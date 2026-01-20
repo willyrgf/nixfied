@@ -8,8 +8,7 @@ let
   envVar = projectMeta.envVar or "PROJECT_ENV";
   slotVar = projectMeta.slotVar or "NIX_ENV";
 
-  envOffsets =
-    builtins.mapAttrs (name: envCfg: envCfg.offset or 0) (cfg.envs or { });
+  envOffsets = builtins.mapAttrs (name: envCfg: envCfg.offset or 0) (cfg.envs or { });
   envNames = builtins.attrNames envOffsets;
   defaultEnv =
     if builtins.hasAttr "dev" envOffsets then
@@ -22,10 +21,10 @@ let
   ports = cfg.ports or { };
   portNames = builtins.attrNames ports;
 
-  baseDirExpr =
-    (cfg.directories.base or "\${XDG_DATA_HOME:-$HOME/.local/share}/project");
+  baseDirExpr = (cfg.directories.base or "\${XDG_DATA_HOME:-$HOME/.local/share}/project");
 
-  normalizeName = name:
+  normalizeName =
+    name:
     let
       replaced = pkgs.lib.replaceStrings [ "-" "." ] [ "_" "_" ] name;
     in
@@ -33,20 +32,17 @@ let
 
   portVarName = name: "${normalizeName name}_PORT";
 
-  portAssignments = pkgs.lib.concatMapStringsSep "\n" (
-    name: ''
-      ${portVarName name}=$((${toString ports.${name}} + SLOT + ENV_OFFSET))
-    ''
-  ) portNames;
+  portAssignments = pkgs.lib.concatMapStringsSep "\n" (name: ''
+    ${portVarName name}=$((${toString ports.${name}} + SLOT + ENV_OFFSET))
+  '') portNames;
 
   portExports = pkgs.lib.concatMapStringsSep "\n" (
-    name: "echo \"${portVarName name}=$${portVarName name}\""
+    name: "echo \"${portVarName name}=${"$"}${portVarName name}\""
   ) portNames;
 
-  envCase =
-    pkgs.lib.concatMapStringsSep "\n" (
-      name: "  ${name}) ENV_OFFSET=${toString envOffsets.${name}} ;;"
-    ) envNames;
+  envCase = pkgs.lib.concatMapStringsSep "\n" (
+    name: "  ${name}) ENV_OFFSET=${toString envOffsets.${name}} ;;"
+  ) envNames;
 
   envList = pkgs.lib.concatStringsSep " " envNames;
 
@@ -138,7 +134,7 @@ let
       ${pkgs.lib.optionalString (portNames != [ ]) ''
         echo "Computed ports:" >&2
         ${pkgs.lib.concatMapStringsSep "\n" (name: ''
-          echo "  ${normalizeName name}: $${portVarName name}" >&2
+          echo "  ${normalizeName name}: ${"$"}${portVarName name}" >&2
         '') portNames}
         echo "" >&2
       ''}

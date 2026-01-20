@@ -1,4 +1,6 @@
-{ pkgs ? null }:
+{
+  pkgs ? null,
+}:
 
 let
   conf = import ./conf.nix { inherit pkgs; };

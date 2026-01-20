@@ -1,5 +1,9 @@
 # Installer app for the framework
-{ pkgs, lib, frameworkRoot }:
+{
+  pkgs,
+  lib,
+  frameworkRoot,
+}:
 
 let
   inherit (lib) mkApp;
@@ -112,8 +116,19 @@ let
       cp -f "$SRC/flake.lock" "$ROOT/flake.lock"
     fi
 
-    rm -rf "$ROOT/nix"
-    cp -R "$SRC/nix" "$ROOT/nix"
+    if [ -d "$ROOT/nix" ]; then
+      chmod -R u+w "$ROOT/nix" 2>/dev/null || true
+      rm -rf "$ROOT/nix"
+    fi
+
+    if command -v rsync >/dev/null 2>&1; then
+      rsync -a --chmod=Du+w,Fu+w "$SRC/nix/" "$ROOT/nix/"
+    else
+      cp -R "$SRC/nix" "$ROOT/nix"
+      chmod -R u+w "$ROOT/nix" 2>/dev/null || true
+    fi
+
+    rm -f "$ROOT/nix/.framework"
 
     if [ -n "$FILTERS_RAW" ]; then
       IFS=',' read -r -a FILTERS <<< "$FILTERS_RAW"

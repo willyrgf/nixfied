@@ -1,15 +1,15 @@
 # Framework helpers for building Nix apps
-{ pkgs, project, hooks ? { } }:
+{
+  pkgs,
+  project,
+  hooks ? { },
+}:
 
 let
   inherit (pkgs.lib) concatMapStringsSep makeBinPath;
 
   runtimePackages = project.tooling.runtimePackages or [ ];
-  runtimePath =
-    if runtimePackages == [ ] then
-      ""
-    else
-      makeBinPath runtimePackages;
+  runtimePath = if runtimePackages == [ ] then "" else makeBinPath runtimePackages;
 
   # Script to load .env if it exists (does not override existing env vars)
   loadEnv = pkgs.writeShellScript "load-env" ''
@@ -27,14 +27,11 @@ let
   '';
 
   hookEnv = hooks.env or { };
-  hookExports = pkgs.lib.concatMapStringsSep "\n" (
-    key:
-    ''
-      if [ -z "''${${key}:-}" ]; then
-        export ${key}="${toString hookEnv.${key}}"
-      fi
-    ''
-  ) (builtins.attrNames hookEnv);
+  hookExports = pkgs.lib.concatMapStringsSep "\n" (key: ''
+    if [ -z "''${${key}:-}" ]; then
+      export ${key}="${toString hookEnv.${key}}"
+    fi
+  '') (builtins.attrNames hookEnv);
 
   summaryParser = pkgs.writeShellScript "summary-parser" ''
     LOGFILE="$1"
@@ -337,7 +334,10 @@ let
       fi
 
       local pid=$!
-      with_cleanup "stop_service $pid \"$name\""
+      # Avoid registering cleanup in command substitution subshells (they exit immediately).
+      if [ -n "''${BASHPID:-}" ] && [ "''${BASHPID}" = "$$" ]; then
+        with_cleanup "stop_service $pid \"$name\""
+      fi
 
       if [ -n "$wait_http_url" ]; then
         if ! wait_http "$wait_http_url" "$timeout" "$interval"; then
@@ -426,6 +426,34 @@ let
   '';
 
   # Helper to create app scripts
+  mkAppScript =
+    {
+      name,
+      script,
+      env ? { },
+      useDeps ? false,
+    }:
+    let
+      envExports = concatMapStringsSep "\n" (key: "export ${key}=${toString env.${key}}") (
+        builtins.attrNames env
+      );
+      depsScript = project.install.deps or "";
+      depsBlock = if useDeps && depsScript != "" then depsScript else "";
+      pathBlock = if runtimePath != "" then "export PATH=\"${runtimePath}:$PATH\"" else "";
+    in
+    pkgs.writeShellScript name ''
+      set -euo pipefail
+      ${pathBlock}
+      export COMMAND_NAME="${name}"
+      cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+      source ${loadEnv}
+      source ${helpersScript}
+      ${hookExports}
+      ${envExports}
+      ${depsBlock}
+      ${script}
+    '';
+
   mkApp =
     {
       name,
@@ -435,40 +463,21 @@ let
       description ? null,
     }:
     let
-      envExports = concatMapStringsSep "\n" (
-        key: "export ${key}=${toString env.${key}}"
-      ) (builtins.attrNames env);
-      depsScript = project.install.deps or "";
-      depsBlock =
-        if useDeps && depsScript != "" then
-          depsScript
-        else
-          "";
-      pathBlock =
-        if runtimePath != "" then
-          "export PATH=\"${runtimePath}:$PATH\""
-        else
-          "";
+      scriptDrv = mkAppScript {
+        inherit
+          name
+          script
+          env
+          useDeps
+          ;
+      };
     in
     {
       type = "app";
       meta = pkgs.lib.optionalAttrs (description != null) {
         inherit description;
       };
-        program = toString (
-          pkgs.writeShellScript name ''
-            set -euo pipefail
-            ${pathBlock}
-            export COMMAND_NAME="${name}"
-            cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-            source ${loadEnv}
-            source ${helpersScript}
-            ${hookExports}
-            ${envExports}
-            ${depsBlock}
-            ${script}
-          ''
-        );
+      program = toString scriptDrv;
     };
 
   mkAppWithDeps = args: mkApp (args // { useDeps = true; });
@@ -624,6 +633,7 @@ in
     summaryParser
     helpersScript
     withTiming
+    mkAppScript
     mkApp
     mkAppWithDeps
     mkSignalHandler

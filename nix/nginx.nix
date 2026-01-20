@@ -1,5 +1,9 @@
 # Nginx module (optional)
-{ pkgs, project, slots }:
+{
+  pkgs,
+  project,
+  slots,
+}:
 
 let
   cfg = project.modules.nginx or { };

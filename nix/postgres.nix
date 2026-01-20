@@ -1,5 +1,9 @@
 # PostgreSQL module (optional)
-{ pkgs, project, slots }:
+{
+  pkgs,
+  project,
+  slots,
+}:
 
 let
   cfg = project.modules.postgres or { };
@@ -24,29 +28,29 @@ let
   '';
 
   init = pkgs.writeShellScript "postgres-init" ''
-    set -euo pipefail
+            set -euo pipefail
 
-    if [ -z "''${PGDATA:-}" ] || [ -z "''${PGPORT:-}" ]; then
-      echo "❌ PGDATA and PGPORT must be set" >&2
-      exit 1
-    fi
+            if [ -z "''${PGDATA:-}" ] || [ -z "''${PGPORT:-}" ]; then
+              echo "❌ PGDATA and PGPORT must be set" >&2
+              exit 1
+            fi
 
-    mkdir -p "$PGDATA"
+            mkdir -p "$PGDATA"
 
-    if [ -f "$PGDATA/PG_VERSION" ]; then
-      echo "✅ PostgreSQL already initialized at $PGDATA"
-      exit 0
-    fi
+            if [ -f "$PGDATA/PG_VERSION" ]; then
+              echo "✅ PostgreSQL already initialized at $PGDATA"
+              exit 0
+            fi
 
-    echo "🔧 Initializing PostgreSQL at $PGDATA..."
-    ${postgres}/bin/initdb -D "$PGDATA" -U postgres --no-locale --encoding=UTF8 -A trust
+            echo "🔧 Initializing PostgreSQL at $PGDATA..."
+            ${postgres}/bin/initdb -D "$PGDATA" -U postgres --no-locale --encoding=UTF8 -A trust
 
-    cat > "$PGDATA/postgresql.conf" << EOF
-${baseConf}
-${extraConfig}
+            cat > "$PGDATA/postgresql.conf" <<'EOF'
+    ${baseConf}
+    ${extraConfig}
     EOF
 
-    cat > "$PGDATA/pg_hba.conf" << EOF
+            cat > "$PGDATA/pg_hba.conf" <<'EOF'
     # TYPE  DATABASE        USER  ADDRESS       METHOD
     local   all             all                 trust
     host    all             all   127.0.0.1/32  trust

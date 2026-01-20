@@ -34,11 +34,10 @@ let
       };
 in
 {
-  env =
-    {
-      SLOT_INFO = toString slots.getSlotInfo;
-      REQUIRE_SLOT_ENV = toString slots.requireSlotEnv;
-    }
-    // postgresEnv
-    // nginxEnv;
+  env = {
+    SLOT_INFO = toString slots.getSlotInfo;
+    REQUIRE_SLOT_ENV = toString slots.requireSlotEnv;
+  }
+  // postgresEnv
+  // nginxEnv;
 }

@@ -1,18 +1,17 @@
-# Base project configuration
+# Test fixture: enable optional modules
 {
   pkgs ? null,
 }:
 
 rec {
   project = {
-    name = "Nixfied Project";
-    id = "nixfied-project";
-    description = "Reusable Nix development framework";
+    name = "Nixfied Test Project";
+    id = "nixfied-test-framework";
+    description = "Framework test fixture";
     envVar = "PROJECT_ENV";
     slotVar = "NIX_ENV";
   };
 
-  # Environment definitions and port offsets
   envs = {
     prod = {
       offset = 0;
@@ -25,7 +24,6 @@ rec {
     };
   };
 
-  # Port roles (keys become <KEY>_PORT in slot scripts)
   ports = {
     backend = 3000;
     frontend = 3100;
@@ -34,7 +32,6 @@ rec {
     postgres = 5432;
   };
 
-  # Base data directory for per-slot/per-env state
   directories = {
     base = "\${XDG_DATA_HOME:-$HOME/.local/share}/${project.id}";
   };
@@ -43,11 +40,10 @@ rec {
     runtimePackages = [
       pkgs.coreutils
       pkgs.gnused
+      pkgs.gnugrep
     ];
     devShellPackages = [ ];
-    devShellHook = ''
-      echo "Nix framework dev shell ready."
-    '';
+    devShellHook = "";
   };
 
   install = {
@@ -61,7 +57,7 @@ rec {
 
   modules = {
     postgres = {
-      enable = false;
+      enable = true;
       database = "app";
       testDatabase = "app_test";
       extensions = [ ];
@@ -71,7 +67,7 @@ rec {
       extraConfig = "";
     };
     nginx = {
-      enable = false;
+      enable = true;
       portKeyHttp = "http";
       portKeyHttps = "https";
       dataDirName = "nginx";

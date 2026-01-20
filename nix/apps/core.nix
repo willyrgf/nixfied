@@ -19,36 +19,34 @@ let
       description = cfg.description or null;
     };
 
-  commandApps =
-    builtins.listToAttrs (
-      map (name: {
-        name = name;
-        value = mkCommandApp name commands.${name};
-      }) commandNames
-    );
+  commandApps = builtins.listToAttrs (
+    map (name: {
+      name = name;
+      value = mkCommandApp name commands.${name};
+    }) commandNames
+  );
 
-  helpLines =
-    pkgs.lib.concatMapStringsSep "\n" (
-      name:
-      let
-        desc = (commands.${name}.description or "");
-      in
-      "  ${name}  ${desc}"
-    ) (pkgs.lib.sort (a: b: a < b) commandNames);
+  helpLines = pkgs.lib.concatMapStringsSep "\n" (
+    name:
+    let
+      desc = (commands.${name}.description or "");
+    in
+    "  ${name}  ${desc}"
+  ) (pkgs.lib.sort (a: b: a < b) commandNames);
 
   helpScript = ''
-    cat <<'EOF'
-${project.project.name}
+        cat <<'EOF'
+    ${project.project.name}
 
-Commands:
-${helpLines}
+    Commands:
+    ${helpLines}
 
-Environment:
-  ${project.project.envVar}  Environment name (${pkgs.lib.concatStringsSep "|" (builtins.attrNames project.envs)})
-  ${project.project.slotVar}  Slot number (0-9)
+    Environment:
+      ${project.project.envVar}  Environment name (${pkgs.lib.concatStringsSep "|" (builtins.attrNames project.envs)})
+      ${project.project.slotVar}  Slot number (0-9)
 
-Edit nix/project/ to customize commands, ports, and modules.
-EOF
+    Edit nix/project/ to customize commands, ports, and modules.
+    EOF
   '';
 
   autoHelp = lib.mkApp {

@@ -1,5 +1,9 @@
 # Supervisor module (process-compose) for production execution
-{ pkgs, project, slots }:
+{
+  pkgs,
+  project,
+  slots,
+}:
 
 let
   pc = pkgs.process-compose;
@@ -21,9 +25,10 @@ let
     else
       ''
         environment:
-      '' + pkgs.lib.concatMapStringsSep "\n" (
-        key: "      - ${key}=${toString env.${key}}"
-      ) (builtins.attrNames env);
+      ''
+      + pkgs.lib.concatMapStringsSep "\n" (key: "      - ${key}=${toString env.${key}}") (
+        builtins.attrNames env
+      );
 
   dependsBlock =
     deps:
@@ -32,12 +37,11 @@ let
     else
       ''
         depends_on:
-      '' + pkgs.lib.concatMapStringsSep "\n" (
-        dep: ''
-          ${dep}:
-            condition: process_healthy
-        ''
-      ) deps;
+      ''
+      + pkgs.lib.concatMapStringsSep "\n" (dep: ''
+        ${dep}:
+          condition: process_healthy
+      '') deps;
 
   readinessBlock =
     readiness:
@@ -109,15 +113,15 @@ let
       shutdown = cfg.shutdown or null;
     in
     ''
-      ${name}:
-        command: |
-${indent 10 cmd}
-        working_dir: ${workingDir}
-${envBlock env}
-${readinessBlock readiness}
-${dependsBlock deps}
-${availabilityBlock availability}
-${shutdownBlock shutdown}
+            ${name}:
+              command: |
+      ${indent 10 cmd}
+              working_dir: ${workingDir}
+      ${envBlock env}
+      ${readinessBlock readiness}
+      ${dependsBlock deps}
+      ${availabilityBlock availability}
+      ${shutdownBlock shutdown}
     '';
 
   servicesYaml =

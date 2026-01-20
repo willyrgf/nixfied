@@ -58,20 +58,44 @@
             lib
             ;
         };
-        installApps = import ./nix/apps/install.nix {
-          inherit
-            pkgs
-            lib
-            ;
-          frameworkRoot = ./.;
-        };
-        ciApp = import ./nix/ci.nix {
+        isFramework = builtins.pathExists ./nix/.framework;
+
+        installApps =
+          if isFramework then
+            import ./nix/apps/install.nix {
+              inherit
+                pkgs
+                lib
+                ;
+              frameworkRoot = ./.;
+            }
+          else
+            { };
+
+        testApps =
+          if isFramework then
+            import ./nix/apps/test-framework.nix {
+              inherit
+                pkgs
+                lib
+                ;
+            }
+          else
+            { };
+        ciEntry = import ./nix/ci.nix {
           inherit
             pkgs
             project
             lib
             ;
         };
+        ciApp =
+          if ciEntry == null then
+            null
+          else if ciEntry ? app then
+            ciEntry.app
+          else
+            ciEntry;
       in
       {
         devShells.default = import ./nix/devshell.nix {
@@ -85,9 +109,9 @@
           coreApps
           // (if ciApp != null then { ci = ciApp; } else { })
           // installApps
+          // testApps
           // {
-            default =
-              if coreApps ? help then coreApps.help else coreApps.dev;
+            default = if coreApps ? help then coreApps.help else coreApps.dev;
           };
 
         packages = project.packages or { };

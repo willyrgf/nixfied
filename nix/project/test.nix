@@ -11,7 +11,9 @@
   commands = {
     test = {
       description = "Run tests";
-      env = { "${project.envVar}" = "test"; };
+      env = {
+        "${project.envVar}" = "test";
+      };
       useDeps = true;
       script = ''
         echo "Test command placeholder. Edit nix/project/test.nix."

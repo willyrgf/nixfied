@@ -13,7 +13,9 @@
   commands = {
     dev = {
       description = "Start the dev workflow";
-      env = { "${project.envVar}" = "dev"; };
+      env = {
+        "${project.envVar}" = "dev";
+      };
       useDeps = true;
       script = ''
         echo "Dev command placeholder. Edit nix/project/dev.nix to run your app."

@@ -7,7 +7,9 @@
   commands = {
     ci = {
       description = "Run the CI pipeline";
-      env = { "${project.envVar}" = "test"; };
+      env = {
+        "${project.envVar}" = "test";
+      };
       useDeps = true;
       script = ''
         echo "CI DSL is enabled. Edit nix/project/ci.nix to customize steps."
@@ -19,7 +21,9 @@
   ci = {
     enable = true;
     defaultMode = "basic";
-    env = { "${project.envVar}" = "test"; };
+    env = {
+      "${project.envVar}" = "test";
+    };
     useDeps = true;
     setup = "";
     teardown = "";
@@ -29,9 +33,27 @@
       keepOnSuccess = false;
     };
     modes = {
-      basic = { steps = [ "quality" "tests" ]; };
-      app = { steps = [ "quality" "tests" "system-quick" ]; };
-      env = { steps = [ "quality" "tests" "system-quick" "nginx-proxy" ]; };
+      basic = {
+        steps = [
+          "quality"
+          "tests"
+        ];
+      };
+      app = {
+        steps = [
+          "quality"
+          "tests"
+          "system-quick"
+        ];
+      };
+      env = {
+        steps = [
+          "quality"
+          "tests"
+          "system-quick"
+          "nginx-proxy"
+        ];
+      };
     };
     steps = {
       quality = {
