@@ -82,6 +82,10 @@
             }
           else
             { };
+        frameworkApps = pkgs.lib.mapAttrs' (name: value: {
+          name = if name == "test-framework" then "framework::test" else "framework::${name}";
+          value = value;
+        }) (installApps // testApps);
         ciEntry = import ./nix/ci.nix {
           inherit
             pkgs
@@ -108,8 +112,7 @@
         apps =
           coreApps
           // (if ciApp != null then { ci = ciApp; } else { })
-          // installApps
-          // testApps
+          // frameworkApps
           // {
             default = if coreApps ? help then coreApps.help else coreApps.dev;
           };

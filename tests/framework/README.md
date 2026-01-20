@@ -7,14 +7,14 @@ This folder contains fixtures and guidance for the Nixfied framework tests.
 From the framework repo root:
 
 ```bash
-nix run .#test-framework
+nix run .#framework::test
 ```
 
-If you have untracked changes and `nix run .#test-framework` fails to see them,
+If you have untracked changes and `nix run .#framework::test` fails to see them,
 use a path-based flake reference:
 
 ```bash
-nix run path:.#test-framework
+nix run path:.#framework::test
 ```
 
 ## What is covered

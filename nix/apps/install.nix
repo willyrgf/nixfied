@@ -21,7 +21,7 @@ let
           FILTERS_RAW="''${arg#--filter=}"
           ;;
         --help|-h)
-          echo "Usage: nix run github:willyrgf/nixfied#install [--force] [--filter=conf,dev,test,prod,quality,ci]"
+          echo "Usage: nix run github:willyrgf/nixfied#framework::install [--force] [--filter=conf,dev,test,prod,quality,ci]"
           exit 0
           ;;
       esac
@@ -128,6 +128,7 @@ let
       chmod -R u+w "$ROOT/nix" 2>/dev/null || true
     fi
 
+    chmod u+w "$ROOT/nix/.framework" 2>/dev/null || true
     rm -f "$ROOT/nix/.framework"
 
     if [ -n "$FILTERS_RAW" ]; then

@@ -1,8 +1,6 @@
 # Nixfied
 
-A generic, Nix-first framework for development, testing, CI, and production.
-All behavior is configured in `nix/project/` and is safe by default (no-op
-commands that exit 0).
+A generic, Nix-first framework for development, testing, CI, and production environments.
 
 ## Contents
 
@@ -41,7 +39,7 @@ From your target repository:
 
 ```bash
 cd my-app
-nix run github:willyrgf/nixfied#install
+nix run github:willyrgf/nixfied#framework::install
 ```
 
 Safety behavior:
@@ -53,19 +51,19 @@ Safety behavior:
 Force overwrite:
 
 ```bash
-nix run github:willyrgf/nixfied#install -- --force
+nix run github:willyrgf/nixfied#framework::install -- --force
 # or
-NIXFIED_INSTALL_FORCE=1 nix run github:willyrgf/nixfied#install
+NIXFIED_INSTALL_FORCE=1 nix run github:willyrgf/nixfied#framework::install
 ```
 
 Filter which project files are installed (conf is always included):
 
 ```bash
-nix run github:willyrgf/nixfied#install -- --filter=conf,test,ci
+nix run github:willyrgf/nixfied#framework::install -- --filter=conf,test,ci
 ```
 
 Framework-only apps:
-- The `install` and `test-framework` apps are only exposed when the repository
+- The `framework::install` and `framework::test` apps are only exposed when the repository
   contains `nix/.framework`.
 - The installer removes this marker in target repos so `nix flake show` will
   not list those apps after installation.
@@ -449,13 +447,13 @@ command scripts, import the module in your Nix code and run the script path
 Run the integration test suite for the framework itself:
 
 ```bash
-nix run .#test-framework
+nix run .#framework::test
 ```
 
 If you have untracked changes and want the tests to use your working tree:
 
 ```bash
-nix run path:.#test-framework
+nix run path:.#framework::test
 ```
 
 The test runner is fully packaged with Nix tools; it does not depend on system

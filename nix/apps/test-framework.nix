@@ -238,7 +238,7 @@ let
     log "installer basic"
     INSTALL_BASE="$WORKDIR/install-repo"
     init_repo "$INSTALL_BASE"
-    (cd "$INSTALL_BASE" && nix run "path:$ROOT"#install >/dev/null)
+    (cd "$INSTALL_BASE" && nix run "path:$ROOT"#framework::install >/dev/null)
     INSTALL_TARGET="''${INSTALL_BASE}_nixified"
     assert_file_exists "$INSTALL_TARGET/flake.nix"
     if [ ! -d "$INSTALL_TARGET/nix" ]; then
@@ -248,7 +248,7 @@ let
     log "installer filter"
     INSTALL_FILTER="$WORKDIR/install-filter"
     init_repo "$INSTALL_FILTER"
-    (cd "$INSTALL_FILTER" && nix run "path:$ROOT"#install -- --filter=conf,ci >/dev/null)
+    (cd "$INSTALL_FILTER" && nix run "path:$ROOT"#framework::install -- --filter=conf,ci >/dev/null)
     FILTER_TARGET="''${INSTALL_FILTER}_nixified"
     assert_file_exists "$FILTER_TARGET/nix/project/ci.nix"
     assert_file_absent "$FILTER_TARGET/nix/project/dev.nix"
@@ -263,7 +263,7 @@ let
     INSTALL_FORCE="$WORKDIR/force_nixified"
     init_repo "$INSTALL_FORCE"
     mkdir -p "$INSTALL_FORCE/nix"
-    (cd "$INSTALL_FORCE" && nix run "path:$ROOT"#install -- --force >/dev/null)
+    (cd "$INSTALL_FORCE" && nix run "path:$ROOT"#framework::install -- --force >/dev/null)
     assert_file_exists "$INSTALL_FORCE/flake.nix"
     if [ ! -d "$INSTALL_FORCE/nix" ]; then
       fail "expected nix/ directory in force target"
