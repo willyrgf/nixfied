@@ -1,0 +1,62 @@
+name: Nix CI
+permissions:
+  contents: read
+  pull-requests: write
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  BUILD_CMD: "nix flake check -L -v --log-format bar-with-logs"
+  RUN_CMD: "nix run .#help -L -v --log-format bar-with-logs"
+  RUN_TESTS_CMD: "nix run .#test-framework -L -v --log-format bar-with-logs"
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          nix_path: nixpkgs=channel:nixpkgs-unstable
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+          git config --global init.defaultBranch main
+
+      - name: Nix flake check
+        run: |
+          nix flake check
+
+      - name: Run .#test-framework
+        run: |
+          echo $RUN_TESTS_CMD
+          eval $RUN_TESTS_CMD
+
+      - name: Run .#help
+        run: |
+          echo $RUN_CMD
+          # Build the flake and run the help command
+          output=$(eval $RUN_CMD)
+
+          # Echo the output for debugging
+          echo "Help output:"
+          echo "$output"
+
+          # Check if the output contains expected text
+          if echo "$output" | grep -q 'NIX_ENV'; then
+            echo "✓ Help text contains 'NIX_ENV' as expected"
+          else
+            echo "✗ Help text does not contain 'NIX_ENV'"
+            exit 1
+          fi
+
