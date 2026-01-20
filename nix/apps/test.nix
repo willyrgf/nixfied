@@ -13,7 +13,7 @@ let
     pkgs.nix
     pkgs.rsync
   ];
-  testScript = pkgs.writeShellScript "test-framework" ''
+  testScript = pkgs.writeShellScript "framework-test" ''
     set -euo pipefail
 
     ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
@@ -274,8 +274,8 @@ let
 
 in
 {
-  test-framework = lib.mkApp {
-    name = "test-framework";
+  test = lib.mkApp {
+    name = "test";
     description = "Run framework integration tests";
     env = { };
     useDeps = false;

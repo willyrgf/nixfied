@@ -74,7 +74,7 @@
 
         testApps =
           if isFramework then
-            import ./nix/apps/test-framework.nix {
+            import ./nix/apps/test.nix {
               inherit
                 pkgs
                 lib
@@ -83,7 +83,7 @@
           else
             { };
         frameworkApps = pkgs.lib.mapAttrs' (name: value: {
-          name = if name == "test-framework" then "framework::test" else "framework::${name}";
+          name = "framework::${name}";
           value = value;
         }) (installApps // testApps);
         ciEntry = import ./nix/ci.nix {

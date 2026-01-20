@@ -128,7 +128,20 @@ let
       chmod -R u+w "$ROOT/nix" 2>/dev/null || true
     fi
 
+    chmod -R u+w "$ROOT/nix" 2>/dev/null || true
+    if command -v chflags >/dev/null 2>&1; then
+      chflags -R nouchg "$ROOT/nix" 2>/dev/null || true
+    fi
+    if command -v chattr >/dev/null 2>&1; then
+      chattr -R -i "$ROOT/nix" 2>/dev/null || true
+    fi
     chmod u+w "$ROOT/nix/.framework" 2>/dev/null || true
+    if command -v chflags >/dev/null 2>&1; then
+      chflags nouchg "$ROOT/nix/.framework" 2>/dev/null || true
+    fi
+    if command -v chattr >/dev/null 2>&1; then
+      chattr -i "$ROOT/nix/.framework" 2>/dev/null || true
+    fi
     rm -f "$ROOT/nix/.framework"
 
     if [ -n "$FILTERS_RAW" ]; then

@@ -70,6 +70,11 @@ Framework-only apps:
 - If you want to run framework tests from an installed repo, create the marker
   file (`touch nix/.framework`) locally.
 
+Framework workspace:
+- Framework maintenance commands live under the `framework::` namespace so they
+  don't collide with project commands (e.g. `nix run .#framework::test`).
+  This workspace only exists when `nix/.framework` is present.
+
 ## Repository layout
 
 ```
