@@ -17,10 +17,8 @@
       let
         pkgs = import nixpkgs { inherit system; };
 
-        project = import ./nix/project.nix { inherit pkgs; };
+        project = import ./nix/project { inherit pkgs; };
         slots = import ./nix/slots.nix { inherit pkgs project; };
-        lib = import ./nix/lib.nix { inherit pkgs project; };
-        supervisor = import ./nix/supervisor.nix { inherit pkgs project slots; };
 
         postgres =
           if (project.modules.postgres.enable or false) then
@@ -40,7 +38,34 @@
           else
             null;
 
+        hooks = import ./nix/hooks.nix {
+          inherit
+            pkgs
+            project
+            slots
+            postgres
+            nginx
+            ;
+        };
+
+        lib = import ./nix/lib.nix { inherit pkgs project hooks; };
+        supervisor = import ./nix/supervisor.nix { inherit pkgs project slots; };
+
         coreApps = import ./nix/apps/core.nix {
+          inherit
+            pkgs
+            project
+            lib
+            ;
+        };
+        installApps = import ./nix/apps/install.nix {
+          inherit
+            pkgs
+            lib
+            ;
+          frameworkRoot = ./.;
+        };
+        ciApp = import ./nix/ci.nix {
           inherit
             pkgs
             project
@@ -58,6 +83,8 @@
 
         apps =
           coreApps
+          // (if ciApp != null then { ci = ciApp; } else { })
+          // installApps
           // {
             default =
               if coreApps ? help then coreApps.help else coreApps.dev;
