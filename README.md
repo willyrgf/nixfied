@@ -1,22 +1,47 @@
 # Nixfied
 
-A generic, Nix-first framework for development, testing, CI, and production environments.
+A Nix-first framework for single codified source of truth for packaging, distribution, and environments setup.
+
+## Overview
+
+**Motivation:** Nixfied is built for code agents and humans who want *one*
+codified source of truth for packaging, distribution, and environment setup.
+The goal is reproducibility across dev, test, prod, CI, and config layers—no
+hand-crafted snowflakes, just repeatable environments everywhere.
+
+### Install (from your repo):
+
+```bash
+cd my-project
+nix run github:willyrgf/nixfied#framework::install
+```
+
+### Prompt your AI (optional):
+
+```bash
+nix run github:willyrgf/nixfied#framework::prompt-plan
+```
+
+**This generates `NIXFIED_PROMPT_PLAN.md`. Paste it into your AI prompt and ask
+the model to follow it.**
 
 ## Contents
 
-- Quick start
-- Install into an existing repo
-- Repository layout
-- Configuration model
-- Command definitions
-- Execution environment
-- Slots, environments, and ports
-- Framework helpers (shell)
-- CI pipeline DSL
-- Optional modules (Postgres, Nginx)
-- Supervisor (process-compose)
-- Dev shell and packages
-- Sanity checks
+- [Overview](#overview)
+- [Quick start](#quick-start)
+- [Install into an existing repo](#install-into-an-existing-repo)
+- [Repository layout](#repository-layout)
+- [Configuration model](#configuration-model)
+- [Execution environment](#execution-environment)
+- [Slots, environments, and ports](#slots-environments-and-ports)
+- [Framework helpers (shell)](#framework-helpers-shell)
+- [Nix helper functions (lib)](#nix-helper-functions-lib)
+- [CI pipeline DSL](#ci-pipeline-dsl)
+- [Optional modules](#optional-modules)
+- [Supervisor (process-compose)](#supervisor-process-compose)
+- [Dev shell and packages](#dev-shell-and-packages)
+- [Framework tests](#framework-tests)
+- [Sanity checks](#sanity-checks)
 
 ## Quick start
 
