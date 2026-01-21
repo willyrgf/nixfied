@@ -235,6 +235,7 @@ let
     assert_contains "$SUP_CONFIG" "processes:"
     assert_contains "$SUP_CONFIG" "app:"
 
+    export NIXFIED_PROMPT_PLAN=0
     log "installer basic"
     INSTALL_BASE="$WORKDIR/install-repo"
     init_repo "$INSTALL_BASE"

@@ -62,9 +62,22 @@ Filter which project files are installed (conf is always included):
 nix run github:willyrgf/nixfied#framework::install -- --filter=conf,test,ci
 ```
 
+Prompt plan (optional):
+- The installer generates `NIXFIED_PROMPT_PLAN.md` using the project docs +
+  framework README (via `dump2llm`) so you can paste it into any LLM.
+- Re-run or generate manually:
+
+```bash
+nix run github:willyrgf/nixfied#framework::prompt-plan
+```
+
+- Disable with `NIXFIED_PROMPT_PLAN=0`.
+- Overwrite with `--force` or `NIXFIED_PROMPT_PLAN_OVERWRITE=1`.
+
 Framework-only apps:
-- The `framework::install` and `framework::test` apps are only exposed when the repository
-  contains `nix/.framework`.
+- The `framework::install`, `framework::prompt-plan` (prompt generator), and
+  `framework::test` apps are
+  only exposed when the repository contains `nix/.framework`.
 - The installer removes this marker in target repos so `nix flake show` will
   not list those apps after installation.
 - If you want to run framework tests from an installed repo, create the marker
