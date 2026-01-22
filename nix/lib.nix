@@ -319,17 +319,38 @@ let
         return 1
       fi
 
-      if [ -n "$cwd" ]; then
-        if [ -n "$log" ]; then
-          (cd "$cwd" && "$@" > "$log" 2>&1) &
+      local in_subshell="false"
+      if [ "''${BASH_SUBSHELL:-0}" -gt 0 ]; then
+        in_subshell="true"
+      fi
+
+      if [ "$in_subshell" = "true" ] && command -v nohup >/dev/null 2>&1; then
+        if [ -n "$cwd" ]; then
+          if [ -n "$log" ]; then
+            (cd "$cwd" && nohup "$@" > "$log" 2>&1) &
+          else
+            (cd "$cwd" && nohup "$@" >/dev/null 2>&1) &
+          fi
         else
-          (cd "$cwd" && "$@") &
+          if [ -n "$log" ]; then
+            nohup "$@" > "$log" 2>&1 &
+          else
+            nohup "$@" >/dev/null 2>&1 &
+          fi
         fi
       else
-        if [ -n "$log" ]; then
-          ("$@" > "$log" 2>&1) &
+        if [ -n "$cwd" ]; then
+          if [ -n "$log" ]; then
+            (cd "$cwd" && "$@" > "$log" 2>&1) &
+          else
+            (cd "$cwd" && "$@") &
+          fi
         else
-          ("$@") &
+          if [ -n "$log" ]; then
+            ("$@" > "$log" 2>&1) &
+          else
+            ("$@") &
+          fi
         fi
       fi
 

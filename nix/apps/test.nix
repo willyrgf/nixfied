@@ -75,6 +75,33 @@ let
       grep -q "$pattern" "$file" || fail "expected '$pattern' in $file"
     }
 
+    run_app() {
+      local flake_path="$1"
+      local app="$2"
+      shift 2
+      if [ "$#" -gt 0 ]; then
+        nix run "path:$flake_path"#"$app" -- "$@"
+      else
+        nix run "path:$flake_path"#"$app"
+      fi
+    }
+
+    run_app_quiet() {
+      run_app "$@" >/dev/null
+    }
+
+    assert_app_missing() {
+      local flake_path="$1"
+      local app="$2"
+      set +e
+      nix run "path:$flake_path"#"$app" >/dev/null 2>&1
+      local rc=$?
+      set -e
+      if [ "$rc" -eq 0 ]; then
+        fail "expected app to be missing: $app"
+      fi
+    }
+
     build_expr() {
       local expr="$1"
       nix build --impure --expr "$expr" --argstr root "$ROOT" --argstr system "$SYSTEM" --no-link --print-out-paths
@@ -246,6 +273,22 @@ let
       fail "expected nix/ directory in installer target"
     fi
 
+    log "example project apps (basic install)"
+    BASIC_HELP="$WORKDIR/basic-help.txt"
+    run_app "$INSTALL_TARGET" help > "$BASIC_HELP"
+    assert_contains "$BASIC_HELP" "Commands:"
+    assert_contains "$BASIC_HELP" "dev  Start the dev workflow"
+    assert_contains "$BASIC_HELP" "test  Run tests"
+    assert_contains "$BASIC_HELP" "build  Build artifacts"
+    assert_contains "$BASIC_HELP" "check  Run quality checks"
+    assert_contains "$BASIC_HELP" "ci  Run the CI pipeline"
+    run_app_quiet "$INSTALL_TARGET" dev
+    run_app_quiet "$INSTALL_TARGET" test
+    run_app_quiet "$INSTALL_TARGET" build
+    run_app_quiet "$INSTALL_TARGET" check
+    run_app_quiet "$INSTALL_TARGET" ci --summary
+    assert_app_missing "$INSTALL_TARGET" "framework::test"
+
     log "installer filter"
     INSTALL_FILTER="$WORKDIR/install-filter"
     init_repo "$INSTALL_FILTER"
@@ -260,6 +303,17 @@ let
       fail "default.nix should not include dev.nix when filtered"
     fi
 
+    log "example project apps (filtered install)"
+    FILTER_HELP="$WORKDIR/filter-help.txt"
+    run_app "$FILTER_TARGET" help > "$FILTER_HELP"
+    assert_contains "$FILTER_HELP" "Commands:"
+    assert_contains "$FILTER_HELP" "ci  Run the CI pipeline"
+    assert_app_missing "$FILTER_TARGET" "dev"
+    assert_app_missing "$FILTER_TARGET" "test"
+    assert_app_missing "$FILTER_TARGET" "build"
+    assert_app_missing "$FILTER_TARGET" "check"
+    run_app_quiet "$FILTER_TARGET" ci --summary
+
     log "installer force"
     INSTALL_FORCE="$WORKDIR/force_nixified"
     init_repo "$INSTALL_FORCE"
@@ -269,6 +323,22 @@ let
     if [ ! -d "$INSTALL_FORCE/nix" ]; then
       fail "expected nix/ directory in force target"
     fi
+
+    log "example project apps (force install)"
+    FORCE_HELP="$WORKDIR/force-help.txt"
+    run_app "$INSTALL_FORCE" help > "$FORCE_HELP"
+    assert_contains "$FORCE_HELP" "Commands:"
+    assert_contains "$FORCE_HELP" "dev  Start the dev workflow"
+    assert_contains "$FORCE_HELP" "test  Run tests"
+    assert_contains "$FORCE_HELP" "build  Build artifacts"
+    assert_contains "$FORCE_HELP" "check  Run quality checks"
+    assert_contains "$FORCE_HELP" "ci  Run the CI pipeline"
+    run_app_quiet "$INSTALL_FORCE" dev
+    run_app_quiet "$INSTALL_FORCE" test
+    run_app_quiet "$INSTALL_FORCE" build
+    run_app_quiet "$INSTALL_FORCE" check
+    run_app_quiet "$INSTALL_FORCE" ci --summary
+    assert_app_missing "$INSTALL_FORCE" "framework::test"
 
     log "all tests passed"
   '';
