@@ -502,7 +502,7 @@ nix run path:.#framework::test
 The test runner is fully packaged with Nix tools; it does not depend on system
 utilities.
 
-See `tests/framework/README.md` for fixtures and details.
+See `tests/framework/README.md` for fixtures, example snippets, and an examples index.
 
 ## Sanity checks
 

@@ -9,130 +9,130 @@ let
   inherit (lib) mkApp;
 
   promptPlanScript = pkgs.writeShellScript "nixfied-prompt-plan" ''
-        set -euo pipefail
+            set -euo pipefail
 
-        FORCE=false
-        OUT_PATH=""
+            FORCE=false
+            OUT_PATH=""
 
-        for arg in "$@"; do
-          case "$arg" in
-            --force) FORCE=true ;;
-            --output=*)
-              OUT_PATH="''${arg#--output=}"
-              ;;
-            --help|-h)
-              echo "Usage: nix run github:willyrgf/nixfied#framework::prompt-plan [--force] [--output=PATH]"
+            for arg in "$@"; do
+              case "$arg" in
+                --force) FORCE=true ;;
+                --output=*)
+                  OUT_PATH="''${arg#--output=}"
+                  ;;
+                --help|-h)
+                  echo "Usage: nix run github:willyrgf/nixfied#framework::prompt-plan [--force] [--output=PATH]"
+                  exit 0
+                  ;;
+              esac
+            done
+
+            for arg in "$@"; do
+              case "$arg" in
+                --output)
+                  shift
+                  OUT_PATH="''${1:-}"
+                  ;;
+              esac
+            done
+
+            if [ "''${NIXFIED_PROMPT_PLAN:-1}" = "0" ] || [ "''${NIXFIED_PROMPT_PLAN:-}" = "false" ] || [ "''${NIXFIED_INTEGRATION_PLAN:-}" = "0" ] || [ "''${NIXFIED_INTEGRATION_PLAN:-}" = "false" ]; then
+              echo "ℹ️  Prompt plan disabled (NIXFIED_PROMPT_PLAN=0)."
               exit 0
-              ;;
-          esac
-        done
+            fi
 
-        for arg in "$@"; do
-          case "$arg" in
-            --output)
-              shift
-              OUT_PATH="''${1:-}"
-              ;;
-          esac
-        done
+            ROOT=$(git rev-parse --show-toplevel 2>/dev/null || true)
+            if [ -z "$ROOT" ]; then
+              echo "❌ Not inside a git repository." >&2
+              exit 1
+            fi
 
-        if [ "''${NIXFIED_PROMPT_PLAN:-1}" = "0" ] || [ "''${NIXFIED_PROMPT_PLAN:-}" = "false" ] || [ "''${NIXFIED_INTEGRATION_PLAN:-}" = "0" ] || [ "''${NIXFIED_INTEGRATION_PLAN:-}" = "false" ]; then
-          echo "ℹ️  Prompt plan disabled (NIXFIED_PROMPT_PLAN=0)."
+            OUT_PATH="''${OUT_PATH:-$ROOT/NIXFIED_PROMPT_PLAN.md}"
+
+            if [ -f "$OUT_PATH" ] && [ "$FORCE" = "false" ] && [ "''${NIXFIED_PROMPT_PLAN_OVERWRITE:-0}" != "1" ] && [ "''${NIXFIED_INTEGRATION_PLAN_OVERWRITE:-0}" != "1" ]; then
+              echo "ℹ️  Prompt plan already exists: $OUT_PATH"
+              echo "    Re-run with --force or NIXFIED_PROMPT_PLAN_OVERWRITE=1 to overwrite."
+              exit 0
+            fi
+
+            if ! command -v nix >/dev/null 2>&1; then
+              echo "❌ nix is required to run dump2llm." >&2
+              exit 1
+            fi
+
+        CONTEXT_FILE=$(mktemp)
+        PROMPT_FILE=$(mktemp)
+        TMPDIR=$(mktemp -d)
+        trap 'rm -rf "$TMPDIR" "$CONTEXT_FILE" "$PROMPT_FILE"' EXIT
+
+        INPUTS=()
+
+        if [ -f "$ROOT/README.md" ]; then
+          cp "$ROOT/README.md" "$TMPDIR/PROJECT_README.md"
+          INPUTS+=("PROJECT_README.md")
+        fi
+        if [ -f "$ROOT/CLAUDE.md" ]; then
+          cp "$ROOT/CLAUDE.md" "$TMPDIR/PROJECT_CLAUDE.md"
+          INPUTS+=("PROJECT_CLAUDE.md")
+        fi
+        if [ -f "$ROOT/AGENTS.md" ]; then
+          cp "$ROOT/AGENTS.md" "$TMPDIR/PROJECT_AGENTS.md"
+          INPUTS+=("PROJECT_AGENTS.md")
+        fi
+
+        FRAMEWORK_README="${frameworkRoot}/README.md"
+        if [ -f "$FRAMEWORK_README" ]; then
+          cp "$FRAMEWORK_README" "$TMPDIR/NIXFIED_FRAMEWORK_README.md"
+          INPUTS+=("NIXFIED_FRAMEWORK_README.md")
+        fi
+
+        if [ "''${#INPUTS[@]}" -eq 0 ]; then
+          echo "ℹ️  Skipping prompt plan (no README/CLAUDE/AGENTS files found)." >&2
           exit 0
         fi
 
-        ROOT=$(git rev-parse --show-toplevel 2>/dev/null || true)
-        if [ -z "$ROOT" ]; then
-          echo "❌ Not inside a git repository." >&2
-          exit 1
+        cat > "$PROMPT_FILE" <<'EOF'
+    Create a PROMPT PLAN in Markdown for integrating this project with the Nixfied framework.
+
+    Requirements:
+    - Be concise and actionable.
+    - Use headings: "PROMPT PLAN", "Project Snapshot", "Integration Steps", "Key Files to Edit",
+      "Open Questions", and "Next Prompts".
+    - Ground every step in the provided context; do not guess missing details.
+    - Mention Nixfied files to customize (e.g. nix/project/conf.nix and nix/project/{dev,test,prod,quality,ci}.nix).
+    - In "Integration Steps", start with high-level integration goals (Nixfied as the single entrypoint for dev/test/check/prod/db/ci, parity with current behavior, avoid regressions), then list concrete wiring steps.
+    - Include explicit validation expectations (e.g., nix run .#help/.#check/.#test smoke checks) and documentation refactor goals (README + CLAUDE.md make Nixfied the canonical entrypoint).
+    - If docs conflict on command names or behavior, call it out and ask which source is authoritative.
+    - If info is missing, list it in "Open Questions".
+
+    Sources:
+    - Project docs: PROJECT_README.md, PROJECT_CLAUDE.md, PROJECT_AGENTS.md
+    - Nixfied docs: NIXFIED_FRAMEWORK_README.md
+
+    Context (project docs + framework README) follows:
+    EOF
+
+        CONTEXT_STATUS=0
+        if ! (cd "$TMPDIR" && nix run github:willyrgf/dump2llm -- "''${INPUTS[@]}") > "$CONTEXT_FILE"; then
+          CONTEXT_STATUS=1
         fi
 
-        OUT_PATH="''${OUT_PATH:-$ROOT/NIXFIED_PROMPT_PLAN.md}"
+            {
+              echo "# NIXFIED PROMPT PLAN"
+              echo ""
+              cat "$PROMPT_FILE"
+              echo ""
+          if [ "$CONTEXT_STATUS" -eq 0 ]; then
+            cat "$CONTEXT_FILE"
+          else
+            echo ""
+            echo "⚠️  Context generation failed. Re-run the prompt plan:"
+            echo ""
+            echo "  nix run github:willyrgf/nixfied#framework::prompt-plan -- --force"
+          fi
+        } > "$OUT_PATH"
 
-        if [ -f "$OUT_PATH" ] && [ "$FORCE" = "false" ] && [ "''${NIXFIED_PROMPT_PLAN_OVERWRITE:-0}" != "1" ] && [ "''${NIXFIED_INTEGRATION_PLAN_OVERWRITE:-0}" != "1" ]; then
-          echo "ℹ️  Prompt plan already exists: $OUT_PATH"
-          echo "    Re-run with --force or NIXFIED_PROMPT_PLAN_OVERWRITE=1 to overwrite."
-          exit 0
-        fi
-
-        if ! command -v nix >/dev/null 2>&1; then
-          echo "❌ nix is required to run dump2llm." >&2
-          exit 1
-        fi
-
-    CONTEXT_FILE=$(mktemp)
-    PROMPT_FILE=$(mktemp)
-    TMPDIR=$(mktemp -d)
-    trap 'rm -rf "$TMPDIR" "$CONTEXT_FILE" "$PROMPT_FILE"' EXIT
-
-    INPUTS=()
-
-    if [ -f "$ROOT/README.md" ]; then
-      cp "$ROOT/README.md" "$TMPDIR/PROJECT_README.md"
-      INPUTS+=("PROJECT_README.md")
-    fi
-    if [ -f "$ROOT/CLAUDE.md" ]; then
-      cp "$ROOT/CLAUDE.md" "$TMPDIR/PROJECT_CLAUDE.md"
-      INPUTS+=("PROJECT_CLAUDE.md")
-    fi
-    if [ -f "$ROOT/AGENTS.md" ]; then
-      cp "$ROOT/AGENTS.md" "$TMPDIR/PROJECT_AGENTS.md"
-      INPUTS+=("PROJECT_AGENTS.md")
-    fi
-
-    FRAMEWORK_README="${frameworkRoot}/README.md"
-    if [ -f "$FRAMEWORK_README" ]; then
-      cp "$FRAMEWORK_README" "$TMPDIR/NIXFIED_FRAMEWORK_README.md"
-      INPUTS+=("NIXFIED_FRAMEWORK_README.md")
-    fi
-
-    if [ "''${#INPUTS[@]}" -eq 0 ]; then
-      echo "ℹ️  Skipping prompt plan (no README/CLAUDE/AGENTS files found)." >&2
-      exit 0
-    fi
-
-    cat > "$PROMPT_FILE" <<'EOF'
-Create a PROMPT PLAN in Markdown for integrating this project with the Nixfied framework.
-
-Requirements:
-- Be concise and actionable.
-- Use headings: "PROMPT PLAN", "Project Snapshot", "Integration Steps", "Key Files to Edit",
-  "Open Questions", and "Next Prompts".
-- Ground every step in the provided context; do not guess missing details.
-- Mention Nixfied files to customize (e.g. nix/project/conf.nix and nix/project/{dev,test,prod,quality,ci}.nix).
-- In "Integration Steps", start with high-level integration goals (Nixfied as the single entrypoint for dev/test/check/prod/db/ci, parity with current behavior, avoid regressions), then list concrete wiring steps.
-- Include explicit validation expectations (e.g., nix run .#help/.#check/.#test smoke checks) and documentation refactor goals (README + CLAUDE.md make Nixfied the canonical entrypoint).
-- If docs conflict on command names or behavior, call it out and ask which source is authoritative.
-- If info is missing, list it in "Open Questions".
-
-Sources:
-- Project docs: PROJECT_README.md, PROJECT_CLAUDE.md, PROJECT_AGENTS.md
-- Nixfied docs: NIXFIED_FRAMEWORK_README.md
-
-Context (project docs + framework README) follows:
-EOF
-
-    CONTEXT_STATUS=0
-    if ! (cd "$TMPDIR" && nix run github:willyrgf/dump2llm -- "''${INPUTS[@]}") > "$CONTEXT_FILE"; then
-      CONTEXT_STATUS=1
-    fi
-
-        {
-          echo "# NIXFIED PROMPT PLAN"
-          echo ""
-          cat "$PROMPT_FILE"
-          echo ""
-      if [ "$CONTEXT_STATUS" -eq 0 ]; then
-        cat "$CONTEXT_FILE"
-      else
-        echo ""
-        echo "⚠️  Context generation failed. Re-run the prompt plan:"
-        echo ""
-        echo "  nix run github:willyrgf/nixfied#framework::prompt-plan -- --force"
-      fi
-    } > "$OUT_PATH"
-
-        echo "📝 Prompt plan written to $OUT_PATH"
+            echo "📝 Prompt plan written to $OUT_PATH"
   '';
 
   installScript = ''
