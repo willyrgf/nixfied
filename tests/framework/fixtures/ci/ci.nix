@@ -22,7 +22,9 @@
     setup = ''
       mkdir -p .ci-artifacts
     '';
-    teardown = "";
+    teardown = ''
+      touch "$(artifact_path "teardown.ok")"
+    '';
     artifacts = {
       dir = ".ci-artifacts";
       keepOnFailure = true;

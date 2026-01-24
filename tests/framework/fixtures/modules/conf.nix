@@ -41,6 +41,7 @@ rec {
       pkgs.coreutils
       pkgs.gnused
       pkgs.gnugrep
+      pkgs.netcat
     ];
     devShellPackages = [ ];
     devShellHook = "";

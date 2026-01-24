@@ -124,7 +124,12 @@ let
 
     ${portAssignments}
 
-    if [ -t 0 ] && ([ -z "''${!SLOT_VAR:-}" ] || [ -z "''${!ENV_VAR:-}" ]); then
+    NON_INTERACTIVE=false
+    if [ -n "''${CI:-}" ] || [ -n "''${NO_TTY:-}" ] || [ "''${TERM:-}" = "dumb" ]; then
+      NON_INTERACTIVE=true
+    fi
+
+    if [ "$NON_INTERACTIVE" = "false" ] && [ -t 0 ] && ([ -z "''${!SLOT_VAR:-}" ] || [ -z "''${!ENV_VAR:-}" ]); then
       echo "⚠️  $SLOT_VAR and/or $ENV_VAR not explicitly set" >&2
       echo "" >&2
       echo "Using defaults:" >&2

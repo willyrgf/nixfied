@@ -232,35 +232,50 @@ let
 
                   mkdir -p "$CI_ARTIFACTS_DIR"
 
+                  local exit_code=0
+                  local step_rc=0
+                  STEPS=()
+
                   case "$CI_MODE" in
         ${modeCase}
                     *)
                       echo "Unknown CI mode: $CI_MODE" >&2
-                      exit 1
+                      exit_code=1
                       ;;
                   esac
 
-                  if [ "''${#STEPS[@]}" -eq 0 ]; then
+                  if [ "$exit_code" -eq 0 ] && [ "''${#STEPS[@]}" -eq 0 ]; then
                     echo "No steps configured for mode: $CI_MODE"
-                    exit 1
+                    exit_code=1
                   fi
 
-                  TOTAL_STEPS="''${#STEPS[@]}"
-                  STEP_INDEX=1
-                  for step in "''${STEPS[@]}"; do
-                    STEP_FUNC=$(step_func "$step")
-                    if [ -z "$STEP_FUNC" ]; then
-                      echo "Unknown step: $step" >&2
-                      exit 1
-                    fi
-                    STEP_DESC=$(step_desc "$step")
-                    echo ""
-                    echo "Step ''${STEP_INDEX}/''${TOTAL_STEPS}: ''${STEP_DESC}"
-                    "$STEP_FUNC"
-                    STEP_INDEX=$((STEP_INDEX + 1))
-                  done
+                  if [ "$exit_code" -eq 0 ]; then
+                    TOTAL_STEPS="''${#STEPS[@]}"
+                    STEP_INDEX=1
+                    for step in "''${STEPS[@]}"; do
+                      STEP_FUNC=$(step_func "$step")
+                      if [ -z "$STEP_FUNC" ]; then
+                        echo "Unknown step: $step" >&2
+                        exit_code=1
+                        break
+                      fi
+                      STEP_DESC=$(step_desc "$step")
+                      echo ""
+                      echo "Step ''${STEP_INDEX}/''${TOTAL_STEPS}: ''${STEP_DESC}"
+                      set +e
+                      ( "$STEP_FUNC" )
+                      step_rc=$?
+                      set -e
+                      if [ "$step_rc" -ne 0 ]; then
+                        exit_code="$step_rc"
+                        break
+                      fi
+                      STEP_INDEX=$((STEP_INDEX + 1))
+                    done
+                  fi
 
         ${teardownScript}
+                  return "$exit_code"
                 }
 
                 if [ "$CI_SUMMARY" = "true" ]; then

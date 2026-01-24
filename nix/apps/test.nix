@@ -130,9 +130,97 @@ let
     nix run "path:$ROOT"#check >/dev/null
     nix run "path:$ROOT"#ci -- --summary >/dev/null
 
+    log "helpers runtime"
+    HELPERS_DIR="$WORKDIR/helpers"
+    mkdir -p "$HELPERS_DIR"
+    HELPERS_EXPR=$(cat <<'NIX'
+    { root, system }:
+    let
+      flake = builtins.getFlake root;
+      pkgs = flake.inputs.nixpkgs.legacyPackages.''${system};
+      base = import ./nix/project { inherit pkgs; };
+      project = pkgs.lib.recursiveUpdate base {
+        tooling.runtimePackages =
+          (base.tooling.runtimePackages or [ ])
+          ++ [
+            pkgs.gnugrep
+            pkgs.lsof
+            pkgs.netcat
+            pkgs.python3
+          ];
+      };
+      slots = import ./nix/slots.nix { inherit pkgs project; };
+      hooks = import ./nix/hooks.nix { inherit pkgs project slots; postgres = null; nginx = null; };
+      lib = import ./nix/lib.nix { inherit pkgs project hooks; };
+    in
+      lib.mkAppScript {
+        name = "helpers-runtime";
+        env = { };
+        useDeps = false;
+        script = builtins.readFile ./tests/framework/fixtures/helpers/runtime.sh;
+      }
+    NIX
+    )
+
+    HELPERS_SCRIPT=$(build_expr "$HELPERS_EXPR")
+    HELPERS_LOG="$WORKDIR/helpers-runtime.log"
+    set +e
+    (cd "$HELPERS_DIR" && "$HELPERS_SCRIPT" >"$HELPERS_LOG" 2>&1)
+    HELPERS_RC=$?
+    set -e
+    if [ "$HELPERS_RC" -ne 0 ]; then
+      echo "Helpers runtime fixture failed (rc=$HELPERS_RC)." >&2
+      echo "" >&2
+      echo "Fixture output (last 100 lines):" >&2
+      tail -100 "$HELPERS_LOG" >&2 || true
+      exit "$HELPERS_RC"
+    fi
+
+    log "slots env"
+    SLOTS_DIR="$WORKDIR/slots"
+    mkdir -p "$SLOTS_DIR"
+    SLOTS_EXPR=$(cat <<'NIX'
+    { root, system }:
+    let
+      flake = builtins.getFlake root;
+      pkgs = flake.inputs.nixpkgs.legacyPackages.''${system};
+      base = import ./nix/project { inherit pkgs; };
+      project = pkgs.lib.recursiveUpdate base {
+        tooling.runtimePackages =
+          (base.tooling.runtimePackages or [ ])
+          ++ [
+            pkgs.gnugrep
+            pkgs.python3
+          ];
+      };
+      slots = import ./nix/slots.nix { inherit pkgs project; };
+      hooks = import ./nix/hooks.nix { inherit pkgs project slots; postgres = null; nginx = null; };
+      lib = import ./nix/lib.nix { inherit pkgs project hooks; };
+    in
+      lib.mkAppScript {
+        name = "slots-runtime";
+        env = { };
+        useDeps = false;
+        script = builtins.readFile ./tests/framework/fixtures/slots/runtime.sh;
+      }
+    NIX
+    )
+
+    SLOTS_SCRIPT=$(build_expr "$SLOTS_EXPR")
+    SLOTS_LOG="$WORKDIR/slots-runtime.log"
+    set +e
+    (cd "$SLOTS_DIR" && "$SLOTS_SCRIPT" >"$SLOTS_LOG" 2>&1)
+    SLOTS_RC=$?
+    set -e
+    if [ "$SLOTS_RC" -ne 0 ]; then
+      echo "Slots env fixture failed (rc=$SLOTS_RC)." >&2
+      echo "" >&2
+      echo "Fixture output (last 100 lines):" >&2
+      tail -100 "$SLOTS_LOG" >&2 || true
+      exit "$SLOTS_RC"
+    fi
+
     log "ci DSL fixture"
-    CI_DIR="$WORKDIR/ci"
-    mkdir -p "$CI_DIR"
     CI_EXPR=$(cat <<'NIX'
     { root, system }:
     let
@@ -151,21 +239,117 @@ let
     )
 
     CI_SCRIPT=$(build_expr "$CI_EXPR")
+    CI_BASIC_DIR="$WORKDIR/ci-basic"
+    CI_BASIC_LOG="$WORKDIR/ci-basic.log"
+    mkdir -p "$CI_BASIC_DIR"
     unset CI_MISSING
-    (cd "$CI_DIR" && "$CI_SCRIPT" --mode basic >/dev/null)
-    assert_file_exists "$CI_DIR/.ci-artifacts/runs.ok"
-    assert_file_absent "$CI_DIR/.ci-artifacts/skip-missing.ok"
-    assert_file_absent "$CI_DIR/.ci-artifacts/when.ok"
-    assert_file_absent "$CI_DIR/.ci-artifacts/requires.ok"
-
     set +e
-    (cd "$CI_DIR" && "$CI_SCRIPT" --mode failure >/dev/null 2>&1)
+    (cd "$CI_BASIC_DIR" && "$CI_SCRIPT" --mode basic > "$CI_BASIC_LOG" 2>&1)
+    RC=$?
+    set -e
+    if [ "$RC" -ne 0 ]; then
+      fail "expected CI basic mode to exit zero"
+    fi
+    assert_file_exists "$CI_BASIC_DIR/.ci-artifacts/runs.ok"
+    assert_file_absent "$CI_BASIC_DIR/.ci-artifacts/skip-missing.ok"
+    assert_file_absent "$CI_BASIC_DIR/.ci-artifacts/when.ok"
+    assert_file_absent "$CI_BASIC_DIR/.ci-artifacts/requires.ok"
+    assert_file_exists "$CI_BASIC_DIR/.ci-artifacts/teardown.ok"
+    assert_contains "$CI_BASIC_LOG" "missing CI_MISSING"
+    assert_contains "$CI_BASIC_LOG" "condition not met"
+    assert_contains "$CI_BASIC_LOG" "requires module(s): nginx"
+
+    CI_FAIL_DIR="$WORKDIR/ci-failure"
+    CI_FAIL_LOG="$WORKDIR/ci-failure.log"
+    mkdir -p "$CI_FAIL_DIR"
+    set +e
+    (cd "$CI_FAIL_DIR" && "$CI_SCRIPT" --mode failure > "$CI_FAIL_LOG" 2>&1)
     RC=$?
     set -e
     if [ "$RC" -eq 0 ]; then
       fail "expected CI failure mode to exit non-zero"
     fi
-    assert_file_exists "$CI_DIR/.ci-artifacts/fail.cleanup"
+    assert_file_exists "$CI_FAIL_DIR/.ci-artifacts/fail.cleanup"
+    assert_file_exists "$CI_FAIL_DIR/.ci-artifacts/teardown.ok"
+
+    CI_ERR_DIR="$WORKDIR/ci-errors"
+    CI_MODE_LOG="$WORKDIR/ci-unknown-mode.log"
+    CI_FLAG_LOG="$WORKDIR/ci-unknown-flag.log"
+    mkdir -p "$CI_ERR_DIR"
+    set +e
+    (cd "$CI_ERR_DIR" && "$CI_SCRIPT" --mode does-not-exist > "$CI_MODE_LOG" 2>&1)
+    RC=$?
+    set -e
+    if [ "$RC" -eq 0 ]; then
+      fail "expected unknown CI mode to exit non-zero"
+    fi
+    assert_contains "$CI_MODE_LOG" "Unknown CI mode"
+
+    set +e
+    (cd "$CI_ERR_DIR" && "$CI_SCRIPT" --no-such-flag > "$CI_FLAG_LOG" 2>&1)
+    RC=$?
+    set -e
+    if [ "$RC" -eq 0 ]; then
+      fail "expected unknown CI flag to exit non-zero"
+    fi
+    assert_contains "$CI_FLAG_LOG" "Unknown option"
+
+    log "ci artifacts retention"
+    CI_RET_EXPR=$(cat <<'NIX'
+    { root, system }:
+    let
+      flake = builtins.getFlake root;
+      pkgs = flake.inputs.nixpkgs.legacyPackages.''${system};
+      base = import ./nix/project { inherit pkgs; };
+      fixture = import ./tests/framework/fixtures/ci/retention.nix { project = base.project; };
+      project = pkgs.lib.recursiveUpdate base fixture;
+      slots = import ./nix/slots.nix { inherit pkgs project; };
+      hooks = import ./nix/hooks.nix { inherit pkgs project slots; postgres = null; nginx = null; };
+      lib = import ./nix/lib.nix { inherit pkgs project hooks; };
+      ciEntry = import ./nix/ci.nix { inherit pkgs project lib; };
+    in
+      ciEntry.scriptDrv
+    NIX
+    )
+
+    CI_RET_SCRIPT=$(build_expr "$CI_RET_EXPR")
+    CI_RET_OK_DIR="$WORKDIR/ci-ret-ok"
+    CI_RET_FAIL_DIR="$WORKDIR/ci-ret-fail"
+    mkdir -p "$CI_RET_OK_DIR" "$CI_RET_FAIL_DIR"
+    (cd "$CI_RET_OK_DIR" && "$CI_RET_SCRIPT" --mode success >/dev/null)
+    assert_file_absent "$CI_RET_OK_DIR/.ci-artifacts"
+
+    set +e
+    (cd "$CI_RET_FAIL_DIR" && "$CI_RET_SCRIPT" --mode failure >/dev/null 2>&1)
+    RC=$?
+    set -e
+    if [ "$RC" -eq 0 ]; then
+      fail "expected retention failure mode to exit non-zero"
+    fi
+    assert_file_exists "$CI_RET_FAIL_DIR/.ci-artifacts/fail.cleanup"
+
+    CI_RET_SUM_OK_DIR="$WORKDIR/ci-ret-summary-ok"
+    CI_RET_SUM_OK_LOG="$WORKDIR/ci-ret-summary-ok.log"
+    mkdir -p "$CI_RET_SUM_OK_DIR"
+    (cd "$CI_RET_SUM_OK_DIR" && "$CI_RET_SCRIPT" --mode success --summary > "$CI_RET_SUM_OK_LOG" 2>&1)
+    assert_contains "$CI_RET_SUM_OK_LOG" "Summary"
+    assert_contains "$CI_RET_SUM_OK_LOG" "Exit code: 0"
+    assert_file_absent "$CI_RET_SUM_OK_DIR/.ci-artifacts"
+
+    CI_RET_SUM_FAIL_DIR="$WORKDIR/ci-ret-summary-fail"
+    CI_RET_SUM_FAIL_LOG="$WORKDIR/ci-ret-summary-fail.log"
+    mkdir -p "$CI_RET_SUM_FAIL_DIR"
+    set +e
+    (cd "$CI_RET_SUM_FAIL_DIR" && "$CI_RET_SCRIPT" --mode failure --summary > "$CI_RET_SUM_FAIL_LOG" 2>&1)
+    RC=$?
+    set -e
+    if [ "$RC" -eq 0 ]; then
+      fail "expected retention failure summary mode to exit non-zero"
+    fi
+    assert_contains "$CI_RET_SUM_FAIL_LOG" "Summary"
+    assert_contains "$CI_RET_SUM_FAIL_LOG" "Exit code: 1"
+    assert_contains "$CI_RET_SUM_FAIL_LOG" "Last 50 lines"
+    assert_file_exists "$CI_RET_SUM_FAIL_DIR/.ci-artifacts/fail.cleanup"
 
     log "module hooks fixture"
     MOD_DIR="$WORKDIR/modules"
@@ -272,6 +456,8 @@ let
     if [ ! -d "$INSTALL_TARGET/nix" ]; then
       fail "expected nix/ directory in installer target"
     fi
+    assert_file_absent "$INSTALL_TARGET/nix/.framework"
+    assert_file_absent "$INSTALL_TARGET/NIXFIED_PROMPT_PLAN.md"
 
     log "example project apps (basic install)"
     BASIC_HELP="$WORKDIR/basic-help.txt"
@@ -287,7 +473,42 @@ let
     run_app_quiet "$INSTALL_TARGET" build
     run_app_quiet "$INSTALL_TARGET" check
     run_app_quiet "$INSTALL_TARGET" ci --summary
+    assert_app_missing "$INSTALL_TARGET" "framework::install"
+    assert_app_missing "$INSTALL_TARGET" "framework::prompt-plan"
     assert_app_missing "$INSTALL_TARGET" "framework::test"
+
+    log "framework marker toggle"
+    touch "$INSTALL_TARGET/nix/.framework"
+    FRAMEWORK_HELP="$WORKDIR/framework-help.txt"
+    run_app "$INSTALL_TARGET" "framework::prompt-plan" --help > "$FRAMEWORK_HELP"
+    assert_contains "$FRAMEWORK_HELP" "prompt-plan"
+    FRAMEWORK_INSTALL_HELP="$WORKDIR/framework-install-help.txt"
+    run_app "$INSTALL_TARGET" "framework::install" --help > "$FRAMEWORK_INSTALL_HELP"
+    assert_contains "$FRAMEWORK_INSTALL_HELP" "framework::install"
+    PROMPT_PLAN_OUT="$WORKDIR/prompt-plan-disabled.md"
+    assert_file_absent "$PROMPT_PLAN_OUT"
+    PROMPT_PLAN_LOG="$WORKDIR/prompt-plan-disabled.log"
+    set +e
+    NIXFIED_PROMPT_PLAN=0 run_app "$INSTALL_TARGET" "framework::prompt-plan" -- --output="$PROMPT_PLAN_OUT" > "$PROMPT_PLAN_LOG" 2>&1
+    RC=$?
+    set -e
+    if [ "$RC" -ne 0 ]; then
+      fail "expected prompt-plan disabled run to exit zero"
+    fi
+    assert_contains "$PROMPT_PLAN_LOG" "Prompt plan disabled"
+    assert_file_absent "$PROMPT_PLAN_OUT"
+    rm -f "$INSTALL_TARGET/nix/.framework"
+
+    log "installer re-entry"
+    REENTRY_BASE="$WORKDIR/install-reentry"
+    init_repo "$REENTRY_BASE"
+    (cd "$REENTRY_BASE" && nix run "path:$ROOT"#framework::install >/dev/null)
+    REENTRY_TARGET="''${REENTRY_BASE}_nixified"
+    assert_file_exists "$REENTRY_TARGET/flake.nix"
+    assert_file_absent "$REENTRY_TARGET/nix/.framework"
+    (cd "$REENTRY_BASE" && nix run "path:$ROOT"#framework::install -- --force >/dev/null)
+    assert_file_exists "$REENTRY_TARGET/flake.nix"
+    assert_file_absent "''${REENTRY_TARGET}_nixified"
 
     log "installer filter"
     INSTALL_FILTER="$WORKDIR/install-filter"
@@ -302,17 +523,34 @@ let
     if grep -q "dev.nix" "$FILTER_TARGET/nix/project/default.nix"; then
       fail "default.nix should not include dev.nix when filtered"
     fi
+    assert_file_absent "$FILTER_TARGET/nix/.framework"
+    assert_file_absent "$FILTER_TARGET/NIXFIED_PROMPT_PLAN.md"
 
     log "example project apps (filtered install)"
     FILTER_HELP="$WORKDIR/filter-help.txt"
     run_app "$FILTER_TARGET" help > "$FILTER_HELP"
     assert_contains "$FILTER_HELP" "Commands:"
     assert_contains "$FILTER_HELP" "ci  Run the CI pipeline"
+    assert_app_missing "$FILTER_TARGET" "framework::install"
+    assert_app_missing "$FILTER_TARGET" "framework::prompt-plan"
     assert_app_missing "$FILTER_TARGET" "dev"
     assert_app_missing "$FILTER_TARGET" "test"
     assert_app_missing "$FILTER_TARGET" "build"
     assert_app_missing "$FILTER_TARGET" "check"
     run_app_quiet "$FILTER_TARGET" ci --summary
+
+    log "installer invalid filter"
+    INSTALL_BAD_FILTER="$WORKDIR/install-bad-filter"
+    init_repo "$INSTALL_BAD_FILTER"
+    BAD_FILTER_LOG="$WORKDIR/install-bad-filter.log"
+    set +e
+    (cd "$INSTALL_BAD_FILTER" && nix run "path:$ROOT"#framework::install -- --filter=conf,nope > "$BAD_FILTER_LOG" 2>&1)
+    RC=$?
+    set -e
+    if [ "$RC" -eq 0 ]; then
+      fail "expected invalid filter to exit non-zero"
+    fi
+    assert_contains "$BAD_FILTER_LOG" "Unknown filter"
 
     log "installer force"
     INSTALL_FORCE="$WORKDIR/force_nixified"
@@ -323,6 +561,8 @@ let
     if [ ! -d "$INSTALL_FORCE/nix" ]; then
       fail "expected nix/ directory in force target"
     fi
+    assert_file_absent "$INSTALL_FORCE/nix/.framework"
+    assert_file_absent "$INSTALL_FORCE/NIXFIED_PROMPT_PLAN.md"
 
     log "example project apps (force install)"
     FORCE_HELP="$WORKDIR/force-help.txt"
@@ -338,6 +578,8 @@ let
     run_app_quiet "$INSTALL_FORCE" build
     run_app_quiet "$INSTALL_FORCE" check
     run_app_quiet "$INSTALL_FORCE" ci --summary
+    assert_app_missing "$INSTALL_FORCE" "framework::install"
+    assert_app_missing "$INSTALL_FORCE" "framework::prompt-plan"
     assert_app_missing "$INSTALL_FORCE" "framework::test"
 
     log "all tests passed"
