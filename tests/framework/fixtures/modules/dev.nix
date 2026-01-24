@@ -148,6 +148,32 @@
           exit 1
         fi
 
+        # Example: module hooks should fail cleanly when required env vars are missing.
+        unset PGDATA PGPORT PGDATABASE
+        if run_hook POSTGRES_START >/dev/null 2>&1; then
+          echo "POSTGRES_START should fail without PGDATA/PGPORT" >&2
+          exit 1
+        fi
+        if run_hook POSTGRES_INIT >/dev/null 2>&1; then
+          echo "POSTGRES_INIT should fail without PGDATA/PGPORT" >&2
+          exit 1
+        fi
+        if run_hook POSTGRES_SETUP_DB >/dev/null 2>&1; then
+          echo "POSTGRES_SETUP_DB should fail without PGPORT/PGDATABASE" >&2
+          exit 1
+        fi
+        export PGDATA="$BASE_DIR/postgres-$SLOT-$ENV"
+        export PGPORT="$POSTGRES_PORT"
+
+        if run_hook NGINX_SITE_PROXY >/dev/null 2>&1; then
+          echo "NGINX_SITE_PROXY should fail without args" >&2
+          exit 1
+        fi
+        if run_hook NGINX_SITE_STATIC >/dev/null 2>&1; then
+          echo "NGINX_SITE_STATIC should fail without args" >&2
+          exit 1
+        fi
+
         if nc -z 127.0.0.1 "$HTTP_PORT" >/dev/null 2>&1 || nc -z 127.0.0.1 "$HTTPS_PORT" >/dev/null 2>&1; then
           echo "Skipping NGINX_START (port in use)" >&2
         else

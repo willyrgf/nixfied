@@ -157,7 +157,7 @@ let
         name = "helpers-runtime";
         env = { };
         useDeps = false;
-        script = builtins.readFile ./tests/framework/fixtures/helpers/runtime.sh;
+        script = import ./tests/framework/fixtures/helpers/runtime.nix { };
       }
     NIX
     )
@@ -201,7 +201,7 @@ let
         name = "slots-runtime";
         env = { };
         useDeps = false;
-        script = builtins.readFile ./tests/framework/fixtures/slots/runtime.sh;
+        script = import ./tests/framework/fixtures/slots/runtime.nix { };
       }
     NIX
     )
@@ -327,6 +327,37 @@ let
       fail "expected retention failure mode to exit non-zero"
     fi
     assert_file_exists "$CI_RET_FAIL_DIR/.ci-artifacts/fail.cleanup"
+
+    log "ci unknown step"
+    CI_UNKNOWN_EXPR=$(cat <<'NIX'
+    { root, system }:
+    let
+      flake = builtins.getFlake root;
+      pkgs = flake.inputs.nixpkgs.legacyPackages.''${system};
+      base = import ./nix/project { inherit pkgs; };
+      fixture = import ./tests/framework/fixtures/ci/unknown-step.nix { project = base.project; };
+      project = pkgs.lib.recursiveUpdate base fixture;
+      slots = import ./nix/slots.nix { inherit pkgs project; };
+      hooks = import ./nix/hooks.nix { inherit pkgs project slots; postgres = null; nginx = null; };
+      lib = import ./nix/lib.nix { inherit pkgs project hooks; };
+      ciEntry = import ./nix/ci.nix { inherit pkgs project lib; };
+    in
+      ciEntry.scriptDrv
+    NIX
+    )
+
+    CI_UNKNOWN_SCRIPT=$(build_expr "$CI_UNKNOWN_EXPR")
+    CI_UNKNOWN_DIR="$WORKDIR/ci-unknown-step"
+    CI_UNKNOWN_LOG="$WORKDIR/ci-unknown-step.log"
+    mkdir -p "$CI_UNKNOWN_DIR"
+    set +e
+    (cd "$CI_UNKNOWN_DIR" && "$CI_UNKNOWN_SCRIPT" > "$CI_UNKNOWN_LOG" 2>&1)
+    RC=$?
+    set -e
+    if [ "$RC" -eq 0 ]; then
+      fail "expected unknown step to exit non-zero"
+    fi
+    assert_contains "$CI_UNKNOWN_LOG" "Unknown step"
 
     CI_RET_SUM_OK_DIR="$WORKDIR/ci-ret-summary-ok"
     CI_RET_SUM_OK_LOG="$WORKDIR/ci-ret-summary-ok.log"
@@ -497,6 +528,10 @@ let
     fi
     assert_contains "$PROMPT_PLAN_LOG" "Prompt plan disabled"
     assert_file_absent "$PROMPT_PLAN_OUT"
+    PROMPT_PLAN_FORCE_OUT="$WORKDIR/prompt-plan-enabled.md"
+    assert_file_absent "$PROMPT_PLAN_FORCE_OUT"
+    NIXFIED_PROMPT_PLAN=1 run_app "$INSTALL_TARGET" "framework::prompt-plan" -- --force --output="$PROMPT_PLAN_FORCE_OUT" >/dev/null
+    assert_file_exists "$PROMPT_PLAN_FORCE_OUT"
     rm -f "$INSTALL_TARGET/nix/.framework"
 
     log "installer re-entry"

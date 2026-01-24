@@ -414,8 +414,19 @@ let
         return 1
       fi
 
-      start_service "$name" "''${args[@]}"
+      local pid=""
+      local rc=0
+      pid=$(start_service "$name" "''${args[@]}")
+      if [ -z "$pid" ]; then
+        echo "with_service: failed to start $name" >&2
+        return 1
+      fi
+      set +e
       "''${run_cmd[@]}"
+      rc=$?
+      set -e
+      stop_service "$pid" "$name"
+      return "$rc"
     }
   '';
 
