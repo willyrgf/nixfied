@@ -205,7 +205,11 @@ let
                 export CI_MODE
                 export CI_SUMMARY
                 export CI_STEP_ARGS
-                export CI_ARTIFACTS_DIR="${artifactsDir}"
+                if [ -n "''${CI_ARTIFACTS_DIR:-}" ]; then
+                  export CI_ARTIFACTS_DIR="''${CI_ARTIFACTS_DIR}"
+                else
+                  export CI_ARTIFACTS_DIR="${artifactsDir}"
+                fi
                 export CI_KEEP_ARTIFACTS_ON_FAILURE="${if keepOnFailure then "1" else "0"}"
                 export CI_KEEP_ARTIFACTS_ON_SUCCESS="${if keepOnSuccess then "1" else "0"}"
 

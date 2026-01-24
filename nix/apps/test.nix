@@ -617,6 +617,11 @@ let
     assert_app_missing "$INSTALL_FORCE" "framework::prompt-plan"
     assert_app_missing "$INSTALL_FORCE" "framework::test"
 
+    if [ "''${FRAMEWORK_ISOLATION:-}" = "1" ]; then
+      log "isolation runner"
+      run_app "$ROOT" test-isolation
+    fi
+
     log "all tests passed"
   '';
 

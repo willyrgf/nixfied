@@ -8,6 +8,10 @@ let
   envVar = projectMeta.envVar or "PROJECT_ENV";
   slotVar = projectMeta.slotVar or "NIX_ENV";
 
+  slotsCfg = cfg.slots or { };
+  slotMax = slotsCfg.max or 9;
+  slotStride = slotsCfg.stride or 1;
+
   envOffsets = builtins.mapAttrs (name: envCfg: envCfg.offset or 0) (cfg.envs or { });
   envNames = builtins.attrNames envOffsets;
   defaultEnv =
@@ -23,6 +27,21 @@ let
 
   baseDirExpr = (cfg.directories.base or "\${XDG_DATA_HOME:-$HOME/.local/share}/project");
 
+  servicesCfg = cfg.services or { };
+  rawServiceNames = servicesCfg.names or [ ];
+  defaultServiceNames = if rawServiceNames != [ ] then rawServiceNames else portNames;
+  defaultServiceSockets =
+    if builtins.hasAttr "postgres" ports then
+      { postgres = ".s.PGSQL.$PGPORT"; }
+    else
+      { };
+  serviceSockets = defaultServiceSockets // (servicesCfg.sockets or { });
+  serviceSocketNames = builtins.attrNames serviceSockets;
+  uniqueNames =
+    names:
+    builtins.attrNames (builtins.listToAttrs (map (name: { inherit name; value = true; }) names));
+  serviceNames = uniqueNames (defaultServiceNames ++ serviceSocketNames);
+
   normalizeName =
     name:
     let
@@ -33,7 +52,7 @@ let
   portVarName = name: "${normalizeName name}_PORT";
 
   portAssignments = pkgs.lib.concatMapStringsSep "\n" (name: ''
-    ${portVarName name}=$((${toString ports.${name}} + SLOT + ENV_OFFSET))
+    ${portVarName name}=$((${toString ports.${name}} + SLOT * ${toString slotStride} + ENV_OFFSET))
   '') portNames;
 
   portExports = pkgs.lib.concatMapStringsSep "\n" (
@@ -104,8 +123,8 @@ let
       ENV=$(${resolveEnv})
     fi
 
-    if [ "$SLOT" -lt 0 ] || [ "$SLOT" -gt 9 ]; then
-      echo "❌ Error: $SLOT_VAR must be 0-9 (got $SLOT)" >&2
+    if [ "$SLOT" -lt 0 ] || [ "$SLOT" -gt ${toString slotMax} ]; then
+      echo "❌ Error: $SLOT_VAR must be 0-${toString slotMax} (got $SLOT)" >&2
       exit 1
     fi
 
@@ -161,8 +180,8 @@ let
     ENV_VAR="${envVar}"
 
     SLOT="''${!SLOT_VAR:-0}"
-    if [ "$SLOT" -lt 0 ] || [ "$SLOT" -gt 9 ]; then
-      echo "Error: $SLOT_VAR must be 0-9 (got $SLOT)" >&2
+    if [ "$SLOT" -lt 0 ] || [ "$SLOT" -gt ${toString slotMax} ]; then
+      echo "Error: $SLOT_VAR must be 0-${toString slotMax} (got $SLOT)" >&2
       exit 1
     fi
 
@@ -180,14 +199,44 @@ let
 
     ${portAssignments}
 
+    ${pkgs.lib.concatMapStringsSep "\n" (name: let upper = normalizeName name; in ''
+      ${upper}_DIR="${baseDirExpr}/${name}-$SLOT-$ENV"
+      ${upper}_LOG_DIR="${baseDirExpr}/${name}-$SLOT-$ENV/logs"
+      ${upper}_RUN_DIR="${baseDirExpr}/${name}-$SLOT-$ENV/run"
+      ${upper}_CONFIG_DIR="${baseDirExpr}/${name}-$SLOT-$ENV/config"
+      ${upper}_STATE_DIR="${baseDirExpr}/${name}-$SLOT-$ENV/state"
+      ${upper}_SOCKET_DIR="${baseDirExpr}/${name}-$SLOT-$ENV/run/sockets"
+    '') serviceNames}
+
+    ${pkgs.lib.concatMapStringsSep "\n" (name: let upper = normalizeName name; in ''
+      ${upper}_SOCKET_NAME="${serviceSockets.${name}}"
+      if [ -n "${"$"}{${upper}_SOCKET_NAME:-}" ]; then
+        ${upper}_SOCKET="${"$"}{${upper}_SOCKET_DIR}/${"$"}{${upper}_SOCKET_NAME}"
+      fi
+    '') serviceSocketNames}
+
     echo "SLOT=$SLOT"
     echo "ENV=$ENV"
     echo "ENV_OFFSET=$ENV_OFFSET"
+    echo "SLOT_STRIDE=${toString slotStride}"
     echo "BASE_DIR=$BASE_DIR"
     echo "LOG_DIR=$LOG_DIR"
     echo "RUN_DIR=$RUN_DIR"
     echo "CONFIG_DIR=$CONFIG_DIR"
     echo "STATE_DIR=$STATE_DIR"
+    ${pkgs.lib.concatMapStringsSep "\n" (name: let upper = normalizeName name; in ''
+      echo "${upper}_DIR=${"$"}${upper}_DIR"
+      echo "${upper}_LOG_DIR=${"$"}${upper}_LOG_DIR"
+      echo "${upper}_RUN_DIR=${"$"}${upper}_RUN_DIR"
+      echo "${upper}_CONFIG_DIR=${"$"}${upper}_CONFIG_DIR"
+      echo "${upper}_STATE_DIR=${"$"}${upper}_STATE_DIR"
+      echo "${upper}_SOCKET_DIR=${"$"}${upper}_SOCKET_DIR"
+    '') serviceNames}
+    ${pkgs.lib.concatMapStringsSep "\n" (name: let upper = normalizeName name; in ''
+      if [ -n "${"$"}{${upper}_SOCKET:-}" ]; then
+        echo "${upper}_SOCKET=${"$"}${upper}_SOCKET"
+      fi
+    '') serviceSocketNames}
     ${portExports}
   '';
 
@@ -200,9 +249,14 @@ in
     envOffsets
     ports
     portVarName
+    normalizeName
     resolveEnv
     requireSlotEnv
     getSlotInfo
     getServiceDir
+    serviceNames
+    serviceSockets
+    slotMax
+    slotStride
     ;
 }

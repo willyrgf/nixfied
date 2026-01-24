@@ -25,6 +25,12 @@ rec {
     };
   };
 
+  # Slot behavior for port calculations
+  slots = {
+    max = 9;
+    stride = 1;
+  };
+
   # Port roles (keys become <KEY>_PORT in slot scripts)
   ports = {
     backend = 3000;
@@ -76,6 +82,32 @@ rec {
       portKeyHttps = "https";
       dataDirName = "nginx";
     };
+  };
+
+  # Isolation test runner configuration (nix run .#test-isolation)
+  isolation = {
+    enable = true;
+    slots = [ 5 7 8 9 ];
+    envs = [ ];
+    validationInterval = 10;
+    maxRuntime = 300;
+    startupWait = 30;
+    logsDir = "/tmp/${project.id}-isolation";
+    keepLogsOnSuccess = false;
+    keepLogsOnFailure = true;
+    useDeps = false;
+    runApp = "ci";
+    runArgs = [ "--summary" ];
+    runEnv = { };
+    preInstall = "";
+    runCommand = "nix run path:.#ci -- --summary";
+    validateCommand = "";
+    cleanup = "";
+  };
+
+  services = {
+    names = [ ];
+    sockets = { };
   };
 
   packages = { };
