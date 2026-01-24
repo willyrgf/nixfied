@@ -493,10 +493,10 @@ Run the integration test suite for the framework itself:
 nix run .#framework::test
 ```
 
-If you have untracked changes and want the tests to use your working tree:
+To include the isolation runner in framework tests:
 
 ```bash
-nix run path:.#framework::test
+FRAMEWORK_ISOLATION=1 nix run .#framework::test
 ```
 
 The test runner is fully packaged with Nix tools; it does not depend on system

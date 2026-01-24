@@ -71,8 +71,14 @@ let
       exit 0
     fi
 
+    if [ -z "''${PGSOCKET_DIR:-}" ]; then
+      PGSOCKET_DIR="/tmp"
+    fi
+    mkdir -p "$PGSOCKET_DIR"
+    chmod 700 "$PGSOCKET_DIR" 2>/dev/null || true
+
     echo "🚀 Starting PostgreSQL on port $PGPORT..."
-    ${postgres}/bin/pg_ctl -D "$PGDATA" -l "$PGDATA/postgres.log" -o "-p $PGPORT" start
+    ${postgres}/bin/pg_ctl -D "$PGDATA" -l "$PGDATA/postgres.log" -o "-p $PGPORT -k $PGSOCKET_DIR" start
 
     for i in $(seq 1 60); do
       if ${postgres}/bin/pg_isready -U postgres -h localhost -p "$PGPORT" -q 2>/dev/null; then
@@ -126,6 +132,7 @@ let
     PORT_VAR="${portVar}"
     export PGPORT="''${!PORT_VAR}"
     export PGDATA="${pgdataExpr}"
+    export PGSOCKET_DIR="''${POSTGRES_SOCKET_DIR:-$PGDATA/run/sockets}"
     export PGDATABASE="''${PGDATABASE:-${database}}"
 
     echo "🎰 Slot $SLOT, env $ENV (PGPORT=$PGPORT)"
@@ -146,6 +153,7 @@ let
     PORT_VAR="${portVar}"
     export PGPORT="''${!PORT_VAR}"
     export PGDATA="${pgdataExpr}"
+    export PGSOCKET_DIR="''${POSTGRES_SOCKET_DIR:-$PGDATA/run/sockets}"
     export PGDATABASE="''${PGDATABASE:-${testDatabase}}"
 
     ${init}

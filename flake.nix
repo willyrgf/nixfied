@@ -82,6 +82,14 @@
             }
           else
             { };
+        isolationApps = import ./nix/apps/isolation.nix {
+          inherit
+            pkgs
+            project
+            lib
+            slots
+            ;
+        };
         frameworkApps = pkgs.lib.mapAttrs' (name: value: {
           name = "framework::${name}";
           value = value;
@@ -112,6 +120,7 @@
         apps =
           coreApps
           // (if ciApp != null then { ci = ciApp; } else { })
+          // isolationApps
           // frameworkApps
           // {
             default = if coreApps ? help then coreApps.help else coreApps.dev;
