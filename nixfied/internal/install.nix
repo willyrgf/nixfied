@@ -422,29 +422,49 @@ EOF
           cp -f "$SRC/flake.lock" "$ROOT/flake.lock"
         fi
 
-        PRESERVE_PROJECT=false
-        if [ -d "$ROOT/nixfied/project" ] && [ "$RESET_PROJECT" != "true" ]; then
-          PRESERVE_PROJECT=true
-        fi
-        if [ "$MODE" = "upgrade" ] && [ "$RESET_PROJECT" != "true" ]; then
-          PRESERVE_PROJECT=true
-        fi
+	        PRESERVE_PROJECT=false
+	        if [ -d "$ROOT/nixfied/project" ] && [ "$RESET_PROJECT" != "true" ]; then
+	          PRESERVE_PROJECT=true
+	        fi
+	        if [ "$MODE" = "upgrade" ] && [ "$RESET_PROJECT" != "true" ]; then
+	          PRESERVE_PROJECT=true
+	        fi
+	
+	        PRESERVE_LOCAL=false
+	        if [ -d "$ROOT/nixfied/local" ]; then
+	          PRESERVE_LOCAL=true
+	        fi
 
-        if [ -n "$FILTERS_RAW" ] && [ "$PRESERVE_PROJECT" = "true" ]; then
-          echo "ℹ️  Skipping --filter on upgrade (nixfied/project is preserved)."
-          FILTERS_RAW=""
-        fi
+	        if [ -n "$FILTERS_RAW" ] && [ "$PRESERVE_PROJECT" = "true" ]; then
+	          echo "ℹ️  Skipping --filter on upgrade (nixfied/project is preserved)."
+	          FILTERS_RAW=""
+	        fi
 
         if [ -d "$ROOT/nixfied" ]; then
           chmod -R u+w "$ROOT/nixfied" 2>/dev/null || true
         fi
 
-        if [ "$PRESERVE_PROJECT" = "true" ]; then
-          echo "🔧 Upgrading nixfied/ (preserving nixfied/project/)"
-          ${pkgs.rsync}/bin/rsync -a --delete --chmod=Du+w,Fu+w --exclude='/project/' "$SRC/nixfied/" "$ROOT/nixfied/"
-        else
-          ${pkgs.rsync}/bin/rsync -a --delete --chmod=Du+w,Fu+w "$SRC/nixfied/" "$ROOT/nixfied/"
-        fi
+	        RSYNC_EXCLUDES=()
+	        PRESERVE_MSG=""
+	        if [ "$PRESERVE_PROJECT" = "true" ]; then
+	          RSYNC_EXCLUDES+=(--exclude='/project/')
+	          PRESERVE_MSG="nixfied/project/"
+	        fi
+	        if [ "$PRESERVE_LOCAL" = "true" ]; then
+	          RSYNC_EXCLUDES+=(--exclude='/local/')
+	          if [ -n "$PRESERVE_MSG" ]; then
+	            PRESERVE_MSG="$PRESERVE_MSG and nixfied/local/"
+	          else
+	            PRESERVE_MSG="nixfied/local/"
+	          fi
+	        fi
+	
+	        if [ "''${#RSYNC_EXCLUDES[@]}" -gt 0 ]; then
+	          echo "🔧 Upgrading nixfied/ (preserving $PRESERVE_MSG)"
+	          ${pkgs.rsync}/bin/rsync -a --delete --chmod=Du+w,Fu+w "''${RSYNC_EXCLUDES[@]}" "$SRC/nixfied/" "$ROOT/nixfied/"
+	        else
+	          ${pkgs.rsync}/bin/rsync -a --delete --chmod=Du+w,Fu+w "$SRC/nixfied/" "$ROOT/nixfied/"
+	        fi
 
         chmod -R u+w "$ROOT/nixfied" 2>/dev/null || true
         if command -v chflags >/dev/null 2>&1; then
@@ -525,12 +545,12 @@ EOF
           fi
         fi
 
-        if [ "$PRESERVE_PROJECT" = "true" ] || [ "$MODE" = "upgrade" ]; then
-          echo "✅ Framework upgraded."
-          echo "    Preserved nixfied/project/ (pass --reset-project to overwrite)."
-        else
-          echo "✅ Framework installed."
-        fi
+	        if [ "$PRESERVE_PROJECT" = "true" ] || [ "$PRESERVE_LOCAL" = "true" ] || [ "$MODE" = "upgrade" ]; then
+	          echo "✅ Framework upgraded."
+	          echo "    Preserved nixfied/project/ and nixfied/local/ (pass --reset-project to overwrite project templates)."
+	        else
+	          echo "✅ Framework installed."
+	        fi
         echo "Next:"
         echo "  - Edit nixfied/project/conf.nix"
         echo "  - Customize nixfied/project/{dev,test,prod,quality,ci}.nix (prod.nix defines the build command)"
@@ -557,8 +577,8 @@ in
     name = "upgrade";
     api = {
       version = 1;
-      summary = "Upgrade Nixfied framework in-place (preserving nixfied/project by default)";
-      details = "Upgrades the Nixfied framework in-place. By default it preserves nixfied/project so project-specific configuration remains intact.";
+      summary = "Upgrade Nixfied framework in-place (preserving nixfied/project and nixfied/local by default)";
+      details = "Upgrades the Nixfied framework in-place. By default it preserves nixfied/project and nixfied/local so project-specific configuration and extensions remain intact.";
       usage = [ "nix run .#framework::upgrade -- [--force] [--reset-project] [--no-prompt-plan]" ];
       category = "framework";
     };

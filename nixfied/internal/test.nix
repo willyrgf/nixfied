@@ -503,6 +503,7 @@ let
     fi
     assert_file_absent "$INSTALL_TARGET/nixfied/.framework"
     assert_file_absent "$INSTALL_TARGET/NIXFIED_PROMPT_PLAN.md"
+    assert_file_exists "$INSTALL_TARGET/nixfied/local/default.nix"
 
     log "installer worktree"
     INSTALL_WT_BASE="$WORKDIR/install-worktree"
@@ -528,6 +529,7 @@ let
       fail "expected nixfied/ directory in worktree target"
     fi
     assert_file_absent "$INSTALL_WT_TARGET/nixfied/.framework"
+    assert_file_exists "$INSTALL_WT_TARGET/nixfied/local/default.nix"
 
     log "example project apps (basic install)"
     BASIC_HELP="$WORKDIR/basic-help.txt"
@@ -599,8 +601,10 @@ let
 
     log "installer upgrade preserves project"
     echo "# NIXFIED_UPGRADE_TEST_MARKER" >> "$INSTALL_TARGET/nixfied/project/conf.nix"
+    echo "# NIXFIED_LOCAL_UPGRADE_TEST_MARKER" >> "$INSTALL_TARGET/nixfied/local/default.nix"
     (cd "$INSTALL_TARGET" && nix run "path:$ROOT"#framework::upgrade -- --force >/dev/null)
     assert_contains "$INSTALL_TARGET/nixfied/project/conf.nix" "NIXFIED_UPGRADE_TEST_MARKER"
+    assert_contains "$INSTALL_TARGET/nixfied/local/default.nix" "NIXFIED_LOCAL_UPGRADE_TEST_MARKER"
     assert_file_absent "$INSTALL_TARGET/nixfied/.framework"
 
     log "framework marker toggle"

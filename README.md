@@ -93,6 +93,7 @@ Safety behavior:
 - If you are on another branch, it switches to `nixfied` before writing files
   (refuses to switch if the working tree is dirty unless `--force`).
 - It installs only `flake.nix`, `flake.lock`, and `nixfied/`.
+- Customize your project in `nixfied/project/` and `nixfied/local/` (avoid editing framework code).
 
 Force overwrite:
 
@@ -114,7 +115,7 @@ Custom worktree directory:
 nix run github:willyrgf/nixfied#framework::install -- --worktree --target /path/to/my-app_nixfied
 ```
 
-Upgrade an existing install (upgrades framework files, preserves `nixfied/project/` by default):
+Upgrade an existing install (upgrades framework files, preserves `nixfied/project/` and `nixfied/local/` by default):
 
 ```bash
 cd my-app
@@ -170,6 +171,8 @@ nixfied/
     test.nix           # framework test runner
     isolation.nix      # parallel isolation stress test
     module-apps.nix    # auto-generated module apps (db-*, nginx-*, supervisor)
+  local/
+    default.nix        # user-owned extensions (extra apps/packages/devShells)
   project/
     conf.nix           # base configuration
     dev.nix            # dev command
