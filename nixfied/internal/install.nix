@@ -108,15 +108,29 @@ let
 
     Requirements:
     - Be concise and actionable.
-    - Use headings: "PROMPT PLAN", "Project Snapshot", "Integration Steps", "Key Files to Edit",
-      "Open Questions", and "Next Prompts".
+    - Use headings: "PROMPT PLAN", "Project Snapshot", "Current Behavior", "Integration Steps",
+      "Key Files to Edit", "Validation Checklist", "Open Questions", and "Next Prompts".
     - Ground every step in the provided context; do not guess missing details.
-    - Mention Nixfied files to customize (e.g. nixfied/project/conf.nix and nixfied/project/{dev,test,prod,quality,ci}.nix).
-    - Reference key framework features: ephemeral environments (slot locking, conditional cleanup),
-      module apps (db-*, nginx-*, supervisor), CI --bg mode, run registry, backup/migration system.
-    - Key files: nixfied/project/conf.nix, nixfied/project/{dev,test,prod,quality,ci}.nix.
-    - In "Integration Steps", start with high-level integration goals (Nixfied as the single entrypoint for dev/test/check/prod/db/ci, parity with current behavior, avoid regressions), then list concrete wiring steps.
-    - Include explicit validation expectations (e.g., nix run .#help/.#check/.#test smoke checks) and documentation refactor goals (README + CLAUDE.md make Nixfied the canonical entrypoint).
+    - Treat Nixfied as the single entrypoint for dev/test/build/check/ci and (optionally) db/nginx/supervisor:
+      nix run .#help, .#dev, .#test, .#build, .#check, .#ci
+    - Call out the key file-to-command mapping (do not assume "prod" is a command):
+      - nixfied/project/dev.nix -> commands.dev
+      - nixfied/project/test.nix -> commands.test
+      - nixfied/project/prod.nix -> commands.build (build/prod workflow)
+      - nixfied/project/quality.nix -> commands.check
+      - nixfied/project/ci.nix -> CI pipeline DSL config (ci.modes/ci.steps) + CI command metadata
+      - nixfied/project/conf.nix -> project identity, envs/ports, module toggles, ephemeral config
+      - nixfied/project/default.nix -> merges all project files; update if new files are added
+    - Mention the primary customization surface is nixfied/project/ (avoid editing flake.nix unless the plan proves it's necessary).
+    - Reference relevant framework features (only if applicable to this project):
+      - CI pipeline DSL (modes/steps, artifacts, summary.json; supports --summary, --mode/--<mode>, --bg)
+      - Ephemeral environments (slot locking, source copy, conditional cleanup; ci.useEphemeral)
+      - Module apps + hooks (db-*, nginx-*, supervisor apps; postgres backups/migrations)
+      - Run registry (used by CI --bg mode)
+    - In "Integration Steps", start with high-level goals (behavior parity with the current dev/test/build/check/ci workflows, avoid regressions), then list concrete wiring steps with exact file paths.
+    - In "Key Files to Edit", list each file and the specific changes needed.
+    - In "Validation Checklist", include concrete smoke checks (nix run .#help/.#dev/.#test/.#build/.#check/.#ci -- --summary) and any project-specific checks from the docs.
+    - Include documentation alignment goals (README.md plus any agent instruction docs like CLAUDE.md/AGENTS.md should make Nixfied the canonical entrypoint).
     - If docs conflict on command names or behavior, call it out and ask which source is authoritative.
     - If info is missing, list it in "Open Questions".
 
