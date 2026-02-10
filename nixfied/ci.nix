@@ -159,7 +159,7 @@ let
   script =
     if !enabled then
       ''
-        echo "CI DSL is disabled. Enable it in nix/project/ci.nix (ci.enable = true)."
+        echo "CI DSL is disabled. Enable it in nixfied/project/ci.nix (ci.enable = true)."
         exit 1
       ''
     else if modeNames == [ ] then

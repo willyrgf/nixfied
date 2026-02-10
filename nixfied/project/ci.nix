@@ -12,7 +12,7 @@
       };
       useDeps = true;
       script = ''
-        echo "CI DSL is enabled. Edit nix/project/ci.nix to customize steps."
+        echo "CI DSL is enabled. Edit nixfied/project/ci.nix to customize steps."
         exit 0
       '';
     };

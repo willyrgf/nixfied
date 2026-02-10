@@ -15,7 +15,7 @@
       };
       useDeps = true;
       script = ''
-        echo "Build command placeholder. Edit nix/project/prod.nix."
+        echo "Build command placeholder. Edit nixfied/project/prod.nix."
         exit 0
       '';
     };

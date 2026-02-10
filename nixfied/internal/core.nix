@@ -69,7 +69,7 @@ let
       ${project.project.envVar}  Environment name (${pkgs.lib.concatStringsSep "|" (builtins.attrNames project.envs)})
       ${project.project.slotVar}  Slot number (0-9)
 
-    Edit nix/project/ to customize commands, ports, and modules.
+    Edit nixfied/project/ to customize commands, ports, and modules.
     EOF
   '';
 

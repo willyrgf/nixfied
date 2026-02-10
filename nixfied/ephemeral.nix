@@ -50,6 +50,12 @@ let
 
   slotMax = (project.slots or { }).max or 9;
 
+  # Pre-computed bash variable references
+  # Nix $${var} doesn't interpolate; use "\$${var}" in "..." strings instead
+  refEphRoot = "\$${projectIdUpper}_EPHEMERAL_ROOT";
+  refEphSlot = "\$${projectIdUpper}_EPHEMERAL_SLOT";
+  refLockFd = "\$${projectIdUpper}_SLOT_LOCK_FD";
+
   mkUniqueId = pkgs.writeShellScript "mk-unique-id" ''
     echo "$(date +%Y%m%d-%H%M%S)-$(head -c 4 /dev/urandom | od -An -tx1 | tr -d ' \n')"
   '';
@@ -86,7 +92,7 @@ let
 
   releaseSlotLock = pkgs.writeShellScript "release-slot-lock" ''
     if [ -n "''${${projectIdUpper}_SLOT_LOCK_FD:-}" ]; then
-      eval "exec $${projectIdUpper}_SLOT_LOCK_FD>&-" 2>/dev/null || true
+      eval "exec ${refLockFd}>&-" 2>/dev/null || true
     fi
   '';
 
@@ -136,12 +142,12 @@ let
       else
         echo ""
         echo "🧹 Cleaning up ephemeral state (slot ''${${projectIdUpper}_EPHEMERAL_SLOT:-unknown})..."
-        rm -rf "$${projectIdUpper}_EPHEMERAL_ROOT"
+        rm -rf "${refEphRoot}"
         echo "   ✅ Ephemeral state cleaned"
       fi
 
       if [ -n "''${${projectIdUpper}_SLOT_LOCK_FD:-}" ]; then
-        eval "exec $${projectIdUpper}_SLOT_LOCK_FD>&-" 2>/dev/null || true
+        eval "exec ${refLockFd}>&-" 2>/dev/null || true
       fi
 
       return $exit_code
@@ -190,20 +196,20 @@ let
       echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
       echo "🔒 Ephemeral execution mode"
       echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-      echo "   Root: $${projectIdUpper}_EPHEMERAL_ROOT"
-      echo "   Slot: $${projectIdUpper}_EPHEMERAL_SLOT (${slotVar}=''${${slotVar}}, ${envVar}=''${${envVar}})"
+      echo "   Root: ${refEphRoot}"
+      echo "   Slot: ${refEphSlot} (${slotVar}=''${${slotVar}}, ${envVar}=''${${envVar}})"
       echo ""
 
       source ${mkConditionalCleanup}
       trap _ephemeral_cleanup EXIT INT TERM
 
-      ${mkSourceCopy} "$ORIGINAL_ROOT" "$${projectIdUpper}_EPHEMERAL_ROOT/source"
+      ${mkSourceCopy} "$ORIGINAL_ROOT" "${refEphRoot}/source"
 
-      export XDG_DATA_HOME="$${projectIdUpper}_EPHEMERAL_ROOT/data"
+      export XDG_DATA_HOME="${refEphRoot}/data"
 
       ${extraEnv}
 
-      cd "$${projectIdUpper}_EPHEMERAL_ROOT/source"
+      cd "${refEphRoot}/source"
 
       ${
         if installDeps && depsScript != "" then
@@ -244,9 +250,9 @@ let
 
   getEphemeralPaths = pkgs.writeShellScript "get-ephemeral-paths" ''
     if [ "''${${projectIdUpper}_EPHEMERAL:-}" = "1" ] && [ -n "''${${projectIdUpper}_EPHEMERAL_ROOT:-}" ]; then
-      echo "EPHEMERAL_SOURCE=$${projectIdUpper}_EPHEMERAL_ROOT/source"
-      echo "EPHEMERAL_DATA=$${projectIdUpper}_EPHEMERAL_ROOT/data"
-      echo "EPHEMERAL_BUILD=$${projectIdUpper}_EPHEMERAL_ROOT/build"
+      echo "EPHEMERAL_SOURCE=${refEphRoot}/source"
+      echo "EPHEMERAL_DATA=${refEphRoot}/data"
+      echo "EPHEMERAL_BUILD=${refEphRoot}/build"
     else
       echo "EPHEMERAL_SOURCE=$(pwd)"
       echo "EPHEMERAL_DATA=''${XDG_DATA_HOME:-$HOME/.local/share}"

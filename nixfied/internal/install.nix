@@ -99,7 +99,10 @@ let
     - Use headings: "PROMPT PLAN", "Project Snapshot", "Integration Steps", "Key Files to Edit",
       "Open Questions", and "Next Prompts".
     - Ground every step in the provided context; do not guess missing details.
-    - Mention Nixfied files to customize (e.g. nix/project/conf.nix and nix/project/{dev,test,prod,quality,ci}.nix).
+    - Mention Nixfied files to customize (e.g. nixfied/project/conf.nix and nixfied/project/{dev,test,prod,quality,ci}.nix).
+    - Reference key framework features: ephemeral environments (slot locking, conditional cleanup),
+      module apps (db-*, nginx-*, supervisor), CI --bg mode, run registry, backup/migration system.
+    - Key files: nixfied/project/conf.nix, nixfied/project/{dev,test,prod,quality,ci}.nix.
     - In "Integration Steps", start with high-level integration goals (Nixfied as the single entrypoint for dev/test/check/prod/db/ci, parity with current behavior, avoid regressions), then list concrete wiring steps.
     - Include explicit validation expectations (e.g., nix run .#help/.#check/.#test smoke checks) and documentation refactor goals (README + CLAUDE.md make Nixfied the canonical entrypoint).
     - If docs conflict on command names or behavior, call it out and ask which source is authoritative.
@@ -210,20 +213,20 @@ let
 
     SRC="${frameworkRoot}"
 
-    if [ ! -f "$SRC/flake.nix" ] || [ ! -d "$SRC/nix" ]; then
+    if [ ! -f "$SRC/flake.nix" ] || [ ! -d "$SRC/nixfied" ]; then
       echo "❌ Framework source is missing required files." >&2
       exit 1
     fi
 
     NEEDS_OVERWRITE=false
-    if [ -e "$ROOT/flake.nix" ] || [ -e "$ROOT/flake.lock" ] || [ -d "$ROOT/nix" ]; then
+    if [ -e "$ROOT/flake.nix" ] || [ -e "$ROOT/flake.lock" ] || [ -d "$ROOT/nixfied" ]; then
       NEEDS_OVERWRITE=true
     fi
 
     if [ "$NEEDS_OVERWRITE" = "true" ] && [ -z "''${NIXFIED_INSTALL_FORCE:-}" ]; then
       if [ -t 0 ]; then
         echo "⚠️  Existing Nix files found in $ROOT"
-        echo "    This will overwrite: flake.nix, flake.lock, nix/"
+        echo "    This will overwrite: flake.nix, flake.lock, nixfied/"
         echo -n "Continue? [y/N]: "
         read -r REPLY
         if [[ ! "$REPLY" =~ ^[Yy]$ ]]; then
@@ -243,33 +246,33 @@ let
       cp -f "$SRC/flake.lock" "$ROOT/flake.lock"
     fi
 
-    if [ -d "$ROOT/nix" ]; then
-      chmod -R u+w "$ROOT/nix" 2>/dev/null || true
-      rm -rf "$ROOT/nix"
+    if [ -d "$ROOT/nixfied" ]; then
+      chmod -R u+w "$ROOT/nixfied" 2>/dev/null || true
+      rm -rf "$ROOT/nixfied"
     fi
 
     if command -v rsync >/dev/null 2>&1; then
-      rsync -a --chmod=Du+w,Fu+w "$SRC/nix/" "$ROOT/nix/"
+      rsync -a --chmod=Du+w,Fu+w "$SRC/nixfied/" "$ROOT/nixfied/"
     else
-      cp -R "$SRC/nix" "$ROOT/nix"
-      chmod -R u+w "$ROOT/nix" 2>/dev/null || true
+      cp -R "$SRC/nixfied" "$ROOT/nixfied"
+      chmod -R u+w "$ROOT/nixfied" 2>/dev/null || true
     fi
 
-    chmod -R u+w "$ROOT/nix" 2>/dev/null || true
+    chmod -R u+w "$ROOT/nixfied" 2>/dev/null || true
     if command -v chflags >/dev/null 2>&1; then
-      chflags -R nouchg "$ROOT/nix" 2>/dev/null || true
+      chflags -R nouchg "$ROOT/nixfied" 2>/dev/null || true
     fi
     if command -v chattr >/dev/null 2>&1; then
-      chattr -R -i "$ROOT/nix" 2>/dev/null || true
+      chattr -R -i "$ROOT/nixfied" 2>/dev/null || true
     fi
-    chmod u+w "$ROOT/nix/.framework" 2>/dev/null || true
+    chmod u+w "$ROOT/nixfied/.framework" 2>/dev/null || true
     if command -v chflags >/dev/null 2>&1; then
-      chflags nouchg "$ROOT/nix/.framework" 2>/dev/null || true
+      chflags nouchg "$ROOT/nixfied/.framework" 2>/dev/null || true
     fi
     if command -v chattr >/dev/null 2>&1; then
-      chattr -i "$ROOT/nix/.framework" 2>/dev/null || true
+      chattr -i "$ROOT/nixfied/.framework" 2>/dev/null || true
     fi
-    rm -f "$ROOT/nix/.framework"
+    rm -f "$ROOT/nixfied/.framework"
 
     if [ -n "$FILTERS_RAW" ]; then
       IFS=',' read -r -a FILTERS <<< "$FILTERS_RAW"
@@ -293,7 +296,7 @@ let
 
       for f in dev test prod quality ci; do
         if [ -z "''${KEEP[$f]:-}" ]; then
-          rm -f "$ROOT/nix/project/$f.nix" 2>/dev/null || true
+          rm -f "$ROOT/nixfied/project/$f.nix" 2>/dev/null || true
         fi
       done
 
@@ -313,7 +316,7 @@ let
         echo "  ];"
         echo "in"
         echo "pkgs.lib.foldl' pkgs.lib.recursiveUpdate { } parts"
-      } > "$ROOT/nix/project/default.nix"
+      } > "$ROOT/nixfied/project/default.nix"
     fi
 
     PLAN_EXIT=0
@@ -327,8 +330,8 @@ let
 
     echo "✅ Framework installed."
     echo "Next:"
-    echo "  - Edit nix/project/conf.nix"
-    echo "  - Customize nix/project/{dev,test,prod,quality,ci}.nix"
+    echo "  - Edit nixfied/project/conf.nix"
+    echo "  - Customize nixfied/project/{dev,test,prod,quality,ci}.nix"
   '';
 in
 {

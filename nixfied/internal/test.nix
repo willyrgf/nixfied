@@ -20,7 +20,7 @@ let
     ROOT=$(cd "$ROOT" && pwd -P)
     cd "$ROOT"
 
-    if [ ! -f "$ROOT/flake.nix" ] || [ ! -d "$ROOT/nix" ]; then
+    if [ ! -f "$ROOT/flake.nix" ] || [ ! -d "$ROOT/nixfied" ]; then
       echo "Run from the framework repository root." >&2
       exit 1
     fi
@@ -138,7 +138,7 @@ let
     let
       flake = builtins.getFlake root;
       pkgs = flake.inputs.nixpkgs.legacyPackages.''${system};
-      base = import ./nix/project { inherit pkgs; };
+      base = import ./nixfied/project { inherit pkgs; };
       project = pkgs.lib.recursiveUpdate base {
         tooling.runtimePackages =
           (base.tooling.runtimePackages or [ ])
@@ -149,9 +149,9 @@ let
             pkgs.python3
           ];
       };
-      slots = import ./nix/slots.nix { inherit pkgs project; };
-      hooks = import ./nix/hooks.nix { inherit pkgs project slots; postgres = null; nginx = null; };
-      lib = import ./nix/lib { inherit pkgs project hooks; };
+      slots = import ./nixfied/slots.nix { inherit pkgs project; };
+      hooks = import ./nixfied/hooks.nix { inherit pkgs project slots; postgres = null; nginx = null; };
+      lib = import ./nixfied/lib { inherit pkgs project hooks; };
     in
       lib.mkAppScript {
         name = "helpers-runtime";
@@ -184,7 +184,7 @@ let
     let
       flake = builtins.getFlake root;
       pkgs = flake.inputs.nixpkgs.legacyPackages.''${system};
-      base = import ./nix/project { inherit pkgs; };
+      base = import ./nixfied/project { inherit pkgs; };
       project = pkgs.lib.recursiveUpdate base {
         tooling.runtimePackages =
           (base.tooling.runtimePackages or [ ])
@@ -193,9 +193,9 @@ let
             pkgs.python3
           ];
       };
-      slots = import ./nix/slots.nix { inherit pkgs project; };
-      hooks = import ./nix/hooks.nix { inherit pkgs project slots; postgres = null; nginx = null; };
-      lib = import ./nix/lib { inherit pkgs project hooks; };
+      slots = import ./nixfied/slots.nix { inherit pkgs project; };
+      hooks = import ./nixfied/hooks.nix { inherit pkgs project slots; postgres = null; nginx = null; };
+      lib = import ./nixfied/lib { inherit pkgs project hooks; };
     in
       lib.mkAppScript {
         name = "slots-runtime";
@@ -226,13 +226,13 @@ let
     let
       flake = builtins.getFlake root;
       pkgs = flake.inputs.nixpkgs.legacyPackages.''${system};
-      base = import ./nix/project { inherit pkgs; };
+      base = import ./nixfied/project { inherit pkgs; };
       fixture = import ./tests/framework/fixtures/ci/ci.nix { project = base.project; };
       project = pkgs.lib.recursiveUpdate base fixture;
-      slots = import ./nix/slots.nix { inherit pkgs project; };
-      hooks = import ./nix/hooks.nix { inherit pkgs project slots; postgres = null; nginx = null; };
-      lib = import ./nix/lib { inherit pkgs project hooks; };
-      ciEntry = import ./nix/ci.nix { inherit pkgs project lib; };
+      slots = import ./nixfied/slots.nix { inherit pkgs project; };
+      hooks = import ./nixfied/hooks.nix { inherit pkgs project slots; postgres = null; nginx = null; };
+      lib = import ./nixfied/lib { inherit pkgs project hooks; };
+      ciEntry = import ./nixfied/ci.nix { inherit pkgs project lib; };
     in
       ciEntry.scriptDrv
     NIX
@@ -300,13 +300,13 @@ let
     let
       flake = builtins.getFlake root;
       pkgs = flake.inputs.nixpkgs.legacyPackages.''${system};
-      base = import ./nix/project { inherit pkgs; };
+      base = import ./nixfied/project { inherit pkgs; };
       fixture = import ./tests/framework/fixtures/ci/retention.nix { project = base.project; };
       project = pkgs.lib.recursiveUpdate base fixture;
-      slots = import ./nix/slots.nix { inherit pkgs project; };
-      hooks = import ./nix/hooks.nix { inherit pkgs project slots; postgres = null; nginx = null; };
-      lib = import ./nix/lib { inherit pkgs project hooks; };
-      ciEntry = import ./nix/ci.nix { inherit pkgs project lib; };
+      slots = import ./nixfied/slots.nix { inherit pkgs project; };
+      hooks = import ./nixfied/hooks.nix { inherit pkgs project slots; postgres = null; nginx = null; };
+      lib = import ./nixfied/lib { inherit pkgs project hooks; };
+      ciEntry = import ./nixfied/ci.nix { inherit pkgs project lib; };
     in
       ciEntry.scriptDrv
     NIX
@@ -334,13 +334,13 @@ let
     let
       flake = builtins.getFlake root;
       pkgs = flake.inputs.nixpkgs.legacyPackages.''${system};
-      base = import ./nix/project { inherit pkgs; };
+      base = import ./nixfied/project { inherit pkgs; };
       fixture = import ./tests/framework/fixtures/ci/unknown-step.nix { project = base.project; };
       project = pkgs.lib.recursiveUpdate base fixture;
-      slots = import ./nix/slots.nix { inherit pkgs project; };
-      hooks = import ./nix/hooks.nix { inherit pkgs project slots; postgres = null; nginx = null; };
-      lib = import ./nix/lib { inherit pkgs project hooks; };
-      ciEntry = import ./nix/ci.nix { inherit pkgs project lib; };
+      slots = import ./nixfied/slots.nix { inherit pkgs project; };
+      hooks = import ./nixfied/hooks.nix { inherit pkgs project slots; postgres = null; nginx = null; };
+      lib = import ./nixfied/lib { inherit pkgs project hooks; };
+      ciEntry = import ./nixfied/ci.nix { inherit pkgs project lib; };
     in
       ciEntry.scriptDrv
     NIX
@@ -390,23 +390,23 @@ let
     let
       flake = builtins.getFlake root;
       pkgs = flake.inputs.nixpkgs.legacyPackages.''${system};
-      base = import ./nix/project { inherit pkgs; };
+      base = import ./nixfied/project { inherit pkgs; };
       conf = import ./tests/framework/fixtures/modules/conf.nix { inherit pkgs; };
       dev = import ./tests/framework/fixtures/modules/dev.nix { project = conf.project; };
       project = pkgs.lib.recursiveUpdate base (pkgs.lib.recursiveUpdate conf dev);
-      slots = import ./nix/slots.nix { inherit pkgs project; };
+      slots = import ./nixfied/slots.nix { inherit pkgs project; };
       postgres =
         if (project.modules.postgres.enable or false) then
-          import ./nix/postgres { inherit pkgs project slots; }
+          import ./nixfied/postgres { inherit pkgs project slots; }
         else
           null;
       nginx =
         if (project.modules.nginx.enable or false) then
-          import ./nix/nginx { inherit pkgs project slots; }
+          import ./nixfied/nginx { inherit pkgs project slots; }
         else
           null;
-      hooks = import ./nix/hooks.nix { inherit pkgs project slots postgres nginx; };
-      lib = import ./nix/lib { inherit pkgs project hooks; };
+      hooks = import ./nixfied/hooks.nix { inherit pkgs project slots postgres nginx; };
+      lib = import ./nixfied/lib { inherit pkgs project hooks; };
     in
       let
         devCfg = dev.commands.dev or { };
@@ -452,7 +452,7 @@ let
     let
       flake = builtins.getFlake root;
       pkgs = flake.inputs.nixpkgs.legacyPackages.''${system};
-      base = import ./nix/project { inherit pkgs; };
+      base = import ./nixfied/project { inherit pkgs; };
       project = pkgs.lib.recursiveUpdate base {
         supervisor = {
           enable = true;
@@ -464,8 +464,8 @@ let
           };
         };
       };
-      slots = import ./nix/slots.nix { inherit pkgs project; };
-      supervisor = import ./nix/supervisor { inherit pkgs project slots; };
+      slots = import ./nixfied/slots.nix { inherit pkgs project; };
+      supervisor = import ./nixfied/supervisor { inherit pkgs project slots; };
     in
       supervisor.generateConfig
     NIX
@@ -484,10 +484,10 @@ let
     (cd "$INSTALL_BASE" && nix run "path:$ROOT"#framework::install >/dev/null)
     INSTALL_TARGET="''${INSTALL_BASE}_nixified"
     assert_file_exists "$INSTALL_TARGET/flake.nix"
-    if [ ! -d "$INSTALL_TARGET/nix" ]; then
-      fail "expected nix/ directory in installer target"
+    if [ ! -d "$INSTALL_TARGET/nixfied" ]; then
+      fail "expected nixfied/ directory in installer target"
     fi
-    assert_file_absent "$INSTALL_TARGET/nix/.framework"
+    assert_file_absent "$INSTALL_TARGET/nixfied/.framework"
     assert_file_absent "$INSTALL_TARGET/NIXFIED_PROMPT_PLAN.md"
 
     log "example project apps (basic install)"
@@ -509,7 +509,7 @@ let
     assert_app_missing "$INSTALL_TARGET" "framework::test"
 
     log "framework marker toggle"
-    touch "$INSTALL_TARGET/nix/.framework"
+    touch "$INSTALL_TARGET/nixfied/.framework"
     FRAMEWORK_HELP="$WORKDIR/framework-help.txt"
     run_app "$INSTALL_TARGET" "framework::prompt-plan" --help > "$FRAMEWORK_HELP"
     assert_contains "$FRAMEWORK_HELP" "prompt-plan"
@@ -532,7 +532,7 @@ let
     assert_file_absent "$PROMPT_PLAN_FORCE_OUT"
     NIXFIED_PROMPT_PLAN=1 run_app "$INSTALL_TARGET" "framework::prompt-plan" -- --force --output="$PROMPT_PLAN_FORCE_OUT" >/dev/null
     assert_file_exists "$PROMPT_PLAN_FORCE_OUT"
-    rm -f "$INSTALL_TARGET/nix/.framework"
+    rm -f "$INSTALL_TARGET/nixfied/.framework"
 
     log "installer re-entry"
     REENTRY_BASE="$WORKDIR/install-reentry"
@@ -540,7 +540,7 @@ let
     (cd "$REENTRY_BASE" && nix run "path:$ROOT"#framework::install >/dev/null)
     REENTRY_TARGET="''${REENTRY_BASE}_nixified"
     assert_file_exists "$REENTRY_TARGET/flake.nix"
-    assert_file_absent "$REENTRY_TARGET/nix/.framework"
+    assert_file_absent "$REENTRY_TARGET/nixfied/.framework"
     (cd "$REENTRY_BASE" && nix run "path:$ROOT"#framework::install -- --force >/dev/null)
     assert_file_exists "$REENTRY_TARGET/flake.nix"
     assert_file_absent "''${REENTRY_TARGET}_nixified"
@@ -550,15 +550,15 @@ let
     init_repo "$INSTALL_FILTER"
     (cd "$INSTALL_FILTER" && nix run "path:$ROOT"#framework::install -- --filter=conf,ci >/dev/null)
     FILTER_TARGET="''${INSTALL_FILTER}_nixified"
-    assert_file_exists "$FILTER_TARGET/nix/project/ci.nix"
-    assert_file_absent "$FILTER_TARGET/nix/project/dev.nix"
-    assert_file_absent "$FILTER_TARGET/nix/project/test.nix"
-    assert_file_absent "$FILTER_TARGET/nix/project/prod.nix"
-    assert_file_absent "$FILTER_TARGET/nix/project/quality.nix"
-    if grep -q "dev.nix" "$FILTER_TARGET/nix/project/default.nix"; then
+    assert_file_exists "$FILTER_TARGET/nixfied/project/ci.nix"
+    assert_file_absent "$FILTER_TARGET/nixfied/project/dev.nix"
+    assert_file_absent "$FILTER_TARGET/nixfied/project/test.nix"
+    assert_file_absent "$FILTER_TARGET/nixfied/project/prod.nix"
+    assert_file_absent "$FILTER_TARGET/nixfied/project/quality.nix"
+    if grep -q "dev.nix" "$FILTER_TARGET/nixfied/project/default.nix"; then
       fail "default.nix should not include dev.nix when filtered"
     fi
-    assert_file_absent "$FILTER_TARGET/nix/.framework"
+    assert_file_absent "$FILTER_TARGET/nixfied/.framework"
     assert_file_absent "$FILTER_TARGET/NIXFIED_PROMPT_PLAN.md"
 
     log "example project apps (filtered install)"
@@ -590,13 +590,13 @@ let
     log "installer force"
     INSTALL_FORCE="$WORKDIR/force_nixified"
     init_repo "$INSTALL_FORCE"
-    mkdir -p "$INSTALL_FORCE/nix"
+    mkdir -p "$INSTALL_FORCE/nixfied"
     (cd "$INSTALL_FORCE" && nix run "path:$ROOT"#framework::install -- --force >/dev/null)
     assert_file_exists "$INSTALL_FORCE/flake.nix"
-    if [ ! -d "$INSTALL_FORCE/nix" ]; then
-      fail "expected nix/ directory in force target"
+    if [ ! -d "$INSTALL_FORCE/nixfied" ]; then
+      fail "expected nixfied/ directory in force target"
     fi
-    assert_file_absent "$INSTALL_FORCE/nix/.framework"
+    assert_file_absent "$INSTALL_FORCE/nixfied/.framework"
     assert_file_absent "$INSTALL_FORCE/NIXFIED_PROMPT_PLAN.md"
 
     log "example project apps (force install)"
@@ -616,6 +616,237 @@ let
     assert_app_missing "$INSTALL_FORCE" "framework::install"
     assert_app_missing "$INSTALL_FORCE" "framework::prompt-plan"
     assert_app_missing "$INSTALL_FORCE" "framework::test"
+
+    log "ephemeral slot locking"
+    EPHEM_DIR="$WORKDIR/ephemeral"
+    mkdir -p "$EPHEM_DIR"
+    EPHEM_EXPR=$(cat <<'NIX'
+    { root, system }:
+    let
+      flake = builtins.getFlake root;
+      pkgs = flake.inputs.nixpkgs.legacyPackages.''${system};
+      base = import ./nixfied/project { inherit pkgs; };
+      project = pkgs.lib.recursiveUpdate base {
+        ephemeral.enable = true;
+      };
+      ephemeral = import ./nixfied/ephemeral.nix { inherit pkgs project; };
+      slots = import ./nixfied/slots.nix { inherit pkgs project; };
+      hooks = import ./nixfied/hooks.nix { inherit pkgs project slots; postgres = null; nginx = null; };
+      lib = import ./nixfied/lib { inherit pkgs project hooks; };
+    in
+      lib.mkAppScript {
+        name = "ephemeral-lock-test";
+        env = { };
+        useDeps = false;
+        script = import ./tests/framework/fixtures/ephemeral/lock.nix {
+          acquireSlotLock = toString ephemeral.acquireSlotLock;
+          releaseSlotLock = toString ephemeral.releaseSlotLock;
+          projectIdUpper = "NIXFIED_PROJECT";
+        };
+      }
+    NIX
+    )
+
+    EPHEM_SCRIPT=$(build_expr "$EPHEM_EXPR")
+    EPHEM_LOG="$WORKDIR/ephemeral-lock.log"
+    set +e
+    (cd "$EPHEM_DIR" && "$EPHEM_SCRIPT" >"$EPHEM_LOG" 2>&1)
+    EPHEM_RC=$?
+    set -e
+    if [ "$EPHEM_RC" -ne 0 ]; then
+      echo "Ephemeral lock fixture failed (rc=$EPHEM_RC)." >&2
+      echo "" >&2
+      echo "Fixture output (last 50 lines):" >&2
+      tail -50 "$EPHEM_LOG" >&2 || true
+      exit "$EPHEM_RC"
+    fi
+
+    log "run registry foreground"
+    REG_DIR="$WORKDIR/registry"
+    mkdir -p "$REG_DIR"
+    REG_EXPR=$(cat <<'NIX'
+    { root, system }:
+    let
+      flake = builtins.getFlake root;
+      pkgs = flake.inputs.nixpkgs.legacyPackages.''${system};
+      base = import ./nixfied/project { inherit pkgs; };
+      project = base;
+      slots = import ./nixfied/slots.nix { inherit pkgs project; };
+      hooks = import ./nixfied/hooks.nix { inherit pkgs project slots; postgres = null; nginx = null; };
+      lib = import ./nixfied/lib { inherit pkgs project hooks; };
+    in
+      lib.mkAppScript {
+        name = "registry-fg-test";
+        env = { };
+        useDeps = false;
+        script = import ./tests/framework/fixtures/registry/foreground.nix {
+          runRegistryStart = toString lib.runRegistryStart;
+          runsRoot = "/tmp/nixfied-project-runs";
+        };
+      }
+    NIX
+    )
+
+    REG_SCRIPT=$(build_expr "$REG_EXPR")
+    REG_LOG="$WORKDIR/registry-fg.log"
+    set +e
+    (cd "$REG_DIR" && "$REG_SCRIPT" >"$REG_LOG" 2>&1)
+    REG_RC=$?
+    set -e
+    if [ "$REG_RC" -ne 0 ]; then
+      echo "Registry foreground fixture failed (rc=$REG_RC)." >&2
+      echo "" >&2
+      echo "Fixture output (last 50 lines):" >&2
+      tail -50 "$REG_LOG" >&2 || true
+      exit "$REG_RC"
+    fi
+
+    log "ci summary.json"
+    CI_SJ_EXPR=$(cat <<'NIX'
+    { root, system }:
+    let
+      flake = builtins.getFlake root;
+      pkgs = flake.inputs.nixpkgs.legacyPackages.''${system};
+      base = import ./nixfied/project { inherit pkgs; };
+      fixture = import ./tests/framework/fixtures/ci/summary-json.nix { project = base.project; };
+      project = pkgs.lib.recursiveUpdate base fixture;
+      slots = import ./nixfied/slots.nix { inherit pkgs project; };
+      hooks = import ./nixfied/hooks.nix { inherit pkgs project slots; postgres = null; nginx = null; };
+      lib = import ./nixfied/lib { inherit pkgs project hooks; };
+      ciEntry = import ./nixfied/ci.nix { inherit pkgs project lib; };
+    in
+      ciEntry.scriptDrv
+    NIX
+    )
+
+    CI_SJ_SCRIPT=$(build_expr "$CI_SJ_EXPR")
+    CI_SJ_DIR="$WORKDIR/ci-summary-json"
+    CI_SJ_LOG="$WORKDIR/ci-summary-json.log"
+    mkdir -p "$CI_SJ_DIR"
+    set +e
+    (cd "$CI_SJ_DIR" && "$CI_SJ_SCRIPT" --mode check > "$CI_SJ_LOG" 2>&1)
+    CI_SJ_RC=$?
+    set -e
+    if [ "$CI_SJ_RC" -ne 0 ]; then
+      fail "expected CI summary-json mode to exit zero"
+    fi
+    assert_file_exists "$CI_SJ_DIR/.ci-artifacts/summary.json"
+    assert_contains "$CI_SJ_DIR/.ci-artifacts/summary.json" '"mode"'
+    assert_contains "$CI_SJ_DIR/.ci-artifacts/summary.json" '"check"'
+    assert_contains "$CI_SJ_DIR/.ci-artifacts/summary.json" '"exit_code": 0'
+    assert_contains "$CI_SJ_DIR/.ci-artifacts/summary.json" '"passing"'
+    assert_contains "$CI_SJ_DIR/.ci-artifacts/summary.json" '"passed"'
+    assert_contains "$CI_SJ_DIR/.ci-artifacts/summary.json" '"skipped"'
+
+    log "module apps exposure"
+    MODAPP_EXPR=$(cat <<'NIX'
+    { root, system }:
+    let
+      flake = builtins.getFlake root;
+      pkgs = flake.inputs.nixpkgs.legacyPackages.''${system};
+      base = import ./nixfied/project { inherit pkgs; };
+      project = pkgs.lib.recursiveUpdate base {
+        modules.postgres.enable = true;
+        modules.nginx.enable = true;
+      };
+      slots = import ./nixfied/slots.nix { inherit pkgs project; };
+      postgres = import ./nixfied/postgres { inherit pkgs project slots; };
+      nginx = import ./nixfied/nginx { inherit pkgs project slots; };
+      supervisor = import ./nixfied/supervisor { inherit pkgs project slots; };
+      hooks = import ./nixfied/hooks.nix {
+        inherit pkgs project slots postgres nginx supervisor;
+      };
+      lib = import ./nixfied/lib { inherit pkgs project hooks; };
+      moduleApps = import ./nixfied/internal/module-apps.nix {
+        inherit pkgs project lib postgres nginx supervisor slots;
+      };
+    in
+      pkgs.writeText "module-app-names" (builtins.concatStringsSep "\n" (builtins.attrNames moduleApps))
+    NIX
+    )
+
+    MODAPP_NAMES_FILE=$(build_expr "$MODAPP_EXPR")
+    assert_contains "$MODAPP_NAMES_FILE" "db-start"
+    assert_contains "$MODAPP_NAMES_FILE" "nginx-start"
+    assert_contains "$MODAPP_NAMES_FILE" "up"
+    assert_contains "$MODAPP_NAMES_FILE" "check-ports"
+
+    MODAPP_DISABLED_EXPR=$(cat <<'NIX'
+    { root, system }:
+    let
+      flake = builtins.getFlake root;
+      pkgs = flake.inputs.nixpkgs.legacyPackages.''${system};
+      base = import ./nixfied/project { inherit pkgs; };
+      project = base;
+      slots = import ./nixfied/slots.nix { inherit pkgs project; };
+      supervisor = import ./nixfied/supervisor { inherit pkgs project slots; };
+      hooks = import ./nixfied/hooks.nix {
+        inherit pkgs project slots supervisor;
+        postgres = null;
+        nginx = null;
+      };
+      lib = import ./nixfied/lib { inherit pkgs project hooks; };
+      moduleApps = import ./nixfied/internal/module-apps.nix {
+        inherit pkgs project lib slots;
+        postgres = null;
+        nginx = null;
+        supervisor = supervisor;
+      };
+    in
+      pkgs.writeText "module-app-names-disabled" (builtins.concatStringsSep "\n" (builtins.attrNames moduleApps))
+    NIX
+    )
+
+    MODAPP_DISABLED_FILE=$(build_expr "$MODAPP_DISABLED_EXPR")
+    if grep -q "db-start" "$MODAPP_DISABLED_FILE"; then
+      fail "db-start should not be present when postgres is disabled"
+    fi
+    if grep -q "nginx-start" "$MODAPP_DISABLED_FILE"; then
+      fail "nginx-start should not be present when nginx is disabled"
+    fi
+    assert_contains "$MODAPP_DISABLED_FILE" "check-ports"
+    assert_contains "$MODAPP_DISABLED_FILE" "ports"
+
+    log "supervisor hooks"
+    SUP_HOOKS_EXPR=$(cat <<'NIX'
+    { root, system }:
+    let
+      flake = builtins.getFlake root;
+      pkgs = flake.inputs.nixpkgs.legacyPackages.''${system};
+      base = import ./nixfied/project { inherit pkgs; };
+      project = pkgs.lib.recursiveUpdate base {
+        supervisor = {
+          enable = true;
+          services = {
+            app = {
+              command = "echo hello";
+              workingDir = ".";
+            };
+          };
+        };
+      };
+      slots = import ./nixfied/slots.nix { inherit pkgs project; };
+      supervisor = import ./nixfied/supervisor { inherit pkgs project slots; };
+      hooks = import ./nixfied/hooks.nix {
+        inherit pkgs project slots supervisor;
+        postgres = null;
+        nginx = null;
+      };
+    in
+      pkgs.writeText "supervisor-hooks" (builtins.concatStringsSep "\n" (
+        builtins.map (name: "''${name}=''${hooks.env.''${name}}") (
+          builtins.filter (n: builtins.substring 0 10 n == "SUPERVISOR") (builtins.attrNames hooks.env)
+        )
+      ))
+    NIX
+    )
+
+    SUP_HOOKS_FILE=$(build_expr "$SUP_HOOKS_EXPR")
+    assert_contains "$SUP_HOOKS_FILE" "SUPERVISOR_START="
+    assert_contains "$SUP_HOOKS_FILE" "SUPERVISOR_STOP="
+    assert_contains "$SUP_HOOKS_FILE" "SUPERVISOR_STATUS="
+    # Verify they point to nix store paths
+    assert_contains "$SUP_HOOKS_FILE" "/nix/store/"
 
     if [ "''${FRAMEWORK_ISOLATION:-}" = "1" ]; then
       log "isolation runner"
