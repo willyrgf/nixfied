@@ -147,16 +147,15 @@
             { };
       in
       {
-        devShells =
-          {
-            default = import ./nixfied/devshell.nix {
-              inherit
-                pkgs
-                project
-                ;
-            };
-          }
-          // (local.devShells or { });
+        devShells = {
+          default = import ./nixfied/devshell.nix {
+            inherit
+              pkgs
+              project
+              ;
+          };
+        }
+        // (local.devShells or { });
 
         apps =
           let

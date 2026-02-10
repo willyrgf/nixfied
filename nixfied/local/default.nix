@@ -1,4 +1,14 @@
-{ pkgs, project, lib, slots ? null, hooks ? null, postgres ? null, nginx ? null, supervisor ? null, ephemeral ? null }:
+{
+  pkgs,
+  project,
+  lib,
+  slots ? null,
+  hooks ? null,
+  postgres ? null,
+  nginx ? null,
+  supervisor ? null,
+  ephemeral ? null,
+}:
 
 {
   # User-owned extension point.
@@ -18,4 +28,3 @@
   # Optional: extend dev shells (merged into `devShells` output).
   devShells = { };
 }
-
