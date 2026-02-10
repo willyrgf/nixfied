@@ -35,6 +35,16 @@ Additional repo checks used by contributors:
 
 ## Output & Logging
 - No emojis and no non-ASCII markers in CLI output/logs; keep output plain ASCII and grep-able. Prefer stable prefixes at line start: `INFO:`, `WARN:`, `ERROR:`, `OK:`, `SKIP:`.
+- Prefer single-line events that include context as `key=value` (example: `INFO: starting service name=postgres slot=0 env=dev port=5432`).
+- Errors go to stderr and should include an actionable next step when possible.
+
+## Engineering Principles
+- Prefer boring, explicit solutions over clever abstractions.
+- Keep interfaces stable: flake apps (`nix run .#<cmd>`) and their outputs are a contract; if output changes, keep stable prefixes and avoid breaking grep/script usage.
+- Write idempotent scripts and commands: re-running should be safe and should converge to the desired state.
+- Fail fast on invalid config/env; avoid partial side effects on failure.
+- Keep state isolated: use slots/ephemeral execution where appropriate; avoid writing outside project/ephemeral roots unless explicitly required.
+- Do not leak secrets into logs; never echo `.env` contents or credentials.
 
 ## Testing Guidelines
 - Framework tests live in `tests/framework/` with fixtures under `tests/framework/fixtures/`.
