@@ -22,6 +22,14 @@ let
     else
       "dev";
 
+  projectId = projectMeta.id or "project";
+  projectIdUpper = normalizeName projectId;
+
+  postgresEnabled = (cfg.modules.postgres.enable or false);
+  postgresDatabase = cfg.modules.postgres.database or "app";
+  postgresTestDatabase = cfg.modules.postgres.testDatabase or "app_test";
+  postgresPortKey = cfg.modules.postgres.portKey or "postgres";
+
   ports = cfg.ports or { };
   portNames = builtins.attrNames ports;
 
@@ -191,11 +199,18 @@ let
     ${envCase}
     esac
 
-    BASE_DIR="${baseDirExpr}"
+    # Ephemeral path override
+    if [ "''${${projectIdUpper}_EPHEMERAL:-}" = "1" ] && [ -n "''${${projectIdUpper}_EPHEMERAL_ROOT:-}" ]; then
+      BASE_DIR="''${${projectIdUpper}_EPHEMERAL_ROOT}/data/${projectId}"
+    else
+      BASE_DIR="${baseDirExpr}"
+    fi
+
     LOG_DIR="$BASE_DIR/logs-$SLOT-$ENV"
     RUN_DIR="$BASE_DIR/run-$SLOT-$ENV"
     CONFIG_DIR="$BASE_DIR/config-$SLOT-$ENV"
     STATE_DIR="$BASE_DIR/state-$SLOT-$ENV"
+    BACKUP_BASE_DIR="$BASE_DIR/backups/slot-$SLOT-$ENV"
 
     ${portAssignments}
 
@@ -224,6 +239,7 @@ let
     echo "RUN_DIR=$RUN_DIR"
     echo "CONFIG_DIR=$CONFIG_DIR"
     echo "STATE_DIR=$STATE_DIR"
+    echo "BACKUP_BASE_DIR=$BACKUP_BASE_DIR"
     ${pkgs.lib.concatMapStringsSep "\n" (name: let upper = normalizeName name; in ''
       echo "${upper}_DIR=${"$"}${upper}_DIR"
       echo "${upper}_LOG_DIR=${"$"}${upper}_LOG_DIR"
@@ -238,9 +254,64 @@ let
       fi
     '') serviceSocketNames}
     ${portExports}
+    ${pkgs.lib.optionalString (postgresEnabled && builtins.hasAttr postgresPortKey ports) ''
+      DATABASE_URL="postgresql://localhost:${"$"}${portVarName postgresPortKey}/${postgresDatabase}"
+      TEST_DATABASE_URL="postgresql://localhost:${"$"}${portVarName postgresPortKey}/${postgresTestDatabase}"
+      echo "DATABASE_URL=$DATABASE_URL"
+      echo "TEST_DATABASE_URL=$TEST_DATABASE_URL"
+    ''}
   '';
 
   getServiceDir = service: "${baseDirExpr}/${service}-$SLOT-$ENV";
+
+  # Nix-level accessor: calculate ports for a given slot/env
+  calculatePorts =
+    { slot, env }:
+    let
+      offset = envOffsets.${env} or 0;
+    in
+    builtins.mapAttrs (name: base: base + (slot * slotStride) + offset) ports;
+
+  # Nix-level accessor: get database URL for env and port
+  getDatabaseUrl = env: port:
+    "postgresql://localhost:${toString port}/${if env == "test" then postgresTestDatabase else postgresDatabase}";
+
+  # Nix-level accessor: validate slot/env pair
+  validateSlotEnv =
+    { slot, env }:
+    if slot < 0 || slot > slotMax then
+      { valid = false; error = "${slotVar} must be 0-${toString slotMax} (got ${toString slot})"; }
+    else if !(builtins.hasAttr env envOffsets) then
+      { valid = false; error = "${envVar} must be one of: ${envList} (got '${env}')"; }
+    else
+      { valid = true; error = ""; };
+
+  # Nix-level accessor: full config for a slot/env
+  getFullConfig =
+    { slot, env }:
+    let
+      computed = calculatePorts { inherit slot env; };
+      offset = envOffsets.${env} or 0;
+    in
+    {
+      ports = computed;
+      directories = {
+        base = baseDirExpr;
+        log = "logs-${toString slot}-${env}";
+        run = "run-${toString slot}-${env}";
+        config = "config-${toString slot}-${env}";
+        state = "state-${toString slot}-${env}";
+        backup = "backups/slot-${toString slot}-${env}";
+      };
+      urls = pkgs.lib.optionalAttrs (postgresEnabled && builtins.hasAttr postgresPortKey computed) {
+        database = getDatabaseUrl env computed.${postgresPortKey};
+        testDatabase = getDatabaseUrl "test" computed.${postgresPortKey};
+      };
+      environment = {
+        inherit slot env offset;
+        stride = slotStride;
+      };
+    };
 
 in
 {
@@ -258,5 +329,9 @@ in
     serviceSockets
     slotMax
     slotStride
+    calculatePorts
+    getDatabaseUrl
+    validateSlotEnv
+    getFullConfig
     ;
 }

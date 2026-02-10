@@ -151,7 +151,7 @@ let
       };
       slots = import ./nix/slots.nix { inherit pkgs project; };
       hooks = import ./nix/hooks.nix { inherit pkgs project slots; postgres = null; nginx = null; };
-      lib = import ./nix/lib.nix { inherit pkgs project hooks; };
+      lib = import ./nix/lib { inherit pkgs project hooks; };
     in
       lib.mkAppScript {
         name = "helpers-runtime";
@@ -195,7 +195,7 @@ let
       };
       slots = import ./nix/slots.nix { inherit pkgs project; };
       hooks = import ./nix/hooks.nix { inherit pkgs project slots; postgres = null; nginx = null; };
-      lib = import ./nix/lib.nix { inherit pkgs project hooks; };
+      lib = import ./nix/lib { inherit pkgs project hooks; };
     in
       lib.mkAppScript {
         name = "slots-runtime";
@@ -231,7 +231,7 @@ let
       project = pkgs.lib.recursiveUpdate base fixture;
       slots = import ./nix/slots.nix { inherit pkgs project; };
       hooks = import ./nix/hooks.nix { inherit pkgs project slots; postgres = null; nginx = null; };
-      lib = import ./nix/lib.nix { inherit pkgs project hooks; };
+      lib = import ./nix/lib { inherit pkgs project hooks; };
       ciEntry = import ./nix/ci.nix { inherit pkgs project lib; };
     in
       ciEntry.scriptDrv
@@ -305,7 +305,7 @@ let
       project = pkgs.lib.recursiveUpdate base fixture;
       slots = import ./nix/slots.nix { inherit pkgs project; };
       hooks = import ./nix/hooks.nix { inherit pkgs project slots; postgres = null; nginx = null; };
-      lib = import ./nix/lib.nix { inherit pkgs project hooks; };
+      lib = import ./nix/lib { inherit pkgs project hooks; };
       ciEntry = import ./nix/ci.nix { inherit pkgs project lib; };
     in
       ciEntry.scriptDrv
@@ -339,7 +339,7 @@ let
       project = pkgs.lib.recursiveUpdate base fixture;
       slots = import ./nix/slots.nix { inherit pkgs project; };
       hooks = import ./nix/hooks.nix { inherit pkgs project slots; postgres = null; nginx = null; };
-      lib = import ./nix/lib.nix { inherit pkgs project hooks; };
+      lib = import ./nix/lib { inherit pkgs project hooks; };
       ciEntry = import ./nix/ci.nix { inherit pkgs project lib; };
     in
       ciEntry.scriptDrv
@@ -397,16 +397,16 @@ let
       slots = import ./nix/slots.nix { inherit pkgs project; };
       postgres =
         if (project.modules.postgres.enable or false) then
-          import ./nix/postgres.nix { inherit pkgs project slots; }
+          import ./nix/postgres { inherit pkgs project slots; }
         else
           null;
       nginx =
         if (project.modules.nginx.enable or false) then
-          import ./nix/nginx.nix { inherit pkgs project slots; }
+          import ./nix/nginx { inherit pkgs project slots; }
         else
           null;
       hooks = import ./nix/hooks.nix { inherit pkgs project slots postgres nginx; };
-      lib = import ./nix/lib.nix { inherit pkgs project hooks; };
+      lib = import ./nix/lib { inherit pkgs project hooks; };
     in
       let
         devCfg = dev.commands.dev or { };
@@ -465,7 +465,7 @@ let
         };
       };
       slots = import ./nix/slots.nix { inherit pkgs project; };
-      supervisor = import ./nix/supervisor.nix { inherit pkgs project slots; };
+      supervisor = import ./nix/supervisor { inherit pkgs project slots; };
     in
       supervisor.generateConfig
     NIX

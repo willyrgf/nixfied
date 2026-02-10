@@ -3,11 +3,13 @@
   pkgs,
   project,
   lib,
+  ephemeral ? null,
 }:
 
 let
   ci = project.ci or null;
   enabled = ci != null && (ci.enable or false);
+  useEphemeral = ephemeral != null && (ci.useEphemeral or true);
 
   steps = if enabled then (ci.steps or { }) else { };
   modes = if enabled then (ci.modes or { }) else { };
@@ -103,7 +105,7 @@ let
 
       ${pkgs.lib.optionalString (missingReason != "") ''
         echo "↷ Skipping ''${step_desc}: ${missingReason}"
-        return 0
+        return 42
       ''}
 
       ${pkgs.lib.optionalString (skipVars != [ ]) ''
@@ -116,14 +118,14 @@ let
         done
         if [ -n "$missing_reason" ]; then
           echo "↷ Skipping ''${step_desc}: $missing_reason"
-          return 0
+          return 42
         fi
       ''}
 
       ${pkgs.lib.optionalString (when != "") ''
         if ! ( ${when} ); then
           echo "↷ Skipping ''${step_desc}: condition not met"
-          return 0
+          return 42
         fi
       ''}
 
@@ -151,6 +153,9 @@ let
   setupScript = ci.setup or "";
   teardownScript = ci.teardown or "";
 
+  # Run registry script path
+  runRegistryScript = toString lib.runRegistryStart;
+
   script =
     if !enabled then
       ''
@@ -167,12 +172,17 @@ let
                 # Parse args
                 CI_MODE="${resolvedDefaultMode}"
                 CI_SUMMARY=false
+                CI_BACKGROUND=false
                 CI_STEP_ARGS=()
 
                 while [ "''$#" -gt 0 ]; do
                   case "''$1" in
                     --summary)
                       CI_SUMMARY=true
+                      shift
+                      ;;
+                    --bg)
+                      CI_BACKGROUND=true
                       shift
                       ;;
                     --mode)
@@ -213,6 +223,16 @@ let
                 export CI_KEEP_ARTIFACTS_ON_FAILURE="${if keepOnFailure then "1" else "0"}"
                 export CI_KEEP_ARTIFACTS_ON_SUCCESS="${if keepOnSuccess then "1" else "0"}"
 
+                # Background mode: delegate to run registry and exit
+                if [ "$CI_BACKGROUND" = "true" ]; then
+                  REEXEC_ARGS="--mode $CI_MODE --summary"
+                  ${runRegistryScript} \
+                    --name "ci-$CI_MODE" \
+                    --bg \
+                    --script "$0 $REEXEC_ARGS"
+                  exit $?
+                fi
+
         ${stepFunctions}
 
                 step_desc() {
@@ -227,6 +247,35 @@ let
         ${stepFuncCase}
                     *) echo "" ;;
                   esac
+                }
+
+                # Step result tracking for summary.json
+                declare -a _CI_STEP_RESULTS=()
+
+                _ci_record_step() {
+                  local name="$1" status="$2" duration="$3"
+                  _CI_STEP_RESULTS+=("$name|$status|$duration")
+                }
+
+                _write_summary_json() {
+                  local ec="$1"
+                  local json_file="$CI_ARTIFACTS_DIR/summary.json"
+                  mkdir -p "$CI_ARTIFACTS_DIR"
+                  {
+                    echo "{"
+                    echo "  \"mode\": \"$CI_MODE\","
+                    echo "  \"exit_code\": $ec,"
+                    echo "  \"steps\": ["
+                    local first=true
+                    for entry in "''${_CI_STEP_RESULTS[@]}"; do
+                      IFS='|' read -r s_name s_status s_dur <<< "$entry"
+                      if [ "$first" = true ]; then first=false; else echo ","; fi
+                      printf "    {\"name\": \"%s\", \"status\": \"%s\", \"duration\": %s}" "$s_name" "$s_status" "$s_dur"
+                    done
+                    echo ""
+                    echo "  ]"
+                    echo "}"
+                  } > "$json_file"
                 }
 
                 run_pipeline() {
@@ -266,11 +315,19 @@ let
                       STEP_DESC=$(step_desc "$step")
                       echo ""
                       echo "Step ''${STEP_INDEX}/''${TOTAL_STEPS}: ''${STEP_DESC}"
+                      local STEP_START_TIME=$(date +%s)
                       set +e
                       ( "$STEP_FUNC" )
                       step_rc=$?
                       set -e
-                      if [ "$step_rc" -ne 0 ]; then
+                      local STEP_END_TIME=$(date +%s)
+                      local STEP_DUR=$((STEP_END_TIME - STEP_START_TIME))
+                      if [ "$step_rc" -eq 42 ]; then
+                        _ci_record_step "$step" "skipped" "$STEP_DUR"
+                      elif [ "$step_rc" -eq 0 ]; then
+                        _ci_record_step "$step" "passed" "$STEP_DUR"
+                      else
+                        _ci_record_step "$step" "failed" "$STEP_DUR"
                         exit_code="$step_rc"
                         break
                       fi
@@ -279,12 +336,15 @@ let
                   fi
 
         ${teardownScript}
+
+                  # Write structured summary
+                  _write_summary_json "$exit_code"
+
                   return "$exit_code"
                 }
 
                 if [ "$CI_SUMMARY" = "true" ]; then
                   LOGFILE=$(mktemp)
-                  trap "rm -f $LOGFILE" EXIT
                   START_TIME=$(date +%s)
                   set +e
                   ( run_pipeline ) 2>&1 | tee "$LOGFILE"
@@ -293,6 +353,7 @@ let
                   END_TIME=$(date +%s)
                   DURATION=$((END_TIME - START_TIME))
                   summary_parse "$LOGFILE" "$DURATION" "$EXIT_CODE"
+                  rm -f "$LOGFILE" 2>/dev/null || true
                   if [ "$EXIT_CODE" -ne 0 ]; then
                     if [ "$CI_KEEP_ARTIFACTS_ON_FAILURE" = "1" ]; then
                       echo "🧾 CI artifacts kept at: $CI_ARTIFACTS_DIR"
@@ -331,12 +392,26 @@ let
 
   scriptDrv =
     if enabled then
-      lib.mkAppScript {
-        name = "ci";
-        env = ci.env or { };
-        useDeps = ci.useDeps or true;
-        script = script;
-      }
+      if useEphemeral then
+        ephemeral.mkEphemeralWrapper {
+          name = "ci";
+          installDeps = ci.useDeps or true;
+          extraEnv = ''
+            export COMMAND_NAME="ci"
+            source ${toString lib.loadEnv}
+            source ${toString lib.helpersScript}
+            ${lib.hookExports}
+            ${ciEnvExports}
+          '';
+          inherit script;
+        }
+      else
+        lib.mkAppScript {
+          name = "ci";
+          env = ci.env or { };
+          useDeps = ci.useDeps or true;
+          script = script;
+        }
     else
       null;
 

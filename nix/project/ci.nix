@@ -27,6 +27,9 @@
     useDeps = true;
     setup = "";
     teardown = "";
+    failureSignals = [ ];
+    runsRoot = "/tmp/${project.id}-runs";
+    useEphemeral = true;
     artifacts = {
       dir = "/tmp/ci-artifacts";
       keepOnFailure = true;

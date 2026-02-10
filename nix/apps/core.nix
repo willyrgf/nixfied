@@ -3,6 +3,7 @@
   pkgs,
   project,
   lib,
+  moduleApps ? { },
 }:
 
 let
@@ -34,12 +35,35 @@ let
     "  ${name}  ${desc}"
   ) (pkgs.lib.sort (a: b: a < b) commandNames);
 
+  moduleAppNames = builtins.attrNames moduleApps;
+  moduleHelpLines =
+    if moduleAppNames == [ ] then
+      ""
+    else
+      "\n"
+      + pkgs.lib.concatMapStringsSep "\n" (
+        name:
+        let
+          app = moduleApps.${name};
+          desc = (app.meta.description or "");
+        in
+        "  ${name}  ${desc}"
+      ) (pkgs.lib.sort (a: b: a < b) moduleAppNames);
+
   helpScript = ''
         cat <<'EOF'
     ${project.project.name}
 
     Commands:
     ${helpLines}
+    ${
+      if moduleHelpLines != "" then
+        ''
+
+    Module Apps:${moduleHelpLines}''
+      else
+        ""
+    }
 
     Environment:
       ${project.project.envVar}  Environment name (${pkgs.lib.concatStringsSep "|" (builtins.attrNames project.envs)})

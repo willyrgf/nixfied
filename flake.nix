@@ -22,19 +22,25 @@
 
         postgres =
           if (project.modules.postgres.enable or false) then
-            import ./nix/postgres.nix { inherit pkgs project slots; }
+            import ./nix/postgres { inherit pkgs project slots; }
           else
             null;
 
         nginx =
           if (project.modules.nginx.enable or false) then
-            import ./nix/nginx.nix { inherit pkgs project slots; }
+            import ./nix/nginx { inherit pkgs project slots; }
           else
             null;
 
         playwright =
           if (project.modules.playwright.enable or false) then
             import ./nix/playwright.nix { inherit pkgs project; }
+          else
+            null;
+
+        ephemeral =
+          if (project.ephemeral.enable or false) then
+            import ./nix/ephemeral.nix { inherit pkgs project; }
           else
             null;
 
@@ -45,17 +51,20 @@
             slots
             postgres
             nginx
+            supervisor
+            ephemeral
             ;
         };
 
-        lib = import ./nix/lib.nix { inherit pkgs project hooks; };
-        supervisor = import ./nix/supervisor.nix { inherit pkgs project slots; };
+        lib = import ./nix/lib { inherit pkgs project hooks; };
+        supervisor = import ./nix/supervisor { inherit pkgs project slots; };
 
         coreApps = import ./nix/apps/core.nix {
           inherit
             pkgs
             project
             lib
+            moduleApps
             ;
         };
         isFramework = builtins.pathExists ./nix/.framework;
@@ -90,6 +99,17 @@
             slots
             ;
         };
+        moduleApps = import ./nix/apps/module-apps.nix {
+          inherit
+            pkgs
+            project
+            lib
+            postgres
+            nginx
+            supervisor
+            slots
+            ;
+        };
         frameworkApps = pkgs.lib.mapAttrs' (name: value: {
           name = "framework::${name}";
           value = value;
@@ -99,6 +119,7 @@
             pkgs
             project
             lib
+            ephemeral
             ;
         };
         ciApp =
@@ -119,6 +140,7 @@
 
         apps =
           coreApps
+          // moduleApps
           // (if ciApp != null then { ci = ciApp; } else { })
           // isolationApps
           // frameworkApps
