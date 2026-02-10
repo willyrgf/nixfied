@@ -553,6 +553,14 @@ let
     assert_app_missing "$INSTALL_TARGET" "framework::prompt-plan"
     assert_app_missing "$INSTALL_TARGET" "framework::test"
 
+    log "ports env var aliases"
+    PORTS_ALIAS_OUT="$WORKDIR/ports-alias.txt"
+    NIXFIED_ENV=1 run_app "$INSTALL_TARGET" ports > "$PORTS_ALIAS_OUT"
+    assert_contains "$PORTS_ALIAS_OUT" "Port assignments for slot 1, env dev"
+    PORTS_NIX_ENV_OUT="$WORKDIR/ports-nix-env.txt"
+    NIX_ENV=1 run_app "$INSTALL_TARGET" ports > "$PORTS_NIX_ENV_OUT"
+    assert_contains "$PORTS_NIX_ENV_OUT" "Port assignments for slot 1, env dev"
+
     log "app api contract enforcement"
     BAD_API_BASE="$WORKDIR/install-bad-api"
     init_repo "$BAD_API_BASE"

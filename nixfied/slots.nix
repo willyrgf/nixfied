@@ -128,6 +128,12 @@ let
     SLOT_VAR="${slotVar}"
     ENV_VAR="${envVar}"
 
+    # Compatibility aliases:
+    # - NIXFIED_ENV: alias for the configured slot variable (default: NIX_ENV).
+    if [ -z "''${!SLOT_VAR:-}" ] && [ -n "''${NIXFIED_ENV:-}" ]; then
+      export "$SLOT_VAR"="''${NIXFIED_ENV}"
+    fi
+
     SLOT="''${!SLOT_VAR:-0}"
     ENV="''${!ENV_VAR:-}"
 
@@ -190,6 +196,12 @@ let
   getSlotInfo = pkgs.writeShellScript "get-slot-info" ''
     SLOT_VAR="${slotVar}"
     ENV_VAR="${envVar}"
+
+    # Compatibility aliases:
+    # - NIXFIED_ENV: alias for the configured slot variable (default: NIX_ENV).
+    if [ -z "''${!SLOT_VAR:-}" ] && [ -n "''${NIXFIED_ENV:-}" ]; then
+      export "$SLOT_VAR"="''${NIXFIED_ENV}"
+    fi
 
     SLOT="''${!SLOT_VAR:-0}"
     if [ "$SLOT" -lt 0 ] || [ "$SLOT" -gt ${toString slotMax} ]; then
