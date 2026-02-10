@@ -171,6 +171,12 @@ let
 
       export ORIGINAL_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 
+      # Compatibility aliases:
+      # - NIXFIED_ENV: alias for the configured slot variable (default: NIX_ENV).
+      if [ -z "''${${slotVar}:-}" ] && [ -n "''${NIXFIED_ENV:-}" ]; then
+        export ${slotVar}="''${NIXFIED_ENV}"
+      fi
+
       # Slot acquisition: respect pre-set slot var (e.g. from test-isolation)
       if [ -n "''${${slotVar}:-}" ]; then
         export ${projectIdUpper}_EPHEMERAL_SLOT="''${${slotVar}}"

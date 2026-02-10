@@ -128,6 +128,7 @@ let
     assert_contains "$HELP_OUT" "Commands:"
     assert_contains "$HELP_OUT" "PROJECT_ENV"
     assert_contains "$HELP_OUT" "NIX_ENV"
+    assert_contains "$HELP_OUT" "NIXFIED_ENV"
 
     HELP_DEV_OUT="$WORKDIR/help-dev.txt"
     nix run "path:$ROOT"#help -- dev > "$HELP_DEV_OUT"
