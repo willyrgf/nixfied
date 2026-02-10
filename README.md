@@ -95,6 +95,11 @@ Safety behavior:
 - It installs only `flake.nix`, `flake.lock`, and `nixfied/`.
 - Customize your project in `nixfied/project/` and `nixfied/local/` (avoid editing framework code).
 
+Vendoring boundaries (relevant for upgrades):
+- Framework-owned (overwritten on `framework::upgrade`): `flake.nix`, `flake.lock`, `nixfied/internal/`, `nixfied/lib/`, and framework modules under `nixfied/`.
+- User-owned (preserved on `framework::upgrade`): `nixfied/project/` and `nixfied/local/`.
+- Canonical doc: `nixfied/VENDORED.txt`.
+
 Force overwrite:
 
 ```bash
