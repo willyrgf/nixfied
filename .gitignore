@@ -1,4 +1,5 @@
 *.log
 .ci-artifacts
 *.md
+!AGENTS.md
 result
