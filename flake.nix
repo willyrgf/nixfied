@@ -32,12 +32,6 @@
           else
             null;
 
-        playwright =
-          if (project.modules.playwright.enable or false) then
-            import ./nixfied/playwright.nix { inherit pkgs project; }
-          else
-            null;
-
         ephemeral =
           if (project.ephemeral.enable or false) then
             import ./nixfied/ephemeral.nix { inherit pkgs project; }
@@ -57,7 +51,11 @@
         };
 
         lib = import ./nixfied/lib { inherit pkgs project hooks; };
-        supervisor = import ./nixfied/supervisor { inherit pkgs project slots; };
+        supervisor =
+          if (project.supervisor.enable or true) then
+            import ./nixfied/supervisor { inherit pkgs project slots; }
+          else
+            null;
 
         coreApps = import ./nixfied/internal/core.nix {
           inherit

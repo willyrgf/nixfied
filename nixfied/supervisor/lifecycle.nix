@@ -53,7 +53,6 @@ let
     CONFIG_FILE=$(${config.generateConfig})
 
     PID_FILE="$RUN_DIR/supervisor.pid"
-    SOCKET="$RUN_DIR/supervisor.sock"
 
     # Check if already running
     if [ -f "$PID_FILE" ]; then
@@ -72,16 +71,15 @@ let
     DAEMON_PID=$!
     echo "$DAEMON_PID" > "$PID_FILE"
 
-    # Wait for socket readiness
-    for i in $(seq 1 30); do
-      if [ -S "$SOCKET" ] 2>/dev/null || kill -0 "$DAEMON_PID" 2>/dev/null; then
-        echo "✅ Supervisor started (PID $DAEMON_PID)"
-        exit 0
-      fi
-      sleep 1
-    done
+    # Fail fast if the daemon exits immediately (common config error case).
+    sleep 1
+    if ! kill -0 "$DAEMON_PID" 2>/dev/null; then
+      echo "❌ Supervisor failed to start (PID $DAEMON_PID exited). See: $LOG_DIR/supervisor-daemon.log" >&2
+      rm -f "$PID_FILE" 2>/dev/null || true
+      exit 1
+    fi
 
-    echo "⚠️  Supervisor started but socket not ready (PID $DAEMON_PID)"
+    echo "✅ Supervisor started (PID $DAEMON_PID)"
   '';
 
 in

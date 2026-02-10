@@ -215,12 +215,12 @@ let
     ${portAssignments}
 
     ${pkgs.lib.concatMapStringsSep "\n" (name: let upper = normalizeName name; in ''
-      ${upper}_DIR="${baseDirExpr}/${name}-$SLOT-$ENV"
-      ${upper}_LOG_DIR="${baseDirExpr}/${name}-$SLOT-$ENV/logs"
-      ${upper}_RUN_DIR="${baseDirExpr}/${name}-$SLOT-$ENV/run"
-      ${upper}_CONFIG_DIR="${baseDirExpr}/${name}-$SLOT-$ENV/config"
-      ${upper}_STATE_DIR="${baseDirExpr}/${name}-$SLOT-$ENV/state"
-      ${upper}_SOCKET_DIR="${baseDirExpr}/${name}-$SLOT-$ENV/run/sockets"
+      ${upper}_DIR="$BASE_DIR/${name}-$SLOT-$ENV"
+      ${upper}_LOG_DIR="$BASE_DIR/${name}-$SLOT-$ENV/logs"
+      ${upper}_RUN_DIR="$BASE_DIR/${name}-$SLOT-$ENV/run"
+      ${upper}_CONFIG_DIR="$BASE_DIR/${name}-$SLOT-$ENV/config"
+      ${upper}_STATE_DIR="$BASE_DIR/${name}-$SLOT-$ENV/state"
+      ${upper}_SOCKET_DIR="$BASE_DIR/${name}-$SLOT-$ENV/run/sockets"
     '') serviceNames}
 
     ${pkgs.lib.concatMapStringsSep "\n" (name: let upper = normalizeName name; in ''
@@ -262,7 +262,7 @@ let
     ''}
   '';
 
-  getServiceDir = service: "${baseDirExpr}/${service}-$SLOT-$ENV";
+  getServiceDir = service: "\${BASE_DIR:-${baseDirExpr}}/${service}-$SLOT-$ENV";
 
   # Nix-level accessor: calculate ports for a given slot/env
   calculatePorts =

@@ -11,27 +11,39 @@ let
   promptPlanScript = pkgs.writeShellScript "nixfied-prompt-plan" ''
             set -euo pipefail
 
+            ORIG_ARGS=("$@")
             FORCE=false
             OUT_PATH=""
 
-            for arg in "$@"; do
-              case "$arg" in
-                --force) FORCE=true ;;
+            while [ "$#" -gt 0 ]; do
+              case "$1" in
+                --force)
+                  FORCE=true
+                  shift
+                  ;;
                 --output=*)
-                  OUT_PATH="''${arg#--output=}"
+                  OUT_PATH="''${1#--output=}"
+                  shift
+                  ;;
+                --output)
+                  if [ "$#" -lt 2 ]; then
+                    echo "❌ --output requires a path" >&2
+                    exit 1
+                  fi
+                  OUT_PATH="''${2-}"
+                  shift 2
                   ;;
                 --help|-h)
                   echo "Usage: nix run github:willyrgf/nixfied#framework::prompt-plan [--force] [--output=PATH]"
                   exit 0
                   ;;
-              esac
-            done
-
-            for arg in "$@"; do
-              case "$arg" in
-                --output)
+                --)
+                  # Accept an explicit "--" (some wrappers include it) and keep parsing.
                   shift
-                  OUT_PATH="''${1:-}"
+                  ;;
+                *)
+                  # Ignore unknown args for forward compatibility.
+                  shift
                   ;;
               esac
             done
@@ -141,27 +153,39 @@ let
   installScript = ''
     set -euo pipefail
 
+    ORIG_ARGS=("$@")
     FORCE=false
     FILTERS_RAW=""
 
-    for arg in "$@"; do
-      case "$arg" in
-        --force) FORCE=true ;;
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --force)
+          FORCE=true
+          shift
+          ;;
         --filter=*)
-          FILTERS_RAW="''${arg#--filter=}"
+          FILTERS_RAW="''${1#--filter=}"
+          shift
+          ;;
+        --filter)
+          if [ "$#" -lt 2 ]; then
+            echo "❌ --filter requires a value (example: --filter=conf,ci)" >&2
+            exit 1
+          fi
+          FILTERS_RAW="''${2-}"
+          shift 2
           ;;
         --help|-h)
           echo "Usage: nix run github:willyrgf/nixfied#framework::install [--force] [--filter=conf,dev,test,prod,quality,ci]"
           exit 0
           ;;
-      esac
-    done
-
-    for arg in "$@"; do
-      case "$arg" in
-        --filter)
+        --)
+          # Accept an explicit "--" (some wrappers include it) and keep parsing.
           shift
-          FILTERS_RAW="''${1:-}"
+          ;;
+        *)
+          # Ignore unknown args for forward compatibility.
+          shift
           ;;
       esac
     done
@@ -186,7 +210,7 @@ let
           if [ "$FORCE" = "true" ]; then
             echo "⚠️  Target already exists: $TARGET"
             echo "    Reusing existing copy (no new copy made)."
-            (cd "$TARGET" && NIXFIED_INSTALL_REENTRY=1 NIXFIED_INSTALL_FORCE=1 "$0" "$@")
+            (cd "$TARGET" && NIXFIED_INSTALL_REENTRY=1 NIXFIED_INSTALL_FORCE=1 "$0" "''${ORIG_ARGS[@]}")
             exit 0
           else
             echo "❌ Target already exists: $TARGET" >&2
@@ -201,7 +225,7 @@ let
           cp -a "$ROOT" "$TARGET"
         fi
         echo "✅ Copy complete. Re-running installer in $TARGET"
-        (cd "$TARGET" && NIXFIED_INSTALL_REENTRY=1 "$0" "$@")
+        (cd "$TARGET" && NIXFIED_INSTALL_REENTRY=1 "$0" "''${ORIG_ARGS[@]}")
         exit 0
       fi
     fi

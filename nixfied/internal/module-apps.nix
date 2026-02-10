@@ -181,6 +181,7 @@ let
       description = "Scan configured ports for conflicts";
       script = ''
         eval "$($SLOT_INFO)"
+        LSOF="${pkgs.lsof}/bin/lsof"
         echo "Port status for slot ''${${project.project.slotVar}:-0}, env ''${${project.project.envVar}:-dev}:"
         echo ""
         ${pkgs.lib.concatMapStringsSep "\n" (
@@ -192,8 +193,8 @@ let
           ''
             PORT_VAL="''${${varName}:-}"
             if [ -n "$PORT_VAL" ]; then
-              if lsof -iTCP:"$PORT_VAL" -sTCP:LISTEN -n -P >/dev/null 2>&1; then
-                PIDS=$(lsof -iTCP:"$PORT_VAL" -sTCP:LISTEN -n -P -t 2>/dev/null | tr '\n' ',' | sed 's/,$//')
+              if "$LSOF" -iTCP:"$PORT_VAL" -sTCP:LISTEN -n -P >/dev/null 2>&1; then
+                PIDS=$("$LSOF" -iTCP:"$PORT_VAL" -sTCP:LISTEN -n -P -t 2>/dev/null | tr '\n' ',' | sed 's/,$//')
                 echo "  ${portName} ($PORT_VAL): IN USE (PIDs: $PIDS)"
               else
                 echo "  ${portName} ($PORT_VAL): free"
