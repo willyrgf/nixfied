@@ -110,7 +110,12 @@ let
     init_repo() {
       local dir="$1"
       mkdir -p "$dir"
-      (cd "$dir" && git init -q)
+      (
+        cd "$dir" \
+          && git init -q \
+          && git config user.email "nixfied-test@example.invalid" \
+          && git config user.name "nixfied test"
+      )
     }
 
     log "flake eval"
@@ -487,13 +492,42 @@ let
     INSTALL_BASE="$WORKDIR/install-repo"
     init_repo "$INSTALL_BASE"
     (cd "$INSTALL_BASE" && nix run "path:$ROOT"#framework::install >/dev/null)
-    INSTALL_TARGET="''${INSTALL_BASE}_nixified"
+    INSTALL_TARGET="$INSTALL_BASE"
+    INSTALL_BRANCH=$(git -C "$INSTALL_TARGET" symbolic-ref --short HEAD 2>/dev/null || git -C "$INSTALL_TARGET" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+    if [ "$INSTALL_BRANCH" != "nixfied" ]; then
+      fail "expected installer to switch to nixfied branch (got: $INSTALL_BRANCH)"
+    fi
     assert_file_exists "$INSTALL_TARGET/flake.nix"
     if [ ! -d "$INSTALL_TARGET/nixfied" ]; then
       fail "expected nixfied/ directory in installer target"
     fi
     assert_file_absent "$INSTALL_TARGET/nixfied/.framework"
     assert_file_absent "$INSTALL_TARGET/NIXFIED_PROMPT_PLAN.md"
+
+    log "installer worktree"
+    INSTALL_WT_BASE="$WORKDIR/install-worktree"
+    init_repo "$INSTALL_WT_BASE"
+    echo "test" > "$INSTALL_WT_BASE/README.md"
+    (cd "$INSTALL_WT_BASE" && git add README.md && git commit -qm "init")
+    INSTALL_WT_TARGET="$WORKDIR/install-worktree-target"
+    ORIG_BRANCH=$(git -C "$INSTALL_WT_BASE" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+    (cd "$INSTALL_WT_BASE" && nix run "path:$ROOT"#framework::install -- --worktree --target "$INSTALL_WT_TARGET" --force >/dev/null)
+    AFTER_ORIG_BRANCH=$(git -C "$INSTALL_WT_BASE" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+    if [ "$AFTER_ORIG_BRANCH" != "$ORIG_BRANCH" ]; then
+      fail "expected worktree install to keep current checkout on '$ORIG_BRANCH' (got: $AFTER_ORIG_BRANCH)"
+    fi
+    if ! git -C "$INSTALL_WT_BASE" worktree list | grep -q "$INSTALL_WT_TARGET"; then
+      fail "expected git worktree to exist: $INSTALL_WT_TARGET"
+    fi
+    WT_BRANCH=$(git -C "$INSTALL_WT_TARGET" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+    if [ "$WT_BRANCH" != "nixfied" ]; then
+      fail "expected worktree install to use nixfied branch (got: $WT_BRANCH)"
+    fi
+    assert_file_exists "$INSTALL_WT_TARGET/flake.nix"
+    if [ ! -d "$INSTALL_WT_TARGET/nixfied" ]; then
+      fail "expected nixfied/ directory in worktree target"
+    fi
+    assert_file_absent "$INSTALL_WT_TARGET/nixfied/.framework"
 
     log "example project apps (basic install)"
     BASIC_HELP="$WORKDIR/basic-help.txt"
@@ -521,7 +555,7 @@ let
     BAD_API_BASE="$WORKDIR/install-bad-api"
     init_repo "$BAD_API_BASE"
     (cd "$BAD_API_BASE" && nix run "path:$ROOT"#framework::install >/dev/null)
-    BAD_API_TARGET="''${BAD_API_BASE}_nixified"
+    BAD_API_TARGET="$BAD_API_BASE"
     assert_file_exists "$BAD_API_TARGET/flake.nix"
     cat > "$BAD_API_TARGET/nixfied/project/dev.nix" <<'EOF'
     { ... }:
@@ -599,18 +633,19 @@ let
     REENTRY_BASE="$WORKDIR/install-reentry"
     init_repo "$REENTRY_BASE"
     (cd "$REENTRY_BASE" && nix run "path:$ROOT"#framework::install >/dev/null)
-    REENTRY_TARGET="''${REENTRY_BASE}_nixified"
+    REENTRY_TARGET="$REENTRY_BASE"
     assert_file_exists "$REENTRY_TARGET/flake.nix"
     assert_file_absent "$REENTRY_TARGET/nixfied/.framework"
     (cd "$REENTRY_BASE" && nix run "path:$ROOT"#framework::install -- --force >/dev/null)
     assert_file_exists "$REENTRY_TARGET/flake.nix"
-    assert_file_absent "''${REENTRY_TARGET}_nixified"
+    assert_file_absent "''${REENTRY_BASE}_nixfied"
+    assert_file_absent "''${REENTRY_BASE}_nixified"
 
     log "installer filter"
     INSTALL_FILTER="$WORKDIR/install-filter"
     init_repo "$INSTALL_FILTER"
     (cd "$INSTALL_FILTER" && nix run "path:$ROOT"#framework::install -- --filter=conf,ci >/dev/null)
-    FILTER_TARGET="''${INSTALL_FILTER}_nixified"
+    FILTER_TARGET="$INSTALL_FILTER"
     assert_file_exists "$FILTER_TARGET/nixfied/project/ci.nix"
     assert_file_absent "$FILTER_TARGET/nixfied/project/dev.nix"
     assert_file_absent "$FILTER_TARGET/nixfied/project/test.nix"

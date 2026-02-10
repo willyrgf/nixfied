@@ -236,31 +236,31 @@ let
               RESET_PROJECT=true
               shift
               ;;
-            --help|-h)
-              cat <<'EOF'
-    Usage:
-      nix run github:willyrgf/nixfied#framework::install [options]
-      nix run github:willyrgf/nixfied#framework::upgrade [options]
+	        --help|-h)
+	          cat <<'EOF'
+Usage:
+  nix run github:willyrgf/nixfied#framework::install [options]
+  nix run github:willyrgf/nixfied#framework::upgrade [options]
 
-    Install options:
-      --force                Overwrite existing nix files (flake.nix/flake.lock/nixfied)
-      --filter=LIST          Fresh install only: install subset of project templates
-                             (values: conf,dev,test,build,quality,ci; build is an alias of prod.nix)
-      --target=PATH          When installing from a non-_nixified repo, write to PATH (must end with _nixified)
-      --worktree             Use 'git worktree add --detach' instead of copying (requires clean working tree unless --force)
-      --sync                 If target exists and --force is set, sync repo contents into target before installing
+Install options:
+  --force                Overwrite existing nix files (flake.nix/flake.lock/nixfied)
+  --filter=LIST          Fresh install only: install subset of project templates
+                         (values: conf,dev,test,build,quality,ci; build is an alias of prod.nix)
+  --worktree             Install into a git worktree for the nixfied branch (keeps current checkout unchanged)
+  --target=PATH          With --worktree: worktree directory path (default: <repo>_nixfied)
+  --sync                 Deprecated (no-op); kept for backward compatibility
 
-    Upgrade options:
-      --upgrade              Treat as an upgrade (preserves nixfied/project unless --reset-project)
-      --reset-project        Overwrite nixfied/project templates during upgrade
+Upgrade options:
+  --upgrade              Treat as an upgrade (preserves nixfied/project unless --reset-project)
+  --reset-project        Overwrite nixfied/project templates during upgrade
 
-    Prompt plan:
-      --no-prompt-plan       Skip generating NIXFIED_PROMPT_PLAN.md (default is to generate)
-      --prompt-plan          Generate NIXFIED_PROMPT_PLAN.md after install/upgrade (best effort; default)
-      --prompt-plan-force    Overwrite existing NIXFIED_PROMPT_PLAN.md
-    EOF
-              exit 0
-              ;;
+Prompt plan:
+  --no-prompt-plan       Skip generating NIXFIED_PROMPT_PLAN.md (default is to generate)
+  --prompt-plan          Generate NIXFIED_PROMPT_PLAN.md after install/upgrade (best effort; default)
+  --prompt-plan-force    Overwrite existing NIXFIED_PROMPT_PLAN.md
+EOF
+	          exit 0
+	          ;;
             --)
               # Accept an explicit "--" (some wrappers include it) and keep parsing.
               shift
@@ -272,93 +272,116 @@ let
           esac
         done
 
-        if [ "$FORCE" = "true" ]; then
-          export NIXFIED_INSTALL_FORCE=1
-        fi
+	        if [ "$FORCE" = "true" ]; then
+	          export NIXFIED_INSTALL_FORCE=1
+	        fi
 
-        ROOT=$(git rev-parse --show-toplevel 2>/dev/null || true)
-        if [ -z "$ROOT" ]; then
-          echo "❌ Not inside a git repository." >&2
-          exit 1
-        fi
+	        GIT="${pkgs.git}/bin/git"
+	        if [ ! -x "$GIT" ]; then
+	          echo "❌ git is required to install/upgrade." >&2
+	          exit 1
+	        fi
 
-        SUFFIX="_nixified"
-        BASE=$(basename "$ROOT")
+	        ROOT=$("$GIT" rev-parse --show-toplevel 2>/dev/null || true)
+	        if [ -z "$ROOT" ]; then
+	          echo "❌ Not inside a git repository." >&2
+	          exit 1
+	        fi
+	        ROOT=$(cd "$ROOT" && pwd -P)
 
-        if [ "$MODE" = "upgrade" ]; then
-          if [[ "$BASE" != *"$SUFFIX" ]]; then
-            echo "❌ Upgrade requires running inside a repository ending with $SUFFIX" >&2
-            exit 1
-          fi
-          if [ ! -d "$ROOT/nixfied" ]; then
-            echo "❌ No nixfied/ directory found in $ROOT" >&2
-            echo "   Run install first: nix run github:willyrgf/nixfied#framework::install" >&2
-            exit 1
-          fi
-        fi
+	        INSTALL_BRANCH="''${NIXFIED_INSTALL_BRANCH:-nixfied}"
 
-        if [ "$MODE" != "upgrade" ] && [ -z "''${NIXFIED_INSTALL_REENTRY:-}" ]; then
-          if [[ "$BASE" != *"$SUFFIX" ]]; then
-            TARGET="''${TARGET_PATH:-''${ROOT}''${SUFFIX}}"
-            if [[ "$(basename "$TARGET")" != *"$SUFFIX" ]]; then
-              echo "❌ Target must end with $SUFFIX (got: $TARGET)" >&2
-              exit 1
-            fi
-            case "$TARGET" in
-              "$ROOT"/*)
-                echo "❌ Target must not be inside the source repo (got: $TARGET)" >&2
-                exit 1
-                ;;
-            esac
-            if [ -e "$TARGET" ]; then
-              if [ "$FORCE" = "true" ]; then
-                if [ "$SYNC_TARGET" = "true" ] && [ "$USE_WORKTREE" != "true" ]; then
-                  echo "🔄 Syncing repository to $TARGET..."
-                  ${pkgs.rsync}/bin/rsync -a --delete "$ROOT/" "$TARGET/"
-                else
-                  echo "⚠️  Target already exists: $TARGET"
-                  echo "    Reusing existing target (no new copy/worktree created)."
-                  if [ "$SYNC_TARGET" = "true" ] && [ "$USE_WORKTREE" = "true" ]; then
-                    echo "ℹ️  --sync has no effect with --worktree."
-                  fi
-                fi
-                (cd "$TARGET" && NIXFIED_INSTALL_REENTRY=1 NIXFIED_INSTALL_FORCE=1 "$0" "''${ORIG_ARGS[@]}")
-                exit 0
-              else
-                echo "❌ Target already exists: $TARGET" >&2
-                echo "   Remove it or rename it, then re-run (or pass --force to reuse)." >&2
-                exit 1
-              fi
-            fi
-            if [ "$USE_WORKTREE" = "true" ]; then
-              if [ ! -x "${pkgs.git}/bin/git" ]; then
-                echo "❌ git is required for --worktree" >&2
-                exit 1
-              fi
-              DIRTY=$(${pkgs.git}/bin/git -C "$ROOT" status --porcelain 2>/dev/null || true)
-              if [ -n "$DIRTY" ] && [ "$FORCE" != "true" ]; then
-                echo "❌ Working tree is dirty; refusing to create a detached worktree without --force" >&2
-                echo "   (uncommitted changes would not be present in the worktree)" >&2
-                exit 1
-              fi
-              echo "🌿 Creating git worktree at $TARGET..."
-              ${pkgs.git}/bin/git -C "$ROOT" worktree add --detach "$TARGET" >/dev/null
-            else
-              echo "📦 Copying repository to $TARGET..."
-              ${pkgs.rsync}/bin/rsync -a "$ROOT/" "$TARGET/"
-            fi
-            echo "✅ Target ready. Re-running installer in $TARGET"
-            (cd "$TARGET" && NIXFIED_INSTALL_REENTRY=1 "$0" "''${ORIG_ARGS[@]}")
-            exit 0
-          fi
-        fi
+	        if [ "$SYNC_TARGET" = "true" ]; then
+	          echo "ℹ️  --sync is deprecated in the branch-based installer (no-op)."
+	        fi
 
-        if [[ "$BASE" != *"$SUFFIX" ]]; then
-          echo "❌ For safety, run inside a repository ending with $SUFFIX" >&2
-          exit 1
-        fi
+	        if [ -z "''${NIXFIED_INSTALL_REENTRY:-}" ] && [ "$USE_WORKTREE" = "true" ]; then
+	          TARGET="''${TARGET_PATH:-''${ROOT}_''${INSTALL_BRANCH}}"
+	          case "$TARGET" in
+	            "$ROOT"/*)
+	              echo "❌ Target must not be inside the source repo (got: $TARGET)" >&2
+	              exit 1
+	              ;;
+	          esac
 
-        SRC="${frameworkRoot}"
+	          if [ -e "$TARGET" ]; then
+	            if [ "$FORCE" = "true" ]; then
+	              echo "⚠️  Target already exists: $TARGET"
+	              echo "    Reusing existing target (no new worktree created)."
+	            else
+	              echo "❌ Target already exists: $TARGET" >&2
+	              echo "   Remove it or pass --force to reuse." >&2
+	              exit 1
+	            fi
+	          else
+	            DIRTY=$("$GIT" -C "$ROOT" status --porcelain 2>/dev/null || true)
+	            if [ -n "$DIRTY" ] && [ "$FORCE" != "true" ]; then
+	              echo "❌ Working tree is dirty; refusing to create a worktree without --force" >&2
+	              echo "   (uncommitted changes would not be present in the worktree)" >&2
+	              exit 1
+	            fi
+	            echo "🌿 Creating git worktree at $TARGET (branch: $INSTALL_BRANCH)..."
+	            if "$GIT" -C "$ROOT" show-ref --verify --quiet "refs/heads/$INSTALL_BRANCH"; then
+	              "$GIT" -C "$ROOT" worktree add "$TARGET" "$INSTALL_BRANCH" >/dev/null
+	            else
+	              "$GIT" -C "$ROOT" worktree add -b "$INSTALL_BRANCH" "$TARGET" >/dev/null
+	            fi
+	          fi
+
+	          if ! "$GIT" -C "$TARGET" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+	            echo "❌ Target exists but is not a git worktree: $TARGET" >&2
+	            exit 1
+	          fi
+
+	          echo "✅ Worktree ready. Re-running installer in $TARGET"
+	          (cd "$TARGET" && NIXFIED_INSTALL_REENTRY=1 "$0" "''${ORIG_ARGS[@]}")
+	          exit 0
+	        fi
+
+	        if [ -n "$TARGET_PATH" ] && [ "$USE_WORKTREE" != "true" ] && [ -z "''${NIXFIED_INSTALL_REENTRY:-}" ]; then
+	          echo "ℹ️  --target is only used with --worktree; ignoring."
+	        fi
+
+	        HEAD_REF=$("$GIT" -C "$ROOT" symbolic-ref -q HEAD 2>/dev/null || true)
+	        if [[ "$HEAD_REF" == refs/heads/* ]]; then
+	          CURRENT_BRANCH="''${HEAD_REF#refs/heads/}"
+	        else
+	          CURRENT_BRANCH=$("$GIT" -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+	        fi
+
+	        if [ "$MODE" = "upgrade" ]; then
+	          if [ ! -d "$ROOT/nixfied" ]; then
+	            echo "❌ No nixfied/ directory found in $ROOT" >&2
+	            echo "   Run install first: nix run github:willyrgf/nixfied#framework::install" >&2
+	            exit 1
+	          fi
+	          if [ "$HEAD_REF" != "refs/heads/$INSTALL_BRANCH" ] && ! "$GIT" -C "$ROOT" show-ref --verify --quiet "refs/heads/$INSTALL_BRANCH"; then
+	            echo "❌ Upgrade requires an existing branch: $INSTALL_BRANCH" >&2
+	            exit 1
+	          fi
+	        fi
+
+	        if [ "$CURRENT_BRANCH" != "$INSTALL_BRANCH" ]; then
+	          if "$GIT" -C "$ROOT" show-ref --verify --quiet "refs/heads/$INSTALL_BRANCH"; then
+	            DIRTY=$("$GIT" -C "$ROOT" status --porcelain 2>/dev/null || true)
+	            if [ -n "$DIRTY" ] && [ "$FORCE" != "true" ]; then
+	              echo "❌ Working tree is dirty; refusing to switch to '$INSTALL_BRANCH' without --force" >&2
+	              echo "   (commit/stash your changes, or pass --worktree)" >&2
+	              exit 1
+	            fi
+	            echo "🌿 Switching to $INSTALL_BRANCH branch..."
+	            "$GIT" -C "$ROOT" switch "$INSTALL_BRANCH" >/dev/null
+	          else
+	            if [ "$MODE" = "upgrade" ]; then
+	              echo "❌ Upgrade requires an existing branch: $INSTALL_BRANCH" >&2
+	              exit 1
+	            fi
+	            echo "🌿 Creating and switching to $INSTALL_BRANCH branch..."
+	            "$GIT" -C "$ROOT" switch -c "$INSTALL_BRANCH" >/dev/null
+	          fi
+	        fi
+
+	        SRC="${frameworkRoot}"
 
         if [ ! -f "$SRC/flake.nix" ] || [ ! -d "$SRC/nixfied" ]; then
           echo "❌ Framework source is missing required files." >&2

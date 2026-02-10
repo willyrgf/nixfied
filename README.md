@@ -89,9 +89,9 @@ nix run github:willyrgf/nixfied#framework::install
 ```
 
 Safety behavior:
-- If the repo name does not end with `_nixified`, the installer copies the repo
-  to `<repo>_nixified` (or `--target`) and re-runs itself there.
-- It refuses to install/upgrade unless the repo name ends with `_nixified`.
+- Installs into the `nixfied` branch (creates it from your current HEAD if missing).
+- If you are on another branch, it switches to `nixfied` before writing files
+  (refuses to switch if the working tree is dirty unless `--force`).
 - It installs only `flake.nix`, `flake.lock`, and `nixfied/`.
 
 Force overwrite:
@@ -102,28 +102,22 @@ nix run github:willyrgf/nixfied#framework::install -- --force
 NIXFIED_INSTALL_FORCE=1 nix run github:willyrgf/nixfied#framework::install
 ```
 
-Fast install (optional, avoids copying large repos):
+Worktree install (optional, keeps current checkout unchanged):
 
 ```bash
 nix run github:willyrgf/nixfied#framework::install -- --worktree
 ```
 
-Custom target directory:
+Custom worktree directory:
 
 ```bash
-nix run github:willyrgf/nixfied#framework::install -- --target /path/to/my-app_nixified
+nix run github:willyrgf/nixfied#framework::install -- --worktree --target /path/to/my-app_nixfied
 ```
 
-If the target already exists and you want to refresh it from the source repo:
+Upgrade an existing install (upgrades framework files, preserves `nixfied/project/` by default):
 
 ```bash
-nix run github:willyrgf/nixfied#framework::install -- --force --sync
-```
-
-Upgrade an existing `_nixified` repo (preserves `nixfied/project/` by default):
-
-```bash
-cd my-app_nixified
+cd my-app
 nix run github:willyrgf/nixfied#framework::upgrade -- --force
 ```
 
