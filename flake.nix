@@ -137,14 +137,18 @@
         };
 
         apps =
-          coreApps
-          // moduleApps
-          // (if ciApp != null then { ci = ciApp; } else { })
-          // isolationApps
-          // frameworkApps
-          // {
-            default = if coreApps ? help then coreApps.help else coreApps.dev;
-          };
+          let
+            apps0 =
+              coreApps
+              // moduleApps
+              // (if ciApp != null then { ci = ciApp; } else { })
+              // isolationApps
+              // frameworkApps
+              // {
+                default = if coreApps ? help then coreApps.help else coreApps.dev;
+              };
+          in
+          lib.appApi.validateApps apps0;
 
         packages = project.packages or { };
       }

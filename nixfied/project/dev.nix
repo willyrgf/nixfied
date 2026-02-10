@@ -13,6 +13,28 @@
   commands = {
     dev = {
       description = "Start the dev workflow";
+      api = {
+        version = 1;
+        summary = "Start the dev workflow";
+        details = ''
+          Runs the project's dev workflow.
+
+          Customize this command in nixfied/project/dev.nix (start services, run hooks, etc).
+        '';
+        usage = [ "nix run .#dev" ];
+        examples = [ "NIX_ENV=0 nix run .#dev" ];
+        env = [
+          {
+            name = project.envVar;
+            description = "Environment name (set to dev by default for this command)";
+          }
+          {
+            name = project.slotVar;
+            description = "Slot number (0-9)";
+          }
+        ];
+        category = "core";
+      };
       env = {
         "${project.envVar}" = "dev";
       };

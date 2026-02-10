@@ -61,6 +61,24 @@ Template defaults are safe no-ops: `dev`, `test`, `build`, and `check` print a
 placeholder and exit 0. The CI pipeline is enabled and runs placeholder steps.
 Replace each command in its file under `nixfied/project/`.
 
+## App API contract
+
+Nixfied requires any app exposed in `flake.nix` to define structured metadata at
+`commands.<name>.api` (or `app.meta.nixfied.api` for generated/internal apps).
+This is used to power `nix run .#help`, and missing/invalid metadata fails
+flake evaluation.
+
+Minimal example:
+
+```nix
+commands.dev.api = {
+  version = 1;
+  summary = "Start the dev workflow";
+  details = "Longer docs (can be multi-line).";
+  usage = [ "nix run .#dev" ];
+};
+```
+
 ## Install into an existing repo
 
 From your target repository:
@@ -121,20 +139,15 @@ Filter which project files are installed (conf is always included):
 nix run github:willyrgf/nixfied#framework::install -- --filter=conf,test,ci
 ```
 
-Prompt plan (optional):
+Prompt plan:
+- Generated automatically as part of install/upgrade (best effort).
 - Generate manually:
 
 ```bash
 nix run github:willyrgf/nixfied#framework::prompt-plan
 ```
 
-- Or generate as part of install/upgrade:
-
-```bash
-nix run github:willyrgf/nixfied#framework::install -- --prompt-plan
-```
-
-- Disable with `NIXFIED_PROMPT_PLAN=0`.
+- Skip with `--no-prompt-plan` or `NIXFIED_PROMPT_PLAN=0`.
 - Overwrite with `--prompt-plan-force` or `NIXFIED_PROMPT_PLAN_OVERWRITE=1`.
 
 Framework-only apps:

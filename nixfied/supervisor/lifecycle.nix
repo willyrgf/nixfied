@@ -26,9 +26,12 @@ let
     ${pc}/bin/process-compose -f "$CONFIG_FILE" down 2>/dev/null || true
 
     # Clean up orphan processes on configured ports
-    ${pkgs.lib.concatMapStringsSep "\n" (name:
-      let portVar = slots.portVarName name;
-      in ''
+    ${pkgs.lib.concatMapStringsSep "\n" (
+      name:
+      let
+        portVar = slots.portVarName name;
+      in
+      ''
         PORT="''${${portVar}:-}"
         if [ -n "$PORT" ] && command -v lsof >/dev/null 2>&1; then
           ORPHANS=$(lsof -ti:"$PORT" 2>/dev/null || true)
@@ -84,5 +87,10 @@ let
 
 in
 {
-  inherit pc start stop startDaemon;
+  inherit
+    pc
+    start
+    stop
+    startDaemon
+    ;
 }

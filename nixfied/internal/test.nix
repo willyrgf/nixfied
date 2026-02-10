@@ -124,6 +124,11 @@ let
     assert_contains "$HELP_OUT" "PROJECT_ENV"
     assert_contains "$HELP_OUT" "NIX_ENV"
 
+    HELP_DEV_OUT="$WORKDIR/help-dev.txt"
+    nix run "path:$ROOT"#help -- dev > "$HELP_DEV_OUT"
+    assert_contains "$HELP_DEV_OUT" "Usage:"
+    assert_contains "$HELP_DEV_OUT" "nix run .#dev"
+
     nix run "path:$ROOT"#dev >/dev/null
     nix run "path:$ROOT"#test >/dev/null
     nix run "path:$ROOT"#build >/dev/null
@@ -499,6 +504,10 @@ let
     assert_contains "$BASIC_HELP" "build  Build artifacts"
     assert_contains "$BASIC_HELP" "check  Run quality checks"
     assert_contains "$BASIC_HELP" "ci  Run the CI pipeline"
+    BASIC_HELP_DEV="$WORKDIR/basic-help-dev.txt"
+    run_app "$INSTALL_TARGET" help dev > "$BASIC_HELP_DEV"
+    assert_contains "$BASIC_HELP_DEV" "Usage:"
+    assert_contains "$BASIC_HELP_DEV" "nix run .#dev"
     run_app_quiet "$INSTALL_TARGET" dev
     run_app_quiet "$INSTALL_TARGET" test
     run_app_quiet "$INSTALL_TARGET" build
@@ -507,6 +516,52 @@ let
     assert_app_missing "$INSTALL_TARGET" "framework::install"
     assert_app_missing "$INSTALL_TARGET" "framework::prompt-plan"
     assert_app_missing "$INSTALL_TARGET" "framework::test"
+
+    log "app api contract enforcement"
+    BAD_API_BASE="$WORKDIR/install-bad-api"
+    init_repo "$BAD_API_BASE"
+    (cd "$BAD_API_BASE" && nix run "path:$ROOT"#framework::install >/dev/null)
+    BAD_API_TARGET="''${BAD_API_BASE}_nixified"
+    assert_file_exists "$BAD_API_TARGET/flake.nix"
+    cat > "$BAD_API_TARGET/nixfied/project/dev.nix" <<'EOF'
+    { ... }:
+
+    {
+      commands = {
+        dev = {
+          description = "Start the dev workflow";
+          api = {
+            version = 1;
+            summary = "Start the dev workflow";
+            details = "ok";
+            usage = [ "nix run .#dev" ];
+          };
+          env = {
+            PROJECT_ENV = "dev";
+          };
+          useDeps = true;
+          script = "echo dev\nexit 0\n";
+        };
+
+        missing-api = {
+          description = "This command is missing api";
+          env = { };
+          useDeps = false;
+          script = "echo missing\nexit 0\n";
+        };
+      };
+    }
+    EOF
+    BAD_API_LOG="$WORKDIR/bad-api-contract.log"
+    set +e
+    nix flake show "path:$BAD_API_TARGET" > "$BAD_API_LOG" 2>&1
+    RC=$?
+    set -e
+    if [ "$RC" -eq 0 ]; then
+      fail "expected API contract violation to fail"
+    fi
+    assert_contains "$BAD_API_LOG" "Nixfied app API contract violated"
+    assert_contains "$BAD_API_LOG" "missing meta.nixfied.api"
 
     log "installer upgrade preserves project"
     echo "# NIXFIED_UPGRADE_TEST_MARKER" >> "$INSTALL_TARGET/nixfied/project/conf.nix"
@@ -864,9 +919,15 @@ let
 
 in
 {
-  test = lib.mkApp {
+  test = lib.appApi.mkNixfiedApp {
     name = "test";
-    description = "Run framework integration tests";
+    api = {
+      version = 1;
+      summary = "Run framework integration tests";
+      details = "Runs the Nixfied framework integration test suite (intended for framework development).";
+      usage = [ "nix run .#framework::test" ];
+      category = "framework";
+    };
     env = { };
     useDeps = false;
     script = ''

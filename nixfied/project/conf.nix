@@ -113,7 +113,12 @@ rec {
   # Isolation test runner configuration (nix run .#test-isolation)
   isolation = {
     enable = true;
-    slots = [ 5 7 8 9 ];
+    slots = [
+      5
+      7
+      8
+      9
+    ];
     envs = [ ];
     validationInterval = 10;
     maxRuntime = 300;

@@ -7,6 +7,21 @@
   commands = {
     ci = {
       description = "Run the CI pipeline";
+      api = {
+        version = 1;
+        summary = "Run the CI pipeline";
+        details = ''
+          Runs the CI pipeline defined by the ci.modes and ci.steps configuration in this file.
+
+          Customize steps, modes, artifacts, and hooks in nixfied/project/ci.nix.
+        '';
+        usage = [
+          "nix run .#ci"
+          "nix run .#ci -- --summary"
+        ];
+        examples = [ "nix run .#ci -- --summary" ];
+        category = "core";
+      };
       env = {
         "${project.envVar}" = "test";
       };

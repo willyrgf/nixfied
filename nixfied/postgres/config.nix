@@ -51,7 +51,8 @@ let
     autovacuum = off
   '';
 
-  mkEnvConf = envName: defaults:
+  mkEnvConf =
+    envName: defaults:
     let
       userOverrides = userEnvConfigs.${envName} or { };
       userConfStr = userOverrides.extraConfig or "";
