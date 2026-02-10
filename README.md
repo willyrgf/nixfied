@@ -37,6 +37,9 @@ the model to follow it.**
 - [Framework helpers (shell)](#framework-helpers-shell)
 - [Nix helper functions (lib)](#nix-helper-functions-lib)
 - [CI pipeline DSL](#ci-pipeline-dsl)
+- [Ephemeral environments](#ephemeral-environments)
+- [Module apps](#module-apps)
+- [Run registry](#run-registry)
 - [Optional modules](#optional-modules)
 - [Supervisor (process-compose)](#supervisor-process-compose)
 - [Dev shell and packages](#dev-shell-and-packages)
@@ -56,7 +59,7 @@ nix run .#check
 
 Template defaults are safe no-ops: `dev`, `test`, `build`, and `check` print a
 placeholder and exit 0. The CI pipeline is enabled and runs placeholder steps.
-Replace each command in its file under `nix/project/`.
+Replace each command in its file under `nixfied/project/`.
 
 ## Install into an existing repo
 
@@ -71,7 +74,7 @@ Safety behavior:
 - If the repo name does not end with `_nixified`, the installer copies the repo
   to `<repo>_nixified` and re-runs itself there.
 - It refuses to install unless the repo name ends with `_nixified`.
-- It installs only `flake.nix`, `flake.lock`, and `nix/`.
+- It installs only `flake.nix`, `flake.lock`, and `nixfied/`.
 
 Force overwrite:
 
@@ -102,49 +105,89 @@ nix run github:willyrgf/nixfied#framework::prompt-plan
 Framework-only apps:
 - The `framework::install`, `framework::prompt-plan` (prompt generator), and
   `framework::test` apps are
-  only exposed when the repository contains `nix/.framework`.
+  only exposed when the repository contains `nixfied/.framework`.
 - The installer removes this marker in target repos so `nix flake show` will
   not list those apps after installation.
 - If you want to run framework tests from an installed repo, create the marker
-  file (`touch nix/.framework`) locally.
+  file (`touch nixfied/.framework`) locally.
 
 Framework workspace:
 - Framework maintenance commands live under the `framework::` namespace so they
   don't collide with project commands (e.g. `nix run .#framework::test`).
-  This workspace only exists when `nix/.framework` is present.
+  This workspace only exists when `nixfied/.framework` is present.
 
 ## Repository layout
 
 ```
 flake.nix
-nix/
-  apps/
-    core.nix        # dev/test/build/check/help apps
-    install.nix     # installer app
+nixfied/
+  .framework          # marker: enables framework::* apps
+  internal/
+    core.nix           # dev/test/build/check/help apps
+    install.nix        # installer + prompt-plan
+    test.nix           # framework test runner
+    isolation.nix      # parallel isolation stress test
+    module-apps.nix    # auto-generated module apps (db-*, nginx-*, supervisor)
   project/
-    conf.nix        # base configuration
-    dev.nix         # dev command
-    test.nix        # test command
-    prod.nix        # build/prod command(s)
-    quality.nix     # check command
-    ci.nix          # CI command + pipeline DSL
-    default.nix     # merges the files above
-  ci.nix            # pipeline runner implementation
-  lib.nix           # helper functions and app builder
-  slots.nix         # slot/env/port logic
-  hooks.nix         # exported hook env vars
-  postgres.nix      # optional postgres module
-  nginx.nix         # optional nginx module
-  supervisor.nix    # process-compose config generator
-  devshell.nix      # nix develop shell
+    conf.nix           # base configuration
+    dev.nix            # dev command
+    test.nix           # test command
+    prod.nix           # build/prod command(s)
+    quality.nix        # check command
+    ci.nix             # CI command + pipeline DSL
+    default.nix        # merges the files above
+  lib/
+    default.nix        # aggregator re-exporting all lib functions
+    helpers.nix        # shell helper script generation
+    builders.nix       # mkApp / mkAppScript / withTiming
+    summary.nix        # summary parser for CI output
+    run-registry.nix   # run tracking with meta.json + background mode
+    parallel.nix       # parallel runner generation
+    process.nix        # signal handler + process manager
+    port-utils.nix     # port cleanup + conflict checker
+  postgres/
+    default.nix        # aggregator
+    lifecycle.nix      # init/start/stop
+    config.nix         # postgresql.conf generation
+    backup.nix         # backup/restore/list
+    migration.nix      # migration runner
+    migration-safety.nix # pre-migration safety checks
+    port-management.nix  # port conflict resolution
+    rollback.nix       # rollback support
+  nginx/
+    default.nix        # aggregator
+    lifecycle.nix      # init/start/stop/reload
+    templates.nix      # config templates
+    site-management.nix # add/remove/enable/disable sites
+    ssl.nix            # certificate management
+  supervisor/
+    default.nix        # aggregator
+    config.nix         # process-compose YAML generation
+    lifecycle.nix      # start/stop/restart
+    status.nix         # status/isRunning/logs
+    management.nix     # daemon management
+  ci.nix               # pipeline runner (ephemeral, summary.json)
+  ephemeral.nix        # ephemeral environments (slot locking, cleanup)
+  slots.nix            # slot/env/port logic
+  hooks.nix            # exported hook env vars
+  devshell.nix         # nix develop shell
+tests/
+  framework/
+    fixtures/
+      ci/              # CI DSL fixtures
+      modules/         # module hook fixtures
+      helpers/         # helper function fixtures
+      slots/           # slot/env fixtures
+      ephemeral/       # ephemeral slot locking fixtures
+      registry/        # run registry fixtures
 ```
 
 ## Configuration model
 
-All project configuration lives in `nix/project/`.
-`nix/project/default.nix` merges the files below via `recursiveUpdate`.
+All project configuration lives in `nixfied/project/`.
+`nixfied/project/default.nix` merges the files below via `recursiveUpdate`.
 
-### `nix/project/conf.nix`
+### `nixfied/project/conf.nix`
 
 Base configuration and module toggles.
 
@@ -191,10 +234,10 @@ modules.nginx.enable = false;
 packages = { };
 ```
 
-### `nix/project/*.nix` command files
+### `nixfied/project/*.nix` command files
 
 Each file exports a `commands` attrset. You can add new commands anywhere as
-long as they are merged in `nix/project/default.nix`.
+long as they are merged in `nixfied/project/default.nix`.
 
 Command schema:
 
@@ -218,13 +261,13 @@ Files by convention:
 
 ## Execution environment
 
-Every command is wrapped by `nix/lib.nix` and gets:
+Every command is wrapped by `nixfied/lib.nix` and gets:
 - `COMMAND_NAME` set to the command name.
 - `.env` loaded if present (does not override existing env vars).
 - `tooling.runtimePackages` added to `PATH`.
 - `install.deps` (if `useDeps = true`).
 - Framework helper functions (see below).
-- Hook environment variables from `nix/hooks.nix`.
+- Hook environment variables from `nixfied/hooks.nix`.
 
 ## Slots, environments, and ports
 
@@ -237,7 +280,7 @@ Ports are computed as:
 computed_port = base_port + slot + env_offset
 ```
 
-`nix/slots.nix` exposes helper scripts:
+`nixfied/slots.nix` exposes helper scripts:
 - `SLOT_INFO` prints `SLOT`, `ENV`, `BASE_DIR`, `LOG_DIR`, `RUN_DIR`,
   `CONFIG_DIR`, `STATE_DIR`, and all computed ports.
 - `REQUIRE_SLOT_ENV` validates env/slot, prints values, and prompts in TTY
@@ -252,7 +295,7 @@ echo "Backend port: $BACKEND_PORT"
 
 ## Framework helpers (shell)
 
-Every command sources a helper script generated by `nix/lib.nix`.
+Every command sources a helper script generated by `nixfied/lib.nix`.
 
 - `require_env VAR [message]`
   - Fail if `VAR` is missing or empty.
@@ -293,27 +336,26 @@ stop_service "$PID" backend
 
 ## Nix helper functions (lib)
 
-`nix/lib.nix` also exposes Nix-level helpers you can reuse when wiring custom
-apps:
+`nixfied/lib/` is a directory of Nix modules re-exported through
+`nixfied/lib/default.nix`. Import it in your Nix wiring:
 
-- `mkApp` / `mkAppWithDeps` - wrap a shell script as a flake app with env, deps,
-  hooks, and helper functions preloaded.
-- `mkAppScript` - produce the underlying script derivation used by `mkApp`.
-- `withTiming` - wrap a script to print a duration footer.
-- `mkParallelRunner` - generate a script that runs multiple commands in
-  parallel and collates output.
-- `mkPortCleanup` / `mkPortConflictChecker` - generate scripts to kill or check
-  port listeners.
-- `mkSignalHandler` / `mkProcessManager` - generate scripts for clean shutdown
-  and process supervision.
-- `summaryParser`, `helpersScript`, `loadEnv` - internal helpers used by `mkApp`.
+```nix
+lib = import ./nixfied/lib { inherit pkgs project hooks; };
+```
 
-To use them, import `nix/lib.nix` in your Nix wiring and call the functions
-directly.
+Exported functions:
+
+- **builders.nix** - `mkApp`, `mkAppWithDeps`, `mkAppScript`, `withTiming`
+- **helpers.nix** - `loadEnv`, `helpersScript`, `hookExports`
+- **summary.nix** - `summaryParser`
+- **parallel.nix** - `mkParallelRunner`
+- **port-utils.nix** - `mkPortCleanup`, `mkPortConflictChecker`
+- **process.nix** - `mkSignalHandler`, `mkProcessManager`
+- **run-registry.nix** - `runRegistryStart` (run tracking with meta.json)
 
 ## CI pipeline DSL
 
-The CI runner is enabled by default and defined in `nix/project/ci.nix`.
+The CI runner is enabled by default and defined in `nixfied/project/ci.nix`.
 
 Top-level config:
 
@@ -375,7 +417,11 @@ nix run .#ci                 # default mode
 nix run .#ci -- --summary    # summary output
 nix run .#ci -- --mode app   # select mode
 nix run .#ci -- --app        # shorthand for mode "app"
+nix run .#ci -- --bg         # run in background via run registry
 ```
+
+The CI runner writes `summary.json` to the artifacts directory after each run,
+containing mode, exit code, and per-step results (name, status, duration).
 
 CI environment variables available inside steps:
 - `CI_MODE`
@@ -388,9 +434,66 @@ Artifacts:
 - Stored in `ci.artifacts.dir` and also in `CI_ARTIFACTS_DIR`.
 - Removed automatically unless `keepOnFailure`/`keepOnSuccess` are true.
 
+## Ephemeral environments
+
+Ephemeral mode provides fully isolated, deterministic execution environments.
+All mutable state goes to a temporary directory that is cleaned up on success
+and preserved on failure for debugging.
+
+Enable in `nixfied/project/conf.nix`:
+
+```nix
+ephemeral = {
+  enable = true;
+  excludePatterns = [ ".git" "node_modules" ".next" "dist" ];
+  extraDirs = [ ];
+};
+```
+
+Features:
+- **Slot locking**: Each ephemeral run acquires an exclusive lock on a slot
+  (0-9) to prevent port conflicts between concurrent runs.
+- **Conditional cleanup**: State is cleaned on success, preserved on failure.
+- **Source copy**: The project is rsync'd to the ephemeral root (excluding
+  configured patterns).
+- **CI integration**: When `ci.useEphemeral = true` (default), CI steps run
+  inside an ephemeral wrapper via `mkEphemeralWrapper`.
+
+## Module apps
+
+When modules are enabled, the framework auto-generates convenience apps via
+`nixfied/internal/module-apps.nix`. These are listed under "Module Apps" in
+`nix run .#help`.
+
+Postgres apps (when `modules.postgres.enable = true`):
+- `db-start`, `db-stop`, `db-init`, `db-setup`, `db-full-start`
+- `db-backup`, `db-restore`, `db-list-backups`
+- `db-test-migrations`, `db-check-port`, `db-list-instances`
+
+Nginx apps (when `modules.nginx.enable = true`):
+- `nginx-start`, `nginx-stop`, `nginx-init`, `nginx-reload`
+- `nginx-site-add`, `nginx-site-remove`, `nginx-site-list`
+- `nginx-site-enable`, `nginx-site-disable`
+- `nginx-cert-obtain`, `nginx-cert-renew`
+
+Supervisor apps (when `supervisor.enable = true`):
+- `up`, `down`, `supervisor-status`, `supervisor-logs`, `supervisor-restart`
+
+Utility apps (always available):
+- `check-ports`, `ports`
+
+## Run registry
+
+The run registry (`nixfied/lib/run-registry.nix`) provides durable run tracking.
+Each run creates a directory with `meta.json` (status, timing, exit code) and
+`output.log`.
+
+Used by CI `--bg` mode to detach runs into the background. The runs root
+defaults to `/tmp/<project-id>-runs` (configurable via `ci.runsRoot`).
+
 ## Optional modules
 
-Enable modules in `nix/project/conf.nix`.
+Enable modules in `nixfied/project/conf.nix`.
 
 ### Postgres
 
@@ -409,18 +512,19 @@ modules.postgres = {
 ```
 
 Hooks (exported env vars):
-- `POSTGRES_INIT`
-- `POSTGRES_START`
-- `POSTGRES_STOP`
-- `POSTGRES_SETUP_DB`
-- `POSTGRES_FULL_START`
-- `POSTGRES_FULL_START_TEST`
+- `POSTGRES_INIT`, `POSTGRES_START`, `POSTGRES_STOP`, `POSTGRES_SETUP_DB`
+- `POSTGRES_FULL_START`, `POSTGRES_FULL_START_TEST`
+- `POSTGRES_BACKUP`, `POSTGRES_RESTORE`, `POSTGRES_LIST_BACKUPS`
+- `POSTGRES_TEST_MIGRATIONS`, `POSTGRES_ENSURE_MIGRATION_TESTED`
+- `POSTGRES_CHECK_PORT`, `POSTGRES_KILL_PORT`, `POSTGRES_LIST_INSTANCES`
 
 Example:
 
 ```bash
 run_hook POSTGRES_FULL_START
 run_hook POSTGRES_SETUP_DB
+run_hook POSTGRES_BACKUP my-backup
+run_hook POSTGRES_LIST_INSTANCES
 ```
 
 ### Nginx
@@ -437,11 +541,11 @@ modules.nginx = {
 ```
 
 Hooks:
-- `NGINX_INIT`
-- `NGINX_START`
-- `NGINX_STOP`
-- `NGINX_SITE_PROXY`
-- `NGINX_SITE_STATIC`
+- `NGINX_INIT`, `NGINX_START`, `NGINX_STOP`, `NGINX_RELOAD`
+- `NGINX_SITE_PROXY`, `NGINX_SITE_STATIC`
+- `NGINX_SITE_ADD`, `NGINX_SITE_REMOVE`, `NGINX_SITE_LIST`
+- `NGINX_SITE_ENABLE`, `NGINX_SITE_DISABLE`
+- `NGINX_CERT_OBTAIN`, `NGINX_CERT_RENEW`, `NGINX_CERT_STATUS`
 
 Example:
 
@@ -449,12 +553,13 @@ Example:
 run_hook NGINX_INIT
 run_hook NGINX_SITE_PROXY example.localhost 127.0.0.1 3000
 run_hook NGINX_START
+run_hook NGINX_SITE_LIST
 ```
 
 ## Supervisor (process-compose)
 
 Supervisor is intended for production orchestration. Configure services in
-`nix/project/conf.nix`:
+`nixfied/project/conf.nix`:
 
 ```nix
 supervisor = {
@@ -475,10 +580,21 @@ supervisor = {
 };
 ```
 
-The `nix/supervisor.nix` module generates a process-compose YAML and provides
-scripts to `start`, `stop`, and `status`. If you want to use these from your
-command scripts, import the module in your Nix code and run the script path
-(e.g., `toString supervisor.start`).
+The `nixfied/supervisor/` module generates a process-compose YAML and provides
+lifecycle scripts.
+
+Hooks (exported env vars when supervisor is enabled):
+- `SUPERVISOR_START`, `SUPERVISOR_STOP`, `SUPERVISOR_START_DAEMON`
+- `SUPERVISOR_STATUS`, `SUPERVISOR_IS_RUNNING`
+- `SUPERVISOR_LOGS`, `SUPERVISOR_RESTART`
+
+Example:
+
+```bash
+run_hook SUPERVISOR_START
+run_hook SUPERVISOR_STATUS
+run_hook SUPERVISOR_STOP
+```
 
 ## Dev shell and packages
 

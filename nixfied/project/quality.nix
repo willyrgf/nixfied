@@ -13,7 +13,7 @@
       env = { };
       useDeps = true;
       script = ''
-        echo "Quality checks placeholder. Edit nix/project/quality.nix."
+        echo "Quality checks placeholder. Edit nixfied/project/quality.nix."
         exit 0
       '';
     };

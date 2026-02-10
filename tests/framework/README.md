@@ -24,9 +24,12 @@ The test runner validates:
 - Core apps (`help`, `dev`, `test`, `build`, `check`, `ci`).
 - Helper functions (log_capture, summary_parse, wait_http/port, start_service, with_service, with_cleanup).
 - Slot/env helpers (SLOT_INFO ports, REQUIRE_SLOT_ENV prompt behavior).
-- CI DSL behavior (modes, errors, step skipping, cleanup, teardown, artifacts, summary output).
+- CI DSL behavior (modes, errors, step skipping, cleanup, teardown, artifacts, summary output, summary.json).
 - Module hooks for Postgres and Nginx (init, start/stop, config generation, error paths).
-- Supervisor config generation.
+- Supervisor config generation and hooks.
+- Ephemeral slot locking (acquire/release, env var export).
+- Run registry (foreground run tracking, meta.json, output.log).
+- Module apps exposure (db-*, nginx-*, supervisor apps present/absent based on config).
 - Installer safety, re-entry reuse, invalid filter handling, prompt-plan toggle, and framework marker/app exposure behavior.
 
 ## Example snippets
@@ -57,6 +60,8 @@ If you want end‑to‑end examples, start here:
 - `fixtures/ci/retention.nix` — artifact retention modes.
 - `fixtures/ci/unknown-step.nix` — failure on misconfigured steps.
 - `fixtures/modules/dev.nix` — Postgres/Nginx hook usage + error paths.
+- `fixtures/ephemeral/lock.nix` — Ephemeral slot lock acquire/release.
+- `fixtures/registry/foreground.nix` — Run registry foreground tracking.
 
 ## Fixtures
 
@@ -66,6 +71,8 @@ If you want end‑to‑end examples, start here:
   - CI artifacts retention behavior.
 - `fixtures/ci/unknown-step.nix`
   - CI modes referencing unknown steps.
+- `fixtures/ci/summary-json.nix`
+  - CI summary.json output validation.
 - `fixtures/modules/conf.nix`
   - Base config with Postgres/Nginx enabled.
 - `fixtures/modules/dev.nix`
@@ -74,3 +81,7 @@ If you want end‑to‑end examples, start here:
   - Helper function regression tests (runtime helpers).
 - `fixtures/slots/runtime.nix`
   - Slot/env helper regression tests.
+- `fixtures/ephemeral/lock.nix`
+  - Ephemeral slot locking (acquire/release) tests.
+- `fixtures/registry/foreground.nix`
+  - Run registry foreground mode tests (meta.json, output.log).

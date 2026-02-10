@@ -18,7 +18,7 @@
       };
       useDeps = true;
       script = ''
-        echo "Dev command placeholder. Edit nix/project/dev.nix to run your app."
+        echo "Dev command placeholder. Edit nixfied/project/dev.nix to run your app."
         exit 0
       '';
     };

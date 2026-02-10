@@ -1,8 +1,9 @@
-# PostgreSQL module (optional)
+# PostgreSQL lifecycle management - init, start, stop, setupDb, fullStart
 {
   pkgs,
   project,
   slots,
+  config,
 }:
 
 let
@@ -14,43 +15,47 @@ let
   pgdataExpr = slots.getServiceDir dataDirName;
   database = cfg.database or "app";
   testDatabase = cfg.testDatabase or "${database}_test";
-  extensions = cfg.extensions or [ ];
-  extraConfig = cfg.extraConfig or "";
-
-  baseConf = ''
-    listen_addresses = 'localhost'
-    port = $PGPORT
-    unix_socket_directories = '/tmp'
-    max_connections = 50
-    shared_buffers = 128MB
-    log_destination = 'stderr'
-    logging_collector = off
-  '';
+  extensions = config.extensions or [ ];
 
   init = pkgs.writeShellScript "postgres-init" ''
-            set -euo pipefail
+    set -euo pipefail
 
-            if [ -z "''${PGDATA:-}" ] || [ -z "''${PGPORT:-}" ]; then
-              echo "❌ PGDATA and PGPORT must be set" >&2
-              exit 1
-            fi
+    if [ -z "''${PGDATA:-}" ] || [ -z "''${PGPORT:-}" ]; then
+      echo "❌ PGDATA and PGPORT must be set" >&2
+      exit 1
+    fi
 
-            mkdir -p "$PGDATA"
+    mkdir -p "$PGDATA"
 
-            if [ -f "$PGDATA/PG_VERSION" ]; then
-              echo "✅ PostgreSQL already initialized at $PGDATA"
-              exit 0
-            fi
+    if [ -f "$PGDATA/PG_VERSION" ]; then
+      echo "✅ PostgreSQL already initialized at $PGDATA"
+      exit 0
+    fi
 
-            echo "🔧 Initializing PostgreSQL at $PGDATA..."
-            ${postgres}/bin/initdb -D "$PGDATA" -U postgres --no-locale --encoding=UTF8 -A trust
+    echo "🔧 Initializing PostgreSQL at $PGDATA..."
+    ${postgres}/bin/initdb -D "$PGDATA" -U postgres --no-locale --encoding=UTF8 -A trust
 
-            cat > "$PGDATA/postgresql.conf" <<'EOF'
-    ${baseConf}
-    ${extraConfig}
-    EOF
+    # Determine environment-specific config
+    CONF_ENV="''${ENV:-dev}"
+    case "$CONF_ENV" in
+      prod)
+        cat > "$PGDATA/postgresql.conf" <<'PGCONF'
+    ${config.prodConf}
+    PGCONF
+        ;;
+      test)
+        cat > "$PGDATA/postgresql.conf" <<'PGCONF'
+    ${config.testConf}
+    PGCONF
+        ;;
+      *)
+        cat > "$PGDATA/postgresql.conf" <<'PGCONF'
+    ${config.devConf}
+    PGCONF
+        ;;
+    esac
 
-            cat > "$PGDATA/pg_hba.conf" <<'EOF'
+    cat > "$PGDATA/pg_hba.conf" <<'EOF'
     # TYPE  DATABASE        USER  ADDRESS       METHOD
     local   all             all                 trust
     host    all             all   127.0.0.1/32  trust
@@ -67,8 +72,30 @@ let
     fi
 
     if ${postgres}/bin/pg_isready -U postgres -h localhost -p "$PGPORT" -q 2>/dev/null; then
-      echo "✅ PostgreSQL already running on port $PGPORT"
-      exit 0
+      # Verify the running instance is ours by checking PGDATA
+      if [ -f "$PGDATA/postmaster.pid" ]; then
+        echo "✅ PostgreSQL already running on port $PGPORT"
+        exit 0
+      else
+        echo "⚠️  Port $PGPORT in use by a different PostgreSQL instance" >&2
+        if [ "''${CI:-}" = "true" ] || [ "''${AUTO_STOP_CONFLICTING:-}" = "1" ]; then
+          echo "   Auto-stopping conflicting instance (CI mode)..." >&2
+          lsof -ti:$PGPORT 2>/dev/null | xargs kill -TERM 2>/dev/null || true
+          sleep 2
+        else
+          echo "   Use 'run_hook POSTGRES_CHECK_PORT' to investigate" >&2
+          exit 1
+        fi
+      fi
+    fi
+
+    # Clean up stale PID file
+    if [ -f "$PGDATA/postmaster.pid" ]; then
+      STALE_PID=$(head -1 "$PGDATA/postmaster.pid" 2>/dev/null || true)
+      if [ -n "$STALE_PID" ] && ! kill -0 "$STALE_PID" 2>/dev/null; then
+        echo "🧹 Removing stale PID file (PID $STALE_PID not running)"
+        rm -f "$PGDATA/postmaster.pid"
+      fi
     fi
 
     if [ -z "''${PGSOCKET_DIR:-}" ]; then
@@ -161,6 +188,23 @@ let
     ${setupDb}
   '';
 
+  listInstances = pkgs.writeShellScript "postgres-list-instances" ''
+    set -euo pipefail
+    echo "PostgreSQL instances:"
+    echo ""
+    for pidfile in $(find "''${XDG_DATA_HOME:-$HOME/.local/share}" -name "postmaster.pid" 2>/dev/null || true); do
+      PGDATA_DIR=$(dirname "$pidfile")
+      PID=$(head -1 "$pidfile" 2>/dev/null || echo "unknown")
+      PORT=$(sed -n '4p' "$pidfile" 2>/dev/null || echo "unknown")
+      if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
+        STATUS="running"
+      else
+        STATUS="stale"
+      fi
+      echo "  $PGDATA_DIR (PID: $PID, Port: $PORT, Status: $STATUS)"
+    done
+  '';
+
 in
 {
   inherit
@@ -171,5 +215,6 @@ in
     setupDb
     fullStart
     fullStartTest
+    listInstances
     ;
 }

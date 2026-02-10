@@ -1,4 +1,4 @@
-# Supervisor module (process-compose) for production execution
+# Supervisor YAML generation from service definitions
 {
   pkgs,
   project,
@@ -6,7 +6,6 @@
 }:
 
 let
-  pc = pkgs.process-compose;
   services = project.supervisor.services or { };
   serviceNames = builtins.attrNames services;
 
@@ -151,30 +150,7 @@ let
     echo "$CONFIG_FILE"
   '';
 
-  start = pkgs.writeShellScript "supervisor-start" ''
-    set -euo pipefail
-    CONFIG_FILE=$(${generateConfig})
-    exec ${pc}/bin/process-compose -f "$CONFIG_FILE" up
-  '';
-
-  stop = pkgs.writeShellScript "supervisor-stop" ''
-    set -euo pipefail
-    CONFIG_FILE=$(${generateConfig})
-    exec ${pc}/bin/process-compose -f "$CONFIG_FILE" down
-  '';
-
-  status = pkgs.writeShellScript "supervisor-status" ''
-    set -euo pipefail
-    CONFIG_FILE=$(${generateConfig})
-    exec ${pc}/bin/process-compose -f "$CONFIG_FILE" status
-  '';
 in
 {
-  inherit
-    pc
-    generateConfig
-    start
-    stop
-    status
-    ;
+  inherit generateConfig servicesYaml;
 }

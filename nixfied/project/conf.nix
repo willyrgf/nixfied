@@ -65,6 +65,22 @@ rec {
     services = { };
   };
 
+  ephemeral = {
+    enable = false;
+    excludePatterns = [
+      ".git"
+      "node_modules"
+      ".next"
+      "dist"
+      ".turbo"
+      ".cache"
+      "*.log"
+      "test-results"
+      "coverage"
+    ];
+    extraDirs = [ ];
+  };
+
   modules = {
     postgres = {
       enable = false;
@@ -75,6 +91,16 @@ rec {
       portKey = "postgres";
       dataDirName = "postgres";
       extraConfig = "";
+      envConfigs = {
+        dev = { };
+        prod = { };
+        test = { };
+      };
+      migrations = {
+        dir = "migrations";
+        command = "";
+        sourceDatabase = null;
+      };
     };
     nginx = {
       enable = false;

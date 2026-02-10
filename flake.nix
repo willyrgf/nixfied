@@ -17,52 +17,59 @@
       let
         pkgs = import nixpkgs { inherit system; };
 
-        project = import ./nix/project { inherit pkgs; };
-        slots = import ./nix/slots.nix { inherit pkgs project; };
+        project = import ./nixfied/project { inherit pkgs; };
+        slots = import ./nixfied/slots.nix { inherit pkgs project; };
 
         postgres =
           if (project.modules.postgres.enable or false) then
-            import ./nix/postgres.nix { inherit pkgs project slots; }
+            import ./nixfied/postgres { inherit pkgs project slots; }
           else
             null;
 
         nginx =
           if (project.modules.nginx.enable or false) then
-            import ./nix/nginx.nix { inherit pkgs project slots; }
+            import ./nixfied/nginx { inherit pkgs project slots; }
           else
             null;
 
-        playwright =
-          if (project.modules.playwright.enable or false) then
-            import ./nix/playwright.nix { inherit pkgs project; }
+        ephemeral =
+          if (project.ephemeral.enable or false) then
+            import ./nixfied/ephemeral.nix { inherit pkgs project; }
           else
             null;
 
-        hooks = import ./nix/hooks.nix {
+        hooks = import ./nixfied/hooks.nix {
           inherit
             pkgs
             project
             slots
             postgres
             nginx
+            supervisor
+            ephemeral
             ;
         };
 
-        lib = import ./nix/lib.nix { inherit pkgs project hooks; };
-        supervisor = import ./nix/supervisor.nix { inherit pkgs project slots; };
+        lib = import ./nixfied/lib { inherit pkgs project hooks; };
+        supervisor =
+          if (project.supervisor.enable or true) then
+            import ./nixfied/supervisor { inherit pkgs project slots; }
+          else
+            null;
 
-        coreApps = import ./nix/apps/core.nix {
+        coreApps = import ./nixfied/internal/core.nix {
           inherit
             pkgs
             project
             lib
+            moduleApps
             ;
         };
-        isFramework = builtins.pathExists ./nix/.framework;
+        isFramework = builtins.pathExists ./nixfied/.framework;
 
         installApps =
           if isFramework then
-            import ./nix/apps/install.nix {
+            import ./nixfied/internal/install.nix {
               inherit
                 pkgs
                 lib
@@ -74,7 +81,7 @@
 
         testApps =
           if isFramework then
-            import ./nix/apps/test.nix {
+            import ./nixfied/internal/test.nix {
               inherit
                 pkgs
                 lib
@@ -82,7 +89,7 @@
             }
           else
             { };
-        isolationApps = import ./nix/apps/isolation.nix {
+        isolationApps = import ./nixfied/internal/isolation.nix {
           inherit
             pkgs
             project
@@ -90,15 +97,27 @@
             slots
             ;
         };
-        frameworkApps = pkgs.lib.mapAttrs' (name: value: {
-          name = "framework::${name}";
-          value = value;
-        }) (installApps // testApps);
-        ciEntry = import ./nix/ci.nix {
+        moduleApps = import ./nixfied/internal/module-apps.nix {
           inherit
             pkgs
             project
             lib
+            postgres
+            nginx
+            supervisor
+            slots
+            ;
+        };
+        frameworkApps = pkgs.lib.mapAttrs' (name: value: {
+          name = "framework::${name}";
+          value = value;
+        }) (installApps // testApps);
+        ciEntry = import ./nixfied/ci.nix {
+          inherit
+            pkgs
+            project
+            lib
+            ephemeral
             ;
         };
         ciApp =
@@ -110,7 +129,7 @@
             ciEntry;
       in
       {
-        devShells.default = import ./nix/devshell.nix {
+        devShells.default = import ./nixfied/devshell.nix {
           inherit
             pkgs
             project
@@ -119,6 +138,7 @@
 
         apps =
           coreApps
+          // moduleApps
           // (if ciApp != null then { ci = ciApp; } else { })
           // isolationApps
           // frameworkApps

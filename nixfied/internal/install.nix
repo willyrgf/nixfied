@@ -11,27 +11,39 @@ let
   promptPlanScript = pkgs.writeShellScript "nixfied-prompt-plan" ''
             set -euo pipefail
 
+            ORIG_ARGS=("$@")
             FORCE=false
             OUT_PATH=""
 
-            for arg in "$@"; do
-              case "$arg" in
-                --force) FORCE=true ;;
+            while [ "$#" -gt 0 ]; do
+              case "$1" in
+                --force)
+                  FORCE=true
+                  shift
+                  ;;
                 --output=*)
-                  OUT_PATH="''${arg#--output=}"
+                  OUT_PATH="''${1#--output=}"
+                  shift
+                  ;;
+                --output)
+                  if [ "$#" -lt 2 ]; then
+                    echo "❌ --output requires a path" >&2
+                    exit 1
+                  fi
+                  OUT_PATH="''${2-}"
+                  shift 2
                   ;;
                 --help|-h)
                   echo "Usage: nix run github:willyrgf/nixfied#framework::prompt-plan [--force] [--output=PATH]"
                   exit 0
                   ;;
-              esac
-            done
-
-            for arg in "$@"; do
-              case "$arg" in
-                --output)
+                --)
+                  # Accept an explicit "--" (some wrappers include it) and keep parsing.
                   shift
-                  OUT_PATH="''${1:-}"
+                  ;;
+                *)
+                  # Ignore unknown args for forward compatibility.
+                  shift
                   ;;
               esac
             done
@@ -96,12 +108,29 @@ let
 
     Requirements:
     - Be concise and actionable.
-    - Use headings: "PROMPT PLAN", "Project Snapshot", "Integration Steps", "Key Files to Edit",
-      "Open Questions", and "Next Prompts".
+    - Use headings: "PROMPT PLAN", "Project Snapshot", "Current Behavior", "Integration Steps",
+      "Key Files to Edit", "Validation Checklist", "Open Questions", and "Next Prompts".
     - Ground every step in the provided context; do not guess missing details.
-    - Mention Nixfied files to customize (e.g. nix/project/conf.nix and nix/project/{dev,test,prod,quality,ci}.nix).
-    - In "Integration Steps", start with high-level integration goals (Nixfied as the single entrypoint for dev/test/check/prod/db/ci, parity with current behavior, avoid regressions), then list concrete wiring steps.
-    - Include explicit validation expectations (e.g., nix run .#help/.#check/.#test smoke checks) and documentation refactor goals (README + CLAUDE.md make Nixfied the canonical entrypoint).
+    - Treat Nixfied as the single entrypoint for dev/test/build/check/ci and (optionally) db/nginx/supervisor:
+      nix run .#help, .#dev, .#test, .#build, .#check, .#ci
+    - Call out the key file-to-command mapping (do not assume "prod" is a command):
+      - nixfied/project/dev.nix -> commands.dev
+      - nixfied/project/test.nix -> commands.test
+      - nixfied/project/prod.nix -> commands.build (build/prod workflow)
+      - nixfied/project/quality.nix -> commands.check
+      - nixfied/project/ci.nix -> CI pipeline DSL config (ci.modes/ci.steps) + CI command metadata
+      - nixfied/project/conf.nix -> project identity, envs/ports, module toggles, ephemeral config
+      - nixfied/project/default.nix -> merges all project files; update if new files are added
+    - Mention the primary customization surface is nixfied/project/ (avoid editing flake.nix unless the plan proves it's necessary).
+    - Reference relevant framework features (only if applicable to this project):
+      - CI pipeline DSL (modes/steps, artifacts, summary.json; supports --summary, --mode/--<mode>, --bg)
+      - Ephemeral environments (slot locking, source copy, conditional cleanup; ci.useEphemeral)
+      - Module apps + hooks (db-*, nginx-*, supervisor apps; postgres backups/migrations)
+      - Run registry (used by CI --bg mode)
+    - In "Integration Steps", start with high-level goals (behavior parity with the current dev/test/build/check/ci workflows, avoid regressions), then list concrete wiring steps with exact file paths.
+    - In "Key Files to Edit", list each file and the specific changes needed.
+    - In "Validation Checklist", include concrete smoke checks (nix run .#help/.#dev/.#test/.#build/.#check/.#ci -- --summary) and any project-specific checks from the docs.
+    - Include documentation alignment goals (README.md plus any agent instruction docs like CLAUDE.md/AGENTS.md should make Nixfied the canonical entrypoint).
     - If docs conflict on command names or behavior, call it out and ask which source is authoritative.
     - If info is missing, list it in "Open Questions".
 
@@ -138,27 +167,39 @@ let
   installScript = ''
     set -euo pipefail
 
+    ORIG_ARGS=("$@")
     FORCE=false
     FILTERS_RAW=""
 
-    for arg in "$@"; do
-      case "$arg" in
-        --force) FORCE=true ;;
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --force)
+          FORCE=true
+          shift
+          ;;
         --filter=*)
-          FILTERS_RAW="''${arg#--filter=}"
+          FILTERS_RAW="''${1#--filter=}"
+          shift
+          ;;
+        --filter)
+          if [ "$#" -lt 2 ]; then
+            echo "❌ --filter requires a value (example: --filter=conf,ci)" >&2
+            exit 1
+          fi
+          FILTERS_RAW="''${2-}"
+          shift 2
           ;;
         --help|-h)
           echo "Usage: nix run github:willyrgf/nixfied#framework::install [--force] [--filter=conf,dev,test,prod,quality,ci]"
           exit 0
           ;;
-      esac
-    done
-
-    for arg in "$@"; do
-      case "$arg" in
-        --filter)
+        --)
+          # Accept an explicit "--" (some wrappers include it) and keep parsing.
           shift
-          FILTERS_RAW="''${1:-}"
+          ;;
+        *)
+          # Ignore unknown args for forward compatibility.
+          shift
           ;;
       esac
     done
@@ -183,7 +224,7 @@ let
           if [ "$FORCE" = "true" ]; then
             echo "⚠️  Target already exists: $TARGET"
             echo "    Reusing existing copy (no new copy made)."
-            (cd "$TARGET" && NIXFIED_INSTALL_REENTRY=1 NIXFIED_INSTALL_FORCE=1 "$0" "$@")
+            (cd "$TARGET" && NIXFIED_INSTALL_REENTRY=1 NIXFIED_INSTALL_FORCE=1 "$0" "''${ORIG_ARGS[@]}")
             exit 0
           else
             echo "❌ Target already exists: $TARGET" >&2
@@ -198,7 +239,7 @@ let
           cp -a "$ROOT" "$TARGET"
         fi
         echo "✅ Copy complete. Re-running installer in $TARGET"
-        (cd "$TARGET" && NIXFIED_INSTALL_REENTRY=1 "$0" "$@")
+        (cd "$TARGET" && NIXFIED_INSTALL_REENTRY=1 "$0" "''${ORIG_ARGS[@]}")
         exit 0
       fi
     fi
@@ -210,20 +251,20 @@ let
 
     SRC="${frameworkRoot}"
 
-    if [ ! -f "$SRC/flake.nix" ] || [ ! -d "$SRC/nix" ]; then
+    if [ ! -f "$SRC/flake.nix" ] || [ ! -d "$SRC/nixfied" ]; then
       echo "❌ Framework source is missing required files." >&2
       exit 1
     fi
 
     NEEDS_OVERWRITE=false
-    if [ -e "$ROOT/flake.nix" ] || [ -e "$ROOT/flake.lock" ] || [ -d "$ROOT/nix" ]; then
+    if [ -e "$ROOT/flake.nix" ] || [ -e "$ROOT/flake.lock" ] || [ -d "$ROOT/nixfied" ]; then
       NEEDS_OVERWRITE=true
     fi
 
     if [ "$NEEDS_OVERWRITE" = "true" ] && [ -z "''${NIXFIED_INSTALL_FORCE:-}" ]; then
       if [ -t 0 ]; then
         echo "⚠️  Existing Nix files found in $ROOT"
-        echo "    This will overwrite: flake.nix, flake.lock, nix/"
+        echo "    This will overwrite: flake.nix, flake.lock, nixfied/"
         echo -n "Continue? [y/N]: "
         read -r REPLY
         if [[ ! "$REPLY" =~ ^[Yy]$ ]]; then
@@ -243,33 +284,33 @@ let
       cp -f "$SRC/flake.lock" "$ROOT/flake.lock"
     fi
 
-    if [ -d "$ROOT/nix" ]; then
-      chmod -R u+w "$ROOT/nix" 2>/dev/null || true
-      rm -rf "$ROOT/nix"
+    if [ -d "$ROOT/nixfied" ]; then
+      chmod -R u+w "$ROOT/nixfied" 2>/dev/null || true
+      rm -rf "$ROOT/nixfied"
     fi
 
     if command -v rsync >/dev/null 2>&1; then
-      rsync -a --chmod=Du+w,Fu+w "$SRC/nix/" "$ROOT/nix/"
+      rsync -a --chmod=Du+w,Fu+w "$SRC/nixfied/" "$ROOT/nixfied/"
     else
-      cp -R "$SRC/nix" "$ROOT/nix"
-      chmod -R u+w "$ROOT/nix" 2>/dev/null || true
+      cp -R "$SRC/nixfied" "$ROOT/nixfied"
+      chmod -R u+w "$ROOT/nixfied" 2>/dev/null || true
     fi
 
-    chmod -R u+w "$ROOT/nix" 2>/dev/null || true
+    chmod -R u+w "$ROOT/nixfied" 2>/dev/null || true
     if command -v chflags >/dev/null 2>&1; then
-      chflags -R nouchg "$ROOT/nix" 2>/dev/null || true
+      chflags -R nouchg "$ROOT/nixfied" 2>/dev/null || true
     fi
     if command -v chattr >/dev/null 2>&1; then
-      chattr -R -i "$ROOT/nix" 2>/dev/null || true
+      chattr -R -i "$ROOT/nixfied" 2>/dev/null || true
     fi
-    chmod u+w "$ROOT/nix/.framework" 2>/dev/null || true
+    chmod u+w "$ROOT/nixfied/.framework" 2>/dev/null || true
     if command -v chflags >/dev/null 2>&1; then
-      chflags nouchg "$ROOT/nix/.framework" 2>/dev/null || true
+      chflags nouchg "$ROOT/nixfied/.framework" 2>/dev/null || true
     fi
     if command -v chattr >/dev/null 2>&1; then
-      chattr -i "$ROOT/nix/.framework" 2>/dev/null || true
+      chattr -i "$ROOT/nixfied/.framework" 2>/dev/null || true
     fi
-    rm -f "$ROOT/nix/.framework"
+    rm -f "$ROOT/nixfied/.framework"
 
     if [ -n "$FILTERS_RAW" ]; then
       IFS=',' read -r -a FILTERS <<< "$FILTERS_RAW"
@@ -293,7 +334,7 @@ let
 
       for f in dev test prod quality ci; do
         if [ -z "''${KEEP[$f]:-}" ]; then
-          rm -f "$ROOT/nix/project/$f.nix" 2>/dev/null || true
+          rm -f "$ROOT/nixfied/project/$f.nix" 2>/dev/null || true
         fi
       done
 
@@ -313,7 +354,7 @@ let
         echo "  ];"
         echo "in"
         echo "pkgs.lib.foldl' pkgs.lib.recursiveUpdate { } parts"
-      } > "$ROOT/nix/project/default.nix"
+      } > "$ROOT/nixfied/project/default.nix"
     fi
 
     PLAN_EXIT=0
@@ -327,8 +368,8 @@ let
 
     echo "✅ Framework installed."
     echo "Next:"
-    echo "  - Edit nix/project/conf.nix"
-    echo "  - Customize nix/project/{dev,test,prod,quality,ci}.nix"
+    echo "  - Edit nixfied/project/conf.nix"
+    echo "  - Customize nixfied/project/{dev,test,prod,quality,ci}.nix"
   '';
 in
 {
