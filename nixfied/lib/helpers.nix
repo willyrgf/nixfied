@@ -35,7 +35,7 @@ let
       local var="$1"
       local msg="''${2:-Missing required env var: $var}"
       if [ -z "''${!var:-}" ]; then
-        echo "❌ $msg" >&2
+        echo "ERROR: $msg" >&2
         return 1
       fi
       return 0
@@ -47,7 +47,7 @@ let
       local var="$1"
       local reason="''${2:-Missing required env var: $var}"
       if [ -z "''${!var:-}" ]; then
-        echo "ℹ️  Skipping: $reason"
+        echo "SKIP: $reason"
         return 1
       fi
       return 0
@@ -142,7 +142,7 @@ let
       fi
       local cmd="''${!var:-}"
       if [ -z "$cmd" ]; then
-        echo "❌ Hook not available: $var" >&2
+        echo "ERROR: Hook not available: $var" >&2
         return 1
       fi
       "$cmd" "$@"
@@ -217,7 +217,7 @@ let
       fi
 
       if kill -0 "$pid" 2>/dev/null; then
-        echo "🛑 Stopping $name (PID $pid)..."
+        echo "STOP: $name (PID $pid)"
         kill -TERM "$pid" 2>/dev/null || true
         wait "$pid" 2>/dev/null || true
       fi
@@ -325,14 +325,14 @@ let
 
       if [ -n "$wait_http_url" ]; then
         if ! wait_http "$wait_http_url" "$timeout" "$interval"; then
-          echo "❌ $name failed readiness check (http)" >&2
+          echo "ERROR: $name failed readiness check (http)" >&2
           return 1
         fi
       fi
 
       if [ -n "$wait_port_num" ]; then
         if ! wait_port "$wait_port_num" "$timeout" "$interval"; then
-          echo "❌ $name failed readiness check (port)" >&2
+          echo "ERROR: $name failed readiness check (port)" >&2
           return 1
         fi
       fi

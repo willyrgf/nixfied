@@ -82,7 +82,7 @@ let
       fi
     done
 
-    echo "❌ Error: All $((${toString slotMax} + 1)) ephemeral slots (0-${toString slotMax}) are in use" >&2
+    echo "ERROR: All $((${toString slotMax} + 1)) ephemeral slots (0-${toString slotMax}) are in use" >&2
     echo "" >&2
     echo "   This means $((${toString slotMax} + 1)) concurrent runs are already running." >&2
     echo "   Wait for one to complete or check for stale locks:" >&2
@@ -119,13 +119,13 @@ let
     SOURCE_DIR="$1"
     DEST_DIR="$2"
 
-    echo "📦 Copying project source to ephemeral location..."
+    echo "INFO: Copying project source to ephemeral location"
 
     ${pkgs.rsync}/bin/rsync -a \
       ${rsyncExcludes} \
       "$SOURCE_DIR/" "$DEST_DIR/"
 
-    echo "   ✅ Source copied to $DEST_DIR"
+    echo "OK: Source copied to $DEST_DIR"
   '';
 
   mkConditionalCleanup = pkgs.writeShellScript "mk-conditional-cleanup" ''
@@ -142,9 +142,9 @@ let
         :
       else
         echo ""
-        echo "🧹 Cleaning up ephemeral state (slot ''${${projectIdUpper}_EPHEMERAL_SLOT:-unknown})..."
+        echo "INFO: Cleaning up ephemeral state (slot ''${${projectIdUpper}_EPHEMERAL_SLOT:-unknown})"
         rm -rf "${refEphRoot}"
-        echo "   ✅ Ephemeral state cleaned"
+        echo "OK: Ephemeral state cleaned"
       fi
 
       if [ -n "''${${projectIdUpper}_SLOT_LOCK_FD:-}" ]; then
@@ -181,7 +181,7 @@ let
       if [ -n "''${${slotVar}:-}" ]; then
         export ${projectIdUpper}_EPHEMERAL_SLOT="''${${slotVar}}"
         export ${projectIdUpper}_SLOT_LOCK_FD=""
-        echo "   Using pre-set slot: ''${${slotVar}} (no lock - caller managed)"
+        echo "INFO: Using pre-set slot: ''${${slotVar}} (no lock - caller managed)"
       else
         eval "$(${acquireSlotLock})"
       fi
@@ -192,11 +192,9 @@ let
       export ${projectIdUpper}_EPHEMERAL=1
 
       echo ""
-      echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-      echo "🔒 Ephemeral execution mode"
-      echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-      echo "   Root: ${refEphRoot}"
-      echo "   Slot: ${refEphSlot} (${slotVar}=''${${slotVar}}, ${envVar}=''${${envVar}})"
+      echo "INFO: Ephemeral execution mode"
+      echo "INFO: Root: ${refEphRoot}"
+      echo "INFO: Slot: ${refEphSlot} (${slotVar}=''${${slotVar}}, ${envVar}=''${${envVar}})"
       echo ""
 
       source ${mkConditionalCleanup}
@@ -213,9 +211,9 @@ let
       ${
         if installDeps && depsScript != "" then
           ''
-            echo "📦 Installing dependencies..."
+            echo "INFO: Installing dependencies"
             ${depsScript}
-            echo "   ✅ Dependencies installed"
+            echo "OK: Dependencies installed"
           ''
         else
           ""
@@ -237,7 +235,7 @@ let
       fi
 
       echo ""
-      echo "🚀 Starting ${name}..."
+      echo "INFO: Starting ${name}"
       echo ""
 
       ${script}

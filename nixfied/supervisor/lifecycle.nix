@@ -36,7 +36,7 @@ let
         if [ -n "$PORT" ] && command -v lsof >/dev/null 2>&1; then
           ORPHANS=$(lsof -ti:"$PORT" 2>/dev/null || true)
           if [ -n "$ORPHANS" ]; then
-            echo "🧹 Cleaning orphan processes on port $PORT (${name}): $ORPHANS"
+            echo "INFO: Cleaning orphan processes on port $PORT (${name}): $ORPHANS"
             echo "$ORPHANS" | xargs kill -TERM 2>/dev/null || true
           fi
         fi
@@ -47,7 +47,7 @@ let
     PID_FILE="$RUN_DIR/supervisor.pid"
     rm -f "$PID_FILE" 2>/dev/null || true
 
-    echo "✅ Supervisor stopped"
+    echo "OK: Supervisor stopped"
   '';
 
   startDaemon = pkgs.writeShellScript "supervisor-start-daemon" ''
@@ -61,13 +61,13 @@ let
     if [ -f "$PID_FILE" ]; then
       PID=$(cat "$PID_FILE" 2>/dev/null || true)
       if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
-        echo "✅ Supervisor already running (PID $PID)"
+        echo "OK: Supervisor already running (PID $PID)"
         exit 0
       fi
       rm -f "$PID_FILE"
     fi
 
-    echo "🚀 Starting supervisor in background..."
+    echo "INFO: Starting supervisor in background"
     nohup ${pc}/bin/process-compose -f "$CONFIG_FILE" up \
       > "$LOG_DIR/supervisor-daemon.log" 2>&1 &
 
@@ -77,12 +77,12 @@ let
     # Fail fast if the daemon exits immediately (common config error case).
     sleep 1
     if ! kill -0 "$DAEMON_PID" 2>/dev/null; then
-      echo "❌ Supervisor failed to start (PID $DAEMON_PID exited). See: $LOG_DIR/supervisor-daemon.log" >&2
+      echo "ERROR: Supervisor failed to start (PID $DAEMON_PID exited). See: $LOG_DIR/supervisor-daemon.log" >&2
       rm -f "$PID_FILE" 2>/dev/null || true
       exit 1
     fi
 
-    echo "✅ Supervisor started (PID $DAEMON_PID)"
+    echo "OK: Supervisor started (PID $DAEMON_PID)"
   '';
 
 in

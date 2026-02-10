@@ -142,7 +142,7 @@ let
     fi
 
     if [ "$SLOT" -lt 0 ] || [ "$SLOT" -gt ${toString slotMax} ]; then
-      echo "❌ Error: $SLOT_VAR must be 0-${toString slotMax} (got $SLOT)" >&2
+      echo "ERROR: $SLOT_VAR must be 0-${toString slotMax} (got $SLOT)" >&2
       exit 1
     fi
 
@@ -150,7 +150,7 @@ let
       ${pkgs.lib.concatStringsSep "|" envNames})
         ;;
       *)
-        echo "❌ Error: $ENV_VAR must be one of: ${envList} (got '$ENV')" >&2
+        echo "ERROR: $ENV_VAR must be one of: ${envList} (got '$ENV')" >&2
         exit 1
         ;;
     esac
@@ -167,7 +167,7 @@ let
     fi
 
     if [ "$NON_INTERACTIVE" = "false" ] && [ -t 0 ] && ([ -z "''${!SLOT_VAR:-}" ] || [ -z "''${!ENV_VAR:-}" ]); then
-      echo "⚠️  $SLOT_VAR and/or $ENV_VAR not explicitly set" >&2
+      echo "WARN: $SLOT_VAR and/or $ENV_VAR not explicitly set" >&2
       echo "" >&2
       echo "Using defaults:" >&2
       echo "  $SLOT_VAR=$SLOT" >&2
