@@ -72,8 +72,8 @@ nix run github:willyrgf/nixfied#framework::install
 
 Safety behavior:
 - If the repo name does not end with `_nixified`, the installer copies the repo
-  to `<repo>_nixified` and re-runs itself there.
-- It refuses to install unless the repo name ends with `_nixified`.
+  to `<repo>_nixified` (or `--target`) and re-runs itself there.
+- It refuses to install/upgrade unless the repo name ends with `_nixified`.
 - It installs only `flake.nix`, `flake.lock`, and `nixfied/`.
 
 Force overwrite:
@@ -84,6 +84,37 @@ nix run github:willyrgf/nixfied#framework::install -- --force
 NIXFIED_INSTALL_FORCE=1 nix run github:willyrgf/nixfied#framework::install
 ```
 
+Fast install (optional, avoids copying large repos):
+
+```bash
+nix run github:willyrgf/nixfied#framework::install -- --worktree
+```
+
+Custom target directory:
+
+```bash
+nix run github:willyrgf/nixfied#framework::install -- --target /path/to/my-app_nixified
+```
+
+If the target already exists and you want to refresh it from the source repo:
+
+```bash
+nix run github:willyrgf/nixfied#framework::install -- --force --sync
+```
+
+Upgrade an existing `_nixified` repo (preserves `nixfied/project/` by default):
+
+```bash
+cd my-app_nixified
+nix run github:willyrgf/nixfied#framework::upgrade -- --force
+```
+
+To overwrite project templates during upgrade:
+
+```bash
+nix run github:willyrgf/nixfied#framework::upgrade -- --force --reset-project
+```
+
 Filter which project files are installed (conf is always included):
 
 ```bash
@@ -91,20 +122,24 @@ nix run github:willyrgf/nixfied#framework::install -- --filter=conf,test,ci
 ```
 
 Prompt plan (optional):
-- The installer generates `NIXFIED_PROMPT_PLAN.md` using the project docs +
-  framework README (via `dump2llm`) so you can paste it into any LLM.
-- Re-run or generate manually:
+- Generate manually:
 
 ```bash
 nix run github:willyrgf/nixfied#framework::prompt-plan
 ```
 
+- Or generate as part of install/upgrade:
+
+```bash
+nix run github:willyrgf/nixfied#framework::install -- --prompt-plan
+```
+
 - Disable with `NIXFIED_PROMPT_PLAN=0`.
-- Overwrite with `--force` or `NIXFIED_PROMPT_PLAN_OVERWRITE=1`.
+- Overwrite with `--prompt-plan-force` or `NIXFIED_PROMPT_PLAN_OVERWRITE=1`.
 
 Framework-only apps:
-- The `framework::install`, `framework::prompt-plan` (prompt generator), and
-  `framework::test` apps are
+- The `framework::install`, `framework::upgrade`, `framework::prompt-plan`
+  (prompt generator), and `framework::test` apps are
   only exposed when the repository contains `nixfied/.framework`.
 - The installer removes this marker in target repos so `nix flake show` will
   not list those apps after installation.
@@ -124,7 +159,7 @@ nixfied/
   .framework          # marker: enables framework::* apps
   internal/
     core.nix           # dev/test/build/check/help apps
-    install.nix        # installer + prompt-plan
+    install.nix        # installer + upgrade + prompt-plan
     test.nix           # framework test runner
     isolation.nix      # parallel isolation stress test
     module-apps.nix    # auto-generated module apps (db-*, nginx-*, supervisor)

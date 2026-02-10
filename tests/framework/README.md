@@ -30,7 +30,7 @@ The test runner validates:
 - Ephemeral slot locking (acquire/release, env var export).
 - Run registry (foreground run tracking, meta.json, output.log).
 - Module apps exposure (db-*, nginx-*, supervisor apps present/absent based on config).
-- Installer safety, re-entry reuse, invalid filter handling, prompt-plan toggle, and framework marker/app exposure behavior.
+- Installer safety, upgrade (preserving nixfied/project), re-entry reuse, invalid filter handling, prompt-plan toggle, and framework marker/app exposure behavior.
 
 ## Example snippets
 

@@ -508,6 +508,12 @@ let
     assert_app_missing "$INSTALL_TARGET" "framework::prompt-plan"
     assert_app_missing "$INSTALL_TARGET" "framework::test"
 
+    log "installer upgrade preserves project"
+    echo "# NIXFIED_UPGRADE_TEST_MARKER" >> "$INSTALL_TARGET/nixfied/project/conf.nix"
+    (cd "$INSTALL_TARGET" && nix run "path:$ROOT"#framework::upgrade -- --force >/dev/null)
+    assert_contains "$INSTALL_TARGET/nixfied/project/conf.nix" "NIXFIED_UPGRADE_TEST_MARKER"
+    assert_file_absent "$INSTALL_TARGET/nixfied/.framework"
+
     log "framework marker toggle"
     touch "$INSTALL_TARGET/nixfied/.framework"
     FRAMEWORK_HELP="$WORKDIR/framework-help.txt"
