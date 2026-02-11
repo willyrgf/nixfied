@@ -1518,6 +1518,10 @@ let
       pkgs.writeText "strict-slot-env-apps" (
         "UP=" + moduleApps.up.program + "\n"
         + "POSTGRES_LIST_INSTANCES=" + moduleApps."service::postgres::list-instances".program + "\n"
+        + "POSTGRES_CHECK_PORT=" + moduleApps."service::postgres::check-port".program + "\n"
+        + "HOOK_POSTGRES_LIST_INSTANCES=" + hooks.env.POSTGRES_LIST_INSTANCES + "\n"
+        + "HOOK_POSTGRES_CHECK_PORT=" + hooks.env.POSTGRES_CHECK_PORT + "\n"
+        + "REQUIRE_SLOT_ENV=" + hooks.env.REQUIRE_SLOT_ENV + "\n"
       )
     NIX
     )
@@ -1525,6 +1529,10 @@ let
     STRICT_SLOT_ENV_FILE=$(build_expr "$STRICT_SLOT_ENV_EXPR")
     STRICT_UP_SCRIPT=$(grep 'UP=' "$STRICT_SLOT_ENV_FILE" | head -1 | sed 's/^[[:space:]]*UP=//')
     STRICT_PG_LIST_SCRIPT=$(grep 'POSTGRES_LIST_INSTANCES=' "$STRICT_SLOT_ENV_FILE" | head -1 | sed 's/^[[:space:]]*POSTGRES_LIST_INSTANCES=//')
+    STRICT_PG_CHECK_PORT_SCRIPT=$(grep 'POSTGRES_CHECK_PORT=' "$STRICT_SLOT_ENV_FILE" | head -1 | sed 's/^[[:space:]]*POSTGRES_CHECK_PORT=//')
+    STRICT_HOOK_PG_LIST_SCRIPT=$(grep 'HOOK_POSTGRES_LIST_INSTANCES=' "$STRICT_SLOT_ENV_FILE" | head -1 | sed 's/^[[:space:]]*HOOK_POSTGRES_LIST_INSTANCES=//')
+    STRICT_HOOK_PG_CHECK_PORT_SCRIPT=$(grep 'HOOK_POSTGRES_CHECK_PORT=' "$STRICT_SLOT_ENV_FILE" | head -1 | sed 's/^[[:space:]]*HOOK_POSTGRES_CHECK_PORT=//')
+    STRICT_REQUIRE_SLOT_ENV_SCRIPT=$(grep 'REQUIRE_SLOT_ENV=' "$STRICT_SLOT_ENV_FILE" | head -1 | sed 's/^[[:space:]]*REQUIRE_SLOT_ENV=//')
 
     STRICT_UP_MISSING_ENV_LOG="$WORKDIR/strict-up-missing-env.log"
     set +e
@@ -1557,6 +1565,47 @@ let
     assert_contains "$STRICT_PG_MISSING_ENV_LOG" "PROJECT_ENV must be set"
 
     PROJECT_ENV=dev NIX_ENV=0 "$STRICT_PG_LIST_SCRIPT" >/dev/null
+
+    STRICT_PG_HOOK_MISSING_ENV_LOG="$WORKDIR/strict-pg-hook-list-missing-env.log"
+    set +e
+    REQUIRE_SLOT_ENV="$STRICT_REQUIRE_SLOT_ENV_SCRIPT" NIX_ENV=0 "$STRICT_HOOK_PG_LIST_SCRIPT" > "$STRICT_PG_HOOK_MISSING_ENV_LOG" 2>&1
+    RC=$?
+    set -e
+    if [ "$RC" -eq 0 ]; then
+      fail "expected POSTGRES_LIST_INSTANCES hook to fail when PROJECT_ENV is missing"
+    fi
+    assert_contains "$STRICT_PG_HOOK_MISSING_ENV_LOG" "PROJECT_ENV must be set"
+
+    REQUIRE_SLOT_ENV="$STRICT_REQUIRE_SLOT_ENV_SCRIPT" PROJECT_ENV=dev NIX_ENV=0 "$STRICT_HOOK_PG_LIST_SCRIPT" >/dev/null
+
+    log "service arg forwarding parity"
+    STRICT_PORT_ARG=65529
+
+    STRICT_PG_CHECK_PORT_LOG="$WORKDIR/strict-pg-check-port-app.log"
+    set +e
+    PROJECT_ENV=dev NIX_ENV=0 "$STRICT_PG_CHECK_PORT_SCRIPT" "$STRICT_PORT_ARG" > "$STRICT_PG_CHECK_PORT_LOG" 2>&1
+    RC=$?
+    set -e
+    if grep -q "usage: postgres-check-port <port>" "$STRICT_PG_CHECK_PORT_LOG"; then
+      fail "expected service::postgres::check-port to receive forwarded args"
+    fi
+    assert_contains "$STRICT_PG_CHECK_PORT_LOG" "$STRICT_PORT_ARG"
+    if [ "$RC" -ne 0 ] && ! grep -q "Port $STRICT_PORT_ARG is in use by PID(s):" "$STRICT_PG_CHECK_PORT_LOG"; then
+      fail "unexpected failure from service::postgres::check-port with forwarded args"
+    fi
+
+    STRICT_PG_HOOK_CHECK_PORT_LOG="$WORKDIR/strict-pg-check-port-hook.log"
+    set +e
+    REQUIRE_SLOT_ENV="$STRICT_REQUIRE_SLOT_ENV_SCRIPT" PROJECT_ENV=dev NIX_ENV=0 "$STRICT_HOOK_PG_CHECK_PORT_SCRIPT" "$STRICT_PORT_ARG" > "$STRICT_PG_HOOK_CHECK_PORT_LOG" 2>&1
+    RC=$?
+    set -e
+    if grep -q "usage: postgres-check-port <port>" "$STRICT_PG_HOOK_CHECK_PORT_LOG"; then
+      fail "expected POSTGRES_CHECK_PORT hook to receive forwarded args"
+    fi
+    assert_contains "$STRICT_PG_HOOK_CHECK_PORT_LOG" "$STRICT_PORT_ARG"
+    if [ "$RC" -ne 0 ] && ! grep -q "Port $STRICT_PORT_ARG is in use by PID(s):" "$STRICT_PG_HOOK_CHECK_PORT_LOG"; then
+      fail "unexpected failure from POSTGRES_CHECK_PORT hook with forwarded args"
+    fi
 
     MODAPP_DISABLED_EXPR=$(cat <<'NIX'
     { root, system }:
