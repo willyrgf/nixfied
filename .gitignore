@@ -2,4 +2,5 @@
 .ci-artifacts
 *.md
 !AGENTS.md
+!README.md
 result

@@ -96,9 +96,9 @@ Generated service apps are exposed as:
 - `service::<service>::<operation>`
 
 Examples:
-- `nix run .#service::postgres::start`
-- `nix run .#service::nginx::site-add -- example.localhost 127.0.0.1 3000`
-- `nix run .#service::minio::bucket-list`
+- `PROJECT_ENV=dev NIX_ENV=0 nix run .#service::postgres::start`
+- `PROJECT_ENV=dev NIX_ENV=0 nix run .#service::nginx::site-add -- example.localhost 127.0.0.1 3000`
+- `PROJECT_ENV=dev NIX_ENV=0 nix run .#service::minio::bucket-list`
 
 ## Install into an existing repo
 
@@ -364,12 +364,14 @@ computed_port = base_port + slot + env_offset
 `nixfied/.framework/slots.nix` exposes helper scripts:
 - `SLOT_INFO` prints `SLOT`, `ENV`, `BASE_DIR`, `LOG_DIR`, `RUN_DIR`,
   `CONFIG_DIR`, `STATE_DIR`, and all computed ports.
-- `REQUIRE_SLOT_ENV` validates env/slot, prints values, and prompts in TTY
-  if `PROJECT_ENV` or `NIX_ENV` were not explicitly set.
+- `REQUIRE_SLOT_ENV` validates env/slot and hard-fails if `PROJECT_ENV` or
+  `NIX_ENV` are missing.
 
 Example usage:
 
 ```bash
+export PROJECT_ENV=dev
+export NIX_ENV=0
 eval "$(${SLOT_INFO})"
 echo "Backend port: $BACKEND_PORT"
 ```
@@ -556,6 +558,10 @@ Supervisor apps (when `supervisor.enable = true`):
 
 Utility apps (always available):
 - `check-ports`, `ports`
+
+All module apps and supervisor apps require explicit slot/env selection.
+Set both `PROJECT_ENV` and `NIX_ENV` before running `up`, `down`, `svc-*`,
+or any `service::<service>::<operation>` app.
 
 ## Run registry
 

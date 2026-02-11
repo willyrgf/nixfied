@@ -22,6 +22,7 @@ Use the flake apps; they are the primary interface:
 - `nix run .#test-isolation` - run the isolation runner across slots/envs (configured in `nixfied/project/conf.nix`).
 - `nix run .#validate-env` - validate ports/dirs for the current slot/env (used by the isolation runner).
 - Module/utility apps (vary by enabled modules): `nix run .#ports`, `nix run .#check-ports`, `nix run .#up`, `nix run .#down`.
+- Slot/env-sensitive module and supervisor apps require explicit `PROJECT_ENV` and `NIX_ENV` (for example: `up`, `down`, `svc-*`, `service::*`).
 - Framework-only (requires `nixfied/.framework/.workspace` marker): `nix run .#framework::test`, `nix run .#framework::install`, `nix run .#framework::upgrade`, `nix run .#framework::prompt-plan`.
 
 Additional repo checks used by contributors:
