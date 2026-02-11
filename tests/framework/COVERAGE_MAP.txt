@@ -26,6 +26,13 @@ Each framework file must appear here with at least one validating scenario.
 - `nixfied/.framework/minio/config.nix`: `fixtures/modules/conf.nix`, `fixtures/minio/bucket-ops.nix`
 - `nixfied/.framework/minio/default.nix`: `fixtures/modules/dev.nix`, `fixtures/minio/bucket-ops.nix`
 - `nixfied/.framework/minio/lifecycle.nix`: `fixtures/modules/dev.nix`, `fixtures/minio/bucket-ops.nix`
+- `nixfied/.framework/reth/config.nix`: `fixtures/modules/conf.nix`, `fixtures/reth/lifecycle.nix`
+- `nixfied/.framework/reth/default.nix`: `fixtures/modules/dev.nix`, `fixtures/reth/lifecycle.nix`
+- `nixfied/.framework/reth/lifecycle.nix`: `fixtures/modules/dev.nix`, `fixtures/reth/lifecycle.nix`
+- `nixfied/.framework/helios/package.nix`: `fixtures/modules/conf.nix`, `fixtures/helios/lifecycle.nix`
+- `nixfied/.framework/helios/config.nix`: `fixtures/modules/conf.nix`, `fixtures/helios/lifecycle.nix`
+- `nixfied/.framework/helios/default.nix`: `fixtures/modules/dev.nix`, `fixtures/helios/lifecycle.nix`
+- `nixfied/.framework/helios/lifecycle.nix`: `fixtures/modules/dev.nix`, `fixtures/helios/lifecycle.nix`
 - `nixfied/.framework/nginx/default.nix`: `fixtures/modules/dev.nix`, `fixtures/nginx/site-lifecycle.nix`
 - `nixfied/.framework/nginx/lifecycle.nix`: `fixtures/modules/dev.nix`, `fixtures/nginx/site-lifecycle.nix`
 - `nixfied/.framework/nginx/site-management.nix`: `fixtures/modules/dev.nix`, `fixtures/nginx/site-lifecycle.nix`

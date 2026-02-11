@@ -41,6 +41,10 @@ rec {
     postgres = 5432;
     minioApi = 9000;
     minioConsole = 9001;
+    rethHttp = 8545;
+    rethWs = 8546;
+    rethAuth = 8551;
+    heliosRpc = 8547;
   };
 
   # Base data directory for per-slot/per-env state
@@ -121,6 +125,29 @@ rec {
       rootUser = "minioadmin";
       rootPassword = "minioadmin";
       browser = true;
+    };
+    reth = {
+      enable = false;
+      package = if pkgs != null then pkgs.reth else null;
+      portKeyHttp = "rethHttp";
+      portKeyWs = "rethWs";
+      portKeyAuth = "rethAuth";
+      dataDirName = "reth";
+      network = "local";
+      devMode = true;
+      extraArgs = [ ];
+    };
+    helios = {
+      enable = false;
+      package = if pkgs != null then pkgs.callPackage ../.framework/helios/package.nix { } else null;
+      portKeyRpc = "heliosRpc";
+      dataDirName = "helios";
+      network = "local";
+      executionRpcPortKey = "rethHttp";
+      executionRpcUrl = "";
+      consensusRpcUrl = "";
+      checkpoint = "";
+      extraArgs = [ ];
     };
   };
 

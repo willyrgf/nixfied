@@ -240,6 +240,70 @@
           fi
         fi
 
+        RETH_DIR="$BASE_DIR/reth-$SLOT-$ENV"
+        run_hook RETH_INIT
+        run_hook RETH_INIT
+        if [ ! -d "$RETH_DIR/data" ]; then
+          echo "reth data dir missing" >&2
+          exit 1
+        fi
+        run_hook RETH_CHECK_CONFIG
+
+        if nc -z 127.0.0.1 "$RETHHTTP_PORT" >/dev/null 2>&1; then
+          echo "Skipping RETH_START (port in use)" >&2
+        else
+          RETH_PID=$(start_service reth -- "$RETH_START")
+          RETH_READY=0
+          for i in $(seq 1 50); do
+            if run_hook RETH_HEALTH >/dev/null 2>&1; then
+              RETH_READY=1
+              break
+            fi
+            sleep 0.2
+          done
+          if [ "$RETH_READY" -ne 1 ]; then
+            echo "reth health check failed after start" >&2
+            exit 1
+          fi
+
+          run_hook RETH_STOP
+          if kill -0 "$RETH_PID" 2>/dev/null; then
+            stop_service "$RETH_PID" "reth"
+          fi
+        fi
+
+        HELIOS_DIR="$BASE_DIR/helios-$SLOT-$ENV"
+        run_hook HELIOS_INIT
+        run_hook HELIOS_INIT
+        if [ ! -d "$HELIOS_DIR/data" ]; then
+          echo "helios data dir missing" >&2
+          exit 1
+        fi
+        run_hook HELIOS_CHECK_CONFIG
+
+        if nc -z 127.0.0.1 "$HELIOSRPC_PORT" >/dev/null 2>&1; then
+          echo "Skipping HELIOS_START (port in use)" >&2
+        else
+          HELIOS_PID=$(start_service helios -- "$HELIOS_START")
+          HELIOS_READY=0
+          for i in $(seq 1 50); do
+            if run_hook HELIOS_HEALTH >/dev/null 2>&1; then
+              HELIOS_READY=1
+              break
+            fi
+            sleep 0.2
+          done
+          if [ "$HELIOS_READY" -ne 1 ]; then
+            echo "helios health check failed after start" >&2
+            exit 1
+          fi
+
+          run_hook HELIOS_STOP
+          if kill -0 "$HELIOS_PID" 2>/dev/null; then
+            stop_service "$HELIOS_PID" "helios"
+          fi
+        fi
+
         mkdir -p "$BASE_DIR/logs-$SLOT-$ENV"
         LOGFILE="$BASE_DIR/logs-$SLOT-$ENV/helpers.log"
         log_capture "$LOGFILE" -- echo "helpers ok"
