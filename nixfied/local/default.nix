@@ -6,8 +6,10 @@
   hooks ? null,
   postgres ? null,
   nginx ? null,
+  minio ? null,
   supervisor ? null,
   ephemeral ? null,
+  serviceApis ? { },
 }:
 
 {

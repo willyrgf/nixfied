@@ -3,11 +3,12 @@
 ## Project Structure & Module Organization
 - `flake.nix` defines the Nix flake entry points and wires apps, modules, and dev shells.
 - `nixfied/` contains framework implementation:
+  - `nixfied/.framework/` holds vendored framework code and framework-only marker (`.workspace`).
   - `nixfied/project/` holds project configuration (`conf.nix`, command files like `dev.nix`, `test.nix`, `prod.nix`, `quality.nix`, `ci.nix`).
-  - `nixfied/internal/` defines flake apps (core, install, test, isolation, module-apps).
-  - `nixfied/lib/` contains helper modules (builders, helpers, summary, run-registry, parallel, process, port-utils).
-  - `nixfied/ci.nix`, `nixfied/slots.nix`, `nixfied/hooks.nix`, `nixfied/ephemeral.nix` implement core framework features.
-  - `nixfied/postgres/`, `nixfied/nginx/`, `nixfied/supervisor/` are optional module directories.
+  - `nixfied/.framework/internal/` defines flake apps (core, install, test, isolation, module-apps).
+  - `nixfied/.framework/lib/` contains helper modules (builders, helpers, summary, run-registry, parallel, process, port-utils).
+  - `nixfied/.framework/ci.nix`, `nixfied/.framework/slots.nix`, `nixfied/.framework/hooks.nix`, `nixfied/.framework/ephemeral.nix` implement core framework features.
+  - `nixfied/.framework/postgres/`, `nixfied/.framework/nginx/`, `nixfied/.framework/supervisor/`, `nixfied/.framework/minio/` are framework module directories.
 - `tests/framework/` contains fixtures and documentation for framework tests.
 
 ## Build, Test, and Development Commands
@@ -21,7 +22,7 @@ Use the flake apps; they are the primary interface:
 - `nix run .#test-isolation` - run the isolation runner across slots/envs (configured in `nixfied/project/conf.nix`).
 - `nix run .#validate-env` - validate ports/dirs for the current slot/env (used by the isolation runner).
 - Module/utility apps (vary by enabled modules): `nix run .#ports`, `nix run .#check-ports`, `nix run .#up`, `nix run .#down`.
-- Framework-only (requires `nixfied/.framework` marker): `nix run .#framework::test`, `nix run .#framework::install`, `nix run .#framework::upgrade`, `nix run .#framework::prompt-plan`.
+- Framework-only (requires `nixfied/.framework/.workspace` marker): `nix run .#framework::test`, `nix run .#framework::install`, `nix run .#framework::upgrade`, `nix run .#framework::prompt-plan`.
 
 Additional repo checks used by contributors:
 - Formatter: `find . -name '*.nix' -print0 | xargs -0 nixfmt --`.

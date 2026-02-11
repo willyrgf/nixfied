@@ -205,6 +205,40 @@
           fi
         fi
 
+        MINIO_DIR="$BASE_DIR/minio-$SLOT-$ENV"
+        run_hook MINIO_INIT
+        run_hook MINIO_INIT
+        if [ ! -d "$MINIO_DIR/data" ]; then
+          echo "minio data dir missing" >&2
+          exit 1
+        fi
+        run_hook MINIO_CHECK_CONFIG
+
+        if nc -z 127.0.0.1 "$MINIOAPI_PORT" >/dev/null 2>&1 || nc -z 127.0.0.1 "$MINIOCONSOLE_PORT" >/dev/null 2>&1; then
+          echo "Skipping MINIO_START (port in use)" >&2
+        else
+          MINIO_PID=$(start_service minio -- "$MINIO_START")
+          MINIO_READY=0
+          for i in $(seq 1 50); do
+            if run_hook MINIO_HEALTH >/dev/null 2>&1; then
+              MINIO_READY=1
+              break
+            fi
+            sleep 0.2
+          done
+          if [ "$MINIO_READY" -ne 1 ]; then
+            echo "minio health check failed after start" >&2
+            exit 1
+          fi
+
+          run_hook MINIO_BUCKET_LIST >/dev/null
+          run_hook MINIO_STOP
+
+          if kill -0 "$MINIO_PID" 2>/dev/null; then
+            stop_service "$MINIO_PID" "minio"
+          fi
+        fi
+
         mkdir -p "$BASE_DIR/logs-$SLOT-$ENV"
         LOGFILE="$BASE_DIR/logs-$SLOT-$ENV/helpers.log"
         log_capture "$LOGFILE" -- echo "helpers ok"

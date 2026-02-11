@@ -30,6 +30,8 @@ rec {
     http = 8080;
     https = 8443;
     postgres = 5432;
+    minioApi = 9000;
+    minioConsole = 9001;
   };
 
   directories = {
@@ -72,6 +74,17 @@ rec {
       portKeyHttp = "http";
       portKeyHttps = "https";
       dataDirName = "nginx";
+    };
+    minio = {
+      enable = true;
+      package = if pkgs != null then pkgs.minio else null;
+      clientPackage = if pkgs != null then pkgs.minio-client else null;
+      portKeyApi = "minioApi";
+      portKeyConsole = "minioConsole";
+      dataDirName = "minio";
+      rootUser = "minioadmin";
+      rootPassword = "minioadmin";
+      browser = true;
     };
   };
 

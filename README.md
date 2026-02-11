@@ -79,6 +79,27 @@ commands.dev.api = {
 };
 ```
 
+## Service API contract
+
+For supported services (`postgres`, `nginx`, `minio`), Nixfied enforces a
+service contract at `module.publicApi` during flake evaluation.
+
+Required shape:
+- `version = 1`
+- `service = "<name>"`
+- `profiles = [ "dev" "prod" "test" "ci" ]`
+- `coreOps` with required ops:
+  `init`, `start`, `stop`, `restart`, `status`, `health`, `check-config`
+- `artifacts` metadata
+
+Generated service apps are exposed as:
+- `service::<service>::<operation>`
+
+Examples:
+- `nix run .#service::postgres::start`
+- `nix run .#service::nginx::site-add -- example.localhost 127.0.0.1 3000`
+- `nix run .#service::minio::bucket-list`
+
 ## Install into an existing repo
 
 From your target repository:
@@ -96,7 +117,7 @@ Safety behavior:
 - Customize your project in `nixfied/project/` and `nixfied/local/` (avoid editing framework code).
 
 Vendoring boundaries (relevant for upgrades):
-- Framework-owned (overwritten on `framework::upgrade`): `flake.nix`, `flake.lock`, `nixfied/internal/`, `nixfied/lib/`, and framework modules under `nixfied/`.
+- Framework-owned (overwritten on `framework::upgrade`): `flake.nix`, `flake.lock`, `nixfied/.framework/`.
 - User-owned (preserved on `framework::upgrade`): `nixfied/project/` and `nixfied/local/`.
 - Canonical doc: `nixfied/VENDORED.txt`.
 
@@ -153,29 +174,71 @@ nix run github:willyrgf/nixfied#framework::prompt-plan
 Framework-only apps:
 - The `framework::install`, `framework::upgrade`, `framework::prompt-plan`
   (prompt generator), and `framework::test` apps are
-  only exposed when the repository contains `nixfied/.framework`.
+  only exposed when the repository contains `nixfied/.framework/.workspace`.
 - The installer removes this marker in target repos so `nix flake show` will
   not list those apps after installation.
 - If you want to run framework tests from an installed repo, create the marker
-  file (`touch nixfied/.framework`) locally.
+  file (`touch nixfied/.framework/.workspace`) locally.
 
 Framework workspace:
 - Framework maintenance commands live under the `framework::` namespace so they
   don't collide with project commands (e.g. `nix run .#framework::test`).
-  This workspace only exists when `nixfied/.framework` is present.
+  This workspace only exists when `nixfied/.framework/.workspace` is present.
 
 ## Repository layout
 
 ```
 flake.nix
 nixfied/
-  .framework          # marker: enables framework::* apps
-  internal/
-    core.nix           # dev/test/build/check/help apps
-    install.nix        # installer + upgrade + prompt-plan
-    test.nix           # framework test runner
-    isolation.nix      # parallel isolation stress test
-    module-apps.nix    # auto-generated module apps (db-*, nginx-*, supervisor)
+  .framework/
+    .workspace         # marker: enables framework::* apps
+    internal/
+      core.nix         # dev/test/build/check/help apps
+      install.nix      # installer + upgrade + prompt-plan
+      test.nix         # framework test runner
+      isolation.nix    # parallel isolation stress test
+      module-apps.nix  # auto-generated module apps (service::<service>::<op>, supervisor)
+    lib/
+      default.nix      # aggregator re-exporting all lib functions
+      helpers.nix      # shell helper script generation
+      builders.nix     # mkApp / mkAppScript / withTiming
+      summary.nix      # summary parser for CI output
+      run-registry.nix # run tracking with meta.json + background mode
+      parallel.nix     # parallel runner generation
+      process.nix      # signal handler + process manager
+      port-utils.nix   # port cleanup + conflict checker
+      service-api.nix  # service API contract validation + app/hook generation
+    postgres/
+      default.nix      # aggregator
+      lifecycle.nix    # init/start/stop
+      config.nix       # postgresql.conf generation
+      backup.nix       # backup/restore/list
+      migration.nix    # migration runner
+      migration-safety.nix # pre-migration safety checks
+      port-management.nix  # port conflict resolution
+      rollback.nix     # rollback support
+    nginx/
+      default.nix      # aggregator
+      lifecycle.nix    # init/start/stop/reload
+      templates.nix    # config templates
+      site-management.nix # add/remove/enable/disable sites
+      ssl.nix          # certificate management
+    minio/
+      default.nix      # aggregator
+      config.nix       # minio config defaults
+      lifecycle.nix    # init/start/stop/restart/status/health/check-config
+      bucket-management.nix # bucket/policy operations
+    supervisor/
+      default.nix      # aggregator
+      config.nix       # process-compose YAML generation
+      lifecycle.nix    # start/stop/restart
+      status.nix       # status/isRunning/logs
+      management.nix   # daemon management
+    ci.nix             # pipeline runner (ephemeral, summary.json)
+    ephemeral.nix      # ephemeral environments (slot locking, cleanup)
+    slots.nix          # slot/env/port logic
+    hooks.nix          # exported hook env vars
+    devshell.nix       # nix develop shell
   local/
     default.nix        # user-owned extensions (extra apps/packages/devShells)
   project/
@@ -186,41 +249,6 @@ nixfied/
     quality.nix        # check command
     ci.nix             # CI command + pipeline DSL
     default.nix        # merges the files above
-  lib/
-    default.nix        # aggregator re-exporting all lib functions
-    helpers.nix        # shell helper script generation
-    builders.nix       # mkApp / mkAppScript / withTiming
-    summary.nix        # summary parser for CI output
-    run-registry.nix   # run tracking with meta.json + background mode
-    parallel.nix       # parallel runner generation
-    process.nix        # signal handler + process manager
-    port-utils.nix     # port cleanup + conflict checker
-  postgres/
-    default.nix        # aggregator
-    lifecycle.nix      # init/start/stop
-    config.nix         # postgresql.conf generation
-    backup.nix         # backup/restore/list
-    migration.nix      # migration runner
-    migration-safety.nix # pre-migration safety checks
-    port-management.nix  # port conflict resolution
-    rollback.nix       # rollback support
-  nginx/
-    default.nix        # aggregator
-    lifecycle.nix      # init/start/stop/reload
-    templates.nix      # config templates
-    site-management.nix # add/remove/enable/disable sites
-    ssl.nix            # certificate management
-  supervisor/
-    default.nix        # aggregator
-    config.nix         # process-compose YAML generation
-    lifecycle.nix      # start/stop/restart
-    status.nix         # status/isRunning/logs
-    management.nix     # daemon management
-  ci.nix               # pipeline runner (ephemeral, summary.json)
-  ephemeral.nix        # ephemeral environments (slot locking, cleanup)
-  slots.nix            # slot/env/port logic
-  hooks.nix            # exported hook env vars
-  devshell.nix         # nix develop shell
 tests/
   framework/
     fixtures/
@@ -262,6 +290,8 @@ ports = {
   http = 8080;
   https = 8443;
   postgres = 5432;
+  minioApi = 9000;
+  minioConsole = 9001;
 };
 
 directories.base = "${XDG_DATA_HOME:-$HOME/.local/share}/${project.id}";
@@ -280,6 +310,7 @@ supervisor.services = { };
 
 modules.postgres.enable = false;
 modules.nginx.enable = false;
+modules.minio.enable = false;
 
 packages = { };
 ```
@@ -311,13 +342,13 @@ Files by convention:
 
 ## Execution environment
 
-Every command is wrapped by `nixfied/lib.nix` and gets:
+Every command is wrapped by framework lib helpers and gets:
 - `COMMAND_NAME` set to the command name.
 - `.env` loaded if present (does not override existing env vars).
 - `tooling.runtimePackages` added to `PATH`.
 - `install.deps` (if `useDeps = true`).
 - Framework helper functions (see below).
-- Hook environment variables from `nixfied/hooks.nix`.
+- Hook environment variables from `nixfied/.framework/hooks.nix`.
 
 ## Slots, environments, and ports
 
@@ -330,7 +361,7 @@ Ports are computed as:
 computed_port = base_port + slot + env_offset
 ```
 
-`nixfied/slots.nix` exposes helper scripts:
+`nixfied/.framework/slots.nix` exposes helper scripts:
 - `SLOT_INFO` prints `SLOT`, `ENV`, `BASE_DIR`, `LOG_DIR`, `RUN_DIR`,
   `CONFIG_DIR`, `STATE_DIR`, and all computed ports.
 - `REQUIRE_SLOT_ENV` validates env/slot, prints values, and prompts in TTY
@@ -345,7 +376,7 @@ echo "Backend port: $BACKEND_PORT"
 
 ## Framework helpers (shell)
 
-Every command sources a helper script generated by `nixfied/lib.nix`.
+Every command sources a helper script generated by `nixfied/.framework/lib/`.
 
 - `require_env VAR [message]`
   - Fail if `VAR` is missing or empty.
@@ -386,11 +417,11 @@ stop_service "$PID" backend
 
 ## Nix helper functions (lib)
 
-`nixfied/lib/` is a directory of Nix modules re-exported through
-`nixfied/lib/default.nix`. Import it in your Nix wiring:
+`nixfied/.framework/lib/` is a directory of Nix modules re-exported through
+`nixfied/.framework/lib/default.nix`. Import it in your Nix wiring:
 
 ```nix
-lib = import ./nixfied/lib { inherit pkgs project hooks; };
+lib = import ./nixfied/.framework/lib { inherit pkgs project hooks; };
 ```
 
 Exported functions:
@@ -512,29 +543,23 @@ Features:
 ## Module apps
 
 When modules are enabled, the framework auto-generates convenience apps via
-`nixfied/internal/module-apps.nix`. These are listed under "Module Apps" in
+`nixfied/.framework/internal/module-apps.nix`. These are listed under "Module Apps" in
 `nix run .#help`.
 
-Postgres apps (when `modules.postgres.enable = true`):
-- `db-start`, `db-stop`, `db-init`, `db-setup`, `db-full-start`
-- `db-backup`, `db-restore`, `db-list-backups`
-- `db-test-migrations`, `db-check-port`, `db-list-instances`
-
-Nginx apps (when `modules.nginx.enable = true`):
-- `nginx-start`, `nginx-stop`, `nginx-init`, `nginx-reload`
-- `nginx-site-add`, `nginx-site-remove`, `nginx-site-list`
-- `nginx-site-enable`, `nginx-site-disable`
-- `nginx-cert-obtain`, `nginx-cert-renew`
+Service apps (when modules are enabled):
+- `service::postgres::<operation>` (for example: `start`, `setup-db`, `backup`, `shell`)
+- `service::nginx::<operation>` (for example: `start`, `site-add`, `site-list`, `cert-renew`)
+- `service::minio::<operation>` (for example: `start`, `bucket-create`, `bucket-list`, `policy-apply`)
 
 Supervisor apps (when `supervisor.enable = true`):
-- `up`, `down`, `supervisor-status`, `supervisor-logs`, `supervisor-restart`
+- `up`, `down`, `svc-status`, `svc-logs`, `svc-restart`
 
 Utility apps (always available):
 - `check-ports`, `ports`
 
 ## Run registry
 
-The run registry (`nixfied/lib/run-registry.nix`) provides durable run tracking.
+The run registry (`nixfied/.framework/lib/run-registry.nix`) provides durable run tracking.
 Each run creates a directory with `meta.json` (status, timing, exit code) and
 `output.log`.
 
@@ -562,11 +587,14 @@ modules.postgres = {
 ```
 
 Hooks (exported env vars):
-- `POSTGRES_INIT`, `POSTGRES_START`, `POSTGRES_STOP`, `POSTGRES_SETUP_DB`
+- `POSTGRES_INIT`, `POSTGRES_START`, `POSTGRES_STOP`, `POSTGRES_RESTART`
+- `POSTGRES_STATUS`, `POSTGRES_HEALTH`, `POSTGRES_CHECK_CONFIG`
+- `POSTGRES_SETUP_DB`
 - `POSTGRES_FULL_START`, `POSTGRES_FULL_START_TEST`
 - `POSTGRES_BACKUP`, `POSTGRES_RESTORE`, `POSTGRES_LIST_BACKUPS`
 - `POSTGRES_TEST_MIGRATIONS`, `POSTGRES_ENSURE_MIGRATION_TESTED`
 - `POSTGRES_CHECK_PORT`, `POSTGRES_KILL_PORT`, `POSTGRES_LIST_INSTANCES`
+- `POSTGRES_SHELL`
 
 Example:
 
@@ -591,7 +619,8 @@ modules.nginx = {
 ```
 
 Hooks:
-- `NGINX_INIT`, `NGINX_START`, `NGINX_STOP`, `NGINX_RELOAD`
+- `NGINX_INIT`, `NGINX_START`, `NGINX_STOP`, `NGINX_RESTART`
+- `NGINX_STATUS`, `NGINX_HEALTH`, `NGINX_CHECK_CONFIG`, `NGINX_RELOAD`
 - `NGINX_SITE_PROXY`, `NGINX_SITE_STATIC`
 - `NGINX_SITE_ADD`, `NGINX_SITE_REMOVE`, `NGINX_SITE_LIST`
 - `NGINX_SITE_ENABLE`, `NGINX_SITE_DISABLE`
@@ -604,6 +633,39 @@ run_hook NGINX_INIT
 run_hook NGINX_SITE_PROXY example.localhost 127.0.0.1 3000
 run_hook NGINX_START
 run_hook NGINX_SITE_LIST
+```
+
+### MinIO
+
+Config:
+
+```nix
+modules.minio = {
+  enable = true;
+  package = pkgs.minio;
+  clientPackage = pkgs.minio-client;
+  portKeyApi = "minioApi";
+  portKeyConsole = "minioConsole";
+  dataDirName = "minio";
+  rootUser = "minioadmin";
+  rootPassword = "minioadmin";
+  browser = true;
+};
+```
+
+Hooks:
+- `MINIO_INIT`, `MINIO_START`, `MINIO_STOP`, `MINIO_RESTART`
+- `MINIO_STATUS`, `MINIO_HEALTH`, `MINIO_CHECK_CONFIG`
+- `MINIO_BUCKET_CREATE`, `MINIO_BUCKET_DELETE`, `MINIO_BUCKET_LIST`
+- `MINIO_POLICY_APPLY`
+
+Example:
+
+```bash
+run_hook MINIO_INIT
+run_hook MINIO_START
+run_hook MINIO_BUCKET_LIST
+run_hook MINIO_STOP
 ```
 
 ## Supervisor (process-compose)
@@ -630,7 +692,7 @@ supervisor = {
 };
 ```
 
-The `nixfied/supervisor/` module generates a process-compose YAML and provides
+The `nixfied/.framework/supervisor/` module generates a process-compose YAML and provides
 lifecycle scripts.
 
 Hooks (exported env vars when supervisor is enabled):
