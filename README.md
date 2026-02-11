@@ -126,7 +126,7 @@ Safety behavior:
 Vendoring boundaries (relevant for upgrades):
 - Framework-owned (overwritten on `framework::upgrade`): `flake.nix`, `flake.lock`, `nixfied/.framework/`.
 - User-owned (preserved on `framework::upgrade`): `nixfied/project/` and `nixfied/local/`.
-- Canonical doc: `nixfied/VENDORED.txt`.
+- Canonical doc: `nixfied/VENDORED.txt` (includes the framework source revision used by install/upgrade).
 
 Force overwrite:
 
