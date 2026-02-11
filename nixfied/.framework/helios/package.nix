@@ -1,23 +1,46 @@
-# Vendored Helios package wrapper
-{ pkgs }:
+# Package Helios from upstream source.
+{
+  lib,
+  fetchFromGitHub,
+  rustPlatform,
+  pkg-config,
+  perl,
+}:
 
-pkgs.writeShellScriptBin "helios" ''
-  set -euo pipefail
+rustPlatform.buildRustPackage rec {
+  pname = "helios";
+  version = "unstable-2026-02-04";
 
-  if [ -n "''${HELIOS_BIN:-}" ]; then
-    if [ ! -x "''${HELIOS_BIN}" ]; then
-      echo "ERROR: HELIOS_BIN is set but not executable path=$HELIOS_BIN" >&2
-      exit 1
-    fi
-    exec "''${HELIOS_BIN}" "$@"
-  fi
+  src = fetchFromGitHub {
+    owner = "a16z";
+    repo = "helios";
+    rev = "4a32ac1a9fbcf46386a497e4e0a7232ad1388762";
+    hash = "sha256-AJps+uQrN2fvtT78TsNaRiUtM+GaiPVBHfWumyNzt5M=";
+  };
 
-  SYS_HELIOS=$(command -v helios 2>/dev/null || true)
-  if [ -n "$SYS_HELIOS" ] && [ "$SYS_HELIOS" != "$0" ]; then
-    exec "$SYS_HELIOS" "$@"
-  fi
+  cargoHash = "sha256-RSTwadwdmZ35RwIjsomIjFdsvdayAxP13Y6GzXTJBQI=";
 
-  echo "ERROR: Helios binary unavailable. Override modules.helios.package or set HELIOS_BIN." >&2
-  echo "ERROR: Suggested source: https://github.com/a16z/helios" >&2
-  exit 1
-''
+  cargoBuildFlags = [
+    "--package"
+    "helios-cli"
+    "--bin"
+    "helios"
+  ];
+
+  cargoTestFlags = cargoBuildFlags;
+  doCheck = false;
+
+  nativeBuildInputs = [
+    pkg-config
+    perl
+  ];
+
+  meta = with lib; {
+    description = "Ethereum light client";
+    homepage = "https://github.com/a16z/helios";
+    license = licenses.mit;
+    maintainers = [ ];
+    mainProgram = "helios";
+    platforms = platforms.unix;
+  };
+}
