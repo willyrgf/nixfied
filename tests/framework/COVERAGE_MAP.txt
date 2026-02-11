@@ -1,0 +1,46 @@
+# Framework Coverage Map
+
+Each framework file must appear here with at least one validating scenario.
+
+- `nixfied/.framework/ci.nix`: `fixtures/ci/ci.nix`, `fixtures/ci/retention.nix`, `fixtures/ci/unknown-step.nix`, `fixtures/ci/summary-json.nix`
+- `nixfied/.framework/devshell.nix`: `framework::test` flake evaluation and app wiring checks
+- `nixfied/.framework/ephemeral.nix`: `fixtures/ephemeral/lock.nix`
+- `nixfied/.framework/hooks.nix`: module hook export assertions in `.framework/internal/test.nix`
+- `nixfied/.framework/internal/core.nix`: core app smoke checks (`help/dev/test/build/check/ci`)
+- `nixfied/.framework/internal/install.nix`: installer/upgrade/re-entry/filter/error fixtures in `.framework/internal/test.nix`
+- `nixfied/.framework/internal/isolation.nix`: `framework::test --profile full` isolation runner path
+- `nixfied/.framework/internal/module-apps.nix`: module app exposure and strict slot/env checks
+- `nixfied/.framework/internal/test.nix`: `framework::test` self-run smoke and fixture orchestration
+- `nixfied/.framework/lib/app-api.nix`: app API contract enforcement fixture in `.framework/internal/test.nix`
+- `nixfied/.framework/lib/builders.nix`: helper/runtime/slots fixture app generation checks
+- `nixfied/.framework/lib/default.nix`: helper runtime fixture and module integration fixture
+- `nixfied/.framework/lib/helpers.nix`: `fixtures/helpers/runtime.nix`
+- `nixfied/.framework/lib/parallel.nix`: `fixtures/lib/parallel.nix`
+- `nixfied/.framework/lib/port-utils.nix`: `fixtures/lib/port-utils.nix`
+- `nixfied/.framework/lib/process.nix`: `fixtures/lib/process.nix`
+- `nixfied/.framework/lib/run-registry.nix`: `fixtures/registry/foreground.nix`, `fixtures/registry/background-timeout.nix`
+- `nixfied/.framework/lib/service-api.nix`: service API contract enforcement fixture in `.framework/internal/test.nix`
+- `nixfied/.framework/lib/summary.nix`: helper `summary_parse` checks in `fixtures/helpers/runtime.nix`
+- `nixfied/.framework/minio/bucket-management.nix`: `fixtures/minio/bucket-ops.nix`
+- `nixfied/.framework/minio/config.nix`: `fixtures/modules/conf.nix`, `fixtures/minio/bucket-ops.nix`
+- `nixfied/.framework/minio/default.nix`: `fixtures/modules/dev.nix`, `fixtures/minio/bucket-ops.nix`
+- `nixfied/.framework/minio/lifecycle.nix`: `fixtures/modules/dev.nix`, `fixtures/minio/bucket-ops.nix`
+- `nixfied/.framework/nginx/default.nix`: `fixtures/modules/dev.nix`, `fixtures/nginx/site-lifecycle.nix`
+- `nixfied/.framework/nginx/lifecycle.nix`: `fixtures/modules/dev.nix`, `fixtures/nginx/site-lifecycle.nix`
+- `nixfied/.framework/nginx/site-management.nix`: `fixtures/modules/dev.nix`, `fixtures/nginx/site-lifecycle.nix`
+- `nixfied/.framework/nginx/ssl.nix`: `fixtures/nginx/site-lifecycle.nix` (self-signed lifecycle and status/list coverage)
+- `nixfied/.framework/nginx/templates.nix`: nginx init/site generation checks in module and nginx fixtures
+- `nixfied/.framework/postgres/backup.nix`: `fixtures/postgres/extensions.nix`
+- `nixfied/.framework/postgres/config.nix`: postgres module fixture configuration checks
+- `nixfied/.framework/postgres/default.nix`: `fixtures/modules/dev.nix`, `fixtures/postgres/extensions.nix`
+- `nixfied/.framework/postgres/lifecycle.nix`: `fixtures/modules/dev.nix`
+- `nixfied/.framework/postgres/migration-safety.nix`: `fixtures/postgres/extensions.nix`
+- `nixfied/.framework/postgres/migration.nix`: `fixtures/postgres/extensions.nix`
+- `nixfied/.framework/postgres/port-management.nix`: `fixtures/postgres/extensions.nix`
+- `nixfied/.framework/postgres/rollback.nix`: `fixtures/postgres/extensions.nix`
+- `nixfied/.framework/slots.nix`: `fixtures/slots/runtime.nix` and strict slot/env checks
+- `nixfied/.framework/supervisor/config.nix`: supervisor config fixture
+- `nixfied/.framework/supervisor/default.nix`: supervisor hooks fixture and management fixture
+- `nixfied/.framework/supervisor/lifecycle.nix`: module app exposure and supervisor hooks checks
+- `nixfied/.framework/supervisor/management.nix`: `fixtures/supervisor/management.nix`
+- `nixfied/.framework/supervisor/status.nix`: `fixtures/supervisor/management.nix`

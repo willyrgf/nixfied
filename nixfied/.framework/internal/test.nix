@@ -35,16 +35,95 @@ let
       exit 1
     fi
 
+    PROFILE="ci"
+    SUMMARY_JSON=""
+
+    usage() {
+      cat <<'EOF'
+    Usage: nix run .#framework::test [--profile ci|full] [--summary-json <path>]
+
+    Options:
+      --profile <name>      Test profile to run (ci|full). Default: ci.
+      --summary-json <path> Write a compact JSON summary to <path>.
+      --help                Show this help.
+    EOF
+    }
+
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --profile)
+          PROFILE="''${2:-}"
+          if [ -z "$PROFILE" ]; then
+            echo "Missing value for --profile" >&2
+            exit 1
+          fi
+          case "$PROFILE" in
+            ci|full) ;;
+            *)
+              echo "Unknown profile: $PROFILE (expected: ci|full)" >&2
+              exit 1
+              ;;
+          esac
+          shift 2
+          ;;
+        --summary-json)
+          SUMMARY_JSON="''${2:-}"
+          if [ -z "$SUMMARY_JSON" ]; then
+            echo "Missing value for --summary-json" >&2
+            exit 1
+          fi
+          shift 2
+          ;;
+        --help|-h)
+          usage
+          exit 0
+          ;;
+        *)
+          echo "Unknown option: $1" >&2
+          usage >&2
+          exit 1
+          ;;
+      esac
+    done
+
+    TEST_STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    TEST_START_EPOCH=$(date +%s)
+
     WORKDIR=$(mktemp -d)
     WORKDIR=$(cd "$WORKDIR" && pwd -P)
     SYSTEM="${pkgs.stdenv.hostPlatform.system}"
 
+    write_summary_json() {
+      local rc="$1"
+      local finished_at
+      local duration
+      finished_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+      duration=$(( $(date +%s) - TEST_START_EPOCH ))
+      mkdir -p "$(dirname "$SUMMARY_JSON")"
+      cat > "$SUMMARY_JSON" <<JSON
+    {
+      "profile": "$PROFILE",
+      "exit_code": $rc,
+      "duration_seconds": $duration,
+      "started_at": "$TEST_STARTED_AT",
+      "finished_at": "$finished_at"
+    }
+    JSON
+      echo "INFO: wrote summary json path=$SUMMARY_JSON"
+    }
+
     cleanup() {
+      local rc=$?
+      set +e
+      if [ -n "$SUMMARY_JSON" ]; then
+        write_summary_json "$rc"
+      fi
       if [ "''${NIXFIED_TEST_KEEP:-}" = "1" ]; then
         echo "Keeping test workspace: $WORKDIR"
       else
         rm -rf "$WORKDIR"
       fi
+      return "$rc"
     }
     trap cleanup EXIT
 
@@ -121,6 +200,9 @@ let
     log "flake eval"
     nix flake show "path:$ROOT" >/dev/null
     nix flake check --no-build "path:$ROOT" >/dev/null
+
+    log "coverage map"
+    "$ROOT/tests/framework/scripts/check-coverage-map.sh" "$ROOT" >/dev/null
 
     log "core apps"
     HELP_OUT="$WORKDIR/help.txt"
@@ -862,6 +944,466 @@ let
       exit "$REG_RC"
     fi
 
+    log "postgres extensions"
+    PG_EXT_DIR="$WORKDIR/postgres-extensions"
+    mkdir -p "$PG_EXT_DIR"
+    PG_EXT_EXPR=$(cat <<'NIX'
+    { root, system }:
+    let
+      flake = builtins.getFlake root;
+      pkgs = flake.inputs.nixpkgs.legacyPackages.''${system};
+      base = import ./nixfied/project { inherit pkgs; };
+      project = pkgs.lib.recursiveUpdate base {
+        modules.postgres.enable = true;
+        tooling.runtimePackages =
+          (base.tooling.runtimePackages or [ ])
+          ++ [
+            pkgs.gnugrep
+            pkgs.gzip
+            pkgs.lsof
+            pkgs.netcat
+            pkgs.python3
+          ];
+      };
+      slots = import ./nixfied/.framework/slots.nix { inherit pkgs project; };
+      postgres = import ./nixfied/.framework/postgres { inherit pkgs project slots; };
+      hooks = import ./nixfied/.framework/hooks.nix {
+        inherit pkgs project slots postgres;
+        nginx = null;
+        minio = null;
+        supervisor = null;
+      };
+      lib = import ./nixfied/.framework/lib { inherit pkgs project hooks; };
+    in
+      lib.mkAppScript {
+        name = "postgres-extensions-test";
+        env = {
+          "''${project.project.envVar}" = "dev";
+          "''${project.project.slotVar}" = "0";
+        };
+        useDeps = false;
+        script = import ./tests/framework/fixtures/postgres/extensions.nix {
+          inherit (postgres)
+            backup
+            listBackups
+            verifyBackup
+            cleanupBackups
+            restore
+            findBackupForCommit
+            testRollback
+            testMigrations
+            ensureMigrationTested
+            markMigrationTested
+            detectDrift
+            checkPort
+            killPort
+            ;
+        };
+      }
+    NIX
+    )
+
+    PG_EXT_SCRIPT=$(build_expr "$PG_EXT_EXPR")
+    PG_EXT_LOG="$WORKDIR/postgres-extensions.log"
+    set +e
+    (cd "$PG_EXT_DIR" && "$PG_EXT_SCRIPT" >"$PG_EXT_LOG" 2>&1)
+    PG_EXT_RC=$?
+    set -e
+    if [ "$PG_EXT_RC" -ne 0 ]; then
+      echo "Postgres extensions fixture failed (rc=$PG_EXT_RC)." >&2
+      echo "" >&2
+      echo "Fixture output (last 80 lines):" >&2
+      tail -80 "$PG_EXT_LOG" >&2 || true
+      exit "$PG_EXT_RC"
+    fi
+
+    log "nginx site lifecycle"
+    NGX_DIR="$WORKDIR/nginx-site-lifecycle"
+    mkdir -p "$NGX_DIR"
+    NGX_EXPR=$(cat <<'NIX'
+    { root, system }:
+    let
+      flake = builtins.getFlake root;
+      pkgs = flake.inputs.nixpkgs.legacyPackages.''${system};
+      base = import ./nixfied/project { inherit pkgs; };
+      project = pkgs.lib.recursiveUpdate base {
+        modules.nginx.enable = true;
+        tooling.runtimePackages =
+          (base.tooling.runtimePackages or [ ])
+          ++ [
+            pkgs.gnugrep
+            pkgs.netcat
+          ];
+      };
+      slots = import ./nixfied/.framework/slots.nix { inherit pkgs project; };
+      nginx = import ./nixfied/.framework/nginx { inherit pkgs project slots; };
+      hooks = import ./nixfied/.framework/hooks.nix {
+        inherit pkgs project slots nginx;
+        postgres = null;
+        minio = null;
+        supervisor = null;
+      };
+      lib = import ./nixfied/.framework/lib { inherit pkgs project hooks; };
+    in
+      lib.mkAppScript {
+        name = "nginx-site-lifecycle-test";
+        env = {
+          "''${project.project.envVar}" = "dev";
+          "''${project.project.slotVar}" = "0";
+        };
+        useDeps = false;
+        script = import ./tests/framework/fixtures/nginx/site-lifecycle.nix {
+          nginxInit = toString nginx.init;
+          nginxReload = toString nginx.reload;
+          nginxCheckConfig = toString nginx.checkConfig;
+          nginxStatus = toString nginx.status;
+          nginxHealth = toString nginx.health;
+          nginxSiteAdd = toString nginx.addSite;
+          nginxSiteStatic = toString nginx.writeStaticSite;
+          nginxSiteList = toString nginx.listSites;
+          nginxSiteDisable = toString nginx.disableSite;
+          nginxSiteEnable = toString nginx.enableSite;
+          nginxSiteRemove = toString nginx.removeSite;
+        };
+      }
+    NIX
+    )
+
+    NGX_SCRIPT=$(build_expr "$NGX_EXPR")
+    NGX_LOG="$WORKDIR/nginx-site-lifecycle.log"
+    set +e
+    (cd "$NGX_DIR" && "$NGX_SCRIPT" >"$NGX_LOG" 2>&1)
+    NGX_RC=$?
+    set -e
+    if [ "$NGX_RC" -ne 0 ]; then
+      echo "Nginx site lifecycle fixture failed (rc=$NGX_RC)." >&2
+      echo "" >&2
+      echo "Fixture output (last 80 lines):" >&2
+      tail -80 "$NGX_LOG" >&2 || true
+      exit "$NGX_RC"
+    fi
+
+    log "minio bucket ops"
+    MINIO_FIX_DIR="$WORKDIR/minio-bucket-ops"
+    mkdir -p "$MINIO_FIX_DIR"
+    MINIO_FIX_EXPR=$(cat <<'NIX'
+    { root, system }:
+    let
+      flake = builtins.getFlake root;
+      pkgs = flake.inputs.nixpkgs.legacyPackages.''${system};
+      base = import ./nixfied/project { inherit pkgs; };
+      project = pkgs.lib.recursiveUpdate base {
+        modules.minio.enable = true;
+        tooling.runtimePackages =
+          (base.tooling.runtimePackages or [ ])
+          ++ [
+            pkgs.gnugrep
+            pkgs.netcat
+          ];
+      };
+      slots = import ./nixfied/.framework/slots.nix { inherit pkgs project; };
+      minio = import ./nixfied/.framework/minio { inherit pkgs project slots; };
+      hooks = import ./nixfied/.framework/hooks.nix {
+        inherit pkgs project slots minio;
+        postgres = null;
+        nginx = null;
+        supervisor = null;
+      };
+      lib = import ./nixfied/.framework/lib { inherit pkgs project hooks; };
+    in
+      lib.mkAppScript {
+        name = "minio-bucket-ops-test";
+        env = {
+          "''${project.project.envVar}" = "dev";
+          "''${project.project.slotVar}" = "0";
+        };
+        useDeps = false;
+        script = import ./tests/framework/fixtures/minio/bucket-ops.nix {
+          minioInit = toString minio.init;
+          minioStart = toString minio.start;
+          minioStop = toString minio.stop;
+          minioHealth = toString minio.health;
+          minioStatus = toString minio.status;
+          minioCheckConfig = toString minio.checkConfig;
+          minioBucketCreate = toString minio.bucketCreate;
+          minioBucketDelete = toString minio.bucketDelete;
+          minioBucketList = toString minio.bucketList;
+          minioPolicyApply = toString minio.policyApply;
+        };
+      }
+    NIX
+    )
+
+    MINIO_FIX_SCRIPT=$(build_expr "$MINIO_FIX_EXPR")
+    MINIO_FIX_LOG="$WORKDIR/minio-bucket-ops.log"
+    set +e
+    (cd "$MINIO_FIX_DIR" && "$MINIO_FIX_SCRIPT" >"$MINIO_FIX_LOG" 2>&1)
+    MINIO_FIX_RC=$?
+    set -e
+    if [ "$MINIO_FIX_RC" -ne 0 ]; then
+      echo "MinIO bucket ops fixture failed (rc=$MINIO_FIX_RC)." >&2
+      echo "" >&2
+      echo "Fixture output (last 80 lines):" >&2
+      tail -80 "$MINIO_FIX_LOG" >&2 || true
+      exit "$MINIO_FIX_RC"
+    fi
+
+    log "supervisor management"
+    SUP_MGMT_DIR="$WORKDIR/supervisor-management"
+    mkdir -p "$SUP_MGMT_DIR"
+    SUP_MGMT_EXPR=$(cat <<'NIX'
+    { root, system }:
+    let
+      flake = builtins.getFlake root;
+      pkgs = flake.inputs.nixpkgs.legacyPackages.''${system};
+      base = import ./nixfied/project { inherit pkgs; };
+      project = pkgs.lib.recursiveUpdate base {
+        tooling.runtimePackages =
+          (base.tooling.runtimePackages or [ ])
+          ++ [
+            pkgs.gzip
+          ];
+        supervisor = {
+          enable = true;
+          services = {
+            app = {
+              command = "sleep 30";
+              workingDir = ".";
+            };
+          };
+        };
+      };
+      slots = import ./nixfied/.framework/slots.nix { inherit pkgs project; };
+      supervisor = import ./nixfied/.framework/supervisor { inherit pkgs project slots; };
+      hooks = import ./nixfied/.framework/hooks.nix {
+        inherit pkgs project slots supervisor;
+        postgres = null;
+        nginx = null;
+        minio = null;
+      };
+      lib = import ./nixfied/.framework/lib { inherit pkgs project hooks; };
+    in
+      lib.mkAppScript {
+        name = "supervisor-management-test";
+        env = {
+          "''${project.project.envVar}" = "dev";
+          "''${project.project.slotVar}" = "0";
+        };
+        useDeps = false;
+        script = import ./tests/framework/fixtures/supervisor/management.nix {
+          supervisorRestart = toString supervisor.restart;
+          supervisorRotateLogs = toString supervisor.rotateLogs;
+          supervisorIsRunning = toString supervisor.isRunning;
+          supervisorLogs = toString supervisor.logs;
+        };
+      }
+    NIX
+    )
+
+    SUP_MGMT_SCRIPT=$(build_expr "$SUP_MGMT_EXPR")
+    SUP_MGMT_LOG="$WORKDIR/supervisor-management.log"
+    set +e
+    (cd "$SUP_MGMT_DIR" && "$SUP_MGMT_SCRIPT" >"$SUP_MGMT_LOG" 2>&1)
+    SUP_MGMT_RC=$?
+    set -e
+    if [ "$SUP_MGMT_RC" -ne 0 ]; then
+      echo "Supervisor management fixture failed (rc=$SUP_MGMT_RC)." >&2
+      echo "" >&2
+      echo "Fixture output (last 80 lines):" >&2
+      tail -80 "$SUP_MGMT_LOG" >&2 || true
+      exit "$SUP_MGMT_RC"
+    fi
+
+    log "run registry background/timeout"
+    REG_BG_DIR="$WORKDIR/registry-background-timeout"
+    mkdir -p "$REG_BG_DIR"
+    REG_BG_EXPR=$(cat <<'NIX'
+    { root, system }:
+    let
+      flake = builtins.getFlake root;
+      pkgs = flake.inputs.nixpkgs.legacyPackages.''${system};
+      base = import ./nixfied/project { inherit pkgs; };
+      project = pkgs.lib.recursiveUpdate base {
+        ci.runsRoot = "/tmp/nixfied-framework-test-runs";
+      };
+      slots = import ./nixfied/.framework/slots.nix { inherit pkgs project; };
+      hooks = import ./nixfied/.framework/hooks.nix {
+        inherit pkgs project slots;
+        postgres = null;
+        nginx = null;
+        minio = null;
+        supervisor = null;
+      };
+      lib = import ./nixfied/.framework/lib { inherit pkgs project hooks; };
+    in
+      lib.mkAppScript {
+        name = "registry-bg-timeout-test";
+        env = { };
+        useDeps = false;
+        script = import ./tests/framework/fixtures/registry/background-timeout.nix {
+          runRegistryStart = toString lib.runRegistryStart;
+          runsRoot = "/tmp/nixfied-framework-test-runs";
+        };
+      }
+    NIX
+    )
+
+    REG_BG_SCRIPT=$(build_expr "$REG_BG_EXPR")
+    REG_BG_LOG="$WORKDIR/registry-background-timeout.log"
+    set +e
+    (cd "$REG_BG_DIR" && "$REG_BG_SCRIPT" >"$REG_BG_LOG" 2>&1)
+    REG_BG_RC=$?
+    set -e
+    if [ "$REG_BG_RC" -ne 0 ]; then
+      echo "Registry background/timeout fixture failed (rc=$REG_BG_RC)." >&2
+      echo "" >&2
+      echo "Fixture output (last 80 lines):" >&2
+      tail -80 "$REG_BG_LOG" >&2 || true
+      exit "$REG_BG_RC"
+    fi
+
+    log "lib parallel"
+    LIB_PAR_DIR="$WORKDIR/lib-parallel"
+    mkdir -p "$LIB_PAR_DIR"
+    LIB_PAR_EXPR=$(cat <<'NIX'
+    { root, system }:
+    let
+      flake = builtins.getFlake root;
+      pkgs = flake.inputs.nixpkgs.legacyPackages.''${system};
+      base = import ./nixfied/project { inherit pkgs; };
+      project = base;
+      slots = import ./nixfied/.framework/slots.nix { inherit pkgs project; };
+      hooks = import ./nixfied/.framework/hooks.nix { inherit pkgs project slots; postgres = null; nginx = null; };
+      lib = import ./nixfied/.framework/lib { inherit pkgs project hooks; };
+      parallel = import ./nixfied/.framework/lib/parallel.nix { inherit pkgs; };
+      runnerOk = parallel.mkParallelRunner [
+        "echo first"
+        "echo second"
+      ];
+      runnerFail = parallel.mkParallelRunner [
+        "echo passing-command"
+        "echo failing-command >&2; exit 3"
+      ];
+    in
+      lib.mkAppScript {
+        name = "lib-parallel-test";
+        env = { };
+        useDeps = false;
+        script = import ./tests/framework/fixtures/lib/parallel.nix {
+          parallelRunnerOk = toString runnerOk;
+          parallelRunnerFail = toString runnerFail;
+        };
+      }
+    NIX
+    )
+
+    LIB_PAR_SCRIPT=$(build_expr "$LIB_PAR_EXPR")
+    LIB_PAR_LOG="$WORKDIR/lib-parallel.log"
+    set +e
+    (cd "$LIB_PAR_DIR" && "$LIB_PAR_SCRIPT" >"$LIB_PAR_LOG" 2>&1)
+    LIB_PAR_RC=$?
+    set -e
+    if [ "$LIB_PAR_RC" -ne 0 ]; then
+      echo "Lib parallel fixture failed (rc=$LIB_PAR_RC)." >&2
+      echo "" >&2
+      echo "Fixture output (last 80 lines):" >&2
+      tail -80 "$LIB_PAR_LOG" >&2 || true
+      exit "$LIB_PAR_RC"
+    fi
+
+    log "lib port utils"
+    LIB_PORT_DIR="$WORKDIR/lib-port-utils"
+    mkdir -p "$LIB_PORT_DIR"
+    LIB_PORT_EXPR=$(cat <<'NIX'
+    { root, system }:
+    let
+      flake = builtins.getFlake root;
+      pkgs = flake.inputs.nixpkgs.legacyPackages.''${system};
+      base = import ./nixfied/project { inherit pkgs; };
+      project = pkgs.lib.recursiveUpdate base {
+        tooling.runtimePackages =
+          (base.tooling.runtimePackages or [ ])
+          ++ [
+            pkgs.lsof
+            pkgs.netcat
+          ];
+      };
+      slots = import ./nixfied/.framework/slots.nix { inherit pkgs project; };
+      hooks = import ./nixfied/.framework/hooks.nix { inherit pkgs project slots; postgres = null; nginx = null; };
+      lib = import ./nixfied/.framework/lib { inherit pkgs project hooks; };
+      portUtils = import ./nixfied/.framework/lib/port-utils.nix { inherit pkgs; };
+    in
+      lib.mkAppScript {
+        name = "lib-port-utils-test";
+        env = { };
+        useDeps = false;
+        script = import ./tests/framework/fixtures/lib/port-utils.nix {
+          portCleanup = toString portUtils.mkPortCleanup;
+          portConflictChecker = toString portUtils.mkPortConflictChecker;
+        };
+      }
+    NIX
+    )
+
+    LIB_PORT_SCRIPT=$(build_expr "$LIB_PORT_EXPR")
+    LIB_PORT_LOG="$WORKDIR/lib-port-utils.log"
+    set +e
+    (cd "$LIB_PORT_DIR" && "$LIB_PORT_SCRIPT" >"$LIB_PORT_LOG" 2>&1)
+    LIB_PORT_RC=$?
+    set -e
+    if [ "$LIB_PORT_RC" -ne 0 ]; then
+      echo "Lib port-utils fixture failed (rc=$LIB_PORT_RC)." >&2
+      echo "" >&2
+      echo "Fixture output (last 80 lines):" >&2
+      tail -80 "$LIB_PORT_LOG" >&2 || true
+      exit "$LIB_PORT_RC"
+    fi
+
+    log "lib process"
+    LIB_PROC_DIR="$WORKDIR/lib-process"
+    mkdir -p "$LIB_PROC_DIR"
+    LIB_PROC_EXPR=$(cat <<'NIX'
+    { root, system }:
+    let
+      flake = builtins.getFlake root;
+      pkgs = flake.inputs.nixpkgs.legacyPackages.''${system};
+      base = import ./nixfied/project { inherit pkgs; };
+      project = base;
+      slots = import ./nixfied/.framework/slots.nix { inherit pkgs project; };
+      hooks = import ./nixfied/.framework/hooks.nix { inherit pkgs project slots; postgres = null; nginx = null; };
+      lib = import ./nixfied/.framework/lib { inherit pkgs project hooks; };
+      process = import ./nixfied/.framework/lib/process.nix { inherit pkgs; };
+      processManager = process.mkProcessManager {
+        processName = "fixture-process";
+        startupScript = "sleep 30 &\nCHILD_PID=$!\nwait \"$CHILD_PID\"";
+        cleanupHook = "echo \"cleaned\" >> \"$PROCESS_FIXTURE_MARKER\"";
+      };
+    in
+      lib.mkAppScript {
+        name = "lib-process-test";
+        env = { };
+        useDeps = false;
+        script = import ./tests/framework/fixtures/lib/process.nix {
+          processManager = toString processManager;
+        };
+      }
+    NIX
+    )
+
+    LIB_PROC_SCRIPT=$(build_expr "$LIB_PROC_EXPR")
+    LIB_PROC_LOG="$WORKDIR/lib-process.log"
+    set +e
+    (cd "$LIB_PROC_DIR" && "$LIB_PROC_SCRIPT" >"$LIB_PROC_LOG" 2>&1)
+    LIB_PROC_RC=$?
+    set -e
+    if [ "$LIB_PROC_RC" -ne 0 ]; then
+      echo "Lib process fixture failed (rc=$LIB_PROC_RC)." >&2
+      echo "" >&2
+      echo "Fixture output (last 80 lines):" >&2
+      tail -80 "$LIB_PROC_LOG" >&2 || true
+      exit "$LIB_PROC_RC"
+    fi
+
     log "ci summary.json"
     CI_SJ_EXPR=$(cat <<'NIX'
     { root, system }:
@@ -1147,7 +1689,7 @@ let
     # Verify they point to nix store paths
     assert_contains "$SUP_HOOKS_FILE" "/nix/store/"
 
-    if [ "''${FRAMEWORK_ISOLATION:-}" = "1" ]; then
+    if [ "$PROFILE" = "full" ] || [ "''${FRAMEWORK_ISOLATION:-}" = "1" ]; then
       log "isolation runner"
       run_app "$ROOT" test-isolation
     fi
@@ -1162,8 +1704,12 @@ in
     api = {
       version = 1;
       summary = "Run framework integration tests";
-      details = "Runs the Nixfied framework integration test suite (intended for framework development).";
-      usage = [ "nix run .#framework::test" ];
+      details = "Runs the Nixfied framework integration test suite (intended for framework development). Supports --profile and --summary-json options.";
+      usage = [
+        "nix run .#framework::test"
+        "nix run .#framework::test -- --profile full"
+        "nix run .#framework::test -- --summary-json /tmp/framework-test-summary.json"
+      ];
       category = "framework";
     };
     env = { };
