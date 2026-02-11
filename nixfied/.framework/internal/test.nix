@@ -596,6 +596,7 @@ let
     assert_file_absent "$INSTALL_TARGET/nixfied/.framework/.workspace"
     assert_file_absent "$INSTALL_TARGET/NIXFIED_PROMPT_PLAN.md"
     assert_file_exists "$INSTALL_TARGET/nixfied/local/default.nix"
+    assert_file_exists "$INSTALL_TARGET/nixfied/README.md"
 
     log "installer worktree"
     INSTALL_WT_BASE="$WORKDIR/install-worktree"
@@ -625,6 +626,7 @@ let
     fi
     assert_file_absent "$INSTALL_WT_TARGET/nixfied/.framework/.workspace"
     assert_file_exists "$INSTALL_WT_TARGET/nixfied/local/default.nix"
+    assert_file_exists "$INSTALL_WT_TARGET/nixfied/README.md"
 
     log "example project apps (basic install)"
     BASIC_HELP="$WORKDIR/basic-help.txt"
@@ -748,6 +750,7 @@ let
     assert_contains "$INSTALL_TARGET/nixfied/project/conf.nix" "NIXFIED_UPGRADE_TEST_MARKER"
     assert_contains "$INSTALL_TARGET/nixfied/local/default.nix" "NIXFIED_LOCAL_UPGRADE_TEST_MARKER"
     assert_file_absent "$INSTALL_TARGET/nixfied/.framework/.workspace"
+    assert_file_exists "$INSTALL_TARGET/nixfied/README.md"
 
     log "framework marker toggle"
     mkdir -p "$INSTALL_TARGET/nixfied/.framework"
