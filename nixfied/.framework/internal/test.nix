@@ -489,7 +489,7 @@ let
     )
 
     SUP_SCRIPT=$(build_expr "$SUP_EXPR")
-    SUP_CONFIG=$("$SUP_SCRIPT")
+    SUP_CONFIG=$(PROJECT_ENV=dev NIX_ENV=0 "$SUP_SCRIPT")
     assert_file_exists "$SUP_CONFIG"
     assert_contains "$SUP_CONFIG" "processes:"
     assert_contains "$SUP_CONFIG" "app:"
@@ -568,10 +568,10 @@ let
 
     log "ports env var aliases"
     PORTS_ALIAS_OUT="$WORKDIR/ports-alias.txt"
-    NIXFIED_ENV=1 run_app "$INSTALL_TARGET" ports > "$PORTS_ALIAS_OUT"
+    PROJECT_ENV=dev NIXFIED_ENV=1 run_app "$INSTALL_TARGET" ports > "$PORTS_ALIAS_OUT"
     assert_contains "$PORTS_ALIAS_OUT" "Port assignments for slot 1, env dev"
     PORTS_NIX_ENV_OUT="$WORKDIR/ports-nix-env.txt"
-    NIX_ENV=1 run_app "$INSTALL_TARGET" ports > "$PORTS_NIX_ENV_OUT"
+    PROJECT_ENV=dev NIX_ENV=1 run_app "$INSTALL_TARGET" ports > "$PORTS_NIX_ENV_OUT"
     assert_contains "$PORTS_NIX_ENV_OUT" "Port assignments for slot 1, env dev"
 
     log "app api contract enforcement"
@@ -939,6 +939,79 @@ let
     assert_contains "$MODAPP_NAMES_FILE" "service::minio::start"
     assert_contains "$MODAPP_NAMES_FILE" "up"
     assert_contains "$MODAPP_NAMES_FILE" "check-ports"
+
+    log "strict slot/env enforcement"
+    STRICT_SLOT_ENV_EXPR=$(cat <<'NIX'
+    { root, system }:
+    let
+      flake = builtins.getFlake root;
+      pkgs = flake.inputs.nixpkgs.legacyPackages.''${system};
+      base = import ./nixfied/project { inherit pkgs; };
+      project = pkgs.lib.recursiveUpdate base {
+        modules.postgres.enable = true;
+        modules.nginx.enable = true;
+        modules.minio.enable = true;
+      };
+      slots = import ./nixfied/.framework/slots.nix { inherit pkgs project; };
+      postgres = import ./nixfied/.framework/postgres { inherit pkgs project slots; };
+      nginx = import ./nixfied/.framework/nginx { inherit pkgs project slots; };
+      minio = import ./nixfied/.framework/minio { inherit pkgs project slots; };
+      supervisor = import ./nixfied/.framework/supervisor { inherit pkgs project slots; };
+      serviceApis = {
+        postgres = postgres.publicApi;
+        nginx = nginx.publicApi;
+        minio = minio.publicApi;
+      };
+      hooks = import ./nixfied/.framework/hooks.nix {
+        inherit pkgs project slots postgres nginx minio supervisor serviceApis;
+      };
+      lib = import ./nixfied/.framework/lib { inherit pkgs project hooks; };
+      moduleApps = import ./nixfied/.framework/internal/module-apps.nix {
+        inherit pkgs project lib supervisor slots serviceApis;
+      };
+    in
+      pkgs.writeText "strict-slot-env-apps" (
+        "UP=" + moduleApps.up.program + "\n"
+        + "POSTGRES_LIST_INSTANCES=" + moduleApps."service::postgres::list-instances".program + "\n"
+      )
+    NIX
+    )
+
+    STRICT_SLOT_ENV_FILE=$(build_expr "$STRICT_SLOT_ENV_EXPR")
+    STRICT_UP_SCRIPT=$(grep 'UP=' "$STRICT_SLOT_ENV_FILE" | head -1 | sed 's/^[[:space:]]*UP=//')
+    STRICT_PG_LIST_SCRIPT=$(grep 'POSTGRES_LIST_INSTANCES=' "$STRICT_SLOT_ENV_FILE" | head -1 | sed 's/^[[:space:]]*POSTGRES_LIST_INSTANCES=//')
+
+    STRICT_UP_MISSING_ENV_LOG="$WORKDIR/strict-up-missing-env.log"
+    set +e
+    NIX_ENV=0 "$STRICT_UP_SCRIPT" > "$STRICT_UP_MISSING_ENV_LOG" 2>&1
+    RC=$?
+    set -e
+    if [ "$RC" -eq 0 ]; then
+      fail "expected up app to fail when PROJECT_ENV is missing"
+    fi
+    assert_contains "$STRICT_UP_MISSING_ENV_LOG" "PROJECT_ENV must be set"
+
+    STRICT_UP_MISSING_SLOT_LOG="$WORKDIR/strict-up-missing-slot.log"
+    set +e
+    PROJECT_ENV=dev "$STRICT_UP_SCRIPT" > "$STRICT_UP_MISSING_SLOT_LOG" 2>&1
+    RC=$?
+    set -e
+    if [ "$RC" -eq 0 ]; then
+      fail "expected up app to fail when NIX_ENV is missing"
+    fi
+    assert_contains "$STRICT_UP_MISSING_SLOT_LOG" "NIX_ENV must be set"
+
+    STRICT_PG_MISSING_ENV_LOG="$WORKDIR/strict-pg-list-missing-env.log"
+    set +e
+    NIX_ENV=0 "$STRICT_PG_LIST_SCRIPT" > "$STRICT_PG_MISSING_ENV_LOG" 2>&1
+    RC=$?
+    set -e
+    if [ "$RC" -eq 0 ]; then
+      fail "expected service::postgres::list-instances to fail when PROJECT_ENV is missing"
+    fi
+    assert_contains "$STRICT_PG_MISSING_ENV_LOG" "PROJECT_ENV must be set"
+
+    PROJECT_ENV=dev NIX_ENV=0 "$STRICT_PG_LIST_SCRIPT" >/dev/null
 
     MODAPP_DISABLED_EXPR=$(cat <<'NIX'
     { root, system }:

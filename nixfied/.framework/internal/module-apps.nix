@@ -44,21 +44,33 @@ let
           summary = "Start all services";
           details = "Starts all supervisor-managed services for the current slot/env.";
           category = "supervisor";
-          script = ''run_hook SUPERVISOR_START_DAEMON'';
+          script = ''
+            SLOT_ENV_OUT="$($REQUIRE_SLOT_ENV)" || exit 1
+            eval "$SLOT_ENV_OUT"
+            run_hook SUPERVISOR_START_DAEMON
+          '';
         };
         down = mk {
           name = "down";
           summary = "Stop all services";
           details = "Stops all supervisor-managed services for the current slot/env.";
           category = "supervisor";
-          script = ''run_hook SUPERVISOR_STOP'';
+          script = ''
+            SLOT_ENV_OUT="$($REQUIRE_SLOT_ENV)" || exit 1
+            eval "$SLOT_ENV_OUT"
+            run_hook SUPERVISOR_STOP
+          '';
         };
         svc-status = mk {
           name = "svc-status";
           summary = "Show service status";
           details = "Shows the status of supervisor-managed services.";
           category = "supervisor";
-          script = ''run_hook SUPERVISOR_STATUS'';
+          script = ''
+            SLOT_ENV_OUT="$($REQUIRE_SLOT_ENV)" || exit 1
+            eval "$SLOT_ENV_OUT"
+            run_hook SUPERVISOR_STATUS
+          '';
         };
         svc-logs = mk {
           name = "svc-logs";
@@ -66,7 +78,11 @@ let
           details = "Streams logs for supervisor-managed services. Arguments are forwarded to the hook.";
           usage = [ "nix run .#svc-logs -- <args>" ];
           category = "supervisor";
-          script = ''run_hook SUPERVISOR_LOGS "$@"'';
+          script = ''
+            SLOT_ENV_OUT="$($REQUIRE_SLOT_ENV)" || exit 1
+            eval "$SLOT_ENV_OUT"
+            run_hook SUPERVISOR_LOGS "$@"
+          '';
         };
         svc-restart = mk {
           name = "svc-restart";
@@ -74,7 +90,11 @@ let
           details = "Restarts a supervisor-managed service. Arguments are forwarded to the hook.";
           usage = [ "nix run .#svc-restart -- <args>" ];
           category = "supervisor";
-          script = ''run_hook SUPERVISOR_RESTART "$@"'';
+          script = ''
+            SLOT_ENV_OUT="$($REQUIRE_SLOT_ENV)" || exit 1
+            eval "$SLOT_ENV_OUT"
+            run_hook SUPERVISOR_RESTART "$@"
+          '';
         };
       };
 
@@ -87,7 +107,8 @@ let
       details = "Scans the configured ports for the current slot/env and reports whether they are free or listening.";
       category = "utility";
       script = ''
-        eval "$($SLOT_INFO)"
+        SLOT_INFO_OUT="$($SLOT_INFO)" || exit 1
+        eval "$SLOT_INFO_OUT"
         LSOF="${pkgs.lsof}/bin/lsof"
         echo "Port status for slot ''${SLOT:-0}, env ''${ENV:-dev}:"
         echo ""
@@ -117,7 +138,8 @@ let
       details = "Prints effective port assignments for the current slot/env.";
       category = "utility";
       script = ''
-        eval "$($SLOT_INFO)"
+        SLOT_INFO_OUT="$($SLOT_INFO)" || exit 1
+        eval "$SLOT_INFO_OUT"
         echo "Port assignments for slot ''${SLOT:-0}, env ''${ENV:-dev}:"
         echo ""
         ${pkgs.lib.concatMapStringsSep "\n" (

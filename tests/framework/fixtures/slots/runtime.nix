@@ -45,115 +45,54 @@
     fail "prod slot 0 backend port mismatch: $BACKEND_PORT"
   fi
 
-  # Example: resolveEnv uses COMMAND_NAME when PROJECT_ENV is unset.
-  unset PROJECT_ENV NIX_ENV
+  # SLOT_INFO should fail when slot/env are missing and should not infer from command name.
+  unset PROJECT_ENV NIX_ENV NIXFIED_ENV
   export COMMAND_NAME="ci"
-  ENV_OUT=$("$SLOT_INFO" | grep "^ENV=" | cut -d= -f2)
-  if [ "$ENV_OUT" != "test" ]; then
-    fail "resolveEnv did not infer test from COMMAND_NAME=ci (got $ENV_OUT)"
+  set +e
+  OUT=$("$SLOT_INFO" 2>&1 < /dev/null)
+  RC=$?
+  set -e
+  if [ "$RC" -eq 0 ]; then
+    fail "expected SLOT_INFO to fail without PROJECT_ENV/NIX_ENV"
   fi
+  echo "$OUT" | grep -q "NIX_ENV must be set" || fail "missing explicit slot error"
   unset COMMAND_NAME
 
-  export COMMAND_NAME="dev"
-  ENV_OUT=$("$SLOT_INFO" | grep "^ENV=" | cut -d= -f2)
-  if [ "$ENV_OUT" != "dev" ]; then
-    fail "resolveEnv did not infer dev from COMMAND_NAME=dev (got $ENV_OUT)"
-  fi
-  unset COMMAND_NAME
-
-  export COMMAND_NAME="prod"
-  ENV_OUT=$("$SLOT_INFO" | grep "^ENV=" | cut -d= -f2)
-  if [ "$ENV_OUT" != "prod" ]; then
-    fail "resolveEnv did not infer prod from COMMAND_NAME=prod (got $ENV_OUT)"
-  fi
-  unset COMMAND_NAME
-
-  export TERM=dumb
-  export NO_TTY=1
-  export CI=1
+  # REQUIRE_SLOT_ENV should fail fast when env is missing.
+  export NIX_ENV="0"
+  unset PROJECT_ENV
   set +e
   OUT=$("$REQUIRE_SLOT_ENV" 2>&1 < /dev/null)
   RC=$?
   set -e
-  if [ "$RC" -ne 0 ]; then
-    echo "REQUIRE_SLOT_ENV non-tty failed (rc=$RC)" >&2
-    echo "$OUT" >&2
-    fail "require_slot_env non-tty failure"
+  if [ "$RC" -eq 0 ]; then
+    fail "expected REQUIRE_SLOT_ENV to fail when PROJECT_ENV is unset"
   fi
-  echo "$OUT" | grep -q "Continue with these defaults" && fail "non-tty should not prompt"
-  echo "$OUT" | grep -q "SLOT=0" || fail "missing SLOT output"
-  echo "$OUT" | grep -q "ENV=dev" || fail "missing default env output"
+  echo "$OUT" | grep -q "PROJECT_ENV must be set" || fail "missing explicit env error"
 
-  unset CI NO_TTY
-  export TERM=xterm-256color
+  # REQUIRE_SLOT_ENV should fail fast when slot is missing.
+  unset NIX_ENV NIXFIED_ENV
+  export PROJECT_ENV="dev"
+  set +e
+  OUT=$("$REQUIRE_SLOT_ENV" 2>&1 < /dev/null)
+  RC=$?
+  set -e
+  if [ "$RC" -eq 0 ]; then
+    fail "expected REQUIRE_SLOT_ENV to fail when NIX_ENV is unset"
+  fi
+  echo "$OUT" | grep -q "NIX_ENV must be set" || fail "missing explicit slot error"
 
-  python3 - <<PY
-  import os
-  import pty
-  import select
-  import subprocess
-  import sys
-  import time
-
-  cmd = [os.environ["REQUIRE_SLOT_ENV"]]
-  env = os.environ.copy()
-  env.pop("PROJECT_ENV", None)
-  env.pop("NIX_ENV", None)
-  env.pop("CI", None)
-  env.pop("NO_TTY", None)
-  env["TERM"] = "xterm-256color"
-
-  master, slave = pty.openpty()
-  proc = subprocess.Popen(
-      cmd,
-      env=env,
-      stdin=slave,
-      stdout=slave,
-      stderr=slave,
-      close_fds=True,
-  )
-  os.close(slave)
-  os.write(master, b"n\n")
-
-  output = b""
-  deadline = time.time() + 5
-  while True:
-      if time.time() > deadline:
-          proc.kill()
-          print("timeout waiting for prompt")
-          sys.exit(1)
-      r, _, _ = select.select([master], [], [], 0.2)
-      if r:
-          try:
-              chunk = os.read(master, 1024)
-          except OSError:
-              break
-          if not chunk:
-              break
-          output += chunk
-      if proc.poll() is not None and not r:
-          break
-
-  rc = proc.wait()
-  try:
-      os.close(master)
-  except OSError:
-      pass
-
-  text = output.decode("utf-8", "ignore")
-  if rc == 0:
-      print("expected non-zero rc")
-      print(text)
-      sys.exit(1)
-  if "Continue with these defaults" not in text:
-      print("missing prompt text")
-      print(text)
-      sys.exit(1)
-  if "Aborted." not in text:
-      print("missing abort message")
-      print(text)
-      sys.exit(1)
-  PY
+  # Compatibility alias: NIXFIED_ENV should be accepted as slot input.
+  unset NIX_ENV
+  export NIXFIED_ENV="4"
+  export PROJECT_ENV="dev"
+  load_slot_info
+  if [ "$SLOT" != "4" ]; then
+    fail "NIXFIED_ENV alias did not set slot (got $SLOT)"
+  fi
+  if [ "$BACKEND_PORT" -ne 3014 ]; then
+    fail "alias slot 4 backend port mismatch: $BACKEND_PORT"
+  fi
 
   # Example: requireSlotEnv rejects invalid slot and env values.
   set +e

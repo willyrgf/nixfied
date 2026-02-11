@@ -271,7 +271,11 @@ let
                 name = appName;
                 value = appApi.mkNixfiedApp {
                   name = appName;
-                  script = toString op.script;
+                  script = ''
+                    SLOT_ENV_OUT="$($REQUIRE_SLOT_ENV)" || exit 1
+                    eval "$SLOT_ENV_OUT"
+                    ${toString op.script}
+                  '';
                   env = { };
                   useDeps = false;
                   api = {

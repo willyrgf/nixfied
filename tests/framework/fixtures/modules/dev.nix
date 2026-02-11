@@ -148,22 +148,23 @@
           exit 1
         fi
 
-        # Example: module hooks should fail cleanly when required env vars are missing.
-        unset PGDATA PGPORT PGDATABASE
+        # Example: module hooks should fail cleanly when slot/env are missing.
+        unset "${project.envVar}" "${project.slotVar}" NIXFIED_ENV
         if run_hook POSTGRES_START >/dev/null 2>&1; then
-          echo "POSTGRES_START should fail without PGDATA/PGPORT" >&2
+          echo "POSTGRES_START should fail without slot/env" >&2
           exit 1
         fi
         if run_hook POSTGRES_INIT >/dev/null 2>&1; then
-          echo "POSTGRES_INIT should fail without PGDATA/PGPORT" >&2
+          echo "POSTGRES_INIT should fail without slot/env" >&2
           exit 1
         fi
         if run_hook POSTGRES_SETUP_DB >/dev/null 2>&1; then
-          echo "POSTGRES_SETUP_DB should fail without PGPORT/PGDATABASE" >&2
+          echo "POSTGRES_SETUP_DB should fail without slot/env" >&2
           exit 1
         fi
-        export PGDATA="$BASE_DIR/postgres-$SLOT-$ENV"
-        export PGPORT="$POSTGRES_PORT"
+        export "${project.envVar}"="dev"
+        export "${project.slotVar}"="1"
+        eval "$("$SLOT_INFO")"
 
         if run_hook NGINX_SITE_PROXY >/dev/null 2>&1; then
           echo "NGINX_SITE_PROXY should fail without args" >&2

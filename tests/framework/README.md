@@ -23,7 +23,7 @@ The test runner validates:
 - Flake evaluation (`nix flake show`, `nix flake check --no-build`).
 - Core apps (`help`, `dev`, `test`, `build`, `check`, `ci`).
 - Helper functions (log_capture, summary_parse, wait_http/port, start_service, with_service, with_cleanup).
-- Slot/env helpers (SLOT_INFO ports, REQUIRE_SLOT_ENV prompt behavior).
+- Slot/env helpers (SLOT_INFO explicit env/slot validation, REQUIRE_SLOT_ENV failure paths).
 - CI DSL behavior (modes, errors, step skipping, cleanup, teardown, artifacts, summary output, summary.json).
 - Module hooks for Postgres and Nginx (init, start/stop, config generation, error paths).
 - Supervisor config generation and hooks.
@@ -45,17 +45,19 @@ with_service web --wait-port "$PORT" -- python3 -m http.server "$PORT" --bind 12
 ART_PATH=$(artifact_path "quality.log")
 log_capture "$ART_PATH" -- ./lint
 
-# Resolve env defaults from the command name.
-export COMMAND_NAME="ci"
+# Resolve slot/env values explicitly.
+export PROJECT_ENV="test"
+export NIX_ENV="0"
 eval "$(${SLOT_INFO})"
-echo "$ENV"  # test
+echo "$ENV"   # test
+echo "$SLOT"  # 0
 ```
 
 ## Examples index
 
 If you want end‑to‑end examples, start here:
 - `fixtures/helpers/runtime.nix` — helper utilities in real scripts (log_capture, with_service, artifact_path).
-- `fixtures/slots/runtime.nix` — slot/env resolution patterns and prompt behavior.
+- `fixtures/slots/runtime.nix` — slot/env strict validation and alias behavior.
 - `fixtures/ci/ci.nix` — CI DSL wiring and step control.
 - `fixtures/ci/retention.nix` — artifact retention modes.
 - `fixtures/ci/unknown-step.nix` — failure on misconfigured steps.
