@@ -8,6 +8,43 @@
 
 let
   inherit (lib.appApi) mkNixfiedApp;
+  installManifest = import ./install-manifest.nix { inherit pkgs; };
+  projectTemplates = installManifest.projectTemplates;
+  frameworkHelpers = installManifest.frameworkHelpers;
+  requiredTemplates = builtins.filter (t: t.required or false) projectTemplates;
+  optionalTemplates = builtins.filter (t: !(t.required or false)) projectTemplates;
+  filterHelpValues = builtins.concatStringsSep "," installManifest.templateFilterDisplayTokens;
+  filterAliasNotes = builtins.concatStringsSep "; " (
+    builtins.concatLists (map (t: map (alias: "${alias} is an alias of ${t.file}") (t.aliases or [ ])) projectTemplates)
+  );
+  requiredKeepAssignments = pkgs.lib.concatMapStringsSep "\n" (t: "                                  KEEP[${t.key}]=1") requiredTemplates;
+  filterCaseArms = pkgs.lib.concatMapStringsSep "\n" (
+    t:
+    pkgs.lib.concatMapStringsSep "\n" (
+      token: ''
+                                      ${token})
+                                        KEEP[${t.key}]=1
+                                        ;;
+      ''
+    ) ([ t.key ] ++ (t.aliases or [ ]))
+  ) projectTemplates;
+  optionalTemplatePruneScript = pkgs.lib.concatMapStringsSep "\n" (
+    t: ''
+                                  if [ -z "''${KEEP[${t.key}]:-}" ]; then
+                                    rm -f "$ROOT/nixfied/project/${t.file}" 2>/dev/null || true
+                                  fi
+    ''
+  ) optionalTemplates;
+  filteredDefaultImportsScript = pkgs.lib.concatMapStringsSep "\n" (
+    t: ''
+                                      if [ -n "''${KEEP[${t.key}]:-}" ]; then
+                                        echo "    (import ./${t.file} { inherit pkgs project; })"
+                                      fi
+    ''
+  ) optionalTemplates;
+  filteredTemplateHint = builtins.concatStringsSep "," (
+    map (t: pkgs.lib.strings.removeSuffix ".nix" t.file) optionalTemplates
+  );
 
   promptPlanScript = pkgs.writeShellScript "nixfied-prompt-plan" ''
                             set -euo pipefail
@@ -247,7 +284,7 @@ let
                                         echo "  --force                Overwrite existing nix files (flake.nix/flake.lock/nixfied)"
                                         echo "                         and, without --worktree, apply changes on the current branch"
                                         echo "  --filter=LIST          Fresh install only: install subset of project templates"
-                                        echo "                         (values: conf,dev,test,build,quality,ci; build is an alias of prod.nix)"
+                                        echo "                         (values: ${filterHelpValues}${if filterAliasNotes != "" then "; ${filterAliasNotes}" else ""})"
                                         echo "  --worktree             Install into a git worktree for the nixfied branch (keeps current checkout unchanged)"
                                         echo "  --target=PATH          With --worktree: worktree directory path (default: <repo>_nixfied)"
                                         echo "  --sync                 Deprecated (no-op); kept for backward compatibility"
@@ -534,17 +571,12 @@ let
                                 if [ -n "$FILTERS_RAW" ]; then
                                   IFS=',' read -r -a FILTERS <<< "$FILTERS_RAW"
                                   declare -A KEEP
-                                  KEEP[conf]=1
+${requiredKeepAssignments}
 
                                   for f in "''${FILTERS[@]}"; do
                                     f="''${f,,}"
                                     case "$f" in
-                                      build)
-                                        KEEP[prod]=1
-                                        ;;
-                                      conf|dev|test|prod|quality|ci)
-                                        KEEP["$f"]=1
-                                        ;;
+${filterCaseArms}
                                       "")
                                         ;;
                         	              *)
@@ -554,11 +586,7 @@ let
                         	            esac
                         	          done
 
-                                  for f in dev test prod quality ci; do
-                                    if [ -z "''${KEEP[$f]:-}" ]; then
-                                      rm -f "$ROOT/nixfied/project/$f.nix" 2>/dev/null || true
-                                    fi
-                                  done
+${optionalTemplatePruneScript}
 
                                   {
                                     echo "{ pkgs ? null }:"
@@ -568,11 +596,7 @@ let
                                     echo "  project = conf.project or { };"
                                     echo "  parts = ["
                                     echo "    conf"
-                                    for f in dev test prod quality ci; do
-                                      if [ -n "''${KEEP[$f]:-}" ]; then
-                                        echo "    (import ./$f.nix { inherit pkgs project; })"
-                                      fi
-                                    done
+${filteredDefaultImportsScript}
                                     echo "  ];"
                                     echo "in"
                                     echo "pkgs.lib.foldl' pkgs.lib.recursiveUpdate { } parts"
@@ -599,58 +623,36 @@ let
                         		          echo "    Preserved nixfied/project/ and nixfied/local/ (pass --reset-project to overwrite project templates)."
                         		        else
                         		          echo "OK: Framework installed."
-                        		        fi
+                                fi
                                 echo "Next:"
                                 echo "  - Edit nixfied/project/conf.nix"
-                                echo "  - Customize nixfied/project/{dev,test,prod,quality,ci}.nix (prod.nix defines the build command)"
+                                echo "  - Customize nixfied/project/{${filteredTemplateHint}}.nix (prod.nix defines the build command)"
   '';
+
+  helperScriptFor =
+    helper:
+    if helper.runner == "install" then
+      installScript
+    else if helper.runner == "prompt-plan" then
+      ''
+        ${promptPlanScript} "$@"
+      ''
+    else
+      throw "Unknown framework helper runner: ${helper.runner}";
+
+  mkFrameworkHelperApp =
+    helper:
+    mkNixfiedApp {
+      name = helper.name;
+      api = helper.api;
+      env = helper.env or { };
+      useDeps = false;
+      script = helperScriptFor helper;
+    };
 in
-{
-  install = mkNixfiedApp {
-    name = "install";
-    api = {
-      version = 1;
-      summary = "Install Nixfied framework into a repository";
-      details = "Installs the Nixfied framework into a target repository (writes flake.nix and nixfied/), optionally generating project scaffolding.";
-      usage = [
-        "nix run .#framework::install -- [--force] [--filter=...] [--reset-project] [--no-prompt-plan]"
-      ];
-      category = "framework";
-    };
-    env = { };
-    useDeps = false;
-    script = installScript;
-  };
-
-  upgrade = mkNixfiedApp {
-    name = "upgrade";
-    api = {
-      version = 1;
-      summary = "Upgrade Nixfied framework in-place (preserving nixfied/project and nixfied/local by default)";
-      details = "Upgrades the Nixfied framework in-place. By default it preserves nixfied/project and nixfied/local so project-specific configuration and extensions remain intact.";
-      usage = [ "nix run .#framework::upgrade -- [--force] [--reset-project] [--no-prompt-plan]" ];
-      category = "framework";
-    };
-    env = {
-      NIXFIED_INSTALL_MODE = "upgrade";
-    };
-    useDeps = false;
-    script = installScript;
-  };
-
-  "prompt-plan" = mkNixfiedApp {
-    name = "prompt-plan";
-    api = {
-      version = 1;
-      summary = "Generate Nixfied prompt plan from project docs";
-      details = "Generates a prompt plan document (for agents) from the repository's project docs. This is framework-only and can be disabled via NIXFIED_PROMPT_PLAN=0.";
-      usage = [ "nix run .#framework::prompt-plan -- [--force] [--output=PATH]" ];
-      category = "framework";
-    };
-    env = { };
-    useDeps = false;
-    script = ''
-      ${promptPlanScript} "$@"
-    '';
-  };
-}
+builtins.listToAttrs (
+  map (helper: {
+    name = helper.name;
+    value = mkFrameworkHelperApp helper;
+  }) frameworkHelpers
+)

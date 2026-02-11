@@ -8,6 +8,7 @@ Each framework file must appear here with at least one validating scenario.
 - `nixfied/.framework/hooks.nix`: module hook export assertions in `.framework/internal/test.nix`
 - `nixfied/.framework/internal/core.nix`: core app smoke checks (`help/dev/test/build/check/ci`)
 - `nixfied/.framework/internal/install.nix`: installer/upgrade/re-entry/filter/error fixtures in `.framework/internal/test.nix`
+- `nixfied/.framework/internal/install-manifest.nix`: installer helper/filter generation coverage in `.framework/internal/test.nix`
 - `nixfied/.framework/internal/isolation.nix`: `framework::test --profile full` isolation runner path
 - `nixfied/.framework/internal/module-apps.nix`: module app exposure and strict slot/env checks
 - `nixfied/.framework/internal/test.nix`: `framework::test` self-run smoke and fixture orchestration

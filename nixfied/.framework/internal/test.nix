@@ -764,6 +764,9 @@ let
     FRAMEWORK_INSTALL_HELP="$WORKDIR/framework-install-help.txt"
     run_app "$INSTALL_TARGET" "framework::install" --help > "$FRAMEWORK_INSTALL_HELP"
     assert_contains "$FRAMEWORK_INSTALL_HELP" "framework::install"
+    FRAMEWORK_UPGRADE_HELP="$WORKDIR/framework-upgrade-help.txt"
+    run_app "$INSTALL_TARGET" "framework::upgrade" --help > "$FRAMEWORK_UPGRADE_HELP"
+    assert_contains "$FRAMEWORK_UPGRADE_HELP" "framework::upgrade"
     PROMPT_PLAN_OUT="$WORKDIR/prompt-plan-disabled.md"
     assert_file_absent "$PROMPT_PLAN_OUT"
     PROMPT_PLAN_LOG="$WORKDIR/prompt-plan-disabled.log"
@@ -822,6 +825,26 @@ let
     assert_app_missing "$FILTER_TARGET" "build"
     assert_app_missing "$FILTER_TARGET" "check"
     run_app_quiet "$FILTER_TARGET" ci --summary
+
+    log "installer filter build alias"
+    INSTALL_FILTER_BUILD="$WORKDIR/install-filter-build"
+    init_repo "$INSTALL_FILTER_BUILD"
+    (cd "$INSTALL_FILTER_BUILD" && nix run "path:$ROOT"#framework::install -- --filter=conf,build >/dev/null)
+    FILTER_BUILD_TARGET="$INSTALL_FILTER_BUILD"
+    assert_file_exists "$FILTER_BUILD_TARGET/nixfied/project/prod.nix"
+    assert_file_absent "$FILTER_BUILD_TARGET/nixfied/project/dev.nix"
+    assert_file_absent "$FILTER_BUILD_TARGET/nixfied/project/test.nix"
+    assert_file_absent "$FILTER_BUILD_TARGET/nixfied/project/quality.nix"
+    assert_file_absent "$FILTER_BUILD_TARGET/nixfied/project/ci.nix"
+    if ! grep -q "prod.nix" "$FILTER_BUILD_TARGET/nixfied/project/default.nix"; then
+      fail "default.nix should include prod.nix when filtered with build alias"
+    fi
+    FILTER_BUILD_HELP="$WORKDIR/filter-build-help.txt"
+    run_app "$FILTER_BUILD_TARGET" help > "$FILTER_BUILD_HELP"
+    assert_contains "$FILTER_BUILD_HELP" "build  Build artifacts"
+    assert_app_missing "$FILTER_BUILD_TARGET" "ci"
+    assert_app_missing "$FILTER_BUILD_TARGET" "check"
+    run_app_quiet "$FILTER_BUILD_TARGET" build
 
     log "installer invalid filter"
     INSTALL_BAD_FILTER="$WORKDIR/install-bad-filter"
