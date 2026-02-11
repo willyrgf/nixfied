@@ -29,6 +29,7 @@ rec {
   slots = {
     max = 9;
     stride = 1;
+    default = 0;
   };
 
   # Port roles (keys become <KEY>_PORT in slot scripts)

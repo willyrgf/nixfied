@@ -1559,15 +1559,16 @@ let
     fi
     assert_contains "$STRICT_UP_MISSING_ENV_LOG" "PROJECT_ENV must be set"
 
-    STRICT_UP_MISSING_SLOT_LOG="$WORKDIR/strict-up-missing-slot.log"
+    STRICT_REQUIRE_MISSING_SLOT_LOG="$WORKDIR/strict-require-missing-slot.log"
     set +e
-    PROJECT_ENV=dev "$STRICT_UP_SCRIPT" > "$STRICT_UP_MISSING_SLOT_LOG" 2>&1
+    PROJECT_ENV=dev "$STRICT_REQUIRE_SLOT_ENV_SCRIPT" > "$STRICT_REQUIRE_MISSING_SLOT_LOG" 2>&1
     RC=$?
     set -e
-    if [ "$RC" -eq 0 ]; then
-      fail "expected up app to fail when NIX_ENV is missing"
+    if [ "$RC" -ne 0 ]; then
+      fail "expected REQUIRE_SLOT_ENV to default NIX_ENV when missing"
     fi
-    assert_contains "$STRICT_UP_MISSING_SLOT_LOG" "NIX_ENV must be set"
+    assert_contains "$STRICT_REQUIRE_MISSING_SLOT_LOG" "INFO: default slot selected"
+    assert_contains "$STRICT_REQUIRE_MISSING_SLOT_LOG" "SLOT=0"
 
     STRICT_PG_MISSING_ENV_LOG="$WORKDIR/strict-pg-list-missing-env.log"
     set +e

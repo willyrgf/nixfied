@@ -45,7 +45,7 @@
     fail "prod slot 0 backend port mismatch: $BACKEND_PORT"
   fi
 
-  # SLOT_INFO should fail when slot/env are missing and should not infer from command name.
+  # SLOT_INFO should fail when env is missing and should not infer from command name.
   unset PROJECT_ENV NIX_ENV NIXFIED_ENV
   export COMMAND_NAME="ci"
   set +e
@@ -53,9 +53,10 @@
   RC=$?
   set -e
   if [ "$RC" -eq 0 ]; then
-    fail "expected SLOT_INFO to fail without PROJECT_ENV/NIX_ENV"
+    fail "expected SLOT_INFO to fail without PROJECT_ENV"
   fi
-  echo "$OUT" | grep -q "NIX_ENV must be set" || fail "missing explicit slot error"
+  echo "$OUT" | grep -q "default slot selected" || fail "missing default slot info"
+  echo "$OUT" | grep -q "PROJECT_ENV must be set" || fail "missing explicit env error"
   unset COMMAND_NAME
 
   # REQUIRE_SLOT_ENV should fail fast when env is missing.
@@ -70,17 +71,18 @@
   fi
   echo "$OUT" | grep -q "PROJECT_ENV must be set" || fail "missing explicit env error"
 
-  # REQUIRE_SLOT_ENV should fail fast when slot is missing.
+  # REQUIRE_SLOT_ENV should default slot when it is missing.
   unset NIX_ENV NIXFIED_ENV
   export PROJECT_ENV="dev"
   set +e
   OUT=$("$REQUIRE_SLOT_ENV" 2>&1 < /dev/null)
   RC=$?
   set -e
-  if [ "$RC" -eq 0 ]; then
-    fail "expected REQUIRE_SLOT_ENV to fail when NIX_ENV is unset"
+  if [ "$RC" -ne 0 ]; then
+    fail "expected REQUIRE_SLOT_ENV to default NIX_ENV when unset"
   fi
-  echo "$OUT" | grep -q "NIX_ENV must be set" || fail "missing explicit slot error"
+  echo "$OUT" | grep -q "default slot selected" || fail "missing default slot info"
+  echo "$OUT" | grep -q "SLOT=0" || fail "missing default slot output"
 
   # Compatibility alias: NIXFIED_ENV should be accepted as slot input.
   unset NIX_ENV
