@@ -837,13 +837,28 @@ let
     INSTALL_FORCE="$WORKDIR/force_nixified"
     init_repo "$INSTALL_FORCE"
     mkdir -p "$INSTALL_FORCE/nixfied"
+    FORCE_BRANCH_BEFORE=$(git -C "$INSTALL_FORCE" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
     (cd "$INSTALL_FORCE" && nix run "path:$ROOT"#framework::install -- --force >/dev/null)
+    FORCE_BRANCH_AFTER=$(git -C "$INSTALL_FORCE" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+    if [ "$FORCE_BRANCH_AFTER" != "$FORCE_BRANCH_BEFORE" ]; then
+      fail "expected --force install to keep branch '$FORCE_BRANCH_BEFORE' (got: $FORCE_BRANCH_AFTER)"
+    fi
     assert_file_exists "$INSTALL_FORCE/flake.nix"
     if [ ! -d "$INSTALL_FORCE/nixfied" ]; then
       fail "expected nixfied/ directory in force target"
     fi
     assert_file_absent "$INSTALL_FORCE/nixfied/.framework/.workspace"
     assert_file_absent "$INSTALL_FORCE/NIXFIED_PROMPT_PLAN.md"
+
+    log "upgrade force keeps current branch"
+    echo "# NIXFIED_FORCE_UPGRADE_TEST_MARKER" >> "$INSTALL_FORCE/nixfied/project/conf.nix"
+    FORCE_UPGRADE_BRANCH_BEFORE=$(git -C "$INSTALL_FORCE" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+    (cd "$INSTALL_FORCE" && nix run "path:$ROOT"#framework::upgrade -- --force >/dev/null)
+    FORCE_UPGRADE_BRANCH_AFTER=$(git -C "$INSTALL_FORCE" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+    if [ "$FORCE_UPGRADE_BRANCH_AFTER" != "$FORCE_UPGRADE_BRANCH_BEFORE" ]; then
+      fail "expected --force upgrade to keep branch '$FORCE_UPGRADE_BRANCH_BEFORE' (got: $FORCE_UPGRADE_BRANCH_AFTER)"
+    fi
+    assert_contains "$INSTALL_FORCE/nixfied/project/conf.nix" "NIXFIED_FORCE_UPGRADE_TEST_MARKER"
 
     log "example project apps (force install)"
     FORCE_HELP="$WORKDIR/force-help.txt"

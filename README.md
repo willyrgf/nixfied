@@ -116,8 +116,10 @@ nix run github:willyrgf/nixfied#framework::install
 
 Safety behavior:
 - Installs into the `nixfied` branch (creates it from your current HEAD if missing).
-- If you are on another branch, it switches to `nixfied` before writing files
+- By default, if you are on another branch, it switches to `nixfied` before writing files
   (refuses to switch if the working tree is dirty unless `--force`).
+- With `--force` (and without `--worktree`), install/upgrade run on your current branch
+  instead of switching to `nixfied`.
 - It installs only `flake.nix`, `flake.lock`, and `nixfied/`.
 - Customize your project in `nixfied/project/` and `nixfied/local/` (avoid editing framework code).
 
@@ -152,6 +154,8 @@ Upgrade an existing install (upgrades framework files, preserves `nixfied/projec
 cd my-app
 nix run github:willyrgf/nixfied#framework::upgrade -- --force
 ```
+
+With `--force` (and without `--worktree`), upgrade runs in your current branch.
 
 To overwrite project templates during upgrade:
 
