@@ -95,6 +95,15 @@
           echo "Skipping POSTGRES_START (port in use)" >&2
         else
           set +e
+          run_hook POSTGRES_HEALTH >/dev/null 2>&1
+          POSTGRES_PRE_HEALTH_RC=$?
+          set -e
+          if [ "$POSTGRES_PRE_HEALTH_RC" -eq 0 ]; then
+            echo "POSTGRES_HEALTH should fail before start" >&2
+            exit 1
+          fi
+
+          set +e
           run_hook POSTGRES_START
           POSTGRES_RC=$?
           set -e
@@ -118,6 +127,11 @@
             exit 1
           fi
 
+          run_hook POSTGRES_HEALTH >/dev/null || {
+            echo "POSTGRES_HEALTH should pass while running" >&2
+            exit 1
+          }
+
           export PGDATABASE="nixfied_test"
           run_hook POSTGRES_SETUP_DB
 
@@ -130,6 +144,15 @@
           done
           if [ -f "$PGDATA/postmaster.pid" ]; then
             echo "postmaster.pid still present after stop" >&2
+            exit 1
+          fi
+
+          set +e
+          run_hook POSTGRES_HEALTH >/dev/null 2>&1
+          POSTGRES_POST_HEALTH_RC=$?
+          set -e
+          if [ "$POSTGRES_POST_HEALTH_RC" -eq 0 ]; then
+            echo "POSTGRES_HEALTH should fail after stop" >&2
             exit 1
           fi
         fi
@@ -173,6 +196,14 @@
           echo "POSTGRES_SETUP_DB should fail without slot/env" >&2
           exit 1
         fi
+        if run_hook POSTGRES_HEALTH >/dev/null 2>&1; then
+          echo "POSTGRES_HEALTH should fail without slot/env" >&2
+          exit 1
+        fi
+        if run_hook NGINX_HEALTH >/dev/null 2>&1; then
+          echo "NGINX_HEALTH should fail without slot/env" >&2
+          exit 1
+        fi
         export "${project.envVar}"="dev"
         export "${project.slotVar}"="1"
         eval "$("$SLOT_INFO")"
@@ -189,6 +220,15 @@
         if nc -z 127.0.0.1 "$HTTP_PORT" >/dev/null 2>&1 || nc -z 127.0.0.1 "$HTTPS_PORT" >/dev/null 2>&1; then
           echo "Skipping NGINX_START (port in use)" >&2
         else
+          set +e
+          run_hook NGINX_HEALTH >/dev/null 2>&1
+          NGINX_PRE_HEALTH_RC=$?
+          set -e
+          if [ "$NGINX_PRE_HEALTH_RC" -eq 0 ]; then
+            echo "NGINX_HEALTH should fail before start" >&2
+            exit 1
+          fi
+
           NGINX_PID=$(start_service nginx -- "$NGINX_START")
           for i in $(seq 1 20); do
             if [ -f "$NGINX_DIR/run/nginx.pid" ]; then
@@ -201,6 +241,11 @@
             exit 1
           fi
 
+          run_hook NGINX_HEALTH >/dev/null || {
+            echo "NGINX_HEALTH should pass while running" >&2
+            exit 1
+          }
+
           run_hook NGINX_STOP
           for i in $(seq 1 20); do
             if [ ! -f "$NGINX_DIR/run/nginx.pid" ]; then
@@ -210,6 +255,15 @@
           done
           if [ -f "$NGINX_DIR/run/nginx.pid" ]; then
             echo "nginx pid still present after stop" >&2
+            exit 1
+          fi
+
+          set +e
+          run_hook NGINX_HEALTH >/dev/null 2>&1
+          NGINX_POST_HEALTH_RC=$?
+          set -e
+          if [ "$NGINX_POST_HEALTH_RC" -eq 0 ]; then
+            echo "NGINX_HEALTH should fail after stop" >&2
             exit 1
           fi
           if kill -0 "$NGINX_PID" 2>/dev/null; then
@@ -229,6 +283,15 @@
         if nc -z 127.0.0.1 "$MINIOAPI_PORT" >/dev/null 2>&1 || nc -z 127.0.0.1 "$MINIOCONSOLE_PORT" >/dev/null 2>&1; then
           echo "Skipping MINIO_START (port in use)" >&2
         else
+          set +e
+          run_hook MINIO_HEALTH >/dev/null 2>&1
+          MINIO_PRE_HEALTH_RC=$?
+          set -e
+          if [ "$MINIO_PRE_HEALTH_RC" -eq 0 ]; then
+            echo "MINIO_HEALTH should fail before start" >&2
+            exit 1
+          fi
+
           MINIO_PID=$(start_service minio -- "$MINIO_START")
           MINIO_READY=0
           for i in $(seq 1 50); do
@@ -245,6 +308,20 @@
 
           run_hook MINIO_BUCKET_LIST >/dev/null
           run_hook MINIO_STOP
+
+          MINIO_DOWN=0
+          for i in $(seq 1 40); do
+            if run_hook MINIO_HEALTH >/dev/null 2>&1; then
+              sleep 0.2
+            else
+              MINIO_DOWN=1
+              break
+            fi
+          done
+          if [ "$MINIO_DOWN" -ne 1 ]; then
+            echo "MINIO_HEALTH should fail after stop" >&2
+            exit 1
+          fi
 
           if kill -0 "$MINIO_PID" 2>/dev/null; then
             stop_service "$MINIO_PID" "minio"
@@ -263,9 +340,18 @@
         if nc -z 127.0.0.1 "$RETHHTTP_PORT" >/dev/null 2>&1; then
           echo "Skipping RETH_START (port in use)" >&2
         else
+          set +e
+          run_hook RETH_HEALTH >/dev/null 2>&1
+          RETH_PRE_HEALTH_RC=$?
+          set -e
+          if [ "$RETH_PRE_HEALTH_RC" -eq 0 ]; then
+            echo "RETH_HEALTH should fail before start" >&2
+            exit 1
+          fi
+
           RETH_PID=$(start_service reth -- "$RETH_START")
           RETH_READY=0
-          for i in $(seq 1 50); do
+          for i in $(seq 1 120); do
             if run_hook RETH_HEALTH >/dev/null 2>&1; then
               RETH_READY=1
               break
@@ -278,6 +364,20 @@
           fi
 
           run_hook RETH_STOP
+          RETH_DOWN=0
+          for i in $(seq 1 40); do
+            if run_hook RETH_HEALTH >/dev/null 2>&1; then
+              sleep 0.2
+            else
+              RETH_DOWN=1
+              break
+            fi
+          done
+          if [ "$RETH_DOWN" -ne 1 ]; then
+            echo "RETH_HEALTH should fail after stop" >&2
+            exit 1
+          fi
+
           if kill -0 "$RETH_PID" 2>/dev/null; then
             stop_service "$RETH_PID" "reth"
           fi
@@ -286,6 +386,7 @@
         HELIOS_DIR="$BASE_DIR/helios-$SLOT-$ENV"
         run_hook HELIOS_INIT
         run_hook HELIOS_INIT
+        export HELIOS_CONSENSUS_RPC_URL="http://127.0.0.1:$RETHHTTP_PORT"
         if [ ! -d "$HELIOS_DIR/data" ]; then
           echo "helios data dir missing" >&2
           exit 1
@@ -295,9 +396,18 @@
         if nc -z 127.0.0.1 "$HELIOSRPC_PORT" >/dev/null 2>&1; then
           echo "Skipping HELIOS_START (port in use)" >&2
         else
+          set +e
+          run_hook HELIOS_HEALTH >/dev/null 2>&1
+          HELIOS_PRE_HEALTH_RC=$?
+          set -e
+          if [ "$HELIOS_PRE_HEALTH_RC" -eq 0 ]; then
+            echo "HELIOS_HEALTH should fail before start" >&2
+            exit 1
+          fi
+
           HELIOS_PID=$(start_service helios -- "$HELIOS_START")
           HELIOS_READY=0
-          for i in $(seq 1 50); do
+          for i in $(seq 1 120); do
             if run_hook HELIOS_HEALTH >/dev/null 2>&1; then
               HELIOS_READY=1
               break
@@ -310,6 +420,20 @@
           fi
 
           run_hook HELIOS_STOP
+          HELIOS_DOWN=0
+          for i in $(seq 1 40); do
+            if run_hook HELIOS_HEALTH >/dev/null 2>&1; then
+              sleep 0.2
+            else
+              HELIOS_DOWN=1
+              break
+            fi
+          done
+          if [ "$HELIOS_DOWN" -ne 1 ]; then
+            echo "HELIOS_HEALTH should fail after stop" >&2
+            exit 1
+          fi
+
           if kill -0 "$HELIOS_PID" 2>/dev/null; then
             stop_service "$HELIOS_PID" "helios"
           fi

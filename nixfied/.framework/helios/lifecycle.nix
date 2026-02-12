@@ -36,6 +36,12 @@ let
       HELIOS_EXECUTION_RPC_URL="http://127.0.0.1:$HELIOS_EXECUTION_PORT"
     fi
 
+    # Helios local profile expects a consensus endpoint; default to execution RPC
+    # so local dev/testing can run without a separate consensus client.
+    if [ "$HELIOS_NETWORK" = "local" ] && [ -z "$HELIOS_CONSENSUS_RPC_URL" ] && [ -n "$HELIOS_EXECUTION_RPC_URL" ]; then
+      HELIOS_CONSENSUS_RPC_URL="$HELIOS_EXECUTION_RPC_URL"
+    fi
+
     if [ -z "$HELIOS_RPC_PORT" ]; then
       echo "ERROR: helios RPC port variable is not set" >&2
       exit 1

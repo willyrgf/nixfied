@@ -25,8 +25,8 @@ The test runner validates:
 - Helper functions (log_capture, summary_parse, wait_http/port, start_service, with_service, with_cleanup).
 - Slot/env helpers (SLOT_INFO explicit env/slot validation, REQUIRE_SLOT_ENV failure paths).
 - CI DSL behavior (modes, errors, step skipping, cleanup, teardown, artifacts, summary output, summary.json).
-- Module hooks for Postgres and Nginx (init, start/stop, config generation, error paths).
-- Supervisor config generation and hooks.
+- Service module hooks for Postgres, Nginx, MinIO, Reth, and Helios (init/start/stop/check-config and health pass/fail paths).
+- Supervisor config generation/hook exposure, readiness enforcement, and service-level health checks.
 - Ephemeral slot locking (acquire/release, env var export).
 - Run registry (foreground run tracking, meta.json, output.log).
 - Module apps exposure (db-*, nginx-*, supervisor apps present/absent based on config).
@@ -61,7 +61,7 @@ If you want end‑to‑end examples, start here:
 - `fixtures/ci/ci.nix` — CI DSL wiring and step control.
 - `fixtures/ci/retention.nix` — artifact retention modes.
 - `fixtures/ci/unknown-step.nix` — failure on misconfigured steps.
-- `fixtures/modules/dev.nix` — Postgres/Nginx hook usage + error paths.
+- `fixtures/modules/dev.nix` — service hook lifecycle and health behavior across all supported modules.
 - `fixtures/ephemeral/lock.nix` — Ephemeral slot lock acquire/release.
 - `fixtures/registry/foreground.nix` — Run registry foreground tracking.
 

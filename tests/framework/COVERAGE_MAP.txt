@@ -24,31 +24,31 @@ Each framework file must appear here with at least one validating scenario.
 - `nixfied/.framework/lib/summary.nix`: helper `summary_parse` checks in `fixtures/helpers/runtime.nix`
 - `nixfied/.framework/minio/bucket-management.nix`: `fixtures/minio/bucket-ops.nix`
 - `nixfied/.framework/minio/config.nix`: `fixtures/modules/conf.nix`, `fixtures/minio/bucket-ops.nix`
-- `nixfied/.framework/minio/default.nix`: `fixtures/modules/dev.nix`, `fixtures/minio/bucket-ops.nix`
-- `nixfied/.framework/minio/lifecycle.nix`: `fixtures/modules/dev.nix`, `fixtures/minio/bucket-ops.nix`
+- `nixfied/.framework/minio/default.nix`: `fixtures/modules/dev.nix`, `fixtures/minio/bucket-ops.nix` (health fail/pass coverage)
+- `nixfied/.framework/minio/lifecycle.nix`: `fixtures/modules/dev.nix`, `fixtures/minio/bucket-ops.nix` (health fail/pass coverage)
 - `nixfied/.framework/reth/config.nix`: `fixtures/modules/conf.nix`, `fixtures/reth/lifecycle.nix`
-- `nixfied/.framework/reth/default.nix`: `fixtures/modules/dev.nix`, `fixtures/reth/lifecycle.nix`
-- `nixfied/.framework/reth/lifecycle.nix`: `fixtures/modules/dev.nix`, `fixtures/reth/lifecycle.nix`
+- `nixfied/.framework/reth/default.nix`: `fixtures/modules/dev.nix`, `fixtures/reth/lifecycle.nix` (health fail/pass coverage)
+- `nixfied/.framework/reth/lifecycle.nix`: `fixtures/modules/dev.nix`, `fixtures/reth/lifecycle.nix` (real protocol health checks)
 - `nixfied/.framework/helios/package.nix`: `fixtures/modules/conf.nix`, `fixtures/helios/lifecycle.nix`
 - `nixfied/.framework/helios/config.nix`: `fixtures/modules/conf.nix`, `fixtures/helios/lifecycle.nix`
-- `nixfied/.framework/helios/default.nix`: `fixtures/modules/dev.nix`, `fixtures/helios/lifecycle.nix`
-- `nixfied/.framework/helios/lifecycle.nix`: `fixtures/modules/dev.nix`, `fixtures/helios/lifecycle.nix`
-- `nixfied/.framework/nginx/default.nix`: `fixtures/modules/dev.nix`, `fixtures/nginx/site-lifecycle.nix`
-- `nixfied/.framework/nginx/lifecycle.nix`: `fixtures/modules/dev.nix`, `fixtures/nginx/site-lifecycle.nix`
+- `nixfied/.framework/helios/default.nix`: `fixtures/modules/dev.nix`, `fixtures/helios/lifecycle.nix` (health fail/pass coverage)
+- `nixfied/.framework/helios/lifecycle.nix`: `fixtures/modules/dev.nix`, `fixtures/helios/lifecycle.nix` (real Helios + real Reth protocol checks)
+- `nixfied/.framework/nginx/default.nix`: `fixtures/modules/dev.nix`, `fixtures/nginx/site-lifecycle.nix` (health fail/pass coverage)
+- `nixfied/.framework/nginx/lifecycle.nix`: `fixtures/modules/dev.nix`, `fixtures/nginx/site-lifecycle.nix` (health fail/pass coverage)
 - `nixfied/.framework/nginx/site-management.nix`: `fixtures/modules/dev.nix`, `fixtures/nginx/site-lifecycle.nix`
 - `nixfied/.framework/nginx/ssl.nix`: `fixtures/nginx/site-lifecycle.nix` (self-signed lifecycle and status/list coverage)
 - `nixfied/.framework/nginx/templates.nix`: nginx init/site generation checks in module and nginx fixtures
 - `nixfied/.framework/postgres/backup.nix`: `fixtures/postgres/extensions.nix`
 - `nixfied/.framework/postgres/config.nix`: postgres module fixture configuration checks
-- `nixfied/.framework/postgres/default.nix`: `fixtures/modules/dev.nix`, `fixtures/postgres/extensions.nix`
-- `nixfied/.framework/postgres/lifecycle.nix`: `fixtures/modules/dev.nix`
+- `nixfied/.framework/postgres/default.nix`: `fixtures/modules/dev.nix`, `fixtures/postgres/extensions.nix` (health fail/pass coverage)
+- `nixfied/.framework/postgres/lifecycle.nix`: `fixtures/modules/dev.nix` (health fail/pass coverage)
 - `nixfied/.framework/postgres/migration-safety.nix`: `fixtures/postgres/extensions.nix`
 - `nixfied/.framework/postgres/migration.nix`: `fixtures/postgres/extensions.nix`
 - `nixfied/.framework/postgres/port-management.nix`: `fixtures/postgres/extensions.nix`
 - `nixfied/.framework/postgres/rollback.nix`: `fixtures/postgres/extensions.nix`
 - `nixfied/.framework/slots.nix`: `fixtures/slots/runtime.nix` and strict slot/env checks
-- `nixfied/.framework/supervisor/config.nix`: supervisor config fixture
-- `nixfied/.framework/supervisor/default.nix`: supervisor hooks fixture and management fixture
-- `nixfied/.framework/supervisor/lifecycle.nix`: module app exposure and supervisor hooks checks
+- `nixfied/.framework/supervisor/config.nix`: supervisor config fixture (including missing-readiness hard-fail)
+- `nixfied/.framework/supervisor/default.nix`: supervisor hooks fixture and management fixture (including health export)
+- `nixfied/.framework/supervisor/lifecycle.nix`: module app exposure and supervisor hooks checks (including `svc-health`)
 - `nixfied/.framework/supervisor/management.nix`: `fixtures/supervisor/management.nix`
-- `nixfied/.framework/supervisor/status.nix`: `fixtures/supervisor/management.nix`
+- `nixfied/.framework/supervisor/status.nix`: `fixtures/supervisor/management.nix` (daemon/service health assertions)

@@ -38,9 +38,15 @@
 
   ${rethCheckConfig} >/dev/null || fail "rethCheckConfig failed"
 
+  set +e
+  ${rethHealth} >/dev/null 2>&1
+  RC=$?
+  set -e
+  [ "$RC" -ne 0 ] || fail "rethHealth should fail before start"
+
   RETH_PID=$(start_service reth -- ${rethStart})
   READY=0
-  for _ in $(seq 1 80); do
+  for _ in $(seq 1 120); do
     if ${rethHealth} >/dev/null 2>&1; then
       READY=1
       break
@@ -55,6 +61,17 @@
   if kill -0 "$RETH_PID" 2>/dev/null; then
     stop_service "$RETH_PID" "reth"
   fi
+
+  RETH_DOWN=0
+  for _ in $(seq 1 40); do
+    if ${rethHealth} >/dev/null 2>&1; then
+      sleep 0.2
+    else
+      RETH_DOWN=1
+      break
+    fi
+  done
+  [ "$RETH_DOWN" -eq 1 ] || fail "rethHealth should fail after stop"
 
   echo "reth lifecycle fixture ok"
 
