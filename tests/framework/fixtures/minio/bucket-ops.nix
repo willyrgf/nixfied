@@ -33,8 +33,14 @@
     }
 
     eval "$("$SLOT_INFO")"
-    export MINIOAPI_PORT=$(pick_port)
-    export MINIOCONSOLE_PORT=$(pick_port)
+    API_PORT=$(pick_port)
+    CONSOLE_PORT=$(pick_port)
+    # Support both fixture naming (MINIOAPI_PORT/MINIOCONSOLE_PORT) and
+    # project naming (MINIO_PORT/MINIO_CONSOLE_PORT).
+    export MINIOAPI_PORT="$API_PORT"
+    export MINIOCONSOLE_PORT="$CONSOLE_PORT"
+    export MINIO_PORT="$API_PORT"
+    export MINIO_CONSOLE_PORT="$CONSOLE_PORT"
 
     ${minioInit}
     ${minioInit}
