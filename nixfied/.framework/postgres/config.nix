@@ -13,7 +13,9 @@ let
   # Base configuration shared across all environments
   baseConf = ''
     listen_addresses = 'localhost'
-    port = $PGPORT
+    # Lifecycle hooks rewrite this to the slot-specific runtime port.
+    # Keep a static valid fallback so fresh initdb config always parses.
+    port = 5432
     unix_socket_directories = '/tmp'
     log_destination = 'stderr'
     logging_collector = off

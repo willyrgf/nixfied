@@ -77,7 +77,18 @@
           exit 1
         fi
 
+        if grep -q '\$PGPORT' "$PGDATA/postgresql.conf"; then
+          echo "postgresql.conf still contains unresolved PGPORT placeholder" >&2
+          exit 1
+        fi
+
+        if ! grep -Eq "^[[:space:]]*port[[:space:]]*=[[:space:]]*$PGPORT([[:space:]]|$)" "$PGDATA/postgresql.conf"; then
+          echo "postgresql.conf did not render runtime PGPORT ($PGPORT)" >&2
+          exit 1
+        fi
+
         run_hook POSTGRES_INIT
+        run_hook POSTGRES_CHECK_CONFIG
 
         POSTGRES_STARTED=0
         if nc -z 127.0.0.1 "$PGPORT" >/dev/null 2>&1; then
