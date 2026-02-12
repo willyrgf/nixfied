@@ -11,6 +11,7 @@ let
     (import ./test.nix { inherit pkgs project; })
     (import ./prod.nix { inherit pkgs project; })
     (import ./quality.nix { inherit pkgs project; })
+    (import ./format.nix { inherit pkgs project; })
     (import ./ci.nix { inherit pkgs project; })
   ];
 in
