@@ -604,7 +604,7 @@ let
           enable = true;
           services = {
             app = {
-              command = "echo hello";
+              command = "echo $KEEP_ME";
               workingDir = ".";
             };
           };
@@ -622,6 +622,7 @@ let
     assert_file_exists "$SUP_CONFIG"
     assert_contains "$SUP_CONFIG" "processes:"
     assert_contains "$SUP_CONFIG" "app:"
+    assert_contains "$SUP_CONFIG" 'echo $KEEP_ME'
 
     export NIXFIED_PROMPT_PLAN=0
     log "installer basic"
