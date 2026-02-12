@@ -93,6 +93,7 @@ let
     fi
 
     ARGS=(
+      ethereum
       --network "$HELIOS_NETWORK"
       --rpc-bind-ip 127.0.0.1
       --rpc-port "$HELIOS_RPC_PORT"
@@ -243,7 +244,8 @@ let
       exit 1
     fi
 
-    ${helios}/bin/helios --help >/dev/null 2>&1 || true
+    # Ensure the expected Helios subcommand exists; CLI shape changes should fail fast here.
+    ${helios}/bin/helios ethereum --help >/dev/null 2>&1
     echo "OK: helios configuration valid dir=$HELIOS_DIR network=$HELIOS_NETWORK"
   '';
 in

@@ -176,37 +176,76 @@ rec {
           pkgs.writeShellScriptBin "helios" ''
             set -euo pipefail
 
-            for arg in "$@"; do
-              case "$arg" in
-                --help|-h)
-                  echo "helios-mock help"
+            if [ "$#" -eq 0 ]; then
+              echo "Usage: helios [OPTIONS] <COMMAND>" >&2
+              exit 2
+            fi
+
+            case "$1" in
+              --help|-h)
+                echo "helios-mock"
+                echo ""
+                echo "Usage: helios [OPTIONS] <COMMAND>"
+                echo ""
+                echo "Commands:"
+                echo "  ethereum"
+                echo "  help"
+                echo ""
+                echo "Options:"
+                echo "  -h, --help"
+                echo "  -V, --version"
+                exit 0
+                ;;
+              --version|-V)
+                echo "helios-mock 1.0.0"
+                exit 0
+                ;;
+              ethereum)
+                shift
+                if [ "$#" -gt 0 ] && { [ "$1" = "--help" ] || [ "$1" = "-h" ]; }; then
+                  echo "Usage: helios ethereum [OPTIONS]"
+                  echo ""
+                  echo "Options:"
+                  echo "  --network <NETWORK>"
+                  echo "  --rpc-bind-ip <RPC_BIND_IP>"
+                  echo "  --rpc-port <RPC_PORT>"
+                  echo "  --data-dir <DATA_DIR>"
+                  echo "  --execution-rpc <EXECUTION_RPC>"
+                  echo "  --consensus-rpc <CONSENSUS_RPC>"
+                  echo "  --checkpoint <CHECKPOINT>"
                   exit 0
-                  ;;
-                --version|-V)
-                  echo "helios-mock 1.0.0"
-                  exit 0
-                  ;;
-              esac
-            done
+                fi
+                ;;
+              *)
+                if [ "''${1#-}" != "$1" ]; then
+                  echo "error: unexpected argument '$1' found" >&2
+                  echo "" >&2
+                  echo "Usage: helios [OPTIONS] <COMMAND>" >&2
+                  exit 2
+                fi
+                echo "error: unknown command '$1'" >&2
+                exit 2
+                ;;
+            esac
 
             PORT="8547"
             while [ "$#" -gt 0 ]; do
               case "$1" in
-                            --rpc-port)
-                              PORT="''${2:-$PORT}"
-                              shift 2
-                              ;;
-                            --rpc-port=*)
-                              PORT="''${1#*=}"
-                              shift
-                              ;;
-                            *)
-                              shift
-                              ;;
-                          esac
-                        done
+                --rpc-port)
+                  PORT="''${2:-$PORT}"
+                  shift 2
+                  ;;
+                --rpc-port=*)
+                  PORT="''${1#*=}"
+                  shift
+                  ;;
+                *)
+                  shift
+                  ;;
+              esac
+            done
 
-                        exec ${pkgs.python3}/bin/python3 - "$PORT" <<'PY'
+            exec ${pkgs.python3}/bin/python3 - "$PORT" <<'PY'
             import http.server
             import json
             import socketserver
