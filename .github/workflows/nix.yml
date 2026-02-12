@@ -11,7 +11,7 @@ on:
 env:
   BUILD_CMD: "nix flake check -L -v --log-format bar-with-logs"
   RUN_CMD: "nix run .#help -L -v --log-format bar-with-logs"
-  RUN_TESTS_CMD: "nix run .#framework::test -L -v --log-format bar-with-logs"
+  RUN_TESTS_CMD: "nix run -L -v --log-format bar-with-logs .#framework::test -- --profile full"
 
 jobs:
   build-and-test:

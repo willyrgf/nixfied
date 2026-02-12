@@ -35,7 +35,7 @@ let
       exit 1
     fi
 
-    PROFILE="ci"
+    PROFILE="full"
     SUMMARY_JSON=""
 
     usage() {
@@ -43,7 +43,7 @@ let
     Usage: nix run .#framework::test [--profile ci|full] [--summary-json <path>]
 
     Options:
-      --profile <name>      Test profile to run (ci|full). Default: ci.
+      --profile <name>      Test profile to run (ci|full). Default: full.
       --summary-json <path> Write a compact JSON summary to <path>.
       --help                Show this help.
     EOF
@@ -729,6 +729,7 @@ let
     assert_contains "$BASIC_HELP" "test  Run tests"
     assert_contains "$BASIC_HELP" "build  Build artifacts"
     assert_contains "$BASIC_HELP" "check  Run quality checks"
+    assert_contains "$BASIC_HELP" "format  Format Nix files"
     assert_contains "$BASIC_HELP" "ci  Run the CI pipeline"
     BASIC_HELP_DEV="$WORKDIR/basic-help-dev.txt"
     run_app "$INSTALL_TARGET" help dev > "$BASIC_HELP_DEV"
@@ -739,7 +740,6 @@ let
     run_app_quiet "$INSTALL_TARGET" build
     run_app_quiet "$INSTALL_TARGET" check
     run_app_quiet "$INSTALL_TARGET" ci --summary
-    assert_app_missing "$INSTALL_TARGET" "format"
     assert_app_missing "$INSTALL_TARGET" "framework::install"
     assert_app_missing "$INSTALL_TARGET" "framework::prompt-plan"
     assert_app_missing "$INSTALL_TARGET" "framework::test"
@@ -988,13 +988,13 @@ let
     assert_contains "$FORCE_HELP" "test  Run tests"
     assert_contains "$FORCE_HELP" "build  Build artifacts"
     assert_contains "$FORCE_HELP" "check  Run quality checks"
+    assert_contains "$FORCE_HELP" "format  Format Nix files"
     assert_contains "$FORCE_HELP" "ci  Run the CI pipeline"
     run_app_quiet "$INSTALL_FORCE" dev
     run_app_quiet "$INSTALL_FORCE" test
     run_app_quiet "$INSTALL_FORCE" build
     run_app_quiet "$INSTALL_FORCE" check
     run_app_quiet "$INSTALL_FORCE" ci --summary
-    assert_app_missing "$INSTALL_FORCE" "format"
     assert_app_missing "$INSTALL_FORCE" "framework::install"
     assert_app_missing "$INSTALL_FORCE" "framework::prompt-plan"
     assert_app_missing "$INSTALL_FORCE" "framework::test"
