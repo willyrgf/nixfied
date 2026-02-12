@@ -36,7 +36,7 @@
           "runs"
           "skip-missing"
           "when-false"
-          "requires-nginx"
+          "runs-second"
         ];
       };
       failure = {
@@ -64,11 +64,19 @@
           touch "$(artifact_path "when.ok")"
         '';
       };
-      requires-nginx = {
-        description = "Skipped when module disabled";
-        requires = [ "nginx" ];
+      runs-second = {
+        description = "Second step runs";
+        fixtures = {
+          env = {
+            FIXTURE_STEP_ENV = "from-fixture";
+          };
+        };
         run = ''
-          touch "$(artifact_path "requires.ok")"
+          if [ "$FIXTURE_STEP_ENV" != "from-fixture" ]; then
+            echo "fixture env missing" >&2
+            exit 1
+          fi
+          touch "$(artifact_path "runs-second.ok")"
         '';
       };
       fail-with-cleanup = {

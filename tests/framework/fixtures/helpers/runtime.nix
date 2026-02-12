@@ -96,6 +96,32 @@
   fi
   stop_service "$PID" "sleeper"
 
+  PID2=""
+  start_service_into PID2 sleeper2 -- sleep 5
+  if [ -z "$PID2" ]; then
+    fail "start_service_into did not populate pid variable"
+  fi
+  stop_service "$PID2" "sleeper2"
+
+  READY_PID_FILE="$TMPDIR/readiness-pid"
+  FREE_PORT=$(pick_port) || fail "failed to pick free port for readiness failure"
+  set +e
+  start_service bad-ready --wait-port "$FREE_PORT" --timeout 1 -- \
+    "$BASH" -c "echo \$\$ > \"$READY_PID_FILE\"; sleep 30" >/dev/null 2>&1
+  READY_RC=$?
+  set -e
+  if [ "$READY_RC" -eq 0 ]; then
+    fail "start_service should fail readiness check"
+  fi
+  if [ ! -f "$READY_PID_FILE" ]; then
+    fail "start_service readiness test did not create pid file"
+  fi
+  READY_PID=$(cat "$READY_PID_FILE")
+  sleep 0.2
+  if kill -0 "$READY_PID" 2>/dev/null; then
+    fail "start_service did not stop failed readiness process"
+  fi
+
   WS_PORT=$(pick_port) || fail "failed to pick with_service port"
   with_service web --wait-port "$WS_PORT" -- python3 -m http.server "$WS_PORT" --bind 127.0.0.1 --run \
     "$BASH" -c "nc -z 127.0.0.1 $WS_PORT"

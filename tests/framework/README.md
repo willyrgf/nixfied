@@ -25,7 +25,7 @@ nix run path:.#framework::test
 The test runner validates:
 - Flake evaluation (`nix flake show`, `nix flake check --no-build`).
 - Core apps (`help`, `dev`, `test`, `build`, `check`, `ci`).
-- Helper functions (log_capture, summary_parse, wait_http/port, start_service, with_service, with_cleanup).
+- Helper functions (log_capture, summary_parse, wait_http/port, start_service, start_service_into, with_service, with_cleanup).
 - Slot/env helpers (SLOT_INFO explicit env/slot validation, REQUIRE_SLOT_ENV failure paths).
 - CI DSL behavior (modes, errors, step skipping, cleanup, teardown, artifacts, summary output, summary.json).
 - Service module hooks for Postgres, Nginx, MinIO, Reth, and Helios (init/start/stop/check-config and health pass/fail paths).
