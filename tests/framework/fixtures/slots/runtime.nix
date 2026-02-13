@@ -1,6 +1,7 @@
 { }:
 ''
   set -euo pipefail
+  source ${../support/env-guards.sh}
 
   fail() {
     echo "FAIL: $*" >&2
@@ -9,11 +10,11 @@
 
   echo "slots runtime start"
 
-  if [ -z "''${SLOT_INFO:-}" ] || [ ! -x "$SLOT_INFO" ]; then
+  if ! require_executable_env_var SLOT_INFO; then
     fail "SLOT_INFO not executable"
   fi
 
-  if [ -z "''${REQUIRE_SLOT_ENV:-}" ] || [ ! -x "$REQUIRE_SLOT_ENV" ]; then
+  if ! require_executable_env_var REQUIRE_SLOT_ENV; then
     fail "REQUIRE_SLOT_ENV not executable"
   fi
 

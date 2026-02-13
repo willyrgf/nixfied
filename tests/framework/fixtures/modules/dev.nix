@@ -11,6 +11,7 @@
       useDeps = false;
       script = ''
         set -euo pipefail
+        source ${../support/env-guards.sh}
 
         require_env "${project.envVar}"
         if skip_if_missing "THIS_SHOULD_BE_MISSING" "missing on purpose"; then
@@ -18,8 +19,7 @@
           exit 1
         fi
 
-        if [ -z "''${SLOT_INFO:-}" ] || [ ! -x "$SLOT_INFO" ]; then
-          echo "SLOT_INFO not executable: ''${SLOT_INFO:-<unset>}" >&2
+        if ! require_executable_env_var SLOT_INFO; then
           exit 1
         fi
         SLOT_INFO_OUT=".slot-info.out"
