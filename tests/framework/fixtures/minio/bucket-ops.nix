@@ -20,6 +20,13 @@
       exit 1
     }
 
+    cleanup_minio() {
+      ${minioStop} >/dev/null 2>&1 || true
+      if [ -n "''${MINIO_PID:-}" ] && kill -0 "$MINIO_PID" 2>/dev/null; then
+        stop_service "$MINIO_PID" "minio"
+      fi
+    }
+
     pick_port() {
       local port
       local i
@@ -80,6 +87,7 @@
     set -e
     [ "$RC" -ne 0 ] || fail "minioReady should fail before start"
 
+    MINIO_PID=""
     MINIO_PID=$(start_service minio -- ${minioStart})
     READY=0
     for _ in $(seq 1 50); do
@@ -89,7 +97,11 @@
       fi
       sleep 0.2
     done
-    [ "$READY" -eq 1 ] || fail "minio did not become ready"
+    if [ "$READY" -ne 1 ]; then
+      print_log_tail "$MINIO_DIR/logs/minio.log" 50
+      cleanup_minio
+      fail "minio did not become ready"
+    fi
 
     ${minioHealth} >/dev/null || fail "minioHealth should pass while running"
 
@@ -121,10 +133,7 @@
       fail "bucket should be deleted"
     fi
 
-    ${minioStop}
-    if kill -0 "$MINIO_PID" 2>/dev/null; then
-      stop_service "$MINIO_PID" "minio"
-    fi
+    cleanup_minio
 
     MINIO_DOWN=0
     for _ in $(seq 1 40); do

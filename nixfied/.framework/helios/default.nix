@@ -95,6 +95,9 @@ let
         details = ''
           Waits until Helios can answer `eth_blockNumber` successfully.
 
+          Note: framework fixtures intentionally skip Helios start/readiness checks
+          for `network=local` when a beacon consensus endpoint is unavailable.
+
           Tunables:
           - `HELIOS_READY_TIMEOUT_SECS` (default: 300)
           - `HELIOS_READY_INTERVAL_SECS` (default: 1)

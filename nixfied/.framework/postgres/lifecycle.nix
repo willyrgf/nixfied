@@ -168,7 +168,12 @@ let
     done
 
     echo "ERROR: PostgreSQL failed to start. Check $PGDATA/postgres.log" >&2
-    tail -20 "$PGDATA/postgres.log" || true
+    if [ -f "$PGDATA/postgres.log" ]; then
+      echo "INFO: postgres log tail path=$PGDATA/postgres.log lines=20" >&2
+      tail -20 "$PGDATA/postgres.log" >&2 || true
+    else
+      echo "WARN: postgres log file missing path=$PGDATA/postgres.log" >&2
+    fi
     exit 1
   '';
 

@@ -23,6 +23,13 @@
     exit 1
   }
 
+  cleanup_nginx() {
+    ${nginxStop} >/dev/null 2>&1 || true
+    if [ -n "''${NGINX_PID:-}" ] && kill -0 "$NGINX_PID" 2>/dev/null; then
+      stop_service "$NGINX_PID" "nginx"
+    fi
+  }
+
   eval "$("$SLOT_INFO")"
 
   set +e
@@ -92,6 +99,7 @@
   set -e
   [ "$RC" -ne 0 ] || fail "nginxReady should fail when not running"
 
+  NGINX_PID=""
   NGINX_PID=$(start_service nginx -- ${nginxStart})
   READY=0
   for _ in $(seq 1 80); do
@@ -101,16 +109,16 @@
     fi
     sleep 0.2
   done
-  [ "$READY" -eq 1 ] || fail "nginx did not become ready"
+  if [ "$READY" -ne 1 ]; then
+    print_log_tail "$NGINX_DIR/logs/error.log" 50
+    cleanup_nginx
+    fail "nginx did not become ready"
+  fi
 
   ${nginxHealth} >/dev/null || fail "nginxHealth should pass while running"
 
   ${nginxStatus} >/dev/null || fail "nginxStatus should pass while running"
-  ${nginxStop}
-
-  if kill -0 "$NGINX_PID" 2>/dev/null; then
-    stop_service "$NGINX_PID" "nginx"
-  fi
+  cleanup_nginx
 
   set +e
   ${nginxHealth} >/dev/null 2>&1

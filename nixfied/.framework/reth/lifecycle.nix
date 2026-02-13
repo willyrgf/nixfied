@@ -143,7 +143,12 @@ let
 
     if [ "$READY" -ne 1 ]; then
       echo "ERROR: reth failed to become healthy. log=$RETH_LOG_FILE" >&2
-      tail -50 "$RETH_LOG_FILE" >&2 || true
+      if [ -f "$RETH_LOG_FILE" ]; then
+        echo "INFO: reth log tail path=$RETH_LOG_FILE lines=50" >&2
+        tail -50 "$RETH_LOG_FILE" >&2 || true
+      else
+        echo "WARN: reth log file missing path=$RETH_LOG_FILE" >&2
+      fi
       exit 1
     fi
 

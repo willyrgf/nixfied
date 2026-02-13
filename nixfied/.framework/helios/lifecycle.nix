@@ -249,7 +249,12 @@ let
 
     if [ "$READY" -ne 1 ]; then
       echo "ERROR: helios failed to become healthy. log=$HELIOS_LOG_FILE" >&2
-      tail -50 "$HELIOS_LOG_FILE" >&2 || true
+      if [ -f "$HELIOS_LOG_FILE" ]; then
+        echo "INFO: helios log tail path=$HELIOS_LOG_FILE lines=50" >&2
+        tail -50 "$HELIOS_LOG_FILE" >&2 || true
+      else
+        echo "WARN: helios log file missing path=$HELIOS_LOG_FILE" >&2
+      fi
       exit 1
     fi
 

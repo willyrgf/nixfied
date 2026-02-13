@@ -76,6 +76,19 @@
           done
         }
 
+        cleanup_hook_pid() {
+          local stop_hook="$1"
+          local pid="''${2:-}"
+          local service="''${3:-service}"
+
+          if [ -n "$stop_hook" ]; then
+            run_hook "$stop_hook" >/dev/null 2>&1 || true
+          fi
+          if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+            stop_service "$pid" "$service"
+          fi
+        }
+
         assign_port PGPORT || {
           echo "failed to pick postgres port" >&2
           exit 1
@@ -158,8 +171,9 @@
           POSTGRES_RC=$?
           set -e
           if [ "$POSTGRES_RC" -ne 0 ]; then
-            echo "Skipping POSTGRES_START checks (failed to start)" >&2
-            tail -50 "$PGDATA/postgres.log" >&2 || true
+            echo "WARN: skipping POSTGRES_START checks start_failed=1" >&2
+            print_log_tail "$PGDATA/postgres.log" 50
+            cleanup_hook_pid POSTGRES_STOP "" "postgres"
           else
             POSTGRES_STARTED=1
           fi
@@ -177,12 +191,23 @@
             exit 1
           fi
 
+          POSTGRES_READY_OK=0
+          for i in $(seq 1 60); do
+            if run_hook POSTGRES_READY >/dev/null 2>&1; then
+              POSTGRES_READY_OK=1
+              break
+            fi
+            sleep 0.2
+          done
+          if [ "$POSTGRES_READY_OK" -ne 1 ]; then
+            echo "POSTGRES_READY should pass while running" >&2
+            print_log_tail "$PGDATA/postgres.log" 50
+            cleanup_hook_pid POSTGRES_STOP "" "postgres"
+            exit 1
+          fi
+
           run_hook POSTGRES_HEALTH >/dev/null || {
             echo "POSTGRES_HEALTH should pass while running" >&2
-            exit 1
-          }
-          run_hook POSTGRES_READY >/dev/null || {
-            echo "POSTGRES_READY should pass while running" >&2
             exit 1
           }
 
@@ -331,6 +356,8 @@
           done
           if [ "$NGINX_READY_OK" -ne 1 ]; then
             echo "NGINX_READY should pass while running" >&2
+            print_log_tail "$NGINX_DIR/logs/error.log" 50
+            cleanup_hook_pid NGINX_STOP "$NGINX_PID" "nginx"
             exit 1
           fi
 
@@ -367,9 +394,7 @@
             echo "NGINX_READY should fail after stop" >&2
             exit 1
           fi
-          if kill -0 "$NGINX_PID" 2>/dev/null; then
-            stop_service "$NGINX_PID" "nginx"
-          fi
+          cleanup_hook_pid NGINX_STOP "$NGINX_PID" "nginx"
         fi
 
         MINIO_DIR="$BASE_DIR/minio-$SLOT-$ENV"
@@ -402,6 +427,7 @@
             exit 1
           fi
 
+          MINIO_PID=""
           MINIO_PID=$(start_service minio -- "$MINIO_START")
           MINIO_READY_OK=0
           for i in $(seq 1 50); do
@@ -413,6 +439,8 @@
           done
           if [ "$MINIO_READY_OK" -ne 1 ]; then
             echo "minio ready check failed after start" >&2
+            print_log_tail "$MINIO_DIR/logs/minio.log" 50
+            cleanup_hook_pid MINIO_STOP "$MINIO_PID" "minio"
             exit 1
           fi
 
@@ -447,9 +475,7 @@
             exit 1
           fi
 
-          if kill -0 "$MINIO_PID" 2>/dev/null; then
-            stop_service "$MINIO_PID" "minio"
-          fi
+          cleanup_hook_pid MINIO_STOP "$MINIO_PID" "minio"
         fi
 
         RETH_DIR="$BASE_DIR/reth-$SLOT-$ENV"
@@ -489,17 +515,18 @@
           fi
 
           RETH_PID=$(start_service reth -- "$RETH_START")
-          RETH_HEALTH_OK=0
+          RETH_READY_OK=0
           for i in $(seq 1 120); do
-            if run_hook RETH_HEALTH >/dev/null 2>&1; then
-              RETH_HEALTH_OK=1
+            if run_hook RETH_READY >/dev/null 2>&1; then
+              RETH_READY_OK=1
               break
             fi
             sleep 0.2
           done
-          if [ "$RETH_HEALTH_OK" -ne 1 ]; then
-            echo "reth health check failed after start" >&2
-            tail -50 "$RETH_DIR/logs/reth.log" >&2 || true
+          if [ "$RETH_READY_OK" -ne 1 ]; then
+            echo "reth ready check failed after start" >&2
+            print_log_tail "$RETH_DIR/logs/reth.log" 50
+            cleanup_hook_pid RETH_STOP "$RETH_PID" "reth"
             exit 1
           fi
 
@@ -541,7 +568,7 @@
           )"
 
           if [ "$HELIOS_NETWORK_VALUE" = "local" ]; then
-            echo "Skipping HELIOS_START (network=local requires beacon consensus endpoint)" >&2
+            echo "SKIP: HELIOS_START skipped network=local requires beacon consensus endpoint in this harness" >&2
           elif nc -z 127.0.0.1 "$HELIOSRPC_PORT" >/dev/null 2>&1; then
             echo "Skipping HELIOS_START (port in use)" >&2
           else
@@ -563,19 +590,21 @@
               exit 1
             fi
 
+            HELIOS_PID=""
             HELIOS_PID=$(start_service helios -- "$HELIOS_START")
-            export HELIOS_READY_TIMEOUT_SECS="120"
-            if ! run_hook HELIOS_READY >/dev/null 2>&1; then
+            export HELIOS_READY_TIMEOUT_SECS="2"
+            HELIOS_READY_OK=0
+            for i in $(seq 1 120); do
+              if run_hook HELIOS_READY >/dev/null 2>&1; then
+                HELIOS_READY_OK=1
+                break
+              fi
+              sleep 0.2
+            done
+            if [ "$HELIOS_READY_OK" -ne 1 ]; then
               echo "helios ready check failed after start" >&2
-              if [ -f "$HELIOS_DIR/logs/helios.log" ]; then
-                tail -50 "$HELIOS_DIR/logs/helios.log" >&2 || true
-              else
-                echo "helios log missing path=$HELIOS_DIR/logs/helios.log" >&2
-              fi
-              run_hook HELIOS_STOP >/dev/null 2>&1 || true
-              if kill -0 "$HELIOS_PID" 2>/dev/null; then
-                stop_service "$HELIOS_PID" "helios"
-              fi
+              print_log_tail "$HELIOS_DIR/logs/helios.log" 50
+              cleanup_hook_pid HELIOS_STOP "$HELIOS_PID" "helios"
               exit 1
             fi
 
@@ -609,9 +638,7 @@
               exit 1
             fi
 
-            if kill -0 "$HELIOS_PID" 2>/dev/null; then
-              stop_service "$HELIOS_PID" "helios"
-            fi
+            cleanup_hook_pid HELIOS_STOP "$HELIOS_PID" "helios"
           fi
         fi
 
@@ -640,9 +667,7 @@
             exit 1
           fi
 
-          if kill -0 "$RETH_PID" 2>/dev/null; then
-            stop_service "$RETH_PID" "reth"
-          fi
+          cleanup_hook_pid RETH_STOP "$RETH_PID" "reth"
         fi
 
         mkdir -p "$BASE_DIR/logs-$SLOT-$ENV"

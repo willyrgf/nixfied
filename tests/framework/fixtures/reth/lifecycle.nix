@@ -16,6 +16,13 @@
     exit 1
   }
 
+  cleanup_reth() {
+    ${rethStop} >/dev/null 2>&1 || true
+    if [ -n "''${RETH_PID:-}" ] && kill -0 "$RETH_PID" 2>/dev/null; then
+      stop_service "$RETH_PID" "reth"
+    fi
+  }
+
   eval "$("$SLOT_INFO")"
 
   if nc -z 127.0.0.1 "$RETHHTTP_PORT" >/dev/null 2>&1 || nc -z 127.0.0.1 "$RETHWS_PORT" >/dev/null 2>&1 || nc -z 127.0.0.1 "$RETHAUTH_PORT" >/dev/null 2>&1; then
@@ -42,17 +49,19 @@
   set -e
   [ "$RC" -ne 0 ] || fail "rethReady should fail before start"
 
+  RETH_PID=""
   RETH_PID=$(start_service reth -- ${rethStart})
   READY=0
   for _ in $(seq 1 240); do
-    if ${rethHealth} >/dev/null 2>&1; then
+    if ${rethReady} >/dev/null 2>&1; then
       READY=1
       break
     fi
     sleep 0.2
   done
   if [ "$READY" -ne 1 ]; then
-    tail -50 "$RETH_DIR/logs/reth.log" >&2 || true
+    print_log_tail "$RETH_DIR/logs/reth.log" 50
+    cleanup_reth
     fail "reth did not become healthy"
   fi
 
@@ -61,10 +70,7 @@
 
   ${rethStatus} >/dev/null || fail "rethStatus should pass while running"
 
-  ${rethStop}
-  if kill -0 "$RETH_PID" 2>/dev/null; then
-    stop_service "$RETH_PID" "reth"
-  fi
+  cleanup_reth
 
   RETH_DOWN=0
   for _ in $(seq 1 40); do
