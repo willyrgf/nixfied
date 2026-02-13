@@ -55,6 +55,7 @@ Additional repo checks used by contributors:
 
 ## Commit & Pull Request Guidelines
 - Commit messages in this repo are short, imperative, and lowercase (e.g., "expand framework test coverage").
+- Keep commits small and focused (one logical change per commit) so upgrade history stays useful in `nixfied/UPGRADE_CHECK.txt` (`git log --oneline` and `git diff --stat` between framework revisions when resolvable).
 - PRs should include:
   - A brief description of intent and affected commands/modules.
   - Notes on testing (`nix run .#test`, `nix run .#framework::test`, or "not run").
