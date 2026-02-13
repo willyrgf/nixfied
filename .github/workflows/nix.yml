@@ -11,7 +11,7 @@ on:
 env:
   BUILD_CMD: "nix flake check -L -v --log-format bar-with-logs"
   RUN_CMD: "nix run .#help -L -v --log-format bar-with-logs"
-  RUN_TESTS_CMD: "nix run -L -v --log-format bar-with-logs .#framework::test -- --profile full"
+  RUN_TESTS_CMD: "FRAMEWORK_ISOLATION=1 nix run -L -v --log-format bar-with-logs .#framework::test -- --jobs 4"
 
 jobs:
   build-and-test:
@@ -44,11 +44,6 @@ jobs:
         run: |
           nix flake check
 
-      - name: Run .#framework::test
-        run: |
-          echo $RUN_TESTS_CMD
-          eval $RUN_TESTS_CMD
-
       - name: Run .#help
         run: |
           echo $RUN_CMD
@@ -66,3 +61,9 @@ jobs:
             echo "✗ Help text does not contain 'NIX_ENV'"
             exit 1
           fi
+
+      - name: Run .#framework::test
+        run: |
+          echo $RUN_TESTS_CMD
+          eval $RUN_TESTS_CMD
+
