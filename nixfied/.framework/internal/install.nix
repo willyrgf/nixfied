@@ -591,7 +591,9 @@ let
                                         echo ""
                                         echo "git log --oneline"
                                         echo "-----------------"
-                                        if [ -n "$PREV_FRAMEWORK_COMMIT" ] && [ -n "$FRAMEWORK_COMMIT" ]; then
+                                        if [ "$PREV_FRAMEWORK_REVISION" = "$FRAMEWORK_REVISION" ] && [ "$FRAMEWORK_REVISION" != "unknown" ]; then
+                                          echo "SKIP: Revisions are identical; no framework changes to report."
+                                        elif [ -n "$PREV_FRAMEWORK_COMMIT" ] && [ -n "$FRAMEWORK_COMMIT" ]; then
                                           "$GIT" -C "$SRC" log --oneline "''${PREV_FRAMEWORK_COMMIT}..''${FRAMEWORK_COMMIT}"
                                         else
                                           echo "SKIP: Unable to resolve both revisions in framework source git history."
@@ -599,7 +601,9 @@ let
                                         echo ""
                                         echo "git diff --stat"
                                         echo "---------------"
-                                        if [ -n "$PREV_FRAMEWORK_COMMIT" ] && [ -n "$FRAMEWORK_COMMIT" ]; then
+                                        if [ "$PREV_FRAMEWORK_REVISION" = "$FRAMEWORK_REVISION" ] && [ "$FRAMEWORK_REVISION" != "unknown" ]; then
+                                          echo "SKIP: Revisions are identical; no framework changes to report."
+                                        elif [ -n "$PREV_FRAMEWORK_COMMIT" ] && [ -n "$FRAMEWORK_COMMIT" ]; then
                                           "$GIT" -C "$SRC" diff --stat "$PREV_FRAMEWORK_COMMIT" "$FRAMEWORK_COMMIT"
                                         else
                                           echo "SKIP: Unable to resolve both revisions in framework source git history."
