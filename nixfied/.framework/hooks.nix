@@ -31,30 +31,23 @@ let
   _ = serviceApi.validateServiceApis effectiveServiceApis;
 
   serviceEnv = serviceApi.mkServiceHookEnvFromContract effectiveServiceApis;
+  mkOptionalEnv = cfg: attrs: if cfg == null then { } else attrs;
 
-  supervisorEnv =
-    if supervisor == null then
-      { }
-    else
-      {
-        SUPERVISOR_START = toString supervisor.start;
-        SUPERVISOR_STOP = toString supervisor.stop;
-        SUPERVISOR_START_DAEMON = toString supervisor.startDaemon;
-        SUPERVISOR_STATUS = toString supervisor.status;
-        SUPERVISOR_HEALTH = toString supervisor.health;
-        SUPERVISOR_IS_RUNNING = toString supervisor.isRunning;
-        SUPERVISOR_LOGS = toString supervisor.logs;
-        SUPERVISOR_RESTART = toString supervisor.restart;
-      };
+  supervisorEnv = mkOptionalEnv supervisor {
+    SUPERVISOR_START = toString supervisor.start;
+    SUPERVISOR_STOP = toString supervisor.stop;
+    SUPERVISOR_START_DAEMON = toString supervisor.startDaemon;
+    SUPERVISOR_STATUS = toString supervisor.status;
+    SUPERVISOR_HEALTH = toString supervisor.health;
+    SUPERVISOR_IS_RUNNING = toString supervisor.isRunning;
+    SUPERVISOR_LOGS = toString supervisor.logs;
+    SUPERVISOR_RESTART = toString supervisor.restart;
+  };
 
-  ephemeralEnv =
-    if ephemeral == null then
-      { }
-    else
-      {
-        EPHEMERAL_IS_ACTIVE = toString ephemeral.isEphemeral;
-        EPHEMERAL_PATHS = toString ephemeral.getEphemeralPaths;
-      };
+  ephemeralEnv = mkOptionalEnv ephemeral {
+    EPHEMERAL_IS_ACTIVE = toString ephemeral.isEphemeral;
+    EPHEMERAL_PATHS = toString ephemeral.getEphemeralPaths;
+  };
 in
 {
   env = {
