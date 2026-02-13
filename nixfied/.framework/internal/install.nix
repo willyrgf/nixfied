@@ -121,26 +121,23 @@ let
                         TMPDIR=$(mktemp -d)
                         trap 'rm -rf "$TMPDIR" "$CONTEXT_FILE" "$PROMPT_FILE"' EXIT
 
+                        add_prompt_input() {
+                          local src="$1"
+                          local dest="$2"
+                          if [ -f "$src" ]; then
+                            cp "$src" "$TMPDIR/$dest"
+                            INPUTS+=("$dest")
+                          fi
+                        }
+
                         INPUTS=()
 
-                        if [ -f "$ROOT/README.md" ]; then
-                          cp "$ROOT/README.md" "$TMPDIR/PROJECT_README.md"
-                          INPUTS+=("PROJECT_README.md")
-                        fi
-                        if [ -f "$ROOT/CLAUDE.md" ]; then
-                          cp "$ROOT/CLAUDE.md" "$TMPDIR/PROJECT_CLAUDE.md"
-                          INPUTS+=("PROJECT_CLAUDE.md")
-                        fi
-                        if [ -f "$ROOT/AGENTS.md" ]; then
-                          cp "$ROOT/AGENTS.md" "$TMPDIR/PROJECT_AGENTS.md"
-                          INPUTS+=("PROJECT_AGENTS.md")
-                        fi
+                        add_prompt_input "$ROOT/README.md" "PROJECT_README.md"
+                        add_prompt_input "$ROOT/CLAUDE.md" "PROJECT_CLAUDE.md"
+                        add_prompt_input "$ROOT/AGENTS.md" "PROJECT_AGENTS.md"
 
                         FRAMEWORK_README="${frameworkRoot}/README.md"
-                        if [ -f "$FRAMEWORK_README" ]; then
-                          cp "$FRAMEWORK_README" "$TMPDIR/NIXFIED_FRAMEWORK_README.md"
-                          INPUTS+=("NIXFIED_FRAMEWORK_README.md")
-                        fi
+                        add_prompt_input "$FRAMEWORK_README" "NIXFIED_FRAMEWORK_README.md"
 
                 	        if [ "''${#INPUTS[@]}" -eq 0 ]; then
                 	          echo "SKIP: Skipping prompt plan (no README/CLAUDE/AGENTS files found)." >&2
