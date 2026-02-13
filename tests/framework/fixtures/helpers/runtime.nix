@@ -133,11 +133,15 @@
   CLEANUP_LOG="$TMPDIR/cleanup.log"
   with_cleanup "$BASH" -c "echo first >> \"$CLEANUP_LOG\""
   with_cleanup "$BASH" -c "echo second >> \"$CLEANUP_LOG\""
+  cleanup_from_function() {
+    echo function >> "$CLEANUP_LOG"
+  }
+  with_cleanup cleanup_from_function
   _run_cleanups
   _cleanup_actions=()
   _cleanup_initialized=false
   trap - EXIT INT TERM
-  EXPECTED=$(printf "second\nfirst\n")
+  EXPECTED=$(printf "function\nsecond\nfirst\n")
   ACTUAL=$(cat "$CLEANUP_LOG")
   if [ "$ACTUAL" != "$EXPECTED" ]; then
     echo "expected cleanup order:" >&2

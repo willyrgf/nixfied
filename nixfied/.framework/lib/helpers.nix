@@ -74,6 +74,40 @@ let
       return 0
     }
 
+    require_positive_number() {
+      local name="$1"
+      local value="$2"
+      local whole=""
+      local frac=""
+
+      case "$value" in
+        *[!0-9.]*|""|*.*.*|.*|*.)
+          echo "ERROR: $name must be a positive number (got '$value')" >&2
+          return 1
+          ;;
+      esac
+
+      if [ "''${value#*.}" = "$value" ]; then
+        if ! is_uint "$value" || [ "$value" -le 0 ]; then
+          echo "ERROR: $name must be a positive number (got '$value')" >&2
+          return 1
+        fi
+        return 0
+      fi
+
+      whole="''${value%%.*}"
+      frac="''${value#*.}"
+      if ! is_uint "$whole" || ! is_uint "$frac"; then
+        echo "ERROR: $name must be a positive number (got '$value')" >&2
+        return 1
+      fi
+      if [ "$whole" -eq 0 ] && [ -z "''${frac//0/}" ]; then
+        echo "ERROR: $name must be a positive number (got '$value')" >&2
+        return 1
+      fi
+      return 0
+    }
+
     require_port() {
       local name="$1"
       local value="$2"
@@ -98,7 +132,7 @@ let
         return 1
       fi
       require_positive_int "timeout" "$timeout" || return 1
-      require_positive_int "interval" "$interval" || return 1
+      require_positive_number "interval" "$interval" || return 1
 
       while true; do
         if ${pkgs.curl}/bin/curl -sSf "$url" >/dev/null 2>&1; then
@@ -228,7 +262,7 @@ let
         return 1
       fi
       require_positive_int "timeout" "$timeout" || return 1
-      require_positive_int "interval" "$interval" || return 1
+      require_positive_number "interval" "$interval" || return 1
 
       while true; do
         if run_hook "$var" >/dev/null 2>&1; then
@@ -289,7 +323,7 @@ let
           ;;
       esac
       require_positive_int "timeout" "$timeout" || return 1
-      require_positive_int "interval" "$interval" || return 1
+      require_positive_number "interval" "$interval" || return 1
 
       local start_hook=""
       local init_hook=""
@@ -424,7 +458,7 @@ let
 
     # with_cleanup CMD [arg...]
     # - register cleanup command + args to run on EXIT/INT/TERM (LIFO order).
-    #   Commands are executed without eval.
+    #   Commands run in a subshell that inherits helper function definitions.
     with_cleanup() {
       if [ "$#" -lt 1 ]; then
         echo "usage: with_cleanup <command> [arg...]" >&2
@@ -439,7 +473,6 @@ let
       {
         printf '#!/usr/bin/env bash\n'
         printf 'set -euo pipefail\n'
-        printf 'exec'
         printf ' %q' "$@"
         printf '\n'
       } >"$script"
@@ -453,7 +486,10 @@ let
     _run_cleanups() {
       local i=$(( ''${#_cleanup_actions[@]} - 1 ))
       while [ $i -ge 0 ]; do
-        "''${_cleanup_actions[$i]}" || true
+        (
+          # shellcheck source=/dev/null
+          source "''${_cleanup_actions[$i]}"
+        ) || true
         rm -f "''${_cleanup_actions[$i]}" >/dev/null 2>&1 || true
         i=$((i - 1))
       done
@@ -474,7 +510,7 @@ let
       fi
       require_port "port" "$port" || return 1
       require_positive_int "timeout" "$timeout" || return 1
-      require_positive_int "interval" "$interval" || return 1
+      require_positive_number "interval" "$interval" || return 1
 
       while true; do
         if command -v lsof >/dev/null 2>&1; then
@@ -570,7 +606,7 @@ let
         return 1
       fi
       require_positive_int "--timeout" "$timeout" || return 1
-      require_positive_int "--interval" "$interval" || return 1
+      require_positive_number "--interval" "$interval" || return 1
       if [ -n "$wait_port_num" ]; then
         require_port "--wait-port" "$wait_port_num" || return 1
       fi
