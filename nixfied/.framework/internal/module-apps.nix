@@ -301,38 +301,48 @@ let
       tool = processToolByAppName.${target};
     };
 
-  runtimeAliasSpecs = [
-    (mkRuntimeAliasSpec {
+  runtimeAliasDefs = [
+    {
       name = "runtime::status";
       target = "process::status";
-      usage = [ "nix run .#runtime::status -- [args]" ];
-    })
-    (mkRuntimeAliasSpec {
+      usageTail = "[args]";
+    }
+    {
       name = "runtime::ps";
       target = "process::status";
-      usage = [ "nix run .#runtime::ps -- [args]" ];
-    })
-    (mkRuntimeAliasSpec {
+      usageTail = "[args]";
+    }
+    {
       name = "runtime::slots";
       target = "process::slots";
-      usage = [ "nix run .#runtime::slots -- [args]" ];
-    })
-    (mkRuntimeAliasSpec {
+      usageTail = "[args]";
+    }
+    {
       name = "runtime::runs";
       target = "process::runs";
-      usage = [ "nix run .#runtime::runs -- [args]" ];
-    })
-    (mkRuntimeAliasSpec {
+      usageTail = "[args]";
+    }
+    {
       name = "runtime::inspect";
       target = "process::inspect";
-      usage = [ "nix run .#runtime::inspect -- <id>" ];
-    })
-    (mkRuntimeAliasSpec {
+      usageTail = "<id>";
+    }
+    {
       name = "runtime::gc";
       target = "process::gc";
-      usage = [ "nix run .#runtime::gc -- [args]" ];
-    })
+      usageTail = "[args]";
+    }
   ];
+  runtimeAliasSpecs = map (
+    def:
+    mkRuntimeAliasSpec {
+      inherit (def)
+        name
+        target
+        ;
+      usage = [ "nix run .#${def.name} -- ${def.usageTail}" ];
+    }
+  ) runtimeAliasDefs;
   runtimeAliases = mkAppsFromSpecs mkRuntimeAliasApp runtimeAliasSpecs;
 in
 serviceApps // supervisorApps // utilityApps // processApps // runtimeAliases
