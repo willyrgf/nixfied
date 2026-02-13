@@ -88,6 +88,10 @@ rec {
     extraDirs = [ ];
   };
 
+  process = {
+    registryRoot = "/tmp/nixfied-runtime/${project.id}";
+  };
+
   modules = {
     postgres = {
       enable = false;

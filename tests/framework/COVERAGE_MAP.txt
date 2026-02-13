@@ -20,6 +20,7 @@ Each framework file must appear here with at least one validating scenario.
 - `nixfied/.framework/lib/parallel.nix`: `fixtures/lib/parallel.nix`
 - `nixfied/.framework/lib/port-utils.nix`: `fixtures/lib/port-utils.nix`
 - `nixfied/.framework/lib/process.nix`: `fixtures/lib/process.nix`
+- `nixfied/.framework/lib/process-registry.nix`: `framework::test` flake app wiring checks and `process::*` command smoke coverage
 - `nixfied/.framework/lib/run-registry.nix`: `fixtures/registry/foreground.nix`, `fixtures/registry/background-timeout.nix`
 - `nixfied/.framework/lib/service-api.nix`: service API contract enforcement fixture in `.framework/internal/test.nix`
 - `nixfied/.framework/lib/summary.nix`: helper `summary_parse` checks in `fixtures/helpers/runtime.nix`
