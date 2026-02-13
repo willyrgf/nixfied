@@ -1004,10 +1004,18 @@ Run the integration test suite for the framework itself:
 nix run .#framework::test
 ```
 
-This defaults to the `ci` profile (fastest framework test profile):
+Default behavior:
+- Uses the `ci` profile.
+- Runs shard groups in parallel (`--jobs 2`).
+
+Examples:
 
 ```bash
 nix run .#framework::test -- --profile ci
+nix run .#framework::test -- --jobs 3
+nix run .#framework::test -- --serial
+nix run .#framework::test -- --list-shards
+nix run .#framework::test -- --shard installer
 ```
 
 To include isolation in framework tests:

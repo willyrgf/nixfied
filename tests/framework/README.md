@@ -11,7 +11,17 @@ nix run .#framework::test
 ```
 
 Default profile is `ci`.
+Default shard worker count is `2`.
 Use `FRAMEWORK_ISOLATION=1` to include the isolation runner.
+
+Useful options:
+
+```bash
+nix run .#framework::test -- --jobs 3
+nix run .#framework::test -- --serial
+nix run .#framework::test -- --list-shards
+nix run .#framework::test -- --shard installer
+```
 
 If you have untracked changes and `nix run .#framework::test` fails to see them,
 use a path-based flake reference:
