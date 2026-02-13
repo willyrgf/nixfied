@@ -9,6 +9,7 @@
   heliosStart,
   heliosStop,
   heliosHealth,
+  heliosReady,
   heliosStatus,
   heliosCheckConfig,
 }:
@@ -21,25 +22,17 @@
     exit 1
   }
 
-  pick_port() {
-    local port
-    local i
-    for i in $(seq 1 40); do
-      port=$(( (RANDOM % 20000) + 20000 ))
-      if ! nc -z 127.0.0.1 "$port" >/dev/null 2>&1; then
-        echo "$port"
-        return 0
-      fi
-    done
-    return 1
-  }
-
   eval "$("$SLOT_INFO")"
-  export RETHHTTP_PORT=$(pick_port)
-  export RETHWS_PORT=$(pick_port)
-  export RETHAUTH_PORT=$(pick_port)
-  export HELIOSRPC_PORT=$(pick_port)
+
+  if nc -z 127.0.0.1 "$RETHHTTP_PORT" >/dev/null 2>&1 || nc -z 127.0.0.1 "$RETHWS_PORT" >/dev/null 2>&1 || nc -z 127.0.0.1 "$RETHAUTH_PORT" >/dev/null 2>&1 || nc -z 127.0.0.1 "$HELIOSRPC_PORT" >/dev/null 2>&1; then
+    echo "SKIP: helios lifecycle ports already in use reth_http=$RETHHTTP_PORT reth_ws=$RETHWS_PORT reth_auth=$RETHAUTH_PORT helios_rpc=$HELIOSRPC_PORT"
+    exit 0
+  fi
+
   export HELIOS_CONSENSUS_RPC_URL="http://127.0.0.1:$RETHHTTP_PORT"
+  # Fast-fail readiness checks before start.
+  export HELIOS_READY_TIMEOUT_SECS="0"
+  export HELIOS_READY_INTERVAL_SECS="1"
 
   RETH_VERSION_OUT=$(${rethBin} --version 2>&1 || true)
   echo "$RETH_VERSION_OUT" | grep -qi "mock" && fail "reth binary is mocked: $RETH_VERSION_OUT"
@@ -65,6 +58,7 @@
     sleep 0.25
   done
   [ "$RETH_READY" -eq 1 ] || fail "reth did not become healthy"
+  ${rethHealth} >/dev/null || fail "rethHealth should pass while running"
 
   ${heliosInit}
   ${heliosInit}
@@ -77,16 +71,16 @@
   set -e
   [ "$RC" -ne 0 ] || fail "heliosHealth should fail before start"
 
+  set +e
+  ${heliosReady} >/dev/null 2>&1
+  RC=$?
+  set -e
+  [ "$RC" -ne 0 ] || fail "heliosReady should fail before start"
+
   HELIOS_PID=$(start_service helios -- ${heliosStart})
-  READY=0
-  for _ in $(seq 1 120); do
-    if ${heliosHealth} >/dev/null 2>&1; then
-      READY=1
-      break
-    fi
-    sleep 0.2
-  done
-  [ "$READY" -eq 1 ] || fail "helios did not become healthy"
+  export HELIOS_READY_TIMEOUT_SECS="120"
+  ${heliosReady} >/dev/null 2>&1 || fail "helios did not become ready"
+  ${heliosHealth} >/dev/null || fail "heliosHealth should pass while running"
 
   ${heliosStatus} >/dev/null || fail "heliosStatus should pass while running"
 
@@ -105,6 +99,13 @@
     fi
   done
   [ "$HELIOS_DOWN" -eq 1 ] || fail "heliosHealth should fail after stop"
+
+  export HELIOS_READY_TIMEOUT_SECS="0"
+  set +e
+  ${heliosReady} >/dev/null 2>&1
+  RC=$?
+  set -e
+  [ "$RC" -ne 0 ] || fail "heliosReady should fail after stop"
 
   ${rethStop}
   if kill -0 "$RETH_PID" 2>/dev/null; then

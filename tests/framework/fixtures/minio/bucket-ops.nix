@@ -3,6 +3,7 @@
   minioStart,
   minioStop,
   minioHealth,
+  minioReady,
   minioStatus,
   minioCheckConfig,
   minioBucketCreate,
@@ -32,9 +33,26 @@
       return 1
     }
 
+    used_ports=""
+    assign_port() {
+      local name="$1"
+      local candidate
+      while true; do
+        candidate="$(pick_port)" || return 1
+        case " $used_ports " in
+          *" $candidate "*) ;;
+          *)
+            used_ports="$used_ports $candidate"
+            export "$name=$candidate"
+            return 0
+            ;;
+        esac
+      done
+    }
+
     eval "$("$SLOT_INFO")"
-    API_PORT=$(pick_port)
-    CONSOLE_PORT=$(pick_port)
+    assign_port API_PORT || fail "failed to pick API_PORT"
+    assign_port CONSOLE_PORT || fail "failed to pick CONSOLE_PORT"
     # Support both fixture naming (MINIOAPI_PORT/MINIOCONSOLE_PORT) and
     # project naming (MINIO_PORT/MINIO_CONSOLE_PORT).
     export MINIOAPI_PORT="$API_PORT"
@@ -56,16 +74,24 @@
     set -e
     [ "$RC" -ne 0 ] || fail "minioHealth should fail before start"
 
+    set +e
+    ${minioReady} >/dev/null 2>&1
+    RC=$?
+    set -e
+    [ "$RC" -ne 0 ] || fail "minioReady should fail before start"
+
     MINIO_PID=$(start_service minio -- ${minioStart})
     READY=0
     for _ in $(seq 1 50); do
-      if ${minioHealth} >/dev/null 2>&1; then
+      if ${minioReady} >/dev/null 2>&1; then
         READY=1
         break
       fi
       sleep 0.2
     done
-    [ "$READY" -eq 1 ] || fail "minio did not become healthy"
+    [ "$READY" -eq 1 ] || fail "minio did not become ready"
+
+    ${minioHealth} >/dev/null || fail "minioHealth should pass while running"
 
     ${minioStatus} >/dev/null || fail "minioStatus should pass while running"
 
@@ -110,6 +136,12 @@
       fi
     done
     [ "$MINIO_DOWN" -eq 1 ] || fail "minioHealth should fail after stop"
+
+    set +e
+    ${minioReady} >/dev/null 2>&1
+    RC=$?
+    set -e
+    [ "$RC" -ne 0 ] || fail "minioReady should fail after stop"
 
     echo "minio bucket ops fixture ok"
 

@@ -30,10 +30,17 @@ let
     HELIOS_NETWORK="''${HELIOS_NETWORK:-${config.network or "local"}}"
     HELIOS_EXECUTION_RPC_URL="''${HELIOS_EXECUTION_RPC_URL:-${config.executionRpcUrl or ""}}"
     HELIOS_CONSENSUS_RPC_URL="''${HELIOS_CONSENSUS_RPC_URL:-${config.consensusRpcUrl or ""}}"
+    HELIOS_DEFAULT_CONSENSUS_RPC_URL="''${HELIOS_DEFAULT_CONSENSUS_RPC_URL:-${config.defaultConsensusRpcUrl or ""}}"
     HELIOS_CHECKPOINT="''${HELIOS_CHECKPOINT:-${config.checkpoint or ""}}"
 
     if [ -z "$HELIOS_EXECUTION_RPC_URL" ] && [ -n "$HELIOS_EXECUTION_PORT" ]; then
       HELIOS_EXECUTION_RPC_URL="http://127.0.0.1:$HELIOS_EXECUTION_PORT"
+    fi
+
+    # Default consensus endpoint for mainnet if not explicitly configured.
+    # This keeps testnets and other networks explicit to avoid accidentally mixing networks.
+    if [ "$HELIOS_NETWORK" = "mainnet" ] && [ -z "$HELIOS_CONSENSUS_RPC_URL" ] && [ -n "$HELIOS_DEFAULT_CONSENSUS_RPC_URL" ]; then
+      HELIOS_CONSENSUS_RPC_URL="$HELIOS_DEFAULT_CONSENSUS_RPC_URL"
     fi
 
     # Helios local profile expects a consensus endpoint; default to execution RPC
@@ -41,6 +48,9 @@ let
     if [ "$HELIOS_NETWORK" = "local" ] && [ -z "$HELIOS_CONSENSUS_RPC_URL" ] && [ -n "$HELIOS_EXECUTION_RPC_URL" ]; then
       HELIOS_CONSENSUS_RPC_URL="$HELIOS_EXECUTION_RPC_URL"
     fi
+
+    # Normalize for composing paths.
+    HELIOS_CONSENSUS_RPC_URL="''${HELIOS_CONSENSUS_RPC_URL%/}"
 
     if [ -z "$HELIOS_RPC_PORT" ]; then
       echo "ERROR: helios RPC port variable is not set" >&2
@@ -88,13 +98,101 @@ let
       exit 1
     fi
 
-    if [ "$HELIOS_NETWORK" != "local" ] && [ -z "$HELIOS_CONSENSUS_RPC_URL" ]; then
-      echo "ERROR: HELIOS_CONSENSUS_RPC_URL is required when network is not local" >&2
+    if [ -z "$HELIOS_EXECUTION_RPC_URL" ]; then
+      echo "ERROR: HELIOS_EXECUTION_RPC_URL is required (or set executionRpcPortKey to a valid port key)" >&2
       exit 1
     fi
 
-    if [ -z "$HELIOS_EXECUTION_RPC_URL" ]; then
-      echo "ERROR: HELIOS_EXECUTION_RPC_URL is required (or set executionRpcPortKey to a valid port key)" >&2
+    # Derive a recent weak-subjectivity checkpoint when not pinned explicitly.
+    #
+    # This avoids a common failure mode where Helios stays "healthy" but remains unable to answer
+    # `eth_blockNumber` because the consensus light client never bootstrapped.
+    if [ "$HELIOS_NETWORK" != "local" ] && [ -z "$HELIOS_CHECKPOINT" ]; then
+      if [ -z "$HELIOS_CONSENSUS_RPC_URL" ]; then
+        echo "ERROR: cannot derive HELIOS_CHECKPOINT: HELIOS_CONSENSUS_RPC_URL is empty" >&2
+        exit 1
+      fi
+
+      # Mainnet fallback: lightclientdata can be temporarily unavailable (e.g. 503).
+      # Prefer it first (Helios upstream default), then try a known public Lodestar endpoint.
+      CONS_CANDIDATES=("$HELIOS_CONSENSUS_RPC_URL")
+      if [ "$HELIOS_NETWORK" = "mainnet" ] && [ "$HELIOS_CONSENSUS_RPC_URL" = "https://www.lightclientdata.org" ]; then
+        CONS_CANDIDATES+=("https://lodestar-mainnet.chainsafe.io")
+      fi
+
+      DERIVED=0
+      for CONS in "''${CONS_CANDIDATES[@]}"; do
+        if [ -z "''${CONS:-}" ]; then
+          continue
+        fi
+        CONS="''${CONS%/}"
+
+        echo "INFO: deriving HELIOS_CHECKPOINT from consensus endpoint cons=$CONS" >&2
+
+        FINALIZED_URL="$CONS/eth/v1/beacon/headers/finalized"
+        if ! FINALIZED_JSON="$(${pkgs.curl}/bin/curl -fsS --max-time 10 \
+          --retry 3 --retry-delay 1 --retry-max-time 30 \
+          -H 'accept: application/json' \
+          "$FINALIZED_URL" 2>&1)"; then
+          echo "WARN: failed to fetch finalized header cons=$CONS url=$FINALIZED_URL" >&2
+          echo "DETAIL: $FINALIZED_JSON" >&2
+          continue
+        fi
+
+        slot="$(echo "$FINALIZED_JSON" | ${pkgs.jq}/bin/jq -r '.data.header.message.slot|tonumber' 2>/dev/null || true)"
+        case "$slot" in
+          *[!0-9]*|"")
+            echo "WARN: failed to parse finalized slot from consensus response cons=$CONS" >&2
+            continue
+            ;;
+        esac
+
+        epoch_start=$((slot - (slot % 32)))
+
+        EPOCH_URL="$CONS/eth/v1/beacon/headers/$epoch_start"
+        if ! EPOCH_JSON="$(${pkgs.curl}/bin/curl -fsS --max-time 10 \
+          --retry 3 --retry-delay 1 --retry-max-time 30 \
+          -H 'accept: application/json' \
+          "$EPOCH_URL" 2>&1)"; then
+          echo "WARN: failed to fetch epoch boundary header cons=$CONS url=$EPOCH_URL" >&2
+          echo "DETAIL: $EPOCH_JSON" >&2
+          continue
+        fi
+
+        checkpoint="$(echo "$EPOCH_JSON" | ${pkgs.jq}/bin/jq -r '.data.root // empty' 2>/dev/null || true)"
+        if ! echo "$checkpoint" | ${pkgs.gnugrep}/bin/grep -Eq '^0x[0-9a-fA-F]{64}$'; then
+          echo "WARN: invalid checkpoint root from consensus endpoint cons=$CONS root='$checkpoint'" >&2
+          continue
+        fi
+
+        # Sanity-check that the light-client bootstrap endpoint is served for this checkpoint.
+        BOOTSTRAP_URL="$CONS/eth/v1/beacon/light_client/bootstrap/$checkpoint"
+        if ! BOOTSTRAP_ERR="$(${pkgs.curl}/bin/curl -fsS --max-time 10 \
+          --retry 3 --retry-delay 1 --retry-max-time 30 \
+          -H 'accept: application/json' \
+          -o /dev/null \
+          "$BOOTSTRAP_URL" 2>&1)"; then
+          echo "WARN: consensus endpoint does not serve light_client/bootstrap cons=$CONS url=$BOOTSTRAP_URL" >&2
+          echo "DETAIL: $BOOTSTRAP_ERR" >&2
+          continue
+        fi
+
+        HELIOS_CONSENSUS_RPC_URL="$CONS"
+        HELIOS_CHECKPOINT="$checkpoint"
+        echo "INFO: derived HELIOS_CHECKPOINT=$HELIOS_CHECKPOINT (cons=$HELIOS_CONSENSUS_RPC_URL)" >&2
+        DERIVED=1
+        break
+      done
+
+      if [ "$DERIVED" -ne 1 ]; then
+        echo "ERROR: failed to derive HELIOS_CHECKPOINT from consensus endpoint(s)." >&2
+        echo "HINT: set HELIOS_CONSENSUS_RPC_URL and HELIOS_CHECKPOINT explicitly." >&2
+        exit 1
+      fi
+    fi
+
+    if [ "$HELIOS_NETWORK" != "local" ] && [ -z "$HELIOS_CONSENSUS_RPC_URL" ]; then
+      echo "ERROR: HELIOS_CONSENSUS_RPC_URL is required when network is not local" >&2
       exit 1
     fi
 
@@ -255,6 +353,80 @@ let
     echo "OK: helios configuration valid dir=$HELIOS_DIR network=$HELIOS_NETWORK"
   '';
 
+  ready = pkgs.writeShellScript "helios-ready" ''
+    set -euo pipefail
+    ${runtimePrelude}
+
+    if [ ! -f "$HELIOS_PID_FILE" ]; then
+      echo "ERROR: helios not running (missing pid file) pid_file=$HELIOS_PID_FILE" >&2
+      exit 1
+    fi
+
+    PID=$(cat "$HELIOS_PID_FILE" 2>/dev/null || true)
+    if [ -z "$PID" ] || ! kill -0 "$PID" 2>/dev/null; then
+      echo "ERROR: helios not running (stale pid file) pid_file=$HELIOS_PID_FILE pid=''${PID:-unknown}" >&2
+      exit 1
+    fi
+
+    TIMEOUT_SECS="''${HELIOS_READY_TIMEOUT_SECS:-300}"
+    INTERVAL_SECS="''${HELIOS_READY_INTERVAL_SECS:-1}"
+
+    case "$TIMEOUT_SECS" in
+      *[!0-9]*|"")
+        echo "ERROR: HELIOS_READY_TIMEOUT_SECS must be an integer seconds value (got '$TIMEOUT_SECS')" >&2
+        exit 1
+        ;;
+    esac
+
+    start_ts="$(${pkgs.coreutils}/bin/date +%s)"
+    attempt=0
+
+    while true; do
+      attempt=$((attempt + 1))
+
+      RESP="$(${pkgs.curl}/bin/curl -fsS --max-time 2 \
+        -H 'content-type: application/json' \
+        --data '{"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]}' \
+        "http://127.0.0.1:$HELIOS_RPC_PORT" 2>/dev/null || true)"
+
+      if [ -n "$RESP" ] && echo "$RESP" | ${pkgs.jq}/bin/jq -e '.result | strings' >/dev/null 2>&1; then
+        echo "OK: helios ready rpc_port=$HELIOS_RPC_PORT"
+        exit 0
+      fi
+
+      if [ $((attempt % 10)) -eq 0 ]; then
+        ERR_MSG=""
+        if [ -n "$RESP" ]; then
+          ERR_MSG="$(echo "$RESP" | ${pkgs.jq}/bin/jq -r '.error.message // empty' 2>/dev/null || true)"
+        fi
+
+        SYNC_STATUS="$(${pkgs.curl}/bin/curl -fsS --max-time 2 \
+          -H 'content-type: application/json' \
+          --data '{"jsonrpc":"2.0","id":1,"method":"eth_syncing","params":[]}' \
+          "http://127.0.0.1:$HELIOS_RPC_PORT" 2>/dev/null \
+          | ${pkgs.jq}/bin/jq -r '.result | if type == "object" then "\(.currentBlock)/\(.highestBlock)" else "not_syncing" end' 2>/dev/null \
+          || true)"
+
+        if [ -n "''${ERR_MSG:-}" ] && [ -n "''${SYNC_STATUS:-}" ]; then
+          echo "INFO: helios not ready yet: $ERR_MSG (eth_syncing=$SYNC_STATUS)" >&2
+        elif [ -n "''${ERR_MSG:-}" ]; then
+          echo "INFO: helios not ready yet: $ERR_MSG" >&2
+        elif [ -n "''${SYNC_STATUS:-}" ]; then
+          echo "INFO: helios eth_syncing=$SYNC_STATUS" >&2
+        fi
+      fi
+
+      now_ts="$(${pkgs.coreutils}/bin/date +%s)"
+      if [ $((now_ts - start_ts)) -ge "$TIMEOUT_SECS" ]; then
+        echo "ERROR: helios not ready after $TIMEOUT_SECS s (eth_blockNumber still failing) rpc_port=$HELIOS_RPC_PORT" >&2
+        echo "HINT: set HELIOS_CHECKPOINT and HELIOS_CONSENSUS_RPC_URL explicitly for mainnet." >&2
+        exit 1
+      fi
+
+      ${pkgs.coreutils}/bin/sleep "$INTERVAL_SECS"
+    done
+  '';
+
   fullStart = pkgs.writeShellScript "helios-full-start" ''
     set -euo pipefail
 
@@ -281,6 +453,7 @@ in
     status
     health
     checkConfig
+    ready
     fullStart
     fullStartTest
     ;

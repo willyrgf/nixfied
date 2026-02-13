@@ -196,25 +196,43 @@ let
       echo "''${token}_''${op}"
     }
 
-    # fixture_start_service SERVICE [profile] [timeout] [interval] [logfile]
-    # - start service lifecycle from hook contract and register cleanup.
+    # fixture_start_service SERVICE [profile] [timeout] [interval] [logfile] [keep_running]
+    # - start service lifecycle from hook contract and register cleanup unless keep_running=1.
     fixture_start_service() {
       local service="$1"
       local profile="''${2:-default}"
       local timeout="''${3:-60}"
       local interval="''${4:-1}"
       local logfile="''${5:-}"
+      local keep_running_raw="''${6:-0}"
+      local keep_running="0"
 
       if [ -z "$service" ]; then
-        echo "usage: fixture_start_service <service> [profile] [timeout] [interval] [logfile]" >&2
+        echo "usage: fixture_start_service <service> [profile] [timeout] [interval] [logfile] [keep_running]" >&2
         return 1
       fi
+
+      case "$keep_running_raw" in
+        1|true|TRUE|yes|YES)
+          keep_running="1"
+          ;;
+        0|false|FALSE|no|NO|"")
+          keep_running="0"
+          ;;
+        *)
+          echo "ERROR: fixture_start_service keep_running must be 0/1/true/false (got '$keep_running_raw')" >&2
+          return 1
+          ;;
+      esac
 
       local start_hook=""
       local init_hook=""
       local check_hook=""
       local stop_hook=""
       local health_hook=""
+      local ready_hook=""
+      local wait_hook=""
+      local status_hook=""
       local start_cmd=""
       local op=""
       local hook=""
@@ -244,6 +262,8 @@ let
 
       stop_hook=$(_service_hook_name "$service" "STOP")
       health_hook=$(_service_hook_name "$service" "HEALTH")
+      ready_hook=$(_service_hook_name "$service" "READY")
+      status_hook=$(_service_hook_name "$service" "STATUS")
       init_hook=$(_service_hook_name "$service" "INIT")
       check_hook=$(_service_hook_name "$service" "CHECK_CONFIG")
       start_cmd="''${!start_hook}"
@@ -266,21 +286,69 @@ let
         return 1
       fi
 
-      # Always clean wrapper process and module-native process state.
-      with_cleanup "stop_service $pid \"$service\""
-      if has_hook "$stop_hook"; then
-        with_cleanup "run_hook $stop_hook"
+      # Clean wrapper process and module-native process state unless persistence is requested.
+      if [ "$keep_running" = "1" ]; then
+        echo "INFO: fixture service keep_running enabled service=$service pid=$pid" >&2
+      else
+        with_cleanup "stop_service $pid \"$service\""
+        if has_hook "$stop_hook"; then
+          with_cleanup "run_hook $stop_hook"
+        fi
       fi
 
-      if has_hook "$health_hook"; then
-        if ! wait_hook_ok "$health_hook" "$timeout" "$interval"; then
-          echo "ERROR: fixture health check failed service=$service hook=$health_hook" >&2
-          if has_hook "$stop_hook"; then
-            run_hook "$stop_hook" >/dev/null 2>&1 || true
+      if has_hook "$ready_hook"; then
+        wait_hook="$ready_hook"
+      elif has_hook "$health_hook"; then
+        wait_hook="$health_hook"
+      fi
+
+      if [ -n "$wait_hook" ]; then
+        local start_ts
+        start_ts=$(date +%s)
+
+        while true; do
+          if run_hook "$wait_hook" >/dev/null 2>&1; then
+            break
           fi
-          stop_service "$pid" "$service" >/dev/null 2>&1 || true
-          return 1
-        fi
+
+          # If the wrapper process died, fail fast unless STATUS indicates service is up.
+          if ! kill -0 "$pid" 2>/dev/null; then
+            local status_ok=0
+            if has_hook "$status_hook"; then
+              if run_hook "$status_hook" >/dev/null 2>&1; then
+                status_ok=1
+              fi
+            fi
+
+            if [ "$status_ok" -ne 1 ]; then
+              echo "ERROR: fixture service start exited early service=$service pid=$pid hook=$start_hook" >&2
+              if [ -n "$logfile" ] && [ -f "$logfile" ]; then
+                echo "INFO: last 200 lines of log: $logfile" >&2
+                tail -200 "$logfile" >&2 || true
+              fi
+              if has_hook "$stop_hook"; then
+                run_hook "$stop_hook" >/dev/null 2>&1 || true
+              fi
+              stop_service "$pid" "$service" >/dev/null 2>&1 || true
+              return 1
+            fi
+          fi
+
+          if [ $(( $(date +%s) - start_ts )) -ge "$timeout" ]; then
+            echo "ERROR: fixture readiness check failed service=$service hook=$wait_hook timeout=''${timeout}s" >&2
+            if [ -n "$logfile" ] && [ -f "$logfile" ]; then
+              echo "INFO: last 200 lines of log: $logfile" >&2
+              tail -200 "$logfile" >&2 || true
+            fi
+            if has_hook "$stop_hook"; then
+              run_hook "$stop_hook" >/dev/null 2>&1 || true
+            fi
+            stop_service "$pid" "$service" >/dev/null 2>&1 || true
+            return 1
+          fi
+
+          sleep "$interval"
+        done
       fi
 
       echo "OK: fixture service ready service=$service profile=$profile"

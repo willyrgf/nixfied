@@ -99,7 +99,11 @@ rec {
       dataDirName = "reth";
       network = "local";
       devMode = true;
-      extraArgs = [ ];
+      # Use an ephemeral p2p listener in test fixtures to avoid collisions with local nodes.
+      extraArgs = [
+        "--port"
+        "0"
+      ];
     };
     helios = {
       enable = true;

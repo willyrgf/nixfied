@@ -6,6 +6,7 @@
   nginxCheckConfig,
   nginxStatus,
   nginxHealth,
+  nginxReady,
   nginxSiteAdd,
   nginxSiteStatic,
   nginxSiteList,
@@ -85,16 +86,24 @@
   set -e
   [ "$RC" -ne 0 ] || fail "nginxHealth should fail when not running"
 
+  set +e
+  ${nginxReady} >/dev/null 2>&1
+  RC=$?
+  set -e
+  [ "$RC" -ne 0 ] || fail "nginxReady should fail when not running"
+
   NGINX_PID=$(start_service nginx -- ${nginxStart})
   READY=0
   for _ in $(seq 1 80); do
-    if ${nginxHealth} >/dev/null 2>&1; then
+    if ${nginxReady} >/dev/null 2>&1; then
       READY=1
       break
     fi
     sleep 0.2
   done
-  [ "$READY" -eq 1 ] || fail "nginx did not become healthy"
+  [ "$READY" -eq 1 ] || fail "nginx did not become ready"
+
+  ${nginxHealth} >/dev/null || fail "nginxHealth should pass while running"
 
   ${nginxStatus} >/dev/null || fail "nginxStatus should pass while running"
   ${nginxStop}
@@ -108,6 +117,12 @@
   RC=$?
   set -e
   [ "$RC" -ne 0 ] || fail "nginxHealth should fail after stop"
+
+  set +e
+  ${nginxReady} >/dev/null 2>&1
+  RC=$?
+  set -e
+  [ "$RC" -ne 0 ] || fail "nginxReady should fail after stop"
 
   echo "nginx site lifecycle fixture ok"
 

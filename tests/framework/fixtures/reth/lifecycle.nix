@@ -3,6 +3,7 @@
   rethStart,
   rethStop,
   rethHealth,
+  rethReady,
   rethStatus,
   rethCheckConfig,
 }:
@@ -15,23 +16,14 @@
     exit 1
   }
 
-  pick_port() {
-    local port
-    local i
-    for i in $(seq 1 40); do
-      port=$(( (RANDOM % 20000) + 20000 ))
-      if ! nc -z 127.0.0.1 "$port" >/dev/null 2>&1; then
-        echo "$port"
-        return 0
-      fi
-    done
-    return 1
-  }
-
   eval "$("$SLOT_INFO")"
-  export RETHHTTP_PORT=$(pick_port)
-  export RETHWS_PORT=$(pick_port)
-  export RETHAUTH_PORT=$(pick_port)
+
+  if nc -z 127.0.0.1 "$RETHHTTP_PORT" >/dev/null 2>&1 || nc -z 127.0.0.1 "$RETHWS_PORT" >/dev/null 2>&1 || nc -z 127.0.0.1 "$RETHAUTH_PORT" >/dev/null 2>&1; then
+    echo "SKIP: reth lifecycle ports already in use http=$RETHHTTP_PORT ws=$RETHWS_PORT auth=$RETHAUTH_PORT"
+    exit 0
+  fi
+
+  RETH_DIR="$BASE_DIR/reth-$SLOT-$ENV"
 
   ${rethInit}
   ${rethInit}
@@ -44,16 +36,28 @@
   set -e
   [ "$RC" -ne 0 ] || fail "rethHealth should fail before start"
 
+  set +e
+  ${rethReady} >/dev/null 2>&1
+  RC=$?
+  set -e
+  [ "$RC" -ne 0 ] || fail "rethReady should fail before start"
+
   RETH_PID=$(start_service reth -- ${rethStart})
   READY=0
-  for _ in $(seq 1 120); do
+  for _ in $(seq 1 240); do
     if ${rethHealth} >/dev/null 2>&1; then
       READY=1
       break
     fi
     sleep 0.2
   done
-  [ "$READY" -eq 1 ] || fail "reth did not become healthy"
+  if [ "$READY" -ne 1 ]; then
+    tail -50 "$RETH_DIR/logs/reth.log" >&2 || true
+    fail "reth did not become healthy"
+  fi
+
+  ${rethHealth} >/dev/null || fail "rethHealth should pass while running"
+  ${rethReady} >/dev/null || fail "rethReady should pass while running"
 
   ${rethStatus} >/dev/null || fail "rethStatus should pass while running"
 
@@ -72,6 +76,12 @@
     fi
   done
   [ "$RETH_DOWN" -eq 1 ] || fail "rethHealth should fail after stop"
+
+  set +e
+  ${rethReady} >/dev/null 2>&1
+  RC=$?
+  set -e
+  [ "$RC" -ne 0 ] || fail "rethReady should fail after stop"
 
   echo "reth lifecycle fixture ok"
 
