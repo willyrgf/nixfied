@@ -509,33 +509,49 @@ let
     echo "TESTS FAILED"
     exit 1
   '';
+
+  mkIsolationApp =
+    {
+      name,
+      script,
+      useDeps ? false,
+      summary,
+      details,
+      usage,
+    }:
+    lib.appApi.mkNixfiedApp {
+      inherit
+        name
+        script
+        useDeps
+        ;
+      env = { };
+      api = {
+        version = 1;
+        inherit
+          summary
+          details
+          usage
+          ;
+        category = "isolation";
+      };
+    };
 in
 {
-  validate-env = lib.appApi.mkNixfiedApp {
+  validate-env = mkIsolationApp {
     name = "validate-env";
     script = validateEnvScript;
-    env = { };
-    useDeps = false;
-    api = {
-      version = 1;
-      summary = "Validate slot/env listeners and directories";
-      details = "Validates port listeners and required directories for the current slot/env.";
-      usage = [ "nix run .#validate-env" ];
-      category = "isolation";
-    };
+    summary = "Validate slot/env listeners and directories";
+    details = "Validates port listeners and required directories for the current slot/env.";
+    usage = [ "nix run .#validate-env" ];
   };
 
-  test-isolation = lib.appApi.mkNixfiedApp {
+  test-isolation = mkIsolationApp {
     name = "test-isolation";
     script = testIsolationScript;
-    env = { };
     useDeps = useDeps;
-    api = {
-      version = 1;
-      summary = "Run concurrent isolation checks across slots/envs";
-      details = "Runs concurrent validation and CI (or custom) commands across slot/env combinations and reports isolation issues.";
-      usage = [ "nix run .#test-isolation" ];
-      category = "isolation";
-    };
+    summary = "Run concurrent isolation checks across slots/envs";
+    details = "Runs concurrent validation and CI (or custom) commands across slot/env combinations and reports isolation issues.";
+    usage = [ "nix run .#test-isolation" ];
   };
 }
