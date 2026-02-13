@@ -155,6 +155,13 @@ let
       mkAppsFromSpecs mkSupervisorHookApp supervisorSpecs;
 
   portNames = builtins.attrNames (project.ports or { });
+  slotInfoEvalBlock = ''
+    SLOT_INFO_OUT="$($SLOT_INFO)" || exit 1
+    eval "$SLOT_INFO_OUT"
+  '';
+  portVarNameFor =
+    portName:
+    pkgs.lib.strings.toUpper (pkgs.lib.replaceStrings [ "-" "." ] [ "_" "_" ] portName) + "_PORT";
 
   utilityApps = {
     check-ports = mk {
@@ -163,16 +170,14 @@ let
       details = "Scans the configured ports for the current slot/env and reports whether they are free or listening.";
       category = "utility";
       script = ''
-        SLOT_INFO_OUT="$($SLOT_INFO)" || exit 1
-        eval "$SLOT_INFO_OUT"
+        ${slotInfoEvalBlock}
         LSOF="${pkgs.lsof}/bin/lsof"
         echo "Port status for slot ''${SLOT:-0}, env ''${ENV:-dev}:"
         echo ""
         ${pkgs.lib.concatMapStringsSep "\n" (
           portName:
           let
-            varName =
-              pkgs.lib.strings.toUpper (pkgs.lib.replaceStrings [ "-" "." ] [ "_" "_" ] portName) + "_PORT";
+            varName = portVarNameFor portName;
           in
           ''
             PORT_VAL="''${${varName}:-}"
@@ -194,15 +199,13 @@ let
       details = "Prints effective port assignments for the current slot/env.";
       category = "utility";
       script = ''
-        SLOT_INFO_OUT="$($SLOT_INFO)" || exit 1
-        eval "$SLOT_INFO_OUT"
+        ${slotInfoEvalBlock}
         echo "Port assignments for slot ''${SLOT:-0}, env ''${ENV:-dev}:"
         echo ""
         ${pkgs.lib.concatMapStringsSep "\n" (
           portName:
           let
-            varName =
-              pkgs.lib.strings.toUpper (pkgs.lib.replaceStrings [ "-" "." ] [ "_" "_" ] portName) + "_PORT";
+            varName = portVarNameFor portName;
           in
           ''
             echo "  ${portName}: ''${${varName}:-n/a}"
