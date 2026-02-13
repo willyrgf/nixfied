@@ -118,8 +118,8 @@ let
     else
       throw "Install manifest invalid: filterDisplay includes unknown tokens: ${builtins.concatStringsSep ", " unknown}";
 
-  frameworkHelpers = [
-    (mkFrameworkHelper {
+  frameworkHelperSpecs = [
+    {
       name = "install";
       runner = "install";
       summary = "Install Nixfied framework into a repository";
@@ -127,8 +127,8 @@ let
       usage = [
         "nix run .#framework::install -- [--force] [--filter=...] [--reset-project] [--no-prompt-plan]"
       ];
-    })
-    (mkFrameworkHelper {
+    }
+    {
       name = "upgrade";
       runner = "install";
       env = {
@@ -137,15 +137,16 @@ let
       summary = "Upgrade Nixfied framework in-place (preserving nixfied/project and nixfied/local by default)";
       details = "Upgrades the Nixfied framework in-place. By default it preserves nixfied/project and nixfied/local so project-specific configuration and extensions remain intact.";
       usage = [ "nix run .#framework::upgrade -- [--force] [--reset-project] [--no-prompt-plan]" ];
-    })
-    (mkFrameworkHelper {
+    }
+    {
       name = "prompt-plan";
       runner = "prompt-plan";
       summary = "Generate Nixfied prompt plan from project docs";
       details = "Generates a prompt plan document (for agents) from the repository's project docs. This is framework-only and can be disabled via NIXFIED_PROMPT_PLAN=0.";
       usage = [ "nix run .#framework::prompt-plan -- [--force] [--output=PATH]" ];
-    })
+    }
   ];
+  frameworkHelpers = map mkFrameworkHelper frameworkHelperSpecs;
 
   helperNames = map (h: h.name) frameworkHelpers;
   helperRunners = map (h: h.runner) frameworkHelpers;
