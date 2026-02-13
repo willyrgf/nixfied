@@ -214,6 +214,30 @@ let
           - Missing publicApi for enabled services: ${builtins.concatStringsSep ", " missing}
       '';
 
+  mkServiceApisFromModules =
+    modules:
+    let
+      names = lib.sort (a: b: a < b) (builtins.attrNames modules);
+      pairs = builtins.concatLists (
+        map (
+          name:
+          let
+            mod = modules.${name};
+          in
+          if mod == null then
+            [ ]
+          else
+            [
+              {
+                inherit name;
+                value = mod.publicApi or null;
+              }
+            ]
+        ) names
+      );
+    in
+    builtins.listToAttrs pairs;
+
   serviceOps = api: (api.coreOps or { }) // (api.extensions or { });
 
   hookNameFor =
@@ -361,6 +385,7 @@ in
     validateServiceApi
     validateServiceApis
     validateEnabledServicesHaveContracts
+    mkServiceApisFromModules
     mkServiceHookEnvFromContract
     mkServiceAppsFromContract
     ;

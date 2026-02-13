@@ -2648,12 +2648,15 @@ let
       reth = import ./nixfied/.framework/reth { inherit pkgs project slots; };
       helios = import ./nixfied/.framework/helios { inherit pkgs project slots; };
       supervisor = import ./nixfied/.framework/supervisor { inherit pkgs project slots; };
-      serviceApis = {
-        postgres = postgres.publicApi;
-        nginx = nginx.publicApi;
-        minio = minio.publicApi;
-        reth = reth.publicApi;
-        helios = helios.publicApi;
+      serviceApi = import ./nixfied/.framework/lib/service-api.nix { inherit pkgs; };
+      serviceApis = serviceApi.mkServiceApisFromModules {
+        inherit
+          postgres
+          nginx
+          minio
+          reth
+          helios
+          ;
       };
       hooks = import ./nixfied/.framework/hooks.nix {
         inherit pkgs project slots postgres nginx minio reth helios supervisor serviceApis;
@@ -2711,12 +2714,15 @@ let
       reth = import ./nixfied/.framework/reth { inherit pkgs project slots; };
       helios = import ./nixfied/.framework/helios { inherit pkgs project slots; };
       supervisor = import ./nixfied/.framework/supervisor { inherit pkgs project slots; };
-      serviceApis = {
-        postgres = postgres.publicApi;
-        nginx = nginx.publicApi;
-        minio = minio.publicApi;
-        reth = reth.publicApi;
-        helios = helios.publicApi;
+      serviceApi = import ./nixfied/.framework/lib/service-api.nix { inherit pkgs; };
+      serviceApis = serviceApi.mkServiceApisFromModules {
+        inherit
+          postgres
+          nginx
+          minio
+          reth
+          helios
+          ;
       };
       hooks = import ./nixfied/.framework/hooks.nix {
         inherit pkgs project slots postgres nginx minio reth helios supervisor serviceApis;
@@ -2885,12 +2891,15 @@ let
       minio = import ./nixfied/.framework/minio { inherit pkgs project slots; };
       reth = import ./nixfied/.framework/reth { inherit pkgs project slots; };
       helios = import ./nixfied/.framework/helios { inherit pkgs project slots; };
-      serviceApis = {
-        postgres = postgres.publicApi;
-        nginx = nginx.publicApi;
-        minio = minio.publicApi;
-        reth = reth.publicApi;
-        helios = helios.publicApi;
+      serviceApi = import ./nixfied/.framework/lib/service-api.nix { inherit pkgs; };
+      serviceApis = serviceApi.mkServiceApisFromModules {
+        inherit
+          postgres
+          nginx
+          minio
+          reth
+          helios
+          ;
       };
       hooks = import ./nixfied/.framework/hooks.nix {
         inherit pkgs project slots postgres nginx minio reth helios serviceApis;
