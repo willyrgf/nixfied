@@ -162,6 +162,20 @@ let
   portVarNameFor =
     portName:
     pkgs.lib.strings.toUpper (pkgs.lib.replaceStrings [ "-" "." ] [ "_" "_" ] portName) + "_PORT";
+  mkPortScriptLines =
+    render:
+    pkgs.lib.concatMapStringsSep "\n" (
+      portName:
+      let
+        varName = portVarNameFor portName;
+      in
+      render {
+        inherit
+          portName
+          varName
+          ;
+      }
+    ) portNames;
 
   utilityApps = {
     check-ports = mk {
@@ -174,11 +188,11 @@ let
         LSOF="${pkgs.lsof}/bin/lsof"
         echo "Port status for slot ''${SLOT:-0}, env ''${ENV:-dev}:"
         echo ""
-        ${pkgs.lib.concatMapStringsSep "\n" (
-          portName:
-          let
-            varName = portVarNameFor portName;
-          in
+        ${mkPortScriptLines (
+          {
+            portName,
+            varName,
+          }:
           ''
             PORT_VAL="''${${varName}:-}"
             if [ -n "$PORT_VAL" ]; then
@@ -190,7 +204,7 @@ let
               fi
             fi
           ''
-        ) portNames}
+        )}
       '';
     };
     ports = mk {
@@ -202,15 +216,15 @@ let
         ${slotInfoEvalBlock}
         echo "Port assignments for slot ''${SLOT:-0}, env ''${ENV:-dev}:"
         echo ""
-        ${pkgs.lib.concatMapStringsSep "\n" (
-          portName:
-          let
-            varName = portVarNameFor portName;
-          in
+        ${mkPortScriptLines (
+          {
+            portName,
+            varName,
+          }:
           ''
             echo "  ${portName}: ''${${varName}:-n/a}"
           ''
-        ) portNames}
+        )}
       '';
     };
   };
