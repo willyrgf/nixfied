@@ -886,7 +886,7 @@ let
     set +e
     (
       unset SLOT_INFO REQUIRE_SLOT_ENV \
-        POSTGRES_INIT POSTGRES_START POSTGRES_STOP POSTGRES_HEALTH POSTGRES_READY POSTGRES_SETUP_DB POSTGRES_FULL_START POSTGRES_FULL_START_TEST \
+        POSTGRES_INIT POSTGRES_START POSTGRES_STOP POSTGRES_HEALTH POSTGRES_READY POSTGRES_READY_TEST POSTGRES_SETUP_DB POSTGRES_FULL_START POSTGRES_FULL_START_TEST \
         NGINX_INIT NGINX_START NGINX_STOP NGINX_HEALTH NGINX_READY NGINX_SITE_PROXY NGINX_SITE_STATIC \
         MINIO_INIT MINIO_START MINIO_STOP MINIO_HEALTH MINIO_READY MINIO_CHECK_CONFIG MINIO_BUCKET_LIST \
         RETH_INIT RETH_START RETH_STOP RETH_HEALTH RETH_READY RETH_CHECK_CONFIG \
@@ -1193,6 +1193,22 @@ let
         _cleanup_initialized=false
         echo "OK: fixture_start_service retried READY hook"
 
+        printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' 'exit 1' > "$PWD/mock-ready-default-fail.sh"
+        printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' 'COUNT_FILE="$MOCK_READY_TEST_COUNT_FILE"' 'if [ -z "$COUNT_FILE" ]; then COUNT_FILE="$PWD/mock-ready-test.count"; fi' 'count=0' 'if [ -f "$COUNT_FILE" ]; then count=$(cat "$COUNT_FILE"); fi' 'count=$((count + 1))' 'echo "$count" > "$COUNT_FILE"' 'if [ "$count" -lt 2 ]; then exit 1; fi' 'exit 0' > "$PWD/mock-ready-test.sh"
+        chmod +x "$PWD/mock-ready-default-fail.sh" "$PWD/mock-ready-test.sh"
+        export MOCK_READY_TEST_COUNT_FILE="$PWD/mock-ready-test.count"
+        rm -f "$MOCK_READY_TEST_COUNT_FILE"
+        export MOCKSVC_READY="$PWD/mock-ready-default-fail.sh"
+        export MOCKSVC_READY_TEST="$PWD/mock-ready-test.sh"
+
+        fixture_start_service mocksvc test 5 1
+        READY_TEST_ATTEMPTS="$(cat "$MOCK_READY_TEST_COUNT_FILE" 2>/dev/null || echo 0)"
+        [ "$READY_TEST_ATTEMPTS" -ge 2 ] || fail "fixture_start_service should retry READY_TEST hook attempts=$READY_TEST_ATTEMPTS"
+        _run_cleanups
+        _cleanup_actions=()
+        _cleanup_initialized=false
+        echo "OK: fixture_start_service preferred READY_TEST hook"
+
         export PGPORT="$(pick_port)" || fail "failed to pick port"
         export CI_ARTIFACTS_DIR="$PWD/.artifacts"
         LOGFILE="$(artifact_path "postgres-keep-running.log")"
@@ -1271,6 +1287,7 @@ let
       exit "$RC"
     fi
     assert_contains "$FIX_START_READY_LOG" "OK: fixture_start_service retried READY hook"
+    assert_contains "$FIX_START_READY_LOG" "OK: fixture_start_service preferred READY_TEST hook"
     assert_contains "$FIX_START_READY_LOG" "OK: fixture_start_service keep_running preserved service"
     assert_contains "$FIX_START_READY_LOG" "WARN: fixture log file missing path="
     assert_contains "$FIX_START_READY_LOG" "OK: fixture_start_service timeout cleanup removed process"
@@ -1672,6 +1689,9 @@ let
     assert_file_absent "$INSTALL_TARGET/nixfied/.framework/.workspace"
     assert_file_exists "$INSTALL_TARGET/nixfied/README.md"
     assert_contains "$INSTALL_TARGET/nixfied/VENDORED.txt" "Framework source revision"
+    assert_file_exists "$INSTALL_TARGET/nixfied/UPGRADE_CHECK.txt"
+    assert_contains "$INSTALL_TARGET/nixfied/UPGRADE_CHECK.txt" "git log --oneline"
+    assert_contains "$INSTALL_TARGET/nixfied/UPGRADE_CHECK.txt" "git diff --stat"
 
     log "framework marker toggle"
     mkdir -p "$INSTALL_TARGET/nixfied/.framework"
@@ -2859,6 +2879,7 @@ let
     assert_contains "$SERVICE_HOOKS_FILE" "POSTGRES_START="
     assert_contains "$SERVICE_HOOKS_FILE" "POSTGRES_HEALTH="
     assert_contains "$SERVICE_HOOKS_FILE" "POSTGRES_READY="
+    assert_contains "$SERVICE_HOOKS_FILE" "POSTGRES_READY_TEST="
     assert_contains "$SERVICE_HOOKS_FILE" "NGINX_START="
     assert_contains "$SERVICE_HOOKS_FILE" "NGINX_HEALTH="
     assert_contains "$SERVICE_HOOKS_FILE" "NGINX_READY="
