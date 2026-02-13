@@ -94,6 +94,17 @@ let
       "STATE_DIR"
     ];
   dirVarsStr = pkgs.lib.concatMapStringsSep " " pkgs.lib.escapeShellArg dirVars;
+  forEachDirVarFunction = ''
+    for_each_dir_var() {
+      local callback="$1"
+      local var
+      local path
+      for var in "''${DIR_VARS[@]}" "''${SERVICE_DIR_VARS[@]}"; do
+        path="''${!var:-}"
+        "$callback" "$var" "$path"
+      done
+    }
+  '';
 
   validateEnvScript = ''
     set -euo pipefail
@@ -112,6 +123,7 @@ let
     DIR_VARS=(${dirVarsStr})
     SERVICE_DIR_VARS=(${serviceDirVarsStr})
     SOCKET_CHECKS=(${socketChecksStr})
+    ${forEachDirVarFunction}
 
     LSOF="${pkgs.lsof}/bin/lsof"
 
@@ -150,18 +162,21 @@ let
       check_port "$name" "$var" "$port"
     done
 
-    for var in "''${DIR_VARS[@]}" "''${SERVICE_DIR_VARS[@]}"; do
-      path="''${!var:-}"
+    warn_missing_dir_var() {
+      local var="$1"
+      local path="$2"
       if [ -z "$path" ]; then
         echo "WARN: $var not set"
         WARNINGS=$((WARNINGS + 1))
-        continue
+        return 0
       fi
       if [ ! -d "$path" ]; then
         echo "WARN: $var missing: $path"
         WARNINGS=$((WARNINGS + 1))
       fi
-    done
+    }
+
+    for_each_dir_var warn_missing_dir_var
 
     check_socket() {
       local name="$1"
@@ -239,6 +254,7 @@ let
     KEEP_LOGS_ON_FAILURE=${if keepLogsOnFailure then "true" else "false"}
     DIR_VARS=(${dirVarsStr})
     SERVICE_DIR_VARS=(${serviceDirVarsStr})
+    ${forEachDirVarFunction}
 
     declare -A PIDS
     declare -A OUTPUTS
@@ -348,15 +364,17 @@ let
       echo ""
     fi
 
+    ensure_dir_var() {
+      local _var="$1"
+      local path="$2"
+      if [ -n "$path" ]; then
+        mkdir -p "$path"
+        chmod 700 "$path" 2>/dev/null || true
+      fi
+    }
+
     ensure_dirs() {
-      local var
-      for var in "''${DIR_VARS[@]}" "''${SERVICE_DIR_VARS[@]}"; do
-        local path="''${!var:-}"
-        if [ -n "$path" ]; then
-          mkdir -p "$path"
-          chmod 700 "$path" 2>/dev/null || true
-        fi
-      done
+      for_each_dir_var ensure_dir_var
     }
 
     run_cmd() {
