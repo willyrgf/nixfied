@@ -34,6 +34,7 @@ let
 
   isAttrs = x: builtins.isAttrs x;
   sortedAttrNames = attrs: lib.sort (a: b: a < b) (builtins.attrNames attrs);
+  renderErrors = errs: builtins.concatStringsSep "\n" (map (e: "  - " + e) errs);
 
   normalizeToken =
     x: pkgs.lib.strings.toUpper (pkgs.lib.replaceStrings [ "-" "." ":" ] [ "_" "_" "_" ] x);
@@ -167,7 +168,7 @@ let
     else
       throw ''
         Nixfied service API contract violated for "${serviceName}":
-        ${builtins.concatStringsSep "\n" (map (e: "  - " + e) errs)}
+        ${renderErrors errs}
 
         Fix:
           - Define ${serviceName}.publicApi with:
@@ -195,7 +196,7 @@ let
     else
       throw ''
         Nixfied service API contract violated:
-        ${builtins.concatStringsSep "\n" (map (e: "  - " + e) errs)}
+        ${renderErrors errs}
       '';
 
   validateEnabledServicesHaveContracts =
