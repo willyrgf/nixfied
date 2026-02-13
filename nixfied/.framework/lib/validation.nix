@@ -5,6 +5,7 @@ rec {
   isNonEmptyString = x: builtins.isString x && x != "";
   isNonEmptyList = x: builtins.isList x && x != [ ];
   expect = cond: msg: if cond then [ ] else [ msg ];
+  renderErrors = errs: builtins.concatStringsSep "\n" (map (e: "  - " + e) errs);
   sortedAttrNames = attrs: pkgs.lib.sort (a: b: a < b) (builtins.attrNames attrs);
   optionalAttrSatisfies = attrs: field: pred: !(builtins.hasAttr field attrs) || pred (attrs.${field});
   isListOfNonEmptyStrings =

@@ -8,6 +8,7 @@ let
     isNonEmptyString
     isNonEmptyList
     expect
+    renderErrors
     isListOfNonEmptyStrings
     sortedAttrNames
     optionalAttrSatisfies
@@ -20,7 +21,6 @@ let
         - For project commands: define commands.${commandName}.api = { version = 1; summary = "..."; details = "..."; usage = [ "nix run .#${commandName}" ]; };
         - For generated/internal apps: set app.meta.nixfied.api (or use lib.appApi.mkNixfiedApp).
     '';
-  renderErrors = errs: builtins.concatStringsSep "\n" (map (e: "  - " + e) errs);
   throwNamedViolation =
     name: errs:
     throw ''

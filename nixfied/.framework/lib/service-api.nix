@@ -11,6 +11,7 @@ let
     isNonEmptyString
     isNonEmptyList
     expect
+    renderErrors
     sortedAttrNames
     optionalAttrSatisfies
     isListOfNonEmptyStrings
@@ -35,8 +36,6 @@ let
   ];
 
   isAttrs = x: builtins.isAttrs x;
-  renderErrors = errs: builtins.concatStringsSep "\n" (map (e: "  - " + e) errs);
-
   normalizeToken =
     x: pkgs.lib.strings.toUpper (pkgs.lib.replaceStrings [ "-" "." ":" ] [ "_" "_" "_" ] x);
 
