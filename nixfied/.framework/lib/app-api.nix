@@ -12,6 +12,13 @@ let
     isKVSpec
     ;
 
+  mkFixHint =
+    commandName: ''
+      Fix:
+        - For project commands: define commands.${commandName}.api = { version = 1; summary = "..."; details = "..."; usage = [ "nix run .#${commandName}" ]; };
+        - For generated/internal apps: set app.meta.nixfied.api (or use lib.appApi.mkNixfiedApp).
+    '';
+
   validateApiErrors =
     { name, api }:
     let
@@ -60,9 +67,7 @@ let
         Nixfied app API contract violated for "${name}":
         ${builtins.concatStringsSep "\n" (map (e: "  - " + e) errs)}
 
-        Fix:
-          - For project commands: define commands.${name}.api = { version = 1; summary = "..."; details = "..."; usage = [ "nix run .#${name}" ]; };
-          - For generated/internal apps: set app.meta.nixfied.api (or use lib.appApi.mkNixfiedApp).
+        ${mkFixHint name}
       '';
 
   validateAppErrors =
@@ -93,9 +98,7 @@ let
         Nixfied app API contract violated for "${name}":
         ${builtins.concatStringsSep "\n" (map (e: "  - " + e) errs)}
 
-        Fix:
-          - For project commands: define commands.${name}.api = { version = 1; summary = "..."; details = "..."; usage = [ "nix run .#${name}" ]; };
-          - For generated/internal apps: set app.meta.nixfied.api (or use lib.appApi.mkNixfiedApp).
+        ${mkFixHint name}
       '';
 
   validateApps =
@@ -119,9 +122,7 @@ let
         Nixfied app API contract violated:
         ${builtins.concatStringsSep "\n" (map (e: "  - " + e) errs)}
 
-        Fix:
-          - For project commands: define commands.<name>.api = { version = 1; summary = "..."; details = "..."; usage = [ "nix run .#<name>" ]; };
-          - For generated/internal apps: set app.meta.nixfied.api (or use lib.appApi.mkNixfiedApp).
+        ${mkFixHint "<name>"}
       '';
 
   mkNixfiedApp =
