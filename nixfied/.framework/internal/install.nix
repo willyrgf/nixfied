@@ -43,12 +43,25 @@ let
   filteredTemplateHint = builtins.concatStringsSep "," (
     map (t: pkgs.lib.strings.removeSuffix ".nix" t.file) optionalTemplates
   );
+  requireNextArgFunction = ''
+    require_next_arg() {
+      local flag="$1"
+      local requirement="$2"
+      shift 2 || true
+      if [ "$#" -lt 2 ]; then
+        echo "ERROR: $flag requires $requirement" >&2
+        exit 1
+      fi
+      printf '%s\n' "$2"
+    }
+  '';
 
   promptPlanScript = pkgs.writeShellScript "nixfied-prompt-plan" ''
                             set -euo pipefail
 
                             FORCE=false
                             OUT_PATH=""
+                            ${requireNextArgFunction}
 
                             while [ "$#" -gt 0 ]; do
                               case "$1" in
@@ -61,11 +74,7 @@ let
                                   shift
                                   ;;
                 	                --output)
-                	                  if [ "$#" -lt 2 ]; then
-                	                    echo "ERROR: --output requires a path" >&2
-                	                    exit 1
-                	                  fi
-                                  OUT_PATH="''${2-}"
+                                  OUT_PATH="$(require_next_arg --output "a path" "$@")"
                                   shift 2
                                   ;;
                                 --help|-h)
@@ -212,6 +221,7 @@ let
                                     PROMPT_PLAN_FORCE=false
                                     RESET_PROJECT=false
                                     MODE="''${NIXFIED_INSTALL_MODE:-install}"
+                                    ${requireNextArgFunction}
 
                                     while [ "$#" -gt 0 ]; do
                                       case "$1" in
@@ -228,11 +238,7 @@ let
                                           shift
                                           ;;
                             	            --filter)
-                            	              if [ "$#" -lt 2 ]; then
-                            	                echo "ERROR: --filter requires a value (example: --filter=conf,ci)" >&2
-                            	                exit 1
-                            	              fi
-                                          FILTERS_RAW="''${2-}"
+                                          FILTERS_RAW="$(require_next_arg --filter "a value (example: --filter=conf,ci)" "$@")"
                                           shift 2
                                           ;;
                                         --target=*)
@@ -240,11 +246,7 @@ let
                                           shift
                                           ;;
                             	            --target)
-                            	              if [ "$#" -lt 2 ]; then
-                            	                echo "ERROR: --target requires a path" >&2
-                            	                exit 1
-                            	              fi
-                                          TARGET_PATH="''${2-}"
+                                          TARGET_PATH="$(require_next_arg --target "a path" "$@")"
                                           shift 2
                                           ;;
                                         --worktree)
