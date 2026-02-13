@@ -26,9 +26,10 @@ The test runner validates:
 - Flake evaluation (`nix flake show`, `nix flake check --no-build`).
 - Core apps (`help`, `dev`, `test`, `build`, `check`, `ci`).
 - Helper functions (log_capture, summary_parse, wait_http/port, start_service, start_service_into, with_service, with_cleanup).
+- Fixture helper behavior (`fixture_start_service`) including readiness precedence (`READY` over `HEALTH`) and `keep_running`.
 - Slot/env helpers (SLOT_INFO explicit env/slot validation, REQUIRE_SLOT_ENV failure paths).
 - CI DSL behavior (modes, errors, step skipping, cleanup, teardown, artifacts, summary output, summary.json).
-- Service module hooks for Postgres, Nginx, MinIO, Reth, and Helios (init/start/stop/check-config and health pass/fail paths).
+- Service module hooks for Postgres, Nginx, MinIO, Reth, and Helios (init/start/stop/check-config plus health/ready pass-fail paths).
 - Supervisor config generation/hook exposure, readiness enforcement, and service-level health checks.
 - Ephemeral slot locking (acquire/release, env var export).
 - Run registry (foreground run tracking, meta.json, output.log).
@@ -64,7 +65,7 @@ If you want end‑to‑end examples, start here:
 - `fixtures/ci/ci.nix` — CI DSL wiring and step control.
 - `fixtures/ci/retention.nix` — artifact retention modes.
 - `fixtures/ci/unknown-step.nix` — failure on misconfigured steps.
-- `fixtures/modules/dev.nix` — service hook lifecycle and health behavior across all supported modules.
+- `fixtures/modules/dev.nix` — service hook lifecycle with health/readiness behavior across all supported modules.
 - `fixtures/ephemeral/lock.nix` — Ephemeral slot lock acquire/release.
 - `fixtures/registry/foreground.nix` — Run registry foreground tracking.
 
