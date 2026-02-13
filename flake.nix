@@ -112,16 +112,6 @@
             rev
           else
             "unknown";
-        frameworkSourceInfo =
-          let
-            sourceInfo = if self ? sourceInfo then self.sourceInfo else { };
-          in
-          {
-            type = if sourceInfo ? type then sourceInfo.type else "";
-            owner = if sourceInfo ? owner then sourceInfo.owner else "";
-            repo = if sourceInfo ? repo then sourceInfo.repo else "";
-            rev = if sourceInfo ? rev then sourceInfo.rev else "";
-          };
 
         installApps =
           if isFramework then
@@ -131,7 +121,7 @@
                 lib
                 ;
               frameworkRoot = ./.;
-              inherit frameworkRevision frameworkSourceInfo;
+              inherit frameworkRevision;
             }
           else
             { };

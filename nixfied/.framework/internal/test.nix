@@ -1683,58 +1683,14 @@ let
     log "installer upgrade preserves project"
     echo "# NIXFIED_UPGRADE_TEST_MARKER" >> "$INSTALL_TARGET/nixfied/project/conf.nix"
     echo "# NIXFIED_LOCAL_UPGRADE_TEST_MARKER" >> "$INSTALL_TARGET/nixfied/local/default.nix"
+    echo "stale upgrade check" > "$INSTALL_TARGET/nixfied/UPGRADE_CHECK.txt"
     (cd "$INSTALL_TARGET" && nix run "path:$ROOT"#framework::upgrade -- --force >/dev/null)
     assert_contains "$INSTALL_TARGET/nixfied/project/conf.nix" "NIXFIED_UPGRADE_TEST_MARKER"
     assert_contains "$INSTALL_TARGET/nixfied/local/default.nix" "NIXFIED_LOCAL_UPGRADE_TEST_MARKER"
     assert_file_absent "$INSTALL_TARGET/nixfied/.framework/.workspace"
     assert_file_exists "$INSTALL_TARGET/nixfied/README.md"
     assert_contains "$INSTALL_TARGET/nixfied/VENDORED.txt" "Framework source revision"
-    assert_file_exists "$INSTALL_TARGET/nixfied/UPGRADE_CHECK.txt"
-    assert_contains "$INSTALL_TARGET/nixfied/UPGRADE_CHECK.txt" "git log --oneline"
-    assert_contains "$INSTALL_TARGET/nixfied/UPGRADE_CHECK.txt" "git diff --stat"
-
-    log "upgrade check remote fetch fallback"
-    UPGRADE_FETCH_SOURCE="$WORKDIR/upgrade-fetch-source"
-    git clone -q "$ROOT" "$UPGRADE_FETCH_SOURCE"
-    ${pkgs.rsync}/bin/rsync -a --delete --exclude='.git/' "$ROOT/" "$UPGRADE_FETCH_SOURCE/"
-    git -C "$UPGRADE_FETCH_SOURCE" config user.email "nixfied-test@example.invalid"
-    git -C "$UPGRADE_FETCH_SOURCE" config user.name "nixfied test"
-    git -C "$UPGRADE_FETCH_SOURCE" add -A
-    if ! git -C "$UPGRADE_FETCH_SOURCE" diff --cached --quiet; then
-      git -C "$UPGRADE_FETCH_SOURCE" commit -qm "test source snapshot"
-    fi
-    if ! git -C "$UPGRADE_FETCH_SOURCE" rev-parse --verify HEAD~1 >/dev/null 2>&1; then
-      fail "expected at least two commits in framework source fixture"
-    fi
-    UPGRADE_FETCH_NEW_REV=$(git -C "$UPGRADE_FETCH_SOURCE" rev-parse HEAD)
-    UPGRADE_FETCH_OLD_REV=$(git -C "$UPGRADE_FETCH_SOURCE" rev-parse HEAD~1)
-    UPGRADE_FETCH_NEW_SHORT=$(printf '%s' "$UPGRADE_FETCH_NEW_REV" | cut -c1-7)
-
-    log "upgrade check identical revisions"
-    UPGRADE_FETCH_IDENTICAL_TARGET="$WORKDIR/install-upgrade-fetch-identical"
-    init_repo "$UPGRADE_FETCH_IDENTICAL_TARGET"
-    (cd "$UPGRADE_FETCH_IDENTICAL_TARGET" && nix run "git+file://$UPGRADE_FETCH_SOURCE?rev=$UPGRADE_FETCH_NEW_REV"#framework::install -- --force --no-prompt-plan >/dev/null)
-    (cd "$UPGRADE_FETCH_IDENTICAL_TARGET" && nix run "git+file://$UPGRADE_FETCH_SOURCE?rev=$UPGRADE_FETCH_NEW_REV"#framework::upgrade -- --force --no-prompt-plan >/dev/null)
-    assert_file_exists "$UPGRADE_FETCH_IDENTICAL_TARGET/nixfied/UPGRADE_CHECK.txt"
-    assert_contains "$UPGRADE_FETCH_IDENTICAL_TARGET/nixfied/UPGRADE_CHECK.txt" "SKIP: Revisions are identical; no framework changes to report."
-
-    UPGRADE_FETCH_TARGET="$WORKDIR/install-upgrade-fetch"
-    init_repo "$UPGRADE_FETCH_TARGET"
-    (cd "$UPGRADE_FETCH_TARGET" && nix run "git+file://$UPGRADE_FETCH_SOURCE?rev=$UPGRADE_FETCH_OLD_REV"#framework::install -- --force --no-prompt-plan >/dev/null)
-    (cd "$UPGRADE_FETCH_TARGET" && NIXFIED_UPGRADE_CHECK_REMOTE_URL="file://$UPGRADE_FETCH_SOURCE" nix run "git+file://$UPGRADE_FETCH_SOURCE?rev=$UPGRADE_FETCH_NEW_REV"#framework::upgrade -- --force --no-prompt-plan >/dev/null)
-    assert_file_exists "$UPGRADE_FETCH_TARGET/nixfied/UPGRADE_CHECK.txt"
-    assert_contains "$UPGRADE_FETCH_TARGET/nixfied/UPGRADE_CHECK.txt" "$UPGRADE_FETCH_OLD_REV"
-    assert_contains "$UPGRADE_FETCH_TARGET/nixfied/UPGRADE_CHECK.txt" "$UPGRADE_FETCH_NEW_REV"
-    assert_contains "$UPGRADE_FETCH_TARGET/nixfied/UPGRADE_CHECK.txt" "$UPGRADE_FETCH_NEW_SHORT"
-    assert_not_contains "$UPGRADE_FETCH_TARGET/nixfied/UPGRADE_CHECK.txt" "SKIP: Unable to resolve both revisions in framework source git history."
-
-    log "upgrade check fetch disable"
-    UPGRADE_FETCH_DISABLED_TARGET="$WORKDIR/install-upgrade-fetch-disabled"
-    init_repo "$UPGRADE_FETCH_DISABLED_TARGET"
-    (cd "$UPGRADE_FETCH_DISABLED_TARGET" && nix run "git+file://$UPGRADE_FETCH_SOURCE?rev=$UPGRADE_FETCH_OLD_REV"#framework::install -- --force --no-prompt-plan >/dev/null)
-    (cd "$UPGRADE_FETCH_DISABLED_TARGET" && NIXFIED_UPGRADE_CHECK_FETCH=0 NIXFIED_UPGRADE_CHECK_REMOTE_URL="file://$UPGRADE_FETCH_SOURCE" nix run "git+file://$UPGRADE_FETCH_SOURCE?rev=$UPGRADE_FETCH_NEW_REV"#framework::upgrade -- --force --no-prompt-plan >/dev/null)
-    assert_file_exists "$UPGRADE_FETCH_DISABLED_TARGET/nixfied/UPGRADE_CHECK.txt"
-    assert_contains "$UPGRADE_FETCH_DISABLED_TARGET/nixfied/UPGRADE_CHECK.txt" "SKIP: Unable to resolve both revisions in framework source git history."
+    assert_file_absent "$INSTALL_TARGET/nixfied/UPGRADE_CHECK.txt"
 
     log "framework marker toggle"
     mkdir -p "$INSTALL_TARGET/nixfied/.framework"
