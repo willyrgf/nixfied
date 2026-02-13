@@ -139,6 +139,7 @@ Vendoring boundaries (relevant for upgrades):
 - Framework-owned (overwritten on `framework::upgrade`): `flake.nix`, `flake.lock`, `nixfied/.framework/`.
 - User-owned (preserved on `framework::upgrade`): `nixfied/project/` and `nixfied/local/`.
 - Canonical doc: `nixfied/VENDORED.txt` (includes the framework source revision used by install/upgrade).
+- Upgrade report: `nixfied/UPGRADE_CHECK.txt` (contains `git log --oneline` and `git diff --stat` from previous to new framework revision when resolvable).
 
 Force overwrite:
 

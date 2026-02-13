@@ -438,6 +438,33 @@ let
 
                                     echo "INFO: Framework source revision rev=$FRAMEWORK_REVISION"
 
+                                    PREV_FRAMEWORK_REVISION="unknown"
+                                    PREV_FRAMEWORK_COMMIT=""
+                                    FRAMEWORK_COMMIT=""
+                                    if [ "$MODE" = "upgrade" ] && [ -f "$ROOT/nixfied/VENDORED.txt" ]; then
+                                      PREV_FRAMEWORK_REVISION=$(${pkgs.gawk}/bin/awk '
+                                        $0 ~ /^Framework source revision \(install\/upgrade\):$/ { in_section=1; next }
+                                        in_section && $0 ~ /^[[:space:]]*-[[:space:]]+/ {
+                                          line=$0
+                                          sub(/^[[:space:]]*-[[:space:]]+/, "", line)
+                                          print line
+                                          exit
+                                        }
+                                      ' "$ROOT/nixfied/VENDORED.txt" 2>/dev/null || true)
+                                      if [ -z "$PREV_FRAMEWORK_REVISION" ]; then
+                                        PREV_FRAMEWORK_REVISION="unknown"
+                                      fi
+                                      echo "INFO: Existing vendored revision rev=$PREV_FRAMEWORK_REVISION"
+                                    fi
+
+                                    if [ "$MODE" = "upgrade" ]; then
+                                      PREV_FRAMEWORK_COMMIT=$("$GIT" -C "$SRC" rev-parse --verify "''${PREV_FRAMEWORK_REVISION}^{commit}" 2>/dev/null || true)
+                                      FRAMEWORK_COMMIT=$("$GIT" -C "$SRC" rev-parse --verify "''${FRAMEWORK_REVISION}^{commit}" 2>/dev/null || true)
+                                      if [ -z "$FRAMEWORK_COMMIT" ]; then
+                                        FRAMEWORK_COMMIT=$("$GIT" -C "$SRC" rev-parse --verify HEAD^{commit} 2>/dev/null || true)
+                                      fi
+                                    fi
+
         	                    	        if [ ! -f "$SRC/flake.nix" ] || [ ! -d "$SRC/nixfied" ]; then
         	                    	          echo "ERROR: Framework source is missing required files." >&2
         	                    	          exit 1
@@ -550,6 +577,36 @@ let
                                       echo "If you need to customize behavior, prefer editing files under nixfied/project/"
                                       echo "and nixfied/local/ rather than editing framework code."
                                     } > "$ROOT/nixfied/VENDORED.txt"
+
+                                    if [ "$MODE" = "upgrade" ]; then
+                                      UPGRADE_CHECK_FILE="$ROOT/nixfied/UPGRADE_CHECK.txt"
+                                      {
+                                        echo "Nixfied Upgrade Check"
+                                        echo "====================="
+                                        echo ""
+                                        echo "Previous revision (from nixfied/VENDORED.txt):"
+                                        echo "- $PREV_FRAMEWORK_REVISION"
+                                        echo "New revision (upgrade source):"
+                                        echo "- $FRAMEWORK_REVISION"
+                                        echo ""
+                                        echo "git log --oneline"
+                                        echo "-----------------"
+                                        if [ -n "$PREV_FRAMEWORK_COMMIT" ] && [ -n "$FRAMEWORK_COMMIT" ]; then
+                                          "$GIT" -C "$SRC" log --oneline "''${PREV_FRAMEWORK_COMMIT}..''${FRAMEWORK_COMMIT}"
+                                        else
+                                          echo "SKIP: Unable to resolve both revisions in framework source git history."
+                                        fi
+                                        echo ""
+                                        echo "git diff --stat"
+                                        echo "---------------"
+                                        if [ -n "$PREV_FRAMEWORK_COMMIT" ] && [ -n "$FRAMEWORK_COMMIT" ]; then
+                                          "$GIT" -C "$SRC" diff --stat "$PREV_FRAMEWORK_COMMIT" "$FRAMEWORK_COMMIT"
+                                        else
+                                          echo "SKIP: Unable to resolve both revisions in framework source git history."
+                                        fi
+                                      } > "$UPGRADE_CHECK_FILE"
+                                      echo "INFO: Upgrade check written path=$UPGRADE_CHECK_FILE"
+                                    fi
 
                                     chmod -R u+w "$ROOT/nixfied" 2>/dev/null || true
                                     if command -v chflags >/dev/null 2>&1; then
