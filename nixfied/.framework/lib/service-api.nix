@@ -33,6 +33,7 @@ let
   ];
 
   isAttrs = x: builtins.isAttrs x;
+  sortedAttrNames = attrs: lib.sort (a: b: a < b) (builtins.attrNames attrs);
 
   normalizeToken =
     x: pkgs.lib.strings.toUpper (pkgs.lib.replaceStrings [ "-" "." ":" ] [ "_" "_" "_" ] x);
@@ -178,7 +179,7 @@ let
   validateServiceApis =
     serviceApis:
     let
-      names = lib.sort (a: b: a < b) (builtins.attrNames serviceApis);
+      names = sortedAttrNames serviceApis;
       errs = builtins.concatLists (
         map (
           serviceName:
@@ -240,7 +241,7 @@ let
   mkServiceApisFromModules =
     modules:
     let
-      names = lib.sort (a: b: a < b) (builtins.attrNames modules);
+      names = sortedAttrNames modules;
       pairs = builtins.concatLists (
         map (
           name:
@@ -304,13 +305,13 @@ let
   collectServiceOps =
     serviceApis:
     let
-      names = lib.sort (a: b: a < b) (builtins.attrNames serviceApis);
+      names = sortedAttrNames serviceApis;
       validated = validateServiceApis serviceApis;
       toOps =
         serviceName:
         let
           ops = serviceOps validated.${serviceName};
-          opNamesSorted = lib.sort (a: b: a < b) (builtins.attrNames ops);
+          opNamesSorted = sortedAttrNames ops;
         in
         map (
           opName:
