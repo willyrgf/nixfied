@@ -9,25 +9,19 @@
 let
   cfg = project.modules.nginx or { };
   processRegistry = import ../lib/process-registry.nix { inherit pkgs project; };
+  observability = import ../lib/service-observability.nix {
+    inherit
+      pkgs
+      slots
+      processRegistry
+      ;
+  };
   nginx = templates.nginx;
   portVarHttp = slots.portVarName (cfg.portKeyHttp or "http");
   portVarHttps = slots.portVarName (cfg.portKeyHttps or "https");
   dataDirName = cfg.dataDirName or "nginx";
   nginxDirExpr = slots.getServiceDir dataDirName;
-  emitHelper = ''
-    emit_service_event() {
-      local event_type="$1"
-      local state="$2"
-      shift 2 || true
-      ${processRegistry.emitEvent} \
-        --event-type "$event_type" \
-        --service nginx \
-        --state "$state" \
-        --slot "$SLOT" \
-        --env "$ENV" \
-        "$@" >/dev/null 2>&1 || true
-    }
-  '';
+  emitHelper = observability.mkEmitServiceEventFunction "nginx";
 
   generateSelfSignedCert = pkgs.writeShellScript "nginx-generate-self-signed" ''
     set -euo pipefail

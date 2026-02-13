@@ -9,6 +9,13 @@
 let
   cfg = project.modules.postgres or { };
   processRegistry = import ../lib/process-registry.nix { inherit pkgs project; };
+  observability = import ../lib/service-observability.nix {
+    inherit
+      pkgs
+      slots
+      processRegistry
+      ;
+  };
   postgres = cfg.package or pkgs.postgresql_16;
   portKey = cfg.portKey or "postgres";
   portVar = slots.portVarName portKey;
@@ -43,18 +50,7 @@ let
         ;;
     esac
 
-    emit_service_event() {
-      local event_type="$1"
-      local state="$2"
-      shift 2 || true
-      ${processRegistry.emitEvent} \
-        --event-type "$event_type" \
-        --service postgres \
-        --state "$state" \
-        --slot "$SLOT" \
-        --env "$ENV" \
-        "$@" >/dev/null 2>&1 || true
-    }
+    ${observability.mkEmitServiceEventFunction "postgres"}
   '';
 
   ensureConfigPort = ''

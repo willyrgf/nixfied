@@ -21,20 +21,7 @@ let
   consolePortVar = slots.portVarName config.portKeyConsole;
   minioDirExpr = slots.getServiceDir config.dataDirName;
   browserValue = if config.browser then "on" else "off";
-  emitHelper = ''
-    emit_service_event() {
-      local event_type="$1"
-      local state="$2"
-      shift 2 || true
-      ${processRegistry.emitEvent} \
-        --event-type "$event_type" \
-        --service minio \
-        --state "$state" \
-        --slot "$SLOT" \
-        --env "$ENV" \
-        "$@" >/dev/null 2>&1 || true
-    }
-  '';
+  emitHelper = observability.mkEmitServiceEventFunction "minio";
 
   init = pkgs.writeShellScript "minio-init" ''
     set -euo pipefail

@@ -53,6 +53,37 @@ let
       return 0
     }
 
+    is_uint() {
+      case "''${1:-}" in
+        *[!0-9]*|"")
+          return 1
+          ;;
+        *)
+          return 0
+          ;;
+      esac
+    }
+
+    require_positive_int() {
+      local name="$1"
+      local value="$2"
+      if ! is_uint "$value" || [ "$value" -le 0 ]; then
+        echo "ERROR: $name must be a positive integer (got '$value')" >&2
+        return 1
+      fi
+      return 0
+    }
+
+    require_port() {
+      local name="$1"
+      local value="$2"
+      if ! is_uint "$value" || [ "$value" -lt 1 ] || [ "$value" -gt 65535 ]; then
+        echo "ERROR: $name must be a valid TCP port (1-65535, got '$value')" >&2
+        return 1
+      fi
+      return 0
+    }
+
     # wait_http URL [timeout] [interval]
     # - poll HTTP(S) endpoint until it responds 2xx/3xx or timeout.
     wait_http() {
@@ -66,6 +97,8 @@ let
         echo "usage: wait_http <url> [timeout] [interval]" >&2
         return 1
       fi
+      require_positive_int "timeout" "$timeout" || return 1
+      require_positive_int "interval" "$interval" || return 1
 
       while true; do
         if ${pkgs.curl}/bin/curl -sSf "$url" >/dev/null 2>&1; then
@@ -194,6 +227,8 @@ let
         echo "ERROR: Hook not available: $var" >&2
         return 1
       fi
+      require_positive_int "timeout" "$timeout" || return 1
+      require_positive_int "interval" "$interval" || return 1
 
       while true; do
         if run_hook "$var" >/dev/null 2>&1; then
@@ -253,6 +288,8 @@ let
           return 1
           ;;
       esac
+      require_positive_int "timeout" "$timeout" || return 1
+      require_positive_int "interval" "$interval" || return 1
 
       local start_hook=""
       local init_hook=""
@@ -435,6 +472,9 @@ let
         echo "usage: wait_port <port> [timeout] [interval]" >&2
         return 1
       fi
+      require_port "port" "$port" || return 1
+      require_positive_int "timeout" "$timeout" || return 1
+      require_positive_int "interval" "$interval" || return 1
 
       while true; do
         if command -v lsof >/dev/null 2>&1; then
@@ -528,6 +568,11 @@ let
       if [ "''$#" -eq 0 ]; then
         echo "start_service: missing command" >&2
         return 1
+      fi
+      require_positive_int "--timeout" "$timeout" || return 1
+      require_positive_int "--interval" "$interval" || return 1
+      if [ -n "$wait_port_num" ]; then
+        require_port "--wait-port" "$wait_port_num" || return 1
       fi
 
       local in_subshell="false"

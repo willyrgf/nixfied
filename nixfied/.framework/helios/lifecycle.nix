@@ -67,18 +67,7 @@ let
       exit 1
     fi
 
-    emit_service_event() {
-      local event_type="$1"
-      local state="$2"
-      shift 2 || true
-      ${processRegistry.emitEvent} \
-        --event-type "$event_type" \
-        --service helios \
-        --state "$state" \
-        --slot "$SLOT" \
-        --env "$ENV" \
-        "$@" >/dev/null 2>&1 || true
-    }
+    ${observability.mkEmitServiceEventFunction "helios"}
   '';
 
   healthCheck = ''

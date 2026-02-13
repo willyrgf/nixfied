@@ -17,12 +17,20 @@ let
   envVar = projectMeta.envVar or "PROJECT_ENV";
   processCfg = project.process or { };
   registryRoot = processCfg.registryRoot or "/tmp/nixfied-runtime/${projectId}";
+  baseDirExpr = (project.directories.base or "\${XDG_DATA_HOME:-$HOME/.local/share}/${projectId}");
+  ciCfg = project.ci or { };
+  artifactsCfg = ciCfg.artifacts or { };
+  artifactsRootExpr = artifactsCfg.dir or "/tmp/ci-artifacts";
+  ephemeralPrefix = "/tmp/${projectId}-ephemeral-";
 
   sharedPrelude = ''
     set -euo pipefail
 
     REGISTRY_ROOT="${registryRoot}"
     PROJECT_ID="${projectId}"
+    BASE_DIR_DEFAULT="${baseDirExpr}"
+    CI_ARTIFACTS_BASE_DEFAULT="${artifactsRootExpr}"
+    EPHEMERAL_PREFIX="${ephemeralPrefix}"
     SLOT_VAR="${slotVar}"
     ENV_VAR="${envVar}"
     EPHEMERAL_FLAG_VAR="${projectIdUpper}_EPHEMERAL"
@@ -864,15 +872,74 @@ let
       exit 1
     fi
 
+    LOG_PATH_CANON="$(${pkgs.coreutils}/bin/realpath "$LOG_PATH" 2>/dev/null || true)"
+    if [ -z "$LOG_PATH_CANON" ]; then
+      echo "ERROR: failed to resolve canonical log path path=$LOG_PATH service=$SERVICE" >&2
+      exit 1
+    fi
+
+    ALLOWED_ROOTS=()
+    add_allowed_root() {
+      local root_path="$1"
+      local root_canon
+      if [ -z "$root_path" ] || [ ! -d "$root_path" ]; then
+        return 0
+      fi
+      root_canon="$(${pkgs.coreutils}/bin/realpath "$root_path" 2>/dev/null || true)"
+      if [ -n "$root_canon" ]; then
+        ALLOWED_ROOTS+=("$root_canon")
+      fi
+      return 0
+    }
+
+    is_under_root() {
+      local candidate="$1"
+      local root="$2"
+      case "$candidate" in
+        "$root"|"$root"/*) return 0 ;;
+        *) return 1 ;;
+      esac
+    }
+
+    add_allowed_root "''${BASE_DIR:-$BASE_DIR_DEFAULT}"
+    add_allowed_root "$CI_ARTIFACTS_BASE_DEFAULT"
+    add_allowed_root "''${CI_ARTIFACTS_BASE:-}"
+    add_allowed_root "''${CI_ARTIFACTS_DIR:-}"
+
+    case "$LOG_PATH_CANON" in
+      "$EPHEMERAL_PREFIX"*)
+        eph_suffix="''${LOG_PATH_CANON#$EPHEMERAL_PREFIX}"
+        eph_id="''${eph_suffix%%/*}"
+        if [ -n "$eph_id" ] && [ "$eph_id" != "$eph_suffix" -o "$LOG_PATH_CANON" = "$EPHEMERAL_PREFIX$eph_id" ]; then
+          add_allowed_root "$EPHEMERAL_PREFIX$eph_id"
+        fi
+        ;;
+      *)
+        ;;
+    esac
+
+    ALLOWED=0
+    for root in "''${ALLOWED_ROOTS[@]}"; do
+      if is_under_root "$LOG_PATH_CANON" "$root"; then
+        ALLOWED=1
+        break
+      fi
+    done
+    if [ "$ALLOWED" -ne 1 ]; then
+      echo "ERROR: log path is outside allowed roots path=$LOG_PATH_CANON service=$SERVICE" >&2
+      echo "HINT: allowed roots are BASE_DIR/CI_ARTIFACTS and project ephemeral prefixes only." >&2
+      exit 1
+    fi
+
     if [ ! -f "$LOG_PATH" ]; then
-      echo "ERROR: log file not found path=$LOG_PATH service=$SERVICE" >&2
+      echo "ERROR: log file not found path=$LOG_PATH_CANON service=$SERVICE" >&2
       exit 1
     fi
 
     if [ "$FOLLOW" = "true" ]; then
-      exec ${pkgs.coreutils}/bin/tail -n "$LINES" -f "$LOG_PATH"
+      exec ${pkgs.coreutils}/bin/tail -n "$LINES" -f "$LOG_PATH_CANON"
     fi
-    exec ${pkgs.coreutils}/bin/tail -n "$LINES" "$LOG_PATH"
+    exec ${pkgs.coreutils}/bin/tail -n "$LINES" "$LOG_PATH_CANON"
   '';
 
   serviceStatus = pkgs.writeShellScript "process-service-status" ''

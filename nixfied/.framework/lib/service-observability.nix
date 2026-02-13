@@ -64,22 +64,20 @@ let
       fi
     '';
 
-  mkEmitServiceEventFunction =
-    service:
-    ''
-      emit_service_event() {
-        local event_type="$1"
-        local state="$2"
-        shift 2 || true
-        ${processRegistry.emitEvent} \
-          --event-type "$event_type" \
-          --service ${service} \
-          --state "$state" \
-          --slot "$SLOT" \
-          --env "$ENV" \
-          "$@" >/dev/null 2>&1 || true
-      }
-    '';
+  mkEmitServiceEventFunction = service: ''
+    emit_service_event() {
+      local event_type="$1"
+      local state="$2"
+      shift 2 || true
+      ${processRegistry.emitEvent} \
+        --event-type "$event_type" \
+        --service ${service} \
+        --state "$state" \
+        --slot "$SLOT" \
+        --env "$ENV" \
+        "$@" >/dev/null 2>&1 || true
+    }
+  '';
 in
 {
   inherit

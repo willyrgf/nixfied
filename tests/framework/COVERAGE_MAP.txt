@@ -26,6 +26,7 @@ Each framework file must appear here with at least one validating scenario.
 - `nixfied/.framework/lib/service-observability.nix`: `fixtures/modules/dev.nix`, `fixtures/helios/lifecycle.nix`, `fixtures/reth/lifecycle.nix`, `fixtures/minio/bucket-ops.nix`, `fixtures/nginx/site-lifecycle.nix`, `fixtures/postgres/extensions.nix`
 - `nixfied/.framework/lib/service-api.nix`: service API contract enforcement fixture in `.framework/internal/test.nix`
 - `nixfied/.framework/lib/summary.nix`: helper `summary_parse` checks in `fixtures/helpers/runtime.nix`
+- `nixfied/.framework/lib/validation.nix`: app/service API contract enforcement fixtures in `.framework/internal/test.nix`
 - `nixfied/.framework/minio/bucket-management.nix`: `fixtures/minio/bucket-ops.nix`
 - `nixfied/.framework/minio/config.nix`: `fixtures/modules/conf.nix`, `fixtures/minio/bucket-ops.nix`
 - `nixfied/.framework/minio/default.nix`: `fixtures/modules/dev.nix`, `fixtures/minio/bucket-ops.nix` (health fail/pass coverage)
