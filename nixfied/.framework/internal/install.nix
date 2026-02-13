@@ -441,6 +441,7 @@ let
                                     PREV_FRAMEWORK_REVISION="unknown"
                                     PREV_FRAMEWORK_COMMIT=""
                                     FRAMEWORK_COMMIT=""
+                                    UPGRADE_GIT_REPO="$SRC"
                                     if [ "$MODE" = "upgrade" ] && [ -f "$ROOT/nixfied/VENDORED.txt" ]; then
                                       PREV_FRAMEWORK_REVISION=$(${pkgs.gawk}/bin/awk '
                                         $0 ~ /^Framework source revision \(install\/upgrade\):$/ { in_section=1; next }
@@ -462,6 +463,15 @@ let
                                       FRAMEWORK_COMMIT=$("$GIT" -C "$SRC" rev-parse --verify "''${FRAMEWORK_REVISION}^{commit}" 2>/dev/null || true)
                                       if [ -z "$FRAMEWORK_COMMIT" ]; then
                                         FRAMEWORK_COMMIT=$("$GIT" -C "$SRC" rev-parse --verify HEAD^{commit} 2>/dev/null || true)
+                                      fi
+                                      if [ -z "$PREV_FRAMEWORK_COMMIT" ] || [ -z "$FRAMEWORK_COMMIT" ]; then
+                                        PREV_FRAMEWORK_COMMIT_ROOT=$("$GIT" -C "$ROOT" rev-parse --verify "''${PREV_FRAMEWORK_REVISION}^{commit}" 2>/dev/null || true)
+                                        FRAMEWORK_COMMIT_ROOT=$("$GIT" -C "$ROOT" rev-parse --verify "''${FRAMEWORK_REVISION}^{commit}" 2>/dev/null || true)
+                                        if [ -n "$PREV_FRAMEWORK_COMMIT_ROOT" ] && [ -n "$FRAMEWORK_COMMIT_ROOT" ]; then
+                                          PREV_FRAMEWORK_COMMIT="$PREV_FRAMEWORK_COMMIT_ROOT"
+                                          FRAMEWORK_COMMIT="$FRAMEWORK_COMMIT_ROOT"
+                                          UPGRADE_GIT_REPO="$ROOT"
+                                        fi
                                       fi
                                     fi
 
@@ -594,7 +604,7 @@ let
                                         if [ "$PREV_FRAMEWORK_REVISION" = "$FRAMEWORK_REVISION" ] && [ "$FRAMEWORK_REVISION" != "unknown" ]; then
                                           echo "SKIP: Revisions are identical; no framework changes to report."
                                         elif [ -n "$PREV_FRAMEWORK_COMMIT" ] && [ -n "$FRAMEWORK_COMMIT" ]; then
-                                          "$GIT" -C "$SRC" log --oneline "''${PREV_FRAMEWORK_COMMIT}..''${FRAMEWORK_COMMIT}"
+                                          "$GIT" -C "$UPGRADE_GIT_REPO" log --oneline "''${PREV_FRAMEWORK_COMMIT}..''${FRAMEWORK_COMMIT}"
                                         else
                                           echo "SKIP: Unable to resolve both revisions in framework source git history."
                                         fi
@@ -604,7 +614,7 @@ let
                                         if [ "$PREV_FRAMEWORK_REVISION" = "$FRAMEWORK_REVISION" ] && [ "$FRAMEWORK_REVISION" != "unknown" ]; then
                                           echo "SKIP: Revisions are identical; no framework changes to report."
                                         elif [ -n "$PREV_FRAMEWORK_COMMIT" ] && [ -n "$FRAMEWORK_COMMIT" ]; then
-                                          "$GIT" -C "$SRC" diff --stat "$PREV_FRAMEWORK_COMMIT" "$FRAMEWORK_COMMIT"
+                                          "$GIT" -C "$UPGRADE_GIT_REPO" diff --stat "$PREV_FRAMEWORK_COMMIT" "$FRAMEWORK_COMMIT"
                                         else
                                           echo "SKIP: Unable to resolve both revisions in framework source git history."
                                         fi
