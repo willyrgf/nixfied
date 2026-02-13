@@ -28,6 +28,13 @@ let
   log = logs;
 
   events = observability.mkEventsScript "minio";
+  logEventExtensions = observability.mkLogEventExtensions {
+    service = "minio";
+    summaryName = "MinIO";
+    logScript = log;
+    logsScript = logs;
+    eventsScript = events;
+  };
   bucketMgmt = import ./bucket-management.nix {
     inherit
       pkgs
@@ -150,28 +157,7 @@ let
         details = "Applies a JSON policy file to a MinIO bucket.";
         usage = [ "nix run .#service::minio::policy-apply -- <bucket> <policy-file>" ];
       };
-      log = {
-        script = log;
-        hook = "LOG";
-        summary = "Show MinIO log";
-        details = "Shows MinIO runtime log for the current slot/environment.";
-        usage = [ "nix run .#service::minio::log -- [--lines N] [--follow]" ];
-      };
-      logs = {
-        script = logs;
-        hook = "LOGS";
-        summary = "Alias for service::minio::log";
-        details = "Compatibility alias for service::minio::log.";
-        usage = [ "nix run .#service::minio::logs -- [--lines N] [--follow]" ];
-      };
-      events = {
-        script = events;
-        hook = "EVENTS";
-        summary = "Show MinIO lifecycle events";
-        details = "Shows MinIO lifecycle events from the global process registry for the current slot/environment.";
-        usage = [ "nix run .#service::minio::events -- [--limit N]" ];
-      };
-    };
+    } // logEventExtensions;
   };
 in
 {

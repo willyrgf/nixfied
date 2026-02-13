@@ -33,6 +33,13 @@ let
   log = logs;
 
   events = observability.mkEventsScript "helios";
+  logEventExtensions = observability.mkLogEventExtensions {
+    service = "helios";
+    summaryName = "Helios";
+    logScript = log;
+    logsScript = logs;
+    eventsScript = events;
+  };
 
   publicApi = {
     version = 1;
@@ -116,28 +123,7 @@ let
           - `HELIOS_READY_INTERVAL_SECS` (default: 1)
         '';
       };
-      log = {
-        script = log;
-        hook = "LOG";
-        summary = "Show Helios log";
-        details = "Shows Helios runtime log for the current slot/environment.";
-        usage = [ "nix run .#service::helios::log -- [--lines N] [--follow]" ];
-      };
-      logs = {
-        script = logs;
-        hook = "LOGS";
-        summary = "Alias for service::helios::log";
-        details = "Compatibility alias for service::helios::log.";
-        usage = [ "nix run .#service::helios::logs -- [--lines N] [--follow]" ];
-      };
-      events = {
-        script = events;
-        hook = "EVENTS";
-        summary = "Show Helios lifecycle events";
-        details = "Shows Helios lifecycle events from the global process registry for the current slot/environment.";
-        usage = [ "nix run .#service::helios::events -- [--limit N]" ];
-      };
-    };
+    } // logEventExtensions;
   };
 in
 {

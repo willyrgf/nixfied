@@ -170,6 +170,13 @@ let
   log = logs;
 
   events = observability.mkEventsScript "nginx";
+  logEventExtensions = observability.mkLogEventExtensions {
+    service = "nginx";
+    summaryName = "nginx";
+    logScript = log;
+    logsScript = logs;
+    eventsScript = events;
+  };
 
   publicApi = {
     version = 1;
@@ -311,28 +318,7 @@ let
         summary = "Show SSL certificate status";
         details = "Prints certificate status for configured domains.";
       };
-      log = {
-        script = log;
-        hook = "LOG";
-        summary = "Show nginx log";
-        details = "Shows nginx runtime log for the current slot/environment.";
-        usage = [ "nix run .#service::nginx::log -- [--lines N] [--follow]" ];
-      };
-      logs = {
-        script = logs;
-        hook = "LOGS";
-        summary = "Alias for service::nginx::log";
-        details = "Compatibility alias for service::nginx::log.";
-        usage = [ "nix run .#service::nginx::logs -- [--lines N] [--follow]" ];
-      };
-      events = {
-        script = events;
-        hook = "EVENTS";
-        summary = "Show nginx lifecycle events";
-        details = "Shows nginx lifecycle events from the global process registry for the current slot/environment.";
-        usage = [ "nix run .#service::nginx::events -- [--limit N]" ];
-      };
-    };
+    } // logEventExtensions;
   };
 in
 {
