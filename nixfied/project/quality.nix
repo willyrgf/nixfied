@@ -1,33 +1,22 @@
-{ project, ... }:
+{
+  project,
+  commandLib ? import ./lib/command.nix { inherit project; },
+  ...
+}:
+
+let
+  inherit (commandLib) mkPlaceholderScript mkProjectCommand;
+in
 
 {
-  # Example (uncomment and adapt):
-  # commands.check.script = ''
-  #   ./lint
-  #   ./typecheck
-  # '';
+  commands.check = mkProjectCommand {
+    name = "check";
+    description = "Run quality checks";
+    details = ''
+      Runs the project's quality checks (lint, typecheck, format checks, etc).
 
-  commands = {
-    check = {
-      description = "Run quality checks";
-      api = {
-        version = 1;
-        summary = "Run quality checks";
-        details = ''
-          Runs the project's quality checks (lint, typecheck, format checks, etc).
-
-          Customize this command in nixfied/project/quality.nix.
-        '';
-        usage = [ "nix run .#check" ];
-        examples = [ "nix run .#check" ];
-        category = "core";
-      };
-      env = { };
-      useDeps = true;
-      script = ''
-        echo "Quality checks placeholder. Edit nixfied/project/quality.nix."
-        exit 0
-      '';
-    };
+      Customize this command in nixfied/project/quality.nix.
+    '';
+    script = mkPlaceholderScript "Quality checks placeholder. Edit nixfied/project/quality.nix.";
   };
 }

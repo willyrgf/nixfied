@@ -5,14 +5,16 @@
 let
   conf = import ./conf.nix { inherit pkgs; };
   project = conf.project or { };
+  commandLib = import ./lib/command.nix { inherit project; };
+  mkPart = path: import path { inherit pkgs project commandLib; };
   parts = [
     conf
-    (import ./dev.nix { inherit pkgs project; })
-    (import ./test.nix { inherit pkgs project; })
-    (import ./prod.nix { inherit pkgs project; })
-    (import ./quality.nix { inherit pkgs project; })
-    (import ./format.nix { inherit pkgs project; })
-    (import ./ci.nix { inherit pkgs project; })
+    (mkPart ./dev.nix)
+    (mkPart ./test.nix)
+    (mkPart ./prod.nix)
+    (mkPart ./quality.nix)
+    (mkPart ./format.nix)
+    (mkPart ./ci.nix)
   ];
 in
 pkgs.lib.foldl' pkgs.lib.recursiveUpdate { } parts

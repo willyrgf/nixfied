@@ -1,41 +1,26 @@
-{ project, ... }:
+{
+  project,
+  commandLib ? import ./lib/command.nix { inherit project; },
+  ...
+}:
+
+let
+  inherit (commandLib) mkEnvDocProjectEnv mkPlaceholderScript mkProjectCommand;
+in
 
 {
-  # Example (uncomment and adapt):
-  # commands.build.script = ''
-  #   ./build-backend
-  #   ./build-frontend
-  # '';
+  commands.build = mkProjectCommand {
+    name = "build";
+    description = "Build artifacts";
+    details = ''
+      Runs the project's build workflow (prod build).
 
-  commands = {
-    build = {
-      description = "Build artifacts";
-      api = {
-        version = 1;
-        summary = "Build artifacts";
-        details = ''
-          Runs the project's build workflow (prod build).
-
-          Customize this command in nixfied/project/prod.nix to build your artifacts (backend, frontend, etc).
-        '';
-        usage = [ "nix run .#build" ];
-        examples = [ "nix run .#build" ];
-        env = [
-          {
-            name = project.envVar;
-            description = "Environment name (set to prod by default for this command)";
-          }
-        ];
-        category = "core";
-      };
-      env = {
-        "${project.envVar}" = "prod";
-      };
-      useDeps = true;
-      script = ''
-        echo "Build command placeholder. Edit nixfied/project/prod.nix."
-        exit 0
-      '';
+      Customize this command in nixfied/project/prod.nix to build your artifacts (backend, frontend, etc).
+    '';
+    envDocs = [ (mkEnvDocProjectEnv "prod") ];
+    env = {
+      "${project.envVar}" = "prod";
     };
+    script = mkPlaceholderScript "Build command placeholder. Edit nixfied/project/prod.nix.";
   };
 }

@@ -1,36 +1,31 @@
-{ project, ... }:
+{
+  project,
+  commandLib ? import ./lib/command.nix { inherit project; },
+  ...
+}:
+
+let
+  inherit (commandLib) mkPlaceholderScript mkProjectCommand;
+in
 
 {
-  # Example CI configuration (adapt as needed):
-  # - enable postgres/nginx modules in conf.nix to use their hooks.
+  commands.ci = mkProjectCommand {
+    name = "ci";
+    description = "Run the CI pipeline";
+    details = ''
+      Runs the CI pipeline defined by the ci.modes and ci.steps configuration in this file.
 
-  commands = {
-    ci = {
-      description = "Run the CI pipeline";
-      api = {
-        version = 1;
-        summary = "Run the CI pipeline";
-        details = ''
-          Runs the CI pipeline defined by the ci.modes and ci.steps configuration in this file.
-
-          Customize steps, modes, artifacts, and hooks in nixfied/project/ci.nix.
-        '';
-        usage = [
-          "nix run .#ci"
-          "nix run .#ci -- --summary"
-        ];
-        examples = [ "nix run .#ci -- --summary" ];
-        category = "core";
-      };
-      env = {
-        "${project.envVar}" = "test";
-      };
-      useDeps = true;
-      script = ''
-        echo "CI DSL is enabled. Edit nixfied/project/ci.nix to customize steps."
-        exit 0
-      '';
+      Customize steps, modes, artifacts, and hooks in nixfied/project/ci.nix.
+    '';
+    usage = [
+      "nix run .#ci"
+      "nix run .#ci -- --summary"
+    ];
+    examples = [ "nix run .#ci -- --summary" ];
+    env = {
+      "${project.envVar}" = "test";
     };
+    script = mkPlaceholderScript "CI DSL is enabled. Edit nixfied/project/ci.nix to customize steps.";
   };
 
   ci = {
