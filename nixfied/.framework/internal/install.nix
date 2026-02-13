@@ -4,10 +4,14 @@
   lib,
   frameworkRoot,
   frameworkRevision ? "unknown",
+  frameworkSourceInfo ? { },
 }:
 
 let
   inherit (lib.appApi) mkNixfiedApp;
+  frameworkSourceType = if frameworkSourceInfo ? type then frameworkSourceInfo.type else "";
+  frameworkSourceOwner = if frameworkSourceInfo ? owner then frameworkSourceInfo.owner else "";
+  frameworkSourceRepo = if frameworkSourceInfo ? repo then frameworkSourceInfo.repo else "";
   installManifest = import ./install-manifest.nix { inherit pkgs; };
   projectTemplates = installManifest.projectTemplates;
   frameworkHelpers = installManifest.frameworkHelpers;
@@ -293,6 +297,10 @@ let
                                             echo "  --upgrade              Treat as an upgrade (preserves nixfied/project unless --reset-project)"
                                             echo "  --reset-project        Overwrite nixfied/project templates during upgrade"
                                             echo ""
+                                            echo "Upgrade-check environment:"
+                                            echo "  NIXFIED_UPGRADE_CHECK_FETCH=0           Disable remote fetch attempts for UPGRADE_CHECK.txt"
+                                            echo "  NIXFIED_UPGRADE_CHECK_REMOTE_URL=<url>  Override remote used for upgrade-check revision resolution"
+                                            echo ""
                                             echo "Prompt plan:"
                                             echo "  --no-prompt-plan       Skip generating NIXFIED_PROMPT_PLAN.md (default is to generate)"
                                             echo "  --prompt-plan          Generate NIXFIED_PROMPT_PLAN.md after install/upgrade (best effort; default)"
@@ -327,6 +335,11 @@ let
                             		          exit 1
                             		        fi
                             	        ROOT=$(cd "$ROOT" && pwd -P)
+                                    UPGRADE_CHECK_FETCH="''${NIXFIED_UPGRADE_CHECK_FETCH:-1}"
+                                    UPGRADE_CHECK_REMOTE_URL_OVERRIDE="''${NIXFIED_UPGRADE_CHECK_REMOTE_URL:-}"
+                                    UPGRADE_SOURCE_TYPE=${pkgs.lib.escapeShellArg frameworkSourceType}
+                                    UPGRADE_SOURCE_OWNER=${pkgs.lib.escapeShellArg frameworkSourceOwner}
+                                    UPGRADE_SOURCE_REPO=${pkgs.lib.escapeShellArg frameworkSourceRepo}
 
                                     INSTALL_BRANCH="''${NIXFIED_INSTALL_BRANCH:-nixfied}"
 
@@ -442,6 +455,7 @@ let
                                     PREV_FRAMEWORK_COMMIT=""
                                     FRAMEWORK_COMMIT=""
                                     UPGRADE_GIT_REPO="$SRC"
+                                    UPGRADE_GIT_REPO_IS_TEMP=false
                                     if [ "$MODE" = "upgrade" ] && [ -f "$ROOT/nixfied/VENDORED.txt" ]; then
                                       PREV_FRAMEWORK_REVISION=$(${pkgs.gawk}/bin/awk '
                                         $0 ~ /^Framework source revision \(install\/upgrade\):$/ { in_section=1; next }
@@ -471,6 +485,72 @@ let
                                           PREV_FRAMEWORK_COMMIT="$PREV_FRAMEWORK_COMMIT_ROOT"
                                           FRAMEWORK_COMMIT="$FRAMEWORK_COMMIT_ROOT"
                                           UPGRADE_GIT_REPO="$ROOT"
+                                        fi
+                                      fi
+                                      if [ -z "$PREV_FRAMEWORK_COMMIT" ] || [ -z "$FRAMEWORK_COMMIT" ]; then
+                                        if [ "$UPGRADE_CHECK_FETCH" != "0" ] && [ "$UPGRADE_CHECK_FETCH" != "false" ] && [ "$PREV_FRAMEWORK_REVISION" != "unknown" ] && [ "$FRAMEWORK_REVISION" != "unknown" ]; then
+                                          UPGRADE_CHECK_REMOTE_URL="$UPGRADE_CHECK_REMOTE_URL_OVERRIDE"
+                                          if [ -z "$UPGRADE_CHECK_REMOTE_URL" ] && [ "$UPGRADE_SOURCE_TYPE" = "github" ] && [ -n "$UPGRADE_SOURCE_OWNER" ] && [ -n "$UPGRADE_SOURCE_REPO" ]; then
+                                            UPGRADE_CHECK_REMOTE_URL="https://github.com/$UPGRADE_SOURCE_OWNER/$UPGRADE_SOURCE_REPO.git"
+                                          fi
+                                          if [ -n "$UPGRADE_CHECK_REMOTE_URL" ]; then
+                                            UPGRADE_CHECK_TMP_REPO=$(${pkgs.coreutils}/bin/mktemp -d 2>/dev/null || true)
+                                            if [ -n "$UPGRADE_CHECK_TMP_REPO" ]; then
+                                              if "$GIT" -C "$UPGRADE_CHECK_TMP_REPO" init -q >/dev/null 2>&1; then
+                                                if "$GIT" -C "$UPGRADE_CHECK_TMP_REPO" remote add origin "$UPGRADE_CHECK_REMOTE_URL" >/dev/null 2>&1; then
+                                                  UPGRADE_CHECK_REMOTE_RESOLVED=false
+                                                  PREV_FRAMEWORK_COMMIT_TMP=""
+                                                  FRAMEWORK_COMMIT_TMP=""
+                                                  if GIT_TERMINAL_PROMPT=0 "$GIT" -C "$UPGRADE_CHECK_TMP_REPO" \
+                                                    -c gc.auto=0 \
+                                                    -c core.askPass= \
+                                                    -c credential.helper= \
+                                                    -c http.lowSpeedLimit=1024 \
+                                                    -c http.lowSpeedTime=12 \
+                                                    fetch --depth=1 --no-tags origin "$PREV_FRAMEWORK_REVISION" >/dev/null 2>&1 \
+                                                    && GIT_TERMINAL_PROMPT=0 "$GIT" -C "$UPGRADE_CHECK_TMP_REPO" \
+                                                    -c gc.auto=0 \
+                                                    -c core.askPass= \
+                                                    -c credential.helper= \
+                                                    -c http.lowSpeedLimit=1024 \
+                                                    -c http.lowSpeedTime=12 \
+                                                    fetch --depth=1 --no-tags origin "$FRAMEWORK_REVISION" >/dev/null 2>&1; then
+                                                    PREV_FRAMEWORK_COMMIT_TMP=$("$GIT" -C "$UPGRADE_CHECK_TMP_REPO" rev-parse --verify "''${PREV_FRAMEWORK_REVISION}^{commit}" 2>/dev/null || true)
+                                                    FRAMEWORK_COMMIT_TMP=$("$GIT" -C "$UPGRADE_CHECK_TMP_REPO" rev-parse --verify "''${FRAMEWORK_REVISION}^{commit}" 2>/dev/null || true)
+                                                  fi
+                                                  if [ -z "$PREV_FRAMEWORK_COMMIT_TMP" ] || [ -z "$FRAMEWORK_COMMIT_TMP" ]; then
+                                                    for UPGRADE_CHECK_FETCH_DEPTH in 32 128 512; do
+                                                      if GIT_TERMINAL_PROMPT=0 "$GIT" -C "$UPGRADE_CHECK_TMP_REPO" \
+                                                        -c gc.auto=0 \
+                                                        -c core.askPass= \
+                                                        -c credential.helper= \
+                                                        -c http.lowSpeedLimit=1024 \
+                                                        -c http.lowSpeedTime=12 \
+                                                        fetch --depth="$UPGRADE_CHECK_FETCH_DEPTH" --no-tags origin HEAD >/dev/null 2>&1; then
+                                                        PREV_FRAMEWORK_COMMIT_TMP=$("$GIT" -C "$UPGRADE_CHECK_TMP_REPO" rev-parse --verify "''${PREV_FRAMEWORK_REVISION}^{commit}" 2>/dev/null || true)
+                                                        FRAMEWORK_COMMIT_TMP=$("$GIT" -C "$UPGRADE_CHECK_TMP_REPO" rev-parse --verify "''${FRAMEWORK_REVISION}^{commit}" 2>/dev/null || true)
+                                                        if [ -n "$PREV_FRAMEWORK_COMMIT_TMP" ] && [ -n "$FRAMEWORK_COMMIT_TMP" ]; then
+                                                          UPGRADE_CHECK_REMOTE_RESOLVED=true
+                                                          break
+                                                        fi
+                                                      fi
+                                                    done
+                                                  else
+                                                    UPGRADE_CHECK_REMOTE_RESOLVED=true
+                                                  fi
+                                                  if [ "$UPGRADE_CHECK_REMOTE_RESOLVED" = "true" ]; then
+                                                    PREV_FRAMEWORK_COMMIT="$PREV_FRAMEWORK_COMMIT_TMP"
+                                                    FRAMEWORK_COMMIT="$FRAMEWORK_COMMIT_TMP"
+                                                    UPGRADE_GIT_REPO="$UPGRADE_CHECK_TMP_REPO"
+                                                    UPGRADE_GIT_REPO_IS_TEMP=true
+                                                  fi
+                                                fi
+                                              fi
+                                              if [ "$UPGRADE_GIT_REPO_IS_TEMP" != "true" ]; then
+                                                rm -rf "$UPGRADE_CHECK_TMP_REPO" 2>/dev/null || true
+                                              fi
+                                            fi
+                                          fi
                                         fi
                                       fi
                                     fi
@@ -620,6 +700,9 @@ let
                                         fi
                                       } > "$UPGRADE_CHECK_FILE"
                                       echo "INFO: Upgrade check written path=$UPGRADE_CHECK_FILE"
+                                      if [ "$UPGRADE_GIT_REPO_IS_TEMP" = "true" ]; then
+                                        rm -rf "$UPGRADE_GIT_REPO" 2>/dev/null || true
+                                      fi
                                     fi
 
                                     chmod -R u+w "$ROOT/nixfied" 2>/dev/null || true

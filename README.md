@@ -140,6 +140,9 @@ Vendoring boundaries (relevant for upgrades):
 - User-owned (preserved on `framework::upgrade`): `nixfied/project/` and `nixfied/local/`.
 - Canonical doc: `nixfied/VENDORED.txt` (includes the framework source revision used by install/upgrade).
 - Upgrade report: `nixfied/UPGRADE_CHECK.txt` (contains `git log --oneline` and `git diff --stat` from previous to new framework revision when resolvable).
+- If local git history is unavailable, upgrade-check may do a shallow fetch from the source repo to resolve revisions.
+- Set `NIXFIED_UPGRADE_CHECK_FETCH=0` to disable remote fetch attempts.
+- Set `NIXFIED_UPGRADE_CHECK_REMOTE_URL=<git-url>` to override the fetch remote used for upgrade-check.
 
 Force overwrite:
 
