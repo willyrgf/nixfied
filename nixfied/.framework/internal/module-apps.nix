@@ -279,44 +279,59 @@ let
     }
   ];
   processApps = mkAppsFromSpecs mkProcessApp processSpecs;
+  processToolByAppName = builtins.listToAttrs (
+    map (spec: {
+      name = spec.name;
+      value = spec.tool;
+    }) processSpecs
+  );
+
+  mkRuntimeAliasSpec =
+    {
+      name,
+      target,
+      usage,
+    }:
+    {
+      inherit
+        name
+        target
+        usage
+        ;
+      tool = processToolByAppName.${target};
+    };
 
   runtimeAliasSpecs = [
-    {
+    (mkRuntimeAliasSpec {
       name = "runtime::status";
       target = "process::status";
       usage = [ "nix run .#runtime::status -- [args]" ];
-      tool = lib.processStatus;
-    }
-    {
+    })
+    (mkRuntimeAliasSpec {
       name = "runtime::ps";
       target = "process::status";
       usage = [ "nix run .#runtime::ps -- [args]" ];
-      tool = lib.processStatus;
-    }
-    {
+    })
+    (mkRuntimeAliasSpec {
       name = "runtime::slots";
       target = "process::slots";
       usage = [ "nix run .#runtime::slots -- [args]" ];
-      tool = lib.processSlots;
-    }
-    {
+    })
+    (mkRuntimeAliasSpec {
       name = "runtime::runs";
       target = "process::runs";
       usage = [ "nix run .#runtime::runs -- [args]" ];
-      tool = lib.processRuns;
-    }
-    {
+    })
+    (mkRuntimeAliasSpec {
       name = "runtime::inspect";
       target = "process::inspect";
       usage = [ "nix run .#runtime::inspect -- <id>" ];
-      tool = lib.processInspect;
-    }
-    {
+    })
+    (mkRuntimeAliasSpec {
       name = "runtime::gc";
       target = "process::gc";
       usage = [ "nix run .#runtime::gc -- [args]" ];
-      tool = lib.processGc;
-    }
+    })
   ];
   runtimeAliases = mkAppsFromSpecs mkRuntimeAliasApp runtimeAliasSpecs;
 in
