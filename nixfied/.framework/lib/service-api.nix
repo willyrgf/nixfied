@@ -35,6 +35,8 @@ let
   isAttrs = x: builtins.isAttrs x;
   sortedAttrNames = attrs: lib.sort (a: b: a < b) (builtins.attrNames attrs);
   renderErrors = errs: builtins.concatStringsSep "\n" (map (e: "  - " + e) errs);
+  optionalAttrSatisfies = attrs: field: pred: !(builtins.hasAttr field attrs) || pred (attrs.${field});
+  isKVSpecList = value: builtins.isList value && builtins.all isKVSpec value;
 
   normalizeToken =
     x: pkgs.lib.strings.toUpper (pkgs.lib.replaceStrings [ "-" "." ":" ] [ "_" "_" "_" ] x);
@@ -59,28 +61,14 @@ let
       ++ expect (isNonEmptyString (op.summary or "")) "${prefix}: summary must be a non-empty string"
       ++ expect (op ? details) "${prefix}: details is required"
       ++ expect (builtins.isString (op.details or null)) "${prefix}: details must be a string"
-      ++ expect (
-        !(op ? usage) || isListOfNonEmptyStrings (op.usage or null)
-      ) "${prefix}: usage must be a list of non-empty strings"
-      ++ expect (
-        !(op ? examples) || isListOfNonEmptyStrings (op.examples or null)
-      ) "${prefix}: examples must be a list of non-empty strings"
-      ++ expect (
-        !(op ? args) || (builtins.isList (op.args or null) && builtins.all isKVSpec (op.args or [ ]))
-      ) "${prefix}: args must be a list of { name, description }"
-      ++ expect (
-        !(op ? env) || (builtins.isList (op.env or null) && builtins.all isKVSpec (op.env or [ ]))
-      ) "${prefix}: env must be a list of { name, description }"
-      ++ expect (
-        !(op ? category) || isNonEmptyString (op.category or "")
-      ) "${prefix}: category must be a non-empty string"
-      ++ expect (!(op ? app) || builtins.isBool (op.app or null)) "${prefix}: app must be a boolean"
-      ++ expect (
-        !(op ? appName) || isNonEmptyString (op.appName or "")
-      ) "${prefix}: appName must be a non-empty string"
-      ++ expect (
-        !(op ? hook) || isNonEmptyString (op.hook or "")
-      ) "${prefix}: hook must be a non-empty string";
+      ++ expect (optionalAttrSatisfies op "usage" isListOfNonEmptyStrings) "${prefix}: usage must be a list of non-empty strings"
+      ++ expect (optionalAttrSatisfies op "examples" isListOfNonEmptyStrings) "${prefix}: examples must be a list of non-empty strings"
+      ++ expect (optionalAttrSatisfies op "args" isKVSpecList) "${prefix}: args must be a list of { name, description }"
+      ++ expect (optionalAttrSatisfies op "env" isKVSpecList) "${prefix}: env must be a list of { name, description }"
+      ++ expect (optionalAttrSatisfies op "category" isNonEmptyString) "${prefix}: category must be a non-empty string"
+      ++ expect (optionalAttrSatisfies op "app" builtins.isBool) "${prefix}: app must be a boolean"
+      ++ expect (optionalAttrSatisfies op "appName" isNonEmptyString) "${prefix}: appName must be a non-empty string"
+      ++ expect (optionalAttrSatisfies op "hook" isNonEmptyString) "${prefix}: hook must be a non-empty string";
 
   opNames = ops: builtins.attrNames ops;
 
