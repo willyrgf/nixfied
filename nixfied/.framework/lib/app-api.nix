@@ -9,7 +9,9 @@ let
     isNonEmptyList
     expect
     isListOfNonEmptyStrings
-    isKVSpec
+    sortedAttrNames
+    optionalAttrSatisfies
+    isKVSpecList
     ;
 
   mkFixHint =
@@ -18,10 +20,7 @@ let
         - For project commands: define commands.${commandName}.api = { version = 1; summary = "..."; details = "..."; usage = [ "nix run .#${commandName}" ]; };
         - For generated/internal apps: set app.meta.nixfied.api (or use lib.appApi.mkNixfiedApp).
     '';
-  sortedAttrNames = attrs: lib.sort (a: b: a < b) (builtins.attrNames attrs);
   renderErrors = errs: builtins.concatStringsSep "\n" (map (e: "  - " + e) errs);
-  optionalAttrSatisfies = attrs: field: pred: !(builtins.hasAttr field attrs) || pred (attrs.${field});
-  isKVSpecList = value: builtins.isList value && builtins.all isKVSpec value;
   throwNamedViolation =
     name: errs:
     throw ''

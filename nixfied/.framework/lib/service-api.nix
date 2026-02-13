@@ -11,8 +11,10 @@ let
     isNonEmptyString
     isNonEmptyList
     expect
+    sortedAttrNames
+    optionalAttrSatisfies
     isListOfNonEmptyStrings
-    isKVSpec
+    isKVSpecList
     ;
 
   requiredProfiles = [
@@ -33,10 +35,7 @@ let
   ];
 
   isAttrs = x: builtins.isAttrs x;
-  sortedAttrNames = attrs: lib.sort (a: b: a < b) (builtins.attrNames attrs);
   renderErrors = errs: builtins.concatStringsSep "\n" (map (e: "  - " + e) errs);
-  optionalAttrSatisfies = attrs: field: pred: !(builtins.hasAttr field attrs) || pred (attrs.${field});
-  isKVSpecList = value: builtins.isList value && builtins.all isKVSpec value;
 
   normalizeToken =
     x: pkgs.lib.strings.toUpper (pkgs.lib.replaceStrings [ "-" "." ":" ] [ "_" "_" "_" ] x);
