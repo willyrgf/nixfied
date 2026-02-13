@@ -8,9 +8,9 @@
 let
   hookEnv = hooks.env or { };
   hookExports = pkgs.lib.concatMapStringsSep "\n" (key: ''
-    if [ -z "''${${key}:-}" ]; then
-      export ${key}="${toString hookEnv.${key}}"
-    fi
+    # Always pin framework hook paths for deterministic app behavior.
+    # User shell/.env hook overrides can route commands to stale scripts.
+    export ${key}="${toString hookEnv.${key}}"
   '') (builtins.attrNames hookEnv);
 
   # Script to load .env if it exists (does not override existing env vars)
