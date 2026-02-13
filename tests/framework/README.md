@@ -10,8 +10,8 @@ From the framework repo root:
 nix run .#framework::test
 ```
 
-Default profile is `full` (deepest run, including isolation).
-Use `-- --profile ci` for the quicker subset.
+Default profile is `ci`.
+Use `FRAMEWORK_ISOLATION=1` to include the isolation runner.
 
 If you have untracked changes and `nix run .#framework::test` fails to see them,
 use a path-based flake reference:

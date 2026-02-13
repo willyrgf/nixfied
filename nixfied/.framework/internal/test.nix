@@ -35,7 +35,7 @@ let
       exit 1
     fi
 
-    PROFILE="full"
+    PROFILE="ci"
     SUMMARY_JSON=""
 
     usage() {
@@ -43,7 +43,7 @@ let
     Usage: nix run .#framework::test [--profile ci|full] [--summary-json <path>]
 
     Options:
-      --profile <name>      Test profile to run (ci|full). Default: full.
+      --profile <name>      Test profile to run. Use ci (default). full is a deprecated alias for ci.
       --summary-json <path> Write a compact JSON summary to <path>.
       --help                Show this help.
     EOF
@@ -58,7 +58,11 @@ let
             exit 1
           fi
           case "$PROFILE" in
-            ci|full) ;;
+            ci) ;;
+            full)
+              echo "WARN: profile 'full' is deprecated; using 'ci'. Set FRAMEWORK_ISOLATION=1 to include isolation."
+              PROFILE="ci"
+              ;;
             *)
               echo "Unknown profile: $PROFILE (expected: ci|full)" >&2
               exit 1
@@ -169,6 +173,66 @@ let
         tail -n "$lines" "$file" >&2 || true
       else
         echo "WARN: test log missing path=$file" >&2
+      fi
+    }
+
+    declare -a PARALLEL_FIXTURE_LABELS=()
+    declare -a PARALLEL_FIXTURE_PIDS=()
+    declare -a PARALLEL_FIXTURE_LOGS=()
+    declare -a PARALLEL_FIXTURE_TAILS=()
+
+    start_parallel_fixture() {
+      local label="$1"
+      local dir="$2"
+      local script="$3"
+      local log_file="$4"
+      local tail_lines="''${5:-80}"
+
+      PARALLEL_FIXTURE_LABELS+=("$label")
+      PARALLEL_FIXTURE_LOGS+=("$log_file")
+      PARALLEL_FIXTURE_TAILS+=("$tail_lines")
+
+      (
+        cd "$dir" && "$script" >"$log_file" 2>&1
+      ) &
+      PARALLEL_FIXTURE_PIDS+=("$!")
+    }
+
+    wait_parallel_fixtures() {
+      local i
+      local rc=0
+      local failed=0
+      local first_fail_rc=1
+
+      for i in "''${!PARALLEL_FIXTURE_PIDS[@]}"; do
+        set +e
+        wait "''${PARALLEL_FIXTURE_PIDS[$i]}"
+        rc=$?
+        set -e
+
+        if [ "$rc" -ne 0 ]; then
+          local label="''${PARALLEL_FIXTURE_LABELS[$i]}"
+          local log_file="''${PARALLEL_FIXTURE_LOGS[$i]}"
+          local tail_lines="''${PARALLEL_FIXTURE_TAILS[$i]}"
+          echo "''${label} failed (rc=$rc)." >&2
+          echo "" >&2
+          echo "Fixture output (last $tail_lines lines):" >&2
+          print_log_tail "$log_file" "$tail_lines"
+          echo "" >&2
+          if [ "$failed" -eq 0 ]; then
+            first_fail_rc="$rc"
+          fi
+          failed=1
+        fi
+      done
+
+      PARALLEL_FIXTURE_LABELS=()
+      PARALLEL_FIXTURE_PIDS=()
+      PARALLEL_FIXTURE_LOGS=()
+      PARALLEL_FIXTURE_TAILS=()
+
+      if [ "$failed" -ne 0 ]; then
+        exit "$first_fail_rc"
       fi
     }
 
@@ -1717,7 +1781,7 @@ let
         name = "postgres-extensions-test";
         env = {
           "''${project.project.envVar}" = "dev";
-          "''${project.project.slotVar}" = "0";
+          "''${project.project.slotVar}" = "4";
         };
         useDeps = false;
         script = import ./tests/framework/fixtures/postgres/extensions.nix {
@@ -1743,17 +1807,6 @@ let
 
     PG_EXT_SCRIPT=$(build_expr "$PG_EXT_EXPR")
     PG_EXT_LOG="$WORKDIR/postgres-extensions.log"
-    set +e
-    (cd "$PG_EXT_DIR" && "$PG_EXT_SCRIPT" >"$PG_EXT_LOG" 2>&1)
-    PG_EXT_RC=$?
-    set -e
-    if [ "$PG_EXT_RC" -ne 0 ]; then
-      echo "Postgres extensions fixture failed (rc=$PG_EXT_RC)." >&2
-      echo "" >&2
-      echo "Fixture output (last 80 lines):" >&2
-      print_log_tail "$PG_EXT_LOG" 80
-      exit "$PG_EXT_RC"
-    fi
 
     log "nginx site lifecycle"
     NGX_DIR="$WORKDIR/nginx-site-lifecycle"
@@ -1787,7 +1840,7 @@ let
         name = "nginx-site-lifecycle-test";
         env = {
           "''${project.project.envVar}" = "dev";
-          "''${project.project.slotVar}" = "0";
+          "''${project.project.slotVar}" = "5";
         };
         useDeps = false;
         script = import ./tests/framework/fixtures/nginx/site-lifecycle.nix {
@@ -1812,17 +1865,6 @@ let
 
     NGX_SCRIPT=$(build_expr "$NGX_EXPR")
     NGX_LOG="$WORKDIR/nginx-site-lifecycle.log"
-    set +e
-    (cd "$NGX_DIR" && "$NGX_SCRIPT" >"$NGX_LOG" 2>&1)
-    NGX_RC=$?
-    set -e
-    if [ "$NGX_RC" -ne 0 ]; then
-      echo "Nginx site lifecycle fixture failed (rc=$NGX_RC)." >&2
-      echo "" >&2
-      echo "Fixture output (last 80 lines):" >&2
-      print_log_tail "$NGX_LOG" 80
-      exit "$NGX_RC"
-    fi
 
     log "minio bucket ops"
     MINIO_FIX_DIR="$WORKDIR/minio-bucket-ops"
@@ -1856,7 +1898,7 @@ let
         name = "minio-bucket-ops-test";
         env = {
           "''${project.project.envVar}" = "dev";
-          "''${project.project.slotVar}" = "0";
+          "''${project.project.slotVar}" = "6";
         };
         useDeps = false;
         script = import ./tests/framework/fixtures/minio/bucket-ops.nix {
@@ -1878,17 +1920,6 @@ let
 
     MINIO_FIX_SCRIPT=$(build_expr "$MINIO_FIX_EXPR")
     MINIO_FIX_LOG="$WORKDIR/minio-bucket-ops.log"
-    set +e
-    (cd "$MINIO_FIX_DIR" && "$MINIO_FIX_SCRIPT" >"$MINIO_FIX_LOG" 2>&1)
-    MINIO_FIX_RC=$?
-    set -e
-    if [ "$MINIO_FIX_RC" -ne 0 ]; then
-      echo "MinIO bucket ops fixture failed (rc=$MINIO_FIX_RC)." >&2
-      echo "" >&2
-      echo "Fixture output (last 80 lines):" >&2
-      print_log_tail "$MINIO_FIX_LOG" 80
-      exit "$MINIO_FIX_RC"
-    fi
 
     log "reth lifecycle"
     RETH_FIX_DIR="$WORKDIR/reth-lifecycle"
@@ -1943,17 +1974,6 @@ let
 
     RETH_FIX_SCRIPT=$(build_expr "$RETH_FIX_EXPR")
     RETH_FIX_LOG="$WORKDIR/reth-lifecycle.log"
-    set +e
-    (cd "$RETH_FIX_DIR" && "$RETH_FIX_SCRIPT" >"$RETH_FIX_LOG" 2>&1)
-    RETH_FIX_RC=$?
-    set -e
-    if [ "$RETH_FIX_RC" -ne 0 ]; then
-      echo "Reth lifecycle fixture failed (rc=$RETH_FIX_RC)." >&2
-      echo "" >&2
-      echo "Fixture output (last 80 lines):" >&2
-      print_log_tail "$RETH_FIX_LOG" 80
-      exit "$RETH_FIX_RC"
-    fi
 
     log "helios lifecycle"
     HELIOS_FIX_DIR="$WORKDIR/helios-lifecycle"
@@ -2014,6 +2034,24 @@ let
 
     HELIOS_FIX_SCRIPT=$(build_expr "$HELIOS_FIX_EXPR")
     HELIOS_FIX_LOG="$WORKDIR/helios-lifecycle.log"
+    log "module lifecycle fixtures (parallel)"
+    start_parallel_fixture "Postgres extensions fixture" "$PG_EXT_DIR" "$PG_EXT_SCRIPT" "$PG_EXT_LOG" 80
+    start_parallel_fixture "Nginx site lifecycle fixture" "$NGX_DIR" "$NGX_SCRIPT" "$NGX_LOG" 80
+    start_parallel_fixture "MinIO bucket ops fixture" "$MINIO_FIX_DIR" "$MINIO_FIX_SCRIPT" "$MINIO_FIX_LOG" 80
+    wait_parallel_fixtures
+
+    set +e
+    (cd "$RETH_FIX_DIR" && "$RETH_FIX_SCRIPT" >"$RETH_FIX_LOG" 2>&1)
+    RETH_FIX_RC=$?
+    set -e
+    if [ "$RETH_FIX_RC" -ne 0 ]; then
+      echo "Reth lifecycle fixture failed (rc=$RETH_FIX_RC)." >&2
+      echo "" >&2
+      echo "Fixture output (last 80 lines):" >&2
+      print_log_tail "$RETH_FIX_LOG" 80
+      exit "$RETH_FIX_RC"
+    fi
+
     set +e
     (cd "$HELIOS_FIX_DIR" && "$HELIOS_FIX_SCRIPT" >"$HELIOS_FIX_LOG" 2>&1)
     HELIOS_FIX_RC=$?
@@ -2691,7 +2729,7 @@ let
     # Verify they point to nix store paths
     assert_contains "$SUP_HOOKS_FILE" "/nix/store/"
 
-    if [ "$PROFILE" = "full" ] || [ "''${FRAMEWORK_ISOLATION:-}" = "1" ]; then
+    if [ "''${FRAMEWORK_ISOLATION:-}" = "1" ]; then
       log "isolation runner"
       run_app "$ROOT" test-isolation
     fi
@@ -2709,7 +2747,8 @@ in
       details = "Runs the Nixfied framework integration test suite (intended for framework development). Supports --profile and --summary-json options.";
       usage = [
         "nix run .#framework::test"
-        "nix run .#framework::test -- --profile full"
+        "nix run .#framework::test -- --profile ci"
+        "FRAMEWORK_ISOLATION=1 nix run .#framework::test"
         "nix run .#framework::test -- --summary-json /tmp/framework-test-summary.json"
       ];
       category = "framework";
