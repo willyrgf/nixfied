@@ -1,6 +1,5 @@
 {
-  project,
-  commandLib ? import ./lib/command.nix { inherit project; },
+  commandLib,
   ...
 }:
 

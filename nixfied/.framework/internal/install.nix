@@ -37,7 +37,7 @@ let
   '') optionalTemplates;
   filteredDefaultImportsScript = pkgs.lib.concatMapStringsSep "\n" (t: ''
     if [ -n "''${KEEP[${t.key}]:-}" ]; then
-      echo "    (import ./${t.file} { inherit pkgs project; })"
+      echo "    (mkPart ./${t.file})"
     fi
   '') optionalTemplates;
   filteredTemplateHint = builtins.concatStringsSep "," (
@@ -612,6 +612,8 @@ let
                                         echo "let"
                                         echo "  conf = import ./conf.nix { inherit pkgs; };"
                                         echo "  project = conf.project or { };"
+                                        echo "  commandLib = import ./lib/command.nix { inherit project; };"
+                                        echo "  mkPart = path: import path { inherit pkgs project commandLib; };"
                                         echo "  parts = ["
                                         echo "    conf"
     ${filteredDefaultImportsScript}
