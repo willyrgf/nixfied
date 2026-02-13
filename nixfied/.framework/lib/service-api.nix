@@ -214,6 +214,29 @@ let
           - Missing publicApi for enabled services: ${builtins.concatStringsSep ", " missing}
       '';
 
+  mkServiceApi =
+    {
+      service,
+      summary,
+      details,
+      artifacts,
+      coreOps,
+      extensions ? { },
+      profiles ? requiredProfiles,
+    }:
+    {
+      version = 1;
+      inherit
+        service
+        summary
+        details
+        profiles
+        artifacts
+        coreOps
+        extensions
+        ;
+    };
+
   mkServiceApisFromModules =
     modules:
     let
@@ -385,6 +408,7 @@ in
     validateServiceApi
     validateServiceApis
     validateEnabledServicesHaveContracts
+    mkServiceApi
     mkServiceApisFromModules
     mkServiceHookEnvFromContract
     mkServiceAppsFromContract

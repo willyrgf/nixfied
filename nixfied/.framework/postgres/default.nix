@@ -7,6 +7,7 @@
 
 let
   cfg = project.modules.postgres or { };
+  serviceApi = import ../lib/service-api.nix { inherit pkgs; };
   processRegistry = import ../lib/process-registry.nix { inherit pkgs project; };
   observability = import ../lib/service-observability.nix {
     inherit
@@ -190,17 +191,10 @@ let
     eventsScript = events;
   };
 
-  publicApi = {
-    version = 1;
+  publicApi = serviceApi.mkServiceApi {
     service = "postgres";
     summary = "PostgreSQL service management API";
     details = "Public service contract for managing PostgreSQL across dev/prod/test/ci.";
-    profiles = [
-      "dev"
-      "prod"
-      "test"
-      "ci"
-    ];
     artifacts = {
       portKey = portKey;
       portVar = portVar;

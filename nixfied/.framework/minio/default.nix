@@ -6,6 +6,7 @@
 }:
 
 let
+  serviceApi = import ../lib/service-api.nix { inherit pkgs; };
   processRegistry = import ../lib/process-registry.nix { inherit pkgs project; };
   observability = import ../lib/service-observability.nix {
     inherit
@@ -44,17 +45,10 @@ let
       ;
   };
 
-  publicApi = {
-    version = 1;
+  publicApi = serviceApi.mkServiceApi {
     service = "minio";
     summary = "MinIO service management API";
     details = "Public service contract for managing MinIO across dev/prod/test/ci.";
-    profiles = [
-      "dev"
-      "prod"
-      "test"
-      "ci"
-    ];
     artifacts = {
       apiPortVar = slots.portVarName config.portKeyApi;
       consolePortVar = slots.portVarName config.portKeyConsole;

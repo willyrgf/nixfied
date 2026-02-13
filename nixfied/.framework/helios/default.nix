@@ -6,6 +6,7 @@
 }:
 
 let
+  serviceApi = import ../lib/service-api.nix { inherit pkgs; };
   processRegistry = import ../lib/process-registry.nix { inherit pkgs project; };
   observability = import ../lib/service-observability.nix {
     inherit
@@ -41,17 +42,10 @@ let
     eventsScript = events;
   };
 
-  publicApi = {
-    version = 1;
+  publicApi = serviceApi.mkServiceApi {
     service = "helios";
     summary = "Helios service management API";
     details = "Public service contract for managing Helios across dev/prod/test/ci.";
-    profiles = [
-      "dev"
-      "prod"
-      "test"
-      "ci"
-    ];
     artifacts = {
       rpcPortVar = slots.portVarName config.portKeyRpc;
       executionPortVar = slots.portVarName config.executionRpcPortKey;
