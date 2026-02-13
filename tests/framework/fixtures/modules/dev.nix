@@ -529,9 +529,20 @@
             echo "helios data dir missing" >&2
             exit 1
           fi
-          run_hook HELIOS_CHECK_CONFIG
+          HELIOS_CHECK_OUTPUT="$(run_hook HELIOS_CHECK_CONFIG 2>&1)" || {
+            echo "$HELIOS_CHECK_OUTPUT" >&2
+            exit 1
+          }
+          echo "$HELIOS_CHECK_OUTPUT"
+          HELIOS_NETWORK_VALUE="$(
+            printf '%s\n' "$HELIOS_CHECK_OUTPUT" \
+              | sed -n 's/.* network=\([^[:space:]]*\).*/\1/p' \
+              | tail -1
+          )"
 
-          if nc -z 127.0.0.1 "$HELIOSRPC_PORT" >/dev/null 2>&1; then
+          if [ "$HELIOS_NETWORK_VALUE" = "local" ]; then
+            echo "Skipping HELIOS_START (network=local requires beacon consensus endpoint)" >&2
+          elif nc -z 127.0.0.1 "$HELIOSRPC_PORT" >/dev/null 2>&1; then
             echo "Skipping HELIOS_START (port in use)" >&2
           else
             set +e
@@ -556,7 +567,15 @@
             export HELIOS_READY_TIMEOUT_SECS="120"
             if ! run_hook HELIOS_READY >/dev/null 2>&1; then
               echo "helios ready check failed after start" >&2
-              tail -50 "$HELIOS_DIR/logs/helios.log" >&2 || true
+              if [ -f "$HELIOS_DIR/logs/helios.log" ]; then
+                tail -50 "$HELIOS_DIR/logs/helios.log" >&2 || true
+              else
+                echo "helios log missing path=$HELIOS_DIR/logs/helios.log" >&2
+              fi
+              run_hook HELIOS_STOP >/dev/null 2>&1 || true
+              if kill -0 "$HELIOS_PID" 2>/dev/null; then
+                stop_service "$HELIOS_PID" "helios"
+              fi
               exit 1
             fi
 

@@ -30,7 +30,9 @@ let
     HELIOS_NETWORK="''${HELIOS_NETWORK:-${config.network or "local"}}"
     HELIOS_EXECUTION_RPC_URL="''${HELIOS_EXECUTION_RPC_URL:-${config.executionRpcUrl or ""}}"
     HELIOS_CONSENSUS_RPC_URL="''${HELIOS_CONSENSUS_RPC_URL:-${config.consensusRpcUrl or ""}}"
-    HELIOS_DEFAULT_CONSENSUS_RPC_URL="''${HELIOS_DEFAULT_CONSENSUS_RPC_URL:-${config.defaultConsensusRpcUrl or ""}}"
+    HELIOS_DEFAULT_CONSENSUS_RPC_URL="''${HELIOS_DEFAULT_CONSENSUS_RPC_URL:-${
+      config.defaultConsensusRpcUrl or ""
+    }}"
     HELIOS_CHECKPOINT="''${HELIOS_CHECKPOINT:-${config.checkpoint or ""}}"
 
     if [ -z "$HELIOS_EXECUTION_RPC_URL" ] && [ -n "$HELIOS_EXECUTION_PORT" ]; then
@@ -357,17 +359,6 @@ let
     set -euo pipefail
     ${runtimePrelude}
 
-    if [ ! -f "$HELIOS_PID_FILE" ]; then
-      echo "ERROR: helios not running (missing pid file) pid_file=$HELIOS_PID_FILE" >&2
-      exit 1
-    fi
-
-    PID=$(cat "$HELIOS_PID_FILE" 2>/dev/null || true)
-    if [ -z "$PID" ] || ! kill -0 "$PID" 2>/dev/null; then
-      echo "ERROR: helios not running (stale pid file) pid_file=$HELIOS_PID_FILE pid=''${PID:-unknown}" >&2
-      exit 1
-    fi
-
     TIMEOUT_SECS="''${HELIOS_READY_TIMEOUT_SECS:-300}"
     INTERVAL_SECS="''${HELIOS_READY_INTERVAL_SECS:-1}"
 
@@ -379,6 +370,33 @@ let
     esac
 
     start_ts="$(${pkgs.coreutils}/bin/date +%s)"
+
+    # HELIOS_START runs asynchronously in tests/helpers; wait for pid file creation
+    # so readiness checks do not fail before startup has finished writing runtime state.
+    while true; do
+      PID=""
+      PID_STATE="missing"
+      if [ -f "$HELIOS_PID_FILE" ]; then
+        PID=$(cat "$HELIOS_PID_FILE" 2>/dev/null || true)
+        if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
+          break
+        fi
+        PID_STATE="stale"
+      fi
+
+      now_ts="$(${pkgs.coreutils}/bin/date +%s)"
+      if [ $((now_ts - start_ts)) -ge "$TIMEOUT_SECS" ]; then
+        if [ "$PID_STATE" = "stale" ]; then
+          echo "ERROR: helios not running (stale pid file) pid_file=$HELIOS_PID_FILE pid=''${PID:-unknown}" >&2
+        else
+          echo "ERROR: helios not running (missing pid file) pid_file=$HELIOS_PID_FILE" >&2
+        fi
+        exit 1
+      fi
+
+      ${pkgs.coreutils}/bin/sleep "$INTERVAL_SECS"
+    done
+
     attempt=0
 
     while true; do
