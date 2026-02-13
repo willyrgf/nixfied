@@ -18,6 +18,15 @@ let
         - For project commands: define commands.${commandName}.api = { version = 1; summary = "..."; details = "..."; usage = [ "nix run .#${commandName}" ]; };
         - For generated/internal apps: set app.meta.nixfied.api (or use lib.appApi.mkNixfiedApp).
     '';
+  renderErrors = errs: builtins.concatStringsSep "\n" (map (e: "  - " + e) errs);
+  throwNamedViolation =
+    name: errs:
+    throw ''
+      Nixfied app API contract violated for "${name}":
+      ${renderErrors errs}
+
+      ${mkFixHint name}
+    '';
 
   validateApiErrors =
     { name, api }:
@@ -63,12 +72,7 @@ let
     if errs == [ ] then
       api
     else
-      throw ''
-        Nixfied app API contract violated for "${name}":
-        ${builtins.concatStringsSep "\n" (map (e: "  - " + e) errs)}
-
-        ${mkFixHint name}
-      '';
+      throwNamedViolation name errs;
 
   validateAppErrors =
     { name, app }:
@@ -94,12 +98,7 @@ let
     if errs == [ ] then
       app
     else
-      throw ''
-        Nixfied app API contract violated for "${name}":
-        ${builtins.concatStringsSep "\n" (map (e: "  - " + e) errs)}
-
-        ${mkFixHint name}
-      '';
+      throwNamedViolation name errs;
 
   validateApps =
     apps:
@@ -120,7 +119,7 @@ let
     else
       throw ''
         Nixfied app API contract violated:
-        ${builtins.concatStringsSep "\n" (map (e: "  - " + e) errs)}
+        ${renderErrors errs}
 
         ${mkFixHint "<name>"}
       '';
