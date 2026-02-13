@@ -7,6 +7,7 @@
 let
   projectMeta = project.project or { };
   projectId = projectMeta.id or "project";
+  id = import ./id.nix { inherit pkgs; };
   projectIdUpper =
     let
       replaced = pkgs.lib.replaceStrings [ "-" "." ] [ "_" "_" ] projectId;
@@ -208,10 +209,8 @@ let
     fi
 
     if [ -z "$EVENT_RUN_ID" ]; then
-      EVENT_RUN_ID="''${RUN_ID:-}"
-    fi
-    if [ -z "$EVENT_RUN_ID" ]; then
-      EVENT_RUN_ID="$(${pkgs.coreutils}/bin/date +%Y%m%d-%H%M%S)-$$"
+      EVENT_RUN_ID="$(${id.resolveId} "''${RUN_ID:-}")"
+      export RUN_ID="$EVENT_RUN_ID"
     fi
 
     if [ -z "$EVENT_COMMAND" ]; then
@@ -265,7 +264,7 @@ let
       esac
     fi
 
-    EVENT_ID="$(${pkgs.coreutils}/bin/date +%Y%m%d-%H%M%S)-$(head -c 4 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+    EVENT_ID="$(${id.mkUniqueId})"
     EVENT_TS="$(${pkgs.coreutils}/bin/date -u +%Y-%m-%dT%H:%M:%SZ)"
     EVENT_READINESS_HEALTH_NORM="$(normalize_bool "$EVENT_READINESS_HEALTH")"
     EVENT_READINESS_READY_NORM="$(normalize_bool "$EVENT_READINESS_READY")"
@@ -485,7 +484,10 @@ let
 
       def is_released:
         .event_type == "slot_released"
-        or .state == "released";
+        or .state == "released"
+        or .state == "stopped"
+        or .state == "failed"
+        or .state == "passed";
 
       ([ .[] | select(.event_type == "slot_acquired" or .event_type == "slot_released") ] | latest_by(slot_key)) as $slot_events
       | (if ($slot_events | length) > 0 then
@@ -626,43 +628,40 @@ let
       | @tsv
     ' "$EVENTS_FILE")
 
-    if [ -z "$CANDIDATES" ]; then
-      echo "OK: no GC candidates found project_id=$PROJECT_ID"
-      exit 0
-    fi
-
     FOUND=0
     APPLIED=0
     RUN_FOUND=0
     RUN_APPLIED=0
 
-    while IFS=$'\t' read -r SERVICE SLOT ENV RUN_ID PID LOG_PATH; do
-      if [ -z "$PID" ]; then
-        continue
-      fi
+    if [ -n "$CANDIDATES" ]; then
+      while IFS=$'\t' read -r SERVICE SLOT ENV RUN_ID PID LOG_PATH; do
+        if [ -z "$PID" ]; then
+          continue
+        fi
 
-      if kill -0 "$PID" 2>/dev/null; then
-        continue
-      fi
+        if kill -0 "$PID" 2>/dev/null; then
+          continue
+        fi
 
-      FOUND=$((FOUND + 1))
-      echo "WARN: orphan detected service=$SERVICE slot=''${SLOT:-unknown} env=''${ENV:-unknown} pid=$PID run_id=''${RUN_ID:-unknown}"
+        FOUND=$((FOUND + 1))
+        echo "WARN: orphan detected service=$SERVICE slot=''${SLOT:-unknown} env=''${ENV:-unknown} pid=$PID run_id=''${RUN_ID:-unknown}"
 
-      if [ "$APPLY" = "true" ]; then
-        ${emitEvent} \
-          --event-type service_orphaned \
-          --state orphaned \
-          --service "$SERVICE" \
-          --slot "$SLOT" \
-          --env "$ENV" \
-          --run-id "$RUN_ID" \
-          --pid "$PID" \
-          --log-path "$LOG_PATH" \
-          --wait-reason "gc_detected_dead_pid" >/dev/null 2>&1 || true
-        APPLIED=$((APPLIED + 1))
-        echo "OK: orphan marked service=$SERVICE slot=''${SLOT:-unknown} env=''${ENV:-unknown} pid=$PID"
-      fi
-    done <<< "$CANDIDATES"
+        if [ "$APPLY" = "true" ]; then
+          ${emitEvent} \
+            --event-type service_orphaned \
+            --state orphaned \
+            --service "$SERVICE" \
+            --slot "$SLOT" \
+            --env "$ENV" \
+            --run-id "$RUN_ID" \
+            --pid "$PID" \
+            --log-path "$LOG_PATH" \
+            --wait-reason "gc_detected_dead_pid" >/dev/null 2>&1 || true
+          APPLIED=$((APPLIED + 1))
+          echo "OK: orphan marked service=$SERVICE slot=''${SLOT:-unknown} env=''${ENV:-unknown} pid=$PID"
+        fi
+      done <<< "$CANDIDATES"
+    fi
 
     RUN_CANDIDATES=$(${pkgs.jq}/bin/jq -sr '
       def is_active:
@@ -850,6 +849,18 @@ let
     if [ -z "$LOG_PATH" ]; then
       echo "ERROR: no log path recorded for service=$SERVICE slot=''${SLOT_FILTER:-any} env=''${ENV_FILTER:-any}" >&2
       echo "HINT: start the service once so it emits lifecycle events with log_path." >&2
+      exit 1
+    fi
+
+    case "$LOG_PATH" in
+      /*) ;;
+      *)
+        echo "ERROR: log path must be absolute path=$LOG_PATH service=$SERVICE" >&2
+        exit 1
+        ;;
+    esac
+    if echo "$LOG_PATH" | ${pkgs.gnugrep}/bin/grep -Eq '(^|/)[.]{1,2}(/|$)'; then
+      echo "ERROR: log path contains unsafe traversal segments path=$LOG_PATH service=$SERVICE" >&2
       exit 1
     fi
 

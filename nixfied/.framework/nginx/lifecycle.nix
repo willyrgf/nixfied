@@ -14,6 +14,20 @@ let
   portVarHttps = slots.portVarName (cfg.portKeyHttps or "https");
   dataDirName = cfg.dataDirName or "nginx";
   nginxDirExpr = slots.getServiceDir dataDirName;
+  emitHelper = ''
+    emit_service_event() {
+      local event_type="$1"
+      local state="$2"
+      shift 2 || true
+      ${processRegistry.emitEvent} \
+        --event-type "$event_type" \
+        --service nginx \
+        --state "$state" \
+        --slot "$SLOT" \
+        --env "$ENV" \
+        "$@" >/dev/null 2>&1 || true
+    }
+  '';
 
   generateSelfSignedCert = pkgs.writeShellScript "nginx-generate-self-signed" ''
     set -euo pipefail
@@ -65,6 +79,7 @@ let
   start = pkgs.writeShellScript "nginx-start" ''
     set -euo pipefail
     eval "$(${slots.getSlotInfo})"
+    ${emitHelper}
     NGINX_DIR="${nginxDirExpr}"
 
     CONF="$NGINX_DIR/conf/nginx.conf"
@@ -73,13 +88,7 @@ let
       exit 1
     fi
 
-    ${processRegistry.emitEvent} \
-      --event-type service_starting \
-      --service nginx \
-      --state starting \
-      --slot "$SLOT" \
-      --env "$ENV" \
-      --log-path "$NGINX_DIR/logs/error.log" >/dev/null 2>&1 || true
+    emit_service_event service_starting starting --log-path "$NGINX_DIR/logs/error.log"
 
     ${nginx}/bin/nginx -c "$CONF" -g 'daemon off;'
   '';
@@ -87,6 +96,7 @@ let
   stop = pkgs.writeShellScript "nginx-stop" ''
     set -euo pipefail
     eval "$(${slots.getSlotInfo})"
+    ${emitHelper}
     NGINX_DIR="${nginxDirExpr}"
     PID_FILE="$NGINX_DIR/run/nginx.pid"
 
@@ -94,32 +104,13 @@ let
       PID=$(cat "$PID_FILE" 2>/dev/null || true)
       if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
         ${nginx}/bin/nginx -c "$NGINX_DIR/conf/nginx.conf" -s quit || true
-        ${processRegistry.emitEvent} \
-          --event-type service_stopped \
-          --service nginx \
-          --state stopped \
-          --slot "$SLOT" \
-          --env "$ENV" \
-          --pid "$PID" \
-          --log-path "$NGINX_DIR/logs/error.log" >/dev/null 2>&1 || true
+        emit_service_event service_stopped stopped --pid "$PID" --log-path "$NGINX_DIR/logs/error.log"
       else
         rm -f "$PID_FILE"
-        ${processRegistry.emitEvent} \
-          --event-type service_stopped \
-          --service nginx \
-          --state stopped \
-          --slot "$SLOT" \
-          --env "$ENV" \
-          --log-path "$NGINX_DIR/logs/error.log" >/dev/null 2>&1 || true
+        emit_service_event service_stopped stopped --log-path "$NGINX_DIR/logs/error.log"
       fi
     else
-      ${processRegistry.emitEvent} \
-        --event-type service_stopped \
-        --service nginx \
-        --state stopped \
-        --slot "$SLOT" \
-        --env "$ENV" \
-        --log-path "$NGINX_DIR/logs/error.log" >/dev/null 2>&1 || true
+      emit_service_event service_stopped stopped --log-path "$NGINX_DIR/logs/error.log"
     fi
   '';
 

@@ -131,8 +131,8 @@
   fi
 
   CLEANUP_LOG="$TMPDIR/cleanup.log"
-  with_cleanup "echo first >> \"$CLEANUP_LOG\""
-  with_cleanup "echo second >> \"$CLEANUP_LOG\""
+  with_cleanup "$BASH" -c "echo first >> \"$CLEANUP_LOG\""
+  with_cleanup "$BASH" -c "echo second >> \"$CLEANUP_LOG\""
   _run_cleanups
   _cleanup_actions=()
   _cleanup_initialized=false

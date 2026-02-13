@@ -125,6 +125,12 @@ let
         echo "usage: artifact_path <name>" >&2
         return 1
       fi
+      case "$name" in
+        */*|*\\*|.|..)
+          echo "ERROR: artifact name must be a single file name (got '$name')" >&2
+          return 1
+          ;;
+      esac
       local dir
       dir=$(artifact_dir)
       mkdir -p "$dir"
@@ -313,9 +319,9 @@ let
       if [ "$keep_running" = "1" ]; then
         echo "INFO: fixture service keep_running enabled service=$service pid=$pid" >&2
       else
-        with_cleanup "stop_service $pid \"$service\""
+        with_cleanup stop_service "$pid" "$service"
         if has_hook "$stop_hook"; then
-          with_cleanup "run_hook $stop_hook"
+          with_cleanup run_hook "$stop_hook"
         fi
       fi
 
@@ -379,15 +385,28 @@ let
     _cleanup_initialized=false
     _cleanup_actions=()
 
-    # with_cleanup CMD
-    # - register cleanup command to run on EXIT/INT/TERM (LIFO order).
+    # with_cleanup CMD [arg...]
+    # - register cleanup command + args to run on EXIT/INT/TERM (LIFO order).
+    #   Commands are executed without eval.
     with_cleanup() {
-      local cmd="$1"
-      if [ -z "$cmd" ]; then
-        echo "usage: with_cleanup <command>" >&2
+      if [ "$#" -lt 1 ]; then
+        echo "usage: with_cleanup <command> [arg...]" >&2
         return 1
       fi
-      _cleanup_actions+=("$cmd")
+      local script
+      script="$(mktemp "''${TMPDIR:-/tmp}/nixfied-cleanup.XXXXXX")" || {
+        echo "ERROR: failed to create cleanup script file" >&2
+        return 1
+      }
+      chmod 700 "$script" 2>/dev/null || true
+      {
+        printf '#!/usr/bin/env bash\n'
+        printf 'set -euo pipefail\n'
+        printf 'exec'
+        printf ' %q' "$@"
+        printf '\n'
+      } >"$script"
+      _cleanup_actions+=("$script")
       if [ "$_cleanup_initialized" = false ]; then
         _cleanup_initialized=true
         trap _run_cleanups EXIT INT TERM
@@ -397,7 +416,8 @@ let
     _run_cleanups() {
       local i=$(( ''${#_cleanup_actions[@]} - 1 ))
       while [ $i -ge 0 ]; do
-        eval "''${_cleanup_actions[$i]}" || true
+        "''${_cleanup_actions[$i]}" || true
+        rm -f "''${_cleanup_actions[$i]}" >/dev/null 2>&1 || true
         i=$((i - 1))
       done
     }
@@ -565,7 +585,7 @@ let
 
       # Avoid registering cleanup in command substitution subshells (they exit immediately).
       if [ -n "''${BASHPID:-}" ] && [ "''${BASHPID}" = "$$" ]; then
-        with_cleanup "stop_service $pid \"$name\""
+        with_cleanup stop_service "$pid" "$name"
       fi
 
       echo "$pid"

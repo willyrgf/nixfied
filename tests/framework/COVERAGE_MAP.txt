@@ -16,12 +16,14 @@ Each framework file must appear here with at least one validating scenario.
 - `nixfied/.framework/lib/builders.nix`: helper/runtime/slots fixture app generation checks
 - `nixfied/.framework/lib/default.nix`: helper runtime fixture and module integration fixture
 - `nixfied/.framework/lib/helpers.nix`: `fixtures/helpers/runtime.nix`
+- `nixfied/.framework/lib/id.nix`: `fixtures/registry/foreground.nix`, `fixtures/registry/background-timeout.nix`, `fixtures/ephemeral/lock.nix`
 - `nixfied/.framework/lib/fixtures.nix`: `fixtures/ci/ci.nix` (fixtures.env wiring), command fixture wiring in `.framework/internal/test.nix`
 - `nixfied/.framework/lib/parallel.nix`: `fixtures/lib/parallel.nix`
 - `nixfied/.framework/lib/port-utils.nix`: `fixtures/lib/port-utils.nix`
 - `nixfied/.framework/lib/process.nix`: `fixtures/lib/process.nix`
 - `nixfied/.framework/lib/process-registry.nix`: `framework::test` flake app wiring checks and `process::*` command smoke coverage
 - `nixfied/.framework/lib/run-registry.nix`: `fixtures/registry/foreground.nix`, `fixtures/registry/background-timeout.nix`
+- `nixfied/.framework/lib/service-observability.nix`: `fixtures/modules/dev.nix`, `fixtures/helios/lifecycle.nix`, `fixtures/reth/lifecycle.nix`, `fixtures/minio/bucket-ops.nix`, `fixtures/nginx/site-lifecycle.nix`, `fixtures/postgres/extensions.nix`
 - `nixfied/.framework/lib/service-api.nix`: service API contract enforcement fixture in `.framework/internal/test.nix`
 - `nixfied/.framework/lib/summary.nix`: helper `summary_parse` checks in `fixtures/helpers/runtime.nix`
 - `nixfied/.framework/minio/bucket-management.nix`: `fixtures/minio/bucket-ops.nix`
