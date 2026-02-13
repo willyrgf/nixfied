@@ -18,7 +18,10 @@ let
         - For project commands: define commands.${commandName}.api = { version = 1; summary = "..."; details = "..."; usage = [ "nix run .#${commandName}" ]; };
         - For generated/internal apps: set app.meta.nixfied.api (or use lib.appApi.mkNixfiedApp).
     '';
+  sortedAttrNames = attrs: lib.sort (a: b: a < b) (builtins.attrNames attrs);
   renderErrors = errs: builtins.concatStringsSep "\n" (map (e: "  - " + e) errs);
+  optionalAttrSatisfies = attrs: field: pred: !(builtins.hasAttr field attrs) || pred (attrs.${field});
+  isKVSpecList = value: builtins.isList value && builtins.all isKVSpec value;
   throwNamedViolation =
     name: errs:
     throw ''
@@ -51,18 +54,10 @@ let
       ++ expect (isListOfNonEmptyStrings (
         api.usage or [ ]
       )) "${name}: api.usage must be a list of non-empty strings"
-      ++ expect (
-        !(api ? examples) || isListOfNonEmptyStrings (api.examples or null)
-      ) "${name}: api.examples must be a list of non-empty strings"
-      ++ expect (
-        !(api ? args) || (builtins.isList (api.args or null) && builtins.all isKVSpec (api.args or [ ]))
-      ) "${name}: api.args must be a list of { name, description }"
-      ++ expect (
-        !(api ? env) || (builtins.isList (api.env or null) && builtins.all isKVSpec (api.env or [ ]))
-      ) "${name}: api.env must be a list of { name, description }"
-      ++ expect (
-        !(api ? category) || isNonEmptyString (api.category or "")
-      ) "${name}: api.category must be a non-empty string";
+      ++ expect (optionalAttrSatisfies api "examples" isListOfNonEmptyStrings) "${name}: api.examples must be a list of non-empty strings"
+      ++ expect (optionalAttrSatisfies api "args" isKVSpecList) "${name}: api.args must be a list of { name, description }"
+      ++ expect (optionalAttrSatisfies api "env" isKVSpecList) "${name}: api.env must be a list of { name, description }"
+      ++ expect (optionalAttrSatisfies api "category" isNonEmptyString) "${name}: api.category must be a non-empty string";
 
   validateApi =
     { name, api }:
@@ -103,7 +98,7 @@ let
   validateApps =
     apps:
     let
-      names = lib.sort (a: b: a < b) (builtins.attrNames apps);
+      names = sortedAttrNames apps;
       errs = builtins.concatLists (
         map (
           name:
