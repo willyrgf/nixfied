@@ -63,6 +63,19 @@ rec {
     '';
   };
 
+  discovery = {
+    enable = true;
+    strict = true;
+    refreshArg = "--refresh-discovery";
+    requiredDocs = [
+      "README.md"
+      "AGENTS.md"
+      "CLAUDE.md"
+      "ARCHITECTURE.md"
+      "REDESIGN.md"
+    ];
+  };
+
   install = {
     deps = "";
   };

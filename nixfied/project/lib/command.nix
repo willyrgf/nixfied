@@ -26,6 +26,7 @@
       details ? "",
       usage ? [ "nix run .#${name}" ],
       examples ? usage,
+      args ? [ ],
       envDocs ? [ ],
       env ? { },
       useDeps ? true,
@@ -35,12 +36,8 @@
     {
       inherit description env useDeps script;
       api =
-        { version = 1; inherit summary details usage examples category; }
-        // (
-          if envDocs != [ ] then
-            { env = envDocs; }
-          else
-            { }
-        );
+        ({ version = 1; inherit summary details usage examples category; })
+        // (if args != [ ] then { inherit args; } else { })
+        // (if envDocs != [ ] then { env = envDocs; } else { });
     };
 }
