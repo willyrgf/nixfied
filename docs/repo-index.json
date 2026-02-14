@@ -30,7 +30,7 @@
       "path": "CLAUDE.md",
       "purpose": "Additional assistant guidance for this repository.",
       "priority": 3,
-      "exists": true
+      "exists": false
     },
     {
       "path": "ARCHITECTURE.md",
