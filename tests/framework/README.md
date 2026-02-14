@@ -43,6 +43,7 @@ The test runner validates:
 - Supervisor config generation/hook exposure, readiness enforcement, and service-level health checks.
 - Ephemeral slot locking (acquire/release, env var export).
 - Run registry (foreground run tracking, meta.json, output.log).
+- Process registry policy inference (reuse policy to owner/discovery scope mapping).
 - Module apps exposure (db-*, nginx-*, supervisor apps present/absent based on config).
 - Installer safety, upgrade (preserving nixfied/project), re-entry reuse, invalid filter handling, prompt-plan toggle, and framework marker/app exposure behavior.
 
@@ -78,6 +79,7 @@ If you want end‑to‑end examples, start here:
 - `fixtures/modules/dev.nix` — service hook lifecycle with health/readiness behavior across all supported modules.
 - `fixtures/ephemeral/lock.nix` — Ephemeral slot lock acquire/release.
 - `fixtures/registry/foreground.nix` — Run registry foreground tracking.
+- `fixtures/registry/policy-inference.nix` — Reuse policy inference and scope precedence checks.
 
 ## Fixtures
 
@@ -101,3 +103,5 @@ If you want end‑to‑end examples, start here:
   - Ephemeral slot locking (acquire/release) tests.
 - `fixtures/registry/foreground.nix`
   - Run registry foreground mode tests (meta.json, output.log).
+- `fixtures/registry/policy-inference.nix`
+  - Process registry inference tests (`SERVICE_REUSE_POLICY` -> owner/discovery fallback behavior).
