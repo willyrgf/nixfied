@@ -3,4 +3,5 @@
 *.md
 !AGENTS.md
 !README.md
+!docs/repo-map.md
 result
