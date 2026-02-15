@@ -530,14 +530,35 @@
             exit 1
           fi
 
-          run_hook RETH_HEALTH >/dev/null || {
+          RETH_HEALTH_OK=0
+          for i in $(seq 1 20); do
+            if run_hook RETH_HEALTH >/dev/null 2>&1; then
+              RETH_HEALTH_OK=1
+              break
+            fi
+            sleep 0.2
+          done
+          if [ "$RETH_HEALTH_OK" -ne 1 ]; then
             echo "RETH_HEALTH should pass while running" >&2
+            print_log_tail "$RETH_DIR/logs/reth.log" 50
+            cleanup_hook_pid RETH_STOP "$RETH_PID" "reth"
             exit 1
-          }
-          run_hook RETH_READY >/dev/null || {
+          fi
+
+          RETH_READY_STABLE=0
+          for i in $(seq 1 20); do
+            if run_hook RETH_READY >/dev/null 2>&1; then
+              RETH_READY_STABLE=1
+              break
+            fi
+            sleep 0.2
+          done
+          if [ "$RETH_READY_STABLE" -ne 1 ]; then
             echo "RETH_READY should pass while running" >&2
+            print_log_tail "$RETH_DIR/logs/reth.log" 50
+            cleanup_hook_pid RETH_STOP "$RETH_PID" "reth"
             exit 1
-          }
+          fi
           RETH_STARTED=1
           RETH_AVAILABLE=1
         fi
