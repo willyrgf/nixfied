@@ -1734,10 +1734,35 @@ let
         dev = {
           description = "Start the dev workflow";
           api = {
-            version = 1;
+            version = 2;
             summary = "Start the dev workflow";
             details = "ok";
             usage = [ "nix run .#dev" ];
+            category = "core";
+            appContract = {
+              version = 2;
+              name = "dev";
+              allowUnknownArgs = false;
+              args = [ ];
+              env = [
+                {
+                  name = "PROJECT_ENV";
+                  type = "string";
+                  required = false;
+                }
+              ];
+              outputs = {
+                mode = "text";
+              };
+              failureCodes = {
+                generic = 1;
+                usage = 2;
+                precondition = 3;
+                unavailable = 4;
+                timeout = 5;
+              };
+              idempotent = true;
+            };
           };
           env = {
             PROJECT_ENV = "dev";
@@ -1763,8 +1788,7 @@ let
     if [ "$RC" -eq 0 ]; then
       fail "expected API contract violation to fail"
     fi
-    assert_contains "$BAD_API_LOG" "Nixfied app API contract violated"
-    assert_contains "$BAD_API_LOG" "missing meta.nixfied.api"
+    assert_contains "$BAD_API_LOG" "commands.missing-api.api is required"
 
     log "service api contract enforcement"
     BAD_SERVICE_API_EXPR=$(cat <<'NIX'
@@ -3238,8 +3262,8 @@ in
 {
   test = lib.appApi.mkNixfiedApp {
     name = "test";
-    api = {
-      version = 1;
+    api = lib.appApi.mkApi {
+      name = "test";
       summary = "Run framework integration tests";
       details = "Runs the Nixfied framework integration test suite (intended for framework development). Supports shard orchestration via --jobs/--serial/--shard plus --profile and --summary-json options.";
       usage = [
@@ -3253,6 +3277,7 @@ in
         "nix run .#framework::test -- --summary-json /tmp/framework-test-summary.json"
       ];
       category = "framework";
+      allowUnknownArgs = true;
     };
     env = { };
     useDeps = false;

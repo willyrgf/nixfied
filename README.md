@@ -83,10 +83,26 @@ Minimal example:
 
 ```nix
 commands.dev.api = {
-  version = 1;
+  version = 2;
   summary = "Start the dev workflow";
   details = "Longer docs (can be multi-line).";
   usage = [ "nix run .#dev" ];
+  appContract = {
+    version = 2;
+    name = "dev";
+    allowUnknownArgs = false;
+    args = [ ];
+    env = [ ];
+    outputs = { mode = "text"; };
+    failureCodes = {
+      generic = 1;
+      usage = 2;
+      precondition = 3;
+      unavailable = 4;
+      timeout = 5;
+    };
+    idempotent = true;
+  };
 };
 ```
 

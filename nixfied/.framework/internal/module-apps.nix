@@ -18,17 +18,27 @@ let
       usage ? [ "nix run .#${name}" ],
       script,
       category ? "module",
+      args ? [ ],
+      env ? [ ],
+      allowUnknownArgs ? false,
+      idempotent ? true,
     }:
     lib.appApi.mkNixfiedApp {
       inherit name script;
       env = { };
       useDeps = false;
-      api = {
-        version = 1;
-        summary = summary;
-        details = details;
-        usage = usage;
-        category = category;
+      api = lib.appApi.mkApi {
+        inherit
+          name
+          summary
+          details
+          usage
+          args
+          env
+          category
+          allowUnknownArgs
+          idempotent
+          ;
       };
     };
 
@@ -49,6 +59,8 @@ let
         usage
         ;
       category = "supervisor";
+      allowUnknownArgs = passArgs;
+      idempotent = false;
       script = ''
         SLOT_ENV_OUT="$($REQUIRE_SLOT_ENV)" || exit 1
         eval "$SLOT_ENV_OUT"
@@ -72,6 +84,8 @@ let
         usage
         ;
       category = "utility";
+      allowUnknownArgs = true;
+      idempotent = false;
       script = ''
         exec ${toString tool} "$@"
       '';

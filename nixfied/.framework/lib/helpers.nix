@@ -687,7 +687,9 @@ let
       fi
 
       # Avoid registering cleanup in command substitution subshells (they exit immediately).
-      if [ -n "''${BASHPID:-}" ] && [ "''${BASHPID}" = "$$" ]; then
+      # App wrappers that execute command bodies in a dedicated subshell set
+      # NIXFIED_CLEANUP_OWNER_BASHPID to the app-body shell BASHPID.
+      if { [ -n "''${NIXFIED_CLEANUP_OWNER_BASHPID:-}" ] && [ -n "''${BASHPID:-}" ] && [ "''${NIXFIED_CLEANUP_OWNER_BASHPID}" = "''${BASHPID}" ]; } || { [ -n "''${BASHPID:-}" ] && [ "''${BASHPID}" = "$$" ]; }; then
         with_cleanup stop_service "$pid" "$name"
       fi
 
