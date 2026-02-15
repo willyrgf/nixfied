@@ -1069,7 +1069,10 @@ let
 
         fixture_start_service() {
           local service="$1"
-          local keep_running="''${6:-missing}"
+          local keep_running="missing"
+          if [ "$#" -ge 6 ] && [ -n "$6" ]; then
+            keep_running="$6"
+          fi
           echo "service=$service keep_running=$keep_running" >> "$PWD/keep-values.log"
           return 0
         }
