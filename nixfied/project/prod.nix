@@ -5,11 +5,11 @@
 }:
 
 let
-  inherit (commandLib) mkEnvDocProjectEnv mkPlaceholderScript mkProjectCommand;
+  inherit (commandLib) mkEnvDocProjectEnv mkPlaceholderScript mkProjectTypedCommand;
 in
 
 {
-  commands.build = mkProjectCommand {
+  commands.build = mkProjectTypedCommand {
     name = "build";
     description = "Build artifacts";
     details = ''

@@ -5,11 +5,11 @@
 }:
 
 let
-  inherit (commandLib) mkEnvDocProjectEnv mkEnvDocSlot mkPlaceholderScript mkProjectCommand;
+  inherit (commandLib) mkEnvDocProjectEnv mkEnvDocSlot mkPlaceholderScript mkProjectTypedCommand;
 in
 
 {
-  commands.test = mkProjectCommand {
+  commands.test = mkProjectTypedCommand {
     name = "test";
     description = "Run tests";
     details = ''

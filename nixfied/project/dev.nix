@@ -5,11 +5,11 @@
 }:
 
 let
-  inherit (commandLib) mkEnvDocProjectEnv mkEnvDocSlot mkPlaceholderScript mkProjectCommand;
+  inherit (commandLib) mkEnvDocProjectEnv mkEnvDocSlot mkPlaceholderScript mkProjectTypedCommand;
 in
 
 {
-  commands.dev = mkProjectCommand {
+  commands.dev = mkProjectTypedCommand {
     name = "dev";
     description = "Start the dev workflow";
     details = ''
