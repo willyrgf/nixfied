@@ -2100,6 +2100,51 @@ let
       exit "$REG_STALE_RC"
     fi
 
+    log "process registry stop"
+    REG_STOP_DIR="$WORKDIR/registry-process-stop"
+    mkdir -p "$REG_STOP_DIR"
+    REG_STOP_EXPR=$(cat <<'NIX'
+    { root, system }:
+    let
+      flake = builtins.getFlake root;
+      pkgs = flake.inputs.nixpkgs.legacyPackages.''${system};
+      base = import ./nixfied/project { inherit pkgs; };
+      project = pkgs.lib.recursiveUpdate base {
+        project.id = "nixfied-process-stop-fixture";
+        process.registryRoot = "$PWD/.process-registry";
+      };
+      slots = import ./nixfied/.framework/slots.nix { inherit pkgs project; };
+      hooks = import ./nixfied/.framework/hooks.nix { inherit pkgs project slots; postgres = null; nginx = null; };
+      lib = import ./nixfied/.framework/lib { inherit pkgs project hooks; };
+    in
+      lib.mkAppScript {
+        name = "registry-process-stop-test";
+        env = { };
+        useDeps = false;
+        script = import ./tests/framework/fixtures/registry/process-stop.nix {
+          emitEvent = toString lib.emitEvent;
+          processInspect = toString lib.processInspect;
+          processStop = toString lib.processStop;
+          registryRoot = "$PWD/.process-registry";
+        };
+      }
+    NIX
+    )
+
+    REG_STOP_SCRIPT=$(build_expr "$REG_STOP_EXPR")
+    REG_STOP_LOG="$WORKDIR/registry-process-stop.log"
+    set +e
+    (cd "$REG_STOP_DIR" && "$REG_STOP_SCRIPT" >"$REG_STOP_LOG" 2>&1)
+    REG_STOP_RC=$?
+    set -e
+    if [ "$REG_STOP_RC" -ne 0 ]; then
+      echo "Registry process stop fixture failed (rc=$REG_STOP_RC)." >&2
+      echo "" >&2
+      echo "Fixture output (last 50 lines):" >&2
+      print_log_tail "$REG_STOP_LOG" 50
+      exit "$REG_STOP_RC"
+    fi
+
     log "process registry policy inference"
     REG_POLICY_DIR="$WORKDIR/registry-policy-inference"
     mkdir -p "$REG_POLICY_DIR"

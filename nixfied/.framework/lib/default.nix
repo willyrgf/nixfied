@@ -55,6 +55,7 @@ in
     processSlots
     processRuns
     processInspect
+    processStop
     processGc
     emitEvent
     serviceEvents

@@ -77,25 +77,8 @@ let
       '';
     };
 
-  mkRuntimeAliasApp =
-    {
-      name,
-      target,
-      tool,
-      usage,
-    }:
-    mk {
-      inherit name usage;
-      summary = "Alias for ${target}";
-      details = "Compatibility alias for ${target}.";
-      category = "utility";
-      script = ''
-        echo "WARN: ${name} is deprecated; use ${target}" >&2
-        exec ${toString tool} "$@"
-      '';
-    };
-
-  mkAppsFromSpecs = mkFromSpec: specs:
+  mkAppsFromSpecs =
+    mkFromSpec: specs:
     builtins.listToAttrs (
       map (spec: {
         name = spec.name;
@@ -149,10 +132,7 @@ let
   ];
 
   supervisorApps =
-    if supervisor == null then
-      { }
-    else
-      mkAppsFromSpecs mkSupervisorHookApp supervisorSpecs;
+    if supervisor == null then { } else mkAppsFromSpecs mkSupervisorHookApp supervisorSpecs;
 
   portNames = builtins.attrNames (project.ports or { });
   slotInfoEvalBlock = ''
@@ -268,6 +248,17 @@ let
       tool = lib.processInspect;
     }
     {
+      name = "process::stop";
+      summary = "Stop active entities by run id";
+      details = "Stops active run and service processes tied to a run id. Use --scope slot-env to stop all active entities in the same slot/env.";
+      usage = [
+        "nix run .#process::stop -- --run-id <id>"
+        "nix run .#process::stop -- --run-id <id> --scope slot-env"
+        "nix run .#process::stop -- --run-id <id> --dry-run"
+      ];
+      tool = lib.processStop;
+    }
+    {
       name = "process::gc";
       summary = "Reconcile orphaned process metadata";
       details = "Finds orphaned service metadata in the process registry and records orphaned state with --apply.";
@@ -279,70 +270,6 @@ let
     }
   ];
   processApps = mkAppsFromSpecs mkProcessApp processSpecs;
-  processToolByAppName = builtins.listToAttrs (
-    map (spec: {
-      name = spec.name;
-      value = spec.tool;
-    }) processSpecs
-  );
 
-  mkRuntimeAliasSpec =
-    {
-      name,
-      target,
-      usage,
-    }:
-    {
-      inherit
-        name
-        target
-        usage
-        ;
-      tool = processToolByAppName.${target};
-    };
-
-  runtimeAliasDefs = [
-    {
-      name = "runtime::status";
-      target = "process::status";
-      usageTail = "[args]";
-    }
-    {
-      name = "runtime::ps";
-      target = "process::status";
-      usageTail = "[args]";
-    }
-    {
-      name = "runtime::slots";
-      target = "process::slots";
-      usageTail = "[args]";
-    }
-    {
-      name = "runtime::runs";
-      target = "process::runs";
-      usageTail = "[args]";
-    }
-    {
-      name = "runtime::inspect";
-      target = "process::inspect";
-      usageTail = "<id>";
-    }
-    {
-      name = "runtime::gc";
-      target = "process::gc";
-      usageTail = "[args]";
-    }
-  ];
-  runtimeAliasSpecs = map (
-    def:
-    mkRuntimeAliasSpec {
-      inherit (def)
-        name
-        target
-        ;
-      usage = [ "nix run .#${def.name} -- ${def.usageTail}" ];
-    }
-  ) runtimeAliasDefs;
-  runtimeAliases = mkAppsFromSpecs mkRuntimeAliasApp runtimeAliasSpecs;
 in
-serviceApps // supervisorApps // utilityApps // processApps // runtimeAliases
+serviceApps // supervisorApps // utilityApps // processApps
