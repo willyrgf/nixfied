@@ -14,6 +14,31 @@ let
   steps = if enabled then (ci.steps or { }) else { };
   modes = if enabled then (ci.modes or { }) else { };
   modeNames = builtins.attrNames modes;
+  modeTokenName =
+    mode:
+    pkgs.lib.replaceStrings [ "-" "." ":" " " "/" ] [ "_" "_" "_" "_" "_" ] mode;
+  modeArgDocs = map (mode: {
+    name = "--${mode}";
+    description = "Select CI mode ${mode}.";
+  }) modeNames;
+  modeFlagSpecs = map (mode: lib.appApi.arg.flag {
+    name = "mode_${modeTokenName mode}";
+    long = "--${mode}";
+  }) modeNames;
+  modeOptionSpec =
+    if modeNames == [ ] then
+      lib.appApi.arg.option {
+        name = "mode";
+        long = "--mode";
+        type = "string";
+      }
+    else
+      lib.appApi.arg.option {
+        name = "mode";
+        long = "--mode";
+        type = "enum";
+        values = modeNames;
+      };
   defaultMode =
     if enabled then
       (ci.defaultMode or (if modeNames != [ ] then builtins.head modeNames else ""))
@@ -180,8 +205,20 @@ let
                       shift
                       ;;
                     --mode)
+                      if [ -z "''${2:-}" ]; then
+                        echo "Missing value for --mode" >&2
+                        exit 1
+                      fi
                       CI_MODE="''${2:-}"
                       shift 2
+                      ;;
+                    --mode=*)
+                      CI_MODE="''${1#--mode=}"
+                      if [ -z "$CI_MODE" ]; then
+                        echo "Missing value for --mode" >&2
+                        exit 1
+                      fi
+                      shift
                       ;;
                     --)
                       shift
@@ -469,7 +506,10 @@ let
                   # Write structured summary
                   _write_summary_json "$exit_code" "$pipeline_duration" "$setup_duration" "$steps_duration" "$teardown_duration"
 
-                  return "$exit_code"
+                  if [ "$exit_code" -eq 0 ]; then
+                    return 0
+                  fi
+                  return 1
                 }
 
                 if [ "$CI_SUMMARY" = "true" ]; then
@@ -507,7 +547,7 @@ let
                 fi
       '';
 
-  ciApi = lib.appApi.mkApi {
+  ciApi = lib.appApi.mkBatchRunnerCommandApi {
     name = "ci";
     summary = "Run the CI pipeline";
     details = "Runs the CI pipeline defined in nixfied/project/ci.nix (modes + steps).";
@@ -517,7 +557,6 @@ let
     ];
     examples = [ "nix run .#ci -- --summary" ];
     category = "core";
-    allowUnknownArgs = true;
     idempotent = false;
     args = [
       {
@@ -532,7 +571,20 @@ let
         name = "--mode";
         description = "Select configured CI mode.";
       }
-    ];
+    ] ++ modeArgDocs;
+    contractArgs =
+      [
+        (lib.appApi.arg.flag {
+          name = "summary";
+          long = "--summary";
+        })
+        (lib.appApi.arg.flag {
+          name = "bg";
+          long = "--bg";
+        })
+        modeOptionSpec
+      ]
+      ++ modeFlagSpecs;
     env = [
       {
         name = "CI_ARTIFACTS_DIR";
@@ -543,6 +595,14 @@ let
         description = "Override artifacts root; must be absolute path.";
       }
     ];
+    contractEnv = [
+      (lib.appApi.env.string { name = "CI_ARTIFACTS_DIR"; })
+      (lib.appApi.env.typed {
+        name = "CI_ARTIFACTS_BASE";
+        type = "pathAbs";
+      })
+    ];
+    failureCodes = lib.appApi.failureProfiles.script;
   };
 
   scriptDrv =

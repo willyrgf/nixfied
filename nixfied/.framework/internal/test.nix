@@ -729,7 +729,7 @@ let
     if [ "$RC" -eq 0 ]; then
       fail "expected unknown CI mode to exit non-zero"
     fi
-    assert_contains "$CI_MODE_LOG" "Unknown CI mode"
+    assert_contains "$CI_MODE_LOG" "arg:mode must be one of"
 
     set +e
     (cd "$CI_ERR_DIR" && "$CI_SCRIPT" --no-such-flag > "$CI_FLAG_LOG" 2>&1)
@@ -738,7 +738,7 @@ let
     if [ "$RC" -eq 0 ]; then
       fail "expected unknown CI flag to exit non-zero"
     fi
-    assert_contains "$CI_FLAG_LOG" "Unknown option"
+    assert_contains "$CI_FLAG_LOG" "unknown option token=--no-such-flag"
 
     log "ci artifacts retention"
     CI_RET_EXPR=$(cat <<'NIX'
@@ -1742,6 +1742,7 @@ let
             appContract = {
               version = 2;
               name = "dev";
+              commandClass = "typed";
               allowUnknownArgs = false;
               args = [ ];
               env = [
@@ -2874,6 +2875,101 @@ let
     assert_contains "$CI_SJ_DIR/.ci-artifacts/summary.json" '"accounted_duration"'
     assert_contains "$CI_SJ_DIR/.ci-artifacts/summary.json" '"untracked_duration"'
 
+    CI_SJ_EQ_LOG="$WORKDIR/ci-summary-json-equals.log"
+    set +e
+    (cd "$CI_SJ_DIR" && CI_ARTIFACTS_DIR=".ci-artifacts-equals" "$CI_SJ_SCRIPT" --mode=check > "$CI_SJ_EQ_LOG" 2>&1)
+    CI_SJ_EQ_RC=$?
+    set -e
+    if [ "$CI_SJ_EQ_RC" -ne 0 ]; then
+      fail "expected CI --mode=<name> form to exit zero"
+    fi
+    assert_file_exists "$CI_SJ_DIR/.ci-artifacts-equals/summary.json"
+
+    CI_SJ_BAD_LOG="$WORKDIR/ci-summary-json-bad.log"
+    set +e
+    (cd "$CI_SJ_DIR" && CI_ARTIFACTS_DIR=".ci-artifacts-bad" "$CI_SJ_SCRIPT" --unknown-option > "$CI_SJ_BAD_LOG" 2>&1)
+    CI_SJ_BAD_RC=$?
+    set -e
+    if [ "$CI_SJ_BAD_RC" -eq 0 ]; then
+      fail "expected CI unknown option to fail under strict contract"
+    fi
+    assert_contains "$CI_SJ_BAD_LOG" "unknown option token=--unknown-option"
+
+    log "command class policy"
+    CLASS_POLICY_EXPR=$(cat <<'NIX'
+    { root, system }:
+    let
+      flake = builtins.getFlake root;
+      pkgs = flake.inputs.nixpkgs.legacyPackages.''${system};
+      base = import ./nixfied/project { inherit pkgs; };
+      slots = import ./nixfied/.framework/slots.nix {
+        inherit pkgs;
+        project = base;
+      };
+      hooks = import ./nixfied/.framework/hooks.nix { inherit pkgs; project = base; inherit slots; postgres = null; nginx = null; };
+      lib = import ./nixfied/.framework/lib { inherit pkgs; project = base; inherit hooks; };
+    in
+      pkgs.writeText "bad-command-class-policy" (builtins.toJSON (lib.appApi.mkTypedCommandApi {
+        name = "bad-policy";
+        summary = "bad";
+        details = "bad";
+        usage = [ "nix run .#bad-policy" ];
+        appContract = {
+          version = 2;
+          name = "bad-policy";
+          commandClass = "typed";
+          allowUnknownArgs = true;
+          args = [ ];
+          env = [ ];
+          outputs = { mode = "text"; };
+          failureCodes = lib.appApi.failureProfiles.script;
+          idempotent = true;
+        };
+      }))
+    NIX
+    )
+    CLASS_POLICY_LOG="$WORKDIR/command-class-policy.log"
+    set +e
+    build_expr "$CLASS_POLICY_EXPR" > "$CLASS_POLICY_LOG" 2>&1
+    CLASS_POLICY_RC=$?
+    set -e
+    if [ "$CLASS_POLICY_RC" -eq 0 ]; then
+      fail "expected typed class policy violation to fail"
+    fi
+    assert_contains "$CLASS_POLICY_LOG" "typed command class requires allowUnknownArgs=false"
+
+    MISSING_CLASS_EXPR=$(cat <<'NIX'
+    { root, system }:
+    let
+      flake = builtins.getFlake root;
+      pkgs = flake.inputs.nixpkgs.legacyPackages.''${system};
+      shellContract = import ./nixfied/.framework/lib/shell-contract.nix { inherit pkgs; };
+    in
+      pkgs.writeText "missing-command-class" (builtins.toJSON (shellContract.validateAppContract {
+        name = "missing-class";
+        contract = {
+          version = 2;
+          name = "missing-class";
+          allowUnknownArgs = false;
+          args = [ ];
+          env = [ ];
+          outputs = { mode = "text"; };
+          failureCodes = shellContract.defaultFailureCodes;
+          idempotent = true;
+        };
+      }))
+    NIX
+    )
+    MISSING_CLASS_LOG="$WORKDIR/missing-command-class.log"
+    set +e
+    build_expr "$MISSING_CLASS_EXPR" > "$MISSING_CLASS_LOG" 2>&1
+    MISSING_CLASS_RC=$?
+    set -e
+    if [ "$MISSING_CLASS_RC" -eq 0 ]; then
+      fail "expected appContract.commandClass missing violation"
+    fi
+    assert_contains "$MISSING_CLASS_LOG" "appContract.commandClass is required"
+
     log "module apps exposure"
     MODAPP_EXPR=$(cat <<'NIX'
     { root, system }:
@@ -3262,7 +3358,7 @@ in
 {
   test = lib.appApi.mkNixfiedApp {
     name = "test";
-    api = lib.appApi.mkApi {
+    api = lib.appApi.mkPassthroughCommandApi {
       name = "test";
       summary = "Run framework integration tests";
       details = "Runs the Nixfied framework integration test suite (intended for framework development). Supports shard orchestration via --jobs/--serial/--shard plus --profile and --summary-json options.";
@@ -3277,7 +3373,6 @@ in
         "nix run .#framework::test -- --summary-json /tmp/framework-test-summary.json"
       ];
       category = "framework";
-      allowUnknownArgs = true;
     };
     env = { };
     useDeps = false;

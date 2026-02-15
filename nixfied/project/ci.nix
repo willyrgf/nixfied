@@ -5,11 +5,30 @@
 }:
 
 let
-  inherit (commandLib) mkPlaceholderScript mkProjectCommand;
+  inherit (commandLib)
+    mkPlaceholderScript
+    mkProjectBatchRunnerCommand
+    arg
+    env
+    failureProfiles
+    ;
+  ciModes = [
+    "basic"
+    "app"
+    "env"
+  ];
+  modeFlagDocs = map (mode: {
+    name = "--${mode}";
+    description = "Select ${mode} mode.";
+  }) ciModes;
+  modeFlagSpecs = map (mode: arg.flag {
+    name = "mode_${mode}";
+    long = "--${mode}";
+  }) ciModes;
 in
 
 {
-  commands.ci = mkProjectCommand {
+  commands.ci = mkProjectBatchRunnerCommand {
     name = "ci";
     description = "Run the CI pipeline";
     details = ''
@@ -22,6 +41,58 @@ in
       "nix run .#ci -- --summary"
     ];
     examples = [ "nix run .#ci -- --summary" ];
+    args = [
+      {
+        name = "--summary";
+        description = "Print compact CI summary output.";
+      }
+      {
+        name = "--bg";
+        description = "Run CI in background via the run registry.";
+      }
+      {
+        name = "--mode";
+        description = "Select CI mode by name (value: <name>).";
+      }
+    ] ++ modeFlagDocs;
+    contractArgs =
+      [
+        (arg.flag {
+          name = "summary";
+          long = "--summary";
+        })
+        (arg.flag {
+          name = "bg";
+          long = "--bg";
+        })
+        (arg.option {
+          name = "mode";
+          long = "--mode";
+          type = "enum";
+          values = ciModes;
+        })
+      ]
+      ++ modeFlagSpecs;
+    envDocs = [
+      {
+        name = "CI_ARTIFACTS_DIR";
+        description = "Override artifact output directory.";
+      }
+      {
+        name = "CI_ARTIFACTS_BASE";
+        description = "Override artifacts root directory (absolute path).";
+      }
+    ];
+    contractEnv = [
+      (env.string {
+        name = "CI_ARTIFACTS_DIR";
+      })
+      (env.typed {
+        name = "CI_ARTIFACTS_BASE";
+        type = "pathAbs";
+      })
+    ];
+    failureCodes = failureProfiles.script;
     env = {
       "${project.envVar}" = "test";
     };

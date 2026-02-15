@@ -4,11 +4,11 @@
 }:
 
 let
-  inherit (commandLib) mkPlaceholderScript mkProjectCommand;
+  inherit (commandLib) mkPlaceholderScript mkProjectTypedCommand;
 in
 
 {
-  commands.check = mkProjectCommand {
+  commands.check = mkProjectTypedCommand {
     name = "check";
     description = "Run quality checks";
     details = ''
