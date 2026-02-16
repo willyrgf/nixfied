@@ -7,6 +7,7 @@
 
 let
   cfg = project.modules.nginx or { };
+  slotEnvRuntime = import ../lib/slot-env-runtime.nix { inherit pkgs; };
   serviceApi = import ../lib/service-api.nix { inherit pkgs; };
   processRegistry = import ../lib/process-registry.nix { inherit pkgs project; };
   observability = import ../lib/service-observability.nix {
@@ -20,6 +21,33 @@ let
   portVarHttps = slots.portVarName (cfg.portKeyHttps or "https");
   dataDirName = cfg.dataDirName or "nginx";
   nginxDirExpr = slots.getServiceDir dataDirName;
+  runtimePrelude = ''
+    ${slotEnvRuntime.loadJsonFromCommand {
+      outVar = "SLOT_INFO_JSON_OUT";
+      command = toString slots.getSlotInfoJson;
+      exportVars = false;
+    }}
+
+    HTTP_PORT_VAR="${portVarHttp}"
+    HTTPS_PORT_VAR="${portVarHttps}"
+
+    ${slotEnvRuntime.readPortFromJson {
+      targetVar = "HTTP_PORT";
+      jsonVar = "SLOT_INFO_JSON_OUT";
+      keyExpr = "$HTTP_PORT_VAR";
+    }}
+    ${slotEnvRuntime.readPortFromJson {
+      targetVar = "HTTPS_PORT";
+      jsonVar = "SLOT_INFO_JSON_OUT";
+      keyExpr = "$HTTPS_PORT_VAR";
+    }}
+    NGINX_DIR="${nginxDirExpr}"
+
+    if [ -z "$HTTP_PORT" ] || [ -z "$HTTPS_PORT" ]; then
+      echo "ERROR: nginx port variables are not set (http/https)" >&2
+      exit 1
+    fi
+  '';
 
   templates = import ./templates.nix { inherit pkgs; };
   lifecycle = import ./lifecycle.nix {
@@ -57,15 +85,8 @@ let
 
   status = pkgs.writeShellScript "nginx-status" ''
     set -euo pipefail
-    source <(${slots.getSlotInfo})
-
-    NGINX_DIR="${nginxDirExpr}"
+    ${runtimePrelude}
     PID_FILE="$NGINX_DIR/run/nginx.pid"
-    HTTP_PORT_VAR="${portVarHttp}"
-    HTTPS_PORT_VAR="${portVarHttps}"
-
-    HTTP_PORT="''${!HTTP_PORT_VAR}"
-    HTTPS_PORT="''${!HTTPS_PORT_VAR}"
 
     RUNNING=false
     PID=""
@@ -92,12 +113,8 @@ let
 
   health = pkgs.writeShellScript "nginx-health" ''
     set -euo pipefail
-    source <(${slots.getSlotInfo})
-
-    NGINX_DIR="${nginxDirExpr}"
+    ${runtimePrelude}
     PID_FILE="$NGINX_DIR/run/nginx.pid"
-    HTTP_PORT_VAR="${portVarHttp}"
-    HTTP_PORT="''${!HTTP_PORT_VAR}"
 
     PID=""
     if [ -f "$PID_FILE" ]; then
@@ -117,12 +134,8 @@ let
 
   ready = pkgs.writeShellScript "nginx-ready" ''
     set -euo pipefail
-    source <(${slots.getSlotInfo})
-
-    NGINX_DIR="${nginxDirExpr}"
+    ${runtimePrelude}
     PID_FILE="$NGINX_DIR/run/nginx.pid"
-    HTTP_PORT_VAR="${portVarHttp}"
-    HTTP_PORT="''${!HTTP_PORT_VAR}"
 
     PID=""
     if [ -f "$PID_FILE" ]; then
@@ -153,9 +166,7 @@ let
 
   checkConfig = pkgs.writeShellScript "nginx-check-config" ''
     set -euo pipefail
-    source <(${slots.getSlotInfo})
-
-    NGINX_DIR="${nginxDirExpr}"
+    ${runtimePrelude}
     CONF="$NGINX_DIR/conf/nginx.conf"
 
     if [ ! -f "$CONF" ]; then

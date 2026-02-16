@@ -8,6 +8,7 @@
 }:
 
 let
+  slotEnvRuntime = lib.slotEnvRuntime;
   isolationRaw = project.isolation or { };
   isolationSchema = import ../lib/isolation-schema.nix {
     inherit
@@ -116,15 +117,8 @@ let
   '';
   loadSlotInfoJsonFunction = ''
     load_slot_info_json() {
-      local json="$1"
-      SLOT="$(${pkgs.jq}/bin/jq -r '.slot' <<<"$json")"
-      ENV="$(${pkgs.jq}/bin/jq -r '.env' <<<"$json")"
-      while IFS= read -r ENTRY_B64; do
-        [ -z "$ENTRY_B64" ] && continue
-        KEY="$(printf '%s' "$ENTRY_B64" | ${pkgs.coreutils}/bin/base64 -d | ${pkgs.jq}/bin/jq -r '.key')"
-        VALUE="$(printf '%s' "$ENTRY_B64" | ${pkgs.coreutils}/bin/base64 -d | ${pkgs.jq}/bin/jq -r '.value | tostring')"
-        export "$KEY=$VALUE"
-      done < <(printf '%s\n' "$json" | ${pkgs.jq}/bin/jq -r '.vars // {} | to_entries[] | @base64')
+      local json_value="$1"
+      ${slotEnvRuntime.loadSlotEnvAndVarsFromJson { jsonVar = "json_value"; }}
     }
   '';
 
@@ -134,14 +128,10 @@ let
     ERRORS=0
     WARNINGS=0
 
-    if [ -z "''${SLOT_INFO_JSON:-}" ] || [ ! -x "$SLOT_INFO_JSON" ]; then
-      echo "ERROR: SLOT_INFO_JSON not available"
-      exit 1
-    fi
-
-    ${loadSlotInfoJsonFunction}
-    SLOT_INFO_JSON_OUT="$("$SLOT_INFO_JSON")"
-    load_slot_info_json "$SLOT_INFO_JSON_OUT"
+    ${slotEnvRuntime.requireSlotInfoJson {
+      outVar = "SLOT_INFO_JSON_OUT";
+      missingMsg = "ERROR: SLOT_INFO_JSON not available";
+    }}
 
     PORT_PAIRS=(${portPairsStr})
     DIR_VARS=(${dirVarsStr})
@@ -375,7 +365,11 @@ let
         for pair in "''${PORT_PAIRS[@]}"; do
           name="''${pair%%:*}"
           var="''${pair#*:}"
-          value=$(printf '%s\n' "$INFO_JSON" | ${pkgs.jq}/bin/jq -r --arg key "$var" '.ports[$key] // empty')
+          ${slotEnvRuntime.readPortFromJson {
+            targetVar = "value";
+            jsonVar = "INFO_JSON";
+            keyExpr = "$var";
+          }}
           PORTS="$PORTS $name:$value"
         done
         printf "  slot=%s env=%s%s\n" "$slot" "$env" "$PORTS"

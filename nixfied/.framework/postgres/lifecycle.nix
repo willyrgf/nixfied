@@ -8,6 +8,7 @@
 
 let
   cfg = project.modules.postgres or { };
+  slotEnvRuntime = import ../lib/slot-env-runtime.nix { inherit pkgs; };
   processRegistry = import ../lib/process-registry.nix { inherit pkgs project; };
   observability = import ../lib/service-observability.nix {
     inherit
@@ -25,13 +26,23 @@ let
   testDatabase = cfg.testDatabase or "${database}_test";
   extensions = config.extensions or [ ];
   pgRuntimePrelude = defaultDb: ''
-    SLOT_INFO_JSON_OUT="$(${slots.getSlotInfoJson})" || exit 1
-    SLOT="$(${pkgs.jq}/bin/jq -r '.slot' <<<"$SLOT_INFO_JSON_OUT")"
-    ENV="$(${pkgs.jq}/bin/jq -r '.env' <<<"$SLOT_INFO_JSON_OUT")"
-    RUN_DIR="$(${pkgs.jq}/bin/jq -r '.directories.run' <<<"$SLOT_INFO_JSON_OUT")"
+    ${slotEnvRuntime.loadJsonFromCommand {
+      outVar = "SLOT_INFO_JSON_OUT";
+      command = toString slots.getSlotInfoJson;
+      exportVars = false;
+    }}
+    ${slotEnvRuntime.readJsonField {
+      targetVar = "RUN_DIR";
+      jsonVar = "SLOT_INFO_JSON_OUT";
+      jqExpr = ".directories.run";
+    }}
 
     PORT_VAR="${portVar}"
-    _PGPORT_RESOLVED="$(${pkgs.jq}/bin/jq -r --arg key "$PORT_VAR" '.ports[$key] // empty' <<<"$SLOT_INFO_JSON_OUT")"
+    ${slotEnvRuntime.readPortFromJson {
+      targetVar = "_PGPORT_RESOLVED";
+      jsonVar = "SLOT_INFO_JSON_OUT";
+      keyExpr = "$PORT_VAR";
+    }}
     export PGPORT="''${PGPORT:-$_PGPORT_RESOLVED}"
     export PGDATA="''${PGDATA:-${pgdataExpr}}"
     # Keep the unix socket path short. In CI (and on some systems with long TMPDIR paths),

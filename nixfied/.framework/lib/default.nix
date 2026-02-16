@@ -41,6 +41,8 @@ let
     inherit pkgs project;
   };
   processRegistry = import ./process-registry.nix { inherit pkgs project; };
+  slotEnvRuntime = import ./slot-env-runtime.nix { inherit pkgs; };
+  servicePolicy = import ./service-policy.nix { inherit pkgs; };
   portUtils = import ./port-utils.nix { inherit pkgs; };
   parallel = import ./parallel.nix { inherit pkgs; };
   runRegistry = import ./run-registry.nix { inherit pkgs project; };
@@ -87,6 +89,8 @@ in
     serviceStatus
     registryRoot
     ;
+  inherit slotEnvRuntime;
+  inherit servicePolicy;
   inherit (portUtils) mkPortCleanup mkPortConflictChecker;
   inherit (parallel) mkParallelRunner;
   inherit (runRegistry) runRegistryStart;

@@ -14,25 +14,12 @@ let
     isNonEmptyList
     isListOfNonEmptyStrings
     sortedAttrNames
+    isEnvVarName
+    isScalarAttrset
     ;
   actionSchema = import ./action-schema.nix {
     inherit pkgs knownApps;
   };
-
-  isEnvVarName = value: builtins.isString value && (builtins.match "^[A-Z_][A-Z0-9_]*$" value) != null;
-  isScalar =
-    value:
-    builtins.isString value
-    || builtins.isInt value
-    || builtins.isBool value
-    || builtins.isFloat value
-    || builtins.isPath value;
-
-  isScalarAttrset =
-    value:
-    builtins.isAttrs value
-    && builtins.all isEnvVarName (builtins.attrNames value)
-    && builtins.all (key: isScalar value.${key}) (builtins.attrNames value);
 
   renderWhen =
     when:

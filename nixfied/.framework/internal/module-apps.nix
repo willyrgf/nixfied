@@ -10,6 +10,7 @@
 }:
 
 let
+  slotEnvRuntime = lib.slotEnvRuntime;
   slotVar = project.project.slotVar or "NIX_ENV";
   envVar = project.project.envVar or "PROJECT_ENV";
   mk =
@@ -64,9 +65,10 @@ let
       allowUnknownArgs = passArgs;
       idempotent = false;
       script = ''
-        SLOT_ENV_JSON_OUT="$($REQUIRE_SLOT_ENV_JSON)" || exit 1
-        SLOT="$(${pkgs.jq}/bin/jq -r '.slot' <<<"$SLOT_ENV_JSON_OUT")"
-        ENV="$(${pkgs.jq}/bin/jq -r '.env' <<<"$SLOT_ENV_JSON_OUT")"
+        ${slotEnvRuntime.requireSlotEnvJson {
+          outVar = "SLOT_ENV_JSON_OUT";
+          exportVars = false;
+        }}
         export ${slotVar}="$SLOT"
         export ${envVar}="$ENV"
         export NIXFIED_ENV="$SLOT"
@@ -155,11 +157,11 @@ let
     if supervisor == null then { } else mkAppsFromSpecs mkSupervisorHookApp supervisorSpecs;
 
   portNames = builtins.attrNames (project.ports or { });
-  slotInfoJsonBlock = ''
-    SLOT_INFO_JSON_OUT="$($SLOT_INFO_JSON)" || exit 1
-    SLOT="$(${pkgs.jq}/bin/jq -r '.slot' <<<"$SLOT_INFO_JSON_OUT")"
-    ENV="$(${pkgs.jq}/bin/jq -r '.env' <<<"$SLOT_INFO_JSON_OUT")"
-  '';
+  slotInfoJsonBlock = slotEnvRuntime.loadJsonFromCommand {
+    outVar = "SLOT_INFO_JSON_OUT";
+    command = "\"$SLOT_INFO_JSON\"";
+    exportVars = false;
+  };
   portVarNameFor =
     portName:
     pkgs.lib.strings.toUpper (pkgs.lib.replaceStrings [ "-" "." ] [ "_" "_" ] portName) + "_PORT";
@@ -195,7 +197,11 @@ let
             varName,
           }:
           ''
-            PORT_VAL="$(${pkgs.jq}/bin/jq -r --arg key "${varName}" '.ports[$key] // empty' <<<"$SLOT_INFO_JSON_OUT")"
+            ${slotEnvRuntime.readPortFromJson {
+              targetVar = "PORT_VAL";
+              jsonVar = "SLOT_INFO_JSON_OUT";
+              keyExpr = varName;
+            }}
             if [ -n "$PORT_VAL" ]; then
               if "$LSOF" -iTCP:"$PORT_VAL" -sTCP:LISTEN -n -P >/dev/null 2>&1; then
                 PIDS=$("$LSOF" -iTCP:"$PORT_VAL" -sTCP:LISTEN -n -P -t 2>/dev/null | tr '\n' ',' | sed 's/,$//')
@@ -223,7 +229,11 @@ let
             varName,
           }:
           ''
-            PORT_VAL="$(${pkgs.jq}/bin/jq -r --arg key "${varName}" '.ports[$key] // empty' <<<"$SLOT_INFO_JSON_OUT")"
+            ${slotEnvRuntime.readPortFromJson {
+              targetVar = "PORT_VAL";
+              jsonVar = "SLOT_INFO_JSON_OUT";
+              keyExpr = varName;
+            }}
             echo "  ${portName}: ''${PORT_VAL:-n/a}"
           ''
         )}

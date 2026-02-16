@@ -7,7 +7,12 @@
 let
   lib = pkgs.lib;
   validation = import ./validation.nix { inherit pkgs; };
-  inherit (validation) expect renderErrors;
+  inherit (validation)
+    expect
+    renderErrors
+    isEnvVarName
+    isScalar
+    ;
 
   envFileCfg = ((project.tooling or { }).envFile or { });
   envFileEnabled = envFileCfg.enable or true;
@@ -15,7 +20,6 @@ let
   allowSpecsRawValue = envFileCfg.allow or [ ];
   allowSpecsRaw = if builtins.isList allowSpecsRawValue then allowSpecsRawValue else [ ];
 
-  isEnvVarName = value: builtins.isString value && (builtins.match "^[A-Z_][A-Z0-9_]*$" value) != null;
   supportedTypes = [
     "string"
     "int"
@@ -26,14 +30,6 @@ let
     "durationSec"
     "json"
   ];
-  isScalar =
-    value:
-    builtins.isString value
-    || builtins.isInt value
-    || builtins.isBool value
-    || builtins.isFloat value
-    || builtins.isPath value;
-
   specErrors =
     builtins.concatLists (
       lib.imap0 (

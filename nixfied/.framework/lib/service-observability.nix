@@ -6,13 +6,16 @@
 }:
 
 let
+  slotEnvRuntime = import ./slot-env-runtime.nix { inherit pkgs; };
   mkLogScript =
     service:
     pkgs.writeShellScript "${service}-log" ''
       set -euo pipefail
-      SLOT_INFO_JSON_OUT="$(${slots.getSlotInfoJson})" || exit 1
-      SLOT="$(${pkgs.jq}/bin/jq -r '.slot' <<<"$SLOT_INFO_JSON_OUT")"
-      ENV="$(${pkgs.jq}/bin/jq -r '.env' <<<"$SLOT_INFO_JSON_OUT")"
+      ${slotEnvRuntime.loadJsonFromCommand {
+        outVar = "SLOT_INFO_JSON_OUT";
+        command = toString slots.getSlotInfoJson;
+        exportVars = false;
+      }}
       exec ${processRegistry.serviceLogs} --service ${service} --slot "$SLOT" --env "$ENV" "$@"
     '';
 
@@ -20,9 +23,11 @@ let
     service:
     pkgs.writeShellScript "${service}-events" ''
       set -euo pipefail
-      SLOT_INFO_JSON_OUT="$(${slots.getSlotInfoJson})" || exit 1
-      SLOT="$(${pkgs.jq}/bin/jq -r '.slot' <<<"$SLOT_INFO_JSON_OUT")"
-      ENV="$(${pkgs.jq}/bin/jq -r '.env' <<<"$SLOT_INFO_JSON_OUT")"
+      ${slotEnvRuntime.loadJsonFromCommand {
+        outVar = "SLOT_INFO_JSON_OUT";
+        command = toString slots.getSlotInfoJson;
+        exportVars = false;
+      }}
       exec ${processRegistry.serviceEvents} --service ${service} --slot "$SLOT" --env "$ENV" "$@"
     '';
 

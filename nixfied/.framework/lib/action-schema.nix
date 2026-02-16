@@ -12,6 +12,9 @@ let
     renderErrors
     isNonEmptyString
     isListOfNonEmptyStrings
+    isScalar
+    isEnvVarName
+    isScalarAttrset
     ;
 
   actionKinds = [
@@ -22,22 +25,6 @@ let
     "assertEnvEquals"
     "fail"
   ];
-
-  isScalar =
-    value:
-    builtins.isString value
-    || builtins.isInt value
-    || builtins.isBool value
-    || builtins.isFloat value
-    || builtins.isPath value;
-
-  isEnvVarName = value: builtins.isString value && (builtins.match "^[A-Z_][A-Z0-9_]*$" value) != null;
-
-  isScalarAttrset =
-    value:
-    builtins.isAttrs value
-    && builtins.all isEnvVarName (builtins.attrNames value)
-    && builtins.all (key: isScalar value.${key}) (builtins.attrNames value);
 
   isArtifactName = value: builtins.isString value && (builtins.match "^[A-Za-z0-9._-]+$" value) != null;
 

@@ -8,13 +8,22 @@
 
 let
   pc = pkgs.process-compose;
+  slotEnvRuntime = import ../lib/slot-env-runtime.nix { inherit pkgs; };
   ports = project.ports or { };
   portNames = builtins.attrNames ports;
 
   start = pkgs.writeShellScript "supervisor-start" ''
     set -euo pipefail
-    SLOT_INFO_JSON_OUT="$(${slots.getSlotInfoJson})" || exit 1
-    RUN_DIR="$(${pkgs.jq}/bin/jq -r '.directories.run' <<<"$SLOT_INFO_JSON_OUT")"
+    ${slotEnvRuntime.loadJsonFromCommand {
+      outVar = "SLOT_INFO_JSON_OUT";
+      command = toString slots.getSlotInfoJson;
+      exportVars = false;
+    }}
+    ${slotEnvRuntime.readJsonField {
+      targetVar = "RUN_DIR";
+      jsonVar = "SLOT_INFO_JSON_OUT";
+      jqExpr = ".directories.run";
+    }}
     SOCKET_HASH=$(printf '%s' "$RUN_DIR" | cksum | cut -d ' ' -f1)
     export PC_SOCKET_PATH="/tmp/nixfied-pc-$SOCKET_HASH.sock"
     CONFIG_FILE=$(${config.generateConfig})
@@ -25,15 +34,27 @@ let
 
   stop = pkgs.writeShellScript "supervisor-stop" ''
     set -euo pipefail
-    SLOT_INFO_JSON_OUT="$(${slots.getSlotInfoJson})" || exit 1
-    RUN_DIR="$(${pkgs.jq}/bin/jq -r '.directories.run' <<<"$SLOT_INFO_JSON_OUT")"
+    ${slotEnvRuntime.loadJsonFromCommand {
+      outVar = "SLOT_INFO_JSON_OUT";
+      command = toString slots.getSlotInfoJson;
+      exportVars = false;
+    }}
+    ${slotEnvRuntime.readJsonField {
+      targetVar = "RUN_DIR";
+      jsonVar = "SLOT_INFO_JSON_OUT";
+      jqExpr = ".directories.run";
+    }}
     ${pkgs.lib.concatMapStringsSep "\n" (
       name:
       let
         portVar = slots.portVarName name;
       in
       ''
-        ${portVar}="$(${pkgs.jq}/bin/jq -r --arg key "${portVar}" '.ports[$key] // empty' <<<"$SLOT_INFO_JSON_OUT")"
+        ${slotEnvRuntime.readPortFromJson {
+          targetVar = portVar;
+          jsonVar = "SLOT_INFO_JSON_OUT";
+          keyExpr = portVar;
+        }}
       ''
     ) portNames}
     SOCKET_HASH=$(printf '%s' "$RUN_DIR" | cksum | cut -d ' ' -f1)
@@ -70,9 +91,21 @@ let
 
   startDaemon = pkgs.writeShellScript "supervisor-start-daemon" ''
     set -euo pipefail
-    SLOT_INFO_JSON_OUT="$(${slots.getSlotInfoJson})" || exit 1
-    RUN_DIR="$(${pkgs.jq}/bin/jq -r '.directories.run' <<<"$SLOT_INFO_JSON_OUT")"
-    LOG_DIR="$(${pkgs.jq}/bin/jq -r '.directories.log' <<<"$SLOT_INFO_JSON_OUT")"
+    ${slotEnvRuntime.loadJsonFromCommand {
+      outVar = "SLOT_INFO_JSON_OUT";
+      command = toString slots.getSlotInfoJson;
+      exportVars = false;
+    }}
+    ${slotEnvRuntime.readJsonField {
+      targetVar = "RUN_DIR";
+      jsonVar = "SLOT_INFO_JSON_OUT";
+      jqExpr = ".directories.run";
+    }}
+    ${slotEnvRuntime.readJsonField {
+      targetVar = "LOG_DIR";
+      jsonVar = "SLOT_INFO_JSON_OUT";
+      jqExpr = ".directories.log";
+    }}
     SOCKET_HASH=$(printf '%s' "$RUN_DIR" | cksum | cut -d ' ' -f1)
     export PC_SOCKET_PATH="/tmp/nixfied-pc-$SOCKET_HASH.sock"
     CONFIG_FILE=$(${config.generateConfig})

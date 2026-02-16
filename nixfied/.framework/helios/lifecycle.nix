@@ -8,6 +8,7 @@
 
 let
   lib = pkgs.lib;
+  slotEnvRuntime = import ../lib/slot-env-runtime.nix { inherit pkgs; };
   processRegistry = import ../lib/process-registry.nix { inherit pkgs project; };
   observability = import ../lib/service-observability.nix {
     inherit
@@ -23,15 +24,25 @@ let
   extraArgs = lib.escapeShellArgs (config.extraArgs or [ ]);
 
   runtimePrelude = ''
-    SLOT_INFO_JSON_OUT="$(${slots.getSlotInfoJson})" || exit 1
-    SLOT="$(${pkgs.jq}/bin/jq -r '.slot' <<<"$SLOT_INFO_JSON_OUT")"
-    ENV="$(${pkgs.jq}/bin/jq -r '.env' <<<"$SLOT_INFO_JSON_OUT")"
+    ${slotEnvRuntime.loadJsonFromCommand {
+      outVar = "SLOT_INFO_JSON_OUT";
+      command = toString slots.getSlotInfoJson;
+      exportVars = false;
+    }}
 
     HELIOS_RPC_PORT_VAR="${rpcPortVar}"
     HELIOS_EXECUTION_PORT_VAR="${executionRpcPortVar}"
 
-    HELIOS_RPC_PORT="$(${pkgs.jq}/bin/jq -r --arg key "$HELIOS_RPC_PORT_VAR" '.ports[$key] // empty' <<<"$SLOT_INFO_JSON_OUT")"
-    HELIOS_EXECUTION_PORT="$(${pkgs.jq}/bin/jq -r --arg key "$HELIOS_EXECUTION_PORT_VAR" '.ports[$key] // empty' <<<"$SLOT_INFO_JSON_OUT")"
+    ${slotEnvRuntime.readPortFromJson {
+      targetVar = "HELIOS_RPC_PORT";
+      jsonVar = "SLOT_INFO_JSON_OUT";
+      keyExpr = "$HELIOS_RPC_PORT_VAR";
+    }}
+    ${slotEnvRuntime.readPortFromJson {
+      targetVar = "HELIOS_EXECUTION_PORT";
+      jsonVar = "SLOT_INFO_JSON_OUT";
+      keyExpr = "$HELIOS_EXECUTION_PORT_VAR";
+    }}
     HELIOS_DIR="${heliosDirExpr}"
     HELIOS_PID_FILE="$HELIOS_DIR/run/helios.pid"
     HELIOS_LOG_FILE="$HELIOS_DIR/logs/helios.log"
