@@ -12,7 +12,12 @@
       nixpkgs,
       flake-utils,
     }:
-    flake-utils.lib.eachSystem flake-utils.lib.allSystems (
+    let
+      supportedSystems = builtins.filter (
+        system: builtins.elem system nixpkgs.lib.systems.flakeExposed
+      ) flake-utils.lib.allSystems;
+    in
+    flake-utils.lib.eachSystem supportedSystems (
       system:
       let
         pkgs = import nixpkgs { inherit system; };
