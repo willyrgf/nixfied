@@ -6,27 +6,16 @@
 }:
 
 let
+  envLoader = import ./env-loader.nix { inherit pkgs; };
   hookEnv = hooks.env or { };
   hookExports = pkgs.lib.concatMapStringsSep "\n" (key: ''
     # Always pin framework hook paths for deterministic app behavior.
     # User shell/.env hook overrides can route commands to stale scripts.
     export ${key}="${toString hookEnv.${key}}"
-  '') (builtins.attrNames hookEnv);
+  '') (pkgs.lib.sort (a: b: a < b) (builtins.attrNames hookEnv));
 
-  # Script to load .env if it exists (does not override existing env vars)
-  loadEnv = pkgs.writeShellScript "load-env" ''
-    if [ -f ".env" ]; then
-      while IFS='=' read -r key value || [ -n "$key" ]; do
-        case "$key" in
-          \#*|"") continue ;;
-        esac
-        value=$(echo "$value" | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")
-        if [ -z "''${!key:-}" ]; then
-          export "$key=$value"
-        fi
-      done < .env
-    fi
-  '';
+  loadEnv = envLoader.loadEnv;
+  loadEnvFile = envLoader.loadEnvFile;
 
   helpersScript = pkgs.writeShellScript "framework-helpers" ''
     # require_env VAR [message]
@@ -790,5 +779,10 @@ let
   '';
 in
 {
-  inherit loadEnv helpersScript hookExports;
+  inherit
+    loadEnv
+    loadEnvFile
+    helpersScript
+    hookExports
+    ;
 }

@@ -16,6 +16,8 @@ Each framework file must appear here with at least one validating scenario.
 - `nixfied/.framework/lib/builders.nix`: helper/runtime/slots fixture app generation checks
 - `nixfied/.framework/lib/default.nix`: helper runtime fixture and module integration fixture
 - `nixfied/.framework/lib/discovery.nix`: check command discovery verify/refresh flow in `.framework/internal/test.nix`
+- `nixfied/.framework/lib/env-loader.nix`: helper runtime fixture and ephemeral wrapper `.env` loading path
+- `nixfied/.framework/lib/execution-core.nix`: CI DSL fixtures (`fixtures/ci/ci.nix`, `fixtures/ci/summary-json.nix`, `fixtures/ci/unknown-step.nix`)
 - `nixfied/.framework/lib/helpers.nix`: `fixtures/helpers/runtime.nix`
 - `nixfied/.framework/lib/id.nix`: `fixtures/registry/foreground.nix`, `fixtures/registry/background-timeout.nix`, `fixtures/ephemeral/lock.nix`
 - `nixfied/.framework/lib/fixtures.nix`: `fixtures/ci/ci.nix` (fixtures.env wiring), command fixture wiring in `.framework/internal/test.nix`

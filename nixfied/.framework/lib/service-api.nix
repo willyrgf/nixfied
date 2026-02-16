@@ -34,6 +34,11 @@ let
     "health"
     "check-config"
   ];
+  requiredLifecycleOps = [
+    "start"
+    "stop"
+    "status"
+  ];
 
   isAttrs = x: builtins.isAttrs x;
   normalizeToken =
@@ -59,14 +64,28 @@ let
       ++ expect (isNonEmptyString (op.summary or "")) "${prefix}: summary must be a non-empty string"
       ++ expect (op ? details) "${prefix}: details is required"
       ++ expect (builtins.isString (op.details or null)) "${prefix}: details must be a string"
-      ++ expect (optionalAttrSatisfies op "usage" isListOfNonEmptyStrings) "${prefix}: usage must be a list of non-empty strings"
-      ++ expect (optionalAttrSatisfies op "examples" isListOfNonEmptyStrings) "${prefix}: examples must be a list of non-empty strings"
-      ++ expect (optionalAttrSatisfies op "args" isKVSpecList) "${prefix}: args must be a list of { name, description }"
-      ++ expect (optionalAttrSatisfies op "env" isKVSpecList) "${prefix}: env must be a list of { name, description }"
-      ++ expect (optionalAttrSatisfies op "category" isNonEmptyString) "${prefix}: category must be a non-empty string"
+      ++ expect (optionalAttrSatisfies op "usage"
+        isListOfNonEmptyStrings
+      ) "${prefix}: usage must be a list of non-empty strings"
+      ++ expect (optionalAttrSatisfies op "examples"
+        isListOfNonEmptyStrings
+      ) "${prefix}: examples must be a list of non-empty strings"
+      ++ expect (optionalAttrSatisfies op "args"
+        isKVSpecList
+      ) "${prefix}: args must be a list of { name, description }"
+      ++ expect (optionalAttrSatisfies op "env"
+        isKVSpecList
+      ) "${prefix}: env must be a list of { name, description }"
+      ++ expect (optionalAttrSatisfies op "category"
+        isNonEmptyString
+      ) "${prefix}: category must be a non-empty string"
       ++ expect (optionalAttrSatisfies op "app" builtins.isBool) "${prefix}: app must be a boolean"
-      ++ expect (optionalAttrSatisfies op "appName" isNonEmptyString) "${prefix}: appName must be a non-empty string"
-      ++ expect (optionalAttrSatisfies op "hook" isNonEmptyString) "${prefix}: hook must be a non-empty string";
+      ++ expect (optionalAttrSatisfies op "appName"
+        isNonEmptyString
+      ) "${prefix}: appName must be a non-empty string"
+      ++ expect (optionalAttrSatisfies op "hook"
+        isNonEmptyString
+      ) "${prefix}: hook must be a non-empty string";
 
   opNames = ops: builtins.attrNames ops;
 
@@ -77,13 +96,16 @@ let
     { serviceName, api }:
     let
       base = [ ];
+      version = api.version or null;
       profiles = api.profiles or [ ];
       coreOps = api.coreOps or { };
       extOps = api.extensions or { };
-      allOps = coreOps // extOps;
+      opsV2 = api.operations or { };
+      allOps = if version == 2 then opsV2 else coreOps // extOps;
       overlap = opsOverlap coreOps extOps;
       missingProfiles = builtins.filter (p: !(builtins.elem p profiles)) requiredProfiles;
       missingCoreOps = builtins.filter (op: !(builtins.hasAttr op coreOps)) requiredCoreOps;
+      missingLifecycleOps = builtins.filter (op: !(builtins.hasAttr op opsV2)) requiredLifecycleOps;
       opErrs = builtins.concatLists (
         map (
           name:
@@ -105,7 +127,7 @@ let
       ++ expect (builtins.isInt (
         api.version or null
       )) "${serviceName}: publicApi.version must be an integer"
-      ++ expect ((api.version or null) == 1) "${serviceName}: publicApi.version must be 1"
+      ++ expect (version == 1 || version == 2) "${serviceName}: publicApi.version must be 1 or 2"
       ++ expect (api ? service) "${serviceName}: publicApi.service is required"
       ++ expect (isNonEmptyString (
         api.service or ""
@@ -121,23 +143,35 @@ let
       ++ expect (builtins.isString (
         api.details or null
       )) "${serviceName}: publicApi.details must be a string"
-      ++ expect (api ? profiles) "${serviceName}: publicApi.profiles is required"
-      ++ expect (isNonEmptyList (profiles)) "${serviceName}: publicApi.profiles must be a non-empty list"
-      ++ expect (isListOfNonEmptyStrings profiles) "${serviceName}: publicApi.profiles must be a list of non-empty strings"
-      ++
-        expect (missingProfiles == [ ])
-          "${serviceName}: publicApi.profiles missing required values: ${builtins.concatStringsSep ", " missingProfiles}"
-      ++ expect (api ? coreOps) "${serviceName}: publicApi.coreOps is required"
-      ++ expect (isAttrs coreOps) "${serviceName}: publicApi.coreOps must be an attribute set"
-      ++
-        expect (missingCoreOps == [ ])
-          "${serviceName}: publicApi.coreOps missing required ops: ${builtins.concatStringsSep ", " missingCoreOps}"
-      ++ expect (
-        !(api ? extensions) || isAttrs extOps
-      ) "${serviceName}: publicApi.extensions must be an attribute set"
-      ++
-        expect (overlap == [ ])
-          "${serviceName}: publicApi.coreOps/extensions overlap on ops: ${builtins.concatStringsSep ", " overlap}"
+      ++ (
+        if version == 1 then
+          expect (api ? profiles) "${serviceName}: publicApi.profiles is required"
+          ++ expect (isNonEmptyList (profiles)) "${serviceName}: publicApi.profiles must be a non-empty list"
+          ++ expect (isListOfNonEmptyStrings profiles) "${serviceName}: publicApi.profiles must be a list of non-empty strings"
+          ++
+            expect (missingProfiles == [ ])
+              "${serviceName}: publicApi.profiles missing required values: ${builtins.concatStringsSep ", " missingProfiles}"
+          ++ expect (api ? coreOps) "${serviceName}: publicApi.coreOps is required"
+          ++ expect (isAttrs coreOps) "${serviceName}: publicApi.coreOps must be an attribute set"
+          ++
+            expect (missingCoreOps == [ ])
+              "${serviceName}: publicApi.coreOps missing required ops: ${builtins.concatStringsSep ", " missingCoreOps}"
+          ++ expect (
+            !(api ? extensions) || isAttrs extOps
+          ) "${serviceName}: publicApi.extensions must be an attribute set"
+          ++
+            expect (overlap == [ ])
+              "${serviceName}: publicApi.coreOps/extensions overlap on ops: ${builtins.concatStringsSep ", " overlap}"
+        else
+          expect (
+            !(api ? profiles) || isListOfNonEmptyStrings profiles
+          ) "${serviceName}: publicApi.profiles must be a list of non-empty strings when set"
+          ++ expect (api ? operations) "${serviceName}: publicApi.operations is required for version=2"
+          ++ expect (isAttrs opsV2) "${serviceName}: publicApi.operations must be an attribute set"
+          ++
+            expect (missingLifecycleOps == [ ])
+              "${serviceName}: publicApi.operations missing required lifecycle ops: ${builtins.concatStringsSep ", " missingLifecycleOps}"
+      )
       ++ expect (api ? artifacts) "${serviceName}: publicApi.artifacts is required"
       ++ expect (isAttrs (
         api.artifacts or null
@@ -157,10 +191,9 @@ let
         ${renderErrors errs}
 
         Fix:
-          - Define ${serviceName}.publicApi with:
-            version=1, service="${serviceName}", profiles=["dev" "prod" "test" "ci"],
-            coreOps={ init/start/stop/restart/status/health/check-config = { script, summary, details, ... }; },
-            artifacts={ ... }.
+          - Define ${serviceName}.publicApi with one of:
+            - version=1 + profiles + coreOps/extensions + artifacts
+            - version=2 + operations + artifacts
       '';
 
   validateServiceApis =
@@ -225,6 +258,27 @@ let
         ;
     };
 
+  mkServiceApiV2 =
+    {
+      service,
+      summary,
+      details,
+      artifacts,
+      operations,
+      profiles ? [ ],
+    }:
+    {
+      version = 2;
+      inherit
+        service
+        summary
+        details
+        profiles
+        artifacts
+        operations
+        ;
+    };
+
   mkServiceApisFromModules =
     modules:
     let
@@ -249,7 +303,12 @@ let
     in
     builtins.listToAttrs pairs;
 
-  serviceOps = api: (api.coreOps or { }) // (api.extensions or { });
+  serviceOps =
+    api:
+    if (api.version or 1) == 2 then
+      (api.operations or { })
+    else
+      (api.coreOps or { }) // (api.extensions or { });
 
   hookNameFor =
     service: opName: opCfg:
@@ -396,6 +455,7 @@ in
     validateServiceApis
     validateEnabledServicesHaveContracts
     mkServiceApi
+    mkServiceApiV2
     mkServiceApisFromModules
     mkServiceHookEnvFromContract
     mkServiceAppsFromContract
