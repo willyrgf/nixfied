@@ -557,23 +557,18 @@ let
       details,
       usage,
     }:
-    lib.appApi.mkNixfiedApp {
+    lib.appApi.mkTypedAppFromSpec {
       inherit
         name
         script
         useDeps
+        summary
+        details
+        usage
         ;
-      env = { };
-      api = lib.appApi.mkApi {
-        inherit
-          name
-          summary
-          details
-          usage
-          ;
-        category = "isolation";
-        allowUnknownArgs = false;
-      };
+      class = "typed";
+      category = "isolation";
+      runtimeEnv = { };
     };
 in
 {

@@ -42,7 +42,12 @@ rec {
       failureCodes ? appApi.failureProfiles.script,
     }:
     {
-      inherit description env useDeps script;
+      inherit
+        description
+        env
+        useDeps
+        script
+        ;
       api = appApi.mkCommandApi {
         inherit
           name

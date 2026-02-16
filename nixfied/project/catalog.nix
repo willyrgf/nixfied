@@ -21,10 +21,13 @@ let
     name = "--${mode}";
     description = "Select ${mode} mode.";
   }) ciModes;
-  modeFlagSpecs = map (mode: arg.flag {
-    name = "mode_${mode}";
-    long = "--${mode}";
-  }) ciModes;
+  modeFlagSpecs = map (
+    mode:
+    arg.flag {
+      name = "mode_${mode}";
+      long = "--${mode}";
+    }
+  ) ciModes;
 in
 {
   dev = mkPlaceholderCommand {
@@ -126,25 +129,25 @@ in
         name = "--mode";
         description = "Select CI mode by name (value: <name>).";
       }
-    ] ++ modeFlagDocs;
-    contractArgs =
-      [
-        (arg.flag {
-          name = "summary";
-          long = "--summary";
-        })
-        (arg.flag {
-          name = "bg";
-          long = "--bg";
-        })
-        (arg.option {
-          name = "mode";
-          long = "--mode";
-          type = "enum";
-          values = ciModes;
-        })
-      ]
-      ++ modeFlagSpecs;
+    ]
+    ++ modeFlagDocs;
+    contractArgs = [
+      (arg.flag {
+        name = "summary";
+        long = "--summary";
+      })
+      (arg.flag {
+        name = "bg";
+        long = "--bg";
+      })
+      (arg.option {
+        name = "mode";
+        long = "--mode";
+        type = "enum";
+        values = ciModes;
+      })
+    ]
+    ++ modeFlagSpecs;
     envDocs = [
       {
         name = "CI_ARTIFACTS_DIR";

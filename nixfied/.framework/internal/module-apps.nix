@@ -26,23 +26,21 @@ let
       allowUnknownArgs ? false,
       idempotent ? true,
     }:
-    lib.appApi.mkNixfiedApp {
-      inherit name script;
-      env = { };
+    lib.appApi.mkTypedAppFromSpec {
+      inherit
+        name
+        script
+        summary
+        details
+        usage
+        args
+        category
+        idempotent
+        ;
+      class = if allowUnknownArgs then "passthrough" else "typed";
+      envDocs = env;
+      runtimeEnv = { };
       useDeps = false;
-      api = lib.appApi.mkCommandApi {
-        class = if allowUnknownArgs then "passthrough" else "typed";
-        inherit
-          name
-          summary
-          details
-          usage
-          args
-          env
-          category
-          idempotent
-          ;
-      };
     };
 
   mkSupervisorHookApp =
