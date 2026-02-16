@@ -10,7 +10,7 @@ let
   shellContract = import ./shell-contract.nix { inherit pkgs; };
   summary = import ./summary.nix { inherit pkgs project; };
   helpers = import ./helpers.nix {
-    inherit pkgs hooks;
+    inherit pkgs project hooks;
     inherit (summary) summaryParser;
   };
   fixtures = import ./fixtures.nix {

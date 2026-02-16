@@ -19,12 +19,13 @@
       "${project.envVar}" = "test";
     };
     useDeps = false;
-    setup = ''
-      mkdir -p .ci-artifacts
-    '';
-    teardown = ''
-      touch "$(artifact_path "teardown.ok")"
-    '';
+    setupActions = [ ];
+    teardownActions = [
+      {
+        kind = "artifactTouch";
+        artifact = "teardown.ok";
+      }
+    ];
     artifacts = {
       dir = ".ci-artifacts";
       keepOnFailure = true;
@@ -46,23 +47,36 @@
     steps = {
       runs = {
         description = "Basic step runs";
-        run = ''
-          touch "$(artifact_path "runs.ok")"
-        '';
+        actions = [
+          {
+            kind = "artifactTouch";
+            artifact = "runs.ok";
+          }
+        ];
       };
       skip-missing = {
         description = "Skipped when env var missing";
         skipIfMissing = [ "CI_MISSING" ];
-        run = ''
-          touch "$(artifact_path "skip-missing.ok")"
-        '';
+        actions = [
+          {
+            kind = "artifactTouch";
+            artifact = "skip-missing.ok";
+          }
+        ];
       };
       when-false = {
         description = "Skipped when condition false";
-        when = "[ \"$PROJECT_ENV\" = \"dev\" ]";
-        run = ''
-          touch "$(artifact_path "when.ok")"
-        '';
+        when = {
+          envEquals = {
+            "${project.envVar}" = "dev";
+          };
+        };
+        actions = [
+          {
+            kind = "artifactTouch";
+            artifact = "when.ok";
+          }
+        ];
       };
       runs-second = {
         description = "Second step runs";
@@ -71,23 +85,36 @@
             FIXTURE_STEP_ENV = "from-fixture";
           };
         };
-        run = ''
-          if [ "$FIXTURE_STEP_ENV" != "from-fixture" ]; then
-            echo "fixture env missing" >&2
-            exit 1
-          fi
-          touch "$(artifact_path "runs-second.ok")"
-        '';
+        actions = [
+          {
+            kind = "assertEnvEquals";
+            name = "FIXTURE_STEP_ENV";
+            value = "from-fixture";
+          }
+          {
+            kind = "artifactTouch";
+            artifact = "runs-second.ok";
+          }
+        ];
       };
       fail-with-cleanup = {
         description = "Cleanup runs on failure";
-        run = ''
-          touch "$(artifact_path "fail.ran")"
-          exit 1
-        '';
-        cleanup = ''
-          touch "$(artifact_path "fail.cleanup")"
-        '';
+        actions = [
+          {
+            kind = "artifactTouch";
+            artifact = "fail.ran";
+          }
+          {
+            kind = "fail";
+            code = 1;
+          }
+        ];
+        cleanupActions = [
+          {
+            kind = "artifactTouch";
+            artifact = "fail.cleanup";
+          }
+        ];
       };
     };
   };

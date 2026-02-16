@@ -21,7 +21,7 @@ let
       exit 1
     fi
 
-    eval "$(${slots.getSlotInfo})"
+    source <(${slots.getSlotInfo})
     API_PORT_VAR="${apiPortVar}"
     MINIO_API_PORT="''${!API_PORT_VAR}"
     MINIO_DIR="${minioDirExpr}"
@@ -45,7 +45,7 @@ let
       exit 1
     fi
 
-    eval "$(${slots.getSlotInfo})"
+    source <(${slots.getSlotInfo})
     API_PORT_VAR="${apiPortVar}"
     MINIO_API_PORT="''${!API_PORT_VAR}"
     MINIO_DIR="${minioDirExpr}"
@@ -69,7 +69,7 @@ let
       exit 1
     fi
 
-    eval "$(${slots.getSlotInfo})"
+    source <(${slots.getSlotInfo})
     API_PORT_VAR="${apiPortVar}"
     MINIO_API_PORT="''${!API_PORT_VAR}"
     MINIO_DIR="${minioDirExpr}"
@@ -87,7 +87,7 @@ let
   bucketList = pkgs.writeShellScript "minio-bucket-list" ''
     set -euo pipefail
 
-    eval "$(${slots.getSlotInfo})"
+    source <(${slots.getSlotInfo})
     API_PORT_VAR="${apiPortVar}"
     MINIO_API_PORT="''${!API_PORT_VAR}"
     MINIO_DIR="${minioDirExpr}"
@@ -117,7 +117,7 @@ let
       exit 1
     fi
 
-    eval "$(${slots.getSlotInfo})"
+    source <(${slots.getSlotInfo})
     API_PORT_VAR="${apiPortVar}"
     MINIO_API_PORT="''${!API_PORT_VAR}"
     MINIO_DIR="${minioDirExpr}"

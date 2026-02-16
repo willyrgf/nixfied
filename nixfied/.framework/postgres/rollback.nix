@@ -13,7 +13,7 @@ let
 
   findBackupForCommit = pkgs.writeShellScript "postgres-find-backup-for-commit" ''
     set -euo pipefail
-    eval "$(${slots.getSlotInfo})"
+    source <(${slots.getSlotInfo})
 
     COMMIT="''${1:-}"
     if [ -z "$COMMIT" ]; then
@@ -44,7 +44,7 @@ let
 
   testRollback = pkgs.writeShellScript "postgres-test-rollback" ''
     set -euo pipefail
-    eval "$(${slots.getSlotInfo})"
+    source <(${slots.getSlotInfo})
 
     PORT_VAR="${portVar}"
     export PGPORT="''${!PORT_VAR}"

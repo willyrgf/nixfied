@@ -41,7 +41,7 @@ let
 
   restart = pkgs.writeShellScript "postgres-restart" ''
     set -euo pipefail
-    eval "$(${slots.getSlotInfo})"
+    source <(${slots.getSlotInfo})
 
     PORT_VAR="${portVar}"
     export PGPORT="''${!PORT_VAR}"
@@ -55,7 +55,7 @@ let
 
   status = pkgs.writeShellScript "postgres-status" ''
     set -euo pipefail
-    eval "$(${slots.getSlotInfo})"
+    source <(${slots.getSlotInfo})
 
     PORT_VAR="${portVar}"
     PGPORT="''${PGPORT:-''${!PORT_VAR}}"
@@ -86,7 +86,7 @@ let
 
   health = pkgs.writeShellScript "postgres-health" ''
     set -euo pipefail
-    eval "$(${slots.getSlotInfo})"
+    source <(${slots.getSlotInfo})
 
     PORT_VAR="${portVar}"
     PGPORT="''${PGPORT:-''${!PORT_VAR}}"
@@ -102,7 +102,7 @@ let
 
   ready = pkgs.writeShellScript "postgres-ready" ''
     set -euo pipefail
-    eval "$(${slots.getSlotInfo})"
+    source <(${slots.getSlotInfo})
 
     PORT_VAR="${portVar}"
     PGPORT="''${PGPORT:-''${!PORT_VAR}}"
@@ -123,7 +123,7 @@ let
 
   readyTest = pkgs.writeShellScript "postgres-ready-test" ''
     set -euo pipefail
-    eval "$(${slots.getSlotInfo})"
+    source <(${slots.getSlotInfo})
 
     PORT_VAR="${portVar}"
     PGPORT="''${PGPORT:-''${!PORT_VAR}}"
@@ -150,7 +150,7 @@ let
 
   checkConfig = pkgs.writeShellScript "postgres-check-config" ''
     set -euo pipefail
-    eval "$(${slots.getSlotInfo})"
+    source <(${slots.getSlotInfo})
 
     PGDATA="${pgdataExpr}"
 
@@ -170,7 +170,7 @@ let
 
   shell = pkgs.writeShellScript "postgres-shell" ''
     set -euo pipefail
-    eval "$(${slots.getSlotInfo})"
+    source <(${slots.getSlotInfo})
 
     PORT_VAR="${portVar}"
     PGPORT="''${!PORT_VAR}"

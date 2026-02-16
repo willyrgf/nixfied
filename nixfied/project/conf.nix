@@ -61,6 +61,11 @@ rec {
     devShellHook = ''
       echo "Nix framework dev shell ready."
     '';
+    envFile = {
+      enable = true;
+      strict = false;
+      allow = [ ];
+    };
   };
 
   discovery = {
@@ -185,13 +190,18 @@ rec {
     keepLogsOnSuccess = false;
     keepLogsOnFailure = true;
     useDeps = false;
-    runApp = "ci";
-    runArgs = [ "--summary" ];
+    run = {
+      kind = "runApp";
+      app = "ci";
+      args = [ "--summary" ];
+    };
+    validate = {
+      kind = "runApp";
+      app = "validate-env";
+    };
     runEnv = { };
-    preInstall = "";
-    runCommand = "nix run path:.#ci -- --summary";
-    validateCommand = "";
-    cleanup = "";
+    setupActions = [ ];
+    cleanupActions = [ ];
   };
 
   services = {

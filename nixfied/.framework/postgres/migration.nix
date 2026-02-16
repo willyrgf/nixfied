@@ -29,7 +29,7 @@ let
         ""
     }
 
-    eval "$(${slots.getSlotInfo})"
+    source <(${slots.getSlotInfo})
 
     PORT_VAR="${portVar}"
     export PGPORT="''${!PORT_VAR}"

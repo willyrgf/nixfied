@@ -803,18 +803,69 @@ let
     NIX
     )
 
-    CI_UNKNOWN_SCRIPT=$(build_expr "$CI_UNKNOWN_EXPR")
-    CI_UNKNOWN_DIR="$WORKDIR/ci-unknown-step"
     CI_UNKNOWN_LOG="$WORKDIR/ci-unknown-step.log"
-    mkdir -p "$CI_UNKNOWN_DIR"
     set +e
-    (cd "$CI_UNKNOWN_DIR" && "$CI_UNKNOWN_SCRIPT" > "$CI_UNKNOWN_LOG" 2>&1)
+    build_expr "$CI_UNKNOWN_EXPR" > /dev/null 2> "$CI_UNKNOWN_LOG"
     RC=$?
     set -e
     if [ "$RC" -eq 0 ]; then
-      fail "expected unknown step to exit non-zero"
+      fail "expected unknown step fixture evaluation to fail"
     fi
-    assert_contains "$CI_UNKNOWN_LOG" "Unknown step"
+    assert_contains "$CI_UNKNOWN_LOG" "ci.modes.broken.steps references unknown steps"
+
+    log "ci legacy fields"
+    CI_LEGACY_EXPR=$(cat <<'NIX'
+    { root, system }:
+    let
+      flake = builtins.getFlake root;
+      pkgs = flake.inputs.nixpkgs.legacyPackages.''${system};
+      base = import ./nixfied/project { inherit pkgs; };
+      fixture = import ./tests/framework/fixtures/ci/legacy-fields.nix { project = base.project; };
+      project = pkgs.lib.recursiveUpdate base fixture;
+      slots = import ./nixfied/.framework/slots.nix { inherit pkgs project; };
+      hooks = import ./nixfied/.framework/hooks.nix { inherit pkgs project slots; postgres = null; nginx = null; };
+      lib = import ./nixfied/.framework/lib { inherit pkgs project hooks; };
+      ciEntry = import ./nixfied/.framework/ci.nix { inherit pkgs project lib; };
+    in
+      ciEntry.scriptDrv
+    NIX
+    )
+    CI_LEGACY_LOG="$WORKDIR/ci-legacy-fields.log"
+    set +e
+    build_expr "$CI_LEGACY_EXPR" > /dev/null 2> "$CI_LEGACY_LOG"
+    RC=$?
+    set -e
+    if [ "$RC" -eq 0 ]; then
+      fail "expected legacy CI fields fixture evaluation to fail"
+    fi
+    assert_contains "$CI_LEGACY_LOG" "ci.steps.legacy-step.run has been removed"
+
+    log "isolation legacy fields"
+    ISO_LEGACY_EXPR=$(cat <<'NIX'
+    { root, system }:
+    let
+      flake = builtins.getFlake root;
+      pkgs = flake.inputs.nixpkgs.legacyPackages.''${system};
+      base = import ./nixfied/project { inherit pkgs; };
+      fixture = import ./tests/framework/fixtures/isolation/legacy-fields.nix { };
+      project = pkgs.lib.recursiveUpdate base fixture;
+      slots = import ./nixfied/.framework/slots.nix { inherit pkgs project; };
+      hooks = import ./nixfied/.framework/hooks.nix { inherit pkgs project slots; postgres = null; nginx = null; };
+      lib = import ./nixfied/.framework/lib { inherit pkgs project hooks; };
+      isolationApps = import ./nixfied/.framework/internal/isolation.nix { inherit pkgs project lib slots; };
+    in
+      isolationApps.test-isolation.program
+    NIX
+    )
+    ISO_LEGACY_LOG="$WORKDIR/isolation-legacy-fields.log"
+    set +e
+    build_expr "$ISO_LEGACY_EXPR" > /dev/null 2> "$ISO_LEGACY_LOG"
+    RC=$?
+    set -e
+    if [ "$RC" -eq 0 ]; then
+      fail "expected legacy isolation fields fixture evaluation to fail"
+    fi
+    assert_contains "$ISO_LEGACY_LOG" "isolation.runCommand has been removed"
 
     CI_RET_SUM_OK_DIR="$WORKDIR/ci-ret-summary-ok"
     CI_RET_SUM_OK_LOG="$WORKDIR/ci-ret-summary-ok.log"

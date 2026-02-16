@@ -10,8 +10,9 @@ let
     service:
     pkgs.writeShellScript "${service}-log" ''
       set -euo pipefail
-      SLOT_INFO_OUT="$(${slots.getSlotInfo})" || exit 1
-      eval "$SLOT_INFO_OUT"
+      SLOT_INFO_JSON_OUT="$(${slots.getSlotInfoJson})" || exit 1
+      SLOT="$(${pkgs.jq}/bin/jq -r '.slot' <<<"$SLOT_INFO_JSON_OUT")"
+      ENV="$(${pkgs.jq}/bin/jq -r '.env' <<<"$SLOT_INFO_JSON_OUT")"
       exec ${processRegistry.serviceLogs} --service ${service} --slot "$SLOT" --env "$ENV" "$@"
     '';
 
@@ -19,8 +20,9 @@ let
     service:
     pkgs.writeShellScript "${service}-events" ''
       set -euo pipefail
-      SLOT_INFO_OUT="$(${slots.getSlotInfo})" || exit 1
-      eval "$SLOT_INFO_OUT"
+      SLOT_INFO_JSON_OUT="$(${slots.getSlotInfoJson})" || exit 1
+      SLOT="$(${pkgs.jq}/bin/jq -r '.slot' <<<"$SLOT_INFO_JSON_OUT")"
+      ENV="$(${pkgs.jq}/bin/jq -r '.env' <<<"$SLOT_INFO_JSON_OUT")"
       exec ${processRegistry.serviceEvents} --service ${service} --slot "$SLOT" --env "$ENV" "$@"
     '';
 

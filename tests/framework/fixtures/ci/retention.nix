@@ -8,12 +8,13 @@
       "${project.envVar}" = "test";
     };
     useDeps = false;
-    setup = ''
-      mkdir -p .ci-artifacts
-    '';
-    teardown = ''
-      touch "$(artifact_path "teardown.ok")"
-    '';
+    setupActions = [ ];
+    teardownActions = [
+      {
+        kind = "artifactTouch";
+        artifact = "teardown.ok";
+      }
+    ];
     artifacts = {
       dir = ".ci-artifacts";
       keepOnFailure = true;
@@ -30,19 +31,31 @@
     steps = {
       ok = {
         description = "Success step";
-        run = ''
-          touch "$(artifact_path "ok.ok")"
-        '';
+        actions = [
+          {
+            kind = "artifactTouch";
+            artifact = "ok.ok";
+          }
+        ];
       };
       fail = {
         description = "Failing step";
-        run = ''
-          touch "$(artifact_path "fail.ran")"
-          exit 1
-        '';
-        cleanup = ''
-          touch "$(artifact_path "fail.cleanup")"
-        '';
+        actions = [
+          {
+            kind = "artifactTouch";
+            artifact = "fail.ran";
+          }
+          {
+            kind = "fail";
+            code = 1;
+          }
+        ];
+        cleanupActions = [
+          {
+            kind = "artifactTouch";
+            artifact = "fail.cleanup";
+          }
+        ];
       };
     };
   };

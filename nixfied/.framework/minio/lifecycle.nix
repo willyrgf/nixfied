@@ -25,7 +25,7 @@ let
 
   init = pkgs.writeShellScript "minio-init" ''
     set -euo pipefail
-    eval "$(${slots.getSlotInfo})"
+    source <(${slots.getSlotInfo})
 
     MINIO_DIR="${minioDirExpr}"
     mkdir -p "$MINIO_DIR/data"
@@ -38,7 +38,7 @@ let
 
   start = pkgs.writeShellScript "minio-start" ''
     set -euo pipefail
-    eval "$(${slots.getSlotInfo})"
+    source <(${slots.getSlotInfo})
     ${emitHelper}
 
     API_PORT_VAR="${apiPortVar}"
@@ -111,7 +111,7 @@ let
 
   stop = pkgs.writeShellScript "minio-stop" ''
     set -euo pipefail
-    eval "$(${slots.getSlotInfo})"
+    source <(${slots.getSlotInfo})
     ${emitHelper}
 
     MINIO_DIR="${minioDirExpr}"
@@ -158,7 +158,7 @@ let
 
   status = pkgs.writeShellScript "minio-status" ''
     set -euo pipefail
-    eval "$(${slots.getSlotInfo})"
+    source <(${slots.getSlotInfo})
 
     API_PORT_VAR="${apiPortVar}"
     CONSOLE_PORT_VAR="${consolePortVar}"
@@ -193,7 +193,7 @@ let
 
   health = pkgs.writeShellScript "minio-health" ''
     set -euo pipefail
-    eval "$(${slots.getSlotInfo})"
+    source <(${slots.getSlotInfo})
 
     API_PORT_VAR="${apiPortVar}"
     MINIO_API_PORT="''${!API_PORT_VAR}"
@@ -209,7 +209,7 @@ let
 
   ready = pkgs.writeShellScript "minio-ready" ''
     set -euo pipefail
-    eval "$(${slots.getSlotInfo})"
+    source <(${slots.getSlotInfo})
 
     API_PORT_VAR="${apiPortVar}"
     MINIO_API_PORT="''${!API_PORT_VAR}"
@@ -225,7 +225,7 @@ let
 
   checkConfig = pkgs.writeShellScript "minio-check-config" ''
     set -euo pipefail
-    eval "$(${slots.getSlotInfo})"
+    source <(${slots.getSlotInfo})
 
     MINIO_DIR="${minioDirExpr}"
 
@@ -256,7 +256,7 @@ let
 
   exportS3Env = pkgs.writeShellScript "minio-export-s3-env" ''
     set -euo pipefail
-    eval "$(${slots.getSlotInfo})"
+    source <(${slots.getSlotInfo})
 
     API_PORT_VAR="${apiPortVar}"
     MINIO_API_PORT="''${!API_PORT_VAR}"

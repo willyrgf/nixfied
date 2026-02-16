@@ -25,16 +25,17 @@ let
   extraArgs = lib.escapeShellArgs (config.extraArgs or [ ]);
 
   runtimePrelude = ''
-    SLOT_INFO_OUT="$(${slots.getSlotInfo})" || exit 1
-    eval "$SLOT_INFO_OUT"
+    SLOT_INFO_JSON_OUT="$(${slots.getSlotInfoJson})" || exit 1
+    SLOT="$(${pkgs.jq}/bin/jq -r '.slot' <<<"$SLOT_INFO_JSON_OUT")"
+    ENV="$(${pkgs.jq}/bin/jq -r '.env' <<<"$SLOT_INFO_JSON_OUT")"
 
     HTTP_PORT_VAR="${httpPortVar}"
     WS_PORT_VAR="${wsPortVar}"
     AUTH_PORT_VAR="${authPortVar}"
 
-    RETH_HTTP_PORT="''${!HTTP_PORT_VAR:-}"
-    RETH_WS_PORT="''${!WS_PORT_VAR:-}"
-    RETH_AUTH_PORT="''${!AUTH_PORT_VAR:-}"
+    RETH_HTTP_PORT="$(${pkgs.jq}/bin/jq -r --arg key "$HTTP_PORT_VAR" '.ports[$key] // empty' <<<"$SLOT_INFO_JSON_OUT")"
+    RETH_WS_PORT="$(${pkgs.jq}/bin/jq -r --arg key "$WS_PORT_VAR" '.ports[$key] // empty' <<<"$SLOT_INFO_JSON_OUT")"
+    RETH_AUTH_PORT="$(${pkgs.jq}/bin/jq -r --arg key "$AUTH_PORT_VAR" '.ports[$key] // empty' <<<"$SLOT_INFO_JSON_OUT")"
     RETH_DIR="${rethDirExpr}"
     RETH_PID_FILE="$RETH_DIR/run/reth.pid"
     RETH_LOG_FILE="$RETH_DIR/logs/reth.log"

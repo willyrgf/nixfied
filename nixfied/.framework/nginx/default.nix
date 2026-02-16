@@ -57,7 +57,7 @@ let
 
   status = pkgs.writeShellScript "nginx-status" ''
     set -euo pipefail
-    eval "$(${slots.getSlotInfo})"
+    source <(${slots.getSlotInfo})
 
     NGINX_DIR="${nginxDirExpr}"
     PID_FILE="$NGINX_DIR/run/nginx.pid"
@@ -92,7 +92,7 @@ let
 
   health = pkgs.writeShellScript "nginx-health" ''
     set -euo pipefail
-    eval "$(${slots.getSlotInfo})"
+    source <(${slots.getSlotInfo})
 
     NGINX_DIR="${nginxDirExpr}"
     PID_FILE="$NGINX_DIR/run/nginx.pid"
@@ -117,7 +117,7 @@ let
 
   ready = pkgs.writeShellScript "nginx-ready" ''
     set -euo pipefail
-    eval "$(${slots.getSlotInfo})"
+    source <(${slots.getSlotInfo})
 
     NGINX_DIR="${nginxDirExpr}"
     PID_FILE="$NGINX_DIR/run/nginx.pid"
@@ -153,7 +153,7 @@ let
 
   checkConfig = pkgs.writeShellScript "nginx-check-config" ''
     set -euo pipefail
-    eval "$(${slots.getSlotInfo})"
+    source <(${slots.getSlotInfo})
 
     NGINX_DIR="${nginxDirExpr}"
     CONF="$NGINX_DIR/conf/nginx.conf"

@@ -10,6 +10,8 @@
 }:
 
 let
+  slotVar = project.project.slotVar or "NIX_ENV";
+  envVar = project.project.envVar or "PROJECT_ENV";
   mk =
     {
       name,
@@ -62,8 +64,12 @@ let
       allowUnknownArgs = passArgs;
       idempotent = false;
       script = ''
-        SLOT_ENV_OUT="$($REQUIRE_SLOT_ENV)" || exit 1
-        eval "$SLOT_ENV_OUT"
+        SLOT_ENV_JSON_OUT="$($REQUIRE_SLOT_ENV_JSON)" || exit 1
+        SLOT="$(${pkgs.jq}/bin/jq -r '.slot' <<<"$SLOT_ENV_JSON_OUT")"
+        ENV="$(${pkgs.jq}/bin/jq -r '.env' <<<"$SLOT_ENV_JSON_OUT")"
+        export ${slotVar}="$SLOT"
+        export ${envVar}="$ENV"
+        export NIXFIED_ENV="$SLOT"
         run_hook ${hook}${if passArgs then " \"$@\"" else ""}
       '';
     };
@@ -149,9 +155,10 @@ let
     if supervisor == null then { } else mkAppsFromSpecs mkSupervisorHookApp supervisorSpecs;
 
   portNames = builtins.attrNames (project.ports or { });
-  slotInfoEvalBlock = ''
-    SLOT_INFO_OUT="$($SLOT_INFO)" || exit 1
-    eval "$SLOT_INFO_OUT"
+  slotInfoJsonBlock = ''
+    SLOT_INFO_JSON_OUT="$($SLOT_INFO_JSON)" || exit 1
+    SLOT="$(${pkgs.jq}/bin/jq -r '.slot' <<<"$SLOT_INFO_JSON_OUT")"
+    ENV="$(${pkgs.jq}/bin/jq -r '.env' <<<"$SLOT_INFO_JSON_OUT")"
   '';
   portVarNameFor =
     portName:
@@ -178,7 +185,7 @@ let
       details = "Scans the configured ports for the current slot/env and reports whether they are free or listening.";
       category = "utility";
       script = ''
-        ${slotInfoEvalBlock}
+        ${slotInfoJsonBlock}
         LSOF="${pkgs.lsof}/bin/lsof"
         echo "Port status for slot ''${SLOT:-0}, env ''${ENV:-dev}:"
         echo ""
@@ -188,7 +195,7 @@ let
             varName,
           }:
           ''
-            PORT_VAL="''${${varName}:-}"
+            PORT_VAL="$(${pkgs.jq}/bin/jq -r --arg key "${varName}" '.ports[$key] // empty' <<<"$SLOT_INFO_JSON_OUT")"
             if [ -n "$PORT_VAL" ]; then
               if "$LSOF" -iTCP:"$PORT_VAL" -sTCP:LISTEN -n -P >/dev/null 2>&1; then
                 PIDS=$("$LSOF" -iTCP:"$PORT_VAL" -sTCP:LISTEN -n -P -t 2>/dev/null | tr '\n' ',' | sed 's/,$//')
@@ -207,7 +214,7 @@ let
       details = "Prints effective port assignments for the current slot/env.";
       category = "utility";
       script = ''
-        ${slotInfoEvalBlock}
+        ${slotInfoJsonBlock}
         echo "Port assignments for slot ''${SLOT:-0}, env ''${ENV:-dev}:"
         echo ""
         ${mkPortScriptLines (
@@ -216,7 +223,8 @@ let
             varName,
           }:
           ''
-            echo "  ${portName}: ''${${varName}:-n/a}"
+            PORT_VAL="$(${pkgs.jq}/bin/jq -r --arg key "${varName}" '.ports[$key] // empty' <<<"$SLOT_INFO_JSON_OUT")"
+            echo "  ${portName}: ''${PORT_VAL:-n/a}"
           ''
         )}
       '';

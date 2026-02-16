@@ -25,11 +25,14 @@ let
   testDatabase = cfg.testDatabase or "${database}_test";
   extensions = config.extensions or [ ];
   pgRuntimePrelude = defaultDb: ''
-    SLOT_INFO_OUT="$(${slots.getSlotInfo})" || exit 1
-    eval "$SLOT_INFO_OUT"
+    SLOT_INFO_JSON_OUT="$(${slots.getSlotInfoJson})" || exit 1
+    SLOT="$(${pkgs.jq}/bin/jq -r '.slot' <<<"$SLOT_INFO_JSON_OUT")"
+    ENV="$(${pkgs.jq}/bin/jq -r '.env' <<<"$SLOT_INFO_JSON_OUT")"
+    RUN_DIR="$(${pkgs.jq}/bin/jq -r '.directories.run' <<<"$SLOT_INFO_JSON_OUT")"
 
     PORT_VAR="${portVar}"
-    export PGPORT="''${PGPORT:-''${!PORT_VAR:-}}"
+    _PGPORT_RESOLVED="$(${pkgs.jq}/bin/jq -r --arg key "$PORT_VAR" '.ports[$key] // empty' <<<"$SLOT_INFO_JSON_OUT")"
+    export PGPORT="''${PGPORT:-$_PGPORT_RESOLVED}"
     export PGDATA="''${PGDATA:-${pgdataExpr}}"
     # Keep the unix socket path short. In CI (and on some systems with long TMPDIR paths),
     # putting sockets under $PGDATA can exceed the 107-byte sockaddr_un.sun_path limit and

@@ -268,18 +268,23 @@ let
     pkgs.writeShellScript (launcherNameFor serviceName opName) ''
       set -euo pipefail
 
-      REQUIRE_SLOT_ENV_CMD="''${REQUIRE_SLOT_ENV:-}"
-      if [ -z "$REQUIRE_SLOT_ENV_CMD" ]; then
-        echo "ERROR: REQUIRE_SLOT_ENV is not set; run via nixfied app/hook context." >&2
+      REQUIRE_SLOT_ENV_JSON_CMD="''${REQUIRE_SLOT_ENV_JSON:-}"
+      if [ -z "$REQUIRE_SLOT_ENV_JSON_CMD" ]; then
+        echo "ERROR: REQUIRE_SLOT_ENV_JSON is not set; run via nixfied app/hook context." >&2
         exit 1
       fi
-      if [ ! -x "$REQUIRE_SLOT_ENV_CMD" ]; then
-        echo "ERROR: REQUIRE_SLOT_ENV is not executable: $REQUIRE_SLOT_ENV_CMD" >&2
+      if [ ! -x "$REQUIRE_SLOT_ENV_JSON_CMD" ]; then
+        echo "ERROR: REQUIRE_SLOT_ENV_JSON is not executable: $REQUIRE_SLOT_ENV_JSON_CMD" >&2
         exit 1
       fi
 
-      SLOT_ENV_OUT="$("$REQUIRE_SLOT_ENV_CMD")" || exit 1
-      eval "$SLOT_ENV_OUT"
+      SLOT_ENV_JSON="$("$REQUIRE_SLOT_ENV_JSON_CMD")" || exit 1
+      while IFS= read -r ENTRY_B64; do
+        [ -z "$ENTRY_B64" ] && continue
+        KEY="$(printf '%s' "$ENTRY_B64" | ${pkgs.coreutils}/bin/base64 -d | ${pkgs.jq}/bin/jq -r '.key')"
+        VALUE="$(printf '%s' "$ENTRY_B64" | ${pkgs.coreutils}/bin/base64 -d | ${pkgs.jq}/bin/jq -r '.value | tostring')"
+        export "$KEY=$VALUE"
+      done < <(printf '%s\n' "$SLOT_ENV_JSON" | ${pkgs.jq}/bin/jq -r '.vars // {} | to_entries[] | @base64')
 
       exec ${toString opCfg.script} "$@"
     '';

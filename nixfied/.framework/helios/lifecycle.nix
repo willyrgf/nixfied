@@ -23,14 +23,15 @@ let
   extraArgs = lib.escapeShellArgs (config.extraArgs or [ ]);
 
   runtimePrelude = ''
-    SLOT_INFO_OUT="$(${slots.getSlotInfo})" || exit 1
-    eval "$SLOT_INFO_OUT"
+    SLOT_INFO_JSON_OUT="$(${slots.getSlotInfoJson})" || exit 1
+    SLOT="$(${pkgs.jq}/bin/jq -r '.slot' <<<"$SLOT_INFO_JSON_OUT")"
+    ENV="$(${pkgs.jq}/bin/jq -r '.env' <<<"$SLOT_INFO_JSON_OUT")"
 
     HELIOS_RPC_PORT_VAR="${rpcPortVar}"
     HELIOS_EXECUTION_PORT_VAR="${executionRpcPortVar}"
 
-    HELIOS_RPC_PORT="''${!HELIOS_RPC_PORT_VAR:-}"
-    HELIOS_EXECUTION_PORT="''${!HELIOS_EXECUTION_PORT_VAR:-}"
+    HELIOS_RPC_PORT="$(${pkgs.jq}/bin/jq -r --arg key "$HELIOS_RPC_PORT_VAR" '.ports[$key] // empty' <<<"$SLOT_INFO_JSON_OUT")"
+    HELIOS_EXECUTION_PORT="$(${pkgs.jq}/bin/jq -r --arg key "$HELIOS_EXECUTION_PORT_VAR" '.ports[$key] // empty' <<<"$SLOT_INFO_JSON_OUT")"
     HELIOS_DIR="${heliosDirExpr}"
     HELIOS_PID_FILE="$HELIOS_DIR/run/helios.pid"
     HELIOS_LOG_FILE="$HELIOS_DIR/logs/helios.log"

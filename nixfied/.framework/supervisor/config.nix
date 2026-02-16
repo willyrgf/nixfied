@@ -153,7 +153,7 @@ let
 
   generateConfig = pkgs.writeShellScript "supervisor-generate-config" ''
     set -euo pipefail
-    eval "$(${slots.getSlotInfo})"
+    source <(${slots.getSlotInfo})
 
     mkdir -p "$LOG_DIR" "$RUN_DIR" "$CONFIG_DIR"
     chmod 700 "$LOG_DIR" "$RUN_DIR" "$CONFIG_DIR"

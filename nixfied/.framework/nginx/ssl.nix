@@ -23,7 +23,7 @@ let
       exit 1
     fi
 
-    eval "$(${slots.getSlotInfo})"
+    source <(${slots.getSlotInfo})
     NGINX_DIR="${nginxDirExpr}"
     WEBROOT="$NGINX_DIR/html"
 
@@ -50,7 +50,7 @@ let
 
   renewCerts = pkgs.writeShellScript "nginx-cert-renew" ''
     set -euo pipefail
-    eval "$(${slots.getSlotInfo})"
+    source <(${slots.getSlotInfo})
     NGINX_DIR="${nginxDirExpr}"
 
     echo "INFO: Renewing certificates"
@@ -64,7 +64,7 @@ let
 
   certStatus = pkgs.writeShellScript "nginx-cert-status" ''
     set -euo pipefail
-    eval "$(${slots.getSlotInfo})"
+    source <(${slots.getSlotInfo})
     NGINX_DIR="${nginxDirExpr}"
 
     SSL_DIR="$NGINX_DIR/ssl/live"

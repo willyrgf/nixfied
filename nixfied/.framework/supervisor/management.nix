@@ -10,7 +10,7 @@ let
 
   restart = pkgs.writeShellScript "supervisor-restart" ''
     set -euo pipefail
-    eval "$(${slots.getSlotInfo})"
+    source <(${slots.getSlotInfo})
 
     SERVICE="''${1:-}"
     if [ -z "$SERVICE" ]; then
@@ -28,7 +28,7 @@ let
 
   rotateLogs = pkgs.writeShellScript "supervisor-rotate-logs" ''
     set -euo pipefail
-    eval "$(${slots.getSlotInfo})"
+    source <(${slots.getSlotInfo})
 
     MAX_SIZE="''${1:-10485760}"  # 10MB default
     KEEP_COUNT="''${2:-5}"

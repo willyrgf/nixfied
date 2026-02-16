@@ -13,8 +13,8 @@ let
 
   start = pkgs.writeShellScript "supervisor-start" ''
     set -euo pipefail
-    SLOT_INFO_OUT="$(${slots.getSlotInfo})" || exit 1
-    eval "$SLOT_INFO_OUT"
+    SLOT_INFO_JSON_OUT="$(${slots.getSlotInfoJson})" || exit 1
+    RUN_DIR="$(${pkgs.jq}/bin/jq -r '.directories.run' <<<"$SLOT_INFO_JSON_OUT")"
     SOCKET_HASH=$(printf '%s' "$RUN_DIR" | cksum | cut -d ' ' -f1)
     export PC_SOCKET_PATH="/tmp/nixfied-pc-$SOCKET_HASH.sock"
     CONFIG_FILE=$(${config.generateConfig})
@@ -25,8 +25,17 @@ let
 
   stop = pkgs.writeShellScript "supervisor-stop" ''
     set -euo pipefail
-    SLOT_INFO_OUT="$(${slots.getSlotInfo})" || exit 1
-    eval "$SLOT_INFO_OUT"
+    SLOT_INFO_JSON_OUT="$(${slots.getSlotInfoJson})" || exit 1
+    RUN_DIR="$(${pkgs.jq}/bin/jq -r '.directories.run' <<<"$SLOT_INFO_JSON_OUT")"
+    ${pkgs.lib.concatMapStringsSep "\n" (
+      name:
+      let
+        portVar = slots.portVarName name;
+      in
+      ''
+        ${portVar}="$(${pkgs.jq}/bin/jq -r --arg key "${portVar}" '.ports[$key] // empty' <<<"$SLOT_INFO_JSON_OUT")"
+      ''
+    ) portNames}
     SOCKET_HASH=$(printf '%s' "$RUN_DIR" | cksum | cut -d ' ' -f1)
     export PC_SOCKET_PATH="/tmp/nixfied-pc-$SOCKET_HASH.sock"
 
@@ -61,8 +70,9 @@ let
 
   startDaemon = pkgs.writeShellScript "supervisor-start-daemon" ''
     set -euo pipefail
-    SLOT_INFO_OUT="$(${slots.getSlotInfo})" || exit 1
-    eval "$SLOT_INFO_OUT"
+    SLOT_INFO_JSON_OUT="$(${slots.getSlotInfoJson})" || exit 1
+    RUN_DIR="$(${pkgs.jq}/bin/jq -r '.directories.run' <<<"$SLOT_INFO_JSON_OUT")"
+    LOG_DIR="$(${pkgs.jq}/bin/jq -r '.directories.log' <<<"$SLOT_INFO_JSON_OUT")"
     SOCKET_HASH=$(printf '%s' "$RUN_DIR" | cksum | cut -d ' ' -f1)
     export PC_SOCKET_PATH="/tmp/nixfied-pc-$SOCKET_HASH.sock"
     CONFIG_FILE=$(${config.generateConfig})

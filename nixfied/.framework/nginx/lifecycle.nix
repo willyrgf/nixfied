@@ -45,7 +45,7 @@ let
 
   init = pkgs.writeShellScript "nginx-init" ''
     set -euo pipefail
-    eval "$(${slots.getSlotInfo})"
+    source <(${slots.getSlotInfo})
 
     HTTP_PORT_VAR="${portVarHttp}"
     HTTPS_PORT_VAR="${portVarHttps}"
@@ -72,7 +72,7 @@ let
 
   start = pkgs.writeShellScript "nginx-start" ''
     set -euo pipefail
-    eval "$(${slots.getSlotInfo})"
+    source <(${slots.getSlotInfo})
     ${emitHelper}
     NGINX_DIR="${nginxDirExpr}"
 
@@ -89,7 +89,7 @@ let
 
   stop = pkgs.writeShellScript "nginx-stop" ''
     set -euo pipefail
-    eval "$(${slots.getSlotInfo})"
+    source <(${slots.getSlotInfo})
     ${emitHelper}
     NGINX_DIR="${nginxDirExpr}"
     PID_FILE="$NGINX_DIR/run/nginx.pid"
@@ -110,7 +110,7 @@ let
 
   reload = pkgs.writeShellScript "nginx-reload" ''
     set -euo pipefail
-    eval "$(${slots.getSlotInfo})"
+    source <(${slots.getSlotInfo})
     NGINX_DIR="${nginxDirExpr}"
     CONF="$NGINX_DIR/conf/nginx.conf"
 

@@ -11,7 +11,7 @@ let
 
   status = pkgs.writeShellScript "supervisor-status" ''
     set -euo pipefail
-    eval "$(${slots.getSlotInfo})"
+    source <(${slots.getSlotInfo})
     SOCKET_HASH=$(printf '%s' "$RUN_DIR" | cksum | cut -d ' ' -f1)
     export PC_SOCKET_PATH="/tmp/nixfied-pc-$SOCKET_HASH.sock"
 
@@ -25,7 +25,7 @@ let
 
   isRunning = pkgs.writeShellScript "supervisor-is-running" ''
     set -euo pipefail
-    eval "$(${slots.getSlotInfo})"
+    source <(${slots.getSlotInfo})
 
     SOCKET_HASH=$(printf '%s' "$RUN_DIR" | cksum | cut -d ' ' -f1)
     export PC_SOCKET_PATH="/tmp/nixfied-pc-$SOCKET_HASH.sock"
@@ -41,7 +41,7 @@ let
 
   logs = pkgs.writeShellScript "supervisor-logs" ''
     set -euo pipefail
-    eval "$(${slots.getSlotInfo})"
+    source <(${slots.getSlotInfo})
 
     SERVICE="''${1:-}"
     LINES="''${2:-50}"
@@ -69,7 +69,7 @@ let
 
   health = pkgs.writeShellScript "supervisor-health" ''
     set -euo pipefail
-    eval "$(${slots.getSlotInfo})"
+    source <(${slots.getSlotInfo})
 
     SOCKET_HASH=$(printf '%s' "$RUN_DIR" | cksum | cut -d ' ' -f1)
     export PC_SOCKET_PATH="/tmp/nixfied-pc-$SOCKET_HASH.sock"

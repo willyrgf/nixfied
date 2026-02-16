@@ -179,8 +179,8 @@ in
       "${project.envVar}" = "test";
     };
     useDeps = true;
-    setup = "";
-    teardown = "";
+    setupActions = [ ];
+    teardownActions = [ ];
     failureSignals = [ ];
     runsRoot = "/tmp/${project.id}-runs";
     useEphemeral = true;
@@ -215,32 +215,40 @@ in
     steps = {
       quality = {
         description = "Quality checks";
-        run = ''
-          LOGFILE=$(artifact_path "quality.log")
-          log_capture "$LOGFILE" -- "$BASH" -c 'echo "quality checks placeholder"'
-        '';
+        actions = [
+          {
+            kind = "artifactTouch";
+            artifact = "quality.log";
+          }
+        ];
       };
       tests = {
         description = "Tests";
-        run = ''
-          LOGFILE=$(artifact_path "tests.log")
-          log_capture "$LOGFILE" -- "$BASH" -c 'echo "tests placeholder"'
-        '';
+        actions = [
+          {
+            kind = "artifactTouch";
+            artifact = "tests.log";
+          }
+        ];
       };
       system-quick = {
         description = "Quick system tests";
         skipIfMissing = [ "API_KEY" ];
-        run = ''
-          LOGFILE=$(artifact_path "system-quick.log")
-          log_capture "$LOGFILE" -- "$BASH" -c 'echo "system tests placeholder"'
-        '';
+        actions = [
+          {
+            kind = "artifactTouch";
+            artifact = "system-quick.log";
+          }
+        ];
       };
       nginx-proxy = {
         description = "Nginx proxy test";
-        run = ''
-          LOGFILE=$(artifact_path "nginx-proxy.log")
-          log_capture "$LOGFILE" -- "$BASH" -c 'echo "nginx proxy placeholder"'
-        '';
+        actions = [
+          {
+            kind = "artifactTouch";
+            artifact = "nginx-proxy.log";
+          }
+        ];
       };
     };
   };

@@ -20,8 +20,8 @@
       "${project.envVar}" = "test";
     };
     useDeps = false;
-    setup = "";
-    teardown = "";
+    setupActions = [ ];
+    teardownActions = [ ];
     artifacts = {
       dir = ".ci-artifacts";
       keepOnFailure = true;
@@ -38,16 +38,22 @@
     steps = {
       passing = {
         description = "A passing step";
-        run = ''
-          echo "step passed"
-        '';
+        actions = [
+          {
+            kind = "artifactTouch";
+            artifact = "passing.ok";
+          }
+        ];
       };
       skipped = {
         description = "A skipped step";
         skipIfMissing = [ "NONEXISTENT_VAR_FOR_TEST" ];
-        run = ''
-          echo "should not run"
-        '';
+        actions = [
+          {
+            kind = "artifactTouch";
+            artifact = "skipped.ok";
+          }
+        ];
       };
     };
   };

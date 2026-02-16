@@ -91,7 +91,7 @@ let
     validate_upstream_host "$UPSTREAM_HOST"
     validate_port "$UPSTREAM_PORT"
 
-    eval "$(${slots.getSlotInfo})"
+    source <(${slots.getSlotInfo})
     HTTP_PORT_VAR="${portVarHttp}"
     HTTPS_PORT_VAR="${portVarHttps}"
     HTTP_PORT="''${!HTTP_PORT_VAR}"
@@ -126,7 +126,7 @@ let
     validate_domain "$DOMAIN"
     validate_site_root "$SITE_ROOT"
 
-    eval "$(${slots.getSlotInfo})"
+    source <(${slots.getSlotInfo})
     HTTP_PORT_VAR="${portVarHttp}"
     HTTPS_PORT_VAR="${portVarHttps}"
     HTTP_PORT="''${!HTTP_PORT_VAR}"
@@ -157,7 +157,7 @@ let
       exit 1
     fi
 
-    eval "$(${slots.getSlotInfo})"
+    source <(${slots.getSlotInfo})
     NGINX_DIR="${nginxDirExpr}"
 
     rm -f "$NGINX_DIR/conf/sites-enabled/$DOMAIN.conf"
@@ -173,7 +173,7 @@ let
       exit 1
     fi
 
-    eval "$(${slots.getSlotInfo})"
+    source <(${slots.getSlotInfo})
     NGINX_DIR="${nginxDirExpr}"
 
     AVAIL="$NGINX_DIR/conf/sites-available/$DOMAIN.conf"
@@ -194,7 +194,7 @@ let
       exit 1
     fi
 
-    eval "$(${slots.getSlotInfo})"
+    source <(${slots.getSlotInfo})
     NGINX_DIR="${nginxDirExpr}"
 
     rm -f "$NGINX_DIR/conf/sites-enabled/$DOMAIN.conf"
@@ -203,7 +203,7 @@ let
 
   listSites = pkgs.writeShellScript "nginx-site-list" ''
     set -euo pipefail
-    eval "$(${slots.getSlotInfo})"
+    source <(${slots.getSlotInfo})
     NGINX_DIR="${nginxDirExpr}"
 
     AVAIL_DIR="$NGINX_DIR/conf/sites-available"

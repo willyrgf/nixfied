@@ -1,12 +1,15 @@
 # Shell runtime helpers - sourced by all app scripts
 {
   pkgs,
+  project ? { },
   hooks ? { },
   summaryParser,
 }:
 
 let
-  envLoader = import ./env-loader.nix { inherit pkgs; };
+  envLoader = import ./env-loader.nix {
+    inherit pkgs project;
+  };
   hookEnv = hooks.env or { };
   hookExports = pkgs.lib.concatMapStringsSep "\n" (key: ''
     # Always pin framework hook paths for deterministic app behavior.
