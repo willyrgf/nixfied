@@ -103,6 +103,66 @@
   fi
   stop_service "$PID2" "sleeper2"
 
+  unset SERVICE_OWNER_SCOPE SERVICE_REUSE_POLICY SERVICE_DISCOVERY_SCOPE
+
+  export SERVICE_REUSE_POLICY="same-slot"
+  KEEP_POLICY_PID=""
+  start_service_into KEEP_POLICY_PID keep-policy -- sleep 30
+  _run_cleanups
+  if ! kill -0 "$KEEP_POLICY_PID" 2>/dev/null; then
+    fail "start_service should preserve process for same-slot reuse"
+  fi
+  stop_service "$KEEP_POLICY_PID" "keep-policy"
+  _cleanup_actions=()
+  _cleanup_initialized=false
+
+  export SERVICE_REUSE_POLICY="never"
+  CLEAN_POLICY_PID=""
+  start_service_into CLEAN_POLICY_PID clean-policy -- sleep 30
+  _run_cleanups
+  sleep 0.2
+  if kill -0 "$CLEAN_POLICY_PID" 2>/dev/null; then
+    fail "start_service should stop process for never reuse"
+  fi
+  _cleanup_actions=()
+  _cleanup_initialized=false
+
+  export SERVICE_REUSE_POLICY="never"
+  KEEP_OVERRIDE_PID=""
+  start_service_into KEEP_OVERRIDE_PID keep-override --keep-running -- sleep 30
+  _run_cleanups
+  if ! kill -0 "$KEEP_OVERRIDE_PID" 2>/dev/null; then
+    fail "start_service --keep-running should override cleanup policy"
+  fi
+  stop_service "$KEEP_OVERRIDE_PID" "keep-override"
+  _cleanup_actions=()
+  _cleanup_initialized=false
+
+  export SERVICE_REUSE_POLICY="same-slot"
+  CLEAN_OVERRIDE_PID=""
+  start_service_into CLEAN_OVERRIDE_PID clean-override --cleanup -- sleep 30
+  _run_cleanups
+  sleep 0.2
+  if kill -0 "$CLEAN_OVERRIDE_PID" 2>/dev/null; then
+    fail "start_service --cleanup should override keep policy"
+  fi
+  _cleanup_actions=()
+  _cleanup_initialized=false
+
+  POLICY_ERR="$TMPDIR/start-policy-invalid.log"
+  set +e
+  SERVICE_REUSE_POLICY=cross-run SERVICE_OWNER_SCOPE=ephemeral SERVICE_DISCOVERY_SCOPE=global \
+    start_service invalid-policy -- sleep 30 > /dev/null 2>"$POLICY_ERR"
+  POLICY_RC=$?
+  set -e
+  if [ "$POLICY_RC" -eq 0 ]; then
+    fail "start_service should fail for invalid policy matrix"
+  fi
+  grep -q "cross-run reuse requires SERVICE_OWNER_SCOPE=persistent and SERVICE_DISCOVERY_SCOPE=global" "$POLICY_ERR" \
+    || fail "start_service should print actionable policy matrix error"
+
+  unset SERVICE_OWNER_SCOPE SERVICE_REUSE_POLICY SERVICE_DISCOVERY_SCOPE
+
   READY_PID_FILE="$TMPDIR/readiness-pid"
   FREE_PORT=$(pick_port) || fail "failed to pick free port for readiness failure"
   set +e
