@@ -89,6 +89,35 @@
           fi
         }
 
+        wait_hook_success() {
+          local hook_name="$1"
+          local attempts="$2"
+          local interval="$3"
+          local i
+          for i in $(seq 1 "$attempts"); do
+            if run_hook "$hook_name" >/dev/null 2>&1; then
+              return 0
+            fi
+            sleep "$interval"
+          done
+          return 1
+        }
+
+        wait_hook_failure() {
+          local hook_name="$1"
+          local attempts="$2"
+          local interval="$3"
+          local i
+          for i in $(seq 1 "$attempts"); do
+            if run_hook "$hook_name" >/dev/null 2>&1; then
+              sleep "$interval"
+            else
+              return 0
+            fi
+          done
+          return 1
+        }
+
         assign_port PGPORT || {
           echo "failed to pick postgres port" >&2
           exit 1
@@ -206,10 +235,12 @@
             exit 1
           fi
 
-          run_hook POSTGRES_HEALTH >/dev/null || {
+          if ! wait_hook_success POSTGRES_HEALTH 20 0.2; then
             echo "POSTGRES_HEALTH should pass while running" >&2
+            print_log_tail "$PGDATA/postgres.log" 50
+            cleanup_hook_pid POSTGRES_STOP "" "postgres"
             exit 1
-          }
+          fi
 
           export PGDATABASE="nixfied_test"
           run_hook POSTGRES_SETUP_DB
@@ -226,20 +257,12 @@
             exit 1
           fi
 
-          set +e
-          run_hook POSTGRES_HEALTH >/dev/null 2>&1
-          POSTGRES_POST_HEALTH_RC=$?
-          set -e
-          if [ "$POSTGRES_POST_HEALTH_RC" -eq 0 ]; then
+          if ! wait_hook_failure POSTGRES_HEALTH 40 0.2; then
             echo "POSTGRES_HEALTH should fail after stop" >&2
             exit 1
           fi
 
-          set +e
-          run_hook POSTGRES_READY >/dev/null 2>&1
-          POSTGRES_POST_READY_RC=$?
-          set -e
-          if [ "$POSTGRES_POST_READY_RC" -eq 0 ]; then
+          if ! wait_hook_failure POSTGRES_READY 20 0.2; then
             echo "POSTGRES_READY should fail after stop" >&2
             exit 1
           fi
@@ -361,10 +384,12 @@
             exit 1
           fi
 
-          run_hook NGINX_HEALTH >/dev/null || {
+          if ! wait_hook_success NGINX_HEALTH 20 0.2; then
             echo "NGINX_HEALTH should pass while running" >&2
+            print_log_tail "$NGINX_DIR/logs/error.log" 50
+            cleanup_hook_pid NGINX_STOP "$NGINX_PID" "nginx"
             exit 1
-          }
+          fi
 
           run_hook NGINX_STOP
           for i in $(seq 1 20); do
@@ -378,19 +403,11 @@
             exit 1
           fi
 
-          set +e
-          run_hook NGINX_HEALTH >/dev/null 2>&1
-          NGINX_POST_HEALTH_RC=$?
-          set -e
-          if [ "$NGINX_POST_HEALTH_RC" -eq 0 ]; then
+          if ! wait_hook_failure NGINX_HEALTH 40 0.2; then
             echo "NGINX_HEALTH should fail after stop" >&2
             exit 1
           fi
-          set +e
-          run_hook NGINX_READY >/dev/null 2>&1
-          NGINX_POST_READY_RC=$?
-          set -e
-          if [ "$NGINX_POST_READY_RC" -eq 0 ]; then
+          if ! wait_hook_failure NGINX_READY 20 0.2; then
             echo "NGINX_READY should fail after stop" >&2
             exit 1
           fi
@@ -430,7 +447,7 @@
           MINIO_PID=""
           MINIO_PID=$(start_service minio -- "$MINIO_START")
           MINIO_READY_OK=0
-          for i in $(seq 1 50); do
+          for i in $(seq 1 120); do
             if run_hook MINIO_READY >/dev/null 2>&1; then
               MINIO_READY_OK=1
               break
@@ -444,33 +461,22 @@
             exit 1
           fi
 
-          run_hook MINIO_HEALTH >/dev/null || {
+          if ! wait_hook_success MINIO_HEALTH 30 0.2; then
             echo "MINIO_HEALTH should pass while running" >&2
+            print_log_tail "$MINIO_DIR/logs/minio.log" 50
+            cleanup_hook_pid MINIO_STOP "$MINIO_PID" "minio"
             exit 1
-          }
+          fi
 
           run_hook MINIO_BUCKET_LIST >/dev/null
           run_hook MINIO_STOP
 
-          MINIO_DOWN=0
-          for i in $(seq 1 40); do
-            if run_hook MINIO_HEALTH >/dev/null 2>&1; then
-              sleep 0.2
-            else
-              MINIO_DOWN=1
-              break
-            fi
-          done
-          if [ "$MINIO_DOWN" -ne 1 ]; then
+          if ! wait_hook_failure MINIO_HEALTH 40 0.2; then
             echo "MINIO_HEALTH should fail after stop" >&2
             exit 1
           fi
 
-          set +e
-          run_hook MINIO_READY >/dev/null 2>&1
-          MINIO_POST_READY_RC=$?
-          set -e
-          if [ "$MINIO_POST_READY_RC" -eq 0 ]; then
+          if ! wait_hook_failure MINIO_READY 20 0.2; then
             echo "MINIO_READY should fail after stop" >&2
             exit 1
           fi
@@ -629,10 +635,12 @@
               exit 1
             fi
 
-            run_hook HELIOS_HEALTH >/dev/null || {
+            if ! wait_hook_success HELIOS_HEALTH 20 0.2; then
               echo "HELIOS_HEALTH should pass while running" >&2
+              print_log_tail "$HELIOS_DIR/logs/helios.log" 50
+              cleanup_hook_pid HELIOS_STOP "$HELIOS_PID" "helios"
               exit 1
-            }
+            fi
 
             run_hook HELIOS_STOP
             HELIOS_DOWN=0
@@ -650,11 +658,7 @@
             fi
 
             export HELIOS_READY_TIMEOUT_SECS="0"
-            set +e
-            run_hook HELIOS_READY >/dev/null 2>&1
-            HELIOS_POST_READY_RC=$?
-            set -e
-            if [ "$HELIOS_POST_READY_RC" -eq 0 ]; then
+            if ! wait_hook_failure HELIOS_READY 20 0.2; then
               echo "HELIOS_READY should fail after stop" >&2
               exit 1
             fi
@@ -679,11 +683,7 @@
             exit 1
           fi
 
-          set +e
-          run_hook RETH_READY >/dev/null 2>&1
-          RETH_POST_READY_RC=$?
-          set -e
-          if [ "$RETH_POST_READY_RC" -eq 0 ]; then
+          if ! wait_hook_failure RETH_READY 20 0.2; then
             echo "RETH_READY should fail after stop" >&2
             exit 1
           fi

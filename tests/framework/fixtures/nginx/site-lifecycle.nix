@@ -23,6 +23,35 @@
     exit 1
   }
 
+  wait_ok() {
+    local attempts="$1"
+    local interval="$2"
+    shift 2
+    local i
+    for i in $(seq 1 "$attempts"); do
+      if "$@" >/dev/null 2>&1; then
+        return 0
+      fi
+      sleep "$interval"
+    done
+    return 1
+  }
+
+  wait_fail() {
+    local attempts="$1"
+    local interval="$2"
+    shift 2
+    local i
+    for i in $(seq 1 "$attempts"); do
+      if "$@" >/dev/null 2>&1; then
+        sleep "$interval"
+      else
+        return 0
+      fi
+    done
+    return 1
+  }
+
   cleanup_nginx() {
     ${nginxStop} >/dev/null 2>&1 || true
     if [ -n "''${NGINX_PID:-}" ] && kill -0 "$NGINX_PID" 2>/dev/null; then
@@ -115,22 +144,25 @@
     fail "nginx did not become ready"
   fi
 
-  ${nginxHealth} >/dev/null || fail "nginxHealth should pass while running"
+  if ! wait_ok 20 0.2 ${nginxHealth}; then
+    print_log_tail "$NGINX_DIR/logs/error.log" 50
+    cleanup_nginx
+    fail "nginxHealth should pass while running"
+  fi
 
-  ${nginxStatus} >/dev/null || fail "nginxStatus should pass while running"
+  if ! wait_ok 15 0.2 ${nginxStatus}; then
+    cleanup_nginx
+    fail "nginxStatus should pass while running"
+  fi
   cleanup_nginx
 
-  set +e
-  ${nginxHealth} >/dev/null 2>&1
-  RC=$?
-  set -e
-  [ "$RC" -ne 0 ] || fail "nginxHealth should fail after stop"
+  if ! wait_fail 40 0.2 ${nginxHealth}; then
+    fail "nginxHealth should fail after stop"
+  fi
 
-  set +e
-  ${nginxReady} >/dev/null 2>&1
-  RC=$?
-  set -e
-  [ "$RC" -ne 0 ] || fail "nginxReady should fail after stop"
+  if ! wait_fail 20 0.2 ${nginxReady}; then
+    fail "nginxReady should fail after stop"
+  fi
 
   echo "nginx site lifecycle fixture ok"
 

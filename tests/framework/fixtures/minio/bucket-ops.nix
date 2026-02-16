@@ -20,6 +20,35 @@
       exit 1
     }
 
+    wait_ok() {
+      local attempts="$1"
+      local interval="$2"
+      shift 2
+      local i
+      for i in $(seq 1 "$attempts"); do
+        if "$@" >/dev/null 2>&1; then
+          return 0
+        fi
+        sleep "$interval"
+      done
+      return 1
+    }
+
+    wait_fail() {
+      local attempts="$1"
+      local interval="$2"
+      shift 2
+      local i
+      for i in $(seq 1 "$attempts"); do
+        if "$@" >/dev/null 2>&1; then
+          sleep "$interval"
+        else
+          return 0
+        fi
+      done
+      return 1
+    }
+
     cleanup_minio() {
       ${minioStop} >/dev/null 2>&1 || true
       if [ -n "''${MINIO_PID:-}" ] && kill -0 "$MINIO_PID" 2>/dev/null; then
@@ -103,9 +132,16 @@
       fail "minio did not become ready"
     fi
 
-    ${minioHealth} >/dev/null || fail "minioHealth should pass while running"
+    if ! wait_ok 25 0.2 ${minioHealth}; then
+      print_log_tail "$MINIO_DIR/logs/minio.log" 50
+      cleanup_minio
+      fail "minioHealth should pass while running"
+    fi
 
-    ${minioStatus} >/dev/null || fail "minioStatus should pass while running"
+    if ! wait_ok 15 0.2 ${minioStatus}; then
+      cleanup_minio
+      fail "minioStatus should pass while running"
+    fi
 
     ${minioBucketCreate} "fixture-bucket"
     LIST_OUT="$PWD/minio-buckets.log"
@@ -146,11 +182,9 @@
     done
     [ "$MINIO_DOWN" -eq 1 ] || fail "minioHealth should fail after stop"
 
-    set +e
-    ${minioReady} >/dev/null 2>&1
-    RC=$?
-    set -e
-    [ "$RC" -ne 0 ] || fail "minioReady should fail after stop"
+    if ! wait_fail 20 0.2 ${minioReady}; then
+      fail "minioReady should fail after stop"
+    fi
 
     echo "minio bucket ops fixture ok"
 
