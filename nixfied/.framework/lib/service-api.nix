@@ -9,7 +9,6 @@ let
   validation = import ./validation.nix { inherit pkgs; };
   inherit (validation)
     isNonEmptyString
-    isNonEmptyList
     expect
     renderErrors
     sortedAttrNames
@@ -17,23 +16,6 @@ let
     isListOfNonEmptyStrings
     isKVSpecList
     ;
-
-  requiredProfiles = [
-    "dev"
-    "prod"
-    "test"
-    "ci"
-  ];
-
-  requiredCoreOps = [
-    "init"
-    "start"
-    "stop"
-    "restart"
-    "status"
-    "health"
-    "check-config"
-  ];
   requiredLifecycleOps = [
     "start"
     "stop"
@@ -89,32 +71,23 @@ let
 
   opNames = ops: builtins.attrNames ops;
 
-  opsOverlap =
-    coreOps: extOps: builtins.filter (name: builtins.elem name (opNames extOps)) (opNames coreOps);
-
   validateServiceApiErrors =
     { serviceName, api }:
     let
       base = [ ];
       version = api.version or null;
       profiles = api.profiles or [ ];
-      coreOps = api.coreOps or { };
-      extOps = api.extensions or { };
-      opsV2 = api.operations or { };
-      allOps = if version == 2 then opsV2 else coreOps // extOps;
-      overlap = opsOverlap coreOps extOps;
-      missingProfiles = builtins.filter (p: !(builtins.elem p profiles)) requiredProfiles;
-      missingCoreOps = builtins.filter (op: !(builtins.hasAttr op coreOps)) requiredCoreOps;
-      missingLifecycleOps = builtins.filter (op: !(builtins.hasAttr op opsV2)) requiredLifecycleOps;
+      ops = api.operations or { };
+      missingLifecycleOps = builtins.filter (op: !(builtins.hasAttr op ops)) requiredLifecycleOps;
       opErrs = builtins.concatLists (
         map (
           name:
           validateOpErrors {
             service = serviceName;
             opName = name;
-            op = allOps.${name};
+            op = ops.${name};
           }
-        ) (opNames allOps)
+        ) (opNames ops)
       );
     in
     if api == null then
@@ -127,7 +100,7 @@ let
       ++ expect (builtins.isInt (
         api.version or null
       )) "${serviceName}: publicApi.version must be an integer"
-      ++ expect (version == 1 || version == 2) "${serviceName}: publicApi.version must be 1 or 2"
+      ++ expect (version == 2) "${serviceName}: publicApi.version must be 2"
       ++ expect (api ? service) "${serviceName}: publicApi.service is required"
       ++ expect (isNonEmptyString (
         api.service or ""
@@ -143,35 +116,14 @@ let
       ++ expect (builtins.isString (
         api.details or null
       )) "${serviceName}: publicApi.details must be a string"
-      ++ (
-        if version == 1 then
-          expect (api ? profiles) "${serviceName}: publicApi.profiles is required"
-          ++ expect (isNonEmptyList (profiles)) "${serviceName}: publicApi.profiles must be a non-empty list"
-          ++ expect (isListOfNonEmptyStrings profiles) "${serviceName}: publicApi.profiles must be a list of non-empty strings"
-          ++
-            expect (missingProfiles == [ ])
-              "${serviceName}: publicApi.profiles missing required values: ${builtins.concatStringsSep ", " missingProfiles}"
-          ++ expect (api ? coreOps) "${serviceName}: publicApi.coreOps is required"
-          ++ expect (isAttrs coreOps) "${serviceName}: publicApi.coreOps must be an attribute set"
-          ++
-            expect (missingCoreOps == [ ])
-              "${serviceName}: publicApi.coreOps missing required ops: ${builtins.concatStringsSep ", " missingCoreOps}"
-          ++ expect (
-            !(api ? extensions) || isAttrs extOps
-          ) "${serviceName}: publicApi.extensions must be an attribute set"
-          ++
-            expect (overlap == [ ])
-              "${serviceName}: publicApi.coreOps/extensions overlap on ops: ${builtins.concatStringsSep ", " overlap}"
-        else
-          expect (
-            !(api ? profiles) || isListOfNonEmptyStrings profiles
-          ) "${serviceName}: publicApi.profiles must be a list of non-empty strings when set"
-          ++ expect (api ? operations) "${serviceName}: publicApi.operations is required for version=2"
-          ++ expect (isAttrs opsV2) "${serviceName}: publicApi.operations must be an attribute set"
-          ++
-            expect (missingLifecycleOps == [ ])
-              "${serviceName}: publicApi.operations missing required lifecycle ops: ${builtins.concatStringsSep ", " missingLifecycleOps}"
-      )
+      ++ expect (
+        !(api ? profiles) || isListOfNonEmptyStrings profiles
+      ) "${serviceName}: publicApi.profiles must be a list of non-empty strings when set"
+      ++ expect (api ? operations) "${serviceName}: publicApi.operations is required"
+      ++ expect (isAttrs ops) "${serviceName}: publicApi.operations must be an attribute set"
+      ++
+        expect (missingLifecycleOps == [ ])
+          "${serviceName}: publicApi.operations missing required lifecycle ops: ${builtins.concatStringsSep ", " missingLifecycleOps}"
       ++ expect (api ? artifacts) "${serviceName}: publicApi.artifacts is required"
       ++ expect (isAttrs (
         api.artifacts or null
@@ -191,8 +143,7 @@ let
         ${renderErrors errs}
 
         Fix:
-          - Define ${serviceName}.publicApi with one of:
-            - version=1 + profiles + coreOps/extensions + artifacts
+          - Define ${serviceName}.publicApi with:
             - version=2 + operations + artifacts
       '';
 
@@ -234,29 +185,6 @@ let
         Nixfied service API contract violated:
           - Missing publicApi for enabled services: ${builtins.concatStringsSep ", " missing}
       '';
-
-  mkServiceApi =
-    {
-      service,
-      summary,
-      details,
-      artifacts,
-      coreOps,
-      extensions ? { },
-      profiles ? requiredProfiles,
-    }:
-    {
-      version = 1;
-      inherit
-        service
-        summary
-        details
-        profiles
-        artifacts
-        coreOps
-        extensions
-        ;
-    };
 
   mkServiceApiV2 =
     {
@@ -303,12 +231,7 @@ let
     in
     builtins.listToAttrs pairs;
 
-  serviceOps =
-    api:
-    if (api.version or 1) == 2 then
-      (api.operations or { })
-    else
-      (api.coreOps or { }) // (api.extensions or { });
+  serviceOps = api: api.operations or { };
 
   hookNameFor =
     service: opName: opCfg:
@@ -449,12 +372,9 @@ let
 in
 {
   inherit
-    requiredProfiles
-    requiredCoreOps
     validateServiceApi
     validateServiceApis
     validateEnabledServicesHaveContracts
-    mkServiceApi
     mkServiceApiV2
     mkServiceApisFromModules
     mkServiceHookEnvFromContract

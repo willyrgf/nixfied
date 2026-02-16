@@ -33,7 +33,6 @@ let
     service = "minio";
     summaryName = "MinIO";
     logScript = log;
-    logsScript = logs;
     eventsScript = events;
   };
   bucketMgmt = import ./bucket-management.nix {

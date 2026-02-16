@@ -113,12 +113,32 @@ For supported services (`postgres`, `nginx`, `minio`, `reth`, `helios`), Nixfied
 service contract at `module.publicApi` during flake evaluation.
 
 Required shape:
-- `version = 1`
+- `version = 2`
 - `service = "<name>"`
-- `profiles = [ "dev" "prod" "test" "ci" ]`
-- `coreOps` with required ops:
-  `init`, `start`, `stop`, `restart`, `status`, `health`, `check-config`
+- `summary` and `details`
 - `artifacts` metadata
+- `operations` (attribute set) with required lifecycle ops:
+  `start`, `stop`, `status`
+
+Operation entries support:
+- `script`, `summary`, `details` (required)
+- optional metadata (`usage`, `examples`, `args`, `env`, `category`, `app`, `appName`, `hook`)
+
+Migration from legacy module contracts:
+- merge previous `coreOps` and `extensions` into one `operations` attrset
+- use `serviceApi.mkServiceApiV2 { ... }` only
+
+Minimal migration pattern:
+
+```nix
+publicApi = serviceApi.mkServiceApiV2 {
+  service = "postgres";
+  summary = "PostgreSQL service management API";
+  details = "Public service contract.";
+  artifacts = { };
+  operations = coreOps // extensions;
+};
+```
 
 Built-in services also expose a `READY` extension hook (`<SERVICE>_READY`) to
 gate "usable" state, which may be stricter than "alive".
@@ -724,7 +744,6 @@ Process commands:
 
 Service-level observability extensions:
 - `nix run .#service::<name>::log -- [--lines N] [--follow]`
-- `nix run .#service::<name>::logs -- [--lines N] [--follow]` (compat alias)
 - `nix run .#service::<name>::events -- [--limit N]`
 - `nix run .#service::<name>::status` (local + global registry merge)
 
@@ -802,7 +821,6 @@ Phase plan:
 
 Compatibility:
 - existing defaults remain non-breaking
-- `runtime::*` aliases remain available during migration
 - status field additions are additive key/value fields
 
 Acceptance goals:
@@ -811,6 +829,13 @@ Acceptance goals:
 - reuse behavior is explicit, documented, and test-covered
 - cross-root status is no longer silently misleading
 - CI + registry data provides postmortem traceability
+
+## Breaking changes
+
+- Removed service app alias: `service::<service>::logs` (use `service::<service>::log`)
+- Removed framework test profile alias: `framework::test --profile full` (use `--profile ci`)
+- Removed installer/upgrade flag: `--sync`
+- Removed service contract V1 support (`publicApi.version = 1`)
 
 ## Optional modules
 
