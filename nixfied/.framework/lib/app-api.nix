@@ -358,47 +358,48 @@ let
       }
     );
 
-  mkTypedCommandApi =
+  mkCommandApi =
     args:
-    mkCommandClassApi (
-      args
-      // {
-        allowUnknownArgs = false;
-        commandClass = "typed";
-      }
-    );
-
-  mkPassthroughCommandApi =
-    args:
-    mkCommandClassApi (
-      args
-      // {
-        allowUnknownArgs = true;
-        commandClass = "passthrough";
-      }
-    );
-
-  mkJsonCommandApi =
-    args:
-    mkCommandClassApi (
-      args
-      // {
-        allowUnknownArgs = false;
-        commandClass = "json";
-        outputsMode = "json";
-      }
-    );
-
-  mkBatchRunnerCommandApi =
-    args:
-    mkCommandClassApi (
-      args
-      // {
-        allowUnknownArgs = false;
-        commandClass = "batch-runner";
-        idempotent = args.idempotent or false;
-      }
-    );
+    let
+      class = args.class or "typed";
+      base = builtins.removeAttrs args [ "class" ];
+    in
+    if class == "typed" then
+      mkCommandClassApi (
+        base
+        // {
+          allowUnknownArgs = false;
+          commandClass = "typed";
+        }
+      )
+    else if class == "passthrough" then
+      mkCommandClassApi (
+        base
+        // {
+          allowUnknownArgs = true;
+          commandClass = "passthrough";
+        }
+      )
+    else if class == "json" then
+      mkCommandClassApi (
+        base
+        // {
+          allowUnknownArgs = false;
+          commandClass = "json";
+          outputsMode = "json";
+        }
+      )
+    else if class == "batch-runner" then
+      mkCommandClassApi (
+        base
+        // {
+          allowUnknownArgs = false;
+          commandClass = "batch-runner";
+          idempotent = args.idempotent or false;
+        }
+      )
+    else
+      throw "${args.name or "<unknown>"}: unsupported command api class '${class}'";
 
   validateAppErrors =
     { name, app }:
@@ -482,10 +483,7 @@ in
 {
   inherit
     mkApi
-    mkTypedCommandApi
-    mkPassthroughCommandApi
-    mkJsonCommandApi
-    mkBatchRunnerCommandApi
+    mkCommandApi
     validateApi
     validateApp
     validateApps

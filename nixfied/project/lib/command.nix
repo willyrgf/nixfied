@@ -4,24 +4,22 @@
 }:
 
 rec {
-  mkEnvDocProjectEnv =
-    defaultEnv: {
-      name = project.envVar;
-      description = "Environment name (set to ${defaultEnv} by default for this command)";
-    };
+  mkEnvDocProjectEnv = defaultEnv: {
+    name = project.envVar;
+    description = "Environment name (set to ${defaultEnv} by default for this command)";
+  };
 
   mkEnvDocSlot = {
     name = project.slotVar;
     description = "Slot number (0-9)";
   };
 
-  mkPlaceholderScript =
-    message: ''
-      echo "${message}"
-      exit 0
-    '';
+  mkPlaceholderScript = message: ''
+    echo "${message}"
+    exit 0
+  '';
 
-  mkProjectTypedCommand =
+  mkCommand =
     {
       name,
       description,
@@ -34,165 +32,87 @@ rec {
       contractArgs ? null,
       contractEnv ? null,
       outputsKeys ? [ ],
+      class ? "typed",
       env ? { },
       useDeps ? true,
       script ? "",
+      category ? "core",
+      idempotent ? (class != "passthrough"),
+      outputsMode ? "text",
+      failureCodes ? appApi.failureProfiles.script,
+    }:
+    {
+      inherit description env useDeps script;
+      api = appApi.mkCommandApi {
+        inherit
+          name
+          summary
+          details
+          usage
+          examples
+          args
+          category
+          idempotent
+          outputsMode
+          failureCodes
+          outputsKeys
+          contractArgs
+          contractEnv
+          ;
+        class = class;
+        env = envDocs;
+      };
+    };
+
+  mkPlaceholderCommand =
+    {
+      name,
+      description,
+      details,
+      message,
+      envDefault ? null,
+      includeSlot ? false,
+      summary ? description,
+      usage ? [ "nix run .#${name}" ],
+      examples ? usage,
+      args ? [ ],
+      class ? "typed",
       category ? "core",
       idempotent ? true,
       outputsMode ? "text",
       failureCodes ? appApi.failureProfiles.script,
     }:
-    {
-      inherit description env useDeps script;
-      api = appApi.mkTypedCommandApi {
-        inherit
-          name
-          summary
-          details
-          usage
-          examples
-          args
-          category
-          idempotent
-          outputsMode
-          failureCodes
-          outputsKeys
-          ;
-        env = envDocs;
-        contractArgs = contractArgs;
-        contractEnv = contractEnv;
-      };
+    let
+      envDocs =
+        (if envDefault == null then [ ] else [ (mkEnvDocProjectEnv envDefault) ])
+        ++ (if includeSlot then [ mkEnvDocSlot ] else [ ]);
+      env =
+        if envDefault == null then
+          { }
+        else
+          {
+            "${project.envVar}" = envDefault;
+          };
+    in
+    mkCommand {
+      inherit
+        name
+        description
+        summary
+        details
+        usage
+        examples
+        args
+        class
+        env
+        category
+        idempotent
+        outputsMode
+        failureCodes
+        ;
+      inherit envDocs;
+      script = mkPlaceholderScript message;
     };
-
-  mkProjectPassthroughCommand =
-    {
-      name,
-      description,
-      summary ? description,
-      details ? "",
-      usage ? [ "nix run .#${name}" ],
-      examples ? usage,
-      args ? [ ],
-      envDocs ? [ ],
-      contractArgs ? null,
-      contractEnv ? null,
-      outputsKeys ? [ ],
-      env ? { },
-      useDeps ? true,
-      script ? "",
-      category ? "core",
-      idempotent ? false,
-      outputsMode ? "text",
-      failureCodes ? appApi.failureProfiles.script,
-    }:
-    {
-      inherit description env useDeps script;
-      api = appApi.mkPassthroughCommandApi {
-        inherit
-          name
-          summary
-          details
-          usage
-          examples
-          args
-          category
-          idempotent
-          outputsMode
-          failureCodes
-          outputsKeys
-          ;
-        env = envDocs;
-        contractArgs = contractArgs;
-        contractEnv = contractEnv;
-      };
-    };
-
-  mkProjectJsonCommand =
-    {
-      name,
-      description,
-      summary ? description,
-      details ? "",
-      usage ? [ "nix run .#${name}" ],
-      examples ? usage,
-      args ? [ ],
-      envDocs ? [ ],
-      contractArgs ? null,
-      contractEnv ? null,
-      outputsKeys ? [ ],
-      env ? { },
-      useDeps ? true,
-      script ? "",
-      category ? "core",
-      idempotent ? true,
-      failureCodes ? appApi.failureProfiles.script,
-    }:
-    {
-      inherit description env useDeps script;
-      api = appApi.mkJsonCommandApi {
-        inherit
-          name
-          summary
-          details
-          usage
-          examples
-          args
-          category
-          idempotent
-          failureCodes
-          outputsKeys
-          ;
-        env = envDocs;
-        contractArgs = contractArgs;
-        contractEnv = contractEnv;
-      };
-    };
-
-  mkProjectBatchRunnerCommand =
-    {
-      name,
-      description,
-      summary ? description,
-      details ? "",
-      usage ? [ "nix run .#${name}" ],
-      examples ? usage,
-      args ? [ ],
-      envDocs ? [ ],
-      contractArgs ? null,
-      contractEnv ? null,
-      outputsKeys ? [ ],
-      env ? { },
-      useDeps ? true,
-      script ? "",
-      category ? "core",
-      idempotent ? false,
-      outputsMode ? "text",
-      failureCodes ? appApi.failureProfiles.script,
-    }:
-    {
-      inherit description env useDeps script;
-      api = appApi.mkBatchRunnerCommandApi {
-        inherit
-          name
-          summary
-          details
-          usage
-          examples
-          args
-          category
-          idempotent
-          outputsMode
-          failureCodes
-          outputsKeys
-          ;
-        env = envDocs;
-        contractArgs = contractArgs;
-        contractEnv = contractEnv;
-      };
-    };
-
-  # Backward-compatible alias for existing templates.
-  mkProjectCommand = args: mkProjectTypedCommand args;
 
   inherit (appApi) arg env failureProfiles;
 }

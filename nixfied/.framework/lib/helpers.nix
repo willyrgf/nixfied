@@ -285,7 +285,7 @@ let
       local op="$2"
       local token
       token=$(_service_token "$service")
-      echo "''${token}_''${op}"
+      echo "SVC_''${token}_''${op}"
     }
 
     # fixture_start_service SERVICE [profile] [timeout] [interval] [logfile] [keep_running]

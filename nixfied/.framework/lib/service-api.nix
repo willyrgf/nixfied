@@ -21,6 +21,12 @@ let
     "stop"
     "status"
   ];
+  validCommandClasses = [
+    "typed"
+    "passthrough"
+    "json"
+    "batch-runner"
+  ];
 
   isAttrs = x: builtins.isAttrs x;
   normalizeToken =
@@ -61,7 +67,14 @@ let
       ++ expect (optionalAttrSatisfies op "category"
         isNonEmptyString
       ) "${prefix}: category must be a non-empty string"
-      ++ expect (optionalAttrSatisfies op "app" builtins.isBool) "${prefix}: app must be a boolean"
+      ++ expect (optionalAttrSatisfies op "class"
+        isNonEmptyString
+      ) "${prefix}: class must be a non-empty string"
+      ++ expect (
+        !(op ? class) || builtins.elem op.class validCommandClasses
+      ) "${prefix}: class must be one of ${builtins.concatStringsSep ", " validCommandClasses}"
+      ++ expect (optionalAttrSatisfies op "idempotent" builtins.isBool) "${prefix}: idempotent must be a boolean"
+      ++ expect (optionalAttrSatisfies op "exposeApp" builtins.isBool) "${prefix}: exposeApp must be a boolean"
       ++ expect (optionalAttrSatisfies op "appName"
         isNonEmptyString
       ) "${prefix}: appName must be a non-empty string"
@@ -100,7 +113,7 @@ let
       ++ expect (builtins.isInt (
         api.version or null
       )) "${serviceName}: publicApi.version must be an integer"
-      ++ expect (version == 2) "${serviceName}: publicApi.version must be 2"
+      ++ expect (version == 3) "${serviceName}: publicApi.version must be 3"
       ++ expect (api ? service) "${serviceName}: publicApi.service is required"
       ++ expect (isNonEmptyString (
         api.service or ""
@@ -144,7 +157,7 @@ let
 
         Fix:
           - Define ${serviceName}.publicApi with:
-            - version=2 + operations + artifacts
+            - version=3 + operations + artifacts
       '';
 
   validateServiceApis =
@@ -186,7 +199,7 @@ let
           - Missing publicApi for enabled services: ${builtins.concatStringsSep ", " missing}
       '';
 
-  mkServiceApiV2 =
+  mkServiceApiV3 =
     {
       service,
       summary,
@@ -196,7 +209,7 @@ let
       profiles ? [ ],
     }:
     {
-      version = 2;
+      version = 3;
       inherit
         service
         summary
@@ -239,7 +252,7 @@ let
       prefix = normalizeToken service;
       suffix = if opCfg ? hook then opCfg.hook else normalizeToken opName;
     in
-    "${prefix}_${suffix}";
+    "SVC_${prefix}_${suffix}";
 
   sanitizeScriptToken = x: pkgs.lib.replaceStrings [ "/" ":" "." " " ] [ "-" "-" "-" "-" ] x;
 
@@ -286,7 +299,7 @@ let
           opName:
           let
             opCfg = ops.${opName};
-            appName = if opCfg ? appName then opCfg.appName else "service::${serviceName}::${opName}";
+            appName = if opCfg ? appName then opCfg.appName else "svc::${serviceName}::${opName}";
           in
           {
             inherit
@@ -296,9 +309,11 @@ let
               appName
               ;
             hookName = hookNameFor serviceName opName opCfg;
-            includeApp = opCfg.app or true;
+            includeApp = opCfg.exposeApp or true;
             usage = if opCfg ? usage then opCfg.usage else [ "nix run .#${appName}" ];
             category = if opCfg ? category then opCfg.category else serviceName;
+            class = opCfg.class or "passthrough";
+            idempotent = opCfg.idempotent or false;
             launcher = mkServiceOpLauncher {
               inherit
                 serviceName
@@ -348,7 +363,8 @@ let
           '';
           env = { };
           useDeps = false;
-          api = appApi.mkPassthroughCommandApi {
+          api = appApi.mkCommandApi {
+            class = op.class;
             name = op.appName;
             summary = op.opCfg.summary;
             details = op.opCfg.details;
@@ -357,7 +373,7 @@ let
             args = op.opCfg.args or [ ];
             env = op.opCfg.env or [ ];
             category = op.category;
-            idempotent = false;
+            idempotent = op.idempotent;
           };
           meta = {
             nixfied = {
@@ -375,7 +391,7 @@ in
     validateServiceApi
     validateServiceApis
     validateEnabledServicesHaveContracts
-    mkServiceApiV2
+    mkServiceApiV3
     mkServiceApisFromModules
     mkServiceHookEnvFromContract
     mkServiceAppsFromContract

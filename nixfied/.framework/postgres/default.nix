@@ -190,7 +190,7 @@ let
     eventsScript = events;
   };
 
-  publicApi = serviceApi.mkServiceApiV2 {
+  publicApi = serviceApi.mkServiceApiV3 {
     service = "postgres";
     summary = "PostgreSQL service management API";
     details = "Public service contract for managing PostgreSQL across dev/prod/test/ci.";
@@ -279,13 +279,13 @@ let
         script = backupMod.backup;
         summary = "Create PostgreSQL backup";
         details = "Creates a backup for the current slot and environment.";
-        usage = [ "nix run .#service::postgres::backup -- <args>" ];
+        usage = [ "nix run .#svc::postgres::backup -- <args>" ];
       };
       restore = {
         script = backupMod.restore;
         summary = "Restore PostgreSQL backup";
         details = "Restores PostgreSQL data from a selected backup.";
-        usage = [ "nix run .#service::postgres::restore -- <backup-path>" ];
+        usage = [ "nix run .#svc::postgres::restore -- <backup-path>" ];
       };
       list-backups = {
         script = backupMod.listBackups;
@@ -297,13 +297,13 @@ let
         script = backupMod.verifyBackup;
         summary = "Verify PostgreSQL backup";
         details = "Verifies backup archive integrity.";
-        usage = [ "nix run .#service::postgres::verify-backup -- <backup-path>" ];
+        usage = [ "nix run .#svc::postgres::verify-backup -- <backup-path>" ];
       };
       cleanup-backups = {
         script = backupMod.cleanupBackups;
         summary = "Prune old PostgreSQL backups";
         details = "Removes old backups while keeping the requested number of newest snapshots.";
-        usage = [ "nix run .#service::postgres::cleanup-backups -- <keep-count>" ];
+        usage = [ "nix run .#svc::postgres::cleanup-backups -- <keep-count>" ];
       };
       test-migrations = {
         script = migration.testMigrations;
@@ -316,27 +316,27 @@ let
         hook = "ENSURE_MIGRATION_TESTED";
         summary = "Ensure migrations were tested";
         details = "Fails when migration hashes were not previously tested.";
-        app = false;
+        exposeApp = false;
       };
       check-port = {
         script = portMgmt.checkPort;
         hook = "CHECK_PORT";
         summary = "Check PostgreSQL port usage";
         details = "Checks whether a port is already in use.";
-        usage = [ "nix run .#service::postgres::check-port -- <port>" ];
+        usage = [ "nix run .#svc::postgres::check-port -- <port>" ];
       };
       kill-port = {
         script = portMgmt.killPort;
         hook = "KILL_PORT";
         summary = "Kill processes bound to a port";
         details = "Stops processes listening on a given port.";
-        usage = [ "nix run .#service::postgres::kill-port -- <port>" ];
+        usage = [ "nix run .#svc::postgres::kill-port -- <port>" ];
       };
       shell = {
         script = shell;
         summary = "Open PostgreSQL shell";
         details = "Opens psql connected to the configured slot/environment database.";
-        usage = [ "nix run .#service::postgres::shell -- <psql-args>" ];
+        usage = [ "nix run .#svc::postgres::shell -- <psql-args>" ];
       };
     }
     // logEventExtensions;

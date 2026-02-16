@@ -535,7 +535,8 @@ let
                         fi
       '';
 
-  ciApi = lib.appApi.mkBatchRunnerCommandApi {
+  ciApi = lib.appApi.mkCommandApi {
+    class = "batch-runner";
     name = "ci";
     summary = "Run the CI pipeline";
     details = "Runs the CI pipeline defined in nixfied/project/ci.nix (modes + steps).";

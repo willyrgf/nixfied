@@ -92,14 +92,14 @@ let
         hook = "LOG";
         summary = "Show ${summaryName} log";
         details = "Shows ${summaryName} runtime log for the current slot/environment.";
-        usage = [ "nix run .#service::${service}::log -- [--lines N] [--follow]" ];
+        usage = [ "nix run .#svc::${service}::log -- [--lines N] [--follow]" ];
       };
       events = {
         script = eventsScript;
         hook = "EVENTS";
         summary = "Show ${summaryName} lifecycle events";
         details = "Shows ${summaryName} lifecycle events from the global process registry for the current slot/environment.";
-        usage = [ "nix run .#service::${service}::events -- [--limit N]" ];
+        usage = [ "nix run .#svc::${service}::events -- [--limit N]" ];
       };
     };
 in

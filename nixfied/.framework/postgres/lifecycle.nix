@@ -128,7 +128,7 @@ let
 
     if [ ! -f "$PGDATA/postgresql.conf" ]; then
       echo "ERROR: PostgreSQL not initialized at $PGDATA (missing postgresql.conf)" >&2
-      echo "   Run postgres init first: nix run .#service::postgres::init" >&2
+      echo "   Run postgres init first: nix run .#svc::postgres::init" >&2
       exit 1
     fi
     ensure_config_port "$PGDATA/postgresql.conf"
@@ -147,7 +147,7 @@ let
           lsof -ti:$PGPORT 2>/dev/null | xargs kill -TERM 2>/dev/null || true
           sleep 2
         else
-          echo "   Use 'run_hook POSTGRES_CHECK_PORT' to investigate" >&2
+          echo "   Use 'run_hook SVC_POSTGRES_CHECK_PORT' to investigate" >&2
           exit 1
         fi
       fi

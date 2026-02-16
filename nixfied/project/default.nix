@@ -13,7 +13,8 @@ let
     inherit project;
     appApi = frameworkLib.appApi;
   };
-  mkPart = path: import path { inherit pkgs project commandLib; };
+  catalog = import ./catalog.nix { inherit project commandLib; };
+  mkPart = path: import path { inherit pkgs project commandLib catalog; };
   parts = [
     conf
     (mkPart ./dev.nix)
