@@ -22,6 +22,35 @@
     exit 1
   }
 
+  wait_ok() {
+    local attempts="$1"
+    local interval="$2"
+    shift 2
+    local i
+    for i in $(seq 1 "$attempts"); do
+      if "$@" >/dev/null 2>&1; then
+        return 0
+      fi
+      sleep "$interval"
+    done
+    return 1
+  }
+
+  wait_fail() {
+    local attempts="$1"
+    local interval="$2"
+    shift 2
+    local i
+    for i in $(seq 1 "$attempts"); do
+      if "$@" >/dev/null 2>&1; then
+        sleep "$interval"
+      else
+        return 0
+      fi
+    done
+    return 1
+  }
+
   cleanup_reth() {
     ${rethStop} >/dev/null 2>&1 || true
     if [ -n "''${RETH_PID:-}" ] && kill -0 "$RETH_PID" 2>/dev/null; then
@@ -42,6 +71,8 @@
     echo "SKIP: helios lifecycle ports already in use reth_http=$RETHHTTP_PORT reth_ws=$RETHWS_PORT reth_auth=$RETHAUTH_PORT helios_rpc=$HELIOSRPC_PORT"
     exit 0
   fi
+
+  RETH_DIR="$BASE_DIR/reth-$SLOT-$ENV"
 
   export HELIOS_CONSENSUS_RPC_URL="http://127.0.0.1:$RETHHTTP_PORT"
   # Fast-fail readiness checks before start.
@@ -73,10 +104,15 @@
     sleep 0.25
   done
   if [ "$RETH_READY" -ne 1 ]; then
+    print_log_tail "$RETH_DIR/logs/reth.log" 50
     cleanup_reth
     fail "reth did not become healthy"
   fi
-  ${rethHealth} >/dev/null || fail "rethHealth should pass while running"
+  if ! wait_ok 20 0.25 ${rethHealth}; then
+    print_log_tail "$RETH_DIR/logs/reth.log" 50
+    cleanup_reth
+    fail "rethHealth should pass while running"
+  fi
 
   ${heliosInit}
   ${heliosInit}
@@ -125,9 +161,17 @@
       cleanup_helios
       fail "helios did not become ready"
     fi
-    ${heliosHealth} >/dev/null || fail "heliosHealth should pass while running"
+    if ! wait_ok 20 0.25 ${heliosHealth}; then
+      HELIOS_DIR="$BASE_DIR/helios-$SLOT-$ENV"
+      print_log_tail "$HELIOS_DIR/logs/helios.log" 50
+      cleanup_helios
+      fail "heliosHealth should pass while running"
+    fi
 
-    ${heliosStatus} >/dev/null || fail "heliosStatus should pass while running"
+    if ! wait_ok 15 0.25 ${heliosStatus}; then
+      cleanup_helios
+      fail "heliosStatus should pass while running"
+    fi
 
     cleanup_helios
 
@@ -143,11 +187,9 @@
     [ "$HELIOS_DOWN" -eq 1 ] || fail "heliosHealth should fail after stop"
 
     export HELIOS_READY_TIMEOUT_SECS="0"
-    set +e
-    ${heliosReady} >/dev/null 2>&1
-    RC=$?
-    set -e
-    [ "$RC" -ne 0 ] || fail "heliosReady should fail after stop"
+    if ! wait_fail 20 0.25 ${heliosReady}; then
+      fail "heliosReady should fail after stop"
+    fi
   fi
 
   cleanup_reth

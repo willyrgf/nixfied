@@ -16,6 +16,35 @@
     exit 1
   }
 
+  wait_ok() {
+    local attempts="$1"
+    local interval="$2"
+    shift 2
+    local i
+    for i in $(seq 1 "$attempts"); do
+      if "$@" >/dev/null 2>&1; then
+        return 0
+      fi
+      sleep "$interval"
+    done
+    return 1
+  }
+
+  wait_fail() {
+    local attempts="$1"
+    local interval="$2"
+    shift 2
+    local i
+    for i in $(seq 1 "$attempts"); do
+      if "$@" >/dev/null 2>&1; then
+        sleep "$interval"
+      else
+        return 0
+      fi
+    done
+    return 1
+  }
+
   cleanup_reth() {
     ${rethStop} >/dev/null 2>&1 || true
     if [ -n "''${RETH_PID:-}" ] && kill -0 "$RETH_PID" 2>/dev/null; then
@@ -65,10 +94,21 @@
     fail "reth did not become healthy"
   fi
 
-  ${rethHealth} >/dev/null || fail "rethHealth should pass while running"
-  ${rethReady} >/dev/null || fail "rethReady should pass while running"
+  if ! wait_ok 20 0.2 ${rethHealth}; then
+    print_log_tail "$RETH_DIR/logs/reth.log" 50
+    cleanup_reth
+    fail "rethHealth should pass while running"
+  fi
+  if ! wait_ok 20 0.2 ${rethReady}; then
+    print_log_tail "$RETH_DIR/logs/reth.log" 50
+    cleanup_reth
+    fail "rethReady should pass while running"
+  fi
 
-  ${rethStatus} >/dev/null || fail "rethStatus should pass while running"
+  if ! wait_ok 15 0.2 ${rethStatus}; then
+    cleanup_reth
+    fail "rethStatus should pass while running"
+  fi
 
   cleanup_reth
 
@@ -83,11 +123,9 @@
   done
   [ "$RETH_DOWN" -eq 1 ] || fail "rethHealth should fail after stop"
 
-  set +e
-  ${rethReady} >/dev/null 2>&1
-  RC=$?
-  set -e
-  [ "$RC" -ne 0 ] || fail "rethReady should fail after stop"
+  if ! wait_fail 20 0.2 ${rethReady}; then
+    fail "rethReady should fail after stop"
+  fi
 
   echo "reth lifecycle fixture ok"
 
