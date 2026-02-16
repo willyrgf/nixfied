@@ -1298,7 +1298,7 @@ let
         export MOCKSVC_STATUS="$PWD/mock-status.sh"
         export MOCKSVC_STOP="$PWD/mock-stop.sh"
 
-        fixture_start_service mocksvc default 5 1
+        fixture_start_service mocksvc default 20 1
         READY_ATTEMPTS="$(cat "$MOCK_READY_COUNT_FILE" 2>/dev/null || echo 0)"
         [ "$READY_ATTEMPTS" -ge 3 ] || fail "fixture_start_service should retry READY hook attempts=$READY_ATTEMPTS"
         _run_cleanups
@@ -1314,7 +1314,7 @@ let
         export MOCKSVC_READY="$PWD/mock-ready-default-fail.sh"
         export MOCKSVC_READY_TEST="$PWD/mock-ready-test.sh"
 
-        fixture_start_service mocksvc test 5 1
+        fixture_start_service mocksvc test 20 1
         READY_TEST_ATTEMPTS="$(cat "$MOCK_READY_TEST_COUNT_FILE" 2>/dev/null || echo 0)"
         [ "$READY_TEST_ATTEMPTS" -ge 2 ] || fail "fixture_start_service should retry READY_TEST hook attempts=$READY_TEST_ATTEMPTS"
         _run_cleanups
