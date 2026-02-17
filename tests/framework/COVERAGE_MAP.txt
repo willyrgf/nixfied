@@ -4,7 +4,7 @@ Each framework file must appear here with at least one validating scenario.
 
 - `nixfied/.framework/ci.nix`: `fixtures/ci/ci.nix`, `fixtures/ci/retention.nix`, `fixtures/ci/unknown-step.nix`, `fixtures/ci/summary-json.nix`
 - `nixfied/.framework/devshell.nix`: `framework::test` flake evaluation and app wiring checks
-- `nixfied/.framework/ephemeral.nix`: `fixtures/ephemeral/lock.nix`
+- `nixfied/.framework/ephemeral.nix`: `fixtures/ephemeral/lock.nix`, `fixtures/ephemeral/env-loader-export.nix`
 - `nixfied/.framework/hooks.nix`: module hook export assertions in `.framework/internal/test.nix`
 - `nixfied/.framework/internal/core.nix`: core app smoke checks (`help/dev/test/build/check/ci`)
 - `nixfied/.framework/internal/install.nix`: installer/upgrade/re-entry/filter/error fixtures in `.framework/internal/test.nix`
@@ -18,7 +18,7 @@ Each framework file must appear here with at least one validating scenario.
 - `nixfied/.framework/lib/ci-schema.nix`: CI schema validation and normalization fixtures (`fixtures/ci/ci.nix`, `fixtures/ci/unknown-step.nix`, `fixtures/ci/legacy-fields.nix`)
 - `nixfied/.framework/lib/default.nix`: helper runtime fixture and module integration fixture
 - `nixfied/.framework/lib/discovery.nix`: check command discovery verify/refresh flow in `.framework/internal/test.nix`
-- `nixfied/.framework/lib/env-loader.nix`: helper runtime fixture and ephemeral wrapper `.env` loading path
+- `nixfied/.framework/lib/env-loader.nix`: `fixtures/helpers/env-loader-export.nix` and `fixtures/ephemeral/env-loader-export.nix` for wrapper `.env` export propagation
 - `nixfied/.framework/lib/execution-core.nix`: CI DSL fixtures (`fixtures/ci/ci.nix`, `fixtures/ci/summary-json.nix`, `fixtures/ci/unknown-step.nix`)
 - `nixfied/.framework/lib/helpers.nix`: `fixtures/helpers/runtime.nix`
 - `nixfied/.framework/lib/id.nix`: `fixtures/registry/foreground.nix`, `fixtures/registry/background-timeout.nix`, `fixtures/ephemeral/lock.nix`

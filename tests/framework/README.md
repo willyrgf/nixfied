@@ -72,12 +72,14 @@ echo "$SLOT"  # 0
 
 If you want end‑to‑end examples, start here:
 - `fixtures/helpers/runtime.nix` — helper utilities in real scripts (log_capture, with_service, artifact_path).
+- `fixtures/helpers/env-loader-export.nix` — standard wrapper `.env` export propagation checks.
 - `fixtures/slots/runtime.nix` — slot/env strict validation and alias behavior.
 - `fixtures/ci/ci.nix` — CI DSL wiring and step control.
 - `fixtures/ci/retention.nix` — artifact retention modes.
 - `fixtures/ci/unknown-step.nix` — failure on misconfigured steps.
 - `fixtures/modules/dev.nix` — service hook lifecycle with health/readiness behavior across all supported modules.
 - `fixtures/ephemeral/lock.nix` — Ephemeral slot lock acquire/release.
+- `fixtures/ephemeral/env-loader-export.nix` — ephemeral wrapper `.env` export propagation checks.
 - `fixtures/registry/foreground.nix` — Run registry foreground tracking.
 - `fixtures/registry/policy-inference.nix` — Reuse policy inference and scope precedence checks.
 
@@ -97,10 +99,14 @@ If you want end‑to‑end examples, start here:
   - Dev command script to exercise module hooks and helpers.
 - `fixtures/helpers/runtime.nix`
   - Helper function regression tests (runtime helpers).
+- `fixtures/helpers/env-loader-export.nix`
+  - Standard wrapper `.env` export propagation regression tests.
 - `fixtures/slots/runtime.nix`
   - Slot/env helper regression tests.
 - `fixtures/ephemeral/lock.nix`
   - Ephemeral slot locking (acquire/release) tests.
+- `fixtures/ephemeral/env-loader-export.nix`
+  - Ephemeral wrapper `.env` export propagation regression tests.
 - `fixtures/registry/foreground.nix`
   - Run registry foreground mode tests (meta.json, output.log).
 - `fixtures/registry/policy-inference.nix`
