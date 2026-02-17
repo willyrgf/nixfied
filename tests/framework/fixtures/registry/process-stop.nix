@@ -103,6 +103,24 @@
   kill -0 "$RUN_TARGET_PID" 2>/dev/null || fail "dry-run should not stop target run pid"
   kill -0 "$SVC_TARGET_PID" 2>/dev/null || fail "dry-run should not stop target service pid"
 
+  set +e
+  ${processStop} --all --run-id "$RUN_TARGET_ID" >/dev/null 2>&1
+  ALL_WITH_RUN_ID_RC=$?
+  set -e
+  [ "$ALL_WITH_RUN_ID_RC" -ne 0 ] || fail "--all should reject --run-id"
+
+  set +e
+  ${processStop} --all --scope slot-env >/dev/null 2>&1
+  ALL_WITH_SCOPE_RC=$?
+  set -e
+  [ "$ALL_WITH_SCOPE_RC" -ne 0 ] || fail "--all should reject --scope"
+
+  set +e
+  ${processStop} --dry-run >/dev/null 2>&1
+  MISSING_TARGET_RC=$?
+  set -e
+  [ "$MISSING_TARGET_RC" -ne 0 ] || fail "process-stop should require --run-id or --all"
+
   ${processStop} --run-id "$RUN_TARGET_ID" >/dev/null
   if kill -0 "$RUN_TARGET_PID" 2>/dev/null; then
     fail "run scope stop should stop target run pid"
@@ -128,6 +146,22 @@
 
   kill -0 "$RUN_OTHER_PID" 2>/dev/null || fail "slot-env scope should not stop other env run"
   kill -0 "$SVC_OTHER_PID" 2>/dev/null || fail "slot-env scope should not stop other env service"
+
+  ${processStop} --all --dry-run >/dev/null
+  kill -0 "$RUN_OTHER_PID" 2>/dev/null || fail "--all dry-run should not stop other env run"
+  kill -0 "$SVC_OTHER_PID" 2>/dev/null || fail "--all dry-run should not stop other env service"
+
+  ${processStop} --all >/dev/null
+  if kill -0 "$RUN_OTHER_PID" 2>/dev/null; then
+    fail "--all should stop other env run"
+  fi
+  if kill -0 "$SVC_OTHER_PID" 2>/dev/null; then
+    fail "--all should stop other env service"
+  fi
+
+  OTHER_INSPECT="$(${processInspect} --id "$RUN_OTHER_ID")"
+  printf '%s\n' "$OTHER_INSPECT" | grep -q '"event_type": "run_finished"' || fail "all stop should record run_finished for other run"
+  printf '%s\n' "$OTHER_INSPECT" | grep -q '"event_type": "service_stopped"' || fail "all stop should record service_stopped for other service"
 
   echo "registry process stop fixture ok"
 ''
