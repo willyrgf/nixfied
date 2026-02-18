@@ -10,6 +10,8 @@ This directory contains detailed docs for Nixfied optional service modules.
   - `LOG_LEVEL` (`error|warn|info|debug|trace`, alias `NIXFIED_LOG_LEVEL`)
   - `OUTPUT_MODE` (`stdout|logs|both`, alias `NIXFIED_OUTPUT_MODE`)
 - Runtime default coupling applies to module hooks/apps: if `OUTPUT_MODE` is unset and `LOG_LEVEL=debug`, output defaults to `both`.
+- Runtime alias conflicts fail fast: conflicting canonical/alias pairs are rejected.
+- Runtime empty values fail fast: explicitly setting `LOG_LEVEL=""` or `OUTPUT_MODE=""` is invalid (leave unset to use defaults).
 - Each operation can expose:
   - app: `svc::<service>::<operation>`
   - hook env var: `SVC_<SERVICE>_<OP>`
