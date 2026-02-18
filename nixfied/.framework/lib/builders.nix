@@ -105,11 +105,13 @@ let
       source ${helpersScript}
       ${hookExports}
       ${envExports}
-      export NIXFIED_LOG_LEVEL="''${NIXFIED_LOG_LEVEL:-${defaultLogLevel}}"
-      export NIXFIED_OUTPUT_MODE="''${NIXFIED_OUTPUT_MODE:-${defaultOutputMode}}"
+      export LOG_LEVEL="''${LOG_LEVEL:-''${NIXFIED_LOG_LEVEL:-${defaultLogLevel}}}"
+      export OUTPUT_MODE="''${OUTPUT_MODE:-''${NIXFIED_OUTPUT_MODE:-${defaultOutputMode}}}"
+      export NIXFIED_LOG_LEVEL="$LOG_LEVEL"
+      export NIXFIED_OUTPUT_MODE="$OUTPUT_MODE"
       export NIXFIED_LOG_TRACE="''${NIXFIED_LOG_TRACE:-0}"
       export COMMAND_NAME="''${COMMAND_NAME:-${name}}"
-      if [ "''${NIXFIED_OUTPUT_MODE}" != "stdout" ]; then
+      if [ "''${OUTPUT_MODE}" != "stdout" ]; then
         if [ -z "''${NIXFIED_LOG_FILE:-}" ]; then
           _nixfied_slot="''${NIX_ENV:-0}"
           _nixfied_env="''${PROJECT_ENV:-default}"
@@ -127,7 +129,7 @@ let
         set -euo pipefail
         export COMMAND_NAME="''${COMMAND_NAME:-${name}}"
         export NIXFIED_CLEANUP_OWNER_BASHPID="''${BASHPID:-}"
-        if [ "''${NIXFIED_LOG_LEVEL:-}" = "trace" ] && [ "''${NIXFIED_LOG_TRACE:-0}" = "1" ]; then
+        if [ "''${LOG_LEVEL:-}" = "trace" ] && [ "''${NIXFIED_LOG_TRACE:-0}" = "1" ]; then
           if [ -z "''${NIXFIED_XTRACE_FILE:-}" ]; then
             NIXFIED_XTRACE_FILE="''${NIXFIED_LOG_FILE:-''${LOG_DIR:-/tmp}/nixfied-trace-''${COMMAND_NAME:-app}-''${PROJECT_ENV:-default}-slot''${NIX_ENV:-0}-$$.log}"
             export NIXFIED_XTRACE_FILE

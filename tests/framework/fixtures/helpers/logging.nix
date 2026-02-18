@@ -41,14 +41,14 @@
 
     (
       set -euo pipefail
-      export NIXFIED_LOG_LEVEL="$level"
+      export LOG_LEVEL="$level"
       export NIXFIED_LOG_TRACE="$trace_flag"
       export LOG_DIR="$TMPDIR"
       export COMMAND_NAME="logging-fixture"
       export PROJECT_ENV="test"
       export NIX_ENV="0"
 
-      if [ "''${NIXFIED_LOG_LEVEL:-}" = "trace" ] && [ "''${NIXFIED_LOG_TRACE:-0}" = "1" ]; then
+      if [ "''${LOG_LEVEL:-}" = "trace" ] && [ "''${NIXFIED_LOG_TRACE:-0}" = "1" ]; then
         if [ -z "''${NIXFIED_XTRACE_FILE:-}" ]; then
           NIXFIED_XTRACE_FILE="$trace_file"
           export NIXFIED_XTRACE_FILE
@@ -93,10 +93,10 @@
   assert_empty "$C4_OUT"
   assert_empty "$C4_ERR"
 
-  # 5) NIXFIED_LOG_LEVEL=debug enables debug output.
+  # 5) LOG_LEVEL=debug enables debug output.
   C5_OUT="$TMPDIR/case5.out"
   C5_ERR="$TMPDIR/case5.err"
-  ( NIXFIED_LOG_LEVEL=debug log_debug "msg-debug-visible" ) >"$C5_OUT" 2>"$C5_ERR"
+  ( LOG_LEVEL=debug log_debug "msg-debug-visible" ) >"$C5_OUT" 2>"$C5_ERR"
   assert_empty "$C5_OUT"
   assert_contains "$C5_ERR" "^DEBUG: msg-debug-visible$"
 
@@ -104,48 +104,56 @@
   C6_OUT="$TMPDIR/case6.out"
   C6_ERR="$TMPDIR/case6.err"
   (
-    NIXFIED_LOG_LEVEL=error log_info "msg-info-hidden"
-    NIXFIED_LOG_LEVEL=error log_warn "msg-warn-hidden"
-    NIXFIED_LOG_LEVEL=error log_error "msg-error-visible"
+    LOG_LEVEL=error log_info "msg-info-hidden"
+    LOG_LEVEL=error log_warn "msg-warn-hidden"
+    LOG_LEVEL=error log_error "msg-error-visible"
   ) >"$C6_OUT" 2>"$C6_ERR"
   assert_empty "$C6_OUT"
   assert_not_contains "$C6_ERR" "msg-warn-hidden"
   assert_contains "$C6_ERR" "^ERROR: msg-error-visible$"
 
-  # 7) level=warn allows WARN and suppresses INFO.
+  # 7) Legacy NIXFIED_LOG_LEVEL works when LOG_LEVEL is unset.
   C7_OUT="$TMPDIR/case7.out"
   C7_ERR="$TMPDIR/case7.err"
   (
+    unset LOG_LEVEL
     NIXFIED_LOG_LEVEL=warn log_info "msg-info-hidden-2"
     NIXFIED_LOG_LEVEL=warn log_warn "msg-warn-visible"
+    NIXFIED_LOG_LEVEL=warn log_debug "msg-debug-hidden-2"
   ) >"$C7_OUT" 2>"$C7_ERR"
   assert_empty "$C7_OUT"
   assert_contains "$C7_ERR" "^WARN: msg-warn-visible$"
   assert_not_contains "$C7_ERR" "msg-info-hidden-2"
+  assert_not_contains "$C7_ERR" "msg-debug-hidden-2"
 
-  # 8) output=logs routes non-error logs to file.
+  # 8) OUTPUT_MODE=logs routes non-error logs to file.
   C8_LOG="$TMPDIR/case8.log"
   C8_OUT="$TMPDIR/case8.out"
   C8_ERR="$TMPDIR/case8.err"
-  ( NIXFIED_OUTPUT_MODE=logs NIXFIED_LOG_FILE="$C8_LOG" log_info "msg-logs-only" ) >"$C8_OUT" 2>"$C8_ERR"
+  ( OUTPUT_MODE=logs NIXFIED_LOG_FILE="$C8_LOG" log_info "msg-logs-only" ) >"$C8_OUT" 2>"$C8_ERR"
   assert_empty "$C8_OUT"
   assert_empty "$C8_ERR"
   assert_contains "$C8_LOG" "^INFO: msg-logs-only$"
 
-  # 9) output=both writes to terminal and file.
+  # 9) Legacy NIXFIED_OUTPUT_MODE still works when OUTPUT_MODE is unset.
   C9_LOG="$TMPDIR/case9.log"
   C9_OUT="$TMPDIR/case9.out"
   C9_ERR="$TMPDIR/case9.err"
-  ( NIXFIED_OUTPUT_MODE=both NIXFIED_LOG_FILE="$C9_LOG" log_info "msg-both" ) >"$C9_OUT" 2>"$C9_ERR"
+  (
+    unset OUTPUT_MODE
+    NIXFIED_OUTPUT_MODE=both NIXFIED_LOG_FILE="$C9_LOG" log_info "msg-both"
+  ) >"$C9_OUT" 2>"$C9_ERR"
   assert_contains "$C9_OUT" "^INFO: msg-both$"
   assert_empty "$C9_ERR"
   assert_contains "$C9_LOG" "^INFO: msg-both$"
 
-  # 10) output=logs still emits ERROR to stderr.
+  # 10) OUTPUT_MODE=logs still emits ERROR to stderr.
   C10_LOG="$TMPDIR/case10.log"
   C10_OUT="$TMPDIR/case10.out"
   C10_ERR="$TMPDIR/case10.err"
-  ( NIXFIED_OUTPUT_MODE=logs NIXFIED_LOG_FILE="$C10_LOG" log_error "msg-logs-error" ) >"$C10_OUT" 2>"$C10_ERR"
+  (
+    OUTPUT_MODE=logs NIXFIED_LOG_FILE="$C10_LOG" log_error "msg-logs-error"
+  ) >"$C10_OUT" 2>"$C10_ERR"
   assert_empty "$C10_OUT"
   assert_contains "$C10_ERR" "^ERROR: msg-logs-error$"
   assert_contains "$C10_LOG" "^ERROR: msg-logs-error$"

@@ -34,7 +34,12 @@ let
     }
 
     _nixfied_refresh_log_level() {
-      local current_level="''${NIXFIED_LOG_LEVEL:-info}"
+      local current_level="info"
+      if [ -n "''${LOG_LEVEL:-}" ]; then
+        current_level="$LOG_LEVEL"
+      elif [ -n "''${NIXFIED_LOG_LEVEL:-}" ]; then
+        current_level="$NIXFIED_LOG_LEVEL"
+      fi
       if [ "''${_NIXFIED_LOG_LEVEL_RAW:-}" != "$current_level" ]; then
         _NIXFIED_LOG_LEVEL_RAW="$current_level"
         _NIXFIED_LOG_LEVEL_NUM="$(_nixfied_level_num "$current_level")"
@@ -55,8 +60,14 @@ let
       local level_num="$1"
       local message="$2"
       local to_stderr="$3"
-      local output_mode="''${NIXFIED_OUTPUT_MODE:-stdout}"
+      local output_mode="stdout"
       local log_file="''${NIXFIED_LOG_FILE:-}"
+
+      if [ -n "''${OUTPUT_MODE:-}" ]; then
+        output_mode="$OUTPUT_MODE"
+      elif [ -n "''${NIXFIED_OUTPUT_MODE:-}" ]; then
+        output_mode="$NIXFIED_OUTPUT_MODE"
+      fi
 
       _nixfied_refresh_log_level
       if [ "$level_num" -gt "''${_NIXFIED_LOG_LEVEL_NUM:-2}" ]; then
