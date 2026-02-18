@@ -8,7 +8,18 @@
 
 let
   shellContract = import ./shell-contract.nix { inherit pkgs; };
-  summary = import ./summary.nix { inherit pkgs project; };
+  baseLoggingPrelude =
+    (
+      import ./helpers.nix {
+        inherit pkgs project;
+        hooks = { };
+        summaryParser = "";
+      }
+    ).loggingPrelude;
+  summary = import ./summary.nix {
+    inherit pkgs project;
+    loggingPrelude = baseLoggingPrelude;
+  };
   helpers = import ./helpers.nix {
     inherit pkgs project hooks;
     inherit (summary) summaryParser;

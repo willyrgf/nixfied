@@ -216,7 +216,7 @@ let
 
       if [ "$DERIVED" -ne 1 ]; then
         log_error "failed to derive HELIOS_CHECKPOINT from consensus endpoint(s)."
-        echo "HINT: set HELIOS_CONSENSUS_RPC_URL and HELIOS_CHECKPOINT explicitly." >&2
+        log_hint "set HELIOS_CONSENSUS_RPC_URL and HELIOS_CHECKPOINT explicitly."
         exit 1
       fi
     fi
@@ -532,7 +532,7 @@ let
       now_ts="$(${pkgs.coreutils}/bin/date +%s)"
       if [ $((now_ts - start_ts)) -ge "$TIMEOUT_SECS" ]; then
         log_error "helios not ready after $TIMEOUT_SECS s (eth_blockNumber still failing) rpc_port=$HELIOS_RPC_PORT"
-        echo "HINT: set HELIOS_CHECKPOINT and HELIOS_CONSENSUS_RPC_URL explicitly for mainnet." >&2
+        log_hint "set HELIOS_CHECKPOINT and HELIOS_CONSENSUS_RPC_URL explicitly for mainnet."
         exit 1
       fi
 

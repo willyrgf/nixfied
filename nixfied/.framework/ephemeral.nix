@@ -55,6 +55,7 @@ let
   };
   envLoader = import ./lib/env-loader.nix {
     inherit pkgs project;
+    loggingPrelude = resolvedLoggingPrelude;
   };
   processRegistry = import ./lib/process-registry.nix {
     inherit pkgs project;

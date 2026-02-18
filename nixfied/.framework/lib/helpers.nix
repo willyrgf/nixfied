@@ -9,6 +9,7 @@
 let
   envLoader = import ./env-loader.nix {
     inherit pkgs project;
+    loggingPrelude = loggingPrelude;
   };
   servicePolicy = import ./service-policy.nix { inherit pkgs; };
   hookEnv = hooks.env or { };

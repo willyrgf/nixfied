@@ -418,7 +418,7 @@ let
       if command -v log_error >/dev/null 2>&1; then
         log_error "$*"
       else
-        echo "ERROR: $*" >&2
+        printf '%s\n' "ERROR: $*" >&2
       fi
     }
 
