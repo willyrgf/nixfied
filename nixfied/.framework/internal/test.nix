@@ -691,7 +691,10 @@ let
       };
       slots = import ./nixfied/.framework/slots.nix { inherit pkgs project; };
       hooks = import ./nixfied/.framework/hooks.nix { inherit pkgs project slots; postgres = null; nginx = null; };
-      ephemeral = import ./nixfied/.framework/ephemeral.nix { inherit pkgs project; };
+      ephemeral = import ./nixfied/.framework/ephemeral.nix {
+        inherit pkgs project;
+        loggingPrelude = lib.loggingPrelude;
+      };
     in
       ephemeral.mkEphemeralWrapper {
         name = "env-loader-export-ephemeral";
@@ -2316,7 +2319,10 @@ let
       project = pkgs.lib.recursiveUpdate base {
         ephemeral.enable = true;
       };
-      ephemeral = import ./nixfied/.framework/ephemeral.nix { inherit pkgs project; };
+      ephemeral = import ./nixfied/.framework/ephemeral.nix {
+        inherit pkgs project;
+        loggingPrelude = lib.loggingPrelude;
+      };
       slots = import ./nixfied/.framework/slots.nix { inherit pkgs project; };
       hooks = import ./nixfied/.framework/hooks.nix { inherit pkgs project slots; postgres = null; nginx = null; };
       lib = import ./nixfied/.framework/lib { inherit pkgs project hooks; };

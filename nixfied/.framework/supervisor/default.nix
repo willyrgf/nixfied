@@ -22,8 +22,12 @@ let
       loggingPrelude
       ;
   };
-  statusMod = import ./status.nix { inherit pkgs slots config; };
-  management = import ./management.nix { inherit pkgs slots config; };
+  statusMod = import ./status.nix {
+    inherit pkgs slots config loggingPrelude;
+  };
+  management = import ./management.nix {
+    inherit pkgs slots config loggingPrelude;
+  };
 in
 {
   # Backward compat

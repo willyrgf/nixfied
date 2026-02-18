@@ -50,7 +50,7 @@ let
     NGINX_DIR="${nginxDirExpr}"
 
     if [ -z "$HTTP_PORT" ] || [ -z "$HTTPS_PORT" ]; then
-      echo "ERROR: nginx port variables are not set (http/https)" >&2
+      log_error "nginx port variables are not set (http/https)"
       exit 1
     fi
   '';
@@ -72,6 +72,7 @@ let
       slots
       templates
       lifecycle
+      loggingPrelude
       ;
   };
   ssl = import ./ssl.nix {
@@ -80,6 +81,7 @@ let
       project
       slots
       lifecycle
+      loggingPrelude
       ;
   };
 
@@ -91,6 +93,8 @@ let
   '';
 
   status = pkgs.writeShellScript "nginx-status" ''
+    ${loggingPrelude}
+
     set -euo pipefail
     ${runtimePrelude}
     PID_FILE="$NGINX_DIR/run/nginx.pid"
@@ -119,6 +123,8 @@ let
   '';
 
   health = pkgs.writeShellScript "nginx-health" ''
+    ${loggingPrelude}
+
     set -euo pipefail
     ${runtimePrelude}
     PID_FILE="$NGINX_DIR/run/nginx.pid"
@@ -130,16 +136,18 @@ let
 
     if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
       if ${pkgs.netcat}/bin/nc -z 127.0.0.1 "$HTTP_PORT" >/dev/null 2>&1; then
-        echo "OK: nginx healthy http_port=$HTTP_PORT pid=$PID"
+        log_ok "nginx healthy http_port=$HTTP_PORT pid=$PID"
         exit 0
       fi
     fi
 
-    echo "ERROR: nginx unhealthy http_port=$HTTP_PORT pid=''${PID:-unknown}" >&2
+    log_error "nginx unhealthy http_port=$HTTP_PORT pid=''${PID:-unknown}"
     exit 1
   '';
 
   ready = pkgs.writeShellScript "nginx-ready" ''
+    ${loggingPrelude}
+
     set -euo pipefail
     ${runtimePrelude}
     PID_FILE="$NGINX_DIR/run/nginx.pid"
@@ -150,7 +158,7 @@ let
     fi
 
     if [ -z "$PID" ] || ! kill -0 "$PID" 2>/dev/null; then
-      echo "ERROR: nginx not ready (process not running) http_port=$HTTP_PORT pid=''${PID:-unknown}" >&2
+      log_error "nginx not ready (process not running) http_port=$HTTP_PORT pid=''${PID:-unknown}"
       exit 1
     fi
 
@@ -163,26 +171,28 @@ let
         --env "$ENV" \
         --pid "$PID" \
         --log-path "$NGINX_DIR/logs/error.log" >/dev/null 2>&1 || true
-      echo "OK: nginx ready http_port=$HTTP_PORT pid=$PID"
+      log_ok "nginx ready http_port=$HTTP_PORT pid=$PID"
       exit 0
     fi
 
-    echo "ERROR: nginx not ready http_port=$HTTP_PORT pid=$PID" >&2
+    log_error "nginx not ready http_port=$HTTP_PORT pid=$PID"
     exit 1
   '';
 
   checkConfig = pkgs.writeShellScript "nginx-check-config" ''
+    ${loggingPrelude}
+
     set -euo pipefail
     ${runtimePrelude}
     CONF="$NGINX_DIR/conf/nginx.conf"
 
     if [ ! -f "$CONF" ]; then
-      echo "ERROR: missing nginx config at $CONF" >&2
+      log_error "missing nginx config at $CONF"
       exit 1
     fi
 
     ${lifecycle.nginx}/bin/nginx -c "$CONF" -t 2>&1
-    echo "OK: nginx configuration valid conf=$CONF"
+    log_ok "nginx configuration valid conf=$CONF"
   '';
 
   logs = observability.mkLogScript "nginx";

@@ -4,6 +4,7 @@
   project,
   slots,
   config,
+  loggingPrelude,
 }:
 
 let
@@ -13,6 +14,8 @@ let
   minioDirExpr = slots.getServiceDir config.dataDirName;
 
   bucketCreate = pkgs.writeShellScript "minio-bucket-create" ''
+    ${loggingPrelude}
+
     set -euo pipefail
 
     BUCKET="''${1:-}"
@@ -33,10 +36,12 @@ let
     ${mc}/bin/mc alias set local "http://127.0.0.1:$MINIO_API_PORT" "$ROOT_USER" "$ROOT_PASSWORD" >/dev/null
     ${mc}/bin/mc mb --ignore-existing "local/$BUCKET"
 
-    echo "OK: minio bucket created bucket=$BUCKET"
+    log_ok "minio bucket created bucket=$BUCKET"
   '';
 
   bucketEnsure = pkgs.writeShellScript "minio-bucket-ensure" ''
+    ${loggingPrelude}
+
     set -euo pipefail
 
     BUCKET="''${1:-}"
@@ -57,10 +62,12 @@ let
     ${mc}/bin/mc alias set local "http://127.0.0.1:$MINIO_API_PORT" "$ROOT_USER" "$ROOT_PASSWORD" >/dev/null
     ${mc}/bin/mc mb --ignore-existing "local/$BUCKET" >/dev/null
 
-    echo "OK: minio bucket ensured bucket=$BUCKET"
+    log_ok "minio bucket ensured bucket=$BUCKET"
   '';
 
   bucketDelete = pkgs.writeShellScript "minio-bucket-delete" ''
+    ${loggingPrelude}
+
     set -euo pipefail
 
     BUCKET="''${1:-}"
@@ -81,7 +88,7 @@ let
     ${mc}/bin/mc alias set local "http://127.0.0.1:$MINIO_API_PORT" "$ROOT_USER" "$ROOT_PASSWORD" >/dev/null
     ${mc}/bin/mc rb --force "local/$BUCKET"
 
-    echo "OK: minio bucket deleted bucket=$BUCKET"
+    log_ok "minio bucket deleted bucket=$BUCKET"
   '';
 
   bucketList = pkgs.writeShellScript "minio-bucket-list" ''
@@ -102,6 +109,8 @@ let
   '';
 
   policyApply = pkgs.writeShellScript "minio-policy-apply" ''
+    ${loggingPrelude}
+
     set -euo pipefail
 
     BUCKET="''${1:-}"
@@ -113,7 +122,7 @@ let
     fi
 
     if [ ! -f "$POLICY_FILE" ]; then
-      echo "ERROR: policy file not found: $POLICY_FILE" >&2
+      log_error "policy file not found: $POLICY_FILE"
       exit 1
     fi
 
@@ -129,7 +138,7 @@ let
     ${mc}/bin/mc alias set local "http://127.0.0.1:$MINIO_API_PORT" "$ROOT_USER" "$ROOT_PASSWORD" >/dev/null
     ${mc}/bin/mc anonymous set-json "$POLICY_FILE" "local/$BUCKET"
 
-    echo "OK: minio policy applied bucket=$BUCKET file=$POLICY_FILE"
+    log_ok "minio policy applied bucket=$BUCKET file=$POLICY_FILE"
   '';
 in
 {

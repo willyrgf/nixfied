@@ -35,15 +35,22 @@ let
   serviceApi = import ./service-api.nix {
     inherit pkgs appApi;
   };
-  discovery = import ./discovery.nix { inherit pkgs project; };
+  discovery = import ./discovery.nix {
+    inherit pkgs project;
+    inherit (helpers) loggingPrelude;
+  };
   process = import ./process.nix {
     inherit pkgs;
     inherit (helpers) loggingPrelude;
   };
   id = import ./id.nix {
     inherit pkgs project;
+    inherit (helpers) loggingPrelude;
   };
-  processRegistry = import ./process-registry.nix { inherit pkgs project; };
+  processRegistry = import ./process-registry.nix {
+    inherit pkgs project;
+    inherit (helpers) loggingPrelude;
+  };
   slotEnvRuntime = import ./slot-env-runtime.nix { inherit pkgs; };
   servicePolicy = import ./service-policy.nix { inherit pkgs; };
   portUtils = import ./port-utils.nix {
@@ -54,7 +61,10 @@ let
     inherit pkgs;
     inherit (helpers) loggingPrelude;
   };
-  runRegistry = import ./run-registry.nix { inherit pkgs project; };
+  runRegistry = import ./run-registry.nix {
+    inherit pkgs project;
+    inherit (helpers) loggingPrelude;
+  };
   executionCore = import ./execution-core.nix {
     inherit pkgs project;
     inherit (helpers) loggingPrelude;

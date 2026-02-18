@@ -14,7 +14,11 @@
 # Usage:
 #   mkEphemeralWrapper { name = "ci"; script = "..."; }
 #
-{ pkgs, project }:
+{
+  pkgs,
+  project,
+  loggingPrelude ? null,
+}:
 
 let
   projectMeta = project.project or { };
@@ -47,17 +51,32 @@ let
   runtimePackages = project.tooling.runtimePackages or [ ];
   id = import ./lib/id.nix {
     inherit pkgs project;
+    loggingPrelude = resolvedLoggingPrelude;
   };
   envLoader = import ./lib/env-loader.nix {
     inherit pkgs project;
   };
-  processRegistry = import ./lib/process-registry.nix { inherit pkgs project; };
+  processRegistry = import ./lib/process-registry.nix {
+    inherit pkgs project;
+    loggingPrelude = resolvedLoggingPrelude;
+  };
   shellContract = import ./lib/shell-contract.nix { inherit pkgs; };
 
   lockDir = "/tmp";
   lockPrefix = "${projectId}-slot";
 
   slotMax = (project.slots or { }).max or 9;
+  resolvedLoggingPrelude =
+    if loggingPrelude != null && loggingPrelude != "" then
+      loggingPrelude
+    else
+      (
+        import ./lib/helpers.nix {
+          inherit pkgs project;
+          hooks = { };
+          summaryParser = "";
+        }
+      ).loggingPrelude;
 
   # Pre-computed bash variable references
   # Nix $${var} doesn't interpolate; use "\$${var}" in "..." strings instead
@@ -68,6 +87,8 @@ let
   mkUniqueId = id.mkUniqueId;
 
   acquireSlotLock = pkgs.writeShellScript "acquire-slot-lock" ''
+    ${resolvedLoggingPrelude}
+
     set -euo pipefail
 
     LOCK_DIR="${lockDir}"
@@ -88,7 +109,7 @@ let
       fi
     done
 
-    echo "ERROR: All $((${toString slotMax} + 1)) ephemeral slots (0-${toString slotMax}) are in use" >&2
+    log_error "All $((${toString slotMax} + 1)) ephemeral slots (0-${toString slotMax}) are in use"
     echo "" >&2
     echo "   This means $((${toString slotMax} + 1)) concurrent runs are already running." >&2
     echo "   Wait for one to complete or check for stale locks:" >&2
@@ -120,21 +141,25 @@ let
   rsyncExcludes = pkgs.lib.concatMapStringsSep " " (pat: "--exclude='${pat}'") excludePatterns;
 
   mkSourceCopy = pkgs.writeShellScript "mk-source-copy" ''
+    ${resolvedLoggingPrelude}
+
     set -euo pipefail
 
     SOURCE_DIR="$1"
     DEST_DIR="$2"
 
-    echo "INFO: Copying project source to ephemeral location"
+    log_info "Copying project source to ephemeral location"
 
     ${pkgs.rsync}/bin/rsync -a \
       ${rsyncExcludes} \
       "$SOURCE_DIR/" "$DEST_DIR/"
 
-    echo "OK: Source copied to $DEST_DIR"
+    log_ok "Source copied to $DEST_DIR"
   '';
 
   mkConditionalCleanup = pkgs.writeShellScript "mk-conditional-cleanup" ''
+    ${resolvedLoggingPrelude}
+
     _ephemeral_cleanup() {
       local exit_code=$?
 
@@ -148,9 +173,9 @@ let
         :
       else
         echo ""
-        echo "INFO: Cleaning up ephemeral state (slot ''${${projectIdUpper}_EPHEMERAL_SLOT:-unknown})"
+        log_info "Cleaning up ephemeral state (slot ''${${projectIdUpper}_EPHEMERAL_SLOT:-unknown})"
         rm -rf "${refEphRoot}"
-        echo "OK: Ephemeral state cleaned"
+        log_ok "Ephemeral state cleaned"
       fi
 
       ${processRegistry.emitEvent} \
@@ -207,6 +232,8 @@ let
           '';
     in
     pkgs.writeShellScript "ephemeral-${name}" ''
+      ${resolvedLoggingPrelude}
+
       set -euo pipefail
 
       export ORIGINAL_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
@@ -221,7 +248,7 @@ let
       if [ -n "''${${slotVar}:-}" ]; then
         export ${projectIdUpper}_EPHEMERAL_SLOT="''${${slotVar}}"
         export ${projectIdUpper}_SLOT_LOCK_FD=""
-        echo "INFO: Using pre-set slot: ''${${slotVar}} (no lock - caller managed)"
+        log_info "Using pre-set slot: ''${${slotVar}} (no lock - caller managed)"
       else
         eval "$(${acquireSlotLock})"
       fi
@@ -234,9 +261,9 @@ let
       export ${projectIdUpper}_EPHEMERAL=1
 
       echo ""
-      echo "INFO: Ephemeral execution mode"
-      echo "INFO: Root: ${refEphRoot}"
-      echo "INFO: Slot: ${refEphSlot} (${slotVar}=''${${slotVar}}, ${envVar}=''${${envVar}})"
+      log_info "Ephemeral execution mode"
+      log_info "Root: ${refEphRoot}"
+      log_info "Slot: ${refEphSlot} (${slotVar}=''${${slotVar}}, ${envVar}=''${${envVar}})"
       echo ""
 
       ${processRegistry.emitEvent} \
@@ -260,9 +287,9 @@ let
       ${
         if installDeps && depsScript != "" then
           ''
-            echo "INFO: Installing dependencies"
+            log_info "Installing dependencies"
             ${depsScript}
-            echo "OK: Dependencies installed"
+            log_ok "Dependencies installed"
           ''
         else
           ""
@@ -277,7 +304,7 @@ let
       ${contractPrelude}
 
       echo ""
-      echo "INFO: Starting ${name}"
+      log_info "Starting ${name}"
       echo ""
 
       _NIXFIED_APP_RC=0

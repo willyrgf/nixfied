@@ -262,7 +262,7 @@ let
                         case "$CI_ARTIFACTS_BASE" in
                           /*) ;;
                           *)
-                            echo "ERROR: CI_ARTIFACTS_BASE must resolve to an absolute path (got '$CI_ARTIFACTS_BASE')" >&2
+                            log_error "CI_ARTIFACTS_BASE must resolve to an absolute path (got '$CI_ARTIFACTS_BASE')"
                             exit 1
                             ;;
                         esac
@@ -296,7 +296,7 @@ let
                           fi
 
                           if [ "$keep" -eq 1 ]; then
-                            echo "INFO: CI artifacts kept at: $CI_ARTIFACTS_DIR"
+                            log_info "CI artifacts kept at: $CI_ARTIFACTS_DIR"
                             return 0
                           fi
 
@@ -447,7 +447,7 @@ let
                           setup_duration=$((setup_end_time - setup_start_time))
 
                           if [ "$setup_rc" -ne 0 ]; then
-                            echo "ERROR: CI setup failed rc=$setup_rc" >&2
+                            log_error "CI setup failed rc=$setup_rc"
                             exit_code=$setup_rc
                           fi
 
@@ -490,7 +490,7 @@ let
                           teardown_end_time=$(date +%s)
                           teardown_duration=$((teardown_end_time - teardown_start_time))
                           if [ "$teardown_rc" -ne 0 ]; then
-                            echo "ERROR: CI teardown failed rc=$teardown_rc" >&2
+                            log_error "CI teardown failed rc=$teardown_rc"
                             if [ "$exit_code" -eq 0 ]; then
                               exit_code=$teardown_rc
                             fi

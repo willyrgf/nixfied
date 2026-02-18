@@ -29,6 +29,7 @@ let
       project
       slots
       config
+      loggingPrelude
       ;
   };
 
