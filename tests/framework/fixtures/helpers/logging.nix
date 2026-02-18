@@ -34,6 +34,10 @@
   }
   trap cleanup EXIT
 
+  # Fixture assertions depend on baseline defaults unless overridden per case.
+  unset LOG_LEVEL NIXFIED_LOG_LEVEL OUTPUT_MODE NIXFIED_OUTPUT_MODE NIXFIED_LOG_FILE
+  unset NIXFIED_LOG_TRACE NIXFIED_XTRACE_FILE
+
   run_trace_probe() {
     local trace_file="$1"
     local level="$2"
