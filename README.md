@@ -157,6 +157,7 @@ Core env interface:
 - `NIX_ENV`: slot index (defaults to `0` when unset).
 - `LOG_LEVEL`: runtime logging level (`error|warn|info|debug|trace`).
 - `OUTPUT_MODE`: runtime log routing (`stdout|logs|both`).
+- default coupling: when `OUTPUT_MODE` is unset and `LOG_LEVEL=debug`, output defaults to `both`.
 
 Important distinction:
 - `OUTPUT_MODE` controls where log lines are emitted.

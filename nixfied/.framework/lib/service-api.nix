@@ -411,7 +411,14 @@ let
       ${slotEnvRuntime.requireSlotEnvJson { }}
 
       LOG_LEVEL="''${LOG_LEVEL:-''${NIXFIED_LOG_LEVEL:-${logLevelDefault}}}"
-      OUTPUT_MODE="''${OUTPUT_MODE:-''${NIXFIED_OUTPUT_MODE:-${outputModeDefault}}}"
+      OUTPUT_MODE="''${OUTPUT_MODE:-''${NIXFIED_OUTPUT_MODE:-}}"
+      if [ -z "$OUTPUT_MODE" ]; then
+        if [ "$LOG_LEVEL" = "debug" ] && [ "${outputModeDefault}" = "stdout" ]; then
+          OUTPUT_MODE="both"
+        else
+          OUTPUT_MODE="${outputModeDefault}"
+        fi
+      fi
       export LOG_LEVEL
       export OUTPUT_MODE
       export NIXFIED_LOG_LEVEL="$LOG_LEVEL"

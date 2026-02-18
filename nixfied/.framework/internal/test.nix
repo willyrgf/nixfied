@@ -3769,6 +3769,68 @@ let
     fi
     assert_contains "$HOOK_BAD_OUTPUT_MODE_LOG" "invalid OUTPUT_MODE value=file"
 
+    SERVICE_DEFAULT_OUTPUT_HOOK_EXPR=$(cat <<'NIX'
+    { root, system }:
+    let
+      flake = builtins.getFlake root;
+      pkgs = flake.inputs.nixpkgs.legacyPackages.''${system};
+      serviceApi = import ./nixfied/.framework/lib/service-api.nix { inherit pkgs; };
+      printOutputMode = pkgs.writeShellScript "svc-print-output-mode" "set -euo pipefail\necho \"OUTPUT_MODE=$OUTPUT_MODE\"\n";
+      publicApi = serviceApi.mkServiceApiV3 {
+        service = "probe";
+        summary = "probe service";
+        details = "tests default runtime primitives in launcher";
+        artifacts = { };
+        operations = {
+          start = {
+            script = printOutputMode;
+            summary = "start";
+            details = "start";
+          };
+          stop = {
+            script = printOutputMode;
+            summary = "stop";
+            details = "stop";
+          };
+          status = {
+            script = printOutputMode;
+            summary = "status";
+            details = "status";
+          };
+        };
+      };
+      hookPath = (serviceApi.mkServiceHookEnvFromContract {
+        probe = publicApi;
+      }).SVC_PROBE_STATUS;
+    in
+      pkgs.writeText "service-default-output-hook-path" hookPath
+    NIX
+    )
+    SERVICE_DEFAULT_OUTPUT_HOOK=$(cat "$(build_expr "$SERVICE_DEFAULT_OUTPUT_HOOK_EXPR")")
+    if [ -z "$SERVICE_DEFAULT_OUTPUT_HOOK" ] || [ ! -x "$SERVICE_DEFAULT_OUTPUT_HOOK" ]; then
+      fail "expected executable service default output hook path"
+    fi
+
+    HOOK_DEBUG_DEFAULT_MODE_LOG="$WORKDIR/service-hook-debug-default-mode.log"
+    set +e
+    REQUIRE_SLOT_ENV_JSON="$HOOK_SLOT_JSON" LOG_LEVEL=debug OUTPUT_MODE= NIXFIED_OUTPUT_MODE= "$SERVICE_DEFAULT_OUTPUT_HOOK" > "$HOOK_DEBUG_DEFAULT_MODE_LOG" 2>&1
+    HOOK_DEBUG_DEFAULT_MODE_RC=$?
+    set -e
+    if [ "$HOOK_DEBUG_DEFAULT_MODE_RC" -ne 0 ]; then
+      fail "expected debug hook run to succeed when defaulting output mode"
+    fi
+    assert_contains "$HOOK_DEBUG_DEFAULT_MODE_LOG" "OUTPUT_MODE=both"
+
+    HOOK_INFO_DEFAULT_MODE_LOG="$WORKDIR/service-hook-info-default-mode.log"
+    set +e
+    REQUIRE_SLOT_ENV_JSON="$HOOK_SLOT_JSON" LOG_LEVEL=info OUTPUT_MODE= NIXFIED_OUTPUT_MODE= "$SERVICE_DEFAULT_OUTPUT_HOOK" > "$HOOK_INFO_DEFAULT_MODE_LOG" 2>&1
+    HOOK_INFO_DEFAULT_MODE_RC=$?
+    set -e
+    if [ "$HOOK_INFO_DEFAULT_MODE_RC" -ne 0 ]; then
+      fail "expected info hook run to succeed when defaulting output mode"
+    fi
+    assert_contains "$HOOK_INFO_DEFAULT_MODE_LOG" "OUTPUT_MODE=stdout"
+
     log "supervisor hooks"
     SUP_HOOKS_EXPR=$(cat <<'NIX'
     { root, system }:
