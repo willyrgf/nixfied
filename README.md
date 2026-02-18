@@ -120,8 +120,11 @@ Required API shape:
 
 `appContract` defines machine-readable command behavior:
 - `commandClass`: `typed` | `passthrough` | `json` | `batch-runner`
+- runtime primitives in `appContract.env`:
+  - `LOG_LEVEL` (`error|warn|info|debug|trace`, alias: `NIXFIED_LOG_LEVEL`)
+  - `OUTPUT_MODE` (`stdout|logs|both`, alias: `NIXFIED_OUTPUT_MODE`)
 - argument/env specs
-- output mode
+- output contract mode (`appContract.outputs.mode`: `text|kv|json`)
 - failure codes
 - idempotence metadata
 
@@ -136,6 +139,10 @@ Required fields:
 - `service` (must match module key)
 - `summary`, `details`
 - `artifacts` (metadata)
+- `runtimePrimitives`:
+  - `version = 1`
+  - `logLevel` contract (`LOG_LEVEL`, alias `NIXFIED_LOG_LEVEL`, enum values)
+  - `outputMode` contract (`OUTPUT_MODE`, alias `NIXFIED_OUTPUT_MODE`, enum values)
 - `operations` attrset with required lifecycle ops:
   - `start`, `stop`, `status`
 
@@ -148,6 +155,12 @@ Each operation includes script and docs metadata and can expose:
 Core env interface:
 - `PROJECT_ENV`: required for service/supervisor apps.
 - `NIX_ENV`: slot index (defaults to `0` when unset).
+- `LOG_LEVEL`: runtime logging level (`error|warn|info|debug|trace`).
+- `OUTPUT_MODE`: runtime log routing (`stdout|logs|both`).
+
+Important distinction:
+- `OUTPUT_MODE` controls where log lines are emitted.
+- `appContract.outputs.mode` controls command payload format (`text|kv|json`).
 
 Service reuse and discovery controls:
 - `SERVICE_REUSE_POLICY=never|same-root|same-slot|cross-run`

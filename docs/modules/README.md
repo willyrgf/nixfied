@@ -6,6 +6,9 @@ This directory contains detailed docs for Nixfied optional service modules.
 
 - Enable modules in `nixfied/project/conf.nix` under `modules.<name>.enable = true`.
 - Each module defines `publicApi.version = 3` and a set of operations.
+- Each module defines `publicApi.runtimePrimitives` (version `1`) for:
+  - `LOG_LEVEL` (`error|warn|info|debug|trace`, alias `NIXFIED_LOG_LEVEL`)
+  - `OUTPUT_MODE` (`stdout|logs|both`, alias `NIXFIED_OUTPUT_MODE`)
 - Each operation can expose:
   - app: `svc::<service>::<operation>`
   - hook env var: `SVC_<SERVICE>_<OP>`
