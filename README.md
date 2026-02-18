@@ -1,6 +1,6 @@
 # Nixfied
 
-WARNING: Nixfied is in active development. Breaking changes can happen in any commit.
+> WARNING: Nixfied is in active development. Breaking changes can happen in any commit.
 
 Nixfied is a Nix-first framework for codifying project workflows (dev, test, build, check, CI), runtime environments, and optional infrastructure modules from a single configuration surface.
 
