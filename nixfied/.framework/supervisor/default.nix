@@ -6,6 +6,12 @@
 }:
 
 let
+  summary = import ../lib/summary.nix { inherit pkgs project; };
+  helpers = import ../lib/helpers.nix {
+    inherit pkgs project;
+    inherit (summary) summaryParser;
+  };
+  loggingPrelude = helpers.loggingPrelude;
   config = import ./config.nix { inherit pkgs project slots; };
   lifecycle = import ./lifecycle.nix {
     inherit
@@ -13,6 +19,7 @@ let
       project
       slots
       config
+      loggingPrelude
       ;
   };
   statusMod = import ./status.nix { inherit pkgs slots config; };

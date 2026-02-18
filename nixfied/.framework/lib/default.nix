@@ -36,24 +36,35 @@ let
     inherit pkgs appApi;
   };
   discovery = import ./discovery.nix { inherit pkgs project; };
-  process = import ./process.nix { inherit pkgs; };
+  process = import ./process.nix {
+    inherit pkgs;
+    inherit (helpers) loggingPrelude;
+  };
   id = import ./id.nix {
     inherit pkgs project;
   };
   processRegistry = import ./process-registry.nix { inherit pkgs project; };
   slotEnvRuntime = import ./slot-env-runtime.nix { inherit pkgs; };
   servicePolicy = import ./service-policy.nix { inherit pkgs; };
-  portUtils = import ./port-utils.nix { inherit pkgs; };
-  parallel = import ./parallel.nix { inherit pkgs; };
+  portUtils = import ./port-utils.nix {
+    inherit pkgs;
+    inherit (helpers) loggingPrelude;
+  };
+  parallel = import ./parallel.nix {
+    inherit pkgs;
+    inherit (helpers) loggingPrelude;
+  };
   runRegistry = import ./run-registry.nix { inherit pkgs project; };
   executionCore = import ./execution-core.nix {
     inherit pkgs project;
+    inherit (helpers) loggingPrelude;
   };
 in
 {
   inherit (helpers)
     loadEnv
     loadEnvFile
+    loggingPrelude
     helpersScript
     hookExports
     ;

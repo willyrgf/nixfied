@@ -7,6 +7,12 @@
 
 let
   cfg = project.modules.postgres or { };
+  summary = import ../lib/summary.nix { inherit pkgs project; };
+  helpers = import ../lib/helpers.nix {
+    inherit pkgs project;
+    inherit (summary) summaryParser;
+  };
+  loggingPrelude = helpers.loggingPrelude;
   serviceApi = import ../lib/service-api.nix { inherit pkgs; };
   processRegistry = import ../lib/process-registry.nix { inherit pkgs project; };
   observability = import ../lib/service-observability.nix {
@@ -31,6 +37,7 @@ let
       project
       slots
       config
+      loggingPrelude
       ;
   };
   backupMod = import ./backup.nix { inherit pkgs project slots; };

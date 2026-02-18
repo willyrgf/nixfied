@@ -7,6 +7,12 @@
 
 let
   cfg = project.modules.nginx or { };
+  summary = import ../lib/summary.nix { inherit pkgs project; };
+  helpers = import ../lib/helpers.nix {
+    inherit pkgs project;
+    inherit (summary) summaryParser;
+  };
+  loggingPrelude = helpers.loggingPrelude;
   slotEnvRuntime = import ../lib/slot-env-runtime.nix { inherit pkgs; };
   serviceApi = import ../lib/service-api.nix { inherit pkgs; };
   processRegistry = import ../lib/process-registry.nix { inherit pkgs project; };
@@ -56,6 +62,7 @@ let
       project
       slots
       templates
+      loggingPrelude
       ;
   };
   siteMgmt = import ./site-management.nix {

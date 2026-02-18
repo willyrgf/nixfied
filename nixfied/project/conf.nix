@@ -52,6 +52,11 @@ rec {
     base = "\${XDG_DATA_HOME:-$HOME/.local/share}/${project.id}";
   };
 
+  logging = {
+    level = "info";
+    output = "stdout";
+  };
+
   tooling = {
     runtimePackages = [
       pkgs.coreutils

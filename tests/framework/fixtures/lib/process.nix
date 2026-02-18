@@ -22,7 +22,15 @@
     fail "process manager still running after TERM"
   fi
 
-  grep -q "INFO: Starting" "$PM_LOG" || fail "process manager start log missing"
+  START_LOG_FOUND=0
+  for i in $(seq 1 30); do
+    if grep -q "INFO: Starting" "$PM_LOG"; then
+      START_LOG_FOUND=1
+      break
+    fi
+    sleep 0.1
+  done
+  [ "$START_LOG_FOUND" -eq 1 ] || fail "process manager start log missing"
 
   echo "lib process fixture ok"
 

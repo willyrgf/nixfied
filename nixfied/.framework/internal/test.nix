@@ -611,6 +611,42 @@ let
       exit "$HELPERS_RC"
     fi
 
+    log "helpers logging"
+    HELPERS_LOGGING_DIR="$WORKDIR/helpers-logging"
+    mkdir -p "$HELPERS_LOGGING_DIR"
+    HELPERS_LOGGING_EXPR=$(cat <<'NIX'
+    { root, system }:
+    let
+      flake = builtins.getFlake root;
+      pkgs = flake.inputs.nixpkgs.legacyPackages.''${system};
+      project = import ./nixfied/project { inherit pkgs; };
+      slots = import ./nixfied/.framework/slots.nix { inherit pkgs project; };
+      hooks = import ./nixfied/.framework/hooks.nix { inherit pkgs project slots; postgres = null; nginx = null; };
+      lib = import ./nixfied/.framework/lib { inherit pkgs project hooks; };
+    in
+      lib.mkAppScript {
+        name = "helpers-logging";
+        env = { };
+        useDeps = false;
+        script = import ./tests/framework/fixtures/helpers/logging.nix { };
+      }
+    NIX
+    )
+
+    HELPERS_LOGGING_SCRIPT=$(build_expr "$HELPERS_LOGGING_EXPR")
+    HELPERS_LOGGING_LOG="$WORKDIR/helpers-logging.log"
+    set +e
+    (cd "$HELPERS_LOGGING_DIR" && "$HELPERS_LOGGING_SCRIPT" >"$HELPERS_LOGGING_LOG" 2>&1)
+    HELPERS_LOGGING_RC=$?
+    set -e
+    if [ "$HELPERS_LOGGING_RC" -ne 0 ]; then
+      echo "Helpers logging fixture failed (rc=$HELPERS_LOGGING_RC)." >&2
+      echo "" >&2
+      echo "Fixture output (last 120 lines):" >&2
+      print_log_tail "$HELPERS_LOGGING_LOG" 120
+      exit "$HELPERS_LOGGING_RC"
+    fi
+
     log "env loader export propagation"
     ENV_LOADER_STD_DIR="$WORKDIR/env-loader-standard"
     ENV_LOADER_EPH_DIR="$WORKDIR/env-loader-ephemeral"
@@ -2974,7 +3010,10 @@ let
       slots = import ./nixfied/.framework/slots.nix { inherit pkgs project; };
       hooks = import ./nixfied/.framework/hooks.nix { inherit pkgs project slots; postgres = null; nginx = null; };
       lib = import ./nixfied/.framework/lib { inherit pkgs project hooks; };
-      parallel = import ./nixfied/.framework/lib/parallel.nix { inherit pkgs; };
+      parallel = import ./nixfied/.framework/lib/parallel.nix {
+        inherit pkgs;
+        loggingPrelude = lib.loggingPrelude;
+      };
       runnerOk = parallel.mkParallelRunner [
         "echo first"
         "echo second"
@@ -3030,7 +3069,10 @@ let
       slots = import ./nixfied/.framework/slots.nix { inherit pkgs project; };
       hooks = import ./nixfied/.framework/hooks.nix { inherit pkgs project slots; postgres = null; nginx = null; };
       lib = import ./nixfied/.framework/lib { inherit pkgs project hooks; };
-      portUtils = import ./nixfied/.framework/lib/port-utils.nix { inherit pkgs; };
+      portUtils = import ./nixfied/.framework/lib/port-utils.nix {
+        inherit pkgs;
+        loggingPrelude = lib.loggingPrelude;
+      };
     in
       lib.mkAppScript {
         name = "lib-port-utils-test";
@@ -3071,7 +3113,10 @@ let
       slots = import ./nixfied/.framework/slots.nix { inherit pkgs project; };
       hooks = import ./nixfied/.framework/hooks.nix { inherit pkgs project slots; postgres = null; nginx = null; };
       lib = import ./nixfied/.framework/lib { inherit pkgs project hooks; };
-      process = import ./nixfied/.framework/lib/process.nix { inherit pkgs; };
+      process = import ./nixfied/.framework/lib/process.nix {
+        inherit pkgs;
+        loggingPrelude = lib.loggingPrelude;
+      };
       processManager = process.mkProcessManager {
         processName = "fixture-process";
         startupScript = "sleep 30 &\nCHILD_PID=$!\nwait \"$CHILD_PID\"";
