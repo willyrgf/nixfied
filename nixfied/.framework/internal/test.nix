@@ -292,12 +292,14 @@ let
 
     write_framework_shard_plan() {
       local plan_file="$1"
+      local artifacts_dir="$2"
       local units_file="$WORKDIR/framework-test-units.jsonl"
       local shard_name
       local selected=0
       local index=0
       local unit_token=""
-      local run_script=""
+      local child_args_json="[]"
+      local child_log_file=""
 
       : > "$units_file"
 
@@ -309,49 +311,39 @@ let
         selected=$((selected + 1))
         index=$((index + 1))
         unit_token=$(printf '%s' "$shard_name" | tr -- '-.: /' '_____')
-
-    run_script=$(cat <<'EOF'
-    shard_name="__SHARD_NAME__"
-    log_file="$(artifact_path "shard-$shard_name.log")"
-    started=$(date +%s)
-    set +e
-    env -u CI_ARTIFACTS_DIR -u CI_ARTIFACTS_BASE -u CI_ARTIFACTS_LATEST_LINK \
-      -u RUN_ID -u NIXFIED_PLAN_ID -u NIXFIED_UNIT_ID -u NIXFIED_UNIT_ATTEMPT \
-      ${pkgs.bash}/bin/bash "$FRAMEWORK_TEST_SCRIPT" \
-      --profile "$PROFILE" \
-      --jobs 1 \
-      --shard "$shard_name" \
-      --skip-setup \
-      --skip-teardown >"$log_file" 2>&1
-    rc=$?
-    set -e
-    duration=$(( $(date +%s) - started ))
-    if [ "$rc" -eq 0 ]; then
-      log_ok "shard=$shard_name duration=$duration"
-      exit 0
-    fi
-    log_error "shard=$shard_name exit=$rc log=$log_file"
-    log_error "shard failure tail shard=$shard_name"
-    if [ -f "$log_file" ]; then
-      tail -n 80 "$log_file" >&2 || true
-    else
-      log_warn "test log missing path=$log_file"
-    fi
-    exit "$rc"
-    EOF
-        )
-        run_script="''${run_script//__SHARD_NAME__/$shard_name}"
+        child_log_file="$artifacts_dir/shard-$shard_name.log"
+        child_args_json="$(${pkgs.jq}/bin/jq -cn \
+          --arg script "$FRAMEWORK_TEST_SCRIPT" \
+          --arg profile "$PROFILE" \
+          --arg shard "$shard_name" \
+          '
+            [
+              $script,
+              "--profile",
+              $profile,
+              "--jobs",
+              "1",
+              "--shard",
+              $shard,
+              "--skip-setup",
+              "--skip-teardown"
+            ]
+          '
+        )"
 
         ${pkgs.jq}/bin/jq -cn \
           --arg id "unit.framework_test.$index.$unit_token" \
           --arg name "$shard_name" \
           --arg description "$shard_name" \
-          --arg run "$run_script" \
+          --arg command "${pkgs.bash}/bin/bash" \
+          --arg log_file "$child_log_file" \
+          --argjson child_args "$child_args_json" \
           '
             {
               id: $id,
               name: $name,
               description: $description,
+              kind: "ci_child",
               env: {},
               when: "",
               cleanup: "",
@@ -359,7 +351,12 @@ let
               depends_on: [],
               locks: [],
               missing: false,
-              run: $run
+              run: "",
+              child_command: $command,
+              child_args: $child_args,
+              child_env: {},
+              child_log_file: $log_file,
+              child_log_tail_lines: 80
             }
           ' >> "$units_file"
       done
@@ -395,7 +392,7 @@ let
       export FRAMEWORK_TEST_SCRIPT="$0"
       export PROFILE
 
-      if ! write_framework_shard_plan "$plan_file"; then
+      if ! write_framework_shard_plan "$plan_file" "$artifacts_dir"; then
         return 1
       fi
 
@@ -1105,6 +1102,115 @@ let
     assert_contains "$CI_CANCEL_DIR/.ci-artifacts/summary.json" '"failed"'
     assert_contains "$CI_CANCEL_DIR/.ci-artifacts/summary.json" '"canceled"'
     assert_contains "$CI_CANCEL_DIR/.ci-artifacts/summary.json" '"canceled_count":'
+
+    CI_CHILD_DIR="$WORKDIR/ci-child-unit"
+    CI_CHILD_PLAN="$CI_CHILD_DIR/plan.json"
+    CI_CHILD_RESULT="$CI_CHILD_DIR/result.json"
+    CI_CHILD_RUN_LOG="$CI_CHILD_DIR/run.log"
+    CI_CHILD_CHILD_LOG="$CI_CHILD_DIR/child.log"
+    CI_CHILD_CHILD_SCRIPT="$CI_CHILD_DIR/child-script.sh"
+    CI_CHILD_OUTPUT_FILE="$CI_CHILD_DIR/child.ok"
+    mkdir -p "$CI_CHILD_DIR"
+    cat > "$CI_CHILD_CHILD_SCRIPT" <<'EOF'
+    #!/usr/bin/env bash
+    set -euo pipefail
+    out_file="$1"
+    printf '%s\n' "ci-child-ok"
+    touch "$out_file"
+    EOF
+    chmod +x "$CI_CHILD_CHILD_SCRIPT"
+    ${pkgs.jq}/bin/jq -n \
+      --arg child_cmd "${pkgs.bash}/bin/bash" \
+      --arg child_script "$CI_CHILD_CHILD_SCRIPT" \
+      --arg output_file "$CI_CHILD_OUTPUT_FILE" \
+      --arg child_log "$CI_CHILD_CHILD_LOG" \
+      '
+        {
+          schema_version: 2,
+          mode: "ci-child-fixture",
+          max_workers: 1,
+          units: [
+            {
+              id: "unit.ci_child.1.child-run",
+              name: "child-run",
+              description: "child-run",
+              kind: "ci_child",
+              env: {},
+              when: "",
+              cleanup: "",
+              skip_if_missing: [],
+              depends_on: [],
+              locks: [],
+              missing: false,
+              run: "",
+              child_command: $child_cmd,
+              child_args: [
+                $child_script,
+                $output_file
+              ],
+              child_env: {},
+              child_log_file: $child_log,
+              child_log_tail_lines: 40
+            }
+          ]
+        }
+      ' > "$CI_CHILD_PLAN"
+    set +e
+    ${toString lib.runPlan} \
+      --plan-file "$CI_CHILD_PLAN" \
+      --result-file "$CI_CHILD_RESULT" \
+      --emit-event "${toString lib.emitEvent}" \
+      --context-script "${toString lib.helpersScript}" >"$CI_CHILD_RUN_LOG" 2>&1
+    RC=$?
+    set -e
+    if [ "$RC" -ne 0 ]; then
+      fail "expected ci_child execution plan to exit zero"
+    fi
+    assert_file_exists "$CI_CHILD_OUTPUT_FILE"
+    assert_file_exists "$CI_CHILD_CHILD_LOG"
+    assert_contains "$CI_CHILD_CHILD_LOG" "ci-child-ok"
+    assert_contains "$CI_CHILD_RUN_LOG" "OK: shard=child-run duration="
+    assert_contains "$CI_CHILD_RESULT" '"passed"'
+
+    CI_CHILD_BAD_PLAN="$CI_CHILD_DIR/bad-plan.json"
+    CI_CHILD_BAD_RESULT="$CI_CHILD_DIR/bad-result.json"
+    CI_CHILD_BAD_LOG="$CI_CHILD_DIR/bad-run.log"
+    ${pkgs.jq}/bin/jq -n \
+      '
+        {
+          schema_version: 2,
+          mode: "ci-child-invalid",
+          max_workers: 1,
+          units: [
+            {
+              id: "unit.ci_child.1.bad-child",
+              name: "bad-child",
+              description: "bad-child",
+              kind: "ci_child",
+              env: {},
+              when: "",
+              cleanup: "",
+              skip_if_missing: [],
+              depends_on: [],
+              locks: [],
+              missing: false,
+              run: ""
+            }
+          ]
+        }
+      ' > "$CI_CHILD_BAD_PLAN"
+    set +e
+    ${toString lib.runPlan} \
+      --plan-file "$CI_CHILD_BAD_PLAN" \
+      --result-file "$CI_CHILD_BAD_RESULT" \
+      --emit-event "${toString lib.emitEvent}" \
+      --context-script "${toString lib.helpersScript}" >"$CI_CHILD_BAD_LOG" 2>&1
+    RC=$?
+    set -e
+    if [ "$RC" -eq 0 ]; then
+      fail "expected ci_child plan missing child_command to fail"
+    fi
+    assert_contains "$CI_CHILD_BAD_LOG" "ci_child units must define child_command"
 
     CI_ERR_DIR="$WORKDIR/ci-errors"
     CI_MODE_LOG="$WORKDIR/ci-unknown-mode.log"

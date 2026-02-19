@@ -139,6 +139,72 @@ let
           exit 1
         fi
 
+        BAD_UNIT_KINDS="$(${pkgs.jq}/bin/jq -r '
+          [
+            (.units // [])[] as $unit
+            | (($unit.kind // "script") as $kind
+              | select($kind != "script" and $kind != "ci_child")
+              | "\($unit.name)=\($kind)")
+          ] | .[]?
+        ' "$PLAN_FILE")"
+        if [ -n "$BAD_UNIT_KINDS" ]; then
+          log_error "execution plan has unsupported unit kinds (expected script|ci_child):"
+          echo "$BAD_UNIT_KINDS" >&2
+          exit 1
+        fi
+
+        BAD_CI_CHILD_COMMANDS="$(${pkgs.jq}/bin/jq -r '
+          [
+            (.units // [])[]
+            | select((.kind // "script") == "ci_child" and ((.child_command // "") | length == 0))
+            | .name
+          ] | .[]?
+        ' "$PLAN_FILE")"
+        if [ -n "$BAD_CI_CHILD_COMMANDS" ]; then
+          log_error "ci_child units must define child_command:"
+          echo "$BAD_CI_CHILD_COMMANDS" >&2
+          exit 1
+        fi
+
+        BAD_CI_CHILD_ARGS_ARRAYS="$(${pkgs.jq}/bin/jq -r '
+          [
+            (.units // [])[]
+            | select((.kind // "script") == "ci_child" and ((.child_args // []) | type != "array"))
+            | .name
+          ] | .[]?
+        ' "$PLAN_FILE")"
+        if [ -n "$BAD_CI_CHILD_ARGS_ARRAYS" ]; then
+          log_error "ci_child units must define child_args as an array when set:"
+          echo "$BAD_CI_CHILD_ARGS_ARRAYS" >&2
+          exit 1
+        fi
+
+        BAD_CI_CHILD_ARG_VALUES="$(${pkgs.jq}/bin/jq -r '
+          [
+            (.units // [])[] as $unit
+            | select(($unit.kind // "script") == "ci_child")
+            | (($unit.child_args // [])[]? | select(type != "string") | $unit.name)
+          ] | .[]?
+        ' "$PLAN_FILE")"
+        if [ -n "$BAD_CI_CHILD_ARG_VALUES" ]; then
+          log_error "ci_child units must define child_args entries as strings:"
+          echo "$BAD_CI_CHILD_ARG_VALUES" >&2
+          exit 1
+        fi
+
+        BAD_CI_CHILD_ENV_OBJECTS="$(${pkgs.jq}/bin/jq -r '
+          [
+            (.units // [])[]
+            | select((.kind // "script") == "ci_child" and ((.child_env // {}) | type != "object"))
+            | .name
+          ] | .[]?
+        ' "$PLAN_FILE")"
+        if [ -n "$BAD_CI_CHILD_ENV_OBJECTS" ]; then
+          log_error "ci_child units must define child_env as an object when set:"
+          echo "$BAD_CI_CHILD_ENV_OBJECTS" >&2
+          exit 1
+        fi
+
         if ! ${pkgs.jq}/bin/jq -e '
           def done_has($done; $name):
             ($done | index($name)) != null;
@@ -213,6 +279,21 @@ let
           unit_field "$unit_name" '.env // {} | to_entries[] | @base64'
         }
 
+        unit_kind() {
+          local unit_name="$1"
+          unit_field "$unit_name" '.kind // "script"'
+        }
+
+        unit_child_env_entries() {
+          local unit_name="$1"
+          unit_field "$unit_name" '.child_env // {} | to_entries[] | @base64'
+        }
+
+        unit_child_arg_entries() {
+          local unit_name="$1"
+          unit_field "$unit_name" '.child_args // [] | .[] | @base64'
+        }
+
         write_unit_script() {
           local unit_name="$1"
           local mode="$2"
@@ -240,7 +321,7 @@ let
           chmod +x "$script_file"
         }
 
-        run_unit_process() {
+        run_script_unit_process() {
           local unit_name="$1"
           local run_script_file=""
           local rc=0
@@ -255,6 +336,111 @@ let
 
           rm -f "$run_script_file"
           return "$rc"
+        }
+
+        run_ci_child_process() {
+          local unit_name="$1"
+          local child_command=""
+          local child_log_file=""
+          local child_log_tail_lines=80
+          local child_args_b64=""
+          local child_env_b64=""
+          local child_arg=""
+          local child_env_key=""
+          local child_env_value=""
+          local started=0
+          local duration=0
+          local rc=0
+          local -a child_args=()
+
+          child_command="$(unit_field "$unit_name" '.child_command // ""')"
+          if [ -z "$child_command" ]; then
+            log_error "ci_child unit missing child_command unit=$unit_name"
+            return 1
+          fi
+
+          child_log_file="$(unit_field "$unit_name" '.child_log_file // ""')"
+          child_log_tail_lines="$(unit_field "$unit_name" '.child_log_tail_lines // 80')"
+          case "$child_log_tail_lines" in
+            *[!0-9]*|"")
+              child_log_tail_lines=80
+              ;;
+          esac
+          if [ "$child_log_tail_lines" -lt 1 ]; then
+            child_log_tail_lines=80
+          fi
+
+          while IFS= read -r child_args_b64; do
+            [ -z "$child_args_b64" ] && continue
+            child_arg="$(printf '%s' "$child_args_b64" | ${pkgs.coreutils}/bin/base64 -d)"
+            child_args+=("$child_arg")
+          done < <(unit_child_arg_entries "$unit_name")
+
+          started="$(${pkgs.coreutils}/bin/date +%s)"
+          set +e
+          (
+            unset CI_ARTIFACTS_DIR CI_ARTIFACTS_BASE CI_ARTIFACTS_LATEST_LINK
+            unset RUN_ID NIXFIED_PLAN_ID NIXFIED_UNIT_ID NIXFIED_UNIT_ATTEMPT
+
+            while IFS= read -r child_env_b64; do
+              [ -z "$child_env_b64" ] && continue
+              child_env_key="$(printf '%s' "$child_env_b64" | ${pkgs.coreutils}/bin/base64 -d | ${pkgs.jq}/bin/jq -r '.key')"
+              child_env_value="$(printf '%s' "$child_env_b64" | ${pkgs.coreutils}/bin/base64 -d | ${pkgs.jq}/bin/jq -r '.value | tostring')"
+              export "$child_env_key=$child_env_value"
+            done < <(unit_child_env_entries "$unit_name")
+
+            if [ -n "$child_log_file" ]; then
+              mkdir -p "$(dirname "$child_log_file")"
+              "$child_command" "''${child_args[@]}" >"$child_log_file" 2>&1
+            else
+              "$child_command" "''${child_args[@]}"
+            fi
+          )
+          rc=$?
+          set -e
+          duration=$(( $(${pkgs.coreutils}/bin/date +%s) - started ))
+          if [ "$duration" -lt 0 ]; then
+            duration=0
+          fi
+
+          if [ "$rc" -eq 0 ]; then
+            log_ok "shard=$unit_name duration=$duration"
+            return 0
+          fi
+
+          if [ -n "$child_log_file" ]; then
+            log_error "shard=$unit_name exit=$rc log=$child_log_file"
+            log_error "shard failure tail shard=$unit_name"
+            if [ -f "$child_log_file" ]; then
+              tail -n "$child_log_tail_lines" "$child_log_file" >&2 || true
+            else
+              log_warn "test log missing path=$child_log_file"
+            fi
+          else
+            log_error "ci_child unit failed unit=$unit_name exit=$rc"
+          fi
+          return "$rc"
+        }
+
+        run_unit_process() {
+          local unit_name="$1"
+          local unit_kind_value=""
+
+          unit_kind_value="$(unit_kind "$unit_name")"
+          case "$unit_kind_value" in
+            script|"")
+              run_script_unit_process "$unit_name"
+              return $?
+              ;;
+            ci_child)
+              run_ci_child_process "$unit_name"
+              return $?
+              ;;
+            *)
+              log_error "unsupported unit kind kind=$unit_kind_value unit=$unit_name"
+              return 1
+              ;;
+          esac
         }
 
         run_cleanup_for_unit() {
