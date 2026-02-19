@@ -290,111 +290,132 @@ let
       fi
     }
 
-    run_parallel_shards() {
-      local shards_dir="$WORKDIR/shards"
-      local failed=0
-      local first_fail_rc=1
-      local have_fail_rc=0
+    write_framework_shard_plan() {
+      local plan_file="$1"
+      local units_file="$WORKDIR/framework-test-units.jsonl"
       local shard_name
+      local selected=0
+      local index=0
+      local unit_token=""
+      local run_script=""
 
-      mkdir -p "$shards_dir"
-
-      local -a active_pids=()
-      declare -A shard_by_pid=()
-      declare -A log_by_pid=()
-      declare -A start_by_pid=()
-
-      remove_active_pid() {
-        local remove_pid="$1"
-        local pid
-        local -a keep=()
-        for pid in "''${active_pids[@]}"; do
-          if [ "$pid" != "$remove_pid" ]; then
-            keep+=("$pid")
-          fi
-        done
-        active_pids=("''${keep[@]}")
-      }
-
-      start_one_shard() {
-        local shard="$1"
-        local log_file="$shards_dir/$shard.log"
-        local pid
-        local started
-
-        started=$(date +%s)
-        "$0" \
-          --profile "$PROFILE" \
-          --jobs 1 \
-          --shard "$shard" \
-          --skip-setup \
-          --skip-teardown >"$log_file" 2>&1 &
-        pid=$!
-
-        active_pids+=("$pid")
-        shard_by_pid["$pid"]="$shard"
-        log_by_pid["$pid"]="$log_file"
-        start_by_pid["$pid"]="$started"
-
-        log_info "shard started name=$shard pid=$pid log=$log_file"
-      }
-
-      wait_one_shard() {
-        local done_pid=""
-        local rc=0
-        local shard=""
-        local log_file=""
-        local started=0
-        local duration=0
-
-        set +e
-        wait -n -p done_pid
-        rc=$?
-        set -e
-
-        if [ -z "$done_pid" ]; then
-          return 0
-        fi
-
-        shard="''${shard_by_pid[$done_pid]:-unknown}"
-        log_file="''${log_by_pid[$done_pid]:-}"
-        started="''${start_by_pid[$done_pid]:-0}"
-        duration=$(( $(date +%s) - started ))
-
-        remove_active_pid "$done_pid"
-        unset "shard_by_pid[$done_pid]" "log_by_pid[$done_pid]" "start_by_pid[$done_pid]"
-
-        if [ "$rc" -eq 0 ]; then
-          log_ok "shard=$shard duration=$duration"
-          return 0
-        fi
-
-        log_error "shard=$shard exit=$rc log=$log_file"
-        log_error "shard failure tail shard=$shard"
-        print_log_tail "$log_file" 80
-        failed=1
-        if [ "$have_fail_rc" -eq 0 ]; then
-          first_fail_rc="$rc"
-          have_fail_rc=1
-        fi
-        return 0
-      }
+      : > "$units_file"
 
       for shard_name in "''${SHARDS[@]}"; do
-        while [ "''${#active_pids[@]}" -ge "$JOBS" ]; do
-          wait_one_shard
-        done
-        start_one_shard "$shard_name"
+        if ! should_run_shard "$shard_name"; then
+          continue
+        fi
+
+        selected=$((selected + 1))
+        index=$((index + 1))
+        unit_token=$(printf '%s' "$shard_name" | tr -- '-.: /' '_____')
+
+    run_script=$(cat <<'EOF'
+    shard_name="__SHARD_NAME__"
+    log_file="$(artifact_path "shard-$shard_name.log")"
+    started=$(date +%s)
+    set +e
+    env -u CI_ARTIFACTS_DIR -u CI_ARTIFACTS_BASE -u CI_ARTIFACTS_LATEST_LINK \
+      -u RUN_ID -u NIXFIED_PLAN_ID -u NIXFIED_UNIT_ID -u NIXFIED_UNIT_ATTEMPT \
+      ${pkgs.bash}/bin/bash "$FRAMEWORK_TEST_SCRIPT" \
+      --profile "$PROFILE" \
+      --jobs 1 \
+      --shard "$shard_name" \
+      --skip-setup \
+      --skip-teardown >"$log_file" 2>&1
+    rc=$?
+    set -e
+    duration=$(( $(date +%s) - started ))
+    if [ "$rc" -eq 0 ]; then
+      log_ok "shard=$shard_name duration=$duration"
+      exit 0
+    fi
+    log_error "shard=$shard_name exit=$rc log=$log_file"
+    log_error "shard failure tail shard=$shard_name"
+    if [ -f "$log_file" ]; then
+      tail -n 80 "$log_file" >&2 || true
+    else
+      log_warn "test log missing path=$log_file"
+    fi
+    exit "$rc"
+    EOF
+        )
+        run_script="''${run_script//__SHARD_NAME__/$shard_name}"
+
+        ${pkgs.jq}/bin/jq -cn \
+          --arg id "unit.framework_test.$index.$unit_token" \
+          --arg name "$shard_name" \
+          --arg description "$shard_name" \
+          --arg run "$run_script" \
+          '
+            {
+              id: $id,
+              name: $name,
+              description: $description,
+              env: {},
+              when: "",
+              cleanup: "",
+              skip_if_missing: [],
+              depends_on: [],
+              locks: [],
+              missing: false,
+              run: $run
+            }
+          ' >> "$units_file"
       done
 
-      while [ "''${#active_pids[@]}" -gt 0 ]; do
-        wait_one_shard
-      done
-
-      if [ "$failed" -ne 0 ]; then
-        return "$first_fail_rc"
+      if [ "$selected" -eq 0 ]; then
+        log_error "no shards selected for execution"
+        return 1
       fi
-      return 0
+
+      ${pkgs.jq}/bin/jq -s \
+        --arg mode "framework-test" \
+        --argjson max_workers "$JOBS" \
+        '
+          {
+            schema_version: 2,
+            mode: $mode,
+            max_workers: $max_workers,
+            units: .
+          }
+        ' "$units_file" > "$plan_file"
+    }
+
+    run_shards_via_ci_plan() {
+      local artifacts_dir="$WORKDIR/.framework-test-artifacts"
+      local plan_file="$artifacts_dir/execution-plan.json"
+      local result_file="$artifacts_dir/execution-result.json"
+      local rc=0
+      local peak_workers=""
+
+      mkdir -p "$artifacts_dir"
+      export CI_ARTIFACTS_DIR="$artifacts_dir"
+      export CI_ARTIFACTS_BASE="$(dirname "$artifacts_dir")"
+      export FRAMEWORK_TEST_SCRIPT="$0"
+      export PROFILE
+
+      if ! write_framework_shard_plan "$plan_file"; then
+        return 1
+      fi
+
+      set +e
+      ${toString lib.runPlan} \
+        --plan-file "$plan_file" \
+        --result-file "$result_file" \
+        --emit-event "${toString lib.emitEvent}" \
+        --context-script "${toString lib.helpersScript}"
+      rc=$?
+      set -e
+
+      if [ -f "$result_file" ]; then
+        peak_workers="$(${pkgs.jq}/bin/jq -r '.timing.parallelism.peak_workers // ""' "$result_file" 2>/dev/null || true)"
+        if [ -n "$peak_workers" ]; then
+          log_info "shard parallelism max_workers=$JOBS peak_workers=$peak_workers"
+        fi
+      fi
+
+      return "$rc"
     }
 
     run_app() {
@@ -610,9 +631,9 @@ let
       assert_contains "$DEV_EMPTY_OUTPUT_MODE_LOG" "env:OUTPUT_MODE cannot be empty when set"
     fi
 
-    if [ -z "$SHARD" ] && [ "$SKIP_SETUP" -ne 1 ] && [ "$SKIP_TEARDOWN" -ne 1 ] && [ "$JOBS" -gt 1 ]; then
-      log "parallel shard execution"
-      if ! run_parallel_shards; then
+    if [ -z "$SHARD" ] && [ "$SKIP_SETUP" -ne 1 ] && [ "$SKIP_TEARDOWN" -ne 1 ]; then
+      log "shard execution via ci primitives"
+      if ! run_shards_via_ci_plan; then
         exit 1
       fi
       if [ "''${FRAMEWORK_ISOLATION:-}" = "1" ]; then
@@ -1023,6 +1044,47 @@ let
     assert_file_exists "$CI_CAP_DIR/.ci-artifacts/cap-three.ok"
     assert_contains "$CI_CAP_DIR/.ci-artifacts/summary.json" '"max_workers": 2'
     assert_contains "$CI_CAP_DIR/.ci-artifacts/summary.json" '"peak_workers": 2'
+
+    CI_CAP_OVR_DIR="$WORKDIR/ci-worker-cap-override"
+    CI_CAP_OVR_LOG="$WORKDIR/ci-worker-cap-override.log"
+    mkdir -p "$CI_CAP_OVR_DIR"
+    set +e
+    (cd "$CI_CAP_OVR_DIR" && CI_ARTIFACTS_DIR=".ci-artifacts" CI_MAX_WORKERS=1 "$CI_SCRIPT" --mode worker-cap > "$CI_CAP_OVR_LOG" 2>&1)
+    RC=$?
+    set -e
+    if [ "$RC" -ne 0 ]; then
+      fail "expected worker-cap mode with CI_MAX_WORKERS override to exit zero"
+    fi
+    assert_file_exists "$CI_CAP_OVR_DIR/.ci-artifacts/cap-one.ok"
+    assert_file_exists "$CI_CAP_OVR_DIR/.ci-artifacts/cap-two.ok"
+    assert_file_exists "$CI_CAP_OVR_DIR/.ci-artifacts/cap-three.ok"
+    assert_contains "$CI_CAP_OVR_DIR/.ci-artifacts/summary.json" '"max_workers": 1'
+    assert_contains "$CI_CAP_OVR_DIR/.ci-artifacts/summary.json" '"peak_workers": 1'
+
+    CI_CAP_ALIAS_DIR="$WORKDIR/ci-worker-cap-alias-override"
+    CI_CAP_ALIAS_LOG="$WORKDIR/ci-worker-cap-alias-override.log"
+    mkdir -p "$CI_CAP_ALIAS_DIR"
+    set +e
+    (cd "$CI_CAP_ALIAS_DIR" && CI_ARTIFACTS_DIR=".ci-artifacts" NIXFIED_CI_MAX_WORKERS=1 "$CI_SCRIPT" --mode worker-cap > "$CI_CAP_ALIAS_LOG" 2>&1)
+    RC=$?
+    set -e
+    if [ "$RC" -ne 0 ]; then
+      fail "expected worker-cap mode with NIXFIED_CI_MAX_WORKERS override to exit zero"
+    fi
+    assert_contains "$CI_CAP_ALIAS_DIR/.ci-artifacts/summary.json" '"max_workers": 1'
+    assert_contains "$CI_CAP_ALIAS_DIR/.ci-artifacts/summary.json" '"peak_workers": 1'
+
+    CI_CAP_BAD_DIR="$WORKDIR/ci-worker-cap-invalid-override"
+    CI_CAP_BAD_LOG="$WORKDIR/ci-worker-cap-invalid-override.log"
+    mkdir -p "$CI_CAP_BAD_DIR"
+    set +e
+    (cd "$CI_CAP_BAD_DIR" && CI_ARTIFACTS_DIR=".ci-artifacts" CI_MAX_WORKERS=0 "$CI_SCRIPT" --mode worker-cap > "$CI_CAP_BAD_LOG" 2>&1)
+    RC=$?
+    set -e
+    if [ "$RC" -eq 0 ]; then
+      fail "expected invalid CI_MAX_WORKERS override to exit non-zero"
+    fi
+    assert_contains "$CI_CAP_BAD_LOG" "CI_MAX_WORKERS must be an integer >= 1"
 
     CI_CANCEL_DIR="$WORKDIR/ci-cancel"
     CI_CANCEL_LOG="$WORKDIR/ci-cancel.log"
