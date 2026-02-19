@@ -887,6 +887,7 @@ in
                         set -euo pipefail
 
                         source_root="${builtins.toString ../.}"
+                        repo_root="${builtins.toString ../../.}"
                         target="."
                         vendor=0
 
@@ -920,6 +921,9 @@ in
                           fi
                           mkdir -p "$target/nixfied"
                           cp -R "$source_root/." "$target/nixfied"
+                          if [ -f "$repo_root/README.md" ]; then
+                            cp "$repo_root/README.md" "$target/nixfied/README.md"
+                          fi
                           chmod -R u+w "$target/nixfied" 2>/dev/null || true
                           rm -rf "$target/nixfied/.git"
                           rm -f "$target/nixfied/result"
