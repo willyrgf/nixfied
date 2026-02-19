@@ -886,6 +886,7 @@ in
           command = ''
                         set -euo pipefail
 
+                        source_root="${builtins.toString ../.}"
                         target="."
                         vendor=0
 
@@ -913,9 +914,15 @@ in
                         mkdir -p "$target"
 
                         if [ "$vendor" -eq 1 ]; then
-                          rm -rf "$target/nixfied"
-                          cp -R . "$target/nixfied"
+                          if [ -e "$target/nixfied" ]; then
+                            chmod -R u+w "$target/nixfied" 2>/dev/null || true
+                            rm -rf "$target/nixfied"
+                          fi
+                          mkdir -p "$target/nixfied"
+                          cp -R "$source_root/." "$target/nixfied"
+                          chmod -R u+w "$target/nixfied" 2>/dev/null || true
                           rm -rf "$target/nixfied/.git"
+                          rm -f "$target/nixfied/result"
                           cat > "$target/flake.nix" <<'NIXFIED_WRAPPER'
             ${vendoredWrapperFlake}
             NIXFIED_WRAPPER
