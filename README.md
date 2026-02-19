@@ -8,6 +8,7 @@ Nixfied is a Nix-first framework for codifying project workflows (dev, test, bui
 
 - [Quick start](#quick-start)
 - [General architecture](#general-architecture)
+- [Detailed architecture and usage guide](#detailed-architecture-and-usage-guide)
 - [Public APIs](#public-apis)
 - [Install and upgrade](#install-and-upgrade)
 - [Configuration model](#configuration-model)
@@ -75,6 +76,12 @@ effective_port = base_port + slot + env_offset
 Slot helpers exported to runtime:
 - `SLOT_INFO`, `SLOT_INFO_JSON`
 - `REQUIRE_SLOT_ENV`, `REQUIRE_SLOT_ENV_JSON`
+
+## Detailed architecture and usage guide
+
+For a maintainer-focused deep dive (architecture internals, contract enforcement, module architecture, and full user playbooks), see:
+
+- `docs/DETAILED.md`
 
 ## Public APIs
 
