@@ -665,6 +665,32 @@ Features:
 - `--bg` delegates to run registry for detached execution
 - `summary.json` artifact per run
 
+Parallel worker limit precedence:
+- Default max workers is `4` when no CI parallel config is set.
+- `ci.parallel.maxWorkers` sets the global default for all modes.
+- `ci.modes.<mode>.parallel.maxWorkers` overrides the global value for that mode.
+- `CI_MAX_WORKERS` (alias `NIXFIED_CI_MAX_WORKERS`) overrides the resolved mode value at run time.
+- If both worker env vars are set they must match; value must be an integer `>= 1`.
+
+Plan and scheduler semantics:
+- Step graph roots from `ci.steps.<name>` definitions, including optional `dependsOn` and `locks`.
+- `ci.modes.<mode>.steps` injects sequential dependencies between listed steps.
+- `ci.modes.<mode>.stages` injects stage barriers: every step in stage `N` depends on all steps in stage `N-1`.
+- Scheduler starts ready units until `max_workers` is reached.
+- A unit is runnable only when all dependencies are `passed`/`skipped` and lock tokens are free.
+- `ci.steps.<name>.locks` enforces mutual exclusion across units sharing a lock token.
+- Lock tokens must match `^[A-Za-z0-9._:-]+$`.
+- First failure triggers fail-fast cancellation for running units, and non-started units are marked `canceled`.
+- If units remain but none are runnable, execution fails as a blocked plan.
+
+Parallel telemetry artifacts:
+- `execution-plan.json` records the resolved unit graph and `max_workers`.
+- `execution-result.json` records per-step statuses plus `timing.parallelism`:
+  - `max_workers`
+  - `peak_workers`
+  - `canceled_count`
+- `summary.json` includes the same `timing.parallelism` fields when plan data is present.
+
 SOURCE:
 - `nixfied/.framework/ci.nix`
 - `nixfied/.framework/lib/execution-core.nix`
@@ -928,7 +954,7 @@ nix run .#process::status -- --all
 Expected result:
 - Background runs are registered and inspectable.
 - CI artifacts include `summary.json`.
-- `CI_MAX_WORKERS` (or alias `NIXFIED_CI_MAX_WORKERS`) overrides run-time max workers (`>= 1`).
+- Max workers resolve in this order: `ci.parallel.maxWorkers` -> `ci.modes.<mode>.parallel.maxWorkers` -> `CI_MAX_WORKERS` (alias `NIXFIED_CI_MAX_WORKERS`) override.
 
 Common failures:
 - Unknown mode: verify `ci.modes` in `nixfied/project/ci.nix`.
