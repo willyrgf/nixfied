@@ -1,0 +1,163 @@
+{
+  pkgs,
+  model,
+  registry,
+}:
+let
+  executor = import ../../nixfied/runner/executor.nix {
+    inherit
+      pkgs
+      model
+      registry
+      ;
+    projectRoot = ../..;
+  };
+in
+pkgs.runCommand "parallel-runner-smoke" { } ''
+  set -euo pipefail
+
+  EXECUTOR="${executor}/bin/nixfied-executor"
+  EVENTS_FILE="$TMPDIR/registry/events.ndjson"
+  export REGISTRY_ROOT="$TMPDIR/registry"
+  mkdir -p "$REGISTRY_ROOT"
+
+  export NIXFIED_WORKFLOW_PARALLEL=1
+  export NIXFIED_PARALLEL_SMOKE=1
+
+  "$EXECUTOR" run-workflow workflow.test.parallel.smoke --summary > "$TMPDIR/smoke.out" 2>&1
+  smoke_run_id="$(${pkgs.gnused}/bin/sed -n 's/^INFO: runId=\([^ ]*\).*/\1/p' "$TMPDIR/smoke.out" | ${pkgs.coreutils}/bin/tail -n 1)"
+  if [ -z "$smoke_run_id" ]; then
+    echo "missing smoke run id"
+    cat "$TMPDIR/smoke.out"
+    exit 1
+  fi
+
+  seq_of() {
+    local run_id="$1"
+    local task_id="$2"
+    local state="$3"
+    ${pkgs.jq}/bin/jq -r --arg runId "$run_id" --arg taskId "$task_id" --arg state "$state" '
+      select(.runId == $runId and .taskId == $taskId and .state == $state) | .seq
+    ' "$EVENTS_FILE" | ${pkgs.coreutils}/bin/head -n 1
+  }
+
+  require_non_empty() {
+    local value="$1"
+    local label="$2"
+    if [ -z "$value" ] || [ "$value" = "null" ]; then
+      echo "missing value for $label"
+      exit 1
+    fi
+  }
+
+  a_running="$(seq_of "$smoke_run_id" "task.test.parallel.sleep-a" "running")"
+  b_running="$(seq_of "$smoke_run_id" "task.test.parallel.sleep-b" "running")"
+  c_running="$(seq_of "$smoke_run_id" "task.test.parallel.sleep-c" "running")"
+  d_running="$(seq_of "$smoke_run_id" "task.test.parallel.sleep-d" "running")"
+  a_passed="$(seq_of "$smoke_run_id" "task.test.parallel.sleep-a" "passed")"
+  b_passed="$(seq_of "$smoke_run_id" "task.test.parallel.sleep-b" "passed")"
+
+  require_non_empty "$a_running" "a_running"
+  require_non_empty "$b_running" "b_running"
+  require_non_empty "$c_running" "c_running"
+  require_non_empty "$d_running" "d_running"
+  require_non_empty "$a_passed" "a_passed"
+  require_non_empty "$b_passed" "b_passed"
+
+  if ! [ "$a_running" -lt "$a_passed" ] || ! [ "$b_running" -lt "$a_passed" ]; then
+    echo "expected units a and b to run before unit a passed"
+    exit 1
+  fi
+
+  if ! [ "$c_running" -gt "$a_passed" ]; then
+    echo "expected unit c to start after unit a passed"
+    exit 1
+  fi
+
+  if ! [ "$d_running" -gt "$b_passed" ]; then
+    echo "expected unit d to start after unit b passed due to lock"
+    exit 1
+  fi
+
+  skip_reason="$(${pkgs.jq}/bin/jq -r --arg runId "$smoke_run_id" '
+    select(.runId == $runId and .taskId == "task.test.parallel.skip" and .state == "canceled") | .detail.reason
+  ' "$EVENTS_FILE" | ${pkgs.coreutils}/bin/head -n 1)"
+  if [ "$skip_reason" != "when-false" ]; then
+    echo "expected skip task to be canceled with when-false reason"
+    exit 1
+  fi
+
+  max_running="$(${pkgs.jq}/bin/jq -s -r --arg runId "$smoke_run_id" '
+    map(select(.runId == $runId and (.taskId // "") != "")) |
+    sort_by(.seq) |
+    reduce .[] as $event ({running: 0, max: 0};
+      if $event.state == "running" then
+        .running += 1 |
+        .max = (if .running > .max then .running else .max end)
+      elif ($event.state == "passed" or $event.state == "failed" or $event.state == "canceled") then
+        .running = (if .running > 0 then .running - 1 else 0 end)
+      else
+        .
+      end
+    ) | .max
+  ' "$EVENTS_FILE")"
+  if ! [ "$max_running" -le 2 ]; then
+    echo "expected max running tasks <= 2, got $max_running"
+    exit 1
+  fi
+
+  set +e
+  "$EXECUTOR" run-workflow workflow.test.parallel.failfast --summary > "$TMPDIR/failfast.out" 2>&1
+  failfast_rc="$?"
+  set -e
+  if [ "$failfast_rc" -eq 0 ]; then
+    echo "expected failfast workflow to fail"
+    cat "$TMPDIR/failfast.out"
+    exit 1
+  fi
+
+  failfast_run_id="$(${pkgs.gnused}/bin/sed -n 's/^INFO: runId=\([^ ]*\).*/\1/p' "$TMPDIR/failfast.out" | ${pkgs.coreutils}/bin/tail -n 1)"
+  if [ -z "$failfast_run_id" ]; then
+    echo "missing failfast run id"
+    cat "$TMPDIR/failfast.out"
+    exit 1
+  fi
+
+  fail_state="$(seq_of "$failfast_run_id" "task.test.parallel.fail" "failed")"
+  require_non_empty "$fail_state" "fail_state"
+
+  slow_a_reason="$(${pkgs.jq}/bin/jq -r --arg runId "$failfast_run_id" '
+    select(.runId == $runId and .taskId == "task.test.parallel.slow-a" and .state == "canceled") | .detail.reason
+  ' "$EVENTS_FILE" | ${pkgs.coreutils}/bin/head -n 1)"
+  slow_b_reason="$(${pkgs.jq}/bin/jq -r --arg runId "$failfast_run_id" '
+    select(.runId == $runId and .taskId == "task.test.parallel.slow-b" and .state == "canceled") | .detail.reason
+  ' "$EVENTS_FILE" | ${pkgs.coreutils}/bin/head -n 1)"
+  after_reason="$(${pkgs.jq}/bin/jq -r --arg runId "$failfast_run_id" '
+    select(.runId == $runId and .taskId == "task.test.parallel.sleep-c" and .state == "canceled") | .detail.reason
+  ' "$EVENTS_FILE" | ${pkgs.coreutils}/bin/head -n 1)"
+
+  if [ "$slow_a_reason" != "fail-fast-running" ]; then
+    echo "expected slow-a to be canceled as fail-fast-running"
+    exit 1
+  fi
+
+  if [ "$slow_b_reason" != "fail-fast-running" ]; then
+    echo "expected slow-b to be canceled as fail-fast-running"
+    exit 1
+  fi
+
+  if [ "$after_reason" != "fail-fast" ]; then
+    echo "expected dependent after unit to be canceled with fail-fast reason"
+    exit 1
+  fi
+
+  after_running_count="$(${pkgs.jq}/bin/jq -r --arg runId "$failfast_run_id" '
+    select(.runId == $runId and .taskId == "task.test.parallel.sleep-c" and .state == "running") | .seq
+  ' "$EVENTS_FILE" | ${pkgs.gnugrep}/bin/grep -c '^[0-9]' || true)"
+  if [ "$after_running_count" -ne 0 ]; then
+    echo "expected dependent after unit to never enter running state"
+    exit 1
+  fi
+
+  echo "OK: parallel workflow scheduler behavior is validated" > "$out"
+''

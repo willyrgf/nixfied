@@ -17,9 +17,12 @@ Core apps:
 Dispatcher:
   run-task <task-id> [-- ...]
   run-workflow <workflow-id> [-- ...]
+  run-workflow-parallel <workflow-id> [-- ...]
 
 Workflows:
   workflow.ci.app - App CI workflow
   workflow.ci.basic - Basic CI workflow
   workflow.ci.env - Environment CI workflow
   workflow.ci.full - Full CI workflow
+  workflow.test.parallel.failfast - Parallel runner fail-fast workflow
+  workflow.test.parallel.smoke - Parallel runner smoke workflow

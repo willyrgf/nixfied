@@ -485,6 +485,156 @@ in
             ui.app.expose = false;
           };
 
+        test-parallel-sleep-a =
+          mkCommandTask {
+            id = "task.test.parallel.sleep-a";
+            appName = "test-parallel-sleep-a";
+            kind = "internal";
+            summary = "Parallel smoke unit A";
+            description = "Sleeps for 1 second for workflow scheduler validation.";
+            runtimeInputs = commonRuntimeInputs;
+            command = ''
+              set -euo pipefail
+              echo "INFO: parallel smoke sleep-a start"
+              sleep 1
+              echo "OK: parallel smoke sleep-a done"
+            '';
+          }
+          // {
+            ui.app.expose = false;
+          };
+
+        test-parallel-sleep-b =
+          mkCommandTask {
+            id = "task.test.parallel.sleep-b";
+            appName = "test-parallel-sleep-b";
+            kind = "internal";
+            summary = "Parallel smoke unit B";
+            description = "Sleeps for 1 second for workflow scheduler validation.";
+            runtimeInputs = commonRuntimeInputs;
+            command = ''
+              set -euo pipefail
+              echo "INFO: parallel smoke sleep-b start"
+              sleep 1
+              echo "OK: parallel smoke sleep-b done"
+            '';
+          }
+          // {
+            ui.app.expose = false;
+          };
+
+        test-parallel-sleep-c =
+          mkCommandTask {
+            id = "task.test.parallel.sleep-c";
+            appName = "test-parallel-sleep-c";
+            kind = "internal";
+            summary = "Parallel smoke dependent unit";
+            description = "Sleeps for 1 second and depends on unit A in smoke workflow.";
+            runtimeInputs = commonRuntimeInputs;
+            command = ''
+              set -euo pipefail
+              echo "INFO: parallel smoke sleep-c start"
+              sleep 1
+              echo "OK: parallel smoke sleep-c done"
+            '';
+          }
+          // {
+            ui.app.expose = false;
+          };
+
+        test-parallel-sleep-d =
+          mkCommandTask {
+            id = "task.test.parallel.sleep-d";
+            appName = "test-parallel-sleep-d";
+            kind = "internal";
+            summary = "Parallel smoke lock unit";
+            description = "Sleeps for 1 second and shares lock with unit B.";
+            runtimeInputs = commonRuntimeInputs;
+            command = ''
+              set -euo pipefail
+              echo "INFO: parallel smoke sleep-d start"
+              sleep 1
+              echo "OK: parallel smoke sleep-d done"
+            '';
+          }
+          // {
+            ui.app.expose = false;
+          };
+
+        test-parallel-skip =
+          mkCommandTask {
+            id = "task.test.parallel.skip";
+            appName = "test-parallel-skip";
+            kind = "internal";
+            summary = "Parallel smoke when-skip unit";
+            description = "No-op task canceled by when.envPresent in smoke workflow.";
+            runtimeInputs = commonRuntimeInputs;
+            command = ''
+              set -euo pipefail
+              echo "WARN: parallel smoke skip task should not run"
+            '';
+          }
+          // {
+            ui.app.expose = false;
+          };
+
+        test-parallel-fail =
+          mkCommandTask {
+            id = "task.test.parallel.fail";
+            appName = "test-parallel-fail";
+            kind = "internal";
+            summary = "Parallel fail-fast trigger";
+            description = "Fails intentionally for fail-fast workflow validation.";
+            runtimeInputs = commonRuntimeInputs;
+            command = ''
+              set -euo pipefail
+              echo "ERROR: intentional fail-fast trigger"
+              sleep 1
+              exit 7
+            '';
+          }
+          // {
+            ui.app.expose = false;
+          };
+
+        test-parallel-slow-a =
+          mkCommandTask {
+            id = "task.test.parallel.slow-a";
+            appName = "test-parallel-slow-a";
+            kind = "internal";
+            summary = "Parallel fail-fast slow unit A";
+            description = "Long-running unit that should be canceled by fail-fast.";
+            runtimeInputs = commonRuntimeInputs;
+            command = ''
+              set -euo pipefail
+              echo "INFO: fail-fast slow-a start"
+              sleep 10
+              echo "OK: fail-fast slow-a done"
+            '';
+          }
+          // {
+            ui.app.expose = false;
+          };
+
+        test-parallel-slow-b =
+          mkCommandTask {
+            id = "task.test.parallel.slow-b";
+            appName = "test-parallel-slow-b";
+            kind = "internal";
+            summary = "Parallel fail-fast slow unit B";
+            description = "Long-running unit that should be canceled by fail-fast.";
+            runtimeInputs = commonRuntimeInputs;
+            command = ''
+              set -euo pipefail
+              echo "INFO: fail-fast slow-b start"
+              sleep 10
+              echo "OK: fail-fast slow-b done"
+            '';
+          }
+          // {
+            ui.app.expose = false;
+          };
+
         framework-test = mkCommandTask {
           id = "task.framework.test";
           appName = "framework::test";
@@ -1135,6 +1285,152 @@ in
               "task.ci.nginx-proxy"
             ]
           ];
+          setup.tasks = [ ];
+          teardown = {
+            tasks = [ ];
+            alwaysRun = true;
+          };
+          artifacts = {
+            root = "/tmp/ci-artifacts";
+            keepOnSuccess = false;
+            keepOnFailure = true;
+            writeSummary = true;
+          };
+          execution = {
+            failFast = true;
+            lockPolicy = "exclusive";
+            emitRegistryEvents = true;
+          };
+        };
+
+        test-parallel-smoke = {
+          id = "workflow.test.parallel.smoke";
+          summary = "Parallel runner smoke workflow";
+          description = "Validates worker cap, dependency gating, locks, and when behavior.";
+          mode = "custom";
+          maxWorkers = 2;
+          units = {
+            alpha = {
+              taskId = "task.test.parallel.sleep-a";
+              needs = [ ];
+              locks = [ ];
+              when = {
+                envEquals = { };
+                envPresent = [ "NIXFIED_PARALLEL_SMOKE" ];
+              };
+              skipIfMissingEnv = [ ];
+            };
+            beta = {
+              taskId = "task.test.parallel.sleep-b";
+              needs = [ ];
+              locks = [ "smoke-lock" ];
+              when = {
+                envEquals = {
+                  NIXFIED_PARALLEL_SMOKE = "1";
+                };
+                envPresent = [ ];
+              };
+              skipIfMissingEnv = [ ];
+            };
+            gamma = {
+              taskId = "task.test.parallel.sleep-c";
+              needs = [ "alpha" ];
+              locks = [ ];
+              when = {
+                envEquals = { };
+                envPresent = [ ];
+              };
+              skipIfMissingEnv = [ ];
+            };
+            delta = {
+              taskId = "task.test.parallel.sleep-d";
+              needs = [ ];
+              locks = [ "smoke-lock" ];
+              when = {
+                envEquals = { };
+                envPresent = [ "NIXFIED_PARALLEL_SMOKE" ];
+              };
+              skipIfMissingEnv = [ ];
+            };
+            skip = {
+              taskId = "task.test.parallel.skip";
+              needs = [ ];
+              locks = [ ];
+              when = {
+                envEquals = { };
+                envPresent = [ "NIXFIED_PARALLEL_SKIP" ];
+              };
+              skipIfMissingEnv = [ ];
+            };
+          };
+          stages = [ ];
+          setup.tasks = [ ];
+          teardown = {
+            tasks = [ ];
+            alwaysRun = true;
+          };
+          artifacts = {
+            root = "/tmp/ci-artifacts";
+            keepOnSuccess = false;
+            keepOnFailure = true;
+            writeSummary = true;
+          };
+          execution = {
+            failFast = true;
+            lockPolicy = "exclusive";
+            emitRegistryEvents = true;
+          };
+        };
+
+        test-parallel-failfast = {
+          id = "workflow.test.parallel.failfast";
+          summary = "Parallel runner fail-fast workflow";
+          description = "Validates fail-fast cancellation of running and pending units.";
+          mode = "custom";
+          maxWorkers = 3;
+          units = {
+            fail = {
+              taskId = "task.test.parallel.fail";
+              needs = [ ];
+              locks = [ ];
+              when = {
+                envEquals = { };
+                envPresent = [ ];
+              };
+              skipIfMissingEnv = [ ];
+            };
+            slow-a = {
+              taskId = "task.test.parallel.slow-a";
+              needs = [ ];
+              locks = [ ];
+              when = {
+                envEquals = { };
+                envPresent = [ ];
+              };
+              skipIfMissingEnv = [ ];
+            };
+            slow-b = {
+              taskId = "task.test.parallel.slow-b";
+              needs = [ ];
+              locks = [ ];
+              when = {
+                envEquals = { };
+                envPresent = [ ];
+              };
+              skipIfMissingEnv = [ ];
+            };
+            after = {
+              taskId = "task.test.parallel.sleep-c";
+              needs = [ "slow-a" ];
+              locks = [ ];
+              when = {
+                envEquals = { };
+                envPresent = [ ];
+              };
+              skipIfMissingEnv = [ ];
+            };
+          };
+          stages = [ ];
           setup.tasks = [ ];
           teardown = {
             tasks = [ ];
