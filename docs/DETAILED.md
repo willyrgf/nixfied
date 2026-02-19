@@ -1,10 +1,10 @@
 # Detailed Architecture
 
-## Model
+## Model Contract
 
-`nixfiedModel` is compiled from typed modules and is the only source for generated views.
+`nixfiedModel` is compiled from typed modules and is the canonical source for generated command and view surfaces.
 
-Top-level shape:
+Top-level structure:
 
 - `schema`
 - `identity`
@@ -15,9 +15,9 @@ Top-level shape:
 - `views`
 - `state`
 
-## Compiler Passes
+## Compilation Passes
 
-Pass order:
+Deterministic pass order:
 
 1. `resolve-modules`
 2. `normalize-runtime`
@@ -27,57 +27,110 @@ Pass order:
 6. `compile-views`
 7. `finalize-model`
 
-Each pass is pure and deterministic.
+The compiled state hash is `sha256(toCanonicalNix(model))`.
 
-## Determinism
+## Canonicalization Rules
 
-- Canonical rendering is Nix-native (`toCanonicalNix`), not JSON.
+- Canonical rendering is Nix-native (`toCanonicalNix`), not JSON-first.
 - Attrset keys are recursively sorted.
 - List ordering is preserved.
 - Function values are rejected in canonicalized subtrees.
-- `stateHash` is the SHA-256 digest of canonical model rendering.
 
-## Runtime Boundary
+## Runtime and Dispatch
 
-Executor guarantees:
+Execution is model-backed through dispatcher apps:
+
+- `nix run .#run-task -- <task-id> [-- ...]`
+- `nix run .#run-workflow -- <workflow-id> [-- ...]`
+
+Executor behavior:
 
 - deterministic env initialization
 - hermetic `PATH` from declared `runtimeInputs`
-- deterministic defaults (`LANG`, `LC_ALL`, `TZ`, `umask`)
-- model-backed task and workflow dispatch only
+- deterministic defaults (`locale`, `timezone`, `umask`, workdir policy)
+- runtime variable support for `NIX_ENV` and `PROJECT_ENV`
 
-## Registry
+## Core App Surfaces
 
-Event log location:
+Exposed core apps:
+
+- `build`
+- `check`
+- `check-ports`
+- `ci`
+- `dev`
+- `format`
+- `framework::install`
+- `framework::test`
+- `ports`
+- `test`
+- `test-isolation`
+- `validate-env`
+
+Introspection apps:
+
+- `model`
+- `stateHash`
+- `tasks`
+- `task::<id>`
+- `schema`
+
+## Workflow Shape
+
+CI modes are represented as separate workflow IDs:
+
+- `workflow.ci.basic`
+- `workflow.ci.app`
+- `workflow.ci.env`
+- `workflow.ci.full`
+
+Internal CI step tasks (for workflow composition) include:
+
+- `task.ci.quality`
+- `task.ci.tests`
+- `task.ci.system-quick`
+- `task.ci.nginx-proxy`
+
+Only top-level user app surfaces are exposed in help output.
+
+## Operations Utilities
+
+Operations tasks are model-derived from runtime/env configuration:
+
+- `validate-env`
+- `ports`
+- `check-ports`
+- `test-isolation`
+
+Port calculation is based on:
+
+`base_port + env_offset + (slot * stride)`
+
+## Registry Contract
+
+Event log path:
 
 - `$REGISTRY_ROOT/events.ndjson`
 
-Rules:
+Log rules:
 
 - one compact JSON object per line
 - newline-delimited and newline-terminated
 - append-only writes
-- stable key order
+- stable key ordering
 - monotonic contiguous `seq`
 - RFC3339 UTC `ts`
 
-Run IDs are deterministic and include collision suffixing policy (`-cNNN`) for active-run conflicts.
+Run IDs are deterministic and support collision suffixing (`-cNNN`) for active-run conflicts.
 
-## Flake Surfaces
+## Framework Validation
 
-Introspection:
+`framework::test` provides deterministic shard execution:
 
-- `.#model`
-- `.#stateHash`
-- `.#tasks`
-- `.#task::<id>`
-- `.#schema`
+- `flake-check`
+- `help`
+- `workflow-test`
+- `workflow-ci`
+- `isolation`
 
-Dispatcher:
-
-- `.#run-task`
-- `.#run-workflow`
-
-## Testing
-
-Determinism gates live in `tests/framework/` and are published via `flake checks`.
+Determinism and contract checks live under `tests/framework/` and are exposed via flake checks.

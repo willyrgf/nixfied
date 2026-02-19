@@ -1,6 +1,6 @@
 # Reth Module Notes
 
-## Configure in `conf.nix`
+## Configure in `nixfied/project/conf.nix`
 
 ```nix
 modules.reth = {
@@ -8,10 +8,23 @@ modules.reth = {
   portKeyHttp = "rethHttp";
   portKeyWs = "rethWs";
   portKeyAuth = "rethAuth";
+  dataDirName = "reth";
+  network = "local";
+  devMode = true;
+  extraArgs = [ ];
 };
 ```
 
-## Command surface
+## Relevant Port Keys
 
-No dedicated Reth command namespace is currently exposed as a standalone app surface.
-Use `nix run .#help` to see the current model-generated commands.
+- `portKeyHttp` maps to `ports.rethHttp`.
+- `portKeyWs` maps to `ports.rethWs`.
+- `portKeyAuth` maps to `ports.rethAuth`.
+
+## Command Surface
+
+No dedicated Reth app namespace is exposed. Use model-generated operations:
+
+- `nix run .#validate-env`
+- `nix run .#ports`
+- `nix run .#check-ports`

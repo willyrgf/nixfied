@@ -1,16 +1,28 @@
 # MinIO Module Notes
 
-## Configure in `conf.nix`
+## Configure in `nixfied/project/conf.nix`
 
 ```nix
 modules.minio = {
   enable = true;
   portKeyApi = "minioApi";
   portKeyConsole = "minioConsole";
+  dataDirName = "minio";
+  rootUser = "minioadmin";
+  rootPassword = "minioadmin";
+  browser = true;
 };
 ```
 
-## Command surface
+## Relevant Port Keys
 
-No dedicated MinIO command namespace is currently exposed as a standalone app surface.
-Use `nix run .#help` to see the current model-generated commands.
+- `portKeyApi` maps to `ports.minioApi`.
+- `portKeyConsole` maps to `ports.minioConsole`.
+
+## Command Surface
+
+No dedicated MinIO app namespace is exposed. Use model-generated operations:
+
+- `nix run .#validate-env`
+- `nix run .#ports`
+- `nix run .#check-ports`

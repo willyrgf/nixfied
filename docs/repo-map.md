@@ -29,6 +29,11 @@ Generated from `docs/repo-index.json`.
 - `test-isolation` from `nixfied/project/module.nix`
 - `validate-env` from `nixfied/project/module.nix`
 
+## Dispatcher and Introspection
+- `run-task -- <task-id> [-- ...]` from `nixfied/runner/dispatcher.nix`
+- `run-workflow -- <workflow-id> [-- ...]` from `nixfied/runner/dispatcher.nix`
+- `model`, `stateHash`, `tasks`, `task::<id>`, `schema` from `nixfied/lib/mkNixfied.nix`
+
 ## Sensitive Zones
 - `nixfied/.framework` - Framework install internals and workspace marker handling. (checks: nix run .#help)
 - `nixfied/project/module.nix` - Primary task/workflow/app surface. (checks: nix run .#help, nix run .#framework::test, nix run .#ci -- --summary)

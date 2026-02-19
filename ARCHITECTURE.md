@@ -1,12 +1,15 @@
 # Architecture
 
-Nixfied is a model-first framework. Typed Nix modules compile into `nixfiedModel`, and command/help/docs surfaces are generated views of that model.
+Nixfied is a model-first framework.
 
-## Pipeline
+Typed Nix modules compile into a canonical `nixfiedModel`, and runtime interfaces (help text, app surfaces, and workflows) are generated from that model.
 
-`modules -> resolved config -> compiler passes -> nixfiedModel -> stateHash + apps + docs`
+## Model Pipeline
 
-Compiler passes:
+`modules -> resolved config -> compiler passes -> nixfiedModel -> stateHash + apps + introspection`
+
+Compiler pass order:
+
 1. `resolve-modules`
 2. `normalize-runtime`
 3. `compile-services`
@@ -15,33 +18,66 @@ Compiler passes:
 6. `compile-views`
 7. `finalize-model`
 
-## Core Directories
+Each pass is pure and deterministic.
 
-- `nixfied/project/`: project-owned config (`conf.nix`, `module.nix`).
-- `nixfied/modules/`: typed option definitions.
-- `nixfied/compiler/`: deterministic model compilation passes.
-- `nixfied/runner/`: dispatcher and executor runtime.
-- `nixfied/registry/`: strict NDJSON event store, snapshot, replay.
-- `nixfied/lib/`: canonical rendering and `mkNixfied` entrypoint.
+## Runtime Structure
 
-## Runtime Contract
+Task/workflow execution uses a single dispatcher boundary:
 
-- Single dispatcher surfaces: `run-task` and `run-workflow`.
-- Hermetic task boundary with deterministic defaults (`LANG`, `LC_ALL`, `TZ`, `umask`, `cwd` policy).
-- Stable, prefix-based CLI output (`INFO:`, `WARN:`, `ERROR:`, `OK:`, `SKIP:`).
-- Deterministic scheduling and lock arbitration.
+- `run-task <task-id> [-- ...]`
+- `run-workflow <workflow-id> [-- ...]`
 
-## Flake Surfaces
+Execution contracts:
 
-- User-facing workflows/apps: `help`, `dev`, `test`, `build`, `check`, `format`, `ci`, `validate-env`, `test-isolation`, `ports`, `check-ports`, `framework::test`, `framework::install`.
-- Introspection apps: `model`, `stateHash`, `tasks`, `task::<id>`, `schema`.
+- Hermetic runtime inputs for each task.
+- Deterministic defaults for locale, timezone, umask, and workdir policy.
+- Stable CLI prefixes (`INFO:`, `WARN:`, `ERROR:`, `OK:`, `SKIP:`).
+- Deterministic scheduling and lock behavior.
+
+## Generated App Surfaces
+
+Core model-generated apps:
+
+- `build`
+- `check`
+- `check-ports`
+- `ci`
+- `dev`
+- `format`
+- `framework::install`
+- `framework::test`
+- `ports`
+- `test`
+- `test-isolation`
+- `validate-env`
+
+Introspection apps:
+
+- `model`
+- `stateHash`
+- `tasks`
+- `task::<id>`
+- `schema`
+
+## Project Layout
+
+- `flake.nix`: top-level flake entrypoint.
+- `nixfied/project/`: project configuration and task/workflow definitions.
+- `nixfied/modules/`: typed option modules.
+- `nixfied/compiler/`: model compilation passes.
+- `nixfied/runner/`: dispatcher and executor apps.
+- `nixfied/registry/`: NDJSON event log, replay, and snapshot logic.
+- `nixfied/lib/`: canonical renderer and `mkNixfied`.
+- `tests/framework/`: deterministic framework gates and snapshots.
 
 ## Determinism Gates
 
-Authoritative checks are in `tests/framework/` and include:
+Authoritative checks in `tests/framework/` include:
+
 - model hash stability
 - cross-machine hash stability
 - scheduler order determinism
 - help snapshot contract
 - registry replay/events contract
-- executor and env-sandbox contracts
+- executor/env-sandbox contracts
+- log prefix contract

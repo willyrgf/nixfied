@@ -1,16 +1,37 @@
 # Postgres Module Notes
 
-## Configure in `conf.nix`
+## Configure in `nixfied/project/conf.nix`
 
 ```nix
 modules.postgres = {
   enable = true;
   database = "app";
+  testDatabase = "app_test";
+  extensions = [ ];
   portKey = "postgres";
+  dataDirName = "postgres";
+  extraConfig = "";
+  envConfigs = {
+    dev = { };
+    test = { };
+    prod = { };
+  };
+  migrations = {
+    dir = "migrations";
+    command = "";
+    sourceDatabase = null;
+  };
 };
 ```
 
-## Command surface
+## Relevant Port Keys
 
-No dedicated Postgres command namespace is currently exposed as a standalone app surface.
-Use `nix run .#help` to see the current model-generated commands.
+- `portKey = "postgres"` maps to `ports.postgres` in `conf.nix`.
+
+## Command Surface
+
+No dedicated Postgres app namespace is exposed. Use model-generated commands:
+
+- `nix run .#validate-env`
+- `nix run .#ports`
+- `nix run .#check-ports`

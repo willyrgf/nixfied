@@ -2,7 +2,7 @@
 
 Nixfied is a model-driven Nix framework.
 
-The canonical source of truth is `nixfiedModel`, compiled from typed modules and exposed through stable flake interfaces.
+The canonical source of truth is `nixfiedModel`, compiled from typed modules and exposed through stable flake app surfaces.
 
 ## Quick Start
 
@@ -10,28 +10,32 @@ The canonical source of truth is `nixfiedModel`, compiled from typed modules and
 nix run .#help
 nix run .#dev
 nix run .#test
-nix run .#ci -- --mode full --summary
+nix run .#ci -- --summary
 ```
 
-## Documentation
+## Core Commands
 
-- `ARCHITECTURE.md` - High-level architecture reference.
-- `docs/DETAILED.md` - Detailed model/runtime/registry contracts.
-- `REDESIGN.md` - Redesign and migration context.
+Model-generated app surfaces:
 
-## Core Architecture
+- `nix run .#build`
+- `nix run .#check`
+- `nix run .#check-ports`
+- `nix run .#ci`
+- `nix run .#dev`
+- `nix run .#format`
+- `nix run .#framework::install`
+- `nix run .#framework::test`
+- `nix run .#ports`
+- `nix run .#test`
+- `nix run .#test-isolation`
+- `nix run .#validate-env`
 
-- Module system: `lib.evalModules` with typed options (`nixfied/modules/*.nix`).
-- Compiler pipeline: explicit passes (`nixfied/compiler/*.nix`).
-- Canonical hashing: `stateHash = sha256(toCanonicalNix(model))`.
-- Runner: single dispatcher with:
-  - `run-task <task-id> [-- ...]`
-  - `run-workflow <workflow-id> [-- ...]`
-- Registry: strict NDJSON event log and deterministic replay.
+Dispatcher surfaces:
 
-## Stable Flake Interfaces
+- `nix run .#run-task -- <task-id> [-- ...]`
+- `nix run .#run-workflow -- <workflow-id> [-- ...]`
 
-Introspection outputs:
+Introspection surfaces:
 
 - `nix run .#model`
 - `nix run .#stateHash`
@@ -39,16 +43,39 @@ Introspection outputs:
 - `nix run .#task::<id>`
 - `nix run .#schema`
 
-Operational outputs:
+## Configuration Surface
 
-- `nix run .#validate-env`
-- `nix run .#test-isolation`
-- `nix run .#ports`
-- `nix run .#check-ports`
+Primary edit points:
+
+- `nixfied/project/conf.nix` for project identity, envs, ports, and module settings.
+- `nixfied/project/module.nix` for task/workflow modeling and exposed app names.
+- `nixfied/modules/` for typed module options.
+
+Environment defaults:
+
+- `NIX_ENV=0`
+- `PROJECT_ENV=dev`
+
+## Architecture Summary
+
+- Modules: `lib.evalModules` + typed options from `nixfied/modules/*.nix`.
+- Compiler: deterministic pass pipeline in `nixfied/compiler/*.nix`.
+- Hashing: `stateHash = sha256(toCanonicalNix(model))`.
+- Runner: single dispatcher for task/workflow execution.
+- Registry: append-only NDJSON event stream with replay support.
+
+## Docs
+
+- `ARCHITECTURE.md` for high-level architecture.
+- `docs/DETAILED.md` for model, runtime, workflow, and registry contracts.
+- `REDESIGN.md` for redesign and migration context.
+- `docs/repo-map.md` for a repository-oriented index.
+- `docs/modules/README.md` for module-specific configuration notes.
+- `tests/framework/README.md` for deterministic framework validation.
 
 ## API
 
-`nixfied.lib.mkNixfied` is the primary entrypoint:
+Primary library entrypoint:
 
 ```nix
 nixfied.lib.mkNixfied {
@@ -56,10 +83,11 @@ nixfied.lib.mkNixfied {
   projectRoot = ./.;
   projectModules = [ ./nixfied/project/module.nix ];
   extraModules = [ ];
+  localOverrides = [ ];
 }
 ```
 
-Return shape:
+Returned attributes:
 
 ```nix
 {
@@ -74,19 +102,12 @@ Return shape:
 }
 ```
 
-## Schemas
+## Output Contract
 
-Published external schemas:
+User-facing shell task output should be plain ASCII and prefix-based:
 
-- `nixfied/schemas/task-contract.json`
-- `nixfied/schemas/workflow-contract.json`
-- `nixfied/schemas/model-export.json`
-
-## Installer
-
-- `nix run .#framework::install` creates a thin wrapper flake.
-- `nix run .#framework::install -- --vendor` creates a vendored wrapper layout.
-
-## Determinism Gates
-
-See `tests/framework/` for model hash, scheduler order, help snapshot, and registry replay gates.
+- `INFO:`
+- `WARN:`
+- `ERROR:`
+- `OK:`
+- `SKIP:`

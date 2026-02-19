@@ -1,16 +1,24 @@
 # Module Documentation
 
-These pages track module configuration notes only.
+These pages document module configuration knobs in `nixfied/project/conf.nix`.
 
-Current command surfaces are model-generated from `nixfied/project/module.nix` and do not expose dedicated module app namespaces.
-Use `nix run .#help` for the live command list.
+The current framework surface does not expose dedicated module command namespaces. Module behavior is consumed through shared tasks/workflows and model-derived operations.
 
-## Configuration source
+Use `nix run .#help` for the live app list.
 
-- `nixfied/project/conf.nix` controls module enablement and module-specific port keys.
-- Runtime validation for env/slot settings is provided by `nix run .#validate-env`.
+## Configuration Source of Truth
 
-## Module pages
+- Module enablement and defaults: `nixfied/project/conf.nix`
+- Service option schemas: `nixfied/modules/services/*.nix`
+- Project task/workflow wiring: `nixfied/project/module.nix`
+
+## Operational Validation
+
+- `nix run .#validate-env` checks slot/env constraints.
+- `nix run .#ports` prints computed per-slot/per-env ports.
+- `nix run .#check-ports` reports current listener status.
+
+## Module Pages
 
 - `docs/modules/postgres.md`
 - `docs/modules/nginx.md`
