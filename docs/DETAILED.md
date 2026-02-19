@@ -655,8 +655,9 @@ CI generator:
 
 High-level model:
 - Validate CI schema from project config.
-- Build mode plans from `ci.modes` and `ci.steps`.
-- Execute plan units (via execution core), collect results and summary.
+- Build mode plans from `ci.modes` using either sequential `steps` or staged `stages`.
+- Execute plan units via execution core with dependency ordering, worker caps, lock-aware scheduling, and fail-fast cancellation.
+- Collect execution results and write summary artifacts.
 
 Features:
 - `--mode <name>` or `--<mode>`

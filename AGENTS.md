@@ -15,7 +15,7 @@
 Use the flake apps; they are the primary interface:
 - `nix run .#help` - list available commands.
 - `nix run .#dev` - run the dev workflow (placeholder unless customized).
-- `nix run .#test` - run tests (placeholder unless customized).
+- `nix run .#test` - run tests (delegates to `nix run .#ci -- --mode full --summary` by default).
 - `nix run .#build` - build/prod workflow (placeholder unless customized).
 - `nix run .#check` - quality checks.
 - `nix run .#ci` - CI pipeline runner; add `-- --summary` for a concise report.

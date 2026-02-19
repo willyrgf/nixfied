@@ -29,7 +29,8 @@ nix run .#ci
 nix run .#format
 ```
 
-Template defaults are placeholders for `dev`, `test`, and `build`.
+Template defaults are placeholders for `dev` and `build`.
+By default, `test` delegates to the CI pipeline (`nix run .#ci -- --mode full --summary`).
 
 ## General architecture
 
@@ -307,7 +308,9 @@ nix run .#ci -- --bg
 ```
 
 Highlights:
-- Modes and steps are defined declaratively (`ci.modes`, `ci.steps`).
+- CI modes can be declared as sequential `steps` or staged groups (`stages`).
+- Parallel execution supports global/mode worker caps and per-step locks
+  (`ci.parallel.maxWorkers`, `ci.modes.<mode>.parallel.maxWorkers`, `ci.steps.<name>.locks`).
 - `summary.json` is produced per run in CI artifacts.
 - `--bg` uses the run registry for detached execution.
 
