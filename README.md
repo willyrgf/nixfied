@@ -307,6 +307,21 @@ nix run .#ci -- --mode app
 nix run .#ci -- --bg
 ```
 
+Runtime env overrides:
+
+- `CI_ARTIFACTS_DIR`: set explicit artifact output directory.
+- `CI_ARTIFACTS_BASE`: set artifact root directory (absolute path).
+- `CI_MAX_WORKERS`: override run-time CI parallel worker cap (`>= 1`).
+- `NIXFIED_CI_MAX_WORKERS`: alias for `CI_MAX_WORKERS`.
+  When both are set they must match.
+
+Examples:
+
+```bash
+CI_MAX_WORKERS=3 nix run .#ci -- --mode full --summary
+NIXFIED_CI_MAX_WORKERS=2 nix run .#ci -- --mode basic
+```
+
 Highlights:
 - CI modes can be declared as sequential `steps` or staged groups (`stages`).
 - Parallel execution supports global/mode worker caps and per-step locks

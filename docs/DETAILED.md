@@ -919,6 +919,7 @@ Commands:
 ```bash
 nix run .#ci -- --summary
 nix run .#ci -- --mode app
+CI_MAX_WORKERS=3 nix run .#ci -- --mode app --summary
 nix run .#ci -- --bg
 nix run .#process::runs
 nix run .#process::status -- --all
@@ -927,10 +928,13 @@ nix run .#process::status -- --all
 Expected result:
 - Background runs are registered and inspectable.
 - CI artifacts include `summary.json`.
+- `CI_MAX_WORKERS` (or alias `NIXFIED_CI_MAX_WORKERS`) overrides run-time max workers (`>= 1`).
 
 Common failures:
 - Unknown mode: verify `ci.modes` in `nixfied/project/ci.nix`.
 - Stale or stuck runs: use `process::inspect` and `process::stop`.
+- Worker override errors: unset empty values, ensure integer `>= 1`, and if both
+  `CI_MAX_WORKERS` and `NIXFIED_CI_MAX_WORKERS` are set they must match.
 
 ### Playbook 7: Isolation and Parallel Safety Validation
 

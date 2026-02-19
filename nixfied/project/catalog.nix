@@ -172,6 +172,10 @@ in
         name = "CI_ARTIFACTS_BASE";
         description = "Override artifacts root directory (absolute path).";
       }
+      {
+        name = "CI_MAX_WORKERS";
+        description = "Override max parallel workers for this run (integer >= 1). Alias: NIXFIED_CI_MAX_WORKERS.";
+      }
     ];
     contractEnv = [
       (env.string {
@@ -180,6 +184,12 @@ in
       (env.typed {
         name = "CI_ARTIFACTS_BASE";
         type = "pathAbs";
+      })
+      (env.typed {
+        name = "CI_MAX_WORKERS";
+        type = "int";
+        min = 1;
+        aliases = [ "NIXFIED_CI_MAX_WORKERS" ];
       })
     ];
     failureCodes = failureProfiles.script;

@@ -464,6 +464,10 @@ let
                         write_ci_plan() {
                           local plan_file="$1"
                           local mode_plan_json=""
+                          local max_workers_override=""
+                          local max_workers_alias=""
+                          local max_workers_canonical_set=0
+                          local max_workers_alias_set=0
                           local unit_count=0
                           local plan_canonical=""
                           local plan_id=""
@@ -473,6 +477,48 @@ let
                           if [ "$mode_plan_json" = "null" ] || [ -z "$mode_plan_json" ]; then
                             echo "Unknown CI mode: $CI_MODE" >&2
                             return 1
+                          fi
+
+                          if [ "''${CI_MAX_WORKERS+x}" = "x" ]; then
+                            max_workers_canonical_set=1
+                            max_workers_override="''${CI_MAX_WORKERS}"
+                            if [ -z "$max_workers_override" ]; then
+                              log_error "CI_MAX_WORKERS cannot be empty when set"
+                              return 1
+                            fi
+                          fi
+                          if [ "''${NIXFIED_CI_MAX_WORKERS+x}" = "x" ]; then
+                            max_workers_alias_set=1
+                            max_workers_alias="''${NIXFIED_CI_MAX_WORKERS}"
+                            if [ -z "$max_workers_alias" ]; then
+                              log_error "NIXFIED_CI_MAX_WORKERS cannot be empty when set"
+                              return 1
+                            fi
+                            if [ "$max_workers_canonical_set" -eq 0 ]; then
+                              max_workers_override="$max_workers_alias"
+                            elif [ "$max_workers_override" != "$max_workers_alias" ]; then
+                              log_error "CI_MAX_WORKERS and NIXFIED_CI_MAX_WORKERS must match when both are set"
+                              return 1
+                            fi
+                          fi
+                          if [ -n "$max_workers_override" ]; then
+                            case "$max_workers_override" in
+                              *[!0-9]*)
+                                log_error "CI_MAX_WORKERS must be an integer >= 1 (got '$max_workers_override')"
+                                return 1
+                                ;;
+                            esac
+                            if [ "$max_workers_override" -lt 1 ]; then
+                              log_error "CI_MAX_WORKERS must be an integer >= 1 (got '$max_workers_override')"
+                              return 1
+                            fi
+                            if ! mode_plan_json="$(
+                              printf '%s\n' "$mode_plan_json" \
+                                | ${pkgs.jq}/bin/jq -c --arg max_workers "$max_workers_override" '.max_workers = ($max_workers | tonumber)'
+                            )"; then
+                              log_error "invalid CI_MAX_WORKERS override value=$max_workers_override"
+                              return 1
+                            fi
                           fi
 
                           printf '%s\n' "$mode_plan_json" > "$plan_file"
@@ -669,12 +715,22 @@ let
         name = "CI_ARTIFACTS_BASE";
         description = "Override artifacts root; must be absolute path.";
       }
+      {
+        name = "CI_MAX_WORKERS";
+        description = "Override max parallel workers for this run (integer >= 1). Alias: NIXFIED_CI_MAX_WORKERS.";
+      }
     ];
     contractEnv = [
       (lib.appApi.env.string { name = "CI_ARTIFACTS_DIR"; })
       (lib.appApi.env.typed {
         name = "CI_ARTIFACTS_BASE";
         type = "pathAbs";
+      })
+      (lib.appApi.env.typed {
+        name = "CI_MAX_WORKERS";
+        type = "int";
+        min = 1;
+        aliases = [ "NIXFIED_CI_MAX_WORKERS" ];
       })
     ];
     failureCodes = lib.appApi.failureProfiles.script;
