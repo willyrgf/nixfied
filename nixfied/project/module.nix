@@ -35,6 +35,8 @@ let
       usage ? [ ],
       examples ? [ ],
       runtimeInputs ? commonRuntimeInputs,
+      preHooks ? { },
+      postHooks ? { },
       workflowId ? null,
       contractArgs ? [ ],
     }:
@@ -107,6 +109,8 @@ let
         umask = "022";
         locale = "C.UTF-8";
         timezone = "UTC";
+        preHooks = preHooks;
+        postHooks = postHooks;
       };
 
       scheduling = {
@@ -289,10 +293,18 @@ in
           runtimeInputs = commonRuntimeInputs ++ [
             nixFormatterPkg
           ];
+          postHooks = {
+            "framework.nixfmt" = {
+              command = lib.mkDefault ''
+                set -euo pipefail
+                find . -name '*.nix' -print0 | xargs -0 nixfmt --
+                echo "OK: formatted nix files"
+              '';
+            };
+          };
           command = ''
             set -euo pipefail
-            find . -name '*.nix' -print0 | xargs -0 nixfmt --
-            echo "OK: formatted nix files"
+            echo "INFO: running format task"
           '';
         };
 

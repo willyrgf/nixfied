@@ -50,6 +50,8 @@ Deterministic checks live in `tests/framework/` and run via `nix flake check pat
 - `env-sandbox-contract`
 - `registry-events-contract`
 - `log-prefix-contract`
+- `parallel-runner-smoke`
+- `task-hooks-smoke`
 
 ## Output contract
 

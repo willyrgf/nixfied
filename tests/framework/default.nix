@@ -78,4 +78,12 @@
       registry
       ;
   };
+
+  "task-hooks-smoke" = import ./task-hooks-smoke.nix {
+    inherit
+      pkgs
+      model
+      registry
+      ;
+  };
 }

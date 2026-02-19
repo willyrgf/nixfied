@@ -11,6 +11,11 @@ assert pkgs.lib.hasInfix "INFO: runId=$run_id passed=$passed failed=$failed canc
 assert pkgs.lib.hasInfix "run_workflow_parallel_impl()" source;
 assert pkgs.lib.hasInfix "wait -n -p done_pid" source;
 assert pkgs.lib.hasInfix "NIXFIED_WORKFLOW_PARALLEL" source;
+assert pkgs.lib.hasInfix "run_task_hooks() {" source;
+assert pkgs.lib.hasInfix "INFO: hook $phase $hook_id start" source;
+assert pkgs.lib.hasInfix "ERROR: hook $phase $hook_id failed exitCode=$hook_exit_code" source;
+assert pkgs.lib.hasInfix "defines runtime hooks but runner type '$runner_type' is unsupported"
+  source;
 pkgs.runCommand "executor-contract" { } ''
   echo "OK: executor contract markers are stable" > "$out"
 ''

@@ -1,0 +1,285 @@
+{
+  pkgs,
+  model,
+  registry,
+}:
+let
+  baseTask = model.tasks."task.check";
+
+  mkShellTask =
+    {
+      id,
+      command,
+      preHooks ? { },
+      postHooks ? { },
+    }:
+    baseTask
+    // {
+      inherit id;
+      summary = id;
+      description = id;
+      runner = {
+        type = "shell";
+        command = command;
+        package = null;
+        workflowId = null;
+      };
+      runtime = baseTask.runtime // {
+        workdir = "stateRoot";
+        customWorkdir = null;
+        preHooks = preHooks;
+        postHooks = postHooks;
+      };
+      ui = baseTask.ui // {
+        app = baseTask.ui.app // {
+          expose = false;
+          name = builtins.replaceStrings [ "." ] [ "-" ] id;
+        };
+      };
+    };
+
+  hooksModel = model // {
+    tasks = model.tasks // {
+      "task.test.hooks.order" = mkShellTask {
+        id = "task.test.hooks.order";
+        command = ''
+          set -euo pipefail
+          echo "main" >> "./order.log"
+        '';
+        preHooks = {
+          "01.first" = {
+            command = ''
+              set -euo pipefail
+              echo "pre-1" >> "./order.log"
+            '';
+          };
+          "02.second" = {
+            command = ''
+              set -euo pipefail
+              echo "pre-2" >> "./order.log"
+            '';
+          };
+        };
+        postHooks = {
+          "10.final" = {
+            command = ''
+              set -euo pipefail
+              echo "post" >> "./order.log"
+            '';
+          };
+        };
+      };
+
+      "task.test.hooks.main-fails" = mkShellTask {
+        id = "task.test.hooks.main-fails";
+        command = ''
+          set -euo pipefail
+          echo "main-fail" >> "./main-fails.log"
+          exit 9
+        '';
+        postHooks = {
+          "after.main" = {
+            command = ''
+              set -euo pipefail
+              echo "post-after-main-fail" >> "./main-fails.log"
+            '';
+          };
+        };
+      };
+
+      "task.test.hooks.post-fails" = mkShellTask {
+        id = "task.test.hooks.post-fails";
+        command = ''
+          set -euo pipefail
+          echo "main-ok" >> "./post-fails.log"
+        '';
+        postHooks = {
+          "broken.post" = {
+            command = ''
+              set -euo pipefail
+              echo "post-fail" >> "./post-fails.log"
+              exit 17
+            '';
+          };
+        };
+      };
+
+      "task.test.hooks.pre-fails" = mkShellTask {
+        id = "task.test.hooks.pre-fails";
+        command = ''
+          set -euo pipefail
+          echo "main-should-not-run" >> "./pre-fails.log"
+        '';
+        preHooks = {
+          "broken.pre" = {
+            command = ''
+              set -euo pipefail
+              echo "pre-fail" >> "./pre-fails.log"
+              exit 13
+            '';
+          };
+        };
+        postHooks = {
+          "should.not.run" = {
+            command = ''
+              set -euo pipefail
+              echo "post-should-not-run" >> "./pre-fails.log"
+            '';
+          };
+        };
+      };
+
+      "task.test.hooks.unsupported-runner" =
+        baseTask
+        // {
+          id = "task.test.hooks.unsupported-runner";
+          summary = "hooks unsupported runner";
+          description = "hooks unsupported runner";
+          runner = {
+            type = "workflowRef";
+            command = "";
+            package = null;
+            workflowId = "workflow.ci.full";
+          };
+          runtime = baseTask.runtime // {
+            preHooks = {
+              "pre.hook" = {
+                command = ''
+                  set -euo pipefail
+                  echo "should-not-run"
+                '';
+              };
+            };
+            postHooks = { };
+          };
+          ui = baseTask.ui // {
+            app = baseTask.ui.app // {
+              expose = false;
+              name = "task-test-hooks-unsupported-runner";
+            };
+          };
+        };
+    };
+  };
+
+  executor = import ../../nixfied/runner/executor.nix {
+    inherit
+      pkgs
+      registry
+      ;
+    model = hooksModel;
+    projectRoot = ../..;
+  };
+
+  frameworkLib = import ../../nixfied/lib {
+    inherit pkgs;
+    system = pkgs.system;
+  };
+
+  overrideCompiled = frameworkLib.mkNixfied {
+    projectRoot = ../..;
+    projectModules = [ ../../nixfied/project/module.nix ];
+    extraModules = [
+      {
+        nixfied.tasks.format.runtime.postHooks."framework.nixfmt".command = "echo overridden-hook";
+      }
+    ];
+    localOverrides = [ ];
+  };
+in
+assert overrideCompiled.model.tasks."task.format".runtime.postHooks."framework.nixfmt".command
+  == "echo overridden-hook";
+pkgs.runCommand "task-hooks-smoke" { } ''
+  set -euo pipefail
+
+  EXECUTOR="${executor}/bin/nixfied-executor"
+  export REGISTRY_ROOT="$TMPDIR/registry"
+  mkdir -p "$REGISTRY_ROOT"
+
+  "$EXECUTOR" run-task task.test.hooks.order > "$TMPDIR/order.out" 2>&1
+  cat > "$TMPDIR/order.expected" <<'EOF'
+pre-1
+pre-2
+main
+post
+EOF
+  if ! ${pkgs.diffutils}/bin/diff -u "$TMPDIR/order.expected" "$REGISTRY_ROOT/order.log"; then
+    echo "unexpected hook execution order"
+    cat "$TMPDIR/order.out"
+    exit 1
+  fi
+
+  set +e
+  "$EXECUTOR" run-task task.test.hooks.main-fails > "$TMPDIR/main-fails.out" 2>&1
+  main_fails_rc="$?"
+  set -e
+  if [ "$main_fails_rc" -ne 9 ]; then
+    echo "expected main-fails rc=9, got $main_fails_rc"
+    cat "$TMPDIR/main-fails.out"
+    exit 1
+  fi
+  cat > "$TMPDIR/main-fails.expected" <<'EOF'
+main-fail
+post-after-main-fail
+EOF
+  if ! ${pkgs.diffutils}/bin/diff -u "$TMPDIR/main-fails.expected" "$REGISTRY_ROOT/main-fails.log"; then
+    echo "post hook did not run after main failure"
+    cat "$TMPDIR/main-fails.out"
+    exit 1
+  fi
+
+  set +e
+  "$EXECUTOR" run-task task.test.hooks.post-fails > "$TMPDIR/post-fails.out" 2>&1
+  post_fails_rc="$?"
+  set -e
+  if [ "$post_fails_rc" -ne 17 ]; then
+    echo "expected post-fails rc=17, got $post_fails_rc"
+    cat "$TMPDIR/post-fails.out"
+    exit 1
+  fi
+  if ! ${pkgs.gnugrep}/bin/grep -q "^main-ok$" "$REGISTRY_ROOT/post-fails.log"; then
+    echo "main command did not run for post-fails task"
+    cat "$TMPDIR/post-fails.out"
+    exit 1
+  fi
+  if ! ${pkgs.gnugrep}/bin/grep -q "^post-fail$" "$REGISTRY_ROOT/post-fails.log"; then
+    echo "post command did not run for post-fails task"
+    cat "$TMPDIR/post-fails.out"
+    exit 1
+  fi
+
+  set +e
+  "$EXECUTOR" run-task task.test.hooks.pre-fails > "$TMPDIR/pre-fails.out" 2>&1
+  pre_fails_rc="$?"
+  set -e
+  if [ "$pre_fails_rc" -ne 13 ]; then
+    echo "expected pre-fails rc=13, got $pre_fails_rc"
+    cat "$TMPDIR/pre-fails.out"
+    exit 1
+  fi
+  cat > "$TMPDIR/pre-fails.expected" <<'EOF'
+pre-fail
+EOF
+  if ! ${pkgs.diffutils}/bin/diff -u "$TMPDIR/pre-fails.expected" "$REGISTRY_ROOT/pre-fails.log"; then
+    echo "main/post should not run after pre hook failure"
+    cat "$TMPDIR/pre-fails.out"
+    exit 1
+  fi
+
+  set +e
+  "$EXECUTOR" run-task task.test.hooks.unsupported-runner > "$TMPDIR/unsupported.out" 2>&1
+  unsupported_rc="$?"
+  set -e
+  if [ "$unsupported_rc" -ne 3 ]; then
+    echo "expected unsupported-runner rc=3, got $unsupported_rc"
+    cat "$TMPDIR/unsupported.out"
+    exit 1
+  fi
+  if ! ${pkgs.gnugrep}/bin/grep -q "defines runtime hooks but runner type 'workflowRef' is unsupported" "$TMPDIR/unsupported.out"; then
+    echo "missing unsupported runner error"
+    cat "$TMPDIR/unsupported.out"
+    exit 1
+  fi
+
+  echo "OK: task hooks behavior is validated" > "$out"
+''
