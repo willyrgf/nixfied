@@ -16,6 +16,7 @@ let
     "basic"
     "app"
     "env"
+    "full"
   ];
   modeFlagDocs = map (mode: {
     name = "--${mode}";
@@ -44,18 +45,32 @@ in
     message = "Dev command placeholder. Edit nixfied/project/dev.nix to run your app.";
   };
 
-  test = mkPlaceholderCommand {
+  test = mkCommand {
+    class = "batch-runner";
     name = "test";
     description = "Run tests";
     details = ''
-      Runs the project's test workflow.
+      Runs tests through the shared CI staged pipeline definition.
 
-      Customize this command in nixfied/project/test.nix (start required services, run hooks, execute your test runner).
+      This keeps local test orchestration aligned with CI step contracts and lock behavior.
     '';
-    examples = [ "NIX_ENV=0 nix run .#test" ];
-    envDefault = "test";
-    includeSlot = true;
-    message = "Test command placeholder. Edit nixfied/project/test.nix.";
+    usage = [
+      "nix run .#test"
+      "NIX_ENV=0 nix run .#test"
+    ];
+    examples = [ "nix run .#test" ];
+    envDocs = [
+      (commandLib.mkEnvDocProjectEnv "test")
+      commandLib.mkEnvDocSlot
+    ];
+    env = {
+      "${project.envVar}" = "test";
+    };
+    idempotent = false;
+    script = ''
+      set -euo pipefail
+      nix run .#ci -- --mode full --summary
+    '';
   };
 
   build = mkPlaceholderCommand {
@@ -192,6 +207,9 @@ in
       keepOnFailure = true;
       keepOnSuccess = false;
     };
+    parallel = {
+      maxWorkers = 4;
+    };
     modes = {
       basic = {
         steps = [
@@ -212,6 +230,21 @@ in
           "tests"
           "system-quick"
           "nginx-proxy"
+        ];
+      };
+      full = {
+        parallel = {
+          maxWorkers = 2;
+        };
+        stages = [
+          [
+            "quality"
+            "tests"
+          ]
+          [
+            "system-quick"
+            "nginx-proxy"
+          ]
         ];
       };
     };
