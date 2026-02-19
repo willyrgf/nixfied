@@ -3,7 +3,7 @@
   registry,
 }:
 let
-  source = builtins.readFile ../../../nixfied/registry/events.nix;
+  source = builtins.readFile ../../nixfied/registry/events.nix;
   snapshot = registry.snapshot.fromEvents [
     {
       taskId = "task.ci.quality";
@@ -35,6 +35,6 @@ assert pkgs.lib.hasInfix "events.ndjson" source;
 assert pkgs.lib.hasInfix "date -u +\"%Y-%m-%dT%H:%M:%SZ\"" source;
 assert pkgs.lib.hasInfix "schemaVersion: $schemaVersion" source;
 assert pkgs.lib.hasInfix "workflowId: $workflowId" source;
-pkgs.runCommand "v2-registry-events-contract" { } ''
+pkgs.runCommand "registry-events-contract" { } ''
   echo "OK: registry event contracts are stable" > "$out"
 ''

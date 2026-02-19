@@ -1,6 +1,6 @@
-# Framework Tests (v2)
+# Framework Tests
 
-This directory documents the v2-native framework test surface.
+This directory documents the native framework test surface.
 
 ## Primary command
 
@@ -18,7 +18,7 @@ nix run path:.#framework::test
 
 ## Behavior
 
-`framework::test` is a first-class v2 task defined in `nixfied/project/module.nix`.
+`framework::test` is a first-class task defined in `nixfied/project/module.nix`.
 It runs deterministic validation shards with stable log prefixes.
 
 Available shards:
@@ -39,17 +39,17 @@ nix run .#framework::test -- --summary-json /tmp/framework-test-summary.json
 
 ## Flake checks (canonical)
 
-Deterministic v2 checks live in `tests/framework/v2/` and run via `nix flake check path:.`:
-- `v2-model-hash`
-- `v2-cross-machine-hash`
-- `v2-scheduler-order`
-- `v2-help-snapshot`
-- `v2-registry-replay`
-- `v2-compiler-validation`
-- `v2-executor-contract`
-- `v2-env-sandbox-contract`
-- `v2-registry-events-contract`
-- `v2-log-prefix-contract`
+Deterministic checks live in `tests/framework/` and run via `nix flake check path:.`:
+- `model-hash`
+- `cross-machine-hash`
+- `scheduler-order`
+- `help-snapshot`
+- `registry-replay`
+- `compiler-validation`
+- `executor-contract`
+- `env-sandbox-contract`
+- `registry-events-contract`
+- `log-prefix-contract`
 
 ## Output contract
 

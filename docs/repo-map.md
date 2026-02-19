@@ -6,9 +6,9 @@ Generated from `docs/repo-index.json`.
 - `docs/repo-index.json` - Canonical deterministic repository index.
 - `docs/repo-map.md` - LLM-facing repository map generated from docs/repo-index.json.
 - `README.md` - Primary repository overview and command entrypoints.
-- `docs/DETAILED.md` - Detailed v2 model architecture and contracts.
-- `ARCHITECTURE.md` - High-level v2 architecture reference.
-- `REDESIGN.md` - v2 redesign and migration context.
+- `docs/DETAILED.md` - Detailed model architecture and contracts.
+- `ARCHITECTURE.md` - High-level architecture reference.
+- `REDESIGN.md` - Redesign and migration context.
 - `AGENTS.md` - Agent instructions and collaboration constraints.
 - `CLAUDE.md` - Additional assistant guidance for this repository.
 
@@ -31,7 +31,7 @@ Generated from `docs/repo-index.json`.
 
 ## Sensitive Zones
 - `nixfied/.framework` - Framework install internals and workspace marker handling. (checks: nix run .#help)
-- `nixfied/project/module.nix` - Primary v2 task/workflow/app surface. (checks: nix run .#help, nix run .#framework::test, nix run .#ci -- --summary)
+- `nixfied/project/module.nix` - Primary task/workflow/app surface. (checks: nix run .#help, nix run .#framework::test, nix run .#ci -- --summary)
 - `nixfied/project/conf.nix` - Project identity, env names, and port contract. (checks: nix run .#validate-env, nix run .#ci -- --summary)
 
 ## Canonical Commands

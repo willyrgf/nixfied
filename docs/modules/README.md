@@ -1,8 +1,8 @@
-# Module Documentation (v2)
+# Module Documentation
 
 These pages track module configuration notes only.
 
-Current v2 command surfaces are model-generated from `nixfied/project/module.nix` and do not expose dedicated module app namespaces.
+Current command surfaces are model-generated from `nixfied/project/module.nix` and do not expose dedicated module app namespaces.
 Use `nix run .#help` for the live command list.
 
 ## Configuration source

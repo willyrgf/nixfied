@@ -31,7 +31,7 @@ let
     }
     {
       path = "nixfied/project/module.nix";
-      risk = "Primary v2 command/task/workflow surface.";
+      risk = "Primary command/task/workflow surface.";
       required_checks = [
         "nix run .#help"
         "nix run .#framework::test"

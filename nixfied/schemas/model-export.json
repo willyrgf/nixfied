@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://nixfied.dev/schemas/model-export-v1.json",
-  "title": "Nixfied Model Export v1",
+  "$id": "https://nixfied.dev/schemas/model-export.json",
+  "title": "Nixfied Model Export",
   "type": "object",
   "required": [
     "schema",
@@ -19,7 +19,7 @@
       "required": [ "kind", "version" ],
       "properties": {
         "kind": { "const": "nixfied-model" },
-        "version": { "const": 2 }
+        "version": { "const": 1 }
       }
     },
     "identity": { "type": "object" },

@@ -61,9 +61,9 @@ let
 
   docsLines =
     [
-      "# Nixfied v2 Detailed Model"
+      "# Nixfied Detailed Model"
       ""
-      "This document is generated from nixfiedModel.v2."
+      "This document is generated from nixfiedModel."
       ""
       "## Runtime"
       ""

@@ -22,19 +22,19 @@
     },
     {
       "path": "docs/DETAILED.md",
-      "purpose": "Detailed v2 model architecture and contracts.",
+      "purpose": "Detailed model architecture and contracts.",
       "priority": 2,
       "exists": true
     },
     {
       "path": "ARCHITECTURE.md",
-      "purpose": "High-level v2 architecture reference.",
+      "purpose": "High-level architecture reference.",
       "priority": 3,
       "exists": true
     },
     {
       "path": "REDESIGN.md",
-      "purpose": "v2 redesign and migration context.",
+      "purpose": "Redesign and migration context.",
       "priority": 4,
       "exists": true
     },
@@ -68,7 +68,7 @@
     },
     {
       "path": "nixfied/project/module.nix",
-      "risk": "Primary v2 task/workflow/app surface.",
+      "risk": "Primary task/workflow/app surface.",
       "required_checks": [
         "nix run .#help",
         "nix run .#framework::test",

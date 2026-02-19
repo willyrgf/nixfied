@@ -1,5 +1,5 @@
 {
-  description = "Nixfied framework (model-first v2 architecture)";
+  description = "Nixfied framework (model-first architecture)";
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs?ref=nixos-unstable";
@@ -36,7 +36,7 @@
             localOverrides = [ ];
           };
 
-          v2Checks = import ./tests/framework/v2 {
+          frameworkChecks = import ./tests/framework {
             inherit
               pkgs
               ;
@@ -54,7 +54,7 @@
         {
           apps = compiled.apps;
           packages = compiled.packages;
-          checks = compiled.checks // v2Checks;
+          checks = compiled.checks // frameworkChecks;
           devShells = compiled.devShells;
         };
     in
@@ -93,9 +93,9 @@
       nixfied = {
         modules = import ./nixfied/modules;
         schemas = {
-          task = ./nixfied/schemas/task-contract-v1.json;
-          workflow = ./nixfied/schemas/workflow-contract-v1.json;
-          model = ./nixfied/schemas/model-export-v1.json;
+          task = ./nixfied/schemas/task-contract.json;
+          workflow = ./nixfied/schemas/workflow-contract.json;
+          model = ./nixfied/schemas/model-export.json;
         };
       };
     };

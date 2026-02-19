@@ -188,7 +188,7 @@ in
             env = {
               schemaRef = lib.mkOption {
                 type = t.str;
-                default = "runtimePrimitives.v1";
+                default = "runtimePrimitives";
               };
               extra = lib.mkOption {
                 type = t.listOf envSpec;

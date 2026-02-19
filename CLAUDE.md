@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-Nixfied is a model-first v2 framework. Typed Nix modules are compiled into `nixfiedModel.v2`, and command/help/docs views are generated from that model.
+Nixfied is a model-first framework. Typed Nix modules are compiled into `nixfiedModel`, and command/help/docs views are generated from that model.
 
 ## Build and Development Commands
 
@@ -58,7 +58,7 @@ nix run .#framework::test -- --shard help
 nix flake check path:.
 ```
 
-Primary deterministic checks live in `tests/framework/v2/` and include model hash, scheduler order, help snapshot, registry replay, and runtime contract gates.
+Primary deterministic checks live in `tests/framework/` and include model hash, scheduler order, help snapshot, registry replay, and runtime contract gates.
 
 ## Architecture
 
@@ -90,7 +90,7 @@ flake.nix
 
 ### Model Pipeline
 
-`modules -> resolved config -> compile-* passes -> finalize-model -> nixfiedModel.v2 -> generated views/apps`
+`modules -> resolved config -> compile-* passes -> finalize-model -> nixfiedModel -> generated views/apps`
 
 Compiler passes are in `nixfied/compiler/`:
 - `resolve-modules`

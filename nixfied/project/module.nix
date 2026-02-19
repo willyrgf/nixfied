@@ -66,7 +66,7 @@ let
             spec = contractArgs;
           };
           env = {
-            schemaRef = "runtimePrimitives.v1";
+            schemaRef = "runtimePrimitives";
             extra = [ ];
           };
         };
@@ -484,9 +484,9 @@ in
           id = "task.framework.test";
           appName = "framework::test";
           kind = "utility";
-          summary = "Run framework validation in the v2 model";
+          summary = "Run framework validation in the model";
           description = ''
-            Runs deterministic v2 validation shards.
+            Runs deterministic validation shards.
           '';
           runtimeInputs = [
             pkgs.bash

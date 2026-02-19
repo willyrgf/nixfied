@@ -1,6 +1,6 @@
 { pkgs }:
 let
-  source = builtins.readFile ../../../nixfied/runner/env-sandbox.nix;
+  source = builtins.readFile ../../nixfied/runner/env-sandbox.nix;
 in
 assert pkgs.lib.hasInfix "run_in_sandbox() {" source;
 assert pkgs.lib.hasInfix "ERROR: task runtime.workdir=custom but customWorkdir is empty" source;
@@ -10,6 +10,6 @@ assert pkgs.lib.hasInfix
   source;
 assert pkgs.lib.hasInfix ".runtime.passThroughEnv[]?" source;
 assert pkgs.lib.hasInfix ".runtime.env | to_entries[]?" source;
-pkgs.runCommand "v2-env-sandbox-contract" { } ''
+pkgs.runCommand "env-sandbox-contract" { } ''
   echo "OK: sandbox contract markers are stable" > "$out"
 ''

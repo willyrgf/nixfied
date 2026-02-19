@@ -59,9 +59,9 @@ let
     ) taskIds
   );
 
-  taskSchema = builtins.fromJSON (builtins.readFile ../schemas/task-contract-v1.json);
-  workflowSchema = builtins.fromJSON (builtins.readFile ../schemas/workflow-contract-v1.json);
-  modelSchema = builtins.fromJSON (builtins.readFile ../schemas/model-export-v1.json);
+  taskSchema = builtins.fromJSON (builtins.readFile ../schemas/task-contract.json);
+  workflowSchema = builtins.fromJSON (builtins.readFile ../schemas/workflow-contract.json);
+  modelSchema = builtins.fromJSON (builtins.readFile ../schemas/model-export.json);
 
   schemaBundle = builtins.toJSON {
     task = taskSchema;
@@ -73,9 +73,9 @@ let
 
   schemaDir = pkgs.runCommand "nixfied-schemas" { } ''
     mkdir -p "$out"
-    cp ${../schemas/task-contract-v1.json} "$out/task-contract-v1.json"
-    cp ${../schemas/workflow-contract-v1.json} "$out/workflow-contract-v1.json"
-    cp ${../schemas/model-export-v1.json} "$out/model-export-v1.json"
+    cp ${../schemas/task-contract.json} "$out/task-contract.json"
+    cp ${../schemas/workflow-contract.json} "$out/workflow-contract.json"
+    cp ${../schemas/model-export.json} "$out/model-export.json"
   '';
 
   mkApp =
@@ -154,7 +154,7 @@ NIXFIED_TASKS
         ln -s ${apps.default.program} "$out/bin/default"
       '';
 
-      model = pkgs.writeText "nixfied-model-v2.nix" "${modelCanonical}\n";
+      model = pkgs.writeText "nixfied-model.nix" "${modelCanonical}\n";
       stateHash = pkgs.writeText "nixfied-state-hash.txt" "${compiled.stateHash}\n";
       tasks = pkgs.writeText "nixfied-tasks.txt" "${tasksTable}\n";
       schema = schemaDir;

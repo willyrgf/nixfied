@@ -23,6 +23,6 @@ let
 in
 assert snapshot."task:task.dev" == "passed";
 assert snapshot."workflow:workflow.ci.full" == "passed";
-pkgs.runCommand "v2-registry-replay" { } ''
+pkgs.runCommand "registry-replay" { } ''
   echo "OK: registry replay snapshot is deterministic" > "$out"
 ''

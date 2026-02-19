@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://nixfied.dev/schemas/task-contract-v1.json",
-  "title": "Nixfied Task Contract v1",
+  "$id": "https://nixfied.dev/schemas/task-contract.json",
+  "title": "Nixfied Task Contract",
   "type": "object",
   "required": [
     "id",

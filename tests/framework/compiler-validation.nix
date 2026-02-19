@@ -29,6 +29,6 @@ assert frameworkTask.runner.type == "shell";
 assert frameworkTask.ui.app.name == "framework::test";
 assert tasksHaveStableIds;
 assert workflowsReferenceKnownTasks;
-pkgs.runCommand "v2-compiler-validation" { } ''
+pkgs.runCommand "compiler-validation" { } ''
   echo "OK: compiler task and workflow contracts are stable" > "$out"
 ''

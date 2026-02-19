@@ -13,12 +13,12 @@
 - `flake.nix`: flake entry points for apps, modules, and dev shells.
 - `nixfied/project/`: project config and command model (`conf.nix`, `module.nix`).
 - `nixfied/modules/`: typed module options (`core`, `runtime`, `tasks`, `workflows`, `operations`, `services/*`).
-- `nixfied/compiler/`: explicit compiler passes that build `nixfiedModel.v2`.
+- `nixfied/compiler/`: explicit compiler passes that build `nixfiedModel`.
 - `nixfied/runner/`: dispatcher/executor runtime apps.
 - `nixfied/registry/`: strict NDJSON event store, snapshot, replay.
 - `nixfied/install/`: thin-wrapper/vendoring installer helpers.
 - `nixfied/.framework/internal/`: framework install internals and `.workspace` marker handling.
-- `tests/framework/`: framework v2 checks and test docs.
+- `tests/framework/`: framework checks and test docs.
 
 ## Commands
 - `nix run .#help`: list available commands.
@@ -40,14 +40,14 @@
 - Format Nix: `find . -name '*.nix' -print0 | xargs -0 nixfmt --`.
 - Common checks: `nix flake check && nix flake show && nix run .#help`.
 - Framework tests: `nix run .#framework::test` or `nix run path:.#framework::test`.
-- Prefer deterministic checks in `tests/framework/v2/` and keep help snapshots current.
+- Prefer deterministic checks in `tests/framework/` and keep help snapshots current.
 - Keep commits small, imperative, and lowercase (for example, `expand framework test coverage`).
 - PRs should include intent, affected commands/modules, test notes, and config rationale when `nixfied/project/` changes.
 
 ## Configuration
 - Main project config: `nixfied/project/conf.nix`.
 - Task/workflow and app behavior: `nixfied/project/module.nix` (`config.nixfied.tasks`, `config.nixfied.workflows`).
-- If exposing a new app, set `ui.app.expose = true` and keep `tests/framework/v2/snapshots/help.txt` current.
+- If exposing a new app, set `ui.app.expose = true` and keep `tests/framework/snapshots/help.txt` current.
 
 ## Skills
 Skills are local instruction sets in `SKILL.md` files.

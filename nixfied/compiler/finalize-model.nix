@@ -25,7 +25,7 @@ let
   model = canonical.canonicalize {
     schema = {
       kind = "nixfied-model";
-      version = 2;
+      version = 1;
     };
 
     identity = {

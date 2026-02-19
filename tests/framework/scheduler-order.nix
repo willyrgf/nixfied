@@ -13,6 +13,6 @@ let
   ];
 in
 assert order == expected;
-pkgs.runCommand "v2-scheduler-order" { } ''
+pkgs.runCommand "scheduler-order" { } ''
   echo "OK: scheduler order is deterministic" > "$out"
 ''

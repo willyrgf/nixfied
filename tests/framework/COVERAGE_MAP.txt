@@ -1,28 +1,28 @@
-Framework coverage map (v2)
+Framework coverage map
 
 Source of truth:
-- tests/framework/v2/*.nix
+- tests/framework/*.nix
 - nix run .#framework::test
 
 Compiler/model contracts:
 - nixfied/compiler/compile-tasks.nix
 - nixfied/compiler/compile-workflows.nix
 - nixfied/compiler/compile-views.nix
-- checks: v2-model-hash, v2-cross-machine-hash, v2-help-snapshot, v2-compiler-validation
+- checks: model-hash, cross-machine-hash, help-snapshot, compiler-validation
 
 Runner contracts:
 - nixfied/runner/executor.nix
 - nixfied/runner/env-sandbox.nix
-- checks: v2-executor-contract, v2-env-sandbox-contract, v2-log-prefix-contract
+- checks: executor-contract, env-sandbox-contract, log-prefix-contract
 
 Registry contracts:
 - nixfied/registry/events.nix
 - nixfied/registry/snapshot.nix
-- checks: v2-registry-replay, v2-registry-events-contract
+- checks: registry-replay, registry-events-contract
 
 Workflow determinism:
 - nixfied/project/module.nix (workflow.ci.*)
-- check: v2-scheduler-order
+- check: scheduler-order
 
 Fixture harness status:
-- removed (legacy harness wiring deleted in v2)
+- removed (legacy harness wiring deleted in the redesign)

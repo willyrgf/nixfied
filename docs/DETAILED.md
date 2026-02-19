@@ -1,8 +1,8 @@
-# Detailed Architecture (v2)
+# Detailed Architecture
 
 ## Model
 
-`nixfiedModel.v2` is compiled from typed modules and is the only source for generated views.
+`nixfiedModel` is compiled from typed modules and is the only source for generated views.
 
 Top-level shape:
 
@@ -80,4 +80,4 @@ Dispatcher:
 
 ## Testing
 
-Determinism gates live in `tests/framework/v2/` and are published via `flake checks`.
+Determinism gates live in `tests/framework/` and are published via `flake checks`.

@@ -1,8 +1,8 @@
-# Nixfied (Model-First v2)
+# Nixfied (Model-First)
 
 Nixfied is a model-driven Nix framework.
 
-The canonical source of truth is `nixfiedModel.v2`, compiled from typed modules and exposed through stable flake interfaces.
+The canonical source of truth is `nixfiedModel`, compiled from typed modules and exposed through stable flake interfaces.
 
 ## Quick Start
 
@@ -15,9 +15,9 @@ nix run .#ci -- --mode full --summary
 
 ## Documentation
 
-- `ARCHITECTURE.md` - High-level v2 architecture reference.
+- `ARCHITECTURE.md` - High-level architecture reference.
 - `docs/DETAILED.md` - Detailed model/runtime/registry contracts.
-- `REDESIGN.md` - v2 redesign and migration context.
+- `REDESIGN.md` - Redesign and migration context.
 
 ## Core Architecture
 
@@ -78,9 +78,9 @@ Return shape:
 
 Published external schemas:
 
-- `nixfied/schemas/task-contract-v1.json`
-- `nixfied/schemas/workflow-contract-v1.json`
-- `nixfied/schemas/model-export-v1.json`
+- `nixfied/schemas/task-contract.json`
+- `nixfied/schemas/workflow-contract.json`
+- `nixfied/schemas/model-export.json`
 
 ## Installer
 
@@ -89,4 +89,4 @@ Published external schemas:
 
 ## Determinism Gates
 
-See `tests/framework/v2/` for model hash, scheduler order, help snapshot, and registry replay gates.
+See `tests/framework/` for model hash, scheduler order, help snapshot, and registry replay gates.

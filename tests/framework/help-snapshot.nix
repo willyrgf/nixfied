@@ -7,6 +7,6 @@ let
   expected = builtins.readFile ./snapshots/help.txt;
 in
 assert rendered == expected;
-pkgs.runCommand "v2-help-snapshot" { } ''
+pkgs.runCommand "help-snapshot" { } ''
   echo "OK: help snapshot is stable" > "$out"
 ''

@@ -1,10 +1,10 @@
-# Architecture (v2)
+# Architecture
 
-Nixfied is a model-first framework. Typed Nix modules compile into `nixfiedModel.v2`, and command/help/docs surfaces are generated views of that model.
+Nixfied is a model-first framework. Typed Nix modules compile into `nixfiedModel`, and command/help/docs surfaces are generated views of that model.
 
 ## Pipeline
 
-`modules -> resolved config -> compiler passes -> nixfiedModel.v2 -> stateHash + apps + docs`
+`modules -> resolved config -> compiler passes -> nixfiedModel -> stateHash + apps + docs`
 
 Compiler passes:
 1. `resolve-modules`
@@ -38,7 +38,7 @@ Compiler passes:
 
 ## Determinism Gates
 
-Authoritative checks are in `tests/framework/v2/` and include:
+Authoritative checks are in `tests/framework/` and include:
 - model hash stability
 - cross-machine hash stability
 - scheduler order determinism

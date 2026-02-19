@@ -5,7 +5,7 @@
   projectRoot,
 }:
 let
-  modelFile = pkgs.writeText "nixfied-model-v2.json" (builtins.toJSON model);
+  modelFile = pkgs.writeText "nixfied-model.json" (builtins.toJSON model);
   registryShell = registry.events.mkShellLib { };
   envSandboxShell = import ./env-sandbox.nix {
     inherit
@@ -65,7 +65,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
     args_hash="$(normalize_args_hash "$args_payload")"
     env_hash="$(normalize_env_hash)"
 
-    run_input="run-id-v1|${model.identity.evalHash}|$workflow_id|$task_id|$mode|$slot_value|$env_value|$args_hash|$env_hash"
+    run_input="run-id|${model.identity.evalHash}|$workflow_id|$task_id|$mode|$slot_value|$env_value|$args_hash|$env_hash"
     run_base="$(sha256_text "$run_input")"
     run_id="run-''${run_base:0:24}"
     RUN_SUFFIX_REASON=""
