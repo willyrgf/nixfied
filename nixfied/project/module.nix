@@ -341,12 +341,6 @@ in
               description = "Print compact summary output.";
             }
             {
-              name = "bg";
-              kind = "flag";
-              long = "--bg";
-              description = "Reserved for background mode compatibility.";
-            }
-            {
               name = "mode";
               kind = "option";
               long = "--mode";
@@ -492,7 +486,7 @@ in
           kind = "utility";
           summary = "Run framework validation in the v2 model";
           description = ''
-            Runs deterministic v2 validation shards without relying on legacy fixture harnesses.
+            Runs deterministic v2 validation shards.
           '';
           runtimeInputs = [
             pkgs.bash
@@ -533,19 +527,6 @@ in
               type = "enum";
               values = [ "ci" ];
               description = "Test profile to run (ci only).";
-            }
-            {
-              name = "jobs";
-              kind = "option";
-              long = "--jobs";
-              type = "int";
-              description = "Compatibility option. Accepted and recorded in summary output.";
-            }
-            {
-              name = "serial";
-              kind = "flag";
-              long = "--serial";
-              description = "Compatibility alias for --jobs 1.";
             }
             {
               name = "shard";
@@ -611,7 +592,6 @@ in
             ROOT="$(pwd -P)"
             PROFILE="ci"
             MODE="full"
-            JOBS=1
             SHARD=""
             LIST_SHARDS=0
             SUMMARY=0
@@ -649,7 +629,7 @@ in
 
             usage() {
               cat <<'EOF'
-            Usage: nix run .#framework::test [-- --profile ci] [--mode <basic|app|env|full>] [--summary] [--summary-json <path>] [--jobs <n>] [--serial] [--shard <name>] [--list-shards]
+            Usage: nix run .#framework::test [-- --profile ci] [--mode <basic|app|env|full>] [--summary] [--summary-json <path>] [--shard <name>] [--list-shards]
 
             Shards:
               flake-check   Run nix flake check for the current project root.
@@ -688,7 +668,6 @@ in
             {
               "profile": "$PROFILE",
               "mode": "$MODE",
-              "jobs": $JOBS,
               "shard": $(if [ -n "$SHARD" ]; then printf '"%s"' "$SHARD"; else printf 'null'; fi),
               "executed_shards": $EXECUTED,
               "exit_code": $rc,
@@ -798,26 +777,6 @@ in
                   SUMMARY_JSON="$2"
                   shift 2
                   ;;
-                --jobs)
-                  if [ "$#" -lt 2 ]; then
-                    log_error "--jobs requires a value"
-                    exit 2
-                  fi
-                  JOBS="$2"
-                  if ! printf '%s' "$JOBS" | grep -Eq '^[0-9]+$'; then
-                    log_error "--jobs must be an integer >= 1"
-                    exit 2
-                  fi
-                  if [ "$JOBS" -lt 1 ]; then
-                    log_error "--jobs must be >= 1"
-                    exit 2
-                  fi
-                  shift 2
-                  ;;
-                --serial)
-                  JOBS=1
-                  shift
-                  ;;
                 --shard)
                   if [ "$#" -lt 2 ]; then
                     log_error "--shard requires a value"
@@ -884,10 +843,6 @@ in
               exit 2
             fi
 
-            if [ "$JOBS" -gt 1 ]; then
-              log_info "deterministic serial execution enabled; jobs=$JOBS is recorded for compatibility"
-            fi
-
             cleanup() {
               local rc=$?
               if [ -n "$SUMMARY_JSON" ]; then
@@ -906,7 +861,7 @@ in
             fi
 
             if [ "$SUMMARY" -eq 1 ]; then
-              log_info "summary profile=$PROFILE mode=$MODE jobs=$JOBS executed_shards=$EXECUTED"
+              log_info "summary profile=$PROFILE mode=$MODE executed_shards=$EXECUTED"
             fi
 
             log_ok "framework::test completed"

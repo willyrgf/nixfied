@@ -35,8 +35,6 @@ nix run .#framework::test -- --list-shards
 nix run .#framework::test -- --shard flake-check
 nix run .#framework::test -- --mode env --summary
 nix run .#framework::test -- --summary-json /tmp/framework-test-summary.json
-nix run .#framework::test -- --jobs 2
-nix run .#framework::test -- --serial
 ```
 
 ## Flake checks (canonical)
