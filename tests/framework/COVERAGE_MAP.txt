@@ -25,4 +25,4 @@ Workflow determinism:
 - check: v2-scheduler-order
 
 Fixture harness status:
-- nixfied/.framework/internal/test.nix
+- removed (legacy harness wiring deleted in v2)

@@ -5,17 +5,19 @@
 - Keep CLI output plain ASCII and grep-friendly with stable prefixes: `INFO:`, `WARN:`, `ERROR:`, `OK:`, `SKIP:`.
 - Prefer boring, explicit, idempotent behavior; fail fast on invalid config and avoid partial side effects.
 - Keep state isolated to project/ephemeral roots; do not leak secrets in logs.
-- Use lowercase command names in `nixfied/project/*.nix` via `commands.<name>`.
+- Define tasks/workflows and exposed app surfaces in `nixfied/project/module.nix`.
+- Keep exposed app names lowercase via `nixfied.tasks.<id>.ui.app.name`.
 - When users name a skill (or task clearly matches one), open its `SKILL.md` and follow it for that turn.
 
 ## Project Layout
 - `flake.nix`: flake entry points for apps, modules, and dev shells.
-- `nixfied/.framework/`: vendored framework code and `.workspace` marker.
 - `nixfied/project/`: project config and command model (`conf.nix`, `module.nix`).
-- `nixfied/.framework/internal/`: flake app wiring (core, install, test, isolation, module apps).
-- `nixfied/.framework/lib/`: framework helpers (builders, helpers, summary, run registry, parallel, process, port utils).
-- `nixfied/.framework/{ci,slots,hooks,ephemeral}.nix`: core framework behavior.
-- `nixfied/.framework/{postgres,nginx,supervisor,minio}/`: module directories.
+- `nixfied/modules/`: typed module options (`core`, `runtime`, `tasks`, `workflows`, `operations`, `services/*`).
+- `nixfied/compiler/`: explicit compiler passes that build `nixfiedModel.v2`.
+- `nixfied/runner/`: dispatcher/executor runtime apps.
+- `nixfied/registry/`: strict NDJSON event store, snapshot, replay.
+- `nixfied/install/`: thin-wrapper/vendoring installer helpers.
+- `nixfied/.framework/internal/`: framework install internals and `.workspace` marker handling.
 - `tests/framework/`: framework v2 checks and test docs.
 
 ## Commands
@@ -24,11 +26,14 @@
 - `nix run .#test`: tests (defaults to `ci -- --mode full --summary`).
 - `nix run .#build`: build/prod workflow.
 - `nix run .#check`: quality checks.
+- `nix run .#format`: format workflow.
 - `nix run .#ci -- --summary`: CI pipeline with concise report.
 - `nix run .#test-isolation`: slot/env isolation runner.
 - `nix run .#validate-env`: validate ports/dirs for current slot/env.
-- `nix run .#ports`, `nix run .#check-ports`, `nix run .#up`, `nix run .#down`: module/utility apps (when enabled).
-- `PROJECT_ENV` is required for slot/env-sensitive module and supervisor apps; `NIX_ENV` defaults to slot `0`.
+- `nix run .#ports`, `nix run .#check-ports`: model-derived port utilities.
+- `nix run .#model`, `nix run .#stateHash`, `nix run .#tasks`, `nix run .#task::<id>`, `nix run .#schema`: introspection surfaces.
+- `nix run .#run-task -- <task-id>` and `nix run .#run-workflow -- <workflow-id>`: dispatcher surfaces.
+- `NIX_ENV` defaults to slot `0`; `PROJECT_ENV` defaults to `dev` unless overridden.
 - Framework-only commands (requires `.workspace` marker): `framework::test`, `framework::install`.
 
 ## Coding, Testing, and PRs
@@ -41,8 +46,8 @@
 
 ## Configuration
 - Main project config: `nixfied/project/conf.nix`.
-- Command behavior: `nixfied/project/*.nix`.
-- If adding command files, update `nixfied/project/default.nix`.
+- Task/workflow and app behavior: `nixfied/project/module.nix` (`config.nixfied.tasks`, `config.nixfied.workflows`).
+- If exposing a new app, set `ui.app.expose = true` and keep `tests/framework/v2/snapshots/help.txt` current.
 
 ## Skills
 Skills are local instruction sets in `SKILL.md` files.

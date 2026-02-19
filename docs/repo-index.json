@@ -21,28 +21,34 @@
       "exists": true
     },
     {
+      "path": "docs/DETAILED.md",
+      "purpose": "Detailed v2 model architecture and contracts.",
+      "priority": 2,
+      "exists": true
+    },
+    {
+      "path": "ARCHITECTURE.md",
+      "purpose": "High-level v2 architecture reference.",
+      "priority": 3,
+      "exists": true
+    },
+    {
+      "path": "REDESIGN.md",
+      "purpose": "v2 redesign and migration context.",
+      "priority": 4,
+      "exists": true
+    },
+    {
       "path": "AGENTS.md",
       "purpose": "Agent instructions and collaboration constraints.",
-      "priority": 2,
+      "priority": 5,
       "exists": true
     },
     {
       "path": "CLAUDE.md",
       "purpose": "Additional assistant guidance for this repository.",
-      "priority": 3,
-      "exists": false
-    },
-    {
-      "path": "ARCHITECTURE.md",
-      "purpose": "Architecture and system design details.",
-      "priority": 4,
-      "exists": false
-    },
-    {
-      "path": "REDESIGN.md",
-      "purpose": "Redesign notes and migration context.",
-      "priority": 5,
-      "exists": false
+      "priority": 6,
+      "exists": true
     }
   ],
   "components": [
@@ -55,14 +61,14 @@
   "risk_areas": [
     {
       "path": "nixfied/.framework",
-      "risk": "Framework internals; avoid direct edits in installed repos.",
+      "risk": "Framework install internals and workspace marker handling.",
       "required_checks": [
         "nix run .#help"
       ]
     },
     {
       "path": "nixfied/project/module.nix",
-      "risk": "Primary v2 command/task/workflow surface.",
+      "risk": "Primary v2 task/workflow/app surface.",
       "required_checks": [
         "nix run .#help",
         "nix run .#framework::test",
@@ -71,7 +77,7 @@
     },
     {
       "path": "nixfied/project/conf.nix",
-      "risk": "Project identity, environment names, and port contract.",
+      "risk": "Project identity, env names, and port contract.",
       "required_checks": [
         "nix run .#validate-env",
         "nix run .#ci -- --summary"
@@ -85,6 +91,10 @@
     },
     {
       "name": "check",
+      "owner_file": "nixfied/project/module.nix"
+    },
+    {
+      "name": "check-ports",
       "owner_file": "nixfied/project/module.nix"
     },
     {
@@ -108,7 +118,19 @@
       "owner_file": "nixfied/project/module.nix"
     },
     {
+      "name": "ports",
+      "owner_file": "nixfied/project/module.nix"
+    },
+    {
       "name": "test",
+      "owner_file": "nixfied/project/module.nix"
+    },
+    {
+      "name": "test-isolation",
+      "owner_file": "nixfied/project/module.nix"
+    },
+    {
+      "name": "validate-env",
       "owner_file": "nixfied/project/module.nix"
     }
   ]

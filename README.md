@@ -13,6 +13,12 @@ nix run .#test
 nix run .#ci -- --mode full --summary
 ```
 
+## Documentation
+
+- `ARCHITECTURE.md` - High-level v2 architecture reference.
+- `docs/DETAILED.md` - Detailed model/runtime/registry contracts.
+- `REDESIGN.md` - v2 redesign and migration context.
+
 ## Core Architecture
 
 - Module system: `lib.evalModules` with typed options (`nixfied/modules/*.nix`).
