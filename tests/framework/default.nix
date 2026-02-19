@@ -86,4 +86,12 @@
       registry
       ;
   };
+
+  "framework-install-vendor-smoke" = import ./framework-install-vendor-smoke.nix {
+    inherit
+      pkgs
+      model
+      registry
+      ;
+  };
 }
