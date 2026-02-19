@@ -871,19 +871,19 @@ Use fixed ownership lanes to avoid ambiguous responsibility:
 
 ### 20.3 Master checklist (execution order)
 
-- [ ] Phase 0 completed and merged.
-- [ ] Phase 1 completed and merged.
-- [ ] Phase 2 completed and merged.
-- [ ] Phase 3 completed and merged.
-- [ ] Phase 4 completed and merged.
-- [ ] Phase 5 completed and merged.
-- [ ] Phase 6 completed and merged.
-- [ ] Phase 7 completed and merged.
-- [ ] Phase 8 completed and merged.
-- [ ] Phase 9 completed and merged.
-- [ ] Phase 10 completed and merged.
-- [ ] Phase 11 completed and merged.
-- [ ] Phase 12 completed and merged.
+- [x] Phase 0 completed and merged.
+- [x] Phase 1 completed and merged.
+- [x] Phase 2 completed and merged.
+- [x] Phase 3 completed and merged.
+- [x] Phase 4 completed and merged.
+- [x] Phase 5 completed and merged.
+- [x] Phase 6 completed and merged.
+- [x] Phase 7 completed and merged.
+- [x] Phase 8 completed and merged.
+- [x] Phase 9 completed and merged.
+- [x] Phase 10 completed and merged.
+- [x] Phase 11 completed and merged.
+- [x] Phase 12 completed and merged.
 
 ### 20.4 PR slicing guidance
 

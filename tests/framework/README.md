@@ -111,3 +111,14 @@ If you want end‑to‑end examples, start here:
   - Run registry foreground mode tests (meta.json, output.log).
 - `fixtures/registry/policy-inference.nix`
   - Process registry inference tests (`SERVICE_REUSE_POLICY` -> owner/discovery fallback behavior).
+
+## V2 Determinism Gates
+
+Model-first architecture gates live in `tests/framework/v2/`:
+- `model-hash.nix` — canonical model hash stability for identical inputs.
+- `cross-machine-hash.nix` — canonical rendering hash stability independent of machine runtime state.
+- `scheduler-order.nix` — deterministic workflow expansion ordering.
+- `help-snapshot.nix` — generated help surface snapshot lock.
+- `registry-replay.nix` — deterministic registry state replay.
+
+They are exposed through flake checks and should pass in both local and CI runs.
