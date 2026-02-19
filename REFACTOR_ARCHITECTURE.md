@@ -835,3 +835,61 @@ nixfied/
    - one workflow
    - one app generated from dispatcher
    - one determinism test.
+
+## 20. Implementation Checklist (File-by-File Ownership and Sequence)
+
+This section is the execution checklist for the refactor and is intended to be used as a live tracker.
+
+### 20.1 Ownership lanes
+
+Use fixed ownership lanes to avoid ambiguous responsibility:
+
+- `lane.modules`: Nix options, profiles, service modules, merge/conflict policy.
+- `lane.compiler`: model compilation passes, canonical hashing, deterministic IDs.
+- `lane.runner`: dispatcher, workflow executor, hermetic runtime boundary.
+- `lane.registry`: NDJSON event store, replay, run-id collision handling.
+- `lane.surface`: flake outputs, introspection surfaces, installer/wrapper/vendoring behavior.
+- `lane.cleanup`: deletion of old architecture files and dead paths.
+
+### 20.2 Sequenced rollout matrix
+
+| Seq | Phase | Owner | Create | Modify | Remove | Exit gate |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0 | Bootstrap new architecture skeleton | `lane.surface` | `nixfied/lib/mkNixfied.nix`, `nixfied/lib/canonical.nix`, `nixfied/modules/default.nix`, `nixfied/compiler/default.nix`, `nixfied/runner/default.nix`, `nixfied/registry/default.nix` | `flake.nix` | None | `nix flake show` exposes skeleton outputs without eval failure |
+| 1 | Module system foundation | `lane.modules` | `nixfied/modules/core.nix`, `nixfied/modules/runtime.nix`, `nixfied/modules/profiles/webapp.nix`, `nixfied/modules/profiles/eth.nix`, `nixfied/project/module.nix` | `nixfied/modules/default.nix` | None | `lib.evalModules` resolves config via imports only |
+| 2 | Typed task/workflow options | `lane.modules` | `nixfied/modules/tasks.nix`, `nixfied/modules/workflows.nix` | `nixfied/modules/default.nix`, `nixfied/modules/core.nix` | None | Sample project can define `nixfied.tasks` and `nixfied.workflows` with type validation |
+| 3 | Compiler pass scaffolding | `lane.compiler` | `nixfied/compiler/resolve-modules.nix`, `nixfied/compiler/normalize-runtime.nix`, `nixfied/compiler/compile-services.nix`, `nixfied/compiler/compile-tasks.nix`, `nixfied/compiler/compile-workflows.nix`, `nixfied/compiler/compile-views.nix`, `nixfied/compiler/finalize-model.nix` | `nixfied/compiler/default.nix`, `nixfied/lib/mkNixfied.nix` | None | `mkNixfied` returns `model` and `stateHash` |
+| 4 | Canonical hash and deterministic ID primitives | `lane.compiler` | `nixfied/compiler/id.nix` | `nixfied/lib/canonical.nix`, `nixfied/compiler/finalize-model.nix`, `nixfied/compiler/compile-tasks.nix` | None | Repeated evaluation yields stable `stateHash` and stable task/workflow IDs |
+| 5 | Dispatcher and app/help/docs model views | `lane.runner` + `lane.surface` | `nixfied/runner/dispatcher.nix` | `nixfied/compiler/compile-views.nix`, `nixfied/lib/mkNixfied.nix`, `flake.nix` | None | `apps`, `help`, and `docs` are generated from model only |
+| 6 | Universal deterministic workflow executor | `lane.runner` | `nixfied/runner/executor.nix`, `nixfied/runner/env-sandbox.nix` | `nixfied/runner/default.nix`, `nixfied/lib/mkNixfied.nix` | None | `dev/test/build/check/ci` run through one executor with deterministic scheduling |
+| 7 | Registry rewrite (strict NDJSON + replay) | `lane.registry` | `nixfied/registry/events.nix`, `nixfied/registry/snapshot.nix`, `nixfied/registry/replay.nix` | `nixfied/registry/default.nix`, `nixfied/runner/executor.nix` | None | Events written as strict NDJSON, replay reproduces terminal state |
+| 8 | Operational commands bound to model | `lane.runner` + `lane.compiler` | `nixfied/modules/operations.nix` | `nixfied/compiler/compile-tasks.nix`, `nixfied/compiler/compile-views.nix` | None | `validate-env`, `test-isolation`, `ports`, `check-ports` execute from compiled model data |
+| 9 | Introspection + external schema outputs | `lane.surface` | `nixfied/schemas/task-contract-v1.json`, `nixfied/schemas/workflow-contract-v1.json`, `nixfied/schemas/model-export-v1.json` | `flake.nix`, `nixfied/lib/mkNixfied.nix` | None | `.#model`, `.#stateHash`, `.#tasks`, `.#task::<id>`, `.#schema` all work |
+| 10 | Installer/wrapper/vendoring flow | `lane.surface` | `nixfied/install/wrapper-flake.nix` | `nixfied/.framework/internal/install.nix` (or replacement installer entrypoint), `flake.nix` | None | `framework::install` defaults to thin wrapper; `--vendor` supported |
+| 11 | Determinism and regression gates | `lane.modules` + `lane.compiler` + `lane.runner` + `lane.registry` | `tests/framework/v2/model-hash.nix`, `tests/framework/v2/cross-machine-hash.nix`, `tests/framework/v2/scheduler-order.nix`, `tests/framework/v2/help-snapshot.nix`, `tests/framework/v2/registry-replay.nix` | `tests/framework/README.md` | None | All determinism gates pass locally and in CI |
+| 12 | Decommission old architecture | `lane.cleanup` | None | `flake.nix`, `README.md`, `docs/DETAILED.md` | `nixfied/.framework/hooks.nix`, `nixfied/.framework/ci.nix`, `nixfied/.framework/slots.nix`, `nixfied/.framework/internal/core.nix`, `nixfied/.framework/internal/module-apps.nix`, `nixfied/.framework/internal/isolation.nix`, `nixfied/.framework/lib/app-api.nix`, `nixfied/.framework/lib/service-api.nix`, `nixfied/.framework/lib/execution-core.nix`, `nixfied/.framework/lib/process-registry.nix`, `nixfied/project/default.nix`, `nixfied/project/dev.nix`, `nixfied/project/test.nix`, `nixfied/project/prod.nix`, `nixfied/project/quality.nix`, `nixfied/project/format.nix`, `nixfied/project/ci.nix`, `nixfied/project/catalog.nix`, `nixfied/project/lib/command.nix` | No runtime path references removed files; all top-level commands come from new model |
+
+### 20.3 Master checklist (execution order)
+
+- [ ] Phase 0 completed and merged.
+- [ ] Phase 1 completed and merged.
+- [ ] Phase 2 completed and merged.
+- [ ] Phase 3 completed and merged.
+- [ ] Phase 4 completed and merged.
+- [ ] Phase 5 completed and merged.
+- [ ] Phase 6 completed and merged.
+- [ ] Phase 7 completed and merged.
+- [ ] Phase 8 completed and merged.
+- [ ] Phase 9 completed and merged.
+- [ ] Phase 10 completed and merged.
+- [ ] Phase 11 completed and merged.
+- [ ] Phase 12 completed and merged.
+
+### 20.4 PR slicing guidance
+
+To keep review quality high, each phase should be one PR series with:
+
+- one architectural concern per PR,
+- deterministic test updates in the same PR,
+- explicit before/after command behavior notes in PR description,
+- no mixed-phase changes unless required by build breakage.

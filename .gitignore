@@ -3,6 +3,7 @@
 *.md
 !AGENTS.md
 !README.md
+!REFACTOR_ARCHITECTURE.md
 !docs/DETAILED.md
 !docs/repo-map.md
 result
