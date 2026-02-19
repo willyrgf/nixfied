@@ -1,69 +1,28 @@
-# Framework Coverage Map
+Framework coverage map (v2)
 
-Each framework file must appear here with at least one validating scenario.
+Source of truth:
+- tests/framework/v2/*.nix
+- nix run .#framework::test
 
-- `nixfied/.framework/ci.nix`: `fixtures/ci/ci.nix`, `fixtures/ci/retention.nix`, `fixtures/ci/unknown-step.nix`, `fixtures/ci/summary-json.nix`
-- `nixfied/.framework/devshell.nix`: `framework::test` flake evaluation and app wiring checks
-- `nixfied/.framework/ephemeral.nix`: `fixtures/ephemeral/lock.nix`, `fixtures/ephemeral/env-loader-export.nix`
-- `nixfied/.framework/hooks.nix`: module hook export assertions in `.framework/internal/test.nix`
-- `nixfied/.framework/internal/core.nix`: core app smoke checks (`help/dev/test/build/check/ci`)
-- `nixfied/.framework/internal/install.nix`: installer/upgrade/re-entry/filter/error fixtures in `.framework/internal/test.nix`
-- `nixfied/.framework/internal/install-manifest.nix`: installer helper/filter generation coverage in `.framework/internal/test.nix`
-- `nixfied/.framework/internal/isolation.nix`: `framework::test --profile ci` isolation runner path
-- `nixfied/.framework/internal/module-apps.nix`: module app exposure and strict slot/env checks
-- `nixfied/.framework/internal/test.nix`: `framework::test` self-run smoke and fixture orchestration
-- `nixfied/.framework/lib/app-api.nix`: app API contract enforcement fixture in `.framework/internal/test.nix`
-- `nixfied/.framework/lib/action-schema.nix`: CI/isolation schema fixtures in `.framework/internal/test.nix` (`fixtures/ci/ci.nix`, `fixtures/ci/legacy-fields.nix`, `fixtures/isolation/legacy-fields.nix`)
-- `nixfied/.framework/lib/builders.nix`: helper/runtime/slots fixture app generation checks
-- `nixfied/.framework/lib/ci-schema.nix`: CI schema validation and normalization fixtures (`fixtures/ci/ci.nix`, `fixtures/ci/unknown-step.nix`, `fixtures/ci/legacy-fields.nix`)
-- `nixfied/.framework/lib/default.nix`: helper runtime fixture and module integration fixture
-- `nixfied/.framework/lib/discovery.nix`: check command discovery verify/refresh flow in `.framework/internal/test.nix`
-- `nixfied/.framework/lib/env-loader.nix`: `fixtures/helpers/env-loader-export.nix` and `fixtures/ephemeral/env-loader-export.nix` for wrapper `.env` export propagation
-- `nixfied/.framework/lib/execution-core.nix`: CI DSL fixtures (`fixtures/ci/ci.nix`, `fixtures/ci/summary-json.nix`, `fixtures/ci/unknown-step.nix`)
-- `nixfied/.framework/lib/helpers.nix`: `fixtures/helpers/runtime.nix`
-- `nixfied/.framework/lib/id.nix`: `fixtures/registry/foreground.nix`, `fixtures/registry/background-timeout.nix`, `fixtures/ephemeral/lock.nix`
-- `nixfied/.framework/lib/fixtures.nix`: `fixtures/ci/ci.nix` (fixtures.env wiring), command fixture wiring in `.framework/internal/test.nix`
-- `nixfied/.framework/lib/isolation-schema.nix`: isolation schema validation fixtures in `.framework/internal/test.nix` (`fixtures/isolation/legacy-fields.nix`)
-- `nixfied/.framework/lib/parallel.nix`: `fixtures/lib/parallel.nix`
-- `nixfied/.framework/lib/port-utils.nix`: `fixtures/lib/port-utils.nix`
-- `nixfied/.framework/lib/process.nix`: `fixtures/lib/process.nix`
-- `nixfied/.framework/lib/process-registry.nix`: `framework::test` flake app wiring checks and `process::*` command smoke coverage
-- `nixfied/.framework/lib/run-registry.nix`: `fixtures/registry/foreground.nix`, `fixtures/registry/background-timeout.nix`
-- `nixfied/.framework/lib/shell-contract.nix`: app contract enforcement and runtime arg/env validation checks in `.framework/internal/test.nix`
-- `nixfied/.framework/lib/service-observability.nix`: `fixtures/modules/dev.nix`, `fixtures/helios/lifecycle.nix`, `fixtures/reth/lifecycle.nix`, `fixtures/minio/bucket-ops.nix`, `fixtures/nginx/site-lifecycle.nix`, `fixtures/postgres/extensions.nix`
-- `nixfied/.framework/lib/service-policy.nix`: policy matrix fixtures in `fixtures/helpers/runtime.nix`, `fixtures/registry/policy-inference.nix`, and fixture keep-running policy checks in `.framework/internal/test.nix`
-- `nixfied/.framework/lib/service-module.nix`: service module API aggregation coverage via `fixtures/modules/dev.nix`, module app exposure assertions, and service API contract checks in `.framework/internal/test.nix`
-- `nixfied/.framework/lib/service-api.nix`: service API contract enforcement fixture in `.framework/internal/test.nix`
-- `nixfied/.framework/lib/slot-env-runtime.nix`: strict slot/env/runtime export coverage via module app checks, isolation runner checks, and service API launcher checks in `.framework/internal/test.nix`
-- `nixfied/.framework/lib/summary.nix`: helper `summary_parse` checks in `fixtures/helpers/runtime.nix`
-- `nixfied/.framework/lib/validation.nix`: app/service API contract enforcement fixtures in `.framework/internal/test.nix`
-- `nixfied/.framework/minio/bucket-management.nix`: `fixtures/minio/bucket-ops.nix`
-- `nixfied/.framework/minio/config.nix`: `fixtures/modules/conf.nix`, `fixtures/minio/bucket-ops.nix`
-- `nixfied/.framework/minio/default.nix`: `fixtures/modules/dev.nix`, `fixtures/minio/bucket-ops.nix` (health fail/pass coverage)
-- `nixfied/.framework/minio/lifecycle.nix`: `fixtures/modules/dev.nix`, `fixtures/minio/bucket-ops.nix` (health fail/pass coverage)
-- `nixfied/.framework/reth/config.nix`: `fixtures/modules/conf.nix`, `fixtures/reth/lifecycle.nix`
-- `nixfied/.framework/reth/default.nix`: `fixtures/modules/dev.nix`, `fixtures/reth/lifecycle.nix` (health fail/pass coverage)
-- `nixfied/.framework/reth/lifecycle.nix`: `fixtures/modules/dev.nix`, `fixtures/reth/lifecycle.nix` (real protocol health checks)
-- `nixfied/.framework/helios/package.nix`: `fixtures/modules/conf.nix`, `fixtures/helios/lifecycle.nix`
-- `nixfied/.framework/helios/config.nix`: `fixtures/modules/conf.nix`, `fixtures/helios/lifecycle.nix`
-- `nixfied/.framework/helios/default.nix`: `fixtures/modules/dev.nix`, `fixtures/helios/lifecycle.nix` (health fail/pass coverage)
-- `nixfied/.framework/helios/lifecycle.nix`: `fixtures/modules/dev.nix`, `fixtures/helios/lifecycle.nix` (real Helios + real Reth protocol checks)
-- `nixfied/.framework/nginx/default.nix`: `fixtures/modules/dev.nix`, `fixtures/nginx/site-lifecycle.nix` (health fail/pass coverage)
-- `nixfied/.framework/nginx/lifecycle.nix`: `fixtures/modules/dev.nix`, `fixtures/nginx/site-lifecycle.nix` (health fail/pass coverage)
-- `nixfied/.framework/nginx/site-management.nix`: `fixtures/modules/dev.nix`, `fixtures/nginx/site-lifecycle.nix`
-- `nixfied/.framework/nginx/ssl.nix`: `fixtures/nginx/site-lifecycle.nix` (self-signed lifecycle and status/list coverage)
-- `nixfied/.framework/nginx/templates.nix`: nginx init/site generation checks in module and nginx fixtures
-- `nixfied/.framework/postgres/backup.nix`: `fixtures/postgres/extensions.nix`
-- `nixfied/.framework/postgres/config.nix`: postgres module fixture configuration checks
-- `nixfied/.framework/postgres/default.nix`: `fixtures/modules/dev.nix`, `fixtures/postgres/extensions.nix` (health fail/pass coverage)
-- `nixfied/.framework/postgres/lifecycle.nix`: `fixtures/modules/dev.nix` (health fail/pass coverage)
-- `nixfied/.framework/postgres/migration-safety.nix`: `fixtures/postgres/extensions.nix`
-- `nixfied/.framework/postgres/migration.nix`: `fixtures/postgres/extensions.nix`
-- `nixfied/.framework/postgres/port-management.nix`: `fixtures/postgres/extensions.nix`
-- `nixfied/.framework/postgres/rollback.nix`: `fixtures/postgres/extensions.nix`
-- `nixfied/.framework/slots.nix`: `fixtures/slots/runtime.nix` and strict slot/env checks
-- `nixfied/.framework/supervisor/config.nix`: supervisor config fixture (including missing-readiness hard-fail)
-- `nixfied/.framework/supervisor/default.nix`: supervisor hooks fixture and management fixture (including health export)
-- `nixfied/.framework/supervisor/lifecycle.nix`: module app exposure and supervisor hooks checks (including `svc-health`)
-- `nixfied/.framework/supervisor/management.nix`: `fixtures/supervisor/management.nix`
-- `nixfied/.framework/supervisor/status.nix`: `fixtures/supervisor/management.nix` (daemon/service health assertions)
+Compiler/model contracts:
+- nixfied/compiler/compile-tasks.nix
+- nixfied/compiler/compile-workflows.nix
+- nixfied/compiler/compile-views.nix
+- checks: v2-model-hash, v2-cross-machine-hash, v2-help-snapshot, v2-compiler-validation
+
+Runner contracts:
+- nixfied/runner/executor.nix
+- nixfied/runner/env-sandbox.nix
+- checks: v2-executor-contract, v2-env-sandbox-contract, v2-log-prefix-contract
+
+Registry contracts:
+- nixfied/registry/events.nix
+- nixfied/registry/snapshot.nix
+- checks: v2-registry-replay, v2-registry-events-contract
+
+Workflow determinism:
+- nixfied/project/module.nix (workflow.ci.*)
+- check: v2-scheduler-order
+
+Legacy fixture harness removed:
+- nixfied/.framework/internal/test.nix

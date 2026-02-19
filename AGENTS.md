@@ -11,12 +11,12 @@
 ## Project Layout
 - `flake.nix`: flake entry points for apps, modules, and dev shells.
 - `nixfied/.framework/`: vendored framework code and `.workspace` marker.
-- `nixfied/project/`: project config and command files (`conf.nix`, `dev.nix`, `test.nix`, `prod.nix`, `quality.nix`, `ci.nix`).
+- `nixfied/project/`: project config and command model (`conf.nix`, `module.nix`).
 - `nixfied/.framework/internal/`: flake app wiring (core, install, test, isolation, module apps).
 - `nixfied/.framework/lib/`: framework helpers (builders, helpers, summary, run registry, parallel, process, port utils).
 - `nixfied/.framework/{ci,slots,hooks,ephemeral}.nix`: core framework behavior.
 - `nixfied/.framework/{postgres,nginx,supervisor,minio}/`: module directories.
-- `tests/framework/`: framework tests, fixtures, and docs.
+- `tests/framework/`: framework v2 checks and test docs.
 
 ## Commands
 - `nix run .#help`: list available commands.
@@ -29,13 +29,13 @@
 - `nix run .#validate-env`: validate ports/dirs for current slot/env.
 - `nix run .#ports`, `nix run .#check-ports`, `nix run .#up`, `nix run .#down`: module/utility apps (when enabled).
 - `PROJECT_ENV` is required for slot/env-sensitive module and supervisor apps; `NIX_ENV` defaults to slot `0`.
-- Framework-only commands (requires `.workspace` marker): `framework::test`, `framework::install`, `framework::upgrade`, `framework::prompt-plan`.
+- Framework-only commands (requires `.workspace` marker): `framework::test`, `framework::install`.
 
 ## Coding, Testing, and PRs
 - Format Nix: `find . -name '*.nix' -print0 | xargs -0 nixfmt --`.
 - Common checks: `nix flake check && nix flake show && nix run .#help`.
 - Framework tests: `nix run .#framework::test` or `nix run path:.#framework::test`.
-- Prefer minimal fixtures/scripts that exercise helpers and CI behavior.
+- Prefer deterministic checks in `tests/framework/v2/` and keep help snapshots current.
 - Keep commits small, imperative, and lowercase (for example, `expand framework test coverage`).
 - PRs should include intent, affected commands/modules, test notes, and config rationale when `nixfied/project/` changes.
 

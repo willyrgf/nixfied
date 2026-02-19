@@ -1,124 +1,63 @@
-# Framework Tests
+# Framework Tests (v2)
 
-This folder contains fixtures and guidance for the Nixfied framework tests.
+This directory documents the v2-native framework test surface.
 
-## Run
+## Primary command
 
-From the framework repo root:
+Run from repository root:
 
 ```bash
 nix run .#framework::test
 ```
 
-Default profile is `ci`.
-Default shard worker count is `2`.
-Use `FRAMEWORK_ISOLATION=1` to include the isolation runner.
-
-Useful options:
-
-```bash
-nix run .#framework::test -- --jobs 3
-nix run .#framework::test -- --serial
-nix run .#framework::test -- --list-shards
-nix run .#framework::test -- --shard installer
-```
-
-If you have untracked changes and `nix run .#framework::test` fails to see them,
-use a path-based flake reference:
+Path-based reference for untracked changes:
 
 ```bash
 nix run path:.#framework::test
 ```
 
-## What is covered
+## Behavior
 
-The test runner validates:
-- Flake evaluation (`nix flake show`, `nix flake check --no-build`).
-- Core apps (`help`, `dev`, `test`, `build`, `check`, `ci`).
-- Helper functions (log_capture, summary_parse, wait_http/port, start_service, start_service_into, with_service, with_cleanup).
-- Fixture helper behavior (`fixture_start_service`) including readiness precedence (`READY` over `HEALTH`) and `keep_running`.
-- Slot/env helpers (SLOT_INFO explicit env/slot validation, REQUIRE_SLOT_ENV failure paths).
-- CI DSL behavior (modes, errors, step skipping, cleanup, teardown, artifacts, summary output, summary.json).
-- Service module hooks for Postgres, Nginx, MinIO, Reth, and Helios (init/start/stop/check-config plus health/ready pass-fail paths).
-- Supervisor config generation/hook exposure, readiness enforcement, and service-level health checks.
-- Ephemeral slot locking (acquire/release, env var export).
-- Run registry (foreground run tracking, meta.json, output.log).
-- Process registry policy inference (reuse policy to owner/discovery scope mapping).
-- Module apps exposure (db-*, nginx-*, supervisor apps present/absent based on config).
-- Installer safety, upgrade (preserving nixfied/project), re-entry reuse, invalid filter handling, prompt-plan toggle, and framework marker/app exposure behavior.
+`framework::test` is a first-class v2 task defined in `nixfied/project/module.nix`.
+It runs deterministic validation shards with stable log prefixes.
 
-## Example snippets
+Available shards:
+- `flake-check`
+- `help`
+- `workflow-test`
+- `workflow-ci`
+- `isolation` (runs when `FRAMEWORK_ISOLATION=1` or explicitly selected)
 
-These are intentionally minimal, real patterns taken from fixtures:
+## Useful options
 
 ```bash
-# Start a temporary service, run a check, then auto-cleanup.
-with_service web --wait-port "$PORT" -- python3 -m http.server "$PORT" --bind 127.0.0.1 --run \
-  "$BASH" -c "nc -z 127.0.0.1 $PORT"
-
-# Generate a CI artifact path (creates directory if needed).
-ART_PATH=$(artifact_path "quality.log")
-log_capture "$ART_PATH" -- ./lint
-
-# Resolve slot/env values explicitly.
-export PROJECT_ENV="test"
-export NIX_ENV="0"
-eval "$(${SLOT_INFO})"
-echo "$ENV"   # test
-echo "$SLOT"  # 0
+nix run .#framework::test -- --list-shards
+nix run .#framework::test -- --shard flake-check
+nix run .#framework::test -- --mode env --summary
+nix run .#framework::test -- --summary-json /tmp/framework-test-summary.json
+nix run .#framework::test -- --jobs 2
+nix run .#framework::test -- --serial
 ```
 
-## Examples index
+## Flake checks (canonical)
 
-If you want end‑to‑end examples, start here:
-- `fixtures/helpers/runtime.nix` — helper utilities in real scripts (log_capture, with_service, artifact_path).
-- `fixtures/helpers/env-loader-export.nix` — standard wrapper `.env` export propagation checks.
-- `fixtures/slots/runtime.nix` — slot/env strict validation and alias behavior.
-- `fixtures/ci/ci.nix` — CI DSL wiring and step control.
-- `fixtures/ci/retention.nix` — artifact retention modes.
-- `fixtures/ci/unknown-step.nix` — failure on misconfigured steps.
-- `fixtures/modules/dev.nix` — service hook lifecycle with health/readiness behavior across all supported modules.
-- `fixtures/ephemeral/lock.nix` — Ephemeral slot lock acquire/release.
-- `fixtures/ephemeral/env-loader-export.nix` — ephemeral wrapper `.env` export propagation checks.
-- `fixtures/registry/foreground.nix` — Run registry foreground tracking.
-- `fixtures/registry/policy-inference.nix` — Reuse policy inference and scope precedence checks.
+Deterministic v2 checks live in `tests/framework/v2/` and run via `nix flake check path:.`:
+- `v2-model-hash`
+- `v2-cross-machine-hash`
+- `v2-scheduler-order`
+- `v2-help-snapshot`
+- `v2-registry-replay`
+- `v2-compiler-validation`
+- `v2-executor-contract`
+- `v2-env-sandbox-contract`
+- `v2-registry-events-contract`
+- `v2-log-prefix-contract`
 
-## Fixtures
+## Output contract
 
-- `fixtures/ci/ci.nix`
-  - CI DSL test configuration.
-- `fixtures/ci/retention.nix`
-  - CI artifacts retention behavior.
-- `fixtures/ci/unknown-step.nix`
-  - CI modes referencing unknown steps.
-- `fixtures/ci/summary-json.nix`
-  - CI summary.json output validation.
-- `fixtures/modules/conf.nix`
-  - Base config with Postgres/Nginx enabled.
-- `fixtures/modules/dev.nix`
-  - Dev command script to exercise module hooks and helpers.
-- `fixtures/helpers/runtime.nix`
-  - Helper function regression tests (runtime helpers).
-- `fixtures/helpers/env-loader-export.nix`
-  - Standard wrapper `.env` export propagation regression tests.
-- `fixtures/slots/runtime.nix`
-  - Slot/env helper regression tests.
-- `fixtures/ephemeral/lock.nix`
-  - Ephemeral slot locking (acquire/release) tests.
-- `fixtures/ephemeral/env-loader-export.nix`
-  - Ephemeral wrapper `.env` export propagation regression tests.
-- `fixtures/registry/foreground.nix`
-  - Run registry foreground mode tests (meta.json, output.log).
-- `fixtures/registry/policy-inference.nix`
-  - Process registry inference tests (`SERVICE_REUSE_POLICY` -> owner/discovery fallback behavior).
-
-## V2 Determinism Gates
-
-Model-first architecture gates live in `tests/framework/v2/`:
-- `model-hash.nix` — canonical model hash stability for identical inputs.
-- `cross-machine-hash.nix` — canonical rendering hash stability independent of machine runtime state.
-- `scheduler-order.nix` — deterministic workflow expansion ordering.
-- `help-snapshot.nix` — generated help surface snapshot lock.
-- `registry-replay.nix` — deterministic registry state replay.
-
-They are exposed through flake checks and should pass in both local and CI runs.
+All framework-facing command output must remain ASCII and prefix-based:
+- `INFO:`
+- `WARN:`
+- `ERROR:`
+- `OK:`
+- `SKIP:`

@@ -8,6 +8,7 @@ Core apps:
   dev - Start the dev workflow
   format - Format Nix files
   framework::install - Install thin wrapper flake
+  framework::test - Run framework validation in the v2 model
   ports - Print model-derived port assignments
   test - Run tests
   test-isolation - Run isolation checks

@@ -11,7 +11,7 @@ on:
 env:
   BUILD_CMD: "nix flake check -L -v --log-format bar-with-logs"
   RUN_CMD: "nix run .#help -L -v --log-format bar-with-logs"
-  RUN_TESTS_CMD: "FRAMEWORK_ISOLATION=1 nix run -L -v --log-format bar-with-logs .#framework::test -- --jobs 2"
+  RUN_TESTS_CMD: "nix run -L -v --log-format bar-with-logs .#framework::test -- --summary"
 
 jobs:
   build-and-test:
@@ -47,23 +47,11 @@ jobs:
       - name: Run .#help
         run: |
           echo $RUN_CMD
-          # Build the flake and run the help command
           output=$(eval $RUN_CMD)
-
-          # Echo the output for debugging
-          echo "Help output:"
           echo "$output"
-
-          # Check if the output contains expected text
-          if echo "$output" | grep -q 'NIX_ENV'; then
-            echo "✓ Help text contains 'NIX_ENV' as expected"
-          else
-            echo "✗ Help text does not contain 'NIX_ENV'"
-            exit 1
-          fi
+          echo "$output" | grep -q 'Nixfied commands (model-generated)'
 
       - name: Run .#framework::test
         run: |
           echo $RUN_TESTS_CMD
           eval $RUN_TESTS_CMD
-
