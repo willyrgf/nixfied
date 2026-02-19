@@ -21,6 +21,8 @@ let
     pkgs.gnugrep
   ];
 
+  nixFormatterPkg = if pkgs ? nixfmt then pkgs.nixfmt else pkgs.nixfmt-rfc-style;
+
   mkCommandTask =
     {
       id,
@@ -284,6 +286,9 @@ in
           appName = "format";
           summary = "Format Nix files";
           usage = [ "nix run .#format" ];
+          runtimeInputs = commonRuntimeInputs ++ [
+            nixFormatterPkg
+          ];
           command = ''
             set -euo pipefail
             find . -name '*.nix' -print0 | xargs -0 nixfmt --
