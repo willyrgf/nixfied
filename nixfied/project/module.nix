@@ -1150,6 +1150,7 @@ in
             writeSummary = true;
           };
           execution = {
+            parallel = true;
             failFast = true;
             lockPolicy = "exclusive";
             emitRegistryEvents = true;
@@ -1207,6 +1208,7 @@ in
             writeSummary = true;
           };
           execution = {
+            parallel = true;
             failFast = true;
             lockPolicy = "exclusive";
             emitRegistryEvents = true;
@@ -1274,6 +1276,7 @@ in
             writeSummary = true;
           };
           execution = {
+            parallel = true;
             failFast = true;
             lockPolicy = "exclusive";
             emitRegistryEvents = true;
@@ -1309,6 +1312,7 @@ in
             writeSummary = true;
           };
           execution = {
+            parallel = true;
             failFast = true;
             lockPolicy = "exclusive";
             emitRegistryEvents = true;

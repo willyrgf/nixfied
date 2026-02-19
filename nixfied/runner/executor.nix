@@ -380,6 +380,31 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
     printf '%s' "$effective_workers"
   }
 
+  resolve_parallel_mode() {
+    local workflow="$1"
+    local configured_parallel
+    local env_override
+    local run_parallel=0
+
+    configured_parallel="$(printf '%s' "$workflow" | ${pkgs.jq}/bin/jq -r '.execution.parallel // false')"
+    if [ "$configured_parallel" = "true" ]; then
+      run_parallel=1
+    fi
+
+    env_override="''${NIXFIED_WORKFLOW_PARALLEL:-}"
+    if [ -n "$env_override" ]; then
+      if [ "$env_override" = "1" ]; then
+        run_parallel=1
+      elif [ "$env_override" = "0" ]; then
+        run_parallel=0
+      else
+        echo "WARN: ignoring invalid NIXFIED_WORKFLOW_PARALLEL='$env_override' (expected 0 or 1)"
+      fi
+    fi
+
+    printf '%s' "$run_parallel"
+  }
+
   run_workflow_serial_impl() {
     local run_id="$1"
     local workflow_id="$2"
@@ -847,6 +872,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
     local run_id
     local detail_json
     local fail_fast
+    local run_parallel
     local status=0
 
     workflow="$(workflow_json "$workflow_id")"
@@ -865,8 +891,9 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
     append_event "$run_id" "$workflow_id" "" "queued" "$detail_json"
 
     fail_fast="$(printf '%s' "$workflow" | ${pkgs.jq}/bin/jq -r '.execution.failFast')"
+    run_parallel="$(resolve_parallel_mode "$workflow")"
 
-    if [ "''${NIXFIED_WORKFLOW_PARALLEL:-0}" = "1" ]; then
+    if [ "$run_parallel" = "1" ]; then
       if run_workflow_parallel_impl "$run_id" "$workflow_id" "$workflow" "$fail_fast" "''${passthrough_args[@]}"; then
         status=0
       else
