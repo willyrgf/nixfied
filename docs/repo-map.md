@@ -15,23 +15,25 @@ Generated from `docs/repo-index.json`.
 - `flake.nix` (nix-flake)
 
 ## Command Surfaces
-- `build` from `nixfied/project/prod.nix`
-- `check` from `nixfied/project/quality.nix`
-- `ci` from `nixfied/project/ci.nix`
-- `dev` from `nixfied/project/dev.nix`
-- `format` from `nixfied/project/format.nix`
-- `test` from `nixfied/project/test.nix`
+- `build` from `nixfied/project/module.nix`
+- `check` from `nixfied/project/module.nix`
+- `ci` from `nixfied/project/module.nix`
+- `dev` from `nixfied/project/module.nix`
+- `format` from `nixfied/project/module.nix`
+- `framework::install` from `nixfied/project/module.nix`
+- `framework::test` from `nixfied/project/module.nix`
+- `test` from `nixfied/project/module.nix`
 
 ## Sensitive Zones
 - `nixfied/.framework` - Framework internals; avoid direct edits in installed repos. (checks: nix run .#help)
-- `nixfied/project/ci.nix` - CI pipeline behavior and release gates. (checks: nix run .#ci -- --summary)
-- `nixfied/project/conf.nix` - Project identity, environment names, and port contract. (checks: nix run .#check, nix run .#ci -- --summary)
-- `nixfied/project/quality.nix` - Quality checks and discovery drift enforcement. (checks: nix run .#check)
+- `nixfied/project/module.nix` - Primary v2 command/task/workflow surface. (checks: nix run .#help, nix run .#framework::test, nix run .#ci -- --summary)
+- `nixfied/project/conf.nix` - Project identity, environment names, and port contract. (checks: nix run .#validate-env, nix run .#ci -- --summary)
 
 ## Canonical Commands
 - `nix run .#help`
 - `nix run .#dev`
 - `nix run .#test`
+- `nix run .#framework::test`
 - `nix run .#build`
 - `nix run .#check`
 - `nix run .#ci -- --summary`

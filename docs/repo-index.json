@@ -61,9 +61,11 @@
       ]
     },
     {
-      "path": "nixfied/project/ci.nix",
-      "risk": "CI pipeline behavior and release gates.",
+      "path": "nixfied/project/module.nix",
+      "risk": "Primary v2 command/task/workflow surface.",
       "required_checks": [
+        "nix run .#help",
+        "nix run .#framework::test",
         "nix run .#ci -- --summary"
       ]
     },
@@ -71,42 +73,43 @@
       "path": "nixfied/project/conf.nix",
       "risk": "Project identity, environment names, and port contract.",
       "required_checks": [
-        "nix run .#check",
+        "nix run .#validate-env",
         "nix run .#ci -- --summary"
-      ]
-    },
-    {
-      "path": "nixfied/project/quality.nix",
-      "risk": "Quality checks and discovery drift enforcement.",
-      "required_checks": [
-        "nix run .#check"
       ]
     }
   ],
   "command_surfaces": [
     {
       "name": "build",
-      "owner_file": "nixfied/project/prod.nix"
+      "owner_file": "nixfied/project/module.nix"
     },
     {
       "name": "check",
-      "owner_file": "nixfied/project/quality.nix"
+      "owner_file": "nixfied/project/module.nix"
     },
     {
       "name": "ci",
-      "owner_file": "nixfied/project/ci.nix"
+      "owner_file": "nixfied/project/module.nix"
     },
     {
       "name": "dev",
-      "owner_file": "nixfied/project/dev.nix"
+      "owner_file": "nixfied/project/module.nix"
     },
     {
       "name": "format",
-      "owner_file": "nixfied/project/format.nix"
+      "owner_file": "nixfied/project/module.nix"
+    },
+    {
+      "name": "framework::install",
+      "owner_file": "nixfied/project/module.nix"
+    },
+    {
+      "name": "framework::test",
+      "owner_file": "nixfied/project/module.nix"
     },
     {
       "name": "test",
-      "owner_file": "nixfied/project/test.nix"
+      "owner_file": "nixfied/project/module.nix"
     }
   ]
 }

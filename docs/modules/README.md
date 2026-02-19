@@ -1,24 +1,14 @@
-# Module Documentation
+# Module Documentation (v2)
 
-This directory contains detailed docs for Nixfied optional service modules.
+These pages track module configuration notes only.
 
-## Shared module contract
+Current v2 command surfaces are model-generated from `nixfied/project/module.nix` and do not expose dedicated module app namespaces.
+Use `nix run .#help` for the live command list.
 
-- Enable modules in `nixfied/project/conf.nix` under `modules.<name>.enable = true`.
-- Each module defines `publicApi.version = 3` and a set of operations.
-- Each module defines `publicApi.runtimePrimitives` (version `1`) for:
-  - `LOG_LEVEL` (`error|warn|info|debug|trace`, alias `NIXFIED_LOG_LEVEL`)
-  - `OUTPUT_MODE` (`stdout|logs|both`, alias `NIXFIED_OUTPUT_MODE`)
-- Runtime default coupling applies to module hooks/apps: if `OUTPUT_MODE` is unset and `LOG_LEVEL=debug`, output defaults to `both`.
-- Runtime alias conflicts fail fast: conflicting canonical/alias pairs are rejected.
-- Runtime empty values fail fast: explicitly setting `LOG_LEVEL=""` or `OUTPUT_MODE=""` is invalid (leave unset to use defaults).
-- Each operation can expose:
-  - app: `svc::<service>::<operation>`
-  - hook env var: `SVC_<SERVICE>_<OP>`
-- Service apps require `PROJECT_ENV` and use `NIX_ENV` for slot selection (`0` default when unset).
-- Log and event operations are available as:
-  - `svc::<service>::log`
-  - `svc::<service>::events`
+## Configuration source
+
+- `nixfied/project/conf.nix` controls module enablement and module-specific port keys.
+- Runtime validation for env/slot settings is provided by `nix run .#validate-env`.
 
 ## Module pages
 

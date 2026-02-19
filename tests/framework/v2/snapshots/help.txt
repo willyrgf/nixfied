@@ -1,0 +1,25 @@
+Nixfied commands (model-generated)
+
+Core apps:
+  build - Build artifacts
+  check - Run quality checks
+  check-ports - Check model-derived port availability
+  ci - Run the CI pipeline
+  dev - Start the dev workflow
+  format - Format Nix files
+  framework::install - Install thin wrapper flake
+  framework::test - Run framework validation in the v2 model
+  ports - Print model-derived port assignments
+  test - Run tests
+  test-isolation - Run isolation checks
+  validate-env - Validate slot/env settings
+
+Dispatcher:
+  run-task <task-id> [-- ...]
+  run-workflow <workflow-id> [-- ...]
+
+Workflows:
+  workflow.ci.app - App CI workflow
+  workflow.ci.basic - Basic CI workflow
+  workflow.ci.env - Environment CI workflow
+  workflow.ci.full - Full CI workflow
