@@ -19,6 +19,9 @@ let
         set -euo pipefail
         pwd -P > "$CI_ARTIFACTS_DIR/workdir.txt"
         touch "./ephemeral-write-check.txt"
+        mkdir -p "./result/bin"
+        printf 'probe\n' > "./result/bin/mfm_cli"
+        chmod -R a-w "./result"
         echo "OK: ephemeral probe task complete"
       '';
       package = null;
@@ -129,6 +132,26 @@ pkgs.runCommand "ephemeral-execution-smoke" { } ''
 
   ${pkgs.gnugrep}/bin/grep -Fq "INFO: Ephemeral execution mode" "$TMPDIR/probe.out"
   ${pkgs.gnugrep}/bin/grep -Fq "OK: ephemeral probe task complete" "$TMPDIR/probe.out"
+  ${pkgs.gnugrep}/bin/grep -Fq "OK: Ephemeral state cleaned" "$TMPDIR/probe.out"
+
+  if ${pkgs.gnugrep}/bin/grep -Fq "Permission denied" "$TMPDIR/probe.out"; then
+    echo "unexpected permission error during ephemeral cleanup"
+    cat "$TMPDIR/probe.out"
+    exit 1
+  fi
+
+  summary_file="$CI_ARTIFACTS_DIR/summary.json"
+  if [ ! -f "$summary_file" ]; then
+    echo "missing summary file: $summary_file"
+    cat "$TMPDIR/probe.out"
+    exit 1
+  fi
+
+  ${pkgs.jq}/bin/jq -e '
+    (.timing.setup_duration | type) == "number"
+    and (.timing.total_duration | type) == "number"
+    and (.timing.total_duration >= .timing.setup_duration)
+  ' "$summary_file" > /dev/null
 
   echo "OK: ephemeral execution uses copied writable source root" > "$out"
 ''
