@@ -118,6 +118,10 @@
       "owner_file": "nixfied/project/module.nix"
     },
     {
+      "name": "framework::upgrade",
+      "owner_file": "nixfied/project/module.nix"
+    },
+    {
       "name": "health",
       "owner_file": "nixfied/project/module.nix"
     },

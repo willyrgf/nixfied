@@ -1552,9 +1552,9 @@ in
             };
           };
           stages = [ ];
-          preRun.tasks = [ ];
+          preRun.tasks = [ "task.ops.ready" ];
           postRun = {
-            tasks = [ ];
+            tasks = [ "task.ops.health" ];
             alwaysRun = true;
           };
           artifacts = {
@@ -1611,9 +1611,9 @@ in
             };
           };
           stages = [ ];
-          preRun.tasks = [ ];
+          preRun.tasks = [ "task.ops.ready" ];
           postRun = {
-            tasks = [ ];
+            tasks = [ "task.ops.health" ];
             alwaysRun = true;
           };
           artifacts = {
@@ -1680,9 +1680,9 @@ in
             };
           };
           stages = [ ];
-          preRun.tasks = [ ];
+          preRun.tasks = [ "task.ops.ready" ];
           postRun = {
-            tasks = [ ];
+            tasks = [ "task.ops.health" ];
             alwaysRun = true;
           };
           artifacts = {
@@ -1717,9 +1717,9 @@ in
               "task.ci.nginx-proxy"
             ]
           ];
-          preRun.tasks = [ ];
+          preRun.tasks = [ "task.ops.ready" ];
           postRun = {
-            tasks = [ ];
+            tasks = [ "task.ops.health" ];
             alwaysRun = true;
           };
           artifacts = {
@@ -1798,9 +1798,9 @@ in
             };
           };
           stages = [ ];
-          preRun.tasks = [ ];
+          preRun.tasks = [ "task.ops.ready" ];
           postRun = {
-            tasks = [ ];
+            tasks = [ "task.ops.health" ];
             alwaysRun = true;
           };
           artifacts = {
@@ -1835,9 +1835,9 @@ in
             };
           };
           stages = [ ];
-          preRun.tasks = [ ];
+          preRun.tasks = [ "task.ops.ready" ];
           postRun = {
-            tasks = [ ];
+            tasks = [ "task.ops.health" ];
             alwaysRun = true;
           };
           artifacts = {
@@ -1904,9 +1904,9 @@ in
             };
           };
           stages = [ ];
-          preRun.tasks = [ ];
+          preRun.tasks = [ "task.ops.ready" ];
           postRun = {
-            tasks = [ ];
+            tasks = [ "task.ops.health" ];
             alwaysRun = true;
           };
           artifacts = {

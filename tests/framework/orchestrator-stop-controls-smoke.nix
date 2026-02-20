@@ -54,7 +54,7 @@ let
         skipIfMissingEnv = [ ];
       };
     };
-    stages = [ ];
+    stages = [ [ "main" ] ];
     preRun = {
       tasks = [ ];
     };

@@ -64,6 +64,13 @@
     inherit pkgs;
   };
 
+  "ready-health-matrix-smoke" = import ./ready-health-matrix-smoke.nix {
+    inherit
+      pkgs
+      registry
+      ;
+  };
+
   "registry-events-contract" = import ./registry-events-contract.nix {
     inherit
       pkgs

@@ -24,6 +24,7 @@ Generated from `docs/repo-index.json`.
 - `format` from `nixfied/project/module.nix`
 - `framework::install` from `nixfied/project/module.nix`
 - `framework::test` from `nixfied/project/module.nix`
+- `framework::upgrade` from `nixfied/project/module.nix`
 - `health` from `nixfied/project/module.nix`
 - `ports` from `nixfied/project/module.nix`
 - `ready` from `nixfied/project/module.nix`
@@ -38,7 +39,7 @@ Generated from `docs/repo-index.json`.
 - `runs [run-id]` from `nixfied/runner/dispatcher.nix`
 - `stop-run -- <run-id>` from `nixfied/runner/dispatcher.nix`
 - `stop-all-runs` from `nixfied/runner/dispatcher.nix`
-- `model`, `stateHash`, `tasks`, `task::<id>`, `schema` from `nixfied/lib/mkNixfied.nix`
+- `model`, `stateHash`, `tasks`, `services`, `task::<id>`, `schema` from `nixfied/lib/mkNixfied.nix`
 
 ## Sensitive Zones
 - `nixfied/.framework` - Framework install internals and workspace marker handling. (checks: nix run .#help)
@@ -59,6 +60,7 @@ Generated from `docs/repo-index.json`.
 - `nix run .#check-ports`
 - `nix run .#framework::test`
 - `nix run .#framework::install`
+- `nix run .#framework::upgrade`
 
 ## Invariants
 - Treat `nixfied/project/` as the primary customization surface.

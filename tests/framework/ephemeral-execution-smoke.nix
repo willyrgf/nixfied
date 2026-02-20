@@ -52,7 +52,7 @@ let
     units = {
       probe = probeUnit;
     };
-    stages = [ ];
+    stages = [ [ "probe" ] ];
     preRun = {
       tasks = [ ];
     };

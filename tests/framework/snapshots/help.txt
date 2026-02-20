@@ -1,4 +1,5 @@
-Nixfied commands (model-generated)
+Nixfied Project commands (model-generated)
+Reusable Nix development framework
 
 Core apps:
   build - Build artifacts
