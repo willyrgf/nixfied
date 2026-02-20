@@ -26,7 +26,7 @@ Available shards:
 - `help`
 - `workflow-test`
 - `workflow-ci`
-- `isolation` (runs when `FRAMEWORK_ISOLATION=1` or explicitly selected)
+- `isolation`
 
 ## Useful options
 

@@ -433,6 +433,7 @@ ${envOffsetCase}
     slot_var=${lib.escapeShellArg isolationSlotVar}
     env_var=${lib.escapeShellArg isolationEnvVar}
     slot_max=${toString isolationMaxSlot}
+    max_parallel=${toString cfg.testIsolation.maxParallel}
     logs_root=${lib.escapeShellArg cfg.testIsolation.logsDir}
     run_app=${lib.escapeShellArg cfg.testIsolation.runApp}
     validate_app=${lib.escapeShellArg cfg.testIsolation.validateApp}
@@ -455,6 +456,16 @@ ${envOffsetCase}
       exit 3
     fi
 
+    if ! [[ "$max_parallel" =~ ^[0-9]+$ ]]; then
+      echo "ERROR: test-isolation maxParallel is not an integer: $max_parallel"
+      exit 3
+    fi
+
+    if [ "$max_parallel" -lt 1 ]; then
+      echo "ERROR: test-isolation maxParallel must be >= 1"
+      exit 3
+    fi
+
     mapfile -t isolation_slots < <(${pkgs.jq}/bin/jq -r '.[]' <<<"$slots_json")
     mapfile -t isolation_envs < <(${pkgs.jq}/bin/jq -r '.[]' <<<"$envs_json")
     mapfile -t run_args < <(${pkgs.jq}/bin/jq -r '.[]' <<<"$run_args_json")
@@ -473,8 +484,23 @@ ${envOffsetCase}
     mkdir -p "$logs_root"
     echo "INFO: test-isolation matrix slots=''${#isolation_slots[@]} envs=''${#isolation_envs[@]}"
 
+    statuses_dir="$(mktemp -d "$logs_root/.status.XXXXXX")"
+    semaphore_dir="$(mktemp -d "$logs_root/.semaphore.XXXXXX")"
+    semaphore_fifo="$semaphore_dir/tokens.fifo"
+    mkfifo "$semaphore_fifo"
+    exec 9<>"$semaphore_fifo"
+    rm -f "$semaphore_fifo"
+
+    token_count=0
+    while [ "$token_count" -lt "$max_parallel" ]; do
+      printf 'token\n' >&9
+      token_count=$((token_count + 1))
+    done
+
     total=0
     failed=0
+    worker_pids=()
+    status_files=()
 
     for slot_value in "''${isolation_slots[@]}"; do
       if ! [[ "$slot_value" =~ ^[0-9]+$ ]]; then
@@ -506,12 +532,16 @@ ${envOffsetCase}
         artifacts_dir="$cell_dir/artifacts"
         validate_log="$cell_dir/validate.log"
         run_log="$cell_dir/run.log"
+        status_file="$statuses_dir/$cell_name.rc"
 
         mkdir -p "$cell_dir" "$artifacts_dir"
         echo "INFO: isolation cell start slot=$slot_value env=$env_value"
+        status_files+=("$status_file")
 
-        set +e
+        IFS= read -r -u 9 _
         (
+          set +e
+          rc=1
           export "$slot_var=$slot_value"
           export "$env_var=$env_value"
           export CI_ARTIFACTS_DIR="$artifacts_dir"
@@ -523,22 +553,50 @@ ${envOffsetCase}
           done
 
           nix run "path:$project_root"#"$validate_app" > "$validate_log" 2>&1
-          nix run "path:$project_root"#"$run_app" -- "''${run_args[@]}" > "$run_log" 2>&1
-        )
-        rc="$?"
-        set -e
-
-        if [ "$rc" -eq 0 ]; then
-          echo "OK: isolation cell passed slot=$slot_value env=$env_value"
-          if [ "$keep_logs_success" -eq 0 ]; then
-            rm -rf "$cell_dir"
+          rc="$?"
+          if [ "$rc" -eq 0 ]; then
+            nix run "path:$project_root"#"$run_app" -- "''${run_args[@]}" > "$run_log" 2>&1
+            rc="$?"
           fi
-        else
-          failed=$((failed + 1))
-          echo "ERROR: isolation cell failed slot=$slot_value env=$env_value rc=$rc"
-        fi
+
+          printf '%s\n' "$rc" > "$status_file"
+          if [ "$rc" -eq 0 ]; then
+            echo "OK: isolation cell passed slot=$slot_value env=$env_value"
+            if [ "$keep_logs_success" -eq 0 ]; then
+              rm -rf "$cell_dir"
+            fi
+          else
+            echo "ERROR: isolation cell failed slot=$slot_value env=$env_value rc=$rc"
+          fi
+
+          printf 'token\n' >&9
+          exit 0
+        ) &
+        worker_pids+=("$!")
       done
     done
+
+    for worker_pid in "''${worker_pids[@]}"; do
+      wait "$worker_pid" || true
+    done
+
+    exec 9>&-
+    exec 9<&-
+    rm -rf "$semaphore_dir"
+
+    for status_file in "''${status_files[@]}"; do
+      if [ ! -f "$status_file" ]; then
+        failed=$((failed + 1))
+        echo "ERROR: isolation cell status missing file=$status_file"
+        continue
+      fi
+
+      rc="$(cat "$status_file")"
+      if [ "$rc" != "0" ]; then
+        failed=$((failed + 1))
+      fi
+    done
+    rm -rf "$statuses_dir"
 
     if [ "$total" -eq 0 ]; then
       echo "ERROR: test-isolation matrix did not execute any cells"
@@ -599,6 +657,11 @@ in
     testIsolation.keepLogsOnFailure = lib.mkOption {
       type = lib.types.bool;
       default = true;
+    };
+
+    testIsolation.maxParallel = lib.mkOption {
+      type = lib.types.ints.positive;
+      default = 4;
     };
 
     testIsolation.runApp = lib.mkOption {

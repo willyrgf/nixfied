@@ -236,6 +236,7 @@ in
           logsDir = conf.isolation.logsDir or "/tmp/${project.id}-isolation";
           keepLogsOnSuccess = conf.isolation.keepLogsOnSuccess or false;
           keepLogsOnFailure = conf.isolation.keepLogsOnFailure or true;
+          maxParallel = conf.isolation.maxParallel or 4;
           runApp = conf.isolation.run.app or "ci";
           runArgs = conf.isolation.run.args or [ "--summary" ];
           validateApp = conf.isolation.validate.app or "validate-env";
@@ -690,7 +691,7 @@ in
           examples = [
             "nix run .#framework::test -- --list-shards"
             "nix run .#framework::test -- --shard flake-check"
-            "FRAMEWORK_ISOLATION=1 nix run .#framework::test -- --summary"
+            "nix run .#framework::test -- --shard isolation"
           ];
           contractArgs = [
             {
@@ -822,7 +823,7 @@ in
               help          Validate generated help output.
               workflow-test Run the test workflow surface.
               workflow-ci   Run the CI workflow surface in selected mode.
-              isolation     Run isolation checks when FRAMEWORK_ISOLATION=1 or explicitly selected.
+              isolation     Run isolation checks.
             EOF
             }
 
@@ -896,12 +897,7 @@ in
             }
 
             shard_isolation() {
-              if [ "''${FRAMEWORK_ISOLATION:-}" = "1" ] || [ "$SHARD" = "isolation" ]; then
-                nix run "path:$ROOT"#test-isolation
-                return 0
-              fi
-              log_skip "isolation shard disabled (set FRAMEWORK_ISOLATION=1 to enable)"
-              return 0
+              nix run "path:$ROOT"#test-isolation
             }
 
             run_named_shard() {
