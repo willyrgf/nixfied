@@ -38,10 +38,14 @@ The compiled state hash is `sha256(toCanonicalNix(model))`.
 
 ## Runtime and Dispatch
 
-Execution is model-backed through dispatcher apps:
+Execution is model-backed through dispatcher apps and orchestrator controls:
 
 - `nix run .#run-task -- <task-id> [-- ...]`
 - `nix run .#run-workflow -- <workflow-id> [-- ...]`
+- `nix run .#run-workflow-parallel -- <workflow-id> [-- ...]`
+- `nix run .#runs [-- <run-id>]`
+- `nix run .#stop-run -- <run-id>`
+- `nix run .#stop-all-runs`
 
 Executor behavior:
 
@@ -49,6 +53,8 @@ Executor behavior:
 - hermetic `PATH` from declared `runtimeInputs`
 - deterministic defaults (`locale`, `timezone`, `umask`, workdir policy)
 - runtime variable support for `NIX_ENV` and `PROJECT_ENV`
+- workflow lifecycle phases via `preRun.tasks` and `postRun.tasks`
+- summary artifact contract at `CI_ARTIFACTS_DIR/summary.json` when enabled
 
 ## Core App Surfaces
 
@@ -93,6 +99,12 @@ Internal CI step tasks (for workflow composition) include:
 - `task.ci.system-quick`
 - `task.ci.nginx-proxy`
 
+Workflow lifecycle fields:
+
+- `preRun.tasks`
+- `postRun.tasks`
+- `postRun.alwaysRun`
+
 Only top-level user app surfaces are exposed in help output.
 
 ## Operations Utilities
@@ -125,7 +137,7 @@ Log rules:
 - monotonic contiguous `seq`
 - RFC3339 UTC `ts`
 
-Run IDs are deterministic and support collision suffixing (`-cNNN`) for active-run conflicts.
+Run IDs are allocated by the orchestrator and used as the registry correlation key for lifecycle events and control surfaces.
 
 ## Framework Validation
 

@@ -22,13 +22,23 @@ Each pass is pure and deterministic.
 
 ## Runtime Structure
 
-Task/workflow execution uses a single dispatcher boundary:
+Task/workflow execution is process-first and uses:
 
 - `run-task <task-id> [-- ...]`
 - `run-workflow <workflow-id> [-- ...]`
+- `run-workflow-parallel <workflow-id> [-- ...]`
+- `runs [run-id]`
+- `stop-run <run-id>`
+- `stop-all-runs`
+
+Runtime path:
+
+- dispatcher -> orchestrator -> executor
 
 Execution contracts:
 
+- Orchestrator-owned run lifecycle/state for all execution surfaces.
+- Foreground/background process policy (`--fg` / `--bg`) with run inventory and stop controls.
 - Hermetic runtime inputs for each task.
 - Deterministic defaults for locale, timezone, umask, and workdir policy.
 - Stable CLI prefixes (`INFO:`, `WARN:`, `ERROR:`, `OK:`, `SKIP:`).
@@ -65,7 +75,7 @@ Introspection apps:
 - `nixfied/project/`: project configuration and task/workflow definitions.
 - `nixfied/modules/`: typed option modules.
 - `nixfied/compiler/`: model compilation passes.
-- `nixfied/runner/`: dispatcher and executor apps.
+- `nixfied/runner/`: dispatcher, orchestrator, and executor apps.
 - `nixfied/registry/`: NDJSON event log, replay, and snapshot logic.
 - `nixfied/lib/`: canonical renderer and `mkNixfied`.
 - `tests/framework/`: deterministic framework gates and snapshots.

@@ -24,7 +24,9 @@ Generated from `docs/repo-index.json`.
 - `format` from `nixfied/project/module.nix`
 - `framework::install` from `nixfied/project/module.nix`
 - `framework::test` from `nixfied/project/module.nix`
+- `health` from `nixfied/project/module.nix`
 - `ports` from `nixfied/project/module.nix`
+- `ready` from `nixfied/project/module.nix`
 - `test` from `nixfied/project/module.nix`
 - `test-isolation` from `nixfied/project/module.nix`
 - `validate-env` from `nixfied/project/module.nix`
@@ -32,6 +34,10 @@ Generated from `docs/repo-index.json`.
 ## Dispatcher and Introspection
 - `run-task -- <task-id> [-- ...]` from `nixfied/runner/dispatcher.nix`
 - `run-workflow -- <workflow-id> [-- ...]` from `nixfied/runner/dispatcher.nix`
+- `run-workflow-parallel -- <workflow-id> [-- ...]` from `nixfied/runner/dispatcher.nix`
+- `runs [run-id]` from `nixfied/runner/dispatcher.nix`
+- `stop-run -- <run-id>` from `nixfied/runner/dispatcher.nix`
+- `stop-all-runs` from `nixfied/runner/dispatcher.nix`
 - `model`, `stateHash`, `tasks`, `task::<id>`, `schema` from `nixfied/lib/mkNixfied.nix`
 
 ## Sensitive Zones

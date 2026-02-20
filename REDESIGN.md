@@ -20,7 +20,7 @@ Primary goals:
 - Centralized configuration in typed module options (`nixfied/modules/`).
 - Explicit compiler pass pipeline (`nixfied/compiler/`).
 - Canonical state hashing from Nix rendering (`toCanonicalNix`).
-- Single dispatcher runtime for tasks/workflows (`nixfied/runner/`).
+- Process-first runtime (`dispatcher -> orchestrator -> executor`) for tasks/workflows (`nixfied/runner/`).
 - Strict NDJSON event registry with replay/snapshot support (`nixfied/registry/`).
 - Determinism-focused validation in `tests/framework/`.
 
