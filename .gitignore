@@ -1,6 +1,7 @@
 *.log
 .ci-artifacts
 *.md
+!REINCORPORATION_PLAN.md
 !AGENTS.md
 !README.md
 !CLAUDE.md
