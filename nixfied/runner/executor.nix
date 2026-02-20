@@ -349,6 +349,8 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         printf '%s' "$candidate"
         return
       fi
+      echo "ERROR: unknown mode '$mode_override' (expected: basic|app|env|full)" >&2
+      return 2
     fi
 
     printf '%s' "$workflow_id"
@@ -381,7 +383,8 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           effective_workers="$override_value"
         fi
       else
-        echo "WARN: ignoring invalid $override_name='$override_value' (expected integer >= 1)"
+        echo "ERROR: $override_name must be an integer >= 1 (got '$override_value')" >&2
+        return 2
       fi
     fi
 
@@ -639,7 +642,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       done
     }
 
-    max_workers="$(resolve_effective_max_workers "$workflow")"
+    max_workers="$(resolve_effective_max_workers "$workflow")" || return $?
     lock_policy="$(printf '%s' "$workflow" | ${pkgs.jq}/bin/jq -r '.execution.lockPolicy // "exclusive"')"
     if [ "$lock_policy" = "shared-aware" ]; then
       echo "WARN: lockPolicy=shared-aware uses exclusive semantics in workflow parallel runner"
@@ -1038,7 +1041,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       esac
     done
 
-    workflow_id="$(resolve_workflow_mode "$workflow_id" "$mode_override")"
+    workflow_id="$(resolve_workflow_mode "$workflow_id" "$mode_override")" || return $?
 
     local workflow
     local args_payload

@@ -91,6 +91,22 @@
       ;
   };
 
+  "parallel-worker-cap-invalid-smoke" = import ./parallel-worker-cap-invalid-smoke.nix {
+    inherit
+      pkgs
+      model
+      registry
+      ;
+  };
+
+  "ci-mode-matrix-smoke" = import ./ci-mode-matrix-smoke.nix {
+    inherit
+      pkgs
+      model
+      registry
+      ;
+  };
+
   "task-hooks-smoke" = import ./task-hooks-smoke.nix {
     inherit
       pkgs
@@ -99,7 +115,30 @@
       ;
   };
 
+  "framework-test-cli-contract-smoke" = import ./framework-test-cli-contract-smoke.nix {
+    inherit
+      pkgs
+      model
+      registry
+      ;
+  };
+
+  "framework-selfhost-contract" = import ./framework-selfhost-contract.nix {
+    inherit
+      pkgs
+      model
+      ;
+  };
+
   "framework-install-vendor-smoke" = import ./framework-install-vendor-smoke.nix {
+    inherit
+      pkgs
+      model
+      registry
+      ;
+  };
+
+  "framework-install-thin-smoke" = import ./framework-install-thin-smoke.nix {
     inherit
       pkgs
       model

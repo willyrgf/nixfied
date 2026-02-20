@@ -13,7 +13,7 @@ Compiler/model contracts:
 Runner contracts:
 - nixfied/runner/executor.nix
 - nixfied/runner/env-sandbox.nix
-- checks: executor-contract, env-sandbox-contract, log-prefix-contract
+- checks: executor-contract, env-sandbox-contract, log-prefix-contract, parallel-runner-smoke, parallel-worker-cap-smoke, parallel-worker-cap-invalid-smoke, workflow-lifecycle-smoke, task-hooks-smoke
 
 Operations contracts:
 - nixfied/modules/operations.nix
@@ -26,12 +26,20 @@ Registry contracts:
 
 Workflow determinism:
 - nixfied/project/module.nix (workflow.ci.*)
-- check: scheduler-order
+- checks: scheduler-order, ci-mode-matrix-smoke
 
 Install wrapper contracts:
 - nixfied/install/wrapper-flake.nix
 - nixfied/project/module.nix (task.framework.install)
-- check: framework-install-vendor-smoke
+- checks: framework-install-vendor-smoke, framework-install-thin-smoke
+
+Framework task/app contracts:
+- nixfied/project/module.nix (task.framework.test)
+- checks: framework-test-cli-contract-smoke, framework-selfhost-contract
+
+Orchestrator lifecycle controls:
+- nixfied/runner/orchestrator.nix
+- checks: orchestrator-lifecycle-contract, orchestrator-stop-controls-smoke, summary-json-smoke
 
 Fixture harness status:
 - removed (legacy harness wiring deleted in the redesign)

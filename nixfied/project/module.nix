@@ -667,6 +667,29 @@ in
             ui.app.expose = false;
           };
 
+        test-framework-selfhost =
+          mkCommandTask {
+            id = "task.test.framework.selfhost";
+            appName = "test-framework-selfhost";
+            kind = "internal";
+            summary = "Framework self-host smoke command";
+            description = "Runs framework commands through dispatcher entry points.";
+            runtimeInputs = commonRuntimeInputs ++ [
+              pkgs.nix
+            ];
+            command = ''
+              set -euo pipefail
+              ROOT="$(pwd -P)"
+              echo "INFO: self-host smoke start"
+              nix run "path:$ROOT"#run-task -- task.dev > /dev/null
+              nix run "path:$ROOT"#run-workflow -- workflow.ci.basic --summary > /dev/null
+              echo "OK: self-host smoke complete"
+            '';
+          }
+          // {
+            ui.app.expose = false;
+          };
+
         framework-test = mkCommandTask {
           id = "task.framework.test";
           appName = "framework::test";
@@ -692,6 +715,7 @@ in
             "nix run .#framework::test -- --list-shards"
             "nix run .#framework::test -- --shard flake-check"
             "nix run .#framework::test -- --shard isolation"
+            "nix run .#framework::test -- --shard self-host"
           ];
           contractArgs = [
             {
@@ -726,6 +750,7 @@ in
                 "workflow-test"
                 "workflow-ci"
                 "isolation"
+                "self-host"
               ];
               description = "Run one shard only.";
             }
@@ -789,6 +814,7 @@ in
               "workflow-test"
               "workflow-ci"
               "isolation"
+              "self-host"
             )
             EXECUTED=0
             STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -824,6 +850,7 @@ in
               workflow-test Run the test workflow surface.
               workflow-ci   Run the CI workflow surface in selected mode.
               isolation     Run isolation checks.
+              self-host     Run a workflow that exercises framework entry points.
             EOF
             }
 
@@ -874,30 +901,35 @@ in
                 EXECUTED="$((EXECUTED + 1))"
                 log_ok "shard passed name=$shard_name"
                 return 0
+              else
+                local rc=$?
+                log_error "shard failed name=$shard_name rc=$rc"
+                return "$rc"
               fi
-              local rc=$?
-              log_error "shard failed name=$shard_name rc=$rc"
-              return "$rc"
             }
 
             shard_flake_check() {
-              nix flake check "path:$ROOT"
+              nix flake check path:.
             }
 
             shard_help() {
-              nix run "path:$ROOT"#help >/dev/null
+              nix run path:.#help >/dev/null
             }
 
             shard_workflow_test() {
-              nix run "path:$ROOT"#test -- --summary
+              nix run path:.#test -- --summary
             }
 
             shard_workflow_ci() {
-              nix run "path:$ROOT"#ci -- --mode "$MODE" --summary
+              nix run path:.#ci -- --mode "$MODE" --summary
             }
 
             shard_isolation() {
-              nix run "path:$ROOT"#test-isolation
+              nix run path:.#test-isolation
+            }
+
+            shard_self_host() {
+              nix run path:.#run-workflow -- workflow.test.framework.selfhost --summary
             }
 
             run_named_shard() {
@@ -917,6 +949,9 @@ in
                   ;;
                 isolation)
                   run_shard "$shard_name" shard_isolation
+                  ;;
+                self-host)
+                  run_shard "$shard_name" shard_self_host
                   ;;
                 *)
                   log_error "unknown shard '$shard_name'"
@@ -1429,6 +1464,45 @@ in
             failFast = true;
             lockPolicy = "exclusive";
             emitRegistryEvents = true;
+          };
+        };
+
+        test-framework-selfhost = {
+          id = "workflow.test.framework.selfhost";
+          summary = "Framework self-host smoke workflow";
+          description = "Runs internal self-host command through workflow orchestration.";
+          mode = "custom";
+          maxWorkers = 1;
+          units = {
+            main = {
+              taskId = "task.test.framework.selfhost";
+              needs = [ ];
+              locks = [ ];
+              when = {
+                envEquals = { };
+                envPresent = [ ];
+              };
+              skipIfMissingEnv = [ ];
+            };
+          };
+          stages = [ ];
+          preRun.tasks = [ ];
+          postRun = {
+            tasks = [ ];
+            alwaysRun = true;
+          };
+          artifacts = {
+            root = "/tmp/ci-artifacts";
+            keepOnSuccess = false;
+            keepOnFailure = true;
+            writeSummary = true;
+          };
+          execution = {
+            parallel = false;
+            failFast = true;
+            lockPolicy = "exclusive";
+            emitRegistryEvents = true;
+            ephemeral.enable = null;
           };
         };
 

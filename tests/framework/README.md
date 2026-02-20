@@ -27,12 +27,14 @@ Available shards:
 - `workflow-test`
 - `workflow-ci`
 - `isolation`
+- `self-host`
 
 ## Useful options
 
 ```bash
 nix run .#framework::test -- --list-shards
 nix run .#framework::test -- --shard flake-check
+nix run .#framework::test -- --shard self-host
 nix run .#framework::test -- --mode env --summary
 nix run .#framework::test -- --summary-json /tmp/framework-test-summary.json
 ```
@@ -53,8 +55,13 @@ Deterministic checks live in `tests/framework/` and run via `nix flake check pat
 - `log-prefix-contract`
 - `parallel-runner-smoke`
 - `parallel-worker-cap-smoke`
+- `parallel-worker-cap-invalid-smoke`
+- `ci-mode-matrix-smoke`
 - `task-hooks-smoke`
+- `framework-test-cli-contract-smoke`
+- `framework-selfhost-contract`
 - `framework-install-vendor-smoke`
+- `framework-install-thin-smoke`
 - `orchestrator-lifecycle-contract`
 - `orchestrator-stop-controls-smoke`
 - `workflow-lifecycle-smoke`
