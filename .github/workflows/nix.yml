@@ -51,8 +51,9 @@ jobs:
         run: |
           set -euo pipefail
           output="$(nix run .#help -L -v --log-format bar-with-logs)"
+          expected_header="$(head -n1 tests/framework/snapshots/help.txt)"
           echo "$output"
-          echo "$output" | grep -q 'Nixfied commands (model-generated)'
+          echo "$output" | grep -Fq "$expected_header"
 
       - name: Run .#framework::test
         run: |
