@@ -19,7 +19,7 @@ nix run path:.#framework::test
 ## Behavior
 
 `framework::test` is a first-class task defined in `nixfied/project/module.nix`.
-It runs deterministic validation shards with stable log prefixes.
+It runs validation shards with stable log prefixes and supports shard-level parallelism.
 
 Available shards:
 - `flake-check`

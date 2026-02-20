@@ -35,6 +35,13 @@ pkgs.runCommand "framework-test-cli-contract-smoke" { } ''
   require_contains "$TMPDIR/shard-help.out" "OK: shard passed name=help"
   require_contains "$TMPDIR/shard-help.out" "INFO: summary profile=ci mode=full executed_shards=1"
 
+  "$ORCH" run-task task.framework.test --shard help --serial --summary > "$TMPDIR/shard-help-serial.out" 2>&1
+  require_contains "$TMPDIR/shard-help-serial.out" "INFO: running shards serial total=1"
+  require_contains "$TMPDIR/shard-help-serial.out" "OK: shard passed name=help"
+
+  "$ORCH" run-task task.framework.test --shard help --max-parallel-shards auto --summary > "$TMPDIR/shard-help-auto.out" 2>&1
+  require_contains "$TMPDIR/shard-help-auto.out" "OK: shard passed name=help"
+
   summary_json="$TMPDIR/framework-summary.json"
   "$ORCH" run-task task.framework.test --shard help --summary-json "$summary_json" > "$TMPDIR/summary-json.out" 2>&1
   require_file "$summary_json"
@@ -75,6 +82,15 @@ pkgs.runCommand "framework-test-cli-contract-smoke" { } ''
     fail "expected unknown shard to fail"
   fi
   require_contains "$TMPDIR/shard-unknown.out" "unknown shard 'unknown'"
+
+  set +e
+  "$ORCH" run-task task.framework.test --shard help --max-parallel-shards 0 > "$TMPDIR/max-parallel-invalid.out" 2>&1
+  max_parallel_rc="$?"
+  set -e
+  if [ "$max_parallel_rc" -eq 0 ]; then
+    fail "expected --max-parallel-shards 0 to fail"
+  fi
+  require_contains "$TMPDIR/max-parallel-invalid.out" "invalid --max-parallel-shards '0'"
 
   echo "OK: framework::test CLI contract is validated" > "$out"
 ''

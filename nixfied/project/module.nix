@@ -2,6 +2,14 @@
 let
   conf = import ./conf.nix { inherit pkgs; };
   project = conf.project;
+  frameworkTestMaxParallelShardsRaw = conf.frameworkTest.maxParallelShards or "auto";
+  frameworkTestMaxParallelShards =
+    if builtins.isInt frameworkTestMaxParallelShardsRaw then
+      toString frameworkTestMaxParallelShardsRaw
+    else if builtins.isString frameworkTestMaxParallelShardsRaw then
+      frameworkTestMaxParallelShardsRaw
+    else
+      throw "ERROR: frameworkTest.maxParallelShards must be \"auto\" or a positive integer";
 
   envNames = builtins.attrNames conf.envs;
   envOffsets = lib.mapAttrs (_: value: value.offset or 0) conf.envs;
@@ -912,7 +920,7 @@ in
           kind = "utility";
           summary = "Run framework validation in the model";
           description = ''
-            Runs deterministic validation shards.
+            Runs framework validation shards with configurable shard parallelism.
           '';
           runtimeInputs = [
             pkgs.bash
@@ -971,6 +979,19 @@ in
               description = "Run one shard only.";
             }
             {
+              name = "max-parallel-shards";
+              kind = "option";
+              long = "--max-parallel-shards";
+              type = "string";
+              description = "Shard worker cap (positive integer) or 'auto' for all selected shards.";
+            }
+            {
+              name = "serial";
+              kind = "flag";
+              long = "--serial";
+              description = "Force serial shard execution.";
+            }
+            {
               name = "list-shards";
               kind = "flag";
               long = "--list-shards";
@@ -1024,6 +1045,9 @@ in
             LIST_SHARDS=0
             SUMMARY=0
             SUMMARY_JSON=""
+            MAX_PARALLEL_SHARDS_DEFAULT=${lib.escapeShellArg frameworkTestMaxParallelShards}
+            MAX_PARALLEL_SHARDS="$MAX_PARALLEL_SHARDS_DEFAULT"
+            SERIAL=0
             SHARDS=(
               "flake-check"
               "help"
@@ -1058,7 +1082,7 @@ in
 
             usage() {
               cat <<'EOF'
-            Usage: nix run .#framework::test [-- --profile ci] [--mode <basic|app|env|full>] [--summary] [--summary-json <path>] [--shard <name>] [--list-shards]
+            Usage: nix run .#framework::test [-- --profile ci] [--mode <basic|app|env|full>] [--summary] [--summary-json <path>] [--shard <name>] [--max-parallel-shards <n|auto>] [--serial] [--list-shards]
 
             Shards:
               flake-check   Run nix flake check for the current project root.
@@ -1114,7 +1138,6 @@ in
               shift
               log_info "running shard=$shard_name"
               if "$@"; then
-                EXECUTED="$((EXECUTED + 1))"
                 log_ok "shard passed name=$shard_name"
                 return 0
               else
@@ -1176,6 +1199,133 @@ in
               esac
             }
 
+            run_named_shard_recorded() {
+              local shard_name="$1"
+              if run_named_shard "$shard_name"; then
+                EXECUTED="$((EXECUTED + 1))"
+                return 0
+              fi
+              return $?
+            }
+
+            resolve_parallel_workers() {
+              local requested="$1"
+              local shard_total="$2"
+              local workers="$shard_total"
+
+              if [ "$requested" != "auto" ]; then
+                workers="$requested"
+              fi
+
+              if [ "$workers" -gt "$shard_total" ]; then
+                workers="$shard_total"
+              fi
+
+              if [ "$workers" -lt 1 ]; then
+                workers=1
+              fi
+
+              printf '%s' "$workers"
+            }
+
+            run_shards_parallel() {
+              local requested_workers="$1"
+              shift
+              local shard_names=("''${@}")
+              local shard_total="''${#shard_names[@]}"
+              local workers
+              local temp_root
+              local status_dir
+              local semaphore_dir
+              local semaphore_fifo
+              local token_index
+              local shard_name
+              local status_file
+              local worker_pids=()
+              local worker_pid
+              local rc
+              local failed=0
+              local first_rc=1
+
+              if [ "$shard_total" -eq 0 ]; then
+                return 0
+              fi
+
+              workers="$(resolve_parallel_workers "$requested_workers" "$shard_total")"
+              if [ "$workers" -le 1 ]; then
+                for shard_name in "''${shard_names[@]}"; do
+                  run_named_shard_recorded "$shard_name" || return $?
+                done
+                return 0
+              fi
+
+              log_info "running shards parallel workers=$workers total=$shard_total"
+
+              temp_root="$(mktemp -d)"
+              status_dir="$temp_root/status"
+              semaphore_dir="$temp_root/semaphore"
+              semaphore_fifo="$semaphore_dir/tokens.fifo"
+              mkdir -p "$status_dir" "$semaphore_dir"
+
+              mkfifo "$semaphore_fifo"
+              exec 8<>"$semaphore_fifo"
+              rm -f "$semaphore_fifo"
+
+              token_index=0
+              while [ "$token_index" -lt "$workers" ]; do
+                printf 'token\n' >&8
+                token_index="$((token_index + 1))"
+              done
+
+              for shard_name in "''${shard_names[@]}"; do
+                status_file="$status_dir/$shard_name.rc"
+                IFS= read -r -u 8 _
+                (
+                  set +e
+                  run_named_shard "$shard_name"
+                  rc="$?"
+                  printf '%s\n' "$rc" > "$status_file"
+                  printf 'token\n' >&8
+                  exit 0
+                ) &
+                worker_pids+=("$!")
+              done
+
+              for worker_pid in "''${worker_pids[@]}"; do
+                wait "$worker_pid" || true
+              done
+
+              exec 8>&-
+              exec 8<&-
+
+              for shard_name in "''${shard_names[@]}"; do
+                status_file="$status_dir/$shard_name.rc"
+                if [ ! -f "$status_file" ]; then
+                  failed=1
+                  first_rc=1
+                  log_error "shard status missing name=$shard_name"
+                  continue
+                fi
+
+                rc="$(cat "$status_file")"
+                if [ "$rc" = "0" ]; then
+                  EXECUTED="$((EXECUTED + 1))"
+                else
+                  if [ "$failed" -eq 0 ]; then
+                    first_rc="$rc"
+                  fi
+                  failed=1
+                fi
+              done
+
+              rm -rf "$temp_root"
+
+              if [ "$failed" -eq 1 ]; then
+                return "$first_rc"
+              fi
+              return 0
+            }
+
             while [ "$#" -gt 0 ]; do
               case "$1" in
                 --profile)
@@ -1217,6 +1367,18 @@ in
                   fi
                   SHARD="$2"
                   shift 2
+                  ;;
+                --max-parallel-shards)
+                  if [ "$#" -lt 2 ]; then
+                    log_error "--max-parallel-shards requires a value"
+                    exit 2
+                  fi
+                  MAX_PARALLEL_SHARDS="$2"
+                  shift 2
+                  ;;
+                --serial)
+                  SERIAL=1
+                  shift
                   ;;
                 --list-shards)
                   LIST_SHARDS=1
@@ -1265,6 +1427,21 @@ in
                 ;;
             esac
 
+            case "$MAX_PARALLEL_SHARDS" in
+              auto)
+                ;;
+              *)
+                if ! [[ "$MAX_PARALLEL_SHARDS" =~ ^[0-9]+$ ]]; then
+                  log_error "invalid --max-parallel-shards '$MAX_PARALLEL_SHARDS' (expected: auto|positive-integer)"
+                  exit 2
+                fi
+                if [ "$MAX_PARALLEL_SHARDS" -lt 1 ]; then
+                  log_error "invalid --max-parallel-shards '$MAX_PARALLEL_SHARDS' (expected: auto|positive-integer)"
+                  exit 2
+                fi
+                ;;
+            esac
+
             if [ "$LIST_SHARDS" -eq 1 ]; then
               print_shards
               exit 0
@@ -1285,12 +1462,20 @@ in
             }
             trap cleanup EXIT
 
+            selected_shards=()
             if [ -n "$SHARD" ]; then
-              run_named_shard "$SHARD"
+              selected_shards+=("$SHARD")
             else
-              for shard_name in "''${SHARDS[@]}"; do
-                run_named_shard "$shard_name"
+              selected_shards=("''${SHARDS[@]}")
+            fi
+
+            if [ "$SERIAL" -eq 1 ]; then
+              log_info "running shards serial total=''${#selected_shards[@]}"
+              for shard_name in "''${selected_shards[@]}"; do
+                run_named_shard_recorded "$shard_name"
               done
+            else
+              run_shards_parallel "$MAX_PARALLEL_SHARDS" "''${selected_shards[@]}"
             fi
 
             if [ "$SUMMARY" -eq 1 ]; then

@@ -141,12 +141,13 @@ Run IDs are allocated by the orchestrator and used as the registry correlation k
 
 ## Framework Validation
 
-`framework::test` provides deterministic shard execution:
+`framework::test` provides shard execution with configurable parallelism:
 
 - `flake-check`
 - `help`
 - `workflow-test`
 - `workflow-ci`
 - `isolation`
+- `self-host`
 
 Determinism and contract checks live under `tests/framework/` and are exposed via flake checks.
