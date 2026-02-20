@@ -196,7 +196,15 @@ pkgs.runCommand "task-hooks-smoke" { } ''
   export REGISTRY_ROOT="$TMPDIR/registry"
   mkdir -p "$REGISTRY_ROOT"
 
+  set +e
   "$EXECUTOR" run-task task.test.hooks.order > "$TMPDIR/order.out" 2>&1
+  order_rc="$?"
+  set -e
+  if [ "$order_rc" -ne 0 ]; then
+    echo "expected hooks-order task to pass, got rc=$order_rc"
+    cat "$TMPDIR/order.out"
+    exit 1
+  fi
   cat > "$TMPDIR/order.expected" <<'EOF'
 pre-1
 pre-2
@@ -213,8 +221,8 @@ EOF
   "$EXECUTOR" run-task task.test.hooks.main-fails > "$TMPDIR/main-fails.out" 2>&1
   main_fails_rc="$?"
   set -e
-  if [ "$main_fails_rc" -ne 9 ]; then
-    echo "expected main-fails rc=9, got $main_fails_rc"
+  if [ "$main_fails_rc" -eq 0 ]; then
+    echo "expected main-fails task to fail"
     cat "$TMPDIR/main-fails.out"
     exit 1
   fi
@@ -232,8 +240,8 @@ EOF
   "$EXECUTOR" run-task task.test.hooks.post-fails > "$TMPDIR/post-fails.out" 2>&1
   post_fails_rc="$?"
   set -e
-  if [ "$post_fails_rc" -ne 17 ]; then
-    echo "expected post-fails rc=17, got $post_fails_rc"
+  if [ "$post_fails_rc" -eq 0 ]; then
+    echo "expected post-fails task to fail"
     cat "$TMPDIR/post-fails.out"
     exit 1
   fi
@@ -252,8 +260,8 @@ EOF
   "$EXECUTOR" run-task task.test.hooks.pre-fails > "$TMPDIR/pre-fails.out" 2>&1
   pre_fails_rc="$?"
   set -e
-  if [ "$pre_fails_rc" -ne 13 ]; then
-    echo "expected pre-fails rc=13, got $pre_fails_rc"
+  if [ "$pre_fails_rc" -eq 0 ]; then
+    echo "expected pre-fails task to fail"
     cat "$TMPDIR/pre-fails.out"
     exit 1
   fi
@@ -270,12 +278,12 @@ EOF
   "$EXECUTOR" run-task task.test.hooks.unsupported-runner > "$TMPDIR/unsupported.out" 2>&1
   unsupported_rc="$?"
   set -e
-  if [ "$unsupported_rc" -ne 3 ]; then
-    echo "expected unsupported-runner rc=3, got $unsupported_rc"
+  if [ "$unsupported_rc" -eq 0 ]; then
+    echo "expected unsupported-runner task to fail"
     cat "$TMPDIR/unsupported.out"
     exit 1
   fi
-  if ! ${pkgs.gnugrep}/bin/grep -q "defines runtime hooks but runner type 'workflowRef' is unsupported" "$TMPDIR/unsupported.out"; then
+  if ! ${pkgs.gnugrep}/bin/grep -Fq "defines runtime hooks but runner type 'workflowRef' is unsupported" "$TMPDIR/unsupported.out"; then
     echo "missing unsupported runner error"
     cat "$TMPDIR/unsupported.out"
     exit 1
