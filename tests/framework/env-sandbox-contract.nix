@@ -9,6 +9,8 @@ assert pkgs.lib.hasInfix "ERROR: unknown runtime.workdir '$workdir_kind'" source
 assert pkgs.lib.hasInfix
   "env -i \"PATH=$final_path\" \"LANG=$locale\" \"LC_ALL=$locale\" \"TZ=$timezone\" \"HOME=$home_value\""
   source;
+assert pkgs.lib.hasInfix "/usr/bin/xcrun --sdk macosx --show-sdk-path" source;
+assert pkgs.lib.hasInfix "env_cmd+=(\"SDKROOT=$host_sdkroot\")" source;
 assert pkgs.lib.hasInfix ".passThroughEnv[]?" source;
 assert pkgs.lib.hasInfix ".env | to_entries[]?" source;
 pkgs.runCommand "env-sandbox-contract" { } ''
