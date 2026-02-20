@@ -41,7 +41,29 @@ pkgs.runCommand "summary-json-smoke" { } ''
     and (.counts.passed | type == "number")
     and (.counts.failed | type == "number")
     and (.counts.canceled | type == "number")
+    and (.steps | type == "array")
+    and (.steps | length >= 2)
+    and ([.steps[] | .name | type] | all(. == "string"))
+    and ([.steps[] | .status | type] | all(. == "string"))
+    and ([.steps[] | .duration | type] | all(. == "number"))
+    and (.timing.total_duration | type == "number")
+    and (.timing.setup_duration | type == "number")
+    and (.timing.steps_duration | type == "number")
+    and (.timing.teardown_duration | type == "number")
+    and (.timing.accounted_duration | type == "number")
+    and (.timing.untracked_duration | type == "number")
+    and ((.timing.parallelism.max_workers | type) == "number" or (.timing.parallelism.max_workers | type) == "null")
+    and ((.timing.parallelism.peak_workers | type) == "number" or (.timing.parallelism.peak_workers | type) == "null")
+    and ((.timing.parallelism.canceled_count | type) == "number" or (.timing.parallelism.canceled_count | type) == "null")
   ' "$summary_file" > /dev/null
+
+  ${pkgs.gnugrep}/bin/grep -Fq "Summary" "$TMPDIR/ci.out"
+  ${pkgs.gnugrep}/bin/grep -Fq "[PASS] task.ci.quality" "$TMPDIR/ci.out"
+  ${pkgs.gnugrep}/bin/grep -Fq "[PASS] task.ci.tests" "$TMPDIR/ci.out"
+  ${pkgs.gnugrep}/bin/grep -Fq "Total time:" "$TMPDIR/ci.out"
+  ${pkgs.gnugrep}/bin/grep -Fq "INFO: Time breakdown" "$TMPDIR/ci.out"
+  ${pkgs.gnugrep}/bin/grep -Fq "INFO: Parallelism" "$TMPDIR/ci.out"
+  ${pkgs.gnugrep}/bin/grep -Fq "OK: Exit code: 0" "$TMPDIR/ci.out"
 
   echo "OK: workflow summary json contract validated" > "$out"
 ''
