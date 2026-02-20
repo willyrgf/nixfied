@@ -2,6 +2,7 @@
 .ci-artifacts
 *.md
 !REINCORPORATION_PLAN.md
+!RESTORE_PROCESS_FIRST_CI.md
 !AGENTS.md
 !README.md
 !CLAUDE.md
