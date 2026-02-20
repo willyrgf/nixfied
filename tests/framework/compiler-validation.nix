@@ -22,6 +22,16 @@ let
     builtins.all (unit: builtins.hasAttr unit.taskId model.tasks) workflow.plan
   ) workflowIds;
 
+  workflowsHaveLifecycle = builtins.all (
+    workflowId:
+    let
+      workflow = model.workflows.${workflowId};
+    in
+    workflow ? preRun
+    && workflow ? postRun
+    && workflow.postRun ? alwaysRun
+  ) workflowIds;
+
   frameworkTask = model.tasks."task.framework.test" or null;
   formatTask = model.tasks."task.format" or null;
 in
@@ -35,6 +45,7 @@ assert formatTask.runtime.postHooks ? "framework.nixfmt";
 assert pkgs.lib.hasInfix "nixfmt --" formatTask.runtime.postHooks."framework.nixfmt".command;
 assert tasksHaveStableIds;
 assert workflowsReferenceKnownTasks;
+assert workflowsHaveLifecycle;
 pkgs.runCommand "compiler-validation" { } ''
   echo "OK: compiler task and workflow contracts are stable" > "$out"
 ''

@@ -52,8 +52,13 @@ Deterministic checks live in `tests/framework/` and run via `nix flake check pat
 - `registry-events-contract`
 - `log-prefix-contract`
 - `parallel-runner-smoke`
+- `parallel-worker-cap-smoke`
 - `task-hooks-smoke`
 - `framework-install-vendor-smoke`
+- `orchestrator-lifecycle-contract`
+- `orchestrator-stop-controls-smoke`
+- `workflow-lifecycle-smoke`
+- `summary-json-smoke`
 
 ## Output contract
 

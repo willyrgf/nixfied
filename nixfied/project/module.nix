@@ -66,7 +66,7 @@ let
         input = {
           args = {
             parser = "typed";
-            allowUnknown = true;
+            allowUnknown = false;
             spec = contractArgs;
           };
           env = {
@@ -223,7 +223,24 @@ in
       operations = {
         enable = true;
         validateEnv.enable = true;
-        testIsolation.enable = true;
+        testIsolation = {
+          enable = conf.isolation.enable or true;
+          slots = conf.isolation.slots or [
+            conf.slots.default
+          ];
+          envs =
+            let
+              configured = conf.isolation.envs or [ ];
+            in
+            if configured == [ ] then envNames else configured;
+          logsDir = conf.isolation.logsDir or "/tmp/${project.id}-isolation";
+          keepLogsOnSuccess = conf.isolation.keepLogsOnSuccess or false;
+          keepLogsOnFailure = conf.isolation.keepLogsOnFailure or true;
+          runApp = conf.isolation.run.app or "ci";
+          runArgs = conf.isolation.run.args or [ "--summary" ];
+          validateApp = conf.isolation.validate.app or "validate-env";
+          runEnv = conf.isolation.runEnv or { };
+        };
         ports.enable = true;
         checkPorts.enable = true;
         health.enable = true;
@@ -1052,6 +1069,21 @@ in
             "nix run .#framework::install"
             "nix run .#framework::install -- --vendor"
           ];
+          contractArgs = [
+            {
+              name = "vendor";
+              kind = "flag";
+              long = "--vendor";
+              description = "Generate a vendored wrapper flake.";
+            }
+            {
+              name = "target";
+              kind = "option";
+              long = "--target";
+              type = "string";
+              description = "Output directory for generated wrapper.";
+            }
+          ];
           command = ''
                         set -euo pipefail
 
@@ -1140,8 +1172,8 @@ in
             };
           };
           stages = [ ];
-          setup.tasks = [ ];
-          teardown = {
+          preRun.tasks = [ ];
+          postRun = {
             tasks = [ ];
             alwaysRun = true;
           };
@@ -1156,6 +1188,7 @@ in
             failFast = true;
             lockPolicy = "exclusive";
             emitRegistryEvents = true;
+            ephemeral.enable = true;
           };
         };
 
@@ -1198,8 +1231,8 @@ in
             };
           };
           stages = [ ];
-          setup.tasks = [ ];
-          teardown = {
+          preRun.tasks = [ ];
+          postRun = {
             tasks = [ ];
             alwaysRun = true;
           };
@@ -1214,6 +1247,7 @@ in
             failFast = true;
             lockPolicy = "exclusive";
             emitRegistryEvents = true;
+            ephemeral.enable = true;
           };
         };
 
@@ -1266,8 +1300,8 @@ in
             };
           };
           stages = [ ];
-          setup.tasks = [ ];
-          teardown = {
+          preRun.tasks = [ ];
+          postRun = {
             tasks = [ ];
             alwaysRun = true;
           };
@@ -1282,6 +1316,7 @@ in
             failFast = true;
             lockPolicy = "exclusive";
             emitRegistryEvents = true;
+            ephemeral.enable = true;
           };
         };
 
@@ -1302,8 +1337,8 @@ in
               "task.ci.nginx-proxy"
             ]
           ];
-          setup.tasks = [ ];
-          teardown = {
+          preRun.tasks = [ ];
+          postRun = {
             tasks = [ ];
             alwaysRun = true;
           };
@@ -1318,6 +1353,7 @@ in
             failFast = true;
             lockPolicy = "exclusive";
             emitRegistryEvents = true;
+            ephemeral.enable = true;
           };
         };
 
@@ -1382,8 +1418,8 @@ in
             };
           };
           stages = [ ];
-          setup.tasks = [ ];
-          teardown = {
+          preRun.tasks = [ ];
+          postRun = {
             tasks = [ ];
             alwaysRun = true;
           };
@@ -1449,8 +1485,8 @@ in
             };
           };
           stages = [ ];
-          setup.tasks = [ ];
-          teardown = {
+          preRun.tasks = [ ];
+          postRun = {
             tasks = [ ];
             alwaysRun = true;
           };

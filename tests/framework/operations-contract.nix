@@ -15,6 +15,9 @@ assert pkgs.lib.hasInfix "checking helios readiness" source;
 assert pkgs.lib.hasInfix "\"method\":\"web3_clientVersion\"" source;
 assert pkgs.lib.hasInfix "\"method\":\"eth_chainId\"" source;
 assert pkgs.lib.hasInfix "\"method\":\"eth_blockNumber\"" source;
+assert pkgs.lib.hasInfix "isolation cell start" source;
+assert pkgs.lib.hasInfix "test-isolation matrix has no slots" source;
+assert pkgs.lib.hasInfix "test-isolation completed with failures" source;
 pkgs.runCommand "operations-contract" { } ''
   echo "OK: operations health/readiness contract markers are stable" > "$out"
 ''

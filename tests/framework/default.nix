@@ -83,6 +83,14 @@
       ;
   };
 
+  "parallel-worker-cap-smoke" = import ./parallel-worker-cap-smoke.nix {
+    inherit
+      pkgs
+      model
+      registry
+      ;
+  };
+
   "task-hooks-smoke" = import ./task-hooks-smoke.nix {
     inherit
       pkgs
@@ -92,6 +100,34 @@
   };
 
   "framework-install-vendor-smoke" = import ./framework-install-vendor-smoke.nix {
+    inherit
+      pkgs
+      model
+      registry
+      ;
+  };
+
+  "orchestrator-lifecycle-contract" = import ./orchestrator-lifecycle-contract.nix {
+    inherit pkgs;
+  };
+
+  "orchestrator-stop-controls-smoke" = import ./orchestrator-stop-controls-smoke.nix {
+    inherit
+      pkgs
+      model
+      registry
+      ;
+  };
+
+  "workflow-lifecycle-smoke" = import ./workflow-lifecycle-smoke.nix {
+    inherit
+      pkgs
+      model
+      registry
+      ;
+  };
+
+  "summary-json-smoke" = import ./summary-json-smoke.nix {
     inherit
       pkgs
       model
