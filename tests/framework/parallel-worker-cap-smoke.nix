@@ -18,17 +18,27 @@ pkgs.runCommand "parallel-worker-cap-smoke" { } ''
 
   EXECUTOR="${executor}/bin/nixfied-executor"
   export REGISTRY_ROOT="$TMPDIR/registry"
-  mkdir -p "$REGISTRY_ROOT"
+  export CI_ARTIFACTS_DIR="$TMPDIR/artifacts"
+  mkdir -p "$REGISTRY_ROOT" "$CI_ARTIFACTS_DIR"
 
   export NIXFIED_WORKFLOW_PARALLEL=1
   export NIXFIED_PARALLEL_SMOKE=1
+  export NIXFIED_CI_MAX_WORKERS=1
   export CI_MAX_WORKERS=1
+  unset NIXFIED_WORKFLOW_NESTED
+  unset NIXFIED_ORCHESTRATOR_RUN_ID
 
   "$EXECUTOR" run-workflow workflow.test.parallel.smoke --summary > "$TMPDIR/out.log" 2>&1
   run_id="$(${pkgs.gnused}/bin/sed -n 's/^INFO: runId=\([^ ]*\).*/\1/p' "$TMPDIR/out.log" | ${pkgs.coreutils}/bin/tail -n 1)"
+  if [ -z "$run_id" ] && [ -f "$REGISTRY_ROOT/events.ndjson" ]; then
+    run_id="$(${pkgs.jq}/bin/jq -r 'select(.workflowId == "workflow.test.parallel.smoke" and (.taskId // "") == "") | .runId' "$REGISTRY_ROOT/events.ndjson" | ${pkgs.coreutils}/bin/tail -n 1)"
+  fi
   if [ -z "$run_id" ]; then
     echo "missing run id"
     cat "$TMPDIR/out.log"
+    if [ -f "$REGISTRY_ROOT/events.ndjson" ]; then
+      cat "$REGISTRY_ROOT/events.ndjson"
+    fi
     exit 1
   fi
 
@@ -47,8 +57,17 @@ pkgs.runCommand "parallel-worker-cap-smoke" { } ''
     ) | .max
   ' "$REGISTRY_ROOT/events.ndjson")"
 
+  if ! [[ "$max_running" =~ ^[0-9]+$ ]]; then
+    echo "expected integer max running count, got '$max_running'"
+    cat "$TMPDIR/out.log"
+    cat "$REGISTRY_ROOT/events.ndjson"
+    exit 1
+  fi
+
   if [ "$max_running" -gt 1 ]; then
     echo "expected max running tasks <= 1 with CI_MAX_WORKERS=1, got $max_running"
+    cat "$TMPDIR/out.log"
+    cat "$REGISTRY_ROOT/events.ndjson"
     exit 1
   fi
 
