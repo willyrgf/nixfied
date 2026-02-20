@@ -14,6 +14,8 @@ Use `nix run .#help` for the live app list.
 
 ## Operational Validation
 
+- `nix run .#health` runs health checks for enabled services.
+- `nix run .#ready` runs readiness checks for enabled services.
 - `nix run .#validate-env` checks slot/env constraints.
 - `nix run .#ports` prints computed per-slot/per-env ports.
 - `nix run .#check-ports` reports current listener status.

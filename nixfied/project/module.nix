@@ -226,6 +226,8 @@ in
         testIsolation.enable = true;
         ports.enable = true;
         checkPorts.enable = true;
+        health.enable = true;
+        ready.enable = true;
       };
 
       tasks = {

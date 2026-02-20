@@ -60,6 +60,10 @@
     inherit pkgs;
   };
 
+  "operations-contract" = import ./operations-contract.nix {
+    inherit pkgs;
+  };
+
   "registry-events-contract" = import ./registry-events-contract.nix {
     inherit
       pkgs

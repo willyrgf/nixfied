@@ -9,7 +9,9 @@ Core apps:
   format - Format Nix files
   framework::install - Install thin wrapper flake
   framework::test - Run framework validation in the model
+  health - Run service health checks
   ports - Print model-derived port assignments
+  ready - Run service readiness checks
   test - Run tests
   test-isolation - Run isolation checks
   validate-env - Validate slot/env settings

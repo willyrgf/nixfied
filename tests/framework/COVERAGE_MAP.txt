@@ -15,6 +15,10 @@ Runner contracts:
 - nixfied/runner/env-sandbox.nix
 - checks: executor-contract, env-sandbox-contract, log-prefix-contract
 
+Operations contracts:
+- nixfied/modules/operations.nix
+- checks: operations-contract
+
 Registry contracts:
 - nixfied/registry/events.nix
 - nixfied/registry/snapshot.nix

@@ -62,7 +62,9 @@ Exposed core apps:
 - `format`
 - `framework::install`
 - `framework::test`
+- `health`
 - `ports`
+- `ready`
 - `test`
 - `test-isolation`
 - `validate-env`
@@ -97,6 +99,8 @@ Only top-level user app surfaces are exposed in help output.
 
 Operations tasks are model-derived from runtime/env configuration:
 
+- `health`
+- `ready`
 - `validate-env`
 - `ports`
 - `check-ports`
