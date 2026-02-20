@@ -189,4 +189,12 @@
       registry
       ;
   };
+
+  "ephemeral-execution-smoke" = import ./ephemeral-execution-smoke.nix {
+    inherit
+      pkgs
+      model
+      registry
+      ;
+  };
 }
