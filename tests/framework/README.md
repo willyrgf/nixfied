@@ -62,6 +62,7 @@ Deterministic checks live in `tests/framework/` and run via `nix flake check pat
 - `framework-selfhost-contract`
 - `framework-install-vendor-smoke`
 - `framework-install-thin-smoke`
+- `framework-upgrade-preserve-smoke`
 - `orchestrator-lifecycle-contract`
 - `orchestrator-stop-controls-smoke`
 - `workflow-lifecycle-smoke`

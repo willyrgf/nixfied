@@ -146,6 +146,14 @@
       ;
   };
 
+  "framework-upgrade-preserve-smoke" = import ./framework-upgrade-preserve-smoke.nix {
+    inherit
+      pkgs
+      model
+      registry
+      ;
+  };
+
   "orchestrator-lifecycle-contract" = import ./orchestrator-lifecycle-contract.nix {
     inherit pkgs;
   };

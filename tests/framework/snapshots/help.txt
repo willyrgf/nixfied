@@ -7,8 +7,9 @@ Core apps:
   ci - Run the CI pipeline
   dev - Start the dev workflow
   format - Format Nix files
-  framework::install - Install thin wrapper flake
+  framework::install - Install thin or vendored wrapper flake
   framework::test - Run framework validation in the model
+  framework::upgrade - Upgrade vendored wrapper in-place
   health - Run service health checks
   ports - Print model-derived port assignments
   ready - Run service readiness checks

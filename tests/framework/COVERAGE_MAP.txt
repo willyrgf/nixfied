@@ -30,8 +30,8 @@ Workflow determinism:
 
 Install wrapper contracts:
 - nixfied/install/wrapper-flake.nix
-- nixfied/project/module.nix (task.framework.install)
-- checks: framework-install-vendor-smoke, framework-install-thin-smoke
+- nixfied/project/module.nix (task.framework.install, task.framework.upgrade)
+- checks: framework-install-vendor-smoke, framework-install-thin-smoke, framework-upgrade-preserve-smoke
 
 Framework task/app contracts:
 - nixfied/project/module.nix (task.framework.test)
