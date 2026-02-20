@@ -1,28 +1,35 @@
 name: Nix CI
 permissions:
   contents: read
-  pull-requests: write
 
 on:
   push:
     branches: [dev]
   pull_request:
 
+concurrency:
+  group: nix-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
-  BUILD_CMD: "nix flake check -L -v --log-format bar-with-logs"
-  RUN_CMD: "nix run .#help -L -v --log-format bar-with-logs"
-  RUN_TESTS_CMD: "nix run -L -v --log-format bar-with-logs .#framework::test -- --summary"
+  NIX_CONFIG: |
+    max-jobs = 2
+    cores = 2
 
 jobs:
   build-and-test:
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         os:
-          - ubuntu-latest
-          - macos-latest
+          - ubuntu-24.04
+          - macos-14
 
     runs-on: ${{ matrix.os }}
+    env:
+      CI_ARTIFACTS_DIR: ${{ runner.temp }}/nixfied-artifacts-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}
+      REGISTRY_ROOT: ${{ runner.temp }}/nixfied-registry-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}
 
     steps:
       - name: Checkout repository
@@ -31,27 +38,23 @@ jobs:
       - name: Install Nix
         uses: cachix/install-nix-action@v31
         with:
-          nix_path: nixpkgs=channel:nixpkgs-unstable
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Configure Git
+      - name: Prepare runtime directories
         run: |
-          git config --global user.name "GitHub Actions"
-          git config --global user.email "actions@github.com"
-          git config --global init.defaultBranch main
-
-      - name: Nix flake check
-        run: |
-          nix flake check
+          set -euo pipefail
+          rm -rf "$CI_ARTIFACTS_DIR" "$REGISTRY_ROOT"
+          mkdir -p "$CI_ARTIFACTS_DIR" "$REGISTRY_ROOT"
+          chmod 700 "$CI_ARTIFACTS_DIR" "$REGISTRY_ROOT"
 
       - name: Run .#help
         run: |
-          echo $RUN_CMD
-          output=$(eval $RUN_CMD)
+          set -euo pipefail
+          output="$(nix run .#help -L -v --log-format bar-with-logs)"
           echo "$output"
           echo "$output" | grep -q 'Nixfied commands (model-generated)'
 
       - name: Run .#framework::test
         run: |
-          echo $RUN_TESTS_CMD
-          eval $RUN_TESTS_CMD
+          set -euo pipefail
+          nix run -L -v --log-format bar-with-logs .#framework::test -- --summary --serial
