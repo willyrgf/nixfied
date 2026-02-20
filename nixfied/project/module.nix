@@ -192,6 +192,7 @@ let
               chmod -R u+w "$stage_dir/nixfied" 2>/dev/null || true
               rm -rf "$stage_dir/nixfied/.git"
               rm -f "$stage_dir/nixfied/result"
+              rm -f "$stage_dir/nixfied/.framework/.workspace"
 
               preserve_project=0
               preserve_local=0
@@ -224,6 +225,7 @@ let
               fi
 
               ${pkgs.rsync}/bin/rsync "''${rsync_args[@]}" "$stage_dir/nixfied/" "$target/nixfied/"
+              rm -f "$target/nixfied/.framework/.workspace"
 
               cat > "$target/flake.nix" <<'NIXFIED_WRAPPER'
       ${vendoredWrapperFlake}

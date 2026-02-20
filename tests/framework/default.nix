@@ -168,6 +168,14 @@
       ;
   };
 
+  "framework-template-install-upgrade-help-smoke" = import ./framework-template-install-upgrade-help-smoke.nix {
+    inherit
+      pkgs
+      model
+      registry
+      ;
+  };
+
   "framework-upgrade-preserve-smoke" = import ./framework-upgrade-preserve-smoke.nix {
     inherit
       pkgs

@@ -39,6 +39,11 @@ pkgs.runCommand "framework-install-vendor-smoke" { } ''
     exit 1
   fi
 
+  if [ -f "$target/nixfied/.framework/.workspace" ]; then
+    echo "vendored wrapper must not contain nixfied/.framework/.workspace marker"
+    exit 1
+  fi
+
   if ${pkgs.gnugrep}/bin/grep -Fq 'nixfied.url = "path:' "$target/flake.nix"; then
     echo "vendored wrapper should not require nixfied flake input"
     cat "$target/flake.nix"
