@@ -28,8 +28,8 @@ jobs:
 
     runs-on: ${{ matrix.os }}
     env:
-      CI_ARTIFACTS_DIR: ${{ runner.temp }}/nixfied-artifacts-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}
-      REGISTRY_ROOT: ${{ runner.temp }}/nixfied-registry-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}
+      CI_ARTIFACTS_DIR: /tmp/nixfied-artifacts-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}
+      REGISTRY_ROOT: /tmp/nixfied-registry-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}
 
     steps:
       - name: Checkout repository
