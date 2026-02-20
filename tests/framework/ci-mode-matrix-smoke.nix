@@ -66,7 +66,7 @@ pkgs.runCommand "ci-mode-matrix-smoke" { } ''
   if [ "$invalid_rc" -eq 0 ]; then
     fail "expected --mode nope to fail"
   fi
-  require_contains "$TMPDIR/mode-invalid.out" "ERROR: unknown mode 'nope' (expected: basic|app|env|full)"
+  require_contains "$TMPDIR/mode-invalid.out" "ERROR: unknown mode 'nope' (expected:"
 
   echo "OK: ci mode matrix aliases resolve deterministic workflows" > "$out"
 ''

@@ -107,6 +107,14 @@
       ;
   };
 
+  "workflow-mode-derived-smoke" = import ./workflow-mode-derived-smoke.nix {
+    inherit
+      pkgs
+      model
+      registry
+      ;
+  };
+
   "task-hooks-smoke" = import ./task-hooks-smoke.nix {
     inherit
       pkgs
