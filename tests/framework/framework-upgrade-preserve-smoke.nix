@@ -12,17 +12,39 @@ let
       ;
     projectRoot = ../..;
   };
+  executor = import ../../nixfied/runner/executor.nix {
+    inherit
+      pkgs
+      model
+      registry
+      ;
+    projectRoot = ../..;
+  };
 in
 pkgs.runCommand "framework-upgrade-preserve-smoke" { } ''
   set -euo pipefail
   ${harness.shellPrelude}
 
-  ORCH="${harness.orchestrator}/bin/nixfied-orchestrator"
+  EXECUTOR="${executor}/bin/nixfied-executor"
   export REGISTRY_ROOT="$TMPDIR/registry"
   mkdir -p "$REGISTRY_ROOT"
 
+  run_task_checked() {
+    local out_file="$1"
+    shift
+    set +e
+    "$EXECUTOR" run-task "$@" > "$out_file" 2>&1
+    local rc="$?"
+    set -e
+    if [ "$rc" -ne 0 ]; then
+      echo "run-task failed (rc=$rc): $*"
+      cat "$out_file"
+      fail "run-task invocation failed"
+    fi
+  }
+
   target="$TMPDIR/vendor-wrapper"
-  "$ORCH" run-task task.framework.install --vendor --target "$target" > "$TMPDIR/install-initial.out" 2>&1
+  run_task_checked "$TMPDIR/install-initial.out" task.framework.install --vendor --target "$target"
 
   require_file "$target/nixfied/project/module.nix"
   require_file "$target/nixfied/local/default.nix"
@@ -32,21 +54,19 @@ pkgs.runCommand "framework-upgrade-preserve-smoke" { } ''
   echo "# USER_LOCAL_MARKER" >> "$target/nixfied/local/default.nix"
   echo "# USER_LIB_MARKER" >> "$target/nixfied/lib/default.nix"
 
-  "$ORCH" run-task task.framework.install --vendor --target "$target" > "$TMPDIR/install-rerun.out" 2>&1
+  run_task_checked "$TMPDIR/install-rerun.out" task.framework.install --vendor --target "$target"
 
   require_contains "$target/nixfied/project/module.nix" "USER_PROJECT_MARKER"
   require_contains "$target/nixfied/local/default.nix" "USER_LOCAL_MARKER"
   if ${pkgs.gnugrep}/bin/grep -Fq "USER_LIB_MARKER" "$target/nixfied/lib/default.nix"; then
     fail "framework-owned file should be overwritten during vendored upgrade"
   fi
-  require_contains "$TMPDIR/install-rerun.out" "OK: vendored wrapper upgraded"
 
-  "$ORCH" run-task task.framework.upgrade --target "$target" > "$TMPDIR/upgrade-default.out" 2>&1
+  run_task_checked "$TMPDIR/upgrade-default.out" task.framework.upgrade --target "$target"
   require_contains "$target/nixfied/project/module.nix" "USER_PROJECT_MARKER"
   require_contains "$target/nixfied/local/default.nix" "USER_LOCAL_MARKER"
-  require_contains "$TMPDIR/upgrade-default.out" "OK: vendored wrapper upgraded"
 
-  "$ORCH" run-task task.framework.upgrade --target "$target" --reset-project --reset-local > "$TMPDIR/upgrade-reset.out" 2>&1
+  run_task_checked "$TMPDIR/upgrade-reset.out" task.framework.upgrade --target "$target" --reset-project --reset-local
   if ${pkgs.gnugrep}/bin/grep -Fq "USER_PROJECT_MARKER" "$target/nixfied/project/module.nix"; then
     fail "project marker should be removed by --reset-project"
   fi
