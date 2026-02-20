@@ -51,6 +51,8 @@ Deterministic checks live in `tests/framework/` and run via `nix flake check pat
 - `executor-contract`
 - `env-sandbox-contract`
 - `operations-contract`
+- `ready-health-matrix-smoke`
+- `ready-health-shutdown-smoke`
 - `registry-events-contract`
 - `log-prefix-contract`
 - `parallel-runner-smoke`

@@ -17,7 +17,7 @@ Runner contracts:
 
 Operations contracts:
 - nixfied/modules/operations.nix
-- checks: operations-contract
+- checks: operations-contract, ready-health-matrix-smoke, ready-health-shutdown-smoke
 
 Registry contracts:
 - nixfied/registry/events.nix

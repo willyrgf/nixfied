@@ -71,6 +71,13 @@
       ;
   };
 
+  "ready-health-shutdown-smoke" = import ./ready-health-shutdown-smoke.nix {
+    inherit
+      pkgs
+      registry
+      ;
+  };
+
   "registry-events-contract" = import ./registry-events-contract.nix {
     inherit
       pkgs
