@@ -56,6 +56,33 @@ Executor behavior:
 - workflow lifecycle phases via `preRun.tasks` and `postRun.tasks`
 - summary artifact contract at `CI_ARTIFACTS_DIR/summary.json` when enabled
 
+## Ephemeral Runtime Contract
+
+Ephemeral workflow execution is mediated by `nixfied/.framework/ephemeral.nix` and configured through `model.runtime.ephemeral`.
+
+Mode selection:
+
+- `copyMode = "git-files"` (default): copies files from `git ls-files --cached --others --exclude-standard`.
+- `copyMode = "static-excludes"`: copies with fixed `rsync --exclude` patterns from `excludePatterns`.
+
+Copy root behavior:
+
+- If the caller is inside a git worktree, source root resolves to `git rev-parse --show-toplevel`.
+- Otherwise, source root falls back to caller path.
+
+Failure retention policy:
+
+- `keepFailures` controls whether failed ephemeral roots are retained.
+- Retained failures are renamed to `${projectId}-ephemeral-failed-...`.
+- `maxFailedRootAgeHours` prunes old retained roots.
+- `maxFailedRoots` prunes oldest retained roots beyond count limit.
+
+Disk budget guardrails:
+
+- `maxCopyBytes` enforces a maximum estimated copy size.
+- `minFreeBytesAfterCopy` enforces a minimum estimated free space floor after copy.
+- Budgets are evaluated before copy using dry-run `rsync --stats` estimates and fail fast with `ERROR:` logs.
+
 ## Core App Surfaces
 
 Exposed core apps:

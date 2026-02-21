@@ -51,6 +51,7 @@ Deterministic checks live in `tests/framework/` and run via `nix flake check pat
 - `executor-contract`
 - `env-sandbox-contract`
 - `operations-contract`
+- `project-config-boundary`
 - `ready-health-matrix-smoke`
 - `ready-health-shutdown-smoke`
 - `registry-events-contract`
@@ -59,6 +60,8 @@ Deterministic checks live in `tests/framework/` and run via `nix flake check pat
 - `parallel-worker-cap-smoke`
 - `parallel-worker-cap-invalid-smoke`
 - `ci-mode-matrix-smoke`
+- `logging-injection-smoke`
+- `workflow-mode-derived-smoke`
 - `task-hooks-smoke`
 - `framework-test-cli-contract-smoke`
 - `framework-selfhost-contract`
@@ -70,6 +73,10 @@ Deterministic checks live in `tests/framework/` and run via `nix flake check pat
 - `orchestrator-stop-controls-smoke`
 - `workflow-lifecycle-smoke`
 - `summary-json-smoke`
+- `ephemeral-execution-smoke`
+- `ephemeral-copy-mode-smoke`
+- `ephemeral-retention-smoke`
+- `ephemeral-copy-budget-smoke`
 
 ## Output contract
 

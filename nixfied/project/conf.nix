@@ -97,6 +97,9 @@ rec {
 
   ephemeral = {
     enable = false;
+    # Copy strategy for ephemeral source setup:
+    # - git-files: tracked + non-ignored files via git ls-files.
+    # - static-excludes: rsync with excludePatterns.
     copyMode = "git-files";
     excludePatterns = [
       ".git"
@@ -112,9 +115,11 @@ rec {
       "coverage"
     ];
     extraDirs = [ ];
+    # Preserve failed roots for debugging and prune deterministically.
     keepFailures = true;
     maxFailedRoots = 8;
     maxFailedRootAgeHours = 72;
+    # Pre-copy disk guards; set > 0 to enforce.
     maxCopyBytes = 0;
     minFreeBytesAfterCopy = 0;
   };

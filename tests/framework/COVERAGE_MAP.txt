@@ -13,7 +13,7 @@ Compiler/model contracts:
 Runner contracts:
 - nixfied/runner/executor.nix
 - nixfied/runner/env-sandbox.nix
-- checks: executor-contract, env-sandbox-contract, log-prefix-contract, parallel-runner-smoke, parallel-worker-cap-smoke, parallel-worker-cap-invalid-smoke, workflow-lifecycle-smoke, task-hooks-smoke
+- checks: executor-contract, env-sandbox-contract, log-prefix-contract, parallel-runner-smoke, parallel-worker-cap-smoke, parallel-worker-cap-invalid-smoke, workflow-lifecycle-smoke, task-hooks-smoke, logging-injection-smoke, workflow-mode-derived-smoke
 
 Operations contracts:
 - nixfied/modules/operations.nix
@@ -40,6 +40,10 @@ Framework task/app contracts:
 Orchestrator lifecycle controls:
 - nixfied/runner/orchestrator.nix
 - checks: orchestrator-lifecycle-contract, orchestrator-stop-controls-smoke, summary-json-smoke
+
+Ephemeral execution and isolation:
+- nixfied/.framework/ephemeral.nix
+- checks: ephemeral-execution-smoke, ephemeral-copy-mode-smoke, ephemeral-retention-smoke, ephemeral-copy-budget-smoke
 
 Fixture harness status:
 - removed (legacy harness wiring deleted in the redesign)
