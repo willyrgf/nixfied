@@ -532,6 +532,12 @@ in
           executionRpcPortKey = conf.services.helios.ports.executionRpc or "rethHttp";
           sourceKeys = builtins.sort builtins.lessThan (builtins.attrNames (conf.services.helios.sources or { }));
           defaultSource = conf.services.helios.defaultSource or "";
+          sourceKinds = conf.services.helios.sourceKinds or { };
+          readiness = {
+            profile = conf.services.helios.readiness.profile or "fast";
+            requireNotSyncing = conf.services.helios.readiness.requireNotSyncing or false;
+            disallowSourceKinds = conf.services.helios.readiness.disallowSourceKinds or [ ];
+          };
         };
       };
 

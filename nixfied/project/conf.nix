@@ -247,11 +247,23 @@ rec {
           }
         else
           { };
+      sourceKinds =
+        if pkgs != null && pkgs ? helios then
+          {
+            nixpkgs = "real";
+          }
+        else
+          { };
       defaultSource =
         if pkgs != null && pkgs ? helios then
           "nixpkgs"
         else
           "";
+      readiness = {
+        profile = "fast";
+        requireNotSyncing = false;
+        disallowSourceKinds = [ ];
+      };
     };
   };
 

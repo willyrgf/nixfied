@@ -82,6 +82,13 @@
       ;
   };
 
+  "ready-helios-sync-gate-smoke" = import ./ready-helios-sync-gate-smoke.nix {
+    inherit
+      pkgs
+      registry
+      ;
+  };
+
   "registry-events-contract" = import ./registry-events-contract.nix {
     inherit
       pkgs

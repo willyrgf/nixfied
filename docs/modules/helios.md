@@ -17,7 +17,17 @@ services.helios = {
     stable.package = pkgs.callPackage ./nixfied/project/sources/helios-stable.nix { };
     patched.package = pkgs.callPackage ./nixfied/project/sources/helios-patched.nix { };
   };
+  sourceKinds = {
+    stable = "real";
+    patched = "real";
+    shim = "shim";
+  };
   defaultSource = "stable";
+  readiness = {
+    profile = "strict";
+    requireNotSyncing = true;
+    disallowSourceKinds = [ "shim" "unknown" ];
+  };
 };
 ```
 
@@ -35,3 +45,5 @@ No dedicated Helios app namespace is exposed. Use model-generated operations:
 - `nix run .#check-ports`
 - `nix run .#health -- --service helios --source stable`
 - `nix run .#ready -- --service helios --source patched`
+
+In strict readiness mode, `ready` rejects disallowed source kinds and requires `eth_syncing=false`.
