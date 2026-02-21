@@ -473,6 +473,9 @@ in
               "coverage"
             ];
           extraDirs = conf.ephemeral.extraDirs or [ ];
+          keepFailures = conf.ephemeral.keepFailures or true;
+          maxFailedRoots = conf.ephemeral.maxFailedRoots or 8;
+          maxFailedRootAgeHours = conf.ephemeral.maxFailedRootAgeHours or 72;
         };
       };
 

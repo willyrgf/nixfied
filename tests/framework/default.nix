@@ -239,4 +239,12 @@
       registry
       ;
   };
+
+  "ephemeral-retention-smoke" = import ./ephemeral-retention-smoke.nix {
+    inherit
+      pkgs
+      model
+      registry
+      ;
+  };
 }

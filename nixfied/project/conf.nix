@@ -112,6 +112,9 @@ rec {
       "coverage"
     ];
     extraDirs = [ ];
+    keepFailures = true;
+    maxFailedRoots = 8;
+    maxFailedRootAgeHours = 72;
   };
 
   process = {

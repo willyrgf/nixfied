@@ -44,6 +44,9 @@ in
     copyMode = resolved.runtime.ephemeral.copyMode;
     excludePatterns = resolved.runtime.ephemeral.excludePatterns;
     extraDirs = resolved.runtime.ephemeral.extraDirs;
+    keepFailures = resolved.runtime.ephemeral.keepFailures;
+    maxFailedRoots = resolved.runtime.ephemeral.maxFailedRoots;
+    maxFailedRootAgeHours = resolved.runtime.ephemeral.maxFailedRootAgeHours;
   };
 
   runtimePackages = map builtins.toString (resolved.tooling.runtimePackages or [ ]);

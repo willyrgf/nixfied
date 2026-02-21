@@ -180,6 +180,21 @@ in
         type = t.listOf t.str;
         default = [ ];
       };
+
+      keepFailures = lib.mkOption {
+        type = t.bool;
+        default = true;
+      };
+
+      maxFailedRoots = lib.mkOption {
+        type = t.ints.unsigned;
+        default = 8;
+      };
+
+      maxFailedRootAgeHours = lib.mkOption {
+        type = t.ints.unsigned;
+        default = 72;
+      };
     };
   };
 }

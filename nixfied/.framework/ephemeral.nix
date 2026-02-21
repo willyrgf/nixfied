@@ -49,6 +49,9 @@ let
       "coverage"
     ];
   extraDirs = ephemeralCfg.extraDirs or [ ];
+  keepFailures = ephemeralCfg.keepFailures or true;
+  maxFailedRoots = ephemeralCfg.maxFailedRoots or 8;
+  maxFailedRootAgeHours = ephemeralCfg.maxFailedRootAgeHours or 72;
 
   depsScript = project.install.deps or "";
   runtimePackages = project.tooling.runtimePackages or [ ];
@@ -221,8 +224,53 @@ let
   mkConditionalCleanup = pkgs.writeShellScript "mk-conditional-cleanup" ''
     ${resolvedLoggingPrelude}
 
+    remove_tree() {
+      local target="$1"
+      if rm -rf "$target" 2>/dev/null; then
+        return 0
+      fi
+      chmod -R u+w "$target" 2>/dev/null || true
+      rm -rf "$target" 2>/dev/null
+    }
+
+    prune_failed_roots() {
+      local base_dir="$1"
+      local prefix="${projectId}-ephemeral-failed-"
+      local keep_limit=${toString maxFailedRoots}
+      local age_hours=${toString maxFailedRootAgeHours}
+      local age_minutes=0
+      local failed_paths
+
+      if ! [ -d "$base_dir" ]; then
+        return 0
+      fi
+
+      if [ "$age_hours" -gt 0 ]; then
+        age_minutes=$((age_hours * 60))
+        while IFS= read -r old_path; do
+          [ -z "$old_path" ] && continue
+          remove_tree "$old_path" || true
+          log_info "Pruned failed ephemeral root (age): $old_path"
+        done < <(${pkgs.findutils}/bin/find "$base_dir" -mindepth 1 -maxdepth 1 -type d -name "$prefix*" -mmin "+$age_minutes" | sort)
+      fi
+
+      mapfile -t failed_paths < <(${pkgs.findutils}/bin/find "$base_dir" -mindepth 1 -maxdepth 1 -type d -name "$prefix*" | sort)
+
+      if [ "$keep_limit" -ge 0 ] && [ "''${#failed_paths[@]}" -gt "$keep_limit" ]; then
+        local to_remove_count
+        to_remove_count=$(( ''${#failed_paths[@]} - keep_limit ))
+        local i
+        for i in $(seq 0 $((to_remove_count - 1))); do
+          remove_tree "''${failed_paths[$i]}" || true
+          log_info "Pruned failed ephemeral root (count): ''${failed_paths[$i]}"
+        done
+      fi
+    }
+
     _ephemeral_cleanup() {
       local exit_code=$?
+      local eph_root="${refEphRoot}"
+      local eph_base=""
 
       if [ -n "''${_EPHEMERAL_CHILD_PIDS:-}" ]; then
         for pid in $_EPHEMERAL_CHILD_PIDS; do
@@ -231,19 +279,36 @@ let
       fi
 
       if [ $exit_code -ne 0 ]; then
-        :
+        if [ -d "$eph_root" ]; then
+          eph_base="$(${pkgs.coreutils}/bin/dirname "$eph_root")"
+          if [ "${if keepFailures then "1" else "0"}" = "1" ]; then
+            local failed_stamp slot_label failed_root
+            failed_stamp="$(${pkgs.coreutils}/bin/date -u +%Y%m%d-%H%M%S)"
+            slot_label="''${${slotVar}:-unknown}"
+            slot_label="$(printf '%s' "$slot_label" | ${pkgs.gnused}/bin/sed -E 's/[^A-Za-z0-9_.-]+/_/g')"
+            failed_root="$eph_base/${projectId}-ephemeral-failed-$failed_stamp-slot$slot_label-$$"
+            if mv "$eph_root" "$failed_root" 2>/dev/null; then
+              log_warn "Preserving failed ephemeral state at $failed_root"
+            else
+              failed_root="$eph_root"
+              log_warn "Preserving failed ephemeral state at $failed_root"
+            fi
+            prune_failed_roots "$eph_base"
+          else
+            if remove_tree "$eph_root"; then
+              log_info "Removed failed ephemeral state root=$eph_root"
+            else
+              log_warn "Unable to remove failed ephemeral root=$eph_root"
+            fi
+          fi
+        fi
       else
         echo ""
         log_info "Cleaning up ephemeral state (slot ''${${projectIdUpper}_EPHEMERAL_SLOT:-unknown})"
-        if rm -rf "${refEphRoot}" 2>/dev/null; then
+        if remove_tree "$eph_root"; then
           log_ok "Ephemeral state cleaned"
         else
-          chmod -R u+w "${refEphRoot}" 2>/dev/null || true
-          if rm -rf "${refEphRoot}" 2>/dev/null; then
-            log_ok "Ephemeral state cleaned"
-          else
-            log_warn "Ephemeral cleanup incomplete root=${refEphRoot}; preserving for manual cleanup"
-          fi
+          log_warn "Ephemeral cleanup incomplete root=$eph_root; preserving for manual cleanup"
         fi
       fi
 
