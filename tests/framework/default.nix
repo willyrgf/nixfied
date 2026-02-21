@@ -64,6 +64,10 @@
     inherit pkgs;
   };
 
+  "project-config-boundary" = import ./project-config-boundary.nix {
+    inherit pkgs;
+  };
+
   "ready-health-matrix-smoke" = import ./ready-health-matrix-smoke.nix {
     inherit
       pkgs

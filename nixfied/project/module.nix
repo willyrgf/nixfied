@@ -471,34 +471,44 @@ in
 
       services = {
         postgres = {
-          enable = conf.modules.postgres.enable or false;
-          database = conf.modules.postgres.database or "app";
-          portKey = conf.modules.postgres.portKey or "postgres";
+          enable = conf.services.postgres.enable or false;
+          database = conf.services.postgres.database or "app";
+          portKey = conf.services.postgres.ports.primary or "postgres";
+          sourceKeys = builtins.sort builtins.lessThan (builtins.attrNames (conf.services.postgres.sources or { }));
+          defaultSource = conf.services.postgres.defaultSource or "";
         };
 
         nginx = {
-          enable = conf.modules.nginx.enable or false;
-          portKeyHttp = conf.modules.nginx.portKeyHttp or "http";
-          portKeyHttps = conf.modules.nginx.portKeyHttps or "https";
+          enable = conf.services.nginx.enable or false;
+          portKeyHttp = conf.services.nginx.ports.http or "http";
+          portKeyHttps = conf.services.nginx.ports.https or "https";
+          sourceKeys = builtins.sort builtins.lessThan (builtins.attrNames (conf.services.nginx.sources or { }));
+          defaultSource = conf.services.nginx.defaultSource or "";
         };
 
         minio = {
-          enable = conf.modules.minio.enable or false;
-          portKeyApi = conf.modules.minio.portKeyApi or "minioApi";
-          portKeyConsole = conf.modules.minio.portKeyConsole or "minioConsole";
+          enable = conf.services.minio.enable or false;
+          portKeyApi = conf.services.minio.ports.api or "minioApi";
+          portKeyConsole = conf.services.minio.ports.console or "minioConsole";
+          sourceKeys = builtins.sort builtins.lessThan (builtins.attrNames (conf.services.minio.sources or { }));
+          defaultSource = conf.services.minio.defaultSource or "";
         };
 
         reth = {
-          enable = conf.modules.reth.enable or false;
-          portKeyHttp = conf.modules.reth.portKeyHttp or "rethHttp";
-          portKeyWs = conf.modules.reth.portKeyWs or "rethWs";
-          portKeyAuth = conf.modules.reth.portKeyAuth or "rethAuth";
+          enable = conf.services.reth.enable or false;
+          portKeyHttp = conf.services.reth.ports.http or "rethHttp";
+          portKeyWs = conf.services.reth.ports.ws or "rethWs";
+          portKeyAuth = conf.services.reth.ports.auth or "rethAuth";
+          sourceKeys = builtins.sort builtins.lessThan (builtins.attrNames (conf.services.reth.sources or { }));
+          defaultSource = conf.services.reth.defaultSource or "";
         };
 
         helios = {
-          enable = conf.modules.helios.enable or false;
-          portKeyRpc = conf.modules.helios.portKeyRpc or "heliosRpc";
-          executionRpcPortKey = conf.modules.helios.executionRpcPortKey or "rethHttp";
+          enable = conf.services.helios.enable or false;
+          portKeyRpc = conf.services.helios.ports.rpc or "heliosRpc";
+          executionRpcPortKey = conf.services.helios.ports.executionRpc or "rethHttp";
+          sourceKeys = builtins.sort builtins.lessThan (builtins.attrNames (conf.services.helios.sources or { }));
+          defaultSource = conf.services.helios.defaultSource or "";
         };
       };
 

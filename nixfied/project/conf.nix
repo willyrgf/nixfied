@@ -115,14 +115,15 @@ rec {
     registryRoot = "/tmp/nixfied-runtime/${project.id}";
   };
 
-  modules = {
+  services = {
     postgres = {
       enable = false;
+      ports = {
+        primary = "postgres";
+      };
       database = "app";
       testDatabase = "app_test";
       extensions = [ ];
-      package = if pkgs != null then pkgs.postgresql_16 else null;
-      portKey = "postgres";
       dataDirName = "postgres";
       extraConfig = "";
       envConfigs = {
@@ -135,46 +136,109 @@ rec {
         command = "";
         sourceDatabase = null;
       };
+      sources =
+        if pkgs != null then
+          {
+            nixpkgs.package = pkgs.postgresql_16;
+          }
+        else
+          { };
+      defaultSource = if pkgs != null then "nixpkgs" else "";
     };
+
     nginx = {
       enable = false;
-      portKeyHttp = "http";
-      portKeyHttps = "https";
+      ports = {
+        http = "http";
+        https = "https";
+      };
       dataDirName = "nginx";
+      sources =
+        if pkgs != null && pkgs ? nginx then
+          {
+            nixpkgs.package = pkgs.nginx;
+          }
+        else
+          { };
+      defaultSource =
+        if pkgs != null && pkgs ? nginx then
+          "nixpkgs"
+        else
+          "";
     };
+
     minio = {
       enable = false;
-      package = if pkgs != null then pkgs.minio else null;
-      clientPackage = if pkgs != null then pkgs.minio-client else null;
-      portKeyApi = "minioApi";
-      portKeyConsole = "minioConsole";
+      ports = {
+        api = "minioApi";
+        console = "minioConsole";
+      };
       dataDirName = "minio";
       rootUser = "minioadmin";
       rootPassword = "minioadmin";
       browser = true;
+      sources =
+        if pkgs != null then
+          {
+            nixpkgs = {
+              package = pkgs.minio;
+              clientPackage = pkgs.minio-client;
+            };
+          }
+        else
+          { };
+      defaultSource = if pkgs != null then "nixpkgs" else "";
     };
+
     reth = {
       enable = false;
-      package = if pkgs != null then pkgs.reth else null;
-      portKeyHttp = "rethHttp";
-      portKeyWs = "rethWs";
-      portKeyAuth = "rethAuth";
+      ports = {
+        http = "rethHttp";
+        ws = "rethWs";
+        auth = "rethAuth";
+      };
       dataDirName = "reth";
       network = "local";
       devMode = true;
       extraArgs = [ ];
+      sources =
+        if pkgs != null && pkgs ? reth then
+          {
+            nixpkgs.package = pkgs.reth;
+          }
+        else
+          { };
+      defaultSource =
+        if pkgs != null && pkgs ? reth then
+          "nixpkgs"
+        else
+          "";
     };
+
     helios = {
       enable = false;
-      package = if pkgs != null then pkgs.callPackage ../.framework/helios/package.nix { } else null;
-      portKeyRpc = "heliosRpc";
+      ports = {
+        rpc = "heliosRpc";
+        executionRpc = "rethHttp";
+      };
       dataDirName = "helios";
       network = "local";
-      executionRpcPortKey = "rethHttp";
       executionRpcUrl = "";
       consensusRpcUrl = "";
       checkpoint = "";
       extraArgs = [ ];
+      sources =
+        if pkgs != null && pkgs ? helios then
+          {
+            nixpkgs.package = pkgs.helios;
+          }
+        else
+          { };
+      defaultSource =
+        if pkgs != null && pkgs ? helios then
+          "nixpkgs"
+        else
+          "";
     };
   };
 
@@ -215,11 +279,6 @@ rec {
     # Default shard parallelism used when --max-parallel-shards is not passed.
     # Supported values: "auto" or a positive integer.
     maxParallelShards = "auto";
-  };
-
-  services = {
-    names = [ ];
-    sockets = { };
   };
 
   packages = { };

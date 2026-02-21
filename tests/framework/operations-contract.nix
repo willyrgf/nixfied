@@ -4,6 +4,11 @@ let
 in
 assert pkgs.lib.hasInfix "id = \"task.ops.health\";" source;
 assert pkgs.lib.hasInfix "id = \"task.ops.ready\";" source;
+assert pkgs.lib.hasInfix "name = \"service\";" source;
+assert pkgs.lib.hasInfix "long = \"--service\";" source;
+assert pkgs.lib.hasInfix "long = \"--source\";" source;
+assert pkgs.lib.hasInfix "service_selected()" source;
+assert pkgs.lib.hasInfix "resolve_service_source()" source;
 assert pkgs.lib.hasInfix "checking postgres health" source;
 assert pkgs.lib.hasInfix "checking postgres readiness" source;
 assert pkgs.lib.hasInfix "checking nginx health" source;

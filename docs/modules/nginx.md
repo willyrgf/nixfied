@@ -3,18 +3,20 @@
 ## Configure in `nixfied/project/conf.nix`
 
 ```nix
-modules.nginx = {
+services.nginx = {
   enable = true;
-  portKeyHttp = "http";
-  portKeyHttps = "https";
+  ports.http = "http";
+  ports.https = "https";
   dataDirName = "nginx";
+  sources.nixpkgs.package = pkgs.nginx;
+  defaultSource = "nixpkgs";
 };
 ```
 
 ## Relevant Port Keys
 
-- `portKeyHttp` maps to `ports.http`.
-- `portKeyHttps` maps to `ports.https`.
+- `ports.http` maps to `ports.http`.
+- `ports.https` maps to `ports.https`.
 
 ## Command Surface
 
@@ -23,3 +25,5 @@ No dedicated Nginx app namespace is exposed. Use model-generated commands and CI
 - `nix run .#ci -- --mode env --summary`
 - `nix run .#ports`
 - `nix run .#check-ports`
+- `nix run .#health -- --service nginx`
+- `nix run .#ready -- --service nginx`

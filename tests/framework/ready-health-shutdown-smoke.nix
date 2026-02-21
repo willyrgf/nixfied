@@ -220,7 +220,7 @@ EOF_HTTP
 
   pg_data="$TMPDIR/postgres-data"
   ${postgresPkg}/bin/initdb -D "$pg_data" --auth=trust --username=postgres --no-locale > "$TMPDIR/postgres-init.log" 2>&1
-  ${postgresPkg}/bin/pg_ctl -D "$pg_data" -o "-h 127.0.0.1 -p $postgres_port" -w start > "$TMPDIR/postgres-start.log" 2>&1
+  ${postgresPkg}/bin/pg_ctl -D "$pg_data" -o "-h 127.0.0.1 -p $postgres_port -k $TMPDIR" -w start > "$TMPDIR/postgres-start.log" 2>&1
 
   start_tcp_listener "$nginx_http_port"
   start_tcp_listener "$nginx_https_port"
