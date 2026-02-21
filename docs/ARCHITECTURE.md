@@ -69,6 +69,7 @@ Introspection apps:
 - `model`
 - `stateHash`
 - `tasks`
+- `services`
 - `task::<id>`
 - `schema`
 
