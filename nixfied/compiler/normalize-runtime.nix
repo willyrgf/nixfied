@@ -47,6 +47,8 @@ in
     keepFailures = resolved.runtime.ephemeral.keepFailures;
     maxFailedRoots = resolved.runtime.ephemeral.maxFailedRoots;
     maxFailedRootAgeHours = resolved.runtime.ephemeral.maxFailedRootAgeHours;
+    maxCopyBytes = resolved.runtime.ephemeral.maxCopyBytes;
+    minFreeBytesAfterCopy = resolved.runtime.ephemeral.minFreeBytesAfterCopy;
   };
 
   runtimePackages = map builtins.toString (resolved.tooling.runtimePackages or [ ]);

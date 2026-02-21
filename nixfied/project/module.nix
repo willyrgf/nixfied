@@ -476,6 +476,8 @@ in
           keepFailures = conf.ephemeral.keepFailures or true;
           maxFailedRoots = conf.ephemeral.maxFailedRoots or 8;
           maxFailedRootAgeHours = conf.ephemeral.maxFailedRootAgeHours or 72;
+          maxCopyBytes = conf.ephemeral.maxCopyBytes or 0;
+          minFreeBytesAfterCopy = conf.ephemeral.minFreeBytesAfterCopy or 0;
         };
       };
 

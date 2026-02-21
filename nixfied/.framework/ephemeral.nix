@@ -52,6 +52,8 @@ let
   keepFailures = ephemeralCfg.keepFailures or true;
   maxFailedRoots = ephemeralCfg.maxFailedRoots or 8;
   maxFailedRootAgeHours = ephemeralCfg.maxFailedRootAgeHours or 72;
+  maxCopyBytes = ephemeralCfg.maxCopyBytes or 0;
+  minFreeBytesAfterCopy = ephemeralCfg.minFreeBytesAfterCopy or 0;
 
   depsScript = project.install.deps or "";
   runtimePackages = project.tooling.runtimePackages or [ ];
@@ -171,16 +173,76 @@ let
     SOURCE_DIR="$1"
     DEST_DIR="$2"
     COPY_MODE=${pkgs.lib.escapeShellArg copyMode}
+    MAX_COPY_BYTES=${toString maxCopyBytes}
+    MIN_FREE_BYTES_AFTER_COPY=${toString minFreeBytesAfterCopy}
+
+    extract_total_file_size_bytes() {
+      local stats="$1"
+      local total=""
+      total="$(printf '%s\n' "$stats" | ${pkgs.gawk}/bin/awk '
+        /^Total file size:/ {
+          gsub(/[^0-9]/, "", $4)
+          print $4
+          exit
+        }
+      ')"
+      if [ -z "$total" ]; then
+        printf '0'
+      else
+        printf '%s' "$total"
+      fi
+    }
+
+    available_bytes_for_dest() {
+      local free_kib
+      free_kib="$(${pkgs.coreutils}/bin/df -Pk "$DEST_DIR" | ${pkgs.gawk}/bin/awk 'NR==2 {print $4}')"
+      if [ -z "$free_kib" ]; then
+        printf '0'
+      else
+        printf '%s' "$((free_kib * 1024))"
+      fi
+    }
+
+    enforce_copy_budget() {
+      local copy_bytes="$1"
+      local free_bytes
+      local remaining_bytes
+      free_bytes="$(available_bytes_for_dest)"
+      remaining_bytes=$((free_bytes - copy_bytes))
+
+      log_info "Ephemeral copy budget bytes_required=$copy_bytes bytes_free=$free_bytes bytes_remaining=$remaining_bytes"
+
+      if [ "$MAX_COPY_BYTES" -gt 0 ] && [ "$copy_bytes" -gt "$MAX_COPY_BYTES" ]; then
+        log_error "ephemeral copy budget exceeded: bytes_required=$copy_bytes max_copy_bytes=$MAX_COPY_BYTES"
+        exit 1
+      fi
+
+      if [ "$free_bytes" -le "$copy_bytes" ]; then
+        log_error "ephemeral copy budget exceeded: bytes_required=$copy_bytes bytes_free=$free_bytes"
+        exit 1
+      fi
+
+      if [ "$MIN_FREE_BYTES_AFTER_COPY" -gt 0 ] && [ "$remaining_bytes" -lt "$MIN_FREE_BYTES_AFTER_COPY" ]; then
+        log_error "ephemeral copy budget exceeded: bytes_remaining=$remaining_bytes min_free_after_copy=$MIN_FREE_BYTES_AFTER_COPY"
+        exit 1
+      fi
+    }
 
     static_copy() {
+      local dry_run_stats copy_bytes
       log_info "Using static-excludes copy mode"
+      dry_run_stats="$(${pkgs.rsync}/bin/rsync -an --stats \
+        ${rsyncExcludes} \
+        "$SOURCE_DIR/" "$DEST_DIR/")"
+      copy_bytes="$(extract_total_file_size_bytes "$dry_run_stats")"
+      enforce_copy_budget "$copy_bytes"
       ${pkgs.rsync}/bin/rsync -a \
         ${rsyncExcludes} \
         "$SOURCE_DIR/" "$DEST_DIR/"
     }
 
     git_copy() {
-      local manifest
+      local manifest dry_run_stats copy_bytes
       manifest="$(${pkgs.coreutils}/bin/mktemp)"
 
       (
@@ -194,6 +256,9 @@ let
         log_warn "Git file manifest is empty; source copy may be incomplete"
       fi
 
+      dry_run_stats="$(${pkgs.rsync}/bin/rsync -an --stats --from0 --files-from="$manifest" "$SOURCE_DIR/" "$DEST_DIR/")"
+      copy_bytes="$(extract_total_file_size_bytes "$dry_run_stats")"
+      enforce_copy_budget "$copy_bytes"
       ${pkgs.rsync}/bin/rsync -a --from0 --files-from="$manifest" "$SOURCE_DIR/" "$DEST_DIR/"
       rm -f "$manifest"
     }

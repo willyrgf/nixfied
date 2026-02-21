@@ -195,6 +195,16 @@ in
         type = t.ints.unsigned;
         default = 72;
       };
+
+      maxCopyBytes = lib.mkOption {
+        type = t.ints.unsigned;
+        default = 0;
+      };
+
+      minFreeBytesAfterCopy = lib.mkOption {
+        type = t.ints.unsigned;
+        default = 0;
+      };
     };
   };
 }

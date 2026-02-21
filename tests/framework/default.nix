@@ -247,4 +247,12 @@
       registry
       ;
   };
+
+  "ephemeral-copy-budget-smoke" = import ./ephemeral-copy-budget-smoke.nix {
+    inherit
+      pkgs
+      model
+      registry
+      ;
+  };
 }

@@ -48,6 +48,8 @@ assert builtins.isList model.runtime.ephemeral.extraDirs;
 assert builtins.isBool model.runtime.ephemeral.keepFailures;
 assert builtins.isInt model.runtime.ephemeral.maxFailedRoots;
 assert builtins.isInt model.runtime.ephemeral.maxFailedRootAgeHours;
+assert builtins.isInt model.runtime.ephemeral.maxCopyBytes;
+assert builtins.isInt model.runtime.ephemeral.minFreeBytesAfterCopy;
 assert model.runtime.runtimePackages != [ ];
 assert builtins.all (pkg: builtins.elem pkg formatTask.runtime.runtimeInputs) model.runtime.runtimePackages;
 assert formatTask.runtime ? preHooks;

@@ -115,6 +115,8 @@ rec {
     keepFailures = true;
     maxFailedRoots = 8;
     maxFailedRootAgeHours = 72;
+    maxCopyBytes = 0;
+    minFreeBytesAfterCopy = 0;
   };
 
   process = {
