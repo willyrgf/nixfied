@@ -27,7 +27,7 @@
       "exists": true
     },
     {
-      "path": "ARCHITECTURE.md",
+      "path": "docs/ARCHITECTURE.md",
       "purpose": "High-level architecture reference.",
       "priority": 3,
       "exists": true

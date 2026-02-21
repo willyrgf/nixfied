@@ -7,7 +7,7 @@ Generated from `docs/repo-index.json`.
 - `docs/repo-map.md` - LLM-facing repository map generated from docs/repo-index.json.
 - `README.md` - Primary repository overview and command entrypoints.
 - `docs/DETAILED.md` - Detailed model architecture and contracts.
-- `ARCHITECTURE.md` - High-level architecture reference.
+- `docs/ARCHITECTURE.md` - High-level architecture reference.
 - `REDESIGN.md` - Redesign and migration context.
 - `AGENTS.md` - Agent instructions and collaboration constraints.
 - `CLAUDE.md` - Additional assistant guidance for this repository.

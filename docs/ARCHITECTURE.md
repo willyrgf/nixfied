@@ -56,7 +56,10 @@ Core model-generated apps:
 - `format`
 - `framework::install`
 - `framework::test`
+- `framework::upgrade`
+- `health`
 - `ports`
+- `ready`
 - `test`
 - `test-isolation`
 - `validate-env`

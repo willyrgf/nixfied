@@ -95,6 +95,7 @@ Exposed core apps:
 - `format`
 - `framework::install`
 - `framework::test`
+- `framework::upgrade`
 - `health`
 - `ports`
 - `ready`

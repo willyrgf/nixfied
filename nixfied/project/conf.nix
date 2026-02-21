@@ -81,7 +81,7 @@ rec {
       "README.md"
       "AGENTS.md"
       "CLAUDE.md"
-      "ARCHITECTURE.md"
+      "docs/ARCHITECTURE.md"
       "REDESIGN.md"
     ];
   };
