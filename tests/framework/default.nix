@@ -60,6 +60,13 @@
     inherit pkgs;
   };
 
+  "sensitive-pass-through-smoke" = import ./sensitive-pass-through-smoke.nix {
+    inherit
+      pkgs
+      registry
+      ;
+  };
+
   "operations-contract" = import ./operations-contract.nix {
     inherit pkgs;
   };
@@ -233,6 +240,13 @@
     inherit
       pkgs
       model
+      registry
+      ;
+  };
+
+  "artifacts-run-isolation-smoke" = import ./artifacts-run-isolation-smoke.nix {
+    inherit
+      pkgs
       registry
       ;
   };

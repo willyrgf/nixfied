@@ -12,6 +12,8 @@ assert pkgs.lib.hasInfix
 assert pkgs.lib.hasInfix "/usr/bin/xcrun --sdk macosx --show-sdk-path" source;
 assert pkgs.lib.hasInfix "env_cmd+=(\"SDKROOT=$host_sdkroot\")" source;
 assert pkgs.lib.hasInfix ".passThroughEnv[]?" source;
+assert pkgs.lib.hasInfix ".allowSensitivePassThrough // false" source;
+assert pkgs.lib.hasInfix "ERROR: sensitive passthrough env blocked name=$pass_name" source;
 assert pkgs.lib.hasInfix ".env | to_entries[]?" source;
 assert pkgs.lib.hasInfix ".runtimePackages[]?" source;
 assert pkgs.lib.hasInfix ".primitives.defs // {}" source;

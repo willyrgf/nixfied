@@ -27,3 +27,10 @@ Use `nix run .#help` for the live app list.
 - `docs/modules/minio.md`
 - `docs/modules/reth.md`
 - `docs/modules/helios.md`
+
+## Service Process Safety
+
+- Probe the intended service endpoint directly; do not validate Helios using a generic execution RPC alias.
+- Stop only owned service processes (PID files/process groups), never arbitrary listeners discovered only by port.
+- Prefer model-generated operations (`health`, `ready`, `stop-run`, `stop-all-runs`) over ad hoc service control.
+- Keep shell output prefix-stable and grep-friendly: `INFO:`, `WARN:`, `ERROR:`, `OK:`, `SKIP:`.

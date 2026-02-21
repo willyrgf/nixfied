@@ -141,8 +141,7 @@ let
         "${argName}|${argLong}";
       existing = map argIdentity contractArgs;
     in
-    contractArgs
-    ++ lib.filter (arg: !(builtins.elem (argIdentity arg) existing)) loggingContractArgs;
+    contractArgs ++ lib.filter (arg: !(builtins.elem (argIdentity arg) existing)) loggingContractArgs;
 
   mkFrameworkInstallCommand =
     {
@@ -292,6 +291,23 @@ let
             fi
     '';
 
+  defaultTaskPassThroughEnv = [
+    "HOME"
+    project.envVar
+    project.slotVar
+    "CI_ARTIFACTS_DIR"
+    "CI_MAX_WORKERS"
+    "NIXFIED_CI_MAX_WORKERS"
+    "LOG_LEVEL"
+    "NIXFIED_LOG_LEVEL"
+    "OUTPUT_MODE"
+    "NIXFIED_OUTPUT_MODE"
+    "RUST_LOG"
+    "MFM_LOG"
+    "MFM_TEST_LOG"
+    "MFM_TEST_LOG_FILTER"
+  ];
+
   mkCommandTask =
     {
       id,
@@ -309,6 +325,8 @@ let
       workflowId ? null,
       contractArgs ? [ ],
       logging ? { },
+      passThroughEnv ? defaultTaskPassThroughEnv,
+      allowSensitivePassThrough ? false,
     }:
     {
       inherit
@@ -366,23 +384,8 @@ let
         workdir = "projectRoot";
         hermetic = true;
         runtimeInputs = runtimeInputs;
-        passThroughEnv = [
-          "HOME"
-          project.envVar
-          project.slotVar
-          "CI_ARTIFACTS_DIR"
-          "CI_MAX_WORKERS"
-          "NIXFIED_CI_MAX_WORKERS"
-          "LOG_LEVEL"
-          "NIXFIED_LOG_LEVEL"
-          "OUTPUT_MODE"
-          "NIXFIED_OUTPUT_MODE"
-          "RUST_LOG"
-          "MFM_LOG"
-          "MFM_TEST_LOG"
-          "MFM_TEST_LOG_FILTER"
-          "API_KEY"
-        ];
+        passThroughEnv = passThroughEnv;
+        allowSensitivePassThrough = allowSensitivePassThrough;
         logging = {
           levelDefault = logging.levelDefault or null;
           outputDefault = logging.outputDefault or null;
@@ -497,7 +500,9 @@ in
           enable = conf.services.postgres.enable or false;
           database = conf.services.postgres.database or "app";
           portKey = conf.services.postgres.ports.primary or "postgres";
-          sourceKeys = builtins.sort builtins.lessThan (builtins.attrNames (conf.services.postgres.sources or { }));
+          sourceKeys = builtins.sort builtins.lessThan (
+            builtins.attrNames (conf.services.postgres.sources or { })
+          );
           defaultSource = conf.services.postgres.defaultSource or "";
         };
 
@@ -505,7 +510,9 @@ in
           enable = conf.services.nginx.enable or false;
           portKeyHttp = conf.services.nginx.ports.http or "http";
           portKeyHttps = conf.services.nginx.ports.https or "https";
-          sourceKeys = builtins.sort builtins.lessThan (builtins.attrNames (conf.services.nginx.sources or { }));
+          sourceKeys = builtins.sort builtins.lessThan (
+            builtins.attrNames (conf.services.nginx.sources or { })
+          );
           defaultSource = conf.services.nginx.defaultSource or "";
         };
 
@@ -513,7 +520,9 @@ in
           enable = conf.services.minio.enable or false;
           portKeyApi = conf.services.minio.ports.api or "minioApi";
           portKeyConsole = conf.services.minio.ports.console or "minioConsole";
-          sourceKeys = builtins.sort builtins.lessThan (builtins.attrNames (conf.services.minio.sources or { }));
+          sourceKeys = builtins.sort builtins.lessThan (
+            builtins.attrNames (conf.services.minio.sources or { })
+          );
           defaultSource = conf.services.minio.defaultSource or "";
         };
 
@@ -522,7 +531,9 @@ in
           portKeyHttp = conf.services.reth.ports.http or "rethHttp";
           portKeyWs = conf.services.reth.ports.ws or "rethWs";
           portKeyAuth = conf.services.reth.ports.auth or "rethAuth";
-          sourceKeys = builtins.sort builtins.lessThan (builtins.attrNames (conf.services.reth.sources or { }));
+          sourceKeys = builtins.sort builtins.lessThan (
+            builtins.attrNames (conf.services.reth.sources or { })
+          );
           defaultSource = conf.services.reth.defaultSource or "";
         };
 
@@ -530,7 +541,9 @@ in
           enable = conf.services.helios.enable or false;
           portKeyRpc = conf.services.helios.ports.rpc or "heliosRpc";
           executionRpcPortKey = conf.services.helios.ports.executionRpc or "rethHttp";
-          sourceKeys = builtins.sort builtins.lessThan (builtins.attrNames (conf.services.helios.sources or { }));
+          sourceKeys = builtins.sort builtins.lessThan (
+            builtins.attrNames (conf.services.helios.sources or { })
+          );
           defaultSource = conf.services.helios.defaultSource or "";
           sourceKinds = conf.services.helios.sourceKinds or { };
           readiness = {
@@ -799,6 +812,8 @@ in
               "system"
             ];
             runtimeInputs = commonRuntimeInputs;
+            passThroughEnv = defaultTaskPassThroughEnv ++ [ "API_KEY" ];
+            allowSensitivePassThrough = true;
             command = ''
               set -euo pipefail
               if [ -z "''${API_KEY:-}" ]; then

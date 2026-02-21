@@ -31,6 +31,8 @@ services.helios = {
 };
 ```
 
+`pinned` is the deterministic default source. `nixpkgs` is an optional fallback source when present.
+
 ## Relevant Port Keys
 
 - `ports.rpc` maps to `ports.heliosRpc`.
