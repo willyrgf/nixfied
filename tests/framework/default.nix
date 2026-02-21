@@ -68,6 +68,10 @@
     inherit pkgs;
   };
 
+  "helios-pinned-source-contract" = import ./helios-pinned-source-contract.nix {
+    inherit pkgs;
+  };
+
   "ready-health-matrix-smoke" = import ./ready-health-matrix-smoke.nix {
     inherit
       pkgs
@@ -187,13 +191,15 @@
       ;
   };
 
-  "framework-template-install-upgrade-help-smoke" = import ./framework-template-install-upgrade-help-smoke.nix {
-    inherit
-      pkgs
-      model
-      registry
-      ;
-  };
+  "framework-template-install-upgrade-help-smoke" =
+    import ./framework-template-install-upgrade-help-smoke.nix
+      {
+        inherit
+          pkgs
+          model
+          registry
+          ;
+      };
 
   "framework-upgrade-preserve-smoke" = import ./framework-upgrade-preserve-smoke.nix {
     inherit

@@ -14,15 +14,15 @@ services.helios = {
   checkpoint = "";
   extraArgs = [ ];
   sources = {
-    stable.package = pkgs.callPackage ./nixfied/project/sources/helios-stable.nix { };
-    patched.package = pkgs.callPackage ./nixfied/project/sources/helios-patched.nix { };
+    pinned.package = pkgs.callPackage ./nixfied/project/sources/helios-pinned.nix { };
+    nixpkgs.package = pkgs.helios;
   };
   sourceKinds = {
-    stable = "real";
-    patched = "real";
+    pinned = "real";
+    nixpkgs = "real";
     shim = "shim";
   };
-  defaultSource = "stable";
+  defaultSource = "pinned";
   readiness = {
     profile = "strict";
     requireNotSyncing = true;
@@ -43,7 +43,7 @@ No dedicated Helios app namespace is exposed. Use model-generated operations:
 - `nix run .#validate-env`
 - `nix run .#ports`
 - `nix run .#check-ports`
-- `nix run .#health -- --service helios --source stable`
-- `nix run .#ready -- --service helios --source patched`
+- `nix run .#health -- --service helios --source pinned`
+- `nix run .#ready -- --service helios --source nixpkgs`
 
 In strict readiness mode, `ready` rejects disallowed source kinds and requires `eth_syncing=false`.

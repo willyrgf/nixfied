@@ -173,11 +173,7 @@ rec {
           }
         else
           { };
-      defaultSource =
-        if pkgs != null && pkgs ? nginx then
-          "nixpkgs"
-        else
-          "";
+      defaultSource = if pkgs != null && pkgs ? nginx then "nixpkgs" else "";
     };
 
     minio = {
@@ -221,11 +217,7 @@ rec {
           }
         else
           { };
-      defaultSource =
-        if pkgs != null && pkgs ? reth then
-          "nixpkgs"
-        else
-          "";
+      defaultSource = if pkgs != null && pkgs ? reth then "nixpkgs" else "";
     };
 
     helios = {
@@ -241,24 +233,36 @@ rec {
       checkpoint = "";
       extraArgs = [ ];
       sources =
-        if pkgs != null && pkgs ? helios then
+        if pkgs != null then
           {
-            nixpkgs.package = pkgs.helios;
+            pinned.package = pkgs.callPackage ./sources/helios-pinned.nix { };
           }
+          // (
+            if pkgs ? helios then
+              {
+                nixpkgs.package = pkgs.helios;
+              }
+            else
+              { }
+          )
         else
           { };
       sourceKinds =
-        if pkgs != null && pkgs ? helios then
+        if pkgs != null then
           {
-            nixpkgs = "real";
+            pinned = "real";
           }
+          // (
+            if pkgs ? helios then
+              {
+                nixpkgs = "real";
+              }
+            else
+              { }
+          )
         else
           { };
-      defaultSource =
-        if pkgs != null && pkgs ? helios then
-          "nixpkgs"
-        else
-          "";
+      defaultSource = if pkgs != null then "pinned" else "";
       readiness = {
         profile = "fast";
         requireNotSyncing = false;
