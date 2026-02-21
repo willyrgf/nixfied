@@ -456,6 +456,24 @@ in
 
         ports = conf.ports;
         directories.base = conf.directories.base;
+        ephemeral = {
+          copyMode = conf.ephemeral.copyMode or "git-files";
+          excludePatterns =
+            conf.ephemeral.excludePatterns or [
+              ".git"
+              "node_modules"
+              ".next"
+              "dist"
+              ".turbo"
+              ".cache"
+              "result"
+              "result-*"
+              "*.log"
+              "test-results"
+              "coverage"
+            ];
+          extraDirs = conf.ephemeral.extraDirs or [ ];
+        };
       };
 
       state = {

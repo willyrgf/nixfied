@@ -231,4 +231,12 @@
       registry
       ;
   };
+
+  "ephemeral-copy-mode-smoke" = import ./ephemeral-copy-mode-smoke.nix {
+    inherit
+      pkgs
+      model
+      registry
+      ;
+  };
 }

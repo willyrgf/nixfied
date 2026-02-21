@@ -97,6 +97,7 @@ rec {
 
   ephemeral = {
     enable = false;
+    copyMode = "git-files";
     excludePatterns = [
       ".git"
       "node_modules"
@@ -104,6 +105,8 @@ rec {
       "dist"
       ".turbo"
       ".cache"
+      "result"
+      "result-*"
       "*.log"
       "test-results"
       "coverage"

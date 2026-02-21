@@ -44,6 +44,7 @@ let
           pkgs.git
         ];
       };
+      ephemeral = model.runtime.ephemeral or { };
     };
   };
   ephemeralExecutorWrapper = frameworkEphemeral.mkEphemeralWrapper {

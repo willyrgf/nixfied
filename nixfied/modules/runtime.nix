@@ -149,5 +149,37 @@ in
         default = "\${XDG_DATA_HOME:-$HOME/.local/share}/nixfied-project";
       };
     };
+
+    ephemeral = {
+      copyMode = lib.mkOption {
+        type = t.enum [
+          "git-files"
+          "static-excludes"
+        ];
+        default = "git-files";
+      };
+
+      excludePatterns = lib.mkOption {
+        type = t.listOf t.str;
+        default = [
+          ".git"
+          "node_modules"
+          ".next"
+          "dist"
+          ".turbo"
+          ".cache"
+          "result"
+          "result-*"
+          "*.log"
+          "test-results"
+          "coverage"
+        ];
+      };
+
+      extraDirs = lib.mkOption {
+        type = t.listOf t.str;
+        default = [ ];
+      };
+    };
   };
 }

@@ -33,6 +33,7 @@ let
   envVar = projectMeta.envVar or "PROJECT_ENV";
 
   ephemeralCfg = project.ephemeral or { };
+  copyMode = ephemeralCfg.copyMode or "git-files";
   excludePatterns =
     ephemeralCfg.excludePatterns or [
       ".git"
@@ -166,12 +167,53 @@ let
 
     SOURCE_DIR="$1"
     DEST_DIR="$2"
+    COPY_MODE=${pkgs.lib.escapeShellArg copyMode}
+
+    static_copy() {
+      log_info "Using static-excludes copy mode"
+      ${pkgs.rsync}/bin/rsync -a \
+        ${rsyncExcludes} \
+        "$SOURCE_DIR/" "$DEST_DIR/"
+    }
+
+    git_copy() {
+      local manifest
+      manifest="$(${pkgs.coreutils}/bin/mktemp)"
+
+      (
+        cd "$SOURCE_DIR"
+        ${pkgs.git}/bin/git ls-files -z --cached --others --exclude-standard
+      ) > "$manifest"
+
+      log_info "Using git-files copy mode"
+
+      if [ ! -s "$manifest" ]; then
+        log_warn "Git file manifest is empty; source copy may be incomplete"
+      fi
+
+      ${pkgs.rsync}/bin/rsync -a --from0 --files-from="$manifest" "$SOURCE_DIR/" "$DEST_DIR/"
+      rm -f "$manifest"
+    }
 
     log_info "Copying project source to ephemeral location"
 
-    ${pkgs.rsync}/bin/rsync -a \
-      ${rsyncExcludes} \
-      "$SOURCE_DIR/" "$DEST_DIR/"
+    case "$COPY_MODE" in
+      git-files)
+        if ${pkgs.git}/bin/git -C "$SOURCE_DIR" rev-parse --show-toplevel >/dev/null 2>&1; then
+          git_copy
+        else
+          log_warn "git-files copy mode unavailable outside a git worktree; falling back to static-excludes"
+          static_copy
+        fi
+        ;;
+      static-excludes)
+        static_copy
+        ;;
+      *)
+        log_error "Unsupported ephemeral copy mode: $COPY_MODE"
+        exit 2
+        ;;
+    esac
 
     log_ok "Source copied to $DEST_DIR"
   '';
@@ -263,7 +305,12 @@ let
 
       set -euo pipefail
 
-      export ORIGINAL_ROOT="''${NIXFIED_CALLER_PWD:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+      CALLER_ROOT="''${NIXFIED_CALLER_PWD:-$(pwd -P)}"
+      if ORIGINAL_ROOT="$(${pkgs.git}/bin/git -C "$CALLER_ROOT" rev-parse --show-toplevel 2>/dev/null)"; then
+        export ORIGINAL_ROOT
+      else
+        export ORIGINAL_ROOT="$CALLER_ROOT"
+      fi
 
       # Compatibility aliases:
       # - NIXFIED_ENV: alias for the configured slot variable (default: NIX_ENV).

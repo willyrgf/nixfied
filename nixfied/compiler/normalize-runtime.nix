@@ -40,5 +40,11 @@ in
     base = resolved.runtime.directories.base;
   };
 
+  ephemeral = {
+    copyMode = resolved.runtime.ephemeral.copyMode;
+    excludePatterns = resolved.runtime.ephemeral.excludePatterns;
+    extraDirs = resolved.runtime.ephemeral.extraDirs;
+  };
+
   runtimePackages = map builtins.toString (resolved.tooling.runtimePackages or [ ]);
 }
