@@ -100,6 +100,50 @@ let
     }
   ];
 
+  loggingContractArgs = [
+    {
+      name = "log-level";
+      kind = "option";
+      long = "--log-level";
+      type = "enum";
+      values = [
+        "error"
+        "warn"
+        "info"
+        "debug"
+        "trace"
+      ];
+      description = "Override LOG_LEVEL for this run.";
+    }
+    {
+      name = "output-mode";
+      kind = "option";
+      long = "--output-mode";
+      type = "enum";
+      values = [
+        "stdout"
+        "logs"
+        "both"
+      ];
+      description = "Override OUTPUT_MODE for this run.";
+    }
+  ];
+
+  mergeLoggingContractArgs =
+    contractArgs:
+    let
+      argIdentity =
+        arg:
+        let
+          argName = if arg ? name then arg.name else "";
+          argLong = if (arg ? long) && arg.long != null then arg.long else "";
+        in
+        "${argName}|${argLong}";
+      existing = map argIdentity contractArgs;
+    in
+    contractArgs
+    ++ lib.filter (arg: !(builtins.elem (argIdentity arg) existing)) loggingContractArgs;
+
   mkFrameworkInstallCommand =
     {
       upgradeDefault ? false,
@@ -264,6 +308,7 @@ let
       postHooks ? { },
       workflowId ? null,
       contractArgs ? [ ],
+      logging ? { },
     }:
     {
       inherit
@@ -292,7 +337,7 @@ let
           args = {
             parser = "typed";
             allowUnknown = false;
-            spec = contractArgs;
+            spec = mergeLoggingContractArgs contractArgs;
           };
           env = {
             schemaRef = "runtimePrimitives";
@@ -328,8 +373,20 @@ let
           "CI_ARTIFACTS_DIR"
           "CI_MAX_WORKERS"
           "NIXFIED_CI_MAX_WORKERS"
+          "LOG_LEVEL"
+          "NIXFIED_LOG_LEVEL"
+          "OUTPUT_MODE"
+          "NIXFIED_OUTPUT_MODE"
+          "RUST_LOG"
+          "MFM_LOG"
+          "MFM_TEST_LOG"
+          "MFM_TEST_LOG_FILTER"
           "API_KEY"
         ];
+        logging = {
+          levelDefault = logging.levelDefault or null;
+          outputDefault = logging.outputDefault or null;
+        };
         env = { };
         umask = "022";
         locale = "C.UTF-8";

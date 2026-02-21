@@ -58,6 +58,7 @@ pkgs.runCommand "ci-mode-matrix-smoke" { } ''
   run_case "mode-env" "workflow.ci.env" --env
   run_case "mode-full" "workflow.ci.full" --full
   run_case "mode-option" "workflow.ci.app" --mode app
+  run_case "mode-option-logging" "workflow.ci.app" --mode app --log-level debug --output-mode both
 
   set +e
   "$ORCH" run-task task.ci --mode nope --summary > "$TMPDIR/mode-invalid.out" 2>&1
@@ -67,6 +68,24 @@ pkgs.runCommand "ci-mode-matrix-smoke" { } ''
     fail "expected --mode nope to fail"
   fi
   require_contains "$TMPDIR/mode-invalid.out" "ERROR: unknown mode 'nope' (expected:"
+
+  set +e
+  "$ORCH" run-task task.ci --mode basic --summary --log-level nope > "$TMPDIR/log-level-invalid.out" 2>&1
+  invalid_log_level_rc="$?"
+  set -e
+  if [ "$invalid_log_level_rc" -eq 0 ]; then
+    fail "expected --log-level nope to fail"
+  fi
+  require_contains "$TMPDIR/log-level-invalid.out" "ERROR: invalid --log-level 'nope'"
+
+  set +e
+  "$ORCH" run-task task.ci --mode basic --summary --output-mode nope > "$TMPDIR/output-mode-invalid.out" 2>&1
+  invalid_output_mode_rc="$?"
+  set -e
+  if [ "$invalid_output_mode_rc" -eq 0 ]; then
+    fail "expected --output-mode nope to fail"
+  fi
+  require_contains "$TMPDIR/output-mode-invalid.out" "ERROR: invalid --output-mode 'nope'"
 
   echo "OK: ci mode matrix aliases resolve deterministic workflows" > "$out"
 ''

@@ -121,6 +121,14 @@
       ;
   };
 
+  "logging-injection-smoke" = import ./logging-injection-smoke.nix {
+    inherit
+      pkgs
+      model
+      registry
+      ;
+  };
+
   "workflow-mode-derived-smoke" = import ./workflow-mode-derived-smoke.nix {
     inherit
       pkgs

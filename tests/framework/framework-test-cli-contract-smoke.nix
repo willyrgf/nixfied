@@ -35,6 +35,9 @@ pkgs.runCommand "framework-test-cli-contract-smoke" { } ''
   require_contains "$TMPDIR/shard-help.out" "OK: shard passed name=help"
   require_contains "$TMPDIR/shard-help.out" "INFO: summary profile=ci mode=full executed_shards=1"
 
+  "$ORCH" run-task task.framework.test --shard help --summary --log-level debug --output-mode both > "$TMPDIR/shard-help-logging.out" 2>&1
+  require_contains "$TMPDIR/shard-help-logging.out" "OK: shard passed name=help"
+
   "$ORCH" run-task task.framework.test --shard help --serial --summary > "$TMPDIR/shard-help-serial.out" 2>&1
   require_contains "$TMPDIR/shard-help-serial.out" "INFO: running shards serial total=1"
   require_contains "$TMPDIR/shard-help-serial.out" "OK: shard passed name=help"
