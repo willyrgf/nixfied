@@ -4,12 +4,24 @@
   registry,
 }:
 let
+  probeModel = model // {
+    workflows = model.workflows // {
+      "workflow.ci.basic" = model.workflows."workflow.ci.basic" // {
+        execution = model.workflows."workflow.ci.basic".execution // {
+          ephemeral = (model.workflows."workflow.ci.basic".execution.ephemeral or { }) // {
+            enable = false;
+          };
+        };
+      };
+    };
+  };
+
   orchestrator = import ../../nixfied/runner/orchestrator.nix {
     inherit
       pkgs
-      model
       registry
       ;
+    model = probeModel;
     projectRoot = ../..;
   };
 in
@@ -18,12 +30,18 @@ pkgs.runCommand "summary-json-smoke" { } ''
 
   ORCH="${orchestrator}/bin/nixfied-orchestrator"
   export REGISTRY_ROOT="$TMPDIR/registry"
-  export CI_ARTIFACTS_DIR="$TMPDIR/artifacts"
-  mkdir -p "$REGISTRY_ROOT" "$CI_ARTIFACTS_DIR"
+  export CI_ARTIFACTS_ROOT="$TMPDIR/artifacts"
+  mkdir -p "$REGISTRY_ROOT" "$CI_ARTIFACTS_ROOT"
 
   "$ORCH" run-workflow workflow.ci.basic --summary > "$TMPDIR/ci.out" 2>&1
 
-  summary_file="$CI_ARTIFACTS_DIR/summary.json"
+  run_id="$(${pkgs.gnused}/bin/sed -n 's/^INFO: runId=\([^ ]*\).*/\1/p' "$TMPDIR/ci.out" | ${pkgs.coreutils}/bin/tail -n 1)"
+  if [ -z "$run_id" ]; then
+    echo "missing run id"
+    cat "$TMPDIR/ci.out"
+    exit 1
+  fi
+  summary_file="$CI_ARTIFACTS_ROOT/$run_id/summary.json"
   if [ ! -f "$summary_file" ]; then
     echo "missing summary file: $summary_file"
     cat "$TMPDIR/ci.out"

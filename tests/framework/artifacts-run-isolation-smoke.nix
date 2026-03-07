@@ -42,8 +42,20 @@ pkgs.runCommand "artifacts-run-isolation-smoke" { } ''
   mkdir -p "$REGISTRY_ROOT"
   unset CI_ARTIFACTS_DIR || true
 
-  "$ORCH" run-workflow ${workflowId} --summary > "$TMPDIR/run-1.out" 2>&1
-  "$ORCH" run-workflow ${workflowId} --summary > "$TMPDIR/run-2.out" 2>&1
+  set +e
+  "$ORCH" run-workflow ${workflowId} --summary > "$TMPDIR/run-1.out" 2>&1 &
+  pid_one="$!"
+  "$ORCH" run-workflow ${workflowId} --summary > "$TMPDIR/run-2.out" 2>&1 &
+  pid_two="$!"
+  wait "$pid_one"
+  rc_one="$?"
+  wait "$pid_two"
+  rc_two="$?"
+  set -e
+
+  if [ "$rc_one" -ne 0 ] || [ "$rc_two" -ne 0 ]; then
+    fail "expected concurrent workflow runs to pass"
+  fi
 
   run_1="$(extract_run_id "$TMPDIR/run-1.out")"
   run_2="$(extract_run_id "$TMPDIR/run-2.out")"

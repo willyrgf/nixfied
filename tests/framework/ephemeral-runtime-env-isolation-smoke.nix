@@ -6,23 +6,26 @@
 let
   baseTask = model.tasks."task.ci.quality";
 
-  probeTaskId = "task.test.ephemeral.probe";
-  probeWorkflowId = "workflow.test.ephemeral.probe";
+  probeTaskId = "task.test.ephemeral.runtime-env";
+  probeWorkflowId = "workflow.test.ephemeral.runtime-env";
 
   probeTask = baseTask // {
     id = probeTaskId;
-    summary = "ephemeral execution probe";
-    description = "Verifies workflow execution uses a writable ephemeral source copy.";
+    summary = "ephemeral runtime env probe";
+    description = "Verifies ephemeral runs receive only run-local mutable directories.";
     runner = {
       type = "shell";
       command = ''
         set -euo pipefail
         echo "INFO: sandbox_pwd=$(pwd -P)"
-        touch "./ephemeral-write-check.txt"
-        mkdir -p "./result/bin"
-        printf 'probe\n' > "./result/bin/mfm_cli"
-        chmod -R a-w "./result"
-        echo "OK: ephemeral probe task complete"
+        echo "INFO: sandbox_home=$HOME"
+        echo "INFO: sandbox_tmp=$TMPDIR"
+        echo "INFO: sandbox_xdg_data=$XDG_DATA_HOME"
+        echo "INFO: sandbox_xdg_state=$XDG_STATE_HOME"
+        echo "INFO: sandbox_xdg_cache=$XDG_CACHE_HOME"
+        echo "INFO: sandbox_registry=$REGISTRY_ROOT"
+        echo "INFO: sandbox_artifacts=$CI_ARTIFACTS_DIR"
+        echo "OK: ephemeral runtime env probe complete"
       '';
       package = null;
       workflowId = null;
@@ -30,7 +33,7 @@ let
     ui = baseTask.ui // {
       app = baseTask.ui.app // {
         expose = false;
-        name = "test-ephemeral-probe";
+        name = "test-ephemeral-runtime-env";
       };
     };
   };
@@ -48,8 +51,8 @@ let
 
   probeWorkflow = {
     id = probeWorkflowId;
-    summary = "ephemeral execution probe workflow";
-    description = "Validates orchestrator-enforced filesystem isolation.";
+    summary = "ephemeral runtime env probe workflow";
+    description = "Validates the ephemeral runtime env contract.";
     mode = "custom";
     maxWorkers = 1;
     units = {
@@ -106,7 +109,7 @@ let
     projectRoot = ../..;
   };
 in
-pkgs.runCommand "ephemeral-execution-smoke" { } ''
+pkgs.runCommand "ephemeral-runtime-env-isolation-smoke" { } ''
   set -euo pipefail
 
   ORCH="${orchestrator}/bin/nixfied-orchestrator"
@@ -122,30 +125,16 @@ pkgs.runCommand "ephemeral-execution-smoke" { } ''
     exit 1
   fi
 
-  sandbox_pwd="$(${pkgs.gnused}/bin/sed -n 's/^INFO: sandbox_pwd=//p' "$TMPDIR/probe.out" | ${pkgs.coreutils}/bin/tail -n 1)"
-  if [ "$sandbox_pwd" != "$eph_root/source" ]; then
-    echo "expected task workdir inside ephemeral source copy"
-    echo "sandbox_pwd=$sandbox_pwd"
-    echo "eph_root=$eph_root"
-    cat "$TMPDIR/probe.out"
-    exit 1
-  fi
-
-  ${pkgs.gnugrep}/bin/grep -Fq "INFO: Ephemeral execution mode" "$TMPDIR/probe.out"
-  ${pkgs.gnugrep}/bin/grep -Fq "INFO: summary_json=$eph_root/artifacts/summary.json" "$TMPDIR/probe.out"
-  ${pkgs.gnugrep}/bin/grep -Fq "OK: ephemeral probe task complete" "$TMPDIR/probe.out"
+  ${pkgs.gnugrep}/bin/grep -Fq "INFO: sandbox_pwd=$eph_root/source" "$TMPDIR/probe.out"
+  ${pkgs.gnugrep}/bin/grep -Fq "INFO: sandbox_home=$eph_root/home" "$TMPDIR/probe.out"
+  ${pkgs.gnugrep}/bin/grep -Fq "INFO: sandbox_tmp=$eph_root/tmp" "$TMPDIR/probe.out"
+  ${pkgs.gnugrep}/bin/grep -Fq "INFO: sandbox_xdg_data=$eph_root/xdg/data" "$TMPDIR/probe.out"
+  ${pkgs.gnugrep}/bin/grep -Fq "INFO: sandbox_xdg_state=$eph_root/xdg/state" "$TMPDIR/probe.out"
+  ${pkgs.gnugrep}/bin/grep -Fq "INFO: sandbox_xdg_cache=$eph_root/xdg/cache" "$TMPDIR/probe.out"
+  ${pkgs.gnugrep}/bin/grep -Fq "INFO: sandbox_registry=$eph_root/registry" "$TMPDIR/probe.out"
+  ${pkgs.gnugrep}/bin/grep -Fq "INFO: sandbox_artifacts=$eph_root/artifacts" "$TMPDIR/probe.out"
+  ${pkgs.gnugrep}/bin/grep -Fq "OK: ephemeral runtime env probe complete" "$TMPDIR/probe.out"
   ${pkgs.gnugrep}/bin/grep -Fq "OK: Ephemeral state cleaned" "$TMPDIR/probe.out"
 
-  if ${pkgs.gnugrep}/bin/grep -Fq "Permission denied" "$TMPDIR/probe.out"; then
-    echo "unexpected permission error during ephemeral cleanup"
-    cat "$TMPDIR/probe.out"
-    exit 1
-  fi
-
-  if [ -e "$eph_root" ]; then
-    echo "expected ephemeral root to be cleaned: $eph_root"
-    exit 1
-  fi
-
-  echo "OK: ephemeral execution uses copied writable source root" > "$out"
+  echo "OK: ephemeral runtime env vars are run-local" > "$out"
 ''

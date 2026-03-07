@@ -7,6 +7,9 @@ in
 assert pkgs.lib.hasInfix "nixfied-orchestrator" orchestratorSource;
 assert pkgs.lib.hasInfix "create_run_record() {" orchestratorSource;
 assert pkgs.lib.hasInfix "update_run_state() {" orchestratorSource;
+assert pkgs.lib.hasInfix "resolve_run_artifacts_dir() {" orchestratorSource;
+assert pkgs.lib.hasInfix "registry_events_snapshot" orchestratorSource;
+assert pkgs.lib.hasInfix "tmp=\"$(mktemp \"$run_file.tmp.XXXXXX\")\"" orchestratorSource;
 assert pkgs.lib.hasInfix "stop-all-runs" orchestratorSource;
 assert pkgs.lib.hasInfix "validate_typed_task_args() {" orchestratorSource;
 assert pkgs.lib.hasInfix "run_workflow_phase_tasks() {" executorSource;

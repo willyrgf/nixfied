@@ -47,9 +47,10 @@ rec {
     heliosRpc = 8547;
   };
 
-  # Base data directory for per-slot/per-env state
+  # Base runtime directory. project/module.nix resolves the final default to a
+  # workspace-scoped path for the current checkout.
   directories = {
-    base = "\${XDG_DATA_HOME:-$HOME/.local/share}/${project.id}";
+    base = "/tmp/nixfied-runtime/${project.id}/runtime";
   };
 
   logging = {
@@ -125,7 +126,9 @@ rec {
   };
 
   process = {
-    registryRoot = "/tmp/nixfied-runtime/${project.id}";
+    # project/module.nix resolves the final default to a workspace-scoped path
+    # for the current checkout.
+    registryRoot = "/tmp/nixfied-runtime/${project.id}/registry";
   };
 
   services = {

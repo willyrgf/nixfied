@@ -4,12 +4,45 @@
   registry,
 }:
 let
+  probeModel = model // {
+    workflows = model.workflows // {
+      "workflow.ci.basic" = model.workflows."workflow.ci.basic" // {
+        execution = model.workflows."workflow.ci.basic".execution // {
+          ephemeral = (model.workflows."workflow.ci.basic".execution.ephemeral or { }) // {
+            enable = false;
+          };
+        };
+      };
+      "workflow.ci.app" = model.workflows."workflow.ci.app" // {
+        execution = model.workflows."workflow.ci.app".execution // {
+          ephemeral = (model.workflows."workflow.ci.app".execution.ephemeral or { }) // {
+            enable = false;
+          };
+        };
+      };
+      "workflow.ci.env" = model.workflows."workflow.ci.env" // {
+        execution = model.workflows."workflow.ci.env".execution // {
+          ephemeral = (model.workflows."workflow.ci.env".execution.ephemeral or { }) // {
+            enable = false;
+          };
+        };
+      };
+      "workflow.ci.full" = model.workflows."workflow.ci.full" // {
+        execution = model.workflows."workflow.ci.full".execution // {
+          ephemeral = (model.workflows."workflow.ci.full".execution.ephemeral or { }) // {
+            enable = false;
+          };
+        };
+      };
+    };
+  };
+
   harness = import ./lib/harness.nix {
     inherit
       pkgs
-      model
       registry
       ;
+    model = probeModel;
     projectRoot = ../..;
   };
 in
@@ -33,11 +66,19 @@ pkgs.runCommand "ci-mode-matrix-smoke" { } ''
     CI_ARTIFACTS_DIR="$artifacts_dir" "$ORCH" run-task task.ci "$@" --summary > "$log_file" 2>&1
 
     local run_id
+    local summary_file
     run_id="$(extract_run_id "$log_file")"
     require_non_empty "$run_id" "run id for $label"
+    summary_file="$(${pkgs.gnused}/bin/sed -n 's/^INFO: summary_json=//p' "$log_file" | ${pkgs.coreutils}/bin/tail -n 1)"
+    require_non_empty "$summary_file" "summary file for $label"
 
-    local summary_file="$artifacts_dir/summary.json"
     require_file "$summary_file"
+    case "$summary_file" in
+      "$artifacts_dir/$run_id/summary.json") ;;
+      *)
+        fail "expected run-scoped summary path for $label: $summary_file"
+        ;;
+    esac
 
     ${pkgs.jq}/bin/jq -e --arg workflow "$expected_workflow" '
       .workflow_id == $workflow

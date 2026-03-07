@@ -50,6 +50,17 @@ in
       fi
     }
 
+    require_not_contains() {
+      local file="$1"
+      local needle="$2"
+      if ${pkgs.gnugrep}/bin/grep -Fq "$needle" "$file"; then
+        echo "unexpected text '$needle' in $file"
+        echo "--- $file"
+        cat "$file"
+        fail "assertion failed"
+      fi
+    }
+
     require_non_empty() {
       local value="$1"
       local label="$2"

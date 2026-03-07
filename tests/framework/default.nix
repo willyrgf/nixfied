@@ -60,6 +60,13 @@
     inherit pkgs;
   };
 
+  "workspace-registry-isolation-smoke" = import ./workspace-registry-isolation-smoke.nix {
+    inherit
+      pkgs
+      registry
+      ;
+  };
+
   "sensitive-pass-through-smoke" = import ./sensitive-pass-through-smoke.nix {
     inherit
       pkgs
@@ -251,7 +258,31 @@
       ;
   };
 
+  "artifacts-root-override-isolation-smoke" = import ./artifacts-root-override-isolation-smoke.nix {
+    inherit
+      pkgs
+      model
+      registry
+      ;
+  };
+
   "ephemeral-execution-smoke" = import ./ephemeral-execution-smoke.nix {
+    inherit
+      pkgs
+      model
+      registry
+      ;
+  };
+
+  "ephemeral-runtime-env-isolation-smoke" = import ./ephemeral-runtime-env-isolation-smoke.nix {
+    inherit
+      pkgs
+      model
+      registry
+      ;
+  };
+
+  "ephemeral-registry-run-isolation-smoke" = import ./ephemeral-registry-run-isolation-smoke.nix {
     inherit
       pkgs
       model
@@ -276,6 +307,29 @@
   };
 
   "ephemeral-copy-budget-smoke" = import ./ephemeral-copy-budget-smoke.nix {
+    inherit
+      pkgs
+      model
+      registry
+      ;
+  };
+
+  "registry-lock-recovery-smoke" = import ./registry-lock-recovery-smoke.nix {
+    inherit
+      pkgs
+      registry
+      ;
+  };
+
+  "run-record-atomicity-smoke" = import ./run-record-atomicity-smoke.nix {
+    inherit
+      pkgs
+      model
+      registry
+      ;
+  };
+
+  "service-dir-isolation-smoke" = import ./service-dir-isolation-smoke.nix {
     inherit
       pkgs
       model

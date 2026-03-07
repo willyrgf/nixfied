@@ -21,6 +21,8 @@ assert pkgs.lib.hasInfix "run_task_with_deps() {" source;
 assert pkgs.lib.hasInfix "run_workflow_phase_tasks() {" source;
 assert pkgs.lib.hasInfix ".postRun.alwaysRun" source;
 assert pkgs.lib.hasInfix "write_workflow_summary_json() {" source;
+assert pkgs.lib.hasInfix "ensure_run_artifacts_dir() {" source;
+assert pkgs.lib.hasInfix "registry_events_snapshot" source;
 assert pkgs.lib.hasInfix "summary_json=$summary_file" source;
 assert pkgs.lib.hasInfix "workflow_steps_json() {" source;
 assert pkgs.lib.hasInfix "print_workflow_summary_report() {" source;

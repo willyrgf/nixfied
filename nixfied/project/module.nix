@@ -1,7 +1,28 @@
-{ lib, pkgs, ... }:
+{ lib, pkgs, projectRoot, ... }:
 let
   conf = import ./conf.nix { inherit pkgs; };
   project = conf.project;
+  workspaceId = builtins.substring 0 12 (builtins.hashString "sha256" (toString projectRoot));
+  workspaceRuntimeRoot = "/tmp/nixfied-runtime/${project.id}/${workspaceId}";
+  legacyRuntimeBases = [
+    "\${XDG_DATA_HOME:-$HOME/.local/share}/${project.id}"
+    "/tmp/nixfied-runtime/${project.id}/runtime"
+  ];
+  legacyRegistryRoots = [
+    "/tmp/nixfied-runtime/${project.id}"
+    "/tmp/nixfied-runtime/${project.id}/registry"
+  ];
+  resolvedRuntimeBase =
+    if builtins.elem conf.directories.base legacyRuntimeBases then
+      "${workspaceRuntimeRoot}/runtime"
+    else
+      conf.directories.base;
+  resolvedRegistryRoot =
+    if builtins.elem conf.process.registryRoot legacyRegistryRoots then
+      "${workspaceRuntimeRoot}/registry"
+    else
+      conf.process.registryRoot;
+  resolvedArtifactsRoot = "/tmp/ci-artifacts/${project.id}/${workspaceId}";
   frameworkTestMaxParallelShardsRaw = conf.frameworkTest.maxParallelShards or "auto";
   frameworkTestMaxParallelShards =
     if builtins.isInt frameworkTestMaxParallelShardsRaw then
@@ -458,7 +479,7 @@ in
         };
 
         ports = conf.ports;
-        directories.base = conf.directories.base;
+        directories.base = resolvedRuntimeBase;
         ephemeral = {
           copyMode = conf.ephemeral.copyMode or "git-files";
           excludePatterns =
@@ -485,8 +506,9 @@ in
       };
 
       state = {
-        registryRoot = conf.process.registryRoot;
-        artifactsRoot = "/tmp/ci-artifacts";
+        workspaceId = workspaceId;
+        registryRoot = resolvedRegistryRoot;
+        artifactsRoot = resolvedArtifactsRoot;
       };
 
       tooling = {
@@ -766,7 +788,7 @@ in
             runtimeInputs = commonRuntimeInputs;
             command = ''
               set -euo pipefail
-              artifacts_dir="''${CI_ARTIFACTS_DIR:-/tmp/ci-artifacts}"
+              artifacts_dir="''${CI_ARTIFACTS_DIR:-$REGISTRY_ROOT/artifacts/manual}"
               mkdir -p "$artifacts_dir"
               touch "$artifacts_dir/quality.log"
               echo "OK: quality step complete"
@@ -790,7 +812,7 @@ in
             runtimeInputs = commonRuntimeInputs;
             command = ''
               set -euo pipefail
-              artifacts_dir="''${CI_ARTIFACTS_DIR:-/tmp/ci-artifacts}"
+              artifacts_dir="''${CI_ARTIFACTS_DIR:-$REGISTRY_ROOT/artifacts/manual}"
               mkdir -p "$artifacts_dir"
               touch "$artifacts_dir/tests.log"
               echo "OK: tests step complete"
@@ -820,7 +842,7 @@ in
                 echo "SKIP: API_KEY not set"
                 exit 0
               fi
-              artifacts_dir="''${CI_ARTIFACTS_DIR:-/tmp/ci-artifacts}"
+              artifacts_dir="''${CI_ARTIFACTS_DIR:-$REGISTRY_ROOT/artifacts/manual}"
               mkdir -p "$artifacts_dir"
               touch "$artifacts_dir/system-quick.log"
               echo "OK: quick system step complete"
@@ -844,7 +866,7 @@ in
             runtimeInputs = commonRuntimeInputs;
             command = ''
               set -euo pipefail
-              artifacts_dir="''${CI_ARTIFACTS_DIR:-/tmp/ci-artifacts}"
+              artifacts_dir="''${CI_ARTIFACTS_DIR:-$REGISTRY_ROOT/artifacts/manual}"
               mkdir -p "$artifacts_dir"
               touch "$artifacts_dir/nginx-proxy.log"
               echo "OK: nginx proxy step complete"
@@ -1182,7 +1204,7 @@ in
             }
 
             log_error() {
-              printf 'ERROR: %s\n' "$*" >&2
+              printf 'ERROR: %s\n' "$*"
             }
 
             log_ok() {
@@ -1228,10 +1250,13 @@ in
             write_summary_json() {
               local rc="$1"
               local finished_at duration
+              local summary_dir summary_tmp
               finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
               duration="$(( $(date +%s) - START_EPOCH ))"
-              mkdir -p "$(dirname "$SUMMARY_JSON")"
-              cat > "$SUMMARY_JSON" <<JSON
+              summary_dir="$(dirname "$SUMMARY_JSON")"
+              mkdir -p "$summary_dir"
+              summary_tmp="$(mktemp "$SUMMARY_JSON.tmp.XXXXXX")"
+              cat > "$summary_tmp" <<JSON
             {
               "profile": "$PROFILE",
               "mode": "$MODE",
@@ -1243,6 +1268,7 @@ in
               "finished_at": "$finished_at"
             }
             JSON
+              mv "$summary_tmp" "$SUMMARY_JSON"
               log_info "wrote summary json path=$SUMMARY_JSON"
             }
 
@@ -1265,7 +1291,18 @@ in
             }
 
             shard_help() {
-              nix run path:.#help >/dev/null
+              local help_stderr
+              local rc
+              help_stderr="$(mktemp)"
+              if nix run path:.#help >/dev/null 2>"$help_stderr"; then
+                rm -f "$help_stderr"
+                return 0
+              fi
+              rc="$?"
+              log_error "help shard command failed pwd=$(pwd -P) rc=$rc"
+              cat "$help_stderr"
+              rm -f "$help_stderr"
+              return "$rc"
             }
 
             shard_workflow_test() {
@@ -1314,11 +1351,14 @@ in
 
             run_named_shard_recorded() {
               local shard_name="$1"
+              local rc=0
               if run_named_shard "$shard_name"; then
                 EXECUTED="$((EXECUTED + 1))"
                 return 0
+              else
+                rc="$?"
               fi
-              return $?
+              return "$rc"
             }
 
             resolve_parallel_workers() {
@@ -1584,6 +1624,10 @@ in
 
             if [ "$SERIAL" -eq 1 ]; then
               log_info "running shards serial total=''${#selected_shards[@]}"
+              for shard_name in "''${selected_shards[@]}"; do
+                run_named_shard_recorded "$shard_name"
+              done
+            elif [ "''${#selected_shards[@]}" -le 1 ]; then
               for shard_name in "''${selected_shards[@]}"; do
                 run_named_shard_recorded "$shard_name"
               done

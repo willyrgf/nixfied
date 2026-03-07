@@ -17,7 +17,7 @@ let
       type = "shell";
       command = ''
         set -euo pipefail
-        pwd -P > "$CI_ARTIFACTS_DIR/workdir.txt"
+        echo "INFO: sandbox_pwd=$(pwd -P)"
 
         required_files=(
           "tracked.txt"
@@ -136,8 +136,7 @@ pkgs.runCommand "ephemeral-copy-mode-smoke" { } ''
 
   ORCH="${orchestrator}/bin/nixfied-orchestrator"
   export REGISTRY_ROOT="$TMPDIR/registry"
-  export CI_ARTIFACTS_DIR="$TMPDIR/artifacts"
-  mkdir -p "$REGISTRY_ROOT" "$CI_ARTIFACTS_DIR"
+  mkdir -p "$REGISTRY_ROOT"
 
   repo="$TMPDIR/repo"
   mkdir -p "$repo/subdir" "$repo/ignored-dir"
@@ -161,16 +160,10 @@ pkgs.runCommand "ephemeral-copy-mode-smoke" { } ''
     exit 1
   fi
 
-  workdir_file="$CI_ARTIFACTS_DIR/workdir.txt"
-  if [ ! -f "$workdir_file" ]; then
-    echo "missing probe workdir output: $workdir_file"
-    cat "$TMPDIR/probe.out"
-    exit 1
-  fi
-
-  if ! ${pkgs.gnugrep}/bin/grep -Eq '.+-ephemeral-.+/source$' "$workdir_file"; then
+  sandbox_pwd="$(${pkgs.gnused}/bin/sed -n 's/^INFO: sandbox_pwd=//p' "$TMPDIR/probe.out" | ${pkgs.coreutils}/bin/tail -n 1)"
+  if ! printf '%s\n' "$sandbox_pwd" | ${pkgs.gnugrep}/bin/grep -Eq '.+-ephemeral-.+/source$'; then
     echo "expected task workdir inside ephemeral source copy"
-    cat "$workdir_file"
+    echo "sandbox_pwd=$sandbox_pwd"
     cat "$TMPDIR/probe.out"
     exit 1
   fi
