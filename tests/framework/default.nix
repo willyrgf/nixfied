@@ -205,6 +205,14 @@
       ;
   };
 
+  "caller-pwd-remote-projectroot-smoke" = import ./caller-pwd-remote-projectroot-smoke.nix {
+    inherit
+      pkgs
+      model
+      registry
+      ;
+  };
+
   "framework-template-install-upgrade-help-smoke" =
     import ./framework-template-install-upgrade-help-smoke.nix
       {

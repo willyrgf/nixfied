@@ -183,6 +183,15 @@
           fi
           return 0
         fi
+
+        case "$project_root_real" in
+          /nix/store/*)
+            # Remote framework proxy apps execute from a store path, but they
+            # should treat the caller checkout as the project root by default.
+            printf '%s' "$caller_pwd_real"
+            return 0
+            ;;
+        esac
       fi
 
       printf '%s' "$effective_root"
