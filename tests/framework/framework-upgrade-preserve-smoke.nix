@@ -51,7 +51,7 @@ pkgs.runCommand "framework-upgrade-preserve-smoke" { } ''
   require_file "$target/nixfied/lib/default.nix"
   require_file "$target/nixfied/VENDORED.txt"
   require_contains "$target/nixfied/VENDORED.txt" "Framework source revision (install/upgrade):"
-  require_not_contains "$target/nixfied/VENDORED.txt" "set by `framework::install` / `framework::upgrade`"
+  require_not_contains "$target/nixfied/VENDORED.txt" 'set by `framework::install` / `framework::upgrade`'
   require_not_contains "$target/nixfied/VENDORED.txt" "- unknown"
   if ! ${pkgs.gnugrep}/bin/grep -Eq '^- [0-9a-f]{7,}(-dirty)?$' "$target/nixfied/VENDORED.txt"; then
     fail "vendored metadata must record a framework source revision"

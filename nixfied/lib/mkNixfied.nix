@@ -5,7 +5,10 @@
   projectModules,
   extraModules ? [ ],
   localOverrides ? [ ],
-  frameworkSourceRevision ? "unknown",
+  frameworkSourceRevision ? import ./framework-revision.nix {
+    sourcePath = ../.;
+    metadataPath = ../VENDORED.txt;
+  },
 }:
 let
   lib = pkgs.lib;

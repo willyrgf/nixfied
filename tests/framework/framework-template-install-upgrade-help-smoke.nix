@@ -39,7 +39,7 @@ pkgs.runCommand "framework-template-install-upgrade-help-smoke" { } ''
   require_not_contains() {
     local file="$1"
     local needle="$2"
-    if ${pkgs.gnugrep}/bin/grep -Fq "$needle" "$file"; then
+    if ${pkgs.gnugrep}/bin/grep -Fq -- "$needle" "$file"; then
       echo "unexpected text '$needle' in $file"
       echo "--- $file"
       cat "$file"
@@ -97,7 +97,7 @@ pkgs.runCommand "framework-template-install-upgrade-help-smoke" { } ''
   require_file "$template_repo/nixfied/lib/default.nix"
   require_file "$template_repo/nixfied/VENDORED.txt"
   require_contains "$template_repo/nixfied/VENDORED.txt" "Framework source revision (install/upgrade):"
-  require_not_contains "$template_repo/nixfied/VENDORED.txt" "set by `framework::install` / `framework::upgrade`"
+  require_not_contains "$template_repo/nixfied/VENDORED.txt" 'set by `framework::install` / `framework::upgrade`'
   require_not_contains "$template_repo/nixfied/VENDORED.txt" "- unknown"
   if ! ${pkgs.gnugrep}/bin/grep -Eq '^- [0-9a-f]{7,}(-dirty)?$' "$template_repo/nixfied/VENDORED.txt"; then
     fail "vendored install must record the framework source revision"

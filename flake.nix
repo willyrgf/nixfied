@@ -14,21 +14,13 @@
       ...
     }:
     let
-      supportedSystems = builtins.filter (
-        system: builtins.elem system nixpkgs.lib.systems.flakeExposed
-      ) flake-utils.lib.allSystems;
+      supportedSystems = flake-utils.lib.defaultSystems;
 
-      frameworkRevision =
-        let
-          dirtyRev = if self ? dirtyRev then self.dirtyRev else null;
-          rev = if self ? rev then self.rev else null;
-        in
-        if dirtyRev != null then
-          dirtyRev
-        else if rev != null then
-          rev
-        else
-          "unknown";
+      frameworkRevision = import ./nixfied/lib/framework-revision.nix {
+        inherit self;
+        sourcePath = ./.;
+        metadataPath = ./nixfied/VENDORED.txt;
+      };
 
       mkForSystem =
         system:
