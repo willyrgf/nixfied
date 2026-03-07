@@ -33,6 +33,7 @@ assert snapshot."workflow:workflow.ci.full" == "failed";
 assert pkgs.lib.hasInfix "registry_next_seq()" source;
 assert pkgs.lib.hasInfix "registry_events_snapshot()" source;
 assert pkgs.lib.hasInfix "registry_lock_acquire_shared()" source;
+assert pkgs.lib.hasInfix "\${pkgs.procps}/bin/ps" source;
 assert pkgs.lib.hasInfix "events.ndjson" source;
 assert pkgs.lib.hasInfix "flock -w" source;
 assert pkgs.lib.hasInfix "date -u +\"%Y-%m-%dT%H:%M:%SZ\"" source;

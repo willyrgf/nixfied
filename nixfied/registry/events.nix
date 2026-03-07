@@ -50,7 +50,7 @@
         meta_file="$(registry_lock_meta_file "$lock_file")"
         acquired_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
         hostname="$(${pkgs.coreutils}/bin/uname -n 2>/dev/null || printf 'unknown')"
-        process_started_at="$(ps -o lstart= -p $$ 2>/dev/null | ${pkgs.gnused}/bin/sed -E 's/^[[:space:]]+//')"
+        process_started_at="$(${pkgs.procps}/bin/ps -o lstart= -p $$ 2>/dev/null | ${pkgs.gnused}/bin/sed -E 's/^[[:space:]]+//')"
         if [ -z "$process_started_at" ]; then
           process_started_at="$acquired_at"
         fi

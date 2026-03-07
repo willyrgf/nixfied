@@ -111,8 +111,8 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
     local parent_pgid
     local pgid
 
-    parent_pgid="$(ps -o pgid= -p $$ 2>/dev/null | tr -d '[:space:]' || true)"
-    pgid="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d '[:space:]' || true)"
+    parent_pgid="$(${pkgs.procps}/bin/ps -o pgid= -p $$ 2>/dev/null | tr -d '[:space:]' || true)"
+    pgid="$(${pkgs.procps}/bin/ps -o pgid= -p "$pid" 2>/dev/null | tr -d '[:space:]' || true)"
 
     if [ -z "$pgid" ] || [ "$pgid" = "$parent_pgid" ]; then
       printf '0'
