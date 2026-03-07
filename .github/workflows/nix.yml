@@ -30,6 +30,7 @@ jobs:
     env:
       CI_ARTIFACTS_DIR: /tmp/nixfied-artifacts-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}
       REGISTRY_ROOT: /tmp/nixfied-registry-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}
+      CI_DEBUG_DIR: /tmp/nixfied-debug-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}
 
     steps:
       - name: Checkout repository
@@ -43,42 +44,166 @@ jobs:
       - name: Prepare runtime directories
         run: |
           set -euo pipefail
-          rm -rf "$CI_ARTIFACTS_DIR" "$REGISTRY_ROOT"
-          mkdir -p "$CI_ARTIFACTS_DIR" "$REGISTRY_ROOT"
-          chmod 700 "$CI_ARTIFACTS_DIR" "$REGISTRY_ROOT"
+          rm -rf "$CI_ARTIFACTS_DIR" "$REGISTRY_ROOT" "$CI_DEBUG_DIR"
+          mkdir -p "$CI_ARTIFACTS_DIR" "$REGISTRY_ROOT" "$CI_DEBUG_DIR"
+          chmod 700 "$CI_ARTIFACTS_DIR" "$REGISTRY_ROOT" "$CI_DEBUG_DIR"
+
+      - name: Capture runner baseline
+        run: |
+          set -euo pipefail
+          log_file="$CI_DEBUG_DIR/runner-baseline.log"
+          {
+            echo "INFO: generated_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "INFO: runner_os=${{ runner.os }}"
+            echo "INFO: matrix_os=${{ matrix.os }}"
+            echo "INFO: pwd=$(pwd -P)"
+            echo "INFO: uname=$(uname -a)"
+            echo "INFO: nix_version=$(nix --version)"
+            echo "INFO: nix_show_config"
+            nix show-config | grep -E '^(cores|max-jobs|sandbox|substituters|system) = ' || true
+            echo "INFO: disk_usage"
+            df -h .
+            df -h /tmp
+            if command -v sw_vers >/dev/null 2>&1; then
+              echo "INFO: sw_vers"
+              sw_vers
+            fi
+            if [ -x /usr/bin/xcrun ]; then
+              echo "INFO: xcrun_sdkroot"
+              /usr/bin/xcrun --sdk macosx --show-sdk-path || true
+            fi
+          } 2>&1 | tee "$log_file"
 
       - name: Run .#help
+        id: run_help
+        continue-on-error: true
         run: |
           set -euo pipefail
-          output="$(nix run .#help -L -v --log-format bar-with-logs)"
-          expected_header="$(head -n1 tests/framework/snapshots/help.txt)"
-          echo "$output"
-          echo "$output" | grep -Fq "$expected_header"
+          log_file="$CI_DEBUG_DIR/run-help.log"
+          {
+            output="$(nix run .#help -L -v --log-format bar-with-logs)"
+            expected_header="$(head -n1 tests/framework/snapshots/help.txt)"
+            echo "$output"
+            echo "$output" | grep -Fq "$expected_header"
+          } 2>&1 | tee "$log_file"
 
       - name: Run framework shard flake-check
+        id: shard_flake_check
+        continue-on-error: true
         run: |
           set -euo pipefail
-          nix run -L -v --log-format bar-with-logs .#framework::test -- --summary --serial --shard flake-check
+          log_file="$CI_DEBUG_DIR/framework-shard-flake-check.log"
+          nix run -L -v --log-format bar-with-logs .#framework::test -- --summary --serial --shard flake-check 2>&1 | tee "$log_file"
 
       - name: Run framework shard help
+        id: shard_help
+        continue-on-error: true
         run: |
           set -euo pipefail
-          nix run -L -v --log-format bar-with-logs .#framework::test -- --summary --serial --shard help
+          log_file="$CI_DEBUG_DIR/framework-shard-help.log"
+          nix run -L -v --log-format bar-with-logs .#framework::test -- --summary --serial --shard help 2>&1 | tee "$log_file"
 
       - name: Run framework shard workflow-test
+        id: shard_workflow_test
+        continue-on-error: true
         run: |
           set -euo pipefail
-          nix run -L -v --log-format bar-with-logs .#framework::test -- --summary --serial --shard workflow-test
+          log_file="$CI_DEBUG_DIR/framework-shard-workflow-test.log"
+          nix run -L -v --log-format bar-with-logs .#framework::test -- --summary --serial --shard workflow-test 2>&1 | tee "$log_file"
 
       - name: Run framework shard workflow-ci
+        id: shard_workflow_ci
+        continue-on-error: true
         run: |
           set -euo pipefail
-          nix run -L -v --log-format bar-with-logs .#framework::test -- --summary --serial --shard workflow-ci
+          log_file="$CI_DEBUG_DIR/framework-shard-workflow-ci.log"
+          nix run -L -v --log-format bar-with-logs .#framework::test -- --summary --serial --shard workflow-ci 2>&1 | tee "$log_file"
 
       - name: Run framework shard self-host
+        id: shard_self_host
+        continue-on-error: true
         run: |
           set -euo pipefail
-          nix run -L -v --log-format bar-with-logs .#framework::test -- --summary --serial --shard self-host
+          log_file="$CI_DEBUG_DIR/framework-shard-self-host.log"
+          nix run -L -v --log-format bar-with-logs .#framework::test -- --summary --serial --shard self-host 2>&1 | tee "$log_file"
+
+      - name: Verify build-and-test outcomes
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p "$CI_DEBUG_DIR"
+          status_file="$CI_DEBUG_DIR/build-and-test-status.log"
+          failed=0
+
+          report_step() {
+            local step_name="$1"
+            local outcome="$2"
+            if [ "$outcome" = "success" ]; then
+              echo "OK: step passed name=$step_name"
+            else
+              echo "ERROR: step failed name=$step_name outcome=$outcome"
+              failed=1
+            fi
+          }
+
+          {
+            report_step "help-surface" "${{ steps.run_help.outcome }}"
+            report_step "framework-shard-flake-check" "${{ steps.shard_flake_check.outcome }}"
+            report_step "framework-shard-help" "${{ steps.shard_help.outcome }}"
+            report_step "framework-shard-workflow-test" "${{ steps.shard_workflow_test.outcome }}"
+            report_step "framework-shard-workflow-ci" "${{ steps.shard_workflow_ci.outcome }}"
+            report_step "framework-shard-self-host" "${{ steps.shard_self_host.outcome }}"
+          } 2>&1 | tee "$status_file"
+
+          if [ "$failed" -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Summarize build-and-test failure context
+        if: failure()
+        run: |
+          set -euo pipefail
+          mkdir -p "$CI_DEBUG_DIR"
+          summary_file="$CI_DEBUG_DIR/failure-summary.log"
+          {
+            echo "INFO: generated_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "INFO: ci_debug_dir=$CI_DEBUG_DIR"
+            echo "INFO: ci_artifacts_dir=$CI_ARTIFACTS_DIR"
+            if [ -d "$CI_ARTIFACTS_DIR" ]; then
+              find "$CI_ARTIFACTS_DIR" -print | sort
+              while IFS= read -r summary_json; do
+                echo "INFO: summary_json=$summary_json"
+                cat "$summary_json"
+              done < <(find "$CI_ARTIFACTS_DIR" -type f -name summary.json | sort)
+            else
+              echo "WARN: missing directory $CI_ARTIFACTS_DIR"
+            fi
+            echo "INFO: registry_root=$REGISTRY_ROOT"
+            if [ -d "$REGISTRY_ROOT" ]; then
+              find "$REGISTRY_ROOT" -print | sort
+            else
+              echo "WARN: missing directory $REGISTRY_ROOT"
+            fi
+            if [ -f "$REGISTRY_ROOT/events.ndjson" ]; then
+              echo "INFO: tail registry events"
+              tail -n 200 "$REGISTRY_ROOT/events.ndjson"
+            else
+              echo "WARN: missing registry events file"
+            fi
+          } > "$summary_file" 2>&1
+          cat "$summary_file"
+
+      - name: Upload build-and-test failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nix-ci-build-and-test-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}
+          path: |
+            ${{ env.CI_DEBUG_DIR }}
+            ${{ env.CI_ARTIFACTS_DIR }}
+            ${{ env.REGISTRY_ROOT }}
+          if-no-files-found: warn
+          retention-days: 7
 
   isolation:
     timeout-minutes: 60
@@ -99,6 +224,7 @@ jobs:
     env:
       CI_ARTIFACTS_DIR: /tmp/nixfied-artifacts-${{ github.run_id }}-${{ github.run_attempt }}-ubuntu-24.04-slot${{ matrix.slot }}-${{ matrix.project_env }}
       REGISTRY_ROOT: /tmp/nixfied-registry-${{ github.run_id }}-${{ github.run_attempt }}-ubuntu-24.04-slot${{ matrix.slot }}-${{ matrix.project_env }}
+      CI_DEBUG_DIR: /tmp/nixfied-debug-${{ github.run_id }}-${{ github.run_attempt }}-ubuntu-24.04-slot${{ matrix.slot }}-${{ matrix.project_env }}
 
     steps:
       - name: Checkout repository
@@ -112,11 +238,73 @@ jobs:
       - name: Prepare runtime directories
         run: |
           set -euo pipefail
-          rm -rf "$CI_ARTIFACTS_DIR" "$REGISTRY_ROOT"
-          mkdir -p "$CI_ARTIFACTS_DIR" "$REGISTRY_ROOT"
-          chmod 700 "$CI_ARTIFACTS_DIR" "$REGISTRY_ROOT"
+          rm -rf "$CI_ARTIFACTS_DIR" "$REGISTRY_ROOT" "$CI_DEBUG_DIR"
+          mkdir -p "$CI_ARTIFACTS_DIR" "$REGISTRY_ROOT" "$CI_DEBUG_DIR"
+          chmod 700 "$CI_ARTIFACTS_DIR" "$REGISTRY_ROOT" "$CI_DEBUG_DIR"
+
+      - name: Capture runner baseline
+        run: |
+          set -euo pipefail
+          log_file="$CI_DEBUG_DIR/runner-baseline.log"
+          {
+            echo "INFO: generated_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "INFO: runner_os=${{ runner.os }}"
+            echo "INFO: slot=${{ matrix.slot }}"
+            echo "INFO: project_env=${{ matrix.project_env }}"
+            echo "INFO: pwd=$(pwd -P)"
+            echo "INFO: uname=$(uname -a)"
+            echo "INFO: nix_version=$(nix --version)"
+            echo "INFO: nix_show_config"
+            nix show-config | grep -E '^(cores|max-jobs|sandbox|substituters|system) = ' || true
+            echo "INFO: disk_usage"
+            df -h .
+            df -h /tmp
+          } 2>&1 | tee "$log_file"
 
       - name: Run isolation cell
         run: |
           set -euo pipefail
-          nix run -L -v --log-format bar-with-logs .#test-isolation -- --slot ${{ matrix.slot }} --env ${{ matrix.project_env }} --max-parallel 1
+          log_file="$CI_DEBUG_DIR/isolation-cell.log"
+          nix run -L -v --log-format bar-with-logs .#test-isolation -- --slot ${{ matrix.slot }} --env ${{ matrix.project_env }} --max-parallel 1 2>&1 | tee "$log_file"
+
+      - name: Summarize isolation failure context
+        if: failure()
+        run: |
+          set -euo pipefail
+          mkdir -p "$CI_DEBUG_DIR"
+          summary_file="$CI_DEBUG_DIR/failure-summary.log"
+          {
+            echo "INFO: generated_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "INFO: ci_debug_dir=$CI_DEBUG_DIR"
+            echo "INFO: ci_artifacts_dir=$CI_ARTIFACTS_DIR"
+            if [ -d "$CI_ARTIFACTS_DIR" ]; then
+              find "$CI_ARTIFACTS_DIR" -print | sort
+            else
+              echo "WARN: missing directory $CI_ARTIFACTS_DIR"
+            fi
+            echo "INFO: registry_root=$REGISTRY_ROOT"
+            if [ -d "$REGISTRY_ROOT" ]; then
+              find "$REGISTRY_ROOT" -print | sort
+            else
+              echo "WARN: missing directory $REGISTRY_ROOT"
+            fi
+            if [ -f "$REGISTRY_ROOT/events.ndjson" ]; then
+              echo "INFO: tail registry events"
+              tail -n 200 "$REGISTRY_ROOT/events.ndjson"
+            else
+              echo "WARN: missing registry events file"
+            fi
+          } > "$summary_file" 2>&1
+          cat "$summary_file"
+
+      - name: Upload isolation failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nix-ci-isolation-${{ github.run_id }}-${{ github.run_attempt }}-slot${{ matrix.slot }}-${{ matrix.project_env }}
+          path: |
+            ${{ env.CI_DEBUG_DIR }}
+            ${{ env.CI_ARTIFACTS_DIR }}
+            ${{ env.REGISTRY_ROOT }}
+          if-no-files-found: warn
+          retention-days: 7
