@@ -27,27 +27,33 @@
       "exists": true
     },
     {
+      "path": "docs/UPGRADE.md",
+      "purpose": "Downstream upgrade notes for behavioral and path contract changes.",
+      "priority": 3,
+      "exists": true
+    },
+    {
       "path": "docs/ARCHITECTURE.md",
       "purpose": "High-level architecture reference.",
-      "priority": 3,
+      "priority": 4,
       "exists": true
     },
     {
       "path": "REDESIGN.md",
       "purpose": "Redesign and migration context.",
-      "priority": 4,
+      "priority": 5,
       "exists": true
     },
     {
       "path": "AGENTS.md",
       "purpose": "Agent instructions and collaboration constraints.",
-      "priority": 5,
+      "priority": 6,
       "exists": true
     },
     {
       "path": "CLAUDE.md",
       "purpose": "Additional assistant guidance for this repository.",
-      "priority": 6,
+      "priority": 7,
       "exists": true
     }
   ],

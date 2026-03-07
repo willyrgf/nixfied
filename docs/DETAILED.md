@@ -56,6 +56,13 @@ Executor behavior:
 - workflow lifecycle phases via `preRun.tasks` and `postRun.tasks`
 - summary artifact contract at `CI_ARTIFACTS_DIR/summary.json` when enabled
 
+Workspace-scoped defaults:
+
+- `model.state.workspaceId` is derived from project root and used to isolate default runtime state per workspace.
+- Default registry root is `/tmp/nixfied-runtime/<projectId>/<workspaceId>/registry`.
+- Default artifacts root is `/tmp/ci-artifacts/<projectId>/<workspaceId>`.
+- If `REGISTRY_ROOT` is explicitly overridden and artifacts still use the legacy default, orchestrator resolves artifacts under `$REGISTRY_ROOT/artifacts`.
+
 ## Ephemeral Runtime Contract
 
 Ephemeral workflow execution is mediated by `nixfied/.framework/ephemeral.nix` and configured through `model.runtime.ephemeral`.
@@ -76,6 +83,12 @@ Failure retention policy:
 - Retained failures are renamed to `${projectId}-ephemeral-failed-...`.
 - `maxFailedRootAgeHours` prunes old retained roots.
 - `maxFailedRoots` prunes oldest retained roots beyond count limit.
+
+Ephemeral env and workdir behavior:
+
+- `HOME`, `TMPDIR`, `XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_CACHE_HOME`, `REGISTRY_ROOT`, and `NIXFIED_SERVICE_ROOT` are rebound into the ephemeral root.
+- `CI_ARTIFACTS_DIR` defaults into the ephemeral root, but explicit caller artifact overrides remain respected.
+- When execution starts from a project subdirectory, workdir resolution preserves that relative path inside the copied source tree.
 
 Disk budget guardrails:
 
@@ -167,6 +180,14 @@ Log rules:
 - RFC3339 UTC `ts`
 
 Run IDs are allocated by the orchestrator and used as the registry correlation key for lifecycle events and control surfaces.
+
+Write and lock guarantees:
+
+- Registry event snapshots are taken under lock before replay/inspection.
+- Registry sequence updates and event appends are atomic.
+- Orchestrator run records are written by temp-file replace, never in-place mutation.
+- Workflow `summary.json` is written atomically.
+- Lock metadata records owner pid/host/purpose/timestamps for diagnostics and recovery checks.
 
 ## Framework Validation
 

@@ -41,6 +41,9 @@ Execution contracts:
 - Foreground/background process policy (`--fg` / `--bg`) with run inventory and stop controls.
 - Hermetic runtime inputs for each task.
 - Deterministic defaults for locale, timezone, umask, and workdir policy.
+- Workspace-scoped default registry and artifact roots.
+- Atomic run metadata and summary writes.
+- Ephemeral env isolation for cache, temp, service, and registry state.
 - Stable CLI prefixes (`INFO:`, `WARN:`, `ERROR:`, `OK:`, `SKIP:`).
 - Deterministic scheduling and lock behavior.
 
