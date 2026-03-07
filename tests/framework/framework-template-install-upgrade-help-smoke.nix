@@ -95,6 +95,13 @@ pkgs.runCommand "framework-template-install-upgrade-help-smoke" { } ''
   require_file "$template_repo/flake.nix"
   require_file "$template_repo/nixfied/project/module.nix"
   require_file "$template_repo/nixfied/lib/default.nix"
+  require_file "$template_repo/nixfied/VENDORED.txt"
+  require_contains "$template_repo/nixfied/VENDORED.txt" "Framework source revision (install/upgrade):"
+  require_not_contains "$template_repo/nixfied/VENDORED.txt" "set by `framework::install` / `framework::upgrade`"
+  require_not_contains "$template_repo/nixfied/VENDORED.txt" "- unknown"
+  if ! ${pkgs.gnugrep}/bin/grep -Eq '^- [0-9a-f]{7,}(-dirty)?$' "$template_repo/nixfied/VENDORED.txt"; then
+    fail "vendored install must record the framework source revision"
+  fi
   if [ -f "$template_repo/nixfied/.framework/.workspace" ]; then
     fail "vendored install must not include nixfied/.framework/.workspace"
   fi
@@ -107,6 +114,9 @@ pkgs.runCommand "framework-template-install-upgrade-help-smoke" { } ''
   require_contains "$TMPDIR/upgrade-command.out" "OK: vendored wrapper upgraded at $template_repo/flake.nix"
   if [ -f "$template_repo/nixfied/.framework/.workspace" ]; then
     fail "upgrade must keep nixfied/.framework/.workspace absent"
+  fi
+  if ! ${pkgs.gnugrep}/bin/grep -Eq '^- [0-9a-f]{7,}(-dirty)?$' "$template_repo/nixfied/VENDORED.txt"; then
+    fail "vendored upgrade must keep the framework source revision"
   fi
 
   "$GIT_BIN" -C "$template_repo" add -A

@@ -18,6 +18,18 @@
         system: builtins.elem system nixpkgs.lib.systems.flakeExposed
       ) flake-utils.lib.allSystems;
 
+      frameworkRevision =
+        let
+          dirtyRev = if self ? dirtyRev then self.dirtyRev else null;
+          rev = if self ? rev then self.rev else null;
+        in
+        if dirtyRev != null then
+          dirtyRev
+        else if rev != null then
+          rev
+        else
+          "unknown";
+
       mkForSystem =
         system:
         let
@@ -34,6 +46,7 @@
             projectModules = [ ./nixfied/project/module.nix ];
             extraModules = [ ];
             localOverrides = [ ];
+            frameworkSourceRevision = frameworkRevision;
           };
 
           frameworkChecks = import ./tests/framework {
@@ -68,6 +81,7 @@
             projectModules,
             extraModules ? [ ],
             localOverrides ? [ ],
+            frameworkSourceRevision ? frameworkRevision,
           }:
           let
             pkgs = import nixpkgs { inherit system; };
@@ -84,6 +98,7 @@
               projectModules
               extraModules
               localOverrides
+              frameworkSourceRevision
               ;
           };
 

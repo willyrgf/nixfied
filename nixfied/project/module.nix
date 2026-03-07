@@ -2,6 +2,7 @@
   lib,
   pkgs,
   projectRoot,
+  frameworkSourceRevision ? "unknown",
   ...
 }:
 let
@@ -47,6 +48,30 @@ let
   vendoredWrapperFlake = import ../install/wrapper-flake.nix {
     vendorPath = "./nixfied";
   };
+
+  vendoredMetadata = ''
+    Vendored Framework
+    ==================
+
+    This repository vendors the Nixfied framework under `nixfied/`.
+
+    Framework source revision (install/upgrade):
+    - ${frameworkSourceRevision}
+
+    Framework source revision workflow:
+    - initialized via `framework::install`
+    - upgraded via `framework::upgrade` (preserves `nixfied/project/` and `nixfied/local/` by default)
+
+    Framework-owned paths:
+    - `flake.nix`, `flake.lock`
+    - `nixfied/.framework/`
+
+    User-owned customization paths:
+    - `nixfied/project/` (primary command/task/workflow customization surface)
+    - `nixfied/local/` (optional extensions)
+
+    Prefer editing `nixfied/project/` and `nixfied/local/` over direct framework internals.
+  '';
 
   commonRuntimeInputs = [
     pkgs.coreutils
@@ -295,6 +320,10 @@ let
 
               ${pkgs.rsync}/bin/rsync "''${rsync_args[@]}" "$stage_dir/nixfied/" "$target/nixfied/"
               rm -f "$target/nixfied/.framework/.workspace"
+
+              cat > "$target/nixfied/VENDORED.txt" <<'NIXFIED_VENDORED'
+      ${vendoredMetadata}
+      NIXFIED_VENDORED
 
               cat > "$target/flake.nix" <<'NIXFIED_WRAPPER'
       ${vendoredWrapperFlake}
