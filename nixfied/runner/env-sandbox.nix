@@ -8,6 +8,13 @@
   SERVICES_JSON=${pkgs.lib.escapeShellArg (builtins.toJSON model.services)}
   PROJECT_NAME=${pkgs.lib.escapeShellArg model.identity.projectName}
   PROJECT_DESCRIPTION=${pkgs.lib.escapeShellArg model.identity.description}
+  PROJECT_ID=${pkgs.lib.escapeShellArg model.identity.projectId}
+  PROJECT_ID_UPPER=${
+    pkgs.lib.escapeShellArg (
+      pkgs.lib.toUpper (pkgs.lib.replaceStrings [ "-" "." ] [ "_" "_" ] model.identity.projectId)
+    )
+  }
+  RUNTIME_DIR_BASE_DEFAULT=${pkgs.lib.escapeShellArg model.runtime.directories.base}
 
   normalize_env_token() {
     printf '%s' "$1" | ${pkgs.coreutils}/bin/tr '[:lower:].-' '[:upper:]__' | ${pkgs.coreutils}/bin/tr -c 'A-Z0-9_' '_'
@@ -52,6 +59,40 @@
     esac
   }
 
+  is_reserved_runtime_env_name() {
+    local env_name="$1"
+
+    case "$env_name" in
+      HOME|TMPDIR|XDG_DATA_HOME|XDG_STATE_HOME|XDG_CACHE_HOME|REGISTRY_ROOT|CI_ARTIFACTS_DIR|NIXFIED_SERVICE_ROOT)
+        return 0
+        ;;
+      NIXFIED_RUNTIME_DIR_SCOPE_OVERRIDE|NIXFIED_RUNTIME_DIR_SCOPE|NIXFIED_RUNTIME_DIR_BASE)
+        return 0
+        ;;
+      NIXFIED_RUNTIME_HOME|NIXFIED_RUNTIME_TMPDIR|NIXFIED_RUNTIME_XDG_DATA_HOME|NIXFIED_RUNTIME_XDG_STATE_HOME|NIXFIED_RUNTIME_XDG_CACHE_HOME)
+        return 0
+        ;;
+      NIXFIED_RUNTIME_REGISTRY_ROOT|NIXFIED_RUNTIME_ARTIFACTS_DIR|NIXFIED_RUNTIME_SERVICE_ROOT)
+        return 0
+        ;;
+      NIXFIED_MODEL_FILE|NIXFIED_RUN_ID)
+        return 0
+        ;;
+      NIXFIED_EXECUTOR_BIN|NIXFIED_ORCHESTRATOR_BIN|NIXFIED_EXECUTOR_SELF|NIXFIED_ORCHESTRATOR_SELF)
+        return 0
+        ;;
+      NIXFIED_EXECUTION_EPHEMERAL|NIXFIED_ORCHESTRATOR_RUN_ID|NIXFIED_ORCHESTRATOR_PROCESS_MODE|NIXFIED_ORCHESTRATOR_WORKFLOW_ID)
+        return 0
+        ;;
+      NIXFIED_WORKFLOW_SETUP_STARTED_AT|NIXFIED_WORKFLOW_SETUP_STARTED_EPOCH)
+        return 0
+        ;;
+      *)
+        return 1
+        ;;
+    esac
+  }
+
   ensure_runtime_dir() {
     local path="$1"
     if [ -n "$path" ]; then
@@ -87,6 +128,10 @@
     local env_offset
     local runtime_dir_base
     local runtime_scope_root
+    local runtime_scope_override
+    local project_ephemeral_flag_var
+    local project_ephemeral_root_var
+    local ephemeral_root=""
     local log_level_default
     local output_mode_default
     local task_log_level_default
@@ -197,29 +242,6 @@
       printf '%s' "$effective_root"
     }
 
-    workdir_kind="$(printf '%s' "$runtime_json" | ${pkgs.jq}/bin/jq -r '.workdir')"
-    custom_workdir="$(printf '%s' "$runtime_json" | ${pkgs.jq}/bin/jq -r '.customWorkdir // empty')"
-
-    case "$workdir_kind" in
-      projectRoot)
-        workdir="$(resolve_project_root_workdir)"
-        ;;
-      stateRoot)
-        workdir="$REGISTRY_ROOT"
-        ;;
-      custom)
-        if [ -z "$custom_workdir" ]; then
-          echo "ERROR: task runtime.workdir=custom but customWorkdir is empty"
-          return 3
-        fi
-        workdir="$custom_workdir"
-        ;;
-      *)
-        echo "ERROR: unknown runtime.workdir '$workdir_kind'"
-        return 3
-        ;;
-    esac
-
     while IFS= read -r runtime_input; do
       if [ -n "$runtime_input" ]; then
         if [ -z "$runtime_path" ]; then
@@ -275,22 +297,32 @@
     fi
 
     runtime_dir_base="$(printf '%s' "$RUNTIME_JSON" | ${pkgs.jq}/bin/jq -r '.directories.base // empty')"
+    project_ephemeral_flag_var="''${PROJECT_ID_UPPER}_EPHEMERAL"
+    project_ephemeral_root_var="''${PROJECT_ID_UPPER}_EPHEMERAL_ROOT"
+    ephemeral_root="''${!project_ephemeral_root_var:-}"
+    runtime_scope_override="''${NIXFIED_RUNTIME_DIR_SCOPE_OVERRIDE:-}"
     log_level_default="$(printf '%s' "$RUNTIME_JSON" | ${pkgs.jq}/bin/jq -r '.logging.levelDefault // "info"')"
     output_mode_default="$(printf '%s' "$RUNTIME_JSON" | ${pkgs.jq}/bin/jq -r '.logging.outputDefault // "stdout"')"
 
     if [ -z "$runtime_dir_base" ] || [[ "$runtime_dir_base" == *"$"* ]]; then
-      runtime_dir_base="$REGISTRY_ROOT/runtime"
+      runtime_dir_base="$RUNTIME_DIR_BASE_DEFAULT"
     fi
-    runtime_scope_root="$runtime_dir_base/$env_value/slot-$slot_value"
+    if [ -n "$runtime_scope_override" ]; then
+      runtime_scope_root="$runtime_scope_override"
+    elif [ -n "$ephemeral_root" ]; then
+      runtime_scope_root="$ephemeral_root"
+    else
+      runtime_scope_root="$runtime_dir_base/$env_value/slot-$slot_value"
+    fi
 
-    home_value="''${HOME:-$runtime_scope_root/home}"
-    tmp_value="''${TMPDIR:-$runtime_scope_root/tmp}"
-    xdg_data_value="''${XDG_DATA_HOME:-$runtime_scope_root/xdg/data}"
-    xdg_state_value="''${XDG_STATE_HOME:-$runtime_scope_root/xdg/state}"
-    xdg_cache_value="''${XDG_CACHE_HOME:-$runtime_scope_root/xdg/cache}"
-    registry_root_value="''${REGISTRY_ROOT:-$runtime_scope_root/registry}"
-    artifacts_dir_value="''${CI_ARTIFACTS_DIR:-$runtime_scope_root/artifacts}"
-    services_root="''${NIXFIED_SERVICE_ROOT:-$runtime_scope_root/services}"
+    home_value="$runtime_scope_root/home"
+    tmp_value="$runtime_scope_root/tmp"
+    xdg_data_value="$runtime_scope_root/xdg/data"
+    xdg_state_value="$runtime_scope_root/xdg/state"
+    xdg_cache_value="$runtime_scope_root/xdg/cache"
+    registry_root_value="$runtime_scope_root/registry"
+    artifacts_dir_value="$runtime_scope_root/artifacts"
+    services_root="$runtime_scope_root/services"
 
     ensure_runtime_dir "$home_value"
     ensure_runtime_dir "$tmp_value"
@@ -300,6 +332,29 @@
     ensure_runtime_dir "$registry_root_value"
     ensure_runtime_dir "$artifacts_dir_value"
     ensure_runtime_dir "$services_root"
+
+    workdir_kind="$(printf '%s' "$runtime_json" | ${pkgs.jq}/bin/jq -r '.workdir')"
+    custom_workdir="$(printf '%s' "$runtime_json" | ${pkgs.jq}/bin/jq -r '.customWorkdir // empty')"
+
+    case "$workdir_kind" in
+      projectRoot)
+        workdir="$(resolve_project_root_workdir)"
+        ;;
+      stateRoot)
+        workdir="$registry_root_value"
+        ;;
+      custom)
+        if [ -z "$custom_workdir" ]; then
+          echo "ERROR: task runtime.workdir=custom but customWorkdir is empty"
+          return 3
+        fi
+        workdir="$custom_workdir"
+        ;;
+      *)
+        echo "ERROR: unknown runtime.workdir '$workdir_kind'"
+        return 3
+        ;;
+    esac
 
     if ! valid_log_level "$log_level_default"; then
       echo "ERROR: invalid runtime default LOG_LEVEL value='$log_level_default' (expected: error|warn|info|debug|trace)"
@@ -539,12 +594,62 @@
     env_cmd+=("NIXFIED_PROJECT_DESCRIPTION=$PROJECT_DESCRIPTION")
     env_cmd+=("NIXFIED_RUNTIME_DIR_BASE=$runtime_dir_base")
     env_cmd+=("NIXFIED_RUNTIME_DIR_SCOPE=$runtime_scope_root")
+    env_cmd+=("NIXFIED_RUNTIME_HOME=$home_value")
+    env_cmd+=("NIXFIED_RUNTIME_TMPDIR=$tmp_value")
+    env_cmd+=("NIXFIED_RUNTIME_XDG_DATA_HOME=$xdg_data_value")
+    env_cmd+=("NIXFIED_RUNTIME_XDG_STATE_HOME=$xdg_state_value")
+    env_cmd+=("NIXFIED_RUNTIME_XDG_CACHE_HOME=$xdg_cache_value")
+    env_cmd+=("NIXFIED_RUNTIME_REGISTRY_ROOT=$registry_root_value")
+    env_cmd+=("NIXFIED_RUNTIME_ARTIFACTS_DIR=$artifacts_dir_value")
+    env_cmd+=("NIXFIED_RUNTIME_SERVICE_ROOT=$services_root")
     env_cmd+=("LOG_LEVEL=$resolved_log_level")
     env_cmd+=("NIXFIED_LOG_LEVEL=$resolved_log_level")
     env_cmd+=("OUTPUT_MODE=$resolved_output_mode")
     env_cmd+=("NIXFIED_OUTPUT_MODE=$resolved_output_mode")
+    if [ -n "''${NIXFIED_EXECUTOR_BIN:-}" ]; then
+      env_cmd+=("NIXFIED_EXECUTOR_BIN=$NIXFIED_EXECUTOR_BIN")
+    fi
+    if [ -n "''${NIXFIED_ORCHESTRATOR_BIN:-}" ]; then
+      env_cmd+=("NIXFIED_ORCHESTRATOR_BIN=$NIXFIED_ORCHESTRATOR_BIN")
+    fi
+    if [ -n "$ephemeral_root" ]; then
+      env_cmd+=("''${project_ephemeral_root_var}=$ephemeral_root")
+    fi
+    if [ -n "''${!project_ephemeral_flag_var:-}" ]; then
+      env_cmd+=("''${project_ephemeral_flag_var}=1")
+    fi
     if [ -n "''${NIXFIED_LOG_FILE+x}" ]; then
       env_cmd+=("NIXFIED_LOG_FILE=$NIXFIED_LOG_FILE")
+    fi
+    if [ -n "''${NIXFIED_EXECUTOR_SELF:-}" ]; then
+      env_cmd+=("NIXFIED_EXECUTOR_SELF=$NIXFIED_EXECUTOR_SELF")
+    fi
+    if [ -n "''${NIXFIED_ORCHESTRATOR_SELF:-}" ]; then
+      env_cmd+=("NIXFIED_ORCHESTRATOR_SELF=$NIXFIED_ORCHESTRATOR_SELF")
+    fi
+    if [ -n "''${NIXFIED_EXECUTION_EPHEMERAL:-}" ]; then
+      env_cmd+=("NIXFIED_EXECUTION_EPHEMERAL=$NIXFIED_EXECUTION_EPHEMERAL")
+    fi
+    if [ -n "''${NIXFIED_ORCHESTRATOR_RUN_ID:-}" ]; then
+      env_cmd+=("NIXFIED_ORCHESTRATOR_RUN_ID=$NIXFIED_ORCHESTRATOR_RUN_ID")
+    fi
+    if [ -n "''${NIXFIED_ORCHESTRATOR_PROCESS_MODE:-}" ]; then
+      env_cmd+=("NIXFIED_ORCHESTRATOR_PROCESS_MODE=$NIXFIED_ORCHESTRATOR_PROCESS_MODE")
+    fi
+    if [ -n "''${NIXFIED_ORCHESTRATOR_WORKFLOW_ID:-}" ]; then
+      env_cmd+=("NIXFIED_ORCHESTRATOR_WORKFLOW_ID=$NIXFIED_ORCHESTRATOR_WORKFLOW_ID")
+    fi
+    if [ -n "''${NIXFIED_WORKFLOW_SETUP_STARTED_AT:-}" ]; then
+      env_cmd+=("NIXFIED_WORKFLOW_SETUP_STARTED_AT=$NIXFIED_WORKFLOW_SETUP_STARTED_AT")
+    fi
+    if [ -n "''${NIXFIED_WORKFLOW_SETUP_STARTED_EPOCH:-}" ]; then
+      env_cmd+=("NIXFIED_WORKFLOW_SETUP_STARTED_EPOCH=$NIXFIED_WORKFLOW_SETUP_STARTED_EPOCH")
+    fi
+    if [ -n "''${NIXFIED_MODEL_FILE:-}" ]; then
+      env_cmd+=("NIXFIED_MODEL_FILE=$NIXFIED_MODEL_FILE")
+    fi
+    if [ -n "''${NIXFIED_RUN_ID:-}" ]; then
+      env_cmd+=("NIXFIED_RUN_ID=$NIXFIED_RUN_ID")
     fi
 
     while IFS=$'\t' read -r primitive_name primitive_default primitive_aliases_json; do
@@ -676,6 +781,11 @@
         continue
       fi
 
+      if is_reserved_runtime_env_name "$pass_name"; then
+        echo "ERROR: runtime-owned passthrough env blocked name=$pass_name"
+        return 3
+      fi
+
       if [ "$allow_sensitive_pass_through" != "1" ] && is_sensitive_env_name "$pass_name"; then
         echo "ERROR: sensitive passthrough env blocked name=$pass_name"
         return 3
@@ -703,6 +813,10 @@
         fi
         if [ "$env_name" = "NIXFIED_LOG_FILE" ]; then
           continue
+        fi
+        if is_reserved_runtime_env_name "$env_name"; then
+          echo "ERROR: runtime-owned env override blocked name=$env_name"
+          return 3
         fi
         env_cmd+=("$env_name=$env_value")
       fi

@@ -12,16 +12,30 @@ let
   probeTask = baseTask // {
     id = probeTaskId;
     summary = "run record atomicity probe";
-    description = "Sleeps briefly so concurrent readers can sample orchestrator run records.";
+    description = "Blocks on a release gate so concurrent readers can sample orchestrator run records.";
     runner = {
       type = "shell";
       command = ''
         set -euo pipefail
-        sleep 0.2
+        if [ -z "''${ATOMICITY_READY_DIR:-}" ] || [ -z "''${ATOMICITY_GATE_DIR:-}" ]; then
+          echo "ERROR: atomicity gate env is missing"
+          exit 3
+        fi
+        mkdir -p "$ATOMICITY_READY_DIR" "$ATOMICITY_GATE_DIR"
+        : > "$ATOMICITY_READY_DIR/$NIXFIED_RUN_ID"
+        while [ ! -f "$ATOMICITY_GATE_DIR/release" ]; do
+          sleep 0.1
+        done
         echo "OK: atomicity probe complete"
       '';
       package = null;
       workflowId = null;
+    };
+    runtime = baseTask.runtime // {
+      passThroughEnv = (baseTask.runtime.passThroughEnv or [ ]) ++ [
+        "ATOMICITY_READY_DIR"
+        "ATOMICITY_GATE_DIR"
+      ];
     };
     ui = baseTask.ui // {
       app = baseTask.ui.app // {
@@ -55,7 +69,9 @@ pkgs.runCommand "run-record-atomicity-smoke" { } ''
   ORCH="${harness.orchestrator}/bin/nixfied-orchestrator"
   export REGISTRY_ROOT="$TMPDIR/registry"
   export CI_ARTIFACTS_ROOT="$TMPDIR/artifacts"
-  mkdir -p "$REGISTRY_ROOT" "$CI_ARTIFACTS_ROOT"
+  export ATOMICITY_READY_DIR="$TMPDIR/atomicity-ready"
+  export ATOMICITY_GATE_DIR="$TMPDIR/atomicity-gate"
+  mkdir -p "$REGISTRY_ROOT" "$CI_ARTIFACTS_ROOT" "$ATOMICITY_READY_DIR" "$ATOMICITY_GATE_DIR"
 
   watch_run_records() {
     while [ ! -f "$TMPDIR/atomicity.done" ]; do
@@ -67,8 +83,15 @@ pkgs.runCommand "run-record-atomicity-smoke" { } ''
           fi
         done < <(${pkgs.findutils}/bin/find "$REGISTRY_ROOT/orchestrator/runs" -type f -name '*.json' | ${pkgs.coreutils}/bin/sort)
       fi
-      sleep 0.01
     done
+  }
+
+  ready_count_is() {
+    local expected="$1"
+    local count
+
+    count="$(${pkgs.findutils}/bin/find "$ATOMICITY_READY_DIR" -type f | ${pkgs.coreutils}/bin/wc -l | ${pkgs.coreutils}/bin/tr -d '[:space:]')"
+    [ "$count" = "$expected" ]
   }
 
   watch_run_records > "$TMPDIR/atomicity-watch.out" 2>&1 &
@@ -82,12 +105,16 @@ pkgs.runCommand "run-record-atomicity-smoke" { } ''
     pids+=("$!")
     run_index="$((run_index + 1))"
   done
+  set -e
+
+  wait_for_condition 60 "all atomicity runs to block on the gate" ready_count_is 16
+
+  : > "$ATOMICITY_GATE_DIR/release"
 
   failed_runs=0
   for pid in "''${pids[@]}"; do
     wait "$pid" || failed_runs="$((failed_runs + 1))"
   done
-  set -e
 
   touch "$TMPDIR/atomicity.done"
   wait "$watch_pid" || true

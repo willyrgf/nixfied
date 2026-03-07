@@ -32,6 +32,8 @@ pkgs.runCommand "framework-template-install-upgrade-help-smoke" { } ''
 
   export REGISTRY_ROOT="$TMPDIR/registry"
   mkdir -p "$REGISTRY_ROOT"
+  export NIXFIED_RUNTIME_DIR_SCOPE_OVERRIDE="$TMPDIR/runtime-scope"
+  mkdir -p "$NIXFIED_RUNTIME_DIR_SCOPE_OVERRIDE"
   export HOME="$TMPDIR/home"
   export XDG_CACHE_HOME="$HOME/.cache"
   mkdir -p "$XDG_CACHE_HOME"

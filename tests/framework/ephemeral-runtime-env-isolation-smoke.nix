@@ -114,9 +114,18 @@ pkgs.runCommand "ephemeral-runtime-env-isolation-smoke" { } ''
 
   ORCH="${orchestrator}/bin/nixfied-orchestrator"
   export REGISTRY_ROOT="$TMPDIR/registry"
+  hostile_runtime_root="$TMPDIR/hostile-runtime"
   mkdir -p "$REGISTRY_ROOT"
 
-  "$ORCH" run-workflow "${probeWorkflowId}" --summary > "$TMPDIR/probe.out" 2>&1
+  NIXFIED_RUNTIME_HOME="$hostile_runtime_root/home" \
+  NIXFIED_RUNTIME_TMPDIR="$hostile_runtime_root/tmp" \
+  NIXFIED_RUNTIME_XDG_DATA_HOME="$hostile_runtime_root/xdg/data" \
+  NIXFIED_RUNTIME_XDG_STATE_HOME="$hostile_runtime_root/xdg/state" \
+  NIXFIED_RUNTIME_XDG_CACHE_HOME="$hostile_runtime_root/xdg/cache" \
+  NIXFIED_RUNTIME_REGISTRY_ROOT="$hostile_runtime_root/registry" \
+  NIXFIED_RUNTIME_ARTIFACTS_DIR="$hostile_runtime_root/artifacts" \
+  NIXFIED_RUNTIME_SERVICE_ROOT="$hostile_runtime_root/services" \
+    "$ORCH" run-workflow "${probeWorkflowId}" --summary > "$TMPDIR/probe.out" 2>&1
 
   eph_root="$(${pkgs.gnused}/bin/sed -n 's/^INFO: Root: //p' "$TMPDIR/probe.out" | ${pkgs.coreutils}/bin/tail -n 1)"
   if [ -z "$eph_root" ]; then
@@ -135,6 +144,11 @@ pkgs.runCommand "ephemeral-runtime-env-isolation-smoke" { } ''
   ${pkgs.gnugrep}/bin/grep -Fq "INFO: sandbox_artifacts=$eph_root/artifacts" "$TMPDIR/probe.out"
   ${pkgs.gnugrep}/bin/grep -Fq "OK: ephemeral runtime env probe complete" "$TMPDIR/probe.out"
   ${pkgs.gnugrep}/bin/grep -Fq "OK: Ephemeral state cleaned" "$TMPDIR/probe.out"
+  if ${pkgs.gnugrep}/bin/grep -Fq "$hostile_runtime_root" "$TMPDIR/probe.out"; then
+    echo "ephemeral runtime env should ignore hostile runtime override inputs"
+    cat "$TMPDIR/probe.out"
+    exit 1
+  fi
 
   echo "OK: ephemeral runtime env vars are run-local" > "$out"
 ''

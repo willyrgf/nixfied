@@ -33,15 +33,16 @@ pkgs.runCommand "summary-json-smoke" { } ''
   export CI_ARTIFACTS_ROOT="$TMPDIR/artifacts"
   mkdir -p "$REGISTRY_ROOT" "$CI_ARTIFACTS_ROOT"
 
-  "$ORCH" run-workflow workflow.ci.basic --summary > "$TMPDIR/ci.out" 2>&1
+  run_id_file="$TMPDIR/ci.run-id"
+  summary_file="$TMPDIR/ci.summary.json"
+  "$ORCH" run-workflow workflow.ci.basic --run-id-file "$run_id_file" --summary-file "$summary_file" --summary > "$TMPDIR/ci.out" 2>&1
 
-  run_id="$(${pkgs.gnused}/bin/sed -n 's/^INFO: runId=\([^ ]*\).*/\1/p' "$TMPDIR/ci.out" | ${pkgs.coreutils}/bin/tail -n 1)"
+  run_id="$(${pkgs.coreutils}/bin/tr -d '\n' < "$run_id_file")"
   if [ -z "$run_id" ]; then
     echo "missing run id"
     cat "$TMPDIR/ci.out"
     exit 1
   fi
-  summary_file="$CI_ARTIFACTS_ROOT/$run_id/summary.json"
   if [ ! -f "$summary_file" ]; then
     echo "missing summary file: $summary_file"
     cat "$TMPDIR/ci.out"
@@ -82,6 +83,33 @@ pkgs.runCommand "summary-json-smoke" { } ''
   ${pkgs.gnugrep}/bin/grep -Fq "INFO: Time breakdown" "$TMPDIR/ci.out"
   ${pkgs.gnugrep}/bin/grep -Fq "INFO: Parallelism" "$TMPDIR/ci.out"
   ${pkgs.gnugrep}/bin/grep -Fq "OK: Exit code: 0" "$TMPDIR/ci.out"
+
+  json_run_id_file="$TMPDIR/ci-json.run-id"
+  json_summary_file="$TMPDIR/ci-json.summary.json"
+  "$ORCH" run-workflow workflow.ci.basic --run-id-file "$json_run_id_file" --summary-file "$json_summary_file" --json > "$TMPDIR/ci.json.out" 2>&1
+
+  json_run_id="$(${pkgs.coreutils}/bin/tr -d '\n' < "$json_run_id_file")"
+  if [ -z "$json_run_id" ]; then
+    echo "missing json run id"
+    cat "$TMPDIR/ci.json.out"
+    exit 1
+  fi
+  json_payload="$(${pkgs.gawk}/bin/awk 'NF { line = $0 } END { print line }' "$TMPDIR/ci.json.out")"
+  if [ -z "$json_payload" ]; then
+    echo "missing json payload"
+    cat "$TMPDIR/ci.json.out"
+    exit 1
+  fi
+  printf '%s\n' "$json_payload" > "$TMPDIR/ci.json.payload"
+
+  ${pkgs.jq}/bin/jq -e --arg runId "$json_run_id" '
+    .run_id == $runId
+    and .workflow_id == "workflow.ci.basic"
+    and (.exit_code | type == "number")
+    and (.summary_json | type == "string")
+    and .summary.run_id == $runId
+    and .summary.workflow_id == "workflow.ci.basic"
+  ' "$TMPDIR/ci.json.payload" > /dev/null
 
   echo "OK: workflow summary json contract validated" > "$out"
 ''

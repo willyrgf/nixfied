@@ -113,7 +113,7 @@ pkgs.runCommand "ephemeral-execution-smoke" { } ''
   export REGISTRY_ROOT="$TMPDIR/registry"
   mkdir -p "$REGISTRY_ROOT"
 
-  "$ORCH" run-workflow "${probeWorkflowId}" --summary > "$TMPDIR/probe.out" 2>&1
+  "$ORCH" run-workflow "${probeWorkflowId}" --summary-file "$TMPDIR/probe.summary.json" --summary > "$TMPDIR/probe.out" 2>&1
 
   eph_root="$(${pkgs.gnused}/bin/sed -n 's/^INFO: Root: //p' "$TMPDIR/probe.out" | ${pkgs.coreutils}/bin/tail -n 1)"
   if [ -z "$eph_root" ]; then
@@ -132,9 +132,14 @@ pkgs.runCommand "ephemeral-execution-smoke" { } ''
   fi
 
   ${pkgs.gnugrep}/bin/grep -Fq "INFO: Ephemeral execution mode" "$TMPDIR/probe.out"
-  ${pkgs.gnugrep}/bin/grep -Fq "INFO: summary_json=$eph_root/artifacts/summary.json" "$TMPDIR/probe.out"
   ${pkgs.gnugrep}/bin/grep -Fq "OK: ephemeral probe task complete" "$TMPDIR/probe.out"
   ${pkgs.gnugrep}/bin/grep -Fq "OK: Ephemeral state cleaned" "$TMPDIR/probe.out"
+  if [ ! -f "$TMPDIR/probe.summary.json" ]; then
+    echo "missing summary file"
+    cat "$TMPDIR/probe.out"
+    exit 1
+  fi
+  ${pkgs.jq}/bin/jq -e '.workflow_id == "'"${probeWorkflowId}"'"' "$TMPDIR/probe.summary.json" > /dev/null
 
   if ${pkgs.gnugrep}/bin/grep -Fq "Permission denied" "$TMPDIR/probe.out"; then
     echo "unexpected permission error during ephemeral cleanup"

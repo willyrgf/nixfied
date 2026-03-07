@@ -12,6 +12,9 @@ assert pkgs.lib.hasInfix "registry_events_snapshot" orchestratorSource;
 assert pkgs.lib.hasInfix "\${pkgs.procps}/bin/ps" orchestratorSource;
 assert pkgs.lib.hasInfix "tmp=\"$(mktemp \"$run_file.tmp.XXXXXX\")\"" orchestratorSource;
 assert pkgs.lib.hasInfix "stop-all-runs" orchestratorSource;
+assert pkgs.lib.hasInfix "split_process_mode() {" orchestratorSource;
+assert pkgs.lib.hasInfix "NIXFIED_RUN_ID_FILE_OVERRIDE" orchestratorSource;
+assert pkgs.lib.hasInfix "NIXFIED_SUMMARY_FILE_OVERRIDE" orchestratorSource;
 assert pkgs.lib.hasInfix "validate_typed_task_args() {" orchestratorSource;
 assert pkgs.lib.hasInfix "run_workflow_phase_tasks() {" executorSource;
 assert pkgs.lib.hasInfix "write_workflow_summary_json() {" executorSource;
@@ -22,6 +25,7 @@ assert pkgs.lib.hasInfix "ephemeral = model.runtime.ephemeral or { };" orchestra
 assert pkgs.lib.hasInfix "EPHEMERAL_EXECUTOR_WRAPPER=" orchestratorSource;
 assert pkgs.lib.hasInfix "NIXFIED_WORKFLOW_SETUP_STARTED_AT" orchestratorSource;
 assert pkgs.lib.hasInfix "NIXFIED_WORKFLOW_SETUP_STARTED_EPOCH" orchestratorSource;
+assert pkgs.lib.hasInfix "NIXFIED_JSON_OUTPUT_OVERRIDE" orchestratorSource;
 assert pkgs.lib.hasInfix "\"$EPHEMERAL_EXECUTOR_WRAPPER\" \"$EXECUTOR_PROGRAM\" run-task"
   orchestratorSource;
 assert pkgs.lib.hasInfix "\"$EPHEMERAL_EXECUTOR_WRAPPER\" \"$EXECUTOR_PROGRAM\" run-workflow"

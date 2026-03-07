@@ -20,8 +20,11 @@ let
 in
 pkgs.writeShellScriptBin "nixfied-executor" ''
   set -euo pipefail
+  export NIXFIED_EXECUTOR_BIN="$0"
+  export NIXFIED_EXECUTOR_SELF="$0"
 
   MODEL_FILE=${pkgs.lib.escapeShellArg (builtins.toString modelFile)}
+  export NIXFIED_MODEL_FILE="$MODEL_FILE"
   PROJECT_ROOT=${pkgs.lib.escapeShellArg (builtins.toString projectRoot)}
   REGISTRY_ROOT_DEFAULT=${pkgs.lib.escapeShellArg model.state.registry.root}
   ARTIFACTS_ROOT_DEFAULT=${pkgs.lib.escapeShellArg model.state.artifacts.root}
@@ -138,6 +141,42 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
     fi
   }
 
+  emit_workflow_result_json() {
+    local run_id="$1"
+    local workflow_id="$2"
+    local summary_file="$3"
+    local exit_code="$4"
+
+    if [ -n "$summary_file" ] && [ -f "$summary_file" ]; then
+      ${pkgs.jq}/bin/jq -cnS \
+        --arg runId "$run_id" \
+        --arg workflowId "$workflow_id" \
+        --arg summaryJson "$summary_file" \
+        --argjson exitCode "$exit_code" \
+        --slurpfile summary "$summary_file" \
+        '{
+          run_id: $runId,
+          workflow_id: $workflowId,
+          exit_code: $exitCode,
+          summary_json: $summaryJson,
+          summary: ($summary[0] // null)
+        }'
+      return 0
+    fi
+
+    ${pkgs.jq}/bin/jq -cnS \
+      --arg runId "$run_id" \
+      --arg workflowId "$workflow_id" \
+      --argjson exitCode "$exit_code" \
+      '{
+        run_id: $runId,
+        workflow_id: $workflowId,
+        exit_code: $exitCode,
+        summary_json: null,
+        summary: null
+      }'
+  }
+
   compute_run_id() {
     local mode="$1"
     local workflow_id="$2"
@@ -237,6 +276,10 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
   }
 
   LOGGING_FILTERED_ARGS=()
+  MACHINE_FILTERED_ARGS=()
+  MACHINE_JSON=0
+  MACHINE_RUN_ID_FILE=""
+  MACHINE_SUMMARY_FILE=""
 
   extract_logging_override_args() {
     local parse_options=1
@@ -320,6 +363,119 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
     else
       unset NIXFIED_CLI_OUTPUT_MODE_OVERRIDE || true
     fi
+  }
+
+  extract_machine_output_args() {
+    local parse_options=1
+    local arg=""
+    local value=""
+
+    MACHINE_FILTERED_ARGS=()
+    MACHINE_JSON=0
+    if [ "''${NIXFIED_JSON_OUTPUT_OVERRIDE:-0}" = "1" ]; then
+      MACHINE_JSON=1
+    fi
+    MACHINE_RUN_ID_FILE="''${NIXFIED_RUN_ID_FILE_OVERRIDE:-}"
+    MACHINE_SUMMARY_FILE="''${NIXFIED_SUMMARY_FILE_OVERRIDE:-}"
+
+    while [ "$#" -gt 0 ]; do
+      arg="$1"
+      shift
+
+      if [ "$parse_options" -eq 0 ]; then
+        MACHINE_FILTERED_ARGS+=("$arg")
+        continue
+      fi
+
+      case "$arg" in
+        --)
+          parse_options=0
+          MACHINE_FILTERED_ARGS+=("--")
+          ;;
+        --json)
+          MACHINE_JSON=1
+          ;;
+        --run-id-file)
+          if [ "$#" -lt 1 ]; then
+            echo "ERROR: --run-id-file requires a value"
+            return 2
+          fi
+          value="$1"
+          shift
+          if [ -z "$value" ]; then
+            echo "ERROR: --run-id-file requires a non-empty value"
+            return 2
+          fi
+          MACHINE_RUN_ID_FILE="$value"
+          ;;
+        --run-id-file=*)
+          value="''${arg#--run-id-file=}"
+          if [ -z "$value" ]; then
+            echo "ERROR: --run-id-file requires a non-empty value"
+            return 2
+          fi
+          MACHINE_RUN_ID_FILE="$value"
+          ;;
+        --summary-file)
+          if [ "$#" -lt 1 ]; then
+            echo "ERROR: --summary-file requires a value"
+            return 2
+          fi
+          value="$1"
+          shift
+          if [ -z "$value" ]; then
+            echo "ERROR: --summary-file requires a non-empty value"
+            return 2
+          fi
+          MACHINE_SUMMARY_FILE="$value"
+          ;;
+        --summary-file=*)
+          value="''${arg#--summary-file=}"
+          if [ -z "$value" ]; then
+            echo "ERROR: --summary-file requires a non-empty value"
+            return 2
+          fi
+          MACHINE_SUMMARY_FILE="$value"
+          ;;
+        *)
+          MACHINE_FILTERED_ARGS+=("$arg")
+          ;;
+      esac
+    done
+  }
+
+  write_text_file_atomic() {
+    local target="$1"
+    local value="$2"
+    local parent_dir
+    local tmp
+
+    if [ -z "$target" ]; then
+      return 0
+    fi
+
+    parent_dir="$(dirname "$target")"
+    mkdir -p "$parent_dir"
+    tmp="$(mktemp "$target.tmp.XXXXXX")"
+    printf '%s\n' "$value" > "$tmp"
+    mv "$tmp" "$target"
+  }
+
+  copy_file_atomic() {
+    local source_file="$1"
+    local target_file="$2"
+    local parent_dir
+    local tmp
+
+    if [ -z "$target_file" ]; then
+      return 0
+    fi
+
+    parent_dir="$(dirname "$target_file")"
+    mkdir -p "$parent_dir"
+    tmp="$(mktemp "$target_file.tmp.XXXXXX")"
+    ${pkgs.coreutils}/bin/cp "$source_file" "$tmp"
+    mv "$tmp" "$target_file"
   }
 
   append_event() {
@@ -633,6 +789,8 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
     local run_id
     local detail_json
     local status
+    local task
+    local runner_type
     local managed_by_orchestrator=0
     local NIXFIED_WORKFLOW_CONTEXT="0"
     local -a filtered_args
@@ -640,6 +798,24 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
     extract_logging_override_args "$@" || return $?
     filtered_args=("''${LOGGING_FILTERED_ARGS[@]}")
+    extract_machine_output_args "''${filtered_args[@]}" || return $?
+    filtered_args=("''${MACHINE_FILTERED_ARGS[@]}")
+
+    task="$(task_json "$task_id")"
+    if [ -z "$task" ]; then
+      echo "ERROR: unknown task '$task_id'"
+      return 2
+    fi
+    runner_type="$(printf '%s' "$task" | ${pkgs.jq}/bin/jq -r '.runner.type // "shell"')"
+
+    if [ "$runner_type" != "workflowRef" ] && [ -n "$MACHINE_SUMMARY_FILE" ]; then
+      echo "ERROR: --summary-file is only supported for workflow runs"
+      return 2
+    fi
+    if [ "$runner_type" != "workflowRef" ] && [ "$MACHINE_JSON" = "1" ]; then
+      echo "ERROR: --json is only supported for workflow runs"
+      return 2
+    fi
 
     if [ -n "''${NIXFIED_ORCHESTRATOR_RUN_ID:-}" ]; then
       run_id="$NIXFIED_ORCHESTRATOR_RUN_ID"
@@ -653,6 +829,11 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
     fi
 
     ensure_run_artifacts_dir "$run_id" "" "$managed_by_orchestrator" || return $?
+    export NIXFIED_RUN_ID="$run_id"
+
+    if [ "$runner_type" != "workflowRef" ] && [ -n "$MACHINE_RUN_ID_FILE" ]; then
+      write_text_file_atomic "$MACHINE_RUN_ID_FILE" "$run_id" || return $?
+    fi
 
     detail_json="$(${pkgs.jq}/bin/jq -cn --arg suffix "$RUN_SUFFIX_REASON" '{mode: "task", suffixReason: (if $suffix == "" then null else $suffix end)}')"
     append_event "$run_id" "" "$task_id" "queued" "$detail_json"
@@ -718,10 +899,22 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         fi
       done < <(printf '%s' "$current_task_json" | ${pkgs.jq}/bin/jq -r '.deps.softNeeds[]?')
 
+      if [ "$current_task" = "$task_id" ] && [ "$runner_type" = "workflowRef" ]; then
+        export NIXFIED_JSON_OUTPUT_OVERRIDE="$MACHINE_JSON"
+        export NIXFIED_RUN_ID_FILE_OVERRIDE="$MACHINE_RUN_ID_FILE"
+        export NIXFIED_SUMMARY_FILE_OVERRIDE="$MACHINE_SUMMARY_FILE"
+      fi
+
       if execute_task "$run_id" "" "$current_task" "$@"; then
         rc=0
       else
         rc="$?"
+      fi
+
+      if [ "$current_task" = "$task_id" ] && [ "$runner_type" = "workflowRef" ]; then
+        unset NIXFIED_JSON_OUTPUT_OVERRIDE || true
+        unset NIXFIED_RUN_ID_FILE_OVERRIDE || true
+        unset NIXFIED_SUMMARY_FILE_OVERRIDE || true
       fi
 
       unset "active_tasks[$current_task]"
@@ -1731,6 +1924,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
     local exit_code="$4"
     local started_at="$5"
     local started_epoch="$6"
+    local summary_file_override="$7"
 
     local should_write
     local mode
@@ -1898,6 +2092,14 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
     fi
     mv "$summary_tmp" "$summary_file"
 
+    if [ -n "$summary_file_override" ] && [ "$summary_file_override" != "$summary_file" ]; then
+      if ! copy_file_atomic "$summary_file" "$summary_file_override"; then
+        registry_snapshot_cleanup "$events_file"
+        echo "ERROR: failed to write summary file '$summary_file_override'"
+        return 1
+      fi
+    fi
+
     LAST_WORKFLOW_SUMMARY_FILE="$summary_file"
     echo "INFO: summary_json=$summary_file"
     registry_snapshot_cleanup "$events_file"
@@ -1925,6 +2127,8 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
     extract_logging_override_args "$@" || return $?
     input_args=("''${LOGGING_FILTERED_ARGS[@]}")
+    extract_machine_output_args "''${input_args[@]}" || return $?
+    input_args=("''${MACHINE_FILTERED_ARGS[@]}")
     set -- "''${input_args[@]}"
 
     while [ "$#" -gt 0 ]; do
@@ -1975,6 +2179,11 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
     workflow_id="$(resolve_workflow_mode "$workflow_id" "$mode_override")" || return $?
 
+    if [ "$print_summary" -eq 1 ] && [ "$MACHINE_JSON" = "1" ]; then
+      echo "ERROR: --json and --summary cannot be combined"
+      return 2
+    fi
+
     local workflow
     local args_payload
     local run_id
@@ -2020,7 +2229,12 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       trap "deactivate_run '$run_id'" EXIT
     fi
 
+    if [ -n "$MACHINE_RUN_ID_FILE" ]; then
+      write_text_file_atomic "$MACHINE_RUN_ID_FILE" "$run_id" || return $?
+    fi
+
     ensure_run_artifacts_dir "$run_id" "$workflow" "$managed_by_orchestrator" || return $?
+    export NIXFIED_RUN_ID="$run_id"
 
     detail_json="$(${pkgs.jq}/bin/jq -cn --arg suffix "$RUN_SUFFIX_REASON" --arg mode "workflow" '{mode: $mode, suffixReason: (if $suffix == "" then null else $suffix end)}')"
     append_event "$run_id" "$workflow_id" "" "queued" "$detail_json"
@@ -2083,7 +2297,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
     fi
 
     if [ "$nested_workflow_call" -eq 0 ]; then
-      if ! write_workflow_summary_json "$run_id" "$workflow_id" "$workflow" "$status" "$started_at" "$started_epoch"; then
+      if ! write_workflow_summary_json "$run_id" "$workflow_id" "$workflow" "$status" "$started_at" "$started_epoch" "$MACHINE_SUMMARY_FILE"; then
         if [ "$status" -eq 0 ]; then
           status=1
           detail_json="$(${pkgs.jq}/bin/jq -cn --arg reason "summary-write-failed" '{reason: $reason, exitCode: 1}')"
@@ -2116,6 +2330,10 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         fi
       fi
       echo "INFO: runId=$run_id passed=$passed failed=$failed canceled=$canceled"
+    fi
+
+    if [ "$MACHINE_JSON" = "1" ] && [ "$nested_workflow_call" -eq 0 ]; then
+      emit_workflow_result_json "$run_id" "$workflow_id" "$summary_file" "$status"
     fi
 
     if [ "$managed_by_orchestrator" -eq 0 ]; then

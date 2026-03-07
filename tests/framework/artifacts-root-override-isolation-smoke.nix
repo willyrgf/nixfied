@@ -22,9 +22,9 @@ pkgs.runCommand "artifacts-root-override-isolation-smoke" { } ''
   mkdir -p "$REGISTRY_ROOT"
 
   set +e
-  CI_ARTIFACTS_ROOT="$TMPDIR/root-override" "$ORCH" run-workflow workflow.ci.basic --summary > "$TMPDIR/root-1.out" 2>&1 &
+  CI_ARTIFACTS_ROOT="$TMPDIR/root-override" "$ORCH" run-workflow workflow.ci.basic --run-id-file "$TMPDIR/root-1.run-id" --summary > "$TMPDIR/root-1.out" 2>&1 &
   pid_one="$!"
-  CI_ARTIFACTS_ROOT="$TMPDIR/root-override" "$ORCH" run-workflow workflow.ci.basic --summary > "$TMPDIR/root-2.out" 2>&1 &
+  CI_ARTIFACTS_ROOT="$TMPDIR/root-override" "$ORCH" run-workflow workflow.ci.basic --run-id-file "$TMPDIR/root-2.run-id" --summary > "$TMPDIR/root-2.out" 2>&1 &
   pid_two="$!"
   wait "$pid_one"
   rc_one="$?"
@@ -36,10 +36,10 @@ pkgs.runCommand "artifacts-root-override-isolation-smoke" { } ''
     fail "expected root override workflow runs to pass"
   fi
 
-  run_one="$(extract_run_id "$TMPDIR/root-1.out")"
-  run_two="$(extract_run_id "$TMPDIR/root-2.out")"
-  summary_one="$(${pkgs.gnused}/bin/sed -n 's/^INFO: summary_json=//p' "$TMPDIR/root-1.out" | ${pkgs.coreutils}/bin/tail -n 1)"
-  summary_two="$(${pkgs.gnused}/bin/sed -n 's/^INFO: summary_json=//p' "$TMPDIR/root-2.out" | ${pkgs.coreutils}/bin/tail -n 1)"
+  run_one="$(read_trimmed_file "$TMPDIR/root-1.run-id")"
+  run_two="$(read_trimmed_file "$TMPDIR/root-2.run-id")"
+  summary_one="$TMPDIR/root-override/$run_one/summary.json"
+  summary_two="$TMPDIR/root-override/$run_two/summary.json"
   require_non_empty "$run_one" "run_one"
   require_non_empty "$run_two" "run_two"
   require_non_empty "$summary_one" "summary_one"
@@ -62,15 +62,15 @@ pkgs.runCommand "artifacts-root-override-isolation-smoke" { } ''
   esac
 
   set +e
-  CI_ARTIFACTS_DIR="$TMPDIR/flat-override" "$ORCH" run-workflow workflow.ci.basic --summary > "$TMPDIR/flat.out" 2>&1
+  CI_ARTIFACTS_DIR="$TMPDIR/flat-override" "$ORCH" run-workflow workflow.ci.basic --run-id-file "$TMPDIR/flat.run-id" --summary > "$TMPDIR/flat.out" 2>&1
   flat_rc="$?"
   set -e
   if [ "$flat_rc" -ne 0 ]; then
     fail "expected flat artifacts dir override to be normalized, not rejected"
   fi
 
-  flat_run="$(extract_run_id "$TMPDIR/flat.out")"
-  flat_summary="$(${pkgs.gnused}/bin/sed -n 's/^INFO: summary_json=//p' "$TMPDIR/flat.out" | ${pkgs.coreutils}/bin/tail -n 1)"
+  flat_run="$(read_trimmed_file "$TMPDIR/flat.run-id")"
+  flat_summary="$TMPDIR/flat-override/$flat_run/summary.json"
   require_non_empty "$flat_run" "flat_run"
   require_non_empty "$flat_summary" "flat_summary"
   require_file "$flat_summary"

@@ -19,12 +19,23 @@ let
         set -euo pipefail
         printf '%s\n' "$REGISTRY_ROOT" > "$CI_ARTIFACTS_DIR/registry-root.txt"
         echo "INFO: probe_registry=$REGISTRY_ROOT"
-        sleep 1
+        if [ -n "''${NIXFIED_EPHEMERAL_GATE_DIR:-}" ]; then
+          ready_file="$NIXFIED_EPHEMERAL_GATE_DIR/$NIXFIED_RUN_ID.ready"
+          release_file="$NIXFIED_EPHEMERAL_GATE_DIR/release"
+          mkdir -p "$NIXFIED_EPHEMERAL_GATE_DIR"
+          : > "$ready_file"
+          while [ ! -f "$release_file" ]; do
+            sleep 0.1
+          done
+        fi
         echo "ERROR: intentional failure to preserve ephemeral state" >&2
         exit 1
       '';
       package = null;
       workflowId = null;
+    };
+    runtime = baseTask.runtime // {
+      passThroughEnv = (baseTask.runtime.passThroughEnv or [ ]) ++ [ "NIXFIED_EPHEMERAL_GATE_DIR" ];
     };
     ui = baseTask.ui // {
       app = baseTask.ui.app // {
@@ -118,13 +129,21 @@ pkgs.runCommand "ephemeral-registry-run-isolation-smoke" { } ''
   ORCH="${harness.orchestrator}/bin/nixfied-orchestrator"
   export REGISTRY_ROOT="$TMPDIR/host-registry"
   export NIXFIED_EPHEMERAL_ROOT_BASE="$TMPDIR/ephemeral-roots"
-  mkdir -p "$REGISTRY_ROOT" "$NIXFIED_EPHEMERAL_ROOT_BASE"
+  gate_dir="$TMPDIR/gates"
+  mkdir -p "$REGISTRY_ROOT" "$NIXFIED_EPHEMERAL_ROOT_BASE" "$gate_dir"
 
   set +e
-  "$ORCH" run-workflow "${probeWorkflowId}" --summary > "$TMPDIR/run-1.out" 2>&1 &
+  NIXFIED_EPHEMERAL_GATE_DIR="$gate_dir" "$ORCH" run-workflow "${probeWorkflowId}" --run-id-file "$TMPDIR/run-1.run-id" --summary > "$TMPDIR/run-1.out" 2>&1 &
   pid_one="$!"
-  "$ORCH" run-workflow "${probeWorkflowId}" --summary > "$TMPDIR/run-2.out" 2>&1 &
+  NIXFIED_EPHEMERAL_GATE_DIR="$gate_dir" "$ORCH" run-workflow "${probeWorkflowId}" --run-id-file "$TMPDIR/run-2.run-id" --summary > "$TMPDIR/run-2.out" 2>&1 &
   pid_two="$!"
+  wait_for_condition 30 "run one id" test -s "$TMPDIR/run-1.run-id"
+  wait_for_condition 30 "run two id" test -s "$TMPDIR/run-2.run-id"
+  run_one="$(read_trimmed_file "$TMPDIR/run-1.run-id")"
+  run_two="$(read_trimmed_file "$TMPDIR/run-2.run-id")"
+  wait_for_condition 60 "run one ready" test -f "$gate_dir/$run_one.ready"
+  wait_for_condition 60 "run two ready" test -f "$gate_dir/$run_two.ready"
+  : > "$gate_dir/release"
   wait "$pid_one"
   rc_one="$?"
   wait "$pid_two"
@@ -135,8 +154,6 @@ pkgs.runCommand "ephemeral-registry-run-isolation-smoke" { } ''
     fail "expected probe workflows to fail so ephemeral roots are preserved"
   fi
 
-  run_one="$(extract_run_id "$TMPDIR/run-1.out")"
-  run_two="$(extract_run_id "$TMPDIR/run-2.out")"
   root_one="$(${pkgs.gnused}/bin/sed -n 's/^INFO: Root: //p' "$TMPDIR/run-1.out" | ${pkgs.coreutils}/bin/tail -n 1)"
   root_two="$(${pkgs.gnused}/bin/sed -n 's/^INFO: Root: //p' "$TMPDIR/run-2.out" | ${pkgs.coreutils}/bin/tail -n 1)"
   require_non_empty "$run_one" "run_one"

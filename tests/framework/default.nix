@@ -74,6 +74,13 @@
       ;
   };
 
+  "runtime-owned-env-blocked-smoke" = import ./runtime-owned-env-blocked-smoke.nix {
+    inherit
+      pkgs
+      registry
+      ;
+  };
+
   "operations-contract" = import ./operations-contract.nix {
     inherit pkgs;
   };
@@ -283,6 +290,14 @@
   };
 
   "ephemeral-runtime-env-isolation-smoke" = import ./ephemeral-runtime-env-isolation-smoke.nix {
+    inherit
+      pkgs
+      model
+      registry
+      ;
+  };
+
+  "runtime-env-isolation-smoke" = import ./runtime-env-isolation-smoke.nix {
     inherit
       pkgs
       model

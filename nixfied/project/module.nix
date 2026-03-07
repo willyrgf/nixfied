@@ -347,10 +347,8 @@ let
     '';
 
   defaultTaskPassThroughEnv = [
-    "HOME"
     project.envVar
     project.slotVar
-    "CI_ARTIFACTS_DIR"
     "CI_MAX_WORKERS"
     "NIXFIED_CI_MAX_WORKERS"
     "LOG_LEVEL"
@@ -628,8 +626,28 @@ in
           keepLogsOnSuccess = conf.isolation.keepLogsOnSuccess or false;
           keepLogsOnFailure = conf.isolation.keepLogsOnFailure or true;
           maxParallel = conf.isolation.maxParallel or 4;
+          runTaskId =
+            conf.isolation.run.taskId or (
+              let
+                configuredApp = conf.isolation.run.app or "ci";
+              in
+              if configuredApp == "ci" then
+                "task.ci"
+              else
+                throw "ERROR: isolation.run.taskId must be set when isolation.run.app is not 'ci'"
+            );
           runApp = conf.isolation.run.app or "ci";
           runArgs = conf.isolation.run.args or [ "--summary" ];
+          validateTaskId =
+            conf.isolation.validate.taskId or (
+              let
+                configuredApp = conf.isolation.validate.app or "validate-env";
+              in
+              if configuredApp == "validate-env" then
+                "task.ops.validate-env"
+              else
+                throw "ERROR: isolation.validate.taskId must be set when isolation.validate.app is not 'validate-env'"
+            );
           validateApp = conf.isolation.validate.app or "validate-env";
           runEnv = conf.isolation.runEnv or { };
         };
@@ -1066,16 +1084,17 @@ in
             appName = "test-framework-selfhost";
             kind = "internal";
             summary = "Framework self-host smoke command";
-            description = "Runs framework commands through dispatcher entry points.";
-            runtimeInputs = commonRuntimeInputs ++ [
-              pkgs.nix
-            ];
+            description = "Runs framework commands through the built executor from the current evaluation closure.";
+            runtimeInputs = commonRuntimeInputs;
             command = ''
               set -euo pipefail
-              ROOT="$(pwd -P)"
+              if [ -z "''${NIXFIED_EXECUTOR_SELF:-}" ]; then
+                echo "ERROR: NIXFIED_EXECUTOR_SELF is not set"
+                exit 3
+              fi
               echo "INFO: self-host smoke start"
-              nix run "path:$ROOT"#run-task -- task.dev > /dev/null
-              nix run "path:$ROOT"#run-workflow -- workflow.ci.basic --summary > /dev/null
+              NIXFIED_CALLER_PWD="$PWD" "$NIXFIED_EXECUTOR_SELF" run-task task.dev > /dev/null
+              NIXFIED_CALLER_PWD="$PWD" "$NIXFIED_EXECUTOR_SELF" run-workflow workflow.ci.basic --summary > /dev/null
               echo "OK: self-host smoke complete"
             '';
           }
@@ -1340,19 +1359,43 @@ in
             }
 
             shard_workflow_test() {
-              nix run path:.#test -- --summary
+              if [ -z "''${NIXFIED_EXECUTOR_SELF:-}" ]; then
+                log_error "NIXFIED_EXECUTOR_SELF is not set"
+                return 3
+              fi
+              NIXFIED_CALLER_PWD="$PWD" "$NIXFIED_EXECUTOR_SELF" run-task task.test --summary
             }
 
             shard_workflow_ci() {
-              nix run path:.#ci -- --mode "$MODE" --summary
+              if [ -z "''${NIXFIED_EXECUTOR_SELF:-}" ]; then
+                log_error "NIXFIED_EXECUTOR_SELF is not set"
+                return 3
+              fi
+              NIXFIED_CALLER_PWD="$PWD" "$NIXFIED_EXECUTOR_SELF" run-task task.ci --mode "$MODE" --summary
             }
 
             shard_isolation() {
-              nix run path:.#test-isolation
+              local -a isolation_args
+              isolation_args=()
+
+              if [ -z "''${NIXFIED_EXECUTOR_SELF:-}" ]; then
+                log_error "NIXFIED_EXECUTOR_SELF is not set"
+                return 3
+              fi
+
+              if [ "$SERIAL" -eq 1 ] || [ "''${CI:-}" = "1" ] || [ "''${CI:-}" = "true" ]; then
+                isolation_args+=(--max-parallel 1)
+              fi
+
+              NIXFIED_CALLER_PWD="$PWD" "$NIXFIED_EXECUTOR_SELF" run-task task.ops.test-isolation "''${isolation_args[@]}"
             }
 
             shard_self_host() {
-              nix run path:.#run-workflow -- workflow.test.framework.selfhost --summary
+              if [ -z "''${NIXFIED_EXECUTOR_SELF:-}" ]; then
+                log_error "NIXFIED_EXECUTOR_SELF is not set"
+                return 3
+              fi
+              NIXFIED_CALLER_PWD="$PWD" "$NIXFIED_EXECUTOR_SELF" run-workflow workflow.test.framework.selfhost --summary
             }
 
             run_named_shard() {
@@ -2042,7 +2085,7 @@ in
             failFast = true;
             lockPolicy = "exclusive";
             emitRegistryEvents = true;
-            ephemeral.enable = null;
+            ephemeral.enable = true;
           };
         };
 

@@ -18,7 +18,9 @@ pkgs.runCommand "framework-install-vendor-smoke" { } ''
 
   EXECUTOR="${executor}/bin/nixfied-executor"
   export REGISTRY_ROOT="$TMPDIR/registry"
+  export NIXFIED_RUNTIME_DIR_SCOPE_OVERRIDE="$TMPDIR/runtime-scope"
   mkdir -p "$REGISTRY_ROOT"
+  mkdir -p "$NIXFIED_RUNTIME_DIR_SCOPE_OVERRIDE"
 
   target="$TMPDIR/vendor-wrapper"
   "$EXECUTOR" run-task task.framework.install --vendor --target "$target" > "$TMPDIR/install.out" 2>&1

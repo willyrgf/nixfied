@@ -112,11 +112,14 @@ let
   envNames = runtime.env.names;
   envPattern =
     if envNames == [ ] then runtime.env.default else builtins.concatStringsSep "|" envNames;
+  isolationEnvValues = if envNames == [ ] then [ runtime.env.default ] else envNames;
   isolationSlotVar = runtime.slot.var;
   isolationEnvVar = runtime.env.var;
   isolationMaxSlot = runtime.slot.max;
   isolationSlotsJson = builtins.toJSON cfg.testIsolation.slots;
   isolationEnvsJson = builtins.toJSON cfg.testIsolation.envs;
+  isolationRunTaskId = cfg.testIsolation.runTaskId;
+  isolationValidateTaskId = cfg.testIsolation.validateTaskId;
   isolationRunArgsJson = builtins.toJSON cfg.testIsolation.runArgs;
   isolationRunEnvJson = builtins.toJSON cfg.testIsolation.runEnv;
 
@@ -200,6 +203,32 @@ let
       long = "--source";
       type = "string";
       description = "Override source key for selected service (requires --service).";
+    }
+  ];
+
+  testIsolationContractArgs = [
+    {
+      name = "slot";
+      kind = "option";
+      long = "--slot";
+      type = "int";
+      description = "Run a single isolation slot (requires --env).";
+    }
+    {
+      name = "env";
+      kind = "option";
+      long = "--env";
+      type = "enum";
+      values = isolationEnvValues;
+      description = "Run a single isolation environment (requires --slot).";
+    }
+    {
+      name = "max-parallel";
+      kind = "option";
+      long = "--max-parallel";
+      type = "int";
+      min = 1;
+      description = "Override the isolation worker cap for this invocation.";
     }
   ];
 
@@ -462,7 +491,6 @@ let
         hermetic = true;
         runtimeInputs = runtimeInputs;
         passThroughEnv = [
-          "HOME"
           runtime.env.var
           runtime.slot.var
         ];
@@ -910,10 +938,10 @@ let
     slot_var=${lib.escapeShellArg isolationSlotVar}
     env_var=${lib.escapeShellArg isolationEnvVar}
     slot_max=${toString isolationMaxSlot}
-    max_parallel=${toString cfg.testIsolation.maxParallel}
-    logs_root=${lib.escapeShellArg cfg.testIsolation.logsDir}
-    run_app=${lib.escapeShellArg cfg.testIsolation.runApp}
-    validate_app=${lib.escapeShellArg cfg.testIsolation.validateApp}
+    max_parallel_default=${toString cfg.testIsolation.maxParallel}
+    logs_root_base=${lib.escapeShellArg cfg.testIsolation.logsDir}
+    run_task_id=${lib.escapeShellArg isolationRunTaskId}
+    validate_task_id=${lib.escapeShellArg isolationValidateTaskId}
     keep_logs_success=${if cfg.testIsolation.keepLogsOnSuccess then "1" else "0"}
     keep_logs_failure=${if cfg.testIsolation.keepLogsOnFailure then "1" else "0"}
 
@@ -921,24 +949,108 @@ let
     envs_json='${isolationEnvsJson}'
     run_args_json='${isolationRunArgsJson}'
     run_env_json='${isolationRunEnvJson}'
-    project_root="$(pwd -P)"
+    selected_slot=""
+    selected_env=""
+    max_parallel_override=""
+    effective_max_parallel=""
+    executor_bin="''${NIXFIED_EXECUTOR_SELF:-''${NIXFIED_EXECUTOR_BIN:-}}"
+    logs_root=""
+    run_scope=""
 
-    if [ -z "$run_app" ]; then
-      echo "ERROR: test-isolation runApp is empty"
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --slot)
+          if [ "$#" -lt 2 ]; then
+            echo "ERROR: --slot requires a value"
+            exit 2
+          fi
+          selected_slot="$2"
+          shift 2
+          ;;
+        --slot=*)
+          selected_slot="''${1#--slot=}"
+          shift
+          ;;
+        --env)
+          if [ "$#" -lt 2 ]; then
+            echo "ERROR: --env requires a value"
+            exit 2
+          fi
+          selected_env="$2"
+          shift 2
+          ;;
+        --env=*)
+          selected_env="''${1#--env=}"
+          shift
+          ;;
+        --max-parallel)
+          if [ "$#" -lt 2 ]; then
+            echo "ERROR: --max-parallel requires a value"
+            exit 2
+          fi
+          max_parallel_override="$2"
+          shift 2
+          ;;
+        --max-parallel=*)
+          max_parallel_override="''${1#--max-parallel=}"
+          shift
+          ;;
+        --)
+          shift
+          break
+          ;;
+        *)
+          echo "ERROR: unknown argument '$1'"
+          exit 2
+          ;;
+      esac
+    done
+
+    if [ "$#" -gt 0 ]; then
+      echo "ERROR: unexpected positional arguments: $*"
+      exit 2
+    fi
+
+    if [ -n "$selected_slot" ] && [ -z "$selected_env" ]; then
+      echo "ERROR: --slot requires --env"
+      exit 2
+    fi
+
+    if [ -n "$selected_env" ] && [ -z "$selected_slot" ]; then
+      echo "ERROR: --env requires --slot"
+      exit 2
+    fi
+
+    if [ -z "$run_task_id" ]; then
+      echo "ERROR: test-isolation runTaskId is empty"
       exit 3
     fi
 
-    if [ -z "$validate_app" ]; then
-      echo "ERROR: test-isolation validateApp is empty"
+    if [ -z "$validate_task_id" ]; then
+      echo "ERROR: test-isolation validateTaskId is empty"
       exit 3
     fi
 
-    if ! [[ "$max_parallel" =~ ^[0-9]+$ ]]; then
-      echo "ERROR: test-isolation maxParallel is not an integer: $max_parallel"
+    if [ -z "$executor_bin" ]; then
+      echo "ERROR: test-isolation requires NIXFIED_EXECUTOR_SELF or NIXFIED_EXECUTOR_BIN"
       exit 3
     fi
 
-    if [ "$max_parallel" -lt 1 ]; then
+    effective_max_parallel="$max_parallel_default"
+    if [ -n "$max_parallel_override" ]; then
+      effective_max_parallel="$max_parallel_override"
+    fi
+    if [ "''${CI:-}" = "1" ] || [ "''${CI:-}" = "true" ]; then
+      effective_max_parallel=1
+      echo "INFO: test-isolation forcing maxParallel=1 reason=ci"
+    fi
+
+    if ! [[ "$effective_max_parallel" =~ ^[0-9]+$ ]]; then
+      echo "ERROR: test-isolation maxParallel is not an integer: $effective_max_parallel"
+      exit 3
+    fi
+
+    if [ "$effective_max_parallel" -lt 1 ]; then
       echo "ERROR: test-isolation maxParallel must be >= 1"
       exit 3
     fi
@@ -947,6 +1059,38 @@ let
     mapfile -t isolation_envs < <(${pkgs.jq}/bin/jq -r '.[]' <<<"$envs_json")
     mapfile -t run_args < <(${pkgs.jq}/bin/jq -r '.[]' <<<"$run_args_json")
     mapfile -t run_env_entries < <(${pkgs.jq}/bin/jq -r 'to_entries[]? | [.key, (.value | tostring)] | @tsv' <<<"$run_env_json")
+
+    if [ -n "$selected_slot" ]; then
+      if ! [[ "$selected_slot" =~ ^[0-9]+$ ]]; then
+        echo "ERROR: --slot must be an integer"
+        exit 2
+      fi
+      filtered_slots=()
+      for slot_value in "''${isolation_slots[@]}"; do
+        if [ "$slot_value" = "$selected_slot" ]; then
+          filtered_slots+=("$slot_value")
+        fi
+      done
+      isolation_slots=("''${filtered_slots[@]}")
+      if [ "''${#isolation_slots[@]}" -eq 0 ]; then
+        echo "ERROR: selected slot is not in the isolation matrix: $selected_slot"
+        exit 3
+      fi
+    fi
+
+    if [ -n "$selected_env" ]; then
+      filtered_envs=()
+      for env_value in "''${isolation_envs[@]}"; do
+        if [ "$env_value" = "$selected_env" ]; then
+          filtered_envs+=("$env_value")
+        fi
+      done
+      isolation_envs=("''${filtered_envs[@]}")
+      if [ "''${#isolation_envs[@]}" -eq 0 ]; then
+        echo "ERROR: selected environment is not in the isolation matrix: $selected_env"
+        exit 3
+      fi
+    fi
 
     if [ "''${#isolation_slots[@]}" -eq 0 ]; then
       echo "ERROR: test-isolation matrix has no slots"
@@ -958,8 +1102,11 @@ let
       exit 3
     fi
 
+    run_scope="''${NIXFIED_RUN_ID:-run-$(${pkgs.coreutils}/bin/date -u +%Y%m%d-%H%M%S)-$$}"
+    logs_root="$logs_root_base/$run_scope"
     mkdir -p "$logs_root"
-    echo "INFO: test-isolation matrix slots=''${#isolation_slots[@]} envs=''${#isolation_envs[@]}"
+    echo "INFO: test-isolation matrix slots=''${#isolation_slots[@]} envs=''${#isolation_envs[@]} max_parallel=$effective_max_parallel"
+    echo "INFO: test-isolation logs_root=$logs_root"
 
     statuses_dir="$(mktemp -d "$logs_root/.status.XXXXXX")"
     semaphore_dir="$(mktemp -d "$logs_root/.semaphore.XXXXXX")"
@@ -969,7 +1116,7 @@ let
     rm -f "$semaphore_fifo"
 
     token_count=0
-    while [ "$token_count" -lt "$max_parallel" ]; do
+    while [ "$token_count" -lt "$effective_max_parallel" ]; do
       printf 'token\n' >&9
       token_count=$((token_count + 1))
     done
@@ -1006,12 +1153,16 @@ let
 
         cell_name="slot-''${slot_value}__env-''${env_value}"
         cell_dir="$logs_root/$cell_name"
+        registry_dir="$cell_dir/registry"
         artifacts_dir="$cell_dir/artifacts"
         validate_log="$cell_dir/validate.log"
         run_log="$cell_dir/run.log"
+        validate_run_id_file="$cell_dir/validate.run-id"
+        run_id_file="$cell_dir/run.run-id"
+        summary_file="$cell_dir/summary.json"
         status_file="$statuses_dir/$cell_name.rc"
 
-        mkdir -p "$cell_dir" "$artifacts_dir"
+        mkdir -p "$cell_dir" "$registry_dir" "$artifacts_dir"
         echo "INFO: isolation cell start slot=$slot_value env=$env_value"
         status_files+=("$status_file")
 
@@ -1019,9 +1170,33 @@ let
         (
           set +e
           rc=1
+          runtime_root="$cell_dir/runtime"
+          services_root="$cell_dir/services"
+          mkdir -p \
+            "$runtime_root/home" \
+            "$runtime_root/tmp" \
+            "$runtime_root/xdg/data" \
+            "$runtime_root/xdg/state" \
+            "$runtime_root/xdg/cache" \
+            "$services_root"
           export "$slot_var=$slot_value"
           export "$env_var=$env_value"
+          export HOME="$runtime_root/home"
+          export TMPDIR="$runtime_root/tmp"
+          export XDG_DATA_HOME="$runtime_root/xdg/data"
+          export XDG_STATE_HOME="$runtime_root/xdg/state"
+          export XDG_CACHE_HOME="$runtime_root/xdg/cache"
+          export REGISTRY_ROOT="$registry_dir"
           export CI_ARTIFACTS_DIR="$artifacts_dir"
+          export NIXFIED_SERVICE_ROOT="$services_root"
+          export NIXFIED_RUNTIME_HOME="$HOME"
+          export NIXFIED_RUNTIME_TMPDIR="$TMPDIR"
+          export NIXFIED_RUNTIME_XDG_DATA_HOME="$XDG_DATA_HOME"
+          export NIXFIED_RUNTIME_XDG_STATE_HOME="$XDG_STATE_HOME"
+          export NIXFIED_RUNTIME_XDG_CACHE_HOME="$XDG_CACHE_HOME"
+          export NIXFIED_RUNTIME_REGISTRY_ROOT="$registry_dir"
+          export NIXFIED_RUNTIME_ARTIFACTS_DIR="$artifacts_dir"
+          export NIXFIED_RUNTIME_SERVICE_ROOT="$services_root"
 
           for run_env_entry in "''${run_env_entries[@]}"; do
             run_env_key="''${run_env_entry%%$'\t'*}"
@@ -1029,10 +1204,10 @@ let
             export "$run_env_key=$run_env_value"
           done
 
-          nix run "path:$project_root"#"$validate_app" > "$validate_log" 2>&1
+          NIXFIED_CALLER_PWD="$PWD" "$executor_bin" run-task "$validate_task_id" --run-id-file "$validate_run_id_file" > "$validate_log" 2>&1
           rc="$?"
           if [ "$rc" -eq 0 ]; then
-            nix run "path:$project_root"#"$run_app" -- "''${run_args[@]}" > "$run_log" 2>&1
+            NIXFIED_CALLER_PWD="$PWD" "$executor_bin" run-task "$run_task_id" "''${run_args[@]}" --run-id-file "$run_id_file" --summary-file "$summary_file" > "$run_log" 2>&1
             rc="$?"
           fi
 
@@ -1090,6 +1265,8 @@ let
 
     if [ "$keep_logs_success" -eq 1 ]; then
       echo "INFO: isolation logs preserved at $logs_root"
+    else
+      rm -rf "$logs_root"
     fi
     echo "OK: test-isolation completed total=$total"
   '';
@@ -1141,6 +1318,11 @@ in
       default = 4;
     };
 
+    testIsolation.runTaskId = lib.mkOption {
+      type = lib.types.str;
+      default = "task.ci";
+    };
+
     testIsolation.runApp = lib.mkOption {
       type = lib.types.str;
       default = "ci";
@@ -1154,6 +1336,11 @@ in
     testIsolation.validateApp = lib.mkOption {
       type = lib.types.str;
       default = "validate-env";
+    };
+
+    testIsolation.validateTaskId = lib.mkOption {
+      type = lib.types.str;
+      default = "task.ops.validate-env";
     };
 
     testIsolation.runEnv = lib.mkOption {
@@ -1206,10 +1393,10 @@ in
         summary = "Run isolation checks";
         description = "Runs deterministic isolation smoke checks from model metadata.";
         command = isolationScript;
+        contractArgs = testIsolationContractArgs;
         runtimeInputs = [
           pkgs.coreutils
           pkgs.jq
-          pkgs.nix
         ];
       };
     })

@@ -185,8 +185,12 @@ pkgs.runCommand "workflow-lifecycle-smoke" { } ''
     set -euo pipefail
 
     EXECUTOR="${executor}/bin/nixfied-executor"
+    runtime_scope="$TMPDIR/runtime-scope"
+    runtime_registry="$runtime_scope/registry"
     export REGISTRY_ROOT="$TMPDIR/registry"
+    export NIXFIED_RUNTIME_DIR_SCOPE_OVERRIDE="$runtime_scope"
     mkdir -p "$REGISTRY_ROOT"
+    mkdir -p "$runtime_scope"
 
     set +e
     "$EXECUTOR" run-workflow workflow.test.lifecycle.always > "$TMPDIR/always.out" 2>&1
@@ -203,7 +207,7 @@ pkgs.runCommand "workflow-lifecycle-smoke" { } ''
   main
   post
   EOF_ALWAYS
-    if ! ${pkgs.diffutils}/bin/diff -u "$TMPDIR/always.expected" "$REGISTRY_ROOT/lifecycle-always.log"; then
+    if ! ${pkgs.diffutils}/bin/diff -u "$TMPDIR/always.expected" "$runtime_registry/lifecycle-always.log"; then
       echo "unexpected lifecycle order for alwaysRun=true"
       cat "$TMPDIR/always.out"
       exit 1
@@ -223,7 +227,7 @@ pkgs.runCommand "workflow-lifecycle-smoke" { } ''
   pre
   main
   EOF_SKIP
-    if ! ${pkgs.diffutils}/bin/diff -u "$TMPDIR/skip.expected" "$REGISTRY_ROOT/lifecycle-skip.log"; then
+    if ! ${pkgs.diffutils}/bin/diff -u "$TMPDIR/skip.expected" "$runtime_registry/lifecycle-skip.log"; then
       echo "unexpected lifecycle order for alwaysRun=false"
       cat "$TMPDIR/skip.out"
       exit 1

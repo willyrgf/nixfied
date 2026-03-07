@@ -21,8 +21,8 @@ pkgs.runCommand "logging-injection-smoke" { } ''
   export REGISTRY_ROOT="$TMPDIR/registry"
   mkdir -p "$REGISTRY_ROOT"
 
-  "$ORCH" run-workflow workflow.ci.basic --summary --log-level info --output-mode stdout > "$TMPDIR/workflow-logging.out" 2>&1
-  require_contains "$TMPDIR/workflow-logging.out" "INFO: runId="
+  "$ORCH" run-workflow workflow.ci.basic --run-id-file "$TMPDIR/workflow-logging.run-id" --summary --log-level info --output-mode stdout > "$TMPDIR/workflow-logging.out" 2>&1
+  require_non_empty "$(read_trimmed_file "$TMPDIR/workflow-logging.run-id")" "workflow logging run id"
 
   set +e
   LOG_LEVEL=info NIXFIED_LOG_LEVEL=debug "$ORCH" run-task task.ci --mode basic --summary > "$TMPDIR/log-level-conflict.out" 2>&1

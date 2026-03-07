@@ -19,13 +19,16 @@ pkgs.runCommand "parallel-runner-smoke" { } ''
   EXECUTOR="${executor}/bin/nixfied-executor"
   EVENTS_FILE="$TMPDIR/registry/events.ndjson"
   export REGISTRY_ROOT="$TMPDIR/registry"
+  export NIXFIED_RUNTIME_DIR_SCOPE_OVERRIDE="$TMPDIR/runtime-scope"
   mkdir -p "$REGISTRY_ROOT"
+  mkdir -p "$NIXFIED_RUNTIME_DIR_SCOPE_OVERRIDE"
 
   export NIXFIED_WORKFLOW_PARALLEL=1
   export NIXFIED_PARALLEL_SMOKE=1
 
-  "$EXECUTOR" run-workflow workflow.test.parallel.smoke --summary > "$TMPDIR/smoke.out" 2>&1
-  smoke_run_id="$(${pkgs.gnused}/bin/sed -n 's/^INFO: runId=\([^ ]*\).*/\1/p' "$TMPDIR/smoke.out" | ${pkgs.coreutils}/bin/tail -n 1)"
+  smoke_run_id_file="$TMPDIR/smoke.run-id"
+  "$EXECUTOR" run-workflow workflow.test.parallel.smoke --run-id-file "$smoke_run_id_file" --summary > "$TMPDIR/smoke.out" 2>&1
+  smoke_run_id="$(${pkgs.coreutils}/bin/tr -d '\n' < "$smoke_run_id_file")"
   if [ -z "$smoke_run_id" ]; then
     echo "missing smoke run id"
     cat "$TMPDIR/smoke.out"
@@ -107,7 +110,8 @@ pkgs.runCommand "parallel-runner-smoke" { } ''
   fi
 
   set +e
-  "$EXECUTOR" run-workflow workflow.test.parallel.failfast --summary > "$TMPDIR/failfast.out" 2>&1
+  failfast_run_id_file="$TMPDIR/failfast.run-id"
+  "$EXECUTOR" run-workflow workflow.test.parallel.failfast --run-id-file "$failfast_run_id_file" --summary > "$TMPDIR/failfast.out" 2>&1
   failfast_rc="$?"
   set -e
   if [ "$failfast_rc" -eq 0 ]; then
@@ -116,7 +120,7 @@ pkgs.runCommand "parallel-runner-smoke" { } ''
     exit 1
   fi
 
-  failfast_run_id="$(${pkgs.gnused}/bin/sed -n 's/^INFO: runId=\([^ ]*\).*/\1/p' "$TMPDIR/failfast.out" | ${pkgs.coreutils}/bin/tail -n 1)"
+  failfast_run_id="$(${pkgs.coreutils}/bin/tr -d '\n' < "$failfast_run_id_file")"
   if [ -z "$failfast_run_id" ]; then
     echo "missing failfast run id"
     cat "$TMPDIR/failfast.out"

@@ -60,25 +60,15 @@ pkgs.runCommand "ci-mode-matrix-smoke" { } ''
     shift 2
 
     local log_file="$TMPDIR/$label.out"
-    local artifacts_dir="$TMPDIR/artifacts-$label"
-    mkdir -p "$artifacts_dir"
+    local run_id_file="$TMPDIR/$label.run-id"
+    local summary_file="$TMPDIR/$label.summary.json"
 
-    CI_ARTIFACTS_DIR="$artifacts_dir" "$ORCH" run-task task.ci "$@" --summary > "$log_file" 2>&1
+    "$ORCH" run-task task.ci "$@" --run-id-file "$run_id_file" --summary-file "$summary_file" --summary > "$log_file" 2>&1
 
     local run_id
-    local summary_file
-    run_id="$(extract_run_id "$log_file")"
+    run_id="$(read_trimmed_file "$run_id_file")"
     require_non_empty "$run_id" "run id for $label"
-    summary_file="$(${pkgs.gnused}/bin/sed -n 's/^INFO: summary_json=//p' "$log_file" | ${pkgs.coreutils}/bin/tail -n 1)"
-    require_non_empty "$summary_file" "summary file for $label"
-
     require_file "$summary_file"
-    case "$summary_file" in
-      "$artifacts_dir/$run_id/summary.json") ;;
-      *)
-        fail "expected run-scoped summary path for $label: $summary_file"
-        ;;
-    esac
 
     ${pkgs.jq}/bin/jq -e --arg workflow "$expected_workflow" '
       .workflow_id == $workflow

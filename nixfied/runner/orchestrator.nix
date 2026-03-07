@@ -63,9 +63,13 @@ let
 in
 pkgs.writeShellScriptBin "nixfied-orchestrator" ''
   set -euo pipefail
+  export NIXFIED_ORCHESTRATOR_BIN="$0"
+  export NIXFIED_ORCHESTRATOR_SELF="$0"
 
   MODEL_FILE=${lib.escapeShellArg (builtins.toString modelFile)}
+  export NIXFIED_MODEL_FILE="$MODEL_FILE"
   EXECUTOR_PROGRAM=${lib.escapeShellArg "${executor}/bin/nixfied-executor"}
+  export NIXFIED_EXECUTOR_BIN="$EXECUTOR_PROGRAM"
   EPHEMERAL_EXECUTOR_WRAPPER=${lib.escapeShellArg (builtins.toString ephemeralExecutorWrapper)}
   PROJECT_ROOT=${lib.escapeShellArg (builtins.toString projectRoot)}
   REGISTRY_ROOT_DEFAULT=${lib.escapeShellArg model.state.registry.root}
@@ -203,6 +207,9 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
   split_process_mode() {
     PROCESS_MODE="fg"
     FORWARD_ARGS=()
+    MACHINE_JSON="''${NIXFIED_JSON_OUTPUT_OVERRIDE:-0}"
+    MACHINE_RUN_ID_FILE="''${NIXFIED_RUN_ID_FILE_OVERRIDE:-}"
+    MACHINE_SUMMARY_FILE="''${NIXFIED_SUMMARY_FILE_OVERRIDE:-}"
 
     local parse_opts=1
     local arg
@@ -221,6 +228,36 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
             PROCESS_MODE="fg"
             continue
             ;;
+          --json)
+            MACHINE_JSON=1
+            continue
+            ;;
+          --run-id-file)
+            if [ "$#" -lt 1 ]; then
+              echo "ERROR: --run-id-file requires a value"
+              return 2
+            fi
+            MACHINE_RUN_ID_FILE="$1"
+            shift
+            continue
+            ;;
+          --run-id-file=*)
+            MACHINE_RUN_ID_FILE="''${arg#--run-id-file=}"
+            continue
+            ;;
+          --summary-file)
+            if [ "$#" -lt 1 ]; then
+              echo "ERROR: --summary-file requires a value"
+              return 2
+            fi
+            MACHINE_SUMMARY_FILE="$1"
+            shift
+            continue
+            ;;
+          --summary-file=*)
+            MACHINE_SUMMARY_FILE="''${arg#--summary-file=}"
+            continue
+            ;;
           --)
             parse_opts=0
             FORWARD_ARGS+=("--")
@@ -231,6 +268,41 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
 
       FORWARD_ARGS+=("$arg")
     done
+
+    if [ "$MACHINE_JSON" = "1" ]; then
+      export NIXFIED_JSON_OUTPUT_OVERRIDE=1
+    else
+      unset NIXFIED_JSON_OUTPUT_OVERRIDE || true
+    fi
+
+    if [ -n "$MACHINE_RUN_ID_FILE" ]; then
+      export NIXFIED_RUN_ID_FILE_OVERRIDE="$MACHINE_RUN_ID_FILE"
+    else
+      unset NIXFIED_RUN_ID_FILE_OVERRIDE || true
+    fi
+
+    if [ -n "$MACHINE_SUMMARY_FILE" ]; then
+      export NIXFIED_SUMMARY_FILE_OVERRIDE="$MACHINE_SUMMARY_FILE"
+    else
+      unset NIXFIED_SUMMARY_FILE_OVERRIDE || true
+    fi
+  }
+
+  write_text_file_atomic() {
+    local target="$1"
+    local value="$2"
+    local parent_dir
+    local tmp
+
+    if [ -z "$target" ]; then
+      return 0
+    fi
+
+    parent_dir="$(dirname "$target")"
+    mkdir -p "$parent_dir"
+    tmp="$(mktemp "$target.tmp.XXXXXX")"
+    printf '%s\n' "$value" > "$tmp"
+    mv "$tmp" "$target"
   }
 
   validate_workflow_args() {
@@ -268,6 +340,26 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
           workflow_resolve_mode_id "$workflow_id" "$mode_value" >/dev/null || return $?
           ;;
         --summary)
+          ;;
+        --json)
+          ;;
+        --run-id-file)
+          if [ "$#" -lt 1 ]; then
+            echo "ERROR: --run-id-file requires a value"
+            return 2
+          fi
+          shift
+          ;;
+        --run-id-file=*)
+          ;;
+        --summary-file)
+          if [ "$#" -lt 1 ]; then
+            echo "ERROR: --summary-file requires a value"
+            return 2
+          fi
+          shift
+          ;;
+        --summary-file=*)
           ;;
         --log-level)
           if [ "$#" -lt 1 ]; then
@@ -362,6 +454,9 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
       case "$arg" in
         --*=*)
           key="''${arg%%=*}"
+          if [ "$key" = "--run-id-file" ] || [ "$key" = "--summary-file" ]; then
+            continue
+          fi
           if contains_item "$key" "''${option_longs[@]}"; then
             continue
           fi
@@ -372,6 +467,14 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
           return 2
           ;;
         --*)
+          if [ "$arg" = "--run-id-file" ] || [ "$arg" = "--summary-file" ]; then
+            if [ "$#" -lt 1 ]; then
+              echo "ERROR: option '$arg' requires a value"
+              return 2
+            fi
+            shift
+            continue
+          fi
           if contains_item "$arg" "''${flag_longs[@]}"; then
             continue
           fi
@@ -567,11 +670,13 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
     local workflow_id="$3"
 
     local artifacts_dir
+    local runtime_scope_dir
     local caller_root="''${CI_ARTIFACTS_ROOT:-}"
     local caller_dir="''${CI_ARTIFACTS_DIR:-}"
 
     if [ "$ephemeral_enabled" = "1" ]; then
       export NIXFIED_EXECUTION_EPHEMERAL=1
+      unset NIXFIED_RUNTIME_DIR_SCOPE_OVERRIDE || true
 
       if [ -n "$caller_root" ] || [ -n "$caller_dir" ]; then
         artifacts_dir="$(resolve_run_artifacts_dir "$run_id" "$workflow_id")" || return $?
@@ -591,10 +696,18 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
     export NIXFIED_EXECUTION_EPHEMERAL=0
     artifacts_dir="$(resolve_run_artifacts_dir "$run_id" "$workflow_id")" || return $?
     export CI_ARTIFACTS_DIR="$artifacts_dir"
+    runtime_scope_dir="$artifacts_dir/.runtime"
+    export NIXFIED_RUNTIME_DIR_SCOPE_OVERRIDE="$runtime_scope_dir"
 
     if [ -n "$CI_ARTIFACTS_DIR" ]; then
       if ! mkdir -p "$CI_ARTIFACTS_DIR"; then
         echo "ERROR: failed to prepare CI_ARTIFACTS_DIR '$CI_ARTIFACTS_DIR'"
+        return 3
+      fi
+    fi
+    if [ -n "$NIXFIED_RUNTIME_DIR_SCOPE_OVERRIDE" ]; then
+      if ! mkdir -p "$NIXFIED_RUNTIME_DIR_SCOPE_OVERRIDE"; then
+        echo "ERROR: failed to prepare NIXFIED_RUNTIME_DIR_SCOPE_OVERRIDE '$NIXFIED_RUNTIME_DIR_SCOPE_OVERRIDE'"
         return 3
       fi
     fi
@@ -1038,6 +1151,9 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
     fi
 
     run_id="$(next_run_id)"
+    if [ -n "$MACHINE_RUN_ID_FILE" ]; then
+      write_text_file_atomic "$MACHINE_RUN_ID_FILE" "$run_id"
+    fi
     args_json="$(${pkgs.jq}/bin/jq -cn '$ARGS.positional' --args -- "''${FORWARD_ARGS[@]}")"
     create_run_record "$run_id" "run-task" "$workflow_ref" "$task_id" "$execution_mode" "$PROCESS_MODE" "$ephemeral_enabled" "$args_json"
 
@@ -1091,6 +1207,9 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
 
     ephemeral_enabled="$(workflow_ephemeral_flag "$workflow_id")"
     run_id="$(next_run_id)"
+    if [ -n "$MACHINE_RUN_ID_FILE" ]; then
+      write_text_file_atomic "$MACHINE_RUN_ID_FILE" "$run_id"
+    fi
     args_json="$(${pkgs.jq}/bin/jq -cn '$ARGS.positional' --args -- "''${FORWARD_ARGS[@]}")"
     create_run_record "$run_id" "run-workflow" "$workflow_id" "" "$mode" "$PROCESS_MODE" "$ephemeral_enabled" "$args_json"
 

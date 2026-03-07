@@ -55,7 +55,68 @@ jobs:
           echo "$output"
           echo "$output" | grep -Fq "$expected_header"
 
-      - name: Run .#framework::test
+      - name: Run framework shard flake-check
         run: |
           set -euo pipefail
-          nix run -L -v --log-format bar-with-logs .#framework::test -- --summary --serial
+          nix run -L -v --log-format bar-with-logs .#framework::test -- --summary --serial --shard flake-check
+
+      - name: Run framework shard help
+        run: |
+          set -euo pipefail
+          nix run -L -v --log-format bar-with-logs .#framework::test -- --summary --serial --shard help
+
+      - name: Run framework shard workflow-test
+        run: |
+          set -euo pipefail
+          nix run -L -v --log-format bar-with-logs .#framework::test -- --summary --serial --shard workflow-test
+
+      - name: Run framework shard workflow-ci
+        run: |
+          set -euo pipefail
+          nix run -L -v --log-format bar-with-logs .#framework::test -- --summary --serial --shard workflow-ci
+
+      - name: Run framework shard self-host
+        run: |
+          set -euo pipefail
+          nix run -L -v --log-format bar-with-logs .#framework::test -- --summary --serial --shard self-host
+
+  isolation:
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        slot:
+          - 5
+          - 7
+          - 8
+          - 9
+        project_env:
+          - dev
+          - prod
+          - test
+
+    runs-on: ubuntu-24.04
+    env:
+      CI_ARTIFACTS_DIR: /tmp/nixfied-artifacts-${{ github.run_id }}-${{ github.run_attempt }}-ubuntu-24.04-slot${{ matrix.slot }}-${{ matrix.project_env }}
+      REGISTRY_ROOT: /tmp/nixfied-registry-${{ github.run_id }}-${{ github.run_attempt }}-ubuntu-24.04-slot${{ matrix.slot }}-${{ matrix.project_env }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prepare runtime directories
+        run: |
+          set -euo pipefail
+          rm -rf "$CI_ARTIFACTS_DIR" "$REGISTRY_ROOT"
+          mkdir -p "$CI_ARTIFACTS_DIR" "$REGISTRY_ROOT"
+          chmod 700 "$CI_ARTIFACTS_DIR" "$REGISTRY_ROOT"
+
+      - name: Run isolation cell
+        run: |
+          set -euo pipefail
+          nix run -L -v --log-format bar-with-logs .#test-isolation -- --slot ${{ matrix.slot }} --env ${{ matrix.project_env }} --max-parallel 1

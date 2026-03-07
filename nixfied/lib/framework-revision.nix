@@ -4,17 +4,9 @@
   self ? null,
 }:
 let
-  dirtyRev =
-    if self != null && self ? dirtyRev then
-      self.dirtyRev
-    else
-      null;
+  dirtyRev = if self != null && self ? dirtyRev then self.dirtyRev else null;
 
-  rev =
-    if self != null && self ? rev then
-      self.rev
-    else
-      null;
+  rev = if self != null && self ? rev then self.rev else null;
 
   lines =
     if metadataPath != null && builtins.pathExists metadataPath then
@@ -56,17 +48,16 @@ let
 
   persistedRevision = findPersistedRevision lines;
 
-  fallbackRevision =
-    builtins.substring 0 12 (
-      builtins.hashString "sha256" (
-        builtins.toString (
-          builtins.path {
-            path = sourcePath;
-            name = "nixfied-framework-source";
-          }
-        )
+  fallbackRevision = builtins.substring 0 12 (
+    builtins.hashString "sha256" (
+      builtins.toString (
+        builtins.path {
+          path = sourcePath;
+          name = "nixfied-framework-source";
+        }
       )
-    );
+    )
+  );
 in
 if dirtyRev != null then
   dirtyRev

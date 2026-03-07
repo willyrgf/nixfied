@@ -114,16 +114,17 @@ pkgs.runCommand "service-dir-isolation-smoke" { } ''
   EXECUTOR="${harness.executor}/bin/nixfied-executor"
   ORCH="${harness.orchestrator}/bin/nixfied-orchestrator"
 
-  non_ephemeral_base=${pkgs.lib.escapeShellArg probeModel.runtime.directories.base}
+  non_ephemeral_scope="$TMPDIR/non-ephemeral-runtime"
   PROJECT_ENV=test NIX_ENV=2 REGISTRY_ROOT="$TMPDIR/non-ephemeral-registry" CI_ARTIFACTS_DIR="$TMPDIR/non-ephemeral-artifacts" \
+    NIXFIED_RUNTIME_DIR_SCOPE_OVERRIDE="$non_ephemeral_scope" \
     "$EXECUTOR" run-task "${probeTaskId}" > "$TMPDIR/non-ephemeral.out" 2>&1
 
-  ${pkgs.gnugrep}/bin/grep -Fq "INFO: postgres_data=$non_ephemeral_base/test/slot-2/services/postgres/data" "$TMPDIR/non-ephemeral.out"
-  ${pkgs.gnugrep}/bin/grep -Fq "INFO: postgres_state=$non_ephemeral_base/test/slot-2/services/postgres/state" "$TMPDIR/non-ephemeral.out"
-  ${pkgs.gnugrep}/bin/grep -Fq "INFO: postgres_log=$non_ephemeral_base/test/slot-2/services/postgres/log" "$TMPDIR/non-ephemeral.out"
-  ${pkgs.gnugrep}/bin/grep -Fq "INFO: nginx_data=$non_ephemeral_base/test/slot-2/services/nginx/data" "$TMPDIR/non-ephemeral.out"
-  ${pkgs.gnugrep}/bin/grep -Fq "INFO: nginx_state=$non_ephemeral_base/test/slot-2/services/nginx/state" "$TMPDIR/non-ephemeral.out"
-  ${pkgs.gnugrep}/bin/grep -Fq "INFO: nginx_log=$non_ephemeral_base/test/slot-2/services/nginx/log" "$TMPDIR/non-ephemeral.out"
+  ${pkgs.gnugrep}/bin/grep -Fq "INFO: postgres_data=$non_ephemeral_scope/services/postgres/data" "$TMPDIR/non-ephemeral.out"
+  ${pkgs.gnugrep}/bin/grep -Fq "INFO: postgres_state=$non_ephemeral_scope/services/postgres/state" "$TMPDIR/non-ephemeral.out"
+  ${pkgs.gnugrep}/bin/grep -Fq "INFO: postgres_log=$non_ephemeral_scope/services/postgres/log" "$TMPDIR/non-ephemeral.out"
+  ${pkgs.gnugrep}/bin/grep -Fq "INFO: nginx_data=$non_ephemeral_scope/services/nginx/data" "$TMPDIR/non-ephemeral.out"
+  ${pkgs.gnugrep}/bin/grep -Fq "INFO: nginx_state=$non_ephemeral_scope/services/nginx/state" "$TMPDIR/non-ephemeral.out"
+  ${pkgs.gnugrep}/bin/grep -Fq "INFO: nginx_log=$non_ephemeral_scope/services/nginx/log" "$TMPDIR/non-ephemeral.out"
 
   REGISTRY_ROOT="$TMPDIR/host-registry" "$ORCH" run-workflow "${probeWorkflowId}" --summary > "$TMPDIR/ephemeral.out" 2>&1
   eph_root="$(${pkgs.gnused}/bin/sed -n 's/^INFO: Root: //p' "$TMPDIR/ephemeral.out" | ${pkgs.coreutils}/bin/tail -n 1)"

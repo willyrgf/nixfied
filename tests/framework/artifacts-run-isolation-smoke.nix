@@ -43,9 +43,9 @@ pkgs.runCommand "artifacts-run-isolation-smoke" { } ''
   unset CI_ARTIFACTS_DIR || true
 
   set +e
-  "$ORCH" run-workflow ${workflowId} --summary > "$TMPDIR/run-1.out" 2>&1 &
+  "$ORCH" run-workflow ${workflowId} --run-id-file "$TMPDIR/run-1.run-id" --summary > "$TMPDIR/run-1.out" 2>&1 &
   pid_one="$!"
-  "$ORCH" run-workflow ${workflowId} --summary > "$TMPDIR/run-2.out" 2>&1 &
+  "$ORCH" run-workflow ${workflowId} --run-id-file "$TMPDIR/run-2.run-id" --summary > "$TMPDIR/run-2.out" 2>&1 &
   pid_two="$!"
   wait "$pid_one"
   rc_one="$?"
@@ -57,10 +57,10 @@ pkgs.runCommand "artifacts-run-isolation-smoke" { } ''
     fail "expected concurrent workflow runs to pass"
   fi
 
-  run_1="$(extract_run_id "$TMPDIR/run-1.out")"
-  run_2="$(extract_run_id "$TMPDIR/run-2.out")"
-  summary_1="$(${pkgs.gnused}/bin/sed -n 's/^INFO: summary_json=//p' "$TMPDIR/run-1.out" | ${pkgs.coreutils}/bin/tail -n 1)"
-  summary_2="$(${pkgs.gnused}/bin/sed -n 's/^INFO: summary_json=//p' "$TMPDIR/run-2.out" | ${pkgs.coreutils}/bin/tail -n 1)"
+  run_1="$(read_trimmed_file "$TMPDIR/run-1.run-id")"
+  run_2="$(read_trimmed_file "$TMPDIR/run-2.run-id")"
+  summary_1="artifacts-root/$run_1/summary.json"
+  summary_2="artifacts-root/$run_2/summary.json"
   require_non_empty "$run_1" "run_1"
   require_non_empty "$run_2" "run_2"
   require_non_empty "$summary_1" "summary_1"

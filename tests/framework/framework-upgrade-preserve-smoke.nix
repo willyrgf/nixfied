@@ -27,7 +27,9 @@ pkgs.runCommand "framework-upgrade-preserve-smoke" { } ''
 
   EXECUTOR="${executor}/bin/nixfied-executor"
   export REGISTRY_ROOT="$TMPDIR/registry"
+  export NIXFIED_RUNTIME_DIR_SCOPE_OVERRIDE="$TMPDIR/runtime-scope"
   mkdir -p "$REGISTRY_ROOT"
+  mkdir -p "$NIXFIED_RUNTIME_DIR_SCOPE_OVERRIDE"
 
   run_task_checked() {
     local out_file="$1"

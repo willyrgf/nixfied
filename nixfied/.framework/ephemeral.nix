@@ -503,6 +503,7 @@ let
       export XDG_STATE_HOME="${refEphRoot}/xdg/state"
       export XDG_CACHE_HOME="${refEphRoot}/xdg/cache"
       export REGISTRY_ROOT="${refEphRoot}/registry"
+      export NIXFIED_RUNTIME_DIR_SCOPE_OVERRIDE="${refEphRoot}"
       if [ -z "''${CI_ARTIFACTS_DIR:-}" ]; then
         export CI_ARTIFACTS_DIR="${refEphRoot}/artifacts"
       fi

@@ -192,8 +192,12 @@ pkgs.runCommand "task-hooks-smoke" { } ''
     set -euo pipefail
 
     EXECUTOR="${executor}/bin/nixfied-executor"
+    runtime_scope="$TMPDIR/runtime-scope"
+    runtime_registry="$runtime_scope/registry"
     export REGISTRY_ROOT="$TMPDIR/registry"
+    export NIXFIED_RUNTIME_DIR_SCOPE_OVERRIDE="$runtime_scope"
     mkdir -p "$REGISTRY_ROOT"
+    mkdir -p "$runtime_scope"
 
     set +e
     "$EXECUTOR" run-task task.test.hooks.order > "$TMPDIR/order.out" 2>&1
@@ -210,7 +214,7 @@ pkgs.runCommand "task-hooks-smoke" { } ''
   main
   post
   EOF
-    if ! ${pkgs.diffutils}/bin/diff -u "$TMPDIR/order.expected" "$REGISTRY_ROOT/order.log"; then
+    if ! ${pkgs.diffutils}/bin/diff -u "$TMPDIR/order.expected" "$runtime_registry/order.log"; then
       echo "unexpected hook execution order"
       cat "$TMPDIR/order.out"
       exit 1
@@ -229,7 +233,7 @@ pkgs.runCommand "task-hooks-smoke" { } ''
   main-fail
   post-after-main-fail
   EOF
-    if ! ${pkgs.diffutils}/bin/diff -u "$TMPDIR/main-fails.expected" "$REGISTRY_ROOT/main-fails.log"; then
+    if ! ${pkgs.diffutils}/bin/diff -u "$TMPDIR/main-fails.expected" "$runtime_registry/main-fails.log"; then
       echo "post hook did not run after main failure"
       cat "$TMPDIR/main-fails.out"
       exit 1
@@ -244,12 +248,12 @@ pkgs.runCommand "task-hooks-smoke" { } ''
       cat "$TMPDIR/post-fails.out"
       exit 1
     fi
-    if ! ${pkgs.gnugrep}/bin/grep -q "^main-ok$" "$REGISTRY_ROOT/post-fails.log"; then
+    if ! ${pkgs.gnugrep}/bin/grep -q "^main-ok$" "$runtime_registry/post-fails.log"; then
       echo "main command did not run for post-fails task"
       cat "$TMPDIR/post-fails.out"
       exit 1
     fi
-    if ! ${pkgs.gnugrep}/bin/grep -q "^post-fail$" "$REGISTRY_ROOT/post-fails.log"; then
+    if ! ${pkgs.gnugrep}/bin/grep -q "^post-fail$" "$runtime_registry/post-fails.log"; then
       echo "post command did not run for post-fails task"
       cat "$TMPDIR/post-fails.out"
       exit 1
@@ -267,7 +271,7 @@ pkgs.runCommand "task-hooks-smoke" { } ''
     cat > "$TMPDIR/pre-fails.expected" <<'EOF'
   pre-fail
   EOF
-    if ! ${pkgs.diffutils}/bin/diff -u "$TMPDIR/pre-fails.expected" "$REGISTRY_ROOT/pre-fails.log"; then
+    if ! ${pkgs.diffutils}/bin/diff -u "$TMPDIR/pre-fails.expected" "$runtime_registry/pre-fails.log"; then
       echo "main/post should not run after pre hook failure"
       cat "$TMPDIR/pre-fails.out"
       exit 1

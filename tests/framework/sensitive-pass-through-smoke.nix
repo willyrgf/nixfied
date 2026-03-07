@@ -47,6 +47,36 @@ let
             runtime.passThroughEnv = [ "API_KEY" ];
             runtime.allowSensitivePassThrough = true;
           };
+
+          nixfied.tasks.runtime-owned-pass-through-blocked = {
+            id = "task.test.runtime-owned.blocked";
+            kind = "internal";
+            summary = "Runtime-owned pass-through blocked task";
+            runner = {
+              type = "shell";
+              command = ''
+                set -euo pipefail
+                echo "OK: runtime-owned blocked task command should not execute"
+              '';
+            };
+            runtime.passThroughEnv = [ "HOME" ];
+          };
+
+          nixfied.tasks.runtime-owned-env-override-blocked = {
+            id = "task.test.runtime-owned.env-override";
+            kind = "internal";
+            summary = "Runtime-owned env override blocked task";
+            runner = {
+              type = "shell";
+              command = ''
+                set -euo pipefail
+                echo "OK: runtime-owned env override task command should not execute"
+              '';
+            };
+            runtime.env = {
+              XDG_CACHE_HOME = "/tmp/runtime-owned-override";
+            };
+          };
         }
       )
     ];
@@ -67,7 +97,9 @@ pkgs.runCommand "sensitive-pass-through-smoke" { } ''
 
   EXECUTOR="${executor}/bin/nixfied-executor"
   export REGISTRY_ROOT="$TMPDIR/registry"
+  export NIXFIED_RUNTIME_DIR_SCOPE_OVERRIDE="$TMPDIR/runtime-scope"
   mkdir -p "$REGISTRY_ROOT"
+  mkdir -p "$NIXFIED_RUNTIME_DIR_SCOPE_OVERRIDE"
 
   set +e
   API_KEY=top-secret "$EXECUTOR" run-task task.test.sensitive.blocked > "$TMPDIR/blocked.out" 2>&1
@@ -91,5 +123,35 @@ pkgs.runCommand "sensitive-pass-through-smoke" { } ''
     exit 1
   fi
 
-  echo "OK: sensitive pass-through enforcement validated" > "$out"
+  set +e
+  HOME="$TMPDIR/host-home" "$EXECUTOR" run-task task.test.runtime-owned.blocked > "$TMPDIR/runtime-owned-blocked.out" 2>&1
+  runtime_owned_rc="$?"
+  set -e
+  if [ "$runtime_owned_rc" -eq 0 ]; then
+    echo "expected runtime-owned pass-through to be blocked"
+    cat "$TMPDIR/runtime-owned-blocked.out"
+    exit 1
+  fi
+  if ! ${pkgs.gnugrep}/bin/grep -Fq "ERROR: runtime-owned passthrough env blocked name=HOME" "$TMPDIR/runtime-owned-blocked.out"; then
+    echo "missing runtime-owned passthrough marker"
+    cat "$TMPDIR/runtime-owned-blocked.out"
+    exit 1
+  fi
+
+  set +e
+  "$EXECUTOR" run-task task.test.runtime-owned.env-override > "$TMPDIR/runtime-owned-override.out" 2>&1
+  runtime_owned_override_rc="$?"
+  set -e
+  if [ "$runtime_owned_override_rc" -eq 0 ]; then
+    echo "expected runtime-owned env override to be blocked"
+    cat "$TMPDIR/runtime-owned-override.out"
+    exit 1
+  fi
+  if ! ${pkgs.gnugrep}/bin/grep -Fq "ERROR: runtime-owned env override blocked name=XDG_CACHE_HOME" "$TMPDIR/runtime-owned-override.out"; then
+    echo "missing runtime-owned env override marker"
+    cat "$TMPDIR/runtime-owned-override.out"
+    exit 1
+  fi
+
+  echo "OK: sensitive and runtime-owned pass-through enforcement validated" > "$out"
 ''
