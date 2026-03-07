@@ -1,4 +1,9 @@
-{ lib, pkgs, projectRoot, ... }:
+{
+  lib,
+  pkgs,
+  projectRoot,
+  ...
+}:
 let
   conf = import ./conf.nix { inherit pkgs; };
   project = conf.project;

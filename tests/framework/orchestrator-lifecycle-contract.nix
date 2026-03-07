@@ -15,13 +15,16 @@ assert pkgs.lib.hasInfix "validate_typed_task_args() {" orchestratorSource;
 assert pkgs.lib.hasInfix "run_workflow_phase_tasks() {" executorSource;
 assert pkgs.lib.hasInfix "write_workflow_summary_json() {" executorSource;
 assert pkgs.lib.hasInfix "NIXFIED_ORCHESTRATOR_RUN_ID" executorSource;
-assert pkgs.lib.hasInfix "frameworkEphemeral = import ../.framework/ephemeral.nix" orchestratorSource;
+assert pkgs.lib.hasInfix "frameworkEphemeral = import ../.framework/ephemeral.nix"
+  orchestratorSource;
 assert pkgs.lib.hasInfix "ephemeral = model.runtime.ephemeral or { };" orchestratorSource;
 assert pkgs.lib.hasInfix "EPHEMERAL_EXECUTOR_WRAPPER=" orchestratorSource;
 assert pkgs.lib.hasInfix "NIXFIED_WORKFLOW_SETUP_STARTED_AT" orchestratorSource;
 assert pkgs.lib.hasInfix "NIXFIED_WORKFLOW_SETUP_STARTED_EPOCH" orchestratorSource;
-assert pkgs.lib.hasInfix "\"$EPHEMERAL_EXECUTOR_WRAPPER\" \"$EXECUTOR_PROGRAM\" run-task" orchestratorSource;
-assert pkgs.lib.hasInfix "\"$EPHEMERAL_EXECUTOR_WRAPPER\" \"$EXECUTOR_PROGRAM\" run-workflow" orchestratorSource;
+assert pkgs.lib.hasInfix "\"$EPHEMERAL_EXECUTOR_WRAPPER\" \"$EXECUTOR_PROGRAM\" run-task"
+  orchestratorSource;
+assert pkgs.lib.hasInfix "\"$EPHEMERAL_EXECUTOR_WRAPPER\" \"$EXECUTOR_PROGRAM\" run-workflow"
+  orchestratorSource;
 assert pkgs.lib.hasInfix "orchestratorProgram =" dispatcherSource;
 assert pkgs.lib.hasInfix "exec \${orchestratorProgram} run-task" dispatcherSource;
 assert pkgs.lib.hasInfix "exec \${orchestratorProgram} run-workflow" dispatcherSource;

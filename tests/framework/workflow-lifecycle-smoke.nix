@@ -182,52 +182,52 @@ let
   };
 in
 pkgs.runCommand "workflow-lifecycle-smoke" { } ''
-  set -euo pipefail
+    set -euo pipefail
 
-  EXECUTOR="${executor}/bin/nixfied-executor"
-  export REGISTRY_ROOT="$TMPDIR/registry"
-  mkdir -p "$REGISTRY_ROOT"
+    EXECUTOR="${executor}/bin/nixfied-executor"
+    export REGISTRY_ROOT="$TMPDIR/registry"
+    mkdir -p "$REGISTRY_ROOT"
 
-  set +e
-  "$EXECUTOR" run-workflow workflow.test.lifecycle.always > "$TMPDIR/always.out" 2>&1
-  rc_always="$?"
-  set -e
-  if [ "$rc_always" -eq 0 ]; then
-    echo "expected workflow.test.lifecycle.always to fail"
-    cat "$TMPDIR/always.out"
-    exit 1
-  fi
+    set +e
+    "$EXECUTOR" run-workflow workflow.test.lifecycle.always > "$TMPDIR/always.out" 2>&1
+    rc_always="$?"
+    set -e
+    if [ "$rc_always" -eq 0 ]; then
+      echo "expected workflow.test.lifecycle.always to fail"
+      cat "$TMPDIR/always.out"
+      exit 1
+    fi
 
-  cat > "$TMPDIR/always.expected" <<'EOF_ALWAYS'
-pre
-main
-post
-EOF_ALWAYS
-  if ! ${pkgs.diffutils}/bin/diff -u "$TMPDIR/always.expected" "$REGISTRY_ROOT/lifecycle-always.log"; then
-    echo "unexpected lifecycle order for alwaysRun=true"
-    cat "$TMPDIR/always.out"
-    exit 1
-  fi
+    cat > "$TMPDIR/always.expected" <<'EOF_ALWAYS'
+  pre
+  main
+  post
+  EOF_ALWAYS
+    if ! ${pkgs.diffutils}/bin/diff -u "$TMPDIR/always.expected" "$REGISTRY_ROOT/lifecycle-always.log"; then
+      echo "unexpected lifecycle order for alwaysRun=true"
+      cat "$TMPDIR/always.out"
+      exit 1
+    fi
 
-  set +e
-  "$EXECUTOR" run-workflow workflow.test.lifecycle.skip > "$TMPDIR/skip.out" 2>&1
-  rc_skip="$?"
-  set -e
-  if [ "$rc_skip" -eq 0 ]; then
-    echo "expected workflow.test.lifecycle.skip to fail"
-    cat "$TMPDIR/skip.out"
-    exit 1
-  fi
+    set +e
+    "$EXECUTOR" run-workflow workflow.test.lifecycle.skip > "$TMPDIR/skip.out" 2>&1
+    rc_skip="$?"
+    set -e
+    if [ "$rc_skip" -eq 0 ]; then
+      echo "expected workflow.test.lifecycle.skip to fail"
+      cat "$TMPDIR/skip.out"
+      exit 1
+    fi
 
-  cat > "$TMPDIR/skip.expected" <<'EOF_SKIP'
-pre
-main
-EOF_SKIP
-  if ! ${pkgs.diffutils}/bin/diff -u "$TMPDIR/skip.expected" "$REGISTRY_ROOT/lifecycle-skip.log"; then
-    echo "unexpected lifecycle order for alwaysRun=false"
-    cat "$TMPDIR/skip.out"
-    exit 1
-  fi
+    cat > "$TMPDIR/skip.expected" <<'EOF_SKIP'
+  pre
+  main
+  EOF_SKIP
+    if ! ${pkgs.diffutils}/bin/diff -u "$TMPDIR/skip.expected" "$REGISTRY_ROOT/lifecycle-skip.log"; then
+      echo "unexpected lifecycle order for alwaysRun=false"
+      cat "$TMPDIR/skip.out"
+      exit 1
+    fi
 
-  echo "OK: workflow preRun/postRun lifecycle is validated" > "$out"
+    echo "OK: workflow preRun/postRun lifecycle is validated" > "$out"
 ''

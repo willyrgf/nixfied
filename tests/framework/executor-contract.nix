@@ -7,8 +7,11 @@ assert pkgs.lib.hasInfix "ERROR: usage: run-task <task-id> [-- ...]" source;
 assert pkgs.lib.hasInfix "ERROR: usage: run-workflow <workflow-id> [-- ...]" source;
 assert pkgs.lib.hasInfix "ERROR: unknown workflow '$workflow_id'" source;
 assert pkgs.lib.hasInfix "workflow_resolve_mode_id \"$workflow_id\" \"$mode_override\"" source;
-assert pkgs.lib.hasInfix "workflow_simple_shorthand_exists_for_family \"$workflow_id\" \"$shorthand_mode\"" source;
-assert pkgs.lib.hasInfix "ERROR: $override_name must be an integer >= 1 (got '$override_value')" source;
+assert pkgs.lib.hasInfix
+  "workflow_simple_shorthand_exists_for_family \"$workflow_id\" \"$shorthand_mode\""
+  source;
+assert pkgs.lib.hasInfix "ERROR: $override_name must be an integer >= 1 (got '$override_value')"
+  source;
 assert pkgs.lib.hasInfix "INFO: runId=$run_id passed=$passed failed=$failed canceled=$canceled"
   source;
 assert pkgs.lib.hasInfix "run_workflow_parallel_impl()" source;

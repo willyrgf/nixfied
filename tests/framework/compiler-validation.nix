@@ -27,9 +27,7 @@ let
     let
       workflow = model.workflows.${workflowId};
     in
-    workflow ? preRun
-    && workflow ? postRun
-    && workflow.postRun ? alwaysRun
+    workflow ? preRun && workflow ? postRun && workflow.postRun ? alwaysRun
   ) workflowIds;
 
   frameworkTask = model.tasks."task.framework.test" or null;
@@ -51,7 +49,9 @@ assert builtins.isInt model.runtime.ephemeral.maxFailedRootAgeHours;
 assert builtins.isInt model.runtime.ephemeral.maxCopyBytes;
 assert builtins.isInt model.runtime.ephemeral.minFreeBytesAfterCopy;
 assert model.runtime.runtimePackages != [ ];
-assert builtins.all (pkg: builtins.elem pkg formatTask.runtime.runtimeInputs) model.runtime.runtimePackages;
+assert builtins.all (
+  pkg: builtins.elem pkg formatTask.runtime.runtimeInputs
+) model.runtime.runtimePackages;
 assert formatTask.runtime ? preHooks;
 assert formatTask.runtime ? postHooks;
 assert formatTask.runtime.postHooks ? "framework.nixfmt";

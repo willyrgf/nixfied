@@ -19,25 +19,28 @@ let
       projectRoot = ../..;
       projectModules = [ ../../nixfied/project/module.nix ];
       extraModules = [
-        ({ lib, ... }: {
-          nixfied.services.postgres.enable = lib.mkForce false;
-          nixfied.services.nginx.enable = lib.mkForce enableNginx;
-          nixfied.services.minio.enable = lib.mkForce enableMinio;
-          nixfied.services.reth.enable = lib.mkForce false;
-          nixfied.services.helios.enable = lib.mkForce false;
+        (
+          { lib, ... }:
+          {
+            nixfied.services.postgres.enable = lib.mkForce false;
+            nixfied.services.nginx.enable = lib.mkForce enableNginx;
+            nixfied.services.minio.enable = lib.mkForce enableMinio;
+            nixfied.services.reth.enable = lib.mkForce false;
+            nixfied.services.helios.enable = lib.mkForce false;
 
-          nixfied.runtime.ports = lib.mkForce {
-            http = basePort + 0;
-            https = basePort + 1;
-            minioApi = basePort + 2;
-            minioConsole = basePort + 3;
-            postgres = basePort + 4;
-            rethHttp = basePort + 5;
-            rethWs = basePort + 6;
-            rethAuth = basePort + 7;
-            heliosRpc = basePort + 8;
-          };
-        })
+            nixfied.runtime.ports = lib.mkForce {
+              http = basePort + 0;
+              https = basePort + 1;
+              minioApi = basePort + 2;
+              minioConsole = basePort + 3;
+              postgres = basePort + 4;
+              rethHttp = basePort + 5;
+              rethWs = basePort + 6;
+              rethAuth = basePort + 7;
+              heliosRpc = basePort + 8;
+            };
+          }
+        )
       ];
       localOverrides = [ ];
     };

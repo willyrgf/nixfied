@@ -129,36 +129,34 @@ let
         };
       };
 
-      "task.test.hooks.unsupported-runner" =
-        baseTask
-        // {
-          id = "task.test.hooks.unsupported-runner";
-          summary = "hooks unsupported runner";
-          description = "hooks unsupported runner";
-          runner = {
-            type = "workflowRef";
-            command = "";
-            package = null;
-            workflowId = "workflow.ci.full";
-          };
-          runtime = baseTask.runtime // {
-            preHooks = {
-              "pre.hook" = {
-                command = ''
-                  set -euo pipefail
-                  echo "should-not-run"
-                '';
-              };
+      "task.test.hooks.unsupported-runner" = baseTask // {
+        id = "task.test.hooks.unsupported-runner";
+        summary = "hooks unsupported runner";
+        description = "hooks unsupported runner";
+        runner = {
+          type = "workflowRef";
+          command = "";
+          package = null;
+          workflowId = "workflow.ci.full";
+        };
+        runtime = baseTask.runtime // {
+          preHooks = {
+            "pre.hook" = {
+              command = ''
+                set -euo pipefail
+                echo "should-not-run"
+              '';
             };
-            postHooks = { };
           };
-          ui = baseTask.ui // {
-            app = baseTask.ui.app // {
-              expose = false;
-              name = "task-test-hooks-unsupported-runner";
-            };
+          postHooks = { };
+        };
+        ui = baseTask.ui // {
+          app = baseTask.ui.app // {
+            expose = false;
+            name = "task-test-hooks-unsupported-runner";
           };
         };
+      };
     };
   };
 
@@ -187,107 +185,108 @@ let
     localOverrides = [ ];
   };
 in
-assert overrideCompiled.model.tasks."task.format".runtime.postHooks."framework.nixfmt".command
+assert
+  overrideCompiled.model.tasks."task.format".runtime.postHooks."framework.nixfmt".command
   == "echo overridden-hook";
 pkgs.runCommand "task-hooks-smoke" { } ''
-  set -euo pipefail
+    set -euo pipefail
 
-  EXECUTOR="${executor}/bin/nixfied-executor"
-  export REGISTRY_ROOT="$TMPDIR/registry"
-  mkdir -p "$REGISTRY_ROOT"
+    EXECUTOR="${executor}/bin/nixfied-executor"
+    export REGISTRY_ROOT="$TMPDIR/registry"
+    mkdir -p "$REGISTRY_ROOT"
 
-  set +e
-  "$EXECUTOR" run-task task.test.hooks.order > "$TMPDIR/order.out" 2>&1
-  order_rc="$?"
-  set -e
-  if [ "$order_rc" -ne 0 ]; then
-    echo "expected hooks-order task to pass, got rc=$order_rc"
-    cat "$TMPDIR/order.out"
-    exit 1
-  fi
-  cat > "$TMPDIR/order.expected" <<'EOF'
-pre-1
-pre-2
-main
-post
-EOF
-  if ! ${pkgs.diffutils}/bin/diff -u "$TMPDIR/order.expected" "$REGISTRY_ROOT/order.log"; then
-    echo "unexpected hook execution order"
-    cat "$TMPDIR/order.out"
-    exit 1
-  fi
+    set +e
+    "$EXECUTOR" run-task task.test.hooks.order > "$TMPDIR/order.out" 2>&1
+    order_rc="$?"
+    set -e
+    if [ "$order_rc" -ne 0 ]; then
+      echo "expected hooks-order task to pass, got rc=$order_rc"
+      cat "$TMPDIR/order.out"
+      exit 1
+    fi
+    cat > "$TMPDIR/order.expected" <<'EOF'
+  pre-1
+  pre-2
+  main
+  post
+  EOF
+    if ! ${pkgs.diffutils}/bin/diff -u "$TMPDIR/order.expected" "$REGISTRY_ROOT/order.log"; then
+      echo "unexpected hook execution order"
+      cat "$TMPDIR/order.out"
+      exit 1
+    fi
 
-  set +e
-  "$EXECUTOR" run-task task.test.hooks.main-fails > "$TMPDIR/main-fails.out" 2>&1
-  main_fails_rc="$?"
-  set -e
-  if [ "$main_fails_rc" -eq 0 ]; then
-    echo "expected main-fails task to fail"
-    cat "$TMPDIR/main-fails.out"
-    exit 1
-  fi
-  cat > "$TMPDIR/main-fails.expected" <<'EOF'
-main-fail
-post-after-main-fail
-EOF
-  if ! ${pkgs.diffutils}/bin/diff -u "$TMPDIR/main-fails.expected" "$REGISTRY_ROOT/main-fails.log"; then
-    echo "post hook did not run after main failure"
-    cat "$TMPDIR/main-fails.out"
-    exit 1
-  fi
+    set +e
+    "$EXECUTOR" run-task task.test.hooks.main-fails > "$TMPDIR/main-fails.out" 2>&1
+    main_fails_rc="$?"
+    set -e
+    if [ "$main_fails_rc" -eq 0 ]; then
+      echo "expected main-fails task to fail"
+      cat "$TMPDIR/main-fails.out"
+      exit 1
+    fi
+    cat > "$TMPDIR/main-fails.expected" <<'EOF'
+  main-fail
+  post-after-main-fail
+  EOF
+    if ! ${pkgs.diffutils}/bin/diff -u "$TMPDIR/main-fails.expected" "$REGISTRY_ROOT/main-fails.log"; then
+      echo "post hook did not run after main failure"
+      cat "$TMPDIR/main-fails.out"
+      exit 1
+    fi
 
-  set +e
-  "$EXECUTOR" run-task task.test.hooks.post-fails > "$TMPDIR/post-fails.out" 2>&1
-  post_fails_rc="$?"
-  set -e
-  if [ "$post_fails_rc" -eq 0 ]; then
-    echo "expected post-fails task to fail"
-    cat "$TMPDIR/post-fails.out"
-    exit 1
-  fi
-  if ! ${pkgs.gnugrep}/bin/grep -q "^main-ok$" "$REGISTRY_ROOT/post-fails.log"; then
-    echo "main command did not run for post-fails task"
-    cat "$TMPDIR/post-fails.out"
-    exit 1
-  fi
-  if ! ${pkgs.gnugrep}/bin/grep -q "^post-fail$" "$REGISTRY_ROOT/post-fails.log"; then
-    echo "post command did not run for post-fails task"
-    cat "$TMPDIR/post-fails.out"
-    exit 1
-  fi
+    set +e
+    "$EXECUTOR" run-task task.test.hooks.post-fails > "$TMPDIR/post-fails.out" 2>&1
+    post_fails_rc="$?"
+    set -e
+    if [ "$post_fails_rc" -eq 0 ]; then
+      echo "expected post-fails task to fail"
+      cat "$TMPDIR/post-fails.out"
+      exit 1
+    fi
+    if ! ${pkgs.gnugrep}/bin/grep -q "^main-ok$" "$REGISTRY_ROOT/post-fails.log"; then
+      echo "main command did not run for post-fails task"
+      cat "$TMPDIR/post-fails.out"
+      exit 1
+    fi
+    if ! ${pkgs.gnugrep}/bin/grep -q "^post-fail$" "$REGISTRY_ROOT/post-fails.log"; then
+      echo "post command did not run for post-fails task"
+      cat "$TMPDIR/post-fails.out"
+      exit 1
+    fi
 
-  set +e
-  "$EXECUTOR" run-task task.test.hooks.pre-fails > "$TMPDIR/pre-fails.out" 2>&1
-  pre_fails_rc="$?"
-  set -e
-  if [ "$pre_fails_rc" -eq 0 ]; then
-    echo "expected pre-fails task to fail"
-    cat "$TMPDIR/pre-fails.out"
-    exit 1
-  fi
-  cat > "$TMPDIR/pre-fails.expected" <<'EOF'
-pre-fail
-EOF
-  if ! ${pkgs.diffutils}/bin/diff -u "$TMPDIR/pre-fails.expected" "$REGISTRY_ROOT/pre-fails.log"; then
-    echo "main/post should not run after pre hook failure"
-    cat "$TMPDIR/pre-fails.out"
-    exit 1
-  fi
+    set +e
+    "$EXECUTOR" run-task task.test.hooks.pre-fails > "$TMPDIR/pre-fails.out" 2>&1
+    pre_fails_rc="$?"
+    set -e
+    if [ "$pre_fails_rc" -eq 0 ]; then
+      echo "expected pre-fails task to fail"
+      cat "$TMPDIR/pre-fails.out"
+      exit 1
+    fi
+    cat > "$TMPDIR/pre-fails.expected" <<'EOF'
+  pre-fail
+  EOF
+    if ! ${pkgs.diffutils}/bin/diff -u "$TMPDIR/pre-fails.expected" "$REGISTRY_ROOT/pre-fails.log"; then
+      echo "main/post should not run after pre hook failure"
+      cat "$TMPDIR/pre-fails.out"
+      exit 1
+    fi
 
-  set +e
-  "$EXECUTOR" run-task task.test.hooks.unsupported-runner > "$TMPDIR/unsupported.out" 2>&1
-  unsupported_rc="$?"
-  set -e
-  if [ "$unsupported_rc" -eq 0 ]; then
-    echo "expected unsupported-runner task to fail"
-    cat "$TMPDIR/unsupported.out"
-    exit 1
-  fi
-  if ! ${pkgs.gnugrep}/bin/grep -Fq "defines runtime hooks but runner type 'workflowRef' is unsupported" "$TMPDIR/unsupported.out"; then
-    echo "missing unsupported runner error"
-    cat "$TMPDIR/unsupported.out"
-    exit 1
-  fi
+    set +e
+    "$EXECUTOR" run-task task.test.hooks.unsupported-runner > "$TMPDIR/unsupported.out" 2>&1
+    unsupported_rc="$?"
+    set -e
+    if [ "$unsupported_rc" -eq 0 ]; then
+      echo "expected unsupported-runner task to fail"
+      cat "$TMPDIR/unsupported.out"
+      exit 1
+    fi
+    if ! ${pkgs.gnugrep}/bin/grep -Fq "defines runtime hooks but runner type 'workflowRef' is unsupported" "$TMPDIR/unsupported.out"; then
+      echo "missing unsupported runner error"
+      cat "$TMPDIR/unsupported.out"
+      exit 1
+    fi
 
-  echo "OK: task hooks behavior is validated" > "$out"
+    echo "OK: task hooks behavior is validated" > "$out"
 ''
