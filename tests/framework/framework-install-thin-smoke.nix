@@ -26,7 +26,7 @@ pkgs.runCommand "framework-install-thin-smoke" { } ''
 
   require_file "$target/flake.nix"
   require_contains "$target/flake.nix" 'description = "Nixfied thin wrapper";'
-  require_contains "$target/flake.nix" 'nixfied.url = "github:willyrgf/nixfied";'
+  require_contains "$target/flake.nix" 'nixfied.url = "github:willyrgf/nixfied/dev";'
   require_contains "$target/flake.nix" 'projectModules = [ ./nixfied/project/module.nix ];'
 
   if [ -d "$target/nixfied" ]; then

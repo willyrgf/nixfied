@@ -42,7 +42,7 @@ let
   envOffsets = lib.mapAttrs (_: value: value.offset or 0) conf.envs;
 
   thinWrapperFlake = import ../install/wrapper-flake.nix {
-    frameworkInput = "github:willyrgf/nixfied";
+    frameworkInput = "github:willyrgf/nixfied/dev";
   };
 
   vendoredWrapperFlake = import ../install/wrapper-flake.nix {
