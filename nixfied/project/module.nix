@@ -40,6 +40,10 @@ let
 
   envNames = builtins.attrNames conf.envs;
   envOffsets = lib.mapAttrs (_: value: value.offset or 0) conf.envs;
+  normalizeSourceKeys = sources: builtins.sort builtins.lessThan (builtins.attrNames sources);
+  normalizePostgresEnvConfigs = lib.mapAttrs (_: envCfg: {
+    extraConfig = envCfg.extraConfig or "";
+  });
 
   thinWrapperFlake = import ../install/wrapper-flake.nix {
     frameworkInput = "github:willyrgf/nixfied/dev";
@@ -553,10 +557,19 @@ in
         postgres = {
           enable = conf.services.postgres.enable or false;
           database = conf.services.postgres.database or "app";
+          testDatabase = conf.services.postgres.testDatabase or "app_test";
           portKey = conf.services.postgres.ports.primary or "postgres";
-          sourceKeys = builtins.sort builtins.lessThan (
-            builtins.attrNames (conf.services.postgres.sources or { })
-          );
+          dataDirName = conf.services.postgres.dataDirName or "postgres";
+          extensions = conf.services.postgres.extensions or [ ];
+          extraConfig = conf.services.postgres.extraConfig or "";
+          envConfigs = normalizePostgresEnvConfigs (conf.services.postgres.envConfigs or { });
+          migrations = {
+            dir = conf.services.postgres.migrations.dir or "migrations";
+            command = conf.services.postgres.migrations.command or "";
+            sourceDatabase = conf.services.postgres.migrations.sourceDatabase or null;
+          };
+          sources = conf.services.postgres.sources or { };
+          sourceKeys = normalizeSourceKeys (conf.services.postgres.sources or { });
           defaultSource = conf.services.postgres.defaultSource or "";
         };
 
@@ -564,9 +577,9 @@ in
           enable = conf.services.nginx.enable or false;
           portKeyHttp = conf.services.nginx.ports.http or "http";
           portKeyHttps = conf.services.nginx.ports.https or "https";
-          sourceKeys = builtins.sort builtins.lessThan (
-            builtins.attrNames (conf.services.nginx.sources or { })
-          );
+          dataDirName = conf.services.nginx.dataDirName or "nginx";
+          sources = conf.services.nginx.sources or { };
+          sourceKeys = normalizeSourceKeys (conf.services.nginx.sources or { });
           defaultSource = conf.services.nginx.defaultSource or "";
         };
 
@@ -574,9 +587,12 @@ in
           enable = conf.services.minio.enable or false;
           portKeyApi = conf.services.minio.ports.api or "minioApi";
           portKeyConsole = conf.services.minio.ports.console or "minioConsole";
-          sourceKeys = builtins.sort builtins.lessThan (
-            builtins.attrNames (conf.services.minio.sources or { })
-          );
+          dataDirName = conf.services.minio.dataDirName or "minio";
+          rootUser = conf.services.minio.rootUser or "minioadmin";
+          rootPassword = conf.services.minio.rootPassword or "minioadmin";
+          browser = conf.services.minio.browser or true;
+          sources = conf.services.minio.sources or { };
+          sourceKeys = normalizeSourceKeys (conf.services.minio.sources or { });
           defaultSource = conf.services.minio.defaultSource or "";
         };
 
@@ -585,9 +601,12 @@ in
           portKeyHttp = conf.services.reth.ports.http or "rethHttp";
           portKeyWs = conf.services.reth.ports.ws or "rethWs";
           portKeyAuth = conf.services.reth.ports.auth or "rethAuth";
-          sourceKeys = builtins.sort builtins.lessThan (
-            builtins.attrNames (conf.services.reth.sources or { })
-          );
+          dataDirName = conf.services.reth.dataDirName or "reth";
+          network = conf.services.reth.network or "local";
+          devMode = conf.services.reth.devMode or false;
+          extraArgs = conf.services.reth.extraArgs or [ ];
+          sources = conf.services.reth.sources or { };
+          sourceKeys = normalizeSourceKeys (conf.services.reth.sources or { });
           defaultSource = conf.services.reth.defaultSource or "";
         };
 
@@ -595,9 +614,16 @@ in
           enable = conf.services.helios.enable or false;
           portKeyRpc = conf.services.helios.ports.rpc or "heliosRpc";
           executionRpcPortKey = conf.services.helios.ports.executionRpc or "rethHttp";
-          sourceKeys = builtins.sort builtins.lessThan (
-            builtins.attrNames (conf.services.helios.sources or { })
-          );
+          dataDirName = conf.services.helios.dataDirName or "helios";
+          network = conf.services.helios.network or "local";
+          executionRpcUrl = conf.services.helios.executionRpcUrl or "";
+          consensusRpcUrl = conf.services.helios.consensusRpcUrl or "";
+          defaultConsensusRpcUrl =
+            conf.services.helios.defaultConsensusRpcUrl or "https://www.lightclientdata.org";
+          checkpoint = conf.services.helios.checkpoint or "";
+          extraArgs = conf.services.helios.extraArgs or [ ];
+          sources = conf.services.helios.sources or { };
+          sourceKeys = normalizeSourceKeys (conf.services.helios.sources or { });
           defaultSource = conf.services.helios.defaultSource or "";
           sourceKinds = conf.services.helios.sourceKinds or { };
           readiness = {

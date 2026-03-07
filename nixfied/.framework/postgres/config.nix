@@ -5,7 +5,11 @@
 }:
 
 let
-  cfg = project.modules.postgres or { };
+  serviceConfig = import ../../lib/service-config.nix { lib = pkgs.lib; };
+  cfg = serviceConfig.getProjectServiceConfig {
+    inherit project;
+    name = "postgres";
+  };
   extensions = cfg.extensions or [ ];
   extraConfig = cfg.extraConfig or "";
   userEnvConfigs = cfg.envConfigs or { };

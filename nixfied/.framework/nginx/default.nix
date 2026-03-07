@@ -6,7 +6,6 @@
 }:
 
 let
-  cfg = project.modules.nginx or { };
   summary = import ../lib/summary.nix { inherit pkgs project; };
   helpers = import ../lib/helpers.nix {
     inherit pkgs project;
@@ -23,9 +22,10 @@ let
       processRegistry
       ;
   };
-  portVarHttp = slots.portVarName (cfg.portKeyHttp or "http");
-  portVarHttps = slots.portVarName (cfg.portKeyHttps or "https");
-  dataDirName = cfg.dataDirName or "nginx";
+  config = import ./config.nix { inherit pkgs project; };
+  portVarHttp = slots.portVarName (config.portKeyHttp or "http");
+  portVarHttps = slots.portVarName (config.portKeyHttps or "https");
+  dataDirName = config.dataDirName or "nginx";
   nginxDirExpr = slots.getServiceDir dataDirName;
   runtimePrimitives = serviceApi.mkRuntimePrimitivesV1 {
     logLevelDefault = toString ((project.logging or { }).level or "info");
@@ -65,6 +65,7 @@ let
       pkgs
       project
       slots
+      config
       templates
       loggingPrelude
       ;
@@ -74,6 +75,7 @@ let
       pkgs
       project
       slots
+      config
       templates
       lifecycle
       loggingPrelude
@@ -84,6 +86,7 @@ let
       pkgs
       project
       slots
+      config
       lifecycle
       loggingPrelude
       ;

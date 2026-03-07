@@ -8,7 +8,6 @@
 }:
 
 let
-  cfg = project.modules.postgres or { };
   slotEnvRuntime = import ../lib/slot-env-runtime.nix { inherit pkgs; };
   processRegistry = import ../lib/process-registry.nix { inherit pkgs project; };
   observability = import ../lib/service-observability.nix {
@@ -18,13 +17,13 @@ let
       processRegistry
       ;
   };
-  postgres = cfg.package or pkgs.postgresql_16;
-  portKey = cfg.portKey or "postgres";
+  postgres = config.package or pkgs.postgresql_16;
+  portKey = config.portKey or "postgres";
   portVar = slots.portVarName portKey;
-  dataDirName = cfg.dataDirName or "postgres";
+  dataDirName = config.dataDirName or "postgres";
   pgdataExpr = slots.getServiceDir dataDirName;
-  database = cfg.database or "app";
-  testDatabase = cfg.testDatabase or "${database}_test";
+  database = config.database or "app";
+  testDatabase = config.testDatabase or "${database}_test";
   extensions = config.extensions or [ ];
   pgRuntimePrelude = defaultDb: ''
     ${slotEnvRuntime.loadJsonFromCommand {

@@ -3,16 +3,16 @@
   pkgs,
   project,
   slots,
+  config,
   templates,
   lifecycle,
   loggingPrelude,
 }:
 
 let
-  cfg = project.modules.nginx or { };
-  portVarHttp = slots.portVarName (cfg.portKeyHttp or "http");
-  portVarHttps = slots.portVarName (cfg.portKeyHttps or "https");
-  dataDirName = cfg.dataDirName or "nginx";
+  portVarHttp = slots.portVarName (config.portKeyHttp or "http");
+  portVarHttps = slots.portVarName (config.portKeyHttps or "https");
+  dataDirName = config.dataDirName or "nginx";
   nginxDirExpr = slots.getServiceDir dataDirName;
   siteHelpers = ''
     validate_domain() {

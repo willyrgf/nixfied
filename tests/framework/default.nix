@@ -89,6 +89,10 @@
     inherit pkgs;
   };
 
+  "no-legacy-project-modules" = import ./no-legacy-project-modules.nix {
+    inherit pkgs;
+  };
+
   "helios-pinned-source-contract" = import ./helios-pinned-source-contract.nix {
     inherit pkgs;
   };

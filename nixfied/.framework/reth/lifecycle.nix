@@ -18,7 +18,7 @@ let
       processRegistry
       ;
   };
-  reth = config.package or (project.modules.reth.package or pkgs.reth);
+  reth = config.package or pkgs.reth;
   httpPortVar = slots.portVarName config.portKeyHttp;
   wsPortVar = slots.portVarName config.portKeyWs;
   authPortVar = slots.portVarName config.portKeyAuth;

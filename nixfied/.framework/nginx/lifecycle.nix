@@ -3,12 +3,12 @@
   pkgs,
   project,
   slots,
+  config,
   templates,
   loggingPrelude,
 }:
 
 let
-  cfg = project.modules.nginx or { };
   slotEnvRuntime = import ../lib/slot-env-runtime.nix { inherit pkgs; };
   processRegistry = import ../lib/process-registry.nix { inherit pkgs project; };
   observability = import ../lib/service-observability.nix {
@@ -19,9 +19,9 @@ let
       ;
   };
   nginx = templates.nginx;
-  portVarHttp = slots.portVarName (cfg.portKeyHttp or "http");
-  portVarHttps = slots.portVarName (cfg.portKeyHttps or "https");
-  dataDirName = cfg.dataDirName or "nginx";
+  portVarHttp = slots.portVarName (config.portKeyHttp or "http");
+  portVarHttps = slots.portVarName (config.portKeyHttps or "https");
+  dataDirName = config.dataDirName or "nginx";
   nginxDirExpr = slots.getServiceDir dataDirName;
   emitHelper = observability.mkEmitServiceEventFunction "nginx";
   runtimePrelude = ''

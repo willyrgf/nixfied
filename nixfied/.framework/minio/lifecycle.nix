@@ -8,7 +8,6 @@
 }:
 
 let
-  cfg = project.modules.minio or { };
   slotEnvRuntime = import ../lib/slot-env-runtime.nix { inherit pkgs; };
   processRegistry = import ../lib/process-registry.nix { inherit pkgs project; };
   observability = import ../lib/service-observability.nix {
@@ -18,7 +17,7 @@ let
       processRegistry
       ;
   };
-  minio = cfg.package or pkgs.minio;
+  minio = config.package or pkgs.minio;
   apiPortVar = slots.portVarName config.portKeyApi;
   consolePortVar = slots.portVarName config.portKeyConsole;
   minioDirExpr = slots.getServiceDir config.dataDirName;

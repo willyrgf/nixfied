@@ -6,7 +6,6 @@
 }:
 
 let
-  cfg = project.modules.postgres or { };
   summary = import ../lib/summary.nix { inherit pkgs project; };
   helpers = import ../lib/helpers.nix {
     inherit pkgs project;
@@ -22,19 +21,19 @@ let
       processRegistry
       ;
   };
-  pgPackage = cfg.package or pkgs.postgresql_16;
-  pgDatabase = cfg.database or "app";
-  testDatabase = cfg.testDatabase or "${pgDatabase}_test";
-  portKey = cfg.portKey or "postgres";
+  config = import ./config.nix { inherit pkgs project; };
+  pgPackage = config.package or pkgs.postgresql_16;
+  pgDatabase = config.database or "app";
+  testDatabase = config.testDatabase or "${pgDatabase}_test";
+  portKey = config.portKey or "postgres";
   portVar = slots.portVarName portKey;
-  dataDirName = cfg.dataDirName or "postgres";
+  dataDirName = config.dataDirName or "postgres";
   pgdataExpr = slots.getServiceDir dataDirName;
   runtimePrimitives = serviceApi.mkRuntimePrimitivesV1 {
     logLevelDefault = toString ((project.logging or { }).level or "info");
     outputModeDefault = toString ((project.logging or { }).output or "stdout");
   };
 
-  config = import ./config.nix { inherit pkgs project; };
   lifecycle = import ./lifecycle.nix {
     inherit
       pkgs
@@ -49,6 +48,7 @@ let
       pkgs
       project
       slots
+      config
       loggingPrelude
       ;
   };
@@ -57,6 +57,7 @@ let
       pkgs
       project
       slots
+      config
       loggingPrelude
       ;
   };
@@ -65,6 +66,7 @@ let
       pkgs
       project
       slots
+      config
       loggingPrelude
       ;
   };
@@ -73,6 +75,7 @@ let
       pkgs
       project
       slots
+      config
       loggingPrelude
       ;
   };

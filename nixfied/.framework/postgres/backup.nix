@@ -3,15 +3,15 @@
   pkgs,
   project,
   slots,
+  config,
   loggingPrelude,
 }:
 
 let
-  cfg = project.modules.postgres or { };
-  dataDirName = cfg.dataDirName or "postgres";
+  dataDirName = config.dataDirName or "postgres";
   pgdataExpr = slots.getServiceDir dataDirName;
-  postgres = cfg.package or pkgs.postgresql_16;
-  portKey = cfg.portKey or "postgres";
+  postgres = config.package or pkgs.postgresql_16;
+  portKey = config.portKey or "postgres";
   portVar = slots.portVarName portKey;
 
   archiveWal = pkgs.writeShellScript "postgres-archive-wal" ''
