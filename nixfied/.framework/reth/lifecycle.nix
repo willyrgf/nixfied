@@ -149,39 +149,15 @@ let
       emit_service_event service_ready ready --pid "$PID" --log-path "$LOG_FILE"
       log_ok "reth already running pid=$PID http_port=$RETH_HTTP_PORT"
     '';
-    startPostLaunchBody = ''
-      READY=0
-      for _ in $(seq 1 80); do
-        if ! kill -0 "$CHILD_PID" 2>/dev/null; then
-          break
-        fi
-        if ${healthCheck}
-        then
-          READY=1
-          break
-        fi
-        sleep 0.25
-      done
-
-      if [ "$READY" -ne 1 ]; then
-        emit_service_event service_degraded degraded \
-          --pid "$CHILD_PID" \
-          --log-path "$LOG_FILE" \
-          --wait-reason "failed_readiness" \
-          --last-error "reth failed health check during startup"
-        log_error "reth failed to become healthy. log=$LOG_FILE"
-        if [ -f "$LOG_FILE" ]; then
-          log_info "reth log tail path=$LOG_FILE lines=50"
-          tail -50 "$LOG_FILE" >&2 || true
-        else
-          log_warn "reth log file missing path=$LOG_FILE"
-        fi
-        exit 1
-      fi
-
-      emit_service_event service_ready ready --pid "$CHILD_PID" --log-path "$LOG_FILE"
-      log_info "reth started pid=$CHILD_PID http_port=$RETH_HTTP_PORT ws_port=$RETH_WS_PORT auth_port=$RETH_AUTH_PORT"
-    '';
+    startPostLaunchBody = managedServiceLifecycle.mkStartupReadinessBody {
+      probeCommand = healthCheck;
+      serviceLabel = "reth";
+      probeAttempts = 80;
+      degradedWaitReason = "failed_readiness";
+      degradedLastError = "reth failed health check during startup";
+      failureMessage = "reth failed to become healthy";
+      successMessage = "reth started pid=$CHILD_PID http_port=$RETH_HTTP_PORT ws_port=$RETH_WS_PORT auth_port=$RETH_AUTH_PORT";
+    };
     startExitFailureBody = ''
       emit_service_event service_degraded degraded \
         --pid "$CHILD_PID" \

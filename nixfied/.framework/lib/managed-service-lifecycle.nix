@@ -41,6 +41,54 @@ let
       exit 1
     '';
 
+  mkStartupReadinessBody =
+    {
+      probeCommand,
+      serviceLabel,
+      successMessage,
+      failureMessage,
+      degradedWaitReason,
+      degradedLastError,
+      probeAttempts ? 40,
+      probeInterval ? "0.25",
+      tailLines ? 50,
+      successBody ? "",
+    }:
+    ''
+      READY=0
+      for _ in $(seq 1 ${toString probeAttempts}); do
+        if ! kill -0 "$CHILD_PID" 2>/dev/null; then
+          break
+        fi
+        if ${probeCommand}
+        then
+          READY=1
+          break
+        fi
+        sleep ${probeInterval}
+      done
+
+      if [ "$READY" -ne 1 ]; then
+        emit_service_event service_degraded degraded \
+          --pid "$CHILD_PID" \
+          --log-path "$LOG_FILE" \
+          --wait-reason "${degradedWaitReason}" \
+          --last-error "${degradedLastError}"
+        log_error "${failureMessage}. log=$LOG_FILE"
+        if [ -f "$LOG_FILE" ]; then
+          log_info "${serviceLabel} log tail path=$LOG_FILE lines=${toString tailLines}"
+          tail -n ${toString tailLines} "$LOG_FILE" >&2 || true
+        else
+          log_warn "${serviceLabel} log file missing path=$LOG_FILE"
+        fi
+        exit 1
+      fi
+
+      emit_service_event service_ready ready --pid "$CHILD_PID" --log-path "$LOG_FILE"
+      ${successBody}
+      log_info "${successMessage}"
+    '';
+
   mkWrappedScript =
     {
       name,
@@ -357,6 +405,7 @@ in
 {
   inherit
     mkSimpleProbeBody
+    mkStartupReadinessBody
     mkWrappedScript
     mkObservedStatusScript
     mkPidFileManagedLifecycle

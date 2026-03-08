@@ -14,6 +14,7 @@ assert pkgs.lib.hasInfix "mkWrappedScript" helperSource;
 assert pkgs.lib.hasInfix "mkObservedStatusScript" helperSource;
 assert pkgs.lib.hasInfix "mkStopOutcomeBody" helperSource;
 assert pkgs.lib.hasInfix "mkSimpleProbeBody" helperSource;
+assert pkgs.lib.hasInfix "mkStartupReadinessBody" helperSource;
 assert pkgs.lib.hasInfix "SERVICE_PID_FILE" helperSource;
 assert pkgs.lib.hasInfix "SERVICE_LOG_FILE" helperSource;
 assert pkgs.lib.hasInfix "stopRequestBody" helperSource;
@@ -52,13 +53,19 @@ assert (!pkgs.lib.hasInfix "stopMissingBody =" nginxLifecycleSource);
 assert (!pkgs.lib.hasInfix "stopStaleBody =" nginxLifecycleSource);
 assert (!pkgs.lib.hasInfix "stopStoppedBody =" nginxLifecycleSource);
 assert (!pkgs.lib.hasInfix "stopForceKilledBody =" nginxLifecycleSource);
+assert pkgs.lib.hasInfix "startPostLaunchBody = serviceScripts.mkStartupReadinessBody {"
+  nginxLifecycleSource;
 assert pkgs.lib.hasInfix "healthBody = managedServiceLifecycle.mkSimpleProbeBody" minioSource;
 assert pkgs.lib.hasInfix "readyBody = managedServiceLifecycle.mkSimpleProbeBody" minioSource;
 assert pkgs.lib.hasInfix "healthBody = serviceScripts.mkSimpleProbeBody" nginxLifecycleSource;
 assert pkgs.lib.hasInfix "readyBody = serviceScripts.mkSimpleProbeBody" nginxLifecycleSource;
 assert pkgs.lib.hasInfix "healthBody = managedServiceLifecycle.mkSimpleProbeBody" rethSource;
 assert pkgs.lib.hasInfix "readyBody = managedServiceLifecycle.mkSimpleProbeBody" rethSource;
+assert pkgs.lib.hasInfix "startPostLaunchBody = managedServiceLifecycle.mkStartupReadinessBody {"
+  rethSource;
 assert pkgs.lib.hasInfix "healthBody = managedServiceLifecycle.mkSimpleProbeBody" heliosSource;
+assert pkgs.lib.hasInfix "startPostLaunchBody = managedServiceLifecycle.mkStartupReadinessBody {"
+  heliosSource;
 assert pkgs.lib.hasInfix "body = managedServiceLifecycle.mkSimpleProbeBody" postgresLifecycleSource;
 assert pkgs.lib.hasInfix "inherit (managedLifecycle)" minioSource;
 assert pkgs.lib.hasInfix "inherit (managedLifecycle)" rethSource;

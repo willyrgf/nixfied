@@ -260,40 +260,15 @@ let
       emit_service_event service_ready ready --pid "$PID" --log-path "$LOG_FILE"
       log_ok "helios already running pid=$PID rpc_port=$HELIOS_RPC_PORT"
     '';
-    startPostLaunchBody = ''
-      READY=0
-      for _ in $(seq 1 80); do
-        if ! kill -0 "$CHILD_PID" 2>/dev/null; then
-          break
-        fi
-        if ${healthCheck}
-        then
-          READY=1
-          break
-        fi
-        sleep 0.25
-      done
-
-      if [ "$READY" -ne 1 ]; then
-        emit_service_event service_degraded degraded \
-          --pid "$CHILD_PID" \
-          --log-path "$LOG_FILE" \
-          --wait-reason "failed_startup_health" \
-          --last-error "helios failed initial health checks"
-        log_error "helios failed to become healthy. log=$LOG_FILE"
-        if [ -f "$LOG_FILE" ]; then
-          log_info "helios log tail path=$LOG_FILE lines=50"
-          tail -50 "$LOG_FILE" >&2 || true
-        else
-          log_warn "helios log file missing path=$LOG_FILE"
-        fi
-        exit 1
-      fi
-
-      emit_service_event service_ready ready --pid "$CHILD_PID" --log-path "$LOG_FILE"
-
-      log_info "helios started pid=$CHILD_PID rpc_port=$HELIOS_RPC_PORT"
-    '';
+    startPostLaunchBody = managedServiceLifecycle.mkStartupReadinessBody {
+      probeCommand = healthCheck;
+      serviceLabel = "helios";
+      probeAttempts = 80;
+      degradedWaitReason = "failed_startup_health";
+      degradedLastError = "helios failed initial health checks";
+      failureMessage = "helios failed to become healthy";
+      successMessage = "helios started pid=$CHILD_PID rpc_port=$HELIOS_RPC_PORT";
+    };
     startExitFailureBody = ''
       emit_service_event service_degraded degraded \
         --pid "$CHILD_PID" \
@@ -361,10 +336,12 @@ let
       while true; do
         attempt=$((attempt + 1))
 
-        RESP="$(${probeCommands.jsonRpcRequestCmd {
-          urlExpr = heliosRpcUrlExpr;
-          method = "eth_blockNumber";
-        }} 2>/dev/null || true)"
+        RESP="$(${
+          probeCommands.jsonRpcRequestCmd {
+            urlExpr = heliosRpcUrlExpr;
+            method = "eth_blockNumber";
+          }
+        } 2>/dev/null || true)"
 
         if [ -n "$RESP" ] && echo "$RESP" | ${pkgs.jq}/bin/jq -e '.result | strings' >/dev/null 2>&1; then
           log_ok "helios ready rpc_port=$HELIOS_RPC_PORT"
@@ -395,11 +372,13 @@ let
             ERR_MSG="$(echo "$RESP" | ${pkgs.jq}/bin/jq -r '.error.message // empty' 2>/dev/null || true)"
           fi
 
-          SYNC_STATUS="$(${probeCommands.jsonRpcFieldCmd {
-            urlExpr = heliosRpcUrlExpr;
-            method = "eth_syncing";
-            jqExpr = ".result | if type == \"object\" then \"\\(.currentBlock)/\\(.highestBlock)\" else \"not_syncing\" end";
-          }} 2>/dev/null || true)"
+          SYNC_STATUS="$(${
+            probeCommands.jsonRpcFieldCmd {
+              urlExpr = heliosRpcUrlExpr;
+              method = "eth_syncing";
+              jqExpr = ".result | if type == \"object\" then \"\\(.currentBlock)/\\(.highestBlock)\" else \"not_syncing\" end";
+            }
+          } 2>/dev/null || true)"
 
           if [ -n "''${ERR_MSG:-}" ] && [ -n "''${SYNC_STATUS:-}" ]; then
             log_info "helios not ready yet: $ERR_MSG (eth_syncing=$SYNC_STATUS)"
