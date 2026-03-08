@@ -1,29 +1,26 @@
 { pkgs }:
+let
+  commonRuntimeShell = import ./common-runtime.nix { inherit pkgs; };
+in
 ''
+  ${commonRuntimeShell}
+
   validate_log_level_value() {
     local value="$1"
-    case "$value" in
-      error|warn|info|debug|trace)
-        return 0
-        ;;
-      *)
-        echo "ERROR: invalid --log-level '$value' (expected: error|warn|info|debug|trace)"
-        return 2
-        ;;
-    esac
+    if valid_log_level "$value"; then
+      return 0
+    fi
+    echo "ERROR: invalid --log-level '$value' (expected: error|warn|info|debug|trace)"
+    return 2
   }
 
   validate_output_mode_value() {
     local value="$1"
-    case "$value" in
-      stdout|logs|both)
-        return 0
-        ;;
-      *)
-        echo "ERROR: invalid --output-mode '$value' (expected: stdout|logs|both)"
-        return 2
-        ;;
-    esac
+    if valid_output_mode "$value"; then
+      return 0
+    fi
+    echo "ERROR: invalid --output-mode '$value' (expected: stdout|logs|both)"
+    return 2
   }
 
   split_process_mode() {
@@ -108,23 +105,6 @@
     else
       unset NIXFIED_SUMMARY_FILE_OVERRIDE || true
     fi
-  }
-
-  write_text_file_atomic() {
-    local target="$1"
-    local value="$2"
-    local parent_dir
-    local tmp
-
-    if [ -z "$target" ]; then
-      return 0
-    fi
-
-    parent_dir="$(dirname "$target")"
-    mkdir -p "$parent_dir"
-    tmp="$(mktemp "$target.tmp.XXXXXX")"
-    printf '%s\n' "$value" > "$tmp"
-    mv "$tmp" "$target"
   }
 
   run_file_state() {

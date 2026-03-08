@@ -5,6 +5,7 @@
 }:
 let
   lib = pkgs.lib;
+  commonRuntimeShell = import ./common-runtime.nix { inherit pkgs; };
 
   valueToString =
     value:
@@ -81,6 +82,8 @@ let
   );
 in
 ''
+  ${commonRuntimeShell}
+
   PROJECT_NAME=${pkgs.lib.escapeShellArg model.identity.projectName}
   PROJECT_DESCRIPTION=${pkgs.lib.escapeShellArg model.identity.description}
   PROJECT_ID=${pkgs.lib.escapeShellArg model.identity.projectId}
@@ -105,30 +108,6 @@ in
 
   normalize_env_token() {
     printf '%s' "$1" | ${pkgs.coreutils}/bin/tr '[:lower:].-' '[:upper:]__' | ${pkgs.coreutils}/bin/tr -c 'A-Z0-9_' '_'
-  }
-
-  valid_log_level() {
-    local value="$1"
-    case "$value" in
-      error|warn|info|debug|trace)
-        return 0
-        ;;
-      *)
-        return 1
-        ;;
-    esac
-  }
-
-  valid_output_mode() {
-    local value="$1"
-    case "$value" in
-      stdout|logs|both)
-        return 0
-        ;;
-      *)
-        return 1
-        ;;
-    esac
   }
 
   is_sensitive_env_name() {

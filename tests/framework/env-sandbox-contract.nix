@@ -1,9 +1,12 @@
 { pkgs }:
 let
   source = builtins.readFile ../../nixfied/runner/env-sandbox.nix;
+  commonSource = builtins.readFile ../../nixfied/runner/common-runtime.nix;
 in
 assert pkgs.lib.hasInfix "run_in_sandbox_runtime() {" source;
 assert pkgs.lib.hasInfix "run_in_sandbox() {" source;
+assert pkgs.lib.hasInfix "commonRuntimeShell = import ./common-runtime.nix" source;
+assert pkgs.lib.hasInfix "\${commonRuntimeShell}" source;
 assert pkgs.lib.hasInfix "ERROR: task runtime.workdir=custom but customWorkdir is empty" source;
 assert pkgs.lib.hasInfix "ERROR: unknown runtime.workdir '$workdir_kind'" source;
 assert pkgs.lib.hasInfix "env -i" source;
@@ -24,6 +27,8 @@ assert pkgs.lib.hasInfix "ENV_SANDBOX_STATIC_RUNTIME_PORTS_TSV" source;
 assert pkgs.lib.hasInfix "ENV_SANDBOX_STATIC_SERVICE_NAMES" source;
 assert pkgs.lib.hasInfix "env_sandbox_runtime_env_offset() {" source;
 assert pkgs.lib.hasInfix "is_reserved_runtime_env_name() {" source;
+assert !(pkgs.lib.hasInfix "valid_log_level() {" source);
+assert !(pkgs.lib.hasInfix "valid_output_mode() {" source);
 assert pkgs.lib.hasInfix ".allowSensitivePassThrough // false" source;
 assert pkgs.lib.hasInfix "ERROR: runtime-owned passthrough env blocked name=$pass_name" source;
 assert pkgs.lib.hasInfix "ERROR: runtime-owned env override blocked name=$env_name" source;
@@ -53,6 +58,8 @@ assert !(pkgs.lib.hasInfix "runtime_xdg_cache_override=" source);
 assert !(pkgs.lib.hasInfix "\${NIXFIED_RUNTIME_REGISTRY_ROOT:-" source);
 assert !(pkgs.lib.hasInfix "\${NIXFIED_RUNTIME_ARTIFACTS_DIR:-" source);
 assert !(pkgs.lib.hasInfix "\${NIXFIED_RUNTIME_SERVICE_ROOT:-" source);
+assert pkgs.lib.hasInfix "valid_log_level() {" commonSource;
+assert pkgs.lib.hasInfix "valid_output_mode() {" commonSource;
 pkgs.runCommand "env-sandbox-contract" { } ''
   echo "OK: sandbox contract markers are stable" > "$out"
 ''

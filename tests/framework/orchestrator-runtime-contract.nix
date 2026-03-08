@@ -2,6 +2,7 @@
 let
   orchestratorSource = builtins.readFile ../../nixfied/runner/orchestrator.nix;
   runtimeSource = builtins.readFile ../../nixfied/runner/orchestrator-runtime.nix;
+  commonSource = builtins.readFile ../../nixfied/runner/common-runtime.nix;
 in
 assert pkgs.lib.hasInfix "orchestratorRuntimeShell = import ./orchestrator-runtime.nix"
   orchestratorSource;
@@ -18,12 +19,15 @@ assert pkgs.lib.hasInfix "run_file_pid \"$run_file\"" orchestratorSource;
 assert pkgs.lib.hasInfix "run_file_pgid \"$run_file\"" orchestratorSource;
 assert pkgs.lib.hasInfix "run_file_command \"$run_file\"" orchestratorSource;
 assert pkgs.lib.hasInfix "run_file_process_mode \"$run_file\"" orchestratorSource;
+assert pkgs.lib.hasInfix "commonRuntimeShell = import ./common-runtime.nix" runtimeSource;
+assert pkgs.lib.hasInfix "\${commonRuntimeShell}" runtimeSource;
 assert pkgs.lib.hasInfix "split_process_mode() {" runtimeSource;
 assert pkgs.lib.hasInfix "run_file_state() {" runtimeSource;
 assert pkgs.lib.hasInfix "run_file_pid() {" runtimeSource;
 assert pkgs.lib.hasInfix "run_file_pgid() {" runtimeSource;
 assert pkgs.lib.hasInfix "run_file_command() {" runtimeSource;
 assert pkgs.lib.hasInfix "run_file_process_mode() {" runtimeSource;
+assert (!pkgs.lib.hasInfix "write_text_file_atomic() {" runtimeSource);
 assert pkgs.lib.hasInfix "validate_workflow_args() {" runtimeSource;
 assert pkgs.lib.hasInfix "validate_typed_task_args() {" runtimeSource;
 assert pkgs.lib.hasInfix "resolve_run_artifacts_dir() {" runtimeSource;
@@ -33,6 +37,9 @@ assert pkgs.lib.hasInfix "NIXFIED_RUN_ID_FILE_OVERRIDE" runtimeSource;
 assert pkgs.lib.hasInfix "NIXFIED_SUMMARY_FILE_OVERRIDE" runtimeSource;
 assert pkgs.lib.hasInfix "workflow_simple_shorthand_exists_for_family" runtimeSource;
 assert pkgs.lib.hasInfix "task_arg_long_kind" runtimeSource;
+assert pkgs.lib.hasInfix "valid_log_level() {" commonSource;
+assert pkgs.lib.hasInfix "valid_output_mode() {" commonSource;
+assert pkgs.lib.hasInfix "write_text_file_atomic() {" commonSource;
 pkgs.runCommand "orchestrator-runtime-contract" { } ''
   echo "OK: orchestrator runtime helpers are split and stable" > "$out"
 ''
