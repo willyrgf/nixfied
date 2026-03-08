@@ -15,10 +15,11 @@ let
 
   defaultRequiredDocs = [
     "README.md"
+    "CLEANUPS.md"
     "AGENTS.md"
-    "CLAUDE.md"
-    "ARCHITECTURE.md"
-    "REDESIGN.md"
+    "docs/ARCHITECTURE.md"
+    "docs/DETAILED.md"
+    "docs/UPGRADE.md"
   ];
   requiredDocs = cfg.requiredDocs or defaultRequiredDocs;
 
@@ -138,9 +139,12 @@ let
         doc_purpose() {
           case "$1" in
             README.md) echo "Primary repository overview and command entrypoints." ;;
+            CLEANUPS.md) echo "Current repository cleanup ledger and maintenance queue." ;;
             AGENTS.md) echo "Agent instructions and collaboration constraints." ;;
             CLAUDE.md) echo "Additional assistant guidance for this repository." ;;
-            ARCHITECTURE.md) echo "Architecture and system design details." ;;
+            ARCHITECTURE.md|docs/ARCHITECTURE.md) echo "High-level architecture reference." ;;
+            docs/DETAILED.md) echo "Detailed model architecture and contracts." ;;
+            docs/UPGRADE.md) echo "Downstream upgrade notes for behavioral and path contract changes." ;;
             REDESIGN.md) echo "Redesign notes and migration context." ;;
             *) echo "Project documentation." ;;
           esac
@@ -149,10 +153,13 @@ let
         doc_priority() {
           case "$1" in
             README.md) echo 1 ;;
-            AGENTS.md) echo 2 ;;
-            CLAUDE.md) echo 3 ;;
-            ARCHITECTURE.md) echo 4 ;;
-            REDESIGN.md) echo 5 ;;
+            CLEANUPS.md) echo 2 ;;
+            docs/DETAILED.md) echo 3 ;;
+            docs/UPGRADE.md) echo 4 ;;
+            ARCHITECTURE.md|docs/ARCHITECTURE.md) echo 5 ;;
+            REDESIGN.md) echo 6 ;;
+            AGENTS.md) echo 7 ;;
+            CLAUDE.md) echo 7 ;;
             *) echo 20 ;;
           esac
         }
@@ -358,6 +365,15 @@ let
             end
           ' "$TMP_INDEX"
           echo ""
+          echo "## Dispatcher and Introspection"
+          echo '- `run-task -- <task-id> [-- ...]` from `nixfied/runner/dispatcher.nix`'
+          echo '- `run-workflow -- <workflow-id> [-- ...]` from `nixfied/runner/dispatcher.nix`'
+          echo '- `run-workflow-parallel -- <workflow-id> [-- ...]` from `nixfied/runner/dispatcher.nix`'
+          echo '- `runs [run-id]` from `nixfied/runner/dispatcher.nix`'
+          echo '- `stop-run -- <run-id>` from `nixfied/runner/dispatcher.nix`'
+          echo '- `stop-all-runs` from `nixfied/runner/dispatcher.nix`'
+          echo '- `model`, `stateHash`, `tasks`, `services`, `task::<id>`, `schema` from `nixfied/lib/mkNixfied.nix`'
+          echo ""
           echo "## Sensitive Zones"
           ${pkgs.jq}/bin/jq -r '
             if (.risk_areas | length) == 0 then
@@ -379,12 +395,20 @@ let
           echo '- `nix run .#test`'
           echo '- `nix run .#build`'
           echo '- `nix run .#check`'
+          echo '- `nix run .#format`'
           echo '- `nix run .#ci -- --summary`'
+          echo '- `nix run .#validate-env`'
+          echo '- `nix run .#test-isolation`'
+          echo '- `nix run .#ports`'
+          echo '- `nix run .#check-ports`'
+          echo '- `nix run .#framework::test`'
+          echo '- `nix run .#framework::install`'
+          echo '- `nix run .#framework::upgrade`'
           echo ""
           echo "## Invariants"
           echo '- Treat `nixfied/project/` as the primary customization surface.'
-          echo '- Keep command metadata (`api`) aligned with script behavior.'
-          echo '- Keep this map and `docs/repo-index.json` in sync via `nix run .#check`.'
+          echo '- Keep command metadata aligned with script behavior.'
+          echo '- Keep this map and `docs/repo-index.json` in sync when command surfaces or key docs change.'
         } > "$TMP_MAP"
 
         verify_file() {
@@ -434,7 +458,7 @@ let
 
         if [ "$rc" -ne 0 ]; then
           log_error "discovery artifacts are out of date."
-          log_info "refresh with: nix run .#check -- ${refreshArg}"
+          log_info "refresh the committed discovery artifacts with the configured discovery generator"
           exit "$rc"
         fi
 

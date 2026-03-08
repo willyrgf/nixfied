@@ -80,10 +80,11 @@ rec {
     refreshArg = "--refresh-discovery";
     requiredDocs = [
       "README.md"
+      "CLEANUPS.md"
       "AGENTS.md"
-      "CLAUDE.md"
       "docs/ARCHITECTURE.md"
-      "REDESIGN.md"
+      "docs/DETAILED.md"
+      "docs/UPGRADE.md"
     ];
   };
 
