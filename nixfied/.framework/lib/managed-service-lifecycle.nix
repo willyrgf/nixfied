@@ -21,6 +21,19 @@ let
       log_${level} "${serviceName} ${message}"
     '';
 
+  mkProcessExitFailureBody =
+    {
+      waitReason,
+      lastError,
+    }:
+    ''
+      emit_service_event service_degraded degraded \
+        --pid "$CHILD_PID" \
+        --log-path "$LOG_FILE" \
+        --wait-reason "${waitReason}" \
+        --last-error "${lastError}"
+    '';
+
   mkSimpleProbeBody =
     {
       probeCommand,
@@ -399,6 +412,7 @@ let
 in
 {
   inherit
+    mkProcessExitFailureBody
     mkSimpleProbeBody
     mkStartupReadinessBody
     mkWrappedScript

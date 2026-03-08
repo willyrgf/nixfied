@@ -158,13 +158,10 @@ let
       failureMessage = "reth failed to become healthy";
       successMessage = "reth started pid=$CHILD_PID http_port=$RETH_HTTP_PORT ws_port=$RETH_WS_PORT auth_port=$RETH_AUTH_PORT";
     };
-    startExitFailureBody = ''
-      emit_service_event service_degraded degraded \
-        --pid "$CHILD_PID" \
-        --log-path "$LOG_FILE" \
-        --wait-reason "reth_process_exit code=$RC" \
-        --last-error "reth process exited non-zero"
-    '';
+    startExitFailureBody = managedServiceLifecycle.mkProcessExitFailureBody {
+      waitReason = "reth_process_exit code=$RC";
+      lastError = "reth process exited non-zero";
+    };
     statusMergeBlock = observability.mkStatusMergeBlock {
       service = "reth";
       defaultLogPathExpr = ''"$RETH_LOG_FILE"'';

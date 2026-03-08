@@ -141,13 +141,10 @@ let
       failureMessage = "nginx failed to become healthy";
       successMessage = "nginx started pid=$CHILD_PID http_port=$HTTP_PORT https_port=$HTTPS_PORT";
     };
-    startExitFailureBody = ''
-      emit_service_event service_degraded degraded \
-        --pid "$CHILD_PID" \
-        --log-path "$LOG_FILE" \
-        --wait-reason "nginx_process_exit code=$RC" \
-        --last-error "nginx process exited non-zero"
-    '';
+    startExitFailureBody = serviceScripts.mkProcessExitFailureBody {
+      waitReason = "nginx_process_exit code=$RC";
+      lastError = "nginx process exited non-zero";
+    };
     stopRequestBody = ''
       if [ -f "$NGINX_DIR/conf/nginx.conf" ]; then
         ${nginx}/bin/nginx -c "$NGINX_DIR/conf/nginx.conf" -s quit 2>/dev/null || kill "$PID" 2>/dev/null || true

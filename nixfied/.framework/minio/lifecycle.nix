@@ -105,13 +105,10 @@ let
       emit_service_event service_ready ready --pid "$CHILD_PID" --log-path "$LOG_FILE"
       log_info "minio started pid=$CHILD_PID api_port=$MINIO_API_PORT console_port=$MINIO_CONSOLE_PORT"
     '';
-    startExitFailureBody = ''
-      emit_service_event service_degraded degraded \
-        --pid "$CHILD_PID" \
-        --log-path "$LOG_FILE" \
-        --wait-reason "minio_process_exit code=$RC" \
-        --last-error "minio process exited non-zero"
-    '';
+    startExitFailureBody = managedServiceLifecycle.mkProcessExitFailureBody {
+      waitReason = "minio_process_exit code=$RC";
+      lastError = "minio process exited non-zero";
+    };
     stopMissingLogPathExpr = null;
     stopStateLogPathExpr = null;
     statusMergeBlock = observability.mkStatusMergeBlock {

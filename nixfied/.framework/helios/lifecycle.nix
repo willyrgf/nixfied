@@ -269,13 +269,10 @@ let
       failureMessage = "helios failed to become healthy";
       successMessage = "helios started pid=$CHILD_PID rpc_port=$HELIOS_RPC_PORT";
     };
-    startExitFailureBody = ''
-      emit_service_event service_degraded degraded \
-        --pid "$CHILD_PID" \
-        --log-path "$LOG_FILE" \
-        --wait-reason "helios_process_exit code=$RC" \
-        --last-error "helios process exited non-zero"
-    '';
+    startExitFailureBody = managedServiceLifecycle.mkProcessExitFailureBody {
+      waitReason = "helios_process_exit code=$RC";
+      lastError = "helios process exited non-zero";
+    };
     statusMergeBlock = observability.mkStatusMergeBlock {
       service = "helios";
       defaultLogPathExpr = ''"$HELIOS_LOG_FILE"'';
