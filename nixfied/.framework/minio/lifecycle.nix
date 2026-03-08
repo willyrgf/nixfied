@@ -125,28 +125,20 @@ let
         "console_port=$MINIO_CONSOLE_PORT"
       ];
     };
-    healthBody = ''
-      if ${probeCommands.httpGetOkCmd {
+    healthBody = managedServiceLifecycle.mkSimpleProbeBody {
+      probeCommand = probeCommands.httpGetOkCmd {
         urlExpr = "http://127.0.0.1:$MINIO_API_PORT/minio/health/live";
-      }} then
-        log_ok "minio healthy api_port=$MINIO_API_PORT"
-        exit 0
-      fi
-
-      log_error "minio unhealthy api_port=$MINIO_API_PORT"
-      exit 1
-    '';
-    readyBody = ''
-      if ${probeCommands.httpGetOkCmd {
+      };
+      successMessage = "minio healthy api_port=$MINIO_API_PORT";
+      failureMessage = "minio unhealthy api_port=$MINIO_API_PORT";
+    };
+    readyBody = managedServiceLifecycle.mkSimpleProbeBody {
+      probeCommand = probeCommands.httpGetOkCmd {
         urlExpr = "http://127.0.0.1:$MINIO_API_PORT/minio/health/ready";
-      }} then
-        log_ok "minio ready api_port=$MINIO_API_PORT"
-        exit 0
-      fi
-
-      log_error "minio not ready api_port=$MINIO_API_PORT"
-      exit 1
-    '';
+      };
+      successMessage = "minio ready api_port=$MINIO_API_PORT";
+      failureMessage = "minio not ready api_port=$MINIO_API_PORT";
+    };
   };
 
   inherit (managedLifecycle)

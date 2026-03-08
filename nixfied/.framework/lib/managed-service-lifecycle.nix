@@ -21,6 +21,26 @@ let
       log_${level} "${serviceName} ${message}"
     '';
 
+  mkSimpleProbeBody =
+    {
+      probeCommand,
+      successMessage,
+      failureMessage,
+      successBody ? "",
+      failureBody ? "",
+    }:
+    ''
+      if ${probeCommand}; then
+        ${successBody}
+        log_ok "${successMessage}"
+        exit 0
+      fi
+
+      ${failureBody}
+      log_error "${failureMessage}"
+      exit 1
+    '';
+
   mkWrappedScript =
     {
       name,
@@ -336,6 +356,7 @@ let
 in
 {
   inherit
+    mkSimpleProbeBody
     mkWrappedScript
     mkObservedStatusScript
     mkPidFileManagedLifecycle

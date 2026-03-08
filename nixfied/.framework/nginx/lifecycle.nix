@@ -190,26 +190,20 @@ let
         "https_port=$HTTPS_PORT"
       ];
     };
-    healthBody = ''
-      if ${probeCommands.tcpOpenCmd { portExpr = "$HTTP_PORT"; }} then
-        log_ok "nginx healthy http_port=$HTTP_PORT"
-        exit 0
-      fi
-
-      log_error "nginx unhealthy http_port=$HTTP_PORT"
-      exit 1
-    '';
-    readyBody = ''
-      if ${probeCommands.tcpOpenCmd { portExpr = "$HTTP_PORT"; }} then
+    healthBody = serviceScripts.mkSimpleProbeBody {
+      probeCommand = probeCommands.tcpOpenCmd { portExpr = "$HTTP_PORT"; };
+      successMessage = "nginx healthy http_port=$HTTP_PORT";
+      failureMessage = "nginx unhealthy http_port=$HTTP_PORT";
+    };
+    readyBody = serviceScripts.mkSimpleProbeBody {
+      probeCommand = probeCommands.tcpOpenCmd { portExpr = "$HTTP_PORT"; };
+      successBody = ''
         PID=$(cat "$NGINX_PID_FILE" 2>/dev/null || true)
         emit_service_event service_ready ready --pid "$PID" --log-path "$NGINX_LOG_FILE"
-        log_ok "nginx ready http_port=$HTTP_PORT pid=''${PID:-unknown}"
-        exit 0
-      fi
-
-      log_error "nginx not ready http_port=$HTTP_PORT"
-      exit 1
-    '';
+      '';
+      successMessage = "nginx ready http_port=$HTTP_PORT pid=''${PID:-unknown}";
+      failureMessage = "nginx not ready http_port=$HTTP_PORT";
+    };
     stopWaitAttempts = 40;
     stopWaitInterval = "0.25";
   };

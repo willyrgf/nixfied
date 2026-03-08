@@ -312,16 +312,11 @@ let
         "network=$HELIOS_NETWORK"
       ];
     };
-    healthBody = ''
-      if ${healthCheck}
-      then
-        log_ok "helios healthy rpc_port=$HELIOS_RPC_PORT"
-        exit 0
-      fi
-
-      log_error "helios unhealthy rpc_port=$HELIOS_RPC_PORT"
-      exit 1
-    '';
+    healthBody = managedServiceLifecycle.mkSimpleProbeBody {
+      probeCommand = healthCheck;
+      successMessage = "helios healthy rpc_port=$HELIOS_RPC_PORT";
+      failureMessage = "helios unhealthy rpc_port=$HELIOS_RPC_PORT";
+    };
     readyBody = ''
       TIMEOUT_SECS="''${HELIOS_READY_TIMEOUT_SECS:-300}"
       INTERVAL_SECS="''${HELIOS_READY_INTERVAL_SECS:-1}"

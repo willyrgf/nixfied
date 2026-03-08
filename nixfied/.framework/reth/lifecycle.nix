@@ -202,26 +202,16 @@ let
         "network=$RETH_NETWORK"
       ];
     };
-    healthBody = ''
-      if ${healthCheck}
-      then
-        log_ok "reth healthy http_port=$RETH_HTTP_PORT"
-        exit 0
-      fi
-
-      log_error "reth unhealthy http_port=$RETH_HTTP_PORT"
-      exit 1
-    '';
-    readyBody = ''
-      if ${healthCheck}
-      then
-        log_ok "reth ready http_port=$RETH_HTTP_PORT"
-        exit 0
-      fi
-
-      log_error "reth not ready http_port=$RETH_HTTP_PORT"
-      exit 1
-    '';
+    healthBody = managedServiceLifecycle.mkSimpleProbeBody {
+      probeCommand = healthCheck;
+      successMessage = "reth healthy http_port=$RETH_HTTP_PORT";
+      failureMessage = "reth unhealthy http_port=$RETH_HTTP_PORT";
+    };
+    readyBody = managedServiceLifecycle.mkSimpleProbeBody {
+      probeCommand = healthCheck;
+      successMessage = "reth ready http_port=$RETH_HTTP_PORT";
+      failureMessage = "reth not ready http_port=$RETH_HTTP_PORT";
+    };
     stopWaitAttempts = 40;
     stopWaitInterval = "0.25";
   };

@@ -298,20 +298,14 @@ let
 
   health = mkPgScript {
     name = "postgres-health";
-    body = ''
-      if ${
-        probeCommands.pgIsReadyCmd {
-          inherit postgres;
-          portExpr = "$PGPORT";
-        }
-      } then
-        log_ok "PostgreSQL healthy port=$PGPORT"
-        exit 0
-      fi
-
-      log_error "PostgreSQL unhealthy port=$PGPORT"
-      exit 1
-    '';
+    body = managedServiceLifecycle.mkSimpleProbeBody {
+      probeCommand = probeCommands.pgIsReadyCmd {
+        inherit postgres;
+        portExpr = "$PGPORT";
+      };
+      successMessage = "PostgreSQL healthy port=$PGPORT";
+      failureMessage = "PostgreSQL unhealthy port=$PGPORT";
+    };
   };
 
   ready = mkPgScript {
