@@ -152,6 +152,10 @@
       ;
   };
 
+  "registry-events-runtime-contract" = import ./registry-events-runtime-contract.nix {
+    inherit pkgs;
+  };
+
   "log-prefix-contract" = import ./log-prefix-contract.nix {
     inherit pkgs;
   };
