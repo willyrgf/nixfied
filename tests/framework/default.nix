@@ -340,6 +340,10 @@
       ;
   };
 
+  "helpers-runtime-contract" = import ./helpers-runtime-contract.nix {
+    inherit pkgs;
+  };
+
   "ephemeral-execution-smoke" = import ./ephemeral-execution-smoke.nix {
     inherit
       pkgs
