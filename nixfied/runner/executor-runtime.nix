@@ -348,4 +348,78 @@
     ${pkgs.coreutils}/bin/cp "$source_file" "$tmp"
     mv "$tmp" "$target_file"
   }
+
+  workflow_unit_name() {
+    local unit_json="$1"
+    printf '%s' "$unit_json" | ${pkgs.jq}/bin/jq -r '.name'
+  }
+
+  workflow_unit_task_id() {
+    local unit_json="$1"
+    printf '%s' "$unit_json" | ${pkgs.jq}/bin/jq -r '.taskId'
+  }
+
+  workflow_unit_needs_count() {
+    local unit_json="$1"
+    printf '%s' "$unit_json" | ${pkgs.jq}/bin/jq -r '(.needs // []) | length'
+  }
+
+  workflow_unit_dependencies() {
+    local unit_json="$1"
+    printf '%s' "$unit_json" | ${pkgs.jq}/bin/jq -r '.needs[]?'
+  }
+
+  workflow_unit_lock_list() {
+    local unit_json="$1"
+    printf '%s' "$unit_json" | ${pkgs.jq}/bin/jq -r '.locks[]?' | ${pkgs.gawk}/bin/awk 'NF {printf "%s ", $0}'
+  }
+
+  workflow_unit_produces_json() {
+    local unit_json="$1"
+    printf '%s' "$unit_json" | ${pkgs.jq}/bin/jq -c '.produces // {artifacts: [], stateKeys: []}'
+  }
+
+  workflow_unit_missing_env_csv() {
+    local unit_json="$1"
+    local missing=""
+    local required_env
+
+    while IFS= read -r required_env; do
+      if [ -n "$required_env" ] && [ -z "''${!required_env:-}" ]; then
+        if [ -z "$missing" ]; then
+          missing="$required_env"
+        else
+          missing="$missing,$required_env"
+        fi
+      fi
+    done < <(printf '%s' "$unit_json" | ${pkgs.jq}/bin/jq -r '.skipIfMissingEnv[]?')
+
+    printf '%s' "$missing"
+  }
+
+  workflow_unit_when_matches() {
+    local unit_json="$1"
+    local required_env
+    local env_name
+    local expected_value
+    local actual_value
+
+    while IFS= read -r required_env; do
+      if [ -n "$required_env" ] && [ -z "''${!required_env:-}" ]; then
+        return 1
+      fi
+    done < <(printf '%s' "$unit_json" | ${pkgs.jq}/bin/jq -r '.when.envPresent[]?')
+
+    while IFS=$'\t' read -r env_name expected_value; do
+      if [ -z "$env_name" ]; then
+        continue
+      fi
+      actual_value="''${!env_name:-}"
+      if [ "$actual_value" != "$expected_value" ]; then
+        return 1
+      fi
+    done < <(printf '%s' "$unit_json" | ${pkgs.jq}/bin/jq -r '.when.envEquals // {} | to_entries[]? | [.key, (.value | tostring)] | @tsv')
+
+    return 0
+  }
 ''

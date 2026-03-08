@@ -628,55 +628,19 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
     while IFS= read -r unit_json; do
       local unit_task
-      local skip=0
       local missing=""
-      local when_failed=0
-      local required_env
-      local env_name
-      local expected_value
-      local actual_value
 
-      unit_task="$(printf '%s' "$unit_json" | ${pkgs.jq}/bin/jq -r '.taskId')"
+      unit_task="$(workflow_unit_task_id "$unit_json")"
+      missing="$(workflow_unit_missing_env_csv "$unit_json")"
 
-      while IFS= read -r required_env; do
-        if [ -n "$required_env" ] && [ -z "''${!required_env:-}" ]; then
-          skip=1
-          if [ -z "$missing" ]; then
-            missing="$required_env"
-          else
-            missing="$missing,$required_env"
-          fi
-        fi
-      done < <(printf '%s' "$unit_json" | ${pkgs.jq}/bin/jq -r '.skipIfMissingEnv[]?')
-
-      if [ "$skip" -eq 1 ]; then
+      if [ -n "$missing" ]; then
         local detail_json
         detail_json="$(${pkgs.jq}/bin/jq -cn --arg reason "missing-env" --arg missing "$missing" '{reason: $reason, missing: $missing}')"
         append_event "$run_id" "$workflow_id" "$unit_task" "canceled" "$detail_json"
         continue
       fi
 
-      while IFS= read -r required_env; do
-        if [ -n "$required_env" ] && [ -z "''${!required_env:-}" ]; then
-          when_failed=1
-          break
-        fi
-      done < <(printf '%s' "$unit_json" | ${pkgs.jq}/bin/jq -r '.when.envPresent[]?')
-
-      if [ "$when_failed" -eq 0 ]; then
-        while IFS=$'\t' read -r env_name expected_value; do
-          if [ -z "$env_name" ]; then
-            continue
-          fi
-          actual_value="''${!env_name:-}"
-          if [ "$actual_value" != "$expected_value" ]; then
-            when_failed=1
-            break
-          fi
-        done < <(printf '%s' "$unit_json" | ${pkgs.jq}/bin/jq -r '.when.envEquals // {} | to_entries[]? | [.key, (.value | tostring)] | @tsv')
-      fi
-
-      if [ "$when_failed" -eq 1 ]; then
+      if ! workflow_unit_when_matches "$unit_json"; then
         local detail_json
         detail_json="$(${pkgs.jq}/bin/jq -cn --arg reason "when-false" '{reason: $reason}')"
         append_event "$run_id" "$workflow_id" "$unit_task" "canceled" "$detail_json"
@@ -887,10 +851,10 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       local needs_count
       local lock_list
 
-      unit_name="$(printf '%s' "$unit_json" | ${pkgs.jq}/bin/jq -r '.name')"
-      unit_task="$(printf '%s' "$unit_json" | ${pkgs.jq}/bin/jq -r '.taskId')"
-      needs_count="$(printf '%s' "$unit_json" | ${pkgs.jq}/bin/jq -r '(.needs // []) | length')"
-      lock_list="$(printf '%s' "$unit_json" | ${pkgs.jq}/bin/jq -r '.locks[]?' | ${pkgs.gawk}/bin/awk 'NF {printf "%s ", $0}')"
+      unit_name="$(workflow_unit_name "$unit_json")"
+      unit_task="$(workflow_unit_task_id "$unit_json")"
+      needs_count="$(workflow_unit_needs_count "$unit_json")"
+      lock_list="$(workflow_unit_lock_list "$unit_json")"
 
       unit_names+=("$unit_name")
       UNIT_JSON[$unit_name]="$unit_json"
@@ -912,59 +876,23 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         if [ -n "$dependency" ]; then
           UNIT_DEPENDENTS[$dependency]="''${UNIT_DEPENDENTS[$dependency]:-} $unit_name"
         fi
-      done < <(printf '%s' "''${UNIT_JSON[$unit_name]}" | ${pkgs.jq}/bin/jq -r '.needs[]?')
+      done < <(workflow_unit_dependencies "''${UNIT_JSON[$unit_name]}")
     done
 
     for unit_name in "''${unit_names[@]}"; do
       local unit_json
       local missing=""
-      local skip=0
-      local when_failed=0
-      local required_env
-      local env_name
-      local expected_value
-      local actual_value
 
       unit_json="''${UNIT_JSON[$unit_name]}"
+      missing="$(workflow_unit_missing_env_csv "$unit_json")"
 
-      while IFS= read -r required_env; do
-        if [ -n "$required_env" ] && [ -z "''${!required_env:-}" ]; then
-          skip=1
-          if [ -z "$missing" ]; then
-            missing="$required_env"
-          else
-            missing="$missing,$required_env"
-          fi
-        fi
-      done < <(printf '%s' "$unit_json" | ${pkgs.jq}/bin/jq -r '.skipIfMissingEnv[]?')
-
-      if [ "$skip" -eq 1 ]; then
+      if [ -n "$missing" ]; then
         mark_unit_canceled "$unit_name" "missing-env" "missing" "$missing"
         cancel_pending_dependents "$unit_name" "dependency-not-passed"
         continue
       fi
 
-      while IFS= read -r required_env; do
-        if [ -n "$required_env" ] && [ -z "''${!required_env:-}" ]; then
-          when_failed=1
-          break
-        fi
-      done < <(printf '%s' "$unit_json" | ${pkgs.jq}/bin/jq -r '.when.envPresent[]?')
-
-      if [ "$when_failed" -eq 0 ]; then
-        while IFS=$'\t' read -r env_name expected_value; do
-          if [ -z "$env_name" ]; then
-            continue
-          fi
-          actual_value="''${!env_name:-}"
-          if [ "$actual_value" != "$expected_value" ]; then
-            when_failed=1
-            break
-          fi
-        done < <(printf '%s' "$unit_json" | ${pkgs.jq}/bin/jq -r '.when.envEquals // {} | to_entries[]? | [.key, (.value | tostring)] | @tsv')
-      fi
-
-      if [ "$when_failed" -eq 1 ]; then
+      if ! workflow_unit_when_matches "$unit_json"; then
         mark_unit_canceled "$unit_name" "when-false"
         cancel_pending_dependents "$unit_name" "dependency-not-passed"
         continue
@@ -1027,7 +955,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       fi
 
       if [ "$wait_rc" -eq 0 ]; then
-        detail_json="$(${pkgs.jq}/bin/jq -cn --argjson produces "$(printf '%s' "''${UNIT_JSON[$done_unit]}" | ${pkgs.jq}/bin/jq -c '.produces // {artifacts: [], stateKeys: []}')" '{produces: $produces}')"
+        detail_json="$(${pkgs.jq}/bin/jq -cn --argjson produces "$(workflow_unit_produces_json "''${UNIT_JSON[$done_unit]}")" '{produces: $produces}')"
         append_event "$run_id" "$workflow_id" "''${UNIT_TASK[$done_unit]}" "passed" "$detail_json"
         UNIT_STATE[$done_unit]="passed"
         completed_count=$((completed_count + 1))

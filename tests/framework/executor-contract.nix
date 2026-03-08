@@ -1,6 +1,7 @@
 { pkgs }:
 let
   source = builtins.readFile ../../nixfied/runner/executor.nix;
+  runtimeSource = builtins.readFile ../../nixfied/runner/executor-runtime.nix;
 in
 assert pkgs.lib.hasInfix "compute_run_id() {" source;
 assert pkgs.lib.hasInfix "ERROR: usage: run-task <task-id> [-- ...]" source;
@@ -26,6 +27,10 @@ assert pkgs.lib.hasInfix "run_task_with_deps() {" source;
 assert pkgs.lib.hasInfix "run_workflow_phase_tasks() {" source;
 assert pkgs.lib.hasInfix "executorRuntimeShell = import ./executor-runtime.nix" source;
 assert pkgs.lib.hasInfix "\${executorRuntimeShell}" source;
+assert pkgs.lib.hasInfix "workflow_unit_missing_env_csv \"$unit_json\"" source;
+assert pkgs.lib.hasInfix "workflow_unit_when_matches \"$unit_json\"" source;
+assert pkgs.lib.hasInfix "workflow_unit_dependencies \"''\${UNIT_JSON[\$unit_name]}\"" source;
+assert pkgs.lib.hasInfix "workflow_unit_produces_json \"''\${UNIT_JSON[\$done_unit]}\"" source;
 assert pkgs.lib.hasInfix "extract_machine_output_args \"''\${filtered_args[@]}\"" source;
 assert pkgs.lib.hasInfix "--json and --summary cannot be combined" source;
 assert pkgs.lib.hasInfix "write_text_file_atomic \"$MACHINE_RUN_ID_FILE\" \"$run_id\"" source;
@@ -63,6 +68,17 @@ assert (!pkgs.lib.hasInfix "extract_machine_output_args() {" source);
 assert (!pkgs.lib.hasInfix ".stages as $stages" source);
 assert (!pkgs.lib.hasInfix "task_json() {" source);
 assert (!pkgs.lib.hasInfix "workflow_json() {" source);
+assert (!pkgs.lib.hasInfix ".skipIfMissingEnv[]?" source);
+assert (!pkgs.lib.hasInfix ".when.envPresent[]?" source);
+assert (!pkgs.lib.hasInfix ".when.envEquals // {}" source);
+assert pkgs.lib.hasInfix "workflow_unit_name() {" runtimeSource;
+assert pkgs.lib.hasInfix "workflow_unit_task_id() {" runtimeSource;
+assert pkgs.lib.hasInfix "workflow_unit_needs_count() {" runtimeSource;
+assert pkgs.lib.hasInfix "workflow_unit_dependencies() {" runtimeSource;
+assert pkgs.lib.hasInfix "workflow_unit_lock_list() {" runtimeSource;
+assert pkgs.lib.hasInfix "workflow_unit_produces_json() {" runtimeSource;
+assert pkgs.lib.hasInfix "workflow_unit_missing_env_csv() {" runtimeSource;
+assert pkgs.lib.hasInfix "workflow_unit_when_matches() {" runtimeSource;
 pkgs.runCommand "executor-contract" { } ''
   echo "OK: executor contract markers are stable" > "$out"
 ''
