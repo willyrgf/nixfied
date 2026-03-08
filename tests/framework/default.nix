@@ -259,6 +259,10 @@
     inherit pkgs;
   };
 
+  "install-runtime-contract" = import ./install-runtime-contract.nix {
+    inherit pkgs;
+  };
+
   "caller-pwd-remote-projectroot-smoke" = import ./caller-pwd-remote-projectroot-smoke.nix {
     inherit
       pkgs
