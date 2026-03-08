@@ -43,6 +43,14 @@ assert pkgs.lib.hasInfix "INFO: Time breakdown" source;
 assert pkgs.lib.hasInfix "run_task_hooks() {" source;
 assert pkgs.lib.hasInfix "INFO: hook $phase $hook_id start" source;
 assert pkgs.lib.hasInfix "ERROR: hook $phase $hook_id failed exitCode=$hook_exit_code" source;
+assert pkgs.lib.hasInfix "hook_command=\"$(task_hook_command \"$task_id\" \"$phase\" \"$hook_id\")\"" source;
+assert pkgs.lib.hasInfix "hook_runtime_json=\"$(task_hook_runtime_json \"$task_id\" \"$phase\" \"$hook_id\")\"" source;
+assert pkgs.lib.hasInfix "runtime_json=\"$(task_runtime_json \"$task_id\")\"" source;
+assert pkgs.lib.hasInfix "command=\"$(task_runner_command \"$task_id\")\"" source;
+assert pkgs.lib.hasInfix "package_path=\"$(task_runner_package \"$task_id\")\"" source;
+assert pkgs.lib.hasInfix "done < <(task_hook_ids \"$task_id\" \"$phase\")" source;
+assert pkgs.lib.hasInfix "done < <(task_needs \"$current_task\")" source;
+assert pkgs.lib.hasInfix "done < <(task_soft_needs \"$current_task\")" source;
 assert pkgs.lib.hasInfix "defines runtime hooks but runner type '$runner_type' is unsupported"
   source;
 assert pkgs.lib.hasInfix "workflow_post_run_always \"$workflow_id\"" source;
@@ -52,6 +60,7 @@ assert pkgs.lib.hasInfix "workflow_lock_policy \"$workflow_id\"" source;
 assert pkgs.lib.hasInfix "workflow_fail_fast \"$workflow_id\"" source;
 assert (!pkgs.lib.hasInfix "extract_machine_output_args() {" source);
 assert (!pkgs.lib.hasInfix ".stages as $stages" source);
+assert (!pkgs.lib.hasInfix "task_json() {" source);
 pkgs.runCommand "executor-contract" { } ''
   echo "OK: executor contract markers are stable" > "$out"
 ''

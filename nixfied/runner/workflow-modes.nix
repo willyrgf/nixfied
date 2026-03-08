@@ -93,6 +93,47 @@ let
       short = if hasShort then spec.short else "";
     };
 
+  mergeTaskRuntimeWithRunnerPackage =
+    task:
+    let
+      packagePath = task.runner.package or null;
+    in
+    task.runtime
+    // {
+      runtimeInputs =
+        (task.runtime.runtimeInputs or [ ])
+        ++ lib.optionals (packagePath != null && packagePath != "") [ packagePath ];
+    };
+
+  mergeHookRuntime =
+    task: hook:
+    let
+      taskRuntime = task.runtime;
+      hookWorkdir = hook.workdir or null;
+      hookCustomWorkdir = hook.customWorkdir or null;
+      taskCustomWorkdir = taskRuntime.customWorkdir or null;
+    in
+    {
+      slotEnv = taskRuntime.slotEnv;
+      workdir = if hookWorkdir == null then taskRuntime.workdir else hookWorkdir;
+      customWorkdir =
+        if hookCustomWorkdir != null then
+          hookCustomWorkdir
+        else if hookWorkdir == null then
+          taskCustomWorkdir
+        else if hookWorkdir == "custom" then
+          taskCustomWorkdir
+        else
+          null;
+      hermetic = taskRuntime.hermetic;
+      runtimeInputs = (taskRuntime.runtimeInputs or [ ]) ++ (hook.runtimeInputs or [ ]);
+      passThroughEnv = (taskRuntime.passThroughEnv or [ ]) ++ (hook.passThroughEnv or [ ]);
+      env = (taskRuntime.env or { }) // (hook.env or { });
+      umask = taskRuntime.umask or "022";
+      locale = taskRuntime.locale or "C.UTF-8";
+      timezone = taskRuntime.timezone or "UTC";
+    };
+
   taskIds = uniqueSorted (builtins.attrNames tasks);
 
   taskDescriptorById = builtins.listToAttrs (
@@ -102,6 +143,9 @@ let
         task = tasks.${taskId};
         argsContract = (((task.contract or { }).input or { }).args or { });
         specs = map normalizeTaskArgSpec (argsContract.spec or [ ]);
+        packagePath = task.runner.package or null;
+        preHookIds = uniqueSorted (builtins.attrNames (task.runtime.preHooks or { }));
+        postHookIds = uniqueSorted (builtins.attrNames (task.runtime.postHooks or { }));
         longKinds = builtins.concatLists (
           map (
             spec:
@@ -131,6 +175,29 @@ let
           parser = argsContract.parser or "typed";
           allowUnknown = if argsContract.allowUnknown or false then "true" else "false";
           hasPositional = if builtins.any (spec: spec.kind == "positional") specs then "true" else "false";
+          hookCount = toString (builtins.length preHookIds + builtins.length postHookIds);
+          runnerCommand =
+            if (task.runner.command or null) == null then "" else task.runner.command;
+          runnerPackage = if packagePath == null then "" else packagePath;
+          runtimeJson = builtins.toJSON (mergeTaskRuntimeWithRunnerPackage task);
+          producesJson = builtins.toJSON {
+            artifacts = task.produces.artifacts or [ ];
+            stateKeys = task.produces.stateKeys or [ ];
+          };
+          maxAttempts =
+            toString (
+              let
+                attempts = task.scheduling.maxAttempts or 1;
+              in
+              if attempts < 1 then 1 else attempts
+            );
+          retryBackoffJson = builtins.toJSON (task.scheduling.retryBackoffSec or [ ]);
+          needs = task.deps.needs or [ ];
+          softNeeds = task.deps.softNeeds or [ ];
+          inherit
+            preHookIds
+            postHookIds
+            ;
           inherit
             longKinds
             shortKinds
@@ -151,6 +218,28 @@ let
           return 0
           ;;
       '') cases
+    );
+
+  renderCasePrintLines =
+    valuesExpr: cases:
+    lib.concatStringsSep "\n" (
+      map (
+        entry:
+        let
+          values = valuesExpr entry;
+        in
+        ''
+          ${lib.escapeShellArg entry.key})
+            ${
+              if values == [ ] then
+                ":"
+              else
+                "printf '%s\\n' " + lib.concatStringsSep " " (map lib.escapeShellArg values)
+            }
+            return 0
+            ;;
+        ''
+      ) cases
     );
 
   workflowIdCases = map (workflowId: { key = workflowId; }) workflowIds;
@@ -192,6 +281,33 @@ let
         key = "${taskId}:${entry.token}";
         value = entry.kind;
       }) taskDescriptorById.${taskId}.shortKinds
+    ) taskIds
+  );
+
+  taskHookCases = builtins.concatLists (
+    map (
+      taskId:
+      let
+        task = tasks.${taskId};
+        preHooks = task.runtime.preHooks or { };
+        postHooks = task.runtime.postHooks or { };
+        mkPhaseCases =
+          phase: hooks:
+          map (
+            hookId:
+            let
+              hook = hooks.${hookId};
+            in
+            {
+              key = "${taskId}:${phase}:${hookId}";
+              value = {
+                command = hook.command;
+                runtimeJson = builtins.toJSON (mergeHookRuntime task hook);
+              };
+            }
+          ) (uniqueSorted (builtins.attrNames hooks));
+      in
+      mkPhaseCases "pre" preHooks ++ mkPhaseCases "post" postHooks
     ) taskIds
   );
 in
@@ -541,6 +657,137 @@ in
         *)
           printf '%s' ""
           return 0
+          ;;
+      esac
+    }
+
+    task_runner_command() {
+      local task_id="$1"
+      case "$task_id" in
+  ${renderCaseReturn (entry: entry.value.runnerCommand) taskCases}
+        *)
+          printf '%s' ""
+          return 0
+          ;;
+      esac
+    }
+
+    task_runner_package() {
+      local task_id="$1"
+      case "$task_id" in
+  ${renderCaseReturn (entry: entry.value.runnerPackage) taskCases}
+        *)
+          printf '%s' ""
+          return 0
+          ;;
+      esac
+    }
+
+    task_runtime_json() {
+      local task_id="$1"
+      case "$task_id" in
+  ${renderCaseReturn (entry: entry.value.runtimeJson) taskCases}
+        *)
+          return 1
+          ;;
+      esac
+    }
+
+    task_produces_json() {
+      local task_id="$1"
+      case "$task_id" in
+  ${renderCaseReturn (entry: entry.value.producesJson) taskCases}
+        *)
+          return 1
+          ;;
+      esac
+    }
+
+    task_max_attempts() {
+      local task_id="$1"
+      case "$task_id" in
+  ${renderCaseReturn (entry: entry.value.maxAttempts) taskCases}
+        *)
+          printf '%s' "1"
+          return 0
+          ;;
+      esac
+    }
+
+    task_retry_backoff_json() {
+      local task_id="$1"
+      case "$task_id" in
+  ${renderCaseReturn (entry: entry.value.retryBackoffJson) taskCases}
+        *)
+          printf '%s' "[]"
+          return 0
+          ;;
+      esac
+    }
+
+    task_needs() {
+      local task_id="$1"
+      case "$task_id" in
+  ${renderCasePrintLines (entry: entry.value.needs) taskCases}
+        *)
+          return 1
+          ;;
+      esac
+    }
+
+    task_soft_needs() {
+      local task_id="$1"
+      case "$task_id" in
+  ${renderCasePrintLines (entry: entry.value.softNeeds) taskCases}
+        *)
+          return 1
+          ;;
+      esac
+    }
+
+    task_hook_count() {
+      local task_id="$1"
+      case "$task_id" in
+  ${renderCaseReturn (entry: entry.value.hookCount) taskCases}
+        *)
+          printf '%s' "0"
+          return 0
+          ;;
+      esac
+    }
+
+    task_hook_ids() {
+      local task_id="$1"
+      local phase="$2"
+      case "$task_id:$phase" in
+  ${renderCasePrintLines (entry: entry.value.preHookIds) (map (entry: { key = "${entry.key}:pre"; value = entry.value; }) taskCases)}
+  ${renderCasePrintLines (entry: entry.value.postHookIds) (map (entry: { key = "${entry.key}:post"; value = entry.value; }) taskCases)}
+        *)
+          return 1
+          ;;
+      esac
+    }
+
+    task_hook_command() {
+      local task_id="$1"
+      local phase="$2"
+      local hook_id="$3"
+      case "$task_id:$phase:$hook_id" in
+  ${renderCaseReturn (entry: entry.value.command) taskHookCases}
+        *)
+          return 1
+          ;;
+      esac
+    }
+
+    task_hook_runtime_json() {
+      local task_id="$1"
+      local phase="$2"
+      local hook_id="$3"
+      case "$task_id:$phase:$hook_id" in
+  ${renderCaseReturn (entry: entry.value.runtimeJson) taskHookCases}
+        *)
+          return 1
           ;;
       esac
     }

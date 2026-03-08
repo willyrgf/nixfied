@@ -124,11 +124,6 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
     rm -f "$REGISTRY_ROOT/active/$run_id"
   }
 
-  task_json() {
-    local task_id="$1"
-    ${pkgs.jq}/bin/jq -c --arg taskId "$task_id" '.tasks[$taskId] // empty' "$MODEL_FILE"
-  }
-
   workflow_json() {
     local workflow_id="$1"
     ${pkgs.jq}/bin/jq -c --arg workflowId "$workflow_id" '.workflows[$workflowId] // empty' "$MODEL_FILE"
@@ -145,10 +140,9 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
   }
 
   task_has_hooks() {
-    local task="$1"
     local hook_count
 
-    hook_count="$(printf '%s' "$task" | ${pkgs.jq}/bin/jq -r '((.runtime.preHooks // {}) | length) + ((.runtime.postHooks // {}) | length)')"
+    hook_count="$(task_hook_count "$1")"
     if [ "$hook_count" -gt 0 ]; then
       return 0
     fi
@@ -157,9 +151,8 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
   run_task_hooks() {
     local task_id="$1"
-    local task="$2"
-    local phase="$3"
-    shift 3
+    local phase="$2"
+    shift 2
 
     local hook_id
     local hook_command
@@ -172,31 +165,8 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       fi
 
       echo "INFO: hook $phase $hook_id start"
-      hook_command="$(
-        printf '%s' "$task" | ${pkgs.jq}/bin/jq -r --arg phase "$phase" --arg hookId "$hook_id" '.runtime[($phase + "Hooks")][$hookId].command'
-      )"
-      hook_runtime_json="$(
-        printf '%s' "$task" | ${pkgs.jq}/bin/jq -c --arg phase "$phase" --arg hookId "$hook_id" '
-          .runtime as $taskRuntime
-          | .runtime[($phase + "Hooks")][$hookId] as $hook
-          | {
-              slotEnv: $taskRuntime.slotEnv,
-              workdir: (if ($hook.workdir // null) == null then $taskRuntime.workdir else $hook.workdir end),
-              customWorkdir:
-                (if ($hook.customWorkdir // null) != null then $hook.customWorkdir
-                 elif ($hook.workdir // null) == null then ($taskRuntime.customWorkdir // null)
-                 elif $hook.workdir == "custom" then ($taskRuntime.customWorkdir // null)
-                 else null end),
-              hermetic: $taskRuntime.hermetic,
-              runtimeInputs: (($taskRuntime.runtimeInputs // []) + ($hook.runtimeInputs // [])),
-              passThroughEnv: (($taskRuntime.passThroughEnv // []) + ($hook.passThroughEnv // [])),
-              env: (($taskRuntime.env // {}) + ($hook.env // {})),
-              umask: ($taskRuntime.umask // "022"),
-              locale: ($taskRuntime.locale // "C.UTF-8"),
-              timezone: ($taskRuntime.timezone // "UTC")
-            }
-        '
-      )"
+      hook_command="$(task_hook_command "$task_id" "$phase" "$hook_id")" || return 3
+      hook_runtime_json="$(task_hook_runtime_json "$task_id" "$phase" "$hook_id")" || return 3
 
       run_in_sandbox_runtime "$hook_runtime_json" "$hook_command" "$@"
       hook_exit_code="$?"
@@ -206,56 +176,25 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       fi
 
       echo "OK: hook $phase $hook_id done"
-    done < <(printf '%s' "$task" | ${pkgs.jq}/bin/jq -r --arg phase "$phase" '.runtime[($phase + "Hooks")] // {} | keys[]')
+    done < <(task_hook_ids "$task_id" "$phase")
 
     return 0
   }
 
-  task_runtime_with_runner_package() {
-    local task="$1"
-    printf '%s' "$task" | ${pkgs.jq}/bin/jq -c '
-      .runtime as $runtime
-      | .runner.package as $package
-      | $runtime + {
-          runtimeInputs: (($runtime.runtimeInputs // []) + (if ($package // "") == "" then [] else [$package] end))
-        }
-    '
-  }
-
-  task_produces_json() {
-    local task="$1"
-    printf '%s' "$task" | ${pkgs.jq}/bin/jq -c '{
-      artifacts: (.produces.artifacts // []),
-      stateKeys: (.produces.stateKeys // [])
-    }'
-  }
-
   task_pass_detail_json() {
     local task_id="$1"
-    local task
-    task="$(task_json "$task_id")"
-    if [ -z "$task" ]; then
+    if ! task_descriptor_exists "$task_id"; then
       printf '%s' '{}'
       return 0
     fi
-    task_produces_json "$task"
-  }
-
-  task_max_attempts() {
-    local task="$1"
-    local attempts
-    attempts="$(printf '%s' "$task" | ${pkgs.jq}/bin/jq -r '.scheduling.maxAttempts // 1')"
-    if ! [[ "$attempts" =~ ^[0-9]+$ ]] || [ "$attempts" -lt 1 ]; then
-      attempts=1
-    fi
-    printf '%s' "$attempts"
+    task_produces_json "$task_id"
   }
 
   task_retry_backoff_for_attempt() {
-    local task="$1"
+    local task_id="$1"
     local retry_index="$2"
-    printf '%s' "$task" | ${pkgs.jq}/bin/jq -r --argjson idx "$retry_index" '
-      .scheduling.retryBackoffSec as $backoff
+    task_retry_backoff_json "$task_id" | ${pkgs.jq}/bin/jq -r --argjson idx "$retry_index" '
+      . as $backoff
       | if ($backoff | type) != "array" or ($backoff | length) == 0 then
           0
         elif $idx < ($backoff | length) then
@@ -268,8 +207,6 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
   execute_task_once() {
     local task_id="$1"
-    local task="$2"
-    shift
     shift
 
     local runner_type
@@ -282,21 +219,21 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
     local post_exit_code
 
     runner_type="$(task_runner_type "$task_id")"
-    if [ "$runner_type" != "shell" ] && task_has_hooks "$task"; then
+    if [ "$runner_type" != "shell" ] && task_has_hooks "$task_id"; then
       echo "ERROR: task '$task_id' defines runtime hooks but runner type '$runner_type' is unsupported"
       return 3
     fi
-    runtime_json="$(task_runtime_with_runner_package "$task")"
+    runtime_json="$(task_runtime_json "$task_id")" || return 3
 
     set +e
     case "$runner_type" in
       shell)
-        if run_task_hooks "$task_id" "$task" "pre" "$@"; then
-          command="$(printf '%s' "$task" | ${pkgs.jq}/bin/jq -r '.runner.command')"
+        if run_task_hooks "$task_id" "pre" "$@"; then
+          command="$(task_runner_command "$task_id")"
           run_in_sandbox_runtime "$runtime_json" "$command" "$@"
           main_exit_code="$?"
 
-          if run_task_hooks "$task_id" "$task" "post" "$@"; then
+          if run_task_hooks "$task_id" "post" "$@"; then
             post_exit_code=0
           else
             post_exit_code="$?"
@@ -329,8 +266,8 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         fi
         ;;
       derivation)
-        package_path="$(printf '%s' "$task" | ${pkgs.jq}/bin/jq -r '.runner.package // empty')"
-        command="$(printf '%s' "$task" | ${pkgs.jq}/bin/jq -r '.runner.command // empty')"
+        package_path="$(task_runner_package "$task_id")"
+        command="$(task_runner_command "$task_id")"
         if [ -z "$package_path" ]; then
           echo "ERROR: task '$task_id' derivation runner requires runner.package"
           exit_code=3
@@ -356,23 +293,21 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
     local task_id="$1"
     shift
 
-    local task
     local max_attempts
     local attempt=1
     local exit_code=0
     local retry_index
     local backoff_sec
 
-    task="$(task_json "$task_id")"
-    if [ -z "$task" ]; then
+    if ! task_descriptor_exists "$task_id"; then
       echo "ERROR: unknown task '$task_id'"
       return 2
     fi
 
-    max_attempts="$(task_max_attempts "$task")"
+    max_attempts="$(task_max_attempts "$task_id")"
 
     while [ "$attempt" -le "$max_attempts" ]; do
-      if execute_task_once "$task_id" "$task" "$@"; then
+      if execute_task_once "$task_id" "$@"; then
         return 0
       else
         exit_code="$?"
@@ -383,7 +318,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       fi
 
       retry_index=$((attempt - 1))
-      backoff_sec="$(task_retry_backoff_for_attempt "$task" "$retry_index")"
+      backoff_sec="$(task_retry_backoff_for_attempt "$task_id" "$retry_index")"
       if ! [[ "$backoff_sec" =~ ^[0-9]+$ ]]; then
         backoff_sec=0
       fi
@@ -445,7 +380,6 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
     local run_id
     local detail_json
     local status
-    local task
     local runner_type
     local managed_by_orchestrator=0
     local NIXFIED_WORKFLOW_CONTEXT="0"
@@ -457,8 +391,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
     extract_machine_output_args "''${filtered_args[@]}" || return $?
     filtered_args=("''${MACHINE_FILTERED_ARGS[@]}")
 
-    task="$(task_json "$task_id")"
-    if [ -z "$task" ]; then
+    if ! task_descriptor_exists "$task_id"; then
       echo "ERROR: unknown task '$task_id'"
       return 2
     fi
@@ -500,7 +433,6 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
     run_task_with_deps() {
       local current_task="$1"
       shift
-      local current_task_json
       local dep_task
       local dep_rc=0
       local rc=0
@@ -514,8 +446,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         return 3
       fi
 
-      current_task_json="$(task_json "$current_task")"
-      if [ -z "$current_task_json" ]; then
+      if ! task_descriptor_exists "$current_task"; then
         echo "ERROR: unknown task '$current_task'"
         return 2
       fi
@@ -535,13 +466,13 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           unset "active_tasks[$current_task]"
           return "$dep_rc"
         fi
-      done < <(printf '%s' "$current_task_json" | ${pkgs.jq}/bin/jq -r '.deps.needs[]?')
+      done < <(task_needs "$current_task")
 
       while IFS= read -r dep_task; do
         if [ -z "$dep_task" ]; then
           continue
         fi
-        if [ -z "$(task_json "$dep_task")" ]; then
+        if ! task_descriptor_exists "$dep_task"; then
           echo "WARN: task '$current_task' soft dependency '$dep_task' is not defined"
           continue
         fi
@@ -553,7 +484,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         if [ "$dep_rc" -ne 0 ]; then
           echo "WARN: task '$current_task' soft dependency '$dep_task' failed exitCode=$dep_rc"
         fi
-      done < <(printf '%s' "$current_task_json" | ${pkgs.jq}/bin/jq -r '.deps.softNeeds[]?')
+      done < <(task_soft_needs "$current_task")
 
       if [ "$current_task" = "$task_id" ] && [ "$runner_type" = "workflowRef" ]; then
         export NIXFIED_JSON_OUTPUT_OVERRIDE="$MACHINE_JSON"
