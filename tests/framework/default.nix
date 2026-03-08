@@ -60,6 +60,10 @@
     inherit pkgs;
   };
 
+  "executor-runtime-contract" = import ./executor-runtime-contract.nix {
+    inherit pkgs;
+  };
+
   "env-sandbox-contract" = import ./env-sandbox-contract.nix {
     inherit pkgs;
   };

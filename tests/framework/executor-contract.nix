@@ -22,18 +22,17 @@ assert pkgs.lib.hasInfix "workflow_unit_records() {" source;
 assert pkgs.lib.hasInfix "retrying attempt=" source;
 assert pkgs.lib.hasInfix "run_task_with_deps() {" source;
 assert pkgs.lib.hasInfix "run_workflow_phase_tasks() {" source;
-assert pkgs.lib.hasInfix "extract_machine_output_args() {" source;
-assert pkgs.lib.hasInfix "--run-id-file" source;
-assert pkgs.lib.hasInfix "--summary-file" source;
+assert pkgs.lib.hasInfix "executorRuntimeShell = import ./executor-runtime.nix" source;
+assert pkgs.lib.hasInfix "\${executorRuntimeShell}" source;
+assert pkgs.lib.hasInfix "extract_machine_output_args \"''\${filtered_args[@]}\"" source;
 assert pkgs.lib.hasInfix "--json and --summary cannot be combined" source;
-assert pkgs.lib.hasInfix "write_text_file_atomic() {" source;
+assert pkgs.lib.hasInfix "write_text_file_atomic \"$MACHINE_RUN_ID_FILE\" \"$run_id\"" source;
 assert pkgs.lib.hasInfix "write_workflow_summary_json() {" source;
-assert pkgs.lib.hasInfix "ensure_run_artifacts_dir() {" source;
+assert pkgs.lib.hasInfix "ensure_run_artifacts_dir \"$run_id\" \"$workflow_id\"" source;
 assert pkgs.lib.hasInfix "registry_events_snapshot" source;
 assert pkgs.lib.hasInfix "summary_json=$summary_file" source;
-assert pkgs.lib.hasInfix "extract_machine_output_args()" source;
 assert pkgs.lib.hasInfix "--json" source;
-assert pkgs.lib.hasInfix "emit_workflow_result_json()" source;
+assert pkgs.lib.hasInfix "emit_workflow_result_json \"$run_id\" \"$workflow_id\"" source;
 assert pkgs.lib.hasInfix "NIXFIED_JSON_OUTPUT_OVERRIDE" source;
 assert pkgs.lib.hasInfix "workflow_steps_json() {" source;
 assert pkgs.lib.hasInfix "print_workflow_summary_report() {" source;
@@ -50,6 +49,7 @@ assert pkgs.lib.hasInfix "workflow_write_summary \"$workflow_id\"" source;
 assert pkgs.lib.hasInfix "workflow_logging_level_default \"$workflow_id\"" source;
 assert pkgs.lib.hasInfix "workflow_lock_policy \"$workflow_id\"" source;
 assert pkgs.lib.hasInfix "workflow_fail_fast \"$workflow_id\"" source;
+assert (!pkgs.lib.hasInfix "extract_machine_output_args() {" source);
 pkgs.runCommand "executor-contract" { } ''
   echo "OK: executor contract markers are stable" > "$out"
 ''
