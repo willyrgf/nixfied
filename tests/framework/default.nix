@@ -297,6 +297,10 @@
     inherit pkgs;
   };
 
+  "nginx-site-management-contract" = import ./nginx-site-management-contract.nix {
+    inherit pkgs;
+  };
+
   "orchestrator-lifecycle-contract" = import ./orchestrator-lifecycle-contract.nix {
     inherit pkgs;
   };
