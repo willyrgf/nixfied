@@ -192,8 +192,17 @@ pkgs.runCommand "workflow-lifecycle-smoke" { } ''
     mkdir -p "$REGISTRY_ROOT"
     mkdir -p "$runtime_scope"
 
+    repo="$TMPDIR/repo"
+    mkdir -p "$repo/subdir"
+    printf 'tracked workflow lifecycle probe\n' > "$repo/tracked.txt"
+    printf 'tracked subdir probe\n' > "$repo/subdir/probe.txt"
+    ${pkgs.git}/bin/git -C "$repo" init >/dev/null 2>&1
+    ${pkgs.git}/bin/git -C "$repo" add tracked.txt subdir/probe.txt
+    ${pkgs.git}/bin/git -C "$repo" -c user.name=nixfied -c user.email=nixfied@example.invalid \
+      commit -m "init workflow lifecycle probe repo" >/dev/null 2>&1
+
     set +e
-    "$EXECUTOR" run-workflow workflow.test.lifecycle.always > "$TMPDIR/always.out" 2>&1
+    NIXFIED_CALLER_PWD="$repo/subdir" "$EXECUTOR" run-workflow workflow.test.lifecycle.always > "$TMPDIR/always.out" 2>&1
     rc_always="$?"
     set -e
     if [ "$rc_always" -eq 0 ]; then
@@ -214,7 +223,7 @@ pkgs.runCommand "workflow-lifecycle-smoke" { } ''
     fi
 
     set +e
-    "$EXECUTOR" run-workflow workflow.test.lifecycle.skip > "$TMPDIR/skip.out" 2>&1
+    NIXFIED_CALLER_PWD="$repo/subdir" "$EXECUTOR" run-workflow workflow.test.lifecycle.skip > "$TMPDIR/skip.out" 2>&1
     rc_skip="$?"
     set -e
     if [ "$rc_skip" -eq 0 ]; then

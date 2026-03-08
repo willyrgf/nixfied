@@ -1,16 +1,67 @@
 { pkgs }:
+let
+  lib = pkgs.lib;
+  registryLockMetaSuffix = ".meta";
+  registryLocksDirName = "locks";
+  registrySeqFileName = ".seq";
+  registrySeqLockFileName = "seq.lock";
+  registryEventsFileName = "events.ndjson";
+  registryEventsLockFileName = "events.lock";
+  registryEventSchemaVersion = 1;
+  registryTimestampFormat = "%Y-%m-%dT%H:%M:%SZ";
+  registrySnapshotTemplate = "nixfied-events-snapshot.XXXXXX";
+  registryDefaultLockTimeoutSeconds = 30;
+  registryEventPayloadExpr =
+    "{detail: $detail, runId: $runId, schemaVersion: $schemaVersion, seq: $seq, state: $state, taskId: $taskId, ts: $ts, workflowId: $workflowId}";
+in
 {
   mkShellLib =
     { }:
     ''
+      REGISTRY_LOCK_META_SUFFIX=${lib.escapeShellArg registryLockMetaSuffix}
+      REGISTRY_LOCKS_DIR_NAME=${lib.escapeShellArg registryLocksDirName}
+      REGISTRY_SEQ_FILE_NAME=${lib.escapeShellArg registrySeqFileName}
+      REGISTRY_SEQ_LOCK_FILE_NAME=${lib.escapeShellArg registrySeqLockFileName}
+      REGISTRY_EVENTS_FILE_NAME=${lib.escapeShellArg registryEventsFileName}
+      REGISTRY_EVENTS_LOCK_FILE_NAME=${lib.escapeShellArg registryEventsLockFileName}
+      REGISTRY_EVENT_SCHEMA_VERSION=${lib.escapeShellArg (toString registryEventSchemaVersion)}
+      REGISTRY_TIMESTAMP_FORMAT=${lib.escapeShellArg registryTimestampFormat}
+      REGISTRY_SNAPSHOT_TEMPLATE=${lib.escapeShellArg registrySnapshotTemplate}
+      REGISTRY_DEFAULT_LOCK_TIMEOUT_SECONDS=${lib.escapeShellArg (toString registryDefaultLockTimeoutSeconds)}
+
       registry_lock_close_fd() {
         local lock_fd="$1"
         eval "exec $lock_fd>&-" 2>/dev/null || eval "exec $lock_fd<&-" 2>/dev/null || true
       }
 
+      registry_locks_dir() {
+        local root="$1"
+        printf '%s/%s' "$root" "$REGISTRY_LOCKS_DIR_NAME"
+      }
+
+      registry_seq_file() {
+        local root="$1"
+        printf '%s/%s' "$root" "$REGISTRY_SEQ_FILE_NAME"
+      }
+
+      registry_seq_lock_file() {
+        local root="$1"
+        printf '%s/%s' "$(registry_locks_dir "$root")" "$REGISTRY_SEQ_LOCK_FILE_NAME"
+      }
+
+      registry_events_file() {
+        local root="$1"
+        printf '%s/%s' "$root" "$REGISTRY_EVENTS_FILE_NAME"
+      }
+
+      registry_events_lock_file() {
+        local root="$1"
+        printf '%s/%s' "$(registry_locks_dir "$root")" "$REGISTRY_EVENTS_LOCK_FILE_NAME"
+      }
+
       registry_lock_meta_file() {
         local lock_file="$1"
-        printf '%s.meta' "$lock_file"
+        printf '%s%s' "$lock_file" "$REGISTRY_LOCK_META_SUFFIX"
       }
 
       registry_lock_owner_summary() {
@@ -48,7 +99,7 @@
         local process_started_at
 
         meta_file="$(registry_lock_meta_file "$lock_file")"
-        acquired_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+        acquired_at="$(date -u +"$REGISTRY_TIMESTAMP_FORMAT")"
         hostname="$(${pkgs.coreutils}/bin/uname -n 2>/dev/null || printf 'unknown')"
         process_started_at="$(${pkgs.procps}/bin/ps -o lstart= -p $$ 2>/dev/null | ${pkgs.gnused}/bin/sed -E 's/^[[:space:]]+//')"
         if [ -z "$process_started_at" ]; then
@@ -137,14 +188,16 @@
 
       registry_next_seq() {
         local root="$1"
-        local seq_file="$root/.seq"
-        local lock_file="$root/locks/seq.lock"
+        local seq_file
+        local lock_file
         local next="1"
         local lock_fd
         local tmp_file
 
+        seq_file="$(registry_seq_file "$root")"
+        lock_file="$(registry_seq_lock_file "$root")"
         mkdir -p "$root"
-        lock_fd="$(registry_lock_acquire "$lock_file" "registry-seq" 30)" || return 1
+        lock_fd="$(registry_lock_acquire "$lock_file" "registry-seq" "$REGISTRY_DEFAULT_LOCK_TIMEOUT_SECONDS")" || return 1
         if [ -f "$seq_file" ]; then
           next="$(( $(cat "$seq_file") + 1 ))"
         fi
@@ -158,18 +211,20 @@
 
       registry_events_snapshot() {
         local root="$1"
-        local events_file="$root/events.ndjson"
-        local lock_file="$root/locks/events.lock"
+        local events_file
+        local lock_file
         local lock_fd
         local snapshot_file
 
+        events_file="$(registry_events_file "$root")"
+        lock_file="$(registry_events_lock_file "$root")"
         if [ ! -f "$events_file" ]; then
           printf '%s' ""
           return 0
         fi
 
-        lock_fd="$(registry_lock_acquire_shared "$lock_file" "registry-events-snapshot" 30)" || return 1
-        snapshot_file="$(mktemp "''${TMPDIR:-/tmp}/nixfied-events-snapshot.XXXXXX")"
+        lock_fd="$(registry_lock_acquire_shared "$lock_file" "registry-events-snapshot" "$REGISTRY_DEFAULT_LOCK_TIMEOUT_SECONDS")" || return 1
+        snapshot_file="$(mktemp "''${TMPDIR:-/tmp}/$REGISTRY_SNAPSHOT_TEMPLATE")"
         cp "$events_file" "$snapshot_file"
         registry_lock_release "$lock_fd" "$lock_file"
         printf '%s' "$snapshot_file"
@@ -190,17 +245,20 @@
         local state="$5"
         local detail_json="$6"
 
-        local events_file="$root/events.ndjson"
-        local seq_file="$root/.seq"
-        local lock_file="$root/locks/events.lock"
+        local events_file
+        local seq_file
+        local lock_file
         local lock_fd
         local seq
         local ts
         local rc
         local seq_tmp
 
+        events_file="$(registry_events_file "$root")"
+        seq_file="$(registry_seq_file "$root")"
+        lock_file="$(registry_events_lock_file "$root")"
         mkdir -p "$root"
-        lock_fd="$(registry_lock_acquire "$lock_file" "registry-events-append" 30)" || return 1
+        lock_fd="$(registry_lock_acquire "$lock_file" "registry-events-append" "$REGISTRY_DEFAULT_LOCK_TIMEOUT_SECONDS")" || return 1
         if [ -f "$seq_file" ]; then
           seq="$(( $(cat "$seq_file") + 1 ))"
         else
@@ -209,11 +267,11 @@
         seq_tmp="$(mktemp "$seq_file.tmp.XXXXXX")"
         printf '%s' "$seq" > "$seq_tmp"
         mv "$seq_tmp" "$seq_file"
-        ts="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+        ts="$(date -u +"$REGISTRY_TIMESTAMP_FORMAT")"
 
         set +e
         ${pkgs.jq}/bin/jq -cnS \
-          --argjson schemaVersion 1 \
+          --argjson schemaVersion "$REGISTRY_EVENT_SCHEMA_VERSION" \
           --argjson seq "$seq" \
           --arg ts "$ts" \
           --arg runId "$run_id" \
@@ -221,7 +279,7 @@
           --arg taskId "$task_id" \
           --arg state "$state" \
           --argjson detail "$detail_json" \
-          '{detail: $detail, runId: $runId, schemaVersion: $schemaVersion, seq: $seq, state: $state, taskId: $taskId, ts: $ts, workflowId: $workflowId}' \
+          ${lib.escapeShellArg registryEventPayloadExpr} \
           >> "$events_file"
         rc="$?"
         set -e

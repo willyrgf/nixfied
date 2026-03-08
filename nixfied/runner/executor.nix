@@ -8,7 +8,10 @@ let
   modelFile = pkgs.writeText "nixfied-model.json" (builtins.toJSON model);
   registryShell = registry.events.mkShellLib { };
   workflowModesShell = import ./workflow-modes.nix {
-    inherit pkgs;
+    inherit
+      pkgs
+      model
+      ;
   };
   envSandboxShell = import ./env-sandbox.nix {
     inherit
@@ -84,7 +87,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
   resolve_run_artifacts_dir() {
     local run_id="$1"
-    local workflow="$2"
+    local workflow_id="$2"
     local caller_root="''${CI_ARTIFACTS_ROOT:-}"
     local caller_dir="''${CI_ARTIFACTS_DIR:-}"
     local configured_root=""
@@ -95,8 +98,8 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       return 2
     fi
 
-    if [ -n "$workflow" ]; then
-      configured_root="$(printf '%s' "$workflow" | ${pkgs.jq}/bin/jq -r '.artifacts.root // empty')"
+    if [ -n "$workflow_id" ]; then
+      configured_root="$(workflow_artifacts_root "$workflow_id")"
     fi
 
     if [ -n "$caller_root" ]; then
@@ -120,7 +123,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
   ensure_run_artifacts_dir() {
     local run_id="$1"
-    local workflow="$2"
+    local workflow_id="$2"
     local managed_by_orchestrator="$3"
     local artifacts_dir
 
@@ -133,7 +136,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       return 0
     fi
 
-    artifacts_dir="$(resolve_run_artifacts_dir "$run_id" "$workflow")" || return $?
+    artifacts_dir="$(resolve_run_artifacts_dir "$run_id" "$workflow_id")" || return $?
     export CI_ARTIFACTS_DIR="$artifacts_dir"
     if ! mkdir -p "$CI_ARTIFACTS_DIR"; then
       echo "ERROR: failed to create artifacts directory '$CI_ARTIFACTS_DIR'"
@@ -625,7 +628,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
     local main_exit_code
     local post_exit_code
 
-    runner_type="$(printf '%s' "$task" | ${pkgs.jq}/bin/jq -r '.runner.type')"
+    runner_type="$(task_runner_type "$task_id")"
     if [ "$runner_type" != "shell" ] && task_has_hooks "$task"; then
       echo "ERROR: task '$task_id' defines runtime hooks but runner type '$runner_type' is unsupported"
       return 3
@@ -659,7 +662,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         fi
         ;;
       workflowRef)
-        nested_workflow="$(printf '%s' "$task" | ${pkgs.jq}/bin/jq -r '.runner.workflowId // empty')"
+        nested_workflow="$(task_runner_workflow_id "$task_id")"
         if [ -z "$nested_workflow" ]; then
           echo "ERROR: task '$task_id' runner.workflowId is empty"
           exit_code=3
@@ -806,7 +809,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       echo "ERROR: unknown task '$task_id'"
       return 2
     fi
-    runner_type="$(printf '%s' "$task" | ${pkgs.jq}/bin/jq -r '.runner.type // "shell"')"
+    runner_type="$(task_runner_type "$task_id")"
 
     if [ "$runner_type" != "workflowRef" ] && [ -n "$MACHINE_SUMMARY_FILE" ]; then
       echo "ERROR: --summary-file is only supported for workflow runs"
@@ -945,13 +948,13 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
   }
 
   resolve_effective_max_workers() {
-    local workflow="$1"
+    local workflow_id="$1"
     local workflow_max_workers
     local effective_workers
     local override_name=""
     local override_value=""
 
-    workflow_max_workers="$(printf '%s' "$workflow" | ${pkgs.jq}/bin/jq -r '.maxWorkers // 1')"
+    workflow_max_workers="$(workflow_max_workers "$workflow_id")"
     if ! [[ "$workflow_max_workers" =~ ^[0-9]+$ ]] || [ "$workflow_max_workers" -lt 1 ]; then
       workflow_max_workers=1
     fi
@@ -1004,12 +1007,12 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
   }
 
   resolve_parallel_mode() {
-    local workflow="$1"
+    local workflow_id="$1"
     local configured_parallel
     local env_override
     local run_parallel=0
 
-    configured_parallel="$(printf '%s' "$workflow" | ${pkgs.jq}/bin/jq -r '.execution.parallel // false')"
+    configured_parallel="$(workflow_parallel_enabled "$workflow_id")"
     if [ "$configured_parallel" = "true" ]; then
       run_parallel=1
     fi
@@ -1319,12 +1322,12 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       done
     }
 
-    if max_workers="$(resolve_effective_max_workers "$workflow")"; then
+    if max_workers="$(resolve_effective_max_workers "$workflow_id")"; then
       :
     else
       return "$?"
     fi
-    lock_policy="$(printf '%s' "$workflow" | ${pkgs.jq}/bin/jq -r '.execution.lockPolicy // "exclusive"')"
+    lock_policy="$(workflow_lock_policy "$workflow_id")"
     if [ "$lock_policy" = "shared-aware" ]; then
       echo "WARN: lockPolicy=shared-aware uses exclusive semantics in workflow parallel runner"
     fi
@@ -1588,16 +1591,6 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
     mins="$(( seconds / 60 ))"
     secs="$(( seconds % 60 ))"
     printf '%s' "''${mins}m ''${secs}s"
-  }
-
-  task_runner_type() {
-    local task_id="$1"
-    if [ -z "$task_id" ]; then
-      printf '%s' "shell"
-      return 0
-    fi
-
-    ${pkgs.jq}/bin/jq -r --arg taskId "$task_id" '.tasks[$taskId].runner.type // "shell"' "$MODEL_FILE"
   }
 
   workflow_step_records_tsv() {
@@ -1956,12 +1949,12 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
     LAST_WORKFLOW_SUMMARY_FILE=""
 
-    should_write="$(printf '%s' "$workflow" | ${pkgs.jq}/bin/jq -r '.artifacts.writeSummary // false')"
+    should_write="$(workflow_write_summary "$workflow_id")"
     if [ "$should_write" != "true" ]; then
       return 0
     fi
 
-    mode="$(printf '%s' "$workflow" | ${pkgs.jq}/bin/jq -r '.mode // "custom"')"
+    mode="$(workflow_mode_name "$workflow_id")"
     artifacts_dir="''${CI_ARTIFACTS_DIR:-}"
     if [ -z "$artifacts_dir" ]; then
       echo "ERROR: CI_ARTIFACTS_DIR is not set for run '$run_id'"
@@ -2009,7 +2002,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       untracked_duration=0
     fi
 
-    if parallel_max_workers="$(resolve_effective_max_workers "$workflow" 2>/dev/null || true)"; then
+    if parallel_max_workers="$(resolve_effective_max_workers "$workflow_id" 2>/dev/null || true)"; then
       :
     fi
     if is_nonneg_int "$parallel_max_workers"; then
@@ -2212,8 +2205,8 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       echo "ERROR: unknown workflow '$workflow_id'"
       return 2
     fi
-    NIXFIED_WORKFLOW_LOG_LEVEL_DEFAULT="$(printf '%s' "$workflow" | ${pkgs.jq}/bin/jq -r '.logging.levelDefault // empty')"
-    NIXFIED_WORKFLOW_OUTPUT_MODE_DEFAULT="$(printf '%s' "$workflow" | ${pkgs.jq}/bin/jq -r '.logging.outputDefault // empty')"
+    NIXFIED_WORKFLOW_LOG_LEVEL_DEFAULT="$(workflow_logging_level_default "$workflow_id")"
+    NIXFIED_WORKFLOW_OUTPUT_MODE_DEFAULT="$(workflow_logging_output_default "$workflow_id")"
 
     started_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
     started_epoch="$(date +%s)"
@@ -2233,14 +2226,14 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       write_text_file_atomic "$MACHINE_RUN_ID_FILE" "$run_id" || return $?
     fi
 
-    ensure_run_artifacts_dir "$run_id" "$workflow" "$managed_by_orchestrator" || return $?
+    ensure_run_artifacts_dir "$run_id" "$workflow_id" "$managed_by_orchestrator" || return $?
     export NIXFIED_RUN_ID="$run_id"
 
     detail_json="$(${pkgs.jq}/bin/jq -cn --arg suffix "$RUN_SUFFIX_REASON" --arg mode "workflow" '{mode: $mode, suffixReason: (if $suffix == "" then null else $suffix end)}')"
     append_event "$run_id" "$workflow_id" "" "queued" "$detail_json"
 
-    fail_fast="$(printf '%s' "$workflow" | ${pkgs.jq}/bin/jq -r '.execution.failFast')"
-    run_parallel="$(resolve_parallel_mode "$workflow")"
+    fail_fast="$(workflow_fail_fast "$workflow_id")"
+    run_parallel="$(resolve_parallel_mode "$workflow_id")"
     if [ "$run_parallel" = "1" ]; then
       local parallel_cap_error=""
       if parallel_cap_error="$(parallel_worker_cap_override_error)"; then
@@ -2271,7 +2264,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       fi
     fi
 
-    post_always="$(printf '%s' "$workflow" | ${pkgs.jq}/bin/jq -r '.postRun.alwaysRun')"
+    post_always="$(workflow_post_run_always "$workflow_id")"
     if [ "$post_always" = "true" ] || [ "$status" -eq 0 ]; then
       if run_workflow_phase_tasks "$run_id" "$workflow_id" "$workflow" "postRun" "''${passthrough_args[@]}"; then
         post_status=0

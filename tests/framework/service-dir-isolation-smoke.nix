@@ -126,7 +126,17 @@ pkgs.runCommand "service-dir-isolation-smoke" { } ''
   ${pkgs.gnugrep}/bin/grep -Fq "INFO: nginx_state=$non_ephemeral_scope/services/nginx/state" "$TMPDIR/non-ephemeral.out"
   ${pkgs.gnugrep}/bin/grep -Fq "INFO: nginx_log=$non_ephemeral_scope/services/nginx/log" "$TMPDIR/non-ephemeral.out"
 
-  REGISTRY_ROOT="$TMPDIR/host-registry" "$ORCH" run-workflow "${probeWorkflowId}" --summary > "$TMPDIR/ephemeral.out" 2>&1
+  repo="$TMPDIR/repo"
+  mkdir -p "$repo/subdir"
+  printf 'tracked service dir probe\n' > "$repo/tracked.txt"
+  printf 'tracked subdir probe\n' > "$repo/subdir/probe.txt"
+  ${pkgs.git}/bin/git -C "$repo" init >/dev/null 2>&1
+  ${pkgs.git}/bin/git -C "$repo" add tracked.txt subdir/probe.txt
+  ${pkgs.git}/bin/git -C "$repo" -c user.name=nixfied -c user.email=nixfied@example.invalid \
+    commit -m "init service dir probe repo" >/dev/null 2>&1
+
+  REGISTRY_ROOT="$TMPDIR/host-registry" NIXFIED_CALLER_PWD="$repo/subdir" \
+    "$ORCH" run-workflow "${probeWorkflowId}" --summary > "$TMPDIR/ephemeral.out" 2>&1
   eph_root="$(${pkgs.gnused}/bin/sed -n 's/^INFO: Root: //p' "$TMPDIR/ephemeral.out" | ${pkgs.coreutils}/bin/tail -n 1)"
   require_non_empty "$eph_root" "eph_root"
 

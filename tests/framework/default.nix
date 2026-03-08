@@ -60,6 +60,26 @@
     inherit pkgs;
   };
 
+  "env-loader-strict-smoke" = import ./env-loader-strict-smoke.nix {
+    inherit pkgs;
+  };
+
+  "shell-contract-contract" = import ./shell-contract-contract.nix {
+    inherit pkgs;
+  };
+
+  "shell-contract-runtime-smoke" = import ./shell-contract-runtime-smoke.nix {
+    inherit pkgs;
+  };
+
+  "slot-env-runtime-contract" = import ./slot-env-runtime-contract.nix {
+    inherit pkgs;
+  };
+
+  "slot-env-runtime-smoke" = import ./slot-env-runtime-smoke.nix {
+    inherit pkgs;
+  };
+
   "workspace-registry-isolation-smoke" = import ./workspace-registry-isolation-smoke.nix {
     inherit
       pkgs
@@ -82,7 +102,10 @@
   };
 
   "operations-contract" = import ./operations-contract.nix {
-    inherit pkgs;
+    inherit
+      pkgs
+      model
+      ;
   };
 
   "project-config-boundary" = import ./project-config-boundary.nix {
@@ -177,6 +200,18 @@
       ;
   };
 
+  "workflow-modes-contract" = import ./workflow-modes-contract.nix {
+    inherit pkgs;
+  };
+
+  "managed-service-lifecycle-contract" = import ./managed-service-lifecycle-contract.nix {
+    inherit pkgs;
+  };
+
+  "supervisor-runtime-contract" = import ./supervisor-runtime-contract.nix {
+    inherit pkgs;
+  };
+
   "task-hooks-smoke" = import ./task-hooks-smoke.nix {
     inherit
       pkgs
@@ -216,6 +251,10 @@
       ;
   };
 
+  "framework-install-filter-smoke" = import ./framework-install-filter-smoke.nix {
+    inherit pkgs;
+  };
+
   "caller-pwd-remote-projectroot-smoke" = import ./caller-pwd-remote-projectroot-smoke.nix {
     inherit
       pkgs
@@ -240,6 +279,14 @@
       model
       registry
       ;
+  };
+
+  "postgres-backup-restore-smoke" = import ./postgres-backup-restore-smoke.nix {
+    inherit pkgs;
+  };
+
+  "nginx-site-management-smoke" = import ./nginx-site-management-smoke.nix {
+    inherit pkgs;
   };
 
   "orchestrator-lifecycle-contract" = import ./orchestrator-lifecycle-contract.nix {
@@ -294,6 +341,14 @@
   };
 
   "ephemeral-runtime-env-isolation-smoke" = import ./ephemeral-runtime-env-isolation-smoke.nix {
+    inherit
+      pkgs
+      model
+      registry
+      ;
+  };
+
+  "ephemeral-env-file-mode-smoke" = import ./ephemeral-env-file-mode-smoke.nix {
     inherit
       pkgs
       model

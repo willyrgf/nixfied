@@ -165,7 +165,7 @@ pkgs.runCommand "ready-health-shutdown-smoke" { } ''
       started_http_ports="$started_http_ports$port,"
 
       ${pkgs.socat}/bin/socat "TCP-LISTEN:$port,bind=127.0.0.1,reuseaddr,fork" \
-        "SYSTEM:${pkgs.coreutils}/bin/cat $TMPDIR/jsonrpc-response.http" \
+        "EXEC:$TMPDIR/jsonrpc-responder.sh" \
         >/dev/null 2>&1 &
       bg_pids+=("$!")
     }
@@ -221,17 +221,23 @@ pkgs.runCommand "ready-health-shutdown-smoke" { } ''
   {"jsonrpc":"2.0","id":1,"result":"0x1"}
   EOF_HTTP
 
+    cat > "$TMPDIR/jsonrpc-responder.sh" <<EOF_RESPONDER
+  #!${pkgs.runtimeShell}
+  exec ${pkgs.coreutils}/bin/cat "$TMPDIR/jsonrpc-response.http"
+  EOF_RESPONDER
+    chmod +x "$TMPDIR/jsonrpc-responder.sh"
+
     pg_data="$TMPDIR/postgres-data"
     ${postgresPkg}/bin/initdb -D "$pg_data" --auth=trust --username=postgres --no-locale > "$TMPDIR/postgres-init.log" 2>&1
     ${postgresPkg}/bin/pg_ctl -D "$pg_data" -o "-h 127.0.0.1 -p $postgres_port -k $TMPDIR" -w start > "$TMPDIR/postgres-start.log" 2>&1
 
     start_tcp_listener "$nginx_http_port"
     start_tcp_listener "$nginx_https_port"
-    start_tcp_listener "$minio_api_port"
     start_tcp_listener "$minio_console_port"
     start_tcp_listener "$reth_ws_port"
     start_tcp_listener "$reth_auth_port"
 
+    start_http_responder "$minio_api_port"
     start_http_responder "$reth_http_port"
     start_http_responder "$helios_rpc_port"
     start_http_responder "$helios_execution_rpc_port"

@@ -159,6 +159,11 @@ in
         default = "git-files";
       };
 
+      includeUntracked = lib.mkOption {
+        type = t.bool;
+        default = false;
+      };
+
       excludePatterns = lib.mkOption {
         type = t.listOf t.str;
         default = [
@@ -204,6 +209,19 @@ in
       minFreeBytesAfterCopy = lib.mkOption {
         type = t.ints.unsigned;
         default = 0;
+      };
+
+      envFileMode = lib.mkOption {
+        type = t.enum [
+          "disabled"
+          "original-root"
+        ];
+        default = "disabled";
+      };
+
+      envFilePath = lib.mkOption {
+        type = t.str;
+        default = ".env";
       };
     };
   };

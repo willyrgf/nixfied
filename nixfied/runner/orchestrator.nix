@@ -6,10 +6,12 @@
 }:
 let
   lib = pkgs.lib;
-  modelFile = pkgs.writeText "nixfied-model.json" (builtins.toJSON model);
   registryShell = registry.events.mkShellLib { };
   workflowModesShell = import ./workflow-modes.nix {
-    inherit pkgs;
+    inherit
+      pkgs
+      model
+      ;
   };
   executor = import ./executor.nix {
     inherit
@@ -66,8 +68,6 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
   export NIXFIED_ORCHESTRATOR_BIN="$0"
   export NIXFIED_ORCHESTRATOR_SELF="$0"
 
-  MODEL_FILE=${lib.escapeShellArg (builtins.toString modelFile)}
-  export NIXFIED_MODEL_FILE="$MODEL_FILE"
   EXECUTOR_PROGRAM=${lib.escapeShellArg "${executor}/bin/nixfied-executor"}
   export NIXFIED_EXECUTOR_BIN="$EXECUTOR_PROGRAM"
   EPHEMERAL_EXECUTOR_WRAPPER=${lib.escapeShellArg (builtins.toString ephemeralExecutorWrapper)}
@@ -154,28 +154,6 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
     seed="orchestrator|${model.identity.evalHash}|$seq|$$|$RANDOM|$(iso_now)"
     digest="$(sha256_text "$seed")"
     printf 'run-%s' "''${digest:0:24}"
-  }
-
-  workflow_json() {
-    local workflow_id="$1"
-    ${pkgs.jq}/bin/jq -c --arg workflowId "$workflow_id" '.workflows[$workflowId] // empty' "$MODEL_FILE"
-  }
-
-  task_json() {
-    local task_id="$1"
-    ${pkgs.jq}/bin/jq -c --arg taskId "$task_id" '.tasks[$taskId] // empty' "$MODEL_FILE"
-  }
-
-  contains_item() {
-    local needle="$1"
-    shift
-    local item
-    for item in "$@"; do
-      if [ "$item" = "$needle" ]; then
-        return 0
-      fi
-    done
-    return 1
   }
 
   validate_log_level_value() {
@@ -405,38 +383,27 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
     local task_id="$1"
     shift
 
-    local task
     local parser
     local allow_unknown
     local has_positional
+    local kind=""
+    local parse_opts=1
+    local arg=""
+    local key=""
 
-    local -a flag_longs
-    local -a option_longs
-    local -a flag_shorts
-    local -a option_shorts
-
-    task="$(task_json "$task_id")"
-    if [ -z "$task" ]; then
+    if ! task_descriptor_exists "$task_id"; then
       echo "ERROR: unknown task '$task_id'"
       return 2
     fi
 
-    parser="$(printf '%s' "$task" | ${pkgs.jq}/bin/jq -r '.contract.input.args.parser // "typed"')"
-    allow_unknown="$(printf '%s' "$task" | ${pkgs.jq}/bin/jq -r '.contract.input.args.allowUnknown // false')"
+    parser="$(task_arg_parser "$task_id")"
+    allow_unknown="$(task_arg_allow_unknown "$task_id")"
 
     if [ "$parser" != "typed" ] || [ "$allow_unknown" = "true" ]; then
       return 0
     fi
 
-    mapfile -t flag_longs < <(printf '%s' "$task" | ${pkgs.jq}/bin/jq -r '.contract.input.args.spec[]? | select(.kind == "flag" and (.long // null) != null) | .long')
-    mapfile -t option_longs < <(printf '%s' "$task" | ${pkgs.jq}/bin/jq -r '.contract.input.args.spec[]? | select(.kind == "option" and (.long // null) != null) | .long')
-    mapfile -t flag_shorts < <(printf '%s' "$task" | ${pkgs.jq}/bin/jq -r '.contract.input.args.spec[]? | select(.kind == "flag" and (.short // null) != null) | .short')
-    mapfile -t option_shorts < <(printf '%s' "$task" | ${pkgs.jq}/bin/jq -r '.contract.input.args.spec[]? | select(.kind == "option" and (.short // null) != null) | .short')
-
-    has_positional="$(printf '%s' "$task" | ${pkgs.jq}/bin/jq -r 'any(.contract.input.args.spec[]?; .kind == "positional")')"
-
-    local parse_opts=1
-    local arg key
+    has_positional="$(task_arg_has_positional "$task_id")"
 
     while [ "$#" -gt 0 ]; do
       arg="$1"
@@ -457,10 +424,8 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
           if [ "$key" = "--run-id-file" ] || [ "$key" = "--summary-file" ]; then
             continue
           fi
-          if contains_item "$key" "''${option_longs[@]}"; then
-            continue
-          fi
-          if contains_item "$key" "''${flag_longs[@]}"; then
+          kind="$(task_arg_long_kind "$task_id" "$key" || true)"
+          if [ "$kind" = "option" ] || [ "$kind" = "flag" ]; then
             continue
           fi
           echo "ERROR: unknown option '$key' for task '$task_id'"
@@ -475,10 +440,11 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
             shift
             continue
           fi
-          if contains_item "$arg" "''${flag_longs[@]}"; then
+          kind="$(task_arg_long_kind "$task_id" "$arg" || true)"
+          if [ "$kind" = "flag" ]; then
             continue
           fi
-          if contains_item "$arg" "''${option_longs[@]}"; then
+          if [ "$kind" = "option" ]; then
             if [ "$#" -lt 1 ]; then
               echo "ERROR: option '$arg' requires a value"
               return 2
@@ -494,10 +460,11 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
             echo "ERROR: unknown option '$arg' for task '$task_id'"
             return 2
           fi
-          if contains_item "$arg" "''${flag_shorts[@]}"; then
+          kind="$(task_arg_short_kind "$task_id" "$arg" || true)"
+          if [ "$kind" = "flag" ]; then
             continue
           fi
-          if contains_item "$arg" "''${option_shorts[@]}"; then
+          if [ "$kind" = "option" ]; then
             if [ "$#" -lt 1 ]; then
               echo "ERROR: option '$arg' requires a value"
               return 2
@@ -517,70 +484,6 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
           ;;
       esac
     done
-  }
-
-  workflow_ephemeral_flag() {
-    local workflow_id="$1"
-    local workflow
-    local explicit
-    local mode
-
-    if [ -z "$workflow_id" ]; then
-      printf '0'
-      return
-    fi
-
-    workflow="$(workflow_json "$workflow_id")"
-    if [ -z "$workflow" ]; then
-      printf '0'
-      return
-    fi
-
-    explicit="$(printf '%s' "$workflow" | ${pkgs.jq}/bin/jq -r 'if .execution.ephemeral.enable == null then "null" else (.execution.ephemeral.enable | tostring) end')"
-    if [ "$explicit" = "true" ]; then
-      printf '1'
-      return
-    fi
-    if [ "$explicit" = "false" ]; then
-      printf '0'
-      return
-    fi
-
-    mode="$(printf '%s' "$workflow" | ${pkgs.jq}/bin/jq -r '.mode // "custom"')"
-    case "$mode" in
-      ci|test)
-        printf '1'
-        ;;
-      *)
-        printf '0'
-        ;;
-    esac
-  }
-
-  workflow_mode_name() {
-    local workflow_id="$1"
-    local workflow
-
-    workflow="$(workflow_json "$workflow_id")"
-    if [ -z "$workflow" ]; then
-      printf 'custom'
-      return
-    fi
-
-    printf '%s' "$(printf '%s' "$workflow" | ${pkgs.jq}/bin/jq -r '.mode // "custom"')"
-  }
-
-  workflow_artifacts_root() {
-    local workflow_id="$1"
-    local workflow
-
-    workflow="$(workflow_json "$workflow_id")"
-    if [ -z "$workflow" ]; then
-      printf '%s' ""
-      return
-    fi
-
-    printf '%s' "$(printf '%s' "$workflow" | ${pkgs.jq}/bin/jq -r '.artifacts.root // empty')"
   }
 
   normalize_run_artifacts_dir() {
@@ -646,18 +549,16 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
 
   resolve_task_workflow_ref() {
     local task_id="$1"
-    local task
     local runner_type
 
-    task="$(task_json "$task_id")"
-    if [ -z "$task" ]; then
+    if ! task_descriptor_exists "$task_id"; then
       printf '%s' ""
       return
     fi
 
-    runner_type="$(printf '%s' "$task" | ${pkgs.jq}/bin/jq -r '.runner.type // "shell"')"
+    runner_type="$(task_runner_type "$task_id")"
     if [ "$runner_type" = "workflowRef" ]; then
-      printf '%s' "$(printf '%s' "$task" | ${pkgs.jq}/bin/jq -r '.runner.workflowId // empty')"
+      task_runner_workflow_id "$task_id"
       return
     fi
 
@@ -1114,9 +1015,7 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
 
     local command_started_at
     local command_started_epoch
-    local task
     local workflow_ref=""
-    local workflow_mode="custom"
     local execution_mode="task"
     local ephemeral_enabled="0"
     local run_id
@@ -1125,8 +1024,7 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
     command_started_at="$(iso_now)"
     command_started_epoch="$(date +%s)"
 
-    task="$(task_json "$task_id")"
-    if [ -z "$task" ]; then
+    if ! task_descriptor_exists "$task_id"; then
       echo "ERROR: unknown task '$task_id'"
       return 2
     fi
@@ -1141,7 +1039,6 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
     fi
 
     if [ -n "$workflow_ref" ]; then
-      workflow_mode="$(workflow_mode_name "$workflow_ref")"
       execution_mode="workflow"
       ephemeral_enabled="$(workflow_ephemeral_flag "$workflow_ref")"
     fi
@@ -1183,7 +1080,6 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
 
     local command_started_at
     local command_started_epoch
-    local workflow
     local mode="workflow"
     local run_id
     local args_json
@@ -1192,8 +1088,7 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
     command_started_at="$(iso_now)"
     command_started_epoch="$(date +%s)"
 
-    workflow="$(workflow_json "$workflow_id")"
-    if [ -z "$workflow" ]; then
+    if ! workflow_id_exists "$workflow_id"; then
       echo "ERROR: unknown workflow '$workflow_id'"
       return 2
     fi

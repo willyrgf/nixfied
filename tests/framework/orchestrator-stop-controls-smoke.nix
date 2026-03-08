@@ -144,8 +144,17 @@ pkgs.runCommand "orchestrator-stop-controls-smoke" { } ''
   mkdir -p "$REGISTRY_ROOT"
 
   stop_gate="$TMPDIR/stop-gate"
+  repo="$TMPDIR/repo"
+  mkdir -p "$repo/subdir"
+  printf 'tracked stop controls probe\n' > "$repo/tracked.txt"
+  printf 'tracked subdir probe\n' > "$repo/subdir/probe.txt"
+  ${pkgs.git}/bin/git -C "$repo" init >/dev/null 2>&1
+  ${pkgs.git}/bin/git -C "$repo" add tracked.txt subdir/probe.txt
+  ${pkgs.git}/bin/git -C "$repo" -c user.name=nixfied -c user.email=nixfied@example.invalid \
+    commit -m "init stop controls probe repo" >/dev/null 2>&1
 
-  NIXFIED_STOP_GATE_FILE="$stop_gate" "$ORCH" run-workflow workflow.test.orchestrator.stop --run-id-file "$TMPDIR/run-one.run-id" --bg > "$TMPDIR/detached-one.out" 2>&1
+  NIXFIED_STOP_GATE_FILE="$stop_gate" NIXFIED_CALLER_PWD="$repo/subdir" \
+    "$ORCH" run-workflow workflow.test.orchestrator.stop --run-id-file "$TMPDIR/run-one.run-id" --bg > "$TMPDIR/detached-one.out" 2>&1
   run_one="$(read_trimmed_file "$TMPDIR/run-one.run-id")"
 
   wait_for_run_state "$ORCH" "$run_one" "running" 10
@@ -157,8 +166,10 @@ pkgs.runCommand "orchestrator-stop-controls-smoke" { } ''
 
   wait_for_run_state "$ORCH" "$run_one" "canceled" 10
 
-  NIXFIED_STOP_GATE_FILE="$stop_gate" "$ORCH" run-workflow workflow.test.orchestrator.stop --run-id-file "$TMPDIR/run-two.run-id" --bg > "$TMPDIR/detached-two.out" 2>&1
-  NIXFIED_STOP_GATE_FILE="$stop_gate" "$ORCH" run-workflow workflow.test.orchestrator.stop --run-id-file "$TMPDIR/run-three.run-id" --bg > "$TMPDIR/detached-three.out" 2>&1
+  NIXFIED_STOP_GATE_FILE="$stop_gate" NIXFIED_CALLER_PWD="$repo/subdir" \
+    "$ORCH" run-workflow workflow.test.orchestrator.stop --run-id-file "$TMPDIR/run-two.run-id" --bg > "$TMPDIR/detached-two.out" 2>&1
+  NIXFIED_STOP_GATE_FILE="$stop_gate" NIXFIED_CALLER_PWD="$repo/subdir" \
+    "$ORCH" run-workflow workflow.test.orchestrator.stop --run-id-file "$TMPDIR/run-three.run-id" --bg > "$TMPDIR/detached-three.out" 2>&1
   run_two="$(read_trimmed_file "$TMPDIR/run-two.run-id")"
   run_three="$(read_trimmed_file "$TMPDIR/run-three.run-id")"
 

@@ -1,0 +1,297 @@
+# Managed service lifecycle helpers and wrapped service-runtime scripts.
+# Pid-file managed services expose SERVICE_DIR, SERVICE_PID_FILE, and
+# SERVICE_LOG_FILE from their runtime prelude.
+{ pkgs }:
+
+let
+  mkWrappedScript =
+    {
+      name,
+      loggingPrelude,
+      runtimePrelude,
+      body,
+    }:
+    pkgs.writeShellScript name ''
+      ${loggingPrelude}
+
+      set -euo pipefail
+      ${runtimePrelude}
+
+      ${body}
+    '';
+
+  mkObservedStatusScript =
+    {
+      name,
+      loggingPrelude,
+      runtimePrelude,
+      runningStateBody,
+      statusMergeBlock,
+      statusBody,
+    }:
+    mkWrappedScript {
+      inherit
+        name
+        loggingPrelude
+        runtimePrelude
+        ;
+      body = ''
+        RUNNING=false
+        PID=""
+
+        ${runningStateBody}
+
+        ${statusMergeBlock}
+
+        ${statusBody}
+
+        if [ "$RUNNING" = "true" ]; then
+          exit 0
+        fi
+        exit 1
+      '';
+    };
+
+  mkPidFileManagedLifecycle =
+    {
+      service,
+      loggingPrelude,
+      runtimePrelude,
+      initBody,
+      checkConfigBody,
+      startPreflight ? "",
+      startCommand,
+      startAlreadyRunningBody,
+      startOnSpawnBody ? ''
+        emit_service_event service_starting starting --pid "$CHILD_PID" --log-path "$LOG_FILE"
+      '',
+      startPostLaunchBody,
+      startExitSuccessBody ? ''
+        emit_service_event service_stopped stopped --pid "$CHILD_PID" --log-path "$LOG_FILE"
+      '',
+      startExitFailureBody,
+      stopMissingBody,
+      stopStaleBody,
+      stopStoppedBody,
+      stopForceKilledBody,
+      statusMergeBlock,
+      statusBody,
+      healthBody,
+      readyBody,
+      stopWaitAttempts ? 20,
+      stopWaitInterval ? "0.2",
+      fullStartBody ? null,
+      fullStartTestBody ? null,
+    }:
+    let
+      init = mkWrappedScript {
+        name = "${service}-init";
+        inherit
+          loggingPrelude
+          runtimePrelude
+          ;
+        body = initBody;
+      };
+
+      start = mkWrappedScript {
+        name = "${service}-start";
+        inherit
+          loggingPrelude
+          runtimePrelude
+          ;
+        body = ''
+          LOG_FILE="$SERVICE_LOG_FILE"
+
+          ${init}
+
+          if [ -f "$SERVICE_PID_FILE" ]; then
+            PID=$(cat "$SERVICE_PID_FILE" 2>/dev/null || true)
+            if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
+              ${startAlreadyRunningBody}
+              exit 0
+            fi
+            rm -f "$SERVICE_PID_FILE"
+          fi
+
+          ${startPreflight}
+          ${startCommand}
+          CHILD_PID=$!
+          echo "$CHILD_PID" > "$SERVICE_PID_FILE"
+
+          ${startOnSpawnBody}
+
+          cleanup() {
+            if [ -n "''${CHILD_PID:-}" ] && kill -0 "$CHILD_PID" 2>/dev/null; then
+              kill "$CHILD_PID" 2>/dev/null || true
+              wait "$CHILD_PID" 2>/dev/null || true
+            fi
+            rm -f "$SERVICE_PID_FILE"
+          }
+
+          trap cleanup EXIT INT TERM
+
+          ${startPostLaunchBody}
+          set +e
+          wait "$CHILD_PID"
+          RC=$?
+          set -e
+
+          if [ "$RC" -eq 0 ]; then
+            ${startExitSuccessBody}
+          else
+            ${startExitFailureBody}
+          fi
+          exit "$RC"
+        '';
+      };
+
+      stop = mkWrappedScript {
+        name = "${service}-stop";
+        inherit
+          loggingPrelude
+          runtimePrelude
+          ;
+        body = ''
+          if [ ! -f "$SERVICE_PID_FILE" ]; then
+            ${stopMissingBody}
+            exit 0
+          fi
+
+          PID=$(cat "$SERVICE_PID_FILE" 2>/dev/null || true)
+          if [ -z "$PID" ] || ! kill -0 "$PID" 2>/dev/null; then
+            rm -f "$SERVICE_PID_FILE"
+            ${stopStaleBody}
+            exit 0
+          fi
+
+          kill "$PID" 2>/dev/null || true
+
+          for _ in $(seq 1 ${toString stopWaitAttempts}); do
+            if ! kill -0 "$PID" 2>/dev/null; then
+              rm -f "$SERVICE_PID_FILE"
+              ${stopStoppedBody}
+              exit 0
+            fi
+            sleep ${stopWaitInterval}
+          done
+
+          kill -KILL "$PID" 2>/dev/null || true
+          rm -f "$SERVICE_PID_FILE"
+          ${stopForceKilledBody}
+        '';
+      };
+
+      restart = pkgs.writeShellScript "${service}-restart" ''
+        ${loggingPrelude}
+
+        set -euo pipefail
+
+        ${stop}
+        exec ${start}
+      '';
+
+      status = mkObservedStatusScript {
+        name = "${service}-status";
+        inherit
+          loggingPrelude
+          runtimePrelude
+          ;
+        runningStateBody = ''
+          if [ -f "$SERVICE_PID_FILE" ]; then
+            PID=$(cat "$SERVICE_PID_FILE" 2>/dev/null || true)
+            if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
+              RUNNING=true
+            fi
+          fi
+        '';
+        inherit
+          statusMergeBlock
+          statusBody
+          ;
+      };
+
+      checkConfig = mkWrappedScript {
+        name = "${service}-check-config";
+        inherit
+          loggingPrelude
+          runtimePrelude
+          ;
+        body = checkConfigBody;
+      };
+
+      health = mkWrappedScript {
+        name = "${service}-health";
+        inherit
+          loggingPrelude
+          runtimePrelude
+          ;
+        body = healthBody;
+      };
+
+      ready = mkWrappedScript {
+        name = "${service}-ready";
+        inherit
+          loggingPrelude
+          runtimePrelude
+          ;
+        body = readyBody;
+      };
+
+      fullStart = pkgs.writeShellScript "${service}-full-start" ''
+        ${loggingPrelude}
+
+        set -euo pipefail
+
+        ${
+          if fullStartBody != null then
+            fullStartBody
+          else
+            ''
+              ${init}
+              ${checkConfig}
+              exec ${start}
+            ''
+        }
+      '';
+
+      fullStartTest = pkgs.writeShellScript "${service}-full-start-test" ''
+        ${loggingPrelude}
+
+        set -euo pipefail
+
+        ${
+          if fullStartTestBody != null then
+            fullStartTestBody
+          else if fullStartBody != null then
+            fullStartBody
+          else
+            ''
+              ${init}
+              ${checkConfig}
+              exec ${start}
+            ''
+        }
+      '';
+    in
+    {
+      inherit
+        init
+        start
+        stop
+        restart
+        status
+        checkConfig
+        health
+        ready
+        fullStart
+        fullStartTest
+        ;
+    };
+in
+{
+  inherit
+    mkWrappedScript
+    mkObservedStatusScript
+    mkPidFileManagedLifecycle
+    ;
+}

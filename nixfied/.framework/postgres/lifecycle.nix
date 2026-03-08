@@ -8,6 +8,8 @@
 }:
 
 let
+  managedServiceLifecycle = import ../lib/managed-service-lifecycle.nix { inherit pkgs; };
+  probeCommands = import ../lib/probe-commands.nix { inherit pkgs; };
   slotEnvRuntime = import ../lib/slot-env-runtime.nix { inherit pkgs; };
   processRegistry = import ../lib/process-registry.nix { inherit pkgs project; };
   observability = import ../lib/service-observability.nix {
@@ -25,6 +27,30 @@ let
   database = config.database or "app";
   testDatabase = config.testDatabase or "${database}_test";
   extensions = config.extensions or [ ];
+  mkWrappedScript =
+    {
+      name,
+      runtimePrelude ? "",
+      body,
+    }:
+    managedServiceLifecycle.mkWrappedScript {
+      inherit
+        name
+        loggingPrelude
+        runtimePrelude
+        body
+        ;
+    };
+  mkPgScript =
+    {
+      name,
+      defaultDb ? database,
+      body,
+    }:
+    mkWrappedScript {
+      inherit name body;
+      runtimePrelude = pgRuntimePrelude defaultDb;
+    };
   pgRuntimePrelude = defaultDb: ''
     ${slotEnvRuntime.loadJsonFromCommand {
       outVar = "SLOT_INFO_JSON_OUT";
@@ -84,223 +110,218 @@ let
     }
   '';
 
-  init = pkgs.writeShellScript "postgres-init" ''
-    ${loggingPrelude}
+  init = mkPgScript {
+    name = "postgres-init";
+    body = ''
+      ${ensureConfigPort}
 
-    set -euo pipefail
+      mkdir -p "$PGDATA"
 
-    ${pgRuntimePrelude database}
-    ${ensureConfigPort}
-
-    mkdir -p "$PGDATA"
-
-    if [ -f "$PGDATA/PG_VERSION" ]; then
-      log_ok "PostgreSQL already initialized at $PGDATA"
-      exit 0
-    fi
-
-    log_info "Initializing PostgreSQL at $PGDATA"
-    ${postgres}/bin/initdb -D "$PGDATA" -U postgres --no-locale --encoding=UTF8 -A trust
-
-    # Determine environment-specific config
-    CONF_ENV="''${ENV:-dev}"
-    case "$CONF_ENV" in
-      prod)
-        cat > "$PGDATA/postgresql.conf" <<'PGCONF'
-    ${config.prodConf}
-    PGCONF
-        ;;
-      test)
-        cat > "$PGDATA/postgresql.conf" <<'PGCONF'
-    ${config.testConf}
-    PGCONF
-        ;;
-      *)
-        cat > "$PGDATA/postgresql.conf" <<'PGCONF'
-    ${config.devConf}
-    PGCONF
-        ;;
-    esac
-
-    ensure_config_port "$PGDATA/postgresql.conf"
-    if ! ${postgres}/bin/postgres -D "$PGDATA" -C port >/dev/null 2>&1; then
-      log_error "PostgreSQL configuration invalid after init pgdata=$PGDATA"
-      exit 1
-    fi
-
-    cat > "$PGDATA/pg_hba.conf" <<'EOF'
-    # TYPE  DATABASE        USER  ADDRESS       METHOD
-    local   all             all                 trust
-    host    all             all   127.0.0.1/32  trust
-    host    all             all   ::1/128       trust
-    EOF
-  '';
-
-  start = pkgs.writeShellScript "postgres-start" ''
-    ${loggingPrelude}
-
-    set -euo pipefail
-
-    ${pgRuntimePrelude database}
-    ${ensureConfigPort}
-
-    if [ ! -f "$PGDATA/postgresql.conf" ]; then
-      log_error "PostgreSQL not initialized at $PGDATA (missing postgresql.conf)"
-      echo "   Run postgres init first: nix run .#svc::postgres::init" >&2
-      exit 1
-    fi
-    ensure_config_port "$PGDATA/postgresql.conf"
-
-    if ${postgres}/bin/pg_isready -U postgres -h localhost -p "$PGPORT" -q 2>/dev/null; then
-      # Verify the running instance is ours by checking PGDATA
-      if [ -f "$PGDATA/postmaster.pid" ]; then
-        RUN_PID=$(head -1 "$PGDATA/postmaster.pid" 2>/dev/null || true)
-        emit_service_event service_ready ready --pid "$RUN_PID" --log-path "$PGDATA/postgres.log"
-        log_ok "PostgreSQL already running on port $PGPORT"
+      if [ -f "$PGDATA/PG_VERSION" ]; then
+        log_ok "PostgreSQL already initialized at $PGDATA"
         exit 0
-      else
-        log_warn "Port $PGPORT in use by a different PostgreSQL instance"
-        if [ "''${CI:-}" = "true" ] || [ "''${AUTO_STOP_CONFLICTING:-}" = "1" ]; then
-          echo "   Auto-stopping conflicting instance (CI mode)..." >&2
-          lsof -ti:$PGPORT 2>/dev/null | xargs kill -TERM 2>/dev/null || true
-          sleep 2
+      fi
+
+      log_info "Initializing PostgreSQL at $PGDATA"
+      ${postgres}/bin/initdb -D "$PGDATA" -U postgres --no-locale --encoding=UTF8 -A trust
+
+      # Determine environment-specific config
+      CONF_ENV="''${ENV:-dev}"
+      case "$CONF_ENV" in
+        prod)
+          cat > "$PGDATA/postgresql.conf" <<'PGCONF'
+      ${config.prodConf}
+      PGCONF
+          ;;
+        test)
+          cat > "$PGDATA/postgresql.conf" <<'PGCONF'
+      ${config.testConf}
+      PGCONF
+          ;;
+        *)
+          cat > "$PGDATA/postgresql.conf" <<'PGCONF'
+      ${config.devConf}
+      PGCONF
+          ;;
+      esac
+
+      ensure_config_port "$PGDATA/postgresql.conf"
+      if ! ${postgres}/bin/postgres -D "$PGDATA" -C port >/dev/null 2>&1; then
+        log_error "PostgreSQL configuration invalid after init pgdata=$PGDATA"
+        exit 1
+      fi
+
+      cat > "$PGDATA/pg_hba.conf" <<'EOF'
+      # TYPE  DATABASE        USER  ADDRESS       METHOD
+      local   all             all                 trust
+      host    all             all   127.0.0.1/32  trust
+      host    all             all   ::1/128       trust
+      EOF
+    '';
+  };
+
+  start = mkPgScript {
+    name = "postgres-start";
+    body = ''
+      ${ensureConfigPort}
+
+      if [ ! -f "$PGDATA/postgresql.conf" ]; then
+        log_error "PostgreSQL not initialized at $PGDATA (missing postgresql.conf)"
+        echo "   Run postgres init first: nix run .#svc::postgres::init" >&2
+        exit 1
+      fi
+      ensure_config_port "$PGDATA/postgresql.conf"
+
+      if ${probeCommands.pgIsReadyCmd {
+        inherit postgres;
+        portExpr = "$PGPORT";
+      }} then
+        # Verify the running instance is ours by checking PGDATA
+        if [ -f "$PGDATA/postmaster.pid" ]; then
+          RUN_PID=$(head -1 "$PGDATA/postmaster.pid" 2>/dev/null || true)
+          emit_service_event service_ready ready --pid "$RUN_PID" --log-path "$PGDATA/postgres.log"
+          log_ok "PostgreSQL already running on port $PGPORT"
+          exit 0
         else
-          echo "   Use 'run_hook SVC_POSTGRES_CHECK_PORT' to investigate" >&2
-          exit 1
+          log_warn "Port $PGPORT in use by a different PostgreSQL instance"
+          if [ "''${CI:-}" = "true" ] || [ "''${AUTO_STOP_CONFLICTING:-}" = "1" ]; then
+            echo "   Auto-stopping conflicting instance (CI mode)..." >&2
+            lsof -ti:$PGPORT 2>/dev/null | xargs kill -TERM 2>/dev/null || true
+            sleep 2
+          else
+            echo "   Use 'run_hook SVC_POSTGRES_CHECK_PORT' to investigate" >&2
+            exit 1
+          fi
         fi
       fi
-    fi
 
-    # Clean up stale PID file
-    if [ -f "$PGDATA/postmaster.pid" ]; then
-      STALE_PID=$(head -1 "$PGDATA/postmaster.pid" 2>/dev/null || true)
-      if [ -n "$STALE_PID" ] && ! kill -0 "$STALE_PID" 2>/dev/null; then
-        log_info "Removing stale PID file (PID $STALE_PID not running)"
-        rm -f "$PGDATA/postmaster.pid"
+      # Clean up stale PID file
+      if [ -f "$PGDATA/postmaster.pid" ]; then
+        STALE_PID=$(head -1 "$PGDATA/postmaster.pid" 2>/dev/null || true)
+        if [ -n "$STALE_PID" ] && ! kill -0 "$STALE_PID" 2>/dev/null; then
+          log_info "Removing stale PID file (PID $STALE_PID not running)"
+          rm -f "$PGDATA/postmaster.pid"
+        fi
       fi
-    fi
 
-    if [ -z "''${PGSOCKET_DIR:-}" ]; then
-      PGSOCKET_DIR="/tmp"
-    fi
-    mkdir -p "$PGSOCKET_DIR"
-    chmod 700 "$PGSOCKET_DIR" 2>/dev/null || true
-
-    log_info "Starting PostgreSQL on port $PGPORT"
-    emit_service_event service_starting starting --log-path "$PGDATA/postgres.log"
-    ${postgres}/bin/pg_ctl -D "$PGDATA" -l "$PGDATA/postgres.log" -o "-p $PGPORT -k $PGSOCKET_DIR" start
-
-    for i in $(seq 1 60); do
-      if ${postgres}/bin/pg_isready -U postgres -h localhost -p "$PGPORT" -q 2>/dev/null; then
-        RUN_PID=$(head -1 "$PGDATA/postmaster.pid" 2>/dev/null || true)
-        emit_service_event service_ready ready --pid "$RUN_PID" --log-path "$PGDATA/postgres.log"
-        log_ok "PostgreSQL ready on port $PGPORT"
-        exit 0
+      if [ -z "''${PGSOCKET_DIR:-}" ]; then
+        PGSOCKET_DIR="/tmp"
       fi
-      sleep 0.5
-    done
+      mkdir -p "$PGSOCKET_DIR"
+      chmod 700 "$PGSOCKET_DIR" 2>/dev/null || true
 
-    emit_service_event service_degraded degraded \
-      --log-path "$PGDATA/postgres.log" \
-      --wait-reason "failed_readiness" \
-      --last-error "postgres did not become ready in startup window"
-    log_error "PostgreSQL failed to start. Check $PGDATA/postgres.log"
-    if [ -f "$PGDATA/postgres.log" ]; then
-      log_info "postgres log tail path=$PGDATA/postgres.log lines=20"
-      tail -20 "$PGDATA/postgres.log" >&2 || true
-    else
-      log_warn "postgres log file missing path=$PGDATA/postgres.log"
-    fi
-    exit 1
-  '';
+      log_info "Starting PostgreSQL on port $PGPORT"
+      emit_service_event service_starting starting --log-path "$PGDATA/postgres.log"
+      ${postgres}/bin/pg_ctl -D "$PGDATA" -l "$PGDATA/postgres.log" -o "-p $PGPORT -k $PGSOCKET_DIR" start
 
-  stop = pkgs.writeShellScript "postgres-stop" ''
-    ${loggingPrelude}
-
-    set -euo pipefail
-    ${pgRuntimePrelude database}
-
-    if [ -n "''${PGDATA:-}" ] && [ -f "$PGDATA/postmaster.pid" ]; then
-      RUN_PID=$(head -1 "$PGDATA/postmaster.pid" 2>/dev/null || true)
-      log_stop "PostgreSQL at $PGDATA"
-      ${postgres}/bin/pg_ctl -D "$PGDATA" stop -m fast 2>/dev/null || true
-      emit_service_event service_stopped stopped --pid "$RUN_PID" --log-path "$PGDATA/postgres.log"
-    else
-      emit_service_event service_stopped stopped
-    fi
-  '';
-
-  setupDb = pkgs.writeShellScript "postgres-setup-db" ''
-    ${loggingPrelude}
-
-    set -euo pipefail
-
-    ${pgRuntimePrelude database}
-
-    log_info "Setting up database '$PGDATABASE'"
-
-    ${postgres}/bin/psql -h localhost -p "$PGPORT" -U postgres -d postgres -c \
-      "DO \$\$ BEGIN CREATE ROLE postgres WITH LOGIN SUPERUSER PASSWORD 'postgres'; EXCEPTION WHEN duplicate_object THEN NULL; END \$\$;" 2>/dev/null || true
-
-    ${postgres}/bin/createdb -h localhost -p "$PGPORT" -U postgres "$PGDATABASE" 2>/dev/null || true
-
-    if [ -n "${pkgs.lib.concatStringsSep " " extensions}" ]; then
-      for ext in ${pkgs.lib.concatStringsSep " " extensions}; do
-        ${postgres}/bin/psql -h localhost -p "$PGPORT" -U postgres -d "$PGDATABASE" \
-          -c "CREATE EXTENSION IF NOT EXISTS $ext;" 2>/dev/null || true
+      for i in $(seq 1 60); do
+        if ${probeCommands.pgIsReadyCmd {
+          inherit postgres;
+          portExpr = "$PGPORT";
+        }} then
+          RUN_PID=$(head -1 "$PGDATA/postmaster.pid" 2>/dev/null || true)
+          emit_service_event service_ready ready --pid "$RUN_PID" --log-path "$PGDATA/postgres.log"
+          log_ok "PostgreSQL ready on port $PGPORT"
+          exit 0
+        fi
+        sleep 0.5
       done
-    fi
 
-    log_ok "Database '$PGDATABASE' ready"
-  '';
-
-  fullStart = pkgs.writeShellScript "postgres-full-start" ''
-    ${loggingPrelude}
-
-    set -euo pipefail
-    ${pgRuntimePrelude database}
-
-    log_info "Slot $SLOT, env $ENV (PGPORT=$PGPORT)"
-
-    ${init}
-    ${start}
-    ${setupDb}
-
-    echo "PGPORT=$PGPORT"
-    echo "PGDATA=$PGDATA"
-    echo "PGDATABASE=$PGDATABASE"
-  '';
-
-  fullStartTest = pkgs.writeShellScript "postgres-full-start-test" ''
-    ${loggingPrelude}
-
-    set -euo pipefail
-    ${pgRuntimePrelude testDatabase}
-    export PGDATABASE="''${PGDATABASE:-${testDatabase}}"
-
-    ${init}
-    ${start}
-    ${setupDb}
-  '';
-
-  listInstances = pkgs.writeShellScript "postgres-list-instances" ''
-    ${loggingPrelude}
-
-    set -euo pipefail
-    echo "PostgreSQL instances:"
-    echo ""
-    for pidfile in $(find "''${XDG_DATA_HOME:-$HOME/.local/share}" -name "postmaster.pid" 2>/dev/null || true); do
-      PGDATA_DIR=$(dirname "$pidfile")
-      PID=$(head -1 "$pidfile" 2>/dev/null || echo "unknown")
-      PORT=$(sed -n '4p' "$pidfile" 2>/dev/null || echo "unknown")
-      if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
-        STATUS="running"
+      emit_service_event service_degraded degraded \
+        --log-path "$PGDATA/postgres.log" \
+        --wait-reason "failed_readiness" \
+        --last-error "postgres did not become ready in startup window"
+      log_error "PostgreSQL failed to start. Check $PGDATA/postgres.log"
+      if [ -f "$PGDATA/postgres.log" ]; then
+        log_info "postgres log tail path=$PGDATA/postgres.log lines=20"
+        tail -20 "$PGDATA/postgres.log" >&2 || true
       else
-        STATUS="stale"
+        log_warn "postgres log file missing path=$PGDATA/postgres.log"
       fi
-      echo "  $PGDATA_DIR (PID: $PID, Port: $PORT, Status: $STATUS)"
-    done
-  '';
+      exit 1
+    '';
+  };
+
+  stop = mkPgScript {
+    name = "postgres-stop";
+    body = ''
+      if [ -n "''${PGDATA:-}" ] && [ -f "$PGDATA/postmaster.pid" ]; then
+        RUN_PID=$(head -1 "$PGDATA/postmaster.pid" 2>/dev/null || true)
+        log_stop "PostgreSQL at $PGDATA"
+        ${postgres}/bin/pg_ctl -D "$PGDATA" stop -m fast 2>/dev/null || true
+        emit_service_event service_stopped stopped --pid "$RUN_PID" --log-path "$PGDATA/postgres.log"
+      else
+        emit_service_event service_stopped stopped
+      fi
+    '';
+  };
+
+  setupDb = mkPgScript {
+    name = "postgres-setup-db";
+    body = ''
+      log_info "Setting up database '$PGDATABASE'"
+
+      ${postgres}/bin/psql -h localhost -p "$PGPORT" -U postgres -d postgres -c \
+        "DO \$\$ BEGIN CREATE ROLE postgres WITH LOGIN SUPERUSER PASSWORD 'postgres'; EXCEPTION WHEN duplicate_object THEN NULL; END \$\$;" 2>/dev/null || true
+
+      ${postgres}/bin/createdb -h localhost -p "$PGPORT" -U postgres "$PGDATABASE" 2>/dev/null || true
+
+      if [ -n "${pkgs.lib.concatStringsSep " " extensions}" ]; then
+        for ext in ${pkgs.lib.concatStringsSep " " extensions}; do
+          ${postgres}/bin/psql -h localhost -p "$PGPORT" -U postgres -d "$PGDATABASE" \
+            -c "CREATE EXTENSION IF NOT EXISTS $ext;" 2>/dev/null || true
+        done
+      fi
+
+      log_ok "Database '$PGDATABASE' ready"
+    '';
+  };
+
+  fullStart = mkPgScript {
+    name = "postgres-full-start";
+    body = ''
+      log_info "Slot $SLOT, env $ENV (PGPORT=$PGPORT)"
+
+      ${init}
+      ${start}
+      ${setupDb}
+
+      echo "PGPORT=$PGPORT"
+      echo "PGDATA=$PGDATA"
+      echo "PGDATABASE=$PGDATABASE"
+    '';
+  };
+
+  fullStartTest = mkPgScript {
+    name = "postgres-full-start-test";
+    defaultDb = testDatabase;
+    body = ''
+      export PGDATABASE="''${PGDATABASE:-${testDatabase}}"
+
+      ${init}
+      ${start}
+      ${setupDb}
+    '';
+  };
+
+  listInstances = mkWrappedScript {
+    name = "postgres-list-instances";
+    body = ''
+      echo "PostgreSQL instances:"
+      echo ""
+      for pidfile in $(find "''${XDG_DATA_HOME:-$HOME/.local/share}" -name "postmaster.pid" 2>/dev/null || true); do
+        PGDATA_DIR=$(dirname "$pidfile")
+        PID=$(head -1 "$pidfile" 2>/dev/null || echo "unknown")
+        PORT=$(sed -n '4p' "$pidfile" 2>/dev/null || echo "unknown")
+        if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
+          STATUS="running"
+        else
+          STATUS="stale"
+        fi
+        echo "  $PGDATA_DIR (PID: $PID, Port: $PORT, Status: $STATUS)"
+      done
+    '';
+  };
 
 in
 {

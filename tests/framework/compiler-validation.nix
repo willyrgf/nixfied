@@ -41,6 +41,7 @@ assert model.identity.projectName == "Nixfied Project";
 assert model.identity.description == "Reusable Nix development framework";
 assert model.runtime ? ephemeral;
 assert model.runtime.ephemeral.copyMode == "git-files";
+assert builtins.isBool model.runtime.ephemeral.includeUntracked;
 assert builtins.isList model.runtime.ephemeral.excludePatterns;
 assert builtins.isList model.runtime.ephemeral.extraDirs;
 assert builtins.isBool model.runtime.ephemeral.keepFailures;
@@ -48,6 +49,8 @@ assert builtins.isInt model.runtime.ephemeral.maxFailedRoots;
 assert builtins.isInt model.runtime.ephemeral.maxFailedRootAgeHours;
 assert builtins.isInt model.runtime.ephemeral.maxCopyBytes;
 assert builtins.isInt model.runtime.ephemeral.minFreeBytesAfterCopy;
+assert model.runtime.ephemeral.envFileMode == "disabled";
+assert model.runtime.ephemeral.envFilePath == ".env";
 assert model.runtime.runtimePackages != [ ];
 assert builtins.all (
   pkg: builtins.elem pkg formatTask.runtime.runtimeInputs

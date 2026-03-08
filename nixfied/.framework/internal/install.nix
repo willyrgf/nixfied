@@ -11,35 +11,14 @@ let
   installManifest = import ./install-manifest.nix { inherit pkgs; };
   projectTemplates = installManifest.projectTemplates;
   frameworkHelpers = installManifest.frameworkHelpers;
-  requiredTemplates = builtins.filter (t: t.required or false) projectTemplates;
   optionalTemplates = builtins.filter (t: !(t.required or false)) projectTemplates;
+  templateFilterPlanDataJson = builtins.toJSON installManifest.templateFilterPlanData;
   filterHelpValues = builtins.concatStringsSep "," installManifest.templateFilterDisplayTokens;
   filterAliasNotes = builtins.concatStringsSep "; " (
     builtins.concatLists (
       map (t: map (alias: "${alias} is an alias of ${t.file}") (t.aliases or [ ])) projectTemplates
     )
   );
-  requiredKeepAssignments = pkgs.lib.concatMapStringsSep "\n" (
-    t: "                                  KEEP[${t.key}]=1"
-  ) requiredTemplates;
-  filterCaseArms = pkgs.lib.concatMapStringsSep "\n" (
-    t:
-    pkgs.lib.concatMapStringsSep "\n" (token: ''
-      ${token})
-        KEEP[${t.key}]=1
-        ;;
-    '') ([ t.key ] ++ (t.aliases or [ ]))
-  ) projectTemplates;
-  optionalTemplatePruneScript = pkgs.lib.concatMapStringsSep "\n" (t: ''
-    if [ -z "''${KEEP[${t.key}]:-}" ]; then
-      rm -f "$ROOT/nixfied/project/${t.file}" 2>/dev/null || true
-    fi
-  '') optionalTemplates;
-  filteredDefaultImportsScript = pkgs.lib.concatMapStringsSep "\n" (t: ''
-    if [ -n "''${KEEP[${t.key}]:-}" ]; then
-      echo "    (mkPart ./${t.file})"
-    fi
-  '') optionalTemplates;
   filteredTemplateHint = builtins.concatStringsSep "," (
     map (t: pkgs.lib.strings.removeSuffix ".nix" t.file) optionalTemplates
   );
@@ -53,6 +32,69 @@ let
         exit 1
       fi
       printf '%s\n' "$2"
+    }
+  '';
+
+  templateFilterPlanFunction = ''
+    PROJECT_TEMPLATE_FILTER_PLAN_DATA_JSON=${pkgs.lib.escapeShellArg templateFilterPlanDataJson}
+
+    compute_template_filter_plan() {
+      local filters_raw="$1"
+
+      printf '%s' "$PROJECT_TEMPLATE_FILTER_PLAN_DATA_JSON" | ${pkgs.jq}/bin/jq -c --arg filtersRaw "$filters_raw" '
+        . as $data
+        | ($data.requiredKeys // []) as $requiredKeys
+        | ($data.optionalTemplates // []) as $optionalTemplates
+        | ($data.tokenToKey // {}) as $tokenToKey
+        | ($filtersRaw | split(",") | map(ascii_downcase) | map(select(length > 0))) as $tokens
+        | reduce $tokens[] as $token (
+            {
+              unknown: [],
+              selectedKeys: []
+            };
+            ([ $tokenToKey[$token] ] | map(select(. != null)) | first) as $matchedKey
+            | if $matchedKey == null then
+                .unknown += [ $token ]
+              else
+                .selectedKeys += [ $matchedKey ]
+              end
+          )
+        | .selectedKeys |= (unique | sort)
+        | .keepKeys = (($requiredKeys + .selectedKeys) | unique | sort)
+        | .keepKeys as $keepKeys
+        | .pruneFiles = [
+            $optionalTemplates[]
+            | .key as $templateKey
+            | select(($keepKeys | index($templateKey)) == null)
+            | .file
+          ]
+        | .defaultNix = (
+            [
+              "{ pkgs ? null }:",
+              "",
+              "let",
+              "  conf = import ./conf.nix { inherit pkgs; };",
+              "  project = conf.project or { };",
+              "  frameworkLib = import ../.framework/lib { inherit pkgs; project = conf; };",
+              "  commandLib = import ./lib/command.nix { inherit project; appApi = frameworkLib.appApi; };",
+              "  mkPart = path: import path { inherit pkgs project commandLib; };",
+              "  parts = [",
+              "    conf"
+            ]
+            + [
+              $optionalTemplates[]
+              | .key as $templateKey
+              | select(($keepKeys | index($templateKey)) != null)
+              | "    (mkPart ./\(.file))"
+            ]
+            + [
+              "  ];",
+              "in",
+              "pkgs.lib.foldl\u0027 pkgs.lib.recursiveUpdate { } parts"
+            ]
+            | join("\n")
+          )
+      '
     }
   '';
 
@@ -206,6 +248,7 @@ let
                                     ${lib.loggingPrelude}
 
                                     set -euo pipefail
+                                    ${templateFilterPlanFunction}
 
                                     ORIG_ARGS=("$@")
                                     FORCE=false
@@ -579,41 +622,24 @@ let
                                     rm -f "$ROOT/nixfied/.framework/.workspace"
 
                                     if [ -n "$FILTERS_RAW" ]; then
-                                      IFS=',' read -r -a FILTERS <<< "$FILTERS_RAW"
-                                      declare -A KEEP
-    ${requiredKeepAssignments}
+                                      FILTER_PLAN_JSON="$(compute_template_filter_plan "$FILTERS_RAW")"
+                                      FIRST_UNKNOWN_FILTER="$(
+                                        printf '%s' "$FILTER_PLAN_JSON" | ${pkgs.jq}/bin/jq -r '.unknown[0] // empty'
+                                      )"
+                                      if [ -n "$FIRST_UNKNOWN_FILTER" ]; then
+                                        log_error "Unknown filter: $FIRST_UNKNOWN_FILTER"
+                                        exit 1
+                                      fi
 
-                                      for f in "''${FILTERS[@]}"; do
-                                        f="''${f,,}"
-                                        case "$f" in
-    ${filterCaseArms}
-                                          "")
-                                            ;;
-                            	              *)
-                            	                log_error "Unknown filter: $f"
-                            	                exit 1
-                            	                ;;
-                            	            esac
-                            	          done
+                                      while IFS= read -r template_file; do
+                                        if [ -n "$template_file" ]; then
+                                          rm -f "$ROOT/nixfied/project/$template_file" 2>/dev/null || true
+                                        fi
+                                      done < <(
+                                        printf '%s' "$FILTER_PLAN_JSON" | ${pkgs.jq}/bin/jq -r '.pruneFiles[]?'
+                                      )
 
-    ${optionalTemplatePruneScript}
-
-                                      {
-                                        echo "{ pkgs ? null }:"
-                                        echo ""
-                                        echo "let"
-                                        echo "  conf = import ./conf.nix { inherit pkgs; };"
-                                        echo "  project = conf.project or { };"
-                                        echo "  frameworkLib = import ../.framework/lib { inherit pkgs; project = conf; };"
-                                        echo "  commandLib = import ./lib/command.nix { inherit project; appApi = frameworkLib.appApi; };"
-                                        echo "  mkPart = path: import path { inherit pkgs project commandLib; };"
-                                        echo "  parts = ["
-                                        echo "    conf"
-    ${filteredDefaultImportsScript}
-                                        echo "  ];"
-                                        echo "in"
-                                        echo "pkgs.lib.foldl' pkgs.lib.recursiveUpdate { } parts"
-                                      } > "$ROOT/nixfied/project/default.nix"
+                                      printf '%s' "$FILTER_PLAN_JSON" | ${pkgs.jq}/bin/jq -r '.defaultNix' > "$ROOT/nixfied/project/default.nix"
                                     fi
 
                                     if [ "$PROMPT_PLAN" = "true" ]; then

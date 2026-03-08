@@ -518,6 +518,7 @@ in
         directories.base = resolvedRuntimeBase;
         ephemeral = {
           copyMode = conf.ephemeral.copyMode or "git-files";
+          includeUntracked = conf.ephemeral.includeUntracked or false;
           excludePatterns =
             conf.ephemeral.excludePatterns or [
               ".git"
@@ -538,6 +539,8 @@ in
           maxFailedRootAgeHours = conf.ephemeral.maxFailedRootAgeHours or 72;
           maxCopyBytes = conf.ephemeral.maxCopyBytes or 0;
           minFreeBytesAfterCopy = conf.ephemeral.minFreeBytesAfterCopy or 0;
+          envFileMode = conf.ephemeral.envFileMode or "disabled";
+          envFilePath = conf.ephemeral.envFilePath or ".env";
         };
       };
 

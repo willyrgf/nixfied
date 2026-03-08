@@ -21,10 +21,21 @@ pkgs.runCommand "artifacts-root-override-isolation-smoke" { } ''
   export REGISTRY_ROOT="$TMPDIR/registry"
   mkdir -p "$REGISTRY_ROOT"
 
+  repo="$TMPDIR/repo"
+  mkdir -p "$repo/subdir"
+  printf 'tracked artifacts root probe\n' > "$repo/tracked.txt"
+  printf 'tracked subdir probe\n' > "$repo/subdir/probe.txt"
+  ${pkgs.git}/bin/git -C "$repo" init >/dev/null 2>&1
+  ${pkgs.git}/bin/git -C "$repo" add tracked.txt subdir/probe.txt
+  ${pkgs.git}/bin/git -C "$repo" -c user.name=nixfied -c user.email=nixfied@example.invalid \
+    commit -m "init artifacts root override probe repo" >/dev/null 2>&1
+
   set +e
-  CI_ARTIFACTS_ROOT="$TMPDIR/root-override" "$ORCH" run-workflow workflow.ci.basic --run-id-file "$TMPDIR/root-1.run-id" --summary > "$TMPDIR/root-1.out" 2>&1 &
+  CI_ARTIFACTS_ROOT="$TMPDIR/root-override" NIXFIED_CALLER_PWD="$repo/subdir" \
+    "$ORCH" run-workflow workflow.ci.basic --run-id-file "$TMPDIR/root-1.run-id" --summary > "$TMPDIR/root-1.out" 2>&1 &
   pid_one="$!"
-  CI_ARTIFACTS_ROOT="$TMPDIR/root-override" "$ORCH" run-workflow workflow.ci.basic --run-id-file "$TMPDIR/root-2.run-id" --summary > "$TMPDIR/root-2.out" 2>&1 &
+  CI_ARTIFACTS_ROOT="$TMPDIR/root-override" NIXFIED_CALLER_PWD="$repo/subdir" \
+    "$ORCH" run-workflow workflow.ci.basic --run-id-file "$TMPDIR/root-2.run-id" --summary > "$TMPDIR/root-2.out" 2>&1 &
   pid_two="$!"
   wait "$pid_one"
   rc_one="$?"
@@ -62,7 +73,8 @@ pkgs.runCommand "artifacts-root-override-isolation-smoke" { } ''
   esac
 
   set +e
-  CI_ARTIFACTS_DIR="$TMPDIR/flat-override" "$ORCH" run-workflow workflow.ci.basic --run-id-file "$TMPDIR/flat.run-id" --summary > "$TMPDIR/flat.out" 2>&1
+  CI_ARTIFACTS_DIR="$TMPDIR/flat-override" NIXFIED_CALLER_PWD="$repo/subdir" \
+    "$ORCH" run-workflow workflow.ci.basic --run-id-file "$TMPDIR/flat.run-id" --summary > "$TMPDIR/flat.out" 2>&1
   flat_rc="$?"
   set -e
   if [ "$flat_rc" -ne 0 ]; then

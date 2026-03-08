@@ -6,6 +6,8 @@
 }:
 
 let
+  serviceScripts = import ../lib/managed-service-lifecycle.nix { inherit pkgs; };
+  probeCommands = import ../lib/probe-commands.nix { inherit pkgs; };
   summary = import ../lib/summary.nix { inherit pkgs project; };
   helpers = import ../lib/helpers.nix {
     inherit pkgs project;
@@ -99,108 +101,112 @@ let
     exec ${lifecycle.start}
   '';
 
-  status = pkgs.writeShellScript "nginx-status" ''
-    ${loggingPrelude}
+  status = serviceScripts.mkObservedStatusScript {
+    name = "nginx-status";
+    inherit
+      loggingPrelude
+      runtimePrelude
+      ;
+    runningStateBody = ''
+      PID_FILE="$NGINX_DIR/run/nginx.pid"
 
-    set -euo pipefail
-    ${runtimePrelude}
-    PID_FILE="$NGINX_DIR/run/nginx.pid"
-
-    RUNNING=false
-    PID=""
-
-    if [ -f "$PID_FILE" ]; then
-      PID=$(cat "$PID_FILE" 2>/dev/null || true)
-      if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
-        RUNNING=true
+      if [ -f "$PID_FILE" ]; then
+        PID=$(cat "$PID_FILE" 2>/dev/null || true)
+        if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
+          RUNNING=true
+        fi
       fi
-    fi
-
-    ${observability.mkStatusMergeBlock {
+    '';
+    statusMergeBlock = observability.mkStatusMergeBlock {
       service = "nginx";
       defaultLogPathExpr = ''"$NGINX_DIR/logs/error.log"'';
-    }}
+    };
+    statusBody = ''
+      echo "service=nginx slot=$SLOT env=$ENV running=$RUNNING pid=''${PID:-unknown} http_port=$HTTP_PORT https_port=$HTTPS_PORT scope=$SCOPE owner_run_id=''${OWNER_RUN_ID:-unknown} owner_scope=''${OWNER_SCOPE:-unknown} ephemeral_root=''${EPHEMERAL_ROOT:-none} registry_state=''${REGISTRY_STATE:-unknown} slot_owner=''${SLOT_OWNER:-unknown} wait_reason=''${WAIT_REASON:-none} log_path=$EFFECTIVE_LOG_PATH"
+    '';
+  };
 
-    echo "service=nginx slot=$SLOT env=$ENV running=$RUNNING pid=''${PID:-unknown} http_port=$HTTP_PORT https_port=$HTTPS_PORT scope=$SCOPE owner_run_id=''${OWNER_RUN_ID:-unknown} owner_scope=''${OWNER_SCOPE:-unknown} ephemeral_root=''${EPHEMERAL_ROOT:-none} registry_state=''${REGISTRY_STATE:-unknown} slot_owner=''${SLOT_OWNER:-unknown} wait_reason=''${WAIT_REASON:-none} log_path=$EFFECTIVE_LOG_PATH"
+  health = serviceScripts.mkWrappedScript {
+    name = "nginx-health";
+    inherit
+      loggingPrelude
+      runtimePrelude
+      ;
+    body = ''
+      PID_FILE="$NGINX_DIR/run/nginx.pid"
 
-    if [ "$RUNNING" = "true" ]; then
-      exit 0
-    fi
-    exit 1
-  '';
+      PID=""
+      if [ -f "$PID_FILE" ]; then
+        PID=$(cat "$PID_FILE" 2>/dev/null || true)
+      fi
 
-  health = pkgs.writeShellScript "nginx-health" ''
-    ${loggingPrelude}
+      if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
+        if ${probeCommands.tcpOpenCmd { portExpr = "$HTTP_PORT"; }} then
+          log_ok "nginx healthy http_port=$HTTP_PORT pid=$PID"
+          exit 0
+        fi
+      fi
 
-    set -euo pipefail
-    ${runtimePrelude}
-    PID_FILE="$NGINX_DIR/run/nginx.pid"
+      log_error "nginx unhealthy http_port=$HTTP_PORT pid=''${PID:-unknown}"
+      exit 1
+    '';
+  };
 
-    PID=""
-    if [ -f "$PID_FILE" ]; then
-      PID=$(cat "$PID_FILE" 2>/dev/null || true)
-    fi
+  ready = serviceScripts.mkWrappedScript {
+    name = "nginx-ready";
+    inherit
+      loggingPrelude
+      runtimePrelude
+      ;
+    body = ''
+      PID_FILE="$NGINX_DIR/run/nginx.pid"
 
-    if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
-      if ${pkgs.netcat}/bin/nc -z 127.0.0.1 "$HTTP_PORT" >/dev/null 2>&1; then
-        log_ok "nginx healthy http_port=$HTTP_PORT pid=$PID"
+      PID=""
+      if [ -f "$PID_FILE" ]; then
+        PID=$(cat "$PID_FILE" 2>/dev/null || true)
+      fi
+
+      if [ -z "$PID" ] || ! kill -0 "$PID" 2>/dev/null; then
+        log_error "nginx not ready (process not running) http_port=$HTTP_PORT pid=''${PID:-unknown}"
+        exit 1
+      fi
+
+      if ${probeCommands.tcpOpenCmd { portExpr = "$HTTP_PORT"; }} then
+        ${processRegistry.emitEvent} \
+          --event-type service_ready \
+          --service nginx \
+          --state ready \
+          --slot "$SLOT" \
+          --env "$ENV" \
+          --pid "$PID" \
+          --log-path "$NGINX_DIR/logs/error.log" >/dev/null 2>&1 || true
+        log_ok "nginx ready http_port=$HTTP_PORT pid=$PID"
         exit 0
       fi
-    fi
 
-    log_error "nginx unhealthy http_port=$HTTP_PORT pid=''${PID:-unknown}"
-    exit 1
-  '';
-
-  ready = pkgs.writeShellScript "nginx-ready" ''
-    ${loggingPrelude}
-
-    set -euo pipefail
-    ${runtimePrelude}
-    PID_FILE="$NGINX_DIR/run/nginx.pid"
-
-    PID=""
-    if [ -f "$PID_FILE" ]; then
-      PID=$(cat "$PID_FILE" 2>/dev/null || true)
-    fi
-
-    if [ -z "$PID" ] || ! kill -0 "$PID" 2>/dev/null; then
-      log_error "nginx not ready (process not running) http_port=$HTTP_PORT pid=''${PID:-unknown}"
+      log_error "nginx not ready http_port=$HTTP_PORT pid=$PID"
       exit 1
-    fi
+    '';
+  };
 
-    if ${pkgs.netcat}/bin/nc -z 127.0.0.1 "$HTTP_PORT" >/dev/null 2>&1; then
-      ${processRegistry.emitEvent} \
-        --event-type service_ready \
-        --service nginx \
-        --state ready \
-        --slot "$SLOT" \
-        --env "$ENV" \
-        --pid "$PID" \
-        --log-path "$NGINX_DIR/logs/error.log" >/dev/null 2>&1 || true
-      log_ok "nginx ready http_port=$HTTP_PORT pid=$PID"
-      exit 0
-    fi
+  checkConfig = serviceScripts.mkWrappedScript {
+    name = "nginx-check-config";
+    inherit
+      loggingPrelude
+      runtimePrelude
+      ;
+    body = ''
+      CONF="$NGINX_DIR/conf/nginx.conf"
 
-    log_error "nginx not ready http_port=$HTTP_PORT pid=$PID"
-    exit 1
-  '';
+      if [ ! -f "$CONF" ]; then
+        log_error "missing nginx config at $CONF"
+        exit 1
+      fi
 
-  checkConfig = pkgs.writeShellScript "nginx-check-config" ''
-    ${loggingPrelude}
-
-    set -euo pipefail
-    ${runtimePrelude}
-    CONF="$NGINX_DIR/conf/nginx.conf"
-
-    if [ ! -f "$CONF" ]; then
-      log_error "missing nginx config at $CONF"
-      exit 1
-    fi
-
-    ${lifecycle.nginx}/bin/nginx -c "$CONF" -t 2>&1
-    log_ok "nginx configuration valid conf=$CONF"
-  '';
+      ${lifecycle.nginx}/bin/nginx -c "$CONF" -t 2>&1
+      log_ok "nginx configuration valid conf=$CONF"
+    '';
+  };
 
   logs = observability.mkLogScript "nginx";
   log = logs;

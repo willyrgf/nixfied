@@ -1,4 +1,176 @@
-{ pkgs }:
+{
+  pkgs,
+  model,
+}:
+let
+  lib = pkgs.lib;
+
+  uniqueSorted = values: builtins.sort builtins.lessThan (lib.unique values);
+
+  workflows = model.workflows or { };
+  tasks = model.tasks or { };
+
+  workflowIds = uniqueSorted (builtins.attrNames workflows);
+
+  workflowModesByFamily =
+    builtins.foldl' (
+      acc: workflowId:
+      let
+        match = builtins.match "^workflow\\.([^.]+)\\.(.+)$" workflowId;
+      in
+      if match == null then
+        acc
+      else
+        let
+          family = builtins.elemAt match 0;
+          mode = builtins.elemAt match 1;
+          existing = acc.${family} or [ ];
+        in
+        acc
+        // {
+          ${family} = uniqueSorted (existing ++ [ mode ]);
+        }
+    ) { } workflowIds;
+
+  workflowFamilies = uniqueSorted (builtins.attrNames workflowModesByFamily);
+
+  workflowDescriptorById = builtins.listToAttrs (
+    map (
+      workflowId:
+      let
+        workflow = workflows.${workflowId};
+        execution = workflow.execution or { };
+        ephemeral = execution.ephemeral or { };
+        artifacts = workflow.artifacts or { };
+        logging = workflow.logging or { };
+        postRun = workflow.postRun or { };
+        mode = workflow.mode or "custom";
+        explicitEphemeral =
+          if (ephemeral ? enable) && ephemeral.enable != null then ephemeral.enable else null;
+        effectiveEphemeral =
+          if explicitEphemeral != null then explicitEphemeral else builtins.elem mode [ "ci" "test" ];
+      in
+      {
+        name = workflowId;
+        value = {
+          inherit mode;
+          artifactsRoot = artifacts.root or "";
+          ephemeralFlag = if effectiveEphemeral then "1" else "0";
+          logLevelDefault = logging.levelDefault or "";
+          outputModeDefault = logging.outputDefault or "";
+          failFast = if execution.failFast or false then "true" else "false";
+          parallelEnabled = if execution.parallel or false then "true" else "false";
+          maxWorkers = toString (workflow.maxWorkers or 1);
+          lockPolicy = execution.lockPolicy or "exclusive";
+          writeSummary = if artifacts.writeSummary or false then "true" else "false";
+          postRunAlways = if postRun.alwaysRun or false then "true" else "false";
+        };
+      }
+    ) workflowIds
+  );
+
+  normalizeTaskArgSpec =
+    spec:
+    let
+      hasLong = (spec ? long) && spec.long != null && spec.long != "";
+      hasShort = (spec ? short) && spec.short != null && spec.short != "";
+      kind =
+        if (spec ? kind) && spec.kind != null then
+          spec.kind
+        else if hasLong || hasShort then
+          "option"
+        else
+          "positional";
+    in
+    {
+      inherit kind;
+      long = if hasLong then spec.long else "";
+      short = if hasShort then spec.short else "";
+    };
+
+  taskIds = uniqueSorted (builtins.attrNames tasks);
+
+  taskDescriptorById = builtins.listToAttrs (
+    map (
+      taskId:
+      let
+        task = tasks.${taskId};
+        argsContract = (((task.contract or { }).input or { }).args or { });
+        specs = map normalizeTaskArgSpec (argsContract.spec or [ ]);
+        longKinds = builtins.concatLists (
+          map (spec: lib.optionals (spec.long != "") [ { token = spec.long; kind = spec.kind; } ]) specs
+        );
+        shortKinds = builtins.concatLists (
+          map (spec: lib.optionals (spec.short != "") [ { token = spec.short; kind = spec.kind; } ]) specs
+        );
+      in
+      {
+        name = taskId;
+        value = {
+          parser = argsContract.parser or "typed";
+          allowUnknown = if argsContract.allowUnknown or false then "true" else "false";
+          hasPositional = if builtins.any (spec: spec.kind == "positional") specs then "true" else "false";
+          inherit
+            longKinds
+            shortKinds
+            ;
+          runnerType = task.runner.type or "shell";
+          runnerWorkflowId = task.runner.workflowId or "";
+        };
+      }
+    ) taskIds
+  );
+
+  renderCaseReturn =
+    valueExpr: cases:
+    lib.concatStringsSep "\n" (
+      map (
+        entry: ''
+          ${lib.escapeShellArg entry.key})
+            printf '%s' ${lib.escapeShellArg (valueExpr entry)}
+            return 0
+            ;;
+        ''
+      ) cases
+    );
+
+  workflowIdCases = map (workflowId: { key = workflowId; }) workflowIds;
+
+  workflowModeCases = map (family: {
+    key = family;
+    value = workflowModesByFamily.${family};
+  }) workflowFamilies;
+
+  workflowCases = map (workflowId: {
+    key = workflowId;
+    value = workflowDescriptorById.${workflowId};
+  }) workflowIds;
+
+  taskCases = map (taskId: {
+    key = taskId;
+    value = taskDescriptorById.${taskId};
+  }) taskIds;
+
+  taskLongKindCases = builtins.concatLists (
+    map (
+      taskId:
+      map (entry: {
+        key = "${taskId}:${entry.token}";
+        value = entry.kind;
+      }) taskDescriptorById.${taskId}.longKinds
+    ) taskIds
+  );
+
+  taskShortKindCases = builtins.concatLists (
+    map (
+      taskId:
+      map (entry: {
+        key = "${taskId}:${entry.token}";
+        value = entry.kind;
+      }) taskDescriptorById.${taskId}.shortKinds
+    ) taskIds
+  );
+in
 ''
   workflow_family_from_id() {
     local workflow_id="$1"
@@ -9,27 +181,172 @@
     return 1
   }
 
+  workflow_id_exists() {
+    local workflow_id="$1"
+    case "$workflow_id" in
+${lib.concatStringsSep "\n" (
+  map (entry: ''
+    ${lib.escapeShellArg entry.key})
+      return 0
+      ;;
+  '') workflowIdCases
+)}
+      *)
+        return 1
+        ;;
+    esac
+  }
+
   workflow_modes_for_family() {
     local workflow_id="$1"
     local family
-    local prefix
 
     family="$(workflow_family_from_id "$workflow_id" || true)"
     if [ -z "$family" ]; then
       return 0
     fi
 
-    prefix="workflow.$family."
-    ${pkgs.jq}/bin/jq -r \
-      --arg prefix "$prefix" \
-      '.workflows | keys[] | select(startswith($prefix)) | .[($prefix | length):]' \
-      "$MODEL_FILE" \
-      | ${pkgs.coreutils}/bin/sort -u
+    case "$family" in
+${lib.concatStringsSep "\n" (
+  map (
+    entry: ''
+      ${lib.escapeShellArg entry.key})
+${lib.concatStringsSep "\n" (map (mode: "        printf '%s\\n' ${lib.escapeShellArg mode}") entry.value)}
+        return 0
+        ;;
+    ''
+  ) workflowModeCases
+)}
+      *)
+        return 0
+        ;;
+    esac
   }
 
   workflow_mode_is_simple_shorthand() {
     local mode="$1"
     [[ "$mode" =~ ^[a-z0-9-]+$ ]]
+  }
+
+  workflow_mode_name() {
+    local workflow_id="$1"
+    case "$workflow_id" in
+${renderCaseReturn (entry: entry.value.mode) workflowCases}
+      *)
+        printf '%s' "custom"
+        return 0
+        ;;
+    esac
+  }
+
+  workflow_artifacts_root() {
+    local workflow_id="$1"
+    case "$workflow_id" in
+${renderCaseReturn (entry: entry.value.artifactsRoot) workflowCases}
+      *)
+        printf '%s' ""
+        return 0
+        ;;
+    esac
+  }
+
+  workflow_ephemeral_flag() {
+    local workflow_id="$1"
+    case "$workflow_id" in
+${renderCaseReturn (entry: entry.value.ephemeralFlag) workflowCases}
+      *)
+        printf '0'
+        return 0
+        ;;
+    esac
+  }
+
+  workflow_logging_level_default() {
+    local workflow_id="$1"
+    case "$workflow_id" in
+${renderCaseReturn (entry: entry.value.logLevelDefault) workflowCases}
+      *)
+        printf '%s' ""
+        return 0
+        ;;
+    esac
+  }
+
+  workflow_logging_output_default() {
+    local workflow_id="$1"
+    case "$workflow_id" in
+${renderCaseReturn (entry: entry.value.outputModeDefault) workflowCases}
+      *)
+        printf '%s' ""
+        return 0
+        ;;
+    esac
+  }
+
+  workflow_fail_fast() {
+    local workflow_id="$1"
+    case "$workflow_id" in
+${renderCaseReturn (entry: entry.value.failFast) workflowCases}
+      *)
+        printf '%s' "false"
+        return 0
+        ;;
+    esac
+  }
+
+  workflow_parallel_enabled() {
+    local workflow_id="$1"
+    case "$workflow_id" in
+${renderCaseReturn (entry: entry.value.parallelEnabled) workflowCases}
+      *)
+        printf '%s' "false"
+        return 0
+        ;;
+    esac
+  }
+
+  workflow_max_workers() {
+    local workflow_id="$1"
+    case "$workflow_id" in
+${renderCaseReturn (entry: entry.value.maxWorkers) workflowCases}
+      *)
+        printf '%s' "1"
+        return 0
+        ;;
+    esac
+  }
+
+  workflow_lock_policy() {
+    local workflow_id="$1"
+    case "$workflow_id" in
+${renderCaseReturn (entry: entry.value.lockPolicy) workflowCases}
+      *)
+        printf '%s' "exclusive"
+        return 0
+        ;;
+    esac
+  }
+
+  workflow_write_summary() {
+    local workflow_id="$1"
+    case "$workflow_id" in
+${renderCaseReturn (entry: entry.value.writeSummary) workflowCases}
+      *)
+        printf '%s' "false"
+        return 0
+        ;;
+    esac
+  }
+
+  workflow_post_run_always() {
+    local workflow_id="$1"
+    case "$workflow_id" in
+${renderCaseReturn (entry: entry.value.postRunAlways) workflowCases}
+      *)
+        printf '%s' "false"
+        return 0
+        ;;
+    esac
   }
 
   workflow_simple_shorthand_exists_for_family() {
@@ -81,7 +398,7 @@
     fi
 
     candidate="workflow.$family.$mode_override"
-    if ${pkgs.jq}/bin/jq -e --arg workflowId "$candidate" '.workflows[$workflowId] != null' "$MODEL_FILE" >/dev/null; then
+    if workflow_id_exists "$candidate"; then
       printf '%s' "$candidate"
       return 0
     fi
@@ -93,5 +410,95 @@
       echo "ERROR: unknown mode '$mode_override'" >&2
     fi
     return 2
+  }
+
+  task_descriptor_exists() {
+    local task_id="$1"
+    case "$task_id" in
+${lib.concatStringsSep "\n" (
+  map (entry: ''
+    ${lib.escapeShellArg entry.key})
+      return 0
+      ;;
+  '') taskCases
+)}
+      *)
+        return 1
+        ;;
+    esac
+  }
+
+  task_arg_parser() {
+    local task_id="$1"
+    case "$task_id" in
+${renderCaseReturn (entry: entry.value.parser) taskCases}
+      *)
+        return 1
+        ;;
+    esac
+  }
+
+  task_arg_allow_unknown() {
+    local task_id="$1"
+    case "$task_id" in
+${renderCaseReturn (entry: entry.value.allowUnknown) taskCases}
+      *)
+        return 1
+        ;;
+    esac
+  }
+
+  task_arg_has_positional() {
+    local task_id="$1"
+    case "$task_id" in
+${renderCaseReturn (entry: entry.value.hasPositional) taskCases}
+      *)
+        return 1
+        ;;
+    esac
+  }
+
+  task_arg_long_kind() {
+    local task_id="$1"
+    local token="$2"
+    case "$task_id:$token" in
+${renderCaseReturn (entry: entry.value) taskLongKindCases}
+      *)
+        return 1
+        ;;
+    esac
+  }
+
+  task_arg_short_kind() {
+    local task_id="$1"
+    local token="$2"
+    case "$task_id:$token" in
+${renderCaseReturn (entry: entry.value) taskShortKindCases}
+      *)
+        return 1
+        ;;
+    esac
+  }
+
+  task_runner_type() {
+    local task_id="$1"
+    case "$task_id" in
+${renderCaseReturn (entry: entry.value.runnerType) taskCases}
+      *)
+        printf '%s' "shell"
+        return 0
+        ;;
+    esac
+  }
+
+  task_runner_workflow_id() {
+    local task_id="$1"
+    case "$task_id" in
+${renderCaseReturn (entry: entry.value.runnerWorkflowId) taskCases}
+      *)
+        printf '%s' ""
+        return 0
+        ;;
+    esac
   }
 ''

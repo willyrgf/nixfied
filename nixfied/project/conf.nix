@@ -102,6 +102,9 @@ rec {
     # - git-files: tracked + non-ignored files via git ls-files.
     # - static-excludes: rsync with excludePatterns.
     copyMode = "git-files";
+    # Reproducible default: tracked git content only.
+    # Opt in to worktree convenience by enabling untracked materialization.
+    includeUntracked = false;
     excludePatterns = [
       ".git"
       "node_modules"
@@ -123,6 +126,9 @@ rec {
     # Pre-copy disk guards; set > 0 to enforce.
     maxCopyBytes = 0;
     minFreeBytesAfterCopy = 0;
+    # Reproducible default: do not import host-local .env files.
+    envFileMode = "disabled";
+    envFilePath = ".env";
   };
 
   process = {

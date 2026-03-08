@@ -18,6 +18,10 @@ let
       command = ''
         set -euo pipefail
         echo "INFO: sandbox_pwd=$(pwd -P)"
+        if [ ! -f "./tracked.txt" ]; then
+          echo "missing tracked file in ephemeral source copy"
+          exit 1
+        fi
         echo "INFO: sandbox_home=$HOME"
         echo "INFO: sandbox_tmp=$TMPDIR"
         echo "INFO: sandbox_xdg_data=$XDG_DATA_HOME"
@@ -117,6 +121,19 @@ pkgs.runCommand "ephemeral-runtime-env-isolation-smoke" { } ''
   hostile_runtime_root="$TMPDIR/hostile-runtime"
   mkdir -p "$REGISTRY_ROOT"
 
+  repo="$TMPDIR/repo"
+  mkdir -p "$repo/subdir"
+  printf 'tracked\n' > "$repo/tracked.txt"
+  printf 'subdir tracked\n' > "$repo/subdir/tracked-subdir.txt"
+
+  ${pkgs.git}/bin/git -C "$repo" init >/dev/null 2>&1
+  ${pkgs.git}/bin/git -C "$repo" config user.name "nixfied tests"
+  ${pkgs.git}/bin/git -C "$repo" config user.email "nixfied-tests@example.invalid"
+  ${pkgs.git}/bin/git -C "$repo" add tracked.txt subdir/tracked-subdir.txt
+  ${pkgs.git}/bin/git -C "$repo" commit -m "seed tracked files" >/dev/null 2>&1
+
+  set +e
+  NIXFIED_CALLER_PWD="$repo/subdir" \
   NIXFIED_RUNTIME_HOME="$hostile_runtime_root/home" \
   NIXFIED_RUNTIME_TMPDIR="$hostile_runtime_root/tmp" \
   NIXFIED_RUNTIME_XDG_DATA_HOME="$hostile_runtime_root/xdg/data" \
@@ -126,6 +143,13 @@ pkgs.runCommand "ephemeral-runtime-env-isolation-smoke" { } ''
   NIXFIED_RUNTIME_ARTIFACTS_DIR="$hostile_runtime_root/artifacts" \
   NIXFIED_RUNTIME_SERVICE_ROOT="$hostile_runtime_root/services" \
     "$ORCH" run-workflow "${probeWorkflowId}" --summary > "$TMPDIR/probe.out" 2>&1
+  probe_rc="$?"
+  set -e
+  if [ "$probe_rc" -ne 0 ]; then
+    echo "probe workflow failed rc=$probe_rc"
+    cat "$TMPDIR/probe.out"
+    exit 1
+  fi
 
   eph_root="$(${pkgs.gnused}/bin/sed -n 's/^INFO: Root: //p' "$TMPDIR/probe.out" | ${pkgs.coreutils}/bin/tail -n 1)"
   if [ -z "$eph_root" ]; then

@@ -6,135 +6,203 @@
 let
   baseTask = model.tasks."task.ci.quality";
 
-  probeTaskId = "task.test.ephemeral.copy-mode";
-  probeWorkflowId = "workflow.test.ephemeral.copy-mode";
+  mkProbeTask =
+    {
+      taskId,
+      appName,
+      expectUntracked,
+    }:
+    baseTask
+    // {
+      id = taskId;
+      summary = "ephemeral copy mode probe";
+      description = "Verifies reproducible tracked-only and explicit worktree copy modes.";
+      runner = {
+        type = "shell";
+        command = ''
+          set -euo pipefail
+          echo "INFO: sandbox_pwd=$(pwd -P)"
 
-  probeTask = baseTask // {
-    id = probeTaskId;
-    summary = "ephemeral copy mode probe";
-    description = "Verifies git-files copy mode honors gitignore and subdirectory invocation.";
-    runner = {
-      type = "shell";
-      command = ''
-        set -euo pipefail
-        echo "INFO: sandbox_pwd=$(pwd -P)"
+          required_files=(
+            "tracked.txt"
+            "tracked-ignored.md"
+          )
+          for path in "''${required_files[@]}"; do
+            if [ ! -f "$path" ]; then
+              echo "missing required file in ephemeral copy: $path"
+              exit 1
+            fi
+          done
 
-        required_files=(
-          "tracked.txt"
-          "tracked-ignored.md"
-          "keep-untracked.txt"
-        )
-        for path in "''${required_files[@]}"; do
-          if [ ! -f "$path" ]; then
-            echo "missing required file in ephemeral copy: $path"
-            exit 1
+          if [ "${if expectUntracked then "1" else "0"}" = "1" ]; then
+            if [ ! -f "keep-untracked.txt" ]; then
+              echo "expected explicit worktree copy to include keep-untracked.txt"
+              exit 1
+            fi
+          else
+            if [ -e "keep-untracked.txt" ]; then
+              echo "expected tracked-only copy to exclude keep-untracked.txt"
+              exit 1
+            fi
           fi
-        done
 
-        excluded_paths=(
-          "ignored.tmp"
-          "ignored-dir/file.txt"
-        )
-        for path in "''${excluded_paths[@]}"; do
-          if [ -e "$path" ]; then
-            echo "ignored path leaked into ephemeral copy: $path"
-            exit 1
-          fi
-        done
+          excluded_paths=(
+            "ignored.tmp"
+            "ignored-dir/file.txt"
+          )
+          for path in "''${excluded_paths[@]}"; do
+            if [ -e "$path" ]; then
+              echo "ignored path leaked into ephemeral copy: $path"
+              exit 1
+            fi
+          done
 
-        echo "OK: copy mode probe task complete"
-      '';
-      package = null;
-      workflowId = null;
-    };
-    ui = baseTask.ui // {
-      app = baseTask.ui.app // {
-        expose = false;
-        name = "test-ephemeral-copy-mode";
+          echo "OK: copy mode probe task complete expect_untracked=${if expectUntracked then "1" else "0"}"
+        '';
+        package = null;
+        workflowId = null;
+      };
+      ui = baseTask.ui // {
+        app = baseTask.ui.app // {
+          expose = false;
+          name = appName;
+        };
       };
     };
-  };
 
-  probeUnit = {
-    taskId = probeTaskId;
-    needs = [ ];
-    locks = [ ];
-    when = {
-      envEquals = { };
-      envPresent = [ ];
-    };
-    skipIfMissingEnv = [ ];
-  };
-
-  probeWorkflow = {
-    id = probeWorkflowId;
-    summary = "ephemeral copy mode probe workflow";
-    description = "Validates git-files copy semantics in ephemeral execution.";
-    mode = "custom";
-    maxWorkers = 1;
-    units = {
-      probe = probeUnit;
-    };
-    stages = [ [ "probe" ] ];
-    preRun = {
-      tasks = [ ];
-    };
-    postRun = {
-      tasks = [ ];
-      alwaysRun = true;
-    };
-    artifacts = {
-      root = "/tmp/ci-artifacts";
-      keepOnSuccess = false;
-      keepOnFailure = true;
-      writeSummary = true;
-    };
-    execution = {
-      parallel = false;
-      failFast = true;
-      lockPolicy = "exclusive";
-      emitRegistryEvents = true;
-      ephemeral = {
-        enable = true;
+  mkProbeWorkflow =
+    {
+      workflowId,
+      taskId,
+    }:
+    {
+      id = workflowId;
+      summary = "ephemeral copy mode probe workflow";
+      description = "Validates reproducible tracked-only and explicit worktree copy semantics in ephemeral execution.";
+      mode = "custom";
+      maxWorkers = 1;
+      units = {
+        probe = {
+          inherit taskId;
+          needs = [ ];
+          locks = [ ];
+          when = {
+            envEquals = { };
+            envPresent = [ ];
+          };
+          skipIfMissingEnv = [ ];
+        };
       };
-    };
-    plan = [
-      (
+      stages = [ [ "probe" ] ];
+      preRun = {
+        tasks = [ ];
+      };
+      postRun = {
+        tasks = [ ];
+        alwaysRun = true;
+      };
+      artifacts = {
+        root = "/tmp/ci-artifacts";
+        keepOnSuccess = false;
+        keepOnFailure = true;
+        writeSummary = true;
+      };
+      execution = {
+        parallel = false;
+        failFast = true;
+        lockPolicy = "exclusive";
+        emitRegistryEvents = true;
+        ephemeral = {
+          enable = true;
+        };
+      };
+      plan = [
         {
           name = "probe";
+          inherit taskId;
+          needs = [ ];
+          locks = [ ];
+          when = {
+            envEquals = { };
+            envPresent = [ ];
+          };
+          skipIfMissingEnv = [ ];
         }
-        // probeUnit
-      )
-    ];
-  };
+      ];
+    };
 
-  probeModel = model // {
+  trackedTaskId = "task.test.ephemeral.copy-mode.tracked";
+  trackedWorkflowId = "workflow.test.ephemeral.copy-mode.tracked";
+  worktreeTaskId = "task.test.ephemeral.copy-mode.worktree";
+  worktreeWorkflowId = "workflow.test.ephemeral.copy-mode.worktree";
+
+  trackedModel = model // {
     runtime = model.runtime // {
       ephemeral = (model.runtime.ephemeral or { }) // {
         copyMode = "git-files";
+        includeUntracked = false;
       };
     };
     tasks = model.tasks // {
-      ${probeTaskId} = probeTask;
+      ${trackedTaskId} = mkProbeTask {
+        taskId = trackedTaskId;
+        appName = "test-ephemeral-copy-mode-tracked";
+        expectUntracked = false;
+      };
     };
     workflows = model.workflows // {
-      ${probeWorkflowId} = probeWorkflow;
+      ${trackedWorkflowId} = mkProbeWorkflow {
+        workflowId = trackedWorkflowId;
+        taskId = trackedTaskId;
+      };
     };
   };
 
-  orchestrator = import ../../nixfied/runner/orchestrator.nix {
+  worktreeModel = model // {
+    runtime = model.runtime // {
+      ephemeral = (model.runtime.ephemeral or { }) // {
+        copyMode = "git-files";
+        includeUntracked = true;
+      };
+    };
+    tasks = model.tasks // {
+      ${worktreeTaskId} = mkProbeTask {
+        taskId = worktreeTaskId;
+        appName = "test-ephemeral-copy-mode-worktree";
+        expectUntracked = true;
+      };
+    };
+    workflows = model.workflows // {
+      ${worktreeWorkflowId} = mkProbeWorkflow {
+        workflowId = worktreeWorkflowId;
+        taskId = worktreeTaskId;
+      };
+    };
+  };
+
+  trackedOrchestrator = import ../../nixfied/runner/orchestrator.nix {
     inherit
       pkgs
       registry
       ;
-    model = probeModel;
+    model = trackedModel;
+    projectRoot = ../..;
+  };
+
+  worktreeOrchestrator = import ../../nixfied/runner/orchestrator.nix {
+    inherit
+      pkgs
+      registry
+      ;
+    model = worktreeModel;
     projectRoot = ../..;
   };
 in
 pkgs.runCommand "ephemeral-copy-mode-smoke" { } ''
   set -euo pipefail
 
-  ORCH="${orchestrator}/bin/nixfied-orchestrator"
+  TRACKED_ORCH="${trackedOrchestrator}/bin/nixfied-orchestrator"
+  WORKTREE_ORCH="${worktreeOrchestrator}/bin/nixfied-orchestrator"
   export REGISTRY_ROOT="$TMPDIR/registry"
   mkdir -p "$REGISTRY_ROOT"
 
@@ -150,26 +218,39 @@ pkgs.runCommand "ephemeral-copy-mode-smoke" { } ''
   ${pkgs.git}/bin/git -C "$repo" init >/dev/null 2>&1
   ${pkgs.git}/bin/git -C "$repo" add .gitignore tracked.txt tracked-ignored.md
 
-  set +e
-  NIXFIED_CALLER_PWD="$repo/subdir" "$ORCH" run-workflow "${probeWorkflowId}" --summary > "$TMPDIR/probe.out" 2>&1
-  probe_rc="$?"
-  set -e
-  if [ "$probe_rc" -ne 0 ]; then
-    echo "probe workflow failed rc=$probe_rc"
-    cat "$TMPDIR/probe.out"
-    exit 1
-  fi
+  run_probe() {
+    local label="$1"
+    local orch="$2"
+    local workflow_id="$3"
+    local expected_include="$4"
+    local out_file="$TMPDIR/$label.out"
+    local sandbox_pwd
+    local rc
 
-  sandbox_pwd="$(${pkgs.gnused}/bin/sed -n 's/^INFO: sandbox_pwd=//p' "$TMPDIR/probe.out" | ${pkgs.coreutils}/bin/tail -n 1)"
-  if ! printf '%s\n' "$sandbox_pwd" | ${pkgs.gnugrep}/bin/grep -Eq '.+-ephemeral-.+/source$'; then
-    echo "expected task workdir inside ephemeral source copy"
-    echo "sandbox_pwd=$sandbox_pwd"
-    cat "$TMPDIR/probe.out"
-    exit 1
-  fi
+    set +e
+    NIXFIED_CALLER_PWD="$repo/subdir" "$orch" run-workflow "$workflow_id" --summary > "$out_file" 2>&1
+    rc="$?"
+    set -e
+    if [ "$rc" -ne 0 ]; then
+      echo "probe workflow failed label=$label rc=$rc"
+      cat "$out_file"
+      exit 1
+    fi
 
-  ${pkgs.gnugrep}/bin/grep -Fq "INFO: Using git-files copy mode" "$TMPDIR/probe.out"
-  ${pkgs.gnugrep}/bin/grep -Fq "OK: copy mode probe task complete" "$TMPDIR/probe.out"
+    sandbox_pwd="$(${pkgs.gnused}/bin/sed -n 's/^INFO: sandbox_pwd=//p' "$out_file" | ${pkgs.coreutils}/bin/tail -n 1)"
+    if ! printf '%s\n' "$sandbox_pwd" | ${pkgs.gnugrep}/bin/grep -Eq '.+-ephemeral-.+/source$'; then
+      echo "expected task workdir inside ephemeral source copy label=$label"
+      echo "sandbox_pwd=$sandbox_pwd"
+      cat "$out_file"
+      exit 1
+    fi
 
-  echo "OK: ephemeral git-files copy mode honors gitignore and repo root resolution" > "$out"
+    ${pkgs.gnugrep}/bin/grep -Fq "INFO: Using git-files copy mode include_untracked=$expected_include" "$out_file"
+    ${pkgs.gnugrep}/bin/grep -Fq "OK: copy mode probe task complete expect_untracked=$expected_include" "$out_file"
+  }
+
+  run_probe tracked-only "$TRACKED_ORCH" "${trackedWorkflowId}" 0
+  run_probe worktree "$WORKTREE_ORCH" "${worktreeWorkflowId}" 1
+
+  echo "OK: ephemeral copy modes separate reproducible tracked-only and explicit worktree behavior" > "$out"
 ''

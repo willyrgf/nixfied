@@ -72,8 +72,119 @@ let
       return 0
     }
 
-    escape_sed_replacement() {
-      printf '%s' "$1" | ${pkgs.gnused}/bin/sed -e 's/[|&\\]/\\&/g'
+    write_config_atomic() {
+      local target="$1"
+      local parent_dir
+      local tmp
+
+      parent_dir=$(${pkgs.coreutils}/bin/dirname "$target")
+      mkdir -p "$parent_dir"
+      tmp=$(${pkgs.coreutils}/bin/mktemp "$target.tmp.XXXXXX")
+      cat > "$tmp"
+      mv "$tmp" "$target"
+    }
+
+    render_proxy_site_config() {
+      local nginx_dir="$1"
+      local http_port="$2"
+      local https_port="$3"
+      local domain="$4"
+      local upstream_host="$5"
+      local upstream_port="$6"
+
+      cat <<EOF
+    server {
+        listen $http_port;
+        server_name $domain;
+
+        # ACME challenge location for Let's Encrypt
+        location /.well-known/acme-challenge/ {
+            root $nginx_dir/html;
+        }
+
+        location / {
+            return 301 https://\$server_name\$request_uri;
+        }
+    }
+
+    server {
+        listen $https_port ssl;
+        http2 on;
+        server_name $domain;
+
+        ssl_certificate $nginx_dir/ssl/live/$domain/fullchain.pem;
+        ssl_certificate_key $nginx_dir/ssl/live/$domain/privkey.pem;
+
+        # Security headers
+        add_header X-Frame-Options "SAMEORIGIN" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-XSS-Protection "1; mode=block" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+
+        # Proxy settings with fast-failure timeout
+        proxy_connect_timeout 5s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+
+        location / {
+            proxy_pass http://$upstream_host:$upstream_port;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade \$http_upgrade;
+            proxy_set_header Connection "upgrade";
+            proxy_set_header Host \$host;
+            proxy_set_header X-Real-IP \$remote_addr;
+            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto \$scheme;
+        }
+    }
+    EOF
+    }
+
+    render_static_site_config() {
+      local nginx_dir="$1"
+      local http_port="$2"
+      local https_port="$3"
+      local domain="$4"
+      local site_root="$5"
+
+      cat <<EOF
+    server {
+        listen $http_port;
+        server_name $domain;
+
+        location /.well-known/acme-challenge/ {
+            root $nginx_dir/html;
+        }
+
+        location / {
+            return 301 https://\$server_name\$request_uri;
+        }
+    }
+
+    server {
+        listen $https_port ssl;
+        http2 on;
+        server_name $domain;
+
+        ssl_certificate $nginx_dir/ssl/live/$domain/fullchain.pem;
+        ssl_certificate_key $nginx_dir/ssl/live/$domain/privkey.pem;
+
+        # Security headers
+        add_header X-Frame-Options "SAMEORIGIN" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-XSS-Protection "1; mode=block" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+
+        root $site_root;
+        index index.html index.htm;
+
+        location / {
+            try_files \$uri \$uri/ =404;
+        }
+    }
+    EOF
     }
   '';
 
@@ -102,15 +213,8 @@ let
 
     NGINX_DIR="${nginxDirExpr}"
     CONF="$NGINX_DIR/conf/sites-available/$DOMAIN.conf"
-
-    ${pkgs.gnused}/bin/sed \
-      -e "s|NGINX_DIR|$(escape_sed_replacement "$NGINX_DIR")|g" \
-      -e "s|HTTP_PORT|$(escape_sed_replacement "$HTTP_PORT")|g" \
-      -e "s|HTTPS_PORT|$(escape_sed_replacement "$HTTPS_PORT")|g" \
-      -e "s|SITE_DOMAIN|$(escape_sed_replacement "$DOMAIN")|g" \
-      -e "s|UPSTREAM_HOST|$(escape_sed_replacement "$UPSTREAM_HOST")|g" \
-      -e "s|UPSTREAM_PORT|$(escape_sed_replacement "$UPSTREAM_PORT")|g" \
-      "${templates.siteProxyTemplate}" > "$CONF"
+    render_proxy_site_config "$NGINX_DIR" "$HTTP_PORT" "$HTTPS_PORT" "$DOMAIN" "$UPSTREAM_HOST" "$UPSTREAM_PORT" \
+      | write_config_atomic "$CONF"
 
     ln -sf "$CONF" "$NGINX_DIR/conf/sites-enabled/$DOMAIN.conf"
     ${lifecycle.generateSelfSignedCert} "$DOMAIN" "$NGINX_DIR/ssl"
@@ -139,14 +243,8 @@ let
 
     NGINX_DIR="${nginxDirExpr}"
     CONF="$NGINX_DIR/conf/sites-available/$DOMAIN.conf"
-
-    ${pkgs.gnused}/bin/sed \
-      -e "s|NGINX_DIR|$(escape_sed_replacement "$NGINX_DIR")|g" \
-      -e "s|HTTP_PORT|$(escape_sed_replacement "$HTTP_PORT")|g" \
-      -e "s|HTTPS_PORT|$(escape_sed_replacement "$HTTPS_PORT")|g" \
-      -e "s|SITE_DOMAIN|$(escape_sed_replacement "$DOMAIN")|g" \
-      -e "s|SITE_ROOT|$(escape_sed_replacement "$SITE_ROOT")|g" \
-      "${templates.siteStaticTemplate}" > "$CONF"
+    render_static_site_config "$NGINX_DIR" "$HTTP_PORT" "$HTTPS_PORT" "$DOMAIN" "$SITE_ROOT" \
+      | write_config_atomic "$CONF"
 
     ln -sf "$CONF" "$NGINX_DIR/conf/sites-enabled/$DOMAIN.conf"
     ${lifecycle.generateSelfSignedCert} "$DOMAIN" "$NGINX_DIR/ssl"

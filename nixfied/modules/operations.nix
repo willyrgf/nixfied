@@ -8,6 +8,8 @@ let
   cfg = config.nixfied.operations;
   runtime = config.nixfied.runtime;
   services = config.nixfied.services;
+  probeCommands = import ../.framework/lib/probe-commands.nix { inherit pkgs; };
+  serviceConfigLib = import ../lib/service-config.nix { inherit lib; };
 
   postgresCfg = services.postgres;
   nginxCfg = services.nginx;
@@ -45,6 +47,14 @@ let
     helios = heliosCfg;
   };
 
+  resolvedServiceConfigByName = builtins.mapAttrs (
+    serviceName: serviceCfg:
+    serviceConfigLib.normalizeServiceConfig {
+      name = serviceName;
+      config = serviceCfg;
+    }
+  ) serviceConfigByName;
+
   enabledServiceNames = builtins.filter (
     serviceName: serviceEnabledByName.${serviceName}
   ) serviceNames;
@@ -56,17 +66,22 @@ let
     else
       throw "nixfied.operations: port key '${key}' is not defined in nixfied.runtime.ports";
 
-  postgresPortBase = if postgresEnabled then resolvePortBase postgresCfg.portKey else 0;
-  nginxHttpPortBase = if nginxEnabled then resolvePortBase nginxCfg.portKeyHttp else 0;
-  nginxHttpsPortBase = if nginxEnabled then resolvePortBase nginxCfg.portKeyHttps else 0;
-  minioApiPortBase = if minioEnabled then resolvePortBase minioCfg.portKeyApi else 0;
-  minioConsolePortBase = if minioEnabled then resolvePortBase minioCfg.portKeyConsole else 0;
-  rethHttpPortBase = if rethEnabled then resolvePortBase rethCfg.portKeyHttp else 0;
-  rethWsPortBase = if rethEnabled then resolvePortBase rethCfg.portKeyWs else 0;
-  rethAuthPortBase = if rethEnabled then resolvePortBase rethCfg.portKeyAuth else 0;
-  heliosRpcPortBase = if heliosEnabled then resolvePortBase heliosCfg.portKeyRpc else 0;
+  resolveServicePortBase =
+    serviceName: endpointName:
+    resolvePortBase
+      resolvedServiceConfigByName.${serviceName}.resolved.endpoints.${endpointName}.portKey;
+
+  postgresPortBase = if postgresEnabled then resolveServicePortBase "postgres" "primary" else 0;
+  nginxHttpPortBase = if nginxEnabled then resolveServicePortBase "nginx" "http" else 0;
+  nginxHttpsPortBase = if nginxEnabled then resolveServicePortBase "nginx" "https" else 0;
+  minioApiPortBase = if minioEnabled then resolveServicePortBase "minio" "api" else 0;
+  minioConsolePortBase = if minioEnabled then resolveServicePortBase "minio" "console" else 0;
+  rethHttpPortBase = if rethEnabled then resolveServicePortBase "reth" "http" else 0;
+  rethWsPortBase = if rethEnabled then resolveServicePortBase "reth" "ws" else 0;
+  rethAuthPortBase = if rethEnabled then resolveServicePortBase "reth" "auth" else 0;
   heliosExecutionRpcPortBase =
-    if heliosEnabled then resolvePortBase heliosCfg.executionRpcPortKey else 0;
+    if heliosEnabled then resolveServicePortBase "helios" "execution" else 0;
+  heliosRpcPortBase = if heliosEnabled then resolveServicePortBase "helios" "rpc" else 0;
 
   netcatPkg =
     if pkgs ? netcat then
@@ -247,7 +262,7 @@ let
     map (
       serviceName:
       "      ${serviceName}) printf '%s' ${
-              lib.escapeShellArg (serviceConfigByName.${serviceName}.defaultSource or "")
+              lib.escapeShellArg (resolvedServiceConfigByName.${serviceName}.defaultSource or "")
             } ;;"
     ) serviceNames
   );
@@ -256,7 +271,7 @@ let
     map (
       serviceName:
       let
-        sourceKeys = serviceConfigByName.${serviceName}.sourceKeys or [ ];
+        sourceKeys = resolvedServiceConfigByName.${serviceName}.sourceKeys or [ ];
         sourceArgs = builtins.concatStringsSep " " (map lib.escapeShellArg sourceKeys);
       in
       ''
@@ -436,6 +451,414 @@ let
 
   '';
 
+  mkServiceProbeSection =
+    mode: serviceName: spec:
+    let
+      modeLabel = if mode == "health" then "health" else "readiness";
+      skipMessage = spec.skipMessage or "SKIP: ${serviceName} ${modeLabel} check not selected";
+    in
+    ''
+      if service_selected "${serviceName}"; then
+        service_source="$(resolve_service_source "${serviceName}")"
+        if [ -z "$service_source" ]; then
+          service_source="unspecified"
+        fi
+        checks=$((checks + ${toString spec.count}))
+        ${spec.body}
+      else
+        echo ${lib.escapeShellArg skipMessage}
+      fi
+    '';
+
+  mkProbeScript =
+    {
+      mode,
+      serviceSpecs,
+      emptyMessage,
+      successMessage,
+    }:
+    ''
+      set -euo pipefail
+      ${slotEnvPrelude}
+      ${serviceSelectionPrelude}
+
+      if [ "$target_service" = "all" ] && [ ${toString (builtins.length enabledServiceNames)} -eq 0 ]; then
+        echo ${lib.escapeShellArg emptyMessage}
+        exit 0
+      fi
+
+      checks=0
+
+      ${builtins.concatStringsSep "\n\n" (
+        map (serviceName: mkServiceProbeSection mode serviceName serviceSpecs.${serviceName}) serviceNames
+      )}
+
+      if [ "$checks" -eq 0 ]; then
+        echo ${lib.escapeShellArg emptyMessage}
+        exit 0
+      fi
+
+      printf '%s services=%s\n' ${lib.escapeShellArg successMessage} "$checks"
+    '';
+
+  portValueExpr =
+    base: "$(( ${toString base} + env_offset + (slot_value * ${toString runtime.slot.stride}) ))";
+  shellVar = name: "$" + name;
+
+  mkTcpProbeBody =
+    {
+      serviceLabel,
+      phaseLabel,
+      successLabel,
+      failureLabel,
+      portVar,
+      portBase,
+    }:
+    ''
+      ${portVar}=${portValueExpr portBase}
+      echo "INFO: checking ${serviceLabel} ${phaseLabel} port=${shellVar portVar} source=$service_source"
+      if ${probeCommands.tcpOpenCmd {
+        portExpr = shellVar portVar;
+      }} then
+        echo "OK: ${serviceLabel} ${successLabel} port=${shellVar portVar}"
+      else
+        echo "ERROR: ${serviceLabel} ${failureLabel} port=${shellVar portVar}"
+        exit 1
+      fi
+    '';
+
+  mkHttpProbeBody =
+    {
+      serviceLabel,
+      phaseLabel,
+      successLabel,
+      failureLabel,
+      path,
+      portVar,
+      portBase,
+    }:
+    ''
+      ${portVar}=${portValueExpr portBase}
+      echo "INFO: checking ${serviceLabel} ${phaseLabel} port=${shellVar portVar} source=$service_source"
+      if ${probeCommands.httpGetOkCmd {
+        urlExpr = "http://127.0.0.1:${shellVar portVar}${path}";
+      }} then
+        echo "OK: ${serviceLabel} ${successLabel} port=${shellVar portVar}"
+      else
+        echo "ERROR: ${serviceLabel} ${failureLabel} port=${shellVar portVar}"
+        exit 1
+      fi
+    '';
+
+  mkJsonRpcProbeBody =
+    {
+      serviceLabel,
+      phaseLabel,
+      successLabel,
+      failureLabel,
+      method,
+      portVar,
+      portBase,
+    }:
+    ''
+      ${portVar}=${portValueExpr portBase}
+      echo "INFO: checking ${serviceLabel} ${phaseLabel} port=${shellVar portVar} source=$service_source"
+      if ${probeCommands.jsonRpcHasResultCmd {
+        urlExpr = "http://127.0.0.1:${shellVar portVar}";
+        inherit method;
+      }} then
+        echo "OK: ${serviceLabel} ${successLabel} port=${shellVar portVar}"
+      else
+        echo "ERROR: ${serviceLabel} ${failureLabel} port=${shellVar portVar}"
+        exit 1
+      fi
+    '';
+
+  postgresHealthBody = ''
+    postgres_port=${portValueExpr postgresPortBase}
+    echo "INFO: checking postgres health port=$postgres_port source=$service_source"
+    if ${probeCommands.pgIsReadyCmd {
+      postgres = postgresProbePkg;
+      host = "127.0.0.1";
+      portExpr = "$postgres_port";
+    }} then
+      echo "OK: postgres healthy port=$postgres_port"
+    else
+      echo "ERROR: postgres unhealthy port=$postgres_port"
+      exit 1
+    fi
+  '';
+
+  postgresReadyBody = ''
+    postgres_port=${portValueExpr postgresPortBase}
+    postgres_db=${lib.escapeShellArg postgresCfg.database}
+    echo "INFO: checking postgres readiness port=$postgres_port source=$service_source"
+
+    if ! ${probeCommands.pgIsReadyCmd {
+      postgres = postgresProbePkg;
+      host = "127.0.0.1";
+      portExpr = "$postgres_port";
+    }} then
+      echo "ERROR: postgres not ready port=$postgres_port (pg_isready failed)"
+      exit 1
+    fi
+
+    if ${probeCommands.psqlQueryCmd {
+      postgres = postgresProbePkg;
+      host = "127.0.0.1";
+      portExpr = "$postgres_port";
+      databaseExpr = "$postgres_db";
+      query = "select 1;";
+    }} >/dev/null 2>&1; then
+      echo "OK: postgres ready port=$postgres_port database=$postgres_db"
+    else
+      echo "ERROR: postgres not ready port=$postgres_port database=$postgres_db (query failed)"
+      exit 1
+    fi
+  '';
+
+  healthProbeSpecs = {
+    postgres = {
+      count = 1;
+      body = postgresHealthBody;
+    };
+
+    nginx = {
+      count = 2;
+      body = builtins.concatStringsSep "\n" [
+        (mkTcpProbeBody {
+          serviceLabel = "nginx";
+          phaseLabel = "health";
+          successLabel = "healthy";
+          failureLabel = "unhealthy";
+          portVar = "nginx_http_port";
+          portBase = nginxHttpPortBase;
+        })
+        (mkTcpProbeBody {
+          serviceLabel = "nginx";
+          phaseLabel = "health";
+          successLabel = "healthy";
+          failureLabel = "unhealthy";
+          portVar = "nginx_https_port";
+          portBase = nginxHttpsPortBase;
+        })
+      ];
+    };
+
+    minio = {
+      count = 2;
+      body = builtins.concatStringsSep "\n" [
+        (mkTcpProbeBody {
+          serviceLabel = "minio";
+          phaseLabel = "health";
+          successLabel = "healthy";
+          failureLabel = "unhealthy";
+          portVar = "minio_api_port";
+          portBase = minioApiPortBase;
+        })
+        (mkTcpProbeBody {
+          serviceLabel = "minio";
+          phaseLabel = "health";
+          successLabel = "healthy";
+          failureLabel = "unhealthy";
+          portVar = "minio_console_port";
+          portBase = minioConsolePortBase;
+        })
+      ];
+    };
+
+    reth = {
+      count = 3;
+      body = builtins.concatStringsSep "\n" [
+        (mkJsonRpcProbeBody {
+          serviceLabel = "reth";
+          phaseLabel = "health";
+          successLabel = "healthy";
+          failureLabel = "unhealthy";
+          method = "web3_clientVersion";
+          portVar = "reth_http_port";
+          portBase = rethHttpPortBase;
+        })
+        (mkTcpProbeBody {
+          serviceLabel = "reth";
+          phaseLabel = "health";
+          successLabel = "healthy";
+          failureLabel = "unhealthy";
+          portVar = "reth_ws_port";
+          portBase = rethWsPortBase;
+        })
+        (mkTcpProbeBody {
+          serviceLabel = "reth";
+          phaseLabel = "health";
+          successLabel = "healthy";
+          failureLabel = "unhealthy";
+          portVar = "reth_auth_port";
+          portBase = rethAuthPortBase;
+        })
+      ];
+    };
+
+    helios = {
+      count = 2;
+      body = builtins.concatStringsSep "\n" [
+        (mkJsonRpcProbeBody {
+          serviceLabel = "helios";
+          phaseLabel = "health";
+          successLabel = "healthy";
+          failureLabel = "unhealthy";
+          method = "eth_chainId";
+          portVar = "helios_rpc_port";
+          portBase = heliosRpcPortBase;
+        })
+        (mkJsonRpcProbeBody {
+          serviceLabel = "helios execution";
+          phaseLabel = "health";
+          successLabel = "healthy";
+          failureLabel = "unhealthy";
+          method = "web3_clientVersion";
+          portVar = "helios_execution_rpc_port";
+          portBase = heliosExecutionRpcPortBase;
+        })
+      ];
+    };
+  };
+
+  readyProbeSpecs = {
+    postgres = {
+      count = 1;
+      body = postgresReadyBody;
+    };
+
+    nginx = {
+      count = 2;
+      body = builtins.concatStringsSep "\n" [
+        (mkTcpProbeBody {
+          serviceLabel = "nginx";
+          phaseLabel = "readiness";
+          successLabel = "ready";
+          failureLabel = "not ready";
+          portVar = "nginx_http_port";
+          portBase = nginxHttpPortBase;
+        })
+        (mkTcpProbeBody {
+          serviceLabel = "nginx";
+          phaseLabel = "readiness";
+          successLabel = "ready";
+          failureLabel = "not ready";
+          portVar = "nginx_https_port";
+          portBase = nginxHttpsPortBase;
+        })
+      ];
+    };
+
+    minio = {
+      count = 2;
+      body = builtins.concatStringsSep "\n" [
+        (mkTcpProbeBody {
+          serviceLabel = "minio";
+          phaseLabel = "readiness";
+          successLabel = "ready";
+          failureLabel = "not ready";
+          portVar = "minio_api_port";
+          portBase = minioApiPortBase;
+        })
+        (mkTcpProbeBody {
+          serviceLabel = "minio";
+          phaseLabel = "readiness";
+          successLabel = "ready";
+          failureLabel = "not ready";
+          portVar = "minio_console_port";
+          portBase = minioConsolePortBase;
+        })
+      ];
+    };
+
+    reth = {
+      count = 3;
+      body = builtins.concatStringsSep "\n" [
+        (mkJsonRpcProbeBody {
+          serviceLabel = "reth";
+          phaseLabel = "readiness";
+          successLabel = "ready";
+          failureLabel = "not ready";
+          method = "eth_chainId";
+          portVar = "reth_http_port";
+          portBase = rethHttpPortBase;
+        })
+        (mkTcpProbeBody {
+          serviceLabel = "reth";
+          phaseLabel = "readiness";
+          successLabel = "ready";
+          failureLabel = "not ready";
+          portVar = "reth_ws_port";
+          portBase = rethWsPortBase;
+        })
+        (mkTcpProbeBody {
+          serviceLabel = "reth";
+          phaseLabel = "readiness";
+          successLabel = "ready";
+          failureLabel = "not ready";
+          portVar = "reth_auth_port";
+          portBase = rethAuthPortBase;
+        })
+      ];
+    };
+
+    helios = {
+      count = 2;
+      body = ''
+        helios_source_kind_value="$(helios_source_kind "$service_source")"
+        helios_readiness_profile=${lib.escapeShellArg heliosReadinessProfile}
+        helios_require_not_syncing=${if heliosReadinessRequireNotSyncing then "1" else "0"}
+        helios_rpc_port=$(( ${toString heliosRpcPortBase} + env_offset + (slot_value * ${toString runtime.slot.stride}) ))
+        helios_execution_rpc_port=$(( ${toString heliosExecutionRpcPortBase} + env_offset + (slot_value * ${toString runtime.slot.stride}) ))
+        echo "INFO: checking helios readiness port=$helios_rpc_port source=$service_source source_kind=$helios_source_kind_value profile=$helios_readiness_profile"
+        if source_kind_disallowed "$helios_source_kind_value" ${heliosReadinessDisallowSourceKindArgs}; then
+          echo "ERROR: helios not ready port=$helios_rpc_port source=$service_source source_kind=$helios_source_kind_value profile=$helios_readiness_profile (source kind disallowed)"
+          exit 1
+        fi
+
+        helios_block_json="$(${probeCommands.jsonRpcRequestCmd {
+          urlExpr = "http://127.0.0.1:$helios_rpc_port";
+          method = "eth_blockNumber";
+        }})" || true
+        helios_block_number="$(printf '%s' "$helios_block_json" | ${pkgs.jq}/bin/jq -r '.result // empty')" || true
+        if [ -z "$helios_block_number" ] || ! [[ "$helios_block_number" =~ ^0x[0-9a-fA-F]+$ ]]; then
+          echo "ERROR: helios not ready port=$helios_rpc_port source=$service_source source_kind=$helios_source_kind_value (invalid eth_blockNumber result)"
+          exit 1
+        fi
+        echo "OK: helios ready port=$helios_rpc_port block_number=$helios_block_number"
+
+        if [ "$helios_require_not_syncing" = "1" ]; then
+          helios_syncing_result="$(${probeCommands.jsonRpcFieldCmd {
+            urlExpr = "http://127.0.0.1:$helios_rpc_port";
+            method = "eth_syncing";
+            jqExpr = ".result";
+            raw = false;
+          }})" || true
+          if [ "$helios_syncing_result" != "false" ]; then
+            echo "ERROR: helios not ready port=$helios_rpc_port source=$service_source source_kind=$helios_source_kind_value profile=$helios_readiness_profile (eth_syncing=$helios_syncing_result)"
+            exit 1
+          fi
+          echo "OK: helios sync status ready port=$helios_rpc_port"
+        else
+          echo "SKIP: helios sync gate disabled profile=$helios_readiness_profile"
+        fi
+
+        echo "INFO: checking helios execution readiness port=$helios_execution_rpc_port source=$service_source"
+        if ${probeCommands.jsonRpcHasResultCmd {
+          urlExpr = "http://127.0.0.1:$helios_execution_rpc_port";
+          method = "eth_chainId";
+        }} then
+          echo "OK: helios execution ready port=$helios_execution_rpc_port"
+        else
+          echo "ERROR: helios execution not ready port=$helios_execution_rpc_port"
+          exit 1
+        fi
+      '';
+    };
+  };
+
   mkTask =
     {
       id,
@@ -588,350 +1011,19 @@ let
     ${portCheckLines}
   '';
 
-  healthScript = ''
-    set -euo pipefail
-    ${slotEnvPrelude}
-    ${serviceSelectionPrelude}
+  healthScript = mkProbeScript {
+    mode = "health";
+    serviceSpecs = healthProbeSpecs;
+    emptyMessage = "SKIP: no enabled services for health checks";
+    successMessage = "OK: health checks passed";
+  };
 
-    checks=0
-
-    if service_selected "postgres"; then
-      postgres_source="$(resolve_service_source "postgres")"
-      if [ -z "$postgres_source" ]; then
-        postgres_source="unspecified"
-      fi
-      checks=$((checks + 1))
-      postgres_port=$(( ${toString postgresPortBase} + env_offset + (slot_value * ${toString runtime.slot.stride}) ))
-      echo "INFO: checking postgres health port=$postgres_port source=$postgres_source"
-      if ${postgresProbePkg}/bin/pg_isready -U postgres -h 127.0.0.1 -p "$postgres_port" -q 2>/dev/null; then
-        echo "OK: postgres healthy port=$postgres_port"
-      else
-        echo "ERROR: postgres unhealthy port=$postgres_port"
-        exit 1
-      fi
-    else
-      echo "SKIP: postgres health check not selected"
-    fi
-
-    if service_selected "nginx"; then
-      nginx_source="$(resolve_service_source "nginx")"
-      if [ -z "$nginx_source" ]; then
-        nginx_source="unspecified"
-      fi
-      checks=$((checks + 2))
-      nginx_http_port=$(( ${toString nginxHttpPortBase} + env_offset + (slot_value * ${toString runtime.slot.stride}) ))
-      nginx_https_port=$(( ${toString nginxHttpsPortBase} + env_offset + (slot_value * ${toString runtime.slot.stride}) ))
-      echo "INFO: checking nginx health port=$nginx_http_port source=$nginx_source"
-      if ${netcatPkg}/bin/nc -z 127.0.0.1 "$nginx_http_port" >/dev/null 2>&1; then
-        echo "OK: nginx healthy port=$nginx_http_port"
-      else
-        echo "ERROR: nginx unhealthy port=$nginx_http_port"
-        exit 1
-      fi
-      echo "INFO: checking nginx health port=$nginx_https_port source=$nginx_source"
-      if ${netcatPkg}/bin/nc -z 127.0.0.1 "$nginx_https_port" >/dev/null 2>&1; then
-        echo "OK: nginx healthy port=$nginx_https_port"
-      else
-        echo "ERROR: nginx unhealthy port=$nginx_https_port"
-        exit 1
-      fi
-    else
-      echo "SKIP: nginx health check not selected"
-    fi
-
-    if service_selected "minio"; then
-      minio_source="$(resolve_service_source "minio")"
-      if [ -z "$minio_source" ]; then
-        minio_source="unspecified"
-      fi
-      checks=$((checks + 2))
-      minio_api_port=$(( ${toString minioApiPortBase} + env_offset + (slot_value * ${toString runtime.slot.stride}) ))
-      minio_console_port=$(( ${toString minioConsolePortBase} + env_offset + (slot_value * ${toString runtime.slot.stride}) ))
-      echo "INFO: checking minio health port=$minio_api_port source=$minio_source"
-      if ${netcatPkg}/bin/nc -z 127.0.0.1 "$minio_api_port" >/dev/null 2>&1; then
-        echo "OK: minio healthy port=$minio_api_port"
-      else
-        echo "ERROR: minio unhealthy port=$minio_api_port"
-        exit 1
-      fi
-      echo "INFO: checking minio health port=$minio_console_port source=$minio_source"
-      if ${netcatPkg}/bin/nc -z 127.0.0.1 "$minio_console_port" >/dev/null 2>&1; then
-        echo "OK: minio healthy port=$minio_console_port"
-      else
-        echo "ERROR: minio unhealthy port=$minio_console_port"
-        exit 1
-      fi
-    else
-      echo "SKIP: minio health check not selected"
-    fi
-
-    if service_selected "reth"; then
-      reth_source="$(resolve_service_source "reth")"
-      if [ -z "$reth_source" ]; then
-        reth_source="unspecified"
-      fi
-      checks=$((checks + 3))
-      reth_http_port=$(( ${toString rethHttpPortBase} + env_offset + (slot_value * ${toString runtime.slot.stride}) ))
-      reth_ws_port=$(( ${toString rethWsPortBase} + env_offset + (slot_value * ${toString runtime.slot.stride}) ))
-      reth_auth_port=$(( ${toString rethAuthPortBase} + env_offset + (slot_value * ${toString runtime.slot.stride}) ))
-      echo "INFO: checking reth health port=$reth_http_port source=$reth_source"
-      if ${pkgs.curl}/bin/curl -fsS --max-time 2 \
-        -H 'content-type: application/json' \
-        --data '{"jsonrpc":"2.0","id":1,"method":"web3_clientVersion","params":[]}' \
-        "http://127.0.0.1:$reth_http_port" \
-        | ${pkgs.gnugrep}/bin/grep -q '"result"'; then
-        echo "OK: reth healthy port=$reth_http_port"
-      else
-        echo "ERROR: reth unhealthy port=$reth_http_port"
-        exit 1
-      fi
-      echo "INFO: checking reth health port=$reth_ws_port source=$reth_source"
-      if ${netcatPkg}/bin/nc -z 127.0.0.1 "$reth_ws_port" >/dev/null 2>&1; then
-        echo "OK: reth healthy port=$reth_ws_port"
-      else
-        echo "ERROR: reth unhealthy port=$reth_ws_port"
-        exit 1
-      fi
-      echo "INFO: checking reth health port=$reth_auth_port source=$reth_source"
-      if ${netcatPkg}/bin/nc -z 127.0.0.1 "$reth_auth_port" >/dev/null 2>&1; then
-        echo "OK: reth healthy port=$reth_auth_port"
-      else
-        echo "ERROR: reth unhealthy port=$reth_auth_port"
-        exit 1
-      fi
-    else
-      echo "SKIP: reth health check not selected"
-    fi
-
-    if service_selected "helios"; then
-      helios_source="$(resolve_service_source "helios")"
-      if [ -z "$helios_source" ]; then
-        helios_source="unspecified"
-      fi
-      checks=$((checks + 2))
-      helios_rpc_port=$(( ${toString heliosRpcPortBase} + env_offset + (slot_value * ${toString runtime.slot.stride}) ))
-      helios_execution_rpc_port=$(( ${toString heliosExecutionRpcPortBase} + env_offset + (slot_value * ${toString runtime.slot.stride}) ))
-      echo "INFO: checking helios health port=$helios_rpc_port source=$helios_source"
-      if ${pkgs.curl}/bin/curl -fsS --max-time 2 \
-        -H 'content-type: application/json' \
-        --data '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}' \
-        "http://127.0.0.1:$helios_rpc_port" \
-        | ${pkgs.gnugrep}/bin/grep -q '"result"'; then
-        echo "OK: helios healthy port=$helios_rpc_port"
-      else
-        echo "ERROR: helios unhealthy port=$helios_rpc_port"
-        exit 1
-      fi
-      echo "INFO: checking helios execution health port=$helios_execution_rpc_port source=$helios_source"
-      if ${pkgs.curl}/bin/curl -fsS --max-time 2 \
-        -H 'content-type: application/json' \
-        --data '{"jsonrpc":"2.0","id":1,"method":"web3_clientVersion","params":[]}' \
-        "http://127.0.0.1:$helios_execution_rpc_port" \
-        | ${pkgs.gnugrep}/bin/grep -q '"result"'; then
-        echo "OK: helios execution healthy port=$helios_execution_rpc_port"
-      else
-        echo "ERROR: helios execution unhealthy port=$helios_execution_rpc_port"
-        exit 1
-      fi
-    else
-      echo "SKIP: helios health check not selected"
-    fi
-
-    if [ "$checks" -eq 0 ]; then
-      echo "SKIP: no enabled services for health checks"
-      exit 0
-    fi
-
-    echo "OK: health checks passed services=$checks"
-  '';
-
-  readyScript = ''
-    set -euo pipefail
-    ${slotEnvPrelude}
-    ${serviceSelectionPrelude}
-
-    checks=0
-
-    if service_selected "postgres"; then
-      postgres_source="$(resolve_service_source "postgres")"
-      if [ -z "$postgres_source" ]; then
-        postgres_source="unspecified"
-      fi
-      checks=$((checks + 1))
-      postgres_port=$(( ${toString postgresPortBase} + env_offset + (slot_value * ${toString runtime.slot.stride}) ))
-      postgres_db=${lib.escapeShellArg postgresCfg.database}
-      echo "INFO: checking postgres readiness port=$postgres_port source=$postgres_source"
-
-      if ! ${postgresProbePkg}/bin/pg_isready -U postgres -h 127.0.0.1 -p "$postgres_port" -q 2>/dev/null; then
-        echo "ERROR: postgres not ready port=$postgres_port (pg_isready failed)"
-        exit 1
-      fi
-
-      if ${postgresProbePkg}/bin/psql -h 127.0.0.1 -p "$postgres_port" -U postgres -d "$postgres_db" -Atqc "select 1;" >/dev/null 2>&1; then
-        echo "OK: postgres ready port=$postgres_port database=$postgres_db"
-      else
-        echo "ERROR: postgres not ready port=$postgres_port database=$postgres_db (query failed)"
-        exit 1
-      fi
-    else
-      echo "SKIP: postgres readiness check not selected"
-    fi
-
-    if service_selected "nginx"; then
-      nginx_source="$(resolve_service_source "nginx")"
-      if [ -z "$nginx_source" ]; then
-        nginx_source="unspecified"
-      fi
-      checks=$((checks + 2))
-      nginx_http_port=$(( ${toString nginxHttpPortBase} + env_offset + (slot_value * ${toString runtime.slot.stride}) ))
-      nginx_https_port=$(( ${toString nginxHttpsPortBase} + env_offset + (slot_value * ${toString runtime.slot.stride}) ))
-      echo "INFO: checking nginx readiness port=$nginx_http_port source=$nginx_source"
-      if ${netcatPkg}/bin/nc -z 127.0.0.1 "$nginx_http_port" >/dev/null 2>&1; then
-        echo "OK: nginx ready port=$nginx_http_port"
-      else
-        echo "ERROR: nginx not ready port=$nginx_http_port"
-        exit 1
-      fi
-      echo "INFO: checking nginx readiness port=$nginx_https_port source=$nginx_source"
-      if ${netcatPkg}/bin/nc -z 127.0.0.1 "$nginx_https_port" >/dev/null 2>&1; then
-        echo "OK: nginx ready port=$nginx_https_port"
-      else
-        echo "ERROR: nginx not ready port=$nginx_https_port"
-        exit 1
-      fi
-    else
-      echo "SKIP: nginx readiness check not selected"
-    fi
-
-    if service_selected "minio"; then
-      minio_source="$(resolve_service_source "minio")"
-      if [ -z "$minio_source" ]; then
-        minio_source="unspecified"
-      fi
-      checks=$((checks + 2))
-      minio_api_port=$(( ${toString minioApiPortBase} + env_offset + (slot_value * ${toString runtime.slot.stride}) ))
-      minio_console_port=$(( ${toString minioConsolePortBase} + env_offset + (slot_value * ${toString runtime.slot.stride}) ))
-      echo "INFO: checking minio readiness port=$minio_api_port source=$minio_source"
-      if ${netcatPkg}/bin/nc -z 127.0.0.1 "$minio_api_port" >/dev/null 2>&1; then
-        echo "OK: minio ready port=$minio_api_port"
-      else
-        echo "ERROR: minio not ready port=$minio_api_port"
-        exit 1
-      fi
-      echo "INFO: checking minio readiness port=$minio_console_port source=$minio_source"
-      if ${netcatPkg}/bin/nc -z 127.0.0.1 "$minio_console_port" >/dev/null 2>&1; then
-        echo "OK: minio ready port=$minio_console_port"
-      else
-        echo "ERROR: minio not ready port=$minio_console_port"
-        exit 1
-      fi
-    else
-      echo "SKIP: minio readiness check not selected"
-    fi
-
-    if service_selected "reth"; then
-      reth_source="$(resolve_service_source "reth")"
-      if [ -z "$reth_source" ]; then
-        reth_source="unspecified"
-      fi
-      checks=$((checks + 3))
-      reth_http_port=$(( ${toString rethHttpPortBase} + env_offset + (slot_value * ${toString runtime.slot.stride}) ))
-      reth_ws_port=$(( ${toString rethWsPortBase} + env_offset + (slot_value * ${toString runtime.slot.stride}) ))
-      reth_auth_port=$(( ${toString rethAuthPortBase} + env_offset + (slot_value * ${toString runtime.slot.stride}) ))
-      echo "INFO: checking reth readiness port=$reth_http_port source=$reth_source"
-      if ${pkgs.curl}/bin/curl -fsS --max-time 2 \
-        -H 'content-type: application/json' \
-        --data '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}' \
-        "http://127.0.0.1:$reth_http_port" \
-        | ${pkgs.gnugrep}/bin/grep -q '"result"'; then
-        echo "OK: reth ready port=$reth_http_port"
-      else
-        echo "ERROR: reth not ready port=$reth_http_port"
-        exit 1
-      fi
-      echo "INFO: checking reth readiness port=$reth_ws_port source=$reth_source"
-      if ${netcatPkg}/bin/nc -z 127.0.0.1 "$reth_ws_port" >/dev/null 2>&1; then
-        echo "OK: reth ready port=$reth_ws_port"
-      else
-        echo "ERROR: reth not ready port=$reth_ws_port"
-        exit 1
-      fi
-      echo "INFO: checking reth readiness port=$reth_auth_port source=$reth_source"
-      if ${netcatPkg}/bin/nc -z 127.0.0.1 "$reth_auth_port" >/dev/null 2>&1; then
-        echo "OK: reth ready port=$reth_auth_port"
-      else
-        echo "ERROR: reth not ready port=$reth_auth_port"
-        exit 1
-      fi
-    else
-      echo "SKIP: reth readiness check not selected"
-    fi
-
-    if service_selected "helios"; then
-      helios_source="$(resolve_service_source "helios")"
-      if [ -z "$helios_source" ]; then
-        helios_source="unspecified"
-      fi
-      helios_source_kind_value="$(helios_source_kind "$helios_source")"
-      helios_readiness_profile=${lib.escapeShellArg heliosReadinessProfile}
-      helios_require_not_syncing=${if heliosReadinessRequireNotSyncing then "1" else "0"}
-      checks=$((checks + 2))
-      helios_rpc_port=$(( ${toString heliosRpcPortBase} + env_offset + (slot_value * ${toString runtime.slot.stride}) ))
-      helios_execution_rpc_port=$(( ${toString heliosExecutionRpcPortBase} + env_offset + (slot_value * ${toString runtime.slot.stride}) ))
-      echo "INFO: checking helios readiness port=$helios_rpc_port source=$helios_source source_kind=$helios_source_kind_value profile=$helios_readiness_profile"
-      if source_kind_disallowed "$helios_source_kind_value" ${heliosReadinessDisallowSourceKindArgs}; then
-        echo "ERROR: helios not ready port=$helios_rpc_port source=$helios_source source_kind=$helios_source_kind_value profile=$helios_readiness_profile (source kind disallowed)"
-        exit 1
-      fi
-
-      helios_block_json="$(${pkgs.curl}/bin/curl -fsS --max-time 2 \
-        -H 'content-type: application/json' \
-        --data '{"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]}' \
-        "http://127.0.0.1:$helios_rpc_port")" || true
-      helios_block_number="$(printf '%s' "$helios_block_json" | ${pkgs.jq}/bin/jq -r '.result // empty')" || true
-      if [ -z "$helios_block_number" ] || ! [[ "$helios_block_number" =~ ^0x[0-9a-fA-F]+$ ]]; then
-        echo "ERROR: helios not ready port=$helios_rpc_port source=$helios_source source_kind=$helios_source_kind_value (invalid eth_blockNumber result)"
-        exit 1
-      fi
-      echo "OK: helios ready port=$helios_rpc_port block_number=$helios_block_number"
-
-      if [ "$helios_require_not_syncing" = "1" ]; then
-        helios_syncing_json="$(${pkgs.curl}/bin/curl -fsS --max-time 2 \
-          -H 'content-type: application/json' \
-          --data '{"jsonrpc":"2.0","id":1,"method":"eth_syncing","params":[]}' \
-          "http://127.0.0.1:$helios_rpc_port")" || true
-        helios_syncing_result="$(printf '%s' "$helios_syncing_json" | ${pkgs.jq}/bin/jq -c '.result')" || true
-        if [ "$helios_syncing_result" != "false" ]; then
-          echo "ERROR: helios not ready port=$helios_rpc_port source=$helios_source source_kind=$helios_source_kind_value profile=$helios_readiness_profile (eth_syncing=$helios_syncing_result)"
-          exit 1
-        fi
-        echo "OK: helios sync status ready port=$helios_rpc_port"
-      else
-        echo "SKIP: helios sync gate disabled profile=$helios_readiness_profile"
-      fi
-
-      echo "INFO: checking helios execution readiness port=$helios_execution_rpc_port source=$helios_source"
-      if ${pkgs.curl}/bin/curl -fsS --max-time 2 \
-        -H 'content-type: application/json' \
-        --data '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}' \
-        "http://127.0.0.1:$helios_execution_rpc_port" \
-        | ${pkgs.gnugrep}/bin/grep -q '"result"'; then
-        echo "OK: helios execution ready port=$helios_execution_rpc_port"
-      else
-        echo "ERROR: helios execution not ready port=$helios_execution_rpc_port"
-        exit 1
-      fi
-    else
-      echo "SKIP: helios readiness check not selected"
-    fi
-
-    if [ "$checks" -eq 0 ]; then
-      echo "SKIP: no enabled services for readiness checks"
-      exit 0
-    fi
-
-    echo "OK: readiness checks passed services=$checks"
-  '';
+  readyScript = mkProbeScript {
+    mode = "ready";
+    serviceSpecs = readyProbeSpecs;
+    emptyMessage = "SKIP: no enabled services for readiness checks";
+    successMessage = "OK: readiness checks passed";
+  };
 
   isolationScript = ''
     set -euo pipefail

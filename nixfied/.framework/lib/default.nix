@@ -64,6 +64,7 @@ let
     inherit pkgs project;
     inherit (helpers) loggingPrelude;
   };
+  managedServiceLifecycle = import ./managed-service-lifecycle.nix { inherit pkgs; };
   slotEnvRuntime = import ./slot-env-runtime.nix { inherit pkgs; };
   servicePolicy = import ./service-policy.nix { inherit pkgs; };
   portUtils = import ./port-utils.nix {
@@ -103,6 +104,7 @@ in
   inherit appApi;
   inherit serviceApi;
   inherit discovery;
+  inherit managedServiceLifecycle;
   inherit (process) mkSignalHandler mkProcessManager;
   inherit (id)
     mkPlanId

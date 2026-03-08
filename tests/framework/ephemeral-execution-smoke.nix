@@ -18,6 +18,10 @@ let
       command = ''
         set -euo pipefail
         echo "INFO: sandbox_pwd=$(pwd -P)"
+        if [ ! -f "./tracked.txt" ]; then
+          echo "missing tracked file in ephemeral source copy"
+          exit 1
+        fi
         touch "./ephemeral-write-check.txt"
         mkdir -p "./result/bin"
         printf 'probe\n' > "./result/bin/mfm_cli"
@@ -113,7 +117,19 @@ pkgs.runCommand "ephemeral-execution-smoke" { } ''
   export REGISTRY_ROOT="$TMPDIR/registry"
   mkdir -p "$REGISTRY_ROOT"
 
-  "$ORCH" run-workflow "${probeWorkflowId}" --summary-file "$TMPDIR/probe.summary.json" --summary > "$TMPDIR/probe.out" 2>&1
+  repo="$TMPDIR/repo"
+  mkdir -p "$repo/subdir"
+  printf 'tracked\n' > "$repo/tracked.txt"
+  printf 'subdir tracked\n' > "$repo/subdir/tracked-subdir.txt"
+
+  ${pkgs.git}/bin/git -C "$repo" init >/dev/null 2>&1
+  ${pkgs.git}/bin/git -C "$repo" config user.name "nixfied tests"
+  ${pkgs.git}/bin/git -C "$repo" config user.email "nixfied-tests@example.invalid"
+  ${pkgs.git}/bin/git -C "$repo" add tracked.txt subdir/tracked-subdir.txt
+  ${pkgs.git}/bin/git -C "$repo" commit -m "seed tracked files" >/dev/null 2>&1
+
+  NIXFIED_CALLER_PWD="$repo/subdir" \
+    "$ORCH" run-workflow "${probeWorkflowId}" --summary-file "$TMPDIR/probe.summary.json" --summary > "$TMPDIR/probe.out" 2>&1
 
   eph_root="$(${pkgs.gnused}/bin/sed -n 's/^INFO: Root: //p' "$TMPDIR/probe.out" | ${pkgs.coreutils}/bin/tail -n 1)"
   if [ -z "$eph_root" ]; then

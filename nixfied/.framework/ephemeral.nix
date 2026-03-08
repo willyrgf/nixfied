@@ -34,6 +34,7 @@ let
 
   ephemeralCfg = project.ephemeral or { };
   copyMode = ephemeralCfg.copyMode or "git-files";
+  includeUntracked = ephemeralCfg.includeUntracked or false;
   excludePatterns =
     ephemeralCfg.excludePatterns or [
       ".git"
@@ -54,6 +55,8 @@ let
   maxFailedRootAgeHours = ephemeralCfg.maxFailedRootAgeHours or 72;
   maxCopyBytes = ephemeralCfg.maxCopyBytes or 0;
   minFreeBytesAfterCopy = ephemeralCfg.minFreeBytesAfterCopy or 0;
+  envFileMode = ephemeralCfg.envFileMode or "disabled";
+  envFilePath = ephemeralCfg.envFilePath or ".env";
 
   depsScript = project.install.deps or "";
   runtimePackages = project.tooling.runtimePackages or [ ];
@@ -184,6 +187,7 @@ let
     SOURCE_DIR="$1"
     DEST_DIR="$2"
     COPY_MODE=${pkgs.lib.escapeShellArg copyMode}
+    INCLUDE_UNTRACKED=${if includeUntracked then "1" else "0"}
     MAX_COPY_BYTES=${toString maxCopyBytes}
     MIN_FREE_BYTES_AFTER_COPY=${toString minFreeBytesAfterCopy}
 
@@ -258,10 +262,14 @@ let
 
       (
         cd "$SOURCE_DIR"
-        ${pkgs.git}/bin/git ls-files -z --cached --others --exclude-standard
+        if [ "$INCLUDE_UNTRACKED" = "1" ]; then
+          ${pkgs.git}/bin/git ls-files -z --cached --others --exclude-standard
+        else
+          ${pkgs.git}/bin/git ls-files -z --cached
+        fi
       ) > "$manifest"
 
-      log_info "Using git-files copy mode"
+      log_info "Using git-files copy mode include_untracked=$INCLUDE_UNTRACKED"
 
       if [ ! -s "$manifest" ]; then
         log_warn "Git file manifest is empty; source copy may be incomplete"
@@ -281,8 +289,13 @@ let
         if ${pkgs.git}/bin/git -C "$SOURCE_DIR" rev-parse --show-toplevel >/dev/null 2>&1; then
           git_copy
         else
-          log_warn "git-files copy mode unavailable outside a git worktree; falling back to static-excludes"
-          static_copy
+          if [ "$INCLUDE_UNTRACKED" = "1" ]; then
+            log_warn "git-files copy mode unavailable outside a git worktree; falling back to static-excludes"
+            static_copy
+          else
+            log_error "git-files copy mode with include_untracked=0 requires a git worktree"
+            exit 2
+          fi
         fi
         ;;
       static-excludes)
@@ -419,12 +432,21 @@ let
           null
         else
           pkgs.writeText "ephemeral-${name}-app-contract.json" (builtins.toJSON appContract);
+      contractRuntime =
+        if appContract == null then
+          null
+        else
+          shellContract.mkContractRuntime {
+            inherit name;
+            contract = appContract;
+          };
       contractPrelude =
         if appContract == null then
           ""
         else
           ''
             NIXFIED_APP_CONTRACT_FILE="${toString contractFile}"
+            NIXFIED_APP_CONTRACT_RUNTIME="${toString contractRuntime}"
             source ${toString shellContract.runtime}
             nixfied_contract_validate_env "$NIXFIED_APP_CONTRACT_FILE"
             nixfied_contract_validate_args "$NIXFIED_APP_CONTRACT_FILE" "$@"
@@ -536,9 +558,19 @@ let
 
       ${pathBlock}
 
-      # Load .env from original location (secrets shouldn't be copied) and
-      # source into this shell so exported keys are visible to app scripts.
-      source ${envLoader.loadEnvFile} "$ORIGINAL_ROOT/.env"
+      case ${pkgs.lib.escapeShellArg envFileMode} in
+        disabled)
+          log_info "Skipping host env file import mode=disabled"
+          ;;
+        original-root)
+          log_info "Loading host env file mode=original-root path=$ORIGINAL_ROOT/${envFilePath}"
+          source ${envLoader.loadEnvFile} "$ORIGINAL_ROOT/${envFilePath}"
+          ;;
+        *)
+          log_error "Unsupported ephemeral env file mode: ${envFileMode}"
+          exit 2
+          ;;
+      esac
 
       ${contractPrelude}
 

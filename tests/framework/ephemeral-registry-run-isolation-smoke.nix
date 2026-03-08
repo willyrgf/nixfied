@@ -130,12 +130,21 @@ pkgs.runCommand "ephemeral-registry-run-isolation-smoke" { } ''
   export REGISTRY_ROOT="$TMPDIR/host-registry"
   export NIXFIED_EPHEMERAL_ROOT_BASE="$TMPDIR/ephemeral-roots"
   gate_dir="$TMPDIR/gates"
-  mkdir -p "$REGISTRY_ROOT" "$NIXFIED_EPHEMERAL_ROOT_BASE" "$gate_dir"
+  repo="$TMPDIR/repo"
+  mkdir -p "$REGISTRY_ROOT" "$NIXFIED_EPHEMERAL_ROOT_BASE" "$gate_dir" "$repo/subdir"
+  printf 'tracked registry isolation probe\n' > "$repo/tracked.txt"
+  printf 'tracked subdir probe\n' > "$repo/subdir/probe.txt"
+  ${pkgs.git}/bin/git -C "$repo" init >/dev/null 2>&1
+  ${pkgs.git}/bin/git -C "$repo" add tracked.txt subdir/probe.txt
+  ${pkgs.git}/bin/git -C "$repo" -c user.name=nixfied -c user.email=nixfied@example.invalid \
+    commit -m "init ephemeral registry isolation probe repo" >/dev/null 2>&1
 
   set +e
-  NIXFIED_EPHEMERAL_GATE_DIR="$gate_dir" "$ORCH" run-workflow "${probeWorkflowId}" --run-id-file "$TMPDIR/run-1.run-id" --summary > "$TMPDIR/run-1.out" 2>&1 &
+  NIXFIED_CALLER_PWD="$repo/subdir" NIXFIED_EPHEMERAL_GATE_DIR="$gate_dir" \
+    "$ORCH" run-workflow "${probeWorkflowId}" --run-id-file "$TMPDIR/run-1.run-id" --summary > "$TMPDIR/run-1.out" 2>&1 &
   pid_one="$!"
-  NIXFIED_EPHEMERAL_GATE_DIR="$gate_dir" "$ORCH" run-workflow "${probeWorkflowId}" --run-id-file "$TMPDIR/run-2.run-id" --summary > "$TMPDIR/run-2.out" 2>&1 &
+  NIXFIED_CALLER_PWD="$repo/subdir" NIXFIED_EPHEMERAL_GATE_DIR="$gate_dir" \
+    "$ORCH" run-workflow "${probeWorkflowId}" --run-id-file "$TMPDIR/run-2.run-id" --summary > "$TMPDIR/run-2.out" 2>&1 &
   pid_two="$!"
   wait_for_condition 30 "run one id" test -s "$TMPDIR/run-1.run-id"
   wait_for_condition 30 "run two id" test -s "$TMPDIR/run-2.run-id"

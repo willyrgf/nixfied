@@ -52,6 +52,15 @@ pkgs.runCommand "workspace-registry-isolation-smoke" { } ''
   ROOT_B="$TMPDIR/${compiledB.model.state.workspaceId}/registry"
   mkdir -p "$ROOT_A" "$ROOT_B"
 
+  repo="$TMPDIR/repo"
+  mkdir -p "$repo/subdir"
+  printf 'tracked workspace registry probe\n' > "$repo/tracked.txt"
+  printf 'tracked subdir probe\n' > "$repo/subdir/probe.txt"
+  ${pkgs.git}/bin/git -C "$repo" init >/dev/null 2>&1
+  ${pkgs.git}/bin/git -C "$repo" add tracked.txt subdir/probe.txt
+  ${pkgs.git}/bin/git -C "$repo" -c user.name=nixfied -c user.email=nixfied@example.invalid \
+    commit -m "init workspace registry probe repo" >/dev/null 2>&1
+
   run_count() {
     local root="$1"
     if [ ! -d "$root/orchestrator/runs" ]; then
@@ -64,7 +73,8 @@ pkgs.runCommand "workspace-registry-isolation-smoke" { } ''
   before_a="$(run_count "$ROOT_A")"
   before_b="$(run_count "$ROOT_B")"
 
-  REGISTRY_ROOT="$ROOT_A" "$ORCH_A" run-workflow workflow.ci.basic --summary > "$TMPDIR/workspace-a.out" 2>&1
+  REGISTRY_ROOT="$ROOT_A" NIXFIED_CALLER_PWD="$repo/subdir" \
+    "$ORCH_A" run-workflow workflow.ci.basic --summary > "$TMPDIR/workspace-a.out" 2>&1
 
   after_a="$(run_count "$ROOT_A")"
   after_b="$(run_count "$ROOT_B")"

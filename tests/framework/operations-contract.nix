@@ -1,6 +1,8 @@
-{ pkgs }:
+{ pkgs, model }:
 let
   source = builtins.readFile ../../nixfied/modules/operations.nix;
+  healthCommand = model.tasks."task.ops.health".runner.command;
+  readyCommand = model.tasks."task.ops.ready".runner.command;
 in
 assert pkgs.lib.hasInfix "id = \"task.ops.health\";" source;
 assert pkgs.lib.hasInfix "id = \"task.ops.ready\";" source;
@@ -14,22 +16,28 @@ assert pkgs.lib.hasInfix "service_selected()" source;
 assert pkgs.lib.hasInfix "resolve_service_source()" source;
 assert pkgs.lib.hasInfix "source_kind_disallowed()" source;
 assert pkgs.lib.hasInfix "helios_source_kind()" source;
+assert pkgs.lib.hasInfix "serviceConfigLib = import ../lib/service-config.nix" source;
+assert pkgs.lib.hasInfix "resolvedServiceConfigByName =" source;
+assert pkgs.lib.hasInfix "resolveServicePortBase =" source;
+assert pkgs.lib.hasInfix "mkTcpProbeBody =" source;
+assert pkgs.lib.hasInfix "mkJsonRpcProbeBody =" source;
+assert pkgs.lib.hasInfix "healthProbeSpecs = {" source;
+assert pkgs.lib.hasInfix "readyProbeSpecs = {" source;
 assert pkgs.lib.hasInfix "checking postgres health" source;
 assert pkgs.lib.hasInfix "checking postgres readiness" source;
-assert pkgs.lib.hasInfix "checking nginx health" source;
-assert pkgs.lib.hasInfix "checking nginx readiness" source;
-assert pkgs.lib.hasInfix "checking minio health" source;
-assert pkgs.lib.hasInfix "checking minio readiness" source;
-assert pkgs.lib.hasInfix "checking reth health" source;
-assert pkgs.lib.hasInfix "checking reth readiness" source;
-assert pkgs.lib.hasInfix "checking helios health" source;
+assert pkgs.lib.hasInfix "serviceLabel = \"nginx\";" source;
+assert pkgs.lib.hasInfix "serviceLabel = \"minio\";" source;
+assert pkgs.lib.hasInfix "serviceLabel = \"reth\";" source;
+assert pkgs.lib.hasInfix "serviceLabel = \"helios execution\";" source;
+assert pkgs.lib.hasInfix "serviceLabel = \"helios\";" source;
+assert pkgs.lib.hasInfix "phaseLabel = \"health\";" source;
+assert pkgs.lib.hasInfix "phaseLabel = \"readiness\";" source;
 assert pkgs.lib.hasInfix "checking helios readiness" source;
-assert pkgs.lib.hasInfix "checking helios execution health" source;
 assert pkgs.lib.hasInfix "checking helios execution readiness" source;
-assert pkgs.lib.hasInfix "\"method\":\"web3_clientVersion\"" source;
-assert pkgs.lib.hasInfix "\"method\":\"eth_chainId\"" source;
-assert pkgs.lib.hasInfix "\"method\":\"eth_blockNumber\"" source;
-assert pkgs.lib.hasInfix "\"method\":\"eth_syncing\"" source;
+assert pkgs.lib.hasInfix "method = \"web3_clientVersion\";" source;
+assert pkgs.lib.hasInfix "method = \"eth_chainId\";" source;
+assert pkgs.lib.hasInfix "method = \"eth_blockNumber\";" source;
+assert pkgs.lib.hasInfix "method = \"eth_syncing\";" source;
 assert pkgs.lib.hasInfix "source kind disallowed" source;
 assert pkgs.lib.hasInfix "isolation cell start" source;
 assert pkgs.lib.hasInfix "test-isolation logs_root=" source;
@@ -39,5 +47,13 @@ assert pkgs.lib.hasInfix "\"$executor_bin\" run-task \"$run_task_id\"" source;
 assert pkgs.lib.hasInfix "test-isolation matrix has no slots" source;
 assert pkgs.lib.hasInfix "test-isolation completed with failures" source;
 pkgs.runCommand "operations-contract" { } ''
+  cat > task-ops-health.sh <<'EOF'
+${healthCommand}
+EOF
+  cat > task-ops-ready.sh <<'EOF'
+${readyCommand}
+EOF
+  ${pkgs.bash}/bin/bash -n task-ops-health.sh
+  ${pkgs.bash}/bin/bash -n task-ops-ready.sh
   echo "OK: operations health/readiness contract markers are stable" > "$out"
 ''
