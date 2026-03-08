@@ -301,22 +301,6 @@ let
         --wait-reason "helios_process_exit code=$RC" \
         --last-error "helios process exited non-zero"
     '';
-    stopMissingBody = ''
-      emit_service_event service_stopped stopped --log-path "$HELIOS_LOG_FILE"
-      log_ok "helios not running"
-    '';
-    stopStaleBody = ''
-      emit_service_event service_stopped stopped --pid "$PID" --log-path "$HELIOS_LOG_FILE"
-      log_ok "helios pid file cleaned"
-    '';
-    stopStoppedBody = ''
-      emit_service_event service_stopped stopped --pid "$PID" --log-path "$HELIOS_LOG_FILE"
-      log_ok "helios stopped pid=$PID"
-    '';
-    stopForceKilledBody = ''
-      emit_service_event service_stopped stopped --pid "$PID" --log-path "$HELIOS_LOG_FILE"
-      log_warn "helios force-killed pid=$PID"
-    '';
     statusMergeBlock = observability.mkStatusMergeBlock {
       service = "helios";
       defaultLogPathExpr = ''"$HELIOS_LOG_FILE"'';

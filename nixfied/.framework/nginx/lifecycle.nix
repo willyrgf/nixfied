@@ -179,22 +179,6 @@ let
         kill "$PID" 2>/dev/null || true
       fi
     '';
-    stopMissingBody = ''
-      emit_service_event service_stopped stopped --log-path "$NGINX_LOG_FILE"
-      log_ok "nginx not running"
-    '';
-    stopStaleBody = ''
-      emit_service_event service_stopped stopped --pid "$PID" --log-path "$NGINX_LOG_FILE"
-      log_ok "nginx pid file cleaned"
-    '';
-    stopStoppedBody = ''
-      emit_service_event service_stopped stopped --pid "$PID" --log-path "$NGINX_LOG_FILE"
-      log_ok "nginx stopped pid=$PID"
-    '';
-    stopForceKilledBody = ''
-      emit_service_event service_stopped stopped --pid "$PID" --log-path "$NGINX_LOG_FILE"
-      log_warn "nginx force-killed pid=$PID"
-    '';
     statusMergeBlock = observability.mkStatusMergeBlock {
       service = "nginx";
       defaultLogPathExpr = ''"$NGINX_LOG_FILE"'';

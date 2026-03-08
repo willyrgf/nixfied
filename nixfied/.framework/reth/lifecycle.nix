@@ -189,22 +189,6 @@ let
         --wait-reason "reth_process_exit code=$RC" \
         --last-error "reth process exited non-zero"
     '';
-    stopMissingBody = ''
-      emit_service_event service_stopped stopped --log-path "$LOG_FILE"
-      log_ok "reth not running"
-    '';
-    stopStaleBody = ''
-      emit_service_event service_stopped stopped --pid "$PID" --log-path "$LOG_FILE"
-      log_ok "reth pid file cleaned"
-    '';
-    stopStoppedBody = ''
-      emit_service_event service_stopped stopped --pid "$PID" --log-path "$LOG_FILE"
-      log_ok "reth stopped pid=$PID"
-    '';
-    stopForceKilledBody = ''
-      emit_service_event service_stopped stopped --pid "$PID" --log-path "$LOG_FILE"
-      log_warn "reth force-killed pid=$PID"
-    '';
     statusMergeBlock = observability.mkStatusMergeBlock {
       service = "reth";
       defaultLogPathExpr = ''"$RETH_LOG_FILE"'';

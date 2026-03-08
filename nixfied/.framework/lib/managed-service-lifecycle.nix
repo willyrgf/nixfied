@@ -4,6 +4,23 @@
 { pkgs }:
 
 let
+  lib = pkgs.lib;
+
+  mkStopOutcomeBody =
+    {
+      serviceName,
+      level,
+      message,
+      pidExpr ? null,
+      logPathExpr ? ''"$SERVICE_LOG_FILE"'',
+    }:
+    ''
+      emit_service_event service_stopped stopped${
+        lib.optionalString (pidExpr != null) " --pid ${pidExpr}"
+      }${lib.optionalString (logPathExpr != null) " --log-path ${logPathExpr}"}
+      log_${level} "${serviceName} ${message}"
+    '';
+
   mkWrappedScript =
     {
       name,
@@ -73,10 +90,36 @@ let
       stopRequestBody ? ''
         kill "$PID" 2>/dev/null || true
       '',
-      stopMissingBody,
-      stopStaleBody,
-      stopStoppedBody,
-      stopForceKilledBody,
+      stopServiceName ? service,
+      stopMissingLogPathExpr ? ''"$SERVICE_LOG_FILE"'',
+      stopStateLogPathExpr ? stopMissingLogPathExpr,
+      stopMissingBody ? mkStopOutcomeBody {
+        serviceName = stopServiceName;
+        level = "ok";
+        message = "not running";
+        logPathExpr = stopMissingLogPathExpr;
+      },
+      stopStaleBody ? mkStopOutcomeBody {
+        serviceName = stopServiceName;
+        level = "ok";
+        message = "pid file cleaned";
+        pidExpr = ''"$PID"'';
+        logPathExpr = stopStateLogPathExpr;
+      },
+      stopStoppedBody ? mkStopOutcomeBody {
+        serviceName = stopServiceName;
+        level = "ok";
+        message = "stopped pid=$PID";
+        pidExpr = ''"$PID"'';
+        logPathExpr = stopStateLogPathExpr;
+      },
+      stopForceKilledBody ? mkStopOutcomeBody {
+        serviceName = stopServiceName;
+        level = "warn";
+        message = "force-killed pid=$PID";
+        pidExpr = ''"$PID"'';
+        logPathExpr = stopStateLogPathExpr;
+      },
       statusMergeBlock,
       statusBody,
       healthBody,

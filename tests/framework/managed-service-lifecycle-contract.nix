@@ -12,9 +12,12 @@ in
 assert pkgs.lib.hasInfix "mkPidFileManagedLifecycle" helperSource;
 assert pkgs.lib.hasInfix "mkWrappedScript" helperSource;
 assert pkgs.lib.hasInfix "mkObservedStatusScript" helperSource;
+assert pkgs.lib.hasInfix "mkStopOutcomeBody" helperSource;
 assert pkgs.lib.hasInfix "SERVICE_PID_FILE" helperSource;
 assert pkgs.lib.hasInfix "SERVICE_LOG_FILE" helperSource;
 assert pkgs.lib.hasInfix "stopRequestBody" helperSource;
+assert pkgs.lib.hasInfix "stopMissingLogPathExpr" helperSource;
+assert pkgs.lib.hasInfix "stopStateLogPathExpr" helperSource;
 assert pkgs.lib.hasInfix "managed-service-lifecycle.nix" minioSource;
 assert pkgs.lib.hasInfix "managed-service-lifecycle.nix" rethSource;
 assert pkgs.lib.hasInfix "managed-service-lifecycle.nix" heliosSource;
@@ -31,6 +34,23 @@ assert pkgs.lib.hasInfix "managedLifecycle = managedServiceLifecycle.mkPidFileMa
   heliosSource;
 assert pkgs.lib.hasInfix "managedLifecycle = serviceScripts.mkPidFileManagedLifecycle"
   nginxLifecycleSource;
+assert pkgs.lib.hasInfix "stopMissingLogPathExpr = null;" minioSource;
+assert (!pkgs.lib.hasInfix "stopMissingBody =" minioSource);
+assert (!pkgs.lib.hasInfix "stopStaleBody =" minioSource);
+assert (!pkgs.lib.hasInfix "stopStoppedBody =" minioSource);
+assert (!pkgs.lib.hasInfix "stopForceKilledBody =" minioSource);
+assert (!pkgs.lib.hasInfix "stopMissingBody =" rethSource);
+assert (!pkgs.lib.hasInfix "stopStaleBody =" rethSource);
+assert (!pkgs.lib.hasInfix "stopStoppedBody =" rethSource);
+assert (!pkgs.lib.hasInfix "stopForceKilledBody =" rethSource);
+assert (!pkgs.lib.hasInfix "stopMissingBody =" heliosSource);
+assert (!pkgs.lib.hasInfix "stopStaleBody =" heliosSource);
+assert (!pkgs.lib.hasInfix "stopStoppedBody =" heliosSource);
+assert (!pkgs.lib.hasInfix "stopForceKilledBody =" heliosSource);
+assert (!pkgs.lib.hasInfix "stopMissingBody =" nginxLifecycleSource);
+assert (!pkgs.lib.hasInfix "stopStaleBody =" nginxLifecycleSource);
+assert (!pkgs.lib.hasInfix "stopStoppedBody =" nginxLifecycleSource);
+assert (!pkgs.lib.hasInfix "stopForceKilledBody =" nginxLifecycleSource);
 assert pkgs.lib.hasInfix "inherit (managedLifecycle)" minioSource;
 assert pkgs.lib.hasInfix "inherit (managedLifecycle)" rethSource;
 assert pkgs.lib.hasInfix "inherit (managedLifecycle)" heliosSource;

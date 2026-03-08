@@ -112,22 +112,8 @@ let
         --wait-reason "minio_process_exit code=$RC" \
         --last-error "minio process exited non-zero"
     '';
-    stopMissingBody = ''
-      emit_service_event service_stopped stopped
-      log_ok "minio not running"
-    '';
-    stopStaleBody = ''
-      emit_service_event service_stopped stopped --pid "$PID"
-      log_ok "minio pid file cleaned"
-    '';
-    stopStoppedBody = ''
-      emit_service_event service_stopped stopped --pid "$PID"
-      log_ok "minio stopped pid=$PID"
-    '';
-    stopForceKilledBody = ''
-      emit_service_event service_stopped stopped --pid "$PID"
-      log_warn "minio force-killed pid=$PID"
-    '';
+    stopMissingLogPathExpr = null;
+    stopStateLogPathExpr = null;
     statusMergeBlock = observability.mkStatusMergeBlock {
       service = "minio";
       defaultLogPathExpr = ''"$MINIO_LOG_FILE"'';
