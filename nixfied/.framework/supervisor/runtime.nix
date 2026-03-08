@@ -8,6 +8,7 @@
 }:
 
 let
+  pc = pkgs.process-compose;
   serviceScripts = import ../lib/managed-service-lifecycle.nix { inherit pkgs; };
   slotEnvRuntime = import ../lib/slot-env-runtime.nix { inherit pkgs; };
   ports = project.ports or { };
@@ -53,6 +54,40 @@ let
     export PC_SOCKET_PATH="/tmp/nixfied-pc-$SOCKET_HASH.sock"
   '';
 
+  helperPrelude = ''
+    SUPERVISOR_PROCESS_JSON=""
+
+    supervisor_pid_file() {
+      printf '%s' "$RUN_DIR/supervisor.pid"
+    }
+
+    supervisor_process_api_ready() {
+      ${pc}/bin/process-compose process list -o json >/dev/null 2>&1
+    }
+
+    supervisor_fetch_process_json() {
+      local proc_json=""
+      local rc=0
+
+      set +e
+      proc_json="$(${pc}/bin/process-compose process list -o json 2>/dev/null)"
+      rc="$?"
+      set -e
+
+      if [ "$rc" -ne 0 ] || [ -z "$proc_json" ]; then
+        SUPERVISOR_PROCESS_JSON=""
+        return 1
+      fi
+
+      SUPERVISOR_PROCESS_JSON="$proc_json"
+      return 0
+    }
+
+    supervisor_clear_state() {
+      rm -f "$PC_SOCKET_PATH" "$(supervisor_pid_file)" 2>/dev/null || true
+    }
+  '';
+
   configPrelude = ''
     CONFIG_FILE=$(${config.generateConfig})
     export PC_CONFIG_FILES="$CONFIG_FILE"
@@ -76,6 +111,7 @@ let
         + pkgs.lib.optionalString includeLogDir logDirPrelude
         + pkgs.lib.optionalString includePorts portsPrelude
         + socketPrelude
+        + helperPrelude
         + pkgs.lib.optionalString includeConfig configPrelude;
     };
 in
@@ -86,6 +122,7 @@ in
     logDirPrelude
     portsPrelude
     socketPrelude
+    helperPrelude
     configPrelude
     ;
 }

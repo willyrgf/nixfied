@@ -27,7 +27,7 @@ let
     name = "supervisor-is-running";
     useLoggingPrelude = false;
     body = ''
-      if ${pc}/bin/process-compose process list -o json >/dev/null 2>&1; then
+      if supervisor_process_api_ready; then
         echo "running (socket $PC_SOCKET_PATH)"
         exit 0
       fi
@@ -70,21 +70,17 @@ let
   health = runtime.mkSupervisorScript {
     name = "supervisor-health";
     body = ''
-      if ! ${isRunning} >/dev/null 2>&1; then
+      if ! supervisor_process_api_ready; then
         log_error "supervisor unhealthy reason=daemon_not_running slot=$SLOT env=$ENV"
         exit 1
       fi
 
-      set +e
-      PROC_JSON=$(${pc}/bin/process-compose process list -o json 2>/dev/null)
-      RC=$?
-      set -e
-      if [ "$RC" -ne 0 ] || [ -z "$PROC_JSON" ]; then
+      if ! supervisor_fetch_process_json; then
         log_error "supervisor unhealthy reason=process_query_failed socket=$PC_SOCKET_PATH"
         exit 1
       fi
 
-      TOTAL=$(${jq}/bin/jq -r 'length' <<<"$PROC_JSON")
+      TOTAL=$(${jq}/bin/jq -r 'length' <<<"$SUPERVISOR_PROCESS_JSON")
       if [ "$TOTAL" -eq 0 ]; then
         log_ok "supervisor healthy services=0 slot=$SLOT env=$ENV"
         exit 0
@@ -102,7 +98,7 @@ let
                 + ",ready=" + (.is_ready | tostring)
               )
           ] | join("; ")
-        ' <<<"$PROC_JSON"
+        ' <<<"$SUPERVISOR_PROCESS_JSON"
       )
 
       if [ -n "$UNHEALTHY" ]; then

@@ -47,9 +47,7 @@ let
       ) portNames}
 
       # Remove runtime state files
-      rm -f "$PC_SOCKET_PATH" 2>/dev/null || true
-      PID_FILE="$RUN_DIR/supervisor.pid"
-      rm -f "$PID_FILE" 2>/dev/null || true
+      supervisor_clear_state
 
       log_ok "Supervisor stopped"
     '';
@@ -60,16 +58,16 @@ let
     includeLogDir = true;
     includeConfig = true;
     body = ''
-      PID_FILE="$RUN_DIR/supervisor.pid"
+      PID_FILE="$(supervisor_pid_file)"
 
       # Check if already running via socket.
-      if ${pc}/bin/process-compose process list -o json >/dev/null 2>&1; then
+      if supervisor_process_api_ready; then
         log_ok "Supervisor already running socket=$PC_SOCKET_PATH"
         exit 0
       fi
 
       # Clear stale state from failed previous runs.
-      rm -f "$PC_SOCKET_PATH" "$PID_FILE" 2>/dev/null || true
+      supervisor_clear_state
 
       log_info "Starting supervisor in background"
       nohup ${pc}/bin/process-compose -f "$CONFIG_FILE" -t=false --keep-project up \
@@ -87,7 +85,7 @@ let
 
       READY=0
       for _ in $(seq 1 40); do
-        if ${pc}/bin/process-compose process list -o json >/dev/null 2>&1; then
+        if supervisor_process_api_ready; then
           READY=1
           break
         fi
