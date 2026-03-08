@@ -1,6 +1,7 @@
 { pkgs, model }:
 let
   source = builtins.readFile ../../nixfied/modules/operations.nix;
+  probeRuntimeSource = builtins.readFile ../../nixfied/.framework/lib/operations-probe-runtime.nix;
   isolationRuntimeSource = builtins.readFile ../../nixfied/.framework/lib/test-isolation-runtime.nix;
   serviceConfigSource = builtins.readFile ../../nixfied/lib/service-config.nix;
   healthCommand = model.tasks."task.ops.health".runner.command;
@@ -18,26 +19,28 @@ assert pkgs.lib.hasInfix "service_selected()" source;
 assert pkgs.lib.hasInfix "resolve_service_source()" source;
 assert pkgs.lib.hasInfix "source_kind_disallowed()" source;
 assert pkgs.lib.hasInfix "serviceConfigLib = import ../lib/service-config.nix" source;
+assert
+  pkgs.lib.hasInfix
+    "probeRuntime = import ../.framework/lib/operations-probe-runtime.nix"
+    source;
 assert pkgs.lib.hasInfix "resolvedServiceConfigByName =" source;
 assert pkgs.lib.hasInfix "resolveServicePortBase =" source;
 assert pkgs.lib.hasInfix "probePlan =" source;
+assert pkgs.lib.hasInfix "renderProbeStep = probeRuntime.renderProbeStep;" source;
 assert pkgs.lib.hasInfix "renderProbeStep =" source;
 assert pkgs.lib.hasInfix "mkServiceProbeSpec =" source;
-assert pkgs.lib.hasInfix "mkTcpProbeBody =" source;
-assert pkgs.lib.hasInfix "mkPostgresPgIsReadyBody =" source;
-assert pkgs.lib.hasInfix "mkPostgresQueryBody =" source;
-assert pkgs.lib.hasInfix "mkJsonRpcProbeBody =" source;
-assert pkgs.lib.hasInfix "mkHeliosReadyBody =" source;
 assert pkgs.lib.hasInfix "healthProbeSpecs = builtins.listToAttrs" source;
 assert pkgs.lib.hasInfix "readyProbeSpecs = builtins.listToAttrs" source;
 assert pkgs.lib.hasInfix
   "testIsolationRuntime = import ../.framework/lib/test-isolation-runtime.nix"
   source;
 assert pkgs.lib.hasInfix "isolationScript = testIsolationRuntime.mkIsolationScript" source;
-assert pkgs.lib.hasInfix "checking helios readiness" source;
-assert pkgs.lib.hasInfix "method = \"eth_blockNumber\";" source;
-assert pkgs.lib.hasInfix "method = \"eth_syncing\";" source;
-assert pkgs.lib.hasInfix "source kind disallowed" source;
+assert pkgs.lib.hasInfix "mkTcpProbeBody =" probeRuntimeSource;
+assert pkgs.lib.hasInfix "mkPostgresPgIsReadyBody =" probeRuntimeSource;
+assert pkgs.lib.hasInfix "mkPostgresQueryBody =" probeRuntimeSource;
+assert pkgs.lib.hasInfix "mkJsonRpcProbeBody =" probeRuntimeSource;
+assert pkgs.lib.hasInfix "mkHeliosReadyBody =" probeRuntimeSource;
+assert pkgs.lib.hasInfix "renderProbeStep =" probeRuntimeSource;
 assert pkgs.lib.hasInfix "operationProbes = {" serviceConfigSource;
 assert pkgs.lib.hasInfix "serviceLabel = \"postgres\";" serviceConfigSource;
 assert pkgs.lib.hasInfix "kind = \"postgres-pg-isready\";" serviceConfigSource;
@@ -54,6 +57,10 @@ assert pkgs.lib.hasInfix "phaseLabel = \"health\";" serviceConfigSource;
 assert pkgs.lib.hasInfix "phaseLabel = \"readiness\";" serviceConfigSource;
 assert pkgs.lib.hasInfix "method = \"web3_clientVersion\";" serviceConfigSource;
 assert pkgs.lib.hasInfix "method = \"eth_chainId\";" serviceConfigSource;
+assert pkgs.lib.hasInfix "INFO: checking helios readiness" readyCommand;
+assert pkgs.lib.hasInfix "source kind disallowed" readyCommand;
+assert pkgs.lib.hasInfix "OK: readiness checks passed" readyCommand;
+assert pkgs.lib.hasInfix "OK: health checks passed" healthCommand;
 assert pkgs.lib.hasInfix "isolation cell start" isolationRuntimeSource;
 assert pkgs.lib.hasInfix "test-isolation logs_root=" isolationRuntimeSource;
 assert pkgs.lib.hasInfix "test-isolation forcing maxParallel=1 reason=ci" isolationRuntimeSource;
