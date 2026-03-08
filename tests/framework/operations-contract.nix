@@ -1,6 +1,7 @@
 { pkgs, model }:
 let
   source = builtins.readFile ../../nixfied/modules/operations.nix;
+  isolationRuntimeSource = builtins.readFile ../../nixfied/.framework/lib/test-isolation-runtime.nix;
   serviceConfigSource = builtins.readFile ../../nixfied/lib/service-config.nix;
   healthCommand = model.tasks."task.ops.health".runner.command;
   readyCommand = model.tasks."task.ops.ready".runner.command;
@@ -29,6 +30,10 @@ assert pkgs.lib.hasInfix "mkJsonRpcProbeBody =" source;
 assert pkgs.lib.hasInfix "mkHeliosReadyBody =" source;
 assert pkgs.lib.hasInfix "healthProbeSpecs = builtins.listToAttrs" source;
 assert pkgs.lib.hasInfix "readyProbeSpecs = builtins.listToAttrs" source;
+assert pkgs.lib.hasInfix
+  "testIsolationRuntime = import ../.framework/lib/test-isolation-runtime.nix"
+  source;
+assert pkgs.lib.hasInfix "isolationScript = testIsolationRuntime.mkIsolationScript" source;
 assert pkgs.lib.hasInfix "checking helios readiness" source;
 assert pkgs.lib.hasInfix "method = \"eth_blockNumber\";" source;
 assert pkgs.lib.hasInfix "method = \"eth_syncing\";" source;
@@ -49,13 +54,13 @@ assert pkgs.lib.hasInfix "phaseLabel = \"health\";" serviceConfigSource;
 assert pkgs.lib.hasInfix "phaseLabel = \"readiness\";" serviceConfigSource;
 assert pkgs.lib.hasInfix "method = \"web3_clientVersion\";" serviceConfigSource;
 assert pkgs.lib.hasInfix "method = \"eth_chainId\";" serviceConfigSource;
-assert pkgs.lib.hasInfix "isolation cell start" source;
-assert pkgs.lib.hasInfix "test-isolation logs_root=" source;
-assert pkgs.lib.hasInfix "test-isolation forcing maxParallel=1 reason=ci" source;
-assert pkgs.lib.hasInfix "\"$executor_bin\" run-task \"$validate_task_id\"" source;
-assert pkgs.lib.hasInfix "\"$executor_bin\" run-task \"$run_task_id\"" source;
-assert pkgs.lib.hasInfix "test-isolation matrix has no slots" source;
-assert pkgs.lib.hasInfix "test-isolation completed with failures" source;
+assert pkgs.lib.hasInfix "isolation cell start" isolationRuntimeSource;
+assert pkgs.lib.hasInfix "test-isolation logs_root=" isolationRuntimeSource;
+assert pkgs.lib.hasInfix "test-isolation forcing maxParallel=1 reason=ci" isolationRuntimeSource;
+assert pkgs.lib.hasInfix "\"$executor_bin\" run-task \"$validate_task_id\"" isolationRuntimeSource;
+assert pkgs.lib.hasInfix "\"$executor_bin\" run-task \"$run_task_id\"" isolationRuntimeSource;
+assert pkgs.lib.hasInfix "test-isolation matrix has no slots" isolationRuntimeSource;
+assert pkgs.lib.hasInfix "test-isolation completed with failures" isolationRuntimeSource;
 pkgs.runCommand "operations-contract" { } ''
     cat > task-ops-health.sh <<'EOF'
   ${healthCommand}
