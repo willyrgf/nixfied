@@ -347,12 +347,12 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
       return 1
     fi
 
-    state="$(${pkgs.jq}/bin/jq -r '.state' "$run_file")"
+    state="$(run_file_state "$run_file")"
     if [ "$state" != "running" ]; then
       return 0
     fi
 
-    pid="$(${pkgs.jq}/bin/jq -r '.pid // empty' "$run_file")"
+    pid="$(run_file_pid "$run_file")"
     if is_pid_running "$pid"; then
       return 0
     fi
@@ -448,11 +448,11 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
 
     while IFS= read -r run_file; do
       run_id="$(basename "$run_file" .json)"
-      command_name="$(${pkgs.jq}/bin/jq -r '.command' "$run_file")"
-      state="$(${pkgs.jq}/bin/jq -r '.state' "$run_file")"
-      mode="$(${pkgs.jq}/bin/jq -r '.process_mode' "$run_file")"
-      pid="$(${pkgs.jq}/bin/jq -r '.pid // ""' "$run_file")"
-      pgid="$(${pkgs.jq}/bin/jq -r '.pgid // ""' "$run_file")"
+      command_name="$(run_file_command "$run_file")"
+      state="$(run_file_state "$run_file")"
+      mode="$(run_file_process_mode "$run_file")"
+      pid="$(run_file_pid "$run_file")"
+      pgid="$(run_file_pgid "$run_file")"
 
       echo "INFO: run_id=$run_id state=$state command=$command_name mode=$mode pid=$pid pgid=$pgid"
       listed=$((listed + 1))
@@ -492,7 +492,7 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
     fi
 
     refresh_one_run "$run_id" || true
-    state="$(${pkgs.jq}/bin/jq -r '.state' "$run_file")"
+    state="$(run_file_state "$run_file")"
 
     case "$state" in
       passed|failed|canceled)
@@ -501,8 +501,8 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
         ;;
     esac
 
-    pid="$(${pkgs.jq}/bin/jq -r '.pid // empty' "$run_file")"
-    pgid="$(${pkgs.jq}/bin/jq -r '.pgid // empty' "$run_file")"
+    pid="$(run_file_pid "$run_file")"
+    pgid="$(run_file_pgid "$run_file")"
 
     if [ -n "$pgid" ] && [ "$pgid" != "0" ]; then
       kill -TERM -- "-$pgid" 2>/dev/null || true
@@ -540,7 +540,7 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
 
     while IFS= read -r run_file; do
       run_id="$(basename "$run_file" .json)"
-      state="$(${pkgs.jq}/bin/jq -r '.state' "$run_file")"
+      state="$(run_file_state "$run_file")"
       if [ "$state" = "running" ] || [ "$state" = "queued" ]; then
         if ! stop_single_run "$run_id"; then
           status=1

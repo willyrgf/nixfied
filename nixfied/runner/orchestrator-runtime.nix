@@ -127,6 +127,31 @@
     mv "$tmp" "$target"
   }
 
+  run_file_state() {
+    local run_file="$1"
+    ${pkgs.jq}/bin/jq -r '.state' "$run_file"
+  }
+
+  run_file_pid() {
+    local run_file="$1"
+    ${pkgs.jq}/bin/jq -r '.pid // empty' "$run_file"
+  }
+
+  run_file_pgid() {
+    local run_file="$1"
+    ${pkgs.jq}/bin/jq -r '.pgid // empty' "$run_file"
+  }
+
+  run_file_command() {
+    local run_file="$1"
+    ${pkgs.jq}/bin/jq -r '.command' "$run_file"
+  }
+
+  run_file_process_mode() {
+    local run_file="$1"
+    ${pkgs.jq}/bin/jq -r '.process_mode' "$run_file"
+  }
+
   validate_workflow_args() {
     local workflow_id="$1"
     shift
