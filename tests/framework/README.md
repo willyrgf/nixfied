@@ -21,6 +21,9 @@ nix run path:.#framework::test
 `framework::test` is a first-class task defined in `nixfied/project/module.nix`.
 It runs validation shards with stable log prefixes and supports shard-level parallelism.
 
+The authoritative flake-check registry lives in `tests/framework/default.nix`.
+This README is an overview, not the canonical full check list.
+
 Available shards:
 - `flake-check`
 - `help`
@@ -41,42 +44,24 @@ nix run .#framework::test -- --summary-json /tmp/framework-test-summary.json
 
 ## Flake checks (canonical)
 
-Deterministic checks live in `tests/framework/` and run via `nix flake check path:.`:
-- `model-hash`
-- `cross-machine-hash`
-- `scheduler-order`
-- `help-snapshot`
-- `registry-replay`
-- `compiler-validation`
-- `executor-contract`
-- `env-sandbox-contract`
-- `operations-contract`
-- `project-config-boundary`
-- `ready-health-matrix-smoke`
-- `ready-health-shutdown-smoke`
-- `registry-events-contract`
-- `log-prefix-contract`
-- `parallel-runner-smoke`
-- `parallel-worker-cap-smoke`
-- `parallel-worker-cap-invalid-smoke`
-- `ci-mode-matrix-smoke`
-- `logging-injection-smoke`
-- `workflow-mode-derived-smoke`
-- `task-hooks-smoke`
-- `framework-test-cli-contract-smoke`
-- `framework-selfhost-contract`
-- `framework-install-vendor-smoke`
-- `framework-install-thin-smoke`
-- `framework-template-install-upgrade-help-smoke`
-- `framework-upgrade-preserve-smoke`
-- `orchestrator-lifecycle-contract`
-- `orchestrator-stop-controls-smoke`
-- `workflow-lifecycle-smoke`
-- `summary-json-smoke`
-- `ephemeral-execution-smoke`
-- `ephemeral-copy-mode-smoke`
-- `ephemeral-retention-smoke`
-- `ephemeral-copy-budget-smoke`
+Deterministic checks live in `tests/framework/` and run via `nix flake check path:.`.
+
+Use `tests/framework/default.nix` as the source of truth for:
+- the complete registered check list
+- the exact check names
+- the import path for each check
+
+The current surface is organized around:
+- model and compiler determinism
+- executor, env sandbox, and shell/runtime contracts
+- registry, orchestrator, and summary behavior
+- operations, readiness, and service observability
+- install/upgrade wrapper flows
+- ephemeral execution and isolation behavior
+- framework CLI and self-host smoke coverage
+
+Shared shell helpers live in `tests/framework/lib/harness.nix`.
+High-complexity operations smokes still have room for more harness extraction, but the harness is active and should be preferred over ad hoc duplication.
 
 ## Output contract
 
