@@ -13,8 +13,11 @@ assert pkgs.lib.hasInfix "task_descriptor_exists() {" source;
 assert pkgs.lib.hasInfix "task_arg_parser() {" source;
 assert pkgs.lib.hasInfix "task_arg_long_kind() {" source;
 assert pkgs.lib.hasInfix "task_runner_workflow_id() {" source;
-assert (! pkgs.lib.hasInfix "$MODEL_FILE" source);
-assert (! pkgs.lib.hasInfix "/bin/jq" source);
+assert pkgs.lib.hasInfix "workflowPlanCases = map" source;
+assert pkgs.lib.hasInfix "builtins.toJSON (workflows.\${workflowId}.plan or [ ])" source;
+assert pkgs.lib.hasInfix "workflow_plan_records() {" source;
+assert (!pkgs.lib.hasInfix "$MODEL_FILE" source);
+assert (!pkgs.lib.hasInfix "/bin/jq" source);
 pkgs.runCommand "workflow-modes-contract" { } ''
   echo "OK: workflow/task runner descriptors are compiled" > "$out"
 ''

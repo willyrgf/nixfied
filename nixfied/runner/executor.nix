@@ -685,36 +685,8 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
   }
 
   workflow_unit_records() {
-    local workflow="$1"
-    printf '%s' "$workflow" | ${pkgs.jq}/bin/jq -c '
-      .stages as $stages
-      | .units as $units
-      | [
-          range(0; ($stages | length)) as $stageIndex
-          | $stages[$stageIndex][] as $unitName
-          | ($units[$unitName] // error("workflow stage references unknown unit: " + $unitName)) as $unit
-          | {
-              stage: $stageIndex,
-              name: $unitName,
-              taskId: $unit.taskId,
-              needs: ($unit.needs // []),
-              locks: ($unit.locks // []),
-              when: ($unit.when // { envEquals: {}, envPresent: [] }),
-              skipIfMissingEnv: ($unit.skipIfMissingEnv // []),
-              priority: ($unit.priority // 100),
-              scheduling:
-                {
-                  maxAttempts: ($unit.scheduling.maxAttempts // 1),
-                  retryBackoffSec: ($unit.scheduling.retryBackoffSec // []),
-                  priority: ($unit.scheduling.priority // ($unit.priority // 100))
-                },
-              deps: ($unit.deps // { needs: [], softNeeds: [] }),
-              produces: ($unit.produces // { artifacts: [], stateKeys: [] })
-            }
-        ]
-      | sort_by(.stage, -(.priority), .name)
-      | .[]
-    '
+    local workflow_id="$1"
+    workflow_plan_records "$workflow_id"
   }
 
   run_workflow_serial_impl() {
@@ -795,7 +767,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       if [ "$status" -ne 0 ] && [ "$fail_fast" = "true" ]; then
         break
       fi
-    done < <(workflow_unit_records "$workflow")
+    done < <(workflow_unit_records "$workflow_id")
 
     return "$status"
   }
@@ -1003,7 +975,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       UNIT_STATE[$unit_name]="pending"
       UNIT_DEPENDENTS[$unit_name]=""
       UNIT_LOCKS[$unit_name]="$lock_list"
-    done < <(workflow_unit_records "$workflow")
+    done < <(workflow_unit_records "$workflow_id")
 
     local total_units="''${#unit_names[@]}"
     if [ "$total_units" -eq 0 ]; then
