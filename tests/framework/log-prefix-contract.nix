@@ -14,6 +14,7 @@ assert pkgs.lib.hasInfix "printf 'SKIP: %s\\n'" frameworkSource;
 assert pkgs.lib.hasInfix "import ./logging-runtime.nix" helpersSource;
 assert pkgs.lib.hasInfix "loggingPrelude = loggingRuntime.loggingPrelude;" helpersSource;
 assert pkgs.lib.hasInfix "log_error()" loggingRuntimeSource;
+assert pkgs.lib.hasInfix "print_log_tail()" loggingRuntimeSource;
 assert pkgs.lib.hasInfix "_nixfied_emit 2 \"INFO: $*\" \"0\"" loggingRuntimeSource;
 assert pkgs.lib.hasInfix "_nixfied_emit 2 \"OK: $*\" \"0\"" loggingRuntimeSource;
 assert pkgs.lib.hasInfix "_nixfied_emit 2 \"SKIP: $*\" \"0\"" loggingRuntimeSource;

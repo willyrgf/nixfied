@@ -75,12 +75,7 @@ let
           --wait-reason "${degradedWaitReason}" \
           --last-error "${degradedLastError}"
         log_error "${failureMessage}. log=$LOG_FILE"
-        if [ -f "$LOG_FILE" ]; then
-          log_info "${serviceLabel} log tail path=$LOG_FILE lines=${toString tailLines}"
-          tail -n ${toString tailLines} "$LOG_FILE" >&2 || true
-        else
-          log_warn "${serviceLabel} log file missing path=$LOG_FILE"
-        fi
+        print_log_tail "$LOG_FILE" ${toString tailLines} "${serviceLabel}"
         exit 1
       fi
 

@@ -15,6 +15,7 @@ assert pkgs.lib.hasInfix "mkObservedStatusScript" helperSource;
 assert pkgs.lib.hasInfix "mkStopOutcomeBody" helperSource;
 assert pkgs.lib.hasInfix "mkSimpleProbeBody" helperSource;
 assert pkgs.lib.hasInfix "mkStartupReadinessBody" helperSource;
+assert pkgs.lib.hasInfix "print_log_tail \"$LOG_FILE\"" helperSource;
 assert pkgs.lib.hasInfix "SERVICE_PID_FILE" helperSource;
 assert pkgs.lib.hasInfix "SERVICE_LOG_FILE" helperSource;
 assert pkgs.lib.hasInfix "stopRequestBody" helperSource;
@@ -67,6 +68,8 @@ assert pkgs.lib.hasInfix "healthBody = managedServiceLifecycle.mkSimpleProbeBody
 assert pkgs.lib.hasInfix "startPostLaunchBody = managedServiceLifecycle.mkStartupReadinessBody {"
   heliosSource;
 assert pkgs.lib.hasInfix "body = managedServiceLifecycle.mkSimpleProbeBody" postgresLifecycleSource;
+assert pkgs.lib.hasInfix "print_log_tail \"$PGDATA/postgres.log\" 20 \"postgres\""
+  postgresLifecycleSource;
 assert pkgs.lib.hasInfix "inherit (managedLifecycle)" minioSource;
 assert pkgs.lib.hasInfix "inherit (managedLifecycle)" rethSource;
 assert pkgs.lib.hasInfix "inherit (managedLifecycle)" heliosSource;

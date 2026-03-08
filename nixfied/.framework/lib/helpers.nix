@@ -223,23 +223,6 @@ let
       echo "$dir/$name"
     }
 
-    # print_log_tail PATH [lines]
-    # - print trailing log lines when available; emit WARN when log file is missing.
-    print_log_tail() {
-      local path="$1"
-      local lines="''${2:-50}"
-      if [ -z "$path" ]; then
-        echo "usage: print_log_tail <path> [lines]" >&2
-        return 1
-      fi
-      if [ -f "$path" ]; then
-        log_info "log tail path=$path lines=$lines"
-        tail -n "$lines" "$path" >&2 || true
-      else
-        log_warn "fixture log file missing path=$path"
-      fi
-    }
-
     # run_hook ENV_VAR [args...]
     # - execute the command stored in ENV_VAR.
     run_hook() {

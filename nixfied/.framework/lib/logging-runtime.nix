@@ -136,6 +136,31 @@ let
       _nixfied_emit 3 "DEBUG: $*" "1"
     }
 
+    # print_log_tail PATH [lines] [label]
+    # - print trailing log lines when available; emit WARN when the log file is missing.
+    print_log_tail() {
+      local path="$1"
+      local lines="''${2:-50}"
+      local label="''${3:-}"
+      local prefix=""
+
+      if [ -z "$path" ]; then
+        echo "usage: print_log_tail <path> [lines] [label]" >&2
+        return 1
+      fi
+
+      if [ -n "$label" ]; then
+        prefix="$label "
+      fi
+
+      if [ -f "$path" ]; then
+        log_info "''${prefix}log tail path=$path lines=$lines"
+        tail -n "$lines" "$path" >&2 || true
+      else
+        log_warn "''${prefix}log file missing path=$path"
+      fi
+    }
+
     _NIXFIED_LOG_LEVEL_RAW=""
     _NIXFIED_LOG_LEVEL_NUM="2"
     _nixfied_refresh_log_level

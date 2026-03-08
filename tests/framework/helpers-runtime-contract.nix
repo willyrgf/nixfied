@@ -3,11 +3,14 @@ let
   helpersSource = builtins.readFile ../../nixfied/.framework/lib/helpers.nix;
   cleanupSource = builtins.readFile ../../nixfied/.framework/lib/cleanup-runtime.nix;
   fixtureSource = builtins.readFile ../../nixfied/.framework/lib/fixture-runtime.nix;
+  loggingRuntimeSource = builtins.readFile ../../nixfied/.framework/lib/logging-runtime.nix;
 in
 assert pkgs.lib.hasInfix "import ./cleanup-runtime.nix" helpersSource;
 assert pkgs.lib.hasInfix "import ./fixture-runtime.nix" helpersSource;
 assert pkgs.lib.hasInfix "cleanupRuntime.cleanupRuntime" helpersSource;
 assert pkgs.lib.hasInfix "fixtureRuntime.fixtureRuntime" helpersSource;
+assert (!pkgs.lib.hasInfix "print_log_tail()" helpersSource);
+assert pkgs.lib.hasInfix "print_log_tail()" loggingRuntimeSource;
 assert pkgs.lib.hasInfix "with_cleanup()" cleanupSource;
 assert pkgs.lib.hasInfix "_run_cleanups()" cleanupSource;
 assert !(pkgs.lib.hasInfix "mktemp \"''${"TMPDIR:-/tmp"}/nixfied-cleanup" cleanupSource);

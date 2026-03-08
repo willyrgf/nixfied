@@ -233,12 +233,7 @@ let
         --wait-reason "failed_readiness" \
         --last-error "postgres did not become ready in startup window"
       log_error "PostgreSQL failed to start. Check $PGDATA/postgres.log"
-      if [ -f "$PGDATA/postgres.log" ]; then
-        log_info "postgres log tail path=$PGDATA/postgres.log lines=20"
-        tail -20 "$PGDATA/postgres.log" >&2 || true
-      else
-        log_warn "postgres log file missing path=$PGDATA/postgres.log"
-      fi
+      print_log_tail "$PGDATA/postgres.log" 20 "postgres"
       exit 1
     '';
   };
