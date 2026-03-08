@@ -145,10 +145,11 @@ let
     startCommand = ''
       "${reth}/bin/reth" "''${ARGS[@]}" > "$LOG_FILE" 2>&1 &
     '';
-    startAlreadyRunningBody = ''
-      emit_service_event service_ready ready --pid "$PID" --log-path "$LOG_FILE"
-      log_ok "reth already running pid=$PID http_port=$RETH_HTTP_PORT"
-    '';
+    startAlreadyRunningBody = managedServiceLifecycle.mkReadyOutcomeBody {
+      level = "ok";
+      pidExpr = ''"$PID"'';
+      message = "reth already running pid=$PID http_port=$RETH_HTTP_PORT";
+    };
     startPostLaunchBody = managedServiceLifecycle.mkStartupReadinessBody {
       probeCommand = healthCheck;
       serviceLabel = "reth";

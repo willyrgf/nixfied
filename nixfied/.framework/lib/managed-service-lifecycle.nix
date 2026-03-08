@@ -34,6 +34,20 @@ let
         --last-error "${lastError}"
     '';
 
+  mkReadyOutcomeBody =
+    {
+      level,
+      message,
+      pidExpr,
+      logPathExpr ? ''"$LOG_FILE"'',
+    }:
+    ''
+      emit_service_event service_ready ready --pid ${pidExpr}${
+        lib.optionalString (logPathExpr != null) " --log-path ${logPathExpr}"
+      }
+      log_${level} "${message}"
+    '';
+
   mkSimpleProbeBody =
     {
       probeCommand,
@@ -413,6 +427,7 @@ in
 {
   inherit
     mkProcessExitFailureBody
+    mkReadyOutcomeBody
     mkSimpleProbeBody
     mkStartupReadinessBody
     mkWrappedScript

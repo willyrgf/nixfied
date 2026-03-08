@@ -129,10 +129,11 @@ let
     startCommand = ''
       ${nginx}/bin/nginx -c "$CONF" -g 'daemon off;' > "$LOG_FILE" 2>&1 &
     '';
-    startAlreadyRunningBody = ''
-      emit_service_event service_ready ready --pid "$PID" --log-path "$LOG_FILE"
-      log_ok "nginx already running pid=$PID http_port=$HTTP_PORT"
-    '';
+    startAlreadyRunningBody = serviceScripts.mkReadyOutcomeBody {
+      level = "ok";
+      pidExpr = ''"$PID"'';
+      message = "nginx already running pid=$PID http_port=$HTTP_PORT";
+    };
     startPostLaunchBody = serviceScripts.mkStartupReadinessBody {
       probeCommand = probeCommands.tcpOpenCmd { portExpr = "$HTTP_PORT"; };
       serviceLabel = "nginx";

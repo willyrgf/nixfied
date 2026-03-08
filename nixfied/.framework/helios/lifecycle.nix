@@ -256,10 +256,11 @@ let
     startCommand = ''
       "${helios}/bin/helios" "''${ARGS[@]}" > "$LOG_FILE" 2>&1 &
     '';
-    startAlreadyRunningBody = ''
-      emit_service_event service_ready ready --pid "$PID" --log-path "$LOG_FILE"
-      log_ok "helios already running pid=$PID rpc_port=$HELIOS_RPC_PORT"
-    '';
+    startAlreadyRunningBody = managedServiceLifecycle.mkReadyOutcomeBody {
+      level = "ok";
+      pidExpr = ''"$PID"'';
+      message = "helios already running pid=$PID rpc_port=$HELIOS_RPC_PORT";
+    };
     startPostLaunchBody = managedServiceLifecycle.mkStartupReadinessBody {
       probeCommand = healthCheck;
       serviceLabel = "helios";

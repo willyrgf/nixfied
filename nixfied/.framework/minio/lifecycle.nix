@@ -97,14 +97,16 @@ let
         --config-dir "$MINIO_DIR/config" \
         > "$LOG_FILE" 2>&1 &
     '';
-    startAlreadyRunningBody = ''
-      emit_service_event service_ready ready --pid "$PID" --log-path "$LOG_FILE"
-      log_ok "minio already running pid=$PID api_port=$MINIO_API_PORT"
-    '';
-    startPostLaunchBody = ''
-      emit_service_event service_ready ready --pid "$CHILD_PID" --log-path "$LOG_FILE"
-      log_info "minio started pid=$CHILD_PID api_port=$MINIO_API_PORT console_port=$MINIO_CONSOLE_PORT"
-    '';
+    startAlreadyRunningBody = managedServiceLifecycle.mkReadyOutcomeBody {
+      level = "ok";
+      pidExpr = ''"$PID"'';
+      message = "minio already running pid=$PID api_port=$MINIO_API_PORT";
+    };
+    startPostLaunchBody = managedServiceLifecycle.mkReadyOutcomeBody {
+      level = "info";
+      pidExpr = ''"$CHILD_PID"'';
+      message = "minio started pid=$CHILD_PID api_port=$MINIO_API_PORT console_port=$MINIO_CONSOLE_PORT";
+    };
     startExitFailureBody = managedServiceLifecycle.mkProcessExitFailureBody {
       waitReason = "minio_process_exit code=$RC";
       lastError = "minio process exited non-zero";
