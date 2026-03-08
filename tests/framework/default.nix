@@ -305,6 +305,10 @@
     inherit pkgs;
   };
 
+  "orchestrator-runtime-contract" = import ./orchestrator-runtime-contract.nix {
+    inherit pkgs;
+  };
+
   "orchestrator-stop-controls-smoke" = import ./orchestrator-stop-controls-smoke.nix {
     inherit
       pkgs
