@@ -305,9 +305,13 @@ let
       service = "helios";
       defaultLogPathExpr = ''"$HELIOS_LOG_FILE"'';
     };
-    statusBody = ''
-      echo "service=helios slot=$SLOT env=$ENV running=$RUNNING pid=''${PID:-unknown} rpc_port=$HELIOS_RPC_PORT network=$HELIOS_NETWORK scope=$SCOPE owner_run_id=''${OWNER_RUN_ID:-unknown} owner_scope=''${OWNER_SCOPE:-unknown} ephemeral_root=''${EPHEMERAL_ROOT:-none} registry_state=''${REGISTRY_STATE:-unknown} slot_owner=''${SLOT_OWNER:-unknown} wait_reason=''${WAIT_REASON:-none} log_path=$EFFECTIVE_LOG_PATH"
-    '';
+    statusBody = observability.mkStatusLine {
+      service = "helios";
+      afterPidFields = [
+        "rpc_port=$HELIOS_RPC_PORT"
+        "network=$HELIOS_NETWORK"
+      ];
+    };
     healthBody = ''
       if ${healthCheck}
       then

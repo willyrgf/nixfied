@@ -193,9 +193,15 @@ let
       service = "reth";
       defaultLogPathExpr = ''"$RETH_LOG_FILE"'';
     };
-    statusBody = ''
-      echo "service=reth slot=$SLOT env=$ENV running=$RUNNING pid=''${PID:-unknown} http_port=$RETH_HTTP_PORT ws_port=$RETH_WS_PORT auth_port=$RETH_AUTH_PORT network=$RETH_NETWORK scope=$SCOPE owner_run_id=''${OWNER_RUN_ID:-unknown} owner_scope=''${OWNER_SCOPE:-unknown} ephemeral_root=''${EPHEMERAL_ROOT:-none} registry_state=''${REGISTRY_STATE:-unknown} slot_owner=''${SLOT_OWNER:-unknown} wait_reason=''${WAIT_REASON:-none} log_path=$EFFECTIVE_LOG_PATH"
-    '';
+    statusBody = observability.mkStatusLine {
+      service = "reth";
+      afterPidFields = [
+        "http_port=$RETH_HTTP_PORT"
+        "ws_port=$RETH_WS_PORT"
+        "auth_port=$RETH_AUTH_PORT"
+        "network=$RETH_NETWORK"
+      ];
+    };
     healthBody = ''
       if ${healthCheck}
       then

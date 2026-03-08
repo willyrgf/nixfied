@@ -287,9 +287,13 @@ let
       service = "postgres";
       defaultLogPathExpr = ''"$PGDATA/postgres.log"'';
     };
-    statusBody = ''
-      echo "service=postgres slot=$SLOT env=$ENV port=$PGPORT pgdata=$PGDATA running=$RUNNING pid=''${PID:-unknown} scope=$SCOPE owner_run_id=''${OWNER_RUN_ID:-unknown} owner_scope=''${OWNER_SCOPE:-unknown} ephemeral_root=''${EPHEMERAL_ROOT:-none} registry_state=''${REGISTRY_STATE:-unknown} slot_owner=''${SLOT_OWNER:-unknown} wait_reason=''${WAIT_REASON:-none} log_path=$EFFECTIVE_LOG_PATH"
-    '';
+    statusBody = observability.mkStatusLine {
+      service = "postgres";
+      beforeRunningFields = [
+        "port=$PGPORT"
+        "pgdata=$PGDATA"
+      ];
+    };
   };
 
   health = mkPgScript {

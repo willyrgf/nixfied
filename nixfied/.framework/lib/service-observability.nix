@@ -6,6 +6,7 @@
 }:
 
 let
+  lib = pkgs.lib;
   slotEnvRuntime = import ./slot-env-runtime.nix { inherit pkgs; };
   mkLogScript =
     service:
@@ -71,6 +72,39 @@ let
       fi
     '';
 
+  mkStatusLine =
+    {
+      service,
+      beforeRunningFields ? [ ],
+      afterPidFields ? [ ],
+    }:
+    let
+      fields = [
+        "service=${service}"
+        "slot=$SLOT"
+        "env=$ENV"
+      ]
+      ++ beforeRunningFields
+      ++ [
+        "running=$RUNNING"
+        "pid=\${PID:-unknown}"
+      ]
+      ++ afterPidFields
+      ++ [
+        "scope=$SCOPE"
+        "owner_run_id=\${OWNER_RUN_ID:-unknown}"
+        "owner_scope=\${OWNER_SCOPE:-unknown}"
+        "ephemeral_root=\${EPHEMERAL_ROOT:-none}"
+        "registry_state=\${REGISTRY_STATE:-unknown}"
+        "slot_owner=\${SLOT_OWNER:-unknown}"
+        "wait_reason=\${WAIT_REASON:-none}"
+        "log_path=$EFFECTIVE_LOG_PATH"
+      ];
+    in
+    ''
+      echo "${lib.concatStringsSep " " fields}"
+    '';
+
   mkEmitServiceEventFunction = service: ''
     emit_service_event() {
       local event_type="$1"
@@ -115,6 +149,7 @@ in
     mkLogScript
     mkEventsScript
     mkStatusMergeBlock
+    mkStatusLine
     mkEmitServiceEventFunction
     mkLogEventExtensions
     ;

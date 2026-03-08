@@ -164,6 +164,10 @@
     inherit pkgs;
   };
 
+  "service-observability-contract" = import ./service-observability-contract.nix {
+    inherit pkgs;
+  };
+
   "parallel-runner-smoke" = import ./parallel-runner-smoke.nix {
     inherit
       pkgs

@@ -183,9 +183,13 @@ let
       service = "nginx";
       defaultLogPathExpr = ''"$NGINX_LOG_FILE"'';
     };
-    statusBody = ''
-      echo "service=nginx slot=$SLOT env=$ENV running=$RUNNING pid=''${PID:-unknown} http_port=$HTTP_PORT https_port=$HTTPS_PORT scope=$SCOPE owner_run_id=''${OWNER_RUN_ID:-unknown} owner_scope=''${OWNER_SCOPE:-unknown} ephemeral_root=''${EPHEMERAL_ROOT:-none} registry_state=''${REGISTRY_STATE:-unknown} slot_owner=''${SLOT_OWNER:-unknown} wait_reason=''${WAIT_REASON:-none} log_path=$EFFECTIVE_LOG_PATH"
-    '';
+    statusBody = observability.mkStatusLine {
+      service = "nginx";
+      afterPidFields = [
+        "http_port=$HTTP_PORT"
+        "https_port=$HTTPS_PORT"
+      ];
+    };
     healthBody = ''
       if ${probeCommands.tcpOpenCmd { portExpr = "$HTTP_PORT"; }} then
         log_ok "nginx healthy http_port=$HTTP_PORT"
