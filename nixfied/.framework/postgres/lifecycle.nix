@@ -110,10 +110,27 @@ let
     }
   '';
 
+  selectConfigTemplate = ''
+    select_config_template() {
+      case "''${1:-dev}" in
+        prod)
+          printf '%s\n' '${config.prodConfFile}'
+          ;;
+        test)
+          printf '%s\n' '${config.testConfFile}'
+          ;;
+        *)
+          printf '%s\n' '${config.devConfFile}'
+          ;;
+      esac
+    }
+  '';
+
   init = mkPgScript {
     name = "postgres-init";
     body = ''
       ${ensureConfigPort}
+      ${selectConfigTemplate}
 
       mkdir -p "$PGDATA"
 
@@ -127,23 +144,8 @@ let
 
       # Determine environment-specific config
       CONF_ENV="''${ENV:-dev}"
-      case "$CONF_ENV" in
-        prod)
-          cat > "$PGDATA/postgresql.conf" <<'PGCONF'
-      ${config.prodConf}
-      PGCONF
-          ;;
-        test)
-          cat > "$PGDATA/postgresql.conf" <<'PGCONF'
-      ${config.testConf}
-      PGCONF
-          ;;
-        *)
-          cat > "$PGDATA/postgresql.conf" <<'PGCONF'
-      ${config.devConf}
-      PGCONF
-          ;;
-      esac
+      PGCONF_TEMPLATE="$(select_config_template "$CONF_ENV")"
+      ${pkgs.coreutils}/bin/install -m 600 "$PGCONF_TEMPLATE" "$PGDATA/postgresql.conf"
 
       ensure_config_port "$PGDATA/postgresql.conf"
       if ! ${postgres}/bin/postgres -D "$PGDATA" -C port >/dev/null 2>&1; then
@@ -151,12 +153,7 @@ let
         exit 1
       fi
 
-      cat > "$PGDATA/pg_hba.conf" <<'EOF'
-      # TYPE  DATABASE        USER  ADDRESS       METHOD
-      local   all             all                 trust
-      host    all             all   127.0.0.1/32  trust
-      host    all             all   ::1/128       trust
-      EOF
+      ${pkgs.coreutils}/bin/install -m 600 ${config.pgHbaConfFile} "$PGDATA/pg_hba.conf"
     '';
   };
 

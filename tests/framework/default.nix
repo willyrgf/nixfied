@@ -301,6 +301,14 @@
     inherit pkgs;
   };
 
+  "postgres-config-artifacts-contract" = import ./postgres-config-artifacts-contract.nix {
+    inherit pkgs;
+  };
+
+  "postgres-config-artifacts-smoke" = import ./postgres-config-artifacts-smoke.nix {
+    inherit pkgs;
+  };
+
   "nginx-site-management-smoke" = import ./nginx-site-management-smoke.nix {
     inherit pkgs;
   };
