@@ -33,11 +33,11 @@ let
   frameworkTask = model.tasks."task.framework.test" or null;
   formatTask = model.tasks."task.format" or null;
   commandSurfaces = model.views.help.commandSurfaces or [ ];
+  nginxService = model.services."service.nginx" or null;
+  heliosService = model.services."service.helios" or null;
   hasCommandSurface =
     name: ownerFile:
-    builtins.any (
-      entry: entry.name == name && entry.owner_file == ownerFile
-    ) commandSurfaces;
+    builtins.any (entry: entry.name == name && entry.owner_file == ownerFile) commandSurfaces;
 in
 assert frameworkTask != null;
 assert frameworkTask.runner.type == "shell";
@@ -58,6 +58,10 @@ assert builtins.isInt model.runtime.ephemeral.minFreeBytesAfterCopy;
 assert model.runtime.ephemeral.envFileMode == "disabled";
 assert model.runtime.ephemeral.envFilePath == ".env";
 assert model.runtime.runtimePackages != [ ];
+assert nginxService != null;
+assert heliosService != null;
+assert nginxService.config.resolved.operationProbes.health.count == 2;
+assert heliosService.config.resolved.operationProbes.ready.count == 2;
 assert builtins.all (
   pkg: builtins.elem pkg formatTask.runtime.runtimeInputs
 ) model.runtime.runtimePackages;

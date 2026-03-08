@@ -71,18 +71,6 @@ let
     resolvePortBase
       resolvedServiceConfigByName.${serviceName}.resolved.endpoints.${endpointName}.portKey;
 
-  postgresPortBase = if postgresEnabled then resolveServicePortBase "postgres" "primary" else 0;
-  nginxHttpPortBase = if nginxEnabled then resolveServicePortBase "nginx" "http" else 0;
-  nginxHttpsPortBase = if nginxEnabled then resolveServicePortBase "nginx" "https" else 0;
-  minioApiPortBase = if minioEnabled then resolveServicePortBase "minio" "api" else 0;
-  minioConsolePortBase = if minioEnabled then resolveServicePortBase "minio" "console" else 0;
-  rethHttpPortBase = if rethEnabled then resolveServicePortBase "reth" "http" else 0;
-  rethWsPortBase = if rethEnabled then resolveServicePortBase "reth" "ws" else 0;
-  rethAuthPortBase = if rethEnabled then resolveServicePortBase "reth" "auth" else 0;
-  heliosExecutionRpcPortBase =
-    if heliosEnabled then resolveServicePortBase "helios" "execution" else 0;
-  heliosRpcPortBase = if heliosEnabled then resolveServicePortBase "helios" "rpc" else 0;
-
   netcatPkg =
     if pkgs ? netcat then
       pkgs.netcat
@@ -92,28 +80,6 @@ let
       throw "nixfied.operations: netcat package is required for readiness probes";
 
   postgresProbePkg = if pkgs ? postgresql_16 then pkgs.postgresql_16 else pkgs.postgresql;
-  heliosSourceKinds = heliosCfg.sourceKinds or { };
-  heliosSourceKindCase = builtins.concatStringsSep "\n" (
-    map (
-      sourceName:
-      "      ${lib.escapeShellArg sourceName}) printf '%s' ${
-              lib.escapeShellArg (heliosSourceKinds.${sourceName} or "unknown")
-            } ;;"
-    ) (builtins.sort builtins.lessThan (builtins.attrNames heliosSourceKinds))
-  );
-  heliosReadinessProfile = heliosCfg.readiness.profile or "fast";
-  heliosReadinessRequireNotSyncing =
-    (heliosCfg.readiness.requireNotSyncing or false) || heliosReadinessProfile == "strict";
-  heliosReadinessDisallowSourceKinds = lib.unique (
-    (heliosCfg.readiness.disallowSourceKinds or [ ])
-    ++ lib.optionals (heliosReadinessProfile == "strict") [
-      "shim"
-      "unknown"
-    ]
-  );
-  heliosReadinessDisallowSourceKindArgs = builtins.concatStringsSep " " (
-    map lib.escapeShellArg heliosReadinessDisallowSourceKinds
-  );
   serviceProbeRuntimeInputs = [
     pkgs.coreutils
     pkgs.gnugrep
@@ -382,16 +348,6 @@ let
           return 1
         }
 
-        helios_source_kind() {
-          local source="$1"
-          case "$source" in
-    ${heliosSourceKindCase}
-            *)
-              printf '%s' "unknown"
-              ;;
-          esac
-        }
-
         service_has_source() {
           local service="$1"
           local source="$2"
@@ -504,6 +460,23 @@ let
   portValueExpr =
     base: "$(( ${toString base} + env_offset + (slot_value * ${toString runtime.slot.stride}) ))";
   shellVar = name: "$" + name;
+  probePortVar = serviceName: endpointName: "${serviceName}_${endpointName}_port";
+  probePlan =
+    mode: serviceName:
+    resolvedServiceConfigByName.${serviceName}.resolved.operationProbes.${mode} or {
+      count = 0;
+      steps = [ ];
+    };
+  renderSourceKindCase =
+    sourceKinds:
+    builtins.concatStringsSep "\n" (
+      map (
+        sourceName:
+        "        ${lib.escapeShellArg sourceName}) helios_source_kind_value=${
+                  lib.escapeShellArg (sourceKinds.${sourceName} or "unknown")
+                } ;;"
+      ) (builtins.sort builtins.lessThan (builtins.attrNames sourceKinds))
+    );
 
   mkTcpProbeBody =
     {
@@ -517,9 +490,11 @@ let
     ''
       ${portVar}=${portValueExpr portBase}
       echo "INFO: checking ${serviceLabel} ${phaseLabel} port=${shellVar portVar} source=$service_source"
-      if ${probeCommands.tcpOpenCmd {
-        portExpr = shellVar portVar;
-      }} then
+      if ${
+        probeCommands.tcpOpenCmd {
+          portExpr = shellVar portVar;
+        }
+      } then
         echo "OK: ${serviceLabel} ${successLabel} port=${shellVar portVar}"
       else
         echo "ERROR: ${serviceLabel} ${failureLabel} port=${shellVar portVar}"
@@ -527,25 +502,61 @@ let
       fi
     '';
 
-  mkHttpProbeBody =
+  mkPostgresPgIsReadyBody =
     {
       serviceLabel,
       phaseLabel,
       successLabel,
       failureLabel,
-      path,
+      host,
+      failureSuffix ? "",
       portVar,
       portBase,
     }:
     ''
       ${portVar}=${portValueExpr portBase}
       echo "INFO: checking ${serviceLabel} ${phaseLabel} port=${shellVar portVar} source=$service_source"
-      if ${probeCommands.httpGetOkCmd {
-        urlExpr = "http://127.0.0.1:${shellVar portVar}${path}";
-      }} then
+      if ${
+        probeCommands.pgIsReadyCmd {
+          postgres = postgresProbePkg;
+          inherit host;
+          portExpr = shellVar portVar;
+        }
+      } then
         echo "OK: ${serviceLabel} ${successLabel} port=${shellVar portVar}"
       else
-        echo "ERROR: ${serviceLabel} ${failureLabel} port=${shellVar portVar}"
+        echo "ERROR: ${serviceLabel} ${failureLabel} port=${shellVar portVar}${failureSuffix}"
+        exit 1
+      fi
+    '';
+
+  mkPostgresQueryBody =
+    {
+      serviceLabel,
+      phaseLabel,
+      successLabel,
+      failureLabel,
+      host,
+      database,
+      query,
+      failureSuffix ? "",
+      portVar,
+      portBase,
+    }:
+    ''
+      ${portVar}=${portValueExpr portBase}
+      echo "INFO: checking ${serviceLabel} ${phaseLabel} port=${shellVar portVar} source=$service_source"
+      if ${
+        probeCommands.psqlQueryCmd {
+          postgres = postgresProbePkg;
+          inherit host query;
+          portExpr = shellVar portVar;
+          databaseExpr = database;
+        }
+      } then
+        echo "OK: ${serviceLabel} ${successLabel} port=${shellVar portVar}"
+      else
+        echo "ERROR: ${serviceLabel} ${failureLabel} port=${shellVar portVar}${failureSuffix}"
         exit 1
       fi
     '';
@@ -563,10 +574,12 @@ let
     ''
       ${portVar}=${portValueExpr portBase}
       echo "INFO: checking ${serviceLabel} ${phaseLabel} port=${shellVar portVar} source=$service_source"
-      if ${probeCommands.jsonRpcHasResultCmd {
-        urlExpr = "http://127.0.0.1:${shellVar portVar}";
-        inherit method;
-      }} then
+      if ${
+        probeCommands.jsonRpcHasResultCmd {
+          urlExpr = "http://127.0.0.1:${shellVar portVar}";
+          inherit method;
+        }
+      } then
         echo "OK: ${serviceLabel} ${successLabel} port=${shellVar portVar}"
       else
         echo "ERROR: ${serviceLabel} ${failureLabel} port=${shellVar portVar}"
@@ -574,290 +587,165 @@ let
       fi
     '';
 
-  postgresHealthBody = ''
-    postgres_port=${portValueExpr postgresPortBase}
-    echo "INFO: checking postgres health port=$postgres_port source=$service_source"
-    if ${probeCommands.pgIsReadyCmd {
-      postgres = postgresProbePkg;
-      host = "127.0.0.1";
-      portExpr = "$postgres_port";
-    }} then
-      echo "OK: postgres healthy port=$postgres_port"
+  mkHeliosReadyBody =
+    {
+      portVar,
+      portBase,
+      sourceKinds,
+      readinessProfile,
+      requireNotSyncing,
+      disallowSourceKinds,
+    }:
+    let
+      sourceKindCase = renderSourceKindCase sourceKinds;
+      disallowArgs = builtins.concatStringsSep " " (map lib.escapeShellArg disallowSourceKinds);
+    in
+    ''
+            ${portVar}=${portValueExpr portBase}
+            helios_source_kind_value="unknown"
+            case "$service_source" in
+      ${sourceKindCase}
+              *)
+                helios_source_kind_value="unknown"
+                ;;
+            esac
+            helios_readiness_profile=${lib.escapeShellArg readinessProfile}
+            helios_require_not_syncing=${if requireNotSyncing then "1" else "0"}
+            echo "INFO: checking helios readiness port=${shellVar portVar} source=$service_source source_kind=$helios_source_kind_value profile=$helios_readiness_profile"
+            if source_kind_disallowed "$helios_source_kind_value"${
+              if disallowArgs == "" then "" else " " + disallowArgs
+            }; then
+              echo "ERROR: helios not ready port=${shellVar portVar} source=$service_source source_kind=$helios_source_kind_value profile=$helios_readiness_profile (source kind disallowed)"
+              exit 1
+            fi
+
+            helios_block_json="$(${
+              probeCommands.jsonRpcRequestCmd {
+                urlExpr = "http://127.0.0.1:${shellVar portVar}";
+                method = "eth_blockNumber";
+              }
+            })" || true
+            helios_block_number="$(printf '%s' "$helios_block_json" | ${pkgs.jq}/bin/jq -r '.result // empty')" || true
+            if [ -z "$helios_block_number" ] || ! [[ "$helios_block_number" =~ ^0x[0-9a-fA-F]+$ ]]; then
+              echo "ERROR: helios not ready port=${shellVar portVar} source=$service_source source_kind=$helios_source_kind_value (invalid eth_blockNumber result)"
+              exit 1
+            fi
+            echo "OK: helios ready port=${shellVar portVar} block_number=$helios_block_number"
+
+            if [ "$helios_require_not_syncing" = "1" ]; then
+              helios_syncing_result="$(${
+                probeCommands.jsonRpcFieldCmd {
+                  urlExpr = "http://127.0.0.1:${shellVar portVar}";
+                  method = "eth_syncing";
+                  jqExpr = ".result";
+                  raw = false;
+                }
+              })" || true
+              if [ "$helios_syncing_result" != "false" ]; then
+                echo "ERROR: helios not ready port=${shellVar portVar} source=$service_source source_kind=$helios_source_kind_value profile=$helios_readiness_profile (eth_syncing=$helios_syncing_result)"
+                exit 1
+              fi
+              echo "OK: helios sync status ready port=${shellVar portVar}"
+            else
+              echo "SKIP: helios sync gate disabled profile=$helios_readiness_profile"
+            fi
+    '';
+
+  renderProbeStep =
+    mode: serviceName: step:
+    let
+      portVar = probePortVar serviceName step.endpoint;
+      portBase = resolveServicePortBase serviceName step.endpoint;
+    in
+    if step.kind == "tcp" then
+      mkTcpProbeBody {
+        inherit
+          portVar
+          portBase
+          ;
+        serviceLabel = step.serviceLabel;
+        phaseLabel = step.phaseLabel;
+        successLabel = step.successLabel;
+        failureLabel = step.failureLabel;
+      }
+    else if step.kind == "jsonrpc" then
+      mkJsonRpcProbeBody {
+        inherit
+          portVar
+          portBase
+          ;
+        serviceLabel = step.serviceLabel;
+        phaseLabel = step.phaseLabel;
+        successLabel = step.successLabel;
+        failureLabel = step.failureLabel;
+        method = step.method;
+      }
+    else if step.kind == "postgres-pg-isready" then
+      mkPostgresPgIsReadyBody {
+        inherit
+          portVar
+          portBase
+          ;
+        serviceLabel = step.serviceLabel;
+        phaseLabel = step.phaseLabel;
+        successLabel = step.successLabel;
+        failureLabel = step.failureLabel;
+        host = step.host or "127.0.0.1";
+        failureSuffix = step.failureSuffix or "";
+      }
+    else if step.kind == "postgres-query" then
+      mkPostgresQueryBody {
+        inherit
+          portVar
+          portBase
+          ;
+        serviceLabel = step.serviceLabel;
+        phaseLabel = step.phaseLabel;
+        successLabel = step.successLabel;
+        failureLabel = step.failureLabel;
+        host = step.host or "127.0.0.1";
+        database = step.database;
+        query = step.query;
+        failureSuffix = step.failureSuffix or "";
+      }
+    else if step.kind == "helios-ready" then
+      mkHeliosReadyBody {
+        inherit
+          portVar
+          portBase
+          ;
+        sourceKinds = step.sourceKinds or { };
+        readinessProfile = step.readinessProfile or "fast";
+        requireNotSyncing = step.requireNotSyncing or false;
+        disallowSourceKinds = step.disallowSourceKinds or [ ];
+      }
     else
-      echo "ERROR: postgres unhealthy port=$postgres_port"
-      exit 1
-    fi
-  '';
+      throw "nixfied.operations: unsupported probe kind '${step.kind}' for service '${serviceName}' mode '${mode}'";
 
-  postgresReadyBody = ''
-    postgres_port=${portValueExpr postgresPortBase}
-    postgres_db=${lib.escapeShellArg postgresCfg.database}
-    echo "INFO: checking postgres readiness port=$postgres_port source=$service_source"
-
-    if ! ${probeCommands.pgIsReadyCmd {
-      postgres = postgresProbePkg;
-      host = "127.0.0.1";
-      portExpr = "$postgres_port";
-    }} then
-      echo "ERROR: postgres not ready port=$postgres_port (pg_isready failed)"
-      exit 1
-    fi
-
-    if ${probeCommands.psqlQueryCmd {
-      postgres = postgresProbePkg;
-      host = "127.0.0.1";
-      portExpr = "$postgres_port";
-      databaseExpr = "$postgres_db";
-      query = "select 1;";
-    }} >/dev/null 2>&1; then
-      echo "OK: postgres ready port=$postgres_port database=$postgres_db"
-    else
-      echo "ERROR: postgres not ready port=$postgres_port database=$postgres_db (query failed)"
-      exit 1
-    fi
-  '';
-
-  healthProbeSpecs = {
-    postgres = {
-      count = 1;
-      body = postgresHealthBody;
+  mkServiceProbeSpec =
+    mode: serviceName:
+    let
+      plan = probePlan mode serviceName;
+      steps = plan.steps or [ ];
+    in
+    {
+      count = if plan ? count then plan.count else builtins.length steps;
+      body = builtins.concatStringsSep "\n" (map (step: renderProbeStep mode serviceName step) steps);
     };
 
-    nginx = {
-      count = 2;
-      body = builtins.concatStringsSep "\n" [
-        (mkTcpProbeBody {
-          serviceLabel = "nginx";
-          phaseLabel = "health";
-          successLabel = "healthy";
-          failureLabel = "unhealthy";
-          portVar = "nginx_http_port";
-          portBase = nginxHttpPortBase;
-        })
-        (mkTcpProbeBody {
-          serviceLabel = "nginx";
-          phaseLabel = "health";
-          successLabel = "healthy";
-          failureLabel = "unhealthy";
-          portVar = "nginx_https_port";
-          portBase = nginxHttpsPortBase;
-        })
-      ];
-    };
+  healthProbeSpecs = builtins.listToAttrs (
+    map (serviceName: {
+      name = serviceName;
+      value = mkServiceProbeSpec "health" serviceName;
+    }) serviceNames
+  );
 
-    minio = {
-      count = 2;
-      body = builtins.concatStringsSep "\n" [
-        (mkTcpProbeBody {
-          serviceLabel = "minio";
-          phaseLabel = "health";
-          successLabel = "healthy";
-          failureLabel = "unhealthy";
-          portVar = "minio_api_port";
-          portBase = minioApiPortBase;
-        })
-        (mkTcpProbeBody {
-          serviceLabel = "minio";
-          phaseLabel = "health";
-          successLabel = "healthy";
-          failureLabel = "unhealthy";
-          portVar = "minio_console_port";
-          portBase = minioConsolePortBase;
-        })
-      ];
-    };
-
-    reth = {
-      count = 3;
-      body = builtins.concatStringsSep "\n" [
-        (mkJsonRpcProbeBody {
-          serviceLabel = "reth";
-          phaseLabel = "health";
-          successLabel = "healthy";
-          failureLabel = "unhealthy";
-          method = "web3_clientVersion";
-          portVar = "reth_http_port";
-          portBase = rethHttpPortBase;
-        })
-        (mkTcpProbeBody {
-          serviceLabel = "reth";
-          phaseLabel = "health";
-          successLabel = "healthy";
-          failureLabel = "unhealthy";
-          portVar = "reth_ws_port";
-          portBase = rethWsPortBase;
-        })
-        (mkTcpProbeBody {
-          serviceLabel = "reth";
-          phaseLabel = "health";
-          successLabel = "healthy";
-          failureLabel = "unhealthy";
-          portVar = "reth_auth_port";
-          portBase = rethAuthPortBase;
-        })
-      ];
-    };
-
-    helios = {
-      count = 2;
-      body = builtins.concatStringsSep "\n" [
-        (mkJsonRpcProbeBody {
-          serviceLabel = "helios";
-          phaseLabel = "health";
-          successLabel = "healthy";
-          failureLabel = "unhealthy";
-          method = "eth_chainId";
-          portVar = "helios_rpc_port";
-          portBase = heliosRpcPortBase;
-        })
-        (mkJsonRpcProbeBody {
-          serviceLabel = "helios execution";
-          phaseLabel = "health";
-          successLabel = "healthy";
-          failureLabel = "unhealthy";
-          method = "web3_clientVersion";
-          portVar = "helios_execution_rpc_port";
-          portBase = heliosExecutionRpcPortBase;
-        })
-      ];
-    };
-  };
-
-  readyProbeSpecs = {
-    postgres = {
-      count = 1;
-      body = postgresReadyBody;
-    };
-
-    nginx = {
-      count = 2;
-      body = builtins.concatStringsSep "\n" [
-        (mkTcpProbeBody {
-          serviceLabel = "nginx";
-          phaseLabel = "readiness";
-          successLabel = "ready";
-          failureLabel = "not ready";
-          portVar = "nginx_http_port";
-          portBase = nginxHttpPortBase;
-        })
-        (mkTcpProbeBody {
-          serviceLabel = "nginx";
-          phaseLabel = "readiness";
-          successLabel = "ready";
-          failureLabel = "not ready";
-          portVar = "nginx_https_port";
-          portBase = nginxHttpsPortBase;
-        })
-      ];
-    };
-
-    minio = {
-      count = 2;
-      body = builtins.concatStringsSep "\n" [
-        (mkTcpProbeBody {
-          serviceLabel = "minio";
-          phaseLabel = "readiness";
-          successLabel = "ready";
-          failureLabel = "not ready";
-          portVar = "minio_api_port";
-          portBase = minioApiPortBase;
-        })
-        (mkTcpProbeBody {
-          serviceLabel = "minio";
-          phaseLabel = "readiness";
-          successLabel = "ready";
-          failureLabel = "not ready";
-          portVar = "minio_console_port";
-          portBase = minioConsolePortBase;
-        })
-      ];
-    };
-
-    reth = {
-      count = 3;
-      body = builtins.concatStringsSep "\n" [
-        (mkJsonRpcProbeBody {
-          serviceLabel = "reth";
-          phaseLabel = "readiness";
-          successLabel = "ready";
-          failureLabel = "not ready";
-          method = "eth_chainId";
-          portVar = "reth_http_port";
-          portBase = rethHttpPortBase;
-        })
-        (mkTcpProbeBody {
-          serviceLabel = "reth";
-          phaseLabel = "readiness";
-          successLabel = "ready";
-          failureLabel = "not ready";
-          portVar = "reth_ws_port";
-          portBase = rethWsPortBase;
-        })
-        (mkTcpProbeBody {
-          serviceLabel = "reth";
-          phaseLabel = "readiness";
-          successLabel = "ready";
-          failureLabel = "not ready";
-          portVar = "reth_auth_port";
-          portBase = rethAuthPortBase;
-        })
-      ];
-    };
-
-    helios = {
-      count = 2;
-      body = ''
-        helios_source_kind_value="$(helios_source_kind "$service_source")"
-        helios_readiness_profile=${lib.escapeShellArg heliosReadinessProfile}
-        helios_require_not_syncing=${if heliosReadinessRequireNotSyncing then "1" else "0"}
-        helios_rpc_port=$(( ${toString heliosRpcPortBase} + env_offset + (slot_value * ${toString runtime.slot.stride}) ))
-        helios_execution_rpc_port=$(( ${toString heliosExecutionRpcPortBase} + env_offset + (slot_value * ${toString runtime.slot.stride}) ))
-        echo "INFO: checking helios readiness port=$helios_rpc_port source=$service_source source_kind=$helios_source_kind_value profile=$helios_readiness_profile"
-        if source_kind_disallowed "$helios_source_kind_value" ${heliosReadinessDisallowSourceKindArgs}; then
-          echo "ERROR: helios not ready port=$helios_rpc_port source=$service_source source_kind=$helios_source_kind_value profile=$helios_readiness_profile (source kind disallowed)"
-          exit 1
-        fi
-
-        helios_block_json="$(${probeCommands.jsonRpcRequestCmd {
-          urlExpr = "http://127.0.0.1:$helios_rpc_port";
-          method = "eth_blockNumber";
-        }})" || true
-        helios_block_number="$(printf '%s' "$helios_block_json" | ${pkgs.jq}/bin/jq -r '.result // empty')" || true
-        if [ -z "$helios_block_number" ] || ! [[ "$helios_block_number" =~ ^0x[0-9a-fA-F]+$ ]]; then
-          echo "ERROR: helios not ready port=$helios_rpc_port source=$service_source source_kind=$helios_source_kind_value (invalid eth_blockNumber result)"
-          exit 1
-        fi
-        echo "OK: helios ready port=$helios_rpc_port block_number=$helios_block_number"
-
-        if [ "$helios_require_not_syncing" = "1" ]; then
-          helios_syncing_result="$(${probeCommands.jsonRpcFieldCmd {
-            urlExpr = "http://127.0.0.1:$helios_rpc_port";
-            method = "eth_syncing";
-            jqExpr = ".result";
-            raw = false;
-          }})" || true
-          if [ "$helios_syncing_result" != "false" ]; then
-            echo "ERROR: helios not ready port=$helios_rpc_port source=$service_source source_kind=$helios_source_kind_value profile=$helios_readiness_profile (eth_syncing=$helios_syncing_result)"
-            exit 1
-          fi
-          echo "OK: helios sync status ready port=$helios_rpc_port"
-        else
-          echo "SKIP: helios sync gate disabled profile=$helios_readiness_profile"
-        fi
-
-        echo "INFO: checking helios execution readiness port=$helios_execution_rpc_port source=$service_source"
-        if ${probeCommands.jsonRpcHasResultCmd {
-          urlExpr = "http://127.0.0.1:$helios_execution_rpc_port";
-          method = "eth_chainId";
-        }} then
-          echo "OK: helios execution ready port=$helios_execution_rpc_port"
-        else
-          echo "ERROR: helios execution not ready port=$helios_execution_rpc_port"
-          exit 1
-        fi
-      '';
-    };
-  };
+  readyProbeSpecs = builtins.listToAttrs (
+    map (serviceName: {
+      name = serviceName;
+      value = mkServiceProbeSpec "ready" serviceName;
+    }) serviceNames
+  );
 
   mkTask =
     {
