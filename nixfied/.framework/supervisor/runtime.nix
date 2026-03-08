@@ -56,9 +56,18 @@ let
 
   helperPrelude = ''
     SUPERVISOR_PROCESS_JSON=""
+    DAEMON_PID=""
 
     supervisor_pid_file() {
       printf '%s' "$RUN_DIR/supervisor.pid"
+    }
+
+    supervisor_exec_up() {
+      exec ${pc}/bin/process-compose -f "$CONFIG_FILE" -t=false --keep-project up
+    }
+
+    supervisor_stop_server() {
+      ${pc}/bin/process-compose down 2>/dev/null || true
     }
 
     supervisor_process_api_ready() {
@@ -81,6 +90,46 @@ let
 
       SUPERVISOR_PROCESS_JSON="$proc_json"
       return 0
+    }
+
+    supervisor_spawn_daemon() {
+      local log_file="$1"
+
+      supervisor_exec_up > "$log_file" 2>&1 &
+      DAEMON_PID=$!
+    }
+
+    supervisor_wait_process_api_ready() {
+      local attempts="''${1:-40}"
+      local interval="''${2:-0.25}"
+
+      for _ in $(seq 1 "$attempts"); do
+        if supervisor_process_api_ready; then
+          return 0
+        fi
+        sleep "$interval"
+      done
+
+      return 1
+    }
+
+    supervisor_cleanup_orphans() {
+      ${pkgs.lib.concatMapStringsSep "\n" (
+        name:
+        let
+          portVar = slots.portVarName name;
+        in
+        ''
+          PORT="''${${portVar}:-}"
+          if [ -n "$PORT" ] && command -v lsof >/dev/null 2>&1; then
+            ORPHANS=$(lsof -ti:"$PORT" 2>/dev/null || true)
+            if [ -n "$ORPHANS" ]; then
+              log_info "Cleaning orphan processes on port $PORT (${name}): $ORPHANS"
+              echo "$ORPHANS" | xargs kill -TERM 2>/dev/null || true
+            fi
+          fi
+        ''
+      ) portNames}
     }
 
     supervisor_clear_state() {

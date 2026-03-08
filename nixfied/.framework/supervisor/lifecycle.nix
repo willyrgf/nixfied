@@ -9,15 +9,11 @@
 }:
 
 let
-  pc = pkgs.process-compose;
-  ports = project.ports or { };
-  portNames = builtins.attrNames ports;
-
   start = runtime.mkSupervisorScript {
     name = "supervisor-start";
     includeConfig = true;
     body = ''
-      exec ${pc}/bin/process-compose -f "$CONFIG_FILE" -t=false --keep-project up
+      supervisor_exec_up
     '';
   };
 
@@ -26,25 +22,10 @@ let
     includePorts = true;
     body = ''
       # First, stop via process-compose server (connected over socket).
-      ${pc}/bin/process-compose down 2>/dev/null || true
+      supervisor_stop_server
 
       # Clean up orphan processes on configured ports
-      ${pkgs.lib.concatMapStringsSep "\n" (
-        name:
-        let
-          portVar = slots.portVarName name;
-        in
-        ''
-          PORT="''${${portVar}:-}"
-          if [ -n "$PORT" ] && command -v lsof >/dev/null 2>&1; then
-            ORPHANS=$(lsof -ti:"$PORT" 2>/dev/null || true)
-            if [ -n "$ORPHANS" ]; then
-              log_info "Cleaning orphan processes on port $PORT (${name}): $ORPHANS"
-              echo "$ORPHANS" | xargs kill -TERM 2>/dev/null || true
-            fi
-          fi
-        ''
-      ) portNames}
+      supervisor_cleanup_orphans
 
       # Remove runtime state files
       supervisor_clear_state
@@ -70,29 +51,19 @@ let
       supervisor_clear_state
 
       log_info "Starting supervisor in background"
-      nohup ${pc}/bin/process-compose -f "$CONFIG_FILE" -t=false --keep-project up \
-        > "$LOG_DIR/supervisor-daemon.log" 2>&1 &
-      DAEMON_PID=$!
+      DAEMON_LOG_FILE="$LOG_DIR/supervisor-daemon.log"
+      supervisor_spawn_daemon "$DAEMON_LOG_FILE"
       echo "$DAEMON_PID" > "$PID_FILE"
 
       # Fail fast if the daemon exits immediately (common config/startup error case).
       sleep 1
       if ! kill -0 "$DAEMON_PID" 2>/dev/null; then
-        log_error "Supervisor failed to start (PID $DAEMON_PID exited). See: $LOG_DIR/supervisor-daemon.log"
+        log_error "Supervisor failed to start (PID $DAEMON_PID exited). See: $DAEMON_LOG_FILE"
         rm -f "$PID_FILE" 2>/dev/null || true
         exit 1
       fi
 
-      READY=0
-      for _ in $(seq 1 40); do
-        if supervisor_process_api_ready; then
-          READY=1
-          break
-        fi
-        sleep 0.25
-      done
-
-      if [ "$READY" -ne 1 ]; then
+      if ! supervisor_wait_process_api_ready 40 0.25; then
         log_error "Supervisor did not expose process API socket=$PC_SOCKET_PATH"
         kill -TERM "$DAEMON_PID" 2>/dev/null || true
         rm -f "$PID_FILE" 2>/dev/null || true
