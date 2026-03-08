@@ -384,6 +384,7 @@ let
       logging ? { },
       passThroughEnv ? defaultTaskPassThroughEnv,
       allowSensitivePassThrough ? false,
+      ownerFile ? "nixfied/project/module.nix",
     }:
     {
       inherit
@@ -478,6 +479,7 @@ let
         category = "core";
         usage = usage;
         examples = examples;
+        ownerFile = ownerFile;
       };
     };
 in

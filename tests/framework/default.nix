@@ -38,6 +38,10 @@
       ;
   };
 
+  "discovery-command-surfaces-smoke" = import ./discovery-command-surfaces-smoke.nix {
+    inherit pkgs;
+  };
+
   "registry-replay" = import ./registry-replay.nix {
     inherit
       pkgs

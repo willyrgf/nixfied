@@ -25,6 +25,11 @@ let
       task = tasks.${taskId};
       app = task.ui.app;
       appName = app.name;
+      ownerFile =
+        if (app.ownerFile or null) == null || app.ownerFile == "" then
+          "nixfied/project/module.nix"
+        else
+          app.ownerFile;
     in
     if !app.expose then
       acc
@@ -43,6 +48,7 @@ let
           category = app.category;
           usage = app.usage;
           examples = app.examples;
+          ownerFile = ownerFile;
         };
       };
 
@@ -57,6 +63,7 @@ let
       fromApps = map (appName: {
         name = appName;
         summary = apps.${appName}.summary;
+        owner_file = apps.${appName}.ownerFile;
       }) appNames;
 
       withFallback =
@@ -66,6 +73,7 @@ let
             {
               name = "framework::upgrade";
               summary = upgradeFallbackSummary;
+              owner_file = "nixfied/runner/dispatcher.nix";
             }
           ]
         else
@@ -144,7 +152,18 @@ in
 
   help = {
     lines = helpLines;
-    commands = coreCommands;
+    commands = map (entry: {
+      inherit (entry)
+        name
+        summary
+        ;
+    }) coreCommands;
+    commandSurfaces = map (entry: {
+      inherit (entry)
+        name
+        owner_file
+        ;
+    }) coreCommands;
   };
 
   docs = {

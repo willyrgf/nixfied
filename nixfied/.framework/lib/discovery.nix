@@ -3,6 +3,7 @@
   pkgs,
   project,
   loggingPrelude ? "",
+  commandSurfaces ? null,
 }:
 
 let
@@ -10,6 +11,7 @@ let
   enabled = cfg.enable or true;
   strict = cfg.strict or true;
   refreshArg = cfg.refreshArg or "--refresh-discovery";
+  resolvedCommandSurfaces = cfg.commandSurfaces or commandSurfaces;
 
   defaultRequiredDocs = [
     "README.md"
@@ -50,6 +52,11 @@ let
 
   requiredDocsJson = builtins.toJSON requiredDocs;
   riskAreasJson = builtins.toJSON riskAreas;
+  commandSurfacesJson =
+    if resolvedCommandSurfaces == null then
+      "null"
+    else
+      builtins.toJSON resolvedCommandSurfaces;
 
   tool = pkgs.writeShellScriptBin "nixfied-discovery-index" ''
         ${loggingPrelude}
@@ -122,6 +129,7 @@ let
 
         REQUIRED_DOCS_JSON='${requiredDocsJson}'
         RISK_AREAS_JSON='${riskAreasJson}'
+        COMPILED_COMMAND_SURFACES_JSON='${commandSurfacesJson}'
         HAS_GIT_TRACKING="0"
         if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
           HAS_GIT_TRACKING="1"
@@ -251,37 +259,55 @@ let
           | sort_by(.path)
         ' "$COMPONENTS_TSV")
 
-        COMMANDS_TSV="$TMP_DIR/commands.tsv"
-        : > "$COMMANDS_TSV"
-        if [ -d "$ROOT/nixfied/project" ]; then
-          while IFS= read -r command_name; do
-            [ -z "$command_name" ] && continue
-            owner_file=$(
-              ${pkgs.ripgrep}/bin/rg -l "commands\\.''${command_name}\\b" "$ROOT/nixfied/project" 2>/dev/null \
-                | ${pkgs.coreutils}/bin/head -n 1 || true
+        if [ "$COMPILED_COMMAND_SURFACES_JSON" = "null" ]; then
+          COMMANDS_TSV="$TMP_DIR/commands.tsv"
+          : > "$COMMANDS_TSV"
+          if [ -d "$ROOT/nixfied/project" ]; then
+            while IFS= read -r command_name; do
+              [ -z "$command_name" ] && continue
+              owner_file=$(
+                ${pkgs.ripgrep}/bin/rg -l "commands\\.''${command_name}\\b" "$ROOT/nixfied/project" 2>/dev/null \
+                  | ${pkgs.coreutils}/bin/head -n 1 || true
+              )
+              if [ -z "$owner_file" ]; then
+                owner_file="nixfied/project"
+              else
+                owner_file="''${owner_file#"$ROOT"/}"
+              fi
+              printf '%s\t%s\n' "$command_name" "$owner_file" >> "$COMMANDS_TSV"
+            done < <(
+              ${pkgs.ripgrep}/bin/rg -o --no-filename 'commands\.[A-Za-z0-9:_-]+' "$ROOT/nixfied/project" 2>/dev/null \
+                | ${pkgs.gnused}/bin/sed 's/^commands\.//' \
+                | ${pkgs.coreutils}/bin/sort -u
             )
-            if [ -z "$owner_file" ]; then
-              owner_file="nixfied/project"
-            else
-              owner_file="''${owner_file#"$ROOT"/}"
-            fi
-            printf '%s\t%s\n' "$command_name" "$owner_file" >> "$COMMANDS_TSV"
-          done < <(
-            ${pkgs.ripgrep}/bin/rg -o --no-filename 'commands\.[A-Za-z0-9:_-]+' "$ROOT/nixfied/project" 2>/dev/null \
-              | ${pkgs.gnused}/bin/sed 's/^commands\.//' \
-              | ${pkgs.coreutils}/bin/sort -u
-          )
-        fi
+          fi
 
-        COMMANDS_JSON=$(${pkgs.jq}/bin/jq -R -s '
-          split("\n")
-          | map(select(length > 0))
-          | map(split("\t") | {
-              name: .[0],
-              owner_file: .[1]
-            })
-          | sort_by(.name)
-        ' "$COMMANDS_TSV")
+          COMMANDS_JSON=$(${pkgs.jq}/bin/jq -R -s '
+            split("\n")
+            | map(select(length > 0))
+            | map(split("\t") | {
+                name: .[0],
+                owner_file: .[1]
+              })
+            | sort_by(.name)
+          ' "$COMMANDS_TSV")
+        else
+          COMMANDS_JSON="$(
+            printf '%s\n' "$COMPILED_COMMAND_SURFACES_JSON" | ${pkgs.jq}/bin/jq -c '
+              map(
+                select((.name // "") != "")
+                | {
+                    name: .name,
+                    owner_file:
+                      ((.owner_file // .ownerFile // "nixfied/project/module.nix")
+                       | if . == "" then "nixfied/project/module.nix" else . end)
+                  }
+              )
+              | unique_by(.name + "\u0000" + .owner_file)
+              | sort_by(.name, .owner_file)
+            '
+          )"
+        fi
 
         RISK_AREAS_NORM_JSON=$(printf '%s\n' "$RISK_AREAS_JSON" | ${pkgs.jq}/bin/jq -c '
           map({

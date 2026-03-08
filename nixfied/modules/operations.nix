@@ -942,6 +942,7 @@ let
         category = "ops";
         usage = [ "nix run .#${appName}" ];
         examples = [ ];
+        ownerFile = "nixfied/modules/operations.nix";
       };
     };
 

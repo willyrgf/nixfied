@@ -32,6 +32,12 @@ let
 
   frameworkTask = model.tasks."task.framework.test" or null;
   formatTask = model.tasks."task.format" or null;
+  commandSurfaces = model.views.help.commandSurfaces or [ ];
+  hasCommandSurface =
+    name: ownerFile:
+    builtins.any (
+      entry: entry.name == name && entry.owner_file == ownerFile
+    ) commandSurfaces;
 in
 assert frameworkTask != null;
 assert frameworkTask.runner.type == "shell";
@@ -59,6 +65,10 @@ assert formatTask.runtime ? preHooks;
 assert formatTask.runtime ? postHooks;
 assert formatTask.runtime.postHooks ? "framework.nixfmt";
 assert pkgs.lib.hasInfix "nixfmt --" formatTask.runtime.postHooks."framework.nixfmt".command;
+assert commandSurfaces != [ ];
+assert hasCommandSurface "dev" "nixfied/project/module.nix";
+assert hasCommandSurface "validate-env" "nixfied/modules/operations.nix";
+assert hasCommandSurface "framework::test" "nixfied/project/module.nix";
 assert tasksHaveStableIds;
 assert workflowsReferenceKnownTasks;
 assert workflowsHaveLifecycle;
