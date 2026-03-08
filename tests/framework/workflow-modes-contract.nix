@@ -27,6 +27,8 @@ assert pkgs.lib.hasInfix "taskHookCases = builtins.concatLists" source;
 assert pkgs.lib.hasInfix "workflowPlanCases = map" source;
 assert pkgs.lib.hasInfix "builtins.toJSON (workflows.\${workflowId}.plan or [ ])" source;
 assert pkgs.lib.hasInfix "workflow_plan_records() {" source;
+assert pkgs.lib.hasInfix "workflowPhaseTaskCases = builtins.concatLists" source;
+assert pkgs.lib.hasInfix "workflow_phase_tasks() {" source;
 assert (!pkgs.lib.hasInfix "$MODEL_FILE" source);
 assert (!pkgs.lib.hasInfix "/bin/jq" source);
 pkgs.runCommand "workflow-modes-contract" { } ''

@@ -20,6 +20,7 @@ assert pkgs.lib.hasInfix "NIXFIED_WORKFLOW_PARALLEL" source;
 assert pkgs.lib.hasInfix "workflow_parallel_enabled \"$workflow_id\"" source;
 assert pkgs.lib.hasInfix "workflow_unit_records() {" source;
 assert pkgs.lib.hasInfix "workflow_plan_records \"$workflow_id\"" source;
+assert pkgs.lib.hasInfix "workflow_phase_tasks \"$workflow_id\" \"$phase_key\"" source;
 assert pkgs.lib.hasInfix "retrying attempt=" source;
 assert pkgs.lib.hasInfix "run_task_with_deps() {" source;
 assert pkgs.lib.hasInfix "run_workflow_phase_tasks() {" source;
@@ -61,6 +62,7 @@ assert pkgs.lib.hasInfix "workflow_fail_fast \"$workflow_id\"" source;
 assert (!pkgs.lib.hasInfix "extract_machine_output_args() {" source);
 assert (!pkgs.lib.hasInfix ".stages as $stages" source);
 assert (!pkgs.lib.hasInfix "task_json() {" source);
+assert (!pkgs.lib.hasInfix "workflow_json() {" source);
 pkgs.runCommand "executor-contract" { } ''
   echo "OK: executor contract markers are stable" > "$out"
 ''

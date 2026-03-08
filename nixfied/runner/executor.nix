@@ -124,11 +124,6 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
     rm -f "$REGISTRY_ROOT/active/$run_id"
   }
 
-  workflow_json() {
-    local workflow_id="$1"
-    ${pkgs.jq}/bin/jq -c --arg workflowId "$workflow_id" '.workflows[$workflowId] // empty' "$MODEL_FILE"
-  }
-
   append_event() {
     local run_id="$1"
     local workflow_id="$2"
@@ -623,9 +618,8 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
   run_workflow_serial_impl() {
     local run_id="$1"
     local workflow_id="$2"
-    local workflow="$3"
-    local fail_fast="$4"
-    shift 4
+    local fail_fast="$3"
+    shift 3
     local -a passthrough_args
     passthrough_args=("$@")
 
@@ -706,9 +700,8 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
   run_workflow_parallel_impl() {
     local run_id="$1"
     local workflow_id="$2"
-    local workflow="$3"
-    local fail_fast="$4"
-    shift 4
+    local fail_fast="$3"
+    shift 3
     local -a passthrough_args
     passthrough_args=("$@")
 
@@ -1074,9 +1067,8 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
   run_workflow_phase_tasks() {
     local run_id="$1"
     local workflow_id="$2"
-    local workflow="$3"
-    local phase_key="$4"
-    shift 4
+    local phase_key="$3"
+    shift 3
     local -a passthrough_args
     passthrough_args=("$@")
 
@@ -1094,7 +1086,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         phase_status="$?"
         break
       fi
-    done < <(printf '%s' "$workflow" | ${pkgs.jq}/bin/jq -r --arg phase "$phase_key" '.[$phase].tasks[]?')
+    done < <(workflow_phase_tasks "$workflow_id" "$phase_key")
 
     return "$phase_status"
   }
@@ -1469,11 +1461,10 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
   write_workflow_summary_json() {
     local run_id="$1"
     local workflow_id="$2"
-    local workflow="$3"
-    local exit_code="$4"
-    local started_at="$5"
-    local started_epoch="$6"
-    local summary_file_override="$7"
+    local exit_code="$3"
+    local started_at="$4"
+    local started_epoch="$5"
+    local summary_file_override="$6"
 
     local should_write
     local mode
@@ -1733,7 +1724,6 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       return 2
     fi
 
-    local workflow
     local args_payload
     local run_id
     local detail_json
@@ -1756,8 +1746,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       nested_workflow_call=1
     fi
 
-    workflow="$(workflow_json "$workflow_id")"
-    if [ -z "$workflow" ]; then
+    if ! workflow_id_exists "$workflow_id"; then
       echo "ERROR: unknown workflow '$workflow_id'"
       return 2
     fi
@@ -1798,7 +1787,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       fi
     fi
 
-    if run_workflow_phase_tasks "$run_id" "$workflow_id" "$workflow" "preRun" "''${passthrough_args[@]}"; then
+    if run_workflow_phase_tasks "$run_id" "$workflow_id" "preRun" "''${passthrough_args[@]}"; then
       status=0
     else
       status="$?"
@@ -1806,13 +1795,13 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
     if [ "$status" -eq 0 ]; then
       if [ "$run_parallel" = "1" ]; then
-        if run_workflow_parallel_impl "$run_id" "$workflow_id" "$workflow" "$fail_fast" "''${passthrough_args[@]}"; then
+        if run_workflow_parallel_impl "$run_id" "$workflow_id" "$fail_fast" "''${passthrough_args[@]}"; then
           status=0
         else
           status="$?"
         fi
       else
-        if run_workflow_serial_impl "$run_id" "$workflow_id" "$workflow" "$fail_fast" "''${passthrough_args[@]}"; then
+        if run_workflow_serial_impl "$run_id" "$workflow_id" "$fail_fast" "''${passthrough_args[@]}"; then
           status=0
         else
           status="$?"
@@ -1822,7 +1811,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
     post_always="$(workflow_post_run_always "$workflow_id")"
     if [ "$post_always" = "true" ] || [ "$status" -eq 0 ]; then
-      if run_workflow_phase_tasks "$run_id" "$workflow_id" "$workflow" "postRun" "''${passthrough_args[@]}"; then
+      if run_workflow_phase_tasks "$run_id" "$workflow_id" "postRun" "''${passthrough_args[@]}"; then
         post_status=0
       else
         post_status="$?"
@@ -1846,7 +1835,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
     fi
 
     if [ "$nested_workflow_call" -eq 0 ]; then
-      if ! write_workflow_summary_json "$run_id" "$workflow_id" "$workflow" "$status" "$started_at" "$started_epoch" "$MACHINE_SUMMARY_FILE"; then
+      if ! write_workflow_summary_json "$run_id" "$workflow_id" "$status" "$started_at" "$started_epoch" "$MACHINE_SUMMARY_FILE"; then
         if [ "$status" -eq 0 ]; then
           status=1
           detail_json="$(${pkgs.jq}/bin/jq -cn --arg reason "summary-write-failed" '{reason: $reason, exitCode: 1}')"

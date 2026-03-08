@@ -259,6 +259,27 @@ let
     value = map builtins.toJSON (workflows.${workflowId}.plan or [ ]);
   }) workflowIds;
 
+  workflowPhaseTaskCases = builtins.concatLists (
+    map (
+      workflowId:
+      let
+        workflow = workflows.${workflowId};
+        preRun = workflow.preRun or { };
+        postRun = workflow.postRun or { };
+      in
+      [
+        {
+          key = "${workflowId}:preRun";
+          value = preRun.tasks or [ ];
+        }
+        {
+          key = "${workflowId}:postRun";
+          value = postRun.tasks or [ ];
+        }
+      ]
+    ) workflowIds
+  );
+
   taskCases = map (taskId: {
     key = taskId;
     value = taskDescriptorById.${taskId};
@@ -502,6 +523,17 @@ in
               ;;
     '') workflowPlanCases
   )}
+        *)
+          return 0
+          ;;
+      esac
+    }
+
+    workflow_phase_tasks() {
+      local workflow_id="$1"
+      local phase_key="$2"
+      case "$workflow_id:$phase_key" in
+  ${renderCasePrintLines (entry: entry.value) workflowPhaseTaskCases}
         *)
           return 0
           ;;
