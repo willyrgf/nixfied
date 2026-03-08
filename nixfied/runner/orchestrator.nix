@@ -22,7 +22,10 @@ let
       ;
   };
   frameworkEphemeral = import ../.framework/ephemeral.nix {
-    inherit pkgs;
+    inherit
+      pkgs
+      projectRoot
+      ;
     project = {
       project = {
         id = model.identity.projectId;

@@ -384,6 +384,14 @@
       ;
   };
 
+  "ephemeral-nix-source-smoke" = import ./ephemeral-nix-source-smoke.nix {
+    inherit
+      pkgs
+      model
+      registry
+      ;
+  };
+
   "ephemeral-retention-smoke" = import ./ephemeral-retention-smoke.nix {
     inherit
       pkgs

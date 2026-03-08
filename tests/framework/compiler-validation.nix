@@ -46,7 +46,7 @@ assert formatTask != null;
 assert model.identity.projectName == "Nixfied Project";
 assert model.identity.description == "Reusable Nix development framework";
 assert model.runtime ? ephemeral;
-assert model.runtime.ephemeral.copyMode == "git-files";
+assert model.runtime.ephemeral.copyMode == "nix-source";
 assert builtins.isBool model.runtime.ephemeral.includeUntracked;
 assert builtins.isList model.runtime.ephemeral.excludePatterns;
 assert builtins.isList model.runtime.ephemeral.extraDirs;

@@ -153,10 +153,11 @@ in
     ephemeral = {
       copyMode = lib.mkOption {
         type = t.enum [
+          "nix-source"
           "git-files"
           "static-excludes"
         ];
-        default = "git-files";
+        default = "nix-source";
       };
 
       includeUntracked = lib.mkOption {

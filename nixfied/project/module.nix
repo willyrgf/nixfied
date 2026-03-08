@@ -41,9 +41,11 @@ let
   envNames = builtins.attrNames conf.envs;
   envOffsets = lib.mapAttrs (_: value: value.offset or 0) conf.envs;
   normalizeSourceKeys = sources: builtins.sort builtins.lessThan (builtins.attrNames sources);
-  normalizePostgresEnvConfigs = lib.mapAttrs (_: envCfg: {
-    extraConfig = envCfg.extraConfig or "";
-  });
+  normalizePostgresEnvConfigs = lib.mapAttrs (
+    _: envCfg: {
+      extraConfig = envCfg.extraConfig or "";
+    }
+  );
 
   thinWrapperFlake = import ../install/wrapper-flake.nix {
     frameworkInput = "github:willyrgf/nixfied/dev";
@@ -519,7 +521,7 @@ in
         ports = conf.ports;
         directories.base = resolvedRuntimeBase;
         ephemeral = {
-          copyMode = conf.ephemeral.copyMode or "git-files";
+          copyMode = conf.ephemeral.copyMode or "nix-source";
           includeUntracked = conf.ephemeral.includeUntracked or false;
           excludePatterns =
             conf.ephemeral.excludePatterns or [

@@ -99,11 +99,12 @@ rec {
   ephemeral = {
     enable = false;
     # Copy strategy for ephemeral source setup:
+    # - nix-source: copy from the compiled Nix source snapshot.
     # - git-files: tracked + non-ignored files via git ls-files.
     # - static-excludes: rsync with excludePatterns.
-    copyMode = "git-files";
-    # Reproducible default: tracked git content only.
-    # Opt in to worktree convenience by enabling untracked materialization.
+    copyMode = "nix-source";
+    # Reproducible default: use the compiled source snapshot and exclude
+    # caller-root worktree drift. Opt in to worktree convenience explicitly.
     includeUntracked = false;
     excludePatterns = [
       ".git"

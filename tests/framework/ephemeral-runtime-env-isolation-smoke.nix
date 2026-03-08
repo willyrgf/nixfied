@@ -96,6 +96,12 @@ let
   };
 
   probeModel = model // {
+    runtime = model.runtime // {
+      ephemeral = (model.runtime.ephemeral or { }) // {
+        copyMode = "git-files";
+        includeUntracked = false;
+      };
+    };
     tasks = model.tasks // {
       ${probeTaskId} = probeTask;
     };
