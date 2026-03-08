@@ -6,8 +6,6 @@
 }:
 
 let
-  serviceScripts = import ../lib/managed-service-lifecycle.nix { inherit pkgs; };
-  probeCommands = import ../lib/probe-commands.nix { inherit pkgs; };
   summary = import ../lib/summary.nix { inherit pkgs project; };
   helpers = import ../lib/helpers.nix {
     inherit pkgs project;
@@ -84,171 +82,6 @@ let
   portMgmt = import ./port-management.nix {
     inherit pkgs loggingPrelude;
   };
-  slotInfoPrelude = ''
-    source <(${slots.getSlotInfo})
-  '';
-  pgPortRuntimePrelude = ''
-    ${slotInfoPrelude}
-
-    PORT_VAR="${portVar}"
-    PGPORT="''${PGPORT:-''${!PORT_VAR}}"
-  '';
-  pgStatusRuntimePrelude = ''
-    ${pgPortRuntimePrelude}
-    PGDATA="''${PGDATA:-${pgdataExpr}}"
-  '';
-  pgReadyTestRuntimePrelude = ''
-    ${pgPortRuntimePrelude}
-    PGDATABASE="''${PGDATABASE:-${testDatabase}}"
-  '';
-  pgConfigRuntimePrelude = ''
-    ${slotInfoPrelude}
-    PGDATA="${pgdataExpr}"
-  '';
-
-  restart = pkgs.writeShellScript "postgres-restart" ''
-    set -euo pipefail
-    source <(${slots.getSlotInfo})
-
-    PORT_VAR="${portVar}"
-    export PGPORT="''${!PORT_VAR}"
-    export PGDATA="${pgdataExpr}"
-    SOCKET_HASH=$(printf '%s' "''${RUN_DIR:-$PGDATA}" | ${pkgs.coreutils}/bin/cksum | ${pkgs.coreutils}/bin/cut -d ' ' -f1)
-    export PGSOCKET_DIR="''${PGSOCKET_DIR:-/tmp/nixfied-pg-$SOCKET_HASH}"
-
-    ${lifecycle.stop}
-    ${lifecycle.start}
-  '';
-
-  status = serviceScripts.mkObservedStatusScript {
-    name = "postgres-status";
-    loggingPrelude = "";
-    runtimePrelude = pgStatusRuntimePrelude;
-    runningStateBody = ''
-      if ${probeCommands.pgIsReadyCmd {
-        postgres = pgPackage;
-        portExpr = "$PGPORT";
-      }} then
-        RUNNING=true
-      fi
-
-      if [ -f "$PGDATA/postmaster.pid" ]; then
-        PID=$(head -1 "$PGDATA/postmaster.pid" 2>/dev/null || true)
-      fi
-    '';
-    statusMergeBlock = observability.mkStatusMergeBlock {
-      service = "postgres";
-      defaultLogPathExpr = ''"$PGDATA/postgres.log"'';
-    };
-    statusBody = ''
-      echo "service=postgres slot=$SLOT env=$ENV port=$PGPORT pgdata=$PGDATA running=$RUNNING pid=''${PID:-unknown} scope=$SCOPE owner_run_id=''${OWNER_RUN_ID:-unknown} owner_scope=''${OWNER_SCOPE:-unknown} ephemeral_root=''${EPHEMERAL_ROOT:-none} registry_state=''${REGISTRY_STATE:-unknown} slot_owner=''${SLOT_OWNER:-unknown} wait_reason=''${WAIT_REASON:-none} log_path=$EFFECTIVE_LOG_PATH"
-    '';
-  };
-
-  health = serviceScripts.mkWrappedScript {
-    name = "postgres-health";
-    inherit loggingPrelude;
-    runtimePrelude = pgPortRuntimePrelude;
-    body = ''
-      if ${probeCommands.pgIsReadyCmd {
-        postgres = pgPackage;
-        portExpr = "$PGPORT";
-      }} then
-        log_ok "PostgreSQL healthy port=$PGPORT"
-        exit 0
-      fi
-
-      log_error "PostgreSQL unhealthy port=$PGPORT"
-      exit 1
-    '';
-  };
-
-  ready = serviceScripts.mkWrappedScript {
-    name = "postgres-ready";
-    inherit loggingPrelude;
-    runtimePrelude = pgPortRuntimePrelude;
-    body = ''
-      if ! ${probeCommands.pgIsReadyCmd {
-        postgres = pgPackage;
-        portExpr = "$PGPORT";
-      }} then
-        log_error "PostgreSQL not ready port=$PGPORT (pg_isready failed)"
-        exit 1
-      fi
-
-      if ${probeCommands.psqlQueryCmd {
-        postgres = pgPackage;
-        portExpr = "$PGPORT";
-        databaseExpr = "postgres";
-        query = "select 1;";
-      }} >/dev/null 2>&1; then
-        log_ok "PostgreSQL ready port=$PGPORT"
-        exit 0
-      fi
-
-      log_error "PostgreSQL not ready port=$PGPORT (query failed)"
-      exit 1
-    '';
-  };
-
-  readyTest = serviceScripts.mkWrappedScript {
-    name = "postgres-ready-test";
-    inherit loggingPrelude;
-    runtimePrelude = pgReadyTestRuntimePrelude;
-    body = ''
-      if ! ${probeCommands.pgIsReadyCmd {
-        postgres = pgPackage;
-        portExpr = "$PGPORT";
-      }} then
-        log_error "PostgreSQL not ready for test db port=$PGPORT database=$PGDATABASE (pg_isready failed)"
-        exit 1
-      fi
-
-      if ! ${probeCommands.psqlQueryCmd {
-        postgres = pgPackage;
-        portExpr = "$PGPORT";
-        databaseExpr = "postgres";
-        query = "select 1;";
-      }} >/dev/null 2>&1; then
-        log_error "PostgreSQL not ready for test db port=$PGPORT database=$PGDATABASE (maintenance query failed)"
-        exit 1
-      fi
-
-      if ${probeCommands.psqlQueryCmd {
-        postgres = pgPackage;
-        portExpr = "$PGPORT";
-        databaseExpr = "$PGDATABASE";
-        query = "select 1;";
-      }} >/dev/null 2>&1; then
-        log_ok "PostgreSQL ready for test db port=$PGPORT database=$PGDATABASE"
-        exit 0
-      fi
-
-      log_error "PostgreSQL not ready for test db port=$PGPORT database=$PGDATABASE (database query failed)"
-      exit 1
-    '';
-  };
-
-  checkConfig = serviceScripts.mkWrappedScript {
-    name = "postgres-check-config";
-    inherit loggingPrelude;
-    runtimePrelude = pgConfigRuntimePrelude;
-    body = ''
-      if [ ! -f "$PGDATA/postgresql.conf" ]; then
-        log_error "missing postgresql.conf at $PGDATA"
-        exit 1
-      fi
-
-      if ${pgPackage}/bin/postgres -D "$PGDATA" -C port >/dev/null 2>&1; then
-        log_ok "PostgreSQL configuration valid pgdata=$PGDATA"
-        exit 0
-      fi
-
-      log_error "PostgreSQL configuration invalid pgdata=$PGDATA"
-      exit 1
-    '';
-  };
-
   shell = pkgs.writeShellScript "postgres-shell" ''
     set -euo pipefail
     source <(${slots.getSlotInfo})
@@ -300,22 +133,22 @@ let
         details = "Stops PostgreSQL for the current slot and environment.";
       };
       restart = {
-        script = restart;
+        script = lifecycle.restart;
         summary = "Restart PostgreSQL server";
         details = "Stops then starts PostgreSQL for the current slot and environment.";
       };
       status = {
-        script = status;
+        script = lifecycle.status;
         summary = "Show PostgreSQL status";
         details = "Prints PostgreSQL status for the current slot and environment.";
       };
       health = {
-        script = health;
+        script = lifecycle.health;
         summary = "Run PostgreSQL health check";
         details = "Checks PostgreSQL readiness on the configured port.";
       };
       check-config = {
-        script = checkConfig;
+        script = lifecycle.checkConfig;
         summary = "Validate PostgreSQL configuration";
         details = "Validates postgresql.conf for the current slot and environment.";
       };
@@ -340,13 +173,13 @@ let
         details = "Performs init/start/setup-db using the configured test database.";
       };
       ready = {
-        script = ready;
+        script = lifecycle.ready;
         hook = "READY";
         summary = "Wait for PostgreSQL readiness";
         details = "Checks PostgreSQL accepts local SQL queries on the configured port.";
       };
       ready-test = {
-        script = readyTest;
+        script = lifecycle.readyTest;
         hook = "READY_TEST";
         summary = "Wait for PostgreSQL test-database readiness";
         details = "Checks PostgreSQL and the configured test database accept local SQL queries.";
@@ -431,6 +264,12 @@ in
     init
     start
     stop
+    restart
+    status
+    health
+    ready
+    readyTest
+    checkConfig
     setupDb
     fullStart
     fullStartTest
@@ -439,11 +278,6 @@ in
 
   # Extended lifecycle
   inherit
-    restart
-    status
-    health
-    ready
-    checkConfig
     shell
     log
     logs

@@ -6,15 +6,12 @@
 }:
 
 let
-  serviceScripts = import ../lib/managed-service-lifecycle.nix { inherit pkgs; };
-  probeCommands = import ../lib/probe-commands.nix { inherit pkgs; };
   summary = import ../lib/summary.nix { inherit pkgs project; };
   helpers = import ../lib/helpers.nix {
     inherit pkgs project;
     inherit (summary) summaryParser;
   };
   loggingPrelude = helpers.loggingPrelude;
-  slotEnvRuntime = import ../lib/slot-env-runtime.nix { inherit pkgs; };
   serviceApi = import ../lib/service-api.nix { inherit pkgs; };
   processRegistry = import ../lib/process-registry.nix { inherit pkgs project; };
   observability = import ../lib/service-observability.nix {
@@ -33,33 +30,6 @@ let
     logLevelDefault = toString ((project.logging or { }).level or "info");
     outputModeDefault = toString ((project.logging or { }).output or "stdout");
   };
-  runtimePrelude = ''
-    ${slotEnvRuntime.loadJsonFromCommand {
-      outVar = "SLOT_INFO_JSON_OUT";
-      command = toString slots.getSlotInfoJson;
-      exportVars = false;
-    }}
-
-    HTTP_PORT_VAR="${portVarHttp}"
-    HTTPS_PORT_VAR="${portVarHttps}"
-
-    ${slotEnvRuntime.readPortFromJson {
-      targetVar = "HTTP_PORT";
-      jsonVar = "SLOT_INFO_JSON_OUT";
-      keyExpr = "$HTTP_PORT_VAR";
-    }}
-    ${slotEnvRuntime.readPortFromJson {
-      targetVar = "HTTPS_PORT";
-      jsonVar = "SLOT_INFO_JSON_OUT";
-      keyExpr = "$HTTPS_PORT_VAR";
-    }}
-    NGINX_DIR="${nginxDirExpr}"
-
-    if [ -z "$HTTP_PORT" ] || [ -z "$HTTPS_PORT" ]; then
-      log_error "nginx port variables are not set (http/https)"
-      exit 1
-    fi
-  '';
 
   templates = import ./templates.nix { inherit pkgs; };
   lifecycle = import ./lifecycle.nix {
@@ -92,120 +62,6 @@ let
       lifecycle
       loggingPrelude
       ;
-  };
-
-  restart = pkgs.writeShellScript "nginx-restart" ''
-    set -euo pipefail
-
-    ${lifecycle.stop}
-    exec ${lifecycle.start}
-  '';
-
-  status = serviceScripts.mkObservedStatusScript {
-    name = "nginx-status";
-    inherit
-      loggingPrelude
-      runtimePrelude
-      ;
-    runningStateBody = ''
-      PID_FILE="$NGINX_DIR/run/nginx.pid"
-
-      if [ -f "$PID_FILE" ]; then
-        PID=$(cat "$PID_FILE" 2>/dev/null || true)
-        if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
-          RUNNING=true
-        fi
-      fi
-    '';
-    statusMergeBlock = observability.mkStatusMergeBlock {
-      service = "nginx";
-      defaultLogPathExpr = ''"$NGINX_DIR/logs/error.log"'';
-    };
-    statusBody = ''
-      echo "service=nginx slot=$SLOT env=$ENV running=$RUNNING pid=''${PID:-unknown} http_port=$HTTP_PORT https_port=$HTTPS_PORT scope=$SCOPE owner_run_id=''${OWNER_RUN_ID:-unknown} owner_scope=''${OWNER_SCOPE:-unknown} ephemeral_root=''${EPHEMERAL_ROOT:-none} registry_state=''${REGISTRY_STATE:-unknown} slot_owner=''${SLOT_OWNER:-unknown} wait_reason=''${WAIT_REASON:-none} log_path=$EFFECTIVE_LOG_PATH"
-    '';
-  };
-
-  health = serviceScripts.mkWrappedScript {
-    name = "nginx-health";
-    inherit
-      loggingPrelude
-      runtimePrelude
-      ;
-    body = ''
-      PID_FILE="$NGINX_DIR/run/nginx.pid"
-
-      PID=""
-      if [ -f "$PID_FILE" ]; then
-        PID=$(cat "$PID_FILE" 2>/dev/null || true)
-      fi
-
-      if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
-        if ${probeCommands.tcpOpenCmd { portExpr = "$HTTP_PORT"; }} then
-          log_ok "nginx healthy http_port=$HTTP_PORT pid=$PID"
-          exit 0
-        fi
-      fi
-
-      log_error "nginx unhealthy http_port=$HTTP_PORT pid=''${PID:-unknown}"
-      exit 1
-    '';
-  };
-
-  ready = serviceScripts.mkWrappedScript {
-    name = "nginx-ready";
-    inherit
-      loggingPrelude
-      runtimePrelude
-      ;
-    body = ''
-      PID_FILE="$NGINX_DIR/run/nginx.pid"
-
-      PID=""
-      if [ -f "$PID_FILE" ]; then
-        PID=$(cat "$PID_FILE" 2>/dev/null || true)
-      fi
-
-      if [ -z "$PID" ] || ! kill -0 "$PID" 2>/dev/null; then
-        log_error "nginx not ready (process not running) http_port=$HTTP_PORT pid=''${PID:-unknown}"
-        exit 1
-      fi
-
-      if ${probeCommands.tcpOpenCmd { portExpr = "$HTTP_PORT"; }} then
-        ${processRegistry.emitEvent} \
-          --event-type service_ready \
-          --service nginx \
-          --state ready \
-          --slot "$SLOT" \
-          --env "$ENV" \
-          --pid "$PID" \
-          --log-path "$NGINX_DIR/logs/error.log" >/dev/null 2>&1 || true
-        log_ok "nginx ready http_port=$HTTP_PORT pid=$PID"
-        exit 0
-      fi
-
-      log_error "nginx not ready http_port=$HTTP_PORT pid=$PID"
-      exit 1
-    '';
-  };
-
-  checkConfig = serviceScripts.mkWrappedScript {
-    name = "nginx-check-config";
-    inherit
-      loggingPrelude
-      runtimePrelude
-      ;
-    body = ''
-      CONF="$NGINX_DIR/conf/nginx.conf"
-
-      if [ ! -f "$CONF" ]; then
-        log_error "missing nginx config at $CONF"
-        exit 1
-      fi
-
-      ${lifecycle.nginx}/bin/nginx -c "$CONF" -t 2>&1
-      log_ok "nginx configuration valid conf=$CONF"
-    '';
   };
 
   logs = observability.mkLogScript "nginx";
@@ -246,22 +102,22 @@ let
         details = "Stops nginx for the current slot and environment.";
       };
       restart = {
-        script = restart;
+        script = lifecycle.restart;
         summary = "Restart nginx server";
         details = "Stops then starts nginx for the current slot and environment.";
       };
       status = {
-        script = status;
+        script = lifecycle.status;
         summary = "Show nginx status";
         details = "Prints nginx status for the current slot and environment.";
       };
       health = {
-        script = health;
+        script = lifecycle.health;
         summary = "Run nginx health check";
         details = "Checks that nginx responds on the configured HTTP port.";
       };
       check-config = {
-        script = checkConfig;
+        script = lifecycle.checkConfig;
         summary = "Validate nginx configuration";
         details = "Runs nginx config validation for the current slot and environment.";
       };
@@ -273,7 +129,7 @@ let
         details = "Tests and reloads nginx configuration.";
       };
       ready = {
-        script = ready;
+        script = lifecycle.ready;
         hook = "READY";
         summary = "Wait for nginx readiness";
         details = "Checks that nginx serves HTTP requests on the configured port.";
@@ -364,6 +220,11 @@ in
     init
     start
     stop
+    restart
+    status
+    health
+    ready
+    checkConfig
     reload
     generateSelfSignedCert
     listInstances
@@ -371,11 +232,6 @@ in
 
   # Extended lifecycle
   inherit
-    restart
-    status
-    health
-    ready
-    checkConfig
     log
     logs
     events

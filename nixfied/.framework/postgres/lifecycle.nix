@@ -172,10 +172,12 @@ let
       fi
       ensure_config_port "$PGDATA/postgresql.conf"
 
-      if ${probeCommands.pgIsReadyCmd {
-        inherit postgres;
-        portExpr = "$PGPORT";
-      }} then
+      if ${
+        probeCommands.pgIsReadyCmd {
+          inherit postgres;
+          portExpr = "$PGPORT";
+        }
+      } then
         # Verify the running instance is ours by checking PGDATA
         if [ -f "$PGDATA/postmaster.pid" ]; then
           RUN_PID=$(head -1 "$PGDATA/postmaster.pid" 2>/dev/null || true)
@@ -215,10 +217,12 @@ let
       ${postgres}/bin/pg_ctl -D "$PGDATA" -l "$PGDATA/postgres.log" -o "-p $PGPORT -k $PGSOCKET_DIR" start
 
       for i in $(seq 1 60); do
-        if ${probeCommands.pgIsReadyCmd {
-          inherit postgres;
-          portExpr = "$PGPORT";
-        }} then
+        if ${
+          probeCommands.pgIsReadyCmd {
+            inherit postgres;
+            portExpr = "$PGPORT";
+          }
+        } then
           RUN_PID=$(head -1 "$PGDATA/postmaster.pid" 2>/dev/null || true)
           emit_service_event service_ready ready --pid "$RUN_PID" --log-path "$PGDATA/postgres.log"
           log_ok "PostgreSQL ready on port $PGPORT"
@@ -253,6 +257,152 @@ let
       else
         emit_service_event service_stopped stopped
       fi
+    '';
+  };
+
+  restart = mkPgScript {
+    name = "postgres-restart";
+    body = ''
+      ${stop}
+      exec ${start}
+    '';
+  };
+
+  status = managedServiceLifecycle.mkObservedStatusScript {
+    name = "postgres-status";
+    inherit loggingPrelude;
+    runtimePrelude = pgRuntimePrelude database;
+    runningStateBody = ''
+      if ${
+        probeCommands.pgIsReadyCmd {
+          inherit postgres;
+          portExpr = "$PGPORT";
+        }
+      } then
+        RUNNING=true
+      fi
+
+      if [ -f "$PGDATA/postmaster.pid" ]; then
+        PID=$(head -1 "$PGDATA/postmaster.pid" 2>/dev/null || true)
+      fi
+    '';
+    statusMergeBlock = observability.mkStatusMergeBlock {
+      service = "postgres";
+      defaultLogPathExpr = ''"$PGDATA/postgres.log"'';
+    };
+    statusBody = ''
+      echo "service=postgres slot=$SLOT env=$ENV port=$PGPORT pgdata=$PGDATA running=$RUNNING pid=''${PID:-unknown} scope=$SCOPE owner_run_id=''${OWNER_RUN_ID:-unknown} owner_scope=''${OWNER_SCOPE:-unknown} ephemeral_root=''${EPHEMERAL_ROOT:-none} registry_state=''${REGISTRY_STATE:-unknown} slot_owner=''${SLOT_OWNER:-unknown} wait_reason=''${WAIT_REASON:-none} log_path=$EFFECTIVE_LOG_PATH"
+    '';
+  };
+
+  health = mkPgScript {
+    name = "postgres-health";
+    body = ''
+      if ${
+        probeCommands.pgIsReadyCmd {
+          inherit postgres;
+          portExpr = "$PGPORT";
+        }
+      } then
+        log_ok "PostgreSQL healthy port=$PGPORT"
+        exit 0
+      fi
+
+      log_error "PostgreSQL unhealthy port=$PGPORT"
+      exit 1
+    '';
+  };
+
+  ready = mkPgScript {
+    name = "postgres-ready";
+    body = ''
+      if ! ${
+        probeCommands.pgIsReadyCmd {
+          inherit postgres;
+          portExpr = "$PGPORT";
+        }
+      } then
+        log_error "PostgreSQL not ready port=$PGPORT (pg_isready failed)"
+        exit 1
+      fi
+
+      if ${
+        probeCommands.psqlQueryCmd {
+          inherit postgres;
+          portExpr = "$PGPORT";
+          databaseExpr = "postgres";
+          query = "select 1;";
+        }
+      } >/dev/null 2>&1; then
+        log_ok "PostgreSQL ready port=$PGPORT"
+        exit 0
+      fi
+
+      log_error "PostgreSQL not ready port=$PGPORT (query failed)"
+      exit 1
+    '';
+  };
+
+  readyTest = mkPgScript {
+    name = "postgres-ready-test";
+    defaultDb = testDatabase;
+    body = ''
+      export PGDATABASE="''${PGDATABASE:-${testDatabase}}"
+
+      if ! ${
+        probeCommands.pgIsReadyCmd {
+          inherit postgres;
+          portExpr = "$PGPORT";
+        }
+      } then
+        log_error "PostgreSQL not ready for test db port=$PGPORT database=$PGDATABASE (pg_isready failed)"
+        exit 1
+      fi
+
+      if ! ${
+        probeCommands.psqlQueryCmd {
+          inherit postgres;
+          portExpr = "$PGPORT";
+          databaseExpr = "postgres";
+          query = "select 1;";
+        }
+      } >/dev/null 2>&1; then
+        log_error "PostgreSQL not ready for test db port=$PGPORT database=$PGDATABASE (maintenance query failed)"
+        exit 1
+      fi
+
+      if ${
+        probeCommands.psqlQueryCmd {
+          inherit postgres;
+          portExpr = "$PGPORT";
+          databaseExpr = "$PGDATABASE";
+          query = "select 1;";
+        }
+      } >/dev/null 2>&1; then
+        log_ok "PostgreSQL ready for test db port=$PGPORT database=$PGDATABASE"
+        exit 0
+      fi
+
+      log_error "PostgreSQL not ready for test db port=$PGPORT database=$PGDATABASE (database query failed)"
+      exit 1
+    '';
+  };
+
+  checkConfig = mkPgScript {
+    name = "postgres-check-config";
+    body = ''
+      if [ ! -f "$PGDATA/postgresql.conf" ]; then
+        log_error "missing postgresql.conf at $PGDATA"
+        exit 1
+      fi
+
+      if ${postgres}/bin/postgres -D "$PGDATA" -C port >/dev/null 2>&1; then
+        log_ok "PostgreSQL configuration valid pgdata=$PGDATA"
+        exit 0
+      fi
+
+      log_error "PostgreSQL configuration invalid pgdata=$PGDATA"
+      exit 1
     '';
   };
 
@@ -330,6 +480,12 @@ in
     init
     start
     stop
+    restart
+    status
+    health
+    ready
+    readyTest
+    checkConfig
     setupDb
     fullStart
     fullStartTest

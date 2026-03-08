@@ -70,6 +70,9 @@ let
         emit_service_event service_stopped stopped --pid "$CHILD_PID" --log-path "$LOG_FILE"
       '',
       startExitFailureBody,
+      stopRequestBody ? ''
+        kill "$PID" 2>/dev/null || true
+      '',
       stopMissingBody,
       stopStaleBody,
       stopStoppedBody,
@@ -164,7 +167,7 @@ let
             exit 0
           fi
 
-          kill "$PID" 2>/dev/null || true
+          ${stopRequestBody}
 
           for _ in $(seq 1 ${toString stopWaitAttempts}); do
             if ! kill -0 "$PID" 2>/dev/null; then

@@ -46,11 +46,18 @@ let
       keyExpr = "$HTTPS_PORT_VAR";
     }}
     NGINX_DIR="${nginxDirExpr}"
+    NGINX_PID_FILE="$NGINX_DIR/run/nginx.pid"
+    NGINX_LOG_FILE="$NGINX_DIR/logs/error.log"
+    SERVICE_DIR="$NGINX_DIR"
+    SERVICE_PID_FILE="$NGINX_PID_FILE"
+    SERVICE_LOG_FILE="$NGINX_LOG_FILE"
 
     if [ -z "$HTTP_PORT" ] || [ -z "$HTTPS_PORT" ]; then
       log_error "nginx port variables are not set (http/https)"
       exit 1
     fi
+
+    ${emitHelper}
   '';
 
   generateSelfSignedCert = serviceScripts.mkWrappedScript {
@@ -77,19 +84,19 @@ let
     '';
   };
 
-  init = serviceScripts.mkWrappedScript {
-    name = "nginx-init";
+  managedLifecycle = serviceScripts.mkPidFileManagedLifecycle {
+    service = "nginx";
     inherit
       loggingPrelude
       runtimePrelude
       ;
-    body = ''
-      mkdir -p "$NGINX_DIR/conf/sites-available"
-      mkdir -p "$NGINX_DIR/conf/sites-enabled"
-      mkdir -p "$NGINX_DIR/ssl/live/localhost"
-      mkdir -p "$NGINX_DIR/logs"
-      mkdir -p "$NGINX_DIR/html"
-      mkdir -p "$NGINX_DIR/run"
+    initBody = ''
+      mkdir -p "$SERVICE_DIR/conf/sites-available"
+      mkdir -p "$SERVICE_DIR/conf/sites-enabled"
+      mkdir -p "$SERVICE_DIR/ssl/live/localhost"
+      mkdir -p "$SERVICE_DIR/logs"
+      mkdir -p "$SERVICE_DIR/html"
+      mkdir -p "$SERVICE_DIR/run"
 
       ${pkgs.gnused}/bin/sed \
         -e "s|NGINX_DIR|$NGINX_DIR|g" \
@@ -98,54 +105,139 @@ let
         "${templates.nginxConfTemplate}" > "$NGINX_DIR/conf/nginx.conf"
 
       ${generateSelfSignedCert} "localhost" "$NGINX_DIR/ssl"
+      log_ok "nginx initialized dir=$NGINX_DIR slot=$SLOT env=$ENV"
     '';
-  };
-
-  start = serviceScripts.mkWrappedScript {
-    name = "nginx-start";
-    inherit
-      loggingPrelude
-      runtimePrelude
-      ;
-    body = ''
-      ${emitHelper}
-
+    checkConfigBody = ''
       CONF="$NGINX_DIR/conf/nginx.conf"
+
+      if [ ! -f "$CONF" ]; then
+        log_error "missing nginx config at $CONF"
+        exit 1
+      fi
+
+      ${nginx}/bin/nginx -c "$CONF" -t 2>&1
+      log_ok "nginx configuration valid conf=$CONF"
+    '';
+    startPreflight = ''
+      CONF="$NGINX_DIR/conf/nginx.conf"
+
       if [ ! -f "$CONF" ]; then
         log_error "Nginx not initialized. Run nginx-init first."
         exit 1
       fi
-
-      emit_service_event service_starting starting --log-path "$NGINX_DIR/logs/error.log"
-
-      ${nginx}/bin/nginx -c "$CONF" -g 'daemon off;'
     '';
-  };
-
-  stop = serviceScripts.mkWrappedScript {
-    name = "nginx-stop";
-    inherit
-      loggingPrelude
-      runtimePrelude
-      ;
-    body = ''
-      ${emitHelper}
-      PID_FILE="$NGINX_DIR/run/nginx.pid"
-
-      if [ -f "$PID_FILE" ]; then
-        PID=$(cat "$PID_FILE" 2>/dev/null || true)
-        if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
-          ${nginx}/bin/nginx -c "$NGINX_DIR/conf/nginx.conf" -s quit || true
-          emit_service_event service_stopped stopped --pid "$PID" --log-path "$NGINX_DIR/logs/error.log"
-        else
-          rm -f "$PID_FILE"
-          emit_service_event service_stopped stopped --log-path "$NGINX_DIR/logs/error.log"
+    startCommand = ''
+      ${nginx}/bin/nginx -c "$CONF" -g 'daemon off;' > "$LOG_FILE" 2>&1 &
+    '';
+    startAlreadyRunningBody = ''
+      emit_service_event service_ready ready --pid "$PID" --log-path "$LOG_FILE"
+      log_ok "nginx already running pid=$PID http_port=$HTTP_PORT"
+    '';
+    startPostLaunchBody = ''
+      READY=0
+      for _ in $(seq 1 40); do
+        if ! kill -0 "$CHILD_PID" 2>/dev/null; then
+          break
         fi
+        if ${probeCommands.tcpOpenCmd { portExpr = "$HTTP_PORT"; }} then
+          READY=1
+          break
+        fi
+        sleep 0.25
+      done
+
+      if [ "$READY" -ne 1 ]; then
+        emit_service_event service_degraded degraded \
+          --pid "$CHILD_PID" \
+          --log-path "$LOG_FILE" \
+          --wait-reason "failed_readiness" \
+          --last-error "nginx failed health check during startup"
+        log_error "nginx failed to become healthy. log=$LOG_FILE"
+        if [ -f "$LOG_FILE" ]; then
+          log_info "nginx log tail path=$LOG_FILE lines=50"
+          tail -50 "$LOG_FILE" >&2 || true
+        else
+          log_warn "nginx log file missing path=$LOG_FILE"
+        fi
+        exit 1
+      fi
+
+      emit_service_event service_ready ready --pid "$CHILD_PID" --log-path "$LOG_FILE"
+      log_info "nginx started pid=$CHILD_PID http_port=$HTTP_PORT https_port=$HTTPS_PORT"
+    '';
+    startExitFailureBody = ''
+      emit_service_event service_degraded degraded \
+        --pid "$CHILD_PID" \
+        --log-path "$LOG_FILE" \
+        --wait-reason "nginx_process_exit code=$RC" \
+        --last-error "nginx process exited non-zero"
+    '';
+    stopRequestBody = ''
+      if [ -f "$NGINX_DIR/conf/nginx.conf" ]; then
+        ${nginx}/bin/nginx -c "$NGINX_DIR/conf/nginx.conf" -s quit 2>/dev/null || kill "$PID" 2>/dev/null || true
       else
-        emit_service_event service_stopped stopped --log-path "$NGINX_DIR/logs/error.log"
+        kill "$PID" 2>/dev/null || true
       fi
     '';
+    stopMissingBody = ''
+      emit_service_event service_stopped stopped --log-path "$NGINX_LOG_FILE"
+      log_ok "nginx not running"
+    '';
+    stopStaleBody = ''
+      emit_service_event service_stopped stopped --pid "$PID" --log-path "$NGINX_LOG_FILE"
+      log_ok "nginx pid file cleaned"
+    '';
+    stopStoppedBody = ''
+      emit_service_event service_stopped stopped --pid "$PID" --log-path "$NGINX_LOG_FILE"
+      log_ok "nginx stopped pid=$PID"
+    '';
+    stopForceKilledBody = ''
+      emit_service_event service_stopped stopped --pid "$PID" --log-path "$NGINX_LOG_FILE"
+      log_warn "nginx force-killed pid=$PID"
+    '';
+    statusMergeBlock = observability.mkStatusMergeBlock {
+      service = "nginx";
+      defaultLogPathExpr = ''"$NGINX_LOG_FILE"'';
+    };
+    statusBody = ''
+      echo "service=nginx slot=$SLOT env=$ENV running=$RUNNING pid=''${PID:-unknown} http_port=$HTTP_PORT https_port=$HTTPS_PORT scope=$SCOPE owner_run_id=''${OWNER_RUN_ID:-unknown} owner_scope=''${OWNER_SCOPE:-unknown} ephemeral_root=''${EPHEMERAL_ROOT:-none} registry_state=''${REGISTRY_STATE:-unknown} slot_owner=''${SLOT_OWNER:-unknown} wait_reason=''${WAIT_REASON:-none} log_path=$EFFECTIVE_LOG_PATH"
+    '';
+    healthBody = ''
+      if ${probeCommands.tcpOpenCmd { portExpr = "$HTTP_PORT"; }} then
+        log_ok "nginx healthy http_port=$HTTP_PORT"
+        exit 0
+      fi
+
+      log_error "nginx unhealthy http_port=$HTTP_PORT"
+      exit 1
+    '';
+    readyBody = ''
+      if ${probeCommands.tcpOpenCmd { portExpr = "$HTTP_PORT"; }} then
+        PID=$(cat "$NGINX_PID_FILE" 2>/dev/null || true)
+        emit_service_event service_ready ready --pid "$PID" --log-path "$NGINX_LOG_FILE"
+        log_ok "nginx ready http_port=$HTTP_PORT pid=''${PID:-unknown}"
+        exit 0
+      fi
+
+      log_error "nginx not ready http_port=$HTTP_PORT"
+      exit 1
+    '';
+    stopWaitAttempts = 40;
+    stopWaitInterval = "0.25";
   };
+
+  inherit (managedLifecycle)
+    init
+    start
+    stop
+    restart
+    status
+    checkConfig
+    health
+    ready
+    fullStart
+    fullStartTest
+    ;
 
   reload = serviceScripts.mkWrappedScript {
     name = "nginx-reload";
@@ -195,11 +287,20 @@ in
 {
   inherit
     nginx
-    init
-    start
-    stop
     reload
     generateSelfSignedCert
     listInstances
+    ;
+  inherit (managedLifecycle)
+    init
+    start
+    stop
+    restart
+    status
+    health
+    checkConfig
+    ready
+    fullStart
+    fullStartTest
     ;
 }
