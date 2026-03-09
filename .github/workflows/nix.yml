@@ -95,6 +95,13 @@ jobs:
           log_file="$CI_DEBUG_DIR/framework-shard-flake-check.log"
           nix run -L -v --log-format bar-with-logs .#framework::test -- --summary --serial --shard flake-check 2>&1 | tee "$log_file"
 
+      - name: Show all features
+        run: |
+          log_file="$CI_DEBUG_DIR/show-features.log"
+          set -euo pipefail
+          nix run -L -v --log-format bar-with-logs .#features | tee "$log_file"
+
+
       - name: Run framework shard help
         id: shard_help
         continue-on-error: true
@@ -266,12 +273,6 @@ jobs:
           set -euo pipefail
           log_file="$CI_DEBUG_DIR/isolation-cell.log"
           nix run -L -v --log-format bar-with-logs .#test-isolation -- --slot ${{ matrix.slot }} --env ${{ matrix.project_env }} --max-parallel 1 2>&1 | tee "$log_file"
-
-      - name: Show all features
-        run: |
-          set -euo pipefail
-          nix run -L -v --log-format bar-with-logs .#features 
-
 
       - name: Summarize isolation failure context
         if: failure()
