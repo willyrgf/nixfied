@@ -69,5 +69,10 @@ in
         '';
       };
     };
+
+    packages = lib.mkOption {
+      type = t.attrsOf t.package;
+      default = { };
+    };
   };
 }

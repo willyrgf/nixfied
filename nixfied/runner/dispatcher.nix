@@ -65,8 +65,7 @@ let
             (if hasLong then spec.long else "")
             (if hasShort then spec.short else "")
           ];
-          valueType =
-            if (spec ? type) && spec.type != null && spec.type != "" then spec.type else "value";
+          valueType = if (spec ? type) && spec.type != null && spec.type != "" then spec.type else "value";
           valueSuffix = if kind == "option" then " <${valueType}>" else "";
           label = "${builtins.concatStringsSep ", " tokens}${valueSuffix}";
           description = spec.description or "";
@@ -77,9 +76,9 @@ let
           "  ${label}"
         else
           "  ${label}: ${description}";
-      optionLines =
-        builtins.filter (line: line != null) (map renderOptionLine argSpecs)
-        ++ [ "  -h, --help: Show this help." ];
+      optionLines = builtins.filter (line: line != null) (map renderOptionLine argSpecs) ++ [
+        "  -h, --help: Show this help."
+      ];
       appName = app.name or taskId;
       summary = task.summary or "";
       description = task.description or "";
@@ -90,9 +89,27 @@ let
         ""
         description
       ]
-      ++ lib.optionals (usageLines != [ ]) ([ "" "Usage:" ] ++ map (line: "  ${line}") usageLines)
-      ++ lib.optionals (optionLines != [ ]) ([ "" "Options:" ] ++ optionLines)
-      ++ lib.optionals (exampleLines != [ ]) ([ "" "Examples:" ] ++ map (line: "  ${line}") exampleLines)
+      ++ lib.optionals (usageLines != [ ]) (
+        [
+          ""
+          "Usage:"
+        ]
+        ++ map (line: "  ${line}") usageLines
+      )
+      ++ lib.optionals (optionLines != [ ]) (
+        [
+          ""
+          "Options:"
+        ]
+        ++ optionLines
+      )
+      ++ lib.optionals (exampleLines != [ ]) (
+        [
+          ""
+          "Examples:"
+        ]
+        ++ map (line: "  ${line}") exampleLines
+      )
     );
 
   mkTaskHelpFile =

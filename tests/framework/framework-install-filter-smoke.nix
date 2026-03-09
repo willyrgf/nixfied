@@ -19,7 +19,9 @@ let
       }:
       let
         envExports = pkgs.lib.concatStringsSep "\n" (
-          pkgs.lib.mapAttrsToList (envName: envValue: "export ${envName}=${pkgs.lib.escapeShellArg (toString envValue)}") env
+          pkgs.lib.mapAttrsToList (
+            envName: envValue: "export ${envName}=${pkgs.lib.escapeShellArg (toString envValue)}"
+          ) env
         );
         drv = pkgs.writeShellScriptBin name ''
           set -euo pipefail

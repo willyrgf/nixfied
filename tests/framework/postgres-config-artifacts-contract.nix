@@ -16,7 +16,8 @@ assert pkgs.lib.hasInfix "archive_mode = on" prodConfText;
 assert pkgs.lib.hasInfix "autovacuum = off" testConfText;
 assert pkgs.lib.hasInfix "127.0.0.1/32  trust" pgHbaConfText;
 assert pkgs.lib.hasInfix "select_config_template() {" lifecycleSource;
-assert pkgs.lib.hasInfix "install -m 600 \"$PGCONF_TEMPLATE\" \"$PGDATA/postgresql.conf\"" lifecycleSource;
+assert pkgs.lib.hasInfix "install -m 600 \"$PGCONF_TEMPLATE\" \"$PGDATA/postgresql.conf\""
+  lifecycleSource;
 assert pkgs.lib.hasInfix "config.pgHbaConfFile" lifecycleSource;
 assert pkgs.lib.hasInfix "\"$PGDATA/pg_hba.conf\"" lifecycleSource;
 assert pkgs.lib.hasInfix "ensure_config_port \"$PGDATA/postgresql.conf\"" lifecycleSource;

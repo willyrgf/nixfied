@@ -191,7 +191,8 @@ let
     features = pkgs.writeText "nixfied-features.txt" "${featuresTable}\n";
     schema = schemaDir;
   }
-  // taskPackages;
+  // taskPackages
+  // compiled.resolved.packages;
 
   checks = {
     model-hash-stable =

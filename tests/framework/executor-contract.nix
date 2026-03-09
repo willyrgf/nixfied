@@ -49,8 +49,12 @@ assert pkgs.lib.hasInfix "INFO: Time breakdown" source;
 assert pkgs.lib.hasInfix "run_task_hooks() {" source;
 assert pkgs.lib.hasInfix "INFO: hook $phase $hook_id start" source;
 assert pkgs.lib.hasInfix "ERROR: hook $phase $hook_id failed exitCode=$hook_exit_code" source;
-assert pkgs.lib.hasInfix "hook_command=\"$(task_hook_command \"$task_id\" \"$phase\" \"$hook_id\")\"" source;
-assert pkgs.lib.hasInfix "hook_runtime_json=\"$(task_hook_runtime_json \"$task_id\" \"$phase\" \"$hook_id\")\"" source;
+assert pkgs.lib.hasInfix
+  "hook_command=\"$(task_hook_command \"$task_id\" \"$phase\" \"$hook_id\")\""
+  source;
+assert pkgs.lib.hasInfix
+  "hook_runtime_json=\"$(task_hook_runtime_json \"$task_id\" \"$phase\" \"$hook_id\")\""
+  source;
 assert pkgs.lib.hasInfix "runtime_json=\"$(task_runtime_json \"$task_id\")\"" source;
 assert pkgs.lib.hasInfix "command=\"$(task_runner_command \"$task_id\")\"" source;
 assert pkgs.lib.hasInfix "package_path=\"$(task_runner_package \"$task_id\")\"" source;

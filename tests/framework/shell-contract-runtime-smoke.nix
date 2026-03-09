@@ -34,23 +34,21 @@ let
         required = true;
       }
     ];
-    env =
-      shellContract.mkRuntimePrimitiveEnvSpecs { }
-      ++ [
-        {
-          name = "API_URL";
-          type = "pathAbs";
-          required = true;
-          aliases = [ "APP_API_URL" ];
-        }
-        {
-          name = "RETRIES";
-          type = "int";
-          default = 3;
-          min = 1;
-          max = 5;
-        }
-      ];
+    env = shellContract.mkRuntimePrimitiveEnvSpecs { } ++ [
+      {
+        name = "API_URL";
+        type = "pathAbs";
+        required = true;
+        aliases = [ "APP_API_URL" ];
+      }
+      {
+        name = "RETRIES";
+        type = "int";
+        default = 3;
+        min = 1;
+        max = 5;
+      }
+    ];
     outputs = {
       mode = "text";
     };

@@ -92,16 +92,8 @@ let
       long = if hasLong then spec.long else "";
       short = if hasShort then spec.short else "";
       type = if (spec ? type) && spec.type != null && spec.type != "" then toString spec.type else "";
-      values =
-        if (spec ? values) && spec.values != null then
-          map toString spec.values
-        else
-          [ ];
-      description =
-        if (spec ? description) && spec.description != null then
-          spec.description
-        else
-          "";
+      values = if (spec ? values) && spec.values != null then map toString spec.values else [ ];
+      description = if (spec ? description) && spec.description != null then spec.description else "";
     };
 
   formatTaskArgHelpLine =
@@ -121,7 +113,9 @@ let
           "<value>";
       descriptionSuffix = if spec.description != "" then ": ${spec.description}" else "";
     in
-    "  ${builtins.concatStringsSep ", " tokens}${lib.optionalString (valueLabel != "") " ${valueLabel}"}${descriptionSuffix}";
+    "  ${builtins.concatStringsSep ", " tokens}${
+        lib.optionalString (valueLabel != "") " ${valueLabel}"
+      }${descriptionSuffix}";
 
   mergeTaskRuntimeWithRunnerPackage =
     task:
@@ -178,46 +172,38 @@ let
         packagePath = task.runner.package or null;
         preHookIds = uniqueSorted (builtins.attrNames (task.runtime.preHooks or { }));
         postHookIds = uniqueSorted (builtins.attrNames (task.runtime.postHooks or { }));
-        displayName =
-          if (app.expose or false) && (app.name or "") != "" then
-            app.name
-          else
-            taskId;
+        displayName = if (app.expose or false) && (app.name or "") != "" then app.name else taskId;
         usageLines =
           let
             configuredUsage = app.usage or [ ];
           in
-          if configuredUsage != [ ] then
-            configuredUsage
-          else
-            [ "nix run .#run-task -- ${taskId} [-- ...]" ];
+          if configuredUsage != [ ] then configuredUsage else [ "nix run .#run-task -- ${taskId} [-- ...]" ];
         exampleLines = app.examples or [ ];
-        taskHelpLines =
-          [
-            "${displayName} - ${task.summary}"
-          ]
-          ++ lib.optionals (task.description or "" != "") [
-            ""
-            task.description
-          ]
-          ++ [
-            ""
-            "Usage:"
-          ]
-          ++ map (line: "  ${line}") usageLines
-          ++ [
-            ""
-            "Options:"
-          ]
-          ++ map formatTaskArgHelpLine specs
-          ++ [
-            "  -h, --help: Show this help."
-          ]
-          ++ lib.optionals (exampleLines != [ ]) [
-            ""
-            "Examples:"
-          ]
-          ++ map (line: "  ${line}") exampleLines;
+        taskHelpLines = [
+          "${displayName} - ${task.summary}"
+        ]
+        ++ lib.optionals (task.description or "" != "") [
+          ""
+          task.description
+        ]
+        ++ [
+          ""
+          "Usage:"
+        ]
+        ++ map (line: "  ${line}") usageLines
+        ++ [
+          ""
+          "Options:"
+        ]
+        ++ map formatTaskArgHelpLine specs
+        ++ [
+          "  -h, --help: Show this help."
+        ]
+        ++ lib.optionals (exampleLines != [ ]) [
+          ""
+          "Examples:"
+        ]
+        ++ map (line: "  ${line}") exampleLines;
         longKinds = builtins.concatLists (
           map (
             spec:
@@ -248,21 +234,19 @@ let
           allowUnknown = if argsContract.allowUnknown or false then "true" else "false";
           hasPositional = if builtins.any (spec: spec.kind == "positional") specs then "true" else "false";
           hookCount = toString (builtins.length preHookIds + builtins.length postHookIds);
-          runnerCommand =
-            if (task.runner.command or null) == null then "" else task.runner.command;
+          runnerCommand = if (task.runner.command or null) == null then "" else task.runner.command;
           runnerPackage = if packagePath == null then "" else packagePath;
           runtimeJson = builtins.toJSON (mergeTaskRuntimeWithRunnerPackage task);
           producesJson = builtins.toJSON {
             artifacts = task.produces.artifacts or [ ];
             stateKeys = task.produces.stateKeys or [ ];
           };
-          maxAttempts =
-            toString (
-              let
-                attempts = task.scheduling.maxAttempts or 1;
-              in
-              if attempts < 1 then 1 else attempts
-            );
+          maxAttempts = toString (
+            let
+              attempts = task.scheduling.maxAttempts or 1;
+            in
+            if attempts < 1 then 1 else attempts
+          );
           retryBackoffJson = builtins.toJSON (task.scheduling.retryBackoffSec or [ ]);
           needs = task.deps.needs or [ ];
           softNeeds = task.deps.softNeeds or [ ];
@@ -895,8 +879,18 @@ in
       local task_id="$1"
       local phase="$2"
       case "$task_id:$phase" in
-  ${renderCasePrintLines (entry: entry.value.preHookIds) (map (entry: { key = "${entry.key}:pre"; value = entry.value; }) taskCases)}
-  ${renderCasePrintLines (entry: entry.value.postHookIds) (map (entry: { key = "${entry.key}:post"; value = entry.value; }) taskCases)}
+  ${renderCasePrintLines (entry: entry.value.preHookIds) (
+    map (entry: {
+      key = "${entry.key}:pre";
+      value = entry.value;
+    }) taskCases
+  )}
+  ${renderCasePrintLines (entry: entry.value.postHookIds) (
+    map (entry: {
+      key = "${entry.key}:post";
+      value = entry.value;
+    }) taskCases
+  )}
         *)
           return 1
           ;;

@@ -46,6 +46,7 @@
               pkgs
               ;
             model = compiled.model;
+            packages = compiled.packages;
             stateHash = compiled.stateHash;
             canonical = frameworkLib.canonical;
             registry = import ./nixfied/registry {

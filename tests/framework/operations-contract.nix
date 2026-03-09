@@ -19,10 +19,8 @@ assert pkgs.lib.hasInfix "service_selected()" source;
 assert pkgs.lib.hasInfix "resolve_service_source()" source;
 assert pkgs.lib.hasInfix "source_kind_disallowed()" source;
 assert pkgs.lib.hasInfix "serviceConfigLib = import ../lib/service-config.nix" source;
-assert
-  pkgs.lib.hasInfix
-    "probeRuntime = import ../.framework/lib/operations-probe-runtime.nix"
-    source;
+assert pkgs.lib.hasInfix "probeRuntime = import ../.framework/lib/operations-probe-runtime.nix"
+  source;
 assert pkgs.lib.hasInfix "resolvedServiceConfigByName =" source;
 assert pkgs.lib.hasInfix "resolveServicePortBase =" source;
 assert pkgs.lib.hasInfix "probePlan =" source;

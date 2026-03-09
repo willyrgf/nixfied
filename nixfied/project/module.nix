@@ -87,6 +87,12 @@ let
   ];
 
   nixFormatterPkg = if pkgs ? nixfmt then pkgs.nixfmt else pkgs.nixfmt-rfc-style;
+  nixChecksPkg = import ../lib/mkNixChecks.nix {
+    inherit
+      pkgs
+      lib
+      ;
+  } { };
 
   frameworkInstallRuntimeInputs = [
     pkgs.coreutils
@@ -186,6 +192,32 @@ let
     }
   ];
 
+  nixChecksContractArgs = [
+    {
+      name = "mode";
+      kind = "option";
+      long = "--mode";
+      type = "enum";
+      values = [
+        "quick"
+        "full"
+      ];
+      description = "Check profile to run.";
+    }
+    {
+      name = "quick";
+      kind = "flag";
+      long = "--quick";
+      description = "Alias for --mode quick.";
+    }
+    {
+      name = "full";
+      kind = "flag";
+      long = "--full";
+      description = "Alias for --mode full.";
+    }
+  ];
+
   mergeLoggingContractArgs =
     contractArgs:
     let
@@ -217,37 +249,42 @@ let
 
             usage() {
               cat <<'EOF'
-      ${if upgradeDefault then ''
-      Usage:
-        nix run .#framework::upgrade -- --target .
-        nix run .#framework::upgrade -- --target . --reset-project
-        nix run .#framework::upgrade -- --target . --reset-local
+      ${
+        if upgradeDefault then
+          ''
+            Usage:
+              nix run .#framework::upgrade -- --target .
+              nix run .#framework::upgrade -- --target . --reset-project
+              nix run .#framework::upgrade -- --target . --reset-local
 
-      Upgrade vendored wrapper in-place while preserving nixfied/project and nixfied/local by default.
+            Upgrade vendored wrapper in-place while preserving nixfied/project and nixfied/local by default.
 
-      Options:
-        --vendor          Generate a vendored wrapper flake (default for framework::upgrade).
-        --target <path>   Output directory for generated wrapper.
-        --reset-project   When vendoring, overwrite nixfied/project.
-        --reset-local     When vendoring, overwrite nixfied/local.
-        --help, -h        Show this help.
-      '' else ''
-      Usage:
-        nix run .#framework::install
-        nix run .#framework::install -- --vendor
-        nix run .#framework::install -- --vendor --target .
-        nix run .#framework::install -- --vendor --upgrade --target .
+            Options:
+              --vendor          Generate a vendored wrapper flake (default for framework::upgrade).
+              --target <path>   Output directory for generated wrapper.
+              --reset-project   When vendoring, overwrite nixfied/project.
+              --reset-local     When vendoring, overwrite nixfied/local.
+              --help, -h        Show this help.
+          ''
+        else
+          ''
+            Usage:
+              nix run .#framework::install
+              nix run .#framework::install -- --vendor
+              nix run .#framework::install -- --vendor --target .
+              nix run .#framework::install -- --vendor --upgrade --target .
 
-      Install a thin wrapper flake by default, or a vendored wrapper with --vendor.
+            Install a thin wrapper flake by default, or a vendored wrapper with --vendor.
 
-      Options:
-        --vendor          Generate a vendored wrapper flake.
-        --target <path>   Output directory for generated wrapper.
-        --upgrade         Upgrade vendored framework files in-place and preserve nixfied/project + nixfied/local.
-        --reset-project   When vendoring, overwrite nixfied/project.
-        --reset-local     When vendoring, overwrite nixfied/local.
-        --help, -h        Show this help.
-      ''}
+            Options:
+              --vendor          Generate a vendored wrapper flake.
+              --target <path>   Output directory for generated wrapper.
+              --upgrade         Upgrade vendored framework files in-place and preserve nixfied/project + nixfied/local.
+              --reset-project   When vendoring, overwrite nixfied/project.
+              --reset-local     When vendoring, overwrite nixfied/local.
+              --help, -h        Show this help.
+          ''
+      }
       EOF
             }
 
@@ -422,6 +459,7 @@ let
       preHooks ? { },
       postHooks ? { },
       workflowId ? null,
+      runner ? null,
       contractArgs ? [ ],
       logging ? { },
       passThroughEnv ? defaultTaskPassThroughEnv,
@@ -438,7 +476,9 @@ let
         ;
 
       runner =
-        if workflowId == null then
+        if runner != null then
+          runner
+        else if workflowId == null then
           {
             type = "shell";
             command = command;
@@ -598,6 +638,10 @@ in
         runtimePackages = conf.tooling.runtimePackages;
         devShellPackages = conf.tooling.devShellPackages;
         devShellHook = conf.tooling.devShellHook;
+      };
+
+      packages = {
+        "nix-checks" = nixChecksPkg;
       };
 
       services = {
@@ -775,16 +819,20 @@ in
           appName = "check";
           summary = "Run quality checks";
           description = ''
-            Runs quality checks for the repository.
-
-            Customize this command in nixfied/project/module.nix.
+            Runs reusable Nix quality checks for the repository.
           '';
-          usage = [ "nix run .#check" ];
-          command = ''
-            set -euo pipefail
-            echo "INFO: running quality checks"
-            echo "SKIP: quality checks placeholder. Edit nixfied/project/module.nix."
-          '';
+          usage = [
+            "nix run .#check"
+            "nix run .#check -- --full"
+          ];
+          examples = [ "nix run .#check -- --full" ];
+          runner = {
+            type = "derivation";
+            package = nixChecksPkg;
+            command = "nix-checks";
+            workflowId = null;
+          };
+          contractArgs = nixChecksContractArgs;
         };
 
         format = mkCommandTask {
@@ -905,19 +953,17 @@ in
             appName = "ci-quality";
             kind = "ci-step";
             summary = "Quality checks";
-            description = "Quality CI step.";
+            description = "Reusable Nix quality checks in full mode.";
             tags = [
               "ci"
               "quality"
             ];
-            runtimeInputs = commonRuntimeInputs;
-            command = ''
-              set -euo pipefail
-              artifacts_dir="''${CI_ARTIFACTS_DIR:-$REGISTRY_ROOT/artifacts/manual}"
-              mkdir -p "$artifacts_dir"
-              touch "$artifacts_dir/quality.log"
-              echo "OK: quality step complete"
-            '';
+            runner = {
+              type = "derivation";
+              package = nixChecksPkg;
+              command = "nix-checks --mode full";
+              workflowId = null;
+            };
           }
           // {
             ui.app.expose = false;

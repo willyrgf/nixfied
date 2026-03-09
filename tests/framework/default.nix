@@ -4,6 +4,7 @@
   stateHash,
   canonical,
   registry,
+  packages,
 }:
 let
   lib = pkgs.lib;
@@ -107,6 +108,13 @@ let
       ${pkgs.jq}/bin/jq -e '.properties.features.type == "object"' ${../../nixfied/schemas/model-export.json} > /dev/null
       echo "OK: model export schema includes features" > "$out"
     '';
+
+    "package-output-contract" = import ./package-output-contract.nix {
+      inherit
+        pkgs
+        packages
+        ;
+    };
 
     "scheduler-order" = import ./scheduler-order.nix {
       inherit
