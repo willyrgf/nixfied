@@ -4,6 +4,7 @@
   project,
   loggingPrelude ? "",
   commandSurfaces ? null,
+  featureInventory ? null,
 }:
 
 let
@@ -12,6 +13,7 @@ let
   strict = cfg.strict or true;
   refreshArg = cfg.refreshArg or "--refresh-discovery";
   resolvedCommandSurfaces = cfg.commandSurfaces or commandSurfaces;
+  resolvedFeatureInventory = cfg.featureInventory or featureInventory;
 
   defaultRequiredDocs = [
     "README.md"
@@ -54,10 +56,9 @@ let
   requiredDocsJson = builtins.toJSON requiredDocs;
   riskAreasJson = builtins.toJSON riskAreas;
   commandSurfacesJson =
-    if resolvedCommandSurfaces == null then
-      "null"
-    else
-      builtins.toJSON resolvedCommandSurfaces;
+    if resolvedCommandSurfaces == null then "null" else builtins.toJSON resolvedCommandSurfaces;
+  featureInventoryJson =
+    if resolvedFeatureInventory == null then "null" else builtins.toJSON resolvedFeatureInventory;
 
   tool = pkgs.writeShellScriptBin "nixfied-discovery-index" ''
         ${loggingPrelude}
@@ -131,6 +132,7 @@ let
         REQUIRED_DOCS_JSON='${requiredDocsJson}'
         RISK_AREAS_JSON='${riskAreasJson}'
         COMPILED_COMMAND_SURFACES_JSON='${commandSurfacesJson}'
+        COMPILED_FEATURE_INVENTORY_JSON='${featureInventoryJson}'
         HAS_GIT_TRACKING="0"
         if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
           HAS_GIT_TRACKING="1"
@@ -316,6 +318,32 @@ let
           )"
         fi
 
+        if [ "$COMPILED_FEATURE_INVENTORY_JSON" = "null" ]; then
+          FEATURES_JSON='[]'
+        else
+          FEATURES_JSON="$(
+            printf '%s\n' "$COMPILED_FEATURE_INVENTORY_JSON" | ${pkgs.jq}/bin/jq -c '
+              if type == "array" then
+                .
+              else
+                to_entries | map(.value + { id: (.value.id // .key) })
+              end
+              | map(
+                  select((.id // "") != "")
+                  | {
+                      id: .id,
+                      kind: (.kind // "unknown"),
+                      summary: (.summary // ""),
+                      status: (.status // ""),
+                      coverage_required: (.coverageRequired // false)
+                    }
+                )
+              | unique_by(.id)
+              | sort_by(.id)
+            '
+          )"
+        fi
+
         RISK_AREAS_NORM_JSON=$(printf '%s\n' "$RISK_AREAS_JSON" | ${pkgs.jq}/bin/jq -c '
           map({
             path: .path,
@@ -329,6 +357,7 @@ let
           --argjson docs "$DOCS_JSON" \
           --argjson components "$COMPONENTS_JSON" \
           --argjson command_surfaces "$COMMANDS_JSON" \
+          --argjson features "$FEATURES_JSON" \
           --argjson risk_areas "$RISK_AREAS_NORM_JSON" \
           '{
             schema_version: 1,
@@ -336,7 +365,8 @@ let
             docs: $docs,
             components: $components,
             risk_areas: $risk_areas,
-            command_surfaces: $command_surfaces
+            command_surfaces: $command_surfaces,
+            features: $features
           }' > "$TMP_INDEX"
 
         {
@@ -365,6 +395,17 @@ let
             end
           ' "$TMP_INDEX"
           echo ""
+          echo "## Features"
+          ${pkgs.jq}/bin/jq -r '
+            if (.features | length) == 0 then
+              "- (none detected)"
+            else
+              .features[]
+              | "- `" + .id + "` [" + .kind + "] - " + .summary
+                + (if .coverage_required then " (coverage required)" else "" end)
+            end
+          ' "$TMP_INDEX"
+          echo ""
           echo "## Dispatcher and Introspection"
           echo '- `run-task -- <task-id> [-- ...]` from `nixfied/runner/dispatcher.nix`'
           echo '- `run-workflow -- <workflow-id> [-- ...]` from `nixfied/runner/dispatcher.nix`'
@@ -372,6 +413,7 @@ let
           echo '- `runs [run-id]` from `nixfied/runner/dispatcher.nix`'
           echo '- `stop-run -- <run-id>` from `nixfied/runner/dispatcher.nix`'
           echo '- `stop-all-runs` from `nixfied/runner/dispatcher.nix`'
+          echo '- `features` from `nixfied/runner/dispatcher.nix`'
           echo '- `model`, `stateHash`, `tasks`, `services`, `task::<id>`, `schema` from `nixfied/lib/mkNixfied.nix`'
           echo ""
           echo "## Sensitive Zones"
@@ -401,6 +443,7 @@ let
           echo '- `nix run .#test-isolation`'
           echo '- `nix run .#ports`'
           echo '- `nix run .#check-ports`'
+          echo '- `nix run .#features`'
           echo '- `nix run .#framework::test`'
           echo '- `nix run .#framework::install`'
           echo '- `nix run .#framework::upgrade`'

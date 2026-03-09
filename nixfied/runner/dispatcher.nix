@@ -56,9 +56,11 @@ let
 
   helpText = builtins.concatStringsSep "\n" model.views.help.lines;
   docsText = builtins.concatStringsSep "\n" model.views.docs.lines;
+  featuresText = builtins.concatStringsSep "\n" model.views.features.lines;
 
   helpFile = pkgs.writeText "nixfied-help.txt" "${helpText}\n";
   docsFile = pkgs.writeText "nixfied-docs.md" "${docsText}\n";
+  featuresFile = pkgs.writeText "nixfied-features.txt" "${featuresText}\n";
 
   frameworkProxyApps =
     if workspaceMarkerPresent then
@@ -125,6 +127,10 @@ in
 
   "docs" = mkApp "docs" ''
     cat ${docsFile}
+  '';
+
+  "features" = mkApp "features" ''
+    cat ${featuresFile}
   '';
 
   "registry::replay" = {

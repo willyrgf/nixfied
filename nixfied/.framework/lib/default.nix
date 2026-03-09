@@ -5,6 +5,7 @@
   project,
   hooks ? { },
   commandSurfaces ? null,
+  featureInventory ? null,
 }:
 
 let
@@ -52,7 +53,10 @@ let
   discovery = import ./discovery.nix {
     inherit pkgs project;
     inherit (helpers) loggingPrelude;
-    inherit commandSurfaces;
+    inherit
+      commandSurfaces
+      featureInventory
+      ;
   };
   process = import ./process.nix {
     inherit pkgs;

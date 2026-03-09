@@ -24,7 +24,7 @@
       "path": "CLEANUPS.md",
       "purpose": "Current repository cleanup ledger and maintenance queue.",
       "priority": 2,
-      "exists": false
+      "exists": true
     },
     {
       "path": "docs/DETAILED.md",
@@ -106,6 +106,14 @@
       "owner_file": "nixfied/project/module.nix"
     },
     {
+      "name": "docs",
+      "owner_file": "nixfied/runner/dispatcher.nix"
+    },
+    {
+      "name": "features",
+      "owner_file": "nixfied/runner/dispatcher.nix"
+    },
+    {
       "name": "format",
       "owner_file": "nixfied/project/module.nix"
     },
@@ -126,12 +134,32 @@
       "owner_file": "nixfied/modules/operations.nix"
     },
     {
+      "name": "model",
+      "owner_file": "nixfied/lib/mkNixfied.nix"
+    },
+    {
       "name": "ports",
       "owner_file": "nixfied/modules/operations.nix"
     },
     {
       "name": "ready",
       "owner_file": "nixfied/modules/operations.nix"
+    },
+    {
+      "name": "schema",
+      "owner_file": "nixfied/lib/mkNixfied.nix"
+    },
+    {
+      "name": "services",
+      "owner_file": "nixfied/lib/mkNixfied.nix"
+    },
+    {
+      "name": "stateHash",
+      "owner_file": "nixfied/lib/mkNixfied.nix"
+    },
+    {
+      "name": "tasks",
+      "owner_file": "nixfied/lib/mkNixfied.nix"
     },
     {
       "name": "test",
@@ -144,6 +172,323 @@
     {
       "name": "validate-env",
       "owner_file": "nixfied/modules/operations.nix"
+    }
+  ],
+  "features": [
+    {
+      "id": "runtime.ephemeral.env-file-loading",
+      "kind": "runtime",
+      "summary": "Ephemeral host env file loading policy",
+      "status": "stable",
+      "coverage_required": true
+    },
+    {
+      "id": "runtime.ephemeral.include-untracked",
+      "kind": "runtime",
+      "summary": "Ephemeral worktree copy policy",
+      "status": "stable",
+      "coverage_required": true
+    },
+    {
+      "id": "runtime.ephemeral.source-materialization",
+      "kind": "runtime",
+      "summary": "Ephemeral source materialization defaults",
+      "status": "stable",
+      "coverage_required": true
+    },
+    {
+      "id": "runtime.output.prefix-contract",
+      "kind": "runtime",
+      "summary": "Stable ASCII log prefix contract",
+      "status": "stable",
+      "coverage_required": true
+    },
+    {
+      "id": "runtime.registry.isolation",
+      "kind": "runtime",
+      "summary": "Run-scoped registry isolation",
+      "status": "stable",
+      "coverage_required": true
+    },
+    {
+      "id": "service.helios",
+      "kind": "service",
+      "summary": "Service configuration and runtime surface for helios",
+      "status": "stable",
+      "coverage_required": true
+    },
+    {
+      "id": "service.minio",
+      "kind": "service",
+      "summary": "Service configuration and runtime surface for minio",
+      "status": "stable",
+      "coverage_required": true
+    },
+    {
+      "id": "service.nginx",
+      "kind": "service",
+      "summary": "Service configuration and runtime surface for nginx",
+      "status": "stable",
+      "coverage_required": true
+    },
+    {
+      "id": "service.postgres",
+      "kind": "service",
+      "summary": "Service configuration and runtime surface for postgres",
+      "status": "stable",
+      "coverage_required": true
+    },
+    {
+      "id": "service.reth",
+      "kind": "service",
+      "summary": "Service configuration and runtime surface for reth",
+      "status": "stable",
+      "coverage_required": true
+    },
+    {
+      "id": "task.build",
+      "kind": "task",
+      "summary": "Build artifacts",
+      "status": "stable",
+      "coverage_required": true
+    },
+    {
+      "id": "task.check",
+      "kind": "task",
+      "summary": "Run quality checks",
+      "status": "stable",
+      "coverage_required": true
+    },
+    {
+      "id": "task.ci",
+      "kind": "task",
+      "summary": "Run the CI pipeline",
+      "status": "stable",
+      "coverage_required": true
+    },
+    {
+      "id": "task.ci.nginx-proxy",
+      "kind": "task",
+      "summary": "Nginx proxy test",
+      "status": "internal",
+      "coverage_required": false
+    },
+    {
+      "id": "task.ci.quality",
+      "kind": "task",
+      "summary": "Quality checks",
+      "status": "internal",
+      "coverage_required": false
+    },
+    {
+      "id": "task.ci.system-quick",
+      "kind": "task",
+      "summary": "Quick system tests",
+      "status": "internal",
+      "coverage_required": false
+    },
+    {
+      "id": "task.ci.tests",
+      "kind": "task",
+      "summary": "Tests",
+      "status": "internal",
+      "coverage_required": false
+    },
+    {
+      "id": "task.dev",
+      "kind": "task",
+      "summary": "Start the dev workflow",
+      "status": "stable",
+      "coverage_required": true
+    },
+    {
+      "id": "task.format",
+      "kind": "task",
+      "summary": "Format Nix files",
+      "status": "stable",
+      "coverage_required": true
+    },
+    {
+      "id": "task.framework.install",
+      "kind": "task",
+      "summary": "Install thin or vendored wrapper flake",
+      "status": "stable",
+      "coverage_required": true
+    },
+    {
+      "id": "task.framework.test",
+      "kind": "task",
+      "summary": "Run framework validation in the model",
+      "status": "stable",
+      "coverage_required": true
+    },
+    {
+      "id": "task.framework.upgrade",
+      "kind": "task",
+      "summary": "Upgrade vendored wrapper in-place",
+      "status": "stable",
+      "coverage_required": true
+    },
+    {
+      "id": "task.ops.check-ports",
+      "kind": "task",
+      "summary": "Check model-derived port availability",
+      "status": "stable",
+      "coverage_required": true
+    },
+    {
+      "id": "task.ops.health",
+      "kind": "task",
+      "summary": "Run service health checks",
+      "status": "stable",
+      "coverage_required": true
+    },
+    {
+      "id": "task.ops.ports",
+      "kind": "task",
+      "summary": "Print model-derived port assignments",
+      "status": "stable",
+      "coverage_required": true
+    },
+    {
+      "id": "task.ops.ready",
+      "kind": "task",
+      "summary": "Run service readiness checks",
+      "status": "stable",
+      "coverage_required": true
+    },
+    {
+      "id": "task.ops.test-isolation",
+      "kind": "task",
+      "summary": "Run isolation checks",
+      "status": "stable",
+      "coverage_required": true
+    },
+    {
+      "id": "task.ops.validate-env",
+      "kind": "task",
+      "summary": "Validate slot/env settings",
+      "status": "stable",
+      "coverage_required": true
+    },
+    {
+      "id": "task.test",
+      "kind": "task",
+      "summary": "Run tests",
+      "status": "stable",
+      "coverage_required": true
+    },
+    {
+      "id": "task.test.framework.selfhost",
+      "kind": "task",
+      "summary": "Framework self-host smoke command",
+      "status": "internal",
+      "coverage_required": false
+    },
+    {
+      "id": "task.test.parallel.fail",
+      "kind": "task",
+      "summary": "Parallel fail-fast trigger",
+      "status": "internal",
+      "coverage_required": false
+    },
+    {
+      "id": "task.test.parallel.skip",
+      "kind": "task",
+      "summary": "Parallel smoke when-skip unit",
+      "status": "internal",
+      "coverage_required": false
+    },
+    {
+      "id": "task.test.parallel.sleep-a",
+      "kind": "task",
+      "summary": "Parallel smoke unit A",
+      "status": "internal",
+      "coverage_required": false
+    },
+    {
+      "id": "task.test.parallel.sleep-b",
+      "kind": "task",
+      "summary": "Parallel smoke unit B",
+      "status": "internal",
+      "coverage_required": false
+    },
+    {
+      "id": "task.test.parallel.sleep-c",
+      "kind": "task",
+      "summary": "Parallel smoke dependent unit",
+      "status": "internal",
+      "coverage_required": false
+    },
+    {
+      "id": "task.test.parallel.sleep-d",
+      "kind": "task",
+      "summary": "Parallel smoke lock unit",
+      "status": "internal",
+      "coverage_required": false
+    },
+    {
+      "id": "task.test.parallel.slow-a",
+      "kind": "task",
+      "summary": "Parallel fail-fast slow unit A",
+      "status": "internal",
+      "coverage_required": false
+    },
+    {
+      "id": "task.test.parallel.slow-b",
+      "kind": "task",
+      "summary": "Parallel fail-fast slow unit B",
+      "status": "internal",
+      "coverage_required": false
+    },
+    {
+      "id": "workflow.ci.app",
+      "kind": "workflow",
+      "summary": "App CI workflow",
+      "status": "stable",
+      "coverage_required": true
+    },
+    {
+      "id": "workflow.ci.basic",
+      "kind": "workflow",
+      "summary": "Basic CI workflow",
+      "status": "stable",
+      "coverage_required": true
+    },
+    {
+      "id": "workflow.ci.env",
+      "kind": "workflow",
+      "summary": "Environment CI workflow",
+      "status": "stable",
+      "coverage_required": true
+    },
+    {
+      "id": "workflow.ci.full",
+      "kind": "workflow",
+      "summary": "Full CI workflow",
+      "status": "stable",
+      "coverage_required": true
+    },
+    {
+      "id": "workflow.test.framework.selfhost",
+      "kind": "workflow",
+      "summary": "Framework self-host smoke workflow",
+      "status": "stable",
+      "coverage_required": true
+    },
+    {
+      "id": "workflow.test.parallel.failfast",
+      "kind": "workflow",
+      "summary": "Parallel runner fail-fast workflow",
+      "status": "stable",
+      "coverage_required": true
+    },
+    {
+      "id": "workflow.test.parallel.smoke",
+      "kind": "workflow",
+      "summary": "Parallel runner smoke workflow",
+      "status": "stable",
+      "coverage_required": true
     }
   ]
 }

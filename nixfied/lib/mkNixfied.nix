@@ -57,6 +57,7 @@ let
 
   taskIds = builtins.sort builtins.lessThan (builtins.attrNames compiled.model.tasks);
   serviceIds = builtins.sort builtins.lessThan (builtins.attrNames compiled.model.services);
+  featureIds = builtins.sort builtins.lessThan (builtins.attrNames compiled.model.features);
 
   modelCanonical = canonical.toCanonicalNix compiled.model;
   tasksTable = builtins.concatStringsSep "\n" (
@@ -70,6 +71,16 @@ let
       in
       "${service.id}\t${service.name}\t${if service.enable then "enabled" else "disabled"}"
     ) serviceIds
+  );
+  featuresTable = builtins.concatStringsSep "\n" (
+    map (
+      featureId:
+      let
+        feature = compiled.model.features.${featureId};
+        coverageFlag = if feature.coverageRequired or false then "required" else "optional";
+      in
+      "${feature.id}\t${feature.kind}\t${coverageFlag}\t${feature.summary}"
+    ) featureIds
   );
 
   taskSchema = builtins.fromJSON (builtins.readFile ../schemas/task-contract.json);
@@ -178,6 +189,7 @@ let
     stateHash = pkgs.writeText "nixfied-state-hash.txt" "${compiled.stateHash}\n";
     tasks = pkgs.writeText "nixfied-tasks.txt" "${tasksTable}\n";
     services = pkgs.writeText "nixfied-services.txt" "${servicesTable}\n";
+    features = pkgs.writeText "nixfied-features.txt" "${featuresTable}\n";
     schema = schemaDir;
   }
   // taskPackages;
@@ -216,6 +228,7 @@ in
   tasks = compiled.model.tasks;
   services = compiled.model.services;
   workflows = compiled.model.workflows;
+  features = compiled.model.features;
 
   apps = apps;
   packages = packages;

@@ -5,6 +5,22 @@
 let
   taskIds = builtins.attrNames model.tasks;
   workflowIds = builtins.attrNames model.workflows;
+  serviceIds = builtins.attrNames model.services;
+  featureIds = builtins.attrNames (model.features or { });
+  expectedRuntimeFeatureIds = [
+    "runtime.ephemeral.source-materialization"
+    "runtime.ephemeral.include-untracked"
+    "runtime.ephemeral.env-file-loading"
+    "runtime.registry.isolation"
+    "runtime.output.prefix-contract"
+  ];
+
+  featureKinds = [
+    "runtime"
+    "service"
+    "task"
+    "workflow"
+  ];
 
   tasksHaveStableIds = builtins.all (
     taskId:
@@ -30,9 +46,51 @@ let
     workflow ? preRun && workflow ? postRun && workflow.postRun ? alwaysRun
   ) workflowIds;
 
+  servicesHaveStableIds = builtins.all (
+    serviceId:
+    let
+      service = model.services.${serviceId};
+    in
+    service.id == serviceId && builtins.substring 0 8 service.id == "service."
+  ) serviceIds;
+
+  featuresHaveStableIds = builtins.all (
+    featureId:
+    let
+      feature = model.features.${featureId};
+      docs = feature.docs or [ ];
+    in
+    feature.id == featureId
+    && builtins.elem (feature.kind or "") featureKinds
+    && builtins.isString (feature.summary or "")
+    && builtins.isList (feature.ownerFiles or [ ])
+    && builtins.isList (feature.modelPaths or [ ])
+    && builtins.isBool (feature.coverageRequired or false)
+    && builtins.isList docs
+  ) featureIds;
+
+  serviceFeaturesPresent = builtins.all (
+    serviceId: builtins.hasAttr serviceId model.features
+  ) serviceIds;
+  workflowFeaturesPresent = builtins.all (
+    workflowId: builtins.hasAttr workflowId model.features
+  ) workflowIds;
+  exposedTaskFeaturesPresent = builtins.all (
+    appName:
+    let
+      taskId = model.views.apps.${appName}.taskId;
+    in
+    builtins.hasAttr taskId model.features
+  ) (builtins.attrNames (model.views.apps or { }));
+
+  runtimeFeaturesPresent = builtins.all (
+    featureId: builtins.hasAttr featureId model.features
+  ) expectedRuntimeFeatureIds;
+
   frameworkTask = model.tasks."task.framework.test" or null;
   formatTask = model.tasks."task.format" or null;
   commandSurfaces = model.views.help.commandSurfaces or [ ];
+  featureView = model.views.features or null;
   nginxService = model.services."service.nginx" or null;
   heliosService = model.services."service.helios" or null;
   hasCommandSurface =
@@ -43,6 +101,7 @@ assert frameworkTask != null;
 assert frameworkTask.runner.type == "shell";
 assert frameworkTask.ui.app.name == "framework::test";
 assert formatTask != null;
+assert model ? features;
 assert model.identity.projectName == "Nixfied Project";
 assert model.identity.description == "Reusable Nix development framework";
 assert model.runtime ? ephemeral;
@@ -70,12 +129,23 @@ assert formatTask.runtime ? postHooks;
 assert formatTask.runtime.postHooks ? "framework.nixfmt";
 assert pkgs.lib.hasInfix "nixfmt --" formatTask.runtime.postHooks."framework.nixfmt".command;
 assert commandSurfaces != [ ];
+assert featureView != null;
+assert featureView ? lines;
 assert hasCommandSurface "dev" "nixfied/project/module.nix";
 assert hasCommandSurface "validate-env" "nixfied/modules/operations.nix";
 assert hasCommandSurface "framework::test" "nixfied/project/module.nix";
+assert hasCommandSurface "features" "nixfied/runner/dispatcher.nix";
+assert hasCommandSurface "model" "nixfied/lib/mkNixfied.nix";
 assert tasksHaveStableIds;
 assert workflowsReferenceKnownTasks;
 assert workflowsHaveLifecycle;
+assert servicesHaveStableIds;
+assert featureIds != [ ];
+assert featuresHaveStableIds;
+assert serviceFeaturesPresent;
+assert workflowFeaturesPresent;
+assert exposedTaskFeaturesPresent;
+assert runtimeFeaturesPresent;
 pkgs.runCommand "compiler-validation" { } ''
-  echo "OK: compiler task and workflow contracts are stable" > "$out"
+  echo "OK: compiler task, workflow, and feature contracts are stable" > "$out"
 ''

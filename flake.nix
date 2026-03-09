@@ -59,7 +59,7 @@
         {
           apps = compiled.apps;
           packages = compiled.packages;
-          checks = compiled.checks // frameworkChecks;
+          checks = frameworkChecks;
           devShells = compiled.devShells;
         };
     in
