@@ -25,11 +25,17 @@ let
       workflowId = "workflow.ci.full";
       state = "failed";
     }
+    {
+      taskId = "";
+      workflowId = "";
+      state = "ready";
+    }
   ];
 in
 assert snapshot."task:task.ci.quality" == "passed";
 assert snapshot."task:task.ci.tests" == "failed";
 assert snapshot."workflow:workflow.ci.full" == "failed";
+assert (!builtins.hasAttr "workflow:" snapshot);
 assert pkgs.lib.hasInfix "registryLocksShell = import ./events-locks.nix" source;
 assert pkgs.lib.hasInfix "registrySnapshotShell = import ./events-snapshot.nix" source;
 assert pkgs.lib.hasInfix "registryAppendShell = import ./events-append.nix" source;

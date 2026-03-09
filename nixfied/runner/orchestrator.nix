@@ -33,6 +33,11 @@ let
         slotVar = model.runtime.slot.var;
         envVar = model.runtime.env.var;
       };
+      state = {
+        registry = {
+          root = model.state.registry.root;
+        };
+      };
       slots = {
         max = model.runtime.slot.max;
       };

@@ -62,7 +62,7 @@ let
     inherit pkgs project;
     inherit (helpers) loggingPrelude;
   };
-  processRegistry = import ./process-registry.nix {
+  runtimeEvents = import ./runtime-events.nix {
     inherit pkgs project;
     inherit (helpers) loggingPrelude;
   };
@@ -114,13 +114,7 @@ in
     mkRunId
     resolveId
     ;
-  inherit (processRegistry)
-    processStatus
-    processSlots
-    processRuns
-    processInspect
-    processStop
-    processGc
+  inherit (runtimeEvents)
     emitEvent
     serviceEvents
     serviceLogs

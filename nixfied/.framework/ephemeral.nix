@@ -63,9 +63,9 @@ let
     inherit pkgs project;
     loggingPrelude = resolvedLoggingPrelude;
   };
-  processRegistry =
-    if builtins.pathExists ./lib/process-registry.nix then
-      import ./lib/process-registry.nix {
+  runtimeEvents =
+    if builtins.pathExists ./lib/runtime-events.nix then
+      import ./lib/runtime-events.nix {
         inherit pkgs project;
         loggingPrelude = resolvedLoggingPrelude;
       }
@@ -273,12 +273,12 @@ let
         fi
       fi
 
-      ${processRegistry.emitEvent} \
+      emit_slot_event \
         --event-type slot_released \
         --state released \
         --slot "''${${slotVar}:-}" \
         --env "''${${envVar}:-}" \
-        --wait-reason "ephemeral_cleanup exit_code=$exit_code" >/dev/null 2>&1 || true
+        --wait-reason "ephemeral_cleanup exit_code=$exit_code"
 
       if [ -n "''${${projectIdUpper}_SLOT_LOCK_FD:-}" ]; then
         eval "exec ${refLockFd}>&-" 2>/dev/null || true
@@ -365,6 +365,7 @@ let
       fi
 
       export ${envVar}="''${${envVar}:-test}"
+      HOST_REGISTRY_ROOT="''${REGISTRY_ROOT:-}"
 
       if [ -z "''${RUN_ID:-}" ]; then
         export RUN_ID="$(${pkgs.coreutils}/bin/date -u +%Y%m%d-%H%M%S)-$$-''${RANDOM:-0}"
@@ -379,12 +380,20 @@ let
       log_info "Slot: ${refEphSlot} (${slotVar}=''${${slotVar}}, ${envVar}=''${${envVar}})"
       echo ""
 
-      ${processRegistry.emitEvent} \
+      emit_slot_event() {
+        if [ -n "''${HOST_REGISTRY_ROOT:-}" ]; then
+          REGISTRY_ROOT="$HOST_REGISTRY_ROOT" ${runtimeEvents.emitEvent} "$@" >/dev/null 2>&1 || true
+        else
+          ${runtimeEvents.emitEvent} "$@" >/dev/null 2>&1 || true
+        fi
+      }
+
+      emit_slot_event \
         --event-type slot_acquired \
         --state busy \
         --slot "''${${slotVar}}" \
         --env "''${${envVar}}" \
-        --wait-reason "ephemeral_start" >/dev/null 2>&1 || true
+        --wait-reason "ephemeral_start"
 
       source ${mkConditionalCleanup}
       trap _ephemeral_cleanup EXIT INT TERM

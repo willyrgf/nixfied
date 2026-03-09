@@ -12,12 +12,12 @@ let
   managedServiceLifecycle = import ../lib/managed-service-lifecycle.nix { inherit pkgs; };
   probeCommands = import ../lib/probe-commands.nix { inherit pkgs; };
   slotEnvRuntime = import ../lib/slot-env-runtime.nix { inherit pkgs; };
-  processRegistry = import ../lib/process-registry.nix { inherit pkgs project; };
+  runtimeEvents = import ../lib/runtime-events.nix { inherit pkgs project; };
   observability = import ../lib/service-observability.nix {
     inherit
       pkgs
       slots
-      processRegistry
+      runtimeEvents
       ;
   };
   helios = config.package;
@@ -355,7 +355,7 @@ let
         fi
 
         if [ $((attempt % 10)) -eq 0 ]; then
-          ${processRegistry.emitEvent} \
+          ${runtimeEvents.emitEvent} \
             --event-type readiness_progress \
             --service helios \
             --state waiting \

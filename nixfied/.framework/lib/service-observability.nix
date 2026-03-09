@@ -2,7 +2,7 @@
 {
   pkgs,
   slots,
-  processRegistry,
+  runtimeEvents,
 }:
 
 let
@@ -17,7 +17,7 @@ let
         command = toString slots.getSlotInfoJson;
         exportVars = false;
       }}
-      exec ${processRegistry.serviceLogs} --service ${service} --slot "$SLOT" --env "$ENV" "$@"
+      exec ${runtimeEvents.serviceLogs} --service ${service} --slot "$SLOT" --env "$ENV" "$@"
     '';
 
   mkEventsScript =
@@ -29,7 +29,7 @@ let
         command = toString slots.getSlotInfoJson;
         exportVars = false;
       }}
-      exec ${processRegistry.serviceEvents} --service ${service} --slot "$SLOT" --env "$ENV" "$@"
+      exec ${runtimeEvents.serviceEvents} --service ${service} --slot "$SLOT" --env "$ENV" "$@"
     '';
 
   mkStatusMergeBlock =
@@ -50,7 +50,7 @@ let
       SLOT_OWNER=""
       REGISTRY_SCOPE="global"
 
-      REG_OUT="$(${processRegistry.serviceStatus} --service ${service} --slot "$SLOT" --env "$ENV" 2>/dev/null || true)"
+      REG_OUT="$(${runtimeEvents.serviceStatus} --service ${service} --slot "$SLOT" --env "$ENV" 2>/dev/null || true)"
       if [ -n "$REG_OUT" ]; then
         eval "$REG_OUT"
       fi
@@ -110,7 +110,7 @@ let
       local event_type="$1"
       local state="$2"
       shift 2 || true
-      ${processRegistry.emitEvent} \
+      ${runtimeEvents.emitEvent} \
         --event-type "$event_type" \
         --service ${service} \
         --state "$state" \

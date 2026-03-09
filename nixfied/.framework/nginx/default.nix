@@ -13,12 +13,12 @@ let
   };
   loggingPrelude = helpers.loggingPrelude;
   serviceApi = import ../lib/service-api.nix { inherit pkgs; };
-  processRegistry = import ../lib/process-registry.nix { inherit pkgs project; };
+  runtimeEvents = import ../lib/runtime-events.nix { inherit pkgs project; };
   observability = import ../lib/service-observability.nix {
     inherit
       pkgs
       slots
-      processRegistry
+      runtimeEvents
       ;
   };
   config = import ./config.nix { inherit pkgs project; };

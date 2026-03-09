@@ -168,6 +168,10 @@
     inherit pkgs;
   };
 
+  "runtime-events-contract" = import ./runtime-events-contract.nix {
+    inherit pkgs;
+  };
+
   "parallel-runner-smoke" = import ./parallel-runner-smoke.nix {
     inherit
       pkgs
