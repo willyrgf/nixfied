@@ -267,6 +267,12 @@ jobs:
           log_file="$CI_DEBUG_DIR/isolation-cell.log"
           nix run -L -v --log-format bar-with-logs .#test-isolation -- --slot ${{ matrix.slot }} --env ${{ matrix.project_env }} --max-parallel 1 2>&1 | tee "$log_file"
 
+      - name: Show all features
+        run: |
+          set -euo pipefail
+          nix run -L -v --log-format bar-with-logs .#features 
+
+
       - name: Summarize isolation failure context
         if: failure()
         run: |
