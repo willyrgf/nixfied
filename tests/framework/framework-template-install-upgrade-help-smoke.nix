@@ -126,7 +126,7 @@ pkgs.runCommand "framework-template-install-upgrade-help-smoke" { } ''
   run_nix_checked "$TMPDIR/upgrade-help.out" "$template_repo" run .#framework::upgrade -- --help
   run_nix_checked "$TMPDIR/upgrade-app-first.out" "$template_repo" run "path:${sourceRoot}#framework::upgrade" -- --target .
   run_nix_checked "$TMPDIR/upgrade-app-second.out" "$template_repo" run "path:${sourceRoot}#framework::upgrade" -- --target .
-  run_nix_checked "$TMPDIR/framework-test-help.out" "${sourceRoot}" run .#framework::test -- --help
+  run_nix_checked "$TMPDIR/framework-test-help.out" "${sourceRoot}" run path:.#framework::test -- --help
   require_contains "$TMPDIR/help.out" "Core apps:"
   require_contains "$TMPDIR/help.out" "framework::upgrade - Upgrade vendored wrapper in-place"
   require_not_contains "$TMPDIR/help.out" "framework::install -"
