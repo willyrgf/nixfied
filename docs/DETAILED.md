@@ -195,7 +195,6 @@ Write and lock guarantees:
 
 - `flake-check`
 - `help`
-- `workflow-test`
 - `workflow-ci`
 - `isolation`
 - `self-host`

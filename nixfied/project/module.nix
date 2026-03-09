@@ -1278,7 +1278,6 @@ in
               values = [
                 "flake-check"
                 "help"
-                "workflow-test"
                 "workflow-ci"
                 "isolation"
                 "self-host"
@@ -1358,7 +1357,6 @@ in
             SHARDS=(
               "flake-check"
               "help"
-              "workflow-test"
               "workflow-ci"
               "isolation"
               "self-host"
@@ -1394,7 +1392,6 @@ in
             Shards:
               flake-check   Run nix flake check for the current project root.
               help          Validate generated help output.
-              workflow-test Run the test workflow surface.
               workflow-ci   Run the CI workflow surface in selected mode.
               isolation     Run isolation checks.
               self-host     Run a workflow that exercises framework entry points.
@@ -1477,14 +1474,6 @@ in
               return "$rc"
             }
 
-            shard_workflow_test() {
-              if [ -z "''${NIXFIED_EXECUTOR_SELF:-}" ]; then
-                log_error "NIXFIED_EXECUTOR_SELF is not set"
-                return 3
-              fi
-              NIXFIED_CALLER_PWD="$PWD" "$NIXFIED_EXECUTOR_SELF" run-task task.test --summary
-            }
-
             shard_workflow_ci() {
               if [ -z "''${NIXFIED_EXECUTOR_SELF:-}" ]; then
                 log_error "NIXFIED_EXECUTOR_SELF is not set"
@@ -1525,9 +1514,6 @@ in
                   ;;
                 help)
                   run_shard "$shard_name" shard_help
-                  ;;
-                workflow-test)
-                  run_shard "$shard_name" shard_workflow_test
                   ;;
                 workflow-ci)
                   run_shard "$shard_name" shard_workflow_ci

@@ -90,6 +90,8 @@ let
   frameworkTask = model.tasks."task.framework.test" or null;
   formatTask = model.tasks."task.format" or null;
   checkTask = model.tasks."task.check" or null;
+  testTask = model.tasks."task.test" or null;
+  ciTask = model.tasks."task.ci" or null;
   qualityTask = model.tasks."task.ci.quality" or null;
   commandSurfaces = model.views.help.commandSurfaces or [ ];
   featureView = model.views.features or null;
@@ -104,6 +106,8 @@ assert frameworkTask.runner.type == "shell";
 assert frameworkTask.ui.app.name == "framework::test";
 assert formatTask != null;
 assert checkTask != null;
+assert testTask != null;
+assert ciTask != null;
 assert qualityTask != null;
 assert model ? features;
 assert model.identity.projectName == "Nixfied Project";
@@ -135,6 +139,10 @@ assert pkgs.lib.hasInfix "nixfmt --" formatTask.runtime.postHooks."framework.nix
 assert checkTask.runner.type == "derivation";
 assert checkTask.runner.command == "nix-checks";
 assert pkgs.lib.hasInfix "nix-checks" (checkTask.runner.package or "");
+assert testTask.runner.type == "workflowRef";
+assert testTask.runner.workflowId == "workflow.ci.full";
+assert ciTask.runner.type == "workflowRef";
+assert ciTask.runner.workflowId == "workflow.ci.full";
 assert qualityTask.runner.type == "derivation";
 assert qualityTask.runner.command == "nix-checks --mode full";
 assert pkgs.lib.hasInfix "nix-checks" (qualityTask.runner.package or "");

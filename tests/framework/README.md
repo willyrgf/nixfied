@@ -27,7 +27,6 @@ This README is an overview, not the canonical full check list.
 Available shards:
 - `flake-check`
 - `help`
-- `workflow-test`
 - `workflow-ci`
 - `isolation`
 - `self-host`
