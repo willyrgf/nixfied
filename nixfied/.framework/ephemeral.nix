@@ -59,10 +59,6 @@ let
     inherit pkgs project;
     loggingPrelude = resolvedLoggingPrelude;
   };
-  envLoader = import ./lib/env-loader.nix {
-    inherit pkgs project;
-    loggingPrelude = resolvedLoggingPrelude;
-  };
   runtimeEvents =
     if builtins.pathExists ./lib/runtime-events.nix then
       import ./lib/runtime-events.nix {

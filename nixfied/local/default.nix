@@ -11,7 +11,6 @@
   helios ? null,
   supervisor ? null,
   ephemeral ? null,
-  serviceApis ? { },
 }:
 
 {

@@ -52,7 +52,6 @@
               inherit
                 pkgs
                 ;
-              canonical = frameworkLib.canonical;
             };
           };
         in

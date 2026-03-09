@@ -1,10 +1,7 @@
 *.log
 .ci-artifacts
 *.md
-!REINCORPORATION_PLAN.md
-!RESTORE_PROCESS_FIRST_CI.md
 !AGENTS.md
-!CLEANUPS.md
 !README.md
 !docs/ARCHITECTURE.md
 !docs/DETAILED.md

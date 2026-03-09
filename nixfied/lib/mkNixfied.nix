@@ -20,7 +20,6 @@ let
   registry = import ../registry {
     inherit
       pkgs
-      canonical
       ;
   };
 
