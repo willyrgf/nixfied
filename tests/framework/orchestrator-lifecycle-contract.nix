@@ -38,10 +38,11 @@ assert pkgs.lib.hasInfix "\"$EPHEMERAL_EXECUTOR_WRAPPER\" \"$EXECUTOR_PROGRAM\" 
 assert pkgs.lib.hasInfix "orchestratorProgram =" dispatcherSource;
 assert pkgs.lib.hasInfix "exec \${orchestratorProgram} run-task" dispatcherSource;
 assert pkgs.lib.hasInfix "exec \${orchestratorProgram} run-workflow" dispatcherSource;
-assert pkgs.lib.hasInfix "github:willyrgf/nixfied/dev#run-task --refresh -- task.framework.install"
+assert pkgs.lib.hasInfix "github:willyrgf/nixfied/dev#framework::install --refresh --"
   dispatcherSource;
-assert pkgs.lib.hasInfix "github:willyrgf/nixfied/dev#run-task --refresh -- task.framework.upgrade"
+assert pkgs.lib.hasInfix "github:willyrgf/nixfied/dev#framework::upgrade --refresh --"
   dispatcherSource;
+assert pkgs.lib.hasInfix "cat \${frameworkUpgradeHelpFile}" dispatcherSource;
 pkgs.runCommand "orchestrator-lifecycle-contract" { } ''
   echo "OK: orchestrator lifecycle contracts are stable" > "$out"
 ''

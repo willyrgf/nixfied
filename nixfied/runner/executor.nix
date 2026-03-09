@@ -390,6 +390,13 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       echo "ERROR: unknown task '$task_id'"
       return 2
     fi
+    if task_help_requested "''${filtered_args[@]}"; then
+      if ! task_print_help "$task_id"; then
+        echo "ERROR: unknown task '$task_id'"
+        return 2
+      fi
+      return 0
+    fi
     runner_type="$(task_runner_type "$task_id")"
 
     if [ "$runner_type" != "workflowRef" ] && [ -n "$MACHINE_SUMMARY_FILE" ]; then

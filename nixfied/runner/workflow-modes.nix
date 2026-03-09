@@ -91,7 +91,37 @@ let
       inherit kind;
       long = if hasLong then spec.long else "";
       short = if hasShort then spec.short else "";
+      type = if (spec ? type) && spec.type != null && spec.type != "" then toString spec.type else "";
+      values =
+        if (spec ? values) && spec.values != null then
+          map toString spec.values
+        else
+          [ ];
+      description =
+        if (spec ? description) && spec.description != null then
+          spec.description
+        else
+          "";
     };
+
+  formatTaskArgHelpLine =
+    spec:
+    let
+      tokens =
+        (lib.optionals (spec.short != "") [ spec.short ])
+        ++ (lib.optionals (spec.long != "") [ spec.long ]);
+      valueLabel =
+        if spec.kind != "option" then
+          ""
+        else if spec.values != [ ] then
+          "<${builtins.concatStringsSep "|" spec.values}>"
+        else if spec.type != "" then
+          "<${spec.type}>"
+        else
+          "<value>";
+      descriptionSuffix = if spec.description != "" then ": ${spec.description}" else "";
+    in
+    "  ${builtins.concatStringsSep ", " tokens}${lib.optionalString (valueLabel != "") " ${valueLabel}"}${descriptionSuffix}";
 
   mergeTaskRuntimeWithRunnerPackage =
     task:
@@ -141,11 +171,53 @@ let
       taskId:
       let
         task = tasks.${taskId};
+        ui = task.ui or { };
+        app = ui.app or { };
         argsContract = (((task.contract or { }).input or { }).args or { });
         specs = map normalizeTaskArgSpec (argsContract.spec or [ ]);
         packagePath = task.runner.package or null;
         preHookIds = uniqueSorted (builtins.attrNames (task.runtime.preHooks or { }));
         postHookIds = uniqueSorted (builtins.attrNames (task.runtime.postHooks or { }));
+        displayName =
+          if (app.expose or false) && (app.name or "") != "" then
+            app.name
+          else
+            taskId;
+        usageLines =
+          let
+            configuredUsage = app.usage or [ ];
+          in
+          if configuredUsage != [ ] then
+            configuredUsage
+          else
+            [ "nix run .#run-task -- ${taskId} [-- ...]" ];
+        exampleLines = app.examples or [ ];
+        taskHelpLines =
+          [
+            "${displayName} - ${task.summary}"
+          ]
+          ++ lib.optionals (task.description or "" != "") [
+            ""
+            task.description
+          ]
+          ++ [
+            ""
+            "Usage:"
+          ]
+          ++ map (line: "  ${line}") usageLines
+          ++ [
+            ""
+            "Options:"
+          ]
+          ++ map formatTaskArgHelpLine specs
+          ++ [
+            "  -h, --help: Show this help."
+          ]
+          ++ lib.optionals (exampleLines != [ ]) [
+            ""
+            "Examples:"
+          ]
+          ++ map (line: "  ${line}") exampleLines;
         longKinds = builtins.concatLists (
           map (
             spec:
@@ -202,6 +274,7 @@ let
             longKinds
             shortKinds
             ;
+          helpLines = taskHelpLines;
           runnerType = task.runner.type or "shell";
           runnerWorkflowId = task.runner.workflowId or "";
         };
@@ -665,6 +738,36 @@ in
       local token="$2"
       case "$task_id:$token" in
   ${renderCaseReturn (entry: entry.value) taskShortKindCases}
+        *)
+          return 1
+          ;;
+      esac
+    }
+
+    task_help_requested() {
+      local arg=""
+
+      while [ "$#" -gt 0 ]; do
+        arg="$1"
+        shift
+
+        case "$arg" in
+          --help|-h)
+            return 0
+            ;;
+          --)
+            return 1
+            ;;
+        esac
+      done
+
+      return 1
+    }
+
+    task_print_help() {
+      local task_id="$1"
+      case "$task_id" in
+  ${renderCasePrintLines (entry: entry.value.helpLines) taskCases}
         *)
           return 1
           ;;

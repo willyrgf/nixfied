@@ -215,6 +215,42 @@ let
             reset_project=0
             reset_local=0
 
+            usage() {
+              cat <<'EOF'
+      ${if upgradeDefault then ''
+      Usage:
+        nix run .#framework::upgrade -- --target .
+        nix run .#framework::upgrade -- --target . --reset-project
+        nix run .#framework::upgrade -- --target . --reset-local
+
+      Upgrade vendored wrapper in-place while preserving nixfied/project and nixfied/local by default.
+
+      Options:
+        --vendor          Generate a vendored wrapper flake (default for framework::upgrade).
+        --target <path>   Output directory for generated wrapper.
+        --reset-project   When vendoring, overwrite nixfied/project.
+        --reset-local     When vendoring, overwrite nixfied/local.
+        --help, -h        Show this help.
+      '' else ''
+      Usage:
+        nix run .#framework::install
+        nix run .#framework::install -- --vendor
+        nix run .#framework::install -- --vendor --target .
+        nix run .#framework::install -- --vendor --upgrade --target .
+
+      Install a thin wrapper flake by default, or a vendored wrapper with --vendor.
+
+      Options:
+        --vendor          Generate a vendored wrapper flake.
+        --target <path>   Output directory for generated wrapper.
+        --upgrade         Upgrade vendored framework files in-place and preserve nixfied/project + nixfied/local.
+        --reset-project   When vendoring, overwrite nixfied/project.
+        --reset-local     When vendoring, overwrite nixfied/local.
+        --help, -h        Show this help.
+      ''}
+      EOF
+            }
+
             log_info() {
               printf 'INFO: %s\n' "$*"
             }
@@ -253,6 +289,10 @@ let
                   fi
                   target="$2"
                   shift 2
+                  ;;
+                --help|-h)
+                  usage
+                  exit 0
                   ;;
                 --)
                   shift

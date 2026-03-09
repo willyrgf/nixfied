@@ -123,10 +123,28 @@ pkgs.runCommand "framework-template-install-upgrade-help-smoke" { } ''
 
   "$GIT_BIN" -C "$template_repo" add -A
   run_nix_checked "$TMPDIR/help.out" "$template_repo" run .#help
+  run_nix_checked "$TMPDIR/upgrade-help.out" "$template_repo" run .#framework::upgrade -- --help
+  run_nix_checked "$TMPDIR/upgrade-app-first.out" "$template_repo" run "path:${sourceRoot}#framework::upgrade" -- --target .
+  run_nix_checked "$TMPDIR/upgrade-app-second.out" "$template_repo" run "path:${sourceRoot}#framework::upgrade" -- --target .
+  run_nix_checked "$TMPDIR/framework-test-help.out" "${sourceRoot}" run .#framework::test -- --help
   require_contains "$TMPDIR/help.out" "Core apps:"
   require_contains "$TMPDIR/help.out" "framework::upgrade - Upgrade vendored wrapper in-place"
   require_not_contains "$TMPDIR/help.out" "framework::install -"
   require_not_contains "$TMPDIR/help.out" "framework::test -"
+  require_contains "$TMPDIR/upgrade-help.out" "framework::upgrade - Upgrade vendored wrapper in-place"
+  require_contains "$TMPDIR/upgrade-help.out" "Usage:"
+  require_contains "$TMPDIR/upgrade-help.out" "  nix run .#framework::upgrade -- --target ."
+  require_contains "$TMPDIR/upgrade-help.out" "  --target <string>: Output directory for generated wrapper."
+  require_contains "$TMPDIR/upgrade-help.out" "  --reset-project: When vendoring, overwrite nixfied/project."
+  require_contains "$TMPDIR/upgrade-help.out" "  -h, --help: Show this help."
+  require_contains "$TMPDIR/upgrade-app-first.out" "INFO: upgrading vendored wrapper (preserving nixfied/project/ and nixfied/local/)"
+  require_contains "$TMPDIR/upgrade-app-first.out" "OK: vendored wrapper upgraded at ./flake.nix"
+  require_contains "$TMPDIR/upgrade-app-second.out" "INFO: upgrading vendored wrapper (preserving nixfied/project/ and nixfied/local/)"
+  require_contains "$TMPDIR/upgrade-app-second.out" "OK: vendored wrapper upgraded at ./flake.nix"
+  require_contains "$TMPDIR/framework-test-help.out" "framework::test - Run framework validation in the model"
+  require_contains "$TMPDIR/framework-test-help.out" "Usage:"
+  require_contains "$TMPDIR/framework-test-help.out" "  nix run .#framework::test"
+  require_contains "$TMPDIR/framework-test-help.out" "self-host"
 
   echo "OK: template install/upgrade/help downstream contract is validated" > "$out"
 ''
