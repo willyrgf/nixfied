@@ -5,6 +5,7 @@
 }:
 let
   lib = pkgs.lib;
+  safeRepoRoot = builtins.unsafeDiscardStringContext (builtins.toString ../..);
 
   featureIds = builtins.sort builtins.lessThan (builtins.attrNames (model.features or { }));
 
@@ -46,7 +47,7 @@ let
     || !builtins.isList covers
     || !builtins.isList ownerFiles
     || ownerFiles == [ ]
-    || builtins.any (path: !builtins.pathExists "${../..}/${path}") ownerFiles
+    || builtins.any (path: !builtins.pathExists "${safeRepoRoot}/${path}") ownerFiles
   ) checkNames;
 
   coveredFeatureIds = unique (

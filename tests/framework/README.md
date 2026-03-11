@@ -44,6 +44,7 @@ nix run .#framework::test -- --summary-json /tmp/framework-test-summary.json
 ## Flake checks (canonical)
 
 Deterministic checks live in `tests/framework/` and run via `nix flake check path:.`.
+The `framework::test` `flake-check` shard intentionally uses `nix flake check path:. --no-build` so the framework harness validates the check graph without recursively rebuilding the same workflow-heavy checks that other shards already exercise.
 
 Use `tests/framework/default.nix` as the source of truth for:
 - the complete registered check list

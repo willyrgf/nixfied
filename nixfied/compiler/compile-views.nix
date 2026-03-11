@@ -9,7 +9,8 @@
   workflows,
 }:
 let
-  workspaceMarkerPresent = builtins.pathExists "${projectRoot}/nixfied/.framework/.workspace";
+  safeProjectRoot = builtins.unsafeDiscardStringContext (builtins.toString projectRoot);
+  workspaceMarkerPresent = builtins.pathExists "${safeProjectRoot}/nixfied/.framework/.workspace";
 
   frameworkHiddenApps = [
     "framework::install"

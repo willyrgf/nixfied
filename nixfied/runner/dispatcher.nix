@@ -6,7 +6,8 @@
 }:
 let
   lib = pkgs.lib;
-  workspaceMarkerPresent = builtins.pathExists "${projectRoot}/nixfied/.framework/.workspace";
+  safeProjectRoot = builtins.unsafeDiscardStringContext (builtins.toString projectRoot);
+  workspaceMarkerPresent = builtins.pathExists "${safeProjectRoot}/nixfied/.framework/.workspace";
 
   orchestrator = import ./orchestrator.nix {
     inherit

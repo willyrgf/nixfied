@@ -32,7 +32,7 @@ pkgs.runCommand "framework-test-cli-contract-smoke" { } ''
 
   "$ORCH" run-task task.framework.test --shard help --summary > "$TMPDIR/shard-help.out" 2>&1
   require_contains "$TMPDIR/shard-help.out" "OK: shard passed name=help"
-  require_contains "$TMPDIR/shard-help.out" "INFO: summary profile=ci mode=full executed_shards=1"
+  require_contains "$TMPDIR/shard-help.out" "INFO: summary profile=ci mode=full executed_shards=1 failed_shards=0 exit_1_shards=0 canceled_shards=0"
 
   "$ORCH" run-task task.framework.test --shard help --summary --log-level debug --output-mode both > "$TMPDIR/shard-help-logging.out" 2>&1
   require_contains "$TMPDIR/shard-help-logging.out" "OK: shard passed name=help"
@@ -52,6 +52,9 @@ pkgs.runCommand "framework-test-cli-contract-smoke" { } ''
     and .mode == "full"
     and .shard == "help"
     and .executed_shards == 1
+    and .failed_shards == 0
+    and .exit_1_shards == 0
+    and .canceled_shards == 0
     and .exit_code == 0
     and (.duration_seconds | type == "number")
     and (.started_at | type == "string")

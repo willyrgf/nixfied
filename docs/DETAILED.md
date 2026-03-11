@@ -200,3 +200,4 @@ Write and lock guarantees:
 - `self-host`
 
 Determinism and contract checks live under `tests/framework/` and are exposed via flake checks.
+The `flake-check` shard evaluates that flake check graph with `nix flake check path:. --no-build` so `framework::test` does not recursively rebuild workflow-heavy checks that are already covered by the other shards and by direct `nix flake check` usage.

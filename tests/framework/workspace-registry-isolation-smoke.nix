@@ -3,32 +3,44 @@
   registry,
 }:
 let
+  lib = pkgs.lib;
   frameworkLib = import ../../nixfied/lib {
     inherit pkgs;
     system = pkgs.system;
   };
 
-  workspaceA = builtins.path {
-    path = ../..;
-    name = "nixfied-workspace-a";
-  };
+  sourceRoot = ../..;
 
-  workspaceB = builtins.path {
-    path = ../..;
-    name = "nixfied-workspace-b";
-  };
+  mkWorkspaceModule =
+    workspaceId:
+    let
+      runtimeRoot = "/tmp/nixfied-runtime/nixfied-project/${workspaceId}";
+    in
+    {
+      nixfied = {
+        runtime.directories.base = lib.mkForce "${runtimeRoot}/runtime";
+        state = {
+          workspaceId = lib.mkForce workspaceId;
+          registryRoot = lib.mkForce "${runtimeRoot}/registry";
+          artifactsRoot = lib.mkForce "/tmp/ci-artifacts/nixfied-project/${workspaceId}";
+        };
+      };
+    };
+
+  workspaceAModule = mkWorkspaceModule "workspace-a";
+  workspaceBModule = mkWorkspaceModule "workspace-b";
 
   compiledA = frameworkLib.mkNixfied {
-    projectRoot = workspaceA;
+    projectRoot = sourceRoot;
     projectModules = [ ../../nixfied/project/module.nix ];
-    extraModules = [ ];
+    extraModules = [ workspaceAModule ];
     localOverrides = [ ];
   };
 
   compiledB = frameworkLib.mkNixfied {
-    projectRoot = workspaceB;
+    projectRoot = sourceRoot;
     projectModules = [ ../../nixfied/project/module.nix ];
-    extraModules = [ ];
+    extraModules = [ workspaceBModule ];
     localOverrides = [ ];
   };
 
@@ -38,7 +50,7 @@ let
       registry
       ;
     model = compiledA.model;
-    projectRoot = workspaceA;
+    projectRoot = sourceRoot;
   };
 in
 assert compiledA.model.identity.projectId == compiledB.model.identity.projectId;

@@ -1207,13 +1207,43 @@ in
             runtimeInputs = commonRuntimeInputs;
             command = ''
               set -euo pipefail
+              logs_dir="$(mktemp -d "''${TMPDIR:-/tmp}/framework-selfhost.XXXXXX")"
+              task_dev_log="$logs_dir/task-dev.log"
+              workflow_log="$logs_dir/workflow-ci-basic.log"
+              cleanup() {
+                local rc=$?
+                if [ "$rc" -eq 0 ]; then
+                  rm -rf "$logs_dir"
+                else
+                  echo "ERROR: self-host logs preserved dir=$logs_dir"
+                  echo "INFO: self-host task.dev log path=$task_dev_log"
+                  echo "INFO: self-host workflow.ci.basic log path=$workflow_log"
+                fi
+                return "$rc"
+              }
+              trap cleanup EXIT
               if [ -z "''${NIXFIED_EXECUTOR_SELF:-}" ]; then
                 echo "ERROR: NIXFIED_EXECUTOR_SELF is not set"
                 exit 3
               fi
               echo "INFO: self-host smoke start"
-              NIXFIED_CALLER_PWD="$PWD" "$NIXFIED_EXECUTOR_SELF" run-task task.dev > /dev/null
-              NIXFIED_CALLER_PWD="$PWD" "$NIXFIED_EXECUTOR_SELF" run-workflow workflow.ci.basic --summary > /dev/null
+              echo "INFO: self-host logs dir=$logs_dir"
+              if NIXFIED_CALLER_PWD="$PWD" "$NIXFIED_EXECUTOR_SELF" run-task task.dev >"$task_dev_log" 2>&1; then
+                echo "OK: self-host task.dev completed"
+              else
+                rc="$?"
+                echo "ERROR: self-host task.dev failed rc=$rc"
+                cat "$task_dev_log"
+                exit "$rc"
+              fi
+              if NIXFIED_CALLER_PWD="$PWD" "$NIXFIED_EXECUTOR_SELF" run-workflow workflow.ci.basic --summary >"$workflow_log" 2>&1; then
+                echo "OK: self-host workflow.ci.basic completed"
+              else
+                rc="$?"
+                echo "ERROR: self-host workflow.ci.basic failed rc=$rc"
+                cat "$workflow_log"
+                exit "$rc"
+              fi
               echo "OK: self-host smoke complete"
             '';
           }
@@ -1362,6 +1392,9 @@ in
               "self-host"
             )
             EXECUTED=0
+            FAILED_SHARDS=0
+            EXIT_1_SHARDS=0
+            CANCELED_SHARDS=0
             STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
             START_EPOCH="$(date +%s)"
 
@@ -1390,7 +1423,7 @@ in
             Usage: nix run .#framework::test [-- --profile ci] [--mode <basic|app|env|full>] [--summary] [--summary-json <path>] [--shard <name>] [--max-parallel-shards <n|auto>] [--serial] [--list-shards]
 
             Shards:
-              flake-check   Run nix flake check for the current project root.
+              flake-check   Evaluate nix flake checks for the current project root.
               help          Validate generated help output.
               workflow-ci   Run the CI workflow surface in selected mode.
               isolation     Run isolation checks.
@@ -1431,6 +1464,9 @@ in
               "mode": "$MODE",
               "shard": $(if [ -n "$SHARD" ]; then printf '"%s"' "$SHARD"; else printf 'null'; fi),
               "executed_shards": $EXECUTED,
+              "failed_shards": $FAILED_SHARDS,
+              "exit_1_shards": $EXIT_1_SHARDS,
+              "canceled_shards": $CANCELED_SHARDS,
               "exit_code": $rc,
               "duration_seconds": $duration,
               "started_at": "$STARTED_AT",
@@ -1456,7 +1492,7 @@ in
             }
 
             shard_flake_check() {
-              nix flake check path:.
+              nix flake check path:. --no-build
             }
 
             shard_help() {
@@ -1539,6 +1575,10 @@ in
                 return 0
               else
                 rc="$?"
+                FAILED_SHARDS="$((FAILED_SHARDS + 1))"
+                if [ "$rc" -eq 1 ]; then
+                  EXIT_1_SHARDS="$((EXIT_1_SHARDS + 1))"
+                fi
               fi
               return "$rc"
             }
@@ -1569,18 +1609,18 @@ in
               local shard_names=("''${@}")
               local shard_total="''${#shard_names[@]}"
               local workers
-              local temp_root
-              local status_dir
-              local semaphore_dir
-              local semaphore_fifo
-              local token_index
-              local shard_name
-              local status_file
-              local worker_pids=()
-              local worker_pid
-              local rc
+              local next_index=0
+              local running_count=0
+              local done_pid=""
+              local done_shard=""
+              local wait_rc=0
+              local pid
               local failed=0
               local first_rc=1
+              local failed_shard=""
+              local pending_canceled=0
+              local -A PID_TO_SHARD=()
+              local -A CANCEL_REQUESTED=()
 
               if [ "$shard_total" -eq 0 ]; then
                 return 0
@@ -1596,64 +1636,83 @@ in
 
               log_info "running shards parallel workers=$workers total=$shard_total"
 
-              temp_root="$(mktemp -d)"
-              status_dir="$temp_root/status"
-              semaphore_dir="$temp_root/semaphore"
-              semaphore_fifo="$semaphore_dir/tokens.fifo"
-              mkdir -p "$status_dir" "$semaphore_dir"
-
-              mkfifo "$semaphore_fifo"
-              exec 8<>"$semaphore_fifo"
-              rm -f "$semaphore_fifo"
-
-              token_index=0
-              while [ "$token_index" -lt "$workers" ]; do
-                printf 'token\n' >&8
-                token_index="$((token_index + 1))"
-              done
-
-              for shard_name in "''${shard_names[@]}"; do
-                status_file="$status_dir/$shard_name.rc"
-                IFS= read -r -u 8 _
+              start_shard_worker() {
+                local shard_name="$1"
                 (
                   set +e
                   run_named_shard "$shard_name"
-                  rc="$?"
-                  printf '%s\n' "$rc" > "$status_file"
-                  printf 'token\n' >&8
-                  exit 0
                 ) &
-                worker_pids+=("$!")
+                pid="$!"
+                PID_TO_SHARD[$pid]="$shard_name"
+                CANCEL_REQUESTED[$pid]=0
+                running_count="$((running_count + 1))"
+              }
+
+              cancel_running_shards() {
+                local active_pid
+                for active_pid in "''${!PID_TO_SHARD[@]}"; do
+                  CANCEL_REQUESTED[$active_pid]=1
+                  kill -TERM "$active_pid" 2>/dev/null || true
+                done
+
+                sleep 5
+                for active_pid in "''${!PID_TO_SHARD[@]}"; do
+                  if kill -0 "$active_pid" 2>/dev/null; then
+                    kill -KILL "$active_pid" 2>/dev/null || true
+                  fi
+                done
+              }
+
+              while [ "$running_count" -lt "$workers" ] && [ "$next_index" -lt "$shard_total" ]; do
+                start_shard_worker "''${shard_names[$next_index]}"
+                next_index="$((next_index + 1))"
               done
 
-              for worker_pid in "''${worker_pids[@]}"; do
-                wait "$worker_pid" || true
-              done
+              while [ "''${#PID_TO_SHARD[@]}" -gt 0 ]; do
+                if wait -n -p done_pid; then
+                  wait_rc=0
+                else
+                  wait_rc="$?"
+                fi
 
-              exec 8>&-
-              exec 8<&-
-
-              for shard_name in "''${shard_names[@]}"; do
-                status_file="$status_dir/$shard_name.rc"
-                if [ ! -f "$status_file" ]; then
-                  failed=1
-                  first_rc=1
-                  log_error "shard status missing name=$shard_name"
+                done_shard="''${PID_TO_SHARD[$done_pid]:-}"
+                if [ -z "$done_shard" ]; then
                   continue
                 fi
 
-                rc="$(cat "$status_file")"
-                if [ "$rc" = "0" ]; then
+                unset "PID_TO_SHARD[$done_pid]"
+                running_count="$((running_count - 1))"
+
+                if [ "''${CANCEL_REQUESTED[$done_pid]:-0}" = "1" ]; then
+                  CANCELED_SHARDS="$((CANCELED_SHARDS + 1))"
+                  continue
+                fi
+
+                if [ "$wait_rc" -eq 0 ]; then
                   EXECUTED="$((EXECUTED + 1))"
                 else
+                  FAILED_SHARDS="$((FAILED_SHARDS + 1))"
+                  if [ "$wait_rc" -eq 1 ]; then
+                    EXIT_1_SHARDS="$((EXIT_1_SHARDS + 1))"
+                  fi
                   if [ "$failed" -eq 0 ]; then
-                    first_rc="$rc"
+                    first_rc="$wait_rc"
+                    failed_shard="$done_shard"
+                    pending_canceled="$((shard_total - next_index))"
+                    CANCELED_SHARDS="$((CANCELED_SHARDS + pending_canceled))"
+                    log_warn "framework::test fail-fast shard=$failed_shard rc=$first_rc pending_canceled=$pending_canceled running_canceled=''${#PID_TO_SHARD[@]}"
+                    cancel_running_shards
                   fi
                   failed=1
                 fi
-              done
 
-              rm -rf "$temp_root"
+                if [ "$failed" -eq 0 ]; then
+                  while [ "$running_count" -lt "$workers" ] && [ "$next_index" -lt "$shard_total" ]; do
+                    start_shard_worker "''${shard_names[$next_index]}"
+                    next_index="$((next_index + 1))"
+                  done
+                fi
+              done
 
               if [ "$failed" -eq 1 ]; then
                 return "$first_rc"
@@ -1804,21 +1863,40 @@ in
               selected_shards=("''${SHARDS[@]}")
             fi
 
+            run_rc=0
             if [ "$SERIAL" -eq 1 ]; then
               log_info "running shards serial total=''${#selected_shards[@]}"
               for shard_name in "''${selected_shards[@]}"; do
-                run_named_shard_recorded "$shard_name"
+                if run_named_shard_recorded "$shard_name"; then
+                  :
+                else
+                  run_rc="$?"
+                  break
+                fi
               done
             elif [ "''${#selected_shards[@]}" -le 1 ]; then
               for shard_name in "''${selected_shards[@]}"; do
-                run_named_shard_recorded "$shard_name"
+                if run_named_shard_recorded "$shard_name"; then
+                  :
+                else
+                  run_rc="$?"
+                  break
+                fi
               done
             else
-              run_shards_parallel "$MAX_PARALLEL_SHARDS" "''${selected_shards[@]}"
+              if run_shards_parallel "$MAX_PARALLEL_SHARDS" "''${selected_shards[@]}"; then
+                run_rc=0
+              else
+                run_rc="$?"
+              fi
             fi
 
             if [ "$SUMMARY" -eq 1 ]; then
-              log_info "summary profile=$PROFILE mode=$MODE executed_shards=$EXECUTED"
+              log_info "summary profile=$PROFILE mode=$MODE executed_shards=$EXECUTED failed_shards=$FAILED_SHARDS exit_1_shards=$EXIT_1_SHARDS canceled_shards=$CANCELED_SHARDS"
+            fi
+
+            if [ "$run_rc" -ne 0 ]; then
+              exit "$run_rc"
             fi
 
             log_ok "framework::test completed"
