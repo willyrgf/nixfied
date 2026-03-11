@@ -41,6 +41,18 @@
       executor_bin="''${NIXFIED_EXECUTOR_SELF:-''${NIXFIED_EXECUTOR_BIN:-}}"
       logs_root=""
       run_scope=""
+      host_home="''${HOME:-}"
+      host_xdg_config_home="''${XDG_CONFIG_HOME:-}"
+      host_nix_user_conf_files="''${NIX_USER_CONF_FILES:-}"
+      host_nix_user_config_file=""
+
+      if [ -z "$host_nix_user_conf_files" ]; then
+        if [ -n "$host_xdg_config_home" ] && [ -r "$host_xdg_config_home/nix/nix.conf" ]; then
+          host_nix_user_config_file="$host_xdg_config_home/nix/nix.conf"
+        elif [ -n "$host_home" ] && [ -r "$host_home/.config/nix/nix.conf" ]; then
+          host_nix_user_config_file="$host_home/.config/nix/nix.conf"
+        fi
+      fi
 
       while [ "$#" -gt 0 ]; do
         case "$1" in
@@ -271,6 +283,12 @@
             export XDG_DATA_HOME="$runtime_root/xdg/data"
             export XDG_STATE_HOME="$runtime_root/xdg/state"
             export XDG_CACHE_HOME="$runtime_root/xdg/cache"
+            if [ -n "$host_nix_user_conf_files" ]; then
+              export NIX_USER_CONF_FILES="$host_nix_user_conf_files"
+            elif [ -n "$host_nix_user_config_file" ]; then
+              # Preserve user-scoped Nix client config after HOME is redirected.
+              export NIX_USER_CONF_FILES="$host_nix_user_config_file"
+            fi
             export REGISTRY_ROOT="$registry_dir"
             export CI_ARTIFACTS_DIR="$artifacts_dir"
             export NIXFIED_SERVICE_ROOT="$services_root"

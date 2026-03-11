@@ -62,6 +62,9 @@ assert pkgs.lib.hasInfix "OK: health checks passed" healthCommand;
 assert pkgs.lib.hasInfix "isolation cell start" isolationRuntimeSource;
 assert pkgs.lib.hasInfix "test-isolation logs_root=" isolationRuntimeSource;
 assert pkgs.lib.hasInfix "test-isolation forcing maxParallel=1 reason=ci" isolationRuntimeSource;
+assert pkgs.lib.hasInfix "host_nix_user_config_file=" isolationRuntimeSource;
+assert pkgs.lib.hasInfix "export NIX_USER_CONF_FILES=\"$host_nix_user_config_file\""
+  isolationRuntimeSource;
 assert pkgs.lib.hasInfix "\"$executor_bin\" run-task \"$validate_task_id\"" isolationRuntimeSource;
 assert pkgs.lib.hasInfix "\"$executor_bin\" run-task \"$run_task_id\"" isolationRuntimeSource;
 assert pkgs.lib.hasInfix "test-isolation matrix has no slots" isolationRuntimeSource;
