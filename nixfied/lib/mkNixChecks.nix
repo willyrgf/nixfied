@@ -72,7 +72,7 @@ pkgs.writeShellScriptBin name ''
 
     run_flake_check() {
       log_info "checking flake checks ref=$flake_ref"
-      ${pkgs.nix}/bin/nix flake check --no-write-lock-file "$flake_ref"
+      ${pkgs.nix}/bin/nix flake check -L --no-write-lock-file "$flake_ref"
       log_ok "flake checks passed ref=$flake_ref"
     }
 

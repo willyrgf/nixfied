@@ -77,6 +77,12 @@ pkgs.runCommand "ci-mode-matrix-smoke" { } ''
       and (.counts.passed | type == "number")
       and (.counts.failed | type == "number")
       and (.counts.canceled | type == "number")
+      and (.steps | type == "array")
+      and (.steps | length >= 2)
+      and ([.steps[] | .name | type] | all(. == "string"))
+      and ([.steps[] | .status | type] | all(. == "string"))
+      and ([.steps[] | .state | type] | all(. == "string"))
+      and ([.steps[] | (.workflow_id == null or (.workflow_id | type == "string"))] | all)
     ' "$summary_file" > /dev/null
 
     ${pkgs.jq}/bin/jq -e --arg runId "$run_id" --arg workflow "$expected_workflow" '

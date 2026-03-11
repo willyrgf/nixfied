@@ -172,7 +172,7 @@ pkgs.runCommand "nix-checks-parent-workflow-skip-smoke" { } ''
   require_contains "$TMPDIR/direct.out" "OK: flake checks passed ref=path:."
   require_contains "$direct_log" "flake show --no-write-lock-file path:."
   require_contains "$direct_log" "run path:.#help"
-  require_contains "$direct_log" "flake check --no-write-lock-file path:."
+  require_contains "$direct_log" "flake check -L --no-write-lock-file path:."
 
   (
     unset NIX_BUILD_TOP

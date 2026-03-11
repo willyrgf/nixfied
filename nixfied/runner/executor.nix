@@ -1157,7 +1157,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           (.reason | tostring),
           (if .exit_code == null or .exit_code == "" then "" else (.exit_code | tostring) end)
         ]
-      | @tsv
+      | join("\u001f")
     ' "$events_file"
   }
 
@@ -1183,7 +1183,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       return 0
     fi
 
-    while IFS=$'\t' read -r task_id workflow_id order_seq state duration reason exit_code; do
+    while IFS=$'\x1f' read -r task_id workflow_id order_seq state duration reason exit_code; do
       if [ -z "$task_id" ]; then
         continue
       fi
