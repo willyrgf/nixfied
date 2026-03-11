@@ -809,7 +809,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       append_event "$run_id" "$workflow_id" "$unit_task" "running" '{}'
 
       (
-        execute_task_body "$unit_task" "''${passthrough_args[@]}"
+        NIXFIED_PARENT_WORKFLOW_ID="$workflow_id" execute_task_body "$unit_task" "''${passthrough_args[@]}"
       ) &
       pid="$!"
 

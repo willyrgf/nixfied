@@ -96,7 +96,7 @@ let
   probeWorkflow = {
     id = probeWorkflowId;
     summary = "nix checks parent workflow skip probe";
-    description = "Runs the fake nix checks task inside a workflow to verify nested flake checks are skipped.";
+    description = "Runs the fake nix checks task in the parallel workflow runner to verify nested flake checks are skipped.";
     mode = "custom";
     maxWorkers = 1;
     units = {
@@ -117,7 +117,7 @@ let
       writeSummary = true;
     };
     execution = {
-      parallel = false;
+      parallel = true;
       failFast = true;
       lockPolicy = "exclusive";
       emitRegistryEvents = true;
