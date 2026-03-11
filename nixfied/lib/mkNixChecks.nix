@@ -77,7 +77,7 @@ pkgs.writeShellScriptBin name ''
     }
 
     should_skip_flake_check() {
-      [ -n "''${NIX_BUILD_TOP:-}" ]
+      [ -n "''${NIX_BUILD_TOP:-}" ] || [ -n "''${NIXFIED_PARENT_WORKFLOW_ID:-}" ]
     }
 
     while [ "$#" -gt 0 ]; do
@@ -137,7 +137,7 @@ pkgs.writeShellScriptBin name ''
 
     if [ "$mode" = "full" ]; then
       if should_skip_flake_check; then
-        log_skip "flake checks skipped inside nix build sandbox ref=$flake_ref"
+        log_skip "flake checks skipped inside nix build sandbox or parent workflow ref=$flake_ref"
       else
         run_flake_check
       fi

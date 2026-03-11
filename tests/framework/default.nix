@@ -201,6 +201,14 @@ let
         ;
     };
 
+    "nix-checks-parent-workflow-skip-smoke" = import ./nix-checks-parent-workflow-skip-smoke.nix {
+      inherit
+        pkgs
+        model
+        registry
+        ;
+    };
+
     "operations-contract" = import ./operations-contract.nix {
       inherit
         pkgs

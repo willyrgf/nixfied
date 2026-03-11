@@ -5,10 +5,10 @@ let
     project = { };
   };
   lifecycleSource = builtins.readFile ../../nixfied/.framework/postgres/lifecycle.nix;
-  devConfText = builtins.readFile config.devConfFile;
-  prodConfText = builtins.readFile config.prodConfFile;
-  testConfText = builtins.readFile config.testConfFile;
-  pgHbaConfText = builtins.readFile config.pgHbaConfFile;
+  devConfText = config.devConf;
+  prodConfText = config.prodConf;
+  testConfText = config.testConf;
+  pgHbaConfText = config.pgHbaConf;
 in
 assert pkgs.lib.hasInfix "listen_addresses = 'localhost'" devConfText;
 assert pkgs.lib.hasInfix "fsync = off" devConfText;

@@ -58,6 +58,24 @@ let
             };
             runtime.passThroughEnv = [ "NIXFIED_RUNTIME_DIR_SCOPE_OVERRIDE" ];
           };
+
+          nixfied.tasks.nix-build-top-pass-through = {
+            id = "task.test.nix-build-top.pass-through";
+            kind = "internal";
+            summary = "Nix build sandbox marker pass-through task";
+            runner = {
+              type = "shell";
+              command = ''
+                set -euo pipefail
+                if [ -z "''${NIX_BUILD_TOP:-}" ]; then
+                  echo "ERROR: NIX_BUILD_TOP is not set"
+                  exit 1
+                fi
+                echo "INFO: nix_build_top=$NIX_BUILD_TOP"
+                echo "OK: nix build top pass-through probe complete"
+              '';
+            };
+          };
         }
       )
     ];
@@ -126,6 +144,31 @@ pkgs.runCommand "runtime-owned-env-blocked-smoke" { } ''
     cat "$TMPDIR/scope-pass-through.out"
     exit 1
   fi
+
+  if [ -z "''${NIX_BUILD_TOP:-}" ]; then
+    echo "expected NIX_BUILD_TOP in the enclosing nix build sandbox"
+    exit 1
+  fi
+
+  set +e
+  "$EXECUTOR" run-task task.test.nix-build-top.pass-through > "$TMPDIR/nix-build-top.out" 2>&1
+  nix_build_top_rc="$?"
+  set -e
+  if [ "$nix_build_top_rc" -ne 0 ]; then
+    echo "expected NIX_BUILD_TOP to be preserved inside the sandboxed task runtime"
+    cat "$TMPDIR/nix-build-top.out"
+    exit 1
+  fi
+
+  nix_build_top="$(${pkgs.gnused}/bin/sed -n 's/^INFO: nix_build_top=//p' "$TMPDIR/nix-build-top.out" | ${pkgs.coreutils}/bin/tail -n 1)"
+  if [ "$nix_build_top" != "$NIX_BUILD_TOP" ]; then
+    echo "expected sandbox to preserve NIX_BUILD_TOP"
+    echo "outer_nix_build_top=$NIX_BUILD_TOP"
+    echo "inner_nix_build_top=$nix_build_top"
+    cat "$TMPDIR/nix-build-top.out"
+    exit 1
+  fi
+  ${pkgs.gnugrep}/bin/grep -Fq "OK: nix build top pass-through probe complete" "$TMPDIR/nix-build-top.out"
 
   echo "OK: runtime-owned env overrides are rejected" > "$out"
 ''
