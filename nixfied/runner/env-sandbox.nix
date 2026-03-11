@@ -678,6 +678,10 @@ in
         fi
       fi
 
+      local host_nix_user_conf_files="''${NIX_USER_CONF_FILES:-}"
+      local host_nix_config="''${NIX_CONFIG:-}"
+      local host_nix_ssl_cert_file="''${NIX_SSL_CERT_FILE:-}"
+
       local -a env_cmd
       env_cmd=(
         env -i
@@ -711,6 +715,15 @@ in
       env_cmd+=("NIXFIED_LOG_LEVEL=$resolved_log_level")
       env_cmd+=("OUTPUT_MODE=$resolved_output_mode")
       env_cmd+=("NIXFIED_OUTPUT_MODE=$resolved_output_mode")
+      if [ -n "$host_nix_user_conf_files" ]; then
+        env_cmd+=("NIX_USER_CONF_FILES=$host_nix_user_conf_files")
+      fi
+      if [ -n "$host_nix_config" ]; then
+        env_cmd+=("NIX_CONFIG=$host_nix_config")
+      fi
+      if [ -n "$host_nix_ssl_cert_file" ]; then
+        env_cmd+=("NIX_SSL_CERT_FILE=$host_nix_ssl_cert_file")
+      fi
       if [ -n "''${NIXFIED_EXECUTOR_BIN:-}" ]; then
         env_cmd+=("NIXFIED_EXECUTOR_BIN=$NIXFIED_EXECUTOR_BIN")
       fi

@@ -59,8 +59,8 @@ jobs:
             echo "INFO: pwd=$(pwd -P)"
             echo "INFO: uname=$(uname -a)"
             echo "INFO: nix_version=$(nix --version)"
-            echo "INFO: nix_show_config"
-            nix show-config | grep -E '^(cores|max-jobs|sandbox|substituters|system) = ' || true
+            echo "INFO: nix_config_show"
+            nix config show | grep -E '^(cores|max-jobs|sandbox|substituters|system) = ' || true
             echo "INFO: disk_usage"
             df -h .
             df -h /tmp
@@ -110,14 +110,6 @@ jobs:
           log_file="$CI_DEBUG_DIR/framework-shard-help.log"
           nix run -L -v --log-format bar-with-logs .#framework::test -- --summary --serial --shard help 2>&1 | tee "$log_file"
 
-      - name: Run framework shard workflow-test
-        id: shard_workflow_test
-        continue-on-error: true
-        run: |
-          set -euo pipefail
-          log_file="$CI_DEBUG_DIR/framework-shard-workflow-test.log"
-          nix run -L -v --log-format bar-with-logs .#framework::test -- --summary --serial --shard workflow-test 2>&1 | tee "$log_file"
-
       - name: Run framework shard workflow-ci
         id: shard_workflow_ci
         continue-on-error: true
@@ -157,7 +149,6 @@ jobs:
             report_step "help-surface" "${{ steps.run_help.outcome }}"
             report_step "framework-shard-flake-check" "${{ steps.shard_flake_check.outcome }}"
             report_step "framework-shard-help" "${{ steps.shard_help.outcome }}"
-            report_step "framework-shard-workflow-test" "${{ steps.shard_workflow_test.outcome }}"
             report_step "framework-shard-workflow-ci" "${{ steps.shard_workflow_ci.outcome }}"
             report_step "framework-shard-self-host" "${{ steps.shard_self_host.outcome }}"
           } 2>&1 | tee "$status_file"
@@ -261,8 +252,8 @@ jobs:
             echo "INFO: pwd=$(pwd -P)"
             echo "INFO: uname=$(uname -a)"
             echo "INFO: nix_version=$(nix --version)"
-            echo "INFO: nix_show_config"
-            nix show-config | grep -E '^(cores|max-jobs|sandbox|substituters|system) = ' || true
+            echo "INFO: nix_config_show"
+            nix config show | grep -E '^(cores|max-jobs|sandbox|substituters|system) = ' || true
             echo "INFO: disk_usage"
             df -h .
             df -h /tmp
@@ -286,6 +277,10 @@ jobs:
             echo "INFO: ci_artifacts_dir=$CI_ARTIFACTS_DIR"
             if [ -d "$CI_ARTIFACTS_DIR" ]; then
               find "$CI_ARTIFACTS_DIR" -print | sort
+              while IFS= read -r summary_json; do
+                echo "INFO: summary_json=$summary_json"
+                cat "$summary_json"
+              done < <(find "$CI_ARTIFACTS_DIR" -type f -name summary.json | sort)
             else
               echo "WARN: missing directory $CI_ARTIFACTS_DIR"
             fi
@@ -300,6 +295,43 @@ jobs:
               tail -n 200 "$REGISTRY_ROOT/events.ndjson"
             else
               echo "WARN: missing registry events file"
+            fi
+            isolation_log_source="$CI_DEBUG_DIR/isolation-cell.log"
+            isolation_logs_dir="$CI_DEBUG_DIR/isolation-logs"
+            if [ -f "$isolation_log_source" ]; then
+              isolation_logs_root="$(
+                sed -n 's/^INFO: test-isolation logs_root=//p' "$isolation_log_source" | tail -n 1
+              )"
+              if [ -n "$isolation_logs_root" ]; then
+                echo "INFO: isolation_logs_root=$isolation_logs_root"
+                if [ -d "$isolation_logs_root" ]; then
+                  rm -rf "$isolation_logs_dir"
+                  mkdir -p "$isolation_logs_dir"
+                  cp -R "$isolation_logs_root"/. "$isolation_logs_dir"/
+                  echo "INFO: copied isolation logs dir=$isolation_logs_dir"
+                  find "$isolation_logs_dir" -print | sort
+                  while IFS= read -r log_file; do
+                    echo "INFO: log_file=$log_file"
+                    cat "$log_file"
+                  done < <(
+                    find "$isolation_logs_dir" -type f \( -name validate.log -o -name run.log \) | sort
+                  )
+                  while IFS= read -r summary_json; do
+                    echo "INFO: summary_json=$summary_json"
+                    cat "$summary_json"
+                  done < <(find "$isolation_logs_dir" -type f -name summary.json | sort)
+                  while IFS= read -r events_file; do
+                    echo "INFO: tail registry events file=$events_file"
+                    tail -n 200 "$events_file"
+                  done < <(find "$isolation_logs_dir" -type f -path '*/registry/events.ndjson' | sort)
+                else
+                  echo "WARN: missing isolation logs root $isolation_logs_root"
+                fi
+              else
+                echo "WARN: unable to resolve isolation logs root from $isolation_log_source"
+              fi
+            else
+              echo "WARN: missing isolation cell log $isolation_log_source"
             fi
           } > "$summary_file" 2>&1
           cat "$summary_file"

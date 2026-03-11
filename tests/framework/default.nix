@@ -160,6 +160,18 @@ let
       inherit pkgs;
     };
 
+    "nix-client-env-smoke" = import ./nix-client-env-smoke.nix {
+      inherit
+        pkgs
+        model
+        registry
+        ;
+    };
+
+    "nix-ci-workflow-contract" = import ./nix-ci-workflow-contract.nix {
+      inherit pkgs;
+    };
+
     "env-loader-strict-smoke" = import ./env-loader-strict-smoke.nix {
       inherit pkgs;
     };
