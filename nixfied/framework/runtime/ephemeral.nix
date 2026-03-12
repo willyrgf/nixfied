@@ -55,12 +55,17 @@ let
 
   depsScript = project.install.deps or "";
   runtimePackages = project.tooling.runtimePackages or [ ];
-  id = import ../../.framework/lib/id.nix {
+  id = import ./helpers/id.nix {
     inherit pkgs project;
     loggingPrelude = resolvedLoggingPrelude;
   };
   runtimeEvents =
-    if builtins.pathExists ../../.framework/lib/runtime-events.nix then
+    if builtins.pathExists ./helpers/runtime-events.nix then
+      import ./helpers/runtime-events.nix {
+        inherit pkgs project;
+        loggingPrelude = resolvedLoggingPrelude;
+      }
+    else if builtins.pathExists ../../.framework/lib/runtime-events.nix then
       import ../../.framework/lib/runtime-events.nix {
         inherit pkgs project;
         loggingPrelude = resolvedLoggingPrelude;

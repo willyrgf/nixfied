@@ -62,11 +62,11 @@ let
     inherit pkgs;
     inherit (helpers) loggingPrelude;
   };
-  id = import ./id.nix {
+  id = import ../../framework/runtime/helpers/id.nix {
     inherit pkgs project;
     inherit (helpers) loggingPrelude;
   };
-  runtimeEvents = import ./runtime-events.nix {
+  runtimeEvents = import ../../framework/runtime/helpers/runtime-events.nix {
     inherit pkgs project;
     inherit (helpers) loggingPrelude;
   };
