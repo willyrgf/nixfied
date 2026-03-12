@@ -1,11 +1,21 @@
 {
   lib,
   pkgs,
+  conf,
   mkCommandTask,
-  frameworkTestMaxParallelShards,
-  plainShellLogging,
   ownerFile ? "nixfied/project/module.nix",
 }:
+let
+  plainShellLogging = import ../../lib/plain-shell-logging.nix;
+  frameworkTestMaxParallelShardsRaw = conf.frameworkTest.maxParallelShards or "auto";
+  frameworkTestMaxParallelShards =
+    if builtins.isInt frameworkTestMaxParallelShardsRaw then
+      toString frameworkTestMaxParallelShardsRaw
+    else if builtins.isString frameworkTestMaxParallelShardsRaw then
+      frameworkTestMaxParallelShardsRaw
+    else
+      throw "ERROR: frameworkTest.maxParallelShards must be \"auto\" or a positive integer";
+in
 {
   tasks = {
     framework-test = mkCommandTask {
