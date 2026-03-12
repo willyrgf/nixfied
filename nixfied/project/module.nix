@@ -559,6 +559,33 @@ let
         ownerFile = ownerFile;
       };
     };
+
+  frameworkInstallPreset = import ../framework/presets/install.nix {
+    inherit
+      mkCommandTask
+      frameworkInstallRuntimeInputs
+      frameworkInstallContractArgs
+      frameworkUpgradeContractArgs
+      mkFrameworkInstallCommand
+      ;
+  };
+
+  frameworkTestPreset = import ../framework/presets/framework-test.nix {
+    inherit
+      lib
+      pkgs
+      mkCommandTask
+      frameworkTestMaxParallelShards
+      plainShellLogging
+      ;
+  };
+
+  frameworkSelfhostPreset = import ../framework/presets/selfhost.nix {
+    inherit
+      mkCommandTask
+      commonRuntimeInputs
+      ;
+  };
 in
 {
   imports = [
@@ -1186,60 +1213,6 @@ in
               echo "INFO: fail-fast slow-b start"
               sleep 10
               echo "OK: fail-fast slow-b done"
-            '';
-          }
-          // {
-            ui.app.expose = false;
-          };
-
-        test-framework-selfhost =
-          mkCommandTask {
-            id = "task.test.framework.selfhost";
-            appName = "test-framework-selfhost";
-            kind = "internal";
-            summary = "Framework self-host smoke command";
-            description = "Runs framework commands through the built executor from the current evaluation closure.";
-            runtimeInputs = commonRuntimeInputs;
-            command = ''
-              set -euo pipefail
-              logs_dir="$(mktemp -d "''${TMPDIR:-/tmp}/framework-selfhost.XXXXXX")"
-              task_dev_log="$logs_dir/task-dev.log"
-              workflow_log="$logs_dir/workflow-ci-basic.log"
-              cleanup() {
-                local rc=$?
-                if [ "$rc" -eq 0 ]; then
-                  rm -rf "$logs_dir"
-                else
-                  echo "ERROR: self-host logs preserved dir=$logs_dir"
-                  echo "INFO: self-host task.dev log path=$task_dev_log"
-                  echo "INFO: self-host workflow.ci.basic log path=$workflow_log"
-                fi
-                return "$rc"
-              }
-              trap cleanup EXIT
-              if [ -z "''${NIXFIED_EXECUTOR_SELF:-}" ]; then
-                echo "ERROR: NIXFIED_EXECUTOR_SELF is not set"
-                exit 3
-              fi
-              echo "INFO: self-host smoke start"
-              echo "INFO: self-host logs dir=$logs_dir"
-              if NIXFIED_CALLER_PWD="$PWD" "$NIXFIED_EXECUTOR_SELF" run-task task.dev >"$task_dev_log" 2>&1; then
-                echo "OK: self-host task.dev completed"
-              else
-                rc="$?"
-                echo "ERROR: self-host task.dev failed rc=$rc"
-                cat "$task_dev_log"
-                exit "$rc"
-              fi
-              if NIXFIED_CALLER_PWD="$PWD" "$NIXFIED_EXECUTOR_SELF" run-workflow workflow.ci.basic --summary >"$workflow_log" 2>&1; then
-                echo "OK: self-host workflow.ci.basic completed"
-              else
-                rc="$?"
-                echo "ERROR: self-host workflow.ci.basic failed rc=$rc"
-                cat "$workflow_log"
-                exit "$rc"
-              fi
-              echo "OK: self-host smoke complete"
             '';
           }
           // {
@@ -1914,7 +1887,10 @@ in
             upgradeDefault = true;
           };
         };
-      };
+      }
+      // frameworkInstallPreset.tasks
+      // frameworkTestPreset.tasks
+      // frameworkSelfhostPreset.tasks;
 
       workflows = {
         ci-basic = {
@@ -2315,7 +2291,7 @@ in
             emitRegistryEvents = true;
           };
         };
-      };
+      } // frameworkSelfhostPreset.workflows;
     };
   };
 }
