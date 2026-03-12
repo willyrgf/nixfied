@@ -3,10 +3,10 @@
   pkgs,
   conf,
   mkCommandTask,
-  ownerFile ? "nixfied/project/module.nix",
+  ownerFile ? "nixfied/framework/presets/framework-test.nix",
 }:
 let
-  plainShellLogging = import ../../lib/plain-shell-logging.nix;
+  plainShellLogging = import ../core/plain-shell-logging.nix;
   frameworkTestMaxParallelShardsRaw = conf.frameworkTest.maxParallelShards or "auto";
   frameworkTestMaxParallelShards =
     if builtins.isInt frameworkTestMaxParallelShardsRaw then

@@ -76,7 +76,7 @@ let
 
   mkExecutor =
     compiled:
-    import ../../nixfied/runner/executor.nix {
+    import ../../nixfied/framework/runtime/executor.nix {
       inherit
         pkgs
         registry

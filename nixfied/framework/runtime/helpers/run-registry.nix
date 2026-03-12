@@ -8,7 +8,7 @@
 let
   projectId = (project.project or { }).id or "project";
   runsRoot = (project.ci or { }).runsRoot or "/tmp/${projectId}-runs";
-  id = import ../../framework/runtime/helpers/id.nix {
+  id = import ./id.nix {
     inherit pkgs project;
   };
 

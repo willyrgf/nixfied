@@ -1,9 +1,9 @@
 { pkgs }:
 let
-  source = builtins.readFile ../../nixfied/registry/events.nix;
-  locksSource = builtins.readFile ../../nixfied/registry/events-locks.nix;
-  snapshotSource = builtins.readFile ../../nixfied/registry/events-snapshot.nix;
-  appendSource = builtins.readFile ../../nixfied/registry/events-append.nix;
+  source = builtins.readFile ../../nixfied/framework/runtime/registry/events.nix;
+  locksSource = builtins.readFile ../../nixfied/framework/runtime/registry/events-locks.nix;
+  snapshotSource = builtins.readFile ../../nixfied/framework/runtime/registry/events-snapshot.nix;
+  appendSource = builtins.readFile ../../nixfied/framework/runtime/registry/events-append.nix;
 in
 assert pkgs.lib.hasInfix "registryLocksShell = import ./events-locks.nix" source;
 assert pkgs.lib.hasInfix "registrySnapshotShell = import ./events-snapshot.nix" source;

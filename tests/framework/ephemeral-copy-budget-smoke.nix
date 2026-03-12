@@ -117,7 +117,7 @@ let
     };
   };
 
-  orchestratorMinFree = import ../../nixfied/runner/orchestrator.nix {
+  orchestratorMinFree = import ../../nixfied/framework/runtime/orchestrator.nix {
     inherit
       pkgs
       registry
@@ -126,7 +126,7 @@ let
     projectRoot = ../..;
   };
 
-  orchestratorMaxCopy = import ../../nixfied/runner/orchestrator.nix {
+  orchestratorMaxCopy = import ../../nixfied/framework/runtime/orchestrator.nix {
     inherit
       pkgs
       registry

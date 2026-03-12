@@ -19,7 +19,7 @@ let
     inherit postgresProbePkg;
     runtimeStride = runtime.slot.stride;
   };
-  serviceConfigLib = import ../lib/service-config.nix { inherit lib; };
+  serviceConfigLib = import ../framework/core/service-config.nix { inherit lib; };
   testIsolationRuntime = import ../framework/runtime/helpers/test-isolation-runtime.nix { inherit lib pkgs; };
 
   postgresCfg = services.postgres;

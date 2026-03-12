@@ -16,7 +16,7 @@
     let
       supportedSystems = flake-utils.lib.defaultSystems;
 
-      frameworkRevision = import ./nixfied/lib/framework-revision.nix {
+      frameworkRevision = import ./nixfied/framework/core/framework-revision.nix {
         inherit self;
         sourcePath = ./.;
         metadataPath = ./nixfied/VENDORED.txt;
@@ -26,7 +26,7 @@
         system:
         let
           pkgs = import nixpkgs { inherit system; };
-          frameworkLib = import ./nixfied/lib {
+          frameworkLib = import ./nixfied/framework/core {
             inherit
               pkgs
               system
@@ -50,7 +50,7 @@
             packages = compiled.packages;
             stateHash = compiled.stateHash;
             canonical = frameworkLib.canonical;
-            registry = import ./nixfied/registry {
+            registry = import ./nixfied/framework/runtime/registry {
               inherit
                 pkgs
                 ;
@@ -78,7 +78,7 @@
           }:
           let
             pkgs = import nixpkgs { inherit system; };
-            frameworkLib = import ./nixfied/lib {
+            frameworkLib = import ./nixfied/framework/core {
               inherit
                 pkgs
                 system
@@ -95,7 +95,7 @@
               ;
           };
 
-        canonical = import ./nixfied/lib/canonical.nix { lib = nixpkgs.lib; };
+        canonical = import ./nixfied/framework/core/canonical.nix { lib = nixpkgs.lib; };
       };
 
       nixfied = {

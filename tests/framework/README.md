@@ -18,7 +18,7 @@ nix run path:.#framework::test
 
 ## Behavior
 
-`framework::test` is a first-class task defined in `nixfied/project/module.nix`.
+`framework::test` is a first-class framework preset task defined in `nixfied/framework/presets/framework-test.nix`.
 It runs validation shards with stable log prefixes and supports shard-level parallelism.
 
 The authoritative flake-check registry lives in `tests/framework/default.nix`.

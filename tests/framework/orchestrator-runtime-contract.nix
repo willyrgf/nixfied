@@ -1,8 +1,8 @@
 { pkgs }:
 let
-  orchestratorSource = builtins.readFile ../../nixfied/runner/orchestrator.nix;
-  runtimeSource = builtins.readFile ../../nixfied/runner/orchestrator-runtime.nix;
-  commonSource = builtins.readFile ../../nixfied/runner/common-runtime.nix;
+  orchestratorSource = builtins.readFile ../../nixfied/framework/runtime/orchestrator.nix;
+  runtimeSource = builtins.readFile ../../nixfied/framework/runtime/orchestrator-runtime.nix;
+  commonSource = builtins.readFile ../../nixfied/framework/runtime/common-runtime.nix;
 in
 assert pkgs.lib.hasInfix "orchestratorRuntimeShell = import ./orchestrator-runtime.nix"
   orchestratorSource;

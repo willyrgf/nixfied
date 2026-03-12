@@ -12,7 +12,7 @@ let
       ;
     projectRoot = ../..;
   };
-  executor = import ../../nixfied/runner/executor.nix {
+  executor = import ../../nixfied/framework/runtime/executor.nix {
     inherit
       pkgs
       model
@@ -97,6 +97,14 @@ pkgs.runCommand "framework-template-install-upgrade-help-smoke" { } ''
     fail "vendored install must not include nixfied/.framework/.workspace"
   fi
 
+  if [ -e "$template_repo/nixfied/.framework" ]; then
+    fail "vendored install must not include legacy nixfied/.framework path"
+  fi
+
+  if [ -f "$template_repo/.workspace" ]; then
+    fail "vendored install must not include repo-root .workspace"
+  fi
+
   cp -f "${sourceRoot}/flake.lock" "$template_repo/flake.lock"
   run_task_checked "$TMPDIR/install-rerun.out" task.framework.install --vendor --target "$template_repo"
   run_task_checked "$TMPDIR/upgrade-command.out" task.framework.upgrade --target "$template_repo"
@@ -105,6 +113,14 @@ pkgs.runCommand "framework-template-install-upgrade-help-smoke" { } ''
   require_contains "$TMPDIR/upgrade-command.out" "OK: vendored wrapper upgraded at $template_repo/flake.nix"
   if [ -f "$template_repo/nixfied/.framework/.workspace" ]; then
     fail "upgrade must keep nixfied/.framework/.workspace absent"
+  fi
+
+  if [ -e "$template_repo/nixfied/.framework" ]; then
+    fail "upgrade must keep legacy nixfied/.framework path absent"
+  fi
+
+  if [ -f "$template_repo/.workspace" ]; then
+    fail "upgrade must keep repo-root .workspace absent"
   fi
   if ! ${pkgs.gnugrep}/bin/grep -Eq '^- [0-9a-f]{7,}(-dirty)?$' "$template_repo/nixfied/VENDORED.txt"; then
     fail "vendored upgrade must keep the framework source revision"

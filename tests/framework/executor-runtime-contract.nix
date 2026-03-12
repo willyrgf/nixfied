@@ -1,8 +1,8 @@
 { pkgs }:
 let
-  executorSource = builtins.readFile ../../nixfied/runner/executor.nix;
-  runtimeSource = builtins.readFile ../../nixfied/runner/executor-runtime.nix;
-  commonSource = builtins.readFile ../../nixfied/runner/common-runtime.nix;
+  executorSource = builtins.readFile ../../nixfied/framework/runtime/executor.nix;
+  runtimeSource = builtins.readFile ../../nixfied/framework/runtime/executor-runtime.nix;
+  commonSource = builtins.readFile ../../nixfied/framework/runtime/common-runtime.nix;
 in
 assert pkgs.lib.hasInfix "executorRuntimeShell = import ./executor-runtime.nix" executorSource;
 assert pkgs.lib.hasInfix "\${executorRuntimeShell}" executorSource;

@@ -10,7 +10,9 @@ Use `nix run .#help` for the live app list.
 
 - Service enablement, ports, and source catalogs: `nixfied/project/conf.nix`
 - Service option schemas: `nixfied/modules/services/*.nix`
-- Project task/workflow wiring: `nixfied/project/module.nix`
+- Project-layer composition and shared builders: `nixfied/project/module.nix`
+- Project runtime/services/tasks/workflows: `nixfied/project/{runtime,services,tasks,workflows}.nix`
+- Framework-owned task/workflow presets: `nixfied/framework/presets/*.nix`
 
 ## Operational Validation
 

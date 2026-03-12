@@ -1,7 +1,7 @@
 {
   mkCommandTask,
   commonRuntimeInputs,
-  ownerFile ? "nixfied/project/module.nix",
+  ownerFile ? "nixfied/framework/presets/selfhost.nix",
 }:
 {
   tasks = {

@@ -10,7 +10,7 @@
   workflows,
 }:
 let
-  listUtils = import ../lib/list-utils.nix;
+  listUtils = import ../framework/core/list-utils.nix;
   featureCatalog = import ./feature-catalog.nix { inherit runtime; };
   safeProjectRoot = builtins.unsafeDiscardStringContext (builtins.toString projectRoot);
 

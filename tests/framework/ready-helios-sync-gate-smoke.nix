@@ -59,7 +59,7 @@ let
     localOverrides = [ ];
   };
 
-  executor = import ../../nixfied/runner/executor.nix {
+  executor = import ../../nixfied/framework/runtime/executor.nix {
     inherit
       pkgs
       registry

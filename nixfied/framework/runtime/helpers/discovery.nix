@@ -43,8 +43,8 @@ let
       ];
     }
     {
-      path = "nixfied/.framework";
-      risk = "Framework internals; avoid direct edits in installed repos.";
+      path = "nixfied/framework";
+      risk = "Framework-owned presets, runtime, and install internals; avoid direct edits in installed repos.";
       required_checks = [
         "nix run .#help"
       ];
@@ -404,14 +404,14 @@ let
           ' "$TMP_INDEX"
           echo ""
           echo "## Dispatcher and Introspection"
-          echo '- `run-task -- <task-id> [-- ...]` from `nixfied/runner/dispatcher.nix`'
-          echo '- `run-workflow -- <workflow-id> [-- ...]` from `nixfied/runner/dispatcher.nix`'
-          echo '- `run-workflow-parallel -- <workflow-id> [-- ...]` from `nixfied/runner/dispatcher.nix`'
-          echo '- `runs [run-id]` from `nixfied/runner/dispatcher.nix`'
-          echo '- `stop-run -- <run-id>` from `nixfied/runner/dispatcher.nix`'
-          echo '- `stop-all-runs` from `nixfied/runner/dispatcher.nix`'
-          echo '- `features` from `nixfied/runner/dispatcher.nix`'
-          echo '- `model`, `stateHash`, `tasks`, `services`, `task::<id>`, `schema` from `nixfied/lib/mkNixfied.nix`'
+          echo '- `run-task -- <task-id> [-- ...]` from `nixfied/framework/runtime/dispatcher.nix`'
+          echo '- `run-workflow -- <workflow-id> [-- ...]` from `nixfied/framework/runtime/dispatcher.nix`'
+          echo '- `run-workflow-parallel -- <workflow-id> [-- ...]` from `nixfied/framework/runtime/dispatcher.nix`'
+          echo '- `runs [run-id]` from `nixfied/framework/runtime/dispatcher.nix`'
+          echo '- `stop-run -- <run-id>` from `nixfied/framework/runtime/dispatcher.nix`'
+          echo '- `stop-all-runs` from `nixfied/framework/runtime/dispatcher.nix`'
+          echo '- `features` from `nixfied/framework/runtime/dispatcher.nix`'
+          echo '- `model`, `stateHash`, `tasks`, `services`, `task::<id>`, `schema` from `nixfied/framework/core/mkNixfied.nix`'
           echo ""
           echo "## Sensitive Zones"
           ${pkgs.jq}/bin/jq -r '

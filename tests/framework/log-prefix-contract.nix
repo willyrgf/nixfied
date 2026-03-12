@@ -2,16 +2,16 @@
 let
   projectSource = builtins.readFile ../../nixfied/project/module.nix;
   frameworkTestPresetSource = builtins.readFile ../../nixfied/framework/presets/framework-test.nix;
-  nixChecksSource = builtins.readFile ../../nixfied/lib/mkNixChecks.nix;
-  plainLoggingSource = builtins.readFile ../../nixfied/lib/plain-shell-logging.nix;
-  executorSource = builtins.readFile ../../nixfied/runner/executor.nix;
-  envSandboxSource = builtins.readFile ../../nixfied/runner/env-sandbox.nix;
+  nixChecksSource = builtins.readFile ../../nixfied/framework/core/mkNixChecks.nix;
+  plainLoggingSource = builtins.readFile ../../nixfied/framework/core/plain-shell-logging.nix;
+  executorSource = builtins.readFile ../../nixfied/framework/runtime/executor.nix;
+  envSandboxSource = builtins.readFile ../../nixfied/framework/runtime/env-sandbox.nix;
   helpersSource = builtins.readFile ../../nixfied/framework/runtime/helpers/helpers.nix;
   loggingRuntimeSource = builtins.readFile ../../nixfied/framework/runtime/helpers/logging-runtime.nix;
 in
 assert pkgs.lib.hasInfix "frameworkTestPreset = import ../framework/presets/framework-test.nix"
   projectSource;
-assert pkgs.lib.hasInfix "plainShellLogging = import ../../lib/plain-shell-logging.nix;"
+assert pkgs.lib.hasInfix "plainShellLogging = import ../core/plain-shell-logging.nix;"
   frameworkTestPresetSource;
 assert pkgs.lib.hasInfix "plainShellLogging = import ./plain-shell-logging.nix;" nixChecksSource;
 assert pkgs.lib.hasInfix "\"INFO: %s\\n\"" plainLoggingSource;

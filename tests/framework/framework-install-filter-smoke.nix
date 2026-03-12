@@ -31,7 +31,7 @@ let
   };
 
   frameworkFixture = pkgs.runCommand "framework-install-fixture" { } ''
-    mkdir -p "$out/nixfied/project" "$out/nixfied/.framework"
+    mkdir -p "$out/nixfied/project" "$out/nixfied/framework"
     cat > "$out/flake.nix" <<'EOF'
     {
       description = "fixture";
@@ -55,7 +55,7 @@ let
     cat > "$out/nixfied/project/default.nix" <<'EOF'
     { pkgs ? null }: { }
     EOF
-    echo "framework placeholder" > "$out/nixfied/.framework/README.md"
+    echo "framework placeholder" > "$out/nixfied/framework/README.md"
   '';
 
   installApps = import ../../nixfied/framework/install/internal/install.nix {

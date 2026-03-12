@@ -2,16 +2,16 @@
   mkCommandTask,
   pkgs,
   frameworkSourceRevision ? "unknown",
-  ownerFile ? "nixfied/project/module.nix",
+  ownerFile ? "nixfied/framework/presets/install.nix",
 }:
 let
-  plainShellLogging = import ../../lib/plain-shell-logging.nix;
+  plainShellLogging = import ../core/plain-shell-logging.nix;
 
-  thinWrapperFlake = import ../../install/wrapper-flake.nix {
+  thinWrapperFlake = import ../install/wrapper-flake.nix {
     frameworkInput = "github:willyrgf/nixfied/dev";
   };
 
-  vendoredWrapperFlake = import ../../install/wrapper-flake.nix {
+  vendoredWrapperFlake = import ../install/wrapper-flake.nix {
     vendorPath = "./nixfied";
   };
 
@@ -30,7 +30,8 @@ let
 
     Framework-owned paths:
     - `flake.nix`, `flake.lock`
-    - `nixfied/.framework/`
+    - `nixfied/framework/`
+    - `nixfied/lib/`, `nixfied/install/`, `nixfied/runner/`, `nixfied/registry/` (compatibility shims)
 
     User-owned customization paths:
     - `nixfied/project/` (primary command/task/workflow customization surface)
@@ -239,6 +240,7 @@ let
               chmod -R u+w "$stage_dir/nixfied" 2>/dev/null || true
               rm -rf "$stage_dir/nixfied/.git"
               rm -f "$stage_dir/nixfied/result"
+              rm -f "$stage_dir/.workspace"
               rm -f "$stage_dir/nixfied/.framework/.workspace"
 
               preserve_project=0
@@ -272,6 +274,7 @@ let
               fi
 
               ${pkgs.rsync}/bin/rsync "''${rsync_args[@]}" "$stage_dir/nixfied/" "$target/nixfied/"
+              rm -f "$target/.workspace"
               rm -f "$target/nixfied/.framework/.workspace"
 
               cat > "$target/nixfied/VENDORED.txt" <<'NIXFIED_VENDORED'

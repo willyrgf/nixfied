@@ -180,7 +180,7 @@ let
     };
   };
 
-  trackedOrchestrator = import ../../nixfied/runner/orchestrator.nix {
+  trackedOrchestrator = import ../../nixfied/framework/runtime/orchestrator.nix {
     inherit
       pkgs
       registry
@@ -189,7 +189,7 @@ let
     projectRoot = ../..;
   };
 
-  worktreeOrchestrator = import ../../nixfied/runner/orchestrator.nix {
+  worktreeOrchestrator = import ../../nixfied/framework/runtime/orchestrator.nix {
     inherit
       pkgs
       registry

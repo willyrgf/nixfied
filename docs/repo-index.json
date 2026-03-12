@@ -60,8 +60,8 @@
   ],
   "risk_areas": [
     {
-      "path": "nixfied/.framework",
-      "risk": "Framework internals; avoid direct edits in installed repos.",
+      "path": "nixfied/framework",
+      "risk": "Framework-owned presets, runtime, and install internals; avoid direct edits in installed repos.",
       "required_checks": [
         "nix run .#help"
       ]
@@ -76,7 +76,7 @@
     },
     {
       "path": "nixfied/project/module.nix",
-      "risk": "Primary command/task/workflow surface.",
+      "risk": "Project-layer composition and shared builders.",
       "required_checks": [
         "nix run .#help",
         "nix run .#framework::test",
@@ -87,11 +87,11 @@
   "command_surfaces": [
     {
       "name": "build",
-      "owner_file": "nixfied/project/module.nix"
+      "owner_file": "nixfied/project/tasks.nix"
     },
     {
       "name": "check",
-      "owner_file": "nixfied/project/module.nix"
+      "owner_file": "nixfied/project/tasks.nix"
     },
     {
       "name": "check-ports",
@@ -99,35 +99,35 @@
     },
     {
       "name": "ci",
-      "owner_file": "nixfied/project/module.nix"
+      "owner_file": "nixfied/project/tasks.nix"
     },
     {
       "name": "dev",
-      "owner_file": "nixfied/project/module.nix"
+      "owner_file": "nixfied/project/tasks.nix"
     },
     {
       "name": "docs",
-      "owner_file": "nixfied/runner/dispatcher.nix"
+      "owner_file": "nixfied/framework/runtime/dispatcher.nix"
     },
     {
       "name": "features",
-      "owner_file": "nixfied/runner/dispatcher.nix"
+      "owner_file": "nixfied/framework/runtime/dispatcher.nix"
     },
     {
       "name": "format",
-      "owner_file": "nixfied/project/module.nix"
+      "owner_file": "nixfied/project/tasks.nix"
     },
     {
       "name": "framework::install",
-      "owner_file": "nixfied/project/module.nix"
+      "owner_file": "nixfied/framework/presets/install.nix"
     },
     {
       "name": "framework::test",
-      "owner_file": "nixfied/project/module.nix"
+      "owner_file": "nixfied/framework/presets/framework-test.nix"
     },
     {
       "name": "framework::upgrade",
-      "owner_file": "nixfied/project/module.nix"
+      "owner_file": "nixfied/framework/presets/install.nix"
     },
     {
       "name": "health",
@@ -135,7 +135,7 @@
     },
     {
       "name": "model",
-      "owner_file": "nixfied/lib/mkNixfied.nix"
+      "owner_file": "nixfied/framework/core/mkNixfied.nix"
     },
     {
       "name": "ports",
@@ -147,23 +147,23 @@
     },
     {
       "name": "schema",
-      "owner_file": "nixfied/lib/mkNixfied.nix"
+      "owner_file": "nixfied/framework/core/mkNixfied.nix"
     },
     {
       "name": "services",
-      "owner_file": "nixfied/lib/mkNixfied.nix"
+      "owner_file": "nixfied/framework/core/mkNixfied.nix"
     },
     {
       "name": "stateHash",
-      "owner_file": "nixfied/lib/mkNixfied.nix"
+      "owner_file": "nixfied/framework/core/mkNixfied.nix"
     },
     {
       "name": "tasks",
-      "owner_file": "nixfied/lib/mkNixfied.nix"
+      "owner_file": "nixfied/framework/core/mkNixfied.nix"
     },
     {
       "name": "test",
-      "owner_file": "nixfied/project/module.nix"
+      "owner_file": "nixfied/project/tasks.nix"
     },
     {
       "name": "test-isolation",

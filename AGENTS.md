@@ -5,19 +5,19 @@
 - Keep CLI output plain ASCII and grep-friendly with stable prefixes: `INFO:`, `WARN:`, `ERROR:`, `OK:`, `SKIP:`.
 - Prefer boring, explicit, idempotent behavior; fail fast on invalid config and avoid partial side effects.
 - Keep state isolated to project/ephemeral roots; do not leak secrets in logs.
-- Define tasks/workflows and exposed app surfaces in `nixfied/project/module.nix`.
+- Define project-owned tasks/workflows in `nixfied/project/{tasks,workflows}.nix`; `nixfied/project/module.nix` composes the project layer and framework presets.
 - Keep exposed app names lowercase via `nixfied.tasks.<id>.ui.app.name`.
 - When users name a skill (or task clearly matches one), open its `SKILL.md` and follow it for that turn.
 
 ## Project Layout
 - `flake.nix`: flake entry points for apps, modules, and dev shells.
-- `nixfied/project/`: project config and command model (`conf.nix`, `module.nix`).
+- `nixfied/project/`: project config and composition (`conf.nix`, `module.nix`, `runtime.nix`, `services.nix`, `tasks.nix`, `workflows.nix`).
 - `nixfied/modules/`: typed module options (`core`, `runtime`, `tasks`, `workflows`, `operations`, `services/*`).
 - `nixfied/compiler/`: explicit compiler passes that build `nixfiedModel`.
-- `nixfied/runner/`: dispatcher/executor runtime apps.
-- `nixfied/registry/`: strict NDJSON event store, snapshot, replay.
-- `nixfied/install/`: thin-wrapper/vendoring installer helpers.
-- `nixfied/framework/install/internal/`: framework install internals; the `.workspace` marker path remains `nixfied/.framework/.workspace`.
+- `nixfied/framework/runtime/`: canonical dispatcher/executor runtime apps; `nixfied/runner/` remains as a compatibility shim.
+- `nixfied/framework/runtime/registry/`: canonical NDJSON event store, snapshot, replay; `nixfied/registry/` remains as a compatibility shim.
+- `nixfied/install/`: compatibility shim for framework install entrypoints.
+- `nixfied/framework/install/internal/`: framework install internals; the framework workspace marker lives at repo-root `.workspace`.
 - `tests/framework/`: framework checks and test docs.
 
 ## Commands
@@ -34,7 +34,7 @@
 - `nix run .#model`, `nix run .#stateHash`, `nix run .#tasks`, `nix run .#task::<id>`, `nix run .#schema`: introspection surfaces.
 - `nix run .#run-task -- <task-id>` and `nix run .#run-workflow -- <workflow-id>`: dispatcher surfaces.
 - `NIX_ENV` defaults to slot `0`; `PROJECT_ENV` defaults to `dev` unless overridden.
-- Framework-only commands (requires `.workspace` marker): `framework::test`, `framework::install`.
+- Framework-only commands (require a workspace marker; canonical path is repo-root `.workspace`): `framework::test`, `framework::install`.
 
 ## Coding, Testing, and PRs
 - Format Nix: `find . -name '*.nix' -print0 | xargs -0 nixfmt --`.
@@ -46,7 +46,7 @@
 
 ## Configuration
 - Main project config: `nixfied/project/conf.nix`.
-- Task/workflow and app behavior: `nixfied/project/module.nix` (`config.nixfied.tasks`, `config.nixfied.workflows`).
+- Task/workflow and app behavior: `nixfied/project/{tasks,workflows}.nix`, composed via `nixfied/project/module.nix`, plus framework-owned presets under `nixfied/framework/presets/`.
 - If exposing a new app, set `ui.app.expose = true` and keep `tests/framework/snapshots/help.txt` current.
 
 ## Skills

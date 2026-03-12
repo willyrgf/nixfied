@@ -58,7 +58,7 @@ Introspection surfaces:
 Primary edit points:
 
 - `nixfied/project/conf.nix` for project identity, envs, ports, and module settings.
-- `nixfied/project/module.nix` for task/workflow modeling and exposed app names.
+- `nixfied/project/module.nix` for project-layer composition, plus `nixfied/project/{tasks,workflows}.nix` for project-owned command surfaces.
 - `nixfied/modules/` for typed module options.
 
 Environment defaults:
@@ -120,6 +120,8 @@ nixfied.lib.mkNixfied {
   localOverrides = [ ];
 }
 ```
+
+`localOverrides` is explicit. The default repository flake passes `[]`, so `nixfied/local/default.nix` is preserved template space, not an auto-loaded module.
 
 Returned attributes:
 

@@ -6,7 +6,7 @@
 }:
 let
   shellHelpers = import ./shell-helpers.nix { inherit pkgs; };
-  executor = import ../../../nixfied/runner/executor.nix {
+  executor = import ../../../nixfied/framework/runtime/executor.nix {
     inherit
       pkgs
       model
@@ -15,7 +15,7 @@ let
       ;
   };
 
-  orchestrator = import ../../../nixfied/runner/orchestrator.nix {
+  orchestrator = import ../../../nixfied/framework/runtime/orchestrator.nix {
     inherit
       pkgs
       model

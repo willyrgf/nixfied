@@ -2,7 +2,7 @@
 { pkgs, project }:
 
 let
-  serviceConfig = import ../../../../lib/service-config.nix { lib = pkgs.lib; };
+  serviceConfig = import ../../../core/service-config.nix { lib = pkgs.lib; };
   cfg = serviceConfig.getProjectServiceConfig {
     inherit project;
     name = "nginx";

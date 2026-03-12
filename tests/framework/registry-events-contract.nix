@@ -3,7 +3,7 @@
   registry,
 }:
 let
-  source = builtins.readFile ../../nixfied/registry/events.nix;
+  source = builtins.readFile ../../nixfied/framework/runtime/registry/events.nix;
   snapshot = registry.snapshot.fromEvents [
     {
       taskId = "task.ci.quality";

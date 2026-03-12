@@ -79,12 +79,14 @@ Introspection apps:
 ## Project Layout
 
 - `flake.nix`: top-level flake entrypoint.
-- `nixfied/project/`: project configuration and task/workflow definitions.
+- `nixfied/project/`: project configuration, composition, and project-owned runtime/task/workflow definitions.
 - `nixfied/modules/`: typed option modules.
 - `nixfied/compiler/`: model compilation passes.
-- `nixfied/runner/`: dispatcher, orchestrator, and executor apps.
-- `nixfied/registry/`: NDJSON event log, replay, and snapshot logic.
-- `nixfied/lib/`: canonical renderer and `mkNixfied`.
+- `nixfied/framework/runtime/`: dispatcher, orchestrator, executor, env sandbox, and runtime helpers.
+- `nixfied/framework/runtime/registry/`: NDJSON event log, replay, and snapshot logic.
+- `nixfied/runner/` and `nixfied/registry/`: compatibility import shims for downstream callers.
+- `nixfied/framework/core/`: canonical renderer, flake/core helpers, and `mkNixfied`.
+- `nixfied/lib/` and `nixfied/install/`: compatibility import shims for downstream callers.
 - `tests/framework/`: deterministic framework gates and snapshots.
 
 ## Determinism Gates

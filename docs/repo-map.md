@@ -16,26 +16,26 @@ Generated from `docs/repo-index.json`.
 - `flake.nix` (nix-flake)
 
 ## Command Surfaces
-- `build` from `nixfied/project/module.nix`
-- `check` from `nixfied/project/module.nix`
+- `build` from `nixfied/project/tasks.nix`
+- `check` from `nixfied/project/tasks.nix`
 - `check-ports` from `nixfied/modules/operations.nix`
-- `ci` from `nixfied/project/module.nix`
-- `dev` from `nixfied/project/module.nix`
-- `docs` from `nixfied/runner/dispatcher.nix`
-- `features` from `nixfied/runner/dispatcher.nix`
-- `format` from `nixfied/project/module.nix`
-- `framework::install` from `nixfied/project/module.nix`
-- `framework::test` from `nixfied/project/module.nix`
-- `framework::upgrade` from `nixfied/project/module.nix`
+- `ci` from `nixfied/project/tasks.nix`
+- `dev` from `nixfied/project/tasks.nix`
+- `docs` from `nixfied/framework/runtime/dispatcher.nix`
+- `features` from `nixfied/framework/runtime/dispatcher.nix`
+- `format` from `nixfied/project/tasks.nix`
+- `framework::install` from `nixfied/framework/presets/install.nix`
+- `framework::test` from `nixfied/framework/presets/framework-test.nix`
+- `framework::upgrade` from `nixfied/framework/presets/install.nix`
 - `health` from `nixfied/modules/operations.nix`
-- `model` from `nixfied/lib/mkNixfied.nix`
+- `model` from `nixfied/framework/core/mkNixfied.nix`
 - `ports` from `nixfied/modules/operations.nix`
 - `ready` from `nixfied/modules/operations.nix`
-- `schema` from `nixfied/lib/mkNixfied.nix`
-- `services` from `nixfied/lib/mkNixfied.nix`
-- `stateHash` from `nixfied/lib/mkNixfied.nix`
-- `tasks` from `nixfied/lib/mkNixfied.nix`
-- `test` from `nixfied/project/module.nix`
+- `schema` from `nixfied/framework/core/mkNixfied.nix`
+- `services` from `nixfied/framework/core/mkNixfied.nix`
+- `stateHash` from `nixfied/framework/core/mkNixfied.nix`
+- `tasks` from `nixfied/framework/core/mkNixfied.nix`
+- `test` from `nixfied/project/tasks.nix`
 - `test-isolation` from `nixfied/modules/operations.nix`
 - `validate-env` from `nixfied/modules/operations.nix`
 
@@ -87,19 +87,19 @@ Generated from `docs/repo-index.json`.
 - `workflow.test.parallel.smoke` [workflow] - Parallel runner smoke workflow (coverage required)
 
 ## Dispatcher and Introspection
-- `run-task -- <task-id> [-- ...]` from `nixfied/runner/dispatcher.nix`
-- `run-workflow -- <workflow-id> [-- ...]` from `nixfied/runner/dispatcher.nix`
-- `run-workflow-parallel -- <workflow-id> [-- ...]` from `nixfied/runner/dispatcher.nix`
-- `runs [run-id]` from `nixfied/runner/dispatcher.nix`
-- `stop-run -- <run-id>` from `nixfied/runner/dispatcher.nix`
-- `stop-all-runs` from `nixfied/runner/dispatcher.nix`
-- `features` from `nixfied/runner/dispatcher.nix`
-- `model`, `stateHash`, `tasks`, `services`, `task::<id>`, `schema` from `nixfied/lib/mkNixfied.nix`
+- `run-task -- <task-id> [-- ...]` from `nixfied/framework/runtime/dispatcher.nix`
+- `run-workflow -- <workflow-id> [-- ...]` from `nixfied/framework/runtime/dispatcher.nix`
+- `run-workflow-parallel -- <workflow-id> [-- ...]` from `nixfied/framework/runtime/dispatcher.nix`
+- `runs [run-id]` from `nixfied/framework/runtime/dispatcher.nix`
+- `stop-run -- <run-id>` from `nixfied/framework/runtime/dispatcher.nix`
+- `stop-all-runs` from `nixfied/framework/runtime/dispatcher.nix`
+- `features` from `nixfied/framework/runtime/dispatcher.nix`
+- `model`, `stateHash`, `tasks`, `services`, `task::<id>`, `schema` from `nixfied/framework/core/mkNixfied.nix`
 
 ## Sensitive Zones
-- `nixfied/.framework` - Framework internals; avoid direct edits in installed repos. (checks: nix run .#help)
+- `nixfied/framework` - Framework-owned presets, runtime, and install internals; avoid direct edits in installed repos. (checks: nix run .#help)
 - `nixfied/project/conf.nix` - Project identity, environment names, and port contract. (checks: nix run .#validate-env, nix run .#ci -- --summary)
-- `nixfied/project/module.nix` - Primary command/task/workflow surface. (checks: nix run .#help, nix run .#framework::test, nix run .#ci -- --summary)
+- `nixfied/project/module.nix` - Project-layer composition and shared builders. (checks: nix run .#help, nix run .#framework::test, nix run .#ci -- --summary)
 
 ## Canonical Commands
 - `nix run .#help`

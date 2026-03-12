@@ -1,7 +1,7 @@
 { pkgs }:
 let
-  source = builtins.readFile ../../nixfied/runner/env-sandbox.nix;
-  commonSource = builtins.readFile ../../nixfied/runner/common-runtime.nix;
+  source = builtins.readFile ../../nixfied/framework/runtime/env-sandbox.nix;
+  commonSource = builtins.readFile ../../nixfied/framework/runtime/common-runtime.nix;
 in
 assert pkgs.lib.hasInfix "run_in_sandbox_runtime() {" source;
 assert pkgs.lib.hasInfix "run_in_sandbox() {" source;

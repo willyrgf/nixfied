@@ -109,9 +109,9 @@ let
                                       chmod -R u+w "$ROOT/nixfied" 2>/dev/null || true
                                     fi
 
-                                    # Ensure the .framework path is a directory in the current layout.
-                                    if [ -f "$ROOT/nixfied/.framework" ]; then
-                                      rm -f "$ROOT/nixfied/.framework"
+                                    # Remove the legacy hidden framework path during upgrade/install.
+                                    if [ -e "$ROOT/nixfied/.framework" ]; then
+                                      rm -rf "$ROOT/nixfied/.framework"
                                     fi
 
                             	        RSYNC_EXCLUDES=()
@@ -151,7 +151,8 @@ let
                                       echo ""
                                       echo "Framework-owned (overwritten on framework::upgrade):"
                                       echo "- flake.nix, flake.lock"
-                                      echo "- nixfied/.framework/"
+                                      echo "- nixfied/framework/"
+                                      echo "- nixfied/lib/, nixfied/install/, nixfied/runner/, nixfied/registry/ (compatibility shims)"
                                       echo ""
                                       echo "User-owned (preserved on framework::upgrade by default):"
                                       echo "- nixfied/project/ (primary customization surface)"
@@ -169,15 +170,9 @@ let
                                     if command -v chattr >/dev/null 2>&1; then
                                       chattr -R -i "$ROOT/nixfied" 2>/dev/null || true
                                     fi
-                                    mkdir -p "$ROOT/nixfied/.framework"
-                                    chmod -R u+w "$ROOT/nixfied/.framework" 2>/dev/null || true
-                                    if command -v chflags >/dev/null 2>&1; then
-                                      chflags -R nouchg "$ROOT/nixfied/.framework" 2>/dev/null || true
-                                    fi
-                                    if command -v chattr >/dev/null 2>&1; then
-                                      chattr -R -i "$ROOT/nixfied/.framework" 2>/dev/null || true
-                                    fi
+                                    rm -f "$ROOT/.workspace"
                                     rm -f "$ROOT/nixfied/.framework/.workspace"
+                                    rm -rf "$ROOT/nixfied/.framework"
 
                                     if [ -n "$FILTERS_RAW" ]; then
                                       FILTER_PLAN_JSON="$(compute_template_filter_plan "$FILTERS_RAW")"

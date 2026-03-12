@@ -118,7 +118,7 @@ let
     };
   };
 
-  orchestratorKeep = import ../../nixfied/runner/orchestrator.nix {
+  orchestratorKeep = import ../../nixfied/framework/runtime/orchestrator.nix {
     inherit
       pkgs
       registry
@@ -127,7 +127,7 @@ let
     projectRoot = ../..;
   };
 
-  orchestratorDrop = import ../../nixfied/runner/orchestrator.nix {
+  orchestratorDrop = import ../../nixfied/framework/runtime/orchestrator.nix {
     inherit
       pkgs
       registry

@@ -11,7 +11,7 @@
     ];
     ownerFiles = [
       "nixfied/project/conf.nix"
-      "nixfied/project/module.nix"
+      "nixfied/project/runtime.nix"
       "nixfied/framework/runtime/ephemeral.nix"
     ];
     modelPaths = [ "runtime.ephemeral.copyMode" ];
@@ -34,7 +34,7 @@
     ];
     ownerFiles = [
       "nixfied/project/conf.nix"
-      "nixfied/project/module.nix"
+      "nixfied/project/runtime.nix"
       "nixfied/framework/runtime/ephemeral.nix"
     ];
     modelPaths = [ "runtime.ephemeral.includeUntracked" ];
@@ -57,7 +57,7 @@
     ];
     ownerFiles = [
       "nixfied/project/conf.nix"
-      "nixfied/project/module.nix"
+      "nixfied/project/runtime.nix"
       "nixfied/framework/runtime/ephemeral.nix"
     ];
     modelPaths = [
@@ -83,8 +83,8 @@
       }
     ];
     ownerFiles = [
-      "nixfied/runner/orchestrator.nix"
-      "nixfied/runner/env-sandbox.nix"
+      "nixfied/framework/runtime/orchestrator.nix"
+      "nixfied/framework/runtime/env-sandbox.nix"
     ];
     modelPaths = [ "state.registry.root" ];
     status = "stable";
@@ -106,7 +106,7 @@
     ];
     ownerFiles = [
       "nixfied/framework/runtime/helpers/helpers.nix"
-      "nixfied/project/module.nix"
+      "nixfied/project/tasks.nix"
     ];
     modelPaths = [ ];
     status = "stable";

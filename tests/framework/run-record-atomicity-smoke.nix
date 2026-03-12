@@ -4,7 +4,7 @@
   registry,
 }:
 let
-  orchestratorSource = builtins.readFile ../../nixfied/runner/orchestrator.nix;
+  orchestratorSource = builtins.readFile ../../nixfied/framework/runtime/orchestrator.nix;
   baseTask = model.tasks."task.ci.quality";
 
   probeTaskId = "task.test.run-record.atomicity";

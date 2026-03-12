@@ -8,7 +8,7 @@
   runtime,
 }:
 let
-  listUtils = import ../lib/list-utils.nix;
+  listUtils = import ../framework/core/list-utils.nix;
   rawTasks = resolved.tasks or { };
   names = builtins.sort builtins.lessThan (builtins.attrNames rawTasks);
   globalRuntimeInputs = map builtins.toString (resolved.tooling.runtimePackages or [ ]);

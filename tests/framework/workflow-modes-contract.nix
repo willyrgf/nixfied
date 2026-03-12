@@ -1,6 +1,6 @@
 { pkgs }:
 let
-  source = builtins.readFile ../../nixfied/runner/workflow-modes.nix;
+  source = builtins.readFile ../../nixfied/framework/runtime/workflow-modes.nix;
 in
 assert pkgs.lib.hasInfix "workflow_id_exists() {" source;
 assert pkgs.lib.hasInfix "workflow_mode_name() {" source;

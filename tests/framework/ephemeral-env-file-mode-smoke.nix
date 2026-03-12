@@ -172,7 +172,7 @@ let
     expectSecret = true;
   };
 
-  disabledOrchestrator = import ../../nixfied/runner/orchestrator.nix {
+  disabledOrchestrator = import ../../nixfied/framework/runtime/orchestrator.nix {
     inherit
       pkgs
       registry
@@ -181,7 +181,7 @@ let
     projectRoot = ../..;
   };
 
-  originalRootOrchestrator = import ../../nixfied/runner/orchestrator.nix {
+  originalRootOrchestrator = import ../../nixfied/framework/runtime/orchestrator.nix {
     inherit
       pkgs
       registry

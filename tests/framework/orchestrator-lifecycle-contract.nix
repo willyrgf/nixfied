@@ -1,8 +1,8 @@
 { pkgs }:
 let
-  orchestratorSource = builtins.readFile ../../nixfied/runner/orchestrator.nix;
-  dispatcherSource = builtins.readFile ../../nixfied/runner/dispatcher.nix;
-  executorSource = builtins.readFile ../../nixfied/runner/executor.nix;
+  orchestratorSource = builtins.readFile ../../nixfied/framework/runtime/orchestrator.nix;
+  dispatcherSource = builtins.readFile ../../nixfied/framework/runtime/dispatcher.nix;
+  executorSource = builtins.readFile ../../nixfied/framework/runtime/executor.nix;
 in
 assert pkgs.lib.hasInfix "nixfied-orchestrator" orchestratorSource;
 assert pkgs.lib.hasInfix "create_run_record() {" orchestratorSource;
@@ -25,8 +25,7 @@ assert (!pkgs.lib.hasInfix "workflow_json() {" orchestratorSource);
 assert pkgs.lib.hasInfix "run_workflow_phase_tasks() {" executorSource;
 assert pkgs.lib.hasInfix "write_workflow_summary_json() {" executorSource;
 assert pkgs.lib.hasInfix "NIXFIED_ORCHESTRATOR_RUN_ID" executorSource;
-assert pkgs.lib.hasInfix "frameworkEphemeral = import ../framework/runtime/ephemeral.nix"
-  orchestratorSource;
+assert pkgs.lib.hasInfix "frameworkEphemeral = import ./ephemeral.nix" orchestratorSource;
 assert pkgs.lib.hasInfix "ephemeral = model.runtime.ephemeral or { };" orchestratorSource;
 assert pkgs.lib.hasInfix "EPHEMERAL_EXECUTOR_WRAPPER=" orchestratorSource;
 assert pkgs.lib.hasInfix "NIXFIED_WORKFLOW_SETUP_STARTED_AT" orchestratorSource;

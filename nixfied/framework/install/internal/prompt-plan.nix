@@ -113,7 +113,7 @@ pkgs.writeShellScript "nixfied-prompt-plan" ''
   - Treat Nixfied as the single entrypoint for dev/test/build/check/ci and (optionally) db/nginx/supervisor:
     nix run .#help, .#dev, .#test, .#build, .#check, .#ci
   - Call out the key file-to-command mapping:
-    - nixfied/project/module.nix -> command/task/workflow definitions for dev/test/build/check/ci/framework::*
+    - nixfied/project/module.nix + nixfied/project/{tasks,workflows}.nix + nixfied/framework/presets/*.nix -> command/task/workflow composition
     - nixfied/project/conf.nix -> project identity, envs/ports, module toggles, runtime defaults
   - Mention the primary customization surface is nixfied/project/ (avoid editing flake.nix unless the plan proves it's necessary).
   - Reference relevant framework features (only if applicable to this project):

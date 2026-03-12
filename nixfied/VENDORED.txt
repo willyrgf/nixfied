@@ -12,7 +12,8 @@ Framework source revision workflow:
 
 Framework-owned paths:
 - `flake.nix`, `flake.lock`
-- `nixfied/.framework/`
+- `nixfied/framework/`
+- `nixfied/lib/`, `nixfied/install/`, `nixfied/runner/`, `nixfied/registry/` (compatibility shims)
 
 User-owned customization paths:
 - `nixfied/project/` (primary command/task/workflow customization surface)

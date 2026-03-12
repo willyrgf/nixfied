@@ -4,7 +4,7 @@
   registry,
 }:
 let
-  executor = import ../../nixfied/runner/executor.nix {
+  executor = import ../../nixfied/framework/runtime/executor.nix {
     inherit
       pkgs
       model
@@ -43,6 +43,16 @@ pkgs.runCommand "framework-install-vendor-smoke" { } ''
 
   if [ -f "$target/nixfied/.framework/.workspace" ]; then
     echo "vendored wrapper must not contain nixfied/.framework/.workspace marker"
+    exit 1
+  fi
+
+  if [ -e "$target/nixfied/.framework" ]; then
+    echo "vendored wrapper must not contain legacy nixfied/.framework path"
+    exit 1
+  fi
+
+  if [ -f "$target/.workspace" ]; then
+    echo "vendored wrapper must not contain repo-root .workspace marker"
     exit 1
   fi
 

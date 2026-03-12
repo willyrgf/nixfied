@@ -8,7 +8,7 @@
   tasks,
 }:
 let
-  listUtils = import ../lib/list-utils.nix;
+  listUtils = import ../framework/core/list-utils.nix;
   rawWorkflows = resolved.workflows or { };
   names = builtins.sort builtins.lessThan (builtins.attrNames rawWorkflows);
 

@@ -124,7 +124,7 @@ let
     };
   };
 
-  orchestrator = import ../../nixfied/runner/orchestrator.nix {
+  orchestrator = import ../../nixfied/framework/runtime/orchestrator.nix {
     inherit
       pkgs
       registry

@@ -1,7 +1,7 @@
 { pkgs }:
 let
-  source = builtins.readFile ../../nixfied/runner/executor.nix;
-  runtimeSource = builtins.readFile ../../nixfied/runner/executor-runtime.nix;
+  source = builtins.readFile ../../nixfied/framework/runtime/executor.nix;
+  runtimeSource = builtins.readFile ../../nixfied/framework/runtime/executor-runtime.nix;
 in
 assert pkgs.lib.hasInfix "compute_run_id() {" source;
 assert pkgs.lib.hasInfix "ERROR: usage: run-task <task-id> [-- ...]" source;

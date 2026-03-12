@@ -12,7 +12,7 @@ let
     inherit pkgs project;
   };
   servicePolicy = import ./service-policy.nix { inherit pkgs; };
-  registry = import ../../../registry/events.nix { inherit pkgs; };
+  registry = import ../registry/events.nix { inherit pkgs; };
   projectIdUpper =
     let
       replaced = pkgs.lib.replaceStrings [ "-" "." ] [ "_" "_" ] projectId;

@@ -14,10 +14,13 @@
 }:
 
 {
-  # User-owned extension point.
+  # Optional user-owned extension point.
   #
   # This directory is intended for customization that should survive framework
-  # upgrades. Prefer nixfied/project/ for normal command/config wiring, and use
+  # upgrades. The default flake compile path does not load it automatically;
+  # pass it via `localOverrides` when embedding Nixfied as a library.
+  #
+  # Prefer nixfied/project/ for normal command/config wiring, and use
   # nixfied/local/ for extra apps/packages that shouldn't live in the framework.
   #
   # Notes:
