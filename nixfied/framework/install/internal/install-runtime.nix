@@ -59,7 +59,7 @@ pkgs.writeText "nixfied-install-runtime.sh" ''
             "let",
             "  conf = import ./conf.nix { inherit pkgs; };",
             "  project = conf.project or { };",
-            "  frameworkLib = import ../.framework/lib { inherit pkgs; project = conf; };",
+            "  frameworkLib = import ../framework/runtime/helpers { inherit pkgs; project = conf; };",
             "  commandLib = import ./lib/command.nix { inherit project; appApi = frameworkLib.appApi; };",
             "  mkPart = path: import path { inherit pkgs project commandLib; };",
             "  parts = [",
