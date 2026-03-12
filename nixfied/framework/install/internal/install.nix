@@ -29,6 +29,7 @@ let
       frameworkRoot
       ;
   };
+  vendoredMetadataRuntime = import ./vendored-metadata.nix { inherit pkgs; };
   installRuntime = import ./install-runtime.nix {
     inherit
       pkgs
@@ -47,6 +48,7 @@ let
     set -euo pipefail
 
     source ${installRuntime}
+    source ${vendoredMetadataRuntime}
 
     parse_install_args "$@"
     resolve_install_repo_root
@@ -54,24 +56,16 @@ let
     resolve_install_branch_context
 
     SRC="${frameworkRoot}"
+    SOURCE_GIT_ROOT="$SRC"
     resolve_framework_revision
 
-                                    PREV_FRAMEWORK_REVISION="unknown"
-                                    if [ "$MODE" = "upgrade" ] && [ -f "$ROOT/nixfied/VENDORED.txt" ]; then
-                                      PREV_FRAMEWORK_REVISION=$(${pkgs.gawk}/bin/awk '
-                                        $0 ~ /^Framework source revision \(install\/upgrade\):$/ { in_section=1; next }
-                                        in_section && $0 ~ /^[[:space:]]*-[[:space:]]+/ {
-                                          line=$0
-                                          sub(/^[[:space:]]*-[[:space:]]+/, "", line)
-                                          print line
-                                          exit
-                                        }
-                                      ' "$ROOT/nixfied/VENDORED.txt" 2>/dev/null || true)
-                                      if [ -z "$PREV_FRAMEWORK_REVISION" ]; then
-                                        PREV_FRAMEWORK_REVISION="unknown"
-                                      fi
-                                      log_info "Existing vendored revision rev=$PREV_FRAMEWORK_REVISION"
-                                    fi
+    PREV_FRAMEWORK_REVISION="unknown"
+    if [ -f "$ROOT/nixfied/VENDORED.txt" ]; then
+      PREV_FRAMEWORK_REVISION="$(read_vendored_revision "$ROOT/nixfied/VENDORED.txt")"
+    fi
+    if [ "$PREV_FRAMEWORK_REVISION" != "unknown" ]; then
+      log_info "Existing vendored revision rev=$PREV_FRAMEWORK_REVISION"
+    fi
 
         	                    	        if [ ! -f "$SRC/flake.nix" ] || [ ! -d "$SRC/nixfied" ]; then
         	                    	          log_error "Framework source is missing required files."
@@ -140,27 +134,7 @@ let
                                       cp -f "$SRC/README.md" "$ROOT/nixfied/README.md"
                                     fi
 
-                                    {
-                                      echo "Vendored Framework"
-                                      echo "=================="
-                                      echo ""
-                                      echo 'This repository vendors the Nixfied framework under `nixfied/`.'
-                                      echo ""
-                                      echo "Framework source revision (install/upgrade):"
-                                      echo "- $FRAMEWORK_REVISION"
-                                      echo ""
-                                      echo "Framework-owned (overwritten on framework::upgrade):"
-                                      echo "- flake.nix, flake.lock"
-                                      echo "- nixfied/framework/"
-                                      echo "- nixfied/lib/, nixfied/install/, nixfied/runner/, nixfied/registry/ (compatibility shims)"
-                                      echo ""
-                                      echo "User-owned (preserved on framework::upgrade by default):"
-                                      echo "- nixfied/project/ (primary customization surface)"
-                                      echo "- nixfied/local/ (extensions: extra apps/packages/devShells)"
-                                      echo ""
-                                      echo "If you need to customize behavior, prefer editing files under nixfied/project/"
-                                      echo "and nixfied/local/ rather than editing framework code."
-                                    } > "$ROOT/nixfied/VENDORED.txt"
+    write_vendored_metadata "$ROOT/nixfied/VENDORED.txt"
                                     rm -f "$ROOT/nixfied/UPGRADE_CHECK.txt" 2>/dev/null || true
 
                                     chmod -R u+w "$ROOT/nixfied" 2>/dev/null || true

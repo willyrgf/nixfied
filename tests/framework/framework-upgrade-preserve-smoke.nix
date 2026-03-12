@@ -53,6 +53,7 @@ pkgs.runCommand "framework-upgrade-preserve-smoke" { } ''
   require_file "$target/nixfied/lib/default.nix"
   require_file "$target/nixfied/VENDORED.txt"
   require_contains "$target/nixfied/VENDORED.txt" "Framework source revision (install/upgrade):"
+  require_contains "$target/nixfied/VENDORED.txt" "Recent framework changes:"
   require_not_contains "$target/nixfied/VENDORED.txt" 'set by `framework::install` / `framework::upgrade`'
   require_not_contains "$target/nixfied/VENDORED.txt" "- unknown"
   if ! ${pkgs.gnugrep}/bin/grep -Eq '^- [0-9a-f]{7,}(-dirty)?$' "$target/nixfied/VENDORED.txt"; then
@@ -77,6 +78,8 @@ pkgs.runCommand "framework-upgrade-preserve-smoke" { } ''
   if ! ${pkgs.gnugrep}/bin/grep -Eq '^- [0-9a-f]{7,}(-dirty)?$' "$target/nixfied/VENDORED.txt"; then
     fail "vendored metadata must keep the framework source revision on upgrade"
   fi
+  require_contains "$target/nixfied/VENDORED.txt" "Changes since previous vendored revision"
+  require_contains "$target/nixfied/VENDORED.txt" "previous vendored revision already matches current framework revision"
 
   run_task_checked "$TMPDIR/upgrade-reset.out" task.framework.upgrade --target "$target" --reset-project --reset-local
   if ${pkgs.gnugrep}/bin/grep -Fq "USER_PROJECT_MARKER" "$target/nixfied/project/module.nix"; then

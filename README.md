@@ -97,6 +97,7 @@ Ephemeral runtime behavior:
 - Hashing: `stateHash = sha256(toCanonicalNix(model))`.
 - Runner: dispatcher routes to orchestrator, then executor (`dispatcher -> orchestrator -> executor`).
 - Registry: append-only NDJSON event stream with replay support.
+- Ownership: framework-owned code lives under `nixfied/framework/{core,runtime,install,presets}`; `nixfied/project/` is the downstream composition/customization layer, while `nixfied/{lib,install,runner,registry}` remain compatibility shims.
 
 ## Docs
 

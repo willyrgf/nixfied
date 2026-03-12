@@ -88,6 +88,7 @@ pkgs.runCommand "framework-template-install-upgrade-help-smoke" { } ''
   require_file "$template_repo/nixfied/lib/default.nix"
   require_file "$template_repo/nixfied/VENDORED.txt"
   require_contains "$template_repo/nixfied/VENDORED.txt" "Framework source revision (install/upgrade):"
+  require_contains "$template_repo/nixfied/VENDORED.txt" "Recent framework changes:"
   require_not_contains "$template_repo/nixfied/VENDORED.txt" 'set by `framework::install` / `framework::upgrade`'
   require_not_contains "$template_repo/nixfied/VENDORED.txt" "- unknown"
   if ! ${pkgs.gnugrep}/bin/grep -Eq '^- [0-9a-f]{7,}(-dirty)?$' "$template_repo/nixfied/VENDORED.txt"; then
@@ -125,6 +126,8 @@ pkgs.runCommand "framework-template-install-upgrade-help-smoke" { } ''
   if ! ${pkgs.gnugrep}/bin/grep -Eq '^- [0-9a-f]{7,}(-dirty)?$' "$template_repo/nixfied/VENDORED.txt"; then
     fail "vendored upgrade must keep the framework source revision"
   fi
+  require_contains "$template_repo/nixfied/VENDORED.txt" "Changes since previous vendored revision"
+  require_contains "$template_repo/nixfied/VENDORED.txt" "previous vendored revision already matches current framework revision"
 
   "$GIT_BIN" -C "$template_repo" add -A
   run_nix_checked "$TMPDIR/help.out" "$template_repo" run .#help

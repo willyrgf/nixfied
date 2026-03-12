@@ -1,5 +1,33 @@
 # Upgrade Notes
 
+## Framework Reorganization
+
+Framework-owned code now has an explicit home:
+
+- `nixfied/framework/core/`: compiler-facing core helpers and `mkNixfied`
+- `nixfied/framework/runtime/`: dispatcher, executor, registry, runtime helpers, and service runtimes
+- `nixfied/framework/install/`: wrapper/install internals
+- `nixfied/framework/presets/`: framework-owned install/test/self-host presets
+
+Project-owned customization is now separated from framework-owned behavior:
+
+- `nixfied/project/module.nix` is the composition layer
+- `nixfied/project/{runtime,services,tasks,workflows}.nix` hold project-owned definitions
+- `nixfied/local/` remains optional extension space and is still preserved on vendored upgrade
+
+Compatibility shims remain in place for downstream imports:
+
+- `nixfied/lib/`
+- `nixfied/install/`
+- `nixfied/runner/`
+- `nixfied/registry/`
+
+Vendored metadata is slightly richer now:
+
+- `nixfied/VENDORED.txt` records the framework source revision
+- upgrade writes an exact `old..new` commit summary when the framework source is a git worktree
+- packaged-source installs fall back to a concise note (plus a compare hint when both revisions are known)
+
 ## Race-Free Isolation Guarantees
 
 This upgrade changes runtime state defaults and strengthens write/lock guarantees.

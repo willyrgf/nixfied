@@ -6,6 +6,7 @@
 }:
 let
   plainShellLogging = import ../core/plain-shell-logging.nix;
+  vendoredMetadataRuntime = import ../install/internal/vendored-metadata.nix { inherit pkgs; };
 
   thinWrapperFlake = import ../install/wrapper-flake.nix {
     frameworkInput = "github:willyrgf/nixfied/dev";
@@ -15,34 +16,11 @@ let
     vendorPath = "./nixfied";
   };
 
-  vendoredMetadata = ''
-    Vendored Framework
-    ==================
-
-    This repository vendors the Nixfied framework under `nixfied/`.
-
-    Framework source revision (install/upgrade):
-    - ${frameworkSourceRevision}
-
-    Framework source revision workflow:
-    - initialized via `framework::install`
-    - upgraded via `framework::upgrade` (preserves `nixfied/project/` and `nixfied/local/` by default)
-
-    Framework-owned paths:
-    - `flake.nix`, `flake.lock`
-    - `nixfied/framework/`
-    - `nixfied/lib/`, `nixfied/install/`, `nixfied/runner/`, `nixfied/registry/` (compatibility shims)
-
-    User-owned customization paths:
-    - `nixfied/project/` (primary command/task/workflow customization surface)
-    - `nixfied/local/` (optional extensions)
-
-    Prefer editing `nixfied/project/` and `nixfied/local/` over direct framework internals.
-  '';
-
   frameworkInstallRuntimeInputs = [
     pkgs.coreutils
     pkgs.findutils
+    pkgs.gawk
+    pkgs.git
     pkgs.gnused
     pkgs.rsync
   ];
@@ -123,6 +101,10 @@ let
             upgrade=${if upgradeDefault then "1" else "0"}
             reset_project=0
             reset_local=0
+            GIT="${pkgs.git}/bin/git"
+            SOURCE_GIT_ROOT="$repo_root"
+            FRAMEWORK_REVISION=${pkgs.lib.escapeShellArg frameworkSourceRevision}
+            PREV_FRAMEWORK_REVISION="unknown"
 
             usage() {
               cat <<'EOF'
@@ -170,6 +152,7 @@ let
               includeSkip = false;
               errorToStderr = true;
             }}
+            source ${vendoredMetadataRuntime}
 
             while [ "$#" -gt 0 ]; do
               case "$1" in
@@ -223,6 +206,13 @@ let
               exit 2
             fi
 
+            if [ -z "$FRAMEWORK_REVISION" ] || [ "$FRAMEWORK_REVISION" = "unknown" ]; then
+              FRAMEWORK_REVISION=$("$GIT" -C "$repo_root" rev-parse --short=12 HEAD 2>/dev/null || true)
+            fi
+            if [ -z "$FRAMEWORK_REVISION" ]; then
+              FRAMEWORK_REVISION="unknown"
+            fi
+
             mkdir -p "$target"
 
             if [ "$vendor" -eq 1 ]; then
@@ -251,6 +241,9 @@ let
               if [ -d "$target/nixfied/local" ] && [ "$reset_local" -eq 0 ]; then
                 preserve_local=1
               fi
+              if [ -f "$target/nixfied/VENDORED.txt" ]; then
+                PREV_FRAMEWORK_REVISION="$(read_vendored_revision "$target/nixfied/VENDORED.txt")"
+              fi
 
               mkdir -p "$target/nixfied"
               chmod -R u+w "$target/nixfied" 2>/dev/null || true
@@ -277,9 +270,7 @@ let
               rm -f "$target/.workspace"
               rm -f "$target/nixfied/.framework/.workspace"
 
-              cat > "$target/nixfied/VENDORED.txt" <<'NIXFIED_VENDORED'
-      ${vendoredMetadata}
-      NIXFIED_VENDORED
+              write_vendored_metadata "$target/nixfied/VENDORED.txt"
 
               cat > "$target/flake.nix" <<'NIXFIED_WRAPPER'
       ${vendoredWrapperFlake}
