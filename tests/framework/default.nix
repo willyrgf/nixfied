@@ -416,6 +416,10 @@ let
         ;
     };
 
+    "vendored-metadata-packaged-source-smoke" = import ./vendored-metadata-packaged-source-smoke.nix {
+      inherit pkgs;
+    };
+
     "postgres-backup-restore-smoke" = import ./postgres-backup-restore-smoke.nix {
       inherit pkgs;
     };

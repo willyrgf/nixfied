@@ -27,6 +27,7 @@ Vendored metadata is slightly richer now:
 - `nixfied/VENDORED.txt` records the framework source revision
 - upgrade writes an exact `old..new` commit summary when the framework source is a git worktree
 - packaged-source installs fall back to a concise note (plus a compare hint when both revisions are known)
+- that packaged-source fallback is the normal path for vendored `framework::upgrade`, because the wrapper dispatches through `github:willyrgf/nixfied/...` instead of your local `.git` checkout
 
 ## Race-Free Isolation Guarantees
 
