@@ -22,7 +22,7 @@ let
       projectRoot
       ;
   };
-  frameworkEphemeral = import ../.framework/ephemeral.nix {
+  frameworkEphemeral = import ../framework/runtime/ephemeral.nix {
     inherit
       pkgs
       projectRoot

@@ -12,7 +12,7 @@
     ownerFiles = [
       "nixfied/project/conf.nix"
       "nixfied/project/module.nix"
-      "nixfied/.framework/ephemeral.nix"
+      "nixfied/framework/runtime/ephemeral.nix"
     ];
     modelPaths = [ "runtime.ephemeral.copyMode" ];
     status = "stable";
@@ -35,7 +35,7 @@
     ownerFiles = [
       "nixfied/project/conf.nix"
       "nixfied/project/module.nix"
-      "nixfied/.framework/ephemeral.nix"
+      "nixfied/framework/runtime/ephemeral.nix"
     ];
     modelPaths = [ "runtime.ephemeral.includeUntracked" ];
     status = "stable";
@@ -58,7 +58,7 @@
     ownerFiles = [
       "nixfied/project/conf.nix"
       "nixfied/project/module.nix"
-      "nixfied/.framework/ephemeral.nix"
+      "nixfied/framework/runtime/ephemeral.nix"
     ];
     modelPaths = [
       "runtime.ephemeral.envFileMode"

@@ -1,8 +1,8 @@
 { pkgs }:
 let
-  installSource = builtins.readFile ../../nixfied/.framework/internal/install.nix;
-  runtimeSource = builtins.readFile ../../nixfied/.framework/internal/install-runtime.nix;
-  promptPlanSource = builtins.readFile ../../nixfied/.framework/internal/prompt-plan.nix;
+  installSource = builtins.readFile ../../nixfied/framework/install/internal/install.nix;
+  runtimeSource = builtins.readFile ../../nixfied/framework/install/internal/install-runtime.nix;
+  promptPlanSource = builtins.readFile ../../nixfied/framework/install/internal/prompt-plan.nix;
 in
 assert pkgs.lib.hasInfix "promptPlanScript = import ./prompt-plan.nix" installSource;
 assert pkgs.lib.hasInfix "installRuntime = import ./install-runtime.nix" installSource;

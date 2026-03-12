@@ -25,7 +25,7 @@ assert (!pkgs.lib.hasInfix "workflow_json() {" orchestratorSource);
 assert pkgs.lib.hasInfix "run_workflow_phase_tasks() {" executorSource;
 assert pkgs.lib.hasInfix "write_workflow_summary_json() {" executorSource;
 assert pkgs.lib.hasInfix "NIXFIED_ORCHESTRATOR_RUN_ID" executorSource;
-assert pkgs.lib.hasInfix "frameworkEphemeral = import ../.framework/ephemeral.nix"
+assert pkgs.lib.hasInfix "frameworkEphemeral = import ../framework/runtime/ephemeral.nix"
   orchestratorSource;
 assert pkgs.lib.hasInfix "ephemeral = model.runtime.ephemeral or { };" orchestratorSource;
 assert pkgs.lib.hasInfix "EPHEMERAL_EXECUTOR_WRAPPER=" orchestratorSource;

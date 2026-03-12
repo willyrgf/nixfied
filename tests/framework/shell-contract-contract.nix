@@ -2,7 +2,7 @@
 let
   shellContractSource = builtins.readFile ../../nixfied/.framework/lib/shell-contract.nix;
   buildersSource = builtins.readFile ../../nixfied/.framework/lib/builders.nix;
-  ephemeralSource = builtins.readFile ../../nixfied/.framework/ephemeral.nix;
+  ephemeralSource = builtins.readFile ../../nixfied/framework/runtime/ephemeral.nix;
 in
 assert pkgs.lib.hasInfix "mkContractRuntime =" shellContractSource;
 assert pkgs.lib.hasInfix "_nixfied_contract_load_runtime_plan() {" shellContractSource;

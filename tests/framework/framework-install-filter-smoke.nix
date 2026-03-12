@@ -58,7 +58,7 @@ let
     echo "framework placeholder" > "$out/nixfied/.framework/README.md"
   '';
 
-  installApps = import ../../nixfied/.framework/internal/install.nix {
+  installApps = import ../../nixfied/framework/install/internal/install.nix {
     inherit pkgs;
     lib = libStub;
     frameworkRoot = frameworkFixture;
