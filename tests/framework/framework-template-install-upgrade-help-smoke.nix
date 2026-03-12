@@ -86,6 +86,7 @@ pkgs.runCommand "framework-template-install-upgrade-help-smoke" { } ''
   require_file "$template_repo/flake.nix"
   require_file "$template_repo/nixfied/project/module.nix"
   require_file "$template_repo/nixfied/lib/default.nix"
+  require_file "$template_repo/nixfied/framework/core/default.nix"
   require_file "$template_repo/nixfied/VENDORED.txt"
   require_contains "$template_repo/nixfied/VENDORED.txt" "Framework source revision (install/upgrade):"
   require_contains "$template_repo/nixfied/VENDORED.txt" "Recent framework changes:"

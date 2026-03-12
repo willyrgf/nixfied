@@ -5,7 +5,7 @@
 }:
 let
   lib = pkgs.lib;
-  listUtils = import ../../nixfied/lib/list-utils.nix;
+  listUtils = import ../../nixfied/framework/core/list-utils.nix;
   safeRepoRoot = builtins.unsafeDiscardStringContext (builtins.toString ../..);
 
   featureIds = builtins.sort builtins.lessThan (builtins.attrNames (model.features or { }));

@@ -9,7 +9,7 @@
 }:
 let
   lib = pkgs.lib;
-  listUtils = import ../../nixfied/lib/list-utils.nix;
+  listUtils = import ../../nixfied/framework/core/list-utils.nix;
 
   exposedTaskFeatureIds = builtins.sort builtins.lessThan (
     builtins.map (appName: model.views.apps.${appName}.taskId) (
@@ -113,6 +113,10 @@ let
         packages
         apps
         ;
+    };
+
+    "vendored-metadata-contract" = import ./vendored-metadata-contract.nix {
+      inherit pkgs;
     };
 
     "scheduler-order" = import ./scheduler-order.nix {

@@ -1,7 +1,9 @@
 { pkgs }:
 let
   shellHelpers = import ./lib/shell-helpers.nix { inherit pkgs; };
-  vendoredMetadata = import ../../nixfied/framework/install/internal/vendored-metadata.nix { inherit pkgs; };
+  vendoredMetadata = import ../../nixfied/framework/install/internal/vendored-metadata.nix {
+    inherit pkgs;
+  };
 in
 pkgs.runCommand "vendored-metadata-contract" { } ''
   set -euo pipefail

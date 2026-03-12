@@ -33,8 +33,8 @@ pkgs.runCommand "framework-install-thin-smoke" { } ''
     fail "thin wrapper should not vendor framework sources"
   fi
 
-  if ${pkgs.gnugrep}/bin/grep -Fq 'nixfiedLib = import ./nixfied/lib/default.nix {' "$target/flake.nix"; then
-    fail "thin wrapper should not import vendored lib/default.nix"
+  if ${pkgs.gnugrep}/bin/grep -Fq 'nixfiedLib = import ./nixfied/framework/core/default.nix {' "$target/flake.nix"; then
+    fail "thin wrapper should not import vendored framework/core/default.nix"
   fi
 
   set +e

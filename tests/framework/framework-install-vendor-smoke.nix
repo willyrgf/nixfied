@@ -36,6 +36,11 @@ pkgs.runCommand "framework-install-vendor-smoke" { } ''
     exit 1
   fi
 
+  if ! [ -f "$target/nixfied/framework/core/default.nix" ]; then
+    echo "missing vendored framework/core/default.nix"
+    exit 1
+  fi
+
   if ! [ -f "$target/nixfied/project/module.nix" ]; then
     echo "missing vendored project/module.nix"
     exit 1
@@ -62,8 +67,14 @@ pkgs.runCommand "framework-install-vendor-smoke" { } ''
     exit 1
   fi
 
-  if ! ${pkgs.gnugrep}/bin/grep -Fq 'nixfiedLib = import ./nixfied/lib/default.nix {' "$target/flake.nix"; then
-    echo "vendored wrapper should import ./nixfied/lib/default.nix"
+  if ! ${pkgs.gnugrep}/bin/grep -Fq 'nixfiedLib = import ./nixfied/framework/core/default.nix {' "$target/flake.nix"; then
+    echo "vendored wrapper should import ./nixfied/framework/core/default.nix"
+    cat "$target/flake.nix"
+    exit 1
+  fi
+
+  if ! ${pkgs.gnugrep}/bin/grep -Fq 'frameworkSourceRevision = import ./nixfied/framework/core/framework-revision.nix {' "$target/flake.nix"; then
+    echo "vendored wrapper should import ./nixfied/framework/core/framework-revision.nix"
     cat "$target/flake.nix"
     exit 1
   fi

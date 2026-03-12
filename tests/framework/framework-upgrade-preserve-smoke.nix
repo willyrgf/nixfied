@@ -51,6 +51,7 @@ pkgs.runCommand "framework-upgrade-preserve-smoke" { } ''
   require_file "$target/nixfied/project/module.nix"
   require_file "$target/nixfied/local/default.nix"
   require_file "$target/nixfied/lib/default.nix"
+  require_file "$target/nixfied/framework/core/default.nix"
   require_file "$target/nixfied/VENDORED.txt"
   require_contains "$target/nixfied/VENDORED.txt" "Framework source revision (install/upgrade):"
   require_contains "$target/nixfied/VENDORED.txt" "Recent framework changes:"

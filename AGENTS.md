@@ -14,9 +14,10 @@
 - `nixfied/project/`: project config and composition (`conf.nix`, `module.nix`, `runtime.nix`, `services.nix`, `tasks.nix`, `workflows.nix`).
 - `nixfied/modules/`: typed module options (`core`, `runtime`, `tasks`, `workflows`, `operations`, `services/*`).
 - `nixfied/compiler/`: explicit compiler passes that build `nixfiedModel`.
-- `nixfied/framework/runtime/`: canonical dispatcher/executor runtime apps; `nixfied/runner/` remains as a compatibility shim.
-- `nixfied/framework/runtime/registry/`: canonical NDJSON event store, snapshot, replay; `nixfied/registry/` remains as a compatibility shim.
-- `nixfied/install/`: compatibility shim for framework install entrypoints.
+- `nixfied/lib/`: transitional compatibility shim for framework core entrypoints; prefer `nixfied/framework/core/` in new internal code.
+- `nixfied/framework/runtime/`: canonical dispatcher/executor runtime apps; `nixfied/runner/` remains as a transitional compatibility shim.
+- `nixfied/framework/runtime/registry/`: canonical NDJSON event store, snapshot, replay; `nixfied/registry/` remains as a transitional compatibility shim.
+- `nixfied/install/`: transitional compatibility shim for framework install entrypoints.
 - `nixfied/framework/install/internal/`: framework install internals; the framework workspace marker lives at repo-root `.workspace`.
 - `tests/framework/`: framework checks and test docs.
 

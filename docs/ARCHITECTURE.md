@@ -84,9 +84,9 @@ Introspection apps:
 - `nixfied/compiler/`: model compilation passes.
 - `nixfied/framework/runtime/`: dispatcher, orchestrator, executor, env sandbox, and runtime helpers.
 - `nixfied/framework/runtime/registry/`: NDJSON event log, replay, and snapshot logic.
-- `nixfied/runner/` and `nixfied/registry/`: compatibility import shims for downstream callers.
+- `nixfied/runner/` and `nixfied/registry/`: transitional compatibility import shims for downstream callers; new internal code should use `nixfied/framework/runtime/...`.
 - `nixfied/framework/core/`: canonical renderer, flake/core helpers, and `mkNixfied`.
-- `nixfied/lib/` and `nixfied/install/`: compatibility import shims for downstream callers.
+- `nixfied/lib/` and `nixfied/install/`: transitional compatibility import shims for downstream callers; generated vendored wrappers now use canonical `nixfied/framework/core/...` paths.
 - `tests/framework/`: deterministic framework gates and snapshots.
 
 ## Determinism Gates

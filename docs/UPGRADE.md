@@ -15,12 +15,17 @@ Project-owned customization is now separated from framework-owned behavior:
 - `nixfied/project/{runtime,services,tasks,workflows}.nix` hold project-owned definitions
 - `nixfied/local/` remains optional extension space and is still preserved on vendored upgrade
 
-Compatibility shims remain in place for downstream imports:
+Compatibility shims remain in place for downstream imports, but they are now treated as transitional bridges rather than canonical internal paths:
 
 - `nixfied/lib/`
 - `nixfied/install/`
 - `nixfied/runner/`
 - `nixfied/registry/`
+
+Generated vendored wrappers now import canonical framework-core entrypoints directly:
+
+- `./nixfied/framework/core/default.nix`
+- `./nixfied/framework/core/framework-revision.nix`
 
 Vendored metadata is slightly richer now:
 

@@ -54,7 +54,7 @@ let
   };
 
   fakeNixChecksPkg =
-    import ../../nixfied/lib/mkNixChecks.nix
+    import ../../nixfied/framework/core/mkNixChecks.nix
       {
         pkgs = fakePkgs;
         lib = pkgs.lib;

@@ -1,6 +1,6 @@
 { pkgs }:
 let
-  plainShellLogging = import ../../../nixfied/lib/plain-shell-logging.nix;
+  plainShellLogging = import ../../../nixfied/framework/core/plain-shell-logging.nix;
 
   mkShellPrelude =
     {
