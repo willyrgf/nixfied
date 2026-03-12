@@ -1,6 +1,7 @@
 { pkgs }:
 let
-  frameworkSource = builtins.readFile ../../nixfied/project/module.nix;
+  projectSource = builtins.readFile ../../nixfied/project/module.nix;
+  frameworkTestPresetSource = builtins.readFile ../../nixfied/framework/presets/framework-test.nix;
   nixChecksSource = builtins.readFile ../../nixfied/lib/mkNixChecks.nix;
   plainLoggingSource = builtins.readFile ../../nixfied/lib/plain-shell-logging.nix;
   executorSource = builtins.readFile ../../nixfied/runner/executor.nix;
@@ -8,8 +9,10 @@ let
   helpersSource = builtins.readFile ../../nixfied/.framework/lib/helpers.nix;
   loggingRuntimeSource = builtins.readFile ../../nixfied/.framework/lib/logging-runtime.nix;
 in
-assert pkgs.lib.hasInfix "plainShellLogging = import ../lib/plain-shell-logging.nix;"
-  frameworkSource;
+assert pkgs.lib.hasInfix "frameworkTestPreset = import ../framework/presets/framework-test.nix"
+  projectSource;
+assert pkgs.lib.hasInfix "plainShellLogging = import ../../lib/plain-shell-logging.nix;"
+  frameworkTestPresetSource;
 assert pkgs.lib.hasInfix "plainShellLogging = import ./plain-shell-logging.nix;" nixChecksSource;
 assert pkgs.lib.hasInfix "\"INFO: %s\\n\"" plainLoggingSource;
 assert pkgs.lib.hasInfix "\"WARN: %s\\n\"" plainLoggingSource;
