@@ -65,7 +65,7 @@ Workspace-scoped defaults:
 
 ## Ephemeral Runtime Contract
 
-Ephemeral workflow execution is mediated by `nixfied/.framework/ephemeral.nix` and configured through `model.runtime.ephemeral`.
+Ephemeral workflow execution is mediated by `nixfied/framework/runtime/ephemeral.nix` and configured through `model.runtime.ephemeral`.
 
 Mode selection:
 

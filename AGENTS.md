@@ -17,7 +17,7 @@
 - `nixfied/runner/`: dispatcher/executor runtime apps.
 - `nixfied/registry/`: strict NDJSON event store, snapshot, replay.
 - `nixfied/install/`: thin-wrapper/vendoring installer helpers.
-- `nixfied/.framework/internal/`: framework install internals and `.workspace` marker handling.
+- `nixfied/framework/install/internal/`: framework install internals; the `.workspace` marker path remains `nixfied/.framework/.workspace`.
 - `tests/framework/`: framework checks and test docs.
 
 ## Commands
