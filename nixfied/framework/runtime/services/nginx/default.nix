@@ -13,7 +13,7 @@ let
   };
   loggingPrelude = helpers.loggingPrelude;
   serviceApi = import ../../../../.framework/lib/service-api.nix { inherit pkgs; };
-  runtimeEvents = import ../../../../.framework/lib/runtime-events.nix { inherit pkgs project; };
+  runtimeEvents = import ../../helpers/runtime-events.nix { inherit pkgs project; };
   observability = import ../../../../.framework/lib/service-observability.nix {
     inherit
       pkgs

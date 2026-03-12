@@ -11,7 +11,7 @@ let
   managedServiceLifecycle = import ../../../../.framework/lib/managed-service-lifecycle.nix { inherit pkgs; };
   probeCommands = import ../../../../.framework/lib/probe-commands.nix { inherit pkgs; };
   slotEnvRuntime = import ../../helpers/slot-env-runtime.nix { inherit pkgs; };
-  runtimeEvents = import ../../../../.framework/lib/runtime-events.nix { inherit pkgs project; };
+  runtimeEvents = import ../../helpers/runtime-events.nix { inherit pkgs project; };
   observability = import ../../../../.framework/lib/service-observability.nix {
     inherit
       pkgs
