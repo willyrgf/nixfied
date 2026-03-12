@@ -1,6 +1,6 @@
 { pkgs }:
 let
-  slotEnvRuntime = import ../../nixfied/.framework/lib/slot-env-runtime.nix { inherit pkgs; };
+  slotEnvRuntime = import ../../nixfied/framework/runtime/helpers/slot-env-runtime.nix { inherit pkgs; };
 in
 pkgs.runCommand "slot-env-runtime-smoke" { } ''
   set -euo pipefail

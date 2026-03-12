@@ -12,7 +12,7 @@ let
     if loggingPrelude != null && loggingPrelude != "" then
       loggingPrelude
     else
-      (import ../../.framework/lib/helpers.nix {
+      (import ./helpers.nix {
         inherit pkgs project;
         hooks = { };
         summaryParser = "";

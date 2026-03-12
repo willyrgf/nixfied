@@ -1,10 +1,10 @@
 { pkgs }:
 let
-  runtimeSource = builtins.readFile ../../nixfied/.framework/supervisor/runtime.nix;
-  defaultSource = builtins.readFile ../../nixfied/.framework/supervisor/default.nix;
-  lifecycleSource = builtins.readFile ../../nixfied/.framework/supervisor/lifecycle.nix;
-  statusSource = builtins.readFile ../../nixfied/.framework/supervisor/status.nix;
-  managementSource = builtins.readFile ../../nixfied/.framework/supervisor/management.nix;
+  runtimeSource = builtins.readFile ../../nixfied/framework/runtime/services/supervisor/runtime.nix;
+  defaultSource = builtins.readFile ../../nixfied/framework/runtime/services/supervisor/default.nix;
+  lifecycleSource = builtins.readFile ../../nixfied/framework/runtime/services/supervisor/lifecycle.nix;
+  statusSource = builtins.readFile ../../nixfied/framework/runtime/services/supervisor/status.nix;
+  managementSource = builtins.readFile ../../nixfied/framework/runtime/services/supervisor/management.nix;
 in
 assert pkgs.lib.hasInfix "mkSupervisorScript" runtimeSource;
 assert pkgs.lib.hasInfix "slotPrelude" runtimeSource;

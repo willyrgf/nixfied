@@ -1,7 +1,7 @@
 { pkgs }:
 let
-  shellContractSource = builtins.readFile ../../nixfied/.framework/lib/shell-contract.nix;
-  buildersSource = builtins.readFile ../../nixfied/.framework/lib/builders.nix;
+  shellContractSource = builtins.readFile ../../nixfied/framework/runtime/helpers/shell-contract.nix;
+  buildersSource = builtins.readFile ../../nixfied/framework/runtime/helpers/builders.nix;
   ephemeralSource = builtins.readFile ../../nixfied/framework/runtime/ephemeral.nix;
 in
 assert pkgs.lib.hasInfix "mkContractRuntime =" shellContractSource;

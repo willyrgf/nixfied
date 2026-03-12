@@ -1,6 +1,6 @@
 { pkgs }:
 let
-  shellContract = import ../../nixfied/.framework/lib/shell-contract.nix { inherit pkgs; };
+  shellContract = import ../../nixfied/framework/runtime/helpers/shell-contract.nix { inherit pkgs; };
   contract = {
     version = 2;
     name = "contract-smoke";

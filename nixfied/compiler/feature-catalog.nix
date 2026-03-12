@@ -105,7 +105,7 @@
       }
     ];
     ownerFiles = [
-      "nixfied/.framework/lib/helpers.nix"
+      "nixfied/framework/runtime/helpers/helpers.nix"
       "nixfied/project/module.nix"
     ];
     modelPaths = [ ];

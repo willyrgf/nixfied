@@ -1,6 +1,6 @@
 { pkgs }:
 let
-  source = builtins.readFile ../../nixfied/.framework/nginx/site-management.nix;
+  source = builtins.readFile ../../nixfied/framework/runtime/services/nginx/site-management.nix;
 in
 assert pkgs.lib.hasInfix "resolvedTemplates.siteProxyTemplate" source;
 assert pkgs.lib.hasInfix "resolvedTemplates.siteStaticTemplate" source;

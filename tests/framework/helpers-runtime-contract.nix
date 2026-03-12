@@ -1,9 +1,9 @@
 { pkgs }:
 let
-  helpersSource = builtins.readFile ../../nixfied/.framework/lib/helpers.nix;
-  cleanupSource = builtins.readFile ../../nixfied/.framework/lib/cleanup-runtime.nix;
-  fixtureSource = builtins.readFile ../../nixfied/.framework/lib/fixture-runtime.nix;
-  loggingRuntimeSource = builtins.readFile ../../nixfied/.framework/lib/logging-runtime.nix;
+  helpersSource = builtins.readFile ../../nixfied/framework/runtime/helpers/helpers.nix;
+  cleanupSource = builtins.readFile ../../nixfied/framework/runtime/helpers/cleanup-runtime.nix;
+  fixtureSource = builtins.readFile ../../nixfied/framework/runtime/helpers/fixture-runtime.nix;
+  loggingRuntimeSource = builtins.readFile ../../nixfied/framework/runtime/helpers/logging-runtime.nix;
 in
 assert pkgs.lib.hasInfix "import ./cleanup-runtime.nix" helpersSource;
 assert pkgs.lib.hasInfix "import ./fixture-runtime.nix" helpersSource;

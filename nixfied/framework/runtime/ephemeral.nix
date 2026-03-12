@@ -65,19 +65,14 @@ let
         inherit pkgs project;
         loggingPrelude = resolvedLoggingPrelude;
       }
-    else if builtins.pathExists ../../.framework/lib/runtime-events.nix then
-      import ../../.framework/lib/runtime-events.nix {
-        inherit pkgs project;
-        loggingPrelude = resolvedLoggingPrelude;
-      }
     else
       {
         emitEvent = pkgs.writeShellScript "emit-event-noop" ''
           exit 0
         '';
       };
-  shellContract = import ../../.framework/lib/shell-contract.nix { inherit pkgs; };
-  sourceMaterialization = import ../../.framework/lib/ephemeral-materialization.nix {
+  shellContract = import ./helpers/shell-contract.nix { inherit pkgs; };
+  sourceMaterialization = import ./helpers/ephemeral-materialization.nix {
     inherit
       pkgs
       project
@@ -93,7 +88,7 @@ let
     if loggingPrelude != null && loggingPrelude != "" then
       loggingPrelude
     else
-      (import ../../.framework/lib/helpers.nix {
+      (import ./helpers/helpers.nix {
         inherit pkgs project;
         hooks = { };
         summaryParser = "";

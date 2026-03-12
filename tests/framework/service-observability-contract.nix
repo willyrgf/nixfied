@@ -1,11 +1,11 @@
 { pkgs }:
 let
   helperSource = builtins.readFile ../../nixfied/.framework/lib/service-observability.nix;
-  minioSource = builtins.readFile ../../nixfied/.framework/minio/lifecycle.nix;
-  nginxSource = builtins.readFile ../../nixfied/.framework/nginx/lifecycle.nix;
-  rethSource = builtins.readFile ../../nixfied/.framework/reth/lifecycle.nix;
-  heliosSource = builtins.readFile ../../nixfied/.framework/helios/lifecycle.nix;
-  postgresSource = builtins.readFile ../../nixfied/.framework/postgres/lifecycle.nix;
+  minioSource = builtins.readFile ../../nixfied/framework/runtime/services/minio/lifecycle.nix;
+  nginxSource = builtins.readFile ../../nixfied/framework/runtime/services/nginx/lifecycle.nix;
+  rethSource = builtins.readFile ../../nixfied/framework/runtime/services/reth/lifecycle.nix;
+  heliosSource = builtins.readFile ../../nixfied/framework/runtime/services/helios/lifecycle.nix;
+  postgresSource = builtins.readFile ../../nixfied/framework/runtime/services/postgres/lifecycle.nix;
 in
 assert pkgs.lib.hasInfix "mkStatusLine =" helperSource;
 assert pkgs.lib.hasInfix "beforeRunningFields ? [ ]" helperSource;

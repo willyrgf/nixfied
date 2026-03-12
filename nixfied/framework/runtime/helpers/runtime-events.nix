@@ -11,7 +11,7 @@ let
   id = import ./id.nix {
     inherit pkgs project;
   };
-  servicePolicy = import ../../.framework/lib/service-policy.nix { inherit pkgs; };
+  servicePolicy = import ./service-policy.nix { inherit pkgs; };
   registry = import ../../../registry/events.nix { inherit pkgs; };
   projectIdUpper =
     let
@@ -37,7 +37,7 @@ let
     if loggingPrelude != null && loggingPrelude != "" then
       loggingPrelude
     else
-      (import ../../.framework/lib/helpers.nix {
+      (import ./helpers.nix {
         inherit pkgs project;
         hooks = { };
         summaryParser = "";

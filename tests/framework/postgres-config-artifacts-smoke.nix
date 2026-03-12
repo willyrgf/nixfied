@@ -21,11 +21,11 @@ let
     };
   };
 
-  config = import ../../nixfied/.framework/postgres/config.nix {
+  config = import ../../nixfied/framework/runtime/services/postgres/config.nix {
     inherit pkgs project;
   };
 
-  lifecycle = import ../../nixfied/.framework/postgres/lifecycle.nix {
+  lifecycle = import ../../nixfied/framework/runtime/services/postgres/lifecycle.nix {
     inherit
       pkgs
       project

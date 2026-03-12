@@ -1,13 +1,13 @@
 { pkgs }:
 let
   helperSource = builtins.readFile ../../nixfied/.framework/lib/managed-service-lifecycle.nix;
-  minioSource = builtins.readFile ../../nixfied/.framework/minio/lifecycle.nix;
-  rethSource = builtins.readFile ../../nixfied/.framework/reth/lifecycle.nix;
-  heliosSource = builtins.readFile ../../nixfied/.framework/helios/lifecycle.nix;
-  nginxLifecycleSource = builtins.readFile ../../nixfied/.framework/nginx/lifecycle.nix;
-  nginxDefaultSource = builtins.readFile ../../nixfied/.framework/nginx/default.nix;
-  postgresLifecycleSource = builtins.readFile ../../nixfied/.framework/postgres/lifecycle.nix;
-  postgresDefaultSource = builtins.readFile ../../nixfied/.framework/postgres/default.nix;
+  minioSource = builtins.readFile ../../nixfied/framework/runtime/services/minio/lifecycle.nix;
+  rethSource = builtins.readFile ../../nixfied/framework/runtime/services/reth/lifecycle.nix;
+  heliosSource = builtins.readFile ../../nixfied/framework/runtime/services/helios/lifecycle.nix;
+  nginxLifecycleSource = builtins.readFile ../../nixfied/framework/runtime/services/nginx/lifecycle.nix;
+  nginxDefaultSource = builtins.readFile ../../nixfied/framework/runtime/services/nginx/default.nix;
+  postgresLifecycleSource = builtins.readFile ../../nixfied/framework/runtime/services/postgres/lifecycle.nix;
+  postgresDefaultSource = builtins.readFile ../../nixfied/framework/runtime/services/postgres/default.nix;
 in
 assert pkgs.lib.hasInfix "mkPidFileManagedLifecycle" helperSource;
 assert pkgs.lib.hasInfix "mkWrappedScript" helperSource;

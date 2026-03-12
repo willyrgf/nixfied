@@ -9,9 +9,9 @@
 }:
 
 let
-  shellContract = import ./shell-contract.nix { inherit pkgs; };
+  shellContract = import ../../framework/runtime/helpers/shell-contract.nix { inherit pkgs; };
   baseLoggingPrelude =
-    (import ./helpers.nix {
+    (import ../../framework/runtime/helpers/helpers.nix {
       inherit pkgs project;
       hooks = { };
       summaryParser = "";
@@ -20,14 +20,14 @@ let
     inherit pkgs project;
     loggingPrelude = baseLoggingPrelude;
   };
-  helpers = import ./helpers.nix {
+  helpers = import ../../framework/runtime/helpers/helpers.nix {
     inherit pkgs project hooks;
     inherit (summary) summaryParser;
   };
   fixtures = import ./fixtures.nix {
     inherit pkgs project;
   };
-  builders = import ./builders.nix {
+  builders = import ../../framework/runtime/helpers/builders.nix {
     inherit pkgs project;
     inherit shellContract;
     fixtureLib = fixtures;
@@ -50,7 +50,7 @@ let
       shellContract
       ;
   };
-  discovery = import ./discovery.nix {
+  discovery = import ../../framework/runtime/helpers/discovery.nix {
     inherit pkgs project;
     inherit (helpers) loggingPrelude;
     inherit
@@ -71,8 +71,8 @@ let
     inherit (helpers) loggingPrelude;
   };
   managedServiceLifecycle = import ./managed-service-lifecycle.nix { inherit pkgs; };
-  slotEnvRuntime = import ./slot-env-runtime.nix { inherit pkgs; };
-  servicePolicy = import ./service-policy.nix { inherit pkgs; };
+  slotEnvRuntime = import ../../framework/runtime/helpers/slot-env-runtime.nix { inherit pkgs; };
+  servicePolicy = import ../../framework/runtime/helpers/service-policy.nix { inherit pkgs; };
   portUtils = import ./port-utils.nix {
     inherit pkgs;
     inherit (helpers) loggingPrelude;

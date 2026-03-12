@@ -1,6 +1,6 @@
 { pkgs }:
 let
-  source = builtins.readFile ../../nixfied/.framework/lib/slot-env-runtime.nix;
+  source = builtins.readFile ../../nixfied/framework/runtime/helpers/slot-env-runtime.nix;
 in
 assert pkgs.lib.hasInfix "def emit($name; $value):" source;
 assert pkgs.lib.hasInfix "map(\"export \" + .key + \"=\" + (.value | tostring | @sh))" source;

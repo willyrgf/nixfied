@@ -6,8 +6,8 @@ let
   plainLoggingSource = builtins.readFile ../../nixfied/lib/plain-shell-logging.nix;
   executorSource = builtins.readFile ../../nixfied/runner/executor.nix;
   envSandboxSource = builtins.readFile ../../nixfied/runner/env-sandbox.nix;
-  helpersSource = builtins.readFile ../../nixfied/.framework/lib/helpers.nix;
-  loggingRuntimeSource = builtins.readFile ../../nixfied/.framework/lib/logging-runtime.nix;
+  helpersSource = builtins.readFile ../../nixfied/framework/runtime/helpers/helpers.nix;
+  loggingRuntimeSource = builtins.readFile ../../nixfied/framework/runtime/helpers/logging-runtime.nix;
 in
 assert pkgs.lib.hasInfix "frameworkTestPreset = import ../framework/presets/framework-test.nix"
   projectSource;

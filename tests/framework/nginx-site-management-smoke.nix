@@ -34,7 +34,7 @@ let
     '';
   };
 
-  siteMgmt = import ../../nixfied/.framework/nginx/site-management.nix {
+  siteMgmt = import ../../nixfied/framework/runtime/services/nginx/site-management.nix {
     inherit pkgs;
     project = { };
     slots = slotsStub;

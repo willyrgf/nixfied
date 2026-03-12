@@ -3,7 +3,7 @@ let
   shellHelpers = import ./lib/shell-helpers.nix { inherit pkgs; };
   loggingPrelude = shellHelpers.loggingPrelude;
 
-  compiledDiscovery = import ../../nixfied/.framework/lib/discovery.nix {
+  compiledDiscovery = import ../../nixfied/framework/runtime/helpers/discovery.nix {
     inherit pkgs loggingPrelude;
     project.discovery = {
       enable = true;
@@ -45,7 +45,7 @@ let
     };
   };
 
-  fallbackDiscovery = import ../../nixfied/.framework/lib/discovery.nix {
+  fallbackDiscovery = import ../../nixfied/framework/runtime/helpers/discovery.nix {
     inherit pkgs loggingPrelude;
     project.discovery = {
       enable = true;

@@ -3,7 +3,7 @@ let
   shellHelpers = import ./lib/shell-helpers.nix { inherit pkgs; };
   loggingPrelude = shellHelpers.errorLoggingPrelude;
 
-  envLoader = import ../../nixfied/.framework/lib/env-loader.nix {
+  envLoader = import ../../nixfied/framework/runtime/helpers/env-loader.nix {
     inherit
       pkgs
       loggingPrelude
