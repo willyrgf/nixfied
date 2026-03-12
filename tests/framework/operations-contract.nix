@@ -1,8 +1,8 @@
 { pkgs, model }:
 let
   source = builtins.readFile ../../nixfied/modules/operations.nix;
-  probeRuntimeSource = builtins.readFile ../../nixfied/.framework/lib/operations-probe-runtime.nix;
-  isolationRuntimeSource = builtins.readFile ../../nixfied/.framework/lib/test-isolation-runtime.nix;
+  probeRuntimeSource = builtins.readFile ../../nixfied/framework/runtime/helpers/operations-probe-runtime.nix;
+  isolationRuntimeSource = builtins.readFile ../../nixfied/framework/runtime/helpers/test-isolation-runtime.nix;
   serviceConfigSource = builtins.readFile ../../nixfied/lib/service-config.nix;
   healthCommand = model.tasks."task.ops.health".runner.command;
   readyCommand = model.tasks."task.ops.ready".runner.command;
@@ -19,7 +19,7 @@ assert pkgs.lib.hasInfix "service_selected()" source;
 assert pkgs.lib.hasInfix "resolve_service_source()" source;
 assert pkgs.lib.hasInfix "source_kind_disallowed()" source;
 assert pkgs.lib.hasInfix "serviceConfigLib = import ../lib/service-config.nix" source;
-assert pkgs.lib.hasInfix "probeRuntime = import ../.framework/lib/operations-probe-runtime.nix"
+assert pkgs.lib.hasInfix "probeRuntime = import ../framework/runtime/helpers/operations-probe-runtime.nix"
   source;
 assert pkgs.lib.hasInfix "resolvedServiceConfigByName =" source;
 assert pkgs.lib.hasInfix "resolveServicePortBase =" source;
@@ -30,7 +30,7 @@ assert pkgs.lib.hasInfix "mkServiceProbeSpec =" source;
 assert pkgs.lib.hasInfix "healthProbeSpecs = builtins.listToAttrs" source;
 assert pkgs.lib.hasInfix "readyProbeSpecs = builtins.listToAttrs" source;
 assert pkgs.lib.hasInfix
-  "testIsolationRuntime = import ../.framework/lib/test-isolation-runtime.nix"
+  "testIsolationRuntime = import ../framework/runtime/helpers/test-isolation-runtime.nix"
   source;
 assert pkgs.lib.hasInfix "isolationScript = testIsolationRuntime.mkIsolationScript" source;
 assert pkgs.lib.hasInfix "mkTcpProbeBody =" probeRuntimeSource;

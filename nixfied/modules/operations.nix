@@ -8,8 +8,8 @@ let
   cfg = config.nixfied.operations;
   runtime = config.nixfied.runtime;
   services = config.nixfied.services;
-  probeCommands = import ../.framework/lib/probe-commands.nix { inherit pkgs; };
-  probeRuntime = import ../.framework/lib/operations-probe-runtime.nix {
+  probeCommands = import ../framework/runtime/helpers/probe-commands.nix { inherit pkgs; };
+  probeRuntime = import ../framework/runtime/helpers/operations-probe-runtime.nix {
     inherit
       lib
       pkgs
@@ -20,7 +20,7 @@ let
     runtimeStride = runtime.slot.stride;
   };
   serviceConfigLib = import ../lib/service-config.nix { inherit lib; };
-  testIsolationRuntime = import ../.framework/lib/test-isolation-runtime.nix { inherit lib pkgs; };
+  testIsolationRuntime = import ../framework/runtime/helpers/test-isolation-runtime.nix { inherit lib pkgs; };
 
   postgresCfg = services.postgres;
   nginxCfg = services.nginx;
