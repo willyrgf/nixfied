@@ -2,13 +2,13 @@
 {
   pkgs,
   appApi ? null,
-  shellContract ? import ../../framework/runtime/helpers/shell-contract.nix { inherit pkgs; },
+  shellContract ? import ./shell-contract.nix { inherit pkgs; },
 }:
 
 let
   lib = pkgs.lib;
-  validation = import ../../framework/runtime/helpers/validation.nix { inherit pkgs; };
-  slotEnvRuntime = import ../../framework/runtime/helpers/slot-env-runtime.nix { inherit pkgs; };
+  validation = import ./validation.nix { inherit pkgs; };
+  slotEnvRuntime = import ./slot-env-runtime.nix { inherit pkgs; };
   inherit (validation)
     isNonEmptyString
     expect

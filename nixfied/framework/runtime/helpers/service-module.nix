@@ -6,7 +6,7 @@
 
 let
   serviceApi = import ./service-api.nix { inherit pkgs; };
-  runtimeEvents = import ../../framework/runtime/helpers/runtime-events.nix { inherit pkgs project; };
+  runtimeEvents = import ./runtime-events.nix { inherit pkgs project; };
   observability = import ./service-observability.nix {
     inherit
       pkgs
