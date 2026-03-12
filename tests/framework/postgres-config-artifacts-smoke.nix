@@ -1,5 +1,6 @@
 { pkgs }:
 let
+  shellHelpers = import ./lib/shell-helpers.nix { inherit pkgs; };
   slotInfoJson = pkgs.writeShellScript "postgres-config-artifacts-slot-info" ''
     printf '{"slot":"%s","env":"%s","ports":{"POSTGRES_PORT":%s},"directories":{"run":"%s"}}\n' \
       "''${SLOT:-0}" \
@@ -31,33 +32,12 @@ let
       config
       ;
     slots = slotsStub;
-    loggingPrelude = ''
-      log_info() { printf 'INFO: %s\n' "$*"; }
-      log_warn() { printf 'WARN: %s\n' "$*"; }
-      log_error() { printf 'ERROR: %s\n' "$*"; }
-      log_ok() { printf 'OK: %s\n' "$*"; }
-      log_stop() { printf 'INFO: stopping %s\n' "$*"; }
-      log_skip() { printf 'SKIP: %s\n' "$*"; }
-    '';
+    loggingPrelude = shellHelpers.loggingPreludeWithStop;
   };
 in
 pkgs.runCommand "postgres-config-artifacts-smoke" { } ''
   set -euo pipefail
-
-  fail() {
-    echo "ERROR: $*" >&2
-    exit 1
-  }
-
-  require_contains() {
-    local path="$1"
-    local needle="$2"
-    ${pkgs.gnugrep}/bin/grep -Fq -- "$needle" "$path" || {
-      echo "--- $path" >&2
-      cat "$path" >&2
-      fail "expected '$needle' in $path"
-    }
-  }
+  ${shellHelpers.stderrShellPrelude}
 
   export HOME="$TMPDIR/home"
   export SLOT=0

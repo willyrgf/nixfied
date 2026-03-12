@@ -44,6 +44,8 @@ Dispatcher surfaces:
 
 Introspection surfaces:
 
+- `nix run .#docs`
+- `nix run .#features`
 - `nix run .#model`
 - `nix run .#stateHash`
 - `nix run .#services`

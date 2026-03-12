@@ -5,6 +5,7 @@
 }:
 let
   lib = pkgs.lib;
+  listUtils = import ../../nixfied/lib/list-utils.nix;
   safeRepoRoot = builtins.unsafeDiscardStringContext (builtins.toString ../..);
 
   featureIds = builtins.sort builtins.lessThan (builtins.attrNames (model.features or { }));
@@ -18,10 +19,6 @@ let
   ) featureIds;
 
   checkNames = builtins.sort builtins.lessThan (builtins.attrNames checks);
-
-  unique =
-    list:
-    builtins.foldl' (acc: value: if builtins.elem value acc then acc else acc ++ [ value ]) [ ] list;
 
   checkMetadata = builtins.listToAttrs (
     builtins.map (name: {
@@ -50,7 +47,7 @@ let
     || builtins.any (path: !builtins.pathExists "${safeRepoRoot}/${path}") ownerFiles
   ) checkNames;
 
-  coveredFeatureIds = unique (
+  coveredFeatureIds = listUtils.uniquePreserveOrder (
     builtins.concatLists (builtins.map (name: (checkMetadata.${name}.covers or [ ])) checkNames)
   );
 

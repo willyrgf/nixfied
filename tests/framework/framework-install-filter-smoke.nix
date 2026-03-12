@@ -1,12 +1,7 @@
 { pkgs }:
 let
-  loggingPrelude = ''
-    log_info() { printf 'INFO: %s\n' "$*"; }
-    log_warn() { printf 'WARN: %s\n' "$*"; }
-    log_error() { printf 'ERROR: %s\n' "$*"; }
-    log_ok() { printf 'OK: %s\n' "$*"; }
-    log_skip() { printf 'SKIP: %s\n' "$*"; }
-  '';
+  shellHelpers = import ./lib/shell-helpers.nix { inherit pkgs; };
+  loggingPrelude = shellHelpers.loggingPrelude;
 
   libStub = {
     inherit loggingPrelude;
@@ -72,6 +67,7 @@ let
 in
 pkgs.runCommand "framework-install-filter-smoke" { } ''
   set -euo pipefail
+  ${shellHelpers.shellPrelude}
 
   INSTALL_BIN="${installApps.install.program}"
   GIT_BIN="${pkgs.git}/bin/git"
@@ -79,41 +75,6 @@ pkgs.runCommand "framework-install-filter-smoke" { } ''
   export HOME="$TMPDIR/home"
   export XDG_CACHE_HOME="$TMPDIR/cache"
   mkdir -p "$HOME" "$XDG_CACHE_HOME"
-
-  fail() {
-    echo "ERROR: $*"
-    exit 1
-  }
-
-  require_file() {
-    local path="$1"
-    [ -f "$path" ] || fail "missing file: $path"
-  }
-
-  require_not_file() {
-    local path="$1"
-    [ ! -f "$path" ] || fail "unexpected file: $path"
-  }
-
-  require_contains() {
-    local path="$1"
-    local needle="$2"
-    ${pkgs.gnugrep}/bin/grep -Fq -- "$needle" "$path" || {
-      echo "--- $path"
-      cat "$path"
-      fail "expected '$needle' in $path"
-    }
-  }
-
-  require_not_contains() {
-    local path="$1"
-    local needle="$2"
-    if ${pkgs.gnugrep}/bin/grep -Fq -- "$needle" "$path"; then
-      echo "--- $path"
-      cat "$path"
-      fail "unexpected '$needle' in $path"
-    fi
-  }
 
   init_repo() {
     local path="$1"

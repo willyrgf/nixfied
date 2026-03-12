@@ -1,10 +1,7 @@
 { pkgs }:
 let
-  loggingPrelude = ''
-    log_error() {
-      printf 'ERROR: %s\n' "$*"
-    }
-  '';
+  shellHelpers = import ./lib/shell-helpers.nix { inherit pkgs; };
+  loggingPrelude = shellHelpers.errorLoggingPrelude;
 
   envLoader = import ../../nixfied/.framework/lib/env-loader.nix {
     inherit

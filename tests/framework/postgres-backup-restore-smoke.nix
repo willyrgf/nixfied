@@ -1,5 +1,6 @@
 { pkgs }:
 let
+  shellHelpers = import ./lib/shell-helpers.nix { inherit pkgs; };
   slotsStub =
     let
       slotInfo = pkgs.writeShellScript "postgres-backup-slot-info" ''
@@ -24,17 +25,12 @@ let
       portKey = "postgres";
       dataDirName = "postgres";
     };
-    loggingPrelude = ''
-      log_info() { printf 'INFO: %s\n' "$*"; }
-      log_warn() { printf 'WARN: %s\n' "$*"; }
-      log_error() { printf 'ERROR: %s\n' "$*"; }
-      log_ok() { printf 'OK: %s\n' "$*"; }
-      log_skip() { printf 'SKIP: %s\n' "$*"; }
-    '';
+    loggingPrelude = shellHelpers.loggingPrelude;
   };
 in
 pkgs.runCommand "postgres-backup-restore-smoke" { } ''
   set -euo pipefail
+  ${shellHelpers.shellPrelude}
 
   RESTORE_BIN="${backupMod.restore}"
   LIST_BIN="${backupMod.listBackups}"
@@ -44,31 +40,6 @@ pkgs.runCommand "postgres-backup-restore-smoke" { } ''
   export PGDATA_ROOT="$TMPDIR/service-root"
   export PGDATA="$PGDATA_ROOT/postgres"
   export BACKUP_BASE_DIR="$TMPDIR/backups"
-
-  fail() {
-    echo "ERROR: $*"
-    exit 1
-  }
-
-  require_file() {
-    local path="$1"
-    [ -f "$path" ] || fail "missing file: $path"
-  }
-
-  require_not_file() {
-    local path="$1"
-    [ ! -f "$path" ] || fail "unexpected file: $path"
-  }
-
-  require_contains() {
-    local path="$1"
-    local needle="$2"
-    ${pkgs.gnugrep}/bin/grep -Fq -- "$needle" "$path" || {
-      echo "--- $path"
-      cat "$path"
-      fail "expected '$needle' in $path"
-    }
-  }
 
   mkdir -p "$PGDATA" "$BACKUP_BASE_DIR/base"
 

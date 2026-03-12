@@ -4,6 +4,7 @@
   ...
 }:
 let
+  shellHelpers = import ./lib/shell-helpers.nix { inherit pkgs; };
   frameworkLib = import ../../nixfied/lib {
     inherit pkgs;
     system = pkgs.system;
@@ -91,22 +92,12 @@ let
 in
 pkgs.runCommand "ready-health-matrix-smoke" { } ''
   set -euo pipefail
+  ${shellHelpers.shellPrelude}
 
   NONE_EXECUTOR="${noneExecutor}/bin/nixfied-executor"
   NGINX_EXECUTOR="${nginxExecutor}/bin/nixfied-executor"
   MINIO_EXECUTOR="${minioExecutor}/bin/nixfied-executor"
   BOTH_EXECUTOR="${bothExecutor}/bin/nixfied-executor"
-
-  require_contains() {
-    local file="$1"
-    local needle="$2"
-    if ! ${pkgs.gnugrep}/bin/grep -Fq -- "$needle" "$file"; then
-      echo "missing expected text '$needle' in $file"
-      echo "--- $file"
-      cat "$file"
-      exit 1
-    fi
-  }
 
   offset_for_env() {
     local env_name="$1"

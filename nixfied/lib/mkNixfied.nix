@@ -12,6 +12,7 @@
 }:
 let
   lib = pkgs.lib;
+  mkShellApp = import ./mk-shell-app.nix { inherit pkgs; };
 
   modules = import ../modules;
 
@@ -101,21 +102,6 @@ let
     cp ${../schemas/model-export.json} "$out/model-export.json"
   '';
 
-  mkApp =
-    appName: body:
-    let
-      suffix = builtins.substring 0 10 (builtins.hashString "sha256" appName);
-      binName = "nixfied-introspect-${suffix}";
-      script = pkgs.writeShellScriptBin binName ''
-        set -euo pipefail
-        ${body}
-      '';
-    in
-    {
-      type = "app";
-      program = "${script}/bin/${binName}";
-    };
-
   taskApps = builtins.listToAttrs (
     map (
       taskId:
@@ -126,39 +112,63 @@ let
       in
       {
         name = "task::${taskId}";
-        value = mkApp "task::${taskId}" ''
-          cat ${taskFile}
-        '';
+        value = mkShellApp {
+          appName = "task::${taskId}";
+          binPrefix = "nixfied-introspect";
+          body = ''
+            cat ${taskFile}
+          '';
+        };
       }
     ) taskIds
   );
 
   introspectionApps = {
-    model = mkApp "model" ''
-            cat <<'NIXFIED_MODEL'
-      ${modelCanonical}
-      NIXFIED_MODEL
-    '';
+    model = mkShellApp {
+      appName = "model";
+      binPrefix = "nixfied-introspect";
+      body = ''
+              cat <<'NIXFIED_MODEL'
+        ${modelCanonical}
+        NIXFIED_MODEL
+      '';
+    };
 
-    stateHash = mkApp "stateHash" ''
-      echo ${lib.escapeShellArg compiled.stateHash}
-    '';
+    stateHash = mkShellApp {
+      appName = "stateHash";
+      binPrefix = "nixfied-introspect";
+      body = ''
+        echo ${lib.escapeShellArg compiled.stateHash}
+      '';
+    };
 
-    tasks = mkApp "tasks" ''
-            cat <<'NIXFIED_TASKS'
-      ${tasksTable}
-      NIXFIED_TASKS
-    '';
+    tasks = mkShellApp {
+      appName = "tasks";
+      binPrefix = "nixfied-introspect";
+      body = ''
+              cat <<'NIXFIED_TASKS'
+        ${tasksTable}
+        NIXFIED_TASKS
+      '';
+    };
 
-    services = mkApp "services" ''
-            cat <<'NIXFIED_SERVICES'
-      ${servicesTable}
-      NIXFIED_SERVICES
-    '';
+    services = mkShellApp {
+      appName = "services";
+      binPrefix = "nixfied-introspect";
+      body = ''
+              cat <<'NIXFIED_SERVICES'
+        ${servicesTable}
+        NIXFIED_SERVICES
+      '';
+    };
 
-    schema = mkApp "schema" ''
-      cat ${schemaBundleFile}
-    '';
+    schema = mkShellApp {
+      appName = "schema";
+      binPrefix = "nixfied-introspect";
+      body = ''
+        cat ${schemaBundleFile}
+      '';
+    };
   }
   // taskApps;
 

@@ -6,6 +6,7 @@
 }:
 let
   lib = pkgs.lib;
+  mkShellApp = import ../lib/mk-shell-app.nix { inherit pkgs; };
   safeProjectRoot = builtins.unsafeDiscardStringContext (builtins.toString projectRoot);
   workspaceMarkerPresent = builtins.pathExists "${safeProjectRoot}/nixfied/.framework/.workspace";
 
@@ -18,24 +19,7 @@ let
       ;
   };
 
-  replayTool = registry.mkReplayApp;
-
   orchestratorProgram = "${orchestrator}/bin/nixfied-orchestrator";
-
-  mkApp =
-    appName: body:
-    let
-      suffix = builtins.substring 0 10 (builtins.hashString "sha256" appName);
-      binName = "nixfied-${suffix}";
-      script = pkgs.writeShellScriptBin binName ''
-        set -euo pipefail
-        ${body}
-      '';
-    in
-    {
-      type = "app";
-      program = "${script}/bin/${binName}";
-    };
 
   viewApps = model.views.apps;
   viewAppNames = builtins.sort builtins.lessThan (builtins.attrNames viewApps);
@@ -130,9 +114,12 @@ let
       in
       {
         name = appName;
-        value = mkApp appName ''
-          NIXFIED_CALLER_PWD="$PWD" exec ${orchestratorProgram} run-task ${lib.escapeShellArg taskId} "$@"
-        '';
+        value = mkShellApp {
+          inherit appName;
+          body = ''
+            NIXFIED_CALLER_PWD="$PWD" exec ${orchestratorProgram} run-task ${lib.escapeShellArg taskId} "$@"
+          '';
+        };
       }
     ) viewAppNames
   );
@@ -150,91 +137,119 @@ let
       { }
     else
       {
-        "framework::install" = mkApp "framework::install" ''
-          if [ "$#" -gt 0 ]; then
-            case "$1" in
-              --help|-h)
-                cat ${frameworkInstallHelpFile}
-                exit 0
-                ;;
-            esac
-          fi
-          NIXFIED_CALLER_PWD="$PWD" exec ${pkgs.nix}/bin/nix run github:willyrgf/nixfied/dev#framework::install --refresh -- "$@"
-        '';
+        "framework::install" = mkShellApp {
+          appName = "framework::install";
+          body = ''
+            if [ "$#" -gt 0 ]; then
+              case "$1" in
+                --help|-h)
+                  cat ${frameworkInstallHelpFile}
+                  exit 0
+                  ;;
+              esac
+            fi
+            NIXFIED_CALLER_PWD="$PWD" exec ${pkgs.nix}/bin/nix run github:willyrgf/nixfied/dev#framework::install --refresh -- "$@"
+          '';
+        };
 
-        "framework::upgrade" = mkApp "framework::upgrade" ''
-          if [ "$#" -gt 0 ]; then
-            case "$1" in
-              --help|-h)
-                cat ${frameworkUpgradeHelpFile}
-                exit 0
-                ;;
-            esac
-          fi
-          NIXFIED_CALLER_PWD="$PWD" exec ${pkgs.nix}/bin/nix run github:willyrgf/nixfied/dev#framework::upgrade --refresh -- "$@"
-        '';
+        "framework::upgrade" = mkShellApp {
+          appName = "framework::upgrade";
+          body = ''
+            if [ "$#" -gt 0 ]; then
+              case "$1" in
+                --help|-h)
+                  cat ${frameworkUpgradeHelpFile}
+                  exit 0
+                  ;;
+              esac
+            fi
+            NIXFIED_CALLER_PWD="$PWD" exec ${pkgs.nix}/bin/nix run github:willyrgf/nixfied/dev#framework::upgrade --refresh -- "$@"
+          '';
+        };
       };
 in
 {
-  "run-task" = mkApp "run-task" ''
-    if [ "$#" -lt 1 ]; then
-      echo "ERROR: usage: run-task <task-id> [-- ...]"
-      exit 2
-    fi
-    NIXFIED_CALLER_PWD="$PWD" exec ${orchestratorProgram} run-task "$@"
-  '';
+  "run-task" = mkShellApp {
+    appName = "run-task";
+    body = ''
+      if [ "$#" -lt 1 ]; then
+        echo "ERROR: usage: run-task <task-id> [-- ...]"
+        exit 2
+      fi
+      NIXFIED_CALLER_PWD="$PWD" exec ${orchestratorProgram} run-task "$@"
+    '';
+  };
 
-  "run-workflow" = mkApp "run-workflow" ''
-    if [ "$#" -lt 1 ]; then
-      echo "ERROR: usage: run-workflow <workflow-id> [-- ...]"
-      exit 2
-    fi
-    NIXFIED_CALLER_PWD="$PWD" exec ${orchestratorProgram} run-workflow "$@"
-  '';
+  "run-workflow" = mkShellApp {
+    appName = "run-workflow";
+    body = ''
+      if [ "$#" -lt 1 ]; then
+        echo "ERROR: usage: run-workflow <workflow-id> [-- ...]"
+        exit 2
+      fi
+      NIXFIED_CALLER_PWD="$PWD" exec ${orchestratorProgram} run-workflow "$@"
+    '';
+  };
 
-  "run-workflow-parallel" = mkApp "run-workflow-parallel" ''
-    if [ "$#" -lt 1 ]; then
-      echo "ERROR: usage: run-workflow-parallel <workflow-id> [-- ...]"
-      exit 2
-    fi
-    NIXFIED_WORKFLOW_PARALLEL=1 NIXFIED_CALLER_PWD="$PWD" exec ${orchestratorProgram} run-workflow "$@"
-  '';
+  "run-workflow-parallel" = mkShellApp {
+    appName = "run-workflow-parallel";
+    body = ''
+      if [ "$#" -lt 1 ]; then
+        echo "ERROR: usage: run-workflow-parallel <workflow-id> [-- ...]"
+        exit 2
+      fi
+      NIXFIED_WORKFLOW_PARALLEL=1 NIXFIED_CALLER_PWD="$PWD" exec ${orchestratorProgram} run-workflow "$@"
+    '';
+  };
 
-  "runs" = mkApp "runs" ''
-    NIXFIED_CALLER_PWD="$PWD" exec ${orchestratorProgram} runs "$@"
-  '';
+  "runs" = mkShellApp {
+    appName = "runs";
+    body = ''
+      NIXFIED_CALLER_PWD="$PWD" exec ${orchestratorProgram} runs "$@"
+    '';
+  };
 
-  "stop-run" = mkApp "stop-run" ''
-    if [ "$#" -ne 1 ]; then
-      echo "ERROR: usage: stop-run <run-id>"
-      exit 2
-    fi
-    NIXFIED_CALLER_PWD="$PWD" exec ${orchestratorProgram} stop-run "$@"
-  '';
+  "stop-run" = mkShellApp {
+    appName = "stop-run";
+    body = ''
+      if [ "$#" -ne 1 ]; then
+        echo "ERROR: usage: stop-run <run-id>"
+        exit 2
+      fi
+      NIXFIED_CALLER_PWD="$PWD" exec ${orchestratorProgram} stop-run "$@"
+    '';
+  };
 
-  "stop-all-runs" = mkApp "stop-all-runs" ''
-    if [ "$#" -ne 0 ]; then
-      echo "ERROR: usage: stop-all-runs"
-      exit 2
-    fi
-    NIXFIED_CALLER_PWD="$PWD" exec ${orchestratorProgram} stop-all-runs
-  '';
+  "stop-all-runs" = mkShellApp {
+    appName = "stop-all-runs";
+    body = ''
+      if [ "$#" -ne 0 ]; then
+        echo "ERROR: usage: stop-all-runs"
+        exit 2
+      fi
+      NIXFIED_CALLER_PWD="$PWD" exec ${orchestratorProgram} stop-all-runs
+    '';
+  };
 
-  "help" = mkApp "help" ''
-    cat ${helpFile}
-  '';
+  "help" = mkShellApp {
+    appName = "help";
+    body = ''
+      cat ${helpFile}
+    '';
+  };
 
-  "docs" = mkApp "docs" ''
-    cat ${docsFile}
-  '';
+  "docs" = mkShellApp {
+    appName = "docs";
+    body = ''
+      cat ${docsFile}
+    '';
+  };
 
-  "features" = mkApp "features" ''
-    cat ${featuresFile}
-  '';
-
-  "registry::replay" = {
-    type = "app";
-    program = "${replayTool}/bin/nixfied-registry-replay";
+  "features" = mkShellApp {
+    appName = "features";
+    body = ''
+      cat ${featuresFile}
+    '';
   };
 }
 // taskApps
@@ -244,7 +259,10 @@ in
     if builtins.hasAttr "help" taskApps then
       taskApps.help
     else
-      mkApp "default-help" ''
-        cat ${helpFile}
-      '';
+      mkShellApp {
+        appName = "default-help";
+        body = ''
+          cat ${helpFile}
+        '';
+      };
 }

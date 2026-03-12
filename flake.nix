@@ -46,6 +46,7 @@
               pkgs
               ;
             model = compiled.model;
+            apps = compiled.apps;
             packages = compiled.packages;
             stateHash = compiled.stateHash;
             canonical = frameworkLib.canonical;

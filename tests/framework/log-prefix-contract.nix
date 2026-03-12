@@ -1,16 +1,21 @@
 { pkgs }:
 let
   frameworkSource = builtins.readFile ../../nixfied/project/module.nix;
+  nixChecksSource = builtins.readFile ../../nixfied/lib/mkNixChecks.nix;
+  plainLoggingSource = builtins.readFile ../../nixfied/lib/plain-shell-logging.nix;
   executorSource = builtins.readFile ../../nixfied/runner/executor.nix;
   envSandboxSource = builtins.readFile ../../nixfied/runner/env-sandbox.nix;
   helpersSource = builtins.readFile ../../nixfied/.framework/lib/helpers.nix;
   loggingRuntimeSource = builtins.readFile ../../nixfied/.framework/lib/logging-runtime.nix;
 in
-assert pkgs.lib.hasInfix "printf 'INFO: %s\\n'" frameworkSource;
-assert pkgs.lib.hasInfix "printf 'WARN: %s\\n'" frameworkSource;
-assert pkgs.lib.hasInfix "printf 'ERROR: %s\\n'" frameworkSource;
-assert pkgs.lib.hasInfix "printf 'OK: %s\\n'" frameworkSource;
-assert pkgs.lib.hasInfix "printf 'SKIP: %s\\n'" frameworkSource;
+assert pkgs.lib.hasInfix "plainShellLogging = import ../lib/plain-shell-logging.nix;"
+  frameworkSource;
+assert pkgs.lib.hasInfix "plainShellLogging = import ./plain-shell-logging.nix;" nixChecksSource;
+assert pkgs.lib.hasInfix "\"INFO: %s\\n\"" plainLoggingSource;
+assert pkgs.lib.hasInfix "\"WARN: %s\\n\"" plainLoggingSource;
+assert pkgs.lib.hasInfix "\"ERROR: %s\\n\"" plainLoggingSource;
+assert pkgs.lib.hasInfix "\"OK: %s\\n\"" plainLoggingSource;
+assert pkgs.lib.hasInfix "\"SKIP: %s\\n\"" plainLoggingSource;
 assert pkgs.lib.hasInfix "import ./logging-runtime.nix" helpersSource;
 assert pkgs.lib.hasInfix "loggingPrelude = loggingRuntime.loggingPrelude;" helpersSource;
 assert pkgs.lib.hasInfix "log_error()" loggingRuntimeSource;

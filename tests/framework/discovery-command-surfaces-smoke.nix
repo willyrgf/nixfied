@@ -1,12 +1,7 @@
 { pkgs }:
 let
-  loggingPrelude = ''
-    log_info() { printf 'INFO: %s\n' "$*"; }
-    log_warn() { printf 'WARN: %s\n' "$*"; }
-    log_error() { printf 'ERROR: %s\n' "$*"; }
-    log_ok() { printf 'OK: %s\n' "$*"; }
-    log_skip() { printf 'SKIP: %s\n' "$*"; }
-  '';
+  shellHelpers = import ./lib/shell-helpers.nix { inherit pkgs; };
+  loggingPrelude = shellHelpers.loggingPrelude;
 
   compiledDiscovery = import ../../nixfied/.framework/lib/discovery.nix {
     inherit pkgs loggingPrelude;
@@ -60,35 +55,11 @@ let
 in
 pkgs.runCommand "discovery-command-surfaces-smoke" { } ''
     set -euo pipefail
+    ${shellHelpers.shellPrelude}
 
     COMPILED_BIN="${compiledDiscovery.tool}/bin/nixfied-discovery-index"
     FALLBACK_BIN="${fallbackDiscovery.tool}/bin/nixfied-discovery-index"
     JQ_BIN="${pkgs.jq}/bin/jq"
-
-    fail() {
-      echo "ERROR: $*"
-      exit 1
-    }
-
-    require_contains() {
-      local path="$1"
-      local needle="$2"
-      ${pkgs.gnugrep}/bin/grep -Fq -- "$needle" "$path" || {
-        echo "--- $path"
-        cat "$path"
-        fail "expected '$needle' in $path"
-      }
-    }
-
-    require_not_contains() {
-      local path="$1"
-      local needle="$2"
-      if ${pkgs.gnugrep}/bin/grep -Fq -- "$needle" "$path"; then
-        echo "--- $path"
-        cat "$path"
-        fail "unexpected '$needle' in $path"
-      fi
-    }
 
     require_jq() {
       local path="$1"

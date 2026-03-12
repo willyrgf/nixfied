@@ -38,17 +38,6 @@ pkgs.runCommand "framework-template-install-upgrade-help-smoke" { } ''
   export XDG_CACHE_HOME="$HOME/.cache"
   mkdir -p "$XDG_CACHE_HOME"
 
-  require_not_contains() {
-    local file="$1"
-    local needle="$2"
-    if ${pkgs.gnugrep}/bin/grep -Fq -- "$needle" "$file"; then
-      echo "unexpected text '$needle' in $file"
-      echo "--- $file"
-      cat "$file"
-      fail "assertion failed"
-    fi
-  }
-
   run_task_checked() {
     local out_file="$1"
     shift

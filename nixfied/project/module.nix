@@ -7,6 +7,7 @@
 }:
 let
   conf = import ./conf.nix { inherit pkgs; };
+  plainShellLogging = import ../lib/plain-shell-logging.nix;
   project = conf.project;
   workspaceId = builtins.substring 0 12 (builtins.hashString "sha256" (toString projectRoot));
   workspaceRuntimeRoot = "/tmp/nixfied-runtime/${project.id}/${workspaceId}";
@@ -288,17 +289,11 @@ let
       EOF
             }
 
-            log_info() {
-              printf 'INFO: %s\n' "$*"
-            }
-
-            log_error() {
-              printf 'ERROR: %s\n' "$*" >&2
-            }
-
-            log_ok() {
-              printf 'OK: %s\n' "$*"
-            }
+            ${plainShellLogging {
+              includeWarn = false;
+              includeSkip = false;
+              errorToStderr = true;
+            }}
 
             while [ "$#" -gt 0 ]; do
               case "$1" in
@@ -1398,25 +1393,7 @@ in
             STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
             START_EPOCH="$(date +%s)"
 
-            log_info() {
-              printf 'INFO: %s\n' "$*"
-            }
-
-            log_warn() {
-              printf 'WARN: %s\n' "$*"
-            }
-
-            log_error() {
-              printf 'ERROR: %s\n' "$*"
-            }
-
-            log_ok() {
-              printf 'OK: %s\n' "$*"
-            }
-
-            log_skip() {
-              printf 'SKIP: %s\n' "$*"
-            }
+            ${plainShellLogging { }}
 
             usage() {
               cat <<'EOF'

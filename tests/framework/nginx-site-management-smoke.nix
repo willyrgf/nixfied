@@ -1,5 +1,6 @@
 { pkgs }:
 let
+  shellHelpers = import ./lib/shell-helpers.nix { inherit pkgs; };
   slotsStub =
     let
       slotInfo = pkgs.writeShellScript "nginx-site-slot-info" ''
@@ -44,17 +45,12 @@ let
     };
     templates = { };
     lifecycle = lifecycleStub;
-    loggingPrelude = ''
-      log_info() { printf 'INFO: %s\n' "$*"; }
-      log_warn() { printf 'WARN: %s\n' "$*"; }
-      log_error() { printf 'ERROR: %s\n' "$*"; }
-      log_ok() { printf 'OK: %s\n' "$*"; }
-      log_skip() { printf 'SKIP: %s\n' "$*"; }
-    '';
+    loggingPrelude = shellHelpers.loggingPrelude;
   };
 in
 pkgs.runCommand "nginx-site-management-smoke" { } ''
   set -euo pipefail
+  ${shellHelpers.shellPrelude}
 
   PROXY_BIN="${siteMgmt.writeProxySite}"
   STATIC_BIN="${siteMgmt.writeStaticSite}"
@@ -65,29 +61,9 @@ pkgs.runCommand "nginx-site-management-smoke" { } ''
   export HTTPS_PORT=8443
   export NGINX_SERVICE_ROOT="$TMPDIR/services"
 
-  fail() {
-    echo "ERROR: $*"
-    exit 1
-  }
-
-  require_file() {
-    local path="$1"
-    [ -f "$path" ] || fail "missing file: $path"
-  }
-
   require_symlink() {
     local path="$1"
     [ -L "$path" ] || fail "missing symlink: $path"
-  }
-
-  require_contains() {
-    local path="$1"
-    local needle="$2"
-    ${pkgs.gnugrep}/bin/grep -Fq -- "$needle" "$path" || {
-      echo "--- $path"
-      cat "$path"
-      fail "expected '$needle' in $path"
-    }
   }
 
   mkdir -p "$NGINX_SERVICE_ROOT/nginx/conf/sites-available" "$NGINX_SERVICE_ROOT/nginx/conf/sites-enabled"

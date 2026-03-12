@@ -7,27 +7,19 @@
   flakeRef ? "path:.",
   formatterPkg ? (if pkgs ? nixfmt then pkgs.nixfmt else pkgs.nixfmt-rfc-style),
 }:
+let
+  plainShellLogging = import ./plain-shell-logging.nix;
+in
 pkgs.writeShellScriptBin name ''
     set -euo pipefail
 
     mode="quick"
     flake_ref=${lib.escapeShellArg flakeRef}
 
-    log_info() {
-      printf 'INFO: %s\n' "$*"
-    }
-
-    log_error() {
-      printf 'ERROR: %s\n' "$*" >&2
-    }
-
-    log_ok() {
-      printf 'OK: %s\n' "$*"
-    }
-
-    log_skip() {
-      printf 'SKIP: %s\n' "$*"
-    }
+    ${plainShellLogging {
+      includeWarn = false;
+      errorToStderr = true;
+    }}
 
     usage() {
       cat <<'EOF'

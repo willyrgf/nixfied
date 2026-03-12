@@ -5,9 +5,11 @@
   canonical,
   registry,
   packages,
+  apps,
 }:
 let
   lib = pkgs.lib;
+  listUtils = import ../../nixfied/lib/list-utils.nix;
 
   exposedTaskFeatureIds = builtins.sort builtins.lessThan (
     builtins.map (appName: model.views.apps.${appName}.taskId) (
@@ -17,10 +19,6 @@ let
   workflowFeatureIds = builtins.sort builtins.lessThan (builtins.attrNames model.workflows);
   serviceFeatureIds = builtins.sort builtins.lessThan (builtins.attrNames model.services);
 
-  unique =
-    values:
-    builtins.foldl' (acc: value: if builtins.elem value acc then acc else acc ++ [ value ]) [ ] values;
-
   defaultCheckKind = name: if lib.hasInfix "smoke" name then "smoke" else "contract";
 
   mkFrameworkCheck =
@@ -28,7 +26,7 @@ let
     let
       existingPassThru = drv.passthru or { };
       kind = metadata.kind or defaultCheckKind name;
-      covers = unique (metadata.covers or [ ]);
+      covers = listUtils.uniquePreserveOrder (metadata.covers or [ ]);
       defaultOwnerFile =
         let
           checkPath = ./${name}.nix;
@@ -56,7 +54,7 @@ let
 
   checkMetadata = {
     "help-snapshot" = {
-      covers = unique (exposedTaskFeatureIds ++ workflowFeatureIds);
+      covers = listUtils.uniquePreserveOrder (exposedTaskFeatureIds ++ workflowFeatureIds);
     };
 
     "compiler-validation" = {
@@ -113,6 +111,7 @@ let
       inherit
         pkgs
         packages
+        apps
         ;
     };
 
