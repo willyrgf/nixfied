@@ -15,12 +15,7 @@ Project-owned customization is now separated from framework-owned behavior:
 - `nixfied/project/{runtime,services,tasks,workflows}.nix` hold project-owned definitions
 - `nixfied/local/` remains optional extension space and is still preserved on vendored upgrade
 
-Compatibility shims remain in place for downstream imports, but they are now treated as transitional bridges rather than canonical internal paths:
-
-- `nixfied/lib/`
-- `nixfied/install/`
-- `nixfied/runner/`
-- `nixfied/registry/`
+All supported framework imports now use the canonical `nixfied/framework/...` paths directly.
 
 Generated vendored wrappers now import canonical framework-core entrypoints directly:
 
@@ -46,7 +41,7 @@ The goal is to remove shared mutable state across workspaces and make run metada
 - Default artifacts are now workspace-scoped: `/tmp/ci-artifacts/<projectId>/<workspaceId>`.
 - Ephemeral workflows now propagate isolated `HOME`, `TMPDIR`, `XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_CACHE_HOME`, `REGISTRY_ROOT`, `CI_ARTIFACTS_DIR`, and `NIXFIED_SERVICE_ROOT`.
 - Ephemeral runs preserve relative caller subdirectories inside the copied source tree instead of collapsing back to project root.
-- If `REGISTRY_ROOT` is explicitly overridden and artifacts still use the legacy default, artifacts now follow the registry under `$REGISTRY_ROOT/artifacts`.
+- If `REGISTRY_ROOT` is explicitly overridden and no explicit artifacts root is provided, artifacts follow the registry under `$REGISTRY_ROOT/artifacts`.
 - Orchestrator run records, workflow `summary.json`, registry sequence updates, and registry event appends now use atomic write/replace behavior.
 - Registry locks now persist owner metadata to make timeout and stale-lock diagnosis explicit.
 
@@ -56,17 +51,19 @@ Downstream code may need adjustment if it depended on the previous shared defaul
 
 Common examples:
 
+- Downstream callers importing removed shim paths; update them to canonical `nixfied/framework/...` imports.
 - Scripts hardcoding `/tmp/ci-artifacts` or shared registry paths.
 - Tasks assuming ephemeral runs still use host-global `HOME`, `TMPDIR`, or XDG cache/state directories.
 - Tooling reading run JSON or `summary.json` during writes and relying on partial in-place updates.
-- Overrides that set `REGISTRY_ROOT` but implicitly expected artifacts to remain in the old shared default location.
+- Overrides that set `REGISTRY_ROOT` without also setting `CI_ARTIFACTS_ROOT` or `CI_ARTIFACTS_DIR`.
 
 ## Upgrade Checklist
 
 - Replace hardcoded registry/artifact paths with `REGISTRY_ROOT`, `CI_ARTIFACTS_DIR`, or model-derived state.
+- Update any framework imports to the canonical `nixfied/framework/...` paths.
 - Treat ephemeral `HOME`, `TMPDIR`, and `XDG_*` values as run-scoped, not machine-global.
 - If you launch from a subdirectory, validate that relative workdir behavior inside ephemeral mode is what your tasks expect.
-- If you override `REGISTRY_ROOT`, verify whether artifact co-location under `$REGISTRY_ROOT/artifacts` is desired.
+- If you override `REGISTRY_ROOT` without explicit artifact settings, verify whether artifact co-location under `$REGISTRY_ROOT/artifacts` is desired.
 - Keep using explicit `CI_ARTIFACTS_ROOT` or `CI_ARTIFACTS_DIR` when you need a fixed artifact location.
 
 ## Recommended Validation

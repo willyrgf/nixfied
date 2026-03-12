@@ -4,7 +4,7 @@
   ...
 }:
 let
-  frameworkLib = import ../../nixfied/lib {
+  frameworkLib = import ../../nixfied/framework/core {
     inherit pkgs;
     system = pkgs.system;
   };

@@ -85,8 +85,8 @@ pkgs.runCommand "framework-template-install-upgrade-help-smoke" { } ''
 
   require_file "$template_repo/flake.nix"
   require_file "$template_repo/nixfied/project/module.nix"
-  require_file "$template_repo/nixfied/lib/default.nix"
   require_file "$template_repo/nixfied/framework/core/default.nix"
+  require_file "$template_repo/nixfied/framework/runtime/default.nix"
   require_file "$template_repo/nixfied/VENDORED.txt"
   require_contains "$template_repo/nixfied/VENDORED.txt" "Framework source revision (install/upgrade):"
   require_contains "$template_repo/nixfied/VENDORED.txt" "Recent framework changes:"
@@ -94,13 +94,6 @@ pkgs.runCommand "framework-template-install-upgrade-help-smoke" { } ''
   require_not_contains "$template_repo/nixfied/VENDORED.txt" "- unknown"
   if ! ${pkgs.gnugrep}/bin/grep -Eq '^- [0-9a-f]{7,}(-dirty)?$' "$template_repo/nixfied/VENDORED.txt"; then
     fail "vendored install must record the framework source revision"
-  fi
-  if [ -f "$template_repo/nixfied/.framework/.workspace" ]; then
-    fail "vendored install must not include nixfied/.framework/.workspace"
-  fi
-
-  if [ -e "$template_repo/nixfied/.framework" ]; then
-    fail "vendored install must not include legacy nixfied/.framework path"
   fi
 
   if [ -f "$template_repo/.workspace" ]; then
@@ -113,14 +106,6 @@ pkgs.runCommand "framework-template-install-upgrade-help-smoke" { } ''
 
   require_contains "$TMPDIR/install-rerun.out" "OK: vendored wrapper upgraded at $template_repo/flake.nix"
   require_contains "$TMPDIR/upgrade-command.out" "OK: vendored wrapper upgraded at $template_repo/flake.nix"
-  if [ -f "$template_repo/nixfied/.framework/.workspace" ]; then
-    fail "upgrade must keep nixfied/.framework/.workspace absent"
-  fi
-
-  if [ -e "$template_repo/nixfied/.framework" ]; then
-    fail "upgrade must keep legacy nixfied/.framework path absent"
-  fi
-
   if [ -f "$template_repo/.workspace" ]; then
     fail "upgrade must keep repo-root .workspace absent"
   fi

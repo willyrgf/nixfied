@@ -50,8 +50,8 @@ pkgs.runCommand "framework-upgrade-preserve-smoke" { } ''
 
   require_file "$target/nixfied/project/module.nix"
   require_file "$target/nixfied/local/default.nix"
-  require_file "$target/nixfied/lib/default.nix"
   require_file "$target/nixfied/framework/core/default.nix"
+  require_file "$target/nixfied/framework/runtime/default.nix"
   require_file "$target/nixfied/VENDORED.txt"
   require_contains "$target/nixfied/VENDORED.txt" "Framework source revision (install/upgrade):"
   require_contains "$target/nixfied/VENDORED.txt" "Recent framework changes:"
@@ -63,13 +63,13 @@ pkgs.runCommand "framework-upgrade-preserve-smoke" { } ''
 
   echo "# USER_PROJECT_MARKER" >> "$target/nixfied/project/module.nix"
   echo "# USER_LOCAL_MARKER" >> "$target/nixfied/local/default.nix"
-  echo "# USER_LIB_MARKER" >> "$target/nixfied/lib/default.nix"
+  echo "# USER_RUNTIME_MARKER" >> "$target/nixfied/framework/runtime/default.nix"
 
   run_task_checked "$TMPDIR/install-rerun.out" task.framework.install --vendor --target "$target"
 
   require_contains "$target/nixfied/project/module.nix" "USER_PROJECT_MARKER"
   require_contains "$target/nixfied/local/default.nix" "USER_LOCAL_MARKER"
-  if ${pkgs.gnugrep}/bin/grep -Fq "USER_LIB_MARKER" "$target/nixfied/lib/default.nix"; then
+  if ${pkgs.gnugrep}/bin/grep -Fq "USER_RUNTIME_MARKER" "$target/nixfied/framework/runtime/default.nix"; then
     fail "framework-owned file should be overwritten during vendored upgrade"
   fi
 

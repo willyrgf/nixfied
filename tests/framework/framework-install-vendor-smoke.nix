@@ -31,8 +31,8 @@ pkgs.runCommand "framework-install-vendor-smoke" { } ''
     exit 1
   fi
 
-  if ! [ -f "$target/nixfied/lib/default.nix" ]; then
-    echo "missing vendored lib/default.nix"
+  if ! [ -f "$target/nixfied/framework/runtime/default.nix" ]; then
+    echo "missing vendored framework/runtime/default.nix"
     exit 1
   fi
 
@@ -43,16 +43,6 @@ pkgs.runCommand "framework-install-vendor-smoke" { } ''
 
   if ! [ -f "$target/nixfied/project/module.nix" ]; then
     echo "missing vendored project/module.nix"
-    exit 1
-  fi
-
-  if [ -f "$target/nixfied/.framework/.workspace" ]; then
-    echo "vendored wrapper must not contain nixfied/.framework/.workspace marker"
-    exit 1
-  fi
-
-  if [ -e "$target/nixfied/.framework" ]; then
-    echo "vendored wrapper must not contain legacy nixfied/.framework path"
     exit 1
   fi
 

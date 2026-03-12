@@ -5,7 +5,7 @@
 }:
 let
   shellHelpers = import ./lib/shell-helpers.nix { inherit pkgs; };
-  frameworkLib = import ../../nixfied/lib {
+  frameworkLib = import ../../nixfied/framework/core {
     inherit pkgs;
     system = pkgs.system;
   };

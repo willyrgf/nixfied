@@ -3,9 +3,6 @@ pkgs.runCommand "no-legacy-project-modules" { } ''
   matches_file="$TMPDIR/project-modules-matches.txt"
   ${pkgs.ripgrep}/bin/rg -n "project\\.modules\\." \
     ${../../nixfied/framework} \
-    ${../../nixfied/framework/runtime} \
-    ${../../nixfied/runner} \
-    ${../../nixfied/registry} \
     -g '*.nix' > "$matches_file" || true
 
   if [ -s "$matches_file" ]; then
