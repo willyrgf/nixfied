@@ -41,6 +41,14 @@ nix run .#framework::test -- --mode env --summary
 nix run .#framework::test -- --summary-json /tmp/framework-test-summary.json
 ```
 
+## Reuse Guides
+
+Use these checked-in guides when reviewing framework behavior or teaching an
+agent how the current framework surface works:
+
+- `tests/framework/WORKFLOW_REUSE.md`
+- `tests/framework/SERVICE_LIFECYCLE_API.md`
+
 ## Flake checks (canonical)
 
 Deterministic checks live in `tests/framework/` and run via `nix flake check path:.`.

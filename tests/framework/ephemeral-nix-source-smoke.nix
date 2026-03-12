@@ -5,13 +5,7 @@
 }:
 let
   baseTask = model.tasks."task.ci.quality";
-  sourceFixture = pkgs.runCommand "ephemeral-nix-source-fixture" { } ''
-    mkdir -p "$out/node_modules"
-    printf 'store-snapshot\n' > "$out/source-origin.txt"
-    printf 'included\n' > "$out/kept.txt"
-    printf 'filtered\n' > "$out/node_modules/ignored.txt"
-    printf 'filtered\n' > "$out/build.log"
-  '';
+  sourceFixture = ./fixtures/ephemeral-nix-source-fixture;
 
   taskId = "task.test.ephemeral.nix-source";
   workflowId = "workflow.test.ephemeral.nix-source";

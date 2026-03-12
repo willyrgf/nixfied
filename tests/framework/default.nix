@@ -133,6 +133,13 @@ let
         ;
     };
 
+    "docs-guidance-contract" = import ./docs-guidance-contract.nix {
+      inherit
+        pkgs
+        model
+        ;
+    };
+
     "discovery-command-surfaces-smoke" = import ./discovery-command-surfaces-smoke.nix {
       inherit pkgs;
     };
@@ -340,6 +347,18 @@ let
     };
 
     "managed-service-lifecycle-contract" = import ./managed-service-lifecycle-contract.nix {
+      inherit pkgs;
+    };
+
+    "service-api-surface-contract" = import ./service-api-surface-contract.nix {
+      inherit pkgs;
+    };
+
+    "service-lifecycle-matrix-smoke" = import ./service-lifecycle-matrix-smoke.nix {
+      inherit pkgs;
+    };
+
+    "supervisor-lifecycle-smoke" = import ./supervisor-lifecycle-smoke.nix {
       inherit pkgs;
     };
 
