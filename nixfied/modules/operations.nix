@@ -20,7 +20,9 @@ let
     runtimeStride = runtime.slot.stride;
   };
   serviceConfigLib = import ../framework/core/service-config.nix { inherit lib; };
-  testIsolationRuntime = import ../framework/runtime/helpers/test-isolation-runtime.nix { inherit lib pkgs; };
+  testIsolationRuntime = import ../framework/runtime/helpers/test-isolation-runtime.nix {
+    inherit lib pkgs;
+  };
 
   postgresCfg = services.postgres;
   nginxCfg = services.nginx;
