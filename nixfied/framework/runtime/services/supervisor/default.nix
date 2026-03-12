@@ -6,7 +6,7 @@
 }:
 
 let
-  summary = import ../../../../.framework/lib/summary.nix { inherit pkgs project; };
+  summary = import ../../helpers/summary.nix { inherit pkgs project; };
   helpers = import ../../helpers/helpers.nix {
     inherit pkgs project;
     inherit (summary) summaryParser;

@@ -9,7 +9,7 @@
 
 let
   pc = pkgs.process-compose;
-  serviceScripts = import ../../../../.framework/lib/managed-service-lifecycle.nix { inherit pkgs; };
+  serviceScripts = import ../../helpers/managed-service-lifecycle.nix { inherit pkgs; };
   slotEnvRuntime = import ../../helpers/slot-env-runtime.nix { inherit pkgs; };
   ports = project.ports or { };
   portNames = builtins.attrNames ports;

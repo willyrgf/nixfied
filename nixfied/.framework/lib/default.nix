@@ -24,7 +24,7 @@ let
     inherit pkgs project hooks;
     inherit (summary) summaryParser;
   };
-  fixtures = import ./fixtures.nix {
+  fixtures = import ../../framework/runtime/helpers/fixtures.nix {
     inherit pkgs project;
   };
   builders = import ../../framework/runtime/helpers/builders.nix {
@@ -58,7 +58,7 @@ let
       featureInventory
       ;
   };
-  process = import ./process.nix {
+  process = import ../../framework/runtime/helpers/process.nix {
     inherit pkgs;
     inherit (helpers) loggingPrelude;
   };
@@ -73,15 +73,15 @@ let
   managedServiceLifecycle = import ./managed-service-lifecycle.nix { inherit pkgs; };
   slotEnvRuntime = import ../../framework/runtime/helpers/slot-env-runtime.nix { inherit pkgs; };
   servicePolicy = import ../../framework/runtime/helpers/service-policy.nix { inherit pkgs; };
-  portUtils = import ./port-utils.nix {
+  portUtils = import ../../framework/runtime/helpers/port-utils.nix {
     inherit pkgs;
     inherit (helpers) loggingPrelude;
   };
-  parallel = import ./parallel.nix {
+  parallel = import ../../framework/runtime/helpers/parallel.nix {
     inherit pkgs;
     inherit (helpers) loggingPrelude;
   };
-  runRegistry = import ./run-registry.nix {
+  runRegistry = import ../../framework/runtime/helpers/run-registry.nix {
     inherit pkgs project;
     inherit (helpers) loggingPrelude;
   };

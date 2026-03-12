@@ -9,10 +9,10 @@
 }:
 
 let
-  serviceScripts = import ../../../../.framework/lib/managed-service-lifecycle.nix { inherit pkgs; };
+  serviceScripts = import ../../helpers/managed-service-lifecycle.nix { inherit pkgs; };
   slotEnvRuntime = import ../../helpers/slot-env-runtime.nix { inherit pkgs; };
   runtimeEvents = import ../../helpers/runtime-events.nix { inherit pkgs project; };
-  observability = import ../../../../.framework/lib/service-observability.nix {
+  observability = import ../../helpers/service-observability.nix {
     inherit
       pkgs
       slots

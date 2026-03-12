@@ -6,15 +6,15 @@
 }:
 
 let
-  summary = import ../../../../.framework/lib/summary.nix { inherit pkgs project; };
+  summary = import ../../helpers/summary.nix { inherit pkgs project; };
   helpers = import ../../helpers/helpers.nix {
     inherit pkgs project;
     inherit (summary) summaryParser;
   };
   loggingPrelude = helpers.loggingPrelude;
-  serviceApi = import ../../../../.framework/lib/service-api.nix { inherit pkgs; };
+  serviceApi = import ../../helpers/service-api.nix { inherit pkgs; };
   runtimeEvents = import ../../helpers/runtime-events.nix { inherit pkgs project; };
-  observability = import ../../../../.framework/lib/service-observability.nix {
+  observability = import ../../helpers/service-observability.nix {
     inherit
       pkgs
       slots

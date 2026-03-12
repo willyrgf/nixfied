@@ -1,6 +1,6 @@
 { pkgs }:
 let
-  helperSource = builtins.readFile ../../nixfied/.framework/lib/managed-service-lifecycle.nix;
+  helperSource = builtins.readFile ../../nixfied/framework/runtime/helpers/managed-service-lifecycle.nix;
   minioSource = builtins.readFile ../../nixfied/framework/runtime/services/minio/lifecycle.nix;
   rethSource = builtins.readFile ../../nixfied/framework/runtime/services/reth/lifecycle.nix;
   heliosSource = builtins.readFile ../../nixfied/framework/runtime/services/helios/lifecycle.nix;

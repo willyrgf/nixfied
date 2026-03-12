@@ -1,6 +1,6 @@
 { pkgs }:
 let
-  helperSource = builtins.readFile ../../nixfied/.framework/lib/service-observability.nix;
+  helperSource = builtins.readFile ../../nixfied/framework/runtime/helpers/service-observability.nix;
   minioSource = builtins.readFile ../../nixfied/framework/runtime/services/minio/lifecycle.nix;
   nginxSource = builtins.readFile ../../nixfied/framework/runtime/services/nginx/lifecycle.nix;
   rethSource = builtins.readFile ../../nixfied/framework/runtime/services/reth/lifecycle.nix;
