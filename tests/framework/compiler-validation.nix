@@ -128,7 +128,17 @@ assert model.runtime.runtimePackages != [ ];
 assert nginxService != null;
 assert heliosService != null;
 assert nginxService.config.resolved.operationProbes.health.count == 2;
+assert nginxService.config.resolved.probePlans.health.count == 2;
+assert
+  nginxService.config.resolved.probePlans.health.count
+  == nginxService.config.resolved.operationProbes.health.count;
 assert heliosService.config.resolved.operationProbes.ready.count == 2;
+assert heliosService.config.resolved.probePlans.ready.count == 2;
+assert heliosService.config.resolved.probePlans.ready.wait.enabled == true;
+assert
+  heliosService.config.resolved.probePlans.ready.wait.timeoutEnvVar == "HELIOS_READY_TIMEOUT_SECS";
+assert
+  heliosService.config.resolved.probePlans.ready.wait.intervalEnvVar == "HELIOS_READY_INTERVAL_SECS";
 assert builtins.all (
   pkg: builtins.elem pkg formatTask.runtime.runtimeInputs
 ) model.runtime.runtimePackages;

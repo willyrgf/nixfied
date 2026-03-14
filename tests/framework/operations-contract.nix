@@ -1,7 +1,7 @@
 { pkgs, model }:
 let
   source = builtins.readFile ../../nixfied/modules/operations.nix;
-  probeRuntimeSource = builtins.readFile ../../nixfied/framework/runtime/helpers/operations-probe-runtime.nix;
+  probeRuntimeSource = builtins.readFile ../../nixfied/framework/runtime/helpers/probe-plan-runtime.nix;
   isolationRuntimeSource = builtins.readFile ../../nixfied/framework/runtime/helpers/test-isolation-runtime.nix;
   serviceConfigSource = builtins.readFile ../../nixfied/framework/core/service-config.nix;
   healthCommand = model.tasks."task.ops.health".runner.command;
@@ -20,13 +20,12 @@ assert pkgs.lib.hasInfix "resolve_service_source()" source;
 assert pkgs.lib.hasInfix "source_kind_disallowed()" source;
 assert pkgs.lib.hasInfix "serviceConfigLib = import ../framework/core/service-config.nix" source;
 assert pkgs.lib.hasInfix
-  "probeRuntime = import ../framework/runtime/helpers/operations-probe-runtime.nix"
+  "probePlanRuntime = import ../framework/runtime/helpers/probe-plan-runtime.nix"
   source;
 assert pkgs.lib.hasInfix "resolvedServiceConfigByName =" source;
 assert pkgs.lib.hasInfix "resolveServicePortBase =" source;
 assert pkgs.lib.hasInfix "probePlan =" source;
-assert pkgs.lib.hasInfix "renderProbeStep = probeRuntime.renderProbeStep;" source;
-assert pkgs.lib.hasInfix "renderProbeStep =" source;
+assert pkgs.lib.hasInfix "probePlanRuntime.renderPlanBody {" source;
 assert pkgs.lib.hasInfix "mkServiceProbeSpec =" source;
 assert pkgs.lib.hasInfix "healthProbeSpecs = builtins.listToAttrs" source;
 assert pkgs.lib.hasInfix "readyProbeSpecs = builtins.listToAttrs" source;
@@ -35,12 +34,16 @@ assert pkgs.lib.hasInfix
   source;
 assert pkgs.lib.hasInfix "isolationScript = testIsolationRuntime.mkIsolationScript" source;
 assert pkgs.lib.hasInfix "mkTcpProbeBody =" probeRuntimeSource;
+assert pkgs.lib.hasInfix "mkHttpProbeBody =" probeRuntimeSource;
 assert pkgs.lib.hasInfix "mkPostgresPgIsReadyBody =" probeRuntimeSource;
 assert pkgs.lib.hasInfix "mkPostgresQueryBody =" probeRuntimeSource;
 assert pkgs.lib.hasInfix "mkJsonRpcProbeBody =" probeRuntimeSource;
 assert pkgs.lib.hasInfix "mkHeliosReadyBody =" probeRuntimeSource;
+assert pkgs.lib.hasInfix "mkExecProbeBody =" probeRuntimeSource;
 assert pkgs.lib.hasInfix "renderProbeStep =" probeRuntimeSource;
-assert pkgs.lib.hasInfix "operationProbes = {" serviceConfigSource;
+assert pkgs.lib.hasInfix "renderPlanBody =" probeRuntimeSource;
+assert pkgs.lib.hasInfix "probePlans = mergeProbePlans" serviceConfigSource;
+assert pkgs.lib.hasInfix "operationProbes = probePlans;" serviceConfigSource;
 assert pkgs.lib.hasInfix "serviceLabel = \"postgres\";" serviceConfigSource;
 assert pkgs.lib.hasInfix "kind = \"postgres-pg-isready\";" serviceConfigSource;
 assert pkgs.lib.hasInfix "kind = \"postgres-query\";" serviceConfigSource;
@@ -54,6 +57,8 @@ assert pkgs.lib.hasInfix "serviceLabel = \"helios execution\";" serviceConfigSou
 assert pkgs.lib.hasInfix "serviceLabel = \"helios\";" serviceConfigSource;
 assert pkgs.lib.hasInfix "phaseLabel = \"health\";" serviceConfigSource;
 assert pkgs.lib.hasInfix "phaseLabel = \"readiness\";" serviceConfigSource;
+assert pkgs.lib.hasInfix "timeoutEnvVar = \"HELIOS_READY_TIMEOUT_SECS\";" serviceConfigSource;
+assert pkgs.lib.hasInfix "intervalEnvVar = \"HELIOS_READY_INTERVAL_SECS\";" serviceConfigSource;
 assert pkgs.lib.hasInfix "method = \"web3_clientVersion\";" serviceConfigSource;
 assert pkgs.lib.hasInfix "method = \"eth_chainId\";" serviceConfigSource;
 assert pkgs.lib.hasInfix "INFO: checking helios readiness" readyCommand;

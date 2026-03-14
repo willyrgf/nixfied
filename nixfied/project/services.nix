@@ -23,6 +23,7 @@
         sources = conf.services.postgres.sources or { };
         sourceKeys = normalizeSourceKeys (conf.services.postgres.sources or { });
         defaultSource = conf.services.postgres.defaultSource or "";
+        probes = conf.services.postgres.probes or { };
       };
 
       nginx = {
@@ -33,6 +34,7 @@
         sources = conf.services.nginx.sources or { };
         sourceKeys = normalizeSourceKeys (conf.services.nginx.sources or { });
         defaultSource = conf.services.nginx.defaultSource or "";
+        probes = conf.services.nginx.probes or { };
       };
 
       minio = {
@@ -46,6 +48,7 @@
         sources = conf.services.minio.sources or { };
         sourceKeys = normalizeSourceKeys (conf.services.minio.sources or { });
         defaultSource = conf.services.minio.defaultSource or "";
+        probes = conf.services.minio.probes or { };
       };
 
       reth = {
@@ -60,6 +63,7 @@
         sources = conf.services.reth.sources or { };
         sourceKeys = normalizeSourceKeys (conf.services.reth.sources or { });
         defaultSource = conf.services.reth.defaultSource or "";
+        probes = conf.services.reth.probes or { };
       };
 
       helios = {
@@ -83,6 +87,7 @@
           requireNotSyncing = conf.services.helios.readiness.requireNotSyncing or false;
           disallowSourceKinds = conf.services.helios.readiness.disallowSourceKinds or [ ];
         };
+        probes = conf.services.helios.probes or { };
       };
     };
   };

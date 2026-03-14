@@ -238,6 +238,10 @@ let
         ;
     };
 
+    "service-probe-overrides-contract" = import ./service-probe-overrides-contract.nix {
+      inherit pkgs;
+    };
+
     "project-config-boundary" = import ./project-config-boundary.nix {
       inherit pkgs;
     };
@@ -269,6 +273,10 @@ let
         pkgs
         registry
         ;
+    };
+
+    "service-probe-overrides-smoke" = import ./service-probe-overrides-smoke.nix {
+      inherit pkgs;
     };
 
     "registry-events-contract" = import ./registry-events-contract.nix {

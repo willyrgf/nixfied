@@ -16,9 +16,60 @@ tests that cover it.
 | --- | --- | --- | --- | --- | --- | --- |
 | postgres | yes | yes | yes | yes | yes | Also exposes `ready-test`. |
 | nginx | yes | yes | yes | yes | yes | Also exposes `reload`. |
-| minio | yes | yes | yes | yes | yes | Health/ready are HTTP endpoint probes. |
-| reth | yes | yes | yes | yes | yes | Health/ready are JSON-RPC probes. |
-| helios | yes | yes | yes | yes | yes | Ready is stricter than health. |
+| minio | yes | yes | yes | yes | yes | Default health/ready plans are HTTP probes. |
+| reth | yes | yes | yes | yes | yes | Default health/ready plans are JSON-RPC probes. |
+| helios | yes | yes | yes | yes | yes | Default ready is stricter than health. |
+
+## Canonical Probe Overrides
+
+For the public five services, `health` and `ready` now come from one
+canonical probe model:
+
+- `nixfied.services.<name>.probes.health`
+- `nixfied.services.<name>.probes.ready`
+
+If a probe block is absent, the framework uses the built-in default plan for
+that service and mode.
+
+Each probe block supports:
+
+- `strategy = "replace" | "prepend" | "append"`
+- `steps = [ ... ]`
+- optional `wait = { enabled, timeoutSeconds, intervalSeconds }`
+
+Supported step kinds today:
+
+- `tcp`
+- `http`
+- `jsonrpc`
+- `postgres-pg-isready`
+- `postgres-query`
+- `helios-ready`
+- `exec`
+
+Both aggregate ops and direct service lifecycle checks consume the same
+normalized probe plan:
+
+- aggregate `task.ops.health`
+- aggregate `task.ops.ready`
+- direct service `health`
+- direct service `ready`
+
+The important behavioral split is `wait`:
+
+- aggregate `task.ops.health` and `task.ops.ready` stay one-shot checks
+- direct service `ready` honors `ready.wait`
+
+`exec` probe steps receive a stable env contract:
+
+- `NIXFIED_PROBE_MODE`
+- `NIXFIED_PROBE_SERVICE`
+- `NIXFIED_PROBE_SOURCE`
+- `NIXFIED_PROBE_<ENDPOINT>_PORT`
+
+Direct service `ready` may execute a successful `exec` probe more than once
+when `wait` is enabled, because the wait loop retries silently and then reruns
+the probe for visible success output.
 
 ## Supervisor Surface
 
@@ -33,6 +84,10 @@ It does not expose `ready`, and downstream code should not assume that it does.
 - Service status formatting is covered by the service observability contract.
 - Aggregate `task.ops.ready` / `task.ops.health` behavior is covered by
   readiness and shutdown smokes.
+- Canonical probe plan normalization and override merging are covered by the
+  service probe override contract.
+- Aggregate and direct service probe override behavior is covered by the
+  service probe override smoke.
 
 ## Coverage Added In This Pass
 

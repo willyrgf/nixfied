@@ -44,7 +44,14 @@ The hidden setup/teardown tasks should:
 ## Ready And Health
 
 - `task.ops.ready` and `task.ops.health` are reusable today.
+- They consume the same canonical per-service probe plans as direct service
+  `health` / `ready`.
+- Probe overrides live under `nixfied.services.<name>.probes.{health,ready}`.
 - They accept one `--service` selector per invocation.
 - `--source` requires a concrete `--service`.
+- `task.ops.ready` stays one-shot even when `nixfied.services.<name>.probes.ready.wait`
+  is enabled for the direct service check.
+- If a workflow needs polling readiness semantics, wrap the direct service
+  `ready` operation in a task instead of relying on `task.ops.ready`.
 - If a workflow needs different service selectors in different phases, wrap
   those invocations in separate tasks.
