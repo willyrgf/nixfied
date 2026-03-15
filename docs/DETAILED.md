@@ -63,6 +63,14 @@ Workspace-scoped defaults:
 - Default artifacts root is `/tmp/ci-artifacts/<projectId>/<workspaceId>`.
 - If `REGISTRY_ROOT` is explicitly overridden and artifacts still use the legacy default, orchestrator resolves artifacts under `$REGISTRY_ROOT/artifacts`.
 
+Task-scoped cache isolation:
+
+- Command-task pre-hooks now set a task-scoped `CARGO_TARGET_DIR` for reproducible Rust cache separation.
+- Default cache key path is `${TMPDIR:-/tmp}/mfm-ci-target/<run-id>/<workflow-id>/<task-id>`.
+- `NIXFIED_TASK_ID`, `NIXFIED_ORCHESTRATOR_WORKFLOW_ID`, and `NIXFIED_PARENT_WORKFLOW_ID` are passed through so task logs and artifacts can be correlated.
+- `NIXFIED_TASK_CACHE_KEY` is exported for quick debugging.
+- Cache components are sanitized before use and truncated with deterministic fallback hashes when needed.
+
 ## Ephemeral Runtime Contract
 
 Ephemeral workflow execution is mediated by `nixfied/framework/runtime/ephemeral.nix` and configured through `model.runtime.ephemeral`.

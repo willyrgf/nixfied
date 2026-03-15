@@ -137,6 +137,81 @@ let
     "MFM_TEST_LOG_FILTER"
   ];
 
+  taskCacheDirPreHook =
+    ''
+      if [ -n "''${CARGO_TARGET_DIR:-}" ]; then
+        echo "INFO: using existing CARGO_TARGET_DIR=$CARGO_TARGET_DIR"
+      else
+        mfm_cache_fallback_hash() {
+          local input="$1"
+          local checksum=""
+
+          if command -v sha256sum >/dev/null 2>&1; then
+            checksum="$(printf '%s' "$input" | sha256sum)"
+            checksum="''${checksum%% *}"
+          elif command -v cksum >/dev/null 2>&1; then
+            checksum="$(printf '%s' "$input" | cksum)"
+            checksum="''${checksum%% *}"
+          fi
+          if [ -z "$checksum" ]; then
+            checksum="$(( ''${#input} ))"
+          fi
+          printf '%s' "$checksum"
+        }
+
+        mfm_cache_sanitize_component() {
+          local input="$1"
+          local fallback="$2"
+          local max_len="$3"
+          local component=""
+          local suffix=""
+          local safe_len=""
+
+          component="$(printf '%s' "$input" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9._-' '-')"
+          component="''${component:-$fallback}"
+
+          while [ -n "$component" ] && [ "''${component:0:1}" = "-" ]; do
+            component="''${component#-}"
+          done
+          while [ -n "$component" ] && [ "''${component: -1}" = "-" ]; do
+            component="''${component%-}"
+          done
+
+          if [ -z "$component" ]; then
+            component="$fallback"
+          fi
+
+          safe_len="$max_len"
+          if [ "''${#component}" -gt "$safe_len" ]; then
+            suffix="$(mfm_cache_fallback_hash "$input")"
+            component="''${component:0:$(( safe_len - 11 ))}-${suffix:0:10}"
+          fi
+
+          printf '%s' "$component"
+        }
+
+        run_id_component="$(mfm_cache_sanitize_component "''${NIXFIED_ORCHESTRATOR_RUN_ID:-''${NIXFIED_RUN_ID:-''${NIX_ENV:-0}}}" "run" 42)"
+        workflow_id_component="$(mfm_cache_sanitize_component "''${NIXFIED_PARENT_WORKFLOW_ID:-''${NIXFIED_ORCHESTRATOR_WORKFLOW_ID:-workflow}}" "workflow" 42)"
+        task_id_component="$(mfm_cache_sanitize_component "''${NIXFIED_TASK_ID:-orchestrator}" "orchestrator" 42)"
+
+        task_cache_key="''${run_id_component}/''${workflow_id_component}/''${task_id_component}"
+        task_cache_dir="''${TMPDIR:-/tmp}/mfm-ci-target/''${task_cache_key}"
+        if [ "''${#task_cache_dir}" -gt 220 ]; then
+          task_cache_key="$(mfm_cache_fallback_hash "''${task_cache_key}")"
+          task_cache_dir="''${TMPDIR:-/tmp}/mfm-ci-target/''${task_cache_key}"
+          if [ "''${#task_cache_dir}" -gt 220 ]; then
+            task_cache_dir="''${TMPDIR:-/tmp}/mfm-ci-target/$run_id_component"
+          fi
+        fi
+
+        export NIXFIED_TASK_CACHE_KEY="''${task_cache_key}"
+        export CARGO_TARGET_DIR="''${task_cache_dir}"
+        mkdir -p "$CARGO_TARGET_DIR"
+        echo "INFO: task cache key=$NIXFIED_TASK_CACHE_KEY"
+        echo "INFO: task cache dir=$CARGO_TARGET_DIR"
+      fi
+    '';
+
   mkCommandTask =
     {
       id,
@@ -227,7 +302,11 @@ let
         umask = "022";
         locale = "C.UTF-8";
         timezone = "UTC";
-        preHooks = preHooks;
+        preHooks = preHooks // {
+          "framework.task-cache-dir" = {
+            command = taskCacheDirPreHook;
+          };
+        };
         postHooks = postHooks;
       };
 

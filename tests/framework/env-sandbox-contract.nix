@@ -53,6 +53,7 @@ assert pkgs.lib.hasInfix "NIXFIED_ORCHESTRATOR_SELF" source;
 assert pkgs.lib.hasInfix "NIXFIED_MODEL_FILE" source;
 assert pkgs.lib.hasInfix "NIXFIED_RUN_ID" source;
 assert pkgs.lib.hasInfix "NIXFIED_PARENT_WORKFLOW_ID" source;
+assert pkgs.lib.hasInfix "NIXFIED_TASK_ID" source;
 assert pkgs.lib.hasInfix "NIX_BUILD_TOP" source;
 assert pkgs.lib.hasInfix "NIXFIED_SERVICE_" source;
 assert pkgs.lib.hasInfix "NIXFIED_SERVICE_''\${service_token}_DATA_DIR" source;
