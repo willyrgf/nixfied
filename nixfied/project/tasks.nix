@@ -273,6 +273,8 @@
             "proxy"
           ];
           runtimeInputs = commonRuntimeInputs;
+          passThroughEnv = defaultTaskPassThroughEnv ++ [ "API_KEY" ];
+          allowSensitivePassThrough = true;
           command = ''
             set -euo pipefail
             artifacts_dir="''${CI_ARTIFACTS_DIR:-$REGISTRY_ROOT/artifacts/manual}"

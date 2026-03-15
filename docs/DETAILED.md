@@ -149,6 +149,10 @@ Internal CI step tasks (for workflow composition) include:
 - `task.ci.system-quick`
 - `task.ci.nginx-proxy`
 
+Sensitive host env vars (for example `API_KEY`, `*_TOKEN`, `*_SECRET`) are blocked from passthrough by default.
+CI step tasks that need them must set `allowSensitivePassThrough = true` and list the required
+variables in `passThroughEnv`.
+
 Workflow lifecycle fields:
 
 - `preRun.tasks`
