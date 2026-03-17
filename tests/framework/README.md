@@ -67,6 +67,7 @@ The current surface is organized around:
 - install/upgrade wrapper flows
 - ephemeral execution and isolation behavior
 - framework CLI and self-host smoke coverage
+- SKIP service behavior and service-skip dependency semantics
 
 Shared shell helpers live in `tests/framework/lib/harness.nix`.
 High-complexity operations smokes still have room for more harness extraction, but the harness is active and should be preferred over ad hoc duplication.

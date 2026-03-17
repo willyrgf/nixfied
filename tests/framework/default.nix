@@ -80,6 +80,13 @@ let
     "ephemeral-registry-run-isolation-smoke" = {
       covers = [ "runtime.registry.isolation" ];
     };
+
+    "skip-service-smoke" = {
+      covers = [
+        "task.framework.test"
+        "task.ops.health"
+      ];
+    };
   };
 
   rawChecks = {
@@ -224,6 +231,14 @@ let
     };
 
     "nix-checks-parent-workflow-skip-smoke" = import ./nix-checks-parent-workflow-skip-smoke.nix {
+      inherit
+        pkgs
+        model
+        registry
+        ;
+    };
+
+    "skip-service-smoke" = import ./skip-service-smoke.nix {
       inherit
         pkgs
         model
