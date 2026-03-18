@@ -260,13 +260,8 @@ pkgs.runCommand "skip-service-smoke" { } ''
     "$EXECUTOR" run-workflow "${dependencyWorkflowId}" --run-id-file "$dependency_skip_run_id_file" > "$TMPDIR/dependency-skip.out" 2>&1
   dependency_skip_rc="$?"
   set -e
-  if [ "$dependency_skip_rc" -eq 0 ]; then
-    echo "expected workflow skip path to fail"
-    cat "$TMPDIR/dependency-skip.out"
-    exit 1
-  fi
-  if [ "$dependency_skip_rc" -ne 3 ]; then
-    echo "expected hard-fail dependency skip workflow exit code 3, got $dependency_skip_rc"
+  if [ "$dependency_skip_rc" -ne 0 ]; then
+    echo "expected skip-only workflow to exit 0, got $dependency_skip_rc"
     cat "$TMPDIR/dependency-skip.out"
     exit 1
   fi
@@ -299,8 +294,8 @@ pkgs.runCommand "skip-service-smoke" { } ''
     cat "$TMPDIR/dependency-skip.out"
     exit 1
   fi
-  if [ "$consumer_skip_reason" != "dependency-not-passed" ]; then
-    echo "expected consumer task skip reason dependency-not-passed, got $consumer_skip_reason"
+  if [ "$consumer_skip_reason" != "dependency-skipped" ]; then
+    echo "expected consumer task skip reason dependency-skipped, got $consumer_skip_reason"
     cat "$TMPDIR/dependency-skip.out"
     exit 1
   fi
@@ -308,6 +303,56 @@ pkgs.runCommand "skip-service-smoke" { } ''
     echo "expected consumer dependency reference ${dependencyTaskId}, got $consumer_skip_dependency"
     cat "$TMPDIR/dependency-skip.out"
     exit 1
+  fi
+
+  # Validate summary.json for skip-only workflow
+  skip_summary_file="$CI_ARTIFACTS_ROOT/$skip_run_id/summary.json"
+  if [ ! -f "$skip_summary_file" ]; then
+    # Try fallback locations
+    skip_summary_file="$(find "$CI_ARTIFACTS_ROOT" -name summary.json -path "*$skip_run_id*" 2>/dev/null | head -n 1 || true)"
+  fi
+  if [ -n "$skip_summary_file" ] && [ -f "$skip_summary_file" ]; then
+    summary_exit_code="$(${pkgs.jq}/bin/jq -r '.exit_code' "$skip_summary_file")"
+    summary_skipped="$(${pkgs.jq}/bin/jq -r '.counts.skipped' "$skip_summary_file")"
+    summary_canceled="$(${pkgs.jq}/bin/jq -r '.counts.canceled' "$skip_summary_file")"
+
+    if [ "$summary_exit_code" != "0" ]; then
+      echo "expected summary.json exit_code 0, got $summary_exit_code"
+      ${pkgs.jq}/bin/jq . "$skip_summary_file"
+      exit 1
+    fi
+    if [ "$summary_skipped" != "2" ]; then
+      echo "expected summary.json counts.skipped 2, got $summary_skipped"
+      ${pkgs.jq}/bin/jq . "$skip_summary_file"
+      exit 1
+    fi
+    if [ "$summary_canceled" != "0" ]; then
+      echo "expected summary.json counts.canceled 0, got $summary_canceled"
+      ${pkgs.jq}/bin/jq . "$skip_summary_file"
+      exit 1
+    fi
+
+    dep_step_status="$(${pkgs.jq}/bin/jq -r --arg taskId "${dependencyTaskId}" '.steps[] | select(.name == $taskId) | .status' "$skip_summary_file")"
+    con_step_status="$(${pkgs.jq}/bin/jq -r --arg taskId "${consumerTaskId}" '.steps[] | select(.name == $taskId) | .status' "$skip_summary_file")"
+    dep_step_reason="$(${pkgs.jq}/bin/jq -r --arg taskId "${dependencyTaskId}" '.steps[] | select(.name == $taskId) | .reason' "$skip_summary_file")"
+    con_step_reason="$(${pkgs.jq}/bin/jq -r --arg taskId "${consumerTaskId}" '.steps[] | select(.name == $taskId) | .reason' "$skip_summary_file")"
+
+    if [ "$dep_step_status" != "skipped" ]; then
+      echo "expected dependency step status skipped, got $dep_step_status"
+      exit 1
+    fi
+    if [ "$con_step_status" != "skipped" ]; then
+      echo "expected consumer step status skipped, got $con_step_status"
+      exit 1
+    fi
+    if [ "$dep_step_reason" != "service-skipped" ]; then
+      echo "expected dependency step reason service-skipped, got $dep_step_reason"
+      exit 1
+    fi
+    if [ "$con_step_reason" != "dependency-skipped" ]; then
+      echo "expected consumer step reason dependency-skipped, got $con_step_reason"
+      exit 1
+    fi
   fi
 
   dependency_run_id_file="$TMPDIR/dependency-ok.run-id"
@@ -320,5 +365,5 @@ pkgs.runCommand "skip-service-smoke" { } ''
     exit 1
   fi
 
-  echo "OK: skip truthy, operations, and hard-fail dependency behavior are validated" > "$out"
+  echo "OK: skip truthy, operations, dependency cascade, and summary behavior are validated" > "$out"
 ''

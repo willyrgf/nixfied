@@ -676,11 +676,14 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       if [ -n "''${blocked_tasks_by_dependency[$unit_task]:-}" ]; then
         local detail_json
         blocked_reason="''${blocked_tasks_reason_by_dependency[$unit_task]:-dependency-not-passed}"
-        detail_json="$(${pkgs.jq}/bin/jq -cn --arg reason "dependency-not-passed" --arg dependency "''${blocked_tasks_by_dependency[$unit_task]}" '{reason: $reason, dependency: $dependency}')"
+        local cascade_reason="dependency-not-passed"
+        case "$blocked_reason" in
+          service-skipped|missing-env|when-false|dependency-skipped)
+            cascade_reason="dependency-skipped"
+            ;;
+        esac
+        detail_json="$(${pkgs.jq}/bin/jq -cn --arg reason "$cascade_reason" --arg dependency "''${blocked_tasks_by_dependency[$unit_task]}" '{reason: $reason, dependency: $dependency}')"
         append_event "$run_id" "$workflow_id" "$unit_task" "canceled" "$detail_json"
-        if [ "$blocked_reason" = "service-skipped" ]; then
-          workflow_status=3
-        fi
         continue
       fi
 
@@ -693,7 +696,13 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         local detail_json
         failed_dependency="$dependency"
         blocked_reason="''${blocked_tasks_reason_by_dependency[$dependency]:-dependency-not-passed}"
-        detail_json="$(${pkgs.jq}/bin/jq -cn --arg reason "dependency-not-passed" --arg dependency "$failed_dependency" '{reason: $reason, dependency: $dependency}')"
+        local cascade_reason="dependency-not-passed"
+        case "$blocked_reason" in
+          service-skipped|missing-env|when-false|dependency-skipped)
+            cascade_reason="dependency-skipped"
+            ;;
+        esac
+        detail_json="$(${pkgs.jq}/bin/jq -cn --arg reason "$cascade_reason" --arg dependency "$failed_dependency" '{reason: $reason, dependency: $dependency}')"
         append_event "$run_id" "$workflow_id" "$unit_task" "canceled" "$detail_json"
         blocked_by_dependency=1
         break
@@ -701,9 +710,6 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       if [ "$blocked_by_dependency" -eq 1 ]; then
         blocked_tasks_by_dependency[$unit_task]="$failed_dependency"
         blocked_tasks_reason_by_dependency[$unit_task]="$blocked_reason"
-        if [ "$blocked_reason" = "service-skipped" ]; then
-          workflow_status=3
-        fi
         continue
       fi
 
@@ -722,7 +728,6 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         append_event "$run_id" "$workflow_id" "$unit_task" "canceled" "$detail_json"
         echo "SKIP: task '$unit_task' (service '$unit_service_name') is skipped because service '$unit_service_name' has a skip flag enabled"
         blocked_tasks_by_dependency["$unit_task"]="$unit_task"
-        workflow_status=3
         blocked_tasks_reason_by_dependency["$unit_task"]="service-skipped"
         continue
       fi
@@ -987,7 +992,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
       if [ -n "$missing" ]; then
         mark_unit_canceled "$unit_name" "missing-env" "missing" "$missing"
-        cancel_pending_dependents "$unit_name" "dependency-not-passed"
+        cancel_pending_dependents "$unit_name" "dependency-skipped"
         continue
       fi
 
@@ -997,16 +1002,13 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       fi
       if is_service_skipped "$unit_service_name"; then
         mark_unit_canceled "$unit_name" "service-skipped" "serviceName" "$unit_service_name"
-        cancel_pending_dependents "$unit_name" "dependency-not-passed"
-        if [ "$workflow_status" -eq 0 ]; then
-          workflow_status=3
-        fi
+        cancel_pending_dependents "$unit_name" "dependency-skipped"
         continue
       fi
 
       if ! workflow_unit_when_matches "$unit_json"; then
         mark_unit_canceled "$unit_name" "when-false"
-        cancel_pending_dependents "$unit_name" "dependency-not-passed"
+        cancel_pending_dependents "$unit_name" "dependency-skipped"
         continue
       fi
 
@@ -1312,7 +1314,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       status="$state"
       if [ "$state" = "canceled" ]; then
         case "$reason" in
-          missing-env|when-false|service-skipped)
+          missing-env|when-false|service-skipped|dependency-skipped)
             status="skipped"
             ;;
           *)
@@ -1588,7 +1590,8 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
     passed="$(printf '%s' "$steps_json" | ${pkgs.jq}/bin/jq -r '[.[] | select(.state == "passed")] | length' 2>/dev/null || echo 0)"
     failed="$(printf '%s' "$steps_json" | ${pkgs.jq}/bin/jq -r '[.[] | select(.state == "failed")] | length' 2>/dev/null || echo 0)"
-    canceled="$(printf '%s' "$steps_json" | ${pkgs.jq}/bin/jq -r '[.[] | select(.state == "canceled")] | length' 2>/dev/null || echo 0)"
+    skipped="$(printf '%s' "$steps_json" | ${pkgs.jq}/bin/jq -r '[.[] | select(.status == "skipped")] | length' 2>/dev/null || echo 0)"
+    canceled="$(printf '%s' "$steps_json" | ${pkgs.jq}/bin/jq -r '[.[] | select(.state == "canceled" and .status != "skipped")] | length' 2>/dev/null || echo 0)"
 
     steps_duration="$(printf '%s' "$steps_json" | ${pkgs.jq}/bin/jq -r '[.[] | (.duration // 0)] | add // 0' 2>/dev/null || echo 0)"
     if ! is_nonneg_int "$steps_duration"; then
@@ -1634,6 +1637,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         --argjson durationSeconds "$duration_seconds" \
         --argjson passed "$passed" \
         --argjson failed "$failed" \
+        --argjson skipped "$skipped" \
         --argjson canceled "$canceled" \
         --argjson steps "$steps_json" \
         --argjson setupDuration "$setup_duration" \
@@ -1655,6 +1659,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           counts: {
             passed: $passed,
             failed: $failed,
+            skipped: $skipped,
             canceled: $canceled
           },
           steps: $steps,
@@ -1898,27 +1903,32 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
     if [ "$print_summary" -eq 1 ] && [ "$nested_workflow_call" -eq 0 ]; then
       local events_file=""
-      local passed failed canceled
+      local passed failed skipped canceled
       print_workflow_summary_report "$run_id" "$workflow_id" "$status" "$duration_seconds" "$summary_file"
 
       if [ -n "$summary_file" ] && [ -f "$summary_file" ]; then
         passed="$(${pkgs.jq}/bin/jq -r '.counts.passed // 0' "$summary_file" 2>/dev/null || echo 0)"
         failed="$(${pkgs.jq}/bin/jq -r '.counts.failed // 0' "$summary_file" 2>/dev/null || echo 0)"
+        skipped="$(${pkgs.jq}/bin/jq -r '.counts.skipped // 0' "$summary_file" 2>/dev/null || echo 0)"
         canceled="$(${pkgs.jq}/bin/jq -r '.counts.canceled // 0' "$summary_file" 2>/dev/null || echo 0)"
       else
         events_file="$(registry_events_snapshot "$REGISTRY_ROOT" 2>/dev/null || true)"
         if [ -n "$events_file" ] && [ -f "$events_file" ]; then
-          passed="$(${pkgs.jq}/bin/jq -r --arg runId "$run_id" 'select(.runId == $runId and .taskId != "" and .state == "passed") | .state' "$events_file" | ${pkgs.gnugrep}/bin/grep -c '^passed$' || true)"
-          failed="$(${pkgs.jq}/bin/jq -r --arg runId "$run_id" 'select(.runId == $runId and .taskId != "" and .state == "failed") | .state' "$events_file" | ${pkgs.gnugrep}/bin/grep -c '^failed$' || true)"
-          canceled="$(${pkgs.jq}/bin/jq -r --arg runId "$run_id" 'select(.runId == $runId and .taskId != "" and .state == "canceled") | .state' "$events_file" | ${pkgs.gnugrep}/bin/grep -c '^canceled$' || true)"
+          local fb_steps_json
+          fb_steps_json="$(workflow_steps_json "$run_id" "$events_file" 2>/dev/null || echo '[]')"
+          passed="$(printf '%s' "$fb_steps_json" | ${pkgs.jq}/bin/jq -r '[.[] | select(.state == "passed")] | length' 2>/dev/null || echo 0)"
+          failed="$(printf '%s' "$fb_steps_json" | ${pkgs.jq}/bin/jq -r '[.[] | select(.state == "failed")] | length' 2>/dev/null || echo 0)"
+          skipped="$(printf '%s' "$fb_steps_json" | ${pkgs.jq}/bin/jq -r '[.[] | select(.status == "skipped")] | length' 2>/dev/null || echo 0)"
+          canceled="$(printf '%s' "$fb_steps_json" | ${pkgs.jq}/bin/jq -r '[.[] | select(.state == "canceled" and .status != "skipped")] | length' 2>/dev/null || echo 0)"
           registry_snapshot_cleanup "$events_file"
         else
           passed=0
           failed=0
+          skipped=0
           canceled=0
         fi
       fi
-      echo "INFO: runId=$run_id passed=$passed failed=$failed canceled=$canceled"
+      echo "INFO: runId=$run_id passed=$passed failed=$failed canceled=$canceled skipped=$skipped"
     fi
 
     if [ "$MACHINE_JSON" = "1" ] && [ "$nested_workflow_call" -eq 0 ]; then

@@ -96,7 +96,7 @@ SKIP_CACHE=yes nix run .#run-task -- <task-id>
 SKIP_REDIS=on nix run .#health -- --service all
 ```
 
-If a workflow unit depends on a skipped service unit, the workflow exits non-zero and dependents are marked skipped as dependency failures.
+If a workflow unit depends on a skipped service unit, its dependents are cascade-skipped with reason `dependency-skipped`. A skip-only workflow exits 0.
 Covered by `tests/framework/skip-service-smoke`.
 
 Ephemeral execution defaults (configured in `nixfied/project/conf.nix`):
