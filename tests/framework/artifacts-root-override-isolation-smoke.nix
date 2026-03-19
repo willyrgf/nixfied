@@ -4,12 +4,19 @@
   registry,
 }:
 let
-  harness = import ./lib/harness.nix {
+  probeModel = import ./lib/ci-probe-model.nix {
     inherit
       pkgs
       model
+      ;
+  };
+
+  harness = import ./lib/harness.nix {
+    inherit
+      pkgs
       registry
       ;
+    model = probeModel;
     projectRoot = ../..;
   };
 in

@@ -287,6 +287,44 @@
           ui.app.expose = false;
         };
 
+      test-isolation-unit =
+        mkCommandTask {
+          id = "task.test.isolation.unit";
+          appName = "test-isolation-unit";
+          kind = "internal";
+          summary = "Isolation probe unit";
+          description = "Lightweight probe body used by test-isolation to validate slot/env scoping without rerunning full CI.";
+          runtimeInputs = commonRuntimeInputs;
+          command = ''
+            set -euo pipefail
+            artifacts_dir="''${CI_ARTIFACTS_DIR:-$REGISTRY_ROOT/artifacts/manual}"
+            mkdir -p "$artifacts_dir"
+            {
+              printf 'slot=%s\n' "''${NIX_ENV:-}"
+              printf 'env=%s\n' "''${PROJECT_ENV:-}"
+              printf 'registry_root=%s\n' "''${REGISTRY_ROOT:-}"
+              printf 'artifacts_dir=%s\n' "''${CI_ARTIFACTS_DIR:-}"
+            } > "$artifacts_dir/isolation-probe.txt"
+            echo "OK: isolation probe complete slot=''${NIX_ENV:-} env=''${PROJECT_ENV:-}"
+          '';
+        }
+        // {
+          ui.app.expose = false;
+        };
+
+      test-isolation-probe =
+        mkCommandTask {
+          id = "task.test.isolation.probe";
+          appName = "test-isolation-probe";
+          kind = "workflow";
+          summary = "Isolation probe";
+          description = "Workflow-backed probe used by test-isolation so each cell emits a summary without rerunning full CI.";
+          workflowId = "workflow.test.isolation.probe";
+        }
+        // {
+          ui.app.expose = false;
+        };
+
       test-parallel-sleep-a =
         mkCommandTask {
           id = "task.test.parallel.sleep-a";

@@ -520,6 +520,14 @@ let
         ;
     };
 
+    "orchestrator-signal-cleanup-smoke" = import ./orchestrator-signal-cleanup-smoke.nix {
+      inherit
+        pkgs
+        model
+        registry
+        ;
+    };
+
     "workflow-lifecycle-smoke" = import ./workflow-lifecycle-smoke.nix {
       inherit
         pkgs
@@ -640,6 +648,10 @@ let
         model
         registry
         ;
+    };
+
+    "workflow-validation-errors" = import ./workflow-validation-errors.nix {
+      inherit pkgs;
     };
 
     "service-dir-isolation-smoke" = import ./service-dir-isolation-smoke.nix {

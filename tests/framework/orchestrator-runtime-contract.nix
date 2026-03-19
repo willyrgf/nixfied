@@ -37,9 +37,12 @@ assert pkgs.lib.hasInfix "NIXFIED_RUN_ID_FILE_OVERRIDE" runtimeSource;
 assert pkgs.lib.hasInfix "NIXFIED_SUMMARY_FILE_OVERRIDE" runtimeSource;
 assert pkgs.lib.hasInfix "workflow_simple_shorthand_exists_for_family" runtimeSource;
 assert pkgs.lib.hasInfix "task_arg_long_kind" runtimeSource;
+assert pkgs.lib.hasInfix "NIXFIED_ORCHESTRATOR_STOP_TIMEOUT_SECONDS" orchestratorSource;
+assert pkgs.lib.hasInfix "handle_foreground_signal() {" orchestratorSource;
 assert pkgs.lib.hasInfix "valid_log_level() {" commonSource;
 assert pkgs.lib.hasInfix "valid_output_mode() {" commonSource;
 assert pkgs.lib.hasInfix "write_text_file_atomic() {" commonSource;
+assert pkgs.lib.hasInfix "ERROR: unable to create temp file for '$target'" commonSource;
 pkgs.runCommand "orchestrator-runtime-contract" { } ''
   echo "OK: orchestrator runtime helpers are split and stable" > "$out"
 ''

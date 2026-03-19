@@ -4,37 +4,17 @@
   registry,
 }:
 let
-  probeModel = model // {
-    workflows = model.workflows // {
-      "workflow.ci.basic" = model.workflows."workflow.ci.basic" // {
-        execution = model.workflows."workflow.ci.basic".execution // {
-          ephemeral = (model.workflows."workflow.ci.basic".execution.ephemeral or { }) // {
-            enable = false;
-          };
-        };
-      };
-      "workflow.ci.app" = model.workflows."workflow.ci.app" // {
-        execution = model.workflows."workflow.ci.app".execution // {
-          ephemeral = (model.workflows."workflow.ci.app".execution.ephemeral or { }) // {
-            enable = false;
-          };
-        };
-      };
-      "workflow.ci.env" = model.workflows."workflow.ci.env" // {
-        execution = model.workflows."workflow.ci.env".execution // {
-          ephemeral = (model.workflows."workflow.ci.env".execution.ephemeral or { }) // {
-            enable = false;
-          };
-        };
-      };
-      "workflow.ci.full" = model.workflows."workflow.ci.full" // {
-        execution = model.workflows."workflow.ci.full".execution // {
-          ephemeral = (model.workflows."workflow.ci.full".execution.ephemeral or { }) // {
-            enable = false;
-          };
-        };
-      };
-    };
+  probeModel = import ./lib/ci-probe-model.nix {
+    inherit
+      pkgs
+      model
+      ;
+    disableEphemeralWorkflows = [
+      "workflow.ci.basic"
+      "workflow.ci.app"
+      "workflow.ci.env"
+      "workflow.ci.full"
+    ];
   };
 
   harness = import ./lib/harness.nix {
@@ -52,7 +32,8 @@ pkgs.runCommand "ci-mode-matrix-smoke" { } ''
 
   ORCH="${harness.orchestrator}/bin/nixfied-orchestrator"
   export REGISTRY_ROOT="$TMPDIR/registry"
-  mkdir -p "$REGISTRY_ROOT"
+  export CI_ARTIFACTS_ROOT="$TMPDIR/artifacts"
+  mkdir -p "$REGISTRY_ROOT" "$CI_ARTIFACTS_ROOT"
 
   run_case() {
     local label="$1"

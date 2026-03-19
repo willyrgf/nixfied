@@ -44,12 +44,17 @@ let
     localOverrides = [ ];
   };
 
+  probeModelA = import ./lib/ci-probe-model.nix {
+    inherit pkgs;
+    model = compiledA.model;
+  };
+
   harnessA = import ./lib/harness.nix {
     inherit
       pkgs
       registry
       ;
-    model = compiledA.model;
+    model = probeModelA;
     projectRoot = sourceRoot;
   };
 in
@@ -62,7 +67,8 @@ pkgs.runCommand "workspace-registry-isolation-smoke" { } ''
   ORCH_A="${harnessA.orchestrator}/bin/nixfied-orchestrator"
   ROOT_A="$TMPDIR/${compiledA.model.state.workspaceId}/registry"
   ROOT_B="$TMPDIR/${compiledB.model.state.workspaceId}/registry"
-  mkdir -p "$ROOT_A" "$ROOT_B"
+  export CI_ARTIFACTS_ROOT="$TMPDIR/artifacts"
+  mkdir -p "$ROOT_A" "$ROOT_B" "$CI_ARTIFACTS_ROOT"
 
   repo="$TMPDIR/repo"
   mkdir -p "$repo/subdir"

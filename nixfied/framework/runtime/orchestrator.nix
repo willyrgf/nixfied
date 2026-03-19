@@ -95,12 +95,22 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
   RUN_LOG_DIR="$REGISTRY_ROOT/orchestrator/logs"
   RUN_COUNTER_ROOT="$REGISTRY_ROOT/orchestrator/counter"
   SETSID_BIN=${lib.escapeShellArg setsidBin}
+  ORCHESTRATOR_STOP_TIMEOUT_SEC_DEFAULT=${lib.escapeShellArg (toString model.runtime.orchestrator.stopTimeoutSec)}
 
   ${registryShell}
   ${workflowModesShell}
   ${orchestratorRuntimeShell}
 
   mkdir -p "$RUNS_DIR" "$RUN_LOCKS_DIR" "$RUN_LOG_DIR" "$RUN_COUNTER_ROOT"
+
+  FOREGROUND_RUN_ACTIVE=0
+  FOREGROUND_RUN_ID=""
+  FOREGROUND_RUN_PID=""
+  FOREGROUND_RUN_PGID=""
+  FOREGROUND_RUN_WORKFLOW_ID=""
+  FOREGROUND_RUN_TASK_ID=""
+  FOREGROUND_SIGNAL_FILE=""
+  FOREGROUND_SIGNAL_NAME=""
 
   sha256_text() {
     printf '%s' "$1" | ${pkgs.coreutils}/bin/sha256sum | ${pkgs.gawk}/bin/awk '{print $1}'
@@ -154,6 +164,114 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
         return 1
         ;;
     esac
+  }
+
+  stop_timeout_seconds() {
+    local value="''${NIXFIED_ORCHESTRATOR_STOP_TIMEOUT_SECONDS:-$ORCHESTRATOR_STOP_TIMEOUT_SEC_DEFAULT}"
+
+    if [[ "$value" =~ ^[0-9]+$ ]]; then
+      printf '%s' "$value"
+      return 0
+    fi
+
+    echo "WARN: ignoring invalid NIXFIED_ORCHESTRATOR_STOP_TIMEOUT_SECONDS='$value'; using default $ORCHESTRATOR_STOP_TIMEOUT_SEC_DEFAULT"
+    printf '%s' "$ORCHESTRATOR_STOP_TIMEOUT_SEC_DEFAULT"
+  }
+
+  run_state_is_terminal() {
+    local state="$1"
+    case "$state" in
+      passed|failed|canceled)
+        return 0
+        ;;
+      *)
+        return 1
+        ;;
+    esac
+  }
+
+  signal_run_process() {
+    local signal_name="$1"
+    local pid="$2"
+    local pgid="$3"
+
+    if [ -n "$pgid" ] && [ "$pgid" != "0" ]; then
+      kill -"$signal_name" -- "-$pgid" 2>/dev/null || true
+    elif [ -n "$pid" ] && [ "$pid" != "null" ]; then
+      kill -"$signal_name" "$pid" 2>/dev/null || true
+    fi
+  }
+
+  wait_for_run_process_exit() {
+    local pid="$1"
+    local timeout_seconds="$2"
+    local waited=0
+
+    if ! is_pid_running "$pid"; then
+      return 0
+    fi
+
+    while [ "$waited" -lt "$timeout_seconds" ]; do
+      if ! is_pid_running "$pid"; then
+        return 0
+      fi
+      sleep 1
+      waited=$((waited + 1))
+    done
+
+    ! is_pid_running "$pid"
+  }
+
+  terminate_run_process() {
+    local pid="$1"
+    local pgid="$2"
+    local timeout_seconds="$3"
+
+    signal_run_process TERM "$pid" "$pgid"
+    wait_for_run_process_exit "$pid" "$timeout_seconds" || true
+
+    if is_pid_running "$pid"; then
+      signal_run_process KILL "$pid" "$pgid"
+    fi
+  }
+
+  append_run_canceled_event() {
+    local run_id="$1"
+    local workflow_id="$2"
+    local task_id="$3"
+    local signal_name="$4"
+    local detail_json
+
+    if [ -z "$workflow_id" ] && [ -z "$task_id" ]; then
+      return 0
+    fi
+
+    detail_json="$(${pkgs.jq}/bin/jq -cn --arg reason "orchestrator-interrupted" --arg signal "$signal_name" '{reason: $reason, signal: $signal}')"
+    if [ -n "$workflow_id" ]; then
+      registry_append_event "$REGISTRY_ROOT" "$run_id" "$workflow_id" "" "canceled" "$detail_json"
+    else
+      registry_append_event "$REGISTRY_ROOT" "$run_id" "" "$task_id" "canceled" "$detail_json"
+    fi
+  }
+
+  clear_foreground_run_context() {
+    FOREGROUND_RUN_ACTIVE=0
+    FOREGROUND_RUN_ID=""
+    FOREGROUND_RUN_PID=""
+    FOREGROUND_RUN_PGID=""
+    FOREGROUND_RUN_WORKFLOW_ID=""
+    FOREGROUND_RUN_TASK_ID=""
+    FOREGROUND_SIGNAL_FILE=""
+    FOREGROUND_SIGNAL_NAME=""
+  }
+
+  set_foreground_run_context() {
+    FOREGROUND_RUN_ACTIVE=1
+    FOREGROUND_RUN_ID="$1"
+    FOREGROUND_RUN_PID="$2"
+    FOREGROUND_RUN_PGID="$3"
+    FOREGROUND_RUN_WORKFLOW_ID="$4"
+    FOREGROUND_RUN_TASK_ID="$5"
   }
 
   next_run_id() {
@@ -292,12 +410,12 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
     local exit_code
 
     events_file="$(registry_events_snapshot "$REGISTRY_ROOT")" || {
-      echo "failed 1"
+      echo "unknown 1"
       return
     }
 
     if [ -z "$events_file" ] || [ ! -f "$events_file" ]; then
-      echo "failed 1"
+      echo "unknown 1"
       return
     fi
 
@@ -308,7 +426,7 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
 
     if [ -z "$terminal_state" ]; then
       registry_snapshot_cleanup "$events_file"
-      echo "failed 1"
+      echo "unknown 1"
       return
     fi
 
@@ -334,7 +452,7 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
         ;;
       *)
         registry_snapshot_cleanup "$events_file"
-        echo "failed 1"
+        echo "unknown 1"
         ;;
     esac
   }
@@ -385,16 +503,124 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
     done < <(${pkgs.findutils}/bin/find "$RUNS_DIR" -type f -name '*.json' | ${pkgs.coreutils}/bin/sort)
   }
 
+  cleanup_interrupted_run() {
+    local run_id="$1"
+    local pid="$2"
+    local pgid="$3"
+    local workflow_id="$4"
+    local task_id="$5"
+    local signal_name="$6"
+    local timeout_seconds
+    local run_file
+    local current_state
+    local terminal_state
+    local terminal_code
+    local stop_reason
+
+    timeout_seconds="$(stop_timeout_seconds)"
+    terminate_run_process "$pid" "$pgid" "$timeout_seconds"
+
+    run_file="$(run_file_for "$run_id")"
+    if [ -f "$run_file" ]; then
+      current_state="$(run_file_state "$run_file")"
+      if ! run_state_is_terminal "$current_state"; then
+        read -r terminal_state terminal_code <<<"$(terminal_from_events "$run_id")"
+        if map_terminal_state "$terminal_state"; then
+          update_run_state "$run_id" "$terminal_state" "$terminal_code" "" "$pid" "$pgid" || true
+        else
+          if [ -z "$signal_name" ]; then
+            signal_name="EXIT"
+          fi
+          append_run_canceled_event "$run_id" "$workflow_id" "$task_id" "$signal_name" || {
+            echo "WARN: failed to append cancellation event run_id=$run_id signal=$signal_name"
+          }
+          stop_reason="signal-$(printf '%s' "$signal_name" | ${pkgs.coreutils}/bin/tr '[:upper:]' '[:lower:]')"
+          update_run_state "$run_id" "canceled" "130" "$stop_reason" "$pid" "$pgid" || true
+        fi
+      fi
+    fi
+    return 0
+  }
+
+  start_foreground_janitor() {
+    local parent_pid="$1"
+    local run_id="$2"
+    local pid="$3"
+    local pgid="$4"
+    local workflow_id="$5"
+    local task_id="$6"
+    local control_file="$7"
+    local signal_file="$8"
+
+    if [ -n "$SETSID_BIN" ] && [ -x "$SETSID_BIN" ]; then
+      "$SETSID_BIN" "$NIXFIED_ORCHESTRATOR_SELF" janitor-run "$parent_pid" "$run_id" "$pid" "$pgid" "$workflow_id" "$task_id" "$control_file" "$signal_file" >/dev/null 2>&1 < /dev/null &
+    elif command -v setsid >/dev/null 2>&1; then
+      setsid "$NIXFIED_ORCHESTRATOR_SELF" janitor-run "$parent_pid" "$run_id" "$pid" "$pgid" "$workflow_id" "$task_id" "$control_file" "$signal_file" >/dev/null 2>&1 < /dev/null &
+    else
+      ${pkgs.coreutils}/bin/nohup "$NIXFIED_ORCHESTRATOR_SELF" janitor-run "$parent_pid" "$run_id" "$pid" "$pgid" "$workflow_id" "$task_id" "$control_file" "$signal_file" >/dev/null 2>&1 < /dev/null &
+    fi
+    printf '%s' "$!"
+  }
+
+  janitor_run_loop() {
+    local parent_pid="$1"
+    local run_id="$2"
+    local pid="$3"
+    local pgid="$4"
+    local workflow_id="$5"
+    local task_id="$6"
+    local control_file="$7"
+    local signal_file="$8"
+    local signal_name
+
+    while [ -f "$control_file" ]; do
+      if ! kill -0 "$parent_pid" 2>/dev/null; then
+        signal_name="EXIT"
+        if [ -f "$signal_file" ]; then
+          signal_name="$(tr -d '\n' < "$signal_file")"
+          if [ -z "$signal_name" ]; then
+            signal_name="EXIT"
+          fi
+        fi
+        cleanup_interrupted_run "$run_id" "$pid" "$pgid" "$workflow_id" "$task_id" "$signal_name"
+        rm -f "$control_file" "$signal_file"
+        return 0
+      fi
+      sleep 0.1
+    done
+
+    return 0
+  }
+
+  handle_foreground_signal() {
+    local signal_name="$1"
+
+    FOREGROUND_SIGNAL_NAME="$signal_name"
+    if [ -n "$FOREGROUND_SIGNAL_FILE" ]; then
+      printf '%s' "$signal_name" > "$FOREGROUND_SIGNAL_FILE" || true
+    fi
+    return 0
+  }
+
   launch_command() {
     local run_id="$1"
     local process_mode="$2"
-    shift 2
+    local terminal_workflow_id="$3"
+    local terminal_task_id="$4"
+    shift 4
 
     local -a cmd
     local pid
     local pgid
     local rc
     local log_file
+    local run_file
+    local current_state
+    local janitor_dir
+    local control_file
+    local signal_file
+    local janitor_pid
+    local interrupted_signal=""
 
     cmd=("$@")
 
@@ -414,16 +640,76 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
       return 0
     fi
 
-    "''${cmd[@]}" &
+    trap 'handle_foreground_signal INT' INT
+    trap 'handle_foreground_signal TERM' TERM
+
+    if [ -n "$SETSID_BIN" ] && [ -x "$SETSID_BIN" ]; then
+      "$SETSID_BIN" "''${cmd[@]}" &
+    elif command -v setsid >/dev/null 2>&1; then
+      setsid "''${cmd[@]}" &
+    else
+      "''${cmd[@]}" &
+    fi
 
     pid="$!"
     pgid="$(pgid_of_pid "$pid")"
+    set_foreground_run_context "$run_id" "$pid" "$pgid" "$terminal_workflow_id" "$terminal_task_id"
+    janitor_dir="$(mktemp -d "$RUN_LOCKS_DIR/fg-$run_id.XXXXXX")"
+    control_file="$janitor_dir/alive"
+    signal_file="$janitor_dir/signal"
+    : > "$control_file"
+    FOREGROUND_SIGNAL_FILE="$signal_file"
+    janitor_pid="$(start_foreground_janitor "$$" "$run_id" "$pid" "$pgid" "$terminal_workflow_id" "$terminal_task_id" "$control_file" "$signal_file")"
     update_run_state "$run_id" "running" "null" "" "$pid" "$pgid"
 
     set +e
     wait "$pid"
     rc="$?"
     set -e
+    trap - INT TERM
+
+    if [ -n "$FOREGROUND_SIGNAL_NAME" ]; then
+      interrupted_signal="$FOREGROUND_SIGNAL_NAME"
+    elif [ -f "$signal_file" ]; then
+      interrupted_signal="$(tr -d '\n' < "$signal_file")"
+    fi
+
+    if [ -n "$interrupted_signal" ]; then
+      cleanup_interrupted_run "$run_id" "$pid" "$pgid" "$terminal_workflow_id" "$terminal_task_id" "$interrupted_signal"
+    fi
+
+    rm -f "$control_file" "$signal_file"
+    wait "$janitor_pid" 2>/dev/null || true
+    rmdir "$janitor_dir" 2>/dev/null || true
+    clear_foreground_run_context
+
+    run_file="$(run_file_for "$run_id")"
+    if [ -f "$run_file" ]; then
+      current_state="$(run_file_state "$run_file")"
+      if run_state_is_terminal "$current_state"; then
+        case "$current_state" in
+          passed)
+            return 0
+            ;;
+          canceled)
+            return 130
+            ;;
+          failed)
+            if [ -n "$interrupted_signal" ]; then
+              return 130
+            fi
+            if [ "$rc" -eq 0 ]; then
+              return 1
+            fi
+            return "$rc"
+            ;;
+        esac
+      fi
+    fi
+
+    if [ -n "$interrupted_signal" ]; then
+      return 130
+    fi
 
     if [ "$rc" -eq 0 ]; then
       update_run_state "$run_id" "passed" "0" "" "$pid" "$pgid"
@@ -488,7 +774,7 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
     local state
     local pid
     local pgid
-    local waited=0
+    local timeout_seconds
 
     run_file="$(run_file_for "$run_id")"
     if [ ! -f "$run_file" ]; then
@@ -508,28 +794,8 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
 
     pid="$(run_file_pid "$run_file")"
     pgid="$(run_file_pgid "$run_file")"
-
-    if [ -n "$pgid" ] && [ "$pgid" != "0" ]; then
-      kill -TERM -- "-$pgid" 2>/dev/null || true
-    elif [ -n "$pid" ]; then
-      kill -TERM "$pid" 2>/dev/null || true
-    fi
-
-    while [ $waited -lt 5 ]; do
-      if ! is_pid_running "$pid"; then
-        break
-      fi
-      sleep 1
-      waited=$((waited + 1))
-    done
-
-    if is_pid_running "$pid"; then
-      if [ -n "$pgid" ] && [ "$pgid" != "0" ]; then
-        kill -KILL -- "-$pgid" 2>/dev/null || true
-      elif [ -n "$pid" ]; then
-        kill -KILL "$pid" 2>/dev/null || true
-      fi
-    fi
+    timeout_seconds="$(stop_timeout_seconds)"
+    terminate_run_process "$pid" "$pgid" "$timeout_seconds"
 
     update_run_state "$run_id" "canceled" "130" "stop-requested" "$pid" "$pgid"
     echo "OK: stopped run_id=$run_id"
@@ -622,9 +888,9 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
     ensure_artifacts_root "$run_id" "$ephemeral_enabled" "$workflow_ref"
 
     if [ "$ephemeral_enabled" = "1" ]; then
-      launch_command "$run_id" "$PROCESS_MODE" "$EPHEMERAL_EXECUTOR_WRAPPER" "$EXECUTOR_PROGRAM" run-task "$task_id" "''${FORWARD_ARGS[@]}"
+      launch_command "$run_id" "$PROCESS_MODE" "$workflow_ref" "$task_id" "$EPHEMERAL_EXECUTOR_WRAPPER" "$EXECUTOR_PROGRAM" run-task "$task_id" "''${FORWARD_ARGS[@]}"
     else
-      launch_command "$run_id" "$PROCESS_MODE" "$EXECUTOR_PROGRAM" run-task "$task_id" "''${FORWARD_ARGS[@]}"
+      launch_command "$run_id" "$PROCESS_MODE" "$workflow_ref" "$task_id" "$EXECUTOR_PROGRAM" run-task "$task_id" "''${FORWARD_ARGS[@]}"
     fi
   }
 
@@ -676,9 +942,9 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
     ensure_artifacts_root "$run_id" "$ephemeral_enabled" "$workflow_id"
 
     if [ "$ephemeral_enabled" = "1" ]; then
-      launch_command "$run_id" "$PROCESS_MODE" "$EPHEMERAL_EXECUTOR_WRAPPER" "$EXECUTOR_PROGRAM" run-workflow "$workflow_id" "''${FORWARD_ARGS[@]}"
+      launch_command "$run_id" "$PROCESS_MODE" "$workflow_id" "" "$EPHEMERAL_EXECUTOR_WRAPPER" "$EXECUTOR_PROGRAM" run-workflow "$workflow_id" "''${FORWARD_ARGS[@]}"
     else
-      launch_command "$run_id" "$PROCESS_MODE" "$EXECUTOR_PROGRAM" run-workflow "$workflow_id" "''${FORWARD_ARGS[@]}"
+      launch_command "$run_id" "$PROCESS_MODE" "$workflow_id" "" "$EXECUTOR_PROGRAM" run-workflow "$workflow_id" "''${FORWARD_ARGS[@]}"
     fi
   }
 
@@ -724,6 +990,13 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
           exit 2
         fi
         stop_all_runs
+        ;;
+      janitor-run)
+        if [ "$#" -ne 8 ]; then
+          echo "ERROR: usage: janitor-run <parent-pid> <run-id> <pid> <pgid> <workflow-id> <task-id> <control-file> <signal-file>"
+          exit 2
+        fi
+        janitor_run_loop "$@"
         ;;
       *)
         echo "ERROR: unknown subcommand '$subcommand'"

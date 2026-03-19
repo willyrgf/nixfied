@@ -19,8 +19,10 @@ pkgs.runCommand "parallel-runner-smoke" { } ''
   EXECUTOR="${executor}/bin/nixfied-executor"
   EVENTS_FILE="$TMPDIR/registry/events.ndjson"
   export REGISTRY_ROOT="$TMPDIR/registry"
+  export CI_ARTIFACTS_ROOT="$TMPDIR/artifacts"
   export NIXFIED_RUNTIME_DIR_SCOPE_OVERRIDE="$TMPDIR/runtime-scope"
   mkdir -p "$REGISTRY_ROOT"
+  mkdir -p "$CI_ARTIFACTS_ROOT"
   mkdir -p "$NIXFIED_RUNTIME_DIR_SCOPE_OVERRIDE"
 
   export NIXFIED_WORKFLOW_PARALLEL=1

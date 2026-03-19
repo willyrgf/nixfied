@@ -4,12 +4,19 @@
   registry,
 }:
 let
-  harness = import ./lib/harness.nix {
+  probeModel = import ./lib/ci-probe-model.nix {
     inherit
       pkgs
       model
+      ;
+  };
+
+  harness = import ./lib/harness.nix {
+    inherit
+      pkgs
       registry
       ;
+    model = probeModel;
     projectRoot = ../..;
   };
 in
@@ -19,7 +26,8 @@ pkgs.runCommand "logging-injection-smoke" { } ''
 
   ORCH="${harness.orchestrator}/bin/nixfied-orchestrator"
   export REGISTRY_ROOT="$TMPDIR/registry"
-  mkdir -p "$REGISTRY_ROOT"
+  export CI_ARTIFACTS_ROOT="$TMPDIR/artifacts"
+  mkdir -p "$REGISTRY_ROOT" "$CI_ARTIFACTS_ROOT"
 
   repo="$TMPDIR/repo"
   mkdir -p "$repo/subdir"

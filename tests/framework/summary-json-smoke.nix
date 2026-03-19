@@ -4,16 +4,12 @@
   registry,
 }:
 let
-  probeModel = model // {
-    workflows = model.workflows // {
-      "workflow.ci.basic" = model.workflows."workflow.ci.basic" // {
-        execution = model.workflows."workflow.ci.basic".execution // {
-          ephemeral = (model.workflows."workflow.ci.basic".execution.ephemeral or { }) // {
-            enable = false;
-          };
-        };
-      };
-    };
+  probeModel = import ./lib/ci-probe-model.nix {
+    inherit
+      pkgs
+      model
+      ;
+    disableEphemeralWorkflows = [ "workflow.ci.basic" ];
   };
 
   orchestrator = import ../../nixfied/framework/runtime/orchestrator.nix {

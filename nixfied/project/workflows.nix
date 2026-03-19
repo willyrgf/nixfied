@@ -216,6 +216,47 @@
         };
       };
 
+      test-isolation-probe = {
+        id = "workflow.test.isolation.probe";
+        summary = "Isolation probe workflow";
+        description = "Runs a single lightweight unit so test-isolation can emit workflow summaries per cell.";
+        mode = "custom";
+        maxWorkers = 1;
+        units = {
+          probe = {
+            taskId = "task.test.isolation.unit";
+            needs = [ ];
+            locks = [ ];
+            when = {
+              envEquals = { };
+              envPresent = [ ];
+            };
+            skipIfMissingEnv = [ ];
+          };
+        };
+        stages = [ ];
+        preRun = {
+          tasks = [ ];
+        };
+        postRun = {
+          tasks = [ ];
+          alwaysRun = true;
+        };
+        artifacts = {
+          root = "/tmp/ci-artifacts";
+          keepOnSuccess = false;
+          keepOnFailure = true;
+          writeSummary = true;
+        };
+        execution = {
+          parallel = false;
+          failFast = true;
+          lockPolicy = "exclusive";
+          emitRegistryEvents = true;
+          ephemeral.enable = true;
+        };
+      };
+
       test-parallel-smoke = {
         id = "workflow.test.parallel.smoke";
         summary = "Parallel runner smoke workflow";

@@ -300,9 +300,8 @@ rec {
     maxParallel = 12;
     useDeps = false;
     run = {
-      kind = "runApp";
-      app = "ci";
-      args = [ "--summary" ];
+      taskId = "task.test.isolation.probe";
+      args = [ ];
     };
     validate = {
       kind = "runApp";
@@ -317,7 +316,7 @@ rec {
   frameworkTest = {
     # Default shard parallelism used when --max-parallel-shards is not passed.
     # Supported values: "auto" or a positive integer.
-    maxParallelShards = "auto";
+    maxParallelShards = 1;
   };
 
   packages = { };

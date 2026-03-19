@@ -159,7 +159,8 @@ pkgs.runCommand "nix-checks-parent-workflow-skip-smoke" { } ''
 
   EXECUTOR="${harness.executor}/bin/nixfied-executor"
   export REGISTRY_ROOT="$TMPDIR/registry"
-  mkdir -p "$REGISTRY_ROOT"
+  export CI_ARTIFACTS_ROOT="$TMPDIR/artifacts"
+  mkdir -p "$REGISTRY_ROOT" "$CI_ARTIFACTS_ROOT"
 
   direct_log="$TMPDIR/direct-fake-nix.log"
   workflow_log="$TMPDIR/workflow-fake-nix.log"

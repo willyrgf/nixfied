@@ -41,5 +41,6 @@ Workflows:
   workflow.ci.env - Environment CI workflow
   workflow.ci.full - Full CI workflow
   workflow.test.framework.selfhost - Framework self-host smoke workflow
+  workflow.test.isolation.probe - Isolation probe workflow
   workflow.test.parallel.failfast - Parallel runner fail-fast workflow
   workflow.test.parallel.smoke - Parallel runner smoke workflow
