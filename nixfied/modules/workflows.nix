@@ -1,6 +1,9 @@
 { lib, ... }:
 let
   t = lib.types;
+  serviceConfigLib = import ../framework/core/service-config.nix { inherit lib; };
+  serviceRequirementType = t.enum serviceConfigLib.supportedServiceNames;
+  serviceRequirementAliasType = t.nullOr serviceRequirementType;
 
   whenSpec = t.submodule {
     options = {
@@ -21,31 +24,42 @@ let
     };
   };
 
-  workflowUnit = t.submodule {
-    options = {
-      taskId = lib.mkOption { type = t.str; };
-      needs = lib.mkOption {
-        type = t.listOf t.str;
-        default = [ ];
+  workflowUnit = t.submodule (
+    { ... }:
+    {
+      options = {
+        taskId = lib.mkOption { type = t.str; };
+        needs = lib.mkOption {
+          type = t.listOf t.str;
+          default = [ ];
+        };
+        locks = lib.mkOption {
+          type = t.listOf t.str;
+          default = [ ];
+        };
+        when = lib.mkOption {
+          type = whenSpec;
+          default = { };
+        };
+        skipIfMissingEnv = lib.mkOption {
+          type = t.listOf t.str;
+          default = [ ];
+        };
+        serviceName = lib.mkOption {
+          type = serviceRequirementAliasType;
+          default = null;
+          description = "Deprecated alias for requirements.services = [ serviceName ].";
+        };
+        requirements = {
+          services = lib.mkOption {
+            type = t.listOf serviceRequirementType;
+            default = [ ];
+            description = "Hard service capability requirements used for graph exclusion and runtime skip.";
+          };
+        };
       };
-      locks = lib.mkOption {
-        type = t.listOf t.str;
-        default = [ ];
-      };
-      when = lib.mkOption {
-        type = whenSpec;
-        default = { };
-      };
-      skipIfMissingEnv = lib.mkOption {
-        type = t.listOf t.str;
-        default = [ ];
-      };
-      serviceName = lib.mkOption {
-        type = t.str;
-        default = "";
-      };
-    };
-  };
+    }
+  );
 in
 {
   options.nixfied.workflows = lib.mkOption {

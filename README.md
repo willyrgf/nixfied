@@ -101,6 +101,12 @@ SKIP_REDIS=on nix run .#health -- --service all
 If a workflow unit depends on a skipped service unit, its dependents are cascade-skipped with reason `dependency-skipped`. A skip-only workflow exits 0.
 Covered by `tests/framework/skip-service-smoke`.
 
+Task and workflow service requirements:
+
+- Use `requirements.services = [ "<service>" ... ]` on tasks and workflow units to declare hard service capability requirements.
+- Compile-time graph exclusion and runtime `SKIP_<SERVICE>` both use those requirements.
+- `serviceName` remains accepted as a deprecated alias for `requirements.services = [ serviceName ]` during the migration window.
+
 Ephemeral execution defaults (configured in `nixfied/project/conf.nix`):
 
 - `ephemeral.copyMode = "git-files"`: copies tracked + non-ignored untracked files.

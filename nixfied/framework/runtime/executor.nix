@@ -370,6 +370,42 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
     fi
   }
 
+  task_first_skipped_required_service() {
+    local task_id="$1"
+    local service_name=""
+
+    while IFS= read -r service_name; do
+      if [ -n "$service_name" ] && is_service_skipped "$service_name"; then
+        printf '%s' "$service_name"
+        return 0
+      fi
+    done < <(task_required_services "$task_id")
+
+    return 1
+  }
+
+  workflow_unit_first_skipped_required_service() {
+    local unit_json="$1"
+    local unit_task="$2"
+    local service_name=""
+
+    while IFS= read -r service_name; do
+      if [ -n "$service_name" ] && is_service_skipped "$service_name"; then
+        printf '%s' "$service_name"
+        return 0
+      fi
+    done < <(workflow_unit_required_services "$unit_json")
+
+    while IFS= read -r service_name; do
+      if [ -n "$service_name" ] && is_service_skipped "$service_name"; then
+        printf '%s' "$service_name"
+        return 0
+      fi
+    done < <(task_required_services "$unit_task")
+
+    return 1
+  }
+
   run_task() {
     if [ "$#" -lt 1 ]; then
       echo "ERROR: usage: run-task <task-id> [-- ...]"
@@ -446,7 +482,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       local dep_task
       local dep_rc=0
       local rc=0
-      local current_task_service_name=""
+      local current_task_skip_service=""
       local skip_detail_json
 
       if [ -n "''${visited_tasks[$current_task]:-}" ]; then
@@ -463,10 +499,10 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         return 2
       fi
 
-      current_task_service_name="$(task_service_name "$current_task")"
-      if is_service_skipped "$current_task_service_name"; then
-        echo "SKIP: task '$current_task' is skipped because service '$current_task_service_name' has a skip flag enabled"
-        skip_detail_json="$(${pkgs.jq}/bin/jq -cn --arg reason "service-skipped" --arg serviceName "$current_task_service_name" '{reason: $reason, serviceName: $serviceName}')"
+      current_task_skip_service="$(task_first_skipped_required_service "$current_task" || true)"
+      if [ -n "$current_task_skip_service" ]; then
+        echo "SKIP: task '$current_task' is skipped because service '$current_task_skip_service' has a skip flag enabled"
+        skip_detail_json="$(${pkgs.jq}/bin/jq -cn --arg reason "service-skipped" --arg serviceName "$current_task_skip_service" '{reason: $reason, serviceName: $serviceName}')"
         append_event "$run_id" "" "$current_task" "canceled" "$skip_detail_json"
         if [ "$current_task" != "$task_id" ]; then
           return 3
@@ -659,7 +695,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
     while IFS= read -r unit_json; do
       local unit_task
-      local unit_service_name
+      local unit_skip_service=""
       local blocked_by_dependency
       local dependency
       local failed_dependency=""
@@ -667,10 +703,6 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       local missing=""
 
       unit_task="$(workflow_unit_task_id "$unit_json")"
-      unit_service_name="$(workflow_unit_service_name "$unit_json")"
-      if [ -z "$unit_service_name" ]; then
-        unit_service_name="$(task_service_name "$unit_task")"
-      fi
       missing="$(workflow_unit_missing_env_csv "$unit_json")"
 
       if [ -n "''${blocked_tasks_by_dependency[$unit_task]:-}" ]; then
@@ -722,11 +754,12 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         continue
       fi
 
-      if is_service_skipped "$unit_service_name"; then
+      unit_skip_service="$(workflow_unit_first_skipped_required_service "$unit_json" "$unit_task" || true)"
+      if [ -n "$unit_skip_service" ]; then
         local detail_json
-        detail_json="$(${pkgs.jq}/bin/jq -cn --arg reason "service-skipped" --arg serviceName "$unit_service_name" '{reason: $reason, serviceName: $serviceName}')"
+        detail_json="$(${pkgs.jq}/bin/jq -cn --arg reason "service-skipped" --arg serviceName "$unit_skip_service" '{reason: $reason, serviceName: $serviceName}')"
         append_event "$run_id" "$workflow_id" "$unit_task" "canceled" "$detail_json"
-        echo "SKIP: task '$unit_task' (service '$unit_service_name') is skipped because service '$unit_service_name' has a skip flag enabled"
+        echo "SKIP: task '$unit_task' (service '$unit_skip_service') is skipped because service '$unit_skip_service' has a skip flag enabled"
         blocked_tasks_by_dependency["$unit_task"]="$unit_task"
         blocked_tasks_reason_by_dependency["$unit_task"]="service-skipped"
         continue
@@ -984,7 +1017,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       local unit_json
       local unit_task
       local missing=""
-      local unit_service_name=""
+      local unit_skip_service=""
 
       unit_json="''${UNIT_JSON[$unit_name]}"
       unit_task="$(workflow_unit_task_id "$unit_json")"
@@ -996,12 +1029,9 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         continue
       fi
 
-      unit_service_name="$(workflow_unit_service_name "$unit_json")"
-      if [ -z "$unit_service_name" ]; then
-        unit_service_name="$(task_service_name "$unit_task")"
-      fi
-      if is_service_skipped "$unit_service_name"; then
-        mark_unit_canceled "$unit_name" "service-skipped" "serviceName" "$unit_service_name"
+      unit_skip_service="$(workflow_unit_first_skipped_required_service "$unit_json" "$unit_task" || true)"
+      if [ -n "$unit_skip_service" ]; then
+        mark_unit_canceled "$unit_name" "service-skipped" "serviceName" "$unit_skip_service"
         cancel_pending_dependents "$unit_name" "dependency-skipped"
         continue
       fi
@@ -1118,18 +1148,18 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
     local phase_status=0
 
     while IFS= read -r phase_task; do
-      local phase_task_service_name
+      local phase_task_skip_service
       local phase_skip_detail
 
       if [ -z "$phase_task" ]; then
         continue
       fi
 
-      phase_task_service_name="$(task_service_name "$phase_task")"
-      if is_service_skipped "$phase_task_service_name"; then
-        phase_skip_detail="$(${pkgs.jq}/bin/jq -cn --arg reason "service-skipped" --arg serviceName "$phase_task_service_name" '{reason: $reason, serviceName: $serviceName}')"
+      phase_task_skip_service="$(task_first_skipped_required_service "$phase_task" || true)"
+      if [ -n "$phase_task_skip_service" ]; then
+        phase_skip_detail="$(${pkgs.jq}/bin/jq -cn --arg reason "service-skipped" --arg serviceName "$phase_task_skip_service" '{reason: $reason, serviceName: $serviceName}')"
         append_event "$run_id" "$workflow_id" "$phase_task" "canceled" "$phase_skip_detail"
-        echo "SKIP: task '$phase_task' (service '$phase_task_service_name') is skipped because service '$phase_task_service_name' has a skip flag enabled"
+        echo "SKIP: task '$phase_task' (service '$phase_task_skip_service') is skipped because service '$phase_task_skip_service' has a skip flag enabled"
         continue
       fi
 

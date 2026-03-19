@@ -169,6 +169,13 @@ Workflow lifecycle fields:
 - `postRun.tasks`
 - `postRun.alwaysRun`
 
+Service requirement fields:
+
+- tasks declare hard service capabilities with `requirements.services`
+- workflow units can add their own `requirements.services`
+- the effective unit requirement set is the union of task and unit requirements
+- deprecated `serviceName` authoring input is normalized into `requirements.services`
+
 Only top-level user app surfaces are exposed in help output.
 
 ## Operations Utilities

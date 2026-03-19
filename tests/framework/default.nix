@@ -87,6 +87,10 @@ let
         "task.ops.health"
       ];
     };
+
+    "service-requirements-contract" = {
+      covers = [ "task.framework.test" ];
+    };
   };
 
   rawChecks = {
@@ -247,6 +251,13 @@ let
     };
 
     "excluded-service-evaluation" = import ./excluded-service-evaluation.nix {
+      inherit
+        pkgs
+        registry
+        ;
+    };
+
+    "service-requirements-contract" = import ./service-requirements-contract.nix {
       inherit
         pkgs
         registry

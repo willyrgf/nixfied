@@ -78,7 +78,7 @@ let
         id = excludedTaskId;
         summary = "Excluded helios task";
         description = "Should be pruned when helios is excluded.";
-        serviceName = "helios";
+        requirements.services = [ "helios" ];
         runner.command = ''
           set -euo pipefail
           printf '%s\n' "excluded-helios-ran"
@@ -161,7 +161,7 @@ let
 
         "local.unit" = {
           taskId = unitLocalTaskId;
-          serviceName = "helios";
+          requirements.services = [ "helios" ];
         };
 
         "after.local" = {

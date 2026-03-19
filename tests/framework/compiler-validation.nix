@@ -30,6 +30,14 @@ let
     task.id == taskId && builtins.substring 0 5 task.id == "task."
   ) taskIds;
 
+  tasksHaveServiceRequirements = builtins.all (
+    taskId:
+    let
+      task = model.tasks.${taskId};
+    in
+    builtins.isList ((((task.requirements or { }).services)))
+  ) taskIds;
+
   workflowsReferenceKnownTasks = builtins.all (
     workflowId:
     let
@@ -44,6 +52,16 @@ let
       workflow = model.workflows.${workflowId};
     in
     workflow ? preRun && workflow ? postRun && workflow.postRun ? alwaysRun
+  ) workflowIds;
+
+  workflowsHaveServiceRequirements = builtins.all (
+    workflowId:
+    let
+      workflow = model.workflows.${workflowId};
+    in
+    builtins.all (
+      unitName: builtins.isList ((((workflow.units.${unitName}.requirements or { }).services)))
+    ) (builtins.attrNames workflow.units)
   ) workflowIds;
 
   servicesHaveStableIds = builtins.all (
@@ -165,8 +183,10 @@ assert hasCommandSurface "framework::test" "nixfied/framework/presets/framework-
 assert hasCommandSurface "features" "nixfied/framework/runtime/dispatcher.nix";
 assert hasCommandSurface "model" "nixfied/framework/core/mkNixfied.nix";
 assert tasksHaveStableIds;
+assert tasksHaveServiceRequirements;
 assert workflowsReferenceKnownTasks;
 assert workflowsHaveLifecycle;
+assert workflowsHaveServiceRequirements;
 assert servicesHaveStableIds;
 assert featureIds != [ ];
 assert featuresHaveStableIds;

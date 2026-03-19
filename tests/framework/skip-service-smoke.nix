@@ -25,15 +25,23 @@ let
   };
   baseTask = compiled.model.tasks."task.check";
 
+  primaryRequiredService =
+    requiredServices:
+    if builtins.length requiredServices == 1 then builtins.head requiredServices else "";
+
   mkShellTask =
     {
       id,
-      serviceName,
+      requiredServices ? [ ],
       commandTail,
     }:
     baseTask
     // {
-      inherit id serviceName;
+      inherit id;
+      requirements = (baseTask.requirements or { }) // {
+        services = requiredServices;
+      };
+      serviceName = primaryRequiredService requiredServices;
       summary = id;
       description = id;
       runner = {
@@ -74,7 +82,7 @@ let
     tasks = compiled.model.tasks // {
       "${taskSkipId}" = mkShellTask {
         id = taskSkipId;
-        serviceName = skipService;
+        requiredServices = [ skipService ];
         commandTail = ''
           set -euo pipefail
           printf '%s\n' "skip-task-main-ran"
@@ -83,7 +91,6 @@ let
 
       "${controlTaskId}" = mkShellTask {
         id = controlTaskId;
-        serviceName = "";
         commandTail = ''
           set -euo pipefail
           printf '%s\n' "control-task-ran"
@@ -92,7 +99,7 @@ let
 
       "${dependencyTaskId}" = mkShellTask {
         id = dependencyTaskId;
-        serviceName = skipService;
+        requiredServices = [ skipService ];
         commandTail = ''
           set -euo pipefail
           printf '%s\n' "dependency-task-ran"
@@ -101,7 +108,6 @@ let
 
       "${consumerTaskId}" = mkShellTask {
         id = consumerTaskId;
-        serviceName = "search";
         commandTail = ''
           set -euo pipefail
           printf '%s\n' "consumer-task-ran"

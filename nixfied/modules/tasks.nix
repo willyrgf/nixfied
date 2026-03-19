@@ -1,6 +1,9 @@
 { lib, ... }:
 let
   t = lib.types;
+  serviceConfigLib = import ../framework/core/service-config.nix { inherit lib; };
+  serviceRequirementType = t.enum serviceConfigLib.supportedServiceNames;
+  serviceRequirementAliasType = t.nullOr serviceRequirementType;
   runtimeWorkdirType = t.enum [
     "projectRoot"
     "stateRoot"
@@ -143,6 +146,7 @@ let
       };
     };
   };
+
 in
 {
   options.nixfied.tasks = lib.mkOption {
@@ -172,8 +176,9 @@ in
               default = name;
             };
             serviceName = lib.mkOption {
-              type = t.str;
-              default = "";
+              type = serviceRequirementAliasType;
+              default = null;
+              description = "Deprecated alias for requirements.services = [ serviceName ].";
             };
             description = lib.mkOption {
               type = t.str;
@@ -182,6 +187,14 @@ in
             tags = lib.mkOption {
               type = t.listOf t.str;
               default = [ ];
+            };
+
+            requirements = {
+              services = lib.mkOption {
+                type = t.listOf serviceRequirementType;
+                default = [ ];
+                description = "Hard service capability requirements used for graph exclusion and runtime skip.";
+              };
             };
 
             runner = {
