@@ -25,10 +25,6 @@ let
   };
   baseTask = compiled.model.tasks."task.check";
 
-  primaryRequiredService =
-    requiredServices:
-    if builtins.length requiredServices == 1 then builtins.head requiredServices else "";
-
   mkShellTask =
     {
       id,
@@ -41,7 +37,6 @@ let
       requirements = (baseTask.requirements or { }) // {
         services = requiredServices;
       };
-      serviceName = primaryRequiredService requiredServices;
       summary = id;
       description = id;
       runner = {
@@ -127,6 +122,7 @@ let
             taskId = dependencyTaskId;
             needs = [ ];
             locks = [ ];
+            requirements.services = [ skipService ];
             when = {
               envEquals = { };
               envPresent = [ ];
@@ -176,6 +172,7 @@ let
             taskId = dependencyTaskId;
             needs = [ ];
             locks = [ ];
+            requirements.services = [ skipService ];
             when = {
               envEquals = { };
               envPresent = [ ];

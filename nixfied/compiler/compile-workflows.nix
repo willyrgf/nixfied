@@ -17,16 +17,6 @@ let
   excludedServices = resolved.graph.excludedServices or [ ];
   names = builtins.sort builtins.lessThan (builtins.attrNames rawWorkflows);
 
-  normalizeRequiredServices =
-    explicitServices: aliasServiceName:
-    listUtils.uniquePreserveOrder (
-      explicitServices ++ lib.optionals (aliasServiceName != null) [ aliasServiceName ]
-    );
-
-  primaryRequiredService =
-    requiredServices:
-    if builtins.length requiredServices == 1 then builtins.head requiredServices else "";
-
   declaredTaskIdSet = builtins.listToAttrs (
     map (taskId: {
       name = taskId;
@@ -60,25 +50,16 @@ let
   isDeclaredTaskId = taskId: builtins.hasAttr taskId declaredTaskIdSet;
   isPrunedTaskId = taskId: builtins.hasAttr taskId prunedTaskIdSet;
 
-  normalizeUnit =
-    unit:
-    let
-      explicitRequiredServices = unit.requirements.services or [ ];
-      normalizedRequiredServices = normalizeRequiredServices explicitRequiredServices (
-        unit.serviceName or null
-      );
-    in
-    {
-      taskId = resolveDeclaredTaskId unit.taskId;
-      needs = listUtils.uniquePreserveOrder unit.needs;
-      locks = listUtils.uniquePreserveOrder unit.locks;
-      when = unit.when;
-      skipIfMissingEnv = listUtils.uniquePreserveOrder unit.skipIfMissingEnv;
-      requirements = unit.requirements or { } // {
-        services = normalizedRequiredServices;
-      };
-      serviceName = primaryRequiredService normalizedRequiredServices;
+  normalizeUnit = unit: {
+    taskId = resolveDeclaredTaskId unit.taskId;
+    needs = listUtils.uniquePreserveOrder unit.needs;
+    locks = listUtils.uniquePreserveOrder unit.locks;
+    when = unit.when;
+    skipIfMissingEnv = listUtils.uniquePreserveOrder unit.skipIfMissingEnv;
+    requirements = unit.requirements or { } // {
+      services = listUtils.uniquePreserveOrder (unit.requirements.services or [ ]);
     };
+  };
 
   unitsFromStages =
     stages:
@@ -108,7 +89,6 @@ let
                 requirements = {
                   services = [ ];
                 };
-                serviceName = "";
               };
             }) stageUnits
           );
@@ -297,7 +277,6 @@ let
           excludedRequirements = builtins.filter (
             serviceName: builtins.elem serviceName excludedServices
           ) effectiveRequiredServices;
-          effectiveServiceName = primaryRequiredService effectiveRequiredServices;
           initialPruneReason =
             if isPrunedTaskId unit.taskId then
               {
@@ -344,7 +323,6 @@ let
           requirements = {
             services = effectiveRequiredServices;
           };
-          serviceName = effectiveServiceName;
           priority = taskScheduling.priority or 100;
           scheduling = {
             maxAttempts = taskScheduling.maxAttempts or 1;
@@ -417,7 +395,6 @@ let
           pruneUnitsUntilStable (pruneReasonsByUnit // nextPruneReasons);
 
       pruneReasonsByUnit = pruneUnitsUntilStable initialPruneReasonsByUnit;
-      prunedUnitNames = builtins.sort builtins.lessThan (builtins.attrNames pruneReasonsByUnit);
       survivingUnitNames = builtins.filter (
         unitName: !(builtins.hasAttr unitName pruneReasonsByUnit)
       ) unitNames;
@@ -446,7 +423,6 @@ let
               when = unit.when;
               skipIfMissingEnv = unit.skipIfMissingEnv;
               requirements = unit.requirements;
-              serviceName = unit.serviceName;
               priority = unit.priority;
               scheduling = unit.scheduling;
               deps = unit.deps;
@@ -504,7 +480,6 @@ let
                 when = unit.when;
                 skipIfMissingEnv = unit.skipIfMissingEnv;
                 requirements = unit.requirements;
-                serviceName = unit.serviceName;
                 priority = unit.priority;
                 scheduling = unit.scheduling;
                 deps = unit.deps;

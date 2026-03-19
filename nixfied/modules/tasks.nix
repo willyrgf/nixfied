@@ -3,7 +3,6 @@ let
   t = lib.types;
   serviceConfigLib = import ../framework/core/service-config.nix { inherit lib; };
   serviceRequirementType = t.enum serviceConfigLib.supportedServiceNames;
-  serviceRequirementAliasType = t.nullOr serviceRequirementType;
   runtimeWorkdirType = t.enum [
     "projectRoot"
     "stateRoot"
@@ -174,11 +173,6 @@ in
             summary = lib.mkOption {
               type = t.str;
               default = name;
-            };
-            serviceName = lib.mkOption {
-              type = serviceRequirementAliasType;
-              default = null;
-              description = "Deprecated alias for requirements.services = [ serviceName ].";
             };
             description = lib.mkOption {
               type = t.str;

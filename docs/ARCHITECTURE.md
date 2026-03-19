@@ -25,6 +25,7 @@ Graph exclusion is resolved before service compilation:
 
 - `nixfied.graph.excludedServices` is consumed during project service projection.
 - Excluded services are removed before their project config branches are selected.
+- Task and workflow-unit service requirements are declared only through `requirements.services`.
 - Later compiler passes then prune dependent tasks, workflow units, features, and views.
 - Runtime `SKIP_<SERVICE>` remains a separate execution-time control and does not change graph selection.
 

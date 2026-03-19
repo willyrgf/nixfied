@@ -40,7 +40,6 @@
       },
       "additionalProperties": true
     },
-    "serviceName": { "type": "string" },
     "tags": {
       "type": "array",
       "items": { "type": "string" }

@@ -3,7 +3,6 @@ let
   t = lib.types;
   serviceConfigLib = import ../framework/core/service-config.nix { inherit lib; };
   serviceRequirementType = t.enum serviceConfigLib.supportedServiceNames;
-  serviceRequirementAliasType = t.nullOr serviceRequirementType;
 
   whenSpec = t.submodule {
     options = {
@@ -44,11 +43,6 @@ let
         skipIfMissingEnv = lib.mkOption {
           type = t.listOf t.str;
           default = [ ];
-        };
-        serviceName = lib.mkOption {
-          type = serviceRequirementAliasType;
-          default = null;
-          description = "Deprecated alias for requirements.services = [ serviceName ].";
         };
         requirements = {
           services = lib.mkOption {

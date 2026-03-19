@@ -35,7 +35,7 @@ let
     let
       task = model.tasks.${taskId};
     in
-    builtins.isList ((((task.requirements or { }).services)))
+    builtins.isList ((((task.requirements or { }).services))) && !(task ? serviceName)
   ) taskIds;
 
   workflowsReferenceKnownTasks = builtins.all (
@@ -60,7 +60,11 @@ let
       workflow = model.workflows.${workflowId};
     in
     builtins.all (
-      unitName: builtins.isList ((((workflow.units.${unitName}.requirements or { }).services)))
+      unitName:
+      let
+        unit = workflow.units.${unitName};
+      in
+      builtins.isList ((((unit.requirements or { }).services))) && !(unit ? serviceName)
     ) (builtins.attrNames workflow.units)
   ) workflowIds;
 

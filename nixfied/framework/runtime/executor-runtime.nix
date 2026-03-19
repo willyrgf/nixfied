@@ -308,30 +308,9 @@ in
     printf '%s' "$unit_json" | ${pkgs.jq}/bin/jq -r '.taskId'
   }
 
-  workflow_unit_service_name() {
-    local unit_json="$1"
-    printf '%s' "$unit_json" | ${pkgs.jq}/bin/jq -r '
-      (.serviceName // (
-        if ((.requirements.services // []) | length) == 1 then
-          .requirements.services[0]
-        else
-          ""
-        end
-      ))
-    '
-  }
-
   workflow_unit_required_services() {
     local unit_json="$1"
-    printf '%s' "$unit_json" | ${pkgs.jq}/bin/jq -r '
-      (.requirements.services // (
-        if (.serviceName // "") == "" then
-          []
-        else
-          [ .serviceName ]
-        end
-      ))[]?
-    '
+    printf '%s' "$unit_json" | ${pkgs.jq}/bin/jq -r '(.requirements.services // [])[]?'
   }
 
   workflow_unit_needs_count() {

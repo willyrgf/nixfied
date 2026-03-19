@@ -12,7 +12,7 @@ let
   shellHelpers = import ./lib/shell-helpers.nix { inherit pkgs; };
 
   multiTaskId = "task.test.requirements.multi";
-  aliasTaskId = "task.test.requirements.alias";
+  singleTaskId = "task.test.requirements.single";
   workflowTaskId = "task.test.requirements.workflow";
   controlTaskId = "task.test.requirements.control";
   workflowId = "workflow.test.requirements";
@@ -33,14 +33,14 @@ let
         '';
       };
 
-      "test.requirements.alias" = {
-        id = aliasTaskId;
-        summary = "Task using deprecated serviceName alias";
-        description = "Used to validate alias normalization into requirements.services.";
-        serviceName = "postgres";
+      "test.requirements.single" = {
+        id = singleTaskId;
+        summary = "Task with a single service requirement";
+        description = "Used to validate runtime skip for single-service requirements.";
+        requirements.services = [ "postgres" ];
         runner.command = ''
           set -euo pipefail
-          printf '%s\n' "alias-task-ran"
+          printf '%s\n' "single-task-ran"
         '';
       };
 
@@ -105,24 +105,52 @@ let
     ];
   };
 
-  invalidTaskAlias = builtins.tryEval (
+  invalidTaskServiceName = builtins.tryEval (
     builtins.deepSeq ((frameworkLib.mkNixfied {
       projectRoot = ../..;
       projectModules = [ ../../nixfied/project/module.nix ];
       extraModules = [
         {
-          nixfied.tasks."test.invalid.alias" = {
-            id = "task.test.invalid.alias";
-            serviceName = "search";
+          nixfied.tasks."test.invalid.service-name" = {
+            id = "task.test.invalid.service-name";
+            serviceName = "postgres";
             runner.command = ''
               set -euo pipefail
-              printf '%s\n' "invalid-alias"
+              printf '%s\n' "invalid-service-name"
             '';
           };
         }
       ];
       localOverrides = [ ];
     }).model.tasks
+    ) true
+  );
+
+  invalidWorkflowServiceName = builtins.tryEval (
+    builtins.deepSeq ((frameworkLib.mkNixfied {
+      projectRoot = ../..;
+      projectModules = [ ../../nixfied/project/module.nix ];
+      extraModules = [
+        {
+          nixfied.tasks."test.invalid.workflow.base" = {
+            id = "task.test.invalid.workflow.base";
+            runner.command = ''
+              set -euo pipefail
+              printf '%s\n' "invalid-workflow-base"
+            '';
+          };
+
+          nixfied.workflows."test.invalid.service-name" = {
+            id = "workflow.test.invalid.service-name";
+            units."bad.unit" = {
+              taskId = "task.test.invalid.workflow.base";
+              serviceName = "postgres";
+            };
+          };
+        }
+      ];
+      localOverrides = [ ];
+    }).model.workflows
     ) true
   );
 
@@ -170,18 +198,20 @@ assert
     "postgres"
     "helios"
   ];
-assert compiled.model.tasks.${aliasTaskId}.requirements.services == [ "postgres" ];
-assert compiled.model.tasks.${aliasTaskId}.serviceName == "postgres";
+assert compiled.model.tasks.${singleTaskId}.requirements.services == [ "postgres" ];
+assert !(compiled.model.tasks.${singleTaskId} ? serviceName);
 assert
   workflowUnit.requirements.services == [
     "postgres"
     "helios"
   ];
+assert !(workflowUnit ? serviceName);
 assert !(builtins.hasAttr multiTaskId compiledExcluded.model.tasks);
 assert builtins.hasAttr workflowTaskId compiledExcluded.model.tasks;
 assert !(builtins.hasAttr "required.unit" compiledExcluded.model.workflows.${workflowId}.units);
 assert builtins.hasAttr "control.unit" compiledExcluded.model.workflows.${workflowId}.units;
-assert invalidTaskAlias.success == false;
+assert invalidTaskServiceName.success == false;
+assert invalidWorkflowServiceName.success == false;
 assert invalidWorkflowRequirement.success == false;
 pkgs.runCommand "service-requirements-contract" { } ''
   set -euo pipefail
@@ -206,20 +236,20 @@ pkgs.runCommand "service-requirements-contract" { } ''
   require_not_contains "$TMPDIR/multi-task.out" "multi-task-ran"
 
   set +e
-  SKIP_POSTGRES=1 "$EXECUTOR" run-task "${aliasTaskId}" > "$TMPDIR/alias-task.out" 2>&1
-  alias_rc="$?"
+  SKIP_POSTGRES=1 "$EXECUTOR" run-task "${singleTaskId}" > "$TMPDIR/single-task.out" 2>&1
+  single_rc="$?"
   set -e
-  if [ "$alias_rc" -ne 0 ]; then
-    echo "expected deprecated alias task skip to exit 0, got $alias_rc"
-    cat "$TMPDIR/alias-task.out"
+  if [ "$single_rc" -ne 0 ]; then
+    echo "expected single-requirement task skip to exit 0, got $single_rc"
+    cat "$TMPDIR/single-task.out"
     exit 1
   fi
-  require_contains "$TMPDIR/alias-task.out" "SKIP: task '${aliasTaskId}' is skipped because service 'postgres' has a skip flag enabled"
-  require_not_contains "$TMPDIR/alias-task.out" "alias-task-ran"
+  require_contains "$TMPDIR/single-task.out" "SKIP: task '${singleTaskId}' is skipped because service 'postgres' has a skip flag enabled"
+  require_not_contains "$TMPDIR/single-task.out" "single-task-ran"
 
   SKIP_HELIOS=1 "$EXECUTOR" run-workflow "${workflowId}" > "$TMPDIR/workflow.out" 2>&1
   require_contains "$TMPDIR/workflow.out" "control-task-ran"
   require_not_contains "$TMPDIR/workflow.out" "workflow-task-ran"
 
-  echo "OK: service requirements normalize, validate, exclude, and skip correctly" > "$out"
+  echo "OK: service requirements validate, exclude, and skip correctly" > "$out"
 ''

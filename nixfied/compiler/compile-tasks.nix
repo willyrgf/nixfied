@@ -14,16 +14,6 @@ let
   globalRuntimeInputs = map builtins.toString (resolved.tooling.runtimePackages or [ ]);
   excludedServices = resolved.graph.excludedServices or [ ];
 
-  normalizeRequiredServices =
-    explicitServices: aliasServiceName:
-    listUtils.uniquePreserveOrder (
-      explicitServices ++ lib.optionals (aliasServiceName != null) [ aliasServiceName ]
-    );
-
-  primaryRequiredService =
-    requiredServices:
-    if builtins.length requiredServices == 1 then builtins.head requiredServices else "";
-
   normalizeHooks =
     hooks:
     builtins.mapAttrs (_: hook: {
@@ -47,8 +37,7 @@ let
     let
       raw = rawTasks.${name};
       id = normalizeId name raw.id;
-      explicitRequiredServices = raw.requirements.services or [ ];
-      requiredServices = normalizeRequiredServices explicitRequiredServices (raw.serviceName or null);
+      requiredServices = listUtils.uniquePreserveOrder (raw.requirements.services or [ ]);
     in
     canonical.canonicalize {
       inherit id;
@@ -57,7 +46,6 @@ let
       requirements = raw.requirements // {
         services = requiredServices;
       };
-      serviceName = primaryRequiredService requiredServices;
       summary = raw.summary;
       description = raw.description;
       tags = raw.tags;

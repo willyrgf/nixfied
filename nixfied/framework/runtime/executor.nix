@@ -386,7 +386,6 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
   workflow_unit_first_skipped_required_service() {
     local unit_json="$1"
-    local unit_task="$2"
     local service_name=""
 
     while IFS= read -r service_name; do
@@ -395,13 +394,6 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         return 0
       fi
     done < <(workflow_unit_required_services "$unit_json")
-
-    while IFS= read -r service_name; do
-      if [ -n "$service_name" ] && is_service_skipped "$service_name"; then
-        printf '%s' "$service_name"
-        return 0
-      fi
-    done < <(task_required_services "$unit_task")
 
     return 1
   }
@@ -754,7 +746,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         continue
       fi
 
-      unit_skip_service="$(workflow_unit_first_skipped_required_service "$unit_json" "$unit_task" || true)"
+      unit_skip_service="$(workflow_unit_first_skipped_required_service "$unit_json" || true)"
       if [ -n "$unit_skip_service" ]; then
         local detail_json
         detail_json="$(${pkgs.jq}/bin/jq -cn --arg reason "service-skipped" --arg serviceName "$unit_skip_service" '{reason: $reason, serviceName: $serviceName}')"
@@ -1029,7 +1021,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         continue
       fi
 
-      unit_skip_service="$(workflow_unit_first_skipped_required_service "$unit_json" "$unit_task" || true)"
+      unit_skip_service="$(workflow_unit_first_skipped_required_service "$unit_json" || true)"
       if [ -n "$unit_skip_service" ]; then
         mark_unit_canceled "$unit_name" "service-skipped" "serviceName" "$unit_skip_service"
         cancel_pending_dependents "$unit_name" "dependency-skipped"

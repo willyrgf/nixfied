@@ -105,7 +105,6 @@ Task and workflow service requirements:
 
 - Use `requirements.services = [ "<service>" ... ]` on tasks and workflow units to declare hard service capability requirements.
 - Compile-time graph exclusion and runtime `SKIP_<SERVICE>` both use those requirements.
-- `serviceName` remains accepted as a deprecated alias for `requirements.services = [ serviceName ]` during the migration window.
 
 Ephemeral execution defaults (configured in `nixfied/project/conf.nix`):
 
