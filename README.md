@@ -81,7 +81,9 @@ Service skip controls:
 - Service names are normalized with:
   - upper-casing
   - non-alphanumerics converted to `_`
-- A true skip suppresses service build/setup/ready/health and prevents service-specific operations work from running.
+- A true skip only affects runtime execution. It suppresses service build/setup/ready/health operations for that run and prevents service-specific operations work from running.
+- To exclude a service from the compiled graph entirely, set `nixfied.graph.excludedServices = [ "<service>" ]`.
+- Graph exclusion happens before project service projection and is the correct mechanism when a service branch must not be evaluated at all.
 
 Examples:
 

@@ -15,10 +15,18 @@ Compiler pass order:
 3. `compile-services`
 4. `compile-tasks`
 5. `compile-workflows`
-6. `compile-views`
-7. `finalize-model`
+6. `compile-features`
+7. `compile-views`
+8. `finalize-model`
 
 Each pass is pure and deterministic.
+
+Graph exclusion is resolved before service compilation:
+
+- `nixfied.graph.excludedServices` is consumed during project service projection.
+- Excluded services are removed before their project config branches are selected.
+- Later compiler passes then prune dependent tasks, workflow units, features, and views.
+- Runtime `SKIP_<SERVICE>` remains a separate execution-time control and does not change graph selection.
 
 ## Runtime Structure
 

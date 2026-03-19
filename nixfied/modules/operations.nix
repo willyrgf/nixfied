@@ -24,8 +24,10 @@ let
   };
 
   configuredServiceNames = builtins.attrNames services;
+  excludedServices = config.nixfied.graph.excludedServices or [ ];
   serviceNames = builtins.filter (
-    serviceName: builtins.elem serviceName configuredServiceNames
+    serviceName:
+    builtins.elem serviceName configuredServiceNames && !(builtins.elem serviceName excludedServices)
   ) serviceConfigLib.supportedServiceNames;
 
   serviceEnabledByName = builtins.listToAttrs (

@@ -246,6 +246,13 @@ let
         ;
     };
 
+    "excluded-service-evaluation" = import ./excluded-service-evaluation.nix {
+      inherit
+        pkgs
+        registry
+        ;
+    };
+
     "operations-contract" = import ./operations-contract.nix {
       inherit
         pkgs

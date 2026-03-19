@@ -24,10 +24,20 @@ Deterministic pass order:
 3. `compile-services`
 4. `compile-tasks`
 5. `compile-workflows`
-6. `compile-views`
-7. `finalize-model`
+6. `compile-features`
+7. `compile-views`
+8. `finalize-model`
 
 The compiled state hash is `sha256(toCanonicalNix(model))`.
+
+## Graph Exclusion
+
+Pure graph exclusion is configured through `nixfied.graph.excludedServices`.
+
+- Excluded services are gated during project service projection, before service config branches are selected.
+- This is the mechanism to use when a service branch must not be evaluated at all.
+- Dependent tasks and workflow units are pruned during compilation, and the filtered graph flows through features and generated views.
+- Runtime `SKIP_<SERVICE>` flags are separate and only affect execution of an already-compiled graph.
 
 ## Canonicalization Rules
 

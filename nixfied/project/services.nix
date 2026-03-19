@@ -4,9 +4,23 @@
   normalizePostgresEnvConfigs,
 }:
 {
+  lib,
+  config,
+  ...
+}:
+let
+  excludedServices = config.nixfied.graph.excludedServices or [ ];
+  serviceExcluded = serviceName: builtins.elem serviceName excludedServices;
+  mkMaybeService =
+    serviceName: value:
+    lib.optionalAttrs (!(serviceExcluded serviceName)) {
+      ${serviceName} = value;
+    };
+in
+{
   config = {
-    nixfied.services = {
-      postgres = {
+    nixfied.services =
+      mkMaybeService "postgres" {
         enable = conf.services.postgres.enable or false;
         database = conf.services.postgres.database or "app";
         testDatabase = conf.services.postgres.testDatabase or "app_test";
@@ -24,9 +38,8 @@
         sourceKeys = normalizeSourceKeys (conf.services.postgres.sources or { });
         defaultSource = conf.services.postgres.defaultSource or "";
         probes = conf.services.postgres.probes or { };
-      };
-
-      nginx = {
+      }
+      // mkMaybeService "nginx" {
         enable = conf.services.nginx.enable or false;
         portKeyHttp = conf.services.nginx.ports.http or "http";
         portKeyHttps = conf.services.nginx.ports.https or "https";
@@ -35,9 +48,8 @@
         sourceKeys = normalizeSourceKeys (conf.services.nginx.sources or { });
         defaultSource = conf.services.nginx.defaultSource or "";
         probes = conf.services.nginx.probes or { };
-      };
-
-      minio = {
+      }
+      // mkMaybeService "minio" {
         enable = conf.services.minio.enable or false;
         portKeyApi = conf.services.minio.ports.api or "minioApi";
         portKeyConsole = conf.services.minio.ports.console or "minioConsole";
@@ -49,9 +61,8 @@
         sourceKeys = normalizeSourceKeys (conf.services.minio.sources or { });
         defaultSource = conf.services.minio.defaultSource or "";
         probes = conf.services.minio.probes or { };
-      };
-
-      reth = {
+      }
+      // mkMaybeService "reth" {
         enable = conf.services.reth.enable or false;
         portKeyHttp = conf.services.reth.ports.http or "rethHttp";
         portKeyWs = conf.services.reth.ports.ws or "rethWs";
@@ -64,9 +75,8 @@
         sourceKeys = normalizeSourceKeys (conf.services.reth.sources or { });
         defaultSource = conf.services.reth.defaultSource or "";
         probes = conf.services.reth.probes or { };
-      };
-
-      helios = {
+      }
+      // mkMaybeService "helios" {
         enable = conf.services.helios.enable or false;
         portKeyRpc = conf.services.helios.ports.rpc or "heliosRpc";
         executionRpcPortKey = conf.services.helios.ports.executionRpc or "rethHttp";
@@ -89,6 +99,5 @@
         };
         probes = conf.services.helios.probes or { };
       };
-    };
   };
 }
