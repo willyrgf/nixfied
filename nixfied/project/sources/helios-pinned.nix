@@ -2,27 +2,40 @@
   lib,
   rustPlatform,
   fetchFromGitHub,
+  pkg-config,
+  perl,
 }:
 rustPlatform.buildRustPackage rec {
   pname = "helios";
-  version = "0.8.4-nightly-fa2d703";
+  version = "0.11.1-nightly-204c998";
 
   src = fetchFromGitHub {
     owner = "a16z";
     repo = "helios";
-    rev = "fa2d7034125bdb79cb16bcce3bac7c476160edce";
-    hash = "sha256-Z6NA7sYFJwBB63PMd6N+eZqqW67/z0G7lbmEY1JR6z0=";
+    rev = "204c998a927348e1c000a664f08d5b37b1b0d924";
+    hash = "sha256-PCDQKoF9EbhPdW0/br725RJgcdkPzt9dGXZIYpFSH7g=";
   };
 
-  cargoHash = "sha256-9869eTna8tL6lIRIDvAoqUxSoXhbZSzubmtnbR+bM/k=";
+  cargoHash = "sha256-6ssu32jTArgyXCVWAulL2hT6SoaTxgfvsR22/ozDM0Y=";
+
+  patches = [
+    ../../framework/runtime/services/helios/patches/0001-disable-reqwest-hickory-dns.patch
+    ../../framework/runtime/services/helios/patches/0002-limit-light-client-updates-request.patch
+  ];
+
   cargoBuildFlags = [
-    "-p"
+    "--package"
     "helios-cli"
     "--bin"
     "helios"
   ];
 
   doCheck = false;
+
+  nativeBuildInputs = [
+    pkg-config
+    perl
+  ];
 
   meta = with lib; {
     description = "A fast, secure, and portable light client for Ethereum";
