@@ -6,6 +6,7 @@ let
   postgresSource = builtins.readFile ../../nixfied/framework/runtime/services/postgres/default.nix;
   nginxSource = builtins.readFile ../../nixfied/framework/runtime/services/nginx/default.nix;
   minioSource = builtins.readFile ../../nixfied/framework/runtime/services/minio/default.nix;
+  minioBucketMgmtSource = builtins.readFile ../../nixfied/framework/runtime/services/minio/bucket-management.nix;
   rethSource = builtins.readFile ../../nixfied/framework/runtime/services/reth/default.nix;
   heliosSource = builtins.readFile ../../nixfied/framework/runtime/services/helios/default.nix;
   supervisorSource = builtins.readFile ../../nixfied/framework/runtime/services/supervisor/default.nix;
@@ -25,6 +26,11 @@ assert assertLifecycleOps nginxSource;
 assert assertLifecycleOps minioSource;
 assert assertLifecycleOps rethSource;
 assert assertLifecycleOps heliosSource;
+assert pkgs.lib.hasInfix "bucketMgmt = import ./bucket-management.nix" minioSource;
+assert pkgs.lib.hasInfix "runtimeDefaults = import ../../../core/runtime-defaults.nix;"
+  minioBucketMgmtSource;
+assert pkgs.lib.hasInfix "mkBucketScript =" minioBucketMgmtSource;
+assert pkgs.lib.hasInfix "mcAliasSetup =" minioBucketMgmtSource;
 assert builtins.hasAttr "svc::postgres::status" apps;
 assert builtins.hasAttr "svc::nginx::status" apps;
 assert builtins.hasAttr "svc::minio::status" apps;
