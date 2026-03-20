@@ -11,7 +11,6 @@ let
   runtimeDefaults = import ../../../core/runtime-defaults.nix;
   postgres = config.package or pkgs.postgresql_16;
   migrationsCfg = config.migrations or { };
-  migrationsDir = migrationsCfg.dir or "migrations";
   migrateCommand = migrationsCfg.command or "";
   sourceDatabase = migrationsCfg.sourceDatabase or null;
   portKey = config.portKey or "postgres";

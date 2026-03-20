@@ -429,19 +429,6 @@ let
     stopWaitAttempts = runtimeDefaults.probes.managedStop.extendedWaitAttempts;
     stopWaitInterval = runtimeDefaults.probes.managedStop.extendedWaitIntervalSeconds;
   };
-
-  inherit (managedLifecycle)
-    init
-    start
-    stop
-    restart
-    status
-    checkConfig
-    health
-    ready
-    fullStart
-    fullStartTest
-    ;
 in
 {
   inherit helios;

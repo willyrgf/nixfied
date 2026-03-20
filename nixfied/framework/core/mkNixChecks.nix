@@ -55,8 +55,12 @@ pkgs.writeShellScriptBin name ''
 
     run_nil_diagnostics_check() {
       local -a nix_files
-      local -a failed_files
+      local -a issue_files
       local nix_file
+      local aggregate_output
+      local file_output
+      local aggregate_status
+      local file_status
 
       mapfile -t nix_files < <(list_nix_files)
 
@@ -66,26 +70,38 @@ pkgs.writeShellScriptBin name ''
       fi
 
       log_info "checking nil diagnostics files=''${#nix_files[@]}"
-      if ${nilPkg}/bin/nil diagnostics "''${nix_files[@]}" > /dev/null 2>&1; then
+      if aggregate_output="$(${nilPkg}/bin/nil diagnostics "''${nix_files[@]}" 2>&1)"; then
+        aggregate_status=0
+      else
+        aggregate_status=$?
+      fi
+
+      if [ "$aggregate_status" -eq 0 ] && [ -z "$aggregate_output" ]; then
         log_ok "nil diagnostics check passed files=''${#nix_files[@]}"
         return 0
       fi
 
-      failed_files=()
+      issue_files=()
       for nix_file in "''${nix_files[@]}"; do
-        if ! ${nilPkg}/bin/nil diagnostics "$nix_file" > /dev/null 2>&1; then
-          failed_files+=("$nix_file")
+        if file_output="$(${nilPkg}/bin/nil diagnostics "$nix_file" 2>&1)"; then
+          file_status=0
+        else
+          file_status=$?
+        fi
+
+        if [ "$file_status" -ne 0 ] || [ -n "$file_output" ]; then
+          issue_files+=("$nix_file")
         fi
       done
 
-      if [ "''${#failed_files[@]}" -eq 0 ]; then
-        log_error "nil diagnostics check failed files=unknown"
+      if [ "''${#issue_files[@]}" -eq 0 ]; then
+        log_error "nil diagnostics reported issues files=unknown"
         return 1
       fi
 
-      log_error "nil diagnostics check failed files=''${#failed_files[@]}"
-      for nix_file in "''${failed_files[@]}"; do
-        log_error "nil diagnostics failed file=$nix_file"
+      log_error "nil diagnostics reported issues files=''${#issue_files[@]}"
+      for nix_file in "''${issue_files[@]}"; do
+        log_error "nil diagnostics reported file=$nix_file"
       done
       return 1
     }

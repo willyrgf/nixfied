@@ -1,6 +1,5 @@
 {
   pkgs,
-  model,
   registry,
 }:
 let

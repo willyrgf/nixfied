@@ -227,19 +227,6 @@ let
     stopWaitInterval = runtimeDefaults.probes.managedStop.extendedWaitIntervalSeconds;
   };
 
-  inherit (managedLifecycle)
-    init
-    start
-    stop
-    restart
-    status
-    checkConfig
-    health
-    ready
-    fullStart
-    fullStartTest
-    ;
-
   reload = serviceScripts.mkWrappedScript {
     name = "nginx-reload";
     inherit

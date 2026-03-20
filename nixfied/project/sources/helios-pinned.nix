@@ -5,7 +5,7 @@
   pkg-config,
   perl,
 }:
-rustPlatform.buildRustPackage rec {
+rustPlatform.buildRustPackage {
   pname = "helios";
   version = "0.11.1-nightly-204c998";
 

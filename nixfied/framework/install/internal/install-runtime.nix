@@ -13,6 +13,7 @@ pkgs.writeText "nixfied-install-runtime.sh" ''
     nixfied_require_next_arg "$@"
   }
 
+  FRAMEWORK_ROOT=${pkgs.lib.escapeShellArg frameworkRoot}
   PROJECT_TEMPLATE_FILTER_PLAN_DATA_JSON=${pkgs.lib.escapeShellArg templateFilterPlanDataJson}
 
   compute_template_filter_plan() {

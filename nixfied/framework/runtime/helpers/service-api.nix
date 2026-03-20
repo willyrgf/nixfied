@@ -6,7 +6,6 @@
 }:
 
 let
-  lib = pkgs.lib;
   validation = import ./validation.nix { inherit pkgs; };
   inherit (validation)
     isNonEmptyString

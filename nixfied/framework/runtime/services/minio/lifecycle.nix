@@ -180,19 +180,6 @@ let
     };
   };
 
-  inherit (managedLifecycle)
-    init
-    start
-    stop
-    restart
-    status
-    checkConfig
-    health
-    ready
-    fullStart
-    fullStartTest
-    ;
-
   exportS3Env = pkgs.writeShellScript "minio-export-s3-env" ''
     ${loggingPrelude}
 

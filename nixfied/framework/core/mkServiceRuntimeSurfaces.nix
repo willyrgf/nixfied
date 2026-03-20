@@ -9,31 +9,32 @@ let
     value: lib.toUpper (lib.replaceStrings [ "." "-" ":" "/" " " ] [ "_" "_" "_" "_" "_" ] value);
 
   serviceIds = builtins.sort builtins.lessThan (builtins.attrNames (model.services or { }));
-  serviceEntries = map (
-    serviceId:
+  serviceEntries =
     let
-      service = model.services.${serviceId};
-      serviceName = service.name or serviceId;
-      dataDirName = service.config.dataDirName or serviceName;
+      entries = map (
+        serviceId:
+        let
+          service = model.services.${serviceId};
+          serviceName = service.name or serviceId;
+          dataDirName = service.config.dataDirName or serviceName;
+        in
+        {
+          id = serviceId;
+          name = serviceName;
+          token = normalizeToken serviceName;
+          inherit dataDirName;
+        }
+      ) serviceIds;
+      duplicateDataDirNames = lib.unique (
+        builtins.filter (
+          dataDirName: builtins.length (builtins.filter (entry: entry.dataDirName == dataDirName) entries) > 1
+        ) (map (entry: entry.dataDirName) entries)
+      );
     in
-    {
-      id = serviceId;
-      name = serviceName;
-      token = normalizeToken serviceName;
-      inherit dataDirName;
-    }
-  ) serviceIds;
-
-  dataDirNames = map (entry: entry.dataDirName) serviceEntries;
-  duplicateDataDirNames = builtins.filter (
-    dataDirName:
-    builtins.length (builtins.filter (entry: entry.dataDirName == dataDirName) serviceEntries) > 1
-  ) dataDirNames;
-  _ =
-    if lib.unique duplicateDataDirNames == [ ] then
-      null
+    if duplicateDataDirNames == [ ] then
+      entries
     else
-      throw "nixfied service runtime surfaces require unique dataDirName values, duplicates: ${builtins.concatStringsSep ", " (lib.unique duplicateDataDirNames)}";
+      throw "nixfied service runtime surfaces require unique dataDirName values, duplicates: ${builtins.concatStringsSep ", " duplicateDataDirNames}";
 
   portNames = builtins.sort builtins.lessThan (builtins.attrNames (model.runtime.ports or { }));
   envNames = builtins.sort builtins.lessThan (builtins.attrNames (model.runtime.env.offsets or { }));

@@ -8,8 +8,6 @@
 let
   runtimeDefaults = import ../../core/runtime-defaults.nix;
 
-  shellVar = name: "$" + name;
-
   normalizeEnvToken =
     value: lib.toUpper (lib.replaceStrings [ "-" "." ":" "/" " " ] [ "_" "_" "_" "_" "_" ] value);
 

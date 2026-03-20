@@ -273,10 +273,13 @@ let
         ;
     };
 
+    "nix-checks-nil-issues-fail-smoke" = import ./nix-checks-nil-issues-fail-smoke.nix {
+      inherit pkgs;
+    };
+
     "skip-service-smoke" = import ./skip-service-smoke.nix {
       inherit
         pkgs
-        model
         registry
         ;
     };
