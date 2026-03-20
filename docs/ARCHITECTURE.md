@@ -30,6 +30,7 @@ Graph exclusion is resolved before service compilation:
 - Runtime `SKIP_<SERVICE>` remains a separate execution-time control and does not change graph selection.
 - Public flake task/workflow surfaces use thin launchers that accept explicit compile-time selectors such as `--exclude-services helios`, then perform a second pure evaluation of the selected app.
 - Truthy `SKIP_<SERVICE>` env vars may be used as launcher sugar, but the canonical compile-time interface is the explicit selector.
+- Service operation surfaces are generated from the compiled service graph. Projects should consume `SVC_<SERVICE>_<OP>` hook env vars or `svc::<service>::<op>` apps instead of importing framework service modules directly.
 
 ## Runtime Structure
 
@@ -46,6 +47,7 @@ Runtime path:
 
 - dispatcher -> orchestrator -> executor
 - public flake launcher -> selector-aware pure app selection -> dispatcher -> orchestrator -> executor
+- service contract -> generated `svc::...` apps / `SVC_...` hooks -> task runtime shell
 
 Execution contracts:
 

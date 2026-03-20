@@ -1,4 +1,7 @@
-{ pkgs }:
+{
+  pkgs,
+  apps,
+}:
 let
   postgresSource = builtins.readFile ../../nixfied/framework/runtime/services/postgres/default.nix;
   nginxSource = builtins.readFile ../../nixfied/framework/runtime/services/nginx/default.nix;
@@ -22,6 +25,11 @@ assert assertLifecycleOps nginxSource;
 assert assertLifecycleOps minioSource;
 assert assertLifecycleOps rethSource;
 assert assertLifecycleOps heliosSource;
+assert builtins.hasAttr "svc::postgres::status" apps;
+assert builtins.hasAttr "svc::nginx::status" apps;
+assert builtins.hasAttr "svc::minio::status" apps;
+assert builtins.hasAttr "svc::reth::status" apps;
+assert builtins.hasAttr "svc::helios::status" apps;
 assert pkgs.lib.hasInfix "inherit (lifecycle)" supervisorSource;
 assert pkgs.lib.hasInfix "start" supervisorSource;
 assert pkgs.lib.hasInfix "stop" supervisorSource;
@@ -32,5 +40,5 @@ assert pkgs.lib.hasInfix "health" supervisorSource;
 assert pkgs.lib.hasInfix "inherit (management) restart rotateLogs;" supervisorSource;
 assert (!pkgs.lib.hasInfix "ready" supervisorSource);
 pkgs.runCommand "service-api-surface-contract" { } ''
-  echo "OK: service lifecycle surface is stable for public services and supervisor remains a separate runtime surface" > "$out"
+  echo "OK: service lifecycle surface is stable for public services, service apps are exported, and supervisor remains a separate runtime surface" > "$out"
 ''

@@ -8,7 +8,6 @@
 let
   lib = pkgs.lib;
   validation = import ./validation.nix { inherit pkgs; };
-  slotEnvRuntime = import ./slot-env-runtime.nix { inherit pkgs; };
   inherit (validation)
     isNonEmptyString
     expect
@@ -406,7 +405,6 @@ let
     pkgs.writeShellScript (launcherNameFor serviceName opName) ''
       set -euo pipefail
 
-      ${slotEnvRuntime.requireSlotEnvJson { }}
       source ${toString shellContract.runtime}
       nixfied_contract_resolve_runtime_primitives "${logLevelDefault}" "${outputModeDefault}"
 

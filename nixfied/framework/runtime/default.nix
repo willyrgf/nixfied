@@ -7,6 +7,8 @@
   mkApps =
     {
       model,
+      serviceApps ? { },
+      serviceHookEnv ? { },
     }:
     import ./dispatcher.nix {
       inherit
@@ -14,6 +16,8 @@
         model
         projectRoot
         registry
+        serviceApps
+        serviceHookEnv
         ;
     };
 }

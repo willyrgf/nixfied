@@ -40,6 +40,7 @@ Pure graph exclusion is configured through `nixfied.graph.excludedServices`.
 - Runtime `SKIP_<SERVICE>` flags are separate and only affect execution of an already-compiled graph.
 - Public flake task/workflow launchers expose explicit compile-time selectors, for example `nix run .#ci -- --exclude-services helios --mode full --summary`.
 - Launcher selector parsing is generic across public task apps and dispatcher surfaces (`run-task`, `run-workflow`, `run-workflow-parallel`).
+- Generated service apps (`svc::<service>::<op>`) participate in the same launcher model.
 - Truthy `SKIP_<SERVICE>` env vars are folded into the launcher-selected exclusion set as compatibility sugar, but they are not compiler inputs by themselves.
 
 ## Canonicalization Rules
@@ -63,9 +64,16 @@ Execution is model-backed through dispatcher apps and orchestrator controls:
 Selector-aware launcher contract:
 
 - Public task apps and dispatcher surfaces accept leading launcher options before normal app args.
+- Public service apps do the same.
 - `--exclude-services <csv>` is the canonical compile-time selector.
 - `--launcher-help` shows launcher-specific help without invoking the selected app.
 - Launcher parsing stops at the first non-launcher argument or `--`, and the remaining args are forwarded unchanged to the selected app.
+
+Service operation consumption:
+
+- The framework exports service operation apps such as `svc::postgres::status` from the compiled service graph.
+- Task runtimes receive matching `SVC_<SERVICE>_<OP>` env vars for surviving services only.
+- Prefer those generated surfaces over importing `framework/runtime/services/<service>/...` directly in project code; direct imports can retain excluded-service closures before task pruning runs.
 
 Executor behavior:
 

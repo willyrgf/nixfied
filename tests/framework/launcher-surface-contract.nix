@@ -8,6 +8,7 @@ let
   wrappedAppNames = builtins.sort builtins.lessThan (
     lib.unique (
       (builtins.attrNames (model.views.apps or { }))
+      ++ (builtins.filter (name: lib.hasPrefix "svc::" name) (builtins.attrNames apps))
       ++ (builtins.filter (name: builtins.hasAttr name apps) [
         "run-task"
         "run-workflow"

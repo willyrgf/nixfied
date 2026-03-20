@@ -3,6 +3,8 @@
   model,
   projectRoot,
   registry,
+  serviceApps ? { },
+  serviceHookEnv ? { },
 }:
 let
   lib = pkgs.lib;
@@ -16,6 +18,7 @@ let
       model
       registry
       projectRoot
+      serviceHookEnv
       ;
   };
 
@@ -253,6 +256,7 @@ in
   };
 }
 // taskApps
+// serviceApps
 // frameworkProxyApps
 // {
   default =

@@ -3,6 +3,7 @@
   model,
   registry,
   projectRoot,
+  serviceHookEnv ? { },
 }:
 let
   lib = pkgs.lib;
@@ -20,6 +21,7 @@ let
       model
       registry
       projectRoot
+      serviceHookEnv
       ;
   };
   frameworkEphemeral = import ./ephemeral.nix {

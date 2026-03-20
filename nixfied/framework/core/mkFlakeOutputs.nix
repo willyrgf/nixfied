@@ -89,12 +89,17 @@ let
   viewAppNames = builtins.sort builtins.lessThan (
     builtins.attrNames (compiled.model.views.apps or { })
   );
+  serviceAppNames = builtins.filter (name: lib.hasPrefix "svc::" name) (
+    builtins.attrNames (compiled.apps or { })
+  );
   dispatcherAppNames = builtins.filter (name: builtins.hasAttr name compiled.apps) [
     "run-task"
     "run-workflow"
     "run-workflow-parallel"
   ];
-  wrappedAppNames = builtins.sort builtins.lessThan (lib.unique (viewAppNames ++ dispatcherAppNames));
+  wrappedAppNames = builtins.sort builtins.lessThan (
+    lib.unique (viewAppNames ++ serviceAppNames ++ dispatcherAppNames)
+  );
 
   renderKnownServices =
     if serviceNames == [ ] then

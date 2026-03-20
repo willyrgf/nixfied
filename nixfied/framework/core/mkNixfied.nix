@@ -43,6 +43,13 @@ let
       ;
   };
 
+  serviceRuntimeSurfaces = import ./mkServiceRuntimeSurfaces.nix {
+    inherit
+      pkgs
+      ;
+    model = compiled.model;
+  };
+
   runner = import ../runtime {
     inherit
       pkgs
@@ -53,6 +60,8 @@ let
 
   baseApps = runner.mkApps {
     model = compiled.model;
+    serviceApps = serviceRuntimeSurfaces.serviceApps;
+    serviceHookEnv = serviceRuntimeSurfaces.serviceHookEnv;
   };
 
   taskIds = builtins.sort builtins.lessThan (builtins.attrNames compiled.model.tasks);
@@ -239,6 +248,8 @@ in
   services = compiled.model.services;
   workflows = compiled.model.workflows;
   features = compiled.model.features;
+  serviceApis = serviceRuntimeSurfaces.serviceApis;
+  serviceHookEnv = serviceRuntimeSurfaces.serviceHookEnv;
 
   apps = apps;
   packages = packages;

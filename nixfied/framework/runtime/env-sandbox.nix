@@ -2,6 +2,7 @@
   pkgs,
   projectRoot,
   model,
+  serviceHookEnv ? { },
 }:
 let
   lib = pkgs.lib;
@@ -61,7 +62,20 @@ let
   );
 
   staticServiceNames = lib.concatStringsSep "\n" (
-    map (serviceId: model.services.${serviceId}.name) serviceIds
+    map (
+      serviceId:
+      let
+        service = model.services.${serviceId};
+      in
+      "${service.name}\t${service.config.dataDirName or service.name}"
+    ) serviceIds
+  );
+
+  staticServiceHookEnvCmds = lib.concatStringsSep "\n" (
+    map (
+      hookName:
+      ''      env_cmd+=(${lib.escapeShellArg "${hookName}=${serviceHookEnv.${hookName}}"})''
+    ) (builtins.sort builtins.lessThan (builtins.attrNames serviceHookEnv))
   );
 
   staticServiceEnvCmds = lib.concatStringsSep "\n" (
@@ -160,6 +174,9 @@ in
           return 0
           ;;
         NIXFIED_WORKFLOW_SETUP_STARTED_AT|NIXFIED_WORKFLOW_SETUP_STARTED_EPOCH)
+          return 0
+          ;;
+        SVC_*)
           return 0
           ;;
         *)
@@ -823,7 +840,7 @@ in
 
   ${staticServiceEnvCmds}
 
-      while IFS= read -r service_name || [ -n "$service_name" ]; do
+      while IFS=$'\t' read -r service_name service_data_dir_name || [ -n "$service_name" ]; do
         local service_token
         local service_root
         local service_data_dir
@@ -835,7 +852,10 @@ in
         fi
 
         service_token="$(normalize_env_token "$service_name")"
-        service_root="$services_root/$service_name"
+        if [ -z "$service_data_dir_name" ]; then
+          service_data_dir_name="$service_name"
+        fi
+        service_root="$services_root/$service_data_dir_name"
         service_data_dir="$service_root/data"
         service_state_dir="$service_root/state"
         service_log_dir="$service_root/log"
@@ -848,6 +868,8 @@ in
         env_cmd+=("NIXFIED_SERVICE_''${service_token}_STATE_DIR=$service_state_dir")
         env_cmd+=("NIXFIED_SERVICE_''${service_token}_LOG_DIR=$service_log_dir")
       done <<< "$ENV_SANDBOX_STATIC_SERVICE_NAMES"
+
+  ${staticServiceHookEnvCmds}
 
       while IFS= read -r pass_name || [ -n "$pass_name" ]; do
         if [ -z "$pass_name" ]; then

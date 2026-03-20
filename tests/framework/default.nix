@@ -93,6 +93,10 @@ let
     };
 
     "launcher-surface-contract" = { };
+
+    "service-hook-env-smoke" = {
+      covers = [ "runtime.service-hooks" ];
+    };
   };
 
   rawChecks = {
@@ -132,6 +136,13 @@ let
       inherit
         pkgs
         model
+        apps
+        ;
+    };
+
+    "service-api-surface-contract" = import ./service-api-surface-contract.nix {
+      inherit
+        pkgs
         apps
         ;
     };
@@ -216,6 +227,10 @@ let
     };
 
     "slot-env-runtime-contract" = import ./slot-env-runtime-contract.nix {
+      inherit pkgs;
+    };
+
+    "service-hook-env-smoke" = import ./service-hook-env-smoke.nix {
       inherit pkgs;
     };
 
@@ -398,10 +413,6 @@ let
     };
 
     "managed-service-lifecycle-contract" = import ./managed-service-lifecycle-contract.nix {
-      inherit pkgs;
-    };
-
-    "service-api-surface-contract" = import ./service-api-surface-contract.nix {
       inherit pkgs;
     };
 

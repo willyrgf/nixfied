@@ -15,6 +15,7 @@ assert builtins.hasAttr "stop-run" apps;
 assert builtins.hasAttr "stop-all-runs" apps;
 assert !(builtins.hasAttr "registry::replay" apps);
 assert builtins.any (appName: pkgs.lib.hasPrefix "task::" appName) (builtins.attrNames apps);
+assert builtins.any (appName: pkgs.lib.hasPrefix "svc::" appName) (builtins.attrNames apps);
 pkgs.runCommand "package-output-contract" { } ''
   set -euo pipefail
 
