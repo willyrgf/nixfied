@@ -7,6 +7,8 @@
   mkApps =
     {
       model,
+      services ? model.services,
+      runtimeHash ? model.identity.evalHash,
       frameworkSourceFlakeRef ? null,
       serviceApps ? { },
       serviceHookEnv ? { },
@@ -15,6 +17,8 @@
       inherit
         pkgs
         model
+        services
+        runtimeHash
         projectRoot
         registry
         frameworkSourceFlakeRef

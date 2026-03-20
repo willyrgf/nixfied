@@ -1,6 +1,7 @@
 {
   pkgs,
   model,
+  services ? model.services,
 }:
 let
   taskIds = builtins.attrNames model.tasks;
@@ -120,8 +121,8 @@ let
   isolationProbeWorkflow = model.workflows."workflow.test.isolation.probe" or null;
   commandSurfaces = model.views.help.commandSurfaces or [ ];
   featureView = model.views.features or null;
-  nginxService = model.services."service.nginx" or null;
-  heliosService = model.services."service.helios" or null;
+  nginxService = services."service.nginx" or null;
+  heliosService = services."service.helios" or null;
   hasCommandSurface =
     name: ownerFile:
     builtins.any (entry: entry.name == name && entry.owner_file == ownerFile) commandSurfaces;

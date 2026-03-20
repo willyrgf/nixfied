@@ -55,6 +55,11 @@ pkgs.runCommand "launcher-surface-contract" { } ''
       echo "missing second-stage app selection in launcher for app=$app_name"
       exit 1
     fi
+
+    if ! ${pkgs.gnugrep}/bin/grep -Fq 'selectedServicesCsv' "$program"; then
+      echo "missing selectedServicesCsv selector in launcher for app=$app_name"
+      exit 1
+    fi
   }
 
   ${renderWrappedChecks}

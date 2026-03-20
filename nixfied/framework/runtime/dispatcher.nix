@@ -1,6 +1,8 @@
 {
   pkgs,
   model,
+  services ? model.services,
+  runtimeHash ? model.identity.evalHash,
   projectRoot,
   registry,
   frameworkSourceFlakeRef ? null,
@@ -18,6 +20,8 @@ let
     inherit
       pkgs
       model
+      services
+      runtimeHash
       registry
       projectRoot
       serviceHookEnv

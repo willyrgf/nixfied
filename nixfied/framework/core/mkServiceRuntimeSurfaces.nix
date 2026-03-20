@@ -1,6 +1,8 @@
 {
   pkgs,
   model,
+  services ? model.services,
+  selectedServices ? null,
 }:
 let
   lib = pkgs.lib;
@@ -8,21 +10,63 @@ let
   normalizeToken =
     value: lib.toUpper (lib.replaceStrings [ "." "-" ":" "/" " " ] [ "_" "_" "_" "_" "_" ] value);
 
-  serviceIds = builtins.sort builtins.lessThan (builtins.attrNames (model.services or { }));
+  serviceIds = builtins.sort builtins.lessThan (builtins.attrNames (services));
+  selectedServiceNames =
+    if selectedServices == null then
+      null
+    else
+      builtins.sort builtins.lessThan (lib.unique selectedServices);
+  selectedServiceSet =
+    if selectedServiceNames == null then
+      { }
+    else
+      builtins.listToAttrs (
+        map (serviceName: {
+          name = serviceName;
+          value = true;
+        }) selectedServiceNames
+      );
+  knownServiceNames = lib.unique (
+    map (
+      serviceId:
+      let
+        service = services.${serviceId};
+      in
+      service.name or serviceId
+    ) serviceIds
+  );
+  unknownSelectedServices =
+    if selectedServiceNames == null then
+      [ ]
+    else
+      builtins.filter (
+        serviceName:
+        !(builtins.elem serviceName knownServiceNames) && !(builtins.elem serviceName serviceIds)
+      ) selectedServiceNames;
   enabledServiceIds = builtins.filter (
-    serviceId: model.services.${serviceId}.enable or false
+    serviceId:
+    let
+      service = services.${serviceId};
+      serviceName = service.name or serviceId;
+    in
+    (service.enable or false)
+    && (
+      selectedServiceNames == null
+      || builtins.hasAttr serviceName selectedServiceSet
+      || builtins.hasAttr serviceId selectedServiceSet
+    )
   ) serviceIds;
 
   validateRuntimeSurfaceService =
     entry:
     let
-      service = model.services.${entry.id};
+      service = services.${entry.id};
       config = service.config or { };
       fail =
         requirement:
         throw ''
           nixfied service runtime surfaces: enabled service '${entry.name}' is missing ${requirement}.
-          Configure nixfied.services.${entry.name}.sources.<source>.package and defaultSource, or disable the service.
+          Configure nixfied.services.${entry.name}.sources.<source>.package, packageAttr, or packageFactory and defaultSource, or disable the service.
         '';
     in
     if entry.name == "nginx" then
@@ -47,7 +91,7 @@ let
       entries = map (
         serviceId:
         let
-          service = model.services.${serviceId};
+          service = services.${serviceId};
           serviceName = service.name or serviceId;
           dataDirName = service.config.dataDirName or serviceName;
         in
@@ -64,7 +108,9 @@ let
         ) (map (entry: entry.dataDirName) entries)
       );
     in
-    if duplicateDataDirNames == [ ] then
+    if unknownSelectedServices != [ ] then
+      throw "nixfied service runtime surfaces received unknown selected services: ${builtins.concatStringsSep ", " unknownSelectedServices}"
+    else if duplicateDataDirNames == [ ] then
       map (entry: builtins.seq (validateRuntimeSurfaceService entry) entry) entries
     else
       throw "nixfied service runtime surfaces require unique dataDirName values, duplicates: ${builtins.concatStringsSep ", " duplicateDataDirNames}";
@@ -318,7 +364,17 @@ let
     directories = {
       base = model.runtime.directories.base;
     };
-    services = model.services;
+    services =
+      if selectedServiceNames == null then
+        services
+      else
+        lib.filterAttrs (
+          serviceId: service:
+          let
+            serviceName = service.name or serviceId;
+          in
+          builtins.hasAttr serviceName selectedServiceSet || builtins.hasAttr serviceId selectedServiceSet
+        ) services;
   };
 
   slots = {

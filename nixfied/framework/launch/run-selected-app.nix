@@ -6,6 +6,7 @@
   frameworkSourceRevision ? "unknown",
   appName,
   excludedServicesCsv ? "",
+  selectedServicesCsv ? "__ALL__",
   projectModuleSpecsJson ? "[]",
   extraModuleSpecsJson ? "[]",
   localOverrideSpecsJson ? "[]",
@@ -49,6 +50,13 @@ let
   excludedServices = builtins.sort builtins.lessThan (
     lib.unique (builtins.filter (name: name != "") (lib.splitString "," excludedServicesCsv))
   );
+  selectedServices =
+    if selectedServicesCsv == "__ALL__" then
+      null
+    else
+      builtins.sort builtins.lessThan (
+        lib.unique (builtins.filter (name: name != "") (lib.splitString "," selectedServicesCsv))
+      );
 
   frameworkLib = import (frameworkRootPath + "/framework/core/default.nix") {
     inherit
@@ -66,7 +74,11 @@ let
   compiled = frameworkLib.mkNixfied {
     projectRoot = projectRootPath;
     projectModules = selectedProjectModules;
-    inherit extraModules frameworkSourceRevision;
+    inherit
+      extraModules
+      frameworkSourceRevision
+      selectedServices
+      ;
     localOverrides = localOverrides ++ [
       (
         { ... }:
@@ -84,7 +96,11 @@ let
       throw "nixfied launcher: unknown app '${appName}'";
 
   launcherName = "nixfied-selected-app-${
-    builtins.substring 0 10 (builtins.hashString "sha256" (appName + builtins.toJSON excludedServices))
+    builtins.substring 0 10 (
+      builtins.hashString "sha256" (
+        appName + builtins.toJSON excludedServices + builtins.toJSON (selectedServices)
+      )
+    )
   }";
 
   selectedLauncher = pkgs.writeShellScriptBin launcherName ''

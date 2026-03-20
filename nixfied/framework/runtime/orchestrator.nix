@@ -1,6 +1,8 @@
 {
   pkgs,
   model,
+  services ? model.services,
+  runtimeHash ? model.identity.evalHash,
   registry,
   projectRoot,
   serviceHookEnv ? { },
@@ -20,6 +22,7 @@ let
     inherit
       pkgs
       model
+      services
       registry
       projectRoot
       serviceHookEnv
@@ -283,7 +286,7 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
     local seed
     local digest
     seq="$(registry_next_seq "$RUN_COUNTER_ROOT")"
-    seed="orchestrator|${model.identity.evalHash}|$seq|$$|$RANDOM|$(iso_now)"
+    seed="orchestrator|${runtimeHash}|$seq|$$|$RANDOM|$(iso_now)"
     digest="$(sha256_text "$seed")"
     printf 'run-%s' "''${digest:0:24}"
   }

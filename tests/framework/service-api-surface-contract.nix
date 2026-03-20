@@ -26,11 +26,13 @@ let
     serviceName:
     let
       appName = "svc::${serviceName}::status";
-      expectedEnabled =
-        if builtins.hasAttr serviceName (model.services or { }) then
-          model.services.${serviceName}.enable or false
-        else
-          false;
+      expectedEnabled = builtins.any (
+        serviceId:
+        let
+          service = model.services.${serviceId};
+        in
+        (service.name or serviceId) == serviceName && (service.enable or false)
+      ) (builtins.attrNames (model.services or { }));
     in
     assert (builtins.hasAttr appName apps) == expectedEnabled;
     true;

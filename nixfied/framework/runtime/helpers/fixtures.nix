@@ -7,7 +7,9 @@
 let
   lib = pkgs.lib;
   runtimeDefaults = import ../../core/runtime-defaults.nix;
-  serviceConfig = import ../../core/service-config.nix { inherit lib; };
+  serviceConfig = import ../../core/service-config.nix {
+    inherit lib pkgs;
+  };
   servicePolicy = import ./service-policy.nix { inherit pkgs; };
 
   postgresCfg = serviceConfig.getProjectServiceConfig {

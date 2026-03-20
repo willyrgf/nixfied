@@ -162,7 +162,7 @@ rec {
       sources =
         if pkgs != null then
           {
-            nixpkgs.package = pkgs.postgresql_16;
+            nixpkgs.packageAttr = "postgresql_16";
           }
         else
           { };
@@ -179,7 +179,7 @@ rec {
       sources =
         if pkgs != null && pkgs ? nginx then
           {
-            nixpkgs.package = pkgs.nginx;
+            nixpkgs.packageAttr = "nginx";
           }
         else
           { };
@@ -200,8 +200,8 @@ rec {
         if pkgs != null then
           {
             nixpkgs = {
-              package = pkgs.minio;
-              clientPackage = pkgs.minio-client;
+              packageAttr = "minio";
+              clientPackageAttr = "minio-client";
             };
           }
         else
@@ -223,7 +223,7 @@ rec {
       sources =
         if pkgs != null && pkgs ? reth then
           {
-            nixpkgs.package = pkgs.reth;
+            nixpkgs.packageAttr = "reth";
           }
         else
           { };
@@ -245,12 +245,12 @@ rec {
       sources =
         if pkgs != null then
           {
-            pinned.package = pkgs.callPackage ./sources/helios-pinned.nix { };
+            pinned.packageFactory = ./sources/helios-pinned.nix;
           }
           // (
             if pkgs ? helios then
               {
-                nixpkgs.package = pkgs.helios;
+                nixpkgs.packageAttr = "helios";
               }
             else
               { }

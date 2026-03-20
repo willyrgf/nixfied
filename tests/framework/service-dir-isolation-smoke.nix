@@ -6,8 +6,35 @@
 let
   baseTask = model.tasks."task.ci.quality";
 
+  noServiceTaskId = "task.test.service-dir.none";
   probeTaskId = "task.test.service-dir.probe";
   probeWorkflowId = "workflow.test.service-dir.probe";
+
+  noServiceTask = baseTask // {
+    id = noServiceTaskId;
+    summary = "service dir no-selection probe";
+    description = "Prints service dir env vars and expects them to be absent without explicit selection.";
+    runner = {
+      type = "shell";
+      command = ''
+        set -euo pipefail
+        echo "INFO: postgres_data=''${NIXFIED_SERVICE_POSTGRES_DATA_DIR:-}"
+        echo "INFO: nginx_data=''${NIXFIED_SERVICE_NGINX_DATA_DIR:-}"
+        echo "OK: service dir no-selection probe complete"
+      '';
+      package = null;
+      workflowId = null;
+    };
+    requirements = {
+      services = [ ];
+    };
+    ui = baseTask.ui // {
+      app = baseTask.ui.app // {
+        expose = false;
+        name = "test-service-dir-none";
+      };
+    };
+  };
 
   probeTask = baseTask // {
     id = probeTaskId;
@@ -28,6 +55,12 @@ let
       package = null;
       workflowId = null;
     };
+    requirements = {
+      services = [
+        "postgres"
+        "nginx"
+      ];
+    };
     ui = baseTask.ui // {
       app = baseTask.ui.app // {
         expose = false;
@@ -45,6 +78,9 @@ let
       envPresent = [ ];
     };
     skipIfMissingEnv = [ ];
+    requirements = {
+      services = [ ];
+    };
   };
 
   probeWorkflow = {
@@ -91,6 +127,7 @@ let
 
   probeModel = model // {
     tasks = model.tasks // {
+      ${noServiceTaskId} = noServiceTask;
       ${probeTaskId} = probeTask;
     };
     workflows = model.workflows // {
@@ -113,6 +150,15 @@ pkgs.runCommand "service-dir-isolation-smoke" { } ''
 
   EXECUTOR="${harness.executor}/bin/nixfied-executor"
   ORCH="${harness.orchestrator}/bin/nixfied-orchestrator"
+
+  PROJECT_ENV=test NIX_ENV=2 REGISTRY_ROOT="$TMPDIR/no-selection-registry" CI_ARTIFACTS_DIR="$TMPDIR/no-selection-artifacts" \
+    NIXFIED_RUNTIME_DIR_SCOPE_OVERRIDE="$TMPDIR/no-selection-runtime" \
+    "$EXECUTOR" run-task "${noServiceTaskId}" > "$TMPDIR/no-selection.out" 2>&1
+
+  ${pkgs.gnugrep}/bin/grep -Fq "INFO: postgres_data=" "$TMPDIR/no-selection.out"
+  ${pkgs.gnugrep}/bin/grep -Fq "INFO: nginx_data=" "$TMPDIR/no-selection.out"
+  require_not_contains "$TMPDIR/no-selection.out" "/services/postgres/data"
+  require_not_contains "$TMPDIR/no-selection.out" "/services/nginx/data"
 
   non_ephemeral_scope="$TMPDIR/non-ephemeral-runtime"
   PROJECT_ENV=test NIX_ENV=2 REGISTRY_ROOT="$TMPDIR/non-ephemeral-registry" CI_ARTIFACTS_DIR="$TMPDIR/non-ephemeral-artifacts" \

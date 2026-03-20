@@ -26,6 +26,7 @@
     "identity": { "type": "object" },
     "runtime": { "type": "object" },
     "services": { "type": "object" },
+    "serviceCatalog": { "type": "object" },
     "tasks": { "type": "object" },
     "workflows": { "type": "object" },
     "features": { "type": "object" },

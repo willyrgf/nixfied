@@ -1,6 +1,8 @@
 {
   pkgs,
   model,
+  services ? model.services,
+  serviceCatalog ? model.serviceCatalog or model.services,
   stateHash,
   canonical,
   registry,
@@ -105,6 +107,8 @@ let
     "service-hook-env-smoke" = {
       covers = [ "runtime.service-hooks" ];
     };
+
+    "runtime-service-selection-contract" = { };
   };
 
   rawChecks = {
@@ -209,6 +213,7 @@ let
       inherit
         pkgs
         model
+        services
         ;
     };
 
@@ -253,6 +258,10 @@ let
     };
 
     "service-hook-env-smoke" = import ./service-hook-env-smoke.nix {
+      inherit pkgs;
+    };
+
+    "runtime-service-selection-contract" = import ./runtime-service-selection-contract.nix {
       inherit pkgs;
     };
 

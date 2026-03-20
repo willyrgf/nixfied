@@ -46,6 +46,8 @@
               pkgs
               ;
             model = frameworkOutputs.model;
+            services = frameworkOutputs.services;
+            serviceCatalog = frameworkOutputs.serviceCatalog;
             apps = frameworkOutputs.apps;
             packages = frameworkOutputs.packages;
             stateHash = frameworkOutputs.stateHash;

@@ -227,10 +227,71 @@ let
     '') taskIds
   );
 
+  workflowIds = builtins.sort builtins.lessThan (
+    builtins.attrNames (compiled.model.workflows or { })
+  );
+
+  workflowFamilyFromId =
+    workflowId:
+    let
+      match = builtins.match "^workflow\\.([^.]+)\\..+$" workflowId;
+    in
+    if match == null then null else builtins.elemAt match 0;
+
+  workflowModesByFamily = builtins.foldl' (
+    acc: workflowId:
+    let
+      family = workflowFamilyFromId workflowId;
+      modeMatch = builtins.match "^workflow\\.[^.]+\\.(.+)$" workflowId;
+      mode = if modeMatch == null then null else builtins.elemAt modeMatch 0;
+      existing = acc.${family} or [ ];
+    in
+    if family == null || mode == null then
+      acc
+    else
+      acc
+      // {
+        ${family} = builtins.sort builtins.lessThan (lib.unique (existing ++ [ mode ]));
+      }
+  ) { } workflowIds;
+
+  workflowFamilies = builtins.sort builtins.lessThan (builtins.attrNames workflowModesByFamily);
+
+  taskBaseClosureCsvById = builtins.listToAttrs (
+    map (taskId: {
+      name = taskId;
+      value = compiled.serviceSelection.servicesToCsv (
+        compiled.serviceSelection.taskBaseClosureServicesById.${taskId} or [ ]
+      );
+    }) taskIds
+  );
+
+  taskRunnerWorkflowIdById = builtins.listToAttrs (
+    map (taskId: {
+      name = taskId;
+      value = compiled.model.tasks.${taskId}.runner.workflowId or "";
+    }) taskIds
+  );
+
+  workflowClosureCsvById = builtins.listToAttrs (
+    map (workflowId: {
+      name = workflowId;
+      value = compiled.serviceSelection.servicesToCsv (
+        compiled.serviceSelection.workflowClosureServicesById.${workflowId} or [ ]
+      );
+    }) workflowIds
+  );
+
   mkSelectorAwareLauncher =
     appName:
     let
-      internalBaseTarget = internalBaseTargetName appName;
+      launcherTaskId =
+        if builtins.hasAttr appName (compiled.model.views.apps or { }) then
+          compiled.model.views.apps.${appName}.taskId
+        else
+          "";
+      serviceAppMatch = builtins.match "^svc::([^:]+)::.+$" appName;
+      launcherServiceName = if serviceAppMatch == null then "" else builtins.elemAt serviceAppMatch 0;
       viewHelpFile =
         if builtins.hasAttr appName (compiled.model.views.apps or { }) then
           builtins.toString taskHelpFiles.${compiled.model.views.apps.${appName}.taskId}
@@ -364,6 +425,300 @@ let
                   esac
                 }
 
+                merge_services_csv() {
+                  local csv=""
+                  local token=""
+                  local old_ifs="$IFS"
+                  local csv_parts=()
+
+                  (
+                    for csv in "$@"; do
+                      [ -n "$csv" ] || continue
+                      IFS=','
+                      read -r -a csv_parts <<< "$csv"
+                      IFS="$old_ifs"
+
+                      for token in "''${csv_parts[@]}"; do
+                        token="$(printf '%s' "$token" | ${pkgs.coreutils}/bin/tr -d '[:space:]')"
+                        [ -n "$token" ] || continue
+                        printf '%s\n' "$token"
+                      done
+                    done
+                  ) | ${pkgs.coreutils}/bin/sort -u | ${pkgs.coreutils}/bin/paste -sd, -
+                }
+
+                workflow_family_from_id() {
+                  local workflow_id="$1"
+                  if [[ "$workflow_id" =~ ^workflow\.([^.]+)\..+$ ]]; then
+                    printf '%s' "''${BASH_REMATCH[1]}"
+                    return 0
+                  fi
+                  return 1
+                }
+
+                workflow_id_exists() {
+                  local workflow_id="$1"
+                  case "$workflow_id" in
+        ${builtins.concatStringsSep "\n" (
+          map (workflowId: ''
+            ${lib.escapeShellArg workflowId})
+              return 0
+              ;;
+          '') workflowIds
+        )}
+                    *)
+                      return 1
+                      ;;
+                  esac
+                }
+
+                workflow_modes_for_family() {
+                  local family="$1"
+                  case "$family" in
+        ${builtins.concatStringsSep "\n" (
+          map (family: ''
+                ${lib.escapeShellArg family})
+            ${builtins.concatStringsSep "\n" (
+              map (mode: "              printf '%s\\n' ${lib.escapeShellArg mode}") (
+                workflowModesByFamily.${family} or [ ]
+              )
+            )}
+                  return 0
+                  ;;
+          '') workflowFamilies
+        )}
+                    *)
+                      return 0
+                      ;;
+                  esac
+                }
+
+                workflow_mode_is_simple_shorthand() {
+                  local mode="$1"
+                  [[ "$mode" =~ ^[a-z0-9-]+$ ]]
+                }
+
+                workflow_simple_shorthand_exists_for_family() {
+                  local workflow_id="$1"
+                  local candidate="$2"
+                  local family=""
+                  local mode=""
+
+                  family="$(workflow_family_from_id "$workflow_id" || true)"
+                  [ -n "$family" ] || return 1
+
+                  while IFS= read -r mode; do
+                    if [ "$mode" = "$candidate" ] && workflow_mode_is_simple_shorthand "$mode"; then
+                      return 0
+                    fi
+                  done < <(workflow_modes_for_family "$family")
+
+                  return 1
+                }
+
+                workflow_resolve_mode_id() {
+                  local workflow_id="$1"
+                  local mode_override="$2"
+                  local family=""
+                  local candidate=""
+
+                  if [ -z "$mode_override" ]; then
+                    printf '%s' "$workflow_id"
+                    return 0
+                  fi
+
+                  family="$(workflow_family_from_id "$workflow_id" || true)"
+                  [ -n "$family" ] || return 1
+
+                  candidate="workflow.$family.$mode_override"
+                  if workflow_id_exists "$candidate"; then
+                    printf '%s' "$candidate"
+                    return 0
+                  fi
+
+                  return 1
+                }
+
+                workflow_mode_override_from_args() {
+                  local workflow_id="$1"
+                  shift
+
+                  local parse_options=1
+                  local arg=""
+                  local shorthand_mode=""
+                  local mode_override=""
+
+                  while [ "$#" -gt 0 ]; do
+                    arg="$1"
+                    shift
+
+                    if [ "$parse_options" -eq 0 ]; then
+                      continue
+                    fi
+
+                    case "$arg" in
+                      --mode)
+                        if [ "$#" -lt 1 ]; then
+                          break
+                        fi
+                        mode_override="$1"
+                        shift
+                        ;;
+                      --mode=*)
+                        mode_override="''${arg#--mode=}"
+                        ;;
+                      --summary)
+                        ;;
+                      --)
+                        parse_options=0
+                        ;;
+                      --*)
+                        shorthand_mode="''${arg#--}"
+                        if workflow_simple_shorthand_exists_for_family "$workflow_id" "$shorthand_mode"; then
+                          mode_override="$shorthand_mode"
+                        fi
+                        ;;
+                    esac
+                  done
+
+                  printf '%s' "$mode_override"
+                }
+
+                dispatcher_task_base_closure_services_csv() {
+                  local task_id="$1"
+                  case "$task_id" in
+        ${builtins.concatStringsSep "\n" (
+          map (taskId: ''
+            ${lib.escapeShellArg taskId})
+              printf '%s' ${lib.escapeShellArg (taskBaseClosureCsvById.${taskId} or "")}
+              return 0
+              ;;
+          '') taskIds
+        )}
+                    *)
+                      printf '%s' ""
+                      return 0
+                      ;;
+                  esac
+                }
+
+                dispatcher_task_runner_workflow_id() {
+                  local task_id="$1"
+                  case "$task_id" in
+        ${builtins.concatStringsSep "\n" (
+          map (taskId: ''
+            ${lib.escapeShellArg taskId})
+              printf '%s' ${lib.escapeShellArg (taskRunnerWorkflowIdById.${taskId} or "")}
+              return 0
+              ;;
+          '') taskIds
+        )}
+                    *)
+                      printf '%s' ""
+                      return 0
+                      ;;
+                  esac
+                }
+
+                workflow_closure_services_csv() {
+                  local workflow_id="$1"
+                  case "$workflow_id" in
+        ${builtins.concatStringsSep "\n" (
+          map (workflowId: ''
+            ${lib.escapeShellArg workflowId})
+              printf '%s' ${lib.escapeShellArg (workflowClosureCsvById.${workflowId} or "")}
+              return 0
+              ;;
+          '') workflowIds
+        )}
+                    *)
+                      printf '%s' ""
+                      return 0
+                      ;;
+                  esac
+                }
+
+                task_selected_services_csv_for_launcher() {
+                  local task_id="$1"
+                  shift
+
+                  local task_base_csv=""
+                  local task_workflow_id=""
+                  local mode_override=""
+                  local resolved_workflow_id=""
+                  local workflow_csv=""
+
+                  task_base_csv="$(dispatcher_task_base_closure_services_csv "$task_id")"
+                  task_workflow_id="$(dispatcher_task_runner_workflow_id "$task_id")"
+
+                  if [ -z "$task_workflow_id" ]; then
+                    printf '%s' "$task_base_csv"
+                    return 0
+                  fi
+
+                  mode_override="$(workflow_mode_override_from_args "$task_workflow_id" "$@")"
+                  resolved_workflow_id="$task_workflow_id"
+                  if resolved_workflow_id_candidate="$(workflow_resolve_mode_id "$task_workflow_id" "$mode_override" 2>/dev/null)"; then
+                    resolved_workflow_id="$resolved_workflow_id_candidate"
+                  fi
+                  workflow_csv="$(workflow_closure_services_csv "$resolved_workflow_id")"
+                  merge_services_csv "$task_base_csv" "$workflow_csv"
+                }
+
+                workflow_selected_services_csv_for_launcher() {
+                  local workflow_id="$1"
+                  shift
+
+                  local mode_override=""
+                  local resolved_workflow_id="$workflow_id"
+
+                  mode_override="$(workflow_mode_override_from_args "$workflow_id" "$@")"
+                  if resolved_workflow_id_candidate="$(workflow_resolve_mode_id "$workflow_id" "$mode_override" 2>/dev/null)"; then
+                    resolved_workflow_id="$resolved_workflow_id_candidate"
+                  fi
+
+                  workflow_closure_services_csv "$resolved_workflow_id"
+                }
+
+                launcher_selected_services_csv() {
+                  local task_id=""
+                  local workflow_id=""
+
+                  if [ -n ${lib.escapeShellArg launcherTaskId} ]; then
+                    task_selected_services_csv_for_launcher ${lib.escapeShellArg launcherTaskId} "$@"
+                    return 0
+                  fi
+
+                  if [ -n ${lib.escapeShellArg launcherServiceName} ]; then
+                    printf '%s' ${lib.escapeShellArg launcherServiceName}
+                    return 0
+                  fi
+
+                  case ${lib.escapeShellArg appName} in
+                    run-task)
+                      task_id="''${1:-}"
+                      if [ -z "$task_id" ]; then
+                        printf '%s' ""
+                        return 0
+                      fi
+                      shift
+                      task_selected_services_csv_for_launcher "$task_id" "$@"
+                      ;;
+                    run-workflow|run-workflow-parallel)
+                      workflow_id="''${1:-}"
+                      if [ -z "$workflow_id" ]; then
+                        printf '%s' ""
+                        return 0
+                      fi
+                      shift
+                      workflow_selected_services_csv_for_launcher "$workflow_id" "$@"
+                      ;;
+                    *)
+                      printf '%s' ""
+                      ;;
+                  esac
+                }
+
                 requested_excluded_services=()
                 forwarded_args=()
 
@@ -410,6 +765,7 @@ let
                 done
 
                 excluded_services_csv="$(build_excluded_services_csv)"
+                selected_services_csv="$(launcher_selected_services_csv "''${forwarded_args[@]}")"
 
                 if forwarded_args_request_help "''${forwarded_args[@]}"; then
                   if [ -n ${lib.escapeShellArg viewHelpFile} ]; then
@@ -421,13 +777,6 @@ let
                     && print_fast_task_help "''${forwarded_args[0]:-}"; then
                     exit 0
                   fi
-                fi
-
-                if [ -z "$excluded_services_csv" ]; then
-                  invocation_pwd="$PWD"
-                  flake_root="$(find_flake_root)"
-                  cd "$flake_root"
-                  NIXFIED_CALLER_PWD="$invocation_pwd" exec ${pkgs.nix}/bin/nix run ".#legacyPackages.${system}._nixfied.baseApps.${internalBaseTarget}" -- "''${forwarded_args[@]}"
                 fi
 
                 flake_root="$(find_flake_root)"
@@ -457,6 +806,9 @@ let
                   "--argstr"
                   "excludedServicesCsv"
                   "$excluded_services_csv"
+                  "--argstr"
+                  "selectedServicesCsv"
+                  "$selected_services_csv"
                   "--argstr"
                   "projectModuleSpecsJson"
                   ${lib.escapeShellArg projectModuleSpecsJson}
