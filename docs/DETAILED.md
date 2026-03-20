@@ -42,6 +42,7 @@ Pure graph exclusion is configured through `nixfied.graph.excludedServices`.
 - Launcher selector parsing is generic across public task apps and dispatcher surfaces (`run-task`, `run-workflow`, `run-workflow-parallel`).
 - Generated service apps (`svc::<service>::<op>`) participate in the same launcher model.
 - Truthy `SKIP_<SERVICE>` env vars are folded into the launcher-selected exclusion set as compatibility sugar, but they are not compiler inputs by themselves.
+- The canonical executed proof for that launcher path is `nix run .#framework::test -- --shard launcher-pruning`, which uses a poisoned Helios source override to verify that `SKIP_HELIOS=1` prevents Helios evaluation before selected-app compilation.
 
 ## Canonicalization Rules
 

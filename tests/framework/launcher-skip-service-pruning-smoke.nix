@@ -12,6 +12,9 @@ let
     projectRoot = ../..;
     projectModules = [ ../../nixfied/project/module.nix ];
     extraModules = [ ];
+    # The override makes Helios evaluation explode on contact. That lets this
+    # smoke prove that launcher-selected compile-time exclusion happens before
+    # Helios source selection or helper generation can be reached.
     localOverrides = [ ./launcher-skip-helios-override.nix ];
   };
 in
@@ -27,6 +30,8 @@ pkgs.runCommand "launcher-skip-service-pruning-smoke" { } ''
   export NIXFIED_FLAKE_ROOT=${lib.escapeShellArg repoRoot}
   mkdir -p "$REGISTRY_ROOT" "$CI_ARTIFACTS_ROOT" "$NIXFIED_RUNTIME_DIR_SCOPE_OVERRIDE"
 
+  # Negative control: without a launcher selector, the selected app evaluation
+  # should still reach the poisoned Helios branch and fail loudly.
   set +e
   "$RUN_TASK_APP" task.test.isolation.unit > "$TMPDIR/no-skip.out" 2>&1
   no_skip_rc="$?"
@@ -38,6 +43,10 @@ pkgs.runCommand "launcher-skip-service-pruning-smoke" { } ''
   fi
   require_contains "$TMPDIR/no-skip.out" "helios evaluated unexpectedly"
 
+  # Positive path: SKIP_HELIOS is only launcher sugar, so the launcher must
+  # translate it into compile-time graph exclusion before evaluating the
+  # selected app. If that happens correctly, the task succeeds and the poison
+  # message never appears.
   SKIP_HELIOS=1 "$RUN_TASK_APP" task.test.isolation.unit > "$TMPDIR/skip.out" 2>&1
   require_contains "$TMPDIR/skip.out" "OK: isolation probe complete"
   require_not_contains "$TMPDIR/skip.out" "helios evaluated unexpectedly"

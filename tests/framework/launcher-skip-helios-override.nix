@@ -1,5 +1,7 @@
 { lib, ... }:
 {
+  # Deliberately poison Helios source selection so any accidental evaluation of
+  # the Helios branch fails immediately and deterministically.
   nixfied.services.helios.sources = lib.mkForce {
     poison.package = throw "helios evaluated unexpectedly";
   };

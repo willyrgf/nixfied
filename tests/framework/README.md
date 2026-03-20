@@ -57,6 +57,42 @@ Deterministic checks live in `tests/framework/` and run via `nix flake check pat
 The `framework::test` `flake-check` shard intentionally uses `nix flake check path:. --no-build` so the framework harness validates the check graph without recursively rebuilding the same workflow-heavy checks that other shards already exercise.
 Checks that need execution inside the framework harness should be wired into a dedicated shard, such as `launcher-pruning` for launcher-driven compile-time service exclusion.
 
+## Launcher Pruning Proof
+
+`launcher-pruning` is the canonical executed proof that launcher-driven service
+exclusion happens before the selected app evaluates an excluded service branch.
+
+Use it when a downstream project needs confidence that:
+
+- `SKIP_<SERVICE>` launcher sugar is converted into compile-time graph exclusion
+- the selected app does not evaluate the excluded service's project branch
+- excluded-service helper generation and package selection do not leak into the
+  surviving launcher path
+
+The proof is implemented by:
+
+- `tests/framework/launcher-skip-helios-override.nix`
+- `tests/framework/launcher-skip-service-pruning-smoke.nix`
+
+Mechanism:
+
+- the override replaces the Helios source with a poison package that throws
+  `"helios evaluated unexpectedly"` as soon as Helios source selection is
+  touched
+- the smoke first runs the launcher without `SKIP_HELIOS` and requires that
+  exact failure
+- it then reruns the same launcher with `SKIP_HELIOS=1` and requires success
+  while also asserting that the poison message never appears
+
+That combination proves more than runtime skip. It proves the launcher applies
+compile-time exclusion before selected-app evaluation reaches the Helios branch.
+
+Run it directly with:
+
+```bash
+nix run .#framework::test -- --shard launcher-pruning --summary
+```
+
 Use `tests/framework/default.nix` as the source of truth for:
 - the complete registered check list
 - the exact check names
