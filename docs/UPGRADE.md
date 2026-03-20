@@ -69,6 +69,6 @@ Common examples:
 ## Recommended Validation
 
 - `nix run .#framework::test`
-- `nix flake check path:. -L`
+- `nix flake check . -L`
 - `nix run .#run-workflow -- <workflow-id> --summary`
 - Re-run one workflow with explicit `REGISTRY_ROOT` and one with explicit `CI_ARTIFACTS_DIR` to confirm downstream expectations.

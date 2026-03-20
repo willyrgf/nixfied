@@ -194,12 +194,12 @@ pkgs.runCommand "nix-checks-parent-workflow-skip-smoke" { } ''
   )
   require_contains "$TMPDIR/direct.out" "INFO: checking nil diagnostics files="
   require_contains "$TMPDIR/direct.out" "OK: nil diagnostics check passed files="
-  require_contains "$TMPDIR/direct.out" "INFO: checking flake checks ref=path:."
-  require_contains "$TMPDIR/direct.out" "OK: flake checks passed ref=path:."
+  require_contains "$TMPDIR/direct.out" "INFO: checking flake checks ref=."
+  require_contains "$TMPDIR/direct.out" "OK: flake checks passed ref=."
   require_contains "$direct_nil_log" "diagnostics ./flake.nix"
-  require_contains "$direct_log" "flake show --no-write-lock-file path:."
-  require_contains "$direct_log" "run path:.#help"
-  require_contains "$direct_log" "flake check -L --no-write-lock-file path:."
+  require_contains "$direct_log" "flake show --no-write-lock-file ."
+  require_contains "$direct_log" "run .#help"
+  require_contains "$direct_log" "flake check -L --no-write-lock-file ."
 
   (
     unset NIX_BUILD_TOP
@@ -208,11 +208,11 @@ pkgs.runCommand "nix-checks-parent-workflow-skip-smoke" { } ''
   )
   require_contains "$TMPDIR/workflow.out" "INFO: checking nil diagnostics files="
   require_contains "$TMPDIR/workflow.out" "OK: nil diagnostics check passed files="
-  require_contains "$TMPDIR/workflow.out" "SKIP: flake checks skipped inside nix build sandbox or parent workflow ref=path:."
+  require_contains "$TMPDIR/workflow.out" "SKIP: flake checks skipped inside nix build sandbox or parent workflow ref=."
   require_contains "$workflow_nil_log" "diagnostics ./flake.nix"
-  require_contains "$workflow_log" "flake show --no-write-lock-file path:."
-  require_contains "$workflow_log" "run path:.#help"
-  require_not_contains "$workflow_log" "flake check --no-write-lock-file path:."
+  require_contains "$workflow_log" "flake show --no-write-lock-file ."
+  require_contains "$workflow_log" "run .#help"
+  require_not_contains "$workflow_log" "flake check --no-write-lock-file ."
 
   echo "OK: parent workflow context skips nested flake checks" > "$out"
 ''

@@ -40,7 +40,7 @@
 ## Coding, Testing, and PRs
 - Format Nix: `find . -name '*.nix' -print0 | xargs -0 nixfmt --`.
 - Common checks: `nix flake check && nix flake show && nix run .#help`.
-- Framework tests: `nix run .#framework::test` or `nix run path:.#framework::test`.
+- Framework tests: `nix run .#framework::test`.
 - Prefer deterministic checks in `tests/framework/` and keep help snapshots current.
 - Keep commits small, imperative, and lowercase (for example, `expand framework test coverage`).
 - PRs should include intent, affected commands/modules, test notes, and config rationale when `nixfied/project/` changes.

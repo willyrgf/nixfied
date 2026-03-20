@@ -13,16 +13,7 @@
 let
   lib = pkgs.lib;
   mkShellApp = import ./mk-shell-app.nix { inherit pkgs; };
-  frameworkFlakeRoot = ../../../.;
-  frameworkFlakeRootAbs = builtins.toString frameworkFlakeRoot;
-  frameworkSourceFlakeRef =
-    if
-      builtins.pathExists "${frameworkFlakeRootAbs}/flake.nix"
-      && builtins.pathExists "${frameworkFlakeRootAbs}/.workspace"
-    then
-      "path:${frameworkFlakeRootAbs}"
-    else
-      null;
+  frameworkSourceFlakeRef = null;
 
   modules = import ../../modules;
 

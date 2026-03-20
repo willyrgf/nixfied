@@ -247,7 +247,7 @@ in
         }
 
         shard_flake_check() {
-          nix flake check path:. --no-build
+          nix flake check . --no-build
         }
 
         verify_public_launcher_help() {
@@ -287,11 +287,11 @@ in
           local help_out
           help_out="$(mktemp)"
 
-          nix build path:.#checks.${pkgs.system}.disabled-service-runtime-surface-smoke
-          nix build path:.#checks.${pkgs.system}.launcher-skip-service-pruning-smoke
-          nix build path:.#checks.${pkgs.system}.launcher-help-fast-path-smoke
-          verify_public_launcher_help "$help_out" nix run path:.#ci -- --help
-          verify_public_launcher_help "$help_out" env SKIP_HELIOS=1 nix run path:.#ci -- --help
+          nix build .#checks.${pkgs.system}.disabled-service-runtime-surface-smoke
+          nix build .#checks.${pkgs.system}.launcher-skip-service-pruning-smoke
+          nix build .#checks.${pkgs.system}.launcher-help-fast-path-smoke
+          verify_public_launcher_help "$help_out" nix run .#ci -- --help
+          verify_public_launcher_help "$help_out" env SKIP_HELIOS=1 nix run .#ci -- --help
           rm -f "$help_out"
         }
 
@@ -299,7 +299,7 @@ in
           local help_stderr
           local rc
           help_stderr="$(mktemp)"
-          if nix run path:.#help >/dev/null 2>"$help_stderr"; then
+          if nix run .#help >/dev/null 2>"$help_stderr"; then
             rm -f "$help_stderr"
             return 0
           fi

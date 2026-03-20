@@ -424,8 +424,10 @@ let
                 fi
 
                 if [ -z "$excluded_services_csv" ]; then
+                  invocation_pwd="$PWD"
                   flake_root="$(find_flake_root)"
-                  NIXFIED_CALLER_PWD="$PWD" exec ${pkgs.nix}/bin/nix run "path:$flake_root#legacyPackages.${system}._nixfied.baseApps.${internalBaseTarget}" -- "''${forwarded_args[@]}"
+                  cd "$flake_root"
+                  NIXFIED_CALLER_PWD="$invocation_pwd" exec ${pkgs.nix}/bin/nix run ".#legacyPackages.${system}._nixfied.baseApps.${internalBaseTarget}" -- "''${forwarded_args[@]}"
                 fi
 
                 flake_root="$(find_flake_root)"

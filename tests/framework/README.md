@@ -10,12 +10,6 @@ Run from repository root:
 nix run .#framework::test
 ```
 
-Path-based reference for untracked changes:
-
-```bash
-nix run path:.#framework::test
-```
-
 ## Behavior
 
 `framework::test` is a first-class framework preset task defined in `nixfied/framework/presets/framework-test.nix`.
@@ -53,8 +47,8 @@ agent how the current framework surface works:
 
 ## Flake checks (canonical)
 
-Deterministic checks live in `tests/framework/` and run via `nix flake check path:.`.
-The `framework::test` `flake-check` shard intentionally uses `nix flake check path:. --no-build` so the framework harness validates the check graph without recursively rebuilding the same workflow-heavy checks that other shards already exercise.
+Deterministic checks live in `tests/framework/` and run via `nix flake check .`.
+The `framework::test` `flake-check` shard intentionally uses `nix flake check . --no-build` so the framework harness validates the check graph without recursively rebuilding the same workflow-heavy checks that other shards already exercise.
 Checks that need execution inside the framework harness should be wired into a dedicated shard, such as `launcher-pruning` for launcher-driven compile-time service exclusion.
 
 ## Launcher Pruning Proof
@@ -89,7 +83,7 @@ Mechanism:
   base graph, then reruns through `SKIP_HELIOS=1` and requires that the gated
   task disappear while a control task still runs
 - the help fast-path smoke proves both the direct launcher path and the exact
-  public `nix run path:.#ci -- --help` surfaces avoid `nixfied-selected-app-*`
+  public `nix run .#ci -- --help` surfaces avoid `nixfied-selected-app-*`
   when no selectors are active
 
 That combination proves the framework no longer leaks disabled services into

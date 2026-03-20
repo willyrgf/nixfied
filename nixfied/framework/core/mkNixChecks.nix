@@ -4,7 +4,7 @@
 }:
 {
   name ? "nix-checks",
-  flakeRef ? "path:.",
+  flakeRef ? ".",
   formatterPkg ? (if pkgs ? nixfmt then pkgs.nixfmt else pkgs.nixfmt-rfc-style),
   nilPkg ? (if pkgs ? nil then pkgs.nil else throw "pkgs.nil is required for nix-checks"),
 }:
