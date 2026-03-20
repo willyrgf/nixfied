@@ -5,15 +5,21 @@
 }:
 let
   lib = pkgs.lib;
+  nonSelectorAppNames = [
+    "framework::install"
+    "framework::upgrade"
+  ];
   wrappedAppNames = builtins.sort builtins.lessThan (
-    lib.unique (
-      (builtins.attrNames (model.views.apps or { }))
-      ++ (builtins.filter (name: lib.hasPrefix "svc::" name) (builtins.attrNames apps))
-      ++ (builtins.filter (name: builtins.hasAttr name apps) [
-        "run-task"
-        "run-workflow"
-        "run-workflow-parallel"
-      ])
+    builtins.filter (appName: !(builtins.elem appName nonSelectorAppNames)) (
+      lib.unique (
+        (builtins.attrNames (model.views.apps or { }))
+        ++ (builtins.filter (name: lib.hasPrefix "svc::" name) (builtins.attrNames apps))
+        ++ (builtins.filter (name: builtins.hasAttr name apps) [
+          "run-task"
+          "run-workflow"
+          "run-workflow-parallel"
+        ])
+      )
     )
   );
   renderWrappedChecks = builtins.concatStringsSep "\n" (
@@ -52,6 +58,16 @@ pkgs.runCommand "launcher-surface-contract" { } ''
   }
 
   ${renderWrappedChecks}
+
+  if ${pkgs.gnugrep}/bin/grep -Fq 'run-selected-app.nix' ${apps."framework::upgrade".program}; then
+    echo "framework::upgrade should not use the selector launcher"
+    exit 1
+  fi
+
+  if ${pkgs.gnugrep}/bin/grep -Fq 'run-selected-app.nix' ${apps."framework::install".program}; then
+    echo "framework::install should not use the selector launcher"
+    exit 1
+  fi
 
   if ${pkgs.gnugrep}/bin/grep -Fq 'run-selected-app.nix' ${apps.help.program}; then
     echo "help surface should not use the selector launcher"

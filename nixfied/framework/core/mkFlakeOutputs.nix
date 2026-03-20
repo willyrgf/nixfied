@@ -97,8 +97,14 @@ let
     "run-workflow"
     "run-workflow-parallel"
   ];
+  nonSelectorAppNames = [
+    "framework::install"
+    "framework::upgrade"
+  ];
   wrappedAppNames = builtins.sort builtins.lessThan (
-    lib.unique (viewAppNames ++ serviceAppNames ++ dispatcherAppNames)
+    builtins.filter (appName: !(builtins.elem appName nonSelectorAppNames)) (
+      lib.unique (viewAppNames ++ serviceAppNames ++ dispatcherAppNames)
+    )
   );
 
   renderKnownServices =
