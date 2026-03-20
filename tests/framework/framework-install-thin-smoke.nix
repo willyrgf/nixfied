@@ -28,6 +28,7 @@ pkgs.runCommand "framework-install-thin-smoke" { } ''
   require_contains "$target/flake.nix" 'description = "Nixfied thin wrapper";'
   require_contains "$target/flake.nix" 'nixfied.url = "github:willyrgf/nixfied/dev";'
   require_contains "$target/flake.nix" 'projectModules = [ ./nixfied/project/module.nix ];'
+  require_contains "$target/flake.nix" 'frameworkOutputs = nixfied.lib.mkFlakeOutputs {'
 
   if [ -d "$target/nixfied" ]; then
     fail "thin wrapper should not vendor framework sources"

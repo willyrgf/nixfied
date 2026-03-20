@@ -103,12 +103,11 @@ let
         fi
 
         PID_FILE="$(${pkgs.gawk}/bin/awk '/^[[:space:]]*pid[[:space:]]+/ { gsub(/;/, "", $2); print $2; exit }' "$CONF")"
-        HTTP_PORT="$(${pkgs.gawk}/bin/awk '
+        LISTEN_PORTS="$(${pkgs.gawk}/bin/awk '
           /^[[:space:]]*listen[[:space:]]+[0-9]+/ {
             if ($2 ~ /^[0-9]+;?$/) {
               gsub(/;/, "", $2)
               print $2
-              exit
             }
           }
         ' "$CONF")"
@@ -129,12 +128,19 @@ let
         mkdir -p "$(dirname "$PID_FILE")"
         echo "$$" > "$PID_FILE"
 
-        exec ${pkgs.python3}/bin/python3 - "$HTTP_PORT" <<'PY'
+        if [ -z "$LISTEN_PORTS" ]; then
+          echo "missing nginx listen port" >&2
+          exit 1
+        fi
+
+        exec ${pkgs.python3}/bin/python3 - $LISTEN_PORTS <<'PY'
     import http.server
+    import socket
     import socketserver
+    import threading
     import sys
 
-    PORT = int(sys.argv[1])
+    PORTS = [int(arg) for arg in sys.argv[1:]]
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
@@ -145,9 +151,23 @@ let
         def log_message(self, format, *args):
             return
 
-    socketserver.TCPServer.allow_reuse_address = True
-    with socketserver.TCPServer(("127.0.0.1", PORT), Handler) as httpd:
-        httpd.serve_forever()
+    class ReusableTCPServer(socketserver.TCPServer):
+        allow_reuse_address = True
+
+    servers = []
+
+    try:
+        for port in PORTS:
+            httpd = ReusableTCPServer(("127.0.0.1", port), Handler)
+            thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+            thread.start()
+            servers.append((httpd, thread))
+
+        threading.Event().wait()
+    finally:
+        for httpd, thread in servers:
+            httpd.shutdown()
+            httpd.server_close()
     PY
   '';
 
@@ -179,6 +199,7 @@ let
         fi
 
         API_PORT=""
+        CONSOLE_PORT=""
         while [ "$#" -gt 0 ]; do
           case "$1" in
             --address)
@@ -186,6 +207,7 @@ let
               shift 2
               ;;
             --console-address)
+              CONSOLE_PORT="$(${pkgs.coreutils}/bin/cut -d: -f2 <<<"$2")"
               shift 2
               ;;
             --config-dir)
@@ -197,12 +219,13 @@ let
           esac
         done
 
-        exec ${pkgs.python3}/bin/python3 - "$API_PORT" <<'PY'
+        exec ${pkgs.python3}/bin/python3 - "$API_PORT" "$CONSOLE_PORT" <<'PY'
     import http.server
     import socketserver
+    import threading
     import sys
 
-    PORT = int(sys.argv[1])
+    PORTS = [int(arg) for arg in sys.argv[1:] if arg]
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
@@ -217,9 +240,23 @@ let
         def log_message(self, format, *args):
             return
 
-    socketserver.TCPServer.allow_reuse_address = True
-    with socketserver.TCPServer(("127.0.0.1", PORT), Handler) as httpd:
-        httpd.serve_forever()
+    class ReusableTCPServer(socketserver.TCPServer):
+        allow_reuse_address = True
+
+    servers = []
+
+    try:
+        for port in PORTS:
+            httpd = ReusableTCPServer(("127.0.0.1", port), Handler)
+            thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+            thread.start()
+            servers.append((httpd, thread))
+
+        threading.Event().wait()
+    finally:
+        for httpd, thread in servers:
+            httpd.shutdown()
+            httpd.server_close()
     PY
   '';
 
@@ -238,10 +275,20 @@ let
         fi
 
         HTTP_PORT=""
+        WS_PORT=""
+        AUTH_PORT=""
         while [ "$#" -gt 0 ]; do
           case "$1" in
             --http.port)
               HTTP_PORT="$2"
+              shift 2
+              ;;
+            --ws.port)
+              WS_PORT="$2"
+              shift 2
+              ;;
+            --authrpc.port)
+              AUTH_PORT="$2"
               shift 2
               ;;
             *)
@@ -250,13 +297,14 @@ let
           esac
         done
 
-        exec ${pkgs.python3}/bin/python3 - "$HTTP_PORT" <<'PY'
+        exec ${pkgs.python3}/bin/python3 - "$HTTP_PORT" "$WS_PORT" "$AUTH_PORT" <<'PY'
     import http.server
     import json
     import socketserver
+    import threading
     import sys
 
-    PORT = int(sys.argv[1])
+    PORTS = [int(arg) for arg in sys.argv[1:] if arg]
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_POST(self):
@@ -265,6 +313,8 @@ let
             method = payload.get("method")
             if method == "web3_clientVersion":
                 response = {"jsonrpc": "2.0", "id": payload.get("id"), "result": "reth-stub"}
+            elif method == "eth_chainId":
+                response = {"jsonrpc": "2.0", "id": payload.get("id"), "result": "0x1"}
             else:
                 response = {"jsonrpc": "2.0", "id": payload.get("id"), "error": {"code": -32601, "message": "method not found"}}
             body = json.dumps(response).encode()
@@ -277,9 +327,23 @@ let
         def log_message(self, format, *args):
             return
 
-    socketserver.TCPServer.allow_reuse_address = True
-    with socketserver.TCPServer(("127.0.0.1", PORT), Handler) as httpd:
-        httpd.serve_forever()
+    class ReusableTCPServer(socketserver.TCPServer):
+        allow_reuse_address = True
+
+    servers = []
+
+    try:
+        for port in PORTS:
+            httpd = ReusableTCPServer(("127.0.0.1", port), Handler)
+            thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+            thread.start()
+            servers.append((httpd, thread))
+
+        threading.Event().wait()
+    finally:
+        for httpd, thread in servers:
+            httpd.shutdown()
+            httpd.server_close()
     PY
   '';
 
@@ -298,10 +362,15 @@ let
         fi
 
         RPC_PORT=""
+        EXECUTION_RPC_URL=""
         while [ "$#" -gt 0 ]; do
           case "$1" in
             --rpc-port)
               RPC_PORT="$2"
+              shift 2
+              ;;
+            --execution-rpc)
+              EXECUTION_RPC_URL="$2"
               shift 2
               ;;
             *)
@@ -310,13 +379,21 @@ let
           esac
         done
 
-        exec ${pkgs.python3}/bin/python3 - "$RPC_PORT" <<'PY'
+        EXECUTION_PORT=""
+        case "$EXECUTION_RPC_URL" in
+          http://127.0.0.1:*)
+            EXECUTION_PORT="$(${pkgs.coreutils}/bin/printf '%s' "$EXECUTION_RPC_URL" | ${pkgs.gnused}/bin/sed -E 's#^http://127\.0\.0\.1:([0-9]+).*$#\1#')"
+            ;;
+        esac
+
+        exec ${pkgs.python3}/bin/python3 - "$RPC_PORT" "$EXECUTION_PORT" <<'PY'
     import http.server
     import json
     import socketserver
+    import threading
     import sys
 
-    PORT = int(sys.argv[1])
+    PORTS = [int(arg) for arg in sys.argv[1:] if arg]
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_POST(self):
@@ -329,6 +406,8 @@ let
                 response = {"jsonrpc": "2.0", "id": payload.get("id"), "result": "0x2a"}
             elif method == "eth_syncing":
                 response = {"jsonrpc": "2.0", "id": payload.get("id"), "result": False}
+            elif method == "web3_clientVersion":
+                response = {"jsonrpc": "2.0", "id": payload.get("id"), "result": "helios-stub"}
             else:
                 response = {"jsonrpc": "2.0", "id": payload.get("id"), "error": {"code": -32601, "message": "method not found"}}
             body = json.dumps(response).encode()
@@ -341,9 +420,23 @@ let
         def log_message(self, format, *args):
             return
 
-    socketserver.TCPServer.allow_reuse_address = True
-    with socketserver.TCPServer(("127.0.0.1", PORT), Handler) as httpd:
-        httpd.serve_forever()
+    class ReusableTCPServer(socketserver.TCPServer):
+        allow_reuse_address = True
+
+    servers = []
+
+    try:
+        for port in PORTS:
+            httpd = ReusableTCPServer(("127.0.0.1", port), Handler)
+            thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+            thread.start()
+            servers.append((httpd, thread))
+
+        threading.Event().wait()
+    finally:
+        for httpd, thread in servers:
+            httpd.shutdown()
+            httpd.server_close()
     PY
   '';
 
@@ -441,7 +534,8 @@ pkgs.runCommand "service-lifecycle-matrix-smoke" { } ''
     done
 
     cat "$log_file" >&2
-    fail "$label did not succeed"
+    echo "$label did not succeed" >&2
+    return 1
   }
 
   require_failure() {
@@ -478,7 +572,8 @@ pkgs.runCommand "service-lifecycle-matrix-smoke" { } ''
     done
 
     cat "$log_file" >&2
-    fail "$label did not fail"
+    echo "$label did not fail" >&2
+    return 1
   }
 
   wait_for_background_exit() {
@@ -519,6 +614,21 @@ pkgs.runCommand "service-lifecycle-matrix-smoke" { } ''
     export SERVICE_ROOT RUN_DIR LOG_DIR CONFIG_DIR
     mkdir -p "$SERVICE_ROOT" "$RUN_DIR" "$LOG_DIR" "$CONFIG_DIR"
 
+    dump_service_debug() {
+      local service="$1"
+      local pg_log="$SERVICE_ROOT/$service/postgres.log"
+
+      if [ -f "$TMPDIR/$service-start.out" ]; then
+        echo "--- $service-start.out" >&2
+        cat "$TMPDIR/$service-start.out" >&2
+      fi
+
+      if [ -f "$pg_log" ]; then
+        echo "--- $pg_log" >&2
+        cat "$pg_log" >&2
+      fi
+    }
+
     echo "INFO: lifecycle-smoke service=$service_name phase=init" >&2
     "$init_bin" > "$TMPDIR/$service_name-init.out" 2>&1 || {
       cat "$TMPDIR/$service_name-init.out" >&2
@@ -536,7 +646,10 @@ pkgs.runCommand "service-lifecycle-matrix-smoke" { } ''
     START_WRAPPER_PID=$!
 
     echo "INFO: lifecycle-smoke service=$service_name phase=health-after-start" >&2
-    wait_for_success "$service_name health after start" "$health_bin" "$TMPDIR/$service_name-health.out"
+    if ! wait_for_success "$service_name health after start" "$health_bin" "$TMPDIR/$service_name-health.out"; then
+      dump_service_debug "$service_name"
+      exit 1
+    fi
     echo "INFO: lifecycle-smoke service=$service_name phase=ready-after-start" >&2
     wait_for_success "$service_name ready after start" "$ready_bin" "$TMPDIR/$service_name-ready.out"
     echo "INFO: lifecycle-smoke service=$service_name phase=status-after-start" >&2

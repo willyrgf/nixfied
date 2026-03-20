@@ -33,7 +33,7 @@
               ;
           };
 
-          compiled = frameworkLib.mkNixfied {
+          frameworkOutputs = frameworkLib.mkFlakeOutputs {
             projectRoot = ./.;
             projectModules = [ ./nixfied/project/module.nix ];
             extraModules = [ ];
@@ -45,10 +45,10 @@
             inherit
               pkgs
               ;
-            model = compiled.model;
-            apps = compiled.apps;
-            packages = compiled.packages;
-            stateHash = compiled.stateHash;
+            model = frameworkOutputs.model;
+            apps = frameworkOutputs.apps;
+            packages = frameworkOutputs.packages;
+            stateHash = frameworkOutputs.stateHash;
             canonical = frameworkLib.canonical;
             registry = import ./nixfied/framework/runtime/registry {
               inherit
@@ -58,10 +58,10 @@
           };
         in
         {
-          apps = compiled.apps;
-          packages = compiled.packages;
+          apps = frameworkOutputs.apps;
+          packages = frameworkOutputs.packages;
           checks = frameworkChecks;
-          devShells = compiled.devShells;
+          devShells = frameworkOutputs.devShells;
         };
     in
     (flake-utils.lib.eachSystem supportedSystems mkForSystem)
@@ -86,6 +86,34 @@
             };
           in
           frameworkLib.mkNixfied {
+            inherit
+              projectRoot
+              projectModules
+              extraModules
+              localOverrides
+              frameworkSourceRevision
+              ;
+          };
+
+        mkFlakeOutputs =
+          {
+            system,
+            projectRoot,
+            projectModules,
+            extraModules ? [ ],
+            localOverrides ? [ ],
+            frameworkSourceRevision ? frameworkRevision,
+          }:
+          let
+            pkgs = import nixpkgs { inherit system; };
+            frameworkLib = import ./nixfied/framework/core {
+              inherit
+                pkgs
+                system
+                ;
+            };
+          in
+          frameworkLib.mkFlakeOutputs {
             inherit
               projectRoot
               projectModules

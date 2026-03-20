@@ -28,6 +28,8 @@ Graph exclusion is resolved before service compilation:
 - Task and workflow-unit service requirements are declared only through `requirements.services`.
 - Later compiler passes then prune dependent tasks, workflow units, features, and views.
 - Runtime `SKIP_<SERVICE>` remains a separate execution-time control and does not change graph selection.
+- Public flake task/workflow surfaces use thin launchers that accept explicit compile-time selectors such as `--exclude-services helios`, then perform a second pure evaluation of the selected app.
+- Truthy `SKIP_<SERVICE>` env vars may be used as launcher sugar, but the canonical compile-time interface is the explicit selector.
 
 ## Runtime Structure
 
@@ -43,6 +45,7 @@ Task/workflow execution is process-first and uses:
 Runtime path:
 
 - dispatcher -> orchestrator -> executor
+- public flake launcher -> selector-aware pure app selection -> dispatcher -> orchestrator -> executor
 
 Execution contracts:
 

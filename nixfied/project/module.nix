@@ -28,7 +28,7 @@ let
       "${workspaceRuntimeRoot}/registry"
     else
       conf.process.registryRoot;
-  resolvedArtifactsRoot = "/tmp/ci-artifacts/${project.id}/${workspaceId}";
+  resolvedArtifactsRoot = "/tmp/nixfied-artifacts-${project.id}-${workspaceId}";
   envNames = builtins.attrNames conf.envs;
   envOffsets = lib.mapAttrs (_: value: value.offset or 0) conf.envs;
   normalizeSourceKeys = sources: builtins.sort builtins.lessThan (builtins.attrNames sources);
@@ -408,7 +408,12 @@ let
       ;
   };
 
-  projectWorkflowsModule = import ./workflows.nix { inherit frameworkSelfhostPreset; };
+  projectWorkflowsModule = import ./workflows.nix {
+    inherit
+      frameworkSelfhostPreset
+      resolvedArtifactsRoot
+      ;
+  };
 in
 {
   imports = [

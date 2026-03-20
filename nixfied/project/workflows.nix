@@ -1,4 +1,7 @@
-{ frameworkSelfhostPreset }:
+{
+  frameworkSelfhostPreset,
+  resolvedArtifactsRoot,
+}:
 {
   config = {
     nixfied.workflows = {
@@ -37,7 +40,7 @@
           alwaysRun = true;
         };
         artifacts = {
-          root = "/tmp/ci-artifacts";
+          root = resolvedArtifactsRoot;
           keepOnSuccess = false;
           keepOnFailure = true;
           writeSummary = true;
@@ -96,7 +99,7 @@
           alwaysRun = true;
         };
         artifacts = {
-          root = "/tmp/ci-artifacts";
+          root = resolvedArtifactsRoot;
           keepOnSuccess = false;
           keepOnFailure = true;
           writeSummary = true;
@@ -165,7 +168,7 @@
           alwaysRun = true;
         };
         artifacts = {
-          root = "/tmp/ci-artifacts";
+          root = resolvedArtifactsRoot;
           keepOnSuccess = false;
           keepOnFailure = true;
           writeSummary = true;
@@ -202,7 +205,7 @@
           alwaysRun = true;
         };
         artifacts = {
-          root = "/tmp/ci-artifacts";
+          root = resolvedArtifactsRoot;
           keepOnSuccess = false;
           keepOnFailure = true;
           writeSummary = true;
@@ -243,7 +246,7 @@
           alwaysRun = true;
         };
         artifacts = {
-          root = "/tmp/ci-artifacts";
+          root = resolvedArtifactsRoot;
           keepOnSuccess = false;
           keepOnFailure = true;
           writeSummary = true;
@@ -324,7 +327,7 @@
           alwaysRun = true;
         };
         artifacts = {
-          root = "/tmp/ci-artifacts";
+          root = resolvedArtifactsRoot;
           keepOnSuccess = false;
           keepOnFailure = true;
           writeSummary = true;
@@ -391,7 +394,7 @@
           alwaysRun = true;
         };
         artifacts = {
-          root = "/tmp/ci-artifacts";
+          root = resolvedArtifactsRoot;
           keepOnSuccess = false;
           keepOnFailure = true;
           writeSummary = true;

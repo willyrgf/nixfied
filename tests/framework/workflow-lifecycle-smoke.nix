@@ -71,7 +71,7 @@ let
         alwaysRun = alwaysRun;
       };
       artifacts = {
-        root = "/tmp/ci-artifacts";
+        root = "artifacts-root";
         keepOnSuccess = false;
         keepOnFailure = true;
         writeSummary = true;

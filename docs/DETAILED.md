@@ -38,6 +38,9 @@ Pure graph exclusion is configured through `nixfied.graph.excludedServices`.
 - This is the mechanism to use when a service branch must not be evaluated at all.
 - Dependent tasks and workflow units are pruned during compilation, and the filtered graph flows through features and generated views.
 - Runtime `SKIP_<SERVICE>` flags are separate and only affect execution of an already-compiled graph.
+- Public flake task/workflow launchers expose explicit compile-time selectors, for example `nix run .#ci -- --exclude-services helios --mode full --summary`.
+- Launcher selector parsing is generic across public task apps and dispatcher surfaces (`run-task`, `run-workflow`, `run-workflow-parallel`).
+- Truthy `SKIP_<SERVICE>` env vars are folded into the launcher-selected exclusion set as compatibility sugar, but they are not compiler inputs by themselves.
 
 ## Canonicalization Rules
 
@@ -56,6 +59,13 @@ Execution is model-backed through dispatcher apps and orchestrator controls:
 - `nix run .#runs [-- <run-id>]`
 - `nix run .#stop-run -- <run-id>`
 - `nix run .#stop-all-runs`
+
+Selector-aware launcher contract:
+
+- Public task apps and dispatcher surfaces accept leading launcher options before normal app args.
+- `--exclude-services <csv>` is the canonical compile-time selector.
+- `--launcher-help` shows launcher-specific help without invoking the selected app.
+- Launcher parsing stops at the first non-launcher argument or `--`, and the remaining args are forwarded unchanged to the selected app.
 
 Executor behavior:
 

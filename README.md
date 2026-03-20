@@ -142,7 +142,19 @@ Ephemeral runtime behavior:
 
 ## API
 
-Primary library entrypoint:
+Primary flake-output entrypoint:
+
+```nix
+nixfied.lib.mkFlakeOutputs {
+  system = "x86_64-linux";
+  projectRoot = ./.;
+  projectModules = [ ./nixfied/project/module.nix ];
+  extraModules = [ ];
+  localOverrides = [ ];
+}
+```
+
+Lower-level compiled-output entrypoint:
 
 ```nix
 nixfied.lib.mkNixfied {
@@ -155,6 +167,13 @@ nixfied.lib.mkNixfied {
 ```
 
 `localOverrides` is explicit. The default repository flake passes `[]`, so `nixfied/local/default.nix` is preserved template space, not an auto-loaded module.
+
+`mkFlakeOutputs` wraps public task/workflow flake apps in thin selector-aware launchers. The canonical compile-time graph selector is `--exclude-services <csv>`, for example:
+
+```bash
+nix run .#ci -- --exclude-services helios --mode full --summary
+nix run .#run-task -- --exclude-services helios task.framework.test --summary
+```
 
 Returned attributes:
 

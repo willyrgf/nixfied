@@ -44,7 +44,7 @@ pkgs.runCommand "postgres-config-artifacts-smoke" { } ''
   export ENV=test
   export RUN_DIR="$TMPDIR/run"
   export PGDATA_ROOT="$TMPDIR/service-root"
-  export POSTGRES_PORT=55433
+  export POSTGRES_PORT=55434
 
   mkdir -p "$HOME" "$RUN_DIR" "$PGDATA_ROOT"
 

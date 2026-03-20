@@ -261,7 +261,7 @@ pkgs.runCommand "ready-health-shutdown-smoke" { } ''
     REGISTRY_ROOT="$REGISTRY_ROOT" NIX_ENV="$slot_value" PROJECT_ENV="dev" \
       "$EXECUTOR" run-task task.ops.health > "$health_log" 2>&1
 
-    require_contains "$ready_log" "OK: readiness checks passed services=10"
+    require_contains "$ready_log" "OK: readiness checks passed services=11"
     require_contains "$health_log" "OK: health checks passed services=10"
 
     require_not_contains "$ready_log" "SKIP: postgres readiness check disabled"

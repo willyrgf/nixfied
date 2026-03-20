@@ -91,6 +91,8 @@ let
     "service-requirements-contract" = {
       covers = [ "task.framework.test" ];
     };
+
+    "launcher-surface-contract" = { };
   };
 
   rawChecks = {
@@ -122,6 +124,14 @@ let
       inherit
         pkgs
         packages
+        apps
+        ;
+    };
+
+    "launcher-surface-contract" = import ./launcher-surface-contract.nix {
+      inherit
+        pkgs
+        model
         apps
         ;
     };

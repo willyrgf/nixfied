@@ -59,7 +59,7 @@ let
       alwaysRun = true;
     };
     artifacts = {
-      root = "/tmp/ci-artifacts";
+      root = "artifacts-root";
       keepOnSuccess = false;
       keepOnFailure = true;
       writeSummary = true;

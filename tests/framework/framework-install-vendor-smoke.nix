@@ -63,6 +63,12 @@ pkgs.runCommand "framework-install-vendor-smoke" { } ''
     exit 1
   fi
 
+  if ! ${pkgs.gnugrep}/bin/grep -Fq 'frameworkOutputs = nixfiedLib.mkFlakeOutputs {' "$target/flake.nix"; then
+    echo "vendored wrapper should call nixfiedLib.mkFlakeOutputs"
+    cat "$target/flake.nix"
+    exit 1
+  fi
+
   if ! ${pkgs.gnugrep}/bin/grep -Fq 'frameworkSourceRevision = import ./nixfied/framework/core/framework-revision.nix {' "$target/flake.nix"; then
     echo "vendored wrapper should import ./nixfied/framework/core/framework-revision.nix"
     cat "$target/flake.nix"
