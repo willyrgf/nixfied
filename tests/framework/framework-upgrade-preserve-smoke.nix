@@ -4,6 +4,7 @@
   registry,
 }:
 let
+  lib = pkgs.lib;
   harness = import ./lib/harness.nix {
     inherit
       pkgs
@@ -20,14 +21,27 @@ let
       ;
     projectRoot = ../..;
   };
+  frameworkLib = import ../../nixfied/framework/core {
+    inherit pkgs;
+    system = pkgs.system;
+  };
+  repoRoot = builtins.toString ../..;
+  frameworkOutputs = frameworkLib.mkFlakeOutputs {
+    projectRoot = ../..;
+    projectModules = [ ../../nixfied/project/module.nix ];
+    extraModules = [ ];
+    localOverrides = [ ];
+  };
 in
 pkgs.runCommand "framework-upgrade-preserve-smoke" { } ''
   set -euo pipefail
   ${harness.shellPrelude}
 
   EXECUTOR="${executor}/bin/nixfied-executor"
+  UPGRADE_APP="${frameworkOutputs.apps."framework::upgrade".program}"
   export REGISTRY_ROOT="$TMPDIR/registry"
   export NIXFIED_RUNTIME_DIR_SCOPE_OVERRIDE="$TMPDIR/runtime-scope"
+  export NIXFIED_FLAKE_ROOT=${lib.escapeShellArg repoRoot}
   mkdir -p "$REGISTRY_ROOT"
   mkdir -p "$NIXFIED_RUNTIME_DIR_SCOPE_OVERRIDE"
 
@@ -44,6 +58,38 @@ pkgs.runCommand "framework-upgrade-preserve-smoke" { } ''
       fail "run-task invocation failed"
     fi
   }
+
+  run_app_expect_failure() {
+    local out_file="$1"
+    shift
+    set +e
+    "$@" > "$out_file" 2>&1
+    local rc="$?"
+    set -e
+    if [ "$rc" -eq 0 ]; then
+      echo "expected app command to fail: $*"
+      cat "$out_file"
+      fail "expected app command failure"
+    fi
+    printf '%s' "$rc"
+  }
+
+  workspace_root="$TMPDIR/framework-workspace-root"
+  mkdir -p "$workspace_root"
+  : > "$workspace_root/.workspace"
+  upgrade_root_rc="$(
+    run_app_expect_failure \
+      "$TMPDIR/upgrade-live-workspace.out" \
+      "$UPGRADE_APP" \
+      --target "$workspace_root"
+  )"
+  if [ "$upgrade_root_rc" -ne 2 ]; then
+    echo "--- $TMPDIR/upgrade-live-workspace.out"
+    cat "$TMPDIR/upgrade-live-workspace.out"
+    fail "framework::upgrade workspace-root refusal must exit with usage code 2 (got $upgrade_root_rc)"
+  fi
+  require_not_file "$workspace_root/flake.nix"
+  require_not_file "$workspace_root/nixfied/VENDORED.txt"
 
   target="$TMPDIR/vendor-wrapper"
   run_task_checked "$TMPDIR/install-initial.out" task.framework.install --vendor --target "$target"

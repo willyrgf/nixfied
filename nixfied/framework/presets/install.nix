@@ -334,7 +334,11 @@ in
       appName = "framework::upgrade";
       kind = "utility";
       summary = "Upgrade vendored wrapper in-place";
-      description = "Upgrades framework files while preserving nixfied/project and nixfied/local by default. Use --reset-project/--reset-local to overwrite those paths.";
+      description = ''
+        Upgrades framework files while preserving nixfied/project and nixfied/local by default.
+        Use --reset-project/--reset-local to overwrite those paths.
+        Do not target a framework workspace root itself; use a downstream repo or another target path.
+      '';
       runtimeInputs = frameworkInstallRuntimeInputs;
       usage = [
         "nix run .#framework::upgrade -- --target ."

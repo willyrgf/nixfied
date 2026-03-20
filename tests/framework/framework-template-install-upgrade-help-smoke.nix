@@ -130,6 +130,7 @@ pkgs.runCommand "framework-template-install-upgrade-help-smoke" { } ''
   require_contains "$TMPDIR/upgrade-help.out" "  nix run .#framework::upgrade -- --target ."
   require_contains "$TMPDIR/upgrade-help.out" "  --target <string>: Output directory for generated wrapper."
   require_contains "$TMPDIR/upgrade-help.out" "  --reset-project: When vendoring, overwrite nixfied/project."
+  require_contains "$TMPDIR/upgrade-help.out" "Do not target a framework workspace root itself"
   require_contains "$TMPDIR/upgrade-help.out" "  -h, --help: Show this help."
   require_contains "$TMPDIR/upgrade-app-first.out" "INFO: upgrading vendored wrapper (preserving nixfied/project/ and nixfied/local/)"
   require_contains "$TMPDIR/upgrade-app-first.out" "OK: vendored wrapper upgraded at ./flake.nix"
