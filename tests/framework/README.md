@@ -59,33 +59,42 @@ Checks that need execution inside the framework harness should be wired into a d
 
 ## Launcher Pruning Proof
 
-`launcher-pruning` is the canonical executed proof that launcher-driven service
-exclusion happens before the selected app evaluates an excluded service branch.
+`launcher-pruning` is the canonical executed proof for selector-aware launcher
+behavior, disabled-service runtime-surface filtering, and public help
+fast-paths.
 
 Use it when a downstream project needs confidence that:
 
 - `SKIP_<SERVICE>` launcher sugar is converted into compile-time graph exclusion
-- the selected app does not evaluate the excluded service's project branch
-- excluded-service helper generation and package selection do not leak into the
-  surviving launcher path
+- disabled services do not leak runtime hook env or generated service apps into
+  unrelated surfaces
+- `nix run .#ci -- --help` and `SKIP_HELIOS=1 nix run .#ci -- --help` stay on
+  the cheap public help path
+- selector-driven recompilation prunes service-gated tasks while leaving
+  unrelated tasks runnable
 
 The proof is implemented by:
 
-- `tests/framework/launcher-skip-helios-override.nix`
+- `tests/framework/launcher-disabled-nginx-override.nix`
+- `tests/framework/disabled-service-runtime-surface-smoke.nix`
 - `tests/framework/launcher-skip-service-pruning-smoke.nix`
+- `tests/framework/launcher-help-fast-path-smoke.nix`
 
 Mechanism:
 
-- the override replaces the Helios source with a poison package that throws
-  `"helios evaluated unexpectedly"` as soon as Helios source selection is
-  touched
-- the smoke first runs the launcher without `SKIP_HELIOS` and requires that
-  exact failure
-- it then reruns the same launcher with `SKIP_HELIOS=1` and requires success
-  while also asserting that the poison message never appears
+- the disabled-service smoke poisons nginx source selection while nginx remains
+  disabled, then asserts that no `SVC_NGINX_*` hook env vars or `svc::nginx::*`
+  apps are generated
+- the pruning smoke enables Helios, verifies a Helios-gated task runs on the
+  base graph, then reruns through `SKIP_HELIOS=1` and requires that the gated
+  task disappear while a control task still runs
+- the help fast-path smoke proves both the direct launcher path and the exact
+  public `nix run path:.#ci -- --help` surfaces avoid `nixfied-selected-app-*`
+  when no selectors are active
 
-That combination proves more than runtime skip. It proves the launcher applies
-compile-time exclusion before selected-app evaluation reaches the Helios branch.
+That combination proves the framework no longer leaks disabled services into
+runtime surface generation, keeps public help cheap, and still recompiles a
+pruned graph when selectors are actually in play.
 
 Run it directly with:
 

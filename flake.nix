@@ -60,6 +60,7 @@
         {
           apps = frameworkOutputs.apps;
           packages = frameworkOutputs.packages;
+          legacyPackages = frameworkOutputs.legacyPackages;
           checks = frameworkChecks;
           devShells = frameworkOutputs.devShells;
         };

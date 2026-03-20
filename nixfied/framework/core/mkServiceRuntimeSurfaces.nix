@@ -9,6 +9,39 @@ let
     value: lib.toUpper (lib.replaceStrings [ "." "-" ":" "/" " " ] [ "_" "_" "_" "_" "_" ] value);
 
   serviceIds = builtins.sort builtins.lessThan (builtins.attrNames (model.services or { }));
+  enabledServiceIds = builtins.filter (
+    serviceId: model.services.${serviceId}.enable or false
+  ) serviceIds;
+
+  validateRuntimeSurfaceService =
+    entry:
+    let
+      service = model.services.${entry.id};
+      config = service.config or { };
+      fail =
+        requirement:
+        throw ''
+          nixfied service runtime surfaces: enabled service '${entry.name}' is missing ${requirement}.
+          Configure nixfied.services.${entry.name}.sources.<source>.package and defaultSource, or disable the service.
+        '';
+    in
+    if entry.name == "nginx" then
+      if (config.package or null) != null || pkgs ? nginx then true else fail "a runtime package"
+    else if entry.name == "reth" then
+      if (config.package or null) != null || pkgs ? reth then true else fail "a runtime package"
+    else if entry.name == "minio" then
+      if
+        ((config.package or null) != null || pkgs ? minio)
+        && ((config.clientPackage or null) != null || pkgs ? minio-client)
+      then
+        true
+      else if !((config.package or null) != null || pkgs ? minio) then
+        fail "a server package"
+      else
+        fail "a client package"
+    else
+      true;
+
   serviceEntries =
     let
       entries = map (
@@ -24,7 +57,7 @@ let
           token = normalizeToken serviceName;
           inherit dataDirName;
         }
-      ) serviceIds;
+      ) enabledServiceIds;
       duplicateDataDirNames = lib.unique (
         builtins.filter (
           dataDirName: builtins.length (builtins.filter (entry: entry.dataDirName == dataDirName) entries) > 1
@@ -32,7 +65,7 @@ let
       );
     in
     if duplicateDataDirNames == [ ] then
-      entries
+      map (entry: builtins.seq (validateRuntimeSurfaceService entry) entry) entries
     else
       throw "nixfied service runtime surfaces require unique dataDirName values, duplicates: ${builtins.concatStringsSep ", " duplicateDataDirNames}";
 

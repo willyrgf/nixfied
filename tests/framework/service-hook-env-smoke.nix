@@ -10,61 +10,66 @@ let
 
   serviceHookTaskId = "task.test.service-hooks";
 
-  serviceHookModule = {
-    nixfied.tasks."test.service-hooks" = {
-      id = serviceHookTaskId;
-      summary = "Service hook export smoke";
-      description = "Validates service hook env export for included and excluded services.";
-      contract.input.args.parser = "passthrough";
-      contract.input.args.allowUnknown = true;
-      runner.command = ''
-        set -euo pipefail
+  serviceHookModule =
+    { lib, ... }:
+    {
+      nixfied.services.postgres.enable = lib.mkForce true;
+      nixfied.services.nginx.enable = lib.mkForce true;
 
-        mode="''${1:-}"
-        case "$mode" in
-          included|excluded) ;;
-          *)
-            echo "ERROR: usage: task.test.service-hooks <included|excluded>" >&2
-            exit 2
-            ;;
-        esac
+      nixfied.tasks."test.service-hooks" = {
+        id = serviceHookTaskId;
+        summary = "Service hook export smoke";
+        description = "Validates service hook env export for included and excluded services.";
+        contract.input.args.parser = "passthrough";
+        contract.input.args.allowUnknown = true;
+        runner.command = ''
+          set -euo pipefail
 
-        if [ -z "''${SVC_POSTGRES_STATUS:-}" ]; then
-          echo "ERROR: missing postgres service hook"
-          exit 1
-        fi
-        if [ ! -x "$SVC_POSTGRES_STATUS" ]; then
-          echo "ERROR: postgres service hook is not executable path=$SVC_POSTGRES_STATUS"
-          exit 1
-        fi
+          mode="''${1:-}"
+          case "$mode" in
+            included|excluded) ;;
+            *)
+              echo "ERROR: usage: task.test.service-hooks <included|excluded>" >&2
+              exit 2
+              ;;
+          esac
 
-        case "$mode" in
-          included)
-            if [ -z "''${SVC_NGINX_STATUS:-}" ]; then
-              echo "ERROR: missing nginx service hook in included mode"
-              exit 1
-            fi
-            if [ ! -x "$SVC_NGINX_STATUS" ]; then
-              echo "ERROR: nginx service hook is not executable path=$SVC_NGINX_STATUS"
-              exit 1
-            fi
-            ;;
-          excluded)
-            if [ -n "''${SVC_NGINX_STATUS:-}" ]; then
-              echo "ERROR: nginx service hook should be absent when nginx is excluded"
-              exit 1
-            fi
-            ;;
-        esac
+          if [ -z "''${SVC_POSTGRES_STATUS:-}" ]; then
+            echo "ERROR: missing postgres service hook"
+            exit 1
+          fi
+          if [ ! -x "$SVC_POSTGRES_STATUS" ]; then
+            echo "ERROR: postgres service hook is not executable path=$SVC_POSTGRES_STATUS"
+            exit 1
+          fi
 
-        echo "OK: service hooks mode=$mode postgres=present nginx=''${SVC_NGINX_STATUS:+present}"
-      '';
-      ui.app = {
-        expose = false;
-        name = "test-service-hooks";
+          case "$mode" in
+            included)
+              if [ -z "''${SVC_NGINX_STATUS:-}" ]; then
+                echo "ERROR: missing nginx service hook in included mode"
+                exit 1
+              fi
+              if [ ! -x "$SVC_NGINX_STATUS" ]; then
+                echo "ERROR: nginx service hook is not executable path=$SVC_NGINX_STATUS"
+                exit 1
+              fi
+              ;;
+            excluded)
+              if [ -n "''${SVC_NGINX_STATUS:-}" ]; then
+                echo "ERROR: nginx service hook should be absent when nginx is excluded"
+                exit 1
+              fi
+              ;;
+          esac
+
+          echo "OK: service hooks mode=$mode postgres=present nginx=''${SVC_NGINX_STATUS:+present}"
+        '';
+        ui.app = {
+          expose = false;
+          name = "test-service-hooks";
+        };
       };
     };
-  };
 
   compiledIncluded = frameworkLib.mkNixfied {
     projectRoot = ../..;

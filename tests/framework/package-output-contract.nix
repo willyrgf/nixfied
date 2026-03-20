@@ -1,8 +1,28 @@
 {
   pkgs,
+  model,
   packages,
   apps,
 }:
+let
+  enabledServiceNames =
+    builtins.map
+      (
+        serviceId:
+        let
+          service = model.services.${serviceId};
+        in
+        service.name or serviceId
+      )
+      (
+        builtins.filter (serviceId: model.services.${serviceId}.enable or false) (
+          builtins.attrNames (model.services or { })
+        )
+      );
+  hasServiceApps = builtins.any (appName: pkgs.lib.hasPrefix "svc::" appName) (
+    builtins.attrNames apps
+  );
+in
 assert builtins.hasAttr "nix-checks" packages;
 assert builtins.hasAttr "help" apps;
 assert builtins.hasAttr "docs" apps;
@@ -15,7 +35,7 @@ assert builtins.hasAttr "stop-run" apps;
 assert builtins.hasAttr "stop-all-runs" apps;
 assert !(builtins.hasAttr "registry::replay" apps);
 assert builtins.any (appName: pkgs.lib.hasPrefix "task::" appName) (builtins.attrNames apps);
-assert builtins.any (appName: pkgs.lib.hasPrefix "svc::" appName) (builtins.attrNames apps);
+assert if enabledServiceNames == [ ] then !hasServiceApps else hasServiceApps;
 pkgs.runCommand "package-output-contract" { } ''
   set -euo pipefail
 

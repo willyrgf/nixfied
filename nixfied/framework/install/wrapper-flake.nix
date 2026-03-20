@@ -41,6 +41,7 @@ if vendorPath == null then
           in {
             apps = frameworkOutputs.apps;
             packages = frameworkOutputs.packages;
+            legacyPackages = frameworkOutputs.legacyPackages;
             checks = frameworkOutputs.checks;
             devShells = frameworkOutputs.devShells;
           });
@@ -80,6 +81,7 @@ else
           in {
             apps = frameworkOutputs.apps;
             packages = frameworkOutputs.packages;
+            legacyPackages = frameworkOutputs.legacyPackages;
             checks = frameworkOutputs.checks;
             devShells = frameworkOutputs.devShells;
           });

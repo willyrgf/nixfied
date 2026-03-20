@@ -1,5 +1,6 @@
 {
   pkgs,
+  model,
   apps,
 }:
 let
@@ -20,6 +21,19 @@ let
     assert pkgs.lib.hasInfix "health = {" source;
     assert pkgs.lib.hasInfix "ready = {" source;
     true;
+
+  serviceStatusAppMatchesEnable =
+    serviceName:
+    let
+      appName = "svc::${serviceName}::status";
+      expectedEnabled =
+        if builtins.hasAttr serviceName (model.services or { }) then
+          model.services.${serviceName}.enable or false
+        else
+          false;
+    in
+    assert (builtins.hasAttr appName apps) == expectedEnabled;
+    true;
 in
 assert assertLifecycleOps postgresSource;
 assert assertLifecycleOps nginxSource;
@@ -31,11 +45,11 @@ assert pkgs.lib.hasInfix "runtimeDefaults = import ../../../core/runtime-default
   minioBucketMgmtSource;
 assert pkgs.lib.hasInfix "mkBucketScript =" minioBucketMgmtSource;
 assert pkgs.lib.hasInfix "mcAliasSetup =" minioBucketMgmtSource;
-assert builtins.hasAttr "svc::postgres::status" apps;
-assert builtins.hasAttr "svc::nginx::status" apps;
-assert builtins.hasAttr "svc::minio::status" apps;
-assert builtins.hasAttr "svc::reth::status" apps;
-assert builtins.hasAttr "svc::helios::status" apps;
+assert serviceStatusAppMatchesEnable "postgres";
+assert serviceStatusAppMatchesEnable "nginx";
+assert serviceStatusAppMatchesEnable "minio";
+assert serviceStatusAppMatchesEnable "reth";
+assert serviceStatusAppMatchesEnable "helios";
 assert pkgs.lib.hasInfix "inherit (lifecycle)" supervisorSource;
 assert pkgs.lib.hasInfix "start" supervisorSource;
 assert pkgs.lib.hasInfix "stop" supervisorSource;
@@ -46,5 +60,5 @@ assert pkgs.lib.hasInfix "health" supervisorSource;
 assert pkgs.lib.hasInfix "inherit (management) restart rotateLogs;" supervisorSource;
 assert (!pkgs.lib.hasInfix "ready" supervisorSource);
 pkgs.runCommand "service-api-surface-contract" { } ''
-  echo "OK: service lifecycle surface is stable for public services, service apps are exported, and supervisor remains a separate runtime surface" > "$out"
+  echo "OK: service lifecycle surface is stable for public services, exported service apps track enabled services, and supervisor remains a separate runtime surface" > "$out"
 ''

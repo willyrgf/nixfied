@@ -106,6 +106,8 @@ let
       lib.unique (viewAppNames ++ serviceAppNames ++ dispatcherAppNames)
     )
   );
+  internalBaseTargetName =
+    appName: "base${builtins.substring 0 10 (builtins.hashString "sha256" appName)}";
 
   renderKnownServices =
     if serviceNames == [ ] then
@@ -117,8 +119,124 @@ let
     map (serviceName: "    ${lib.escapeShellArg serviceName}") serviceNames
   );
 
+  taskIds = builtins.sort builtins.lessThan (builtins.attrNames (compiled.model.tasks or { }));
+
+  normalizeTaskArgSpec =
+    spec:
+    let
+      hasLong = (spec ? long) && spec.long != null && spec.long != "";
+      hasShort = (spec ? short) && spec.short != null && spec.short != "";
+      kind =
+        if (spec ? kind) && spec.kind != null then
+          spec.kind
+        else if hasLong || hasShort then
+          "option"
+        else
+          "positional";
+    in
+    {
+      inherit kind;
+      long = if hasLong then spec.long else "";
+      short = if hasShort then spec.short else "";
+      type = if (spec ? type) && spec.type != null && spec.type != "" then toString spec.type else "";
+      values = if (spec ? values) && spec.values != null then map toString spec.values else [ ];
+      description = if (spec ? description) && spec.description != null then spec.description else "";
+    };
+
+  formatTaskArgHelpLine =
+    spec:
+    let
+      tokens =
+        (lib.optionals (spec.short != "") [ spec.short ])
+        ++ (lib.optionals (spec.long != "") [ spec.long ]);
+      valueLabel =
+        if spec.kind != "option" then
+          ""
+        else if spec.values != [ ] then
+          "<${builtins.concatStringsSep "|" spec.values}>"
+        else if spec.type != "" then
+          "<${spec.type}>"
+        else
+          "<value>";
+      descriptionSuffix = if spec.description != "" then ": ${spec.description}" else "";
+    in
+    "  ${builtins.concatStringsSep ", " tokens}${
+        lib.optionalString (valueLabel != "") " ${valueLabel}"
+      }${descriptionSuffix}";
+
+  renderTaskHelpText =
+    taskId:
+    let
+      task = compiled.model.tasks.${taskId};
+      app = task.ui.app or { };
+      argsContract = (((task.contract or { }).input or { }).args or { });
+      specs = map normalizeTaskArgSpec (argsContract.spec or [ ]);
+      displayName = if (app.expose or false) && (app.name or "") != "" then app.name else taskId;
+      usageLines =
+        let
+          configuredUsage = app.usage or [ ];
+        in
+        if configuredUsage != [ ] then configuredUsage else [ "nix run .#run-task -- ${taskId} [-- ...]" ];
+      exampleLines = app.examples or [ ];
+      optionLines = map formatTaskArgHelpLine specs ++ [
+        "  -h, --help: Show this help."
+      ];
+      summary = task.summary or "";
+      description = task.description or "";
+    in
+    builtins.concatStringsSep "\n" (
+      [ "${displayName} - ${summary}" ]
+      ++ lib.optionals (description != "") [
+        ""
+        description
+      ]
+      ++ [
+        ""
+        "Usage:"
+      ]
+      ++ map (line: "  ${line}") usageLines
+      ++ [
+        ""
+        "Options:"
+      ]
+      ++ optionLines
+      ++ lib.optionals (exampleLines != [ ]) (
+        [
+          ""
+          "Examples:"
+        ]
+        ++ map (line: "  ${line}") exampleLines
+      )
+    );
+
+  taskHelpFiles = builtins.listToAttrs (
+    map (taskId: {
+      name = taskId;
+      value = pkgs.writeText "nixfied-task-help-${builtins.substring 0 10 (builtins.hashString "sha256" taskId)}.txt" ''
+        ${renderTaskHelpText taskId}
+      '';
+    }) taskIds
+  );
+
+  renderTaskHelpCases = builtins.concatStringsSep "\n" (
+    map (taskId: ''
+      ${lib.escapeShellArg taskId})
+        cat ${lib.escapeShellArg (builtins.toString taskHelpFiles.${taskId})}
+        return 0
+        ;;
+    '') taskIds
+  );
+
   mkSelectorAwareLauncher =
     appName:
+    let
+      internalBaseTarget = internalBaseTargetName appName;
+      viewHelpFile =
+        if builtins.hasAttr appName (compiled.model.views.apps or { }) then
+          builtins.toString taskHelpFiles.${compiled.model.views.apps.${appName}.taskId}
+        else
+          "";
+    in
     mkShellApp {
       inherit appName;
       binPrefix = "nixfied-launch";
@@ -217,6 +335,35 @@ let
                   exit 3
                 }
 
+                forwarded_args_request_help() {
+                  local arg=""
+                  while [ "$#" -gt 0 ]; do
+                    arg="$1"
+                    shift
+
+                    case "$arg" in
+                      --help|-h)
+                        return 0
+                        ;;
+                      --)
+                        return 1
+                        ;;
+                    esac
+                  done
+
+                  return 1
+                }
+
+                print_fast_task_help() {
+                  local task_id="$1"
+                  case "$task_id" in
+        ${renderTaskHelpCases}
+                    *)
+                      return 1
+                      ;;
+                  esac
+                }
+
                 requested_excluded_services=()
                 forwarded_args=()
 
@@ -263,6 +410,24 @@ let
                 done
 
                 excluded_services_csv="$(build_excluded_services_csv)"
+
+                if forwarded_args_request_help "''${forwarded_args[@]}"; then
+                  if [ -n ${lib.escapeShellArg viewHelpFile} ]; then
+                    cat ${lib.escapeShellArg viewHelpFile}
+                    exit 0
+                  fi
+
+                  if [ ${lib.escapeShellArg appName} = 'run-task' ] \
+                    && print_fast_task_help "''${forwarded_args[0]:-}"; then
+                    exit 0
+                  fi
+                fi
+
+                if [ -z "$excluded_services_csv" ]; then
+                  flake_root="$(find_flake_root)"
+                  NIXFIED_CALLER_PWD="$PWD" exec ${pkgs.nix}/bin/nix run "path:$flake_root#legacyPackages.${system}._nixfied.baseApps.${internalBaseTarget}" -- "''${forwarded_args[@]}"
+                fi
+
                 flake_root="$(find_flake_root)"
 
         selection_cmd=(
@@ -325,8 +490,26 @@ let
           value = mkSelectorAwareLauncher appName;
         }) wrappedAppNames
       );
+  internalBasePackages =
+    if !launchersSupported then
+      { }
+    else
+      builtins.listToAttrs (
+        map (appName: {
+          name = internalBaseTargetName appName;
+          value = pkgs.writeShellScriptBin (internalBaseTargetName appName) ''
+            set -euo pipefail
+            exec ${compiled.apps.${appName}.program} "$@"
+          '';
+        }) wrappedAppNames
+      );
 in
 compiled
 // {
   apps = compiled.apps // launcherApps;
+  legacyPackages = {
+    _nixfied = {
+      baseApps = internalBasePackages;
+    };
+  };
 }

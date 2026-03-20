@@ -7,17 +7,36 @@ let
   };
   shellHelpers = import ./lib/shell-helpers.nix { inherit pkgs; };
   repoRoot = builtins.toString ../..;
+  compiledBase = frameworkLib.mkNixfied {
+    projectRoot = ../..;
+    projectModules = [ ../../nixfied/project/module.nix ];
+    extraModules = [ ./launcher-helios-task-module.nix ];
+    localOverrides = [ ];
+  };
+  compiledExcluded = frameworkLib.mkNixfied {
+    projectRoot = ../..;
+    projectModules = [ ../../nixfied/project/module.nix ];
+    extraModules = [ ./launcher-helios-task-module.nix ];
+    localOverrides = [
+      (
+        { ... }:
+        {
+          nixfied.graph.excludedServices = [ "helios" ];
+        }
+      )
+    ];
+  };
 
   frameworkOutputs = frameworkLib.mkFlakeOutputs {
     projectRoot = ../..;
     projectModules = [ ../../nixfied/project/module.nix ];
-    extraModules = [ ];
-    # The override makes Helios evaluation explode on contact. That lets this
-    # smoke prove that launcher-selected compile-time exclusion happens before
-    # Helios source selection or helper generation can be reached.
-    localOverrides = [ ./launcher-skip-helios-override.nix ];
+    extraModules = [ ./launcher-helios-task-module.nix ];
+    localOverrides = [ ];
   };
 in
+assert builtins.hasAttr "task.test.launcher.helios-required" compiledBase.model.tasks;
+assert !(builtins.hasAttr "task.test.launcher.helios-required" compiledExcluded.model.tasks);
+assert builtins.hasAttr "task.test.launcher.control" compiledExcluded.model.tasks;
 pkgs.runCommand "launcher-skip-service-pruning-smoke" { } ''
   set -euo pipefail
   ${shellHelpers.shellPrelude}
@@ -30,26 +49,19 @@ pkgs.runCommand "launcher-skip-service-pruning-smoke" { } ''
   export NIXFIED_FLAKE_ROOT=${lib.escapeShellArg repoRoot}
   mkdir -p "$REGISTRY_ROOT" "$CI_ARTIFACTS_ROOT" "$NIXFIED_RUNTIME_DIR_SCOPE_OVERRIDE"
 
-  # Negative control: without a launcher selector, the selected app evaluation
-  # should still reach the poisoned Helios branch and fail loudly.
   set +e
-  "$RUN_TASK_APP" task.test.isolation.unit > "$TMPDIR/no-skip.out" 2>&1
-  no_skip_rc="$?"
+  SKIP_HELIOS=1 "$RUN_TASK_APP" task.test.launcher.helios-required > "$TMPDIR/skip-pruned.out" 2>&1
+  skip_pruned_rc="$?"
   set -e
-  if [ "$no_skip_rc" -eq 0 ]; then
-    echo "expected launcher without SKIP_HELIOS to fail"
-    cat "$TMPDIR/no-skip.out"
+  if [ "$skip_pruned_rc" -eq 0 ]; then
+    echo "expected SKIP_HELIOS to prune the helios-gated task"
+    cat "$TMPDIR/skip-pruned.out"
     exit 1
   fi
-  require_contains "$TMPDIR/no-skip.out" "helios evaluated unexpectedly"
+  require_contains "$TMPDIR/skip-pruned.out" "ERROR: unknown task 'task.test.launcher.helios-required'"
 
-  # Positive path: SKIP_HELIOS is only launcher sugar, so the launcher must
-  # translate it into compile-time graph exclusion before evaluating the
-  # selected app. If that happens correctly, the task succeeds and the poison
-  # message never appears.
-  SKIP_HELIOS=1 "$RUN_TASK_APP" task.test.isolation.unit > "$TMPDIR/skip.out" 2>&1
-  require_contains "$TMPDIR/skip.out" "OK: isolation probe complete"
-  require_not_contains "$TMPDIR/skip.out" "helios evaluated unexpectedly"
+  SKIP_HELIOS=1 "$RUN_TASK_APP" task.test.launcher.control > "$TMPDIR/skip-control.out" 2>&1
+  require_contains "$TMPDIR/skip-control.out" "OK: launcher control task ran"
 
-  echo "OK: launcher SKIP_HELIOS excludes helios before selected app evaluation" > "$out"
+  echo "OK: launcher SKIP_HELIOS recompiles a pruned graph while leaving unrelated tasks runnable" > "$out"
 ''

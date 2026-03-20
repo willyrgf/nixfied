@@ -178,7 +178,7 @@ in
 
         Shards:
           flake-check   Evaluate nix flake checks for the current project root.
-          launcher-pruning  Build the launcher skip-service pruning smoke check.
+          launcher-pruning  Build the launcher pruning and help fast-path smoke checks.
           help          Validate generated help output.
           workflow-ci   Run the CI workflow surface in selected mode.
           isolation     Run isolation checks.
@@ -250,8 +250,49 @@ in
           nix flake check path:. --no-build
         }
 
+        verify_public_launcher_help() {
+          local output_file="$1"
+          shift
+          local rc
+
+          if "$@" >"$output_file" 2>&1; then
+            :
+          else
+            rc="$?"
+            log_error "public launcher help command failed rc=$rc"
+            cat "$output_file"
+            return "$rc"
+          fi
+
+          if ! grep -Fq "ci - Run the CI pipeline" "$output_file"; then
+            log_error "public launcher help output missing ci summary"
+            cat "$output_file"
+            return 1
+          fi
+
+          if ! grep -Fq "Usage:" "$output_file"; then
+            log_error "public launcher help output missing usage block"
+            cat "$output_file"
+            return 1
+          fi
+
+          if grep -Fq "nixfied-selected-app-" "$output_file"; then
+            log_error "public launcher help output hit selected-app path"
+            cat "$output_file"
+            return 1
+          fi
+        }
+
         shard_launcher_pruning() {
+          local help_out
+          help_out="$(mktemp)"
+
+          nix build path:.#checks.${pkgs.system}.disabled-service-runtime-surface-smoke
           nix build path:.#checks.${pkgs.system}.launcher-skip-service-pruning-smoke
+          nix build path:.#checks.${pkgs.system}.launcher-help-fast-path-smoke
+          verify_public_launcher_help "$help_out" nix run path:.#ci -- --help
+          verify_public_launcher_help "$help_out" env SKIP_HELIOS=1 nix run path:.#ci -- --help
+          rm -f "$help_out"
         }
 
         shard_help() {

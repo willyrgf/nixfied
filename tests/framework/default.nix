@@ -94,7 +94,13 @@ let
 
     "launcher-surface-contract" = { };
 
+    "disabled-service-runtime-surface-smoke" = {
+      covers = [ "runtime.service-hooks" ];
+    };
+
     "launcher-skip-service-pruning-smoke" = { };
+
+    "launcher-help-fast-path-smoke" = { };
 
     "service-hook-env-smoke" = {
       covers = [ "runtime.service-hooks" ];
@@ -129,6 +135,7 @@ let
     "package-output-contract" = import ./package-output-contract.nix {
       inherit
         pkgs
+        model
         packages
         apps
         ;
@@ -142,13 +149,22 @@ let
         ;
     };
 
+    "disabled-service-runtime-surface-smoke" = import ./disabled-service-runtime-surface-smoke.nix {
+      inherit pkgs;
+    };
+
     "launcher-skip-service-pruning-smoke" = import ./launcher-skip-service-pruning-smoke.nix {
+      inherit pkgs;
+    };
+
+    "launcher-help-fast-path-smoke" = import ./launcher-help-fast-path-smoke.nix {
       inherit pkgs;
     };
 
     "service-api-surface-contract" = import ./service-api-surface-contract.nix {
       inherit
         pkgs
+        model
         apps
         ;
     };
