@@ -94,6 +94,8 @@ let
 
     "launcher-surface-contract" = { };
 
+    "launcher-skip-service-pruning-smoke" = { };
+
     "service-hook-env-smoke" = {
       covers = [ "runtime.service-hooks" ];
     };
@@ -138,6 +140,10 @@ let
         model
         apps
         ;
+    };
+
+    "launcher-skip-service-pruning-smoke" = import ./launcher-skip-service-pruning-smoke.nix {
+      inherit pkgs;
     };
 
     "service-api-surface-contract" = import ./service-api-surface-contract.nix {

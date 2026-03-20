@@ -1,5 +1,5 @@
 {
-  description = "Nixfied framework (model-first architecture)";
+  description = "Nixfied framework";
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs?ref=nixos-unstable";

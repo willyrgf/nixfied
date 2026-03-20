@@ -25,6 +25,7 @@ pkgs.runCommand "framework-test-cli-contract-smoke" { } ''
 
   "$ORCH" run-task task.framework.test --list-shards > "$TMPDIR/list-shards.out" 2>&1
   require_contains "$TMPDIR/list-shards.out" "flake-check"
+  require_contains "$TMPDIR/list-shards.out" "launcher-pruning"
   require_contains "$TMPDIR/list-shards.out" "help"
   require_contains "$TMPDIR/list-shards.out" "workflow-ci"
   require_contains "$TMPDIR/list-shards.out" "isolation"

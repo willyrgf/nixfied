@@ -318,19 +318,16 @@ let
       throw "unsupported runtime service '${serviceName}'";
 
   serviceModules = builtins.listToAttrs (
-    map (
-      entry:
-      {
-        name = entry.name;
-        value = import (serviceModulePath entry.name) {
-          inherit
-            pkgs
-            slots
-            ;
-          project = serviceProject;
-        };
-      }
-    ) serviceEntries
+    map (entry: {
+      name = entry.name;
+      value = import (serviceModulePath entry.name) {
+        inherit
+          pkgs
+          slots
+          ;
+        project = serviceProject;
+      };
+    }) serviceEntries
   );
 
   serviceApis = runtimeHelpers.serviceApi.mkServiceApisFromModules serviceModules;

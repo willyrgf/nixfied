@@ -72,10 +72,9 @@ let
   );
 
   staticServiceHookEnvCmds = lib.concatStringsSep "\n" (
-    map (
-      hookName:
-      ''      env_cmd+=(${lib.escapeShellArg "${hookName}=${serviceHookEnv.${hookName}}"})''
-    ) (builtins.sort builtins.lessThan (builtins.attrNames serviceHookEnv))
+    map (hookName: "env_cmd+=(${lib.escapeShellArg "${hookName}=${serviceHookEnv.${hookName}}"})") (
+      builtins.sort builtins.lessThan (builtins.attrNames serviceHookEnv)
+    )
   );
 
   staticServiceEnvCmds = lib.concatStringsSep "\n" (

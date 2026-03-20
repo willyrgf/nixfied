@@ -42,6 +42,7 @@ in
       examples = [
         "nix run .#framework::test -- --list-shards"
         "nix run .#framework::test -- --shard flake-check"
+        "nix run .#framework::test -- --shard launcher-pruning"
         "nix run .#framework::test -- --shard isolation"
         "nix run .#framework::test -- --shard self-host"
       ];
@@ -74,6 +75,7 @@ in
           type = "string";
           values = [
             "flake-check"
+            "launcher-pruning"
             "help"
             "workflow-ci"
             "isolation"
@@ -153,6 +155,7 @@ in
         SERIAL=0
         SHARDS=(
           "flake-check"
+          "launcher-pruning"
           "help"
           "workflow-ci"
           "isolation"
@@ -173,6 +176,7 @@ in
 
         Shards:
           flake-check   Evaluate nix flake checks for the current project root.
+          launcher-pruning  Build the launcher skip-service pruning smoke check.
           help          Validate generated help output.
           workflow-ci   Run the CI workflow surface in selected mode.
           isolation     Run isolation checks.
@@ -244,6 +248,10 @@ in
           nix flake check path:. --no-build
         }
 
+        shard_launcher_pruning() {
+          nix build path:.#checks.${pkgs.system}.launcher-skip-service-pruning-smoke
+        }
+
         shard_help() {
           local help_stderr
           local rc
@@ -296,6 +304,9 @@ in
           case "$shard_name" in
             flake-check)
               run_shard "$shard_name" shard_flake_check
+              ;;
+            launcher-pruning)
+              run_shard "$shard_name" shard_launcher_pruning
               ;;
             help)
               run_shard "$shard_name" shard_help

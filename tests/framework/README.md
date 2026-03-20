@@ -26,6 +26,7 @@ This README is an overview, not the canonical full check list.
 
 Available shards:
 - `flake-check`
+- `launcher-pruning`
 - `help`
 - `workflow-ci`
 - `isolation`
@@ -36,6 +37,7 @@ Available shards:
 ```bash
 nix run .#framework::test -- --list-shards
 nix run .#framework::test -- --shard flake-check
+nix run .#framework::test -- --shard launcher-pruning
 nix run .#framework::test -- --shard self-host
 nix run .#framework::test -- --mode env --summary
 nix run .#framework::test -- --summary-json /tmp/framework-test-summary.json
@@ -53,6 +55,7 @@ agent how the current framework surface works:
 
 Deterministic checks live in `tests/framework/` and run via `nix flake check path:.`.
 The `framework::test` `flake-check` shard intentionally uses `nix flake check path:. --no-build` so the framework harness validates the check graph without recursively rebuilding the same workflow-heavy checks that other shards already exercise.
+Checks that need execution inside the framework harness should be wired into a dedicated shard, such as `launcher-pruning` for launcher-driven compile-time service exclusion.
 
 Use `tests/framework/default.nix` as the source of truth for:
 - the complete registered check list
