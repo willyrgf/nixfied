@@ -80,12 +80,12 @@ let
   mkLocalPostgresUrlExportFromPortVar =
     key: portVar: dbName:
     mkPortValueExportFromPortVar key portVar
-      "postgresql://postgres:postgres@${runtimeDefaults.hosts.loopbackIp}:''${_fixture_port_val}/${dbName}";
+      "postgresql://postgres:postgres@${runtimeDefaults.hosts.loopbackIp}:\${_fixture_port_val}/${dbName}";
 
   mkLocalHttpUrlExportFromPortVar =
     key: portVar:
     mkPortValueExportFromPortVar key portVar
-      "http://${runtimeDefaults.hosts.loopbackIp}:''${_fixture_port_val}";
+      "http://${runtimeDefaults.hosts.loopbackIp}:\${_fixture_port_val}";
 
   mkMinioExportScript =
     serviceSpec:

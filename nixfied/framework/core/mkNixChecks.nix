@@ -6,6 +6,7 @@
   name ? "nix-checks",
   flakeRef ? "path:.",
   formatterPkg ? (if pkgs ? nixfmt then pkgs.nixfmt else pkgs.nixfmt-rfc-style),
+  nilPkg ? (if pkgs ? nil then pkgs.nil else throw "pkgs.nil is required for nix-checks"),
 }:
 let
   plainShellLogging = import ./plain-shell-logging.nix;
@@ -28,17 +29,19 @@ pkgs.writeShellScriptBin name ''
   Usage: nix-checks [--mode <quick|full>] [--quick] [--full] [--flake <ref>] [--help]
 
   Modes:
-    quick  Run nixfmt --check, nix flake show, and nix run .#help.
+    quick  Run nixfmt --check, nil diagnostics, nix flake show, and nix run .#help.
     full   Run quick mode plus nix flake check.
   EOF
+    }
+
+    list_nix_files() {
+      ${pkgs.findutils}/bin/find . -type f -name '*.nix' | ${pkgs.coreutils}/bin/sort
     }
 
     run_nixfmt_check() {
       local -a nix_files
 
-      mapfile -t nix_files < <(
-        ${pkgs.findutils}/bin/find . -type f -name '*.nix' | ${pkgs.coreutils}/bin/sort
-      )
+      mapfile -t nix_files < <(list_nix_files)
 
       if [ "''${#nix_files[@]}" -eq 0 ]; then
         log_skip "no nix files found for formatting check"
@@ -48,6 +51,43 @@ pkgs.writeShellScriptBin name ''
       log_info "checking nix formatting files=''${#nix_files[@]}"
       ${formatterPkg}/bin/nixfmt --check "''${nix_files[@]}"
       log_ok "nix formatting check passed files=''${#nix_files[@]}"
+    }
+
+    run_nil_diagnostics_check() {
+      local -a nix_files
+      local -a failed_files
+      local nix_file
+
+      mapfile -t nix_files < <(list_nix_files)
+
+      if [ "''${#nix_files[@]}" -eq 0 ]; then
+        log_skip "no nix files found for nil diagnostics"
+        return 0
+      fi
+
+      log_info "checking nil diagnostics files=''${#nix_files[@]}"
+      if ${nilPkg}/bin/nil diagnostics "''${nix_files[@]}" > /dev/null 2>&1; then
+        log_ok "nil diagnostics check passed files=''${#nix_files[@]}"
+        return 0
+      fi
+
+      failed_files=()
+      for nix_file in "''${nix_files[@]}"; do
+        if ! ${nilPkg}/bin/nil diagnostics "$nix_file" > /dev/null 2>&1; then
+          failed_files+=("$nix_file")
+        fi
+      done
+
+      if [ "''${#failed_files[@]}" -eq 0 ]; then
+        log_error "nil diagnostics check failed files=unknown"
+        return 1
+      fi
+
+      log_error "nil diagnostics check failed files=''${#failed_files[@]}"
+      for nix_file in "''${failed_files[@]}"; do
+        log_error "nil diagnostics failed file=$nix_file"
+      done
+      return 1
     }
 
     run_flake_show_check() {
@@ -112,6 +152,7 @@ pkgs.writeShellScriptBin name ''
 
     log_info "running nix checks mode=$mode flake=$flake_ref"
     run_nixfmt_check
+    run_nil_diagnostics_check
     run_flake_show_check
     run_help_check
 
