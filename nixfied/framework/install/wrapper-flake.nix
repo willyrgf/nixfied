@@ -8,7 +8,7 @@ if vendorPath == null then
       description = "Nixfied thin wrapper";
 
       inputs = {
-        nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+        nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
         flake-utils.url = "github:numtide/flake-utils";
         nixfied.url = "${frameworkInput}";
       };
@@ -52,7 +52,7 @@ else
       description = "Nixfied vendored wrapper";
 
       inputs = {
-        nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+        nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
         flake-utils.url = "github:numtide/flake-utils";
       };
 

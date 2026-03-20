@@ -64,6 +64,7 @@ pkgs.runCommand "framework-template-install-upgrade-help-smoke" { } ''
         --extra-experimental-features nix-command \
         --extra-experimental-features flakes \
         "$subcmd" \
+        --offline \
         --no-write-lock-file \
         "$@"
     ) > "$out_file" 2>&1
@@ -116,8 +117,10 @@ pkgs.runCommand "framework-template-install-upgrade-help-smoke" { } ''
   require_contains "$template_repo/nixfied/VENDORED.txt" "previous vendored revision already matches current framework revision"
 
   "$GIT_BIN" -C "$template_repo" add -A
-  run_nix_checked "$TMPDIR/help.out" "$template_repo" run .#help
-  run_nix_checked "$TMPDIR/upgrade-help.out" "$template_repo" run .#framework::upgrade -- --help
+  "$GIT_BIN" -C "$template_repo" -c user.name=nixfied -c user.email=nixfied@example.invalid \
+    commit -qm "snapshot vendored wrapper"
+  run_nix_checked "$TMPDIR/help.out" "$template_repo" run path:.#help
+  run_nix_checked "$TMPDIR/upgrade-help.out" "$template_repo" run path:.#framework::upgrade -- --help
   run_nix_checked "$TMPDIR/upgrade-app-first.out" "$template_repo" run "path:${sourceRoot}#framework::upgrade" -- --target .
   run_nix_checked "$TMPDIR/upgrade-app-second.out" "$template_repo" run "path:${sourceRoot}#framework::upgrade" -- --target .
   run_nix_checked "$TMPDIR/framework-test-help.out" "${sourceRoot}" run path:.#framework::test -- --help

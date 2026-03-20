@@ -7,6 +7,7 @@
   mkApps =
     {
       model,
+      frameworkSourceFlakeRef ? null,
       serviceApps ? { },
       serviceHookEnv ? { },
     }:
@@ -16,6 +17,7 @@
         model
         projectRoot
         registry
+        frameworkSourceFlakeRef
         serviceApps
         serviceHookEnv
         ;

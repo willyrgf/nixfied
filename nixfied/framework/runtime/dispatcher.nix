@@ -3,6 +3,7 @@
   model,
   projectRoot,
   registry,
+  frameworkSourceFlakeRef ? null,
   serviceApps ? { },
   serviceHookEnv ? { },
 }:
@@ -109,6 +110,25 @@ let
 
   frameworkInstallHelpFile = mkTaskHelpFile "task.framework.install";
   frameworkUpgradeHelpFile = mkTaskHelpFile "task.framework.upgrade";
+  frameworkSourceFlakeRefValue =
+    if frameworkSourceFlakeRef != null && frameworkSourceFlakeRef != "" then
+      frameworkSourceFlakeRef
+    else
+      "github:willyrgf/nixfied/dev";
+  frameworkSourceFlakeRefShell = lib.escapeShellArg frameworkSourceFlakeRefValue;
+  proxyFrameworkCommand = taskId: helpFile: ''
+    if [ "$#" -gt 0 ]; then
+      case "$1" in
+        --help|-h)
+          cat ${helpFile}
+          exit 0
+          ;;
+      esac
+    fi
+
+    framework_source_flake_ref="''${NIXFIED_FRAMEWORK_SOURCE_FLAKE:-${frameworkSourceFlakeRefShell}}"
+    NIXFIED_CALLER_PWD="$PWD" exec ${pkgs.nix}/bin/nix run "''${framework_source_flake_ref}#run-task" --refresh -- ${lib.escapeShellArg taskId} "$@"
+  '';
 
   taskApps = builtins.listToAttrs (
     map (
@@ -143,32 +163,12 @@ let
       {
         "framework::install" = mkShellApp {
           appName = "framework::install";
-          body = ''
-            if [ "$#" -gt 0 ]; then
-              case "$1" in
-                --help|-h)
-                  cat ${frameworkInstallHelpFile}
-                  exit 0
-                  ;;
-              esac
-            fi
-            NIXFIED_CALLER_PWD="$PWD" exec ${pkgs.nix}/bin/nix run github:willyrgf/nixfied/dev#framework::install --refresh -- "$@"
-          '';
+          body = proxyFrameworkCommand "task.framework.install" frameworkInstallHelpFile;
         };
 
         "framework::upgrade" = mkShellApp {
           appName = "framework::upgrade";
-          body = ''
-            if [ "$#" -gt 0 ]; then
-              case "$1" in
-                --help|-h)
-                  cat ${frameworkUpgradeHelpFile}
-                  exit 0
-                  ;;
-              esac
-            fi
-            NIXFIED_CALLER_PWD="$PWD" exec ${pkgs.nix}/bin/nix run github:willyrgf/nixfied/dev#framework::upgrade --refresh -- "$@"
-          '';
+          body = proxyFrameworkCommand "task.framework.upgrade" frameworkUpgradeHelpFile;
         };
       };
 in

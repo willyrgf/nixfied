@@ -37,11 +37,16 @@ assert pkgs.lib.hasInfix "\"$EPHEMERAL_EXECUTOR_WRAPPER\" \"$EXECUTOR_PROGRAM\" 
 assert pkgs.lib.hasInfix "orchestratorProgram =" dispatcherSource;
 assert pkgs.lib.hasInfix "exec \${orchestratorProgram} run-task" dispatcherSource;
 assert pkgs.lib.hasInfix "exec \${orchestratorProgram} run-workflow" dispatcherSource;
-assert pkgs.lib.hasInfix "github:willyrgf/nixfied/dev#framework::install --refresh --"
-  dispatcherSource;
-assert pkgs.lib.hasInfix "github:willyrgf/nixfied/dev#framework::upgrade --refresh --"
-  dispatcherSource;
-assert pkgs.lib.hasInfix "cat \${frameworkUpgradeHelpFile}" dispatcherSource;
+assert pkgs.lib.hasInfix "framework_source_flake_ref=" dispatcherSource;
+assert pkgs.lib.hasInfix "NIXFIED_FRAMEWORK_SOURCE_FLAKE" dispatcherSource;
+assert pkgs.lib.hasInfix "frameworkSourceFlakeRefShell" dispatcherSource;
+assert pkgs.lib.hasInfix "#run-task" dispatcherSource;
+assert pkgs.lib.hasInfix "task.framework.install" dispatcherSource;
+assert pkgs.lib.hasInfix "task.framework.upgrade" dispatcherSource;
+assert pkgs.lib.hasInfix "--refresh --" dispatcherSource;
+assert pkgs.lib.hasInfix "github:willyrgf/nixfied/dev" dispatcherSource;
+assert pkgs.lib.hasInfix "frameworkUpgradeHelpFile" dispatcherSource;
+assert pkgs.lib.hasInfix "proxyFrameworkCommand" dispatcherSource;
 pkgs.runCommand "orchestrator-lifecycle-contract" { } ''
   echo "OK: orchestrator lifecycle contracts are stable" > "$out"
 ''

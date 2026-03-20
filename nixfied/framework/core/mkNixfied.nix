@@ -13,6 +13,16 @@
 let
   lib = pkgs.lib;
   mkShellApp = import ./mk-shell-app.nix { inherit pkgs; };
+  frameworkFlakeRoot = ../../../.;
+  frameworkFlakeRootAbs = builtins.toString frameworkFlakeRoot;
+  frameworkSourceFlakeRef =
+    if
+      builtins.pathExists "${frameworkFlakeRootAbs}/flake.nix"
+      && builtins.pathExists "${frameworkFlakeRootAbs}/.workspace"
+    then
+      "path:${frameworkFlakeRootAbs}"
+    else
+      null;
 
   modules = import ../../modules;
 
@@ -60,6 +70,7 @@ let
 
   baseApps = runner.mkApps {
     model = compiled.model;
+    inherit frameworkSourceFlakeRef;
     serviceApps = serviceRuntimeSurfaces.serviceApps;
     serviceHookEnv = serviceRuntimeSurfaces.serviceHookEnv;
   };
