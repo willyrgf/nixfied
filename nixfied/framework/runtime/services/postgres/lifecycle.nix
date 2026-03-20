@@ -8,6 +8,7 @@
 }:
 
 let
+  runtimeDefaults = import ../../../core/runtime-defaults.nix;
   managedServiceLifecycle = import ../../helpers/managed-service-lifecycle.nix { inherit pkgs; };
   probeCommands = import ../../helpers/probe-commands.nix { inherit pkgs; };
   probePlanRuntime = import ../../helpers/probe-plan-runtime.nix {
@@ -345,7 +346,7 @@ let
       skipMessage = "SKIP: postgres readiness check has no probe steps";
       wait = readyPlan.wait or null;
       timeoutMessage = "PostgreSQL not ready after ${
-        toString ((readyPlan.wait or { }).timeoutSeconds or 300)
+        toString ((readyPlan.wait or { }).timeoutSeconds or runtimeDefaults.probes.wait.timeoutSeconds)
       } s";
     };
   };
@@ -418,14 +419,14 @@ let
     body = ''
       log_info "Setting up database '$PGDATABASE'"
 
-      ${postgres}/bin/psql -h localhost -p "$PGPORT" -U postgres -d postgres -c \
+      ${postgres}/bin/psql -h ${runtimeDefaults.hosts.localhost} -p "$PGPORT" -U postgres -d postgres -c \
         "DO \$\$ BEGIN CREATE ROLE postgres WITH LOGIN SUPERUSER PASSWORD 'postgres'; EXCEPTION WHEN duplicate_object THEN NULL; END \$\$;" 2>/dev/null || true
 
-      ${postgres}/bin/createdb -h localhost -p "$PGPORT" -U postgres "$PGDATABASE" 2>/dev/null || true
+      ${postgres}/bin/createdb -h ${runtimeDefaults.hosts.localhost} -p "$PGPORT" -U postgres "$PGDATABASE" 2>/dev/null || true
 
       if [ -n "${pkgs.lib.concatStringsSep " " extensions}" ]; then
         for ext in ${pkgs.lib.concatStringsSep " " extensions}; do
-          ${postgres}/bin/psql -h localhost -p "$PGPORT" -U postgres -d "$PGDATABASE" \
+          ${postgres}/bin/psql -h ${runtimeDefaults.hosts.localhost} -p "$PGPORT" -U postgres -d "$PGDATABASE" \
             -c "CREATE EXTENSION IF NOT EXISTS $ext;" 2>/dev/null || true
         done
       fi

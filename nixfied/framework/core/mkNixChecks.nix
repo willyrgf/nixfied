@@ -9,6 +9,7 @@
 }:
 let
   plainShellLogging = import ./plain-shell-logging.nix;
+  shellCommon = import ./shell-common.nix { inherit pkgs; };
 in
 pkgs.writeShellScriptBin name ''
     set -euo pipefail
@@ -20,6 +21,7 @@ pkgs.writeShellScriptBin name ''
       includeWarn = false;
       errorToStderr = true;
     }}
+    ${shellCommon}
 
     usage() {
       cat <<'EOF'
@@ -75,12 +77,7 @@ pkgs.writeShellScriptBin name ''
     while [ "$#" -gt 0 ]; do
       case "$1" in
         --mode)
-          if [ "$#" -lt 2 ]; then
-            log_error "--mode requires a value"
-            usage >&2
-            exit 2
-          fi
-          mode="$2"
+          mode="$(nixfied_require_next_arg_with_usage usage --mode "a value" "$@")"
           shift 2
           ;;
         --quick)
@@ -92,12 +89,7 @@ pkgs.writeShellScriptBin name ''
           shift
           ;;
         --flake)
-          if [ "$#" -lt 2 ]; then
-            log_error "--flake requires a value"
-            usage >&2
-            exit 2
-          fi
-          flake_ref="$2"
+          flake_ref="$(nixfied_require_next_arg_with_usage usage --flake "a value" "$@")"
           shift 2
           ;;
         --help)
@@ -105,9 +97,7 @@ pkgs.writeShellScriptBin name ''
           exit 0
           ;;
         *)
-          log_error "unknown argument: $1"
-          usage >&2
-          exit 2
+          nixfied_unknown_arg_with_usage usage "$1"
           ;;
       esac
     done
@@ -116,9 +106,7 @@ pkgs.writeShellScriptBin name ''
       quick|full)
         ;;
       *)
-        log_error "unsupported mode: $mode"
-        usage >&2
-        exit 2
+        nixfied_exit_usage_with_usage usage "unsupported mode: $mode"
         ;;
     esac
 

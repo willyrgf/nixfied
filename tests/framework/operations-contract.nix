@@ -33,6 +33,7 @@ assert pkgs.lib.hasInfix
   "testIsolationRuntime = import ../framework/runtime/helpers/test-isolation-runtime.nix"
   source;
 assert pkgs.lib.hasInfix "isolationScript = testIsolationRuntime.mkIsolationScript" source;
+assert pkgs.lib.hasInfix "shellCommon = import ../framework/core/shell-common.nix" source;
 assert pkgs.lib.hasInfix "mkTcpProbeBody =" probeRuntimeSource;
 assert pkgs.lib.hasInfix "mkHttpProbeBody =" probeRuntimeSource;
 assert pkgs.lib.hasInfix "mkPostgresPgIsReadyBody =" probeRuntimeSource;
@@ -70,6 +71,9 @@ assert pkgs.lib.hasInfix "test-isolation logs_root=" isolationRuntimeSource;
 assert pkgs.lib.hasInfix "test-isolation forcing maxParallel=1 reason=ci" isolationRuntimeSource;
 assert pkgs.lib.hasInfix "host_nix_user_config_file=" isolationRuntimeSource;
 assert pkgs.lib.hasInfix "export NIX_USER_CONF_FILES=\"$host_nix_user_config_file\""
+  isolationRuntimeSource;
+assert pkgs.lib.hasInfix "nixfied_require_next_arg --slot" isolationRuntimeSource;
+assert pkgs.lib.hasInfix "nixfied_exit_precondition \"test-isolation matrix has no slots\""
   isolationRuntimeSource;
 assert pkgs.lib.hasInfix "\"$executor_bin\" run-task \"$validate_task_id\"" isolationRuntimeSource;
 assert pkgs.lib.hasInfix "\"$executor_bin\" run-task \"$run_task_id\"" isolationRuntimeSource;

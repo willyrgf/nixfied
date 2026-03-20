@@ -7,6 +7,7 @@
 }:
 let
   modelFile = pkgs.writeText "nixfied-model.json" (builtins.toJSON model);
+  shellCommon = import ../core/shell-common.nix { inherit pkgs; };
   registryShell = registry.events.mkShellLib { };
   workflowModesShell = import ./workflow-modes.nix {
     inherit
@@ -26,6 +27,7 @@ let
 in
 pkgs.writeShellScriptBin "nixfied-executor" ''
   set -euo pipefail
+  ${shellCommon}
   export NIXFIED_EXECUTOR_BIN="$0"
   export NIXFIED_EXECUTOR_SELF="$0"
 
@@ -298,7 +300,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
     if ! task_descriptor_exists "$task_id"; then
       echo "ERROR: unknown task '$task_id'"
-      return 2
+      return "$NIXFIED_EXIT_USAGE"
     fi
 
     max_attempts="$(task_max_attempts "$task_id")"
@@ -403,7 +405,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
   run_task() {
     if [ "$#" -lt 1 ]; then
       echo "ERROR: usage: run-task <task-id> [-- ...]"
-      return 2
+      return "$NIXFIED_EXIT_USAGE"
     fi
 
     local task_id="$1"
@@ -426,12 +428,12 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
     if ! task_descriptor_exists "$task_id"; then
       echo "ERROR: unknown task '$task_id'"
-      return 2
+      return "$NIXFIED_EXIT_USAGE"
     fi
     if task_help_requested "''${filtered_args[@]}"; then
       if ! task_print_help "$task_id"; then
         echo "ERROR: unknown task '$task_id'"
-        return 2
+        return "$NIXFIED_EXIT_USAGE"
       fi
       return 0
     fi
@@ -439,11 +441,11 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
     if [ "$runner_type" != "workflowRef" ] && [ -n "$MACHINE_SUMMARY_FILE" ]; then
       echo "ERROR: --summary-file is only supported for workflow runs"
-      return 2
+      return "$NIXFIED_EXIT_USAGE"
     fi
     if [ "$runner_type" != "workflowRef" ] && [ "$MACHINE_JSON" = "1" ]; then
       echo "ERROR: --json is only supported for workflow runs"
-      return 2
+      return "$NIXFIED_EXIT_USAGE"
     fi
 
     if [ -n "''${NIXFIED_ORCHESTRATOR_RUN_ID:-}" ]; then
@@ -490,7 +492,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
       if ! task_descriptor_exists "$current_task"; then
         echo "ERROR: unknown task '$current_task'"
-        return 2
+        return "$NIXFIED_EXIT_USAGE"
       fi
 
       current_task_skip_service="$(task_first_skipped_required_service "$current_task" || true)"
@@ -612,7 +614,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         fi
       else
         echo "ERROR: $override_name must be an integer >= 1 (got '$override_value')" >&2
-        return 2
+        return "$NIXFIED_EXIT_USAGE"
       fi
     fi
 
@@ -955,7 +957,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         kill -TERM "$pid" 2>/dev/null || true
       done
 
-      sleep 5
+      sleep "$NIXFIED_RETRY_INTERVAL_DEFAULT"
       for pid in "''${!PID_UNIT[@]}"; do
         if kill -0 "$pid" 2>/dev/null; then
           kill -KILL "$pid" 2>/dev/null || true
@@ -1729,7 +1731,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
   run_workflow() {
     if [ "$#" -lt 1 ]; then
       echo "ERROR: usage: run-workflow <workflow-id> [-- ...]"
-      return 2
+      return "$NIXFIED_EXIT_USAGE"
     fi
 
     local workflow_id="$1"
@@ -1764,7 +1766,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         --mode)
           if [ "$#" -lt 1 ]; then
             echo "ERROR: --mode requires a value"
-            return 2
+            return "$NIXFIED_EXIT_USAGE"
           fi
           mode_override="$1"
           shift
@@ -1784,12 +1786,12 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
             mode_override="$shorthand_mode"
           else
             echo "ERROR: unknown option '$arg'"
-            return 2
+            return "$NIXFIED_EXIT_USAGE"
           fi
           ;;
         -*)
           echo "ERROR: unknown option '$arg'"
-          return 2
+          return "$NIXFIED_EXIT_USAGE"
           ;;
         *)
           passthrough_args+=("$arg")
@@ -1801,7 +1803,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
     if [ "$print_summary" -eq 1 ] && [ "$MACHINE_JSON" = "1" ]; then
       echo "ERROR: --json and --summary cannot be combined"
-      return 2
+      return "$NIXFIED_EXIT_USAGE"
     fi
 
     local args_payload
@@ -1828,7 +1830,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
     if ! workflow_id_exists "$workflow_id"; then
       echo "ERROR: unknown workflow '$workflow_id'"
-      return 2
+      return "$NIXFIED_EXIT_USAGE"
     fi
     NIXFIED_WORKFLOW_LOG_LEVEL_DEFAULT="$(workflow_logging_level_default "$workflow_id")"
     NIXFIED_WORKFLOW_OUTPUT_MODE_DEFAULT="$(workflow_logging_output_default "$workflow_id")"
@@ -1863,7 +1865,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       local parallel_cap_error=""
       if parallel_cap_error="$(parallel_worker_cap_override_error)"; then
         printf '%s\n' "$parallel_cap_error"
-        return 2
+        return "$NIXFIED_EXIT_USAGE"
       fi
     fi
 
@@ -1970,7 +1972,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
   main() {
     if [ "$#" -lt 1 ]; then
       echo "ERROR: usage: nixfied-executor <run-task|run-workflow> ..."
-      exit 2
+      exit "$NIXFIED_EXIT_USAGE"
     fi
 
     local subcommand="$1"
@@ -1985,7 +1987,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         ;;
       *)
         echo "ERROR: unknown subcommand '$subcommand'"
-        exit 2
+        exit "$NIXFIED_EXIT_USAGE"
         ;;
     esac
   }

@@ -9,6 +9,7 @@
 let
   lib = pkgs.lib;
   mkShellApp = import ../core/mk-shell-app.nix { inherit pkgs; };
+  shellCommon = import ../core/shell-common.nix { inherit pkgs; };
   workspaceMarker = import ../workspace-marker.nix;
   workspaceMarkerPresent = workspaceMarker.isPresent projectRoot;
 
@@ -175,9 +176,9 @@ in
   "run-task" = mkShellApp {
     appName = "run-task";
     body = ''
+      ${shellCommon}
       if [ "$#" -lt 1 ]; then
-        echo "ERROR: usage: run-task <task-id> [-- ...]"
-        exit 2
+        nixfied_exit_usage "usage: run-task <task-id> [-- ...]"
       fi
       NIXFIED_CALLER_PWD="$PWD" exec ${orchestratorProgram} run-task "$@"
     '';
@@ -186,9 +187,9 @@ in
   "run-workflow" = mkShellApp {
     appName = "run-workflow";
     body = ''
+      ${shellCommon}
       if [ "$#" -lt 1 ]; then
-        echo "ERROR: usage: run-workflow <workflow-id> [-- ...]"
-        exit 2
+        nixfied_exit_usage "usage: run-workflow <workflow-id> [-- ...]"
       fi
       NIXFIED_CALLER_PWD="$PWD" exec ${orchestratorProgram} run-workflow "$@"
     '';
@@ -197,9 +198,9 @@ in
   "run-workflow-parallel" = mkShellApp {
     appName = "run-workflow-parallel";
     body = ''
+      ${shellCommon}
       if [ "$#" -lt 1 ]; then
-        echo "ERROR: usage: run-workflow-parallel <workflow-id> [-- ...]"
-        exit 2
+        nixfied_exit_usage "usage: run-workflow-parallel <workflow-id> [-- ...]"
       fi
       NIXFIED_WORKFLOW_PARALLEL=1 NIXFIED_CALLER_PWD="$PWD" exec ${orchestratorProgram} run-workflow "$@"
     '';
@@ -215,9 +216,9 @@ in
   "stop-run" = mkShellApp {
     appName = "stop-run";
     body = ''
+      ${shellCommon}
       if [ "$#" -ne 1 ]; then
-        echo "ERROR: usage: stop-run <run-id>"
-        exit 2
+        nixfied_exit_usage "usage: stop-run <run-id>"
       fi
       NIXFIED_CALLER_PWD="$PWD" exec ${orchestratorProgram} stop-run "$@"
     '';
@@ -226,9 +227,9 @@ in
   "stop-all-runs" = mkShellApp {
     appName = "stop-all-runs";
     body = ''
+      ${shellCommon}
       if [ "$#" -ne 0 ]; then
-        echo "ERROR: usage: stop-all-runs"
-        exit 2
+        nixfied_exit_usage "usage: stop-all-runs"
       fi
       NIXFIED_CALLER_PWD="$PWD" exec ${orchestratorProgram} stop-all-runs
     '';

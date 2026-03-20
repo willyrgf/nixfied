@@ -7,6 +7,7 @@
 }:
 let
   conf = import ./conf.nix { inherit pkgs; };
+  exitCodes = import ../framework/core/exit-codes.nix;
   project = conf.project;
   workspaceId = builtins.substring 0 12 (builtins.hashString "sha256" (toString projectRoot));
   workspaceRuntimeRoot = "/tmp/nixfied-runtime/${project.id}/${workspaceId}";
@@ -283,11 +284,11 @@ let
           effects = [ "writes-state" ];
           timeoutSec = 0;
         };
-        errors.codes = {
-          generic = 1;
-          usage = 2;
-          precondition = 3;
-        };
+        errors.codes = builtins.removeAttrs exitCodes [
+          "canceled"
+          "unavailable"
+          "timeout"
+        ];
       };
 
       runtime = {

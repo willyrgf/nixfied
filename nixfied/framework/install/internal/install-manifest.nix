@@ -3,6 +3,7 @@
 
 let
   lib = pkgs.lib;
+  exitCodes = import ../../core/exit-codes.nix;
 
   assertUnique =
     label: values:
@@ -99,13 +100,7 @@ let
           outputs = {
             mode = "text";
           };
-          failureCodes = {
-            generic = 1;
-            usage = 2;
-            precondition = 3;
-            unavailable = 4;
-            timeout = 5;
-          };
+          failureCodes = builtins.removeAttrs exitCodes [ "canceled" ];
           idempotent = false;
         };
       };

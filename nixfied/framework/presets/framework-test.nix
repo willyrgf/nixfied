@@ -7,6 +7,7 @@
 }:
 let
   plainShellLogging = import ../core/plain-shell-logging.nix;
+  shellCommon = import ../core/shell-common.nix { inherit pkgs; };
   frameworkTestMaxParallelShardsRaw = conf.frameworkTest.maxParallelShards or "auto";
   frameworkTestMaxParallelShards =
     if builtins.isInt frameworkTestMaxParallelShardsRaw then
@@ -169,6 +170,7 @@ in
         START_EPOCH="$(date +%s)"
 
         ${plainShellLogging { }}
+        ${shellCommon}
 
         usage() {
           cat <<'EOF'
@@ -270,7 +272,7 @@ in
         shard_workflow_ci() {
           if [ -z "''${NIXFIED_EXECUTOR_SELF:-}" ]; then
             log_error "NIXFIED_EXECUTOR_SELF is not set"
-            return 3
+            return "$NIXFIED_EXIT_PRECONDITION"
           fi
           NIXFIED_CALLER_PWD="$PWD" "$NIXFIED_EXECUTOR_SELF" run-task task.ci --mode "$MODE" --summary
         }
@@ -281,7 +283,7 @@ in
 
           if [ -z "''${NIXFIED_EXECUTOR_SELF:-}" ]; then
             log_error "NIXFIED_EXECUTOR_SELF is not set"
-            return 3
+            return "$NIXFIED_EXIT_PRECONDITION"
           fi
 
           if [ "$SERIAL" -eq 1 ] || [ "''${CI:-}" = "1" ] || [ "''${CI:-}" = "true" ]; then
@@ -294,7 +296,7 @@ in
         shard_self_host() {
           if [ -z "''${NIXFIED_EXECUTOR_SELF:-}" ]; then
             log_error "NIXFIED_EXECUTOR_SELF is not set"
-            return 3
+            return "$NIXFIED_EXIT_PRECONDITION"
           fi
           NIXFIED_CALLER_PWD="$PWD" "$NIXFIED_EXECUTOR_SELF" run-workflow workflow.test.framework.selfhost --summary
         }
@@ -322,7 +324,7 @@ in
               ;;
             *)
               log_error "unknown shard '$shard_name'"
-              return 2
+              return "$NIXFIED_EXIT_USAGE"
               ;;
           esac
         }
@@ -415,7 +417,7 @@ in
               kill -TERM "$active_pid" 2>/dev/null || true
             done
 
-            sleep 5
+            sleep "$NIXFIED_RETRY_INTERVAL_DEFAULT"
             for active_pid in "''${!PID_TO_SHARD[@]}"; do
               if kill -0 "$active_pid" 2>/dev/null; then
                 kill -KILL "$active_pid" 2>/dev/null || true
@@ -483,19 +485,11 @@ in
         while [ "$#" -gt 0 ]; do
           case "$1" in
             --profile)
-              if [ "$#" -lt 2 ]; then
-                log_error "--profile requires a value"
-                exit 2
-              fi
-              PROFILE="$2"
+              PROFILE="$(nixfied_require_next_arg --profile "a value" "$@")"
               shift 2
               ;;
             --mode)
-              if [ "$#" -lt 2 ]; then
-                log_error "--mode requires a value"
-                exit 2
-              fi
-              MODE="$2"
+              MODE="$(nixfied_require_next_arg --mode "a value" "$@")"
               shift 2
               ;;
             --basic|--app|--env|--full)
@@ -507,27 +501,15 @@ in
               shift
               ;;
             --summary-json)
-              if [ "$#" -lt 2 ]; then
-                log_error "--summary-json requires a value"
-                exit 2
-              fi
-              SUMMARY_JSON="$2"
+              SUMMARY_JSON="$(nixfied_require_next_arg --summary-json "a value" "$@")"
               shift 2
               ;;
             --shard)
-              if [ "$#" -lt 2 ]; then
-                log_error "--shard requires a value"
-                exit 2
-              fi
-              SHARD="$2"
+              SHARD="$(nixfied_require_next_arg --shard "a value" "$@")"
               shift 2
               ;;
             --max-parallel-shards)
-              if [ "$#" -lt 2 ]; then
-                log_error "--max-parallel-shards requires a value"
-                exit 2
-              fi
-              MAX_PARALLEL_SHARDS="$2"
+              MAX_PARALLEL_SHARDS="$(nixfied_require_next_arg --max-parallel-shards "a value" "$@")"
               shift 2
               ;;
             --serial)
@@ -547,28 +529,23 @@ in
               break
               ;;
             *)
-              log_error "unknown option '$1'"
-              usage >&2
-              exit 2
+              nixfied_unknown_arg_with_usage usage "$1"
               ;;
           esac
         done
 
-        if [ "$#" -gt 0 ]; then
-          log_error "unexpected positional arguments: $*"
-          exit 2
-        fi
+        nixfied_unexpected_positional_args_with_usage usage "$@"
 
         case "$PROFILE" in
           ci)
             ;;
           full)
             log_error "profile 'full' is no longer supported; use --profile ci."
-            exit 2
+            exit "$NIXFIED_EXIT_USAGE"
             ;;
           *)
             log_error "unknown profile '$PROFILE' (expected: ci)"
-            exit 2
+            exit "$NIXFIED_EXIT_USAGE"
             ;;
         esac
 
@@ -577,7 +554,7 @@ in
             ;;
           *)
             log_error "unknown mode '$MODE' (expected: basic|app|env|full)"
-            exit 2
+            exit "$NIXFIED_EXIT_USAGE"
             ;;
         esac
 
@@ -587,11 +564,11 @@ in
           *)
             if ! [[ "$MAX_PARALLEL_SHARDS" =~ ^[0-9]+$ ]]; then
               log_error "invalid --max-parallel-shards '$MAX_PARALLEL_SHARDS' (expected: auto|positive-integer)"
-              exit 2
+              exit "$NIXFIED_EXIT_USAGE"
             fi
             if [ "$MAX_PARALLEL_SHARDS" -lt 1 ]; then
               log_error "invalid --max-parallel-shards '$MAX_PARALLEL_SHARDS' (expected: auto|positive-integer)"
-              exit 2
+              exit "$NIXFIED_EXIT_USAGE"
             fi
             ;;
         esac
@@ -604,7 +581,7 @@ in
         if [ -n "$SHARD" ] && ! shard_exists "$SHARD"; then
           log_error "unknown shard '$SHARD'"
           log_info "valid shards: $(print_shards | tr '\n' ' ')"
-          exit 2
+          exit "$NIXFIED_EXIT_USAGE"
         fi
 
         cleanup() {

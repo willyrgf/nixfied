@@ -45,7 +45,7 @@ in
         if [ "$(${pkgs.coreutils}/bin/date +%s)" -ge "$deadline" ]; then
           fail "timed out waiting for $label"
         fi
-        sleep 0.1
+        sleep "$NIXFIED_POLL_INTERVAL_FAST"
       done
     }
 

@@ -18,6 +18,7 @@ assert pkgs.lib.hasInfix "mkReadyOutcomeBody" helperSource;
 assert pkgs.lib.hasInfix "mkSimpleProbeBody" helperSource;
 assert pkgs.lib.hasInfix "mkPlanProbeBody" helperSource;
 assert pkgs.lib.hasInfix "mkStartupReadinessBody" helperSource;
+assert pkgs.lib.hasInfix "import ../../core/runtime-defaults.nix" helperSource;
 assert pkgs.lib.hasInfix "print_log_tail \"$LOG_FILE\"" helperSource;
 assert pkgs.lib.hasInfix "SERVICE_PID_FILE" helperSource;
 assert pkgs.lib.hasInfix "SERVICE_LOG_FILE" helperSource;

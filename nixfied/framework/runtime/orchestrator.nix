@@ -7,6 +7,7 @@
 }:
 let
   lib = pkgs.lib;
+  shellCommon = import ../core/shell-common.nix { inherit pkgs; };
   registryShell = registry.events.mkShellLib { };
   workflowModesShell = import ./workflow-modes.nix {
     inherit
@@ -64,9 +65,9 @@ let
     name = "orchestrator-executor";
     installDeps = false;
     script = ''
+      ${shellCommon}
       if [ "$#" -lt 1 ]; then
-        echo "ERROR: missing command for ephemeral wrapper"
-        exit 2
+        nixfied_exit_usage "missing command for ephemeral wrapper"
       fi
       export NIXFIED_CALLER_PWD="$(pwd -P)"
       exec "$@"
@@ -76,6 +77,7 @@ let
 in
 pkgs.writeShellScriptBin "nixfied-orchestrator" ''
   set -euo pipefail
+  ${shellCommon}
   export NIXFIED_ORCHESTRATOR_BIN="$0"
   export NIXFIED_ORCHESTRATOR_SELF="$0"
 
@@ -217,7 +219,7 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
       if ! is_pid_running "$pid"; then
         return 0
       fi
-      sleep 1
+      sleep "$NIXFIED_POLL_INTERVAL_DEFAULT"
       waited=$((waited + 1))
     done
 
@@ -588,7 +590,7 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
         rm -f "$control_file" "$signal_file"
         return 0
       fi
-      sleep 0.1
+      sleep "$NIXFIED_POLL_INTERVAL_FAST"
     done
 
     return 0
@@ -763,7 +765,7 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
     run_file="$(run_file_for "$run_id")"
     if [ ! -f "$run_file" ]; then
       echo "ERROR: unknown run '$run_id'"
-      return 2
+      return "$NIXFIED_EXIT_USAGE"
     fi
 
     refresh_one_run "$run_id" || true
@@ -781,7 +783,7 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
     run_file="$(run_file_for "$run_id")"
     if [ ! -f "$run_file" ]; then
       echo "ERROR: unknown run '$run_id'"
-      return 2
+      return "$NIXFIED_EXIT_USAGE"
     fi
 
     refresh_one_run "$run_id" || true
@@ -827,7 +829,7 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
   run_task() {
     if [ "$#" -lt 1 ]; then
       echo "ERROR: usage: run-task <task-id> [-- ...]"
-      return 2
+      return "$NIXFIED_EXIT_USAGE"
     fi
 
     local task_id="$1"
@@ -846,7 +848,7 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
 
     if ! task_descriptor_exists "$task_id"; then
       echo "ERROR: unknown task '$task_id'"
-      return 2
+      return "$NIXFIED_EXIT_USAGE"
     fi
 
     workflow_ref="$(resolve_task_workflow_ref "$task_id")"
@@ -855,7 +857,7 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
     if task_help_requested "''${FORWARD_ARGS[@]}"; then
       if ! task_print_help "$task_id"; then
         echo "ERROR: unknown task '$task_id'"
-        return 2
+        return "$NIXFIED_EXIT_USAGE"
       fi
       return 0
     fi
@@ -899,7 +901,7 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
   run_workflow() {
     if [ "$#" -lt 1 ]; then
       echo "ERROR: usage: run-workflow <workflow-id> [-- ...]"
-      return 2
+      return "$NIXFIED_EXIT_USAGE"
     fi
 
     local workflow_id="$1"
@@ -917,7 +919,7 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
 
     if ! workflow_id_exists "$workflow_id"; then
       echo "ERROR: unknown workflow '$workflow_id'"
-      return 2
+      return "$NIXFIED_EXIT_USAGE"
     fi
 
     split_process_mode "$@"
@@ -953,7 +955,7 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
   main() {
     if [ "$#" -lt 1 ]; then
       echo "ERROR: usage: nixfied-orchestrator <run-task|run-workflow|runs|stop-run|stop-all-runs> ..."
-      exit 2
+      exit "$NIXFIED_EXIT_USAGE"
     fi
 
     local subcommand="$1"
@@ -976,33 +978,33 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
           show_run "$1"
         else
           echo "ERROR: usage: runs [run-id]"
-          exit 2
+          exit "$NIXFIED_EXIT_USAGE"
         fi
         ;;
       stop-run)
         if [ "$#" -ne 1 ]; then
           echo "ERROR: usage: stop-run <run-id>"
-          exit 2
+          exit "$NIXFIED_EXIT_USAGE"
         fi
         stop_single_run "$1"
         ;;
       stop-all-runs)
         if [ "$#" -ne 0 ]; then
           echo "ERROR: usage: stop-all-runs"
-          exit 2
+          exit "$NIXFIED_EXIT_USAGE"
         fi
         stop_all_runs
         ;;
       janitor-run)
         if [ "$#" -ne 8 ]; then
           echo "ERROR: usage: janitor-run <parent-pid> <run-id> <pid> <pgid> <workflow-id> <task-id> <control-file> <signal-file>"
-          exit 2
+          exit "$NIXFIED_EXIT_USAGE"
         fi
         janitor_run_loop "$@"
         ;;
       *)
         echo "ERROR: unknown subcommand '$subcommand'"
-        exit 2
+        exit "$NIXFIED_EXIT_USAGE"
         ;;
     esac
   }

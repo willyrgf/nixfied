@@ -1,6 +1,7 @@
 { pkgs }:
 let
   plainShellLogging = import ../../../nixfied/framework/core/plain-shell-logging.nix;
+  shellCommon = import ../../../nixfied/framework/core/shell-common.nix { inherit pkgs; };
 
   mkShellPrelude =
     {
@@ -10,9 +11,11 @@ let
       redirect = if stderr then " >&2" else "";
     in
     ''
+      ${shellCommon}
+
       fail() {
         echo "$1"${redirect}
-        exit 1
+        exit "$NIXFIED_EXIT_GENERIC"
       }
 
       require_file() {

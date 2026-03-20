@@ -1,5 +1,7 @@
 { lib }:
 let
+  runtimeDefaults = import ./runtime-defaults.nix;
+
   packagePath =
     {
       discardContext ? false,
@@ -80,13 +82,7 @@ let
         value = sources.${selectedSource} or { };
       };
 
-  defaultWait = {
-    enabled = false;
-    timeoutSeconds = 300;
-    intervalSeconds = 1;
-    timeoutEnvVar = null;
-    intervalEnvVar = null;
-  };
+  defaultWait = runtimeDefaults.probes.wait;
 
   normalizeWait =
     wait:
@@ -181,7 +177,7 @@ let
           field = "endpoint";
           value = step.endpoint or null;
         };
-        host = step.host or "127.0.0.1";
+        host = step.host or runtimeDefaults.hosts.loopbackIp;
         failureSuffix = "";
       }
     else if kind == "postgres-query" then
@@ -192,7 +188,7 @@ let
           field = "endpoint";
           value = step.endpoint or null;
         };
-        host = step.host or "127.0.0.1";
+        host = step.host or runtimeDefaults.hosts.loopbackIp;
         database = requireValue {
           inherit serviceName mode kind;
           field = "database";
@@ -324,7 +320,7 @@ let
               phaseLabel = "health";
               successLabel = "healthy";
               failureLabel = "unhealthy";
-              host = "127.0.0.1";
+              host = runtimeDefaults.hosts.loopbackIp;
               failureSuffix = "";
             }
           ];
@@ -340,7 +336,7 @@ let
               phaseLabel = "readiness";
               successLabel = "ready";
               failureLabel = "not ready";
-              host = "127.0.0.1";
+              host = runtimeDefaults.hosts.loopbackIp;
               failureSuffix = " (pg_isready failed)";
             }
             {
@@ -350,7 +346,7 @@ let
               phaseLabel = "readiness";
               successLabel = "ready";
               failureLabel = "not ready";
-              host = "127.0.0.1";
+              host = runtimeDefaults.hosts.loopbackIp;
               database = cfgWithDefaults.database;
               query = "select 1;";
               failureSuffix = " (query failed)";
@@ -829,10 +825,8 @@ let
               method = "eth_chainId";
             }
           ];
-          wait = {
+          wait = defaultWait // {
             enabled = true;
-            timeoutSeconds = 300;
-            intervalSeconds = 1;
             timeoutEnvVar = "HELIOS_READY_TIMEOUT_SECS";
             intervalEnvVar = "HELIOS_READY_INTERVAL_SECS";
           };
