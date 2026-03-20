@@ -1,12 +1,13 @@
 {
   pkgs,
   model,
-  services ? model.services,
+  services,
+  serviceCatalog,
 }:
 let
   taskIds = builtins.attrNames model.tasks;
   workflowIds = builtins.attrNames model.workflows;
-  serviceIds = builtins.attrNames model.services;
+  serviceIds = builtins.attrNames serviceCatalog;
   featureIds = builtins.attrNames (model.features or { });
   expectedRuntimeFeatureIds = [
     "runtime.ephemeral.source-materialization"
@@ -72,7 +73,7 @@ let
   servicesHaveStableIds = builtins.all (
     serviceId:
     let
-      service = model.services.${serviceId};
+      service = serviceCatalog.${serviceId};
     in
     service.id == serviceId && builtins.substring 0 8 service.id == "service."
   ) serviceIds;

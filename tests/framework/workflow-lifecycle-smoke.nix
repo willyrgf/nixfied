@@ -1,6 +1,7 @@
 {
   pkgs,
   model,
+  services,
   registry,
 }:
 let
@@ -178,6 +179,7 @@ let
       registry
       ;
     model = lifecycleModel;
+    inherit services;
     projectRoot = ../..;
   };
 in

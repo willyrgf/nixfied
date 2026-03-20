@@ -1,6 +1,7 @@
 {
   pkgs,
   model,
+  services,
   registry,
   projectRoot ? ../../..,
 }:
@@ -10,6 +11,7 @@ let
     inherit
       pkgs
       model
+      services
       registry
       projectRoot
       ;
@@ -19,6 +21,7 @@ let
     inherit
       pkgs
       model
+      services
       registry
       projectRoot
       ;

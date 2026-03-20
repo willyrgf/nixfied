@@ -65,6 +65,7 @@ let
       registry
       ;
     model = compiled.model;
+    services = compiled.services;
     projectRoot = ../..;
   };
 

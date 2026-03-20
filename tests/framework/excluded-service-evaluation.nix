@@ -45,7 +45,7 @@ let
       projectModules = [ throwingProjectModule ];
       extraModules = [ ];
       localOverrides = [ ];
-    }).model.services
+    }).model.serviceCatalog
   );
 
   compiledThrowingWithExclusion = builtins.tryEval (
@@ -61,7 +61,7 @@ let
           }
         )
       ];
-    }).model.services
+    }).model.serviceCatalog
   );
 
   excludedTaskId = "task.test.excluded.helios";
@@ -207,13 +207,14 @@ let
       registry
       ;
     model = compiledExcluded.model;
+    services = compiledExcluded.services;
     projectRoot = ../..;
   };
 in
 assert compiledThrowingWithoutExclusion.success == false;
 assert compiledThrowingWithExclusion.success;
 assert !(builtins.hasAttr "service.helios" compiledThrowingWithExclusion.value);
-assert !(builtins.hasAttr "service.helios" compiledExcluded.model.services);
+assert !(builtins.hasAttr "service.helios" compiledExcluded.model.serviceCatalog);
 assert !(builtins.hasAttr "service.helios" compiledExcluded.model.features);
 assert !(builtins.hasAttr excludedTaskId compiledExcluded.model.tasks);
 assert !(builtins.hasAttr hardTaskId compiledExcluded.model.tasks);

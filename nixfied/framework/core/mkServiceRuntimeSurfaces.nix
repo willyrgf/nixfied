@@ -1,7 +1,7 @@
 {
   pkgs,
   model,
-  services ? model.services,
+  services,
   selectedServices ? null,
 }:
 let

@@ -67,8 +67,8 @@ let
   skipEnvVar = "SKIP_${lib.toUpper skipService}";
 
   probeModel = compiled.model // {
-    services = compiled.model.services // {
-      "service.postgres" = compiled.model.services."service.postgres" // {
+    serviceCatalog = compiled.model.serviceCatalog // {
+      "service.postgres" = compiled.model.serviceCatalog."service.postgres" // {
         enable = true;
       };
     };
@@ -200,6 +200,7 @@ let
       registry
       ;
     model = probeModel;
+    services = compiled.services;
     projectRoot = ../..;
   };
 in

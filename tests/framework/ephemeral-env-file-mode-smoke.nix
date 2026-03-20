@@ -1,6 +1,7 @@
 {
   pkgs,
   model,
+  services,
   registry,
 }:
 let
@@ -178,6 +179,7 @@ let
       registry
       ;
     model = disabledModel;
+    inherit services;
     projectRoot = ../..;
   };
 
@@ -187,6 +189,7 @@ let
       registry
       ;
     model = originalRootModel;
+    inherit services;
     projectRoot = ../..;
   };
 in

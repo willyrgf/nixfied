@@ -2,7 +2,7 @@
   pkgs,
   projectRoot,
   model,
-  services ? model.services,
+  services,
   serviceHookEnv ? { },
 }:
 let

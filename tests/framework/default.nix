@@ -1,8 +1,8 @@
 {
   pkgs,
   model,
-  services ? model.services,
-  serviceCatalog ? model.serviceCatalog or model.services,
+  services,
+  serviceCatalog,
   stateHash,
   canonical,
   registry,
@@ -19,7 +19,7 @@ let
     )
   );
   workflowFeatureIds = builtins.sort builtins.lessThan (builtins.attrNames model.workflows);
-  serviceFeatureIds = builtins.sort builtins.lessThan (builtins.attrNames model.services);
+  serviceFeatureIds = builtins.sort builtins.lessThan (builtins.attrNames serviceCatalog);
 
   defaultCheckKind = name: if lib.hasInfix "smoke" name then "smoke" else "contract";
 
@@ -131,15 +131,18 @@ let
     };
 
     "introspection-schema" = pkgs.runCommand "framework-introspection-schema" { } ''
+      ${pkgs.jq}/bin/jq -e '.required | index("serviceCatalog")' ${../../nixfied/schemas/model-export.json} > /dev/null
+      ${pkgs.jq}/bin/jq -e '.properties.serviceCatalog.type == "object"' ${../../nixfied/schemas/model-export.json} > /dev/null
+      ${pkgs.jq}/bin/jq -e '(.required | index("services")) == null' ${../../nixfied/schemas/model-export.json} > /dev/null
       ${pkgs.jq}/bin/jq -e '.required | index("features")' ${../../nixfied/schemas/model-export.json} > /dev/null
       ${pkgs.jq}/bin/jq -e '.properties.features.type == "object"' ${../../nixfied/schemas/model-export.json} > /dev/null
-      echo "OK: model export schema includes features" > "$out"
+      echo "OK: model export schema includes serviceCatalog and features" > "$out"
     '';
 
     "package-output-contract" = import ./package-output-contract.nix {
       inherit
         pkgs
-        model
+        serviceCatalog
         packages
         apps
         ;
@@ -168,7 +171,7 @@ let
     "service-api-surface-contract" = import ./service-api-surface-contract.nix {
       inherit
         pkgs
-        model
+        serviceCatalog
         apps
         ;
     };
@@ -214,6 +217,7 @@ let
         pkgs
         model
         services
+        serviceCatalog
         ;
     };
 
@@ -233,6 +237,7 @@ let
       inherit
         pkgs
         model
+        services
         registry
         ;
     };
@@ -294,6 +299,7 @@ let
       inherit
         pkgs
         model
+        services
         registry
         ;
     };
@@ -398,6 +404,7 @@ let
       inherit
         pkgs
         model
+        services
         registry
         ;
     };
@@ -406,6 +413,7 @@ let
       inherit
         pkgs
         model
+        services
         registry
         ;
     };
@@ -414,6 +422,7 @@ let
       inherit
         pkgs
         model
+        services
         registry
         ;
     };
@@ -422,6 +431,7 @@ let
       inherit
         pkgs
         model
+        services
         registry
         ;
     };
@@ -430,6 +440,7 @@ let
       inherit
         pkgs
         model
+        services
         registry
         ;
     };
@@ -438,6 +449,7 @@ let
       inherit
         pkgs
         model
+        services
         registry
         ;
     };
@@ -466,6 +478,7 @@ let
       inherit
         pkgs
         model
+        services
         registry
         ;
     };
@@ -474,6 +487,7 @@ let
       inherit
         pkgs
         model
+        services
         registry
         ;
     };
@@ -489,6 +503,7 @@ let
       inherit
         pkgs
         model
+        services
         registry
         ;
     };
@@ -497,6 +512,7 @@ let
       inherit
         pkgs
         model
+        services
         registry
         ;
     };
@@ -513,6 +529,7 @@ let
       inherit
         pkgs
         model
+        services
         registry
         ;
     };
@@ -523,6 +540,7 @@ let
           inherit
             pkgs
             model
+            services
             registry
             ;
         };
@@ -531,6 +549,7 @@ let
       inherit
         pkgs
         model
+        services
         registry
         ;
     };
@@ -571,6 +590,7 @@ let
       inherit
         pkgs
         model
+        services
         registry
         ;
     };
@@ -579,6 +599,7 @@ let
       inherit
         pkgs
         model
+        services
         registry
         ;
     };
@@ -587,6 +608,7 @@ let
       inherit
         pkgs
         model
+        services
         registry
         ;
     };
@@ -595,6 +617,7 @@ let
       inherit
         pkgs
         model
+        services
         registry
         ;
     };
@@ -610,6 +633,7 @@ let
       inherit
         pkgs
         model
+        services
         registry
         ;
     };
@@ -622,6 +646,7 @@ let
       inherit
         pkgs
         model
+        services
         registry
         ;
     };
@@ -630,6 +655,7 @@ let
       inherit
         pkgs
         model
+        services
         registry
         ;
     };
@@ -638,6 +664,7 @@ let
       inherit
         pkgs
         model
+        services
         registry
         ;
     };
@@ -646,6 +673,7 @@ let
       inherit
         pkgs
         model
+        services
         registry
         ;
     };
@@ -654,6 +682,7 @@ let
       inherit
         pkgs
         model
+        services
         registry
         ;
     };
@@ -662,6 +691,7 @@ let
       inherit
         pkgs
         model
+        services
         registry
         ;
     };
@@ -670,6 +700,7 @@ let
       inherit
         pkgs
         model
+        services
         registry
         ;
     };
@@ -678,6 +709,7 @@ let
       inherit
         pkgs
         model
+        services
         registry
         ;
     };
@@ -686,6 +718,7 @@ let
       inherit
         pkgs
         model
+        services
         registry
         ;
     };
@@ -701,6 +734,7 @@ let
       inherit
         pkgs
         model
+        services
         registry
         ;
     };
@@ -713,6 +747,7 @@ let
       inherit
         pkgs
         model
+        services
         registry
         ;
     };

@@ -1,6 +1,7 @@
 {
   pkgs,
   model,
+  services,
   registry,
 }:
 let
@@ -123,6 +124,7 @@ let
       registry
       ;
     model = minFreeModel;
+    inherit services;
     projectRoot = ../..;
   };
 
@@ -132,6 +134,7 @@ let
       registry
       ;
     model = maxCopyModel;
+    inherit services;
     projectRoot = ../..;
   };
 in

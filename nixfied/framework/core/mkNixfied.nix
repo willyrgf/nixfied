@@ -78,7 +78,7 @@ let
     serviceHookEnv = serviceRuntimeSurfaces.serviceHookEnv;
   };
 
-  serviceCatalog = compiled.model.serviceCatalog or compiled.model.services;
+  serviceCatalog = compiled.model.serviceCatalog;
 
   taskIds = builtins.sort builtins.lessThan (builtins.attrNames compiled.model.tasks);
   serviceIds = builtins.sort builtins.lessThan (builtins.attrNames serviceCatalog);

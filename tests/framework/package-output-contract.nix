@@ -1,6 +1,6 @@
 {
   pkgs,
-  model,
+  serviceCatalog,
   packages,
   apps,
 }:
@@ -10,13 +10,13 @@ let
       (
         serviceId:
         let
-          service = model.services.${serviceId};
+          service = serviceCatalog.${serviceId};
         in
         service.name or serviceId
       )
       (
-        builtins.filter (serviceId: model.services.${serviceId}.enable or false) (
-          builtins.attrNames (model.services or { })
+        builtins.filter (serviceId: serviceCatalog.${serviceId}.enable or false) (
+          builtins.attrNames serviceCatalog
         )
       );
   hasServiceApps = builtins.any (appName: pkgs.lib.hasPrefix "svc::" appName) (

@@ -1,6 +1,7 @@
 {
   pkgs,
   model,
+  services,
   registry,
 }:
 let
@@ -42,6 +43,7 @@ let
       registry
       ;
     model = probeModel;
+    inherit services;
     projectRoot = ../..;
   };
 in

@@ -7,7 +7,7 @@
   mkApps =
     {
       model,
-      services ? model.services,
+      services,
       runtimeHash ? model.identity.evalHash,
       frameworkSourceFlakeRef ? null,
       serviceApps ? { },

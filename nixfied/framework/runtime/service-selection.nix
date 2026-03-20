@@ -4,7 +4,7 @@ let
 
   tasks = model.tasks or { };
   workflows = model.workflows or { };
-  services = model.services or { };
+  serviceCatalog = model.serviceCatalog or { };
 
   taskIds = builtins.sort builtins.lessThan (builtins.attrNames tasks);
   workflowIds = builtins.sort builtins.lessThan (builtins.attrNames workflows);
@@ -31,13 +31,19 @@ let
   );
 
   enabledServices = uniqueSorted (
-    builtins.map (
-      serviceId:
-      let
-        service = services.${serviceId};
-      in
-      service.name or serviceId
-    ) (builtins.filter (serviceId: services.${serviceId}.enable or false) (builtins.attrNames services))
+    builtins.map
+      (
+        serviceId:
+        let
+          service = serviceCatalog.${serviceId};
+        in
+        service.name or serviceId
+      )
+      (
+        builtins.filter (serviceId: serviceCatalog.${serviceId}.enable or false) (
+          builtins.attrNames serviceCatalog
+        )
+      )
   );
 
   taskDirectServicesById = builtins.mapAttrs (

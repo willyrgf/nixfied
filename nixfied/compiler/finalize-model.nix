@@ -36,7 +36,7 @@ let
   model = canonical.canonicalize {
     schema = {
       kind = "nixfied-model";
-      version = 1;
+      version = 2;
     };
 
     identity = {
@@ -50,7 +50,6 @@ let
 
     runtime = runtime;
 
-    services = serviceCatalog;
     serviceCatalog = serviceCatalog;
     tasks = tasks;
     workflows = workflows;

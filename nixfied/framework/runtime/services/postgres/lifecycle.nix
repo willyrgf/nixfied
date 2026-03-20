@@ -107,9 +107,12 @@ let
     export PGDATA="''${PGDATA:-${pgdataExpr}}"
     # Keep the unix socket path short. In CI (and on some systems with long TMPDIR paths),
     # putting sockets under $PGDATA can exceed the 107-byte sockaddr_un.sun_path limit and
-    # prevent PostgreSQL from starting.
+    # prevent PostgreSQL from starting. Scope the directory by uid as well so separate Nix
+    # sandbox users do not collide on an existing /tmp/nixfied-pg-* directory they cannot
+    # write.
     SOCKET_HASH=$(printf '%s' "''${RUN_DIR:-$PGDATA}" | ${pkgs.coreutils}/bin/cksum | ${pkgs.coreutils}/bin/cut -d ' ' -f1)
-    export PGSOCKET_DIR="''${PGSOCKET_DIR:-/tmp/nixfied-pg-$SOCKET_HASH}"
+    SOCKET_UID="$(${pkgs.coreutils}/bin/id -u)"
+    export PGSOCKET_DIR="''${PGSOCKET_DIR:-/tmp/nixfied-pg-$SOCKET_UID-$SOCKET_HASH}"
     export PGDATABASE="''${PGDATABASE:-${defaultDb}}"
 
     if [ -z "''${PGPORT:-}" ] || [ -z "''${PGDATA:-}" ]; then
@@ -278,10 +281,31 @@ let
       if [ -n "''${PGDATA:-}" ] && [ -f "$PGDATA/postmaster.pid" ]; then
         RUN_PID=$(head -1 "$PGDATA/postmaster.pid" 2>/dev/null || true)
         log_stop "PostgreSQL at $PGDATA"
-        ${postgres}/bin/pg_ctl -D "$PGDATA" stop -m fast 2>/dev/null || true
-        emit_service_event service_stopped stopped --pid "$RUN_PID" --log-path "$PGDATA/postgres.log"
+        if ! ${postgres}/bin/pg_ctl -D "$PGDATA" stop -m fast -w -t 60 >/dev/null 2>&1; then
+          log_error "PostgreSQL failed to stop at $PGDATA"
+          exit 1
+        fi
+
+        for i in $(seq 1 60); do
+          if ${
+            probeCommands.pgIsReadyCmd {
+              inherit postgres;
+              portExpr = "$PGPORT";
+            }
+          }
+          then
+            sleep 0.5
+          else
+            emit_service_event service_stopped stopped --pid "$RUN_PID" --log-path "$PGDATA/postgres.log"
+            exit 0
+          fi
+        done
+
+        log_error "PostgreSQL still responds on port $PGPORT after stop"
+        exit 1
       else
         emit_service_event service_stopped stopped
+        exit 0
       fi
     '';
   };

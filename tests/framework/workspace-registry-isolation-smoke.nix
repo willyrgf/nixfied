@@ -55,6 +55,7 @@ let
       registry
       ;
     model = probeModelA;
+    services = compiledA.services;
     projectRoot = sourceRoot;
   };
 in

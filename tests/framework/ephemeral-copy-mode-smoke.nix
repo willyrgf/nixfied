@@ -1,6 +1,7 @@
 {
   pkgs,
   model,
+  services,
   registry,
 }:
 let
@@ -186,6 +187,7 @@ let
       registry
       ;
     model = trackedModel;
+    inherit services;
     projectRoot = ../..;
   };
 
@@ -195,6 +197,7 @@ let
       registry
       ;
     model = worktreeModel;
+    inherit services;
     projectRoot = ../..;
   };
 in

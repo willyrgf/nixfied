@@ -50,13 +50,18 @@ let
   excludedServices = builtins.sort builtins.lessThan (
     lib.unique (builtins.filter (name: name != "") (lib.splitString "," excludedServicesCsv))
   );
-  selectedServices =
+  selectedServicesRaw =
     if selectedServicesCsv == "__ALL__" then
       null
     else
       builtins.sort builtins.lessThan (
         lib.unique (builtins.filter (name: name != "") (lib.splitString "," selectedServicesCsv))
       );
+  selectedServices =
+    if selectedServicesRaw == null then
+      null
+    else
+      builtins.filter (serviceName: !(builtins.elem serviceName excludedServices)) selectedServicesRaw;
 
   frameworkLib = import (frameworkRootPath + "/framework/core/default.nix") {
     inherit

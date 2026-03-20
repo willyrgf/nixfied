@@ -1,6 +1,6 @@
 {
   pkgs,
-  model,
+  serviceCatalog,
   apps,
 }:
 let
@@ -29,10 +29,10 @@ let
       expectedEnabled = builtins.any (
         serviceId:
         let
-          service = model.services.${serviceId};
+          service = serviceCatalog.${serviceId};
         in
         (service.name or serviceId) == serviceName && (service.enable or false)
-      ) (builtins.attrNames (model.services or { }));
+      ) (builtins.attrNames serviceCatalog);
     in
     assert (builtins.hasAttr appName apps) == expectedEnabled;
     true;
