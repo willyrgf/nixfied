@@ -25,11 +25,19 @@ let
   workflows = model.workflows or { };
   tasks = model.tasks or { };
 
-  workflowIds = uniqueSorted (builtins.attrNames workflows);
+  workflowIds =
+    if resolvedSelectionIndex ? workflowIds then
+      resolvedSelectionIndex.workflowIds
+    else
+      uniqueSorted (builtins.attrNames workflows);
 
   workflowModesByFamily = resolvedSelectionIndex.workflowModesByFamily or { };
 
-  workflowFamilies = uniqueSorted (builtins.attrNames workflowModesByFamily);
+  workflowFamilies =
+    if resolvedSelectionIndex ? workflowFamilies then
+      resolvedSelectionIndex.workflowFamilies
+    else
+      uniqueSorted (builtins.attrNames workflowModesByFamily);
 
   workflowDescriptorById = builtins.listToAttrs (
     map (
@@ -157,7 +165,11 @@ let
       timezone = taskRuntime.timezone or "UTC";
     };
 
-  taskIds = uniqueSorted (builtins.attrNames tasks);
+  taskIds =
+    if resolvedSelectionIndex ? taskIds then
+      resolvedSelectionIndex.taskIds
+    else
+      uniqueSorted (builtins.attrNames tasks);
 
   taskDescriptorById = builtins.listToAttrs (
     map (

@@ -10,7 +10,7 @@ let
 
   model = {
     tasks = {
-      "test.selection.dep" = {
+      "${depTaskId}" = {
         id = depTaskId;
         summary = "dep";
         requirements.services = [ "postgres" ];
@@ -23,7 +23,7 @@ let
         '';
       };
 
-      "test.selection.soft" = {
+      "${softTaskId}" = {
         id = softTaskId;
         summary = "soft";
         requirements.services = [ "nginx" ];
@@ -36,7 +36,7 @@ let
         '';
       };
 
-      "test.selection.root" = {
+      "${rootTaskId}" = {
         id = rootTaskId;
         summary = "root";
         requirements.services = [ "minio" ];
@@ -53,7 +53,7 @@ let
         '';
       };
 
-      "test.selection.phase" = {
+      "${phaseTaskId}" = {
         id = phaseTaskId;
         summary = "phase";
         requirements.services = [ "helios" ];
@@ -67,7 +67,7 @@ let
         '';
       };
 
-      "test.selection.workflow-ref" = {
+      "${workflowTaskId}" = {
         id = workflowTaskId;
         summary = "workflow ref";
         requirements.services = [ "reth" ];
@@ -83,8 +83,9 @@ let
     };
 
     workflows = {
-      "selection-basic" = {
+      "${workflowBasicId}" = {
         id = workflowBasicId;
+        units.dep.taskId = depTaskId;
         preRun.tasks = [ phaseTaskId ];
         postRun = {
           tasks = [ ];
@@ -92,7 +93,7 @@ let
         };
       };
 
-      "selection-full" = {
+      "${workflowFullId}" = {
         id = workflowFullId;
         units.soft.taskId = softTaskId;
         preRun.tasks = [ phaseTaskId ];
@@ -104,89 +105,17 @@ let
     };
   };
 
-  selectionIndex = {
-    taskDirectServicesById = {
-      "${depTaskId}" = [ "postgres" ];
-      "${softTaskId}" = [ "nginx" ];
-      "${rootTaskId}" = [ "minio" ];
-      "${phaseTaskId}" = [ "helios" ];
-      "${workflowTaskId}" = [ "reth" ];
-    };
+  selectionIndex = import ../../nixfied/compiler/compile-selection-index.nix {
+    inherit (pkgs) lib;
+  } {
+    tasks = model.tasks;
+    workflows = model.workflows;
+    serviceCatalog = { };
+  };
 
-    taskClosureServicesById = {
-      "${depTaskId}" = [ "postgres" ];
-      "${softTaskId}" = [ "nginx" ];
-      "${rootTaskId}" = [
-        "minio"
-        "postgres"
-        "nginx"
-      ];
-      "${phaseTaskId}" = [
-        "helios"
-        "minio"
-        "postgres"
-        "nginx"
-      ];
-      "${workflowTaskId}" = [
-        "reth"
-        "postgres"
-        "helios"
-        "minio"
-        "nginx"
-      ];
-    };
-
-    taskBaseClosureServicesById = {
-      "${depTaskId}" = [ "postgres" ];
-      "${softTaskId}" = [ "nginx" ];
-      "${rootTaskId}" = [
-        "minio"
-        "postgres"
-        "nginx"
-      ];
-      "${phaseTaskId}" = [
-        "helios"
-        "minio"
-        "postgres"
-        "nginx"
-      ];
-      "${workflowTaskId}" = [ "reth" ];
-    };
-
-    workflowClosureServicesById = {
-      "${workflowBasicId}" = [
-        "nginx"
-        "helios"
-        "minio"
-        "postgres"
-      ];
-      "${workflowFullId}" = [
-        "nginx"
-        "helios"
-        "minio"
-        "postgres"
-      ];
-    };
-
-    workflowUnitClosureServicesById = {
-      "${workflowBasicId}" = [ "postgres" ];
-      "${workflowFullId}" = [ "nginx" ];
-    };
-
-    workflowReferenceClosureServicesById = {
-      "${workflowBasicId}" = [
-        "postgres"
-        "helios"
-        "minio"
-        "nginx"
-      ];
-      "${workflowFullId}" = [
-        "postgres"
-        "helios"
-        "minio"
-        "nginx"
-      ];
-    };
+  runtimeSelectionIndex = import ../../nixfied/framework/runtime/service-selection.nix {
+    inherit (pkgs) lib;
+    inherit model;
   };
 
   workflowModesShell = import ../../nixfied/framework/runtime/workflow-modes.nix {
@@ -199,6 +128,28 @@ let
 in
 assert pkgs.lib.hasInfix "task_closure_selected_services() {" workflowModesShell;
 assert pkgs.lib.hasInfix "workflow_unit_closure_selected_services() {" workflowModesShell;
+assert runtimeSelectionIndex.taskIds == selectionIndex.taskIds;
+assert runtimeSelectionIndex.workflowIds == selectionIndex.workflowIds;
+assert runtimeSelectionIndex.workflowFamilies == selectionIndex.workflowFamilies;
+assert runtimeSelectionIndex.taskDirectServicesById == selectionIndex.taskDirectServicesById;
+assert runtimeSelectionIndex.taskBaseClosureServicesById == selectionIndex.taskBaseClosureServicesById;
+assert runtimeSelectionIndex.taskClosureServicesById == selectionIndex.taskClosureServicesById;
+assert runtimeSelectionIndex.taskRunnerWorkflowIdById == selectionIndex.taskRunnerWorkflowIdById;
+assert runtimeSelectionIndex.workflowModesByFamily == selectionIndex.workflowModesByFamily;
+assert runtimeSelectionIndex.workflowUnitClosureServicesById == selectionIndex.workflowUnitClosureServicesById;
+assert runtimeSelectionIndex.workflowClosureServicesById == selectionIndex.workflowClosureServicesById;
+assert runtimeSelectionIndex.workflowReferenceClosureServicesById == selectionIndex.workflowReferenceClosureServicesById;
+assert selectionIndex.taskIds == [
+  depTaskId
+  phaseTaskId
+  rootTaskId
+  softTaskId
+  workflowTaskId
+];
+assert selectionIndex.workflowIds == [
+  workflowBasicId
+  workflowFullId
+];
 assert selectionIndex.taskDirectServicesById.${depTaskId} == [ "postgres" ];
 assert
   selectionIndex.taskClosureServicesById.${rootTaskId} == [

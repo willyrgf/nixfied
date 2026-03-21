@@ -105,39 +105,21 @@ let
   localOverrideSpecsJson = builtins.toJSON (map encodeModuleSpec localOverrides);
 
   workspaceMarkerPresent = workspaceMarker.isPresent projectRoot;
-  serviceNames = compiledCore.selectionIndex.enabledServices or [ ];
-  viewAppNames = builtins.sort builtins.lessThan (
-    builtins.attrNames (compiledCore.model.views.apps or { })
-  );
-  selectorDispatcherAppNames = [
-    "run-task"
-    "run-workflow"
-    "run-workflow-parallel"
-  ];
-  nonSelectorAppNames = [
-    "framework::install"
-    "framework::upgrade"
-  ];
-  runtimeControlAppNames = [
-    "runs"
-    "stop-run"
-    "stop-all-runs"
-  ];
-  runtimeProxyAppNames = if workspaceMarkerPresent then [ ] else nonSelectorAppNames;
-  viewWrappedAppNames = builtins.sort builtins.lessThan (
-    builtins.filter (appName: !(builtins.elem appName nonSelectorAppNames)) (
-      lib.unique (viewAppNames ++ selectorDispatcherAppNames)
-    )
-  );
-  serviceWrappedAppNames = builtins.sort builtins.lessThan (
-    compiledCore.serviceSurfaceCatalog.appNames or [ ]
-  );
-  runtimeAppNames = builtins.sort builtins.lessThan (
-    lib.unique (
-      runtimeProxyAppNames
-      ++ builtins.filter (appName: builtins.elem appName nonSelectorAppNames) viewAppNames
-    )
-  );
+  launcherMetadata = import ./mkLauncherMetadata.nix {
+    inherit
+      lib
+      workspaceMarkerPresent
+      ;
+    model = compiledCore.model;
+    selectionIndex = compiledCore.selectionIndex;
+    serviceSurfaceCatalog = compiledCore.serviceSurfaceCatalog;
+  };
+  serviceNames = launcherMetadata.enabledServices;
+  nonSelectorAppNames = launcherMetadata.nonSelectorAppNames;
+  runtimeControlAppNames = launcherMetadata.runtimeControlAppNames;
+  viewWrappedAppNames = launcherMetadata.viewWrappedAppNames;
+  serviceWrappedAppNames = launcherMetadata.serviceWrappedAppNames;
+  runtimeAppNames = launcherMetadata.runtimeAppNames;
   internalBaseTargetName =
     appName: "base${builtins.substring 0 10 (builtins.hashString "sha256" appName)}";
 
@@ -151,7 +133,7 @@ let
     map (serviceName: "    ${lib.escapeShellArg serviceName}") serviceNames
   );
 
-  taskIds = builtins.sort builtins.lessThan (builtins.attrNames (compiledCore.model.tasks or { }));
+  taskIds = launcherMetadata.taskIds;
 
   normalizeTaskArgSpec =
     spec:
@@ -330,37 +312,12 @@ let
     '') taskIds
   );
 
-  workflowIds = builtins.sort builtins.lessThan (
-    builtins.attrNames (compiledCore.model.workflows or { })
-  );
-  workflowModesByFamily = compiledCore.selectionIndex.workflowModesByFamily or { };
-
-  workflowFamilies = builtins.sort builtins.lessThan (builtins.attrNames workflowModesByFamily);
-
-  taskBaseClosureCsvById = builtins.listToAttrs (
-    map (taskId: {
-      name = taskId;
-      value = compiledCore.selectionIndex.servicesToCsv (
-        compiledCore.selectionIndex.taskBaseClosureServicesById.${taskId} or [ ]
-      );
-    }) taskIds
-  );
-
-  taskRunnerWorkflowIdById = builtins.listToAttrs (
-    map (taskId: {
-      name = taskId;
-      value = compiledCore.selectionIndex.taskRunnerWorkflowIdById.${taskId} or "";
-    }) taskIds
-  );
-
-  workflowClosureCsvById = builtins.listToAttrs (
-    map (workflowId: {
-      name = workflowId;
-      value = compiledCore.selectionIndex.servicesToCsv (
-        compiledCore.selectionIndex.workflowClosureServicesById.${workflowId} or [ ]
-      );
-    }) workflowIds
-  );
+  workflowIds = launcherMetadata.workflowIds;
+  workflowModesByFamily = launcherMetadata.workflowModesByFamily;
+  workflowFamilies = launcherMetadata.workflowFamilies;
+  taskBaseClosureCsvById = launcherMetadata.taskBaseClosureCsvById;
+  taskRunnerWorkflowIdById = launcherMetadata.taskRunnerWorkflowIdById;
+  workflowClosureCsvById = launcherMetadata.workflowClosureCsvById;
 
   mkSelectorAwareLauncher =
     appName:

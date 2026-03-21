@@ -214,18 +214,38 @@ let
   );
 
   servicesToCsv = serviceNames: builtins.concatStringsSep "," (uniqueSorted serviceNames);
+
+  taskBaseClosureServicesCsvById = builtins.listToAttrs (
+    map (taskId: {
+      name = taskId;
+      value = servicesToCsv (taskBaseClosureServicesById.${taskId} or [ ]);
+    }) taskIds
+  );
+
+  workflowClosureServicesCsvById = builtins.listToAttrs (
+    map (workflowId: {
+      name = workflowId;
+      value = servicesToCsv (workflowClosureServicesById.${workflowId} or [ ]);
+    }) workflowIds
+  );
 in
 {
   inherit
     enabledServices
+    taskIds
+    workflowIds
+    workflowFamilies
+    workflowIdsByFamily
     servicesToCsv
     taskDirectServicesById
     taskBaseClosureServicesById
+    taskBaseClosureServicesCsvById
     taskClosureServicesById
     taskRunnerWorkflowIdById
     workflowModesByFamily
     workflowUnitClosureServicesById
     workflowClosureServicesById
+    workflowClosureServicesCsvById
     workflowReferenceClosureServicesById
     ;
 }
