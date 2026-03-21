@@ -7,6 +7,7 @@ let
   lib = pkgs.lib;
   nonSelectorAppNames = [
     "framework::install"
+    "framework::test"
     "framework::upgrade"
   ];
   wrappedAppNames = builtins.sort builtins.lessThan (
@@ -71,6 +72,11 @@ pkgs.runCommand "launcher-surface-contract" { } ''
 
   if ${pkgs.gnugrep}/bin/grep -Fq 'run-selected-app.nix' ${apps."framework::install".program}; then
     echo "framework::install should not use the selector launcher"
+    exit 1
+  fi
+
+  if ${pkgs.gnugrep}/bin/grep -Fq 'run-selected-app.nix' ${apps."framework::test".program}; then
+    echo "framework::test should not use the selector launcher"
     exit 1
   fi
 

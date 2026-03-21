@@ -969,6 +969,29 @@ let
       '';
     };
   };
+  frameworkWorkspaceApps =
+    if workspaceMarkerPresent && builtins.hasAttr "framework::test" materializedExecution.baseApps then
+      {
+        "framework::test" = mkShellApp {
+          appName = "framework::test";
+          binPrefix = "nixfied-framework";
+          body = ''
+            if [ "$#" -gt 0 ]; then
+              case "$1" in
+                --help|-h)
+                  cat ${lib.escapeShellArg (builtins.toString taskHelpFiles."task.framework.test")}
+                  exit 0
+                  ;;
+              esac
+            fi
+
+            cd ${lib.escapeShellArg projectRootAbs}
+            exec ${lib.escapeShellArg materializedExecution.baseApps."framework::test".program} "$@"
+          '';
+        };
+      }
+    else
+      { };
   directApps =
     materializedExecution.baseApps
     // coreSurfaces.apps
@@ -1028,11 +1051,12 @@ in
       // selectorLauncherApps
       // runtimeLauncherApps
       // frameworkUtilityApps
+      // frameworkWorkspaceApps
       // {
         default = coreSurfaces.apps.help;
       }
     else
-      directApps // frameworkUtilityApps;
+      directApps // frameworkUtilityApps // frameworkWorkspaceApps;
   legacyPackages = {
     _nixfied = {
       baseApps = internalBasePackages;

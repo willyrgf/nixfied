@@ -100,6 +100,8 @@ let
 
     "framework-install-no-caller-compile-smoke" = { };
 
+    "framework-test-no-caller-compile-smoke" = { };
+
     "framework-upgrade-no-caller-compile-smoke" = { };
 
     "disabled-service-runtime-surface-smoke" = {
@@ -172,6 +174,10 @@ let
     };
 
     "framework-install-no-caller-compile-smoke" = import ./framework-install-no-caller-compile-smoke.nix {
+      inherit pkgs;
+    };
+
+    "framework-test-no-caller-compile-smoke" = import ./framework-test-no-caller-compile-smoke.nix {
       inherit pkgs;
     };
 
