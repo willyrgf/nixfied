@@ -33,7 +33,8 @@ pkgs.runCommand "summary-json-smoke" { } ''
 
   run_id_file="$TMPDIR/ci.run-id"
   summary_file="$TMPDIR/ci.summary.json"
-  "$ORCH" run-workflow workflow.ci.basic --run-id-file "$run_id_file" --summary-file "$summary_file" --summary > "$TMPDIR/ci.out" 2>&1
+  BENIGN_AMBIENT_VAR=alpha \
+    "$ORCH" run-workflow workflow.ci.basic --run-id-file "$run_id_file" --summary-file "$summary_file" --summary > "$TMPDIR/ci.out" 2>&1
 
   run_id="$(${pkgs.coreutils}/bin/tr -d '\n' < "$run_id_file")"
   if [ -z "$run_id" ]; then
@@ -84,12 +85,19 @@ pkgs.runCommand "summary-json-smoke" { } ''
 
   json_run_id_file="$TMPDIR/ci-json.run-id"
   json_summary_file="$TMPDIR/ci-json.summary.json"
-  "$ORCH" run-workflow workflow.ci.basic --run-id-file "$json_run_id_file" --summary-file "$json_summary_file" --json > "$TMPDIR/ci.json.out" 2>&1
+  BENIGN_AMBIENT_VAR=beta \
+    "$ORCH" run-workflow workflow.ci.basic --run-id-file "$json_run_id_file" --summary-file "$json_summary_file" --json > "$TMPDIR/ci.json.out" 2>&1
 
   json_run_id="$(${pkgs.coreutils}/bin/tr -d '\n' < "$json_run_id_file")"
   if [ -z "$json_run_id" ]; then
     echo "missing json run id"
     cat "$TMPDIR/ci.json.out"
+    exit 1
+  fi
+  if [ "$run_id" != "$json_run_id" ]; then
+    echo "run ids differ for equivalent workflow invocations"
+    echo "run_id=$run_id"
+    echo "json_run_id=$json_run_id"
     exit 1
   fi
   json_payload="$(${pkgs.gawk}/bin/awk 'NF { line = $0 } END { print line }' "$TMPDIR/ci.json.out")"

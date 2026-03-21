@@ -44,6 +44,9 @@ The hidden setup/teardown tasks should:
 ## Ready And Health
 
 - `task.ops.ready` and `task.ops.health` are reusable today.
+- When they run as workflow `preRun` / `postRun` phases, the executor scopes
+  them to the workflow unit closure service set instead of all enabled
+  services.
 - They consume the same canonical per-service probe plans as direct service
   `health` / `ready`.
 - Probe overrides live under `nixfied.services.<name>.probes.{health,ready}`.
@@ -53,5 +56,6 @@ The hidden setup/teardown tasks should:
   is enabled for the direct service check.
 - If a workflow needs polling readiness semantics, wrap the direct service
   `ready` operation in a task instead of relying on `task.ops.ready`.
-- If a workflow needs different service selectors in different phases, wrap
-  those invocations in separate tasks.
+- If a workflow needs different service selectors in different phases, encode
+  those requirements on the relevant workflow units so the scoped probe phases
+  inherit the right service set automatically.

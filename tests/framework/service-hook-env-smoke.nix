@@ -1,5 +1,6 @@
 { pkgs }:
 let
+  lib = pkgs.lib;
   frameworkLib = import ../../nixfied/framework/core {
     inherit
       pkgs
@@ -12,6 +13,40 @@ let
   postgresHookTaskId = "task.test.service-hooks.postgres";
   bothHooksTaskId = "task.test.service-hooks.both";
   depClosureHookTaskId = "task.test.service-hooks.dep-closure";
+
+  noServiceEnvKeys = builtins.concatStringsSep "\n" [
+    "NIXFIED_SERVICE_ROOT"
+  ];
+  postgresEnvKeys = builtins.concatStringsSep "\n" [
+    "NIXFIED_SERVICE_POSTGRES_DATA_DIR"
+    "NIXFIED_SERVICE_POSTGRES_LOG_DIR"
+    "NIXFIED_SERVICE_POSTGRES_STATE_DIR"
+    "NIXFIED_SERVICE_ROOT"
+  ];
+  bothEnvKeys = builtins.concatStringsSep "\n" [
+    "NIXFIED_SERVICE_NGINX_DATA_DIR"
+    "NIXFIED_SERVICE_NGINX_LOG_DIR"
+    "NIXFIED_SERVICE_NGINX_STATE_DIR"
+    "NIXFIED_SERVICE_POSTGRES_DATA_DIR"
+    "NIXFIED_SERVICE_POSTGRES_LOG_DIR"
+    "NIXFIED_SERVICE_POSTGRES_STATE_DIR"
+    "NIXFIED_SERVICE_ROOT"
+  ];
+
+  serviceEnvContractPrelude = expectedKeys: ''
+    actual_keys="$(
+      env \
+        | ${pkgs.gnugrep}/bin/grep '^NIXFIED_SERVICE_' \
+        | ${pkgs.coreutils}/bin/cut -d= -f1 \
+        | ${pkgs.coreutils}/bin/sort
+    )"
+    expected_keys=${lib.escapeShellArg expectedKeys}
+    if [ "$actual_keys" != "$expected_keys" ]; then
+      echo "ERROR: unexpected NIXFIED_SERVICE_* key set"
+      printf 'expected:\n%s\nactual:\n%s\n' "$expected_keys" "$actual_keys"
+      exit 1
+    fi
+  '';
 
   serviceHookModule =
     { lib, ... }:
@@ -27,6 +62,7 @@ let
         contract.input.args.allowUnknown = true;
         runner.command = ''
           set -euo pipefail
+          ${serviceEnvContractPrelude noServiceEnvKeys}
 
           if [ -n "''${SVC_POSTGRES_STATUS:-}" ]; then
             echo "ERROR: postgres service hook should be absent without explicit selection"
@@ -54,6 +90,7 @@ let
         contract.input.args.allowUnknown = true;
         runner.command = ''
           set -euo pipefail
+          ${serviceEnvContractPrelude postgresEnvKeys}
 
           if [ -z "''${SVC_POSTGRES_STATUS:-}" ]; then
             echo "ERROR: missing postgres service hook"
@@ -88,6 +125,7 @@ let
         contract.input.args.allowUnknown = true;
         runner.command = ''
           set -euo pipefail
+          ${serviceEnvContractPrelude bothEnvKeys}
 
           if [ -z "''${SVC_POSTGRES_STATUS:-}" ]; then
             echo "ERROR: missing postgres service hook"
@@ -123,6 +161,7 @@ let
         contract.input.args.allowUnknown = true;
         runner.command = ''
           set -euo pipefail
+          ${serviceEnvContractPrelude postgresEnvKeys}
 
           if [ -z "''${SVC_POSTGRES_STATUS:-}" ]; then
             echo "ERROR: missing postgres service hook from dependency closure"

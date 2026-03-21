@@ -4,6 +4,9 @@ let
   runtimeSource = builtins.readFile ../../nixfied/framework/runtime/executor-runtime.nix;
 in
 assert pkgs.lib.hasInfix "compute_run_id() {" source;
+assert pkgs.lib.hasInfix "canonical_run_id_envelope() {" source;
+assert pkgs.lib.hasInfix "jq -cnS" source;
+assert pkgs.lib.hasInfix "argv: $ARGS.positional" source;
 assert pkgs.lib.hasInfix "ERROR: usage: run-task <task-id> [-- ...]" source;
 assert pkgs.lib.hasInfix "ERROR: usage: run-workflow <workflow-id> [-- ...]" source;
 assert pkgs.lib.hasInfix "ERROR: unknown workflow '$workflow_id'" source;
@@ -22,6 +25,7 @@ assert pkgs.lib.hasInfix "workflow_parallel_enabled \"$workflow_id\"" source;
 assert pkgs.lib.hasInfix "workflow_unit_records() {" source;
 assert pkgs.lib.hasInfix "workflow_plan_records \"$workflow_id\"" source;
 assert pkgs.lib.hasInfix "workflow_phase_tasks \"$workflow_id\" \"$phase_key\"" source;
+assert pkgs.lib.hasInfix "workflow_unit_closure_selected_services \"$workflow_id\"" source;
 assert pkgs.lib.hasInfix "retrying attempt=" source;
 assert pkgs.lib.hasInfix "run_task_with_deps() {" source;
 assert pkgs.lib.hasInfix "run_workflow_phase_tasks() {" source;
@@ -70,6 +74,7 @@ assert pkgs.lib.hasInfix "workflow_write_summary \"$workflow_id\"" source;
 assert pkgs.lib.hasInfix "workflow_logging_level_default \"$workflow_id\"" source;
 assert pkgs.lib.hasInfix "workflow_lock_policy \"$workflow_id\"" source;
 assert pkgs.lib.hasInfix "workflow_fail_fast \"$workflow_id\"" source;
+assert (!pkgs.lib.hasInfix "normalize_env_hash() {" source);
 assert (!pkgs.lib.hasInfix "extract_machine_output_args() {" source);
 assert (!pkgs.lib.hasInfix ".stages as $stages" source);
 assert (!pkgs.lib.hasInfix "task_json() {" source);

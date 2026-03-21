@@ -55,6 +55,9 @@ normalized probe plan:
 - direct service `health`
 - direct service `ready`
 
+Workflow `preRun` / `postRun` probe phases scope the aggregate ops to the
+workflow unit closure service set instead of all enabled services.
+
 The important behavioral split is `wait`:
 
 - aggregate `task.ops.health` and `task.ops.ready` stay one-shot checks

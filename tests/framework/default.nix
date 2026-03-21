@@ -373,6 +373,13 @@ let
         ;
     };
 
+    "workflow-probe-scope-smoke" = import ./workflow-probe-scope-smoke.nix {
+      inherit
+        pkgs
+        registry
+        ;
+    };
+
     "service-probe-overrides-smoke" = import ./service-probe-overrides-smoke.nix {
       inherit pkgs;
     };

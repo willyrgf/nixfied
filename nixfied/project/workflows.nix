@@ -2,6 +2,15 @@
   frameworkSelfhostPreset,
   resolvedArtifactsRoot,
 }:
+let
+  workflowProbePhases = {
+    preRun.tasks = [ "task.ops.ready" ];
+    postRun = {
+      tasks = [ "task.ops.health" ];
+      alwaysRun = true;
+    };
+  };
+in
 {
   config = {
     nixfied.workflows = {
@@ -34,11 +43,8 @@
           };
         };
         stages = [ ];
-        preRun.tasks = [ "task.ops.ready" ];
-        postRun = {
-          tasks = [ "task.ops.health" ];
-          alwaysRun = true;
-        };
+        preRun = workflowProbePhases.preRun;
+        postRun = workflowProbePhases.postRun;
         artifacts = {
           root = resolvedArtifactsRoot;
           keepOnSuccess = false;
@@ -93,11 +99,8 @@
           };
         };
         stages = [ ];
-        preRun.tasks = [ "task.ops.ready" ];
-        postRun = {
-          tasks = [ "task.ops.health" ];
-          alwaysRun = true;
-        };
+        preRun = workflowProbePhases.preRun;
+        postRun = workflowProbePhases.postRun;
         artifacts = {
           root = resolvedArtifactsRoot;
           keepOnSuccess = false;
@@ -162,11 +165,8 @@
           };
         };
         stages = [ ];
-        preRun.tasks = [ "task.ops.ready" ];
-        postRun = {
-          tasks = [ "task.ops.health" ];
-          alwaysRun = true;
-        };
+        preRun = workflowProbePhases.preRun;
+        postRun = workflowProbePhases.postRun;
         artifacts = {
           root = resolvedArtifactsRoot;
           keepOnSuccess = false;
@@ -199,11 +199,8 @@
             "task.ci.nginx-proxy"
           ]
         ];
-        preRun.tasks = [ "task.ops.ready" ];
-        postRun = {
-          tasks = [ "task.ops.health" ];
-          alwaysRun = true;
-        };
+        preRun = workflowProbePhases.preRun;
+        postRun = workflowProbePhases.postRun;
         artifacts = {
           root = resolvedArtifactsRoot;
           keepOnSuccess = false;
@@ -321,11 +318,8 @@
           };
         };
         stages = [ ];
-        preRun.tasks = [ "task.ops.ready" ];
-        postRun = {
-          tasks = [ "task.ops.health" ];
-          alwaysRun = true;
-        };
+        preRun = workflowProbePhases.preRun;
+        postRun = workflowProbePhases.postRun;
         artifacts = {
           root = resolvedArtifactsRoot;
           keepOnSuccess = false;
@@ -388,11 +382,8 @@
           };
         };
         stages = [ ];
-        preRun.tasks = [ "task.ops.ready" ];
-        postRun = {
-          tasks = [ "task.ops.health" ];
-          alwaysRun = true;
-        };
+        preRun = workflowProbePhases.preRun;
+        postRun = workflowProbePhases.postRun;
         artifacts = {
           root = resolvedArtifactsRoot;
           keepOnSuccess = false;

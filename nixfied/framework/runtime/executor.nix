@@ -1,6 +1,7 @@
 {
   pkgs,
   model,
+  selectionIndex ? null,
   services,
   runtimeHash ? model.identity.evalHash,
   registry,
@@ -8,6 +9,20 @@
   serviceHookEnv ? { },
 }:
 let
+  resolvedSelectionIndex =
+    if selectionIndex != null then
+      selectionIndex
+    else
+      import ../../compiler/compile-selection-index.nix
+        {
+          inherit (pkgs) lib;
+        }
+        {
+          tasks = model.tasks or { };
+          workflows = model.workflows or { };
+          serviceCatalog = model.serviceCatalog or { };
+        };
+
   modelFile = pkgs.writeText "nixfied-model.json" (builtins.toJSON model);
   shellCommon = import ../core/shell-common.nix { inherit pkgs; };
   registryShell = registry.events.mkShellLib { };
@@ -16,6 +31,7 @@ let
       pkgs
       model
       ;
+    selectionIndex = resolvedSelectionIndex;
   };
   envSandboxShell = import ./env-sandbox.nix {
     inherit
@@ -55,13 +71,31 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
     printf '%s' "$1" | ${pkgs.coreutils}/bin/sha256sum | ${pkgs.gawk}/bin/awk '{print $1}'
   }
 
-  normalize_args_hash() {
-    local args_payload="$1"
-    sha256_text "$args_payload"
-  }
+  canonical_run_id_envelope() {
+    local run_kind="$1"
+    local workflow_id="$2"
+    local task_id="$3"
+    local slot_value="$4"
+    local env_value="$5"
+    shift 5
 
-  normalize_env_hash() {
-    ${pkgs.coreutils}/bin/env | ${pkgs.coreutils}/bin/sort | ${pkgs.coreutils}/bin/sha256sum | ${pkgs.gawk}/bin/awk '{print $1}'
+    ${pkgs.jq}/bin/jq -cnS \
+      --arg runtimeHash "${runtimeHash}" \
+      --arg runKind "$run_kind" \
+      --arg workflowId "$workflow_id" \
+      --arg taskId "$task_id" \
+      --arg slot "$slot_value" \
+      --arg env "$env_value" \
+      --args "$@" \
+      '{
+        runtime_hash: $runtimeHash,
+        run_kind: $runKind,
+        workflow_id: (if $workflowId == "" then null else $workflowId end),
+        task_id: (if $taskId == "" then null else $taskId end),
+        slot: $slot,
+        env: $env,
+        argv: $ARGS.positional
+      }'
   }
 
   selected_services_csv_from_lines() {
@@ -172,10 +206,10 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
   LAST_WORKFLOW_SUMMARY_FILE=""
 
   compute_run_id() {
-    local mode="$1"
+    local run_kind="$1"
     local workflow_id="$2"
     local task_id="$3"
-    local args_payload="$4"
+    shift 3
 
     local slot_var=${pkgs.lib.escapeShellArg model.runtime.slot.var}
     local env_var=${pkgs.lib.escapeShellArg model.runtime.env.var}
@@ -184,8 +218,6 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
     local slot_value
     local env_value
-    local args_hash
-    local env_hash
     local run_input
     local run_base
     local run_id
@@ -193,10 +225,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
     slot_value="''${!slot_var:-$slot_default}"
     env_value="''${!env_var:-$env_default}"
 
-    args_hash="$(normalize_args_hash "$args_payload")"
-    env_hash="$(normalize_env_hash)"
-
-    run_input="run-id|${runtimeHash}|$workflow_id|$task_id|$mode|$slot_value|$env_value|$args_hash|$env_hash"
+    run_input="$(canonical_run_id_envelope "$run_kind" "$workflow_id" "$task_id" "$slot_value" "$env_value" "$@")"
     run_base="$(sha256_text "$run_input")"
     run_id="run-''${run_base:0:24}"
     RUN_SUFFIX_REASON=""
@@ -447,7 +476,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
     local detail_json
     local exit_code
     local effective_workflow_id
-    local selected_services_csv="''${NIXFIED_SELECTED_SERVICES_CSV_OVERRIDE:-}"
+    local selected_services_csv=""
 
     detail_json="$(${pkgs.jq}/bin/jq -cn --arg mode "task" '{mode: $mode}')"
     append_event "$run_id" "$workflow_id" "$task_id" "queued" "$detail_json"
@@ -460,7 +489,9 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
     fi
     echo "INFO: task context runId=$run_id workflowId=$effective_workflow_id taskId=$task_id"
 
-    if [ -z "$selected_services_csv" ]; then
+    if [ -n "''${NIXFIED_SELECTED_SERVICES_CSV_OVERRIDE+x}" ]; then
+      selected_services_csv="''${NIXFIED_SELECTED_SERVICES_CSV_OVERRIDE}"
+    else
       selected_services_csv="$(task_selected_services_csv "$task_id" "$@")"
     fi
 
@@ -523,7 +554,6 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
     local task_id="$1"
     shift
 
-    local args_payload=""
     local run_id
     local detail_json
     local status
@@ -562,11 +592,10 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
     if [ -n "''${NIXFIED_ORCHESTRATOR_RUN_ID:-}" ]; then
       run_id="$NIXFIED_ORCHESTRATOR_RUN_ID"
-      RUN_SUFFIX_REASON="orchestrator"
+      RUN_SUFFIX_REASON="''${NIXFIED_ORCHESTRATOR_RUN_SUFFIX_REASON:-orchestrator}"
       managed_by_orchestrator=1
     else
-      args_payload="$(printf '%s\n' "''${filtered_args[@]}")"
-      run_id="$(compute_run_id "task" "" "$task_id" "$args_payload")"
+      run_id="$(compute_run_id "task" "" "$task_id" "''${filtered_args[@]}")"
       activate_run "$run_id"
       trap "deactivate_run '$run_id'" EXIT
     fi
@@ -884,7 +913,13 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       fi
 
       unit_selected_services_csv="$(workflow_unit_selected_services_csv "$unit_json")"
-      if NIXFIED_SELECTED_SERVICES_CSV_OVERRIDE="$unit_selected_services_csv" execute_task "$run_id" "$workflow_id" "$unit_task" "''${passthrough_args[@]}"; then
+      if [ "''${#passthrough_args[@]}" -gt 0 ]; then
+        if NIXFIED_SELECTED_SERVICES_CSV_OVERRIDE="$unit_selected_services_csv" execute_task "$run_id" "$workflow_id" "$unit_task" "''${passthrough_args[@]}"; then
+          status=0
+        else
+          status="$?"
+        fi
+      elif NIXFIED_SELECTED_SERVICES_CSV_OVERRIDE="$unit_selected_services_csv" execute_task "$run_id" "$workflow_id" "$unit_task"; then
         status=0
       else
         status="$?"
@@ -1047,9 +1082,15 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       append_event "$run_id" "$workflow_id" "$unit_task" "queued" "$detail_json"
       append_event "$run_id" "$workflow_id" "$unit_task" "running" '{}'
 
-      (
-        NIXFIED_TASK_ID="$unit_task" NIXFIED_PARENT_WORKFLOW_ID="$workflow_id" NIXFIED_SELECTED_SERVICES_CSV="$unit_selected_services_csv" execute_task_body "$unit_task" "''${passthrough_args[@]}"
-      ) &
+      if [ "''${#passthrough_args[@]}" -gt 0 ]; then
+        (
+          NIXFIED_TASK_ID="$unit_task" NIXFIED_PARENT_WORKFLOW_ID="$workflow_id" NIXFIED_SELECTED_SERVICES_CSV="$unit_selected_services_csv" execute_task_body "$unit_task" "''${passthrough_args[@]}"
+        ) &
+      else
+        (
+          NIXFIED_TASK_ID="$unit_task" NIXFIED_PARENT_WORKFLOW_ID="$workflow_id" NIXFIED_SELECTED_SERVICES_CSV="$unit_selected_services_csv" execute_task_body "$unit_task"
+        ) &
+      fi
       pid="$!"
 
       UNIT_STATE[$unit_name]="running"
@@ -1262,10 +1303,19 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
     while IFS= read -r phase_task; do
       local phase_task_skip_service
       local phase_skip_detail
+      local phase_task_selected_services_csv=""
 
       if [ -z "$phase_task" ]; then
         continue
       fi
+
+      case "$phase_task" in
+        task.ops.ready|task.ops.health)
+          phase_task_selected_services_csv="$(
+            workflow_unit_closure_selected_services "$workflow_id" | selected_services_csv_from_lines
+          )"
+          ;;
+      esac
 
       phase_task_skip_service="$(task_first_skipped_required_service "$phase_task" || true)"
       if [ -n "$phase_task_skip_service" ]; then
@@ -1275,7 +1325,23 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         continue
       fi
 
-      if execute_task "$run_id" "$workflow_id" "$phase_task" "''${passthrough_args[@]}"; then
+      if [ "$phase_task" = "task.ops.ready" ] || [ "$phase_task" = "task.ops.health" ]; then
+        if [ "''${#passthrough_args[@]}" -gt 0 ]; then
+          if NIXFIED_SELECTED_SERVICES_CSV_OVERRIDE="$phase_task_selected_services_csv" execute_task "$run_id" "$workflow_id" "$phase_task" "''${passthrough_args[@]}"; then
+            phase_status=0
+          else
+            phase_status="$?"
+            break
+          fi
+        elif NIXFIED_SELECTED_SERVICES_CSV_OVERRIDE="$phase_task_selected_services_csv" execute_task "$run_id" "$workflow_id" "$phase_task"; then
+          phase_status=0
+        else
+          phase_status="$?"
+          break
+        fi
+      elif [ "''${#passthrough_args[@]}" -gt 0 ] && execute_task "$run_id" "$workflow_id" "$phase_task" "''${passthrough_args[@]}"; then
+        phase_status=0
+      elif execute_task "$run_id" "$workflow_id" "$phase_task"; then
         phase_status=0
       else
         phase_status="$?"
@@ -1922,7 +1988,6 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       return "$NIXFIED_EXIT_USAGE"
     fi
 
-    local args_payload
     local run_id
     local detail_json
     local fail_fast
@@ -1956,11 +2021,10 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
     if [ -n "''${NIXFIED_ORCHESTRATOR_RUN_ID:-}" ]; then
       run_id="$NIXFIED_ORCHESTRATOR_RUN_ID"
-      RUN_SUFFIX_REASON="orchestrator"
+      RUN_SUFFIX_REASON="''${NIXFIED_ORCHESTRATOR_RUN_SUFFIX_REASON:-orchestrator}"
       managed_by_orchestrator=1
     else
-      args_payload="$(printf '%s\n' "''${passthrough_args[@]}")"
-      run_id="$(compute_run_id "workflow" "$workflow_id" "" "$args_payload")"
+      run_id="$(compute_run_id "workflow" "$workflow_id" "" "''${passthrough_args[@]}")"
       activate_run "$run_id"
       trap "deactivate_run '$run_id'" EXIT
     fi

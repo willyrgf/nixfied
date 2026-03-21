@@ -59,6 +59,8 @@ assert pkgs.lib.hasInfix "NIXFIED_SERVICE_" source;
 assert pkgs.lib.hasInfix "NIXFIED_SERVICE_''\${service_token}_DATA_DIR" source;
 assert pkgs.lib.hasInfix "NIXFIED_SERVICE_''\${service_token}_STATE_DIR" source;
 assert pkgs.lib.hasInfix "NIXFIED_SERVICE_''\${service_token}_LOG_DIR" source;
+assert !(pkgs.lib.hasInfix "NIXFIED_SERVICE_''\${service_token}_ENABLED" source);
+assert !(pkgs.lib.hasInfix "NIXFIED_SERVICE_''\${service_token}_\${configToken}" source);
 assert !(pkgs.lib.hasInfix "runtime_home_override=" source);
 assert !(pkgs.lib.hasInfix "runtime_tmp_override=" source);
 assert !(pkgs.lib.hasInfix "runtime_xdg_data_override=" source);

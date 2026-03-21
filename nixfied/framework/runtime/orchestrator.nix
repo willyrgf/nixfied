@@ -1,6 +1,7 @@
 {
   pkgs,
   model,
+  selectionIndex ? null,
   services,
   runtimeHash ? model.identity.evalHash,
   registry,
@@ -9,6 +10,19 @@
 }:
 let
   lib = pkgs.lib;
+  resolvedSelectionIndex =
+    if selectionIndex != null then
+      selectionIndex
+    else
+      import ../../compiler/compile-selection-index.nix
+        {
+          inherit (pkgs) lib;
+        }
+        {
+          tasks = model.tasks or { };
+          workflows = model.workflows or { };
+          serviceCatalog = model.serviceCatalog or { };
+        };
   shellCommon = import ../core/shell-common.nix { inherit pkgs; };
   registryShell = registry.events.mkShellLib { };
   workflowModesShell = import ./workflow-modes.nix {
@@ -16,6 +30,7 @@ let
       pkgs
       model
       ;
+    selectionIndex = resolvedSelectionIndex;
   };
   orchestratorRuntimeShell = import ./orchestrator-runtime.nix { inherit pkgs; };
   executor = import ./executor.nix {
@@ -27,6 +42,7 @@ let
       projectRoot
       serviceHookEnv
       ;
+    selectionIndex = resolvedSelectionIndex;
   };
   frameworkEphemeral = import ./ephemeral.nix {
     inherit
@@ -100,7 +116,8 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
   RUNS_DIR="$REGISTRY_ROOT/orchestrator/runs"
   RUN_LOCKS_DIR="$REGISTRY_ROOT/orchestrator/locks"
   RUN_LOG_DIR="$REGISTRY_ROOT/orchestrator/logs"
-  RUN_COUNTER_ROOT="$REGISTRY_ROOT/orchestrator/counter"
+  RUN_ID_ACTIVE_ROOT="$REGISTRY_ROOT/active"
+  RUN_ID_COUNTER_ROOT="$REGISTRY_ROOT/counters"
   SETSID_BIN=${lib.escapeShellArg setsidBin}
   ORCHESTRATOR_STOP_TIMEOUT_SEC_DEFAULT=${lib.escapeShellArg (toString model.runtime.orchestrator.stopTimeoutSec)}
 
@@ -108,7 +125,7 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
   ${workflowModesShell}
   ${orchestratorRuntimeShell}
 
-  mkdir -p "$RUNS_DIR" "$RUN_LOCKS_DIR" "$RUN_LOG_DIR" "$RUN_COUNTER_ROOT"
+  mkdir -p "$RUNS_DIR" "$RUN_LOCKS_DIR" "$RUN_LOG_DIR"
 
   FOREGROUND_RUN_ACTIVE=0
   FOREGROUND_RUN_ID=""
@@ -118,9 +135,147 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
   FOREGROUND_RUN_TASK_ID=""
   FOREGROUND_SIGNAL_FILE=""
   FOREGROUND_SIGNAL_NAME=""
+  RUN_SUFFIX_REASON=""
 
   sha256_text() {
     printf '%s' "$1" | ${pkgs.coreutils}/bin/sha256sum | ${pkgs.gawk}/bin/awk '{print $1}'
+  }
+
+  canonical_run_id_envelope() {
+    local run_kind="$1"
+    local workflow_id="$2"
+    local task_id="$3"
+    local slot_value="$4"
+    local env_value="$5"
+    shift 5
+
+    ${pkgs.jq}/bin/jq -cnS \
+      --arg runtimeHash "${runtimeHash}" \
+      --arg runKind "$run_kind" \
+      --arg workflowId "$workflow_id" \
+      --arg taskId "$task_id" \
+      --arg slot "$slot_value" \
+      --arg env "$env_value" \
+      --args "$@" \
+      '{
+        runtime_hash: $runtimeHash,
+        run_kind: $runKind,
+        workflow_id: (if $workflowId == "" then null else $workflowId end),
+        task_id: (if $taskId == "" then null else $taskId end),
+        slot: $slot,
+        env: $env,
+        argv: $ARGS.positional
+      }'
+  }
+
+  filter_run_id_args() {
+    local parse_options=1
+    local arg=""
+    local -a filtered_args=()
+
+    while [ "$#" -gt 0 ]; do
+      arg="$1"
+      shift
+
+      if [ "$parse_options" -eq 0 ]; then
+        filtered_args+=("$arg")
+        continue
+      fi
+
+      case "$arg" in
+        --summary)
+          ;;
+        --log-level)
+          if [ "$#" -lt 1 ]; then
+            echo "ERROR: --log-level requires a value"
+            return 2
+          fi
+          shift
+          ;;
+        --log-level=*)
+          ;;
+        --output-mode)
+          if [ "$#" -lt 1 ]; then
+            echo "ERROR: --output-mode requires a value"
+            return 2
+          fi
+          shift
+          ;;
+        --output-mode=*)
+          ;;
+        --)
+          parse_options=0
+          filtered_args+=("--")
+          ;;
+        *)
+          filtered_args+=("$arg")
+          ;;
+      esac
+    done
+
+    printf '%s\n' "''${filtered_args[@]}"
+  }
+
+  compute_run_id() {
+    local run_kind="$1"
+    local workflow_id="$2"
+    local task_id="$3"
+    shift 3
+
+    local slot_var=${pkgs.lib.escapeShellArg model.runtime.slot.var}
+    local env_var=${pkgs.lib.escapeShellArg model.runtime.env.var}
+    local slot_default=${toString model.runtime.slot.default}
+    local env_default=${pkgs.lib.escapeShellArg model.runtime.env.default}
+
+    local slot_value
+    local env_value
+    local run_input
+    local run_base
+    local run_id
+    local lock_file
+    local counter_file
+    local lock_fd
+    local counter="0"
+
+    slot_value="''${!slot_var:-$slot_default}"
+    env_value="''${!env_var:-$env_default}"
+
+    run_input="$(canonical_run_id_envelope "$run_kind" "$workflow_id" "$task_id" "$slot_value" "$env_value" "$@")"
+    run_base="$(sha256_text "$run_input")"
+    run_id="run-''${run_base:0:24}"
+    RUN_SUFFIX_REASON=""
+
+    mkdir -p "$RUN_ID_ACTIVE_ROOT" "$RUN_ID_COUNTER_ROOT"
+    lock_file="$RUN_ID_COUNTER_ROOT/$run_base.lock"
+    counter_file="$RUN_ID_COUNTER_ROOT/$run_base"
+    lock_fd="$(registry_lock_acquire "$lock_file" "orchestrator-run-counter:$run_base" 30)" || return 1
+
+    if [ -e "$RUN_ID_ACTIVE_ROOT/$run_id" ]; then
+      if [ -f "$counter_file" ]; then
+        counter="$(cat "$counter_file")"
+      fi
+      counter="$(( counter + 1 ))"
+      printf '%s' "$counter" > "$counter_file"
+
+      run_id="$run_id-$(printf 'c%03d' "$counter")"
+      RUN_SUFFIX_REASON="active-collision"
+    fi
+
+    : > "$RUN_ID_ACTIVE_ROOT/$run_id"
+    registry_lock_release "$lock_fd" "$lock_file"
+
+    printf '%s' "$run_id"
+  }
+
+  activate_run_id() {
+    local run_id="$1"
+    mkdir -p "$RUN_ID_ACTIVE_ROOT"
+    : > "$RUN_ID_ACTIVE_ROOT/$run_id"
+  }
+
+  deactivate_run_id() {
+    local run_id="$1"
+    rm -f "$RUN_ID_ACTIVE_ROOT/$run_id"
   }
 
   iso_now() {
@@ -281,16 +436,6 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
     FOREGROUND_RUN_TASK_ID="$5"
   }
 
-  next_run_id() {
-    local seq
-    local seed
-    local digest
-    seq="$(registry_next_seq "$RUN_COUNTER_ROOT")"
-    seed="orchestrator|${runtimeHash}|$seq|$$|$RANDOM|$(iso_now)"
-    digest="$(sha256_text "$seed")"
-    printf 'run-%s' "''${digest:0:24}"
-  }
-
   create_run_record() {
     local run_id="$1"
     local command_name="$2"
@@ -355,6 +500,7 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
 
     mv "$tmp" "$run_file"
     registry_lock_release "$lock_fd" "$lock_file"
+
   }
 
   update_run_state() {
@@ -407,6 +553,12 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
 
     mv "$tmp" "$run_file"
     registry_lock_release "$lock_fd" "$lock_file"
+
+    case "$state" in
+      passed|failed|canceled)
+        deactivate_run_id "$run_id"
+        ;;
+    esac
     return 0
   }
 
@@ -845,6 +997,8 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
     local ephemeral_enabled="0"
     local run_id
     local args_json
+    local -a run_id_args
+    run_id_args=()
 
     command_started_at="$(iso_now)"
     command_started_epoch="$(date +%s)"
@@ -879,14 +1033,19 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
       ephemeral_enabled=1
     fi
 
-    run_id="$(next_run_id)"
+    mapfile -t run_id_args < <(filter_run_id_args "''${FORWARD_ARGS[@]}")
+    run_id="$(compute_run_id "task" "$workflow_ref" "$task_id" "''${run_id_args[@]}")"
     if [ -n "$MACHINE_RUN_ID_FILE" ]; then
       write_text_file_atomic "$MACHINE_RUN_ID_FILE" "$run_id"
     fi
     args_json="$(${pkgs.jq}/bin/jq -cn '$ARGS.positional' --args -- "''${FORWARD_ARGS[@]}")"
-    create_run_record "$run_id" "run-task" "$workflow_ref" "$task_id" "$execution_mode" "$PROCESS_MODE" "$ephemeral_enabled" "$args_json"
+    create_run_record "$run_id" "run-task" "$workflow_ref" "$task_id" "$execution_mode" "$PROCESS_MODE" "$ephemeral_enabled" "$args_json" || {
+      deactivate_run_id "$run_id"
+      return 1
+    }
 
     export NIXFIED_ORCHESTRATOR_RUN_ID="$run_id"
+    export NIXFIED_ORCHESTRATOR_RUN_SUFFIX_REASON="$RUN_SUFFIX_REASON"
     export NIXFIED_ORCHESTRATOR_PROCESS_MODE="$PROCESS_MODE"
     export NIXFIED_ORCHESTRATOR_WORKFLOW_ID="$workflow_ref"
     export NIXFIED_WORKFLOW_SETUP_STARTED_AT="$command_started_at"
@@ -916,6 +1075,8 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
     local run_id
     local args_json
     local ephemeral_enabled
+    local -a run_id_args
+    run_id_args=()
 
     command_started_at="$(iso_now)"
     command_started_epoch="$(date +%s)"
@@ -933,14 +1094,19 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
     fi
 
     ephemeral_enabled="$(workflow_ephemeral_flag "$workflow_id")"
-    run_id="$(next_run_id)"
+    mapfile -t run_id_args < <(filter_run_id_args "''${FORWARD_ARGS[@]}")
+    run_id="$(compute_run_id "workflow" "$workflow_id" "" "''${run_id_args[@]}")"
     if [ -n "$MACHINE_RUN_ID_FILE" ]; then
       write_text_file_atomic "$MACHINE_RUN_ID_FILE" "$run_id"
     fi
     args_json="$(${pkgs.jq}/bin/jq -cn '$ARGS.positional' --args -- "''${FORWARD_ARGS[@]}")"
-    create_run_record "$run_id" "run-workflow" "$workflow_id" "" "$mode" "$PROCESS_MODE" "$ephemeral_enabled" "$args_json"
+    create_run_record "$run_id" "run-workflow" "$workflow_id" "" "$mode" "$PROCESS_MODE" "$ephemeral_enabled" "$args_json" || {
+      deactivate_run_id "$run_id"
+      return 1
+    }
 
     export NIXFIED_ORCHESTRATOR_RUN_ID="$run_id"
+    export NIXFIED_ORCHESTRATOR_RUN_SUFFIX_REASON="$RUN_SUFFIX_REASON"
     export NIXFIED_ORCHESTRATOR_PROCESS_MODE="$PROCESS_MODE"
     export NIXFIED_ORCHESTRATOR_WORKFLOW_ID="$workflow_id"
     export NIXFIED_WORKFLOW_SETUP_STARTED_AT="$command_started_at"

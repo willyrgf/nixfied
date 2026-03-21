@@ -19,8 +19,18 @@ let
       type = "shell";
       command = ''
         set -euo pipefail
+        if [ -z "''${NIXFIED_SERVICE_ROOT:-}" ]; then
+          echo "ERROR: missing runtime service root"
+          exit 1
+        fi
         echo "INFO: postgres_data=''${NIXFIED_SERVICE_POSTGRES_DATA_DIR:-}"
         echo "INFO: nginx_data=''${NIXFIED_SERVICE_NGINX_DATA_DIR:-}"
+        echo "INFO: service_root=$NIXFIED_SERVICE_ROOT"
+        if env | ${pkgs.gnugrep}/bin/grep -Eq '^NIXFIED_SERVICE_[A-Z0-9_]+_(DATA_DIR|STATE_DIR|LOG_DIR|ENABLED)='; then
+          echo "ERROR: unexpected per-service env vars without explicit selection"
+          env | ${pkgs.coreutils}/bin/sort | ${pkgs.gnugrep}/bin/grep '^NIXFIED_SERVICE_'
+          exit 1
+        fi
         echo "OK: service dir no-selection probe complete"
       '';
       package = null;
@@ -45,12 +55,34 @@ let
       type = "shell";
       command = ''
         set -euo pipefail
+        if [ -z "''${NIXFIED_SERVICE_ROOT:-}" ]; then
+          echo "ERROR: missing runtime service root"
+          exit 1
+        fi
         echo "INFO: postgres_data=$NIXFIED_SERVICE_POSTGRES_DATA_DIR"
         echo "INFO: postgres_state=$NIXFIED_SERVICE_POSTGRES_STATE_DIR"
         echo "INFO: postgres_log=$NIXFIED_SERVICE_POSTGRES_LOG_DIR"
         echo "INFO: nginx_data=$NIXFIED_SERVICE_NGINX_DATA_DIR"
         echo "INFO: nginx_state=$NIXFIED_SERVICE_NGINX_STATE_DIR"
         echo "INFO: nginx_log=$NIXFIED_SERVICE_NGINX_LOG_DIR"
+        echo "INFO: service_root=$NIXFIED_SERVICE_ROOT"
+        service_dir_count="$(env | ${pkgs.gnugrep}/bin/grep -Ec '^NIXFIED_SERVICE_[A-Z0-9_]+_(DATA_DIR|STATE_DIR|LOG_DIR)=' || true)"
+        all_service_count="$(env | ${pkgs.gnugrep}/bin/grep -Ec '^NIXFIED_SERVICE_[A-Z0-9_]+_[A-Z0-9_]+=' || true)"
+        if [ "$service_dir_count" -ne 6 ]; then
+          echo "ERROR: expected exactly 6 per-service dir vars, got $service_dir_count"
+          env | ${pkgs.coreutils}/bin/sort | ${pkgs.gnugrep}/bin/grep '^NIXFIED_SERVICE_'
+          exit 1
+        fi
+        if [ "$all_service_count" -ne 6 ]; then
+          echo "ERROR: expected exactly 6 per-service service vars, got $all_service_count"
+          env | ${pkgs.coreutils}/bin/sort | ${pkgs.gnugrep}/bin/grep '^NIXFIED_SERVICE_'
+          exit 1
+        fi
+        if env | ${pkgs.gnugrep}/bin/grep -Eq '^NIXFIED_SERVICE_[A-Z0-9_]+_ENABLED='; then
+          echo "ERROR: unexpected per-service ENABLED env var"
+          env | ${pkgs.coreutils}/bin/sort | ${pkgs.gnugrep}/bin/grep '^NIXFIED_SERVICE_'
+          exit 1
+        fi
         echo "OK: service dir probe complete"
       '';
       package = null;

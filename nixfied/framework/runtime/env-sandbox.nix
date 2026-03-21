@@ -101,35 +101,6 @@ let
     '') serviceHookEntries
   );
 
-  staticServiceEnvCmds = lib.concatStringsSep "\n" (
-    map (
-      serviceId:
-      let
-        service = services.${serviceId};
-        serviceToken = normalizeStaticToken service.name;
-        configKeys = builtins.sort builtins.lessThan (builtins.attrNames (service.config or { }));
-        configCmds = lib.concatStringsSep "\n" (
-          map (
-            configKey:
-            let
-              configToken = normalizeStaticToken configKey;
-            in
-            "    env_cmd+=(${lib.escapeShellArg "NIXFIED_SERVICE_${serviceToken}_${configToken}=${valueToString service.config.${configKey}}"})"
-          ) configKeys
-        );
-      in
-      ''
-        if runtime_service_selected ${lib.escapeShellArg service.name}; then
-          env_cmd+=(${lib.escapeShellArg "NIXFIED_SERVICE_${serviceToken}_ENABLED=${if service.enable then "1" else "0"}"})
-      ''
-      + lib.optionalString (configCmds != "") ''
-        ${configCmds}
-      ''
-      + ''
-        fi
-      ''
-    ) serviceIds
-  );
 in
 ''
     ${commonRuntimeShell}
@@ -829,6 +800,9 @@ in
       if [ -n "''${NIXFIED_PARENT_WORKFLOW_ID:-}" ]; then
         env_cmd+=("NIXFIED_PARENT_WORKFLOW_ID=$NIXFIED_PARENT_WORKFLOW_ID")
       fi
+      if [ -n "''${NIXFIED_SELECTED_SERVICES_CSV:-}" ]; then
+        env_cmd+=("NIXFIED_SELECTED_SERVICES_CSV=$NIXFIED_SELECTED_SERVICES_CSV")
+      fi
       if [ -n "''${NIXFIED_TASK_ID:-}" ]; then
         env_cmd+=("NIXFIED_TASK_ID=$NIXFIED_TASK_ID")
       fi
@@ -889,8 +863,6 @@ in
         port_value="$(( port_base + env_offset + (slot_value * slot_stride) ))"
         env_cmd+=("$port_var=$port_value")
       done <<< "$ENV_SANDBOX_STATIC_RUNTIME_PORTS_TSV"
-
-  ${staticServiceEnvCmds}
 
       while IFS=$'\t' read -r service_name service_data_dir_name || [ -n "$service_name" ]; do
         local service_token

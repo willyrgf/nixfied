@@ -154,6 +154,16 @@ pkgs.runCommand "ephemeral-registry-run-isolation-smoke" { } ''
   run_two="$(read_trimmed_file "$TMPDIR/run-2.run-id")"
   wait_for_condition 60 "run one ready" test -f "$gate_dir/$run_one.ready"
   wait_for_condition 60 "run two ready" test -f "$gate_dir/$run_two.ready"
+  active_collision_count=0
+  case "$run_one" in
+    *-c[0-9][0-9][0-9]) active_collision_count=$(( active_collision_count + 1 )) ;;
+  esac
+  case "$run_two" in
+    *-c[0-9][0-9][0-9]) active_collision_count=$(( active_collision_count + 1 )) ;;
+  esac
+  if [ "$active_collision_count" != "1" ]; then
+    fail "expected exactly one concurrent workflow run id to use the active-collision suffix"
+  fi
   : > "$gate_dir/release"
   wait "$pid_one"
   rc_one="$?"

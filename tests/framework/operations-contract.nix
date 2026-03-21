@@ -1,92 +1,100 @@
 { pkgs, model }:
 let
-  source = builtins.readFile ../../nixfied/modules/operations.nix;
-  probeRuntimeSource = builtins.readFile ../../nixfied/framework/runtime/helpers/probe-plan-runtime.nix;
-  isolationRuntimeSource = builtins.readFile ../../nixfied/framework/runtime/helpers/test-isolation-runtime.nix;
-  serviceConfigSource = builtins.readFile ../../nixfied/framework/core/service-config.nix;
+  lib = pkgs.lib;
+  compiler = import ../../nixfied/compiler {
+    inherit pkgs;
+    canonical = import ../../nixfied/framework/core/canonical.nix { inherit lib; };
+    modules = import ../../nixfied/modules;
+    system = pkgs.system;
+    projectRoot = ../..;
+    frameworkSourceRevision = import ../../nixfied/framework/core/framework-revision.nix {
+      sourcePath = ../../.;
+      metadataPath = ../../VENDORED.txt;
+    };
+  };
+
+  poisonModule =
+    { lib, ... }:
+    {
+      nixfied.services.nginx.enable = lib.mkForce true;
+      nixfied.services.nginx.probes.health = {
+        strategy = "replace";
+        steps = [
+          {
+            kind = "exec";
+            command = throw "nginx health probe normalized unexpectedly";
+          }
+        ];
+      };
+      nixfied.services.nginx.probes.ready = {
+        strategy = "replace";
+        steps = [
+          {
+            kind = "exec";
+            command = throw "nginx readiness probe normalized unexpectedly";
+          }
+        ];
+      };
+    };
+
+  poisoned = compiler.compileCore {
+    projectModules = [ ../../nixfied/project/module.nix ];
+    extraModules = [ poisonModule ];
+    localOverrides = [ ];
+  };
+
+  validateCommand = model.tasks."task.ops.validate-env".runner.command;
+  portsCommand = model.tasks."task.ops.ports".runner.command;
+  checkPortsCommand = model.tasks."task.ops.check-ports".runner.command;
   healthCommand = model.tasks."task.ops.health".runner.command;
   readyCommand = model.tasks."task.ops.ready".runner.command;
+  isolationCommand = model.tasks."task.ops.test-isolation".runner.command;
+
+  poisonedValidateCommand = poisoned.tasks."task.ops.validate-env".runner.command;
+  poisonedPortsCommand = poisoned.tasks."task.ops.ports".runner.command;
+  poisonedCheckPortsCommand = poisoned.tasks."task.ops.check-ports".runner.command;
+  poisonedIsolationCommand = poisoned.tasks."task.ops.test-isolation".runner.command;
 in
-assert pkgs.lib.hasInfix "id = \"task.ops.health\";" source;
-assert pkgs.lib.hasInfix "id = \"task.ops.ready\";" source;
-assert pkgs.lib.hasInfix "name = \"service\";" source;
-assert pkgs.lib.hasInfix "long = \"--service\";" source;
-assert pkgs.lib.hasInfix "long = \"--source\";" source;
-assert pkgs.lib.hasInfix "long = \"--slot\";" source;
-assert pkgs.lib.hasInfix "long = \"--env\";" source;
-assert pkgs.lib.hasInfix "long = \"--max-parallel\";" source;
-assert pkgs.lib.hasInfix "service_selected()" source;
-assert pkgs.lib.hasInfix "resolve_service_source()" source;
-assert pkgs.lib.hasInfix "source_kind_disallowed()" source;
-assert pkgs.lib.hasInfix "serviceConfigLib = import ../framework/core/service-config.nix" source;
-assert pkgs.lib.hasInfix
-  "probePlanRuntime = import ../framework/runtime/helpers/probe-plan-runtime.nix"
-  source;
-assert pkgs.lib.hasInfix "resolvedServiceConfigByName =" source;
-assert pkgs.lib.hasInfix "resolveServicePortBase =" source;
-assert pkgs.lib.hasInfix "probePlan =" source;
-assert pkgs.lib.hasInfix "probePlanRuntime.renderPlanBody {" source;
-assert pkgs.lib.hasInfix "mkServiceProbeSpec =" source;
-assert pkgs.lib.hasInfix "healthProbeSpecs = builtins.listToAttrs" source;
-assert pkgs.lib.hasInfix "readyProbeSpecs = builtins.listToAttrs" source;
-assert pkgs.lib.hasInfix
-  "testIsolationRuntime = import ../framework/runtime/helpers/test-isolation-runtime.nix"
-  source;
-assert pkgs.lib.hasInfix "isolationScript = testIsolationRuntime.mkIsolationScript" source;
-assert pkgs.lib.hasInfix "shellCommon = import ../framework/core/shell-common.nix" source;
-assert pkgs.lib.hasInfix "mkTcpProbeBody =" probeRuntimeSource;
-assert pkgs.lib.hasInfix "mkHttpProbeBody =" probeRuntimeSource;
-assert pkgs.lib.hasInfix "mkPostgresPgIsReadyBody =" probeRuntimeSource;
-assert pkgs.lib.hasInfix "mkPostgresQueryBody =" probeRuntimeSource;
-assert pkgs.lib.hasInfix "mkJsonRpcProbeBody =" probeRuntimeSource;
-assert pkgs.lib.hasInfix "mkHeliosReadyBody =" probeRuntimeSource;
-assert pkgs.lib.hasInfix "mkExecProbeBody =" probeRuntimeSource;
-assert pkgs.lib.hasInfix "renderProbeStep =" probeRuntimeSource;
-assert pkgs.lib.hasInfix "renderPlanBody =" probeRuntimeSource;
-assert pkgs.lib.hasInfix "probePlans = mergeProbePlans" serviceConfigSource;
-assert pkgs.lib.hasInfix "operationProbes = probePlans;" serviceConfigSource;
-assert pkgs.lib.hasInfix "serviceLabel = \"postgres\";" serviceConfigSource;
-assert pkgs.lib.hasInfix "kind = \"postgres-pg-isready\";" serviceConfigSource;
-assert pkgs.lib.hasInfix "kind = \"postgres-query\";" serviceConfigSource;
-assert pkgs.lib.hasInfix "kind = \"tcp\";" serviceConfigSource;
-assert pkgs.lib.hasInfix "kind = \"jsonrpc\";" serviceConfigSource;
-assert pkgs.lib.hasInfix "kind = \"helios-ready\";" serviceConfigSource;
-assert pkgs.lib.hasInfix "serviceLabel = \"nginx\";" serviceConfigSource;
-assert pkgs.lib.hasInfix "serviceLabel = \"minio\";" serviceConfigSource;
-assert pkgs.lib.hasInfix "serviceLabel = \"reth\";" serviceConfigSource;
-assert pkgs.lib.hasInfix "serviceLabel = \"helios execution\";" serviceConfigSource;
-assert pkgs.lib.hasInfix "serviceLabel = \"helios\";" serviceConfigSource;
-assert pkgs.lib.hasInfix "phaseLabel = \"health\";" serviceConfigSource;
-assert pkgs.lib.hasInfix "phaseLabel = \"readiness\";" serviceConfigSource;
-assert pkgs.lib.hasInfix "timeoutEnvVar = \"HELIOS_READY_TIMEOUT_SECS\";" serviceConfigSource;
-assert pkgs.lib.hasInfix "intervalEnvVar = \"HELIOS_READY_INTERVAL_SECS\";" serviceConfigSource;
-assert pkgs.lib.hasInfix "method = \"web3_clientVersion\";" serviceConfigSource;
-assert pkgs.lib.hasInfix "method = \"eth_chainId\";" serviceConfigSource;
-assert pkgs.lib.hasInfix "INFO: checking helios readiness" readyCommand;
-assert pkgs.lib.hasInfix "source kind disallowed" readyCommand;
-assert pkgs.lib.hasInfix "OK: readiness checks passed" readyCommand;
+assert builtins.hasAttr "task.ops.validate-env" model.tasks;
+assert builtins.hasAttr "task.ops.ports" model.tasks;
+assert builtins.hasAttr "task.ops.check-ports" model.tasks;
+assert builtins.hasAttr "task.ops.health" model.tasks;
+assert builtins.hasAttr "task.ops.ready" model.tasks;
+assert builtins.hasAttr "task.ops.test-isolation" model.tasks;
+assert pkgs.lib.hasInfix "OK: environment is valid" validateCommand;
+assert pkgs.lib.hasInfix "INFO: Port assignments" portsCommand;
+assert pkgs.lib.hasInfix "INFO: Port status" checkPortsCommand;
 assert pkgs.lib.hasInfix "OK: health checks passed" healthCommand;
-assert pkgs.lib.hasInfix "isolation cell start" isolationRuntimeSource;
-assert pkgs.lib.hasInfix "test-isolation logs_root=" isolationRuntimeSource;
-assert pkgs.lib.hasInfix "test-isolation forcing maxParallel=1 reason=ci" isolationRuntimeSource;
-assert pkgs.lib.hasInfix "host_nix_user_config_file=" isolationRuntimeSource;
-assert pkgs.lib.hasInfix "export NIX_USER_CONF_FILES=\"$host_nix_user_config_file\""
-  isolationRuntimeSource;
-assert pkgs.lib.hasInfix "nixfied_require_next_arg --slot" isolationRuntimeSource;
-assert pkgs.lib.hasInfix "nixfied_exit_precondition \"test-isolation matrix has no slots\""
-  isolationRuntimeSource;
-assert pkgs.lib.hasInfix "\"$executor_bin\" run-task \"$validate_task_id\"" isolationRuntimeSource;
-assert pkgs.lib.hasInfix "\"$executor_bin\" run-task \"$run_task_id\"" isolationRuntimeSource;
-assert pkgs.lib.hasInfix "test-isolation matrix has no slots" isolationRuntimeSource;
-assert pkgs.lib.hasInfix "test-isolation completed with failures" isolationRuntimeSource;
+assert pkgs.lib.hasInfix "OK: readiness checks passed" readyCommand;
+assert pkgs.lib.hasInfix "isolation cell start" isolationCommand;
+assert builtins.deepSeq poisonedValidateCommand true;
+assert builtins.deepSeq poisonedPortsCommand true;
+assert builtins.deepSeq poisonedCheckPortsCommand true;
+assert builtins.deepSeq poisonedIsolationCommand true;
 pkgs.runCommand "operations-contract" { } ''
-    cat > task-ops-health.sh <<'EOF'
+  cat > task-ops-health.sh <<'EOF'
   ${healthCommand}
   EOF
-    cat > task-ops-ready.sh <<'EOF'
+  cat > task-ops-ready.sh <<'EOF'
   ${readyCommand}
   EOF
-    ${pkgs.bash}/bin/bash -n task-ops-health.sh
-    ${pkgs.bash}/bin/bash -n task-ops-ready.sh
-    echo "OK: operations health/readiness contract markers are stable" > "$out"
+  cat > task-ops-validate-env.sh <<'EOF'
+  ${validateCommand}
+  EOF
+  cat > task-ops-ports.sh <<'EOF'
+  ${portsCommand}
+  EOF
+  cat > task-ops-check-ports.sh <<'EOF'
+  ${checkPortsCommand}
+  EOF
+  cat > task-ops-test-isolation.sh <<'EOF'
+  ${isolationCommand}
+  EOF
+  ${pkgs.bash}/bin/bash -n task-ops-health.sh
+  ${pkgs.bash}/bin/bash -n task-ops-ready.sh
+  ${pkgs.bash}/bin/bash -n task-ops-validate-env.sh
+  ${pkgs.bash}/bin/bash -n task-ops-ports.sh
+  ${pkgs.bash}/bin/bash -n task-ops-check-ports.sh
+  ${pkgs.bash}/bin/bash -n task-ops-test-isolation.sh
+  echo "OK: operations health/readiness and cheap ops contracts are stable" > "$out"
 ''

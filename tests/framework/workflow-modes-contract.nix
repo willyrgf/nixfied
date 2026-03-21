@@ -2,6 +2,8 @@
 let
   source = builtins.readFile ../../nixfied/framework/runtime/workflow-modes.nix;
 in
+assert pkgs.lib.hasInfix "selectionIndex" source;
+assert (!pkgs.lib.hasInfix "service-selection.nix" source);
 assert pkgs.lib.hasInfix "workflow_id_exists() {" source;
 assert pkgs.lib.hasInfix "workflow_mode_name() {" source;
 assert pkgs.lib.hasInfix "workflow_artifacts_root() {" source;
@@ -29,6 +31,7 @@ assert pkgs.lib.hasInfix "builtins.toJSON (workflows.\${workflowId}.plan or [ ])
 assert pkgs.lib.hasInfix "workflow_plan_records() {" source;
 assert pkgs.lib.hasInfix "workflowPhaseTaskCases = builtins.concatLists" source;
 assert pkgs.lib.hasInfix "workflow_phase_tasks() {" source;
+assert pkgs.lib.hasInfix "workflow_unit_closure_selected_services() {" source;
 assert (!pkgs.lib.hasInfix "$MODEL_FILE" source);
 assert (!pkgs.lib.hasInfix "/bin/jq" source);
 pkgs.runCommand "workflow-modes-contract" { } ''
