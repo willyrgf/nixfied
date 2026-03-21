@@ -112,6 +112,8 @@ let
 
     "unselected-service-public-launcher-smoke" = { };
 
+    "selected-source-only-resolution-smoke" = { };
+
     "disabled-service-runtime-surface-smoke" = {
       covers = [ "runtime.service-hooks" ];
     };
@@ -216,6 +218,10 @@ let
     };
 
     "unselected-service-public-launcher-smoke" = import ./unselected-service-public-launcher-smoke.nix {
+      inherit pkgs;
+    };
+
+    "selected-source-only-resolution-smoke" = import ./selected-source-only-resolution-smoke.nix {
       inherit pkgs;
     };
 
