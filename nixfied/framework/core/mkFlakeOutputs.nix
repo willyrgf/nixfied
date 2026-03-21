@@ -109,9 +109,6 @@ let
   viewAppNames = builtins.sort builtins.lessThan (
     builtins.attrNames (compiledCore.model.views.apps or { })
   );
-  serviceAppNames = builtins.sort builtins.lessThan (
-    compiledCore.serviceSurfaceCatalog.appNames or [ ]
-  );
   selectorDispatcherAppNames = [
     "run-task"
     "run-workflow"
@@ -127,10 +124,13 @@ let
     "stop-all-runs"
   ];
   runtimeProxyAppNames = if workspaceMarkerPresent then [ ] else nonSelectorAppNames;
-  wrappedAppNames = builtins.sort builtins.lessThan (
+  viewWrappedAppNames = builtins.sort builtins.lessThan (
     builtins.filter (appName: !(builtins.elem appName nonSelectorAppNames)) (
-      lib.unique (viewAppNames ++ serviceAppNames ++ selectorDispatcherAppNames)
+      lib.unique (viewAppNames ++ selectorDispatcherAppNames)
     )
+  );
+  serviceWrappedAppNames = builtins.sort builtins.lessThan (
+    compiledCore.serviceSurfaceCatalog.appNames or [ ]
   );
   runtimeAppNames = builtins.sort builtins.lessThan (
     lib.unique (
@@ -250,6 +250,77 @@ let
     }) taskIds
   );
 
+  mkStaticHelpFile =
+    name: text:
+    pkgs.writeText "nixfied-help-${builtins.substring 0 10 (builtins.hashString "sha256" name)}.txt" ''
+      ${text}
+    '';
+
+  dispatcherHelpFiles = {
+    "run-task" = mkStaticHelpFile "run-task" ''
+      run-task - Run a compiled task by id
+
+      Usage:
+        nix run .#run-task -- <task-id> [-- ...]
+
+      Options:
+        -h, --help: Show this help.
+    '';
+
+    "run-workflow" = mkStaticHelpFile "run-workflow" ''
+      run-workflow - Run a compiled workflow by id
+
+      Usage:
+        nix run .#run-workflow -- <workflow-id> [-- ...]
+
+      Options:
+        -h, --help: Show this help.
+    '';
+
+    "run-workflow-parallel" = mkStaticHelpFile "run-workflow-parallel" ''
+      run-workflow-parallel - Run a compiled workflow by id with parallel execution enabled
+
+      Usage:
+        nix run .#run-workflow-parallel -- <workflow-id> [-- ...]
+
+      Options:
+        -h, --help: Show this help.
+    '';
+  };
+
+  runtimeControlHelpFiles = {
+    "runs" = mkStaticHelpFile "runs" ''
+      runs - List runs or show one run by id
+
+      Usage:
+        nix run .#runs
+        nix run .#runs -- <run-id>
+
+      Options:
+        -h, --help: Show this help.
+    '';
+
+    "stop-run" = mkStaticHelpFile "stop-run" ''
+      stop-run - Stop one running or queued run
+
+      Usage:
+        nix run .#stop-run -- <run-id>
+
+      Options:
+        -h, --help: Show this help.
+    '';
+
+    "stop-all-runs" = mkStaticHelpFile "stop-all-runs" ''
+      stop-all-runs - Stop all running or queued runs
+
+      Usage:
+        nix run .#stop-all-runs
+
+      Options:
+        -h, --help: Show this help.
+    '';
+  };
+
   renderTaskHelpCases = builtins.concatStringsSep "\n" (
     map (taskId: ''
       ${lib.escapeShellArg taskId})
@@ -304,6 +375,11 @@ let
       viewHelpFile =
         if builtins.hasAttr appName (compiledCore.model.views.apps or { }) then
           builtins.toString taskHelpFiles.${compiledCore.model.views.apps.${appName}.taskId}
+        else
+          "";
+      dispatcherHelpFile =
+        if builtins.hasAttr appName dispatcherHelpFiles then
+          builtins.toString dispatcherHelpFiles.${appName}
         else
           "";
     in
@@ -422,6 +498,21 @@ let
                   done
 
                   return 1
+                }
+
+                forwarded_args_only_help_flag() {
+                  if [ "$#" -ne 1 ]; then
+                    return 1
+                  fi
+
+                  case "$1" in
+                    --help|-h)
+                      return 0
+                      ;;
+                    *)
+                      return 1
+                      ;;
+                  esac
                 }
 
                 print_fast_task_help() {
@@ -776,6 +867,12 @@ let
                 excluded_services_csv="$(build_excluded_services_csv)"
                 selected_services_csv="$(launcher_selected_services_csv "''${forwarded_args[@]}")"
 
+                if [ -n ${lib.escapeShellArg dispatcherHelpFile} ] \
+                  && forwarded_args_only_help_flag "''${forwarded_args[@]}"; then
+                  cat ${lib.escapeShellArg dispatcherHelpFile}
+                  exit 0
+                fi
+
                 if forwarded_args_request_help "''${forwarded_args[@]}"; then
                   if [ -n ${lib.escapeShellArg viewHelpFile} ]; then
                     cat ${lib.escapeShellArg viewHelpFile}
@@ -912,7 +1009,7 @@ let
       '';
     };
 
-  selectorLauncherApps =
+  viewSelectorLauncherApps =
     if !launchersSupported then
       { }
     else
@@ -920,7 +1017,17 @@ let
         map (appName: {
           name = appName;
           value = mkSelectorAwareLauncher appName;
-        }) wrappedAppNames
+        }) viewWrappedAppNames
+      );
+  serviceSelectorLauncherApps =
+    if !launchersSupported then
+      { }
+    else
+      builtins.listToAttrs (
+        map (appName: {
+          name = appName;
+          value = mkSelectorAwareLauncher appName;
+        }) serviceWrappedAppNames
       );
   runtimeLauncherApps =
     if !launchersSupported then
@@ -984,13 +1091,22 @@ let
         inherit appName;
         binPrefix = "nixfied-control";
         body = ''
+          if [ "$#" -eq 1 ]; then
+            case "$1" in
+              --help|-h)
+                cat ${lib.escapeShellArg (builtins.toString runtimeControlHelpFiles.${appName})}
+                exit 0
+                ;;
+            esac
+          fi
+
           exec ${lib.escapeShellArg runtimeControlProgram} ${lib.escapeShellArg appName} "$@"
         '';
       };
     }) runtimeControlAppNames
   );
   frameworkWorkspaceApps =
-    if workspaceMarkerPresent && builtins.hasAttr "framework::test" materializedExecution.baseApps then
+    if workspaceMarkerPresent && builtins.hasAttr "framework::test" (compiledCore.model.views.apps or { }) then
       {
         "framework::test" = mkShellApp {
           appName = "framework::test";
@@ -1030,12 +1146,17 @@ let
     else
       builtins.listToAttrs (
         map (appName: {
-          name = internalBaseTargetName appName;
-          value = pkgs.writeShellScriptBin (internalBaseTargetName appName) ''
-            set -euo pipefail
-            exec ${selectorLauncherApps.${appName}.program} "$@"
+        name = internalBaseTargetName appName;
+        value = pkgs.writeShellScriptBin (internalBaseTargetName appName) ''
+          set -euo pipefail
+            exec ${
+              if builtins.elem appName viewWrappedAppNames then
+                viewSelectorLauncherApps.${appName}.program
+              else
+                serviceSelectorLauncherApps.${appName}.program
+            } "$@"
           '';
-        }) wrappedAppNames
+        }) (viewWrappedAppNames ++ serviceWrappedAppNames)
       );
 in
 {
@@ -1056,7 +1177,7 @@ in
       mkdir -p "$out/bin"
       ln -s ${
         if launchersSupported then
-          selectorLauncherApps.help.program or coreSurfaces.apps.help.program
+          coreSurfaces.apps.help.program
         else
           directApps.default.program
       } "$out/bin/default"
@@ -1067,8 +1188,9 @@ in
   schema = coreSurfaces.schema;
   apps =
     if launchersSupported then
-      coreSurfaces.apps
-      // selectorLauncherApps
+      serviceSelectorLauncherApps
+      // coreSurfaces.apps
+      // viewSelectorLauncherApps
       // runtimeLauncherApps
       // runtimeControlApps
       // frameworkUtilityApps
