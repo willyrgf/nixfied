@@ -18,6 +18,15 @@ let
   workspaceMarker = import ../workspace-marker.nix;
 
   frameworkRoot = ../../.;
+  frameworkRepoRoot = ../../../.;
+  frameworkUtilityCommand = import ../install/wrapper-command.nix {
+    inherit
+      pkgs
+      frameworkSourceRevision
+      ;
+    sourceRoot = frameworkRoot;
+    repoRoot = frameworkRepoRoot;
+  };
 
   compiledCore = import ./mkCompiledCore.nix {
     inherit
@@ -923,6 +932,43 @@ let
           value = mkRuntimeAppLauncher appName;
         }) runtimeAppNames
       );
+  frameworkUtilityApps = {
+    "framework::install" = mkShellApp {
+      appName = "framework::install";
+      binPrefix = "nixfied-framework";
+      body = ''
+        if [ "$#" -gt 0 ]; then
+          case "$1" in
+            --help|-h)
+              cat ${lib.escapeShellArg (builtins.toString taskHelpFiles."task.framework.install")}
+              exit 0
+              ;;
+          esac
+        fi
+
+        ${frameworkUtilityCommand { }}
+      '';
+    };
+
+    "framework::upgrade" = mkShellApp {
+      appName = "framework::upgrade";
+      binPrefix = "nixfied-framework";
+      body = ''
+        if [ "$#" -gt 0 ]; then
+          case "$1" in
+            --help|-h)
+              cat ${lib.escapeShellArg (builtins.toString taskHelpFiles."task.framework.upgrade")}
+              exit 0
+              ;;
+          esac
+        fi
+
+        ${frameworkUtilityCommand {
+          upgradeDefault = true;
+        }}
+      '';
+    };
+  };
   directApps =
     materializedExecution.baseApps
     // coreSurfaces.apps
@@ -981,11 +1027,12 @@ in
       coreSurfaces.apps
       // selectorLauncherApps
       // runtimeLauncherApps
+      // frameworkUtilityApps
       // {
         default = coreSurfaces.apps.help;
       }
     else
-      directApps;
+      directApps // frameworkUtilityApps;
   legacyPackages = {
     _nixfied = {
       baseApps = internalBasePackages;

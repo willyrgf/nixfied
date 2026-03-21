@@ -96,6 +96,12 @@ let
 
     "launcher-surface-contract" = { };
 
+    "framework-utility-launcher-contract" = { };
+
+    "framework-install-no-caller-compile-smoke" = { };
+
+    "framework-upgrade-no-caller-compile-smoke" = { };
+
     "disabled-service-runtime-surface-smoke" = {
       covers = [ "runtime.service-hooks" ];
     };
@@ -155,6 +161,26 @@ let
         pkgs
         model
         apps
+        ;
+    };
+
+    "framework-utility-launcher-contract" = import ./framework-utility-launcher-contract.nix {
+      inherit
+        pkgs
+        apps
+        ;
+    };
+
+    "framework-install-no-caller-compile-smoke" = import ./framework-install-no-caller-compile-smoke.nix {
+      inherit pkgs;
+    };
+
+    "framework-upgrade-no-caller-compile-smoke" = import ./framework-upgrade-no-caller-compile-smoke.nix {
+      inherit
+        pkgs
+        model
+        services
+        registry
         ;
     };
 
