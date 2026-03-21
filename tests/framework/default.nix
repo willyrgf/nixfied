@@ -116,11 +116,15 @@ let
 
     "run-id-semantic-inputs-contract" = { };
 
+    "run-id-active-collision-suffix-smoke" = { };
+
     "unselected-service-no-package-resolution-smoke" = { };
 
     "unselected-service-public-launcher-smoke" = { };
 
     "selected-source-only-resolution-smoke" = { };
+
+    "disabled-service-no-package-resolution-smoke" = { };
 
     "disabled-service-runtime-surface-smoke" = {
       covers = [ "runtime.service-hooks" ];
@@ -253,6 +257,13 @@ let
         ;
     };
 
+    "run-id-active-collision-suffix-smoke" = import ./run-id-active-collision-suffix-smoke.nix {
+      inherit
+        pkgs
+        registry
+        ;
+    };
+
     "unselected-service-no-package-resolution-smoke" =
       import ./unselected-service-no-package-resolution-smoke.nix
         {
@@ -266,6 +277,12 @@ let
     "selected-source-only-resolution-smoke" = import ./selected-source-only-resolution-smoke.nix {
       inherit pkgs;
     };
+
+    "disabled-service-no-package-resolution-smoke" =
+      import ./disabled-service-no-package-resolution-smoke.nix
+        {
+          inherit pkgs;
+        };
 
     "disabled-service-runtime-surface-smoke" = import ./disabled-service-runtime-surface-smoke.nix {
       inherit pkgs;

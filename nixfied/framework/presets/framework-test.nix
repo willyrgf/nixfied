@@ -304,9 +304,11 @@ in
             .#checks.${pkgs.system}.flake-show-no-service-materialization-smoke \
             .#checks.${pkgs.system}.run-id-noise-stability-smoke \
             .#checks.${pkgs.system}.run-id-semantic-inputs-contract \
+            .#checks.${pkgs.system}.run-id-active-collision-suffix-smoke \
             .#checks.${pkgs.system}.unselected-service-no-package-resolution-smoke \
             .#checks.${pkgs.system}.unselected-service-public-launcher-smoke \
             .#checks.${pkgs.system}.selected-source-only-resolution-smoke \
+            .#checks.${pkgs.system}.disabled-service-no-package-resolution-smoke \
             .#checks.${pkgs.system}.disabled-service-runtime-surface-smoke \
             .#checks.${pkgs.system}.launcher-skip-service-pruning-smoke \
             .#checks.${pkgs.system}.launcher-help-fast-path-smoke \
