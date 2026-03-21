@@ -108,6 +108,8 @@ let
 
     "runtime-controls-no-service-materialization-smoke" = { };
 
+    "unselected-service-no-package-resolution-smoke" = { };
+
     "disabled-service-runtime-surface-smoke" = {
       covers = [ "runtime.service-hooks" ];
     };
@@ -204,6 +206,10 @@ let
     };
 
     "runtime-controls-no-service-materialization-smoke" = import ./runtime-controls-no-service-materialization-smoke.nix {
+      inherit pkgs;
+    };
+
+    "unselected-service-no-package-resolution-smoke" = import ./unselected-service-no-package-resolution-smoke.nix {
       inherit pkgs;
     };
 

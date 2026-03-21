@@ -14,6 +14,7 @@ let
   services = compileServices {
     inherit
       pkgs
+      selectedServices
       ;
     resolved = compiledCore.resolved;
   };

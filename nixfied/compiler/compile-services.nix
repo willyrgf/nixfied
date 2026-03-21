@@ -2,6 +2,7 @@
 {
   resolved,
   pkgs,
+  selectedServices ? null,
 }:
 let
   serviceConfig = import ../framework/core/service-config.nix {
@@ -9,8 +10,31 @@ let
   };
   services = resolved.services or { };
   excludedServices = resolved.graph.excludedServices or [ ];
+  selectedServiceNames =
+    if selectedServices == null then
+      null
+    else
+      builtins.sort builtins.lessThan (lib.unique (builtins.filter (name: name != "") selectedServices));
+  selectedServiceSet =
+    if selectedServiceNames == null then
+      { }
+    else
+      builtins.listToAttrs (
+        map (serviceName: {
+          name = serviceName;
+          value = true;
+        }) selectedServiceNames
+      );
   names = builtins.sort builtins.lessThan (
-    builtins.filter (name: !(builtins.elem name excludedServices)) (builtins.attrNames services)
+    builtins.filter (
+      name:
+      !(builtins.elem name excludedServices)
+      && (
+        selectedServiceNames == null
+        || builtins.hasAttr name selectedServiceSet
+        || builtins.hasAttr "service.${name}" selectedServiceSet
+      )
+    ) (builtins.attrNames services)
   );
 in
 builtins.listToAttrs (
