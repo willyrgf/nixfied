@@ -3,23 +3,46 @@
 Nixfied is a model-first framework.
 
 Typed Nix modules compile into a canonical `nixfiedModel`, and runtime interfaces (help text, app surfaces, and workflows) are generated from that model.
+The canonical model is intentionally cheap: heavy service runtime normalization and package resolution stay outside `model.*` and are only materialized for selected execution surfaces.
 
 ## Model Pipeline
 
-`modules -> resolved config -> compiler passes -> nixfiedModel -> stateHash + apps + introspection`
+`modules -> resolved config -> compiler passes -> cheap nixfiedModel + scoped runtime materialization -> stateHash + runtimeHash + apps + introspection`
 
 Compiler pass order:
 
 1. `resolve-modules`
 2. `normalize-runtime`
-3. `compile-services`
-4. `compile-tasks`
-5. `compile-workflows`
-6. `compile-features`
-7. `compile-views`
-8. `finalize-model`
+3. `compile-service-catalog`
+4. `compile-services`
+5. `compile-tasks`
+6. `compile-workflows`
+7. `compile-features`
+8. `compile-views`
+9. `finalize-model`
 
 Each pass is pure and deterministic.
+
+## Model Separation
+
+The canonical exported model contains:
+
+- `schema`
+- `identity`
+- `runtime`
+- `serviceCatalog`
+- `tasks`
+- `workflows`
+- `features`
+- `views`
+- `state`
+
+Separation rules:
+
+- `model.serviceCatalog` is the cheap canonical service view used by introspection, hashing, and selection.
+- Heavy normalized service runtime remains outside `model.*` as internal `compiled.services`.
+- `stateHash` hashes the cheap canonical model.
+- `runtimeHash` is a separate deterministic fingerprint of heavy service runtime inputs and is used by dispatcher/orchestrator/executor run identity.
 
 Graph exclusion is resolved before service compilation:
 
@@ -47,8 +70,16 @@ Task/workflow execution is process-first and uses:
 Runtime path:
 
 - dispatcher -> orchestrator -> executor
-- public flake launcher -> selector-aware pure app selection -> dispatcher -> orchestrator -> executor
+- public flake launcher -> selector-aware pure app selection -> scoped dispatcher -> orchestrator -> executor
 - service contract -> generated `svc::...` apps / `SVC_...` hooks -> task runtime shell
+
+Service selection and env scoping:
+
+- `nixfied/framework/runtime/service-selection.nix` derives sorted service sets from task requirements, recursive task deps, workflow units, workflow `preRun`/`postRun` tasks, `workflowRef` targets, workflow mode resolution, and explicit launcher selectors.
+- Public task apps plus `run-task`, `run-workflow`, and `run-workflow-parallel` are two-stage surfaces: select first, then execute a scoped runtime.
+- `svc::<service>::<op>` surfaces are single-service scoped.
+- Per-service `SVC_*` hook env and `NIXFIED_SERVICE_*` env are exported only for the selected service set of the current invocation.
+- `NIXFIED_SERVICE_ROOT` remains runtime-global; per-service env does not remain ambient.
 
 Execution contracts:
 
@@ -91,6 +122,8 @@ Introspection apps:
 - `task::<id>`
 - `schema`
 
+The `services` introspection surface is backed by `model.serviceCatalog`, not the heavy runtime materialization.
+
 ## Project Layout
 
 - `flake.nix`: top-level flake entrypoint.
@@ -114,3 +147,6 @@ Authoritative checks in `tests/framework/` include:
 - registry replay/events contract
 - executor/env-sandbox contracts
 - log prefix contract
+- runtime service-selection contract
+- launcher skip-service pruning contract
+- service hook env scoping contract
