@@ -110,6 +110,8 @@ let
 
     "runtime-controls-no-service-materialization-smoke" = { };
 
+    "flake-show-no-service-materialization-smoke" = { };
+
     "unselected-service-no-package-resolution-smoke" = { };
 
     "unselected-service-public-launcher-smoke" = { };
@@ -216,6 +218,10 @@ let
     };
 
     "runtime-controls-no-service-materialization-smoke" = import ./runtime-controls-no-service-materialization-smoke.nix {
+      inherit pkgs;
+    };
+
+    "flake-show-no-service-materialization-smoke" = import ./flake-show-no-service-materialization-smoke.nix {
       inherit pkgs;
     };
 

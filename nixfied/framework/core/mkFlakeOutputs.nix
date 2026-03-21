@@ -41,15 +41,6 @@ let
       ;
   };
 
-  materializedExecution = import ./materializeExecution.nix {
-    inherit
-      pkgs
-      projectRoot
-      ;
-    compiledCore = compiledCore;
-    frameworkSourceFlakeRef = null;
-  };
-
   coreSurfaces = import ./mkCoreSurfaces.nix {
     inherit
       pkgs
@@ -1062,40 +1053,57 @@ let
       };
     }) runtimeControlAppNames
   );
-  frameworkWorkspaceApps =
-    if workspaceMarkerPresent && builtins.hasAttr "framework::test" (compiledCore.model.views.apps or { }) then
-      {
-        "framework::test" = mkShellApp {
-          appName = "framework::test";
-          binPrefix = "nixfied-framework";
-          body = ''
-            if [ "$#" -gt 0 ]; then
-              case "$1" in
-                --help|-h)
-                  cat ${lib.escapeShellArg (builtins.toString taskHelpFiles."task.framework.test")}
-                  exit 0
-                  ;;
-              esac
-            fi
-
-            cd ${lib.escapeShellArg projectRootAbs}
-            exec ${lib.escapeShellArg materializedExecution.baseApps."framework::test".program} "$@"
-          '';
+  heavyOutputs =
+    let
+      materializedExecution = import ./materializeExecution.nix {
+        inherit
+          pkgs
+          projectRoot
+          ;
+        compiledCore = compiledCore;
+        frameworkSourceFlakeRef = null;
+      };
+    in
+    {
+      runtimeHash = materializedExecution.runtimeHash or compiledCore.model.identity.evalHash;
+      services = materializedExecution.services;
+      serviceApis = materializedExecution.serviceApis;
+      serviceHookEnv = materializedExecution.serviceHookEnv;
+      directApps =
+        materializedExecution.baseApps
+        // coreSurfaces.apps
+        // {
+          default =
+            if builtins.hasAttr "help" coreSurfaces.apps then
+              coreSurfaces.apps.help
+            else if builtins.hasAttr "default" materializedExecution.baseApps then
+              materializedExecution.baseApps.default
+            else
+              materializedExecution.baseApps.help;
         };
-      }
-    else
-      { };
-  directApps =
-    materializedExecution.baseApps
-    // coreSurfaces.apps
-    // {
-      default =
-        if builtins.hasAttr "help" coreSurfaces.apps then
-          coreSurfaces.apps.help
-        else if builtins.hasAttr "default" materializedExecution.baseApps then
-          materializedExecution.baseApps.default
+      frameworkWorkspaceApps =
+        if workspaceMarkerPresent && builtins.hasAttr "framework::test" (compiledCore.model.views.apps or { }) then
+          {
+            "framework::test" = mkShellApp {
+              appName = "framework::test";
+              binPrefix = "nixfied-framework";
+              body = ''
+                if [ "$#" -gt 0 ]; then
+                  case "$1" in
+                    --help|-h)
+                      cat ${lib.escapeShellArg (builtins.toString taskHelpFiles."task.framework.test")}
+                      exit 0
+                      ;;
+                  esac
+                fi
+
+                cd ${lib.escapeShellArg projectRootAbs}
+                exec ${lib.escapeShellArg materializedExecution.baseApps."framework::test".program} "$@"
+              '';
+            };
+          }
         else
-          materializedExecution.baseApps.help;
+          { };
     };
   internalBasePackages =
     if !launchersSupported then
@@ -1119,16 +1127,16 @@ in
 {
   model = compiledCore.model;
   stateHash = compiledCore.stateHash;
-  runtimeHash = materializedExecution.runtimeHash or compiledCore.model.identity.evalHash;
+  runtimeHash = heavyOutputs.runtimeHash;
   tasks = compiledCore.model.tasks;
-  services = materializedExecution.services;
+  services = heavyOutputs.services;
   serviceCatalog = compiledCore.model.serviceCatalog;
   workflows = compiledCore.model.workflows;
   features = compiledCore.model.features;
   selectionIndex = compiledCore.selectionIndex;
   serviceSurfaceCatalog = compiledCore.serviceSurfaceCatalog;
-  serviceApis = materializedExecution.serviceApis;
-  serviceHookEnv = materializedExecution.serviceHookEnv;
+  serviceApis = heavyOutputs.serviceApis;
+  serviceHookEnv = heavyOutputs.serviceHookEnv;
   packages = coreSurfaces.packages // {
     default = pkgs.runCommand "nixfied-default" { } ''
       mkdir -p "$out/bin"
@@ -1136,7 +1144,7 @@ in
         if launchersSupported then
           coreSurfaces.apps.help.program
         else
-          directApps.default.program
+          heavyOutputs.directApps.default.program
       } "$out/bin/default"
     '';
   };
@@ -1151,12 +1159,15 @@ in
       // runtimeLauncherApps
       // runtimeControlApps
       // frameworkUtilityApps
-      // frameworkWorkspaceApps
+      // heavyOutputs.frameworkWorkspaceApps
       // {
         default = coreSurfaces.apps.help;
       }
     else
-      directApps // runtimeControlApps // frameworkUtilityApps // frameworkWorkspaceApps;
+      heavyOutputs.directApps
+      // runtimeControlApps
+      // frameworkUtilityApps
+      // heavyOutputs.frameworkWorkspaceApps;
   legacyPackages = {
     _nixfied = {
       baseApps = internalBasePackages;
