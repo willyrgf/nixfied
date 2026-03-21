@@ -77,7 +77,10 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
     local task_id="$3"
     local slot_value="$4"
     local env_value="$5"
+    local argv_json
     shift 5
+
+    argv_json="$(jq_positional_args_json "$@")" || return 1
 
     ${pkgs.jq}/bin/jq -cnS \
       --arg runtimeHash "${runtimeHash}" \
@@ -86,7 +89,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       --arg taskId "$task_id" \
       --arg slot "$slot_value" \
       --arg env "$env_value" \
-      --args "$@" \
+      --argjson argv "$argv_json" \
       '{
         runtime_hash: $runtimeHash,
         run_kind: $runKind,
@@ -94,7 +97,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         task_id: (if $taskId == "" then null else $taskId end),
         slot: $slot,
         env: $env,
-        argv: $ARGS.positional
+        argv: $argv
       }'
   }
 

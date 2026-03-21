@@ -104,6 +104,8 @@ let
 
     "launcher-help-fast-path-smoke" = { };
 
+    "orchestrator-arg-forwarding-smoke" = { };
+
     "service-hook-env-smoke" = {
       covers = [ "runtime.service-hooks" ];
     };
@@ -165,6 +167,10 @@ let
     };
 
     "launcher-help-fast-path-smoke" = import ./launcher-help-fast-path-smoke.nix {
+      inherit pkgs;
+    };
+
+    "orchestrator-arg-forwarding-smoke" = import ./orchestrator-arg-forwarding-smoke.nix {
       inherit pkgs;
     };
 

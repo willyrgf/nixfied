@@ -147,7 +147,10 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
     local task_id="$3"
     local slot_value="$4"
     local env_value="$5"
+    local argv_json
     shift 5
+
+    argv_json="$(jq_positional_args_json "$@")" || return 1
 
     ${pkgs.jq}/bin/jq -cnS \
       --arg runtimeHash "${runtimeHash}" \
@@ -156,7 +159,7 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
       --arg taskId "$task_id" \
       --arg slot "$slot_value" \
       --arg env "$env_value" \
-      --args "$@" \
+      --argjson argv "$argv_json" \
       '{
         runtime_hash: $runtimeHash,
         run_kind: $runKind,
@@ -164,7 +167,7 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
         task_id: (if $taskId == "" then null else $taskId end),
         slot: $slot,
         env: $env,
-        argv: $ARGS.positional
+        argv: $argv
       }'
   }
 
@@ -1011,7 +1014,7 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
     workflow_ref="$(resolve_task_workflow_ref "$task_id")"
 
     split_process_mode "$@"
-    if task_help_requested "''${FORWARD_ARGS[@]}"; then
+    if call_with_array_args FORWARD_ARGS task_help_requested; then
       if ! task_print_help "$task_id"; then
         echo "ERROR: unknown task '$task_id'"
         return "$NIXFIED_EXIT_USAGE"
@@ -1019,9 +1022,9 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
       return 0
     fi
     if [ -n "$workflow_ref" ]; then
-      validate_workflow_args "$workflow_ref" "''${FORWARD_ARGS[@]}"
+      call_with_array_args FORWARD_ARGS validate_workflow_args "$workflow_ref"
     else
-      validate_typed_task_args "$task_id" "''${FORWARD_ARGS[@]}"
+      call_with_array_args FORWARD_ARGS validate_typed_task_args "$task_id"
     fi
 
     if [ -n "$workflow_ref" ]; then
@@ -1033,12 +1036,12 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
       ephemeral_enabled=1
     fi
 
-    mapfile -t run_id_args < <(filter_run_id_args "''${FORWARD_ARGS[@]}")
-    run_id="$(compute_run_id "task" "$workflow_ref" "$task_id" "''${run_id_args[@]}")"
+    mapfile -t run_id_args < <(call_with_array_args FORWARD_ARGS filter_run_id_args)
+    run_id="$(call_with_array_args run_id_args compute_run_id "task" "$workflow_ref" "$task_id")"
     if [ -n "$MACHINE_RUN_ID_FILE" ]; then
       write_text_file_atomic "$MACHINE_RUN_ID_FILE" "$run_id"
     fi
-    args_json="$(${pkgs.jq}/bin/jq -cn '$ARGS.positional' --args -- "''${FORWARD_ARGS[@]}")"
+    args_json="$(call_with_array_args FORWARD_ARGS jq_positional_args_json)"
     create_run_record "$run_id" "run-task" "$workflow_ref" "$task_id" "$execution_mode" "$PROCESS_MODE" "$ephemeral_enabled" "$args_json" || {
       deactivate_run_id "$run_id"
       return 1
@@ -1054,9 +1057,9 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
     ensure_artifacts_root "$run_id" "$ephemeral_enabled" "$workflow_ref"
 
     if [ "$ephemeral_enabled" = "1" ]; then
-      launch_command "$run_id" "$PROCESS_MODE" "$workflow_ref" "$task_id" "$EPHEMERAL_EXECUTOR_WRAPPER" "$EXECUTOR_PROGRAM" run-task "$task_id" "''${FORWARD_ARGS[@]}"
+      call_with_array_args FORWARD_ARGS launch_command "$run_id" "$PROCESS_MODE" "$workflow_ref" "$task_id" "$EPHEMERAL_EXECUTOR_WRAPPER" "$EXECUTOR_PROGRAM" run-task "$task_id"
     else
-      launch_command "$run_id" "$PROCESS_MODE" "$workflow_ref" "$task_id" "$EXECUTOR_PROGRAM" run-task "$task_id" "''${FORWARD_ARGS[@]}"
+      call_with_array_args FORWARD_ARGS launch_command "$run_id" "$PROCESS_MODE" "$workflow_ref" "$task_id" "$EXECUTOR_PROGRAM" run-task "$task_id"
     fi
   }
 
@@ -1087,19 +1090,19 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
     fi
 
     split_process_mode "$@"
-    validate_workflow_args "$workflow_id" "''${FORWARD_ARGS[@]}"
+    call_with_array_args FORWARD_ARGS validate_workflow_args "$workflow_id"
 
     if [ "''${NIXFIED_WORKFLOW_PARALLEL:-}" = "1" ]; then
       mode="workflow-parallel"
     fi
 
     ephemeral_enabled="$(workflow_ephemeral_flag "$workflow_id")"
-    mapfile -t run_id_args < <(filter_run_id_args "''${FORWARD_ARGS[@]}")
-    run_id="$(compute_run_id "workflow" "$workflow_id" "" "''${run_id_args[@]}")"
+    mapfile -t run_id_args < <(call_with_array_args FORWARD_ARGS filter_run_id_args)
+    run_id="$(call_with_array_args run_id_args compute_run_id "workflow" "$workflow_id" "")"
     if [ -n "$MACHINE_RUN_ID_FILE" ]; then
       write_text_file_atomic "$MACHINE_RUN_ID_FILE" "$run_id"
     fi
-    args_json="$(${pkgs.jq}/bin/jq -cn '$ARGS.positional' --args -- "''${FORWARD_ARGS[@]}")"
+    args_json="$(call_with_array_args FORWARD_ARGS jq_positional_args_json)"
     create_run_record "$run_id" "run-workflow" "$workflow_id" "" "$mode" "$PROCESS_MODE" "$ephemeral_enabled" "$args_json" || {
       deactivate_run_id "$run_id"
       return 1
@@ -1115,9 +1118,9 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
     ensure_artifacts_root "$run_id" "$ephemeral_enabled" "$workflow_id"
 
     if [ "$ephemeral_enabled" = "1" ]; then
-      launch_command "$run_id" "$PROCESS_MODE" "$workflow_id" "" "$EPHEMERAL_EXECUTOR_WRAPPER" "$EXECUTOR_PROGRAM" run-workflow "$workflow_id" "''${FORWARD_ARGS[@]}"
+      call_with_array_args FORWARD_ARGS launch_command "$run_id" "$PROCESS_MODE" "$workflow_id" "" "$EPHEMERAL_EXECUTOR_WRAPPER" "$EXECUTOR_PROGRAM" run-workflow "$workflow_id"
     else
-      launch_command "$run_id" "$PROCESS_MODE" "$workflow_id" "" "$EXECUTOR_PROGRAM" run-workflow "$workflow_id" "''${FORWARD_ARGS[@]}"
+      call_with_array_args FORWARD_ARGS launch_command "$run_id" "$PROCESS_MODE" "$workflow_id" "" "$EXECUTOR_PROGRAM" run-workflow "$workflow_id"
     fi
   }
 
