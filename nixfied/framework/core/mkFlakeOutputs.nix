@@ -16,6 +16,7 @@ let
   skipPolicy = import ../runtime/helpers/skip-policy.nix { inherit pkgs; };
   canonical = import ./canonical.nix { inherit lib; };
   workspaceMarker = import ../workspace-marker.nix;
+  registry = import ../runtime/registry { inherit pkgs; };
 
   frameworkRoot = ../../.;
   frameworkRepoRoot = ../../../.;
@@ -133,8 +134,7 @@ let
   );
   runtimeAppNames = builtins.sort builtins.lessThan (
     lib.unique (
-      runtimeControlAppNames
-      ++ runtimeProxyAppNames
+      runtimeProxyAppNames
       ++ builtins.filter (appName: builtins.elem appName nonSelectorAppNames) viewAppNames
     )
   );
@@ -969,6 +969,26 @@ let
       '';
     };
   };
+  orchestratorControl = import ../runtime/orchestrator-control.nix {
+    inherit
+      pkgs
+      registry
+      ;
+    model = compiledCore.model;
+  };
+  runtimeControlProgram = "${orchestratorControl}/bin/nixfied-orchestrator-control";
+  runtimeControlApps = builtins.listToAttrs (
+    map (appName: {
+      name = appName;
+      value = mkShellApp {
+        inherit appName;
+        binPrefix = "nixfied-control";
+        body = ''
+          exec ${lib.escapeShellArg runtimeControlProgram} ${lib.escapeShellArg appName} "$@"
+        '';
+      };
+    }) runtimeControlAppNames
+  );
   frameworkWorkspaceApps =
     if workspaceMarkerPresent && builtins.hasAttr "framework::test" materializedExecution.baseApps then
       {
@@ -1050,13 +1070,14 @@ in
       coreSurfaces.apps
       // selectorLauncherApps
       // runtimeLauncherApps
+      // runtimeControlApps
       // frameworkUtilityApps
       // frameworkWorkspaceApps
       // {
         default = coreSurfaces.apps.help;
       }
     else
-      directApps // frameworkUtilityApps // frameworkWorkspaceApps;
+      directApps // runtimeControlApps // frameworkUtilityApps // frameworkWorkspaceApps;
   legacyPackages = {
     _nixfied = {
       baseApps = internalBasePackages;

@@ -104,6 +104,10 @@ let
 
     "framework-upgrade-no-caller-compile-smoke" = { };
 
+    "runtime-control-launcher-contract" = { };
+
+    "runtime-controls-no-service-materialization-smoke" = { };
+
     "disabled-service-runtime-surface-smoke" = {
       covers = [ "runtime.service-hooks" ];
     };
@@ -188,6 +192,17 @@ let
         services
         registry
         ;
+    };
+
+    "runtime-control-launcher-contract" = import ./runtime-control-launcher-contract.nix {
+      inherit
+        pkgs
+        apps
+        ;
+    };
+
+    "runtime-controls-no-service-materialization-smoke" = import ./runtime-controls-no-service-materialization-smoke.nix {
+      inherit pkgs;
     };
 
     "disabled-service-runtime-surface-smoke" = import ./disabled-service-runtime-surface-smoke.nix {
