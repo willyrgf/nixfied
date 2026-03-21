@@ -112,6 +112,10 @@ let
 
     "flake-show-no-service-materialization-smoke" = { };
 
+    "run-id-noise-stability-smoke" = { };
+
+    "run-id-semantic-inputs-contract" = { };
+
     "unselected-service-no-package-resolution-smoke" = { };
 
     "unselected-service-public-launcher-smoke" = { };
@@ -223,6 +227,20 @@ let
 
     "flake-show-no-service-materialization-smoke" = import ./flake-show-no-service-materialization-smoke.nix {
       inherit pkgs;
+    };
+
+    "run-id-noise-stability-smoke" = import ./run-id-noise-stability-smoke.nix {
+      inherit
+        pkgs
+        registry
+        ;
+    };
+
+    "run-id-semantic-inputs-contract" = import ./run-id-semantic-inputs-contract.nix {
+      inherit
+        pkgs
+        registry
+        ;
     };
 
     "unselected-service-no-package-resolution-smoke" = import ./unselected-service-no-package-resolution-smoke.nix {

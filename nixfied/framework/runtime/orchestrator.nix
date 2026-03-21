@@ -147,26 +147,31 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
     local task_id="$3"
     local slot_value="$4"
     local env_value="$5"
+    local pass_through_env_json="$6"
     local argv_json
-    shift 5
+    shift 6
 
     argv_json="$(jq_positional_args_json "$@")" || return 1
 
     ${pkgs.jq}/bin/jq -cnS \
+      --arg modelEvalHash "${model.identity.evalHash}" \
       --arg runtimeHash "${runtimeHash}" \
       --arg runKind "$run_kind" \
       --arg workflowId "$workflow_id" \
       --arg taskId "$task_id" \
       --arg slot "$slot_value" \
       --arg env "$env_value" \
+      --argjson passThroughEnv "$pass_through_env_json" \
       --argjson argv "$argv_json" \
       '{
+        model_eval_hash: $modelEvalHash,
         runtime_hash: $runtimeHash,
         run_kind: $runKind,
         workflow_id: (if $workflowId == "" then null else $workflowId end),
         task_id: (if $taskId == "" then null else $taskId end),
         slot: $slot,
         env: $env,
+        pass_through_env: $passThroughEnv,
         argv: $argv
       }'
   }
@@ -219,6 +224,108 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
     printf '%s\n' "''${filtered_args[@]}"
   }
 
+  emit_runtime_pass_through_env_names() {
+    local runtime_json="$1"
+    printf '%s' "$runtime_json" | ${pkgs.jq}/bin/jq -r '(.passThroughEnv // [])[]?'
+  }
+
+  run_id_pass_through_env_json() {
+    local run_kind="$1"
+    local workflow_id="$2"
+    local task_id="$3"
+    local env_name=""
+    local dep_task_id=""
+    local phase=""
+    local hook_id=""
+    local runner_type=""
+    local nested_workflow_id=""
+    local unit_json=""
+    local unit_task_id=""
+    local -A seen_tasks
+    local -A seen_workflows
+
+    collect_task_env_names() {
+      local current_task_id="$1"
+
+      if [ -z "$current_task_id" ] || [ -n "''${seen_tasks[$current_task_id]:-}" ]; then
+        return 0
+      fi
+      seen_tasks[$current_task_id]=1
+
+      emit_runtime_pass_through_env_names "$(task_runtime_json "$current_task_id")"
+
+      for phase in pre post; do
+        while IFS= read -r hook_id; do
+          [ -n "$hook_id" ] || continue
+          emit_runtime_pass_through_env_names "$(task_hook_runtime_json "$current_task_id" "$phase" "$hook_id")"
+        done < <(task_hook_ids "$current_task_id" "$phase" 2>/dev/null || true)
+      done
+
+      while IFS= read -r dep_task_id; do
+        [ -n "$dep_task_id" ] || continue
+        collect_task_env_names "$dep_task_id"
+      done < <(task_needs "$current_task_id" 2>/dev/null || true)
+
+      while IFS= read -r dep_task_id; do
+        [ -n "$dep_task_id" ] || continue
+        collect_task_env_names "$dep_task_id"
+      done < <(task_soft_needs "$current_task_id" 2>/dev/null || true)
+
+      runner_type="$(task_runner_type "$current_task_id")"
+      if [ "$runner_type" = "workflowRef" ]; then
+        nested_workflow_id="$(task_runner_workflow_id "$current_task_id")"
+        if [ -n "$nested_workflow_id" ]; then
+          collect_workflow_env_names "$nested_workflow_id"
+        fi
+      fi
+    }
+
+    collect_workflow_env_names() {
+      local current_workflow_id="$1"
+
+      if [ -z "$current_workflow_id" ] || [ -n "''${seen_workflows[$current_workflow_id]:-}" ]; then
+        return 0
+      fi
+      seen_workflows[$current_workflow_id]=1
+
+      while IFS= read -r dep_task_id; do
+        [ -n "$dep_task_id" ] || continue
+        collect_task_env_names "$dep_task_id"
+      done < <(workflow_phase_tasks "$current_workflow_id" preRun 2>/dev/null || true)
+
+      while IFS= read -r unit_json; do
+        [ -n "$unit_json" ] || continue
+        unit_task_id="$(workflow_unit_task_id "$unit_json")"
+        if [ -n "$unit_task_id" ] && [ "$unit_task_id" != "null" ]; then
+          collect_task_env_names "$unit_task_id"
+        fi
+      done < <(workflow_plan_records "$current_workflow_id" 2>/dev/null || true)
+
+      while IFS= read -r dep_task_id; do
+        [ -n "$dep_task_id" ] || continue
+        collect_task_env_names "$dep_task_id"
+      done < <(workflow_phase_tasks "$current_workflow_id" postRun 2>/dev/null || true)
+    }
+
+    {
+      while IFS= read -r env_name; do
+        [ -n "$env_name" ] || continue
+        if [ -n "''${!env_name+x}" ]; then
+          ${pkgs.jq}/bin/jq -cn --arg key "$env_name" --arg value "''${!env_name}" '{key: $key, value: $value}'
+        fi
+      done < <(
+        case "$run_kind" in
+          task)
+            collect_task_env_names "$task_id"
+            ;;
+          workflow)
+            collect_workflow_env_names "$workflow_id"
+            ;;
+        esac | ${pkgs.coreutils}/bin/sort -u
+      )
+    } | ${pkgs.jq}/bin/jq -cs 'from_entries'
+  }
+
   compute_run_id() {
     local run_kind="$1"
     local workflow_id="$2"
@@ -232,6 +339,7 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
 
     local slot_value
     local env_value
+    local pass_through_env_json
     local run_input
     local run_base
     local run_id
@@ -242,8 +350,9 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
 
     slot_value="''${!slot_var:-$slot_default}"
     env_value="''${!env_var:-$env_default}"
+    pass_through_env_json="$(run_id_pass_through_env_json "$run_kind" "$workflow_id" "$task_id")"
 
-    run_input="$(canonical_run_id_envelope "$run_kind" "$workflow_id" "$task_id" "$slot_value" "$env_value" "$@")"
+    run_input="$(canonical_run_id_envelope "$run_kind" "$workflow_id" "$task_id" "$slot_value" "$env_value" "$pass_through_env_json" "$@")"
     run_base="$(sha256_text "$run_input")"
     run_id="run-''${run_base:0:24}"
     RUN_SUFFIX_REASON=""
