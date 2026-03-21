@@ -25,6 +25,7 @@ let
 
   normalizeRuntime = import ./normalize-runtime.nix { inherit lib; };
   compileServiceCatalog = import ./compile-service-catalog.nix { inherit lib; };
+  compileServiceSurfaceCatalog = import ./compile-service-surface-catalog.nix { inherit lib; };
   compileServices = import ./compile-services.nix { inherit lib; };
 
   compileTasks = import ./compile-tasks.nix {
@@ -86,6 +87,10 @@ rec {
 
       serviceCatalog = compileServiceCatalog {
         resolved = resolvedModuleGraph.config;
+      };
+
+      serviceSurfaceCatalog = compileServiceSurfaceCatalog {
+        inherit serviceCatalog;
       };
 
       taskCompilation = compileTasks {
@@ -156,6 +161,7 @@ rec {
       views = views;
       runtime = runtime;
       serviceCatalog = serviceCatalog;
+      serviceSurfaceCatalog = serviceSurfaceCatalog;
       features = features;
       selectionIndex = selectionIndex;
     };

@@ -98,6 +98,8 @@ let
 
     "framework-utility-launcher-contract" = { };
 
+    "service-surface-catalog-contract" = { };
+
     "framework-install-no-caller-compile-smoke" = { };
 
     "framework-test-no-caller-compile-smoke" = { };
@@ -183,6 +185,10 @@ let
         pkgs
         apps
         ;
+    };
+
+    "service-surface-catalog-contract" = import ./service-surface-catalog-contract.nix {
+      inherit pkgs;
     };
 
     "framework-install-no-caller-compile-smoke" = import ./framework-install-no-caller-compile-smoke.nix {

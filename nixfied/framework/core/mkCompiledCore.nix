@@ -33,15 +33,5 @@ let
       localOverrides
       ;
   };
-
-  serviceSurfaceCatalog = import ./mkServiceSurfaceCatalog.nix {
-    inherit
-      pkgs
-      ;
-    model = compiled.model;
-  };
 in
 compiled
-// {
-  inherit serviceSurfaceCatalog;
-}
