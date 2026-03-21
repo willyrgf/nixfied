@@ -6,7 +6,9 @@ in
 assert pkgs.lib.hasInfix "compute_run_id() {" source;
 assert pkgs.lib.hasInfix "canonical_run_id_envelope() {" source;
 assert pkgs.lib.hasInfix "jq -cnS" source;
-assert pkgs.lib.hasInfix "argv: $ARGS.positional" source;
+assert pkgs.lib.hasInfix "argv_json=\"$(jq_positional_args_json \"$@\")\"" source;
+assert pkgs.lib.hasInfix "--argjson argv \"$argv_json\"" source;
+assert pkgs.lib.hasInfix "argv: $argv" source;
 assert pkgs.lib.hasInfix "ERROR: usage: run-task <task-id> [-- ...]" source;
 assert pkgs.lib.hasInfix "ERROR: usage: run-workflow <workflow-id> [-- ...]" source;
 assert pkgs.lib.hasInfix "ERROR: unknown workflow '$workflow_id'" source;

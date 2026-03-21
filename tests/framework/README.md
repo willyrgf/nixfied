@@ -96,6 +96,16 @@ Run it directly with:
 nix run .#framework::test -- --shard launcher-pruning --summary
 ```
 
+For local help-path derivation telemetry, use:
+
+```bash
+tests/framework/scripts/measure-help-derivations.sh .
+```
+
+That helper reports incremental derivations built against the current store.
+Use a disposable or otherwise clean Nix store when you need an authoritative
+hard derivation budget.
+
 Use `tests/framework/default.nix` as the source of truth for:
 - the complete registered check list
 - the exact check names
