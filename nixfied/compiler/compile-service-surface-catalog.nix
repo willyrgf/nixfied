@@ -12,9 +12,7 @@ let
           service = catalog.${serviceId};
         in
         service.name or serviceId
-      ) (
-        builtins.filter (serviceId: catalog.${serviceId}.enable or false) (builtins.attrNames catalog)
-      )
+      ) (builtins.filter (serviceId: catalog.${serviceId}.enable or false) (builtins.attrNames catalog))
     )
   );
 

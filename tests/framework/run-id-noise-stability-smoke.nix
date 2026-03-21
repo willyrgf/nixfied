@@ -57,12 +57,8 @@ pkgs.runCommand "run-id-noise-stability-smoke" { } ''
   export NIXFIED_RUNTIME_DIR_SCOPE_OVERRIDE="$TMPDIR/runtime-scope"
   mkdir -p "$REGISTRY_ROOT" "$CI_ARTIFACTS_DIR" "$NIXFIED_RUNTIME_DIR_SCOPE_OVERRIDE"
 
-  FOO=alpha "$EXECUTOR" run-task "${
-    taskId
-  }" --run-id-file "$TMPDIR/run-a.run-id" > "$TMPDIR/run-a.out" 2>&1
-  FOO=beta "$EXECUTOR" run-task "${
-    taskId
-  }" --run-id-file "$TMPDIR/run-b.run-id" > "$TMPDIR/run-b.out" 2>&1
+  FOO=alpha "$EXECUTOR" run-task "${taskId}" --run-id-file "$TMPDIR/run-a.run-id" > "$TMPDIR/run-a.out" 2>&1
+  FOO=beta "$EXECUTOR" run-task "${taskId}" --run-id-file "$TMPDIR/run-b.run-id" > "$TMPDIR/run-b.out" 2>&1
 
   run_a="$(read_trimmed_file "$TMPDIR/run-a.run-id")"
   run_b="$(read_trimmed_file "$TMPDIR/run-b.run-id")"

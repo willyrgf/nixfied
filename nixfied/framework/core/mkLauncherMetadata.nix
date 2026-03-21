@@ -33,9 +33,7 @@ let
     )
   );
 
-  serviceWrappedAppNames = builtins.sort builtins.lessThan (
-    serviceSurfaceCatalog.appNames or [ ]
-  );
+  serviceWrappedAppNames = builtins.sort builtins.lessThan (serviceSurfaceCatalog.appNames or [ ]);
 
   runtimeAppNames = builtins.sort builtins.lessThan (
     lib.unique (

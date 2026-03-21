@@ -105,13 +105,16 @@ let
     };
   };
 
-  selectionIndex = import ../../nixfied/compiler/compile-selection-index.nix {
-    inherit (pkgs) lib;
-  } {
-    tasks = model.tasks;
-    workflows = model.workflows;
-    serviceCatalog = { };
-  };
+  selectionIndex =
+    import ../../nixfied/compiler/compile-selection-index.nix
+      {
+        inherit (pkgs) lib;
+      }
+      {
+        tasks = model.tasks;
+        workflows = model.workflows;
+        serviceCatalog = { };
+      };
 
   runtimeSelectionIndex = import ../../nixfied/framework/runtime/service-selection.nix {
     inherit (pkgs) lib;
@@ -132,24 +135,32 @@ assert runtimeSelectionIndex.taskIds == selectionIndex.taskIds;
 assert runtimeSelectionIndex.workflowIds == selectionIndex.workflowIds;
 assert runtimeSelectionIndex.workflowFamilies == selectionIndex.workflowFamilies;
 assert runtimeSelectionIndex.taskDirectServicesById == selectionIndex.taskDirectServicesById;
-assert runtimeSelectionIndex.taskBaseClosureServicesById == selectionIndex.taskBaseClosureServicesById;
+assert
+  runtimeSelectionIndex.taskBaseClosureServicesById == selectionIndex.taskBaseClosureServicesById;
 assert runtimeSelectionIndex.taskClosureServicesById == selectionIndex.taskClosureServicesById;
 assert runtimeSelectionIndex.taskRunnerWorkflowIdById == selectionIndex.taskRunnerWorkflowIdById;
 assert runtimeSelectionIndex.workflowModesByFamily == selectionIndex.workflowModesByFamily;
-assert runtimeSelectionIndex.workflowUnitClosureServicesById == selectionIndex.workflowUnitClosureServicesById;
-assert runtimeSelectionIndex.workflowClosureServicesById == selectionIndex.workflowClosureServicesById;
-assert runtimeSelectionIndex.workflowReferenceClosureServicesById == selectionIndex.workflowReferenceClosureServicesById;
-assert selectionIndex.taskIds == [
-  depTaskId
-  phaseTaskId
-  rootTaskId
-  softTaskId
-  workflowTaskId
-];
-assert selectionIndex.workflowIds == [
-  workflowBasicId
-  workflowFullId
-];
+assert
+  runtimeSelectionIndex.workflowUnitClosureServicesById
+  == selectionIndex.workflowUnitClosureServicesById;
+assert
+  runtimeSelectionIndex.workflowClosureServicesById == selectionIndex.workflowClosureServicesById;
+assert
+  runtimeSelectionIndex.workflowReferenceClosureServicesById
+  == selectionIndex.workflowReferenceClosureServicesById;
+assert
+  selectionIndex.taskIds == [
+    depTaskId
+    phaseTaskId
+    rootTaskId
+    softTaskId
+    workflowTaskId
+  ];
+assert
+  selectionIndex.workflowIds == [
+    workflowBasicId
+    workflowFullId
+  ];
 assert selectionIndex.taskDirectServicesById.${depTaskId} == [ "postgres" ];
 assert
   selectionIndex.taskClosureServicesById.${rootTaskId} == [

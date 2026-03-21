@@ -137,15 +137,6 @@ let
           null;
     };
 
-  normalizeSources =
-    discardContext: serviceName: keys: sources:
-    builtins.listToAttrs (
-      map (key: {
-        name = key;
-        value = normalizeSource discardContext serviceName key (sources.${key} or { });
-      }) keys
-    );
-
   normalizeSelectedSources =
     discardContext: serviceName: keys: selectedSource: sources:
     builtins.listToAttrs (

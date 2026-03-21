@@ -1,6 +1,5 @@
 { pkgs }:
 let
-  lib = pkgs.lib;
   shellHelpers = import ./lib/shell-helpers.nix { inherit pkgs; };
   repoRoot = builtins.toString ../..;
 in

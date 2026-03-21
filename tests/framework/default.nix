@@ -197,22 +197,26 @@ let
       inherit pkgs;
     };
 
-    "framework-install-no-caller-compile-smoke" = import ./framework-install-no-caller-compile-smoke.nix {
-      inherit pkgs;
-    };
+    "framework-install-no-caller-compile-smoke" =
+      import ./framework-install-no-caller-compile-smoke.nix
+        {
+          inherit pkgs;
+        };
 
     "framework-test-no-caller-compile-smoke" = import ./framework-test-no-caller-compile-smoke.nix {
       inherit pkgs;
     };
 
-    "framework-upgrade-no-caller-compile-smoke" = import ./framework-upgrade-no-caller-compile-smoke.nix {
-      inherit
-        pkgs
-        model
-        services
-        registry
-        ;
-    };
+    "framework-upgrade-no-caller-compile-smoke" =
+      import ./framework-upgrade-no-caller-compile-smoke.nix
+        {
+          inherit
+            pkgs
+            model
+            services
+            registry
+            ;
+        };
 
     "runtime-control-launcher-contract" = import ./runtime-control-launcher-contract.nix {
       inherit
@@ -221,13 +225,17 @@ let
         ;
     };
 
-    "runtime-controls-no-service-materialization-smoke" = import ./runtime-controls-no-service-materialization-smoke.nix {
-      inherit pkgs;
-    };
+    "runtime-controls-no-service-materialization-smoke" =
+      import ./runtime-controls-no-service-materialization-smoke.nix
+        {
+          inherit pkgs;
+        };
 
-    "flake-show-no-service-materialization-smoke" = import ./flake-show-no-service-materialization-smoke.nix {
-      inherit pkgs;
-    };
+    "flake-show-no-service-materialization-smoke" =
+      import ./flake-show-no-service-materialization-smoke.nix
+        {
+          inherit pkgs;
+        };
 
     "run-id-noise-stability-smoke" = import ./run-id-noise-stability-smoke.nix {
       inherit
@@ -243,9 +251,11 @@ let
         ;
     };
 
-    "unselected-service-no-package-resolution-smoke" = import ./unselected-service-no-package-resolution-smoke.nix {
-      inherit pkgs;
-    };
+    "unselected-service-no-package-resolution-smoke" =
+      import ./unselected-service-no-package-resolution-smoke.nix
+        {
+          inherit pkgs;
+        };
 
     "unselected-service-public-launcher-smoke" = import ./unselected-service-public-launcher-smoke.nix {
       inherit pkgs;

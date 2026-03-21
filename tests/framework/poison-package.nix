@@ -1,2 +1,1 @@
-{ }:
-throw "service package resolved unexpectedly for an unselected service"
+{ }: throw "service package resolved unexpectedly for an unselected service"

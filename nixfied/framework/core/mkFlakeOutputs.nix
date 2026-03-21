@@ -106,7 +106,6 @@ let
     serviceSurfaceCatalog = compiledCore.serviceSurfaceCatalog;
   };
   serviceNames = launcherMetadata.enabledServices;
-  nonSelectorAppNames = launcherMetadata.nonSelectorAppNames;
   runtimeControlAppNames = launcherMetadata.runtimeControlAppNames;
   viewWrappedAppNames = launcherMetadata.viewWrappedAppNames;
   serviceWrappedAppNames = launcherMetadata.serviceWrappedAppNames;
@@ -1082,7 +1081,9 @@ let
               materializedExecution.baseApps.help;
         };
       frameworkWorkspaceApps =
-        if workspaceMarkerPresent && builtins.hasAttr "framework::test" (compiledCore.model.views.apps or { }) then
+        if
+          workspaceMarkerPresent && builtins.hasAttr "framework::test" (compiledCore.model.views.apps or { })
+        then
           {
             "framework::test" = mkShellApp {
               appName = "framework::test";
@@ -1111,15 +1112,15 @@ let
     else
       builtins.listToAttrs (
         map (appName: {
-        name = internalBaseTargetName appName;
-        value = pkgs.writeShellScriptBin (internalBaseTargetName appName) ''
-          set -euo pipefail
-            exec ${
-              if builtins.elem appName viewWrappedAppNames then
-                viewSelectorLauncherApps.${appName}.program
-              else
-                serviceSelectorLauncherApps.${appName}.program
-            } "$@"
+          name = internalBaseTargetName appName;
+          value = pkgs.writeShellScriptBin (internalBaseTargetName appName) ''
+            set -euo pipefail
+              exec ${
+                if builtins.elem appName viewWrappedAppNames then
+                  viewSelectorLauncherApps.${appName}.program
+                else
+                  serviceSelectorLauncherApps.${appName}.program
+              } "$@"
           '';
         }) (viewWrappedAppNames ++ serviceWrappedAppNames)
       );
