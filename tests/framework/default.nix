@@ -110,6 +110,8 @@ let
 
     "unselected-service-no-package-resolution-smoke" = { };
 
+    "unselected-service-public-launcher-smoke" = { };
+
     "disabled-service-runtime-surface-smoke" = {
       covers = [ "runtime.service-hooks" ];
     };
@@ -210,6 +212,10 @@ let
     };
 
     "unselected-service-no-package-resolution-smoke" = import ./unselected-service-no-package-resolution-smoke.nix {
+      inherit pkgs;
+    };
+
+    "unselected-service-public-launcher-smoke" = import ./unselected-service-public-launcher-smoke.nix {
       inherit pkgs;
     };
 
