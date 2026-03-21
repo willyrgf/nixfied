@@ -4,6 +4,7 @@ let
   runtimeSource = builtins.readFile ../../nixfied/framework/runtime/executor-runtime.nix;
 in
 assert pkgs.lib.hasInfix "compute_run_id() {" source;
+assert pkgs.lib.hasInfix "compute_attempt_id() {" source;
 assert pkgs.lib.hasInfix "canonical_run_id_envelope() {" source;
 assert pkgs.lib.hasInfix "jq -cnS" source;
 assert pkgs.lib.hasInfix "argv_json=\"$(jq_positional_args_json \"$@\")\"" source;
@@ -41,12 +42,15 @@ assert pkgs.lib.hasInfix "extract_machine_output_args \"''\${filtered_args[@]}\"
 assert pkgs.lib.hasInfix "--json and --summary cannot be combined" source;
 assert pkgs.lib.hasInfix "write_text_file_atomic \"$MACHINE_RUN_ID_FILE\" \"$run_id\"" source;
 assert pkgs.lib.hasInfix "write_workflow_summary_json() {" source;
+assert pkgs.lib.hasInfix "LAST_WORKFLOW_ATTEMPT_ID" source;
 assert pkgs.lib.hasInfix "ensure_run_artifacts_dir \"$run_id\" \"$workflow_id\"" source;
 assert pkgs.lib.hasInfix "registry_events_snapshot" source;
 assert pkgs.lib.hasInfix "summary_json=$summary_file" source;
+assert pkgs.lib.hasInfix "attempt_id: $attemptId," source;
 assert pkgs.lib.hasInfix "--json" source;
 assert pkgs.lib.hasInfix "emit_workflow_result_json \"$run_id\" \"$workflow_id\"" source;
 assert pkgs.lib.hasInfix "NIXFIED_JSON_OUTPUT_OVERRIDE" source;
+assert pkgs.lib.hasInfix "NIXFIED_ATTEMPT_ID" source;
 assert pkgs.lib.hasInfix "workflow_steps_json() {" source;
 assert pkgs.lib.hasInfix "print_workflow_summary_report() {" source;
 assert pkgs.lib.hasInfix "NIXFIED_PARENT_WORKFLOW_ID" source;
@@ -92,6 +96,7 @@ assert pkgs.lib.hasInfix "workflow_unit_lock_list() {" runtimeSource;
 assert pkgs.lib.hasInfix "workflow_unit_produces_json() {" runtimeSource;
 assert pkgs.lib.hasInfix "workflow_unit_missing_env_csv() {" runtimeSource;
 assert pkgs.lib.hasInfix "workflow_unit_when_matches() {" runtimeSource;
+assert pkgs.lib.hasInfix "normalize_run_artifacts_dir() {" runtimeSource;
 pkgs.runCommand "executor-contract" { } ''
   echo "OK: executor contract markers are stable" > "$out"
 ''

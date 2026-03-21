@@ -17,6 +17,7 @@ assert (!pkgs.lib.hasInfix "\${pkgs.jq}/bin/jq -r '.pgid // empty'" orchestrator
 assert pkgs.lib.hasInfix "run_file_state \"$run_file\"" orchestratorSource;
 assert pkgs.lib.hasInfix "run_file_pid \"$run_file\"" orchestratorSource;
 assert pkgs.lib.hasInfix "run_file_pgid \"$run_file\"" orchestratorSource;
+assert pkgs.lib.hasInfix "run_file_attempt_id \"$run_file\"" orchestratorSource;
 assert pkgs.lib.hasInfix "run_file_command \"$run_file\"" orchestratorSource;
 assert pkgs.lib.hasInfix "run_file_process_mode \"$run_file\"" orchestratorSource;
 assert pkgs.lib.hasInfix "commonRuntimeShell = import ./common-runtime.nix" runtimeSource;
@@ -25,6 +26,7 @@ assert pkgs.lib.hasInfix "split_process_mode() {" runtimeSource;
 assert pkgs.lib.hasInfix "run_file_state() {" runtimeSource;
 assert pkgs.lib.hasInfix "run_file_pid() {" runtimeSource;
 assert pkgs.lib.hasInfix "run_file_pgid() {" runtimeSource;
+assert pkgs.lib.hasInfix "run_file_attempt_id() {" runtimeSource;
 assert pkgs.lib.hasInfix "run_file_command() {" runtimeSource;
 assert pkgs.lib.hasInfix "run_file_process_mode() {" runtimeSource;
 assert (!pkgs.lib.hasInfix "write_text_file_atomic() {" runtimeSource);

@@ -6,10 +6,12 @@ let
 in
 assert pkgs.lib.hasInfix "nixfied-orchestrator" orchestratorSource;
 assert pkgs.lib.hasInfix "create_run_record() {" orchestratorSource;
+assert pkgs.lib.hasInfix "local attempt_id=\"$2\"" orchestratorSource;
 assert pkgs.lib.hasInfix "update_run_state() {" orchestratorSource;
 assert pkgs.lib.hasInfix "registry_events_snapshot" orchestratorSource;
 assert pkgs.lib.hasInfix "\${pkgs.procps}/bin/ps" orchestratorSource;
 assert pkgs.lib.hasInfix "tmp=\"$(mktemp \"$run_file.tmp.XXXXXX\")\"" orchestratorSource;
+assert pkgs.lib.hasInfix "attempt_id: $attemptId," orchestratorSource;
 assert pkgs.lib.hasInfix "stop-all-runs" orchestratorSource;
 assert pkgs.lib.hasInfix "orchestratorRuntimeShell = import ./orchestrator-runtime.nix"
   orchestratorSource;
@@ -25,6 +27,7 @@ assert (!pkgs.lib.hasInfix "workflow_json() {" orchestratorSource);
 assert pkgs.lib.hasInfix "run_workflow_phase_tasks() {" executorSource;
 assert pkgs.lib.hasInfix "write_workflow_summary_json() {" executorSource;
 assert pkgs.lib.hasInfix "NIXFIED_ORCHESTRATOR_RUN_ID" executorSource;
+assert pkgs.lib.hasInfix "NIXFIED_ORCHESTRATOR_ATTEMPT_ID" executorSource;
 assert pkgs.lib.hasInfix "frameworkEphemeral = import ./ephemeral.nix" orchestratorSource;
 assert pkgs.lib.hasInfix "ephemeral = model.runtime.ephemeral or { };" orchestratorSource;
 assert pkgs.lib.hasInfix "EPHEMERAL_EXECUTOR_WRAPPER=" orchestratorSource;

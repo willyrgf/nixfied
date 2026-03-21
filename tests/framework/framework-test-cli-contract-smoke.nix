@@ -30,6 +30,7 @@ pkgs.runCommand "framework-test-cli-contract-smoke" { } ''
   require_contains "$TMPDIR/list-shards.out" "launcher-pruning"
   require_contains "$TMPDIR/list-shards.out" "help"
   require_contains "$TMPDIR/list-shards.out" "workflow-ci"
+  require_contains "$TMPDIR/list-shards.out" "services"
   require_contains "$TMPDIR/list-shards.out" "isolation"
   require_contains "$TMPDIR/list-shards.out" "self-host"
 

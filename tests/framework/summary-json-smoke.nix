@@ -47,9 +47,22 @@ pkgs.runCommand "summary-json-smoke" { } ''
     cat "$TMPDIR/ci.out"
     exit 1
   fi
+  attempt_id="$(${pkgs.jq}/bin/jq -r '.attempt_id' "$summary_file")"
+  if [ -z "$attempt_id" ] || [ "$attempt_id" = "null" ]; then
+    echo "missing attempt id in first summary"
+    cat "$summary_file"
+    exit 1
+  fi
+  run_artifacts_summary="$(find "$CI_ARTIFACTS_ROOT" -type f -path "*/$run_id/$attempt_id/summary.json" | head -n 1 || true)"
+  if [ -z "$run_artifacts_summary" ] || [ ! -f "$run_artifacts_summary" ]; then
+    echo "missing attempt-scoped artifacts summary for first run"
+    find "$CI_ARTIFACTS_ROOT" -type f | sort
+    exit 1
+  fi
 
   ${pkgs.jq}/bin/jq -e '
     .run_id
+    and (.attempt_id | type == "string")
     and .workflow_id == "workflow.ci.basic"
     and .mode == "ci"
     and (.exit_code | type == "number")
@@ -100,6 +113,38 @@ pkgs.runCommand "summary-json-smoke" { } ''
     echo "json_run_id=$json_run_id"
     exit 1
   fi
+  json_attempt_id="$(${pkgs.jq}/bin/jq -r '.attempt_id' "$json_summary_file")"
+  if [ -z "$json_attempt_id" ] || [ "$json_attempt_id" = "null" ]; then
+    echo "missing attempt id in second summary"
+    cat "$json_summary_file"
+    exit 1
+  fi
+  if [ "$attempt_id" = "$json_attempt_id" ]; then
+    echo "attempt ids should differ across repeated equivalent invocations"
+    echo "attempt_id=$attempt_id"
+    echo "json_attempt_id=$json_attempt_id"
+    exit 1
+  fi
+  json_run_artifacts_summary="$(find "$CI_ARTIFACTS_ROOT" -type f -path "*/$json_run_id/$json_attempt_id/summary.json" | head -n 1 || true)"
+  if [ -z "$json_run_artifacts_summary" ] || [ ! -f "$json_run_artifacts_summary" ]; then
+    echo "missing attempt-scoped artifacts summary for second run"
+    find "$CI_ARTIFACTS_ROOT" -type f | sort
+    exit 1
+  fi
+  if [ "$run_artifacts_summary" = "$json_run_artifacts_summary" ]; then
+    echo "equivalent reruns should not reuse the same attempt artifacts summary path"
+    echo "run_artifacts_summary=$run_artifacts_summary"
+    echo "json_run_artifacts_summary=$json_run_artifacts_summary"
+    exit 1
+  fi
+  first_step_count="$(${pkgs.jq}/bin/jq -r '.steps | length' "$summary_file")"
+  second_step_count="$(${pkgs.jq}/bin/jq -r '.steps | length' "$json_summary_file")"
+  if [ "$first_step_count" != "$second_step_count" ]; then
+    echo "equivalent rerun should not duplicate summary steps"
+    echo "first_step_count=$first_step_count"
+    echo "second_step_count=$second_step_count"
+    exit 1
+  fi
   json_payload="$(${pkgs.gawk}/bin/awk 'NF { line = $0 } END { print line }' "$TMPDIR/ci.json.out")"
   if [ -z "$json_payload" ]; then
     echo "missing json payload"
@@ -110,10 +155,12 @@ pkgs.runCommand "summary-json-smoke" { } ''
 
   ${pkgs.jq}/bin/jq -e --arg runId "$json_run_id" '
     .run_id == $runId
+    and (.attempt_id | type == "string")
     and .workflow_id == "workflow.ci.basic"
     and (.exit_code | type == "number")
     and (.summary_json | type == "string")
     and .summary.run_id == $runId
+    and (.summary.attempt_id | type == "string")
     and .summary.workflow_id == "workflow.ci.basic"
   ' "$TMPDIR/ci.json.payload" > /dev/null
 

@@ -193,8 +193,8 @@ pkgs.runCommand "ephemeral-registry-run-isolation-smoke" { } ''
   check_root() {
     local root="$1"
     local events_file="$root/registry/events.ndjson"
-    local summary_file="$root/artifacts/summary.json"
-    local registry_file="$root/artifacts/registry-root.txt"
+    local summary_file="$(find "$root/artifacts" -type f -name summary.json | head -n 1 || true)"
+    local registry_file="$(find "$root/artifacts" -type f -name registry-root.txt | head -n 1 || true)"
     local registry_value
     local expected_registry
     local unique_run_count

@@ -60,8 +60,10 @@ pkgs.runCommand "artifacts-run-isolation-smoke" { } ''
 
   run_1="$(read_trimmed_file "$TMPDIR/run-1.run-id")"
   run_2="$(read_trimmed_file "$TMPDIR/run-2.run-id")"
-  summary_1="artifacts-root/$run_1/summary.json"
-  summary_2="artifacts-root/$run_2/summary.json"
+  summary_1="$(find artifacts-root -type f -path "*/$run_1/*/summary.json" | head -n 1 || true)"
+  summary_2="$(find artifacts-root -type f -path "*/$run_2/*/summary.json" | head -n 1 || true)"
+  attempt_1=""
+  attempt_2=""
   require_non_empty "$run_1" "run_1"
   require_non_empty "$run_2" "run_2"
   require_non_empty "$summary_1" "summary_1"
@@ -73,23 +75,27 @@ pkgs.runCommand "artifacts-run-isolation-smoke" { } ''
 
   require_file "$summary_1"
   require_file "$summary_2"
+  attempt_1="$(${pkgs.jq}/bin/jq -r '.attempt_id' "$summary_1")"
+  attempt_2="$(${pkgs.jq}/bin/jq -r '.attempt_id' "$summary_2")"
+  require_non_empty "$attempt_1" "attempt_1"
+  require_non_empty "$attempt_2" "attempt_2"
 
   case "$summary_1" in
-    */"$run_1"/summary.json) ;;
+    */"$run_1"/"$attempt_1"/summary.json) ;;
     *)
-      fail "summary path is not run-scoped for run_1: $summary_1"
+      fail "summary path is not run+attempt scoped for run_1: $summary_1"
       ;;
   esac
 
   case "$summary_2" in
-    */"$run_2"/summary.json) ;;
+    */"$run_2"/"$attempt_2"/summary.json) ;;
     *)
-      fail "summary path is not run-scoped for run_2: $summary_2"
+      fail "summary path is not run+attempt scoped for run_2: $summary_2"
       ;;
   esac
 
   ${pkgs.jq}/bin/jq -e --arg run "$run_1" '.run_id == $run' "$summary_1" > /dev/null
   ${pkgs.jq}/bin/jq -e --arg run "$run_2" '.run_id == $run' "$summary_2" > /dev/null
 
-  echo "OK: workflow artifacts are isolated per run id" > "$out"
+  echo "OK: workflow artifacts are isolated per run and attempt" > "$out"
 ''

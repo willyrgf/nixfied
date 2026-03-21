@@ -23,7 +23,9 @@ assert pkgs.lib.hasInfix "registry_snapshot_cleanup() {" snapshotSource;
 assert pkgs.lib.hasInfix "registry_next_seq() {" appendSource;
 assert pkgs.lib.hasInfix "registry_append_event() {" appendSource;
 assert pkgs.lib.hasInfix "--argjson schemaVersion \"$REGISTRY_EVENT_SCHEMA_VERSION\"" appendSource;
+assert pkgs.lib.hasInfix "--arg attemptId \"$attempt_id\"" appendSource;
 assert pkgs.lib.hasInfix "--arg workflowId \"$workflow_id\"" appendSource;
+assert pkgs.lib.hasInfix "attemptId: $attemptId" source;
 pkgs.runCommand "registry-events-runtime-contract" { } ''
   echo "OK: registry runtime helpers are split and stable" > "$out"
 ''

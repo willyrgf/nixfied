@@ -190,7 +190,7 @@ let
         printf '%s' "$component"
       }
 
-      run_id_component="$(mfm_cache_sanitize_component "''${NIXFIED_ORCHESTRATOR_RUN_ID:-''${NIXFIED_RUN_ID:-''${NIX_ENV:-0}}}" "run" 42)"
+      run_id_component="$(mfm_cache_sanitize_component "''${NIXFIED_ATTEMPT_ID:-''${NIXFIED_ORCHESTRATOR_ATTEMPT_ID:-''${NIXFIED_ORCHESTRATOR_RUN_ID:-''${NIXFIED_RUN_ID:-''${NIX_ENV:-0}}}}}" "run" 42)"
       workflow_id_component="$(mfm_cache_sanitize_component "''${NIXFIED_PARENT_WORKFLOW_ID:-''${NIXFIED_ORCHESTRATOR_WORKFLOW_ID:-workflow}}" "workflow" 42)"
       task_id_component="$(mfm_cache_sanitize_component "''${NIXFIED_TASK_ID:-orchestrator}" "orchestrator" 42)"
 

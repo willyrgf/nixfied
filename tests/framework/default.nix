@@ -139,6 +139,8 @@ let
     };
 
     "runtime-service-selection-contract" = { };
+
+    "framework-test-coverage-contract" = { };
   };
 
   rawChecks = {
@@ -614,6 +616,10 @@ let
         services
         registry
         ;
+    };
+
+    "framework-test-coverage-contract" = import ./framework-test-coverage-contract.nix {
+      inherit pkgs;
     };
 
     "framework-selfhost-contract" = import ./framework-selfhost-contract.nix {

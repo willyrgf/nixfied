@@ -4,6 +4,7 @@ let
 in
 assert pkgs.lib.hasInfix "import ../registry/events.nix" source;
 assert pkgs.lib.hasInfix "registry_append_event \"$REGISTRY_ROOT\"" source;
+assert pkgs.lib.hasInfix "NIXFIED_ATTEMPT_ID:-" source;
 assert pkgs.lib.hasInfix "registry_events_snapshot \"$REGISTRY_ROOT\"" source;
 assert pkgs.lib.hasInfix "REGISTRY_ROOT_DEFAULT=" source;
 assert (!pkgs.lib.hasInfix "events.jsonl" source);

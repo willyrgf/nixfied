@@ -58,24 +58,30 @@ pkgs.runCommand "artifacts-root-override-isolation-smoke" { } ''
 
   run_one="$(read_trimmed_file "$TMPDIR/root-1.run-id")"
   run_two="$(read_trimmed_file "$TMPDIR/root-2.run-id")"
-  summary_one="$TMPDIR/root-override/$run_one/summary.json"
-  summary_two="$TMPDIR/root-override/$run_two/summary.json"
+  summary_one="$(find "$TMPDIR/root-override" -type f -path "*/$run_one/*/summary.json" | head -n 1 || true)"
+  summary_two="$(find "$TMPDIR/root-override" -type f -path "*/$run_two/*/summary.json" | head -n 1 || true)"
+  attempt_one=""
+  attempt_two=""
   require_non_empty "$run_one" "run_one"
   require_non_empty "$run_two" "run_two"
   require_non_empty "$summary_one" "summary_one"
   require_non_empty "$summary_two" "summary_two"
   require_file "$summary_one"
   require_file "$summary_two"
+  attempt_one="$(${pkgs.jq}/bin/jq -r '.attempt_id' "$summary_one")"
+  attempt_two="$(${pkgs.jq}/bin/jq -r '.attempt_id' "$summary_two")"
+  require_non_empty "$attempt_one" "attempt_one"
+  require_non_empty "$attempt_two" "attempt_two"
 
   case "$summary_one" in
-    "$TMPDIR/root-override/$run_one/summary.json") ;;
+    "$TMPDIR/root-override/$run_one/$attempt_one/summary.json") ;;
     *)
       fail "unexpected root override summary path: $summary_one"
       ;;
   esac
 
   case "$summary_two" in
-    "$TMPDIR/root-override/$run_two/summary.json") ;;
+    "$TMPDIR/root-override/$run_two/$attempt_two/summary.json") ;;
     *)
       fail "unexpected root override summary path: $summary_two"
       ;;
@@ -91,17 +97,20 @@ pkgs.runCommand "artifacts-root-override-isolation-smoke" { } ''
   fi
 
   flat_run="$(read_trimmed_file "$TMPDIR/flat.run-id")"
-  flat_summary="$TMPDIR/flat-override/$flat_run/summary.json"
+  flat_summary="$(find "$TMPDIR/flat-override" -type f -path "*/$flat_run/*/summary.json" | head -n 1 || true)"
+  flat_attempt=""
   require_non_empty "$flat_run" "flat_run"
   require_non_empty "$flat_summary" "flat_summary"
   require_file "$flat_summary"
+  flat_attempt="$(${pkgs.jq}/bin/jq -r '.attempt_id' "$flat_summary")"
+  require_non_empty "$flat_attempt" "flat_attempt"
 
   case "$flat_summary" in
-    "$TMPDIR/flat-override/$flat_run/summary.json") ;;
+    "$TMPDIR/flat-override/$flat_run/$flat_attempt/summary.json") ;;
     *)
       fail "expected CI_ARTIFACTS_DIR override to be normalized per run: $flat_summary"
       ;;
   esac
 
-  echo "OK: artifacts overrides remain run-scoped" > "$out"
+  echo "OK: artifacts overrides remain run+attempt scoped" > "$out"
 ''
