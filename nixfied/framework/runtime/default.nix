@@ -11,6 +11,7 @@
       services,
       runtimeHash ? model.identity.evalHash,
       frameworkSourceFlakeRef ? null,
+      taskAppPrograms ? { },
       serviceApps ? { },
       serviceHookEnv ? { },
     }:
@@ -24,6 +25,7 @@
         projectRoot
         registry
         frameworkSourceFlakeRef
+        taskAppPrograms
         serviceApps
         serviceHookEnv
         ;

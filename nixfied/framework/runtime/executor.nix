@@ -9,6 +9,11 @@
   serviceHookEnv ? { },
 }:
 let
+  modelSchemaKind =
+    if builtins.isAttrs model && model ? schema && builtins.isAttrs model.schema then
+      model.schema.kind or ""
+    else
+      "";
   resolvedSelectionIndex =
     if selectionIndex != null then
       selectionIndex
@@ -23,7 +28,15 @@ let
           serviceCatalog = model.serviceCatalog or { };
         };
 
-  modelFile = pkgs.writeText "nixfied-model.json" (builtins.toJSON model);
+  modelFile =
+    pkgs.writeText
+      (
+        if modelSchemaKind == "nixfied-execution-manifest" then
+          "nixfied-execution-manifest.json"
+        else
+          "nixfied-model.json"
+      )
+      (builtins.toJSON model);
   shellCommon = import ../core/shell-common.nix { inherit pkgs; };
   registryShell = registry.events.mkShellLib { };
   workflowModesShell = import ./workflow-modes.nix {

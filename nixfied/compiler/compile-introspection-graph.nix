@@ -8,6 +8,7 @@
   statePolicy,
   runtime,
   apps,
+  appExecutionManifests,
   tasks,
   workflows,
   serviceCatalog,
@@ -148,6 +149,7 @@ let
       let
         app = apps.${appId};
         task = tasks.${app.taskId};
+        manifest = appExecutionManifests.${appId} or null;
         workflowIdsForApp = lib.optionals (
           (task.runner.type or "") == "workflowRef" && (task.runner.workflowId or "") != ""
         ) [ task.runner.workflowId ];
@@ -172,7 +174,11 @@ let
           runSurface = "run-task";
           mappedTaskIds = [ app.taskId ];
           mappedWorkflowIds = workflowIdsForApp;
-          selectedServices = selectionIndex.taskClosureServicesById.${app.taskId} or [ ];
+          selectedServices =
+            if manifest != null then
+              manifest.selectedServices
+            else
+              selectionIndex.taskClosureServicesById.${app.taskId} or [ ];
           runtimeRoots = {
             policyId = statePolicy.id;
             policyKind = statePolicy.kind;
@@ -180,6 +186,7 @@ let
             runtimeBase = statePolicy.runtimeBase;
             registryRoot = statePolicy.registryRoot;
             artifactsRoot = statePolicy.artifactsRoot;
+            manifestHash = if manifest == null then "" else manifest.modelHash;
           };
           workspaceMarkerPresent = workspaceMarkerPresent;
           localOverrides = {
@@ -188,9 +195,13 @@ let
           };
         };
         closure = {
-          directTaskIds = [ app.taskId ];
+          directTaskIds = if manifest == null then [ app.taskId ] else manifest.taskIds;
           directPackageNames = uniqueSorted (map (ref: ref.name) (taskPackageRefs app.taskId));
-          selectedServices = selectionIndex.taskClosureServicesById.${app.taskId} or [ ];
+          selectedServices =
+            if manifest != null then
+              manifest.selectedServices
+            else
+              selectionIndex.taskClosureServicesById.${app.taskId} or [ ];
         };
       }
     ) appIds
@@ -332,14 +343,15 @@ let
   );
 
   executionNodes = builtins.listToAttrs (
-    map mkNode [
-      {
-        nodeId = "execution:selected-app-launcher";
+    (map (
+      appId:
+      mkNode {
+        nodeId = "execution:selected-app-launcher:${appId}";
         kind = "execution";
-        id = "selected-app-launcher";
-        label = "selected-app-launcher";
-        summary = "Selected app launcher";
-        description = "Public apps resolve through the selector launcher built from framework/launch/run-selected-app.nix.";
+        id = "selected-app-launcher:${appId}";
+        label = "selected-app-launcher:${appId}";
+        summary = "Selected app launcher for ${appId}";
+        description = "Public app '${appId}' resolves through the selector launcher built from framework/launch/run-selected-app.nix.";
         ownerFiles = [
           "nixfied/framework/core/mkFlakeOutputs.nix"
           "nixfied/framework/launch/run-selected-app.nix"
@@ -348,22 +360,34 @@ let
         execution = null;
         closure = null;
       }
-      {
-        nodeId = "execution:full-model-manifest";
+    ) appIds)
+    ++ map (
+      appId:
+      let
+        manifest = appExecutionManifests.${appId};
+      in
+      mkNode {
+        nodeId = "execution:app-manifest:${appId}";
         kind = "execution";
-        id = "full-model-manifest";
-        label = "full-model-manifest";
-        summary = "Full compiled model manifest";
-        description = "Selected-app execution currently serializes the full compiled model for runtime execution.";
+        id = "app-manifest:${appId}";
+        label = "app-manifest:${appId}";
+        summary = "App execution manifest for ${appId}";
+        description = "Selected-app execution serializes an app-scoped execution manifest for '${appId}'.";
         ownerFiles = [
+          "nixfied/compiler/compile-app-execution-manifests.nix"
+          "nixfied/framework/core/materializeExecution.nix"
           "nixfied/framework/runtime/executor.nix"
-          "nixfied/compiler/finalize-model.nix"
         ];
-        data = { };
+        data = {
+          modelHash = manifest.modelHash;
+          taskIds = manifest.taskIds;
+          workflowIds = manifest.workflowIds;
+          selectedServices = manifest.selectedServices;
+        };
         execution = null;
         closure = null;
       }
-    ]
+    ) (builtins.sort builtins.lessThan (builtins.attrNames appExecutionManifests))
   );
 
   nodes = appNodes // taskNodes // workflowNodes // serviceNodes // packageNodes // executionNodes;
@@ -432,9 +456,15 @@ let
         })
         (mkEdge {
           from = "app:${appId}";
-          to = "execution:selected-app-launcher";
+          to = "execution:selected-app-launcher:${appId}";
           kind = "app-execution";
           reason = "app '${appId}' runs through the selected-app launcher";
+        })
+        (mkEdge {
+          from = "execution:selected-app-launcher:${appId}";
+          to = "execution:app-manifest:${appId}";
+          kind = "execution-manifest";
+          reason = "selected-app execution materializes the app-scoped execution manifest for '${appId}'";
         })
       ]
     ) appIds
@@ -552,23 +582,32 @@ let
     ) workflowIds
   );
 
-  executionEdges = [
-    (mkEdge {
-      from = "execution:selected-app-launcher";
-      to = "execution:full-model-manifest";
-      kind = "execution-manifest";
-      reason = "selected-app execution currently materializes the full compiled model";
-    })
-  ]
-  ++ map (
-    taskId:
-    mkEdge {
-      from = "execution:full-model-manifest";
-      to = "task:${taskId}";
-      kind = "manifest-task";
-      reason = "the full compiled model includes task '${taskId}'";
-    }
-  ) taskIds;
+  executionEdges = builtins.concatLists (
+    map (
+      appId:
+      let
+        manifest = appExecutionManifests.${appId};
+      in
+      (map (
+        taskId:
+        mkEdge {
+          from = "execution:app-manifest:${appId}";
+          to = "task:${taskId}";
+          kind = "manifest-task";
+          reason = "the app execution manifest for '${appId}' includes task '${taskId}'";
+        }
+      ) manifest.taskIds)
+      ++ map (
+        workflowId:
+        mkEdge {
+          from = "execution:app-manifest:${appId}";
+          to = "workflow:${workflowId}";
+          kind = "manifest-workflow";
+          reason = "the app execution manifest for '${appId}' includes workflow '${workflowId}'";
+        }
+      ) manifest.workflowIds
+    ) (builtins.sort builtins.lessThan (builtins.attrNames appExecutionManifests))
+  );
 
   edges = sortEdges (dedupeEdges (appEdges ++ taskEdges ++ workflowEdges ++ executionEdges));
 in

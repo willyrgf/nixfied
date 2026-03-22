@@ -50,6 +50,50 @@ let
     services = services;
   };
 
+  taskAppPrograms = builtins.mapAttrs (
+    appId: manifest:
+    let
+      appServices = compileServices {
+        inherit
+          pkgs
+          enabledServiceFlags
+          ;
+        resolved = compiledCore.resolved;
+        selectedServices = manifest.selectedServices;
+      };
+
+      appRuntimeHash = canonical.hashCanonical {
+        schema = {
+          kind = "nixfied-runtime";
+          version = 1;
+        };
+        services = appServices;
+      };
+
+      appServiceRuntimeSurfaces = import ./mkServiceRuntimeSurfaces.nix {
+        inherit
+          pkgs
+          ;
+        model = manifest.model;
+        selectedServices = manifest.selectedServices;
+        services = appServices;
+      };
+
+      appOrchestrator = import ../runtime/orchestrator.nix {
+        inherit
+          pkgs
+          registry
+          projectRoot
+          ;
+        model = manifest.model;
+        services = appServices;
+        runtimeHash = appRuntimeHash;
+        serviceHookEnv = appServiceRuntimeSurfaces.serviceHookEnv;
+      };
+    in
+    "${appOrchestrator}/bin/nixfied-orchestrator"
+  ) (compiledCore.appExecutionManifests or { });
+
   runner = import ../runtime {
     inherit
       pkgs
@@ -66,6 +110,7 @@ let
       runtimeHash
       frameworkSourceFlakeRef
       ;
+    taskAppPrograms = taskAppPrograms;
     serviceApps = serviceRuntimeSurfaces.serviceApps;
     serviceHookEnv = serviceRuntimeSurfaces.serviceHookEnv;
   };

@@ -22,6 +22,8 @@ pkgs.runCommand "introspect-contract" { } ''
   "$INTROSPECT" check --why package:nix-checks --json > "$TMPDIR/why.json"
   "$JQ" -e '.closure.target.nodeId == "package:nix-checks"' "$TMPDIR/why.json" > /dev/null
   "$JQ" -e '.closure.reasonChains | length > 0' "$TMPDIR/why.json" > /dev/null
+  "$JQ" -e '[.closure.reasonChains[].nodes[].nodeId] | index("execution:app-manifest:check") != null' "$TMPDIR/why.json" > /dev/null
+  "$JQ" -e '[.closure.reasonChains[].nodes[].nodeId] | index("execution:full-model-manifest") == null' "$TMPDIR/why.json" > /dev/null
 
   "$INTROSPECT" reverse package:nix-checks --json > "$TMPDIR/reverse.json"
   "$JQ" -e '.reverse.target.nodeId == "package:nix-checks"' "$TMPDIR/reverse.json" > /dev/null

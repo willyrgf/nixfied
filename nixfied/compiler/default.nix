@@ -59,6 +59,13 @@ let
       ;
   };
 
+  compileAppExecutionManifests = import ./compile-app-execution-manifests.nix {
+    inherit
+      lib
+      canonical
+      ;
+  };
+
   compileIntrospectionGraph = import ./compile-introspection-graph.nix {
     inherit
       lib
@@ -145,6 +152,24 @@ rec {
           ;
       };
 
+      appExecutionManifests = compileAppExecutionManifests {
+        resolvedIdentity = resolvedModuleGraph.config.identity;
+        runtime = runtime;
+        state = {
+          policy = statePolicy;
+          registry = {
+            schemaVersion = 1;
+          };
+        };
+        inherit
+          serviceCatalog
+          apps
+          tasks
+          workflows
+          selectionIndex
+          ;
+      };
+
       features = compileFeatures {
         inherit
           projectRoot
@@ -162,6 +187,7 @@ rec {
           statePolicy
           runtime
           apps
+          appExecutionManifests
           tasks
           workflows
           serviceCatalog
@@ -210,6 +236,7 @@ rec {
       tasks = tasks;
       workflows = workflows;
       apps = apps;
+      appExecutionManifests = appExecutionManifests;
       introspectionGraph = introspectionGraph;
       views = views;
       runtime = runtime;

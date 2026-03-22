@@ -7,6 +7,7 @@
   projectRoot,
   registry,
   frameworkSourceFlakeRef ? null,
+  taskAppPrograms ? { },
   serviceApps ? { },
   serviceHookEnv ? { },
 }:
@@ -162,13 +163,18 @@ let
       appName:
       let
         taskId = viewApps.${appName}.taskId;
+        appOrchestratorProgram =
+          if builtins.hasAttr appName taskAppPrograms then
+            taskAppPrograms.${appName}
+          else
+            orchestratorProgram;
       in
       {
         name = appName;
         value = mkShellApp {
           inherit appName;
           body = ''
-            NIXFIED_CALLER_PWD="$PWD" exec ${orchestratorProgram} run-task ${lib.escapeShellArg taskId} "$@"
+            NIXFIED_CALLER_PWD="$PWD" exec ${appOrchestratorProgram} run-task ${lib.escapeShellArg taskId} "$@"
           '';
         };
       }

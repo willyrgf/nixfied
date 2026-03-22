@@ -94,6 +94,10 @@ let
       covers = [ "task.framework.test" ];
     };
 
+    "selected-app-manifest-contract" = {
+      covers = [ "runtime.app-execution-manifests" ];
+    };
+
     "launcher-surface-contract" = { };
 
     "framework-utility-launcher-contract" = { };
@@ -185,6 +189,13 @@ let
     };
 
     "introspect-contract" = import ./introspect-contract.nix {
+      inherit
+        pkgs
+        apps
+        ;
+    };
+
+    "selected-app-manifest-contract" = import ./selected-app-manifest-contract.nix {
       inherit
         pkgs
         apps
