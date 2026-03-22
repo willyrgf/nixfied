@@ -14,6 +14,16 @@ Core apps:
   health - Run service health checks
   ports - Print model-derived port assignments
   ready - Run service readiness checks
+  services-export - Export the default service set contract
+  services-start - Start the default service set
+  services-status - Show status for the default service set
+  services-stop - Stop the default service set
+  svcset::default::export - Default service set export
+  svcset::default::health - Default service set health
+  svcset::default::ready - Default service set ready
+  svcset::default::start - Default service set start
+  svcset::default::status - Default service set status
+  svcset::default::stop - Default service set stop
   test - Run tests
   test-isolation - Run isolation checks
   validate-env - Validate slot/env settings

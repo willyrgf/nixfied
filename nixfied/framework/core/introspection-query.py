@@ -4,7 +4,7 @@ import json
 import sys
 
 
-VALID_KINDS = {"app", "task", "workflow", "service", "package"}
+VALID_KINDS = {"app", "task", "workflow", "service", "service-set", "package"}
 SELECTOR_PREFIXES = VALID_KINDS
 
 
@@ -23,6 +23,7 @@ Examples:
   nix run .#introspect -- task:task.check
   nix run .#introspect -- workflow:workflow.ci.full
   nix run .#introspect -- service:postgres
+  nix run .#introspect -- service-set:default
   nix run .#introspect -- check --why package:nix-checks
   nix run .#introspect -- reverse package:nix-checks
 """
@@ -159,6 +160,16 @@ def resolve_explicit(graph, kind, value):
             if candidate.get("data", {}).get("serviceId") == value:
                 return candidate
         return None
+    if kind == "service-set":
+        node = nodes.get(f"service-set:{value}")
+        if node is not None:
+            return node
+        for candidate in nodes.values():
+            if candidate["kind"] != "service-set":
+                continue
+            if candidate.get("data", {}).get("serviceSetId") == value:
+                return candidate
+        return None
     if kind == "package":
         return nodes.get(f"package:{value}")
     return None
@@ -182,6 +193,10 @@ def resolve_bare(graph, token, kind_filter):
             continue
         if node["kind"] == "service":
             if node["id"] == token or node.get("data", {}).get("serviceId") == token:
+                candidates.append(node)
+                continue
+        if node["kind"] == "service-set":
+            if node["id"] == token or node.get("data", {}).get("serviceSetId") == token:
                 candidates.append(node)
                 continue
         if node["kind"] == "package" and node["id"] == token:
@@ -430,12 +445,14 @@ def print_human(response):
             execution = response["execution"]
             tasks = ",".join(execution.get("mappedTaskIds", []))
             workflows = ",".join(execution.get("mappedWorkflowIds", []))
+            service_sets = ",".join(execution.get("mappedServiceSetIds", []))
             services = ",".join(execution.get("selectedServices", []))
             print(f"INFO: execution.launcher_class={execution.get('launcherClass')}")
             print(f"INFO: execution.launcher_target={execution.get('launcherTarget')}")
             print(f"INFO: execution.run_surface={execution.get('runSurface')}")
             print(f"INFO: execution.mapped_tasks={tasks}")
             print(f"INFO: execution.mapped_workflows={workflows}")
+            print(f"INFO: execution.mapped_service_sets={service_sets}")
             print(f"INFO: execution.selected_services={services}")
         if response.get("closure") is not None and response["closure"] is not None:
             closure = response["closure"]

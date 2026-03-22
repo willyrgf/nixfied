@@ -29,5 +29,9 @@ pkgs.runCommand "introspect-contract" { } ''
   "$JQ" -e '.reverse.target.nodeId == "package:nix-checks"' "$TMPDIR/reverse.json" > /dev/null
   "$JQ" -e '.reverse.reasonChains | length > 0' "$TMPDIR/reverse.json" > /dev/null
 
+  "$INTROSPECT" service-set:default --json > "$TMPDIR/service-set.json"
+  "$JQ" -e '.resolved.nodeId == "service-set:default"' "$TMPDIR/service-set.json" > /dev/null
+  "$JQ" -e '.resolved.kind == "service-set"' "$TMPDIR/service-set.json" > /dev/null
+
   echo "OK: introspect surface resolves entities and explains package references" > "$out"
 ''

@@ -6,6 +6,7 @@ in
 {
   imports = [
     ./apps.nix
+    ./service-sets.nix
     ./state.nix
     ./runtime.nix
     ./tasks.nix

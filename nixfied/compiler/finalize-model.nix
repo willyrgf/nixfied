@@ -7,6 +7,7 @@
   runtime,
   services ? null,
   serviceCatalog,
+  serviceSets,
   apps,
   tasks,
   workflows,
@@ -34,6 +35,7 @@ let
     identity = resolved.identity;
     runtime = runtime;
     services = serviceCatalog;
+    serviceSets = serviceSets;
     apps = apps;
     tasks = tasks;
     workflows = workflows;
@@ -43,7 +45,7 @@ let
   model = canonical.canonicalize {
     schema = {
       kind = "nixfied-model";
-      version = 4;
+      version = 5;
     };
 
     identity = {
@@ -57,6 +59,7 @@ let
     runtime = runtime;
 
     serviceCatalog = serviceCatalog;
+    serviceSets = serviceSets;
     apps = apps;
     tasks = tasks;
     workflows = workflows;

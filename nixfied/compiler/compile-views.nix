@@ -38,8 +38,16 @@ let
       acc
       // {
         ${appId} = {
-          kind = if app.kind == "taskRef" then "task" else app.kind;
+          kind =
+            if app.kind == "taskRef" then
+              "task"
+            else if app.kind == "serviceSetRef" then
+              "service-set"
+            else
+              app.kind;
           taskId = app.taskId or null;
+          serviceSetId = app.serviceSetId or null;
+          operation = app.operation or null;
           summary = app.summary;
           description = app.description;
           category = app.category or "core";

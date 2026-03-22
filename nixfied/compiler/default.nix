@@ -26,6 +26,12 @@ let
   compileStatePolicy = import ./compile-state-policy.nix { inherit lib; };
   normalizeRuntime = import ./normalize-runtime.nix { inherit lib; };
   compileServiceCatalog = import ./compile-service-catalog.nix { inherit lib; };
+  compileServiceSets = import ./compile-service-sets.nix {
+    inherit
+      lib
+      canonical
+      ;
+  };
   compileServiceSurfaceCatalog = import ./compile-service-surface-catalog.nix { inherit lib; };
   compileServices = import ./compile-services.nix { inherit lib; };
 
@@ -119,6 +125,16 @@ rec {
         resolved = resolvedModuleGraph.config;
       };
 
+      serviceSets = compileServiceSets {
+        inherit
+          projectRoot
+          serviceCatalog
+          ;
+        resolvedIdentity = resolvedModuleGraph.config.identity;
+        baseStatePolicy = statePolicy;
+        resolved = resolvedModuleGraph.config;
+      };
+
       serviceSurfaceCatalog = compileServiceSurfaceCatalog {
         inherit serviceCatalog;
       };
@@ -141,7 +157,10 @@ rec {
 
       apps = compileApps {
         resolved = resolvedModuleGraph.config;
-        inherit tasks;
+        inherit
+          serviceSets
+          tasks
+          ;
       };
 
       selectionIndex = compileSelectionIndex {
@@ -188,6 +207,7 @@ rec {
           runtime
           apps
           appExecutionManifests
+          serviceSets
           tasks
           workflows
           serviceCatalog
@@ -221,6 +241,7 @@ rec {
           statePolicy
           runtime
           serviceCatalog
+          serviceSets
           apps
           tasks
           workflows
@@ -242,6 +263,7 @@ rec {
       runtime = runtime;
       statePolicy = statePolicy;
       serviceCatalog = serviceCatalog;
+      serviceSets = serviceSets;
       serviceSurfaceCatalog = serviceSurfaceCatalog;
       features = features;
       selectionIndex = selectionIndex;

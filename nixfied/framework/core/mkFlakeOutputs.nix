@@ -329,20 +329,33 @@ let
   taskBaseClosureCsvById = launcherMetadata.taskBaseClosureCsvById;
   taskRunnerWorkflowIdById = launcherMetadata.taskRunnerWorkflowIdById;
   workflowClosureCsvById = launcherMetadata.workflowClosureCsvById;
+  serviceSetServicesCsvById = builtins.mapAttrs (
+    _: serviceSet: builtins.concatStringsSep "," (serviceSet.services.all or [ ])
+  ) (compiledCore.serviceSets or { });
 
   mkSelectorAwareLauncher =
     appName:
     let
-      launcherTaskId =
+      launcherViewApp =
         if builtins.hasAttr appName (compiledCore.model.views.apps or { }) then
-          compiledCore.model.views.apps.${appName}.taskId
+          compiledCore.model.views.apps.${appName}
+        else
+          null;
+      launcherTaskId =
+        if launcherViewApp != null then
+          if (launcherViewApp.taskId or null) == null then "" else launcherViewApp.taskId
         else
           "";
       serviceAppMatch = builtins.match "^svc::([^:]+)::.+$" appName;
       launcherServiceName = if serviceAppMatch == null then "" else builtins.elemAt serviceAppMatch 0;
+      launcherServiceSetId =
+        if launcherViewApp != null then
+          if (launcherViewApp.serviceSetId or null) == null then "" else launcherViewApp.serviceSetId
+        else
+          "";
       viewHelpFile =
-        if builtins.hasAttr appName (compiledCore.model.views.apps or { }) then
-          builtins.toString taskHelpFiles.${compiledCore.model.views.apps.${appName}.taskId}
+        if launcherViewApp != null && (launcherViewApp.taskId or null) != null && launcherViewApp.taskId != "" then
+          builtins.toString taskHelpFiles.${launcherViewApp.taskId}
         else
           "";
       dispatcherHelpFile =
@@ -759,6 +772,13 @@ let
 
                   if [ -n ${lib.escapeShellArg launcherServiceName} ]; then
                     printf '%s' ${lib.escapeShellArg launcherServiceName}
+                    return 0
+                  fi
+
+                  if [ -n ${lib.escapeShellArg launcherServiceSetId} ]; then
+                    printf '%s' ${
+                      lib.escapeShellArg (serviceSetServicesCsvById.${launcherServiceSetId} or "")
+                    }
                     return 0
                   fi
 

@@ -94,6 +94,56 @@ let
     "${appOrchestrator}/bin/nixfied-orchestrator"
   ) (compiledCore.appExecutionManifests or { });
 
+  serviceSetPrograms = builtins.mapAttrs (
+    serviceSetId: serviceSet:
+    let
+      serviceSetModel =
+        compiledCore.model
+        // {
+          runtime =
+            compiledCore.model.runtime
+            // {
+              directories =
+                (compiledCore.model.runtime.directories or { })
+                // {
+                  base = serviceSet.state.policy.runtimeBase;
+                };
+            };
+          state =
+            compiledCore.model.state
+            // {
+              policy = serviceSet.state.policy;
+            };
+        };
+
+      serviceSetRuntimeSurfaces = import ./mkServiceRuntimeSurfaces.nix {
+        inherit pkgs;
+        model = serviceSetModel;
+        services = services;
+        selectedServices = serviceSet.services.all or [ ];
+      };
+    in
+    import ./mkServiceSetPrograms.nix {
+      inherit
+        pkgs
+        serviceSet
+        ;
+      model = serviceSetModel;
+      resolvedServices = compiledCore.resolved.services or { };
+      serviceRuntimeSurfaces = serviceSetRuntimeSurfaces;
+    }
+  ) (compiledCore.serviceSets or { });
+
+  appPrograms = builtins.mapAttrs (
+    appId: app:
+    if (app.kind or "") == "taskRef" then
+      taskAppPrograms.${appId}
+    else if (app.kind or "") == "serviceSetRef" then
+      serviceSetPrograms.${app.serviceSetId}.programsByOperation.${app.operation}.program
+    else
+      throw "materializeExecution: unsupported app kind '${app.kind or ""}' for '${appId}'"
+  ) (compiledCore.model.apps or { });
+
   runner = import ../runtime {
     inherit
       pkgs
@@ -110,7 +160,7 @@ let
       runtimeHash
       frameworkSourceFlakeRef
       ;
-    taskAppPrograms = taskAppPrograms;
+    appPrograms = appPrograms;
     serviceApps = serviceRuntimeSurfaces.serviceApps;
     serviceHookEnv = serviceRuntimeSurfaces.serviceHookEnv;
   };
@@ -119,6 +169,7 @@ in
   inherit
     services
     runtimeHash
+    appPrograms
     baseApps
     ;
   serviceApis = serviceRuntimeSurfaces.serviceApis;

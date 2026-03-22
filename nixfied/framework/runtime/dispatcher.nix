@@ -7,7 +7,7 @@
   projectRoot,
   registry,
   frameworkSourceFlakeRef ? null,
-  taskAppPrograms ? { },
+  appPrograms ? { },
   serviceApps ? { },
   serviceHookEnv ? { },
 }:
@@ -158,23 +158,32 @@ let
     NIXFIED_CALLER_PWD="$PWD" exec ${pkgs.nix}/bin/nix run "''${framework_source_flake_ref}#run-task" --refresh -- ${lib.escapeShellArg taskId} "$@"
   '';
 
-  taskApps = builtins.listToAttrs (
+  viewLaunchApps = builtins.listToAttrs (
     map (
       appName:
       let
-        taskId = viewApps.${appName}.taskId;
-        appOrchestratorProgram =
-          if builtins.hasAttr appName taskAppPrograms then
-            taskAppPrograms.${appName}
+        appModel = appModels.${appName} or null;
+        launchCommand =
+          if appModel == null then
+            throw "dispatcher: missing app model for '${appName}'"
+          else if (appModel.kind or "") == "taskRef" then
+            ''
+              exec ${appPrograms.${appName}} run-task ${lib.escapeShellArg appModel.taskId} "$@"
+            ''
+          else if (appModel.kind or "") == "serviceSetRef" then
+            ''
+              exec ${appPrograms.${appName}} "$@"
+            ''
           else
-            orchestratorProgram;
+            throw "dispatcher: unsupported app kind '${appModel.kind or ""}' for '${appName}'";
       in
       {
         name = appName;
         value = mkShellApp {
           inherit appName;
           body = ''
-            NIXFIED_CALLER_PWD="$PWD" exec ${appOrchestratorProgram} run-task ${lib.escapeShellArg taskId} "$@"
+            export NIXFIED_CALLER_PWD="$PWD"
+            ${launchCommand}
           '';
         };
       }
@@ -289,13 +298,13 @@ in
     '';
   };
 }
-// taskApps
+// viewLaunchApps
 // serviceApps
 // frameworkProxyApps
 // {
   default =
-    if builtins.hasAttr "help" taskApps then
-      taskApps.help
+    if builtins.hasAttr "help" viewLaunchApps then
+      viewLaunchApps.help
     else
       mkShellApp {
         appName = "default-help";

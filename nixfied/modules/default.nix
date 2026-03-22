@@ -2,6 +2,7 @@
   apps = import ./apps.nix;
   core = import ./core.nix;
   runtime = import ./runtime.nix;
+  serviceSets = import ./service-sets.nix;
   tasks = import ./tasks.nix;
   workflows = import ./workflows.nix;
   operations = import ./operations.nix;

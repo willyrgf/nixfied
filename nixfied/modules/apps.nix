@@ -15,11 +15,24 @@ in
             };
 
             kind = lib.mkOption {
-              type = t.enum [ "taskRef" ];
+              type = t.enum [
+                "taskRef"
+                "serviceSetRef"
+              ];
               default = "taskRef";
             };
 
             taskId = lib.mkOption {
+              type = t.str;
+              default = "";
+            };
+
+            serviceSetId = lib.mkOption {
+              type = t.str;
+              default = "";
+            };
+
+            operation = lib.mkOption {
               type = t.str;
               default = "";
             };

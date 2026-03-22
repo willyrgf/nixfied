@@ -104,7 +104,7 @@ let
     let
       taskId = model.views.apps.${appName}.taskId;
     in
-    builtins.hasAttr taskId model.features
+    taskId == null || builtins.hasAttr taskId model.features
   ) (builtins.attrNames (model.views.apps or { }));
 
   runtimeFeaturesPresent = builtins.all (

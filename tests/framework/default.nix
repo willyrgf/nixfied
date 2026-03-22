@@ -14,8 +14,12 @@ let
   listUtils = import ../../nixfied/framework/core/list-utils.nix;
 
   exposedTaskFeatureIds = builtins.sort builtins.lessThan (
-    builtins.map (appName: model.views.apps.${appName}.taskId) (
-      builtins.attrNames (model.views.apps or { })
+    builtins.filter (
+      taskId: taskId != null && taskId != ""
+    ) (
+      builtins.map (appName: model.views.apps.${appName}.taskId) (
+        builtins.attrNames (model.views.apps or { })
+      )
     )
   );
   workflowFeatureIds = builtins.sort builtins.lessThan (builtins.attrNames model.workflows);
@@ -96,6 +100,10 @@ let
 
     "selected-app-manifest-contract" = {
       covers = [ "runtime.app-execution-manifests" ];
+    };
+
+    "service-set-surface-contract" = {
+      covers = [ "runtime.service-set-surfaces" ];
     };
 
     "launcher-surface-contract" = { };
@@ -200,6 +208,10 @@ let
         pkgs
         apps
         ;
+    };
+
+    "service-set-surface-contract" = import ./service-set-surface-contract.nix {
+      inherit pkgs;
     };
 
     "launcher-surface-contract" = import ./launcher-surface-contract.nix {
