@@ -1188,6 +1188,7 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
     export NIXFIED_ORCHESTRATOR_RUN_ID="$run_id"
     export NIXFIED_ORCHESTRATOR_ATTEMPT_ID="$attempt_id"
     export NIXFIED_ORCHESTRATOR_RUN_SUFFIX_REASON="$RUN_SUFFIX_REASON"
+    export NIXFIED_ORCHESTRATOR_MANAGED=1
     export NIXFIED_ORCHESTRATOR_PROCESS_MODE="$PROCESS_MODE"
     export NIXFIED_ORCHESTRATOR_WORKFLOW_ID="$workflow_ref"
     export NIXFIED_WORKFLOW_SETUP_STARTED_AT="$command_started_at"
@@ -1252,6 +1253,7 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
     export NIXFIED_ORCHESTRATOR_RUN_ID="$run_id"
     export NIXFIED_ORCHESTRATOR_ATTEMPT_ID="$attempt_id"
     export NIXFIED_ORCHESTRATOR_RUN_SUFFIX_REASON="$RUN_SUFFIX_REASON"
+    export NIXFIED_ORCHESTRATOR_MANAGED=1
     export NIXFIED_ORCHESTRATOR_PROCESS_MODE="$PROCESS_MODE"
     export NIXFIED_ORCHESTRATOR_WORKFLOW_ID="$workflow_id"
     export NIXFIED_WORKFLOW_SETUP_STARTED_AT="$command_started_at"

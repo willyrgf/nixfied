@@ -849,7 +849,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         return "$NIXFIED_EXIT_USAGE"
       fi
 
-      if [ -n "''${NIXFIED_ORCHESTRATOR_RUN_ID:-}" ]; then
+      if [ "''${NIXFIED_ORCHESTRATOR_MANAGED:-0}" = "1" ] && [ -n "''${NIXFIED_ORCHESTRATOR_RUN_ID:-}" ]; then
         run_id="$NIXFIED_ORCHESTRATOR_RUN_ID"
         attempt_id="''${NIXFIED_ORCHESTRATOR_ATTEMPT_ID:-}"
         RUN_SUFFIX_REASON="''${NIXFIED_ORCHESTRATOR_RUN_SUFFIX_REASON:-orchestrator}"
@@ -2386,7 +2386,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       started_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
       started_epoch="$(date +%s)"
 
-      if [ -n "''${NIXFIED_ORCHESTRATOR_RUN_ID:-}" ]; then
+      if [ "''${NIXFIED_ORCHESTRATOR_MANAGED:-0}" = "1" ] && [ -n "''${NIXFIED_ORCHESTRATOR_RUN_ID:-}" ]; then
         run_id="$NIXFIED_ORCHESTRATOR_RUN_ID"
         attempt_id="''${NIXFIED_ORCHESTRATOR_ATTEMPT_ID:-}"
         RUN_SUFFIX_REASON="''${NIXFIED_ORCHESTRATOR_RUN_SUFFIX_REASON:-orchestrator}"

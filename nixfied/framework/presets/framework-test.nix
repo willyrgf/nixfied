@@ -35,6 +35,7 @@ in
         pkgs.gnused
         pkgs.nix
       ];
+      passThroughEnv = [ "NIXFIED_FRAMEWORK_TEST_FORCE_FAIL_SHARD" ];
       contractArgs = [
         {
           name = "summary";
@@ -227,6 +228,10 @@ in
           local shard_name="$1"
           shift
           log_info "running shard=$shard_name"
+          if [ -n "''${NIXFIED_FRAMEWORK_TEST_FORCE_FAIL_SHARD:-}" ] && [ "$shard_name" = "$NIXFIED_FRAMEWORK_TEST_FORCE_FAIL_SHARD" ]; then
+            log_error "shard failed name=$shard_name rc=17"
+            return 17
+          fi
           if "$@"; then
             log_ok "shard passed name=$shard_name"
             return 0
@@ -683,7 +688,7 @@ in
           fi
         fi
 
-        if [ "$SUMMARY" -eq 1 ]; then
+        if [ "$SUMMARY" -eq 1 ] || [ "$run_rc" -ne 0 ]; then
           log_info "summary profile=$PROFILE mode=$MODE executed_shards=$EXECUTED failed_shards=$FAILED_SHARDS exit_1_shards=$EXIT_1_SHARDS canceled_shards=$CANCELED_SHARDS"
         fi
 

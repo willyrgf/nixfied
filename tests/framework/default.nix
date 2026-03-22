@@ -813,6 +813,15 @@ let
         ;
     };
 
+    "isolation-nested-run-id-smoke" = import ./isolation-nested-run-id-smoke.nix {
+      inherit
+        pkgs
+        model
+        services
+        registry
+        ;
+    };
+
     "artifacts-run-isolation-smoke" = import ./artifacts-run-isolation-smoke.nix {
       inherit
         pkgs

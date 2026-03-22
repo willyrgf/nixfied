@@ -788,15 +788,6 @@ in
       if [ -n "''${NIXFIED_EXECUTION_EPHEMERAL:-}" ]; then
         env_cmd+=("NIXFIED_EXECUTION_EPHEMERAL=$NIXFIED_EXECUTION_EPHEMERAL")
       fi
-      if [ -n "''${NIXFIED_ORCHESTRATOR_RUN_ID:-}" ]; then
-        env_cmd+=("NIXFIED_ORCHESTRATOR_RUN_ID=$NIXFIED_ORCHESTRATOR_RUN_ID")
-      fi
-      if [ -n "''${NIXFIED_ORCHESTRATOR_PROCESS_MODE:-}" ]; then
-        env_cmd+=("NIXFIED_ORCHESTRATOR_PROCESS_MODE=$NIXFIED_ORCHESTRATOR_PROCESS_MODE")
-      fi
-      if [ -n "''${NIXFIED_ORCHESTRATOR_WORKFLOW_ID:-}" ]; then
-        env_cmd+=("NIXFIED_ORCHESTRATOR_WORKFLOW_ID=$NIXFIED_ORCHESTRATOR_WORKFLOW_ID")
-      fi
       if [ -n "''${NIXFIED_PARENT_WORKFLOW_ID:-}" ]; then
         env_cmd+=("NIXFIED_PARENT_WORKFLOW_ID=$NIXFIED_PARENT_WORKFLOW_ID")
       fi
@@ -805,12 +796,6 @@ in
       fi
       if [ -n "''${NIXFIED_TASK_ID:-}" ]; then
         env_cmd+=("NIXFIED_TASK_ID=$NIXFIED_TASK_ID")
-      fi
-      if [ -n "''${NIXFIED_WORKFLOW_SETUP_STARTED_AT:-}" ]; then
-        env_cmd+=("NIXFIED_WORKFLOW_SETUP_STARTED_AT=$NIXFIED_WORKFLOW_SETUP_STARTED_AT")
-      fi
-      if [ -n "''${NIXFIED_WORKFLOW_SETUP_STARTED_EPOCH:-}" ]; then
-        env_cmd+=("NIXFIED_WORKFLOW_SETUP_STARTED_EPOCH=$NIXFIED_WORKFLOW_SETUP_STARTED_EPOCH")
       fi
       if [ -n "''${NIXFIED_MODEL_FILE:-}" ]; then
         env_cmd+=("NIXFIED_MODEL_FILE=$NIXFIED_MODEL_FILE")
