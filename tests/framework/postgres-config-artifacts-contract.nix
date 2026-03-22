@@ -11,8 +11,16 @@ let
   pgHbaConfText = config.pgHbaConf;
 in
 assert pkgs.lib.hasInfix "listen_addresses = 'localhost'" devConfText;
+assert pkgs.lib.hasInfix "shared_memory_type = mmap" devConfText;
+assert pkgs.lib.hasInfix "dynamic_shared_memory_type = mmap" devConfText;
+assert pkgs.lib.hasInfix "max_connections = 20" devConfText;
+assert pkgs.lib.hasInfix "shared_buffers = 32MB" devConfText;
 assert pkgs.lib.hasInfix "fsync = off" devConfText;
+assert pkgs.lib.hasInfix "max_connections = 50" prodConfText;
+assert pkgs.lib.hasInfix "shared_buffers = 128MB" prodConfText;
 assert pkgs.lib.hasInfix "archive_mode = on" prodConfText;
+assert pkgs.lib.hasInfix "max_connections = 20" testConfText;
+assert pkgs.lib.hasInfix "shared_buffers = 32MB" testConfText;
 assert pkgs.lib.hasInfix "autovacuum = off" testConfText;
 assert pkgs.lib.hasInfix "127.0.0.1/32  trust" pgHbaConfText;
 assert pkgs.lib.hasInfix "select_config_template() {" lifecycleSource;
