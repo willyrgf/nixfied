@@ -38,6 +38,7 @@ in
 pkgs.runCommand "postgres-config-artifacts-smoke" { } ''
   set -euo pipefail
   ${shellHelpers.stderrShellPrelude}
+  ${shellHelpers.postgresCapabilityPrelude}
 
   export HOME="$TMPDIR/home"
   export SLOT=0
@@ -47,6 +48,7 @@ pkgs.runCommand "postgres-config-artifacts-smoke" { } ''
   export POSTGRES_PORT=55434
 
   mkdir -p "$HOME" "$RUN_DIR" "$PGDATA_ROOT"
+  skip_if_postgres_bootstrap_unavailable "postgres-config-artifacts-smoke"
 
   "${lifecycle.init}" > "$TMPDIR/init.out" 2>&1 || {
     cat "$TMPDIR/init.out" >&2

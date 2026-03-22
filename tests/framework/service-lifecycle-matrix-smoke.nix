@@ -507,6 +507,13 @@ in
 pkgs.runCommand "service-lifecycle-matrix-smoke" { } ''
   set -euo pipefail
   ${shellHelpers.stderrShellPrelude}
+  ${shellHelpers.postgresCapabilityPrelude}
+
+  POSTGRES_LIVE_AVAILABLE=1
+  if ! postgres_bootstrap_probe; then
+    POSTGRES_LIVE_AVAILABLE=0
+    echo "SKIP: postgres lifecycle case requires PostgreSQL bootstrap support in the build sandbox" >&2
+  fi
 
   export HOME="$TMPDIR/home"
   export SLOT=0
@@ -687,17 +694,19 @@ pkgs.runCommand "service-lifecycle-matrix-smoke" { } ''
     echo "INFO: lifecycle-smoke service=$service_name phase=done" >&2
   }
 
-  export POSTGRES_PORT=55433
-  run_service_case \
-    postgres \
-    "${postgresService.init}" \
-    "${postgresService.checkConfig}" \
-    "${postgresService.start}" \
-    "${postgresService.status}" \
-    "${postgresService.health}" \
-    "${postgresService.ready}" \
-    "${postgresService.restart}" \
-    "${postgresService.stop}"
+  if [ "$POSTGRES_LIVE_AVAILABLE" -eq 1 ]; then
+    export POSTGRES_PORT=55433
+    run_service_case \
+      postgres \
+      "${postgresService.init}" \
+      "${postgresService.checkConfig}" \
+      "${postgresService.start}" \
+      "${postgresService.status}" \
+      "${postgresService.health}" \
+      "${postgresService.ready}" \
+      "${postgresService.restart}" \
+      "${postgresService.stop}"
+  fi
 
   export HTTP_PORT=28080 HTTPS_PORT=28443
   run_service_case \

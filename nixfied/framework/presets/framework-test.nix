@@ -167,7 +167,7 @@ in
         Usage: nix run .#framework::test [-- --profile ci] [--mode <basic|app|env|full>] [--summary] [--summary-json <path>] [--shard <name>] [--max-parallel-shards <n|auto>] [--serial] [--list-shards]
 
         Shards:
-          flake-check   Evaluate nix flake checks for the current project root.
+          flake-check   Build and run the full registered framework check suite.
           launcher-pruning  Build the launcher/runtime split regression checks and help fast paths.
           help          Validate generated help output.
           workflow-ci   Run the CI workflow surface in selected mode.
@@ -238,7 +238,7 @@ in
         }
 
         shard_flake_check() {
-          nix flake check . --no-build
+          nix flake check .
         }
 
         verify_public_launcher_help() {
@@ -324,11 +324,7 @@ in
         }
 
         shard_workflow_ci() {
-          if [ -z "''${NIXFIED_EXECUTOR_SELF:-}" ]; then
-            log_error "NIXFIED_EXECUTOR_SELF is not set"
-            return "$NIXFIED_EXIT_PRECONDITION"
-          fi
-          NIXFIED_CALLER_PWD="$PWD" "$NIXFIED_EXECUTOR_SELF" run-task task.ci --mode "$MODE" --summary
+          nix run .#run-workflow -- "workflow.ci.$MODE" --summary
         }
 
         shard_services() {
@@ -665,7 +661,7 @@ in
         if [ -n "$SHARD" ]; then
           selected_shards+=("$SHARD")
         else
-          selected_shards=("''${SHARDS[@]}")
+          selected_shards=("flake-check")
         fi
 
         run_rc=0

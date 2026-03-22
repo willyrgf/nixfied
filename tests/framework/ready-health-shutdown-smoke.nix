@@ -8,6 +8,7 @@ let
     inherit pkgs;
     system = pkgs.system;
   };
+  shellHelpers = import ./lib/shell-helpers.nix { inherit pkgs; };
 
   basePort = 27100;
 
@@ -65,6 +66,9 @@ let
 in
 pkgs.runCommand "ready-health-shutdown-smoke" { } ''
     set -euo pipefail
+    ${shellHelpers.postgresCapabilityPrelude}
+
+    skip_if_postgres_bootstrap_unavailable "ready-health-shutdown-smoke"
 
     EXECUTOR="${executor}/bin/nixfied-executor"
     export REGISTRY_ROOT="$TMPDIR/registry"
