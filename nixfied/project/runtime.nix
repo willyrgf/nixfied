@@ -1,10 +1,6 @@
 {
   conf,
   project,
-  workspaceId,
-  resolvedRuntimeBase,
-  resolvedRegistryRoot,
-  resolvedArtifactsRoot,
   envNames,
   envOffsets,
   nixChecksPkg,
@@ -39,7 +35,6 @@
         };
 
         ports = conf.ports;
-        directories.base = resolvedRuntimeBase;
         ephemeral = {
           copyMode = conf.ephemeral.copyMode or "nix-source";
           includeUntracked = conf.ephemeral.includeUntracked or false;
@@ -66,12 +61,6 @@
           envFileMode = conf.ephemeral.envFileMode or "disabled";
           envFilePath = conf.ephemeral.envFilePath or ".env";
         };
-      };
-
-      state = {
-        workspaceId = workspaceId;
-        registryRoot = resolvedRegistryRoot;
-        artifactsRoot = resolvedArtifactsRoot;
       };
 
       tooling = {

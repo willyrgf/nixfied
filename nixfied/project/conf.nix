@@ -47,12 +47,6 @@ rec {
     heliosRpc = 8547;
   };
 
-  # Base runtime directory. project/module.nix resolves the final default to a
-  # workspace-scoped path for the current checkout.
-  directories = {
-    base = "/tmp/nixfied-runtime/${project.id}/runtime";
-  };
-
   logging = {
     level = "info";
     output = "stdout";
@@ -130,12 +124,6 @@ rec {
     # Reproducible default: do not import host-local .env files.
     envFileMode = "disabled";
     envFilePath = ".env";
-  };
-
-  process = {
-    # project/module.nix resolves the final default to a workspace-scoped path
-    # for the current checkout.
-    registryRoot = "/tmp/nixfied-runtime/${project.id}/registry";
   };
 
   services = {

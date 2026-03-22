@@ -303,6 +303,11 @@ def diagnostics(graph):
     return {
         "localOverridesActive": graph["localOverrides"]["active"],
         "localOverrideCount": graph["localOverrides"]["count"],
+        "policyId": graph["state"]["policyId"],
+        "policyKind": graph["state"]["policyKind"],
+        "policySource": graph["state"]["policySource"],
+        "ownerScope": graph["state"]["ownerScope"],
+        "discoveryScope": graph["state"]["discoveryScope"],
         "workspaceMarkerPresent": graph["state"]["workspaceMarkerPresent"],
         "runtimeBase": graph["state"]["runtimeBase"],
         "registryRoot": graph["state"]["registryRoot"],
@@ -459,6 +464,11 @@ def print_human(response):
     print(f"INFO: diagnostics.local_overrides_active={str(diag['localOverridesActive']).lower()}")
     print(f"INFO: diagnostics.local_override_count={diag['localOverrideCount']}")
     print(f"INFO: diagnostics.workspace_marker_present={str(diag['workspaceMarkerPresent']).lower()}")
+    print(f"INFO: diagnostics.policy_id={diag['policyId']}")
+    print(f"INFO: diagnostics.policy_kind={diag['policyKind']}")
+    print(f"INFO: diagnostics.policy_source={diag['policySource']}")
+    print(f"INFO: diagnostics.owner_scope={diag['ownerScope']}")
+    print(f"INFO: diagnostics.discovery_scope={diag['discoveryScope']}")
     print(f"INFO: diagnostics.workspace_id={diag['workspaceId']}")
     print(f"INFO: diagnostics.runtime_base={diag['runtimeBase']}")
     print(f"INFO: diagnostics.registry_root={diag['registryRoot']}")

@@ -2,6 +2,7 @@
 {
   projectRoot,
   resolved,
+  statePolicy,
   features,
   runtime,
   services,
@@ -151,7 +152,10 @@ let
     "- Project id: ${resolved.identity.projectId}"
     "- Project name: ${resolved.identity.projectName}"
     "- Description: ${resolved.identity.description}"
-    "- Workspace id: ${resolved.state.workspaceId}"
+    "- State policy id: ${statePolicy.id}"
+    "- State policy kind: ${statePolicy.kind}"
+    "- State policy source: ${statePolicy.source}"
+    "- Workspace id: ${statePolicy.workspaceId}"
     ""
     "## Runtime"
     ""
@@ -160,6 +164,8 @@ let
     "- Environment variable: ${runtime.env.var}"
     "- Environment names: ${builtins.concatStringsSep ", " runtime.env.names}"
     "- Runtime directory base: ${runtime.directories.base}"
+    "- Registry root: ${statePolicy.registryRoot}"
+    "- Artifacts root: ${statePolicy.artifactsRoot}"
     "- Enabled services: ${enabledServicesLine}"
     "- Feature count: ${toString (builtins.length featureIds)}"
     ""

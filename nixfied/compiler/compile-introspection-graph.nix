@@ -5,6 +5,7 @@
 {
   projectRoot,
   resolved,
+  statePolicy,
   runtime,
   apps,
   tasks,
@@ -173,10 +174,12 @@ let
           mappedWorkflowIds = workflowIdsForApp;
           selectedServices = selectionIndex.taskClosureServicesById.${app.taskId} or [ ];
           runtimeRoots = {
-            workspaceId = resolved.state.workspaceId;
-            runtimeBase = runtime.directories.base;
-            registryRoot = resolved.state.registryRoot;
-            artifactsRoot = resolved.state.artifactsRoot;
+            policyId = statePolicy.id;
+            policyKind = statePolicy.kind;
+            workspaceId = statePolicy.workspaceId;
+            runtimeBase = statePolicy.runtimeBase;
+            registryRoot = statePolicy.registryRoot;
+            artifactsRoot = statePolicy.artifactsRoot;
           };
           workspaceMarkerPresent = workspaceMarkerPresent;
           localOverrides = {
@@ -575,10 +578,15 @@ canonical.canonicalize {
     version = 1;
   };
   state = {
-    workspaceId = resolved.state.workspaceId;
-    runtimeBase = runtime.directories.base;
-    registryRoot = resolved.state.registryRoot;
-    artifactsRoot = resolved.state.artifactsRoot;
+    policyId = statePolicy.id;
+    policyKind = statePolicy.kind;
+    policySource = statePolicy.source;
+    ownerScope = statePolicy.ownerScope;
+    discoveryScope = statePolicy.discoveryScope;
+    workspaceId = statePolicy.workspaceId;
+    runtimeBase = statePolicy.runtimeBase;
+    registryRoot = statePolicy.registryRoot;
+    artifactsRoot = statePolicy.artifactsRoot;
     workspaceMarkerPresent = workspaceMarkerPresent;
   };
   localOverrides = {

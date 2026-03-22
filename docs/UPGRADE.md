@@ -53,7 +53,7 @@ This split is a real contract change for downstream code that previously read de
 ## User-Visible Changes
 
 - Default registry state is now workspace-scoped: `/tmp/nixfied-runtime/<projectId>/<workspaceId>/registry`.
-- Default artifacts are now workspace-scoped: `/tmp/ci-artifacts/<projectId>/<workspaceId>`.
+- Default artifacts are now workspace-scoped: `/tmp/nixfied-artifacts-<projectId>-<workspaceId>`.
 - Ephemeral workflows now propagate isolated `HOME`, `TMPDIR`, `XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_CACHE_HOME`, `REGISTRY_ROOT`, `CI_ARTIFACTS_DIR`, and `NIXFIED_SERVICE_ROOT`.
 - Ephemeral runs preserve relative caller subdirectories inside the copied source tree instead of collapsing back to project root.
 - If `REGISTRY_ROOT` is explicitly overridden and no explicit artifacts root is provided, artifacts follow the registry under `$REGISTRY_ROOT/artifacts`.
@@ -72,7 +72,7 @@ Common examples:
 - Downstream callers importing removed shim paths; update them to canonical `nixfied/framework/...` imports.
 - Downstream tooling reading `model.services`; migrate to `model.serviceCatalog` for cheap introspection and to internal compiled runtime surfaces only when heavy service details are actually required.
 - Tasks or scripts that assumed all `SVC_*` or `NIXFIED_SERVICE_*` vars were ambient; model service needs explicitly instead.
-- Scripts hardcoding `/tmp/ci-artifacts` or shared registry paths.
+- Scripts hardcoding `/tmp/ci-artifacts`, `/tmp/nixfied-artifacts-*`, or shared registry paths.
 - Tasks assuming ephemeral runs still use host-global `HOME`, `TMPDIR`, or XDG cache/state directories.
 - Tooling reading run JSON or `summary.json` during writes and relying on partial in-place updates.
 - Overrides that set `REGISTRY_ROOT` without also setting `CI_ARTIFACTS_ROOT` or `CI_ARTIFACTS_DIR`.

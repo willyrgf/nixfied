@@ -350,16 +350,11 @@ let
       output = model.runtime.logging.outputDefault;
     };
     state = {
-      registry = {
-        root = model.state.registry.root;
-      };
-      artifacts = {
-        root = model.state.artifacts.root;
-      };
+      policy = model.state.policy;
     };
     ci = {
       artifacts = {
-        dir = model.state.artifacts.root;
+        dir = model.state.policy.artifactsRoot;
       };
     };
     directories = {

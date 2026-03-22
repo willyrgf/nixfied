@@ -11,21 +11,14 @@ let
 
   sourceRoot = ../..;
 
-  mkWorkspaceModule =
-    workspaceId:
-    let
-      runtimeRoot = "/tmp/nixfied-runtime/nixfied-project/${workspaceId}";
-    in
-    {
-      nixfied = {
-        runtime.directories.base = lib.mkForce "${runtimeRoot}/runtime";
-        state = {
-          workspaceId = lib.mkForce workspaceId;
-          registryRoot = lib.mkForce "${runtimeRoot}/registry";
-          artifactsRoot = lib.mkForce "/tmp/ci-artifacts/nixfied-project/${workspaceId}";
-        };
+  mkWorkspaceModule = workspaceId: {
+    nixfied = {
+      state.policy = {
+        workspace.mode = lib.mkForce "literal";
+        workspace.value = lib.mkForce workspaceId;
       };
     };
+  };
 
   workspaceAModule = mkWorkspaceModule "workspace-a";
   workspaceBModule = mkWorkspaceModule "workspace-b";
@@ -60,14 +53,14 @@ let
   };
 in
 assert compiledA.model.identity.projectId == compiledB.model.identity.projectId;
-assert compiledA.model.state.registry.root != compiledB.model.state.registry.root;
+assert compiledA.model.state.policy.registryRoot != compiledB.model.state.policy.registryRoot;
 pkgs.runCommand "workspace-registry-isolation-smoke" { } ''
   set -euo pipefail
   ${harnessA.shellPrelude}
 
   ORCH_A="${harnessA.orchestrator}/bin/nixfied-orchestrator"
-  ROOT_A="$TMPDIR/${compiledA.model.state.workspaceId}/registry"
-  ROOT_B="$TMPDIR/${compiledB.model.state.workspaceId}/registry"
+  ROOT_A="$TMPDIR/${compiledA.model.state.policy.workspaceId}/registry"
+  ROOT_B="$TMPDIR/${compiledB.model.state.policy.workspaceId}/registry"
   export CI_ARTIFACTS_ROOT="$TMPDIR/artifacts"
   mkdir -p "$ROOT_A" "$ROOT_B" "$CI_ARTIFACTS_ROOT"
 

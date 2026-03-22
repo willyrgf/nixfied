@@ -145,7 +145,7 @@ in
             artifacts = {
               root = lib.mkOption {
                 type = t.str;
-                default = "/tmp/ci-artifacts";
+                default = "";
               };
               keepOnSuccess = lib.mkOption {
                 type = t.bool;

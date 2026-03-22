@@ -33,14 +33,15 @@ Execution-only compiled surfaces:
 Deterministic pass order:
 
 1. `resolve-modules`
-2. `normalize-runtime`
-3. `compile-service-catalog`
-4. `compile-services`
-5. `compile-tasks`
-6. `compile-workflows`
-7. `compile-features`
-8. `compile-views`
-9. `finalize-model`
+2. `compile-state-policy`
+3. `normalize-runtime`
+4. `compile-service-catalog`
+5. `compile-services`
+6. `compile-tasks`
+7. `compile-workflows`
+8. `compile-features`
+9. `compile-views`
+10. `finalize-model`
 
 The compiled state hash is `sha256(toCanonicalNix(model))`.
 `runtimeHash` is a separate deterministic hash of the heavy compiled service runtime and is used by executor/orchestrator run-id seeding.
@@ -106,11 +107,13 @@ Executor behavior:
 - summary artifact contract at `CI_ARTIFACTS_DIR/summary.json` when enabled
 - run ids and orchestrator seeds incorporate `runtimeHash`, not only the cheap model hash
 
-Workspace-scoped defaults:
+State policy defaults:
 
-- `model.state.workspaceId` is derived from project root and used to isolate default runtime state per workspace.
+- `model.state.policy.workspaceId` is derived from project root and used to isolate default runtime state per workspace.
+- Default policy id and kind are `workspace-scoped`.
+- Default runtime base is `/tmp/nixfied-runtime/<projectId>/<workspaceId>/runtime`.
 - Default registry root is `/tmp/nixfied-runtime/<projectId>/<workspaceId>/registry`.
-- Default artifacts root is `/tmp/ci-artifacts/<projectId>/<workspaceId>`.
+- Default artifacts root is `/tmp/nixfied-artifacts-<projectId>-<workspaceId>`.
 - If `REGISTRY_ROOT` is explicitly overridden and artifacts still use the legacy default, orchestrator resolves artifacts under `$REGISTRY_ROOT/artifacts`.
 
 Task-scoped cache isolation:

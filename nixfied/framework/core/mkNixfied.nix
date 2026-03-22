@@ -61,6 +61,7 @@ let
 in
 {
   model = compiledCore.model;
+  statePolicy = compiledCore.model.state.policy;
   stateHash = compiledCore.stateHash;
   runtimeHash = execution.runtimeHash or compiledCore.model.identity.evalHash;
   tasks = compiledCore.model.tasks;

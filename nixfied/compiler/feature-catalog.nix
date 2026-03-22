@@ -86,7 +86,7 @@
       "nixfied/framework/runtime/orchestrator.nix"
       "nixfied/framework/runtime/env-sandbox.nix"
     ];
-    modelPaths = [ "state.registry.root" ];
+    modelPaths = [ "state.policy.registryRoot" ];
     status = "stable";
     defaults = {
       registryRoot = null;

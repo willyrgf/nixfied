@@ -9,27 +9,6 @@ let
   conf = import ./conf.nix { inherit pkgs; };
   exitCodes = import ../framework/core/exit-codes.nix;
   project = conf.project;
-  workspaceId = builtins.substring 0 12 (builtins.hashString "sha256" (toString projectRoot));
-  workspaceRuntimeRoot = "/tmp/nixfied-runtime/${project.id}/${workspaceId}";
-  legacyRuntimeBases = [
-    "\${XDG_DATA_HOME:-$HOME/.local/share}/${project.id}"
-    "/tmp/nixfied-runtime/${project.id}/runtime"
-  ];
-  legacyRegistryRoots = [
-    "/tmp/nixfied-runtime/${project.id}"
-    "/tmp/nixfied-runtime/${project.id}/registry"
-  ];
-  resolvedRuntimeBase =
-    if builtins.elem conf.directories.base legacyRuntimeBases then
-      "${workspaceRuntimeRoot}/runtime"
-    else
-      conf.directories.base;
-  resolvedRegistryRoot =
-    if builtins.elem conf.process.registryRoot legacyRegistryRoots then
-      "${workspaceRuntimeRoot}/registry"
-    else
-      conf.process.registryRoot;
-  resolvedArtifactsRoot = "/tmp/nixfied-artifacts-${project.id}-${workspaceId}";
   envNames = builtins.attrNames conf.envs;
   envOffsets = lib.mapAttrs (_: value: value.offset or 0) conf.envs;
   normalizeSourceKeys = sources: builtins.sort builtins.lessThan (builtins.attrNames sources);
@@ -391,10 +370,6 @@ let
     inherit
       conf
       project
-      workspaceId
-      resolvedRuntimeBase
-      resolvedRegistryRoot
-      resolvedArtifactsRoot
       envNames
       envOffsets
       nixChecksPkg
@@ -425,16 +400,14 @@ let
       ;
   };
 
-  projectWorkflowsModule = import ./workflows.nix {
-    inherit
-      frameworkSelfhostPreset
-      resolvedArtifactsRoot
-      ;
-  };
+  workspaceStatePolicyPreset = import ../framework/presets/state-policies/workspace-scoped.nix;
+
+  projectWorkflowsModule = import ./workflows.nix { inherit frameworkSelfhostPreset; };
 in
 {
   imports = [
     ../modules/profiles/webapp.nix
+    workspaceStatePolicyPreset
     projectRuntimeModule
     projectServicesModule
     projectTasksModule

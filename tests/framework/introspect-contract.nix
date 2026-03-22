@@ -12,10 +12,12 @@ pkgs.runCommand "introspect-contract" { } ''
   "$INTROSPECT" check > "$TMPDIR/check-human.txt"
   "$GREP" -Fq 'INFO: resolved.node=app:check' "$TMPDIR/check-human.txt"
   "$GREP" -Fq 'INFO: execution.mapped_tasks=task.check' "$TMPDIR/check-human.txt"
+  "$GREP" -Fq 'INFO: diagnostics.policy_kind=workspace-scoped' "$TMPDIR/check-human.txt"
 
   "$INTROSPECT" app:check --json > "$TMPDIR/check.json"
   "$JQ" -e '.resolved.nodeId == "app:check"' "$TMPDIR/check.json" > /dev/null
   "$JQ" -e '.execution.launcherClass == "selected-app"' "$TMPDIR/check.json" > /dev/null
+  "$JQ" -e '.diagnostics.policyKind == "workspace-scoped"' "$TMPDIR/check.json" > /dev/null
 
   "$INTROSPECT" check --why package:nix-checks --json > "$TMPDIR/why.json"
   "$JQ" -e '.closure.target.nodeId == "package:nix-checks"' "$TMPDIR/why.json" > /dev/null

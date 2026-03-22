@@ -1,7 +1,4 @@
-{
-  frameworkSelfhostPreset,
-  resolvedArtifactsRoot,
-}:
+{ frameworkSelfhostPreset }:
 let
   workflowProbePhases = {
     preRun.tasks = [ "task.ops.ready" ];
@@ -46,7 +43,6 @@ in
         preRun = workflowProbePhases.preRun;
         postRun = workflowProbePhases.postRun;
         artifacts = {
-          root = resolvedArtifactsRoot;
           keepOnSuccess = false;
           keepOnFailure = true;
           writeSummary = true;
@@ -102,7 +98,6 @@ in
         preRun = workflowProbePhases.preRun;
         postRun = workflowProbePhases.postRun;
         artifacts = {
-          root = resolvedArtifactsRoot;
           keepOnSuccess = false;
           keepOnFailure = true;
           writeSummary = true;
@@ -168,7 +163,6 @@ in
         preRun = workflowProbePhases.preRun;
         postRun = workflowProbePhases.postRun;
         artifacts = {
-          root = resolvedArtifactsRoot;
           keepOnSuccess = false;
           keepOnFailure = true;
           writeSummary = true;
@@ -202,7 +196,6 @@ in
         preRun = workflowProbePhases.preRun;
         postRun = workflowProbePhases.postRun;
         artifacts = {
-          root = resolvedArtifactsRoot;
           keepOnSuccess = false;
           keepOnFailure = true;
           writeSummary = true;
@@ -243,7 +236,6 @@ in
           alwaysRun = true;
         };
         artifacts = {
-          root = resolvedArtifactsRoot;
           keepOnSuccess = false;
           keepOnFailure = true;
           writeSummary = true;
@@ -321,7 +313,6 @@ in
         preRun = workflowProbePhases.preRun;
         postRun = workflowProbePhases.postRun;
         artifacts = {
-          root = resolvedArtifactsRoot;
           keepOnSuccess = false;
           keepOnFailure = true;
           writeSummary = true;
@@ -385,7 +376,6 @@ in
         preRun = workflowProbePhases.preRun;
         postRun = workflowProbePhases.postRun;
         artifacts = {
-          root = resolvedArtifactsRoot;
           keepOnSuccess = false;
           keepOnFailure = true;
           writeSummary = true;

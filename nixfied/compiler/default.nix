@@ -23,6 +23,7 @@ let
       ;
   };
 
+  compileStatePolicy = import ./compile-state-policy.nix { inherit lib; };
   normalizeRuntime = import ./normalize-runtime.nix { inherit lib; };
   compileServiceCatalog = import ./compile-service-catalog.nix { inherit lib; };
   compileServiceSurfaceCatalog = import ./compile-service-surface-catalog.nix { inherit lib; };
@@ -95,8 +96,16 @@ rec {
           ;
       };
 
+      statePolicy = compileStatePolicy {
+        inherit
+          projectRoot
+          ;
+        resolved = resolvedModuleGraph.config;
+      };
+
       runtime = normalizeRuntime {
         resolved = resolvedModuleGraph.config;
+        inherit statePolicy;
       };
 
       serviceCatalog = compileServiceCatalog {
@@ -150,6 +159,7 @@ rec {
       introspectionGraph = compileIntrospectionGraph {
         inherit
           projectRoot
+          statePolicy
           runtime
           apps
           tasks
@@ -168,6 +178,7 @@ rec {
         inherit projectRoot;
         resolved = resolvedModuleGraph.config;
         inherit
+          statePolicy
           features
           runtime
           apps
@@ -181,6 +192,7 @@ rec {
         inherit
           system
           projectRoot
+          statePolicy
           runtime
           serviceCatalog
           apps
@@ -201,6 +213,7 @@ rec {
       introspectionGraph = introspectionGraph;
       views = views;
       runtime = runtime;
+      statePolicy = statePolicy;
       serviceCatalog = serviceCatalog;
       serviceSurfaceCatalog = serviceSurfaceCatalog;
       features = features;

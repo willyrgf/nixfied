@@ -6,6 +6,7 @@ in
 {
   imports = [
     ./apps.nix
+    ./state.nix
     ./runtime.nix
     ./tasks.nix
     ./workflows.nix
@@ -33,23 +34,6 @@ in
       description = lib.mkOption {
         type = t.str;
         default = "Model-driven Nixfied project";
-      };
-    };
-
-    state = {
-      workspaceId = lib.mkOption {
-        type = t.str;
-        default = "default";
-      };
-
-      registryRoot = lib.mkOption {
-        type = t.str;
-        default = "/tmp/nixfied-runtime/nixfied-project/registry";
-      };
-
-      artifactsRoot = lib.mkOption {
-        type = t.str;
-        default = "/tmp/ci-artifacts/nixfied-project";
       };
     };
 
