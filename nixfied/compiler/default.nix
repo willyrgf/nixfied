@@ -109,6 +109,40 @@ rec {
           ;
       };
 
+      legacyLocalDefault =
+        let
+          relativePath = "nixfied/local/default.nix";
+          projectPath = "${builtins.toString projectRoot}/${relativePath}";
+          templateContents = builtins.readFile ../local/default.nix;
+          present = builtins.pathExists projectPath;
+          contents = if present then builtins.readFile projectPath else "";
+          customized = present && contents != templateContents;
+          status =
+            if !present then
+              "missing"
+            else if customized then
+              "customized-inactive"
+            else
+              "template-inactive";
+          message =
+            if !present then
+              "legacy local/default.nix is absent"
+            else if customized then
+              "legacy local/default.nix differs from the framework template but is not loaded by flake outputs"
+            else
+              "legacy local/default.nix matches the framework template and is not loaded by flake outputs";
+        in
+        {
+          path = relativePath;
+          inherit
+            present
+            customized
+            status
+            message
+            ;
+          active = false;
+        };
+
       statePolicy = compileStatePolicy {
         inherit
           projectRoot
@@ -220,6 +254,7 @@ rec {
         resolved = resolvedModuleGraph.config;
         localOverridesActive = localOverrides != [ ];
         localOverrideCount = builtins.length localOverrides;
+        inherit legacyLocalDefault;
       };
 
       views = compileViews {
@@ -269,6 +304,7 @@ rec {
       serviceSurfaceCatalog = serviceSurfaceCatalog;
       features = features;
       selectionIndex = selectionIndex;
+      legacyLocalDefault = legacyLocalDefault;
     };
 
   compileServicesResolved =

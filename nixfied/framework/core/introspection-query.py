@@ -318,6 +318,7 @@ def diagnostics(graph):
     return {
         "localOverridesActive": graph["localOverrides"]["active"],
         "localOverrideCount": graph["localOverrides"]["count"],
+        "legacyLocalDefault": graph["legacyLocalDefault"],
         "policyId": graph["state"]["policyId"],
         "policyKind": graph["state"]["policyKind"],
         "policySource": graph["state"]["policySource"],
@@ -480,6 +481,13 @@ def print_human(response):
     diag = response["diagnostics"]
     print(f"INFO: diagnostics.local_overrides_active={str(diag['localOverridesActive']).lower()}")
     print(f"INFO: diagnostics.local_override_count={diag['localOverrideCount']}")
+    legacy_local_default = diag["legacyLocalDefault"]
+    print(f"INFO: diagnostics.legacy_local_default_path={legacy_local_default['path']}")
+    print(f"INFO: diagnostics.legacy_local_default_present={str(legacy_local_default['present']).lower()}")
+    print(f"INFO: diagnostics.legacy_local_default_customized={str(legacy_local_default['customized']).lower()}")
+    print(f"INFO: diagnostics.legacy_local_default_active={str(legacy_local_default['active']).lower()}")
+    print(f"INFO: diagnostics.legacy_local_default_status={legacy_local_default['status']}")
+    print(f"INFO: diagnostics.legacy_local_default_message={legacy_local_default['message']}")
     print(f"INFO: diagnostics.workspace_marker_present={str(diag['workspaceMarkerPresent']).lower()}")
     print(f"INFO: diagnostics.policy_id={diag['policyId']}")
     print(f"INFO: diagnostics.policy_kind={diag['policyKind']}")

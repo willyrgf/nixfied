@@ -18,6 +18,14 @@
   selectionIndex,
   localOverridesActive ? false,
   localOverrideCount ? 0,
+  legacyLocalDefault ? {
+    path = "nixfied/local/default.nix";
+    present = false;
+    customized = false;
+    active = false;
+    status = "missing";
+    message = "legacy local/default.nix is absent";
+  },
 }:
 let
   workspaceMarker = import ../framework/workspace-marker.nix;
@@ -957,6 +965,7 @@ canonical.canonicalize {
     active = localOverridesActive;
     count = localOverrideCount;
   };
+  legacyLocalDefault = legacyLocalDefault;
   resolution = {
     appIds = appIds;
     serviceSetIds = serviceSetIds;

@@ -13,11 +13,17 @@ pkgs.runCommand "introspect-contract" { } ''
   "$GREP" -Fq 'INFO: resolved.node=app:check' "$TMPDIR/check-human.txt"
   "$GREP" -Fq 'INFO: execution.mapped_tasks=task.check' "$TMPDIR/check-human.txt"
   "$GREP" -Fq 'INFO: diagnostics.policy_kind=workspace-scoped' "$TMPDIR/check-human.txt"
+  "$GREP" -Fq 'INFO: diagnostics.legacy_local_default_status=template-inactive' "$TMPDIR/check-human.txt"
 
   "$INTROSPECT" app:check --json > "$TMPDIR/check.json"
   "$JQ" -e '.resolved.nodeId == "app:check"' "$TMPDIR/check.json" > /dev/null
   "$JQ" -e '.execution.launcherClass == "selected-app"' "$TMPDIR/check.json" > /dev/null
   "$JQ" -e '.diagnostics.policyKind == "workspace-scoped"' "$TMPDIR/check.json" > /dev/null
+  "$JQ" -e '.diagnostics.legacyLocalDefault.path == "nixfied/local/default.nix"' "$TMPDIR/check.json" > /dev/null
+  "$JQ" -e '.diagnostics.legacyLocalDefault.present == true' "$TMPDIR/check.json" > /dev/null
+  "$JQ" -e '.diagnostics.legacyLocalDefault.customized == false' "$TMPDIR/check.json" > /dev/null
+  "$JQ" -e '.diagnostics.legacyLocalDefault.active == false' "$TMPDIR/check.json" > /dev/null
+  "$JQ" -e '.diagnostics.legacyLocalDefault.status == "template-inactive"' "$TMPDIR/check.json" > /dev/null
 
   "$INTROSPECT" check --why package:nix-checks --json > "$TMPDIR/why.json"
   "$JQ" -e '.closure.target.nodeId == "package:nix-checks"' "$TMPDIR/why.json" > /dev/null
