@@ -33,6 +33,7 @@ let
       ;
     selectionIndex = resolvedSelectionIndex;
   };
+  executorRuntimeShell = import ./executor-runtime.nix { inherit pkgs; };
   orchestratorRuntimeShell = import ./orchestrator-runtime.nix { inherit pkgs; };
   executor = import ./executor.nix {
     inherit
@@ -123,6 +124,7 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
 
   ${registryShell}
   ${workflowModesShell}
+  ${executorRuntimeShell}
   ${orchestratorRuntimeShell}
 
   mkdir -p "$RUNS_DIR" "$RUN_LOCKS_DIR" "$RUN_LOG_DIR"

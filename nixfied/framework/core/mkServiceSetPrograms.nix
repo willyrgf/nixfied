@@ -4,6 +4,7 @@
   serviceSet,
   resolvedServices,
   serviceRuntimeSurfaces,
+  operations ? null,
 }:
 let
   lib = pkgs.lib;
@@ -17,8 +18,31 @@ let
   };
   requiredServices = serviceSet.services.required or [ ];
   optionalHealthServices = serviceSet.services.optional or [ ];
-  healthServices = builtins.sort builtins.lessThan (lib.unique (requiredServices ++ optionalHealthServices));
+  availableRuntimeServiceNames = builtins.sort builtins.lessThan (
+    builtins.attrNames (serviceRuntimeSurfaces.serviceApis or { })
+  );
+  runtimeRequiredServices = builtins.filter (
+    serviceName: builtins.elem serviceName availableRuntimeServiceNames
+  ) requiredServices;
+  runtimeOptionalHealthServices = builtins.filter (
+    serviceName: builtins.elem serviceName availableRuntimeServiceNames
+  ) optionalHealthServices;
+  healthServices = builtins.sort builtins.lessThan (
+    lib.unique (runtimeRequiredServices ++ runtimeOptionalHealthServices)
+  );
   knownServiceNames = builtins.sort builtins.lessThan (builtins.attrNames resolvedServices);
+  enabledOperations =
+    if operations == null then
+      [
+        "start"
+        "stop"
+        "status"
+        "health"
+        "ready"
+        "export"
+      ]
+    else
+      builtins.sort builtins.lessThan (lib.unique operations);
   normalizeToken =
     value: lib.toUpper (lib.replaceStrings [ "." "-" ":" "/" " " ] [ "_" "_" "_" "_" "_" ] value);
 
@@ -73,7 +97,7 @@ let
     };
 
   healthProbeRuntime = probeRuntimeFor healthServices;
-  readyProbeRuntime = probeRuntimeFor requiredServices;
+  readyProbeRuntime = probeRuntimeFor runtimeRequiredServices;
 
   renderStringCases =
     values:
@@ -384,7 +408,7 @@ NIXFIED_USAGE
   exportScript =
     appName:
     let
-      exportLines = renderExportRecordLines requiredServices;
+      exportLines = renderExportRecordLines runtimeRequiredServices;
       scriptName = "nixfied-service-set-${normalizeToken serviceSet.name}-export";
       drv = pkgs.writeShellScriptBin scriptName ''
       set -euo pipefail
@@ -396,7 +420,7 @@ NIXFIED_USAGE
 ${renderOperationHelp {
   inherit appName;
   operation = "export";
-  members = requiredServices;
+  members = runtimeRequiredServices;
   allowFormat = true;
 }}
 NIXFIED_USAGE
@@ -412,7 +436,7 @@ NIXFIED_USAGE
       fi
 
       ${mkMemberSelectorPrelude {
-        members = requiredServices;
+        members = runtimeRequiredServices;
         allowFormat = true;
         defaultFormat = serviceSet.export.defaultFormat;
       }}
@@ -529,22 +553,28 @@ ${exportLines}
     };
 in
 {
-  programsByOperation = {
+  programsByOperation = lib.optionalAttrs (builtins.elem "start" enabledOperations) {
     start = groupedControlScript {
       operation = "start";
       appName = "svcset::${serviceSet.name}::start";
-      members = requiredServices;
+      members = runtimeRequiredServices;
     };
+  }
+  // lib.optionalAttrs (builtins.elem "stop" enabledOperations) {
     stop = groupedControlScript {
       operation = "stop";
       appName = "svcset::${serviceSet.name}::stop";
-      members = requiredServices;
+      members = runtimeRequiredServices;
     };
+  }
+  // lib.optionalAttrs (builtins.elem "status" enabledOperations) {
     status = groupedControlScript {
       operation = "status";
       appName = "svcset::${serviceSet.name}::status";
-      members = requiredServices;
+      members = runtimeRequiredServices;
     };
+  }
+  // lib.optionalAttrs (builtins.elem "health" enabledOperations) {
     health =
       let
         scriptName = "nixfied-service-set-${normalizeToken serviceSet.name}-health";
@@ -571,6 +601,8 @@ NIXFIED_USAGE
         inherit drv;
         program = "${drv}/bin/${scriptName}";
       };
+  }
+  // lib.optionalAttrs (builtins.elem "ready" enabledOperations) {
     ready =
       let
         scriptName = "nixfied-service-set-${normalizeToken serviceSet.name}-ready";
@@ -580,7 +612,7 @@ NIXFIED_USAGE
 ${renderOperationHelp {
   appName = "svcset::${serviceSet.name}::ready";
   operation = "ready";
-  members = requiredServices;
+  members = runtimeRequiredServices;
   allowSource = true;
 }}
 NIXFIED_USAGE
@@ -597,6 +629,8 @@ NIXFIED_USAGE
         inherit drv;
         program = "${drv}/bin/${scriptName}";
       };
+  }
+  // lib.optionalAttrs (builtins.elem "export" enabledOperations) {
     export = exportScript "svcset::${serviceSet.name}::export";
   };
 }

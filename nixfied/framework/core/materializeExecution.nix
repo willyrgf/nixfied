@@ -11,6 +11,42 @@ let
   mkShellApp = import ./mk-shell-app.nix { inherit pkgs; };
   registry = import ../runtime/registry { inherit pkgs; };
   compileServices = import ../../compiler/compile-services.nix { inherit lib; };
+  normalizedSelectedServices =
+    if selectedServices == null then
+      null
+    else
+      builtins.sort builtins.lessThan (lib.unique (builtins.filter (name: name != "") selectedServices));
+
+  selectedServiceScopeSet =
+    if normalizedSelectedServices == null then
+      { }
+    else
+      builtins.listToAttrs (
+        map (serviceName: {
+          name = serviceName;
+          value = true;
+        }) normalizedSelectedServices
+      );
+
+  isSelectedServiceAllowed =
+    serviceName:
+    normalizedSelectedServices == null
+    || builtins.hasAttr serviceName selectedServiceScopeSet
+    || builtins.hasAttr "service.${serviceName}" selectedServiceScopeSet
+    || (
+      lib.hasPrefix "service." serviceName
+      && builtins.hasAttr (lib.removePrefix "service." serviceName) selectedServiceScopeSet
+    );
+
+  constrainSelectedServices =
+    serviceNames:
+    let
+      normalized = builtins.sort builtins.lessThan (lib.unique (builtins.filter (name: name != "") serviceNames));
+    in
+    if normalizedSelectedServices == null then
+      normalized
+    else
+      builtins.filter isSelectedServiceAllowed normalized;
 
   enabledServiceFlags = builtins.listToAttrs (
     map (
@@ -55,13 +91,14 @@ let
     appId: manifest:
     let
       app = compiledCore.model.apps.${appId};
+      effectiveSelectedServices = constrainSelectedServices (manifest.selectedServices or [ ]);
       appServices = compileServices {
         inherit
           pkgs
           enabledServiceFlags
           ;
         resolved = compiledCore.resolved;
-        selectedServices = manifest.selectedServices;
+        selectedServices = effectiveSelectedServices;
       };
 
       appRuntimeHash = canonical.hashCanonical {
@@ -77,7 +114,7 @@ let
           pkgs
           ;
         model = manifest.model;
-        selectedServices = manifest.selectedServices;
+        selectedServices = effectiveSelectedServices;
         services = appServices;
       };
 
@@ -112,6 +149,16 @@ let
   serviceSetPrograms = builtins.mapAttrs (
     serviceSetId: serviceSet:
     let
+      effectiveSelectedServices = constrainSelectedServices (serviceSet.services.all or [ ]);
+      serviceSetServices = compileServices {
+        inherit
+          pkgs
+          enabledServiceFlags
+          ;
+        resolved = compiledCore.resolved;
+        selectedServices = effectiveSelectedServices;
+      };
+
       serviceSetModel =
         compiledCore.model
         // {
@@ -134,8 +181,8 @@ let
       serviceSetRuntimeSurfaces = import ./mkServiceRuntimeSurfaces.nix {
         inherit pkgs;
         model = serviceSetModel;
-        services = services;
-        selectedServices = serviceSet.services.all or [ ];
+        services = serviceSetServices;
+        selectedServices = effectiveSelectedServices;
       };
     in
     import ./mkServiceSetPrograms.nix {

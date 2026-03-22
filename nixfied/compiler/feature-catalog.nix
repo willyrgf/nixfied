@@ -123,6 +123,76 @@
     docs = [ ];
   };
 
+  "runtime.service-set-surfaces" = {
+    kind = "runtime";
+    summary = "Grouped service-set lifecycle, export, and workflow adapter surfaces";
+    surfaces = [
+      {
+        kind = "app";
+        name = "svcset::<service-set>::<operation>";
+      }
+      {
+        kind = "workflow-phase";
+        name = "preRun.serviceSets/postRun.serviceSets";
+      }
+    ];
+    ownerFiles = [
+      "nixfied/modules/service-sets.nix"
+      "nixfied/framework/core/mkServiceSetPrograms.nix"
+      "nixfied/framework/core/materializeExecution.nix"
+      "nixfied/compiler/compile-service-sets.nix"
+      "nixfied/compiler/compile-workflows.nix"
+    ];
+    modelPaths = [ "serviceSets" ];
+    status = "stable";
+    defaults = {
+      appPrefix = "svcset::";
+      operations = [
+        "start"
+        "stop"
+        "status"
+        "health"
+        "ready"
+        "export"
+      ];
+    };
+    coverageRequired = true;
+    docs = [ ];
+  };
+
+  "runtime.app-execution-manifests" = {
+    kind = "runtime";
+    summary = "App-scoped execution manifests for selected launchers and machine-output wrappers";
+    surfaces = [
+      {
+        kind = "app";
+        name = "selected-app";
+      }
+      {
+        kind = "execution";
+        name = "app-manifest";
+      }
+    ];
+    ownerFiles = [
+      "nixfied/modules/apps.nix"
+      "nixfied/compiler/compile-app-execution-manifests.nix"
+      "nixfied/framework/core/materializeExecution.nix"
+      "nixfied/framework/core/mkMachineOutputPrograms.nix"
+    ];
+    modelPaths = [ "apps" ];
+    status = "stable";
+    defaults = {
+      manifestScope = "app";
+      wrapperKinds = [
+        "taskRef"
+        "workflowRef"
+        "machineOutput"
+      ];
+    };
+    coverageRequired = true;
+    docs = [ ];
+  };
+
   "runtime.output.prefix-contract" = {
     kind = "runtime";
     summary = "Stable ASCII log prefix contract";
