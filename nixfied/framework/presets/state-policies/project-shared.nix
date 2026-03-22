@@ -10,7 +10,6 @@
     workspace.hashLength = lib.mkDefault 12;
     roots.runtimeBase = lib.mkDefault "/tmp/nixfied-runtime/${config.nixfied.identity.projectId}/runtime";
     roots.registryRoot = lib.mkDefault "/tmp/nixfied-runtime/${config.nixfied.identity.projectId}/registry";
-    roots.artifactsRoot =
-      lib.mkDefault "/tmp/nixfied-artifacts-${config.nixfied.identity.projectId}";
+    roots.artifactsRoot = lib.mkDefault "/tmp/nixfied-artifacts-${config.nixfied.identity.projectId}";
   };
 }

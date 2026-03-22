@@ -203,7 +203,9 @@ let
           acc
         else
           {
-            seen = acc.seen // { ${dedupeKey} = true; };
+            seen = acc.seen // {
+              ${dedupeKey} = true;
+            };
             entries = acc.entries ++ [
               (canonical.canonicalize {
                 serviceSetId = serviceSet.id;
@@ -335,10 +337,12 @@ let
 
       normalizedPreRunTasks = normalizePhaseTaskRefs workflowId "preRun" (raw.preRun.tasks or [ ]);
       normalizedPostRunTasks = normalizePhaseTaskRefs workflowId "postRun" (raw.postRun.tasks or [ ]);
-      normalizedPreRunServiceSets =
-        normalizePhaseServiceSetRefs workflowId "preRun" (raw.preRun.serviceSets or [ ]);
-      normalizedPostRunServiceSets =
-        normalizePhaseServiceSetRefs workflowId "postRun" (raw.postRun.serviceSets or [ ]);
+      normalizedPreRunServiceSets = normalizePhaseServiceSetRefs workflowId "preRun" (
+        raw.preRun.serviceSets or [ ]
+      );
+      normalizedPostRunServiceSets = normalizePhaseServiceSetRefs workflowId "postRun" (
+        raw.postRun.serviceSets or [ ]
+      );
 
       authoredUnitsByTask = unitNamesByTask authoredUnits;
 

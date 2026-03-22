@@ -18,7 +18,6 @@ let
   uniqueSorted = values: builtins.sort builtins.lessThan (lib.unique values);
 
   appIds = builtins.sort builtins.lessThan (builtins.attrNames apps);
-  taskIds = builtins.sort builtins.lessThan (builtins.attrNames tasks);
   workflowIds = builtins.sort builtins.lessThan (builtins.attrNames workflows);
 
   workflowFamilyFromId =
@@ -46,8 +45,7 @@ let
   );
 
   goTask =
-    seen:
-    taskId:
+    seen: taskId:
     let
       token = "task:${taskId}";
     in
@@ -83,8 +81,7 @@ let
       };
 
   goWorkflow =
-    seen:
-    workflowId:
+    seen: workflowId:
     let
       token = "workflow:${workflowId}";
     in
@@ -113,8 +110,7 @@ let
       };
 
   goWorkflowReference =
-    seen:
-    workflowId:
+    seen: workflowId:
     let
       workflowIdsForReference = workflowIdsByFamily.${workflowId} or [ workflowId ];
       closures = map (candidateId: goWorkflow seen candidateId) workflowIdsForReference;
@@ -139,8 +135,7 @@ let
         else
           uniqueSorted (selectionIndex.taskClosureServicesById.${app.taskId} or [ ]);
       serviceCatalogFiltered = lib.filterAttrs (
-        _: service:
-        builtins.elem (service.name or service.id) selectedServices
+        _: service: builtins.elem (service.name or service.id) selectedServices
       ) serviceCatalog;
       manifestEvalHash = canonical.hashCanonical {
         schema = {

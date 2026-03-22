@@ -40,12 +40,12 @@ let
       raw = rawServiceSets.${name};
       requiredServices = uniqueSorted (raw.services.required or [ ]);
       optionalServices = uniqueSorted (raw.services.optional or [ ]);
-      unknownServices = builtins.filter (
-        serviceName: !(builtins.elem serviceName knownServiceNames)
-      ) (requiredServices ++ optionalServices);
-      disabledServices = builtins.filter (
-        serviceName: !(builtins.elem serviceName enabledServiceNames)
-      ) (requiredServices ++ optionalServices);
+      unknownServices = builtins.filter (serviceName: !(builtins.elem serviceName knownServiceNames)) (
+        requiredServices ++ optionalServices
+      );
+      disabledServices = builtins.filter (serviceName: !(builtins.elem serviceName enabledServiceNames)) (
+        requiredServices ++ optionalServices
+      );
       overlappingServices = builtins.filter (
         serviceName: builtins.elem serviceName optionalServices
       ) requiredServices;

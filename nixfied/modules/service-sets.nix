@@ -162,11 +162,7 @@ let
               ownerFile
               ;
             summary = "${serviceSet.summary} ${operation}";
-            description =
-              if serviceSet.description == "" then
-                ""
-              else
-                "${serviceSet.description}\n";
+            description = if serviceSet.description == "" then "" else "${serviceSet.description}\n";
             usage = usageFor operation;
             examples = examplesFor operation;
           };
@@ -224,7 +220,9 @@ let
         };
       };
 
-  generatedNamedApps = builtins.foldl' (acc: name: acc // mkNamedServiceSetApps name) { } serviceSetNames;
+  generatedNamedApps = builtins.foldl' (
+    acc: name: acc // mkNamedServiceSetApps name
+  ) { } serviceSetNames;
 in
 {
   options.nixfied.serviceSets = lib.mkOption {

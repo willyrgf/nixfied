@@ -342,24 +342,15 @@ in
           local -a isolation_args
           isolation_args=()
 
-          if [ -z "''${NIXFIED_EXECUTOR_SELF:-}" ]; then
-            log_error "NIXFIED_EXECUTOR_SELF is not set"
-            return "$NIXFIED_EXIT_PRECONDITION"
-          fi
-
           if [ "$SERIAL" -eq 1 ] || [ "''${CI:-}" = "1" ] || [ "''${CI:-}" = "true" ]; then
             isolation_args+=(--max-parallel 1)
           fi
 
-          NIXFIED_CALLER_PWD="$PWD" "$NIXFIED_EXECUTOR_SELF" run-task task.ops.test-isolation "''${isolation_args[@]}"
+          nix run .#run-task -- task.ops.test-isolation "''${isolation_args[@]}"
         }
 
         shard_self_host() {
-          if [ -z "''${NIXFIED_EXECUTOR_SELF:-}" ]; then
-            log_error "NIXFIED_EXECUTOR_SELF is not set"
-            return "$NIXFIED_EXIT_PRECONDITION"
-          fi
-          NIXFIED_CALLER_PWD="$PWD" "$NIXFIED_EXECUTOR_SELF" run-workflow workflow.test.framework.selfhost --summary
+          nix run .#run-workflow -- workflow.test.framework.selfhost --summary
         }
 
         run_named_shard() {
@@ -661,7 +652,7 @@ in
         if [ -n "$SHARD" ]; then
           selected_shards+=("$SHARD")
         else
-          selected_shards=("flake-check")
+          selected_shards=("''${SHARDS[@]}")
         fi
 
         run_rc=0

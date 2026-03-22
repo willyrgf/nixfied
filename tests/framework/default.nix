@@ -14,9 +14,7 @@ let
   listUtils = import ../../nixfied/framework/core/list-utils.nix;
 
   exposedTaskFeatureIds = builtins.sort builtins.lessThan (
-    builtins.filter (
-      taskId: taskId != null && taskId != ""
-    ) (
+    builtins.filter (taskId: taskId != null && taskId != "") (
       builtins.map (appName: model.views.apps.${appName}.taskId) (
         builtins.attrNames (model.views.apps or { })
       )

@@ -13,9 +13,9 @@ let
     if (app.validation.schema or null) == null then
       ""
     else
-      pkgs.writeText "nixfied-machine-output-schema-${
-        builtins.substring 0 10 (builtins.hashString "sha256" appId)
-      }.json" (builtins.toJSON app.validation.schema);
+      pkgs.writeText "nixfied-machine-output-schema-${builtins.substring 0 10 (builtins.hashString "sha256" appId)}.json" (
+        builtins.toJSON app.validation.schema
+      );
   targetArgsLiteral = builtins.concatStringsSep " " (map lib.escapeShellArg (app.targetArgs or [ ]));
   setupProgramsLiteral = builtins.concatStringsSep " " (map lib.escapeShellArg setupPrograms);
   teardownProgramsLiteral = builtins.concatStringsSep " " (map lib.escapeShellArg teardownPrograms);

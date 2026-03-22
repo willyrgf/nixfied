@@ -30,7 +30,6 @@ let
   healthServices = builtins.sort builtins.lessThan (
     lib.unique (runtimeRequiredServices ++ runtimeOptionalHealthServices)
   );
-  knownServiceNames = builtins.sort builtins.lessThan (builtins.attrNames resolvedServices);
   enabledOperations =
     if operations == null then
       [
@@ -62,8 +61,7 @@ let
     case "$env_value" in
       ${builtins.concatStringsSep "\n" (
         map (
-          envName:
-          "    ${envName}) env_offset=${toString (model.runtime.env.offsets.${envName} or 0)} ;;"
+          envName: "    ${envName}) env_offset=${toString (model.runtime.env.offsets.${envName} or 0)} ;;"
         ) (model.runtime.env.names or [ model.runtime.env.default ])
       )}
       *)
@@ -134,11 +132,7 @@ let
         serviceName:
         let
           artifacts = serviceRuntimeSurfaces.serviceApis.${serviceName}.artifacts or { };
-          value =
-            if builtins.hasAttr artifactKey artifacts then
-              toString artifacts.${artifactKey}
-            else
-              "";
+          value = if builtins.hasAttr artifactKey artifacts then toString artifacts.${artifactKey} else "";
         in
         ''
           ${lib.escapeShellArg serviceName})
@@ -158,12 +152,16 @@ let
           api = serviceRuntimeSurfaces.serviceApis.${serviceName};
         in
         ''
-          printf '%s\n' ${lib.escapeShellArg (builtins.toJSON {
-            service = serviceName;
-            required = builtins.elem serviceName requiredServices;
-            artifacts = api.artifacts or { };
-            operations = builtins.sort builtins.lessThan (builtins.attrNames (api.operations or { }));
-          })}
+          printf '%s\n' ${
+            lib.escapeShellArg (
+              builtins.toJSON {
+                service = serviceName;
+                required = builtins.elem serviceName requiredServices;
+                artifacts = api.artifacts or { };
+                operations = builtins.sort builtins.lessThan (builtins.attrNames (api.operations or { }));
+              }
+            )
+          }
         ''
       ) members
     );
@@ -310,95 +308,95 @@ let
     let
       scriptName = "nixfied-service-set-${normalizeToken serviceSet.name}-${operation}";
       drv = pkgs.writeShellScriptBin scriptName ''
-      set -euo pipefail
-      ${shellCommon}
-      ${skipPolicy.skipPolicyFunctions}
+              set -euo pipefail
+              ${shellCommon}
+              ${skipPolicy.skipPolicyFunctions}
 
-      render_usage() {
-        cat <<'NIXFIED_USAGE'
-${renderOperationHelp { inherit appName operation members; }}
-NIXFIED_USAGE
-      }
+              render_usage() {
+                cat <<'NIXFIED_USAGE'
+        ${renderOperationHelp { inherit appName operation members; }}
+        NIXFIED_USAGE
+              }
 
-      if [ "$#" -gt 0 ]; then
-        case "$1" in
-          --help|-h)
-            render_usage
-            exit 0
-            ;;
-        esac
-      fi
+              if [ "$#" -gt 0 ]; then
+                case "$1" in
+                  --help|-h)
+                    render_usage
+                    exit 0
+                    ;;
+                esac
+              fi
 
-      ${mkMemberSelectorPrelude {
-        inherit members;
-      }}
+              ${mkMemberSelectorPrelude {
+                inherit members;
+              }}
 
-      service_program() {
-        case "$1" in
-      ${renderServiceProgramCases operation members}
-          *)
-            printf '%s' ""
-            return 1
-            ;;
-        esac
-      }
+              service_program() {
+                case "$1" in
+              ${renderServiceProgramCases operation members}
+                  *)
+                    printf '%s' ""
+                    return 1
+                    ;;
+                esac
+              }
 
-      service_log_expr() {
-        case "$1" in
-      ${renderServiceArtifactCases "logFile" members}
-          *)
-            printf '%s' ""
-            return 1
-            ;;
-        esac
-      }
+              service_log_expr() {
+                case "$1" in
+              ${renderServiceArtifactCases "logFile" members}
+                  *)
+                    printf '%s' ""
+                    return 1
+                    ;;
+                esac
+              }
 
-      resolve_expr_value() {
-        local expr="$1"
-        local resolved=""
-        if [ -z "$expr" ]; then
-          printf '%s' ""
-          return 0
-        fi
-        eval "resolved=$expr"
-        printf '%s' "$resolved"
-      }
+              resolve_expr_value() {
+                local expr="$1"
+                local resolved=""
+                if [ -z "$expr" ]; then
+                  printf '%s' ""
+                  return 0
+                fi
+                eval "resolved=$expr"
+                printf '%s' "$resolved"
+              }
 
-      failure_count=0
+              failure_count=0
 
-      for service_name in "''${selected_services[@]}"; do
-        service_program_path="$(service_program "$service_name")"
-        if [ -z "$service_program_path" ]; then
-          echo "ERROR: service '$service_name' does not expose '${operation}'" >&2
-          failure_count=$((failure_count + 1))
-          continue
-        fi
+              for service_name in "''${selected_services[@]}"; do
+                service_program_path="$(service_program "$service_name")"
+                if [ -z "$service_program_path" ]; then
+                  echo "ERROR: service '$service_name' does not expose '${operation}'" >&2
+                  failure_count=$((failure_count + 1))
+                  continue
+                fi
 
-        output_file="$TMPDIR/service-set-${serviceSet.name}-${operation}-''${service_name}.log"
-        if "$service_program_path" >"$output_file" 2>&1; then
-          cat "$output_file"
-        else
-          rc="$?"
-          cat "$output_file" >&2 || true
-          if [ ${if serviceSet.failureLogs.capture then "1" else "0"} = "1" ]; then
-            log_expr="$(service_log_expr "$service_name" || true)"
-            log_path="$(resolve_expr_value "$log_expr")"
-            if [ -n "$log_path" ] && [ -f "$log_path" ]; then
-              echo "ERROR: service-set ${serviceSet.name} ${operation} failed service=$service_name log=$log_path" >&2
-              ${pkgs.coreutils}/bin/tail -n ${toString serviceSet.failureLogs.tailLines} "$log_path" >&2 || true
-            fi
-          fi
-          echo "ERROR: service-set ${serviceSet.name} ${operation} failed service=$service_name rc=$rc" >&2
-          failure_count=$((failure_count + 1))
-        fi
-      done
+                output_file="$TMPDIR/service-set-${serviceSet.name}-${operation}-''${service_name}.log"
+                if "$service_program_path" >"$output_file" 2>&1; then
+                  cat "$output_file"
+                else
+                  rc="$?"
+                  cat "$output_file" >&2 || true
+                  if [ ${if serviceSet.failureLogs.capture then "1" else "0"} = "1" ]; then
+                    log_expr="$(service_log_expr "$service_name" || true)"
+                    log_path="$(resolve_expr_value "$log_expr")"
+                    if [ -n "$log_path" ] && [ -f "$log_path" ]; then
+                      echo "ERROR: service-set ${serviceSet.name} ${operation} failed service=$service_name log=$log_path" >&2
+                      ${pkgs.coreutils}/bin/tail -n ${toString serviceSet.failureLogs.tailLines} "$log_path" >&2 || true
+                    fi
+                  fi
+                  echo "ERROR: service-set ${serviceSet.name} ${operation} failed service=$service_name rc=$rc" >&2
+                  failure_count=$((failure_count + 1))
+                fi
+              done
 
-      if [ "$failure_count" -gt 0 ]; then
-        exit 1
-      fi
+              if [ "$failure_count" -gt 0 ]; then
+                exit 1
+              fi
 
-      echo "OK: service-set ${serviceSet.name} ${operation} passed services=''${#selected_services[@]}"
-    '';
+              echo "OK: service-set ${serviceSet.name} ${operation} passed services=''${#selected_services[@]}"
+      '';
     in
     {
       inherit drv;
@@ -411,141 +409,141 @@ NIXFIED_USAGE
       exportLines = renderExportRecordLines runtimeRequiredServices;
       scriptName = "nixfied-service-set-${normalizeToken serviceSet.name}-export";
       drv = pkgs.writeShellScriptBin scriptName ''
-      set -euo pipefail
-      ${shellCommon}
-      source <(${serviceRuntimeSurfaces.slots.getSlotInfo})
+              set -euo pipefail
+              ${shellCommon}
+              source <(${serviceRuntimeSurfaces.slots.getSlotInfo})
 
-      render_usage() {
-        cat <<'NIXFIED_USAGE'
-${renderOperationHelp {
-  inherit appName;
-  operation = "export";
-  members = runtimeRequiredServices;
-  allowFormat = true;
-}}
-NIXFIED_USAGE
-      }
+              render_usage() {
+                cat <<'NIXFIED_USAGE'
+        ${renderOperationHelp {
+          inherit appName;
+          operation = "export";
+          members = runtimeRequiredServices;
+          allowFormat = true;
+        }}
+        NIXFIED_USAGE
+              }
 
-      if [ "$#" -gt 0 ]; then
-        case "$1" in
-          --help|-h)
-            render_usage
-            exit 0
-            ;;
-        esac
-      fi
+              if [ "$#" -gt 0 ]; then
+                case "$1" in
+                  --help|-h)
+                    render_usage
+                    exit 0
+                    ;;
+                esac
+              fi
 
-      ${mkMemberSelectorPrelude {
-        members = runtimeRequiredServices;
-        allowFormat = true;
-        defaultFormat = serviceSet.export.defaultFormat;
-      }}
+              ${mkMemberSelectorPrelude {
+                members = runtimeRequiredServices;
+                allowFormat = true;
+                defaultFormat = serviceSet.export.defaultFormat;
+              }}
 
-      emit_records() {
-        :
-${exportLines}
-      }
+              emit_records() {
+                :
+        ${exportLines}
+              }
 
-      resolve_artifact_value() {
-        local key="$1"
-        local raw="$2"
-        local resolved=""
+              resolve_artifact_value() {
+                local key="$1"
+                local raw="$2"
+                local resolved=""
 
-        if [ -z "$raw" ]; then
-          printf '%s' ""
-          return 0
-        fi
+                if [ -z "$raw" ]; then
+                  printf '%s' ""
+                  return 0
+                fi
 
-        case "$key" in
-          *PortVar)
-            printf '%s' "''${!raw:-}"
-            ;;
-          *)
-            eval "resolved=$raw"
-            printf '%s' "$resolved"
-            ;;
-        esac
-      }
+                case "$key" in
+                  *PortVar)
+                    printf '%s' "''${!raw:-}"
+                    ;;
+                  *)
+                    eval "resolved=$raw"
+                    printf '%s' "$resolved"
+                    ;;
+                esac
+              }
 
-      selected_json="$(${pkgs.jq}/bin/jq -cn '[]')"
-      for service_name in "''${selected_services[@]}"; do
-        selected_json="$(${pkgs.jq}/bin/jq -cn --argjson current "$selected_json" --arg value "$service_name" '$current + [$value]')"
-      done
+              selected_json="$(${pkgs.jq}/bin/jq -cn '[]')"
+              for service_name in "''${selected_services[@]}"; do
+                selected_json="$(${pkgs.jq}/bin/jq -cn --argjson current "$selected_json" --arg value "$service_name" '$current + [$value]')"
+              done
 
-      records_json="$(
-        emit_records | ${pkgs.jq}/bin/jq -cs --argjson selected "$selected_json" '
-          map(select(.service as $service | $selected | index($service)))
-        '
-      )"
+              records_json="$(
+                emit_records | ${pkgs.jq}/bin/jq -cs --argjson selected "$selected_json" '
+                  map(select(.service as $service | $selected | index($service)))
+                '
+              )"
 
-      resolved_records="$(${pkgs.jq}/bin/jq -cn '[]')"
-      while IFS= read -r record_json; do
-        [ -n "$record_json" ] || continue
-        resolved_artifacts="$(${pkgs.jq}/bin/jq -cn '{}')"
-        while IFS=$'\t' read -r artifact_key artifact_raw || [ -n "$artifact_key" ]; do
-          [ -n "$artifact_key" ] || continue
-          artifact_value="$(resolve_artifact_value "$artifact_key" "$artifact_raw")"
-          resolved_artifacts="$(
-            ${pkgs.jq}/bin/jq -cn \
-              --argjson current "$resolved_artifacts" \
-              --arg key "$artifact_key" \
-              --arg value "$artifact_value" \
-              '$current + {($key): $value}'
-          )"
-        done < <(printf '%s' "$record_json" | ${pkgs.jq}/bin/jq -r '.artifacts | to_entries[]? | [.key, (.value | tostring)] | @tsv')
+              resolved_records="$(${pkgs.jq}/bin/jq -cn '[]')"
+              while IFS= read -r record_json; do
+                [ -n "$record_json" ] || continue
+                resolved_artifacts="$(${pkgs.jq}/bin/jq -cn '{}')"
+                while IFS=$'\t' read -r artifact_key artifact_raw || [ -n "$artifact_key" ]; do
+                  [ -n "$artifact_key" ] || continue
+                  artifact_value="$(resolve_artifact_value "$artifact_key" "$artifact_raw")"
+                  resolved_artifacts="$(
+                    ${pkgs.jq}/bin/jq -cn \
+                      --argjson current "$resolved_artifacts" \
+                      --arg key "$artifact_key" \
+                      --arg value "$artifact_value" \
+                      '$current + {($key): $value}'
+                  )"
+                done < <(printf '%s' "$record_json" | ${pkgs.jq}/bin/jq -r '.artifacts | to_entries[]? | [.key, (.value | tostring)] | @tsv')
 
-        resolved_record="$(
-          ${pkgs.jq}/bin/jq -cn \
-            --argjson record "$record_json" \
-            --argjson artifacts "$resolved_artifacts" \
-            --arg serviceSetId ${lib.escapeShellArg serviceSet.id} \
-            --arg policyId ${lib.escapeShellArg serviceSet.state.policy.id} \
-            --arg policyKind ${lib.escapeShellArg serviceSet.state.policy.kind} \
-            --arg runtimeBase ${lib.escapeShellArg serviceSet.state.policy.runtimeBase} \
-            --arg registryRoot ${lib.escapeShellArg serviceSet.state.policy.registryRoot} \
-            --arg artifactsRoot ${lib.escapeShellArg serviceSet.state.policy.artifactsRoot} \
-            '
-              $record
-              + {
-                  serviceSetId: $serviceSetId,
-                  statePolicy: {
-                    id: $policyId,
-                    kind: $policyKind,
-                    runtimeBase: $runtimeBase,
-                    registryRoot: $registryRoot,
-                    artifactsRoot: $artifactsRoot
-                  },
-                  resolvedArtifacts: $artifacts
-                }
-            '
-        )"
-        resolved_records="$(${pkgs.jq}/bin/jq -cn --argjson current "$resolved_records" --argjson record "$resolved_record" '$current + [$record]')"
-      done < <(printf '%s' "$records_json" | ${pkgs.jq}/bin/jq -c '.[]')
+                resolved_record="$(
+                  ${pkgs.jq}/bin/jq -cn \
+                    --argjson record "$record_json" \
+                    --argjson artifacts "$resolved_artifacts" \
+                    --arg serviceSetId ${lib.escapeShellArg serviceSet.id} \
+                    --arg policyId ${lib.escapeShellArg serviceSet.state.policy.id} \
+                    --arg policyKind ${lib.escapeShellArg serviceSet.state.policy.kind} \
+                    --arg runtimeBase ${lib.escapeShellArg serviceSet.state.policy.runtimeBase} \
+                    --arg registryRoot ${lib.escapeShellArg serviceSet.state.policy.registryRoot} \
+                    --arg artifactsRoot ${lib.escapeShellArg serviceSet.state.policy.artifactsRoot} \
+                    '
+                      $record
+                      + {
+                          serviceSetId: $serviceSetId,
+                          statePolicy: {
+                            id: $policyId,
+                            kind: $policyKind,
+                            runtimeBase: $runtimeBase,
+                            registryRoot: $registryRoot,
+                            artifactsRoot: $artifactsRoot
+                          },
+                          resolvedArtifacts: $artifacts
+                        }
+                    '
+                )"
+                resolved_records="$(${pkgs.jq}/bin/jq -cn --argjson current "$resolved_records" --argjson record "$resolved_record" '$current + [$record]')"
+              done < <(printf '%s' "$records_json" | ${pkgs.jq}/bin/jq -c '.[]')
 
-      case "$output_format" in
-        json)
-          printf '%s\n' "$resolved_records"
-          ;;
-        env)
-          printf 'NIXFIED_SERVICE_SET_ID=%s\n' ${lib.escapeShellArg serviceSet.id}
-          printf 'NIXFIED_SERVICE_SET_POLICY_ID=%s\n' ${lib.escapeShellArg serviceSet.state.policy.id}
-          while IFS= read -r record_json; do
-            [ -n "$record_json" ] || continue
-            service_name="$(printf '%s' "$record_json" | ${pkgs.jq}/bin/jq -r '.service')"
-            service_token="$(printf '%s' "$service_name" | ${pkgs.coreutils}/bin/tr '[:lower:].-:/ ' '[:upper:]______' | ${pkgs.coreutils}/bin/tr -c 'A-Z0-9_' '_')"
-            printf 'NIXFIED_SERVICE_SET_%s_SERVICE=%s\n' "$service_token" "$service_name"
-            while IFS=$'\t' read -r artifact_key artifact_value || [ -n "$artifact_key" ]; do
-              [ -n "$artifact_key" ] || continue
-              artifact_token="$(printf '%s' "$artifact_key" | ${pkgs.coreutils}/bin/tr '[:lower:].-:/ ' '[:upper:]______' | ${pkgs.coreutils}/bin/tr -c 'A-Z0-9_' '_')"
-              printf 'NIXFIED_SERVICE_SET_%s_%s=%s\n' "$service_token" "$artifact_token" "$artifact_value"
-            done < <(printf '%s' "$record_json" | ${pkgs.jq}/bin/jq -r '.resolvedArtifacts | to_entries[]? | [.key, (.value | tostring)] | @tsv')
-          done < <(printf '%s' "$resolved_records" | ${pkgs.jq}/bin/jq -c '.[]')
-          ;;
-        *)
-          nixfied_exit_usage "--format must be json or env"
-          ;;
-      esac
-    '';
+              case "$output_format" in
+                json)
+                  printf '%s\n' "$resolved_records"
+                  ;;
+                env)
+                  printf 'NIXFIED_SERVICE_SET_ID=%s\n' ${lib.escapeShellArg serviceSet.id}
+                  printf 'NIXFIED_SERVICE_SET_POLICY_ID=%s\n' ${lib.escapeShellArg serviceSet.state.policy.id}
+                  while IFS= read -r record_json; do
+                    [ -n "$record_json" ] || continue
+                    service_name="$(printf '%s' "$record_json" | ${pkgs.jq}/bin/jq -r '.service')"
+                    service_token="$(printf '%s' "$service_name" | ${pkgs.coreutils}/bin/tr '[:lower:].-:/ ' '[:upper:]______' | ${pkgs.coreutils}/bin/tr -c 'A-Z0-9_' '_')"
+                    printf 'NIXFIED_SERVICE_SET_%s_SERVICE=%s\n' "$service_token" "$service_name"
+                    while IFS=$'\t' read -r artifact_key artifact_value || [ -n "$artifact_key" ]; do
+                      [ -n "$artifact_key" ] || continue
+                      artifact_token="$(printf '%s' "$artifact_key" | ${pkgs.coreutils}/bin/tr '[:lower:].-:/ ' '[:upper:]______' | ${pkgs.coreutils}/bin/tr -c 'A-Z0-9_' '_')"
+                      printf 'NIXFIED_SERVICE_SET_%s_%s=%s\n' "$service_token" "$artifact_token" "$artifact_value"
+                    done < <(printf '%s' "$record_json" | ${pkgs.jq}/bin/jq -r '.resolvedArtifacts | to_entries[]? | [.key, (.value | tostring)] | @tsv')
+                  done < <(printf '%s' "$resolved_records" | ${pkgs.jq}/bin/jq -c '.[]')
+                  ;;
+                *)
+                  nixfied_exit_usage "--format must be json or env"
+                  ;;
+              esac
+      '';
     in
     {
       inherit drv;
@@ -553,84 +551,85 @@ ${exportLines}
     };
 in
 {
-  programsByOperation = lib.optionalAttrs (builtins.elem "start" enabledOperations) {
-    start = groupedControlScript {
-      operation = "start";
-      appName = "svcset::${serviceSet.name}::start";
-      members = runtimeRequiredServices;
-    };
-  }
-  // lib.optionalAttrs (builtins.elem "stop" enabledOperations) {
-    stop = groupedControlScript {
-      operation = "stop";
-      appName = "svcset::${serviceSet.name}::stop";
-      members = runtimeRequiredServices;
-    };
-  }
-  // lib.optionalAttrs (builtins.elem "status" enabledOperations) {
-    status = groupedControlScript {
-      operation = "status";
-      appName = "svcset::${serviceSet.name}::status";
-      members = runtimeRequiredServices;
-    };
-  }
-  // lib.optionalAttrs (builtins.elem "health" enabledOperations) {
-    health =
-      let
-        scriptName = "nixfied-service-set-${normalizeToken serviceSet.name}-health";
-        drv = pkgs.writeShellScriptBin scriptName ''
-      if [ "$#" -gt 0 ] && { [ "$1" = "--help" ] || [ "$1" = "-h" ]; }; then
-        cat <<'NIXFIED_USAGE'
-${renderOperationHelp {
-  appName = "svcset::${serviceSet.name}::health";
-  operation = "health";
-  members = healthServices;
-  allowSource = true;
-}}
-NIXFIED_USAGE
-        exit 0
-      fi
-      ${healthProbeRuntime.mkProbeScript {
-        mode = "health";
-        emptyMessage = "SKIP: no enabled services for health checks";
-        successMessage = "OK: service-set ${serviceSet.name} health checks passed";
-      }}
-    '';
-      in
-      {
-        inherit drv;
-        program = "${drv}/bin/${scriptName}";
+  programsByOperation =
+    lib.optionalAttrs (builtins.elem "start" enabledOperations) {
+      start = groupedControlScript {
+        operation = "start";
+        appName = "svcset::${serviceSet.name}::start";
+        members = runtimeRequiredServices;
       };
-  }
-  // lib.optionalAttrs (builtins.elem "ready" enabledOperations) {
-    ready =
-      let
-        scriptName = "nixfied-service-set-${normalizeToken serviceSet.name}-ready";
-        drv = pkgs.writeShellScriptBin scriptName ''
-      if [ "$#" -gt 0 ] && { [ "$1" = "--help" ] || [ "$1" = "-h" ]; }; then
-        cat <<'NIXFIED_USAGE'
-${renderOperationHelp {
-  appName = "svcset::${serviceSet.name}::ready";
-  operation = "ready";
-  members = runtimeRequiredServices;
-  allowSource = true;
-}}
-NIXFIED_USAGE
-        exit 0
-      fi
-      ${readyProbeRuntime.mkProbeScript {
-        mode = "ready";
-        emptyMessage = "SKIP: no enabled services for readiness checks";
-        successMessage = "OK: service-set ${serviceSet.name} readiness checks passed";
-      }}
-    '';
-      in
-      {
-        inherit drv;
-        program = "${drv}/bin/${scriptName}";
+    }
+    // lib.optionalAttrs (builtins.elem "stop" enabledOperations) {
+      stop = groupedControlScript {
+        operation = "stop";
+        appName = "svcset::${serviceSet.name}::stop";
+        members = runtimeRequiredServices;
       };
-  }
-  // lib.optionalAttrs (builtins.elem "export" enabledOperations) {
-    export = exportScript "svcset::${serviceSet.name}::export";
-  };
+    }
+    // lib.optionalAttrs (builtins.elem "status" enabledOperations) {
+      status = groupedControlScript {
+        operation = "status";
+        appName = "svcset::${serviceSet.name}::status";
+        members = runtimeRequiredServices;
+      };
+    }
+    // lib.optionalAttrs (builtins.elem "health" enabledOperations) {
+      health =
+        let
+          scriptName = "nixfied-service-set-${normalizeToken serviceSet.name}-health";
+          drv = pkgs.writeShellScriptBin scriptName ''
+                  if [ "$#" -gt 0 ] && { [ "$1" = "--help" ] || [ "$1" = "-h" ]; }; then
+                    cat <<'NIXFIED_USAGE'
+            ${renderOperationHelp {
+              appName = "svcset::${serviceSet.name}::health";
+              operation = "health";
+              members = healthServices;
+              allowSource = true;
+            }}
+            NIXFIED_USAGE
+                    exit 0
+                  fi
+                  ${healthProbeRuntime.mkProbeScript {
+                    mode = "health";
+                    emptyMessage = "SKIP: no enabled services for health checks";
+                    successMessage = "OK: service-set ${serviceSet.name} health checks passed";
+                  }}
+          '';
+        in
+        {
+          inherit drv;
+          program = "${drv}/bin/${scriptName}";
+        };
+    }
+    // lib.optionalAttrs (builtins.elem "ready" enabledOperations) {
+      ready =
+        let
+          scriptName = "nixfied-service-set-${normalizeToken serviceSet.name}-ready";
+          drv = pkgs.writeShellScriptBin scriptName ''
+                  if [ "$#" -gt 0 ] && { [ "$1" = "--help" ] || [ "$1" = "-h" ]; }; then
+                    cat <<'NIXFIED_USAGE'
+            ${renderOperationHelp {
+              appName = "svcset::${serviceSet.name}::ready";
+              operation = "ready";
+              members = runtimeRequiredServices;
+              allowSource = true;
+            }}
+            NIXFIED_USAGE
+                    exit 0
+                  fi
+                  ${readyProbeRuntime.mkProbeScript {
+                    mode = "ready";
+                    emptyMessage = "SKIP: no enabled services for readiness checks";
+                    successMessage = "OK: service-set ${serviceSet.name} readiness checks passed";
+                  }}
+          '';
+        in
+        {
+          inherit drv;
+          program = "${drv}/bin/${scriptName}";
+        };
+    }
+    // lib.optionalAttrs (builtins.elem "export" enabledOperations) {
+      export = exportScript "svcset::${serviceSet.name}::export";
+    };
 }

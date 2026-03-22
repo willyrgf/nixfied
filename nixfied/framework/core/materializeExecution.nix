@@ -41,7 +41,9 @@ let
   constrainSelectedServices =
     serviceNames:
     let
-      normalized = builtins.sort builtins.lessThan (lib.unique (builtins.filter (name: name != "") serviceNames));
+      normalized = builtins.sort builtins.lessThan (
+        lib.unique (builtins.filter (name: name != "") serviceNames)
+      );
     in
     if normalizedSelectedServices == null then
       normalized
@@ -131,19 +133,17 @@ let
         inherit serviceSetPrograms;
       };
     in
-    (
-      mkShellApp {
-        appName = "app-runtime:${appId}";
-        binPrefix = "nixfied-app-runtime";
-        body = ''
-          exec ${appOrchestrator}/bin/nixfied-orchestrator ${
-            if (app.kind or "") == "workflowRef" then "run-workflow" else "run-task"
-          } ${lib.escapeShellArg (
-            if (app.kind or "") == "workflowRef" then app.workflowId else app.taskId
-          )} "$@"
-        '';
-      }
-    ).program
+    (mkShellApp {
+      appName = "app-runtime:${appId}";
+      binPrefix = "nixfied-app-runtime";
+      body = ''
+        exec ${appOrchestrator}/bin/nixfied-orchestrator ${
+          if (app.kind or "") == "workflowRef" then "run-workflow" else "run-task"
+        } ${
+          lib.escapeShellArg (if (app.kind or "") == "workflowRef" then app.workflowId else app.taskId)
+        } "$@"
+      '';
+    }).program
   ) (compiledCore.appExecutionManifests or { });
 
   serviceSetPrograms = builtins.mapAttrs (
@@ -159,24 +159,16 @@ let
         selectedServices = effectiveSelectedServices;
       };
 
-      serviceSetModel =
-        compiledCore.model
-        // {
-          runtime =
-            compiledCore.model.runtime
-            // {
-              directories =
-                (compiledCore.model.runtime.directories or { })
-                // {
-                  base = serviceSet.state.policy.runtimeBase;
-                };
-            };
-          state =
-            compiledCore.model.state
-            // {
-              policy = serviceSet.state.policy;
-            };
+      serviceSetModel = compiledCore.model // {
+        runtime = compiledCore.model.runtime // {
+          directories = (compiledCore.model.runtime.directories or { }) // {
+            base = serviceSet.state.policy.runtimeBase;
+          };
         };
+        state = compiledCore.model.state // {
+          policy = serviceSet.state.policy;
+        };
+      };
 
       serviceSetRuntimeSurfaces = import ./mkServiceRuntimeSurfaces.nix {
         inherit pkgs;

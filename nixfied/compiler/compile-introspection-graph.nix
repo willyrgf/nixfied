@@ -228,7 +228,6 @@ let
       appId:
       let
         app = apps.${appId};
-        task = if (app.taskId or "") != "" then tasks.${app.taskId} else null;
         manifest = appExecutionManifests.${appId} or null;
         serviceSet = if (app.serviceSetId or "") != "" then serviceSets.${app.serviceSetId} else null;
         directTaskIds = appResolvedTaskIds appId;
@@ -275,10 +274,14 @@ let
           runtimeRoots = {
             policyId = if serviceSet == null then statePolicy.id else serviceSet.state.policy.id;
             policyKind = if serviceSet == null then statePolicy.kind else serviceSet.state.policy.kind;
-            workspaceId = if serviceSet == null then statePolicy.workspaceId else serviceSet.state.policy.workspaceId;
-            runtimeBase = if serviceSet == null then statePolicy.runtimeBase else serviceSet.state.policy.runtimeBase;
-            registryRoot = if serviceSet == null then statePolicy.registryRoot else serviceSet.state.policy.registryRoot;
-            artifactsRoot = if serviceSet == null then statePolicy.artifactsRoot else serviceSet.state.policy.artifactsRoot;
+            workspaceId =
+              if serviceSet == null then statePolicy.workspaceId else serviceSet.state.policy.workspaceId;
+            runtimeBase =
+              if serviceSet == null then statePolicy.runtimeBase else serviceSet.state.policy.runtimeBase;
+            registryRoot =
+              if serviceSet == null then statePolicy.registryRoot else serviceSet.state.policy.registryRoot;
+            artifactsRoot =
+              if serviceSet == null then statePolicy.artifactsRoot else serviceSet.state.policy.artifactsRoot;
             manifestHash = if manifest == null then "" else manifest.modelHash;
           };
           workspaceMarkerPresent = workspaceMarkerPresent;
@@ -295,7 +298,9 @@ let
             if directTaskIds == [ ] then
               [ ]
             else
-              uniqueSorted (builtins.concatLists (map (taskId: map (ref: ref.name) (taskPackageRefs taskId)) directTaskIds));
+              uniqueSorted (
+                builtins.concatLists (map (taskId: map (ref: ref.name) (taskPackageRefs taskId)) directTaskIds)
+              );
           selectedServices = selectedServices;
         };
       }
@@ -522,62 +527,64 @@ let
         closure = null;
       }
     ) (builtins.sort builtins.lessThan (builtins.attrNames appExecutionManifests))
-    ++ builtins.filter (node: node != null) (map (
-      appId:
-      let
-        app = apps.${appId};
-      in
-      if (app.kind or "") == "serviceSetRef" then
-        mkNode {
-          nodeId = "execution:service-set-runtime:${appId}";
-          kind = "execution";
-          id = "service-set-runtime:${appId}";
-          label = "service-set-runtime:${appId}";
-          summary = "Service-set runtime for ${appId}";
-          description = "Selected-app execution materializes grouped runtime surfaces for the '${app.serviceSetId}' service set.";
-          ownerFiles = [
-            "nixfied/framework/core/materializeExecution.nix"
-            "nixfied/framework/core/mkServiceSetPrograms.nix"
-          ];
-          data = {
-            serviceSetId = app.serviceSetId;
-            operation = app.operation;
-          };
-          execution = null;
-          closure = null;
-        }
-      else if (app.kind or "") == "machineOutput" then
-        mkNode {
-          nodeId = "execution:machine-output:${appId}";
-          kind = "execution";
-          id = "machine-output:${appId}";
-          label = "machine-output:${appId}";
-          summary = "Machine-output wrapper for ${appId}";
-          description = "Selected-app execution materializes a strict JSON wrapper for '${appId}'.";
-          ownerFiles = [
-            "nixfied/framework/core/materializeExecution.nix"
-            "nixfied/framework/core/mkMachineOutputPrograms.nix"
-          ];
-          data = {
-            targetAppId = app.targetAppId;
-            setupAppIds = app.setupAppIds or [ ];
-            teardownAppIds = app.teardownAppIds or [ ];
-            validationMode =
-              if ((app.validation.schema or null) != null) && ((app.validation.command or "") != "") then
-                "schema+command"
-              else if (app.validation.schema or null) != null then
-                "schema"
-              else if (app.validation.command or "") != "" then
-                "command"
-              else
-                "none";
-          };
-          execution = null;
-          closure = null;
-        }
-      else
-        null
-    ) appIds);
+    ++ builtins.filter (node: node != null) (
+      map (
+        appId:
+        let
+          app = apps.${appId};
+        in
+        if (app.kind or "") == "serviceSetRef" then
+          mkNode {
+            nodeId = "execution:service-set-runtime:${appId}";
+            kind = "execution";
+            id = "service-set-runtime:${appId}";
+            label = "service-set-runtime:${appId}";
+            summary = "Service-set runtime for ${appId}";
+            description = "Selected-app execution materializes grouped runtime surfaces for the '${app.serviceSetId}' service set.";
+            ownerFiles = [
+              "nixfied/framework/core/materializeExecution.nix"
+              "nixfied/framework/core/mkServiceSetPrograms.nix"
+            ];
+            data = {
+              serviceSetId = app.serviceSetId;
+              operation = app.operation;
+            };
+            execution = null;
+            closure = null;
+          }
+        else if (app.kind or "") == "machineOutput" then
+          mkNode {
+            nodeId = "execution:machine-output:${appId}";
+            kind = "execution";
+            id = "machine-output:${appId}";
+            label = "machine-output:${appId}";
+            summary = "Machine-output wrapper for ${appId}";
+            description = "Selected-app execution materializes a strict JSON wrapper for '${appId}'.";
+            ownerFiles = [
+              "nixfied/framework/core/materializeExecution.nix"
+              "nixfied/framework/core/mkMachineOutputPrograms.nix"
+            ];
+            data = {
+              targetAppId = app.targetAppId;
+              setupAppIds = app.setupAppIds or [ ];
+              teardownAppIds = app.teardownAppIds or [ ];
+              validationMode =
+                if ((app.validation.schema or null) != null) && ((app.validation.command or "") != "") then
+                  "schema+command"
+                else if (app.validation.schema or null) != null then
+                  "schema"
+                else if (app.validation.command or "") != "" then
+                  "command"
+                else
+                  "none";
+            };
+            execution = null;
+            closure = null;
+          }
+        else
+          null
+      ) appIds
+    );
 
   executionNodes = builtins.listToAttrs executionNodeList;
 
@@ -872,8 +879,7 @@ let
             to = "service-set:${serviceSets.${entry.serviceSetId}.name}";
             kind = "workflow-prerun-service-set";
             via = "preRun";
-            reason =
-              "workflow '${workflowId}' preRun includes service set '${entry.serviceSetId}' operation '${entry.operation}'";
+            reason = "workflow '${workflowId}' preRun includes service set '${entry.serviceSetId}' operation '${entry.operation}'";
           }
         ) (workflow.preRun.serviceSets or [ ]);
         postRunServiceSetEdges = map (
@@ -883,8 +889,7 @@ let
             to = "service-set:${serviceSets.${entry.serviceSetId}.name}";
             kind = "workflow-postrun-service-set";
             via = "postRun";
-            reason =
-              "workflow '${workflowId}' postRun includes service set '${entry.serviceSetId}' operation '${entry.operation}'";
+            reason = "workflow '${workflowId}' postRun includes service set '${entry.serviceSetId}' operation '${entry.operation}'";
           }
         ) (workflow.postRun.serviceSets or [ ]);
       in
@@ -942,7 +947,9 @@ let
     ) (builtins.sort builtins.lessThan (builtins.attrNames appExecutionManifests))
   );
 
-  edges = sortEdges (dedupeEdges (appEdges ++ taskEdges ++ workflowEdges ++ serviceSetEdges ++ executionEdges));
+  edges = sortEdges (
+    dedupeEdges (appEdges ++ taskEdges ++ workflowEdges ++ serviceSetEdges ++ executionEdges)
+  );
 in
 canonical.canonicalize {
   schema = {

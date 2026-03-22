@@ -20,10 +20,13 @@ let
 
       replaceTokens =
         template:
-        builtins.replaceStrings [ "{projectId}" "{workspaceId}" ] [
-          identity.projectId
-          workspaceId
-        ] template;
+        builtins.replaceStrings
+          [ "{projectId}" "{workspaceId}" ]
+          [
+            identity.projectId
+            workspaceId
+          ]
+          template;
     in
     {
       id = policy.id;

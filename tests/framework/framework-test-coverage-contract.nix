@@ -6,7 +6,7 @@ assert pkgs.lib.hasInfix "\"services\"" source;
 assert pkgs.lib.hasInfix "shard_services() {" source;
 assert pkgs.lib.hasInfix "nix flake check ." source;
 assert (!pkgs.lib.hasInfix "nix flake check . --no-build" source);
-assert pkgs.lib.hasInfix "selected_shards=(\"flake-check\")" source;
+assert pkgs.lib.hasInfix "selected_shards=(\"''\${SHARDS[@]}\")" source;
 assert pkgs.lib.hasInfix "nix build --no-link \\" source;
 assert pkgs.lib.hasInfix "service-surface-catalog-contract" source;
 assert pkgs.lib.hasInfix "runtime-controls-no-service-materialization-smoke" source;
@@ -22,5 +22,5 @@ assert pkgs.lib.hasInfix "ready-helios-sync-gate-smoke" source;
 assert pkgs.lib.hasInfix "supervisor-lifecycle-smoke" source;
 assert pkgs.lib.hasInfix "supervisor-runtime-contract" source;
 pkgs.runCommand "framework-test-coverage-contract" { } ''
-  echo "OK: framework::test defaults to the full suite and keeps targeted shards" > "$out"
+  echo "OK: framework::test defaults to all shards and keeps targeted shards" > "$out"
 ''

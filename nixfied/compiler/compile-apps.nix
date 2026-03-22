@@ -50,7 +50,8 @@ let
       taskId = raw.taskId or "";
       task = if taskId != "" && builtins.hasAttr taskId tasks then tasks.${taskId} else null;
       workflowId = raw.workflowId or "";
-      workflow = if workflowId != "" && builtins.hasAttr workflowId workflows then workflows.${workflowId} else null;
+      workflow =
+        if workflowId != "" && builtins.hasAttr workflowId workflows then workflows.${workflowId} else null;
       serviceSetId = raw.serviceSetId or "";
       serviceSet =
         if serviceSetId != "" && builtins.hasAttr serviceSetId serviceSets then
@@ -58,11 +59,7 @@ let
         else
           null;
       operation = raw.operation or "";
-      operationSummary =
-        if serviceSet == null then
-          ""
-        else
-          "${serviceSet.summary} ${operation}";
+      operationSummary = if serviceSet == null then "" else "${serviceSet.summary} ${operation}";
       operationDescription =
         if serviceSet == null then
           ""
@@ -75,20 +72,15 @@ let
       setupAppIds = normalizeAppRefs (raw.setupAppIds or [ ]);
       teardownAppIds = normalizeAppRefs (raw.teardownAppIds or [ ]);
       validationSchema =
-        if (((raw.validation or { }).schema or null)) == null then
-          null
-        else
-          (raw.validation or { }).schema;
+        if (((raw.validation or { }).schema or null)) == null then null else (raw.validation or { }).schema;
       validationCommand = ((raw.validation or { }).command or "");
       targetPreview = if targetAppId != "" && appExists targetAppId then appPreview targetAppId else null;
-      referencedAppIds = setupAppIds ++ teardownAppIds ++ lib.optionals (targetAppId != "") [ targetAppId ];
+      referencedAppIds =
+        setupAppIds ++ teardownAppIds ++ lib.optionals (targetAppId != "") [ targetAppId ];
       unknownReferencedAppIds = builtins.filter (appRef: !(appExists appRef)) referencedAppIds;
       nestedMachineOutputRefs = builtins.filter isMachineOutputPreview referencedAppIds;
       machineSummary =
-        if targetPreview == null then
-          "Machine output ${appId}"
-        else
-          "Machine output ${targetAppId}";
+        if targetPreview == null then "Machine output ${appId}" else "Machine output ${targetAppId}";
     in
     if appId == "" then
       throw "nixfied apps: app '${name}' must have a non-empty id"

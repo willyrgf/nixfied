@@ -354,7 +354,9 @@ let
         else
           "";
       viewHelpFile =
-        if launcherViewApp != null && (launcherViewApp.taskId or null) != null && launcherViewApp.taskId != "" then
+        if
+          launcherViewApp != null && (launcherViewApp.taskId or null) != null && launcherViewApp.taskId != ""
+        then
           builtins.toString taskHelpFiles.${launcherViewApp.taskId}
         else
           "";

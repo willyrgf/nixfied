@@ -13,7 +13,8 @@ nix run .#framework::test
 ## Behavior
 
 `framework::test` is a first-class framework preset task defined in `nixfied/framework/presets/framework-test.nix`.
-By default it runs the full registered framework suite via `nix flake check .`.
+By default it runs all framework shards, including the full registered framework
+suite via `nix flake check .`.
 Named shards remain available for focused debugging with stable log prefixes.
 
 The authoritative flake-check registry lives in `tests/framework/default.nix`.
@@ -50,9 +51,11 @@ agent how the current framework surface works:
 ## Flake checks (canonical)
 
 Deterministic checks live in `tests/framework/` and run via `nix flake check .`.
-The `framework::test` default path runs the full `nix flake check .` suite.
-Named shards are still useful for focused debugging, such as `launcher-pruning`
-for launcher-driven compile-time service exclusion.
+The `framework::test` default path runs every shard, with `flake-check`
+covering the full `nix flake check .` suite and the remaining shards exercising
+targeted framework runner surfaces. Named shards are still useful for focused
+debugging, such as `launcher-pruning` for launcher-driven compile-time service
+exclusion.
 
 ## Launcher Pruning Proof
 
