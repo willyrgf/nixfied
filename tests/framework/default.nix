@@ -106,6 +106,10 @@ let
       covers = [ "runtime.service-set-surfaces" ];
     };
 
+    "workflow-service-set-adapter-smoke" = {
+      covers = [ "runtime.service-set-surfaces" ];
+    };
+
     "launcher-surface-contract" = { };
 
     "framework-utility-launcher-contract" = { };
@@ -211,6 +215,10 @@ let
     };
 
     "service-set-surface-contract" = import ./service-set-surface-contract.nix {
+      inherit pkgs;
+    };
+
+    "workflow-service-set-adapter-smoke" = import ./workflow-service-set-adapter-smoke.nix {
       inherit pkgs;
     };
 

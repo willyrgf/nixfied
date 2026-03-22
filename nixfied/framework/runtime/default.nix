@@ -12,6 +12,7 @@
       runtimeHash ? model.identity.evalHash,
       frameworkSourceFlakeRef ? null,
       appPrograms ? { },
+      serviceSetPrograms ? { },
       serviceApps ? { },
       serviceHookEnv ? { },
     }:
@@ -26,6 +27,7 @@
         registry
         frameworkSourceFlakeRef
         appPrograms
+        serviceSetPrograms
         serviceApps
         serviceHookEnv
         ;

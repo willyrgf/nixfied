@@ -100,15 +100,37 @@ let
       };
     };
   };
+
+  unknownPreRunServiceSet = evalWorkflows {
+    nixfied.tasks."test.workflow.errors.base" = {
+      id = "task.test.workflow.errors.base";
+      runner.command = ''
+        set -euo pipefail
+        printf '%s\n' "base"
+      '';
+    };
+
+    nixfied.workflows."test.workflow.errors.unknown-service-set" = {
+      id = "workflow.test.workflow.errors.unknown-service-set";
+      units.main.taskId = "task.test.workflow.errors.base";
+      preRun.serviceSets = [
+        {
+          serviceSetId = "missing";
+        }
+      ];
+    };
+  };
 in
 assert emptyUnitTask.success == false;
 assert emptyPreRunTask.success == false;
 assert emptyStageEntry.success == false;
 assert dependencyCycle.success == false;
+assert unknownPreRunServiceSet.success == false;
 assert pkgs.lib.hasInfix "unit '\${unitName}' has an empty taskId" compilerSource;
 assert pkgs.lib.hasInfix "\${phaseName}.tasks references an empty task id" compilerSource;
+assert pkgs.lib.hasInfix "\${phaseName}.serviceSets references unknown service set" compilerSource;
 assert pkgs.lib.hasInfix "workflow stage entries must not be empty" compilerSource;
 assert pkgs.lib.hasInfix "workflow '\${workflowId}' has a dependency cycle" compilerSource;
 pkgs.runCommand "workflow-validation-errors" { } ''
-  echo "OK: workflow validation rejects empty task refs and dependency cycles" > "$out"
+  echo "OK: workflow validation rejects invalid phase refs and dependency cycles" > "$out"
 ''

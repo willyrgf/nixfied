@@ -6,6 +6,7 @@
   runtimeHash ? model.identity.evalHash,
   registry,
   projectRoot,
+  serviceSetPrograms ? { },
   serviceHookEnv ? { },
 }:
 let
@@ -40,6 +41,7 @@ let
       services
       registry
       projectRoot
+      serviceSetPrograms
       serviceHookEnv
       ;
     selectionIndex = resolvedSelectionIndex;

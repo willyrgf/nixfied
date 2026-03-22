@@ -375,6 +375,27 @@ let
     ) workflowIds
   );
 
+  workflowPhaseServiceSetCases = builtins.concatLists (
+    map (
+      workflowId:
+      let
+        workflow = workflows.${workflowId};
+        preRun = workflow.preRun or { };
+        postRun = workflow.postRun or { };
+      in
+      [
+        {
+          key = "${workflowId}:preRun";
+          value = map builtins.toJSON (preRun.serviceSets or [ ]);
+        }
+        {
+          key = "${workflowId}:postRun";
+          value = map builtins.toJSON (postRun.serviceSets or [ ]);
+        }
+      ]
+    ) workflowIds
+  );
+
   taskCases = map (taskId: {
     key = taskId;
     value = taskDescriptorById.${taskId};
@@ -659,6 +680,17 @@ in
       local phase_key="$2"
       case "$workflow_id:$phase_key" in
   ${renderCasePrintLines (entry: entry.value) workflowPhaseTaskCases}
+        *)
+          return 0
+          ;;
+      esac
+    }
+
+    workflow_phase_service_sets() {
+      local workflow_id="$1"
+      local phase_key="$2"
+      case "$workflow_id:$phase_key" in
+  ${renderCasePrintLines (entry: entry.value) workflowPhaseServiceSetCases}
         *)
           return 0
           ;;

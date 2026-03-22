@@ -149,6 +149,7 @@ rec {
       workflows = compileWorkflows {
         resolved = resolvedModuleGraph.config;
         inherit tasks;
+        inherit serviceSets;
         allTasks = taskCompilation.allTasks;
         declaredTaskIds = taskCompilation.declaredTaskIds;
         prunedTaskIds = taskCompilation.prunedTaskIds;

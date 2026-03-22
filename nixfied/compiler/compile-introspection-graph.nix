@@ -291,6 +291,8 @@ let
         data = {
           mode = workflow.mode or "custom";
           unitNames = map (unit: unit.name) (workflow.plan or [ ]);
+          preRunServiceSetIds = map (entry: entry.serviceSetId) (workflow.preRun.serviceSets or [ ]);
+          postRunServiceSetIds = map (entry: entry.serviceSetId) (workflow.postRun.serviceSets or [ ]);
         };
         execution = {
           launcherClass = "dispatcher";
@@ -304,6 +306,8 @@ let
           unitTaskIds = uniqueSorted (map (unit: unit.taskId) (workflow.plan or [ ]));
           preRunTaskIds = workflow.preRun.tasks or [ ];
           postRunTaskIds = workflow.postRun.tasks or [ ];
+          preRunServiceSetIds = map (entry: entry.serviceSetId) (workflow.preRun.serviceSets or [ ]);
+          postRunServiceSetIds = map (entry: entry.serviceSetId) (workflow.postRun.serviceSets or [ ]);
           selectedServices = selectionIndex.workflowClosureServicesById.${workflowId} or [ ];
         };
       }
@@ -699,8 +703,35 @@ let
             reason = "workflow '${workflowId}' postRun includes task '${taskId}'";
           }
         ) (workflow.postRun.tasks or [ ]);
+        preRunServiceSetEdges = map (
+          entry:
+          mkEdge {
+            from = "workflow:${workflowId}";
+            to = "service-set:${serviceSets.${entry.serviceSetId}.name}";
+            kind = "workflow-prerun-service-set";
+            via = "preRun";
+            reason =
+              "workflow '${workflowId}' preRun includes service set '${entry.serviceSetId}' operation '${entry.operation}'";
+          }
+        ) (workflow.preRun.serviceSets or [ ]);
+        postRunServiceSetEdges = map (
+          entry:
+          mkEdge {
+            from = "workflow:${workflowId}";
+            to = "service-set:${serviceSets.${entry.serviceSetId}.name}";
+            kind = "workflow-postrun-service-set";
+            via = "postRun";
+            reason =
+              "workflow '${workflowId}' postRun includes service set '${entry.serviceSetId}' operation '${entry.operation}'";
+          }
+        ) (workflow.postRun.serviceSets or [ ]);
       in
-      unitEdges ++ unitServiceEdges ++ preRunEdges ++ postRunEdges
+      unitEdges
+      ++ unitServiceEdges
+      ++ preRunEdges
+      ++ postRunEdges
+      ++ preRunServiceSetEdges
+      ++ postRunServiceSetEdges
     ) workflowIds
   );
 

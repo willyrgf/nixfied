@@ -6,6 +6,7 @@
   runtimeHash ? model.identity.evalHash,
   registry,
   projectRoot,
+  serviceSetPrograms ? { },
   serviceHookEnv ? { },
 }:
 let
@@ -27,6 +28,23 @@ let
           workflows = model.workflows or { };
           serviceCatalog = model.serviceCatalog or { };
         };
+
+  serviceSetProgramCases = builtins.concatLists (
+    map (
+      serviceSetId:
+      let
+        operations = builtins.sort builtins.lessThan (
+          builtins.attrNames (serviceSetPrograms.${serviceSetId}.programsByOperation or { })
+        );
+      in
+      map (
+        operation: {
+          key = "${serviceSetId}:${operation}";
+          value = serviceSetPrograms.${serviceSetId}.programsByOperation.${operation}.program;
+        }
+      ) operations
+    ) (builtins.sort builtins.lessThan (builtins.attrNames serviceSetPrograms))
+  );
 
   modelFile =
     pkgs.writeText
@@ -132,6 +150,24 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
     )"
 
     printf '%s' "$services_csv"
+  }
+
+  workflow_phase_service_set_program() {
+    local service_set_id="$1"
+    local operation="$2"
+    case "$service_set_id:$operation" in
+${builtins.concatStringsSep "\n" (
+  map (entry: ''
+      ${pkgs.lib.escapeShellArg entry.key})
+        printf '%s' ${pkgs.lib.escapeShellArg entry.value}
+        return 0
+        ;;
+  '') serviceSetProgramCases
+)}
+      *)
+        return 1
+        ;;
+    esac
   }
 
   emit_runtime_pass_through_env_names() {
@@ -1497,6 +1533,100 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
     return "$phase_status"
   }
 
+  run_workflow_phase_service_sets() {
+    local run_id="$1"
+    local workflow_id="$2"
+    local phase_key="$3"
+    local phase_status=0
+    local phase_entry_json=""
+    local service_set_id=""
+    local service_set_name=""
+    local operation=""
+    local phase_entry_id=""
+    local selected_services_csv=""
+    local phase_detail=""
+    local failure_detail=""
+    local program_path=""
+
+    while IFS= read -r phase_entry_json; do
+      if [ -z "$phase_entry_json" ]; then
+        continue
+      fi
+
+      service_set_id="$(printf '%s' "$phase_entry_json" | ${pkgs.jq}/bin/jq -r '.serviceSetId')"
+      service_set_name="$(printf '%s' "$phase_entry_json" | ${pkgs.jq}/bin/jq -r '.serviceSetName // .serviceSetId')"
+      operation="$(printf '%s' "$phase_entry_json" | ${pkgs.jq}/bin/jq -r '.operation')"
+      selected_services_csv="$(
+        printf '%s' "$phase_entry_json" | ${pkgs.jq}/bin/jq -r '(.selectedServices // []) | unique | join(",")'
+      )"
+      phase_entry_id="''${service_set_id}:''${operation}"
+      phase_detail="$(
+        ${pkgs.jq}/bin/jq -cn \
+          --arg phase "$phase_key" \
+          --arg serviceSetId "$service_set_id" \
+          --arg serviceSetName "$service_set_name" \
+          --arg operation "$operation" \
+          '{
+            phase: $phase,
+            serviceSetId: $serviceSetId,
+            serviceSetName: $serviceSetName,
+            operation: $operation
+          }'
+      )"
+
+      program_path="$(workflow_phase_service_set_program "$service_set_id" "$operation" || true)"
+      if [ -z "$program_path" ]; then
+        echo "ERROR: missing service-set program serviceSetId=$service_set_id operation=$operation" >&2
+        append_event "$run_id" "$workflow_id" "$phase_entry_id" "failed" "$phase_detail"
+        phase_status=1
+        break
+      fi
+
+      append_event "$run_id" "$workflow_id" "$phase_entry_id" "queued" "$phase_detail"
+      append_event "$run_id" "$workflow_id" "$phase_entry_id" "running" "$phase_detail"
+
+      if NIXFIED_SELECTED_SERVICES_CSV="$selected_services_csv" "$program_path"; then
+        append_event "$run_id" "$workflow_id" "$phase_entry_id" "passed" "$phase_detail"
+        phase_status=0
+      else
+        phase_status="$?"
+        failure_detail="$(
+          ${pkgs.jq}/bin/jq -cn \
+            --argjson base "$phase_detail" \
+            --argjson exitCode "$phase_status" \
+            '$base + {exitCode: $exitCode}'
+        )"
+        append_event "$run_id" "$workflow_id" "$phase_entry_id" "failed" "$failure_detail"
+        break
+      fi
+    done < <(workflow_phase_service_sets "$workflow_id" "$phase_key")
+
+    return "$phase_status"
+  }
+
+  run_workflow_phase() {
+    local run_id="$1"
+    local workflow_id="$2"
+    local phase_key="$3"
+    shift 3
+    local -a passthrough_args
+    passthrough_args=("$@")
+
+    if [ "$phase_key" = "preRun" ]; then
+      if run_workflow_phase_service_sets "$run_id" "$workflow_id" "$phase_key"; then
+        run_workflow_phase_tasks "$run_id" "$workflow_id" "$phase_key" "''${passthrough_args[@]}"
+      else
+        return "$?"
+      fi
+    else
+      if run_workflow_phase_tasks "$run_id" "$workflow_id" "$phase_key" "''${passthrough_args[@]}"; then
+        run_workflow_phase_service_sets "$run_id" "$workflow_id" "$phase_key"
+      else
+        return "$?"
+      fi
+    fi
+  }
+
   is_nonneg_int() {
     case "''${1:-}" in
       ""|*[!0-9]*)
@@ -2208,7 +2338,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       fi
     fi
 
-    if run_workflow_phase_tasks "$run_id" "$workflow_id" "preRun" "''${passthrough_args[@]}"; then
+    if run_workflow_phase "$run_id" "$workflow_id" "preRun" "''${passthrough_args[@]}"; then
       status=0
     else
       status="$?"
@@ -2232,7 +2362,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
     post_always="$(workflow_post_run_always "$workflow_id")"
     if [ "$post_always" = "true" ] || [ "$status" -eq 0 ]; then
-      if run_workflow_phase_tasks "$run_id" "$workflow_id" "postRun" "''${passthrough_args[@]}"; then
+      if run_workflow_phase "$run_id" "$workflow_id" "postRun" "''${passthrough_args[@]}"; then
         post_status=0
       else
         post_status="$?"

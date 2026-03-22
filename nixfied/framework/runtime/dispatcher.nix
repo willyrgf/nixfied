@@ -8,6 +8,7 @@
   registry,
   frameworkSourceFlakeRef ? null,
   appPrograms ? { },
+  serviceSetPrograms ? { },
   serviceApps ? { },
   serviceHookEnv ? { },
 }:
@@ -27,6 +28,7 @@ let
       runtimeHash
       registry
       projectRoot
+      serviceSetPrograms
       serviceHookEnv
       ;
   };

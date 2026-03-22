@@ -7,6 +7,12 @@ let
   phaseTaskId = "task.test.selection.phase";
   workflowBasicId = "workflow.selection.basic";
   workflowFullId = "workflow.selection.full";
+  workflowPhaseServiceSet = {
+    serviceSetId = "service-set.selection";
+    serviceSetName = "selection";
+    operation = "status";
+    selectedServices = [ "reth" ];
+  };
 
   model = {
     tasks = {
@@ -96,9 +102,13 @@ let
       "${workflowFullId}" = {
         id = workflowFullId;
         units.soft.taskId = softTaskId;
-        preRun.tasks = [ phaseTaskId ];
+        preRun = {
+          tasks = [ phaseTaskId ];
+          serviceSets = [ workflowPhaseServiceSet ];
+        };
         postRun = {
           tasks = [ ];
+          serviceSets = [ ];
           alwaysRun = true;
         };
       };
@@ -175,6 +185,7 @@ assert
     "helios"
     "minio"
     "postgres"
+    "reth"
   ];
 assert selectionIndex.workflowUnitClosureServicesById.${workflowBasicId} == [ "postgres" ];
 assert selectionIndex.workflowUnitClosureServicesById.${workflowFullId} == [ "nginx" ];
@@ -184,6 +195,7 @@ assert
     "helios"
     "minio"
     "nginx"
+    "reth"
   ];
 assert
   selectionIndex.taskClosureServicesById.${workflowTaskId} == [

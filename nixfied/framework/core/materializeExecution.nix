@@ -89,6 +89,7 @@ let
         services = appServices;
         runtimeHash = appRuntimeHash;
         serviceHookEnv = appServiceRuntimeSurfaces.serviceHookEnv;
+        inherit serviceSetPrograms;
       };
     in
     "${appOrchestrator}/bin/nixfied-orchestrator"
@@ -161,6 +162,7 @@ let
       frameworkSourceFlakeRef
       ;
     appPrograms = appPrograms;
+    serviceSetPrograms = serviceSetPrograms;
     serviceApps = serviceRuntimeSurfaces.serviceApps;
     serviceHookEnv = serviceRuntimeSurfaces.serviceHookEnv;
   };
@@ -170,6 +172,7 @@ in
     services
     runtimeHash
     appPrograms
+    serviceSetPrograms
     baseApps
     ;
   serviceApis = serviceRuntimeSurfaces.serviceApis;
