@@ -1,9 +1,19 @@
 { frameworkSelfhostPreset }:
 let
   workflowProbePhases = {
-    preRun.tasks = [ "task.ops.ready" ];
+    preRun.serviceSets = [
+      {
+        serviceSetId = "service-set.default";
+        operation = "ready";
+      }
+    ];
     postRun = {
-      tasks = [ "task.ops.health" ];
+      serviceSets = [
+        {
+          serviceSetId = "service-set.default";
+          operation = "health";
+        }
+      ];
       alwaysRun = true;
     };
   };
