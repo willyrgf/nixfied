@@ -168,16 +168,10 @@ let
         launchCommand =
           if appModel == null then
             throw "dispatcher: missing app model for '${appName}'"
-          else if (appModel.kind or "") == "taskRef" then
-            ''
-              exec ${appPrograms.${appName}} run-task ${lib.escapeShellArg appModel.taskId} "$@"
-            ''
-          else if (appModel.kind or "") == "serviceSetRef" then
+          else
             ''
               exec ${appPrograms.${appName}} "$@"
-            ''
-          else
-            throw "dispatcher: unsupported app kind '${appModel.kind or ""}' for '${appName}'";
+            '';
       in
       {
         name = appName;

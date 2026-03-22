@@ -140,6 +140,76 @@ let
     }) serviceNames
   );
 
+  appReferencedAppIds =
+    app:
+    uniqueSorted (
+      (app.setupAppIds or [ ])
+      ++ lib.optionals ((app.targetAppId or "") != "") [ app.targetAppId ]
+      ++ (app.teardownAppIds or [ ])
+    );
+
+  appResolvedTaskIds =
+    appId:
+    let
+      app = apps.${appId};
+      manifest = appExecutionManifests.${appId} or null;
+    in
+    if (app.kind or "") == "machineOutput" then
+      uniqueSorted (builtins.concatLists (map appResolvedTaskIds (appReferencedAppIds app)))
+    else if manifest != null then
+      manifest.taskIds or [ ]
+    else if (app.taskId or "") != "" then
+      [ app.taskId ]
+    else
+      [ ];
+
+  appResolvedWorkflowIds =
+    appId:
+    let
+      app = apps.${appId};
+      manifest = appExecutionManifests.${appId} or null;
+    in
+    if (app.kind or "") == "machineOutput" then
+      uniqueSorted (builtins.concatLists (map appResolvedWorkflowIds (appReferencedAppIds app)))
+    else if manifest != null then
+      manifest.workflowIds or [ ]
+    else if (app.workflowId or "") != "" then
+      [ app.workflowId ]
+    else
+      [ ];
+
+  appResolvedServiceSetIds =
+    appId:
+    let
+      app = apps.${appId};
+    in
+    if (app.kind or "") == "machineOutput" then
+      uniqueSorted (builtins.concatLists (map appResolvedServiceSetIds (appReferencedAppIds app)))
+    else if (app.serviceSetId or "") != "" then
+      [ app.serviceSetId ]
+    else
+      [ ];
+
+  appResolvedSelectedServices =
+    appId:
+    let
+      app = apps.${appId};
+      manifest = appExecutionManifests.${appId} or null;
+      serviceSet = if (app.serviceSetId or "") != "" then serviceSets.${app.serviceSetId} else null;
+    in
+    if (app.kind or "") == "machineOutput" then
+      uniqueSorted (builtins.concatLists (map appResolvedSelectedServices (appReferencedAppIds app)))
+    else if serviceSet != null then
+      serviceSet.services.all
+    else if manifest != null then
+      manifest.selectedServices
+    else if (app.workflowId or "") != "" then
+      selectionIndex.workflowClosureServicesById.${app.workflowId} or [ ]
+    else if (app.taskId or "") != "" then
+      selectionIndex.taskClosureServicesById.${app.taskId} or [ ]
+    else
+      [ ];
+
   mkNode = node: {
     name = node.nodeId;
     value = canonical.canonicalize node;
@@ -153,12 +223,10 @@ let
         task = if (app.taskId or "") != "" then tasks.${app.taskId} else null;
         manifest = appExecutionManifests.${appId} or null;
         serviceSet = if (app.serviceSetId or "") != "" then serviceSets.${app.serviceSetId} else null;
-        workflowIdsForApp =
-          if task == null then
-            [ ]
-          else
-            lib.optionals ((task.runner.type or "") == "workflowRef" && (task.runner.workflowId or "") != "")
-              [ task.runner.workflowId ];
+        directTaskIds = appResolvedTaskIds appId;
+        directWorkflowIds = appResolvedWorkflowIds appId;
+        directServiceSetIds = appResolvedServiceSetIds appId;
+        selectedServices = appResolvedSelectedServices appId;
       in
       mkNode {
         nodeId = "app:${appId}";
@@ -171,25 +239,31 @@ let
         data = {
           category = app.category or "core";
           taskId = app.taskId or null;
+          workflowId = app.workflowId or null;
           serviceSetId = app.serviceSetId or null;
           operation = app.operation or null;
+          targetAppId = app.targetAppId or null;
+          setupAppIds = app.setupAppIds or [ ];
+          teardownAppIds = app.teardownAppIds or [ ];
           usage = app.usage or [ ];
           examples = app.examples or [ ];
         };
         execution = {
           launcherClass = "selected-app";
           launcherTarget = appId;
-          runSurface = if serviceSet == null then "run-task" else "service-set";
-          mappedTaskIds = lib.optionals (task != null) [ app.taskId ];
-          mappedWorkflowIds = workflowIdsForApp;
-          mappedServiceSetIds = lib.optionals (serviceSet != null) [ serviceSet.id ];
-          selectedServices =
-            if serviceSet != null then
-              serviceSet.services.all
-            else if manifest != null then
-              manifest.selectedServices
+          runSurface =
+            if (app.kind or "") == "serviceSetRef" then
+              "service-set"
+            else if (app.kind or "") == "workflowRef" then
+              "run-workflow"
+            else if (app.kind or "") == "machineOutput" then
+              "app-wrapper"
             else
-              selectionIndex.taskClosureServicesById.${app.taskId} or [ ];
+              "run-task";
+          mappedTaskIds = directTaskIds;
+          mappedWorkflowIds = directWorkflowIds;
+          mappedServiceSetIds = directServiceSetIds;
+          selectedServices = selectedServices;
           runtimeRoots = {
             policyId = if serviceSet == null then statePolicy.id else serviceSet.state.policy.id;
             policyKind = if serviceSet == null then statePolicy.kind else serviceSet.state.policy.kind;
@@ -206,26 +280,15 @@ let
           };
         };
         closure = {
-          directTaskIds =
-            if serviceSet != null then
-              [ ]
-            else if manifest == null then
-              [ app.taskId ]
-            else
-              manifest.taskIds;
-          directServiceSetIds = lib.optionals (serviceSet != null) [ serviceSet.id ];
+          directTaskIds = directTaskIds;
+          directWorkflowIds = directWorkflowIds;
+          directServiceSetIds = directServiceSetIds;
           directPackageNames =
-            if task == null then
+            if directTaskIds == [ ] then
               [ ]
             else
-              uniqueSorted (map (ref: ref.name) (taskPackageRefs app.taskId));
-          selectedServices =
-            if serviceSet != null then
-              serviceSet.services.all
-            else if manifest != null then
-              manifest.selectedServices
-            else
-              selectionIndex.taskClosureServicesById.${app.taskId} or [ ];
+              uniqueSorted (builtins.concatLists (map (taskId: map (ref: ref.name) (taskPackageRefs taskId)) directTaskIds));
+          selectedServices = selectedServices;
         };
       }
     ) appIds
@@ -456,9 +519,7 @@ let
       let
         app = apps.${appId};
       in
-      if (app.kind or "") != "serviceSetRef" then
-        null
-      else
+      if (app.kind or "") == "serviceSetRef" then
         mkNode {
           nodeId = "execution:service-set-runtime:${appId}";
           kind = "execution";
@@ -477,6 +538,37 @@ let
           execution = null;
           closure = null;
         }
+      else if (app.kind or "") == "machineOutput" then
+        mkNode {
+          nodeId = "execution:machine-output:${appId}";
+          kind = "execution";
+          id = "machine-output:${appId}";
+          label = "machine-output:${appId}";
+          summary = "Machine-output wrapper for ${appId}";
+          description = "Selected-app execution materializes a strict JSON wrapper for '${appId}'.";
+          ownerFiles = [
+            "nixfied/framework/core/materializeExecution.nix"
+            "nixfied/framework/core/mkMachineOutputPrograms.nix"
+          ];
+          data = {
+            targetAppId = app.targetAppId;
+            setupAppIds = app.setupAppIds or [ ];
+            teardownAppIds = app.teardownAppIds or [ ];
+            validationMode =
+              if ((app.validation.schema or null) != null) && ((app.validation.command or "") != "") then
+                "schema+command"
+              else if (app.validation.schema or null) != null then
+                "schema"
+              else if (app.validation.command or "") != "" then
+                "command"
+              else
+                "none";
+          };
+          execution = null;
+          closure = null;
+        }
+      else
+        null
     ) appIds);
 
   executionNodes = builtins.listToAttrs executionNodeList;
@@ -572,6 +664,68 @@ let
             reason = "service-set runtime for '${appId}' uses service set '${app.serviceSetId}'";
           })
         ]
+      else if (app.kind or "") == "workflowRef" then
+        [
+          (mkEdge {
+            from = "app:${appId}";
+            to = "workflow:${app.workflowId}";
+            kind = "app-workflow";
+            reason = "app '${appId}' resolves to workflow '${app.workflowId}'";
+          })
+          (mkEdge {
+            from = "app:${appId}";
+            to = "execution:selected-app-launcher:${appId}";
+            kind = "app-execution";
+            reason = "app '${appId}' runs through the selected-app launcher";
+          })
+          (mkEdge {
+            from = "execution:selected-app-launcher:${appId}";
+            to = "execution:app-manifest:${appId}";
+            kind = "execution-manifest";
+            reason = "selected-app execution materializes the app-scoped execution manifest for '${appId}'";
+          })
+        ]
+      else if (app.kind or "") == "machineOutput" then
+        [
+          (mkEdge {
+            from = "app:${appId}";
+            to = "app:${app.targetAppId}";
+            kind = "app-target-app";
+            reason = "machine-output app '${appId}' targets app '${app.targetAppId}'";
+          })
+          (mkEdge {
+            from = "app:${appId}";
+            to = "execution:selected-app-launcher:${appId}";
+            kind = "app-execution";
+            reason = "app '${appId}' runs through the selected-app launcher";
+          })
+          (mkEdge {
+            from = "execution:selected-app-launcher:${appId}";
+            to = "execution:machine-output:${appId}";
+            kind = "execution-machine-output";
+            reason = "selected-app execution materializes the machine-output wrapper for '${appId}'";
+          })
+        ]
+        ++ map (
+          setupAppId:
+          mkEdge {
+            from = "app:${appId}";
+            to = "app:${setupAppId}";
+            kind = "app-setup-app";
+            via = "setup";
+            reason = "machine-output app '${appId}' runs setup app '${setupAppId}'";
+          }
+        ) (app.setupAppIds or [ ])
+        ++ map (
+          teardownAppId:
+          mkEdge {
+            from = "app:${appId}";
+            to = "app:${teardownAppId}";
+            kind = "app-teardown-app";
+            via = "teardown";
+            reason = "machine-output app '${appId}' runs teardown app '${teardownAppId}'";
+          }
+        ) (app.teardownAppIds or [ ])
       else
         [
           (mkEdge {

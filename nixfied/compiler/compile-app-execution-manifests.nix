@@ -128,12 +128,20 @@ let
     appId:
     let
       app = apps.${appId};
-      selectedServices = uniqueSorted (selectionIndex.taskClosureServicesById.${app.taskId} or [ ]);
+      closure =
+        if (app.kind or "") == "workflowRef" then
+          goWorkflowReference [ ] app.workflowId
+        else
+          goTask [ ] app.taskId;
+      selectedServices =
+        if (app.kind or "") == "workflowRef" then
+          uniqueSorted (selectionIndex.workflowReferenceClosureServicesById.${app.workflowId} or [ ])
+        else
+          uniqueSorted (selectionIndex.taskClosureServicesById.${app.taskId} or [ ]);
       serviceCatalogFiltered = lib.filterAttrs (
         _: service:
         builtins.elem (service.name or service.id) selectedServices
       ) serviceCatalog;
-      closure = goTask [ ] app.taskId;
       manifestEvalHash = canonical.hashCanonical {
         schema = {
           kind = "nixfied-app-execution-eval";
@@ -166,7 +174,8 @@ let
     in
     {
       id = appId;
-      taskId = app.taskId;
+      taskId = if (app.taskId or "") == "" then null else app.taskId;
+      workflowId = if (app.workflowId or "") == "" then null else app.workflowId;
       taskIds = closure.taskIds;
       workflowIds = closure.workflowIds;
       selectedServices = selectedServices;
@@ -179,7 +188,10 @@ let
     let
       app = apps.${appId};
     in
-    (app.kind or "") == "taskRef" && (app.taskId or "") != ""
+    (
+      ((app.kind or "") == "taskRef" && (app.taskId or "") != "")
+      || ((app.kind or "") == "workflowRef" && (app.workflowId or "") != "")
+    )
   ) appIds;
 in
 builtins.listToAttrs (

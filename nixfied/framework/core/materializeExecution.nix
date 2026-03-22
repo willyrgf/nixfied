@@ -8,6 +8,7 @@
 let
   lib = pkgs.lib;
   canonical = import ./canonical.nix { inherit lib; };
+  mkShellApp = import ./mk-shell-app.nix { inherit pkgs; };
   registry = import ../runtime/registry { inherit pkgs; };
   compileServices = import ../../compiler/compile-services.nix { inherit lib; };
 
@@ -50,9 +51,10 @@ let
     services = services;
   };
 
-  taskAppPrograms = builtins.mapAttrs (
+  manifestBackedAppPrograms = builtins.mapAttrs (
     appId: manifest:
     let
+      app = compiledCore.model.apps.${appId};
       appServices = compileServices {
         inherit
           pkgs
@@ -92,7 +94,19 @@ let
         inherit serviceSetPrograms;
       };
     in
-    "${appOrchestrator}/bin/nixfied-orchestrator"
+    (
+      mkShellApp {
+        appName = "app-runtime:${appId}";
+        binPrefix = "nixfied-app-runtime";
+        body = ''
+          exec ${appOrchestrator}/bin/nixfied-orchestrator ${
+            if (app.kind or "") == "workflowRef" then "run-workflow" else "run-task"
+          } ${lib.escapeShellArg (
+            if (app.kind or "") == "workflowRef" then app.workflowId else app.taskId
+          )} "$@"
+        '';
+      }
+    ).program
   ) (compiledCore.appExecutionManifests or { });
 
   serviceSetPrograms = builtins.mapAttrs (
@@ -137,10 +151,21 @@ let
 
   appPrograms = builtins.mapAttrs (
     appId: app:
-    if (app.kind or "") == "taskRef" then
-      taskAppPrograms.${appId}
+    if builtins.hasAttr appId manifestBackedAppPrograms then
+      manifestBackedAppPrograms.${appId}
     else if (app.kind or "") == "serviceSetRef" then
       serviceSetPrograms.${app.serviceSetId}.programsByOperation.${app.operation}.program
+    else if (app.kind or "") == "machineOutput" then
+      import ./mkMachineOutputPrograms.nix {
+        inherit
+          pkgs
+          appId
+          app
+          ;
+        targetProgram = appPrograms.${app.targetAppId};
+        setupPrograms = map (setupAppId: appPrograms.${setupAppId}) (app.setupAppIds or [ ]);
+        teardownPrograms = map (teardownAppId: appPrograms.${teardownAppId}) (app.teardownAppIds or [ ]);
+      }
     else
       throw "materializeExecution: unsupported app kind '${app.kind or ""}' for '${appId}'"
   ) (compiledCore.model.apps or { });

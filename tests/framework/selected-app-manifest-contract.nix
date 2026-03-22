@@ -42,7 +42,11 @@ pkgs.runCommand "selected-app-manifest-contract" { } ''
   require_non_empty "$app_wrapper" "app wrapper"
   require_file "$app_wrapper"
 
-  orchestrator="$("$GREP" -Eo '/nix/store/[^"[:space:]]+-nixfied-orchestrator[^"[:space:]]*/bin/nixfied-orchestrator' "$app_wrapper" | "$HEAD" -n 1)"
+  app_runtime="$("$GREP" -Eo '/nix/store/[^"[:space:]]+-nixfied-app-runtime[^"[:space:]]*/bin/nixfied-app-runtime[^"[:space:]]*' "$app_wrapper" | "$HEAD" -n 1)"
+  require_non_empty "$app_runtime" "app runtime"
+  require_file "$app_runtime"
+
+  orchestrator="$("$GREP" -Eo '/nix/store/[^"[:space:]]+-nixfied-orchestrator[^"[:space:]]*/bin/nixfied-orchestrator' "$app_runtime" | "$HEAD" -n 1)"
   require_non_empty "$orchestrator" "app orchestrator"
   require_file "$orchestrator"
 

@@ -110,6 +110,10 @@ let
       covers = [ "runtime.service-set-surfaces" ];
     };
 
+    "machine-output-app-smoke" = {
+      covers = [ "runtime.app-execution-manifests" ];
+    };
+
     "launcher-surface-contract" = { };
 
     "framework-utility-launcher-contract" = { };
@@ -219,6 +223,10 @@ let
     };
 
     "workflow-service-set-adapter-smoke" = import ./workflow-service-set-adapter-smoke.nix {
+      inherit pkgs;
+    };
+
+    "machine-output-app-smoke" = import ./machine-output-app-smoke.nix {
       inherit pkgs;
     };
 

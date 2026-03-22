@@ -41,13 +41,19 @@ let
           kind =
             if app.kind == "taskRef" then
               "task"
+            else if app.kind == "workflowRef" then
+              "workflow"
             else if app.kind == "serviceSetRef" then
               "service-set"
+            else if app.kind == "machineOutput" then
+              "machine-output"
             else
               app.kind;
           taskId = app.taskId or null;
+          workflowId = app.workflowId or null;
           serviceSetId = app.serviceSetId or null;
           operation = app.operation or null;
+          targetAppId = app.targetAppId or null;
           summary = app.summary;
           description = app.description;
           category = app.category or "core";

@@ -161,6 +161,7 @@ rec {
         inherit
           serviceSets
           tasks
+          workflows
           ;
       };
 

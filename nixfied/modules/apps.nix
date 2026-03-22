@@ -17,12 +17,19 @@ in
             kind = lib.mkOption {
               type = t.enum [
                 "taskRef"
+                "workflowRef"
                 "serviceSetRef"
+                "machineOutput"
               ];
               default = "taskRef";
             };
 
             taskId = lib.mkOption {
+              type = t.str;
+              default = "";
+            };
+
+            workflowId = lib.mkOption {
               type = t.str;
               default = "";
             };
@@ -35,6 +42,38 @@ in
             operation = lib.mkOption {
               type = t.str;
               default = "";
+            };
+
+            targetAppId = lib.mkOption {
+              type = t.str;
+              default = "";
+            };
+
+            targetArgs = lib.mkOption {
+              type = t.listOf t.str;
+              default = [ ];
+            };
+
+            setupAppIds = lib.mkOption {
+              type = t.listOf t.str;
+              default = [ ];
+            };
+
+            teardownAppIds = lib.mkOption {
+              type = t.listOf t.str;
+              default = [ ];
+            };
+
+            validation = {
+              schema = lib.mkOption {
+                type = t.nullOr t.anything;
+                default = null;
+              };
+
+              command = lib.mkOption {
+                type = t.str;
+                default = "";
+              };
             };
 
             summary = lib.mkOption {
