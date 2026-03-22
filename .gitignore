@@ -3,6 +3,7 @@
 *.md
 !AGENTS.md
 !README.md
+!RFC_PROBLEM_MFM_POV_ANALYSIS.md
 !tests/framework/WORKFLOW_REUSE.md
 !tests/framework/SERVICE_LIFECYCLE_API.md
 !tests/framework/fixtures/ephemeral-nix-source-fixture/build.log
