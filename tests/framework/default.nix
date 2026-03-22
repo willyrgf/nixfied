@@ -184,6 +184,13 @@ let
         ;
     };
 
+    "introspect-contract" = import ./introspect-contract.nix {
+      inherit
+        pkgs
+        apps
+        ;
+    };
+
     "launcher-surface-contract" = import ./launcher-surface-contract.nix {
       inherit
         pkgs

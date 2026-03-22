@@ -28,7 +28,6 @@ let
               set -euo pipefail
               printf '%s\n' "OK: run id noise probe"
             '';
-            ui.app.expose = false;
           };
         }
       )

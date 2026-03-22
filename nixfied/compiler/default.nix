@@ -58,6 +58,13 @@ let
       ;
   };
 
+  compileIntrospectionGraph = import ./compile-introspection-graph.nix {
+    inherit
+      lib
+      canonical
+      ;
+  };
+
   compileViews = import ./compile-views.nix { inherit lib; };
   compileSelectionIndex = import ./compile-selection-index.nix { inherit lib; };
 
@@ -140,6 +147,23 @@ rec {
         services = serviceCatalog;
       };
 
+      introspectionGraph = compileIntrospectionGraph {
+        inherit
+          projectRoot
+          runtime
+          apps
+          tasks
+          workflows
+          serviceCatalog
+          serviceSurfaceCatalog
+          features
+          selectionIndex
+          ;
+        resolved = resolvedModuleGraph.config;
+        localOverridesActive = localOverrides != [ ];
+        localOverrideCount = builtins.length localOverrides;
+      };
+
       views = compileViews {
         inherit projectRoot;
         resolved = resolvedModuleGraph.config;
@@ -174,6 +198,7 @@ rec {
       tasks = tasks;
       workflows = workflows;
       apps = apps;
+      introspectionGraph = introspectionGraph;
       views = views;
       runtime = runtime;
       serviceCatalog = serviceCatalog;

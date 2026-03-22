@@ -24,7 +24,9 @@ let
   );
 in
 assert builtins.hasAttr "nix-checks" packages;
+assert builtins.hasAttr "introspectionGraph" packages;
 assert builtins.hasAttr "help" apps;
+assert builtins.hasAttr "introspect" apps;
 assert builtins.hasAttr "docs" apps;
 assert builtins.hasAttr "features" apps;
 assert builtins.hasAttr "run-task" apps;
@@ -34,7 +36,7 @@ assert builtins.hasAttr "runs" apps;
 assert builtins.hasAttr "stop-run" apps;
 assert builtins.hasAttr "stop-all-runs" apps;
 assert !(builtins.hasAttr "registry::replay" apps);
-assert builtins.any (appName: pkgs.lib.hasPrefix "task::" appName) (builtins.attrNames apps);
+assert !(builtins.any (appName: pkgs.lib.hasPrefix "task::" appName) (builtins.attrNames apps));
 assert if enabledServiceNames == [ ] then !hasServiceApps else hasServiceApps;
 pkgs.runCommand "package-output-contract" { } ''
   set -euo pipefail

@@ -95,12 +95,6 @@ let
         "FAKE_NIL_LOG"
       ];
     };
-    ui = baseTask.ui // {
-      app = baseTask.ui.app // {
-        expose = false;
-        name = "test-nix-checks-parent-workflow-skip";
-      };
-    };
   };
 
   probeUnit = {

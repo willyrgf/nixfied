@@ -23,12 +23,6 @@ let
       package = null;
       workflowId = null;
     };
-    ui = baseTask.ui // {
-      app = baseTask.ui.app // {
-        expose = false;
-        name = "test-caller-pwd-remote-projectroot";
-      };
-    };
   };
 
   probeModel = model // {

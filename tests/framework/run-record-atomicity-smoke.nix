@@ -38,12 +38,6 @@ let
         "ATOMICITY_GATE_DIR"
       ];
     };
-    ui = baseTask.ui // {
-      app = baseTask.ui.app // {
-        expose = false;
-        name = "test-run-record-atomicity";
-      };
-    };
   };
 
   probeModel = model // {

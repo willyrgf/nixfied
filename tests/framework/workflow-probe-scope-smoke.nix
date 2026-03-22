@@ -83,7 +83,6 @@ let
               set -euo pipefail
               echo "MARKER: workflow unit"
             '';
-            ui.app.expose = false;
           };
 
           nixfied.workflows."test.workflow.probe-scope" = {

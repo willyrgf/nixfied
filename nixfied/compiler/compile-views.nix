@@ -79,6 +79,11 @@ let
 
   introspectionCommands = [
     {
+      name = "introspect";
+      summary = "Query compiled apps, tasks, workflows, services, and packages";
+      owner_file = "nixfied/framework/core/mkCoreSurfaces.nix";
+    }
+    {
       name = "docs";
       summary = "Render detailed model documentation";
       owner_file = "nixfied/framework/runtime/dispatcher.nix";
@@ -89,28 +94,13 @@ let
       owner_file = "nixfied/framework/runtime/dispatcher.nix";
     }
     {
-      name = "model";
-      summary = "Print canonical compiled model";
-      owner_file = "nixfied/framework/core/mkNixfied.nix";
-    }
-    {
       name = "schema";
       summary = "Print bundled export schemas";
       owner_file = "nixfied/framework/core/mkNixfied.nix";
     }
     {
-      name = "services";
-      summary = "List compiled services";
-      owner_file = "nixfied/framework/core/mkNixfied.nix";
-    }
-    {
       name = "stateHash";
       summary = "Print canonical model hash";
-      owner_file = "nixfied/framework/core/mkNixfied.nix";
-    }
-    {
-      name = "tasks";
-      summary = "List compiled tasks";
       owner_file = "nixfied/framework/core/mkNixfied.nix";
     }
   ];

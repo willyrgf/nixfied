@@ -68,6 +68,7 @@ in
   serviceCatalog = compiledCore.model.serviceCatalog;
   workflows = compiledCore.model.workflows;
   features = compiledCore.model.features;
+  introspectionGraph = compiledCore.introspectionGraph;
   selectionIndex = compiledCore.selectionIndex;
   serviceSurfaceCatalog = compiledCore.serviceSurfaceCatalog;
   serviceApis = execution.serviceApis;

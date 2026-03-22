@@ -33,7 +33,6 @@ let
               done
               printf '%s\n' "OK: collision probe released"
             '';
-            ui.app.expose = false;
           };
 
           nixfied.workflows."test.run-id.active-collision" = {

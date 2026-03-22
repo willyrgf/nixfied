@@ -176,14 +176,9 @@ Exposed core apps:
 
 Introspection apps:
 
-- `model`
+- `introspect`
 - `stateHash`
-- `tasks`
-- `services`
-- `task::<id>`
 - `schema`
-
-The `services` introspection app renders `model.serviceCatalog`, not heavy runtime internals.
 
 ## Workflow Shape
 

@@ -94,7 +94,7 @@ Generated from `docs/repo-index.json`.
 - `stop-run -- <run-id>` from `nixfied/framework/runtime/dispatcher.nix`
 - `stop-all-runs` from `nixfied/framework/runtime/dispatcher.nix`
 - `features` from `nixfied/framework/runtime/dispatcher.nix`
-- `model`, `stateHash`, `tasks`, `services`, `task::<id>`, `schema` from `nixfied/framework/core/mkNixfied.nix`
+- `introspect`, `stateHash`, `schema` from `nixfied/framework/core/mkNixfied.nix`
 
 ## Sensitive Zones
 - `nixfied/framework` - Framework-owned presets, runtime, and install internals; avoid direct edits in installed repos. (checks: nix run .#help)

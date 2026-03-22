@@ -75,10 +75,6 @@ let
 
           echo "OK: ambient service hooks removed"
         '';
-        ui.app = {
-          expose = false;
-          name = "test-service-hooks-none";
-        };
       };
 
       nixfied.tasks."test.service-hooks.postgres" = {
@@ -107,10 +103,6 @@ let
 
           echo "OK: scoped postgres hook present"
         '';
-        ui.app = {
-          expose = false;
-          name = "test-service-hooks-postgres";
-        };
       };
 
       nixfied.tasks."test.service-hooks.both" = {
@@ -146,10 +138,6 @@ let
 
           echo "OK: scoped postgres and nginx hooks present"
         '';
-        ui.app = {
-          expose = false;
-          name = "test-service-hooks-both";
-        };
       };
 
       nixfied.tasks."test.service-hooks.dep-closure" = {
@@ -178,10 +166,6 @@ let
 
           echo "OK: dependency closure hook present"
         '';
-        ui.app = {
-          expose = false;
-          name = "test-service-hooks-dep-closure";
-        };
       };
     };
 

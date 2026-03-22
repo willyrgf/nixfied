@@ -52,12 +52,6 @@ let
           package = null;
           workflowId = null;
         };
-        ui = baseTask.ui // {
-          app = baseTask.ui.app // {
-            expose = false;
-            name = "test-ephemeral-nix-source";
-          };
-        };
       };
     };
     workflows = model.workflows // {

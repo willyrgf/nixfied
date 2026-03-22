@@ -29,12 +29,6 @@ let
         preHooks = { };
         postHooks = { };
       };
-      ui = baseTask.ui // {
-        app = baseTask.ui.app // {
-          expose = false;
-          name = builtins.replaceStrings [ "." ] [ "-" ] id;
-        };
-      };
     };
 
   mkWorkflow =

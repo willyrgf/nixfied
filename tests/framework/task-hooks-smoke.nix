@@ -31,12 +31,6 @@ let
         preHooks = preHooks;
         postHooks = postHooks;
       };
-      ui = baseTask.ui // {
-        app = baseTask.ui.app // {
-          expose = false;
-          name = builtins.replaceStrings [ "." ] [ "-" ] id;
-        };
-      };
     };
 
   hooksModel = model // {
@@ -150,12 +144,6 @@ let
             };
           };
           postHooks = { };
-        };
-        ui = baseTask.ui // {
-          app = baseTask.ui.app // {
-            expose = false;
-            name = "task-test-hooks-unsupported-runner";
-          };
         };
       };
     };

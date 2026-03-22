@@ -130,7 +130,7 @@ let
 in
 assert frameworkTask != null;
 assert frameworkTask.runner.type == "shell";
-assert frameworkTask.ui.app.name == "framework::test";
+assert model.apps."framework::test".taskId == frameworkTask.id;
 assert formatTask != null;
 assert checkTask != null;
 assert testTask != null;
@@ -199,7 +199,7 @@ assert hasCommandSurface "dev" "nixfied/project/tasks.nix";
 assert hasCommandSurface "validate-env" "nixfied/modules/operations.nix";
 assert hasCommandSurface "framework::test" "nixfied/framework/presets/framework-test.nix";
 assert hasCommandSurface "features" "nixfied/framework/runtime/dispatcher.nix";
-assert hasCommandSurface "model" "nixfied/framework/core/mkNixfied.nix";
+assert hasCommandSurface "introspect" "nixfied/framework/core/mkCoreSurfaces.nix";
 assert tasksHaveStableIds;
 assert tasksHaveServiceRequirements;
 assert workflowsReferenceKnownTasks;

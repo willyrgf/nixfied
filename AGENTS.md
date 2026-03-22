@@ -6,7 +6,7 @@
 - Prefer boring, explicit, idempotent behavior; fail fast on invalid config and avoid partial side effects.
 - Keep state isolated to project/ephemeral roots; do not leak secrets in logs.
 - Define project-owned tasks/workflows in `nixfied/project/{tasks,workflows}.nix`; `nixfied/project/module.nix` composes the project layer and framework presets.
-- Keep exposed app names lowercase via `nixfied.tasks.<id>.ui.app.name`.
+- Keep exposed app names lowercase via `nixfied.apps.<name>.name`.
 - When users name a skill (or task clearly matches one), open its `SKILL.md` and follow it for that turn.
 
 ## Project Layout
@@ -32,7 +32,7 @@
 - `nix run .#test-isolation`: slot/env isolation runner.
 - `nix run .#validate-env`: validate ports/dirs for current slot/env.
 - `nix run .#ports`, `nix run .#check-ports`: model-derived port utilities.
-- `nix run .#model`, `nix run .#stateHash`, `nix run .#tasks`, `nix run .#task::<id>`, `nix run .#schema`: introspection surfaces.
+- `nix run .#introspect -- <query>`, `nix run .#stateHash`, `nix run .#schema`: introspection surfaces.
 - `nix run .#run-task -- <task-id>` and `nix run .#run-workflow -- <workflow-id>`: dispatcher surfaces.
 - `NIX_ENV` defaults to slot `0`; `PROJECT_ENV` defaults to `dev` unless overridden.
 - Framework-only commands (require a workspace marker; canonical path is repo-root `.workspace`): `framework::test`, `framework::install`.
@@ -48,7 +48,7 @@
 ## Configuration
 - Main project config: `nixfied/project/conf.nix`.
 - Task/workflow and app behavior: `nixfied/project/{tasks,workflows}.nix`, composed via `nixfied/project/module.nix`, plus framework-owned presets under `nixfied/framework/presets/`.
-- If exposing a new app, set `ui.app.expose = true` and keep `tests/framework/snapshots/help.txt` current.
+- If exposing a new app, define it under `nixfied.apps` and keep `tests/framework/snapshots/help.txt` current.
 
 ## Skills
 Skills are local instruction sets in `SKILL.md` files.

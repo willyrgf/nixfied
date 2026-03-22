@@ -31,12 +31,6 @@ let
         postHooks = { };
         passThroughEnv = (baseTask.runtime.passThroughEnv or [ ]) ++ extraPassThroughEnv;
       };
-      ui = baseTask.ui // {
-        app = baseTask.ui.app // {
-          expose = false;
-          name = builtins.replaceStrings [ "." ] [ "-" ] id;
-        };
-      };
     };
 
   stopWorkflow = {

@@ -46,12 +46,6 @@ let
         passThroughEnv = (baseTask.runtime.passThroughEnv or [ ]) ++ [ "EPHEMERAL_HOST_ENV_SECRET" ];
         allowSensitivePassThrough = true;
       };
-      ui = baseTask.ui // {
-        app = baseTask.ui.app // {
-          expose = false;
-          name = appName;
-        };
-      };
     };
 
   mkProbeWorkflow =

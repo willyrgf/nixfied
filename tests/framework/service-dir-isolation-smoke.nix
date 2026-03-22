@@ -39,12 +39,6 @@ let
     requirements = {
       services = [ ];
     };
-    ui = baseTask.ui // {
-      app = baseTask.ui.app // {
-        expose = false;
-        name = "test-service-dir-none";
-      };
-    };
   };
 
   probeTask = baseTask // {
@@ -93,12 +87,6 @@ let
         "postgres"
         "nginx"
       ];
-    };
-    ui = baseTask.ui // {
-      app = baseTask.ui.app // {
-        expose = false;
-        name = "test-service-dir-probe";
-      };
     };
   };
 

@@ -19,13 +19,11 @@ Core apps:
   validate-env - Validate slot/env settings
 
 Introspection:
+  introspect - Query compiled apps, tasks, workflows, services, and packages
   docs - Render detailed model documentation
   features - List compiled feature inventory
-  model - Print canonical compiled model
   schema - Print bundled export schemas
-  services - List compiled services
   stateHash - Print canonical model hash
-  tasks - List compiled tasks
 
 Dispatcher:
   run-task <task-id> [-- ...]

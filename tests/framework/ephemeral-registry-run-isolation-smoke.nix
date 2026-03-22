@@ -38,12 +38,6 @@ let
     runtime = baseTask.runtime // {
       passThroughEnv = (baseTask.runtime.passThroughEnv or [ ]) ++ [ "NIXFIED_EPHEMERAL_GATE_DIR" ];
     };
-    ui = baseTask.ui // {
-      app = baseTask.ui.app // {
-        expose = false;
-        name = "test-ephemeral-registry-isolation";
-      };
-    };
   };
 
   probeUnit = {

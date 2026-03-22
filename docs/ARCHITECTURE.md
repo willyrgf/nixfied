@@ -115,14 +115,9 @@ Core model-generated apps:
 
 Introspection apps:
 
-- `model`
+- `introspect`
 - `stateHash`
-- `tasks`
-- `services`
-- `task::<id>`
 - `schema`
-
-The `services` introspection surface is backed by `model.serviceCatalog`, not the heavy runtime materialization.
 
 ## Project Layout
 

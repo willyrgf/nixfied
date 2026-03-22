@@ -32,7 +32,6 @@ let
                 set -euo pipefail
                 printf '%s\n' "OK: run id semantic probe input=''${RUN_ID_INPUT:-unset} args=$*"
               '';
-              ui.app.expose = false;
             };
 
             nixfied.workflows."test.run-id.semantic" = {

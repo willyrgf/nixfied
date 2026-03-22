@@ -4,10 +4,10 @@ let
   workflowReuse = builtins.readFile ./WORKFLOW_REUSE.md;
   serviceLifecycle = builtins.readFile ./SERVICE_LIFECYCLE_API.md;
   docsText = builtins.concatStringsSep "\n" model.views.docs.lines;
-  readyTask = model.tasks."task.ops.ready";
-  healthTask = model.tasks."task.ops.health";
-  readyExamples = readyTask.ui.app.examples or [ ];
-  healthExamples = healthTask.ui.app.examples or [ ];
+  readyApp = model.apps.ready;
+  healthApp = model.apps.health;
+  readyExamples = readyApp.examples or [ ];
+  healthExamples = healthApp.examples or [ ];
   hasExample = examples: needle: builtins.elem needle examples;
 in
 assert pkgs.lib.hasInfix "## Reuse Guides" readme;
