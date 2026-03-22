@@ -124,6 +124,26 @@ let
   );
 
   taskIds = launcherMetadata.taskIds;
+  appModels = compiledCore.model.apps or { };
+
+  taskAppIds =
+    taskId:
+    builtins.sort builtins.lessThan (
+      builtins.filter (
+        appId:
+        let
+          app = appModels.${appId};
+        in
+        (app.kind or "") == "taskRef" && (app.taskId or "") == taskId
+      ) (builtins.attrNames appModels)
+    );
+
+  preferredTaskApp =
+    taskId:
+    let
+      appIds = taskAppIds taskId;
+    in
+    if appIds == [ ] then null else appModels.${builtins.head appIds};
 
   normalizeTaskArgSpec =
     spec:
@@ -172,21 +192,22 @@ let
     taskId:
     let
       task = compiledCore.model.tasks.${taskId};
-      app = task.ui.app or { };
+      app = preferredTaskApp taskId;
       argsContract = (((task.contract or { }).input or { }).args or { });
       specs = map normalizeTaskArgSpec (argsContract.spec or [ ]);
-      displayName = if (app.expose or false) && (app.name or "") != "" then app.name else taskId;
+      displayName = if app == null then taskId else app.id or taskId;
       usageLines =
         let
-          configuredUsage = app.usage or [ ];
+          configuredUsage = if app == null then [ ] else app.usage or [ ];
         in
         if configuredUsage != [ ] then configuredUsage else [ "nix run .#run-task -- ${taskId} [-- ...]" ];
-      exampleLines = app.examples or [ ];
+      exampleLines = if app == null then [ ] else app.examples or [ ];
       optionLines = map formatTaskArgHelpLine specs ++ [
         "  -h, --help: Show this help."
       ];
-      summary = task.summary or "";
-      description = task.description or "";
+      summary = if app == null then task.summary or "" else app.summary or task.summary or "";
+      description =
+        if app == null then task.description or "" else app.description or task.description or "";
     in
     builtins.concatStringsSep "\n" (
       [ "${displayName} - ${summary}" ]

@@ -215,14 +215,11 @@ let
   mkCommandTask =
     {
       id,
-      appName,
       summary,
       description ? "",
       command ? "",
       kind ? "command",
       tags ? [ ],
-      usage ? [ ],
-      examples ? [ ],
       runtimeInputs ? commonRuntimeInputs,
       preHooks ? { },
       postHooks ? { },
@@ -337,20 +334,37 @@ let
         artifacts = [ ];
         stateKeys = [ ];
       };
+    };
 
-      ui.app = {
-        expose = true;
-        name = appName;
-        category = "core";
-        usage = usage;
-        examples = examples;
-        ownerFile = ownerFile;
-      };
+  mkTaskApp =
+    {
+      taskId,
+      appId,
+      summary ? "",
+      description ? "",
+      usage ? [ "nix run .#${appId}" ],
+      examples ? [ ],
+      category ? "core",
+      ownerFile ? "nixfied/project/tasks.nix",
+    }:
+    {
+      id = appId;
+      kind = "taskRef";
+      taskId = taskId;
+      inherit
+        summary
+        description
+        usage
+        examples
+        category
+        ownerFile
+        ;
     };
 
   frameworkInstallPreset = import ../framework/presets/install.nix {
     inherit
       mkCommandTask
+      mkTaskApp
       pkgs
       frameworkSourceRevision
       ;
@@ -362,6 +376,7 @@ let
       pkgs
       conf
       mkCommandTask
+      mkTaskApp
       ;
   };
 
@@ -398,6 +413,7 @@ let
     inherit
       lib
       mkCommandTask
+      mkTaskApp
       commonRuntimeInputs
       nixChecksPkg
       nixChecksContractArgs

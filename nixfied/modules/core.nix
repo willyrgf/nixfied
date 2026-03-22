@@ -5,6 +5,7 @@ let
 in
 {
   imports = [
+    ./apps.nix
     ./runtime.nix
     ./tasks.nix
     ./workflows.nix

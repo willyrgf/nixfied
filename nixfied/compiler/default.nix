@@ -51,6 +51,13 @@ let
       ;
   };
 
+  compileApps = import ./compile-apps.nix {
+    inherit
+      lib
+      canonical
+      ;
+  };
+
   compileViews = import ./compile-views.nix { inherit lib; };
   compileSelectionIndex = import ./compile-selection-index.nix { inherit lib; };
 
@@ -109,6 +116,11 @@ rec {
         pruneReasonsByTaskId = taskCompilation.pruneReasonsByTaskId;
       };
 
+      apps = compileApps {
+        resolved = resolvedModuleGraph.config;
+        inherit tasks;
+      };
+
       selectionIndex = compileSelectionIndex {
         inherit
           tasks
@@ -121,6 +133,7 @@ rec {
         inherit
           projectRoot
           runtime
+          apps
           tasks
           workflows
           ;
@@ -133,6 +146,7 @@ rec {
         inherit
           features
           runtime
+          apps
           tasks
           workflows
           ;
@@ -145,6 +159,7 @@ rec {
           projectRoot
           runtime
           serviceCatalog
+          apps
           tasks
           workflows
           features
@@ -158,6 +173,7 @@ rec {
       resolved = resolvedModuleGraph.config;
       tasks = tasks;
       workflows = workflows;
+      apps = apps;
       views = views;
       runtime = runtime;
       serviceCatalog = serviceCatalog;

@@ -1,4 +1,5 @@
 {
+  apps = import ./apps.nix;
   core = import ./core.nix;
   runtime = import ./runtime.nix;
   tasks = import ./tasks.nix;
