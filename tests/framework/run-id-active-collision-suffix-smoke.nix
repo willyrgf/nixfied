@@ -109,7 +109,7 @@ pkgs.runCommand "run-id-active-collision-suffix-smoke" { } ''
   wait_for_run_state "$ORCH" "$run_one" "running" 30
   run_one_record="$REGISTRY_ROOT/orchestrator/runs/$run_one.json"
   require_file "$run_one_record"
-  attempt_one="$(${pkgs.jq}/bin/jq -r '.attempt_id' "$run_one_record")"
+  attempt_one="$(${pkgs.jq}/bin/jq -r '.payload.attempt_id' "$run_one_record")"
   require_non_empty "$attempt_one" "attempt_one"
 
   "$ORCH" run-workflow "${workflowId}" \
@@ -137,7 +137,7 @@ pkgs.runCommand "run-id-active-collision-suffix-smoke" { } ''
   run_two_record="$REGISTRY_ROOT/orchestrator/runs/$run_two.json"
   wait_for_condition 30 "second run record" wait_for_file "$run_two_record"
   require_file "$run_two_record"
-  attempt_two="$(${pkgs.jq}/bin/jq -r '.attempt_id' "$run_two_record")"
+  attempt_two="$(${pkgs.jq}/bin/jq -r '.payload.attempt_id' "$run_two_record")"
   require_non_empty "$attempt_two" "attempt_two"
 
   if [ "$attempt_one" = "$attempt_two" ]; then
@@ -153,11 +153,11 @@ pkgs.runCommand "run-id-active-collision-suffix-smoke" { } ''
   require_file "$TMPDIR/run-2.summary.json"
 
   ${pkgs.jq}/bin/jq -e --arg runId "$run_one" --arg attemptId "$attempt_one" '
-    .run_id == $runId and .attempt_id == $attemptId
+    .payload.run_id == $runId and .payload.attempt_id == $attemptId
   ' "$TMPDIR/run-1.summary.json" > /dev/null
 
   ${pkgs.jq}/bin/jq -e --arg runId "$run_two" --arg attemptId "$attempt_two" '
-    .run_id == $runId and .attempt_id == $attemptId
+    .payload.run_id == $runId and .payload.attempt_id == $attemptId
   ' "$TMPDIR/run-2.summary.json" > /dev/null
 
   run_one_artifacts="$(find "$CI_ARTIFACTS_ROOT" -type f -path "*/$run_one/$attempt_one/summary.json" | head -n 1 || true)"

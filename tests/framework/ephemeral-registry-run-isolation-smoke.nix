@@ -198,8 +198,8 @@ pkgs.runCommand "ephemeral-registry-run-isolation-smoke" { } ''
     require_file "$summary_file"
     require_file "$registry_file"
 
-    unique_run_count="$(${pkgs.jq}/bin/jq -r '.runId' "$events_file" | ${pkgs.coreutils}/bin/sort -u | ${pkgs.coreutils}/bin/wc -l | ${pkgs.coreutils}/bin/tr -d '[:space:]')"
-    only_run_id="$(${pkgs.jq}/bin/jq -r '.runId' "$events_file" | ${pkgs.coreutils}/bin/sort -u | ${pkgs.coreutils}/bin/head -n 1)"
+    unique_run_count="$(${pkgs.jq}/bin/jq -r '.payload.runId' "$events_file" | ${pkgs.coreutils}/bin/sort -u | ${pkgs.coreutils}/bin/wc -l | ${pkgs.coreutils}/bin/tr -d '[:space:]')"
+    only_run_id="$(${pkgs.jq}/bin/jq -r '.payload.runId' "$events_file" | ${pkgs.coreutils}/bin/sort -u | ${pkgs.coreutils}/bin/head -n 1)"
     if [ "$unique_run_count" != "1" ] || [ -z "$only_run_id" ]; then
       fail "expected preserved events to contain exactly one run id for $root"
     fi
@@ -221,7 +221,7 @@ pkgs.runCommand "ephemeral-registry-run-isolation-smoke" { } ''
       fail "registry root artifact did not match the original run-local registry for $only_run_id"
     fi
 
-    ${pkgs.jq}/bin/jq -e --arg run "$only_run_id" '.run_id == $run' "$summary_file" > /dev/null
+    ${pkgs.jq}/bin/jq -e --arg run "$only_run_id" '.payload.run_id == $run' "$summary_file" > /dev/null
     printf '%s' "$only_run_id"
   }
 

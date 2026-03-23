@@ -75,22 +75,22 @@ let
     if [ -n "$SUMMARY_JSON" ] && command -v ${pkgs.jq}/bin/jq >/dev/null 2>&1; then
       echo "Source: $SUMMARY_JSON"
       ${pkgs.jq}/bin/jq -r '
-        if .steps then
-          .steps[] | "  [\(if .status == "passed" then "PASS" elif .status == "skipped" then "SKIP" elif .status == "failed" then "FAIL" elif .status == "canceled" then "FAIL" else "FAIL" end)] \(.name) (\(.duration // "?")s)"
+        if .payload.steps then
+          .payload.steps[] | "  [\(if .status == "passed" then "PASS" elif .status == "skipped" then "SKIP" elif .status == "failed" then "FAIL" elif .status == "canceled" then "FAIL" else "FAIL" end)] \(.name) (\(.duration // "?")s)"
         else
           empty
         end
       ' "$SUMMARY_JSON" 2>/dev/null || true
 
       TIMING_FIELDS=$(${pkgs.jq}/bin/jq -r '
-        if (.timing and (.timing | type == "object")) then
+        if (.payload.timing and (.payload.timing | type == "object")) then
           [
-            (.timing.total_duration // ""),
-            (.timing.setup_duration // ""),
-            (.timing.steps_duration // ""),
-            (.timing.teardown_duration // ""),
-            (.timing.accounted_duration // ""),
-            (.timing.untracked_duration // "")
+            (.payload.timing.total_duration // ""),
+            (.payload.timing.setup_duration // ""),
+            (.payload.timing.steps_duration // ""),
+            (.payload.timing.teardown_duration // ""),
+            (.payload.timing.accounted_duration // ""),
+            (.payload.timing.untracked_duration // "")
           ] | @tsv
         else
           ""
@@ -104,11 +104,11 @@ let
       fi
 
       PAR_FIELDS=$(${pkgs.jq}/bin/jq -r '
-        if (.timing.parallelism and (.timing.parallelism | type == "object")) then
+        if (.payload.timing.parallelism and (.payload.timing.parallelism | type == "object")) then
           [
-            (.timing.parallelism.max_workers // ""),
-            (.timing.parallelism.peak_workers // ""),
-            (.timing.parallelism.canceled_count // "")
+            (.payload.timing.parallelism.max_workers // ""),
+            (.payload.timing.parallelism.peak_workers // ""),
+            (.payload.timing.parallelism.canceled_count // "")
           ] | @tsv
         else
           ""
@@ -137,7 +137,7 @@ let
 
     SKIPPED_COUNT=""
     if [ -n "$SUMMARY_JSON" ] && command -v ${pkgs.jq}/bin/jq >/dev/null 2>&1; then
-      SKIPPED_COUNT="$(${pkgs.jq}/bin/jq -r '.counts.skipped // ""' "$SUMMARY_JSON" 2>/dev/null || true)"
+      SKIPPED_COUNT="$(${pkgs.jq}/bin/jq -r '.payload.counts.skipped // ""' "$SUMMARY_JSON" 2>/dev/null || true)"
     fi
     if _is_nonneg_int "$SKIPPED_COUNT" && [ "$SKIPPED_COUNT" -gt 0 ]; then
       log_info "SKIP: $SKIPPED_COUNT task(s) skipped"

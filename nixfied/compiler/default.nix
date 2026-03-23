@@ -94,6 +94,9 @@ let
       contracts
       ;
   };
+  frameworkContractDefinitions = import ../framework/contracts/default-definitions.nix {
+    contracts = contracts.types;
+  };
 
   finalizeModel = import ./finalize-model.nix {
     inherit
@@ -205,6 +208,7 @@ rec {
 
       contractBundle = compileContractBundle {
         resolved = resolvedModuleGraph.config;
+        frameworkDefinitions = frameworkContractDefinitions;
       };
 
       apps = compileApps {

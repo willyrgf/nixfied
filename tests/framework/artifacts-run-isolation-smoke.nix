@@ -75,8 +75,8 @@ pkgs.runCommand "artifacts-run-isolation-smoke" { } ''
 
   require_file "$summary_1"
   require_file "$summary_2"
-  attempt_1="$(${pkgs.jq}/bin/jq -r '.attempt_id' "$summary_1")"
-  attempt_2="$(${pkgs.jq}/bin/jq -r '.attempt_id' "$summary_2")"
+  attempt_1="$(${pkgs.jq}/bin/jq -r '.payload.attempt_id' "$summary_1")"
+  attempt_2="$(${pkgs.jq}/bin/jq -r '.payload.attempt_id' "$summary_2")"
   require_non_empty "$attempt_1" "attempt_1"
   require_non_empty "$attempt_2" "attempt_2"
 
@@ -94,8 +94,8 @@ pkgs.runCommand "artifacts-run-isolation-smoke" { } ''
       ;;
   esac
 
-  ${pkgs.jq}/bin/jq -e --arg run "$run_1" '.run_id == $run' "$summary_1" > /dev/null
-  ${pkgs.jq}/bin/jq -e --arg run "$run_2" '.run_id == $run' "$summary_2" > /dev/null
+  ${pkgs.jq}/bin/jq -e --arg run "$run_1" '.payload.run_id == $run' "$summary_1" > /dev/null
+  ${pkgs.jq}/bin/jq -e --arg run "$run_2" '.payload.run_id == $run' "$summary_2" > /dev/null
 
   echo "OK: workflow artifacts are isolated per run and attempt" > "$out"
 ''

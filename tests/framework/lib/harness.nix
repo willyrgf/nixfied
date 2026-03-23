@@ -78,7 +78,7 @@ in
       local expected_state="$3"
       local state
 
-      state="$("$orch" runs "$run_id" | ${pkgs.jq}/bin/jq -r '.state' 2>/dev/null || true)"
+      state="$("$orch" runs "$run_id" | ${pkgs.jq}/bin/jq -r '.payload.state' 2>/dev/null || true)"
       [ "$state" = "$expected_state" ]
     }
 
@@ -88,7 +88,7 @@ in
       local blocked_state="$3"
       local state
 
-      state="$("$orch" runs "$run_id" | ${pkgs.jq}/bin/jq -r '.state' 2>/dev/null || true)"
+      state="$("$orch" runs "$run_id" | ${pkgs.jq}/bin/jq -r '.payload.state' 2>/dev/null || true)"
       [ -n "$state" ] && [ "$state" != "$blocked_state" ]
     }
   '';

@@ -36,7 +36,7 @@ pkgs.runCommand "parallel-worker-cap-smoke" { } ''
   "$EXECUTOR" run-workflow workflow.test.parallel.smoke --run-id-file "$run_id_file" --summary > "$TMPDIR/out.log" 2>&1
   run_id="$(${pkgs.coreutils}/bin/tr -d '\n' < "$run_id_file")"
   if [ -z "$run_id" ] && [ -f "$REGISTRY_ROOT/events.ndjson" ]; then
-    run_id="$(${pkgs.jq}/bin/jq -r 'select(.workflowId == "workflow.test.parallel.smoke" and (.taskId // "") == "") | .runId' "$REGISTRY_ROOT/events.ndjson" | ${pkgs.coreutils}/bin/tail -n 1)"
+    run_id="$(${pkgs.jq}/bin/jq -r 'select((.payload.workflowId // "") == "workflow.test.parallel.smoke" and (.payload.taskId // "") == "") | .payload.runId' "$REGISTRY_ROOT/events.ndjson" | ${pkgs.coreutils}/bin/tail -n 1)"
   fi
   if [ -z "$run_id" ]; then
     echo "missing run id"
@@ -48,13 +48,13 @@ pkgs.runCommand "parallel-worker-cap-smoke" { } ''
   fi
 
   max_running="$(${pkgs.jq}/bin/jq -s -r --arg runId "$run_id" '
-    map(select(.runId == $runId and (.taskId // "") != ""))
-    | sort_by(.seq)
+    map(select((.payload.runId // "") == $runId and (.payload.taskId // "") != ""))
+    | sort_by((.payload.seq // 0))
     | reduce .[] as $event ({running: 0, max: 0};
-      if $event.state == "running" then
+      if ($event.payload.state // "") == "running" then
         .running += 1 |
         .max = (if .running > .max then .running else .max end)
-      elif ($event.state == "passed" or $event.state == "failed" or $event.state == "canceled") then
+      elif (($event.payload.state // "") == "passed" or ($event.payload.state // "") == "failed" or ($event.payload.state // "") == "canceled") then
         .running = (if .running > 0 then .running - 1 else 0 end)
       else
         .

@@ -158,6 +158,14 @@ let
       ;
   };
   executorRuntimeShell = import ./executor-runtime.nix { inherit pkgs; };
+  runtimeArtifactContracts = import ../contracts/runtime-artifact-contracts.nix { inherit pkgs; };
+  summaryValidator = import ../contracts/mkValidator.nix {
+    inherit
+      pkgs
+      ;
+    contractBundle = runtimeArtifactContracts;
+    contractRef = "runtime.summary";
+  };
 in
 pkgs.writeShellScriptBin "nixfied-executor" ''
     set -euo pipefail
@@ -1773,54 +1781,54 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       ${pkgs.jq}/bin/jq -r -s --arg runId "$run_id" --arg attemptId "$attempt_id" '
         map(
           select(
-            .runId == $runId
-            and ($attemptId == "" or (.attemptId // "") == $attemptId)
-            and (.taskId // "") != ""
+            (.payload.runId // "") == $runId
+            and ($attemptId == "" or ((.payload.attemptId // "") == $attemptId))
+            and (.payload.taskId // "") != ""
             and (
-              .state == "queued"
-              or .state == "running"
-              or .state == "passed"
-              or .state == "failed"
-              or .state == "canceled"
+              (.payload.state // "") == "queued"
+              or (.payload.state // "") == "running"
+              or (.payload.state // "") == "passed"
+              or (.payload.state // "") == "failed"
+              or (.payload.state // "") == "canceled"
             )
           )
         )
-        | sort_by(.seq)
+        | sort_by((.payload.seq // 0))
         | reduce .[] as $event (
             { active: {}, rows: [] };
-            (((($event.workflowId // "") + "\u001f" + $event.taskId)) as $key
-            | if ($event.state == "queued" or $event.state == "running") then
+            (((($event.payload.workflowId // "") + "\u001f" + $event.payload.taskId)) as $key
+            | if (($event.payload.state // "") == "queued" or ($event.payload.state // "") == "running") then
                 .active[$key] = (
                   (.active[$key] // {
-                    task_id: $event.taskId,
-                    workflow_id: ($event.workflowId // ""),
-                    order_seq: $event.seq,
+                    task_id: $event.payload.taskId,
+                    workflow_id: ($event.payload.workflowId // ""),
+                    order_seq: ($event.payload.seq // 0),
                     running_ts: null
                   })
-                  | .order_seq = (if .order_seq > $event.seq then $event.seq else .order_seq end)
-                  | if $event.state == "running" then .running_ts = $event.ts else . end
+                  | .order_seq = (if .order_seq > ($event.payload.seq // 0) then ($event.payload.seq // 0) else .order_seq end)
+                  | if ($event.payload.state // "") == "running" then .running_ts = $event.payload.ts else . end
                 )
-              elif ($event.state == "passed" or $event.state == "failed" or $event.state == "canceled") then
+              elif (($event.payload.state // "") == "passed" or ($event.payload.state // "") == "failed" or ($event.payload.state // "") == "canceled") then
                 (.active[$key] // {
-                  task_id: $event.taskId,
-                  workflow_id: ($event.workflowId // ""),
-                  order_seq: $event.seq,
+                  task_id: $event.payload.taskId,
+                  workflow_id: ($event.payload.workflowId // ""),
+                  order_seq: ($event.payload.seq // 0),
                   running_ts: null
                 }) as $entry
                 | .rows += [
                     {
                       task_id: $entry.task_id,
-                      workflow_id: (if $entry.workflow_id == "" then ($event.workflowId // "") else $entry.workflow_id end),
+                      workflow_id: (if $entry.workflow_id == "" then ($event.payload.workflowId // "") else $entry.workflow_id end),
                       order_seq: $entry.order_seq,
-                      state: $event.state,
-                      reason: ($event.detail.reason // ""),
-                      exit_code: ($event.detail.exitCode // ""),
+                      state: $event.payload.state,
+                      reason: ($event.payload.detail.reason // ""),
+                      exit_code: ($event.payload.detail.exitCode // ""),
                       duration_seconds: (
                         if ($entry.running_ts != null)
                           and ($entry.running_ts | type == "string")
-                          and ($event.ts | type == "string")
+                          and (($event.payload.ts // null) | type == "string")
                         then
-                          (((($event.ts | fromdateiso8601) - ($entry.running_ts | fromdateiso8601)) | floor) | if . < 0 then 0 else . end)
+                          ((((($event.payload.ts | fromdateiso8601) - ($entry.running_ts | fromdateiso8601)) | floor)) | if . < 0 then 0 else . end)
                         else
                           0
                         end
@@ -1951,22 +1959,22 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       ${pkgs.jq}/bin/jq -r -s --arg runId "$run_id" --arg attemptId "$attempt_id" --argjson taskIds "$leaf_task_ids_json" '
         map(
           select(
-            .runId == $runId
-            and ($attemptId == "" or (.attemptId // "") == $attemptId)
-            and (.taskId // "") != ""
-            and ((.taskId as $id | ($taskIds | index($id)) != null))
+            (.payload.runId // "") == $runId
+            and ($attemptId == "" or ((.payload.attemptId // "") == $attemptId))
+            and (.payload.taskId // "") != ""
+            and ((.payload.taskId as $id | ($taskIds | index($id)) != null))
             and (
-              .state == "running"
-              or .state == "passed"
-              or .state == "failed"
-              or .state == "canceled"
+              (.payload.state // "") == "running"
+              or (.payload.state // "") == "passed"
+              or (.payload.state // "") == "failed"
+              or (.payload.state // "") == "canceled"
             )
           )
         )
-        | sort_by(.seq)
+        | sort_by((.payload.seq // 0))
         | reduce .[] as $event (
             { running: 0, max: 0 };
-            if $event.state == "running" then
+            if ($event.payload.state // "") == "running" then
               .running += 1
               | .max = (if .running > .max then .running else .max end)
             else
@@ -2003,22 +2011,22 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
       if [ -n "$summary_file" ] && [ -f "$summary_file" ]; then
         echo "Source: $summary_file"
-        steps_json="$(${pkgs.jq}/bin/jq -c '.steps // []' "$summary_file" 2>/dev/null || echo "[]")"
-        summary_duration="$(${pkgs.jq}/bin/jq -r '.timing.total_duration // .duration_seconds // ""' "$summary_file" 2>/dev/null || true)"
+        steps_json="$(${pkgs.jq}/bin/jq -c '.payload.steps // []' "$summary_file" 2>/dev/null || echo "[]")"
+        summary_duration="$(${pkgs.jq}/bin/jq -r '.payload.timing.total_duration // .payload.duration_seconds // ""' "$summary_file" 2>/dev/null || true)"
         if is_nonneg_int "$summary_duration"; then
           duration_seconds="$summary_duration"
         fi
         timing_fields="$(
           ${pkgs.jq}/bin/jq -r '
             [
-              (.timing.setup_duration // ""),
-              (.timing.steps_duration // ""),
-              (.timing.teardown_duration // ""),
-              (.timing.accounted_duration // ""),
-              (.timing.untracked_duration // ""),
-              (.timing.parallelism.max_workers // ""),
-              (.timing.parallelism.peak_workers // ""),
-              (.timing.parallelism.canceled_count // "")
+              (.payload.timing.setup_duration // ""),
+              (.payload.timing.steps_duration // ""),
+              (.payload.timing.teardown_duration // ""),
+              (.payload.timing.accounted_duration // ""),
+              (.payload.timing.untracked_duration // ""),
+              (.payload.timing.parallelism.max_workers // ""),
+              (.payload.timing.parallelism.peak_workers // ""),
+              (.payload.timing.parallelism.canceled_count // "")
             ] | @tsv
           ' "$summary_file" 2>/dev/null || true
         )"
@@ -2101,6 +2109,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       local duration_seconds
       local passed
       local failed
+      local skipped
       local canceled
       local steps_json
       local steps_duration
@@ -2117,6 +2126,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       local leaf_task_ids_json="[]"
       local events_file=""
       local setup_timing_fields
+      local validate_stderr
       local attempt_id="''${NIXFIED_ATTEMPT_ID:-}"
 
       LAST_WORKFLOW_SUMMARY_FILE=""
@@ -2201,6 +2211,8 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       write_summary_payload() {
         local target_file="$1"
         ${pkgs.jq}/bin/jq -n -S \
+          --arg kind "workflow-summary" \
+          --argjson version 1 \
           --arg runId "$run_id" \
           --arg attemptId "$attempt_id" \
           --arg workflowId "$workflow_id" \
@@ -2223,44 +2235,57 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           --argjson parallelPeakWorkers "$parallel_peak_workers_json" \
           --argjson parallelCanceledCount "$parallel_canceled_count_json" \
           '{
-            run_id: $runId,
-            attempt_id: $attemptId,
-            workflow_id: $workflowId,
-            mode: $mode,
-            exit_code: $exitCode,
-            started_at: $startedAt,
-            finished_at: $finishedAt,
-            duration_seconds: $durationSeconds,
-            counts: {
-              passed: $passed,
-              failed: $failed,
-              skipped: $skipped,
-              canceled: $canceled
-            },
-            steps: $steps,
-            timing: {
-              total_duration: $durationSeconds,
-              setup_duration: $setupDuration,
-              steps_duration: $stepsDuration,
-              teardown_duration: $teardownDuration,
-              accounted_duration: $accountedDuration,
-              untracked_duration: $untrackedDuration,
-              parallelism: {
-                max_workers: $parallelMaxWorkers,
-                peak_workers: $parallelPeakWorkers,
-                canceled_count: $parallelCanceledCount
+            kind: $kind,
+            version: $version,
+            payload: {
+              run_id: $runId,
+              attempt_id: $attemptId,
+              workflow_id: $workflowId,
+              mode: $mode,
+              exit_code: $exitCode,
+              started_at: $startedAt,
+              finished_at: $finishedAt,
+              duration_seconds: $durationSeconds,
+              counts: {
+                passed: $passed,
+                failed: $failed,
+                skipped: $skipped,
+                canceled: $canceled
+              },
+              steps: $steps,
+              timing: {
+                total_duration: $durationSeconds,
+                setup_duration: $setupDuration,
+                steps_duration: $stepsDuration,
+                teardown_duration: $teardownDuration,
+                accounted_duration: $accountedDuration,
+                untracked_duration: $untrackedDuration,
+                parallelism: {
+                  max_workers: $parallelMaxWorkers,
+                  peak_workers: $parallelPeakWorkers,
+                  canceled_count: $parallelCanceledCount
+                }
               }
             }
           }' > "$target_file"
       }
 
       summary_tmp="$(mktemp "$summary_file.tmp.XXXXXX")"
+      validate_stderr="$(mktemp "$summary_file.validate.XXXXXX")"
       if ! write_summary_payload "$summary_tmp"; then
-        rm -f "$summary_tmp"
+        rm -f "$summary_tmp" "$validate_stderr"
         registry_snapshot_cleanup "$events_file"
         echo "ERROR: failed to write summary file '$summary_file'"
         return 1
       fi
+      if ! ${summaryValidator} "$summary_tmp" >/dev/null 2>"$validate_stderr"; then
+        cat "$validate_stderr" >&2 || true
+        rm -f "$summary_tmp" "$validate_stderr"
+        registry_snapshot_cleanup "$events_file"
+        echo "ERROR: failed to validate summary file '$summary_file'"
+        return 1
+      fi
+      rm -f "$validate_stderr"
       mv "$summary_tmp" "$summary_file"
 
       if [ -n "$summary_file_override" ] && [ "$summary_file_override" != "$summary_file" ]; then
@@ -2486,10 +2511,10 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         print_workflow_summary_report "$run_id" "$workflow_id" "$status" "$duration_seconds" "$summary_file"
 
         if [ -n "$summary_file" ] && [ -f "$summary_file" ]; then
-          passed="$(${pkgs.jq}/bin/jq -r '.counts.passed // 0' "$summary_file" 2>/dev/null || echo 0)"
-          failed="$(${pkgs.jq}/bin/jq -r '.counts.failed // 0' "$summary_file" 2>/dev/null || echo 0)"
-          skipped="$(${pkgs.jq}/bin/jq -r '.counts.skipped // 0' "$summary_file" 2>/dev/null || echo 0)"
-          canceled="$(${pkgs.jq}/bin/jq -r '.counts.canceled // 0' "$summary_file" 2>/dev/null || echo 0)"
+          passed="$(${pkgs.jq}/bin/jq -r '.payload.counts.passed // 0' "$summary_file" 2>/dev/null || echo 0)"
+          failed="$(${pkgs.jq}/bin/jq -r '.payload.counts.failed // 0' "$summary_file" 2>/dev/null || echo 0)"
+          skipped="$(${pkgs.jq}/bin/jq -r '.payload.counts.skipped // 0' "$summary_file" 2>/dev/null || echo 0)"
+          canceled="$(${pkgs.jq}/bin/jq -r '.payload.counts.canceled // 0' "$summary_file" 2>/dev/null || echo 0)"
         else
           events_file="$(registry_events_snapshot "$REGISTRY_ROOT" 2>/dev/null || true)"
           if [ -n "$events_file" ] && [ -f "$events_file" ]; then

@@ -54,22 +54,24 @@ pkgs.runCommand "ci-mode-matrix-smoke" { } ''
     require_file "$summary_file"
 
     ${pkgs.jq}/bin/jq -e --arg workflow "$expected_workflow" '
-      .workflow_id == $workflow
-      and .mode == "ci"
-      and .exit_code == 0
-      and (.counts.passed | type == "number")
-      and (.counts.failed | type == "number")
-      and (.counts.canceled | type == "number")
-      and (.steps | type == "array")
-      and (.steps | length >= 2)
-      and ([.steps[] | .name | type] | all(. == "string"))
-      and ([.steps[] | .status | type] | all(. == "string"))
-      and ([.steps[] | .state | type] | all(. == "string"))
-      and ([.steps[] | (.workflow_id == null or (.workflow_id | type == "string"))] | all)
+      .kind == "workflow-summary"
+      and .version == 1
+      and .payload.workflow_id == $workflow
+      and .payload.mode == "ci"
+      and .payload.exit_code == 0
+      and (.payload.counts.passed | type == "number")
+      and (.payload.counts.failed | type == "number")
+      and (.payload.counts.canceled | type == "number")
+      and (.payload.steps | type == "array")
+      and (.payload.steps | length >= 2)
+      and ([.payload.steps[] | .name | type] | all(. == "string"))
+      and ([.payload.steps[] | .status | type] | all(. == "string"))
+      and ([.payload.steps[] | .state | type] | all(. == "string"))
+      and ([.payload.steps[] | (.workflow_id == null or (.workflow_id | type == "string"))] | all)
     ' "$summary_file" > /dev/null
 
     ${pkgs.jq}/bin/jq -e --arg runId "$run_id" --arg workflow "$expected_workflow" '
-      select(.runId == $runId and .workflowId == $workflow) | .runId
+      select((.payload.runId // "") == $runId and (.payload.workflowId // "") == $workflow) | .payload.runId
     ' "$REGISTRY_ROOT/events.ndjson" > /dev/null
   }
 

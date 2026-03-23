@@ -5,24 +5,40 @@
 let
   snapshot = registry.snapshot.fromEvents [
     {
-      taskId = "task.dev";
-      workflowId = "workflow.ci.full";
-      state = "running";
+      kind = "runtime-event";
+      version = 1;
+      payload = {
+        taskId = "task.dev";
+        workflowId = "workflow.ci.full";
+        state = "running";
+      };
     }
     {
-      taskId = "task.dev";
-      workflowId = "workflow.ci.full";
-      state = "passed";
+      kind = "runtime-event";
+      version = 1;
+      payload = {
+        taskId = "task.dev";
+        workflowId = "workflow.ci.full";
+        state = "passed";
+      };
     }
     {
-      taskId = "";
-      workflowId = "workflow.ci.full";
-      state = "passed";
+      kind = "runtime-event";
+      version = 1;
+      payload = {
+        taskId = "";
+        workflowId = "workflow.ci.full";
+        state = "passed";
+      };
     }
     {
-      taskId = "";
-      workflowId = "";
-      state = "ready";
+      kind = "runtime-event";
+      version = 1;
+      payload = {
+        taskId = "";
+        workflowId = "";
+        state = "ready";
+      };
     }
   ];
 in

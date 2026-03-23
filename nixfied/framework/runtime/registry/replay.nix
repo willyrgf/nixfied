@@ -30,10 +30,10 @@ in
 
       ${pkgs.jq}/bin/jq -cs '
         reduce (
-          sort_by(.seq)[]
-          | select((.taskId // "") != "" or (.workflowId // "") != "")
+          sort_by((.payload.seq // 0))[]
+          | select((.payload.taskId // "") != "" or (.payload.workflowId // "") != "")
         ) as $event ({};
-          .[(if ($event.taskId // "") != "" then "task:" + $event.taskId else "workflow:" + ($event.workflowId // "unknown") end)] = $event.state
+          .[(if ($event.payload.taskId // "") != "" then "task:" + $event.payload.taskId else "workflow:" + ($event.payload.workflowId // "unknown") end)] = $event.payload.state
         )
       ' "$events_file"
       registry_snapshot_cleanup "$events_file"

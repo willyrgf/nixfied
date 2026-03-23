@@ -58,6 +58,7 @@ let
 in
 assert pkgs.lib.hasInfix "tmp=\"$(mktemp \"$run_file.tmp.XXXXXX\")\"" orchestratorSource;
 assert pkgs.lib.hasInfix "mv \"$tmp\" \"$run_file\"" orchestratorSource;
+assert pkgs.lib.hasInfix "contractRef = \"runtime.runRecord\";" orchestratorSource;
 pkgs.runCommand "run-record-atomicity-smoke" { } ''
   set -euo pipefail
   ${harness.shellPrelude}
@@ -73,7 +74,7 @@ pkgs.runCommand "run-record-atomicity-smoke" { } ''
     while [ ! -f "$TMPDIR/atomicity.done" ]; do
       if [ -d "$REGISTRY_ROOT/orchestrator/runs" ]; then
         while IFS= read -r run_file; do
-          if ! ${pkgs.jq}/bin/jq -e '.' "$run_file" > /dev/null 2>&1; then
+          if ! ${pkgs.jq}/bin/jq -e '.kind == "run-record" and .version == 1 and (.payload.run_id | type == "string") and (.payload.attempt_id | type == "string")' "$run_file" > /dev/null 2>&1; then
             printf '%s\n' "$run_file" > "$TMPDIR/atomicity.err"
             return 1
           fi

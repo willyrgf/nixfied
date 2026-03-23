@@ -4,6 +4,14 @@
 }:
 let
   lib = pkgs.lib;
+  runtimeArtifactContracts = import ../../contracts/runtime-artifact-contracts.nix { inherit pkgs; };
+  registryEventValidator = import ../../contracts/mkValidator.nix {
+    inherit
+      pkgs
+      ;
+    contractBundle = runtimeArtifactContracts;
+    contractRef = "runtime.registryEvent";
+  };
 in
 ''
   registry_next_seq() {
@@ -46,6 +54,8 @@ in
     local ts
     local rc
     local seq_tmp
+    local event_tmp
+    local validate_stderr
 
     events_file="$(registry_events_file "$root")"
     seq_file="$(registry_seq_file "$root")"
@@ -61,10 +71,13 @@ in
     printf '%s' "$seq" > "$seq_tmp"
     mv "$seq_tmp" "$seq_file"
     ts="$(date -u +"$REGISTRY_TIMESTAMP_FORMAT")"
+    event_tmp="$(mktemp "$events_file.event.XXXXXX")"
+    validate_stderr="$(mktemp "$events_file.validate.XXXXXX")"
 
     set +e
     ${pkgs.jq}/bin/jq -cnS \
-      --argjson schemaVersion "$REGISTRY_EVENT_SCHEMA_VERSION" \
+      --arg kind "$REGISTRY_EVENT_KIND" \
+      --argjson version "$REGISTRY_EVENT_VERSION" \
       --argjson seq "$seq" \
       --arg ts "$ts" \
       --arg runId "$run_id" \
@@ -74,9 +87,21 @@ in
       --arg state "$state" \
       --argjson detail "$detail_json" \
       ${lib.escapeShellArg registryEventPayloadExpr} \
-      >> "$events_file"
+      > "$event_tmp"
     rc="$?"
     set -e
+
+    if [ "$rc" -eq 0 ]; then
+      if ${registryEventValidator} "$event_tmp" >/dev/null 2>"$validate_stderr"; then
+        cat "$event_tmp" >> "$events_file"
+        rc="$?"
+      else
+        cat "$validate_stderr" >&2 || true
+        rc=1
+      fi
+    fi
+
+    rm -f "$event_tmp" "$validate_stderr"
     registry_lock_release "$lock_fd" "$lock_file"
     return "$rc"
   }

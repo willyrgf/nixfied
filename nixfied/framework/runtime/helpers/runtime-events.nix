@@ -411,12 +411,12 @@ let
       --arg env "$ENV_FILTER" \
       --arg limit "$LIMIT" '
       [ .[]
-        | select((.detail.kind // "") == "serviceLifecycle")
-        | select((.detail.service // "") == $service)
-        | select(($slot == "") or (((.detail.slot // "") | tostring) == $slot))
-        | select(($env == "") or ((.detail.env // "") == $env))
+        | select((.payload.detail.kind // "") == "serviceLifecycle")
+        | select((.payload.detail.service // "") == $service)
+        | select(($slot == "") or (((.payload.detail.slot // "") | tostring) == $slot))
+        | select(($env == "") or ((.payload.detail.env // "") == $env))
       ]
-      | sort_by((.seq // 0), (.ts // ""))
+      | sort_by((.payload.seq // 0), (.payload.ts // ""))
       | if (($limit | tonumber?) // 0) > 0 then
           .[-(($limit | tonumber?) // 0):]
         else
@@ -489,14 +489,14 @@ let
       --arg slot "$SLOT_FILTER" \
       --arg env "$ENV_FILTER" '
       [ .[]
-        | select((.detail.kind // "") == "serviceLifecycle")
-        | select((.detail.service // "") == $service)
-        | select(($slot == "") or (((.detail.slot // "") | tostring) == $slot))
-        | select(($env == "") or ((.detail.env // "") == $env))
-        | select((.detail.logPath // "") != "")
+        | select((.payload.detail.kind // "") == "serviceLifecycle")
+        | select((.payload.detail.service // "") == $service)
+        | select(($slot == "") or (((.payload.detail.slot // "") | tostring) == $slot))
+        | select(($env == "") or ((.payload.detail.env // "") == $env))
+        | select((.payload.detail.logPath // "") != "")
       ]
-      | sort_by((.seq // 0), (.ts // ""))
-      | (last | .detail.logPath) // ""
+      | sort_by((.payload.seq // 0), (.payload.ts // ""))
+      | (last | .payload.detail.logPath) // ""
     ' "$EVENTS_FILE")
 
     if [ -z "$LOG_PATH" ]; then
@@ -661,12 +661,12 @@ let
       --arg slot "$SLOT_FILTER" \
       --arg env "$ENV_FILTER" '
       [ .[]
-        | select((.detail.kind // "") == "serviceLifecycle")
-        | select((.detail.service // "") == $service)
-        | select(($slot == "") or (((.detail.slot // "") | tostring) == $slot))
-        | select(($env == "") or ((.detail.env // "") == $env))
+        | select((.payload.detail.kind // "") == "serviceLifecycle")
+        | select((.payload.detail.service // "") == $service)
+        | select(($slot == "") or (((.payload.detail.slot // "") | tostring) == $slot))
+        | select(($env == "") or ((.payload.detail.env // "") == $env))
       ]
-      | sort_by((.seq // 0), (.ts // ""))
+      | sort_by((.payload.seq // 0), (.payload.ts // ""))
       | (last // {})
     ' "$EVENTS_FILE")
 
@@ -684,24 +684,24 @@ let
       exit 0
     fi
 
-    STATE=$(echo "$MATCH" | ${pkgs.jq}/bin/jq -r '.state // "unknown"')
-    OWNER_RUN_ID=$(echo "$MATCH" | ${pkgs.jq}/bin/jq -r '.runId // ""')
-    OWNER_SCOPE=$(echo "$MATCH" | ${pkgs.jq}/bin/jq -r '.detail.ownerScope // ""')
-    EPHEMERAL_ROOT=$(echo "$MATCH" | ${pkgs.jq}/bin/jq -r '.detail.ephemeralRoot // ""')
-    WAIT_REASON=$(echo "$MATCH" | ${pkgs.jq}/bin/jq -r '.detail.waitReason // ""')
-    LOG_PATH=$(echo "$MATCH" | ${pkgs.jq}/bin/jq -r '.detail.logPath // ""')
+    STATE=$(echo "$MATCH" | ${pkgs.jq}/bin/jq -r '.payload.state // "unknown"')
+    OWNER_RUN_ID=$(echo "$MATCH" | ${pkgs.jq}/bin/jq -r '.payload.runId // ""')
+    OWNER_SCOPE=$(echo "$MATCH" | ${pkgs.jq}/bin/jq -r '.payload.detail.ownerScope // ""')
+    EPHEMERAL_ROOT=$(echo "$MATCH" | ${pkgs.jq}/bin/jq -r '.payload.detail.ephemeralRoot // ""')
+    WAIT_REASON=$(echo "$MATCH" | ${pkgs.jq}/bin/jq -r '.payload.detail.waitReason // ""')
+    LOG_PATH=$(echo "$MATCH" | ${pkgs.jq}/bin/jq -r '.payload.detail.logPath // ""')
 
     SLOT_OWNER=$(${pkgs.jq}/bin/jq -r -s \
       --arg slot "$SLOT_FILTER" \
       --arg env "$ENV_FILTER" '
       [ .[]
-        | select((.detail.kind // "") == "slotLifecycle")
-        | select((.detail.eventType // "") == "slot_acquired" or (.detail.eventType // "") == "slot_released")
-        | select(($slot == "") or (((.detail.slot // "") | tostring) == $slot))
-        | select(($env == "") or ((.detail.env // "") == $env))
+        | select((.payload.detail.kind // "") == "slotLifecycle")
+        | select((.payload.detail.eventType // "") == "slot_acquired" or (.payload.detail.eventType // "") == "slot_released")
+        | select(($slot == "") or (((.payload.detail.slot // "") | tostring) == $slot))
+        | select(($env == "") or ((.payload.detail.env // "") == $env))
       ]
-      | sort_by((.seq // 0), (.ts // ""))
-      | (last | .runId) // ""
+      | sort_by((.payload.seq // 0), (.payload.ts // ""))
+      | (last | .payload.runId) // ""
     ' "$EVENTS_FILE")
 
     REGISTRY_RUNNING="false"

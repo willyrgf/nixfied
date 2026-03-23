@@ -157,7 +157,7 @@ pkgs.runCommand "ephemeral-execution-smoke" { } ''
     cat "$TMPDIR/probe.out"
     exit 1
   fi
-  ${pkgs.jq}/bin/jq -e '.workflow_id == "'"${probeWorkflowId}"'"' "$TMPDIR/probe.summary.json" > /dev/null
+  ${pkgs.jq}/bin/jq -e '.payload.workflow_id == "'"${probeWorkflowId}"'"' "$TMPDIR/probe.summary.json" > /dev/null
 
   if ${pkgs.gnugrep}/bin/grep -Fq "Permission denied" "$TMPDIR/probe.out"; then
     echo "unexpected permission error during ephemeral cleanup"

@@ -22,10 +22,13 @@ assert pkgs.lib.hasInfix "registry_events_snapshot() {" snapshotSource;
 assert pkgs.lib.hasInfix "registry_snapshot_cleanup() {" snapshotSource;
 assert pkgs.lib.hasInfix "registry_next_seq() {" appendSource;
 assert pkgs.lib.hasInfix "registry_append_event() {" appendSource;
-assert pkgs.lib.hasInfix "--argjson schemaVersion \"$REGISTRY_EVENT_SCHEMA_VERSION\"" appendSource;
+assert pkgs.lib.hasInfix "registryEventValidator = import ../../contracts/mkValidator.nix" appendSource;
+assert pkgs.lib.hasInfix "contractRef = \"runtime.registryEvent\";" appendSource;
+assert pkgs.lib.hasInfix "--arg kind \"$REGISTRY_EVENT_KIND\"" appendSource;
+assert pkgs.lib.hasInfix "--argjson version \"$REGISTRY_EVENT_VERSION\"" appendSource;
 assert pkgs.lib.hasInfix "--arg attemptId \"$attempt_id\"" appendSource;
 assert pkgs.lib.hasInfix "--arg workflowId \"$workflow_id\"" appendSource;
-assert pkgs.lib.hasInfix "attemptId: $attemptId" source;
+assert pkgs.lib.hasInfix "attemptId: (if $attemptId ==" source;
 pkgs.runCommand "registry-events-runtime-contract" { } ''
   echo "OK: registry runtime helpers are split and stable" > "$out"
 ''

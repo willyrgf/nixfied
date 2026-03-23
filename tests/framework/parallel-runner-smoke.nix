@@ -44,7 +44,7 @@ pkgs.runCommand "parallel-runner-smoke" { } ''
     local task_id="$2"
     local state="$3"
     ${pkgs.jq}/bin/jq -r --arg runId "$run_id" --arg taskId "$task_id" --arg state "$state" '
-      select(.runId == $runId and .taskId == $taskId and .state == $state) | .seq
+      select((.payload.runId // "") == $runId and (.payload.taskId // "") == $taskId and (.payload.state // "") == $state) | .payload.seq
     ' "$EVENTS_FILE" | ${pkgs.coreutils}/bin/head -n 1
   }
 
@@ -87,7 +87,7 @@ pkgs.runCommand "parallel-runner-smoke" { } ''
   fi
 
   skip_reason="$(${pkgs.jq}/bin/jq -r --arg runId "$smoke_run_id" '
-    select(.runId == $runId and .taskId == "task.test.parallel.skip" and .state == "canceled") | .detail.reason
+    select((.payload.runId // "") == $runId and (.payload.taskId // "") == "task.test.parallel.skip" and (.payload.state // "") == "canceled") | .payload.detail.reason
   ' "$EVENTS_FILE" | ${pkgs.coreutils}/bin/head -n 1)"
   if [ "$skip_reason" != "when-false" ]; then
     echo "expected skip task to be canceled with when-false reason"
@@ -95,13 +95,13 @@ pkgs.runCommand "parallel-runner-smoke" { } ''
   fi
 
   max_running="$(${pkgs.jq}/bin/jq -s -r --arg runId "$smoke_run_id" '
-    map(select(.runId == $runId and (.taskId // "") != "")) |
-    sort_by(.seq) |
+    map(select((.payload.runId // "") == $runId and (.payload.taskId // "") != "")) |
+    sort_by((.payload.seq // 0)) |
     reduce .[] as $event ({running: 0, max: 0};
-      if $event.state == "running" then
+      if ($event.payload.state // "") == "running" then
         .running += 1 |
         .max = (if .running > .max then .running else .max end)
-      elif ($event.state == "passed" or $event.state == "failed" or $event.state == "canceled") then
+      elif (($event.payload.state // "") == "passed" or ($event.payload.state // "") == "failed" or ($event.payload.state // "") == "canceled") then
         .running = (if .running > 0 then .running - 1 else 0 end)
       else
         .
@@ -135,13 +135,13 @@ pkgs.runCommand "parallel-runner-smoke" { } ''
   require_non_empty "$fail_state" "fail_state"
 
   slow_a_reason="$(${pkgs.jq}/bin/jq -r --arg runId "$failfast_run_id" '
-    select(.runId == $runId and .taskId == "task.test.parallel.slow-a" and .state == "canceled") | .detail.reason
+    select((.payload.runId // "") == $runId and (.payload.taskId // "") == "task.test.parallel.slow-a" and (.payload.state // "") == "canceled") | .payload.detail.reason
   ' "$EVENTS_FILE" | ${pkgs.coreutils}/bin/head -n 1)"
   slow_b_reason="$(${pkgs.jq}/bin/jq -r --arg runId "$failfast_run_id" '
-    select(.runId == $runId and .taskId == "task.test.parallel.slow-b" and .state == "canceled") | .detail.reason
+    select((.payload.runId // "") == $runId and (.payload.taskId // "") == "task.test.parallel.slow-b" and (.payload.state // "") == "canceled") | .payload.detail.reason
   ' "$EVENTS_FILE" | ${pkgs.coreutils}/bin/head -n 1)"
   after_reason="$(${pkgs.jq}/bin/jq -r --arg runId "$failfast_run_id" '
-    select(.runId == $runId and .taskId == "task.test.parallel.sleep-c" and .state == "canceled") | .detail.reason
+    select((.payload.runId // "") == $runId and (.payload.taskId // "") == "task.test.parallel.sleep-c" and (.payload.state // "") == "canceled") | .payload.detail.reason
   ' "$EVENTS_FILE" | ${pkgs.coreutils}/bin/head -n 1)"
 
   if [ "$slow_a_reason" != "fail-fast-running" ]; then
@@ -160,7 +160,7 @@ pkgs.runCommand "parallel-runner-smoke" { } ''
   fi
 
   after_running_count="$(${pkgs.jq}/bin/jq -r --arg runId "$failfast_run_id" '
-    select(.runId == $runId and .taskId == "task.test.parallel.sleep-c" and .state == "running") | .seq
+    select((.payload.runId // "") == $runId and (.payload.taskId // "") == "task.test.parallel.sleep-c" and (.payload.state // "") == "running") | .payload.seq
   ' "$EVENTS_FILE" | ${pkgs.gnugrep}/bin/grep -c '^[0-9]' || true)"
   if [ "$after_running_count" -ne 0 ]; then
     echo "expected dependent after unit to never enter running state"

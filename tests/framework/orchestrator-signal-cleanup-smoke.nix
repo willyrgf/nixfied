@@ -157,15 +157,15 @@ pkgs.runCommand "orchestrator-signal-cleanup-smoke" { } ''
   wait_for_run_state "$ORCH" "$run_id" "canceled" 20
 
   if ! ${pkgs.jq}/bin/jq -e --arg runId "$run_id" '
-    select(.runId == $runId and .workflowId == "workflow.test.orchestrator.signal" and .taskId == "" and .state == "canceled")
-    | (.detail.reason == "orchestrator-interrupted" and .detail.signal == "TERM")
+    select((.payload.runId // "") == $runId and (.payload.workflowId // "") == "workflow.test.orchestrator.signal" and (.payload.taskId // "") == "" and (.payload.state // "") == "canceled")
+    | (.payload.detail.reason == "orchestrator-interrupted" and .payload.detail.signal == "TERM")
   ' "$REGISTRY_ROOT/events.ndjson" > /dev/null; then
     echo "expected cancellation event for interrupted orchestrator run"
     cat "$REGISTRY_ROOT/events.ndjson"
     exit 1
   fi
 
-  if ! "$ORCH" runs "$run_id" | ${pkgs.jq}/bin/jq -e '.stop_reason == "signal-term"' > /dev/null; then
+  if ! "$ORCH" runs "$run_id" | ${pkgs.jq}/bin/jq -e '.payload.stop_reason == "signal-term"' > /dev/null; then
     echo "expected run record stop_reason=signal-term"
     "$ORCH" runs "$run_id"
     exit 1

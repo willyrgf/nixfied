@@ -277,13 +277,13 @@ pkgs.runCommand "skip-service-smoke" { } ''
   fi
 
   dependency_skip_reason="$(${pkgs.jq}/bin/jq -r --arg runId "$skip_run_id" --arg taskId "${dependencyTaskId}" '
-    select(.runId == $runId and .taskId == $taskId and .state == "canceled") | .detail.reason
+    select((.payload.runId // "") == $runId and (.payload.taskId // "") == $taskId and (.payload.state // "") == "canceled") | .payload.detail.reason
   ' "$REGISTRY_FILE" | ${pkgs.coreutils}/bin/head -n 1)"
   consumer_skip_reason="$(${pkgs.jq}/bin/jq -r --arg runId "$skip_run_id" --arg taskId "${consumerTaskId}" '
-    select(.runId == $runId and .taskId == $taskId and .state == "canceled") | .detail.reason
+    select((.payload.runId // "") == $runId and (.payload.taskId // "") == $taskId and (.payload.state // "") == "canceled") | .payload.detail.reason
   ' "$REGISTRY_FILE" | ${pkgs.coreutils}/bin/head -n 1)"
   consumer_skip_dependency="$(${pkgs.jq}/bin/jq -r --arg runId "$skip_run_id" --arg taskId "${consumerTaskId}" '
-    select(.runId == $runId and .taskId == $taskId and .state == "canceled") | .detail.dependency
+    select((.payload.runId // "") == $runId and (.payload.taskId // "") == $taskId and (.payload.state // "") == "canceled") | .payload.detail.dependency
   ' "$REGISTRY_FILE" | ${pkgs.coreutils}/bin/head -n 1)"
 
   if [ "$dependency_skip_reason" != "service-skipped" ]; then
@@ -309,9 +309,9 @@ pkgs.runCommand "skip-service-smoke" { } ''
     skip_summary_file="$(find "$CI_ARTIFACTS_ROOT" -name summary.json -path "*$skip_run_id*" 2>/dev/null | head -n 1 || true)"
   fi
   if [ -n "$skip_summary_file" ] && [ -f "$skip_summary_file" ]; then
-    summary_exit_code="$(${pkgs.jq}/bin/jq -r '.exit_code' "$skip_summary_file")"
-    summary_skipped="$(${pkgs.jq}/bin/jq -r '.counts.skipped' "$skip_summary_file")"
-    summary_canceled="$(${pkgs.jq}/bin/jq -r '.counts.canceled' "$skip_summary_file")"
+    summary_exit_code="$(${pkgs.jq}/bin/jq -r '.payload.exit_code' "$skip_summary_file")"
+    summary_skipped="$(${pkgs.jq}/bin/jq -r '.payload.counts.skipped' "$skip_summary_file")"
+    summary_canceled="$(${pkgs.jq}/bin/jq -r '.payload.counts.canceled' "$skip_summary_file")"
 
     if [ "$summary_exit_code" != "0" ]; then
       echo "expected summary.json exit_code 0, got $summary_exit_code"
@@ -329,10 +329,10 @@ pkgs.runCommand "skip-service-smoke" { } ''
       exit 1
     fi
 
-    dep_step_status="$(${pkgs.jq}/bin/jq -r --arg taskId "${dependencyTaskId}" '.steps[] | select(.name == $taskId) | .status' "$skip_summary_file")"
-    con_step_status="$(${pkgs.jq}/bin/jq -r --arg taskId "${consumerTaskId}" '.steps[] | select(.name == $taskId) | .status' "$skip_summary_file")"
-    dep_step_reason="$(${pkgs.jq}/bin/jq -r --arg taskId "${dependencyTaskId}" '.steps[] | select(.name == $taskId) | .reason' "$skip_summary_file")"
-    con_step_reason="$(${pkgs.jq}/bin/jq -r --arg taskId "${consumerTaskId}" '.steps[] | select(.name == $taskId) | .reason' "$skip_summary_file")"
+    dep_step_status="$(${pkgs.jq}/bin/jq -r --arg taskId "${dependencyTaskId}" '.payload.steps[] | select(.name == $taskId) | .status' "$skip_summary_file")"
+    con_step_status="$(${pkgs.jq}/bin/jq -r --arg taskId "${consumerTaskId}" '.payload.steps[] | select(.name == $taskId) | .status' "$skip_summary_file")"
+    dep_step_reason="$(${pkgs.jq}/bin/jq -r --arg taskId "${dependencyTaskId}" '.payload.steps[] | select(.name == $taskId) | .reason' "$skip_summary_file")"
+    con_step_reason="$(${pkgs.jq}/bin/jq -r --arg taskId "${consumerTaskId}" '.payload.steps[] | select(.name == $taskId) | .reason' "$skip_summary_file")"
 
     if [ "$dep_step_status" != "skipped" ]; then
       echo "expected dependency step status skipped, got $dep_step_status"

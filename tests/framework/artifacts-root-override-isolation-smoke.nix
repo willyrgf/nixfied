@@ -68,8 +68,8 @@ pkgs.runCommand "artifacts-root-override-isolation-smoke" { } ''
   require_non_empty "$summary_two" "summary_two"
   require_file "$summary_one"
   require_file "$summary_two"
-  attempt_one="$(${pkgs.jq}/bin/jq -r '.attempt_id' "$summary_one")"
-  attempt_two="$(${pkgs.jq}/bin/jq -r '.attempt_id' "$summary_two")"
+  attempt_one="$(${pkgs.jq}/bin/jq -r '.payload.attempt_id' "$summary_one")"
+  attempt_two="$(${pkgs.jq}/bin/jq -r '.payload.attempt_id' "$summary_two")"
   require_non_empty "$attempt_one" "attempt_one"
   require_non_empty "$attempt_two" "attempt_two"
 
@@ -102,7 +102,7 @@ pkgs.runCommand "artifacts-root-override-isolation-smoke" { } ''
   require_non_empty "$flat_run" "flat_run"
   require_non_empty "$flat_summary" "flat_summary"
   require_file "$flat_summary"
-  flat_attempt="$(${pkgs.jq}/bin/jq -r '.attempt_id' "$flat_summary")"
+  flat_attempt="$(${pkgs.jq}/bin/jq -r '.payload.attempt_id' "$flat_summary")"
   require_non_empty "$flat_attempt" "flat_attempt"
 
   case "$flat_summary" in

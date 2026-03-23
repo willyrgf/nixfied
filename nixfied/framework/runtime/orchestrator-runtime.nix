@@ -109,32 +109,32 @@ in
 
   run_file_state() {
     local run_file="$1"
-    ${pkgs.jq}/bin/jq -r '.state' "$run_file"
+    ${pkgs.jq}/bin/jq -r '.payload.state' "$run_file"
   }
 
   run_file_pid() {
     local run_file="$1"
-    ${pkgs.jq}/bin/jq -r '.pid // empty' "$run_file"
+    ${pkgs.jq}/bin/jq -r '.payload.pid // empty' "$run_file"
   }
 
   run_file_pgid() {
     local run_file="$1"
-    ${pkgs.jq}/bin/jq -r '.pgid // empty' "$run_file"
+    ${pkgs.jq}/bin/jq -r '.payload.pgid // empty' "$run_file"
   }
 
   run_file_attempt_id() {
     local run_file="$1"
-    ${pkgs.jq}/bin/jq -r '.attempt_id // empty' "$run_file"
+    ${pkgs.jq}/bin/jq -r '.payload.attempt_id // empty' "$run_file"
   }
 
   run_file_command() {
     local run_file="$1"
-    ${pkgs.jq}/bin/jq -r '.command' "$run_file"
+    ${pkgs.jq}/bin/jq -r '.payload.command' "$run_file"
   }
 
   run_file_process_mode() {
     local run_file="$1"
-    ${pkgs.jq}/bin/jq -r '.process_mode' "$run_file"
+    ${pkgs.jq}/bin/jq -r '.payload.process_mode' "$run_file"
   }
 
   validate_workflow_args() {
