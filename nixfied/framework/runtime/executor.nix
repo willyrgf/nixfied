@@ -535,9 +535,11 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       local task_id="$3"
       local state="$4"
       local detail_json="$5"
+      local detail_reason="''${6:-}"
+      local detail_exit_code="''${7:-}"
       local attempt_id="''${NIXFIED_ATTEMPT_ID:-}"
 
-      registry_append_event "$REGISTRY_ROOT" "$run_id" "$attempt_id" "$workflow_id" "$task_id" "$state" "$detail_json"
+      registry_append_event "$REGISTRY_ROOT" "$run_id" "$attempt_id" "$workflow_id" "$task_id" "$state" "$detail_json" "$detail_reason" "$detail_exit_code"
     }
 
     task_has_hooks() {
@@ -778,7 +780,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         append_event "$run_id" "$workflow_id" "$task_id" "passed" "$detail_json"
       else
         detail_json="$(${pkgs.jq}/bin/jq -cn --argjson exitCode "$exit_code" '{exitCode: $exitCode}')"
-        append_event "$run_id" "$workflow_id" "$task_id" "failed" "$detail_json"
+        append_event "$run_id" "$workflow_id" "$task_id" "failed" "$detail_json" "" "$exit_code"
         return "$exit_code"
       fi
     }
@@ -913,7 +915,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         if [ -n "$current_task_skip_service" ]; then
           echo "SKIP: task '$current_task' is skipped because service '$current_task_skip_service' has a skip flag enabled"
           skip_detail_json="$(${pkgs.jq}/bin/jq -cn --arg reason "service-skipped" --arg serviceName "$current_task_skip_service" '{reason: $reason, serviceName: $serviceName}')"
-          append_event "$run_id" "" "$current_task" "canceled" "$skip_detail_json"
+          append_event "$run_id" "" "$current_task" "canceled" "$skip_detail_json" "service-skipped"
           if [ "$current_task" != "$task_id" ]; then
             return 3
           fi
@@ -1126,7 +1128,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
               ;;
           esac
           detail_json="$(${pkgs.jq}/bin/jq -cn --arg reason "$cascade_reason" --arg dependency "''${blocked_tasks_by_dependency[$unit_task]}" '{reason: $reason, dependency: $dependency}')"
-          append_event "$run_id" "$workflow_id" "$unit_task" "canceled" "$detail_json"
+          append_event "$run_id" "$workflow_id" "$unit_task" "canceled" "$detail_json" "$cascade_reason"
           continue
         fi
 
@@ -1146,7 +1148,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
               ;;
           esac
           detail_json="$(${pkgs.jq}/bin/jq -cn --arg reason "$cascade_reason" --arg dependency "$failed_dependency" '{reason: $reason, dependency: $dependency}')"
-          append_event "$run_id" "$workflow_id" "$unit_task" "canceled" "$detail_json"
+          append_event "$run_id" "$workflow_id" "$unit_task" "canceled" "$detail_json" "$cascade_reason"
           blocked_by_dependency=1
           break
         done < <(workflow_unit_dependencies "$unit_json")
@@ -1159,7 +1161,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         if [ -n "$missing" ]; then
           local detail_json
           detail_json="$(${pkgs.jq}/bin/jq -cn --arg reason "missing-env" --arg missing "$missing" '{reason: $reason, missing: $missing}')"
-          append_event "$run_id" "$workflow_id" "$unit_task" "canceled" "$detail_json"
+          append_event "$run_id" "$workflow_id" "$unit_task" "canceled" "$detail_json" "missing-env"
           blocked_tasks_by_dependency["$unit_task"]="$unit_task"
           blocked_tasks_reason_by_dependency["$unit_task"]="missing-env"
           continue
@@ -1169,7 +1171,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         if [ -n "$unit_skip_service" ]; then
           local detail_json
           detail_json="$(${pkgs.jq}/bin/jq -cn --arg reason "service-skipped" --arg serviceName "$unit_skip_service" '{reason: $reason, serviceName: $serviceName}')"
-          append_event "$run_id" "$workflow_id" "$unit_task" "canceled" "$detail_json"
+          append_event "$run_id" "$workflow_id" "$unit_task" "canceled" "$detail_json" "service-skipped"
           echo "SKIP: task '$unit_task' (service '$unit_skip_service') is skipped because service '$unit_skip_service' has a skip flag enabled"
           blocked_tasks_by_dependency["$unit_task"]="$unit_task"
           blocked_tasks_reason_by_dependency["$unit_task"]="service-skipped"
@@ -1179,7 +1181,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         if ! workflow_unit_when_matches "$unit_json"; then
           local detail_json
           detail_json="$(${pkgs.jq}/bin/jq -cn --arg reason "when-false" '{reason: $reason}')"
-          append_event "$run_id" "$workflow_id" "$unit_task" "canceled" "$detail_json"
+          append_event "$run_id" "$workflow_id" "$unit_task" "canceled" "$detail_json" "when-false"
           blocked_tasks_by_dependency["$unit_task"]="$unit_task"
           blocked_tasks_reason_by_dependency["$unit_task"]="when-false"
           continue
@@ -1261,7 +1263,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           detail_json="$(${pkgs.jq}/bin/jq -cn --arg reason "$reason" '{reason: $reason}')"
         fi
 
-        append_event "$run_id" "$workflow_id" "''${UNIT_TASK[$unit_name]}" "canceled" "$detail_json"
+        append_event "$run_id" "$workflow_id" "''${UNIT_TASK[$unit_name]}" "canceled" "$detail_json" "$reason"
         UNIT_STATE[$unit_name]="canceled"
         completed_count=$((completed_count + 1))
       }
@@ -1518,7 +1520,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
         if [ "''${CANCEL_REQUESTED[$done_unit]:-0}" = "1" ]; then
           detail_json="$(${pkgs.jq}/bin/jq -cn --arg reason "fail-fast-running" '{reason: $reason}')"
-          append_event "$run_id" "$workflow_id" "''${UNIT_TASK[$done_unit]}" "canceled" "$detail_json"
+          append_event "$run_id" "$workflow_id" "''${UNIT_TASK[$done_unit]}" "canceled" "$detail_json" "fail-fast-running"
           UNIT_STATE[$done_unit]="canceled"
           completed_count=$((completed_count + 1))
           continue
@@ -1541,7 +1543,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           done
         else
           detail_json="$(${pkgs.jq}/bin/jq -cn --argjson exitCode "$wait_rc" '{exitCode: $exitCode}')"
-          append_event "$run_id" "$workflow_id" "''${UNIT_TASK[$done_unit]}" "failed" "$detail_json"
+          append_event "$run_id" "$workflow_id" "''${UNIT_TASK[$done_unit]}" "failed" "$detail_json" "" "$wait_rc"
           UNIT_STATE[$done_unit]="failed"
           completed_count=$((completed_count + 1))
 
@@ -1593,7 +1595,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         phase_task_skip_service="$(task_first_skipped_required_service "$phase_task" || true)"
         if [ -n "$phase_task_skip_service" ]; then
           phase_skip_detail="$(${pkgs.jq}/bin/jq -cn --arg reason "service-skipped" --arg serviceName "$phase_task_skip_service" '{reason: $reason, serviceName: $serviceName}')"
-          append_event "$run_id" "$workflow_id" "$phase_task" "canceled" "$phase_skip_detail"
+          append_event "$run_id" "$workflow_id" "$phase_task" "canceled" "$phase_skip_detail" "service-skipped"
           echo "SKIP: task '$phase_task' (service '$phase_task_skip_service') is skipped because service '$phase_task_skip_service' has a skip flag enabled"
           continue
         fi
@@ -1682,7 +1684,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
               --argjson exitCode "$phase_status" \
               '$base + {exitCode: $exitCode}'
           )"
-          append_event "$run_id" "$workflow_id" "$phase_entry_id" "failed" "$failure_detail"
+          append_event "$run_id" "$workflow_id" "$phase_entry_id" "failed" "$failure_detail" "" "$phase_status"
           break
         fi
       done < <(workflow_phase_service_sets "$workflow_id" "$phase_key")
@@ -1815,94 +1817,96 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
     workflow_step_records_tsv() {
       local run_id="$1"
-      local events_file="$2"
+      local events_index_file="$2"
       local attempt_id="''${NIXFIED_ATTEMPT_ID:-}"
 
-      if [ ! -f "$events_file" ]; then
+      if [ ! -f "$events_index_file" ]; then
         return 0
       fi
 
-      ${pkgs.jq}/bin/jq -r -s --arg runId "$run_id" --arg attemptId "$attempt_id" '
-        map(
-          select(
-            (.payload.runId // "") == $runId
-            and ($attemptId == "" or ((.payload.attemptId // "") == $attemptId))
-            and (.payload.taskId // "") != ""
-            and (
-              (.payload.state // "") == "queued"
-              or (.payload.state // "") == "running"
-              or (.payload.state // "") == "passed"
-              or (.payload.state // "") == "failed"
-              or (.payload.state // "") == "canceled"
-            )
-          )
-        )
-        | sort_by((.payload.seq // 0))
-        | reduce .[] as $event (
-            { active: {}, rows: [] };
-            (((($event.payload.workflowId // "") + "\u001f" + $event.payload.taskId)) as $key
-            | if (($event.payload.state // "") == "queued" or ($event.payload.state // "") == "running") then
-                .active[$key] = (
-                  (.active[$key] // {
-                    task_id: $event.payload.taskId,
-                    workflow_id: ($event.payload.workflowId // ""),
-                    order_seq: ($event.payload.seq // 0),
-                    running_ts: null
-                  })
-                  | .order_seq = (if .order_seq > ($event.payload.seq // 0) then ($event.payload.seq // 0) else .order_seq end)
-                  | if ($event.payload.state // "") == "running" then .running_ts = $event.payload.ts else . end
-                )
-              elif (($event.payload.state // "") == "passed" or ($event.payload.state // "") == "failed" or ($event.payload.state // "") == "canceled") then
-                (.active[$key] // {
-                  task_id: $event.payload.taskId,
-                  workflow_id: ($event.payload.workflowId // ""),
-                  order_seq: ($event.payload.seq // 0),
-                  running_ts: null
-                }) as $entry
-                | .rows += [
-                    {
-                      task_id: $entry.task_id,
-                      workflow_id: (if $entry.workflow_id == "" then ($event.payload.workflowId // "") else $entry.workflow_id end),
-                      order_seq: $entry.order_seq,
-                      state: $event.payload.state,
-                      reason: ($event.payload.detail.reason // ""),
-                      exit_code: ($event.payload.detail.exitCode // ""),
-                      duration_seconds: (
-                        if ($entry.running_ts != null)
-                          and ($entry.running_ts | type == "string")
-                          and (($event.payload.ts // null) | type == "string")
-                        then
-                          ((((($event.payload.ts | fromdateiso8601) - ($entry.running_ts | fromdateiso8601)) | floor)) | if . < 0 then 0 else . end)
-                        else
-                          0
-                        end
-                      )
-                    }
-                  ]
-                | del(.active[$key])
-              else
-                .
-              end)
-          )
-        | .rows
-        | sort_by(.order_seq)
-        | .[]
-        | [
-            .task_id,
-            .workflow_id,
-            (.order_seq | tostring),
-            .state,
-            (.duration_seconds | tostring),
-            (.reason | tostring),
-            (if .exit_code == null or .exit_code == "" then "" else (.exit_code | tostring) end)
-          ]
-        | join("\u001f")
-      ' "$events_file"
+      ${pkgs.gawk}/bin/awk -v run_id="$run_id" -v attempt_id="$attempt_id" '
+        BEGIN {
+          FS = "\t"
+          OFS = "\037"
+          row_count = 0
+        }
+
+        {
+          seq = $1 + 0
+          ts_epoch = $2
+          event_run_id = $4
+          event_attempt_id = $5
+          workflow_id = $6
+          task_id = $7
+          state = $8
+          reason = $9
+          exit_code = $10
+
+          if (event_run_id != run_id) {
+            next
+          }
+          if (attempt_id != "" && event_attempt_id != attempt_id) {
+            next
+          }
+          if (task_id == "") {
+            next
+          }
+          if (state != "queued" && state != "running" && state != "passed" && state != "failed" && state != "canceled") {
+            next
+          }
+
+          key = workflow_id SUBSEP task_id
+          if (state == "queued" || state == "running") {
+            if (!(key in active_order_seq) || seq < active_order_seq[key]) {
+              active_order_seq[key] = seq
+            }
+            active_task_id[key] = task_id
+            active_workflow_id[key] = workflow_id
+            if (state == "running" && ts_epoch ~ /^[0-9]+$/) {
+              active_running_epoch[key] = ts_epoch + 0
+            }
+            next
+          }
+
+          order_seq = seq
+          entry_workflow_id = workflow_id
+          if (key in active_order_seq) {
+            order_seq = active_order_seq[key]
+          }
+          if ((key in active_workflow_id) && active_workflow_id[key] != "") {
+            entry_workflow_id = active_workflow_id[key]
+          }
+
+          duration_seconds = 0
+          if ((key in active_running_epoch) && ts_epoch ~ /^[0-9]+$/) {
+            duration_seconds = (ts_epoch + 0) - active_running_epoch[key]
+            if (duration_seconds < 0) {
+              duration_seconds = 0
+            }
+          }
+
+          row_count += 1
+          row_key = sprintf("%020d:%020d", order_seq, row_count)
+          rows[row_key] = task_id OFS entry_workflow_id OFS order_seq OFS state OFS duration_seconds OFS reason OFS exit_code
+
+          delete active_order_seq[key]
+          delete active_running_epoch[key]
+          delete active_task_id[key]
+          delete active_workflow_id[key]
+        }
+
+        END {
+          PROCINFO["sorted_in"] = "@ind_str_asc"
+          for (row_key in rows) {
+            print rows[row_key]
+          }
+        }
+      ' "$events_index_file"
     }
 
     workflow_collect_steps() {
       local run_id="$1"
-      local events_file="$2"
+      local events_index_file="$2"
       local steps_target="$3"
       local task_id=""
       local workflow_id=""
@@ -1935,12 +1939,13 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       WORKFLOW_CANCELED_COUNT=0
       WORKFLOW_STEPS_DURATION=0
       WORKFLOW_LEAF_TASK_IDS_JSON='[]'
+      WORKFLOW_LEAF_TASK_IDS_LINES=""
 
       if [ -n "$steps_target" ]; then
         : > "$steps_target" || return 1
       fi
 
-      if [ ! -f "$events_file" ]; then
+      if [ ! -f "$events_index_file" ]; then
         return 0
       fi
 
@@ -2015,8 +2020,14 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           leaf_task_seen["$task_id"]=1
           leaf_task_ids_json_content="''${leaf_task_ids_json_content}''${leaf_task_ids_json_separator}$(json_quote_string "$task_id")"
           leaf_task_ids_json_separator=","
+          if [ -n "$WORKFLOW_LEAF_TASK_IDS_LINES" ]; then
+            WORKFLOW_LEAF_TASK_IDS_LINES="''${WORKFLOW_LEAF_TASK_IDS_LINES}
+$task_id"
+          else
+            WORKFLOW_LEAF_TASK_IDS_LINES="$task_id"
+          fi
         fi
-      done < <(workflow_step_records_tsv "$run_id" "$events_file")
+      done < <(workflow_step_records_tsv "$run_id" "$events_index_file")
 
       WORKFLOW_STEPS_JSON="[''${steps_json_content}]"
       WORKFLOW_PASSED_COUNT="$passed"
@@ -2029,9 +2040,9 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
     workflow_steps_json() {
       local run_id="$1"
-      local events_file="$2"
+      local events_index_file="$2"
 
-      if ! workflow_collect_steps "$run_id" "$events_file" ""; then
+      if ! workflow_collect_steps "$run_id" "$events_index_file" ""; then
         printf '%s' "[]"
         return 0
       fi
@@ -2041,42 +2052,61 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
     workflow_peak_workers() {
       local run_id="$1"
-      local events_file="$2"
-      local leaf_task_ids_json="$3"
+      local events_index_file="$2"
+      local leaf_task_ids_lines="$3"
       local attempt_id="''${NIXFIED_ATTEMPT_ID:-}"
 
-      if [ ! -f "$events_file" ]; then
+      if [ ! -f "$events_index_file" ] || [ -z "$leaf_task_ids_lines" ]; then
         printf '%s' "0"
         return 0
       fi
 
-      ${pkgs.jq}/bin/jq -r -s --arg runId "$run_id" --arg attemptId "$attempt_id" --argjson taskIds "$leaf_task_ids_json" '
-        map(
-          select(
-            (.payload.runId // "") == $runId
-            and ($attemptId == "" or ((.payload.attemptId // "") == $attemptId))
-            and (.payload.taskId // "") != ""
-            and ((.payload.taskId as $id | ($taskIds | index($id)) != null))
-            and (
-              (.payload.state // "") == "running"
-              or (.payload.state // "") == "passed"
-              or (.payload.state // "") == "failed"
-              or (.payload.state // "") == "canceled"
-            )
-          )
-        )
-        | sort_by((.payload.seq // 0))
-        | reduce .[] as $event (
-            { running: 0, max: 0 };
-            if ($event.payload.state // "") == "running" then
-              .running += 1
-              | .max = (if .running > .max then .running else .max end)
-            else
-              .running = (if .running > 0 then .running - 1 else 0 end)
-            end
-          )
-        | .max
-      ' "$events_file"
+      ${pkgs.gawk}/bin/awk -v run_id="$run_id" -v attempt_id="$attempt_id" -v task_ids="$leaf_task_ids_lines" '
+        BEGIN {
+          FS = "\t"
+          split(task_ids, entries, /\n/)
+          for (idx in entries) {
+            if (entries[idx] != "") {
+              allowed[entries[idx]] = 1
+            }
+          }
+          running = 0
+          max_running = 0
+        }
+
+        {
+          event_run_id = $4
+          event_attempt_id = $5
+          task_id = $7
+          state = $8
+
+          if (event_run_id != run_id) {
+            next
+          }
+          if (attempt_id != "" && event_attempt_id != attempt_id) {
+            next
+          }
+          if (!(task_id in allowed)) {
+            next
+          }
+          if (state != "running" && state != "passed" && state != "failed" && state != "canceled") {
+            next
+          }
+
+          if (state == "running") {
+            running += 1
+            if (running > max_running) {
+              max_running = running
+            }
+          } else if (running > 0) {
+            running -= 1
+          }
+        }
+
+        END {
+          print max_running + 0
+        }
+      ' "$events_index_file"
     }
 
     print_workflow_summary_report() {
@@ -2085,7 +2115,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       local exit_code="$3"
       local duration_seconds="$4"
       local summary_file="$5"
-      local events_file=""
+      local events_index_file=""
       local summary_duration=""
       local timing_setup=""
       local timing_steps=""
@@ -2133,10 +2163,10 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       fi
 
       if [ -z "$steps_display_file" ]; then
-        events_file="$(registry_events_snapshot "$REGISTRY_ROOT" 2>/dev/null || true)"
-        if [ -n "$events_file" ] && [ -f "$events_file" ]; then
+        events_index_file="$(registry_events_index_snapshot "$REGISTRY_ROOT" 2>/dev/null || true)"
+        if [ -n "$events_index_file" ] && [ -f "$events_index_file" ]; then
           steps_tmp="$(mktemp "''${TMPDIR:-/tmp}/nixfied-summary-steps.XXXXXX")" || true
-          if [ -n "$steps_tmp" ] && workflow_collect_steps "$run_id" "$events_file" "$steps_tmp" 2>/dev/null; then
+          if [ -n "$steps_tmp" ] && workflow_collect_steps "$run_id" "$events_index_file" "$steps_tmp" 2>/dev/null; then
             steps_display_file="$steps_tmp"
           fi
         fi
@@ -2191,7 +2221,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
       echo "------------------------------------------------------------"
       rm -f "$steps_tmp"
-      registry_snapshot_cleanup "$events_file"
+      registry_snapshot_cleanup "$events_index_file"
     }
 
     write_workflow_summary_json() {
@@ -2231,7 +2261,8 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       local parallel_peak_workers_json="null"
       local parallel_canceled_count_json="null"
       local leaf_task_ids_json="[]"
-      local events_file=""
+      local leaf_task_ids_lines=""
+      local events_index_file=""
       local setup_timing_fields
       local validate_stderr
       local attempt_id="''${NIXFIED_ATTEMPT_ID:-}"
@@ -2268,14 +2299,14 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         duration_seconds=0
       fi
 
-      events_file="$(registry_events_snapshot "$REGISTRY_ROOT" 2>/dev/null || true)"
+      events_index_file="$(registry_events_index_snapshot "$REGISTRY_ROOT" 2>/dev/null || true)"
       summary_steps_tmp="$(mktemp "$summary_steps_file.tmp.XXXXXX")" || {
-        registry_snapshot_cleanup "$events_file"
+        registry_snapshot_cleanup "$events_index_file"
         echo "ERROR: failed to create summary steps temp file '$summary_steps_file'"
         return 1
       }
-      if [ -n "$events_file" ] && [ -f "$events_file" ]; then
-        if workflow_collect_steps "$run_id" "$events_file" "$summary_steps_tmp"; then
+      if [ -n "$events_index_file" ] && [ -f "$events_index_file" ]; then
+        if workflow_collect_steps "$run_id" "$events_index_file" "$summary_steps_tmp"; then
           steps_json="$WORKFLOW_STEPS_JSON"
           passed="$WORKFLOW_PASSED_COUNT"
           failed="$WORKFLOW_FAILED_COUNT"
@@ -2283,8 +2314,9 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           canceled="$WORKFLOW_CANCELED_COUNT"
           steps_duration="$WORKFLOW_STEPS_DURATION"
           leaf_task_ids_json="$WORKFLOW_LEAF_TASK_IDS_JSON"
+          leaf_task_ids_lines="$WORKFLOW_LEAF_TASK_IDS_LINES"
         else
-          echo "WARN: failed to collect step summary from '$events_file'; using empty step list"
+          echo "WARN: failed to collect step summary from '$events_index_file'; using empty step list"
           steps_json="[]"
           passed=0
           failed=0
@@ -2292,6 +2324,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           canceled=0
           steps_duration=0
           leaf_task_ids_json='[]'
+          leaf_task_ids_lines=""
           : > "$summary_steps_tmp"
         fi
       else
@@ -2302,6 +2335,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         canceled=0
         steps_duration=0
         leaf_task_ids_json='[]'
+        leaf_task_ids_lines=""
         : > "$summary_steps_tmp"
       fi
       accounted_duration="$(( setup_duration + steps_duration + teardown_duration ))"
@@ -2317,8 +2351,8 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         parallel_max_workers_json="$parallel_max_workers"
       fi
 
-      if [ -n "$events_file" ] && [ -f "$events_file" ]; then
-        parallel_peak_workers="$(workflow_peak_workers "$run_id" "$events_file" "$leaf_task_ids_json" 2>/dev/null || echo 0)"
+      if [ -n "$events_index_file" ] && [ -f "$events_index_file" ]; then
+        parallel_peak_workers="$(workflow_peak_workers "$run_id" "$events_index_file" "$leaf_task_ids_lines" 2>/dev/null || echo 0)"
       else
         parallel_peak_workers=0
       fi
@@ -2457,7 +2491,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
       LAST_WORKFLOW_SUMMARY_FILE="$summary_file"
       echo "INFO: summary_json=$summary_file"
-      registry_snapshot_cleanup "$events_file"
+      registry_snapshot_cleanup "$events_index_file"
       return 0
     }
 
@@ -2645,7 +2679,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         append_event "$run_id" "$workflow_id" "" "passed" '{}'
       else
         detail_json="$(${pkgs.jq}/bin/jq -cn --argjson exitCode "$status" '{exitCode: $exitCode}')"
-        append_event "$run_id" "$workflow_id" "" "failed" "$detail_json"
+        append_event "$run_id" "$workflow_id" "" "failed" "$detail_json" "" "$status"
       fi
 
       duration_seconds="$(( $(date +%s) - started_epoch ))"
@@ -2658,7 +2692,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           if [ "$status" -eq 0 ]; then
             status=1
             detail_json="$(${pkgs.jq}/bin/jq -cn --arg reason "summary-write-failed" '{reason: $reason, exitCode: 1}')"
-            append_event "$run_id" "$workflow_id" "" "failed" "$detail_json"
+            append_event "$run_id" "$workflow_id" "" "failed" "$detail_json" "summary-write-failed" "1"
           fi
         fi
         summary_file="$LAST_WORKFLOW_SUMMARY_FILE"
@@ -2684,7 +2718,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
             canceled=0
           fi
         else
-          events_file="$(registry_events_snapshot "$REGISTRY_ROOT" 2>/dev/null || true)"
+          events_file="$(registry_events_index_snapshot "$REGISTRY_ROOT" 2>/dev/null || true)"
           if [ -n "$events_file" ] && [ -f "$events_file" ]; then
             if workflow_collect_steps "$run_id" "$events_file" "" 2>/dev/null; then
               passed="$WORKFLOW_PASSED_COUNT"

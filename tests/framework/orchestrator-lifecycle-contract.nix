@@ -8,7 +8,7 @@ assert pkgs.lib.hasInfix "nixfied-orchestrator" orchestratorSource;
 assert pkgs.lib.hasInfix "create_run_record() {" orchestratorSource;
 assert pkgs.lib.hasInfix "local attempt_id=\"$2\"" orchestratorSource;
 assert pkgs.lib.hasInfix "update_run_state() {" orchestratorSource;
-assert pkgs.lib.hasInfix "registry_events_snapshot" orchestratorSource;
+assert pkgs.lib.hasInfix "registry_events_index_snapshot" orchestratorSource;
 assert pkgs.lib.hasInfix "\${pkgs.procps}/bin/ps" orchestratorSource;
 assert pkgs.lib.hasInfix "tmp=\"$(mktemp \"$run_file.tmp.XXXXXX\")\"" orchestratorSource;
 assert pkgs.lib.hasInfix "attempt_id: $attemptId," orchestratorSource;
@@ -24,6 +24,7 @@ assert pkgs.lib.hasInfix "workflow_id_exists \"$workflow_id\"" orchestratorSourc
 assert (!pkgs.lib.hasInfix "NIXFIED_MODEL_FILE" orchestratorSource);
 assert (!pkgs.lib.hasInfix "task_json() {" orchestratorSource);
 assert (!pkgs.lib.hasInfix "workflow_json() {" orchestratorSource);
+assert (!pkgs.lib.hasInfix "jq -r --arg runId" orchestratorSource);
 assert pkgs.lib.hasInfix "run_workflow_phase_tasks() {" executorSource;
 assert pkgs.lib.hasInfix "write_workflow_summary_json() {" executorSource;
 assert pkgs.lib.hasInfix "NIXFIED_ORCHESTRATOR_RUN_ID" executorSource;

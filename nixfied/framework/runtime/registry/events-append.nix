@@ -45,19 +45,24 @@ in
     local task_id="$5"
     local state="$6"
     local detail_json="$7"
+    local detail_reason="''${8:-}"
+    local detail_exit_code="''${9:-}"
 
     local events_file
+    local events_index_file
     local seq_file
     local lock_file
     local lock_fd
     local seq
     local ts
+    local ts_epoch
     local rc
     local seq_tmp
     local event_tmp
     local validate_stderr
 
     events_file="$(registry_events_file "$root")"
+    events_index_file="$(registry_events_index_file "$root")"
     seq_file="$(registry_seq_file "$root")"
     lock_file="$(registry_events_lock_file "$root")"
     mkdir -p "$root"
@@ -71,6 +76,7 @@ in
     printf '%s' "$seq" > "$seq_tmp"
     mv "$seq_tmp" "$seq_file"
     ts="$(date -u +"$REGISTRY_TIMESTAMP_FORMAT")"
+    ts_epoch="$(date +%s)"
     event_tmp="$(mktemp "$events_file.event.XXXXXX")"
     validate_stderr="$(mktemp "$events_file.validate.XXXXXX")"
     REGISTRY_APPEND_LAST_SEQ=""
@@ -99,6 +105,20 @@ in
         REGISTRY_APPEND_LAST_EVENT_JSON="$(cat "$event_tmp")"
         cat "$event_tmp" >> "$events_file"
         rc="$?"
+        if [ "$rc" -eq 0 ]; then
+          printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+            "$seq" \
+            "$ts_epoch" \
+            "$ts" \
+            "$run_id" \
+            "$attempt_id" \
+            "$workflow_id" \
+            "$task_id" \
+            "$state" \
+            "$detail_reason" \
+            "$detail_exit_code" >> "$events_index_file"
+          rc="$?"
+        fi
       else
         cat "$validate_stderr" >&2 || true
         rc=1

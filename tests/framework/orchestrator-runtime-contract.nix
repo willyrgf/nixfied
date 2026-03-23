@@ -1,6 +1,7 @@
 { pkgs }:
 let
   orchestratorSource = builtins.readFile ../../nixfied/framework/runtime/orchestrator.nix;
+  controlSource = builtins.readFile ../../nixfied/framework/runtime/orchestrator-control.nix;
   runtimeSource = builtins.readFile ../../nixfied/framework/runtime/orchestrator-runtime.nix;
   commonSource = builtins.readFile ../../nixfied/framework/runtime/common-runtime.nix;
 in
@@ -21,7 +22,11 @@ assert pkgs.lib.hasInfix "run_file_pgid \"$run_file\"" orchestratorSource;
 assert pkgs.lib.hasInfix "run_file_attempt_id \"$run_file\"" orchestratorSource;
 assert pkgs.lib.hasInfix "run_file_command \"$run_file\"" orchestratorSource;
 assert pkgs.lib.hasInfix "run_file_process_mode \"$run_file\"" orchestratorSource;
+assert pkgs.lib.hasInfix "registry_events_index_snapshot" orchestratorSource;
 assert pkgs.lib.hasInfix "cat \"$run_file\"" orchestratorSource;
+assert (!pkgs.lib.hasInfix "jq -r --arg runId" orchestratorSource);
+assert pkgs.lib.hasInfix "registry_events_index_snapshot" controlSource;
+assert (!pkgs.lib.hasInfix "jq -r --arg runId" controlSource);
 assert pkgs.lib.hasInfix "commonRuntimeShell = import ./common-runtime.nix" runtimeSource;
 assert pkgs.lib.hasInfix "\${commonRuntimeShell}" runtimeSource;
 assert pkgs.lib.hasInfix "split_process_mode() {" runtimeSource;

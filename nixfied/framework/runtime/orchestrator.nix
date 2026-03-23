@@ -549,9 +549,9 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
 
     detail_json="$(${pkgs.jq}/bin/jq -cn --arg reason "orchestrator-interrupted" --arg signal "$signal_name" '{reason: $reason, signal: $signal}')"
     if [ -n "$workflow_id" ]; then
-      registry_append_event "$REGISTRY_ROOT" "$run_id" "$attempt_id" "$workflow_id" "" "canceled" "$detail_json"
+      registry_append_event "$REGISTRY_ROOT" "$run_id" "$attempt_id" "$workflow_id" "" "canceled" "$detail_json" "orchestrator-interrupted"
     else
-      registry_append_event "$REGISTRY_ROOT" "$run_id" "$attempt_id" "" "$task_id" "canceled" "$detail_json"
+      registry_append_event "$REGISTRY_ROOT" "$run_id" "$attempt_id" "" "$task_id" "canceled" "$detail_json" "orchestrator-interrupted"
     fi
   }
 
@@ -764,53 +764,69 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
   terminal_from_events() {
     local run_id="$1"
     local attempt_id="$2"
-    local events_file
-    local terminal_state
-    local exit_code
+    local events_index_file
+    local terminal_state=""
+    local exit_code=""
+    local seq=""
+    local ts_epoch=""
+    local ts=""
+    local event_run_id=""
+    local event_attempt_id=""
+    local workflow_id=""
+    local task_id=""
+    local state=""
+    local reason=""
+    local event_exit_code=""
 
-    events_file="$(registry_events_snapshot "$REGISTRY_ROOT")" || {
+    events_index_file="$(registry_events_index_snapshot "$REGISTRY_ROOT")" || {
       echo "unknown 1"
       return
     }
 
-    if [ -z "$events_file" ] || [ ! -f "$events_file" ]; then
+    if [ -z "$events_index_file" ] || [ ! -f "$events_index_file" ]; then
       echo "unknown 1"
       return
     fi
 
-    terminal_state="$(${pkgs.jq}/bin/jq -r --arg runId "$run_id" --arg attemptId "$attempt_id" '
-      select((.payload.runId // "") == $runId and ($attemptId == "" or ((.payload.attemptId // "") == $attemptId)) and ((.payload.state // "") == "passed" or (.payload.state // "") == "failed" or (.payload.state // "") == "canceled"))
-      | .payload.state
-    ' "$events_file" | ${pkgs.coreutils}/bin/tail -n 1)"
+    while IFS=$'\t' read -r seq ts_epoch ts event_run_id event_attempt_id workflow_id task_id state reason event_exit_code; do
+      if [ "$event_run_id" != "$run_id" ]; then
+        continue
+      fi
+      if [ -n "$attempt_id" ] && [ "$event_attempt_id" != "$attempt_id" ]; then
+        continue
+      fi
+      case "$state" in
+        passed|failed|canceled)
+          terminal_state="$state"
+          exit_code="$event_exit_code"
+          ;;
+      esac
+    done < "$events_index_file"
 
     if [ -z "$terminal_state" ]; then
-      registry_snapshot_cleanup "$events_file"
+      registry_snapshot_cleanup "$events_index_file"
       echo "unknown 1"
       return
     fi
 
     case "$terminal_state" in
       passed)
-        registry_snapshot_cleanup "$events_file"
+        registry_snapshot_cleanup "$events_index_file"
         echo "passed 0"
         ;;
       canceled)
-        registry_snapshot_cleanup "$events_file"
+        registry_snapshot_cleanup "$events_index_file"
         echo "canceled 130"
         ;;
       failed)
-        exit_code="$(${pkgs.jq}/bin/jq -r --arg runId "$run_id" --arg attemptId "$attempt_id" '
-          select((.payload.runId // "") == $runId and ($attemptId == "" or ((.payload.attemptId // "") == $attemptId)) and (.payload.state // "") == "failed")
-          | .payload.detail.exitCode // empty
-        ' "$events_file" | ${pkgs.coreutils}/bin/tail -n 1)"
         if [ -z "$exit_code" ]; then
           exit_code=1
         fi
-        registry_snapshot_cleanup "$events_file"
+        registry_snapshot_cleanup "$events_index_file"
         echo "failed $exit_code"
         ;;
       *)
-        registry_snapshot_cleanup "$events_file"
+        registry_snapshot_cleanup "$events_index_file"
         echo "unknown 1"
         ;;
     esac

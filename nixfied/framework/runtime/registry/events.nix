@@ -8,6 +8,7 @@ let
   registrySeqFileName = ".seq";
   registrySeqLockFileName = "seq.lock";
   registryEventsFileName = "events.ndjson";
+  registryEventsIndexFileName = "events.index.tsv";
   registryEventsLockFileName = "events.lock";
   registryEventKind = "runtime-event";
   registryEventVersion = 1;
@@ -31,6 +32,7 @@ in
       REGISTRY_SEQ_FILE_NAME=${lib.escapeShellArg registrySeqFileName}
       REGISTRY_SEQ_LOCK_FILE_NAME=${lib.escapeShellArg registrySeqLockFileName}
       REGISTRY_EVENTS_FILE_NAME=${lib.escapeShellArg registryEventsFileName}
+      REGISTRY_EVENTS_INDEX_FILE_NAME=${lib.escapeShellArg registryEventsIndexFileName}
       REGISTRY_EVENTS_LOCK_FILE_NAME=${lib.escapeShellArg registryEventsLockFileName}
       REGISTRY_EVENT_KIND=${lib.escapeShellArg registryEventKind}
       REGISTRY_EVENT_VERSION=${lib.escapeShellArg (toString registryEventVersion)}
