@@ -25,6 +25,7 @@ let
 in
 assert builtins.hasAttr "nix-checks" packages;
 assert builtins.hasAttr "introspectionGraph" packages;
+assert builtins.hasAttr "introspectionBundle" packages;
 assert builtins.hasAttr "help" apps;
 assert builtins.hasAttr "introspect" apps;
 assert builtins.hasAttr "docs" apps;

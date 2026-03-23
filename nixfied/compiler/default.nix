@@ -84,6 +84,12 @@ let
       canonical
       ;
   };
+  compileIntrospectionBundle = import ./compile-introspection-bundle.nix {
+    inherit
+      lib
+      canonical
+      ;
+  };
 
   compileViews = import ./compile-views.nix { inherit lib; };
   compileSelectionIndex = import ./compile-selection-index.nix { inherit lib; };
@@ -279,6 +285,10 @@ rec {
         inherit legacyLocalDefault;
       };
 
+      introspectionBundle = compileIntrospectionBundle {
+        inherit introspectionGraph;
+      };
+
       views = compileViews {
         inherit projectRoot;
         resolved = resolvedModuleGraph.config;
@@ -318,6 +328,7 @@ rec {
       apps = apps;
       appExecutionManifests = appExecutionManifests;
       introspectionGraph = introspectionGraph;
+      introspectionBundle = introspectionBundle;
       views = views;
       runtime = runtime;
       statePolicy = statePolicy;
