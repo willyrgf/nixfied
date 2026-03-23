@@ -37,7 +37,9 @@ pkgs.runCommand "workflow-ref-app-manifest-contract" { } ''
     fail "workflowRef app should use its direct runtime launcher"
   fi
 
-  app_runtime="$("$GREP" -Eo '/nix/store/[^"[:space:]]+-nixfied-app-runtime[^"[:space:]]*/bin/nixfied-app-runtime[^"[:space:]]*' ${frameworkOutputs.apps."ci-full-direct".program} | "$HEAD" -n 1)"
+  app_runtime="$("$GREP" -Eo '/nix/store/[^"[:space:]]+-nixfied-app-runtime[^"[:space:]]*/bin/nixfied-app-runtime[^"[:space:]]*' ${
+    frameworkOutputs.apps."ci-full-direct".program
+  } | "$HEAD" -n 1)"
   require_non_empty "$app_runtime" "app runtime"
   require_file "$app_runtime"
 

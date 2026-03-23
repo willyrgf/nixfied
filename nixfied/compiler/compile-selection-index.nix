@@ -146,8 +146,7 @@ let
         )
       );
 
-  goWorkflowExact =
-    seen: workflowId: goWorkflow seen workflowId;
+  goWorkflowExact = seen: workflowId: goWorkflow seen workflowId;
 
   goWorkflowReference =
     seen: workflowId:

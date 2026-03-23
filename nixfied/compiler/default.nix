@@ -113,21 +113,6 @@ rec {
         let
           relativePath = "nixfied/local/default.nix";
           projectPath = builtins.unsafeDiscardStringContext "${builtins.toString projectRoot}/${relativePath}";
-          normalizeModuleSpec =
-            moduleSpec:
-            if builtins.isPath moduleSpec then
-              builtins.unsafeDiscardStringContext (builtins.toString moduleSpec)
-            else if builtins.isString moduleSpec then
-              builtins.unsafeDiscardStringContext moduleSpec
-            else
-              "";
-          explicitlyActive = builtins.any (
-            moduleSpec:
-            let
-              normalized = normalizeModuleSpec moduleSpec;
-            in
-            normalized == projectPath || normalized == relativePath || normalized == "./${relativePath}"
-          ) localOverrides;
           templateContents = builtins.readFile ../local/default.nix;
           present = builtins.pathExists projectPath;
           contents = if present then builtins.readFile projectPath else "";
@@ -135,10 +120,6 @@ rec {
           status =
             if !present then
               "missing"
-            else if explicitlyActive && customized then
-              "customized-active"
-            else if explicitlyActive then
-              "template-active"
             else if customized then
               "customized-inactive"
             else
@@ -146,14 +127,10 @@ rec {
           message =
             if !present then
               "legacy local/default.nix is absent"
-            else if explicitlyActive && customized then
-              "legacy local/default.nix differs from the framework template and is explicitly loaded via localOverrides"
-            else if explicitlyActive then
-              "legacy local/default.nix matches the framework template and is explicitly loaded via localOverrides"
             else if customized then
-              "legacy local/default.nix differs from the framework template but is not loaded by flake outputs"
+              "legacy local/default.nix differs from the framework template and is not loaded by nixfied"
             else
-              "legacy local/default.nix matches the framework template and is not loaded by flake outputs";
+              "legacy local/default.nix matches the framework template and is not loaded by nixfied";
         in
         {
           path = relativePath;
@@ -163,7 +140,7 @@ rec {
             status
             message
             ;
-          active = explicitlyActive;
+          active = false;
         };
 
       statePolicy = compileStatePolicy {
