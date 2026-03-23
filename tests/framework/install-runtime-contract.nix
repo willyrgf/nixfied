@@ -14,7 +14,11 @@ assert pkgs.lib.hasInfix "maybe_reenter_install_worktree()" runtimeSource;
 assert pkgs.lib.hasInfix "resolve_install_branch_context()" runtimeSource;
 assert pkgs.lib.hasInfix "maybe_confirm_install_overwrite()" runtimeSource;
 assert pkgs.lib.hasInfix "maybe_generate_prompt_plan()" runtimeSource;
+assert !(pkgs.lib.hasInfix "\${pkgs.jq}/bin/jq" installSource);
+assert !(pkgs.lib.hasInfix "\${pkgs.jq}/bin/jq" runtimeSource);
+assert pkgs.lib.hasInfix "PROJECT_TEMPLATE_REQUIRED_KEYS=(" runtimeSource;
+assert pkgs.lib.hasInfix "FILTER_PLAN_PRUNE_FILES=()" runtimeSource;
 assert pkgs.lib.hasInfix "Create a PROMPT PLAN in Markdown" promptPlanSource;
 pkgs.runCommand "install-runtime-contract" { } ''
-  echo "OK: install runtime policy is split into focused helpers" > "$out"
+  echo "OK: install runtime policy is split into focused helpers and template filters are jq-free" > "$out"
 ''
