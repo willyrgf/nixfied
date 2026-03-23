@@ -10,6 +10,7 @@
 let
   lib = pkgs.lib;
   mkShellApp = import ./mk-shell-app.nix { inherit pkgs; };
+  commonRuntimeShell = import ../runtime/common-runtime.nix { inherit pkgs; };
   contractRef = ((app.validation or { }).contractRef or "");
   validatorProgram = import ../contracts/mkValidator.nix {
     inherit
@@ -26,6 +27,7 @@ in
   appName = "machine-output:${appId}";
   binPrefix = "nixfied-machine-output";
   body = ''
+    ${commonRuntimeShell}
     target_program=${lib.escapeShellArg targetProgram}
     target_app_id=${lib.escapeShellArg (app.targetAppId or "")}
     contract_ref=${lib.escapeShellArg contractRef}
@@ -68,29 +70,22 @@ in
       local message="$3"
       local failed_app_id="$4"
       local exit_code="$5"
-
-      ${pkgs.jq}/bin/jq -cn \
-        --arg appId ${lib.escapeShellArg appId} \
-        --arg targetAppId "$target_app_id" \
-        --arg stage "$stage" \
-        --arg code "$code" \
-        --arg message "$message" \
-        --arg failedAppId "$failed_app_id" \
-        --arg contractRef "$contract_ref" \
-        --arg validator "cue" \
-        --argjson exitCode "$exit_code" \
-        '{
-          ok: false,
-          appId: $appId,
-          targetAppId: $targetAppId,
-          stage: $stage,
-          code: $code,
-          message: $message,
-          failedAppId: (if $failedAppId == "" then null else $failedAppId end),
-          contractRef: (if $contractRef == "" then null else $contractRef end),
-          validator: (if $stage == "validation" then $validator else null end),
-          exitCode: $exitCode
-        }'
+      printf '{'
+      printf '"ok":false'
+      printf ',"appId":%s' "$(json_quote_string ${lib.escapeShellArg appId})"
+      printf ',"targetAppId":%s' "$(json_quote_string "$target_app_id")"
+      printf ',"stage":%s' "$(json_quote_string "$stage")"
+      printf ',"code":%s' "$(json_quote_string "$code")"
+      printf ',"message":%s' "$(json_quote_string "$message")"
+      printf ',"failedAppId":%s' "$(json_string_or_null "$failed_app_id")"
+      printf ',"contractRef":%s' "$(json_string_or_null "$contract_ref")"
+      if [ "$stage" = "validation" ]; then
+        printf ',"validator":"cue"'
+      else
+        printf ',"validator":null'
+      fi
+      printf ',"exitCode":%s' "$exit_code"
+      printf '}\n'
     }
 
     run_captured_app() {
