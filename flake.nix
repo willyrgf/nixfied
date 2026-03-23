@@ -15,6 +15,11 @@
     }:
     let
       supportedSystems = flake-utils.lib.defaultSystems;
+      canonicalLib = import ./nixfied/framework/core/canonical.nix { lib = nixpkgs.lib; };
+      contractsLib = import ./nixfied/contracts {
+        lib = nixpkgs.lib;
+        canonical = canonicalLib;
+      };
 
       frameworkRevision = import ./nixfied/framework/core/framework-revision.nix {
         inherit self;
@@ -127,10 +132,12 @@
           };
 
         canonical = import ./nixfied/framework/core/canonical.nix { lib = nixpkgs.lib; };
+        contracts = contractsLib;
       };
 
       nixfied = {
         modules = import ./nixfied/modules;
+        contracts = contractsLib;
         schemas = {
           task = ./nixfied/schemas/task-contract.json;
           workflow = ./nixfied/schemas/workflow-contract.json;

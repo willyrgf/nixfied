@@ -167,6 +167,8 @@ let
     "runtime-service-selection-contract" = { };
 
     "framework-test-coverage-contract" = { };
+
+    "contract-render-snapshot" = { };
   };
 
   rawChecks = {
@@ -256,6 +258,10 @@ let
     };
 
     "service-surface-catalog-contract" = import ./service-surface-catalog-contract.nix {
+      inherit pkgs;
+    };
+
+    "contract-render-snapshot" = import ./contract-render-snapshot.nix {
       inherit pkgs;
     };
 
