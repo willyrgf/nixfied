@@ -22,6 +22,10 @@ assert pkgs.lib.hasInfix "import ../../core/runtime-defaults.nix" helperSource;
 assert pkgs.lib.hasInfix "print_log_tail \"$LOG_FILE\"" helperSource;
 assert pkgs.lib.hasInfix "SERVICE_PID_FILE" helperSource;
 assert pkgs.lib.hasInfix "SERVICE_LOG_FILE" helperSource;
+assert pkgs.lib.hasInfix "NIXFIED_START_RETURN_AFTER_READY" helperSource;
+assert pkgs.lib.hasInfix "if [ \"''\${NIXFIED_START_RETURN_AFTER_READY:-0}\" = \"1\" ]; then"
+  helperSource;
+assert pkgs.lib.hasInfix "NIXFIED_START_RETURN_AFTER_READY=1 exec \${start}" helperSource;
 assert pkgs.lib.hasInfix "stopRequestBody" helperSource;
 assert pkgs.lib.hasInfix "stopMissingLogPathExpr" helperSource;
 assert pkgs.lib.hasInfix "stopStateLogPathExpr" helperSource;

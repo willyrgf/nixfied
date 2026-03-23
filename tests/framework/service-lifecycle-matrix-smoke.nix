@@ -446,61 +446,99 @@ let
     script = heliosStubScript;
   };
 
+  nginxProject = projectBase // {
+    services.nginx = {
+      defaultSource = "stub";
+      sources = {
+        stub.package = nginxStub;
+      };
+    };
+  };
+
+  minioProject = projectBase // {
+    services.minio = {
+      defaultSource = "stub";
+      sources = {
+        stub.package = minioStub;
+      };
+    };
+  };
+
+  rethProject = projectBase // {
+    services.reth = {
+      defaultSource = "stub";
+      sources = {
+        stub.package = rethStub;
+      };
+    };
+  };
+
+  heliosProject = projectBase // {
+    services.helios = {
+      defaultSource = "stub";
+      sources = {
+        stub.package = heliosStub;
+      };
+    };
+  };
+
   postgresService = import ../../nixfied/framework/runtime/services/postgres/default.nix {
     inherit pkgs;
     project = projectBase;
     slots = slotsStub;
   };
 
+  nginxSummary = import ../../nixfied/framework/runtime/helpers/summary.nix {
+    inherit pkgs;
+    project = nginxProject;
+  };
+
+  nginxHelpers = import ../../nixfied/framework/runtime/helpers/helpers.nix {
+    inherit pkgs;
+    project = nginxProject;
+    inherit (nginxSummary) summaryParser;
+  };
+
+  nginxConfig = import ../../nixfied/framework/runtime/services/nginx/config.nix {
+    inherit pkgs;
+    project = nginxProject;
+  };
+
+  nginxTemplates = import ../../nixfied/framework/runtime/services/nginx/templates.nix {
+    inherit pkgs;
+    package = nginxConfig.package or pkgs.nginx;
+  };
+
+  nginxLifecycle = import ../../nixfied/framework/runtime/services/nginx/lifecycle.nix {
+    inherit pkgs;
+    project = nginxProject;
+    slots = slotsStub;
+    config = nginxConfig;
+    templates = nginxTemplates;
+    loggingPrelude = nginxHelpers.loggingPrelude;
+  };
+
   nginxService = import ../../nixfied/framework/runtime/services/nginx/default.nix {
     inherit pkgs;
-    project = projectBase // {
-      services.nginx = {
-        defaultSource = "stub";
-        sources = {
-          stub.package = nginxStub;
-        };
-      };
-    };
+    project = nginxProject;
     slots = slotsStub;
   };
 
   minioService = import ../../nixfied/framework/runtime/services/minio/default.nix {
     inherit pkgs;
-    project = projectBase // {
-      services.minio = {
-        defaultSource = "stub";
-        sources = {
-          stub.package = minioStub;
-        };
-      };
-    };
+    project = minioProject;
     slots = slotsStub;
   };
 
   rethService = import ../../nixfied/framework/runtime/services/reth/default.nix {
     inherit pkgs;
-    project = projectBase // {
-      services.reth = {
-        defaultSource = "stub";
-        sources = {
-          stub.package = rethStub;
-        };
-      };
-    };
+    project = rethProject;
     slots = slotsStub;
   };
 
   heliosService = import ../../nixfied/framework/runtime/services/helios/default.nix {
     inherit pkgs;
-    project = projectBase // {
-      services.helios = {
-        defaultSource = "stub";
-        sources = {
-          stub.package = heliosStub;
-        };
-      };
-    };
+    project = heliosProject;
     slots = slotsStub;
   };
 in
@@ -519,6 +557,7 @@ pkgs.runCommand "service-lifecycle-matrix-smoke" { } ''
   export SLOT=0
   export ENV=test
   export REGISTRY_ROOT="$TMPDIR/registry"
+  FULL_START_TIMEOUT_SECS=15
   mkdir -p "$HOME" "$REGISTRY_ROOT"
 
   wait_for_success() {
@@ -603,6 +642,43 @@ pkgs.runCommand "service-lifecycle-matrix-smoke" { } ''
     fi
   }
 
+  reset_service_case_dirs() {
+    local service_name="$1"
+    local case_name="$2"
+
+    SERVICE_ROOT="$TMPDIR/$service_name-$case_name-root"
+    RUN_DIR="$TMPDIR/$service_name-$case_name-run"
+    LOG_DIR="$TMPDIR/$service_name-$case_name-log"
+    CONFIG_DIR="$TMPDIR/$service_name-$case_name-config"
+    export SERVICE_ROOT RUN_DIR LOG_DIR CONFIG_DIR
+    mkdir -p "$SERVICE_ROOT" "$RUN_DIR" "$LOG_DIR" "$CONFIG_DIR"
+  }
+
+  dump_service_debug() {
+    local service_name="$1"
+    local phase_name="$2"
+    local output_file="$TMPDIR/$service_name-$phase_name.out"
+    local service_dir="$SERVICE_ROOT/$service_name"
+    local log_path=""
+
+    if [ -f "$output_file" ]; then
+      echo "--- $output_file" >&2
+      cat "$output_file" >&2
+    fi
+
+    if [ -f "$service_dir/postgres.log" ]; then
+      echo "--- $service_dir/postgres.log" >&2
+      cat "$service_dir/postgres.log" >&2
+    fi
+
+    for log_path in "$service_dir/logs"/*; do
+      if [ -f "$log_path" ]; then
+        echo "--- $log_path" >&2
+        cat "$log_path" >&2
+      fi
+    done
+  }
+
   run_service_case() {
     local service_name="$1"
     local init_bin="$2"
@@ -620,21 +696,6 @@ pkgs.runCommand "service-lifecycle-matrix-smoke" { } ''
     CONFIG_DIR="$TMPDIR/$service_name-config"
     export SERVICE_ROOT RUN_DIR LOG_DIR CONFIG_DIR
     mkdir -p "$SERVICE_ROOT" "$RUN_DIR" "$LOG_DIR" "$CONFIG_DIR"
-
-    dump_service_debug() {
-      local service="$1"
-      local pg_log="$SERVICE_ROOT/$service/postgres.log"
-
-      if [ -f "$TMPDIR/$service-start.out" ]; then
-        echo "--- $service-start.out" >&2
-        cat "$TMPDIR/$service-start.out" >&2
-      fi
-
-      if [ -f "$pg_log" ]; then
-        echo "--- $pg_log" >&2
-        cat "$pg_log" >&2
-      fi
-    }
 
     echo "INFO: lifecycle-smoke service=$service_name phase=init" >&2
     "$init_bin" > "$TMPDIR/$service_name-init.out" 2>&1 || {
@@ -654,7 +715,7 @@ pkgs.runCommand "service-lifecycle-matrix-smoke" { } ''
 
     echo "INFO: lifecycle-smoke service=$service_name phase=health-after-start" >&2
     if ! wait_for_success "$service_name health after start" "$health_bin" "$TMPDIR/$service_name-health.out"; then
-      dump_service_debug "$service_name"
+      dump_service_debug "$service_name" "start"
       exit 1
     fi
     echo "INFO: lifecycle-smoke service=$service_name phase=ready-after-start" >&2
@@ -694,6 +755,80 @@ pkgs.runCommand "service-lifecycle-matrix-smoke" { } ''
     echo "INFO: lifecycle-smoke service=$service_name phase=done" >&2
   }
 
+  run_full_start_case() {
+    local service_name="$1"
+    local phase_name="$2"
+    local full_start_bin="$3"
+    local status_bin="$4"
+    local health_bin="$5"
+    local ready_bin="$6"
+    local stop_bin="$7"
+    local rc=0
+
+    reset_service_case_dirs "$service_name" "$phase_name"
+
+    echo "INFO: lifecycle-smoke service=$service_name phase=$phase_name" >&2
+    set +e
+    ${pkgs.coreutils}/bin/timeout "$FULL_START_TIMEOUT_SECS" "$full_start_bin" > "$TMPDIR/$service_name-$phase_name.out" 2>&1
+    rc="$?"
+    set -e
+    if [ "$rc" -ne 0 ]; then
+      dump_service_debug "$service_name" "$phase_name"
+      fail "$service_name $phase_name should return after readiness"
+    fi
+
+    echo "INFO: lifecycle-smoke service=$service_name phase=status-after-$phase_name" >&2
+    "$status_bin" > "$TMPDIR/$service_name-$phase_name-status.out" 2>&1 || {
+      dump_service_debug "$service_name" "$phase_name"
+      fail "$service_name $phase_name should leave the service running"
+    }
+    require_contains "$TMPDIR/$service_name-$phase_name-status.out" "service=$service_name"
+    require_contains "$TMPDIR/$service_name-$phase_name-status.out" "running=true"
+
+    echo "INFO: lifecycle-smoke service=$service_name phase=health-after-$phase_name" >&2
+    if ! wait_for_success \
+      "$service_name health after $phase_name" \
+      "$health_bin" \
+      "$TMPDIR/$service_name-$phase_name-health.out"
+    then
+      dump_service_debug "$service_name" "$phase_name"
+      "$stop_bin" >/dev/null 2>&1 || true
+      exit 1
+    fi
+
+    echo "INFO: lifecycle-smoke service=$service_name phase=ready-after-$phase_name" >&2
+    if ! wait_for_success \
+      "$service_name ready after $phase_name" \
+      "$ready_bin" \
+      "$TMPDIR/$service_name-$phase_name-ready.out"
+    then
+      dump_service_debug "$service_name" "$phase_name"
+      "$stop_bin" >/dev/null 2>&1 || true
+      exit 1
+    fi
+
+    echo "INFO: lifecycle-smoke service=$service_name phase=stop-after-$phase_name" >&2
+    "$stop_bin" > "$TMPDIR/$service_name-$phase_name-stop.out" 2>&1 || {
+      cat "$TMPDIR/$service_name-$phase_name-stop.out" >&2
+      fail "$service_name stop after $phase_name should succeed"
+    }
+
+    wait_for_failure \
+      "$service_name health after stop ($phase_name)" \
+      "$health_bin" \
+      "$TMPDIR/$service_name-$phase_name-health-stopped.out"
+    wait_for_failure \
+      "$service_name ready after stop ($phase_name)" \
+      "$ready_bin" \
+      "$TMPDIR/$service_name-$phase_name-ready-stopped.out"
+    wait_for_failure \
+      "$service_name status after stop ($phase_name)" \
+      "$status_bin" \
+      "$TMPDIR/$service_name-$phase_name-status-stopped.out"
+    require_contains "$TMPDIR/$service_name-$phase_name-status-stopped.out" "running=false"
+    echo "INFO: lifecycle-smoke service=$service_name phase=$phase_name-done" >&2
+  }
+
   if [ "$POSTGRES_LIVE_AVAILABLE" -eq 1 ]; then
     export POSTGRES_PORT=55433
     run_service_case \
@@ -719,6 +854,14 @@ pkgs.runCommand "service-lifecycle-matrix-smoke" { } ''
     "${nginxService.ready}" \
     "${nginxService.restart}" \
     "${nginxService.stop}"
+  run_full_start_case \
+    nginx \
+    full-start \
+    "${nginxLifecycle.fullStart}" \
+    "${nginxService.status}" \
+    "${nginxService.health}" \
+    "${nginxService.ready}" \
+    "${nginxService.stop}"
 
   export MINIO_API_PORT=29000 MINIO_CONSOLE_PORT=29001
   run_service_case \
@@ -731,6 +874,22 @@ pkgs.runCommand "service-lifecycle-matrix-smoke" { } ''
     "${minioService.ready}" \
     "${minioService.restart}" \
     "${minioService.stop}"
+  run_full_start_case \
+    minio \
+    full-start \
+    "${minioService.fullStart}" \
+    "${minioService.status}" \
+    "${minioService.health}" \
+    "${minioService.ready}" \
+    "${minioService.stop}"
+  run_full_start_case \
+    minio \
+    full-start-test \
+    "${minioService.fullStartTest}" \
+    "${minioService.status}" \
+    "${minioService.health}" \
+    "${minioService.ready}" \
+    "${minioService.stop}"
 
   export RETH_HTTP_PORT=29100 RETH_WS_PORT=29101 RETH_AUTH_PORT=29102
   run_service_case \
@@ -742,6 +901,22 @@ pkgs.runCommand "service-lifecycle-matrix-smoke" { } ''
     "${rethService.health}" \
     "${rethService.ready}" \
     "${rethService.restart}" \
+    "${rethService.stop}"
+  run_full_start_case \
+    reth \
+    full-start \
+    "${rethService.fullStart}" \
+    "${rethService.status}" \
+    "${rethService.health}" \
+    "${rethService.ready}" \
+    "${rethService.stop}"
+  run_full_start_case \
+    reth \
+    full-start-test \
+    "${rethService.fullStartTest}" \
+    "${rethService.status}" \
+    "${rethService.health}" \
+    "${rethService.ready}" \
     "${rethService.stop}"
 
   export HELIOSRPC_PORT=29200 RETH_HTTP_PORT=29210
@@ -756,6 +931,22 @@ pkgs.runCommand "service-lifecycle-matrix-smoke" { } ''
     "${heliosService.ready}" \
     "${heliosService.restart}" \
     "${heliosService.stop}"
+  run_full_start_case \
+    helios \
+    full-start \
+    "${heliosService.fullStart}" \
+    "${heliosService.status}" \
+    "${heliosService.health}" \
+    "${heliosService.ready}" \
+    "${heliosService.stop}"
+  run_full_start_case \
+    helios \
+    full-start-test \
+    "${heliosService.fullStartTest}" \
+    "${heliosService.status}" \
+    "${heliosService.health}" \
+    "${heliosService.ready}" \
+    "${heliosService.stop}"
 
-  echo "OK: public service modules cover direct start stop restart health and ready behavior" > "$out"
+  echo "OK: public service modules cover direct start stop restart health ready and full-start return-after-readiness behavior" > "$out"
 ''

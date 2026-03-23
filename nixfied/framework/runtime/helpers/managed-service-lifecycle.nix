@@ -364,6 +364,16 @@ let
           trap cleanup EXIT INT TERM
 
           ${startPostLaunchBody}
+          # Let composed full-start helpers reuse startup readiness without
+          # keeping this supervisor wrapper alive.
+          if [ "''${NIXFIED_START_RETURN_AFTER_READY:-0}" = "1" ]; then
+            trap - EXIT INT TERM
+            if command -v disown >/dev/null 2>&1; then
+              disown "$CHILD_PID" 2>/dev/null || true
+            fi
+            exit 0
+          fi
+
           set +e
           wait "$CHILD_PID"
           RC=$?
@@ -470,6 +480,12 @@ let
         body = readyBody;
       };
 
+      defaultFullStartBody = ''
+        ${init}
+        ${checkConfig}
+        NIXFIED_START_RETURN_AFTER_READY=1 exec ${start}
+      '';
+
       fullStart = pkgs.writeShellScript "${service}-full-start" ''
         ${loggingPrelude}
 
@@ -479,11 +495,7 @@ let
           if fullStartBody != null then
             fullStartBody
           else
-            ''
-              ${init}
-              ${checkConfig}
-              exec ${start}
-            ''
+            defaultFullStartBody
         }
       '';
 
@@ -498,11 +510,7 @@ let
           else if fullStartBody != null then
             fullStartBody
           else
-            ''
-              ${init}
-              ${checkConfig}
-              exec ${start}
-            ''
+            defaultFullStartBody
         }
       '';
     in
