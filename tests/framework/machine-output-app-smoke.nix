@@ -4,6 +4,7 @@ let
     inherit pkgs;
     system = pkgs.system;
   };
+  contractTypes = frameworkLib.contracts.types;
   shellHelpers = import ./lib/shell-helpers.nix { inherit pkgs; };
   repoRoot = builtins.toString ../..;
   workflowTaskId = "task.test.machine-output.workflow-body";
@@ -17,6 +18,19 @@ let
     projectModules = [ ../../nixfied/project/module.nix ];
     extraModules = [
       {
+        nixfied.contracts.definitions.machineOutput.result = contractTypes.record {
+          fields = {
+            kind = contractTypes.field {
+              schema = contractTypes.enum {
+                values = [ "task" ];
+              };
+            };
+            ok = contractTypes.field {
+              schema = contractTypes.bool { };
+            };
+          };
+        };
+
         nixfied.tasks."test.machine-output.workflow-body" = {
           id = workflowTaskId;
           summary = "machine-output workflow body";
@@ -144,22 +158,7 @@ let
             setupAppIds = [ "machine-output-setup" ];
             teardownAppIds = [ "machine-output-teardown" ];
             validation = {
-              schema = {
-                type = "object";
-                required = [
-                  "ok"
-                  "kind"
-                ];
-                properties = {
-                  ok.type = "boolean";
-                  kind = {
-                    type = "string";
-                    enum = [ "task" ];
-                  };
-                };
-                additionalProperties = false;
-              };
-              command = "${pkgs.jq}/bin/jq -e '.kind == \"task\"' \"$NIXFIED_MACHINE_OUTPUT_FILE\" > /dev/null";
+              contractRef = "machineOutput.result";
             };
             summary = "Machine-output app smoke";
             description = "Wraps a JSON-emitting task app with setup and teardown helpers.";
@@ -171,8 +170,8 @@ let
             id = "workflow-machine-invalid";
             kind = "machineOutput";
             targetAppId = "workflow-smoke";
-            validation.schema = {
-              type = "object";
+            validation = {
+              contractRef = "machineOutput.result";
             };
             summary = "Workflow machine-output failure smoke";
             description = "Shows that workflowRef targets fail cleanly when they do not emit strict JSON.";
@@ -249,6 +248,10 @@ pkgs.runCommand "machine-output-app-smoke" { } ''
   "$JQ" -e '.resolved.nodeId == "app:machine-json"' "$TMPDIR/machine-introspect.json" > /dev/null || {
     cat "$TMPDIR/machine-introspect.json"
     fail "introspect must resolve machine-json as an app"
+  }
+  "$JQ" -e '.resolution.data.contractRef == "machineOutput.result"' "$TMPDIR/machine-introspect.json" > /dev/null || {
+    cat "$TMPDIR/machine-introspect.json"
+    fail "introspect must expose machine-json contractRef"
   }
   "$JQ" -e '.resolution.data.targetAppId == "json-body"' "$TMPDIR/machine-introspect.json" > /dev/null || {
     cat "$TMPDIR/machine-introspect.json"

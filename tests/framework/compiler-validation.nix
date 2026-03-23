@@ -5,6 +5,12 @@
   serviceCatalog,
 }:
 let
+  frameworkLib = import ../../nixfied/framework/core {
+    inherit
+      pkgs
+      ;
+    system = pkgs.system;
+  };
   taskIds = builtins.attrNames model.tasks;
   workflowIds = builtins.attrNames model.workflows;
   serviceIds = builtins.attrNames serviceCatalog;
@@ -127,6 +133,28 @@ let
   featureView = model.views.features or null;
   nginxService = services."service.nginx" or null;
   heliosService = services."service.helios" or null;
+  invalidMachineOutputContractRef = builtins.tryEval (
+    builtins.deepSeq ((frameworkLib.mkNixfied {
+      projectRoot = ../..;
+      projectModules = [ ../../nixfied/project/module.nix ];
+      extraModules = [
+        {
+          nixfied.apps."test-invalid-machine-output-contract" = {
+            id = "test-invalid-machine-output-contract";
+            kind = "machineOutput";
+            targetAppId = "check";
+            validation.contractRef = "missing.machine-output.contract";
+            summary = "invalid machine-output contract";
+            description = "Compiler validation coverage for unknown machine-output contracts.";
+            usage = [ "nix run .#test-invalid-machine-output-contract" ];
+            ownerFile = "tests/framework/compiler-validation.nix";
+          };
+        }
+      ];
+      localOverrides = [ ];
+    }).model.apps
+    ) true
+  );
   hasCommandSurface =
     name: ownerFile:
     builtins.any (entry: entry.name == name && entry.owner_file == ownerFile) commandSurfaces;
@@ -232,6 +260,7 @@ assert serviceFeaturesPresent;
 assert workflowFeaturesPresent;
 assert exposedTaskFeaturesPresent;
 assert runtimeFeaturesPresent;
+assert invalidMachineOutputContractRef.success == false;
 pkgs.runCommand "compiler-validation" { } ''
   echo "OK: compiler task, workflow, and feature contracts are stable" > "$out"
 ''

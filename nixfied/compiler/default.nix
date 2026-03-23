@@ -8,6 +8,12 @@
 }:
 let
   lib = pkgs.lib;
+  contracts = import ../contracts {
+    inherit
+      lib
+      canonical
+      ;
+  };
 
   idLib = import ./id.nix {
     inherit
@@ -81,6 +87,13 @@ let
 
   compileViews = import ./compile-views.nix { inherit lib; };
   compileSelectionIndex = import ./compile-selection-index.nix { inherit lib; };
+  compileContractBundle = import ./compile-contract-bundle.nix {
+    inherit
+      lib
+      canonical
+      contracts
+      ;
+  };
 
   finalizeModel = import ./finalize-model.nix {
     inherit
@@ -190,12 +203,17 @@ rec {
         pruneReasonsByTaskId = taskCompilation.pruneReasonsByTaskId;
       };
 
+      contractBundle = compileContractBundle {
+        resolved = resolvedModuleGraph.config;
+      };
+
       apps = compileApps {
         resolved = resolvedModuleGraph.config;
         inherit
           serviceSets
           tasks
           workflows
+          contractBundle
           ;
       };
 
@@ -304,6 +322,7 @@ rec {
       serviceSurfaceCatalog = serviceSurfaceCatalog;
       features = features;
       selectionIndex = selectionIndex;
+      contractBundle = contractBundle;
       legacyLocalDefault = legacyLocalDefault;
     };
 
