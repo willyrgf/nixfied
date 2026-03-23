@@ -15,10 +15,10 @@ in
       validateTaskId,
       keepLogsSuccess,
       keepLogsFailure,
-      slotsJson,
-      envsJson,
-      runArgsJson,
-      runEnvJson,
+      slotsShell,
+      envsShell,
+      runArgsShell,
+      runEnvEntriesShell,
       envPattern,
     }:
     ''
@@ -34,10 +34,14 @@ in
       keep_logs_success=${if keepLogsSuccess then "1" else "0"}
       keep_logs_failure=${if keepLogsFailure then "1" else "0"}
 
-      slots_json='${slotsJson}'
-      envs_json='${envsJson}'
-      run_args_json='${runArgsJson}'
-      run_env_json='${runEnvJson}'
+      isolation_slots=()
+      isolation_envs=()
+      run_args=()
+      run_env_entries=()
+${slotsShell}
+${envsShell}
+${runArgsShell}
+${runEnvEntriesShell}
       selected_slot=""
       selected_env=""
       max_parallel_override=""
@@ -132,11 +136,6 @@ in
       if [ "$effective_max_parallel" -lt 1 ]; then
         nixfied_exit_precondition "test-isolation maxParallel must be >= 1"
       fi
-
-      mapfile -t isolation_slots < <(${pkgs.jq}/bin/jq -r '.[]' <<<"$slots_json")
-      mapfile -t isolation_envs < <(${pkgs.jq}/bin/jq -r '.[]' <<<"$envs_json")
-      mapfile -t run_args < <(${pkgs.jq}/bin/jq -r '.[]' <<<"$run_args_json")
-      mapfile -t run_env_entries < <(${pkgs.jq}/bin/jq -r 'to_entries[]? | [.key, (.value | tostring)] | @tsv' <<<"$run_env_json")
 
       if [ -n "$selected_slot" ]; then
         if ! [[ "$selected_slot" =~ ^[0-9]+$ ]]; then
