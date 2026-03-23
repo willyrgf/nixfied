@@ -22,9 +22,13 @@ let
 
   introspectionGraphJson = builtins.toJSON compiledCore.introspectionGraph;
   introspectionBundleJson = builtins.toJSON compiledCore.introspectionBundle;
+  introspectionAssets = import ../introspection/assets.nix {
+    inherit pkgs canonical;
+    bundle = compiledCore.introspectionBundle;
+  };
   introspectionRuntime = import ../introspection/runtime.nix {
     inherit pkgs;
-    bundleFile = introspectionBundleFile;
+    assetsDir = introspectionAssets;
   };
 
   taskSchema = builtins.fromJSON (builtins.readFile ../../schemas/task-contract.json);
@@ -106,6 +110,7 @@ let
     docs = docsFile;
     introspectionGraph = introspectionGraphFile;
     introspectionBundle = introspectionBundleFile;
+    introspectionAssets = introspectionAssets;
     stateHash = pkgs.writeText "nixfied-state-hash.txt" "${compiledCore.stateHash}\n";
     features = pkgs.writeText "nixfied-features.txt" "${featuresTable}\n";
     schema = schemaDir;

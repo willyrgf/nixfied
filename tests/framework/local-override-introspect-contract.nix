@@ -32,11 +32,11 @@ pkgs.runCommand "local-override-introspect-contract" { } ''
   cd "$NIXFIED_FLAKE_ROOT"
 
   "$INTROSPECT_APP" check --json > "$TMPDIR/check.json"
-  "$JQ" -e '.diagnostics.localOverridesActive == true' "$TMPDIR/check.json" > /dev/null
-  "$JQ" -e '.diagnostics.localOverrideCount == 1' "$TMPDIR/check.json" > /dev/null
-  "$JQ" -e '.diagnostics.legacyLocalDefault.active == false' "$TMPDIR/check.json" > /dev/null
-  "$JQ" -e '.diagnostics.legacyLocalDefault.status == "template-inactive"' "$TMPDIR/check.json" > /dev/null
-  "$JQ" -e '.diagnostics.legacyLocalDefault.message | contains("not loaded by nixfied")' "$TMPDIR/check.json" > /dev/null
+  "$JQ" -e '.payload.diagnostics.localOverridesActive == true' "$TMPDIR/check.json" > /dev/null
+  "$JQ" -e '.payload.diagnostics.localOverrideCount == 1' "$TMPDIR/check.json" > /dev/null
+  "$JQ" -e '.payload.diagnostics.legacyLocalDefault.active == false' "$TMPDIR/check.json" > /dev/null
+  "$JQ" -e '.payload.diagnostics.legacyLocalDefault.status == "template-inactive"' "$TMPDIR/check.json" > /dev/null
+  "$JQ" -e '.payload.diagnostics.legacyLocalDefault.message | contains("not loaded by nixfied")' "$TMPDIR/check.json" > /dev/null
 
   "$INTROSPECT_APP" check > "$TMPDIR/check-human.txt"
   require_contains "$TMPDIR/check-human.txt" "INFO: diagnostics.local_overrides_active=true"

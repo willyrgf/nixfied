@@ -40,8 +40,8 @@ pkgs.runCommand "service-set-surface-contract" { } ''
   require_contains "$TMPDIR/service-set-start-help.txt" "minio, postgres"
 
   "$INTROSPECT_APP" service-set:default --json > "$TMPDIR/service-set-introspect.json"
-  "$JQ" -e '.resolved.nodeId == "service-set:default"' "$TMPDIR/service-set-introspect.json" > /dev/null
-  "$JQ" -e '.resolution.data.requiredServices | sort == ["minio", "postgres"]' "$TMPDIR/service-set-introspect.json" > /dev/null
+  "$JQ" -e '.payload.resolved.nodeId == "service-set:default"' "$TMPDIR/service-set-introspect.json" > /dev/null
+  "$JQ" -e '.payload.resolution.data.requiredServices | sort == ["minio", "postgres"]' "$TMPDIR/service-set-introspect.json" > /dev/null
 
   echo "OK: service-set surfaces expose grouped export and introspection contracts" > "$out"
 ''

@@ -440,33 +440,33 @@ pkgs.runCommand "machine-output-app-smoke" { } ''
   }
 
   "$INTROSPECT_APP" app:machine-json --json > "$TMPDIR/machine-introspect.json"
-  "$JQ" -e '.resolved.nodeId == "app:machine-json"' "$TMPDIR/machine-introspect.json" > /dev/null || {
+  "$JQ" -e '.payload.resolved.nodeId == "app:machine-json"' "$TMPDIR/machine-introspect.json" > /dev/null || {
     cat "$TMPDIR/machine-introspect.json"
     fail "introspect must resolve machine-json as an app"
   }
-  "$JQ" -e '.resolution.data.contractRef == "machineOutput.result"' "$TMPDIR/machine-introspect.json" > /dev/null || {
+  "$JQ" -e '.payload.resolution.data.contractRef == "machineOutput.result"' "$TMPDIR/machine-introspect.json" > /dev/null || {
     cat "$TMPDIR/machine-introspect.json"
     fail "introspect must expose machine-json contractRef"
   }
-  "$JQ" -e '.resolution.data.targetAppId == "json-body"' "$TMPDIR/machine-introspect.json" > /dev/null || {
+  "$JQ" -e '.payload.resolution.data.targetAppId == "json-body"' "$TMPDIR/machine-introspect.json" > /dev/null || {
     cat "$TMPDIR/machine-introspect.json"
     fail "introspect must expose machine-json targetAppId"
   }
-  "$JQ" -e '.execution.runSurface == "app-wrapper"' "$TMPDIR/machine-introspect.json" > /dev/null || {
+  "$JQ" -e '.payload.execution.runSurface == "app-wrapper"' "$TMPDIR/machine-introspect.json" > /dev/null || {
     cat "$TMPDIR/machine-introspect.json"
     fail "introspect must expose app-wrapper execution for machineOutput apps"
   }
 
   "$INTROSPECT_APP" app:workflow-smoke --json > "$TMPDIR/workflow-introspect.json"
-  "$JQ" -e '.resolved.nodeId == "app:workflow-smoke"' "$TMPDIR/workflow-introspect.json" > /dev/null || {
+  "$JQ" -e '.payload.resolved.nodeId == "app:workflow-smoke"' "$TMPDIR/workflow-introspect.json" > /dev/null || {
     cat "$TMPDIR/workflow-introspect.json"
     fail "introspect must resolve workflow-smoke as an app"
   }
-  "$JQ" -e --arg workflowId ${pkgs.lib.escapeShellArg workflowId} '.resolution.data.workflowId == $workflowId' "$TMPDIR/workflow-introspect.json" > /dev/null || {
+  "$JQ" -e --arg workflowId ${pkgs.lib.escapeShellArg workflowId} '.payload.resolution.data.workflowId == $workflowId' "$TMPDIR/workflow-introspect.json" > /dev/null || {
     cat "$TMPDIR/workflow-introspect.json"
     fail "introspect must expose workflowId for workflowRef apps"
   }
-  "$JQ" -e '.execution.runSurface == "run-workflow"' "$TMPDIR/workflow-introspect.json" > /dev/null || {
+  "$JQ" -e '.payload.execution.runSurface == "run-workflow"' "$TMPDIR/workflow-introspect.json" > /dev/null || {
     cat "$TMPDIR/workflow-introspect.json"
     fail "introspect must expose run-workflow execution for workflowRef apps"
   }
