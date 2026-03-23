@@ -73,6 +73,8 @@ in
     ts="$(date -u +"$REGISTRY_TIMESTAMP_FORMAT")"
     event_tmp="$(mktemp "$events_file.event.XXXXXX")"
     validate_stderr="$(mktemp "$events_file.validate.XXXXXX")"
+    REGISTRY_APPEND_LAST_SEQ=""
+    REGISTRY_APPEND_LAST_EVENT_JSON=""
 
     set +e
     ${pkgs.jq}/bin/jq -cnS \
@@ -93,6 +95,8 @@ in
 
     if [ "$rc" -eq 0 ]; then
       if ${registryEventValidator} "$event_tmp" >/dev/null 2>"$validate_stderr"; then
+        REGISTRY_APPEND_LAST_SEQ="$seq"
+        REGISTRY_APPEND_LAST_EVENT_JSON="$(cat "$event_tmp")"
         cat "$event_tmp" >> "$events_file"
         rc="$?"
       else

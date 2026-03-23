@@ -351,7 +351,7 @@ let
 
   workflowPlanCases = map (workflowId: {
     key = workflowId;
-    value = map builtins.toJSON (workflows.${workflowId}.plan or [ ]);
+    value = map (unit: "workflow-unit:${workflowId}:${unit.name}") (workflows.${workflowId}.plan or [ ]);
   }) workflowIds;
 
   workflowPhaseTaskCases = builtins.concatLists (

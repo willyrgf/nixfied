@@ -107,34 +107,103 @@ in
     fi
   }
 
+  run_record_fields_file() {
+    local run_file="$1"
+    printf '%s.fields' "$run_file"
+  }
+
+  write_run_record_fields() {
+    local run_file="$1"
+    local state="$2"
+    local pid="$3"
+    local pgid="$4"
+    local attempt_id="$5"
+    local command_name="$6"
+    local process_mode="$7"
+    local fields_file
+    local parent_dir
+    local tmp
+
+    fields_file="$(run_record_fields_file "$run_file")"
+    parent_dir="$(dirname "$fields_file")" || {
+      echo "ERROR: unable to determine parent directory for '$fields_file'" >&2
+      return 1
+    }
+    mkdir -p "$parent_dir" || {
+      echo "ERROR: unable to create directory '$parent_dir'" >&2
+      return 1
+    }
+    tmp="$(mktemp "$fields_file.tmp.XXXXXX")" || {
+      echo "ERROR: unable to create temp file for '$fields_file'" >&2
+      return 1
+    }
+    {
+      printf 'RUN_RECORD_STATE=%q\n' "$state"
+      printf 'RUN_RECORD_PID=%q\n' "$pid"
+      printf 'RUN_RECORD_PGID=%q\n' "$pgid"
+      printf 'RUN_RECORD_ATTEMPT_ID=%q\n' "$attempt_id"
+      printf 'RUN_RECORD_COMMAND=%q\n' "$command_name"
+      printf 'RUN_RECORD_PROCESS_MODE=%q\n' "$process_mode"
+    } > "$tmp" || {
+      rm -f "$tmp"
+      echo "ERROR: failed to write temp file for '$fields_file'" >&2
+      return 1
+    }
+    if ! mv "$tmp" "$fields_file"; then
+      rm -f "$tmp"
+      echo "ERROR: failed to move temp file into '$fields_file'" >&2
+      return 1
+    fi
+  }
+
+  load_run_record_fields() {
+    local run_file="$1"
+    local fields_file
+
+    fields_file="$(run_record_fields_file "$run_file")"
+    if [ ! -f "$fields_file" ]; then
+      echo "ERROR: missing run record fields for '$run_file'" >&2
+      return 1
+    fi
+
+    unset RUN_RECORD_STATE RUN_RECORD_PID RUN_RECORD_PGID RUN_RECORD_ATTEMPT_ID RUN_RECORD_COMMAND RUN_RECORD_PROCESS_MODE || true
+    . "$fields_file"
+  }
+
   run_file_state() {
     local run_file="$1"
-    ${pkgs.jq}/bin/jq -r '.payload.state' "$run_file"
+    load_run_record_fields "$run_file" || return 1
+    printf '%s' "$RUN_RECORD_STATE"
   }
 
   run_file_pid() {
     local run_file="$1"
-    ${pkgs.jq}/bin/jq -r '.payload.pid // empty' "$run_file"
+    load_run_record_fields "$run_file" || return 1
+    printf '%s' "$RUN_RECORD_PID"
   }
 
   run_file_pgid() {
     local run_file="$1"
-    ${pkgs.jq}/bin/jq -r '.payload.pgid // empty' "$run_file"
+    load_run_record_fields "$run_file" || return 1
+    printf '%s' "$RUN_RECORD_PGID"
   }
 
   run_file_attempt_id() {
     local run_file="$1"
-    ${pkgs.jq}/bin/jq -r '.payload.attempt_id // empty' "$run_file"
+    load_run_record_fields "$run_file" || return 1
+    printf '%s' "$RUN_RECORD_ATTEMPT_ID"
   }
 
   run_file_command() {
     local run_file="$1"
-    ${pkgs.jq}/bin/jq -r '.payload.command' "$run_file"
+    load_run_record_fields "$run_file" || return 1
+    printf '%s' "$RUN_RECORD_COMMAND"
   }
 
   run_file_process_mode() {
     local run_file="$1"
-    ${pkgs.jq}/bin/jq -r '.payload.process_mode' "$run_file"
+    load_run_record_fields "$run_file" || return 1
+    printf '%s' "$RUN_RECORD_PROCESS_MODE"
   }
 
   validate_workflow_args() {

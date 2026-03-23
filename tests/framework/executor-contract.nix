@@ -96,6 +96,7 @@ assert pkgs.lib.hasInfix "workflow_unit_lock_list() {" runtimeSource;
 assert pkgs.lib.hasInfix "workflow_unit_produces_json() {" runtimeSource;
 assert pkgs.lib.hasInfix "workflow_unit_missing_env_csv() {" runtimeSource;
 assert pkgs.lib.hasInfix "workflow_unit_when_matches() {" runtimeSource;
+assert pkgs.lib.hasInfix "workflow-unit:" runtimeSource;
 assert pkgs.lib.hasInfix "normalize_run_artifacts_dir() {" runtimeSource;
 pkgs.runCommand "executor-contract" { } ''
   echo "OK: executor contract markers are stable" > "$out"

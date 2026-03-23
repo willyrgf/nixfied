@@ -157,7 +157,12 @@ let
       serviceHookEnv
       ;
   };
-  executorRuntimeShell = import ./executor-runtime.nix { inherit pkgs; };
+  executorRuntimeShell = import ./executor-runtime.nix {
+    inherit
+      pkgs
+      model
+      ;
+  };
   runtimeArtifactContracts = import ../contracts/runtime-artifact-contracts.nix { inherit pkgs; };
   summaryValidator = import ../contracts/mkValidator.nix {
     inherit
@@ -2102,6 +2107,8 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       local mode
       local artifacts_dir
       local summary_file
+      local summary_fields_file
+      local summary_steps_file
       local summary_tmp
       local summary_started_at="$started_at"
       local summary_started_epoch="$started_epoch"
@@ -2144,6 +2151,8 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         return 1
       fi
       summary_file="$artifacts_dir/summary.json"
+      summary_fields_file="$artifacts_dir/summary.fields"
+      summary_steps_file="$artifacts_dir/summary.steps.tsv"
 
       if ! mkdir -p "$artifacts_dir"; then
         echo "ERROR: failed to create artifacts directory '$artifacts_dir'"
@@ -2270,6 +2279,51 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           }' > "$target_file"
       }
 
+      write_summary_sidecars() {
+        local fields_target="$1"
+        local steps_target="$2"
+        local fields_tmp
+        local steps_tmp
+
+        fields_tmp="$(mktemp "$fields_target.tmp.XXXXXX")" || return 1
+        steps_tmp="$(mktemp "$steps_target.tmp.XXXXXX")" || {
+          rm -f "$fields_tmp"
+          return 1
+        }
+
+        {
+          printf 'SUMMARY_TOTAL_DURATION=%q\n' "$duration_seconds"
+          printf 'SUMMARY_SETUP_DURATION=%q\n' "$setup_duration"
+          printf 'SUMMARY_STEPS_DURATION=%q\n' "$steps_duration"
+          printf 'SUMMARY_TEARDOWN_DURATION=%q\n' "$teardown_duration"
+          printf 'SUMMARY_ACCOUNTED_DURATION=%q\n' "$accounted_duration"
+          printf 'SUMMARY_UNTRACKED_DURATION=%q\n' "$untracked_duration"
+          printf 'SUMMARY_PARALLEL_MAX_WORKERS=%q\n' "$parallel_max_workers"
+          printf 'SUMMARY_PARALLEL_PEAK_WORKERS=%q\n' "$parallel_peak_workers"
+          printf 'SUMMARY_PARALLEL_CANCELED_COUNT=%q\n' "$parallel_canceled_count"
+          printf 'SUMMARY_SKIPPED_COUNT=%q\n' "$skipped"
+        } > "$fields_tmp" || {
+          rm -f "$fields_tmp" "$steps_tmp"
+          return 1
+        }
+
+        if ! printf '%s' "$steps_json" | ${pkgs.jq}/bin/jq -r '
+          .[] | [.name, .status, ((.duration // 0) | tostring)] | @tsv
+        ' > "$steps_tmp"; then
+          rm -f "$fields_tmp" "$steps_tmp"
+          return 1
+        fi
+
+        if ! mv "$fields_tmp" "$fields_target"; then
+          rm -f "$fields_tmp" "$steps_tmp"
+          return 1
+        fi
+        if ! mv "$steps_tmp" "$steps_target"; then
+          rm -f "$steps_tmp"
+          return 1
+        fi
+      }
+
       summary_tmp="$(mktemp "$summary_file.tmp.XXXXXX")"
       validate_stderr="$(mktemp "$summary_file.validate.XXXXXX")"
       if ! write_summary_payload "$summary_tmp"; then
@@ -2287,11 +2341,26 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       fi
       rm -f "$validate_stderr"
       mv "$summary_tmp" "$summary_file"
+      if ! write_summary_sidecars "$summary_fields_file" "$summary_steps_file"; then
+        registry_snapshot_cleanup "$events_file"
+        echo "ERROR: failed to write summary sidecars for '$summary_file'"
+        return 1
+      fi
 
       if [ -n "$summary_file_override" ] && [ "$summary_file_override" != "$summary_file" ]; then
         if ! copy_file_atomic "$summary_file" "$summary_file_override"; then
           registry_snapshot_cleanup "$events_file"
           echo "ERROR: failed to write summary file '$summary_file_override'"
+          return 1
+        fi
+        if ! copy_file_atomic "$summary_fields_file" "$(dirname "$summary_file_override")/summary.fields"; then
+          registry_snapshot_cleanup "$events_file"
+          echo "ERROR: failed to write summary fields file for '$summary_file_override'"
+          return 1
+        fi
+        if ! copy_file_atomic "$summary_steps_file" "$(dirname "$summary_file_override")/summary.steps.tsv"; then
+          registry_snapshot_cleanup "$events_file"
+          echo "ERROR: failed to write summary steps file for '$summary_file_override'"
           return 1
         fi
       fi

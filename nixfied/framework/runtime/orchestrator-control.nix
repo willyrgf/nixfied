@@ -141,6 +141,13 @@ pkgs.writeShellScriptBin "nixfied-orchestrator-control" ''
     local tmp
     local now
     local validate_stderr
+    local current_attempt_id=""
+    local current_command=""
+    local current_process_mode=""
+    local current_pid=""
+    local current_pgid=""
+    local next_pid=""
+    local next_pgid=""
 
     run_file="$(run_file_for "$run_id")"
     lock_file="$(run_lock_for "$run_id")"
@@ -148,6 +155,22 @@ pkgs.writeShellScriptBin "nixfied-orchestrator-control" ''
 
     if [ ! -f "$run_file" ]; then
       return 1
+    fi
+
+    current_attempt_id="$(run_file_attempt_id "$run_file")"
+    current_command="$(run_file_command "$run_file")"
+    current_process_mode="$(run_file_process_mode "$run_file")"
+    current_pid="$(run_file_pid "$run_file")"
+    current_pgid="$(run_file_pgid "$run_file")"
+    if [ -n "$pid" ]; then
+      next_pid="$pid"
+    else
+      next_pid="$current_pid"
+    fi
+    if [ -n "$pgid" ]; then
+      next_pgid="$pgid"
+    else
+      next_pgid="$current_pgid"
     fi
 
     lock_fd="$(registry_lock_acquire "$lock_file" "orchestrator-update-run-state:$run_id" 30)" || return 1
@@ -186,6 +209,10 @@ pkgs.writeShellScriptBin "nixfied-orchestrator-control" ''
 
     rm -f "$validate_stderr"
     mv "$tmp" "$run_file"
+    if ! write_run_record_fields "$run_file" "$state" "$next_pid" "$next_pgid" "$current_attempt_id" "$current_command" "$current_process_mode"; then
+      registry_lock_release "$lock_fd" "$lock_file"
+      return 1
+    fi
     registry_lock_release "$lock_fd" "$lock_file"
 
     case "$state" in

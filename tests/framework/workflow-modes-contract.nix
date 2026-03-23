@@ -27,7 +27,7 @@ assert pkgs.lib.hasInfix "task_hook_command() {" source;
 assert pkgs.lib.hasInfix "task_hook_runtime_json() {" source;
 assert pkgs.lib.hasInfix "taskHookCases = builtins.concatLists" source;
 assert pkgs.lib.hasInfix "workflowPlanCases = map" source;
-assert pkgs.lib.hasInfix "builtins.toJSON (workflows.\${workflowId}.plan or [ ])" source;
+assert pkgs.lib.hasInfix "\"workflow-unit:\${workflowId}:\${unit.name}\"" source;
 assert pkgs.lib.hasInfix "workflow_plan_records() {" source;
 assert pkgs.lib.hasInfix "workflowPhaseTaskCases = builtins.concatLists" source;
 assert pkgs.lib.hasInfix "workflow_phase_tasks() {" source;

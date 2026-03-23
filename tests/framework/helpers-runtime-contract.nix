@@ -5,7 +5,9 @@ let
   fixtureSource = builtins.readFile ../../nixfied/framework/runtime/helpers/fixture-runtime.nix;
   fixturesDslSource = builtins.readFile ../../nixfied/framework/runtime/helpers/fixtures.nix;
   loggingRuntimeSource = builtins.readFile ../../nixfied/framework/runtime/helpers/logging-runtime.nix;
+  runtimeEventsSource = builtins.readFile ../../nixfied/framework/runtime/helpers/runtime-events.nix;
   shellCommonSource = builtins.readFile ../../nixfied/framework/core/shell-common.nix;
+  summarySource = builtins.readFile ../../nixfied/framework/runtime/helpers/summary.nix;
   runtimeDefaultsSource = builtins.readFile ../../nixfied/framework/core/runtime-defaults.nix;
 in
 assert pkgs.lib.hasInfix "import ./cleanup-runtime.nix" helpersSource;
@@ -29,6 +31,10 @@ assert pkgs.lib.hasInfix "NIXFIED_EXIT_USAGE=" shellCommonSource;
 assert pkgs.lib.hasInfix "nixfied_require_next_arg()" shellCommonSource;
 assert pkgs.lib.hasInfix "nixfied_exit_usage_with_usage()" shellCommonSource;
 assert pkgs.lib.hasInfix "runtimeDefaults ? import ./runtime-defaults.nix" shellCommonSource;
+assert pkgs.lib.hasInfix "service_status_file_for()" runtimeEventsSource;
+assert pkgs.lib.hasInfix "summary.steps.tsv" summarySource;
+assert (!pkgs.lib.hasInfix "\${pkgs.jq}/bin/jq" runtimeEventsSource);
+assert (!pkgs.lib.hasInfix "\${pkgs.jq}/bin/jq" summarySource);
 assert pkgs.lib.hasInfix "loopbackIp = \"127.0.0.1\";" runtimeDefaultsSource;
 assert pkgs.lib.hasInfix "extendedWaitIntervalSeconds = \"0.25\";" runtimeDefaultsSource;
 assert pkgs.lib.hasInfix "import ../../core/shell-common.nix" loggingRuntimeSource;

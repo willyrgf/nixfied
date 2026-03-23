@@ -1,7 +1,84 @@
-{ pkgs }:
+{
+  pkgs,
+  model ? null,
+}:
 let
+  lib = pkgs.lib;
   commonRuntimeShell = import ./common-runtime.nix { inherit pkgs; };
   skipPolicy = import ./helpers/skip-policy.nix { inherit pkgs; };
+  workflows =
+    if model == null then
+      { }
+    else
+      model.workflows or { };
+  workflowIds = builtins.sort builtins.lessThan (builtins.attrNames workflows);
+  workflowUnitEntries = builtins.concatLists (
+    map (
+      workflowId:
+      map (
+        unit:
+        let
+          needs = unit.needs or [ ];
+          locks = unit.locks or [ ];
+          requirements = unit.requirements or { };
+          produces = unit.produces or { };
+          when = unit.when or { };
+          whenEnvEquals = when.envEquals or { };
+        in
+        {
+          key = "workflow-unit:${workflowId}:${unit.name}";
+          value = {
+            name = unit.name;
+            taskId = unit.taskId or "";
+            needsCount = toString (builtins.length needs);
+            needs = needs;
+            locks = if locks == [ ] then "" else "${lib.concatStringsSep " " locks} ";
+            requiredServices = requirements.services or [ ];
+            producesJson = builtins.toJSON {
+              artifacts = produces.artifacts or [ ];
+              stateKeys = produces.stateKeys or [ ];
+            };
+            skipIfMissingEnv = unit.skipIfMissingEnv or [ ];
+            whenEnvPresent = when.envPresent or [ ];
+            whenEnvEquals = map (name: "${name}\t${builtins.toString whenEnvEquals.${name}}") (
+              builtins.sort builtins.lessThan (builtins.attrNames whenEnvEquals)
+            );
+          };
+        }
+      ) (workflows.${workflowId}.plan or [ ])
+    ) workflowIds
+  );
+  renderCaseReturn =
+    valueExpr: entries:
+    lib.concatStringsSep "\n" (
+      map (entry: ''
+        ${lib.escapeShellArg entry.key})
+          printf '%s' ${lib.escapeShellArg (valueExpr entry)}
+          return 0
+          ;;
+      '') entries
+    );
+  renderCasePrintLines =
+    valuesExpr: entries:
+    lib.concatStringsSep "\n" (
+      map (
+        entry:
+        let
+          values = valuesExpr entry;
+        in
+        ''
+          ${lib.escapeShellArg entry.key})
+            ${
+              if values == [ ] then
+                ":"
+              else
+                "printf '%s\\n' " + lib.concatStringsSep " " (map lib.escapeShellArg values)
+            }
+            return 0
+            ;;
+        ''
+      ) entries
+    );
 in
 ''
   ${commonRuntimeShell}
@@ -91,39 +168,25 @@ in
     local summary_file="$3"
     local exit_code="$4"
     local attempt_id="''${NIXFIED_ATTEMPT_ID:-''${NIXFIED_ORCHESTRATOR_ATTEMPT_ID:-}}"
+    local summary_json_literal="null"
+    local summary_payload="null"
 
     if [ -n "$summary_file" ] && [ -f "$summary_file" ]; then
-      ${pkgs.jq}/bin/jq -cnS \
-        --arg runId "$run_id" \
-        --arg attemptId "$attempt_id" \
-        --arg workflowId "$workflow_id" \
-        --arg summaryJson "$summary_file" \
-        --argjson exitCode "$exit_code" \
-        --slurpfile summary "$summary_file" \
-        '{
-          run_id: $runId,
-          attempt_id: $attemptId,
-          workflow_id: $workflowId,
-          exit_code: $exitCode,
-          summary_json: $summaryJson,
-          summary: ($summary[0] // null)
-        }'
-      return 0
+      summary_json_literal="$(json_quote_string "$summary_file")"
+      summary_payload="$(${pkgs.coreutils}/bin/tr -d '\n' < "$summary_file")"
     fi
 
-    ${pkgs.jq}/bin/jq -cnS \
-      --arg runId "$run_id" \
-      --arg attemptId "$attempt_id" \
-      --arg workflowId "$workflow_id" \
-      --argjson exitCode "$exit_code" \
-      '{
-        run_id: $runId,
-        attempt_id: $attemptId,
-        workflow_id: $workflowId,
-        exit_code: $exitCode,
-        summary_json: null,
-        summary: null
-      }'
+    printf '{'
+    printf '"run_id":'
+    json_quote_string "$run_id"
+    printf ',"attempt_id":'
+    json_quote_string "$attempt_id"
+    printf ',"workflow_id":'
+    json_quote_string "$workflow_id"
+    printf ',"exit_code":%s' "$exit_code"
+    printf ',"summary_json":%s' "$summary_json_literal"
+    printf ',"summary":%s' "$summary_payload"
+    printf '}\n'
   }
 
   LOGGING_FILTERED_ARGS=()
@@ -331,37 +394,72 @@ in
 
   workflow_unit_name() {
     local unit_json="$1"
-    printf '%s' "$unit_json" | ${pkgs.jq}/bin/jq -r '.name'
+    case "$unit_json" in
+${renderCaseReturn (entry: entry.value.name) workflowUnitEntries}
+      *)
+        return 1
+        ;;
+    esac
   }
 
   workflow_unit_task_id() {
     local unit_json="$1"
-    printf '%s' "$unit_json" | ${pkgs.jq}/bin/jq -r '.taskId'
+    case "$unit_json" in
+${renderCaseReturn (entry: entry.value.taskId) workflowUnitEntries}
+      *)
+        return 1
+        ;;
+    esac
   }
 
   workflow_unit_required_services() {
     local unit_json="$1"
-    printf '%s' "$unit_json" | ${pkgs.jq}/bin/jq -r '(.requirements.services // [])[]?'
+    case "$unit_json" in
+${renderCasePrintLines (entry: entry.value.requiredServices) workflowUnitEntries}
+      *)
+        return 0
+        ;;
+    esac
   }
 
   workflow_unit_needs_count() {
     local unit_json="$1"
-    printf '%s' "$unit_json" | ${pkgs.jq}/bin/jq -r '(.needs // []) | length'
+    case "$unit_json" in
+${renderCaseReturn (entry: entry.value.needsCount) workflowUnitEntries}
+      *)
+        return 1
+        ;;
+    esac
   }
 
   workflow_unit_dependencies() {
     local unit_json="$1"
-    printf '%s' "$unit_json" | ${pkgs.jq}/bin/jq -r '.needs[]?'
+    case "$unit_json" in
+${renderCasePrintLines (entry: entry.value.needs) workflowUnitEntries}
+      *)
+        return 0
+        ;;
+    esac
   }
 
   workflow_unit_lock_list() {
     local unit_json="$1"
-    printf '%s' "$unit_json" | ${pkgs.jq}/bin/jq -r '.locks[]?' | ${pkgs.gawk}/bin/awk 'NF {printf "%s ", $0}'
+    case "$unit_json" in
+${renderCaseReturn (entry: entry.value.locks) workflowUnitEntries}
+      *)
+        return 0
+        ;;
+    esac
   }
 
   workflow_unit_produces_json() {
     local unit_json="$1"
-    printf '%s' "$unit_json" | ${pkgs.jq}/bin/jq -c '.produces // {artifacts: [], stateKeys: []}'
+    case "$unit_json" in
+${renderCaseReturn (entry: entry.value.producesJson) workflowUnitEntries}
+      *)
+        return 1
+        ;;
+    esac
   }
 
   workflow_unit_missing_env_csv() {
@@ -377,7 +475,14 @@ in
           missing="$missing,$required_env"
         fi
       fi
-    done < <(printf '%s' "$unit_json" | ${pkgs.jq}/bin/jq -r '.skipIfMissingEnv[]?')
+    done < <(
+      case "$unit_json" in
+${renderCasePrintLines (entry: entry.value.skipIfMissingEnv) workflowUnitEntries}
+        *)
+          :
+          ;;
+      esac
+    )
 
     printf '%s' "$missing"
   }
@@ -393,7 +498,14 @@ in
       if [ -n "$required_env" ] && [ -z "''${!required_env:-}" ]; then
         return 1
       fi
-    done < <(printf '%s' "$unit_json" | ${pkgs.jq}/bin/jq -r '.when.envPresent[]?')
+    done < <(
+      case "$unit_json" in
+${renderCasePrintLines (entry: entry.value.whenEnvPresent) workflowUnitEntries}
+        *)
+          :
+          ;;
+      esac
+    )
 
     while IFS=$'\t' read -r env_name expected_value; do
       if [ -z "$env_name" ]; then
@@ -403,7 +515,14 @@ in
       if [ "$actual_value" != "$expected_value" ]; then
         return 1
       fi
-    done < <(printf '%s' "$unit_json" | ${pkgs.jq}/bin/jq -r '.when.envEquals // {} | to_entries[]? | [.key, (.value | tostring)] | @tsv')
+    done < <(
+      case "$unit_json" in
+${renderCasePrintLines (entry: entry.value.whenEnvEquals) workflowUnitEntries}
+        *)
+          :
+          ;;
+      esac
+    )
 
     return 0
   }
