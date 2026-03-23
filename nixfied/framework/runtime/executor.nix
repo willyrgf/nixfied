@@ -267,11 +267,6 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       esac
     }
 
-    emit_runtime_pass_through_env_names() {
-      local runtime_json="$1"
-      printf '%s' "$runtime_json" | ${pkgs.jq}/bin/jq -r '(.passThroughEnv // [])[]?'
-    }
-
     run_id_pass_through_env_json() {
       local run_kind="$1"
       local workflow_id="$2"
@@ -295,12 +290,12 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         fi
         seen_tasks[$current_task_id]=1
 
-        emit_runtime_pass_through_env_names "$(task_runtime_json "$current_task_id")"
+        task_runtime_pass_through_env_names "$current_task_id"
 
         for phase in pre post; do
           while IFS= read -r hook_id; do
             [ -n "$hook_id" ] || continue
-            emit_runtime_pass_through_env_names "$(task_hook_runtime_json "$current_task_id" "$phase" "$hook_id")"
+            task_hook_runtime_pass_through_env_names "$current_task_id" "$phase" "$hook_id"
           done < <(task_hook_ids "$current_task_id" "$phase" 2>/dev/null || true)
         done
 
@@ -562,7 +557,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
       local hook_id
       local hook_command
-      local hook_runtime_json
+      local hook_runtime_plan_shell
       local hook_exit_code
 
       while IFS= read -r hook_id; do
@@ -572,9 +567,9 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
         echo "INFO: hook $phase $hook_id start"
         hook_command="$(task_hook_command "$task_id" "$phase" "$hook_id")" || return 3
-        hook_runtime_json="$(task_hook_runtime_json "$task_id" "$phase" "$hook_id")" || return 3
+        hook_runtime_plan_shell="$(task_hook_runtime_plan_shell "$task_id" "$phase" "$hook_id")" || return 3
 
-        run_in_sandbox_runtime "$hook_runtime_json" "$hook_command" "$@"
+        run_in_sandbox_runtime "$hook_runtime_plan_shell" "$hook_command" "$@"
         hook_exit_code="$?"
         if [ "$hook_exit_code" -ne 0 ]; then
           echo "ERROR: hook $phase $hook_id failed exitCode=$hook_exit_code"
@@ -619,7 +614,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       local command
       local nested_workflow
       local package_path
-      local runtime_json
+      local runtime_plan_shell
       local exit_code
       local main_exit_code
       local post_exit_code
@@ -629,14 +624,14 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         echo "ERROR: task '$task_id' defines runtime hooks but runner type '$runner_type' is unsupported"
         return 3
       fi
-      runtime_json="$(task_runtime_json "$task_id")" || return 3
+      runtime_plan_shell="$(task_runtime_plan_shell "$task_id")" || return 3
 
       set +e
       case "$runner_type" in
         shell)
           if run_task_hooks "$task_id" "pre" "$@"; then
             command="$(task_runner_command "$task_id")"
-            run_in_sandbox_runtime "$runtime_json" "$command" "$@"
+            run_in_sandbox_runtime "$runtime_plan_shell" "$command" "$@"
             main_exit_code="$?"
 
             if run_task_hooks "$task_id" "post" "$@"; then
@@ -681,7 +676,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
             echo "ERROR: task '$task_id' derivation runner requires runner.command"
             exit_code=3
           else
-            run_in_sandbox_runtime "$runtime_json" "$command" "$@"
+            run_in_sandbox_runtime "$runtime_plan_shell" "$command" "$@"
             exit_code="$?"
           fi
           ;;
@@ -1635,7 +1630,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       local workflow_id="$2"
       local phase_key="$3"
       local phase_status=0
-      local phase_entry_json=""
+      local phase_entry_tsv=""
       local service_set_id=""
       local service_set_name=""
       local operation=""
@@ -1645,17 +1640,11 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       local failure_detail=""
       local program_path=""
 
-      while IFS= read -r phase_entry_json; do
-        if [ -z "$phase_entry_json" ]; then
+      while IFS=$'\t' read -r service_set_id service_set_name operation selected_services_csv; do
+        if [ -z "$service_set_id" ]; then
           continue
         fi
 
-        service_set_id="$(printf '%s' "$phase_entry_json" | ${pkgs.jq}/bin/jq -r '.serviceSetId')"
-        service_set_name="$(printf '%s' "$phase_entry_json" | ${pkgs.jq}/bin/jq -r '.serviceSetName // .serviceSetId')"
-        operation="$(printf '%s' "$phase_entry_json" | ${pkgs.jq}/bin/jq -r '.operation')"
-        selected_services_csv="$(
-          printf '%s' "$phase_entry_json" | ${pkgs.jq}/bin/jq -r '(.selectedServices // []) | unique | join(",")'
-        )"
         phase_entry_id="''${service_set_id}:''${operation}"
         phase_detail="$(
           ${pkgs.jq}/bin/jq -cn \

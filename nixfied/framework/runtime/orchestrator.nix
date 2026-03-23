@@ -249,11 +249,6 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
     printf '%s\n' "''${filtered_args[@]}"
   }
 
-  emit_runtime_pass_through_env_names() {
-    local runtime_json="$1"
-    printf '%s' "$runtime_json" | ${pkgs.jq}/bin/jq -r '(.passThroughEnv // [])[]?'
-  }
-
   run_id_pass_through_env_json() {
     local run_kind="$1"
     local workflow_id="$2"
@@ -277,12 +272,12 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
       fi
       seen_tasks[$current_task_id]=1
 
-      emit_runtime_pass_through_env_names "$(task_runtime_json "$current_task_id")"
+      task_runtime_pass_through_env_names "$current_task_id"
 
       for phase in pre post; do
         while IFS= read -r hook_id; do
           [ -n "$hook_id" ] || continue
-          emit_runtime_pass_through_env_names "$(task_hook_runtime_json "$current_task_id" "$phase" "$hook_id")"
+          task_hook_runtime_pass_through_env_names "$current_task_id" "$phase" "$hook_id"
         done < <(task_hook_ids "$current_task_id" "$phase" 2>/dev/null || true)
       done
 

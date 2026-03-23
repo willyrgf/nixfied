@@ -26,7 +26,7 @@ assert pkgs.lib.hasInfix "env_cmd+=(\"NIX_SSL_CERT_FILE=$host_nix_ssl_cert_file\
 assert pkgs.lib.hasInfix "/usr/bin/xcrun --sdk macosx --show-sdk-path" source;
 assert pkgs.lib.hasInfix "env_cmd+=(\"SDKROOT=$host_sdkroot\")" source;
 assert pkgs.lib.hasInfix "load_runtime_plan() {" source;
-assert pkgs.lib.hasInfix "eval \"$runtime_plan_shell\"" source;
+assert pkgs.lib.hasInfix "if ! eval \"$runtime_plan_shell\"; then" source;
 assert pkgs.lib.hasInfix "ENV_SANDBOX_STATIC_RUNTIME_PACKAGES_PATH" source;
 assert pkgs.lib.hasInfix "ENV_SANDBOX_STATIC_RUNTIME_PRIMITIVES_TSV" source;
 assert pkgs.lib.hasInfix "ENV_SANDBOX_STATIC_RUNTIME_PORTS_TSV" source;
@@ -35,7 +35,7 @@ assert pkgs.lib.hasInfix "env_sandbox_runtime_env_offset() {" source;
 assert pkgs.lib.hasInfix "is_reserved_runtime_env_name() {" source;
 assert !(pkgs.lib.hasInfix "valid_log_level() {" source);
 assert !(pkgs.lib.hasInfix "valid_output_mode() {" source);
-assert pkgs.lib.hasInfix ".allowSensitivePassThrough // false" source;
+assert pkgs.lib.hasInfix "allow_sensitive_pass_through" source;
 assert pkgs.lib.hasInfix "ERROR: runtime-owned passthrough env blocked name=$pass_name" source;
 assert pkgs.lib.hasInfix "ERROR: runtime-owned env override blocked name=$env_name" source;
 assert pkgs.lib.hasInfix "ERROR: sensitive passthrough env blocked name=$pass_name" source;

@@ -69,9 +69,11 @@ assert pkgs.lib.hasInfix
   "hook_command=\"$(task_hook_command \"$task_id\" \"$phase\" \"$hook_id\")\""
   source;
 assert pkgs.lib.hasInfix
-  "hook_runtime_json=\"$(task_hook_runtime_json \"$task_id\" \"$phase\" \"$hook_id\")\""
+  "hook_runtime_plan_shell=\"$(task_hook_runtime_plan_shell \"$task_id\" \"$phase\" \"$hook_id\")\""
   source;
-assert pkgs.lib.hasInfix "runtime_json=\"$(task_runtime_json \"$task_id\")\"" source;
+assert pkgs.lib.hasInfix "runtime_plan_shell=\"$(task_runtime_plan_shell \"$task_id\")\"" source;
+assert (!pkgs.lib.hasInfix "hook_runtime_json=\"$(task_hook_runtime_json" source);
+assert (!pkgs.lib.hasInfix "runtime_json=\"$(task_runtime_json" source);
 assert pkgs.lib.hasInfix "command=\"$(task_runner_command \"$task_id\")\"" source;
 assert pkgs.lib.hasInfix "package_path=\"$(task_runner_package \"$task_id\")\"" source;
 assert pkgs.lib.hasInfix "done < <(task_hook_ids \"$task_id\" \"$phase\")" source;
