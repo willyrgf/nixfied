@@ -87,7 +87,6 @@ let
           pkgs.gnused
           pkgs.gnugrep
           pkgs.gawk
-          pkgs.jq
           pkgs.git
         ];
       };
@@ -176,7 +175,7 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
     local argv_json
     shift 6
 
-    argv_json="$(jq_positional_args_json "$@")" || return 1
+    argv_json="$(positional_args_json "$@")" || return 1
 
     printf '{'
     printf '"model_eval_hash":%s' "$(json_quote_string "${model.identity.evalHash}")"
@@ -1227,7 +1226,7 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
     if [ -n "$MACHINE_RUN_ID_FILE" ]; then
       write_text_file_atomic "$MACHINE_RUN_ID_FILE" "$run_id"
     fi
-    args_json="$(call_with_array_args FORWARD_ARGS jq_positional_args_json)"
+    args_json="$(call_with_array_args FORWARD_ARGS positional_args_json)"
     create_run_record "$run_id" "$attempt_id" "run-task" "$workflow_ref" "$task_id" "$execution_mode" "$PROCESS_MODE" "$ephemeral_enabled" "$args_json" || {
       deactivate_run_id "$run_id"
       return 1
@@ -1292,7 +1291,7 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
     if [ -n "$MACHINE_RUN_ID_FILE" ]; then
       write_text_file_atomic "$MACHINE_RUN_ID_FILE" "$run_id"
     fi
-    args_json="$(call_with_array_args FORWARD_ARGS jq_positional_args_json)"
+    args_json="$(call_with_array_args FORWARD_ARGS positional_args_json)"
     create_run_record "$run_id" "$attempt_id" "run-workflow" "$workflow_id" "" "$mode" "$PROCESS_MODE" "$ephemeral_enabled" "$args_json" || {
       deactivate_run_id "$run_id"
       return 1

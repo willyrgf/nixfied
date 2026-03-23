@@ -209,7 +209,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       local argv_json
       shift 6
 
-      argv_json="$(jq_positional_args_json "$@")" || return 1
+      argv_json="$(positional_args_json "$@")" || return 1
 
       printf '{'
       printf '"model_eval_hash":%s' "$(json_quote_string "${model.identity.evalHash}")"

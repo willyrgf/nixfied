@@ -6,7 +6,7 @@ in
 assert pkgs.lib.hasInfix "compute_run_id() {" source;
 assert pkgs.lib.hasInfix "compute_attempt_id() {" source;
 assert pkgs.lib.hasInfix "canonical_run_id_envelope() {" source;
-assert pkgs.lib.hasInfix "argv_json=\"$(jq_positional_args_json \"$@\")\"" source;
+assert pkgs.lib.hasInfix "argv_json=\"$(positional_args_json \"$@\")\"" source;
 assert pkgs.lib.hasInfix "printf ',\"argv\":%s' \"$argv_json\"" source;
 assert pkgs.lib.hasInfix "json_object_from_named_env_values" source;
 assert pkgs.lib.hasInfix "ERROR: usage: run-task <task-id> [-- ...]" source;

@@ -43,7 +43,7 @@ let
     ${slotEnvRuntime.readJsonField {
       targetVar = "RUN_DIR";
       jsonVar = "SLOT_INFO_JSON_OUT";
-      jqExpr = ".directories.run";
+      fieldExpr = ".directories.run";
     }}
   '';
 
@@ -51,7 +51,7 @@ let
     ${slotEnvRuntime.readJsonField {
       targetVar = "LOG_DIR";
       jsonVar = "SLOT_INFO_JSON_OUT";
-      jqExpr = ".directories.log";
+      fieldExpr = ".directories.log";
     }}
   '';
 

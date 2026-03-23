@@ -94,7 +94,7 @@ let
     ${slotEnvRuntime.readJsonField {
       targetVar = "RUN_DIR";
       jsonVar = "SLOT_INFO_JSON_OUT";
-      jqExpr = ".directories.run";
+      fieldExpr = ".directories.run";
     }}
 
     PORT_VAR="${portVar}"

@@ -393,7 +393,7 @@ in
         fi
       fi
 
-      base_path="${pkgs.coreutils}/bin:${pkgs.findutils}/bin:${pkgs.gnused}/bin:${pkgs.gnugrep}/bin:${pkgs.jq}/bin:${pkgs.bash}/bin"
+      base_path="${pkgs.coreutils}/bin:${pkgs.findutils}/bin:${pkgs.gnused}/bin:${pkgs.gnugrep}/bin:${pkgs.bash}/bin"
       if [ -n "$runtime_path" ]; then
         final_path="$runtime_path:$base_path"
       else

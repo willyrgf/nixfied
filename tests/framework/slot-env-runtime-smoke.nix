@@ -37,7 +37,7 @@ EOF
   ${slotEnvRuntime.readJsonField {
     targetVar = "RUN_DIR";
     jsonVar = "SLOT_INFO_JSON";
-    jqExpr = ".directories.run";
+    fieldExpr = ".directories.run";
   }}
   [ "$RUN_DIR" = "/tmp/runtime-run" ] || fail "expected directory field"
 

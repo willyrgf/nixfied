@@ -95,7 +95,7 @@
     printf '}'
   }
 
-  jq_positional_args_json() {
+  positional_args_json() {
     local first=1
 
     printf '['

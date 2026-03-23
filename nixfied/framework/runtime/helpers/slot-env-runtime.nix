@@ -88,12 +88,12 @@ rec {
     {
       targetVar,
       jsonVar,
-      jqExpr,
+      fieldExpr,
     }:
     ''
       ${evalAssignments { assignmentsVar = jsonVar; }}
       __slot_info_field_var=""
-      case ${lib.escapeShellArg jqExpr} in
+      case ${lib.escapeShellArg fieldExpr} in
         .slot)
           __slot_info_field_var="SLOT"
           ;;
@@ -110,7 +110,7 @@ rec {
           __slot_info_field_var="CONFIG_DIR"
           ;;
         *)
-          echo "ERROR: unsupported slot info expression ${jqExpr}" >&2
+          echo "ERROR: unsupported slot info expression ${fieldExpr}" >&2
           exit 1
           ;;
       esac
