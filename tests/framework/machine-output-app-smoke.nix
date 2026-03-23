@@ -11,6 +11,7 @@ let
   jsonTaskId = "task.test.machine-output.json-body";
   invalidJsonTaskId = "task.test.machine-output.invalid-json-body";
   unknownFieldTaskId = "task.test.machine-output.unknown-field-body";
+  machineLogTaskId = "task.test.machine-output.log-on-machine-channel";
   setupTaskId = "task.test.machine-output.setup";
   teardownTaskId = "task.test.machine-output.teardown";
   workflowId = "workflow.test.machine-output.sample";
@@ -46,7 +47,7 @@ let
         nixfied.tasks."test.machine-output.json-body" = {
           id = jsonTaskId;
           summary = "machine-output json body";
-          description = "Emits strict JSON so the machine-output wrapper can replay it.";
+          description = "Emits strict JSON to the declared machine channel.";
           contract.output = {
             format = "json";
             channels = "stdout";
@@ -57,14 +58,19 @@ let
           };
           runner.command = ''
             set -euo pipefail
-            printf '%s\n' '{"ok":true,"kind":"task"}'
+            if [ -n "''${NIXFIED_MACHINE_OUTPUT_FILE:-}" ]; then
+              printf '%s\n' "json-body human log"
+              printf '%s\n' '{"ok":true,"kind":"task"}' > "$NIXFIED_MACHINE_OUTPUT_FILE"
+            else
+              printf '%s\n' '{"ok":true,"kind":"task"}'
+            fi
           '';
         };
 
         nixfied.tasks."test.machine-output.invalid-json-body" = {
           id = invalidJsonTaskId;
           summary = "machine-output invalid json body";
-          description = "Emits JSON with an invalid type for contract validation coverage.";
+          description = "Emits JSON with an invalid type to the declared machine channel.";
           contract.output = {
             format = "json";
             channels = "stdout";
@@ -75,14 +81,19 @@ let
           };
           runner.command = ''
             set -euo pipefail
-            printf '%s\n' '{"ok":"yes","kind":"task"}'
+            if [ -n "''${NIXFIED_MACHINE_OUTPUT_FILE:-}" ]; then
+              printf '%s\n' "invalid-json-body human log"
+              printf '%s\n' '{"ok":"yes","kind":"task"}' > "$NIXFIED_MACHINE_OUTPUT_FILE"
+            else
+              printf '%s\n' '{"ok":"yes","kind":"task"}'
+            fi
           '';
         };
 
         nixfied.tasks."test.machine-output.unknown-field-body" = {
           id = unknownFieldTaskId;
           summary = "machine-output unknown-field body";
-          description = "Emits JSON with an unexpected field for closed-record validation coverage.";
+          description = "Emits JSON with an unexpected field to the declared machine channel.";
           contract.output = {
             format = "json";
             channels = "stdout";
@@ -94,7 +105,34 @@ let
           };
           runner.command = ''
             set -euo pipefail
-            printf '%s\n' '{"ok":true,"kind":"task","extra":"boom"}'
+            if [ -n "''${NIXFIED_MACHINE_OUTPUT_FILE:-}" ]; then
+              printf '%s\n' "unknown-field-body human log"
+              printf '%s\n' '{"ok":true,"kind":"task","extra":"boom"}' > "$NIXFIED_MACHINE_OUTPUT_FILE"
+            else
+              printf '%s\n' '{"ok":true,"kind":"task","extra":"boom"}'
+            fi
+          '';
+        };
+
+        nixfied.tasks."test.machine-output.log-on-machine-channel" = {
+          id = machineLogTaskId;
+          summary = "machine-output log on machine channel";
+          description = "Writes human log text to the machine channel so validation rejects it.";
+          contract.output = {
+            format = "json";
+            channels = "stdout";
+            keys = [
+              "ok"
+              "kind"
+            ];
+          };
+          runner.command = ''
+            set -euo pipefail
+            if [ -n "''${NIXFIED_MACHINE_OUTPUT_FILE:-}" ]; then
+              printf '%s\n' "INFO: this is not json" > "$NIXFIED_MACHINE_OUTPUT_FILE"
+            else
+              printf '%s\n' "INFO: this is not json"
+            fi
           '';
         };
 
@@ -210,6 +248,16 @@ let
             ownerFile = "tests/framework/machine-output-app-smoke.nix";
           };
 
+          "json-body-log-on-machine-channel" = {
+            id = "json-body-log-on-machine-channel";
+            kind = "taskRef";
+            taskId = machineLogTaskId;
+            summary = "Log-text machine channel app";
+            description = "Runs a taskRef app that writes log text to the machine channel.";
+            usage = [ "nix run .#json-body-log-on-machine-channel" ];
+            ownerFile = "tests/framework/machine-output-app-smoke.nix";
+          };
+
           "machine-json" = {
             id = "machine-json";
             kind = "machineOutput";
@@ -263,6 +311,19 @@ let
             usage = [ "nix run .#workflow-machine-invalid" ];
             ownerFile = "tests/framework/machine-output-app-smoke.nix";
           };
+
+          "machine-json-log-on-machine-channel" = {
+            id = "machine-json-log-on-machine-channel";
+            kind = "machineOutput";
+            targetAppId = "json-body-log-on-machine-channel";
+            validation = {
+              contractRef = "machineOutput.result";
+            };
+            summary = "Machine-output log-text failure smoke";
+            description = "Shows that log text on the machine channel fails validation.";
+            usage = [ "nix run .#machine-json-log-on-machine-channel" ];
+            ownerFile = "tests/framework/machine-output-app-smoke.nix";
+          };
         };
       }
     ];
@@ -277,6 +338,7 @@ pkgs.runCommand "machine-output-app-smoke" { } ''
   MACHINE_APP="${frameworkOutputs.apps."machine-json".program}"
   INVALID_PAYLOAD_APP="${frameworkOutputs.apps."machine-json-invalid-payload".program}"
   UNKNOWN_FIELD_APP="${frameworkOutputs.apps."machine-json-unknown-field".program}"
+  LOG_ON_MACHINE_CHANNEL_APP="${frameworkOutputs.apps."machine-json-log-on-machine-channel".program}"
   INVALID_APP="${frameworkOutputs.apps."workflow-machine-invalid".program}"
   INTROSPECT_APP="${frameworkOutputs.apps.introspect.program}"
   JQ=${pkgs.jq}/bin/jq
@@ -305,6 +367,9 @@ pkgs.runCommand "machine-output-app-smoke" { } ''
     cat "$TMPDIR/machine.json"
     fail "machineOutput app did not replay the expected payload"
   }
+  require_contains "$TMPDIR/machine.err" "setup-noise"
+  require_contains "$TMPDIR/machine.err" "json-body human log"
+  require_contains "$TMPDIR/machine.err" "teardown-noise"
   require_not_contains "$TMPDIR/machine.json" "setup-noise"
   require_not_contains "$TMPDIR/machine.json" "teardown-noise"
   require_file "$MACHINE_OUTPUT_TEST_DIR/setup.txt"
@@ -359,6 +424,19 @@ pkgs.runCommand "machine-output-app-smoke" { } ''
   "$JQ" -e '.targetAppId == "json-body-unknown-field" and .contractRef == "machineOutput.result"' "$TMPDIR/unknown-field.json" > /dev/null || {
     cat "$TMPDIR/unknown-field.json"
     fail "unknown-field machineOutput failure payload must identify the target app and contract"
+  }
+
+  if "$LOG_ON_MACHINE_CHANNEL_APP" > "$TMPDIR/log-on-machine-channel.json" 2>"$TMPDIR/log-on-machine-channel.err"; then
+    cat "$TMPDIR/log-on-machine-channel.json"
+    fail "log-text machineOutput app should fail"
+  fi
+  "$JQ" -e '.ok == false and .stage == "validation" and .code == "machine-output-validation-failed"' "$TMPDIR/log-on-machine-channel.json" > /dev/null || {
+    cat "$TMPDIR/log-on-machine-channel.json"
+    fail "log-text machineOutput failure payload must use the validation failure envelope"
+  }
+  "$JQ" -e '.targetAppId == "json-body-log-on-machine-channel" and .contractRef == "machineOutput.result"' "$TMPDIR/log-on-machine-channel.json" > /dev/null || {
+    cat "$TMPDIR/log-on-machine-channel.json"
+    fail "log-text machineOutput failure payload must identify the target app and contract"
   }
 
   "$INTROSPECT_APP" app:machine-json --json > "$TMPDIR/machine-introspect.json"

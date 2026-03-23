@@ -40,19 +40,26 @@ in
     }
     trap cleanup_machine_output EXIT
 
-    render_captured_logs() {
-      local label="$1"
-      local stdout_file="$2"
-      local stderr_file="$3"
+    render_captured_stream() {
+      local level="$1"
+      local label="$2"
+      local stream="$3"
+      local path="$4"
 
-      if [ -s "$stdout_file" ]; then
-        echo "ERROR: $label stdout:" >&2
-        cat "$stdout_file" >&2
+      if [ -s "$path" ]; then
+        echo "$level: $label $stream:" >&2
+        cat "$path" >&2
       fi
-      if [ -s "$stderr_file" ]; then
-        echo "ERROR: $label stderr:" >&2
-        cat "$stderr_file" >&2
-      fi
+    }
+
+    render_captured_logs() {
+      local level="$1"
+      local label="$2"
+      local stdout_file="$3"
+      local stderr_file="$4"
+
+      render_captured_stream "$level" "$label" "stdout" "$stdout_file"
+      render_captured_stream "$level" "$label" "stderr" "$stderr_file"
     }
 
     emit_failure_json() {
@@ -94,6 +101,17 @@ in
       "$program" "$@" >"$stdout_file" 2>"$stderr_file"
     }
 
+    run_machine_output_target() {
+      local program="$1"
+      local payload_file="$2"
+      local stdout_file="$3"
+      local stderr_file="$4"
+      shift 4
+      ${pkgs.coreutils}/bin/env \
+        NIXFIED_MACHINE_OUTPUT_FILE="$payload_file" \
+        "$program" "$@" >"$stdout_file" 2>"$stderr_file"
+    }
+
     setup_index=0
     for setup_program in "''${setup_programs[@]}"; do
       setup_index="$((setup_index + 1))"
@@ -101,33 +119,37 @@ in
       setup_stderr="$work_dir/setup-$setup_index.stderr"
       if run_captured_app "$setup_program" "$setup_stdout" "$setup_stderr"; then
         rc=0
+        render_captured_logs "INFO" "setup app $setup_index" "$setup_stdout" "$setup_stderr"
       else
         rc="$?"
-        render_captured_logs "setup app $setup_index" "$setup_stdout" "$setup_stderr"
+        render_captured_logs "ERROR" "setup app $setup_index" "$setup_stdout" "$setup_stderr"
         emit_failure_json "setup" "machine-output-setup-failed" "setup app $setup_index failed" "" "$rc"
         exit "$rc"
       fi
     done
 
+    payload_file="$work_dir/payload.json"
     target_stdout="$work_dir/target.stdout"
     target_stderr="$work_dir/target.stderr"
-    if run_captured_app "$target_program" "$target_stdout" "$target_stderr" "''${target_args[@]}" "$@"; then
+    if run_machine_output_target "$target_program" "$payload_file" "$target_stdout" "$target_stderr" "''${target_args[@]}" "$@"; then
       rc=0
+      render_captured_logs "INFO" "target app" "$target_stdout" "$target_stderr"
     else
       rc="$?"
-      render_captured_logs "target app" "$target_stdout" "$target_stderr"
+      render_captured_logs "ERROR" "target app" "$target_stdout" "$target_stderr"
       emit_failure_json "target" "machine-output-target-failed" "target app '$target_app_id' failed" "$target_app_id" "$rc"
       exit "$rc"
     fi
 
-    payload_stdout="$work_dir/payload.stdout"
-    ${pkgs.gnugrep}/bin/grep -Ev '^(INFO|WARN|ERROR|OK|SKIP): ' "$target_stdout" >"$payload_stdout" || true
+    if [ ! -s "$payload_file" ]; then
+      emit_failure_json "validation" "machine-output-validation-failed" "target app '$target_app_id' did not write machine payload to declared file" "$target_app_id" 1
+      exit 1
+    fi
 
-    if "$validator_program" "$payload_stdout" >"$work_dir/validate.stdout" 2>"$work_dir/validate.stderr"; then
+    if "$validator_program" "$payload_file" >"$work_dir/validate.stdout" 2>"$work_dir/validate.stderr"; then
       :
     else
-      render_captured_logs "target app" "$target_stdout" "$target_stderr"
-      render_captured_logs "validation" "$work_dir/validate.stdout" "$work_dir/validate.stderr"
+      render_captured_logs "ERROR" "validation" "$work_dir/validate.stdout" "$work_dir/validate.stderr"
       emit_failure_json "validation" "machine-output-validation-failed" "target app '$target_app_id' did not satisfy contract '$contract_ref'" "$target_app_id" 1
       exit 1
     fi
@@ -139,14 +161,15 @@ in
       teardown_stderr="$work_dir/teardown-$teardown_index.stderr"
       if run_captured_app "$teardown_program" "$teardown_stdout" "$teardown_stderr"; then
         rc=0
+        render_captured_logs "INFO" "teardown app $teardown_index" "$teardown_stdout" "$teardown_stderr"
       else
         rc="$?"
-        render_captured_logs "teardown app $teardown_index" "$teardown_stdout" "$teardown_stderr"
+        render_captured_logs "ERROR" "teardown app $teardown_index" "$teardown_stdout" "$teardown_stderr"
         emit_failure_json "teardown" "machine-output-teardown-failed" "teardown app $teardown_index failed" "" "$rc"
         exit "$rc"
       fi
     done
 
-    cat "$payload_stdout"
+    cat "$payload_file"
   '';
 }).program
