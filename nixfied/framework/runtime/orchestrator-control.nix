@@ -371,7 +371,7 @@ pkgs.writeShellScriptBin "nixfied-orchestrator-control" ''
     fi
 
     refresh_one_run "$run_id" || true
-    ${pkgs.jq}/bin/jq -cS '.' "$run_file"
+    cat "$run_file"
   }
 
   stop_single_run() {

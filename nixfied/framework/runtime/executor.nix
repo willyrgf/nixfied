@@ -1774,6 +1774,56 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       printf '%s' "''${mins}m ''${secs}s"
     }
 
+    summary_fields_file_for() {
+      local summary_file="$1"
+      printf '%s/summary.fields' "$(dirname "$summary_file")"
+    }
+
+    summary_steps_file_for() {
+      local summary_file="$1"
+      printf '%s/summary.steps.tsv' "$(dirname "$summary_file")"
+    }
+
+    load_summary_fields() {
+      local fields_file="$1"
+
+      if [ ! -f "$fields_file" ]; then
+        return 1
+      fi
+
+      unset \
+        SUMMARY_TOTAL_DURATION \
+        SUMMARY_SETUP_DURATION \
+        SUMMARY_STEPS_DURATION \
+        SUMMARY_TEARDOWN_DURATION \
+        SUMMARY_ACCOUNTED_DURATION \
+        SUMMARY_UNTRACKED_DURATION \
+        SUMMARY_PARALLEL_MAX_WORKERS \
+        SUMMARY_PARALLEL_PEAK_WORKERS \
+        SUMMARY_PARALLEL_CANCELED_COUNT \
+        SUMMARY_PASSED_COUNT \
+        SUMMARY_FAILED_COUNT \
+        SUMMARY_SKIPPED_COUNT \
+        SUMMARY_CANCELED_COUNT || true
+      . "$fields_file"
+    }
+
+    workflow_step_status() {
+      local state="$1"
+      local reason="$2"
+
+      if [ "$state" = "canceled" ]; then
+        case "$reason" in
+          missing-env|when-false|service-skipped|dependency-skipped)
+            printf '%s' "skipped"
+            return 0
+            ;;
+        esac
+      fi
+
+      printf '%s' "$state"
+    }
+
     workflow_step_records_tsv() {
       local run_id="$1"
       local events_file="$2"
@@ -1861,25 +1911,47 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       ' "$events_file"
     }
 
-    workflow_steps_json() {
+    workflow_collect_steps() {
       local run_id="$1"
       local events_file="$2"
-      local steps_json="[]"
-      local task_id
-      local workflow_id
-      local order_seq
-      local state
-      local duration
-      local reason
-      local exit_code
-      local runner_type
-      local status
-      local duration_json
-      local order_seq_json
-      local exit_code_json
+      local steps_target="$3"
+      local task_id=""
+      local workflow_id=""
+      local order_seq=""
+      local state=""
+      local duration=""
+      local reason=""
+      local exit_code=""
+      local runner_type=""
+      local status=""
+      local duration_json=0
+      local order_seq_json=0
+      local exit_code_json="null"
+      local step_json=""
+      local steps_json_content=""
+      local steps_json_separator=""
+      local leaf_task_ids_json_content=""
+      local leaf_task_ids_json_separator=""
+      local passed=0
+      local failed=0
+      local skipped=0
+      local canceled=0
+      local steps_duration=0
+      local -A leaf_task_seen=()
+
+      WORKFLOW_STEPS_JSON='[]'
+      WORKFLOW_PASSED_COUNT=0
+      WORKFLOW_FAILED_COUNT=0
+      WORKFLOW_SKIPPED_COUNT=0
+      WORKFLOW_CANCELED_COUNT=0
+      WORKFLOW_STEPS_DURATION=0
+      WORKFLOW_LEAF_TASK_IDS_JSON='[]'
+
+      if [ -n "$steps_target" ]; then
+        : > "$steps_target" || return 1
+      fi
 
       if [ ! -f "$events_file" ]; then
-        printf '%s' "$steps_json"
         return 0
       fi
 
@@ -1893,17 +1965,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           continue
         fi
 
-        status="$state"
-        if [ "$state" = "canceled" ]; then
-          case "$reason" in
-            missing-env|when-false|service-skipped|dependency-skipped)
-              status="skipped"
-              ;;
-            *)
-              status="canceled"
-              ;;
-          esac
-        fi
+        status="$(workflow_step_status "$state" "$reason")"
 
         if is_nonneg_int "$duration"; then
           duration_json="$duration"
@@ -1923,31 +1985,69 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           exit_code_json="null"
         fi
 
-        steps_json="$(
-          ${pkgs.jq}/bin/jq -cn \
-            --argjson steps "$steps_json" \
-            --arg name "$task_id" \
-            --arg status "$status" \
-            --arg state "$state" \
-            --arg workflowId "$workflow_id" \
-            --arg reason "$reason" \
-            --argjson duration "$duration_json" \
-            --argjson orderSeq "$order_seq_json" \
-            --argjson exitCode "$exit_code_json" \
-            '$steps + [{
-              name: $name,
-              status: $status,
-              state: $state,
-              duration: $duration,
-              order: $orderSeq,
-              workflow_id: (if $workflowId == "" then null else $workflowId end),
-              reason: (if $reason == "" then null else $reason end),
-              exit_code: $exitCode
-            }]'
+        step_json="$(
+          printf '{'
+          printf '"name":%s' "$(json_quote_string "$task_id")"
+          printf ',"status":%s' "$(json_quote_string "$status")"
+          printf ',"state":%s' "$(json_quote_string "$state")"
+          printf ',"duration":%s' "$duration_json"
+          printf ',"order":%s' "$order_seq_json"
+          printf ',"workflow_id":%s' "$(json_string_or_null "$workflow_id")"
+          printf ',"reason":%s' "$(json_string_or_null "$reason")"
+          printf ',"exit_code":%s' "$exit_code_json"
+          printf '}'
         )"
+        steps_json_content="''${steps_json_content}''${steps_json_separator}''${step_json}"
+        steps_json_separator=","
+
+        if [ -n "$steps_target" ]; then
+          printf '%s\t%s\t%s\n' "$task_id" "$status" "$duration_json" >> "$steps_target" || return 1
+        fi
+
+        case "$state" in
+          passed)
+            passed=$((passed + 1))
+            ;;
+          failed)
+            failed=$((failed + 1))
+            ;;
+          canceled)
+            if [ "$status" = "skipped" ]; then
+              skipped=$((skipped + 1))
+            else
+              canceled=$((canceled + 1))
+            fi
+            ;;
+        esac
+
+        steps_duration=$((steps_duration + duration_json))
+
+        if [ -z "''${leaf_task_seen[$task_id]+x}" ]; then
+          leaf_task_seen["$task_id"]=1
+          leaf_task_ids_json_content="''${leaf_task_ids_json_content}''${leaf_task_ids_json_separator}$(json_quote_string "$task_id")"
+          leaf_task_ids_json_separator=","
+        fi
       done < <(workflow_step_records_tsv "$run_id" "$events_file")
 
-      printf '%s' "$steps_json" | ${pkgs.jq}/bin/jq -c 'sort_by(.order)'
+      WORKFLOW_STEPS_JSON="[''${steps_json_content}]"
+      WORKFLOW_PASSED_COUNT="$passed"
+      WORKFLOW_FAILED_COUNT="$failed"
+      WORKFLOW_SKIPPED_COUNT="$skipped"
+      WORKFLOW_CANCELED_COUNT="$canceled"
+      WORKFLOW_STEPS_DURATION="$steps_duration"
+      WORKFLOW_LEAF_TASK_IDS_JSON="[''${leaf_task_ids_json_content}]"
+    }
+
+    workflow_steps_json() {
+      local run_id="$1"
+      local events_file="$2"
+
+      if ! workflow_collect_steps "$run_id" "$events_file" ""; then
+        printf '%s' "[]"
+        return 0
+      fi
+
+      printf '%s' "$WORKFLOW_STEPS_JSON"
     }
 
     workflow_peak_workers() {
@@ -1997,8 +2097,6 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       local duration_seconds="$4"
       local summary_file="$5"
       local events_file=""
-      local steps_json="[]"
-      local timing_fields=""
       local summary_duration=""
       local timing_setup=""
       local timing_steps=""
@@ -2008,6 +2106,14 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       local parallel_max_workers=""
       local parallel_peak_workers=""
       local parallel_canceled_count=""
+      local summary_fields_file=""
+      local summary_steps_file=""
+      local steps_display_file=""
+      local steps_tmp=""
+      local step_name=""
+      local step_status=""
+      local step_duration=""
+      local step_marker=""
 
       echo ""
       echo "------------------------------------------------------------"
@@ -2016,51 +2122,54 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
       if [ -n "$summary_file" ] && [ -f "$summary_file" ]; then
         echo "Source: $summary_file"
-        steps_json="$(${pkgs.jq}/bin/jq -c '.payload.steps // []' "$summary_file" 2>/dev/null || echo "[]")"
-        summary_duration="$(${pkgs.jq}/bin/jq -r '.payload.timing.total_duration // .payload.duration_seconds // ""' "$summary_file" 2>/dev/null || true)"
-        if is_nonneg_int "$summary_duration"; then
-          duration_seconds="$summary_duration"
-        fi
-        timing_fields="$(
-          ${pkgs.jq}/bin/jq -r '
-            [
-              (.payload.timing.setup_duration // ""),
-              (.payload.timing.steps_duration // ""),
-              (.payload.timing.teardown_duration // ""),
-              (.payload.timing.accounted_duration // ""),
-              (.payload.timing.untracked_duration // ""),
-              (.payload.timing.parallelism.max_workers // ""),
-              (.payload.timing.parallelism.peak_workers // ""),
-              (.payload.timing.parallelism.canceled_count // "")
-            ] | @tsv
-          ' "$summary_file" 2>/dev/null || true
-        )"
-        if [ -n "$timing_fields" ]; then
-          IFS=$'\t' read -r timing_setup timing_steps timing_teardown timing_accounted timing_untracked parallel_max_workers parallel_peak_workers parallel_canceled_count <<< "$timing_fields"
-        fi
-      else
-        events_file="$(registry_events_snapshot "$REGISTRY_ROOT" 2>/dev/null || true)"
-        if [ -n "$events_file" ] && [ -f "$events_file" ]; then
-          steps_json="$(workflow_steps_json "$run_id" "$events_file" 2>/dev/null || echo "[]")"
+        summary_fields_file="$(summary_fields_file_for "$summary_file")"
+        summary_steps_file="$(summary_steps_file_for "$summary_file")"
+        if load_summary_fields "$summary_fields_file"; then
+          summary_duration="''${SUMMARY_TOTAL_DURATION:-}"
+          timing_setup="''${SUMMARY_SETUP_DURATION:-}"
+          timing_steps="''${SUMMARY_STEPS_DURATION:-}"
+          timing_teardown="''${SUMMARY_TEARDOWN_DURATION:-}"
+          timing_accounted="''${SUMMARY_ACCOUNTED_DURATION:-}"
+          timing_untracked="''${SUMMARY_UNTRACKED_DURATION:-}"
+          parallel_max_workers="''${SUMMARY_PARALLEL_MAX_WORKERS:-}"
+          parallel_peak_workers="''${SUMMARY_PARALLEL_PEAK_WORKERS:-}"
+          parallel_canceled_count="''${SUMMARY_PARALLEL_CANCELED_COUNT:-}"
+          if is_nonneg_int "$summary_duration"; then
+            duration_seconds="$summary_duration"
+          fi
+          if [ -f "$summary_steps_file" ]; then
+            steps_display_file="$summary_steps_file"
+          fi
         fi
       fi
 
-      printf '%s' "$steps_json" | ${pkgs.jq}/bin/jq -r '
-        .[] |
-        "  [\(
-          if .status == "passed" then
-            "PASS"
-          elif .status == "skipped" then
-            "SKIP"
-          elif .status == "failed" then
-            "FAIL"
-          elif .status == "canceled" then
-            "FAIL"
-          else
-            "FAIL"
-          end
-        )] \(.name) (\((.duration // "?") | tostring)s)"
-      ' 2>/dev/null || true
+      if [ -z "$steps_display_file" ]; then
+        events_file="$(registry_events_snapshot "$REGISTRY_ROOT" 2>/dev/null || true)"
+        if [ -n "$events_file" ] && [ -f "$events_file" ]; then
+          steps_tmp="$(mktemp "''${TMPDIR:-/tmp}/nixfied-summary-steps.XXXXXX")" || true
+          if [ -n "$steps_tmp" ] && workflow_collect_steps "$run_id" "$events_file" "$steps_tmp" 2>/dev/null; then
+            steps_display_file="$steps_tmp"
+          fi
+        fi
+      fi
+
+      if [ -n "$steps_display_file" ] && [ -f "$steps_display_file" ]; then
+        while IFS=$'\t' read -r step_name step_status step_duration; do
+          [ -n "$step_name" ] || continue
+          case "$step_status" in
+            passed)
+              step_marker="PASS"
+              ;;
+            skipped)
+              step_marker="SKIP"
+              ;;
+            *)
+              step_marker="FAIL"
+              ;;
+          esac
+          echo "  [$step_marker] $step_name (''${step_duration:-?}s)"
+        done < "$steps_display_file"
+      fi
 
       if is_nonneg_int "$duration_seconds"; then
         echo "Total time: $(format_duration_seconds "$duration_seconds")"
@@ -2092,6 +2201,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       fi
 
       echo "------------------------------------------------------------"
+      rm -f "$steps_tmp"
       registry_snapshot_cleanup "$events_file"
     }
 
@@ -2110,6 +2220,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       local summary_fields_file
       local summary_steps_file
       local summary_tmp
+      local summary_steps_tmp
       local summary_started_at="$started_at"
       local summary_started_epoch="$started_epoch"
       local finished_at
@@ -2169,25 +2280,40 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       fi
 
       events_file="$(registry_events_snapshot "$REGISTRY_ROOT" 2>/dev/null || true)"
+      summary_steps_tmp="$(mktemp "$summary_steps_file.tmp.XXXXXX")" || {
+        registry_snapshot_cleanup "$events_file"
+        echo "ERROR: failed to create summary steps temp file '$summary_steps_file'"
+        return 1
+      }
       if [ -n "$events_file" ] && [ -f "$events_file" ]; then
-        if steps_json="$(workflow_steps_json "$run_id" "$events_file")"; then
-          :
+        if workflow_collect_steps "$run_id" "$events_file" "$summary_steps_tmp"; then
+          steps_json="$WORKFLOW_STEPS_JSON"
+          passed="$WORKFLOW_PASSED_COUNT"
+          failed="$WORKFLOW_FAILED_COUNT"
+          skipped="$WORKFLOW_SKIPPED_COUNT"
+          canceled="$WORKFLOW_CANCELED_COUNT"
+          steps_duration="$WORKFLOW_STEPS_DURATION"
+          leaf_task_ids_json="$WORKFLOW_LEAF_TASK_IDS_JSON"
         else
           echo "WARN: failed to collect step summary from '$events_file'; using empty step list"
           steps_json="[]"
+          passed=0
+          failed=0
+          skipped=0
+          canceled=0
+          steps_duration=0
+          leaf_task_ids_json='[]'
+          : > "$summary_steps_tmp"
         fi
       else
         steps_json="[]"
-      fi
-
-      passed="$(printf '%s' "$steps_json" | ${pkgs.jq}/bin/jq -r '[.[] | select(.state == "passed")] | length' 2>/dev/null || echo 0)"
-      failed="$(printf '%s' "$steps_json" | ${pkgs.jq}/bin/jq -r '[.[] | select(.state == "failed")] | length' 2>/dev/null || echo 0)"
-      skipped="$(printf '%s' "$steps_json" | ${pkgs.jq}/bin/jq -r '[.[] | select(.status == "skipped")] | length' 2>/dev/null || echo 0)"
-      canceled="$(printf '%s' "$steps_json" | ${pkgs.jq}/bin/jq -r '[.[] | select(.state == "canceled" and .status != "skipped")] | length' 2>/dev/null || echo 0)"
-
-      steps_duration="$(printf '%s' "$steps_json" | ${pkgs.jq}/bin/jq -r '[.[] | (.duration // 0)] | add // 0' 2>/dev/null || echo 0)"
-      if ! is_nonneg_int "$steps_duration"; then
+        passed=0
+        failed=0
+        skipped=0
+        canceled=0
         steps_duration=0
+        leaf_task_ids_json='[]'
+        : > "$summary_steps_tmp"
       fi
       accounted_duration="$(( setup_duration + steps_duration + teardown_duration ))"
       untracked_duration="$(( duration_seconds - accounted_duration ))"
@@ -2202,7 +2328,6 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         parallel_max_workers_json="$parallel_max_workers"
       fi
 
-      leaf_task_ids_json="$(printf '%s' "$steps_json" | ${pkgs.jq}/bin/jq -c '[.[] | .name] | unique' 2>/dev/null || echo '[]')"
       if [ -n "$events_file" ] && [ -f "$events_file" ]; then
         parallel_peak_workers="$(workflow_peak_workers "$run_id" "$events_file" "$leaf_task_ids_json" 2>/dev/null || echo 0)"
       else
@@ -2219,69 +2344,42 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
       write_summary_payload() {
         local target_file="$1"
-        ${pkgs.jq}/bin/jq -n -S \
-          --arg kind "workflow-summary" \
-          --argjson version 1 \
-          --arg runId "$run_id" \
-          --arg attemptId "$attempt_id" \
-          --arg workflowId "$workflow_id" \
-          --arg mode "$mode" \
-          --argjson exitCode "$exit_code" \
-          --arg startedAt "$summary_started_at" \
-          --arg finishedAt "$finished_at" \
-          --argjson durationSeconds "$duration_seconds" \
-          --argjson passed "$passed" \
-          --argjson failed "$failed" \
-          --argjson skipped "$skipped" \
-          --argjson canceled "$canceled" \
-          --argjson steps "$steps_json" \
-          --argjson setupDuration "$setup_duration" \
-          --argjson stepsDuration "$steps_duration" \
-          --argjson teardownDuration "$teardown_duration" \
-          --argjson accountedDuration "$accounted_duration" \
-          --argjson untrackedDuration "$untracked_duration" \
-          --argjson parallelMaxWorkers "$parallel_max_workers_json" \
-          --argjson parallelPeakWorkers "$parallel_peak_workers_json" \
-          --argjson parallelCanceledCount "$parallel_canceled_count_json" \
-          '{
-            kind: $kind,
-            version: $version,
-            payload: {
-              run_id: $runId,
-              attempt_id: $attemptId,
-              workflow_id: $workflowId,
-              mode: $mode,
-              exit_code: $exitCode,
-              started_at: $startedAt,
-              finished_at: $finishedAt,
-              duration_seconds: $durationSeconds,
-              counts: {
-                passed: $passed,
-                failed: $failed,
-                skipped: $skipped,
-                canceled: $canceled
-              },
-              steps: $steps,
-              timing: {
-                total_duration: $durationSeconds,
-                setup_duration: $setupDuration,
-                steps_duration: $stepsDuration,
-                teardown_duration: $teardownDuration,
-                accounted_duration: $accountedDuration,
-                untracked_duration: $untrackedDuration,
-                parallelism: {
-                  max_workers: $parallelMaxWorkers,
-                  peak_workers: $parallelPeakWorkers,
-                  canceled_count: $parallelCanceledCount
-                }
-              }
-            }
-          }' > "$target_file"
+        {
+          printf '{'
+          printf '"kind":"workflow-summary","version":1,"payload":{'
+          printf '"run_id":%s' "$(json_quote_string "$run_id")"
+          printf ',"attempt_id":%s' "$(json_quote_string "$attempt_id")"
+          printf ',"workflow_id":%s' "$(json_quote_string "$workflow_id")"
+          printf ',"mode":%s' "$(json_quote_string "$mode")"
+          printf ',"exit_code":%s' "$exit_code"
+          printf ',"started_at":%s' "$(json_quote_string "$summary_started_at")"
+          printf ',"finished_at":%s' "$(json_quote_string "$finished_at")"
+          printf ',"duration_seconds":%s' "$duration_seconds"
+          printf ',"counts":{'
+          printf '"passed":%s,"failed":%s,"skipped":%s,"canceled":%s' "$passed" "$failed" "$skipped" "$canceled"
+          printf '}'
+          printf ',"steps":%s' "$steps_json"
+          printf ',"timing":{'
+          printf '"total_duration":%s' "$duration_seconds"
+          printf ',"setup_duration":%s' "$setup_duration"
+          printf ',"steps_duration":%s' "$steps_duration"
+          printf ',"teardown_duration":%s' "$teardown_duration"
+          printf ',"accounted_duration":%s' "$accounted_duration"
+          printf ',"untracked_duration":%s' "$untracked_duration"
+          printf ',"parallelism":{'
+          printf '"max_workers":%s' "$parallel_max_workers_json"
+          printf ',"peak_workers":%s' "$parallel_peak_workers_json"
+          printf ',"canceled_count":%s' "$parallel_canceled_count_json"
+          printf '}'
+          printf '}'
+          printf '}}\n'
+        } > "$target_file"
       }
 
       write_summary_sidecars() {
         local fields_target="$1"
         local steps_target="$2"
+        local steps_source="$3"
         local fields_tmp
         local steps_tmp
 
@@ -2301,15 +2399,16 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           printf 'SUMMARY_PARALLEL_MAX_WORKERS=%q\n' "$parallel_max_workers"
           printf 'SUMMARY_PARALLEL_PEAK_WORKERS=%q\n' "$parallel_peak_workers"
           printf 'SUMMARY_PARALLEL_CANCELED_COUNT=%q\n' "$parallel_canceled_count"
+          printf 'SUMMARY_PASSED_COUNT=%q\n' "$passed"
+          printf 'SUMMARY_FAILED_COUNT=%q\n' "$failed"
           printf 'SUMMARY_SKIPPED_COUNT=%q\n' "$skipped"
+          printf 'SUMMARY_CANCELED_COUNT=%q\n' "$canceled"
         } > "$fields_tmp" || {
           rm -f "$fields_tmp" "$steps_tmp"
           return 1
         }
 
-        if ! printf '%s' "$steps_json" | ${pkgs.jq}/bin/jq -r '
-          .[] | [.name, .status, ((.duration // 0) | tostring)] | @tsv
-        ' > "$steps_tmp"; then
+        if ! cp "$steps_source" "$steps_tmp"; then
           rm -f "$fields_tmp" "$steps_tmp"
           return 1
         fi
@@ -2327,25 +2426,27 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       summary_tmp="$(mktemp "$summary_file.tmp.XXXXXX")"
       validate_stderr="$(mktemp "$summary_file.validate.XXXXXX")"
       if ! write_summary_payload "$summary_tmp"; then
-        rm -f "$summary_tmp" "$validate_stderr"
+        rm -f "$summary_tmp" "$summary_steps_tmp" "$validate_stderr"
         registry_snapshot_cleanup "$events_file"
         echo "ERROR: failed to write summary file '$summary_file'"
         return 1
       fi
       if ! ${summaryValidator} "$summary_tmp" >/dev/null 2>"$validate_stderr"; then
         cat "$validate_stderr" >&2 || true
-        rm -f "$summary_tmp" "$validate_stderr"
+        rm -f "$summary_tmp" "$summary_steps_tmp" "$validate_stderr"
         registry_snapshot_cleanup "$events_file"
         echo "ERROR: failed to validate summary file '$summary_file'"
         return 1
       fi
       rm -f "$validate_stderr"
       mv "$summary_tmp" "$summary_file"
-      if ! write_summary_sidecars "$summary_fields_file" "$summary_steps_file"; then
+      if ! write_summary_sidecars "$summary_fields_file" "$summary_steps_file" "$summary_steps_tmp"; then
+        rm -f "$summary_steps_tmp"
         registry_snapshot_cleanup "$events_file"
         echo "ERROR: failed to write summary sidecars for '$summary_file'"
         return 1
       fi
+      rm -f "$summary_steps_tmp"
 
       if [ -n "$summary_file_override" ] && [ "$summary_file_override" != "$summary_file" ]; then
         if ! copy_file_atomic "$summary_file" "$summary_file_override"; then
@@ -2576,23 +2677,37 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
       if [ "$print_summary" -eq 1 ] && [ "$nested_workflow_call" -eq 0 ]; then
         local events_file=""
+        local summary_fields_file=""
         local passed failed skipped canceled
         print_workflow_summary_report "$run_id" "$workflow_id" "$status" "$duration_seconds" "$summary_file"
 
         if [ -n "$summary_file" ] && [ -f "$summary_file" ]; then
-          passed="$(${pkgs.jq}/bin/jq -r '.payload.counts.passed // 0' "$summary_file" 2>/dev/null || echo 0)"
-          failed="$(${pkgs.jq}/bin/jq -r '.payload.counts.failed // 0' "$summary_file" 2>/dev/null || echo 0)"
-          skipped="$(${pkgs.jq}/bin/jq -r '.payload.counts.skipped // 0' "$summary_file" 2>/dev/null || echo 0)"
-          canceled="$(${pkgs.jq}/bin/jq -r '.payload.counts.canceled // 0' "$summary_file" 2>/dev/null || echo 0)"
+          summary_fields_file="$(summary_fields_file_for "$summary_file")"
+          if load_summary_fields "$summary_fields_file"; then
+            passed="''${SUMMARY_PASSED_COUNT:-0}"
+            failed="''${SUMMARY_FAILED_COUNT:-0}"
+            skipped="''${SUMMARY_SKIPPED_COUNT:-0}"
+            canceled="''${SUMMARY_CANCELED_COUNT:-0}"
+          else
+            passed=0
+            failed=0
+            skipped=0
+            canceled=0
+          fi
         else
           events_file="$(registry_events_snapshot "$REGISTRY_ROOT" 2>/dev/null || true)"
           if [ -n "$events_file" ] && [ -f "$events_file" ]; then
-            local fb_steps_json
-            fb_steps_json="$(workflow_steps_json "$run_id" "$events_file" 2>/dev/null || echo '[]')"
-            passed="$(printf '%s' "$fb_steps_json" | ${pkgs.jq}/bin/jq -r '[.[] | select(.state == "passed")] | length' 2>/dev/null || echo 0)"
-            failed="$(printf '%s' "$fb_steps_json" | ${pkgs.jq}/bin/jq -r '[.[] | select(.state == "failed")] | length' 2>/dev/null || echo 0)"
-            skipped="$(printf '%s' "$fb_steps_json" | ${pkgs.jq}/bin/jq -r '[.[] | select(.status == "skipped")] | length' 2>/dev/null || echo 0)"
-            canceled="$(printf '%s' "$fb_steps_json" | ${pkgs.jq}/bin/jq -r '[.[] | select(.state == "canceled" and .status != "skipped")] | length' 2>/dev/null || echo 0)"
+            if workflow_collect_steps "$run_id" "$events_file" "" 2>/dev/null; then
+              passed="$WORKFLOW_PASSED_COUNT"
+              failed="$WORKFLOW_FAILED_COUNT"
+              skipped="$WORKFLOW_SKIPPED_COUNT"
+              canceled="$WORKFLOW_CANCELED_COUNT"
+            else
+              passed=0
+              failed=0
+              skipped=0
+              canceled=0
+            fi
             registry_snapshot_cleanup "$events_file"
           else
             passed=0
