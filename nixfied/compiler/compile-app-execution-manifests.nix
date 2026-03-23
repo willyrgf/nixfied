@@ -60,6 +60,12 @@ let
         nextSeen = seen ++ [ token ];
         depIds = (task.deps.needs or [ ]) ++ (task.deps.softNeeds or [ ]);
         depClosure = map (depTaskId: goTask nextSeen depTaskId) depIds;
+        runtimeTaskClosures = map (refTaskId: goTask nextSeen refTaskId) (
+          task.runtime.references.taskIds or [ ]
+        );
+        runtimeWorkflowClosures = map (workflowId: goWorkflowExact nextSeen workflowId) (
+          task.runtime.references.workflowIds or [ ]
+        );
         workflowClosure =
           if (task.runner.type or "") == "workflowRef" && (task.runner.workflowId or "") != "" then
             goWorkflowReference nextSeen task.runner.workflowId
@@ -73,10 +79,15 @@ let
         taskIds = uniquePreserveOrder (
           [ taskId ]
           ++ builtins.concatLists (map (entry: entry.taskIds) depClosure)
+          ++ builtins.concatLists (map (entry: entry.taskIds) runtimeTaskClosures)
+          ++ builtins.concatLists (map (entry: entry.taskIds) runtimeWorkflowClosures)
           ++ workflowClosure.taskIds
         );
         workflowIds = uniquePreserveOrder (
-          builtins.concatLists (map (entry: entry.workflowIds) depClosure) ++ workflowClosure.workflowIds
+          builtins.concatLists (map (entry: entry.workflowIds) depClosure)
+          ++ builtins.concatLists (map (entry: entry.workflowIds) runtimeTaskClosures)
+          ++ builtins.concatLists (map (entry: entry.workflowIds) runtimeWorkflowClosures)
+          ++ workflowClosure.workflowIds
         );
       };
 

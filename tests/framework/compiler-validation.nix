@@ -117,6 +117,9 @@ let
   testTask = model.tasks."task.test" or null;
   ciTask = model.tasks."task.ci" or null;
   qualityTask = model.tasks."task.ci.quality" or null;
+  validateEnvTask = model.tasks."task.ops.validate-env" or null;
+  testIsolationTask = model.tasks."task.ops.test-isolation" or null;
+  selfhostTask = model.tasks."task.test.framework.selfhost" or null;
   isolationProbeTask = model.tasks."task.test.isolation.probe" or null;
   isolationProbeUnit = model.tasks."task.test.isolation.unit" or null;
   isolationProbeWorkflow = model.workflows."workflow.test.isolation.probe" or null;
@@ -136,6 +139,9 @@ assert checkTask != null;
 assert testTask != null;
 assert ciTask != null;
 assert qualityTask != null;
+assert validateEnvTask != null;
+assert testIsolationTask != null;
+assert selfhostTask != null;
 assert isolationProbeTask != null;
 assert isolationProbeUnit != null;
 assert isolationProbeWorkflow != null;
@@ -194,6 +200,14 @@ assert ciTask.runner.workflowId == "workflow.ci.full";
 assert qualityTask.runner.type == "derivation";
 assert qualityTask.runner.command == "nix-checks --mode full";
 assert pkgs.lib.hasInfix "nix-checks" (qualityTask.runner.package or "");
+assert
+  testIsolationTask.runtime.references.taskIds == [
+    "task.ops.validate-env"
+    "task.test.isolation.probe"
+  ];
+assert testIsolationTask.runtime.references.workflowIds == [ ];
+assert selfhostTask.runtime.references.taskIds == [ "task.dev" ];
+assert selfhostTask.runtime.references.workflowIds == [ "workflow.ci.basic" ];
 assert isolationProbeTask.runner.type == "workflowRef";
 assert isolationProbeTask.runner.workflowId == "workflow.test.isolation.probe";
 assert isolationProbeUnit.runner.type == "shell";

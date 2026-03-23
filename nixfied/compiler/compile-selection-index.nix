@@ -79,8 +79,13 @@ let
         nextSeen = seen ++ [ token ];
         depIds = (task.deps.needs or [ ]) ++ (task.deps.softNeeds or [ ]);
         depServices = builtins.concatLists (map (depTaskId: goTaskBase nextSeen depTaskId) depIds);
+        runtimeTaskRefServices = builtins.concatLists (
+          map (refTaskId: goTaskBase nextSeen refTaskId) (task.runtime.references.taskIds or [ ])
+        );
       in
-      uniquePreserveOrder (((task.requirements or { }).services or [ ]) ++ depServices);
+      uniquePreserveOrder (
+        ((task.requirements or { }).services or [ ]) ++ depServices ++ runtimeTaskRefServices
+      );
 
   goWorkflow =
     seen: workflowId:
@@ -175,8 +180,11 @@ let
             goWorkflowReference nextSeen task.runner.workflowId
           else
             [ ];
+        runtimeWorkflowServices = builtins.concatLists (
+          map (workflowId: goWorkflowExact nextSeen workflowId) (task.runtime.references.workflowIds or [ ])
+        );
       in
-      uniquePreserveOrder ((goTaskBase seen taskId) ++ workflowServices);
+      uniquePreserveOrder ((goTaskBase seen taskId) ++ workflowServices ++ runtimeWorkflowServices);
 
   taskClosureServicesById = builtins.listToAttrs (
     map (taskId: {
@@ -184,6 +192,20 @@ let
       value = goTask [ ] taskId;
     }) taskIds
   );
+
+  _validateTaskRuntimeWorkflowReferences = map (
+    taskId:
+    let
+      task = taskSet.${taskId};
+      validateWorkflowRef =
+        workflowId:
+        if builtins.hasAttr workflowId workflowSet then
+          true
+        else
+          throw "task '${taskId}' runtime references unknown workflow '${workflowId}'";
+    in
+    map validateWorkflowRef (task.runtime.references.workflowIds or [ ])
+  ) taskIds;
 
   taskBaseClosureServicesById = builtins.listToAttrs (
     map (taskId: {

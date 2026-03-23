@@ -12,9 +12,12 @@ let
     projectModules = [ ../../nixfied/project/module.nix ];
     extraModules = [ ];
     localOverrides = [
-      ({ pkgs, ... }: {
-        nixfied.packages.local-override-probe = pkgs.writeText "local-override-probe" "probe\n";
-      })
+      (
+        { pkgs, ... }:
+        {
+          nixfied.packages.local-override-probe = pkgs.writeText "local-override-probe" "probe\n";
+        }
+      )
     ];
   };
 in
