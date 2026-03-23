@@ -211,27 +211,17 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
       argv_json="$(jq_positional_args_json "$@")" || return 1
 
-      ${pkgs.jq}/bin/jq -cnS \
-        --arg modelEvalHash "${model.identity.evalHash}" \
-        --arg runtimeHash "${runtimeHash}" \
-        --arg runKind "$run_kind" \
-        --arg workflowId "$workflow_id" \
-        --arg taskId "$task_id" \
-        --arg slot "$slot_value" \
-        --arg env "$env_value" \
-        --argjson passThroughEnv "$pass_through_env_json" \
-        --argjson argv "$argv_json" \
-        '{
-          model_eval_hash: $modelEvalHash,
-          runtime_hash: $runtimeHash,
-          run_kind: $runKind,
-          workflow_id: (if $workflowId == "" then null else $workflowId end),
-          task_id: (if $taskId == "" then null else $taskId end),
-          slot: $slot,
-          env: $env,
-          pass_through_env: $passThroughEnv,
-          argv: $argv
-        }'
+      printf '{'
+      printf '"model_eval_hash":%s' "$(json_quote_string "${model.identity.evalHash}")"
+      printf ',"runtime_hash":%s' "$(json_quote_string "${runtimeHash}")"
+      printf ',"run_kind":%s' "$(json_quote_string "$run_kind")"
+      printf ',"workflow_id":%s' "$(json_string_or_null "$workflow_id")"
+      printf ',"task_id":%s' "$(json_string_or_null "$task_id")"
+      printf ',"slot":%s' "$(json_quote_string "$slot_value")"
+      printf ',"env":%s' "$(json_quote_string "$env_value")"
+      printf ',"pass_through_env":%s' "$pass_through_env_json"
+      printf ',"argv":%s' "$argv_json"
+      printf '}'
     }
 
     selected_services_csv_from_lines() {
@@ -345,23 +335,83 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         done < <(workflow_phase_tasks "$current_workflow_id" postRun 2>/dev/null || true)
       }
 
-      {
-        while IFS= read -r env_name; do
-          [ -n "$env_name" ] || continue
-          if [ -n "''${!env_name+x}" ]; then
-            ${pkgs.jq}/bin/jq -cn --arg key "$env_name" --arg value "''${!env_name}" '{key: $key, value: $value}'
-          fi
-        done < <(
-          case "$run_kind" in
-            task)
-              collect_task_env_names "$task_id"
-              ;;
-            workflow)
-              collect_workflow_env_names "$workflow_id"
-              ;;
-          esac | ${pkgs.coreutils}/bin/sort -u
-        )
-      } | ${pkgs.jq}/bin/jq -cs 'from_entries'
+      case "$run_kind" in
+        task)
+          collect_task_env_names "$task_id"
+          ;;
+        workflow)
+          collect_workflow_env_names "$workflow_id"
+          ;;
+      esac | ${pkgs.coreutils}/bin/sort -u | json_object_from_named_env_values
+    }
+
+    event_detail_mode_json() {
+      local mode="$1"
+      printf '{"mode":%s}' "$(json_quote_string "$mode")"
+    }
+
+    event_detail_mode_suffix_json() {
+      local mode="$1"
+      local suffix_reason="$2"
+      printf '{'
+      printf '"mode":%s' "$(json_quote_string "$mode")"
+      printf ',"suffixReason":%s' "$(json_string_or_null "$suffix_reason")"
+      printf '}'
+    }
+
+    event_detail_exit_code_json() {
+      local exit_code="$1"
+      printf '{"exitCode":%s}' "$exit_code"
+    }
+
+    event_detail_produces_json() {
+      local produces_json="$1"
+      printf '{"produces":%s}' "$produces_json"
+    }
+
+    event_detail_reason_json() {
+      local reason="$1"
+      printf '{"reason":%s}' "$(json_quote_string "$reason")"
+    }
+
+    event_detail_reason_key_value_json() {
+      local reason="$1"
+      local extra_key="$2"
+      local extra_value="$3"
+      printf '{'
+      printf '"reason":%s' "$(json_quote_string "$reason")"
+      printf ',%s:%s' "$(json_quote_string "$extra_key")" "$(json_quote_string "$extra_value")"
+      printf '}'
+    }
+
+    workflow_phase_service_set_detail_json() {
+      local phase="$1"
+      local service_set_id="$2"
+      local service_set_name="$3"
+      local operation="$4"
+
+      printf '{'
+      printf '"phase":%s' "$(json_quote_string "$phase")"
+      printf ',"serviceSetId":%s' "$(json_quote_string "$service_set_id")"
+      printf ',"serviceSetName":%s' "$(json_quote_string "$service_set_name")"
+      printf ',"operation":%s' "$(json_quote_string "$operation")"
+      printf '}'
+    }
+
+    workflow_phase_service_set_failure_json() {
+      local phase="$1"
+      local service_set_id="$2"
+      local service_set_name="$3"
+      local operation="$4"
+      local exit_code="$5"
+
+      printf '{'
+      printf '"phase":%s' "$(json_quote_string "$phase")"
+      printf ',"serviceSetId":%s' "$(json_quote_string "$service_set_id")"
+      printf ',"serviceSetName":%s' "$(json_quote_string "$service_set_name")"
+      printf ',"operation":%s' "$(json_quote_string "$operation")"
+      printf ',"exitCode":%s' "$exit_code"
+      printf '}'
     }
 
     workflow_mode_override_from_args() {
@@ -596,16 +646,21 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
     task_retry_backoff_for_attempt() {
       local task_id="$1"
       local retry_index="$2"
-      task_retry_backoff_json "$task_id" | ${pkgs.jq}/bin/jq -r --argjson idx "$retry_index" '
-        . as $backoff
-        | if ($backoff | type) != "array" or ($backoff | length) == 0 then
-            0
-          elif $idx < ($backoff | length) then
-            ($backoff[$idx] // 0)
-          else
-            ($backoff[-1] // 0)
-          end
-      '
+      local backoff_value=""
+      local -a backoff_values=()
+
+      while IFS= read -r backoff_value; do
+        [ -n "$backoff_value" ] || continue
+        backoff_values+=("$backoff_value")
+      done < <(task_retry_backoff_values "$task_id")
+
+      if [ "''${#backoff_values[@]}" -eq 0 ]; then
+        printf '%s' "0"
+      elif [ "$retry_index" -lt "''${#backoff_values[@]}" ]; then
+        printf '%s' "''${backoff_values[$retry_index]}"
+      else
+        printf '%s' "''${backoff_values[$(( ''${#backoff_values[@]} - 1 ))]}"
+      fi
     }
 
     execute_task_once() {
@@ -746,7 +801,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       local effective_workflow_id
       local selected_services_csv=""
 
-      detail_json="$(${pkgs.jq}/bin/jq -cn --arg mode "task" '{mode: $mode}')"
+      detail_json="$(event_detail_mode_json "task")"
       append_event "$run_id" "$workflow_id" "$task_id" "queued" "$detail_json"
       append_event "$run_id" "$workflow_id" "$task_id" "running" '{}'
 
@@ -776,10 +831,10 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       fi
 
       if [ "$exit_code" -eq 0 ]; then
-        detail_json="$(${pkgs.jq}/bin/jq -cn --argjson produces "$(task_pass_detail_json "$task_id")" '{produces: $produces}')"
+        detail_json="$(event_detail_produces_json "$(task_pass_detail_json "$task_id")")"
         append_event "$run_id" "$workflow_id" "$task_id" "passed" "$detail_json"
       else
-        detail_json="$(${pkgs.jq}/bin/jq -cn --argjson exitCode "$exit_code" '{exitCode: $exitCode}')"
+        detail_json="$(event_detail_exit_code_json "$exit_code")"
         append_event "$run_id" "$workflow_id" "$task_id" "failed" "$detail_json" "" "$exit_code"
         return "$exit_code"
       fi
@@ -882,7 +937,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         write_text_file_atomic "$MACHINE_RUN_ID_FILE" "$run_id" || return $?
       fi
 
-      detail_json="$(${pkgs.jq}/bin/jq -cn --arg suffix "$RUN_SUFFIX_REASON" '{mode: "task", suffixReason: (if $suffix == "" then null else $suffix end)}')"
+      detail_json="$(event_detail_mode_suffix_json "task" "$RUN_SUFFIX_REASON")"
       append_event "$run_id" "" "$task_id" "queued" "$detail_json"
 
       local -A visited_tasks
@@ -914,7 +969,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         current_task_skip_service="$(task_first_skipped_required_service "$current_task" || true)"
         if [ -n "$current_task_skip_service" ]; then
           echo "SKIP: task '$current_task' is skipped because service '$current_task_skip_service' has a skip flag enabled"
-          skip_detail_json="$(${pkgs.jq}/bin/jq -cn --arg reason "service-skipped" --arg serviceName "$current_task_skip_service" '{reason: $reason, serviceName: $serviceName}')"
+          skip_detail_json="$(event_detail_reason_key_value_json "service-skipped" "serviceName" "$current_task_skip_service")"
           append_event "$run_id" "" "$current_task" "canceled" "$skip_detail_json" "service-skipped"
           if [ "$current_task" != "$task_id" ]; then
             return 3
@@ -1127,7 +1182,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
               cascade_reason="dependency-skipped"
               ;;
           esac
-          detail_json="$(${pkgs.jq}/bin/jq -cn --arg reason "$cascade_reason" --arg dependency "''${blocked_tasks_by_dependency[$unit_task]}" '{reason: $reason, dependency: $dependency}')"
+          detail_json="$(event_detail_reason_key_value_json "$cascade_reason" "dependency" "''${blocked_tasks_by_dependency[$unit_task]}")"
           append_event "$run_id" "$workflow_id" "$unit_task" "canceled" "$detail_json" "$cascade_reason"
           continue
         fi
@@ -1147,7 +1202,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
               cascade_reason="dependency-skipped"
               ;;
           esac
-          detail_json="$(${pkgs.jq}/bin/jq -cn --arg reason "$cascade_reason" --arg dependency "$failed_dependency" '{reason: $reason, dependency: $dependency}')"
+          detail_json="$(event_detail_reason_key_value_json "$cascade_reason" "dependency" "$failed_dependency")"
           append_event "$run_id" "$workflow_id" "$unit_task" "canceled" "$detail_json" "$cascade_reason"
           blocked_by_dependency=1
           break
@@ -1160,7 +1215,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
         if [ -n "$missing" ]; then
           local detail_json
-          detail_json="$(${pkgs.jq}/bin/jq -cn --arg reason "missing-env" --arg missing "$missing" '{reason: $reason, missing: $missing}')"
+          detail_json="$(event_detail_reason_key_value_json "missing-env" "missing" "$missing")"
           append_event "$run_id" "$workflow_id" "$unit_task" "canceled" "$detail_json" "missing-env"
           blocked_tasks_by_dependency["$unit_task"]="$unit_task"
           blocked_tasks_reason_by_dependency["$unit_task"]="missing-env"
@@ -1170,7 +1225,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         unit_skip_service="$(workflow_unit_first_skipped_required_service "$unit_json" || true)"
         if [ -n "$unit_skip_service" ]; then
           local detail_json
-          detail_json="$(${pkgs.jq}/bin/jq -cn --arg reason "service-skipped" --arg serviceName "$unit_skip_service" '{reason: $reason, serviceName: $serviceName}')"
+          detail_json="$(event_detail_reason_key_value_json "service-skipped" "serviceName" "$unit_skip_service")"
           append_event "$run_id" "$workflow_id" "$unit_task" "canceled" "$detail_json" "service-skipped"
           echo "SKIP: task '$unit_task' (service '$unit_skip_service') is skipped because service '$unit_skip_service' has a skip flag enabled"
           blocked_tasks_by_dependency["$unit_task"]="$unit_task"
@@ -1180,7 +1235,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
         if ! workflow_unit_when_matches "$unit_json"; then
           local detail_json
-          detail_json="$(${pkgs.jq}/bin/jq -cn --arg reason "when-false" '{reason: $reason}')"
+          detail_json="$(event_detail_reason_json "when-false")"
           append_event "$run_id" "$workflow_id" "$unit_task" "canceled" "$detail_json" "when-false"
           blocked_tasks_by_dependency["$unit_task"]="$unit_task"
           blocked_tasks_reason_by_dependency["$unit_task"]="when-false"
@@ -1258,9 +1313,9 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         fi
 
         if [ -n "$extra_key" ]; then
-          detail_json="$(${pkgs.jq}/bin/jq -cn --arg reason "$reason" --arg extraKey "$extra_key" --arg extraValue "$extra_value" '{reason: $reason} + {($extraKey): $extraValue}')"
+          detail_json="$(event_detail_reason_key_value_json "$reason" "$extra_key" "$extra_value")"
         else
-          detail_json="$(${pkgs.jq}/bin/jq -cn --arg reason "$reason" '{reason: $reason}')"
+          detail_json="$(event_detail_reason_json "$reason")"
         fi
 
         append_event "$run_id" "$workflow_id" "''${UNIT_TASK[$unit_name]}" "canceled" "$detail_json" "$reason"
@@ -1353,7 +1408,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
         unit_task="''${UNIT_TASK[$unit_name]}"
         unit_selected_services_csv="$(workflow_unit_selected_services_csv "''${UNIT_JSON[$unit_name]}")"
-        detail_json="$(${pkgs.jq}/bin/jq -cn --arg mode "task" '{mode: $mode}')"
+        detail_json="$(event_detail_mode_json "task")"
         append_event "$run_id" "$workflow_id" "$unit_task" "queued" "$detail_json"
         append_event "$run_id" "$workflow_id" "$unit_task" "running" '{}'
 
@@ -1519,7 +1574,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         release_unit_locks "$done_unit"
 
         if [ "''${CANCEL_REQUESTED[$done_unit]:-0}" = "1" ]; then
-          detail_json="$(${pkgs.jq}/bin/jq -cn --arg reason "fail-fast-running" '{reason: $reason}')"
+          detail_json="$(event_detail_reason_json "fail-fast-running")"
           append_event "$run_id" "$workflow_id" "''${UNIT_TASK[$done_unit]}" "canceled" "$detail_json" "fail-fast-running"
           UNIT_STATE[$done_unit]="canceled"
           completed_count=$((completed_count + 1))
@@ -1527,7 +1582,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         fi
 
         if [ "$wait_rc" -eq 0 ]; then
-          detail_json="$(${pkgs.jq}/bin/jq -cn --argjson produces "$(workflow_unit_produces_json "''${UNIT_JSON[$done_unit]}")" '{produces: $produces}')"
+          detail_json="$(event_detail_produces_json "$(workflow_unit_produces_json "''${UNIT_JSON[$done_unit]}")")"
           append_event "$run_id" "$workflow_id" "''${UNIT_TASK[$done_unit]}" "passed" "$detail_json"
           UNIT_STATE[$done_unit]="passed"
           completed_count=$((completed_count + 1))
@@ -1542,7 +1597,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
             fi
           done
         else
-          detail_json="$(${pkgs.jq}/bin/jq -cn --argjson exitCode "$wait_rc" '{exitCode: $exitCode}')"
+          detail_json="$(event_detail_exit_code_json "$wait_rc")"
           append_event "$run_id" "$workflow_id" "''${UNIT_TASK[$done_unit]}" "failed" "$detail_json" "" "$wait_rc"
           UNIT_STATE[$done_unit]="failed"
           completed_count=$((completed_count + 1))
@@ -1594,7 +1649,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
         phase_task_skip_service="$(task_first_skipped_required_service "$phase_task" || true)"
         if [ -n "$phase_task_skip_service" ]; then
-          phase_skip_detail="$(${pkgs.jq}/bin/jq -cn --arg reason "service-skipped" --arg serviceName "$phase_task_skip_service" '{reason: $reason, serviceName: $serviceName}')"
+          phase_skip_detail="$(event_detail_reason_key_value_json "service-skipped" "serviceName" "$phase_task_skip_service")"
           append_event "$run_id" "$workflow_id" "$phase_task" "canceled" "$phase_skip_detail" "service-skipped"
           echo "SKIP: task '$phase_task' (service '$phase_task_skip_service') is skipped because service '$phase_task_skip_service' has a skip flag enabled"
           continue
@@ -1648,19 +1703,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         fi
 
         phase_entry_id="''${service_set_id}:''${operation}"
-        phase_detail="$(
-          ${pkgs.jq}/bin/jq -cn \
-            --arg phase "$phase_key" \
-            --arg serviceSetId "$service_set_id" \
-            --arg serviceSetName "$service_set_name" \
-            --arg operation "$operation" \
-            '{
-              phase: $phase,
-              serviceSetId: $serviceSetId,
-              serviceSetName: $serviceSetName,
-              operation: $operation
-            }'
-        )"
+        phase_detail="$(workflow_phase_service_set_detail_json "$phase_key" "$service_set_id" "$service_set_name" "$operation")"
 
         program_path="$(workflow_phase_service_set_program "$service_set_id" "$operation" || true)"
         if [ -z "$program_path" ]; then
@@ -1678,12 +1721,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           phase_status=0
         else
           phase_status="$?"
-          failure_detail="$(
-            ${pkgs.jq}/bin/jq -cn \
-              --argjson base "$phase_detail" \
-              --argjson exitCode "$phase_status" \
-              '$base + {exitCode: $exitCode}'
-          )"
+          failure_detail="$(workflow_phase_service_set_failure_json "$phase_key" "$service_set_id" "$service_set_name" "$operation" "$phase_status")"
           append_event "$run_id" "$workflow_id" "$phase_entry_id" "failed" "$failure_detail" "" "$phase_status"
           break
         fi
@@ -2627,7 +2665,7 @@ $task_id"
       export NIXFIED_RUN_ID="$run_id"
       export NIXFIED_ATTEMPT_ID="$attempt_id"
 
-      detail_json="$(${pkgs.jq}/bin/jq -cn --arg suffix "$RUN_SUFFIX_REASON" --arg mode "workflow" '{mode: $mode, suffixReason: (if $suffix == "" then null else $suffix end)}')"
+      detail_json="$(event_detail_mode_suffix_json "workflow" "$RUN_SUFFIX_REASON")"
       append_event "$run_id" "$workflow_id" "" "queued" "$detail_json"
 
       fail_fast="$(workflow_fail_fast "$workflow_id")"
@@ -2678,7 +2716,7 @@ $task_id"
       if [ "$status" -eq 0 ]; then
         append_event "$run_id" "$workflow_id" "" "passed" '{}'
       else
-        detail_json="$(${pkgs.jq}/bin/jq -cn --argjson exitCode "$status" '{exitCode: $exitCode}')"
+        detail_json="$(event_detail_exit_code_json "$status")"
         append_event "$run_id" "$workflow_id" "" "failed" "$detail_json" "" "$status"
       fi
 
@@ -2691,7 +2729,12 @@ $task_id"
         if ! write_workflow_summary_json "$run_id" "$workflow_id" "$status" "$started_at" "$started_epoch" "$MACHINE_SUMMARY_FILE"; then
           if [ "$status" -eq 0 ]; then
             status=1
-            detail_json="$(${pkgs.jq}/bin/jq -cn --arg reason "summary-write-failed" '{reason: $reason, exitCode: 1}')"
+            detail_json="$(
+              printf '{'
+              printf '"reason":%s' "$(json_quote_string "summary-write-failed")"
+              printf ',"exitCode":1'
+              printf '}'
+            )"
             append_event "$run_id" "$workflow_id" "" "failed" "$detail_json" "summary-write-failed" "1"
           fi
         fi

@@ -369,7 +369,7 @@ let
               in
               if attempts < 1 then 1 else attempts
             );
-            retryBackoffJson = builtins.toJSON (task.scheduling.retryBackoffSec or [ ]);
+            retryBackoffValues = map toString (task.scheduling.retryBackoffSec or [ ]);
             needs = task.deps.needs or [ ];
             softNeeds = task.deps.softNeeds or [ ];
             inherit
@@ -1101,12 +1101,11 @@ in
       esac
     }
 
-    task_retry_backoff_json() {
+    task_retry_backoff_values() {
       local task_id="$1"
       case "$task_id" in
-  ${renderCaseReturn (entry: entry.value.retryBackoffJson) taskCases}
+  ${renderCasePrintLines (entry: entry.value.retryBackoffValues) taskCases}
         *)
-          printf '%s' "[]"
           return 0
           ;;
       esac

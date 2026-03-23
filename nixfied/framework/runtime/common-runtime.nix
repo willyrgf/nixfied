@@ -76,6 +76,25 @@
     esac
   }
 
+  json_object_from_named_env_values() {
+    local env_name=""
+    local first=1
+
+    printf '{'
+    while IFS= read -r env_name; do
+      [ -n "$env_name" ] || continue
+      if [ -z "''${!env_name+x}" ]; then
+        continue
+      fi
+      if [ "$first" -eq 0 ]; then
+        printf ','
+      fi
+      printf '%s:%s' "$(json_quote_string "$env_name")" "$(json_quote_string "''${!env_name}")"
+      first=0
+    done
+    printf '}'
+  }
+
   jq_positional_args_json() {
     local first=1
 

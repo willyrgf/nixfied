@@ -114,12 +114,6 @@ in
 
   write_run_record_fields() {
     local run_file="$1"
-    local state="$2"
-    local pid="$3"
-    local pgid="$4"
-    local attempt_id="$5"
-    local command_name="$6"
-    local process_mode="$7"
     local fields_file
     local parent_dir
     local tmp
@@ -138,12 +132,25 @@ in
       return 1
     }
     {
-      printf 'RUN_RECORD_STATE=%q\n' "$state"
-      printf 'RUN_RECORD_PID=%q\n' "$pid"
-      printf 'RUN_RECORD_PGID=%q\n' "$pgid"
-      printf 'RUN_RECORD_ATTEMPT_ID=%q\n' "$attempt_id"
-      printf 'RUN_RECORD_COMMAND=%q\n' "$command_name"
-      printf 'RUN_RECORD_PROCESS_MODE=%q\n' "$process_mode"
+      printf 'RUN_RECORD_RUN_ID=%q\n' "$RUN_RECORD_RUN_ID"
+      printf 'RUN_RECORD_ATTEMPT_ID=%q\n' "$RUN_RECORD_ATTEMPT_ID"
+      printf 'RUN_RECORD_COMMAND=%q\n' "$RUN_RECORD_COMMAND"
+      printf 'RUN_RECORD_WORKFLOW_ID=%q\n' "$RUN_RECORD_WORKFLOW_ID"
+      printf 'RUN_RECORD_TASK_ID=%q\n' "$RUN_RECORD_TASK_ID"
+      printf 'RUN_RECORD_EXECUTION_MODE=%q\n' "$RUN_RECORD_EXECUTION_MODE"
+      printf 'RUN_RECORD_PROCESS_MODE=%q\n' "$RUN_RECORD_PROCESS_MODE"
+      printf 'RUN_RECORD_EPHEMERAL_ENABLED=%q\n' "$RUN_RECORD_EPHEMERAL_ENABLED"
+      printf 'RUN_RECORD_STATE=%q\n' "$RUN_RECORD_STATE"
+      printf 'RUN_RECORD_PID=%q\n' "$RUN_RECORD_PID"
+      printf 'RUN_RECORD_PGID=%q\n' "$RUN_RECORD_PGID"
+      printf 'RUN_RECORD_EXIT_CODE=%q\n' "$RUN_RECORD_EXIT_CODE"
+      printf 'RUN_RECORD_STOP_REASON=%q\n' "$RUN_RECORD_STOP_REASON"
+      printf 'RUN_RECORD_CREATED_AT=%q\n' "$RUN_RECORD_CREATED_AT"
+      printf 'RUN_RECORD_STARTED_AT=%q\n' "$RUN_RECORD_STARTED_AT"
+      printf 'RUN_RECORD_FINISHED_AT=%q\n' "$RUN_RECORD_FINISHED_AT"
+      printf 'RUN_RECORD_UPDATED_AT=%q\n' "$RUN_RECORD_UPDATED_AT"
+      printf 'RUN_RECORD_ARGS_JSON=%q\n' "$RUN_RECORD_ARGS_JSON"
+      printf 'RUN_RECORD_HISTORY_LINES=%q\n' "$RUN_RECORD_HISTORY_LINES"
     } > "$tmp" || {
       rm -f "$tmp"
       echo "ERROR: failed to write temp file for '$fields_file'" >&2
@@ -166,8 +173,92 @@ in
       return 1
     fi
 
-    unset RUN_RECORD_STATE RUN_RECORD_PID RUN_RECORD_PGID RUN_RECORD_ATTEMPT_ID RUN_RECORD_COMMAND RUN_RECORD_PROCESS_MODE || true
+    unset \
+      RUN_RECORD_RUN_ID \
+      RUN_RECORD_ATTEMPT_ID \
+      RUN_RECORD_COMMAND \
+      RUN_RECORD_WORKFLOW_ID \
+      RUN_RECORD_TASK_ID \
+      RUN_RECORD_EXECUTION_MODE \
+      RUN_RECORD_PROCESS_MODE \
+      RUN_RECORD_EPHEMERAL_ENABLED \
+      RUN_RECORD_STATE \
+      RUN_RECORD_PID \
+      RUN_RECORD_PGID \
+      RUN_RECORD_EXIT_CODE \
+      RUN_RECORD_STOP_REASON \
+      RUN_RECORD_CREATED_AT \
+      RUN_RECORD_STARTED_AT \
+      RUN_RECORD_FINISHED_AT \
+      RUN_RECORD_UPDATED_AT \
+      RUN_RECORD_ARGS_JSON \
+      RUN_RECORD_HISTORY_LINES || true
     . "$fields_file"
+  }
+
+  run_record_history_append() {
+    local state="$1"
+    local at="$2"
+    local entry=""
+
+    printf -v entry '%s\t%s' "$state" "$at"
+    if [ -n "$RUN_RECORD_HISTORY_LINES" ]; then
+      RUN_RECORD_HISTORY_LINES="''${RUN_RECORD_HISTORY_LINES}
+$entry"
+    else
+      RUN_RECORD_HISTORY_LINES="$entry"
+    fi
+  }
+
+  run_record_history_json() {
+    local state=""
+    local at=""
+    local first=1
+
+    printf '['
+    while IFS=$'\t' read -r state at; do
+      [ -n "$state" ] || continue
+      if [ "$first" -eq 0 ]; then
+        printf ','
+      fi
+      printf '{'
+      printf '"state":%s' "$(json_quote_string "$state")"
+      printf ',"at":%s' "$(json_quote_string "$at")"
+      printf '}'
+      first=0
+    done <<< "$RUN_RECORD_HISTORY_LINES"
+    printf ']'
+  }
+
+  write_run_record_json_file() {
+    local target_file="$1"
+    local history_json=""
+
+    history_json="$(run_record_history_json)" || return 1
+    {
+      printf '{'
+      printf '"kind":"run-record","version":1,"payload":{'
+      printf '"run_id":%s' "$(json_quote_string "$RUN_RECORD_RUN_ID")"
+      printf ',"attempt_id":%s' "$(json_quote_string "$RUN_RECORD_ATTEMPT_ID")"
+      printf ',"command":%s' "$(json_quote_string "$RUN_RECORD_COMMAND")"
+      printf ',"workflow_id":%s' "$(json_string_or_null "$RUN_RECORD_WORKFLOW_ID")"
+      printf ',"task_id":%s' "$(json_string_or_null "$RUN_RECORD_TASK_ID")"
+      printf ',"execution_mode":%s' "$(json_quote_string "$RUN_RECORD_EXECUTION_MODE")"
+      printf ',"process_mode":%s' "$(json_quote_string "$RUN_RECORD_PROCESS_MODE")"
+      printf ',"ephemeral_enabled":%s' "$(json_bool_or_null "$RUN_RECORD_EPHEMERAL_ENABLED")"
+      printf ',"state":%s' "$(json_quote_string "$RUN_RECORD_STATE")"
+      printf ',"pid":%s' "$(json_number_or_null "$RUN_RECORD_PID")"
+      printf ',"pgid":%s' "$(json_number_or_null "$RUN_RECORD_PGID")"
+      printf ',"exit_code":%s' "$(json_number_or_null "$RUN_RECORD_EXIT_CODE")"
+      printf ',"stop_reason":%s' "$(json_string_or_null "$RUN_RECORD_STOP_REASON")"
+      printf ',"created_at":%s' "$(json_quote_string "$RUN_RECORD_CREATED_AT")"
+      printf ',"started_at":%s' "$(json_string_or_null "$RUN_RECORD_STARTED_AT")"
+      printf ',"finished_at":%s' "$(json_string_or_null "$RUN_RECORD_FINISHED_AT")"
+      printf ',"updated_at":%s' "$(json_quote_string "$RUN_RECORD_UPDATED_AT")"
+      printf ',"args":%s' "$RUN_RECORD_ARGS_JSON"
+      printf ',"history":%s' "$history_json"
+      printf '}}\n'
+    } > "$target_file"
   }
 
   run_file_state() {

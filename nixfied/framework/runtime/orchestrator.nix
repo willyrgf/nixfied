@@ -178,27 +178,17 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
 
     argv_json="$(jq_positional_args_json "$@")" || return 1
 
-    ${pkgs.jq}/bin/jq -cnS \
-      --arg modelEvalHash "${model.identity.evalHash}" \
-      --arg runtimeHash "${runtimeHash}" \
-      --arg runKind "$run_kind" \
-      --arg workflowId "$workflow_id" \
-      --arg taskId "$task_id" \
-      --arg slot "$slot_value" \
-      --arg env "$env_value" \
-      --argjson passThroughEnv "$pass_through_env_json" \
-      --argjson argv "$argv_json" \
-      '{
-        model_eval_hash: $modelEvalHash,
-        runtime_hash: $runtimeHash,
-        run_kind: $runKind,
-        workflow_id: (if $workflowId == "" then null else $workflowId end),
-        task_id: (if $taskId == "" then null else $taskId end),
-        slot: $slot,
-        env: $env,
-        pass_through_env: $passThroughEnv,
-        argv: $argv
-      }'
+    printf '{'
+    printf '"model_eval_hash":%s' "$(json_quote_string "${model.identity.evalHash}")"
+    printf ',"runtime_hash":%s' "$(json_quote_string "${runtimeHash}")"
+    printf ',"run_kind":%s' "$(json_quote_string "$run_kind")"
+    printf ',"workflow_id":%s' "$(json_string_or_null "$workflow_id")"
+    printf ',"task_id":%s' "$(json_string_or_null "$task_id")"
+    printf ',"slot":%s' "$(json_quote_string "$slot_value")"
+    printf ',"env":%s' "$(json_quote_string "$env_value")"
+    printf ',"pass_through_env":%s' "$pass_through_env_json"
+    printf ',"argv":%s' "$argv_json"
+    printf '}'
   }
 
   filter_run_id_args() {
@@ -327,23 +317,24 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
       done < <(workflow_phase_tasks "$current_workflow_id" postRun 2>/dev/null || true)
     }
 
-    {
-      while IFS= read -r env_name; do
-        [ -n "$env_name" ] || continue
-        if [ -n "''${!env_name+x}" ]; then
-          ${pkgs.jq}/bin/jq -cn --arg key "$env_name" --arg value "''${!env_name}" '{key: $key, value: $value}'
-        fi
-      done < <(
-        case "$run_kind" in
-          task)
-            collect_task_env_names "$task_id"
-            ;;
-          workflow)
-            collect_workflow_env_names "$workflow_id"
-            ;;
-        esac | ${pkgs.coreutils}/bin/sort -u
-      )
-    } | ${pkgs.jq}/bin/jq -cs 'from_entries'
+    case "$run_kind" in
+      task)
+        collect_task_env_names "$task_id"
+        ;;
+      workflow)
+        collect_workflow_env_names "$workflow_id"
+        ;;
+    esac | ${pkgs.coreutils}/bin/sort -u | json_object_from_named_env_values
+  }
+
+  event_detail_signal_json() {
+    local reason="$1"
+    local signal_name="$2"
+
+    printf '{'
+    printf '"reason":%s' "$(json_quote_string "$reason")"
+    printf ',"signal":%s' "$(json_quote_string "$signal_name")"
+    printf '}'
   }
 
   compute_run_id() {
@@ -547,7 +538,7 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
       attempt_id="$(run_file_attempt_id "$run_file")"
     fi
 
-    detail_json="$(${pkgs.jq}/bin/jq -cn --arg reason "orchestrator-interrupted" --arg signal "$signal_name" '{reason: $reason, signal: $signal}')"
+    detail_json="$(event_detail_signal_json "orchestrator-interrupted" "$signal_name")"
     if [ -n "$workflow_id" ]; then
       registry_append_event "$REGISTRY_ROOT" "$run_id" "$attempt_id" "$workflow_id" "" "canceled" "$detail_json" "orchestrator-interrupted"
     else
@@ -600,47 +591,32 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
     tmp="$(mktemp "$run_file.tmp.XXXXXX")"
     validate_stderr="$(mktemp "$run_file.validate.XXXXXX")"
 
-    if ! ${pkgs.jq}/bin/jq -cnS \
-      --arg runId "$run_id" \
-      --arg attemptId "$attempt_id" \
-      --arg command "$command_name" \
-      --arg workflowId "$workflow_id" \
-      --arg taskId "$task_id" \
-      --arg executionMode "$execution_mode" \
-      --arg processMode "$process_mode" \
-      --argjson ephemeralEnabled "$( [ "$ephemeral_enabled" = "1" ] && printf true || printf false )" \
-      --argjson args "$args_json" \
-      --arg ts "$now" \
-      '{
-        kind: "run-record",
-        version: 1,
-        payload: {
-          run_id: $runId,
-          attempt_id: $attemptId,
-          command: $command,
-          workflow_id: (if $workflowId == "" then null else $workflowId end),
-          task_id: (if $taskId == "" then null else $taskId end),
-          execution_mode: $executionMode,
-          process_mode: $processMode,
-          ephemeral_enabled: $ephemeralEnabled,
-          state: "queued",
-          pid: null,
-          pgid: null,
-          exit_code: null,
-          stop_reason: null,
-          created_at: $ts,
-          started_at: null,
-          finished_at: null,
-          updated_at: $ts,
-          args: $args,
-          history: [
-            {
-              state: "queued",
-              at: $ts
-            }
-          ]
-        }
-      }' > "$tmp"; then
+    RUN_RECORD_RUN_ID="$run_id"
+    RUN_RECORD_ATTEMPT_ID="$attempt_id"
+    RUN_RECORD_COMMAND="$command_name"
+    RUN_RECORD_WORKFLOW_ID="$workflow_id"
+    RUN_RECORD_TASK_ID="$task_id"
+    RUN_RECORD_EXECUTION_MODE="$execution_mode"
+    RUN_RECORD_PROCESS_MODE="$process_mode"
+    if [ "$ephemeral_enabled" = "1" ]; then
+      RUN_RECORD_EPHEMERAL_ENABLED="true"
+    else
+      RUN_RECORD_EPHEMERAL_ENABLED="false"
+    fi
+    RUN_RECORD_STATE="queued"
+    RUN_RECORD_PID=""
+    RUN_RECORD_PGID=""
+    RUN_RECORD_EXIT_CODE=""
+    RUN_RECORD_STOP_REASON=""
+    RUN_RECORD_CREATED_AT="$now"
+    RUN_RECORD_STARTED_AT=""
+    RUN_RECORD_FINISHED_AT=""
+    RUN_RECORD_UPDATED_AT="$now"
+    RUN_RECORD_ARGS_JSON="$args_json"
+    RUN_RECORD_HISTORY_LINES=""
+    run_record_history_append "queued" "$now"
+
+    if ! write_run_record_json_file "$tmp"; then
       rm -f "$tmp"
       rm -f "$validate_stderr"
       registry_lock_release "$lock_fd" "$lock_file"
@@ -656,7 +632,7 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
 
     rm -f "$validate_stderr"
     mv "$tmp" "$run_file"
-    if ! write_run_record_fields "$run_file" "queued" "" "" "$attempt_id" "$command_name" "$process_mode"; then
+    if ! write_run_record_fields "$run_file"; then
       registry_lock_release "$lock_fd" "$lock_file"
       return 1
     fi
@@ -678,13 +654,6 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
     local tmp
     local now
     local validate_stderr
-    local current_attempt_id=""
-    local current_command=""
-    local current_process_mode=""
-    local current_pid=""
-    local current_pgid=""
-    local next_pid=""
-    local next_pgid=""
 
     run_file="$(run_file_for "$run_id")"
     lock_file="$(run_lock_for "$run_id")"
@@ -694,44 +663,42 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
       return 1
     fi
 
-    current_attempt_id="$(run_file_attempt_id "$run_file")"
-    current_command="$(run_file_command "$run_file")"
-    current_process_mode="$(run_file_process_mode "$run_file")"
-    current_pid="$(run_file_pid "$run_file")"
-    current_pgid="$(run_file_pgid "$run_file")"
-    if [ -n "$pid" ]; then
-      next_pid="$pid"
-    else
-      next_pid="$current_pid"
-    fi
-    if [ -n "$pgid" ]; then
-      next_pgid="$pgid"
-    else
-      next_pgid="$current_pgid"
-    fi
-
     lock_fd="$(registry_lock_acquire "$lock_file" "orchestrator-update-run-state:$run_id" 30)" || return 1
     tmp="$(mktemp "$run_file.tmp.XXXXXX")"
     validate_stderr="$(mktemp "$run_file.validate.XXXXXX")"
 
-    if ! ${pkgs.jq}/bin/jq -cS \
-      --arg state "$state" \
-      --arg ts "$now" \
-      --argjson exitCode "$exit_code_json" \
-      --arg stopReason "$stop_reason" \
-      --arg pid "$pid" \
-      --arg pgid "$pgid" \
-      '
-      .payload.state = $state
-      | .payload.updated_at = $ts
-      | .payload.history += [{state: $state, at: $ts}]
-      | .payload.pid = (if $pid == "" then .payload.pid else ($pid | tonumber) end)
-      | .payload.pgid = (if $pgid == "" then .payload.pgid else ($pgid | tonumber) end)
-      | .payload.started_at = (if (.payload.started_at == null and $state == "running") then $ts else .payload.started_at end)
-      | .payload.finished_at = (if ($state == "passed" or $state == "failed" or $state == "canceled") then $ts else .payload.finished_at end)
-      | .payload.exit_code = (if $exitCode == null then .payload.exit_code else $exitCode end)
-      | .payload.stop_reason = (if $stopReason == "" then .payload.stop_reason else $stopReason end)
-      ' "$run_file" > "$tmp"; then
+    if ! load_run_record_fields "$run_file"; then
+      rm -f "$tmp"
+      rm -f "$validate_stderr"
+      registry_lock_release "$lock_fd" "$lock_file"
+      return 1
+    fi
+
+    RUN_RECORD_STATE="$state"
+    RUN_RECORD_UPDATED_AT="$now"
+    run_record_history_append "$state" "$now"
+    if [ -n "$pid" ]; then
+      RUN_RECORD_PID="$pid"
+    fi
+    if [ -n "$pgid" ]; then
+      RUN_RECORD_PGID="$pgid"
+    fi
+    if [ -z "$RUN_RECORD_STARTED_AT" ] && [ "$state" = "running" ]; then
+      RUN_RECORD_STARTED_AT="$now"
+    fi
+    case "$state" in
+      passed|failed|canceled)
+        RUN_RECORD_FINISHED_AT="$now"
+        ;;
+    esac
+    if [ -n "$exit_code_json" ] && [ "$exit_code_json" != "null" ]; then
+      RUN_RECORD_EXIT_CODE="$exit_code_json"
+    fi
+    if [ -n "$stop_reason" ]; then
+      RUN_RECORD_STOP_REASON="$stop_reason"
+    fi
+
+    if ! write_run_record_json_file "$tmp"; then
       rm -f "$tmp"
       rm -f "$validate_stderr"
       registry_lock_release "$lock_fd" "$lock_file"
@@ -747,7 +714,7 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
 
     rm -f "$validate_stderr"
     mv "$tmp" "$run_file"
-    if ! write_run_record_fields "$run_file" "$state" "$next_pid" "$next_pgid" "$current_attempt_id" "$current_command" "$current_process_mode"; then
+    if ! write_run_record_fields "$run_file"; then
       registry_lock_release "$lock_fd" "$lock_file"
       return 1
     fi

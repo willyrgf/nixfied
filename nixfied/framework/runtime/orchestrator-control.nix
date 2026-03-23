@@ -141,13 +141,6 @@ pkgs.writeShellScriptBin "nixfied-orchestrator-control" ''
     local tmp
     local now
     local validate_stderr
-    local current_attempt_id=""
-    local current_command=""
-    local current_process_mode=""
-    local current_pid=""
-    local current_pgid=""
-    local next_pid=""
-    local next_pgid=""
 
     run_file="$(run_file_for "$run_id")"
     lock_file="$(run_lock_for "$run_id")"
@@ -157,44 +150,41 @@ pkgs.writeShellScriptBin "nixfied-orchestrator-control" ''
       return 1
     fi
 
-    current_attempt_id="$(run_file_attempt_id "$run_file")"
-    current_command="$(run_file_command "$run_file")"
-    current_process_mode="$(run_file_process_mode "$run_file")"
-    current_pid="$(run_file_pid "$run_file")"
-    current_pgid="$(run_file_pgid "$run_file")"
-    if [ -n "$pid" ]; then
-      next_pid="$pid"
-    else
-      next_pid="$current_pid"
-    fi
-    if [ -n "$pgid" ]; then
-      next_pgid="$pgid"
-    else
-      next_pgid="$current_pgid"
-    fi
-
     lock_fd="$(registry_lock_acquire "$lock_file" "orchestrator-update-run-state:$run_id" 30)" || return 1
     tmp="$(mktemp "$run_file.tmp.XXXXXX")"
     validate_stderr="$(mktemp "$run_file.validate.XXXXXX")"
 
-    if ! ${pkgs.jq}/bin/jq -cS \
-      --arg state "$state" \
-      --arg ts "$now" \
-      --argjson exitCode "$exit_code_json" \
-      --arg stopReason "$stop_reason" \
-      --arg pid "$pid" \
-      --arg pgid "$pgid" \
-      '
-      .payload.state = $state
-      | .payload.updated_at = $ts
-      | .payload.history += [{state: $state, at: $ts}]
-      | .payload.pid = (if $pid == "" then .payload.pid else ($pid | tonumber) end)
-      | .payload.pgid = (if $pgid == "" then .payload.pgid else ($pgid | tonumber) end)
-      | .payload.started_at = (if (.payload.started_at == null and $state == "running") then $ts else .payload.started_at end)
-      | .payload.finished_at = (if ($state == "passed" or $state == "failed" or $state == "canceled") then $ts else .payload.finished_at end)
-      | .payload.exit_code = (if $exitCode == null then .payload.exit_code else $exitCode end)
-      | .payload.stop_reason = (if $stopReason == "" then .payload.stop_reason else $stopReason end)
-      ' "$run_file" > "$tmp"; then
+    if ! load_run_record_fields "$run_file"; then
+      rm -f "$tmp" "$validate_stderr"
+      registry_lock_release "$lock_fd" "$lock_file"
+      return 1
+    fi
+
+    RUN_RECORD_STATE="$state"
+    RUN_RECORD_UPDATED_AT="$now"
+    run_record_history_append "$state" "$now"
+    if [ -n "$pid" ]; then
+      RUN_RECORD_PID="$pid"
+    fi
+    if [ -n "$pgid" ]; then
+      RUN_RECORD_PGID="$pgid"
+    fi
+    if [ -z "$RUN_RECORD_STARTED_AT" ] && [ "$state" = "running" ]; then
+      RUN_RECORD_STARTED_AT="$now"
+    fi
+    case "$state" in
+      passed|failed|canceled)
+        RUN_RECORD_FINISHED_AT="$now"
+        ;;
+    esac
+    if [ -n "$exit_code_json" ] && [ "$exit_code_json" != "null" ]; then
+      RUN_RECORD_EXIT_CODE="$exit_code_json"
+    fi
+    if [ -n "$stop_reason" ]; then
+      RUN_RECORD_STOP_REASON="$stop_reason"
+    fi
+
+    if ! write_run_record_json_file "$tmp"; then
       rm -f "$tmp" "$validate_stderr"
       registry_lock_release "$lock_fd" "$lock_file"
       return 1
@@ -209,7 +199,7 @@ pkgs.writeShellScriptBin "nixfied-orchestrator-control" ''
 
     rm -f "$validate_stderr"
     mv "$tmp" "$run_file"
-    if ! write_run_record_fields "$run_file" "$state" "$next_pid" "$next_pgid" "$current_attempt_id" "$current_command" "$current_process_mode"; then
+    if ! write_run_record_fields "$run_file"; then
       registry_lock_release "$lock_fd" "$lock_file"
       return 1
     fi
