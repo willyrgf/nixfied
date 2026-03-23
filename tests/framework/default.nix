@@ -405,6 +405,10 @@ let
       inherit pkgs;
     };
 
+    "discovery-runtime-contract" = import ./discovery-runtime-contract.nix {
+      inherit pkgs;
+    };
+
     "registry-replay" = import ./registry-replay.nix {
       inherit
         pkgs
