@@ -16,13 +16,6 @@ let
     "workflow"
   ];
 
-  modeNames = [
-    "closure"
-    "default"
-    "execution"
-    "resolution"
-  ];
-
   sortNames = attrs: builtins.sort builtins.lessThan (builtins.attrNames attrs);
   uniqueSorted = values: builtins.sort builtins.lessThan (lib.unique values);
   nonEmptyStrings = values: builtins.filter (value: value != null && value != "") values;

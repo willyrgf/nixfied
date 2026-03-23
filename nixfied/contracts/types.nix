@@ -11,7 +11,6 @@ let
   isBool = value: builtins.typeOf value == "bool";
   isInt = value: builtins.typeOf value == "int";
   isString = value: builtins.typeOf value == "string";
-  isNull = value: builtins.typeOf value == "null";
   isNumber =
     value:
     let
