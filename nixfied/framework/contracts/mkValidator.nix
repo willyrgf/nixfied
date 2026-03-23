@@ -28,12 +28,14 @@ else
     fi
 
     payload_file="$1"
-    payload_json="$(mktemp "''${TMPDIR:-/tmp}/nixfied-contract-payload.XXXXXX.json")"
+    payload_tmp="$(mktemp "''${TMPDIR:-/tmp}/nixfied-contract-payload.XXXXXX")"
+    payload_json="$payload_tmp.json"
     cleanup_payload_json() {
-      rm -f "$payload_json"
+      rm -f "$payload_tmp" "$payload_json"
     }
     trap cleanup_payload_json EXIT
 
+    mv "$payload_tmp" "$payload_json"
     cp "$payload_file" "$payload_json"
     exec ${pkgs.cue}/bin/cue vet -c ${lib.escapeShellArg cueFile} "$payload_json" -d ${lib.escapeShellArg cueSelector}
   ''
