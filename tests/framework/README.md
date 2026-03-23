@@ -107,6 +107,32 @@ Use `tests/framework/default.nix` as the source of truth for:
 - the exact check names
 - the import path for each check
 
+## Contract Migration Guard
+
+`contract-migration-guard` is the repository policy gate for the CUE contract
+migration.
+
+It fails if:
+
+- framework-owned Python helpers return under `nixfied/framework/core/`
+- migrated framework runtime paths reintroduce semantic `${pkgs.jq}/bin/jq`
+- machine output transport falls back to stdout scraping instead of the
+  declared `NIXFIED_MACHINE_OUTPUT_FILE` channel
+
+That guard complements the runtime contract checks. The architecture is now:
+
+- contract definitions in `nixfied/contracts/`
+- generated validator bundles in `nixfied/framework/contracts/`
+- explicit payload-file machine output transport
+- compile-time introspection bundles with a thin runtime selector
+
+Run it directly with:
+
+```bash
+nix run .#framework::test -- --shard flake-check --summary
+nix build .#checks.$(nix eval --impure --raw --expr builtins.currentSystem).contract-migration-guard
+```
+
 The current surface is organized around:
 - model and compiler determinism
 - executor, env sandbox, and shell/runtime contracts

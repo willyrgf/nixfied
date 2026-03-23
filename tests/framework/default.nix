@@ -169,6 +169,8 @@ let
     "framework-test-coverage-contract" = { };
 
     "contract-render-snapshot" = { };
+
+    "contract-migration-guard" = { };
   };
 
   rawChecks = {
@@ -602,6 +604,10 @@ let
     };
 
     "runtime-events-contract" = import ./runtime-events-contract.nix {
+      inherit pkgs;
+    };
+
+    "contract-migration-guard" = import ./contract-migration-guard.nix {
       inherit pkgs;
     };
 

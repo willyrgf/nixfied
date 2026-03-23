@@ -93,6 +93,17 @@ Execution contracts:
 - Stable CLI prefixes (`INFO:`, `WARN:`, `ERROR:`, `OK:`, `SKIP:`).
 - Deterministic scheduling and lock behavior.
 
+## Contract Boundaries
+
+Machine-facing boundaries are contract-owned.
+
+- `nixfied/contracts/` defines the Nix contract DSL and renders CUE, JSON Schema, and docs from the same source.
+- App machine output uses typed `validation.contractRef` rather than inline schema fragments or runtime validator commands.
+- Machine-output transport is explicit: target apps write the payload to `NIXFIED_MACHINE_OUTPUT_FILE`, and the wrapper validates that declared file instead of recovering payloads from stdout.
+- Workflow summaries, orchestrator run records, and registry events are versioned validated envelopes. Shell runtime code reads companion fields/index files rather than re-deriving schema semantics with `jq`.
+- `introspect` is backed by a compile-time bundle plus a thin runtime selector; query resolution no longer depends on runtime Python.
+- Repository guard tests prevent the deleted Python helpers, migrated semantic `jq`, and stdout-filter fallback transport from reappearing.
+
 ## Generated App Surfaces
 
 Core model-generated apps:
@@ -126,8 +137,9 @@ Introspection apps:
 - `nixfied/modules/`: typed option modules.
 - `nixfied/compiler/`: model compilation passes.
 - `nixfied/framework/runtime/`: dispatcher, orchestrator, executor, env sandbox, and runtime helpers.
-- `nixfied/framework/runtime/registry/`: NDJSON event log, replay, and snapshot logic.
-- `nixfied/framework/core/`: canonical renderer, flake/core helpers, and `mkNixfied`.
+- `nixfied/framework/runtime/registry/`: NDJSON event log, replay, snapshot logic, and contract-backed append helpers.
+- `nixfied/framework/core/`: canonical flake/core helpers and `mkNixfied`.
+- `nixfied/framework/contracts/`: generated validator entrypoints and runtime artifact contract bundles.
 - `nixfied/framework/install/`: wrapper/install internals and vendored-wrapper generation.
 - `tests/framework/`: deterministic framework gates and snapshots.
 
@@ -141,6 +153,7 @@ Authoritative checks in `tests/framework/` include:
 - help snapshot contract
 - registry replay/events contract
 - executor/env-sandbox contracts
+- contract migration guard
 - log prefix contract
 - runtime service-selection contract
 - launcher skip-service pruning contract
