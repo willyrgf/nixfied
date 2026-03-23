@@ -785,6 +785,10 @@ let
       inherit pkgs;
     };
 
+    "postgres-backup-contract" = import ./postgres-backup-contract.nix {
+      inherit pkgs;
+    };
+
     "postgres-config-artifacts-contract" = import ./postgres-config-artifacts-contract.nix {
       inherit pkgs;
     };

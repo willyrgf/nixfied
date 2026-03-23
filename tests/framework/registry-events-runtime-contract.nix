@@ -29,11 +29,9 @@ assert pkgs.lib.hasInfix "contractRef = \"runtime.registryEvent\";" appendSource
 assert pkgs.lib.hasInfix "events_index_file" appendSource;
 assert pkgs.lib.hasInfix "detail_reason" appendSource;
 assert pkgs.lib.hasInfix "detail_exit_code" appendSource;
-assert pkgs.lib.hasInfix "--arg kind \"$REGISTRY_EVENT_KIND\"" appendSource;
-assert pkgs.lib.hasInfix "--argjson version \"$REGISTRY_EVENT_VERSION\"" appendSource;
-assert pkgs.lib.hasInfix "--arg attemptId \"$attempt_id\"" appendSource;
-assert pkgs.lib.hasInfix "--arg workflowId \"$workflow_id\"" appendSource;
-assert pkgs.lib.hasInfix "attemptId: (if $attemptId ==" source;
+assert !(pkgs.lib.hasInfix "\${pkgs.jq}/bin/jq" appendSource);
+assert pkgs.lib.hasInfix "json_quote_string \"$REGISTRY_EVENT_KIND\"" appendSource;
+assert pkgs.lib.hasInfix "\"attemptId\":%s" appendSource;
 pkgs.runCommand "registry-events-runtime-contract" { } ''
-  echo "OK: registry runtime helpers are split and stable" > "$out"
+  echo "OK: registry runtime helpers are split, stable, and jq-free on append" > "$out"
 ''

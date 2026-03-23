@@ -87,7 +87,11 @@ pkgs.runCommand "postgres-backup-restore-smoke" { } ''
     "created_at": "2026-01-01T00:00:00Z",
     "git_commit": "abc1234"
   }
-  EOF
+EOF
+  cat > "$BACKUP_BASE_DIR/base/backup-20260101-000000.manifest.fields" <<'EOF'
+created_at='2026-01-01T00:00:00Z'
+git_commit='abc1234'
+EOF
 
   "$LIST_BIN" > "$TMPDIR/list-backups.out"
   require_contains "$TMPDIR/list-backups.out" "backup-20260101-000000 (created: 2026-01-01T00:00:00Z, commit: abc1234)"

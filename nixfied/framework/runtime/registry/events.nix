@@ -15,13 +15,7 @@ let
   registryTimestampFormat = "%Y-%m-%dT%H:%M:%SZ";
   registrySnapshotTemplate = "nixfied-events-snapshot.XXXXXX";
   registryDefaultLockTimeoutSeconds = 30;
-  registryEventPayloadExpr = "{kind: $kind, version: $version, payload: {attemptId: (if $attemptId == \"\" then null else $attemptId end), detail: $detail, runId: $runId, seq: $seq, state: $state, taskId: (if $taskId == \"\" then null else $taskId end), ts: $ts, workflowId: (if $workflowId == \"\" then null else $workflowId end)}}";
-  registryAppendShell = import ./events-append.nix {
-    inherit
-      pkgs
-      registryEventPayloadExpr
-      ;
-  };
+  registryAppendShell = import ./events-append.nix { inherit pkgs; };
 in
 {
   mkShellLib =

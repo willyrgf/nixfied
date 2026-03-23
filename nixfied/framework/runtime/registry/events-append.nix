@@ -1,9 +1,8 @@
 {
   pkgs,
-  registryEventPayloadExpr,
 }:
 let
-  lib = pkgs.lib;
+  commonRuntimeShell = import ../common-runtime.nix { inherit pkgs; };
   runtimeArtifactContracts = import ../../contracts/runtime-artifact-contracts.nix { inherit pkgs; };
   registryEventValidator = import ../../contracts/mkValidator.nix {
     inherit
@@ -14,6 +13,7 @@ let
   };
 in
 ''
+  ${commonRuntimeShell}
   registry_next_seq() {
     local root="$1"
     local seq_file
@@ -83,19 +83,22 @@ in
     REGISTRY_APPEND_LAST_EVENT_JSON=""
 
     set +e
-    ${pkgs.jq}/bin/jq -cnS \
-      --arg kind "$REGISTRY_EVENT_KIND" \
-      --argjson version "$REGISTRY_EVENT_VERSION" \
-      --argjson seq "$seq" \
-      --arg ts "$ts" \
-      --arg runId "$run_id" \
-      --arg attemptId "$attempt_id" \
-      --arg workflowId "$workflow_id" \
-      --arg taskId "$task_id" \
-      --arg state "$state" \
-      --argjson detail "$detail_json" \
-      ${lib.escapeShellArg registryEventPayloadExpr} \
-      > "$event_tmp"
+    {
+      printf '{'
+      printf '"kind":%s' "$(json_quote_string "$REGISTRY_EVENT_KIND")"
+      printf ',"version":%s' "$REGISTRY_EVENT_VERSION"
+      printf ',"payload":{'
+      printf '"attemptId":%s' "$(json_string_or_null "$attempt_id")"
+      printf ',"detail":%s' "$detail_json"
+      printf ',"runId":%s' "$(json_quote_string "$run_id")"
+      printf ',"seq":%s' "$seq"
+      printf ',"state":%s' "$(json_quote_string "$state")"
+      printf ',"taskId":%s' "$(json_string_or_null "$task_id")"
+      printf ',"ts":%s' "$(json_quote_string "$ts")"
+      printf ',"workflowId":%s' "$(json_string_or_null "$workflow_id")"
+      printf '}'
+      printf '}\n'
+    } > "$event_tmp"
     rc="$?"
     set -e
 
