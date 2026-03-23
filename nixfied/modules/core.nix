@@ -62,6 +62,26 @@ in
       default = { };
     };
 
+    legacyLocal = {
+      apps = lib.mkOption {
+        type = t.attrsOf t.anything;
+        default = { };
+        description = "Legacy local extension apps surfaced from nixfied/local/default.nix.";
+      };
+
+      packages = lib.mkOption {
+        type = t.attrsOf t.package;
+        default = { };
+        description = "Legacy local extension packages surfaced from nixfied/local/default.nix.";
+      };
+
+      devShells = lib.mkOption {
+        type = t.attrsOf t.package;
+        default = { };
+        description = "Legacy local extension dev shells surfaced from nixfied/local/default.nix.";
+      };
+    };
+
     graph = {
       excludedServices = lib.mkOption {
         type = t.listOf (t.enum serviceConfigLib.supportedServiceNames);

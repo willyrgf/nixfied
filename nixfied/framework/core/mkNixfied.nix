@@ -46,7 +46,8 @@ let
   };
 
   apps =
-    execution.baseApps
+    (compiledCore.resolved.legacyLocal.apps or { })
+    // execution.baseApps
     // coreSurfaces.apps
     // {
       default = if execution.baseApps ? help then execution.baseApps.help else execution.baseApps.default;

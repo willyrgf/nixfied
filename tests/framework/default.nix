@@ -112,6 +112,10 @@ let
       covers = [ "runtime.app-execution-manifests" ];
     };
 
+    "workflow-ref-app-manifest-contract" = {
+      covers = [ "runtime.app-execution-manifests" ];
+    };
+
     "launcher-surface-contract" = { };
 
     "framework-utility-launcher-contract" = { };
@@ -209,11 +213,19 @@ let
         ;
     };
 
+    "local-override-introspect-contract" = import ./local-override-introspect-contract.nix {
+      inherit pkgs;
+    };
+
     "selected-app-manifest-contract" = import ./selected-app-manifest-contract.nix {
       inherit
         pkgs
         apps
         ;
+    };
+
+    "workflow-ref-app-manifest-contract" = import ./workflow-ref-app-manifest-contract.nix {
+      inherit pkgs;
     };
 
     "service-set-surface-contract" = import ./service-set-surface-contract.nix {

@@ -146,6 +146,9 @@ let
         )
       );
 
+  goWorkflowExact =
+    seen: workflowId: goWorkflow seen workflowId;
+
   goWorkflowReference =
     seen: workflowId:
     let
@@ -211,6 +214,13 @@ let
     }) workflowIds
   );
 
+  workflowExactClosureServicesById = builtins.listToAttrs (
+    map (workflowId: {
+      name = workflowId;
+      value = goWorkflowExact [ ] workflowId;
+    }) workflowIds
+  );
+
   workflowReferenceClosureServicesById = builtins.listToAttrs (
     map (workflowId: {
       name = workflowId;
@@ -250,6 +260,7 @@ in
     workflowModesByFamily
     workflowUnitClosureServicesById
     workflowClosureServicesById
+    workflowExactClosureServicesById
     workflowClosureServicesCsvById
     workflowReferenceClosureServicesById
     ;

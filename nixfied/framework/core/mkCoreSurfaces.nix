@@ -104,6 +104,7 @@ let
     features = pkgs.writeText "nixfied-features.txt" "${featuresTable}\n";
     schema = schemaDir;
   }
+  // (compiledCore.resolved.legacyLocal.packages or { })
   // compiledCore.resolved.packages;
 
   checks = {
@@ -120,21 +121,23 @@ let
     '';
   };
 
-  devShells = {
-    default = pkgs.mkShell {
-      packages = [
-        pkgs.coreutils
-        pkgs.jq
-        pkgs.nixfmt-rfc-style
-        pkgs.gnugrep
-        pkgs.gnused
-        pkgs.python3
-      ]
-      ++ compiledCore.resolved.tooling.devShellPackages;
+  devShells =
+    {
+      default = pkgs.mkShell {
+        packages = [
+          pkgs.coreutils
+          pkgs.jq
+          pkgs.nixfmt-rfc-style
+          pkgs.gnugrep
+          pkgs.gnused
+          pkgs.python3
+        ]
+        ++ compiledCore.resolved.tooling.devShellPackages;
 
-      shellHook = compiledCore.resolved.tooling.devShellHook;
-    };
-  };
+        shellHook = compiledCore.resolved.tooling.devShellHook;
+      };
+    }
+    // (compiledCore.resolved.legacyLocal.devShells or { });
 in
 {
   apps = introspectionApps;

@@ -109,6 +109,9 @@ let
         );
       };
 
+  goWorkflowExact =
+    seen: workflowId: goWorkflow seen workflowId;
+
   goWorkflowReference =
     seen: workflowId:
     let
@@ -126,12 +129,12 @@ let
       app = apps.${appId};
       closure =
         if (app.kind or "") == "workflowRef" then
-          goWorkflowReference [ ] app.workflowId
+          goWorkflowExact [ ] app.workflowId
         else
           goTask [ ] app.taskId;
       selectedServices =
         if (app.kind or "") == "workflowRef" then
-          uniqueSorted (selectionIndex.workflowReferenceClosureServicesById.${app.workflowId} or [ ])
+          uniqueSorted (selectionIndex.workflowExactClosureServicesById.${app.workflowId} or [ ])
         else
           uniqueSorted (selectionIndex.taskClosureServicesById.${app.taskId} or [ ]);
       serviceCatalogFiltered = lib.filterAttrs (

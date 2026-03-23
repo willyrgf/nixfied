@@ -1181,7 +1181,7 @@ in
   serviceSurfaceCatalog = compiledCore.serviceSurfaceCatalog;
   serviceApis = heavyOutputs.serviceApis;
   serviceHookEnv = heavyOutputs.serviceHookEnv;
-  packages = coreSurfaces.packages // {
+  packages = (compiledCore.resolved.legacyLocal.packages or { }) // coreSurfaces.packages // {
     default = pkgs.runCommand "nixfied-default" { } ''
       mkdir -p "$out/bin"
       ln -s ${
@@ -1193,11 +1193,12 @@ in
     '';
   };
   checks = coreSurfaces.checks;
-  devShells = coreSurfaces.devShells;
+  devShells = (compiledCore.resolved.legacyLocal.devShells or { }) // coreSurfaces.devShells;
   schema = coreSurfaces.schema;
   apps =
     if launchersSupported then
-      serviceSelectorLauncherApps
+      (compiledCore.resolved.legacyLocal.apps or { })
+      // serviceSelectorLauncherApps
       // coreSurfaces.apps
       // viewSelectorLauncherApps
       // runtimeLauncherApps
@@ -1208,7 +1209,8 @@ in
         default = coreSurfaces.apps.help;
       }
     else
-      heavyOutputs.directApps
+      (compiledCore.resolved.legacyLocal.apps or { })
+      // heavyOutputs.directApps
       // runtimeControlApps
       // frameworkUtilityApps
       // heavyOutputs.frameworkWorkspaceApps;
