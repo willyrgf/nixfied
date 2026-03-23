@@ -1,9 +1,9 @@
 { pkgs }:
 let
   lib = pkgs.lib;
-  frameworkSources = builtins.filter (
-    path: lib.hasSuffix ".nix" (toString path)
-  ) (lib.filesystem.listFilesRecursive ../../nixfied/framework);
+  frameworkSources = builtins.filter (path: lib.hasSuffix ".nix" (toString path)) (
+    lib.filesystem.listFilesRecursive ../../nixfied/framework
+  );
   jqAllowlist = map toString [
     ../../nixfied/framework/core/mkCoreSurfaces.nix
     ../../nixfied/framework/runtime/helpers/env-loader.nix

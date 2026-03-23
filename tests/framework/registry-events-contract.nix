@@ -68,7 +68,8 @@ assert pkgs.lib.hasInfix "REGISTRY_TIMESTAMP_FORMAT" source;
 assert pkgs.lib.hasInfix "events.ndjson" source;
 assert pkgs.lib.hasInfix "registryTimestampFormat = \"%Y-%m-%dT%H:%M:%SZ\";" source;
 assert !(pkgs.lib.hasInfix "registryEventPayloadExpr =" source);
-assert pkgs.lib.hasInfix "registryAppendShell = import ./events-append.nix { inherit pkgs; };" source;
+assert pkgs.lib.hasInfix "registryAppendShell = import ./events-append.nix { inherit pkgs; };"
+  source;
 pkgs.runCommand "registry-events-contract" { } ''
   echo "OK: registry event contracts are stable" > "$out"
 ''

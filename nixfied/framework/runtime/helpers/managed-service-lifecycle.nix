@@ -491,12 +491,7 @@ let
 
         set -euo pipefail
 
-        ${
-          if fullStartBody != null then
-            fullStartBody
-          else
-            defaultFullStartBody
-        }
+        ${if fullStartBody != null then fullStartBody else defaultFullStartBody}
       '';
 
       fullStartTest = pkgs.writeShellScript "${service}-full-start-test" ''

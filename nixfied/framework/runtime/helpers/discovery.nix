@@ -119,7 +119,9 @@ let
           let
             feature = normalized.${featureId};
           in
-          "${feature.id}\t${feature.kind}\t${feature.summary}\t${feature.status}\t${if feature.coverageRequired then "true" else "false"}"
+          "${feature.id}\t${feature.kind}\t${feature.summary}\t${feature.status}\t${
+            if feature.coverageRequired then "true" else "false"
+          }"
         ) (builtins.sort builtins.lessThan (builtins.attrNames normalized))
       );
   riskAreaLines = builtins.concatStringsSep "\n" (

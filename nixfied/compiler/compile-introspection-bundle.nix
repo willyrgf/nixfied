@@ -33,19 +33,22 @@ let
     builtins.genList (index: f index (builtins.elemAt values index)) (builtins.length values);
 
   nodeIds = sortNames introspectionGraph.nodes;
-  nonExecutionNodeIds = builtins.filter (nodeId: introspectionGraph.nodes.${nodeId}.kind != "execution") nodeIds;
+  nonExecutionNodeIds = builtins.filter (
+    nodeId: introspectionGraph.nodes.${nodeId}.kind != "execution"
+  ) nodeIds;
 
   diagnostics = canonical.canonicalize {
     localOverridesActive = introspectionGraph.localOverrides.active or false;
     localOverrideCount = introspectionGraph.localOverrides.count or 0;
-    legacyLocalDefault = introspectionGraph.legacyLocalDefault or {
-      path = "nixfied/local/default.nix";
-      present = false;
-      customized = false;
-      active = false;
-      status = "missing";
-      message = "legacy local/default.nix is absent";
-    };
+    legacyLocalDefault =
+      introspectionGraph.legacyLocalDefault or {
+        path = "nixfied/local/default.nix";
+        present = false;
+        customized = false;
+        active = false;
+        status = "missing";
+        message = "legacy local/default.nix is absent";
+      };
     policyId = introspectionGraph.state.policyId or "";
     policyKind = introspectionGraph.state.policyKind or "";
     policySource = introspectionGraph.state.policySource or "";
@@ -59,15 +62,25 @@ let
   };
 
   diagnosticsHumanLines = [
-    "INFO: diagnostics.local_overrides_active=${if diagnostics.localOverridesActive then "true" else "false"}"
+    "INFO: diagnostics.local_overrides_active=${
+      if diagnostics.localOverridesActive then "true" else "false"
+    }"
     "INFO: diagnostics.local_override_count=${builtins.toString diagnostics.localOverrideCount}"
     "INFO: diagnostics.legacy_local_default_path=${diagnostics.legacyLocalDefault.path}"
-    "INFO: diagnostics.legacy_local_default_present=${if diagnostics.legacyLocalDefault.present then "true" else "false"}"
-    "INFO: diagnostics.legacy_local_default_customized=${if diagnostics.legacyLocalDefault.customized then "true" else "false"}"
-    "INFO: diagnostics.legacy_local_default_active=${if diagnostics.legacyLocalDefault.active then "true" else "false"}"
+    "INFO: diagnostics.legacy_local_default_present=${
+      if diagnostics.legacyLocalDefault.present then "true" else "false"
+    }"
+    "INFO: diagnostics.legacy_local_default_customized=${
+      if diagnostics.legacyLocalDefault.customized then "true" else "false"
+    }"
+    "INFO: diagnostics.legacy_local_default_active=${
+      if diagnostics.legacyLocalDefault.active then "true" else "false"
+    }"
     "INFO: diagnostics.legacy_local_default_status=${diagnostics.legacyLocalDefault.status}"
     "INFO: diagnostics.legacy_local_default_message=${diagnostics.legacyLocalDefault.message}"
-    "INFO: diagnostics.workspace_marker_present=${if diagnostics.workspaceMarkerPresent then "true" else "false"}"
+    "INFO: diagnostics.workspace_marker_present=${
+      if diagnostics.workspaceMarkerPresent then "true" else "false"
+    }"
     "INFO: diagnostics.policy_id=${diagnostics.policyId}"
     "INFO: diagnostics.policy_kind=${diagnostics.policyKind}"
     "INFO: diagnostics.policy_source=${diagnostics.policySource}"
@@ -204,10 +217,7 @@ let
     chains:
     builtins.sort (
       left: right:
-      if left.length != right.length then
-        left.length < right.length
-      else
-        left.rendered < right.rendered
+      if left.length != right.length then left.length < right.length else left.rendered < right.rendered
     ) chains;
 
   findAllChains =
@@ -242,7 +252,9 @@ let
         if chains == [ ] then
           [ "WARN: no references found for ${targetNodeId}" ]
         else
-          mapIndexed (index: chain: "INFO: reverse[${builtins.toString (index + 1)}]=${chain.rendered}") chains;
+          mapIndexed (
+            index: chain: "INFO: reverse[${builtins.toString (index + 1)}]=${chain.rendered}"
+          ) chains;
     in
     [ "INFO: reverse.target=${targetNodeId}" ] ++ bodyLines;
 
@@ -319,11 +331,7 @@ let
       reasonChains = sortChains (
         builtins.concatLists (
           map (
-            sourceNodeId:
-            if sourceNodeId == targetNodeId then
-              [ ]
-            else
-              findAllChains sourceNodeId targetNodeId
+            sourceNodeId: if sourceNodeId == targetNodeId then [ ] else findAllChains sourceNodeId targetNodeId
           ) nonExecutionNodeIds
         )
       );
@@ -332,9 +340,7 @@ let
           map (
             sourceNodeId:
             let
-              chains = builtins.filter (
-                chain: (builtins.head chain.nodes).nodeId == sourceNodeId
-              ) reasonChains;
+              chains = builtins.filter (chain: (builtins.head chain.nodes).nodeId == sourceNodeId) reasonChains;
             in
             {
               name = sourceNodeId;
@@ -422,30 +428,24 @@ let
           ])
         else
           uniqueSorted (nonEmptyStrings [ node.id ]);
-      explicitEntries = map (
-        value:
-        {
-          token = "${node.kind}:${value}";
-          kind = node.kind;
-          entry = canonical.canonicalize {
-            nodeId = node.nodeId;
-            sourceKind = "explicit";
-            selector = node.kind;
-          };
-        }
-      ) tokenValues;
-      bareEntries = map (
-        value:
-        {
-          token = value;
-          kind = node.kind;
-          entry = canonical.canonicalize {
-            nodeId = node.nodeId;
-            sourceKind = "bare";
-            selector = node.kind;
-          };
-        }
-      ) tokenValues;
+      explicitEntries = map (value: {
+        token = "${node.kind}:${value}";
+        kind = node.kind;
+        entry = canonical.canonicalize {
+          nodeId = node.nodeId;
+          sourceKind = "explicit";
+          selector = node.kind;
+        };
+      }) tokenValues;
+      bareEntries = map (value: {
+        token = value;
+        kind = node.kind;
+        entry = canonical.canonicalize {
+          nodeId = node.nodeId;
+          sourceKind = "bare";
+          selector = node.kind;
+        };
+      }) tokenValues;
     in
     {
       inherit
@@ -461,8 +461,12 @@ let
     }) nonExecutionNodeIds
   );
 
-  explicitEntries = builtins.concatLists (map (nodeId: allTokenEntries.${nodeId}.explicitEntries) nonExecutionNodeIds);
-  bareEntries = builtins.concatLists (map (nodeId: allTokenEntries.${nodeId}.bareEntries) nonExecutionNodeIds);
+  explicitEntries = builtins.concatLists (
+    map (nodeId: allTokenEntries.${nodeId}.explicitEntries) nonExecutionNodeIds
+  );
+  bareEntries = builtins.concatLists (
+    map (nodeId: allTokenEntries.${nodeId}.bareEntries) nonExecutionNodeIds
+  );
 
   groupEntriesByToken =
     entries:

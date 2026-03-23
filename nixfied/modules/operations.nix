@@ -64,7 +64,7 @@ let
       ${name}=()
     ''
     + builtins.concatStringsSep "\n" (
-      map (value: ''${name}+=(${lib.escapeShellArg (toString value)})'') values
+      map (value: "${name}+=(${lib.escapeShellArg (toString value)})") values
     )
     + "\n";
   renderEnvValue = value: if builtins.isString value then value else builtins.toJSON value;
@@ -72,9 +72,9 @@ let
   isolationEnvsShell = renderShellArray "isolation_envs" cfg.testIsolation.envs;
   isolationRunArgsShell = renderShellArray "run_args" cfg.testIsolation.runArgs;
   isolationRunEnvEntriesShell = renderShellArray "run_env_entries" (
-    map (
-      key: "${key}\t${renderEnvValue cfg.testIsolation.runEnv.${key}}"
-    ) (builtins.sort builtins.lessThan (builtins.attrNames cfg.testIsolation.runEnv))
+    map (key: "${key}\t${renderEnvValue cfg.testIsolation.runEnv.${key}}") (
+      builtins.sort builtins.lessThan (builtins.attrNames cfg.testIsolation.runEnv)
+    )
   );
 
   envOffsetCase = builtins.concatStringsSep "\n" (

@@ -15,11 +15,15 @@ let
   renderShellWords = values: builtins.concatStringsSep " " (map pkgs.lib.escapeShellArg values);
   templateFilterRequiredKeysShell = renderShellWords installManifest.templateFilterPlanData.requiredKeys;
   templateFilterOptionalEntriesShell = renderShellWords (
-    map (template: "${template.key}\t${template.file}") installManifest.templateFilterPlanData.optionalTemplates
+    map (
+      template: "${template.key}\t${template.file}"
+    ) installManifest.templateFilterPlanData.optionalTemplates
   );
   templateFilterTokenEntriesShell = renderShellWords (
     builtins.concatLists (
-      map (template: map (token: "${token}\t${template.key}") ([ template.key ] ++ (template.aliases or [ ]))) projectTemplates
+      map (
+        template: map (token: "${token}\t${template.key}") ([ template.key ] ++ (template.aliases or [ ]))
+      ) projectTemplates
     )
   );
   filterHelpValues = builtins.concatStringsSep "," installManifest.templateFilterDisplayTokens;

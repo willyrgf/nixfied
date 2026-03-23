@@ -24,7 +24,8 @@ assert pkgs.lib.hasInfix "registry_events_index_snapshot() {" snapshotSource;
 assert pkgs.lib.hasInfix "registry_snapshot_cleanup() {" snapshotSource;
 assert pkgs.lib.hasInfix "registry_next_seq() {" appendSource;
 assert pkgs.lib.hasInfix "registry_append_event() {" appendSource;
-assert pkgs.lib.hasInfix "registryEventValidator = import ../../contracts/mkValidator.nix" appendSource;
+assert pkgs.lib.hasInfix "registryEventValidator = import ../../contracts/mkValidator.nix"
+  appendSource;
 assert pkgs.lib.hasInfix "contractRef = \"runtime.registryEvent\";" appendSource;
 assert pkgs.lib.hasInfix "events_index_file" appendSource;
 assert pkgs.lib.hasInfix "detail_reason" appendSource;
