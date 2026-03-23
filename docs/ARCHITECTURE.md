@@ -102,7 +102,7 @@ Machine-facing boundaries are contract-owned.
 - Machine-output transport is explicit: target apps write the payload to `NIXFIED_MACHINE_OUTPUT_FILE`, and the wrapper validates that declared file instead of recovering payloads from stdout.
 - Workflow summaries, orchestrator run records, and registry events are versioned validated envelopes. Shell runtime code reads companion fields/index files rather than re-deriving schema semantics with `jq`.
 - `introspect` is backed by a compile-time bundle plus a thin runtime selector; query resolution no longer depends on runtime Python.
-- Repository guard tests prevent the deleted Python helpers, migrated semantic `jq`, and stdout-filter fallback transport from reappearing.
+- Repository guard tests prevent the deleted Python helpers, stdout-filter fallback transport, and any framework `jq` usage outside a short explicit allowlist for adapter/validation/build-check roles from reappearing.
 
 ## Generated App Surfaces
 

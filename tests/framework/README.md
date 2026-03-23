@@ -115,7 +115,7 @@ migration.
 It fails if:
 
 - framework-owned Python helpers return under `nixfied/framework/core/`
-- migrated framework runtime paths reintroduce semantic `${pkgs.jq}/bin/jq`
+- any framework source under `nixfied/framework/` uses `jq` outside the explicit allowlist for adapter, validation, or build-check roles
 - machine output transport falls back to stdout scraping instead of the
   declared `NIXFIED_MACHINE_OUTPUT_FILE` channel
 
@@ -125,6 +125,7 @@ That guard complements the runtime contract checks. The architecture is now:
 - generated validator bundles in `nixfied/framework/contracts/`
 - explicit payload-file machine output transport
 - compile-time introspection bundles with a thin runtime selector
+- repo-wide `jq` policy enforced by allowlist rather than by migrated-path convention
 
 Run it directly with:
 
