@@ -1,6 +1,12 @@
 { pkgs }:
 let
   shellHelpers = import ./lib/shell-helpers.nix { inherit pkgs; };
+  slotInfo = pkgs.writeShellScript "postgres-config-artifacts-slot-info-shell" ''
+    printf 'SLOT=%q\n' "''${SLOT:-0}"
+    printf 'ENV=%q\n' "''${ENV:-dev}"
+    printf 'RUN_DIR=%q\n' "''${RUN_DIR:-/tmp}"
+    printf 'POSTGRES_PORT=%q\n' "''${POSTGRES_PORT:-55433}"
+  '';
   slotInfoJson = pkgs.writeShellScript "postgres-config-artifacts-slot-info" ''
     printf '{"slot":"%s","env":"%s","ports":{"POSTGRES_PORT":%s},"directories":{"run":"%s"}}\n' \
       "''${SLOT:-0}" \
@@ -10,6 +16,7 @@ let
   '';
 
   slotsStub = {
+    getSlotInfo = slotInfo;
     getSlotInfoJson = slotInfoJson;
     getServiceDir = name: "\${PGDATA_ROOT}/${name}";
     portVarName = _: "POSTGRES_PORT";

@@ -9,6 +9,15 @@ let
     system = pkgs.system;
   };
   slotsStub = {
+    getSlotInfo = pkgs.writeShellScript "service-probe-overrides-slot-info" ''
+      printf 'SLOT=%q\n' "''${SLOT:-0}"
+      printf 'ENV=%q\n' "''${ENV:-dev}"
+      printf 'RUN_DIR=%q\n' "''${RUN_DIR:-/tmp}"
+      printf 'LOG_DIR=%q\n' "''${LOG_DIR:-/tmp}"
+      printf 'CONFIG_DIR=%q\n' "''${CONFIG_DIR:-/tmp}"
+      printf 'HTTP_PORT=%q\n' "''${HTTP_PORT:-27100}"
+      printf 'HTTPS_PORT=%q\n' "''${HTTPS_PORT:-27101}"
+    '';
     getSlotInfoJson = pkgs.writeShellScript "service-probe-overrides-slot-info-json" ''
       printf '{"slot":"%s","env":"%s","ports":{"HTTP_PORT":%s,"HTTPS_PORT":%s},"directories":{"run":"%s","log":"%s","config":"%s"}}\n' \
         "''${SLOT:-0}" \

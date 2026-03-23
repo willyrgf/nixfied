@@ -88,7 +88,7 @@ let
   pgRuntimePrelude = defaultDb: ''
     ${slotEnvRuntime.loadJsonFromCommand {
       outVar = "SLOT_INFO_JSON_OUT";
-      command = toString slots.getSlotInfoJson;
+      command = toString slots.getSlotInfo;
       exportVars = false;
     }}
     ${slotEnvRuntime.readJsonField {

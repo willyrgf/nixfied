@@ -1,10 +1,12 @@
 { pkgs }:
 let
   source = builtins.readFile ../../nixfied/framework/runtime/helpers/slot-env-runtime.nix;
+  surfaceSource = builtins.readFile ../../nixfied/framework/core/mkServiceRuntimeSurfaces.nix;
 in
-assert pkgs.lib.hasInfix "def emit($name; $value):" source;
-assert pkgs.lib.hasInfix "map(\"export \" + .key + \"=\" + (.value | tostring | @sh))" source;
-assert !(pkgs.lib.hasInfix "@base64" source);
+assert !(pkgs.lib.hasInfix "\${pkgs.jq}/bin/jq" source);
+assert !(pkgs.lib.hasInfix "\${pkgs.jq}/bin/jq" surfaceSource);
+assert pkgs.lib.hasInfix "evalAssignments =" source;
+assert pkgs.lib.hasInfix "printf 'SLOT=%q\\n'" surfaceSource;
 pkgs.runCommand "slot-env-runtime-contract" { } ''
-  echo "OK: slot env runtime uses compiled shell assignments" > "$out"
+  echo "OK: slot env runtime and slot-info surfaces are jq-free" > "$out"
 ''

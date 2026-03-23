@@ -3,6 +3,22 @@ let
   shellHelpers = import ./lib/shell-helpers.nix { inherit pkgs; };
   slotsStub =
     let
+      slotInfo = pkgs.writeShellScript "service-lifecycle-slot-info" ''
+        printf 'SLOT=%q\n' "''${SLOT:-0}"
+        printf 'ENV=%q\n' "''${ENV:-test}"
+        printf 'RUN_DIR=%q\n' "''${RUN_DIR:-/tmp}"
+        printf 'LOG_DIR=%q\n' "''${LOG_DIR:-/tmp}"
+        printf 'CONFIG_DIR=%q\n' "''${CONFIG_DIR:-/tmp}"
+        printf 'POSTGRES_PORT=%q\n' "''${POSTGRES_PORT:-55433}"
+        printf 'HTTP_PORT=%q\n' "''${HTTP_PORT:-28080}"
+        printf 'HTTPS_PORT=%q\n' "''${HTTPS_PORT:-28443}"
+        printf 'MINIO_API_PORT=%q\n' "''${MINIO_API_PORT:-29000}"
+        printf 'MINIO_CONSOLE_PORT=%q\n' "''${MINIO_CONSOLE_PORT:-29001}"
+        printf 'RETH_HTTP_PORT=%q\n' "''${RETH_HTTP_PORT:-29100}"
+        printf 'RETH_WS_PORT=%q\n' "''${RETH_WS_PORT:-29101}"
+        printf 'RETH_AUTH_PORT=%q\n' "''${RETH_AUTH_PORT:-29102}"
+        printf 'HELIOSRPC_PORT=%q\n' "''${HELIOSRPC_PORT:-29200}"
+      '';
       slotInfoJson = pkgs.writeShellScript "service-lifecycle-slot-info-json" ''
         printf '{"slot":"%s","env":"%s","ports":{"POSTGRES_PORT":%s,"HTTP_PORT":%s,"HTTPS_PORT":%s,"MINIO_API_PORT":%s,"MINIO_CONSOLE_PORT":%s,"RETH_HTTP_PORT":%s,"RETH_WS_PORT":%s,"RETH_AUTH_PORT":%s,"HELIOSRPC_PORT":%s},"directories":{"run":"%s","log":"%s","config":"%s"}}\n' \
           "''${SLOT:-0}" \
@@ -22,6 +38,7 @@ let
       '';
     in
     {
+      getSlotInfo = slotInfo;
       getSlotInfoJson = slotInfoJson;
       getServiceDir = name: "\${SERVICE_ROOT}/${name}";
       portVarName =
@@ -736,6 +753,8 @@ pkgs.runCommand "service-lifecycle-matrix-smoke" { } ''
     wait_for_success "$service_name health after restart" "$health_bin" "$TMPDIR/$service_name-health-restart.out"
     echo "INFO: lifecycle-smoke service=$service_name phase=ready-after-restart" >&2
     wait_for_success "$service_name ready after restart" "$ready_bin" "$TMPDIR/$service_name-ready-restart.out"
+    wait_for_background_exit "$RESTART_WRAPPER_PID"
+    RESTART_WRAPPER_PID=""
 
     echo "INFO: lifecycle-smoke service=$service_name phase=stop" >&2
     "$stop_bin" > "$TMPDIR/$service_name-stop.out" 2>&1 || {

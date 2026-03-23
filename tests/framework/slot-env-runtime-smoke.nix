@@ -12,7 +12,16 @@ pkgs.runCommand "slot-env-runtime-smoke" { } ''
     exit 1
   }
 
-  SLOT_INFO_JSON='{"slot":"7","env":"prod","vars":{"FOO":"bar","COUNT":3},"ports":{"HTTP_PORT":8080},"directories":{"run":"/tmp/runtime-run"}}'
+  SLOT_INFO_JSON="$(
+    cat <<'EOF'
+SLOT='7'
+ENV='prod'
+FOO='bar'
+COUNT='3'
+RUN_DIR='/tmp/runtime-run'
+HTTP_PORT='8080'
+EOF
+  )"
 
   ${slotEnvRuntime.loadSlotEnvAndVarsFromJson {
     jsonVar = "SLOT_INFO_JSON";
