@@ -595,6 +595,10 @@ let
       inherit pkgs;
     };
 
+    "registry-helper-contract" = import ./registry-helper-contract.nix {
+      inherit pkgs;
+    };
+
     "log-prefix-contract" = import ./log-prefix-contract.nix {
       inherit pkgs;
     };
