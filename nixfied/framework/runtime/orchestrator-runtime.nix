@@ -26,7 +26,6 @@ in
     split_process_mode() {
       PROCESS_MODE="fg"
       FORWARD_ARGS=()
-      MACHINE_JSON="''${NIXFIED_JSON_OUTPUT_OVERRIDE:-0}"
       MACHINE_RUN_ID_FILE="''${NIXFIED_RUN_ID_FILE_OVERRIDE:-}"
       MACHINE_SUMMARY_FILE="''${NIXFIED_SUMMARY_FILE_OVERRIDE:-}"
 
@@ -45,10 +44,6 @@ in
               ;;
             --fg)
               PROCESS_MODE="fg"
-              continue
-              ;;
-            --json)
-              MACHINE_JSON=1
               continue
               ;;
             --run-id-file)
@@ -87,12 +82,6 @@ in
 
         FORWARD_ARGS+=("$arg")
       done
-
-      if [ "$MACHINE_JSON" = "1" ]; then
-        export NIXFIED_JSON_OUTPUT_OVERRIDE=1
-      else
-        unset NIXFIED_JSON_OUTPUT_OVERRIDE || true
-      fi
 
       if [ -n "$MACHINE_RUN_ID_FILE" ]; then
         export NIXFIED_RUN_ID_FILE_OVERRIDE="$MACHINE_RUN_ID_FILE"
@@ -332,8 +321,6 @@ in
             workflow_resolve_mode_id "$workflow_id" "$mode_value" >/dev/null || return $?
             ;;
           --summary)
-            ;;
-          --json)
             ;;
           --run-id-file)
             if [ "$#" -lt 1 ]; then

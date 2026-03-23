@@ -104,6 +104,10 @@ let
       covers = [ "runtime.service-set-surfaces" ];
     };
 
+    "introspection-bundle-determinism" = { };
+
+    "run-record-validator-failure" = { };
+
     "workflow-service-set-adapter-smoke" = {
       covers = [ "runtime.service-set-surfaces" ];
     };
@@ -215,6 +219,10 @@ let
         pkgs
         apps
         ;
+    };
+
+    "introspection-bundle-determinism" = import ./introspection-bundle-determinism.nix {
+      inherit pkgs;
     };
 
     "local-override-introspect-contract" = import ./local-override-introspect-contract.nix {
@@ -973,6 +981,10 @@ let
         services
         registry
         ;
+    };
+
+    "run-record-validator-failure" = import ./run-record-validator-failure.nix {
+      inherit pkgs;
     };
 
     "workflow-validation-errors" = import ./workflow-validation-errors.nix {

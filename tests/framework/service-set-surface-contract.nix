@@ -26,10 +26,12 @@ pkgs.runCommand "service-set-surface-contract" { } ''
   cd "$NIXFIED_FLAKE_ROOT"
 
   "$EXPORT_APP" -- --format json > "$TMPDIR/service-set.json"
-  "$JQ" -e 'length == 2' "$TMPDIR/service-set.json" > /dev/null
-  "$JQ" -e 'map(.service) | sort == ["minio", "postgres"]' "$TMPDIR/service-set.json" > /dev/null
-  "$JQ" -e 'map(.statePolicy.id) | unique == ["workspace-scoped"]' "$TMPDIR/service-set.json" > /dev/null
-  "$JQ" -e 'map(.resolvedArtifacts | has("dataDir")) | all' "$TMPDIR/service-set.json" > /dev/null
+  "$JQ" -e '.kind == "service-set-export" and .version == 1' "$TMPDIR/service-set.json" > /dev/null
+  "$JQ" -e '.payload.serviceSetId == "service-set.default"' "$TMPDIR/service-set.json" > /dev/null
+  "$JQ" -e '.payload.services | length == 2' "$TMPDIR/service-set.json" > /dev/null
+  "$JQ" -e '.payload.services | map(.service) | sort == ["minio", "postgres"]' "$TMPDIR/service-set.json" > /dev/null
+  "$JQ" -e '.payload.statePolicy.id == "workspace-scoped"' "$TMPDIR/service-set.json" > /dev/null
+  "$JQ" -e '.payload.services | map(.resolvedArtifacts | has("dataDir")) | all' "$TMPDIR/service-set.json" > /dev/null
 
   "$EXPORT_APP" -- --format env > "$TMPDIR/service-set.env"
   require_contains "$TMPDIR/service-set.env" "NIXFIED_SERVICE_SET_ID=service-set.default"

@@ -158,36 +158,8 @@ in
       fi
     }
 
-    emit_workflow_result_json() {
-      local run_id="$1"
-      local workflow_id="$2"
-      local summary_file="$3"
-      local exit_code="$4"
-      local attempt_id="''${NIXFIED_ATTEMPT_ID:-''${NIXFIED_ORCHESTRATOR_ATTEMPT_ID:-}}"
-      local summary_json_literal="null"
-      local summary_payload="null"
-
-      if [ -n "$summary_file" ] && [ -f "$summary_file" ]; then
-        summary_json_literal="$(json_quote_string "$summary_file")"
-        summary_payload="$(${pkgs.coreutils}/bin/tr -d '\n' < "$summary_file")"
-      fi
-
-      printf '{'
-      printf '"run_id":'
-      json_quote_string "$run_id"
-      printf ',"attempt_id":'
-      json_quote_string "$attempt_id"
-      printf ',"workflow_id":'
-      json_quote_string "$workflow_id"
-      printf ',"exit_code":%s' "$exit_code"
-      printf ',"summary_json":%s' "$summary_json_literal"
-      printf ',"summary":%s' "$summary_payload"
-      printf '}\n'
-    }
-
     LOGGING_FILTERED_ARGS=()
     MACHINE_FILTERED_ARGS=()
-    MACHINE_JSON=0
     MACHINE_RUN_ID_FILE=""
     MACHINE_SUMMARY_FILE=""
 
@@ -281,10 +253,6 @@ in
       local value=""
 
       MACHINE_FILTERED_ARGS=()
-      MACHINE_JSON=0
-      if [ "''${NIXFIED_JSON_OUTPUT_OVERRIDE:-0}" = "1" ]; then
-        MACHINE_JSON=1
-      fi
       MACHINE_RUN_ID_FILE="''${NIXFIED_RUN_ID_FILE_OVERRIDE:-}"
       MACHINE_SUMMARY_FILE="''${NIXFIED_SUMMARY_FILE_OVERRIDE:-}"
 
@@ -301,9 +269,6 @@ in
           --)
             parse_options=0
             MACHINE_FILTERED_ARGS+=("--")
-            ;;
-          --json)
-            MACHINE_JSON=1
             ;;
           --run-id-file)
             if [ "$#" -lt 1 ]; then

@@ -10,6 +10,14 @@ let
   lib = pkgs.lib;
   shellCommon = import ./shell-common.nix { inherit pkgs; };
   commonRuntimeShell = import ../runtime/common-runtime.nix { inherit pkgs; };
+  runtimeArtifactContracts = import ../contracts/runtime-artifact-contracts.nix { inherit pkgs; };
+  serviceSetExportValidator = import ../contracts/mkValidator.nix {
+    inherit
+      pkgs
+      ;
+    contractBundle = runtimeArtifactContracts;
+    contractRef = "runtime.serviceSetExport";
+  };
   skipPolicy = import ../runtime/helpers/skip-policy.nix { inherit pkgs; };
   serviceConfigLib = import ./service-config.nix {
     inherit
@@ -560,6 +568,8 @@ let
                 json)
                   json_records=""
                   json_separator=""
+                  payload_file="$(mktemp "$TMPDIR/service-set-${serviceSet.name}-export.XXXXXX")"
+                  validate_stderr="$(mktemp "$TMPDIR/service-set-${serviceSet.name}-export.validate.XXXXXX")"
                   for service_name in "''${selected_services[@]}"; do
                     required_json="false"
                     if [ "$(service_record_required "$service_name")" = "1" ]; then
@@ -571,20 +581,32 @@ let
                       printf ',"required":%s' "$required_json"
                       printf ',"artifacts":%s' "$(service_artifacts_json "$service_name" raw)"
                       printf ',"operations":%s' "$(service_operations_json "$service_name")"
-                      printf ',"serviceSetId":%s' ${lib.escapeShellArg (builtins.toJSON serviceSet.id)}
-                      printf ',"statePolicy":{"id":%s,"kind":%s,"runtimeBase":%s,"registryRoot":%s,"artifactsRoot":%s}' \
-                        ${lib.escapeShellArg (builtins.toJSON serviceSet.state.policy.id)} \
-                        ${lib.escapeShellArg (builtins.toJSON serviceSet.state.policy.kind)} \
-                        ${lib.escapeShellArg (builtins.toJSON serviceSet.state.policy.runtimeBase)} \
-                        ${lib.escapeShellArg (builtins.toJSON serviceSet.state.policy.registryRoot)} \
-                        ${lib.escapeShellArg (builtins.toJSON serviceSet.state.policy.artifactsRoot)}
                       printf ',"resolvedArtifacts":%s' "$(service_artifacts_json "$service_name" resolved)"
                       printf '}'
                     )"
                     json_records="''${json_records}''${json_separator}''${record_json}"
                     json_separator=","
                   done
-                  printf '[%s]\n' "$json_records"
+                  {
+                    printf '{'
+                    printf '"kind":"service-set-export","version":1,"payload":{'
+                    printf '"serviceSetId":%s' ${lib.escapeShellArg (builtins.toJSON serviceSet.id)}
+                    printf ',"statePolicy":{"id":%s,"kind":%s,"runtimeBase":%s,"registryRoot":%s,"artifactsRoot":%s}' \
+                      ${lib.escapeShellArg (builtins.toJSON serviceSet.state.policy.id)} \
+                      ${lib.escapeShellArg (builtins.toJSON serviceSet.state.policy.kind)} \
+                      ${lib.escapeShellArg (builtins.toJSON serviceSet.state.policy.runtimeBase)} \
+                      ${lib.escapeShellArg (builtins.toJSON serviceSet.state.policy.registryRoot)} \
+                      ${lib.escapeShellArg (builtins.toJSON serviceSet.state.policy.artifactsRoot)}
+                    printf ',"services":[%s]' "$json_records"
+                    printf '}}\n'
+                  } > "$payload_file"
+                  if ! ${serviceSetExportValidator} "$payload_file" >/dev/null 2>"$validate_stderr"; then
+                    cat "$validate_stderr" >&2 || true
+                    rm -f "$payload_file" "$validate_stderr"
+                    exit 1
+                  fi
+                  cat "$payload_file"
+                  rm -f "$payload_file" "$validate_stderr"
                   ;;
                 env)
                   printf 'NIXFIED_SERVICE_SET_ID=%s\n' ${lib.escapeShellArg serviceSet.id}

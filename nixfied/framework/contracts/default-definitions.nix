@@ -34,6 +34,12 @@ let
       (t.null { })
     ];
   };
+  nullableAnyString = t.union {
+    options = [
+      anyString
+      (t.null { })
+    ];
+  };
   nullablePid = t.union {
     options = [
       nonNegativeInt
@@ -41,6 +47,20 @@ let
       (t.null { })
     ];
   };
+  stringList = t.list { elem = anyString; };
+  nonEmptyStringList = t.list { elem = nonEmptyString; };
+  stringMap = t.map {
+    key = nonEmptyString;
+    value = anyString;
+  };
+  nullableRef =
+    name:
+    t.union {
+      options = [
+        (t.ref { inherit name; })
+        (t.null { })
+      ];
+    };
   runState = t.enum {
     values = [
       "queued"
@@ -73,6 +93,17 @@ let
       "orphaned"
       "waiting"
       "unknown"
+    ];
+  };
+  introspectionNodeKind = t.enum {
+    values = [
+      "app"
+      "package"
+      "service"
+      "service-set"
+      "task"
+      "workflow"
+      "execution"
     ];
   };
 in
@@ -164,6 +195,294 @@ in
       peak_workers = t.field { schema = nullableInt; };
       canceled_count = t.field { schema = nullableInt; };
     };
+  };
+
+  "runtime.serviceSetExport" = t.record {
+    doc = "Validated service-set export envelope.";
+    fields = {
+      kind = t.field {
+        schema = t.literal { value = "service-set-export"; };
+      };
+      version = t.field {
+        schema = t.literal { value = 1; };
+      };
+      payload = t.field {
+        schema = t.ref { name = "runtime.serviceSetExport.payload"; };
+      };
+    };
+  };
+
+  "runtime.serviceSetExport.payload" = t.record {
+    fields = {
+      serviceSetId = t.field { schema = nonEmptyString; };
+      statePolicy = t.field {
+        schema = t.ref { name = "runtime.serviceSetExport.statePolicy"; };
+      };
+      services = t.field {
+        schema = t.list {
+          elem = t.ref { name = "runtime.serviceSetExport.service"; };
+        };
+      };
+    };
+  };
+
+  "runtime.serviceSetExport.statePolicy" = t.record {
+    fields = {
+      id = t.field { schema = nonEmptyString; };
+      kind = t.field { schema = nonEmptyString; };
+      runtimeBase = t.field { schema = nonEmptyString; };
+      registryRoot = t.field { schema = nonEmptyString; };
+      artifactsRoot = t.field { schema = nonEmptyString; };
+    };
+  };
+
+  "runtime.serviceSetExport.service" = t.record {
+    fields = {
+      service = t.field { schema = nonEmptyString; };
+      required = t.field { schema = t.bool { }; };
+      artifacts = t.field { schema = stringMap; };
+      operations = t.field { schema = nonEmptyStringList; };
+      resolvedArtifacts = t.field { schema = stringMap; };
+    };
+  };
+
+  "runtime.introspectionResponse" = t.record {
+    doc = "Validated introspection response envelope.";
+    fields = {
+      kind = t.field {
+        schema = t.literal { value = "introspection-response"; };
+      };
+      version = t.field {
+        schema = t.literal { value = 1; };
+      };
+      payload = t.field {
+        schema = t.ref { name = "runtime.introspectionResponse.payload"; };
+      };
+    };
+  };
+
+  "runtime.introspectionResponse.payload" = t.record {
+    fields = {
+      query = t.field {
+        schema = t.null { };
+      };
+      diagnostics = t.field {
+        schema = t.ref { name = "runtime.introspectionResponse.diagnostics"; };
+      };
+      resolved = t.field {
+        required = false;
+        schema = nullableRef "runtime.introspectionResponse.nodeRef";
+      };
+      resolution = t.field {
+        required = false;
+        schema = nullableRef "runtime.introspectionResponse.resolution";
+      };
+      execution = t.field {
+        required = false;
+        schema = nullableRef "runtime.introspectionResponse.execution";
+      };
+      closure = t.field {
+        required = false;
+        schema = nullableRef "runtime.introspectionResponse.closure";
+      };
+      reverse = t.field {
+        required = false;
+        schema = nullableRef "runtime.introspectionResponse.reverse";
+      };
+    };
+  };
+
+  "runtime.introspectionResponse.diagnostics" = t.record {
+    fields = {
+      localOverridesActive = t.field { schema = t.bool { }; };
+      localOverrideCount = t.field { schema = nonNegativeInt; };
+      legacyLocalDefault = t.field {
+        schema = t.ref { name = "runtime.introspectionResponse.legacyLocalDefault"; };
+      };
+      policyId = t.field { schema = anyString; };
+      policyKind = t.field { schema = anyString; };
+      policySource = t.field { schema = anyString; };
+      ownerScope = t.field { schema = anyString; };
+      discoveryScope = t.field { schema = anyString; };
+      workspaceMarkerPresent = t.field { schema = t.bool { }; };
+      runtimeBase = t.field { schema = anyString; };
+      registryRoot = t.field { schema = anyString; };
+      artifactsRoot = t.field { schema = anyString; };
+      workspaceId = t.field { schema = anyString; };
+    };
+  };
+
+  "runtime.introspectionResponse.legacyLocalDefault" = t.record {
+    fields = {
+      path = t.field { schema = nonEmptyString; };
+      present = t.field { schema = t.bool { }; };
+      customized = t.field { schema = t.bool { }; };
+      active = t.field { schema = t.bool { }; };
+      status = t.field { schema = nonEmptyString; };
+      message = t.field { schema = nonEmptyString; };
+    };
+  };
+
+  "runtime.introspectionResponse.nodeRef" = t.record {
+    fields = {
+      nodeId = t.field { schema = nonEmptyString; };
+      kind = t.field { schema = introspectionNodeKind; };
+      id = t.field { schema = nonEmptyString; };
+      label = t.field {
+        required = false;
+        schema = nonEmptyString;
+      };
+    };
+  };
+
+  "runtime.introspectionResponse.resolution" = t.record {
+    fields = {
+      ownerFiles = t.field { schema = stringList; };
+      summary = t.field { schema = anyString; };
+      description = t.field { schema = anyString; };
+      data = t.field {
+        schema = t.ref { name = "runtime.introspectionResponse.jsonObject"; };
+      };
+    };
+  };
+
+  "runtime.introspectionResponse.execution" = t.record {
+    closed = false;
+    fields = {
+      launcherClass = t.field { schema = nonEmptyString; };
+      launcherTarget = t.field {
+        schema = nullableAnyString;
+      };
+      runSurface = t.field {
+        schema = nullableAnyString;
+      };
+      mappedTaskIds = t.field {
+        required = false;
+        schema = stringList;
+      };
+      mappedWorkflowIds = t.field {
+        required = false;
+        schema = stringList;
+      };
+      mappedServiceSetIds = t.field {
+        required = false;
+        schema = stringList;
+      };
+      selectedServices = t.field {
+        required = false;
+        schema = stringList;
+      };
+      publicApps = t.field {
+        required = false;
+        schema = stringList;
+      };
+      runtimeRoots = t.field {
+        required = false;
+        schema = t.ref { name = "runtime.introspectionResponse.runtimeRoots"; };
+      };
+      workspaceMarkerPresent = t.field {
+        required = false;
+        schema = t.bool { };
+      };
+      localOverrides = t.field {
+        required = false;
+        schema = t.ref { name = "runtime.introspectionResponse.localOverrides"; };
+      };
+    };
+  };
+
+  "runtime.introspectionResponse.runtimeRoots" = t.record {
+    fields = {
+      policyId = t.field { schema = anyString; };
+      policyKind = t.field { schema = anyString; };
+      workspaceId = t.field { schema = anyString; };
+      runtimeBase = t.field { schema = anyString; };
+      registryRoot = t.field { schema = anyString; };
+      artifactsRoot = t.field { schema = anyString; };
+      manifestHash = t.field { schema = anyString; };
+    };
+  };
+
+  "runtime.introspectionResponse.localOverrides" = t.record {
+    fields = {
+      active = t.field { schema = t.bool { }; };
+      count = t.field { schema = nonNegativeInt; };
+    };
+  };
+
+  "runtime.introspectionResponse.closure" = t.record {
+    fields = {
+      target = t.field {
+        required = false;
+        schema = nullableRef "runtime.introspectionResponse.nodeRef";
+      };
+      summary = t.field {
+        schema = nullableRef "runtime.introspectionResponse.jsonObject";
+      };
+      reasonChains = t.field {
+        schema = t.list {
+          elem = t.ref { name = "runtime.introspectionResponse.reasonChain"; };
+        };
+      };
+    };
+  };
+
+  "runtime.introspectionResponse.reverse" = t.record {
+    fields = {
+      target = t.field {
+        schema = t.ref { name = "runtime.introspectionResponse.nodeRef"; };
+      };
+      reasonChains = t.field {
+        schema = t.list {
+          elem = t.ref { name = "runtime.introspectionResponse.reasonChain"; };
+        };
+      };
+    };
+  };
+
+  "runtime.introspectionResponse.reasonChain" = t.record {
+    fields = {
+      length = t.field { schema = nonNegativeInt; };
+      nodes = t.field {
+        schema = t.list {
+          elem = t.ref { name = "runtime.introspectionResponse.nodeRef"; };
+        };
+      };
+      edges = t.field {
+        schema = t.list {
+          elem = t.ref { name = "runtime.introspectionResponse.reasonEdge"; };
+        };
+      };
+      rendered = t.field { schema = nonEmptyString; };
+    };
+  };
+
+  "runtime.introspectionResponse.reasonEdge" = t.record {
+    fields = {
+      from = t.field { schema = nonEmptyString; };
+      to = t.field { schema = nonEmptyString; };
+      kind = t.field { schema = nonEmptyString; };
+      reason = t.field { schema = nonEmptyString; };
+      via = t.field { schema = nullableAnyString; };
+    };
+  };
+
+  "runtime.introspectionResponse.jsonValue" = t.union {
+    options = [
+      anyString
+      (t.number { })
+      (t.bool { })
+      (t.null { })
+      (t.list {
+        elem = t.ref { name = "runtime.introspectionResponse.jsonValue"; };
+      })
+      (t.ref { name = "runtime.introspectionResponse.jsonObject"; })
+    ];
+  };
+
+  "runtime.introspectionResponse.jsonObject" = t.map {
+    key = nonEmptyString;
+    value = t.ref { name = "runtime.introspectionResponse.jsonValue"; };
   };
 
   "runtime.runRecord" = t.record {

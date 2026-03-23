@@ -201,7 +201,6 @@ in
                 NIXFIED_PARENT_WORKFLOW_ID \
                 NIXFIED_TASK_ID \
                 NIXFIED_WORKFLOW_NESTED \
-                NIXFIED_JSON_OUTPUT_OVERRIDE \
                 NIXFIED_RUN_ID_FILE_OVERRIDE \
                 NIXFIED_SUMMARY_FILE_OVERRIDE || true
               NIXFIED_CALLER_PWD="$PWD" "$executor_bin" "$@"

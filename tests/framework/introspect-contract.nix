@@ -4,12 +4,14 @@
 }:
 let
   coreSource = builtins.readFile ../../nixfied/framework/core/mkCoreSurfaces.nix;
+  definitionsSource = builtins.readFile ../../nixfied/framework/contracts/default-definitions.nix;
   runtimeSource = builtins.readFile ../../nixfied/framework/introspection/runtime.nix;
 in
 assert (!builtins.pathExists ../../nixfied/framework/core/introspection-query.py);
 assert pkgs.lib.hasInfix "compile-introspection-bundle.nix" (
   builtins.readFile ../../nixfied/compiler/default.nix
 );
+assert pkgs.lib.hasInfix "\"runtime.introspectionResponse\" = t.record {" definitionsSource;
 assert pkgs.lib.hasInfix "../introspection/runtime.nix" coreSource;
 assert pkgs.lib.hasInfix "../introspection/assets.nix" coreSource;
 assert (!pkgs.lib.hasInfix "introspection-query.py" coreSource);

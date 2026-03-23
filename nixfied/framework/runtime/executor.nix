@@ -909,10 +909,6 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           echo "ERROR: --summary-file is only supported for workflow runs"
           return "$NIXFIED_EXIT_USAGE"
         fi
-        if [ "$runner_type" != "workflowRef" ] && [ "$MACHINE_JSON" = "1" ]; then
-          echo "ERROR: --json is only supported for workflow runs"
-          return "$NIXFIED_EXIT_USAGE"
-        fi
 
         if [ "''${NIXFIED_ORCHESTRATOR_MANAGED:-0}" = "1" ] && [ -n "''${NIXFIED_ORCHESTRATOR_RUN_ID:-}" ]; then
           run_id="$NIXFIED_ORCHESTRATOR_RUN_ID"
@@ -1012,11 +1008,10 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
             fi
           done < <(task_soft_needs "$current_task")
 
-          if [ "$current_task" = "$task_id" ] && [ "$runner_type" = "workflowRef" ]; then
-            export NIXFIED_JSON_OUTPUT_OVERRIDE="$MACHINE_JSON"
-            export NIXFIED_RUN_ID_FILE_OVERRIDE="$MACHINE_RUN_ID_FILE"
-            export NIXFIED_SUMMARY_FILE_OVERRIDE="$MACHINE_SUMMARY_FILE"
-          fi
+        if [ "$current_task" = "$task_id" ] && [ "$runner_type" = "workflowRef" ]; then
+          export NIXFIED_RUN_ID_FILE_OVERRIDE="$MACHINE_RUN_ID_FILE"
+          export NIXFIED_SUMMARY_FILE_OVERRIDE="$MACHINE_SUMMARY_FILE"
+        fi
 
           if execute_task "$run_id" "" "$current_task" "$@"; then
             rc=0
@@ -1024,11 +1019,10 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
             rc="$?"
           fi
 
-          if [ "$current_task" = "$task_id" ] && [ "$runner_type" = "workflowRef" ]; then
-            unset NIXFIED_JSON_OUTPUT_OVERRIDE || true
-            unset NIXFIED_RUN_ID_FILE_OVERRIDE || true
-            unset NIXFIED_SUMMARY_FILE_OVERRIDE || true
-          fi
+        if [ "$current_task" = "$task_id" ] && [ "$runner_type" = "workflowRef" ]; then
+          unset NIXFIED_RUN_ID_FILE_OVERRIDE || true
+          unset NIXFIED_SUMMARY_FILE_OVERRIDE || true
+        fi
 
           unset "active_tasks[$current_task]"
           if [ "$rc" -eq 0 ]; then
@@ -2606,11 +2600,6 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
         workflow_id="$(resolve_workflow_mode "$workflow_id" "$mode_override")" || return $?
 
-        if [ "$print_summary" -eq 1 ] && [ "$MACHINE_JSON" = "1" ]; then
-          echo "ERROR: --json and --summary cannot be combined"
-          return "$NIXFIED_EXIT_USAGE"
-        fi
-
         local run_id
         local detail_json
         local fail_fast
@@ -2783,10 +2772,6 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
             fi
           fi
           echo "INFO: runId=$run_id passed=$passed failed=$failed canceled=$canceled skipped=$skipped"
-        fi
-
-        if [ "$MACHINE_JSON" = "1" ] && [ "$nested_workflow_call" -eq 0 ]; then
-          emit_workflow_result_json "$run_id" "$workflow_id" "$summary_file" "$status"
         fi
 
         if [ "$managed_by_orchestrator" -eq 0 ]; then

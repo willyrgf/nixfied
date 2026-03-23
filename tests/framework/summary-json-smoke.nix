@@ -27,6 +27,7 @@ pkgs.runCommand "summary-json-smoke" { } ''
   set -euo pipefail
 
   ORCH="${orchestrator}/bin/nixfied-orchestrator"
+  JQ=${pkgs.jq}/bin/jq
   export REGISTRY_ROOT="$TMPDIR/registry"
   export CI_ARTIFACTS_ROOT="$TMPDIR/artifacts"
   mkdir -p "$REGISTRY_ROOT" "$CI_ARTIFACTS_ROOT"
@@ -47,7 +48,7 @@ pkgs.runCommand "summary-json-smoke" { } ''
     cat "$TMPDIR/ci.out"
     exit 1
   fi
-  attempt_id="$(${pkgs.jq}/bin/jq -r '.payload.attempt_id' "$summary_file")"
+  attempt_id="$("$JQ" -r '.payload.attempt_id' "$summary_file")"
   if [ -z "$attempt_id" ] || [ "$attempt_id" = "null" ]; then
     echo "missing attempt id in first summary"
     cat "$summary_file"
@@ -60,7 +61,7 @@ pkgs.runCommand "summary-json-smoke" { } ''
     exit 1
   fi
 
-  ${pkgs.jq}/bin/jq -e '
+  "$JQ" -e '
     .kind == "workflow-summary"
     and .version == 1
     and .payload.run_id
@@ -98,75 +99,70 @@ pkgs.runCommand "summary-json-smoke" { } ''
   ${pkgs.gnugrep}/bin/grep -Fq "INFO: Parallelism" "$TMPDIR/ci.out"
   ${pkgs.gnugrep}/bin/grep -Fq "OK: Exit code: 0" "$TMPDIR/ci.out"
 
-  json_run_id_file="$TMPDIR/ci-json.run-id"
-  json_summary_file="$TMPDIR/ci-json.summary.json"
-  BENIGN_AMBIENT_VAR=beta \
-    "$ORCH" run-workflow workflow.ci.basic --run-id-file "$json_run_id_file" --summary-file "$json_summary_file" --json > "$TMPDIR/ci.json.out" 2>&1
-
-  json_run_id="$(${pkgs.coreutils}/bin/tr -d '\n' < "$json_run_id_file")"
-  if [ -z "$json_run_id" ]; then
-    echo "missing json run id"
-    cat "$TMPDIR/ci.json.out"
+  events_file="$REGISTRY_ROOT/events.ndjson"
+  if [ ! -s "$events_file" ]; then
+    echo "missing registry events file"
     exit 1
   fi
-  if [ "$run_id" != "$json_run_id" ]; then
+  "$JQ" -s -e 'length > 0 and all(.[]; .kind == "runtime-event" and .version == 1)' "$events_file" > /dev/null
+
+  rerun_id_file="$TMPDIR/ci-rerun.run-id"
+  rerun_summary_file="$TMPDIR/ci-rerun.summary.json"
+  BENIGN_AMBIENT_VAR=beta \
+    "$ORCH" run-workflow workflow.ci.basic --run-id-file "$rerun_id_file" --summary-file "$rerun_summary_file" > "$TMPDIR/ci.rerun.out" 2>&1
+
+  rerun_id="$(${pkgs.coreutils}/bin/tr -d '\n' < "$rerun_id_file")"
+  if [ -z "$rerun_id" ]; then
+    echo "missing rerun id"
+    cat "$TMPDIR/ci.rerun.out"
+    exit 1
+  fi
+  if [ "$run_id" != "$rerun_id" ]; then
     echo "run ids differ for equivalent workflow invocations"
     echo "run_id=$run_id"
-    echo "json_run_id=$json_run_id"
+    echo "rerun_id=$rerun_id"
     exit 1
   fi
-  json_attempt_id="$(${pkgs.jq}/bin/jq -r '.payload.attempt_id' "$json_summary_file")"
-  if [ -z "$json_attempt_id" ] || [ "$json_attempt_id" = "null" ]; then
+  rerun_attempt_id="$("$JQ" -r '.payload.attempt_id' "$rerun_summary_file")"
+  if [ -z "$rerun_attempt_id" ] || [ "$rerun_attempt_id" = "null" ]; then
     echo "missing attempt id in second summary"
-    cat "$json_summary_file"
+    cat "$rerun_summary_file"
     exit 1
   fi
-  if [ "$attempt_id" = "$json_attempt_id" ]; then
+  if [ "$attempt_id" = "$rerun_attempt_id" ]; then
     echo "attempt ids should differ across repeated equivalent invocations"
     echo "attempt_id=$attempt_id"
-    echo "json_attempt_id=$json_attempt_id"
+    echo "rerun_attempt_id=$rerun_attempt_id"
     exit 1
   fi
-  json_run_artifacts_summary="$(find "$CI_ARTIFACTS_ROOT" -type f -path "*/$json_run_id/$json_attempt_id/summary.json" | head -n 1 || true)"
-  if [ -z "$json_run_artifacts_summary" ] || [ ! -f "$json_run_artifacts_summary" ]; then
+  rerun_artifacts_summary="$(find "$CI_ARTIFACTS_ROOT" -type f -path "*/$rerun_id/$rerun_attempt_id/summary.json" | head -n 1 || true)"
+  if [ -z "$rerun_artifacts_summary" ] || [ ! -f "$rerun_artifacts_summary" ]; then
     echo "missing attempt-scoped artifacts summary for second run"
     find "$CI_ARTIFACTS_ROOT" -type f | sort
     exit 1
   fi
-  if [ "$run_artifacts_summary" = "$json_run_artifacts_summary" ]; then
+  if [ "$run_artifacts_summary" = "$rerun_artifacts_summary" ]; then
     echo "equivalent reruns should not reuse the same attempt artifacts summary path"
     echo "run_artifacts_summary=$run_artifacts_summary"
-    echo "json_run_artifacts_summary=$json_run_artifacts_summary"
+    echo "rerun_artifacts_summary=$rerun_artifacts_summary"
     exit 1
   fi
-  first_step_count="$(${pkgs.jq}/bin/jq -r '.payload.steps | length' "$summary_file")"
-  second_step_count="$(${pkgs.jq}/bin/jq -r '.payload.steps | length' "$json_summary_file")"
+  first_step_count="$("$JQ" -r '.payload.steps | length' "$summary_file")"
+  second_step_count="$("$JQ" -r '.payload.steps | length' "$rerun_summary_file")"
   if [ "$first_step_count" != "$second_step_count" ]; then
     echo "equivalent rerun should not duplicate summary steps"
     echo "first_step_count=$first_step_count"
     echo "second_step_count=$second_step_count"
     exit 1
   fi
-  json_payload="$(${pkgs.gawk}/bin/awk 'NF { line = $0 } END { print line }' "$TMPDIR/ci.json.out")"
-  if [ -z "$json_payload" ]; then
-    echo "missing json payload"
-    cat "$TMPDIR/ci.json.out"
+
+  if BENIGN_AMBIENT_VAR=gamma \
+    "$ORCH" run-workflow workflow.ci.basic --run-id-file "$TMPDIR/rejected.run-id" --summary-file "$TMPDIR/rejected.summary.json" --json > "$TMPDIR/ci.json.rejected.out" 2>&1; then
+    echo "workflow --json should be rejected"
+    cat "$TMPDIR/ci.json.rejected.out"
     exit 1
   fi
-  printf '%s\n' "$json_payload" > "$TMPDIR/ci.json.payload"
+  ${pkgs.gnugrep}/bin/grep -Fq "ERROR: unknown option '--json'" "$TMPDIR/ci.json.rejected.out"
 
-  ${pkgs.jq}/bin/jq -e --arg runId "$json_run_id" '
-    .run_id == $runId
-    and (.attempt_id | type == "string")
-    and .workflow_id == "workflow.ci.basic"
-    and (.exit_code | type == "number")
-    and (.summary_json | type == "string")
-    and .summary.kind == "workflow-summary"
-    and .summary.version == 1
-    and .summary.payload.run_id == $runId
-    and (.summary.payload.attempt_id | type == "string")
-    and .summary.payload.workflow_id == "workflow.ci.basic"
-  ' "$TMPDIR/ci.json.payload" > /dev/null
-
-  echo "OK: workflow summary json contract validated" > "$out"
+  echo "OK: workflow summary sidecars stay stable and workflow stdout json is removed" > "$out"
 ''

@@ -28,6 +28,13 @@ else
     fi
 
     payload_file="$1"
+
+    case "$payload_file" in
+      *.json)
+        exec ${pkgs.cue}/bin/cue vet -c ${lib.escapeShellArg cueFile} "$payload_file" -d ${lib.escapeShellArg cueSelector}
+        ;;
+    esac
+
     payload_tmp="$(mktemp "''${TMPDIR:-/tmp}/nixfied-contract-payload.XXXXXX")"
     payload_json="$payload_tmp.json"
     cleanup_payload_json() {
