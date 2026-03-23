@@ -9,6 +9,8 @@ let
   repoRoot = builtins.toString ../..;
   workflowTaskId = "task.test.machine-output.workflow-body";
   jsonTaskId = "task.test.machine-output.json-body";
+  invalidJsonTaskId = "task.test.machine-output.invalid-json-body";
+  unknownFieldTaskId = "task.test.machine-output.unknown-field-body";
   setupTaskId = "task.test.machine-output.setup";
   teardownTaskId = "task.test.machine-output.teardown";
   workflowId = "workflow.test.machine-output.sample";
@@ -56,6 +58,43 @@ let
           runner.command = ''
             set -euo pipefail
             printf '%s\n' '{"ok":true,"kind":"task"}'
+          '';
+        };
+
+        nixfied.tasks."test.machine-output.invalid-json-body" = {
+          id = invalidJsonTaskId;
+          summary = "machine-output invalid json body";
+          description = "Emits JSON with an invalid type for contract validation coverage.";
+          contract.output = {
+            format = "json";
+            channels = "stdout";
+            keys = [
+              "ok"
+              "kind"
+            ];
+          };
+          runner.command = ''
+            set -euo pipefail
+            printf '%s\n' '{"ok":"yes","kind":"task"}'
+          '';
+        };
+
+        nixfied.tasks."test.machine-output.unknown-field-body" = {
+          id = unknownFieldTaskId;
+          summary = "machine-output unknown-field body";
+          description = "Emits JSON with an unexpected field for closed-record validation coverage.";
+          contract.output = {
+            format = "json";
+            channels = "stdout";
+            keys = [
+              "ok"
+              "kind"
+              "extra"
+            ];
+          };
+          runner.command = ''
+            set -euo pipefail
+            printf '%s\n' '{"ok":true,"kind":"task","extra":"boom"}'
           '';
         };
 
@@ -151,6 +190,26 @@ let
             ownerFile = "tests/framework/machine-output-app-smoke.nix";
           };
 
+          "json-body-invalid" = {
+            id = "json-body-invalid";
+            kind = "taskRef";
+            taskId = invalidJsonTaskId;
+            summary = "Invalid JSON task app";
+            description = "Runs a taskRef app that violates the machine-output contract.";
+            usage = [ "nix run .#json-body-invalid" ];
+            ownerFile = "tests/framework/machine-output-app-smoke.nix";
+          };
+
+          "json-body-unknown-field" = {
+            id = "json-body-unknown-field";
+            kind = "taskRef";
+            taskId = unknownFieldTaskId;
+            summary = "Unknown-field JSON task app";
+            description = "Runs a taskRef app that emits an unknown field.";
+            usage = [ "nix run .#json-body-unknown-field" ];
+            ownerFile = "tests/framework/machine-output-app-smoke.nix";
+          };
+
           "machine-json" = {
             id = "machine-json";
             kind = "machineOutput";
@@ -163,6 +222,32 @@ let
             summary = "Machine-output app smoke";
             description = "Wraps a JSON-emitting task app with setup and teardown helpers.";
             usage = [ "nix run .#machine-json" ];
+            ownerFile = "tests/framework/machine-output-app-smoke.nix";
+          };
+
+          "machine-json-invalid-payload" = {
+            id = "machine-json-invalid-payload";
+            kind = "machineOutput";
+            targetAppId = "json-body-invalid";
+            validation = {
+              contractRef = "machineOutput.result";
+            };
+            summary = "Machine-output invalid-payload smoke";
+            description = "Shows that contract-invalid machine output fails cleanly.";
+            usage = [ "nix run .#machine-json-invalid-payload" ];
+            ownerFile = "tests/framework/machine-output-app-smoke.nix";
+          };
+
+          "machine-json-unknown-field" = {
+            id = "machine-json-unknown-field";
+            kind = "machineOutput";
+            targetAppId = "json-body-unknown-field";
+            validation = {
+              contractRef = "machineOutput.result";
+            };
+            summary = "Machine-output unknown-field smoke";
+            description = "Shows that unknown fields are rejected on closed machine-output payloads.";
+            usage = [ "nix run .#machine-json-unknown-field" ];
             ownerFile = "tests/framework/machine-output-app-smoke.nix";
           };
 
@@ -190,6 +275,8 @@ pkgs.runCommand "machine-output-app-smoke" { } ''
 
   WORKFLOW_APP="${frameworkOutputs.apps."workflow-smoke".program}"
   MACHINE_APP="${frameworkOutputs.apps."machine-json".program}"
+  INVALID_PAYLOAD_APP="${frameworkOutputs.apps."machine-json-invalid-payload".program}"
+  UNKNOWN_FIELD_APP="${frameworkOutputs.apps."machine-json-unknown-field".program}"
   INVALID_APP="${frameworkOutputs.apps."workflow-machine-invalid".program}"
   INTROSPECT_APP="${frameworkOutputs.apps.introspect.program}"
   JQ=${pkgs.jq}/bin/jq
@@ -235,13 +322,43 @@ pkgs.runCommand "machine-output-app-smoke" { } ''
     cat "$TMPDIR/invalid.json"
     fail "workflow-targeted machineOutput failure stage must be validation"
   }
-  "$JQ" -e '.code == "machine-output-invalid-json"' "$TMPDIR/invalid.json" > /dev/null || {
+  "$JQ" -e '.code == "machine-output-validation-failed"' "$TMPDIR/invalid.json" > /dev/null || {
     cat "$TMPDIR/invalid.json"
-    fail "workflow-targeted machineOutput failure code must be machine-output-invalid-json"
+    fail "workflow-targeted machineOutput failure code must be machine-output-validation-failed"
   }
   "$JQ" -e '.targetAppId == "workflow-smoke"' "$TMPDIR/invalid.json" > /dev/null || {
     cat "$TMPDIR/invalid.json"
     fail "workflow-targeted machineOutput failure payload must identify the target app"
+  }
+  "$JQ" -e '.contractRef == "machineOutput.result" and .validator == "cue"' "$TMPDIR/invalid.json" > /dev/null || {
+    cat "$TMPDIR/invalid.json"
+    fail "workflow-targeted machineOutput failure payload must identify the contract and validator"
+  }
+
+  if "$INVALID_PAYLOAD_APP" > "$TMPDIR/invalid-payload.json" 2>"$TMPDIR/invalid-payload.err"; then
+    cat "$TMPDIR/invalid-payload.json"
+    fail "contract-invalid machineOutput app should fail"
+  fi
+  "$JQ" -e '.ok == false and .stage == "validation" and .code == "machine-output-validation-failed"' "$TMPDIR/invalid-payload.json" > /dev/null || {
+    cat "$TMPDIR/invalid-payload.json"
+    fail "contract-invalid machineOutput failure payload must use the validation failure envelope"
+  }
+  "$JQ" -e '.targetAppId == "json-body-invalid" and .contractRef == "machineOutput.result" and .validator == "cue"' "$TMPDIR/invalid-payload.json" > /dev/null || {
+    cat "$TMPDIR/invalid-payload.json"
+    fail "contract-invalid machineOutput failure payload must identify the target app and contract"
+  }
+
+  if "$UNKNOWN_FIELD_APP" > "$TMPDIR/unknown-field.json" 2>"$TMPDIR/unknown-field.err"; then
+    cat "$TMPDIR/unknown-field.json"
+    fail "unknown-field machineOutput app should fail"
+  fi
+  "$JQ" -e '.ok == false and .stage == "validation" and .code == "machine-output-validation-failed"' "$TMPDIR/unknown-field.json" > /dev/null || {
+    cat "$TMPDIR/unknown-field.json"
+    fail "unknown-field machineOutput failure payload must use the validation failure envelope"
+  }
+  "$JQ" -e '.targetAppId == "json-body-unknown-field" and .contractRef == "machineOutput.result"' "$TMPDIR/unknown-field.json" > /dev/null || {
+    cat "$TMPDIR/unknown-field.json"
+    fail "unknown-field machineOutput failure payload must identify the target app and contract"
   }
 
   "$INTROSPECT_APP" app:machine-json --json > "$TMPDIR/machine-introspect.json"

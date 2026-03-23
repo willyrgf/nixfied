@@ -2,6 +2,7 @@
   pkgs,
   appId,
   app,
+  contractBundle,
   targetProgram,
   setupPrograms ? [ ],
   teardownPrograms ? [ ],
@@ -9,17 +10,17 @@
 let
   lib = pkgs.lib;
   mkShellApp = import ./mk-shell-app.nix { inherit pkgs; };
-  schemaFile =
-    if (app.validation.schema or null) == null then
-      ""
-    else
-      pkgs.writeText "nixfied-machine-output-schema-${builtins.substring 0 10 (builtins.hashString "sha256" appId)}.json" (
-        builtins.toJSON app.validation.schema
-      );
+  contractRef = ((app.validation or { }).contractRef or "");
+  validatorProgram = import ../contracts/mkValidator.nix {
+    inherit
+      pkgs
+      contractBundle
+      contractRef
+      ;
+  };
   targetArgsLiteral = builtins.concatStringsSep " " (map lib.escapeShellArg (app.targetArgs or [ ]));
   setupProgramsLiteral = builtins.concatStringsSep " " (map lib.escapeShellArg setupPrograms);
   teardownProgramsLiteral = builtins.concatStringsSep " " (map lib.escapeShellArg teardownPrograms);
-  validationCommand = app.validation.command or "";
 in
 (mkShellApp {
   appName = "machine-output:${appId}";
@@ -27,8 +28,8 @@ in
   body = ''
     target_program=${lib.escapeShellArg targetProgram}
     target_app_id=${lib.escapeShellArg (app.targetAppId or "")}
-    schema_file=${lib.escapeShellArg schemaFile}
-    validation_command=${lib.escapeShellArg validationCommand}
+    contract_ref=${lib.escapeShellArg contractRef}
+    validator_program=${lib.escapeShellArg validatorProgram}
     setup_programs=( ${setupProgramsLiteral} )
     teardown_programs=( ${teardownProgramsLiteral} )
     target_args=( ${targetArgsLiteral} )
@@ -68,6 +69,8 @@ in
         --arg code "$code" \
         --arg message "$message" \
         --arg failedAppId "$failed_app_id" \
+        --arg contractRef "$contract_ref" \
+        --arg validator "cue" \
         --argjson exitCode "$exit_code" \
         '{
           ok: false,
@@ -77,6 +80,8 @@ in
           code: $code,
           message: $message,
           failedAppId: (if $failedAppId == "" then null else $failedAppId end),
+          contractRef: (if $contractRef == "" then null else $contractRef end),
+          validator: (if $stage == "validation" then $validator else null end),
           exitCode: $exitCode
         }'
     }
@@ -118,28 +123,13 @@ in
     payload_stdout="$work_dir/payload.stdout"
     ${pkgs.gnugrep}/bin/grep -Ev '^(INFO|WARN|ERROR|OK|SKIP): ' "$target_stdout" >"$payload_stdout" || true
 
-    if ${pkgs.python3}/bin/python3 ${./machine-output-validate.py} "$schema_file" "$payload_stdout" >"$work_dir/validate.stdout" 2>"$work_dir/validate.stderr"; then
+    if "$validator_program" "$payload_stdout" >"$work_dir/validate.stdout" 2>"$work_dir/validate.stderr"; then
       :
     else
       render_captured_logs "target app" "$target_stdout" "$target_stderr"
       render_captured_logs "validation" "$work_dir/validate.stdout" "$work_dir/validate.stderr"
-      emit_failure_json "validation" "machine-output-invalid-json" "target app '$target_app_id' did not produce valid machine output" "$target_app_id" 1
+      emit_failure_json "validation" "machine-output-validation-failed" "target app '$target_app_id' did not satisfy contract '$contract_ref'" "$target_app_id" 1
       exit 1
-    fi
-
-    if [ -n "$validation_command" ]; then
-      export NIXFIED_MACHINE_OUTPUT_FILE="$payload_stdout"
-      export NIXFIED_MACHINE_OUTPUT_APP_ID=${lib.escapeShellArg appId}
-      if ${pkgs.bash}/bin/bash -lc "$validation_command" >"$work_dir/command-validate.stdout" 2>"$work_dir/command-validate.stderr"; then
-        rc=0
-      else
-        rc="$?"
-        render_captured_logs "command validation" "$work_dir/command-validate.stdout" "$work_dir/command-validate.stderr"
-        emit_failure_json "validation" "machine-output-command-validation-failed" "validation command failed for '$target_app_id'" "$target_app_id" "$rc"
-        exit "$rc"
-      fi
-      unset NIXFIED_MACHINE_OUTPUT_FILE
-      unset NIXFIED_MACHINE_OUTPUT_APP_ID
     fi
 
     teardown_index=0
