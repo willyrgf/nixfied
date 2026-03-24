@@ -22,6 +22,9 @@ let
   );
   workflowFeatureIds = builtins.sort builtins.lessThan (builtins.attrNames model.workflows);
   serviceFeatureIds = builtins.sort builtins.lessThan (builtins.attrNames serviceCatalog);
+  modelExportSchema = builtins.fromJSON (builtins.readFile ../../nixfied/schemas/model-export.json);
+  modelExportRequired = modelExportSchema.required or [ ];
+  modelExportProperties = modelExportSchema.properties or { };
 
   defaultCheckKind = name: if lib.hasInfix "smoke" name then "smoke" else "contract";
 
@@ -198,14 +201,15 @@ let
         ;
     };
 
-    "introspection-schema" = pkgs.runCommand "framework-introspection-schema" { } ''
-      ${pkgs.jq}/bin/jq -e '.required | index("serviceCatalog")' ${../../nixfied/schemas/model-export.json} > /dev/null
-      ${pkgs.jq}/bin/jq -e '.properties.serviceCatalog.type == "object"' ${../../nixfied/schemas/model-export.json} > /dev/null
-      ${pkgs.jq}/bin/jq -e '(.required | index("services")) == null' ${../../nixfied/schemas/model-export.json} > /dev/null
-      ${pkgs.jq}/bin/jq -e '.required | index("features")' ${../../nixfied/schemas/model-export.json} > /dev/null
-      ${pkgs.jq}/bin/jq -e '.properties.features.type == "object"' ${../../nixfied/schemas/model-export.json} > /dev/null
-      echo "OK: model export schema includes serviceCatalog and features" > "$out"
-    '';
+    "introspection-schema" =
+      assert builtins.elem "serviceCatalog" modelExportRequired;
+      assert (modelExportProperties.serviceCatalog.type or null) == "object";
+      assert !(builtins.elem "services" modelExportRequired);
+      assert builtins.elem "features" modelExportRequired;
+      assert (modelExportProperties.features.type or null) == "object";
+      pkgs.runCommand "framework-introspection-schema" { } ''
+        echo "OK: model export schema includes serviceCatalog and features" > "$out"
+      '';
 
     "package-output-contract" = import ./package-output-contract.nix {
       inherit

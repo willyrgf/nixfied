@@ -1,6 +1,8 @@
 # RFC: Harden Core Systems
 
-Status: draft
+Status: closed
+
+Last updated: 2026-03-24
 
 ## Purpose
 
@@ -17,6 +19,44 @@ system is still soft because:
 
 This RFC defines which pieces of code must be replaced, what they must be
 replaced with, and which layers should remain in place.
+
+## Status Update (2026-03-24)
+
+As of the current `2026-03-24` worktree, the RFC-critical hardening plan is
+implemented. The compiler/model/API consolidation is landed, the kernel owns
+the validation and runtime artifact/state-writing paths, and the shell/runtime
+closure items that were still open earlier in the day are now closed.
+
+Landed:
+
+- Lane F foundations: kernel packaging, validation IR, and runtime asset
+  wiring
+- Lane A authoring/model work: typed command authoring, compiled-only
+  `model.apps`, compiler-owned service operation catalog, and
+  `model.compiled.*`
+- Lane K kernel responsibilities: `validate-*`, `run-record`, `registry`,
+  `summary`, and `machine-output run`
+- Lane R closure: `executor.nix`, `orchestrator.nix`, and
+  `runtime-events.nix` now delegate run-id envelope rendering, summary
+  composition, and event/control detail rendering to the kernel; the framework
+  JSON builders were removed from `common-runtime.nix`; and the
+  `shell-contract.nix` runtime path is reduced to plan loading and kernel
+  validation/export wiring
+- Lane D closure: `probe-commands.nix` and `probe-plan-runtime.nix` now use
+  kernel-owned JSON-RPC probe execution instead of shell-managed request
+  temp-files and export-file choreography
+- Contract-tightening tail: `runtime.summary.payload` now uses refined stable
+  ids, workflow-mode enums, and UTC timestamp helpers
+- Lane G guard foundations: CUE removal, deleted authored `nixfied.apps`,
+  deleted static service surface, and no Python responders under
+  `tests/framework`
+- Lane G final cleanup: framework build-check paths are `jq`-free and the
+  hardening guard now enforces `jq`-free runtime/build-check seams in addition
+  to the earlier CUE/Python/deprecated-kernel bans
+
+No remaining open items are tracked for this RFC. Residual `jq` use in smoke
+tests that only inspect outputs is outside the hardened-core ownership boundary
+described here.
 
 ## Decision Summary
 
@@ -867,6 +907,16 @@ This appendix defines the execution order for the refactor.
 - Lane D: adapter migration
 - Lane G: guards, deletions, and final cleanup
 
+### Progress Snapshot (2026-03-24)
+
+- Wave 0 is landed.
+- Wave 1 is landed for the RFC-critical surfaces that motivated this document.
+- Wave 2 is landed.
+- Wave 3 is landed.
+- Wave 4 is landed.
+- Wave 5 is landed.
+- Wave 6 is landed.
+
 ### Wave 0: Shared Foundations
 
 1. `commit 01` in Lane F
@@ -1030,6 +1080,32 @@ Barrier: `commit 22` through `commit 24` must land before final jq removal.
   less shell semantic helper, or one less duplicated schema.
 - If a commit cannot be explained as a narrower ownership move, it is too
   broad.
+
+### Closure Note (2026-03-24)
+
+The short serial finish described earlier is complete:
+
+1. Lane R shell JSON removal is landed.
+   `executor.nix`, `orchestrator.nix`, and `runtime-events.nix` no longer
+   assemble framework-owned run-envelope or event/control JSON in shell.
+
+2. Lane R thin-wrapper reduction is landed.
+   `shell-contract.nix` is on the kernel validation path and
+   `common-runtime.nix` no longer contains framework JSON builders.
+
+3. Lane D probe execution migration is landed.
+   The JSON-RPC probe request/evaluate flow is kernel-owned end to end.
+
+4. The contract-tightening tail is landed.
+   `runtime.summary.payload` is refined to stable ids, workflow-mode enums, and
+   UTC timestamps.
+
+5. Lane G final cleanup is landed for the hardened-core/build-check boundary.
+   Framework build-check paths are `jq`-free and the guard enforces that seam.
+
+6. The RFC is now closed.
+   Any future follow-up should be treated as new work, not as an extension of
+   the open hardening tail recorded by this document.
 
 ## Appendix B: Target LOC Snapshot
 

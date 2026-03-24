@@ -31,9 +31,9 @@ assert (!pkgs.lib.hasInfix "--json" runtimeSource);
 assert (!pkgs.lib.hasInfix "\${pkgs.jq}/bin/jq" runtimeSource);
 assert pkgs.lib.hasInfix "valid_log_level() {" commonSource;
 assert pkgs.lib.hasInfix "valid_output_mode() {" commonSource;
-assert pkgs.lib.hasInfix "json_escape_string() {" commonSource;
-assert pkgs.lib.hasInfix "json_quote_string() {" commonSource;
 assert pkgs.lib.hasInfix "write_text_file_atomic() {" commonSource;
+assert (!pkgs.lib.hasInfix "json_escape_string() {" commonSource);
+assert (!pkgs.lib.hasInfix "json_quote_string() {" commonSource);
 assert (!pkgs.lib.hasInfix "\${pkgs.jq}/bin/jq" commonSource);
 assert pkgs.lib.hasInfix "ERROR: failed to move temp file into '$target'" commonSource;
 pkgs.runCommand "executor-runtime-contract" { } ''

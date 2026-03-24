@@ -27,20 +27,6 @@ let
       pkgs.netcat-openbsd
     else
       throw "probe-commands: netcat package is required";
-
-  jsonRpcPayload =
-    {
-      method,
-      params ? [ ],
-    }:
-    builtins.toJSON {
-      jsonrpc = "2.0";
-      id = 1;
-      inherit
-        method
-        params
-        ;
-    };
 in
 rec {
   jsonRpcProbePlans = {
@@ -79,141 +65,96 @@ rec {
       ${pkgs.curl}/bin/curl -fsS --max-time ${toString maxTime} "${urlExpr}" >/dev/null 2>&1
     '';
 
-  jsonRpcRequestCmd =
+  jsonRpcKernelCmd =
     {
+      planFile,
       urlExpr,
       method,
-      params ? [ ],
       maxTime ? runtimeDefaults.probes.httpMaxTimeSeconds,
     }:
     ''
-      ${pkgs.curl}/bin/curl -fsS --max-time ${toString maxTime} \
-        -H 'content-type: application/json' \
-        --data '${jsonRpcPayload { inherit method params; }}' \
-        "${urlExpr}"
+      ${kernelPackage}/bin/nixfied-kernel probe jsonrpc \
+        ${pkgs.lib.escapeShellArg (toString planFile)} \
+        ${pkgs.lib.escapeShellArg "${pkgs.curl}/bin/curl"} \
+        "${urlExpr}" \
+        ${pkgs.lib.escapeShellArg method} \
+        ${toString maxTime}
     '';
 
   jsonRpcHasResultCmd =
     {
       urlExpr,
       method,
-      params ? [ ],
       maxTime ? runtimeDefaults.probes.httpMaxTimeSeconds,
     }:
     ''
-      (
-        tmp_json="''${TMPDIR:-/tmp}/nixfied-probe-jsonrpc.$$.$RANDOM.json"
-        set +e
-        (
-          ${jsonRpcRequestCmd {
-            inherit
-              urlExpr
-              method
-              params
-              maxTime
+      {
+        ${jsonRpcKernelCmd {
+          planFile = jsonRpcResultPresentPlan;
+          inherit
+            urlExpr
+            method
+            maxTime
             ;
-          }}
-        ) > "$tmp_json"
-        request_rc=$?
-        set -e
-        if [ "$request_rc" -ne 0 ]; then
-          rm -f "$tmp_json"
-          exit "$request_rc"
-        fi
-        set +e
-        ${kernelPackage}/bin/nixfied-kernel probe evaluate ${pkgs.lib.escapeShellArg (toString jsonRpcResultPresentPlan)} "$tmp_json" >/dev/null
-        eval_rc=$?
-        set -e
-        if [ "$eval_rc" -ne 0 ]; then
-          rm -f "$tmp_json"
-          exit "$eval_rc"
-        fi
-        rm -f "$tmp_json"
-      )
+        }}
+      } >/dev/null 2>&1
     '';
 
   jsonRpcResultHexCmd =
     {
       urlExpr,
       method,
-      params ? [ ],
       maxTime ? runtimeDefaults.probes.httpMaxTimeSeconds,
     }:
     ''
-      (
-        tmp_json="''${TMPDIR:-/tmp}/nixfied-probe-jsonrpc.$$.$RANDOM.json"
-        export_file="''${TMPDIR:-/tmp}/nixfied-probe-jsonrpc-export.$$.$RANDOM.sh"
-        set +e
-        (
-          ${jsonRpcRequestCmd {
-            inherit
-              urlExpr
-              method
-              params
-              maxTime
-              ;
-          }}
-        ) > "$tmp_json"
-        request_rc=$?
-        set -e
-        if [ "$request_rc" -ne 0 ]; then
-          rm -f "$tmp_json" "$export_file"
-          exit "$request_rc"
-        fi
-        set +e
-        ${kernelPackage}/bin/nixfied-kernel probe evaluate \
-          ${pkgs.lib.escapeShellArg (toString jsonRpcResultHexPlan)} \
-          "$tmp_json" \
-          "$export_file" >/dev/null
-        eval_rc=$?
-        set -e
-        if [ "$eval_rc" -ne 0 ]; then
-          rm -f "$tmp_json" "$export_file"
-          exit "$eval_rc"
-        fi
-        . "$export_file"
-        printf '%s' "''${NIXFIED_PROBE_RESULT:-}"
-        rm -f "$tmp_json" "$export_file"
-      )
+      {
+        ${jsonRpcKernelCmd {
+          planFile = jsonRpcResultHexPlan;
+          inherit
+            urlExpr
+            method
+            maxTime
+            ;
+        }}
+      } 2>/dev/null
+    '';
+
+  jsonRpcResultCompactCmd =
+    {
+      urlExpr,
+      method,
+      maxTime ? runtimeDefaults.probes.httpMaxTimeSeconds,
+    }:
+    ''
+      {
+        ${jsonRpcKernelCmd {
+          planFile = jsonRpcResultCompactPlan;
+          inherit
+            urlExpr
+            method
+            maxTime
+            ;
+        }}
+      } 2>/dev/null
     '';
 
   jsonRpcResultFalseCmd =
     {
       urlExpr,
       method,
-      params ? [ ],
       maxTime ? runtimeDefaults.probes.httpMaxTimeSeconds,
     }:
     ''
-      (
-        tmp_json="''${TMPDIR:-/tmp}/nixfied-probe-jsonrpc.$$.$RANDOM.json"
-        set +e
-        (
-          ${jsonRpcRequestCmd {
-            inherit
-              urlExpr
-              method
-              params
-              maxTime
-              ;
-          }}
-        ) > "$tmp_json"
-        request_rc=$?
-        set -e
-        if [ "$request_rc" -ne 0 ]; then
-          rm -f "$tmp_json"
-          exit "$request_rc"
-        fi
-        set +e
-        ${kernelPackage}/bin/nixfied-kernel probe evaluate ${pkgs.lib.escapeShellArg (toString jsonRpcResultBoolFalsePlan)} "$tmp_json" >/dev/null
-        eval_rc=$?
-        set -e
-        if [ "$eval_rc" -ne 0 ]; then
-          rm -f "$tmp_json"
-          exit "$eval_rc"
-        fi
-        rm -f "$tmp_json"
-      )
+      {
+        ${jsonRpcKernelCmd {
+          planFile = jsonRpcResultBoolFalsePlan;
+          inherit
+            urlExpr
+            method
+            maxTime
+            ;
+        }}
+      } >/dev/null 2>&1
     '';
 
   pgIsReadyCmd =

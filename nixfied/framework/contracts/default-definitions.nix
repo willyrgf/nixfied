@@ -85,6 +85,17 @@ let
       "workflow"
     ];
   };
+  workflowMode = t.enum {
+    values = [
+      "ci"
+      "dev"
+      "test"
+      "build"
+      "check"
+      "format"
+      "custom"
+    ];
+  };
   stepStatus = t.enum {
     values = [
       "passed"
@@ -140,13 +151,13 @@ in
 
   "runtime.summary.payload" = t.record {
     fields = {
-      run_id = t.field { schema = nonEmptyString; };
-      attempt_id = t.field { schema = nonEmptyString; };
-      workflow_id = t.field { schema = nonEmptyString; };
-      mode = t.field { schema = nonEmptyString; };
+      run_id = t.field { schema = stableId; };
+      attempt_id = t.field { schema = stableId; };
+      workflow_id = t.field { schema = stableId; };
+      mode = t.field { schema = workflowMode; };
       exit_code = t.field { schema = exitCode; };
-      started_at = t.field { schema = nonEmptyString; };
-      finished_at = t.field { schema = nonEmptyString; };
+      started_at = t.field { schema = utcTimestamp; };
+      finished_at = t.field { schema = utcTimestamp; };
       duration_seconds = t.field { schema = nonNegativeInt; };
       counts = t.field {
         schema = t.ref { name = "runtime.summary.counts"; };
@@ -179,7 +190,12 @@ in
       duration = t.field { schema = nonNegativeInt; };
       order = t.field { schema = nonNegativeInt; };
       workflow_id = t.field {
-        schema = nullableString;
+        schema = t.union {
+          options = [
+            stableId
+            (t.null { })
+          ];
+        };
       };
       reason = t.field {
         schema = nullableString;

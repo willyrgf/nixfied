@@ -49,7 +49,7 @@ assert pkgs.lib.hasInfix "ensure_artifacts_root() {" runtimeSource;
 assert (!pkgs.lib.hasInfix "\${pkgs.jq}/bin/jq" runtimeSource);
 assert !(pkgs.lib.hasInfix "run_record_fields_file() {" runtimeSource);
 assert !(pkgs.lib.hasInfix "run-record field" runtimeSource);
-assert pkgs.lib.hasInfix "json_object_from_named_env_values() {" commonSource;
+assert !(pkgs.lib.hasInfix "json_object_from_named_env_values() {" commonSource);
 assert pkgs.lib.hasInfix "NIXFIED_RUN_ID_FILE_OVERRIDE" runtimeSource;
 assert pkgs.lib.hasInfix "NIXFIED_SUMMARY_FILE_OVERRIDE" runtimeSource;
 assert pkgs.lib.hasInfix "workflow_simple_shorthand_exists_for_family" runtimeSource;

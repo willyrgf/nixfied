@@ -34,9 +34,10 @@ assert pkgs.lib.hasInfix "NIXFIED_ORCHESTRATOR_ATTEMPT_ID" executorSource;
 assert pkgs.lib.hasInfix "frameworkEphemeral = import ./ephemeral.nix" orchestratorSource;
 assert pkgs.lib.hasInfix "ephemeral = model.runtime.ephemeral or { };" orchestratorSource;
 assert pkgs.lib.hasInfix "EPHEMERAL_EXECUTOR_WRAPPER=" orchestratorSource;
-assert pkgs.lib.hasInfix "json_quote_string \"controlSignal\"" orchestratorSource;
-assert pkgs.lib.hasInfix "printf ',\"reason\":%s' \"$(json_quote_string \"$reason\")\""
-  orchestratorSource;
+assert pkgs.lib.hasInfix "kernel_run_id_envelope() {" orchestratorSource;
+assert pkgs.lib.hasInfix "nixfied-kernel run-id envelope" orchestratorSource;
+assert pkgs.lib.hasInfix "kernel_event_detail() {" orchestratorSource;
+assert pkgs.lib.hasInfix "nixfied-kernel event-detail render" orchestratorSource;
 assert pkgs.lib.hasInfix "NIXFIED_WORKFLOW_SETUP_STARTED_AT" orchestratorSource;
 assert pkgs.lib.hasInfix "NIXFIED_WORKFLOW_SETUP_STARTED_EPOCH" orchestratorSource;
 assert pkgs.lib.hasInfix "\"$EPHEMERAL_EXECUTOR_WRAPPER\" \"$EXECUTOR_PROGRAM\" run-task"
@@ -56,6 +57,8 @@ assert pkgs.lib.hasInfix "--refresh --" dispatcherSource;
 assert pkgs.lib.hasInfix "github:willyrgf/nixfied/dev" dispatcherSource;
 assert pkgs.lib.hasInfix "frameworkUpgradeHelpFile" dispatcherSource;
 assert pkgs.lib.hasInfix "proxyFrameworkCommand" dispatcherSource;
+assert (!pkgs.lib.hasInfix "json_quote_string" orchestratorSource);
+assert (!pkgs.lib.hasInfix "positional_args_json" orchestratorSource);
 pkgs.runCommand "orchestrator-lifecycle-contract" { } ''
   echo "OK: orchestrator lifecycle contracts are stable" > "$out"
 ''

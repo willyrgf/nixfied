@@ -8,7 +8,7 @@
 let
   projectMeta = project.project or { };
   projectId = projectMeta.id or "project";
-  commonRuntimeShell = import ../common-runtime.nix { inherit pkgs; };
+  kernelPackage = import ../kernel { inherit pkgs; };
   id = import ./id.nix {
     inherit pkgs project;
   };
@@ -72,7 +72,6 @@ let
     EPHEMERAL_ROOT_VAR="${projectIdUpper}_EPHEMERAL_ROOT"
 
     ${registryShell}
-    ${commonRuntimeShell}
 
     normalize_bool() {
       case "''${1:-}" in
@@ -438,37 +437,34 @@ let
       EVENT_KIND="serviceLifecycle"
     fi
 
-    DETAIL_JSON="$(
-      printf '{'
-      printf '"kind":'
-      json_quote_string "$EVENT_KIND"
-      printf ',"eventType":'
-      json_quote_string "$EVENT_TYPE"
-      printf ',"commandName":%s' "$(json_string_or_null "$EVENT_COMMAND")"
-      printf ',"projectId":'
-      json_quote_string "$PROJECT_ID"
-      printf ',"service":%s' "$(json_string_or_null "$EVENT_SERVICE")"
-      printf ',"slot":%s' "$(json_string_or_null "$EVENT_SLOT")"
-      printf ',"env":%s' "$(json_string_or_null "$EVENT_ENV")"
-      printf ',"profile":%s' "$(json_string_or_null "$EVENT_PROFILE")"
-      printf ',"pid":%s' "$(json_number_or_null "$EVENT_PID")"
-      printf ',"pgid":%s' "$(json_number_or_null "$EVENT_PGID")"
-      printf ',"planId":%s' "$(json_string_or_null "$EVENT_PLAN_ID")"
-      printf ',"unitId":%s' "$(json_string_or_null "$EVENT_UNIT_ID")"
-      printf ',"attempt":%s' "$(json_number_or_null "$EVENT_ATTEMPT")"
-      printf ',"ownerScope":%s' "$(json_string_or_null "$EVENT_OWNER_SCOPE")"
-      printf ',"reusePolicy":%s' "$(json_string_or_null "$EVENT_REUSE_POLICY")"
-      printf ',"discoveryScope":%s' "$(json_string_or_null "$EVENT_DISCOVERY_SCOPE")"
-      printf ',"ephemeralRoot":%s' "$(json_string_or_null "$EVENT_EPHEMERAL_ROOT")"
-      printf ',"readiness":{'
-      printf '"healthOk":%s' "$(json_bool_or_null "$EVENT_READINESS_HEALTH_NORM")"
-      printf ',"readyOk":%s' "$(json_bool_or_null "$EVENT_READINESS_READY_NORM")"
-      printf ',"lastError":%s' "$(json_string_or_null "$EVENT_LAST_ERROR")"
-      printf '}'
-      printf ',"waitReason":%s' "$(json_string_or_null "$EVENT_WAIT_REASON")"
-      printf ',"logPath":%s' "$(json_string_or_null "$EVENT_LOG_PATH")"
-      printf '}'
-    )"
+    if ! DETAIL_JSON="$(
+      ${kernelPackage}/bin/nixfied-kernel event-detail render \
+        "$EVENT_KIND" \
+        --event-type "$EVENT_TYPE" \
+        --command-name "$EVENT_COMMAND" \
+        --project-id "$PROJECT_ID" \
+        --service "$EVENT_SERVICE" \
+        --slot "$EVENT_SLOT" \
+        --env "$EVENT_ENV" \
+        --profile "$EVENT_PROFILE" \
+        --pid "$EVENT_PID" \
+        --pgid "$EVENT_PGID" \
+        --plan-id "$EVENT_PLAN_ID" \
+        --unit-id "$EVENT_UNIT_ID" \
+        --attempt "$EVENT_ATTEMPT" \
+        --owner-scope "$EVENT_OWNER_SCOPE" \
+        --reuse-policy "$EVENT_REUSE_POLICY" \
+        --discovery-scope "$EVENT_DISCOVERY_SCOPE" \
+        --ephemeral-root "$EVENT_EPHEMERAL_ROOT" \
+        --readiness-health "$EVENT_READINESS_HEALTH_NORM" \
+        --readiness-ready "$EVENT_READINESS_READY_NORM" \
+        --last-error "$EVENT_LAST_ERROR" \
+        --wait-reason "$EVENT_WAIT_REASON" \
+        --log-path "$EVENT_LOG_PATH"
+    )"; then
+      log_error "failed to render runtime event detail event_type=$EVENT_TYPE kind=$EVENT_KIND"
+      exit 1
+    fi
 
     if ! registry_append_event "$REGISTRY_ROOT" "$EVENT_RUN_ID" "''${NIXFIED_ATTEMPT_ID:-}" "" "" "$EVENT_STATE" "$DETAIL_JSON"; then
       log_error "failed to record runtime event event_type=$EVENT_TYPE run_id=$EVENT_RUN_ID"

@@ -196,29 +196,43 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         printf '%s' "$1" | ${pkgs.coreutils}/bin/sha256sum | ${pkgs.gawk}/bin/awk '{print $1}'
       }
 
-      canonical_run_id_envelope() {
+      write_name_value_tsv_file() {
+        local target_file="$1"
+        local value_name=""
+
+        : > "$target_file" || return 1
+        while IFS= read -r value_name; do
+          [ -n "$value_name" ] || continue
+          if [ -z "''${!value_name+x}" ]; then
+            continue
+          fi
+          printf '%s\t%s\n' "$value_name" "''${!value_name}" >> "$target_file" || return 1
+        done
+      }
+
+      kernel_run_id_envelope() {
         local run_kind="$1"
         local workflow_id="$2"
         local task_id="$3"
         local slot_value="$4"
         local env_value="$5"
-        local pass_through_env_json="$6"
-        local argv_json
+        local pass_through_env_file="$6"
         shift 6
 
-        argv_json="$(positional_args_json "$@")" || return 1
+        ${kernelPackage}/bin/nixfied-kernel run-id envelope \
+          ${pkgs.lib.escapeShellArg "${model.identity.evalHash}"} \
+          ${pkgs.lib.escapeShellArg "${runtimeHash}"} \
+          "$run_kind" \
+          "$workflow_id" \
+          "$task_id" \
+          "$slot_value" \
+          "$env_value" \
+          "$pass_through_env_file" \
+          -- "$@"
+      }
 
-        printf '{'
-        printf '"model_eval_hash":%s' "$(json_quote_string "${model.identity.evalHash}")"
-        printf ',"runtime_hash":%s' "$(json_quote_string "${runtimeHash}")"
-        printf ',"run_kind":%s' "$(json_quote_string "$run_kind")"
-        printf ',"workflow_id":%s' "$(json_string_or_null "$workflow_id")"
-        printf ',"task_id":%s' "$(json_string_or_null "$task_id")"
-        printf ',"slot":%s' "$(json_quote_string "$slot_value")"
-        printf ',"env":%s' "$(json_quote_string "$env_value")"
-        printf ',"pass_through_env":%s' "$pass_through_env_json"
-        printf ',"argv":%s' "$argv_json"
-        printf '}'
+      kernel_event_detail() {
+        ${kernelPackage}/bin/nixfied-kernel event-detail render "$@"
       }
 
       selected_services_csv_from_lines() {
@@ -254,10 +268,12 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         esac
       }
 
-      run_id_pass_through_env_json() {
+      run_id_pass_through_env_file() {
         local run_kind="$1"
         local workflow_id="$2"
         local task_id="$3"
+        local env_file=""
+        local env_names_file=""
         local env_name=""
         local dep_task_id=""
         local phase=""
@@ -332,6 +348,8 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           done < <(workflow_phase_tasks "$current_workflow_id" postRun 2>/dev/null || true)
         }
 
+        env_names_file="$(mktemp "''${TMPDIR:-/tmp}/nixfied-run-id-env-names.XXXXXX")" || return 1
+
         case "$run_kind" in
           task)
             collect_task_env_names "$task_id"
@@ -339,70 +357,68 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           workflow)
             collect_workflow_env_names "$workflow_id"
             ;;
-        esac | ${pkgs.coreutils}/bin/sort -u | json_object_from_named_env_values
+        esac | ${pkgs.coreutils}/bin/sort -u > "$env_names_file"
+
+        env_file="$(mktemp "''${TMPDIR:-/tmp}/nixfied-run-id-env.XXXXXX")" || return 1
+        if ! write_name_value_tsv_file "$env_file" < "$env_names_file"; then
+          rm -f "$env_file" "$env_names_file"
+          return 1
+        fi
+        rm -f "$env_names_file"
+        printf '%s' "$env_file"
       }
 
       event_detail_mode_json() {
         local mode="$1"
-        printf '{'
-        printf '"kind":%s' "$(json_quote_string "slotLifecycle")"
-        printf ',"mode":%s' "$(json_quote_string "$mode")"
-        printf '}'
+        kernel_event_detail slotLifecycle --mode "$mode"
       }
 
       event_detail_mode_suffix_json() {
         local mode="$1"
         local suffix_reason="$2"
-        printf '{'
-        printf '"kind":%s' "$(json_quote_string "slotLifecycle")"
-        printf ',"mode":%s' "$(json_quote_string "$mode")"
-        printf ',"suffixReason":%s' "$(json_string_or_null "$suffix_reason")"
-        printf '}'
+        kernel_event_detail slotLifecycle --mode "$mode" --suffix-reason "$suffix_reason"
       }
 
       event_detail_exit_code_json() {
         local exit_code="$1"
-        printf '{'
-        printf '"kind":%s' "$(json_quote_string "slotLifecycle")"
-        printf ',"exitCode":%s' "$exit_code"
-        printf '}'
+        kernel_event_detail slotLifecycle --exit-code "$exit_code"
       }
 
       event_detail_produces_json() {
         local produces_json="$1"
-        printf '{'
-        printf '"kind":%s' "$(json_quote_string "slotLifecycle")"
-        printf ',"produces":%s' "$produces_json"
-        printf '}'
+        kernel_event_detail slotLifecycle --produces-json "$produces_json"
       }
 
       event_detail_reason_json() {
         local reason="$1"
-        printf '{'
-        printf '"kind":%s' "$(json_quote_string "serviceLifecycle")"
-        printf ',"reason":%s' "$(json_quote_string "$reason")"
-        printf '}'
+        kernel_event_detail serviceLifecycle --reason "$reason"
       }
 
       event_detail_reason_key_value_json() {
         local reason="$1"
         local extra_key="$2"
         local extra_value="$3"
-        printf '{'
-        printf '"kind":%s' "$(json_quote_string "serviceLifecycle")"
-        printf ',"reason":%s' "$(json_quote_string "$reason")"
-        printf ',%s:%s' "$(json_quote_string "$extra_key")" "$(json_quote_string "$extra_value")"
-        printf '}'
+        case "$extra_key" in
+          dependency)
+            kernel_event_detail serviceLifecycle --reason "$reason" --dependency "$extra_value"
+            ;;
+          serviceName)
+            kernel_event_detail serviceLifecycle --reason "$reason" --service-name "$extra_value"
+            ;;
+          missing)
+            kernel_event_detail serviceLifecycle --reason "$reason" --missing "$extra_value"
+            ;;
+          *)
+            echo "ERROR: unsupported event detail field '$extra_key'" >&2
+            return 1
+            ;;
+        esac
       }
 
       event_detail_reason_exit_code_json() {
         local reason="$1"
         local exit_code="$2"
-        printf '{'
-        printf '"kind":%s' "$(json_quote_string "serviceLifecycle")"
-        printf ',"reason":%s' "$(json_quote_string "$reason")"
-        printf ',"exitCode":%s' "$exit_code"
-        printf '}'
+        kernel_event_detail serviceLifecycle --reason "$reason" --exit-code "$exit_code"
       }
 
       workflow_phase_service_set_detail_json() {
@@ -411,13 +427,12 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         local service_set_name="$3"
         local operation="$4"
 
-        printf '{'
-        printf '"kind":%s' "$(json_quote_string "serviceLifecycle")"
-        printf ',"eventType":%s' "$(json_quote_string "$phase")"
-        printf ',"service":%s' "$(json_quote_string "$service_set_name")"
-        printf ',"commandName":%s' "$(json_quote_string "$operation")"
-        printf ',"ownerScope":%s' "$(json_quote_string "$service_set_id")"
-        printf '}'
+        kernel_event_detail \
+          serviceLifecycle \
+          --event-type "$phase" \
+          --service "$service_set_name" \
+          --command-name "$operation" \
+          --owner-scope "$service_set_id"
       }
 
       workflow_phase_service_set_failure_json() {
@@ -427,14 +442,13 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         local operation="$4"
         local exit_code="$5"
 
-        printf '{'
-        printf '"kind":%s' "$(json_quote_string "serviceLifecycle")"
-        printf ',"eventType":%s' "$(json_quote_string "$phase")"
-        printf ',"service":%s' "$(json_quote_string "$service_set_name")"
-        printf ',"commandName":%s' "$(json_quote_string "$operation")"
-        printf ',"ownerScope":%s' "$(json_quote_string "$service_set_id")"
-        printf ',"exitCode":%s' "$exit_code"
-        printf '}'
+        kernel_event_detail \
+          serviceLifecycle \
+          --event-type "$phase" \
+          --service "$service_set_name" \
+          --command-name "$operation" \
+          --owner-scope "$service_set_id" \
+          --exit-code "$exit_code"
       }
 
       workflow_mode_override_from_args() {
@@ -557,7 +571,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
         local slot_value
         local env_value
-        local pass_through_env_json
+        local pass_through_env_file
         local run_input
         local run_base
         local run_id
@@ -565,9 +579,13 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
         slot_value="''${!slot_var:-$slot_default}"
         env_value="''${!env_var:-$env_default}"
-        pass_through_env_json="$(run_id_pass_through_env_json "$run_kind" "$workflow_id" "$task_id")"
+        pass_through_env_file="$(run_id_pass_through_env_file "$run_kind" "$workflow_id" "$task_id")" || return 1
 
-        run_input="$(canonical_run_id_envelope "$run_kind" "$workflow_id" "$task_id" "$slot_value" "$env_value" "$pass_through_env_json" "$@")"
+        run_input="$(kernel_run_id_envelope "$run_kind" "$workflow_id" "$task_id" "$slot_value" "$env_value" "$pass_through_env_file" "$@")" || {
+          rm -f "$pass_through_env_file"
+          return 1
+        }
+        rm -f "$pass_through_env_file"
         run_base="$(sha256_text "$run_input")"
         run_id="run-''${run_base:0:24}"
         RUN_SUFFIX_REASON=""
@@ -1944,12 +1962,6 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         local status=""
         local duration_json=0
         local order_seq_json=0
-        local exit_code_json="null"
-        local step_json=""
-        local steps_json_content=""
-        local steps_json_separator=""
-        local leaf_task_ids_json_content=""
-        local leaf_task_ids_json_separator=""
         local passed=0
         local failed=0
         local skipped=0
@@ -1957,13 +1969,11 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         local steps_duration=0
         local -A leaf_task_seen=()
 
-        WORKFLOW_STEPS_JSON='[]'
         WORKFLOW_PASSED_COUNT=0
         WORKFLOW_FAILED_COUNT=0
         WORKFLOW_SKIPPED_COUNT=0
         WORKFLOW_CANCELED_COUNT=0
         WORKFLOW_STEPS_DURATION=0
-        WORKFLOW_LEAF_TASK_IDS_JSON='[]'
         WORKFLOW_LEAF_TASK_IDS_LINES=""
 
         if [ -n "$steps_target" ]; then
@@ -1999,28 +2009,21 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           fi
 
           if [ -n "$exit_code" ] && [[ "$exit_code" =~ ^-?[0-9]+$ ]]; then
-            exit_code_json="$exit_code"
+            :
           else
-            exit_code_json="null"
+            exit_code=""
           fi
 
-          step_json="$(
-            printf '{'
-            printf '"name":%s' "$(json_quote_string "$task_id")"
-            printf ',"status":%s' "$(json_quote_string "$status")"
-            printf ',"state":%s' "$(json_quote_string "$state")"
-            printf ',"duration":%s' "$duration_json"
-            printf ',"order":%s' "$order_seq_json"
-            printf ',"workflow_id":%s' "$(json_string_or_null "$workflow_id")"
-            printf ',"reason":%s' "$(json_string_or_null "$reason")"
-            printf ',"exit_code":%s' "$exit_code_json"
-            printf '}'
-          )"
-          steps_json_content="''${steps_json_content}''${steps_json_separator}''${step_json}"
-          steps_json_separator=","
-
           if [ -n "$steps_target" ]; then
-            printf '%s\t%s\t%s\n' "$task_id" "$status" "$duration_json" >> "$steps_target" || return 1
+            printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+              "$task_id" \
+              "$status" \
+              "$duration_json" \
+              "$state" \
+              "$order_seq_json" \
+              "$workflow_id" \
+              "$reason" \
+              "$exit_code" >> "$steps_target" || return 1
           fi
 
           case "$state" in
@@ -2043,8 +2046,6 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
           if [ -z "''${leaf_task_seen[$task_id]+x}" ]; then
             leaf_task_seen["$task_id"]=1
-            leaf_task_ids_json_content="''${leaf_task_ids_json_content}''${leaf_task_ids_json_separator}$(json_quote_string "$task_id")"
-            leaf_task_ids_json_separator=","
             if [ -n "$WORKFLOW_LEAF_TASK_IDS_LINES" ]; then
               WORKFLOW_LEAF_TASK_IDS_LINES="''${WORKFLOW_LEAF_TASK_IDS_LINES}
   $task_id"
@@ -2054,25 +2055,15 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           fi
         done < <(workflow_step_records_tsv "$run_id" "$events_index_file")
 
-        WORKFLOW_STEPS_JSON="[''${steps_json_content}]"
         WORKFLOW_PASSED_COUNT="$passed"
         WORKFLOW_FAILED_COUNT="$failed"
         WORKFLOW_SKIPPED_COUNT="$skipped"
         WORKFLOW_CANCELED_COUNT="$canceled"
         WORKFLOW_STEPS_DURATION="$steps_duration"
-        WORKFLOW_LEAF_TASK_IDS_JSON="[''${leaf_task_ids_json_content}]"
       }
 
       workflow_steps_json() {
-        local run_id="$1"
-        local events_index_file="$2"
-
-        if ! workflow_collect_steps "$run_id" "$events_index_file" ""; then
-          printf '%s' "[]"
-          return 0
-        fi
-
-        printf '%s' "$WORKFLOW_STEPS_JSON"
+        printf '%s' "[]"
       }
 
       workflow_peak_workers() {
@@ -2228,7 +2219,6 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         local failed
         local skipped
         local canceled
-        local steps_json
         local steps_duration
         local setup_duration=0
         local teardown_duration=0
@@ -2237,10 +2227,6 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         local parallel_max_workers
         local parallel_peak_workers
         local parallel_canceled_count
-        local parallel_max_workers_json="null"
-        local parallel_peak_workers_json="null"
-        local parallel_canceled_count_json="null"
-        local leaf_task_ids_json="[]"
         local leaf_task_ids_lines=""
         local events_index_file=""
         local setup_timing_fields
@@ -2288,34 +2274,28 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         }
         if [ -n "$events_index_file" ] && [ -f "$events_index_file" ]; then
           if workflow_collect_steps "$run_id" "$events_index_file" "$summary_steps_tmp"; then
-            steps_json="$WORKFLOW_STEPS_JSON"
             passed="$WORKFLOW_PASSED_COUNT"
             failed="$WORKFLOW_FAILED_COUNT"
             skipped="$WORKFLOW_SKIPPED_COUNT"
             canceled="$WORKFLOW_CANCELED_COUNT"
             steps_duration="$WORKFLOW_STEPS_DURATION"
-            leaf_task_ids_json="$WORKFLOW_LEAF_TASK_IDS_JSON"
             leaf_task_ids_lines="$WORKFLOW_LEAF_TASK_IDS_LINES"
           else
             echo "WARN: failed to collect step summary from '$events_index_file'; using empty step list"
-            steps_json="[]"
             passed=0
             failed=0
             skipped=0
             canceled=0
             steps_duration=0
-            leaf_task_ids_json='[]'
             leaf_task_ids_lines=""
             : > "$summary_steps_tmp"
           fi
         else
-          steps_json="[]"
           passed=0
           failed=0
           skipped=0
           canceled=0
           steps_duration=0
-          leaf_task_ids_json='[]'
           leaf_task_ids_lines=""
           : > "$summary_steps_tmp"
         fi
@@ -2328,8 +2308,8 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         if parallel_max_workers="$(resolve_effective_max_workers "$workflow_id" 2>/dev/null || true)"; then
           :
         fi
-        if is_nonneg_int "$parallel_max_workers"; then
-          parallel_max_workers_json="$parallel_max_workers"
+        if ! is_nonneg_int "$parallel_max_workers"; then
+          parallel_max_workers=""
         fi
 
         if [ -n "$events_index_file" ] && [ -f "$events_index_file" ]; then
@@ -2337,66 +2317,46 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         else
           parallel_peak_workers=0
         fi
-        if is_nonneg_int "$parallel_peak_workers"; then
-          parallel_peak_workers_json="$parallel_peak_workers"
+        if ! is_nonneg_int "$parallel_peak_workers"; then
+          parallel_peak_workers=""
         fi
 
         parallel_canceled_count="$canceled"
-        if is_nonneg_int "$parallel_canceled_count"; then
-          parallel_canceled_count_json="$parallel_canceled_count"
+        if ! is_nonneg_int "$parallel_canceled_count"; then
+          parallel_canceled_count=""
         fi
 
-        write_summary_payload() {
-          local target_file="$1"
-          {
-            printf '{'
-            printf '"kind":"workflow-summary","version":1,"payload":{'
-            printf '"run_id":%s' "$(json_quote_string "$run_id")"
-            printf ',"attempt_id":%s' "$(json_quote_string "$attempt_id")"
-            printf ',"workflow_id":%s' "$(json_quote_string "$workflow_id")"
-            printf ',"mode":%s' "$(json_quote_string "$mode")"
-            printf ',"exit_code":%s' "$exit_code"
-            printf ',"started_at":%s' "$(json_quote_string "$summary_started_at")"
-            printf ',"finished_at":%s' "$(json_quote_string "$finished_at")"
-            printf ',"duration_seconds":%s' "$duration_seconds"
-            printf ',"counts":{'
-            printf '"passed":%s,"failed":%s,"skipped":%s,"canceled":%s' "$passed" "$failed" "$skipped" "$canceled"
-            printf '}'
-            printf ',"steps":%s' "$steps_json"
-            printf ',"timing":{'
-            printf '"total_duration":%s' "$duration_seconds"
-            printf ',"setup_duration":%s' "$setup_duration"
-            printf ',"steps_duration":%s' "$steps_duration"
-            printf ',"teardown_duration":%s' "$teardown_duration"
-            printf ',"accounted_duration":%s' "$accounted_duration"
-            printf ',"untracked_duration":%s' "$untracked_duration"
-            printf ',"parallelism":{'
-            printf '"max_workers":%s' "$parallel_max_workers_json"
-            printf ',"peak_workers":%s' "$parallel_peak_workers_json"
-            printf ',"canceled_count":%s' "$parallel_canceled_count_json"
-            printf '}'
-            printf '}'
-            printf '}}\n'
-          } > "$target_file"
-        }
-
-        summary_tmp="$(mktemp "$summary_file.tmp.XXXXXX")"
-        if ! write_summary_payload "$summary_tmp"; then
-          rm -f "$summary_tmp" "$summary_steps_tmp"
-          registry_snapshot_cleanup "$events_index_file"
-          echo "ERROR: failed to write summary file '$summary_file'"
-          return 1
-        fi
-        if ! ${kernelPackage}/bin/nixfied-kernel summary write \
+        if ! ${kernelPackage}/bin/nixfied-kernel summary compose \
           ${lib.escapeShellArg validationBundleFile} \
           "$summary_file" \
-          "$summary_tmp" >/dev/null; then
-          rm -f "$summary_tmp" "$summary_steps_tmp"
+          "$run_id" \
+          "$attempt_id" \
+          "$workflow_id" \
+          "$mode" \
+          "$exit_code" \
+          "$summary_started_at" \
+          "$finished_at" \
+          "$duration_seconds" \
+          "$passed" \
+          "$failed" \
+          "$skipped" \
+          "$canceled" \
+          "$summary_steps_tmp" \
+          "$duration_seconds" \
+          "$setup_duration" \
+          "$steps_duration" \
+          "$teardown_duration" \
+          "$accounted_duration" \
+          "$untracked_duration" \
+          "$parallel_max_workers" \
+          "$parallel_peak_workers" \
+          "$parallel_canceled_count" >/dev/null; then
+          rm -f "$summary_steps_tmp"
           registry_snapshot_cleanup "$events_index_file"
           echo "ERROR: failed to validate summary file '$summary_file'"
           return 1
         fi
-        rm -f "$summary_tmp" "$summary_steps_tmp"
+        rm -f "$summary_steps_tmp"
 
         if [ -n "$summary_file_override" ] && [ "$summary_file_override" != "$summary_file" ]; then
           if ! copy_file_atomic "$summary_file" "$summary_file_override"; then

@@ -162,29 +162,54 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
     printf '%s' "attempt-''${attempt_name#nixfied-attempt.}"
   }
 
-  canonical_run_id_envelope() {
+  write_name_value_tsv_file() {
+    local target_file="$1"
+    local value_name=""
+
+    : > "$target_file" || return 1
+    while IFS= read -r value_name; do
+      [ -n "$value_name" ] || continue
+      if [ -z "''${!value_name+x}" ]; then
+        continue
+      fi
+      printf '%s\t%s\n' "$value_name" "''${!value_name}" >> "$target_file" || return 1
+    done
+  }
+
+  write_args_list_file() {
+    local target_file="$1"
+    shift
+
+    : > "$target_file" || return 1
+    while [ "$#" -gt 0 ]; do
+      printf '%s\n' "$1" >> "$target_file" || return 1
+      shift
+    done
+  }
+
+  kernel_run_id_envelope() {
     local run_kind="$1"
     local workflow_id="$2"
     local task_id="$3"
     local slot_value="$4"
     local env_value="$5"
-    local pass_through_env_json="$6"
-    local argv_json
+    local pass_through_env_file="$6"
     shift 6
 
-    argv_json="$(positional_args_json "$@")" || return 1
+    ${kernelPackage}/bin/nixfied-kernel run-id envelope \
+      ${pkgs.lib.escapeShellArg "${model.identity.evalHash}"} \
+      ${pkgs.lib.escapeShellArg "${runtimeHash}"} \
+      "$run_kind" \
+      "$workflow_id" \
+      "$task_id" \
+      "$slot_value" \
+      "$env_value" \
+      "$pass_through_env_file" \
+      -- "$@"
+  }
 
-    printf '{'
-    printf '"model_eval_hash":%s' "$(json_quote_string "${model.identity.evalHash}")"
-    printf ',"runtime_hash":%s' "$(json_quote_string "${runtimeHash}")"
-    printf ',"run_kind":%s' "$(json_quote_string "$run_kind")"
-    printf ',"workflow_id":%s' "$(json_string_or_null "$workflow_id")"
-    printf ',"task_id":%s' "$(json_string_or_null "$task_id")"
-    printf ',"slot":%s' "$(json_quote_string "$slot_value")"
-    printf ',"env":%s' "$(json_quote_string "$env_value")"
-    printf ',"pass_through_env":%s' "$pass_through_env_json"
-    printf ',"argv":%s' "$argv_json"
-    printf '}'
+  kernel_event_detail() {
+    ${kernelPackage}/bin/nixfied-kernel event-detail render "$@"
   }
 
   filter_run_id_args() {
@@ -235,10 +260,12 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
     printf '%s\n' "''${filtered_args[@]}"
   }
 
-  run_id_pass_through_env_json() {
+  run_id_pass_through_env_file() {
     local run_kind="$1"
     local workflow_id="$2"
     local task_id="$3"
+    local env_file=""
+    local env_names_file=""
     local env_name=""
     local dep_task_id=""
     local phase=""
@@ -313,6 +340,8 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
       done < <(workflow_phase_tasks "$current_workflow_id" postRun 2>/dev/null || true)
     }
 
+    env_names_file="$(mktemp "''${TMPDIR:-/tmp}/nixfied-run-id-env-names.XXXXXX")" || return 1
+
     case "$run_kind" in
       task)
         collect_task_env_names "$task_id"
@@ -320,18 +349,21 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
       workflow)
         collect_workflow_env_names "$workflow_id"
         ;;
-    esac | ${pkgs.coreutils}/bin/sort -u | json_object_from_named_env_values
+    esac | ${pkgs.coreutils}/bin/sort -u > "$env_names_file"
+
+    env_file="$(mktemp "''${TMPDIR:-/tmp}/nixfied-run-id-env.XXXXXX")" || return 1
+    if ! write_name_value_tsv_file "$env_file" < "$env_names_file"; then
+      rm -f "$env_file" "$env_names_file"
+      return 1
+    fi
+    rm -f "$env_names_file"
+    printf '%s' "$env_file"
   }
 
   event_detail_signal_json() {
     local reason="$1"
     local signal_name="$2"
-
-    printf '{'
-    printf '"kind":%s' "$(json_quote_string "controlSignal")"
-    printf ',"reason":%s' "$(json_quote_string "$reason")"
-    printf ',"signal":%s' "$(json_quote_string "$signal_name")"
-    printf '}'
+    kernel_event_detail controlSignal --reason "$reason" --signal "$signal_name"
   }
 
   compute_run_id() {
@@ -347,7 +379,7 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
 
     local slot_value
     local env_value
-    local pass_through_env_json
+    local pass_through_env_file
     local run_input
     local run_base
     local run_id
@@ -358,9 +390,13 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
 
     slot_value="''${!slot_var:-$slot_default}"
     env_value="''${!env_var:-$env_default}"
-    pass_through_env_json="$(run_id_pass_through_env_json "$run_kind" "$workflow_id" "$task_id")"
+    pass_through_env_file="$(run_id_pass_through_env_file "$run_kind" "$workflow_id" "$task_id")" || return 1
 
-    run_input="$(canonical_run_id_envelope "$run_kind" "$workflow_id" "$task_id" "$slot_value" "$env_value" "$pass_through_env_json" "$@")"
+    run_input="$(kernel_run_id_envelope "$run_kind" "$workflow_id" "$task_id" "$slot_value" "$env_value" "$pass_through_env_file" "$@")" || {
+      rm -f "$pass_through_env_file"
+      return 1
+    }
+    rm -f "$pass_through_env_file"
     run_base="$(sha256_text "$run_input")"
     run_id="run-''${run_base:0:24}"
     RUN_SUFFIX_REASON=""
@@ -572,21 +608,15 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
     local execution_mode="$6"
     local process_mode="$7"
     local ephemeral_enabled="$8"
-    local args_json="$9"
+    shift 8
 
     local run_file
     local lock_file
     local lock_fd
-    local args_tmp
 
     run_file="$(run_file_for "$run_id")"
     lock_file="$(run_lock_for "$run_id")"
     lock_fd="$(registry_lock_acquire "$lock_file" "orchestrator-create-run-record:$run_id" 30)" || return 1
-    args_tmp="$(mktemp "$run_file.args.XXXXXX")" || {
-      registry_lock_release "$lock_fd" "$lock_file"
-      return 1
-    }
-    printf '%s\n' "$args_json" > "$args_tmp"
     if [ "$ephemeral_enabled" = "1" ]; then
       ephemeral_enabled="true"
     else
@@ -603,12 +633,10 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
       "$execution_mode" \
       "$process_mode" \
       "$ephemeral_enabled" \
-      "$args_tmp" >/dev/null; then
-      rm -f "$args_tmp"
+      -- "$@" >/dev/null; then
       registry_lock_release "$lock_fd" "$lock_file"
       return 1
     fi
-    rm -f "$args_tmp"
     registry_lock_release "$lock_fd" "$lock_file"
 
   }
@@ -1110,7 +1138,6 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
     local ephemeral_enabled="0"
     local run_id
     local attempt_id
-    local args_json
     local -a run_id_args
     run_id_args=()
 
@@ -1153,8 +1180,7 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
     if [ -n "$MACHINE_RUN_ID_FILE" ]; then
       write_text_file_atomic "$MACHINE_RUN_ID_FILE" "$run_id"
     fi
-    args_json="$(call_with_array_args FORWARD_ARGS positional_args_json)"
-    create_run_record "$run_id" "$attempt_id" "run-task" "$workflow_ref" "$task_id" "$execution_mode" "$PROCESS_MODE" "$ephemeral_enabled" "$args_json" || {
+    call_with_array_args FORWARD_ARGS create_run_record "$run_id" "$attempt_id" "run-task" "$workflow_ref" "$task_id" "$execution_mode" "$PROCESS_MODE" "$ephemeral_enabled" || {
       deactivate_run_id "$run_id"
       return 1
     }
@@ -1191,7 +1217,6 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
     local mode="workflow"
     local run_id
     local attempt_id
-    local args_json
     local ephemeral_enabled
     local -a run_id_args
     run_id_args=()
@@ -1218,8 +1243,7 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
     if [ -n "$MACHINE_RUN_ID_FILE" ]; then
       write_text_file_atomic "$MACHINE_RUN_ID_FILE" "$run_id"
     fi
-    args_json="$(call_with_array_args FORWARD_ARGS positional_args_json)"
-    create_run_record "$run_id" "$attempt_id" "run-workflow" "$workflow_id" "" "$mode" "$PROCESS_MODE" "$ephemeral_enabled" "$args_json" || {
+    call_with_array_args FORWARD_ARGS create_run_record "$run_id" "$attempt_id" "run-workflow" "$workflow_id" "" "$mode" "$PROCESS_MODE" "$ephemeral_enabled" || {
       deactivate_run_id "$run_id"
       return 1
     }

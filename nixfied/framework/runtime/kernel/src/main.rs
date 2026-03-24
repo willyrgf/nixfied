@@ -53,6 +53,16 @@ fn run() -> Result<(), String> {
             }
             validate_exit_command(&plan_path, &exit_code)
         }
+        "run-id" => {
+            let subcommand = args.next().ok_or_else(usage)?;
+            let values = args.collect::<Vec<_>>();
+            run_id_command(&subcommand, &values)
+        }
+        "event-detail" => {
+            let subcommand = args.next().ok_or_else(usage)?;
+            let values = args.collect::<Vec<_>>();
+            event_detail_command(&subcommand, &values)
+        }
         "run-record" => {
             let subcommand = args.next().ok_or_else(usage)?;
             let values = args.collect::<Vec<_>>();
@@ -97,9 +107,11 @@ fn usage() -> String {
         "  validate-input <plan-file> <env|args> <export-file> [-- <args...>]",
         "  validate-scalar <spec-file> <value>",
         "  validate-exit <plan-file> <exit-code>",
+        "  run-id <envelope> ...",
+        "  event-detail <render> ...",
         "  run-record <create|transition> ...",
         "  registry <append|replay> ...",
-        "  summary <write|render-human> ...",
+        "  summary <write|compose|render-human> ...",
         "  adapter decode <kind> ...",
         "  probe evaluate <plan-file> <payload-file> [export-file]",
         "  machine-output run <plan-file> [-- <args...>]",
@@ -209,6 +221,231 @@ fn validate_exit_command(plan_path: &str, exit_code_text: &str) -> Result<(), St
     }
 }
 
+fn run_id_command(subcommand: &str, values: &[String]) -> Result<(), String> {
+    match subcommand {
+        "envelope" => run_id_envelope_command(values),
+        other => Err(format!("unknown run-id subcommand: {}", other)),
+    }
+}
+
+fn run_id_envelope_command(values: &[String]) -> Result<(), String> {
+    if values.len() < 8 {
+        return Err(
+            "usage: nixfied-kernel run-id envelope <model-eval-hash> <runtime-hash> <run-kind> <workflow-id> <task-id> <slot> <env> <pass-through-env-file> [-- <args...>]"
+                .to_string(),
+        );
+    }
+
+    let pass_through_env =
+        parse_tab_separated_name_value_file(&values[7], "run-id pass-through env")?;
+    let pass_through_env_json = JsonValue::Object(
+        pass_through_env
+            .into_iter()
+            .map(|(key, value)| (key, JsonValue::String(value)))
+            .collect(),
+    );
+    let argv = strip_passthrough_separator(&values[8..])
+        .iter()
+        .map(|value| JsonValue::String(value.clone()))
+        .collect::<Vec<_>>();
+    let envelope = JsonValue::Object(BTreeMap::from([
+        (
+            "model_eval_hash".to_string(),
+            JsonValue::String(values[0].clone()),
+        ),
+        (
+            "runtime_hash".to_string(),
+            JsonValue::String(values[1].clone()),
+        ),
+        ("run_kind".to_string(), JsonValue::String(values[2].clone())),
+        ("workflow_id".to_string(), nullable_string_value(&values[3])),
+        ("task_id".to_string(), nullable_string_value(&values[4])),
+        ("slot".to_string(), JsonValue::String(values[5].clone())),
+        ("env".to_string(), JsonValue::String(values[6].clone())),
+        ("pass_through_env".to_string(), pass_through_env_json),
+        ("argv".to_string(), JsonValue::Array(argv)),
+    ]));
+
+    println!("{}", render_json_compact(&envelope));
+    Ok(())
+}
+
+fn event_detail_command(subcommand: &str, values: &[String]) -> Result<(), String> {
+    match subcommand {
+        "render" => event_detail_render_command(values),
+        other => Err(format!("unknown event-detail subcommand: {}", other)),
+    }
+}
+
+fn event_detail_render_command(values: &[String]) -> Result<(), String> {
+    let kind = values.first().ok_or_else(|| {
+        "usage: nixfied-kernel event-detail render <kind> [--field value ...]".to_string()
+    })?;
+
+    let mut event_type = None;
+    let mut command_name = None;
+    let mut project_id = None;
+    let mut service = None;
+    let mut slot = None;
+    let mut env_name = None;
+    let mut profile = None;
+    let mut pid = None;
+    let mut pgid = None;
+    let mut plan_id = None;
+    let mut unit_id = None;
+    let mut attempt = None;
+    let mut owner_scope = None;
+    let mut reuse_policy = None;
+    let mut discovery_scope = None;
+    let mut ephemeral_root = None;
+    let mut readiness_health = None;
+    let mut readiness_ready = None;
+    let mut last_error = None;
+    let mut wait_reason = None;
+    let mut log_path = None;
+    let mut mode = None;
+    let mut suffix_reason = None;
+    let mut produces = None;
+    let mut exit_code = None;
+    let mut reason = None;
+    let mut dependency = None;
+    let mut service_name = None;
+    let mut signal = None;
+    let mut missing = None;
+    let mut run_id = None;
+    let mut workflow_id = None;
+    let mut task_id = None;
+    let mut target = None;
+    let mut index = 1usize;
+
+    while index < values.len() {
+        let flag = values[index].as_str();
+        index += 1;
+        let value = next_flag_value(values, &mut index, flag)?;
+        match flag {
+            "--event-type" => event_type = optional_string_value(&value),
+            "--command-name" => command_name = optional_string_value(&value),
+            "--project-id" => project_id = optional_string_value(&value),
+            "--service" => service = optional_string_value(&value),
+            "--slot" => slot = optional_string_value(&value),
+            "--env" => env_name = optional_string_value(&value),
+            "--profile" => profile = optional_string_value(&value),
+            "--pid" => pid = parse_optional_i64(&value, "event-detail pid")?,
+            "--pgid" => pgid = parse_optional_i64(&value, "event-detail pgid")?,
+            "--plan-id" => plan_id = optional_string_value(&value),
+            "--unit-id" => unit_id = optional_string_value(&value),
+            "--attempt" => attempt = parse_optional_i64(&value, "event-detail attempt")?,
+            "--owner-scope" => owner_scope = optional_string_value(&value),
+            "--reuse-policy" => reuse_policy = optional_string_value(&value),
+            "--discovery-scope" => discovery_scope = optional_string_value(&value),
+            "--ephemeral-root" => ephemeral_root = optional_string_value(&value),
+            "--readiness-health" => {
+                readiness_health =
+                    parse_optional_bool_text(&value, "event-detail readiness-health")?
+            }
+            "--readiness-ready" => {
+                readiness_ready = parse_optional_bool_text(&value, "event-detail readiness-ready")?
+            }
+            "--last-error" => last_error = optional_string_value(&value),
+            "--wait-reason" => wait_reason = optional_string_value(&value),
+            "--log-path" => log_path = optional_string_value(&value),
+            "--mode" => mode = optional_string_value(&value),
+            "--suffix-reason" => suffix_reason = optional_string_value(&value),
+            "--produces-json" => {
+                produces = Some(
+                    parse_json(&value)
+                        .map_err(|err| format!("event-detail produces json is invalid: {}", err))?,
+                )
+            }
+            "--exit-code" => exit_code = parse_optional_i64(&value, "event-detail exit-code")?,
+            "--reason" => reason = optional_string_value(&value),
+            "--dependency" => dependency = optional_string_value(&value),
+            "--service-name" => service_name = optional_string_value(&value),
+            "--signal" => signal = optional_string_value(&value),
+            "--missing" => missing = optional_string_value(&value),
+            "--run-id" => run_id = optional_string_value(&value),
+            "--workflow-id" => workflow_id = optional_string_value(&value),
+            "--task-id" => task_id = optional_string_value(&value),
+            "--target" => target = optional_string_value(&value),
+            other => return Err(format!("unknown event-detail arg: {}", other)),
+        }
+    }
+
+    let mut fields = BTreeMap::new();
+    fields.insert("kind".to_string(), JsonValue::String(kind.clone()));
+
+    match kind.as_str() {
+        "slotLifecycle" => {
+            insert_optional_string_field(&mut fields, "eventType", event_type);
+            insert_optional_string_field(&mut fields, "commandName", command_name);
+            insert_optional_string_field(&mut fields, "projectId", project_id);
+            insert_optional_string_field(&mut fields, "slot", slot);
+            insert_optional_string_field(&mut fields, "env", env_name);
+            insert_optional_string_field(&mut fields, "profile", profile);
+            insert_optional_number_field(&mut fields, "pid", pid);
+            insert_optional_number_field(&mut fields, "pgid", pgid);
+            insert_optional_string_field(&mut fields, "planId", plan_id);
+            insert_optional_string_field(&mut fields, "unitId", unit_id);
+            insert_optional_number_field(&mut fields, "attempt", attempt);
+            if readiness_health.is_some() || readiness_ready.is_some() || last_error.is_some() {
+                let mut readiness = BTreeMap::new();
+                insert_optional_bool_field(&mut readiness, "healthOk", readiness_health);
+                insert_optional_bool_field(&mut readiness, "readyOk", readiness_ready);
+                insert_optional_string_field(&mut readiness, "lastError", last_error);
+                fields.insert("readiness".to_string(), JsonValue::Object(readiness));
+            }
+            insert_optional_string_field(&mut fields, "waitReason", wait_reason);
+            insert_optional_string_field(&mut fields, "logPath", log_path);
+            insert_optional_string_field(&mut fields, "mode", mode);
+            insert_optional_string_field(&mut fields, "suffixReason", suffix_reason);
+            insert_optional_json_field(&mut fields, "produces", produces);
+            insert_optional_number_field(&mut fields, "exitCode", exit_code);
+        }
+        "serviceLifecycle" => {
+            insert_optional_string_field(&mut fields, "eventType", event_type);
+            insert_optional_string_field(&mut fields, "service", service);
+            insert_optional_string_field(&mut fields, "commandName", command_name);
+            insert_optional_string_field(&mut fields, "ownerScope", owner_scope);
+            insert_optional_string_field(&mut fields, "reusePolicy", reuse_policy);
+            insert_optional_string_field(&mut fields, "discoveryScope", discovery_scope);
+            insert_optional_string_field(&mut fields, "ephemeralRoot", ephemeral_root);
+            insert_optional_string_field(&mut fields, "waitReason", wait_reason);
+            insert_optional_string_field(&mut fields, "logPath", log_path);
+            insert_optional_json_field(&mut fields, "produces", produces);
+            insert_optional_number_field(&mut fields, "exitCode", exit_code);
+            insert_optional_string_field(&mut fields, "reason", reason);
+            insert_optional_string_field(&mut fields, "dependency", dependency);
+            insert_optional_string_field(&mut fields, "serviceName", service_name);
+            insert_optional_string_field(&mut fields, "signal", signal);
+            insert_optional_string_field(&mut fields, "missing", missing);
+        }
+        "workflowLifecycle" => {
+            insert_optional_string_field(&mut fields, "commandName", command_name);
+            insert_optional_string_field(&mut fields, "workflowId", workflow_id);
+            insert_optional_string_field(&mut fields, "runId", run_id);
+            insert_optional_number_field(&mut fields, "attempt", attempt);
+        }
+        "taskLifecycle" => {
+            insert_optional_string_field(&mut fields, "commandName", command_name);
+            insert_optional_string_field(&mut fields, "taskId", task_id);
+            insert_optional_string_field(&mut fields, "runId", run_id);
+            insert_optional_number_field(&mut fields, "attempt", attempt);
+            insert_optional_number_field(&mut fields, "exitCode", exit_code);
+            insert_optional_string_field(&mut fields, "reason", reason);
+        }
+        "controlSignal" => {
+            insert_optional_string_field(&mut fields, "signal", signal);
+            insert_optional_string_field(&mut fields, "reason", reason);
+            insert_optional_string_field(&mut fields, "target", target);
+            insert_optional_string_field(&mut fields, "runId", run_id);
+        }
+        other => return Err(format!("unknown event-detail kind: {}", other)),
+    }
+
+    println!("{}", render_json_compact(&JsonValue::Object(fields)));
+    Ok(())
+}
+
 fn load_command_runtime_plan(path: &str) -> Result<CommandRuntimePlan, String> {
     let text = read_text(path)?;
     let value = parse_json(&text)
@@ -280,9 +517,7 @@ fn load_scalar_spec(path: &str) -> Result<ScalarSpec, String> {
 
 fn parse_scalar_spec(value: &JsonValue) -> Result<ScalarSpec, String> {
     Ok(ScalarSpec {
-        type_name: object_string(value, "type")
-            .unwrap_or("string")
-            .to_string(),
+        type_name: object_string(value, "type").unwrap_or("string").to_string(),
         values: array_strings(value, "values"),
         min: object_field(value, "min").and_then(json_value_to_i64),
         max: object_field(value, "max").and_then(json_value_to_i64),
@@ -459,7 +694,10 @@ fn validate_input_args(
             seen.insert(spec.name.clone());
             exports.push((export_arg_name(&spec.name), value.clone()));
         } else if spec.required {
-            return Err(format!("missing required positional arg name={}", spec.name));
+            return Err(format!(
+                "missing required positional arg name={}",
+                spec.name
+            ));
         }
     }
 
@@ -537,20 +775,18 @@ fn resolve_env_spec_value(spec: &CommandEnvSpec) -> Result<Option<String>, Strin
         }
     }
 
-    Ok(
-        canonical_non_empty
-            .cloned()
-            .or_else(|| first_alias.map(|(_, value)| value.clone()))
-            .or_else(|| spec.default.clone()),
-    )
+    Ok(canonical_non_empty
+        .cloned()
+        .or_else(|| first_alias.map(|(_, value)| value.clone()))
+        .or_else(|| spec.default.clone()))
 }
 
 fn validate_scalar_value(spec: &ScalarSpec, value: &str, label: &str) -> Result<(), String> {
     match spec.type_name.as_str() {
         "string" => {}
         "bool" => match value {
-            "1" | "0" | "true" | "false" | "TRUE" | "FALSE" | "yes" | "YES" | "no"
-            | "NO" | "on" | "ON" => {}
+            "1" | "0" | "true" | "false" | "TRUE" | "FALSE" | "yes" | "YES" | "no" | "NO"
+            | "on" | "ON" => {}
             _ => return Err(format!("{} must be bool (got '{}')", label, value)),
         },
         "int" => {
@@ -576,12 +812,18 @@ fn validate_scalar_value(spec: &ScalarSpec, value: &str, label: &str) -> Result<
         }
         "pathAbs" => {
             if !value.starts_with('/') {
-                return Err(format!("{} must be an absolute path (got '{}')", label, value));
+                return Err(format!(
+                    "{} must be an absolute path (got '{}')",
+                    label, value
+                ));
             }
         }
         "pathRel" => {
             if value.is_empty() || value.starts_with('/') {
-                return Err(format!("{} must be a relative path (got '{}')", label, value));
+                return Err(format!(
+                    "{} must be a relative path (got '{}')",
+                    label, value
+                ));
             }
         }
         "port" => {
@@ -603,12 +845,18 @@ fn validate_scalar_value(spec: &ScalarSpec, value: &str, label: &str) -> Result<
 fn validate_numeric_range(value: i64, spec: &ScalarSpec, label: &str) -> Result<(), String> {
     if let Some(minimum) = spec.min {
         if value < minimum {
-            return Err(format!("{} must be >= {} (got '{}')", label, minimum, value));
+            return Err(format!(
+                "{} must be >= {} (got '{}')",
+                label, minimum, value
+            ));
         }
     }
     if let Some(maximum) = spec.max {
         if value > maximum {
-            return Err(format!("{} must be <= {} (got '{}')", label, maximum, value));
+            return Err(format!(
+                "{} must be <= {} (got '{}')",
+                label, maximum, value
+            ));
         }
     }
     Ok(())
@@ -699,7 +947,9 @@ fn json_value_to_plain_string(value: &JsonValue) -> Option<String> {
 
 fn json_value_to_i64(value: &JsonValue) -> Option<i64> {
     match value {
-        JsonValue::Number(number) if number.integer => number.int_value.and_then(|value| i64::try_from(value).ok()),
+        JsonValue::Number(number) if number.integer => {
+            number.int_value.and_then(|value| i64::try_from(value).ok())
+        }
         JsonValue::String(value) => value.parse::<i64>().ok(),
         _ => None,
     }
@@ -771,9 +1021,9 @@ fn run_record_command(subcommand: &str, values: &[String]) -> Result<(), String>
 }
 
 fn run_record_create_command(values: &[String]) -> Result<(), String> {
-    if values.len() != 11 {
+    if values.len() < 10 {
         return Err(
-            "usage: nixfied-kernel run-record create <bundle-file> <run-file> <run-id> <attempt-id> <command> <workflow-id> <task-id> <execution-mode> <process-mode> <ephemeral-enabled> <args-file>"
+            "usage: nixfied-kernel run-record create <bundle-file> <run-file> <run-id> <attempt-id> <command> <workflow-id> <task-id> <execution-mode> <process-mode> <ephemeral-enabled> [-- <args...>]"
                 .to_string(),
         );
     }
@@ -781,17 +1031,31 @@ fn run_record_create_command(values: &[String]) -> Result<(), String> {
     let bundle_path = &values[0];
     let run_file = &values[1];
     let now = current_utc_timestamp()?;
-    let args = parse_json_file(&values[10], "run-record args file")?;
+    let args = JsonValue::Array(
+        strip_passthrough_separator(&values[10..])
+            .iter()
+            .map(|value| JsonValue::String(value.clone()))
+            .collect(),
+    );
 
     let history = JsonValue::Array(vec![run_record_history_entry("queued", &now)]);
     let payload = JsonValue::Object(BTreeMap::from([
         ("run_id".to_string(), JsonValue::String(values[2].clone())),
-        ("attempt_id".to_string(), JsonValue::String(values[3].clone())),
+        (
+            "attempt_id".to_string(),
+            JsonValue::String(values[3].clone()),
+        ),
         ("command".to_string(), JsonValue::String(values[4].clone())),
         ("workflow_id".to_string(), nullable_string_value(&values[5])),
         ("task_id".to_string(), nullable_string_value(&values[6])),
-        ("execution_mode".to_string(), JsonValue::String(values[7].clone())),
-        ("process_mode".to_string(), JsonValue::String(values[8].clone())),
+        (
+            "execution_mode".to_string(),
+            JsonValue::String(values[7].clone()),
+        ),
+        (
+            "process_mode".to_string(),
+            JsonValue::String(values[8].clone()),
+        ),
         (
             "ephemeral_enabled".to_string(),
             JsonValue::Bool(parse_bool_flag(&values[9])?),
@@ -809,7 +1073,10 @@ fn run_record_create_command(values: &[String]) -> Result<(), String> {
         ("history".to_string(), history),
     ]));
     let envelope = JsonValue::Object(BTreeMap::from([
-        ("kind".to_string(), JsonValue::String("run-record".to_string())),
+        (
+            "kind".to_string(),
+            JsonValue::String("run-record".to_string()),
+        ),
         (
             "version".to_string(),
             JsonValue::Number(JsonNumber::from_int(1)),
@@ -849,10 +1116,16 @@ fn run_record_transition_command(values: &[String]) -> Result<(), String> {
     payload_object.insert("state".to_string(), JsonValue::String(state.clone()));
     payload_object.insert("updated_at".to_string(), JsonValue::String(now.clone()));
     if let Some(pid) = pid {
-        payload_object.insert("pid".to_string(), JsonValue::Number(JsonNumber::from_int(pid)));
+        payload_object.insert(
+            "pid".to_string(),
+            JsonValue::Number(JsonNumber::from_int(pid)),
+        );
     }
     if let Some(pgid) = pgid {
-        payload_object.insert("pgid".to_string(), JsonValue::Number(JsonNumber::from_int(pgid)));
+        payload_object.insert(
+            "pgid".to_string(),
+            JsonValue::Number(JsonNumber::from_int(pgid)),
+        );
     }
     if payload_object
         .get("started_at")
@@ -936,7 +1209,10 @@ fn registry_append_command(values: &[String]) -> Result<(), String> {
                 ("attemptId".to_string(), nullable_string_value(&values[3])),
                 ("workflowId".to_string(), nullable_string_value(&values[4])),
                 ("taskId".to_string(), nullable_string_value(&values[5])),
-                ("seq".to_string(), JsonValue::Number(JsonNumber::from_int(seq))),
+                (
+                    "seq".to_string(),
+                    JsonValue::Number(JsonNumber::from_int(seq)),
+                ),
                 ("ts".to_string(), JsonValue::String(ts.clone())),
                 ("state".to_string(), JsonValue::String(values[6].clone())),
                 ("detail".to_string(), detail),
@@ -1015,6 +1291,7 @@ fn registry_replay_command(values: &[String]) -> Result<(), String> {
 fn summary_command(subcommand: &str, values: &[String]) -> Result<(), String> {
     match subcommand {
         "write" => summary_write_command(values),
+        "compose" => summary_compose_command(values),
         "render-human" => summary_render_human_command(values),
         other => Err(format!("unknown summary subcommand: {}", other)),
     }
@@ -1029,23 +1306,191 @@ fn summary_write_command(values: &[String]) -> Result<(), String> {
     }
 
     let input = parse_json_file(&values[2], "summary input file")?;
-    let envelope = if object_field(&input, "kind").is_some() && object_field(&input, "payload").is_some() {
-        input
-    } else {
-        JsonValue::Object(BTreeMap::from([
-            (
-                "kind".to_string(),
-                JsonValue::String("workflow-summary".to_string()),
-            ),
-            (
-                "version".to_string(),
-                JsonValue::Number(JsonNumber::from_int(1)),
-            ),
-            ("payload".to_string(), input),
-        ]))
-    };
+    let envelope =
+        if object_field(&input, "kind").is_some() && object_field(&input, "payload").is_some() {
+            input
+        } else {
+            JsonValue::Object(BTreeMap::from([
+                (
+                    "kind".to_string(),
+                    JsonValue::String("workflow-summary".to_string()),
+                ),
+                (
+                    "version".to_string(),
+                    JsonValue::Number(JsonNumber::from_int(1)),
+                ),
+                ("payload".to_string(), input),
+            ]))
+        };
     validate_and_write_json(&values[0], "runtime.summary", &values[1], &envelope)?;
     println!("OK: summary write");
+    Ok(())
+}
+
+fn summary_compose_command(values: &[String]) -> Result<(), String> {
+    if values.len() != 24 {
+        return Err(
+            "usage: nixfied-kernel summary compose <bundle-file> <summary-file> <run-id> <attempt-id> <workflow-id> <mode> <exit-code> <started-at> <finished-at> <duration-seconds> <passed> <failed> <skipped> <canceled> <steps-file> <total-duration> <setup-duration> <steps-duration> <teardown-duration> <accounted-duration> <untracked-duration> <max-workers|empty> <peak-workers|empty> <canceled-count|empty>"
+                .to_string(),
+        );
+    }
+
+    let steps = parse_summary_steps_file(&values[14])?;
+    let payload = JsonValue::Object(BTreeMap::from([
+        ("run_id".to_string(), JsonValue::String(values[2].clone())),
+        (
+            "attempt_id".to_string(),
+            JsonValue::String(values[3].clone()),
+        ),
+        (
+            "workflow_id".to_string(),
+            JsonValue::String(values[4].clone()),
+        ),
+        ("mode".to_string(), JsonValue::String(values[5].clone())),
+        (
+            "exit_code".to_string(),
+            JsonValue::Number(JsonNumber::from_int(parse_i64_text(
+                &values[6],
+                "summary compose exit-code",
+            )?)),
+        ),
+        (
+            "started_at".to_string(),
+            JsonValue::String(values[7].clone()),
+        ),
+        (
+            "finished_at".to_string(),
+            JsonValue::String(values[8].clone()),
+        ),
+        (
+            "duration_seconds".to_string(),
+            JsonValue::Number(JsonNumber::from_int(parse_i64_text(
+                &values[9],
+                "summary compose duration-seconds",
+            )?)),
+        ),
+        (
+            "counts".to_string(),
+            JsonValue::Object(BTreeMap::from([
+                (
+                    "passed".to_string(),
+                    JsonValue::Number(JsonNumber::from_int(parse_i64_text(
+                        &values[10],
+                        "summary compose passed",
+                    )?)),
+                ),
+                (
+                    "failed".to_string(),
+                    JsonValue::Number(JsonNumber::from_int(parse_i64_text(
+                        &values[11],
+                        "summary compose failed",
+                    )?)),
+                ),
+                (
+                    "skipped".to_string(),
+                    JsonValue::Number(JsonNumber::from_int(parse_i64_text(
+                        &values[12],
+                        "summary compose skipped",
+                    )?)),
+                ),
+                (
+                    "canceled".to_string(),
+                    JsonValue::Number(JsonNumber::from_int(parse_i64_text(
+                        &values[13],
+                        "summary compose canceled",
+                    )?)),
+                ),
+            ])),
+        ),
+        ("steps".to_string(), JsonValue::Array(steps)),
+        (
+            "timing".to_string(),
+            JsonValue::Object(BTreeMap::from([
+                (
+                    "total_duration".to_string(),
+                    JsonValue::Number(JsonNumber::from_int(parse_i64_text(
+                        &values[15],
+                        "summary compose total-duration",
+                    )?)),
+                ),
+                (
+                    "setup_duration".to_string(),
+                    JsonValue::Number(JsonNumber::from_int(parse_i64_text(
+                        &values[16],
+                        "summary compose setup-duration",
+                    )?)),
+                ),
+                (
+                    "steps_duration".to_string(),
+                    JsonValue::Number(JsonNumber::from_int(parse_i64_text(
+                        &values[17],
+                        "summary compose steps-duration",
+                    )?)),
+                ),
+                (
+                    "teardown_duration".to_string(),
+                    JsonValue::Number(JsonNumber::from_int(parse_i64_text(
+                        &values[18],
+                        "summary compose teardown-duration",
+                    )?)),
+                ),
+                (
+                    "accounted_duration".to_string(),
+                    JsonValue::Number(JsonNumber::from_int(parse_i64_text(
+                        &values[19],
+                        "summary compose accounted-duration",
+                    )?)),
+                ),
+                (
+                    "untracked_duration".to_string(),
+                    JsonValue::Number(JsonNumber::from_int(parse_i64_text(
+                        &values[20],
+                        "summary compose untracked-duration",
+                    )?)),
+                ),
+                (
+                    "parallelism".to_string(),
+                    JsonValue::Object(BTreeMap::from([
+                        (
+                            "max_workers".to_string(),
+                            optional_i64_json_value(parse_optional_i64(
+                                &values[21],
+                                "summary compose max-workers",
+                            )?),
+                        ),
+                        (
+                            "peak_workers".to_string(),
+                            optional_i64_json_value(parse_optional_i64(
+                                &values[22],
+                                "summary compose peak-workers",
+                            )?),
+                        ),
+                        (
+                            "canceled_count".to_string(),
+                            optional_i64_json_value(parse_optional_i64(
+                                &values[23],
+                                "summary compose canceled-count",
+                            )?),
+                        ),
+                    ])),
+                ),
+            ])),
+        ),
+    ]));
+    let envelope = JsonValue::Object(BTreeMap::from([
+        (
+            "kind".to_string(),
+            JsonValue::String("workflow-summary".to_string()),
+        ),
+        (
+            "version".to_string(),
+            JsonValue::Number(JsonNumber::from_int(1)),
+        ),
+        ("payload".to_string(), payload),
+    ]));
+
+    validate_and_write_json(&values[0], "runtime.summary", &values[1], &envelope)?;
+    println!("OK: summary compose");
     Ok(())
 }
 
@@ -1101,9 +1546,18 @@ fn summary_render_human_command(values: &[String]) -> Result<(), String> {
     println!("Total time: {}", format_duration_seconds(total_duration));
     println!(
         "INFO: Time breakdown setup={}s steps={}s teardown={}s accounted={}s untracked={}s",
-        timing.get("setup_duration").and_then(json_value_to_i64).unwrap_or(0),
-        timing.get("steps_duration").and_then(json_value_to_i64).unwrap_or(0),
-        timing.get("teardown_duration").and_then(json_value_to_i64).unwrap_or(0),
+        timing
+            .get("setup_duration")
+            .and_then(json_value_to_i64)
+            .unwrap_or(0),
+        timing
+            .get("steps_duration")
+            .and_then(json_value_to_i64)
+            .unwrap_or(0),
+        timing
+            .get("teardown_duration")
+            .and_then(json_value_to_i64)
+            .unwrap_or(0),
         timing
             .get("accounted_duration")
             .and_then(json_value_to_i64)
@@ -1200,6 +1654,141 @@ fn parse_optional_i64(value: &str, label: &str) -> Result<Option<i64>, String> {
     } else {
         parse_i64_text(value, label).map(Some)
     }
+}
+
+fn parse_optional_bool_text(value: &str, label: &str) -> Result<Option<bool>, String> {
+    match value {
+        "" | "null" => Ok(None),
+        "1" | "true" | "TRUE" => Ok(Some(true)),
+        "0" | "false" | "FALSE" => Ok(Some(false)),
+        other => Err(format!("{} must be bool or empty (got '{}')", label, other)),
+    }
+}
+
+fn next_flag_value(values: &[String], index: &mut usize, flag: &str) -> Result<String, String> {
+    let value = values
+        .get(*index)
+        .ok_or_else(|| format!("missing value for {}", flag))?
+        .clone();
+    *index += 1;
+    Ok(value)
+}
+
+fn insert_optional_string_field(
+    fields: &mut BTreeMap<String, JsonValue>,
+    key: &str,
+    value: Option<String>,
+) {
+    if let Some(value) = value {
+        fields.insert(key.to_string(), JsonValue::String(value));
+    }
+}
+
+fn insert_optional_number_field(
+    fields: &mut BTreeMap<String, JsonValue>,
+    key: &str,
+    value: Option<i64>,
+) {
+    if let Some(value) = value {
+        fields.insert(
+            key.to_string(),
+            JsonValue::Number(JsonNumber::from_int(value)),
+        );
+    }
+}
+
+fn insert_optional_bool_field(
+    fields: &mut BTreeMap<String, JsonValue>,
+    key: &str,
+    value: Option<bool>,
+) {
+    if let Some(value) = value {
+        fields.insert(key.to_string(), JsonValue::Bool(value));
+    }
+}
+
+fn insert_optional_json_field(
+    fields: &mut BTreeMap<String, JsonValue>,
+    key: &str,
+    value: Option<JsonValue>,
+) {
+    if let Some(value) = value {
+        fields.insert(key.to_string(), value);
+    }
+}
+
+fn optional_i64_json_value(value: Option<i64>) -> JsonValue {
+    match value {
+        Some(value) => JsonValue::Number(JsonNumber::from_int(value)),
+        None => JsonValue::Null,
+    }
+}
+
+fn parse_tab_separated_name_value_file(
+    path: &str,
+    label: &str,
+) -> Result<Vec<(String, String)>, String> {
+    let text = read_text(path)?;
+    let mut entries = Vec::new();
+    for line in text.lines() {
+        if line.is_empty() {
+            continue;
+        }
+        let (name, value) = line.split_once('\t').ok_or_else(|| {
+            format!(
+                "{} {} must contain tab-separated name/value pairs",
+                label, path
+            )
+        })?;
+        entries.push((name.to_string(), value.to_string()));
+    }
+    Ok(entries)
+}
+
+fn parse_summary_steps_file(path: &str) -> Result<Vec<JsonValue>, String> {
+    let text = read_text(path)?;
+    let mut steps = Vec::new();
+    for line in text.lines() {
+        if line.is_empty() {
+            continue;
+        }
+        let parts = line.split('\t').collect::<Vec<_>>();
+        if parts.len() != 8 {
+            return Err(format!(
+                "summary steps file {} must contain 8 tab-separated fields per line",
+                path
+            ));
+        }
+        steps.push(JsonValue::Object(BTreeMap::from([
+            ("name".to_string(), JsonValue::String(parts[0].to_string())),
+            (
+                "status".to_string(),
+                JsonValue::String(parts[1].to_string()),
+            ),
+            ("state".to_string(), JsonValue::String(parts[3].to_string())),
+            (
+                "duration".to_string(),
+                JsonValue::Number(JsonNumber::from_int(parse_i64_text(
+                    parts[2],
+                    "summary step duration",
+                )?)),
+            ),
+            (
+                "order".to_string(),
+                JsonValue::Number(JsonNumber::from_int(parse_i64_text(
+                    parts[4],
+                    "summary step order",
+                )?)),
+            ),
+            ("workflow_id".to_string(), nullable_string_value(parts[5])),
+            ("reason".to_string(), nullable_string_value(parts[6])),
+            (
+                "exit_code".to_string(),
+                optional_i64_json_value(parse_optional_i64(parts[7], "summary step exit_code")?),
+            ),
+        ])));
+    }
+    Ok(steps)
 }
 
 fn append_line(path: &str, line: &str) -> Result<(), String> {
@@ -1325,8 +1914,7 @@ fn adapter_decode_supervisor_status(values: &[String]) -> Result<(), String> {
 fn adapter_decode_helios_finalized_slot(values: &[String]) -> Result<(), String> {
     if values.len() != 1 {
         return Err(
-            "usage: nixfied-kernel adapter decode helios-finalized-slot <json-file>"
-                .to_string(),
+            "usage: nixfied-kernel adapter decode helios-finalized-slot <json-file>".to_string(),
         );
     }
     let payload = parse_json_file(&values[0], "helios finalized payload")?;
@@ -1345,7 +1933,10 @@ fn adapter_decode_helios_checkpoint_root(values: &[String]) -> Result<(), String
                 .to_string(),
         );
     }
-    let empty_ok = values.get(1).map(|value| value == "--empty-ok").unwrap_or(false);
+    let empty_ok = values
+        .get(1)
+        .map(|value| value == "--empty-ok")
+        .unwrap_or(false);
     let payload = parse_json_file(&values[0], "helios checkpoint payload")?;
     let selected = resolve_json_path(&payload, ".data.root");
     match selected.and_then(JsonValue::as_string) {
@@ -1361,17 +1952,18 @@ fn adapter_decode_helios_checkpoint_root(values: &[String]) -> Result<(), String
 fn probe_command(subcommand: &str, values: &[String]) -> Result<(), String> {
     match subcommand {
         "evaluate" => probe_evaluate_command(values),
+        "jsonrpc" => probe_jsonrpc_command(values),
         other => Err(format!("unknown probe subcommand: {}", other)),
     }
 }
 
 fn probe_evaluate_command(values: &[String]) -> Result<(), String> {
-    let plan_path = values
-        .first()
-        .ok_or_else(|| "usage: nixfied-kernel probe evaluate <plan-file> <payload-file> [export-file]".to_string())?;
-    let payload_path = values
-        .get(1)
-        .ok_or_else(|| "usage: nixfied-kernel probe evaluate <plan-file> <payload-file> [export-file]".to_string())?;
+    let plan_path = values.first().ok_or_else(|| {
+        "usage: nixfied-kernel probe evaluate <plan-file> <payload-file> [export-file]".to_string()
+    })?;
+    let payload_path = values.get(1).ok_or_else(|| {
+        "usage: nixfied-kernel probe evaluate <plan-file> <payload-file> [export-file]".to_string()
+    })?;
     if values.len() > 3 {
         return Err(
             "usage: nixfied-kernel probe evaluate <plan-file> <payload-file> [export-file]"
@@ -1382,45 +1974,7 @@ fn probe_evaluate_command(values: &[String]) -> Result<(), String> {
     let export_path = values.get(2).map(|value| value.as_str());
     let plan = load_probe_plan(plan_path)?;
     let payload = parse_json_file(payload_path, "probe payload")?;
-    let result = resolve_json_path(&payload, ".result");
-    let mut exports = Vec::new();
-
-    match plan.probe_kind.as_str() {
-        "jsonrpc-result-present" => {
-            if matches!(result, Some(JsonValue::Null) | None) {
-                return Err("probe result is missing".to_string());
-            }
-        }
-        "jsonrpc-result-hex" => {
-            let value = result
-                .and_then(JsonValue::as_string)
-                .ok_or_else(|| "probe result must be a hex string".to_string())?;
-            if !is_hex_prefixed(value) {
-                return Err(format!("probe result must be hex, got {}", value));
-            }
-            let export_var = plan
-                .export_var
-                .clone()
-                .ok_or_else(|| "probe plan jsonrpc-result-hex requires exportVar".to_string())?;
-            exports.push((export_var, value.to_string()));
-        }
-        "jsonrpc-result-compact" => {
-            let value = result.ok_or_else(|| "probe result is missing".to_string())?;
-            if matches!(value, JsonValue::Null) {
-                return Err("probe result is missing".to_string());
-            }
-            let export_var = plan
-                .export_var
-                .clone()
-                .ok_or_else(|| "probe plan jsonrpc-result-compact requires exportVar".to_string())?;
-            exports.push((export_var, render_json_compact(value)));
-        }
-        "jsonrpc-result-bool-false" => match result {
-            Some(JsonValue::Bool(false)) => {}
-            _ => return Err("probe result must be false".to_string()),
-        },
-        other => return Err(format!("unknown probe evaluate kind: {}", other)),
-    }
+    let exports = probe_plan_exports(&plan, &payload)?;
 
     if let Some(export_path) = export_path {
         write_shell_exports(export_path, &exports)?;
@@ -1432,6 +1986,33 @@ fn probe_evaluate_command(values: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+fn probe_jsonrpc_command(values: &[String]) -> Result<(), String> {
+    if values.len() != 5 {
+        return Err(
+            "usage: nixfied-kernel probe jsonrpc <plan-file> <curl-bin> <url> <method> <max-time>"
+                .to_string(),
+        );
+    }
+
+    let max_time = parse_i64_text(&values[4], "probe jsonrpc max-time")?;
+    if max_time < 1 {
+        return Err(format!(
+            "probe jsonrpc max-time must be positive, got {}",
+            max_time
+        ));
+    }
+
+    let plan = load_probe_plan(&values[0])?;
+    let payload = request_jsonrpc_payload(&values[1], &values[2], &values[3], max_time)?;
+    let exports = probe_plan_exports(&plan, &payload)?;
+
+    if let Some((_, value)) = exports.first() {
+        println!("{}", value);
+    }
+
+    Ok(())
+}
+
 fn machine_output_command(subcommand: &str, values: &[String]) -> Result<(), String> {
     match subcommand {
         "run" => machine_output_run_command(values),
@@ -1440,9 +2021,9 @@ fn machine_output_command(subcommand: &str, values: &[String]) -> Result<(), Str
 }
 
 fn machine_output_run_command(values: &[String]) -> Result<(), String> {
-    let plan_path = values
-        .first()
-        .ok_or_else(|| "usage: nixfied-kernel machine-output run <plan-file> [-- <args...>]".to_string())?;
+    let plan_path = values.first().ok_or_else(|| {
+        "usage: nixfied-kernel machine-output run <plan-file> [-- <args...>]".to_string()
+    })?;
     let plan = load_machine_output_plan(plan_path)?;
     let remaining = values[1..].to_vec();
     let user_args = strip_passthrough_separator(&remaining).to_vec();
@@ -1451,17 +2032,9 @@ fn machine_output_run_command(values: &[String]) -> Result<(), String> {
     for (index, setup_program) in plan.setup_programs.iter().enumerate() {
         let output = run_captured_program(setup_program, &[], &[])?;
         if output.status.success() {
-            render_captured_logs(
-                "INFO",
-                &format!("setup app {}", index + 1),
-                &output,
-            );
+            render_captured_logs("INFO", &format!("setup app {}", index + 1), &output);
         } else {
-            render_captured_logs(
-                "ERROR",
-                &format!("setup app {}", index + 1),
-                &output,
-            );
+            render_captured_logs("ERROR", &format!("setup app {}", index + 1), &output);
             machine_output_fail(
                 &plan,
                 "setup",
@@ -1479,7 +2052,10 @@ fn machine_output_run_command(values: &[String]) -> Result<(), String> {
     let output = run_captured_program(
         &plan.target_program,
         &target_args,
-        &[("NIXFIED_MACHINE_OUTPUT_FILE".to_string(), payload_file.clone())],
+        &[(
+            "NIXFIED_MACHINE_OUTPUT_FILE".to_string(),
+            payload_file.clone(),
+        )],
     )?;
     if output.status.success() {
         render_captured_logs("INFO", "target app", &output);
@@ -1544,17 +2120,9 @@ fn machine_output_run_command(values: &[String]) -> Result<(), String> {
     for (index, teardown_program) in plan.teardown_programs.iter().enumerate() {
         let output = run_captured_program(teardown_program, &[], &[])?;
         if output.status.success() {
-            render_captured_logs(
-                "INFO",
-                &format!("teardown app {}", index + 1),
-                &output,
-            );
+            render_captured_logs("INFO", &format!("teardown app {}", index + 1), &output);
         } else {
-            render_captured_logs(
-                "ERROR",
-                &format!("teardown app {}", index + 1),
-                &output,
-            );
+            render_captured_logs("ERROR", &format!("teardown app {}", index + 1), &output);
             machine_output_fail(
                 &plan,
                 "teardown",
@@ -1568,6 +2136,105 @@ fn machine_output_run_command(values: &[String]) -> Result<(), String> {
 
     print!("{}", payload_text);
     Ok(())
+}
+
+fn request_jsonrpc_payload(
+    curl_bin: &str,
+    url: &str,
+    method: &str,
+    max_time: i64,
+) -> Result<JsonValue, String> {
+    let request_body = render_json_compact(&JsonValue::Object(BTreeMap::from([
+        ("jsonrpc".to_string(), JsonValue::String("2.0".to_string())),
+        ("id".to_string(), JsonValue::Number(JsonNumber::from_int(1))),
+        ("method".to_string(), JsonValue::String(method.to_string())),
+        ("params".to_string(), JsonValue::Array(Vec::new())),
+    ])));
+    let args = vec![
+        "-fsS".to_string(),
+        "--max-time".to_string(),
+        max_time.to_string(),
+        "-H".to_string(),
+        "content-type: application/json".to_string(),
+        "--data".to_string(),
+        request_body,
+        url.to_string(),
+    ];
+    let output = run_captured_program(curl_bin, &args, &[])?;
+
+    if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let detail = if !stderr.trim().is_empty() {
+            stderr.trim()
+        } else {
+            stdout.trim()
+        };
+        let exit_code = output.status.code().unwrap_or(1);
+        return Err(format!(
+            "probe jsonrpc request failed url={} method={} exit={}{}",
+            url,
+            method,
+            exit_code,
+            if detail.is_empty() {
+                String::new()
+            } else {
+                format!(" detail={}", detail)
+            }
+        ));
+    }
+
+    let response = String::from_utf8(output.stdout)
+        .map_err(|err| format!("probe jsonrpc response is not valid UTF-8: {}", err))?;
+    parse_json(&response)
+        .map_err(|err| format!("probe jsonrpc response is not valid JSON: {}", err))
+}
+
+fn probe_plan_exports(
+    plan: &ProbePlan,
+    payload: &JsonValue,
+) -> Result<Vec<(String, String)>, String> {
+    let result = resolve_json_path(payload, ".result");
+
+    match plan.probe_kind.as_str() {
+        "jsonrpc-result-present" => {
+            if matches!(result, Some(JsonValue::Null) | None) {
+                return Err("probe result is missing".to_string());
+            }
+            Ok(Vec::new())
+        }
+        "jsonrpc-result-hex" => {
+            let value = result
+                .and_then(JsonValue::as_string)
+                .ok_or_else(|| "probe result must be a hex string".to_string())?;
+            if !is_hex_prefixed(value) {
+                return Err(format!("probe result must be hex, got {}", value));
+            }
+            Ok(vec![(
+                plan.export_var.clone().ok_or_else(|| {
+                    "probe plan jsonrpc-result-hex requires exportVar".to_string()
+                })?,
+                value.to_string(),
+            )])
+        }
+        "jsonrpc-result-compact" => {
+            let value = result.ok_or_else(|| "probe result is missing".to_string())?;
+            if matches!(value, JsonValue::Null) {
+                return Err("probe result is missing".to_string());
+            }
+            Ok(vec![(
+                plan.export_var.clone().ok_or_else(|| {
+                    "probe plan jsonrpc-result-compact requires exportVar".to_string()
+                })?,
+                render_json_compact(value),
+            )])
+        }
+        "jsonrpc-result-bool-false" => match result {
+            Some(JsonValue::Bool(false)) => Ok(Vec::new()),
+            _ => Err("probe result must be false".to_string()),
+        },
+        other => Err(format!("unknown probe evaluate kind: {}", other)),
+    }
 }
 
 fn load_machine_output_plan(path: &str) -> Result<MachineOutputPlan, String> {
@@ -1655,7 +2322,10 @@ fn machine_output_fail(
         ),
         ("stage".to_string(), JsonValue::String(stage.to_string())),
         ("code".to_string(), JsonValue::String(code.to_string())),
-        ("message".to_string(), JsonValue::String(message.to_string())),
+        (
+            "message".to_string(),
+            JsonValue::String(message.to_string()),
+        ),
         (
             "failedAppId".to_string(),
             nullable_string_value(failed_app_id),
@@ -1684,10 +2354,7 @@ fn machine_output_fail(
 fn is_hex_prefixed(value: &str) -> bool {
     value.len() >= 3
         && value.starts_with("0x")
-        && value
-            .chars()
-            .skip(2)
-            .all(|ch| ch.is_ascii_hexdigit())
+        && value.chars().skip(2).all(|ch| ch.is_ascii_hexdigit())
 }
 
 fn read_text(path: &str) -> Result<String, String> {
@@ -1826,12 +2493,7 @@ impl Parser {
     }
 
     fn error(&self, message: impl Into<String>) -> String {
-        format!(
-            "line {} column {}: {}",
-            self.line,
-            self.col,
-            message.into()
-        )
+        format!("line {} column {}: {}", self.line, self.col, message.into())
     }
 
     fn skip_whitespace(&mut self) {
@@ -1924,8 +2586,8 @@ impl Parser {
             if !(0xDC00..=0xDFFF).contains(&second) {
                 return Err(self.error("invalid UTF-16 surrogate pair"));
             }
-            let codepoint = 0x10000
-                + ((((first - 0xD800) as u32) << 10) | ((second - 0xDC00) as u32));
+            let codepoint =
+                0x10000 + ((((first - 0xD800) as u32) << 10) | ((second - 0xDC00) as u32));
             return char::from_u32(codepoint)
                 .ok_or_else(|| self.error("invalid Unicode escape sequence"));
         }
@@ -2088,10 +2750,7 @@ impl Parser {
     fn expect_char(&mut self, expected: char) -> Result<(), String> {
         match self.next() {
             Some(actual) if actual == expected => Ok(()),
-            Some(actual) => Err(self.error(format!(
-                "expected '{}', found '{}'",
-                expected, actual
-            ))),
+            Some(actual) => Err(self.error(format!("expected '{}', found '{}'", expected, actual))),
             None => Err(self.error(format!("expected '{}'", expected))),
         }
     }
@@ -2167,7 +2826,8 @@ impl<'a> ValidationContext<'a> {
                 }
             }
             if let Some(validation) = object.get("validation").and_then(JsonValue::as_object) {
-                if let Some(definitions) = validation.get("definitions").and_then(JsonValue::as_object)
+                if let Some(definitions) =
+                    validation.get("definitions").and_then(JsonValue::as_object)
                 {
                     definition_maps.push(definitions);
                 }
@@ -2300,7 +2960,10 @@ fn validate_schema(
         }
         Some("taggedunion") => validate_tagged_union(context, current, value, path, ref_stack),
         Some("object") => validate_object_alias(context, current, value, path, ref_stack),
-        Some(other) => Err(error_at(path, format!("unsupported schema kind '{}'", other))),
+        Some(other) => Err(error_at(
+            path,
+            format!("unsupported schema kind '{}'", other),
+        )),
         None => {
             if object_field(current, "schema").is_some() {
                 validate_schema(
@@ -2369,14 +3032,20 @@ fn error_at(path: &[PathSegment], message: impl Into<String>) -> String {
 fn validate_bool(value: &JsonValue, path: &[PathSegment]) -> Result<(), String> {
     match value {
         JsonValue::Bool(_) => Ok(()),
-        other => Err(error_at(path, format!("expected bool, found {}", value_type(other)))),
+        other => Err(error_at(
+            path,
+            format!("expected bool, found {}", value_type(other)),
+        )),
     }
 }
 
 fn validate_null(value: &JsonValue, path: &[PathSegment]) -> Result<(), String> {
     match value {
         JsonValue::Null => Ok(()),
-        other => Err(error_at(path, format!("expected null, found {}", value_type(other)))),
+        other => Err(error_at(
+            path,
+            format!("expected null, found {}", value_type(other)),
+        )),
     }
 }
 
@@ -2387,7 +3056,12 @@ fn validate_string(
 ) -> Result<(), String> {
     let string = match value {
         JsonValue::String(value) => value,
-        other => return Err(error_at(path, format!("expected string, found {}", value_type(other)))),
+        other => {
+            return Err(error_at(
+                path,
+                format!("expected string, found {}", value_type(other)),
+            ))
+        }
     };
 
     if let Some(min_length) = schema_number(schema, "minLength") {
@@ -2438,7 +3112,12 @@ fn validate_integer(
                 format!("expected integer, found number {}", other.raw),
             ))
         }
-        other => return Err(error_at(path, format!("expected integer, found {}", value_type(other)))),
+        other => {
+            return Err(error_at(
+                path,
+                format!("expected integer, found {}", value_type(other)),
+            ))
+        }
     };
 
     validate_numeric_bounds(schema, number.float_value, path)?;
@@ -2452,7 +3131,12 @@ fn validate_number(
 ) -> Result<(), String> {
     let number = match value {
         JsonValue::Number(value) => value,
-        other => return Err(error_at(path, format!("expected number, found {}", value_type(other)))),
+        other => {
+            return Err(error_at(
+                path,
+                format!("expected number, found {}", value_type(other)),
+            ))
+        }
     };
 
     validate_numeric_bounds(schema, number.float_value, path)?;
@@ -2469,7 +3153,10 @@ fn validate_literal(
         .or_else(|| object_field(schema, "const"));
 
     let Some(expected) = expected else {
-        return Err(error_at(path, "literal schema is missing a value".to_string()));
+        return Err(error_at(
+            path,
+            "literal schema is missing a value".to_string(),
+        ));
     };
 
     if json_equal(expected, value) {
@@ -2514,7 +3201,12 @@ fn validate_list(
 ) -> Result<(), String> {
     let items = match value {
         JsonValue::Array(values) => values,
-        other => return Err(error_at(path, format!("expected array, found {}", value_type(other)))),
+        other => {
+            return Err(error_at(
+                path,
+                format!("expected array, found {}", value_type(other)),
+            ))
+        }
     };
 
     if let Some(tuple_items) = object_array(schema, "items") {
@@ -2537,13 +3229,12 @@ fn validate_list(
         }
 
         if items.len() > tuple_items.len() {
-            if let Some(rest_schema) = object_field(schema, "rest")
-                .or_else(|| object_field(schema, "additionalItems"))
+            if let Some(rest_schema) =
+                object_field(schema, "rest").or_else(|| object_field(schema, "additionalItems"))
             {
                 for (index, item) in items.iter().enumerate().skip(tuple_items.len()) {
                     path.push(PathSegment::Index(index));
-                    let result =
-                        validate_schema(context, rest_schema, item, path, ref_stack);
+                    let result = validate_schema(context, rest_schema, item, path, ref_stack);
                     path.pop();
                     result?;
                 }
@@ -2611,7 +3302,12 @@ fn validate_map(
 ) -> Result<(), String> {
     let object = match value {
         JsonValue::Object(value) => value,
-        other => return Err(error_at(path, format!("expected object, found {}", value_type(other)))),
+        other => {
+            return Err(error_at(
+                path,
+                format!("expected object, found {}", value_type(other)),
+            ))
+        }
     };
 
     let value_schema = object_field(schema, "value")
@@ -2622,19 +3318,22 @@ fn validate_map(
         .or_else(|| object_string(schema, "pattern"))
         .or_else(|| object_string(schema, "keyRegex"));
 
-    let compiled_key_pattern = if let Some(pattern) = key_pattern {
-        Some(
-            SimplePattern::compile(pattern)
-                .map_err(|err| error_at(path, format!("invalid key pattern {}: {}", pattern, err)))?,
-        )
-    } else {
-        None
-    };
+    let compiled_key_pattern =
+        if let Some(pattern) = key_pattern {
+            Some(SimplePattern::compile(pattern).map_err(|err| {
+                error_at(path, format!("invalid key pattern {}: {}", pattern, err))
+            })?)
+        } else {
+            None
+        };
 
     for (key, item) in object {
         if let Some(pattern) = &compiled_key_pattern {
             if !pattern.matches(key) {
-                return Err(error_at(path, format!("key {} does not match key pattern", key)));
+                return Err(error_at(
+                    path,
+                    format!("key {} does not match key pattern", key),
+                ));
             }
         }
 
@@ -2658,7 +3357,12 @@ fn validate_record(
 ) -> Result<(), String> {
     let object = match value {
         JsonValue::Object(value) => value,
-        other => return Err(error_at(path, format!("expected object, found {}", value_type(other)))),
+        other => {
+            return Err(error_at(
+                path,
+                format!("expected object, found {}", value_type(other)),
+            ))
+        }
     };
 
     let (fields, closed) = record_fields(schema)?;
@@ -2713,9 +3417,8 @@ fn validate_union(
     path: &mut Vec<PathSegment>,
     ref_stack: &mut Vec<String>,
 ) -> Result<(), String> {
-    let variants = schema_variants(schema).ok_or_else(|| {
-        error_at(path, "union schema is missing variants".to_string())
-    })?;
+    let variants = schema_variants(schema)
+        .ok_or_else(|| error_at(path, "union schema is missing variants".to_string()))?;
 
     let mut last_error = None;
     for variant in variants {
@@ -2747,16 +3450,21 @@ fn validate_tagged_union(
 ) -> Result<(), String> {
     let object = match value {
         JsonValue::Object(value) => value,
-        other => return Err(error_at(path, format!("expected object, found {}", value_type(other)))),
+        other => {
+            return Err(error_at(
+                path,
+                format!("expected object, found {}", value_type(other)),
+            ))
+        }
     };
 
     let tag_field = object_string(schema, "tag")
         .or_else(|| object_string(schema, "tagField"))
         .or_else(|| object_string(schema, "discriminator"))
         .unwrap_or("tag");
-    let tag_value = object.get(tag_field).ok_or_else(|| {
-        error_at(path, format!("missing tagged union field {}", tag_field))
-    })?;
+    let tag_value = object
+        .get(tag_field)
+        .ok_or_else(|| error_at(path, format!("missing tagged union field {}", tag_field)))?;
 
     let tag_key = scalar_key(tag_value).ok_or_else(|| {
         error_at(
@@ -2765,9 +3473,8 @@ fn validate_tagged_union(
         )
     })?;
 
-    let variants = tagged_union_variants(schema).ok_or_else(|| {
-        error_at(path, "tagged union schema is missing variants".to_string())
-    })?;
+    let variants = tagged_union_variants(schema)
+        .ok_or_else(|| error_at(path, "tagged union schema is missing variants".to_string()))?;
 
     let Some(variant_schema) = variants.get(&tag_key) else {
         return Err(error_at(
@@ -2804,7 +3511,11 @@ fn should_strip_tag_field(schema: &JsonValue, tag_field: &str) -> bool {
     !fields.contains_key(tag_field)
 }
 
-fn validate_numeric_bounds(schema: &JsonValue, value: f64, path: &[PathSegment]) -> Result<(), String> {
+fn validate_numeric_bounds(
+    schema: &JsonValue,
+    value: f64,
+    path: &[PathSegment],
+) -> Result<(), String> {
     if let Some(minimum) = schema_number(schema, "minimum") {
         if value < minimum {
             return Err(error_at(
@@ -2894,25 +3605,19 @@ fn record_fields<'a>(
                     }
                 })
                 .unwrap_or(true);
-            fields.insert(
-                name.clone(),
-                RecordField {
-                    schema,
-                    required,
-                },
-            );
+            fields.insert(name.clone(), RecordField { schema, required });
         }
     } else if let Some(field_values) = object_array(schema, "fields") {
         for field_value in field_values {
             let (name, schema, required) = parse_record_field(field_value, &required_names)?;
             fields.insert(name, RecordField { schema, required });
         }
-    } else if let Some(field_values) = object_field(schema, "properties").and_then(JsonValue::as_object)
+    } else if let Some(field_values) =
+        object_field(schema, "properties").and_then(JsonValue::as_object)
     {
         for (name, schema_value) in field_values {
-            let schema = field_schema(schema_value).ok_or_else(|| {
-                format!("record field {} does not contain a schema", name)
-            })?;
+            let schema = field_schema(schema_value)
+                .ok_or_else(|| format!("record field {} does not contain a schema", name))?;
             let required = object_bool(schema_value, "required")
                 .or_else(|| {
                     if required_names.iter().any(|entry| entry == name) {
@@ -3034,13 +3739,17 @@ fn infer_kind(schema: &JsonValue) -> Option<String> {
     {
         return Some("record".to_string());
     }
-    if object.contains_key("items") || object.contains_key("item") || object.contains_key("element")
+    if object.contains_key("items")
+        || object.contains_key("item")
+        || object.contains_key("element")
         || object.contains_key("elem")
     {
         return Some("list".to_string());
     }
     if object.contains_key("variants") {
-        if object.contains_key("tag") || object.contains_key("tagField") || object.contains_key("discriminator")
+        if object.contains_key("tag")
+            || object.contains_key("tagField")
+            || object.contains_key("discriminator")
         {
             return Some("taggedunion".to_string());
         }
@@ -3141,12 +3850,10 @@ fn schema_patterns(schema: &JsonValue) -> Option<Vec<String>> {
 
 fn known_format_pattern(format: &str) -> Option<&'static str> {
     match format.to_ascii_lowercase().as_str() {
-        "identifier" | "name" | "slug" => {
-            Some("^[A-Za-z0-9][A-Za-z0-9._-]*$")
+        "identifier" | "name" | "slug" => Some("^[A-Za-z0-9][A-Za-z0-9._-]*$"),
+        "timestamp" | "utc-timestamp" | "iso8601-utc" | "rfc3339-utc" => {
+            Some("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
         }
-        "timestamp" | "utc-timestamp" | "iso8601-utc" | "rfc3339-utc" => Some(
-            "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$",
-        ),
         _ => None,
     }
 }
@@ -3385,7 +4092,11 @@ fn render_json_compact(value: &JsonValue) -> String {
             let rendered = values
                 .iter()
                 .map(|(key, item)| {
-                    format!("\"{}\":{}", escape_json_string(key), render_json_compact(item))
+                    format!(
+                        "\"{}\":{}",
+                        escape_json_string(key),
+                        render_json_compact(item)
+                    )
                 })
                 .collect::<Vec<_>>()
                 .join(",");
