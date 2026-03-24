@@ -82,8 +82,6 @@ in
       };
   };
 
-  apps = { };
-
   workflows = {
     test-framework-selfhost = {
       id = "workflow.test.framework.selfhost";

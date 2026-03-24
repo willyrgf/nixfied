@@ -7,7 +7,7 @@ let
 in
 {
   imports = [
-    ./apps.nix
+    ./machine-outputs.nix
     ./service-sets.nix
     ./state.nix
     ./runtime.nix

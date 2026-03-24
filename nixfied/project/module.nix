@@ -207,6 +207,7 @@ let
       logging ? { },
       passThroughEnv ? defaultTaskPassThroughEnv,
       allowSensitivePassThrough ? false,
+      launcher ? null,
       ownerFile ? "nixfied/project/tasks.nix",
     }:
     let
@@ -263,6 +264,12 @@ let
         ];
       };
 
+      launcher =
+        if launcher == null then
+          { }
+        else
+          launcher;
+
       runtime = {
         slotEnv = "optional";
         workdir = "projectRoot";
@@ -311,9 +318,8 @@ let
       };
     };
 
-  mkTaskApp =
+  mkTaskLauncher =
     {
-      taskId,
       appId,
       summary ? "",
       description ? "",
@@ -323,9 +329,8 @@ let
       ownerFile ? "nixfied/project/tasks.nix",
     }:
     {
-      id = appId;
-      kind = "taskRef";
-      taskId = taskId;
+      enable = true;
+      appId = appId;
       inherit
         summary
         description
@@ -339,7 +344,7 @@ let
   frameworkInstallPreset = import ../framework/presets/install.nix {
     inherit
       mkCommandTask
-      mkTaskApp
+      mkTaskLauncher
       pkgs
       frameworkSourceRevision
       ;
@@ -351,7 +356,7 @@ let
       pkgs
       conf
       mkCommandTask
-      mkTaskApp
+      mkTaskLauncher
       ;
   };
 
@@ -384,7 +389,7 @@ let
     inherit
       lib
       mkCommandTask
-      mkTaskApp
+      mkTaskLauncher
       commonRuntimeInputs
       nixChecksPkg
       nixChecksContractArgs

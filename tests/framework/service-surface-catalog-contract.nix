@@ -15,7 +15,7 @@ let
     builtins.filter (appName: lib.hasPrefix "svc::" appName) (builtins.attrNames compiled.apps)
   );
   cheapServiceAppNames = builtins.sort builtins.lessThan (
-    compiled.serviceSurfaceCatalog.appNames or [ ]
+    compiled.model.compiled.serviceSurfaceCatalog.appNames or [ ]
   );
   mkCompiledCoreSource = builtins.readFile ../../nixfied/framework/core/mkCompiledCore.nix;
 in

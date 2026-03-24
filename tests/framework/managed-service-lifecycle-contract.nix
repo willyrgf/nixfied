@@ -1,6 +1,7 @@
 { pkgs }:
 let
   helperSource = builtins.readFile ../../nixfied/framework/runtime/helpers/managed-service-lifecycle.nix;
+  probeCommandsSource = builtins.readFile ../../nixfied/framework/runtime/helpers/probe-commands.nix;
   minioSource = builtins.readFile ../../nixfied/framework/runtime/services/minio/lifecycle.nix;
   rethSource = builtins.readFile ../../nixfied/framework/runtime/services/reth/lifecycle.nix;
   heliosSource = builtins.readFile ../../nixfied/framework/runtime/services/helios/lifecycle.nix;
@@ -18,6 +19,10 @@ assert pkgs.lib.hasInfix "mkReadyOutcomeBody" helperSource;
 assert pkgs.lib.hasInfix "mkSimpleProbeBody" helperSource;
 assert pkgs.lib.hasInfix "mkPlanProbeBody" helperSource;
 assert pkgs.lib.hasInfix "mkStartupReadinessBody" helperSource;
+assert pkgs.lib.hasInfix "request_rc=$?" probeCommandsSource;
+assert pkgs.lib.hasInfix "eval_rc=$?" probeCommandsSource;
+assert pkgs.lib.hasInfix "exit \"$request_rc\"" probeCommandsSource;
+assert pkgs.lib.hasInfix "exit \"$eval_rc\"" probeCommandsSource;
 assert pkgs.lib.hasInfix "import ../../core/runtime-defaults.nix" helperSource;
 assert pkgs.lib.hasInfix "print_log_tail \"$LOG_FILE\"" helperSource;
 assert pkgs.lib.hasInfix "SERVICE_PID_FILE" helperSource;

@@ -139,9 +139,8 @@ let
       projectModules = [ ../../nixfied/project/module.nix ];
       extraModules = [
         {
-          nixfied.apps."test-invalid-machine-output-contract" = {
+          nixfied.machineOutputs."test-invalid-machine-output-contract" = {
             id = "test-invalid-machine-output-contract";
-            kind = "machineOutput";
             targetAppId = "check";
             validation.contractRef = "missing.machine-output.contract";
             summary = "invalid machine-output contract";
@@ -162,6 +161,11 @@ in
 assert frameworkTask != null;
 assert frameworkTask.runner.type == "shell";
 assert model.apps."framework::test".taskId == frameworkTask.id;
+assert model ? compiled;
+assert model.compiled ? apiCatalog;
+assert model.compiled ? runtimeManifests;
+assert model.compiled ? serviceSurfaceCatalog;
+assert builtins.isList (model.compiled.serviceSurfaceCatalog.appNames or [ ]);
 assert formatTask != null;
 assert checkTask != null;
 assert testTask != null;

@@ -1,6 +1,7 @@
 { lib, ... }:
 let
   t = lib.types;
+  launcherOptions = import ./lib/launcher-options.nix { inherit lib; };
   serviceConfigLib = import ../framework/core/service-config.nix { inherit lib; };
   serviceRequirementType = t.enum serviceConfigLib.supportedServiceNames;
   serviceSetPhaseEntry = t.submodule {
@@ -92,6 +93,15 @@ in
             description = lib.mkOption {
               type = t.str;
               default = "";
+            };
+            launcher = lib.mkOption {
+              type = t.submodule {
+                options = launcherOptions.mkLauncherOptions {
+                  defaultAppId = name;
+                };
+              };
+              default = { };
+              description = "Compiled launcher metadata for exposing this workflow as a public app.";
             };
             mode = lib.mkOption {
               type = t.enum [

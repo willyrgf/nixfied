@@ -11,10 +11,9 @@ let
     projectModules = [ ../../nixfied/project/module.nix ];
     extraModules = [
       {
-        nixfied.apps."ci-full-direct" = {
-          id = "ci-full-direct";
-          kind = "workflowRef";
-          workflowId = "workflow.ci.full";
+        nixfied.workflows.ci-full.launcher = {
+          enable = true;
+          appId = "ci-full-direct";
           summary = "Exact workflowRef manifest contract";
           description = "Ensures explicit workflowRef apps only materialize the targeted workflow.";
           usage = [ "nix run .#ci-full-direct" ];

@@ -1,6 +1,6 @@
 {
-  apps = import ./apps.nix;
   core = import ./core.nix;
+  machineOutputs = import ./machine-outputs.nix;
   runtime = import ./runtime.nix;
   serviceSets = import ./service-sets.nix;
   tasks = import ./tasks.nix;

@@ -3,7 +3,7 @@
   pkgs,
   conf,
   mkCommandTask,
-  mkTaskApp,
+  mkTaskLauncher,
   ownerFile ? "nixfied/framework/presets/framework-test.nix",
 }:
 let
@@ -698,28 +698,24 @@ in
 
         log_ok "framework::test completed"
       '';
-      inherit ownerFile;
-    };
-  };
-
-  apps = {
-    "framework::test" = mkTaskApp {
-      taskId = "task.framework.test";
-      appId = "framework::test";
-      category = "framework";
-      usage = [
-        "nix run .#framework::test"
-        "nix run .#framework::test -- --summary"
-        "nix run .#framework::test -- --mode env --summary-json /tmp/framework-summary.json"
-      ];
-      examples = [
-        "nix run .#framework::test -- --list-shards"
-        "nix run .#framework::test -- --shard flake-check"
-        "nix run .#framework::test -- --shard launcher-pruning"
-        "nix run .#framework::test -- --shard services"
-        "nix run .#framework::test -- --shard isolation"
-        "nix run .#framework::test -- --shard self-host"
-      ];
+      launcher = mkTaskLauncher {
+        appId = "framework::test";
+        category = "framework";
+        usage = [
+          "nix run .#framework::test"
+          "nix run .#framework::test -- --summary"
+          "nix run .#framework::test -- --mode env --summary-json /tmp/framework-summary.json"
+        ];
+        examples = [
+          "nix run .#framework::test -- --list-shards"
+          "nix run .#framework::test -- --shard flake-check"
+          "nix run .#framework::test -- --shard launcher-pruning"
+          "nix run .#framework::test -- --shard services"
+          "nix run .#framework::test -- --shard isolation"
+          "nix run .#framework::test -- --shard self-host"
+        ];
+        inherit ownerFile;
+      };
       inherit ownerFile;
     };
   };

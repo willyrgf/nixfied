@@ -117,11 +117,14 @@ It fails if:
 - framework-owned CUE files or CUE references return
 - `mkValidator.nix` or `run-registry.nix` returns
 - deprecated kernel seams such as `validate-json`, `query-json`, or
-  `json-length` are referenced from framework Nix/Bash runtime code
+  `json-length` are referenced from framework Nix/Bash runtime code or remain
+  in the kernel source
 - shell-owned `run-record`, `summary`, or `meta` sidecars return
 - framework-owned `jq` returns under framework/modules/build-check paths
 - machine output transport falls back to stdout scraping instead of the
   declared `NIXFIED_MACHINE_OUTPUT_FILE` channel
+- any framework/runtime smoke test falls back to inline Python responders
+- authored `nixfied.apps` returns or the deleted apps module reappears
 
 That guard complements the runtime contract checks. The architecture is now:
 
@@ -152,6 +155,9 @@ The current surface is organized around:
 
 Shared shell helpers live in `tests/framework/lib/harness.nix`.
 High-complexity operations smokes still have room for more harness extraction, but the harness is active and should be preferred over ad hoc duplication.
+Probe stubs should prefer `tests/framework/lib/shell-helpers.nix`
+(`jsonRpcStub` and `httpStub`) over inline interpreters when a shell-native
+responder is sufficient.
 
 ## Output contract
 

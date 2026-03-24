@@ -126,4 +126,224 @@ in
       exit 0
     }
   '';
+
+  jsonRpcStub =
+    let
+      responder = pkgs.writeShellScript "nixfied-test-jsonrpc-responder" ''
+        set -euo pipefail
+
+        normalize_method_token() {
+          printf '%s' "$1" | tr '[:lower:]' '[:upper:]' | tr -c 'A-Z0-9' '_'
+        }
+
+        read_request_body() {
+          local line=""
+          local content_length="0"
+          local parsed_length=""
+
+          while IFS= read -r line; do
+            line="$(printf '%s' "$line" | ${pkgs.coreutils}/bin/tr -d '\r')"
+            [ -n "$line" ] || break
+
+            case "$line" in
+              [Cc]ontent-[Ll]ength:*)
+                parsed_length="$(
+                  printf '%s' "$line" \
+                    | ${pkgs.gnused}/bin/sed -nE 's/^[^:]+:[[:space:]]*([0-9]+).*$/\1/p'
+                )"
+                if [ -n "$parsed_length" ]; then
+                  content_length="$parsed_length"
+                fi
+                ;;
+            esac
+          done
+
+          if [ "$content_length" -gt 0 ] 2>/dev/null; then
+            ${pkgs.coreutils}/bin/dd bs=1 count="$content_length" 2>/dev/null || true
+          fi
+        }
+
+        result_json_for_method() {
+          local method="$1"
+          local token=""
+          local file_var=""
+          local json_var=""
+          local result_file=""
+          local result_json=""
+
+          token="$(normalize_method_token "$method")"
+          file_var="NIXFIED_JSONRPC_RESULT_FILE_$token"
+          json_var="NIXFIED_JSONRPC_RESULT_JSON_$token"
+
+          result_file="$(${pkgs.coreutils}/bin/printenv "$file_var" 2>/dev/null || true)"
+          result_json="$(${pkgs.coreutils}/bin/printenv "$json_var" 2>/dev/null || true)"
+
+          if [ -n "$result_file" ]; then
+            ${pkgs.coreutils}/bin/cat "$result_file"
+            return 0
+          fi
+
+          if [ -n "$result_json" ]; then
+            printf '%s' "$result_json"
+            return 0
+          fi
+
+          printf 'null'
+        }
+
+        request_body="$(read_request_body)"
+        method="$(
+          printf '%s' "$request_body" \
+            | ${pkgs.gnused}/bin/sed -n 's/.*"method"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+            | ${pkgs.coreutils}/bin/head -n 1
+        )"
+        response_result="$(result_json_for_method "$method")"
+        response_body="$(
+          printf '{"jsonrpc":"2.0","id":1,"result":%s}' "$response_result"
+        )"
+        response_length="$(
+          printf '%s' "$response_body" | ${pkgs.coreutils}/bin/wc -c | ${pkgs.coreutils}/bin/tr -d '[:space:]'
+        )"
+
+        printf 'HTTP/1.1 200 OK\r\n'
+        printf 'Content-Type: application/json\r\n'
+        printf 'Content-Length: %s\r\n' "$response_length"
+        printf 'Connection: close\r\n'
+        printf '\r\n'
+        printf '%s' "$response_body"
+      '';
+    in
+    {
+      inherit responder;
+
+      shellLib = ''
+        start_jsonrpc_stub() {
+          local port="$1"
+          ${pkgs.socat}/bin/socat "TCP-LISTEN:$port,bind=127.0.0.1,reuseaddr,fork" \
+            "EXEC:${responder}" \
+            >/dev/null 2>&1 &
+          bg_pids+=("$!")
+        }
+      '';
+    };
+
+  httpStub =
+    let
+      responder = pkgs.writeShellScript "nixfied-test-http-responder" ''
+        set -euo pipefail
+
+        normalize_path_token() {
+          local path="$1"
+          local token=""
+          if [ "$path" = "/" ] || [ -z "$path" ]; then
+            printf '%s' "ROOT"
+            return 0
+          fi
+          token="$(printf '%s' "$path" | tr '[:lower:]' '[:upper:]' | tr -c 'A-Z0-9' '_')"
+          while [ -n "$token" ] && [ "''${token#_}" != "$token" ]; do
+            token="''${token#_}"
+          done
+          while [ -n "$token" ] && [ "''${token%_}" != "$token" ]; do
+            token="''${token%_}"
+          done
+          printf '%s' "''${token:-ROOT}"
+        }
+
+        read_request() {
+          local request_line=""
+          local line=""
+
+          IFS= read -r request_line || true
+          request_line="$(printf '%s' "$request_line" | ${pkgs.coreutils}/bin/tr -d '\r')"
+
+          HTTP_STUB_METHOD="$(${pkgs.gawk}/bin/awk '{ print $1 }' <<<"$request_line")"
+          HTTP_STUB_PATH="$(${pkgs.gawk}/bin/awk '{ print $2 }' <<<"$request_line")"
+
+          while IFS= read -r line; do
+            line="$(printf '%s' "$line" | ${pkgs.coreutils}/bin/tr -d '\r')"
+            [ -n "$line" ] || break
+          done
+        }
+
+        env_value() {
+          local name="$1"
+          ${pkgs.coreutils}/bin/printenv "$name" 2>/dev/null || true
+        }
+
+        value_for_path() {
+          local prefix="$1"
+          local path="$2"
+          local token=""
+          local path_var=""
+          local default_var=""
+          local value=""
+
+          token="$(normalize_path_token "$path")"
+          path_var="NIXFIED_HTTP_''${prefix}_''${token}"
+          default_var="NIXFIED_HTTP_''${prefix}_DEFAULT"
+
+          value="$(env_value "$path_var")"
+          if [ -n "$value" ]; then
+            printf '%s' "$value"
+            return 0
+          fi
+
+          value="$(env_value "$default_var")"
+          if [ -n "$value" ]; then
+            printf '%s' "$value"
+            return 0
+          fi
+
+          case "$prefix" in
+            STATUS)
+              printf '%s' "200"
+              ;;
+            BODY)
+              printf '%s' "ok"
+              ;;
+            CONTENT_TYPE)
+              printf '%s' "text/plain"
+              ;;
+          esac
+        }
+
+        status_reason() {
+          case "$1" in
+            200) printf '%s' "OK" ;;
+            404) printf '%s' "Not Found" ;;
+            500) printf '%s' "Internal Server Error" ;;
+            *) printf '%s' "OK" ;;
+          esac
+        }
+
+        read_request
+
+        response_status="$(value_for_path STATUS "$HTTP_STUB_PATH")"
+        response_body="$(value_for_path BODY "$HTTP_STUB_PATH")"
+        response_content_type="$(value_for_path CONTENT_TYPE "$HTTP_STUB_PATH")"
+        response_length="$(
+          printf '%s' "$response_body" | ${pkgs.coreutils}/bin/wc -c | ${pkgs.coreutils}/bin/tr -d '[:space:]'
+        )"
+
+        printf 'HTTP/1.1 %s %s\r\n' "$response_status" "$(status_reason "$response_status")"
+        printf 'Content-Type: %s\r\n' "$response_content_type"
+        printf 'Content-Length: %s\r\n' "$response_length"
+        printf 'Connection: close\r\n'
+        printf '\r\n'
+        printf '%s' "$response_body"
+      '';
+    in
+    {
+      inherit responder;
+
+      shellLib = ''
+        start_http_stub() {
+          local port="$1"
+          ${pkgs.socat}/bin/socat "TCP-LISTEN:$port,bind=127.0.0.1,reuseaddr,fork" \
+            "EXEC:${responder}" \
+            >/dev/null 2>&1 &
+          bg_pids+=("$!")
+        }
+      '';
+    };
 }

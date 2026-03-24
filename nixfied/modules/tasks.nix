@@ -3,6 +3,7 @@ let
   t = lib.types;
   serviceConfigLib = import ../framework/core/service-config.nix { inherit lib; };
   apiOptions = import ./lib/api-options.nix { inherit lib; };
+  launcherOptions = import ./lib/launcher-options.nix { inherit lib; };
   serviceRequirementType = t.enum serviceConfigLib.supportedServiceNames;
   runtimeWorkdirType = t.enum [
     "projectRoot"
@@ -114,6 +115,16 @@ in
               type = apiOptions.commandApi;
               default = { };
               description = "Canonical command API metadata for the task.";
+            };
+
+            launcher = lib.mkOption {
+              type = t.submodule {
+                options = launcherOptions.mkLauncherOptions {
+                  defaultAppId = name;
+                };
+              };
+              default = { };
+              description = "Compiled launcher metadata for exposing this task as a public app.";
             };
 
             runtime = {

@@ -573,6 +573,7 @@ let
       id = workflowId;
       summary = raw.summary;
       description = raw.description;
+      launcher = raw.launcher;
       mode = raw.mode;
       maxWorkers = if raw.maxWorkers < 1 then 1 else raw.maxWorkers;
       logging = raw.logging;

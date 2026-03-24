@@ -4,6 +4,7 @@
   ...
 }:
 let
+  shellHelpers = import ./lib/shell-helpers.nix { inherit pkgs; };
   frameworkLib = import ../../nixfied/framework/core {
     inherit pkgs;
     system = pkgs.system;
@@ -70,6 +71,7 @@ pkgs.runCommand "ready-helios-sync-gate-smoke" { } ''
     set -euo pipefail
 
     READY_TASK="${readyTask}"
+    ${shellHelpers.jsonRpcStub.shellLib}
 
     env_offset=${runtimeEnvDevOffset}
     slot_value=0
@@ -109,73 +111,6 @@ pkgs.runCommand "ready-helios-sync-gate-smoke" { } ''
       exit 1
     }
 
-    cat > "$TMPDIR/helios-responder.py" <<'EOF_SCRIPT'
-import http.server
-import json
-import socketserver
-import sys
-import threading
-
-rpc_port = int(sys.argv[1])
-execution_port = int(sys.argv[2])
-block_result_path = sys.argv[3]
-syncing_result_path = sys.argv[4]
-
-
-def read_json_value(path):
-    with open(path, "r", encoding="utf-8") as handle:
-        return json.load(handle)
-
-
-class Handler(http.server.BaseHTTPRequestHandler):
-    def do_POST(self):
-        content_length = int(self.headers.get("Content-Length", "0"))
-        payload = json.loads(self.rfile.read(content_length) or b"{}")
-        method = payload.get("method")
-
-        if method == "eth_blockNumber":
-            result = read_json_value(block_result_path)
-        elif method == "eth_syncing":
-            result = read_json_value(syncing_result_path)
-        elif method == "eth_chainId":
-            result = "0x1"
-        else:
-            result = None
-
-        body = json.dumps(
-            {"jsonrpc": "2.0", "id": payload.get("id"), "result": result},
-            separators=(",", ":"),
-        ).encode()
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def log_message(self, format, *args):
-        return
-
-
-class ReusableTCPServer(socketserver.TCPServer):
-    allow_reuse_address = True
-
-
-servers = []
-
-try:
-    for port in [rpc_port, execution_port]:
-        httpd = ReusableTCPServer(("127.0.0.1", port), Handler)
-        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
-        thread.start()
-        servers.append((httpd, thread))
-
-    threading.Event().wait()
-finally:
-    for httpd, thread in servers:
-        httpd.shutdown()
-        httpd.server_close()
-EOF_SCRIPT
-
     echo '"0x1"' > "$TMPDIR/helios-block-result.json"
     echo 'false' > "$TMPDIR/helios-syncing-result.json"
 
@@ -202,14 +137,12 @@ EOF_SCRIPT
     }
     trap cleanup EXIT
 
-    ${pkgs.python3}/bin/python3 \
-      "$TMPDIR/helios-responder.py" \
-      "$helios_rpc_port" \
-      "$helios_execution_rpc_port" \
-      "$TMPDIR/helios-block-result.json" \
-      "$TMPDIR/helios-syncing-result.json" \
-      >/dev/null 2>&1 &
-    bg_pids+=("$!")
+    export NIXFIED_JSONRPC_RESULT_FILE_ETH_BLOCKNUMBER="$TMPDIR/helios-block-result.json"
+    export NIXFIED_JSONRPC_RESULT_FILE_ETH_SYNCING="$TMPDIR/helios-syncing-result.json"
+    export NIXFIED_JSONRPC_RESULT_JSON_ETH_CHAINID='"0x1"'
+
+    start_jsonrpc_stub "$helios_rpc_port"
+    start_jsonrpc_stub "$helios_execution_rpc_port"
 
     wait_for_http "$helios_rpc_port" "eth_blockNumber"
     wait_for_http "$helios_execution_rpc_port" "eth_chainId"

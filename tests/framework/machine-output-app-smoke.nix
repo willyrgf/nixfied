@@ -189,82 +189,73 @@ let
           summary = "Machine-output workflow smoke";
           description = "Exercises workflowRef and machineOutput app kinds.";
           units.main.taskId = workflowTaskId;
-        };
-
-        nixfied.apps = {
-          "workflow-smoke" = {
-            id = "workflow-smoke";
-            kind = "workflowRef";
-            workflowId = workflowId;
+          launcher = {
+            enable = true;
+            appId = "workflow-smoke";
             summary = "Workflow app runtime smoke";
             description = "Runs a workflowRef app through the selected-app launcher.";
             usage = [ "nix run .#workflow-smoke" ];
             ownerFile = "tests/framework/machine-output-app-smoke.nix";
           };
+        };
 
-          "json-body" = {
-            id = "json-body";
-            kind = "taskRef";
-            taskId = jsonTaskId;
-            summary = "JSON task app runtime smoke";
-            description = "Runs a taskRef app that emits strict JSON.";
-            usage = [ "nix run .#json-body" ];
-            ownerFile = "tests/framework/machine-output-app-smoke.nix";
-          };
+        nixfied.tasks."test.machine-output.json-body".launcher = {
+          enable = true;
+          appId = "json-body";
+          summary = "JSON task app runtime smoke";
+          description = "Runs a taskRef app that emits strict JSON.";
+          usage = [ "nix run .#json-body" ];
+          ownerFile = "tests/framework/machine-output-app-smoke.nix";
+        };
 
-          "machine-output-setup" = {
-            id = "machine-output-setup";
-            kind = "taskRef";
-            taskId = setupTaskId;
-            summary = "Machine-output setup app";
-            description = "Setup helper for machine-output app smoke coverage.";
-            usage = [ "nix run .#machine-output-setup" ];
-            ownerFile = "tests/framework/machine-output-app-smoke.nix";
-          };
+        nixfied.tasks."test.machine-output.setup".launcher = {
+          enable = true;
+          appId = "machine-output-setup";
+          summary = "Machine-output setup app";
+          description = "Setup helper for machine-output app smoke coverage.";
+          usage = [ "nix run .#machine-output-setup" ];
+          ownerFile = "tests/framework/machine-output-app-smoke.nix";
+        };
 
-          "machine-output-teardown" = {
-            id = "machine-output-teardown";
-            kind = "taskRef";
-            taskId = teardownTaskId;
-            summary = "Machine-output teardown app";
-            description = "Teardown helper for machine-output app smoke coverage.";
-            usage = [ "nix run .#machine-output-teardown" ];
-            ownerFile = "tests/framework/machine-output-app-smoke.nix";
-          };
+        nixfied.tasks."test.machine-output.teardown".launcher = {
+          enable = true;
+          appId = "machine-output-teardown";
+          summary = "Machine-output teardown app";
+          description = "Teardown helper for machine-output app smoke coverage.";
+          usage = [ "nix run .#machine-output-teardown" ];
+          ownerFile = "tests/framework/machine-output-app-smoke.nix";
+        };
 
-          "json-body-invalid" = {
-            id = "json-body-invalid";
-            kind = "taskRef";
-            taskId = invalidJsonTaskId;
-            summary = "Invalid JSON task app";
-            description = "Runs a taskRef app that violates the machine-output contract.";
-            usage = [ "nix run .#json-body-invalid" ];
-            ownerFile = "tests/framework/machine-output-app-smoke.nix";
-          };
+        nixfied.tasks."test.machine-output.invalid-json-body".launcher = {
+          enable = true;
+          appId = "json-body-invalid";
+          summary = "Invalid JSON task app";
+          description = "Runs a taskRef app that violates the machine-output contract.";
+          usage = [ "nix run .#json-body-invalid" ];
+          ownerFile = "tests/framework/machine-output-app-smoke.nix";
+        };
 
-          "json-body-unknown-field" = {
-            id = "json-body-unknown-field";
-            kind = "taskRef";
-            taskId = unknownFieldTaskId;
-            summary = "Unknown-field JSON task app";
-            description = "Runs a taskRef app that emits an unknown field.";
-            usage = [ "nix run .#json-body-unknown-field" ];
-            ownerFile = "tests/framework/machine-output-app-smoke.nix";
-          };
+        nixfied.tasks."test.machine-output.unknown-field-body".launcher = {
+          enable = true;
+          appId = "json-body-unknown-field";
+          summary = "Unknown-field JSON task app";
+          description = "Runs a taskRef app that emits an unknown field.";
+          usage = [ "nix run .#json-body-unknown-field" ];
+          ownerFile = "tests/framework/machine-output-app-smoke.nix";
+        };
 
-          "json-body-log-on-machine-channel" = {
-            id = "json-body-log-on-machine-channel";
-            kind = "taskRef";
-            taskId = machineLogTaskId;
-            summary = "Log-text machine channel app";
-            description = "Runs a taskRef app that writes log text to the machine channel.";
-            usage = [ "nix run .#json-body-log-on-machine-channel" ];
-            ownerFile = "tests/framework/machine-output-app-smoke.nix";
-          };
+        nixfied.tasks."test.machine-output.log-on-machine-channel".launcher = {
+          enable = true;
+          appId = "json-body-log-on-machine-channel";
+          summary = "Log-text machine channel app";
+          description = "Runs a taskRef app that writes log text to the machine channel.";
+          usage = [ "nix run .#json-body-log-on-machine-channel" ];
+          ownerFile = "tests/framework/machine-output-app-smoke.nix";
+        };
 
+        nixfied.machineOutputs = {
           "machine-json" = {
             id = "machine-json";
-            kind = "machineOutput";
             targetAppId = "json-body";
             setupAppIds = [ "machine-output-setup" ];
             teardownAppIds = [ "machine-output-teardown" ];
@@ -279,7 +270,6 @@ let
 
           "machine-json-invalid-payload" = {
             id = "machine-json-invalid-payload";
-            kind = "machineOutput";
             targetAppId = "json-body-invalid";
             validation = {
               contractRef = "machineOutput.result";
@@ -292,7 +282,6 @@ let
 
           "machine-json-unknown-field" = {
             id = "machine-json-unknown-field";
-            kind = "machineOutput";
             targetAppId = "json-body-unknown-field";
             validation = {
               contractRef = "machineOutput.result";
@@ -305,7 +294,6 @@ let
 
           "workflow-machine-invalid" = {
             id = "workflow-machine-invalid";
-            kind = "machineOutput";
             targetAppId = "workflow-smoke";
             validation = {
               contractRef = "machineOutput.result";
@@ -318,7 +306,6 @@ let
 
           "machine-json-log-on-machine-channel" = {
             id = "machine-json-log-on-machine-channel";
-            kind = "machineOutput";
             targetAppId = "json-body-log-on-machine-channel";
             validation = {
               contractRef = "machineOutput.result";

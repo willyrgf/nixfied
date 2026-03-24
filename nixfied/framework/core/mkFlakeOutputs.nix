@@ -107,7 +107,6 @@ let
       ;
     model = compiledCore.model;
     selectionIndex = compiledCore.selectionIndex;
-    serviceSurfaceCatalog = compiledCore.serviceSurfaceCatalog;
   };
   serviceNames = launcherMetadata.enabledServices;
   runtimeControlAppNames = launcherMetadata.runtimeControlAppNames;
@@ -1192,7 +1191,7 @@ in
   workflows = compiledCore.model.workflows;
   features = compiledCore.model.features;
   selectionIndex = compiledCore.selectionIndex;
-  serviceSurfaceCatalog = compiledCore.serviceSurfaceCatalog;
+  serviceSurfaceCatalog = (compiledCore.model.compiled or { }).serviceSurfaceCatalog or { };
   serviceApis = heavyOutputs.serviceApis;
   serviceHookEnv = heavyOutputs.serviceHookEnv;
   packages = coreSurfaces.packages // {

@@ -103,6 +103,7 @@ rec {
     ''
       (
         tmp_json="''${TMPDIR:-/tmp}/nixfied-probe-jsonrpc.$$.$RANDOM.json"
+        set +e
         (
           ${jsonRpcRequestCmd {
             inherit
@@ -113,7 +114,20 @@ rec {
             ;
           }}
         ) > "$tmp_json"
+        request_rc=$?
+        set -e
+        if [ "$request_rc" -ne 0 ]; then
+          rm -f "$tmp_json"
+          exit "$request_rc"
+        fi
+        set +e
         ${kernelPackage}/bin/nixfied-kernel probe evaluate ${pkgs.lib.escapeShellArg (toString jsonRpcResultPresentPlan)} "$tmp_json" >/dev/null
+        eval_rc=$?
+        set -e
+        if [ "$eval_rc" -ne 0 ]; then
+          rm -f "$tmp_json"
+          exit "$eval_rc"
+        fi
         rm -f "$tmp_json"
       )
     '';
@@ -129,6 +143,7 @@ rec {
       (
         tmp_json="''${TMPDIR:-/tmp}/nixfied-probe-jsonrpc.$$.$RANDOM.json"
         export_file="''${TMPDIR:-/tmp}/nixfied-probe-jsonrpc-export.$$.$RANDOM.sh"
+        set +e
         (
           ${jsonRpcRequestCmd {
             inherit
@@ -139,10 +154,23 @@ rec {
               ;
           }}
         ) > "$tmp_json"
+        request_rc=$?
+        set -e
+        if [ "$request_rc" -ne 0 ]; then
+          rm -f "$tmp_json" "$export_file"
+          exit "$request_rc"
+        fi
+        set +e
         ${kernelPackage}/bin/nixfied-kernel probe evaluate \
           ${pkgs.lib.escapeShellArg (toString jsonRpcResultHexPlan)} \
           "$tmp_json" \
           "$export_file" >/dev/null
+        eval_rc=$?
+        set -e
+        if [ "$eval_rc" -ne 0 ]; then
+          rm -f "$tmp_json" "$export_file"
+          exit "$eval_rc"
+        fi
         . "$export_file"
         printf '%s' "''${NIXFIED_PROBE_RESULT:-}"
         rm -f "$tmp_json" "$export_file"
@@ -159,6 +187,7 @@ rec {
     ''
       (
         tmp_json="''${TMPDIR:-/tmp}/nixfied-probe-jsonrpc.$$.$RANDOM.json"
+        set +e
         (
           ${jsonRpcRequestCmd {
             inherit
@@ -169,7 +198,20 @@ rec {
               ;
           }}
         ) > "$tmp_json"
+        request_rc=$?
+        set -e
+        if [ "$request_rc" -ne 0 ]; then
+          rm -f "$tmp_json"
+          exit "$request_rc"
+        fi
+        set +e
         ${kernelPackage}/bin/nixfied-kernel probe evaluate ${pkgs.lib.escapeShellArg (toString jsonRpcResultBoolFalsePlan)} "$tmp_json" >/dev/null
+        eval_rc=$?
+        set -e
+        if [ "$eval_rc" -ne 0 ]; then
+          rm -f "$tmp_json"
+          exit "$eval_rc"
+        fi
         rm -f "$tmp_json"
       )
     '';

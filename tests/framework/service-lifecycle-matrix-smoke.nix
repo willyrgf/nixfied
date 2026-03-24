@@ -150,42 +150,26 @@ let
           exit 1
         fi
 
-        exec ${pkgs.python3}/bin/python3 - $LISTEN_PORTS <<'PY'
-    import http.server
-    import socket
-    import socketserver
-    import threading
-    import sys
+        ${shellHelpers.httpStub.shellLib}
+        bg_pids=()
+        cleanup() {
+          local pid=""
+          for pid in "''${bg_pids[@]:-}"; do
+            kill "$pid" 2>/dev/null || true
+          done
+        }
+        trap cleanup EXIT INT TERM
 
-    PORTS = [int(arg) for arg in sys.argv[1:]]
+        export NIXFIED_HTTP_BODY_DEFAULT="ok"
 
-    class Handler(http.server.BaseHTTPRequestHandler):
-        def do_GET(self):
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(b"ok")
+        while IFS= read -r port; do
+          [ -n "$port" ] || continue
+          start_http_stub "$port"
+        done <<EOF
+    $LISTEN_PORTS
+    EOF
 
-        def log_message(self, format, *args):
-            return
-
-    class ReusableTCPServer(socketserver.TCPServer):
-        allow_reuse_address = True
-
-    servers = []
-
-    try:
-        for port in PORTS:
-            httpd = ReusableTCPServer(("127.0.0.1", port), Handler)
-            thread = threading.Thread(target=httpd.serve_forever, daemon=True)
-            thread.start()
-            servers.append((httpd, thread))
-
-        threading.Event().wait()
-    finally:
-        for httpd, thread in servers:
-            httpd.shutdown()
-            httpd.server_close()
-    PY
+        wait
   '';
 
   nginxStub = mkPackageWithScript {
@@ -236,45 +220,29 @@ let
           esac
         done
 
-        exec ${pkgs.python3}/bin/python3 - "$API_PORT" "$CONSOLE_PORT" <<'PY'
-    import http.server
-    import socketserver
-    import threading
-    import sys
+        ${shellHelpers.httpStub.shellLib}
+        bg_pids=()
+        cleanup() {
+          local pid=""
+          for pid in "''${bg_pids[@]:-}"; do
+            kill "$pid" 2>/dev/null || true
+          done
+        }
+        trap cleanup EXIT INT TERM
 
-    PORTS = [int(arg) for arg in sys.argv[1:] if arg]
+        export NIXFIED_HTTP_STATUS_DEFAULT="404"
+        export NIXFIED_HTTP_BODY_DEFAULT=""
+        export NIXFIED_HTTP_STATUS_MINIO_HEALTH_LIVE="200"
+        export NIXFIED_HTTP_BODY_MINIO_HEALTH_LIVE="ok"
+        export NIXFIED_HTTP_STATUS_MINIO_HEALTH_READY="200"
+        export NIXFIED_HTTP_BODY_MINIO_HEALTH_READY="ok"
 
-    class Handler(http.server.BaseHTTPRequestHandler):
-        def do_GET(self):
-            if self.path in ("/minio/health/live", "/minio/health/ready"):
-                self.send_response(200)
-                self.end_headers()
-                self.wfile.write(b"ok")
-                return
-            self.send_response(404)
-            self.end_headers()
+        for port in "$API_PORT" "$CONSOLE_PORT"; do
+          [ -n "$port" ] || continue
+          start_http_stub "$port"
+        done
 
-        def log_message(self, format, *args):
-            return
-
-    class ReusableTCPServer(socketserver.TCPServer):
-        allow_reuse_address = True
-
-    servers = []
-
-    try:
-        for port in PORTS:
-            httpd = ReusableTCPServer(("127.0.0.1", port), Handler)
-            thread = threading.Thread(target=httpd.serve_forever, daemon=True)
-            thread.start()
-            servers.append((httpd, thread))
-
-        threading.Event().wait()
-    finally:
-        for httpd, thread in servers:
-            httpd.shutdown()
-            httpd.server_close()
-    PY
+        wait
   '';
 
   minioStub = mkPackageWithScript {
@@ -314,54 +282,25 @@ let
           esac
         done
 
-        exec ${pkgs.python3}/bin/python3 - "$HTTP_PORT" "$WS_PORT" "$AUTH_PORT" <<'PY'
-    import http.server
-    import json
-    import socketserver
-    import threading
-    import sys
+        ${shellHelpers.jsonRpcStub.shellLib}
+        bg_pids=()
+        cleanup() {
+          local pid=""
+          for pid in "''${bg_pids[@]:-}"; do
+            kill "$pid" 2>/dev/null || true
+          done
+        }
+        trap cleanup EXIT INT TERM
 
-    PORTS = [int(arg) for arg in sys.argv[1:] if arg]
+        export NIXFIED_JSONRPC_RESULT_JSON_WEB3_CLIENTVERSION='"reth-stub"'
+        export NIXFIED_JSONRPC_RESULT_JSON_ETH_CHAINID='"0x1"'
 
-    class Handler(http.server.BaseHTTPRequestHandler):
-        def do_POST(self):
-            length = int(self.headers.get("Content-Length", "0"))
-            payload = json.loads(self.rfile.read(length) or b"{}")
-            method = payload.get("method")
-            if method == "web3_clientVersion":
-                response = {"jsonrpc": "2.0", "id": payload.get("id"), "result": "reth-stub"}
-            elif method == "eth_chainId":
-                response = {"jsonrpc": "2.0", "id": payload.get("id"), "result": "0x1"}
-            else:
-                response = {"jsonrpc": "2.0", "id": payload.get("id"), "error": {"code": -32601, "message": "method not found"}}
-            body = json.dumps(response).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+        for port in "$HTTP_PORT" "$WS_PORT" "$AUTH_PORT"; do
+          [ -n "$port" ] || continue
+          start_jsonrpc_stub "$port"
+        done
 
-        def log_message(self, format, *args):
-            return
-
-    class ReusableTCPServer(socketserver.TCPServer):
-        allow_reuse_address = True
-
-    servers = []
-
-    try:
-        for port in PORTS:
-            httpd = ReusableTCPServer(("127.0.0.1", port), Handler)
-            thread = threading.Thread(target=httpd.serve_forever, daemon=True)
-            thread.start()
-            servers.append((httpd, thread))
-
-        threading.Event().wait()
-    finally:
-        for httpd, thread in servers:
-            httpd.shutdown()
-            httpd.server_close()
-    PY
+        wait
   '';
 
   rethStub = mkPackageWithScript {
@@ -403,58 +342,27 @@ let
             ;;
         esac
 
-        exec ${pkgs.python3}/bin/python3 - "$RPC_PORT" "$EXECUTION_PORT" <<'PY'
-    import http.server
-    import json
-    import socketserver
-    import threading
-    import sys
+        ${shellHelpers.jsonRpcStub.shellLib}
+        bg_pids=()
+        cleanup() {
+          local pid=""
+          for pid in "''${bg_pids[@]:-}"; do
+            kill "$pid" 2>/dev/null || true
+          done
+        }
+        trap cleanup EXIT INT TERM
 
-    PORTS = [int(arg) for arg in sys.argv[1:] if arg]
+        export NIXFIED_JSONRPC_RESULT_JSON_ETH_CHAINID='"0x539"'
+        export NIXFIED_JSONRPC_RESULT_JSON_ETH_BLOCKNUMBER='"0x2a"'
+        export NIXFIED_JSONRPC_RESULT_JSON_ETH_SYNCING='false'
+        export NIXFIED_JSONRPC_RESULT_JSON_WEB3_CLIENTVERSION='"helios-stub"'
 
-    class Handler(http.server.BaseHTTPRequestHandler):
-        def do_POST(self):
-            length = int(self.headers.get("Content-Length", "0"))
-            payload = json.loads(self.rfile.read(length) or b"{}")
-            method = payload.get("method")
-            if method == "eth_chainId":
-                response = {"jsonrpc": "2.0", "id": payload.get("id"), "result": "0x539"}
-            elif method == "eth_blockNumber":
-                response = {"jsonrpc": "2.0", "id": payload.get("id"), "result": "0x2a"}
-            elif method == "eth_syncing":
-                response = {"jsonrpc": "2.0", "id": payload.get("id"), "result": False}
-            elif method == "web3_clientVersion":
-                response = {"jsonrpc": "2.0", "id": payload.get("id"), "result": "helios-stub"}
-            else:
-                response = {"jsonrpc": "2.0", "id": payload.get("id"), "error": {"code": -32601, "message": "method not found"}}
-            body = json.dumps(response).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+        for port in "$RPC_PORT" "$EXECUTION_PORT"; do
+          [ -n "$port" ] || continue
+          start_jsonrpc_stub "$port"
+        done
 
-        def log_message(self, format, *args):
-            return
-
-    class ReusableTCPServer(socketserver.TCPServer):
-        allow_reuse_address = True
-
-    servers = []
-
-    try:
-        for port in PORTS:
-            httpd = ReusableTCPServer(("127.0.0.1", port), Handler)
-            thread = threading.Thread(target=httpd.serve_forever, daemon=True)
-            thread.start()
-            servers.append((httpd, thread))
-
-        threading.Event().wait()
-    finally:
-        for httpd, thread in servers:
-            httpd.shutdown()
-            httpd.server_close()
-    PY
+        wait
   '';
 
   heliosStub = mkPackageWithScript {

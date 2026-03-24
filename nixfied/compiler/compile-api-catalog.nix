@@ -11,6 +11,12 @@
   services ? { },
 }:
 let
+  resolvedIdentity =
+    if resolved == null || !(builtins.isAttrs resolved) then
+      null
+    else
+      resolved.identity or null;
+
   taskCatalog = builtins.mapAttrs (_name: task: {
     id = task.id;
     kind = task.kind or "command";
@@ -49,7 +55,7 @@ let
       version = 1;
     };
     inherit
-      resolved
+      resolvedIdentity
       taskCatalog
       appCatalog
       workflowCatalog

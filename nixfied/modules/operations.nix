@@ -201,6 +201,7 @@ let
       command,
       runtimeInputs ? [ ],
       contractArgs ? [ ],
+      launcher ? null,
     }:
     {
       inherit
@@ -239,6 +240,7 @@ let
           "timeout"
         ];
       };
+      launcher = if launcher == null then { } else launcher;
       runtime = {
         slotEnv = "optional";
         workdir = "projectRoot";
@@ -272,25 +274,6 @@ let
         artifacts = [ ];
         stateKeys = [ ];
       };
-    };
-
-  mkApp =
-    {
-      taskId,
-      appId,
-      usage ? [ "nix run .#${appId}" ],
-      examples ? [ ],
-    }:
-    {
-      id = appId;
-      kind = "taskRef";
-      inherit
-        taskId
-        usage
-        examples
-        ;
-      category = "ops";
-      ownerFile = "nixfied/modules/operations.nix";
     };
 
   validateScript = ''
@@ -497,11 +480,13 @@ in
         summary = "Validate slot/env settings";
         description = "Validates PROJECT_ENV and NIX_ENV values against model runtime constraints.";
         command = validateScript;
-      };
-
-      nixfied.apps."validate-env" = mkApp {
-        taskId = "task.ops.validate-env";
-        appId = "validate-env";
+        launcher = {
+          enable = true;
+          appId = "validate-env";
+          category = "ops";
+          ownerFile = "nixfied/modules/operations.nix";
+          usage = [ "nix run .#validate-env" ];
+        };
       };
     })
 
@@ -514,6 +499,13 @@ in
           command = isolationScript;
           contractArgs = testIsolationContractArgs;
           runtimeInputs = [ pkgs.coreutils ];
+          launcher = {
+            enable = true;
+            appId = "test-isolation";
+            category = "ops";
+            ownerFile = "nixfied/modules/operations.nix";
+            usage = [ "nix run .#test-isolation" ];
+          };
         }
         // {
           runtime.references.taskIds = [
@@ -521,11 +513,6 @@ in
             isolationRunTaskId
           ];
         };
-
-      nixfied.apps."test-isolation" = mkApp {
-        taskId = "task.ops.test-isolation";
-        appId = "test-isolation";
-      };
     })
 
     (lib.mkIf (cfg.enable && cfg.ports.enable) {
@@ -534,11 +521,13 @@ in
         summary = "Print model-derived port assignments";
         description = "Prints computed per-slot/per-env ports from compiled runtime data.";
         command = portsScript;
-      };
-
-      nixfied.apps."ports" = mkApp {
-        taskId = "task.ops.ports";
-        appId = "ports";
+        launcher = {
+          enable = true;
+          appId = "ports";
+          category = "ops";
+          ownerFile = "nixfied/modules/operations.nix";
+          usage = [ "nix run .#ports" ];
+        };
       };
     })
 
@@ -554,11 +543,13 @@ in
           pkgs.gnused
           (if pkgs ? lsof then pkgs.lsof else pkgs.coreutils)
         ];
-      };
-
-      nixfied.apps."check-ports" = mkApp {
-        taskId = "task.ops.check-ports";
-        appId = "check-ports";
+        launcher = {
+          enable = true;
+          appId = "check-ports";
+          category = "ops";
+          ownerFile = "nixfied/modules/operations.nix";
+          usage = [ "nix run .#check-ports" ];
+        };
       };
     })
 
@@ -576,20 +567,21 @@ in
         command = healthScript;
         runtimeInputs = serviceProbeRuntimeInputs;
         contractArgs = serviceSelectionContractArgs;
-      };
-
-      nixfied.apps."health" = mkApp {
-        taskId = "task.ops.health";
-        appId = "health";
-        usage = [
-          "nix run .#health"
-          "nix run .#health -- --service postgres"
-          "nix run .#health -- --service helios --source real"
-        ];
-        examples = [
-          "nix run .#health -- --service postgres"
-          "nix run .#health -- --service helios --source real"
-        ];
+        launcher = {
+          enable = true;
+          appId = "health";
+          category = "ops";
+          ownerFile = "nixfied/modules/operations.nix";
+          usage = [
+            "nix run .#health"
+            "nix run .#health -- --service postgres"
+            "nix run .#health -- --service helios --source real"
+          ];
+          examples = [
+            "nix run .#health -- --service postgres"
+            "nix run .#health -- --service helios --source real"
+          ];
+        };
       };
     })
 
@@ -607,20 +599,21 @@ in
         command = readyScript;
         runtimeInputs = serviceProbeRuntimeInputs;
         contractArgs = serviceSelectionContractArgs;
-      };
-
-      nixfied.apps."ready" = mkApp {
-        taskId = "task.ops.ready";
-        appId = "ready";
-        usage = [
-          "nix run .#ready"
-          "nix run .#ready -- --service postgres"
-          "nix run .#ready -- --service helios --source real"
-        ];
-        examples = [
-          "nix run .#ready -- --service postgres"
-          "nix run .#ready -- --service helios --source real"
-        ];
+        launcher = {
+          enable = true;
+          appId = "ready";
+          category = "ops";
+          ownerFile = "nixfied/modules/operations.nix";
+          usage = [
+            "nix run .#ready"
+            "nix run .#ready -- --service postgres"
+            "nix run .#ready -- --service helios --source real"
+          ];
+          examples = [
+            "nix run .#ready -- --service postgres"
+            "nix run .#ready -- --service helios --source real"
+          ];
+        };
       };
     })
   ];

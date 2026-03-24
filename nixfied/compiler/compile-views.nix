@@ -43,6 +43,8 @@ let
               "task"
             else if app.kind == "workflowRef" then
               "workflow"
+            else if app.kind == "serviceOp" then
+              "service"
             else if app.kind == "serviceSetRef" then
               "service-set"
             else if app.kind == "machineOutput" then

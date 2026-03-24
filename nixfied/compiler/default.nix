@@ -38,7 +38,12 @@ let
       canonical
       ;
   };
-  compileServiceSurfaceCatalog = import ./compile-service-surface-catalog.nix { inherit lib; };
+  compileServiceSurfaceCatalog = import ./compile-service-surface-catalog.nix {
+    inherit
+      lib
+      pkgs
+      ;
+  };
   compileServices = import ./compile-services.nix { inherit lib; };
 
   compileTasks = import ./compile-tasks.nix {
@@ -200,6 +205,11 @@ rec {
         resolved = resolvedModuleGraph.config;
       };
 
+      resolvedServices = compileServices {
+        inherit pkgs;
+        resolved = resolvedModuleGraph.config;
+      };
+
       serviceSets = compileServiceSets {
         inherit
           projectRoot
@@ -211,7 +221,12 @@ rec {
       };
 
       serviceSurfaceCatalog = compileServiceSurfaceCatalog {
-        inherit serviceCatalog;
+        resolvedIdentity = resolvedModuleGraph.config.identity;
+        inherit
+          runtime
+          statePolicy
+          ;
+        services = resolvedServices;
       };
 
       taskCompilation = compileTasks {
@@ -243,6 +258,7 @@ rec {
       apps = compileApps {
         resolved = resolvedModuleGraph.config;
         inherit
+          serviceSurfaceCatalog
           serviceSets
           tasks
           workflows
@@ -370,6 +386,7 @@ rec {
           views
           apiCatalog
           runtimeManifests
+          serviceSurfaceCatalog
           ;
         resolved = resolvedModuleGraph.config;
       };
@@ -387,8 +404,9 @@ rec {
       runtime = runtime;
       statePolicy = statePolicy;
       serviceCatalog = serviceCatalog;
+      resolvedServices = resolvedServices;
       serviceSets = serviceSets;
-      serviceSurfaceCatalog = serviceSurfaceCatalog;
+      serviceSurfaceCatalog = finalized.model.compiled.serviceSurfaceCatalog;
       features = features;
       selectionIndex = selectionIndex;
       contractBundle = contractBundle;

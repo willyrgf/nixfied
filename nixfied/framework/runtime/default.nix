@@ -13,7 +13,6 @@
       frameworkSourceFlakeRef ? null,
       appPrograms ? { },
       serviceSetPrograms ? { },
-      serviceApps ? { },
       serviceHookEnv ? { },
     }:
     import ./dispatcher.nix {
@@ -28,7 +27,6 @@
         frameworkSourceFlakeRef
         appPrograms
         serviceSetPrograms
-        serviceApps
         serviceHookEnv
         ;
     };

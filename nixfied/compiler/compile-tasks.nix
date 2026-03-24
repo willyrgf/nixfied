@@ -58,6 +58,7 @@ let
       };
 
       commandApi = raw.commandApi;
+      launcher = raw.launcher;
 
       runtime = {
         slotEnv = raw.runtime.slotEnv;

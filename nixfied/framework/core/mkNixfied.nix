@@ -72,7 +72,7 @@ in
   introspectionGraph = compiledCore.introspectionGraph;
   introspectionBundle = compiledCore.introspectionBundle;
   selectionIndex = compiledCore.selectionIndex;
-  serviceSurfaceCatalog = compiledCore.serviceSurfaceCatalog;
+  serviceSurfaceCatalog = (compiledCore.model.compiled or { }).serviceSurfaceCatalog or { };
   serviceApis = execution.serviceApis;
   serviceHookEnv = execution.serviceHookEnv;
 

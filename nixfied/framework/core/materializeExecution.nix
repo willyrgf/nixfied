@@ -192,6 +192,8 @@ let
     appId: app:
     if builtins.hasAttr appId manifestBackedAppPrograms then
       manifestBackedAppPrograms.${appId}
+    else if (app.kind or "") == "serviceOp" then
+      serviceRuntimeSurfaces.serviceApps.${appId}.program
     else if (app.kind or "") == "serviceSetRef" then
       serviceSetPrograms.${app.serviceSetId}.programsByOperation.${app.operation}.program
     else if (app.kind or "") == "machineOutput" then
@@ -228,7 +230,6 @@ let
       ;
     appPrograms = appPrograms;
     serviceSetPrograms = serviceSetPrograms;
-    serviceApps = serviceRuntimeSurfaces.serviceApps;
     serviceHookEnv = serviceRuntimeSurfaces.serviceHookEnv;
   };
 in
@@ -241,6 +242,5 @@ in
     baseApps
     ;
   serviceApis = serviceRuntimeSurfaces.serviceApis;
-  serviceApps = serviceRuntimeSurfaces.serviceApps;
   serviceHookEnv = serviceRuntimeSurfaces.serviceHookEnv;
 }

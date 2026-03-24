@@ -2,10 +2,10 @@
   lib,
   model,
   selectionIndex,
-  serviceSurfaceCatalog,
   workspaceMarkerPresent,
 }:
 let
+  serviceSurfaceCatalog = (model.compiled or { }).serviceSurfaceCatalog or { };
   viewAppNames = builtins.sort builtins.lessThan (builtins.attrNames (model.views.apps or { }));
 
   selectorDispatcherAppNames = [

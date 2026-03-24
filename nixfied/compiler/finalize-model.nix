@@ -7,6 +7,7 @@
   runtime,
   apiCatalog ? null,
   runtimeManifests ? null,
+  serviceSurfaceCatalog ? null,
   services ? null,
   serviceCatalog,
   serviceSets,
@@ -42,12 +43,17 @@ let
     tasks = tasks;
     workflows = workflows;
     features = features;
+    compiled = {
+      apiCatalog = apiCatalog;
+      runtimeManifests = runtimeManifests;
+      serviceSurfaceCatalog = serviceSurfaceCatalog;
+    };
   };
 
   model = canonical.canonicalize {
     schema = {
       kind = "nixfied-model";
-      version = 5;
+      version = 6;
     };
 
     identity = {
@@ -66,6 +72,11 @@ let
     tasks = tasks;
     workflows = workflows;
     features = features;
+    compiled = {
+      apiCatalog = apiCatalog;
+      runtimeManifests = runtimeManifests;
+      serviceSurfaceCatalog = serviceSurfaceCatalog;
+    };
 
     views = {
       apps = views.apps;
@@ -89,7 +100,5 @@ in
     model
     stateHash
     runtimeHash
-    apiCatalog
-    runtimeManifests
     ;
 }

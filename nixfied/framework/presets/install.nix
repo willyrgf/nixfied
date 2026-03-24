@@ -1,6 +1,6 @@
 {
   mkCommandTask,
-  mkTaskApp,
+  mkTaskLauncher,
   pkgs,
   frameworkSourceRevision ? "unknown",
   ownerFile ? "nixfied/framework/presets/install.nix",
@@ -96,6 +96,17 @@ in
       runtimeInputs = frameworkInstallRuntimeInputs;
       contractArgs = frameworkInstallContractArgs;
       command = mkFrameworkInstallCommand { };
+      launcher = mkTaskLauncher {
+        appId = "framework::install";
+        category = "framework";
+        usage = [
+          "nix run .#framework::install"
+          "nix run .#framework::install -- --vendor"
+          "nix run .#framework::install -- --vendor --target ."
+          "nix run .#framework::install -- --vendor --upgrade --target ."
+        ];
+        inherit ownerFile;
+      };
       inherit ownerFile;
     };
 
@@ -113,33 +124,16 @@ in
       command = mkFrameworkInstallCommand {
         upgradeDefault = true;
       };
-      inherit ownerFile;
-    };
-  };
-
-  apps = {
-    "framework::install" = mkTaskApp {
-      taskId = "task.framework.install";
-      appId = "framework::install";
-      category = "framework";
-      usage = [
-        "nix run .#framework::install"
-        "nix run .#framework::install -- --vendor"
-        "nix run .#framework::install -- --vendor --target ."
-        "nix run .#framework::install -- --vendor --upgrade --target ."
-      ];
-      inherit ownerFile;
-    };
-
-    "framework::upgrade" = mkTaskApp {
-      taskId = "task.framework.upgrade";
-      appId = "framework::upgrade";
-      category = "framework";
-      usage = [
-        "nix run .#framework::upgrade -- --target ."
-        "nix run .#framework::upgrade -- --target . --reset-project"
-        "nix run .#framework::upgrade -- --target . --reset-local"
-      ];
+      launcher = mkTaskLauncher {
+        appId = "framework::upgrade";
+        category = "framework";
+        usage = [
+          "nix run .#framework::upgrade -- --target ."
+          "nix run .#framework::upgrade -- --target . --reset-project"
+          "nix run .#framework::upgrade -- --target . --reset-local"
+        ];
+        inherit ownerFile;
+      };
       inherit ownerFile;
     };
   };

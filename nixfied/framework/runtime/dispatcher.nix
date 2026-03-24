@@ -9,7 +9,6 @@
   frameworkSourceFlakeRef ? null,
   appPrograms ? { },
   serviceSetPrograms ? { },
-  serviceApps ? { },
   serviceHookEnv ? { },
 }:
 let
@@ -302,7 +301,6 @@ in
   };
 }
 // viewLaunchApps
-// serviceApps
 // frameworkProxyApps
 // {
   default =

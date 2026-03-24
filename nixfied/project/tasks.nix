@@ -1,7 +1,7 @@
 {
   lib,
   mkCommandTask,
-  mkTaskApp,
+  mkTaskLauncher,
   commonRuntimeInputs,
   nixChecksPkg,
   nixChecksContractArgs,
@@ -30,6 +30,9 @@ let
         echo "INFO: starting dev workflow"
         echo "SKIP: dev command placeholder. Edit nixfied/project/tasks.nix to run your app."
       '';
+      launcher = mkTaskLauncher {
+        appId = "dev";
+      };
     };
 
     build = mkCommandTask {
@@ -45,6 +48,9 @@ let
         echo "INFO: running build workflow"
         echo "SKIP: build command placeholder. Edit nixfied/project/tasks.nix."
       '';
+      launcher = mkTaskLauncher {
+        appId = "build";
+      };
     };
 
     check = mkCommandTask {
@@ -60,6 +66,14 @@ let
         workflowId = null;
       };
       contractArgs = nixChecksContractArgs;
+      launcher = mkTaskLauncher {
+        appId = "check";
+        usage = [
+          "nix run .#check"
+          "nix run .#check -- --full"
+        ];
+        examples = [ "nix run .#check -- --full" ];
+      };
     };
 
     format = mkCommandTask {
@@ -81,6 +95,9 @@ let
         set -euo pipefail
         echo "INFO: running format task"
       '';
+      launcher = mkTaskLauncher {
+        appId = "format";
+      };
     };
 
     test = mkCommandTask {
@@ -110,6 +127,9 @@ let
           description = "Select workflow mode.";
         }
       ];
+      launcher = mkTaskLauncher {
+        appId = "test";
+      };
     };
 
     ci = mkCommandTask {
@@ -163,6 +183,13 @@ let
           description = "Alias for --mode full.";
         }
       ];
+      launcher = mkTaskLauncher {
+        appId = "ci";
+        usage = [
+          "nix run .#ci"
+          "nix run .#ci -- --summary"
+        ];
+      };
     };
 
     ci-quality = mkCommandTask {
@@ -386,53 +413,10 @@ let
     };
   };
 
-  apps = {
-    dev = mkTaskApp {
-      taskId = "task.dev";
-      appId = "dev";
-    };
-
-    build = mkTaskApp {
-      taskId = "task.build";
-      appId = "build";
-    };
-
-    check = mkTaskApp {
-      taskId = "task.check";
-      appId = "check";
-      usage = [
-        "nix run .#check"
-        "nix run .#check -- --full"
-      ];
-      examples = [ "nix run .#check -- --full" ];
-    };
-
-    format = mkTaskApp {
-      taskId = "task.format";
-      appId = "format";
-    };
-
-    test = mkTaskApp {
-      taskId = "task.test";
-      appId = "test";
-    };
-
-    ci = mkTaskApp {
-      taskId = "task.ci";
-      appId = "ci";
-      usage = [
-        "nix run .#ci"
-        "nix run .#ci -- --summary"
-      ];
-    };
-  };
 in
 {
   config = {
     nixfied.tasks =
       tasks // frameworkInstallPreset.tasks // frameworkTestPreset.tasks // frameworkSelfhostPreset.tasks;
-
-    nixfied.apps =
-      apps // frameworkInstallPreset.apps // frameworkTestPreset.apps // frameworkSelfhostPreset.apps;
   };
 }

@@ -3,7 +3,7 @@ let
   t = lib.types;
 in
 {
-  options.nixfied.apps = lib.mkOption {
+  options.nixfied.machineOutputs = lib.mkOption {
     type = t.attrsOf (
       t.submodule (
         { name, ... }:
@@ -12,36 +12,6 @@ in
             id = lib.mkOption {
               type = t.str;
               default = name;
-            };
-
-            kind = lib.mkOption {
-              type = t.enum [
-                "taskRef"
-                "workflowRef"
-                "serviceSetRef"
-                "machineOutput"
-              ];
-              default = "taskRef";
-            };
-
-            taskId = lib.mkOption {
-              type = t.str;
-              default = "";
-            };
-
-            workflowId = lib.mkOption {
-              type = t.str;
-              default = "";
-            };
-
-            serviceSetId = lib.mkOption {
-              type = t.str;
-              default = "";
-            };
-
-            operation = lib.mkOption {
-              type = t.str;
-              default = "";
             };
 
             targetAppId = lib.mkOption {
@@ -64,11 +34,9 @@ in
               default = [ ];
             };
 
-            validation = {
-              contractRef = lib.mkOption {
-                type = t.str;
-                default = "";
-              };
+            validation.contractRef = lib.mkOption {
+              type = t.str;
+              default = "";
             };
 
             summary = lib.mkOption {
