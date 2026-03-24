@@ -80,7 +80,7 @@ in
       printf ',"failedAppId":%s' "$(json_string_or_null "$failed_app_id")"
       printf ',"contractRef":%s' "$(json_string_or_null "$contract_ref")"
       if [ "$stage" = "validation" ]; then
-        printf ',"validator":"cue"'
+        printf ',"validator":"nixfied-kernel"'
       else
         printf ',"validator":null'
       fi
