@@ -145,7 +145,6 @@ let
         pkgs.nixfmt-rfc-style
         pkgs.gnugrep
         pkgs.gnused
-        pkgs.python3
       ]
       ++ compiledCore.resolved.tooling.devShellPackages;
 
