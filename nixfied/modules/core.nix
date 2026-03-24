@@ -70,7 +70,7 @@ in
       };
 
       definitions = lib.mkOption {
-        type = t.attrsOf t.anything;
+        type = t.attrsOf t.attrs;
         default = { };
         description = "Project-owned machine contract definitions compiled into the shared contract bundle.";
       };
