@@ -44,7 +44,6 @@ let
     pkgs.gnugrep
     pkgs.gnused
     pkgs.curl
-    pkgs.jq
     netcatPkg
     postgresProbePkg
   ];
@@ -215,7 +214,7 @@ let
         command = command;
       };
       commandApi = {
-        version = 1;
+        version = 2;
         commandClass = "typed";
         summary = summary;
         details = description;
@@ -514,10 +513,7 @@ in
           description = "Runs deterministic isolation smoke checks from model metadata.";
           command = isolationScript;
           contractArgs = testIsolationContractArgs;
-          runtimeInputs = [
-            pkgs.coreutils
-            pkgs.jq
-          ];
+          runtimeInputs = [ pkgs.coreutils ];
         }
         // {
           runtime.references.taskIds = [

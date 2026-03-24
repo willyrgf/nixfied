@@ -6,9 +6,13 @@ let
 in
 assert pkgs.lib.hasInfix "mkContractRuntime =" shellContractSource;
 assert pkgs.lib.hasInfix "_nixfied_contract_load_runtime_plan() {" shellContractSource;
-assert pkgs.lib.hasInfix "NIXFIED_CONTRACT_ENV_NAMES" shellContractSource;
-assert pkgs.lib.hasInfix "NIXFIED_CONTRACT_ARG_BY_LONG" shellContractSource;
-assert pkgs.lib.hasInfix "NIXFIED_CONTRACT_FAILURE_CODE" shellContractSource;
+assert pkgs.lib.hasInfix "\"nixfied-command-runtime-plan\"" shellContractSource;
+assert pkgs.lib.hasInfix "builtins.toJSON" shellContractSource;
+assert pkgs.lib.hasInfix "validate-input" shellContractSource;
+assert pkgs.lib.hasInfix "validate-exit" shellContractSource;
+assert !(pkgs.lib.hasInfix "NIXFIED_CONTRACT_ENV_NAMES" shellContractSource);
+assert !(pkgs.lib.hasInfix "NIXFIED_CONTRACT_ARG_BY_LONG" shellContractSource);
+assert !(pkgs.lib.hasInfix "NIXFIED_CONTRACT_FAILURE_CODE" shellContractSource);
 assert !(pkgs.lib.hasInfix "(.env // [])[]" shellContractSource);
 assert !(pkgs.lib.hasInfix "(.args // [])[]" shellContractSource);
 assert !(pkgs.lib.hasInfix "any(.value == $code)" shellContractSource);

@@ -80,23 +80,21 @@ let
         exit 1
       fi
 
-      TOTAL=$(
-        ${kernelPackage}/bin/nixfied-kernel json-length - <<<"$SUPERVISOR_PROCESS_JSON"
+      mapfile -t SUPERVISOR_ROWS < <(
+        ${kernelPackage}/bin/nixfied-kernel adapter decode supervisor-status - <<<"$SUPERVISOR_PROCESS_JSON"
       )
+      TOTAL="''${#SUPERVISOR_ROWS[@]}"
       if [ "$TOTAL" -eq 0 ]; then
         log_ok "supervisor healthy services=0 slot=$SLOT env=$ENV"
         exit 0
       fi
 
       UNHEALTHY=$(
-        total_index=$((TOTAL - 1))
-        idx=0
+        local row
+        local name status running ready
         parts=""
-        while [ "$idx" -le "$total_index" ]; do
-          status="$(${kernelPackage}/bin/nixfied-kernel query-json - ".''${idx}.status" --raw <<<"$SUPERVISOR_PROCESS_JSON")"
-          running="$(${kernelPackage}/bin/nixfied-kernel query-json - ".''${idx}.is_running" --raw <<<"$SUPERVISOR_PROCESS_JSON")"
-          ready="$(${kernelPackage}/bin/nixfied-kernel query-json - ".''${idx}.is_ready" --raw <<<"$SUPERVISOR_PROCESS_JSON")"
-          name="$(${kernelPackage}/bin/nixfied-kernel query-json - ".''${idx}.name" --raw <<<"$SUPERVISOR_PROCESS_JSON")"
+        for row in "''${SUPERVISOR_ROWS[@]}"; do
+          IFS=$'\t' read -r name status running ready <<<"$row"
           if [ "$status" != "Running" ] || [ "$running" != "true" ]; then
             entry="''${name}:status=$status,running=$running,ready=$ready"
             if [ -n "$parts" ]; then
@@ -105,7 +103,6 @@ let
               parts="$entry"
             fi
           fi
-          idx=$((idx + 1))
         done
         printf '%s' "$parts"
       )

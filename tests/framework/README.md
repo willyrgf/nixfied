@@ -109,23 +109,29 @@ Use `tests/framework/default.nix` as the source of truth for:
 
 ## Contract Migration Guard
 
-`contract-migration-guard` is the repository policy gate for the CUE contract
-migration.
+`contract-migration-guard` is the repository policy gate for the final runtime
+hardening state.
 
 It fails if:
 
-- framework-owned Python helpers return under `nixfied/framework/core/`
-- any framework source under `nixfied/framework/` uses `jq` outside the exact approved adapter, validation, or build-check sites
+- framework-owned CUE files or CUE references return
+- `mkValidator.nix` or `run-registry.nix` returns
+- deprecated kernel seams such as `validate-json`, `query-json`, or
+  `json-length` are referenced from framework Nix/Bash runtime code
+- shell-owned `run-record`, `summary`, or `meta` sidecars return
+- framework-owned `jq` returns under framework/modules/build-check paths
 - machine output transport falls back to stdout scraping instead of the
   declared `NIXFIED_MACHINE_OUTPUT_FILE` channel
 
 That guard complements the runtime contract checks. The architecture is now:
 
-- contract definitions in `nixfied/contracts/`
-- generated validator bundles in `nixfied/framework/contracts/`
+- kernel-only validation and state mutation from compiled runtime assets
+- canonical command/runtime catalogs consumed directly by runtime surfaces
+- zero framework CUE
+- zero framework `jq` in framework runtime/build-check paths
+- no validator shim
 - explicit payload-file machine output transport
-- compile-time introspection bundles with a thin runtime selector and contract-validated generated JSON assets
-- framework `jq` policy enforced by exact-site exceptions rather than whole-file allowlists
+- compile-time introspection bundles with thin runtime selectors over generated assets
 
 Run it directly with:
 

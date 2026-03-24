@@ -234,10 +234,10 @@ let
           {
             type = "workflowRef";
             workflowId = workflowId;
-          };
+      };
 
       commandApi = {
-        version = 1;
+        version = 2;
         commandClass = "typed";
         summary = summary;
         details = description;

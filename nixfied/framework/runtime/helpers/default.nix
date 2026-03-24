@@ -81,10 +81,6 @@ let
     inherit pkgs;
     inherit (helpers) loggingPrelude;
   };
-  runRegistry = import ./run-registry.nix {
-    inherit pkgs project;
-    inherit (helpers) loggingPrelude;
-  };
 in
 {
   inherit (helpers)
@@ -125,5 +121,4 @@ in
   inherit servicePolicy;
   inherit (portUtils) mkPortCleanup mkPortConflictChecker;
   inherit (parallel) mkParallelRunner;
-  inherit (runRegistry) runRegistryStart;
 }

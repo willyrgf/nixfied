@@ -32,7 +32,7 @@ assert pkgs.lib.hasInfix "nixfied_require_next_arg()" shellCommonSource;
 assert pkgs.lib.hasInfix "nixfied_exit_usage_with_usage()" shellCommonSource;
 assert pkgs.lib.hasInfix "runtimeDefaults ? import ./runtime-defaults.nix" shellCommonSource;
 assert pkgs.lib.hasInfix "service_status_file_for()" runtimeEventsSource;
-assert pkgs.lib.hasInfix "summary.steps.tsv" summarySource;
+assert pkgs.lib.hasInfix "nixfied-kernel summary render-human" summarySource;
 assert (!pkgs.lib.hasInfix "\${pkgs.jq}/bin/jq" runtimeEventsSource);
 assert (!pkgs.lib.hasInfix "\${pkgs.jq}/bin/jq" summarySource);
 assert pkgs.lib.hasInfix "loopbackIp = \"127.0.0.1\";" runtimeDefaultsSource;

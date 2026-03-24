@@ -72,6 +72,8 @@ let
         required = spec.required or false;
         hasDefault = spec ? default;
         default = spec.default or null;
+        min = spec.min or null;
+        max = spec.max or null;
       }
     else
       {
@@ -80,6 +82,8 @@ let
         required = false;
         hasDefault = false;
         default = null;
+        min = null;
+        max = null;
       }
   ) allowSpecsRaw;
 
@@ -104,6 +108,34 @@ let
   allowSpecNames = map (spec: spec.name) (
     builtins.filter (spec: spec.name != "") validatedAllowSpecs
   );
+  allowSpecFiles = builtins.listToAttrs (
+    map (
+      spec:
+      {
+        name = spec.name;
+        value = pkgs.writeText "nixfied-env-spec-${spec.name}.json" (
+          builtins.toJSON (
+            ({
+              inherit (spec)
+                type
+                required
+                ;
+              values = spec.values or [ ];
+            }
+            // lib.optionalAttrs (spec.min != null) {
+              min = spec.min;
+            }
+            // lib.optionalAttrs (spec.max != null) {
+              max = spec.max;
+            })
+            // lib.optionalAttrs spec.hasDefault {
+              default = valueToString spec.default;
+            }
+          )
+        );
+      }
+    ) (builtins.filter (spec: spec.name != "") validatedAllowSpecs)
+  );
 
   allowSpecsRuntime = pkgs.writeText "nixfied-env-file-specs.sh" ''
       declare -ag NIXFIED_ENV_SPEC_NAMES=(
@@ -113,6 +145,7 @@ let
       declare -Ag NIXFIED_ENV_SPEC_REQUIRED=()
       declare -Ag NIXFIED_ENV_SPEC_HAS_DEFAULT=()
       declare -Ag NIXFIED_ENV_SPEC_DEFAULT=()
+      declare -Ag NIXFIED_ENV_SPEC_FILE=()
     ${lib.concatStringsSep "\n" (
       map (
         spec:
@@ -128,6 +161,7 @@ let
             lib.escapeShellArg (if spec.hasDefault then "1" else "0")
           }
           NIXFIED_ENV_SPEC_DEFAULT[${lib.escapeShellArg name}]=${lib.escapeShellArg (valueToString spec.default)}
+          NIXFIED_ENV_SPEC_FILE[${lib.escapeShellArg name}]=${lib.escapeShellArg (toString allowSpecFiles.${name})}
         ''
       ) (builtins.filter (spec: spec.name != "") validatedAllowSpecs)
     )}
@@ -158,78 +192,19 @@ let
       local key="$1"
       local type="$2"
       local value="$3"
+      local spec_file="''${NIXFIED_ENV_SPEC_FILE[$key]:-}"
 
-      case "$type" in
-        string)
-          return 0
-          ;;
-        int)
-          if ! printf '%s' "$value" | ${pkgs.gnugrep}/bin/grep -Eq '^-?[0-9]+$'; then
-            log_error ".env key $key expects int (got '$value')"
-            return 1
-          fi
-          ;;
-        bool)
-          case "$value" in
-            1|0|true|false|TRUE|FALSE|yes|no|on|off)
-              ;;
-            *)
-              log_error ".env key $key expects bool (got '$value')"
-              return 1
-              ;;
-          esac
-          ;;
-        pathAbs)
-          case "$value" in
-            /*) ;;
-            *)
-              log_error ".env key $key expects absolute path (got '$value')"
-              return 1
-              ;;
-          esac
-          ;;
-        pathRel)
-          case "$value" in
-            ""|/*)
-              log_error ".env key $key expects relative path (got '$value')"
-              return 1
-              ;;
-            *)
-              ;;
-          esac
-          ;;
-        port)
-          if ! printf '%s' "$value" | ${pkgs.gnugrep}/bin/grep -Eq '^[0-9]+$'; then
-            log_error ".env key $key expects TCP port (got '$value')"
-            return 1
-          fi
-          if [ "$value" -lt 1 ] || [ "$value" -gt 65535 ]; then
-            log_error ".env key $key expects TCP port 1-65535 (got '$value')"
-            return 1
-          fi
-          ;;
-        durationSec)
-          if ! printf '%s' "$value" | ${pkgs.gnugrep}/bin/grep -Eq '^[0-9]+$'; then
-            log_error ".env key $key expects durationSec integer (got '$value')"
-            return 1
-          fi
-          if [ "$value" -le 0 ]; then
-            log_error ".env key $key expects durationSec > 0 (got '$value')"
-            return 1
-          fi
-          ;;
-        json)
-          if ! printf '%s' "$value" | ${kernelPackage}/bin/nixfied-kernel validate-json - >/dev/null 2>&1; then
-            log_error ".env key $key expects valid JSON"
-            return 1
-          fi
-          ;;
-        *)
-          log_error "unsupported env spec type key=$key type=$type"
-          return 1
-          ;;
-      esac
-      return 0
+      if [ -z "$spec_file" ] || [ ! -f "$spec_file" ]; then
+        log_error "missing env spec file key=$key type=$type"
+        return 1
+      fi
+
+      if ${kernelPackage}/bin/nixfied-kernel validate-scalar "$spec_file" "$value" >/dev/null 2>&1; then
+        return 0
+      fi
+
+      log_error ".env key $key expects $type (got '$value')"
+      return 1
     }
 
     nixfied_load_env_file_main() {

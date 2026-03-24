@@ -11,6 +11,7 @@
 }:
 let
   lib = pkgs.lib;
+  kernelPackage = import ./kernel { inherit pkgs; };
   modelSchemaKind =
     if builtins.isAttrs model && model ? schema && builtins.isAttrs model.schema then
       model.schema.kind or ""
@@ -164,13 +165,9 @@ let
       ;
   };
   runtimeArtifactContracts = import ../contracts/runtime-artifact-contracts.nix { inherit pkgs; };
-  summaryValidator = import ../contracts/mkValidator.nix {
-    inherit
-      pkgs
-      ;
-    contractBundle = runtimeArtifactContracts;
-    contractRef = "runtime.summary";
-  };
+  validationBundleFile = pkgs.writeText "nixfied-runtime-artifact-contract-bundle.json" (
+    builtins.toJSON runtimeArtifactContracts.bundle
+  );
 in
 pkgs.writeShellScriptBin "nixfied-executor" ''
       set -euo pipefail
@@ -532,6 +529,10 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
       RUN_SUFFIX_REASON=""
       LAST_WORKFLOW_SUMMARY_FILE=""
       LAST_WORKFLOW_ATTEMPT_ID=""
+      LAST_WORKFLOW_SUMMARY_PASSED_COUNT="0"
+      LAST_WORKFLOW_SUMMARY_FAILED_COUNT="0"
+      LAST_WORKFLOW_SUMMARY_SKIPPED_COUNT="0"
+      LAST_WORKFLOW_SUMMARY_CANCELED_COUNT="0"
 
       compute_attempt_id() {
         local attempt_dir
@@ -1823,40 +1824,6 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         printf '%s' "''${mins}m ''${secs}s"
       }
 
-      summary_fields_file_for() {
-        local summary_file="$1"
-        printf '%s/summary.fields' "$(dirname "$summary_file")"
-      }
-
-      summary_steps_file_for() {
-        local summary_file="$1"
-        printf '%s/summary.steps.tsv' "$(dirname "$summary_file")"
-      }
-
-      load_summary_fields() {
-        local fields_file="$1"
-
-        if [ ! -f "$fields_file" ]; then
-          return 1
-        fi
-
-        unset \
-          SUMMARY_TOTAL_DURATION \
-          SUMMARY_SETUP_DURATION \
-          SUMMARY_STEPS_DURATION \
-          SUMMARY_TEARDOWN_DURATION \
-          SUMMARY_ACCOUNTED_DURATION \
-          SUMMARY_UNTRACKED_DURATION \
-          SUMMARY_PARALLEL_MAX_WORKERS \
-          SUMMARY_PARALLEL_PEAK_WORKERS \
-          SUMMARY_PARALLEL_CANCELED_COUNT \
-          SUMMARY_PASSED_COUNT \
-          SUMMARY_FAILED_COUNT \
-          SUMMARY_SKIPPED_COUNT \
-          SUMMARY_CANCELED_COUNT || true
-        . "$fields_file"
-      }
-
       workflow_step_status() {
         local state="$1"
         local reason="$2"
@@ -2174,17 +2141,6 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         local duration_seconds="$4"
         local summary_file="$5"
         local events_index_file=""
-        local summary_duration=""
-        local timing_setup=""
-        local timing_steps=""
-        local timing_teardown=""
-        local timing_accounted=""
-        local timing_untracked=""
-        local parallel_max_workers=""
-        local parallel_peak_workers=""
-        local parallel_canceled_count=""
-        local summary_fields_file=""
-        local summary_steps_file=""
         local steps_display_file=""
         local steps_tmp=""
         local step_name=""
@@ -2192,41 +2148,23 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         local step_duration=""
         local step_marker=""
 
+        if [ -n "$summary_file" ] && [ -f "$summary_file" ]; then
+          if ${kernelPackage}/bin/nixfied-kernel summary render-human "$summary_file"; then
+            return 0
+          fi
+          echo "WARN: failed to render summary envelope '$summary_file'; falling back to registry-derived report"
+        fi
+
         echo ""
         echo "------------------------------------------------------------"
         echo "Summary"
         echo "------------------------------------------------------------"
 
-        if [ -n "$summary_file" ] && [ -f "$summary_file" ]; then
-          echo "Source: $summary_file"
-          summary_fields_file="$(summary_fields_file_for "$summary_file")"
-          summary_steps_file="$(summary_steps_file_for "$summary_file")"
-          if load_summary_fields "$summary_fields_file"; then
-            summary_duration="''${SUMMARY_TOTAL_DURATION:-}"
-            timing_setup="''${SUMMARY_SETUP_DURATION:-}"
-            timing_steps="''${SUMMARY_STEPS_DURATION:-}"
-            timing_teardown="''${SUMMARY_TEARDOWN_DURATION:-}"
-            timing_accounted="''${SUMMARY_ACCOUNTED_DURATION:-}"
-            timing_untracked="''${SUMMARY_UNTRACKED_DURATION:-}"
-            parallel_max_workers="''${SUMMARY_PARALLEL_MAX_WORKERS:-}"
-            parallel_peak_workers="''${SUMMARY_PARALLEL_PEAK_WORKERS:-}"
-            parallel_canceled_count="''${SUMMARY_PARALLEL_CANCELED_COUNT:-}"
-            if is_nonneg_int "$summary_duration"; then
-              duration_seconds="$summary_duration"
-            fi
-            if [ -f "$summary_steps_file" ]; then
-              steps_display_file="$summary_steps_file"
-            fi
-          fi
-        fi
-
-        if [ -z "$steps_display_file" ]; then
-          events_index_file="$(registry_events_index_snapshot "$REGISTRY_ROOT" 2>/dev/null || true)"
-          if [ -n "$events_index_file" ] && [ -f "$events_index_file" ]; then
-            steps_tmp="$(mktemp "''${TMPDIR:-/tmp}/nixfied-summary-steps.XXXXXX")" || true
-            if [ -n "$steps_tmp" ] && workflow_collect_steps "$run_id" "$events_index_file" "$steps_tmp" 2>/dev/null; then
-              steps_display_file="$steps_tmp"
-            fi
+        events_index_file="$(registry_events_index_snapshot "$REGISTRY_ROOT" 2>/dev/null || true)"
+        if [ -n "$events_index_file" ] && [ -f "$events_index_file" ]; then
+          steps_tmp="$(mktemp "''${TMPDIR:-/tmp}/nixfied-summary-steps.XXXXXX")" || true
+          if [ -n "$steps_tmp" ] && workflow_collect_steps "$run_id" "$events_index_file" "$steps_tmp" 2>/dev/null; then
+            steps_display_file="$steps_tmp"
           fi
         fi
 
@@ -2250,20 +2188,6 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
         if is_nonneg_int "$duration_seconds"; then
           echo "Total time: $(format_duration_seconds "$duration_seconds")"
-        fi
-
-        if is_nonneg_int "$timing_setup" \
-          && is_nonneg_int "$timing_steps" \
-          && is_nonneg_int "$timing_teardown" \
-          && is_nonneg_int "$timing_accounted" \
-          && is_nonneg_int "$timing_untracked"; then
-          echo "INFO: Time breakdown setup=''${timing_setup}s steps=''${timing_steps}s teardown=''${timing_teardown}s accounted=''${timing_accounted}s untracked=''${timing_untracked}s"
-        fi
-
-        if is_nonneg_int "$parallel_max_workers" \
-          && is_nonneg_int "$parallel_peak_workers" \
-          && is_nonneg_int "$parallel_canceled_count"; then
-          echo "INFO: Parallelism max_workers=$parallel_max_workers peak_workers=$parallel_peak_workers canceled_count=$parallel_canceled_count"
         fi
 
         if [ "$exit_code" -eq 0 ]; then
@@ -2294,8 +2218,6 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         local mode
         local artifacts_dir
         local summary_file
-        local summary_fields_file
-        local summary_steps_file
         local summary_tmp
         local summary_steps_tmp
         local summary_started_at="$started_at"
@@ -2322,11 +2244,14 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         local leaf_task_ids_lines=""
         local events_index_file=""
         local setup_timing_fields
-        local validate_stderr
         local attempt_id="''${NIXFIED_ATTEMPT_ID:-}"
 
         LAST_WORKFLOW_SUMMARY_FILE=""
         LAST_WORKFLOW_ATTEMPT_ID="$attempt_id"
+        LAST_WORKFLOW_SUMMARY_PASSED_COUNT="0"
+        LAST_WORKFLOW_SUMMARY_FAILED_COUNT="0"
+        LAST_WORKFLOW_SUMMARY_SKIPPED_COUNT="0"
+        LAST_WORKFLOW_SUMMARY_CANCELED_COUNT="0"
 
         should_write="$(workflow_write_summary "$workflow_id")"
         if [ "$should_write" != "true" ]; then
@@ -2340,8 +2265,6 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           return 1
         fi
         summary_file="$artifacts_dir/summary.json"
-        summary_fields_file="$artifacts_dir/summary.fields"
-        summary_steps_file="$artifacts_dir/summary.steps.tsv"
 
         if ! mkdir -p "$artifacts_dir"; then
           echo "ERROR: failed to create artifacts directory '$artifacts_dir'"
@@ -2358,9 +2281,9 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         fi
 
         events_index_file="$(registry_events_index_snapshot "$REGISTRY_ROOT" 2>/dev/null || true)"
-        summary_steps_tmp="$(mktemp "$summary_steps_file.tmp.XXXXXX")" || {
+        summary_steps_tmp="$(mktemp "''${TMPDIR:-/tmp}/nixfied-summary-steps-write.XXXXXX")" || {
           registry_snapshot_cleanup "$events_index_file"
-          echo "ERROR: failed to create summary steps temp file '$summary_steps_file'"
+          echo "ERROR: failed to create workflow summary steps temp file"
           return 1
         }
         if [ -n "$events_index_file" ] && [ -f "$events_index_file" ]; then
@@ -2457,97 +2380,37 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           } > "$target_file"
         }
 
-        write_summary_sidecars() {
-          local fields_target="$1"
-          local steps_target="$2"
-          local steps_source="$3"
-          local fields_tmp
-          local steps_tmp
-
-          fields_tmp="$(mktemp "$fields_target.tmp.XXXXXX")" || return 1
-          steps_tmp="$(mktemp "$steps_target.tmp.XXXXXX")" || {
-            rm -f "$fields_tmp"
-            return 1
-          }
-
-          {
-            printf 'SUMMARY_TOTAL_DURATION=%q\n' "$duration_seconds"
-            printf 'SUMMARY_SETUP_DURATION=%q\n' "$setup_duration"
-            printf 'SUMMARY_STEPS_DURATION=%q\n' "$steps_duration"
-            printf 'SUMMARY_TEARDOWN_DURATION=%q\n' "$teardown_duration"
-            printf 'SUMMARY_ACCOUNTED_DURATION=%q\n' "$accounted_duration"
-            printf 'SUMMARY_UNTRACKED_DURATION=%q\n' "$untracked_duration"
-            printf 'SUMMARY_PARALLEL_MAX_WORKERS=%q\n' "$parallel_max_workers"
-            printf 'SUMMARY_PARALLEL_PEAK_WORKERS=%q\n' "$parallel_peak_workers"
-            printf 'SUMMARY_PARALLEL_CANCELED_COUNT=%q\n' "$parallel_canceled_count"
-            printf 'SUMMARY_PASSED_COUNT=%q\n' "$passed"
-            printf 'SUMMARY_FAILED_COUNT=%q\n' "$failed"
-            printf 'SUMMARY_SKIPPED_COUNT=%q\n' "$skipped"
-            printf 'SUMMARY_CANCELED_COUNT=%q\n' "$canceled"
-          } > "$fields_tmp" || {
-            rm -f "$fields_tmp" "$steps_tmp"
-            return 1
-          }
-
-          if ! cp "$steps_source" "$steps_tmp"; then
-            rm -f "$fields_tmp" "$steps_tmp"
-            return 1
-          fi
-
-          if ! mv "$fields_tmp" "$fields_target"; then
-            rm -f "$fields_tmp" "$steps_tmp"
-            return 1
-          fi
-          if ! mv "$steps_tmp" "$steps_target"; then
-            rm -f "$steps_tmp"
-            return 1
-          fi
-        }
-
         summary_tmp="$(mktemp "$summary_file.tmp.XXXXXX")"
-        validate_stderr="$(mktemp "$summary_file.validate.XXXXXX")"
         if ! write_summary_payload "$summary_tmp"; then
-          rm -f "$summary_tmp" "$summary_steps_tmp" "$validate_stderr"
-          registry_snapshot_cleanup "$events_file"
+          rm -f "$summary_tmp" "$summary_steps_tmp"
+          registry_snapshot_cleanup "$events_index_file"
           echo "ERROR: failed to write summary file '$summary_file'"
           return 1
         fi
-        if ! ${summaryValidator} "$summary_tmp" >/dev/null 2>"$validate_stderr"; then
-          cat "$validate_stderr" >&2 || true
-          rm -f "$summary_tmp" "$summary_steps_tmp" "$validate_stderr"
-          registry_snapshot_cleanup "$events_file"
+        if ! ${kernelPackage}/bin/nixfied-kernel summary write \
+          ${lib.escapeShellArg validationBundleFile} \
+          "$summary_file" \
+          "$summary_tmp" >/dev/null; then
+          rm -f "$summary_tmp" "$summary_steps_tmp"
+          registry_snapshot_cleanup "$events_index_file"
           echo "ERROR: failed to validate summary file '$summary_file'"
           return 1
         fi
-        rm -f "$validate_stderr"
-        mv "$summary_tmp" "$summary_file"
-        if ! write_summary_sidecars "$summary_fields_file" "$summary_steps_file" "$summary_steps_tmp"; then
-          rm -f "$summary_steps_tmp"
-          registry_snapshot_cleanup "$events_file"
-          echo "ERROR: failed to write summary sidecars for '$summary_file'"
-          return 1
-        fi
-        rm -f "$summary_steps_tmp"
+        rm -f "$summary_tmp" "$summary_steps_tmp"
 
         if [ -n "$summary_file_override" ] && [ "$summary_file_override" != "$summary_file" ]; then
           if ! copy_file_atomic "$summary_file" "$summary_file_override"; then
-            registry_snapshot_cleanup "$events_file"
+            registry_snapshot_cleanup "$events_index_file"
             echo "ERROR: failed to write summary file '$summary_file_override'"
-            return 1
-          fi
-          if ! copy_file_atomic "$summary_fields_file" "$(dirname "$summary_file_override")/summary.fields"; then
-            registry_snapshot_cleanup "$events_file"
-            echo "ERROR: failed to write summary fields file for '$summary_file_override'"
-            return 1
-          fi
-          if ! copy_file_atomic "$summary_steps_file" "$(dirname "$summary_file_override")/summary.steps.tsv"; then
-            registry_snapshot_cleanup "$events_file"
-            echo "ERROR: failed to write summary steps file for '$summary_file_override'"
             return 1
           fi
         fi
 
         LAST_WORKFLOW_SUMMARY_FILE="$summary_file"
+        LAST_WORKFLOW_SUMMARY_PASSED_COUNT="$passed"
+        LAST_WORKFLOW_SUMMARY_FAILED_COUNT="$failed"
+        LAST_WORKFLOW_SUMMARY_SKIPPED_COUNT="$skipped"
+        LAST_WORKFLOW_SUMMARY_CANCELED_COUNT="$canceled"
         echo "INFO: summary_json=$summary_file"
         registry_snapshot_cleanup "$events_index_file"
         return 0
@@ -2753,23 +2616,14 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
         if [ "$print_summary" -eq 1 ] && [ "$nested_workflow_call" -eq 0 ]; then
           local events_file=""
-          local summary_fields_file=""
           local passed failed skipped canceled
           print_workflow_summary_report "$run_id" "$workflow_id" "$status" "$duration_seconds" "$summary_file"
 
           if [ -n "$summary_file" ] && [ -f "$summary_file" ]; then
-            summary_fields_file="$(summary_fields_file_for "$summary_file")"
-            if load_summary_fields "$summary_fields_file"; then
-              passed="''${SUMMARY_PASSED_COUNT:-0}"
-              failed="''${SUMMARY_FAILED_COUNT:-0}"
-              skipped="''${SUMMARY_SKIPPED_COUNT:-0}"
-              canceled="''${SUMMARY_CANCELED_COUNT:-0}"
-            else
-              passed=0
-              failed=0
-              skipped=0
-              canceled=0
-            fi
+            passed="''${LAST_WORKFLOW_SUMMARY_PASSED_COUNT:-0}"
+            failed="''${LAST_WORKFLOW_SUMMARY_FAILED_COUNT:-0}"
+            skipped="''${LAST_WORKFLOW_SUMMARY_SKIPPED_COUNT:-0}"
+            canceled="''${LAST_WORKFLOW_SUMMARY_CANCELED_COUNT:-0}"
           else
             events_file="$(registry_events_index_snapshot "$REGISTRY_ROOT" 2>/dev/null || true)"
             if [ -n "$events_file" ] && [ -f "$events_file" ]; then

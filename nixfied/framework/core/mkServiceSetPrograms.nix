@@ -8,16 +8,13 @@
 }:
 let
   lib = pkgs.lib;
+  kernelPackage = import ../runtime/kernel { inherit pkgs; };
   shellCommon = import ./shell-common.nix { inherit pkgs; };
   commonRuntimeShell = import ../runtime/common-runtime.nix { inherit pkgs; };
   runtimeArtifactContracts = import ../contracts/runtime-artifact-contracts.nix { inherit pkgs; };
-  serviceSetExportValidator = import ../contracts/mkValidator.nix {
-    inherit
-      pkgs
-      ;
-    contractBundle = runtimeArtifactContracts;
-    contractRef = "runtime.serviceSetExport";
-  };
+  validationBundleFile = pkgs.writeText "nixfied-runtime-artifact-contract-bundle.json" (
+    builtins.toJSON runtimeArtifactContracts.bundle
+  );
   skipPolicy = import ../runtime/helpers/skip-policy.nix { inherit pkgs; };
   serviceConfigLib = import ./service-config.nix {
     inherit
@@ -600,7 +597,10 @@ let
                     printf ',"services":[%s]' "$json_records"
                     printf '}}\n'
                   } > "$payload_file"
-                  if ! ${serviceSetExportValidator} "$payload_file" >/dev/null 2>"$validate_stderr"; then
+                  if ! ${kernelPackage}/bin/nixfied-kernel validate-artifact \
+                    ${lib.escapeShellArg validationBundleFile} \
+                    "runtime.serviceSetExport" \
+                    "$payload_file" >/dev/null 2>"$validate_stderr"; then
                     cat "$validate_stderr" >&2 || true
                     rm -f "$payload_file" "$validate_stderr"
                     exit 1

@@ -293,6 +293,8 @@ let
           shellContract.mkContractRuntime {
             inherit name;
             contract = commandApi;
+            logLevelDefault = "info";
+            outputModeDefault = "stdout";
           };
       contractPrelude =
         if commandApi == null then

@@ -22,17 +22,14 @@ assert pkgs.lib.hasInfix "flock -w" locksSource;
 assert pkgs.lib.hasInfix "registry_events_snapshot() {" snapshotSource;
 assert pkgs.lib.hasInfix "registry_events_index_snapshot() {" snapshotSource;
 assert pkgs.lib.hasInfix "registry_snapshot_cleanup() {" snapshotSource;
-assert pkgs.lib.hasInfix "registry_next_seq() {" appendSource;
 assert pkgs.lib.hasInfix "registry_append_event() {" appendSource;
-assert pkgs.lib.hasInfix "registryEventValidator = import ../../contracts/mkValidator.nix"
-  appendSource;
-assert pkgs.lib.hasInfix "contractRef = \"runtime.registryEvent\";" appendSource;
-assert pkgs.lib.hasInfix "events_index_file" appendSource;
+assert pkgs.lib.hasInfix "kernelPackage = import ../kernel" appendSource;
+assert pkgs.lib.hasInfix "nixfied-kernel registry append" appendSource;
+assert pkgs.lib.hasInfix "validationBundleFile" appendSource;
 assert pkgs.lib.hasInfix "detail_reason" appendSource;
 assert pkgs.lib.hasInfix "detail_exit_code" appendSource;
 assert !(pkgs.lib.hasInfix "\${pkgs.jq}/bin/jq" appendSource);
-assert pkgs.lib.hasInfix "json_quote_string \"$REGISTRY_EVENT_KIND\"" appendSource;
-assert pkgs.lib.hasInfix "\"attemptId\":%s" appendSource;
+assert !(pkgs.lib.hasInfix "json_quote_string \"$REGISTRY_EVENT_KIND\"" appendSource);
 pkgs.runCommand "registry-events-runtime-contract" { } ''
-  echo "OK: registry runtime helpers are split, stable, and jq-free on append" > "$out"
+  echo "OK: registry runtime helpers are split, stable, jq-free, and kernel-owned on append" > "$out"
 ''

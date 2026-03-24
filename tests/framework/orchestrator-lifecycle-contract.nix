@@ -10,8 +10,8 @@ assert pkgs.lib.hasInfix "local attempt_id=\"$2\"" orchestratorSource;
 assert pkgs.lib.hasInfix "update_run_state() {" orchestratorSource;
 assert pkgs.lib.hasInfix "registry_events_index_snapshot" orchestratorSource;
 assert pkgs.lib.hasInfix "\${pkgs.procps}/bin/ps" orchestratorSource;
-assert pkgs.lib.hasInfix "tmp=\"$(mktemp \"$run_file.tmp.XXXXXX\")\"" orchestratorSource;
-assert pkgs.lib.hasInfix "run_record_history_append \"queued\" \"$now\"" orchestratorSource;
+assert pkgs.lib.hasInfix "nixfied-kernel run-record create" orchestratorSource;
+assert pkgs.lib.hasInfix "nixfied-kernel run-record transition" orchestratorSource;
 assert pkgs.lib.hasInfix "stop-all-runs" orchestratorSource;
 assert pkgs.lib.hasInfix "orchestratorRuntimeShell = import ./orchestrator-runtime.nix"
   orchestratorSource;

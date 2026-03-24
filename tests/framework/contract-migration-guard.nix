@@ -52,21 +52,44 @@ let
     || !(builtins.all (snippet: lib.hasInfix snippet source) entry.snippets)
   ) jqAllowlist;
   machineOutputSource = builtins.readFile ../../nixfied/framework/core/mkMachineOutputPrograms.nix;
+  runtimeSources = builtins.filter (path: lib.hasSuffix ".nix" (toString path)) (
+    lib.filesystem.listFilesRecursive ../../nixfied/framework/runtime
+  );
+  deprecatedKernelMarkers = [
+    "validate-json"
+    "query-json"
+    "json-length"
+    "mkValidator.nix"
+    "run-record field"
+    "adapter decode jsonrpc-result"
+    "adapter decode supervisor-process-list"
+    "summary.fields"
+    "summary.steps.tsv"
+    "meta.fields"
+  ];
+  filesWithDeprecatedKernelMarkers = builtins.filter (
+    path:
+    let
+      source = builtins.readFile path;
+    in
+    lib.any (marker: lib.hasInfix marker source) deprecatedKernelMarkers
+  ) runtimeSources;
   deletedHelperPaths = [
     ../../nixfied/framework/core/machine-output-validate.py
     ../../nixfied/framework/core/introspection-query.py
+    ../../nixfied/framework/contracts/mkValidator.nix
+    ../../nixfied/framework/contracts/render-cue.nix
+    ../../nixfied/framework/runtime/helpers/run-registry.nix
+    ../../tests/framework/snapshots/contracts/example.cue
   ];
 in
 assert builtins.all (path: !builtins.pathExists path) deletedHelperPaths;
 assert disallowedJqFiles == [ ];
 assert disallowedPythonFiles == [ ];
 assert mismatchedAllowlistedFiles == [ ];
-assert pkgs.lib.hasInfix "NIXFIED_MACHINE_OUTPUT_FILE=\"$payload_file\"" machineOutputSource;
-assert pkgs.lib.hasInfix "did not write machine payload to declared file" machineOutputSource;
-assert (!pkgs.lib.hasInfix "\"$target_stdout\" >\"$payload_file\"" machineOutputSource);
-assert (!pkgs.lib.hasInfix "\"$target_stdout\" >>\"$payload_file\"" machineOutputSource);
-assert (!pkgs.lib.hasInfix "<\"$target_stdout\"" machineOutputSource);
-assert (!pkgs.lib.hasInfix "stdout-filter" machineOutputSource);
+assert filesWithDeprecatedKernelMarkers == [ ];
+assert pkgs.lib.hasInfix "nixfied-kernel machine-output run" machineOutputSource;
+assert !(pkgs.lib.hasInfix "validatorProgram" machineOutputSource);
 pkgs.runCommand "contract-migration-guard" { } ''
-  echo "OK: contract migration guards enforce deleted helpers, explicit machine channels, zero Python helpers, and no framework jq exception sites" > "$out"
+  echo "OK: hardening guards enforce deleted validators/CUE/run-registry, kernel-owned machine output, zero Python helpers, and no deprecated kernel seams in framework runtime" > "$out"
 ''

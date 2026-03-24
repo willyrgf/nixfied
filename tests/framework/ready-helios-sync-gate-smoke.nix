@@ -57,17 +57,11 @@ let
       )
     ];
     localOverrides = [ ];
-  };
+    };
 
-  executor = import ../../nixfied/framework/runtime/executor.nix {
-    inherit
-      pkgs
-      registry
-      ;
-    model = compiled.model;
-    services = compiled.services;
-    projectRoot = ../..;
-  };
+  readyTask = pkgs.writeShellScript "ready-helios-sync-gate-task" (
+    compiled.model.tasks."task.ops.ready".runner.command
+  );
 
   runtimeSlotStride = toString compiled.model.runtime.slot.stride;
   runtimeEnvDevOffset = toString (compiled.model.runtime.env.offsets.dev or 0);
@@ -75,9 +69,7 @@ in
 pkgs.runCommand "ready-helios-sync-gate-smoke" { } ''
     set -euo pipefail
 
-    EXECUTOR="${executor}/bin/nixfied-executor"
-    export REGISTRY_ROOT="$TMPDIR/registry"
-    mkdir -p "$REGISTRY_ROOT"
+    READY_TASK="${readyTask}"
 
     env_offset=${runtimeEnvDevOffset}
     slot_value=0
@@ -117,55 +109,72 @@ pkgs.runCommand "ready-helios-sync-gate-smoke" { } ''
       exit 1
     }
 
-    cat > "$TMPDIR/helios-responder.sh" <<'EOF_SCRIPT'
-  #!${pkgs.bash}/bin/bash
-  set -euo pipefail
-  content_length=0
+    cat > "$TMPDIR/helios-responder.py" <<'EOF_SCRIPT'
+import http.server
+import json
+import socketserver
+import sys
+import threading
 
-  while IFS= read -r header_line; do
-    header_line="''${header_line%$'\r'}"
-    if [ -z "$header_line" ]; then
-      break
-    fi
-    case "$header_line" in
-      [Cc]ontent-[Ll]ength:*)
-        parsed_length="$(printf '%s' "$header_line" | ${pkgs.gnused}/bin/sed -n 's/^[^:]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')"
-        if [ -n "$parsed_length" ]; then
-          content_length="$parsed_length"
-        fi
-        ;;
-    esac
-  done
+rpc_port = int(sys.argv[1])
+execution_port = int(sys.argv[2])
+block_result_path = sys.argv[3]
+syncing_result_path = sys.argv[4]
 
-  request_body=""
-  if [ "$content_length" -gt 0 ]; then
-    request_body="$(${pkgs.coreutils}/bin/head -c "$content_length")"
-  fi
 
-  method="$(printf '%s' "$request_body" | ${pkgs.gnused}/bin/sed -n 's/.*"method":"\([^"]*\)".*/\1/p')"
+def read_json_value(path):
+    with open(path, "r", encoding="utf-8") as handle:
+        return json.load(handle)
 
-  case "$method" in
-    eth_blockNumber)
-      result="$(${pkgs.coreutils}/bin/cat "$TMPDIR/helios-block-result.json")"
-      ;;
-    eth_syncing)
-      result="$(${pkgs.coreutils}/bin/cat "$TMPDIR/helios-syncing-result.json")"
-      ;;
-    eth_chainId)
-      result='"0x1"'
-      ;;
-    *)
-      result='null'
-      ;;
-  esac
 
-  printf 'HTTP/1.1 200 OK\r\n'
-  printf 'Content-Type: application/json\r\n'
-  printf 'Connection: close\r\n'
-  printf '\r\n'
-  printf '{"jsonrpc":"2.0","id":1,"result":%s}\n' "$result"
-  EOF_SCRIPT
-    chmod +x "$TMPDIR/helios-responder.sh"
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_POST(self):
+        content_length = int(self.headers.get("Content-Length", "0"))
+        payload = json.loads(self.rfile.read(content_length) or b"{}")
+        method = payload.get("method")
+
+        if method == "eth_blockNumber":
+            result = read_json_value(block_result_path)
+        elif method == "eth_syncing":
+            result = read_json_value(syncing_result_path)
+        elif method == "eth_chainId":
+            result = "0x1"
+        else:
+            result = None
+
+        body = json.dumps(
+            {"jsonrpc": "2.0", "id": payload.get("id"), "result": result},
+            separators=(",", ":"),
+        ).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format, *args):
+        return
+
+
+class ReusableTCPServer(socketserver.TCPServer):
+    allow_reuse_address = True
+
+
+servers = []
+
+try:
+    for port in [rpc_port, execution_port]:
+        httpd = ReusableTCPServer(("127.0.0.1", port), Handler)
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        servers.append((httpd, thread))
+
+    threading.Event().wait()
+finally:
+    for httpd, thread in servers:
+        httpd.shutdown()
+        httpd.server_close()
+EOF_SCRIPT
 
     echo '"0x1"' > "$TMPDIR/helios-block-result.json"
     echo 'false' > "$TMPDIR/helios-syncing-result.json"
@@ -193,13 +202,12 @@ pkgs.runCommand "ready-helios-sync-gate-smoke" { } ''
     }
     trap cleanup EXIT
 
-    ${pkgs.socat}/bin/socat "TCP-LISTEN:$helios_rpc_port,bind=127.0.0.1,reuseaddr,fork" \
-      "EXEC:$TMPDIR/helios-responder.sh" \
-      >/dev/null 2>&1 &
-    bg_pids+=("$!")
-
-    ${pkgs.socat}/bin/socat "TCP-LISTEN:$helios_execution_rpc_port,bind=127.0.0.1,reuseaddr,fork" \
-      "EXEC:$TMPDIR/helios-responder.sh" \
+    ${pkgs.python3}/bin/python3 \
+      "$TMPDIR/helios-responder.py" \
+      "$helios_rpc_port" \
+      "$helios_execution_rpc_port" \
+      "$TMPDIR/helios-block-result.json" \
+      "$TMPDIR/helios-syncing-result.json" \
       >/dev/null 2>&1 &
     bg_pids+=("$!")
 
@@ -208,8 +216,8 @@ pkgs.runCommand "ready-helios-sync-gate-smoke" { } ''
 
     disallowed_log="$TMPDIR/ready-disallowed.log"
     set +e
-    REGISTRY_ROOT="$REGISTRY_ROOT" NIX_ENV="$slot_value" PROJECT_ENV="dev" \
-      "$EXECUTOR" run-task task.ops.ready --service helios > "$disallowed_log" 2>&1
+    NIX_ENV="$slot_value" PROJECT_ENV="dev" \
+      "$READY_TASK" --service helios > "$disallowed_log" 2>&1
     disallowed_rc="$?"
     set -e
     if [ "$disallowed_rc" -eq 0 ]; then
@@ -224,8 +232,8 @@ pkgs.runCommand "ready-helios-sync-gate-smoke" { } ''
     echo '{"startingBlock":"0x0","currentBlock":"0x1","highestBlock":"0x2"}' > "$TMPDIR/helios-syncing-result.json"
     syncing_log="$TMPDIR/ready-syncing.log"
     set +e
-    REGISTRY_ROOT="$REGISTRY_ROOT" NIX_ENV="$slot_value" PROJECT_ENV="dev" \
-      "$EXECUTOR" run-task task.ops.ready --service helios --source real > "$syncing_log" 2>&1
+    NIX_ENV="$slot_value" PROJECT_ENV="dev" \
+      "$READY_TASK" --service helios --source real > "$syncing_log" 2>&1
     syncing_rc="$?"
     set -e
     if [ "$syncing_rc" -eq 0 ]; then
@@ -239,8 +247,8 @@ pkgs.runCommand "ready-helios-sync-gate-smoke" { } ''
 
     echo 'false' > "$TMPDIR/helios-syncing-result.json"
     ready_log="$TMPDIR/ready-ok.log"
-    REGISTRY_ROOT="$REGISTRY_ROOT" NIX_ENV="$slot_value" PROJECT_ENV="dev" \
-      "$EXECUTOR" run-task task.ops.ready --service helios --source real > "$ready_log" 2>&1
+    NIX_ENV="$slot_value" PROJECT_ENV="dev" \
+      "$READY_TASK" --service helios --source real > "$ready_log" 2>&1
     require_contains "$ready_log" "OK: helios ready port=$helios_rpc_port block_number=0x1"
     require_contains "$ready_log" "OK: helios sync status ready port=$helios_rpc_port"
     require_contains "$ready_log" "OK: helios execution ready port=$helios_execution_rpc_port"

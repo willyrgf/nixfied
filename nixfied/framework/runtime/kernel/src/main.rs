@@ -1,8 +1,9 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
-use std::fs;
-use std::io::{self, Read};
-use std::process;
+use std::fs::{self, OpenOptions};
+use std::io::{self, Read, Write};
+use std::path::Path;
+use std::process::{self, Command, Stdio};
 
 fn main() {
     if let Err(err) = run() {
@@ -20,44 +21,7 @@ fn run() -> Result<(), String> {
             print_help();
             Ok(())
         }
-        "validate-json" => {
-            let input_path = args.next().ok_or_else(usage)?;
-            if args.next().is_some() {
-                return Err(usage());
-            }
-            validate_json_command(&input_path)
-        }
-        "json-length" => {
-            let input_path = args.next().ok_or_else(usage)?;
-            if args.next().is_some() {
-                return Err(usage());
-            }
-            json_length_command(&input_path)
-        }
-        "query-json" => {
-            let input_path = args.next().ok_or_else(usage)?;
-            let path_expr = args.next().ok_or_else(usage)?;
-            let mut raw = false;
-            let mut empty_ok = false;
-            let mut tonumber = false;
-            for flag in args {
-                match flag.as_str() {
-                    "--raw" => raw = true,
-                    "--compact" => raw = false,
-                    "--empty-ok" | "--empty" => empty_ok = true,
-                    "--tonumber" => tonumber = true,
-                    other => {
-                        return Err(format!(
-                            "unknown query-json flag: {}\n{}",
-                            other,
-                            usage()
-                        ))
-                    }
-                }
-            }
-            query_json_command(&input_path, &path_expr, raw, empty_ok, tonumber)
-        }
-        "validate-payload" | "validate-input" | "validate-artifact" | "validate-scalar" => {
+        "validate-payload" | "validate-artifact" => {
             let bundle_path = args.next().ok_or_else(usage)?;
             let contract_ref = args.next().ok_or_else(usage)?;
             let payload_path = args.next().ok_or_else(usage)?;
@@ -65,6 +29,59 @@ fn run() -> Result<(), String> {
                 return Err(usage());
             }
             validate_file_command(&command, &bundle_path, &contract_ref, &payload_path)
+        }
+        "validate-input" => {
+            let plan_path = args.next().ok_or_else(usage)?;
+            let mode = args.next().ok_or_else(usage)?;
+            let export_path = args.next().ok_or_else(usage)?;
+            let remaining = args.collect::<Vec<_>>();
+            validate_input_command(&plan_path, &mode, &export_path, &remaining)
+        }
+        "validate-scalar" => {
+            let spec_path = args.next().ok_or_else(usage)?;
+            let value = args.next().ok_or_else(usage)?;
+            if args.next().is_some() {
+                return Err(usage());
+            }
+            validate_scalar_command(&spec_path, &value)
+        }
+        "validate-exit" => {
+            let plan_path = args.next().ok_or_else(usage)?;
+            let exit_code = args.next().ok_or_else(usage)?;
+            if args.next().is_some() {
+                return Err(usage());
+            }
+            validate_exit_command(&plan_path, &exit_code)
+        }
+        "run-record" => {
+            let subcommand = args.next().ok_or_else(usage)?;
+            let values = args.collect::<Vec<_>>();
+            run_record_command(&subcommand, &values)
+        }
+        "registry" => {
+            let subcommand = args.next().ok_or_else(usage)?;
+            let values = args.collect::<Vec<_>>();
+            registry_command(&subcommand, &values)
+        }
+        "summary" => {
+            let subcommand = args.next().ok_or_else(usage)?;
+            let values = args.collect::<Vec<_>>();
+            summary_command(&subcommand, &values)
+        }
+        "adapter" => {
+            let subcommand = args.next().ok_or_else(usage)?;
+            let values = args.collect::<Vec<_>>();
+            adapter_command(&subcommand, &values)
+        }
+        "probe" => {
+            let subcommand = args.next().ok_or_else(usage)?;
+            let values = args.collect::<Vec<_>>();
+            probe_command(&subcommand, &values)
+        }
+        "machine-output" => {
+            let subcommand = args.next().ok_or_else(usage)?;
+            let values = args.collect::<Vec<_>>();
+            machine_output_command(&subcommand, &values)
         }
         other => Err(format!("unknown command: {}\n{}", other, usage())),
     }
@@ -75,13 +92,17 @@ fn usage() -> String {
         "usage: nixfied-kernel <command> [args...]",
         "",
         "commands:",
-        "  validate-json <json-file>",
-        "  json-length <json-file>",
-        "  query-json <json-file> <path> [--raw|--compact] [--empty-ok] [--tonumber]",
         "  validate-payload <bundle-file> <contract-ref> <payload-file>",
-        "  validate-input   <bundle-file> <contract-ref> <payload-file>",
         "  validate-artifact <bundle-file> <contract-ref> <payload-file>",
-        "  validate-scalar  <bundle-file> <contract-ref> <payload-file>",
+        "  validate-input <plan-file> <env|args> <export-file> [-- <args...>]",
+        "  validate-scalar <spec-file> <value>",
+        "  validate-exit <plan-file> <exit-code>",
+        "  run-record <create|transition> ...",
+        "  registry <append|replay> ...",
+        "  summary <write|render-human> ...",
+        "  adapter decode <kind> ...",
+        "  probe evaluate <plan-file> <payload-file> [export-file]",
+        "  machine-output run <plan-file> [-- <args...>]",
         "  help",
     ]
     .join("\n")
@@ -91,35 +112,1582 @@ fn print_help() {
     println!("{}", usage());
 }
 
+#[derive(Clone)]
+struct ScalarSpec {
+    type_name: String,
+    values: Vec<String>,
+    min: Option<i64>,
+    max: Option<i64>,
+}
+
+#[derive(Clone)]
+struct CommandArgSpec {
+    name: String,
+    kind: String,
+    scalar: ScalarSpec,
+    long: String,
+    short: String,
+    required: bool,
+}
+
+#[derive(Clone)]
+struct CommandEnvSpec {
+    name: String,
+    scalar: ScalarSpec,
+    required: bool,
+    default: Option<String>,
+    aliases: Vec<String>,
+}
+
+#[derive(Clone)]
+struct CommandRuntimePlan {
+    allow_unknown_args: bool,
+    args: Vec<CommandArgSpec>,
+    env: Vec<CommandEnvSpec>,
+    failure_codes: BTreeSet<i32>,
+}
+
+#[derive(Clone)]
+struct ProbePlan {
+    probe_kind: String,
+    export_var: Option<String>,
+}
+
+#[derive(Clone)]
+struct MachineOutputPlan {
+    app_id: String,
+    target_app_id: String,
+    contract_ref: String,
+    bundle_file: String,
+    target_program: String,
+    setup_programs: Vec<String>,
+    teardown_programs: Vec<String>,
+    target_args: Vec<String>,
+}
+
+fn validate_input_command(
+    plan_path: &str,
+    mode: &str,
+    export_path: &str,
+    remaining: &[String],
+) -> Result<(), String> {
+    let plan = load_command_runtime_plan(plan_path)?;
+    let exports = match mode {
+        "env" => validate_input_env(&plan)?,
+        "args" => {
+            let values = strip_passthrough_separator(remaining);
+            validate_input_args(&plan, values)?
+        }
+        other => {
+            return Err(format!(
+                "validate-input mode must be env or args (got {})",
+                other
+            ))
+        }
+    };
+
+    write_shell_exports(export_path, &exports)?;
+    println!("OK: validate-input mode={}", mode);
+    Ok(())
+}
+
+fn validate_scalar_command(spec_path: &str, value: &str) -> Result<(), String> {
+    let spec = load_scalar_spec(spec_path)?;
+    validate_scalar_value(&spec, value, "scalar")?;
+    println!("OK: validate-scalar");
+    Ok(())
+}
+
+fn validate_exit_command(plan_path: &str, exit_code_text: &str) -> Result<(), String> {
+    let plan = load_command_runtime_plan(plan_path)?;
+    let exit_code = parse_i32_text(exit_code_text, "exit code")?;
+    if exit_code == 0 || plan.failure_codes.contains(&exit_code) {
+        println!("OK: validate-exit");
+        Ok(())
+    } else {
+        Err(format!("undeclared exit code code={}", exit_code))
+    }
+}
+
+fn load_command_runtime_plan(path: &str) -> Result<CommandRuntimePlan, String> {
+    let text = read_text(path)?;
+    let value = parse_json(&text)
+        .map_err(|err| format!("runtime plan {} is not valid JSON: {}", path, err))?;
+    parse_command_runtime_plan(&value)
+}
+
+fn parse_command_runtime_plan(value: &JsonValue) -> Result<CommandRuntimePlan, String> {
+    value
+        .as_object()
+        .ok_or_else(|| "runtime plan must be an object".to_string())?;
+
+    let allow_unknown_args = object_bool(value, "allowUnknownArgs").unwrap_or(false);
+    let mut args = Vec::new();
+    let mut env_specs = Vec::new();
+    let mut failure_codes = BTreeSet::new();
+
+    for item in object_array(value, "args").unwrap_or(&[]) {
+        args.push(parse_command_arg_spec(item)?);
+    }
+
+    for item in object_array(value, "env").unwrap_or(&[]) {
+        env_specs.push(parse_command_env_spec(item)?);
+    }
+
+    if let Some(codes) = object_field(value, "failureCodes").and_then(JsonValue::as_object) {
+        for code in codes.values() {
+            let number = json_value_to_i32(code)
+                .ok_or_else(|| "runtime plan failureCodes values must be integers".to_string())?;
+            failure_codes.insert(number);
+        }
+    }
+
+    Ok(CommandRuntimePlan {
+        allow_unknown_args,
+        args,
+        env: env_specs,
+        failure_codes,
+    })
+}
+
+fn parse_command_arg_spec(value: &JsonValue) -> Result<CommandArgSpec, String> {
+    Ok(CommandArgSpec {
+        name: required_string_field(value, "name", "arg spec")?.to_string(),
+        kind: required_string_field(value, "kind", "arg spec")?.to_string(),
+        scalar: parse_scalar_spec(value)?,
+        long: object_string(value, "long").unwrap_or("").to_string(),
+        short: object_string(value, "short").unwrap_or("").to_string(),
+        required: object_bool(value, "required").unwrap_or(false),
+    })
+}
+
+fn parse_command_env_spec(value: &JsonValue) -> Result<CommandEnvSpec, String> {
+    Ok(CommandEnvSpec {
+        name: required_string_field(value, "name", "env spec")?.to_string(),
+        scalar: parse_scalar_spec(value)?,
+        required: object_bool(value, "required").unwrap_or(false),
+        default: object_field(value, "default").and_then(json_value_to_plain_string),
+        aliases: array_strings(value, "aliases"),
+    })
+}
+
+fn load_scalar_spec(path: &str) -> Result<ScalarSpec, String> {
+    let text = read_text(path)?;
+    let value = parse_json(&text)
+        .map_err(|err| format!("scalar spec {} is not valid JSON: {}", path, err))?;
+    parse_scalar_spec(&value)
+}
+
+fn parse_scalar_spec(value: &JsonValue) -> Result<ScalarSpec, String> {
+    Ok(ScalarSpec {
+        type_name: object_string(value, "type")
+            .unwrap_or("string")
+            .to_string(),
+        values: array_strings(value, "values"),
+        min: object_field(value, "min").and_then(json_value_to_i64),
+        max: object_field(value, "max").and_then(json_value_to_i64),
+    })
+}
+
+fn validate_input_env(plan: &CommandRuntimePlan) -> Result<Vec<(String, String)>, String> {
+    let mut exports = Vec::new();
+
+    for spec in &plan.env {
+        let value = resolve_env_spec_value(spec)?;
+        if value.is_none() && spec.required {
+            return Err(format!("required env var missing name={}", spec.name));
+        }
+
+        if let Some(value) = value {
+            validate_scalar_value(&spec.scalar, &value, &format!("env:{}", spec.name))?;
+            exports.push((spec.name.clone(), value.clone()));
+            for alias in &spec.aliases {
+                exports.push((alias.clone(), value.clone()));
+            }
+        }
+    }
+
+    Ok(exports)
+}
+
+fn validate_input_args(
+    plan: &CommandRuntimePlan,
+    args: &[String],
+) -> Result<Vec<(String, String)>, String> {
+    let mut exports = Vec::new();
+    let mut seen = BTreeSet::new();
+    let mut positional_values = Vec::new();
+    let mut index = 0usize;
+    let mut parse_options = true;
+
+    let spec_by_name = plan
+        .args
+        .iter()
+        .map(|spec| (spec.name.as_str(), spec))
+        .collect::<BTreeMap<_, _>>();
+    let long_to_name = plan
+        .args
+        .iter()
+        .filter(|spec| !spec.long.is_empty())
+        .map(|spec| (spec.long.as_str(), spec.name.as_str()))
+        .collect::<BTreeMap<_, _>>();
+    let short_to_name = plan
+        .args
+        .iter()
+        .filter(|spec| !spec.short.is_empty())
+        .map(|spec| (spec.short.as_str(), spec.name.as_str()))
+        .collect::<BTreeMap<_, _>>();
+    let positional_specs = plan
+        .args
+        .iter()
+        .filter(|spec| spec.kind == "positional")
+        .collect::<Vec<_>>();
+
+    while index < args.len() {
+        let token = &args[index];
+        index += 1;
+
+        if !parse_options {
+            positional_values.push(token.clone());
+            continue;
+        }
+
+        if token == "--" {
+            parse_options = false;
+            continue;
+        }
+
+        if let Some((name_token, value)) = token.split_once('=') {
+            if name_token.starts_with("--") {
+                let Some(name) = long_to_name.get(name_token).copied() else {
+                    if plan.allow_unknown_args {
+                        continue;
+                    }
+                    return Err(format!("unknown option token={}", name_token));
+                };
+                let spec = spec_by_name.get(name).copied().unwrap();
+                if spec.kind == "flag" {
+                    return Err(format!("flag does not accept a value token={}", name_token));
+                }
+                validate_scalar_value(&spec.scalar, value, &format!("arg:{}", spec.name))?;
+                seen.insert(spec.name.clone());
+                exports.push((export_arg_name(&spec.name), value.to_string()));
+                continue;
+            }
+        }
+
+        if token.starts_with("--") {
+            let Some(name) = long_to_name.get(token.as_str()).copied() else {
+                if plan.allow_unknown_args {
+                    continue;
+                }
+                return Err(format!("unknown option token={}", token));
+            };
+            let spec = spec_by_name.get(name).copied().unwrap();
+            if spec.kind == "flag" {
+                seen.insert(spec.name.clone());
+                exports.push((export_arg_name(&spec.name), "true".to_string()));
+                continue;
+            }
+            if index >= args.len() {
+                return Err(format!("option requires value token={}", token));
+            }
+            let value = &args[index];
+            index += 1;
+            validate_scalar_value(&spec.scalar, value, &format!("arg:{}", spec.name))?;
+            seen.insert(spec.name.clone());
+            exports.push((export_arg_name(&spec.name), value.clone()));
+            continue;
+        }
+
+        if token.starts_with('-') && token.len() > 1 {
+            if let Some(name) = short_to_name.get(token.as_str()).copied() {
+                let spec = spec_by_name.get(name).copied().unwrap();
+                if spec.kind == "flag" {
+                    seen.insert(spec.name.clone());
+                    exports.push((export_arg_name(&spec.name), "true".to_string()));
+                    continue;
+                }
+                if index >= args.len() {
+                    return Err(format!("option requires value token={}", token));
+                }
+                let value = &args[index];
+                index += 1;
+                validate_scalar_value(&spec.scalar, value, &format!("arg:{}", spec.name))?;
+                seen.insert(spec.name.clone());
+                exports.push((export_arg_name(&spec.name), value.clone()));
+                continue;
+            }
+
+            if token.len() > 2 {
+                let mut cluster_specs = Vec::new();
+                let mut cluster_valid = true;
+                for short in token[1..].chars() {
+                    let short_token = format!("-{}", short);
+                    let Some(name) = short_to_name.get(short_token.as_str()).copied() else {
+                        cluster_valid = false;
+                        break;
+                    };
+                    let spec = spec_by_name.get(name).copied().unwrap();
+                    if spec.kind != "flag" {
+                        cluster_valid = false;
+                        break;
+                    }
+                    cluster_specs.push(spec);
+                }
+                if cluster_valid {
+                    for spec in cluster_specs {
+                        seen.insert(spec.name.clone());
+                        exports.push((export_arg_name(&spec.name), "true".to_string()));
+                    }
+                    continue;
+                }
+            }
+
+            if plan.allow_unknown_args {
+                continue;
+            }
+            return Err(format!("unknown option token={}", token));
+        }
+
+        positional_values.push(token.clone());
+    }
+
+    for (position, spec) in positional_specs.iter().enumerate() {
+        if let Some(value) = positional_values.get(position) {
+            validate_scalar_value(&spec.scalar, value, &format!("arg:{}", spec.name))?;
+            seen.insert(spec.name.clone());
+            exports.push((export_arg_name(&spec.name), value.clone()));
+        } else if spec.required {
+            return Err(format!("missing required positional arg name={}", spec.name));
+        }
+    }
+
+    if positional_values.len() > positional_specs.len() && !plan.allow_unknown_args {
+        return Err(format!(
+            "unexpected positional args count={}",
+            positional_values.len() - positional_specs.len()
+        ));
+    }
+
+    for spec in &plan.args {
+        if spec.required && !seen.contains(&spec.name) {
+            return Err(format!("missing required arg name={}", spec.name));
+        }
+    }
+
+    Ok(exports)
+}
+
+fn resolve_env_spec_value(spec: &CommandEnvSpec) -> Result<Option<String>, String> {
+    let canonical = env::var(&spec.name).ok();
+    let aliases = spec
+        .aliases
+        .iter()
+        .filter_map(|alias| env::var(alias).ok().map(|value| (alias.clone(), value)))
+        .collect::<Vec<_>>();
+
+    if let Some(value) = &canonical {
+        if value.is_empty() && is_runtime_primitive_env(&spec.name) {
+            return Err(format!(
+                "env:{} cannot be empty when set; unset {} to use defaults",
+                spec.name, spec.name
+            ));
+        }
+    }
+
+    for (alias, value) in &aliases {
+        if value.is_empty() && is_runtime_primitive_env(&spec.name) {
+            return Err(format!(
+                "env:{} alias={} cannot be empty when set; unset {} to use defaults",
+                spec.name, alias, alias
+            ));
+        }
+    }
+
+    let canonical_non_empty = canonical.as_ref().filter(|value| !value.is_empty());
+    let alias_non_empty = aliases
+        .iter()
+        .find(|(_, value)| !value.is_empty())
+        .map(|(_, value)| value);
+
+    if let (Some(left), Some(right)) = (canonical_non_empty, alias_non_empty) {
+        if left != right {
+            return Err(format!(
+                "env:{} has conflicting values between {} and alias; set one variable or use matching values",
+                spec.name, spec.name
+            ));
+        }
+    }
+
+    let mut first_alias: Option<(&str, &String)> = None;
+    for (alias, value) in &aliases {
+        if value.is_empty() {
+            continue;
+        }
+        if let Some((previous_alias, previous_value)) = first_alias {
+            if previous_value != value {
+                return Err(format!(
+                    "env:{} has conflicting alias values alias={} and alias={}; set one alias or use matching values",
+                    spec.name, previous_alias, alias
+                ));
+            }
+        } else {
+            first_alias = Some((alias.as_str(), value));
+        }
+    }
+
+    Ok(
+        canonical_non_empty
+            .cloned()
+            .or_else(|| first_alias.map(|(_, value)| value.clone()))
+            .or_else(|| spec.default.clone()),
+    )
+}
+
+fn validate_scalar_value(spec: &ScalarSpec, value: &str, label: &str) -> Result<(), String> {
+    match spec.type_name.as_str() {
+        "string" => {}
+        "bool" => match value {
+            "1" | "0" | "true" | "false" | "TRUE" | "FALSE" | "yes" | "YES" | "no"
+            | "NO" | "on" | "ON" => {}
+            _ => return Err(format!("{} must be bool (got '{}')", label, value)),
+        },
+        "int" => {
+            let number = parse_i64_text(value, label)?;
+            validate_numeric_range(number, spec, label)?;
+        }
+        "durationSec" => {
+            let number = parse_i64_text(value, label)?;
+            if number < 0 {
+                return Err(format!("{} must be >= 0 seconds (got '{}')", label, value));
+            }
+            validate_numeric_range(number, spec, label)?;
+        }
+        "enum" => {
+            if !spec.values.iter().any(|item| item == value) {
+                return Err(format!(
+                    "{} must be one of {} (got '{}')",
+                    label,
+                    spec.values.join(","),
+                    value
+                ));
+            }
+        }
+        "pathAbs" => {
+            if !value.starts_with('/') {
+                return Err(format!("{} must be an absolute path (got '{}')", label, value));
+            }
+        }
+        "pathRel" => {
+            if value.is_empty() || value.starts_with('/') {
+                return Err(format!("{} must be a relative path (got '{}')", label, value));
+            }
+        }
+        "port" => {
+            let number = parse_i64_text(value, label)?;
+            if !(1..=65535).contains(&number) {
+                return Err(format!("{} must be port 1-65535 (got '{}')", label, value));
+            }
+            validate_numeric_range(number, spec, label)?;
+        }
+        "json" => {
+            parse_json(value).map_err(|_| format!("{} must be valid json", label))?;
+        }
+        other => return Err(format!("unsupported type={} for {}", other, label)),
+    }
+
+    Ok(())
+}
+
+fn validate_numeric_range(value: i64, spec: &ScalarSpec, label: &str) -> Result<(), String> {
+    if let Some(minimum) = spec.min {
+        if value < minimum {
+            return Err(format!("{} must be >= {} (got '{}')", label, minimum, value));
+        }
+    }
+    if let Some(maximum) = spec.max {
+        if value > maximum {
+            return Err(format!("{} must be <= {} (got '{}')", label, maximum, value));
+        }
+    }
+    Ok(())
+}
+
+fn strip_passthrough_separator(values: &[String]) -> &[String] {
+    if values.first().map(|value| value.as_str()) == Some("--") {
+        &values[1..]
+    } else {
+        values
+    }
+}
+
+fn export_arg_name(name: &str) -> String {
+    format!("NIXFIED_ARG_{}", sanitize_name(name))
+}
+
+fn sanitize_name(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| match ch {
+            '.' | ':' | '/' | '-' => '_',
+            other => other.to_ascii_uppercase(),
+        })
+        .collect()
+}
+
+fn is_runtime_primitive_env(name: &str) -> bool {
+    matches!(name, "LOG_LEVEL" | "OUTPUT_MODE")
+}
+
+fn write_shell_exports(path: &str, values: &[(String, String)]) -> Result<(), String> {
+    let mut rendered = String::new();
+    for (key, value) in values {
+        rendered.push_str("export ");
+        rendered.push_str(key);
+        rendered.push('=');
+        rendered.push_str(&shell_quote(value));
+        rendered.push('\n');
+    }
+    write_text_atomic(path, &rendered)
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+fn write_text_atomic(path: &str, contents: &str) -> Result<(), String> {
+    let target = Path::new(path);
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|err| format!("failed to create {}: {}", parent.display(), err))?;
+    }
+
+    let tmp_path = format!("{}.tmp.{}", path, process::id());
+    fs::write(&tmp_path, contents)
+        .map_err(|err| format!("failed to write {}: {}", tmp_path, err))?;
+    fs::rename(&tmp_path, path)
+        .map_err(|err| format!("failed to move {} into {}: {}", tmp_path, path, err))
+}
+
+fn required_string_field<'a>(
+    value: &'a JsonValue,
+    key: &str,
+    label: &str,
+) -> Result<&'a str, String> {
+    object_string(value, key).ok_or_else(|| format!("{} missing string field {}", label, key))
+}
+
+fn array_strings(value: &JsonValue, key: &str) -> Vec<String> {
+    object_array(value, key)
+        .unwrap_or(&[])
+        .iter()
+        .filter_map(JsonValue::as_string)
+        .map(|item| item.to_string())
+        .collect()
+}
+
+fn json_value_to_plain_string(value: &JsonValue) -> Option<String> {
+    match value {
+        JsonValue::Null => None,
+        JsonValue::String(value) => Some(value.clone()),
+        JsonValue::Bool(value) => Some(if *value { "true" } else { "false" }.to_string()),
+        JsonValue::Number(number) => Some(number.raw.clone()),
+        JsonValue::Array(_) | JsonValue::Object(_) => None,
+    }
+}
+
+fn json_value_to_i64(value: &JsonValue) -> Option<i64> {
+    match value {
+        JsonValue::Number(number) if number.integer => number.int_value.and_then(|value| i64::try_from(value).ok()),
+        JsonValue::String(value) => value.parse::<i64>().ok(),
+        _ => None,
+    }
+}
+
+fn json_value_to_i32(value: &JsonValue) -> Option<i32> {
+    json_value_to_i64(value).and_then(|value| i32::try_from(value).ok())
+}
+
+fn parse_i64_text(value: &str, label: &str) -> Result<i64, String> {
+    value
+        .parse::<i64>()
+        .map_err(|_| format!("{} must be int (got '{}')", label, value))
+}
+
+fn parse_i32_text(value: &str, label: &str) -> Result<i32, String> {
+    value
+        .parse::<i32>()
+        .map_err(|_| format!("{} must be int (got '{}')", label, value))
+}
+
 fn validate_file_command(
     command: &str,
     bundle_path: &str,
     contract_ref: &str,
     payload_path: &str,
 ) -> Result<(), String> {
+    validate_json_file_against_contract(bundle_path, contract_ref, payload_path)?;
+    println!("OK: {} contract={}", command, contract_ref);
+    Ok(())
+}
+
+fn validate_json_file_against_contract(
+    bundle_path: &str,
+    contract_ref: &str,
+    payload_path: &str,
+) -> Result<(), String> {
     let bundle_text = read_text(bundle_path)?;
     let payload_text = read_text(payload_path)?;
+    let bundle = parse_json(&bundle_text)
+        .map_err(|err| format!("bundle {} is not valid JSON: {}", bundle_path, err))?;
+    let payload = parse_json(&payload_text)
+        .map_err(|err| format!("payload {} is not valid JSON: {}", payload_path, err))?;
+    validate_json_value_against_contract(&bundle, contract_ref, &payload)
+}
 
-    let bundle = parse_json(&bundle_text).map_err(|err| {
-        format!("bundle {} is not valid JSON: {}", bundle_path, err)
-    })?;
-    let payload = parse_json(&payload_text).map_err(|err| {
-        format!("payload {} is not valid JSON: {}", payload_path, err)
-    })?;
-
-    let context = ValidationContext::new(&bundle);
-    let schema = context.resolve_contract_ref(contract_ref).map_err(|err| {
-        format!("contract {} could not be resolved: {}", contract_ref, err)
-    })?;
+fn validate_json_value_against_contract(
+    bundle: &JsonValue,
+    contract_ref: &str,
+    payload: &JsonValue,
+) -> Result<(), String> {
+    let context = ValidationContext::new(bundle);
+    let schema = context
+        .resolve_contract_ref(contract_ref)
+        .map_err(|err| format!("contract {} could not be resolved: {}", contract_ref, err))?;
 
     let mut path = Vec::new();
     let mut ref_stack = Vec::new();
-    validate_schema(&context, schema, &payload, &mut path, &mut ref_stack).map_err(|err| {
-        format!("contract {} failed validation: {}", contract_ref, err)
-    })?;
+    validate_schema(&context, schema, payload, &mut path, &mut ref_stack)
+        .map_err(|err| format!("contract {} failed validation: {}", contract_ref, err))
+}
 
-    println!("OK: {} contract={}", command, contract_ref);
+fn run_record_command(subcommand: &str, values: &[String]) -> Result<(), String> {
+    match subcommand {
+        "create" => run_record_create_command(values),
+        "transition" => run_record_transition_command(values),
+        other => Err(format!("unknown run-record subcommand: {}", other)),
+    }
+}
+
+fn run_record_create_command(values: &[String]) -> Result<(), String> {
+    if values.len() != 11 {
+        return Err(
+            "usage: nixfied-kernel run-record create <bundle-file> <run-file> <run-id> <attempt-id> <command> <workflow-id> <task-id> <execution-mode> <process-mode> <ephemeral-enabled> <args-file>"
+                .to_string(),
+        );
+    }
+
+    let bundle_path = &values[0];
+    let run_file = &values[1];
+    let now = current_utc_timestamp()?;
+    let args = parse_json_file(&values[10], "run-record args file")?;
+
+    let history = JsonValue::Array(vec![run_record_history_entry("queued", &now)]);
+    let payload = JsonValue::Object(BTreeMap::from([
+        ("run_id".to_string(), JsonValue::String(values[2].clone())),
+        ("attempt_id".to_string(), JsonValue::String(values[3].clone())),
+        ("command".to_string(), JsonValue::String(values[4].clone())),
+        ("workflow_id".to_string(), nullable_string_value(&values[5])),
+        ("task_id".to_string(), nullable_string_value(&values[6])),
+        ("execution_mode".to_string(), JsonValue::String(values[7].clone())),
+        ("process_mode".to_string(), JsonValue::String(values[8].clone())),
+        (
+            "ephemeral_enabled".to_string(),
+            JsonValue::Bool(parse_bool_flag(&values[9])?),
+        ),
+        ("state".to_string(), JsonValue::String("queued".to_string())),
+        ("pid".to_string(), JsonValue::Null),
+        ("pgid".to_string(), JsonValue::Null),
+        ("exit_code".to_string(), JsonValue::Null),
+        ("stop_reason".to_string(), JsonValue::Null),
+        ("created_at".to_string(), JsonValue::String(now.clone())),
+        ("started_at".to_string(), JsonValue::Null),
+        ("finished_at".to_string(), JsonValue::Null),
+        ("updated_at".to_string(), JsonValue::String(now)),
+        ("args".to_string(), args),
+        ("history".to_string(), history),
+    ]));
+    let envelope = JsonValue::Object(BTreeMap::from([
+        ("kind".to_string(), JsonValue::String("run-record".to_string())),
+        (
+            "version".to_string(),
+            JsonValue::Number(JsonNumber::from_int(1)),
+        ),
+        ("payload".to_string(), payload),
+    ]));
+
+    validate_and_write_json(bundle_path, "runtime.runRecord", run_file, &envelope)?;
+    println!("OK: run-record create");
     Ok(())
+}
+
+fn run_record_transition_command(values: &[String]) -> Result<(), String> {
+    if values.len() != 7 {
+        return Err(
+            "usage: nixfied-kernel run-record transition <bundle-file> <run-file> <state> <exit-code|empty> <stop-reason|empty> <pid|empty> <pgid|empty>"
+                .to_string(),
+        );
+    }
+
+    let bundle_path = &values[0];
+    let run_file = &values[1];
+    let state = &values[2];
+    let exit_code = parse_optional_i64(&values[3], "run-record exit_code")?;
+    let stop_reason = optional_string_value(&values[4]);
+    let pid = parse_optional_i64(&values[5], "run-record pid")?;
+    let pgid = parse_optional_i64(&values[6], "run-record pgid")?;
+    let now = current_utc_timestamp()?;
+
+    let mut envelope = parse_json_file(run_file, "run-record file")?;
+    let payload = object_field_mut(&mut envelope, "payload")
+        .ok_or_else(|| "run-record payload is missing".to_string())?;
+    let payload_object = payload
+        .as_object_mut()
+        .ok_or_else(|| "run-record payload must be an object".to_string())?;
+
+    payload_object.insert("state".to_string(), JsonValue::String(state.clone()));
+    payload_object.insert("updated_at".to_string(), JsonValue::String(now.clone()));
+    if let Some(pid) = pid {
+        payload_object.insert("pid".to_string(), JsonValue::Number(JsonNumber::from_int(pid)));
+    }
+    if let Some(pgid) = pgid {
+        payload_object.insert("pgid".to_string(), JsonValue::Number(JsonNumber::from_int(pgid)));
+    }
+    if payload_object
+        .get("started_at")
+        .map(|value| matches!(value, JsonValue::Null))
+        .unwrap_or(true)
+        && state == "running"
+    {
+        payload_object.insert("started_at".to_string(), JsonValue::String(now.clone()));
+    }
+    if matches!(state.as_str(), "passed" | "failed" | "canceled") {
+        payload_object.insert("finished_at".to_string(), JsonValue::String(now.clone()));
+    }
+    if let Some(exit_code) = exit_code {
+        payload_object.insert(
+            "exit_code".to_string(),
+            JsonValue::Number(JsonNumber::from_int(exit_code)),
+        );
+    }
+    if let Some(stop_reason) = stop_reason {
+        payload_object.insert("stop_reason".to_string(), JsonValue::String(stop_reason));
+    }
+
+    let history_value = payload_object
+        .get_mut("history")
+        .ok_or_else(|| "run-record history is missing".to_string())?;
+    let history = history_value
+        .as_array_mut()
+        .ok_or_else(|| "run-record history must be an array".to_string())?;
+    history.push(run_record_history_entry(state, &now));
+
+    validate_and_write_json(bundle_path, "runtime.runRecord", run_file, &envelope)?;
+    println!("OK: run-record transition");
+    Ok(())
+}
+fn registry_command(subcommand: &str, values: &[String]) -> Result<(), String> {
+    match subcommand {
+        "append" => registry_append_command(values),
+        "replay" => registry_replay_command(values),
+        other => Err(format!("unknown registry subcommand: {}", other)),
+    }
+}
+
+fn registry_append_command(values: &[String]) -> Result<(), String> {
+    if values.len() != 11 {
+        return Err(
+            "usage: nixfied-kernel registry append <bundle-file> <root> <run-id> <attempt-id> <workflow-id> <task-id> <state> <detail-file> <detail-reason> <detail-exit-code> <export-file>"
+                .to_string(),
+        );
+    }
+
+    let bundle_path = &values[0];
+    let root = &values[1];
+    let seq_file = format!("{}/.seq", root);
+    let events_file = format!("{}/events.ndjson", root);
+    let index_file = format!("{}/events.index.tsv", root);
+    fs::create_dir_all(root).map_err(|err| format!("failed to create {}: {}", root, err))?;
+
+    let seq = fs::read_to_string(&seq_file)
+        .ok()
+        .and_then(|value| value.trim().parse::<i64>().ok())
+        .unwrap_or(0)
+        + 1;
+    write_text_atomic(&seq_file, &seq.to_string())?;
+
+    let ts = current_utc_timestamp()?;
+    let ts_epoch = current_epoch_seconds()?;
+    let detail = parse_json_file(&values[7], "registry event detail file")?;
+    let envelope = JsonValue::Object(BTreeMap::from([
+        (
+            "kind".to_string(),
+            JsonValue::String("runtime-event".to_string()),
+        ),
+        (
+            "version".to_string(),
+            JsonValue::Number(JsonNumber::from_int(1)),
+        ),
+        (
+            "payload".to_string(),
+            JsonValue::Object(BTreeMap::from([
+                ("runId".to_string(), JsonValue::String(values[2].clone())),
+                ("attemptId".to_string(), nullable_string_value(&values[3])),
+                ("workflowId".to_string(), nullable_string_value(&values[4])),
+                ("taskId".to_string(), nullable_string_value(&values[5])),
+                ("seq".to_string(), JsonValue::Number(JsonNumber::from_int(seq))),
+                ("ts".to_string(), JsonValue::String(ts.clone())),
+                ("state".to_string(), JsonValue::String(values[6].clone())),
+                ("detail".to_string(), detail),
+            ])),
+        ),
+    ]));
+    validate_and_write_json(bundle_path, "runtime.registryEvent", "-", &envelope)?;
+
+    let rendered = render_json_compact(&envelope);
+    append_line(&events_file, &rendered)?;
+    append_line(
+        &index_file,
+        &format!(
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            seq,
+            ts_epoch,
+            ts,
+            values[2],
+            values[3],
+            values[4],
+            values[5],
+            values[6],
+            values[8],
+            values[9]
+        ),
+    )?;
+    write_shell_exports(
+        &values[10],
+        &[
+            ("REGISTRY_APPEND_LAST_SEQ".to_string(), seq.to_string()),
+            (
+                "REGISTRY_APPEND_LAST_EVENT_JSON".to_string(),
+                rendered.to_string(),
+            ),
+        ],
+    )?;
+    println!("OK: registry append");
+    Ok(())
+}
+
+fn registry_replay_command(values: &[String]) -> Result<(), String> {
+    if values.len() != 1 {
+        return Err("usage: nixfied-kernel registry replay <root>".to_string());
+    }
+
+    let index_file = format!("{}/events.index.tsv", values[0]);
+    if !Path::new(&index_file).exists() {
+        println!("{{}}");
+        return Ok(());
+    }
+
+    let content = read_text(&index_file)?;
+    let mut replay = BTreeMap::new();
+    for line in content.lines() {
+        let parts = line.split('\t').collect::<Vec<_>>();
+        if parts.len() < 8 {
+            continue;
+        }
+        let workflow_id = parts[5];
+        let task_id = parts[6];
+        let state = parts[7];
+        let key = if !task_id.is_empty() {
+            format!("task:{}", task_id)
+        } else if !workflow_id.is_empty() {
+            format!("workflow:{}", workflow_id)
+        } else {
+            continue;
+        };
+        replay.insert(key, JsonValue::String(state.to_string()));
+    }
+
+    println!("{}", render_json_compact(&JsonValue::Object(replay)));
+    Ok(())
+}
+
+fn summary_command(subcommand: &str, values: &[String]) -> Result<(), String> {
+    match subcommand {
+        "write" => summary_write_command(values),
+        "render-human" => summary_render_human_command(values),
+        other => Err(format!("unknown summary subcommand: {}", other)),
+    }
+}
+
+fn summary_write_command(values: &[String]) -> Result<(), String> {
+    if values.len() != 3 {
+        return Err(
+            "usage: nixfied-kernel summary write <bundle-file> <summary-file> <input-file>"
+                .to_string(),
+        );
+    }
+
+    let input = parse_json_file(&values[2], "summary input file")?;
+    let envelope = if object_field(&input, "kind").is_some() && object_field(&input, "payload").is_some() {
+        input
+    } else {
+        JsonValue::Object(BTreeMap::from([
+            (
+                "kind".to_string(),
+                JsonValue::String("workflow-summary".to_string()),
+            ),
+            (
+                "version".to_string(),
+                JsonValue::Number(JsonNumber::from_int(1)),
+            ),
+            ("payload".to_string(), input),
+        ]))
+    };
+    validate_and_write_json(&values[0], "runtime.summary", &values[1], &envelope)?;
+    println!("OK: summary write");
+    Ok(())
+}
+
+fn summary_render_human_command(values: &[String]) -> Result<(), String> {
+    if values.len() != 1 {
+        return Err("usage: nixfied-kernel summary render-human <summary-file>".to_string());
+    }
+
+    let summary = parse_json_file(&values[0], "summary file")?;
+    let payload = object_field(&summary, "payload")
+        .ok_or_else(|| "summary payload is missing".to_string())?;
+    let steps = object_array(payload, "steps").unwrap_or(&[]);
+    let counts = object_field(payload, "counts")
+        .and_then(JsonValue::as_object)
+        .ok_or_else(|| "summary counts are missing".to_string())?;
+    let timing = object_field(payload, "timing")
+        .and_then(JsonValue::as_object)
+        .ok_or_else(|| "summary timing is missing".to_string())?;
+    let total_duration = object_field(payload, "duration_seconds")
+        .and_then(json_value_to_i64)
+        .unwrap_or(0);
+    let exit_code = object_field(payload, "exit_code")
+        .and_then(json_value_to_i64)
+        .unwrap_or(1);
+    let skipped = counts
+        .get("skipped")
+        .and_then(json_value_to_i64)
+        .unwrap_or(0);
+    let parallel = timing
+        .get("parallelism")
+        .and_then(JsonValue::as_object)
+        .cloned()
+        .unwrap_or_default();
+
+    println!();
+    println!("------------------------------------------------------------");
+    println!("Summary");
+    println!("------------------------------------------------------------");
+    println!("Source: {}", values[0]);
+    for step in steps {
+        let status = object_string(step, "status").unwrap_or("failed");
+        let marker = match status {
+            "passed" => "PASS",
+            "skipped" => "SKIP",
+            _ => "FAIL",
+        };
+        let name = object_string(step, "name").unwrap_or("unknown");
+        let duration = object_field(step, "duration")
+            .and_then(json_value_to_i64)
+            .unwrap_or(0);
+        println!("  [{}] {} ({}s)", marker, name, duration);
+    }
+    println!("Total time: {}", format_duration_seconds(total_duration));
+    println!(
+        "INFO: Time breakdown setup={}s steps={}s teardown={}s accounted={}s untracked={}s",
+        timing.get("setup_duration").and_then(json_value_to_i64).unwrap_or(0),
+        timing.get("steps_duration").and_then(json_value_to_i64).unwrap_or(0),
+        timing.get("teardown_duration").and_then(json_value_to_i64).unwrap_or(0),
+        timing
+            .get("accounted_duration")
+            .and_then(json_value_to_i64)
+            .unwrap_or(0),
+        timing
+            .get("untracked_duration")
+            .and_then(json_value_to_i64)
+            .unwrap_or(0)
+    );
+    println!(
+        "INFO: Parallelism max_workers={} peak_workers={} canceled_count={}",
+        parallel
+            .get("max_workers")
+            .map(json_scalar_or_placeholder)
+            .unwrap_or_else(|| "?".to_string()),
+        parallel
+            .get("peak_workers")
+            .map(json_scalar_or_placeholder)
+            .unwrap_or_else(|| "?".to_string()),
+        parallel
+            .get("canceled_count")
+            .map(json_scalar_or_placeholder)
+            .unwrap_or_else(|| "?".to_string())
+    );
+    if skipped > 0 {
+        println!("INFO: SKIP: {} task(s) skipped", skipped);
+    }
+    if exit_code == 0 {
+        println!("OK: Exit code: 0");
+    } else {
+        println!("ERROR: Exit code: {}", exit_code);
+    }
+    if let Some(parent) = Path::new(&values[0]).parent() {
+        println!();
+        println!("Artifacts: {}", parent.display());
+    }
+    println!("------------------------------------------------------------");
+    Ok(())
+}
+
+fn validate_and_write_json(
+    bundle_path: &str,
+    contract_ref: &str,
+    output_path: &str,
+    value: &JsonValue,
+) -> Result<(), String> {
+    let bundle = parse_json_file(bundle_path, "validation bundle")?;
+    validate_json_value_against_contract(&bundle, contract_ref, value)?;
+    if output_path != "-" {
+        write_text_atomic(output_path, &format!("{}\n", render_json_compact(value)))?;
+    }
+    Ok(())
+}
+
+fn parse_json_file(path: &str, label: &str) -> Result<JsonValue, String> {
+    let text = read_text(path)?;
+    parse_json(&text).map_err(|err| format!("{} {} is not valid JSON: {}", label, path, err))
+}
+
+fn run_record_history_entry(state: &str, at: &str) -> JsonValue {
+    JsonValue::Object(BTreeMap::from([
+        ("state".to_string(), JsonValue::String(state.to_string())),
+        ("at".to_string(), JsonValue::String(at.to_string())),
+    ]))
+}
+
+fn parse_bool_flag(value: &str) -> Result<bool, String> {
+    match value {
+        "1" | "true" | "TRUE" => Ok(true),
+        "0" | "false" | "FALSE" => Ok(false),
+        other => Err(format!("expected boolean flag, got {}", other)),
+    }
+}
+
+fn nullable_string_value(value: &str) -> JsonValue {
+    if value.is_empty() {
+        JsonValue::Null
+    } else {
+        JsonValue::String(value.to_string())
+    }
+}
+
+fn optional_string_value(value: &str) -> Option<String> {
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
+}
+
+fn parse_optional_i64(value: &str, label: &str) -> Result<Option<i64>, String> {
+    if value.is_empty() || value == "null" {
+        Ok(None)
+    } else {
+        parse_i64_text(value, label).map(Some)
+    }
+}
+
+fn append_line(path: &str, line: &str) -> Result<(), String> {
+    let target = Path::new(path);
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|err| format!("failed to create {}: {}", parent.display(), err))?;
+    }
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|err| format!("failed to open {}: {}", path, err))?;
+    file.write_all(line.as_bytes())
+        .and_then(|_| file.write_all(b"\n"))
+        .map_err(|err| format!("failed to append {}: {}", path, err))
+}
+
+fn current_utc_timestamp() -> Result<String, String> {
+    let output = Command::new("date")
+        .args(["-u", "+%Y-%m-%dT%H:%M:%SZ"])
+        .output()
+        .map_err(|err| format!("failed to run date: {}", err))?;
+    if !output.status.success() {
+        return Err("failed to compute UTC timestamp".to_string());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn current_epoch_seconds() -> Result<i64, String> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|err| format!("failed to compute epoch seconds: {}", err))?;
+    Ok(i64::try_from(now.as_secs()).unwrap_or(i64::MAX))
+}
+
+fn print_json_scalar(value: &JsonValue) {
+    match value {
+        JsonValue::Null => println!(),
+        JsonValue::Bool(value) => println!("{}", value),
+        JsonValue::String(value) => println!("{}", value),
+        JsonValue::Number(number) => println!("{}", number.raw),
+        JsonValue::Array(_) | JsonValue::Object(_) => println!("{}", render_json_compact(value)),
+    }
+}
+
+fn format_duration_seconds(seconds: i64) -> String {
+    if seconds < 60 {
+        format!("{}s", seconds)
+    } else {
+        format!("{}m {}s", seconds / 60, seconds % 60)
+    }
+}
+
+fn json_scalar_or_placeholder(value: &JsonValue) -> String {
+    match value {
+        JsonValue::Null => "?".to_string(),
+        JsonValue::Bool(value) => value.to_string(),
+        JsonValue::String(value) => value.clone(),
+        JsonValue::Number(number) => number.raw.clone(),
+        JsonValue::Array(_) | JsonValue::Object(_) => render_json_compact(value),
+    }
+}
+
+fn adapter_command(subcommand: &str, values: &[String]) -> Result<(), String> {
+    match subcommand {
+        "decode" => adapter_decode_command(values),
+        other => Err(format!("unknown adapter subcommand: {}", other)),
+    }
+}
+
+fn adapter_decode_command(values: &[String]) -> Result<(), String> {
+    let kind = values
+        .first()
+        .ok_or_else(|| "usage: nixfied-kernel adapter decode <kind> ...".to_string())?;
+    match kind.as_str() {
+        "supervisor-status" => adapter_decode_supervisor_status(&values[1..]),
+        "helios-finalized-slot" => adapter_decode_helios_finalized_slot(&values[1..]),
+        "helios-checkpoint-root" => adapter_decode_helios_checkpoint_root(&values[1..]),
+        other => Err(format!("unknown adapter decode kind: {}", other)),
+    }
+}
+
+fn adapter_decode_supervisor_status(values: &[String]) -> Result<(), String> {
+    if values.len() != 1 {
+        return Err(
+            "usage: nixfied-kernel adapter decode supervisor-status <json-file>".to_string(),
+        );
+    }
+    let payload = parse_json_file(&values[0], "supervisor payload")?;
+    let rows = payload
+        .as_array()
+        .ok_or_else(|| "supervisor payload must be an array".to_string())?;
+    for row in rows {
+        let object = row
+            .as_object()
+            .ok_or_else(|| "supervisor process row must be an object".to_string())?;
+        println!(
+            "{}\t{}\t{}\t{}",
+            object
+                .get("name")
+                .and_then(JsonValue::as_string)
+                .unwrap_or(""),
+            object
+                .get("status")
+                .and_then(JsonValue::as_string)
+                .unwrap_or(""),
+            object
+                .get("is_running")
+                .and_then(JsonValue::as_bool)
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+            object
+                .get("is_ready")
+                .and_then(JsonValue::as_bool)
+                .map(|value| value.to_string())
+                .unwrap_or_default()
+        );
+    }
+    Ok(())
+}
+
+fn adapter_decode_helios_finalized_slot(values: &[String]) -> Result<(), String> {
+    if values.len() != 1 {
+        return Err(
+            "usage: nixfied-kernel adapter decode helios-finalized-slot <json-file>"
+                .to_string(),
+        );
+    }
+    let payload = parse_json_file(&values[0], "helios finalized payload")?;
+    let selected = resolve_json_path(&payload, ".data.header.message.slot")
+        .ok_or_else(|| "helios finalized slot is missing".to_string())?;
+    let number = json_value_to_number_string(selected)
+        .ok_or_else(|| "helios finalized slot is not numeric".to_string())?;
+    println!("{}", number);
+    Ok(())
+}
+
+fn adapter_decode_helios_checkpoint_root(values: &[String]) -> Result<(), String> {
+    if values.is_empty() || values.len() > 2 {
+        return Err(
+            "usage: nixfied-kernel adapter decode helios-checkpoint-root <json-file> [--empty-ok]"
+                .to_string(),
+        );
+    }
+    let empty_ok = values.get(1).map(|value| value == "--empty-ok").unwrap_or(false);
+    let payload = parse_json_file(&values[0], "helios checkpoint payload")?;
+    let selected = resolve_json_path(&payload, ".data.root");
+    match selected.and_then(JsonValue::as_string) {
+        Some(value) => {
+            println!("{}", value);
+            Ok(())
+        }
+        None if empty_ok => Ok(()),
+        None => Err("helios checkpoint root is missing".to_string()),
+    }
+}
+
+fn probe_command(subcommand: &str, values: &[String]) -> Result<(), String> {
+    match subcommand {
+        "evaluate" => probe_evaluate_command(values),
+        other => Err(format!("unknown probe subcommand: {}", other)),
+    }
+}
+
+fn probe_evaluate_command(values: &[String]) -> Result<(), String> {
+    let plan_path = values
+        .first()
+        .ok_or_else(|| "usage: nixfied-kernel probe evaluate <plan-file> <payload-file> [export-file]".to_string())?;
+    let payload_path = values
+        .get(1)
+        .ok_or_else(|| "usage: nixfied-kernel probe evaluate <plan-file> <payload-file> [export-file]".to_string())?;
+    if values.len() > 3 {
+        return Err(
+            "usage: nixfied-kernel probe evaluate <plan-file> <payload-file> [export-file]"
+                .to_string(),
+        );
+    }
+
+    let export_path = values.get(2).map(|value| value.as_str());
+    let plan = load_probe_plan(plan_path)?;
+    let payload = parse_json_file(payload_path, "probe payload")?;
+    let result = resolve_json_path(&payload, ".result");
+    let mut exports = Vec::new();
+
+    match plan.probe_kind.as_str() {
+        "jsonrpc-result-present" => {
+            if matches!(result, Some(JsonValue::Null) | None) {
+                return Err("probe result is missing".to_string());
+            }
+        }
+        "jsonrpc-result-hex" => {
+            let value = result
+                .and_then(JsonValue::as_string)
+                .ok_or_else(|| "probe result must be a hex string".to_string())?;
+            if !is_hex_prefixed(value) {
+                return Err(format!("probe result must be hex, got {}", value));
+            }
+            let export_var = plan
+                .export_var
+                .clone()
+                .ok_or_else(|| "probe plan jsonrpc-result-hex requires exportVar".to_string())?;
+            exports.push((export_var, value.to_string()));
+        }
+        "jsonrpc-result-compact" => {
+            let value = result.ok_or_else(|| "probe result is missing".to_string())?;
+            if matches!(value, JsonValue::Null) {
+                return Err("probe result is missing".to_string());
+            }
+            let export_var = plan
+                .export_var
+                .clone()
+                .ok_or_else(|| "probe plan jsonrpc-result-compact requires exportVar".to_string())?;
+            exports.push((export_var, render_json_compact(value)));
+        }
+        "jsonrpc-result-bool-false" => match result {
+            Some(JsonValue::Bool(false)) => {}
+            _ => return Err("probe result must be false".to_string()),
+        },
+        other => return Err(format!("unknown probe evaluate kind: {}", other)),
+    }
+
+    if let Some(export_path) = export_path {
+        write_shell_exports(export_path, &exports)?;
+    } else if !exports.is_empty() {
+        return Err("probe evaluate requires export-file when plan emits exports".to_string());
+    }
+
+    println!("OK: probe evaluate kind={}", plan.probe_kind);
+    Ok(())
+}
+
+fn machine_output_command(subcommand: &str, values: &[String]) -> Result<(), String> {
+    match subcommand {
+        "run" => machine_output_run_command(values),
+        other => Err(format!("unknown machine-output subcommand: {}", other)),
+    }
+}
+
+fn machine_output_run_command(values: &[String]) -> Result<(), String> {
+    let plan_path = values
+        .first()
+        .ok_or_else(|| "usage: nixfied-kernel machine-output run <plan-file> [-- <args...>]".to_string())?;
+    let plan = load_machine_output_plan(plan_path)?;
+    let remaining = values[1..].to_vec();
+    let user_args = strip_passthrough_separator(&remaining).to_vec();
+    let work_dir = create_temp_dir("nixfied-machine-output")?;
+
+    for (index, setup_program) in plan.setup_programs.iter().enumerate() {
+        let output = run_captured_program(setup_program, &[], &[])?;
+        if output.status.success() {
+            render_captured_logs(
+                "INFO",
+                &format!("setup app {}", index + 1),
+                &output,
+            );
+        } else {
+            render_captured_logs(
+                "ERROR",
+                &format!("setup app {}", index + 1),
+                &output,
+            );
+            machine_output_fail(
+                &plan,
+                "setup",
+                "machine-output-setup-failed",
+                &format!("setup app {} failed", index + 1),
+                "",
+                output.status.code().unwrap_or(1),
+            );
+        }
+    }
+
+    let payload_file = format!("{}/payload.json", work_dir);
+    let mut target_args = plan.target_args.clone();
+    target_args.extend(user_args.iter().cloned());
+    let output = run_captured_program(
+        &plan.target_program,
+        &target_args,
+        &[("NIXFIED_MACHINE_OUTPUT_FILE".to_string(), payload_file.clone())],
+    )?;
+    if output.status.success() {
+        render_captured_logs("INFO", "target app", &output);
+    } else {
+        render_captured_logs("ERROR", "target app", &output);
+        machine_output_fail(
+            &plan,
+            "target",
+            "machine-output-target-failed",
+            &format!("target app '{}' failed", plan.target_app_id),
+            &plan.target_app_id,
+            output.status.code().unwrap_or(1),
+        );
+    }
+
+    let payload_text = match fs::read_to_string(&payload_file) {
+        Ok(text) if !text.trim().is_empty() => text,
+        _ => {
+            machine_output_fail(
+                &plan,
+                "validation",
+                "machine-output-validation-failed",
+                &format!(
+                    "target app '{}' did not write machine payload to declared file",
+                    plan.target_app_id
+                ),
+                &plan.target_app_id,
+                1,
+            );
+        }
+    };
+    let payload = parse_json(&payload_text).unwrap_or_else(|_| {
+        machine_output_fail(
+            &plan,
+            "validation",
+            "machine-output-validation-failed",
+            &format!(
+                "target app '{}' did not satisfy contract '{}'",
+                plan.target_app_id, plan.contract_ref
+            ),
+            &plan.target_app_id,
+            1,
+        );
+    });
+    let bundle = parse_json_file(&plan.bundle_file, "machine-output validation bundle")
+        .unwrap_or_else(|err| panic!("{}", err));
+    if let Err(err) = validate_json_value_against_contract(&bundle, &plan.contract_ref, &payload) {
+        eprintln!("ERROR: {}", err);
+        machine_output_fail(
+            &plan,
+            "validation",
+            "machine-output-validation-failed",
+            &format!(
+                "target app '{}' did not satisfy contract '{}'",
+                plan.target_app_id, plan.contract_ref
+            ),
+            &plan.target_app_id,
+            1,
+        );
+    }
+
+    for (index, teardown_program) in plan.teardown_programs.iter().enumerate() {
+        let output = run_captured_program(teardown_program, &[], &[])?;
+        if output.status.success() {
+            render_captured_logs(
+                "INFO",
+                &format!("teardown app {}", index + 1),
+                &output,
+            );
+        } else {
+            render_captured_logs(
+                "ERROR",
+                &format!("teardown app {}", index + 1),
+                &output,
+            );
+            machine_output_fail(
+                &plan,
+                "teardown",
+                "machine-output-teardown-failed",
+                &format!("teardown app {} failed", index + 1),
+                "",
+                output.status.code().unwrap_or(1),
+            );
+        }
+    }
+
+    print!("{}", payload_text);
+    Ok(())
+}
+
+fn load_machine_output_plan(path: &str) -> Result<MachineOutputPlan, String> {
+    let value = parse_json_file(path, "machine-output plan")?;
+    Ok(MachineOutputPlan {
+        app_id: required_string_field(&value, "appId", "machine-output plan")?.to_string(),
+        target_app_id: required_string_field(&value, "targetAppId", "machine-output plan")?
+            .to_string(),
+        contract_ref: required_string_field(&value, "contractRef", "machine-output plan")?
+            .to_string(),
+        bundle_file: required_string_field(&value, "bundleFile", "machine-output plan")?
+            .to_string(),
+        target_program: required_string_field(&value, "targetProgram", "machine-output plan")?
+            .to_string(),
+        setup_programs: array_strings(&value, "setupPrograms"),
+        teardown_programs: array_strings(&value, "teardownPrograms"),
+        target_args: array_strings(&value, "targetArgs"),
+    })
+}
+
+fn load_probe_plan(path: &str) -> Result<ProbePlan, String> {
+    let value = parse_json_file(path, "probe plan")?;
+    Ok(ProbePlan {
+        probe_kind: required_string_field(&value, "probeKind", "probe plan")?.to_string(),
+        export_var: object_string(&value, "exportVar").map(|value| value.to_string()),
+    })
+}
+
+fn create_temp_dir(prefix: &str) -> Result<String, String> {
+    let base = env::temp_dir();
+    let candidate = base.join(format!(
+        "{}.{}.{}",
+        prefix,
+        process::id(),
+        current_epoch_seconds()?
+    ));
+    fs::create_dir_all(&candidate)
+        .map_err(|err| format!("failed to create {}: {}", candidate.display(), err))?;
+    Ok(candidate.display().to_string())
+}
+
+fn run_captured_program(
+    program: &str,
+    args: &[String],
+    envs: &[(String, String)],
+) -> Result<std::process::Output, String> {
+    let mut command = Command::new(program);
+    command.args(args);
+    command.stdin(Stdio::null());
+    for (key, value) in envs {
+        command.env(key, value);
+    }
+    command
+        .output()
+        .map_err(|err| format!("failed to run {}: {}", program, err))
+}
+
+fn render_captured_logs(level: &str, label: &str, output: &std::process::Output) {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !stdout.is_empty() {
+        eprintln!("{}: {} stdout:", level, label);
+        eprint!("{}", stdout);
+    }
+    if !stderr.is_empty() {
+        eprintln!("{}: {} stderr:", level, label);
+        eprint!("{}", stderr);
+    }
+}
+
+fn machine_output_fail(
+    plan: &MachineOutputPlan,
+    stage: &str,
+    code: &str,
+    message: &str,
+    failed_app_id: &str,
+    exit_code: i32,
+) -> ! {
+    let payload = JsonValue::Object(BTreeMap::from([
+        ("ok".to_string(), JsonValue::Bool(false)),
+        ("appId".to_string(), JsonValue::String(plan.app_id.clone())),
+        (
+            "targetAppId".to_string(),
+            JsonValue::String(plan.target_app_id.clone()),
+        ),
+        ("stage".to_string(), JsonValue::String(stage.to_string())),
+        ("code".to_string(), JsonValue::String(code.to_string())),
+        ("message".to_string(), JsonValue::String(message.to_string())),
+        (
+            "failedAppId".to_string(),
+            nullable_string_value(failed_app_id),
+        ),
+        (
+            "contractRef".to_string(),
+            nullable_string_value(&plan.contract_ref),
+        ),
+        (
+            "validator".to_string(),
+            if stage == "validation" {
+                JsonValue::String("nixfied-kernel".to_string())
+            } else {
+                JsonValue::Null
+            },
+        ),
+        (
+            "exitCode".to_string(),
+            JsonValue::Number(JsonNumber::from_int(exit_code as i64)),
+        ),
+    ]));
+    println!("{}", render_json_compact(&payload));
+    process::exit(exit_code.max(1));
+}
+
+fn is_hex_prefixed(value: &str) -> bool {
+    value.len() >= 3
+        && value.starts_with("0x")
+        && value
+            .chars()
+            .skip(2)
+            .all(|ch| ch.is_ascii_hexdigit())
 }
 
 fn validate_json_command(input_path: &str) -> Result<(), String> {
@@ -245,9 +1813,23 @@ impl JsonValue {
         }
     }
 
+    fn as_object_mut(&mut self) -> Option<&mut BTreeMap<String, JsonValue>> {
+        match self {
+            JsonValue::Object(value) => Some(value),
+            _ => None,
+        }
+    }
+
     fn as_array(&self) -> Option<&[JsonValue]> {
         match self {
             JsonValue::Array(value) => Some(value.as_slice()),
+            _ => None,
+        }
+    }
+
+    fn as_array_mut(&mut self) -> Option<&mut Vec<JsonValue>> {
+        match self {
+            JsonValue::Array(value) => Some(value),
             _ => None,
         }
     }
@@ -270,6 +1852,17 @@ impl JsonValue {
         match self {
             JsonValue::Number(value) => Some(value),
             _ => None,
+        }
+    }
+}
+
+impl JsonNumber {
+    fn from_int(value: i64) -> Self {
+        Self {
+            raw: value.to_string(),
+            integer: true,
+            int_value: Some(value as i128),
+            float_value: value as f64,
         }
     }
 }
@@ -1577,6 +3170,10 @@ fn infer_kind(schema: &JsonValue) -> Option<String> {
 
 fn object_field<'a>(value: &'a JsonValue, key: &str) -> Option<&'a JsonValue> {
     value.as_object()?.get(key)
+}
+
+fn object_field_mut<'a>(value: &'a mut JsonValue, key: &str) -> Option<&'a mut JsonValue> {
+    value.as_object_mut()?.get_mut(key)
 }
 
 fn object_string<'a>(value: &'a JsonValue, key: &str) -> Option<&'a str> {

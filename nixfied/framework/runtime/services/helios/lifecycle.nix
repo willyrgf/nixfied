@@ -216,7 +216,7 @@ let
             continue
           fi
 
-          slot="$(${kernelPackage}/bin/nixfied-kernel query-json - .data.header.message.slot --raw --tonumber <<<"$FINALIZED_JSON" 2>/dev/null || true)"
+          slot="$(${kernelPackage}/bin/nixfied-kernel adapter decode helios-finalized-slot - <<<"$FINALIZED_JSON" 2>/dev/null || true)"
           case "$slot" in
             *[!0-9]*|"")
               log_warn "failed to parse finalized slot from consensus response cons=$CONS"
@@ -236,7 +236,7 @@ let
             continue
           fi
 
-          checkpoint="$(${kernelPackage}/bin/nixfied-kernel query-json - .data.root --raw --empty-ok <<<"$EPOCH_JSON" 2>/dev/null || true)"
+          checkpoint="$(${kernelPackage}/bin/nixfied-kernel adapter decode helios-checkpoint-root - --empty-ok <<<"$EPOCH_JSON" 2>/dev/null || true)"
           if ! echo "$checkpoint" | ${pkgs.gnugrep}/bin/grep -Eq '^0x[0-9a-fA-F]{64}$'; then
             log_warn "invalid checkpoint root from consensus endpoint cons=$CONS root='$checkpoint'"
             continue

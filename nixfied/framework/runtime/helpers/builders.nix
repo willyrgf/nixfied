@@ -81,6 +81,8 @@ let
           shellContract.mkContractRuntime {
             inherit name;
             contract = commandApi;
+            logLevelDefault = defaultLogLevel;
+            outputModeDefault = defaultOutputMode;
           };
       contractPrelude =
         if commandApi == null then
@@ -114,7 +116,6 @@ let
       source ${toString shellContract.runtime}
       ${hookExports}
       ${envExports}
-      nixfied_contract_resolve_runtime_primitives "${defaultLogLevel}" "${defaultOutputMode}"
       export NIXFIED_LOG_TRACE="''${NIXFIED_LOG_TRACE:-0}"
       export COMMAND_NAME="''${COMMAND_NAME:-${name}}"
       if [ "''${OUTPUT_MODE}" != "stdout" ]; then

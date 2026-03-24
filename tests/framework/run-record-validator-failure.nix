@@ -1,15 +1,12 @@
 { pkgs }:
 let
+  kernelPackage = import ../../nixfied/framework/runtime/kernel { inherit pkgs; };
   runtimeArtifactContracts = import ../../nixfied/framework/contracts/runtime-artifact-contracts.nix {
     inherit pkgs;
   };
-  runRecordValidator = import ../../nixfied/framework/contracts/mkValidator.nix {
-    inherit
-      pkgs
-      ;
-    contractBundle = runtimeArtifactContracts;
-    contractRef = "runtime.runRecord";
-  };
+  validationBundleFile = pkgs.writeText "nixfied-runtime-artifact-contract-bundle.json" (
+    builtins.toJSON runtimeArtifactContracts.bundle
+  );
 in
 pkgs.runCommand "run-record-validator-failure" { } ''
   set -euo pipefail
@@ -118,14 +115,14 @@ pkgs.runCommand "run-record-validator-failure" { } ''
   }
   EOF
 
-  "${runRecordValidator}" "$TMPDIR/valid.json" > /dev/null
+  ${kernelPackage}/bin/nixfied-kernel validate-artifact ${pkgs.lib.escapeShellArg validationBundleFile} runtime.runRecord "$TMPDIR/valid.json" > /dev/null
 
-  if "${runRecordValidator}" "$TMPDIR/invalid-state.json" > /dev/null 2>"$TMPDIR/invalid-state.err"; then
+  if ${kernelPackage}/bin/nixfied-kernel validate-artifact ${pkgs.lib.escapeShellArg validationBundleFile} runtime.runRecord "$TMPDIR/invalid-state.json" > /dev/null 2>"$TMPDIR/invalid-state.err"; then
     echo "run-record validator accepted an invalid state payload"
     exit 1
   fi
 
-  if "${runRecordValidator}" "$TMPDIR/unknown-field.json" > /dev/null 2>"$TMPDIR/unknown-field.err"; then
+  if ${kernelPackage}/bin/nixfied-kernel validate-artifact ${pkgs.lib.escapeShellArg validationBundleFile} runtime.runRecord "$TMPDIR/unknown-field.json" > /dev/null 2>"$TMPDIR/unknown-field.err"; then
     echo "run-record validator accepted an unknown-field payload"
     exit 1
   fi

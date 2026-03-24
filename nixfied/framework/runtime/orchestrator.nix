@@ -11,6 +11,7 @@
 }:
 let
   lib = pkgs.lib;
+  kernelPackage = import ./kernel { inherit pkgs; };
   resolvedSelectionIndex =
     if selectionIndex != null then
       selectionIndex
@@ -41,13 +42,9 @@ let
   };
   orchestratorRuntimeShell = import ./orchestrator-runtime.nix { inherit pkgs; };
   runtimeArtifactContracts = import ../contracts/runtime-artifact-contracts.nix { inherit pkgs; };
-  runRecordValidator = import ../contracts/mkValidator.nix {
-    inherit
-      pkgs
-      ;
-    contractBundle = runtimeArtifactContracts;
-    contractRef = "runtime.runRecord";
-  };
+  validationBundleFile = pkgs.writeText "nixfied-runtime-artifact-contract-bundle.json" (
+    builtins.toJSON runtimeArtifactContracts.bundle
+  );
   executor = import ./executor.nix {
     inherit
       pkgs
@@ -578,64 +575,40 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
     local args_json="$9"
 
     local run_file
-    local now
     local lock_file
     local lock_fd
-    local tmp
-    local validate_stderr
+    local args_tmp
 
     run_file="$(run_file_for "$run_id")"
-    now="$(iso_now)"
     lock_file="$(run_lock_for "$run_id")"
     lock_fd="$(registry_lock_acquire "$lock_file" "orchestrator-create-run-record:$run_id" 30)" || return 1
-    tmp="$(mktemp "$run_file.tmp.XXXXXX")"
-    validate_stderr="$(mktemp "$run_file.validate.XXXXXX")"
-
-    RUN_RECORD_RUN_ID="$run_id"
-    RUN_RECORD_ATTEMPT_ID="$attempt_id"
-    RUN_RECORD_COMMAND="$command_name"
-    RUN_RECORD_WORKFLOW_ID="$workflow_id"
-    RUN_RECORD_TASK_ID="$task_id"
-    RUN_RECORD_EXECUTION_MODE="$execution_mode"
-    RUN_RECORD_PROCESS_MODE="$process_mode"
+    args_tmp="$(mktemp "$run_file.args.XXXXXX")" || {
+      registry_lock_release "$lock_fd" "$lock_file"
+      return 1
+    }
+    printf '%s\n' "$args_json" > "$args_tmp"
     if [ "$ephemeral_enabled" = "1" ]; then
-      RUN_RECORD_EPHEMERAL_ENABLED="true"
+      ephemeral_enabled="true"
     else
-      RUN_RECORD_EPHEMERAL_ENABLED="false"
+      ephemeral_enabled="false"
     fi
-    RUN_RECORD_STATE="queued"
-    RUN_RECORD_PID=""
-    RUN_RECORD_PGID=""
-    RUN_RECORD_EXIT_CODE=""
-    RUN_RECORD_STOP_REASON=""
-    RUN_RECORD_CREATED_AT="$now"
-    RUN_RECORD_STARTED_AT=""
-    RUN_RECORD_FINISHED_AT=""
-    RUN_RECORD_UPDATED_AT="$now"
-    RUN_RECORD_ARGS_JSON="$args_json"
-    RUN_RECORD_HISTORY_LINES=""
-    run_record_history_append "queued" "$now"
-
-    if ! write_run_record_json_file "$tmp"; then
-      rm -f "$tmp"
-      rm -f "$validate_stderr"
+    if ! ${kernelPackage}/bin/nixfied-kernel run-record create \
+      ${lib.escapeShellArg validationBundleFile} \
+      "$run_file" \
+      "$run_id" \
+      "$attempt_id" \
+      "$command_name" \
+      "$workflow_id" \
+      "$task_id" \
+      "$execution_mode" \
+      "$process_mode" \
+      "$ephemeral_enabled" \
+      "$args_tmp" >/dev/null; then
+      rm -f "$args_tmp"
       registry_lock_release "$lock_fd" "$lock_file"
       return 1
     fi
-
-    if ! ${runRecordValidator} "$tmp" >/dev/null 2>"$validate_stderr"; then
-      cat "$validate_stderr" >&2 || true
-      rm -f "$tmp" "$validate_stderr"
-      registry_lock_release "$lock_fd" "$lock_file"
-      return 1
-    fi
-
-    rm -f "$validate_stderr"
-    mv "$tmp" "$run_file"
-    if ! write_run_record_fields "$run_file"; then
-      registry_lock_release "$lock_fd" "$lock_file"
-      return 1
-    fi
+    rm -f "$args_tmp"
     registry_lock_release "$lock_fd" "$lock_file"
 
   }
@@ -651,70 +624,23 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
     local run_file
     local lock_file
     local lock_fd
-    local tmp
-    local now
-    local validate_stderr
 
     run_file="$(run_file_for "$run_id")"
     lock_file="$(run_lock_for "$run_id")"
-    now="$(iso_now)"
 
     if [ ! -f "$run_file" ]; then
       return 1
     fi
 
     lock_fd="$(registry_lock_acquire "$lock_file" "orchestrator-update-run-state:$run_id" 30)" || return 1
-    tmp="$(mktemp "$run_file.tmp.XXXXXX")"
-    validate_stderr="$(mktemp "$run_file.validate.XXXXXX")"
-
-    if ! load_run_record_fields "$run_file"; then
-      rm -f "$tmp"
-      rm -f "$validate_stderr"
-      registry_lock_release "$lock_fd" "$lock_file"
-      return 1
-    fi
-
-    RUN_RECORD_STATE="$state"
-    RUN_RECORD_UPDATED_AT="$now"
-    run_record_history_append "$state" "$now"
-    if [ -n "$pid" ]; then
-      RUN_RECORD_PID="$pid"
-    fi
-    if [ -n "$pgid" ]; then
-      RUN_RECORD_PGID="$pgid"
-    fi
-    if [ -z "$RUN_RECORD_STARTED_AT" ] && [ "$state" = "running" ]; then
-      RUN_RECORD_STARTED_AT="$now"
-    fi
-    case "$state" in
-      passed|failed|canceled)
-        RUN_RECORD_FINISHED_AT="$now"
-        ;;
-    esac
-    if [ -n "$exit_code_json" ] && [ "$exit_code_json" != "null" ]; then
-      RUN_RECORD_EXIT_CODE="$exit_code_json"
-    fi
-    if [ -n "$stop_reason" ]; then
-      RUN_RECORD_STOP_REASON="$stop_reason"
-    fi
-
-    if ! write_run_record_json_file "$tmp"; then
-      rm -f "$tmp"
-      rm -f "$validate_stderr"
-      registry_lock_release "$lock_fd" "$lock_file"
-      return 1
-    fi
-
-    if ! ${runRecordValidator} "$tmp" >/dev/null 2>"$validate_stderr"; then
-      cat "$validate_stderr" >&2 || true
-      rm -f "$tmp" "$validate_stderr"
-      registry_lock_release "$lock_fd" "$lock_file"
-      return 1
-    fi
-
-    rm -f "$validate_stderr"
-    mv "$tmp" "$run_file"
-    if ! write_run_record_fields "$run_file"; then
+    if ! ${kernelPackage}/bin/nixfied-kernel run-record transition \
+      ${lib.escapeShellArg validationBundleFile} \
+      "$run_file" \
+      "$state" \
+      "$exit_code_json" \
+      "$stop_reason" \
+      "$pid" \
+      "$pgid" >/dev/null; then
       registry_lock_release "$lock_fd" "$lock_file"
       return 1
     fi

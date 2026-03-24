@@ -198,6 +198,7 @@ let
             esac
             helios_readiness_profile=${lib.escapeShellArg (step.readinessProfile or "fast")}
             helios_require_not_syncing=${if step.requireNotSyncing or false then "1" else "0"}
+            helios_block_number_valid=0
             echo "INFO: checking ${step.serviceLabel} ${step.phaseLabel} port=${portExpr} source=$probe_source source_kind=$helios_source_kind_value profile=$helios_readiness_profile"
             if source_kind_disallowed "$helios_source_kind_value"${
               if disallowArgs == "" then "" else " " + disallowArgs
@@ -212,9 +213,21 @@ let
                 method = "eth_blockNumber";
               }
             })" || true
-            helios_block_number="$(${kernelPackage}/bin/nixfied-kernel query-json - .result --raw --empty-ok <<<"$helios_block_json")" || true
-            if [ -z "$helios_block_number" ] || ! [[ "$helios_block_number" =~ ^0x[0-9a-fA-F]+$ ]]; then
-              if [ "${if step.allowLocalHealthFallback or false then "1" else "0"}" = "1" ] && ${
+            helios_block_number=""
+            helios_block_json_file="''${TMPDIR:-/tmp}/nixfied-helios-block.$$.$RANDOM.json"
+            helios_block_export_file="''${TMPDIR:-/tmp}/nixfied-helios-block-export.$$.$RANDOM.sh"
+            printf '%s' "$helios_block_json" > "$helios_block_json_file"
+            if ${kernelPackage}/bin/nixfied-kernel probe evaluate \
+              ${lib.escapeShellArg (toString probeCommands.jsonRpcProbePlans.resultHex)} \
+              "$helios_block_json_file" \
+              "$helios_block_export_file" >/dev/null 2>&1; then
+              . "$helios_block_export_file"
+              helios_block_number="''${NIXFIED_PROBE_RESULT:-}"
+            fi
+            rm -f "''${helios_block_json_file:-}" "''${helios_block_export_file:-}"
+            if [ -n "$helios_block_number" ] && [[ "$helios_block_number" =~ ^0x[0-9a-fA-F]+$ ]]; then
+              helios_block_number_valid=1
+            elif [ "${if step.allowLocalHealthFallback or false then "1" else "0"}" = "1" ] && [ "$helios_require_not_syncing" != "1" ] && ${
                 probeCommands.jsonRpcHasResultCmd {
                   urlExpr = probeCommands.localHttpUrlExpr portExpr;
                   method = "eth_chainId";
@@ -223,23 +236,44 @@ let
               then
                 echo "OK: ${step.serviceLabel} ${step.successLabel} port=${portExpr} mode=local_chainid_fallback"
                 exit 0
-              fi
+            elif [ "$helios_require_not_syncing" = "1" ]; then
+              echo "WARN: ${step.serviceLabel} block number unavailable port=${portExpr} source=$probe_source source_kind=$helios_source_kind_value profile=$helios_readiness_profile; continuing to sync gate"
+            else
               echo "ERROR: ${step.serviceLabel} ${step.failureLabel} port=${portExpr} source=$probe_source source_kind=$helios_source_kind_value (invalid eth_blockNumber result)"
               exit 1
             fi
-            echo "OK: ${step.serviceLabel} ${step.successLabel} port=${portExpr} block_number=$helios_block_number"
+            if [ "$helios_block_number_valid" = "1" ]; then
+              echo "OK: ${step.serviceLabel} ${step.successLabel} port=${portExpr} block_number=$helios_block_number"
+            fi
 
             if [ "$helios_require_not_syncing" = "1" ]; then
-              helios_syncing_result="$(${
-                probeCommands.jsonRpcFieldCmd {
+              helios_syncing_json="$(${
+                probeCommands.jsonRpcRequestCmd {
                   urlExpr = probeCommands.localHttpUrlExpr portExpr;
                   method = "eth_syncing";
-                  fieldExpr = ".result";
-                  raw = false;
                 }
               })" || true
-              if [ "$helios_syncing_result" != "false" ]; then
+              helios_syncing_result=""
+              helios_syncing_json_file="''${TMPDIR:-/tmp}/nixfied-helios-syncing.$$.$RANDOM.json"
+              helios_syncing_export_file="''${TMPDIR:-/tmp}/nixfied-helios-syncing-export.$$.$RANDOM.sh"
+              printf '%s' "$helios_syncing_json" > "$helios_syncing_json_file"
+              if ${kernelPackage}/bin/nixfied-kernel probe evaluate \
+                ${lib.escapeShellArg (toString probeCommands.jsonRpcProbePlans.resultCompact)} \
+                "$helios_syncing_json_file" \
+                "$helios_syncing_export_file" >/dev/null 2>&1; then
+                . "$helios_syncing_export_file"
+                helios_syncing_result="''${NIXFIED_PROBE_RESULT:-}"
+              fi
+              if ! ${kernelPackage}/bin/nixfied-kernel probe evaluate \
+                ${lib.escapeShellArg (toString probeCommands.jsonRpcProbePlans.resultBoolFalse)} \
+                "$helios_syncing_json_file" >/dev/null 2>&1; then
+                rm -f "''${helios_syncing_json_file:-}" "''${helios_syncing_export_file:-}"
                 echo "ERROR: ${step.serviceLabel} ${step.failureLabel} port=${portExpr} source=$probe_source source_kind=$helios_source_kind_value profile=$helios_readiness_profile (eth_syncing=$helios_syncing_result)"
+                exit 1
+              fi
+              rm -f "''${helios_syncing_json_file:-}" "''${helios_syncing_export_file:-}"
+              if [ "$helios_block_number_valid" != "1" ]; then
+                echo "ERROR: ${step.serviceLabel} ${step.failureLabel} port=${portExpr} source=$probe_source source_kind=$helios_source_kind_value profile=$helios_readiness_profile (invalid eth_blockNumber result)"
                 exit 1
               fi
               echo "OK: ${step.serviceLabel} sync status ready port=${portExpr}"
