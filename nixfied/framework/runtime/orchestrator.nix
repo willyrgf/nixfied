@@ -331,7 +331,8 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
     local signal_name="$2"
 
     printf '{'
-    printf '"reason":%s' "$(json_quote_string "$reason")"
+    printf '"kind":%s' "$(json_quote_string "controlSignal")"
+    printf ',"reason":%s' "$(json_quote_string "$reason")"
     printf ',"signal":%s' "$(json_quote_string "$signal_name")"
     printf '}'
   }

@@ -67,7 +67,7 @@ pkgs.runCommand "shell-contract-runtime-smoke" { } ''
   }
 
   source ${toString shellContract.runtime}
-  export NIXFIED_APP_CONTRACT_RUNTIME=${toString runtimePlan}
+  export NIXFIED_COMMAND_API_RUNTIME=${toString runtimePlan}
   export APP_API_URL=/tmp/api
 
   nixfied_contract_validate_env /tmp/unused
@@ -88,7 +88,7 @@ pkgs.runCommand "shell-contract-runtime-smoke" { } ''
     PATH="$PATH" \
     HOME="$HOME" \
     TMPDIR="$TMPDIR" \
-    NIXFIED_APP_CONTRACT_RUNTIME=${toString runtimePlan} \
+    NIXFIED_COMMAND_API_RUNTIME=${toString runtimePlan} \
     APP_API_URL=/tmp/api \
     NIXFIED_LOG_LEVEL=debug \
     NIXFIED_OUTPUT_MODE=logs \

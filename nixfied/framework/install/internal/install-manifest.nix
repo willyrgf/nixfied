@@ -57,7 +57,7 @@ let
           usage
           ;
         category = "framework";
-        appContract = {
+        commandApi = {
           version = 2;
           inherit name;
           commandClass = "passthrough";

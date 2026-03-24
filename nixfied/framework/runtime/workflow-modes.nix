@@ -274,12 +274,12 @@ let
   taskDescriptorById = builtins.listToAttrs (
     map (
       taskId:
-    let
-      task = tasks.${taskId};
-      app = preferredTaskApp taskId;
-      commandApi = task.commandApi or { };
-      specs = map normalizeTaskArgSpec (commandApi.args or [ ]);
-      packagePath = task.runner.package or null;
+      let
+        task = tasks.${taskId};
+        app = preferredTaskApp taskId;
+        commandApi = task.commandApi or { };
+        specs = map normalizeTaskArgSpec (commandApi.args or [ ]);
+        packagePath = task.runner.package or null;
         preHookIds = uniqueSorted (builtins.attrNames (task.runtime.preHooks or { }));
         postHookIds = uniqueSorted (builtins.attrNames (task.runtime.postHooks or { }));
         requiredServices = listUtils.uniquePreserveOrder (
@@ -293,7 +293,12 @@ let
           if configuredUsage != [ ] then configuredUsage else [ "nix run .#run-task -- ${taskId} [-- ...]" ];
         exampleLines = if app == null then [ ] else app.examples or [ ];
         taskHelpLines = [
-          "${displayName} - ${if app == null then commandApi.summary or task.summary else app.summary or commandApi.summary or task.summary}"
+          "${displayName} - ${
+            if app == null then
+              commandApi.summary or task.summary
+            else
+              app.summary or commandApi.summary or task.summary
+          }"
         ]
         ++
           lib.optionals
@@ -303,8 +308,7 @@ let
                   commandApi.details or task.description or ""
                 else
                   app.description or commandApi.details or task.description or ""
-              )
-              != ""
+              ) != ""
             )
             [
               ""

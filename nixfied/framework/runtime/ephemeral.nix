@@ -276,42 +276,42 @@ let
       script,
       installDeps ? true,
       extraEnv ? "",
-      appContract ? null,
+      commandApi ? null,
     }:
     let
       runtimePath = if runtimePackages == [ ] then "" else pkgs.lib.makeBinPath runtimePackages;
       pathBlock = if runtimePath != "" then ''export PATH="${runtimePath}:$PATH"'' else "";
       contractFile =
-        if appContract == null then
+        if commandApi == null then
           null
         else
-          pkgs.writeText "ephemeral-${name}-app-contract.json" (builtins.toJSON appContract);
+          pkgs.writeText "ephemeral-${name}-command-api.json" (builtins.toJSON commandApi);
       contractRuntime =
-        if appContract == null then
+        if commandApi == null then
           null
         else
           shellContract.mkContractRuntime {
             inherit name;
-            contract = appContract;
+            contract = commandApi;
           };
       contractPrelude =
-        if appContract == null then
+        if commandApi == null then
           ""
         else
           ''
-            NIXFIED_APP_CONTRACT_FILE="${toString contractFile}"
-            NIXFIED_APP_CONTRACT_RUNTIME="${toString contractRuntime}"
+            NIXFIED_COMMAND_API_FILE="${toString contractFile}"
+            NIXFIED_COMMAND_API_RUNTIME="${toString contractRuntime}"
             source ${toString shellContract.runtime}
-            nixfied_contract_validate_env "$NIXFIED_APP_CONTRACT_FILE"
-            nixfied_contract_validate_args "$NIXFIED_APP_CONTRACT_FILE" "$@"
+            nixfied_contract_validate_env "$NIXFIED_COMMAND_API_FILE"
+            nixfied_contract_validate_args "$NIXFIED_COMMAND_API_FILE" "$@"
           '';
       contractExitCheck =
-        if appContract == null then
+        if commandApi == null then
           ""
         else
           ''
             _NIXFIED_CONTRACT_RC=0
-            nixfied_contract_validate_exit "$NIXFIED_APP_CONTRACT_FILE" "$_NIXFIED_APP_RC" || _NIXFIED_CONTRACT_RC=$?
+            nixfied_contract_validate_exit "$NIXFIED_COMMAND_API_FILE" "$_NIXFIED_APP_RC" || _NIXFIED_CONTRACT_RC=$?
             if [ "$_NIXFIED_CONTRACT_RC" -ne 0 ]; then
               exit "$_NIXFIED_CONTRACT_RC"
             fi

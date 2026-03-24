@@ -1,13 +1,15 @@
 { lib }:
 let
   t = lib.types;
-in
-let
-  contractNodeOptions = rec {
-    contractNodeType = t.submodule {
-      options = contractNodeOptions;
-    };
+  contractNodeType = t.submodule {
+    options = contractNodeOptions;
+  };
 
+  contractFieldType = t.submodule {
+    options = contractFieldOptions;
+  };
+
+  contractNodeOptions = {
     kind = lib.mkOption {
       type = t.enum [
         "bool"
@@ -38,7 +40,7 @@ let
     };
 
     fields = lib.mkOption {
-      type = t.nullOr (t.attrsOf contractNodeType);
+      type = t.nullOr (t.attrsOf contractFieldType);
       default = null;
     };
 
@@ -106,20 +108,6 @@ let
       default = null;
     };
 
-    valueLiteral = lib.mkOption {
-      type = t.nullOr (
-        t.oneOf [
-          t.str
-          t.int
-          t.bool
-          t.float
-          t.null
-        ]
-      );
-      default = null;
-      description = "Literal value for contracts with kind = literal.";
-    };
-
     pattern = lib.mkOption {
       type = t.nullOr t.str;
       default = null;
@@ -136,6 +124,22 @@ let
     };
 
     name = lib.mkOption {
+      type = t.nullOr t.str;
+      default = null;
+    };
+  };
+
+  contractFieldOptions = {
+    schema = lib.mkOption {
+      type = contractNodeType;
+    };
+
+    required = lib.mkOption {
+      type = t.bool;
+      default = true;
+    };
+
+    doc = lib.mkOption {
       type = t.nullOr t.str;
       default = null;
     };

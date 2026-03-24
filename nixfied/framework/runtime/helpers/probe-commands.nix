@@ -3,6 +3,7 @@
 }:
 
 let
+  kernelPackage = import ../kernel { inherit pkgs; };
   runtimeDefaults = import ../../core/runtime-defaults.nix;
 
   netcatPkg =
@@ -110,7 +111,9 @@ rec {
             maxTime
             ;
         }}
-      ) | ${pkgs.jq}/bin/jq -${if raw then "r" else "c"} '${fieldExpr}'
+      ) | ${kernelPackage}/bin/nixfied-kernel query-json - ${pkgs.lib.escapeShellArg fieldExpr} ${
+        if raw then "--raw" else "--compact"
+      }${if fieldExpr == ".result // empty" then " --empty-ok" else ""}
     '';
 
   pgIsReadyCmd =

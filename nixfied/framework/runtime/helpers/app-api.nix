@@ -87,7 +87,7 @@ let
         examples
         category
         ;
-      appContract = {
+      commandApi = {
         version = 2;
         inherit
           name

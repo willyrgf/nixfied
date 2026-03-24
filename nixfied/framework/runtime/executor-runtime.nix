@@ -70,7 +70,6 @@ let
               else
                 "printf '%s\\n' " + lib.concatStringsSep " " (map lib.escapeShellArg values)
             }
-            return 0
             ;;
         ''
       ) entries
@@ -436,14 +435,14 @@ in
             missing="$missing,$required_env"
           fi
         fi
-      done < <(
+      done <<< "$(
         case "$unit_json" in
   ${renderCasePrintLines (entry: entry.value.skipIfMissingEnv) workflowUnitEntries}
           *)
             :
             ;;
         esac
-      )
+      )"
 
       printf '%s' "$missing"
     }
@@ -459,14 +458,14 @@ in
         if [ -n "$required_env" ] && [ -z "''${!required_env:-}" ]; then
           return 1
         fi
-      done < <(
+      done <<< "$(
         case "$unit_json" in
   ${renderCasePrintLines (entry: entry.value.whenEnvPresent) workflowUnitEntries}
           *)
             :
             ;;
         esac
-      )
+      )"
 
       while IFS=$'\t' read -r env_name expected_value; do
         if [ -z "$env_name" ]; then
@@ -476,14 +475,14 @@ in
         if [ "$actual_value" != "$expected_value" ]; then
           return 1
         fi
-      done < <(
+      done <<< "$(
         case "$unit_json" in
   ${renderCasePrintLines (entry: entry.value.whenEnvEquals) workflowUnitEntries}
           *)
             :
             ;;
         esac
-      )
+      )"
 
       return 0
     }

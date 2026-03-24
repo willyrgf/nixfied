@@ -58,8 +58,7 @@ let
         id = noServiceHookTaskId;
         summary = "Service hook export break contract";
         description = "Tasks without selected services should not receive ambient service hooks.";
-        contract.input.args.parser = "passthrough";
-        contract.input.args.allowUnknown = true;
+        commandApi.commandClass = "passthrough";
         runner.command = ''
           set -euo pipefail
           ${serviceEnvContractPrelude noServiceEnvKeys}
@@ -90,8 +89,7 @@ let
         summary = "Scoped postgres hook export smoke";
         description = "Tasks with postgres selected should receive postgres hooks only.";
         requirements.services = [ "postgres" ];
-        contract.input.args.parser = "passthrough";
-        contract.input.args.allowUnknown = true;
+        commandApi.commandClass = "passthrough";
         runner.command = ''
           set -euo pipefail
           ${serviceEnvContractPrelude postgresEnvKeys}
@@ -125,8 +123,7 @@ let
           "postgres"
           "nginx"
         ];
-        contract.input.args.parser = "passthrough";
-        contract.input.args.allowUnknown = true;
+        commandApi.commandClass = "passthrough";
         runner.command = ''
           set -euo pipefail
           ${serviceEnvContractPrelude bothEnvKeys}
@@ -165,8 +162,7 @@ let
         summary = "Dependency-closure hook export smoke";
         description = "Tasks inherit selected service hooks from required task dependencies.";
         deps.needs = [ postgresHookTaskId ];
-        contract.input.args.parser = "passthrough";
-        contract.input.args.allowUnknown = true;
+        commandApi.commandClass = "passthrough";
         runner.command = ''
           set -euo pipefail
           ${serviceEnvContractPrelude postgresEnvKeys}

@@ -347,31 +347,44 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
       event_detail_mode_json() {
         local mode="$1"
-        printf '{"mode":%s}' "$(json_quote_string "$mode")"
+        printf '{'
+        printf '"kind":%s' "$(json_quote_string "slotLifecycle")"
+        printf ',"mode":%s' "$(json_quote_string "$mode")"
+        printf '}'
       }
 
       event_detail_mode_suffix_json() {
         local mode="$1"
         local suffix_reason="$2"
         printf '{'
-        printf '"mode":%s' "$(json_quote_string "$mode")"
+        printf '"kind":%s' "$(json_quote_string "slotLifecycle")"
+        printf ',"mode":%s' "$(json_quote_string "$mode")"
         printf ',"suffixReason":%s' "$(json_string_or_null "$suffix_reason")"
         printf '}'
       }
 
       event_detail_exit_code_json() {
         local exit_code="$1"
-        printf '{"exitCode":%s}' "$exit_code"
+        printf '{'
+        printf '"kind":%s' "$(json_quote_string "slotLifecycle")"
+        printf ',"exitCode":%s' "$exit_code"
+        printf '}'
       }
 
       event_detail_produces_json() {
         local produces_json="$1"
-        printf '{"produces":%s}' "$produces_json"
+        printf '{'
+        printf '"kind":%s' "$(json_quote_string "slotLifecycle")"
+        printf ',"produces":%s' "$produces_json"
+        printf '}'
       }
 
       event_detail_reason_json() {
         local reason="$1"
-        printf '{"reason":%s}' "$(json_quote_string "$reason")"
+        printf '{'
+        printf '"kind":%s' "$(json_quote_string "serviceLifecycle")"
+        printf ',"reason":%s' "$(json_quote_string "$reason")"
+        printf '}'
       }
 
       event_detail_reason_key_value_json() {
@@ -379,8 +392,19 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         local extra_key="$2"
         local extra_value="$3"
         printf '{'
-        printf '"reason":%s' "$(json_quote_string "$reason")"
+        printf '"kind":%s' "$(json_quote_string "serviceLifecycle")"
+        printf ',"reason":%s' "$(json_quote_string "$reason")"
         printf ',%s:%s' "$(json_quote_string "$extra_key")" "$(json_quote_string "$extra_value")"
+        printf '}'
+      }
+
+      event_detail_reason_exit_code_json() {
+        local reason="$1"
+        local exit_code="$2"
+        printf '{'
+        printf '"kind":%s' "$(json_quote_string "serviceLifecycle")"
+        printf ',"reason":%s' "$(json_quote_string "$reason")"
+        printf ',"exitCode":%s' "$exit_code"
         printf '}'
       }
 
@@ -391,10 +415,11 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         local operation="$4"
 
         printf '{'
-        printf '"phase":%s' "$(json_quote_string "$phase")"
-        printf ',"serviceSetId":%s' "$(json_quote_string "$service_set_id")"
-        printf ',"serviceSetName":%s' "$(json_quote_string "$service_set_name")"
-        printf ',"operation":%s' "$(json_quote_string "$operation")"
+        printf '"kind":%s' "$(json_quote_string "serviceLifecycle")"
+        printf ',"eventType":%s' "$(json_quote_string "$phase")"
+        printf ',"service":%s' "$(json_quote_string "$service_set_name")"
+        printf ',"commandName":%s' "$(json_quote_string "$operation")"
+        printf ',"ownerScope":%s' "$(json_quote_string "$service_set_id")"
         printf '}'
       }
 
@@ -406,10 +431,11 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         local exit_code="$5"
 
         printf '{'
-        printf '"phase":%s' "$(json_quote_string "$phase")"
-        printf ',"serviceSetId":%s' "$(json_quote_string "$service_set_id")"
-        printf ',"serviceSetName":%s' "$(json_quote_string "$service_set_name")"
-        printf ',"operation":%s' "$(json_quote_string "$operation")"
+        printf '"kind":%s' "$(json_quote_string "serviceLifecycle")"
+        printf ',"eventType":%s' "$(json_quote_string "$phase")"
+        printf ',"service":%s' "$(json_quote_string "$service_set_name")"
+        printf ',"commandName":%s' "$(json_quote_string "$operation")"
+        printf ',"ownerScope":%s' "$(json_quote_string "$service_set_id")"
         printf ',"exitCode":%s' "$exit_code"
         printf '}'
       }
@@ -803,7 +829,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
         detail_json="$(event_detail_mode_json "task")"
         append_event "$run_id" "$workflow_id" "$task_id" "queued" "$detail_json"
-        append_event "$run_id" "$workflow_id" "$task_id" "running" '{}'
+        append_event "$run_id" "$workflow_id" "$task_id" "running" "$detail_json"
 
         if [ -z "$workflow_id" ]; then
           effective_workflow_id="task-root"
@@ -1404,7 +1430,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           unit_selected_services_csv="$(workflow_unit_selected_services_csv "''${UNIT_JSON[$unit_name]}")"
           detail_json="$(event_detail_mode_json "task")"
           append_event "$run_id" "$workflow_id" "$unit_task" "queued" "$detail_json"
-          append_event "$run_id" "$workflow_id" "$unit_task" "running" '{}'
+          append_event "$run_id" "$workflow_id" "$unit_task" "running" "$detail_json"
 
           if [ "''${#passthrough_args[@]}" -gt 0 ]; then
             (
@@ -2703,7 +2729,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         fi
 
         if [ "$status" -eq 0 ]; then
-          append_event "$run_id" "$workflow_id" "" "passed" '{}'
+          append_event "$run_id" "$workflow_id" "" "passed" "$(event_detail_mode_json "workflow")"
         else
           detail_json="$(event_detail_exit_code_json "$status")"
           append_event "$run_id" "$workflow_id" "" "failed" "$detail_json" "" "$status"
@@ -2718,12 +2744,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           if ! write_workflow_summary_json "$run_id" "$workflow_id" "$status" "$started_at" "$started_epoch" "$MACHINE_SUMMARY_FILE"; then
             if [ "$status" -eq 0 ]; then
               status=1
-              detail_json="$(
-                printf '{'
-                printf '"reason":%s' "$(json_quote_string "summary-write-failed")"
-                printf ',"exitCode":1'
-                printf '}'
-              )"
+              detail_json="$(event_detail_reason_exit_code_json "summary-write-failed" "1")"
               append_event "$run_id" "$workflow_id" "" "failed" "$detail_json" "summary-write-failed" "1"
             fi
           fi

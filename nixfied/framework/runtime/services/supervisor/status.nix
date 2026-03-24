@@ -9,7 +9,7 @@
 
 let
   pc = pkgs.process-compose;
-  jq = pkgs.jq;
+  kernelPackage = import ../../kernel { inherit pkgs; };
 
   status = runtime.mkSupervisorScript {
     name = "supervisor-status";
@@ -80,25 +80,34 @@ let
         exit 1
       fi
 
-      TOTAL=$(${jq}/bin/jq -r 'length' <<<"$SUPERVISOR_PROCESS_JSON")
+      TOTAL=$(
+        ${kernelPackage}/bin/nixfied-kernel json-length - <<<"$SUPERVISOR_PROCESS_JSON"
+      )
       if [ "$TOTAL" -eq 0 ]; then
         log_ok "supervisor healthy services=0 slot=$SLOT env=$ENV"
         exit 0
       fi
 
       UNHEALTHY=$(
-        ${jq}/bin/jq -r '
-          [
-            .[]
-            | select((.status != "Running") or (.is_running != true))
-            | (
-                .name
-                + ":status=" + (.status | tostring)
-                + ",running=" + (.is_running | tostring)
-                + ",ready=" + (.is_ready | tostring)
-              )
-          ] | join("; ")
-        ' <<<"$SUPERVISOR_PROCESS_JSON"
+        total_index=$((TOTAL - 1))
+        idx=0
+        parts=""
+        while [ "$idx" -le "$total_index" ]; do
+          status="$(${kernelPackage}/bin/nixfied-kernel query-json - ".''${idx}.status" --raw <<<"$SUPERVISOR_PROCESS_JSON")"
+          running="$(${kernelPackage}/bin/nixfied-kernel query-json - ".''${idx}.is_running" --raw <<<"$SUPERVISOR_PROCESS_JSON")"
+          ready="$(${kernelPackage}/bin/nixfied-kernel query-json - ".''${idx}.is_ready" --raw <<<"$SUPERVISOR_PROCESS_JSON")"
+          name="$(${kernelPackage}/bin/nixfied-kernel query-json - ".''${idx}.name" --raw <<<"$SUPERVISOR_PROCESS_JSON")"
+          if [ "$status" != "Running" ] || [ "$running" != "true" ]; then
+            entry="''${name}:status=$status,running=$running,ready=$ready"
+            if [ -n "$parts" ]; then
+              parts="$parts; $entry"
+            else
+              parts="$entry"
+            fi
+          fi
+          idx=$((idx + 1))
+        done
+        printf '%s' "$parts"
       )
 
       if [ -n "$UNHEALTHY" ]; then

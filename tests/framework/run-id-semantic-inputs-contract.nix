@@ -25,8 +25,7 @@ let
               id = taskId;
               inherit summary;
               description = "Used to prove semantic invocation inputs change run ids.";
-              contract.input.args.parser = "passthrough";
-              contract.input.args.allowUnknown = true;
+              commandApi.commandClass = "passthrough";
               runtime.passThroughEnv = [ "RUN_ID_INPUT" ];
               runner.command = ''
                 set -euo pipefail

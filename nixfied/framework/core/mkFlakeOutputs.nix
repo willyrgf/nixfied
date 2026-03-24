@@ -867,6 +867,9 @@ let
 
                 excluded_services_csv="$(build_excluded_services_csv)"
                 selected_services_csv="$(launcher_selected_services_csv "''${forwarded_args[@]}")"
+                if [ -n "$excluded_services_csv" ] && [ -z "$selected_services_csv" ]; then
+                  selected_services_csv="__ALL__"
+                fi
 
                 if [ -n ${lib.escapeShellArg dispatcherHelpFile} ] \
                   && forwarded_args_only_help_flag "''${forwarded_args[@]}"; then
@@ -891,13 +894,13 @@ let
         selection_cmd=(
           "${pkgs.nix}/bin/nix-build"
           "--no-out-link"
-          "${frameworkRoot}/framework/launch/run-selected-app.nix"
+          "${frameworkRootAbs}/framework/launch/run-selected-app.nix"
           "--argstr"
           "system"
                   ${lib.escapeShellArg system}
                   "--argstr"
                   "projectRoot"
-                  "$flake_root"
+                  ${lib.escapeShellArg projectRootAbs}
                   "--argstr"
                   "frameworkRoot"
                   ${lib.escapeShellArg frameworkRootAbs}
@@ -966,13 +969,13 @@ let
         runtime_cmd=(
           "${pkgs.nix}/bin/nix-build"
           "--no-out-link"
-          "${frameworkRoot}/framework/launch/run-runtime-app.nix"
+          "${frameworkRootAbs}/framework/launch/run-runtime-app.nix"
           "--argstr"
           "system"
           ${lib.escapeShellArg system}
           "--argstr"
           "projectRoot"
-          "$flake_root"
+          ${lib.escapeShellArg projectRootAbs}
           "--argstr"
           "frameworkRoot"
           ${lib.escapeShellArg frameworkRootAbs}

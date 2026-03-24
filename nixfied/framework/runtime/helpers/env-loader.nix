@@ -7,6 +7,7 @@
 
 let
   lib = pkgs.lib;
+  kernelPackage = import ../kernel { inherit pkgs; };
   inherit (import ./validation.nix { inherit pkgs; })
     expect
     renderErrors
@@ -218,7 +219,7 @@ let
           fi
           ;;
         json)
-          if ! printf '%s' "$value" | ${pkgs.jq}/bin/jq -e . >/dev/null 2>&1; then
+          if ! printf '%s' "$value" | ${kernelPackage}/bin/nixfied-kernel validate-json - >/dev/null 2>&1; then
             log_error ".env key $key expects valid JSON"
             return 1
           fi

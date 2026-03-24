@@ -22,8 +22,7 @@ let
             id = taskId;
             summary = "Run id noise probe";
             description = "Used to prove irrelevant ambient env does not change run ids.";
-            contract.input.args.parser = "passthrough";
-            contract.input.args.allowUnknown = true;
+            commandApi.commandClass = "passthrough";
             runner.command = ''
               set -euo pipefail
               printf '%s\n' "OK: run id noise probe"

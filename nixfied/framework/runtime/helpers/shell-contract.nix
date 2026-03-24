@@ -3,6 +3,7 @@
 
 let
   lib = pkgs.lib;
+  kernelPackage = import ../kernel { inherit pkgs; };
   exitCodes = import ../../core/exit-codes.nix;
   validation = import ./validation.nix { inherit pkgs; };
   inherit (validation)
@@ -177,14 +178,14 @@ let
         inherit env;
         name = envName;
       };
-      prefix = "${name}: appContract.env[${envName}]";
+      prefix = "${name}: commandApi.env[${envName}]";
       actualAliases = if envSpec == null then [ ] else (envSpec.aliases or [ ]);
       actualValues = if envSpec == null then [ ] else (envSpec.values or [ ]);
       actualDefault = if envSpec == null || !(envSpec ? default) then null else envSpec.default;
       actualType = if envSpec == null then null else (envSpec.type or "string");
       actualRequired = if envSpec == null then false else (envSpec.required or false);
     in
-    expect (envSpec != null) "${name}: appContract.env must include ${envName} runtime primitive"
+    expect (envSpec != null) "${name}: commandApi.env must include ${envName} runtime primitive"
     ++ expect (envSpec == null || actualType == "enum") "${prefix}: type must be enum"
     ++ expect (
       envSpec == null || sameStringSet aliases actualAliases
@@ -204,7 +205,7 @@ let
       index,
     }:
     let
-      prefix = "${appName}.appContract.args[${toString index}]";
+      prefix = "${appName}.commandApi.args[${toString index}]";
       kind =
         if !(argSpec ? kind) || argSpec.kind == null then
           if (argSpec ? long) || (argSpec ? short) then "option" else "positional"
@@ -255,7 +256,7 @@ let
       index,
     }:
     let
-      prefix = "${appName}.appContract.env[${toString index}]";
+      prefix = "${appName}.commandApi.env[${toString index}]";
       type = envSpec.type or "string";
       values = envSpec.values or [ ];
       min = envSpec.min or null;
@@ -298,7 +299,7 @@ let
       failureCodes,
     }:
     let
-      prefix = "${appName}.appContract.failureCodes";
+      prefix = "${appName}.commandApi.failureCodes";
       names = if builtins.isAttrs failureCodes then builtins.attrNames failureCodes else [ ];
       badKeys = builtins.filter (key: !isNonEmptyString key) names;
       badValues = builtins.filter (key: !(isPositiveExitCode failureCodes.${key})) names;
@@ -370,71 +371,71 @@ let
         };
     in
     if contract == null then
-      [ "${name}: missing appContract" ]
+      [ "${name}: missing commandApi" ]
     else if !builtins.isAttrs contract then
-      [ "${name}: appContract must be an attribute set" ]
+      [ "${name}: commandApi must be an attribute set" ]
     else
-      expect (contract ? version) "${name}: appContract.version is required"
+      expect (contract ? version) "${name}: commandApi.version is required"
       ++ expect (builtins.isInt (
         contract.version or null
-      )) "${name}: appContract.version must be an integer"
-      ++ expect ((contract.version or null) == 2) "${name}: appContract.version must be 2"
+      )) "${name}: commandApi.version must be an integer"
+      ++ expect ((contract.version or null) == 2) "${name}: commandApi.version must be 2"
       ++ expect (isNonEmptyString (
         contract.name or ""
-      )) "${name}: appContract.name must be a non-empty string"
+      )) "${name}: commandApi.name must be a non-empty string"
       ++ expect (
         !(contract ? allowUnknownArgs) || builtins.isBool (contract.allowUnknownArgs or null)
-      ) "${name}: appContract.allowUnknownArgs must be a boolean when set"
-      ++ expect (contract ? commandClass) "${name}: appContract.commandClass is required"
-      ++ expect (isNonEmptyString commandClass) "${name}: appContract.commandClass must be a non-empty string"
-      ++ expect (isSupportedCommandClass commandClass) "${name}: appContract.commandClass must be one of ${builtins.concatStringsSep "|" supportedCommandClasses}"
-      ++ expect (builtins.isList args) "${name}: appContract.args must be a list"
-      ++ expect (builtins.isList env) "${name}: appContract.env must be a list"
-      ++ expect (builtins.isAttrs outputs) "${name}: appContract.outputs must be an attribute set"
-      ++ expect (isSupportedOutputMode mode) "${name}: appContract.outputs.mode must be one of ${builtins.concatStringsSep "|" supportedOutputModes}"
+      ) "${name}: commandApi.allowUnknownArgs must be a boolean when set"
+      ++ expect (contract ? commandClass) "${name}: commandApi.commandClass is required"
+      ++ expect (isNonEmptyString commandClass) "${name}: commandApi.commandClass must be a non-empty string"
+      ++ expect (isSupportedCommandClass commandClass) "${name}: commandApi.commandClass must be one of ${builtins.concatStringsSep "|" supportedCommandClasses}"
+      ++ expect (builtins.isList args) "${name}: commandApi.args must be a list"
+      ++ expect (builtins.isList env) "${name}: commandApi.env must be a list"
+      ++ expect (builtins.isAttrs outputs) "${name}: commandApi.outputs must be an attribute set"
+      ++ expect (isSupportedOutputMode mode) "${name}: commandApi.outputs.mode must be one of ${builtins.concatStringsSep "|" supportedOutputModes}"
       ++ expect (
         !(outputs ? keys) || isListOfNonEmptyStrings (outputs.keys or [ ])
-      ) "${name}: appContract.outputs.keys must be a list of non-empty strings when set"
+      ) "${name}: commandApi.outputs.keys must be a list of non-empty strings when set"
       ++ expect (
         !(contract ? idempotent) || builtins.isBool (contract.idempotent or null)
-      ) "${name}: appContract.idempotent must be a boolean when set"
+      ) "${name}: commandApi.idempotent must be a boolean when set"
       ++ expect (
         commandClass != "typed" || allowUnknownArgs == false
-      ) "${name}: appContract.commandClass=typed requires allowUnknownArgs=false"
+      ) "${name}: commandApi.commandClass=typed requires allowUnknownArgs=false"
       ++ expect (
         commandClass != "typed" || mode != "json"
-      ) "${name}: appContract.commandClass=typed cannot use outputs.mode=json"
+      ) "${name}: commandApi.commandClass=typed cannot use outputs.mode=json"
       ++ expect (
         commandClass != "passthrough" || allowUnknownArgs == true
-      ) "${name}: appContract.commandClass=passthrough requires allowUnknownArgs=true"
+      ) "${name}: commandApi.commandClass=passthrough requires allowUnknownArgs=true"
       ++ expect (
         commandClass != "json" || mode == "json"
-      ) "${name}: appContract.commandClass=json requires outputs.mode=json"
+      ) "${name}: commandApi.commandClass=json requires outputs.mode=json"
       ++ expect (
         commandClass != "json" || allowUnknownArgs == false
-      ) "${name}: appContract.commandClass=json requires allowUnknownArgs=false"
+      ) "${name}: commandApi.commandClass=json requires allowUnknownArgs=false"
       ++ expect (
         commandClass != "batch-runner" || allowUnknownArgs == false
-      ) "${name}: appContract.commandClass=batch-runner requires allowUnknownArgs=false"
+      ) "${name}: commandApi.commandClass=batch-runner requires allowUnknownArgs=false"
       ++ validateFailureCodesErrors {
         appName = name;
         failureCodes = contract.failureCodes or defaultFailureCodes;
       }
       ++
         expect (duplicateArgNames == [ ])
-          "${name}: appContract.args has duplicate names: ${builtins.concatStringsSep ", " duplicateArgNames}"
+          "${name}: commandApi.args has duplicate names: ${builtins.concatStringsSep ", " duplicateArgNames}"
       ++
         expect (duplicateLongNames == [ ])
-          "${name}: appContract.args has duplicate long options: ${builtins.concatStringsSep ", " duplicateLongNames}"
+          "${name}: commandApi.args has duplicate long options: ${builtins.concatStringsSep ", " duplicateLongNames}"
       ++
         expect (duplicateShortNames == [ ])
-          "${name}: appContract.args has duplicate short options: ${builtins.concatStringsSep ", " duplicateShortNames}"
-      ++
-        expect (duplicateEnvNames == [ ])
-          "${name}: appContract.env has duplicate names: ${builtins.concatStringsSep ", " duplicateEnvNames}"
+          "${name}: commandApi.args has duplicate short options: ${builtins.concatStringsSep ", " duplicateShortNames}"
+      ++ expect (
+        duplicateEnvNames == [ ]
+      ) "${name}: commandApi.env has duplicate names: ${builtins.concatStringsSep ", " duplicateEnvNames}"
       ++
         expect (duplicateEnvAliases == [ ])
-          "${name}: appContract.env has duplicate aliases: ${builtins.concatStringsSep ", " duplicateEnvAliases}"
+          "${name}: commandApi.env has duplicate aliases: ${builtins.concatStringsSep ", " duplicateEnvAliases}"
       ++ argErrs
       ++ envErrs
       ++ runtimePrimitiveErrs;
@@ -654,7 +655,7 @@ let
         value = failureName;
       }) (builtins.attrNames failureCodes);
     in
-    pkgs.writeText "${name}-app-contract-runtime.sh" ''
+    pkgs.writeText "${name}-command-api-runtime.sh" ''
       NIXFIED_CONTRACT_PLAN_NAME=${lib.escapeShellArg validated.name}
       NIXFIED_CONTRACT_ALLOW_UNKNOWN=${
         lib.escapeShellArg (if validated.allowUnknownArgs or false then "true" else "false")
@@ -710,7 +711,7 @@ let
     '';
 
   runtime = pkgs.writeShellScript "nixfied-shell-contract-runtime" ''
-    NIXFIED_CONTRACT_JQ="${pkgs.jq}/bin/jq"
+    NIXFIED_CONTRACT_KERNEL="${kernelPackage}/bin/nixfied-kernel"
     NIXFIED_CONTRACT_NONE="__NIXFIED_NONE__"
     NIXFIED_CONTRACT_RESOLVED_VALUE=""
     NIXFIED_CONTRACT_PLAN_LOADED="0"
@@ -750,7 +751,7 @@ let
 
     _nixfied_contract_load_runtime_plan() {
       local contract_file="''${1:-}"
-      local runtime_file="''${NIXFIED_APP_CONTRACT_RUNTIME:-}"
+      local runtime_file="''${NIXFIED_COMMAND_API_RUNTIME:-}"
 
       if [ "''${NIXFIED_CONTRACT_PLAN_LOADED:-0}" = "1" ] && [ "$runtime_file" = "''${NIXFIED_CONTRACT_PLAN_FILE:-}" ]; then
         return 0
@@ -759,7 +760,7 @@ let
       if [ -z "$runtime_file" ]; then
         _nixfied_contract_err "app contract runtime plan not configured"
         if [ -n "$contract_file" ]; then
-          _nixfied_contract_err "set NIXFIED_APP_CONTRACT_RUNTIME alongside NIXFIED_APP_CONTRACT_FILE=$contract_file"
+          _nixfied_contract_err "set NIXFIED_COMMAND_API_RUNTIME alongside NIXFIED_COMMAND_API_FILE=$contract_file"
         fi
         return 1
       fi
@@ -1012,7 +1013,7 @@ let
           fi
           ;;
         json)
-          if ! printf '%s' "$value" | "$NIXFIED_CONTRACT_JQ" -e . >/dev/null 2>&1; then
+          if ! printf '%s' "$value" | "$NIXFIED_CONTRACT_KERNEL" validate-json - >/dev/null 2>&1; then
             _nixfied_contract_err "$label must be valid json"
             return 1
           fi
@@ -1335,7 +1336,7 @@ let
 
     nixfied_contract_emit_json() {
       local payload="$1"
-      if ! printf '%s' "$payload" | "$NIXFIED_CONTRACT_JQ" -e . >/dev/null 2>&1; then
+      if ! printf '%s' "$payload" | "$NIXFIED_CONTRACT_KERNEL" validate-json - >/dev/null 2>&1; then
         _nixfied_contract_err "nixfied_contract_emit_json payload must be valid json"
         return 1
       fi

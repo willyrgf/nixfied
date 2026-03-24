@@ -21,15 +21,19 @@ let
     projectModules = [ ../../nixfied/project/module.nix ];
     extraModules = [
       {
-        nixfied.contracts.definitions.machineOutput.result = contractTypes.record {
+        nixfied.contracts.definitions."machineOutput.result" = contractTypes.record {
+          doc = "Validated machine-output payload.";
           fields = {
-            kind = contractTypes.field {
-              schema = contractTypes.enum {
-                values = [ "task" ];
-              };
-            };
             ok = contractTypes.field {
               schema = contractTypes.bool { };
+            };
+            kind = contractTypes.field {
+              schema = contractTypes.enum {
+                values = [
+                  "task"
+                  "workflow"
+                ];
+              };
             };
           };
         };
@@ -48,8 +52,8 @@ let
           id = jsonTaskId;
           summary = "machine-output json body";
           description = "Emits strict JSON to the declared machine channel.";
-          contract.output = {
-            format = "json";
+          commandApi.outputs = {
+            mode = "json";
             channels = "stdout";
             keys = [
               "ok"
@@ -71,8 +75,8 @@ let
           id = invalidJsonTaskId;
           summary = "machine-output invalid json body";
           description = "Emits JSON with an invalid type to the declared machine channel.";
-          contract.output = {
-            format = "json";
+          commandApi.outputs = {
+            mode = "json";
             channels = "stdout";
             keys = [
               "ok"
@@ -94,8 +98,8 @@ let
           id = unknownFieldTaskId;
           summary = "machine-output unknown-field body";
           description = "Emits JSON with an unexpected field to the declared machine channel.";
-          contract.output = {
-            format = "json";
+          commandApi.outputs = {
+            mode = "json";
             channels = "stdout";
             keys = [
               "ok"
@@ -118,8 +122,8 @@ let
           id = machineLogTaskId;
           summary = "machine-output log on machine channel";
           description = "Writes human log text to the machine channel so validation rejects it.";
-          contract.output = {
-            format = "json";
+          commandApi.outputs = {
+            mode = "json";
             channels = "stdout";
             keys = [
               "ok"
@@ -141,7 +145,7 @@ let
           summary = "machine-output setup";
           description = "Creates setup marker files and emits stdout noise.";
           runtime.passThroughEnv = [ "MACHINE_OUTPUT_TEST_DIR" ];
-          contract.input.env.extra = [
+          commandApi.env = [
             {
               name = "MACHINE_OUTPUT_TEST_DIR";
               type = "pathAbs";
@@ -163,7 +167,7 @@ let
           summary = "machine-output teardown";
           description = "Creates teardown marker files and emits stdout noise.";
           runtime.passThroughEnv = [ "MACHINE_OUTPUT_TEST_DIR" ];
-          contract.input.env.extra = [
+          commandApi.env = [
             {
               name = "MACHINE_OUTPUT_TEST_DIR";
               type = "pathAbs";
@@ -395,7 +399,7 @@ pkgs.runCommand "machine-output-app-smoke" { } ''
     cat "$TMPDIR/invalid.json"
     fail "workflow-targeted machineOutput failure payload must identify the target app"
   }
-  "$JQ" -e '.contractRef == "machineOutput.result" and .validator == "cue"' "$TMPDIR/invalid.json" > /dev/null || {
+  "$JQ" -e '.contractRef == "machineOutput.result" and .validator == "nixfied-kernel"' "$TMPDIR/invalid.json" > /dev/null || {
     cat "$TMPDIR/invalid.json"
     fail "workflow-targeted machineOutput failure payload must identify the contract and validator"
   }
@@ -408,7 +412,7 @@ pkgs.runCommand "machine-output-app-smoke" { } ''
     cat "$TMPDIR/invalid-payload.json"
     fail "contract-invalid machineOutput failure payload must use the validation failure envelope"
   }
-  "$JQ" -e '.targetAppId == "json-body-invalid" and .contractRef == "machineOutput.result" and .validator == "cue"' "$TMPDIR/invalid-payload.json" > /dev/null || {
+  "$JQ" -e '.targetAppId == "json-body-invalid" and .contractRef == "machineOutput.result" and .validator == "nixfied-kernel"' "$TMPDIR/invalid-payload.json" > /dev/null || {
     cat "$TMPDIR/invalid-payload.json"
     fail "contract-invalid machineOutput failure payload must identify the target app and contract"
   }

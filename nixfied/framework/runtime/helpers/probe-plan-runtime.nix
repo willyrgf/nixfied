@@ -6,6 +6,7 @@
 }:
 
 let
+  kernelPackage = import ../kernel { inherit pkgs; };
   runtimeDefaults = import ../../core/runtime-defaults.nix;
 
   normalizeEnvToken =
@@ -211,7 +212,7 @@ let
                 method = "eth_blockNumber";
               }
             })" || true
-            helios_block_number="$(printf '%s' "$helios_block_json" | ${pkgs.jq}/bin/jq -r '.result // empty')" || true
+            helios_block_number="$(${kernelPackage}/bin/nixfied-kernel query-json - .result --raw --empty-ok <<<"$helios_block_json")" || true
             if [ -z "$helios_block_number" ] || ! [[ "$helios_block_number" =~ ^0x[0-9a-fA-F]+$ ]]; then
               if [ "${if step.allowLocalHealthFallback or false then "1" else "0"}" = "1" ] && ${
                 probeCommands.jsonRpcHasResultCmd {

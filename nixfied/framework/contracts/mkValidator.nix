@@ -8,6 +8,9 @@ let
   kernelPackage = import ../runtime/kernel {
     inherit pkgs;
   };
+  validationBundleFile = pkgs.writeText "nixfied-validation-bundle-${builtins.substring 0 10 (builtins.hashString "sha256" contractRef)}.json" (
+    builtins.toJSON contractBundle.bundle
+  );
 in
 if !(builtins.hasAttr contractRef (contractBundle.bundle.definitions or { })) then
   throw "mkValidator: unknown contractRef '${contractRef}'"
@@ -21,5 +24,5 @@ else
     fi
 
     payload_file="$1"
-    exec ${kernelPackage}/bin/nixfied-kernel validate-payload "$payload_file"
+    exec ${kernelPackage}/bin/nixfied-kernel validate-payload ${lib.escapeShellArg validationBundleFile} ${lib.escapeShellArg contractRef} "$payload_file"
   ''

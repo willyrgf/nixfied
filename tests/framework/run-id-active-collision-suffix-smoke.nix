@@ -21,8 +21,7 @@ let
             id = taskId;
             summary = "Run id active collision probe";
             description = "Blocks on a release gate so concurrent identical invocations must suffix the second run id.";
-            contract.input.args.parser = "passthrough";
-            contract.input.args.allowUnknown = true;
+            commandApi.commandClass = "passthrough";
             runtime.passThroughEnv = [ "RUN_ID_COLLISION_GATE" ];
             runner.command = ''
               set -euo pipefail
