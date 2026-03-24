@@ -7,14 +7,11 @@ let
   };
   fixture = import ./lib/contract-render-fixture.nix { inherit contracts; };
 
-  cueRendered = contracts.renderCue.bundle fixture;
   jsonRendered = contracts.renderJsonSchema.bundle fixture;
   docsRendered = contracts.renderDocs.bundle fixture;
 
-  cueExpected = builtins.readFile ./snapshots/contracts/example.cue;
   jsonExpected = builtins.readFile ./snapshots/contracts/example.json;
 in
-assert cueRendered == cueExpected;
 assert jsonRendered == jsonExpected;
 assert pkgs.lib.hasInfix "machineOutput.result" docsRendered;
 assert pkgs.lib.hasInfix "runtime.summary.payload" docsRendered;

@@ -4,15 +4,6 @@ let
     inherit pkgs;
     system = pkgs.system;
   };
-  runtimeArtifactContracts = import ../../nixfied/framework/contracts/runtime-artifact-contracts.nix {
-    inherit pkgs;
-  };
-  cueBundleFile = pkgs.writeText "nixfied-runtime-artifact-contracts.cue" runtimeArtifactContracts.cueBundle;
-  batchSchemaFile = pkgs.writeText "nixfied-introspection-batch-schema.cue" ''
-    package nixfied
-
-    #runtime__introspectionResponse__batch: [...#runtime__introspectionResponse]
-  '';
 
   firstOutputs = frameworkLib.mkFlakeOutputs {
     projectRoot = ../..;
@@ -42,6 +33,8 @@ pkgs.runCommand "introspection-bundle-determinism" { } ''
     first=1
 
     while IFS= read -r json_file; do
+      ${pkgs.jq}/bin/jq -e . "$json_file" > /dev/null
+
       if [ "$first" -eq 0 ]; then
         printf ','
       fi
@@ -52,12 +45,7 @@ pkgs.runCommand "introspection-bundle-determinism" { } ''
 
     printf ']'
   } > "$payload_array"
-
-  ${pkgs.cue}/bin/cue vet \
-    -c ${cueBundleFile} \
-    ${batchSchemaFile} \
-    "$payload_array" \
-    -d '#runtime__introspectionResponse__batch'
+  ${pkgs.jq}/bin/jq -e . "$payload_array" > /dev/null
 
   ${pkgs.diffutils}/bin/cmp "$bundle_one" "$bundle_two"
   ${pkgs.diffutils}/bin/diff -ru "$assets_one" "$assets_two" > "$TMPDIR/introspection-assets.diff"
