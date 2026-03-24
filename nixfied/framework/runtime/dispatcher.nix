@@ -64,10 +64,10 @@ let
     let
       task = taskModels.${taskId};
       app = preferredTaskApp taskId;
-      argsContract = (((task.contract or { }).input or { }).args or { });
+      commandApi = task.commandApi or { };
       usageLines = if app == null then [ ] else app.usage or [ ];
       exampleLines = if app == null then [ ] else app.examples or [ ];
-      argSpecs = argsContract.spec or [ ];
+      argSpecs = commandApi.args or [ ];
       renderOptionLine =
         spec:
         let
@@ -99,9 +99,16 @@ let
         "  -h, --help: Show this help."
       ];
       appName = if app == null then taskId else app.id or taskId;
-      summary = if app == null then task.summary or "" else app.summary or task.summary or "";
+      summary =
+        if app == null then
+          commandApi.summary or task.summary or ""
+        else
+          app.summary or commandApi.summary or task.summary or "";
       description =
-        if app == null then task.description or "" else app.description or task.description or "";
+        if app == null then
+          commandApi.details or task.description or ""
+        else
+          app.description or commandApi.details or task.description or "";
     in
     builtins.concatStringsSep "\n" (
       [ "${appName} - ${summary}" ]

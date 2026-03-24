@@ -17,16 +17,6 @@ let
     ) (lib.splitString "\n" source);
   jqAllowlist = [
     {
-      path = ../../nixfied/framework/core/mkCoreSurfaces.nix;
-      count = 4;
-      snippets = [
-        "/bin/jq -e '.task and .workflow and .model'"
-        "/bin/jq -e '.schema.kind == \"nixfied-introspection-graph\"'"
-        "/bin/jq -e '.schema.kind == \"nixfied-introspection-bundle\"'"
-        "        pkgs.jq"
-      ];
-    }
-    {
       path = ../../nixfied/framework/runtime/helpers/env-loader.nix;
       count = 1;
       snippets = [

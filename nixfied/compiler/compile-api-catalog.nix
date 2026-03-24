@@ -14,7 +14,7 @@ let
   taskCatalog = builtins.mapAttrs (_name: task: {
     id = task.id;
     kind = task.kind or "command";
-    commandApi = task.api or (if task ? contract then task.contract else null);
+    commandApi = task.commandApi or null;
   }) tasks;
 
   appCatalog = builtins.mapAttrs (_name: app: {

@@ -214,22 +214,20 @@ let
         type = "shell";
         command = command;
       };
-      contract = {
+      commandApi = {
         version = 1;
-        input = {
-          args = {
-            parser = "typed";
-            allowUnknown = false;
-            spec = contractArgs;
-          };
-          env = {
-            schemaRef = "runtimePrimitives";
-            extra = [ ];
-          };
-        };
-        output = {
-          format = "text";
+        commandClass = "typed";
+        summary = summary;
+        details = description;
+        usage = [ ];
+        examples = [ ];
+        category = "ops";
+        args = contractArgs;
+        env = [ ];
+        outputs = {
+          mode = "text";
           channels = "stdout";
+          keys = [ ];
         };
         behavior = {
           idempotent = true;

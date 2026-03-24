@@ -274,12 +274,12 @@ let
   taskDescriptorById = builtins.listToAttrs (
     map (
       taskId:
-      let
-        task = tasks.${taskId};
-        app = preferredTaskApp taskId;
-        argsContract = (((task.contract or { }).input or { }).args or { });
-        specs = map normalizeTaskArgSpec (argsContract.spec or [ ]);
-        packagePath = task.runner.package or null;
+    let
+      task = tasks.${taskId};
+      app = preferredTaskApp taskId;
+      commandApi = task.commandApi or { };
+      specs = map normalizeTaskArgSpec (commandApi.args or [ ]);
+      packagePath = task.runner.package or null;
         preHookIds = uniqueSorted (builtins.attrNames (task.runtime.preHooks or { }));
         postHookIds = uniqueSorted (builtins.attrNames (task.runtime.postHooks or { }));
         requiredServices = listUtils.uniquePreserveOrder (
@@ -293,14 +293,27 @@ let
           if configuredUsage != [ ] then configuredUsage else [ "nix run .#run-task -- ${taskId} [-- ...]" ];
         exampleLines = if app == null then [ ] else app.examples or [ ];
         taskHelpLines = [
-          "${displayName} - ${if app == null then task.summary else app.summary or task.summary}"
+          "${displayName} - ${if app == null then commandApi.summary or task.summary else app.summary or commandApi.summary or task.summary}"
         ]
         ++
           lib.optionals
-            ((if app == null then task.description or "" else app.description or task.description or "") != "")
+            (
+              (
+                if app == null then
+                  commandApi.details or task.description or ""
+                else
+                  app.description or commandApi.details or task.description or ""
+              )
+              != ""
+            )
             [
               ""
-              (if app == null then task.description or "" else app.description or task.description or "")
+              (
+                if app == null then
+                  commandApi.details or task.description or ""
+                else
+                  app.description or commandApi.details or task.description or ""
+              )
             ]
         ++ [
           ""
@@ -350,8 +363,8 @@ let
             runtimePlan = mergeTaskRuntimeWithRunnerPackage task;
           in
           {
-            parser = argsContract.parser or "typed";
-            allowUnknown = if argsContract.allowUnknown or false then "true" else "false";
+            parser = commandApi.commandClass or "typed";
+            allowUnknown = if (commandApi.commandClass or "typed") == "passthrough" then "true" else "false";
             hasPositional = if builtins.any (spec: spec.kind == "positional") specs then "true" else "false";
             hookCount = toString (builtins.length preHookIds + builtins.length postHookIds);
             requiredServices = requiredServices;

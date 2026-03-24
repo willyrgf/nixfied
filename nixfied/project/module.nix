@@ -236,21 +236,18 @@ let
             workflowId = workflowId;
           };
 
-      contract = {
+      commandApi = {
         version = 1;
-        input = {
-          args = {
-            parser = "typed";
-            allowUnknown = false;
-            spec = mergeLoggingContractArgs contractArgs;
-          };
-          env = {
-            schemaRef = "runtimePrimitives";
-            extra = [ ];
-          };
-        };
-        output = {
-          format = "text";
+        commandClass = "typed";
+        summary = summary;
+        details = description;
+        usage = [ ];
+        examples = [ ];
+        category = kind;
+        args = mergeLoggingContractArgs contractArgs;
+        env = [ ];
+        outputs = {
+          mode = "text";
           channels = "stdout";
           keys = [ ];
         };

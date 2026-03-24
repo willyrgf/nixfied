@@ -124,19 +124,24 @@ let
         echo "OK: model hash is deterministic" > "$out"
       '';
 
-    introspection-schema = pkgs.runCommand "schema-bundle" { } ''
-      ${pkgs.jq}/bin/jq -e '.task and .workflow and .model' ${schemaBundleFile} > /dev/null
-      ${pkgs.jq}/bin/jq -e '.schema.kind == "nixfied-introspection-graph"' ${introspectionGraphFile} > /dev/null
-      ${pkgs.jq}/bin/jq -e '.schema.kind == "nixfied-introspection-bundle"' ${introspectionBundleFile} > /dev/null
-      echo "OK: schema bundle and introspection graph are valid" > "$out"
-    '';
+    introspection-schema =
+      let
+        schemaBundleValue = builtins.fromJSON schemaBundle;
+        introspectionGraphValue = compiledCore.introspectionGraph;
+        introspectionBundleValue = compiledCore.introspectionBundle;
+      in
+      assert schemaBundleValue ? task && schemaBundleValue ? workflow && schemaBundleValue ? model;
+      assert introspectionGraphValue.schema.kind == "nixfied-introspection-graph";
+      assert introspectionBundleValue.schema.kind == "nixfied-introspection-bundle";
+      pkgs.runCommand "schema-bundle" { } ''
+        echo "OK: schema bundle and introspection graph are valid" > "$out"
+      '';
   };
 
   devShells = {
     default = pkgs.mkShell {
       packages = [
         pkgs.coreutils
-        pkgs.jq
         pkgs.nixfmt-rfc-style
         pkgs.gnugrep
         pkgs.gnused

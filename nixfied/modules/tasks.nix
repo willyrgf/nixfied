@@ -1,119 +1,14 @@
 { lib, ... }:
 let
   t = lib.types;
-  exitCodes = import ../framework/core/exit-codes.nix;
   serviceConfigLib = import ../framework/core/service-config.nix { inherit lib; };
+  apiOptions = import ./lib/api-options.nix { inherit lib; };
   serviceRequirementType = t.enum serviceConfigLib.supportedServiceNames;
   runtimeWorkdirType = t.enum [
     "projectRoot"
     "stateRoot"
     "custom"
   ];
-
-  argSpec = t.submodule {
-    options = {
-      name = lib.mkOption { type = t.str; };
-      kind = lib.mkOption {
-        type = t.enum [
-          "flag"
-          "option"
-          "positional"
-        ];
-      };
-      type = lib.mkOption {
-        type = t.enum [
-          "string"
-          "int"
-          "bool"
-          "enum"
-          "pathAbs"
-          "pathRel"
-          "json"
-          "durationSec"
-          "port"
-        ];
-        default = "string";
-      };
-      long = lib.mkOption {
-        type = t.nullOr t.str;
-        default = null;
-      };
-      short = lib.mkOption {
-        type = t.nullOr t.str;
-        default = null;
-      };
-      required = lib.mkOption {
-        type = t.bool;
-        default = false;
-      };
-      values = lib.mkOption {
-        type = t.listOf t.str;
-        default = [ ];
-      };
-      min = lib.mkOption {
-        type = t.nullOr t.int;
-        default = null;
-      };
-      max = lib.mkOption {
-        type = t.nullOr t.int;
-        default = null;
-      };
-      description = lib.mkOption {
-        type = t.str;
-        default = "";
-      };
-    };
-  };
-
-  envSpec = t.submodule {
-    options = {
-      name = lib.mkOption { type = t.str; };
-      type = lib.mkOption {
-        type = t.enum [
-          "string"
-          "int"
-          "bool"
-          "enum"
-          "pathAbs"
-          "pathRel"
-          "json"
-          "durationSec"
-          "port"
-        ];
-        default = "string";
-      };
-      required = lib.mkOption {
-        type = t.bool;
-        default = false;
-      };
-      values = lib.mkOption {
-        type = t.listOf t.str;
-        default = [ ];
-      };
-      default = lib.mkOption {
-        type = t.nullOr (
-          t.oneOf [
-            t.str
-            t.int
-            t.bool
-          ]
-        );
-        default = null;
-      };
-      aliases = lib.mkOption {
-        type = t.listOf t.str;
-        default = [ ];
-      };
-      sensitive = lib.mkOption {
-        type = t.bool;
-        default = false;
-      };
-      description = lib.mkOption {
-        type = t.str;
-        default = "";
-      };
-    };
-  };
 
   hookSpec = t.submodule {
     options = {
@@ -215,92 +110,10 @@ in
               };
             };
 
-            contract = {
-              version = lib.mkOption {
-                type = t.int;
-                default = 1;
-              };
-              input = {
-                args = {
-                  parser = lib.mkOption {
-                    type = t.enum [
-                      "typed"
-                      "passthrough"
-                      "json"
-                    ];
-                    default = "typed";
-                  };
-                  allowUnknown = lib.mkOption {
-                    type = t.bool;
-                    default = false;
-                  };
-                  spec = lib.mkOption {
-                    type = t.listOf argSpec;
-                    default = [ ];
-                  };
-                };
-                env = {
-                  schemaRef = lib.mkOption {
-                    type = t.str;
-                    default = "runtimePrimitives";
-                  };
-                  extra = lib.mkOption {
-                    type = t.listOf envSpec;
-                    default = [ ];
-                  };
-                };
-              };
-              output = {
-                format = lib.mkOption {
-                  type = t.enum [
-                    "text"
-                    "kv"
-                    "json"
-                    "ndjson"
-                  ];
-                  default = "text";
-                };
-                channels = lib.mkOption {
-                  type = t.enum [
-                    "stdout"
-                    "logs"
-                    "both"
-                  ];
-                  default = "stdout";
-                };
-                keys = lib.mkOption {
-                  type = t.listOf t.str;
-                  default = [ ];
-                };
-              };
-              behavior = {
-                idempotent = lib.mkOption {
-                  type = t.bool;
-                  default = true;
-                };
-                effects = lib.mkOption {
-                  type = t.listOf (
-                    t.enum [
-                      "none"
-                      "writes-state"
-                      "starts-daemon"
-                      "network"
-                      "reads-secrets"
-                    ]
-                  );
-                  default = [ "none" ];
-                };
-                timeoutSec = lib.mkOption {
-                  type = t.int;
-                  default = 0;
-                };
-              };
-              errors = {
-                codes = lib.mkOption {
-                  type = t.attrsOf t.int;
-                  default = builtins.removeAttrs exitCodes [ "canceled" ];
-                };
-              };
+            commandApi = lib.mkOption {
+              type = apiOptions.commandApi;
+              default = { };
+              description = "Canonical command API metadata for the task.";
             };
 
             runtime = {

@@ -57,7 +57,7 @@ let
         workflowId = raw.runner.workflowId;
       };
 
-      contract = raw.contract;
+      commandApi = raw.commandApi;
 
       runtime = {
         slotEnv = raw.runtime.slotEnv;

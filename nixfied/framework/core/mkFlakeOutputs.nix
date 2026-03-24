@@ -197,8 +197,8 @@ let
     let
       task = compiledCore.model.tasks.${taskId};
       app = preferredTaskApp taskId;
-      argsContract = (((task.contract or { }).input or { }).args or { });
-      specs = map normalizeTaskArgSpec (argsContract.spec or [ ]);
+      commandApi = task.commandApi or { };
+      specs = map normalizeTaskArgSpec (commandApi.args or [ ]);
       displayName = if app == null then taskId else app.id or taskId;
       usageLines =
         let
@@ -209,9 +209,16 @@ let
       optionLines = map formatTaskArgHelpLine specs ++ [
         "  -h, --help: Show this help."
       ];
-      summary = if app == null then task.summary or "" else app.summary or task.summary or "";
+      summary =
+        if app == null then
+          commandApi.summary or task.summary or ""
+        else
+          app.summary or commandApi.summary or task.summary or "";
       description =
-        if app == null then task.description or "" else app.description or task.description or "";
+        if app == null then
+          commandApi.details or task.description or ""
+        else
+          app.description or commandApi.details or task.description or "";
     in
     builtins.concatStringsSep "\n" (
       [ "${displayName} - ${summary}" ]
