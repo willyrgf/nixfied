@@ -49,6 +49,13 @@ let
       ;
   };
 
+  compileValidationIr = import ./compile-validation-ir.nix {
+    inherit
+      lib
+      canonical
+      ;
+  };
+
   compileWorkflows = import ./compile-workflows.nix {
     inherit
       lib
@@ -217,6 +224,10 @@ rec {
         frameworkDefinitions = frameworkContractDefinitions;
       };
 
+      validationIr = compileValidationIr {
+        inherit contractBundle;
+      };
+
       apps = compileApps {
         resolved = resolvedModuleGraph.config;
         inherit
@@ -338,6 +349,7 @@ rec {
       features = features;
       selectionIndex = selectionIndex;
       contractBundle = contractBundle;
+      validationIr = validationIr;
       legacyLocalDefault = legacyLocalDefault;
     };
 
