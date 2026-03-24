@@ -168,6 +168,8 @@ let
       covers = [ "runtime.service-hooks" ];
     };
 
+    "service-op-composition-contract" = { };
+
     "runtime-service-selection-contract" = { };
 
     "framework-test-coverage-contract" = { };
@@ -475,6 +477,10 @@ let
     };
 
     "service-hook-env-smoke" = import ./service-hook-env-smoke.nix {
+      inherit pkgs;
+    };
+
+    "service-op-composition-contract" = import ./service-op-composition-contract.nix {
       inherit pkgs;
     };
 

@@ -22,10 +22,16 @@ assert pkgs.lib.hasInfix "import ../../core/runtime-defaults.nix" helperSource;
 assert pkgs.lib.hasInfix "print_log_tail \"$LOG_FILE\"" helperSource;
 assert pkgs.lib.hasInfix "SERVICE_PID_FILE" helperSource;
 assert pkgs.lib.hasInfix "SERVICE_LOG_FILE" helperSource;
+assert pkgs.lib.hasInfix "startPreflightBody ? \"\"" helperSource;
+assert pkgs.lib.hasInfix "startPrepareBody ? \"\"" helperSource;
 assert pkgs.lib.hasInfix "NIXFIED_START_RETURN_AFTER_READY" helperSource;
 assert pkgs.lib.hasInfix "if [ \"''\${NIXFIED_START_RETURN_AFTER_READY:-0}\" = \"1\" ]; then"
   helperSource;
-assert pkgs.lib.hasInfix "NIXFIED_START_RETURN_AFTER_READY=1 exec \${start}" helperSource;
+assert pkgs.lib.hasInfix "preflightStart = mkWrappedScript" helperSource;
+assert pkgs.lib.hasInfix "startLeaf = mkWrappedScript" helperSource;
+assert pkgs.lib.hasInfix "NIXFIED_START_RETURN_AFTER_READY=1 exec \${startLeaf}" helperSource;
+assert pkgs.lib.hasInfix "fullStartLeaf = pkgs.writeShellScript" helperSource;
+assert pkgs.lib.hasInfix "fullStartTestLeaf = pkgs.writeShellScript" helperSource;
 assert pkgs.lib.hasInfix "stopRequestBody" helperSource;
 assert pkgs.lib.hasInfix "stopMissingLogPathExpr" helperSource;
 assert pkgs.lib.hasInfix "stopStateLogPathExpr" helperSource;

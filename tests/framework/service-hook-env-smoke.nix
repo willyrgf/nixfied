@@ -68,8 +68,16 @@ let
             echo "ERROR: postgres service hook should be absent without explicit selection"
             exit 1
           fi
+          if [ -n "''${SVC_POSTGRES_PREFLIGHT_START:-}" ]; then
+            echo "ERROR: hidden postgres preflight hook should be absent without explicit selection"
+            exit 1
+          fi
           if [ -n "''${SVC_NGINX_STATUS:-}" ]; then
             echo "ERROR: nginx service hook should be absent without explicit selection"
+            exit 1
+          fi
+          if [ -n "''${SVC_NGINX_PREFLIGHT_START:-}" ]; then
+            echo "ERROR: hidden nginx preflight hook should be absent without explicit selection"
             exit 1
           fi
 
@@ -94,6 +102,10 @@ let
           fi
           if [ ! -x "$SVC_POSTGRES_STATUS" ]; then
             echo "ERROR: postgres service hook is not executable path=$SVC_POSTGRES_STATUS"
+            exit 1
+          fi
+          if [ -n "''${SVC_POSTGRES_PREFLIGHT_START:-}" ]; then
+            echo "ERROR: hidden postgres preflight hook should not be exported"
             exit 1
           fi
           if [ -n "''${SVC_NGINX_STATUS:-}" ]; then
@@ -127,12 +139,20 @@ let
             echo "ERROR: postgres service hook is not executable path=$SVC_POSTGRES_STATUS"
             exit 1
           fi
+          if [ -n "''${SVC_POSTGRES_PREFLIGHT_START:-}" ]; then
+            echo "ERROR: hidden postgres preflight hook should not be exported"
+            exit 1
+          fi
           if [ -z "''${SVC_NGINX_STATUS:-}" ]; then
             echo "ERROR: missing nginx service hook"
             exit 1
           fi
           if [ ! -x "$SVC_NGINX_STATUS" ]; then
             echo "ERROR: nginx service hook is not executable path=$SVC_NGINX_STATUS"
+            exit 1
+          fi
+          if [ -n "''${SVC_NGINX_PREFLIGHT_START:-}" ]; then
+            echo "ERROR: hidden nginx preflight hook should not be exported"
             exit 1
           fi
 
@@ -157,6 +177,10 @@ let
           fi
           if [ ! -x "$SVC_POSTGRES_STATUS" ]; then
             echo "ERROR: postgres service hook is not executable path=$SVC_POSTGRES_STATUS"
+            exit 1
+          fi
+          if [ -n "''${SVC_POSTGRES_PREFLIGHT_START:-}" ]; then
+            echo "ERROR: hidden postgres preflight hook should not be exported from dependency closure"
             exit 1
           fi
           if [ -n "''${SVC_NGINX_STATUS:-}" ]; then
