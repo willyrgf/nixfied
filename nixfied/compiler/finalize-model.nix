@@ -42,8 +42,6 @@ let
     tasks = tasks;
     workflows = workflows;
     features = features;
-    apiCatalog = apiCatalog;
-    runtimeManifests = runtimeManifests;
   };
 
   model = canonical.canonicalize {
@@ -68,8 +66,6 @@ let
     tasks = tasks;
     workflows = workflows;
     features = features;
-    apiCatalog = apiCatalog;
-    runtimeManifests = runtimeManifests;
 
     views = {
       apps = views.apps;
