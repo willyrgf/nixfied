@@ -4,6 +4,15 @@ let
 
   nonEmptyString = t.string { minLength = 1; };
   anyString = t.string { };
+  utcTimestamp = t.string {
+    minLength = 20;
+    pattern = "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$";
+  };
+  stableId = t.string {
+    minLength = 1;
+    maxLength = 128;
+    pattern = "^[A-Za-z0-9][A-Za-z0-9._-]*$";
+  };
   nullableString = t.union {
     options = [
       nonEmptyString
@@ -68,6 +77,12 @@ let
       "passed"
       "failed"
       "canceled"
+    ];
+  };
+  executionMode = t.enum {
+    values = [
+      "task"
+      "workflow"
     ];
   };
   stepStatus = t.enum {
@@ -502,12 +517,18 @@ in
 
   "runtime.runRecord.payload" = t.record {
     fields = {
-      run_id = t.field { schema = nonEmptyString; };
-      attempt_id = t.field { schema = nonEmptyString; };
+      run_id = t.field { schema = stableId; };
+      attempt_id = t.field { schema = stableId; };
       command = t.field { schema = nonEmptyString; };
-      workflow_id = t.field { schema = nullableString; };
-      task_id = t.field { schema = nullableString; };
-      execution_mode = t.field { schema = nonEmptyString; };
+      workflow_id = t.field {
+        required = false;
+        schema = nullableString;
+      };
+      task_id = t.field {
+        required = false;
+        schema = nullableString;
+      };
+      execution_mode = t.field { schema = executionMode; };
       process_mode = t.field {
         schema = t.enum {
           values = [
@@ -523,11 +544,30 @@ in
       pid = t.field { schema = nullableInt; };
       pgid = t.field { schema = nullableInt; };
       exit_code = t.field { schema = nullableExitCode; };
-      stop_reason = t.field { schema = nullableString; };
-      created_at = t.field { schema = nonEmptyString; };
-      started_at = t.field { schema = nullableString; };
-      finished_at = t.field { schema = nullableString; };
-      updated_at = t.field { schema = nonEmptyString; };
+      stop_reason = t.field {
+        required = false;
+        schema = nullableString;
+      };
+      created_at = t.field { schema = utcTimestamp; };
+      started_at = t.field {
+        required = false;
+        schema = t.union {
+          options = [
+            utcTimestamp
+            (t.null { })
+          ];
+        };
+      };
+      finished_at = t.field {
+        required = false;
+        schema = t.union {
+          options = [
+            utcTimestamp
+            (t.null { })
+          ];
+        };
+      };
+      updated_at = t.field { schema = utcTimestamp; };
       args = t.field {
         schema = t.list {
           elem = anyString;
@@ -545,7 +585,7 @@ in
   "runtime.runRecord.historyEntry" = t.record {
     fields = {
       state = t.field { schema = runState; };
-      at = t.field { schema = nonEmptyString; };
+      at = t.field { schema = utcTimestamp; };
     };
   };
 
@@ -571,7 +611,7 @@ in
       workflowId = t.field { schema = nullableString; };
       taskId = t.field { schema = nullableString; };
       seq = t.field { schema = positiveInt; };
-      ts = t.field { schema = nonEmptyString; };
+      ts = t.field { schema = utcTimestamp; };
       state = t.field { schema = eventState; };
       detail = t.field {
         schema = t.ref { name = "runtime.registryEvent.detail"; };
@@ -579,139 +619,249 @@ in
     };
   };
 
-  "runtime.registryEvent.detail" = t.record {
-    closed = false;
-    fields = {
-      kind = t.field {
-        required = false;
-        schema = t.union {
-          options = [
-            (t.enum {
-              values = [
-                "slotLifecycle"
-                "serviceLifecycle"
+  "runtime.registryEvent.detail" = t.taggedUnion {
+    tag = "kind";
+    closed = true;
+    variants = {
+      slotLifecycle = t.record {
+        fields = {
+          kind = t.field {
+            schema = t.literal {
+              value = "slotLifecycle";
+            };
+            required = true;
+          };
+          eventType = t.field {
+            required = false;
+            schema = nullableString;
+          };
+          commandName = t.field {
+            required = false;
+            schema = nullableString;
+          };
+          projectId = t.field {
+            required = false;
+            schema = nullableString;
+          };
+          slot = t.field {
+            required = false;
+            schema = nullableString;
+          };
+          env = t.field {
+            required = false;
+            schema = nullableString;
+          };
+          profile = t.field {
+            required = false;
+            schema = nullableString;
+          };
+          pid = t.field {
+            required = false;
+            schema = nullablePid;
+          };
+          pgid = t.field {
+            required = false;
+            schema = nullablePid;
+          };
+          readiness = t.field {
+            required = false;
+            schema = t.ref { name = "runtime.registryEvent.readiness"; };
+          };
+          waitReason = t.field {
+            required = false;
+            schema = nullableString;
+          };
+          logPath = t.field {
+            required = false;
+            schema = nullableString;
+          };
+          mode = t.field {
+            required = false;
+            schema = nullableString;
+          };
+          suffixReason = t.field {
+            required = false;
+            schema = nullableString;
+          };
+          produces = t.field {
+            required = false;
+            schema = t.ref { name = "runtime.registryEvent.produces"; };
+          };
+          exitCode = t.field {
+            required = false;
+            schema = nullableExitCode;
+          };
+        };
+      };
+      serviceLifecycle = t.record {
+        fields = {
+          kind = t.field {
+            schema = t.literal {
+              value = "serviceLifecycle";
+            };
+            required = true;
+          };
+          eventType = t.field {
+            required = false;
+            schema = nullableString;
+          };
+          service = t.field {
+            required = false;
+            schema = nullableString;
+          };
+          commandName = t.field {
+            required = false;
+            schema = nullableString;
+          };
+          ownerScope = t.field {
+            required = false;
+            schema = nullableString;
+          };
+          reusePolicy = t.field {
+            required = false;
+            schema = nullableString;
+          };
+          discoveryScope = t.field {
+            required = false;
+            schema = nullableString;
+          };
+          ephemeralRoot = t.field {
+            required = false;
+            schema = nullableString;
+          };
+          waitReason = t.field {
+            required = false;
+            schema = nullableString;
+          };
+          logPath = t.field {
+            required = false;
+            schema = nullableString;
+          };
+          produces = t.field {
+            required = false;
+            schema = t.ref { name = "runtime.registryEvent.produces"; };
+          };
+          exitCode = t.field {
+            required = false;
+            schema = nullableExitCode;
+          };
+          reason = t.field {
+            required = false;
+            schema = nullableString;
+          };
+          dependency = t.field {
+            required = false;
+            schema = nullableString;
+          };
+          serviceName = t.field {
+            required = false;
+            schema = nullableString;
+          };
+          signal = t.field {
+            required = false;
+            schema = nullableString;
+          };
+          missing = t.field {
+            required = false;
+            schema = nullableString;
+          };
+        };
+      };
+      workflowLifecycle = t.record {
+        fields = {
+          kind = t.field {
+            schema = t.literal {
+              value = "workflowLifecycle";
+            };
+            required = true;
+          };
+          commandName = t.field {
+            required = false;
+            schema = nullableString;
+          };
+          workflowId = t.field {
+            required = false;
+            schema = nullableString;
+          };
+          runId = t.field {
+            required = false;
+            schema = nullableString;
+          };
+          attempt = t.field {
+            required = false;
+            schema = t.union {
+              options = [
+                positiveInt
+                (t.null { })
               ];
-            })
-            (t.null { })
-          ];
+            };
+          };
         };
       };
-      eventType = t.field {
-        required = false;
-        schema = nullableString;
-      };
-      commandName = t.field {
-        required = false;
-        schema = nullableString;
-      };
-      projectId = t.field {
-        required = false;
-        schema = nullableString;
-      };
-      service = t.field {
-        required = false;
-        schema = nullableString;
-      };
-      slot = t.field {
-        required = false;
-        schema = nullableString;
-      };
-      env = t.field {
-        required = false;
-        schema = nullableString;
-      };
-      profile = t.field {
-        required = false;
-        schema = nullableString;
-      };
-      pid = t.field {
-        required = false;
-        schema = nullablePid;
-      };
-      pgid = t.field {
-        required = false;
-        schema = nullablePid;
-      };
-      planId = t.field {
-        required = false;
-        schema = nullableString;
-      };
-      unitId = t.field {
-        required = false;
-        schema = nullableString;
-      };
-      attempt = t.field {
-        required = false;
-        schema = t.union {
-          options = [
-            positiveInt
-            (t.null { })
-          ];
+      taskLifecycle = t.record {
+        fields = {
+          kind = t.field {
+            schema = t.literal {
+              value = "taskLifecycle";
+            };
+            required = true;
+          };
+          commandName = t.field {
+            required = false;
+            schema = nullableString;
+          };
+          taskId = t.field {
+            required = false;
+            schema = nullableString;
+          };
+          runId = t.field {
+            required = false;
+            schema = nullableString;
+          };
+          attempt = t.field {
+            required = false;
+            schema = t.union {
+              options = [
+                positiveInt
+                (t.null { })
+              ];
+            };
+          };
+          exitCode = t.field {
+            required = false;
+            schema = nullableExitCode;
+          };
+          reason = t.field {
+            required = false;
+            schema = nullableString;
+          };
         };
       };
-      ownerScope = t.field {
-        required = false;
-        schema = nullableString;
-      };
-      reusePolicy = t.field {
-        required = false;
-        schema = nullableString;
-      };
-      discoveryScope = t.field {
-        required = false;
-        schema = nullableString;
-      };
-      ephemeralRoot = t.field {
-        required = false;
-        schema = nullableString;
-      };
-      readiness = t.field {
-        required = false;
-        schema = t.ref { name = "runtime.registryEvent.readiness"; };
-      };
-      waitReason = t.field {
-        required = false;
-        schema = nullableString;
-      };
-      logPath = t.field {
-        required = false;
-        schema = nullableString;
-      };
-      mode = t.field {
-        required = false;
-        schema = nullableString;
-      };
-      suffixReason = t.field {
-        required = false;
-        schema = nullableString;
-      };
-      produces = t.field {
-        required = false;
-        schema = t.ref { name = "runtime.registryEvent.produces"; };
-      };
-      exitCode = t.field {
-        required = false;
-        schema = nullableExitCode;
-      };
-      reason = t.field {
-        required = false;
-        schema = nullableString;
-      };
-      dependency = t.field {
-        required = false;
-        schema = nullableString;
-      };
-      serviceName = t.field {
-        required = false;
-        schema = nullableString;
-      };
-      signal = t.field {
-        required = false;
-        schema = nullableString;
-      };
-      missing = t.field {
-        required = false;
-        schema = nullableString;
+      controlSignal = t.record {
+        fields = {
+          kind = t.field {
+            schema = t.literal {
+              value = "controlSignal";
+            };
+            required = true;
+          };
+          signal = t.field {
+            required = false;
+            schema = nullableString;
+          };
+          reason = t.field {
+            required = false;
+            schema = nullableString;
+          };
+          target = t.field {
+            required = false;
+            schema = nullableString;
+          };
+          runId = t.field {
+            required = false;
+            schema = nullableString;
+          };
+        };
       };
     };
   };
@@ -731,7 +881,7 @@ in
   };
 
   "runtime.registryEvent.produces" = t.record {
-    closed = false;
+    closed = true;
     fields = {
       artifacts = t.field {
         required = false;
@@ -743,6 +893,18 @@ in
         required = false;
         schema = t.list {
           elem = anyString;
+        };
+      };
+      services = t.field {
+        required = false;
+        schema = t.list {
+          elem = nonEmptyString;
+        };
+      };
+      stateRoots = t.field {
+        required = false;
+        schema = t.list {
+          elem = nonEmptyString;
         };
       };
     };

@@ -2,9 +2,11 @@
 let
   t = lib.types;
   serviceConfigLib = import ../framework/core/service-config.nix { inherit lib; };
-in
-{
-  imports = [
+  moduleContracts = import ./contracts.nix { inherit lib; };
+  contractDefinitionType = moduleContracts.contractOptions.contractDefinition;
+  in
+  {
+    imports = [
     ./apps.nix
     ./service-sets.nix
     ./state.nix
@@ -69,8 +71,8 @@ in
         description = "Version for the compiled contract bundle.";
       };
 
-      definitions = lib.mkOption {
-        type = t.attrsOf t.attrs;
+    definitions = lib.mkOption {
+        type = t.attrsOf contractDefinitionType;
         default = { };
         description = "Project-owned machine contract definitions compiled into the shared contract bundle.";
       };

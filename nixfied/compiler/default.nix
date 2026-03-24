@@ -77,6 +77,18 @@ let
       canonical
       ;
   };
+  compileApiCatalog = import ./compile-api-catalog.nix {
+    inherit
+      lib
+      canonical
+      ;
+  };
+  compileRuntimeManifest = import ./compile-runtime-manifest.nix {
+    inherit
+      lib
+      canonical
+      ;
+  };
 
   compileAppExecutionManifests = import ./compile-app-execution-manifests.nix {
     inherit
@@ -238,6 +250,16 @@ rec {
           ;
       };
 
+      apiCatalog = compileApiCatalog {
+        resolved = resolvedModuleGraph.config;
+        inherit
+          tasks
+          apps
+          workflows
+          serviceSets
+          ;
+      };
+
       selectionIndex = compileSelectionIndex {
         inherit
           tasks
@@ -300,11 +322,30 @@ rec {
         inherit introspectionGraph;
       };
 
+      runtimeManifests = compileRuntimeManifest {
+        resolvedIdentity = resolvedModuleGraph.config.identity;
+        runtime = runtime;
+        state = {
+          policy = statePolicy;
+          registry = {
+            schemaVersion = 1;
+          };
+        };
+        inherit
+          serviceCatalog
+          apps
+          tasks
+          workflows
+          selectionIndex
+          serviceSets
+          ;
+      };
+
       views = compileViews {
         inherit projectRoot;
         resolved = resolvedModuleGraph.config;
         inherit
-          statePolicy
+        statePolicy
           features
           runtime
           apps
@@ -318,16 +359,18 @@ rec {
         inherit
           system
           projectRoot
-          statePolicy
-          runtime
-          serviceCatalog
-          serviceSets
-          apps
-          tasks
-          workflows
-          features
-          views
-          ;
+        statePolicy
+        runtime
+        serviceCatalog
+        serviceSets
+        apps
+        tasks
+        workflows
+        features
+        views
+        apiCatalog
+        runtimeManifests
+        ;
         resolved = resolvedModuleGraph.config;
       };
     in

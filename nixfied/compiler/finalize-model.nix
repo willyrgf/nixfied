@@ -5,6 +5,8 @@
   resolved,
   statePolicy,
   runtime,
+  apiCatalog ? null,
+  runtimeManifests ? null,
   services ? null,
   serviceCatalog,
   serviceSets,
@@ -40,6 +42,8 @@ let
     tasks = tasks;
     workflows = workflows;
     features = features;
+    apiCatalog = apiCatalog;
+    runtimeManifests = runtimeManifests;
   };
 
   model = canonical.canonicalize {
@@ -64,6 +68,8 @@ let
     tasks = tasks;
     workflows = workflows;
     features = features;
+    apiCatalog = apiCatalog;
+    runtimeManifests = runtimeManifests;
 
     views = {
       apps = views.apps;
@@ -87,5 +93,7 @@ in
     model
     stateHash
     runtimeHash
+    apiCatalog
+    runtimeManifests
     ;
 }
