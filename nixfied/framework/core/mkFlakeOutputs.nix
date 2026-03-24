@@ -17,6 +17,7 @@ let
   canonical = import ./canonical.nix { inherit lib; };
   workspaceMarker = import ../workspace-marker.nix;
   registry = import ../runtime/registry { inherit pkgs; };
+  kernelPackage = import ../runtime/kernel { inherit pkgs; };
 
   frameworkRoot = ../../.;
   frameworkRepoRoot = ../../../.;
@@ -40,6 +41,9 @@ let
       frameworkSourceRevision
       ;
   };
+  validationIrAsset = pkgs.writeText "nixfied-validation-ir.json" ''
+    ${builtins.toJSON compiledCore.validationIr}
+  '';
 
   coreSurfaces = import ./mkCoreSurfaces.nix {
     inherit
@@ -1191,7 +1195,10 @@ in
           heavyOutputs.directApps.default.program
       } "$out/bin/default"
     '';
+    "nixfied-kernel" = kernelPackage;
+    "validation-ir" = validationIrAsset;
   };
+  validationIr = compiledCore.validationIr;
   checks = coreSurfaces.checks;
   devShells = coreSurfaces.devShells;
   schema = coreSurfaces.schema;
