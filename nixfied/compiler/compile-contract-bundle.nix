@@ -48,20 +48,6 @@ let
 
   definitionNames = sortNames normalizedBundle.definitions;
 
-  cueDefinitions =
-    if hasDefinitions then
-      builtins.listToAttrs (
-        map (name: {
-          inherit name;
-          value = contracts.renderCue.definition {
-            bundle = normalizedBundle;
-            inherit name;
-          };
-        }) definitionNames
-      )
-    else
-      { };
-
   jsonSchemaDocuments =
     if hasDefinitions then contracts.renderJsonSchema.documents normalizedBundle else { };
 
@@ -75,9 +61,6 @@ let
       )
     else
       { };
-
-  cueBundle =
-    if hasDefinitions then contracts.renderCue.bundle normalizedBundle else "package nixfied\n";
 
   docs =
     if hasDefinitions then
@@ -94,8 +77,6 @@ canonical.canonicalize {
   bundle = normalizedBundle;
   inherit
     definitionNames
-    cueDefinitions
-    cueBundle
     jsonSchemaDocuments
     validationSchemas
     docs
