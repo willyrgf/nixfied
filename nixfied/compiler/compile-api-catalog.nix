@@ -11,57 +11,37 @@
   services ? { },
 }:
 let
-  taskCatalog = builtins.mapAttrs (
-    _name: task:
-      {
-        id = task.id;
-        kind = task.kind or "command";
-        commandApi = task.api or (if task ? contract then task.contract else null);
-      }
-  ) tasks;
+  taskCatalog = builtins.mapAttrs (_name: task: {
+    id = task.id;
+    kind = task.kind or "command";
+    commandApi = task.api or (if task ? contract then task.contract else null);
+  }) tasks;
 
-  appCatalog = builtins.mapAttrs (
-    _name: app:
-      {
-        id = app.id;
-        kind = app.kind or "taskRef";
-        commandApi = app.commandApi or null;
-      }
-  ) apps;
+  appCatalog = builtins.mapAttrs (_name: app: {
+    id = app.id;
+    kind = app.kind or "taskRef";
+    commandApi = app.commandApi or null;
+  }) apps;
 
-  workflowCatalog = builtins.mapAttrs (
-    _name: workflow:
-      {
-        id = workflow.id;
-        kind = workflow.kind or "workflow";
-        commandApi = workflow.commandApi or null;
-      }
-  ) workflows;
+  workflowCatalog = builtins.mapAttrs (_name: workflow: {
+    id = workflow.id;
+    kind = workflow.kind or "workflow";
+    commandApi = workflow.commandApi or null;
+  }) workflows;
 
-  serviceCatalog = builtins.mapAttrs (
-    _name: serviceSet:
-      {
-        id = serviceSet.id or _name;
-        kind = "serviceSet";
-        commandApi = serviceSet.commandApi or null;
-      }
-  ) serviceSets;
+  serviceCatalog = builtins.mapAttrs (_name: serviceSet: {
+    id = serviceSet.id or _name;
+    kind = "serviceSet";
+    commandApi = serviceSet.commandApi or null;
+  }) serviceSets;
 
-  serviceRuntimeCatalog = builtins.mapAttrs (
-    _name: service:
-      {
-        id = service.id or _name;
-        kind = "service";
-        commandApi = service.commandApi or null;
-      }
-  ) services;
+  serviceRuntimeCatalog = builtins.mapAttrs (_name: service: {
+    id = service.id or _name;
+    kind = "service";
+    commandApi = service.commandApi or null;
+  }) services;
 
-  apiByName =
-    taskCatalog
-    // appCatalog
-    // workflowCatalog
-    // serviceCatalog
-    // serviceRuntimeCatalog;
+  apiByName = taskCatalog // appCatalog // workflowCatalog // serviceCatalog // serviceRuntimeCatalog;
 
   catalog = canonical.canonicalize {
     schema = {

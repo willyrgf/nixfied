@@ -345,7 +345,7 @@ rec {
         inherit projectRoot;
         resolved = resolvedModuleGraph.config;
         inherit
-        statePolicy
+          statePolicy
           features
           runtime
           apps
@@ -359,18 +359,18 @@ rec {
         inherit
           system
           projectRoot
-        statePolicy
-        runtime
-        serviceCatalog
-        serviceSets
-        apps
-        tasks
-        workflows
-        features
-        views
-        apiCatalog
-        runtimeManifests
-        ;
+          statePolicy
+          runtime
+          serviceCatalog
+          serviceSets
+          apps
+          tasks
+          workflows
+          features
+          views
+          apiCatalog
+          runtimeManifests
+          ;
         resolved = resolvedModuleGraph.config;
       };
     in

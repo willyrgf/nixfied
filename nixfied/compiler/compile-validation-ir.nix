@@ -1,25 +1,31 @@
 {
   lib,
   canonical,
-}: {
+}:
+{
   contractBundle,
 }:
 let
-  sortNames = attrs: builtins.sort builtins.lessThan (builtins.attrNames attrs);
+  asAttrSet =
+    value:
+    if builtins.typeOf value == "set" then
+      value
+    else if builtins.typeOf value == "list" then
+      builtins.listToAttrs value
+    else
+      throw "compile-validation-ir: expected set or canonicalized list";
 
   bundle = contractBundle.bundle or (throw "nixfied compile-validation-ir: missing contract bundle");
-  definitions = bundle.definitions or { };
-  definitionNames = sortNames (builtins.attrNames definitions);
-  schemaDocuments = contractBundle.jsonSchemaDocuments or { };
-  validationSchemas = contractBundle.validationSchemas or { };
+  definitions = asAttrSet (bundle.definitions or { });
+  schemaDocuments = asAttrSet (contractBundle.jsonSchemaDocuments or { });
+  validationSchemas = asAttrSet (contractBundle.validationSchemas or { });
+  definitionNames = builtins.sort builtins.lessThan (builtins.attrNames definitions);
 
   irValidationSchemas = builtins.listToAttrs (
-    map (
-      name: {
-        inherit name;
-        value = if schemaDocuments ? name then schemaDocuments.${name} else validationSchemas.${name};
-      }
-    ) definitionNames
+    map (name: {
+      inherit name;
+      value = if schemaDocuments ? name then schemaDocuments.${name} else validationSchemas.${name};
+    }) definitionNames
   );
 in
 canonical.canonicalize {
@@ -30,4 +36,3 @@ canonical.canonicalize {
   validationSchemas = irValidationSchemas;
   docs = if (contractBundle ? docs) then contractBundle.docs else "";
 }
-

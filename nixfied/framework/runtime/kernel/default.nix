@@ -28,4 +28,3 @@ pkgs.stdenv.mkDerivation {
     mainProgram = "nixfied-kernel";
   };
 }
-

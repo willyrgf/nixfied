@@ -32,19 +32,16 @@ let
   };
 
   manifestIds = builtins.sort builtins.lessThan (builtins.attrNames appExecutionManifests);
-  manifestsByServiceSet = builtins.mapAttrs (
-    _name: serviceSet:
-    {
-      id = serviceSet.id or _name;
-      name = serviceSet.name or _name;
-      summary = serviceSet.summary or "";
-      services = serviceSet.services or { };
-      requiredServices = serviceSet.services.required or [ ];
-      optionalServices = serviceSet.services.optional or [ ];
-      allServices = serviceSet.services.all or [ ];
-      defaultOperation = serviceSet.defaultOperation or "health";
-    }
-  ) serviceSets;
+  manifestsByServiceSet = builtins.mapAttrs (_name: serviceSet: {
+    id = serviceSet.id or _name;
+    name = serviceSet.name or _name;
+    summary = serviceSet.summary or "";
+    services = serviceSet.services or { };
+    requiredServices = serviceSet.services.required or [ ];
+    optionalServices = serviceSet.services.optional or [ ];
+    allServices = serviceSet.services.all or [ ];
+    defaultOperation = serviceSet.defaultOperation or "health";
+  }) serviceSets;
 in
 {
   byApp = appExecutionManifests;

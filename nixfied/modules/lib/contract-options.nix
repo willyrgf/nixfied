@@ -83,7 +83,16 @@ let
     };
 
     values = lib.mkOption {
-      type = t.nullOr (t.listOf (t.oneOf [ t.str t.int t.bool t.float ]));
+      type = t.nullOr (
+        t.listOf (
+          t.oneOf [
+            t.str
+            t.int
+            t.bool
+            t.float
+          ]
+        )
+      );
       default = null;
     };
 
@@ -98,13 +107,15 @@ let
     };
 
     valueLiteral = lib.mkOption {
-      type = t.nullOr (t.oneOf [
-        t.str
-        t.int
-        t.bool
-        t.float
-        t.null
-      ]);
+      type = t.nullOr (
+        t.oneOf [
+          t.str
+          t.int
+          t.bool
+          t.float
+          t.null
+        ]
+      );
       default = null;
       description = "Literal value for contracts with kind = literal.";
     };

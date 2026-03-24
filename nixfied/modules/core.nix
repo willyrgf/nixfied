@@ -4,9 +4,9 @@ let
   serviceConfigLib = import ../framework/core/service-config.nix { inherit lib; };
   moduleContracts = import ./contracts.nix { inherit lib; };
   contractDefinitionType = moduleContracts.contractOptions.contractDefinition;
-  in
-  {
-    imports = [
+in
+{
+  imports = [
     ./apps.nix
     ./service-sets.nix
     ./state.nix
@@ -71,7 +71,7 @@ let
         description = "Version for the compiled contract bundle.";
       };
 
-    definitions = lib.mkOption {
+      definitions = lib.mkOption {
         type = t.attrsOf contractDefinitionType;
         default = { };
         description = "Project-owned machine contract definitions compiled into the shared contract bundle.";
