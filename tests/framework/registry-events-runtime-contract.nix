@@ -26,8 +26,8 @@ assert pkgs.lib.hasInfix "registry_append_event() {" appendSource;
 assert pkgs.lib.hasInfix "kernelPackage = import ../kernel" appendSource;
 assert pkgs.lib.hasInfix "nixfied-kernel registry append" appendSource;
 assert pkgs.lib.hasInfix "validationBundleFile" appendSource;
-assert pkgs.lib.hasInfix "detail_reason" appendSource;
-assert pkgs.lib.hasInfix "detail_exit_code" appendSource;
+assert !(pkgs.lib.hasInfix "detail_reason" appendSource);
+assert !(pkgs.lib.hasInfix "detail_exit_code" appendSource);
 assert !(pkgs.lib.hasInfix "\${pkgs.jq}/bin/jq" appendSource);
 assert !(pkgs.lib.hasInfix "json_quote_string \"$REGISTRY_EVENT_KIND\"" appendSource);
 pkgs.runCommand "registry-events-runtime-contract" { } ''

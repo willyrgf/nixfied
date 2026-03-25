@@ -621,6 +621,10 @@ let
       inherit pkgs;
     };
 
+    "registry-detail-derivation-smoke" = import ./registry-detail-derivation-smoke.nix {
+      inherit pkgs;
+    };
+
     "registry-helper-contract" = import ./registry-helper-contract.nix {
       inherit pkgs;
     };

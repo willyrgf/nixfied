@@ -17,8 +17,6 @@ in
     local task_id="$5"
     local state="$6"
     local detail_json="$7"
-    local detail_reason="''${8:-}"
-    local detail_exit_code="''${9:-}"
 
     local events_file
     local lock_file
@@ -52,8 +50,6 @@ in
       "$task_id" \
       "$state" \
       "$detail_tmp" \
-      "$detail_reason" \
-      "$detail_exit_code" \
       "$export_tmp" >/dev/null; then
       # shellcheck source=/dev/null
       source "$export_tmp"

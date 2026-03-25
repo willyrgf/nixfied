@@ -717,11 +717,9 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         local task_id="$3"
         local state="$4"
         local detail_json="$5"
-        local detail_reason="''${6:-}"
-        local detail_exit_code="''${7:-}"
         local attempt_id="''${NIXFIED_ATTEMPT_ID:-}"
 
-        registry_append_event "$REGISTRY_ROOT" "$run_id" "$attempt_id" "$workflow_id" "$task_id" "$state" "$detail_json" "$detail_reason" "$detail_exit_code"
+        registry_append_event "$REGISTRY_ROOT" "$run_id" "$attempt_id" "$workflow_id" "$task_id" "$state" "$detail_json"
       }
 
       task_has_hooks() {
@@ -967,7 +965,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           append_event "$run_id" "$workflow_id" "$task_id" "passed" "$detail_json"
         else
           detail_json="$(event_detail_exit_code_json "$exit_code")"
-          append_event "$run_id" "$workflow_id" "$task_id" "failed" "$detail_json" "" "$exit_code"
+          append_event "$run_id" "$workflow_id" "$task_id" "failed" "$detail_json"
           return "$exit_code"
         fi
       }
@@ -1159,7 +1157,7 @@ EOF
               service-skipped)
                 echo "SKIP: task '$current_task' is skipped because service '$skip_service' has a skip flag enabled"
                 skip_detail_json="$(event_detail_reason_key_value_json "service-skipped" "serviceName" "$skip_service")"
-                append_event "$run_id" "" "$current_task" "canceled" "$skip_detail_json" "service-skipped"
+                append_event "$run_id" "" "$current_task" "canceled" "$skip_detail_json"
                 if [ -n "$soft_parent" ]; then
                   echo "WARN: task '$soft_parent' soft dependency '$current_task' failed exitCode=3"
                   continue
@@ -1418,7 +1416,7 @@ EOF
               else
                 detail_json="$(event_detail_reason_json "$field4")"
               fi
-              append_event "$run_id" "$workflow_id" "$unit_task" "canceled" "$detail_json" "$field4"
+              append_event "$run_id" "$workflow_id" "$unit_task" "canceled" "$detail_json"
               if ! ${kernelPackage}/bin/nixfied-kernel workflow serial-transition \
                 "$state_file" \
                 "$unit_name" \
@@ -1566,7 +1564,7 @@ EOF
                 else
                   detail_json="$(event_detail_reason_json "$field4")"
                 fi
-                append_event "$run_id" "$workflow_id" "$unit_task" "canceled" "$detail_json" "$field4"
+                append_event "$run_id" "$workflow_id" "$unit_task" "canceled" "$detail_json"
                 if ! ${kernelPackage}/bin/nixfied-kernel workflow parallel-transition \
                   "$state_file" \
                   "$unit_name" \
@@ -1647,7 +1645,7 @@ EOF
 
           if [ "''${UNIT_CANCEL_REQUESTED[$done_unit]:-0}" = "1" ]; then
             detail_json="$(event_detail_reason_json "fail-fast-running")"
-            append_event "$run_id" "$workflow_id" "''${UNIT_TASK[$done_unit]}" "canceled" "$detail_json" "fail-fast-running"
+            append_event "$run_id" "$workflow_id" "''${UNIT_TASK[$done_unit]}" "canceled" "$detail_json"
             if ! ${kernelPackage}/bin/nixfied-kernel workflow parallel-transition \
               "$state_file" \
               "$done_unit" \
@@ -1680,7 +1678,7 @@ EOF
             fi
           else
             detail_json="$(event_detail_exit_code_json "$wait_rc")"
-            append_event "$run_id" "$workflow_id" "''${UNIT_TASK[$done_unit]}" "failed" "$detail_json" "" "$wait_rc"
+            append_event "$run_id" "$workflow_id" "''${UNIT_TASK[$done_unit]}" "failed" "$detail_json"
             if ! ${kernelPackage}/bin/nixfied-kernel workflow parallel-transition \
               "$state_file" \
               "$done_unit" \
@@ -1728,7 +1726,7 @@ EOF
           phase_task_skip_service="$(task_first_skipped_required_service "$phase_task" || true)"
           if [ -n "$phase_task_skip_service" ]; then
             phase_skip_detail="$(event_detail_reason_key_value_json "service-skipped" "serviceName" "$phase_task_skip_service")"
-            append_event "$run_id" "$workflow_id" "$phase_task" "canceled" "$phase_skip_detail" "service-skipped"
+            append_event "$run_id" "$workflow_id" "$phase_task" "canceled" "$phase_skip_detail"
             echo "SKIP: task '$phase_task' (service '$phase_task_skip_service') is skipped because service '$phase_task_skip_service' has a skip flag enabled"
             continue
           fi
@@ -1800,7 +1798,7 @@ EOF
           else
             phase_status="$?"
             failure_detail="$(workflow_phase_service_set_failure_json "$phase_key" "$service_set_id" "$service_set_name" "$operation" "$phase_status")"
-            append_event "$run_id" "$workflow_id" "$phase_entry_id" "failed" "$failure_detail" "" "$phase_status"
+            append_event "$run_id" "$workflow_id" "$phase_entry_id" "failed" "$failure_detail"
             break
           fi
         done < <(workflow_phase_service_sets "$workflow_id" "$phase_key")
@@ -2385,7 +2383,7 @@ EOF
           append_event "$run_id" "$workflow_id" "" "passed" "$(event_detail_mode_json "workflow")"
         else
           detail_json="$(event_detail_exit_code_json "$status")"
-          append_event "$run_id" "$workflow_id" "" "failed" "$detail_json" "" "$status"
+          append_event "$run_id" "$workflow_id" "" "failed" "$detail_json"
         fi
 
         duration_seconds="$(( $(date +%s) - started_epoch ))"
@@ -2398,7 +2396,7 @@ EOF
             if [ "$status" -eq 0 ]; then
               status=1
               detail_json="$(event_detail_reason_exit_code_json "summary-write-failed" "1")"
-              append_event "$run_id" "$workflow_id" "" "failed" "$detail_json" "summary-write-failed" "1"
+              append_event "$run_id" "$workflow_id" "" "failed" "$detail_json"
             fi
           fi
           summary_file="$LAST_WORKFLOW_SUMMARY_FILE"

@@ -573,9 +573,9 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
 
     detail_json="$(event_detail_signal_json "orchestrator-interrupted" "$signal_name")"
     if [ -n "$workflow_id" ]; then
-      registry_append_event "$REGISTRY_ROOT" "$run_id" "$attempt_id" "$workflow_id" "" "canceled" "$detail_json" "orchestrator-interrupted"
+      registry_append_event "$REGISTRY_ROOT" "$run_id" "$attempt_id" "$workflow_id" "" "canceled" "$detail_json"
     else
-      registry_append_event "$REGISTRY_ROOT" "$run_id" "$attempt_id" "" "$task_id" "canceled" "$detail_json" "orchestrator-interrupted"
+      registry_append_event "$REGISTRY_ROOT" "$run_id" "$attempt_id" "" "$task_id" "canceled" "$detail_json"
     fi
   }
 

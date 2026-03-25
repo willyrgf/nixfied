@@ -1607,9 +1607,9 @@ fn registry_command(subcommand: &str, values: &[String]) -> Result<(), String> {
 }
 
 fn registry_append_command(values: &[String]) -> Result<(), String> {
-    if values.len() != 11 {
+    if values.len() != 9 {
         return Err(
-            "usage: nixfied-kernel registry append <bundle-file> <root> <run-id> <attempt-id> <workflow-id> <task-id> <state> <detail-file> <detail-reason> <detail-exit-code> <export-file>"
+            "usage: nixfied-kernel registry append <bundle-file> <root> <run-id> <attempt-id> <workflow-id> <task-id> <state> <detail-file> <export-file>"
                 .to_string(),
         );
     }
@@ -1631,6 +1631,8 @@ fn registry_append_command(values: &[String]) -> Result<(), String> {
     let ts = current_utc_timestamp()?;
     let ts_epoch = current_epoch_seconds()?;
     let detail = parse_json_file(&values[7], "registry event detail file")?;
+    let detail_reason = registry_detail_reason(&detail);
+    let detail_exit_code = registry_detail_exit_code(&detail);
     let envelope = JsonValue::Object(BTreeMap::from([
         (
             "kind".to_string(),
@@ -1673,12 +1675,12 @@ fn registry_append_command(values: &[String]) -> Result<(), String> {
             values[4],
             values[5],
             values[6],
-            values[8],
-            values[9]
+            detail_reason,
+            detail_exit_code
         ),
     )?;
     write_shell_exports(
-        &values[10],
+        &values[8],
         &[
             ("REGISTRY_APPEND_LAST_SEQ".to_string(), seq.to_string()),
             (
@@ -1689,6 +1691,17 @@ fn registry_append_command(values: &[String]) -> Result<(), String> {
     )?;
     println!("OK: registry append");
     Ok(())
+}
+
+fn registry_detail_reason(detail: &JsonValue) -> String {
+    object_string(detail, "reason").unwrap_or("").to_string()
+}
+
+fn registry_detail_exit_code(detail: &JsonValue) -> String {
+    object_field(detail, "exitCode")
+        .and_then(json_value_to_i64)
+        .map(|value| value.to_string())
+        .unwrap_or_default()
 }
 
 fn registry_replay_command(values: &[String]) -> Result<(), String> {
