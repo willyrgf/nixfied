@@ -1,6 +1,6 @@
 # RFC: Harden Core Systems
 
-Status: closed
+Status: open
 
 Last updated: 2026-03-25
 
@@ -22,10 +22,12 @@ replaced with, and which layers should remain in place.
 
 ## Status Update (2026-03-25)
 
-As of the current `2026-03-25` worktree, the hardening work is closed in
-substance. The compiler/model/API consolidation is landed, the kernel owns the
-validation and runtime artifact/state-writing paths, and the previously open
-executor parallel-scheduler and guard-enforcement tail is now closed.
+As of the current `2026-03-25` worktree, the hardening work is materially
+advanced but not closed. The compiler/model/API consolidation is landed, the
+kernel owns the validation and several runtime artifact/state-writing paths, and
+workflow serial/parallel scheduling moved onto kernel-backed plan/state
+commands. Post-implementation review still found residual ownership leaks and
+partial closures that should keep this RFC open.
 
 Landed:
 
@@ -46,16 +48,13 @@ Landed:
   derivation through kernel-backed commands instead of shell field parsing and
   index scanning
 - Lane R additional closure: `executor.nix` now routes `run-task` dependency
-  planning, workflow serial scheduling, and workflow summary step aggregation
-  through kernel-backed plan/state commands instead of recursive shell graph
-  walks and shell summary reducers
-- Lane R final closure: `executor.nix` now routes workflow parallel scheduling
-  through kernel-backed plan/state commands instead of shell-owned multi-worker
-  ready/running queues, lock arbitration, fail-fast cancellation bookkeeping,
-  and parallel unit transition state
-- Lane D closure: `probe-plan-runtime.nix` now routes runtime probe execution
-  through kernel-owned `probe evaluate` plans, and the kernel executes probe
-  kinds end to end instead of shell-rendered probe bodies
+  planning, workflow serial scheduling, workflow parallel scheduling, and
+  workflow summary step aggregation through kernel-backed plan/state commands
+  instead of recursive shell graph walks and the older shell-owned scheduler
+  maps/reducers
+- Lane D partial closure: `probe-plan-runtime.nix` now routes plan-backed
+  runtime probe execution through kernel-owned `probe evaluate` plans, but
+  direct service lifecycle probe helpers still remain in shell-owned paths
 - Contract-tightening tail: `runtime.summary.payload` now uses refined stable
   ids, workflow-mode enums, and UTC timestamp helpers
 - Lane G guard foundations: CUE removal, deleted authored `nixfied.apps`,
@@ -65,10 +64,33 @@ Landed:
   hardening guard now covers the probe-plan runtime and the
   orchestrator run-record/terminal-state seam, and the related contract tests
   assert the kernel-backed boundary
-- Lane G final closure: the hardening guard and executor contract now fail if
+- Lane G partial closure: the hardening guard and executor contract now fail if
   executor-owned parallel scheduler helpers, lock/state maps, or equivalent
   pre-kernel parallel scheduling markers reappear inside the hardened-core
-  runtime boundary
+  runtime boundary, but the guard still remains mostly structural rather than
+  behavioral
+
+Remaining work:
+
+- move `runtime-events.nix` policy inference, registry-state mapping, and
+  service/slot status sidecars out of shell semantic ownership or narrow them to
+  path-only caches backed by one kernel-owned state model
+- finish probe migration for direct service lifecycle and startup/readiness
+  checks; shell probe helpers such as `tcpOpenCmd`, `pgIsReadyCmd`,
+  `psqlQueryCmd`, and direct JSON-RPC health checks should not remain
+  framework-semantic paths
+- resolve `execution.lockPolicy = "shared-aware"` by either implementing it end
+  to end in the kernel scheduler or deleting/narrowing the public surface to
+  `exclusive`
+- tighten the parallel cancellation seam so running-unit cancellation is
+  process-group-safe and not just shell-PID best effort; if this remains
+  shell-owned, the boundary must be made explicit and infrastructure-only
+- collapse duplicated registry/index semantics so summary and terminal-state
+  derivation consume one canonical event model rather than parallel shell-fed
+  caches for `reason`, `exit_code`, and service status
+- add behavioral guard coverage for blocked/dead-end workflows, dependency
+  cancellation, lock arbitration, `shared-aware`, residual runtime-events
+  ownership, residual probe ownership, and cancellation races
 
 Residual `jq` use in smoke tests that only inspect outputs remains outside the
 hardened-core ownership boundary described here.
@@ -878,9 +900,22 @@ The RFC is not complete until all of the following are true:
   state engines
 - remaining shell runtime code stages env, paths, process launch, and signal
   forwarding only
+- `runtime-events.nix` no longer infers framework policy/state semantics or
+  owns service/slot status models in shell
 - `runtime.registryEvent.detail` is a tagged union, not an open record
 - machine payload and artifact validation runs through `nixfied-kernel
   validate-*`
+- all framework-owned probe execution paths, including service lifecycle,
+  startup-readiness, and direct health/readiness helpers, route through
+  kernel-owned probe plans or typed kernel commands
+- workflow lock arbitration semantics are either fully implemented and enforced
+  in the kernel for every exposed policy or the unsupported policy surface is
+  removed
+- summary and terminal-state derivation use one canonical event model rather
+  than duplicated TSV/status sidecar semantics that can drift from the validated
+  event envelope
+- behavioral guards exist for blocked/dead-end scheduling, dependency
+  cancellation, fail-fast cancellation of running units, and lock arbitration
 - `nixfied-kernel` does not duplicate module evaluation, compiler passes, or
   public launcher generation
 - no compatibility shims remain for removed validation or launcher paths
@@ -1096,39 +1131,46 @@ Barrier: `commit 22` through `commit 24` must land before final jq removal.
 - If a commit cannot be explained as a narrower ownership move, it is too
   broad.
 
-### Closure Note (2026-03-25)
+### Post-Review Correction (2026-03-25)
 
-The hardening tail described in this RFC is complete:
+The earlier `2026-03-25` closure claim was premature. The following items still
+belong to this RFC and must land before the hardening tail can be treated as
+closed:
 
-1. Lane R shell JSON removal is landed.
-   `executor.nix`, `orchestrator.nix`, and `runtime-events.nix` no longer
-   assemble framework-owned run-envelope or event/control JSON in shell.
+1. Lane R runtime-events ownership is not closed.
+   `runtime-events.nix` still infers policy/state semantics and owns
+   service/slot status sidecars in shell, which leaves the helper layer as a
+   second state engine.
 
-2. Lane R thin-wrapper reduction is landed.
-   `shell-contract.nix` is on the kernel validation path and
-   `common-runtime.nix` no longer contains framework JSON builders.
+2. Lane D probe execution is only partially closed.
+   `probe-plan-runtime.nix` is kernel-backed, but direct probe helpers used by
+   service lifecycle and startup/readiness paths still keep framework semantics
+   in shell.
 
-3. Lane D probe execution migration is landed.
-   The JSON-RPC probe request/evaluate flow is kernel-owned end to end.
+3. Workflow lock-policy closure is incomplete.
+   `shared-aware` remains an exposed policy even though the hardened scheduler
+   still applies exclusive semantics.
 
-4. The contract-tightening tail is landed.
-   `runtime.summary.payload` is refined to stable ids, workflow-mode enums, and
-   UTC timestamps.
+4. Parallel fail-fast cancellation remains partially shell-owned.
+   Running-unit cancellation still depends on executor PID handling rather than
+   an explicitly hardened process-group-safe contract.
 
-5. Lane G final cleanup is landed for the hardened-core/build-check boundary.
-   Framework build-check paths are `jq`-free and the guard enforces that seam,
-   including the final executor parallel-scheduler boundary.
+5. Guard coverage is not yet sufficient to hold the boundary over time.
+   Current guards are strong at banning old markers and `jq`, but they do not
+   yet enforce the remaining runtime-events/probe ownership gaps or behavioral
+   scheduler edge cases such as blocked/dead-end handling.
 
-6. The RFC is now closed.
-   Any future follow-up should be treated as new work, not as an extension of
-   the open hardening tail recorded by this document.
+This RFC should remain open until the items above and the acceptance criteria in
+this document are satisfied.
 
 ### Reopen Note (Historical)
 
 The RFC was briefly reopened on `2026-03-24` after post-closure review found
 that the executor parallel scheduler and guard coverage were still incomplete.
-Those gaps are closed in the `2026-03-25` worktree; this note is retained only
-as historical context for why the status briefly regressed.
+Those specific gaps are closed in the `2026-03-25` worktree, but a broader
+architecture review on `2026-03-25` found the additional residual work recorded
+above. This note is retained as historical context for why the status regressed
+again instead of remaining closed.
 
 ## Appendix B: Target LOC Snapshot
 
