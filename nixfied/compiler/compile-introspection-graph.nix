@@ -740,7 +740,7 @@ let
             reason = "machine-output app '${appId}' runs teardown app '${teardownAppId}'";
           }
         ) (app.teardownAppIds or [ ])
-      else
+      else if app ? taskId then
         [
           (mkEdge {
             from = "app:${appId}";
@@ -748,6 +748,21 @@ let
             kind = "app-task";
             reason = "app '${appId}' resolves to task '${app.taskId}'";
           })
+          (mkEdge {
+            from = "app:${appId}";
+            to = "execution:selected-app-launcher:${appId}";
+            kind = "app-execution";
+            reason = "app '${appId}' runs through the selected-app launcher";
+          })
+          (mkEdge {
+            from = "execution:selected-app-launcher:${appId}";
+            to = "execution:app-manifest:${appId}";
+            kind = "execution-manifest";
+            reason = "selected-app execution materializes the app-scoped execution manifest for '${appId}'";
+          })
+        ]
+      else
+        [
           (mkEdge {
             from = "app:${appId}";
             to = "execution:selected-app-launcher:${appId}";
