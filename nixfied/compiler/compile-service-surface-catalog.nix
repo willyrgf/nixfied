@@ -251,6 +251,7 @@ in
 {
   appNames = builtins.sort builtins.lessThan (builtins.attrNames appServiceByName);
   inherit
+    serviceApis
     appServiceByName
     appsByName
     operationCatalog

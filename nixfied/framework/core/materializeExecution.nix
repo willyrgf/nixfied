@@ -11,6 +11,7 @@ let
   mkShellApp = import ./mk-shell-app.nix { inherit pkgs; };
   registry = import ../runtime/registry { inherit pkgs; };
   compileServices = import ../../compiler/compile-services.nix { inherit lib; };
+  compiledServiceSurfaceCatalog = compiledCore.model.compiled.serviceSurfaceCatalog or { };
   normalizedSelectedServices =
     if selectedServices == null then
       null
@@ -85,6 +86,7 @@ let
       pkgs
       selectedServices
       ;
+    serviceSurfaceCatalog = compiledServiceSurfaceCatalog;
     model = compiledCore.model;
     services = services;
   };
@@ -115,6 +117,7 @@ let
         inherit
           pkgs
           ;
+        serviceSurfaceCatalog = compiledServiceSurfaceCatalog;
         model = manifest.model;
         selectedServices = effectiveSelectedServices;
         services = appServices;
@@ -172,6 +175,7 @@ let
 
       serviceSetRuntimeSurfaces = import ./mkServiceRuntimeSurfaces.nix {
         inherit pkgs;
+        serviceSurfaceCatalog = compiledServiceSurfaceCatalog;
         model = serviceSetModel;
         services = serviceSetServices;
         selectedServices = effectiveSelectedServices;
