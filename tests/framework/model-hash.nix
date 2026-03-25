@@ -5,7 +5,7 @@
   canonical,
 }:
 let
-  recomputed = canonical.hashCanonical model;
+  recomputed = canonical.hashCanonical (builtins.removeAttrs model [ "compiled" ]);
 in
 assert recomputed == stateHash;
 pkgs.runCommand "model-hash" { } ''

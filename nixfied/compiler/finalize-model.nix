@@ -43,11 +43,6 @@ let
     tasks = tasks;
     workflows = workflows;
     features = features;
-    compiled = {
-      apiCatalog = apiCatalog;
-      runtimeManifests = runtimeManifests;
-      serviceSurfaceCatalog = serviceSurfaceCatalog;
-    };
   };
 
   model = canonical.canonicalize {
@@ -93,7 +88,7 @@ let
     };
   };
 
-  stateHash = canonical.hashCanonical model;
+  stateHash = canonical.hashCanonical (builtins.removeAttrs model [ "compiled" ]);
 in
 {
   inherit

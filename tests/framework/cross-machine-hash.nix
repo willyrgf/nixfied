@@ -5,7 +5,7 @@
   canonical,
 }:
 let
-  canonicalizedModel = canonical.canonicalize model;
+  canonicalizedModel = canonical.canonicalize (builtins.removeAttrs model [ "compiled" ]);
   recomputed = builtins.hashString "sha256" (canonical.toCanonicalNix canonicalizedModel);
 in
 assert recomputed == stateHash;
