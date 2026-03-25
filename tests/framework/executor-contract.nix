@@ -21,9 +21,13 @@ assert pkgs.lib.hasInfix "ERROR: $override_name must be an integer >= 1 (got '$o
 assert pkgs.lib.hasInfix "INFO: runId=$run_id passed=$passed failed=$failed canceled=$canceled"
   source;
 assert pkgs.lib.hasInfix "run_workflow_parallel_impl()" source;
+assert pkgs.lib.hasInfix "nixfied-kernel workflow serial-init" source;
+assert pkgs.lib.hasInfix "nixfied-kernel workflow serial-next" source;
+assert pkgs.lib.hasInfix "nixfied-kernel workflow serial-transition" source;
 assert pkgs.lib.hasInfix "wait -n -p done_pid" source;
 assert pkgs.lib.hasInfix "NIXFIED_WORKFLOW_PARALLEL" source;
 assert pkgs.lib.hasInfix "workflow_parallel_enabled \"$workflow_id\"" source;
+assert pkgs.lib.hasInfix "workflowSchedulerPlanFile = pkgs.writeText" source;
 assert pkgs.lib.hasInfix "workflow_unit_records() {" source;
 assert pkgs.lib.hasInfix "workflow_plan_records \"$workflow_id\"" source;
 assert pkgs.lib.hasInfix "workflow_phase_tasks \"$workflow_id\" \"$phase_key\"" source;
@@ -101,6 +105,8 @@ assert (!pkgs.lib.hasInfix "[.[] | .name] | unique" source);
 assert (!pkgs.lib.hasInfix "workflow_step_status() {" source);
 assert (!pkgs.lib.hasInfix "workflow_step_records_tsv() {" source);
 assert (!pkgs.lib.hasInfix "workflow_peak_workers() {" source);
+assert (!pkgs.lib.hasInfix "blocked_tasks_by_dependency" source);
+assert (!pkgs.lib.hasInfix "blocked_tasks_reason_by_dependency" source);
 assert (!pkgs.lib.hasInfix "local -A visited_tasks" source);
 assert (!pkgs.lib.hasInfix "local -A active_tasks" source);
 assert (!pkgs.lib.hasInfix "done < <(task_needs \"$current_task\")" source);

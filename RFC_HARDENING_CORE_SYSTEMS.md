@@ -45,6 +45,10 @@ Landed:
   and `orchestrator-runtime.nix` now route run-record reads and terminal-state
   derivation through kernel-backed commands instead of shell field parsing and
   index scanning
+- Lane R additional closure: `executor.nix` now routes `run-task` dependency
+  planning, workflow serial scheduling, and workflow summary step aggregation
+  through kernel-backed plan/state commands instead of recursive shell graph
+  walks and shell summary reducers
 - Lane D closure: `probe-plan-runtime.nix` now routes runtime probe execution
   through kernel-owned `probe evaluate` plans, and the kernel executes probe
   kinds end to end instead of shell-rendered probe bodies
@@ -61,14 +65,14 @@ Landed:
 Still open:
 
 - Lane R thin-shell closure is not complete. `executor.nix` still owns
-  the workflow serial/parallel scheduler state engines, including ready/pending
-  queue management, lock arbitration, fail-fast cancellation, and unit
-  transition bookkeeping.
+  the workflow parallel scheduler state engine, including multi-worker
+  ready/running queue management, lock arbitration, fail-fast cancellation of
+  running units, and parallel unit transition bookkeeping.
 - Lane G guard enforcement is not complete. The guard is `jq`/CUE/Python-free
   oriented, and it now covers probe execution, task dependency planning,
-  executor summary aggregation, and orchestrator reads, but it does not yet
-  fail on the remaining workflow scheduler semantics that still sit inside the
-  hardened-core runtime boundary.
+  executor serial scheduling, executor summary aggregation, and orchestrator
+  reads, but it does not yet fail on the remaining parallel scheduler
+  semantics that still sit inside the hardened-core runtime boundary.
 
 Residual `jq` use in smoke tests that only inspect outputs remains outside the
 hardened-core ownership boundary described here.
@@ -1130,11 +1134,11 @@ accurate for the current worktree.
 Post-closure review found that:
 
 1. Lane R thin-wrapper reduction is incomplete.
-   The executor path still retains shell-owned workflow scheduler semantics
-   beyond env/path/process/signal staging.
+   The executor path still retains shell-owned parallel workflow scheduler
+   semantics beyond env/path/process/signal staging.
 
 2. Lane G guard enforcement is incomplete.
-   The guard does not yet fail on the remaining executor-owned shell workflow
+   The guard does not yet fail on the remaining executor-owned shell parallel
    scheduler semantics that this RFC intended to prohibit inside the
    hardened-core runtime boundary.
 

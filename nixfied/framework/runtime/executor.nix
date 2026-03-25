@@ -185,6 +185,62 @@ let
       ) (model.tasks or { });
     }
   );
+  workflowSchedulerPlanFile = pkgs.writeText "nixfied-workflow-scheduler-plan.json" (
+    builtins.toJSON {
+      kind = "nixfied-workflow-scheduler-plan";
+      version = 1;
+      workflows = builtins.mapAttrs (
+        workflowId: workflow:
+        let
+          workflowPlan = workflow.plan or [ ];
+        in
+        {
+          units = map (
+            unit:
+            let
+              taskId = unit.taskId or "";
+              task =
+                if taskId != "" && builtins.hasAttr taskId (model.tasks or { }) then
+                  model.tasks.${taskId}
+                else
+                  { };
+              taskRunner = task.runner or { };
+              runnerType = taskRunner.type or "shell";
+              runnerWorkflowId =
+                if runnerType == "workflowRef" then taskRunner.workflowId or "" else "";
+              unitRequiredServices = unit.requirements.services or [ ];
+              taskBaseClosureServices =
+                if taskId != "" then resolvedSelectionIndex.taskBaseClosureServicesById.${taskId} or [ ] else [ ];
+              runnerWorkflowClosureServices =
+                if runnerWorkflowId != "" then
+                  resolvedSelectionIndex.workflowClosureServicesById.${runnerWorkflowId} or [ ]
+                else
+                  [ ];
+              selectedServices = builtins.sort builtins.lessThan (
+                lib.unique (
+                  unitRequiredServices
+                  ++ taskBaseClosureServices
+                  ++ runnerWorkflowClosureServices
+                )
+              );
+              when = unit.when or { };
+            in
+            {
+              name = unit.name or "";
+              taskId = taskId;
+              needs = unit.needs or [ ];
+              locks = unit.locks or [ ];
+              requiredServices = unitRequiredServices;
+              skipIfMissingEnv = unit.skipIfMissingEnv or [ ];
+              whenEnvPresent = when.envPresent or [ ];
+              whenEnvEquals = when.envEquals or { };
+              selectedServicesCsv = lib.concatStringsSep "," selectedServices;
+            }
+          ) workflowPlan;
+        }
+      ) (model.workflows or { });
+    }
+  );
   workflowSummaryPlanFile = pkgs.writeText "nixfied-workflow-summary-plan.json" (
     builtins.toJSON {
       kind = "nixfied-workflow-summary-plan";
@@ -1263,121 +1319,126 @@ EOF
         shift 3
         local -a passthrough_args
         passthrough_args=("$@")
-        local -A blocked_tasks_by_dependency
-        local -A blocked_tasks_reason_by_dependency
-
         local status=0
         local workflow_status=0
-        local unit_json
+        local skipped_services_file=""
+        local state_file=""
+        local action_line=""
+        local action_kind=""
+        local unit_name=""
+        local unit_task=""
+        local field4=""
+        local field5=""
+        local field6=""
+        local detail_json=""
 
-        while IFS= read -r unit_json; do
-          local unit_task
-          local unit_skip_service=""
-          local blocked_by_dependency
-          local dependency
-          local failed_dependency=""
-          local blocked_reason=""
-          local missing=""
-          local unit_selected_services_csv=""
+        skipped_services_file="$(mktemp "''${TMPDIR:-/tmp}/nixfied-workflow-serial-skipped.XXXXXX")" || {
+          echo "ERROR: failed to create workflow serial skipped-services temp file"
+          return 1
+        }
+        state_file="$(mktemp "''${TMPDIR:-/tmp}/nixfied-workflow-serial-state.XXXXXX")" || {
+          rm -f "$skipped_services_file"
+          echo "ERROR: failed to create workflow serial state temp file"
+          return 1
+        }
 
-          unit_task="$(workflow_unit_task_id "$unit_json")"
-          missing="$(workflow_unit_missing_env_csv "$unit_json")"
-
-          if [ -n "''${blocked_tasks_by_dependency[$unit_task]:-}" ]; then
-            local detail_json
-            blocked_reason="''${blocked_tasks_reason_by_dependency[$unit_task]:-dependency-not-passed}"
-            local cascade_reason="dependency-not-passed"
-            case "$blocked_reason" in
-              service-skipped|missing-env|when-false|dependency-skipped)
-                cascade_reason="dependency-skipped"
-                ;;
-            esac
-            detail_json="$(event_detail_reason_key_value_json "$cascade_reason" "dependency" "''${blocked_tasks_by_dependency[$unit_task]}")"
-            append_event "$run_id" "$workflow_id" "$unit_task" "canceled" "$detail_json" "$cascade_reason"
-            continue
-          fi
-
-          blocked_by_dependency=0
-          failed_dependency=""
-          while IFS= read -r dependency; do
-            if [ -z "''${blocked_tasks_by_dependency[$dependency]:-}" ]; then
-              continue
-            fi
-            local detail_json
-            failed_dependency="$dependency"
-            blocked_reason="''${blocked_tasks_reason_by_dependency[$dependency]:-dependency-not-passed}"
-            local cascade_reason="dependency-not-passed"
-            case "$blocked_reason" in
-              service-skipped|missing-env|when-false|dependency-skipped)
-                cascade_reason="dependency-skipped"
-                ;;
-            esac
-            detail_json="$(event_detail_reason_key_value_json "$cascade_reason" "dependency" "$failed_dependency")"
-            append_event "$run_id" "$workflow_id" "$unit_task" "canceled" "$detail_json" "$cascade_reason"
-            blocked_by_dependency=1
-            break
-          done < <(workflow_unit_dependencies "$unit_json")
-          if [ "$blocked_by_dependency" -eq 1 ]; then
-            blocked_tasks_by_dependency[$unit_task]="$failed_dependency"
-            blocked_tasks_reason_by_dependency[$unit_task]="$blocked_reason"
-            continue
-          fi
-
-          if [ -n "$missing" ]; then
-            local detail_json
-            detail_json="$(event_detail_reason_key_value_json "missing-env" "missing" "$missing")"
-            append_event "$run_id" "$workflow_id" "$unit_task" "canceled" "$detail_json" "missing-env"
-            blocked_tasks_by_dependency["$unit_task"]="$unit_task"
-            blocked_tasks_reason_by_dependency["$unit_task"]="missing-env"
-            continue
-          fi
-
-          unit_skip_service="$(workflow_unit_first_skipped_required_service "$unit_json" || true)"
-          if [ -n "$unit_skip_service" ]; then
-            local detail_json
-            detail_json="$(event_detail_reason_key_value_json "service-skipped" "serviceName" "$unit_skip_service")"
-            append_event "$run_id" "$workflow_id" "$unit_task" "canceled" "$detail_json" "service-skipped"
-            echo "SKIP: task '$unit_task' (service '$unit_skip_service') is skipped because service '$unit_skip_service' has a skip flag enabled"
-            blocked_tasks_by_dependency["$unit_task"]="$unit_task"
-            blocked_tasks_reason_by_dependency["$unit_task"]="service-skipped"
-            continue
-          fi
-
-          if ! workflow_unit_when_matches "$unit_json"; then
-            local detail_json
-            detail_json="$(event_detail_reason_json "when-false")"
-            append_event "$run_id" "$workflow_id" "$unit_task" "canceled" "$detail_json" "when-false"
-            blocked_tasks_by_dependency["$unit_task"]="$unit_task"
-            blocked_tasks_reason_by_dependency["$unit_task"]="when-false"
-            continue
-          fi
-
-          unit_selected_services_csv="$(workflow_unit_selected_services_csv "$unit_json")"
-          if [ "''${#passthrough_args[@]}" -gt 0 ]; then
-            if NIXFIED_SELECTED_SERVICES_CSV_OVERRIDE="$unit_selected_services_csv" execute_task "$run_id" "$workflow_id" "$unit_task" "''${passthrough_args[@]}"; then
-              status=0
-            else
-              status="$?"
-            fi
-          elif NIXFIED_SELECTED_SERVICES_CSV_OVERRIDE="$unit_selected_services_csv" execute_task "$run_id" "$workflow_id" "$unit_task"; then
-            status=0
-          else
-            status="$?"
-          fi
-
-          if [ "$status" -ne 0 ] && [ "$workflow_status" -eq 0 ]; then
-            workflow_status="$status"
-          fi
-
-          if [ "$status" -ne 0 ] && [ "$fail_fast" = "true" ]; then
-            break
-          fi
-        done < <(workflow_unit_records "$workflow_id")
-
-        if [ "$workflow_status" -ne 0 ]; then
-          return "$workflow_status"
+        if ! write_skipped_services_file "$skipped_services_file"; then
+          rm -f "$skipped_services_file" "$state_file"
+          return 1
         fi
-        return 0
+
+        if ! ${kernelPackage}/bin/nixfied-kernel workflow serial-init \
+          ${pkgs.lib.escapeShellArg (builtins.toString workflowSchedulerPlanFile)} \
+          "$skipped_services_file" \
+          "$workflow_id" \
+          "$fail_fast" \
+          "$state_file" \
+          >/dev/null; then
+          rm -f "$skipped_services_file" "$state_file"
+          return 1
+        fi
+
+        while true; do
+          action_line="$(${kernelPackage}/bin/nixfied-kernel workflow serial-next "$state_file")" || {
+            rm -f "$skipped_services_file" "$state_file"
+            return 1
+          }
+          IFS=$'\x1f' read -r action_kind unit_name unit_task field4 field5 field6 <<< "$action_line"
+
+          case "$action_kind" in
+            execute)
+              if [ "''${#passthrough_args[@]}" -gt 0 ]; then
+                if NIXFIED_SELECTED_SERVICES_CSV_OVERRIDE="$field4" execute_task "$run_id" "$workflow_id" "$unit_task" "''${passthrough_args[@]}"; then
+                  status=0
+                else
+                  status="$?"
+                fi
+              elif NIXFIED_SELECTED_SERVICES_CSV_OVERRIDE="$field4" execute_task "$run_id" "$workflow_id" "$unit_task"; then
+                status=0
+              else
+                status="$?"
+              fi
+
+              if ! ${kernelPackage}/bin/nixfied-kernel workflow serial-transition \
+                "$state_file" \
+                "$unit_name" \
+                "$(
+                  if [ "$status" -eq 0 ]; then
+                    printf '%s' "passed"
+                  else
+                    printf '%s' "failed"
+                  fi
+                )" \
+                "$(
+                  if [ "$status" -eq 0 ]; then
+                    printf '%s' "0"
+                  else
+                    printf '%s' "$status"
+                  fi
+                )" \
+                "" \
+                "" \
+                "" \
+                >/dev/null; then
+                rm -f "$skipped_services_file" "$state_file"
+                return 1
+              fi
+              ;;
+            cancel)
+              if [ "$field4" = "service-skipped" ]; then
+                echo "SKIP: task '$unit_task' (service '$field6') is skipped because service '$field6' has a skip flag enabled"
+              fi
+              if [ -n "$field5" ]; then
+                detail_json="$(event_detail_reason_key_value_json "$field4" "$field5" "$field6")"
+              else
+                detail_json="$(event_detail_reason_json "$field4")"
+              fi
+              append_event "$run_id" "$workflow_id" "$unit_task" "canceled" "$detail_json" "$field4"
+              if ! ${kernelPackage}/bin/nixfied-kernel workflow serial-transition \
+                "$state_file" \
+                "$unit_name" \
+                "canceled" \
+                "" \
+                "$field4" \
+                "$field5" \
+                "$field6" \
+                >/dev/null; then
+                rm -f "$skipped_services_file" "$state_file"
+                return 1
+              fi
+              ;;
+            done)
+              workflow_status="''${unit_name:-0}"
+              rm -f "$skipped_services_file" "$state_file"
+              return "$workflow_status"
+              ;;
+            *)
+              echo "ERROR: unsupported workflow serial action '$action_kind'"
+              rm -f "$skipped_services_file" "$state_file"
+              return 1
+              ;;
+          esac
+        done
       }
 
       run_workflow_parallel_impl() {
