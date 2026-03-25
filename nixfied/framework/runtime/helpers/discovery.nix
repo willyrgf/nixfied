@@ -211,6 +211,20 @@ let
           HAS_GIT_TRACKING="1"
         fi
 
+        json_quote_string() {
+          local value="$1"
+
+          value=''${value//\\/\\\\}
+          value=''${value//\"/\\\"}
+          value=''${value//$'\n'/\\n}
+          value=''${value//$'\r'/\\r}
+          value=''${value//$'\t'/\\t}
+          value=''${value//$'\f'/\\f}
+          value=''${value//$'\b'/\\b}
+
+          printf '"%s"' "$value"
+        }
+
         render_docs_json() {
           local docs_tsv="$1"
           local path=""
