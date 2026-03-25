@@ -8,6 +8,7 @@
 let
   projectMeta = project.project or { };
   projectId = projectMeta.id or "project";
+  kernelExportRuntime = import ./kernel-export-runtime.nix { };
   kernelPackage = import ../kernel { inherit pkgs; };
   id = import ./id.nix {
     inherit pkgs project;
@@ -56,6 +57,7 @@ let
 
   sharedPrelude = ''
     ${resolvedLoggingPrelude}
+    ${kernelExportRuntime.kernelExportRuntime}
 
     set -euo pipefail
 
@@ -88,7 +90,6 @@ let
       local resolved_owner="$explicit_owner"
       local resolved_discovery="$explicit_discovery"
       local ephemeral_flag="0"
-      local export_file=""
 
       if [ -z "$resolved_reuse" ]; then
         resolved_reuse="''${SERVICE_REUSE_POLICY:-}"
@@ -103,21 +104,12 @@ let
         ephemeral_flag="1"
       fi
 
-      export_file="$(mktemp "''${TMPDIR:-/tmp}/nixfied-runtime-policy.XXXXXX")" || return 1
-      if ! ${kernelPackage}/bin/nixfied-kernel service-policy runtime-event \
+      nixfied_load_kernel_exports "nixfied-runtime-policy" \
+        ${kernelPackage}/bin/nixfied-kernel service-policy runtime-event \
         "$resolved_reuse" \
         "$resolved_owner" \
         "$resolved_discovery" \
-        "$ephemeral_flag" \
-        "$export_file" >/dev/null; then
-        rm -f "$export_file"
-        return 1
-      fi
-      if ! . "$export_file"; then
-        rm -f "$export_file"
-        return 1
-      fi
-      rm -f "$export_file"
+        "$ephemeral_flag"
     }
 
     is_numeric_pid() {
@@ -191,23 +183,13 @@ let
       local env_name="$3"
       local service_index_file=""
       local slot_index_file=""
-      local export_file=""
 
       service_index_file="$(service_events_index_file_for "$service_name" "$slot_name" "$env_name")"
       slot_index_file="$(slot_events_index_file_for "$slot_name" "$env_name")"
-      export_file="$(mktemp "''${TMPDIR:-/tmp}/nixfied-runtime-status.XXXXXX")" || return 1
-      if ! ${kernelPackage}/bin/nixfied-kernel registry runtime-status \
+      nixfied_load_kernel_exports "nixfied-runtime-status" \
+        ${kernelPackage}/bin/nixfied-kernel registry runtime-status \
         "$service_index_file" \
-        "$slot_index_file" \
-        "$export_file" >/dev/null; then
-        rm -f "$export_file"
-        return 1
-      fi
-      if ! . "$export_file"; then
-        rm -f "$export_file"
-        return 1
-      fi
-      rm -f "$export_file"
+        "$slot_index_file"
     }
   '';
 

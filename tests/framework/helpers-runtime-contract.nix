@@ -4,6 +4,8 @@ let
   cleanupSource = builtins.readFile ../../nixfied/framework/runtime/helpers/cleanup-runtime.nix;
   fixtureSource = builtins.readFile ../../nixfied/framework/runtime/helpers/fixture-runtime.nix;
   fixturesDslSource = builtins.readFile ../../nixfied/framework/runtime/helpers/fixtures.nix;
+  kernelExportRuntimeSource =
+    builtins.readFile ../../nixfied/framework/runtime/helpers/kernel-export-runtime.nix;
   loggingRuntimeSource = builtins.readFile ../../nixfied/framework/runtime/helpers/logging-runtime.nix;
   runtimeEventsSource = builtins.readFile ../../nixfied/framework/runtime/helpers/runtime-events.nix;
   shellCommonSource = builtins.readFile ../../nixfied/framework/core/shell-common.nix;
@@ -12,8 +14,10 @@ let
 in
 assert pkgs.lib.hasInfix "import ./cleanup-runtime.nix" helpersSource;
 assert pkgs.lib.hasInfix "import ./fixture-runtime.nix" helpersSource;
+assert pkgs.lib.hasInfix "import ./kernel-export-runtime.nix" helpersSource;
 assert pkgs.lib.hasInfix "cleanupRuntime.cleanupRuntime" helpersSource;
 assert pkgs.lib.hasInfix "fixtureRuntime.fixtureRuntime" helpersSource;
+assert pkgs.lib.hasInfix "nixfied_load_kernel_exports()" kernelExportRuntimeSource;
 assert !(pkgs.lib.hasInfix "import ./service-policy.nix" helpersSource);
 assert (!pkgs.lib.hasInfix "print_log_tail()" helpersSource);
 assert pkgs.lib.hasInfix "nc -z \"$NIXFIED_LOCALHOST_NAME\" \"$port\"" helpersSource;
@@ -30,6 +34,7 @@ assert pkgs.lib.hasInfix "runtimeDefaults = import ../../core/runtime-defaults.n
   fixturesDslSource;
 assert pkgs.lib.hasInfix "mkLocalPostgresUrlExportFromPortVar" fixturesDslSource;
 assert pkgs.lib.hasInfix "mkLocalHttpUrlExportFromPortVar" fixturesDslSource;
+assert pkgs.lib.hasInfix "import ./kernel-export-runtime.nix" fixturesDslSource;
 assert !(pkgs.lib.hasInfix "import ./service-policy.nix" fixturesDslSource);
 assert pkgs.lib.hasInfix "nixfied-kernel service-policy fixture-keep-running" fixturesDslSource;
 assert !(pkgs.lib.hasInfix "nixfied_policy_" fixturesDslSource);
@@ -41,6 +46,7 @@ assert pkgs.lib.hasInfix "runtimeDefaults ? import ./runtime-defaults.nix" shell
 assert pkgs.lib.hasInfix "slot_events_index_file_for()" runtimeEventsSource;
 assert pkgs.lib.hasInfix "load_runtime_status_exports()" runtimeEventsSource;
 assert pkgs.lib.hasInfix "load_runtime_event_policy_exports()" runtimeEventsSource;
+assert pkgs.lib.hasInfix "import ./kernel-export-runtime.nix" runtimeEventsSource;
 assert pkgs.lib.hasInfix "nixfied-kernel service-policy runtime-event" runtimeEventsSource;
 assert !(pkgs.lib.hasInfix "import ./service-policy.nix" runtimeEventsSource);
 assert !(pkgs.lib.hasInfix "service_status_file_for()" runtimeEventsSource);

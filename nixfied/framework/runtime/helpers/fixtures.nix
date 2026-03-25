@@ -5,6 +5,7 @@
 }:
 
 let
+  kernelExportRuntime = import ./kernel-export-runtime.nix { };
   lib = pkgs.lib;
   kernelPackage = import ../kernel { inherit pkgs; };
   runtimeDefaults = import ../../core/runtime-defaults.nix;
@@ -244,23 +245,14 @@ let
       throw "fixtures.env.${key} must be a scalar or attrset";
 
   keepRunningFromPolicy = ''
-    _fixture_keep_running_from_policy() {
-      local export_file=""
+    ${kernelExportRuntime.kernelExportRuntime}
 
-      export_file="$(mktemp "''${TMPDIR:-/tmp}/nixfied-fixture-policy.XXXXXX")" || return 1
-      if ! ${kernelPackage}/bin/nixfied-kernel service-policy fixture-keep-running \
+    _fixture_keep_running_from_policy() {
+      nixfied_load_kernel_exports "nixfied-fixture-policy" \
+        ${kernelPackage}/bin/nixfied-kernel service-policy fixture-keep-running \
         "''${SERVICE_OWNER_SCOPE:-}" \
         "''${SERVICE_REUSE_POLICY:-}" \
-        "''${SERVICE_DISCOVERY_SCOPE:-}" \
-        "$export_file" >/dev/null; then
-        rm -f "$export_file"
-        return 1
-      fi
-      if ! . "$export_file"; then
-        rm -f "$export_file"
-        return 1
-      fi
-      rm -f "$export_file"
+        "''${SERVICE_DISCOVERY_SCOPE:-}"
       echo "$KEEP_RUNNING"
     }
   '';

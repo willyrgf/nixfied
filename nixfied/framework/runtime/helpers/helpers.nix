@@ -9,6 +9,7 @@
 let
   cleanupRuntime = import ./cleanup-runtime.nix { };
   fixtureRuntime = import ./fixture-runtime.nix { };
+  kernelExportRuntime = import ./kernel-export-runtime.nix { };
   kernelPackage = import ../kernel { inherit pkgs; };
   loggingRuntime = import ./logging-runtime.nix { inherit pkgs; };
   envLoader = import ./env-loader.nix {
@@ -28,6 +29,7 @@ let
 
   helpersScript = pkgs.writeShellScript "framework-helpers" ''
     ${loggingPrelude}
+    ${kernelExportRuntime.kernelExportRuntime}
 
     # require_env VAR [message]
     # - fail if VAR is unset/empty; prints message to stderr.
@@ -343,21 +345,11 @@ let
     }
 
     load_start_service_policy_exports() {
-      local export_file=""
-      export_file="$(mktemp "''${TMPDIR:-/tmp}/nixfied-start-service-policy.XXXXXX")" || return 1
-      if ! ${kernelPackage}/bin/nixfied-kernel service-policy start-service \
+      nixfied_load_kernel_exports "nixfied-start-service-policy" \
+        ${kernelPackage}/bin/nixfied-kernel service-policy start-service \
         "''${SERVICE_REUSE_POLICY:-}" \
         "''${SERVICE_OWNER_SCOPE:-}" \
-        "''${SERVICE_DISCOVERY_SCOPE:-}" \
-        "$export_file" >/dev/null; then
-        rm -f "$export_file"
-        return 1
-      fi
-      if ! . "$export_file"; then
-        rm -f "$export_file"
-        return 1
-      fi
-      rm -f "$export_file"
+        "''${SERVICE_DISCOVERY_SCOPE:-}"
     }
 
     # start_service_should_register_cleanup [explicit_mode]

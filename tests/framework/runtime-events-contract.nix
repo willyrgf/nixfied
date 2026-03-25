@@ -13,6 +13,7 @@ assert pkgs.lib.hasInfix "nixfied-kernel event-detail render" source;
 assert pkgs.lib.hasInfix "nixfied-kernel event-state derive" source;
 assert pkgs.lib.hasInfix "nixfied-kernel service-policy runtime-event" source;
 assert pkgs.lib.hasInfix "nixfied-kernel registry runtime-status" source;
+assert pkgs.lib.hasInfix "import ./kernel-export-runtime.nix" source;
 assert !(pkgs.lib.hasInfix "import ./service-policy.nix" source);
 assert !(pkgs.lib.hasInfix "service_status_file_for()" source);
 assert !(pkgs.lib.hasInfix "slot_status_file_for()" source);
