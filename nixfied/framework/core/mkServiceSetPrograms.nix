@@ -11,6 +11,7 @@ let
   kernelPackage = import ../runtime/kernel { inherit pkgs; };
   shellCommon = import ./shell-common.nix { inherit pkgs; };
   commonRuntimeShell = import ../runtime/common-runtime.nix { inherit pkgs; };
+  shellJson = import ../runtime/helpers/shell-json.nix { };
   runtimeArtifactContracts = import ../contracts/runtime-artifact-contracts.nix { inherit pkgs; };
   validationBundleFile = pkgs.writeText "nixfied-runtime-artifact-contract-bundle.json" (
     builtins.toJSON runtimeArtifactContracts.bundle
@@ -446,6 +447,7 @@ let
               set -euo pipefail
               ${shellCommon}
               ${commonRuntimeShell}
+              ${shellJson}
               source <(${serviceRuntimeSurfaces.slots.getSlotInfo})
 
               render_usage() {
@@ -478,6 +480,9 @@ let
                 local key="$1"
                 local raw="$2"
                 local resolved=""
+                local fragment=""
+                local token=""
+                local value=""
 
                 if [ -z "$raw" ]; then
                   printf '%s' ""
@@ -489,7 +494,39 @@ let
                     printf '%s' "''${!raw:-}"
                     ;;
                   *)
-                    eval "resolved=$raw"
+                    resolve_artifact_template() {
+                      local template="$1"
+                      local output=""
+                      local remaining=""
+                      local open_marker='$'
+                      local close_marker='}'
+
+                      remaining="$template"
+                      open_marker="''${open_marker}{"
+                      while [ -n "''${remaining}" ]; do
+                        if [ "''${remaining%%''${open_marker}*}" = "''${remaining}" ]; then
+                          break
+                        fi
+
+                        fragment="''${remaining%%''${open_marker}*}"
+                        output="''${output}''${fragment}"
+                        remaining="''${remaining#*''${open_marker}}"
+
+                        token="''${remaining%%''${close_marker}*}"
+                        if [ "$token" = "$remaining" ]; then
+                          output="''${output}''${remaining}"
+                          break
+                        fi
+
+                        value="''${!token:-}"
+                        output="''${output}''${value}"
+                        remaining="''${remaining#*''${close_marker}}"
+                      done
+
+                      printf '%s' "''${output}''${remaining}"
+                    }
+
+                    resolved="$(resolve_artifact_template "$raw")"
                     printf '%s' "$resolved"
                     ;;
                 esac

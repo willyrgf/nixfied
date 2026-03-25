@@ -8,6 +8,7 @@
 let
   lib = pkgs.lib;
   commonRuntimeShell = import ../runtime/common-runtime.nix { inherit pkgs; };
+  shellJson = import ../runtime/helpers/shell-json.nix { };
 
   normalizeToken =
     value: lib.toUpper (lib.replaceStrings [ "." "-" ":" "/" " " ] [ "_" "_" "_" "_" "_" ] value);
@@ -250,6 +251,7 @@ let
     set -euo pipefail
     ${commonRuntimeShell}
     ${slotRuntimePrelude}
+    ${shellJson}
 
     resolve_slot_runtime_context
 
