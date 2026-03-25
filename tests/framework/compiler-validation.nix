@@ -15,6 +15,7 @@ let
   workflowIds = builtins.attrNames model.workflows;
   serviceIds = builtins.attrNames serviceCatalog;
   featureIds = builtins.attrNames (model.features or { });
+  safeRepoRoot = builtins.unsafeDiscardStringContext (builtins.toString ../..);
   expectedRuntimeFeatureIds = [
     "runtime.ephemeral.source-materialization"
     "runtime.ephemeral.include-untracked"
@@ -116,6 +117,14 @@ let
   runtimeFeaturesPresent = builtins.all (
     featureId: builtins.hasAttr featureId model.features
   ) expectedRuntimeFeatureIds;
+  featuresWithMissingOwnerFiles = builtins.filter (
+    featureId:
+    let
+      feature = model.features.${featureId};
+      ownerFiles = feature.ownerFiles or [ ];
+    in
+    builtins.any (path: !builtins.pathExists "${safeRepoRoot}/${path}") ownerFiles
+  ) featureIds;
 
   frameworkTask = model.tasks."task.framework.test" or null;
   formatTask = model.tasks."task.format" or null;
@@ -259,6 +268,7 @@ assert workflowsHaveLifecycle;
 assert workflowsHaveServiceRequirements;
 assert servicesHaveStableIds;
 assert featureIds != [ ];
+assert featuresWithMissingOwnerFiles == [ ];
 assert featuresHaveStableIds;
 assert serviceFeaturesPresent;
 assert workflowFeaturesPresent;

@@ -386,20 +386,20 @@ let
     hooks = { };
   };
 
-  serviceModules = builtins.listToAttrs (
-    map (entry: {
-      name = entry.name;
-      value = import (serviceModulePath entry.name) {
-        inherit
-          pkgs
-          slots
-          ;
-        project = serviceProject;
-      };
-    }) serviceEntries
+  serviceApis = runtimeHelpers.serviceApi.mkServiceApisFromModules (
+    builtins.listToAttrs (
+      map (entry: {
+        name = entry.name;
+        value = import (serviceModulePath entry.name) {
+          inherit
+            pkgs
+            slots
+            ;
+          project = serviceProject;
+        };
+      }) serviceEntries
+    )
   );
-
-  serviceApis = runtimeHelpers.serviceApi.mkServiceApisFromModules serviceModules;
   serviceHookEnv = runtimeHelpers.serviceApi.mkServiceHookEnvFromContract serviceApis;
   serviceApps = runtimeHelpers.serviceApi.mkServiceAppsFromContract serviceApis;
 in
@@ -408,7 +408,6 @@ in
     serviceApis
     serviceApps
     serviceHookEnv
-    serviceModules
     slots
     ;
 }
