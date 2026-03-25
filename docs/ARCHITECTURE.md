@@ -97,13 +97,14 @@ Execution contracts:
 
 Machine-facing boundaries are contract-owned.
 
-- `nixfied/contracts/` defines the Nix contract DSL and renders CUE, JSON Schema, and docs from the same source.
+- `nixfied/contracts/` defines the typed Nix contract DSL and compiles closed validation bundles and contract docs from the same source.
 - App machine output uses typed `validation.contractRef` rather than inline schema fragments or runtime validator commands.
 - Machine-output transport is explicit: target apps write the payload to `NIXFIED_MACHINE_OUTPUT_FILE`, and the wrapper validates that declared file instead of recovering payloads from stdout.
 - Workflow machine output is sidecar-only: `run-workflow` writes `--run-id-file` and `--summary-file`, and no longer exposes a stdout JSON result surface.
-- Workflow summaries, service-set JSON export, orchestrator run records, registry events, and introspection JSON are versioned validated envelopes. Shell runtime code reads companion fields/index files or precomputed bundles rather than re-deriving framework schema semantics with `jq`.
+- `nixfied-kernel` owns framework validation, workflow scheduler transitions, run-record transitions, registry append/replay/status projection, summary composition, runtime-event policy/state derivation, and probe execution.
+- Workflow summaries, service-set JSON export, orchestrator run records, registry events, and introspection JSON are versioned validated envelopes. Shell runtime code reads kernel-exported fields, validated envelopes, or append-only indices; it does not re-derive framework semantics.
 - `introspect` is backed by a compile-time bundle plus a thin runtime selector, and its generated JSON assets are validated against the contract bundle at build time.
-- Repository guard tests prevent the deleted Python helpers, stdout-filter fallback transport, and any framework `jq` usage outside the exact approved adapter/validation/build-check sites from reappearing.
+- Repository guard tests and runtime contracts prevent deleted Python helpers, stdout-filter fallback transport, deprecated shell semantic seams, and framework `jq` usage in runtime/build-check paths from reappearing.
 
 ## Generated App Surfaces
 
@@ -140,7 +141,7 @@ Introspection apps:
 - `nixfied/framework/runtime/`: dispatcher, orchestrator, executor, env sandbox, and runtime helpers.
 - `nixfied/framework/runtime/registry/`: NDJSON event log, replay, snapshot logic, and contract-backed append helpers.
 - `nixfied/framework/core/`: canonical flake/core helpers and `mkNixfied`.
-- `nixfied/framework/contracts/`: generated validator entrypoints and runtime artifact contract bundles.
+- `nixfied/framework/contracts/`: typed contract definitions and runtime artifact contract bundles.
 - `nixfied/framework/install/`: wrapper/install internals and vendored-wrapper generation.
 - `tests/framework/`: deterministic framework gates and snapshots.
 

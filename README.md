@@ -126,7 +126,7 @@ Ephemeral runtime behavior:
 - Hashing: `stateHash = sha256(toCanonicalNix(model))`.
 - Runner: dispatcher routes to orchestrator, then executor (`dispatcher -> orchestrator -> executor`).
 - Registry: append-only NDJSON event stream with replay support.
-- Runtime semantics: `nixfied-kernel` is the only framework-owned validation and state-mutation layer; shell launchers load compiled plans and invoke kernel commands.
+- Runtime semantics: `nixfied-kernel` is the framework-owned validation and runtime-semantics layer for scheduling, run-record/registry/summary state, runtime-event policy/status projection, and probe execution; shell launchers stage env/path/process orchestration and invoke kernel commands.
 - Runtime inputs: the kernel consumes compiled runtime assets only; it does not evaluate modules, run compiler passes, or regenerate launchers.
 - Ownership: framework-owned code lives under `nixfied/framework/{core,runtime,install,presets}`; `nixfied/project/` is the downstream composition/customization layer.
 
@@ -134,7 +134,7 @@ Ephemeral runtime behavior:
 
 - Zero framework CUE.
 - Zero framework `jq` in framework runtime/build-check paths.
-- No validator shim or shell-owned JSON sidecars for run records, summaries, or registry state.
+- No validator shim or shell-owned semantic sidecars/engines for run records, summaries, registry/runtime status, or service-policy/probe behavior.
 - Public flake command names stay stable; internal runtime seams are free to narrow around compiled assets and kernel commands.
 
 ## Docs

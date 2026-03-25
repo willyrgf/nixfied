@@ -126,10 +126,13 @@ It fails if:
 - any framework/runtime smoke test falls back to inline Python responders
 - authored `nixfied.apps` returns or the deleted apps module reappears
 
-That guard complements the runtime contract checks. The architecture is now:
+That guard complements the runtime contract checks and behavior smokes. The architecture is now:
 
 - kernel-only validation and state mutation from compiled runtime assets
 - canonical command/runtime catalogs consumed directly by runtime surfaces
+- kernel-owned runtime-event policy/state derivation and status projection over append-only indices
+- kernel-owned probe evaluation for lifecycle/startup readiness paths
+- kernel-owned helper service-policy decisions for runtime and fixture behavior
 - zero framework CUE
 - zero framework `jq` in framework runtime/build-check paths
 - no validator shim
