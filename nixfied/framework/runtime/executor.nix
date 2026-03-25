@@ -1310,6 +1310,103 @@ EOF
         printf '%s' "$run_parallel"
       }
 
+      parallel_process_tree_pids() {
+        local root_pid="$1"
+
+        if [ -z "$root_pid" ]; then
+          return 0
+        fi
+
+        ${pkgs.procps}/bin/ps -axo pid=,ppid= \
+          | ${pkgs.gawk}/bin/awk -v root="$root_pid" '
+              {
+                pid=$1
+                ppid=$2
+                children[ppid]=children[ppid] " " pid
+              }
+
+              function walk(node, count, entries, idx) {
+                if (node == "" || seen[node]++) {
+                  return
+                }
+                print node
+                count=split(children[node], entries, /[[:space:]]+/)
+                for (idx=1; idx<=count; idx++) {
+                  if (entries[idx] != "") {
+                    walk(entries[idx])
+                  }
+                }
+              }
+
+              END {
+                walk(root)
+              }
+            '
+      }
+
+      parallel_signal_pid_lines() {
+        local signal_name="$1"
+        local pid_lines="$2"
+        local pid=""
+
+        while IFS= read -r pid; do
+          if [ -n "$pid" ]; then
+            kill "-$signal_name" "$pid" 2>/dev/null || true
+          fi
+        done <<EOF
+$pid_lines
+EOF
+      }
+
+      parallel_run_unit_wrapper() {
+        local unit_task="$1"
+        local workflow_id="$2"
+        local selected_services_csv="$3"
+        shift 3
+
+        local child_pid=""
+        local child_tree_pids=""
+        local child_rc=0
+
+        parallel_cancel_child_tree() {
+          if [ -n "$child_tree_pids" ]; then
+            parallel_signal_pid_lines TERM "$child_tree_pids"
+            sleep "$NIXFIED_RETRY_INTERVAL_DEFAULT"
+            parallel_signal_pid_lines KILL "$child_tree_pids"
+          fi
+        }
+
+        parallel_handle_cancel() {
+          trap - TERM INT
+          if [ -n "$child_pid" ]; then
+            child_tree_pids="$(parallel_process_tree_pids "$child_pid" | ${pkgs.coreutils}/bin/tac)"
+          fi
+          parallel_cancel_child_tree
+          if [ -n "$child_pid" ]; then
+            wait "$child_pid" 2>/dev/null || true
+          fi
+          exit 143
+        }
+
+        trap parallel_handle_cancel TERM INT
+
+        if [ "$#" -gt 0 ]; then
+          NIXFIED_TASK_ID="$unit_task" NIXFIED_PARENT_WORKFLOW_ID="$workflow_id" NIXFIED_SELECTED_SERVICES_CSV="$selected_services_csv" execute_task_body "$unit_task" "$@" &
+        else
+          NIXFIED_TASK_ID="$unit_task" NIXFIED_PARENT_WORKFLOW_ID="$workflow_id" NIXFIED_SELECTED_SERVICES_CSV="$selected_services_csv" execute_task_body "$unit_task" &
+        fi
+        child_pid="$!"
+
+        if wait "$child_pid"; then
+          child_rc=0
+        else
+          child_rc="$?"
+        fi
+
+        trap - TERM INT
+        return "$child_rc"
+      }
+
       workflow_unit_records() {
         local workflow_id="$1"
         workflow_plan_records "$workflow_id"
@@ -1526,13 +1623,9 @@ EOF
                 append_event "$run_id" "$workflow_id" "$unit_task" "running" "$detail_json"
 
                 if [ "''${#passthrough_args[@]}" -gt 0 ]; then
-                  (
-                    NIXFIED_TASK_ID="$unit_task" NIXFIED_PARENT_WORKFLOW_ID="$workflow_id" NIXFIED_SELECTED_SERVICES_CSV="$field4" execute_task_body "$unit_task" "''${passthrough_args[@]}"
-                  ) &
+                  parallel_run_unit_wrapper "$unit_task" "$workflow_id" "$field4" "''${passthrough_args[@]}" &
                 else
-                  (
-                    NIXFIED_TASK_ID="$unit_task" NIXFIED_PARENT_WORKFLOW_ID="$workflow_id" NIXFIED_SELECTED_SERVICES_CSV="$field4" execute_task_body "$unit_task"
-                  ) &
+                  parallel_run_unit_wrapper "$unit_task" "$workflow_id" "$field4" &
                 fi
                 pid="$!"
 
@@ -1618,7 +1711,7 @@ EOF
             sleep "$NIXFIED_RETRY_INTERVAL_DEFAULT"
             for pid in "''${!PID_UNIT[@]}"; do
               if kill -0 "$pid" 2>/dev/null; then
-                kill -KILL "$pid" 2>/dev/null || true
+                parallel_signal_pid_lines KILL "$(parallel_process_tree_pids "$pid" | ${pkgs.coreutils}/bin/tac)"
               fi
             done
           fi

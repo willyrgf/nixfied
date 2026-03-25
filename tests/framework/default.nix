@@ -658,6 +658,15 @@ let
         ;
     };
 
+    "parallel-runner-process-tree-smoke" = import ./parallel-runner-process-tree-smoke.nix {
+      inherit
+        pkgs
+        model
+        services
+        registry
+        ;
+    };
+
     "workflow-parallel-blocked-smoke" = import ./workflow-parallel-blocked-smoke.nix {
       inherit pkgs;
     };

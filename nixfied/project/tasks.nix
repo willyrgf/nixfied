@@ -389,10 +389,23 @@ let
       kind = "internal";
       summary = "Parallel fail-fast slow unit A";
       description = "Long-running unit that should be canceled by fail-fast.";
+      passThroughEnv = defaultTaskPassThroughEnv ++ [ "NIXFIED_PARALLEL_CHILD_LEAK_DIR" ];
       runtimeInputs = commonRuntimeInputs;
       command = ''
         set -euo pipefail
         echo "INFO: fail-fast slow-a start"
+        if [ -n "''${NIXFIED_PARALLEL_CHILD_LEAK_DIR:-}" ]; then
+          mkdir -p "$NIXFIED_PARALLEL_CHILD_LEAK_DIR"
+          (
+            trap "" TERM INT
+            while true; do
+              sleep 1
+            done
+          ) &
+          child_pid="$!"
+          printf '%s\n' "$child_pid" > "$NIXFIED_PARALLEL_CHILD_LEAK_DIR/slow-a.pid"
+          echo "INFO: fail-fast slow-a child pid=$child_pid"
+        fi
         sleep 10
         echo "OK: fail-fast slow-a done"
       '';
