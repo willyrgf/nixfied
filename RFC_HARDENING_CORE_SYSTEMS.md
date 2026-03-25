@@ -1,6 +1,6 @@
 # RFC: Harden Core Systems
 
-Status: open
+Status: closed
 
 Last updated: 2026-03-25
 
@@ -22,12 +22,11 @@ replaced with, and which layers should remain in place.
 
 ## Status Update (2026-03-25)
 
-As of the current `2026-03-25` worktree, the hardening work is materially
-advanced but not closed. The compiler/model/API consolidation is landed, the
-kernel owns the validation and several runtime artifact/state-writing paths, and
-workflow serial/parallel scheduling moved onto kernel-backed plan/state
-commands. Post-implementation review still found residual ownership leaks and
-partial closures that should keep this RFC open.
+As of the current `2026-03-25` worktree, the hardening work is closed. The
+compiler/model/API consolidation is landed, the kernel owns the validation and
+runtime artifact/state-writing paths, workflow serial/parallel scheduling moved
+onto kernel-backed plan/state commands, and the post-review residual ownership
+leaks were closed in follow-up commits before re-closing this RFC.
 
 Landed:
 
@@ -53,8 +52,9 @@ Landed:
   instead of recursive shell graph walks and the older shell-owned scheduler
   maps/reducers
 - Lane D partial closure: `probe-plan-runtime.nix` now routes plan-backed
-  runtime probe execution through kernel-owned `probe evaluate` plans, but
-  direct service lifecycle probe helpers still remain in shell-owned paths
+  runtime probe execution through kernel-owned `probe evaluate` plans; the
+  remaining direct service lifecycle probe paths were closed in subsequent
+  follow-up commits listed below
 - Contract-tightening tail: `runtime.summary.payload` now uses refined stable
   ids, workflow-mode enums, and UTC timestamp helpers
 - Lane G guard foundations: CUE removal, deleted authored `nixfied.apps`,
@@ -67,30 +67,29 @@ Landed:
 - Lane G partial closure: the hardening guard and executor contract now fail if
   executor-owned parallel scheduler helpers, lock/state maps, or equivalent
   pre-kernel parallel scheduling markers reappear inside the hardened-core
-  runtime boundary, but the guard still remains mostly structural rather than
-  behavioral
+  runtime boundary; subsequent follow-up smokes closed the remaining behavioral
+  guard gaps listed below
 
-Remaining work:
+Follow-up closures landed after the architecture review:
 
-- move `runtime-events.nix` policy inference, registry-state mapping, and
-  service/slot status sidecars out of shell semantic ownership or narrow them to
-  path-only caches backed by one kernel-owned state model
-- finish probe migration for direct service lifecycle and startup/readiness
-  checks; shell probe helpers such as `tcpOpenCmd`, `pgIsReadyCmd`,
-  `psqlQueryCmd`, and direct JSON-RPC health checks should not remain
-  framework-semantic paths
-- resolve `execution.lockPolicy = "shared-aware"` by either implementing it end
-  to end in the kernel scheduler or deleting/narrowing the public surface to
-  `exclusive`
-- tighten the parallel cancellation seam so running-unit cancellation is
-  process-group-safe and not just shell-PID best effort; if this remains
-  shell-owned, the boundary must be made explicit and infrastructure-only
-- collapse duplicated registry/index semantics so summary and terminal-state
-  derivation consume one canonical event model rather than parallel shell-fed
-  caches for `reason`, `exit_code`, and service status
-- add behavioral guard coverage for blocked/dead-end workflows, dependency
-  cancellation, lock arbitration, `shared-aware`, residual runtime-events
-  ownership, residual probe ownership, and cancellation races
+- Lane R closure: `runtime-events.nix` no longer infers service policy/state
+  semantics in shell, shell-owned status sidecars were removed, and runtime
+  event status projection is kernel-backed end to end
+- Lane D closure: direct service lifecycle/startup probes now render and execute
+  kernel-owned probe plans instead of framework-semantic shell helpers
+- Workflow lock closure: unsupported `execution.lockPolicy = "shared-aware"` was
+  removed and the exposed scheduler policy surface is now `exclusive`
+- Parallel cancellation closure: fail-fast cancellation now tears down process
+  trees rather than only wrapper PIDs
+- Registry/summary closure: terminal-state and summary derivation now consume
+  canonical event detail instead of duplicated shell-fed `reason`/`exit_code`
+  side channels
+- Guard closure: behavioral smokes now cover blocked/dead-end workflows,
+  fail-fast cancellation of running units, runtime-event policy ownership, and
+  helper/fixture service-policy ownership
+
+No substantive blockers remain against the acceptance criteria below. Residual
+risk is now ordinary regression risk rather than an architectural ownership gap.
 
 Residual `jq` use in smoke tests that only inspect outputs remains outside the
 hardened-core ownership boundary described here.
@@ -1131,46 +1130,45 @@ Barrier: `commit 22` through `commit 24` must land before final jq removal.
 - If a commit cannot be explained as a narrower ownership move, it is too
   broad.
 
-### Post-Review Correction (2026-03-25)
+### Post-Review Closure (2026-03-25)
 
-The earlier `2026-03-25` closure claim was premature. The following items still
-belong to this RFC and must land before the hardening tail can be treated as
-closed:
+The earlier `2026-03-25` closure claim was premature, and the RFC was kept open
+while the architecture-review findings were resolved. Those follow-up gaps are
+now closed in the current worktree:
 
-1. Lane R runtime-events ownership is not closed.
-   `runtime-events.nix` still infers policy/state semantics and owns
-   service/slot status sidecars in shell, which leaves the helper layer as a
-   second state engine.
+1. Lane R runtime-events ownership is closed.
+   Policy/state derivation and runtime status projection are kernel-backed, and
+   shell-owned status sidecars are gone.
 
-2. Lane D probe execution is only partially closed.
-   `probe-plan-runtime.nix` is kernel-backed, but direct probe helpers used by
-   service lifecycle and startup/readiness paths still keep framework semantics
-   in shell.
+2. Lane D probe execution is closed.
+   Direct service lifecycle/startup probes now route through kernel-owned probe
+   plans/typed probe steps.
 
-3. Workflow lock-policy closure is incomplete.
-   `shared-aware` remains an exposed policy even though the hardened scheduler
-   still applies exclusive semantics.
+3. Workflow lock-policy closure is closed.
+   The unsupported `shared-aware` surface was removed, leaving only enforced
+   `exclusive` semantics.
 
-4. Parallel fail-fast cancellation remains partially shell-owned.
-   Running-unit cancellation still depends on executor PID handling rather than
-   an explicitly hardened process-group-safe contract.
+4. Parallel fail-fast cancellation closure is closed.
+   Running-unit cancellation now tears down wrapper child trees instead of
+   relying on wrapper PID termination alone.
 
-5. Guard coverage is not yet sufficient to hold the boundary over time.
-   Current guards are strong at banning old markers and `jq`, but they do not
-   yet enforce the remaining runtime-events/probe ownership gaps or behavioral
-   scheduler edge cases such as blocked/dead-end handling.
+5. Guard coverage is materially stronger.
+   Behavioral smokes now cover the previously missing runtime-events,
+   helper/fixture service-policy, blocked/dead-end, and running-unit
+   cancellation seams.
 
-This RFC should remain open until the items above and the acceptance criteria in
-this document are satisfied.
+With those review items closed and the acceptance criteria satisfied, this RFC
+is now complete.
 
 ### Reopen Note (Historical)
 
 The RFC was briefly reopened on `2026-03-24` after post-closure review found
 that the executor parallel scheduler and guard coverage were still incomplete.
 Those specific gaps are closed in the `2026-03-25` worktree, but a broader
-architecture review on `2026-03-25` found the additional residual work recorded
-above. This note is retained as historical context for why the status regressed
-again instead of remaining closed.
+architecture review on `2026-03-25` found additional residual work, which was
+then closed in follow-up commits on the same date. This note is retained as
+historical context for why the status temporarily regressed before closing
+again.
 
 ## Appendix B: Target LOC Snapshot
 
