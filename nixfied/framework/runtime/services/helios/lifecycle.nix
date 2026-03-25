@@ -60,9 +60,41 @@ let
         else
           throw "helios lifecycle: unsupported probe endpoint '${endpointName}'";
     };
+  renderProbeStep =
+    mode: step:
+    probePlanRuntime.renderProbeStep {
+      inherit
+        mode
+        step
+        ;
+      serviceName = "helios";
+      endpoints = config.resolvedEndpoints or { };
+      portExprForEndpoint =
+        endpointName:
+        if endpointName == "rpc" then
+          "$HELIOS_RPC_PORT"
+        else if endpointName == "execution" then
+          "$HELIOS_EXECUTION_PORT"
+        else
+          throw "helios lifecycle: unsupported probe endpoint '${endpointName}'";
+    };
   healthPlanBody = renderPlanBody "health" healthPlan;
   readyPlanBody = renderPlanBody "ready" readyPlan;
   readyWait = readyPlan.wait or runtimeDefaults.probes.wait;
+  startupHealthCheck = ''
+    {
+      service_source=${lib.escapeShellArg serviceSource}
+      ${renderProbeStep "health" {
+        kind = "jsonrpc";
+        endpoint = "rpc";
+        serviceLabel = "helios";
+        phaseLabel = "health";
+        successLabel = "healthy";
+        failureLabel = "unhealthy";
+        method = "eth_chainId";
+      }}
+    } >/dev/null 2>&1
+  '';
 
   runtimePrelude = ''
     ${slotEnvRuntime.loadJsonFromCommand {
@@ -126,11 +158,6 @@ let
     ${observability.mkEmitServiceEventFunction "helios"}
   '';
 
-  heliosRpcUrlExpr = probeCommands.localHttpUrlExpr "$HELIOS_RPC_PORT";
-  healthCheck = probeCommands.jsonRpcHasResultCmd {
-    urlExpr = heliosRpcUrlExpr;
-    method = "eth_chainId";
-  };
   managedLifecycle = managedServiceLifecycle.mkPidFileManagedLifecycle {
     service = "helios";
     inherit
@@ -304,7 +331,7 @@ let
       message = "helios already running pid=$PID rpc_port=$HELIOS_RPC_PORT";
     };
     startPostLaunchBody = managedServiceLifecycle.mkStartupReadinessBody {
-      probeCommand = healthCheck;
+      probeCommand = startupHealthCheck;
       serviceLabel = "helios";
       probeAttempts = runtimeDefaults.probes.startupReadiness.extendedAttempts;
       degradedWaitReason = "failed_startup_health";

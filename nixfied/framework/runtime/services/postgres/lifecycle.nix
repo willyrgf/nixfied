@@ -59,8 +59,76 @@ let
         else
           throw "postgres lifecycle: unsupported probe endpoint '${endpointName}'";
     };
+  renderProbeStep =
+    mode: step:
+    probePlanRuntime.renderProbeStep {
+      inherit
+        mode
+        step
+        ;
+      serviceName = "postgres";
+      endpoints = config.resolvedEndpoints or { };
+      portExprForEndpoint =
+        endpointName:
+        if endpointName == "primary" then
+          "$PGPORT"
+        else
+          throw "postgres lifecycle: unsupported probe endpoint '${endpointName}'";
+    };
   healthPlanBody = renderPlanBody "health" healthPlan;
   readyPlanBody = renderPlanBody "ready" readyPlan;
+  renderQuietProbeStep =
+    mode: step:
+    ''
+      {
+        service_source=${pkgs.lib.escapeShellArg serviceSource}
+        ${renderProbeStep mode step}
+      } >/dev/null 2>&1
+    '';
+  startupPgIsReadyCommand = renderQuietProbeStep "health" {
+    kind = "postgres-pg-isready";
+    endpoint = "primary";
+    serviceLabel = "postgres";
+    phaseLabel = "health";
+    successLabel = "healthy";
+    failureLabel = "unhealthy";
+    host = runtimeDefaults.hosts.localhost;
+    failureSuffix = "";
+  };
+  readyTestPgIsReadyCommand = renderQuietProbeStep "ready" {
+    kind = "postgres-pg-isready";
+    endpoint = "primary";
+    serviceLabel = "postgres";
+    phaseLabel = "readiness";
+    successLabel = "ready";
+    failureLabel = "not ready";
+    host = runtimeDefaults.hosts.localhost;
+    failureSuffix = " (pg_isready failed)";
+  };
+  readyTestMaintenanceQueryCommand = renderQuietProbeStep "ready" {
+    kind = "postgres-query";
+    endpoint = "primary";
+    serviceLabel = "postgres";
+    phaseLabel = "readiness";
+    successLabel = "ready";
+    failureLabel = "not ready";
+    host = runtimeDefaults.hosts.localhost;
+    database = "postgres";
+    query = "select 1;";
+    failureSuffix = " (maintenance query failed)";
+  };
+  readyTestDatabaseQueryCommand = renderQuietProbeStep "ready" {
+    kind = "postgres-query";
+    endpoint = "primary";
+    serviceLabel = "postgres";
+    phaseLabel = "readiness";
+    successLabel = "ready";
+    failureLabel = "not ready";
+    host = runtimeDefaults.hosts.localhost;
+    database = testDatabase;
+    query = "select 1;";
+    failureSuffix = " (database query failed)";
+  };
   mkWrappedScript =
     {
       name,
@@ -258,12 +326,8 @@ let
       fi
       ensure_config_port "$PGDATA/postgresql.conf"
 
-      if ${
-        probeCommands.pgIsReadyCmd {
-          inherit postgres;
-          portExpr = "$PGPORT";
-        }
-      } then
+      if ${startupPgIsReadyCommand}
+      then
         # Verify the running instance is ours by checking PGDATA
         if [ -f "$PGDATA/postmaster.pid" ]; then
           RUN_PID=$(head -1 "$PGDATA/postmaster.pid" 2>/dev/null || true)
@@ -303,12 +367,8 @@ let
       ${postgres}/bin/pg_ctl -D "$PGDATA" -l "$PGDATA/postgres.log" -o "-p $PGPORT -k $PGSOCKET_DIR" start
 
       for i in $(seq 1 60); do
-        if ${
-          probeCommands.pgIsReadyCmd {
-            inherit postgres;
-            portExpr = "$PGPORT";
-          }
-        } then
+        if ${startupPgIsReadyCommand}
+        then
           RUN_PID=$(head -1 "$PGDATA/postmaster.pid" 2>/dev/null || true)
           emit_service_event service_ready ready --pid "$RUN_PID" --log-path "$PGDATA/postgres.log"
           log_ok "PostgreSQL ready on port $PGPORT"
@@ -349,12 +409,7 @@ let
         fi
 
         for i in $(seq 1 60); do
-          if ${
-            probeCommands.pgIsReadyCmd {
-              inherit postgres;
-              portExpr = "$PGPORT";
-            }
-          }
+          if ${startupPgIsReadyCommand}
           then
             sleep 0.5
           else
@@ -385,12 +440,8 @@ let
     inherit loggingPrelude;
     runtimePrelude = pgRuntimePrelude database;
     runningStateBody = ''
-      if ${
-        probeCommands.pgIsReadyCmd {
-          inherit postgres;
-          portExpr = "$PGPORT";
-        }
-      } then
+      if ${startupPgIsReadyCommand}
+      then
         RUNNING=true
       fi
 
@@ -439,45 +490,28 @@ let
 
   readyTest = mkPgScript {
     name = "postgres-ready-test";
-    defaultDb = testDatabase;
     body = ''
-      export PGDATABASE="''${PGDATABASE:-${testDatabase}}"
+      READY_TEST_DATABASE=${pkgs.lib.escapeShellArg testDatabase}
 
-      if ! ${
-        probeCommands.pgIsReadyCmd {
-          inherit postgres;
-          portExpr = "$PGPORT";
-        }
-      } then
-        log_error "PostgreSQL not ready for test db port=$PGPORT database=$PGDATABASE (pg_isready failed)"
+      if ! ${readyTestPgIsReadyCommand}
+      then
+        log_error "PostgreSQL not ready for test db port=$PGPORT database=$READY_TEST_DATABASE (pg_isready failed)"
         exit 1
       fi
 
-      if ! ${
-        probeCommands.psqlQueryCmd {
-          inherit postgres;
-          portExpr = "$PGPORT";
-          databaseExpr = "postgres";
-          query = "select 1;";
-        }
-      } >/dev/null 2>&1; then
-        log_error "PostgreSQL not ready for test db port=$PGPORT database=$PGDATABASE (maintenance query failed)"
+      if ! ${readyTestMaintenanceQueryCommand}
+      then
+        log_error "PostgreSQL not ready for test db port=$PGPORT database=$READY_TEST_DATABASE (maintenance query failed)"
         exit 1
       fi
 
-      if ${
-        probeCommands.psqlQueryCmd {
-          inherit postgres;
-          portExpr = "$PGPORT";
-          databaseExpr = "$PGDATABASE";
-          query = "select 1;";
-        }
-      } >/dev/null 2>&1; then
-        log_ok "PostgreSQL ready for test db port=$PGPORT database=$PGDATABASE"
+      if ${readyTestDatabaseQueryCommand}
+      then
+        log_ok "PostgreSQL ready for test db port=$PGPORT database=$READY_TEST_DATABASE"
         exit 0
       fi
 
-      log_error "PostgreSQL not ready for test db port=$PGPORT database=$PGDATABASE (database query failed)"
+      log_error "PostgreSQL not ready for test db port=$PGPORT database=$READY_TEST_DATABASE (database query failed)"
       exit 1
     '';
   };

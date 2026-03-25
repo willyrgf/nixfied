@@ -63,8 +63,42 @@ let
         else
           throw "reth lifecycle: unsupported probe endpoint '${endpointName}'";
     };
+  renderProbeStep =
+    mode: step:
+    probePlanRuntime.renderProbeStep {
+      inherit
+        mode
+        step
+        ;
+      serviceName = "reth";
+      endpoints = config.resolvedEndpoints or { };
+      portExprForEndpoint =
+        endpointName:
+        if endpointName == "http" then
+          "$RETH_HTTP_PORT"
+        else if endpointName == "ws" then
+          "$RETH_WS_PORT"
+        else if endpointName == "auth" then
+          "$RETH_AUTH_PORT"
+        else
+          throw "reth lifecycle: unsupported probe endpoint '${endpointName}'";
+    };
   healthPlanBody = renderPlanBody "health" healthPlan;
   readyPlanBody = renderPlanBody "ready" readyPlan;
+  startupHealthCheck = ''
+    {
+      service_source=${lib.escapeShellArg serviceSource}
+      ${renderProbeStep "health" {
+        kind = "jsonrpc";
+        endpoint = "http";
+        serviceLabel = "reth";
+        phaseLabel = "health";
+        successLabel = "healthy";
+        failureLabel = "unhealthy";
+        method = "web3_clientVersion";
+      }}
+    } >/dev/null 2>&1
+  '';
   emitHelper = observability.mkEmitServiceEventFunction "reth";
 
   runtimePrelude = ''
@@ -115,10 +149,6 @@ let
     ${emitHelper}
   '';
 
-  healthCheck = probeCommands.jsonRpcHasResultCmd {
-    urlExpr = probeCommands.localHttpUrlExpr "$RETH_HTTP_PORT";
-    method = "web3_clientVersion";
-  };
   managedLifecycle = managedServiceLifecycle.mkPidFileManagedLifecycle {
     service = "reth";
     inherit
@@ -196,7 +226,7 @@ let
       message = "reth already running pid=$PID http_port=$RETH_HTTP_PORT";
     };
     startPostLaunchBody = managedServiceLifecycle.mkStartupReadinessBody {
-      probeCommand = healthCheck;
+      probeCommand = startupHealthCheck;
       serviceLabel = "reth";
       probeAttempts = runtimeDefaults.probes.startupReadiness.extendedAttempts;
       degradedWaitReason = "failed_readiness";

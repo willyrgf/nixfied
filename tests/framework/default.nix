@@ -606,6 +606,10 @@ let
       inherit pkgs;
     };
 
+    "postgres-kernel-probe-lifecycle-smoke" = import ./postgres-kernel-probe-lifecycle-smoke.nix {
+      inherit pkgs;
+    };
+
     "registry-events-contract" = import ./registry-events-contract.nix {
       inherit
         pkgs

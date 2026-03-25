@@ -59,8 +59,39 @@ let
         else
           throw "nginx lifecycle: unsupported probe endpoint '${endpointName}'";
     };
+  renderProbeStep =
+    mode: step:
+    probePlanRuntime.renderProbeStep {
+      inherit
+        mode
+        step
+        ;
+      serviceName = "nginx";
+      endpoints = config.resolvedEndpoints or { };
+      portExprForEndpoint =
+        endpointName:
+        if endpointName == "http" then
+          "$HTTP_PORT"
+        else if endpointName == "https" then
+          "$HTTPS_PORT"
+        else
+          throw "nginx lifecycle: unsupported probe endpoint '${endpointName}'";
+    };
   healthPlanBody = renderPlanBody "health" healthPlan;
   readyPlanBody = renderPlanBody "ready" readyPlan;
+  startupProbeCommand = ''
+    {
+      service_source=${pkgs.lib.escapeShellArg serviceSource}
+      ${renderProbeStep "health" {
+        kind = "tcp";
+        endpoint = "http";
+        serviceLabel = "nginx";
+        phaseLabel = "health";
+        successLabel = "healthy";
+        failureLabel = "unhealthy";
+      }}
+    } >/dev/null 2>&1
+  '';
   emitHelper = observability.mkEmitServiceEventFunction "nginx";
   runtimePrelude = ''
     ${slotEnvRuntime.loadJsonFromCommand {
@@ -177,7 +208,7 @@ let
       message = "nginx already running pid=$PID http_port=$HTTP_PORT";
     };
     startPostLaunchBody = serviceScripts.mkStartupReadinessBody {
-      probeCommand = probeCommands.tcpOpenCmd { portExpr = "$HTTP_PORT"; };
+      probeCommand = startupProbeCommand;
       serviceLabel = "nginx";
       degradedWaitReason = "failed_readiness";
       degradedLastError = "nginx failed health check during startup";
