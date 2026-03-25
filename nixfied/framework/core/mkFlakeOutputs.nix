@@ -70,7 +70,25 @@ let
 
   projectRootAbs = toAbsString projectRoot;
   frameworkRootAbs = builtins.toString frameworkRoot;
+  frameworkRootRelSuffix =
+    if frameworkRootAbs == projectRootAbs then
+      ""
+    else if lib.hasPrefix "${projectRootAbs}/" frameworkRootAbs then
+      "/${lib.removePrefix "${projectRootAbs}/" frameworkRootAbs}"
+    else
+      "";
+  canRelocateFrameworkRoot =
+    frameworkRootAbs == projectRootAbs || lib.hasPrefix "${projectRootAbs}/" frameworkRootAbs;
   nixpkgsPathAbs = builtins.toString pkgs.path;
+  launcherRootResolverScript = ''
+    can_relocate_framework_root=${lib.escapeShellArg (if canRelocateFrameworkRoot then "1" else "")}
+    flake_root="$(find_flake_root)"
+    project_root_for_launcher="$flake_root"
+    framework_root_for_launcher=${lib.escapeShellArg frameworkRootAbs}
+    if [ -n "''${can_relocate_framework_root-}" ]; then
+      framework_root_for_launcher="$flake_root${lib.escapeShellArg frameworkRootRelSuffix}"
+    fi
+  '';
 
   encodeModuleSpec =
     value:
@@ -888,21 +906,21 @@ let
                   fi
                 fi
 
-                flake_root="$(find_flake_root)"
+                ${launcherRootResolverScript}
 
         selection_cmd=(
           "${pkgs.nix}/bin/nix-build"
           "--no-out-link"
-          "${frameworkRootAbs}/framework/launch/run-selected-app.nix"
+          "$framework_root_for_launcher/framework/launch/run-selected-app.nix"
           "--argstr"
-          "system"
+                  "system"
                   ${lib.escapeShellArg system}
                   "--argstr"
                   "projectRoot"
-                  ${lib.escapeShellArg projectRootAbs}
+                  "$project_root_for_launcher"
                   "--argstr"
                   "frameworkRoot"
-                  ${lib.escapeShellArg frameworkRootAbs}
+                  "$framework_root_for_launcher"
                   "--argstr"
                   "nixpkgsPath"
                   ${lib.escapeShellArg nixpkgsPathAbs}
@@ -963,21 +981,21 @@ let
           exit 3
         }
 
-        flake_root="$(find_flake_root)"
+        ${launcherRootResolverScript}
 
         runtime_cmd=(
           "${pkgs.nix}/bin/nix-build"
           "--no-out-link"
-          "${frameworkRootAbs}/framework/launch/run-runtime-app.nix"
+          "$framework_root_for_launcher/framework/launch/run-runtime-app.nix"
           "--argstr"
           "system"
           ${lib.escapeShellArg system}
           "--argstr"
           "projectRoot"
-          ${lib.escapeShellArg projectRootAbs}
+          "$project_root_for_launcher"
           "--argstr"
           "frameworkRoot"
-          ${lib.escapeShellArg frameworkRootAbs}
+          "$framework_root_for_launcher"
           "--argstr"
           "nixpkgsPath"
           ${lib.escapeShellArg nixpkgsPathAbs}

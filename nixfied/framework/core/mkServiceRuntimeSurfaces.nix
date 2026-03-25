@@ -179,7 +179,9 @@ let
         exit 3
       fi
 
-      if [ -z "$runtime_dir_base" ] || [[ "$runtime_dir_base" == *"$"* ]]; then
+      if [ -n "''${NIXFIED_RUNTIME_DIR_BASE+x}" ]; then
+        runtime_dir_base="$NIXFIED_RUNTIME_DIR_BASE"
+      elif [ -z "$runtime_dir_base" ] || [[ "$runtime_dir_base" == *"$"* ]]; then
         runtime_dir_base="''${NIXFIED_RUNTIME_DIR_BASE:-$runtime_dir_base}"
       fi
 

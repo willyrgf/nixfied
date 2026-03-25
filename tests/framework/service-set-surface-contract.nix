@@ -5,7 +5,7 @@ let
     system = pkgs.system;
   };
   shellHelpers = import ./lib/shell-helpers.nix { inherit pkgs; };
-  repoRoot = builtins.toString ../..;
+  repoRoot = ../..;
 
   frameworkOutputs = frameworkLib.mkFlakeOutputs {
     projectRoot = ../..;
@@ -14,15 +14,19 @@ let
     localOverrides = [ ];
   };
 in
-pkgs.runCommand "service-set-surface-contract" { } ''
+pkgs.runCommand "service-set-surface-contract" { src = repoRoot; } ''
   set -euo pipefail
   ${shellHelpers.shellPrelude}
 
+  workspace_tmp="$(${pkgs.coreutils}/bin/mktemp -d "''${TMPDIR:-/tmp}/nixfied-service-set-surface-contract.XXXXXX")"
+  trap 'rm -rf "$workspace_tmp"' EXIT
+  export TMPDIR="$workspace_tmp"
   EXPORT_APP="${frameworkOutputs.apps."services-export".program}"
   START_APP="${frameworkOutputs.apps."services-start".program}"
   INTROSPECT_APP="${frameworkOutputs.apps.introspect.program}"
   JQ=${pkgs.jq}/bin/jq
-  export NIXFIED_FLAKE_ROOT=${pkgs.lib.escapeShellArg repoRoot}
+  export NIXFIED_FLAKE_ROOT="$src"
+  export NIXFIED_RUNTIME_DIR_BASE="$TMPDIR/runtime"
   cd "$NIXFIED_FLAKE_ROOT"
 
   "$EXPORT_APP" -- --format json > "$TMPDIR/service-set.json"

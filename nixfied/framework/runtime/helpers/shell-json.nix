@@ -1,7 +1,6 @@
 # Shared shell JSON helpers for runtime-generated scripts.
 {
-}
-:
+}:
 ''
   json_quote_string() {
     local value="$1"
@@ -14,7 +13,7 @@
     value="''${value//$'\f'/\\f}"
     value="''${value//$'\b'/\\b}"
 
-    printf '"'"'%s'"'"' "$value"
+    printf '"%s"' "$value"
   }
 
   json_string_or_null() {
