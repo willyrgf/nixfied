@@ -52,7 +52,7 @@ This split is a real contract change for downstream code that previously read de
 
 ## User-Visible Changes
 
-- Default registry state is now workspace-scoped: `/tmp/nixfied-runtime/<projectId>/<workspaceId>/registry`.
+- Default registry state is now workspace-scoped: `${NIX_BUILD_TOP:-${XDG_CACHE_HOME:-$HOME/.cache}}/nixfied-runtime/<projectId>/<workspaceId>/registry`.
 - Default artifacts are now workspace-scoped: `/tmp/nixfied-artifacts-<projectId>-<workspaceId>`.
 - Ephemeral workflows now propagate isolated `HOME`, `TMPDIR`, `XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_CACHE_HOME`, `REGISTRY_ROOT`, `CI_ARTIFACTS_DIR`, and `NIXFIED_SERVICE_ROOT`.
 - Ephemeral runs preserve relative caller subdirectories inside the copied source tree instead of collapsing back to project root.

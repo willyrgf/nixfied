@@ -30,7 +30,8 @@ let
     else if project ? state && project.state ? registryRoot then
       project.state.registryRoot
     else
-      processCfg.registryRoot or "/tmp/nixfied-runtime/${projectId}/registry";
+      processCfg.registryRoot
+        or "\${NIX_BUILD_TOP:-\${XDG_CACHE_HOME:-$HOME/.cache}}/nixfied-runtime/${projectId}/registry";
   baseDirExpr =
     if project ? state && project.state ? policy && project.state.policy ? runtimeBase then
       project.state.policy.runtimeBase
@@ -62,6 +63,11 @@ let
     set -euo pipefail
 
     REGISTRY_ROOT_DEFAULT="${registryRoot}"
+    if [ -n "''${NIXFIED_RUNTIME_REGISTRY_ROOT+x}" ]; then
+      REGISTRY_ROOT_DEFAULT="$NIXFIED_RUNTIME_REGISTRY_ROOT"
+    elif [ -n "''${NIXFIED_RUNTIME_DIR_BASE+x}" ]; then
+      REGISTRY_ROOT_DEFAULT="$NIXFIED_RUNTIME_DIR_BASE/registry"
+    fi
     REGISTRY_ROOT="''${REGISTRY_ROOT:-$REGISTRY_ROOT_DEFAULT}"
     PROJECT_ID="${projectId}"
     BASE_DIR_DEFAULT="${baseDirExpr}"

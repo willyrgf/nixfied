@@ -68,13 +68,13 @@ in
   roots = {
     runtimeBase = lib.mkOption {
       type = t.str;
-      default = "/tmp/nixfied-runtime/{projectId}/{workspaceId}/runtime";
+      default = "\${NIX_BUILD_TOP:-\${XDG_CACHE_HOME:-$HOME/.cache}}/nixfied-runtime/{projectId}/{workspaceId}/runtime";
       description = "Template for the runtime base root. Supports {projectId} and {workspaceId}.";
     };
 
     registryRoot = lib.mkOption {
       type = t.str;
-      default = "/tmp/nixfied-runtime/{projectId}/{workspaceId}/registry";
+      default = "\${NIX_BUILD_TOP:-\${XDG_CACHE_HOME:-$HOME/.cache}}/nixfied-runtime/{projectId}/{workspaceId}/registry";
       description = "Template for the registry root. Supports {projectId} and {workspaceId}.";
     };
 

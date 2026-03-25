@@ -111,8 +111,8 @@ State policy defaults:
 
 - `model.state.policy.workspaceId` is derived from project root and used to isolate default runtime state per workspace.
 - Default policy id and kind are `workspace-scoped`.
-- Default runtime base is `/tmp/nixfied-runtime/<projectId>/<workspaceId>/runtime`.
-- Default registry root is `/tmp/nixfied-runtime/<projectId>/<workspaceId>/registry`.
+- Default runtime base is `${NIX_BUILD_TOP:-${XDG_CACHE_HOME:-$HOME/.cache}}/nixfied-runtime/<projectId>/<workspaceId>/runtime`.
+- Default registry root is `${NIX_BUILD_TOP:-${XDG_CACHE_HOME:-$HOME/.cache}}/nixfied-runtime/<projectId>/<workspaceId>/registry`.
 - Default artifacts root is `/tmp/nixfied-artifacts-<projectId>-<workspaceId>`.
 - If `REGISTRY_ROOT` is explicitly overridden and artifacts still use the legacy default, orchestrator resolves artifacts under `$REGISTRY_ROOT/artifacts`.
 

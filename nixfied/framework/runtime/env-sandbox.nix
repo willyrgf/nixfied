@@ -423,11 +423,13 @@ in
       project_ephemeral_flag_var="''${PROJECT_ID_UPPER}_EPHEMERAL"
       project_ephemeral_root_var="''${PROJECT_ID_UPPER}_EPHEMERAL_ROOT"
       ephemeral_root="''${!project_ephemeral_root_var:-}"
-      runtime_scope_override="''${NIXFIED_RUNTIME_DIR_SCOPE_OVERRIDE:-}"
+      runtime_scope_override="''${NIXFIED_RUNTIME_DIR_SCOPE:-''${NIXFIED_RUNTIME_DIR_SCOPE_OVERRIDE:-}}"
       log_level_default="$ENV_SANDBOX_STATIC_LOG_LEVEL_DEFAULT"
       output_mode_default="$ENV_SANDBOX_STATIC_OUTPUT_MODE_DEFAULT"
 
-      if [ -z "$runtime_dir_base" ] || [[ "$runtime_dir_base" == *"$"* ]]; then
+      if [ -n "''${NIXFIED_RUNTIME_DIR_BASE+x}" ]; then
+        runtime_dir_base="$NIXFIED_RUNTIME_DIR_BASE"
+      elif [ -z "$runtime_dir_base" ] || [[ "$runtime_dir_base" == *"$"* ]]; then
         runtime_dir_base="$RUNTIME_DIR_BASE_DEFAULT"
       fi
       if [ -n "$runtime_scope_override" ]; then

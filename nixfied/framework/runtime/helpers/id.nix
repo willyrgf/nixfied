@@ -7,7 +7,11 @@
 
 let
   projectId = (project.project or { }).id or "project";
-  counterRoot = "/tmp/nixfied-runtime/${projectId}/id-counters";
+  counterRoot =
+    if project ? directories && project.directories ? base then
+      "${project.directories.base}/id-counters"
+    else
+      "\${NIX_BUILD_TOP:-\${XDG_CACHE_HOME:-$HOME/.cache}}/nixfied-runtime/${projectId}/id-counters";
   resolvedLoggingPrelude =
     if loggingPrelude != null && loggingPrelude != "" then
       loggingPrelude
