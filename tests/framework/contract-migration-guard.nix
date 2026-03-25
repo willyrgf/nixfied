@@ -136,12 +136,29 @@ assert pkgs.lib.hasInfix "nixfied-kernel task execution-order" executorSource;
 assert pkgs.lib.hasInfix "nixfied-kernel workflow serial-init" executorSource;
 assert pkgs.lib.hasInfix "nixfied-kernel workflow serial-next" executorSource;
 assert pkgs.lib.hasInfix "nixfied-kernel workflow serial-transition" executorSource;
+assert pkgs.lib.hasInfix "nixfied-kernel workflow parallel-init" executorSource;
+assert pkgs.lib.hasInfix "nixfied-kernel workflow parallel-next" executorSource;
+assert pkgs.lib.hasInfix "nixfied-kernel workflow parallel-transition" executorSource;
 assert !(pkgs.lib.hasInfix "done < <(task_needs \"$current_task\")" executorSource);
 assert !(pkgs.lib.hasInfix "done < <(task_soft_needs \"$current_task\")" executorSource);
 assert pkgs.lib.hasInfix "nixfied-kernel summary collect-steps" executorSource;
 assert !(pkgs.lib.hasInfix "workflow_step_status() {" executorSource);
 assert !(pkgs.lib.hasInfix "workflow_step_records_tsv() {" executorSource);
 assert !(pkgs.lib.hasInfix "workflow_peak_workers() {" executorSource);
+assert !(pkgs.lib.hasInfix "mark_unit_canceled() {" executorSource);
+assert !(pkgs.lib.hasInfix "cancel_pending_dependents() {" executorSource);
+assert !(pkgs.lib.hasInfix "cancel_pending_units() {" executorSource);
+assert !(pkgs.lib.hasInfix "unit_has_lock_conflict() {" executorSource);
+assert !(pkgs.lib.hasInfix "assign_unit_locks() {" executorSource);
+assert !(pkgs.lib.hasInfix "release_unit_locks() {" executorSource);
+assert !(pkgs.lib.hasInfix "next_ready_unit() {" executorSource);
+assert !(pkgs.lib.hasInfix "start_unit() {" executorSource);
+assert !(pkgs.lib.hasInfix "cancel_running_units() {" executorSource);
+assert !(pkgs.lib.hasInfix "UNIT_NEEDS_LEFT" executorSource);
+assert !(pkgs.lib.hasInfix "UNIT_STATE" executorSource);
+assert !(pkgs.lib.hasInfix "UNIT_DEPENDENTS" executorSource);
+assert !(pkgs.lib.hasInfix "UNIT_LOCKS" executorSource);
+assert !(pkgs.lib.hasInfix "LOCK_OWNER" executorSource);
 assert !(pkgs.lib.hasInfix "blocked_tasks_by_dependency" executorSource);
 assert !(pkgs.lib.hasInfix "blocked_tasks_reason_by_dependency" executorSource);
 assert pkgs.lib.hasInfix "nixfied-kernel run-record read" orchestratorRuntimeSource;
@@ -153,5 +170,5 @@ assert !(pkgs.lib.hasInfix "while IFS=$'\\t' read -r seq ts_epoch ts event_run_i
 assert !(pkgs.lib.hasInfix "python3" readyHeliosSyncGateSource);
 assert !(pkgs.lib.hasInfix "http.server" readyHeliosSyncGateSource);
 pkgs.runCommand "contract-migration-guard" { } ''
-  echo "OK: hardening guards enforce deleted validators/CUE/run-registry/static service-surface/apps module, kernel-owned machine output/probe execution/executor task planning/executor serial scheduling/executor summary/orchestrator reads, jq-free runtime/build-check seams, no authored nixfied.apps, no Python responders in framework/runtime tests, and no deprecated kernel seams in framework runtime or kernel source" > "$out"
+  echo "OK: hardening guards enforce deleted validators/CUE/run-registry/static service-surface/apps module, kernel-owned machine output/probe execution/executor task planning/executor serial scheduling/executor parallel scheduling/executor summary/orchestrator reads, jq-free runtime/build-check seams, no authored nixfied.apps, no Python responders in framework/runtime tests, and no deprecated kernel seams in framework runtime or kernel source" > "$out"
 ''

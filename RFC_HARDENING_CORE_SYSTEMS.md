@@ -1,8 +1,8 @@
 # RFC: Harden Core Systems
 
-Status: reopened
+Status: closed
 
-Last updated: 2026-03-24
+Last updated: 2026-03-25
 
 ## Purpose
 
@@ -20,12 +20,12 @@ system is still soft because:
 This RFC defines which pieces of code must be replaced, what they must be
 replaced with, and which layers should remain in place.
 
-## Status Update (2026-03-24)
+## Status Update (2026-03-25)
 
-As of the current `2026-03-24` worktree, the hardening work is only partially
-closed. The compiler/model/API consolidation is landed, the kernel owns the
-validation and runtime artifact/state-writing paths, and several closure items
-previously marked done are now confirmed to remain open in substance.
+As of the current `2026-03-25` worktree, the hardening work is closed in
+substance. The compiler/model/API consolidation is landed, the kernel owns the
+validation and runtime artifact/state-writing paths, and the previously open
+executor parallel-scheduler and guard-enforcement tail is now closed.
 
 Landed:
 
@@ -49,6 +49,10 @@ Landed:
   planning, workflow serial scheduling, and workflow summary step aggregation
   through kernel-backed plan/state commands instead of recursive shell graph
   walks and shell summary reducers
+- Lane R final closure: `executor.nix` now routes workflow parallel scheduling
+  through kernel-backed plan/state commands instead of shell-owned multi-worker
+  ready/running queues, lock arbitration, fail-fast cancellation bookkeeping,
+  and parallel unit transition state
 - Lane D closure: `probe-plan-runtime.nix` now routes runtime probe execution
   through kernel-owned `probe evaluate` plans, and the kernel executes probe
   kinds end to end instead of shell-rendered probe bodies
@@ -61,18 +65,10 @@ Landed:
   hardening guard now covers the probe-plan runtime and the
   orchestrator run-record/terminal-state seam, and the related contract tests
   assert the kernel-backed boundary
-
-Still open:
-
-- Lane R thin-shell closure is not complete. `executor.nix` still owns
-  the workflow parallel scheduler state engine, including multi-worker
-  ready/running queue management, lock arbitration, fail-fast cancellation of
-  running units, and parallel unit transition bookkeeping.
-- Lane G guard enforcement is not complete. The guard is `jq`/CUE/Python-free
-  oriented, and it now covers probe execution, task dependency planning,
-  executor serial scheduling, executor summary aggregation, and orchestrator
-  reads, but it does not yet fail on the remaining parallel scheduler
-  semantics that still sit inside the hardened-core runtime boundary.
+- Lane G final closure: the hardening guard and executor contract now fail if
+  executor-owned parallel scheduler helpers, lock/state maps, or equivalent
+  pre-kernel parallel scheduling markers reappear inside the hardened-core
+  runtime boundary
 
 Residual `jq` use in smoke tests that only inspect outputs remains outside the
 hardened-core ownership boundary described here.
@@ -1100,9 +1096,9 @@ Barrier: `commit 22` through `commit 24` must land before final jq removal.
 - If a commit cannot be explained as a narrower ownership move, it is too
   broad.
 
-### Closure Note (2026-03-24)
+### Closure Note (2026-03-25)
 
-The short serial finish described earlier is complete:
+The hardening tail described in this RFC is complete:
 
 1. Lane R shell JSON removal is landed.
    `executor.nix`, `orchestrator.nix`, and `runtime-events.nix` no longer
@@ -1120,30 +1116,19 @@ The short serial finish described earlier is complete:
    UTC timestamps.
 
 5. Lane G final cleanup is landed for the hardened-core/build-check boundary.
-   Framework build-check paths are `jq`-free and the guard enforces that seam.
+   Framework build-check paths are `jq`-free and the guard enforces that seam,
+   including the final executor parallel-scheduler boundary.
 
 6. The RFC is now closed.
    Any future follow-up should be treated as new work, not as an extension of
    the open hardening tail recorded by this document.
 
-### Reopen Note (2026-03-24)
+### Reopen Note (Historical)
 
-The closure note above is preserved as historical context, but it is no longer
-accurate for the current worktree.
-
-Post-closure review found that:
-
-1. Lane R thin-wrapper reduction is incomplete.
-   The executor path still retains shell-owned parallel workflow scheduler
-   semantics beyond env/path/process/signal staging.
-
-2. Lane G guard enforcement is incomplete.
-   The guard does not yet fail on the remaining executor-owned shell parallel
-   scheduler semantics that this RFC intended to prohibit inside the
-   hardened-core runtime boundary.
-
-The RFC is therefore reopened until those items are implemented and the guard
-and tests enforce the final boundary in substance rather than by status text.
+The RFC was briefly reopened on `2026-03-24` after post-closure review found
+that the executor parallel scheduler and guard coverage were still incomplete.
+Those gaps are closed in the `2026-03-25` worktree; this note is retained only
+as historical context for why the status briefly regressed.
 
 ## Appendix B: Target LOC Snapshot
 

@@ -216,6 +216,7 @@ let
                   resolvedSelectionIndex.workflowClosureServicesById.${runnerWorkflowId} or [ ]
                 else
                   [ ];
+              produces = unit.produces or { };
               selectedServices = builtins.sort builtins.lessThan (
                 lib.unique (
                   unitRequiredServices
@@ -235,6 +236,10 @@ let
               whenEnvPresent = when.envPresent or [ ];
               whenEnvEquals = when.envEquals or { };
               selectedServicesCsv = lib.concatStringsSep "," selectedServices;
+              producesJson = builtins.toJSON {
+                artifacts = produces.artifacts or [ ];
+                stateKeys = produces.stateKeys or [ ];
+              };
             }
           ) workflowPlan;
         }
@@ -1452,176 +1457,28 @@ EOF
         local max_workers
         local lock_policy
         local workflow_status=0
-        local stop_scheduling=0
-        local completed_count=0
-        local running_count=0
+        local skipped_services_file=""
+        local state_file=""
+        local action_line=""
+        local action_kind=""
+        local unit_name=""
+        local unit_task=""
+        local field4=""
+        local field5=""
+        local field6=""
+        local field7=""
+        local detail_json=""
+        local pid=""
+        local had_cancel_signals=0
+        local done_pid=""
+        local wait_rc=0
+        local done_unit=""
 
-        local -a unit_names
-        unit_names=()
-
-        local -A UNIT_JSON
-        local -A UNIT_TASK
-        local -A UNIT_NEEDS_LEFT
-        local -A UNIT_STATE
-        local -A UNIT_DEPENDENTS
-        local -A UNIT_LOCKS
         local -A UNIT_PID
         local -A PID_UNIT
-        local -A LOCK_OWNER
-        local -A CANCEL_REQUESTED
-
-        mark_unit_canceled() {
-          local unit_name="$1"
-          local reason="$2"
-          local extra_key="''${3:-}"
-          local extra_value="''${4:-}"
-          local current_state
-          local detail_json
-
-          current_state="''${UNIT_STATE[$unit_name]:-pending}"
-          if [ "$current_state" != "pending" ] && [ "$current_state" != "ready" ]; then
-            return 0
-          fi
-
-          if [ -n "$extra_key" ]; then
-            detail_json="$(event_detail_reason_key_value_json "$reason" "$extra_key" "$extra_value")"
-          else
-            detail_json="$(event_detail_reason_json "$reason")"
-          fi
-
-          append_event "$run_id" "$workflow_id" "''${UNIT_TASK[$unit_name]}" "canceled" "$detail_json" "$reason"
-          UNIT_STATE[$unit_name]="canceled"
-          completed_count=$((completed_count + 1))
-        }
-
-        cancel_pending_dependents() {
-          local source_unit="$1"
-          local reason="$2"
-          local -a queue
-          local current
-          local dependent
-          queue=("$source_unit")
-
-          while [ "''${#queue[@]}" -gt 0 ]; do
-            current="''${queue[0]}"
-            queue=("''${queue[@]:1}")
-            for dependent in ''${UNIT_DEPENDENTS[$current]:-}; do
-              local before_state
-              before_state="''${UNIT_STATE[$dependent]:-pending}"
-              mark_unit_canceled "$dependent" "$reason" "dependency" "$current"
-              if [ "$before_state" = "pending" ] || [ "$before_state" = "ready" ]; then
-                queue+=("$dependent")
-              fi
-            done
-          done
-        }
-
-        cancel_pending_units() {
-          local reason="$1"
-          local unit_name
-          for unit_name in "''${unit_names[@]}"; do
-            mark_unit_canceled "$unit_name" "$reason"
-          done
-        }
-
-        unit_has_lock_conflict() {
-          local unit_name="$1"
-          local lock
-          local owner
-          for lock in ''${UNIT_LOCKS[$unit_name]:-}; do
-            owner="''${LOCK_OWNER[$lock]:-}"
-            if [ -n "$owner" ] && [ "$owner" != "$unit_name" ]; then
-              return 0
-            fi
-          done
-          return 1
-        }
-
-        assign_unit_locks() {
-          local unit_name="$1"
-          local lock
-          for lock in ''${UNIT_LOCKS[$unit_name]:-}; do
-            LOCK_OWNER[$lock]="$unit_name"
-          done
-        }
-
-        release_unit_locks() {
-          local unit_name="$1"
-          local lock
-          for lock in ''${UNIT_LOCKS[$unit_name]:-}; do
-            if [ "''${LOCK_OWNER[$lock]:-}" = "$unit_name" ]; then
-              unset "LOCK_OWNER[$lock]"
-            fi
-          done
-        }
-
-        next_ready_unit() {
-          local unit_name
-          for unit_name in "''${unit_names[@]}"; do
-            if [ "''${UNIT_STATE[$unit_name]:-pending}" != "ready" ]; then
-              continue
-            fi
-            if unit_has_lock_conflict "$unit_name"; then
-              continue
-            fi
-            printf '%s' "$unit_name"
-            return 0
-          done
-          return 1
-        }
-
-        start_unit() {
-          local unit_name="$1"
-          local unit_task
-          local detail_json
-          local pid
-          local unit_selected_services_csv
-
-          unit_task="''${UNIT_TASK[$unit_name]}"
-          unit_selected_services_csv="$(workflow_unit_selected_services_csv "''${UNIT_JSON[$unit_name]}")"
-          detail_json="$(event_detail_mode_json "task")"
-          append_event "$run_id" "$workflow_id" "$unit_task" "queued" "$detail_json"
-          append_event "$run_id" "$workflow_id" "$unit_task" "running" "$detail_json"
-
-          if [ "''${#passthrough_args[@]}" -gt 0 ]; then
-            (
-              NIXFIED_TASK_ID="$unit_task" NIXFIED_PARENT_WORKFLOW_ID="$workflow_id" NIXFIED_SELECTED_SERVICES_CSV="$unit_selected_services_csv" execute_task_body "$unit_task" "''${passthrough_args[@]}"
-            ) &
-          else
-            (
-              NIXFIED_TASK_ID="$unit_task" NIXFIED_PARENT_WORKFLOW_ID="$workflow_id" NIXFIED_SELECTED_SERVICES_CSV="$unit_selected_services_csv" execute_task_body "$unit_task"
-            ) &
-          fi
-          pid="$!"
-
-          UNIT_STATE[$unit_name]="running"
-          UNIT_PID[$unit_name]="$pid"
-          PID_UNIT[$pid]="$unit_name"
-          CANCEL_REQUESTED[$unit_name]=0
-          assign_unit_locks "$unit_name"
-          running_count=$((running_count + 1))
-        }
-
-        cancel_running_units() {
-          local pid
-          local unit_name
-
-          for pid in "''${!PID_UNIT[@]}"; do
-            unit_name="''${PID_UNIT[$pid]:-}"
-            if [ -z "$unit_name" ]; then
-              continue
-            fi
-            CANCEL_REQUESTED[$unit_name]=1
-            kill -TERM "$pid" 2>/dev/null || true
-          done
-
-          sleep "$NIXFIED_RETRY_INTERVAL_DEFAULT"
-          for pid in "''${!PID_UNIT[@]}"; do
-            if kill -0 "$pid" 2>/dev/null; then
-              kill -KILL "$pid" 2>/dev/null || true
-            fi
-          done
-        }
+        local -A UNIT_TASK
+        local -A UNIT_PRODUCES_JSON
+        local -A UNIT_CANCEL_REQUESTED
 
         if max_workers="$(resolve_effective_max_workers "$workflow_id")"; then
           :
@@ -1633,100 +1490,151 @@ EOF
           echo "WARN: lockPolicy=shared-aware uses exclusive semantics in workflow parallel runner"
         fi
 
-        while IFS= read -r unit_json; do
-          local unit_name
-          local unit_task
-          local needs_count
-          local lock_list
+        skipped_services_file="$(mktemp "''${TMPDIR:-/tmp}/nixfied-workflow-parallel-skipped.XXXXXX")" || {
+          echo "ERROR: failed to create workflow parallel skipped-services temp file"
+          return 1
+        }
+        state_file="$(mktemp "''${TMPDIR:-/tmp}/nixfied-workflow-parallel-state.XXXXXX")" || {
+          rm -f "$skipped_services_file"
+          echo "ERROR: failed to create workflow parallel state temp file"
+          return 1
+        }
 
-          unit_name="$(workflow_unit_name "$unit_json")"
-          unit_task="$(workflow_unit_task_id "$unit_json")"
-          needs_count="$(workflow_unit_needs_count "$unit_json")"
-          lock_list="$(workflow_unit_lock_list "$unit_json")"
-
-          unit_names+=("$unit_name")
-          UNIT_JSON[$unit_name]="$unit_json"
-          UNIT_TASK[$unit_name]="$unit_task"
-          UNIT_NEEDS_LEFT[$unit_name]="$needs_count"
-          UNIT_STATE[$unit_name]="pending"
-          UNIT_DEPENDENTS[$unit_name]=""
-          UNIT_LOCKS[$unit_name]="$lock_list"
-        done < <(workflow_unit_records "$workflow_id")
-
-        local total_units="''${#unit_names[@]}"
-        if [ "$total_units" -eq 0 ]; then
-          return 0
+        if ! write_skipped_services_file "$skipped_services_file"; then
+          rm -f "$skipped_services_file" "$state_file"
+          return 1
         fi
 
-        local unit_name
-        for unit_name in "''${unit_names[@]}"; do
-          while IFS= read -r dependency; do
-            if [ -n "$dependency" ]; then
-              UNIT_DEPENDENTS[$dependency]="''${UNIT_DEPENDENTS[$dependency]:-} $unit_name"
-            fi
-          done < <(workflow_unit_dependencies "''${UNIT_JSON[$unit_name]}")
-        done
+        if ! ${kernelPackage}/bin/nixfied-kernel workflow parallel-init \
+          ${pkgs.lib.escapeShellArg (builtins.toString workflowSchedulerPlanFile)} \
+          "$skipped_services_file" \
+          "$workflow_id" \
+          "$fail_fast" \
+          "$max_workers" \
+          "$state_file" \
+          >/dev/null; then
+          rm -f "$skipped_services_file" "$state_file"
+          return 1
+        fi
 
-        for unit_name in "''${unit_names[@]}"; do
-          local unit_json
-          local unit_task
-          local missing=""
-          local unit_skip_service=""
+        while true; do
+          had_cancel_signals=0
+          while true; do
+            action_line="$(${kernelPackage}/bin/nixfied-kernel workflow parallel-next "$state_file")" || {
+              rm -f "$skipped_services_file" "$state_file"
+              return 1
+            }
+            IFS=$'\x1f' read -r action_kind unit_name unit_task field4 field5 field6 field7 <<< "$action_line"
 
-          unit_json="''${UNIT_JSON[$unit_name]}"
-          unit_task="$(workflow_unit_task_id "$unit_json")"
-          missing="$(workflow_unit_missing_env_csv "$unit_json")"
+            case "$action_kind" in
+              start)
+                detail_json="$(event_detail_mode_json "task")"
+                append_event "$run_id" "$workflow_id" "$unit_task" "queued" "$detail_json"
+                append_event "$run_id" "$workflow_id" "$unit_task" "running" "$detail_json"
 
-          if [ -n "$missing" ]; then
-            mark_unit_canceled "$unit_name" "missing-env" "missing" "$missing"
-            cancel_pending_dependents "$unit_name" "dependency-skipped"
-            continue
-          fi
+                if [ "''${#passthrough_args[@]}" -gt 0 ]; then
+                  (
+                    NIXFIED_TASK_ID="$unit_task" NIXFIED_PARENT_WORKFLOW_ID="$workflow_id" NIXFIED_SELECTED_SERVICES_CSV="$field4" execute_task_body "$unit_task" "''${passthrough_args[@]}"
+                  ) &
+                else
+                  (
+                    NIXFIED_TASK_ID="$unit_task" NIXFIED_PARENT_WORKFLOW_ID="$workflow_id" NIXFIED_SELECTED_SERVICES_CSV="$field4" execute_task_body "$unit_task"
+                  ) &
+                fi
+                pid="$!"
 
-          unit_skip_service="$(workflow_unit_first_skipped_required_service "$unit_json" || true)"
-          if [ -n "$unit_skip_service" ]; then
-            mark_unit_canceled "$unit_name" "service-skipped" "serviceName" "$unit_skip_service"
-            cancel_pending_dependents "$unit_name" "dependency-skipped"
-            continue
-          fi
+                UNIT_PID[$unit_name]="$pid"
+                PID_UNIT[$pid]="$unit_name"
+                UNIT_TASK[$unit_name]="$unit_task"
+                UNIT_PRODUCES_JSON[$unit_name]="$field5"
+                UNIT_CANCEL_REQUESTED[$unit_name]=0
 
-          if ! workflow_unit_when_matches "$unit_json"; then
-            mark_unit_canceled "$unit_name" "when-false"
-            cancel_pending_dependents "$unit_name" "dependency-skipped"
-            continue
-          fi
-
-          if [ "''${UNIT_NEEDS_LEFT[$unit_name]}" -eq 0 ]; then
-            UNIT_STATE[$unit_name]="ready"
-          fi
-        done
-
-        while [ "$completed_count" -lt "$total_units" ]; do
-          if [ "$stop_scheduling" -eq 0 ]; then
-            while [ "$running_count" -lt "$max_workers" ]; do
-              local ready_unit
-              ready_unit="$(next_ready_unit || true)"
-              if [ -z "$ready_unit" ]; then
+                if ! ${kernelPackage}/bin/nixfied-kernel workflow parallel-transition \
+                  "$state_file" \
+                  "$unit_name" \
+                  "started" \
+                  "" \
+                  "" \
+                  "" \
+                  "" \
+                  >/dev/null; then
+                  rm -f "$skipped_services_file" "$state_file"
+                  return 1
+                fi
+                ;;
+              cancel)
+                if [ "$field4" = "service-skipped" ]; then
+                  echo "SKIP: task '$unit_task' (service '$field6') is skipped because service '$field6' has a skip flag enabled"
+                fi
+                if [ -n "$field5" ]; then
+                  detail_json="$(event_detail_reason_key_value_json "$field4" "$field5" "$field6")"
+                else
+                  detail_json="$(event_detail_reason_json "$field4")"
+                fi
+                append_event "$run_id" "$workflow_id" "$unit_task" "canceled" "$detail_json" "$field4"
+                if ! ${kernelPackage}/bin/nixfied-kernel workflow parallel-transition \
+                  "$state_file" \
+                  "$unit_name" \
+                  "canceled" \
+                  "" \
+                  "$field4" \
+                  "$field5" \
+                  "$field6" \
+                  >/dev/null; then
+                  rm -f "$skipped_services_file" "$state_file"
+                  return 1
+                fi
+                ;;
+              signal-running)
+                pid="''${UNIT_PID[$unit_name]:-}"
+                if [ -n "$pid" ]; then
+                  UNIT_CANCEL_REQUESTED[$unit_name]=1
+                  kill -TERM "$pid" 2>/dev/null || true
+                  had_cancel_signals=1
+                fi
+                if ! ${kernelPackage}/bin/nixfied-kernel workflow parallel-transition \
+                  "$state_file" \
+                  "$unit_name" \
+                  "signal-sent" \
+                  "" \
+                  "" \
+                  "" \
+                  "" \
+                  >/dev/null; then
+                  rm -f "$skipped_services_file" "$state_file"
+                  return 1
+                fi
+                ;;
+              wait)
                 break
+                ;;
+              done)
+                workflow_status="''${unit_name:-0}"
+                rm -f "$skipped_services_file" "$state_file"
+                return "$workflow_status"
+                ;;
+              *)
+                echo "ERROR: unsupported workflow parallel action '$action_kind'"
+                rm -f "$skipped_services_file" "$state_file"
+                return 1
+                ;;
+            esac
+          done
+
+          if [ "$had_cancel_signals" -eq 1 ]; then
+            sleep "$NIXFIED_RETRY_INTERVAL_DEFAULT"
+            for pid in "''${!PID_UNIT[@]}"; do
+              if kill -0 "$pid" 2>/dev/null; then
+                kill -KILL "$pid" 2>/dev/null || true
               fi
-              start_unit "$ready_unit"
             done
           fi
 
-          if [ "$running_count" -eq 0 ]; then
-            if [ "$completed_count" -lt "$total_units" ] && [ "$stop_scheduling" -eq 0 ]; then
-              cancel_pending_units "blocked"
-              if [ "$workflow_status" -eq 0 ]; then
-                workflow_status=1
-              fi
-            fi
-            break
+          if [ "''${#PID_UNIT[@]}" -eq 0 ]; then
+            echo "ERROR: parallel runner reached wait state without running units"
+            rm -f "$skipped_services_file" "$state_file"
+            return 1
           fi
-
-          local done_pid=""
-          local wait_rc
-          local done_unit
-          local detail_json
 
           if wait -n -p done_pid; then
             wait_rc=0
@@ -1741,53 +1649,57 @@ EOF
 
           unset "PID_UNIT[$done_pid]"
           unset "UNIT_PID[$done_unit]"
-          running_count=$((running_count - 1))
-          release_unit_locks "$done_unit"
 
-          if [ "''${CANCEL_REQUESTED[$done_unit]:-0}" = "1" ]; then
+          if [ "''${UNIT_CANCEL_REQUESTED[$done_unit]:-0}" = "1" ]; then
             detail_json="$(event_detail_reason_json "fail-fast-running")"
             append_event "$run_id" "$workflow_id" "''${UNIT_TASK[$done_unit]}" "canceled" "$detail_json" "fail-fast-running"
-            UNIT_STATE[$done_unit]="canceled"
-            completed_count=$((completed_count + 1))
+            if ! ${kernelPackage}/bin/nixfied-kernel workflow parallel-transition \
+              "$state_file" \
+              "$done_unit" \
+              "canceled-running" \
+              "$wait_rc" \
+              "fail-fast-running" \
+              "" \
+              "" \
+              >/dev/null; then
+              rm -f "$skipped_services_file" "$state_file"
+              return 1
+            fi
             continue
           fi
 
           if [ "$wait_rc" -eq 0 ]; then
-            detail_json="$(event_detail_produces_json "$(workflow_unit_produces_json "''${UNIT_JSON[$done_unit]}")")"
+            detail_json="$(event_detail_produces_json "''${UNIT_PRODUCES_JSON[$done_unit]}")"
             append_event "$run_id" "$workflow_id" "''${UNIT_TASK[$done_unit]}" "passed" "$detail_json"
-            UNIT_STATE[$done_unit]="passed"
-            completed_count=$((completed_count + 1))
-
-            local dependent
-            for dependent in ''${UNIT_DEPENDENTS[$done_unit]:-}; do
-              if [ "''${UNIT_STATE[$dependent]:-pending}" = "pending" ]; then
-                UNIT_NEEDS_LEFT[$dependent]="$(( ''${UNIT_NEEDS_LEFT[$dependent]} - 1 ))"
-                if [ "''${UNIT_NEEDS_LEFT[$dependent]}" -eq 0 ]; then
-                  UNIT_STATE[$dependent]="ready"
-                fi
-              fi
-            done
+            if ! ${kernelPackage}/bin/nixfied-kernel workflow parallel-transition \
+              "$state_file" \
+              "$done_unit" \
+              "passed" \
+              "0" \
+              "" \
+              "" \
+              "" \
+              >/dev/null; then
+              rm -f "$skipped_services_file" "$state_file"
+              return 1
+            fi
           else
             detail_json="$(event_detail_exit_code_json "$wait_rc")"
             append_event "$run_id" "$workflow_id" "''${UNIT_TASK[$done_unit]}" "failed" "$detail_json" "" "$wait_rc"
-            UNIT_STATE[$done_unit]="failed"
-            completed_count=$((completed_count + 1))
-
-            if [ "$workflow_status" -eq 0 ]; then
-              workflow_status="$wait_rc"
-            fi
-
-            if [ "$fail_fast" = "true" ] && [ "$stop_scheduling" -eq 0 ]; then
-              stop_scheduling=1
-              cancel_running_units
-              cancel_pending_units "fail-fast"
-            else
-              cancel_pending_dependents "$done_unit" "dependency-not-passed"
+            if ! ${kernelPackage}/bin/nixfied-kernel workflow parallel-transition \
+              "$state_file" \
+              "$done_unit" \
+              "failed" \
+              "$wait_rc" \
+              "" \
+              "" \
+              "" \
+              >/dev/null; then
+              rm -f "$skipped_services_file" "$state_file"
+              return 1
             fi
           fi
         done
-
-        return "$workflow_status"
       }
 
       run_workflow_phase_tasks() {
