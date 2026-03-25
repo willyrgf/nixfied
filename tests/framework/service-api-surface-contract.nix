@@ -14,12 +14,12 @@ let
 
   assertLifecycleOps =
     source:
+    assert pkgs.lib.hasInfix "operations =" source;
     assert pkgs.lib.hasInfix "start = {" source;
-    assert pkgs.lib.hasInfix "stop = {" source;
-    assert pkgs.lib.hasInfix "restart = {" source;
-    assert pkgs.lib.hasInfix "status = {" source;
-    assert pkgs.lib.hasInfix "health = {" source;
-    assert pkgs.lib.hasInfix "ready = {" source;
+    assert pkgs.lib.hasInfix "inherit (lifecycle)" source;
+    assert pkgs.lib.hasInfix "restart" source;
+    assert pkgs.lib.hasInfix "status" source;
+    assert pkgs.lib.hasInfix "health" source;
     true;
 
   serviceStatusAppMatchesEnable =

@@ -9,7 +9,7 @@
 
 let
   commonRuntimeShell = import ../../common-runtime.nix { inherit pkgs; };
-  shellJson = import ../helpers/shell-json.nix { };
+  shellJson = import ../../helpers/shell-json.nix { };
   runtimeDefaults = import ../../../core/runtime-defaults.nix;
   dataDirName = config.dataDirName or "postgres";
   pgdataExpr = slots.getServiceDir dataDirName;

@@ -1,6 +1,7 @@
 {
   lib,
   canonical,
+  idLib,
 }:
 {
   projectRoot,
@@ -32,7 +33,8 @@ let
     map (serviceId: serviceCatalog.${serviceId}.name) (builtins.attrNames serviceCatalog)
   );
 
-  uniqueSorted = values: builtins.sort builtins.lessThan (lib.unique values);
+  listUtils = import ../framework/core/list-utils.nix;
+  uniqueSorted = listUtils.uniqueSorted;
 
   normalizeServiceSet =
     name:
@@ -49,7 +51,8 @@ let
       overlappingServices = builtins.filter (
         serviceName: builtins.elem serviceName optionalServices
       ) requiredServices;
-      serviceSetId = if (raw.id or "") == "" then "service-set.${name}" else raw.id;
+      serviceSetId =
+        if (raw.id or "") == "" then "service-set.${name}" else idLib.ensurePrefix "service-set" raw.id;
       effectivePolicy =
         if (raw.state.policy or null) == null then
           baseStatePolicy

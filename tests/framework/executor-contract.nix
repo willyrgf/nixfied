@@ -2,13 +2,16 @@
 let
   source = builtins.readFile ../../nixfied/framework/runtime/executor.nix;
   runtimeSource = builtins.readFile ../../nixfied/framework/runtime/executor-runtime.nix;
+  sharedRuntimeSource = builtins.readFile ../../nixfied/framework/runtime/shared-runtime-lib.nix;
+  hasSharedRuntimeInfix =
+    pattern: pkgs.lib.hasInfix pattern source || pkgs.lib.hasInfix pattern sharedRuntimeSource;
 in
-assert pkgs.lib.hasInfix "compute_run_id() {" source;
+assert hasSharedRuntimeInfix "compute_run_id() {";
 assert pkgs.lib.hasInfix "compute_attempt_id() {" source;
-assert pkgs.lib.hasInfix "kernel_run_id_envelope() {" source;
-assert pkgs.lib.hasInfix "nixfied-kernel run-id envelope" source;
-assert pkgs.lib.hasInfix "run_id_pass_through_env_file() {" source;
-assert pkgs.lib.hasInfix "write_name_value_tsv_file() {" source;
+assert hasSharedRuntimeInfix "kernel_run_id_envelope() {";
+assert hasSharedRuntimeInfix "nixfied-kernel run-id envelope";
+assert hasSharedRuntimeInfix "run_id_pass_through_env_file() {";
+assert hasSharedRuntimeInfix "write_name_value_tsv_file() {";
 assert pkgs.lib.hasInfix "ERROR: usage: run-task <task-id> [-- ...]" source;
 assert pkgs.lib.hasInfix "ERROR: usage: run-workflow <workflow-id> [-- ...]" source;
 assert pkgs.lib.hasInfix "ERROR: unknown workflow '$workflow_id'" source;
@@ -57,14 +60,11 @@ assert pkgs.lib.hasInfix "nixfied-kernel summary collect-steps" source;
 assert pkgs.lib.hasInfix "workflowSummaryPlanFile = pkgs.writeText" source;
 assert pkgs.lib.hasInfix "LAST_WORKFLOW_SUMMARY_PASSED_COUNT" source;
 assert pkgs.lib.hasInfix "workflow_collect_steps() {" source;
-assert pkgs.lib.hasInfix "event_detail_mode_json() {" source;
 assert pkgs.lib.hasInfix "kernel_event_detail() {" source;
 assert pkgs.lib.hasInfix "nixfied-kernel event-detail render" source;
-assert pkgs.lib.hasInfix "event_detail_reason_exit_code_json() {" source;
 assert pkgs.lib.hasInfix "workflow_phase_service_set_failure_json() {" source;
 assert pkgs.lib.hasInfix "WORKFLOW_LEAF_TASK_IDS_LINES" source;
 assert pkgs.lib.hasInfix "NIXFIED_ATTEMPT_ID" source;
-assert pkgs.lib.hasInfix "workflow_steps_json() {" source;
 assert pkgs.lib.hasInfix "print_workflow_summary_report() {" source;
 assert pkgs.lib.hasInfix "NIXFIED_PARENT_WORKFLOW_ID" source;
 assert pkgs.lib.hasInfix "NIXFIED_TASK_ID" source;

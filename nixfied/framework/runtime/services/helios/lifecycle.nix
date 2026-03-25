@@ -8,78 +8,41 @@
 }:
 
 let
-  lib = pkgs.lib;
-  kernelPackage = import ../../kernel { inherit pkgs; };
-  runtimeDefaults = import ../../../core/runtime-defaults.nix;
-  managedServiceLifecycle = import ../../helpers/managed-service-lifecycle.nix { inherit pkgs; };
-  probeCommands = import ../../helpers/probe-commands.nix { inherit pkgs; };
-  probePlanRuntime = import ../../helpers/probe-plan-runtime.nix {
-    inherit
-      lib
-      pkgs
-      probeCommands
-      ;
-    postgresProbePkg = if pkgs ? postgresql_16 then pkgs.postgresql_16 else pkgs.postgresql;
-  };
-  slotEnvRuntime = import ../../helpers/slot-env-runtime.nix { inherit pkgs; };
-  runtimeEvents = import ../../helpers/runtime-events.nix { inherit pkgs project; };
-  observability = import ../../helpers/service-observability.nix {
+  probeSetup = import ../probe-setup-helper.nix {
     inherit
       pkgs
+      project
       slots
-      runtimeEvents
+      config
       ;
+    serviceName = "helios";
+    endpointMapping = {
+      rpc = "$HELIOS_RPC_PORT";
+      execution = "$HELIOS_EXECUTION_PORT";
+    };
   };
+
+  inherit (probeSetup)
+    lib
+    runtimeDefaults
+    managedServiceLifecycle
+    probeCommands
+    slotEnvRuntime
+    runtimeEvents
+    observability
+    serviceSource
+    readyPlan
+    renderProbeStep
+    healthPlanBody
+    readyPlanBody
+    ;
+
+  kernelPackage = import ../../kernel { inherit pkgs; };
   helios = config.package;
   rpcPortVar = slots.portVarName config.portKeyRpc;
   executionRpcPortVar = slots.portVarName config.executionRpcPortKey;
   heliosDirExpr = slots.getServiceDir config.dataDirName;
   extraArgs = lib.escapeShellArgs (config.extraArgs or [ ]);
-  serviceSource = if (config.defaultSource or "") == "" then "unspecified" else config.defaultSource;
-  healthPlan = config.probePlans.health or { steps = [ ]; };
-  readyPlan =
-    config.probePlans.ready or {
-      steps = [ ];
-      wait = null;
-    };
-  renderPlanBody =
-    mode: plan:
-    probePlanRuntime.renderPlanBody {
-      inherit
-        mode
-        plan
-        ;
-      serviceName = "helios";
-      endpoints = config.resolvedEndpoints or { };
-      portExprForEndpoint =
-        endpointName:
-        if endpointName == "rpc" then
-          "$HELIOS_RPC_PORT"
-        else if endpointName == "execution" then
-          "$HELIOS_EXECUTION_PORT"
-        else
-          throw "helios lifecycle: unsupported probe endpoint '${endpointName}'";
-    };
-  renderProbeStep =
-    mode: step:
-    probePlanRuntime.renderProbeStep {
-      inherit
-        mode
-        step
-        ;
-      serviceName = "helios";
-      endpoints = config.resolvedEndpoints or { };
-      portExprForEndpoint =
-        endpointName:
-        if endpointName == "rpc" then
-          "$HELIOS_RPC_PORT"
-        else if endpointName == "execution" then
-          "$HELIOS_EXECUTION_PORT"
-        else
-          throw "helios lifecycle: unsupported probe endpoint '${endpointName}'";
-    };
-  healthPlanBody = renderPlanBody "health" healthPlan;
-  readyPlanBody = renderPlanBody "ready" readyPlan;
   readyWait = readyPlan.wait or runtimeDefaults.probes.wait;
   startupHealthCheck = ''
     {
@@ -96,67 +59,57 @@ let
     } >/dev/null 2>&1
   '';
 
-  runtimePrelude = ''
-    ${slotEnvRuntime.loadJsonFromCommand {
-      outVar = "SLOT_INFO_JSON_OUT";
-      command = toString slots.getSlotInfo;
-      exportVars = false;
-    }}
+  runtimePrelude = import ../service-runtime-prelude.nix {
+    inherit slotEnvRuntime slots observability;
+    serviceName = "helios";
+    serviceNameUpper = "HELIOS";
+    portVars = [
+      {
+        varName = "HELIOS_RPC_PORT_VAR";
+        portVar = rpcPortVar;
+        target = "HELIOS_RPC_PORT";
+      }
+      {
+        varName = "HELIOS_EXECUTION_PORT_VAR";
+        portVar = executionRpcPortVar;
+        target = "HELIOS_EXECUTION_PORT";
+      }
+    ];
+    dirExpr = heliosDirExpr;
+    portValidation = ''
+      HELIOS_NETWORK="''${HELIOS_NETWORK:-${config.network or "local"}}"
+      HELIOS_EXECUTION_RPC_URL="''${HELIOS_EXECUTION_RPC_URL:-${config.executionRpcUrl or ""}}"
+      HELIOS_CONSENSUS_RPC_URL="''${HELIOS_CONSENSUS_RPC_URL:-${config.consensusRpcUrl or ""}}"
+      HELIOS_DEFAULT_CONSENSUS_RPC_URL="''${HELIOS_DEFAULT_CONSENSUS_RPC_URL:-${
+        config.defaultConsensusRpcUrl or ""
+      }}"
+      HELIOS_CHECKPOINT="''${HELIOS_CHECKPOINT:-${config.checkpoint or ""}}"
 
-    HELIOS_RPC_PORT_VAR="${rpcPortVar}"
-    HELIOS_EXECUTION_PORT_VAR="${executionRpcPortVar}"
+      if [ -z "$HELIOS_EXECUTION_RPC_URL" ] && [ -n "$HELIOS_EXECUTION_PORT" ]; then
+        HELIOS_EXECUTION_RPC_URL="${probeCommands.localHttpUrlExpr "$HELIOS_EXECUTION_PORT"}"
+      fi
 
-    ${slotEnvRuntime.readPortFromJson {
-      targetVar = "HELIOS_RPC_PORT";
-      jsonVar = "SLOT_INFO_JSON_OUT";
-      keyExpr = "$HELIOS_RPC_PORT_VAR";
-    }}
-    ${slotEnvRuntime.readPortFromJson {
-      targetVar = "HELIOS_EXECUTION_PORT";
-      jsonVar = "SLOT_INFO_JSON_OUT";
-      keyExpr = "$HELIOS_EXECUTION_PORT_VAR";
-    }}
-    HELIOS_DIR="${heliosDirExpr}"
-    HELIOS_PID_FILE="$HELIOS_DIR/run/helios.pid"
-    HELIOS_LOG_FILE="$HELIOS_DIR/logs/helios.log"
-    SERVICE_DIR="$HELIOS_DIR"
-    SERVICE_PID_FILE="$HELIOS_PID_FILE"
-    SERVICE_LOG_FILE="$HELIOS_LOG_FILE"
+      # Default consensus endpoint for mainnet if not explicitly configured.
+      # This keeps testnets and other networks explicit to avoid accidentally mixing networks.
+      if [ "$HELIOS_NETWORK" = "mainnet" ] && [ -z "$HELIOS_CONSENSUS_RPC_URL" ] && [ -n "$HELIOS_DEFAULT_CONSENSUS_RPC_URL" ]; then
+        HELIOS_CONSENSUS_RPC_URL="$HELIOS_DEFAULT_CONSENSUS_RPC_URL"
+      fi
 
-    HELIOS_NETWORK="''${HELIOS_NETWORK:-${config.network or "local"}}"
-    HELIOS_EXECUTION_RPC_URL="''${HELIOS_EXECUTION_RPC_URL:-${config.executionRpcUrl or ""}}"
-    HELIOS_CONSENSUS_RPC_URL="''${HELIOS_CONSENSUS_RPC_URL:-${config.consensusRpcUrl or ""}}"
-    HELIOS_DEFAULT_CONSENSUS_RPC_URL="''${HELIOS_DEFAULT_CONSENSUS_RPC_URL:-${
-      config.defaultConsensusRpcUrl or ""
-    }}"
-    HELIOS_CHECKPOINT="''${HELIOS_CHECKPOINT:-${config.checkpoint or ""}}"
+      # Helios local profile expects a consensus endpoint; default to execution RPC
+      # so local dev/testing can run without a separate consensus client.
+      if [ "$HELIOS_NETWORK" = "local" ] && [ -z "$HELIOS_CONSENSUS_RPC_URL" ] && [ -n "$HELIOS_EXECUTION_RPC_URL" ]; then
+        HELIOS_CONSENSUS_RPC_URL="$HELIOS_EXECUTION_RPC_URL"
+      fi
 
-    if [ -z "$HELIOS_EXECUTION_RPC_URL" ] && [ -n "$HELIOS_EXECUTION_PORT" ]; then
-      HELIOS_EXECUTION_RPC_URL="${probeCommands.localHttpUrlExpr "$HELIOS_EXECUTION_PORT"}"
-    fi
+      # Normalize for composing paths.
+      HELIOS_CONSENSUS_RPC_URL="''${HELIOS_CONSENSUS_RPC_URL%/}"
 
-    # Default consensus endpoint for mainnet if not explicitly configured.
-    # This keeps testnets and other networks explicit to avoid accidentally mixing networks.
-    if [ "$HELIOS_NETWORK" = "mainnet" ] && [ -z "$HELIOS_CONSENSUS_RPC_URL" ] && [ -n "$HELIOS_DEFAULT_CONSENSUS_RPC_URL" ]; then
-      HELIOS_CONSENSUS_RPC_URL="$HELIOS_DEFAULT_CONSENSUS_RPC_URL"
-    fi
-
-    # Helios local profile expects a consensus endpoint; default to execution RPC
-    # so local dev/testing can run without a separate consensus client.
-    if [ "$HELIOS_NETWORK" = "local" ] && [ -z "$HELIOS_CONSENSUS_RPC_URL" ] && [ -n "$HELIOS_EXECUTION_RPC_URL" ]; then
-      HELIOS_CONSENSUS_RPC_URL="$HELIOS_EXECUTION_RPC_URL"
-    fi
-
-    # Normalize for composing paths.
-    HELIOS_CONSENSUS_RPC_URL="''${HELIOS_CONSENSUS_RPC_URL%/}"
-
-    if [ -z "$HELIOS_RPC_PORT" ]; then
-      log_error "helios RPC port variable is not set"
-      exit 1
-    fi
-
-    ${observability.mkEmitServiceEventFunction "helios"}
-  '';
+      if [ -z "$HELIOS_RPC_PORT" ]; then
+        log_error "helios RPC port variable is not set"
+        exit 1
+      fi
+    '';
+  };
 
   managedLifecycle = managedServiceLifecycle.mkPidFileManagedLifecycle {
     service = "helios";

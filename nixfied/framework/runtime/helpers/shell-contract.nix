@@ -95,7 +95,8 @@ let
       value: (builtins.length (builtins.filter (candidate: candidate == value) values)) > 1
     ) uniq;
 
-  normalizeStringSet = values: lib.sort (a: b: a < b) (lib.unique values);
+  listUtils = import ../../core/list-utils.nix;
+  normalizeStringSet = listUtils.uniqueSorted;
 
   sameStringSet = expected: actual: normalizeStringSet expected == normalizeStringSet actual;
 
@@ -557,14 +558,8 @@ let
       };
     };
 
-  valueToString =
-    value:
-    if value == null then
-      ""
-    else if builtins.isBool value then
-      if value then "true" else "false"
-    else
-      toString value;
+  valueStrings = import ./value-string.nix;
+  valueToString = valueStrings.toContractString;
 
   normalizeArgSpec =
     argSpec:

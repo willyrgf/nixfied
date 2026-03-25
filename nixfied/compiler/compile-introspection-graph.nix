@@ -31,7 +31,8 @@ let
   workspaceMarker = import ../framework/workspace-marker.nix;
   workspaceMarkerPresent = workspaceMarker.isPresent projectRoot;
 
-  uniqueSorted = values: builtins.sort builtins.lessThan (lib.unique values);
+  listUtils = import ../framework/core/list-utils.nix;
+  uniqueSorted = listUtils.uniqueSorted;
 
   featureOwnerFiles =
     featureId:

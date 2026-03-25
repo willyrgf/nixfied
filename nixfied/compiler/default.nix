@@ -5,6 +5,7 @@
   system,
   projectRoot,
   frameworkSourceRevision,
+  selectedServices ? null,
 }:
 let
   lib = pkgs.lib;
@@ -36,6 +37,7 @@ let
     inherit
       lib
       canonical
+      idLib
       ;
   };
   compileServiceSurfaceCatalog = import ./compile-service-surface-catalog.nix {
@@ -141,6 +143,7 @@ rec {
       projectModules,
       extraModules ? [ ],
       localOverrides ? [ ],
+      selectedServices ? null,
     }:
     let
       resolvedModuleGraph = resolveModules {
@@ -207,6 +210,7 @@ rec {
 
       resolvedServices = compileServices {
         inherit pkgs;
+        inherit selectedServices;
         resolved = resolvedModuleGraph.config;
       };
 
@@ -354,6 +358,7 @@ rec {
           workflows
           selectionIndex
           serviceSets
+          appExecutionManifests
           ;
       };
 

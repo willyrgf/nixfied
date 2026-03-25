@@ -8,26 +8,31 @@
 }:
 
 let
-  runtimeDefaults = import ../../../core/runtime-defaults.nix;
-  managedServiceLifecycle = import ../../helpers/managed-service-lifecycle.nix { inherit pkgs; };
-  probeCommands = import ../../helpers/probe-commands.nix { inherit pkgs; };
-  probePlanRuntime = import ../../helpers/probe-plan-runtime.nix {
-    lib = pkgs.lib;
+  probeSetup = import ../probe-setup-helper.nix {
     inherit
       pkgs
-      probeCommands
-      ;
-    postgresProbePkg = if pkgs ? postgresql_16 then pkgs.postgresql_16 else pkgs.postgresql;
-  };
-  slotEnvRuntime = import ../../helpers/slot-env-runtime.nix { inherit pkgs; };
-  runtimeEvents = import ../../helpers/runtime-events.nix { inherit pkgs project; };
-  observability = import ../../helpers/service-observability.nix {
-    inherit
-      pkgs
+      project
       slots
-      runtimeEvents
+      config
       ;
+    serviceName = "postgres";
+    endpointMapping = {
+      primary = "$PGPORT";
+    };
   };
+
+  inherit (probeSetup)
+    runtimeDefaults
+    managedServiceLifecycle
+    slotEnvRuntime
+    observability
+    serviceSource
+    readyPlan
+    renderProbeStep
+    healthPlanBody
+    readyPlanBody
+    ;
+
   postgres = config.package or pkgs.postgresql_16;
   portKey = config.portKey or "postgres";
   portVar = slots.portVarName portKey;
@@ -36,47 +41,6 @@ let
   database = config.database or "app";
   testDatabase = config.testDatabase or "${database}_test";
   extensions = config.extensions or [ ];
-  serviceSource = if (config.defaultSource or "") == "" then "unspecified" else config.defaultSource;
-  healthPlan = config.probePlans.health or { steps = [ ]; };
-  readyPlan =
-    config.probePlans.ready or {
-      steps = [ ];
-      wait = null;
-    };
-  renderPlanBody =
-    mode: plan:
-    probePlanRuntime.renderPlanBody {
-      inherit
-        mode
-        plan
-        ;
-      serviceName = "postgres";
-      endpoints = config.resolvedEndpoints or { };
-      portExprForEndpoint =
-        endpointName:
-        if endpointName == "primary" then
-          "$PGPORT"
-        else
-          throw "postgres lifecycle: unsupported probe endpoint '${endpointName}'";
-    };
-  renderProbeStep =
-    mode: step:
-    probePlanRuntime.renderProbeStep {
-      inherit
-        mode
-        step
-        ;
-      serviceName = "postgres";
-      endpoints = config.resolvedEndpoints or { };
-      portExprForEndpoint =
-        endpointName:
-        if endpointName == "primary" then
-          "$PGPORT"
-        else
-          throw "postgres lifecycle: unsupported probe endpoint '${endpointName}'";
-    };
-  healthPlanBody = renderPlanBody "health" healthPlan;
-  readyPlanBody = renderPlanBody "ready" readyPlan;
   renderQuietProbeStep = mode: step: ''
     {
       service_source=${pkgs.lib.escapeShellArg serviceSource}

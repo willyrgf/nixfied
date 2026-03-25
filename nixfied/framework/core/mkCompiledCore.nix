@@ -5,6 +5,7 @@
   projectModules,
   extraModules ? [ ],
   localOverrides ? [ ],
+  selectedServices ? null,
   frameworkSourceRevision ? import ./framework-revision.nix {
     sourcePath = ../../.;
     metadataPath = ../../VENDORED.txt;
@@ -31,6 +32,7 @@ let
       projectModules
       extraModules
       localOverrides
+      selectedServices
       ;
   };
 in

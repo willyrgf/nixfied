@@ -8,6 +8,7 @@
 }:
 let
   lib = pkgs.lib;
+  listUtils = import ./list-utils.nix;
   kernelPackage = import ../runtime/kernel { inherit pkgs; };
   shellCommon = import ./shell-common.nix { inherit pkgs; };
   commonRuntimeShell = import ../runtime/common-runtime.nix { inherit pkgs; };
@@ -48,9 +49,9 @@ let
         "export"
       ]
     else
-      builtins.sort builtins.lessThan (lib.unique operations);
-  normalizeToken =
-    value: lib.toUpper (lib.replaceStrings [ "." "-" ":" "/" " " ] [ "_" "_" "_" "_" "_" ] value);
+      listUtils.uniqueSorted operations;
+  tokenLib = import ../runtime/helpers/normalize-token.nix { inherit lib; };
+  normalizeToken = tokenLib.normalizeToken;
 
   slotEnvPrelude = ''
     slot_var=${lib.escapeShellArg model.runtime.slot.var}

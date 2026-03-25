@@ -89,13 +89,16 @@ let
     };
   };
 
-  model = canonical.canonicalize (modelPayloadWithEvalHash // {
-    compiled = {
-      apiCatalog = apiCatalog;
-      runtimeManifests = runtimeManifests;
-      serviceSurfaceCatalog = serviceSurfaceCatalog;
-    };
-  });
+  model = canonical.canonicalize (
+    modelPayloadWithEvalHash
+    // {
+      compiled = {
+        apiCatalog = apiCatalog;
+        runtimeManifests = runtimeManifests;
+        serviceSurfaceCatalog = serviceSurfaceCatalog;
+      };
+    }
+  );
 
   stateHash = canonical.hashCanonical modelPayloadWithEvalHash;
 in

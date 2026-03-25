@@ -3,6 +3,10 @@ let
   orchestratorSource = builtins.readFile ../../nixfied/framework/runtime/orchestrator.nix;
   dispatcherSource = builtins.readFile ../../nixfied/framework/runtime/dispatcher.nix;
   executorSource = builtins.readFile ../../nixfied/framework/runtime/executor.nix;
+  sharedRuntimeSource = builtins.readFile ../../nixfied/framework/runtime/shared-runtime-lib.nix;
+  hasSharedRuntimeInfix =
+    pattern:
+    pkgs.lib.hasInfix pattern orchestratorSource || pkgs.lib.hasInfix pattern sharedRuntimeSource;
 in
 assert pkgs.lib.hasInfix "nixfied-orchestrator" orchestratorSource;
 assert pkgs.lib.hasInfix "create_run_record() {" orchestratorSource;
@@ -34,8 +38,8 @@ assert pkgs.lib.hasInfix "NIXFIED_ORCHESTRATOR_ATTEMPT_ID" executorSource;
 assert pkgs.lib.hasInfix "frameworkEphemeral = import ./ephemeral.nix" orchestratorSource;
 assert pkgs.lib.hasInfix "ephemeral = model.runtime.ephemeral or { };" orchestratorSource;
 assert pkgs.lib.hasInfix "EPHEMERAL_EXECUTOR_WRAPPER=" orchestratorSource;
-assert pkgs.lib.hasInfix "kernel_run_id_envelope() {" orchestratorSource;
-assert pkgs.lib.hasInfix "nixfied-kernel run-id envelope" orchestratorSource;
+assert hasSharedRuntimeInfix "kernel_run_id_envelope() {";
+assert hasSharedRuntimeInfix "nixfied-kernel run-id envelope";
 assert pkgs.lib.hasInfix "kernel_event_detail() {" orchestratorSource;
 assert pkgs.lib.hasInfix "nixfied-kernel event-detail render" orchestratorSource;
 assert pkgs.lib.hasInfix "NIXFIED_WORKFLOW_SETUP_STARTED_AT" orchestratorSource;

@@ -119,7 +119,9 @@ let
 
   checks = {
     model-hash-stable =
-      assert canonical.hashCanonical (builtins.removeAttrs compiledCore.model [ "compiled" ]) == compiledCore.stateHash;
+      assert
+        canonical.hashCanonical (builtins.removeAttrs compiledCore.model [ "compiled" ])
+        == compiledCore.stateHash;
       pkgs.runCommand "model-hash-stable" { } ''
         echo "OK: model hash is deterministic" > "$out"
       '';

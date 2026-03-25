@@ -7,18 +7,16 @@
 }:
 let
   lib = pkgs.lib;
+  listUtils = import ./list-utils.nix;
   commonRuntimeShell = import ../runtime/common-runtime.nix { inherit pkgs; };
   shellJson = import ../runtime/helpers/shell-json.nix { };
 
-  normalizeToken =
-    value: lib.toUpper (lib.replaceStrings [ "." "-" ":" "/" " " ] [ "_" "_" "_" "_" "_" ] value);
+  tokenLib = import ../runtime/helpers/normalize-token.nix { inherit lib; };
+  normalizeToken = tokenLib.normalizeToken;
 
   serviceIds = builtins.sort builtins.lessThan (builtins.attrNames (services));
   selectedServiceNames =
-    if selectedServices == null then
-      null
-    else
-      builtins.sort builtins.lessThan (lib.unique selectedServices);
+    if selectedServices == null then null else listUtils.uniqueSorted selectedServices;
   selectedServiceSet =
     if selectedServiceNames == null then
       { }

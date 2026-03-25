@@ -89,6 +89,13 @@ let
     host    all             all   127.0.0.1/32  trust
     host    all             all   ::1/128       trust
   '';
+
+  # Use shared builder for probe/source fields
+  probeFields = import ../service-config-builder.nix {
+    inherit pkgs project;
+    name = "postgres";
+    defaults = _cfg: { };
+  };
 in
 {
   inherit
@@ -99,9 +106,7 @@ in
     testConf
     pgHbaConf
     ;
-  defaultSource = cfg.defaultSource or "";
-  probePlans = cfg.resolved.probePlans or cfg.resolved.operationProbes or { };
-  resolvedEndpoints = cfg.resolved.endpoints or { };
+  inherit (probeFields) defaultSource probePlans resolvedEndpoints;
   devConfFile = mkEnvConfFile "dev" devConf;
   prodConfFile = mkEnvConfFile "prod" prodConf;
   testConfFile = mkEnvConfFile "test" testConf;

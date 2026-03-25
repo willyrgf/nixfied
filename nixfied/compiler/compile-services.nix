@@ -6,6 +6,7 @@
   enabledServiceFlags ? { },
 }:
 let
+  listUtils = import ../framework/core/list-utils.nix;
   serviceConfig = import ../framework/core/service-config.nix {
     inherit lib pkgs;
   };
@@ -15,7 +16,7 @@ let
     if selectedServices == null then
       null
     else
-      builtins.sort builtins.lessThan (lib.unique (builtins.filter (name: name != "") selectedServices));
+      listUtils.uniqueSorted (builtins.filter (name: name != "") selectedServices);
   selectedServiceSet =
     if selectedServiceNames == null then
       { }

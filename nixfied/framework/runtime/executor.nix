@@ -164,6 +164,14 @@ let
       model
       ;
   };
+  sharedRuntimeLibShell = import ./shared-runtime-lib.nix {
+    inherit
+      pkgs
+      model
+      runtimeHash
+      ;
+    runCounterLockPurpose = "executor-run-counter";
+  };
   runtimeArtifactContracts = import ../contracts/runtime-artifact-contracts.nix { inherit pkgs; };
   validationBundleFile = pkgs.writeText "nixfied-runtime-artifact-contract-bundle.json" (
     builtins.toJSON runtimeArtifactContracts.bundle
@@ -261,49 +269,17 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           REGISTRY_ROOT_EXPLICIT=0
         fi
         REGISTRY_ROOT="''${REGISTRY_ROOT:-$REGISTRY_ROOT_DEFAULT}"
+        RUN_ID_ACTIVE_ROOT="$REGISTRY_ROOT/active"
+        RUN_ID_COUNTER_ROOT="$REGISTRY_ROOT/counters"
 
         ${registryShell}
         ${workflowModesShell}
         ${envSandboxShell}
         ${executorRuntimeShell}
+        ${sharedRuntimeLibShell}
 
         sha256_text() {
           printf '%s' "$1" | ${pkgs.coreutils}/bin/sha256sum | ${pkgs.gawk}/bin/awk '{print $1}'
-        }
-
-        write_name_value_tsv_file() {
-          local target_file="$1"
-          local value_name=""
-
-          : > "$target_file" || return 1
-          while IFS= read -r value_name; do
-            [ -n "$value_name" ] || continue
-            if [ -z "''${!value_name+x}" ]; then
-              continue
-            fi
-            printf '%s\t%s\n' "$value_name" "''${!value_name}" >> "$target_file" || return 1
-          done
-        }
-
-        kernel_run_id_envelope() {
-          local run_kind="$1"
-          local workflow_id="$2"
-          local task_id="$3"
-          local slot_value="$4"
-          local env_value="$5"
-          local pass_through_env_file="$6"
-          shift 6
-
-          ${kernelPackage}/bin/nixfied-kernel run-id envelope \
-            ${pkgs.lib.escapeShellArg "${model.identity.evalHash}"} \
-            ${pkgs.lib.escapeShellArg "${runtimeHash}"} \
-            "$run_kind" \
-            "$workflow_id" \
-            "$task_id" \
-            "$slot_value" \
-            "$env_value" \
-            "$pass_through_env_file" \
-            -- "$@"
         }
 
         kernel_event_detail() {
@@ -341,159 +317,6 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
               return 1
               ;;
           esac
-        }
-
-        run_id_pass_through_env_file() {
-          local run_kind="$1"
-          local workflow_id="$2"
-          local task_id="$3"
-          local env_file=""
-          local env_names_file=""
-          local env_name=""
-          local dep_task_id=""
-          local phase=""
-          local hook_id=""
-          local runner_type=""
-          local nested_workflow_id=""
-          local unit_json=""
-          local unit_task_id=""
-          local -A seen_tasks
-          local -A seen_workflows
-
-          collect_task_env_names() {
-            local current_task_id="$1"
-
-            if [ -z "$current_task_id" ] || [ -n "''${seen_tasks[$current_task_id]:-}" ]; then
-              return 0
-            fi
-            seen_tasks[$current_task_id]=1
-
-            task_runtime_pass_through_env_names "$current_task_id"
-
-            for phase in pre post; do
-              while IFS= read -r hook_id; do
-                [ -n "$hook_id" ] || continue
-                task_hook_runtime_pass_through_env_names "$current_task_id" "$phase" "$hook_id"
-              done < <(task_hook_ids "$current_task_id" "$phase" 2>/dev/null || true)
-            done
-
-            while IFS= read -r dep_task_id; do
-              [ -n "$dep_task_id" ] || continue
-              collect_task_env_names "$dep_task_id"
-            done < <(task_needs "$current_task_id" 2>/dev/null || true)
-
-            while IFS= read -r dep_task_id; do
-              [ -n "$dep_task_id" ] || continue
-              collect_task_env_names "$dep_task_id"
-            done < <(task_soft_needs "$current_task_id" 2>/dev/null || true)
-
-            runner_type="$(task_runner_type "$current_task_id")"
-            if [ "$runner_type" = "workflowRef" ]; then
-              nested_workflow_id="$(task_runner_workflow_id "$current_task_id")"
-              if [ -n "$nested_workflow_id" ]; then
-                collect_workflow_env_names "$nested_workflow_id"
-              fi
-            fi
-          }
-
-          collect_workflow_env_names() {
-            local current_workflow_id="$1"
-
-            if [ -z "$current_workflow_id" ] || [ -n "''${seen_workflows[$current_workflow_id]:-}" ]; then
-              return 0
-            fi
-            seen_workflows[$current_workflow_id]=1
-
-            while IFS= read -r dep_task_id; do
-              [ -n "$dep_task_id" ] || continue
-              collect_task_env_names "$dep_task_id"
-            done < <(workflow_phase_tasks "$current_workflow_id" preRun 2>/dev/null || true)
-
-            while IFS= read -r unit_json; do
-              [ -n "$unit_json" ] || continue
-              unit_task_id="$(workflow_unit_task_id "$unit_json")"
-              if [ -n "$unit_task_id" ] && [ "$unit_task_id" != "null" ]; then
-                collect_task_env_names "$unit_task_id"
-              fi
-            done < <(workflow_plan_records "$current_workflow_id" 2>/dev/null || true)
-
-            while IFS= read -r dep_task_id; do
-              [ -n "$dep_task_id" ] || continue
-              collect_task_env_names "$dep_task_id"
-            done < <(workflow_phase_tasks "$current_workflow_id" postRun 2>/dev/null || true)
-          }
-
-          env_names_file="$(mktemp "''${TMPDIR:-/tmp}/nixfied-run-id-env-names.XXXXXX")" || return 1
-
-          case "$run_kind" in
-            task)
-              collect_task_env_names "$task_id"
-              ;;
-            workflow)
-              collect_workflow_env_names "$workflow_id"
-              ;;
-          esac | ${pkgs.coreutils}/bin/sort -u > "$env_names_file"
-
-          env_file="$(mktemp "''${TMPDIR:-/tmp}/nixfied-run-id-env.XXXXXX")" || return 1
-          if ! write_name_value_tsv_file "$env_file" < "$env_names_file"; then
-            rm -f "$env_file" "$env_names_file"
-            return 1
-          fi
-          rm -f "$env_names_file"
-          printf '%s' "$env_file"
-        }
-
-        event_detail_mode_json() {
-          local mode="$1"
-          kernel_event_detail slotLifecycle --mode "$mode"
-        }
-
-        event_detail_mode_suffix_json() {
-          local mode="$1"
-          local suffix_reason="$2"
-          kernel_event_detail slotLifecycle --mode "$mode" --suffix-reason "$suffix_reason"
-        }
-
-        event_detail_exit_code_json() {
-          local exit_code="$1"
-          kernel_event_detail slotLifecycle --exit-code "$exit_code"
-        }
-
-        event_detail_produces_json() {
-          local produces_json="$1"
-          kernel_event_detail slotLifecycle --produces-json "$produces_json"
-        }
-
-        event_detail_reason_json() {
-          local reason="$1"
-          kernel_event_detail serviceLifecycle --reason "$reason"
-        }
-
-        event_detail_reason_key_value_json() {
-          local reason="$1"
-          local extra_key="$2"
-          local extra_value="$3"
-          case "$extra_key" in
-            dependency)
-              kernel_event_detail serviceLifecycle --reason "$reason" --dependency "$extra_value"
-              ;;
-            serviceName)
-              kernel_event_detail serviceLifecycle --reason "$reason" --service-name "$extra_value"
-              ;;
-            missing)
-              kernel_event_detail serviceLifecycle --reason "$reason" --missing "$extra_value"
-              ;;
-            *)
-              echo "ERROR: unsupported event detail field '$extra_key'" >&2
-              return 1
-              ;;
-          esac
-        }
-
-        event_detail_reason_exit_code_json() {
-          local reason="$1"
-          local exit_code="$2"
-          kernel_event_detail serviceLifecycle --reason "$reason" --exit-code "$exit_code"
         }
 
         workflow_phase_service_set_detail_json() {
@@ -631,72 +454,6 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           attempt_name="$(basename "$attempt_dir")"
           rmdir "$attempt_dir"
           printf '%s' "attempt-''${attempt_name#nixfied-attempt.}"
-        }
-
-        compute_run_id() {
-          local run_kind="$1"
-          local workflow_id="$2"
-          local task_id="$3"
-          shift 3
-
-          local slot_var=${pkgs.lib.escapeShellArg model.runtime.slot.var}
-          local env_var=${pkgs.lib.escapeShellArg model.runtime.env.var}
-          local slot_default=${toString model.runtime.slot.default}
-          local env_default=${pkgs.lib.escapeShellArg model.runtime.env.default}
-
-          local slot_value
-          local env_value
-          local pass_through_env_file
-          local run_input
-          local run_base
-          local run_id
-          local attempt_id=""
-
-          slot_value="''${!slot_var:-$slot_default}"
-          env_value="''${!env_var:-$env_default}"
-          pass_through_env_file="$(run_id_pass_through_env_file "$run_kind" "$workflow_id" "$task_id")" || return 1
-
-          run_input="$(kernel_run_id_envelope "$run_kind" "$workflow_id" "$task_id" "$slot_value" "$env_value" "$pass_through_env_file" "$@")" || {
-            rm -f "$pass_through_env_file"
-            return 1
-          }
-          rm -f "$pass_through_env_file"
-          run_base="$(sha256_text "$run_input")"
-          run_id="run-''${run_base:0:24}"
-          RUN_SUFFIX_REASON=""
-
-          mkdir -p "$REGISTRY_ROOT/active" "$REGISTRY_ROOT/counters"
-
-          if [ -e "$REGISTRY_ROOT/active/$run_id" ]; then
-            local lock_file="$REGISTRY_ROOT/counters/$run_base.lock"
-            local counter_file="$REGISTRY_ROOT/counters/$run_base"
-            local counter="0"
-            local lock_fd
-
-            lock_fd="$(registry_lock_acquire "$lock_file" "executor-run-counter:$run_base" 30)" || return 1
-            if [ -f "$counter_file" ]; then
-              counter="$(cat "$counter_file")"
-            fi
-            counter="$(( counter + 1 ))"
-            printf '%s' "$counter" > "$counter_file"
-            registry_lock_release "$lock_fd" "$lock_file"
-
-            run_id="$run_id-$(printf 'c%03d' "$counter")"
-            RUN_SUFFIX_REASON="active-collision"
-          fi
-
-          printf '%s' "$run_id"
-        }
-
-        activate_run() {
-          local run_id="$1"
-          mkdir -p "$REGISTRY_ROOT/active"
-          : > "$REGISTRY_ROOT/active/$run_id"
-        }
-
-        deactivate_run() {
-          local run_id="$1"
-          rm -f "$REGISTRY_ROOT/active/$run_id"
         }
 
         append_event() {
@@ -919,7 +676,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           local effective_workflow_id
           local selected_services_csv=""
 
-          detail_json="$(event_detail_mode_json "task")"
+          detail_json="$(kernel_event_detail slotLifecycle --mode "task")"
           append_event "$run_id" "$workflow_id" "$task_id" "queued" "$detail_json"
           append_event "$run_id" "$workflow_id" "$task_id" "running" "$detail_json"
 
@@ -949,10 +706,10 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           fi
 
           if [ "$exit_code" -eq 0 ]; then
-            detail_json="$(event_detail_produces_json "$(task_pass_detail_json "$task_id")")"
+            detail_json="$(kernel_event_detail slotLifecycle --produces-json "$(task_pass_detail_json "$task_id")")"
             append_event "$run_id" "$workflow_id" "$task_id" "passed" "$detail_json"
           else
-            detail_json="$(event_detail_exit_code_json "$exit_code")"
+            detail_json="$(kernel_event_detail slotLifecycle --exit-code "$exit_code")"
             append_event "$run_id" "$workflow_id" "$task_id" "failed" "$detail_json"
             return "$exit_code"
           fi
@@ -1079,7 +836,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
             write_text_file_atomic "$MACHINE_RUN_ID_FILE" "$run_id" || return $?
           fi
 
-          detail_json="$(event_detail_mode_suffix_json "task" "$RUN_SUFFIX_REASON")"
+          detail_json="$(kernel_event_detail slotLifecycle --mode "task" --suffix-reason "$RUN_SUFFIX_REASON")"
           append_event "$run_id" "" "$task_id" "queued" "$detail_json"
 
           run_task_with_deps() {
@@ -1144,7 +901,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
               case "$action" in
                 service-skipped)
                   echo "SKIP: task '$current_task' is skipped because service '$skip_service' has a skip flag enabled"
-                  skip_detail_json="$(event_detail_reason_key_value_json "service-skipped" "serviceName" "$skip_service")"
+                  skip_detail_json="$(kernel_event_detail serviceLifecycle --reason "service-skipped" --service-name "$skip_service")"
                   append_event "$run_id" "" "$current_task" "canceled" "$skip_detail_json"
                   if [ -n "$soft_parent" ]; then
                     echo "WARN: task '$soft_parent' soft dependency '$current_task' failed exitCode=3"
@@ -1497,9 +1254,23 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
                   echo "SKIP: task '$unit_task' (service '$field6') is skipped because service '$field6' has a skip flag enabled"
                 fi
                 if [ -n "$field5" ]; then
-                  detail_json="$(event_detail_reason_key_value_json "$field4" "$field5" "$field6")"
+                  case "$field5" in
+                    dependency)
+                      detail_json="$(kernel_event_detail serviceLifecycle --reason "$field4" --dependency "$field6")"
+                      ;;
+                    serviceName)
+                      detail_json="$(kernel_event_detail serviceLifecycle --reason "$field4" --service-name "$field6")"
+                      ;;
+                    missing)
+                      detail_json="$(kernel_event_detail serviceLifecycle --reason "$field4" --missing "$field6")"
+                      ;;
+                    *)
+                      echo "ERROR: unsupported event detail field '$field5'" >&2
+                      return 1
+                      ;;
+                  esac
                 else
-                  detail_json="$(event_detail_reason_json "$field4")"
+                  detail_json="$(kernel_event_detail serviceLifecycle --reason "$field4")"
                 fi
                 append_event "$run_id" "$workflow_id" "$unit_task" "canceled" "$detail_json"
                 if ! ${kernelPackage}/bin/nixfied-kernel workflow serial-transition \
@@ -1606,7 +1377,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
               case "$action_kind" in
                 start)
-                  detail_json="$(event_detail_mode_json "task")"
+                  detail_json="$(kernel_event_detail slotLifecycle --mode "task")"
                   append_event "$run_id" "$workflow_id" "$unit_task" "queued" "$detail_json"
                   append_event "$run_id" "$workflow_id" "$unit_task" "running" "$detail_json"
 
@@ -1641,9 +1412,23 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
                     echo "SKIP: task '$unit_task' (service '$field6') is skipped because service '$field6' has a skip flag enabled"
                   fi
                   if [ -n "$field5" ]; then
-                    detail_json="$(event_detail_reason_key_value_json "$field4" "$field5" "$field6")"
+                    case "$field5" in
+                      dependency)
+                        detail_json="$(kernel_event_detail serviceLifecycle --reason "$field4" --dependency "$field6")"
+                        ;;
+                      serviceName)
+                        detail_json="$(kernel_event_detail serviceLifecycle --reason "$field4" --service-name "$field6")"
+                        ;;
+                      missing)
+                        detail_json="$(kernel_event_detail serviceLifecycle --reason "$field4" --missing "$field6")"
+                        ;;
+                      *)
+                        echo "ERROR: unsupported event detail field '$field5'" >&2
+                        return 1
+                        ;;
+                    esac
                   else
-                    detail_json="$(event_detail_reason_json "$field4")"
+                    detail_json="$(kernel_event_detail serviceLifecycle --reason "$field4")"
                   fi
                   append_event "$run_id" "$workflow_id" "$unit_task" "canceled" "$detail_json"
                   if ! ${kernelPackage}/bin/nixfied-kernel workflow parallel-transition \
@@ -1725,7 +1510,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
             unset "UNIT_PID[$done_unit]"
 
             if [ "''${UNIT_CANCEL_REQUESTED[$done_unit]:-0}" = "1" ]; then
-              detail_json="$(event_detail_reason_json "fail-fast-running")"
+              detail_json="$(kernel_event_detail serviceLifecycle --reason "fail-fast-running")"
               append_event "$run_id" "$workflow_id" "''${UNIT_TASK[$done_unit]}" "canceled" "$detail_json"
               if ! ${kernelPackage}/bin/nixfied-kernel workflow parallel-transition \
                 "$state_file" \
@@ -1743,7 +1528,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
             fi
 
             if [ "$wait_rc" -eq 0 ]; then
-              detail_json="$(event_detail_produces_json "''${UNIT_PRODUCES_JSON[$done_unit]}")"
+              detail_json="$(kernel_event_detail slotLifecycle --produces-json "''${UNIT_PRODUCES_JSON[$done_unit]}")"
               append_event "$run_id" "$workflow_id" "''${UNIT_TASK[$done_unit]}" "passed" "$detail_json"
               if ! ${kernelPackage}/bin/nixfied-kernel workflow parallel-transition \
                 "$state_file" \
@@ -1758,7 +1543,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
                 return 1
               fi
             else
-              detail_json="$(event_detail_exit_code_json "$wait_rc")"
+              detail_json="$(kernel_event_detail slotLifecycle --exit-code "$wait_rc")"
               append_event "$run_id" "$workflow_id" "''${UNIT_TASK[$done_unit]}" "failed" "$detail_json"
               if ! ${kernelPackage}/bin/nixfied-kernel workflow parallel-transition \
                 "$state_file" \
@@ -1806,7 +1591,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
             phase_task_skip_service="$(task_first_skipped_required_service "$phase_task" || true)"
             if [ -n "$phase_task_skip_service" ]; then
-              phase_skip_detail="$(event_detail_reason_key_value_json "service-skipped" "serviceName" "$phase_task_skip_service")"
+              phase_skip_detail="$(kernel_event_detail serviceLifecycle --reason "service-skipped" --service-name "$phase_task_skip_service")"
               append_event "$run_id" "$workflow_id" "$phase_task" "canceled" "$phase_skip_detail"
               echo "SKIP: task '$phase_task' (service '$phase_task_skip_service') is skipped because service '$phase_task_skip_service' has a skip flag enabled"
               continue
@@ -2030,10 +1815,6 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           if [ "$cleanup_steps_target" -eq 1 ]; then
             rm -f "$actual_steps_target"
           fi
-        }
-
-        workflow_steps_json() {
-          printf '%s' "[]"
         }
 
         print_workflow_summary_report() {
@@ -2412,7 +2193,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           export NIXFIED_RUN_ID="$run_id"
           export NIXFIED_ATTEMPT_ID="$attempt_id"
 
-          detail_json="$(event_detail_mode_suffix_json "workflow" "$RUN_SUFFIX_REASON")"
+          detail_json="$(kernel_event_detail slotLifecycle --mode "workflow" --suffix-reason "$RUN_SUFFIX_REASON")"
           append_event "$run_id" "$workflow_id" "" "queued" "$detail_json"
 
           fail_fast="$(workflow_fail_fast "$workflow_id")"
@@ -2461,9 +2242,9 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           fi
 
           if [ "$status" -eq 0 ]; then
-            append_event "$run_id" "$workflow_id" "" "passed" "$(event_detail_mode_json "workflow")"
+            append_event "$run_id" "$workflow_id" "" "passed" "$(kernel_event_detail slotLifecycle --mode "workflow")"
           else
-            detail_json="$(event_detail_exit_code_json "$status")"
+            detail_json="$(kernel_event_detail slotLifecycle --exit-code "$status")"
             append_event "$run_id" "$workflow_id" "" "failed" "$detail_json"
           fi
 
@@ -2476,7 +2257,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
             if ! write_workflow_summary_json "$run_id" "$workflow_id" "$status" "$started_at" "$started_epoch" "$MACHINE_SUMMARY_FILE"; then
               if [ "$status" -eq 0 ]; then
                 status=1
-                detail_json="$(event_detail_reason_exit_code_json "summary-write-failed" "1")"
+                detail_json="$(kernel_event_detail serviceLifecycle --reason "summary-write-failed" --exit-code "1")"
                 append_event "$run_id" "$workflow_id" "" "failed" "$detail_json"
               fi
             fi

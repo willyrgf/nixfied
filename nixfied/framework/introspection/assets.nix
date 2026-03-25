@@ -6,8 +6,9 @@
 let
   lib = pkgs.lib;
 
+  listUtils = import ../core/list-utils.nix;
   sortNames = attrs: builtins.sort builtins.lessThan (builtins.attrNames attrs);
-  uniqueSorted = values: builtins.sort builtins.lessThan (lib.unique values);
+  uniqueSorted = listUtils.uniqueSorted;
   modeNames = [
     "default"
     "resolution"

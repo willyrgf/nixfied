@@ -12,28 +12,9 @@
   workflows,
   selectionIndex,
   serviceSets ? { },
+  appExecutionManifests,
 }:
 let
-  appExecutionManifests =
-    (import ./compile-app-execution-manifests.nix {
-      inherit
-        lib
-        canonical
-        ;
-    })
-      {
-        inherit
-          resolvedIdentity
-          runtime
-          state
-          serviceCatalog
-          apps
-          tasks
-          workflows
-          selectionIndex
-          ;
-      };
-
   manifestIds = builtins.sort builtins.lessThan (builtins.attrNames appExecutionManifests);
   manifestsByServiceSet = builtins.mapAttrs (_name: serviceSet: {
     id = serviceSet.id or _name;

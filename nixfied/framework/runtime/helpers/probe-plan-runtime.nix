@@ -9,8 +9,8 @@ let
   runtimeDefaults = import ../../core/runtime-defaults.nix;
   kernelPackage = import ../kernel { inherit pkgs; };
 
-  normalizeEnvToken =
-    value: lib.toUpper (lib.replaceStrings [ "-" "." ":" "/" " " ] [ "_" "_" "_" "_" "_" ] value);
+  tokenLib = import ./normalize-token.nix { inherit lib; };
+  normalizeEnvToken = tokenLib.normalizeToken;
 
   endpointProtocol =
     endpoints: endpointName:

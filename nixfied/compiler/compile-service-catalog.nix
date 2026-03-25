@@ -3,11 +3,12 @@
 let
   services = resolved.services or { };
   excludedServices = resolved.graph.excludedServices or [ ];
+  listUtils = import ../framework/core/list-utils.nix;
+  uniqueSorted = listUtils.uniqueSorted;
+
   names = builtins.sort builtins.lessThan (
     builtins.filter (name: !(builtins.elem name excludedServices)) (builtins.attrNames services)
   );
-
-  uniqueSorted = values: builtins.sort builtins.lessThan (lib.unique values);
 
   sourceKeysFor =
     serviceCfg:

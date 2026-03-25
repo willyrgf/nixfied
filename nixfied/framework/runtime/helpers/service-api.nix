@@ -42,9 +42,10 @@ let
   ];
 
   isAttrs = x: builtins.isAttrs x;
-  normalizeToken =
-    x: pkgs.lib.strings.toUpper (pkgs.lib.replaceStrings [ "-" "." ":" ] [ "_" "_" "_" ] x);
-  normalizeStringSet = values: pkgs.lib.sort (a: b: a < b) (pkgs.lib.unique values);
+  tokenLib = import ./normalize-token.nix { lib = pkgs.lib; };
+  normalizeToken = tokenLib.normalizeToken;
+  listUtils = import ../../core/list-utils.nix;
+  normalizeStringSet = listUtils.uniqueSorted;
   sameStringSet = expected: actual: normalizeStringSet expected == normalizeStringSet actual;
   isListOfOpNames = values: builtins.isList values && isListOfNonEmptyStrings values;
 

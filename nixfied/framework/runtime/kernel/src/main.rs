@@ -1,3 +1,4 @@
+use serde_json::{json, Map, Number, Value as JsonValue};
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs::{self, OpenOptions};
@@ -13,6 +14,21 @@ fn main() {
         process::exit(1);
     }
 }
+
+const SUB_COMMANDS: &[(&str, fn(&str, &[String]) -> Result<(), String>)] = &[
+    ("run-id", run_id_command),
+    ("event-detail", event_detail_command),
+    ("event-state", event_state_command),
+    ("service-policy", service_policy_command),
+    ("run-record", run_record_command),
+    ("task", task_command),
+    ("workflow", workflow_command),
+    ("registry", registry_command),
+    ("summary", summary_command),
+    ("adapter", adapter_command),
+    ("probe", probe_command),
+    ("machine-output", machine_output_command),
+];
 
 fn run() -> Result<(), String> {
     let mut args = env::args().skip(1);
@@ -55,67 +71,15 @@ fn run() -> Result<(), String> {
             }
             validate_exit_command(&plan_path, &exit_code)
         }
-        "run-id" => {
-            let subcommand = args.next().ok_or_else(usage)?;
-            let values = args.collect::<Vec<_>>();
-            run_id_command(&subcommand, &values)
+        other => {
+            if let Some((_, handler)) = SUB_COMMANDS.iter().find(|(name, _)| *name == other) {
+                let subcommand = args.next().ok_or_else(usage)?;
+                let values = args.collect::<Vec<_>>();
+                handler(&subcommand, &values)
+            } else {
+                Err(format!("unknown command: {}\n{}", other, usage()))
+            }
         }
-        "event-detail" => {
-            let subcommand = args.next().ok_or_else(usage)?;
-            let values = args.collect::<Vec<_>>();
-            event_detail_command(&subcommand, &values)
-        }
-        "event-state" => {
-            let subcommand = args.next().ok_or_else(usage)?;
-            let values = args.collect::<Vec<_>>();
-            event_state_command(&subcommand, &values)
-        }
-        "service-policy" => {
-            let subcommand = args.next().ok_or_else(usage)?;
-            let values = args.collect::<Vec<_>>();
-            service_policy_command(&subcommand, &values)
-        }
-        "run-record" => {
-            let subcommand = args.next().ok_or_else(usage)?;
-            let values = args.collect::<Vec<_>>();
-            run_record_command(&subcommand, &values)
-        }
-        "task" => {
-            let subcommand = args.next().ok_or_else(usage)?;
-            let values = args.collect::<Vec<_>>();
-            task_command(&subcommand, &values)
-        }
-        "workflow" => {
-            let subcommand = args.next().ok_or_else(usage)?;
-            let values = args.collect::<Vec<_>>();
-            workflow_command(&subcommand, &values)
-        }
-        "registry" => {
-            let subcommand = args.next().ok_or_else(usage)?;
-            let values = args.collect::<Vec<_>>();
-            registry_command(&subcommand, &values)
-        }
-        "summary" => {
-            let subcommand = args.next().ok_or_else(usage)?;
-            let values = args.collect::<Vec<_>>();
-            summary_command(&subcommand, &values)
-        }
-        "adapter" => {
-            let subcommand = args.next().ok_or_else(usage)?;
-            let values = args.collect::<Vec<_>>();
-            adapter_command(&subcommand, &values)
-        }
-        "probe" => {
-            let subcommand = args.next().ok_or_else(usage)?;
-            let values = args.collect::<Vec<_>>();
-            probe_command(&subcommand, &values)
-        }
-        "machine-output" => {
-            let subcommand = args.next().ok_or_else(usage)?;
-            let values = args.collect::<Vec<_>>();
-            machine_output_command(&subcommand, &values)
-        }
-        other => Err(format!("unknown command: {}\n{}", other, usage())),
     }
 }
 
@@ -433,33 +397,27 @@ fn run_id_envelope_command(values: &[String]) -> Result<(), String> {
 
     let pass_through_env =
         parse_tab_separated_name_value_file(&values[7], "run-id pass-through env")?;
-    let pass_through_env_json = JsonValue::Object(
-        pass_through_env
-            .into_iter()
-            .map(|(key, value)| (key, JsonValue::String(value)))
-            .collect(),
-    );
-    let argv = strip_passthrough_separator(&values[8..])
+    let pass_through_env_json: Map<String, JsonValue> = pass_through_env
+        .into_iter()
+        .map(|(key, value)| (key, JsonValue::String(value)))
+        .collect();
+    let argv: Vec<JsonValue> = strip_passthrough_separator(&values[8..])
         .iter()
-        .map(|value| JsonValue::String(value.clone()))
-        .collect::<Vec<_>>();
-    let envelope = JsonValue::Object(BTreeMap::from([
-        (
-            "model_eval_hash".to_string(),
-            JsonValue::String(values[0].clone()),
-        ),
-        (
-            "runtime_hash".to_string(),
-            JsonValue::String(values[1].clone()),
-        ),
-        ("run_kind".to_string(), JsonValue::String(values[2].clone())),
-        ("workflow_id".to_string(), nullable_string_value(&values[3])),
-        ("task_id".to_string(), nullable_string_value(&values[4])),
-        ("slot".to_string(), JsonValue::String(values[5].clone())),
-        ("env".to_string(), JsonValue::String(values[6].clone())),
-        ("pass_through_env".to_string(), pass_through_env_json),
-        ("argv".to_string(), JsonValue::Array(argv)),
-    ]));
+        .map(|value| json!(value))
+        .collect();
+    let workflow_id = nullable_string_value(&values[3]);
+    let task_id = nullable_string_value(&values[4]);
+    let envelope = json!({
+        "model_eval_hash": values[0],
+        "runtime_hash": values[1],
+        "run_kind": values[2],
+        "workflow_id": workflow_id,
+        "task_id": task_id,
+        "slot": values[5],
+        "env": values[6],
+        "pass_through_env": pass_through_env_json,
+        "argv": argv,
+    });
 
     println!("{}", render_json_compact(&envelope));
     Ok(())
@@ -919,7 +877,7 @@ fn event_detail_render_command(values: &[String]) -> Result<(), String> {
         }
     }
 
-    let mut fields = BTreeMap::new();
+    let mut fields = Map::new();
     fields.insert("kind".to_string(), JsonValue::String(kind.clone()));
 
     match kind.as_str() {
@@ -933,7 +891,7 @@ fn event_detail_render_command(values: &[String]) -> Result<(), String> {
             insert_optional_number_field(&mut fields, "pid", pid);
             insert_optional_number_field(&mut fields, "pgid", pgid);
             if readiness_health.is_some() || readiness_ready.is_some() || last_error.is_some() {
-                let mut readiness = BTreeMap::new();
+                let mut readiness = Map::new();
                 insert_optional_bool_field(&mut readiness, "healthOk", readiness_health);
                 insert_optional_bool_field(&mut readiness, "readyOk", readiness_ready);
                 insert_optional_string_field(&mut readiness, "lastError", last_error);
@@ -1475,7 +1433,7 @@ fn array_strings(value: &JsonValue, key: &str) -> Vec<String> {
     object_array(value, key)
         .unwrap_or(&[])
         .iter()
-        .filter_map(JsonValue::as_string)
+        .filter_map(JsonValue::as_str)
         .map(|item| item.to_string())
         .collect()
 }
@@ -1490,7 +1448,7 @@ fn object_string_map(
         return Ok(result);
     };
     for (entry_key, entry_value) in entries {
-        let Some(entry_text) = entry_value.as_string() else {
+        let Some(entry_text) = entry_value.as_str() else {
             return Err(format!(
                 "{} field {} must contain only string values",
                 label, key
@@ -1506,16 +1464,14 @@ fn json_value_to_plain_string(value: &JsonValue) -> Option<String> {
         JsonValue::Null => None,
         JsonValue::String(value) => Some(value.clone()),
         JsonValue::Bool(value) => Some(if *value { "true" } else { "false" }.to_string()),
-        JsonValue::Number(number) => Some(number.raw.clone()),
+        JsonValue::Number(number) => Some(number.to_string()),
         JsonValue::Array(_) | JsonValue::Object(_) => None,
     }
 }
 
 fn json_value_to_i64(value: &JsonValue) -> Option<i64> {
     match value {
-        JsonValue::Number(number) if number.integer => {
-            number.int_value.and_then(|value| i64::try_from(value).ok())
-        }
+        JsonValue::Number(n) => n.as_i64(),
         JsonValue::String(value) => value.parse::<i64>().ok(),
         _ => None,
     }
@@ -1605,51 +1561,36 @@ fn run_record_create_command(values: &[String]) -> Result<(), String> {
             .collect(),
     );
 
-    let history = JsonValue::Array(vec![run_record_history_entry("queued", &now)]);
-    let payload = JsonValue::Object(BTreeMap::from([
-        ("run_id".to_string(), JsonValue::String(values[2].clone())),
-        (
-            "attempt_id".to_string(),
-            JsonValue::String(values[3].clone()),
-        ),
-        ("command".to_string(), JsonValue::String(values[4].clone())),
-        ("workflow_id".to_string(), nullable_string_value(&values[5])),
-        ("task_id".to_string(), nullable_string_value(&values[6])),
-        (
-            "execution_mode".to_string(),
-            JsonValue::String(values[7].clone()),
-        ),
-        (
-            "process_mode".to_string(),
-            JsonValue::String(values[8].clone()),
-        ),
-        (
-            "ephemeral_enabled".to_string(),
-            JsonValue::Bool(parse_bool_flag(&values[9])?),
-        ),
-        ("state".to_string(), JsonValue::String("queued".to_string())),
-        ("pid".to_string(), JsonValue::Null),
-        ("pgid".to_string(), JsonValue::Null),
-        ("exit_code".to_string(), JsonValue::Null),
-        ("stop_reason".to_string(), JsonValue::Null),
-        ("created_at".to_string(), JsonValue::String(now.clone())),
-        ("started_at".to_string(), JsonValue::Null),
-        ("finished_at".to_string(), JsonValue::Null),
-        ("updated_at".to_string(), JsonValue::String(now)),
-        ("args".to_string(), args),
-        ("history".to_string(), history),
-    ]));
-    let envelope = JsonValue::Object(BTreeMap::from([
-        (
-            "kind".to_string(),
-            JsonValue::String("run-record".to_string()),
-        ),
-        (
-            "version".to_string(),
-            JsonValue::Number(JsonNumber::from_int(1)),
-        ),
-        ("payload".to_string(), payload),
-    ]));
+    let history = vec![run_record_history_entry("queued", &now)];
+    let workflow_id = nullable_string_value(&values[5]);
+    let task_id = nullable_string_value(&values[6]);
+    let ephemeral_enabled = parse_bool_flag(&values[9])?;
+    let payload = json!({
+        "run_id": values[2],
+        "attempt_id": values[3],
+        "command": values[4],
+        "workflow_id": workflow_id,
+        "task_id": task_id,
+        "execution_mode": values[7],
+        "process_mode": values[8],
+        "ephemeral_enabled": ephemeral_enabled,
+        "state": "queued",
+        "pid": null,
+        "pgid": null,
+        "exit_code": null,
+        "stop_reason": null,
+        "created_at": now,
+        "started_at": null,
+        "finished_at": null,
+        "updated_at": now,
+        "args": args,
+        "history": history,
+    });
+    let envelope = json!({
+        "kind": "run-record",
+        "version": 1,
+        "payload": payload,
+    });
 
     validate_and_write_json(bundle_path, "runtime.runRecord", run_file, &envelope)?;
     println!("OK: run-record create");
@@ -1685,13 +1626,13 @@ fn run_record_transition_command(values: &[String]) -> Result<(), String> {
     if let Some(pid) = pid {
         payload_object.insert(
             "pid".to_string(),
-            JsonValue::Number(JsonNumber::from_int(pid)),
+            JsonValue::Number(Number::from(pid)),
         );
     }
     if let Some(pgid) = pgid {
         payload_object.insert(
             "pgid".to_string(),
-            JsonValue::Number(JsonNumber::from_int(pgid)),
+            JsonValue::Number(Number::from(pgid)),
         );
     }
     if payload_object
@@ -1708,7 +1649,7 @@ fn run_record_transition_command(values: &[String]) -> Result<(), String> {
     if let Some(exit_code) = exit_code {
         payload_object.insert(
             "exit_code".to_string(),
-            JsonValue::Number(JsonNumber::from_int(exit_code)),
+            JsonValue::Number(Number::from(exit_code)),
         );
     }
     if let Some(stop_reason) = stop_reason {
@@ -1996,32 +1937,23 @@ fn registry_append_command(values: &[String]) -> Result<(), String> {
     let detail = parse_json_file(&values[7], "registry event detail file")?;
     let detail_reason = registry_detail_reason(&detail);
     let detail_exit_code = registry_detail_exit_code(&detail);
-    let envelope = JsonValue::Object(BTreeMap::from([
-        (
-            "kind".to_string(),
-            JsonValue::String("runtime-event".to_string()),
-        ),
-        (
-            "version".to_string(),
-            JsonValue::Number(JsonNumber::from_int(1)),
-        ),
-        (
-            "payload".to_string(),
-            JsonValue::Object(BTreeMap::from([
-                ("runId".to_string(), JsonValue::String(values[2].clone())),
-                ("attemptId".to_string(), nullable_string_value(&values[3])),
-                ("workflowId".to_string(), nullable_string_value(&values[4])),
-                ("taskId".to_string(), nullable_string_value(&values[5])),
-                (
-                    "seq".to_string(),
-                    JsonValue::Number(JsonNumber::from_int(seq)),
-                ),
-                ("ts".to_string(), JsonValue::String(ts.clone())),
-                ("state".to_string(), JsonValue::String(values[6].clone())),
-                ("detail".to_string(), detail),
-            ])),
-        ),
-    ]));
+    let attempt_id = nullable_string_value(&values[3]);
+    let workflow_id_val = nullable_string_value(&values[4]);
+    let task_id_val = nullable_string_value(&values[5]);
+    let envelope = json!({
+        "kind": "runtime-event",
+        "version": 1,
+        "payload": {
+            "runId": values[2],
+            "attemptId": attempt_id,
+            "workflowId": workflow_id_val,
+            "taskId": task_id_val,
+            "seq": seq,
+            "ts": ts,
+            "state": values[6],
+            "detail": detail,
+        },
+    });
     validate_and_write_json(bundle_path, "runtime.registryEvent", "-", &envelope)?;
 
     let rendered = render_json_compact(&envelope);
@@ -2079,7 +2011,7 @@ fn registry_replay_command(values: &[String]) -> Result<(), String> {
     }
 
     let content = read_text(&index_file)?;
-    let mut replay = BTreeMap::new();
+    let mut replay = Map::new();
     for line in content.lines() {
         let parts = line.split('\t').collect::<Vec<_>>();
         if parts.len() < 8 {
@@ -2287,17 +2219,11 @@ fn summary_write_command(values: &[String]) -> Result<(), String> {
         if object_field(&input, "kind").is_some() && object_field(&input, "payload").is_some() {
             input
         } else {
-            JsonValue::Object(BTreeMap::from([
-                (
-                    "kind".to_string(),
-                    JsonValue::String("workflow-summary".to_string()),
-                ),
-                (
-                    "version".to_string(),
-                    JsonValue::Number(JsonNumber::from_int(1)),
-                ),
-                ("payload".to_string(), input),
-            ]))
+            json!({
+                "kind": "workflow-summary",
+                "version": 1,
+                "payload": input,
+            })
         };
     validate_and_write_json(&values[0], "runtime.summary", &values[1], &envelope)?;
     println!("OK: summary write");
@@ -2313,158 +2239,56 @@ fn summary_compose_command(values: &[String]) -> Result<(), String> {
     }
 
     let steps = parse_summary_steps_file(&values[14])?;
-    let payload = JsonValue::Object(BTreeMap::from([
-        ("run_id".to_string(), JsonValue::String(values[2].clone())),
-        (
-            "attempt_id".to_string(),
-            JsonValue::String(values[3].clone()),
-        ),
-        (
-            "workflow_id".to_string(),
-            JsonValue::String(values[4].clone()),
-        ),
-        ("mode".to_string(), JsonValue::String(values[5].clone())),
-        (
-            "exit_code".to_string(),
-            JsonValue::Number(JsonNumber::from_int(parse_i64_text(
-                &values[6],
-                "summary compose exit-code",
-            )?)),
-        ),
-        (
-            "started_at".to_string(),
-            JsonValue::String(values[7].clone()),
-        ),
-        (
-            "finished_at".to_string(),
-            JsonValue::String(values[8].clone()),
-        ),
-        (
-            "duration_seconds".to_string(),
-            JsonValue::Number(JsonNumber::from_int(parse_i64_text(
-                &values[9],
-                "summary compose duration-seconds",
-            )?)),
-        ),
-        (
-            "counts".to_string(),
-            JsonValue::Object(BTreeMap::from([
-                (
-                    "passed".to_string(),
-                    JsonValue::Number(JsonNumber::from_int(parse_i64_text(
-                        &values[10],
-                        "summary compose passed",
-                    )?)),
-                ),
-                (
-                    "failed".to_string(),
-                    JsonValue::Number(JsonNumber::from_int(parse_i64_text(
-                        &values[11],
-                        "summary compose failed",
-                    )?)),
-                ),
-                (
-                    "skipped".to_string(),
-                    JsonValue::Number(JsonNumber::from_int(parse_i64_text(
-                        &values[12],
-                        "summary compose skipped",
-                    )?)),
-                ),
-                (
-                    "canceled".to_string(),
-                    JsonValue::Number(JsonNumber::from_int(parse_i64_text(
-                        &values[13],
-                        "summary compose canceled",
-                    )?)),
-                ),
-            ])),
-        ),
-        ("steps".to_string(), JsonValue::Array(steps)),
-        (
-            "timing".to_string(),
-            JsonValue::Object(BTreeMap::from([
-                (
-                    "total_duration".to_string(),
-                    JsonValue::Number(JsonNumber::from_int(parse_i64_text(
-                        &values[15],
-                        "summary compose total-duration",
-                    )?)),
-                ),
-                (
-                    "setup_duration".to_string(),
-                    JsonValue::Number(JsonNumber::from_int(parse_i64_text(
-                        &values[16],
-                        "summary compose setup-duration",
-                    )?)),
-                ),
-                (
-                    "steps_duration".to_string(),
-                    JsonValue::Number(JsonNumber::from_int(parse_i64_text(
-                        &values[17],
-                        "summary compose steps-duration",
-                    )?)),
-                ),
-                (
-                    "teardown_duration".to_string(),
-                    JsonValue::Number(JsonNumber::from_int(parse_i64_text(
-                        &values[18],
-                        "summary compose teardown-duration",
-                    )?)),
-                ),
-                (
-                    "accounted_duration".to_string(),
-                    JsonValue::Number(JsonNumber::from_int(parse_i64_text(
-                        &values[19],
-                        "summary compose accounted-duration",
-                    )?)),
-                ),
-                (
-                    "untracked_duration".to_string(),
-                    JsonValue::Number(JsonNumber::from_int(parse_i64_text(
-                        &values[20],
-                        "summary compose untracked-duration",
-                    )?)),
-                ),
-                (
-                    "parallelism".to_string(),
-                    JsonValue::Object(BTreeMap::from([
-                        (
-                            "max_workers".to_string(),
-                            optional_i64_json_value(parse_optional_i64(
-                                &values[21],
-                                "summary compose max-workers",
-                            )?),
-                        ),
-                        (
-                            "peak_workers".to_string(),
-                            optional_i64_json_value(parse_optional_i64(
-                                &values[22],
-                                "summary compose peak-workers",
-                            )?),
-                        ),
-                        (
-                            "canceled_count".to_string(),
-                            optional_i64_json_value(parse_optional_i64(
-                                &values[23],
-                                "summary compose canceled-count",
-                            )?),
-                        ),
-                    ])),
-                ),
-            ])),
-        ),
-    ]));
-    let envelope = JsonValue::Object(BTreeMap::from([
-        (
-            "kind".to_string(),
-            JsonValue::String("workflow-summary".to_string()),
-        ),
-        (
-            "version".to_string(),
-            JsonValue::Number(JsonNumber::from_int(1)),
-        ),
-        ("payload".to_string(), payload),
-    ]));
+    let exit_code = parse_i64_text(&values[6], "summary compose exit-code")?;
+    let duration_seconds = parse_i64_text(&values[9], "summary compose duration-seconds")?;
+    let passed = parse_i64_text(&values[10], "summary compose passed")?;
+    let failed = parse_i64_text(&values[11], "summary compose failed")?;
+    let skipped = parse_i64_text(&values[12], "summary compose skipped")?;
+    let canceled = parse_i64_text(&values[13], "summary compose canceled")?;
+    let total_duration = parse_i64_text(&values[15], "summary compose total-duration")?;
+    let setup_duration = parse_i64_text(&values[16], "summary compose setup-duration")?;
+    let steps_duration = parse_i64_text(&values[17], "summary compose steps-duration")?;
+    let teardown_duration = parse_i64_text(&values[18], "summary compose teardown-duration")?;
+    let accounted_duration = parse_i64_text(&values[19], "summary compose accounted-duration")?;
+    let untracked_duration = parse_i64_text(&values[20], "summary compose untracked-duration")?;
+    let max_workers = optional_i64_json_value(parse_optional_i64(&values[21], "summary compose max-workers")?);
+    let peak_workers = optional_i64_json_value(parse_optional_i64(&values[22], "summary compose peak-workers")?);
+    let canceled_count = optional_i64_json_value(parse_optional_i64(&values[23], "summary compose canceled-count")?);
+    let payload = json!({
+        "run_id": values[2],
+        "attempt_id": values[3],
+        "workflow_id": values[4],
+        "mode": values[5],
+        "exit_code": exit_code,
+        "started_at": values[7],
+        "finished_at": values[8],
+        "duration_seconds": duration_seconds,
+        "counts": {
+            "passed": passed,
+            "failed": failed,
+            "skipped": skipped,
+            "canceled": canceled,
+        },
+        "steps": steps,
+        "timing": {
+            "total_duration": total_duration,
+            "setup_duration": setup_duration,
+            "steps_duration": steps_duration,
+            "teardown_duration": teardown_duration,
+            "accounted_duration": accounted_duration,
+            "untracked_duration": untracked_duration,
+            "parallelism": {
+                "max_workers": max_workers,
+                "peak_workers": peak_workers,
+                "canceled_count": canceled_count,
+            },
+        },
+    });
+    let envelope = json!({
+        "kind": "workflow-summary",
+        "version": 1,
+        "payload": payload,
+    });
 
     validate_and_write_json(&values[0], "runtime.summary", &values[1], &envelope)?;
     println!("OK: summary compose");
@@ -2643,10 +2467,7 @@ fn parse_json_file(path: &str, label: &str) -> Result<JsonValue, String> {
 }
 
 fn run_record_history_entry(state: &str, at: &str) -> JsonValue {
-    JsonValue::Object(BTreeMap::from([
-        ("state".to_string(), JsonValue::String(state.to_string())),
-        ("at".to_string(), JsonValue::String(at.to_string())),
-    ]))
+    json!({ "state": state, "at": at })
 }
 
 fn parse_bool_flag(value: &str) -> Result<bool, String> {
@@ -2700,7 +2521,7 @@ fn next_flag_value(values: &[String], index: &mut usize, flag: &str) -> Result<S
 }
 
 fn insert_optional_string_field(
-    fields: &mut BTreeMap<String, JsonValue>,
+    fields: &mut Map<String, JsonValue>,
     key: &str,
     value: Option<String>,
 ) {
@@ -2710,20 +2531,20 @@ fn insert_optional_string_field(
 }
 
 fn insert_optional_number_field(
-    fields: &mut BTreeMap<String, JsonValue>,
+    fields: &mut Map<String, JsonValue>,
     key: &str,
     value: Option<i64>,
 ) {
     if let Some(value) = value {
         fields.insert(
             key.to_string(),
-            JsonValue::Number(JsonNumber::from_int(value)),
+            JsonValue::Number(Number::from(value)),
         );
     }
 }
 
 fn insert_optional_bool_field(
-    fields: &mut BTreeMap<String, JsonValue>,
+    fields: &mut Map<String, JsonValue>,
     key: &str,
     value: Option<bool>,
 ) {
@@ -2733,7 +2554,7 @@ fn insert_optional_bool_field(
 }
 
 fn insert_optional_json_field(
-    fields: &mut BTreeMap<String, JsonValue>,
+    fields: &mut Map<String, JsonValue>,
     key: &str,
     value: Option<JsonValue>,
 ) {
@@ -2744,7 +2565,7 @@ fn insert_optional_json_field(
 
 fn optional_i64_json_value(value: Option<i64>) -> JsonValue {
     match value {
-        Some(value) => JsonValue::Number(JsonNumber::from_int(value)),
+        Some(value) => JsonValue::Number(Number::from(value)),
         None => JsonValue::Null,
     }
 }
@@ -3345,9 +3166,9 @@ fn load_workflow_serial_state(path: &str) -> Result<WorkflowSerialState, String>
 
     let order = object_field(&value, "order")
         .and_then(JsonValue::as_array)
-        .unwrap_or(&[])
+        .map_or(&[] as &[JsonValue], |v| v)
         .iter()
-        .filter_map(JsonValue::as_string)
+        .filter_map(JsonValue::as_str)
         .map(|item| item.to_string())
         .collect::<Vec<_>>();
     let units_value = object_field(&value, "units")
@@ -3367,9 +3188,9 @@ fn load_workflow_serial_state(path: &str) -> Result<WorkflowSerialState, String>
                     .unwrap_or(0),
                 dependents: object_field(unit_value, "dependents")
                     .and_then(JsonValue::as_array)
-                    .unwrap_or(&[])
+                    .map_or(&[] as &[JsonValue], |v| v)
                     .iter()
-                    .filter_map(JsonValue::as_string)
+                    .filter_map(JsonValue::as_str)
                     .map(|item| item.to_string())
                     .collect(),
                 state: required_string_field(unit_value, "state", "workflow serial unit")?
@@ -3408,78 +3229,32 @@ fn load_workflow_serial_state(path: &str) -> Result<WorkflowSerialState, String>
 }
 
 fn write_workflow_serial_state(path: &str, state: &WorkflowSerialState) -> Result<(), String> {
-    let mut units = BTreeMap::new();
+    let mut units = Map::new();
     for (unit_name, unit) in &state.units {
-        units.insert(
-            unit_name.clone(),
-            JsonValue::Object(BTreeMap::from([
-                ("name".to_string(), JsonValue::String(unit.name.clone())),
-                ("taskId".to_string(), JsonValue::String(unit.task_id.clone())),
-                (
-                    "needsLeft".to_string(),
-                    JsonValue::Number(JsonNumber::from_int(unit.needs_left)),
-                ),
-                (
-                    "dependents".to_string(),
-                    JsonValue::Array(
-                        unit.dependents
-                            .iter()
-                            .map(|item| JsonValue::String(item.clone()))
-                            .collect(),
-                    ),
-                ),
-                ("state".to_string(), JsonValue::String(unit.state.clone())),
-                (
-                    "cancelReason".to_string(),
-                    JsonValue::String(unit.cancel_reason.clone()),
-                ),
-                (
-                    "cancelExtraKey".to_string(),
-                    JsonValue::String(unit.cancel_extra_key.clone()),
-                ),
-                (
-                    "cancelExtraValue".to_string(),
-                    JsonValue::String(unit.cancel_extra_value.clone()),
-                ),
-                (
-                    "selectedServicesCsv".to_string(),
-                    JsonValue::String(unit.selected_services_csv.clone()),
-                ),
-            ])),
-        );
+        let dependents: Vec<JsonValue> = unit.dependents.iter().map(|item| json!(item)).collect();
+        units.insert(unit_name.clone(), json!({
+            "name": unit.name,
+            "taskId": unit.task_id,
+            "needsLeft": unit.needs_left,
+            "dependents": dependents,
+            "state": unit.state,
+            "cancelReason": unit.cancel_reason,
+            "cancelExtraKey": unit.cancel_extra_key,
+            "cancelExtraValue": unit.cancel_extra_value,
+            "selectedServicesCsv": unit.selected_services_csv,
+        }));
     }
-
-    let value = JsonValue::Object(BTreeMap::from([
-        (
-            "kind".to_string(),
-            JsonValue::String("nixfied-workflow-serial-state".to_string()),
-        ),
-        (
-            "version".to_string(),
-            JsonValue::Number(JsonNumber::from_int(1)),
-        ),
-        (
-            "workflowId".to_string(),
-            JsonValue::String(state.workflow_id.clone()),
-        ),
-        ("failFast".to_string(), JsonValue::Bool(state.fail_fast)),
-        (
-            "workflowStatus".to_string(),
-            JsonValue::Number(JsonNumber::from_int(state.workflow_status)),
-        ),
-        ("halted".to_string(), JsonValue::Bool(state.halted)),
-        (
-            "order".to_string(),
-            JsonValue::Array(
-                state
-                    .order
-                    .iter()
-                    .map(|item| JsonValue::String(item.clone()))
-                    .collect(),
-            ),
-        ),
-        ("units".to_string(), JsonValue::Object(units)),
-    ]));
+    let order: Vec<JsonValue> = state.order.iter().map(|item| json!(item)).collect();
+    let value = json!({
+        "kind": "nixfied-workflow-serial-state",
+        "version": 1,
+        "workflowId": state.workflow_id,
+        "failFast": state.fail_fast,
+        "workflowStatus": state.workflow_status,
+        "halted": state.halted,
+        "order": order,
+        "units": JsonValue::Object(units),
+    });
     write_text_atomic(path, &format!("{}\n", render_json_compact(&value)))
 }
 
@@ -3890,9 +3665,9 @@ fn load_workflow_parallel_state(path: &str) -> Result<WorkflowParallelState, Str
 
     let order = object_field(&value, "order")
         .and_then(JsonValue::as_array)
-        .unwrap_or(&[])
+        .map_or(&[] as &[JsonValue], |v| v)
         .iter()
-        .filter_map(JsonValue::as_string)
+        .filter_map(JsonValue::as_str)
         .map(|item| item.to_string())
         .collect::<Vec<_>>();
     let units_value = object_field(&value, "units")
@@ -3912,16 +3687,16 @@ fn load_workflow_parallel_state(path: &str) -> Result<WorkflowParallelState, Str
                     .unwrap_or(0),
                 dependents: object_field(unit_value, "dependents")
                     .and_then(JsonValue::as_array)
-                    .unwrap_or(&[])
+                    .map_or(&[] as &[JsonValue], |v| v)
                     .iter()
-                    .filter_map(JsonValue::as_string)
+                    .filter_map(JsonValue::as_str)
                     .map(|item| item.to_string())
                     .collect(),
                 locks: object_field(unit_value, "locks")
                     .and_then(JsonValue::as_array)
-                    .unwrap_or(&[])
+                    .map_or(&[] as &[JsonValue], |v| v)
                     .iter()
-                    .filter_map(JsonValue::as_string)
+                    .filter_map(JsonValue::as_str)
                     .map(|item| item.to_string())
                     .collect(),
                 state: required_string_field(unit_value, "state", "workflow parallel unit")?
@@ -3966,98 +3741,36 @@ fn load_workflow_parallel_state(path: &str) -> Result<WorkflowParallelState, Str
 }
 
 fn write_workflow_parallel_state(path: &str, state: &WorkflowParallelState) -> Result<(), String> {
-    let mut units = BTreeMap::new();
+    let mut units = Map::new();
     for (unit_name, unit) in &state.units {
-        units.insert(
-            unit_name.clone(),
-            JsonValue::Object(BTreeMap::from([
-                ("name".to_string(), JsonValue::String(unit.name.clone())),
-                ("taskId".to_string(), JsonValue::String(unit.task_id.clone())),
-                (
-                    "needsLeft".to_string(),
-                    JsonValue::Number(JsonNumber::from_int(unit.needs_left)),
-                ),
-                (
-                    "dependents".to_string(),
-                    JsonValue::Array(
-                        unit.dependents
-                            .iter()
-                            .map(|item| JsonValue::String(item.clone()))
-                            .collect(),
-                    ),
-                ),
-                (
-                    "locks".to_string(),
-                    JsonValue::Array(
-                        unit.locks
-                            .iter()
-                            .map(|item| JsonValue::String(item.clone()))
-                            .collect(),
-                    ),
-                ),
-                ("state".to_string(), JsonValue::String(unit.state.clone())),
-                (
-                    "cancelReason".to_string(),
-                    JsonValue::String(unit.cancel_reason.clone()),
-                ),
-                (
-                    "cancelExtraKey".to_string(),
-                    JsonValue::String(unit.cancel_extra_key.clone()),
-                ),
-                (
-                    "cancelExtraValue".to_string(),
-                    JsonValue::String(unit.cancel_extra_value.clone()),
-                ),
-                (
-                    "selectedServicesCsv".to_string(),
-                    JsonValue::String(unit.selected_services_csv.clone()),
-                ),
-                (
-                    "producesJson".to_string(),
-                    JsonValue::String(unit.produces_json.clone()),
-                ),
-            ])),
-        );
+        let dependents: Vec<JsonValue> = unit.dependents.iter().map(|item| json!(item)).collect();
+        let locks: Vec<JsonValue> = unit.locks.iter().map(|item| json!(item)).collect();
+        units.insert(unit_name.clone(), json!({
+            "name": unit.name,
+            "taskId": unit.task_id,
+            "needsLeft": unit.needs_left,
+            "dependents": dependents,
+            "locks": locks,
+            "state": unit.state,
+            "cancelReason": unit.cancel_reason,
+            "cancelExtraKey": unit.cancel_extra_key,
+            "cancelExtraValue": unit.cancel_extra_value,
+            "selectedServicesCsv": unit.selected_services_csv,
+            "producesJson": unit.produces_json,
+        }));
     }
-
-    let value = JsonValue::Object(BTreeMap::from([
-        (
-            "kind".to_string(),
-            JsonValue::String("nixfied-workflow-parallel-state".to_string()),
-        ),
-        (
-            "version".to_string(),
-            JsonValue::Number(JsonNumber::from_int(1)),
-        ),
-        (
-            "workflowId".to_string(),
-            JsonValue::String(state.workflow_id.clone()),
-        ),
-        ("failFast".to_string(), JsonValue::Bool(state.fail_fast)),
-        (
-            "maxWorkers".to_string(),
-            JsonValue::Number(JsonNumber::from_int(state.max_workers)),
-        ),
-        (
-            "workflowStatus".to_string(),
-            JsonValue::Number(JsonNumber::from_int(state.workflow_status)),
-        ),
-        (
-            "stopScheduling".to_string(),
-            JsonValue::Bool(state.stop_scheduling),
-        ),
-        (
-            "order".to_string(),
-            JsonValue::Array(
-                state
-                    .order
-                    .iter()
-                    .map(|item| JsonValue::String(item.clone()))
-                    .collect(),
-            ),
-        ),
-        ("units".to_string(), JsonValue::Object(units)),
-    ]));
+    let order: Vec<JsonValue> = state.order.iter().map(|item| json!(item)).collect();
+    let value = json!({
+        "kind": "nixfied-workflow-parallel-state",
+        "version": 1,
+        "workflowId": state.workflow_id,
+        "failFast": state.fail_fast,
+        "maxWorkers": state.max_workers,
+        "workflowStatus": state.workflow_status,
+        "stopScheduling": state.stop_scheduling,
+        "order": order,
+        "units": JsonValue::Object(units),
+    });
     write_text_atomic(path, &format!("{}\n", render_json_compact(&value)))
 }
 
@@ -4325,34 +4038,21 @@ fn parse_summary_steps_file(path: &str) -> Result<Vec<JsonValue>, String> {
                 path
             ));
         }
-        steps.push(JsonValue::Object(BTreeMap::from([
-            ("name".to_string(), JsonValue::String(parts[0].to_string())),
-            (
-                "status".to_string(),
-                JsonValue::String(parts[1].to_string()),
-            ),
-            ("state".to_string(), JsonValue::String(parts[3].to_string())),
-            (
-                "duration".to_string(),
-                JsonValue::Number(JsonNumber::from_int(parse_i64_text(
-                    parts[2],
-                    "summary step duration",
-                )?)),
-            ),
-            (
-                "order".to_string(),
-                JsonValue::Number(JsonNumber::from_int(parse_i64_text(
-                    parts[4],
-                    "summary step order",
-                )?)),
-            ),
-            ("workflow_id".to_string(), nullable_string_value(parts[5])),
-            ("reason".to_string(), nullable_string_value(parts[6])),
-            (
-                "exit_code".to_string(),
-                optional_i64_json_value(parse_optional_i64(parts[7], "summary step exit_code")?),
-            ),
-        ])));
+        let duration = parse_i64_text(parts[2], "summary step duration")?;
+        let order = parse_i64_text(parts[4], "summary step order")?;
+        let workflow_id_val = nullable_string_value(parts[5]);
+        let reason = nullable_string_value(parts[6]);
+        let exit_code_val = optional_i64_json_value(parse_optional_i64(parts[7], "summary step exit_code")?);
+        steps.push(json!({
+            "name": parts[0],
+            "status": parts[1],
+            "state": parts[3],
+            "duration": duration,
+            "order": order,
+            "workflow_id": workflow_id_val,
+            "reason": reason,
+            "exit_code": exit_code_val,
+        }));
     }
     Ok(steps)
 }
@@ -4396,7 +4096,7 @@ fn print_json_scalar(value: &JsonValue) {
         JsonValue::Null => println!(),
         JsonValue::Bool(value) => println!("{}", value),
         JsonValue::String(value) => println!("{}", value),
-        JsonValue::Number(number) => println!("{}", number.raw),
+        JsonValue::Number(number) => println!("{}", number),
         JsonValue::Array(_) | JsonValue::Object(_) => println!("{}", render_json_compact(value)),
     }
 }
@@ -4414,7 +4114,7 @@ fn json_scalar_or_placeholder(value: &JsonValue) -> String {
         JsonValue::Null => "?".to_string(),
         JsonValue::Bool(value) => value.to_string(),
         JsonValue::String(value) => value.clone(),
-        JsonValue::Number(number) => number.raw.clone(),
+        JsonValue::Number(number) => number.to_string(),
         JsonValue::Array(_) | JsonValue::Object(_) => render_json_compact(value),
     }
 }
@@ -4456,11 +4156,11 @@ fn adapter_decode_supervisor_status(values: &[String]) -> Result<(), String> {
             "{}\t{}\t{}\t{}",
             object
                 .get("name")
-                .and_then(JsonValue::as_string)
+                .and_then(JsonValue::as_str)
                 .unwrap_or(""),
             object
                 .get("status")
-                .and_then(JsonValue::as_string)
+                .and_then(JsonValue::as_str)
                 .unwrap_or(""),
             object
                 .get("is_running")
@@ -4505,7 +4205,7 @@ fn adapter_decode_helios_checkpoint_root(values: &[String]) -> Result<(), String
         .unwrap_or(false);
     let payload = parse_json_file(&values[0], "helios checkpoint payload")?;
     let selected = resolve_json_path(&payload, ".data.root");
-    match selected.and_then(JsonValue::as_string) {
+    match selected.and_then(JsonValue::as_str) {
         Some(value) => {
             println!("{}", value);
             Ok(())
@@ -5111,12 +4811,12 @@ fn request_jsonrpc_payload(
     method: &str,
     max_time: i64,
 ) -> Result<JsonValue, String> {
-    let request_body = render_json_compact(&JsonValue::Object(BTreeMap::from([
-        ("jsonrpc".to_string(), JsonValue::String("2.0".to_string())),
-        ("id".to_string(), JsonValue::Number(JsonNumber::from_int(1))),
-        ("method".to_string(), JsonValue::String(method.to_string())),
-        ("params".to_string(), JsonValue::Array(Vec::new())),
-    ])));
+    let request_body = render_json_compact(&json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": method,
+        "params": [],
+    }));
     let args = vec![
         "-fsS".to_string(),
         "--max-time".to_string(),
@@ -5172,7 +4872,7 @@ fn probe_plan_exports(
         }
         "jsonrpc-result-hex" => {
             let value = result
-                .and_then(JsonValue::as_string)
+                .and_then(JsonValue::as_str)
                 .ok_or_else(|| "probe result must be a hex string".to_string())?;
             if !is_hex_prefixed(value) {
                 return Err(format!("probe result must be hex, got {}", value));
@@ -5438,40 +5138,25 @@ fn machine_output_fail(
     failed_app_id: &str,
     exit_code: i32,
 ) -> ! {
-    let payload = JsonValue::Object(BTreeMap::from([
-        ("ok".to_string(), JsonValue::Bool(false)),
-        ("appId".to_string(), JsonValue::String(plan.app_id.clone())),
-        (
-            "targetAppId".to_string(),
-            JsonValue::String(plan.target_app_id.clone()),
-        ),
-        ("stage".to_string(), JsonValue::String(stage.to_string())),
-        ("code".to_string(), JsonValue::String(code.to_string())),
-        (
-            "message".to_string(),
-            JsonValue::String(message.to_string()),
-        ),
-        (
-            "failedAppId".to_string(),
-            nullable_string_value(failed_app_id),
-        ),
-        (
-            "contractRef".to_string(),
-            nullable_string_value(&plan.contract_ref),
-        ),
-        (
-            "validator".to_string(),
-            if stage == "validation" {
-                JsonValue::String("nixfied-kernel".to_string())
-            } else {
-                JsonValue::Null
-            },
-        ),
-        (
-            "exitCode".to_string(),
-            JsonValue::Number(JsonNumber::from_int(exit_code as i64)),
-        ),
-    ]));
+    let failed_app_id_val = nullable_string_value(failed_app_id);
+    let contract_ref_val = nullable_string_value(&plan.contract_ref);
+    let validator_val: JsonValue = if stage == "validation" {
+        json!("nixfied-kernel")
+    } else {
+        JsonValue::Null
+    };
+    let payload = json!({
+        "ok": false,
+        "appId": plan.app_id,
+        "targetAppId": plan.target_app_id,
+        "stage": stage,
+        "code": code,
+        "message": message,
+        "failedAppId": failed_app_id_val,
+        "contractRef": contract_ref_val,
+        "validator": validator_val,
+        "exitCode": exit_code as i64,
+    });
     println!("{}", render_json_compact(&payload));
     process::exit(exit_code.max(1));
 }
@@ -5494,391 +5179,12 @@ fn read_text(path: &str) -> Result<String, String> {
     fs::read_to_string(path).map_err(|err| format!("failed to read {}: {}", path, err))
 }
 
-#[derive(Clone, Debug)]
-enum JsonValue {
-    Null,
-    Bool(bool),
-    Number(JsonNumber),
-    String(String),
-    Array(Vec<JsonValue>),
-    Object(BTreeMap<String, JsonValue>),
-}
-
-#[derive(Clone, Debug)]
-struct JsonNumber {
-    raw: String,
-    integer: bool,
-    int_value: Option<i128>,
-    float_value: f64,
-}
-
-impl JsonValue {
-    fn as_object(&self) -> Option<&BTreeMap<String, JsonValue>> {
-        match self {
-            JsonValue::Object(value) => Some(value),
-            _ => None,
-        }
-    }
-
-    fn as_object_mut(&mut self) -> Option<&mut BTreeMap<String, JsonValue>> {
-        match self {
-            JsonValue::Object(value) => Some(value),
-            _ => None,
-        }
-    }
-
-    fn as_array(&self) -> Option<&[JsonValue]> {
-        match self {
-            JsonValue::Array(value) => Some(value.as_slice()),
-            _ => None,
-        }
-    }
-
-    fn as_array_mut(&mut self) -> Option<&mut Vec<JsonValue>> {
-        match self {
-            JsonValue::Array(value) => Some(value),
-            _ => None,
-        }
-    }
-
-    fn as_string(&self) -> Option<&str> {
-        match self {
-            JsonValue::String(value) => Some(value.as_str()),
-            _ => None,
-        }
-    }
-
-    fn as_bool(&self) -> Option<bool> {
-        match self {
-            JsonValue::Bool(value) => Some(*value),
-            _ => None,
-        }
-    }
-
-    fn as_number(&self) -> Option<&JsonNumber> {
-        match self {
-            JsonValue::Number(value) => Some(value),
-            _ => None,
-        }
-    }
-}
-
-impl JsonNumber {
-    fn from_int(value: i64) -> Self {
-        Self {
-            raw: value.to_string(),
-            integer: true,
-            int_value: Some(value as i128),
-            float_value: value as f64,
-        }
-    }
-}
-
 fn parse_json(input: &str) -> Result<JsonValue, String> {
-    let mut parser = Parser::new(input);
-    let value = parser.parse_value()?;
-    parser.skip_whitespace();
-    if parser.peek().is_some() {
-        return Err(parser.error("trailing content after JSON value"));
-    }
-    Ok(value)
+    serde_json::from_str(input).map_err(|err| format!("{}", err))
 }
 
-struct Parser {
-    chars: Vec<char>,
-    pos: usize,
-    line: usize,
-    col: usize,
-}
-
-impl Parser {
-    fn new(input: &str) -> Self {
-        Self {
-            chars: input.chars().collect(),
-            pos: 0,
-            line: 1,
-            col: 1,
-        }
-    }
-
-    fn peek(&self) -> Option<char> {
-        self.chars.get(self.pos).copied()
-    }
-
-    fn next(&mut self) -> Option<char> {
-        let ch = self.chars.get(self.pos).copied()?;
-        self.pos += 1;
-        if ch == '\n' {
-            self.line += 1;
-            self.col = 1;
-        } else {
-            self.col += 1;
-        }
-        Some(ch)
-    }
-
-    fn error(&self, message: impl Into<String>) -> String {
-        format!("line {} column {}: {}", self.line, self.col, message.into())
-    }
-
-    fn skip_whitespace(&mut self) {
-        while matches!(self.peek(), Some(' ' | '\n' | '\t' | '\r')) {
-            let _ = self.next();
-        }
-    }
-
-    fn parse_value(&mut self) -> Result<JsonValue, String> {
-        self.skip_whitespace();
-        match self.peek() {
-            Some('{') => self.parse_object(),
-            Some('[') => self.parse_array(),
-            Some('"') => Ok(JsonValue::String(self.parse_string()?)),
-            Some('t') => {
-                self.expect_keyword("true")?;
-                Ok(JsonValue::Bool(true))
-            }
-            Some('f') => {
-                self.expect_keyword("false")?;
-                Ok(JsonValue::Bool(false))
-            }
-            Some('n') => {
-                self.expect_keyword("null")?;
-                Ok(JsonValue::Null)
-            }
-            Some('-') | Some('0'..='9') => Ok(JsonValue::Number(self.parse_number()?)),
-            Some(ch) => Err(self.error(format!("unexpected character '{}'", ch))),
-            None => Err(self.error("unexpected end of input")),
-        }
-    }
-
-    fn expect_keyword(&mut self, keyword: &str) -> Result<(), String> {
-        for expected in keyword.chars() {
-            match self.next() {
-                Some(actual) if actual == expected => {}
-                Some(actual) => {
-                    return Err(self.error(format!(
-                        "expected keyword {}, got character '{}'",
-                        keyword, actual
-                    )))
-                }
-                None => return Err(self.error(format!("expected keyword {}", keyword))),
-            }
-        }
-        Ok(())
-    }
-
-    fn parse_string(&mut self) -> Result<String, String> {
-        self.expect_char('"')?;
-        let mut out = String::new();
-        loop {
-            let ch = self
-                .next()
-                .ok_or_else(|| self.error("unterminated string literal"))?;
-            match ch {
-                '"' => break,
-                '\\' => out.push(self.parse_escape_sequence()?),
-                '\u{0000}'..='\u{001F}' => {
-                    return Err(self.error("unescaped control character in string"))
-                }
-                other => out.push(other),
-            }
-        }
-        Ok(out)
-    }
-
-    fn parse_escape_sequence(&mut self) -> Result<char, String> {
-        match self.next() {
-            Some('"') => Ok('"'),
-            Some('\\') => Ok('\\'),
-            Some('/') => Ok('/'),
-            Some('b') => Ok('\u{0008}'),
-            Some('f') => Ok('\u{000c}'),
-            Some('n') => Ok('\n'),
-            Some('r') => Ok('\r'),
-            Some('t') => Ok('\t'),
-            Some('u') => self.parse_unicode_escape(),
-            Some(other) => Err(self.error(format!("invalid escape sequence '\\{}'", other))),
-            None => Err(self.error("unterminated escape sequence")),
-        }
-    }
-
-    fn parse_unicode_escape(&mut self) -> Result<char, String> {
-        let first = self.parse_hex_quad()?;
-        if (0xD800..=0xDBFF).contains(&first) {
-            self.expect_char('\\')?;
-            self.expect_char('u')?;
-            let second = self.parse_hex_quad()?;
-            if !(0xDC00..=0xDFFF).contains(&second) {
-                return Err(self.error("invalid UTF-16 surrogate pair"));
-            }
-            let codepoint =
-                0x10000 + ((((first - 0xD800) as u32) << 10) | ((second - 0xDC00) as u32));
-            return char::from_u32(codepoint)
-                .ok_or_else(|| self.error("invalid Unicode escape sequence"));
-        }
-        if (0xDC00..=0xDFFF).contains(&first) {
-            return Err(self.error("unexpected low surrogate in Unicode escape"));
-        }
-        char::from_u32(first as u32).ok_or_else(|| self.error("invalid Unicode escape sequence"))
-    }
-
-    fn parse_hex_quad(&mut self) -> Result<u16, String> {
-        let mut value = 0u16;
-        for _ in 0..4 {
-            let ch = self
-                .next()
-                .ok_or_else(|| self.error("unexpected end of Unicode escape"))?;
-            let digit = ch
-                .to_digit(16)
-                .ok_or_else(|| self.error("invalid hex digit in Unicode escape"))?;
-            value = (value << 4) | digit as u16;
-        }
-        Ok(value)
-    }
-
-    fn parse_number(&mut self) -> Result<JsonNumber, String> {
-        let start = self.pos;
-        if self.peek() == Some('-') {
-            let _ = self.next();
-        }
-
-        match self.peek() {
-            Some('0') => {
-                let _ = self.next();
-                if matches!(self.peek(), Some('0'..='9')) {
-                    return Err(self.error("leading zeros are not allowed in JSON numbers"));
-                }
-            }
-            Some('1'..='9') => {
-                let _ = self.next();
-                while matches!(self.peek(), Some('0'..='9')) {
-                    let _ = self.next();
-                }
-            }
-            _ => return Err(self.error("invalid JSON number")),
-        }
-
-        if self.peek() == Some('.') {
-            let _ = self.next();
-            if !matches!(self.peek(), Some('0'..='9')) {
-                return Err(self.error("fractional part requires digits"));
-            }
-            while matches!(self.peek(), Some('0'..='9')) {
-                let _ = self.next();
-            }
-        }
-
-        if matches!(self.peek(), Some('e' | 'E')) {
-            let _ = self.next();
-            if matches!(self.peek(), Some('+' | '-')) {
-                let _ = self.next();
-            }
-            if !matches!(self.peek(), Some('0'..='9')) {
-                return Err(self.error("exponent requires digits"));
-            }
-            while matches!(self.peek(), Some('0'..='9')) {
-                let _ = self.next();
-            }
-        }
-
-        let raw: String = self.chars[start..self.pos].iter().collect();
-        let integer = !raw.contains('.') && !raw.contains('e') && !raw.contains('E');
-        let float_value = raw
-            .parse::<f64>()
-            .map_err(|err| self.error(format!("invalid JSON number: {}", err)))?;
-        let int_value = if integer {
-            raw.parse::<i128>().ok()
-        } else {
-            None
-        };
-
-        Ok(JsonNumber {
-            raw,
-            integer,
-            int_value,
-            float_value,
-        })
-    }
-
-    fn parse_array(&mut self) -> Result<JsonValue, String> {
-        self.expect_char('[')?;
-        self.skip_whitespace();
-        let mut values = Vec::new();
-        if self.peek() == Some(']') {
-            let _ = self.next();
-            return Ok(JsonValue::Array(values));
-        }
-
-        loop {
-            values.push(self.parse_value()?);
-            self.skip_whitespace();
-            match self.peek() {
-                Some(',') => {
-                    let _ = self.next();
-                    self.skip_whitespace();
-                }
-                Some(']') => {
-                    let _ = self.next();
-                    break;
-                }
-                Some(other) => {
-                    return Err(self.error(format!(
-                        "expected ',' or ']' after array item, found '{}'",
-                        other
-                    )))
-                }
-                None => return Err(self.error("unterminated array")),
-            }
-        }
-
-        Ok(JsonValue::Array(values))
-    }
-
-    fn parse_object(&mut self) -> Result<JsonValue, String> {
-        self.expect_char('{')?;
-        self.skip_whitespace();
-        let mut values = BTreeMap::new();
-        if self.peek() == Some('}') {
-            let _ = self.next();
-            return Ok(JsonValue::Object(values));
-        }
-
-        loop {
-            let key = self.parse_string()?;
-            self.skip_whitespace();
-            self.expect_char(':')?;
-            let value = self.parse_value()?;
-            values.insert(key, value);
-            self.skip_whitespace();
-            match self.peek() {
-                Some(',') => {
-                    let _ = self.next();
-                    self.skip_whitespace();
-                }
-                Some('}') => {
-                    let _ = self.next();
-                    break;
-                }
-                Some(other) => {
-                    return Err(self.error(format!(
-                        "expected ',' or '}}' after object item, found '{}'",
-                        other
-                    )))
-                }
-                None => return Err(self.error("unterminated object")),
-            }
-        }
-
-        Ok(JsonValue::Object(values))
-    }
-
-    fn expect_char(&mut self, expected: char) -> Result<(), String> {
-        match self.next() {
-            Some(actual) if actual == expected => Ok(()),
-            Some(actual) => Err(self.error(format!("expected '{}', found '{}'", expected, actual))),
-            None => Err(self.error(format!("expected '{}'", expected))),
-        }
-    }
+fn render_json_compact(value: &JsonValue) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| "null".to_string())
 }
 
 #[derive(Clone, Debug)]
@@ -5934,7 +5240,7 @@ fn is_identifier(value: &str) -> bool {
 
 struct ValidationContext<'a> {
     root: &'a JsonValue,
-    definition_maps: Vec<&'a BTreeMap<String, JsonValue>>,
+    definition_maps: Vec<&'a Map<String, JsonValue>>,
 }
 
 impl<'a> ValidationContext<'a> {
@@ -6230,11 +5536,11 @@ fn validate_integer(
     path: &[PathSegment],
 ) -> Result<(), String> {
     let number = match value {
-        JsonValue::Number(value) if value.integer => value,
+        JsonValue::Number(n) if n.is_i64() || n.is_u64() => n,
         JsonValue::Number(other) => {
             return Err(error_at(
                 path,
-                format!("expected integer, found number {}", other.raw),
+                format!("expected integer, found number {}", other),
             ))
         }
         other => {
@@ -6245,7 +5551,7 @@ fn validate_integer(
         }
     };
 
-    validate_numeric_bounds(schema, number.float_value, path)?;
+    validate_numeric_bounds(schema, number.as_f64().unwrap_or(0.0), path)?;
     Ok(())
 }
 
@@ -6255,7 +5561,7 @@ fn validate_number(
     path: &[PathSegment],
 ) -> Result<(), String> {
     let number = match value {
-        JsonValue::Number(value) => value,
+        JsonValue::Number(n) => n,
         other => {
             return Err(error_at(
                 path,
@@ -6264,7 +5570,7 @@ fn validate_number(
         }
     };
 
-    validate_numeric_bounds(schema, number.float_value, path)?;
+    validate_numeric_bounds(schema, number.as_f64().unwrap_or(0.0), path)?;
     Ok(())
 }
 
@@ -6610,7 +5916,7 @@ fn validate_tagged_union(
 
     let variant_schema = *variant_schema;
     let variant_payload = if should_strip_tag_field(variant_schema, tag_field) {
-        let mut filtered = BTreeMap::new();
+        let mut filtered = Map::new();
         for (key, item) in object {
             if key != tag_field {
                 filtered.insert(key.clone(), item.clone());
@@ -6711,7 +6017,7 @@ fn record_fields<'a>(
         .map(|values| {
             values
                 .iter()
-                .filter_map(JsonValue::as_string)
+                .filter_map(JsonValue::as_str)
                 .map(|value| value.to_string())
                 .collect::<Vec<_>>()
         })
@@ -6849,7 +6155,7 @@ fn schema_kind(schema: &JsonValue) -> Option<String> {
     object
         .get("kind")
         .or_else(|| object.get("type"))
-        .and_then(JsonValue::as_string)
+        .and_then(JsonValue::as_str)
         .map(|value| value.to_ascii_lowercase())
         .or_else(|| infer_kind(schema))
 }
@@ -6926,24 +6232,27 @@ fn object_field_mut<'a>(value: &'a mut JsonValue, key: &str) -> Option<&'a mut J
 }
 
 fn object_string<'a>(value: &'a JsonValue, key: &str) -> Option<&'a str> {
-    object_field(value, key)?.as_string()
+    object_field(value, key)?.as_str()
 }
 
 fn object_bool(value: &JsonValue, key: &str) -> Option<bool> {
     object_field(value, key)?.as_bool()
 }
 
-fn object_number<'a>(value: &'a JsonValue, key: &str) -> Option<&'a JsonNumber> {
-    object_field(value, key)?.as_number()
+fn object_number<'a>(value: &'a JsonValue, key: &str) -> Option<&'a Number> {
+    match object_field(value, key)? {
+        JsonValue::Number(n) => Some(n),
+        _ => None,
+    }
 }
 
 fn object_array<'a>(value: &'a JsonValue, key: &str) -> Option<&'a [JsonValue]> {
-    object_field(value, key)?.as_array()
+    object_field(value, key)?.as_array().map(|v| v.as_slice())
 }
 
 fn schema_number(schema: &JsonValue, key: &str) -> Option<f64> {
     match object_field(schema, key)? {
-        JsonValue::Number(number) => Some(number.float_value),
+        JsonValue::Number(n) => n.as_f64(),
         JsonValue::String(value) => value.parse::<f64>().ok(),
         _ => None,
     }
@@ -6956,7 +6265,7 @@ fn schema_patterns(schema: &JsonValue) -> Option<Vec<String>> {
     }
     if let Some(array) = object_array(schema, "patterns") {
         for item in array {
-            if let Some(pattern) = item.as_string() {
+            if let Some(pattern) = item.as_str() {
                 patterns.push(pattern.to_string());
             }
         }
@@ -7093,46 +6402,21 @@ fn scalar_key(value: &JsonValue) -> Option<String> {
         JsonValue::String(value) => Some(value.clone()),
         JsonValue::Bool(value) => Some(value.to_string()),
         JsonValue::Null => Some("null".to_string()),
-        JsonValue::Number(number) if number.integer => {
-            if let Some(value) = number.int_value {
-                Some(value.to_string())
+        JsonValue::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Some(i.to_string())
+            } else if let Some(u) = n.as_u64() {
+                Some(u.to_string())
             } else {
-                Some(number.raw.clone())
+                Some(n.to_string())
             }
         }
-        JsonValue::Number(number) => Some(number.raw.clone()),
         _ => None,
     }
 }
 
 fn json_equal(left: &JsonValue, right: &JsonValue) -> bool {
-    match (left, right) {
-        (JsonValue::Null, JsonValue::Null) => true,
-        (JsonValue::Bool(a), JsonValue::Bool(b)) => a == b,
-        (JsonValue::String(a), JsonValue::String(b)) => a == b,
-        (JsonValue::Number(a), JsonValue::Number(b)) => {
-            if let (Some(ai), Some(bi)) = (a.int_value, b.int_value) {
-                ai == bi
-            } else {
-                a.float_value == b.float_value
-            }
-        }
-        (JsonValue::Array(a), JsonValue::Array(b)) => {
-            a.len() == b.len()
-                && a.iter()
-                    .zip(b.iter())
-                    .all(|(left, right)| json_equal(left, right))
-        }
-        (JsonValue::Object(a), JsonValue::Object(b)) => {
-            a.len() == b.len()
-                && a.iter().all(|(key, value)| {
-                    b.get(key)
-                        .map(|other| json_equal(value, other))
-                        .unwrap_or(false)
-                })
-        }
-        _ => false,
-    }
+    left == right
 }
 
 fn json_preview(value: &JsonValue) -> String {
@@ -7140,7 +6424,7 @@ fn json_preview(value: &JsonValue) -> String {
         JsonValue::Null => "null".to_string(),
         JsonValue::Bool(value) => value.to_string(),
         JsonValue::String(value) => format!("{:?}", value),
-        JsonValue::Number(number) => number.raw.clone(),
+        JsonValue::Number(number) => number.to_string(),
         JsonValue::Array(values) => format!("[{} items]", values.len()),
         JsonValue::Object(values) => format!("{{{} keys}}", values.len()),
     }
@@ -7177,7 +6461,7 @@ fn resolve_json_path<'a>(value: &'a JsonValue, path_expr: &str) -> Option<&'a Js
 
 fn json_value_to_number_string(value: &JsonValue) -> Option<String> {
     match value {
-        JsonValue::Number(number) => Some(number.raw.clone()),
+        JsonValue::Number(number) => Some(number.to_string()),
         JsonValue::String(text) => {
             if let Ok(value) = text.parse::<i128>() {
                 Some(value.to_string())
@@ -7199,61 +6483,12 @@ fn json_value_to_number_string(value: &JsonValue) -> Option<String> {
     }
 }
 
-fn render_json_compact(value: &JsonValue) -> String {
-    match value {
-        JsonValue::Null => "null".to_string(),
-        JsonValue::Bool(value) => value.to_string(),
-        JsonValue::Number(number) => number.raw.clone(),
-        JsonValue::String(value) => format!("\"{}\"", escape_json_string(value)),
-        JsonValue::Array(values) => {
-            let rendered = values
-                .iter()
-                .map(render_json_compact)
-                .collect::<Vec<_>>()
-                .join(",");
-            format!("[{}]", rendered)
-        }
-        JsonValue::Object(values) => {
-            let rendered = values
-                .iter()
-                .map(|(key, item)| {
-                    format!(
-                        "\"{}\":{}",
-                        escape_json_string(key),
-                        render_json_compact(item)
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join(",");
-            format!("{{{}}}", rendered)
-        }
-    }
-}
-
-fn escape_json_string(value: &str) -> String {
-    let mut out = String::new();
-    for ch in value.chars() {
-        match ch {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\u{08}' => out.push_str("\\b"),
-            '\u{0c}' => out.push_str("\\f"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            ch if ch < ' ' => out.push_str(&format!("\\u{:04x}", ch as u32)),
-            ch => out.push(ch),
-        }
-    }
-    out
-}
-
 fn value_type(value: &JsonValue) -> &'static str {
     match value {
         JsonValue::Null => "null",
         JsonValue::Bool(_) => "bool",
         JsonValue::String(_) => "string",
-        JsonValue::Number(number) if number.integer => "integer",
+        JsonValue::Number(n) if n.is_i64() || n.is_u64() => "integer",
         JsonValue::Number(_) => "number",
         JsonValue::Array(_) => "array",
         JsonValue::Object(_) => "object",

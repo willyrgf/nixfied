@@ -8,27 +8,34 @@
 }:
 
 let
-  lib = pkgs.lib;
-  runtimeDefaults = import ../../../core/runtime-defaults.nix;
-  managedServiceLifecycle = import ../../helpers/managed-service-lifecycle.nix { inherit pkgs; };
-  probeCommands = import ../../helpers/probe-commands.nix { inherit pkgs; };
-  probePlanRuntime = import ../../helpers/probe-plan-runtime.nix {
-    inherit
-      lib
-      pkgs
-      probeCommands
-      ;
-    postgresProbePkg = if pkgs ? postgresql_16 then pkgs.postgresql_16 else pkgs.postgresql;
-  };
-  slotEnvRuntime = import ../../helpers/slot-env-runtime.nix { inherit pkgs; };
-  runtimeEvents = import ../../helpers/runtime-events.nix { inherit pkgs project; };
-  observability = import ../../helpers/service-observability.nix {
+  probeSetup = import ../probe-setup-helper.nix {
     inherit
       pkgs
+      project
       slots
-      runtimeEvents
+      config
       ;
+    serviceName = "reth";
+    endpointMapping = {
+      http = "$RETH_HTTP_PORT";
+      ws = "$RETH_WS_PORT";
+      auth = "$RETH_AUTH_PORT";
+    };
   };
+
+  inherit (probeSetup)
+    lib
+    runtimeDefaults
+    managedServiceLifecycle
+    slotEnvRuntime
+    observability
+    serviceSource
+    readyPlan
+    renderProbeStep
+    healthPlanBody
+    readyPlanBody
+    ;
+
   reth = config.package or pkgs.reth;
   httpPortVar = slots.portVarName config.portKeyHttp;
   wsPortVar = slots.portVarName config.portKeyWs;
@@ -36,55 +43,6 @@ let
   rethDirExpr = slots.getServiceDir config.dataDirName;
   useDevMode = config.devMode or false;
   extraArgs = lib.escapeShellArgs (config.extraArgs or [ ]);
-  serviceSource = if (config.defaultSource or "") == "" then "unspecified" else config.defaultSource;
-  healthPlan = config.probePlans.health or { steps = [ ]; };
-  readyPlan =
-    config.probePlans.ready or {
-      steps = [ ];
-      wait = null;
-    };
-  renderPlanBody =
-    mode: plan:
-    probePlanRuntime.renderPlanBody {
-      inherit
-        mode
-        plan
-        ;
-      serviceName = "reth";
-      endpoints = config.resolvedEndpoints or { };
-      portExprForEndpoint =
-        endpointName:
-        if endpointName == "http" then
-          "$RETH_HTTP_PORT"
-        else if endpointName == "ws" then
-          "$RETH_WS_PORT"
-        else if endpointName == "auth" then
-          "$RETH_AUTH_PORT"
-        else
-          throw "reth lifecycle: unsupported probe endpoint '${endpointName}'";
-    };
-  renderProbeStep =
-    mode: step:
-    probePlanRuntime.renderProbeStep {
-      inherit
-        mode
-        step
-        ;
-      serviceName = "reth";
-      endpoints = config.resolvedEndpoints or { };
-      portExprForEndpoint =
-        endpointName:
-        if endpointName == "http" then
-          "$RETH_HTTP_PORT"
-        else if endpointName == "ws" then
-          "$RETH_WS_PORT"
-        else if endpointName == "auth" then
-          "$RETH_AUTH_PORT"
-        else
-          throw "reth lifecycle: unsupported probe endpoint '${endpointName}'";
-    };
-  healthPlanBody = renderPlanBody "health" healthPlan;
-  readyPlanBody = renderPlanBody "ready" readyPlan;
   startupHealthCheck = ''
     {
       service_source=${lib.escapeShellArg serviceSource}
@@ -99,55 +57,45 @@ let
       }}
     } >/dev/null 2>&1
   '';
-  emitHelper = observability.mkEmitServiceEventFunction "reth";
+  runtimePrelude = import ../service-runtime-prelude.nix {
+    inherit slotEnvRuntime slots observability;
+    serviceName = "reth";
+    serviceNameUpper = "RETH";
+    portVars = [
+      {
+        varName = "HTTP_PORT_VAR";
+        portVar = httpPortVar;
+        target = "RETH_HTTP_PORT";
+      }
+      {
+        varName = "WS_PORT_VAR";
+        portVar = wsPortVar;
+        target = "RETH_WS_PORT";
+      }
+      {
+        varName = "AUTH_PORT_VAR";
+        portVar = authPortVar;
+        target = "RETH_AUTH_PORT";
+      }
+    ];
+    dirExpr = rethDirExpr;
+    portValidation = ''
+      RETH_NETWORK="''${RETH_NETWORK:-${config.network or "local"}}"
+      RETH_USE_DEV="${if useDevMode then "1" else "0"}"
 
-  runtimePrelude = ''
-    ${slotEnvRuntime.loadJsonFromCommand {
-      outVar = "SLOT_INFO_JSON_OUT";
-      command = toString slots.getSlotInfo;
-      exportVars = false;
-    }}
+      if [ "$RETH_NETWORK" = "local" ]; then
+        RETH_USE_DEV="1"
+      fi
 
-    HTTP_PORT_VAR="${httpPortVar}"
-    WS_PORT_VAR="${wsPortVar}"
-    AUTH_PORT_VAR="${authPortVar}"
-
-    ${slotEnvRuntime.readPortFromJson {
-      targetVar = "RETH_HTTP_PORT";
-      jsonVar = "SLOT_INFO_JSON_OUT";
-      keyExpr = "$HTTP_PORT_VAR";
-    }}
-    ${slotEnvRuntime.readPortFromJson {
-      targetVar = "RETH_WS_PORT";
-      jsonVar = "SLOT_INFO_JSON_OUT";
-      keyExpr = "$WS_PORT_VAR";
-    }}
-    ${slotEnvRuntime.readPortFromJson {
-      targetVar = "RETH_AUTH_PORT";
-      jsonVar = "SLOT_INFO_JSON_OUT";
-      keyExpr = "$AUTH_PORT_VAR";
-    }}
-    RETH_DIR="${rethDirExpr}"
-    RETH_PID_FILE="$RETH_DIR/run/reth.pid"
-    RETH_LOG_FILE="$RETH_DIR/logs/reth.log"
-    RETH_JWT_FILE="$RETH_DIR/config/jwt.hex"
-    SERVICE_DIR="$RETH_DIR"
-    SERVICE_PID_FILE="$RETH_PID_FILE"
-    SERVICE_LOG_FILE="$RETH_LOG_FILE"
-    RETH_NETWORK="''${RETH_NETWORK:-${config.network or "local"}}"
-    RETH_USE_DEV="${if useDevMode then "1" else "0"}"
-
-    if [ "$RETH_NETWORK" = "local" ]; then
-      RETH_USE_DEV="1"
-    fi
-
-    if [ -z "$RETH_HTTP_PORT" ] || [ -z "$RETH_WS_PORT" ] || [ -z "$RETH_AUTH_PORT" ]; then
-      log_error "reth port variables are not set (http/ws/auth)"
-      exit 1
-    fi
-
-    ${emitHelper}
-  '';
+      if [ -z "$RETH_HTTP_PORT" ] || [ -z "$RETH_WS_PORT" ] || [ -z "$RETH_AUTH_PORT" ]; then
+        log_error "reth port variables are not set (http/ws/auth)"
+        exit 1
+      fi
+    '';
+    extraPrelude = ''
+      RETH_JWT_FILE="$RETH_DIR/config/jwt.hex"
+    '';
+  };
 
   managedLifecycle = managedServiceLifecycle.mkPidFileManagedLifecycle {
     service = "reth";

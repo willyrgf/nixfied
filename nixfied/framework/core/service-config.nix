@@ -24,7 +24,8 @@ let
       builtins.filter (name: attrs.${name} == null) (builtins.attrNames attrs)
     );
 
-  sortUnique = values: builtins.sort builtins.lessThan (lib.unique values);
+  listUtils = import ./list-utils.nix;
+  uniqueSorted = listUtils.uniqueSorted;
 
   hasNonNullAttr = attrs: name: builtins.hasAttr name attrs && builtins.getAttr name attrs != null;
 
@@ -159,7 +160,7 @@ let
     else
       throw "service '${serviceName}' defaultSource '${defaultSource}' is not defined in sources";
 
-  sourceKeys = cfg: sortUnique ((cfg.sourceKeys or [ ]) ++ builtins.attrNames (cfg.sources or { }));
+  sourceKeys = cfg: uniqueSorted ((cfg.sourceKeys or [ ]) ++ builtins.attrNames (cfg.sources or { }));
 
   sourceValue =
     serviceName: cfg: sources:

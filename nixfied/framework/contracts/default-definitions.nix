@@ -13,42 +13,25 @@ let
     maxLength = 128;
     pattern = "^[A-Za-z0-9][A-Za-z0-9._-]*$";
   };
-  nullableString = t.union {
-    options = [
-      nonEmptyString
-      (t.null { })
-    ];
-  };
+  nullableOf =
+    base:
+    t.union {
+      options = [
+        base
+        (t.null { })
+      ];
+    };
+  nullableString = nullableOf nonEmptyString;
   nonNegativeInt = t.integer { minimum = 0; };
   positiveInt = t.integer { minimum = 1; };
   exitCode = t.integer {
     minimum = 0;
     maximum = 255;
   };
-  nullableInt = t.union {
-    options = [
-      nonNegativeInt
-      (t.null { })
-    ];
-  };
-  nullableExitCode = t.union {
-    options = [
-      exitCode
-      (t.null { })
-    ];
-  };
-  nullableBool = t.union {
-    options = [
-      (t.bool { })
-      (t.null { })
-    ];
-  };
-  nullableAnyString = t.union {
-    options = [
-      anyString
-      (t.null { })
-    ];
-  };
+  nullableInt = nullableOf nonNegativeInt;
+  nullableExitCode = nullableOf exitCode;
+  nullableBool = nullableOf (t.bool { });
+  nullableAnyString = nullableOf anyString;
   nullablePid = t.union {
     options = [
       nonNegativeInt

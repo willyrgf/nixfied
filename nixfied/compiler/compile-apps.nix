@@ -30,7 +30,8 @@ let
 
   normalizeExamples = values: if values == [ ] then [ ] else values;
   normalizeOwnerFile = value: if value == null || value == "" then null else value;
-  normalizeAppRefs = values: builtins.sort builtins.lessThan (lib.unique values);
+  listUtils = import ../framework/core/list-utils.nix;
+  normalizeAppRefs = listUtils.uniqueSorted;
 
   normalizeTaskLauncher =
     taskId:

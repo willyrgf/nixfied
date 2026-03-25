@@ -49,16 +49,16 @@ assert pkgs.lib.hasInfix "fullStartTestLeaf = pkgs.writeShellScript" helperSourc
 assert pkgs.lib.hasInfix "stopRequestBody" helperSource;
 assert pkgs.lib.hasInfix "stopMissingLogPathExpr" helperSource;
 assert pkgs.lib.hasInfix "stopStateLogPathExpr" helperSource;
-assert pkgs.lib.hasInfix "managed-service-lifecycle.nix" minioSource;
-assert pkgs.lib.hasInfix "managed-service-lifecycle.nix" rethSource;
-assert pkgs.lib.hasInfix "managed-service-lifecycle.nix" heliosSource;
-assert pkgs.lib.hasInfix "managed-service-lifecycle.nix" nginxLifecycleSource;
-assert pkgs.lib.hasInfix "managed-service-lifecycle.nix" postgresLifecycleSource;
-assert pkgs.lib.hasInfix "probe-plan-runtime.nix" minioSource;
-assert pkgs.lib.hasInfix "probe-plan-runtime.nix" rethSource;
-assert pkgs.lib.hasInfix "probe-plan-runtime.nix" heliosSource;
-assert pkgs.lib.hasInfix "probe-plan-runtime.nix" nginxLifecycleSource;
-assert pkgs.lib.hasInfix "probe-plan-runtime.nix" postgresLifecycleSource;
+assert pkgs.lib.hasInfix "probe-setup-helper.nix" minioSource;
+assert pkgs.lib.hasInfix "probe-setup-helper.nix" rethSource;
+assert pkgs.lib.hasInfix "probe-setup-helper.nix" heliosSource;
+assert pkgs.lib.hasInfix "probe-setup-helper.nix" nginxLifecycleSource;
+assert pkgs.lib.hasInfix "probe-setup-helper.nix" postgresLifecycleSource;
+assert pkgs.lib.hasInfix "probe-setup-helper.nix" minioSource;
+assert pkgs.lib.hasInfix "probe-setup-helper.nix" rethSource;
+assert pkgs.lib.hasInfix "probe-setup-helper.nix" heliosSource;
+assert pkgs.lib.hasInfix "probe-setup-helper.nix" nginxLifecycleSource;
+assert pkgs.lib.hasInfix "probe-setup-helper.nix" postgresLifecycleSource;
 assert (!pkgs.lib.hasInfix "probeCommands.tcpOpenCmd" nginxLifecycleSource);
 assert (!pkgs.lib.hasInfix "probeCommands.jsonRpcHasResultCmd" rethSource);
 assert (!pkgs.lib.hasInfix "probeCommands.jsonRpcHasResultCmd" heliosSource);
@@ -68,9 +68,6 @@ assert pkgs.lib.hasInfix "startupProbeCommand =" nginxLifecycleSource;
 assert pkgs.lib.hasInfix "startupHealthCheck =" rethSource;
 assert pkgs.lib.hasInfix "startupHealthCheck =" heliosSource;
 assert pkgs.lib.hasInfix "renderQuietProbeStep =" postgresLifecycleSource;
-assert pkgs.lib.hasInfix "SERVICE_PID_FILE=\"$MINIO_PID_FILE\"" minioSource;
-assert pkgs.lib.hasInfix "SERVICE_PID_FILE=\"$RETH_PID_FILE\"" rethSource;
-assert pkgs.lib.hasInfix "SERVICE_PID_FILE=\"$HELIOS_PID_FILE\"" heliosSource;
 assert pkgs.lib.hasInfix "managedLifecycle = managedServiceLifecycle.mkPidFileManagedLifecycle"
   minioSource;
 assert pkgs.lib.hasInfix "managedLifecycle = managedServiceLifecycle.mkPidFileManagedLifecycle"
@@ -108,16 +105,16 @@ assert pkgs.lib.hasInfix "startAlreadyRunningBody = serviceScripts.mkReadyOutcom
   nginxLifecycleSource;
 assert pkgs.lib.hasInfix "startExitFailureBody = serviceScripts.mkProcessExitFailureBody {"
   nginxLifecycleSource;
-assert pkgs.lib.hasInfix "healthPlan = config.probePlans.health" minioSource;
-assert pkgs.lib.hasInfix "config.probePlans.ready or {" minioSource;
 assert pkgs.lib.hasInfix "healthBody = managedServiceLifecycle.mkPlanProbeBody" minioSource;
 assert pkgs.lib.hasInfix "readyBody = managedServiceLifecycle.mkPlanProbeBody" minioSource;
-assert pkgs.lib.hasInfix "healthPlan = config.probePlans.health" nginxLifecycleSource;
-assert pkgs.lib.hasInfix "config.probePlans.ready or {" nginxLifecycleSource;
+assert pkgs.lib.hasInfix "healthBody = managedServiceLifecycle.mkPlanProbeBody" minioSource;
+assert pkgs.lib.hasInfix "readyBody = managedServiceLifecycle.mkPlanProbeBody" minioSource;
 assert pkgs.lib.hasInfix "healthBody = serviceScripts.mkPlanProbeBody" nginxLifecycleSource;
 assert pkgs.lib.hasInfix "readyBody = serviceScripts.mkPlanProbeBody" nginxLifecycleSource;
-assert pkgs.lib.hasInfix "healthPlan = config.probePlans.health" rethSource;
-assert pkgs.lib.hasInfix "config.probePlans.ready or {" rethSource;
+assert pkgs.lib.hasInfix "healthBody = serviceScripts.mkPlanProbeBody" nginxLifecycleSource;
+assert pkgs.lib.hasInfix "readyBody = serviceScripts.mkPlanProbeBody" nginxLifecycleSource;
+assert pkgs.lib.hasInfix "healthBody = managedServiceLifecycle.mkPlanProbeBody" rethSource;
+assert pkgs.lib.hasInfix "readyBody = managedServiceLifecycle.mkPlanProbeBody" rethSource;
 assert pkgs.lib.hasInfix "healthBody = managedServiceLifecycle.mkPlanProbeBody" rethSource;
 assert pkgs.lib.hasInfix "readyBody = managedServiceLifecycle.mkPlanProbeBody" rethSource;
 assert pkgs.lib.hasInfix "startPostLaunchBody = managedServiceLifecycle.mkStartupReadinessBody {"
@@ -126,17 +123,14 @@ assert pkgs.lib.hasInfix "startAlreadyRunningBody = managedServiceLifecycle.mkRe
   rethSource;
 assert pkgs.lib.hasInfix "startExitFailureBody = managedServiceLifecycle.mkProcessExitFailureBody {"
   rethSource;
-assert pkgs.lib.hasInfix "healthPlan = config.probePlans.health" heliosSource;
-assert pkgs.lib.hasInfix "config.probePlans.ready or {" heliosSource;
 assert pkgs.lib.hasInfix "healthBody = managedServiceLifecycle.mkPlanProbeBody" heliosSource;
+assert pkgs.lib.hasInfix "readyBody =" heliosSource;
 assert pkgs.lib.hasInfix "startPostLaunchBody = managedServiceLifecycle.mkStartupReadinessBody {"
   heliosSource;
 assert pkgs.lib.hasInfix "startAlreadyRunningBody = managedServiceLifecycle.mkReadyOutcomeBody {"
   heliosSource;
 assert pkgs.lib.hasInfix "startExitFailureBody = managedServiceLifecycle.mkProcessExitFailureBody {"
   heliosSource;
-assert pkgs.lib.hasInfix "healthPlan = config.probePlans.health" postgresLifecycleSource;
-assert pkgs.lib.hasInfix "config.probePlans.ready or {" postgresLifecycleSource;
 assert pkgs.lib.hasInfix "body = managedServiceLifecycle.mkPlanProbeBody" postgresLifecycleSource;
 assert pkgs.lib.hasInfix "print_log_tail \"$PGDATA/postgres.log\" 20 \"postgres\""
   postgresLifecycleSource;

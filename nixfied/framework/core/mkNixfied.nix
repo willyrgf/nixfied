@@ -24,6 +24,7 @@ let
       extraModules
       localOverrides
       frameworkSourceRevision
+      selectedServices
       ;
   };
 

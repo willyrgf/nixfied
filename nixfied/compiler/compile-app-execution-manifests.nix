@@ -15,123 +15,77 @@
 let
   listUtils = import ../framework/core/list-utils.nix;
   uniquePreserveOrder = listUtils.uniquePreserveOrder;
-  uniqueSorted = values: builtins.sort builtins.lessThan (lib.unique values);
+  uniqueSorted = listUtils.uniqueSorted;
+
+  closureLib = import ./compile-closure-lib.nix { inherit lib; } {
+    inherit tasks workflows;
+  };
 
   appIds = builtins.sort builtins.lessThan (builtins.attrNames apps);
-  workflowIds = builtins.sort builtins.lessThan (builtins.attrNames workflows);
 
-  workflowFamilyFromId =
-    workflowId:
+  # Strategy for collecting { taskIds, workflowIds } closures.
+  idClosureEmpty = {
+    taskIds = [ ];
+    workflowIds = [ ];
+  };
+
+  idClosureMerge =
+    results:
     let
-      match = builtins.match "^workflow\\.([^.]+)\\..+$" workflowId;
-    in
-    if match == null then null else builtins.elemAt match 0;
-
-  workflowIdsByFamily = builtins.listToAttrs (
-    map (
-      workflowId:
-      let
-        family = workflowFamilyFromId workflowId;
-      in
-      {
-        name = workflowId;
-        value =
-          if family == null then
-            [ workflowId ]
-          else
-            builtins.filter (candidateId: workflowFamilyFromId candidateId == family) workflowIds;
-      }
-    ) workflowIds
-  );
-
-  goTask =
-    seen: taskId:
-    let
-      token = "task:${taskId}";
-    in
-    if !(builtins.hasAttr taskId tasks) || builtins.elem token seen then
-      {
-        taskIds = [ ];
-        workflowIds = [ ];
-      }
-    else
-      let
-        task = tasks.${taskId};
-        nextSeen = seen ++ [ token ];
-        depIds = (task.deps.needs or [ ]) ++ (task.deps.softNeeds or [ ]);
-        depClosure = map (depTaskId: goTask nextSeen depTaskId) depIds;
-        runtimeTaskClosures = map (refTaskId: goTask nextSeen refTaskId) (
-          task.runtime.references.taskIds or [ ]
-        );
-        runtimeWorkflowClosures = map (workflowId: goWorkflowExact nextSeen workflowId) (
-          task.runtime.references.workflowIds or [ ]
-        );
-        workflowClosure =
-          if (task.runner.type or "") == "workflowRef" && (task.runner.workflowId or "") != "" then
-            goWorkflowReference nextSeen task.runner.workflowId
-          else
-            {
-              taskIds = [ ];
-              workflowIds = [ ];
-            };
-      in
-      {
-        taskIds = uniquePreserveOrder (
-          [ taskId ]
-          ++ builtins.concatLists (map (entry: entry.taskIds) depClosure)
-          ++ builtins.concatLists (map (entry: entry.taskIds) runtimeTaskClosures)
-          ++ builtins.concatLists (map (entry: entry.taskIds) runtimeWorkflowClosures)
-          ++ workflowClosure.taskIds
-        );
-        workflowIds = uniquePreserveOrder (
-          builtins.concatLists (map (entry: entry.workflowIds) depClosure)
-          ++ builtins.concatLists (map (entry: entry.workflowIds) runtimeTaskClosures)
-          ++ builtins.concatLists (map (entry: entry.workflowIds) runtimeWorkflowClosures)
-          ++ workflowClosure.workflowIds
-        );
-      };
-
-  goWorkflow =
-    seen: workflowId:
-    let
-      token = "workflow:${workflowId}";
-    in
-    if !(builtins.hasAttr workflowId workflows) || builtins.elem token seen then
-      {
-        taskIds = [ ];
-        workflowIds = [ ];
-      }
-    else
-      let
-        workflow = workflows.${workflowId};
-        nextSeen = seen ++ [ token ];
-        unitNames = builtins.sort builtins.lessThan (builtins.attrNames (workflow.units or { }));
-        unitClosures = map (unitName: goTask nextSeen (workflow.units.${unitName}.taskId or "")) unitNames;
-        phaseTaskIds = (workflow.preRun.tasks or [ ]) ++ (workflow.postRun.tasks or [ ]);
-        phaseClosures = map (taskId: goTask nextSeen taskId) phaseTaskIds;
-      in
-      {
-        taskIds = uniquePreserveOrder (
-          builtins.concatLists (map (entry: entry.taskIds) (unitClosures ++ phaseClosures))
-        );
-        workflowIds = uniquePreserveOrder (
-          [ workflowId ]
-          ++ builtins.concatLists (map (entry: entry.workflowIds) (unitClosures ++ phaseClosures))
-        );
-      };
-
-  goWorkflowExact = seen: workflowId: goWorkflow seen workflowId;
-
-  goWorkflowReference =
-    seen: workflowId:
-    let
-      workflowIdsForReference = workflowIdsByFamily.${workflowId} or [ workflowId ];
-      closures = map (candidateId: goWorkflow seen candidateId) workflowIdsForReference;
+      nonEmpty = builtins.filter (r: r.taskIds != [ ] || r.workflowIds != [ ]) results;
     in
     {
-      taskIds = uniquePreserveOrder (builtins.concatLists (map (entry: entry.taskIds) closures));
-      workflowIds = uniquePreserveOrder (builtins.concatLists (map (entry: entry.workflowIds) closures));
+      taskIds = uniquePreserveOrder (builtins.concatLists (map (r: r.taskIds) nonEmpty));
+      workflowIds = uniquePreserveOrder (builtins.concatLists (map (r: r.workflowIds) nonEmpty));
     };
+
+  walker = closureLib.mkClosureWalker {
+    empty = idClosureEmpty;
+    merge = idClosureMerge;
+
+    taskContrib = _taskId: _task: {
+      taskIds = [ _taskId ];
+      workflowIds = [ ];
+    };
+
+    taskWorkflowRef =
+      seen: task: goWorkflowReference:
+      if (task.runner.type or "") == "workflowRef" && (task.runner.workflowId or "") != "" then
+        goWorkflowReference seen task.runner.workflowId
+      else
+        idClosureEmpty;
+
+    taskRuntimeWorkflows =
+      seen: task: goWorkflowExact:
+      let
+        closures = map (wfId: goWorkflowExact seen wfId) (task.runtime.references.workflowIds or [ ]);
+      in
+      idClosureMerge closures;
+
+    workflowUnit =
+      seen: unit: goTask:
+      goTask seen (unit.taskId or "");
+
+    workflowPhase =
+      seen: workflow: goTask:
+      let
+        phaseTaskIds = (workflow.preRun.tasks or [ ]) ++ (workflow.postRun.tasks or [ ]);
+        closures = map (taskId: goTask seen taskId) phaseTaskIds;
+      in
+      idClosureMerge closures;
+
+    workflowPhaseServiceSets = _workflow: idClosureEmpty;
+
+    workflowSelf = workflowId: inner: {
+      taskIds = inner.taskIds;
+      workflowIds = uniquePreserveOrder ([ workflowId ] ++ inner.workflowIds);
+    };
+  };
+
+  inherit (walker)
+    goTask
+    goWorkflowExact
+    ;
 
   manifestForApp =
     appId:

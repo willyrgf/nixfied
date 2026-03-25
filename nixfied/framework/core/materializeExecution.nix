@@ -7,6 +7,7 @@
 }:
 let
   lib = pkgs.lib;
+  listUtils = import ./list-utils.nix;
   canonical = import ./canonical.nix { inherit lib; };
   mkShellApp = import ./mk-shell-app.nix { inherit pkgs; };
   registry = import ../runtime/registry { inherit pkgs; };
@@ -16,7 +17,7 @@ let
     if selectedServices == null then
       null
     else
-      builtins.sort builtins.lessThan (lib.unique (builtins.filter (name: name != "") selectedServices));
+      listUtils.uniqueSorted (builtins.filter (name: name != "") selectedServices);
 
   selectedServiceScopeSet =
     if normalizedSelectedServices == null then

@@ -96,14 +96,8 @@ let
         ${renderErrors allErrs}
       '';
 
-  valueToString =
-    value:
-    if value == null then
-      ""
-    else if builtins.isBool value then
-      if value then "1" else "0"
-    else
-      toString value;
+  valueStrings = import ./value-string.nix;
+  valueToString = valueStrings.toShellEnvString;
 
   allowSpecNames = map (spec: spec.name) (
     builtins.filter (spec: spec.name != "") validatedAllowSpecs

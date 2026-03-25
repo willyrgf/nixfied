@@ -20,7 +20,7 @@ let
           serviceCatalog = model.serviceCatalog or { };
         };
 
-  uniqueSorted = values: builtins.sort builtins.lessThan (lib.unique values);
+  uniqueSorted = listUtils.uniqueSorted;
 
   workflows = model.workflows or { };
   tasks = model.tasks or { };
@@ -237,7 +237,7 @@ let
   renderPhaseServiceSetRecord =
     entry:
     let
-      selectedServices = builtins.sort builtins.lessThan (lib.unique (entry.selectedServices or [ ]));
+      selectedServices = uniqueSorted (entry.selectedServices or [ ]);
       serviceSetId = entry.serviceSetId or "";
       serviceSetName = entry.serviceSetName or serviceSetId;
       operation = entry.operation or "";

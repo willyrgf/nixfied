@@ -11,8 +11,8 @@
 let
   serviceModulePath = import ../framework/core/serviceModulePath.nix;
 
-  normalizeToken =
-    value: lib.toUpper (lib.replaceStrings [ "." "-" ":" "/" " " ] [ "_" "_" "_" "_" "_" ] value);
+  tokenLib = import ../framework/runtime/helpers/normalize-token.nix { inherit lib; };
+  normalizeToken = tokenLib.normalizeToken;
 
   normalizeHookName =
     serviceName: opName: opCfg:

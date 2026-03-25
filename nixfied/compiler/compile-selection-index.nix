@@ -7,22 +7,18 @@
 let
   listUtils = import ../framework/core/list-utils.nix;
 
+  closureLib = import ./compile-closure-lib.nix { inherit lib; } {
+    inherit tasks workflows;
+  };
+  inherit (closureLib) workflowFamilyFromId uniquePreserveOrder;
+  uniqueSorted = listUtils.uniqueSorted;
+
   taskSet = if tasks == null then { } else tasks;
   workflowSet = if workflows == null then { } else workflows;
   catalog = if serviceCatalog == null then { } else serviceCatalog;
 
   taskIds = builtins.sort builtins.lessThan (builtins.attrNames taskSet);
   workflowIds = builtins.sort builtins.lessThan (builtins.attrNames workflowSet);
-
-  uniquePreserveOrder = listUtils.uniquePreserveOrder;
-  uniqueSorted = values: builtins.sort builtins.lessThan (lib.unique values);
-
-  workflowFamilyFromId =
-    workflowId:
-    let
-      match = builtins.match "^workflow\\.([^.]+)\\..+$" workflowId;
-    in
-    if match == null then null else builtins.elemAt match 0;
 
   workflowModesByFamily = builtins.foldl' (
     acc: workflowId:
@@ -45,6 +41,8 @@ let
 
   workflowFamilies = uniqueSorted (builtins.attrNames workflowModesByFamily);
 
+  # For the selection-index we need the family-keyed lookup (family -> list of
+  # workflow ids), which differs from the closure-lib's per-workflowId lookup.
   workflowIdsByFamily = builtins.listToAttrs (
     map (family: {
       name = family;
@@ -66,125 +64,133 @@ let
     _: task: uniquePreserveOrder (((task.requirements or { }).services or [ ]))
   ) taskSet;
 
-  goTaskBase =
-    seen: taskId:
-    let
-      token = "task:${taskId}";
-    in
-    if !(builtins.hasAttr taskId taskSet) || builtins.elem token seen then
-      [ ]
-    else
+  # ---- service-list merge helpers ------------------------------------
+
+  svcEmpty = [ ];
+  svcMerge = results: uniquePreserveOrder (builtins.concatLists results);
+
+  # ---- goTaskBase: service closure WITHOUT following workflow refs ----
+  #
+  # Uses the generic walker with workflow strategies that return [].
+  baseWalker = closureLib.mkClosureWalker {
+    empty = svcEmpty;
+    merge = svcMerge;
+
+    taskContrib = _taskId: task: (task.requirements or { }).services or [ ];
+
+    taskWorkflowRef =
+      _seen: _task: _goWorkflowReference:
+      svcEmpty;
+    taskRuntimeWorkflows =
+      _seen: _task: _goWorkflowExact:
+      svcEmpty;
+
+    # These won't be reached because workflows are never entered, but
+    # they must be present for the strategy interface.
+    workflowUnit =
+      _seen: _unit: _goTask:
+      svcEmpty;
+    workflowPhase =
+      _seen: _workflow: _goTask:
+      svcEmpty;
+    workflowPhaseServiceSets = _workflow: svcEmpty;
+    workflowSelf = _workflowId: inner: inner;
+  };
+  goTaskBase = baseWalker.goTask;
+
+  # ---- full service closure walker -----------------------------------
+
+  fullWalker = closureLib.mkClosureWalker {
+    empty = svcEmpty;
+    merge = svcMerge;
+
+    taskContrib = _taskId: task: (task.requirements or { }).services or [ ];
+
+    taskWorkflowRef =
+      seen: task: goWorkflowReference:
+      if (task.runner.type or "shell") == "workflowRef" && (task.runner.workflowId or "") != "" then
+        goWorkflowReference seen task.runner.workflowId
+      else
+        svcEmpty;
+
+    taskRuntimeWorkflows =
+      seen: task: goWorkflowExact:
+      svcMerge (map (wfId: goWorkflowExact seen wfId) (task.runtime.references.workflowIds or [ ]));
+
+    workflowUnit =
+      seen: unit: goTask:
       let
-        task = taskSet.${taskId};
-        nextSeen = seen ++ [ token ];
-        depIds = (task.deps.needs or [ ]) ++ (task.deps.softNeeds or [ ]);
-        depServices = builtins.concatLists (map (depTaskId: goTaskBase nextSeen depTaskId) depIds);
-        runtimeTaskRefServices = builtins.concatLists (
-          map (refTaskId: goTaskBase nextSeen refTaskId) (task.runtime.references.taskIds or [ ])
-        );
+        taskId = unit.taskId or "";
       in
       uniquePreserveOrder (
-        ((task.requirements or { }).services or [ ]) ++ depServices ++ runtimeTaskRefServices
+        ((unit.requirements or { }).services or [ ]) ++ (lib.optionals (taskId != "") (goTask seen taskId))
       );
 
-  goWorkflow =
-    seen: workflowId:
-    let
-      token = "workflow:${workflowId}";
-    in
-    if !(builtins.hasAttr workflowId workflowSet) || builtins.elem token seen then
-      [ ]
-    else
+    workflowPhase =
+      seen: workflow: goTask:
       let
-        workflow = workflowSet.${workflowId};
-        nextSeen = seen ++ [ token ];
-        unitNames = builtins.sort builtins.lessThan (builtins.attrNames (workflow.units or { }));
-        unitServices = builtins.concatLists (
-          map (
-            unitName:
-            let
-              unit = workflow.units.${unitName};
-              taskId = unit.taskId or "";
-            in
-            uniquePreserveOrder (
-              ((unit.requirements or { }).services or [ ])
-              ++ (lib.optionals (taskId != "") (goTask nextSeen taskId))
-            )
-          ) unitNames
-        );
         phaseTaskIds = (workflow.preRun.tasks or [ ]) ++ (workflow.postRun.tasks or [ ]);
-        phaseTaskServices = builtins.concatLists (map (taskId: goTask nextSeen taskId) phaseTaskIds);
-        phaseServiceSetServices = builtins.concatLists (
-          map (entry: entry.selectedServices or [ ]) (
-            (workflow.preRun.serviceSets or [ ]) ++ (workflow.postRun.serviceSets or [ ])
-          )
-        );
       in
-      uniquePreserveOrder (unitServices ++ phaseTaskServices ++ phaseServiceSetServices);
+      svcMerge (map (taskId: goTask seen taskId) phaseTaskIds);
 
-  goWorkflowUnitsOnly =
-    seen: workflowId:
-    let
-      token = "workflow:${workflowId}:units";
-    in
-    if !(builtins.hasAttr workflowId workflowSet) || builtins.elem token seen then
-      [ ]
-    else
-      let
-        workflow = workflowSet.${workflowId};
-        nextSeen = seen ++ [ token ];
-        unitNames = builtins.sort builtins.lessThan (builtins.attrNames (workflow.units or { }));
-      in
-      uniquePreserveOrder (
-        builtins.concatLists (
-          map (
-            unitName:
-            let
-              unit = workflow.units.${unitName};
-              taskId = unit.taskId or "";
-            in
-            uniquePreserveOrder (
-              ((unit.requirements or { }).services or [ ])
-              ++ (lib.optionals (taskId != "") (goTask nextSeen taskId))
-            )
-          ) unitNames
+    workflowPhaseServiceSets =
+      workflow:
+      builtins.concatLists (
+        map (entry: entry.selectedServices or [ ]) (
+          (workflow.preRun.serviceSets or [ ]) ++ (workflow.postRun.serviceSets or [ ])
         )
       );
 
-  goWorkflowExact = seen: workflowId: goWorkflow seen workflowId;
+    workflowSelf = _workflowId: inner: inner;
+  };
 
-  goWorkflowReference =
-    seen: workflowId:
-    let
-      family = workflowFamilyFromId workflowId;
-      workflowIdsForFamily =
-        if family == null then [ workflowId ] else workflowIdsByFamily.${family} or [ workflowId ];
-    in
-    uniquePreserveOrder (
-      builtins.concatLists (map (candidateId: goWorkflow seen candidateId) workflowIdsForFamily)
-    );
+  goTask = fullWalker.goTask;
+  goWorkflow = fullWalker.goWorkflow;
+  goWorkflowExact = fullWalker.goWorkflowExact;
+  goWorkflowReference = fullWalker.goWorkflowReference;
 
-  goTask =
-    seen: taskId:
-    let
-      token = "task:${taskId}";
-    in
-    if !(builtins.hasAttr taskId taskSet) || builtins.elem token seen then
-      [ ]
-    else
+  # ---- units-only workflow closure -----------------------------------
+  #
+  # Same as goWorkflow but skips phase tasks and phase service sets.
+  # Uses a separate walker so it gets its own cycle-detection tokens.
+  unitsOnlyWalker = closureLib.mkClosureWalker {
+    empty = svcEmpty;
+    merge = svcMerge;
+
+    taskContrib = _taskId: task: (task.requirements or { }).services or [ ];
+
+    taskWorkflowRef =
+      seen: task: goWfRef:
+      if (task.runner.type or "shell") == "workflowRef" && (task.runner.workflowId or "") != "" then
+        goWfRef seen task.runner.workflowId
+      else
+        svcEmpty;
+
+    taskRuntimeWorkflows =
+      seen: task: goWfExact:
+      svcMerge (map (wfId: goWfExact seen wfId) (task.runtime.references.workflowIds or [ ]));
+
+    workflowUnit =
+      seen: unit: goTsk:
       let
-        task = taskSet.${taskId};
-        nextSeen = seen ++ [ token ];
-        workflowServices =
-          if (task.runner.type or "shell") == "workflowRef" && (task.runner.workflowId or "") != "" then
-            goWorkflowReference nextSeen task.runner.workflowId
-          else
-            [ ];
-        runtimeWorkflowServices = builtins.concatLists (
-          map (workflowId: goWorkflowExact nextSeen workflowId) (task.runtime.references.workflowIds or [ ])
-        );
+        taskId = unit.taskId or "";
       in
-      uniquePreserveOrder ((goTaskBase seen taskId) ++ workflowServices ++ runtimeWorkflowServices);
+      uniquePreserveOrder (
+        ((unit.requirements or { }).services or [ ]) ++ (lib.optionals (taskId != "") (goTsk seen taskId))
+      );
+
+    # Skip phases for units-only.
+    workflowPhase =
+      _seen: _workflow: _goTask:
+      svcEmpty;
+    workflowPhaseServiceSets = _workflow: svcEmpty;
+
+    workflowSelf = _workflowId: inner: inner;
+  };
+
+  goWorkflowUnitsOnly = unitsOnlyWalker.goWorkflow;
+
+  # ---- derived indexes -----------------------------------------------
 
   taskClosureServicesById = builtins.listToAttrs (
     map (taskId: {

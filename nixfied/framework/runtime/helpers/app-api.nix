@@ -7,24 +7,7 @@ let
   lib = pkgs.lib;
   exitCodes = import ../../core/exit-codes.nix;
 
-  runtimeEnvSpecs = [
-    {
-      name = shellContract.runtimeLogLevelEnvName;
-      type = "enum";
-      required = false;
-      aliases = shellContract.runtimeLogLevelAliases;
-      values = shellContract.runtimeLogLevels;
-      default = shellContract.runtimeLogLevelDefault;
-    }
-    {
-      name = shellContract.runtimeOutputModeEnvName;
-      type = "enum";
-      required = false;
-      aliases = shellContract.runtimeOutputModeAliases;
-      values = shellContract.runtimeOutputModes;
-      default = shellContract.runtimeOutputModeDefault;
-    }
-  ];
+  runtimeEnvSpecs = shellContract.mkRuntimePrimitiveEnvSpecs { };
 
   normalizeEnvSpec =
     spec:

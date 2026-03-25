@@ -1,22 +1,13 @@
 # Nginx module config defaults
 { pkgs, project }:
 
-let
-  serviceConfig = import ../../../core/service-config.nix {
-    lib = pkgs.lib;
-    inherit pkgs;
+import ../service-config-builder.nix {
+  inherit pkgs project;
+  name = "nginx";
+  defaults = cfg: {
+    package = cfg.package or null;
+    portKeyHttp = cfg.portKeyHttp or "http";
+    portKeyHttps = cfg.portKeyHttps or "https";
+    dataDirName = cfg.dataDirName or "nginx";
   };
-  cfg = serviceConfig.getProjectServiceConfig {
-    inherit project;
-    name = "nginx";
-  };
-in
-{
-  package = cfg.package or null;
-  portKeyHttp = cfg.portKeyHttp or "http";
-  portKeyHttps = cfg.portKeyHttps or "https";
-  dataDirName = cfg.dataDirName or "nginx";
-  defaultSource = cfg.defaultSource or "";
-  probePlans = cfg.resolved.probePlans or cfg.resolved.operationProbes or { };
-  resolvedEndpoints = cfg.resolved.endpoints or { };
 }

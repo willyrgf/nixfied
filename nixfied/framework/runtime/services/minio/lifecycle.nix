@@ -8,93 +8,64 @@
 }:
 
 let
-  runtimeDefaults = import ../../../core/runtime-defaults.nix;
-  managedServiceLifecycle = import ../../helpers/managed-service-lifecycle.nix { inherit pkgs; };
-  probeCommands = import ../../helpers/probe-commands.nix { inherit pkgs; };
-  probePlanRuntime = import ../../helpers/probe-plan-runtime.nix {
-    lib = pkgs.lib;
+  probeSetup = import ../probe-setup-helper.nix {
     inherit
       pkgs
-      probeCommands
-      ;
-    postgresProbePkg = if pkgs ? postgresql_16 then pkgs.postgresql_16 else pkgs.postgresql;
-  };
-  slotEnvRuntime = import ../../helpers/slot-env-runtime.nix { inherit pkgs; };
-  runtimeEvents = import ../../helpers/runtime-events.nix { inherit pkgs project; };
-  observability = import ../../helpers/service-observability.nix {
-    inherit
-      pkgs
+      project
       slots
-      runtimeEvents
+      config
       ;
+    serviceName = "minio";
+    endpointMapping = {
+      api = "$MINIO_API_PORT";
+      console = "$MINIO_CONSOLE_PORT";
+    };
   };
+
+  inherit (probeSetup)
+    lib
+    runtimeDefaults
+    managedServiceLifecycle
+    probeCommands
+    slotEnvRuntime
+    observability
+    serviceSource
+    readyPlan
+    healthPlanBody
+    readyPlanBody
+    ;
+
   minio = config.package or pkgs.minio;
   apiPortVar = slots.portVarName config.portKeyApi;
   consolePortVar = slots.portVarName config.portKeyConsole;
   minioDirExpr = slots.getServiceDir config.dataDirName;
   browserValue = if config.browser then "on" else "off";
-  serviceSource = if (config.defaultSource or "") == "" then "unspecified" else config.defaultSource;
-  healthPlan = config.probePlans.health or { steps = [ ]; };
-  readyPlan =
-    config.probePlans.ready or {
-      steps = [ ];
-      wait = null;
-    };
-  renderPlanBody =
-    mode: plan:
-    probePlanRuntime.renderPlanBody {
-      inherit
-        mode
-        plan
-        ;
-      serviceName = "minio";
-      endpoints = config.resolvedEndpoints or { };
-      portExprForEndpoint =
-        endpointName:
-        if endpointName == "api" then
-          "$MINIO_API_PORT"
-        else if endpointName == "console" then
-          "$MINIO_CONSOLE_PORT"
-        else
-          throw "minio lifecycle: unsupported probe endpoint '${endpointName}'";
-    };
-  healthPlanBody = renderPlanBody "health" healthPlan;
-  readyPlanBody = renderPlanBody "ready" readyPlan;
-  emitHelper = observability.mkEmitServiceEventFunction "minio";
-  runtimePrelude = ''
-    ${slotEnvRuntime.loadJsonFromCommand {
-      outVar = "SLOT_INFO_JSON_OUT";
-      command = toString slots.getSlotInfo;
-      exportVars = false;
-    }}
 
-    API_PORT_VAR="${apiPortVar}"
-    CONSOLE_PORT_VAR="${consolePortVar}"
+  runtimePrelude = import ../service-runtime-prelude.nix {
+    inherit slotEnvRuntime slots observability;
+    serviceName = "minio";
+    serviceNameUpper = "MINIO";
+    portVars = [
+      {
+        varName = "API_PORT_VAR";
+        portVar = apiPortVar;
+        target = "MINIO_API_PORT";
+      }
+      {
+        varName = "CONSOLE_PORT_VAR";
+        portVar = consolePortVar;
+        target = "MINIO_CONSOLE_PORT";
+      }
+    ];
+    dirExpr = minioDirExpr;
+    portValidation = ''
+      if [ -z "$MINIO_API_PORT" ] || [ -z "$MINIO_CONSOLE_PORT" ]; then
+        log_error "minio port variables are not set (api/console)"
+        exit 1
+      fi
+    '';
+  };
 
-    ${slotEnvRuntime.readPortFromJson {
-      targetVar = "MINIO_API_PORT";
-      jsonVar = "SLOT_INFO_JSON_OUT";
-      keyExpr = "$API_PORT_VAR";
-    }}
-    ${slotEnvRuntime.readPortFromJson {
-      targetVar = "MINIO_CONSOLE_PORT";
-      jsonVar = "SLOT_INFO_JSON_OUT";
-      keyExpr = "$CONSOLE_PORT_VAR";
-    }}
-    MINIO_DIR="${minioDirExpr}"
-    MINIO_PID_FILE="$MINIO_DIR/run/minio.pid"
-    MINIO_LOG_FILE="$MINIO_DIR/logs/minio.log"
-    SERVICE_DIR="$MINIO_DIR"
-    SERVICE_PID_FILE="$MINIO_PID_FILE"
-    SERVICE_LOG_FILE="$MINIO_LOG_FILE"
-
-    if [ -z "$MINIO_API_PORT" ] || [ -z "$MINIO_CONSOLE_PORT" ]; then
-      log_error "minio port variables are not set (api/console)"
-      exit 1
-    fi
-
-    ${emitHelper}
-  '';
   managedLifecycle = managedServiceLifecycle.mkPidFileManagedLifecycle {
     service = "minio";
     inherit
@@ -177,14 +148,14 @@ let
     };
     healthBody = managedServiceLifecycle.mkPlanProbeBody {
       planBody = ''
-        service_source=${pkgs.lib.escapeShellArg serviceSource}
+        service_source=${lib.escapeShellArg serviceSource}
         ${healthPlanBody}
       '';
       skipMessage = "SKIP: minio health check has no probe steps";
     };
     readyBody = managedServiceLifecycle.mkPlanProbeBody {
       planBody = ''
-        service_source=${pkgs.lib.escapeShellArg serviceSource}
+        service_source=${lib.escapeShellArg serviceSource}
         ${readyPlanBody}
       '';
       skipMessage = "SKIP: minio readiness check has no probe steps";

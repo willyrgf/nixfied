@@ -17,7 +17,8 @@ let
   ];
 
   sortNames = attrs: builtins.sort builtins.lessThan (builtins.attrNames attrs);
-  uniqueSorted = values: builtins.sort builtins.lessThan (lib.unique values);
+  listUtils = import ../framework/core/list-utils.nix;
+  uniqueSorted = listUtils.uniqueSorted;
   nonEmptyStrings = values: builtins.filter (value: value != null && value != "") values;
   joinCsv = values: builtins.concatStringsSep "," values;
   stringOrEmpty = value: if value == null then "" else value;
