@@ -74,6 +74,11 @@ let
     || !(builtins.all (snippet: lib.hasInfix snippet source) entry.snippets)
   ) jqAllowlist;
   machineOutputSource = builtins.readFile ../../nixfied/framework/core/mkMachineOutputPrograms.nix;
+  probePlanRuntimeSource = builtins.readFile ../../nixfied/framework/runtime/helpers/probe-plan-runtime.nix;
+  executorSource = builtins.readFile ../../nixfied/framework/runtime/executor.nix;
+  orchestratorSource = builtins.readFile ../../nixfied/framework/runtime/orchestrator.nix;
+  orchestratorControlSource = builtins.readFile ../../nixfied/framework/runtime/orchestrator-control.nix;
+  orchestratorRuntimeSource = builtins.readFile ../../nixfied/framework/runtime/orchestrator-runtime.nix;
   runtimeSources = builtins.filter (path: lib.hasSuffix ".nix" (toString path)) (
     lib.filesystem.listFilesRecursive ../../nixfied/framework/runtime
   );
@@ -120,8 +125,28 @@ assert filesWithDeprecatedKernelMarkers == [ ];
 assert !kernelSourceHasDeprecatedMarkers;
 assert pkgs.lib.hasInfix "nixfied-kernel machine-output run" machineOutputSource;
 assert !(pkgs.lib.hasInfix "validatorProgram" machineOutputSource);
+assert pkgs.lib.hasInfix "nixfied-kernel probe evaluate" probePlanRuntimeSource;
+assert !(pkgs.lib.hasInfix "jsonRpcHasResultCmd" probePlanRuntimeSource);
+assert !(pkgs.lib.hasInfix "jsonRpcResultHexCmd" probePlanRuntimeSource);
+assert !(pkgs.lib.hasInfix "jsonRpcResultCompactCmd" probePlanRuntimeSource);
+assert !(pkgs.lib.hasInfix "jsonRpcResultFalseCmd" probePlanRuntimeSource);
+assert !(pkgs.lib.hasInfix "pgIsReadyCmd" probePlanRuntimeSource);
+assert !(pkgs.lib.hasInfix "psqlQueryCmd" probePlanRuntimeSource);
+assert pkgs.lib.hasInfix "nixfied-kernel task execution-order" executorSource;
+assert !(pkgs.lib.hasInfix "done < <(task_needs \"$current_task\")" executorSource);
+assert !(pkgs.lib.hasInfix "done < <(task_soft_needs \"$current_task\")" executorSource);
+assert pkgs.lib.hasInfix "nixfied-kernel summary collect-steps" executorSource;
+assert !(pkgs.lib.hasInfix "workflow_step_status() {" executorSource);
+assert !(pkgs.lib.hasInfix "workflow_step_records_tsv() {" executorSource);
+assert !(pkgs.lib.hasInfix "workflow_peak_workers() {" executorSource);
+assert pkgs.lib.hasInfix "nixfied-kernel run-record read" orchestratorRuntimeSource;
+assert !(pkgs.lib.hasInfix "\${pkgs.gnused}/bin/sed -n" orchestratorRuntimeSource);
+assert pkgs.lib.hasInfix "nixfied-kernel registry terminal" orchestratorSource;
+assert pkgs.lib.hasInfix "nixfied-kernel registry terminal" orchestratorControlSource;
+assert !(pkgs.lib.hasInfix "while IFS=$'\\t' read -r seq ts_epoch ts event_run_id" orchestratorSource);
+assert !(pkgs.lib.hasInfix "while IFS=$'\\t' read -r seq ts_epoch ts event_run_id" orchestratorControlSource);
 assert !(pkgs.lib.hasInfix "python3" readyHeliosSyncGateSource);
 assert !(pkgs.lib.hasInfix "http.server" readyHeliosSyncGateSource);
 pkgs.runCommand "contract-migration-guard" { } ''
-  echo "OK: hardening guards enforce deleted validators/CUE/run-registry/static service-surface/apps module, kernel-owned machine output, jq-free runtime/build-check seams, no authored nixfied.apps, no Python responders in framework/runtime tests, and no deprecated kernel seams in framework runtime or kernel source" > "$out"
+  echo "OK: hardening guards enforce deleted validators/CUE/run-registry/static service-surface/apps module, kernel-owned machine output/probe execution/executor task planning/executor summary/orchestrator reads, jq-free runtime/build-check seams, no authored nixfied.apps, no Python responders in framework/runtime tests, and no deprecated kernel seams in framework runtime or kernel source" > "$out"
 ''

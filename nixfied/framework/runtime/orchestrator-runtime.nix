@@ -1,6 +1,7 @@
 { pkgs }:
 let
   commonRuntimeShell = import ./common-runtime.nix { inherit pkgs; };
+  kernelPackage = import ./kernel { inherit pkgs; };
 in
 ''
     ${commonRuntimeShell}
@@ -98,42 +99,32 @@ in
 
     run_file_state() {
       local run_file="$1"
-      ${pkgs.gnused}/bin/sed -n 's/.*"state":"\([^"]*\)".*/\1/p' "$run_file" | ${pkgs.coreutils}/bin/head -n 1
+      ${kernelPackage}/bin/nixfied-kernel run-record read "$run_file" state
     }
 
     run_file_pid() {
       local run_file="$1"
-      local value
-      value="$(${pkgs.gnused}/bin/sed -n 's/.*"pid":\([0-9][0-9]*\|null\).*/\1/p' "$run_file" | ${pkgs.coreutils}/bin/head -n 1)"
-      if [ "$value" = "null" ]; then
-        value=""
-      fi
-      printf '%s' "$value"
+      ${kernelPackage}/bin/nixfied-kernel run-record read "$run_file" pid
     }
 
     run_file_pgid() {
       local run_file="$1"
-      local value
-      value="$(${pkgs.gnused}/bin/sed -n 's/.*"pgid":\([0-9][0-9]*\|null\).*/\1/p' "$run_file" | ${pkgs.coreutils}/bin/head -n 1)"
-      if [ "$value" = "null" ]; then
-        value=""
-      fi
-      printf '%s' "$value"
+      ${kernelPackage}/bin/nixfied-kernel run-record read "$run_file" pgid
     }
 
     run_file_attempt_id() {
       local run_file="$1"
-      ${pkgs.gnused}/bin/sed -n 's/.*"attempt_id":"\([^"]*\)".*/\1/p' "$run_file" | ${pkgs.coreutils}/bin/head -n 1
+      ${kernelPackage}/bin/nixfied-kernel run-record read "$run_file" attempt_id
     }
 
     run_file_command() {
       local run_file="$1"
-      ${pkgs.gnused}/bin/sed -n 's/.*"command":"\([^"]*\)".*/\1/p' "$run_file" | ${pkgs.coreutils}/bin/head -n 1
+      ${kernelPackage}/bin/nixfied-kernel run-record read "$run_file" command
     }
 
     run_file_process_mode() {
       local run_file="$1"
-      ${pkgs.gnused}/bin/sed -n 's/.*"process_mode":"\([^"]*\)".*/\1/p' "$run_file" | ${pkgs.coreutils}/bin/head -n 1
+      ${kernelPackage}/bin/nixfied-kernel run-record read "$run_file" process_mode
     }
 
     validate_workflow_args() {

@@ -168,6 +168,32 @@ let
   validationBundleFile = pkgs.writeText "nixfied-runtime-artifact-contract-bundle.json" (
     builtins.toJSON runtimeArtifactContracts.bundle
   );
+  availableServiceNamesFile = pkgs.writeText "nixfied-available-service-names.txt" (
+    lib.concatStringsSep "\n" availableServiceNames
+    + lib.optionalString (availableServiceNames != [ ]) "\n"
+  );
+  taskDependencyPlanFile = pkgs.writeText "nixfied-task-dependency-plan.json" (
+    builtins.toJSON {
+      kind = "nixfied-task-dependency-plan";
+      version = 1;
+      tasks = builtins.mapAttrs (
+        _: task: {
+          needs = task.needs or [ ];
+          softNeeds = task.softNeeds or [ ];
+          requiredServices = task.requirements.services or [ ];
+        }
+      ) (model.tasks or { });
+    }
+  );
+  workflowSummaryPlanFile = pkgs.writeText "nixfied-workflow-summary-plan.json" (
+    builtins.toJSON {
+      kind = "nixfied-workflow-summary-plan";
+      version = 1;
+      taskRunnerTypes = builtins.mapAttrs (
+        _: task: task.runner.type or "shell"
+      ) (model.tasks or { });
+    }
+  );
 in
 pkgs.writeShellScriptBin "nixfied-executor" ''
       set -euo pipefail
@@ -913,6 +939,34 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         return 1
       }
 
+      write_skipped_services_file() {
+        local target_file="$1"
+        local service_name=""
+
+        : > "$target_file" || return 1
+        while IFS= read -r service_name; do
+          [ -n "$service_name" ] || continue
+          if is_service_skipped "$service_name"; then
+            printf '%s\n' "$service_name" >> "$target_file" || return 1
+          fi
+        done < ${pkgs.lib.escapeShellArg (builtins.toString availableServiceNamesFile)}
+      }
+
+      task_execution_plan() {
+        local task_id="$1"
+        local skipped_services_file="$2"
+        local plan_target="$3"
+        local export_target="$4"
+
+        ${kernelPackage}/bin/nixfied-kernel task execution-order \
+          ${pkgs.lib.escapeShellArg (builtins.toString taskDependencyPlanFile)} \
+          "$skipped_services_file" \
+          "$task_id" \
+          "$plan_target" \
+          "$export_target" \
+          >/dev/null
+      }
+
       run_task() {
         if [ "$#" -lt 1 ]; then
           echo "ERROR: usage: run-task <task-id> [-- ...]"
@@ -981,98 +1035,115 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         detail_json="$(event_detail_mode_suffix_json "task" "$RUN_SUFFIX_REASON")"
         append_event "$run_id" "" "$task_id" "queued" "$detail_json"
 
-        local -A visited_tasks
-        local -A active_tasks
-
         run_task_with_deps() {
-          local current_task="$1"
+          local root_task="$1"
           shift
-          local dep_task
-          local dep_rc=0
+          local skipped_services_file=""
+          local plan_file=""
+          local export_file=""
+          local current_task=""
+          local action=""
+          local soft_parent=""
+          local skip_service=""
+          local missing_soft_parent=""
+          local missing_soft_task=""
           local rc=0
-          local current_task_skip_service=""
           local skip_detail_json
+          skipped_services_file="$(mktemp "''${TMPDIR:-/tmp}/nixfied-task-skipped-services.XXXXXX")" || {
+            echo "ERROR: failed to create task skipped-services temp file"
+            return 1
+          }
+          plan_file="$(mktemp "''${TMPDIR:-/tmp}/nixfied-task-execution-order.XXXXXX")" || {
+            rm -f "$skipped_services_file"
+            echo "ERROR: failed to create task execution-order temp file"
+            return 1
+          }
+          export_file="$(mktemp "''${TMPDIR:-/tmp}/nixfied-task-execution-exports.XXXXXX")" || {
+            rm -f "$skipped_services_file" "$plan_file"
+            echo "ERROR: failed to create task execution-order export temp file"
+            return 1
+          }
 
-          if [ -n "''${visited_tasks[$current_task]:-}" ]; then
-            return 0
+          if ! write_skipped_services_file "$skipped_services_file"; then
+            rm -f "$skipped_services_file" "$plan_file" "$export_file"
+            return 1
           fi
 
-          if [ -n "''${active_tasks[$current_task]:-}" ]; then
-            echo "ERROR: cyclic task dependency detected at '$current_task'"
-            return 3
+          if ! task_execution_plan "$root_task" "$skipped_services_file" "$plan_file" "$export_file"; then
+            rm -f "$skipped_services_file" "$plan_file" "$export_file"
+            return 1
           fi
 
-          if ! task_descriptor_exists "$current_task"; then
-            echo "ERROR: unknown task '$current_task'"
-            return "$NIXFIED_EXIT_USAGE"
+          if ! . "$export_file"; then
+            rm -f "$skipped_services_file" "$plan_file" "$export_file"
+            echo "ERROR: failed to load task execution-order exports"
+            return 1
           fi
 
-          current_task_skip_service="$(task_first_skipped_required_service "$current_task" || true)"
-          if [ -n "$current_task_skip_service" ]; then
-            echo "SKIP: task '$current_task' is skipped because service '$current_task_skip_service' has a skip flag enabled"
-            skip_detail_json="$(event_detail_reason_key_value_json "service-skipped" "serviceName" "$current_task_skip_service")"
-            append_event "$run_id" "" "$current_task" "canceled" "$skip_detail_json" "service-skipped"
-            if [ "$current_task" != "$task_id" ]; then
-              return 3
-            fi
-            return 0
+          if [ -n "''${TASK_EXECUTION_PLAN_SOFT_MISSING_LINES:-}" ]; then
+            while IFS=$'\t' read -r missing_soft_parent missing_soft_task; do
+              if [ -z "$missing_soft_parent" ] || [ -z "$missing_soft_task" ]; then
+                continue
+              fi
+              echo "WARN: task '$missing_soft_parent' soft dependency '$missing_soft_task' is not defined"
+            done <<EOF
+''${TASK_EXECUTION_PLAN_SOFT_MISSING_LINES}
+EOF
           fi
 
-          active_tasks[$current_task]=1
+          while IFS=$'\x1f' read -r current_task action soft_parent skip_service; do
+            [ -n "$current_task" ] || continue
 
-          while IFS= read -r dep_task; do
-            if [ -z "$dep_task" ]; then
-              continue
-            fi
-            if run_task_with_deps "$dep_task" "$@"; then
-              dep_rc=0
-            else
-              dep_rc="$?"
-            fi
-            if [ "$dep_rc" -ne 0 ]; then
-              unset "active_tasks[$current_task]"
-              return "$dep_rc"
-            fi
-          done < <(task_needs "$current_task")
+            case "$action" in
+              service-skipped)
+                echo "SKIP: task '$current_task' is skipped because service '$skip_service' has a skip flag enabled"
+                skip_detail_json="$(event_detail_reason_key_value_json "service-skipped" "serviceName" "$skip_service")"
+                append_event "$run_id" "" "$current_task" "canceled" "$skip_detail_json" "service-skipped"
+                if [ -n "$soft_parent" ]; then
+                  echo "WARN: task '$soft_parent' soft dependency '$current_task' failed exitCode=3"
+                  continue
+                fi
+                if [ "$current_task" = "$root_task" ]; then
+                  rc=0
+                else
+                  rc=3
+                fi
+                break
+                ;;
+              execute)
+                if [ "$current_task" = "$task_id" ] && [ "$runner_type" = "workflowRef" ]; then
+                  export NIXFIED_RUN_ID_FILE_OVERRIDE="$MACHINE_RUN_ID_FILE"
+                  export NIXFIED_SUMMARY_FILE_OVERRIDE="$MACHINE_SUMMARY_FILE"
+                fi
 
-          while IFS= read -r dep_task; do
-            if [ -z "$dep_task" ]; then
-              continue
-            fi
-            if ! task_descriptor_exists "$dep_task"; then
-              echo "WARN: task '$current_task' soft dependency '$dep_task' is not defined"
-              continue
-            fi
-            if run_task_with_deps "$dep_task" "$@"; then
-              dep_rc=0
-            else
-              dep_rc="$?"
-            fi
-            if [ "$dep_rc" -ne 0 ]; then
-              echo "WARN: task '$current_task' soft dependency '$dep_task' failed exitCode=$dep_rc"
-            fi
-          done < <(task_soft_needs "$current_task")
+                if execute_task "$run_id" "" "$current_task" "$@"; then
+                  rc=0
+                else
+                  rc="$?"
+                fi
 
-        if [ "$current_task" = "$task_id" ] && [ "$runner_type" = "workflowRef" ]; then
-          export NIXFIED_RUN_ID_FILE_OVERRIDE="$MACHINE_RUN_ID_FILE"
-          export NIXFIED_SUMMARY_FILE_OVERRIDE="$MACHINE_SUMMARY_FILE"
-        fi
+                if [ "$current_task" = "$task_id" ] && [ "$runner_type" = "workflowRef" ]; then
+                  unset NIXFIED_RUN_ID_FILE_OVERRIDE || true
+                  unset NIXFIED_SUMMARY_FILE_OVERRIDE || true
+                fi
 
-          if execute_task "$run_id" "" "$current_task" "$@"; then
-            rc=0
-          else
-            rc="$?"
-          fi
+                if [ "$rc" -ne 0 ]; then
+                  if [ -n "$soft_parent" ]; then
+                    echo "WARN: task '$soft_parent' soft dependency '$current_task' failed exitCode=$rc"
+                    continue
+                  fi
+                  break
+                fi
+                ;;
+              *)
+                echo "ERROR: unsupported task execution-order action '$action'"
+                rc=1
+                break
+                ;;
+            esac
+          done < "$plan_file"
 
-        if [ "$current_task" = "$task_id" ] && [ "$runner_type" = "workflowRef" ]; then
-          unset NIXFIED_RUN_ID_FILE_OVERRIDE || true
-          unset NIXFIED_SUMMARY_FILE_OVERRIDE || true
-        fi
-
-          unset "active_tasks[$current_task]"
-          if [ "$rc" -eq 0 ]; then
-            visited_tasks[$current_task]=1
-          fi
+          rm -f "$skipped_services_file" "$plan_file" "$export_file"
           return "$rc"
         }
 
@@ -1842,287 +1913,80 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         printf '%s' "''${mins}m ''${secs}s"
       }
 
-      workflow_step_status() {
-        local state="$1"
-        local reason="$2"
-
-        if [ "$state" = "canceled" ]; then
-          case "$reason" in
-            missing-env|when-false|service-skipped|dependency-skipped)
-              printf '%s' "skipped"
-              return 0
-              ;;
-          esac
-        fi
-
-        printf '%s' "$state"
-      }
-
-      workflow_step_records_tsv() {
-        local run_id="$1"
-        local events_index_file="$2"
-        local attempt_id="''${NIXFIED_ATTEMPT_ID:-}"
-
-        if [ ! -f "$events_index_file" ]; then
-          return 0
-        fi
-
-        ${pkgs.gawk}/bin/awk -v run_id="$run_id" -v attempt_id="$attempt_id" '
-          BEGIN {
-            FS = "\t"
-            OFS = "\037"
-            row_count = 0
-          }
-
-          {
-            seq = $1 + 0
-            ts_epoch = $2
-            event_run_id = $4
-            event_attempt_id = $5
-            workflow_id = $6
-            task_id = $7
-            state = $8
-            reason = $9
-            exit_code = $10
-
-            if (event_run_id != run_id) {
-              next
-            }
-            if (attempt_id != "" && event_attempt_id != attempt_id) {
-              next
-            }
-            if (task_id == "") {
-              next
-            }
-            if (state != "queued" && state != "running" && state != "passed" && state != "failed" && state != "canceled") {
-              next
-            }
-
-            key = workflow_id SUBSEP task_id
-            if (state == "queued" || state == "running") {
-              if (!(key in active_order_seq) || seq < active_order_seq[key]) {
-                active_order_seq[key] = seq
-              }
-              active_task_id[key] = task_id
-              active_workflow_id[key] = workflow_id
-              if (state == "running" && ts_epoch ~ /^[0-9]+$/) {
-                active_running_epoch[key] = ts_epoch + 0
-              }
-              next
-            }
-
-            order_seq = seq
-            entry_workflow_id = workflow_id
-            if (key in active_order_seq) {
-              order_seq = active_order_seq[key]
-            }
-            if ((key in active_workflow_id) && active_workflow_id[key] != "") {
-              entry_workflow_id = active_workflow_id[key]
-            }
-
-            duration_seconds = 0
-            if ((key in active_running_epoch) && ts_epoch ~ /^[0-9]+$/) {
-              duration_seconds = (ts_epoch + 0) - active_running_epoch[key]
-              if (duration_seconds < 0) {
-                duration_seconds = 0
-              }
-            }
-
-            row_count += 1
-            row_key = sprintf("%020d:%020d", order_seq, row_count)
-            rows[row_key] = task_id OFS entry_workflow_id OFS order_seq OFS state OFS duration_seconds OFS reason OFS exit_code
-
-            delete active_order_seq[key]
-            delete active_running_epoch[key]
-            delete active_task_id[key]
-            delete active_workflow_id[key]
-          }
-
-          END {
-            PROCINFO["sorted_in"] = "@ind_str_asc"
-            for (row_key in rows) {
-              print rows[row_key]
-            }
-          }
-        ' "$events_index_file"
-      }
-
       workflow_collect_steps() {
         local run_id="$1"
         local events_index_file="$2"
         local steps_target="$3"
-        local task_id=""
-        local workflow_id=""
-        local order_seq=""
-        local state=""
-        local duration=""
-        local reason=""
-        local exit_code=""
-        local runner_type=""
-        local status=""
-        local duration_json=0
-        local order_seq_json=0
-        local passed=0
-        local failed=0
-        local skipped=0
-        local canceled=0
-        local steps_duration=0
-        local -A leaf_task_seen=()
+        local actual_steps_target="$steps_target"
+        local cleanup_steps_target=0
+        local export_file=""
+        local attempt_id="''${NIXFIED_ATTEMPT_ID:-}"
 
         WORKFLOW_PASSED_COUNT=0
         WORKFLOW_FAILED_COUNT=0
         WORKFLOW_SKIPPED_COUNT=0
         WORKFLOW_CANCELED_COUNT=0
         WORKFLOW_STEPS_DURATION=0
+        WORKFLOW_PEAK_WORKERS=0
         WORKFLOW_LEAF_TASK_IDS_LINES=""
 
-        if [ -n "$steps_target" ]; then
-          : > "$steps_target" || return 1
-        fi
-
         if [ ! -f "$events_index_file" ]; then
+          if [ -n "$steps_target" ]; then
+            : > "$steps_target" || return 1
+          fi
           return 0
         fi
 
-        while IFS=$'\x1f' read -r task_id workflow_id order_seq state duration reason exit_code; do
-          if [ -z "$task_id" ]; then
-            continue
+        if [ -z "$actual_steps_target" ]; then
+          actual_steps_target="$(mktemp "''${TMPDIR:-/tmp}/nixfied-summary-steps-kernel.XXXXXX")" || {
+            echo "ERROR: failed to create workflow summary steps temp file"
+            return 1
+          }
+          cleanup_steps_target=1
+        else
+          : > "$actual_steps_target" || return 1
+        fi
+
+        export_file="$(mktemp "''${TMPDIR:-/tmp}/nixfied-summary-exports.XXXXXX")" || {
+          if [ "$cleanup_steps_target" -eq 1 ]; then
+            rm -f "$actual_steps_target"
           fi
+          echo "ERROR: failed to create workflow summary export temp file"
+          return 1
+        }
 
-          runner_type="$(task_runner_type "$task_id")"
-          if [ "$runner_type" = "workflowRef" ]; then
-            continue
+        if ! ${kernelPackage}/bin/nixfied-kernel summary collect-steps \
+          ${pkgs.lib.escapeShellArg (builtins.toString workflowSummaryPlanFile)} \
+          "$events_index_file" \
+          "$run_id" \
+          "$attempt_id" \
+          "$actual_steps_target" \
+          "$export_file" \
+          >/dev/null; then
+          rm -f "$export_file"
+          if [ "$cleanup_steps_target" -eq 1 ]; then
+            rm -f "$actual_steps_target"
           fi
+          return 1
+        fi
 
-          status="$(workflow_step_status "$state" "$reason")"
-
-          if is_nonneg_int "$duration"; then
-            duration_json="$duration"
-          else
-            duration_json=0
+        if ! . "$export_file"; then
+          rm -f "$export_file"
+          if [ "$cleanup_steps_target" -eq 1 ]; then
+            rm -f "$actual_steps_target"
           fi
+          echo "ERROR: failed to load workflow summary exports"
+          return 1
+        fi
 
-          if is_nonneg_int "$order_seq"; then
-            order_seq_json="$order_seq"
-          else
-            order_seq_json=0
-          fi
-
-          if [ -n "$exit_code" ] && [[ "$exit_code" =~ ^-?[0-9]+$ ]]; then
-            :
-          else
-            exit_code=""
-          fi
-
-          if [ -n "$steps_target" ]; then
-            printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-              "$task_id" \
-              "$status" \
-              "$duration_json" \
-              "$state" \
-              "$order_seq_json" \
-              "$workflow_id" \
-              "$reason" \
-              "$exit_code" >> "$steps_target" || return 1
-          fi
-
-          case "$state" in
-            passed)
-              passed=$((passed + 1))
-              ;;
-            failed)
-              failed=$((failed + 1))
-              ;;
-            canceled)
-              if [ "$status" = "skipped" ]; then
-                skipped=$((skipped + 1))
-              else
-                canceled=$((canceled + 1))
-              fi
-              ;;
-          esac
-
-          steps_duration=$((steps_duration + duration_json))
-
-          if [ -z "''${leaf_task_seen[$task_id]+x}" ]; then
-            leaf_task_seen["$task_id"]=1
-            if [ -n "$WORKFLOW_LEAF_TASK_IDS_LINES" ]; then
-              WORKFLOW_LEAF_TASK_IDS_LINES="''${WORKFLOW_LEAF_TASK_IDS_LINES}
-  $task_id"
-            else
-              WORKFLOW_LEAF_TASK_IDS_LINES="$task_id"
-            fi
-          fi
-        done < <(workflow_step_records_tsv "$run_id" "$events_index_file")
-
-        WORKFLOW_PASSED_COUNT="$passed"
-        WORKFLOW_FAILED_COUNT="$failed"
-        WORKFLOW_SKIPPED_COUNT="$skipped"
-        WORKFLOW_CANCELED_COUNT="$canceled"
-        WORKFLOW_STEPS_DURATION="$steps_duration"
+        rm -f "$export_file"
+        if [ "$cleanup_steps_target" -eq 1 ]; then
+          rm -f "$actual_steps_target"
+        fi
       }
 
       workflow_steps_json() {
         printf '%s' "[]"
-      }
-
-      workflow_peak_workers() {
-        local run_id="$1"
-        local events_index_file="$2"
-        local leaf_task_ids_lines="$3"
-        local attempt_id="''${NIXFIED_ATTEMPT_ID:-}"
-
-        if [ ! -f "$events_index_file" ] || [ -z "$leaf_task_ids_lines" ]; then
-          printf '%s' "0"
-          return 0
-        fi
-
-        ${pkgs.gawk}/bin/awk -v run_id="$run_id" -v attempt_id="$attempt_id" -v task_ids="$leaf_task_ids_lines" '
-          BEGIN {
-            FS = "\t"
-            split(task_ids, entries, /\n/)
-            for (idx in entries) {
-              if (entries[idx] != "") {
-                allowed[entries[idx]] = 1
-              }
-            }
-            running = 0
-            max_running = 0
-          }
-
-          {
-            event_run_id = $4
-            event_attempt_id = $5
-            task_id = $7
-            state = $8
-
-            if (event_run_id != run_id) {
-              next
-            }
-            if (attempt_id != "" && event_attempt_id != attempt_id) {
-              next
-            }
-            if (!(task_id in allowed)) {
-              next
-            }
-            if (state != "running" && state != "passed" && state != "failed" && state != "canceled") {
-              next
-            }
-
-            if (state == "running") {
-              running += 1
-              if (running > max_running) {
-                max_running = running
-              }
-            } else if (running > 0) {
-              running -= 1
-            }
-          }
-
-          END {
-            print max_running + 0
-          }
-        ' "$events_index_file"
       }
 
       print_workflow_summary_report() {
@@ -2279,6 +2143,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
             skipped="$WORKFLOW_SKIPPED_COUNT"
             canceled="$WORKFLOW_CANCELED_COUNT"
             steps_duration="$WORKFLOW_STEPS_DURATION"
+            parallel_peak_workers="$WORKFLOW_PEAK_WORKERS"
             leaf_task_ids_lines="$WORKFLOW_LEAF_TASK_IDS_LINES"
           else
             echo "WARN: failed to collect step summary from '$events_index_file'; using empty step list"
@@ -2287,6 +2152,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
             skipped=0
             canceled=0
             steps_duration=0
+            parallel_peak_workers=0
             leaf_task_ids_lines=""
             : > "$summary_steps_tmp"
           fi
@@ -2296,6 +2162,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           skipped=0
           canceled=0
           steps_duration=0
+          parallel_peak_workers=0
           leaf_task_ids_lines=""
           : > "$summary_steps_tmp"
         fi
@@ -2312,11 +2179,6 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           parallel_max_workers=""
         fi
 
-        if [ -n "$events_index_file" ] && [ -f "$events_index_file" ]; then
-          parallel_peak_workers="$(workflow_peak_workers "$run_id" "$events_index_file" "$leaf_task_ids_lines" 2>/dev/null || echo 0)"
-        else
-          parallel_peak_workers=0
-        fi
         if ! is_nonneg_int "$parallel_peak_workers"; then
           parallel_peak_workers=""
         fi

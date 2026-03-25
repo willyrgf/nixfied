@@ -169,18 +169,7 @@ pkgs.writeShellScriptBin "nixfied-orchestrator-control" ''
     local run_id="$1"
     local attempt_id="$2"
     local events_index_file
-    local terminal_state=""
-    local exit_code=""
-    local seq=""
-    local ts_epoch=""
-    local ts=""
-    local event_run_id=""
-    local event_attempt_id=""
-    local workflow_id=""
-    local task_id=""
-    local state=""
-    local reason=""
-    local event_exit_code=""
+    local terminal_output=""
 
     events_index_file="$(registry_events_index_snapshot "$REGISTRY_ROOT")" || {
       echo "unknown 1"
@@ -192,48 +181,9 @@ pkgs.writeShellScriptBin "nixfied-orchestrator-control" ''
       return
     fi
 
-    while IFS=$'\t' read -r seq ts_epoch ts event_run_id event_attempt_id workflow_id task_id state reason event_exit_code; do
-      if [ "$event_run_id" != "$run_id" ]; then
-        continue
-      fi
-      if [ -n "$attempt_id" ] && [ "$event_attempt_id" != "$attempt_id" ]; then
-        continue
-      fi
-      case "$state" in
-        passed|failed|canceled)
-          terminal_state="$state"
-          exit_code="$event_exit_code"
-          ;;
-      esac
-    done < "$events_index_file"
-
-    if [ -z "$terminal_state" ]; then
-      registry_snapshot_cleanup "$events_index_file"
-      echo "unknown 1"
-      return
-    fi
-
-    case "$terminal_state" in
-      passed)
-        registry_snapshot_cleanup "$events_index_file"
-        echo "passed 0"
-        ;;
-      canceled)
-        registry_snapshot_cleanup "$events_index_file"
-        echo "canceled 130"
-        ;;
-      failed)
-        if [ -z "$exit_code" ]; then
-          exit_code=1
-        fi
-        registry_snapshot_cleanup "$events_index_file"
-        echo "failed $exit_code"
-        ;;
-      *)
-        registry_snapshot_cleanup "$events_index_file"
-        echo "unknown 1"
-        ;;
-    esac
+    terminal_output="$(${kernelPackage}/bin/nixfied-kernel registry terminal "$events_index_file" "$run_id" "$attempt_id" 2>/dev/null || printf 'unknown\t1\n')"
+    registry_snapshot_cleanup "$events_index_file"
+    printf '%s\n' "$terminal_output"
   }
 
   refresh_one_run() {

@@ -2,6 +2,7 @@
 let
   helperSource = builtins.readFile ../../nixfied/framework/runtime/helpers/managed-service-lifecycle.nix;
   probeCommandsSource = builtins.readFile ../../nixfied/framework/runtime/helpers/probe-commands.nix;
+  probePlanRuntimeSource = builtins.readFile ../../nixfied/framework/runtime/helpers/probe-plan-runtime.nix;
   minioSource = builtins.readFile ../../nixfied/framework/runtime/services/minio/lifecycle.nix;
   rethSource = builtins.readFile ../../nixfied/framework/runtime/services/reth/lifecycle.nix;
   heliosSource = builtins.readFile ../../nixfied/framework/runtime/services/helios/lifecycle.nix;
@@ -20,9 +21,17 @@ assert pkgs.lib.hasInfix "mkSimpleProbeBody" helperSource;
 assert pkgs.lib.hasInfix "mkPlanProbeBody" helperSource;
 assert pkgs.lib.hasInfix "mkStartupReadinessBody" helperSource;
 assert pkgs.lib.hasInfix "nixfied-kernel probe jsonrpc" probeCommandsSource;
+assert pkgs.lib.hasInfix "nixfied-kernel probe evaluate" probePlanRuntimeSource;
+assert pkgs.lib.hasInfix ''kind = "nixfied-probe-execution-plan";'' probePlanRuntimeSource;
 assert pkgs.lib.hasInfix "jsonRpcResultCompactCmd =" probeCommandsSource;
 assert (!pkgs.lib.hasInfix "tmp_json=" probeCommandsSource);
 assert (!pkgs.lib.hasInfix "export_file=" probeCommandsSource);
+assert (!pkgs.lib.hasInfix "jsonRpcHasResultCmd" probePlanRuntimeSource);
+assert (!pkgs.lib.hasInfix "jsonRpcResultHexCmd" probePlanRuntimeSource);
+assert (!pkgs.lib.hasInfix "jsonRpcResultCompactCmd" probePlanRuntimeSource);
+assert (!pkgs.lib.hasInfix "jsonRpcResultFalseCmd" probePlanRuntimeSource);
+assert (!pkgs.lib.hasInfix "pgIsReadyCmd" probePlanRuntimeSource);
+assert (!pkgs.lib.hasInfix "psqlQueryCmd" probePlanRuntimeSource);
 assert pkgs.lib.hasInfix "import ../../core/runtime-defaults.nix" helperSource;
 assert pkgs.lib.hasInfix "print_log_tail \"$LOG_FILE\"" helperSource;
 assert pkgs.lib.hasInfix "SERVICE_PID_FILE" helperSource;

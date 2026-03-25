@@ -1,6 +1,6 @@
 # RFC: Harden Core Systems
 
-Status: closed
+Status: reopened
 
 Last updated: 2026-03-24
 
@@ -22,10 +22,10 @@ replaced with, and which layers should remain in place.
 
 ## Status Update (2026-03-24)
 
-As of the current `2026-03-24` worktree, the RFC-critical hardening plan is
-implemented. The compiler/model/API consolidation is landed, the kernel owns
-the validation and runtime artifact/state-writing paths, and the shell/runtime
-closure items that were still open earlier in the day are now closed.
+As of the current `2026-03-24` worktree, the hardening work is only partially
+closed. The compiler/model/API consolidation is landed, the kernel owns the
+validation and runtime artifact/state-writing paths, and several closure items
+previously marked done are now confirmed to remain open in substance.
 
 Landed:
 
@@ -36,27 +36,42 @@ Landed:
   `model.compiled.*`
 - Lane K kernel responsibilities: `validate-*`, `run-record`, `registry`,
   `summary`, and `machine-output run`
-- Lane R closure: `executor.nix`, `orchestrator.nix`, and
-  `runtime-events.nix` now delegate run-id envelope rendering, summary
-  composition, and event/control detail rendering to the kernel; the framework
-  JSON builders were removed from `common-runtime.nix`; and the
-  `shell-contract.nix` runtime path is reduced to plan loading and kernel
-  validation/export wiring
-- Lane D closure: `probe-commands.nix` and `probe-plan-runtime.nix` now use
-  kernel-owned JSON-RPC probe execution instead of shell-managed request
-  temp-files and export-file choreography
+- Lane R partial closure: run-id envelope rendering, run-record writes,
+  registry append/replay, summary rendering/composition, and event-detail
+  envelope rendering moved to kernel-backed paths; `common-runtime.nix` no
+  longer contains the older framework JSON builders; and
+  `shell-contract.nix` is on the kernel validation/export path
+- Lane R additional closure: `orchestrator.nix`, `orchestrator-control.nix`,
+  and `orchestrator-runtime.nix` now route run-record reads and terminal-state
+  derivation through kernel-backed commands instead of shell field parsing and
+  index scanning
+- Lane D closure: `probe-plan-runtime.nix` now routes runtime probe execution
+  through kernel-owned `probe evaluate` plans, and the kernel executes probe
+  kinds end to end instead of shell-rendered probe bodies
 - Contract-tightening tail: `runtime.summary.payload` now uses refined stable
   ids, workflow-mode enums, and UTC timestamp helpers
 - Lane G guard foundations: CUE removal, deleted authored `nixfied.apps`,
   deleted static service surface, and no Python responders under
   `tests/framework`
-- Lane G final cleanup: framework build-check paths are `jq`-free and the
-  hardening guard now enforces `jq`-free runtime/build-check seams in addition
-  to the earlier CUE/Python/deprecated-kernel bans
+- Lane G additional cleanup: framework build-check paths are `jq`-free, the
+  hardening guard now covers the probe-plan runtime and the
+  orchestrator run-record/terminal-state seam, and the related contract tests
+  assert the kernel-backed boundary
 
-No remaining open items are tracked for this RFC. Residual `jq` use in smoke
-tests that only inspect outputs is outside the hardened-core ownership boundary
-described here.
+Still open:
+
+- Lane R thin-shell closure is not complete. `executor.nix` still owns
+  the workflow serial/parallel scheduler state engines, including ready/pending
+  queue management, lock arbitration, fail-fast cancellation, and unit
+  transition bookkeeping.
+- Lane G guard enforcement is not complete. The guard is `jq`/CUE/Python-free
+  oriented, and it now covers probe execution, task dependency planning,
+  executor summary aggregation, and orchestrator reads, but it does not yet
+  fail on the remaining workflow scheduler semantics that still sit inside the
+  hardened-core runtime boundary.
+
+Residual `jq` use in smoke tests that only inspect outputs remains outside the
+hardened-core ownership boundary described here.
 
 ## Decision Summary
 
@@ -1106,6 +1121,25 @@ The short serial finish described earlier is complete:
 6. The RFC is now closed.
    Any future follow-up should be treated as new work, not as an extension of
    the open hardening tail recorded by this document.
+
+### Reopen Note (2026-03-24)
+
+The closure note above is preserved as historical context, but it is no longer
+accurate for the current worktree.
+
+Post-closure review found that:
+
+1. Lane R thin-wrapper reduction is incomplete.
+   The executor path still retains shell-owned workflow scheduler semantics
+   beyond env/path/process/signal staging.
+
+2. Lane G guard enforcement is incomplete.
+   The guard does not yet fail on the remaining executor-owned shell workflow
+   scheduler semantics that this RFC intended to prohibit inside the
+   hardened-core runtime boundary.
+
+The RFC is therefore reopened until those items are implemented and the guard
+and tests enforce the final boundary in substance rather than by status text.
 
 ## Appendix B: Target LOC Snapshot
 

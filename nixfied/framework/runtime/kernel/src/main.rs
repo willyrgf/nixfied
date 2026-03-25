@@ -2,8 +2,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Read, Write};
+use std::net::{TcpStream, ToSocketAddrs};
 use std::path::Path;
 use std::process::{self, Command, Stdio};
+use std::time::Duration;
 
 fn main() {
     if let Err(err) = run() {
@@ -68,6 +70,11 @@ fn run() -> Result<(), String> {
             let values = args.collect::<Vec<_>>();
             run_record_command(&subcommand, &values)
         }
+        "task" => {
+            let subcommand = args.next().ok_or_else(usage)?;
+            let values = args.collect::<Vec<_>>();
+            task_command(&subcommand, &values)
+        }
         "registry" => {
             let subcommand = args.next().ok_or_else(usage)?;
             let values = args.collect::<Vec<_>>();
@@ -110,10 +117,11 @@ fn usage() -> String {
         "  run-id <envelope> ...",
         "  event-detail <render> ...",
         "  run-record <create|transition> ...",
+        "  task <execution-order> ...",
         "  registry <append|replay> ...",
-        "  summary <write|compose|render-human> ...",
+        "  summary <write|compose|collect-steps|render-human> ...",
         "  adapter decode <kind> ...",
-        "  probe evaluate <plan-file> <payload-file> [export-file]",
+        "  probe evaluate <plan-file> [payload-file] [export-file]",
         "  machine-output run <plan-file> [-- <args...>]",
         "  help",
     ]
@@ -166,6 +174,43 @@ struct ProbePlan {
 }
 
 #[derive(Clone)]
+struct ProbeExecutionPlan {
+    mode: String,
+    service_name: String,
+    source_env_var: String,
+    curl_bin: String,
+    runtime_shell_bin: String,
+    pg_is_ready_bin: String,
+    psql_bin: String,
+    steps: Vec<ProbeExecutionStep>,
+}
+
+#[derive(Clone)]
+struct ProbeExecutionStep {
+    kind: String,
+    service_label: String,
+    phase_label: String,
+    success_label: String,
+    failure_label: String,
+    host: Option<String>,
+    scheme: Option<String>,
+    path: Option<String>,
+    method: Option<String>,
+    port_env_var: Option<String>,
+    execution_port_env_var: Option<String>,
+    source_kinds: BTreeMap<String, String>,
+    readiness_profile: Option<String>,
+    require_not_syncing: bool,
+    allow_local_health_fallback: bool,
+    disallow_source_kinds: Vec<String>,
+    max_time_seconds: Option<i64>,
+    database: Option<String>,
+    query: Option<String>,
+    failure_suffix: Option<String>,
+    command: Option<String>,
+}
+
+#[derive(Clone)]
 struct MachineOutputPlan {
     app_id: String,
     target_app_id: String,
@@ -175,6 +220,69 @@ struct MachineOutputPlan {
     setup_programs: Vec<String>,
     teardown_programs: Vec<String>,
     target_args: Vec<String>,
+}
+
+#[derive(Clone)]
+struct TaskDependencyPlan {
+    tasks: BTreeMap<String, TaskDependencyEntry>,
+}
+
+#[derive(Clone)]
+struct TaskDependencyEntry {
+    needs: Vec<String>,
+    soft_needs: Vec<String>,
+    required_services: Vec<String>,
+}
+
+struct TaskExecutionPlan {
+    steps: Vec<TaskExecutionStep>,
+    soft_missing_lines: String,
+}
+
+struct TaskExecutionStep {
+    task_id: String,
+    action: String,
+    soft_parent_task: String,
+    skip_service: String,
+}
+
+#[derive(Clone)]
+struct WorkflowSummaryPlan {
+    task_runner_types: BTreeMap<String, String>,
+}
+
+#[derive(Clone)]
+struct WorkflowCollectedStep {
+    name: String,
+    status: String,
+    state: String,
+    duration: i64,
+    order: i64,
+    workflow_id: String,
+    reason: String,
+    exit_code: String,
+}
+
+struct WorkflowCollectedSummary {
+    steps: Vec<WorkflowCollectedStep>,
+    passed: i64,
+    failed: i64,
+    skipped: i64,
+    canceled: i64,
+    steps_duration: i64,
+    peak_workers: i64,
+    leaf_task_ids_lines: String,
+}
+
+struct WorkflowTerminalRow {
+    order: i64,
+    row_index: usize,
+    name: String,
+    workflow_id: String,
+    state: String,
+    duration: i64,
+    reason: String,
+    exit_code: String,
 }
 
 fn validate_input_command(
@@ -935,6 +1043,27 @@ fn array_strings(value: &JsonValue, key: &str) -> Vec<String> {
         .collect()
 }
 
+fn object_string_map(
+    value: &JsonValue,
+    key: &str,
+    label: &str,
+) -> Result<BTreeMap<String, String>, String> {
+    let mut result = BTreeMap::new();
+    let Some(entries) = object_field(value, key).and_then(JsonValue::as_object) else {
+        return Ok(result);
+    };
+    for (entry_key, entry_value) in entries {
+        let Some(entry_text) = entry_value.as_string() else {
+            return Err(format!(
+                "{} field {} must contain only string values",
+                label, key
+            ));
+        };
+        result.insert(entry_key.clone(), entry_text.to_string());
+    }
+    Ok(result)
+}
+
 fn json_value_to_plain_string(value: &JsonValue) -> Option<String> {
     match value {
         JsonValue::Null => None,
@@ -1015,6 +1144,7 @@ fn validate_json_value_against_contract(
 fn run_record_command(subcommand: &str, values: &[String]) -> Result<(), String> {
     match subcommand {
         "create" => run_record_create_command(values),
+        "read" => run_record_read_command(values),
         "transition" => run_record_transition_command(values),
         other => Err(format!("unknown run-record subcommand: {}", other)),
     }
@@ -1160,10 +1290,67 @@ fn run_record_transition_command(values: &[String]) -> Result<(), String> {
     println!("OK: run-record transition");
     Ok(())
 }
+
+fn run_record_read_command(values: &[String]) -> Result<(), String> {
+    if values.len() != 2 {
+        return Err(
+            "usage: nixfied-kernel run-record read <run-file> <field>".to_string(),
+        );
+    }
+
+    let envelope = parse_json_file(&values[0], "run-record file")?;
+    let payload = object_field(&envelope, "payload")
+        .ok_or_else(|| "run-record payload is missing".to_string())?;
+    let field = values[1].as_str();
+    let rendered = match field {
+        "state" | "attempt_id" | "command" | "process_mode" => {
+            required_string_field(payload, field, "run-record payload")?.to_string()
+        }
+        "pid" | "pgid" => object_field(payload, field)
+            .and_then(json_value_to_plain_string)
+            .unwrap_or_default(),
+        other => return Err(format!("unknown run-record read field: {}", other)),
+    };
+
+    println!("{}", rendered);
+    Ok(())
+}
+
+fn task_command(subcommand: &str, values: &[String]) -> Result<(), String> {
+    match subcommand {
+        "execution-order" => task_execution_order_command(values),
+        other => Err(format!("unknown task subcommand: {}", other)),
+    }
+}
+
+fn task_execution_order_command(values: &[String]) -> Result<(), String> {
+    if values.len() != 5 {
+        return Err(
+            "usage: nixfied-kernel task execution-order <plan-file> <skipped-services-file> <task-id> <order-file> <export-file>"
+                .to_string(),
+        );
+    }
+
+    let plan = load_task_dependency_plan(&values[0])?;
+    let skipped_services = load_line_set(&values[1])?;
+    let execution_plan = collect_task_execution_plan(&plan, &skipped_services, &values[2])?;
+    write_task_execution_plan_file(&values[3], &execution_plan.steps)?;
+    write_shell_exports(
+        &values[4],
+        &[(
+            "TASK_EXECUTION_PLAN_SOFT_MISSING_LINES".to_string(),
+            execution_plan.soft_missing_lines,
+        )],
+    )?;
+    println!("OK: task execution-order");
+    Ok(())
+}
+
 fn registry_command(subcommand: &str, values: &[String]) -> Result<(), String> {
     match subcommand {
         "append" => registry_append_command(values),
         "replay" => registry_replay_command(values),
+        "terminal" => registry_terminal_command(values),
         other => Err(format!("unknown registry subcommand: {}", other)),
     }
 }
@@ -1288,10 +1475,67 @@ fn registry_replay_command(values: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+fn registry_terminal_command(values: &[String]) -> Result<(), String> {
+    if values.len() != 3 {
+        return Err(
+            "usage: nixfied-kernel registry terminal <index-file> <run-id> <attempt-id|empty>"
+                .to_string(),
+        );
+    }
+
+    let content = read_text(&values[0])?;
+    let run_id = values[1].as_str();
+    let attempt_id = values[2].as_str();
+    let mut terminal_state = None::<String>;
+    let mut exit_code = None::<String>;
+
+    for line in content.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        let fields = line.split('\t').collect::<Vec<_>>();
+        if fields.len() < 10 {
+            continue;
+        }
+
+        if fields[3] != run_id {
+            continue;
+        }
+        if !attempt_id.is_empty() && fields[4] != attempt_id {
+            continue;
+        }
+
+        match fields[7] {
+            "passed" | "failed" | "canceled" => {
+                terminal_state = Some(fields[7].to_string());
+                exit_code = Some(fields[9].to_string());
+            }
+            _ => {}
+        }
+    }
+
+    match terminal_state.as_deref() {
+        Some("passed") => println!("passed\t0"),
+        Some("canceled") => println!("canceled\t130"),
+        Some("failed") => {
+            let rendered_code = exit_code
+                .as_deref()
+                .filter(|value| !value.is_empty())
+                .unwrap_or("1");
+            println!("failed\t{}", rendered_code);
+        }
+        _ => println!("unknown\t1"),
+    }
+
+    Ok(())
+}
+
 fn summary_command(subcommand: &str, values: &[String]) -> Result<(), String> {
     match subcommand {
         "write" => summary_write_command(values),
         "compose" => summary_compose_command(values),
+        "collect-steps" => summary_collect_steps_command(values),
         "render-human" => summary_render_human_command(values),
         other => Err(format!("unknown summary subcommand: {}", other)),
     }
@@ -1491,6 +1735,54 @@ fn summary_compose_command(values: &[String]) -> Result<(), String> {
 
     validate_and_write_json(&values[0], "runtime.summary", &values[1], &envelope)?;
     println!("OK: summary compose");
+    Ok(())
+}
+
+fn summary_collect_steps_command(values: &[String]) -> Result<(), String> {
+    if values.len() != 6 {
+        return Err(
+            "usage: nixfied-kernel summary collect-steps <plan-file> <index-file> <run-id> <attempt-id|empty> <steps-file> <export-file>"
+                .to_string(),
+        );
+    }
+
+    let plan = load_workflow_summary_plan(&values[0])?;
+    let collected = collect_workflow_summary(&plan, &values[1], &values[2], &values[3])?;
+    write_workflow_collected_steps_file(&values[4], &collected.steps)?;
+    write_shell_exports(
+        &values[5],
+        &[
+            (
+                "WORKFLOW_PASSED_COUNT".to_string(),
+                collected.passed.to_string(),
+            ),
+            (
+                "WORKFLOW_FAILED_COUNT".to_string(),
+                collected.failed.to_string(),
+            ),
+            (
+                "WORKFLOW_SKIPPED_COUNT".to_string(),
+                collected.skipped.to_string(),
+            ),
+            (
+                "WORKFLOW_CANCELED_COUNT".to_string(),
+                collected.canceled.to_string(),
+            ),
+            (
+                "WORKFLOW_STEPS_DURATION".to_string(),
+                collected.steps_duration.to_string(),
+            ),
+            (
+                "WORKFLOW_PEAK_WORKERS".to_string(),
+                collected.peak_workers.to_string(),
+            ),
+            (
+                "WORKFLOW_LEAF_TASK_IDS_LINES".to_string(),
+                collected.leaf_task_ids_lines,
+            ),
+        ],
+    )?;
+    println!("OK: summary collect-steps");
     Ok(())
 }
 
@@ -1745,6 +2037,421 @@ fn parse_tab_separated_name_value_file(
     Ok(entries)
 }
 
+fn load_line_set(path: &str) -> Result<BTreeSet<String>, String> {
+    let text = read_text(path)?;
+    Ok(text
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| line.to_string())
+        .collect())
+}
+
+fn load_task_dependency_plan(path: &str) -> Result<TaskDependencyPlan, String> {
+    let value = parse_json_file(path, "task dependency plan")?;
+    let kind = required_string_field(&value, "kind", "task dependency plan")?;
+    if kind != "nixfied-task-dependency-plan" {
+        return Err(format!("unsupported task dependency plan kind: {}", kind));
+    }
+    let version = object_field(&value, "version")
+        .and_then(json_value_to_i64)
+        .ok_or_else(|| "task dependency plan missing integer field version".to_string())?;
+    if version != 1 {
+        return Err(format!(
+            "task dependency plan version must be 1 (got {})",
+            version
+        ));
+    }
+
+    let mut tasks = BTreeMap::new();
+    let task_entries = object_field(&value, "tasks")
+        .and_then(JsonValue::as_object)
+        .ok_or_else(|| "task dependency plan missing object field tasks".to_string())?;
+    for (task_id, entry) in task_entries {
+        tasks.insert(
+            task_id.clone(),
+            TaskDependencyEntry {
+                needs: array_strings(entry, "needs"),
+                soft_needs: array_strings(entry, "softNeeds"),
+                required_services: array_strings(entry, "requiredServices"),
+            },
+        );
+    }
+
+    Ok(TaskDependencyPlan { tasks })
+}
+
+fn collect_task_execution_plan(
+    plan: &TaskDependencyPlan,
+    skipped_services: &BTreeSet<String>,
+    root_task_id: &str,
+) -> Result<TaskExecutionPlan, String> {
+    let mut steps = Vec::new();
+    let mut active = BTreeSet::new();
+    let mut emitted = BTreeSet::new();
+    let mut soft_missing = BTreeSet::new();
+
+    collect_task_execution_plan_visit(
+        plan,
+        skipped_services,
+        root_task_id,
+        None,
+        &mut active,
+        &mut emitted,
+        &mut soft_missing,
+        &mut steps,
+    )?;
+
+    Ok(TaskExecutionPlan {
+        steps,
+        soft_missing_lines: soft_missing.into_iter().collect::<Vec<_>>().join("\n"),
+    })
+}
+
+fn collect_task_execution_plan_visit(
+    plan: &TaskDependencyPlan,
+    skipped_services: &BTreeSet<String>,
+    task_id: &str,
+    soft_parent_task: Option<&str>,
+    active: &mut BTreeSet<String>,
+    emitted: &mut BTreeSet<String>,
+    soft_missing: &mut BTreeSet<String>,
+    steps: &mut Vec<TaskExecutionStep>,
+) -> Result<(), String> {
+    if emitted.contains(task_id) {
+        return Ok(());
+    }
+    if active.contains(task_id) {
+        return Err(format!("cyclic task dependency detected at '{}'", task_id));
+    }
+
+    let task = plan
+        .tasks
+        .get(task_id)
+        .ok_or_else(|| format!("unknown task '{}'", task_id))?;
+    active.insert(task_id.to_string());
+
+    if let Some(skip_service) = task
+        .required_services
+        .iter()
+        .find(|service_name| skipped_services.contains(*service_name))
+    {
+        steps.push(TaskExecutionStep {
+            task_id: task_id.to_string(),
+            action: "service-skipped".to_string(),
+            soft_parent_task: soft_parent_task.unwrap_or("").to_string(),
+            skip_service: skip_service.to_string(),
+        });
+        active.remove(task_id);
+        emitted.insert(task_id.to_string());
+        return Ok(());
+    }
+
+    for dependency in &task.needs {
+        collect_task_execution_plan_visit(
+            plan,
+            skipped_services,
+            dependency,
+            None,
+            active,
+            emitted,
+            soft_missing,
+            steps,
+        )?;
+    }
+
+    for dependency in &task.soft_needs {
+        if !plan.tasks.contains_key(dependency) {
+            soft_missing.insert(format!("{}\t{}", task_id, dependency));
+            continue;
+        }
+        collect_task_execution_plan_visit(
+            plan,
+            skipped_services,
+            dependency,
+            Some(task_id),
+            active,
+            emitted,
+            soft_missing,
+            steps,
+        )?;
+    }
+
+    steps.push(TaskExecutionStep {
+        task_id: task_id.to_string(),
+        action: "execute".to_string(),
+        soft_parent_task: soft_parent_task.unwrap_or("").to_string(),
+        skip_service: String::new(),
+    });
+    active.remove(task_id);
+    emitted.insert(task_id.to_string());
+    Ok(())
+}
+
+fn write_task_execution_plan_file(path: &str, steps: &[TaskExecutionStep]) -> Result<(), String> {
+    if path == "-" {
+        return Ok(());
+    }
+
+    let mut rendered = String::new();
+    for step in steps {
+        rendered.push_str(&format!(
+            "{}\u{1f}{}\u{1f}{}\u{1f}{}\n",
+            step.task_id, step.action, step.soft_parent_task, step.skip_service
+        ));
+    }
+    write_text_atomic(path, &rendered)
+}
+
+fn load_workflow_summary_plan(path: &str) -> Result<WorkflowSummaryPlan, String> {
+    let value = parse_json_file(path, "workflow summary plan")?;
+    let kind = required_string_field(&value, "kind", "workflow summary plan")?;
+    if kind != "nixfied-workflow-summary-plan" {
+        return Err(format!("unsupported workflow summary plan kind: {}", kind));
+    }
+    let version = object_field(&value, "version")
+        .and_then(json_value_to_i64)
+        .ok_or_else(|| "workflow summary plan missing integer field version".to_string())?;
+    if version != 1 {
+        return Err(format!(
+            "workflow summary plan version must be 1 (got {})",
+            version
+        ));
+    }
+    Ok(WorkflowSummaryPlan {
+        task_runner_types: object_string_map(&value, "taskRunnerTypes", "workflow summary plan")?,
+    })
+}
+
+fn workflow_step_status_from_state_reason(state: &str, reason: &str) -> String {
+    if state == "canceled"
+        && matches!(
+            reason,
+            "missing-env" | "when-false" | "service-skipped" | "dependency-skipped"
+        )
+    {
+        "skipped".to_string()
+    } else {
+        state.to_string()
+    }
+}
+
+fn collect_workflow_summary(
+    plan: &WorkflowSummaryPlan,
+    index_file: &str,
+    run_id: &str,
+    attempt_id: &str,
+) -> Result<WorkflowCollectedSummary, String> {
+    if !Path::new(index_file).exists() {
+        return Ok(WorkflowCollectedSummary {
+            steps: Vec::new(),
+            passed: 0,
+            failed: 0,
+            skipped: 0,
+            canceled: 0,
+            steps_duration: 0,
+            peak_workers: 0,
+            leaf_task_ids_lines: String::new(),
+        });
+    }
+
+    let content = read_text(index_file)?;
+    let mut active_order_seq = BTreeMap::<String, i64>::new();
+    let mut active_workflow_id = BTreeMap::<String, String>::new();
+    let mut active_running_epoch = BTreeMap::<String, i64>::new();
+    let mut terminal_rows = Vec::<WorkflowTerminalRow>::new();
+    let mut running_workers = 0i64;
+    let mut peak_workers = 0i64;
+
+    for (row_index, line) in content.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        let fields = line.split('\t').collect::<Vec<_>>();
+        if fields.len() < 10 {
+            continue;
+        }
+
+        if fields[3] != run_id {
+            continue;
+        }
+        if !attempt_id.is_empty() && fields[4] != attempt_id {
+            continue;
+        }
+
+        let workflow_id = fields[5];
+        let task_id = fields[6];
+        let state = fields[7];
+        let reason = fields[8];
+        let exit_code = fields[9];
+        if task_id.is_empty() {
+            continue;
+        }
+
+        let runner_type = plan
+            .task_runner_types
+            .get(task_id)
+            .map(|value| value.as_str())
+            .unwrap_or("shell");
+        let counts_for_peak = runner_type != "workflowRef";
+        if counts_for_peak {
+            match state {
+                "running" => {
+                    running_workers += 1;
+                    if running_workers > peak_workers {
+                        peak_workers = running_workers;
+                    }
+                }
+                "passed" | "failed" | "canceled" => {
+                    if running_workers > 0 {
+                        running_workers -= 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if !matches!(state, "queued" | "running" | "passed" | "failed" | "canceled") {
+            continue;
+        }
+
+        let key = format!("{}\u{1f}{}", workflow_id, task_id);
+        let seq = fields[0].parse::<i64>().ok().unwrap_or(0);
+        let ts_epoch = fields[1].parse::<i64>().ok();
+
+        match state {
+            "queued" | "running" => {
+                if active_order_seq
+                    .get(&key)
+                    .map(|value| seq < *value)
+                    .unwrap_or(true)
+                {
+                    active_order_seq.insert(key.clone(), seq);
+                }
+                active_workflow_id.insert(key.clone(), workflow_id.to_string());
+                if state == "running" {
+                    if let Some(ts_epoch) = ts_epoch {
+                        active_running_epoch.insert(key, ts_epoch);
+                    }
+                }
+            }
+            "passed" | "failed" | "canceled" => {
+                let order = active_order_seq.remove(&key).unwrap_or(seq);
+                let entry_workflow_id = active_workflow_id
+                    .remove(&key)
+                    .unwrap_or_else(|| workflow_id.to_string());
+                let duration = match (active_running_epoch.remove(&key), ts_epoch) {
+                    (Some(started_at), Some(finished_at)) if finished_at >= started_at => {
+                        finished_at - started_at
+                    }
+                    _ => 0,
+                };
+                terminal_rows.push(WorkflowTerminalRow {
+                    order,
+                    row_index,
+                    name: task_id.to_string(),
+                    workflow_id: entry_workflow_id,
+                    state: state.to_string(),
+                    duration,
+                    reason: reason.to_string(),
+                    exit_code: exit_code.to_string(),
+                });
+            }
+            _ => {}
+        }
+    }
+
+    terminal_rows.sort_by(|left, right| {
+        left.order
+            .cmp(&right.order)
+            .then(left.row_index.cmp(&right.row_index))
+    });
+
+    let mut steps = Vec::new();
+    let mut passed = 0i64;
+    let mut failed = 0i64;
+    let mut skipped = 0i64;
+    let mut canceled = 0i64;
+    let mut steps_duration = 0i64;
+    let mut seen_leaf_tasks = BTreeSet::new();
+    let mut leaf_task_ids = Vec::new();
+
+    for row in terminal_rows {
+        let runner_type = plan
+            .task_runner_types
+            .get(&row.name)
+            .map(|value| value.as_str())
+            .unwrap_or("shell");
+        if runner_type == "workflowRef" {
+            continue;
+        }
+
+        let status = workflow_step_status_from_state_reason(&row.state, &row.reason);
+        match row.state.as_str() {
+            "passed" => passed += 1,
+            "failed" => failed += 1,
+            "canceled" => {
+                if status == "skipped" {
+                    skipped += 1;
+                } else {
+                    canceled += 1;
+                }
+            }
+            _ => {}
+        }
+        steps_duration += row.duration;
+        if seen_leaf_tasks.insert(row.name.clone()) {
+            leaf_task_ids.push(row.name.clone());
+        }
+        steps.push(WorkflowCollectedStep {
+            name: row.name,
+            status,
+            state: row.state,
+            duration: row.duration,
+            order: row.order,
+            workflow_id: row.workflow_id,
+            reason: row.reason,
+            exit_code: row.exit_code,
+        });
+    }
+
+    Ok(WorkflowCollectedSummary {
+        steps,
+        passed,
+        failed,
+        skipped,
+        canceled,
+        steps_duration,
+        peak_workers,
+        leaf_task_ids_lines: leaf_task_ids.join("\n"),
+    })
+}
+
+fn write_workflow_collected_steps_file(
+    path: &str,
+    steps: &[WorkflowCollectedStep],
+) -> Result<(), String> {
+    if path == "-" {
+        return Ok(());
+    }
+
+    let mut rendered = String::new();
+    for step in steps {
+        rendered.push_str(&format!(
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+            step.name,
+            step.status,
+            step.duration,
+            step.state,
+            step.order,
+            step.workflow_id,
+            step.reason,
+            step.exit_code
+        ));
+    }
+    write_text_atomic(path, &rendered)
+}
+
 fn parse_summary_steps_file(path: &str) -> Result<Vec<JsonValue>, String> {
     let text = read_text(path)?;
     let mut steps = Vec::new();
@@ -1959,31 +2666,49 @@ fn probe_command(subcommand: &str, values: &[String]) -> Result<(), String> {
 
 fn probe_evaluate_command(values: &[String]) -> Result<(), String> {
     let plan_path = values.first().ok_or_else(|| {
-        "usage: nixfied-kernel probe evaluate <plan-file> <payload-file> [export-file]".to_string()
-    })?;
-    let payload_path = values.get(1).ok_or_else(|| {
-        "usage: nixfied-kernel probe evaluate <plan-file> <payload-file> [export-file]".to_string()
+        "usage: nixfied-kernel probe evaluate <plan-file> [payload-file] [export-file]"
+            .to_string()
     })?;
     if values.len() > 3 {
         return Err(
-            "usage: nixfied-kernel probe evaluate <plan-file> <payload-file> [export-file]"
+            "usage: nixfied-kernel probe evaluate <plan-file> [payload-file] [export-file]"
                 .to_string(),
         );
     }
 
-    let export_path = values.get(2).map(|value| value.as_str());
-    let plan = load_probe_plan(plan_path)?;
-    let payload = parse_json_file(payload_path, "probe payload")?;
-    let exports = probe_plan_exports(&plan, &payload)?;
+    let plan_value = parse_json_file(plan_path, "probe plan")?;
+    let plan_kind = required_string_field(&plan_value, "kind", "probe plan")?;
+    match plan_kind {
+        "nixfied-probe-plan" => {
+            let payload_path = values.get(1).ok_or_else(|| {
+                "usage: nixfied-kernel probe evaluate <plan-file> <payload-file> [export-file]"
+                    .to_string()
+            })?;
+            let export_path = values.get(2).map(|value| value.as_str());
+            let plan = load_probe_plan_from_value(&plan_value)?;
+            let payload = parse_json_file(payload_path, "probe payload")?;
+            let exports = probe_plan_exports(&plan, &payload)?;
 
-    if let Some(export_path) = export_path {
-        write_shell_exports(export_path, &exports)?;
-    } else if !exports.is_empty() {
-        return Err("probe evaluate requires export-file when plan emits exports".to_string());
+            if let Some(export_path) = export_path {
+                write_shell_exports(export_path, &exports)?;
+            } else if !exports.is_empty() {
+                return Err("probe evaluate requires export-file when plan emits exports".to_string());
+            }
+
+            println!("OK: probe evaluate kind={}", plan.probe_kind);
+            Ok(())
+        }
+        "nixfied-probe-execution-plan" => {
+            if values.len() != 1 {
+                return Err(
+                    "usage: nixfied-kernel probe evaluate <execution-plan-file>".to_string(),
+                );
+            }
+            let plan = load_probe_execution_plan_from_value(&plan_value)?;
+            execute_probe_execution_plan(&plan)
+        }
+        other => Err(format!("unknown probe plan kind: {}", other)),
     }
-
-    println!("OK: probe evaluate kind={}", plan.probe_kind);
-    Ok(())
 }
 
 fn probe_jsonrpc_command(values: &[String]) -> Result<(), String> {
@@ -2011,6 +2736,389 @@ fn probe_jsonrpc_command(values: &[String]) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn execute_probe_execution_plan(plan: &ProbeExecutionPlan) -> Result<(), String> {
+    let _ = (&plan.mode, &plan.service_name);
+    let probe_source = env::var(&plan.source_env_var)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "unspecified".to_string());
+
+    for step in &plan.steps {
+        execute_probe_execution_step(plan, step, &probe_source)?;
+    }
+
+    Ok(())
+}
+
+fn execute_probe_execution_step(
+    plan: &ProbeExecutionPlan,
+    step: &ProbeExecutionStep,
+    probe_source: &str,
+) -> Result<(), String> {
+    match step.kind.as_str() {
+        "tcp" => execute_probe_tcp_step(step, probe_source),
+        "http" => execute_probe_http_step(plan, step, probe_source),
+        "jsonrpc" => execute_probe_jsonrpc_step(plan, step, probe_source),
+        "postgres-pg-isready" => execute_probe_pg_isready_step(plan, step, probe_source),
+        "postgres-query" => execute_probe_postgres_query_step(plan, step, probe_source),
+        "helios-ready" => execute_probe_helios_ready_step(plan, step, probe_source),
+        "exec" => execute_probe_exec_step(plan, step, probe_source),
+        other => Err(format!("unsupported probe execution step kind={}", other)),
+    }
+}
+
+fn execute_probe_tcp_step(step: &ProbeExecutionStep, probe_source: &str) -> Result<(), String> {
+    let host = probe_step_required_field(step, "host", step.host.as_deref())?;
+    let port_env_var = probe_step_required_field(step, "portEnvVar", step.port_env_var.as_deref())?;
+    let port = required_port_from_env(port_env_var)?;
+
+    println!(
+        "INFO: checking {} {} port={} source={}",
+        step.service_label, step.phase_label, port, probe_source
+    );
+
+    let addresses = format!("{}:{}", host, port)
+        .to_socket_addrs()
+        .map_err(|err| {
+            format!(
+                "probe tcp address resolution failed host={} port={} err={}",
+                host, port, err
+            )
+        })?
+        .collect::<Vec<_>>();
+    if addresses.is_empty() {
+        return Err(format!(
+            "{} {} port={} (no resolved address)",
+            step.service_label, step.failure_label, port
+        ));
+    }
+
+    let timeout = Duration::from_secs(2);
+    if addresses
+        .iter()
+        .any(|address| TcpStream::connect_timeout(address, timeout).is_ok())
+    {
+        println!(
+            "OK: {} {} port={}",
+            step.service_label, step.success_label, port
+        );
+        Ok(())
+    } else {
+        Err(format!(
+            "{} {} port={}",
+            step.service_label, step.failure_label, port
+        ))
+    }
+}
+
+fn execute_probe_http_step(
+    plan: &ProbeExecutionPlan,
+    step: &ProbeExecutionStep,
+    probe_source: &str,
+) -> Result<(), String> {
+    let host = probe_step_required_field(step, "host", step.host.as_deref())?;
+    let scheme = probe_step_required_field(step, "scheme", step.scheme.as_deref())?;
+    let path = probe_step_required_field(step, "path", step.path.as_deref())?;
+    let port_env_var = probe_step_required_field(step, "portEnvVar", step.port_env_var.as_deref())?;
+    let port = required_port_from_env(port_env_var)?;
+    let max_time = probe_step_max_time(step)?;
+    let url = build_probe_url(scheme, host, &port, path);
+
+    println!(
+        "INFO: checking {} {} url={} source={}",
+        step.service_label, step.phase_label, url, probe_source
+    );
+
+    let args = vec![
+        "-fsS".to_string(),
+        "--max-time".to_string(),
+        max_time.to_string(),
+        url.clone(),
+    ];
+    let output = run_captured_program(&plan.curl_bin, &args, &[])?;
+    if output.status.success() {
+        println!(
+            "OK: {} {} url={}",
+            step.service_label, step.success_label, url
+        );
+        Ok(())
+    } else {
+        let exit_code = output.status.code().unwrap_or(1);
+        let detail = captured_output_detail(&output);
+        Err(format!(
+            "{} {} url={} exit={}{}",
+            step.service_label,
+            step.failure_label,
+            url,
+            exit_code,
+            if detail.is_empty() {
+                String::new()
+            } else {
+                format!(" detail={}", detail)
+            }
+        ))
+    }
+}
+
+fn execute_probe_jsonrpc_step(
+    plan: &ProbeExecutionPlan,
+    step: &ProbeExecutionStep,
+    probe_source: &str,
+) -> Result<(), String> {
+    let host = probe_step_required_field(step, "host", step.host.as_deref())?;
+    let scheme = probe_step_required_field(step, "scheme", step.scheme.as_deref())?;
+    let method = probe_step_required_field(step, "method", step.method.as_deref())?;
+    let port_env_var = probe_step_required_field(step, "portEnvVar", step.port_env_var.as_deref())?;
+    let port = required_port_from_env(port_env_var)?;
+    let max_time = probe_step_max_time(step)?;
+    let url = build_probe_url(scheme, host, &port, "");
+
+    println!(
+        "INFO: checking {} {} port={} source={}",
+        step.service_label, step.phase_label, port, probe_source
+    );
+
+    let payload = request_jsonrpc_payload(&plan.curl_bin, &url, method, max_time)?;
+    if matches!(
+        resolve_json_path(&payload, ".result"),
+        Some(JsonValue::Null) | None
+    ) {
+        Err(format!(
+            "{} {} port={}",
+            step.service_label, step.failure_label, port
+        ))
+    } else {
+        println!(
+            "OK: {} {} port={}",
+            step.service_label, step.success_label, port
+        );
+        Ok(())
+    }
+}
+
+fn execute_probe_pg_isready_step(
+    plan: &ProbeExecutionPlan,
+    step: &ProbeExecutionStep,
+    probe_source: &str,
+) -> Result<(), String> {
+    let host = probe_step_required_field(step, "host", step.host.as_deref())?;
+    let port_env_var = probe_step_required_field(step, "portEnvVar", step.port_env_var.as_deref())?;
+    let port = required_port_from_env(port_env_var)?;
+    let failure_suffix = step.failure_suffix.as_deref().unwrap_or("");
+
+    println!(
+        "INFO: checking {} {} port={} source={}",
+        step.service_label, step.phase_label, port, probe_source
+    );
+
+    let args = vec![
+        "-U".to_string(),
+        "postgres".to_string(),
+        "-h".to_string(),
+        host.to_string(),
+        "-p".to_string(),
+        port.clone(),
+        "-q".to_string(),
+    ];
+    let output = run_captured_program(&plan.pg_is_ready_bin, &args, &[])?;
+    if output.status.success() {
+        println!(
+            "OK: {} {} port={}",
+            step.service_label, step.success_label, port
+        );
+        Ok(())
+    } else {
+        Err(format!(
+            "{} {} port={}{}",
+            step.service_label, step.failure_label, port, failure_suffix
+        ))
+    }
+}
+
+fn execute_probe_postgres_query_step(
+    plan: &ProbeExecutionPlan,
+    step: &ProbeExecutionStep,
+    probe_source: &str,
+) -> Result<(), String> {
+    let host = probe_step_required_field(step, "host", step.host.as_deref())?;
+    let port_env_var = probe_step_required_field(step, "portEnvVar", step.port_env_var.as_deref())?;
+    let port = required_port_from_env(port_env_var)?;
+    let database = probe_step_required_field(step, "database", step.database.as_deref())?;
+    let query = probe_step_required_field(step, "query", step.query.as_deref())?;
+    let failure_suffix = step.failure_suffix.as_deref().unwrap_or("");
+
+    println!(
+        "INFO: checking {} {} port={} source={}",
+        step.service_label, step.phase_label, port, probe_source
+    );
+
+    let args = vec![
+        "-h".to_string(),
+        host.to_string(),
+        "-p".to_string(),
+        port.clone(),
+        "-U".to_string(),
+        "postgres".to_string(),
+        "-d".to_string(),
+        database.to_string(),
+        "-Atqc".to_string(),
+        query.to_string(),
+    ];
+    let output = run_captured_program(&plan.psql_bin, &args, &[])?;
+    if output.status.success() {
+        println!(
+            "OK: {} {} port={}",
+            step.service_label, step.success_label, port
+        );
+        Ok(())
+    } else {
+        Err(format!(
+            "{} {} port={}{}",
+            step.service_label, step.failure_label, port, failure_suffix
+        ))
+    }
+}
+
+fn execute_probe_helios_ready_step(
+    plan: &ProbeExecutionPlan,
+    step: &ProbeExecutionStep,
+    probe_source: &str,
+) -> Result<(), String> {
+    let host = probe_step_required_field(step, "host", step.host.as_deref())?;
+    let port_env_var = probe_step_required_field(step, "portEnvVar", step.port_env_var.as_deref())?;
+    let port = required_port_from_env(port_env_var)?;
+    let _ = step
+        .execution_port_env_var
+        .as_deref()
+        .map(required_port_from_env)
+        .transpose()?;
+    let max_time = probe_step_max_time(step)?;
+    let profile = step.readiness_profile.as_deref().unwrap_or("fast");
+    let source_kind = step
+        .source_kinds
+        .get(probe_source)
+        .map(|value| value.as_str())
+        .unwrap_or("unknown");
+    let url = build_probe_url("http", host, &port, "");
+
+    println!(
+        "INFO: checking {} {} port={} source={} source_kind={} profile={}",
+        step.service_label, step.phase_label, port, probe_source, source_kind, profile
+    );
+
+    if step
+        .disallow_source_kinds
+        .iter()
+        .any(|value| value == source_kind)
+    {
+        return Err(format!(
+            "{} {} port={} source={} source_kind={} profile={} (source kind disallowed)",
+            step.service_label, step.failure_label, port, probe_source, source_kind, profile
+        ));
+    }
+
+    let block_number = request_jsonrpc_payload(&plan.curl_bin, &url, "eth_blockNumber", max_time)
+        .ok()
+        .and_then(|payload| resolve_json_path(&payload, ".result").cloned())
+        .and_then(|value| match value {
+            JsonValue::String(text) if is_hex_prefixed(&text) => Some(text),
+            _ => None,
+        });
+    let block_number_valid = block_number.is_some();
+
+    if let Some(block_number) = &block_number {
+        println!(
+            "OK: {} {} port={} block_number={}",
+            step.service_label, step.success_label, port, block_number
+        );
+    } else if step.allow_local_health_fallback
+        && !step.require_not_syncing
+        && request_jsonrpc_payload(&plan.curl_bin, &url, "eth_chainId", max_time)
+            .ok()
+            .and_then(|payload| resolve_json_path(&payload, ".result").cloned())
+            .filter(|value| !matches!(value, JsonValue::Null))
+            .is_some()
+    {
+        println!(
+            "OK: {} {} port={} mode=local_chainid_fallback",
+            step.service_label, step.success_label, port
+        );
+        return Ok(());
+    } else if step.require_not_syncing {
+        println!(
+            "WARN: {} block number unavailable port={} source={} source_kind={} profile={}; continuing to sync gate",
+            step.service_label, port, probe_source, source_kind, profile
+        );
+    } else {
+        return Err(format!(
+            "{} {} port={} source={} source_kind={} (invalid eth_blockNumber result)",
+            step.service_label, step.failure_label, port, probe_source, source_kind
+        ));
+    }
+
+    if step.require_not_syncing {
+        let syncing_payload =
+            request_jsonrpc_payload(&plan.curl_bin, &url, "eth_syncing", max_time).ok();
+        let syncing_value = syncing_payload
+            .as_ref()
+            .and_then(|payload| resolve_json_path(payload, ".result"));
+        let syncing_result = syncing_value.map(render_json_compact).unwrap_or_default();
+        if !matches!(syncing_value, Some(JsonValue::Bool(false))) {
+            return Err(format!(
+                "{} {} port={} source={} source_kind={} profile={} (eth_syncing={})",
+                step.service_label,
+                step.failure_label,
+                port,
+                probe_source,
+                source_kind,
+                profile,
+                syncing_result
+            ));
+        }
+        if !block_number_valid {
+            return Err(format!(
+                "{} {} port={} source={} source_kind={} profile={} (invalid eth_blockNumber result)",
+                step.service_label,
+                step.failure_label,
+                port,
+                probe_source,
+                source_kind,
+                profile
+            ));
+        }
+        println!("OK: {} sync status ready port={}", step.service_label, port);
+    } else {
+        println!("SKIP: helios sync gate disabled profile={}", profile);
+    }
+
+    Ok(())
+}
+
+fn execute_probe_exec_step(
+    plan: &ProbeExecutionPlan,
+    step: &ProbeExecutionStep,
+    probe_source: &str,
+) -> Result<(), String> {
+    let command = probe_step_required_field(step, "command", step.command.as_deref())?;
+
+    println!(
+        "INFO: checking {} {} source={} kind=exec",
+        step.service_label, step.phase_label, probe_source
+    );
+
+    let status = run_streaming_program(
+        &plan.runtime_shell_bin,
+        &["-c".to_string(), command.to_string()],
+        &[],
+    )?;
+    if status.success() {
+        println!("OK: {} {}", step.service_label, step.success_label);
+        Ok(())
+    } else {
+        Err(format!("{} {}", step.service_label, step.failure_label))
+    }
 }
 
 fn machine_output_command(subcommand: &str, values: &[String]) -> Result<(), String> {
@@ -2237,6 +3345,61 @@ fn probe_plan_exports(
     }
 }
 
+fn probe_step_required_field<'a>(
+    step: &ProbeExecutionStep,
+    field: &str,
+    value: Option<&'a str>,
+) -> Result<&'a str, String> {
+    value.ok_or_else(|| {
+        format!(
+            "probe execution step kind={} missing field {}",
+            step.kind, field
+        )
+    })
+}
+
+fn probe_step_max_time(step: &ProbeExecutionStep) -> Result<i64, String> {
+    let Some(max_time) = step.max_time_seconds else {
+        return Err(format!(
+            "probe execution step kind={} missing field maxTimeSeconds",
+            step.kind
+        ));
+    };
+    if max_time < 1 {
+        return Err(format!(
+            "probe execution step kind={} maxTimeSeconds must be positive, got {}",
+            step.kind, max_time
+        ));
+    }
+    Ok(max_time)
+}
+
+fn required_port_from_env(name: &str) -> Result<String, String> {
+    let value = env::var(name).map_err(|_| format!("required env var missing name={}", name))?;
+    if value.trim().is_empty() {
+        return Err(format!("required env var empty name={}", name));
+    }
+    let port = parse_i64_text(&value, &format!("env:{}", name))?;
+    if !(1..=65535).contains(&port) {
+        return Err(format!("env:{} must be port 1-65535 (got '{}')", name, value));
+    }
+    Ok(port.to_string())
+}
+
+fn build_probe_url(scheme: &str, host: &str, port: &str, path: &str) -> String {
+    format!("{}://{}:{}{}", scheme, host, port, path)
+}
+
+fn captured_output_detail(output: &std::process::Output) -> String {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !stderr.trim().is_empty() {
+        stderr.trim().to_string()
+    } else {
+        stdout.trim().to_string()
+    }
+}
+
 fn load_machine_output_plan(path: &str) -> Result<MachineOutputPlan, String> {
     let value = parse_json_file(path, "machine-output plan")?;
     Ok(MachineOutputPlan {
@@ -2257,9 +3420,94 @@ fn load_machine_output_plan(path: &str) -> Result<MachineOutputPlan, String> {
 
 fn load_probe_plan(path: &str) -> Result<ProbePlan, String> {
     let value = parse_json_file(path, "probe plan")?;
+    load_probe_plan_from_value(&value)
+}
+
+fn load_probe_plan_from_value(value: &JsonValue) -> Result<ProbePlan, String> {
+    let kind = required_string_field(value, "kind", "probe plan")?;
+    if kind != "nixfied-probe-plan" {
+        return Err(format!("unsupported probe plan kind: {}", kind));
+    }
     Ok(ProbePlan {
-        probe_kind: required_string_field(&value, "probeKind", "probe plan")?.to_string(),
-        export_var: object_string(&value, "exportVar").map(|value| value.to_string()),
+        probe_kind: required_string_field(value, "probeKind", "probe plan")?.to_string(),
+        export_var: object_string(value, "exportVar").map(|value| value.to_string()),
+    })
+}
+
+fn load_probe_execution_plan_from_value(value: &JsonValue) -> Result<ProbeExecutionPlan, String> {
+    let kind = required_string_field(value, "kind", "probe execution plan")?;
+    if kind != "nixfied-probe-execution-plan" {
+        return Err(format!("unsupported probe execution plan kind: {}", kind));
+    }
+
+    let version = object_field(value, "version")
+        .and_then(json_value_to_i64)
+        .ok_or_else(|| "probe execution plan missing integer field version".to_string())?;
+    if version != 1 {
+        return Err(format!(
+            "probe execution plan version must be 1 (got {})",
+            version
+        ));
+    }
+
+    let mut steps = Vec::new();
+    for (index, step_value) in object_array(value, "steps")
+        .ok_or_else(|| "probe execution plan missing array field steps".to_string())?
+        .iter()
+        .enumerate()
+    {
+        steps.push(parse_probe_execution_step(step_value, index + 1)?);
+    }
+
+    Ok(ProbeExecutionPlan {
+        mode: required_string_field(value, "mode", "probe execution plan")?.to_string(),
+        service_name: required_string_field(value, "serviceName", "probe execution plan")?
+            .to_string(),
+        source_env_var: required_string_field(value, "sourceEnvVar", "probe execution plan")?
+            .to_string(),
+        curl_bin: required_string_field(value, "curlBin", "probe execution plan")?.to_string(),
+        runtime_shell_bin: required_string_field(
+            value,
+            "runtimeShellBin",
+            "probe execution plan",
+        )?
+        .to_string(),
+        pg_is_ready_bin: required_string_field(value, "pgIsReadyBin", "probe execution plan")?
+            .to_string(),
+        psql_bin: required_string_field(value, "psqlBin", "probe execution plan")?.to_string(),
+        steps,
+    })
+}
+
+fn parse_probe_execution_step(
+    value: &JsonValue,
+    index: usize,
+) -> Result<ProbeExecutionStep, String> {
+    let label = format!("probe execution step {}", index);
+    Ok(ProbeExecutionStep {
+        kind: required_string_field(value, "kind", &label)?.to_string(),
+        service_label: required_string_field(value, "serviceLabel", &label)?.to_string(),
+        phase_label: required_string_field(value, "phaseLabel", &label)?.to_string(),
+        success_label: required_string_field(value, "successLabel", &label)?.to_string(),
+        failure_label: required_string_field(value, "failureLabel", &label)?.to_string(),
+        host: object_string(value, "host").map(|text| text.to_string()),
+        scheme: object_string(value, "scheme").map(|text| text.to_string()),
+        path: object_string(value, "path").map(|text| text.to_string()),
+        method: object_string(value, "method").map(|text| text.to_string()),
+        port_env_var: object_string(value, "portEnvVar").map(|text| text.to_string()),
+        execution_port_env_var: object_string(value, "executionPortEnvVar")
+            .map(|text| text.to_string()),
+        source_kinds: object_string_map(value, "sourceKinds", &label)?,
+        readiness_profile: object_string(value, "readinessProfile").map(|text| text.to_string()),
+        require_not_syncing: object_bool(value, "requireNotSyncing").unwrap_or(false),
+        allow_local_health_fallback: object_bool(value, "allowLocalHealthFallback")
+            .unwrap_or(false),
+        disallow_source_kinds: array_strings(value, "disallowSourceKinds"),
+        max_time_seconds: object_field(value, "maxTimeSeconds").and_then(json_value_to_i64),
+        database: object_string(value, "database").map(|text| text.to_string()),
+        query: object_string(value, "query").map(|text| text.to_string()),
+        failure_suffix: object_string(value, "failureSuffix").map(|text| text.to_string()),
+        command: object_string(value, "command").map(|text| text.to_string()),
     })
 }
 
@@ -2289,6 +3537,24 @@ fn run_captured_program(
     }
     command
         .output()
+        .map_err(|err| format!("failed to run {}: {}", program, err))
+}
+
+fn run_streaming_program(
+    program: &str,
+    args: &[String],
+    envs: &[(String, String)],
+) -> Result<std::process::ExitStatus, String> {
+    let mut command = Command::new(program);
+    command.args(args);
+    command.stdin(Stdio::null());
+    command.stdout(Stdio::inherit());
+    command.stderr(Stdio::inherit());
+    for (key, value) in envs {
+        command.env(key, value);
+    }
+    command
+        .status()
         .map_err(|err| format!("failed to run {}: {}", program, err))
 }
 
