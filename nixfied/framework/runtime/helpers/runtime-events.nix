@@ -368,16 +368,10 @@ let
     fi
 
     if [ -z "$EVENT_STATE" ]; then
-      case "$EVENT_TYPE" in
-        slot_acquired) EVENT_STATE="busy" ;;
-        slot_released) EVENT_STATE="released" ;;
-        service_starting) EVENT_STATE="starting" ;;
-        service_ready) EVENT_STATE="ready" ;;
-        service_stopped) EVENT_STATE="stopped" ;;
-        service_orphaned) EVENT_STATE="orphaned" ;;
-        readiness_progress) EVENT_STATE="waiting" ;;
-        *) EVENT_STATE="unknown" ;;
-      esac
+      if ! EVENT_STATE="$(${kernelPackage}/bin/nixfied-kernel event-state derive "$EVENT_TYPE")"; then
+        log_error "failed to derive runtime event state event_type=$EVENT_TYPE"
+        exit 1
+      fi
     fi
 
     EVENT_READINESS_HEALTH_NORM="$(normalize_bool "$EVENT_READINESS_HEALTH")"

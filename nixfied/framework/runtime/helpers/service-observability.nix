@@ -108,12 +108,17 @@ let
   mkEmitServiceEventFunction = service: ''
     emit_service_event() {
       local event_type="$1"
-      local state="$2"
-      shift 2 || true
+      shift || true
+      local -a state_args
+      state_args=()
+      if [ "$#" -gt 0 ] && [ "''${1#--}" = "$1" ]; then
+        state_args=(--state "$1")
+        shift
+      fi
       ${runtimeEvents.emitEvent} \
         --event-type "$event_type" \
         --service ${service} \
-        --state "$state" \
+        "''${state_args[@]}" \
         --slot "$SLOT" \
         --env "$ENV" \
         "$@" >/dev/null 2>&1 || true

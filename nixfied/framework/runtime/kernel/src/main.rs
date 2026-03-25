@@ -65,6 +65,11 @@ fn run() -> Result<(), String> {
             let values = args.collect::<Vec<_>>();
             event_detail_command(&subcommand, &values)
         }
+        "event-state" => {
+            let subcommand = args.next().ok_or_else(usage)?;
+            let values = args.collect::<Vec<_>>();
+            event_state_command(&subcommand, &values)
+        }
         "run-record" => {
             let subcommand = args.next().ok_or_else(usage)?;
             let values = args.collect::<Vec<_>>();
@@ -121,6 +126,7 @@ fn usage() -> String {
         "  validate-exit <plan-file> <exit-code>",
         "  run-id <envelope> ...",
         "  event-detail <render> ...",
+        "  event-state <derive> ...",
         "  run-record <create|transition> ...",
         "  task <execution-order> ...",
         "  workflow <serial-init|serial-next|serial-transition|parallel-init|parallel-next|parallel-transition> ...",
@@ -457,6 +463,36 @@ fn event_detail_command(subcommand: &str, values: &[String]) -> Result<(), Strin
     match subcommand {
         "render" => event_detail_render_command(values),
         other => Err(format!("unknown event-detail subcommand: {}", other)),
+    }
+}
+
+fn event_state_command(subcommand: &str, values: &[String]) -> Result<(), String> {
+    match subcommand {
+        "derive" => event_state_derive_command(values),
+        other => Err(format!("unknown event-state subcommand: {}", other)),
+    }
+}
+
+fn event_state_derive_command(values: &[String]) -> Result<(), String> {
+    if values.len() != 1 {
+        return Err("usage: nixfied-kernel event-state derive <event-type>".to_string());
+    }
+
+    println!("{}", derived_registry_state_for_event_type(&values[0]));
+    Ok(())
+}
+
+fn derived_registry_state_for_event_type(event_type: &str) -> &'static str {
+    match event_type {
+        "slot_acquired" => "busy",
+        "slot_released" => "released",
+        "service_starting" => "starting",
+        "service_ready" => "ready",
+        "service_stopped" => "stopped",
+        "service_orphaned" => "orphaned",
+        "service_degraded" => "degraded",
+        "readiness_progress" => "waiting",
+        _ => "unknown",
     }
 }
 

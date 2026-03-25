@@ -18,8 +18,8 @@ pkgs.runCommand "runtime-events-status-smoke" { } ''
   mkdir -p "$(dirname "$LOG_FILE")"
   printf '%s\n' "runtime events log line" > "$LOG_FILE"
 
-  "${runtimeEvents.emitEvent}" --event-type slot_acquired --state busy --run-id slot-run --slot 0 --env test > /dev/null
-  "${runtimeEvents.emitEvent}" --event-type service_ready --state ready --service postgres --run-id svc-run --slot 0 --env test --owner-scope persistent --log-path "$LOG_FILE" > /dev/null
+  "${runtimeEvents.emitEvent}" --event-type slot_acquired --run-id slot-run --slot 0 --env test > /dev/null
+  "${runtimeEvents.emitEvent}" --event-type service_ready --service postgres --run-id svc-run --slot 0 --env test --owner-scope persistent --log-path "$LOG_FILE" > /dev/null
 
   STATUS_OUT="$("${runtimeEvents.serviceStatus}" --service postgres --slot 0 --env test)"
   eval "$STATUS_OUT"
@@ -34,12 +34,12 @@ pkgs.runCommand "runtime-events-status-smoke" { } ''
   LOG_OUT="$("${runtimeEvents.serviceLogs}" --service postgres --slot 0 --env test --lines 1)"
   [ "$LOG_OUT" = "runtime events log line" ] || fail "service-logs should resolve the latest emitted log path"
 
-  "${runtimeEvents.emitEvent}" --event-type slot_released --state released --run-id slot-run --slot 0 --env test > /dev/null
+  "${runtimeEvents.emitEvent}" --event-type slot_released --run-id slot-run --slot 0 --env test > /dev/null
   STATUS_OUT="$("${runtimeEvents.serviceStatus}" --service postgres --slot 0 --env test)"
   eval "$STATUS_OUT"
   [ -z "$SLOT_OWNER" ] || fail "expected slot owner to clear after slot_released"
 
-  "${runtimeEvents.emitEvent}" --event-type service_stopped --state stopped --service postgres --run-id svc-run --slot 0 --env test > /dev/null
+  "${runtimeEvents.emitEvent}" --event-type service_stopped --service postgres --run-id svc-run --slot 0 --env test > /dev/null
   STATUS_OUT="$("${runtimeEvents.serviceStatus}" --service postgres --slot 0 --env test)"
   eval "$STATUS_OUT"
   [ "$REGISTRY_RUNNING" = "false" ] || fail "expected registry running=false after service_stopped"

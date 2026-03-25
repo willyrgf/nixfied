@@ -256,7 +256,7 @@ let
       } s";
       successBody = ''
         PID=$(cat "$NGINX_PID_FILE" 2>/dev/null || true)
-        emit_service_event service_ready ready --pid "$PID" --log-path "$NGINX_LOG_FILE"
+        emit_service_event service_ready --pid "$PID" --log-path "$NGINX_LOG_FILE"
       '';
     };
     stopWaitAttempts = runtimeDefaults.probes.managedStop.extendedWaitAttempts;

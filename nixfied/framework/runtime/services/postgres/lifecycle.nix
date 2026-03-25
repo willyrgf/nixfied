@@ -331,7 +331,7 @@ let
         # Verify the running instance is ours by checking PGDATA
         if [ -f "$PGDATA/postmaster.pid" ]; then
           RUN_PID=$(head -1 "$PGDATA/postmaster.pid" 2>/dev/null || true)
-          emit_service_event service_ready ready --pid "$RUN_PID" --log-path "$PGDATA/postgres.log"
+          emit_service_event service_ready --pid "$RUN_PID" --log-path "$PGDATA/postgres.log"
           log_ok "PostgreSQL already running on port $PGPORT"
           exit 0
         else
@@ -363,21 +363,21 @@ let
       chmod 700 "$PGSOCKET_DIR" 2>/dev/null || true
 
       log_info "Starting PostgreSQL on port $PGPORT"
-      emit_service_event service_starting starting --log-path "$PGDATA/postgres.log"
+      emit_service_event service_starting --log-path "$PGDATA/postgres.log"
       ${postgres}/bin/pg_ctl -D "$PGDATA" -l "$PGDATA/postgres.log" -o "-p $PGPORT -k $PGSOCKET_DIR" start
 
       for i in $(seq 1 60); do
         if ${startupPgIsReadyCommand}
         then
           RUN_PID=$(head -1 "$PGDATA/postmaster.pid" 2>/dev/null || true)
-          emit_service_event service_ready ready --pid "$RUN_PID" --log-path "$PGDATA/postgres.log"
+          emit_service_event service_ready --pid "$RUN_PID" --log-path "$PGDATA/postgres.log"
           log_ok "PostgreSQL ready on port $PGPORT"
           exit 0
         fi
         sleep 0.5
       done
 
-      emit_service_event service_degraded degraded \
+      emit_service_event service_degraded \
         --log-path "$PGDATA/postgres.log" \
         --wait-reason "failed_readiness" \
         --last-error "postgres did not become ready in startup window"
@@ -413,7 +413,7 @@ let
           then
             sleep 0.5
           else
-            emit_service_event service_stopped stopped --pid "$RUN_PID" --log-path "$PGDATA/postgres.log"
+            emit_service_event service_stopped --pid "$RUN_PID" --log-path "$PGDATA/postgres.log"
             exit 0
           fi
         done
@@ -421,7 +421,7 @@ let
         log_error "PostgreSQL still responds on port $PGPORT after stop"
         exit 1
       else
-        emit_service_event service_stopped stopped
+        emit_service_event service_stopped
         exit 0
       fi
     '';

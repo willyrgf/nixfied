@@ -16,7 +16,7 @@ let
       logPathExpr ? ''"$SERVICE_LOG_FILE"'',
     }:
     ''
-      emit_service_event service_stopped stopped${
+      emit_service_event service_stopped${
         lib.optionalString (pidExpr != null) " --pid ${pidExpr}"
       }${lib.optionalString (logPathExpr != null) " --log-path ${logPathExpr}"}
       log_${level} "${serviceName} ${message}"
@@ -28,7 +28,7 @@ let
       lastError,
     }:
     ''
-      emit_service_event service_degraded degraded \
+      emit_service_event service_degraded \
         --pid "$CHILD_PID" \
         --log-path "$LOG_FILE" \
         --wait-reason "${waitReason}" \
@@ -43,7 +43,7 @@ let
       logPathExpr ? ''"$LOG_FILE"'',
     }:
     ''
-      emit_service_event service_ready ready --pid ${pidExpr}${
+      emit_service_event service_ready --pid ${pidExpr}${
         lib.optionalString (logPathExpr != null) " --log-path ${logPathExpr}"
       }
       log_${level} "${message}"
@@ -193,7 +193,7 @@ let
       done
 
       if [ "$READY" -ne 1 ]; then
-        emit_service_event service_degraded degraded \
+        emit_service_event service_degraded \
           --pid "$CHILD_PID" \
           --log-path "$LOG_FILE" \
           --wait-reason "${degradedWaitReason}" \
@@ -203,7 +203,7 @@ let
         exit 1
       fi
 
-      emit_service_event service_ready ready --pid "$CHILD_PID" --log-path "$LOG_FILE"
+      emit_service_event service_ready --pid "$CHILD_PID" --log-path "$LOG_FILE"
       ${successBody}
       log_info "${successMessage}"
     '';
@@ -268,11 +268,11 @@ let
       startCommand,
       startAlreadyRunningBody,
       startOnSpawnBody ? ''
-        emit_service_event service_starting starting --pid "$CHILD_PID" --log-path "$LOG_FILE"
+        emit_service_event service_starting --pid "$CHILD_PID" --log-path "$LOG_FILE"
       '',
       startPostLaunchBody,
       startExitSuccessBody ? ''
-        emit_service_event service_stopped stopped --pid "$CHILD_PID" --log-path "$LOG_FILE"
+        emit_service_event service_stopped --pid "$CHILD_PID" --log-path "$LOG_FILE"
       '',
       startExitFailureBody,
       stopRequestBody ? ''
