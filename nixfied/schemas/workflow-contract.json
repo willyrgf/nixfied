@@ -89,7 +89,7 @@
       "properties": {
         "parallel": { "type": "boolean" },
         "failFast": { "type": "boolean" },
-        "lockPolicy": { "type": "string", "enum": [ "exclusive", "shared-aware" ] },
+        "lockPolicy": { "type": "string", "enum": [ "exclusive" ] },
         "emitRegistryEvents": { "type": "boolean" },
         "ephemeral": {
           "type": "object",

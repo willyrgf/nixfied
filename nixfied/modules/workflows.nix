@@ -212,7 +212,6 @@ in
               lockPolicy = lib.mkOption {
                 type = t.enum [
                   "exclusive"
-                  "shared-aware"
                 ];
                 default = "exclusive";
               };

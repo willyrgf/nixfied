@@ -1485,11 +1485,6 @@ EOF
         else
           return "$?"
         fi
-        lock_policy="$(workflow_lock_policy "$workflow_id")"
-        if [ "$lock_policy" = "shared-aware" ]; then
-          echo "WARN: lockPolicy=shared-aware uses exclusive semantics in workflow parallel runner"
-        fi
-
         skipped_services_file="$(mktemp "''${TMPDIR:-/tmp}/nixfied-workflow-parallel-skipped.XXXXXX")" || {
           echo "ERROR: failed to create workflow parallel skipped-services temp file"
           return 1

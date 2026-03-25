@@ -9,6 +9,8 @@ let
     system = pkgs.system;
   };
   compilerSource = builtins.readFile ../../nixfied/compiler/compile-workflows.nix;
+  workflowModuleSource = builtins.readFile ../../nixfied/modules/workflows.nix;
+  workflowSchemaSource = builtins.readFile ../../nixfied/schemas/workflow-contract.json;
 
   evalWorkflows =
     extraModule:
@@ -120,17 +122,38 @@ let
       ];
     };
   };
+
+  unsupportedLockPolicy = evalWorkflows {
+    nixfied.tasks."test.workflow.errors.base" = {
+      id = "task.test.workflow.errors.base";
+      runner.command = ''
+        set -euo pipefail
+        printf '%s\n' "base"
+      '';
+    };
+
+    nixfied.workflows."test.workflow.errors.unsupported-lock-policy" = {
+      id = "workflow.test.workflow.errors.unsupported-lock-policy";
+      units.main.taskId = "task.test.workflow.errors.base";
+      execution.lockPolicy = "shared-aware";
+    };
+  };
 in
 assert emptyUnitTask.success == false;
 assert emptyPreRunTask.success == false;
 assert emptyStageEntry.success == false;
 assert dependencyCycle.success == false;
 assert unknownPreRunServiceSet.success == false;
+assert unsupportedLockPolicy.success == false;
 assert pkgs.lib.hasInfix "unit '\${unitName}' has an empty taskId" compilerSource;
 assert pkgs.lib.hasInfix "\${phaseName}.tasks references an empty task id" compilerSource;
 assert pkgs.lib.hasInfix "\${phaseName}.serviceSets references unknown service set" compilerSource;
 assert pkgs.lib.hasInfix "workflow stage entries must not be empty" compilerSource;
 assert pkgs.lib.hasInfix "workflow '\${workflowId}' has a dependency cycle" compilerSource;
+assert pkgs.lib.hasInfix "\"exclusive\"" workflowModuleSource;
+assert (!pkgs.lib.hasInfix "\"shared-aware\"" workflowModuleSource);
+assert pkgs.lib.hasInfix "\"exclusive\"" workflowSchemaSource;
+assert (!pkgs.lib.hasInfix "\"shared-aware\"" workflowSchemaSource);
 pkgs.runCommand "workflow-validation-errors" { } ''
-  echo "OK: workflow validation rejects invalid phase refs and dependency cycles" > "$out"
+  echo "OK: workflow validation rejects invalid refs, cycles, and unsupported lock policy" > "$out"
 ''
