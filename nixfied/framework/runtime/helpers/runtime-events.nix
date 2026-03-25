@@ -185,45 +185,13 @@ let
         "$(runtime_index_segment "$env_name")"
     }
 
-    service_status_file_for() {
-      local service_name="$1"
-      local slot_name="$2"
-      local env_name="$3"
-      printf '%s/%s/%s/status.env' \
-        "$(service_events_root_for "$service_name")" \
-        "$(runtime_index_segment "$slot_name")" \
-        "$(runtime_index_segment "$env_name")"
-    }
-
-    slot_status_file_for() {
+    slot_events_index_file_for() {
       local slot_name="$1"
       local env_name="$2"
-      printf '%s/slots/%s/%s/status.env' \
+      printf '%s/slots/%s/%s/events.tsv' \
         "$(runtime_events_index_root)" \
         "$(runtime_index_segment "$slot_name")" \
         "$(runtime_index_segment "$env_name")"
-    }
-
-    write_shell_vars_file() {
-      local target_file="$1"
-      shift
-      local parent_dir
-      local tmp
-
-      parent_dir="$(dirname "$target_file")" || return 1
-      mkdir -p "$parent_dir" || return 1
-      tmp="$(mktemp "$target_file.tmp.XXXXXX")" || return 1
-      while [ "$#" -gt 1 ]; do
-        printf '%s=%q\n' "$1" "$2" >> "$tmp" || {
-          rm -f "$tmp"
-          return 1
-        }
-        shift 2
-      done
-      if ! mv "$tmp" "$target_file"; then
-        rm -f "$tmp"
-        return 1
-      fi
     }
 
     append_index_line_locked() {
@@ -243,47 +211,29 @@ let
       registry_lock_release "$lock_fd" "$lock_file"
     }
 
-    write_service_status_index() {
+    load_runtime_status_exports() {
       local service_name="$1"
       local slot_name="$2"
       local env_name="$3"
-      local registry_state="$4"
-      local owner_run_id="$5"
-      local owner_scope="$6"
-      local ephemeral_root="$7"
-      local wait_reason="$8"
-      local log_path="$9"
-      local status_file
+      local service_index_file=""
+      local slot_index_file=""
+      local export_file=""
 
-      status_file="$(service_status_file_for "$service_name" "$slot_name" "$env_name")"
-      write_shell_vars_file \
-        "$status_file" \
-        SERVICE_STATUS_STATE "$registry_state" \
-        SERVICE_STATUS_OWNER_RUN_ID "$owner_run_id" \
-        SERVICE_STATUS_OWNER_SCOPE "$owner_scope" \
-        SERVICE_STATUS_EPHEMERAL_ROOT "$ephemeral_root" \
-        SERVICE_STATUS_WAIT_REASON "$wait_reason" \
-        SERVICE_STATUS_LOG_PATH "$log_path"
-    }
-
-    write_slot_owner_index() {
-      local slot_name="$1"
-      local env_name="$2"
-      local owner_run_id="$3"
-      local status_file
-
-      status_file="$(slot_status_file_for "$slot_name" "$env_name")"
-      write_shell_vars_file "$status_file" SLOT_STATUS_OWNER_RUN_ID "$owner_run_id"
-    }
-
-    load_shell_vars_file() {
-      local source_file="$1"
-
-      if [ ! -f "$source_file" ]; then
+      service_index_file="$(service_events_index_file_for "$service_name" "$slot_name" "$env_name")"
+      slot_index_file="$(slot_events_index_file_for "$slot_name" "$env_name")"
+      export_file="$(mktemp "''${TMPDIR:-/tmp}/nixfied-runtime-status.XXXXXX")" || return 1
+      if ! ${kernelPackage}/bin/nixfied-kernel registry runtime-status \
+        "$service_index_file" \
+        "$slot_index_file" \
+        "$export_file" >/dev/null; then
+        rm -f "$export_file"
         return 1
       fi
-
-      . "$source_file"
+      if ! . "$export_file"; then
+        rm -f "$export_file"
+        return 1
+      fi
+      rm -f "$export_file"
     }
   '';
 
@@ -478,35 +428,17 @@ let
         log_error "failed to update service event index service=$EVENT_SERVICE"
         exit 1
       }
-      write_service_status_index \
-        "$EVENT_SERVICE" \
-        "$EVENT_SLOT" \
-        "$EVENT_ENV" \
-        "$EVENT_STATE" \
-        "$EVENT_RUN_ID" \
-        "$EVENT_OWNER_SCOPE" \
-        "$EVENT_EPHEMERAL_ROOT" \
-        "$EVENT_WAIT_REASON" \
-        "$EVENT_LOG_PATH" || {
-        log_error "failed to update service status index service=$EVENT_SERVICE"
+    fi
+
+    if [ "$EVENT_KIND" = "slotLifecycle" ] && [ -n "$EVENT_SLOT" ] && [ -n "$EVENT_ENV" ] \
+      && [ -n "''${REGISTRY_APPEND_LAST_SEQ:-}" ] && [ -n "''${REGISTRY_APPEND_LAST_EVENT_JSON:-}" ]; then
+      append_index_line_locked \
+        "$(slot_events_index_file_for "$EVENT_SLOT" "$EVENT_ENV")" \
+        "''${REGISTRY_APPEND_LAST_SEQ}	''${REGISTRY_APPEND_LAST_EVENT_JSON}" || {
+        log_error "failed to update slot event index slot=$EVENT_SLOT env=$EVENT_ENV"
         exit 1
       }
     fi
-
-    case "$EVENT_KIND:$EVENT_TYPE" in
-      slotLifecycle:slot_acquired)
-        write_slot_owner_index "$EVENT_SLOT" "$EVENT_ENV" "$EVENT_RUN_ID" || {
-          log_error "failed to update slot owner index slot=$EVENT_SLOT env=$EVENT_ENV"
-          exit 1
-        }
-        ;;
-      slotLifecycle:slot_released)
-        write_slot_owner_index "$EVENT_SLOT" "$EVENT_ENV" "" || {
-          log_error "failed to clear slot owner index slot=$EVENT_SLOT env=$EVENT_ENV"
-          exit 1
-        }
-        ;;
-    esac
 
     log_ok "runtime event recorded event_type=$EVENT_TYPE run_id=$EVENT_RUN_ID service=''${EVENT_SERVICE:-none} state=$EVENT_STATE"
   '';
@@ -623,12 +555,15 @@ let
       ENV_FILTER="''${ENV:-''${!ENV_VAR:-}}"
     fi
 
-    STATUS_FILE="$(service_status_file_for "$SERVICE" "$SLOT_FILTER" "$ENV_FILTER")"
-    if ! load_shell_vars_file "$STATUS_FILE"; then
+    if ! load_runtime_status_exports "$SERVICE" "$SLOT_FILTER" "$ENV_FILTER"; then
+      log_error "failed to resolve runtime status service=$SERVICE"
+      exit 1
+    fi
+    if [ "''${REGISTRY_FOUND:-0}" != "1" ]; then
       log_error "no registry events found; cannot resolve log path service=$SERVICE"
       exit 1
     fi
-    LOG_PATH="''${SERVICE_STATUS_LOG_PATH:-}"
+    LOG_PATH="''${LOG_PATH:-}"
 
     if [ -z "$LOG_PATH" ]; then
       log_error "no log path recorded for service=$SERVICE slot=''${SLOT_FILTER:-any} env=''${ENV_FILTER:-any}"
@@ -771,51 +706,21 @@ let
       exit 0
     fi
 
-    STATUS_FILE="$(service_status_file_for "$SERVICE" "$SLOT_FILTER" "$ENV_FILTER")"
-    SLOT_STATUS_FILE="$(slot_status_file_for "$SLOT_FILTER" "$ENV_FILTER")"
-
-    if ! load_shell_vars_file "$STATUS_FILE"; then
-      emit_var "REGISTRY_FOUND" "0"
-      emit_var "REGISTRY_RUNNING" "false"
-      emit_var "REGISTRY_SCOPE" "global"
-      emit_var "REGISTRY_STATE" "unknown"
-      emit_var "OWNER_RUN_ID" ""
-      emit_var "OWNER_SCOPE" ""
-      emit_var "EPHEMERAL_ROOT" ""
-      emit_var "WAIT_REASON" ""
-      emit_var "LOG_PATH" ""
-      emit_var "SLOT_OWNER" ""
-      exit 0
-    fi
-    STATE="''${SERVICE_STATUS_STATE:-unknown}"
-    OWNER_RUN_ID="''${SERVICE_STATUS_OWNER_RUN_ID:-}"
-    OWNER_SCOPE="''${SERVICE_STATUS_OWNER_SCOPE:-}"
-    EPHEMERAL_ROOT="''${SERVICE_STATUS_EPHEMERAL_ROOT:-}"
-    WAIT_REASON="''${SERVICE_STATUS_WAIT_REASON:-}"
-    LOG_PATH="''${SERVICE_STATUS_LOG_PATH:-}"
-
-    SLOT_OWNER=""
-    if load_shell_vars_file "$SLOT_STATUS_FILE"; then
-      SLOT_OWNER="''${SLOT_STATUS_OWNER_RUN_ID:-}"
+    if ! load_runtime_status_exports "$SERVICE" "$SLOT_FILTER" "$ENV_FILTER"; then
+      log_error "failed to resolve runtime status service=$SERVICE"
+      exit 1
     fi
 
-    REGISTRY_RUNNING="false"
-    case "$STATE" in
-      starting|running|ready|degraded|waiting|busy)
-        REGISTRY_RUNNING="true"
-        ;;
-    esac
-
-    emit_var "REGISTRY_FOUND" "1"
-    emit_var "REGISTRY_RUNNING" "$REGISTRY_RUNNING"
+    emit_var "REGISTRY_FOUND" "''${REGISTRY_FOUND:-0}"
+    emit_var "REGISTRY_RUNNING" "''${REGISTRY_RUNNING:-false}"
     emit_var "REGISTRY_SCOPE" "global"
-    emit_var "REGISTRY_STATE" "$STATE"
-    emit_var "OWNER_RUN_ID" "$OWNER_RUN_ID"
-    emit_var "OWNER_SCOPE" "$OWNER_SCOPE"
-    emit_var "EPHEMERAL_ROOT" "$EPHEMERAL_ROOT"
-    emit_var "WAIT_REASON" "$WAIT_REASON"
-    emit_var "LOG_PATH" "$LOG_PATH"
-    emit_var "SLOT_OWNER" "$SLOT_OWNER"
+    emit_var "REGISTRY_STATE" "''${REGISTRY_STATE:-unknown}"
+    emit_var "OWNER_RUN_ID" "''${OWNER_RUN_ID:-}"
+    emit_var "OWNER_SCOPE" "''${OWNER_SCOPE:-}"
+    emit_var "EPHEMERAL_ROOT" "''${EPHEMERAL_ROOT:-}"
+    emit_var "WAIT_REASON" "''${WAIT_REASON:-}"
+    emit_var "LOG_PATH" "''${LOG_PATH:-}"
+    emit_var "SLOT_OWNER" "''${SLOT_OWNER:-}"
   '';
 in
 {

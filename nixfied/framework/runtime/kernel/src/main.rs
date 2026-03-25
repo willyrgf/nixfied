@@ -124,7 +124,7 @@ fn usage() -> String {
         "  run-record <create|transition> ...",
         "  task <execution-order> ...",
         "  workflow <serial-init|serial-next|serial-transition|parallel-init|parallel-next|parallel-transition> ...",
-        "  registry <append|replay> ...",
+        "  registry <append|replay|terminal|runtime-status> ...",
         "  summary <write|compose|collect-steps|render-human> ...",
         "  adapter decode <kind> ...",
         "  probe evaluate <plan-file> [payload-file] [export-file]",
@@ -567,9 +567,6 @@ fn event_detail_render_command(values: &[String]) -> Result<(), String> {
             insert_optional_string_field(&mut fields, "profile", profile);
             insert_optional_number_field(&mut fields, "pid", pid);
             insert_optional_number_field(&mut fields, "pgid", pgid);
-            insert_optional_string_field(&mut fields, "planId", plan_id);
-            insert_optional_string_field(&mut fields, "unitId", unit_id);
-            insert_optional_number_field(&mut fields, "attempt", attempt);
             if readiness_health.is_some() || readiness_ready.is_some() || last_error.is_some() {
                 let mut readiness = BTreeMap::new();
                 insert_optional_bool_field(&mut readiness, "healthOk", readiness_health);
@@ -1602,6 +1599,7 @@ fn registry_command(subcommand: &str, values: &[String]) -> Result<(), String> {
         "append" => registry_append_command(values),
         "replay" => registry_replay_command(values),
         "terminal" => registry_terminal_command(values),
+        "runtime-status" => registry_runtime_status_command(values),
         other => Err(format!("unknown registry subcommand: {}", other)),
     }
 }
@@ -1793,6 +1791,112 @@ fn registry_terminal_command(values: &[String]) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn registry_runtime_status_command(values: &[String]) -> Result<(), String> {
+    if values.len() != 3 {
+        return Err(
+            "usage: nixfied-kernel registry runtime-status <service-index-file> <slot-index-file> <export-file>"
+                .to_string(),
+        );
+    }
+
+    let service_event = registry_latest_event_from_index(&values[0])?;
+    let slot_event = registry_latest_event_from_index(&values[1])?;
+
+    let mut registry_found = "0".to_string();
+    let mut registry_running = "false".to_string();
+    let mut registry_state = "unknown".to_string();
+    let mut owner_run_id = String::new();
+    let mut owner_scope = String::new();
+    let mut ephemeral_root = String::new();
+    let mut wait_reason = String::new();
+    let mut log_path = String::new();
+
+    if let Some(event) = service_event.as_ref() {
+        let payload = object_field(event, "payload")
+            .ok_or_else(|| "registry runtime-status service event missing payload".to_string())?;
+        registry_found = "1".to_string();
+        registry_state = required_string_field(payload, "state", "registry runtime-status payload")?
+            .to_string();
+        owner_run_id = object_string(payload, "runId").unwrap_or("").to_string();
+        registry_running = if matches!(
+            registry_state.as_str(),
+            "starting" | "running" | "ready" | "degraded" | "waiting" | "busy"
+        ) {
+            "true".to_string()
+        } else {
+            "false".to_string()
+        };
+
+        if let Some(detail) = object_field(payload, "detail") {
+            owner_scope = object_string(detail, "ownerScope").unwrap_or("").to_string();
+            ephemeral_root = object_string(detail, "ephemeralRoot")
+                .unwrap_or("")
+                .to_string();
+            wait_reason = object_string(detail, "waitReason").unwrap_or("").to_string();
+            log_path = object_string(detail, "logPath").unwrap_or("").to_string();
+        }
+    }
+
+    let slot_owner = if let Some(event) = slot_event.as_ref() {
+        let payload = object_field(event, "payload")
+            .ok_or_else(|| "registry runtime-status slot event missing payload".to_string())?;
+        let state =
+            required_string_field(payload, "state", "registry runtime-status slot payload")?;
+        if state == "released" {
+            String::new()
+        } else {
+            object_string(payload, "runId").unwrap_or("").to_string()
+        }
+    } else {
+        String::new()
+    };
+
+    write_shell_exports(
+        &values[2],
+        &[
+            ("REGISTRY_FOUND".to_string(), registry_found),
+            ("REGISTRY_RUNNING".to_string(), registry_running),
+            ("REGISTRY_STATE".to_string(), registry_state),
+            ("OWNER_RUN_ID".to_string(), owner_run_id),
+            ("OWNER_SCOPE".to_string(), owner_scope),
+            ("EPHEMERAL_ROOT".to_string(), ephemeral_root),
+            ("WAIT_REASON".to_string(), wait_reason),
+            ("LOG_PATH".to_string(), log_path),
+            ("SLOT_OWNER".to_string(), slot_owner),
+        ],
+    )?;
+    println!("OK: registry runtime-status");
+    Ok(())
+}
+
+fn registry_latest_event_from_index(path: &str) -> Result<Option<JsonValue>, String> {
+    if path.is_empty() || !Path::new(path).exists() {
+        return Ok(None);
+    }
+
+    let content = read_text(path)?;
+    let mut latest = None;
+    for line in content.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let mut parts = line.splitn(2, '\t');
+        let _seq = parts.next();
+        let Some(event_json) = parts.next() else {
+            continue;
+        };
+        latest = Some(
+            parse_json(event_json).map_err(|err| {
+                format!(
+                    "registry runtime-status index {} contains invalid json: {}",
+                    path, err
+                )
+            })?,
+        );
+    }
+    Ok(latest)
 }
 
 fn summary_command(subcommand: &str, values: &[String]) -> Result<(), String> {

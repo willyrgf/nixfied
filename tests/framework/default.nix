@@ -641,6 +641,10 @@ let
       inherit pkgs;
     };
 
+    "runtime-events-status-smoke" = import ./runtime-events-status-smoke.nix {
+      inherit pkgs;
+    };
+
     "contract-migration-guard" = import ./contract-migration-guard.nix {
       inherit pkgs;
     };
