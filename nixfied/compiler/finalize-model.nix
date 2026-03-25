@@ -18,6 +18,44 @@
   views,
 }:
 let
+  identityBase = {
+    projectId = resolved.identity.projectId;
+    projectName = resolved.identity.projectName;
+    description = resolved.identity.description;
+    system = system;
+  };
+
+  modelPayload = {
+    schema = {
+      kind = "nixfied-model";
+      version = 6;
+    };
+
+    identity = identityBase;
+
+    runtime = runtime;
+
+    serviceCatalog = serviceCatalog;
+    serviceSets = serviceSets;
+    apps = apps;
+    tasks = tasks;
+    workflows = workflows;
+    features = features;
+    views = {
+      apps = views.apps;
+      help = views.help;
+      docs = views.docs;
+      features = views.features;
+    };
+
+    state = {
+      policy = statePolicy;
+      registry = {
+        schemaVersion = 1;
+      };
+    };
+  };
+
   runtimeHash =
     if services == null then
       null
@@ -45,50 +83,21 @@ let
     features = features;
   };
 
-  model = canonical.canonicalize {
-    schema = {
-      kind = "nixfied-model";
-      version = 6;
-    };
-
-    identity = {
-      projectId = resolved.identity.projectId;
-      projectName = resolved.identity.projectName;
-      description = resolved.identity.description;
-      system = system;
+  modelPayloadWithEvalHash = modelPayload // {
+    identity = modelPayload.identity // {
       evalHash = evalHash;
     };
+  };
 
-    runtime = runtime;
-
-    serviceCatalog = serviceCatalog;
-    serviceSets = serviceSets;
-    apps = apps;
-    tasks = tasks;
-    workflows = workflows;
-    features = features;
+  model = canonical.canonicalize (modelPayloadWithEvalHash // {
     compiled = {
       apiCatalog = apiCatalog;
       runtimeManifests = runtimeManifests;
       serviceSurfaceCatalog = serviceSurfaceCatalog;
     };
+  });
 
-    views = {
-      apps = views.apps;
-      help = views.help;
-      docs = views.docs;
-      features = views.features;
-    };
-
-    state = {
-      policy = statePolicy;
-      registry = {
-        schemaVersion = 1;
-      };
-    };
-  };
-
-  stateHash = canonical.hashCanonical (builtins.removeAttrs model [ "compiled" ]);
+  stateHash = canonical.hashCanonical modelPayloadWithEvalHash;
 in
 {
   inherit
