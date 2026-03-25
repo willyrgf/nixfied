@@ -132,7 +132,7 @@ fn usage() -> String {
         "  run-id <envelope> ...",
         "  event-detail <render> ...",
         "  event-state <derive> ...",
-        "  service-policy <runtime-event> ...",
+        "  service-policy <runtime-event|start-service|fixture-keep-running> ...",
         "  run-record <create|transition> ...",
         "  task <execution-order> ...",
         "  workflow <serial-init|serial-next|serial-transition|parallel-init|parallel-next|parallel-transition> ...",
@@ -482,6 +482,8 @@ fn event_state_command(subcommand: &str, values: &[String]) -> Result<(), String
 fn service_policy_command(subcommand: &str, values: &[String]) -> Result<(), String> {
     match subcommand {
         "runtime-event" => service_policy_runtime_event_command(values),
+        "start-service" => service_policy_start_service_command(values),
+        "fixture-keep-running" => service_policy_fixture_keep_running_command(values),
         other => Err(format!("unknown service-policy subcommand: {}", other)),
     }
 }
@@ -571,6 +573,80 @@ fn service_policy_runtime_event_command(values: &[String]) -> Result<(), String>
     Ok(())
 }
 
+fn service_policy_start_service_command(values: &[String]) -> Result<(), String> {
+    if values.len() != 4 {
+        return Err(
+            "usage: nixfied-kernel service-policy start-service <reuse-policy|empty> <owner-scope|empty> <discovery-scope|empty> <export-file>"
+                .to_string(),
+        );
+    }
+
+    let explicit_reuse = values[0].as_str();
+    let explicit_owner = values[1].as_str();
+    let explicit_discovery = values[2].as_str();
+    let resolved_owner = if !explicit_owner.is_empty() {
+        explicit_owner.to_string()
+    } else {
+        let from_reuse = service_policy_owner_scope_from_reuse(explicit_reuse);
+        if !from_reuse.is_empty() {
+            from_reuse.to_string()
+        } else {
+            service_policy_owner_scope_from_discovery(explicit_discovery).to_string()
+        }
+    };
+    let resolved_discovery = if !explicit_discovery.is_empty() {
+        explicit_discovery.to_string()
+    } else {
+        let from_reuse = service_policy_discovery_scope_from_reuse(explicit_reuse);
+        if !from_reuse.is_empty() {
+            from_reuse.to_string()
+        } else {
+            service_policy_discovery_scope_from_owner(&resolved_owner).to_string()
+        }
+    };
+    let resolved_reuse =
+        service_policy_infer_reuse_policy(explicit_reuse, &resolved_owner, &resolved_discovery, "");
+    validate_service_policy_matrix(
+        &resolved_reuse,
+        &resolved_owner,
+        &resolved_discovery,
+        true,
+        true,
+    )?;
+    let register_cleanup =
+        service_policy_start_service_register_cleanup(&resolved_reuse, &resolved_owner, &resolved_discovery)?;
+    write_shell_exports(
+        &values[3],
+        &[
+            ("OWNER_SCOPE".to_string(), resolved_owner),
+            ("DISCOVERY_SCOPE".to_string(), resolved_discovery),
+            ("REUSE_POLICY".to_string(), resolved_reuse),
+            ("REGISTER_CLEANUP".to_string(), register_cleanup),
+        ],
+    )?;
+    println!("OK: service-policy start-service");
+    Ok(())
+}
+
+fn service_policy_fixture_keep_running_command(values: &[String]) -> Result<(), String> {
+    if values.len() != 4 {
+        return Err(
+            "usage: nixfied-kernel service-policy fixture-keep-running <owner-scope|empty> <reuse-policy|empty> <discovery-scope|empty> <export-file>"
+                .to_string(),
+        );
+    }
+
+    let owner_scope = values[0].as_str();
+    let reuse_policy = values[1].as_str();
+    let discovery_scope = values[2].as_str();
+    let keep_running =
+        service_policy_fixture_keep_running(owner_scope, reuse_policy, discovery_scope)?;
+
+    write_shell_exports(&values[3], &[("KEEP_RUNNING".to_string(), keep_running)])?;
+    println!("OK: service-policy fixture-keep-running");
+    Ok(())
+}
+
 fn service_policy_owner_scope_from_reuse(reuse: &str) -> &'static str {
     match reuse {
         "same-slot" | "cross-run" => "persistent",
@@ -579,10 +655,26 @@ fn service_policy_owner_scope_from_reuse(reuse: &str) -> &'static str {
     }
 }
 
+fn service_policy_owner_scope_from_discovery(discovery: &str) -> &'static str {
+    match discovery {
+        "global" => "persistent",
+        "local" => "ephemeral",
+        _ => "",
+    }
+}
+
 fn service_policy_discovery_scope_from_reuse(reuse: &str) -> &'static str {
     match reuse {
         "same-slot" | "cross-run" => "global",
         "same-root" => "local",
+        _ => "",
+    }
+}
+
+fn service_policy_discovery_scope_from_owner(owner: &str) -> &'static str {
+    match owner {
+        "persistent" => "global",
+        "ephemeral" => "local",
         _ => "",
     }
 }
@@ -683,6 +775,54 @@ fn validate_service_policy_matrix(
     }
 
     Ok(())
+}
+
+fn service_policy_start_service_register_cleanup(
+    reuse: &str,
+    owner: &str,
+    discovery: &str,
+) -> Result<String, String> {
+    match reuse {
+        "same-slot" | "cross-run" => Ok("0".to_string()),
+        "never" | "same-root" => Ok("1".to_string()),
+        "" => {
+            if owner == "persistent" || discovery == "global" {
+                Ok("0".to_string())
+            } else {
+                Ok("1".to_string())
+            }
+        }
+        _ => Err(format!("unresolved start_service reuse policy '{}'", reuse)),
+    }
+}
+
+fn service_policy_fixture_keep_running(
+    owner_scope: &str,
+    reuse_policy: &str,
+    discovery_scope: &str,
+) -> Result<String, String> {
+    validate_service_policy_owner_scope(owner_scope, true)?;
+    validate_service_policy_reuse_policy(reuse_policy, true)?;
+    validate_service_policy_discovery_scope(discovery_scope, true)?;
+
+    if owner_scope == "persistent" {
+        return Ok("1".to_string());
+    }
+    if owner_scope == "ephemeral" {
+        return Ok("0".to_string());
+    }
+
+    match reuse_policy {
+        "same-slot" | "cross-run" => return Ok("1".to_string()),
+        "never" | "same-root" => return Ok("0".to_string()),
+        _ => {}
+    }
+
+    match discovery_scope {
+        "global" => Ok("1".to_string()),
+        "local" => Ok("0".to_string()),
+        _ => Ok("0".to_string()),
+    }
 }
 
 fn event_detail_render_command(values: &[String]) -> Result<(), String> {

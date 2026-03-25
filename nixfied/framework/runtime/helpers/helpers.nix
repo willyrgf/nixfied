@@ -9,12 +9,12 @@
 let
   cleanupRuntime = import ./cleanup-runtime.nix { };
   fixtureRuntime = import ./fixture-runtime.nix { };
+  kernelPackage = import ../kernel { inherit pkgs; };
   loggingRuntime = import ./logging-runtime.nix { inherit pkgs; };
   envLoader = import ./env-loader.nix {
     inherit pkgs project;
     loggingPrelude = loggingPrelude;
   };
-  servicePolicy = import ./service-policy.nix { inherit pkgs; };
   hookEnv = hooks.env or { };
   hookExports = pkgs.lib.concatMapStringsSep "\n" (key: ''
     # Always pin framework hook paths for deterministic app behavior.
@@ -342,80 +342,22 @@ let
       esac
     }
 
-    ${servicePolicy.policyRuntimeFunctions}
-
-    _start_service_infer_owner_scope_from_reuse_policy() {
-      nixfied_policy_owner_scope_from_reuse "''${SERVICE_REUSE_POLICY:-}"
-    }
-
-    _start_service_infer_discovery_scope_from_reuse_policy() {
-      nixfied_policy_discovery_scope_from_reuse "''${SERVICE_REUSE_POLICY:-}"
-    }
-
-    _start_service_infer_owner_scope() {
-      local from_reuse=""
-      if [ -n "''${SERVICE_OWNER_SCOPE:-}" ]; then
-        echo "$SERVICE_OWNER_SCOPE"
-        return 0
+    load_start_service_policy_exports() {
+      local export_file=""
+      export_file="$(mktemp "''${TMPDIR:-/tmp}/nixfied-start-service-policy.XXXXXX")" || return 1
+      if ! ${kernelPackage}/bin/nixfied-kernel service-policy start-service \
+        "''${SERVICE_REUSE_POLICY:-}" \
+        "''${SERVICE_OWNER_SCOPE:-}" \
+        "''${SERVICE_DISCOVERY_SCOPE:-}" \
+        "$export_file" >/dev/null; then
+        rm -f "$export_file"
+        return 1
       fi
-
-      from_reuse="$(_start_service_infer_owner_scope_from_reuse_policy)"
-      if [ -n "$from_reuse" ]; then
-        echo "$from_reuse"
-        return 0
+      if ! . "$export_file"; then
+        rm -f "$export_file"
+        return 1
       fi
-
-      case "''${SERVICE_DISCOVERY_SCOPE:-}" in
-        global)
-          echo "persistent"
-          ;;
-        local)
-          echo "ephemeral"
-          ;;
-        *)
-          echo ""
-          ;;
-      esac
-    }
-
-    _start_service_infer_discovery_scope() {
-      local owner_scope="''${1:-}"
-      local from_reuse=""
-      if [ -n "''${SERVICE_DISCOVERY_SCOPE:-}" ]; then
-        echo "$SERVICE_DISCOVERY_SCOPE"
-        return 0
-      fi
-
-      from_reuse="$(_start_service_infer_discovery_scope_from_reuse_policy)"
-      if [ -n "$from_reuse" ]; then
-        echo "$from_reuse"
-        return 0
-      fi
-
-      case "$owner_scope" in
-        persistent)
-          echo "global"
-          ;;
-        ephemeral)
-          echo "local"
-          ;;
-        *)
-          echo ""
-          ;;
-      esac
-    }
-
-    _start_service_infer_reuse_policy() {
-      local owner_scope="''${1:-}"
-      local discovery_scope="''${2:-}"
-      nixfied_policy_infer_reuse_policy "''${SERVICE_REUSE_POLICY:-}" "$owner_scope" "$discovery_scope" ""
-    }
-
-    _start_service_validate_policy_matrix() {
-      local reuse="$1"
-      local owner="$2"
-      local discovery="$3"
-      nixfied_policy_validate_matrix "$reuse" "$owner" "$discovery" 1 1
+      rm -f "$export_file"
     }
 
     # start_service_should_register_cleanup [explicit_mode]
@@ -453,31 +395,11 @@ let
         return 0
       fi
 
-      owner_scope="$(_start_service_infer_owner_scope)"
-      discovery_scope="$(_start_service_infer_discovery_scope "$owner_scope")"
-      reuse_policy="$(_start_service_infer_reuse_policy "$owner_scope" "$discovery_scope")"
-
-      _start_service_validate_policy_matrix "$reuse_policy" "$owner_scope" "$discovery_scope" || return 1
-
-      case "$reuse_policy" in
-        same-slot|cross-run)
-          echo "0"
-          ;;
-        never|same-root)
-          echo "1"
-          ;;
-        "")
-          if [ "$owner_scope" = "persistent" ] || [ "$discovery_scope" = "global" ]; then
-            echo "0"
-          else
-            echo "1"
-          fi
-          ;;
-        *)
-          log_error "unresolved start_service reuse policy '$reuse_policy'"
-          return 1
-          ;;
-      esac
+      load_start_service_policy_exports || return 1
+      owner_scope="$OWNER_SCOPE"
+      discovery_scope="$DISCOVERY_SCOPE"
+      reuse_policy="$REUSE_POLICY"
+      echo "$REGISTER_CLEANUP"
       return 0
     }
 

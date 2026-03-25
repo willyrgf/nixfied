@@ -649,6 +649,10 @@ let
       inherit pkgs;
     };
 
+    "service-policy-runtime-smoke" = import ./service-policy-runtime-smoke.nix {
+      inherit pkgs;
+    };
+
     "contract-migration-guard" = import ./contract-migration-guard.nix {
       inherit pkgs;
     };

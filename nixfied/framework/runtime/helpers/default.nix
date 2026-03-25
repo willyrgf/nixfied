@@ -72,7 +72,6 @@ let
   };
   managedServiceLifecycle = import ./managed-service-lifecycle.nix { inherit pkgs; };
   slotEnvRuntime = import ./slot-env-runtime.nix { inherit pkgs; };
-  servicePolicy = import ./service-policy.nix { inherit pkgs; };
   portUtils = import ./port-utils.nix {
     inherit pkgs;
     inherit (helpers) loggingPrelude;
@@ -118,7 +117,6 @@ in
     registryRoot
     ;
   inherit slotEnvRuntime;
-  inherit servicePolicy;
   inherit (portUtils) mkPortCleanup mkPortConflictChecker;
   inherit (parallel) mkParallelRunner;
 }

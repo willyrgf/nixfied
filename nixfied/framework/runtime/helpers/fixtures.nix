@@ -6,11 +6,11 @@
 
 let
   lib = pkgs.lib;
+  kernelPackage = import ../kernel { inherit pkgs; };
   runtimeDefaults = import ../../core/runtime-defaults.nix;
   serviceConfig = import ../../core/service-config.nix {
     inherit lib pkgs;
   };
-  servicePolicy = import ./service-policy.nix { inherit pkgs; };
 
   postgresCfg = serviceConfig.getProjectServiceConfig {
     inherit project;
@@ -244,38 +244,24 @@ let
       throw "fixtures.env.${key} must be a scalar or attrset";
 
   keepRunningFromPolicy = ''
-    ${servicePolicy.policyRuntimeFunctions}
-
     _fixture_keep_running_from_policy() {
-      local owner_scope="''${SERVICE_OWNER_SCOPE:-}"
-      local reuse_policy="''${SERVICE_REUSE_POLICY:-}"
-      local discovery_scope="''${SERVICE_DISCOVERY_SCOPE:-}"
+      local export_file=""
 
-      nixfied_policy_validate_owner_scope "$owner_scope" 1 || return 1
-      nixfied_policy_validate_reuse_policy "$reuse_policy" 1 || return 1
-      nixfied_policy_validate_discovery_scope "$discovery_scope" 1 || return 1
-
-      case "$owner_scope" in
-        persistent) echo "1"; return 0 ;;
-        ephemeral) echo "0"; return 0 ;;
-        "") ;;
-      esac
-
-      case "$reuse_policy" in
-        same-slot|cross-run) echo "1"; return 0 ;;
-        never|same-root) echo "0"; return 0 ;;
-        "") ;;
-      esac
-
-      case "$discovery_scope" in
-        global) echo "1"; return 0 ;;
-        local) echo "0"; return 0 ;;
-        "") ;;
-      esac
-
-      # Keep default fixture semantics unchanged unless policy envs request persistence.
-      echo "0"
-      return 0
+      export_file="$(mktemp "''${TMPDIR:-/tmp}/nixfied-fixture-policy.XXXXXX")" || return 1
+      if ! ${kernelPackage}/bin/nixfied-kernel service-policy fixture-keep-running \
+        "''${SERVICE_OWNER_SCOPE:-}" \
+        "''${SERVICE_REUSE_POLICY:-}" \
+        "''${SERVICE_DISCOVERY_SCOPE:-}" \
+        "$export_file" >/dev/null; then
+        rm -f "$export_file"
+        return 1
+      fi
+      if ! . "$export_file"; then
+        rm -f "$export_file"
+        return 1
+      fi
+      rm -f "$export_file"
+      echo "$KEEP_RUNNING"
     }
   '';
 
