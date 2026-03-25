@@ -12,7 +12,6 @@ let
   id = import ./id.nix {
     inherit pkgs project;
   };
-  servicePolicy = import ./service-policy.nix { inherit pkgs; };
   registry = import ../registry/events.nix { inherit pkgs; };
   projectIdUpper =
     let
@@ -81,69 +80,44 @@ let
       esac
     }
 
-    ${servicePolicy.policyRuntimeFunctions}
+    load_runtime_event_policy_exports() {
+      local explicit_reuse="$1"
+      local explicit_owner="$2"
+      local explicit_discovery="$3"
+      local resolved_reuse="$explicit_reuse"
+      local resolved_owner="$explicit_owner"
+      local resolved_discovery="$explicit_discovery"
+      local ephemeral_flag="0"
+      local export_file=""
 
-    infer_owner_scope_from_reuse_policy() {
-      nixfied_policy_owner_scope_from_reuse "''${SERVICE_REUSE_POLICY:-}"
-    }
-
-    infer_discovery_scope_from_reuse_policy() {
-      nixfied_policy_discovery_scope_from_reuse "''${SERVICE_REUSE_POLICY:-}"
-    }
-
-    infer_owner_scope() {
-      local from_reuse=""
-
-      if [ -n "''${SERVICE_OWNER_SCOPE:-}" ]; then
-        echo "$SERVICE_OWNER_SCOPE"
-        return 0
+      if [ -z "$resolved_reuse" ]; then
+        resolved_reuse="''${SERVICE_REUSE_POLICY:-}"
       fi
-
-      from_reuse="$(infer_owner_scope_from_reuse_policy)"
-      if [ -n "$from_reuse" ]; then
-        echo "$from_reuse"
-        return 0
+      if [ -z "$resolved_owner" ]; then
+        resolved_owner="''${SERVICE_OWNER_SCOPE:-}"
       fi
-
+      if [ -z "$resolved_discovery" ]; then
+        resolved_discovery="''${SERVICE_DISCOVERY_SCOPE:-}"
+      fi
       if [ "''${!EPHEMERAL_FLAG_VAR:-0}" = "1" ]; then
-        echo "ephemeral"
-      else
-        echo "persistent"
-      fi
-    }
-
-    infer_discovery_scope() {
-      local from_reuse=""
-
-      if [ -n "''${SERVICE_DISCOVERY_SCOPE:-}" ]; then
-        echo "$SERVICE_DISCOVERY_SCOPE"
-        return 0
+        ephemeral_flag="1"
       fi
 
-      from_reuse="$(infer_discovery_scope_from_reuse_policy)"
-      if [ -n "$from_reuse" ]; then
-        echo "$from_reuse"
-        return 0
+      export_file="$(mktemp "''${TMPDIR:-/tmp}/nixfied-runtime-policy.XXXXXX")" || return 1
+      if ! ${kernelPackage}/bin/nixfied-kernel service-policy runtime-event \
+        "$resolved_reuse" \
+        "$resolved_owner" \
+        "$resolved_discovery" \
+        "$ephemeral_flag" \
+        "$export_file" >/dev/null; then
+        rm -f "$export_file"
+        return 1
       fi
-
-      if [ "''${!EPHEMERAL_FLAG_VAR:-0}" = "1" ]; then
-        echo "local"
-      else
-        echo "global"
+      if ! . "$export_file"; then
+        rm -f "$export_file"
+        return 1
       fi
-    }
-
-    infer_reuse_policy() {
-      local owner_scope="$1"
-      local discovery_scope="''${2:-}"
-      nixfied_policy_infer_reuse_policy "''${SERVICE_REUSE_POLICY:-}" "$owner_scope" "$discovery_scope" "same-slot"
-    }
-
-    validate_policy_matrix() {
-      local reuse="$1"
-      local owner="$2"
-      local discovery="$3"
-      nixfied_policy_validate_matrix "$reuse" "$owner" "$discovery" 0 0
+      rm -f "$export_file"
     }
 
     is_numeric_pid() {
@@ -351,17 +325,16 @@ let
       EVENT_PGID="$(${pkgs.procps}/bin/ps -o pgid= -p "$EVENT_PID" 2>/dev/null | tr -d ' ' || true)"
     fi
 
-    if [ -z "$EVENT_OWNER_SCOPE" ]; then
-      EVENT_OWNER_SCOPE="$(infer_owner_scope)"
+    if ! load_runtime_event_policy_exports \
+      "$EVENT_REUSE_POLICY" \
+      "$EVENT_OWNER_SCOPE" \
+      "$EVENT_DISCOVERY_SCOPE"; then
+      log_error "failed to resolve runtime event service policy event_type=$EVENT_TYPE"
+      exit 1
     fi
-    if [ -z "$EVENT_DISCOVERY_SCOPE" ]; then
-      EVENT_DISCOVERY_SCOPE="$(infer_discovery_scope)"
-    fi
-    if [ -z "$EVENT_REUSE_POLICY" ]; then
-      EVENT_REUSE_POLICY="$(infer_reuse_policy "$EVENT_OWNER_SCOPE")"
-    fi
-
-    validate_policy_matrix "$EVENT_REUSE_POLICY" "$EVENT_OWNER_SCOPE" "$EVENT_DISCOVERY_SCOPE"
+    EVENT_OWNER_SCOPE="$OWNER_SCOPE"
+    EVENT_DISCOVERY_SCOPE="$DISCOVERY_SCOPE"
+    EVENT_REUSE_POLICY="$REUSE_POLICY"
 
     if [ -z "$EVENT_EPHEMERAL_ROOT" ]; then
       EVENT_EPHEMERAL_ROOT="''${!EPHEMERAL_ROOT_VAR:-}"
@@ -684,9 +657,13 @@ let
       ENV_FILTER="''${ENV:-''${!ENV_VAR:-}}"
     fi
 
-    DISCOVERY_SCOPE="$(infer_discovery_scope)"
+    if ! load_runtime_event_policy_exports "" "" ""; then
+      log_error "failed to resolve runtime event service policy service=$SERVICE"
+      exit 1
+    fi
+    RESOLVED_DISCOVERY_SCOPE="$DISCOVERY_SCOPE"
 
-    if [ "$DISCOVERY_SCOPE" = "local" ]; then
+    if [ "$RESOLVED_DISCOVERY_SCOPE" = "local" ]; then
       emit_var "REGISTRY_FOUND" "0"
       emit_var "REGISTRY_RUNNING" "false"
       emit_var "REGISTRY_SCOPE" "local"
