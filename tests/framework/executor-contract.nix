@@ -90,7 +90,7 @@ assert pkgs.lib.hasInfix "defines runtime hooks but runner type '$runner_type' i
 assert pkgs.lib.hasInfix "workflow_post_run_always \"$workflow_id\"" source;
 assert pkgs.lib.hasInfix "workflow_write_summary \"$workflow_id\"" source;
 assert pkgs.lib.hasInfix "workflow_logging_level_default \"$workflow_id\"" source;
-assert pkgs.lib.hasInfix "workflow_lock_policy \"$workflow_id\"" source;
+assert (!pkgs.lib.hasInfix "workflow_lock_policy \"$workflow_id\"" source);
 assert pkgs.lib.hasInfix "workflow_fail_fast \"$workflow_id\"" source;
 assert (!pkgs.lib.hasInfix "normalize_env_hash() {" source);
 assert (!pkgs.lib.hasInfix "extract_machine_output_args() {" source);

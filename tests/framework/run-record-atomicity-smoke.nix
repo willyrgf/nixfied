@@ -56,9 +56,9 @@ let
     projectRoot = ../..;
   };
 in
-assert pkgs.lib.hasInfix "tmp=\"$(mktemp \"$run_file.tmp.XXXXXX\")\"" orchestratorSource;
-assert pkgs.lib.hasInfix "mv \"$tmp\" \"$run_file\"" orchestratorSource;
-assert pkgs.lib.hasInfix "contractRef = \"runtime.runRecord\";" orchestratorSource;
+assert pkgs.lib.hasInfix "nixfied-kernel run-record create" orchestratorSource;
+assert pkgs.lib.hasInfix "nixfied-kernel run-record transition" orchestratorSource;
+assert pkgs.lib.hasInfix "validationBundleFile" orchestratorSource;
 pkgs.runCommand "run-record-atomicity-smoke" { } ''
   set -euo pipefail
   ${harness.shellPrelude}
