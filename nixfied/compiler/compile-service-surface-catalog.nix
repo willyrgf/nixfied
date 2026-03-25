@@ -18,13 +18,7 @@ let
     serviceName: opName: opCfg:
     let
       prefix = normalizeToken serviceName;
-      suffix =
-        normalizeToken (
-          if (opCfg.hook or "") != "" then
-            opCfg.hook
-          else
-            opName
-        );
+      suffix = normalizeToken (if (opCfg.hook or "") != "" then opCfg.hook else opName);
     in
     "SVC_${prefix}_${suffix}";
 
@@ -146,11 +140,7 @@ let
     serviceName: api: opName:
     let
       opCfg = api.operations.${opName};
-      appName =
-        if (opCfg.appName or "") != "" then
-          opCfg.appName
-        else
-          "svc::${serviceName}::${opName}";
+      appName = if (opCfg.appName or "") != "" then opCfg.appName else "svc::${serviceName}::${opName}";
       includeApp = opCfg.exposeApp or true;
       includeHook = opCfg.exposeHook or true;
       usage = opCfg.usage or [ "nix run .#${appName}" ];
@@ -195,13 +185,10 @@ let
   operationCatalog = builtins.mapAttrs (
     serviceName: api:
     builtins.listToAttrs (
-      map (
-        opName:
-        {
-          name = opName;
-          value = mkOperationRecord serviceName api opName;
-        }
-      ) (builtins.sort builtins.lessThan (builtins.attrNames (api.operations or { })))
+      map (opName: {
+        name = opName;
+        value = mkOperationRecord serviceName api opName;
+      }) (builtins.sort builtins.lessThan (builtins.attrNames (api.operations or { })))
     )
   ) serviceApis;
 
@@ -211,34 +198,31 @@ let
       let
         ops = operationCatalog.${serviceName} or { };
       in
-      map
-        (opName: ops.${opName})
-        (builtins.filter (opName: (ops.${opName}.includeApp or false)) (
+      map (opName: ops.${opName}) (
+        builtins.filter (opName: (ops.${opName}.includeApp or false)) (
           builtins.sort builtins.lessThan (builtins.attrNames ops)
-        ))
+        )
+      )
     ) (builtins.sort builtins.lessThan (builtins.attrNames operationCatalog))
   );
 
   appsByName = builtins.listToAttrs (
-    map (
-      entry:
-      {
-        name = entry.appName;
-        value = {
-          id = entry.appName;
-          kind = "serviceOp";
-          service = entry.serviceName;
-          operation = entry.opName;
-          summary = entry.summary;
-          description = entry.details;
-          category = entry.category;
-          usage = entry.usage;
-          examples = entry.examples;
-          ownerFile = entry.ownerFile;
-          commandApi = entry.commandApi;
-        };
-      }
-    ) appEntries
+    map (entry: {
+      name = entry.appName;
+      value = {
+        id = entry.appName;
+        kind = "serviceOp";
+        service = entry.serviceName;
+        operation = entry.opName;
+        summary = entry.summary;
+        description = entry.details;
+        category = entry.category;
+        usage = entry.usage;
+        examples = entry.examples;
+        ownerFile = entry.ownerFile;
+        commandApi = entry.commandApi;
+      };
+    }) appEntries
   );
 
   appServiceByName = builtins.listToAttrs (

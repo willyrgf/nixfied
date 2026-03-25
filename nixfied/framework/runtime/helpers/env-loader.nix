@@ -109,13 +109,12 @@ let
     builtins.filter (spec: spec.name != "") validatedAllowSpecs
   );
   allowSpecFiles = builtins.listToAttrs (
-    map (
-      spec:
-      {
-        name = spec.name;
-        value = pkgs.writeText "nixfied-env-spec-${spec.name}.json" (
-          builtins.toJSON (
-            ({
+    map (spec: {
+      name = spec.name;
+      value = pkgs.writeText "nixfied-env-spec-${spec.name}.json" (
+        builtins.toJSON (
+          (
+            {
               inherit (spec)
                 type
                 required
@@ -127,14 +126,14 @@ let
             }
             // lib.optionalAttrs (spec.max != null) {
               max = spec.max;
-            })
-            // lib.optionalAttrs spec.hasDefault {
-              default = valueToString spec.default;
             }
           )
-        );
-      }
-    ) (builtins.filter (spec: spec.name != "") validatedAllowSpecs)
+          // lib.optionalAttrs spec.hasDefault {
+            default = valueToString spec.default;
+          }
+        )
+      );
+    }) (builtins.filter (spec: spec.name != "") validatedAllowSpecs)
   );
 
   allowSpecsRuntime = pkgs.writeText "nixfied-env-file-specs.sh" ''
@@ -161,7 +160,9 @@ let
             lib.escapeShellArg (if spec.hasDefault then "1" else "0")
           }
           NIXFIED_ENV_SPEC_DEFAULT[${lib.escapeShellArg name}]=${lib.escapeShellArg (valueToString spec.default)}
-          NIXFIED_ENV_SPEC_FILE[${lib.escapeShellArg name}]=${lib.escapeShellArg (toString allowSpecFiles.${name})}
+          NIXFIED_ENV_SPEC_FILE[${lib.escapeShellArg name}]=${
+            lib.escapeShellArg (toString allowSpecFiles.${name})
+          }
         ''
       ) (builtins.filter (spec: spec.name != "") validatedAllowSpecs)
     )}

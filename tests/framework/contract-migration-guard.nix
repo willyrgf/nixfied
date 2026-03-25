@@ -165,8 +165,10 @@ assert pkgs.lib.hasInfix "nixfied-kernel run-record read" orchestratorRuntimeSou
 assert !(pkgs.lib.hasInfix "\${pkgs.gnused}/bin/sed -n" orchestratorRuntimeSource);
 assert pkgs.lib.hasInfix "nixfied-kernel registry terminal" orchestratorSource;
 assert pkgs.lib.hasInfix "nixfied-kernel registry terminal" orchestratorControlSource;
-assert !(pkgs.lib.hasInfix "while IFS=$'\\t' read -r seq ts_epoch ts event_run_id" orchestratorSource);
-assert !(pkgs.lib.hasInfix "while IFS=$'\\t' read -r seq ts_epoch ts event_run_id" orchestratorControlSource);
+assert
+  !(pkgs.lib.hasInfix "while IFS=$'\\t' read -r seq ts_epoch ts event_run_id" orchestratorSource);
+assert
+  !(pkgs.lib.hasInfix "while IFS=$'\\t' read -r seq ts_epoch ts event_run_id" orchestratorControlSource);
 assert !(pkgs.lib.hasInfix "python3" readyHeliosSyncGateSource);
 assert !(pkgs.lib.hasInfix "http.server" readyHeliosSyncGateSource);
 pkgs.runCommand "contract-migration-guard" { } ''

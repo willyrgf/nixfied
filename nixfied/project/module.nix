@@ -235,7 +235,7 @@ let
           {
             type = "workflowRef";
             workflowId = workflowId;
-      };
+          };
 
       commandApi = {
         version = 2;
@@ -264,11 +264,7 @@ let
         ];
       };
 
-      launcher =
-        if launcher == null then
-          { }
-        else
-          launcher;
+      launcher = if launcher == null then { } else launcher;
 
       runtime = {
         slotEnv = "optional";

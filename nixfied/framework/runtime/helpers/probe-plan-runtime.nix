@@ -168,16 +168,14 @@ let
     let
       steps = plan.steps or [ ];
       planFile = pkgs.writeText "nixfied-probe-${serviceName}-${mode}.json" (
-        builtins.toJSON (
-          mkProbeExecutionPlan {
-            inherit
-              mode
-              serviceName
-              plan
-              endpoints
-              ;
-          }
-        )
+        builtins.toJSON (mkProbeExecutionPlan {
+          inherit
+            mode
+            serviceName
+            plan
+            endpoints
+            ;
+        })
       );
     in
     if steps == [ ] then

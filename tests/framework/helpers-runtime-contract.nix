@@ -4,8 +4,7 @@ let
   cleanupSource = builtins.readFile ../../nixfied/framework/runtime/helpers/cleanup-runtime.nix;
   fixtureSource = builtins.readFile ../../nixfied/framework/runtime/helpers/fixture-runtime.nix;
   fixturesDslSource = builtins.readFile ../../nixfied/framework/runtime/helpers/fixtures.nix;
-  kernelExportRuntimeSource =
-    builtins.readFile ../../nixfied/framework/runtime/helpers/kernel-export-runtime.nix;
+  kernelExportRuntimeSource = builtins.readFile ../../nixfied/framework/runtime/helpers/kernel-export-runtime.nix;
   loggingRuntimeSource = builtins.readFile ../../nixfied/framework/runtime/helpers/logging-runtime.nix;
   runtimeEventsSource = builtins.readFile ../../nixfied/framework/runtime/helpers/runtime-events.nix;
   shellCommonSource = builtins.readFile ../../nixfied/framework/core/shell-common.nix;

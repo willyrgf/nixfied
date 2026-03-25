@@ -12,10 +12,7 @@
 }:
 let
   resolvedIdentity =
-    if resolved == null || !(builtins.isAttrs resolved) then
-      null
-    else
-      resolved.identity or null;
+    if resolved == null || !(builtins.isAttrs resolved) then null else resolved.identity or null;
 
   taskCatalog = builtins.mapAttrs (_name: task: {
     id = task.id;

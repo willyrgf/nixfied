@@ -187,62 +187,62 @@ let
   };
 
   minioStubScript = pkgs.writeShellScript "minio-stub" ''
-        set -euo pipefail
+    set -euo pipefail
 
-        if [ "''${1:-}" = "--help" ] || [ "$#" -eq 0 ]; then
-          echo "minio stub"
-          exit 0
-        fi
+    if [ "''${1:-}" = "--help" ] || [ "$#" -eq 0 ]; then
+      echo "minio stub"
+      exit 0
+    fi
 
-        if [ "$1" != "server" ]; then
-          echo "unsupported minio command: $1" >&2
-          exit 1
-        fi
+    if [ "$1" != "server" ]; then
+      echo "unsupported minio command: $1" >&2
+      exit 1
+    fi
 
-        API_PORT=""
-        CONSOLE_PORT=""
-        while [ "$#" -gt 0 ]; do
-          case "$1" in
-            --address)
-              API_PORT="$(${pkgs.coreutils}/bin/cut -d: -f2 <<<"$2")"
-              shift 2
-              ;;
-            --console-address)
-              CONSOLE_PORT="$(${pkgs.coreutils}/bin/cut -d: -f2 <<<"$2")"
-              shift 2
-              ;;
-            --config-dir)
-              shift 2
-              ;;
-            *)
-              shift
-              ;;
-          esac
-        done
+    API_PORT=""
+    CONSOLE_PORT=""
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --address)
+          API_PORT="$(${pkgs.coreutils}/bin/cut -d: -f2 <<<"$2")"
+          shift 2
+          ;;
+        --console-address)
+          CONSOLE_PORT="$(${pkgs.coreutils}/bin/cut -d: -f2 <<<"$2")"
+          shift 2
+          ;;
+        --config-dir)
+          shift 2
+          ;;
+        *)
+          shift
+          ;;
+      esac
+    done
 
-        ${shellHelpers.httpStub.shellLib}
-        bg_pids=()
-        cleanup() {
-          local pid=""
-          for pid in "''${bg_pids[@]:-}"; do
-            kill "$pid" 2>/dev/null || true
-          done
-        }
-        trap cleanup EXIT INT TERM
+    ${shellHelpers.httpStub.shellLib}
+    bg_pids=()
+    cleanup() {
+      local pid=""
+      for pid in "''${bg_pids[@]:-}"; do
+        kill "$pid" 2>/dev/null || true
+      done
+    }
+    trap cleanup EXIT INT TERM
 
-        export NIXFIED_HTTP_STATUS_DEFAULT="404"
-        export NIXFIED_HTTP_BODY_DEFAULT=""
-        export NIXFIED_HTTP_STATUS_MINIO_HEALTH_LIVE="200"
-        export NIXFIED_HTTP_BODY_MINIO_HEALTH_LIVE="ok"
-        export NIXFIED_HTTP_STATUS_MINIO_HEALTH_READY="200"
-        export NIXFIED_HTTP_BODY_MINIO_HEALTH_READY="ok"
+    export NIXFIED_HTTP_STATUS_DEFAULT="404"
+    export NIXFIED_HTTP_BODY_DEFAULT=""
+    export NIXFIED_HTTP_STATUS_MINIO_HEALTH_LIVE="200"
+    export NIXFIED_HTTP_BODY_MINIO_HEALTH_LIVE="ok"
+    export NIXFIED_HTTP_STATUS_MINIO_HEALTH_READY="200"
+    export NIXFIED_HTTP_BODY_MINIO_HEALTH_READY="ok"
 
-        for port in "$API_PORT" "$CONSOLE_PORT"; do
-          [ -n "$port" ] || continue
-          start_http_stub "$port"
-        done
+    for port in "$API_PORT" "$CONSOLE_PORT"; do
+      [ -n "$port" ] || continue
+      start_http_stub "$port"
+    done
 
-        wait
+    wait
   '';
 
   minioStub = mkPackageWithScript {
@@ -252,55 +252,55 @@ let
   };
 
   rethStubScript = pkgs.writeShellScript "reth-stub" ''
-        set -euo pipefail
+    set -euo pipefail
 
-        if [ "''${1:-}" = "--version" ]; then
-          echo "reth-stub 0.0.0"
-          exit 0
-        fi
+    if [ "''${1:-}" = "--version" ]; then
+      echo "reth-stub 0.0.0"
+      exit 0
+    fi
 
-        HTTP_PORT=""
-        WS_PORT=""
-        AUTH_PORT=""
-        while [ "$#" -gt 0 ]; do
-          case "$1" in
-            --http.port)
-              HTTP_PORT="$2"
-              shift 2
-              ;;
-            --ws.port)
-              WS_PORT="$2"
-              shift 2
-              ;;
-            --authrpc.port)
-              AUTH_PORT="$2"
-              shift 2
-              ;;
-            *)
-              shift
-              ;;
-          esac
-        done
+    HTTP_PORT=""
+    WS_PORT=""
+    AUTH_PORT=""
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --http.port)
+          HTTP_PORT="$2"
+          shift 2
+          ;;
+        --ws.port)
+          WS_PORT="$2"
+          shift 2
+          ;;
+        --authrpc.port)
+          AUTH_PORT="$2"
+          shift 2
+          ;;
+        *)
+          shift
+          ;;
+      esac
+    done
 
-        ${shellHelpers.jsonRpcStub.shellLib}
-        bg_pids=()
-        cleanup() {
-          local pid=""
-          for pid in "''${bg_pids[@]:-}"; do
-            kill "$pid" 2>/dev/null || true
-          done
-        }
-        trap cleanup EXIT INT TERM
+    ${shellHelpers.jsonRpcStub.shellLib}
+    bg_pids=()
+    cleanup() {
+      local pid=""
+      for pid in "''${bg_pids[@]:-}"; do
+        kill "$pid" 2>/dev/null || true
+      done
+    }
+    trap cleanup EXIT INT TERM
 
-        export NIXFIED_JSONRPC_RESULT_JSON_WEB3_CLIENTVERSION='"reth-stub"'
-        export NIXFIED_JSONRPC_RESULT_JSON_ETH_CHAINID='"0x1"'
+    export NIXFIED_JSONRPC_RESULT_JSON_WEB3_CLIENTVERSION='"reth-stub"'
+    export NIXFIED_JSONRPC_RESULT_JSON_ETH_CHAINID='"0x1"'
 
-        for port in "$HTTP_PORT" "$WS_PORT" "$AUTH_PORT"; do
-          [ -n "$port" ] || continue
-          start_jsonrpc_stub "$port"
-        done
+    for port in "$HTTP_PORT" "$WS_PORT" "$AUTH_PORT"; do
+      [ -n "$port" ] || continue
+      start_jsonrpc_stub "$port"
+    done
 
-        wait
+    wait
   '';
 
   rethStub = mkPackageWithScript {
@@ -310,59 +310,59 @@ let
   };
 
   heliosStubScript = pkgs.writeShellScript "helios-stub" ''
-        set -euo pipefail
+    set -euo pipefail
 
-        if [ "''${1:-}" = "ethereum" ] && [ "''${2:-}" = "--help" ]; then
-          echo "helios stub"
-          exit 0
-        fi
+    if [ "''${1:-}" = "ethereum" ] && [ "''${2:-}" = "--help" ]; then
+      echo "helios stub"
+      exit 0
+    fi
 
-        RPC_PORT=""
-        EXECUTION_RPC_URL=""
-        while [ "$#" -gt 0 ]; do
-          case "$1" in
-            --rpc-port)
-              RPC_PORT="$2"
-              shift 2
-              ;;
-            --execution-rpc)
-              EXECUTION_RPC_URL="$2"
-              shift 2
-              ;;
-            *)
-              shift
-              ;;
-          esac
-        done
+    RPC_PORT=""
+    EXECUTION_RPC_URL=""
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --rpc-port)
+          RPC_PORT="$2"
+          shift 2
+          ;;
+        --execution-rpc)
+          EXECUTION_RPC_URL="$2"
+          shift 2
+          ;;
+        *)
+          shift
+          ;;
+      esac
+    done
 
-        EXECUTION_PORT=""
-        case "$EXECUTION_RPC_URL" in
-          http://127.0.0.1:*)
-            EXECUTION_PORT="$(${pkgs.coreutils}/bin/printf '%s' "$EXECUTION_RPC_URL" | ${pkgs.gnused}/bin/sed -E 's#^http://127\.0\.0\.1:([0-9]+).*$#\1#')"
-            ;;
-        esac
+    EXECUTION_PORT=""
+    case "$EXECUTION_RPC_URL" in
+      http://127.0.0.1:*)
+        EXECUTION_PORT="$(${pkgs.coreutils}/bin/printf '%s' "$EXECUTION_RPC_URL" | ${pkgs.gnused}/bin/sed -E 's#^http://127\.0\.0\.1:([0-9]+).*$#\1#')"
+        ;;
+    esac
 
-        ${shellHelpers.jsonRpcStub.shellLib}
-        bg_pids=()
-        cleanup() {
-          local pid=""
-          for pid in "''${bg_pids[@]:-}"; do
-            kill "$pid" 2>/dev/null || true
-          done
-        }
-        trap cleanup EXIT INT TERM
+    ${shellHelpers.jsonRpcStub.shellLib}
+    bg_pids=()
+    cleanup() {
+      local pid=""
+      for pid in "''${bg_pids[@]:-}"; do
+        kill "$pid" 2>/dev/null || true
+      done
+    }
+    trap cleanup EXIT INT TERM
 
-        export NIXFIED_JSONRPC_RESULT_JSON_ETH_CHAINID='"0x539"'
-        export NIXFIED_JSONRPC_RESULT_JSON_ETH_BLOCKNUMBER='"0x2a"'
-        export NIXFIED_JSONRPC_RESULT_JSON_ETH_SYNCING='false'
-        export NIXFIED_JSONRPC_RESULT_JSON_WEB3_CLIENTVERSION='"helios-stub"'
+    export NIXFIED_JSONRPC_RESULT_JSON_ETH_CHAINID='"0x539"'
+    export NIXFIED_JSONRPC_RESULT_JSON_ETH_BLOCKNUMBER='"0x2a"'
+    export NIXFIED_JSONRPC_RESULT_JSON_ETH_SYNCING='false'
+    export NIXFIED_JSONRPC_RESULT_JSON_WEB3_CLIENTVERSION='"helios-stub"'
 
-        for port in "$RPC_PORT" "$EXECUTION_PORT"; do
-          [ -n "$port" ] || continue
-          start_jsonrpc_stub "$port"
-        done
+    for port in "$RPC_PORT" "$EXECUTION_PORT"; do
+      [ -n "$port" ] || continue
+      start_jsonrpc_stub "$port"
+    done
 
-        wait
+    wait
   '';
 
   heliosStub = mkPackageWithScript {

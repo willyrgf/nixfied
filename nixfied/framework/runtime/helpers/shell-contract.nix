@@ -602,19 +602,6 @@ let
     aliases = envSpec.aliases or [ ];
   };
 
-  mkShellArray = var: values: ''
-      declare -ag ${var}=(
-    ${lib.concatStringsSep "\n" (map (value: "  ${lib.escapeShellArg value}") values)}
-      )
-  '';
-
-  mkShellAssoc = var: entries: ''
-      declare -Ag ${var}=()
-    ${lib.concatStringsSep "\n" (
-      map (entry: "${var}[${lib.escapeShellArg entry.key}]=${lib.escapeShellArg entry.value}") entries
-    )}
-  '';
-
   mkContractRuntime =
     {
       name,
@@ -625,27 +612,26 @@ let
     let
       validated = validateAppContract { inherit name contract; };
       normalizedArgs = map normalizeArgSpec (validated.args or [ ]);
-      normalizedEnv =
-        map (
-          envSpec:
-          let
-            normalized = normalizeEnvSpec envSpec;
-          in
-          if normalized.name == runtimeLogLevelEnvName then
-            normalized
-            // {
-              hasDefault = true;
-              default = logLevelDefault;
-            }
-          else if normalized.name == runtimeOutputModeEnvName then
-            normalized
-            // {
-              hasDefault = true;
-              default = outputModeDefault;
-            }
-          else
-            normalized
-        ) (validated.env or [ ]);
+      normalizedEnv = map (
+        envSpec:
+        let
+          normalized = normalizeEnvSpec envSpec;
+        in
+        if normalized.name == runtimeLogLevelEnvName then
+          normalized
+          // {
+            hasDefault = true;
+            default = logLevelDefault;
+          }
+        else if normalized.name == runtimeOutputModeEnvName then
+          normalized
+          // {
+            hasDefault = true;
+            default = outputModeDefault;
+          }
+        else
+          normalized
+      ) (validated.env or [ ]);
       failureCodes = validated.failureCodes or defaultFailureCodes;
     in
     pkgs.writeText "${name}-command-api-runtime.json" (
@@ -653,28 +639,23 @@ let
         kind = "nixfied-command-runtime-plan";
         version = 1;
         allowUnknownArgs = validated.allowUnknownArgs or false;
-        args = map (
-          argSpec:
-          {
-            inherit
-              (argSpec)
-              name
-              kind
-              type
-              long
-              short
-              required
-              values
-              min
-              max
-              ;
-          }
-        ) normalizedArgs;
+        args = map (argSpec: {
+          inherit (argSpec)
+            name
+            kind
+            type
+            long
+            short
+            required
+            values
+            min
+            max
+            ;
+        }) normalizedArgs;
         env = map (
           envSpec:
           {
-            inherit
-              (envSpec)
+            inherit (envSpec)
               name
               type
               required

@@ -386,28 +386,27 @@ let
     hooks = { };
   };
 
-      serviceApiCatalogEntries =
-        let
-          requestedServiceNames = builtins.map (entry: entry.name) serviceEntries;
-          compiledServiceApis =
-            if serviceSurfaceCatalog == null then
-              { }
-            else
-              serviceSurfaceCatalog.serviceApis or { };
-          missingServiceApis = builtins.filter (name: !(builtins.hasAttr name compiledServiceApis)) requestedServiceNames;
-          serviceEntriesFromCatalog = builtins.listToAttrs (
-            map (serviceName: {
-              name = serviceName;
-              value = compiledServiceApis.${serviceName};
-            }) requestedServiceNames
-          );
-        in
-        if serviceSurfaceCatalog == null || compiledServiceApis == { } then
-          null
-        else if missingServiceApis == [ ] then
-          serviceEntriesFromCatalog
-        else
-          throw "nixfied service runtime surfaces expected service APIs for all selected services in serviceSurfaceCatalog: ${builtins.concatStringsSep ", " missingServiceApis}";
+  serviceApiCatalogEntries =
+    let
+      requestedServiceNames = builtins.map (entry: entry.name) serviceEntries;
+      compiledServiceApis =
+        if serviceSurfaceCatalog == null then { } else serviceSurfaceCatalog.serviceApis or { };
+      missingServiceApis = builtins.filter (
+        name: !(builtins.hasAttr name compiledServiceApis)
+      ) requestedServiceNames;
+      serviceEntriesFromCatalog = builtins.listToAttrs (
+        map (serviceName: {
+          name = serviceName;
+          value = compiledServiceApis.${serviceName};
+        }) requestedServiceNames
+      );
+    in
+    if serviceSurfaceCatalog == null || compiledServiceApis == { } then
+      null
+    else if missingServiceApis == [ ] then
+      serviceEntriesFromCatalog
+    else
+      throw "nixfied service runtime surfaces expected service APIs for all selected services in serviceSurfaceCatalog: ${builtins.concatStringsSep ", " missingServiceApis}";
 
   serviceApis =
     if serviceApiCatalogEntries == null then

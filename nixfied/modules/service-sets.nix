@@ -92,7 +92,6 @@ let
     }
   );
 
-  declaredServiceSets = config.nixfied.serviceSets or { };
 in
 {
   options.nixfied.serviceSets = lib.mkOption {

@@ -29,7 +29,9 @@ assert pkgs.lib.hasInfix "nixfied-kernel run-record transition" orchestratorSour
 assert pkgs.lib.hasInfix "cat \"$run_file\"" orchestratorSource;
 assert (!pkgs.lib.hasInfix "jq -r --arg runId" orchestratorSource);
 assert (!pkgs.lib.hasInfix "\${pkgs.jq}/bin/jq -cS" orchestratorSource);
-assert (!pkgs.lib.hasInfix "while IFS=$'\\t' read -r seq ts_epoch ts event_run_id" orchestratorSource);
+assert (
+  !pkgs.lib.hasInfix "while IFS=$'\\t' read -r seq ts_epoch ts event_run_id" orchestratorSource
+);
 assert pkgs.lib.hasInfix "registry_events_index_snapshot" controlSource;
 assert pkgs.lib.hasInfix "nixfied-kernel registry terminal" controlSource;
 assert (!pkgs.lib.hasInfix "jq -r --arg runId" controlSource);

@@ -77,14 +77,12 @@ let
     };
   healthPlanBody = renderPlanBody "health" healthPlan;
   readyPlanBody = renderPlanBody "ready" readyPlan;
-  renderQuietProbeStep =
-    mode: step:
-    ''
-      {
-        service_source=${pkgs.lib.escapeShellArg serviceSource}
-        ${renderProbeStep mode step}
-      } >/dev/null 2>&1
-    '';
+  renderQuietProbeStep = mode: step: ''
+    {
+      service_source=${pkgs.lib.escapeShellArg serviceSource}
+      ${renderProbeStep mode step}
+    } >/dev/null 2>&1
+  '';
   startupPgIsReadyCommand = renderQuietProbeStep "health" {
     kind = "postgres-pg-isready";
     endpoint = "primary";

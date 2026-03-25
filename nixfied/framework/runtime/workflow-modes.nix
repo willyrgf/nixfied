@@ -728,17 +728,6 @@ in
       esac
     }
 
-    workflow_lock_policy() {
-      local workflow_id="$1"
-      case "$workflow_id" in
-  ${renderCaseReturn (entry: entry.value.lockPolicy) workflowCases}
-        *)
-          printf '%s' "exclusive"
-          return 0
-          ;;
-      esac
-    }
-
     workflow_write_summary() {
       local workflow_id="$1"
       case "$workflow_id" in

@@ -26,9 +26,7 @@ let
   workflowIds = builtins.sort builtins.lessThan (builtins.attrNames workflows);
   serviceSetIds = builtins.sort builtins.lessThan (builtins.attrNames serviceSets);
 
-  normalizeUsage =
-    appId: values:
-    if values != [ ] then values else [ "nix run .#${appId}" ];
+  normalizeUsage = appId: values: if values != [ ] then values else [ "nix run .#${appId}" ];
 
   normalizeExamples = values: if values == [ ] then [ ] else values;
   normalizeOwnerFile = value: if value == null || value == "" then null else value;
@@ -122,7 +120,9 @@ let
 
   defaultServiceSetAliases =
     let
-      defaultServiceSets = builtins.filter (serviceSetId: (serviceSets.${serviceSetId}.name or "") == "default") serviceSetIds;
+      defaultServiceSets = builtins.filter (
+        serviceSetId: (serviceSets.${serviceSetId}.name or "") == "default"
+      ) serviceSetIds;
     in
     if defaultServiceSets == [ ] then
       [ ]
@@ -192,7 +192,10 @@ let
     ++ (builtins.filter (app: app != null) (map normalizeWorkflowLauncher workflowIds))
     ++ serviceOperationApps
     ++ (builtins.concatLists (
-      map (serviceSetId: map (operation: normalizeServiceSetLauncher serviceSetId operation) serviceSetOperationNames) serviceSetIds
+      map (
+        serviceSetId:
+        map (operation: normalizeServiceSetLauncher serviceSetId operation) serviceSetOperationNames
+      ) serviceSetIds
     ))
     ++ defaultServiceSetAliases;
 

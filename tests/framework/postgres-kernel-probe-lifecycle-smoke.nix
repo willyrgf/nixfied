@@ -25,7 +25,8 @@ let
       getSlotInfo = slotInfo;
       getSlotInfoJson = slotInfoJson;
       getServiceDir = name: "\${SERVICE_ROOT}/${name}";
-      portVarName = key: if key == "postgres" then "POSTGRES_PORT" else throw "unsupported port key ${key}";
+      portVarName =
+        key: if key == "postgres" then "POSTGRES_PORT" else throw "unsupported port key ${key}";
     };
 
   postgresProject = {

@@ -16,9 +16,9 @@ let
       logPathExpr ? ''"$SERVICE_LOG_FILE"'',
     }:
     ''
-      emit_service_event service_stopped${
-        lib.optionalString (pidExpr != null) " --pid ${pidExpr}"
-      }${lib.optionalString (logPathExpr != null) " --log-path ${logPathExpr}"}
+      emit_service_event service_stopped${lib.optionalString (pidExpr != null) " --pid ${pidExpr}"}${
+        lib.optionalString (logPathExpr != null) " --log-path ${logPathExpr}"
+      }
       log_${level} "${serviceName} ${message}"
     '';
 
