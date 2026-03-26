@@ -8,6 +8,62 @@ This RFC explains why the kernel rewrite improved semantic ownership but did not
 
 This document is about deleting generic framework code, not reorganizing it.
 
+## Hard Constraints
+
+These constraints are part of the refactor and are not optional.
+
+1. Forward-only break change.
+
+- do not preserve backward compatibility for replaced internal seams
+- do not add compatibility shims, compatibility flags, dual-write paths, or old/new adapters
+- when a new layer boundary lands, remove the replaced boundary rather than carrying both
+
+2. Commits are the unit of rollout.
+
+- do the refactor as a sequence of small reviewable commits
+- each commit should remove a real layer seam, not just prepare for a later cleanup
+- every commit should leave the repository in a working and testable state
+
+3. Full cutoff, full cleanup.
+
+- all break changes needed for simplification are available within the internal architecture
+- obsolete runtime transports, helper APIs, manifest forms, and control paths should be deleted, not deprecated
+- cleanup is part of each commit, not a later backlog item
+
+## Refactor Policy
+
+### What May Break
+
+- internal runtime transports
+- internal manifest shapes
+- internal shell helper APIs
+- framework-owned machine JSON shapes
+- kernel subcommand structure
+- executor and orchestrator internal seams
+
+### What Must Not Regress
+
+- framework behavior as a user-facing system
+- determinism
+- service selection and isolation
+- run lifecycle and stop controls
+- registry and summary behavior
+- public flake app availability through `nix run .#<cmd>` unless a separate RFC explicitly chooses otherwise
+
+### No-Compatibility Rule
+
+When a new runtime seam lands:
+
+- remove the old seam in the same commit if practical
+- otherwise make the next commit its deletion, not a future cleanup item
+
+The refactor should not spend time on:
+
+- shims between old and new manifests
+- old and new workflow driver protocols living together
+- compatibility wrappers around export transport
+- temporary shell APIs kept alive "just in case"
+
 ## Summary
 
 The kernel rewrite was correct.
@@ -29,6 +85,7 @@ The next move should be a layers refactor:
 - keep Nix as compile-time authority
 - keep shell only as a thin adapter at the edges
 - promote the kernel from semantic helper to runtime execution authority
+- define service APIs and boundaries strongly enough that service implementations could move to separate repositories without dragging generic framework internals with them
 - delete generated shell metadata APIs, stepwise kernel RPC loops, and temp-file export transport where possible
 
 ## Problem Statement
@@ -57,6 +114,11 @@ The problem is that runtime behavior is still spread across:
 - dispatcher, orchestrator, and executor shell layers
 - helper libraries that expose framework metadata through shell functions
 - a kernel CLI that is called repeatedly for small semantic steps
+
+There is a related boundary problem as well:
+
+- service integrations are not yet tested primarily by whether they could stand behind a small public API and move out of the repository cleanly
+- framework and service concerns are still close enough that some coupling is hidden by co-location rather than prevented by design
 
 That composition keeps the codebase large even after semantic migration to Rust.
 
@@ -206,6 +268,33 @@ The result is not just "a lot of code".
 
 It is a lot of repeated framework control surface.
 
+### 6. Service boundaries are not yet a hard architectural test
+
+Another useful way to frame the problem is:
+
+- if a service integration could not be moved into its own repository behind a small public contract
+- then the framework and service are still coupled too deeply
+
+That does not mean every service should immediately become a separate repository.
+
+It means extractability should be used as a design test.
+
+If the framework needs to know too much about:
+
+- service config internals
+- service lifecycle internals
+- service-specific runtime env structure
+- service-specific helper implementation details
+
+then the generic runtime is still carrying service coupling that should instead be hidden behind a service API.
+
+This matters for the layers refactor because unclear service boundaries force more framework-owned glue:
+
+- more generated runtime metadata
+- more helper libraries
+- more service-aware branching in generic runtime code
+- more difficulty collapsing dispatcher, orchestrator, executor, and kernel responsibilities cleanly
+
 ## Decision
 
 The framework should refactor around a single runtime execution authority.
@@ -219,6 +308,12 @@ The target architecture is:
 This implies a deliberate collapse of generic runtime layers.
 
 The framework should stop treating Bash as a host for framework metadata APIs and state-machine driving logic.
+
+It should also treat service extractability as a boundary check:
+
+- a service integration should present a small public surface to the framework
+- the framework should depend on that surface, not on service implementation layout
+- a future service repository split should be mechanically difficult only in packaging and release terms, not because framework internals are entangled with service code
 
 ## Target Architecture
 
@@ -236,6 +331,8 @@ Nix should continue to own:
 But Nix should emit fewer runtime artifacts with broader scope.
 
 Instead of many narrow runtime files and shell case tables, it should prefer one compiled runtime manifest per selected surface, or a very small number of stable manifests.
+
+Nix should also compile against explicit service descriptors rather than broad service implementation knowledge wherever possible.
 
 ### Layer 2: Kernel Runtime Authority
 
@@ -273,6 +370,7 @@ Shell should not own:
 - semantic JSON transport
 - framework run-record or registry mutation logic
 - framework selection logic already known at compile time
+- service-specific framework knowledge that belongs behind a service API
 
 ## Core Refactor Principles
 
@@ -349,6 +447,21 @@ The user-facing contract should stay stable:
 
 But internally, dispatcher, orchestrator, and executor should be allowed to collapse into much thinner layers or even into naming wrappers over a smaller runtime core.
 
+### 6. Use service extractability as a boundary test
+
+For each service integration, ask:
+
+- what is the public configuration contract
+- what is the public lifecycle contract
+- what generated operation surface does the framework consume
+- what implementation details remain private to the service package
+
+If those answers are unclear, the framework is still carrying service coupling that will obstruct layer collapse.
+
+The goal is not "split every service now".
+
+The goal is "make every service split-ready by API shape".
+
 ## Proposed End State
 
 The desired conceptual pipeline is:
@@ -371,79 +484,177 @@ Not:
 
 The exact number of binaries is less important than the number of framework-owned control layers.
 
-## Migration Strategy
+## Commit-Based Rollout
 
-This refactor should be staged.
+This refactor should be executed as a forward-only commit sequence.
 
-### Stage 1: Delete Shell Metadata APIs
+The sequence below is ordered to delete layer seams early and avoid building a second temporary architecture.
+
+### Commit 1: Introduce A Single Runtime Manifest Family
+
+Suggested commit message:
+
+- `replace shell metadata tables with runtime manifest`
 
 Goal:
 
-- remove `workflow-modes.nix` as a large generated shell query surface
+- remove generated shell metadata tables as the primary runtime API
 
 Actions:
 
-- introduce a runtime manifest with task, workflow, hook, and service-selection data
-- update runtime code to consume that manifest instead of shell case tables
-- preserve user-facing behavior
+- introduce an explicit runtime manifest family for task, workflow, hook, service-selection, and contract metadata
+- update runtime consumers to read the manifest rather than generated shell case tables
+- delete replaced query surfaces instead of dual-serving both forms
+
+Commit must remove:
+
+- shell metadata APIs that are superseded by the manifest
+- compatibility loaders between case-table output and manifest input
 
 Expected result:
 
-- a large reduction in generated shell helper logic
-- simpler executor and launcher paths
+- major reduction in `workflow-modes.nix`
+- fewer shell helper entrypoints
+- clearer separation between compile-time data and runtime execution
 
-### Stage 2: Delete Stepwise Workflow RPC
+### Commit 2: Cut Over Workflow Driving To Coarse-Grained Kernel Execution
+
+Suggested commit message:
+
+- `move workflow driving into kernel runtime`
 
 Goal:
 
-- remove shell-owned serial and parallel scheduler loops
+- delete shell-owned workflow scheduler loops
 
 Actions:
 
-- move scheduler driving into the kernel runtime
-- replace `serial-init/next/transition` and `parallel-init/next/transition` with coarse-grained operations
-- reduce state temp-file handoff
+- replace stepwise `serial-init/next/transition` and `parallel-init/next/transition` protocols with coarse-grained kernel runtime operations
+- move scheduler driving and transition ownership behind the kernel runtime boundary
+- remove temp state handoff that exists only for shell-driven scheduling
+
+Commit must remove:
+
+- executor loops that drive workflow scheduling one state transition at a time
+- obsolete workflow state temp-file machinery
+- old workflow RPC subcommands if no longer needed
 
 Expected result:
 
 - major shrink in `executor.nix`
-- fewer process crossings
-- less duplicated serial and parallel orchestration code
+- fewer process crossings per workflow run
+- serial and parallel orchestration logic owned in one place
 
-### Stage 3: Delete Export File Transport
+### Commit 3: Delete Export File Transport
+
+Suggested commit message:
+
+- `replace kernel export files with direct transport`
 
 Goal:
 
-- stop using framework temp export files as the default kernel-to-shell transport
+- remove temp export files as the default framework runtime boundary
 
 Actions:
 
-- switch validation and policy exports to stdout or JSON transport
-- keep shell quoting rules strict and deterministic
+- cut validation and policy exports over to stdout or structured JSON transport
+- update shell adapters to consume the new transport directly
+- keep quoting and deterministic behavior explicit
+
+Commit must remove:
+
+- default temp export-file transport in framework-owned validation and policy paths
+- helper cleanup code that exists only for export temp files
+- compatibility wrappers for old export loading
 
 Expected result:
 
-- less cleanup code
 - fewer `mktemp` sites
-- smaller shell helper layer
+- less shell cleanup code
+- narrower kernel-to-shell boundary
 
-### Stage 4: Collapse Dispatcher, Orchestrator, And Executor Responsibilities
+### Commit 4: Collapse Dispatcher, Orchestrator, And Executor Internals
+
+Suggested commit message:
+
+- `collapse runtime control layers`
 
 Goal:
 
-- keep public surfaces, shrink internal framework layers
+- delete generic shell control layers that no longer justify their existence
 
 Actions:
 
-- identify which orchestration responsibilities truly need separate shell layers
-- move framework-owned run lifecycle logic behind a smaller runtime authority
-- leave shell only where it is the practical leaf tool
+- move remaining framework-owned run lifecycle logic behind a smaller runtime authority
+- keep public command surfaces, but allow internal dispatcher, orchestrator, and executor roles to collapse
+- leave shell only at the practical process edges
+
+Commit must remove:
+
+- internal layer splits that survive only for historical reasons
+- helper glue that exists only to shuttle framework control between shell layers
+- obsolete manifest or transport seams retained from older runtime splits
 
 Expected result:
 
 - smaller generic runtime footprint
-- clearer ownership
-- fewer framework cross-layer seams to test and guard
+- clearer ownership of process control versus framework semantics
+- fewer internal seams to freeze in tests
+
+### Commit 5: Harden Service Public APIs And Extractable Boundaries
+
+Suggested commit message:
+
+- `separate service contracts from service internals`
+
+Goal:
+
+- make service integrations split-ready by API shape
+
+Actions:
+
+- define the minimal public contract the framework consumes for each service integration
+- separate service descriptors and generated operation surfaces from service implementation layout
+- remove framework dependencies on service-internal helpers and structure where possible
+- verify that services could move to separate repositories without redesigning the generic runtime
+
+Commit must remove:
+
+- generic runtime dependencies on service-internal layout
+- hidden coupling preserved only by repository co-location
+- framework knowledge that belongs behind service APIs
+
+Expected result:
+
+- clearer framework versus service ownership
+- less hidden coupling by co-location
+- easier future repository splits or independent service packaging
+
+### Commit 6: Add Regression Guards For Layer Collapse
+
+Suggested commit message:
+
+- `add guards for collapsed runtime seams`
+
+Goal:
+
+- freeze the new architecture after the old seams are gone
+
+Actions:
+
+- add targeted guards for deleted shell metadata APIs
+- add guards against stepwise shell-driven workflow scheduling
+- add guards against temp export-file transport reappearing as the default
+- add guards against generic runtime code depending on service-internal layout
+
+Commit must remove:
+
+- any remaining test expectations that assume deleted seams still exist
+
+Expected result:
+
+- the repository protects the new layer model rather than the old one
+- future changes are pushed toward the simplified architecture
 
 ## What This RFC Is Not
 
@@ -468,10 +679,12 @@ The refactor should be considered successful only if it deletes major generic ru
 
 Minimum success criteria:
 
+- no backward compatibility shims remain for replaced runtime seams
 - framework-owned task and workflow metadata is no longer exposed primarily as generated shell function tables
 - executor no longer drives workflow scheduling through repeated `init/next/transition` kernel calls
 - framework-owned validation and policy export paths no longer depend on temp export files by default
 - generic runtime code materially shrinks rather than being redistributed across new files
+- service integrations expose clearer public APIs and require less framework knowledge of their internal layout
 - public command availability through `nix run .#<cmd>` remains stable
 - service selection, isolation, registry, summary, and stop-control behavior remain intact
 
@@ -491,6 +704,7 @@ Examples:
 - a guard that fails if framework metadata query APIs reappear as large generated shell case tables
 - a guard that fails if workflow scheduling reverts to stepwise shell-driven kernel RPC
 - a guard that fails if temp export file transport becomes the default framework runtime boundary again
+- a guard that fails if generic runtime code starts depending on service-internal implementation layout rather than declared service surfaces
 
 These should be added as the refactor lands, not before.
 
