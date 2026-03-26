@@ -135,17 +135,21 @@ let
 
         start_ts="$(${pkgs.coreutils}/bin/date +%s)"
         attempt=0
+        last_probe_output=""
 
         while true; do
           attempt=$((attempt + 1))
 
           set +e
-          ( run_probe_once ) >/dev/null 2>&1
+          probe_output="$( ( run_probe_once ) 2>&1 )"
           probe_rc=$?
           set -e
+          last_probe_output="$probe_output"
 
           if [ "$probe_rc" -eq 0 ]; then
-            ( run_probe_once )
+            if [ -n "$probe_output" ]; then
+              printf '%s\n' "$probe_output"
+            fi
             ${successBody}
             exit 0
           fi
@@ -154,9 +158,9 @@ let
 
           now_ts="$(${pkgs.coreutils}/bin/date +%s)"
           if [ $((now_ts - start_ts)) -ge "$plan_probe_timeout_secs" ]; then
-            set +e
-            ( run_probe_once )
-            set -e
+            if [ -n "$last_probe_output" ]; then
+              printf '%s\n' "$last_probe_output"
+            fi
             log_error "${timeoutMessage}"
             exit 1
           fi

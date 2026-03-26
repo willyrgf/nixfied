@@ -190,7 +190,18 @@ let
             portExprForEndpoint
             ;
         }}
-        ${kernelPackage}/bin/nixfied-kernel probe evaluate ${lib.escapeShellArg (toString planFile)}
+        (
+          probe_output=""
+          probe_rc=0
+          set +e
+          probe_output="$(${kernelPackage}/bin/nixfied-kernel probe evaluate ${lib.escapeShellArg (toString planFile)} 2>&1)"
+          probe_rc="$?"
+          set -e
+          if [ -n "$probe_output" ]; then
+            printf '%s\n' "$probe_output"
+          fi
+          exit "$probe_rc"
+        )
       '';
 in
 {

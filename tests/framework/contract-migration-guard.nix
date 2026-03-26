@@ -18,9 +18,9 @@ let
   buildCheckSources = [
     ../../tests/framework/default.nix
   ];
-  kernelRustSources = builtins.filter (
-    path: lib.hasSuffix ".rs" (toString path)
-  ) (lib.filesystem.listFilesRecursive ../../nixfied/framework/runtime/kernel/src);
+  kernelRustSources = builtins.filter (path: lib.hasSuffix ".rs" (toString path)) (
+    lib.filesystem.listFilesRecursive ../../nixfied/framework/runtime/kernel/src
+  );
   kernelSource = lib.concatStringsSep "\n" (map builtins.readFile kernelRustSources);
   readyHeliosSyncGateSource = builtins.readFile ../../tests/framework/ready-helios-sync-gate-smoke.nix;
   jqMarkerLines =

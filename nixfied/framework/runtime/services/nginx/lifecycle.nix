@@ -117,6 +117,7 @@ let
       runtimePrelude
       ;
     initBody = ''
+      mkdir -p "$NGINX_DIR/conf"
       mkdir -p "$SERVICE_DIR/conf/sites-available"
       mkdir -p "$SERVICE_DIR/conf/sites-enabled"
       mkdir -p "$SERVICE_DIR/ssl/live/localhost"
