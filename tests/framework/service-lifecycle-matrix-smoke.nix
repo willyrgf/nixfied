@@ -547,8 +547,153 @@ pkgs.runCommand "service-lifecycle-matrix-smoke" { } ''
     return 1
   }
 
+  extract_status_pid() {
+    local status_file="$1"
+    ${pkgs.gnused}/bin/sed -n 's/.* pid=\([^ ]*\).*/\1/p' "$status_file" | ${pkgs.coreutils}/bin/head -n 1
+  }
+
+  require_background_running() {
+    local label="$1"
+    local pid="$2"
+    local log_file="$3"
+    local rc=0
+
+    if [ -z "$pid" ]; then
+      fail "$label pid is missing"
+    fi
+
+    if kill -0 "$pid" 2>/dev/null; then
+      return 0
+    fi
+
+    set +e
+    wait "$pid" >/dev/null 2>&1
+    rc="$?"
+    set -e
+
+    if [ -f "$log_file" ]; then
+      echo "--- $log_file" >&2
+      cat "$log_file" >&2
+    fi
+
+    if [ "$rc" -ne 0 ]; then
+      fail "$label exited early rc=$rc"
+    fi
+
+    fail "$label exited before stop"
+  }
+
+  wait_for_status_pid_change() {
+    local label="$1"
+    local status_cmd="$2"
+    local status_log="$3"
+    local previous_pid="$4"
+    local wrapper_pid="$5"
+    local wrapper_log="$6"
+    local attempts="''${7:-80}"
+    local interval="''${8:-0.25}"
+    local rc=0
+    local current_pid=""
+
+    if [ -z "$previous_pid" ] || [ "$previous_pid" = "unknown" ]; then
+      fail "$label previous pid is missing"
+    fi
+
+    for _ in $(seq 1 "$attempts"); do
+      set +e
+      "$status_cmd" > "$status_log" 2>&1
+      rc="$?"
+      set -e
+
+      if [ "$rc" -eq 0 ] && ${pkgs.gnugrep}/bin/grep -Fq "running=true" "$status_log"; then
+        current_pid="$(extract_status_pid "$status_log")"
+        if [ -n "$current_pid" ] && [ "$current_pid" != "unknown" ] && [ "$current_pid" != "$previous_pid" ]; then
+          return 0
+        fi
+      fi
+
+      if ! kill -0 "$wrapper_pid" 2>/dev/null; then
+        set +e
+        wait "$wrapper_pid" >/dev/null 2>&1
+        rc="$?"
+        set -e
+
+        if [ -f "$wrapper_log" ]; then
+          echo "--- $wrapper_log" >&2
+          cat "$wrapper_log" >&2
+        fi
+
+        if [ "$rc" -ne 0 ]; then
+          fail "$label exited early rc=$rc"
+        fi
+
+        fail "$label exited before pid changed"
+      fi
+
+      sleep "$interval"
+    done
+
+    if [ -f "$status_log" ]; then
+      echo "--- $status_log" >&2
+      cat "$status_log" >&2
+    fi
+
+    if [ -f "$wrapper_log" ]; then
+      echo "--- $wrapper_log" >&2
+      cat "$wrapper_log" >&2
+    fi
+
+    fail "$label did not replace pid"
+  }
+
+  wait_for_background_success() {
+    local label="$1"
+    local pid="$2"
+    local log_file="$3"
+    local rc=0
+
+    if [ -z "$pid" ]; then
+      fail "$label pid is missing"
+    fi
+
+    for _ in $(seq 1 40); do
+      if ! kill -0 "$pid" 2>/dev/null; then
+        set +e
+        wait "$pid" >/dev/null 2>&1
+        rc="$?"
+        set -e
+
+        if [ "$rc" -eq 0 ]; then
+          return 0
+        fi
+
+        if [ -f "$log_file" ]; then
+          echo "--- $log_file" >&2
+          cat "$log_file" >&2
+        fi
+
+        fail "$label exited early rc=$rc"
+      fi
+      sleep 0.25
+    done
+
+    if [ -f "$log_file" ]; then
+      echo "--- $log_file" >&2
+      cat "$log_file" >&2
+    fi
+
+    set +e
+    kill "$pid" >/dev/null 2>&1 || true
+    wait "$pid" >/dev/null 2>&1 || true
+    set -e
+
+    fail "$label did not exit after readiness"
+  }
+
   wait_for_background_exit() {
-    local pid="$1"
+    local label="$1"
+    local pid="$2"
+    local log_file="$3"
     if [ -n "$pid" ]; then
       for _ in $(seq 1 40); do
         if ! kill -0 "$pid" 2>/dev/null; then
@@ -560,10 +705,17 @@ pkgs.runCommand "service-lifecycle-matrix-smoke" { } ''
         sleep 0.25
       done
 
+      if [ -f "$log_file" ]; then
+        echo "--- $log_file" >&2
+        cat "$log_file" >&2
+      fi
+
       set +e
       kill "$pid" >/dev/null 2>&1 || true
       wait "$pid" >/dev/null 2>&1 || true
       set -e
+
+      fail "$label did not exit after stop"
     fi
   }
 
@@ -614,6 +766,8 @@ pkgs.runCommand "service-lifecycle-matrix-smoke" { } ''
     local ready_bin="$7"
     local restart_bin="$8"
     local stop_bin="$9"
+    local run_ready_checks="''${10:-1}"
+    local expect_long_lived_wrappers="''${11:-1}"
 
     SERVICE_ROOT="$TMPDIR/$service_name-root"
     RUN_DIR="$TMPDIR/$service_name-run"
@@ -643,8 +797,10 @@ pkgs.runCommand "service-lifecycle-matrix-smoke" { } ''
       dump_service_debug "$service_name" "start"
       exit 1
     fi
-    echo "INFO: lifecycle-smoke service=$service_name phase=ready-after-start" >&2
-    wait_for_success "$service_name ready after start" "$ready_bin" "$TMPDIR/$service_name-ready.out"
+    if [ "$run_ready_checks" = "1" ]; then
+      echo "INFO: lifecycle-smoke service=$service_name phase=ready-after-start" >&2
+      wait_for_success "$service_name ready after start" "$ready_bin" "$TMPDIR/$service_name-ready.out"
+    fi
     echo "INFO: lifecycle-smoke service=$service_name phase=status-after-start" >&2
     "$status_bin" > "$TMPDIR/$service_name-status.out" 2>&1 || {
       cat "$TMPDIR/$service_name-status.out" >&2
@@ -652,6 +808,19 @@ pkgs.runCommand "service-lifecycle-matrix-smoke" { } ''
     }
     require_contains "$TMPDIR/$service_name-status.out" "service=$service_name"
     require_contains "$TMPDIR/$service_name-status.out" "running=true"
+    START_STATUS_PID="$(extract_status_pid "$TMPDIR/$service_name-status.out")"
+    if [ "$expect_long_lived_wrappers" = "1" ]; then
+      require_background_running \
+        "$service_name start wrapper" \
+        "$START_WRAPPER_PID" \
+        "$TMPDIR/$service_name-start.out"
+    else
+      wait_for_background_success \
+        "$service_name start wrapper" \
+        "$START_WRAPPER_PID" \
+        "$TMPDIR/$service_name-start.out"
+      START_WRAPPER_PID=""
+    fi
 
     echo "INFO: lifecycle-smoke service=$service_name phase=restart" >&2
     "$restart_bin" > "$TMPDIR/$service_name-restart.out" 2>&1 &
@@ -659,10 +828,31 @@ pkgs.runCommand "service-lifecycle-matrix-smoke" { } ''
 
     echo "INFO: lifecycle-smoke service=$service_name phase=health-after-restart" >&2
     wait_for_success "$service_name health after restart" "$health_bin" "$TMPDIR/$service_name-health-restart.out"
-    echo "INFO: lifecycle-smoke service=$service_name phase=ready-after-restart" >&2
-    wait_for_success "$service_name ready after restart" "$ready_bin" "$TMPDIR/$service_name-ready-restart.out"
-    wait_for_background_exit "$RESTART_WRAPPER_PID"
-    RESTART_WRAPPER_PID=""
+    if [ "$run_ready_checks" = "1" ]; then
+      echo "INFO: lifecycle-smoke service=$service_name phase=ready-after-restart" >&2
+      wait_for_success "$service_name ready after restart" "$ready_bin" "$TMPDIR/$service_name-ready-restart.out"
+    fi
+    if [ "$expect_long_lived_wrappers" = "1" ]; then
+      wait_for_status_pid_change \
+        "$service_name restart wrapper" \
+        "$status_bin" \
+        "$TMPDIR/$service_name-status-restart.out" \
+        "$START_STATUS_PID" \
+        "$RESTART_WRAPPER_PID" \
+        "$TMPDIR/$service_name-restart.out"
+      require_background_running \
+        "$service_name restart wrapper" \
+        "$RESTART_WRAPPER_PID" \
+        "$TMPDIR/$service_name-restart.out"
+    else
+      # PostgreSQL restart is a one-shot wrapper; let it finish before stop so
+      # we do not race a fresh start against the explicit stop below.
+      wait_for_background_success \
+        "$service_name restart wrapper" \
+        "$RESTART_WRAPPER_PID" \
+        "$TMPDIR/$service_name-restart.out"
+      RESTART_WRAPPER_PID=""
+    fi
 
     echo "INFO: lifecycle-smoke service=$service_name phase=stop" >&2
     "$stop_bin" > "$TMPDIR/$service_name-stop.out" 2>&1 || {
@@ -671,12 +861,16 @@ pkgs.runCommand "service-lifecycle-matrix-smoke" { } ''
     }
 
     echo "INFO: lifecycle-smoke service=$service_name phase=wait-background-exit" >&2
-    wait_for_background_exit "$START_WRAPPER_PID"
-    wait_for_background_exit "$RESTART_WRAPPER_PID"
+    wait_for_background_exit "$service_name start wrapper" "$START_WRAPPER_PID" "$TMPDIR/$service_name-start.out"
+    wait_for_background_exit "$service_name restart wrapper" "$RESTART_WRAPPER_PID" "$TMPDIR/$service_name-restart.out"
+    START_WRAPPER_PID=""
+    RESTART_WRAPPER_PID=""
 
     echo "INFO: lifecycle-smoke service=$service_name phase=post-stop-verification" >&2
     wait_for_failure "$service_name health after stop" "$health_bin" "$TMPDIR/$service_name-health-stopped.out"
-    wait_for_failure "$service_name ready after stop" "$ready_bin" "$TMPDIR/$service_name-ready-stopped.out"
+    if [ "$run_ready_checks" = "1" ]; then
+      wait_for_failure "$service_name ready after stop" "$ready_bin" "$TMPDIR/$service_name-ready-stopped.out"
+    fi
     wait_for_failure "$service_name status after stop" "$status_bin" "$TMPDIR/$service_name-status-stopped.out"
     require_contains "$TMPDIR/$service_name-status-stopped.out" "running=false"
     echo "INFO: lifecycle-smoke service=$service_name phase=done" >&2
@@ -767,6 +961,16 @@ pkgs.runCommand "service-lifecycle-matrix-smoke" { } ''
       "${postgresService.health}" \
       "${postgresService.ready}" \
       "${postgresService.restart}" \
+      "${postgresService.stop}" \
+      0 \
+      0
+    run_full_start_case \
+      postgres \
+      full-start \
+      "${postgresService.fullStart}" \
+      "${postgresService.status}" \
+      "${postgresService.health}" \
+      "${postgresService.ready}" \
       "${postgresService.stop}"
   fi
 
