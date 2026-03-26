@@ -335,7 +335,7 @@ assert (!pkgs.lib.hasInfix "stopStoppedBody =" nginxLifecycleSource);
 assert (!pkgs.lib.hasInfix "stopForceKilledBody =" nginxLifecycleSource);
 assert pkgs.lib.hasInfix "startAlreadyRunningBody = managedServiceLifecycle.mkReadyOutcomeBody {"
   minioSource;
-assert pkgs.lib.hasInfix "startPostLaunchBody = managedServiceLifecycle.mkReadyOutcomeBody {"
+assert pkgs.lib.hasInfix "startPostLaunchBody = managedServiceLifecycle.mkStartupReadinessBody {"
   minioSource;
 assert pkgs.lib.hasInfix "startExitFailureBody = managedServiceLifecycle.mkProcessExitFailureBody {"
   minioSource;
