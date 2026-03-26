@@ -366,7 +366,12 @@ let
               kill "$CHILD_PID" 2>/dev/null || true
               wait "$CHILD_PID" 2>/dev/null || true
             fi
-            rm -f "$SERVICE_PID_FILE"
+            if [ -f "$SERVICE_PID_FILE" ]; then
+              CURRENT_PID=$(cat "$SERVICE_PID_FILE" 2>/dev/null || true)
+              if [ "$CURRENT_PID" = "''${CHILD_PID:-}" ]; then
+                rm -f "$SERVICE_PID_FILE"
+              fi
+            fi
           }
 
           trap cleanup EXIT INT TERM
