@@ -1,12 +1,27 @@
 use serde_json::{json, Map, Number, Value as JsonValue};
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
-use std::fs::{self, OpenOptions};
-use std::io::{self, Read, Write};
+use std::fs;
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::Path;
 use std::process::{self, Command, Stdio};
 use std::time::Duration;
+
+mod event;
+mod io_util;
+mod json_util;
+mod parse_util;
+mod policy;
+mod run_id;
+mod validation;
+mod workflow;
+
+use io_util::*;
+use json_util::*;
+use parse_util::*;
+use validation::validate_json_value_against_contract;
+use workflow::load_workflow_summary_plan;
+use workflow::WorkflowUnitStateCommon;
 
 fn main() {
     if let Err(err) = run() {
@@ -22,7 +37,7 @@ const SUB_COMMANDS: &[(&str, fn(&str, &[String]) -> Result<(), String>)] = &[
     ("service-policy", service_policy_command),
     ("run-record", run_record_command),
     ("task", task_command),
-    ("workflow", workflow_command),
+    ("workflow", workflow::workflow_command),
     ("registry", registry_command),
     ("summary", summary_command),
     ("adapter", adapter_command),
@@ -297,6 +312,82 @@ struct WorkflowParallelUnitState {
     produces_json: String,
 }
 
+impl WorkflowUnitStateCommon for WorkflowSerialUnitState {
+    fn state(&self) -> &str {
+        &self.state
+    }
+
+    fn set_state(&mut self, value: &str) {
+        self.state = value.to_string();
+    }
+
+    fn set_cancel_reason(&mut self, value: &str) {
+        self.cancel_reason = value.to_string();
+    }
+
+    fn set_cancel_extra_key(&mut self, value: &str) {
+        self.cancel_extra_key = value.to_string();
+    }
+
+    fn set_cancel_extra_value(&mut self, value: &str) {
+        self.cancel_extra_value = value.to_string();
+    }
+
+    fn dependents(&self) -> &[String] {
+        &self.dependents
+    }
+
+    fn needs_left(&self) -> i64 {
+        self.needs_left
+    }
+
+    fn set_needs_left(&mut self, value: i64) {
+        self.needs_left = value;
+    }
+
+    fn task_id(&self) -> &str {
+        &self.task_id
+    }
+}
+
+impl WorkflowUnitStateCommon for WorkflowParallelUnitState {
+    fn state(&self) -> &str {
+        &self.state
+    }
+
+    fn set_state(&mut self, value: &str) {
+        self.state = value.to_string();
+    }
+
+    fn set_cancel_reason(&mut self, value: &str) {
+        self.cancel_reason = value.to_string();
+    }
+
+    fn set_cancel_extra_key(&mut self, value: &str) {
+        self.cancel_extra_key = value.to_string();
+    }
+
+    fn set_cancel_extra_value(&mut self, value: &str) {
+        self.cancel_extra_value = value.to_string();
+    }
+
+    fn dependents(&self) -> &[String] {
+        &self.dependents
+    }
+
+    fn needs_left(&self) -> i64 {
+        self.needs_left
+    }
+
+    fn set_needs_left(&mut self, value: i64) {
+        self.needs_left = value;
+    }
+
+    fn task_id(&self) -> &str {
+        &self.task_id
+    }
+}
+
 #[derive(Clone)]
 struct WorkflowSummaryPlan {
     task_runner_types: BTreeMap<String, String>,
@@ -342,1155 +433,31 @@ fn validate_input_command(
     export_path: &str,
     remaining: &[String],
 ) -> Result<(), String> {
-    let plan = load_command_runtime_plan(plan_path)?;
-    let exports = match mode {
-        "env" => validate_input_env(&plan)?,
-        "args" => {
-            let values = strip_passthrough_separator(remaining);
-            validate_input_args(&plan, values)?
-        }
-        other => {
-            return Err(format!(
-                "validate-input mode must be env or args (got {})",
-                other
-            ))
-        }
-    };
-
-    write_shell_exports(export_path, &exports)?;
-    println!("OK: validate-input mode={}", mode);
-    Ok(())
+    validation::validate_input_command(plan_path, mode, export_path, remaining)
 }
 
 fn validate_scalar_command(spec_path: &str, value: &str) -> Result<(), String> {
-    let spec = load_scalar_spec(spec_path)?;
-    validate_scalar_value(&spec, value, "scalar")?;
-    println!("OK: validate-scalar");
-    Ok(())
+    validation::validate_scalar_command(spec_path, value)
 }
 
 fn validate_exit_command(plan_path: &str, exit_code_text: &str) -> Result<(), String> {
-    let plan = load_command_runtime_plan(plan_path)?;
-    let exit_code = parse_i32_text(exit_code_text, "exit code")?;
-    if exit_code == 0 || plan.failure_codes.contains(&exit_code) {
-        println!("OK: validate-exit");
-        Ok(())
-    } else {
-        Err(format!("undeclared exit code code={}", exit_code))
-    }
+    validation::validate_exit_command(plan_path, exit_code_text)
 }
 
 fn run_id_command(subcommand: &str, values: &[String]) -> Result<(), String> {
-    match subcommand {
-        "envelope" => run_id_envelope_command(values),
-        other => Err(format!("unknown run-id subcommand: {}", other)),
-    }
-}
-
-fn run_id_envelope_command(values: &[String]) -> Result<(), String> {
-    if values.len() < 8 {
-        return Err(
-            "usage: nixfied-kernel run-id envelope <model-eval-hash> <runtime-hash> <run-kind> <workflow-id> <task-id> <slot> <env> <pass-through-env-file> [-- <args...>]"
-                .to_string(),
-        );
-    }
-
-    let pass_through_env =
-        parse_tab_separated_name_value_file(&values[7], "run-id pass-through env")?;
-    let pass_through_env_json: Map<String, JsonValue> = pass_through_env
-        .into_iter()
-        .map(|(key, value)| (key, JsonValue::String(value)))
-        .collect();
-    let argv: Vec<JsonValue> = strip_passthrough_separator(&values[8..])
-        .iter()
-        .map(|value| json!(value))
-        .collect();
-    let workflow_id = nullable_string_value(&values[3]);
-    let task_id = nullable_string_value(&values[4]);
-    let envelope = json!({
-        "model_eval_hash": values[0],
-        "runtime_hash": values[1],
-        "run_kind": values[2],
-        "workflow_id": workflow_id,
-        "task_id": task_id,
-        "slot": values[5],
-        "env": values[6],
-        "pass_through_env": pass_through_env_json,
-        "argv": argv,
-    });
-
-    println!("{}", render_json_compact(&envelope));
-    Ok(())
+    run_id::run_id_command(subcommand, values)
 }
 
 fn event_detail_command(subcommand: &str, values: &[String]) -> Result<(), String> {
-    match subcommand {
-        "render" => event_detail_render_command(values),
-        other => Err(format!("unknown event-detail subcommand: {}", other)),
-    }
+    event::event_detail_command(subcommand, values)
 }
 
 fn event_state_command(subcommand: &str, values: &[String]) -> Result<(), String> {
-    match subcommand {
-        "derive" => event_state_derive_command(values),
-        other => Err(format!("unknown event-state subcommand: {}", other)),
-    }
+    event::event_state_command(subcommand, values)
 }
 
 fn service_policy_command(subcommand: &str, values: &[String]) -> Result<(), String> {
-    match subcommand {
-        "runtime-event" => service_policy_runtime_event_command(values),
-        "start-service" => service_policy_start_service_command(values),
-        "fixture-keep-running" => service_policy_fixture_keep_running_command(values),
-        other => Err(format!("unknown service-policy subcommand: {}", other)),
-    }
-}
-
-fn event_state_derive_command(values: &[String]) -> Result<(), String> {
-    if values.len() != 1 {
-        return Err("usage: nixfied-kernel event-state derive <event-type>".to_string());
-    }
-
-    println!("{}", derived_registry_state_for_event_type(&values[0]));
-    Ok(())
-}
-
-fn derived_registry_state_for_event_type(event_type: &str) -> &'static str {
-    match event_type {
-        "slot_acquired" => "busy",
-        "slot_released" => "released",
-        "service_starting" => "starting",
-        "service_ready" => "ready",
-        "service_stopped" => "stopped",
-        "service_orphaned" => "orphaned",
-        "service_degraded" => "degraded",
-        "readiness_progress" => "waiting",
-        _ => "unknown",
-    }
-}
-
-fn service_policy_runtime_event_command(values: &[String]) -> Result<(), String> {
-    if values.len() != 5 {
-        return Err(
-            "usage: nixfied-kernel service-policy runtime-event <reuse-policy|empty> <owner-scope|empty> <discovery-scope|empty> <ephemeral-flag> <export-file>"
-                .to_string(),
-        );
-    }
-
-    let explicit_reuse = values[0].as_str();
-    let explicit_owner = values[1].as_str();
-    let explicit_discovery = values[2].as_str();
-    let ephemeral = parse_bool_flag(&values[3])?;
-    let resolved_owner = if !explicit_owner.is_empty() {
-        explicit_owner.to_string()
-    } else {
-        let from_reuse = service_policy_owner_scope_from_reuse(explicit_reuse);
-        if !from_reuse.is_empty() {
-            from_reuse.to_string()
-        } else if ephemeral {
-            "ephemeral".to_string()
-        } else {
-            "persistent".to_string()
-        }
-    };
-    let resolved_discovery = if !explicit_discovery.is_empty() {
-        explicit_discovery.to_string()
-    } else {
-        let from_reuse = service_policy_discovery_scope_from_reuse(explicit_reuse);
-        if !from_reuse.is_empty() {
-            from_reuse.to_string()
-        } else if ephemeral {
-            "local".to_string()
-        } else {
-            "global".to_string()
-        }
-    };
-    let resolved_reuse = service_policy_infer_reuse_policy(
-        explicit_reuse,
-        &resolved_owner,
-        &resolved_discovery,
-        "same-slot",
-    );
-
-    validate_service_policy_matrix(
-        &resolved_reuse,
-        &resolved_owner,
-        &resolved_discovery,
-        false,
-        false,
-    )?;
-    write_shell_exports(
-        &values[4],
-        &[
-            ("OWNER_SCOPE".to_string(), resolved_owner),
-            ("DISCOVERY_SCOPE".to_string(), resolved_discovery),
-            ("REUSE_POLICY".to_string(), resolved_reuse),
-        ],
-    )?;
-    println!("OK: service-policy runtime-event");
-    Ok(())
-}
-
-fn service_policy_start_service_command(values: &[String]) -> Result<(), String> {
-    if values.len() != 4 {
-        return Err(
-            "usage: nixfied-kernel service-policy start-service <reuse-policy|empty> <owner-scope|empty> <discovery-scope|empty> <export-file>"
-                .to_string(),
-        );
-    }
-
-    let explicit_reuse = values[0].as_str();
-    let explicit_owner = values[1].as_str();
-    let explicit_discovery = values[2].as_str();
-    let resolved_owner = if !explicit_owner.is_empty() {
-        explicit_owner.to_string()
-    } else {
-        let from_reuse = service_policy_owner_scope_from_reuse(explicit_reuse);
-        if !from_reuse.is_empty() {
-            from_reuse.to_string()
-        } else {
-            service_policy_owner_scope_from_discovery(explicit_discovery).to_string()
-        }
-    };
-    let resolved_discovery = if !explicit_discovery.is_empty() {
-        explicit_discovery.to_string()
-    } else {
-        let from_reuse = service_policy_discovery_scope_from_reuse(explicit_reuse);
-        if !from_reuse.is_empty() {
-            from_reuse.to_string()
-        } else {
-            service_policy_discovery_scope_from_owner(&resolved_owner).to_string()
-        }
-    };
-    let resolved_reuse =
-        service_policy_infer_reuse_policy(explicit_reuse, &resolved_owner, &resolved_discovery, "");
-    validate_service_policy_matrix(
-        &resolved_reuse,
-        &resolved_owner,
-        &resolved_discovery,
-        true,
-        true,
-    )?;
-    let register_cleanup =
-        service_policy_start_service_register_cleanup(&resolved_reuse, &resolved_owner, &resolved_discovery)?;
-    write_shell_exports(
-        &values[3],
-        &[
-            ("OWNER_SCOPE".to_string(), resolved_owner),
-            ("DISCOVERY_SCOPE".to_string(), resolved_discovery),
-            ("REUSE_POLICY".to_string(), resolved_reuse),
-            ("REGISTER_CLEANUP".to_string(), register_cleanup),
-        ],
-    )?;
-    println!("OK: service-policy start-service");
-    Ok(())
-}
-
-fn service_policy_fixture_keep_running_command(values: &[String]) -> Result<(), String> {
-    if values.len() != 4 {
-        return Err(
-            "usage: nixfied-kernel service-policy fixture-keep-running <owner-scope|empty> <reuse-policy|empty> <discovery-scope|empty> <export-file>"
-                .to_string(),
-        );
-    }
-
-    let owner_scope = values[0].as_str();
-    let reuse_policy = values[1].as_str();
-    let discovery_scope = values[2].as_str();
-    let keep_running =
-        service_policy_fixture_keep_running(owner_scope, reuse_policy, discovery_scope)?;
-
-    write_shell_exports(&values[3], &[("KEEP_RUNNING".to_string(), keep_running)])?;
-    println!("OK: service-policy fixture-keep-running");
-    Ok(())
-}
-
-fn service_policy_owner_scope_from_reuse(reuse: &str) -> &'static str {
-    match reuse {
-        "same-slot" | "cross-run" => "persistent",
-        "same-root" => "ephemeral",
-        _ => "",
-    }
-}
-
-fn service_policy_owner_scope_from_discovery(discovery: &str) -> &'static str {
-    match discovery {
-        "global" => "persistent",
-        "local" => "ephemeral",
-        _ => "",
-    }
-}
-
-fn service_policy_discovery_scope_from_reuse(reuse: &str) -> &'static str {
-    match reuse {
-        "same-slot" | "cross-run" => "global",
-        "same-root" => "local",
-        _ => "",
-    }
-}
-
-fn service_policy_discovery_scope_from_owner(owner: &str) -> &'static str {
-    match owner {
-        "persistent" => "global",
-        "ephemeral" => "local",
-        _ => "",
-    }
-}
-
-fn service_policy_infer_reuse_policy(
-    explicit_reuse: &str,
-    owner_scope: &str,
-    discovery_scope: &str,
-    fallback: &str,
-) -> String {
-    if !explicit_reuse.is_empty() {
-        return explicit_reuse.to_string();
-    }
-
-    if owner_scope == "persistent" || discovery_scope == "global" {
-        return "same-slot".to_string();
-    }
-
-    if owner_scope == "ephemeral" || discovery_scope == "local" {
-        return "same-root".to_string();
-    }
-
-    fallback.to_string()
-}
-
-fn validate_service_policy_reuse_policy(reuse: &str, allow_empty: bool) -> Result<(), String> {
-    match reuse {
-        "never" | "same-root" | "same-slot" | "cross-run" => Ok(()),
-        "" if allow_empty => Ok(()),
-        _ => Err(format!(
-            "SERVICE_REUSE_POLICY must be one of never|same-root|same-slot|cross-run (got '{}')",
-            reuse
-        )),
-    }
-}
-
-fn validate_service_policy_owner_scope(owner: &str, allow_empty: bool) -> Result<(), String> {
-    match owner {
-        "ephemeral" | "persistent" => Ok(()),
-        "" if allow_empty => Ok(()),
-        _ => Err(format!(
-            "SERVICE_OWNER_SCOPE must be ephemeral|persistent (got '{}')",
-            owner
-        )),
-    }
-}
-
-fn validate_service_policy_discovery_scope(
-    discovery: &str,
-    allow_empty: bool,
-) -> Result<(), String> {
-    match discovery {
-        "local" | "global" => Ok(()),
-        "" if allow_empty => Ok(()),
-        _ => Err(format!(
-            "SERVICE_DISCOVERY_SCOPE must be local|global (got '{}')",
-            discovery
-        )),
-    }
-}
-
-fn validate_service_policy_matrix(
-    reuse: &str,
-    owner: &str,
-    discovery: &str,
-    allow_empty: bool,
-    enforce_owner_discovery_alignment: bool,
-) -> Result<(), String> {
-    validate_service_policy_reuse_policy(reuse, allow_empty)?;
-    validate_service_policy_owner_scope(owner, allow_empty)?;
-    validate_service_policy_discovery_scope(discovery, allow_empty)?;
-
-    if reuse == "cross-run" && (owner != "persistent" || discovery != "global") {
-        return Err(
-            "cross-run reuse requires SERVICE_OWNER_SCOPE=persistent and SERVICE_DISCOVERY_SCOPE=global"
-                .to_string(),
-        );
-    }
-
-    if reuse == "same-root" && (owner != "ephemeral" || discovery != "local") {
-        return Err(
-            "same-root reuse requires SERVICE_OWNER_SCOPE=ephemeral and SERVICE_DISCOVERY_SCOPE=local"
-                .to_string(),
-        );
-    }
-
-    if enforce_owner_discovery_alignment && !owner.is_empty() && !discovery.is_empty() {
-        if owner == "persistent" && discovery != "global" {
-            return Err(
-                "persistent owner scope requires SERVICE_DISCOVERY_SCOPE=global".to_string(),
-            );
-        }
-        if owner == "ephemeral" && discovery != "local" {
-            return Err(
-                "ephemeral owner scope requires SERVICE_DISCOVERY_SCOPE=local".to_string(),
-            );
-        }
-    }
-
-    Ok(())
-}
-
-fn service_policy_start_service_register_cleanup(
-    reuse: &str,
-    owner: &str,
-    discovery: &str,
-) -> Result<String, String> {
-    match reuse {
-        "same-slot" | "cross-run" => Ok("0".to_string()),
-        "never" | "same-root" => Ok("1".to_string()),
-        "" => {
-            if owner == "persistent" || discovery == "global" {
-                Ok("0".to_string())
-            } else {
-                Ok("1".to_string())
-            }
-        }
-        _ => Err(format!("unresolved start_service reuse policy '{}'", reuse)),
-    }
-}
-
-fn service_policy_fixture_keep_running(
-    owner_scope: &str,
-    reuse_policy: &str,
-    discovery_scope: &str,
-) -> Result<String, String> {
-    validate_service_policy_owner_scope(owner_scope, true)?;
-    validate_service_policy_reuse_policy(reuse_policy, true)?;
-    validate_service_policy_discovery_scope(discovery_scope, true)?;
-
-    if owner_scope == "persistent" {
-        return Ok("1".to_string());
-    }
-    if owner_scope == "ephemeral" {
-        return Ok("0".to_string());
-    }
-
-    match reuse_policy {
-        "same-slot" | "cross-run" => return Ok("1".to_string()),
-        "never" | "same-root" => return Ok("0".to_string()),
-        _ => {}
-    }
-
-    match discovery_scope {
-        "global" => Ok("1".to_string()),
-        "local" => Ok("0".to_string()),
-        _ => Ok("0".to_string()),
-    }
-}
-
-fn event_detail_render_command(values: &[String]) -> Result<(), String> {
-    let kind = values.first().ok_or_else(|| {
-        "usage: nixfied-kernel event-detail render <kind> [--field value ...]".to_string()
-    })?;
-
-    let mut event_type = None;
-    let mut command_name = None;
-    let mut project_id = None;
-    let mut service = None;
-    let mut slot = None;
-    let mut env_name = None;
-    let mut profile = None;
-    let mut pid = None;
-    let mut pgid = None;
-    let mut plan_id = None;
-    let mut unit_id = None;
-    let mut attempt = None;
-    let mut owner_scope = None;
-    let mut reuse_policy = None;
-    let mut discovery_scope = None;
-    let mut ephemeral_root = None;
-    let mut readiness_health = None;
-    let mut readiness_ready = None;
-    let mut last_error = None;
-    let mut wait_reason = None;
-    let mut log_path = None;
-    let mut mode = None;
-    let mut suffix_reason = None;
-    let mut produces = None;
-    let mut exit_code = None;
-    let mut reason = None;
-    let mut dependency = None;
-    let mut service_name = None;
-    let mut signal = None;
-    let mut missing = None;
-    let mut run_id = None;
-    let mut workflow_id = None;
-    let mut task_id = None;
-    let mut target = None;
-    let mut index = 1usize;
-
-    while index < values.len() {
-        let flag = values[index].as_str();
-        index += 1;
-        let value = next_flag_value(values, &mut index, flag)?;
-        match flag {
-            "--event-type" => event_type = optional_string_value(&value),
-            "--command-name" => command_name = optional_string_value(&value),
-            "--project-id" => project_id = optional_string_value(&value),
-            "--service" => service = optional_string_value(&value),
-            "--slot" => slot = optional_string_value(&value),
-            "--env" => env_name = optional_string_value(&value),
-            "--profile" => profile = optional_string_value(&value),
-            "--pid" => pid = parse_optional_i64(&value, "event-detail pid")?,
-            "--pgid" => pgid = parse_optional_i64(&value, "event-detail pgid")?,
-            "--plan-id" => plan_id = optional_string_value(&value),
-            "--unit-id" => unit_id = optional_string_value(&value),
-            "--attempt" => attempt = parse_optional_i64(&value, "event-detail attempt")?,
-            "--owner-scope" => owner_scope = optional_string_value(&value),
-            "--reuse-policy" => reuse_policy = optional_string_value(&value),
-            "--discovery-scope" => discovery_scope = optional_string_value(&value),
-            "--ephemeral-root" => ephemeral_root = optional_string_value(&value),
-            "--readiness-health" => {
-                readiness_health =
-                    parse_optional_bool_text(&value, "event-detail readiness-health")?
-            }
-            "--readiness-ready" => {
-                readiness_ready = parse_optional_bool_text(&value, "event-detail readiness-ready")?
-            }
-            "--last-error" => last_error = optional_string_value(&value),
-            "--wait-reason" => wait_reason = optional_string_value(&value),
-            "--log-path" => log_path = optional_string_value(&value),
-            "--mode" => mode = optional_string_value(&value),
-            "--suffix-reason" => suffix_reason = optional_string_value(&value),
-            "--produces-json" => {
-                produces = Some(
-                    parse_json(&value)
-                        .map_err(|err| format!("event-detail produces json is invalid: {}", err))?,
-                )
-            }
-            "--exit-code" => exit_code = parse_optional_i64(&value, "event-detail exit-code")?,
-            "--reason" => reason = optional_string_value(&value),
-            "--dependency" => dependency = optional_string_value(&value),
-            "--service-name" => service_name = optional_string_value(&value),
-            "--signal" => signal = optional_string_value(&value),
-            "--missing" => missing = optional_string_value(&value),
-            "--run-id" => run_id = optional_string_value(&value),
-            "--workflow-id" => workflow_id = optional_string_value(&value),
-            "--task-id" => task_id = optional_string_value(&value),
-            "--target" => target = optional_string_value(&value),
-            other => return Err(format!("unknown event-detail arg: {}", other)),
-        }
-    }
-
-    let mut fields = Map::new();
-    fields.insert("kind".to_string(), JsonValue::String(kind.clone()));
-
-    match kind.as_str() {
-        "slotLifecycle" => {
-            insert_optional_string_field(&mut fields, "eventType", event_type);
-            insert_optional_string_field(&mut fields, "commandName", command_name);
-            insert_optional_string_field(&mut fields, "projectId", project_id);
-            insert_optional_string_field(&mut fields, "slot", slot);
-            insert_optional_string_field(&mut fields, "env", env_name);
-            insert_optional_string_field(&mut fields, "profile", profile);
-            insert_optional_number_field(&mut fields, "pid", pid);
-            insert_optional_number_field(&mut fields, "pgid", pgid);
-            if readiness_health.is_some() || readiness_ready.is_some() || last_error.is_some() {
-                let mut readiness = Map::new();
-                insert_optional_bool_field(&mut readiness, "healthOk", readiness_health);
-                insert_optional_bool_field(&mut readiness, "readyOk", readiness_ready);
-                insert_optional_string_field(&mut readiness, "lastError", last_error);
-                fields.insert("readiness".to_string(), JsonValue::Object(readiness));
-            }
-            insert_optional_string_field(&mut fields, "waitReason", wait_reason);
-            insert_optional_string_field(&mut fields, "logPath", log_path);
-            insert_optional_string_field(&mut fields, "mode", mode);
-            insert_optional_string_field(&mut fields, "suffixReason", suffix_reason);
-            insert_optional_json_field(&mut fields, "produces", produces);
-            insert_optional_number_field(&mut fields, "exitCode", exit_code);
-        }
-        "serviceLifecycle" => {
-            insert_optional_string_field(&mut fields, "eventType", event_type);
-            insert_optional_string_field(&mut fields, "service", service);
-            insert_optional_string_field(&mut fields, "commandName", command_name);
-            insert_optional_string_field(&mut fields, "ownerScope", owner_scope);
-            insert_optional_string_field(&mut fields, "reusePolicy", reuse_policy);
-            insert_optional_string_field(&mut fields, "discoveryScope", discovery_scope);
-            insert_optional_string_field(&mut fields, "ephemeralRoot", ephemeral_root);
-            insert_optional_string_field(&mut fields, "waitReason", wait_reason);
-            insert_optional_string_field(&mut fields, "logPath", log_path);
-            insert_optional_json_field(&mut fields, "produces", produces);
-            insert_optional_number_field(&mut fields, "exitCode", exit_code);
-            insert_optional_string_field(&mut fields, "reason", reason);
-            insert_optional_string_field(&mut fields, "dependency", dependency);
-            insert_optional_string_field(&mut fields, "serviceName", service_name);
-            insert_optional_string_field(&mut fields, "signal", signal);
-            insert_optional_string_field(&mut fields, "missing", missing);
-        }
-        "workflowLifecycle" => {
-            insert_optional_string_field(&mut fields, "commandName", command_name);
-            insert_optional_string_field(&mut fields, "workflowId", workflow_id);
-            insert_optional_string_field(&mut fields, "runId", run_id);
-            insert_optional_number_field(&mut fields, "attempt", attempt);
-        }
-        "taskLifecycle" => {
-            insert_optional_string_field(&mut fields, "commandName", command_name);
-            insert_optional_string_field(&mut fields, "taskId", task_id);
-            insert_optional_string_field(&mut fields, "runId", run_id);
-            insert_optional_number_field(&mut fields, "attempt", attempt);
-            insert_optional_number_field(&mut fields, "exitCode", exit_code);
-            insert_optional_string_field(&mut fields, "reason", reason);
-        }
-        "controlSignal" => {
-            insert_optional_string_field(&mut fields, "signal", signal);
-            insert_optional_string_field(&mut fields, "reason", reason);
-            insert_optional_string_field(&mut fields, "target", target);
-            insert_optional_string_field(&mut fields, "runId", run_id);
-        }
-        other => return Err(format!("unknown event-detail kind: {}", other)),
-    }
-
-    println!("{}", render_json_compact(&JsonValue::Object(fields)));
-    Ok(())
-}
-
-fn load_command_runtime_plan(path: &str) -> Result<CommandRuntimePlan, String> {
-    let text = read_text(path)?;
-    let value = parse_json(&text)
-        .map_err(|err| format!("runtime plan {} is not valid JSON: {}", path, err))?;
-    parse_command_runtime_plan(&value)
-}
-
-fn parse_command_runtime_plan(value: &JsonValue) -> Result<CommandRuntimePlan, String> {
-    value
-        .as_object()
-        .ok_or_else(|| "runtime plan must be an object".to_string())?;
-
-    let allow_unknown_args = object_bool(value, "allowUnknownArgs").unwrap_or(false);
-    let mut args = Vec::new();
-    let mut env_specs = Vec::new();
-    let mut failure_codes = BTreeSet::new();
-
-    for item in object_array(value, "args").unwrap_or(&[]) {
-        args.push(parse_command_arg_spec(item)?);
-    }
-
-    for item in object_array(value, "env").unwrap_or(&[]) {
-        env_specs.push(parse_command_env_spec(item)?);
-    }
-
-    if let Some(codes) = object_field(value, "failureCodes").and_then(JsonValue::as_object) {
-        for code in codes.values() {
-            let number = json_value_to_i32(code)
-                .ok_or_else(|| "runtime plan failureCodes values must be integers".to_string())?;
-            failure_codes.insert(number);
-        }
-    }
-
-    Ok(CommandRuntimePlan {
-        allow_unknown_args,
-        args,
-        env: env_specs,
-        failure_codes,
-    })
-}
-
-fn parse_command_arg_spec(value: &JsonValue) -> Result<CommandArgSpec, String> {
-    Ok(CommandArgSpec {
-        name: required_string_field(value, "name", "arg spec")?.to_string(),
-        kind: required_string_field(value, "kind", "arg spec")?.to_string(),
-        scalar: parse_scalar_spec(value)?,
-        long: object_string(value, "long").unwrap_or("").to_string(),
-        short: object_string(value, "short").unwrap_or("").to_string(),
-        required: object_bool(value, "required").unwrap_or(false),
-    })
-}
-
-fn parse_command_env_spec(value: &JsonValue) -> Result<CommandEnvSpec, String> {
-    Ok(CommandEnvSpec {
-        name: required_string_field(value, "name", "env spec")?.to_string(),
-        scalar: parse_scalar_spec(value)?,
-        required: object_bool(value, "required").unwrap_or(false),
-        default: object_field(value, "default").and_then(json_value_to_plain_string),
-        aliases: array_strings(value, "aliases"),
-    })
-}
-
-fn load_scalar_spec(path: &str) -> Result<ScalarSpec, String> {
-    let text = read_text(path)?;
-    let value = parse_json(&text)
-        .map_err(|err| format!("scalar spec {} is not valid JSON: {}", path, err))?;
-    parse_scalar_spec(&value)
-}
-
-fn parse_scalar_spec(value: &JsonValue) -> Result<ScalarSpec, String> {
-    Ok(ScalarSpec {
-        type_name: object_string(value, "type").unwrap_or("string").to_string(),
-        values: array_strings(value, "values"),
-        min: object_field(value, "min").and_then(json_value_to_i64),
-        max: object_field(value, "max").and_then(json_value_to_i64),
-    })
-}
-
-fn validate_input_env(plan: &CommandRuntimePlan) -> Result<Vec<(String, String)>, String> {
-    let mut exports = Vec::new();
-
-    for spec in &plan.env {
-        let value = resolve_env_spec_value(spec)?;
-        if value.is_none() && spec.required {
-            return Err(format!("required env var missing name={}", spec.name));
-        }
-
-        if let Some(value) = value {
-            validate_scalar_value(&spec.scalar, &value, &format!("env:{}", spec.name))?;
-            exports.push((spec.name.clone(), value.clone()));
-            for alias in &spec.aliases {
-                exports.push((alias.clone(), value.clone()));
-            }
-        }
-    }
-
-    Ok(exports)
-}
-
-fn validate_input_args(
-    plan: &CommandRuntimePlan,
-    args: &[String],
-) -> Result<Vec<(String, String)>, String> {
-    let mut exports = Vec::new();
-    let mut seen = BTreeSet::new();
-    let mut positional_values = Vec::new();
-    let mut index = 0usize;
-    let mut parse_options = true;
-
-    let spec_by_name = plan
-        .args
-        .iter()
-        .map(|spec| (spec.name.as_str(), spec))
-        .collect::<BTreeMap<_, _>>();
-    let long_to_name = plan
-        .args
-        .iter()
-        .filter(|spec| !spec.long.is_empty())
-        .map(|spec| (spec.long.as_str(), spec.name.as_str()))
-        .collect::<BTreeMap<_, _>>();
-    let short_to_name = plan
-        .args
-        .iter()
-        .filter(|spec| !spec.short.is_empty())
-        .map(|spec| (spec.short.as_str(), spec.name.as_str()))
-        .collect::<BTreeMap<_, _>>();
-    let positional_specs = plan
-        .args
-        .iter()
-        .filter(|spec| spec.kind == "positional")
-        .collect::<Vec<_>>();
-
-    while index < args.len() {
-        let token = &args[index];
-        index += 1;
-
-        if !parse_options {
-            positional_values.push(token.clone());
-            continue;
-        }
-
-        if token == "--" {
-            parse_options = false;
-            continue;
-        }
-
-        if let Some((name_token, value)) = token.split_once('=') {
-            if name_token.starts_with("--") {
-                let Some(name) = long_to_name.get(name_token).copied() else {
-                    if plan.allow_unknown_args {
-                        continue;
-                    }
-                    return Err(format!("unknown option token={}", name_token));
-                };
-                let spec = spec_by_name.get(name).copied().unwrap();
-                if spec.kind == "flag" {
-                    return Err(format!("flag does not accept a value token={}", name_token));
-                }
-                validate_scalar_value(&spec.scalar, value, &format!("arg:{}", spec.name))?;
-                seen.insert(spec.name.clone());
-                exports.push((export_arg_name(&spec.name), value.to_string()));
-                continue;
-            }
-        }
-
-        if token.starts_with("--") {
-            let Some(name) = long_to_name.get(token.as_str()).copied() else {
-                if plan.allow_unknown_args {
-                    continue;
-                }
-                return Err(format!("unknown option token={}", token));
-            };
-            let spec = spec_by_name.get(name).copied().unwrap();
-            if spec.kind == "flag" {
-                seen.insert(spec.name.clone());
-                exports.push((export_arg_name(&spec.name), "true".to_string()));
-                continue;
-            }
-            if index >= args.len() {
-                return Err(format!("option requires value token={}", token));
-            }
-            let value = &args[index];
-            index += 1;
-            validate_scalar_value(&spec.scalar, value, &format!("arg:{}", spec.name))?;
-            seen.insert(spec.name.clone());
-            exports.push((export_arg_name(&spec.name), value.clone()));
-            continue;
-        }
-
-        if token.starts_with('-') && token.len() > 1 {
-            if let Some(name) = short_to_name.get(token.as_str()).copied() {
-                let spec = spec_by_name.get(name).copied().unwrap();
-                if spec.kind == "flag" {
-                    seen.insert(spec.name.clone());
-                    exports.push((export_arg_name(&spec.name), "true".to_string()));
-                    continue;
-                }
-                if index >= args.len() {
-                    return Err(format!("option requires value token={}", token));
-                }
-                let value = &args[index];
-                index += 1;
-                validate_scalar_value(&spec.scalar, value, &format!("arg:{}", spec.name))?;
-                seen.insert(spec.name.clone());
-                exports.push((export_arg_name(&spec.name), value.clone()));
-                continue;
-            }
-
-            if token.len() > 2 {
-                let mut cluster_specs = Vec::new();
-                let mut cluster_valid = true;
-                for short in token[1..].chars() {
-                    let short_token = format!("-{}", short);
-                    let Some(name) = short_to_name.get(short_token.as_str()).copied() else {
-                        cluster_valid = false;
-                        break;
-                    };
-                    let spec = spec_by_name.get(name).copied().unwrap();
-                    if spec.kind != "flag" {
-                        cluster_valid = false;
-                        break;
-                    }
-                    cluster_specs.push(spec);
-                }
-                if cluster_valid {
-                    for spec in cluster_specs {
-                        seen.insert(spec.name.clone());
-                        exports.push((export_arg_name(&spec.name), "true".to_string()));
-                    }
-                    continue;
-                }
-            }
-
-            if plan.allow_unknown_args {
-                continue;
-            }
-            return Err(format!("unknown option token={}", token));
-        }
-
-        positional_values.push(token.clone());
-    }
-
-    for (position, spec) in positional_specs.iter().enumerate() {
-        if let Some(value) = positional_values.get(position) {
-            validate_scalar_value(&spec.scalar, value, &format!("arg:{}", spec.name))?;
-            seen.insert(spec.name.clone());
-            exports.push((export_arg_name(&spec.name), value.clone()));
-        } else if spec.required {
-            return Err(format!(
-                "missing required positional arg name={}",
-                spec.name
-            ));
-        }
-    }
-
-    if positional_values.len() > positional_specs.len() && !plan.allow_unknown_args {
-        return Err(format!(
-            "unexpected positional args count={}",
-            positional_values.len() - positional_specs.len()
-        ));
-    }
-
-    for spec in &plan.args {
-        if spec.required && !seen.contains(&spec.name) {
-            return Err(format!("missing required arg name={}", spec.name));
-        }
-    }
-
-    Ok(exports)
-}
-
-fn resolve_env_spec_value(spec: &CommandEnvSpec) -> Result<Option<String>, String> {
-    let canonical = env::var(&spec.name).ok();
-    let aliases = spec
-        .aliases
-        .iter()
-        .filter_map(|alias| env::var(alias).ok().map(|value| (alias.clone(), value)))
-        .collect::<Vec<_>>();
-
-    if let Some(value) = &canonical {
-        if value.is_empty() && is_runtime_primitive_env(&spec.name) {
-            return Err(format!(
-                "env:{} cannot be empty when set; unset {} to use defaults",
-                spec.name, spec.name
-            ));
-        }
-    }
-
-    for (alias, value) in &aliases {
-        if value.is_empty() && is_runtime_primitive_env(&spec.name) {
-            return Err(format!(
-                "env:{} alias={} cannot be empty when set; unset {} to use defaults",
-                spec.name, alias, alias
-            ));
-        }
-    }
-
-    let canonical_non_empty = canonical.as_ref().filter(|value| !value.is_empty());
-    let alias_non_empty = aliases
-        .iter()
-        .find(|(_, value)| !value.is_empty())
-        .map(|(_, value)| value);
-
-    if let (Some(left), Some(right)) = (canonical_non_empty, alias_non_empty) {
-        if left != right {
-            return Err(format!(
-                "env:{} has conflicting values between {} and alias; set one variable or use matching values",
-                spec.name, spec.name
-            ));
-        }
-    }
-
-    let mut first_alias: Option<(&str, &String)> = None;
-    for (alias, value) in &aliases {
-        if value.is_empty() {
-            continue;
-        }
-        if let Some((previous_alias, previous_value)) = first_alias {
-            if previous_value != value {
-                return Err(format!(
-                    "env:{} has conflicting alias values alias={} and alias={}; set one alias or use matching values",
-                    spec.name, previous_alias, alias
-                ));
-            }
-        } else {
-            first_alias = Some((alias.as_str(), value));
-        }
-    }
-
-    Ok(canonical_non_empty
-        .cloned()
-        .or_else(|| first_alias.map(|(_, value)| value.clone()))
-        .or_else(|| spec.default.clone()))
-}
-
-fn validate_scalar_value(spec: &ScalarSpec, value: &str, label: &str) -> Result<(), String> {
-    match spec.type_name.as_str() {
-        "string" => {}
-        "bool" => match value {
-            "1" | "0" | "true" | "false" | "TRUE" | "FALSE" | "yes" | "YES" | "no" | "NO"
-            | "on" | "ON" => {}
-            _ => return Err(format!("{} must be bool (got '{}')", label, value)),
-        },
-        "int" => {
-            let number = parse_i64_text(value, label)?;
-            validate_numeric_range(number, spec, label)?;
-        }
-        "durationSec" => {
-            let number = parse_i64_text(value, label)?;
-            if number < 0 {
-                return Err(format!("{} must be >= 0 seconds (got '{}')", label, value));
-            }
-            validate_numeric_range(number, spec, label)?;
-        }
-        "enum" => {
-            if !spec.values.iter().any(|item| item == value) {
-                return Err(format!(
-                    "{} must be one of {} (got '{}')",
-                    label,
-                    spec.values.join(","),
-                    value
-                ));
-            }
-        }
-        "pathAbs" => {
-            if !value.starts_with('/') {
-                return Err(format!(
-                    "{} must be an absolute path (got '{}')",
-                    label, value
-                ));
-            }
-        }
-        "pathRel" => {
-            if value.is_empty() || value.starts_with('/') {
-                return Err(format!(
-                    "{} must be a relative path (got '{}')",
-                    label, value
-                ));
-            }
-        }
-        "port" => {
-            let number = parse_i64_text(value, label)?;
-            if !(1..=65535).contains(&number) {
-                return Err(format!("{} must be port 1-65535 (got '{}')", label, value));
-            }
-            validate_numeric_range(number, spec, label)?;
-        }
-        "json" => {
-            parse_json(value).map_err(|_| format!("{} must be valid json", label))?;
-        }
-        other => return Err(format!("unsupported type={} for {}", other, label)),
-    }
-
-    Ok(())
-}
-
-fn validate_numeric_range(value: i64, spec: &ScalarSpec, label: &str) -> Result<(), String> {
-    if let Some(minimum) = spec.min {
-        if value < minimum {
-            return Err(format!(
-                "{} must be >= {} (got '{}')",
-                label, minimum, value
-            ));
-        }
-    }
-    if let Some(maximum) = spec.max {
-        if value > maximum {
-            return Err(format!(
-                "{} must be <= {} (got '{}')",
-                label, maximum, value
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn strip_passthrough_separator(values: &[String]) -> &[String] {
-    if values.first().map(|value| value.as_str()) == Some("--") {
-        &values[1..]
-    } else {
-        values
-    }
-}
-
-fn export_arg_name(name: &str) -> String {
-    format!("NIXFIED_ARG_{}", sanitize_name(name))
-}
-
-fn sanitize_name(value: &str) -> String {
-    value
-        .chars()
-        .map(|ch| match ch {
-            '.' | ':' | '/' | '-' => '_',
-            other => other.to_ascii_uppercase(),
-        })
-        .collect()
-}
-
-fn is_runtime_primitive_env(name: &str) -> bool {
-    matches!(name, "LOG_LEVEL" | "OUTPUT_MODE")
-}
-
-fn write_shell_exports(path: &str, values: &[(String, String)]) -> Result<(), String> {
-    let mut rendered = String::new();
-    for (key, value) in values {
-        rendered.push_str("export ");
-        rendered.push_str(key);
-        rendered.push('=');
-        rendered.push_str(&shell_quote(value));
-        rendered.push('\n');
-    }
-    write_text_atomic(path, &rendered)
-}
-
-fn shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\"'\"'"))
-}
-
-fn write_text_atomic(path: &str, contents: &str) -> Result<(), String> {
-    let target = Path::new(path);
-    if let Some(parent) = target.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|err| format!("failed to create {}: {}", parent.display(), err))?;
-    }
-
-    let tmp_path = format!("{}.tmp.{}", path, process::id());
-    fs::write(&tmp_path, contents)
-        .map_err(|err| format!("failed to write {}: {}", tmp_path, err))?;
-    fs::rename(&tmp_path, path)
-        .map_err(|err| format!("failed to move {} into {}: {}", tmp_path, path, err))
-}
-
-fn required_string_field<'a>(
-    value: &'a JsonValue,
-    key: &str,
-    label: &str,
-) -> Result<&'a str, String> {
-    object_string(value, key).ok_or_else(|| format!("{} missing string field {}", label, key))
-}
-
-fn array_strings(value: &JsonValue, key: &str) -> Vec<String> {
-    object_array(value, key)
-        .unwrap_or(&[])
-        .iter()
-        .filter_map(JsonValue::as_str)
-        .map(|item| item.to_string())
-        .collect()
-}
-
-fn object_string_map(
-    value: &JsonValue,
-    key: &str,
-    label: &str,
-) -> Result<BTreeMap<String, String>, String> {
-    let mut result = BTreeMap::new();
-    let Some(entries) = object_field(value, key).and_then(JsonValue::as_object) else {
-        return Ok(result);
-    };
-    for (entry_key, entry_value) in entries {
-        let Some(entry_text) = entry_value.as_str() else {
-            return Err(format!(
-                "{} field {} must contain only string values",
-                label, key
-            ));
-        };
-        result.insert(entry_key.clone(), entry_text.to_string());
-    }
-    Ok(result)
-}
-
-fn json_value_to_plain_string(value: &JsonValue) -> Option<String> {
-    match value {
-        JsonValue::Null => None,
-        JsonValue::String(value) => Some(value.clone()),
-        JsonValue::Bool(value) => Some(if *value { "true" } else { "false" }.to_string()),
-        JsonValue::Number(number) => Some(number.to_string()),
-        JsonValue::Array(_) | JsonValue::Object(_) => None,
-    }
-}
-
-fn json_value_to_i64(value: &JsonValue) -> Option<i64> {
-    match value {
-        JsonValue::Number(n) => n.as_i64(),
-        JsonValue::String(value) => value.parse::<i64>().ok(),
-        _ => None,
-    }
-}
-
-fn json_value_to_i32(value: &JsonValue) -> Option<i32> {
-    json_value_to_i64(value).and_then(|value| i32::try_from(value).ok())
-}
-
-fn parse_i64_text(value: &str, label: &str) -> Result<i64, String> {
-    value
-        .parse::<i64>()
-        .map_err(|_| format!("{} must be int (got '{}')", label, value))
-}
-
-fn parse_i32_text(value: &str, label: &str) -> Result<i32, String> {
-    value
-        .parse::<i32>()
-        .map_err(|_| format!("{} must be int (got '{}')", label, value))
+    policy::service_policy_command(subcommand, values)
 }
 
 fn validate_file_command(
@@ -1499,39 +466,7 @@ fn validate_file_command(
     contract_ref: &str,
     payload_path: &str,
 ) -> Result<(), String> {
-    validate_json_file_against_contract(bundle_path, contract_ref, payload_path)?;
-    println!("OK: {} contract={}", command, contract_ref);
-    Ok(())
-}
-
-fn validate_json_file_against_contract(
-    bundle_path: &str,
-    contract_ref: &str,
-    payload_path: &str,
-) -> Result<(), String> {
-    let bundle_text = read_text(bundle_path)?;
-    let payload_text = read_text(payload_path)?;
-    let bundle = parse_json(&bundle_text)
-        .map_err(|err| format!("bundle {} is not valid JSON: {}", bundle_path, err))?;
-    let payload = parse_json(&payload_text)
-        .map_err(|err| format!("payload {} is not valid JSON: {}", payload_path, err))?;
-    validate_json_value_against_contract(&bundle, contract_ref, &payload)
-}
-
-fn validate_json_value_against_contract(
-    bundle: &JsonValue,
-    contract_ref: &str,
-    payload: &JsonValue,
-) -> Result<(), String> {
-    let context = ValidationContext::new(bundle);
-    let schema = context
-        .resolve_contract_ref(contract_ref)
-        .map_err(|err| format!("contract {} could not be resolved: {}", contract_ref, err))?;
-
-    let mut path = Vec::new();
-    let mut ref_stack = Vec::new();
-    validate_schema(&context, schema, payload, &mut path, &mut ref_stack)
-        .map_err(|err| format!("contract {} failed validation: {}", contract_ref, err))
+    validation::validate_file_command(command, bundle_path, contract_ref, payload_path)
 }
 
 fn run_record_command(subcommand: &str, values: &[String]) -> Result<(), String> {
@@ -1624,16 +559,10 @@ fn run_record_transition_command(values: &[String]) -> Result<(), String> {
     payload_object.insert("state".to_string(), JsonValue::String(state.clone()));
     payload_object.insert("updated_at".to_string(), JsonValue::String(now.clone()));
     if let Some(pid) = pid {
-        payload_object.insert(
-            "pid".to_string(),
-            JsonValue::Number(Number::from(pid)),
-        );
+        payload_object.insert("pid".to_string(), JsonValue::Number(Number::from(pid)));
     }
     if let Some(pgid) = pgid {
-        payload_object.insert(
-            "pgid".to_string(),
-            JsonValue::Number(Number::from(pgid)),
-        );
+        payload_object.insert("pgid".to_string(), JsonValue::Number(Number::from(pgid)));
     }
     if payload_object
         .get("started_at")
@@ -1671,9 +600,7 @@ fn run_record_transition_command(values: &[String]) -> Result<(), String> {
 
 fn run_record_read_command(values: &[String]) -> Result<(), String> {
     if values.len() != 2 {
-        return Err(
-            "usage: nixfied-kernel run-record read <run-file> <field>".to_string(),
-        );
+        return Err("usage: nixfied-kernel run-record read <run-file> <field>".to_string());
     }
 
     let envelope = parse_json_file(&values[0], "run-record file")?;
@@ -1721,182 +648,6 @@ fn task_execution_order_command(values: &[String]) -> Result<(), String> {
         )],
     )?;
     println!("OK: task execution-order");
-    Ok(())
-}
-
-fn workflow_command(subcommand: &str, values: &[String]) -> Result<(), String> {
-    match subcommand {
-        "serial-init" => workflow_serial_init_command(values),
-        "serial-next" => workflow_serial_next_command(values),
-        "serial-transition" => workflow_serial_transition_command(values),
-        "parallel-init" => workflow_parallel_init_command(values),
-        "parallel-next" => workflow_parallel_next_command(values),
-        "parallel-transition" => workflow_parallel_transition_command(values),
-        other => Err(format!("unknown workflow subcommand: {}", other)),
-    }
-}
-
-fn workflow_serial_init_command(values: &[String]) -> Result<(), String> {
-    if values.len() != 5 {
-        return Err(
-            "usage: nixfied-kernel workflow serial-init <plan-file> <skipped-services-file> <workflow-id> <fail-fast> <state-file>"
-                .to_string(),
-        );
-    }
-
-    let plan = load_workflow_scheduler_plan(&values[0])?;
-    let skipped_services = load_line_set(&values[1])?;
-    let workflow = plan
-        .workflows
-        .get(&values[2])
-        .ok_or_else(|| format!("unknown workflow '{}'", values[2]))?;
-    let state = build_workflow_serial_state(workflow, &values[2], parse_bool_flag(&values[3])?, &skipped_services);
-    write_workflow_serial_state(&values[4], &state)?;
-    println!("OK: workflow serial-init");
-    Ok(())
-}
-
-fn workflow_serial_next_command(values: &[String]) -> Result<(), String> {
-    if values.len() != 1 {
-        return Err("usage: nixfied-kernel workflow serial-next <state-file>".to_string());
-    }
-
-    let state = load_workflow_serial_state(&values[0])?;
-    match workflow_serial_next_action(&state) {
-        WorkflowSerialAction::Execute {
-            unit_name,
-            task_id,
-            selected_services_csv,
-        } => println!(
-            "execute\u{1f}{}\u{1f}{}\u{1f}{}",
-            unit_name, task_id, selected_services_csv
-        ),
-        WorkflowSerialAction::Cancel {
-            unit_name,
-            task_id,
-            reason,
-            extra_key,
-            extra_value,
-        } => println!(
-            "cancel\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
-            unit_name, task_id, reason, extra_key, extra_value
-        ),
-        WorkflowSerialAction::Done { workflow_status } => {
-            println!("done\u{1f}{}", workflow_status)
-        }
-    }
-    Ok(())
-}
-
-fn workflow_serial_transition_command(values: &[String]) -> Result<(), String> {
-    if values.len() != 7 {
-        return Err(
-            "usage: nixfied-kernel workflow serial-transition <state-file> <unit-name> <status> <exit-code|empty> <reason|empty> <extra-key|empty> <extra-value|empty>"
-                .to_string(),
-        );
-    }
-
-    let mut state = load_workflow_serial_state(&values[0])?;
-    workflow_serial_transition(
-        &mut state,
-        &values[1],
-        &values[2],
-        &values[3],
-        &values[4],
-        &values[5],
-        &values[6],
-    )?;
-    write_workflow_serial_state(&values[0], &state)?;
-    println!("OK: workflow serial-transition");
-    Ok(())
-}
-
-fn workflow_parallel_init_command(values: &[String]) -> Result<(), String> {
-    if values.len() != 6 {
-        return Err(
-            "usage: nixfied-kernel workflow parallel-init <plan-file> <skipped-services-file> <workflow-id> <fail-fast> <max-workers> <state-file>"
-                .to_string(),
-        );
-    }
-
-    let plan = load_workflow_scheduler_plan(&values[0])?;
-    let skipped_services = load_line_set(&values[1])?;
-    let workflow = plan
-        .workflows
-        .get(&values[2])
-        .ok_or_else(|| format!("unknown workflow '{}'", values[2]))?;
-    let max_workers = parse_i64_text(&values[4], "workflow parallel max-workers")?;
-    let state = build_workflow_parallel_state(
-        workflow,
-        &values[2],
-        parse_bool_flag(&values[3])?,
-        max_workers,
-        &skipped_services,
-    );
-    write_workflow_parallel_state(&values[5], &state)?;
-    println!("OK: workflow parallel-init");
-    Ok(())
-}
-
-fn workflow_parallel_next_command(values: &[String]) -> Result<(), String> {
-    if values.len() != 1 {
-        return Err("usage: nixfied-kernel workflow parallel-next <state-file>".to_string());
-    }
-
-    let mut state = load_workflow_parallel_state(&values[0])?;
-    let action = workflow_parallel_next_action(&mut state);
-    write_workflow_parallel_state(&values[0], &state)?;
-    match action {
-        WorkflowParallelAction::Start {
-            unit_name,
-            task_id,
-            selected_services_csv,
-            produces_json,
-        } => println!(
-            "start\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
-            unit_name, task_id, selected_services_csv, produces_json
-        ),
-        WorkflowParallelAction::Cancel {
-            unit_name,
-            task_id,
-            reason,
-            extra_key,
-            extra_value,
-        } => println!(
-            "cancel\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
-            unit_name, task_id, reason, extra_key, extra_value
-        ),
-        WorkflowParallelAction::SignalRunning { unit_name } => {
-            println!("signal-running\u{1f}{}", unit_name)
-        }
-        WorkflowParallelAction::Wait => println!("wait"),
-        WorkflowParallelAction::Done { workflow_status } => {
-            println!("done\u{1f}{}", workflow_status)
-        }
-    }
-    Ok(())
-}
-
-fn workflow_parallel_transition_command(values: &[String]) -> Result<(), String> {
-    if values.len() != 7 {
-        return Err(
-            "usage: nixfied-kernel workflow parallel-transition <state-file> <unit-name> <status> <exit-code|empty> <reason|empty> <extra-key|empty> <extra-value|empty>"
-                .to_string(),
-        );
-    }
-
-    let mut state = load_workflow_parallel_state(&values[0])?;
-    workflow_parallel_transition(
-        &mut state,
-        &values[1],
-        &values[2],
-        &values[3],
-        &values[4],
-        &values[5],
-        &values[6],
-    )?;
-    write_workflow_parallel_state(&values[0], &state)?;
-    println!("OK: workflow parallel-transition");
     Ok(())
 }
 
@@ -2114,8 +865,8 @@ fn registry_runtime_status_command(values: &[String]) -> Result<(), String> {
         let payload = object_field(event, "payload")
             .ok_or_else(|| "registry runtime-status service event missing payload".to_string())?;
         registry_found = "1".to_string();
-        registry_state = required_string_field(payload, "state", "registry runtime-status payload")?
-            .to_string();
+        registry_state =
+            required_string_field(payload, "state", "registry runtime-status payload")?.to_string();
         owner_run_id = object_string(payload, "runId").unwrap_or("").to_string();
         registry_running = if matches!(
             registry_state.as_str(),
@@ -2127,11 +878,15 @@ fn registry_runtime_status_command(values: &[String]) -> Result<(), String> {
         };
 
         if let Some(detail) = object_field(payload, "detail") {
-            owner_scope = object_string(detail, "ownerScope").unwrap_or("").to_string();
+            owner_scope = object_string(detail, "ownerScope")
+                .unwrap_or("")
+                .to_string();
             ephemeral_root = object_string(detail, "ephemeralRoot")
                 .unwrap_or("")
                 .to_string();
-            wait_reason = object_string(detail, "waitReason").unwrap_or("").to_string();
+            wait_reason = object_string(detail, "waitReason")
+                .unwrap_or("")
+                .to_string();
             log_path = object_string(detail, "logPath").unwrap_or("").to_string();
         }
     }
@@ -2184,14 +939,12 @@ fn registry_latest_event_from_index(path: &str) -> Result<Option<JsonValue>, Str
         let Some(event_json) = parts.next() else {
             continue;
         };
-        latest = Some(
-            parse_json(event_json).map_err(|err| {
-                format!(
-                    "registry runtime-status index {} contains invalid json: {}",
-                    path, err
-                )
-            })?,
-        );
+        latest = Some(parse_json(event_json).map_err(|err| {
+            format!(
+                "registry runtime-status index {} contains invalid json: {}",
+                path, err
+            )
+        })?);
     }
     Ok(latest)
 }
@@ -2251,9 +1004,18 @@ fn summary_compose_command(values: &[String]) -> Result<(), String> {
     let teardown_duration = parse_i64_text(&values[18], "summary compose teardown-duration")?;
     let accounted_duration = parse_i64_text(&values[19], "summary compose accounted-duration")?;
     let untracked_duration = parse_i64_text(&values[20], "summary compose untracked-duration")?;
-    let max_workers = optional_i64_json_value(parse_optional_i64(&values[21], "summary compose max-workers")?);
-    let peak_workers = optional_i64_json_value(parse_optional_i64(&values[22], "summary compose peak-workers")?);
-    let canceled_count = optional_i64_json_value(parse_optional_i64(&values[23], "summary compose canceled-count")?);
+    let max_workers = optional_i64_json_value(parse_optional_i64(
+        &values[21],
+        "summary compose max-workers",
+    )?);
+    let peak_workers = optional_i64_json_value(parse_optional_i64(
+        &values[22],
+        "summary compose peak-workers",
+    )?);
+    let canceled_count = optional_i64_json_value(parse_optional_i64(
+        &values[23],
+        "summary compose canceled-count",
+    )?);
     let payload = json!({
         "run_id": values[2],
         "attempt_id": values[3],
@@ -2470,127 +1232,6 @@ fn run_record_history_entry(state: &str, at: &str) -> JsonValue {
     json!({ "state": state, "at": at })
 }
 
-fn parse_bool_flag(value: &str) -> Result<bool, String> {
-    match value {
-        "1" | "true" | "TRUE" => Ok(true),
-        "0" | "false" | "FALSE" => Ok(false),
-        other => Err(format!("expected boolean flag, got {}", other)),
-    }
-}
-
-fn nullable_string_value(value: &str) -> JsonValue {
-    if value.is_empty() {
-        JsonValue::Null
-    } else {
-        JsonValue::String(value.to_string())
-    }
-}
-
-fn optional_string_value(value: &str) -> Option<String> {
-    if value.is_empty() {
-        None
-    } else {
-        Some(value.to_string())
-    }
-}
-
-fn parse_optional_i64(value: &str, label: &str) -> Result<Option<i64>, String> {
-    if value.is_empty() || value == "null" {
-        Ok(None)
-    } else {
-        parse_i64_text(value, label).map(Some)
-    }
-}
-
-fn parse_optional_bool_text(value: &str, label: &str) -> Result<Option<bool>, String> {
-    match value {
-        "" | "null" => Ok(None),
-        "1" | "true" | "TRUE" => Ok(Some(true)),
-        "0" | "false" | "FALSE" => Ok(Some(false)),
-        other => Err(format!("{} must be bool or empty (got '{}')", label, other)),
-    }
-}
-
-fn next_flag_value(values: &[String], index: &mut usize, flag: &str) -> Result<String, String> {
-    let value = values
-        .get(*index)
-        .ok_or_else(|| format!("missing value for {}", flag))?
-        .clone();
-    *index += 1;
-    Ok(value)
-}
-
-fn insert_optional_string_field(
-    fields: &mut Map<String, JsonValue>,
-    key: &str,
-    value: Option<String>,
-) {
-    if let Some(value) = value {
-        fields.insert(key.to_string(), JsonValue::String(value));
-    }
-}
-
-fn insert_optional_number_field(
-    fields: &mut Map<String, JsonValue>,
-    key: &str,
-    value: Option<i64>,
-) {
-    if let Some(value) = value {
-        fields.insert(
-            key.to_string(),
-            JsonValue::Number(Number::from(value)),
-        );
-    }
-}
-
-fn insert_optional_bool_field(
-    fields: &mut Map<String, JsonValue>,
-    key: &str,
-    value: Option<bool>,
-) {
-    if let Some(value) = value {
-        fields.insert(key.to_string(), JsonValue::Bool(value));
-    }
-}
-
-fn insert_optional_json_field(
-    fields: &mut Map<String, JsonValue>,
-    key: &str,
-    value: Option<JsonValue>,
-) {
-    if let Some(value) = value {
-        fields.insert(key.to_string(), value);
-    }
-}
-
-fn optional_i64_json_value(value: Option<i64>) -> JsonValue {
-    match value {
-        Some(value) => JsonValue::Number(Number::from(value)),
-        None => JsonValue::Null,
-    }
-}
-
-fn parse_tab_separated_name_value_file(
-    path: &str,
-    label: &str,
-) -> Result<Vec<(String, String)>, String> {
-    let text = read_text(path)?;
-    let mut entries = Vec::new();
-    for line in text.lines() {
-        if line.is_empty() {
-            continue;
-        }
-        let (name, value) = line.split_once('\t').ok_or_else(|| {
-            format!(
-                "{} {} must contain tab-separated name/value pairs",
-                label, path
-            )
-        })?;
-        entries.push((name.to_string(), value.to_string()));
-    }
-    Ok(entries)
-}
-
 fn load_line_set(path: &str) -> Result<BTreeSet<String>, String> {
     let text = read_text(path)?;
     Ok(text
@@ -2797,1003 +1438,6 @@ enum WorkflowParallelAction {
     },
 }
 
-fn load_workflow_scheduler_plan(path: &str) -> Result<WorkflowSchedulerPlan, String> {
-    let value = parse_json_file(path, "workflow scheduler plan")?;
-    let kind = required_string_field(&value, "kind", "workflow scheduler plan")?;
-    if kind != "nixfied-workflow-scheduler-plan" {
-        return Err(format!("unsupported workflow scheduler plan kind: {}", kind));
-    }
-    let version = object_field(&value, "version")
-        .and_then(json_value_to_i64)
-        .ok_or_else(|| "workflow scheduler plan missing integer field version".to_string())?;
-    if version != 1 {
-        return Err(format!(
-            "workflow scheduler plan version must be 1 (got {})",
-            version
-        ));
-    }
-
-    let workflows_value = object_field(&value, "workflows")
-        .and_then(JsonValue::as_object)
-        .ok_or_else(|| "workflow scheduler plan missing object field workflows".to_string())?;
-    let mut workflows = BTreeMap::new();
-    for (workflow_id, workflow_value) in workflows_value {
-        let units_value = object_field(workflow_value, "units")
-            .and_then(JsonValue::as_array)
-            .ok_or_else(|| {
-                format!(
-                    "workflow scheduler plan workflow '{}' missing array field units",
-                    workflow_id
-                )
-            })?;
-        let mut units = Vec::new();
-        for unit_value in units_value {
-            units.push(WorkflowSchedulerUnitPlan {
-                name: required_string_field(unit_value, "name", "workflow scheduler unit")?
-                    .to_string(),
-                task_id: required_string_field(unit_value, "taskId", "workflow scheduler unit")?
-                    .to_string(),
-                needs: array_strings(unit_value, "needs"),
-                locks: array_strings(unit_value, "locks"),
-                required_services: array_strings(unit_value, "requiredServices"),
-                skip_if_missing_env: array_strings(unit_value, "skipIfMissingEnv"),
-                when_env_present: array_strings(unit_value, "whenEnvPresent"),
-                when_env_equals: object_string_map(
-                    unit_value,
-                    "whenEnvEquals",
-                    "workflow scheduler unit",
-                )?,
-                selected_services_csv: object_string(unit_value, "selectedServicesCsv")
-                    .unwrap_or("")
-                    .to_string(),
-                produces_json: object_string(unit_value, "producesJson")
-                    .unwrap_or("{}")
-                    .to_string(),
-            });
-        }
-        workflows.insert(workflow_id.clone(), WorkflowSchedulerWorkflow { units });
-    }
-    Ok(WorkflowSchedulerPlan { workflows })
-}
-
-fn build_workflow_serial_state(
-    workflow: &WorkflowSchedulerWorkflow,
-    workflow_id: &str,
-    fail_fast: bool,
-    skipped_services: &BTreeSet<String>,
-) -> WorkflowSerialState {
-    let mut units = BTreeMap::new();
-    let mut order = Vec::new();
-
-    for unit in &workflow.units {
-        order.push(unit.name.clone());
-        units.insert(
-            unit.name.clone(),
-            WorkflowSerialUnitState {
-                name: unit.name.clone(),
-                task_id: unit.task_id.clone(),
-                needs_left: unit.needs.len() as i64,
-                dependents: Vec::new(),
-                state: "pending".to_string(),
-                cancel_reason: String::new(),
-                cancel_extra_key: String::new(),
-                cancel_extra_value: String::new(),
-                selected_services_csv: unit.selected_services_csv.clone(),
-            },
-        );
-    }
-
-    for unit in &workflow.units {
-        for dependency in &unit.needs {
-            if let Some(dep_state) = units.get_mut(dependency) {
-                dep_state.dependents.push(unit.name.clone());
-            }
-        }
-    }
-
-    for unit in &workflow.units {
-        if let Some(reason) = workflow_unit_direct_cancel_reason(unit, skipped_services) {
-            workflow_serial_mark_canceled(&mut units, &unit.name, &reason.0, &reason.1, &reason.2);
-            let task_id = units
-                .get(&unit.name)
-                .map(|entry| entry.task_id.clone())
-                .unwrap_or_default();
-            let dependents = units
-                .get(&unit.name)
-                .map(|entry| entry.dependents.clone())
-                .unwrap_or_default();
-            for dependent in dependents {
-                workflow_serial_mark_dependency_canceled_recursive(
-                    &mut units,
-                    &dependent,
-                    "dependency-skipped",
-                    &task_id,
-                );
-            }
-        }
-    }
-
-    for unit in &workflow.units {
-        if matches!(
-            units.get(&unit.name).map(|entry| entry.state.as_str()),
-            Some("pending")
-        ) && unit.needs.is_empty()
-        {
-            if let Some(entry) = units.get_mut(&unit.name) {
-                entry.state = "ready".to_string();
-            }
-        }
-    }
-
-    WorkflowSerialState {
-        workflow_id: workflow_id.to_string(),
-        fail_fast,
-        workflow_status: 0,
-        halted: false,
-        order,
-        units,
-    }
-}
-
-fn workflow_unit_direct_cancel_reason(
-    unit: &WorkflowSchedulerUnitPlan,
-    skipped_services: &BTreeSet<String>,
-) -> Option<(String, String, String)> {
-    let missing = unit
-        .skip_if_missing_env
-        .iter()
-        .filter(|env_name| env::var(env_name.as_str()).unwrap_or_default().is_empty())
-        .cloned()
-        .collect::<Vec<_>>();
-    if !missing.is_empty() {
-        return Some((
-            "missing-env".to_string(),
-            "missing".to_string(),
-            missing.join(","),
-        ));
-    }
-
-    if let Some(service_name) = unit
-        .required_services
-        .iter()
-        .find(|service_name| skipped_services.contains(*service_name))
-    {
-        return Some((
-            "service-skipped".to_string(),
-            "serviceName".to_string(),
-            service_name.to_string(),
-        ));
-    }
-
-    let when_env_present_missing = unit
-        .when_env_present
-        .iter()
-        .any(|env_name| env::var(env_name.as_str()).unwrap_or_default().is_empty());
-    if when_env_present_missing {
-        return Some(("when-false".to_string(), String::new(), String::new()));
-    }
-
-    let when_env_equals_matches = unit.when_env_equals.iter().all(|(env_name, expected)| {
-        env::var(env_name.as_str()).unwrap_or_default() == *expected
-    });
-    if !unit.when_env_equals.is_empty() && !when_env_equals_matches {
-        return Some(("when-false".to_string(), String::new(), String::new()));
-    }
-
-    None
-}
-
-fn workflow_serial_mark_canceled(
-    units: &mut BTreeMap<String, WorkflowSerialUnitState>,
-    unit_name: &str,
-    reason: &str,
-    extra_key: &str,
-    extra_value: &str,
-) {
-    let Some(entry) = units.get_mut(unit_name) else {
-        return;
-    };
-    if entry.state != "pending" && entry.state != "ready" {
-        return;
-    }
-    entry.state = "cancel-pending".to_string();
-    entry.cancel_reason = reason.to_string();
-    entry.cancel_extra_key = extra_key.to_string();
-    entry.cancel_extra_value = extra_value.to_string();
-}
-
-fn workflow_serial_mark_dependency_canceled_recursive(
-    units: &mut BTreeMap<String, WorkflowSerialUnitState>,
-    unit_name: &str,
-    reason: &str,
-    dependency_task_id: &str,
-) {
-    workflow_serial_mark_canceled(units, unit_name, reason, "dependency", dependency_task_id);
-    let dependents = units
-        .get(unit_name)
-        .map(|entry| entry.dependents.clone())
-        .unwrap_or_default();
-    for dependent in dependents {
-        workflow_serial_mark_dependency_canceled_recursive(
-            units,
-            &dependent,
-            reason,
-            dependency_task_id,
-        );
-    }
-}
-
-fn workflow_serial_next_action(state: &WorkflowSerialState) -> WorkflowSerialAction {
-    if state.halted {
-        return WorkflowSerialAction::Done {
-            workflow_status: state.workflow_status,
-        };
-    }
-
-    for unit_name in &state.order {
-        let Some(unit) = state.units.get(unit_name) else {
-            continue;
-        };
-        match unit.state.as_str() {
-            "cancel-pending" => {
-                return WorkflowSerialAction::Cancel {
-                    unit_name: unit.name.clone(),
-                    task_id: unit.task_id.clone(),
-                    reason: unit.cancel_reason.clone(),
-                    extra_key: unit.cancel_extra_key.clone(),
-                    extra_value: unit.cancel_extra_value.clone(),
-                }
-            }
-            "ready" => {
-                return WorkflowSerialAction::Execute {
-                    unit_name: unit.name.clone(),
-                    task_id: unit.task_id.clone(),
-                    selected_services_csv: unit.selected_services_csv.clone(),
-                }
-            }
-            _ => {}
-        }
-    }
-
-    WorkflowSerialAction::Done {
-        workflow_status: state.workflow_status,
-    }
-}
-
-fn workflow_serial_transition(
-    state: &mut WorkflowSerialState,
-    unit_name: &str,
-    status: &str,
-    exit_code_text: &str,
-    reason: &str,
-    extra_key: &str,
-    extra_value: &str,
-) -> Result<(), String> {
-    let dependents = state
-        .units
-        .get(unit_name)
-        .map(|unit| unit.dependents.clone())
-        .ok_or_else(|| format!("unknown workflow serial unit '{}'", unit_name))?;
-    let task_id = state
-        .units
-        .get(unit_name)
-        .map(|unit| unit.task_id.clone())
-        .unwrap_or_default();
-
-    match status {
-        "canceled" => {
-            let unit = state
-                .units
-                .get_mut(unit_name)
-                .ok_or_else(|| format!("unknown workflow serial unit '{}'", unit_name))?;
-            unit.state = "canceled".to_string();
-            if !reason.is_empty() {
-                unit.cancel_reason = reason.to_string();
-                unit.cancel_extra_key = extra_key.to_string();
-                unit.cancel_extra_value = extra_value.to_string();
-            }
-        }
-        "passed" => {
-            let unit = state
-                .units
-                .get_mut(unit_name)
-                .ok_or_else(|| format!("unknown workflow serial unit '{}'", unit_name))?;
-            unit.state = "passed".to_string();
-            for dependent in dependents {
-                if let Some(entry) = state.units.get_mut(&dependent) {
-                    if entry.state == "pending" && entry.needs_left > 0 {
-                        entry.needs_left -= 1;
-                        if entry.needs_left == 0 {
-                            entry.state = "ready".to_string();
-                        }
-                    }
-                }
-            }
-        }
-        "failed" => {
-            let exit_code = if exit_code_text.is_empty() {
-                1
-            } else {
-                parse_i64_text(exit_code_text, "workflow serial failed exit-code")?
-            };
-            let unit = state
-                .units
-                .get_mut(unit_name)
-                .ok_or_else(|| format!("unknown workflow serial unit '{}'", unit_name))?;
-            unit.state = "failed".to_string();
-            if state.workflow_status == 0 {
-                state.workflow_status = exit_code.max(1);
-            }
-            if state.fail_fast {
-                state.halted = true;
-            } else {
-                for dependent in dependents {
-                    workflow_serial_mark_dependency_canceled_recursive(
-                        &mut state.units,
-                        &dependent,
-                        "dependency-not-passed",
-                        &task_id,
-                    );
-                }
-            }
-        }
-        other => {
-            return Err(format!(
-                "unsupported workflow serial transition status '{}'",
-                other
-            ))
-        }
-    }
-
-    Ok(())
-}
-
-fn load_workflow_serial_state(path: &str) -> Result<WorkflowSerialState, String> {
-    let value = parse_json_file(path, "workflow serial state")?;
-    let kind = required_string_field(&value, "kind", "workflow serial state")?;
-    if kind != "nixfied-workflow-serial-state" {
-        return Err(format!("unsupported workflow serial state kind: {}", kind));
-    }
-    let version = object_field(&value, "version")
-        .and_then(json_value_to_i64)
-        .ok_or_else(|| "workflow serial state missing integer field version".to_string())?;
-    if version != 1 {
-        return Err(format!(
-            "workflow serial state version must be 1 (got {})",
-            version
-        ));
-    }
-
-    let order = object_field(&value, "order")
-        .and_then(JsonValue::as_array)
-        .map_or(&[] as &[JsonValue], |v| v)
-        .iter()
-        .filter_map(JsonValue::as_str)
-        .map(|item| item.to_string())
-        .collect::<Vec<_>>();
-    let units_value = object_field(&value, "units")
-        .and_then(JsonValue::as_object)
-        .ok_or_else(|| "workflow serial state missing object field units".to_string())?;
-    let mut units = BTreeMap::new();
-    for (unit_name, unit_value) in units_value {
-        units.insert(
-            unit_name.clone(),
-            WorkflowSerialUnitState {
-                name: required_string_field(unit_value, "name", "workflow serial unit")?
-                    .to_string(),
-                task_id: required_string_field(unit_value, "taskId", "workflow serial unit")?
-                    .to_string(),
-                needs_left: object_field(unit_value, "needsLeft")
-                    .and_then(json_value_to_i64)
-                    .unwrap_or(0),
-                dependents: object_field(unit_value, "dependents")
-                    .and_then(JsonValue::as_array)
-                    .map_or(&[] as &[JsonValue], |v| v)
-                    .iter()
-                    .filter_map(JsonValue::as_str)
-                    .map(|item| item.to_string())
-                    .collect(),
-                state: required_string_field(unit_value, "state", "workflow serial unit")?
-                    .to_string(),
-                cancel_reason: object_string(unit_value, "cancelReason")
-                    .unwrap_or("")
-                    .to_string(),
-                cancel_extra_key: object_string(unit_value, "cancelExtraKey")
-                    .unwrap_or("")
-                    .to_string(),
-                cancel_extra_value: object_string(unit_value, "cancelExtraValue")
-                    .unwrap_or("")
-                    .to_string(),
-                selected_services_csv: object_string(unit_value, "selectedServicesCsv")
-                    .unwrap_or("")
-                    .to_string(),
-            },
-        );
-    }
-
-    Ok(WorkflowSerialState {
-        workflow_id: required_string_field(&value, "workflowId", "workflow serial state")?
-            .to_string(),
-        fail_fast: object_field(&value, "failFast")
-            .and_then(JsonValue::as_bool)
-            .unwrap_or(false),
-        workflow_status: object_field(&value, "workflowStatus")
-            .and_then(json_value_to_i64)
-            .unwrap_or(0),
-        halted: object_field(&value, "halted")
-            .and_then(JsonValue::as_bool)
-            .unwrap_or(false),
-        order,
-        units,
-    })
-}
-
-fn write_workflow_serial_state(path: &str, state: &WorkflowSerialState) -> Result<(), String> {
-    let mut units = Map::new();
-    for (unit_name, unit) in &state.units {
-        let dependents: Vec<JsonValue> = unit.dependents.iter().map(|item| json!(item)).collect();
-        units.insert(unit_name.clone(), json!({
-            "name": unit.name,
-            "taskId": unit.task_id,
-            "needsLeft": unit.needs_left,
-            "dependents": dependents,
-            "state": unit.state,
-            "cancelReason": unit.cancel_reason,
-            "cancelExtraKey": unit.cancel_extra_key,
-            "cancelExtraValue": unit.cancel_extra_value,
-            "selectedServicesCsv": unit.selected_services_csv,
-        }));
-    }
-    let order: Vec<JsonValue> = state.order.iter().map(|item| json!(item)).collect();
-    let value = json!({
-        "kind": "nixfied-workflow-serial-state",
-        "version": 1,
-        "workflowId": state.workflow_id,
-        "failFast": state.fail_fast,
-        "workflowStatus": state.workflow_status,
-        "halted": state.halted,
-        "order": order,
-        "units": JsonValue::Object(units),
-    });
-    write_text_atomic(path, &format!("{}\n", render_json_compact(&value)))
-}
-
-fn build_workflow_parallel_state(
-    workflow: &WorkflowSchedulerWorkflow,
-    workflow_id: &str,
-    fail_fast: bool,
-    max_workers: i64,
-    skipped_services: &BTreeSet<String>,
-) -> WorkflowParallelState {
-    let mut units = BTreeMap::new();
-    let mut order = Vec::new();
-
-    for unit in &workflow.units {
-        order.push(unit.name.clone());
-        units.insert(
-            unit.name.clone(),
-            WorkflowParallelUnitState {
-                name: unit.name.clone(),
-                task_id: unit.task_id.clone(),
-                needs_left: unit.needs.len() as i64,
-                dependents: Vec::new(),
-                locks: unit.locks.clone(),
-                state: "pending".to_string(),
-                cancel_reason: String::new(),
-                cancel_extra_key: String::new(),
-                cancel_extra_value: String::new(),
-                selected_services_csv: unit.selected_services_csv.clone(),
-                produces_json: unit.produces_json.clone(),
-            },
-        );
-    }
-
-    for unit in &workflow.units {
-        for dependency in &unit.needs {
-            if let Some(dep_state) = units.get_mut(dependency) {
-                dep_state.dependents.push(unit.name.clone());
-            }
-        }
-    }
-
-    for unit in &workflow.units {
-        if let Some(reason) = workflow_unit_direct_cancel_reason(unit, skipped_services) {
-            workflow_parallel_mark_canceled(&mut units, &unit.name, &reason.0, &reason.1, &reason.2);
-            let task_id = units
-                .get(&unit.name)
-                .map(|entry| entry.task_id.clone())
-                .unwrap_or_default();
-            let dependents = units
-                .get(&unit.name)
-                .map(|entry| entry.dependents.clone())
-                .unwrap_or_default();
-            for dependent in dependents {
-                workflow_parallel_mark_dependency_canceled_recursive(
-                    &mut units,
-                    &dependent,
-                    "dependency-skipped",
-                    &task_id,
-                );
-            }
-        }
-    }
-
-    for unit in &workflow.units {
-        if matches!(
-            units.get(&unit.name).map(|entry| entry.state.as_str()),
-            Some("pending")
-        ) && unit.needs.is_empty()
-        {
-            if let Some(entry) = units.get_mut(&unit.name) {
-                entry.state = "ready".to_string();
-            }
-        }
-    }
-
-    WorkflowParallelState {
-        workflow_id: workflow_id.to_string(),
-        fail_fast,
-        max_workers: max_workers.max(1),
-        workflow_status: 0,
-        stop_scheduling: false,
-        order,
-        units,
-    }
-}
-
-fn workflow_parallel_mark_canceled(
-    units: &mut BTreeMap<String, WorkflowParallelUnitState>,
-    unit_name: &str,
-    reason: &str,
-    extra_key: &str,
-    extra_value: &str,
-) {
-    let Some(entry) = units.get_mut(unit_name) else {
-        return;
-    };
-    if entry.state != "pending" && entry.state != "ready" {
-        return;
-    }
-    entry.state = "cancel-pending".to_string();
-    entry.cancel_reason = reason.to_string();
-    entry.cancel_extra_key = extra_key.to_string();
-    entry.cancel_extra_value = extra_value.to_string();
-}
-
-fn workflow_parallel_mark_dependency_canceled_recursive(
-    units: &mut BTreeMap<String, WorkflowParallelUnitState>,
-    unit_name: &str,
-    reason: &str,
-    dependency_task_id: &str,
-) {
-    workflow_parallel_mark_canceled(units, unit_name, reason, "dependency", dependency_task_id);
-    let dependents = units
-        .get(unit_name)
-        .map(|entry| entry.dependents.clone())
-        .unwrap_or_default();
-    for dependent in dependents {
-        workflow_parallel_mark_dependency_canceled_recursive(
-            units,
-            &dependent,
-            reason,
-            dependency_task_id,
-        );
-    }
-}
-
-fn workflow_parallel_mark_all_pending_ready(
-    units: &mut BTreeMap<String, WorkflowParallelUnitState>,
-    reason: &str,
-) {
-    let unit_names = units.keys().cloned().collect::<Vec<_>>();
-    for unit_name in unit_names {
-        workflow_parallel_mark_canceled(units, &unit_name, reason, "", "");
-    }
-}
-
-fn workflow_parallel_request_running_cancel(
-    units: &mut BTreeMap<String, WorkflowParallelUnitState>,
-    reason: &str,
-) {
-    for unit in units.values_mut() {
-        if unit.state == "running" {
-            unit.state = "cancel-running-requested".to_string();
-            unit.cancel_reason = reason.to_string();
-            unit.cancel_extra_key = String::new();
-            unit.cancel_extra_value = String::new();
-        }
-    }
-}
-
-fn workflow_parallel_unit_holds_locks(state: &str) -> bool {
-    matches!(
-        state,
-        "running" | "cancel-running-requested" | "cancel-running-signaled"
-    )
-}
-
-fn workflow_parallel_running_count(state: &WorkflowParallelState) -> i64 {
-    state
-        .units
-        .values()
-        .filter(|unit| workflow_parallel_unit_holds_locks(&unit.state))
-        .count() as i64
-}
-
-fn workflow_parallel_completed_count(state: &WorkflowParallelState) -> i64 {
-    state
-        .units
-        .values()
-        .filter(|unit| matches!(unit.state.as_str(), "passed" | "failed" | "canceled"))
-        .count() as i64
-}
-
-fn workflow_parallel_unit_has_lock_conflict(
-    state: &WorkflowParallelState,
-    unit_name: &str,
-) -> bool {
-    let Some(candidate) = state.units.get(unit_name) else {
-        return true;
-    };
-    for (other_name, other_unit) in &state.units {
-        if other_name == unit_name || !workflow_parallel_unit_holds_locks(&other_unit.state) {
-            continue;
-        }
-        for lock in &candidate.locks {
-            if other_unit.locks.iter().any(|other_lock| other_lock == lock) {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-fn workflow_parallel_mark_blocked_if_needed(state: &mut WorkflowParallelState) {
-    if state.stop_scheduling {
-        return;
-    }
-    if workflow_parallel_running_count(state) > 0 {
-        return;
-    }
-    if workflow_parallel_completed_count(state) >= state.order.len() as i64 {
-        return;
-    }
-    workflow_parallel_mark_all_pending_ready(&mut state.units, "blocked");
-    if state.workflow_status == 0 {
-        state.workflow_status = 1;
-    }
-}
-
-fn workflow_parallel_next_action(state: &mut WorkflowParallelState) -> WorkflowParallelAction {
-    for unit_name in &state.order {
-        let Some(unit) = state.units.get(unit_name) else {
-            continue;
-        };
-        if unit.state == "cancel-running-requested" {
-            return WorkflowParallelAction::SignalRunning {
-                unit_name: unit.name.clone(),
-            };
-        }
-    }
-
-    for unit_name in &state.order {
-        let Some(unit) = state.units.get(unit_name) else {
-            continue;
-        };
-        if unit.state == "cancel-pending" {
-            return WorkflowParallelAction::Cancel {
-                unit_name: unit.name.clone(),
-                task_id: unit.task_id.clone(),
-                reason: unit.cancel_reason.clone(),
-                extra_key: unit.cancel_extra_key.clone(),
-                extra_value: unit.cancel_extra_value.clone(),
-            };
-        }
-    }
-
-    if !state.stop_scheduling && workflow_parallel_running_count(state) < state.max_workers {
-        for unit_name in &state.order {
-            let Some(unit) = state.units.get(unit_name) else {
-                continue;
-            };
-            if unit.state != "ready" || workflow_parallel_unit_has_lock_conflict(state, unit_name) {
-                continue;
-            }
-            return WorkflowParallelAction::Start {
-                unit_name: unit.name.clone(),
-                task_id: unit.task_id.clone(),
-                selected_services_csv: unit.selected_services_csv.clone(),
-                produces_json: unit.produces_json.clone(),
-            };
-        }
-    }
-
-    workflow_parallel_mark_blocked_if_needed(state);
-
-    for unit_name in &state.order {
-        let Some(unit) = state.units.get(unit_name) else {
-            continue;
-        };
-        if unit.state == "cancel-pending" {
-            return WorkflowParallelAction::Cancel {
-                unit_name: unit.name.clone(),
-                task_id: unit.task_id.clone(),
-                reason: unit.cancel_reason.clone(),
-                extra_key: unit.cancel_extra_key.clone(),
-                extra_value: unit.cancel_extra_value.clone(),
-            };
-        }
-    }
-
-    if workflow_parallel_running_count(state) > 0 {
-        WorkflowParallelAction::Wait
-    } else {
-        WorkflowParallelAction::Done {
-            workflow_status: state.workflow_status,
-        }
-    }
-}
-
-fn workflow_parallel_transition(
-    state: &mut WorkflowParallelState,
-    unit_name: &str,
-    status: &str,
-    exit_code_text: &str,
-    reason: &str,
-    extra_key: &str,
-    extra_value: &str,
-) -> Result<(), String> {
-    let dependents = state
-        .units
-        .get(unit_name)
-        .map(|unit| unit.dependents.clone())
-        .ok_or_else(|| format!("unknown workflow parallel unit '{}'", unit_name))?;
-    let task_id = state
-        .units
-        .get(unit_name)
-        .map(|unit| unit.task_id.clone())
-        .unwrap_or_default();
-
-    match status {
-        "started" => {
-            let unit = state
-                .units
-                .get_mut(unit_name)
-                .ok_or_else(|| format!("unknown workflow parallel unit '{}'", unit_name))?;
-            unit.state = "running".to_string();
-        }
-        "canceled" => {
-            let unit = state
-                .units
-                .get_mut(unit_name)
-                .ok_or_else(|| format!("unknown workflow parallel unit '{}'", unit_name))?;
-            unit.state = "canceled".to_string();
-            if !reason.is_empty() {
-                unit.cancel_reason = reason.to_string();
-                unit.cancel_extra_key = extra_key.to_string();
-                unit.cancel_extra_value = extra_value.to_string();
-            }
-        }
-        "signal-sent" => {
-            let unit = state
-                .units
-                .get_mut(unit_name)
-                .ok_or_else(|| format!("unknown workflow parallel unit '{}'", unit_name))?;
-            if unit.state == "cancel-running-requested" {
-                unit.state = "cancel-running-signaled".to_string();
-            }
-        }
-        "canceled-running" => {
-            let unit = state
-                .units
-                .get_mut(unit_name)
-                .ok_or_else(|| format!("unknown workflow parallel unit '{}'", unit_name))?;
-            unit.state = "canceled".to_string();
-        }
-        "passed" => {
-            let unit = state
-                .units
-                .get_mut(unit_name)
-                .ok_or_else(|| format!("unknown workflow parallel unit '{}'", unit_name))?;
-            unit.state = "passed".to_string();
-            for dependent in dependents {
-                if let Some(entry) = state.units.get_mut(&dependent) {
-                    if entry.state == "pending" && entry.needs_left > 0 {
-                        entry.needs_left -= 1;
-                        if entry.needs_left == 0 {
-                            entry.state = "ready".to_string();
-                        }
-                    }
-                }
-            }
-        }
-        "failed" => {
-            let exit_code = if exit_code_text.is_empty() {
-                1
-            } else {
-                parse_i64_text(exit_code_text, "workflow parallel failed exit-code")?
-            };
-            let unit = state
-                .units
-                .get_mut(unit_name)
-                .ok_or_else(|| format!("unknown workflow parallel unit '{}'", unit_name))?;
-            unit.state = "failed".to_string();
-            if state.workflow_status == 0 {
-                state.workflow_status = exit_code.max(1);
-            }
-            if state.fail_fast {
-                state.stop_scheduling = true;
-                workflow_parallel_request_running_cancel(&mut state.units, "fail-fast-running");
-                workflow_parallel_mark_all_pending_ready(&mut state.units, "fail-fast");
-            } else {
-                for dependent in dependents {
-                    workflow_parallel_mark_dependency_canceled_recursive(
-                        &mut state.units,
-                        &dependent,
-                        "dependency-not-passed",
-                        &task_id,
-                    );
-                }
-            }
-        }
-        other => {
-            return Err(format!(
-                "unsupported workflow parallel transition status '{}'",
-                other
-            ))
-        }
-    }
-
-    Ok(())
-}
-
-fn load_workflow_parallel_state(path: &str) -> Result<WorkflowParallelState, String> {
-    let value = parse_json_file(path, "workflow parallel state")?;
-    let kind = required_string_field(&value, "kind", "workflow parallel state")?;
-    if kind != "nixfied-workflow-parallel-state" {
-        return Err(format!("unsupported workflow parallel state kind: {}", kind));
-    }
-    let version = object_field(&value, "version")
-        .and_then(json_value_to_i64)
-        .ok_or_else(|| "workflow parallel state missing integer field version".to_string())?;
-    if version != 1 {
-        return Err(format!(
-            "workflow parallel state version must be 1 (got {})",
-            version
-        ));
-    }
-
-    let order = object_field(&value, "order")
-        .and_then(JsonValue::as_array)
-        .map_or(&[] as &[JsonValue], |v| v)
-        .iter()
-        .filter_map(JsonValue::as_str)
-        .map(|item| item.to_string())
-        .collect::<Vec<_>>();
-    let units_value = object_field(&value, "units")
-        .and_then(JsonValue::as_object)
-        .ok_or_else(|| "workflow parallel state missing object field units".to_string())?;
-    let mut units = BTreeMap::new();
-    for (unit_name, unit_value) in units_value {
-        units.insert(
-            unit_name.clone(),
-            WorkflowParallelUnitState {
-                name: required_string_field(unit_value, "name", "workflow parallel unit")?
-                    .to_string(),
-                task_id: required_string_field(unit_value, "taskId", "workflow parallel unit")?
-                    .to_string(),
-                needs_left: object_field(unit_value, "needsLeft")
-                    .and_then(json_value_to_i64)
-                    .unwrap_or(0),
-                dependents: object_field(unit_value, "dependents")
-                    .and_then(JsonValue::as_array)
-                    .map_or(&[] as &[JsonValue], |v| v)
-                    .iter()
-                    .filter_map(JsonValue::as_str)
-                    .map(|item| item.to_string())
-                    .collect(),
-                locks: object_field(unit_value, "locks")
-                    .and_then(JsonValue::as_array)
-                    .map_or(&[] as &[JsonValue], |v| v)
-                    .iter()
-                    .filter_map(JsonValue::as_str)
-                    .map(|item| item.to_string())
-                    .collect(),
-                state: required_string_field(unit_value, "state", "workflow parallel unit")?
-                    .to_string(),
-                cancel_reason: object_string(unit_value, "cancelReason")
-                    .unwrap_or("")
-                    .to_string(),
-                cancel_extra_key: object_string(unit_value, "cancelExtraKey")
-                    .unwrap_or("")
-                    .to_string(),
-                cancel_extra_value: object_string(unit_value, "cancelExtraValue")
-                    .unwrap_or("")
-                    .to_string(),
-                selected_services_csv: object_string(unit_value, "selectedServicesCsv")
-                    .unwrap_or("")
-                    .to_string(),
-                produces_json: object_string(unit_value, "producesJson")
-                    .unwrap_or("{}")
-                    .to_string(),
-            },
-        );
-    }
-
-    Ok(WorkflowParallelState {
-        workflow_id: required_string_field(&value, "workflowId", "workflow parallel state")?
-            .to_string(),
-        fail_fast: object_field(&value, "failFast")
-            .and_then(JsonValue::as_bool)
-            .unwrap_or(false),
-        max_workers: object_field(&value, "maxWorkers")
-            .and_then(json_value_to_i64)
-            .unwrap_or(1),
-        workflow_status: object_field(&value, "workflowStatus")
-            .and_then(json_value_to_i64)
-            .unwrap_or(0),
-        stop_scheduling: object_field(&value, "stopScheduling")
-            .and_then(JsonValue::as_bool)
-            .unwrap_or(false),
-        order,
-        units,
-    })
-}
-
-fn write_workflow_parallel_state(path: &str, state: &WorkflowParallelState) -> Result<(), String> {
-    let mut units = Map::new();
-    for (unit_name, unit) in &state.units {
-        let dependents: Vec<JsonValue> = unit.dependents.iter().map(|item| json!(item)).collect();
-        let locks: Vec<JsonValue> = unit.locks.iter().map(|item| json!(item)).collect();
-        units.insert(unit_name.clone(), json!({
-            "name": unit.name,
-            "taskId": unit.task_id,
-            "needsLeft": unit.needs_left,
-            "dependents": dependents,
-            "locks": locks,
-            "state": unit.state,
-            "cancelReason": unit.cancel_reason,
-            "cancelExtraKey": unit.cancel_extra_key,
-            "cancelExtraValue": unit.cancel_extra_value,
-            "selectedServicesCsv": unit.selected_services_csv,
-            "producesJson": unit.produces_json,
-        }));
-    }
-    let order: Vec<JsonValue> = state.order.iter().map(|item| json!(item)).collect();
-    let value = json!({
-        "kind": "nixfied-workflow-parallel-state",
-        "version": 1,
-        "workflowId": state.workflow_id,
-        "failFast": state.fail_fast,
-        "maxWorkers": state.max_workers,
-        "workflowStatus": state.workflow_status,
-        "stopScheduling": state.stop_scheduling,
-        "order": order,
-        "units": JsonValue::Object(units),
-    });
-    write_text_atomic(path, &format!("{}\n", render_json_compact(&value)))
-}
-
-fn load_workflow_summary_plan(path: &str) -> Result<WorkflowSummaryPlan, String> {
-    let value = parse_json_file(path, "workflow summary plan")?;
-    let kind = required_string_field(&value, "kind", "workflow summary plan")?;
-    if kind != "nixfied-workflow-summary-plan" {
-        return Err(format!("unsupported workflow summary plan kind: {}", kind));
-    }
-    let version = object_field(&value, "version")
-        .and_then(json_value_to_i64)
-        .ok_or_else(|| "workflow summary plan missing integer field version".to_string())?;
-    if version != 1 {
-        return Err(format!(
-            "workflow summary plan version must be 1 (got {})",
-            version
-        ));
-    }
-    Ok(WorkflowSummaryPlan {
-        task_runner_types: object_string_map(&value, "taskRunnerTypes", "workflow summary plan")?,
-    })
-}
-
 fn workflow_step_status_from_state_reason(state: &str, reason: &str) -> String {
     if state == "canceled"
         && matches!(
@@ -3883,7 +1527,10 @@ fn collect_workflow_summary(
             }
         }
 
-        if !matches!(state, "queued" | "running" | "passed" | "failed" | "canceled") {
+        if !matches!(
+            state,
+            "queued" | "running" | "passed" | "failed" | "canceled"
+        ) {
             continue;
         }
 
@@ -4042,7 +1689,8 @@ fn parse_summary_steps_file(path: &str) -> Result<Vec<JsonValue>, String> {
         let order = parse_i64_text(parts[4], "summary step order")?;
         let workflow_id_val = nullable_string_value(parts[5]);
         let reason = nullable_string_value(parts[6]);
-        let exit_code_val = optional_i64_json_value(parse_optional_i64(parts[7], "summary step exit_code")?);
+        let exit_code_val =
+            optional_i64_json_value(parse_optional_i64(parts[7], "summary step exit_code")?);
         steps.push(json!({
             "name": parts[0],
             "status": parts[1],
@@ -4055,22 +1703,6 @@ fn parse_summary_steps_file(path: &str) -> Result<Vec<JsonValue>, String> {
         }));
     }
     Ok(steps)
-}
-
-fn append_line(path: &str, line: &str) -> Result<(), String> {
-    let target = Path::new(path);
-    if let Some(parent) = target.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|err| format!("failed to create {}: {}", parent.display(), err))?;
-    }
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .map_err(|err| format!("failed to open {}: {}", path, err))?;
-    file.write_all(line.as_bytes())
-        .and_then(|_| file.write_all(b"\n"))
-        .map_err(|err| format!("failed to append {}: {}", path, err))
 }
 
 fn current_utc_timestamp() -> Result<String, String> {
@@ -4089,16 +1721,6 @@ fn current_epoch_seconds() -> Result<i64, String> {
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|err| format!("failed to compute epoch seconds: {}", err))?;
     Ok(i64::try_from(now.as_secs()).unwrap_or(i64::MAX))
-}
-
-fn print_json_scalar(value: &JsonValue) {
-    match value {
-        JsonValue::Null => println!(),
-        JsonValue::Bool(value) => println!("{}", value),
-        JsonValue::String(value) => println!("{}", value),
-        JsonValue::Number(number) => println!("{}", number),
-        JsonValue::Array(_) | JsonValue::Object(_) => println!("{}", render_json_compact(value)),
-    }
 }
 
 fn format_duration_seconds(seconds: i64) -> String {
@@ -4154,10 +1776,7 @@ fn adapter_decode_supervisor_status(values: &[String]) -> Result<(), String> {
             .ok_or_else(|| "supervisor process row must be an object".to_string())?;
         println!(
             "{}\t{}\t{}\t{}",
-            object
-                .get("name")
-                .and_then(JsonValue::as_str)
-                .unwrap_or(""),
+            object.get("name").and_then(JsonValue::as_str).unwrap_or(""),
             object
                 .get("status")
                 .and_then(JsonValue::as_str)
@@ -4225,8 +1844,7 @@ fn probe_command(subcommand: &str, values: &[String]) -> Result<(), String> {
 
 fn probe_evaluate_command(values: &[String]) -> Result<(), String> {
     let plan_path = values.first().ok_or_else(|| {
-        "usage: nixfied-kernel probe evaluate <plan-file> [payload-file] [export-file]"
-            .to_string()
+        "usage: nixfied-kernel probe evaluate <plan-file> [payload-file] [export-file]".to_string()
     })?;
     if values.len() > 3 {
         return Err(
@@ -4251,7 +1869,9 @@ fn probe_evaluate_command(values: &[String]) -> Result<(), String> {
             if let Some(export_path) = export_path {
                 write_shell_exports(export_path, &exports)?;
             } else if !exports.is_empty() {
-                return Err("probe evaluate requires export-file when plan emits exports".to_string());
+                return Err(
+                    "probe evaluate requires export-file when plan emits exports".to_string(),
+                );
             }
 
             println!("OK: probe evaluate kind={}", plan.probe_kind);
@@ -4260,7 +1880,7 @@ fn probe_evaluate_command(values: &[String]) -> Result<(), String> {
         "nixfied-probe-execution-plan" => {
             if values.len() != 1 {
                 return Err(
-                    "usage: nixfied-kernel probe evaluate <execution-plan-file>".to_string(),
+                    "usage: nixfied-kernel probe evaluate <execution-plan-file>".to_string()
                 );
             }
             let plan = load_probe_execution_plan_from_value(&plan_value)?;
@@ -4940,7 +2560,10 @@ fn required_port_from_env(name: &str) -> Result<String, String> {
     }
     let port = parse_i64_text(&value, &format!("env:{}", name))?;
     if !(1..=65535).contains(&port) {
-        return Err(format!("env:{} must be port 1-65535 (got '{}')", name, value));
+        return Err(format!(
+            "env:{} must be port 1-65535 (got '{}')",
+            name, value
+        ));
     }
     Ok(port.to_string())
 }
@@ -5025,12 +2648,8 @@ fn load_probe_execution_plan_from_value(value: &JsonValue) -> Result<ProbeExecut
         source_env_var: required_string_field(value, "sourceEnvVar", "probe execution plan")?
             .to_string(),
         curl_bin: required_string_field(value, "curlBin", "probe execution plan")?.to_string(),
-        runtime_shell_bin: required_string_field(
-            value,
-            "runtimeShellBin",
-            "probe execution plan",
-        )?
-        .to_string(),
+        runtime_shell_bin: required_string_field(value, "runtimeShellBin", "probe execution plan")?
+            .to_string(),
         pg_is_ready_bin: required_string_field(value, "pgIsReadyBin", "probe execution plan")?
             .to_string(),
         psql_bin: required_string_field(value, "psqlBin", "probe execution plan")?.to_string(),
@@ -5165,26 +2784,6 @@ fn is_hex_prefixed(value: &str) -> bool {
     value.len() >= 3
         && value.starts_with("0x")
         && value.chars().skip(2).all(|ch| ch.is_ascii_hexdigit())
-}
-
-fn read_text(path: &str) -> Result<String, String> {
-    if path == "-" {
-        let mut buffer = String::new();
-        io::stdin()
-            .read_to_string(&mut buffer)
-            .map_err(|err| format!("failed to read stdin: {}", err))?;
-        return Ok(buffer);
-    }
-
-    fs::read_to_string(path).map_err(|err| format!("failed to read {}: {}", path, err))
-}
-
-fn parse_json(input: &str) -> Result<JsonValue, String> {
-    serde_json::from_str(input).map_err(|err| format!("{}", err))
-}
-
-fn render_json_compact(value: &JsonValue) -> String {
-    serde_json::to_string(value).unwrap_or_else(|_| "null".to_string())
 }
 
 #[derive(Clone, Debug)]
@@ -6223,33 +3822,6 @@ fn infer_kind(schema: &JsonValue) -> Option<String> {
     None
 }
 
-fn object_field<'a>(value: &'a JsonValue, key: &str) -> Option<&'a JsonValue> {
-    value.as_object()?.get(key)
-}
-
-fn object_field_mut<'a>(value: &'a mut JsonValue, key: &str) -> Option<&'a mut JsonValue> {
-    value.as_object_mut()?.get_mut(key)
-}
-
-fn object_string<'a>(value: &'a JsonValue, key: &str) -> Option<&'a str> {
-    object_field(value, key)?.as_str()
-}
-
-fn object_bool(value: &JsonValue, key: &str) -> Option<bool> {
-    object_field(value, key)?.as_bool()
-}
-
-fn object_number<'a>(value: &'a JsonValue, key: &str) -> Option<&'a Number> {
-    match object_field(value, key)? {
-        JsonValue::Number(n) => Some(n),
-        _ => None,
-    }
-}
-
-fn object_array<'a>(value: &'a JsonValue, key: &str) -> Option<&'a [JsonValue]> {
-    object_field(value, key)?.as_array().map(|v| v.as_slice())
-}
-
 fn schema_number(schema: &JsonValue, key: &str) -> Option<f64> {
     match object_field(schema, key)? {
         JsonValue::Number(n) => n.as_f64(),
@@ -6457,30 +4029,6 @@ fn resolve_json_path<'a>(value: &'a JsonValue, path_expr: &str) -> Option<&'a Js
     }
 
     Some(current)
-}
-
-fn json_value_to_number_string(value: &JsonValue) -> Option<String> {
-    match value {
-        JsonValue::Number(number) => Some(number.to_string()),
-        JsonValue::String(text) => {
-            if let Ok(value) = text.parse::<i128>() {
-                Some(value.to_string())
-            } else if let Ok(value) = text.parse::<f64>() {
-                if value.is_finite() {
-                    Some(if value.fract() == 0.0 {
-                        format!("{:.0}", value)
-                    } else {
-                        value.to_string()
-                    })
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        }
-        _ => None,
-    }
 }
 
 fn value_type(value: &JsonValue) -> &'static str {
