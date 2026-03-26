@@ -40,6 +40,12 @@ let
   consolePortVar = slots.portVarName config.portKeyConsole;
   minioDirExpr = slots.getServiceDir config.dataDirName;
   browserValue = if config.browser then "on" else "off";
+  startupProbeCommand = ''
+    {
+      service_source=${lib.escapeShellArg serviceSource}
+      ${healthPlanBody}
+    } >/dev/null 2>&1
+  '';
 
   runtimePrelude = import ../service-runtime-prelude.nix {
     inherit slotEnvRuntime slots observability;
@@ -124,10 +130,14 @@ let
       pidExpr = ''"$PID"'';
       message = "minio already running pid=$PID api_port=$MINIO_API_PORT";
     };
-    startPostLaunchBody = managedServiceLifecycle.mkReadyOutcomeBody {
-      level = "info";
-      pidExpr = ''"$CHILD_PID"'';
-      message = "minio started pid=$CHILD_PID api_port=$MINIO_API_PORT console_port=$MINIO_CONSOLE_PORT";
+    startPostLaunchBody = managedServiceLifecycle.mkStartupReadinessBody {
+      probeCommand = startupProbeCommand;
+      serviceLabel = "minio";
+      probeAttempts = runtimeDefaults.probes.startupReadiness.extendedAttempts;
+      degradedWaitReason = "failed_readiness";
+      degradedLastError = "minio failed health check during startup";
+      failureMessage = "minio failed to become healthy";
+      successMessage = "minio started pid=$CHILD_PID api_port=$MINIO_API_PORT console_port=$MINIO_CONSOLE_PORT";
     };
     startExitFailureBody = managedServiceLifecycle.mkProcessExitFailureBody {
       waitReason = "minio_process_exit code=$RC";
