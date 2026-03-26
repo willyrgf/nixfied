@@ -25,11 +25,9 @@ assert pkgs.lib.hasInfix "INFO: runId=$run_id passed=$passed failed=$failed canc
   source;
 assert pkgs.lib.hasInfix "run_workflow_parallel_impl()" source;
 assert pkgs.lib.hasInfix "nixfied-kernel workflow serial-init" source;
-assert pkgs.lib.hasInfix "nixfied-kernel workflow serial-next" source;
-assert pkgs.lib.hasInfix "nixfied-kernel workflow serial-transition" source;
+assert pkgs.lib.hasInfix "nixfied-kernel workflow serial-step" source;
 assert pkgs.lib.hasInfix "nixfied-kernel workflow parallel-init" source;
-assert pkgs.lib.hasInfix "nixfied-kernel workflow parallel-next" source;
-assert pkgs.lib.hasInfix "nixfied-kernel workflow parallel-transition" source;
+assert pkgs.lib.hasInfix "nixfied-kernel workflow parallel-step" source;
 assert pkgs.lib.hasInfix "wait -n -p done_pid" source;
 assert pkgs.lib.hasInfix "NIXFIED_WORKFLOW_PARALLEL" source;
 assert pkgs.lib.hasInfix "workflow_parallel_enabled \"$workflow_id\"" source;

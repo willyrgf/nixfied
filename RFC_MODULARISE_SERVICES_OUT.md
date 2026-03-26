@@ -1,0 +1,1 @@
+We must modularise a well defined public api and boundaries for the services in a way that we could easily separate it of repositories. This will lead us to identify all coupling that is happening currently between the framework and the services and other public apis.

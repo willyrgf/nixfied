@@ -66,11 +66,11 @@ in
 
   ${portReads}
   ${svcDir}="${dirExpr}"
-  ${svcPidFile}="$${svcDir}/run/${pidFileName}"
-  ${svcLogFile}="$${svcDir}/logs/${logFileName}"
-  SERVICE_DIR="$${svcDir}"
-  SERVICE_PID_FILE="$${svcPidFile}"
-  SERVICE_LOG_FILE="$${svcLogFile}"
+  ${svcPidFile}="''${${svcDir}}/run/${pidFileName}"
+  ${svcLogFile}="''${${svcDir}}/logs/${logFileName}"
+  SERVICE_DIR="''${${svcDir}}"
+  SERVICE_PID_FILE="''${${svcPidFile}}"
+  SERVICE_LOG_FILE="''${${svcLogFile}}"
 
   ${portValidation}
 

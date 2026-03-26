@@ -4,7 +4,9 @@ result
 *.md
 !AGENTS.md
 !README.md
+!RFC_*.md
 !docs/ARCHITECTURE.md
 !docs/DETAILED.md
 !docs/UPGRADE.md
 !docs/repo-map.md
+nixfied/framework/runtime/kernel/target/

@@ -1186,6 +1186,15 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           local field5=""
           local field6=""
           local detail_json=""
+          local transition_unit=""
+          local transition_status=""
+          local transition_exit_code=""
+          local transition_reason=""
+          local transition_extra_key=""
+          local transition_extra_value=""
+          cleanup_workflow_serial_tmp() {
+            rm -f "$skipped_services_file" "$state_file"
+          }
 
           skipped_services_file="$(mktemp "''${TMPDIR:-/tmp}/nixfied-workflow-serial-skipped.XXXXXX")" || {
             echo "ERROR: failed to create workflow serial skipped-services temp file"
@@ -1198,7 +1207,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           }
 
           if ! write_skipped_services_file "$skipped_services_file"; then
-            rm -f "$skipped_services_file" "$state_file"
+            cleanup_workflow_serial_tmp
             return 1
           fi
 
@@ -1209,15 +1218,28 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
             "$fail_fast" \
             "$state_file" \
             >/dev/null; then
-            rm -f "$skipped_services_file" "$state_file"
+            cleanup_workflow_serial_tmp
             return 1
           fi
 
           while true; do
-            action_line="$(${kernelPackage}/bin/nixfied-kernel workflow serial-next "$state_file")" || {
-              rm -f "$skipped_services_file" "$state_file"
+            action_line="$(${kernelPackage}/bin/nixfied-kernel workflow serial-step \
+              "$state_file" \
+              "$transition_unit" \
+              "$transition_status" \
+              "$transition_exit_code" \
+              "$transition_reason" \
+              "$transition_extra_key" \
+              "$transition_extra_value")" || {
+              cleanup_workflow_serial_tmp
               return 1
             }
+            transition_unit=""
+            transition_status=""
+            transition_exit_code=""
+            transition_reason=""
+            transition_extra_key=""
+            transition_extra_value=""
             IFS=$'\x1f' read -r action_kind unit_name unit_task field4 field5 field6 <<< "$action_line"
 
             case "$action_kind" in
@@ -1234,29 +1256,16 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
                   status="$?"
                 fi
 
-                if ! ${kernelPackage}/bin/nixfied-kernel workflow serial-transition \
-                  "$state_file" \
-                  "$unit_name" \
-                  "$(
-                    if [ "$status" -eq 0 ]; then
-                      printf '%s' "passed"
-                    else
-                      printf '%s' "failed"
-                    fi
-                  )" \
-                  "$(
-                    if [ "$status" -eq 0 ]; then
-                      printf '%s' "0"
-                    else
-                      printf '%s' "$status"
-                    fi
-                  )" \
-                  "" \
-                  "" \
-                  "" \
-                  >/dev/null; then
-                  rm -f "$skipped_services_file" "$state_file"
-                  return 1
+                transition_unit="$unit_name"
+                transition_reason=""
+                transition_extra_key=""
+                transition_extra_value=""
+                if [ "$status" -eq 0 ]; then
+                  transition_status="passed"
+                  transition_exit_code="0"
+                else
+                  transition_status="failed"
+                  transition_exit_code="$status"
                 fi
                 ;;
               cancel)
@@ -1276,6 +1285,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
                       ;;
                     *)
                       echo "ERROR: unsupported event detail field '$field5'" >&2
+                      cleanup_workflow_serial_tmp
                       return 1
                       ;;
                   esac
@@ -1283,27 +1293,21 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
                   detail_json="$(kernel_event_detail serviceLifecycle --reason "$field4")"
                 fi
                 append_event "$run_id" "$workflow_id" "$unit_task" "canceled" "$detail_json"
-                if ! ${kernelPackage}/bin/nixfied-kernel workflow serial-transition \
-                  "$state_file" \
-                  "$unit_name" \
-                  "canceled" \
-                  "" \
-                  "$field4" \
-                  "$field5" \
-                  "$field6" \
-                  >/dev/null; then
-                  rm -f "$skipped_services_file" "$state_file"
-                  return 1
-                fi
+                transition_unit="$unit_name"
+                transition_status="canceled"
+                transition_exit_code=""
+                transition_reason="$field4"
+                transition_extra_key="$field5"
+                transition_extra_value="$field6"
                 ;;
               done)
                 workflow_status="''${unit_name:-0}"
-                rm -f "$skipped_services_file" "$state_file"
+                cleanup_workflow_serial_tmp
                 return "$workflow_status"
                 ;;
               *)
                 echo "ERROR: unsupported workflow serial action '$action_kind'"
-                rm -f "$skipped_services_file" "$state_file"
+                cleanup_workflow_serial_tmp
                 return 1
                 ;;
             esac
@@ -1332,11 +1336,20 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           local field6=""
           local field7=""
           local detail_json=""
+          local transition_unit=""
+          local transition_status=""
+          local transition_exit_code=""
+          local transition_reason=""
+          local transition_extra_key=""
+          local transition_extra_value=""
           local pid=""
           local had_cancel_signals=0
           local done_pid=""
           local wait_rc=0
           local done_unit=""
+          cleanup_workflow_parallel_tmp() {
+            rm -f "$skipped_services_file" "$state_file"
+          }
 
           local -A UNIT_PID
           local -A PID_UNIT
@@ -1360,7 +1373,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           }
 
           if ! write_skipped_services_file "$skipped_services_file"; then
-            rm -f "$skipped_services_file" "$state_file"
+            cleanup_workflow_parallel_tmp
             return 1
           fi
 
@@ -1372,17 +1385,30 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
             "$max_workers" \
             "$state_file" \
             >/dev/null; then
-            rm -f "$skipped_services_file" "$state_file"
+            cleanup_workflow_parallel_tmp
             return 1
           fi
 
           while true; do
             had_cancel_signals=0
             while true; do
-              action_line="$(${kernelPackage}/bin/nixfied-kernel workflow parallel-next "$state_file")" || {
-                rm -f "$skipped_services_file" "$state_file"
+              action_line="$(${kernelPackage}/bin/nixfied-kernel workflow parallel-step \
+                "$state_file" \
+                "$transition_unit" \
+                "$transition_status" \
+                "$transition_exit_code" \
+                "$transition_reason" \
+                "$transition_extra_key" \
+                "$transition_extra_value")" || {
+                cleanup_workflow_parallel_tmp
                 return 1
               }
+              transition_unit=""
+              transition_status=""
+              transition_exit_code=""
+              transition_reason=""
+              transition_extra_key=""
+              transition_extra_value=""
               IFS=$'\x1f' read -r action_kind unit_name unit_task field4 field5 field6 field7 <<< "$action_line"
 
               case "$action_kind" in
@@ -1404,18 +1430,12 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
                   UNIT_PRODUCES_JSON[$unit_name]="$field5"
                   UNIT_CANCEL_REQUESTED[$unit_name]=0
 
-                  if ! ${kernelPackage}/bin/nixfied-kernel workflow parallel-transition \
-                    "$state_file" \
-                    "$unit_name" \
-                    "started" \
-                    "" \
-                    "" \
-                    "" \
-                    "" \
-                    >/dev/null; then
-                    rm -f "$skipped_services_file" "$state_file"
-                    return 1
-                  fi
+                  transition_unit="$unit_name"
+                  transition_status="started"
+                  transition_exit_code=""
+                  transition_reason=""
+                  transition_extra_key=""
+                  transition_extra_value=""
                   ;;
                 cancel)
                   if [ "$field4" = "service-skipped" ]; then
@@ -1434,6 +1454,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
                         ;;
                       *)
                         echo "ERROR: unsupported event detail field '$field5'" >&2
+                        cleanup_workflow_parallel_tmp
                         return 1
                         ;;
                     esac
@@ -1441,18 +1462,12 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
                     detail_json="$(kernel_event_detail serviceLifecycle --reason "$field4")"
                   fi
                   append_event "$run_id" "$workflow_id" "$unit_task" "canceled" "$detail_json"
-                  if ! ${kernelPackage}/bin/nixfied-kernel workflow parallel-transition \
-                    "$state_file" \
-                    "$unit_name" \
-                    "canceled" \
-                    "" \
-                    "$field4" \
-                    "$field5" \
-                    "$field6" \
-                    >/dev/null; then
-                    rm -f "$skipped_services_file" "$state_file"
-                    return 1
-                  fi
+                  transition_unit="$unit_name"
+                  transition_status="canceled"
+                  transition_exit_code=""
+                  transition_reason="$field4"
+                  transition_extra_key="$field5"
+                  transition_extra_value="$field6"
                   ;;
                 signal-running)
                   pid="''${UNIT_PID[$unit_name]:-}"
@@ -1461,30 +1476,24 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
                     kill -TERM "$pid" 2>/dev/null || true
                     had_cancel_signals=1
                   fi
-                  if ! ${kernelPackage}/bin/nixfied-kernel workflow parallel-transition \
-                    "$state_file" \
-                    "$unit_name" \
-                    "signal-sent" \
-                    "" \
-                    "" \
-                    "" \
-                    "" \
-                    >/dev/null; then
-                    rm -f "$skipped_services_file" "$state_file"
-                    return 1
-                  fi
+                  transition_unit="$unit_name"
+                  transition_status="signal-sent"
+                  transition_exit_code=""
+                  transition_reason=""
+                  transition_extra_key=""
+                  transition_extra_value=""
                   ;;
                 wait)
                   break
                   ;;
                 done)
                   workflow_status="''${unit_name:-0}"
-                  rm -f "$skipped_services_file" "$state_file"
+                  cleanup_workflow_parallel_tmp
                   return "$workflow_status"
                   ;;
                 *)
                   echo "ERROR: unsupported workflow parallel action '$action_kind'"
-                  rm -f "$skipped_services_file" "$state_file"
+                  cleanup_workflow_parallel_tmp
                   return 1
                   ;;
               esac
@@ -1501,7 +1510,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
             if [ "''${#PID_UNIT[@]}" -eq 0 ]; then
               echo "ERROR: parallel runner reached wait state without running units"
-              rm -f "$skipped_services_file" "$state_file"
+              cleanup_workflow_parallel_tmp
               return 1
             fi
 
@@ -1522,51 +1531,33 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
             if [ "''${UNIT_CANCEL_REQUESTED[$done_unit]:-0}" = "1" ]; then
               detail_json="$(kernel_event_detail serviceLifecycle --reason "fail-fast-running")"
               append_event "$run_id" "$workflow_id" "''${UNIT_TASK[$done_unit]}" "canceled" "$detail_json"
-              if ! ${kernelPackage}/bin/nixfied-kernel workflow parallel-transition \
-                "$state_file" \
-                "$done_unit" \
-                "canceled-running" \
-                "$wait_rc" \
-                "fail-fast-running" \
-                "" \
-                "" \
-                >/dev/null; then
-                rm -f "$skipped_services_file" "$state_file"
-                return 1
-              fi
+              transition_unit="$done_unit"
+              transition_status="canceled-running"
+              transition_exit_code="$wait_rc"
+              transition_reason="fail-fast-running"
+              transition_extra_key=""
+              transition_extra_value=""
               continue
             fi
 
             if [ "$wait_rc" -eq 0 ]; then
               detail_json="$(kernel_event_detail slotLifecycle --produces-json "''${UNIT_PRODUCES_JSON[$done_unit]}")"
               append_event "$run_id" "$workflow_id" "''${UNIT_TASK[$done_unit]}" "passed" "$detail_json"
-              if ! ${kernelPackage}/bin/nixfied-kernel workflow parallel-transition \
-                "$state_file" \
-                "$done_unit" \
-                "passed" \
-                "0" \
-                "" \
-                "" \
-                "" \
-                >/dev/null; then
-                rm -f "$skipped_services_file" "$state_file"
-                return 1
-              fi
+              transition_unit="$done_unit"
+              transition_status="passed"
+              transition_exit_code="0"
+              transition_reason=""
+              transition_extra_key=""
+              transition_extra_value=""
             else
               detail_json="$(kernel_event_detail slotLifecycle --exit-code "$wait_rc")"
               append_event "$run_id" "$workflow_id" "''${UNIT_TASK[$done_unit]}" "failed" "$detail_json"
-              if ! ${kernelPackage}/bin/nixfied-kernel workflow parallel-transition \
-                "$state_file" \
-                "$done_unit" \
-                "failed" \
-                "$wait_rc" \
-                "" \
-                "" \
-                "" \
-                >/dev/null; then
-                rm -f "$skipped_services_file" "$state_file"
-                return 1
-              fi
+              transition_unit="$done_unit"
+              transition_status="failed"
+              transition_exit_code="$wait_rc"
+              transition_reason=""
+              transition_extra_key=""
+              transition_extra_value=""
             fi
           done
         }

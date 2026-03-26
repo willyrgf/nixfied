@@ -96,11 +96,9 @@ pub(crate) fn mark_failed_unit<U: WorkflowUnitStateCommon>(
 pub(crate) fn workflow_command(subcommand: &str, values: &[String]) -> Result<(), String> {
     match subcommand {
         "serial-init" => workflow_serial_init_command(values),
-        "serial-next" => workflow_serial_next_command(values),
-        "serial-transition" => workflow_serial_transition_command(values),
+        "serial-step" => workflow_serial_step_command(values),
         "parallel-init" => workflow_parallel_init_command(values),
-        "parallel-next" => workflow_parallel_next_command(values),
-        "parallel-transition" => workflow_parallel_transition_command(values),
+        "parallel-step" => workflow_parallel_step_command(values),
         other => Err(format!("unknown workflow subcommand: {}", other)),
     }
 }
@@ -130,13 +128,8 @@ pub(crate) fn workflow_serial_init_command(values: &[String]) -> Result<(), Stri
     Ok(())
 }
 
-pub(crate) fn workflow_serial_next_command(values: &[String]) -> Result<(), String> {
-    if values.len() != 1 {
-        return Err("usage: nixfied-kernel workflow serial-next <state-file>".to_string());
-    }
-
-    let state = load_workflow_serial_state(&values[0])?;
-    match workflow_serial_next_action(&state) {
+fn print_workflow_serial_action(action: WorkflowSerialAction) {
+    match action {
         WorkflowSerialAction::Execute {
             unit_name,
             task_id,
@@ -159,23 +152,24 @@ pub(crate) fn workflow_serial_next_command(values: &[String]) -> Result<(), Stri
             println!("done\u{1f}{}", workflow_status)
         }
     }
-    Ok(())
 }
 
-pub(crate) fn workflow_serial_transition_command(values: &[String]) -> Result<(), String> {
+pub(crate) fn workflow_serial_step_command(values: &[String]) -> Result<(), String> {
     if values.len() != 7 {
         return Err(
-            "usage: nixfied-kernel workflow serial-transition <state-file> <unit-name> <status> <exit-code|empty> <reason|empty> <extra-key|empty> <extra-value|empty>"
+            "usage: nixfied-kernel workflow serial-step <state-file> <unit-name|empty> <status|empty> <exit-code|empty> <reason|empty> <extra-key|empty> <extra-value|empty>"
                 .to_string(),
         );
     }
 
     let mut state = load_workflow_serial_state(&values[0])?;
-    workflow_serial_transition(
-        &mut state, &values[1], &values[2], &values[3], &values[4], &values[5], &values[6],
-    )?;
-    write_workflow_serial_state(&values[0], &state)?;
-    println!("OK: workflow serial-transition");
+    if !values[1].is_empty() {
+        workflow_serial_transition(
+            &mut state, &values[1], &values[2], &values[3], &values[4], &values[5], &values[6],
+        )?;
+        write_workflow_serial_state(&values[0], &state)?;
+    }
+    print_workflow_serial_action(workflow_serial_next_action(&state));
     Ok(())
 }
 
@@ -206,14 +200,7 @@ pub(crate) fn workflow_parallel_init_command(values: &[String]) -> Result<(), St
     Ok(())
 }
 
-pub(crate) fn workflow_parallel_next_command(values: &[String]) -> Result<(), String> {
-    if values.len() != 1 {
-        return Err("usage: nixfied-kernel workflow parallel-next <state-file>".to_string());
-    }
-
-    let mut state = load_workflow_parallel_state(&values[0])?;
-    let action = workflow_parallel_next_action(&mut state);
-    write_workflow_parallel_state(&values[0], &state)?;
+fn print_workflow_parallel_action(action: WorkflowParallelAction) {
     match action {
         WorkflowParallelAction::Start {
             unit_name,
@@ -242,23 +229,25 @@ pub(crate) fn workflow_parallel_next_command(values: &[String]) -> Result<(), St
             println!("done\u{1f}{}", workflow_status)
         }
     }
-    Ok(())
 }
 
-pub(crate) fn workflow_parallel_transition_command(values: &[String]) -> Result<(), String> {
+pub(crate) fn workflow_parallel_step_command(values: &[String]) -> Result<(), String> {
     if values.len() != 7 {
         return Err(
-            "usage: nixfied-kernel workflow parallel-transition <state-file> <unit-name> <status> <exit-code|empty> <reason|empty> <extra-key|empty> <extra-value|empty>"
+            "usage: nixfied-kernel workflow parallel-step <state-file> <unit-name|empty> <status|empty> <exit-code|empty> <reason|empty> <extra-key|empty> <extra-value|empty>"
                 .to_string(),
         );
     }
 
     let mut state = load_workflow_parallel_state(&values[0])?;
-    workflow_parallel_transition(
-        &mut state, &values[1], &values[2], &values[3], &values[4], &values[5], &values[6],
-    )?;
+    if !values[1].is_empty() {
+        workflow_parallel_transition(
+            &mut state, &values[1], &values[2], &values[3], &values[4], &values[5], &values[6],
+        )?;
+    }
+    let action = workflow_parallel_next_action(&mut state);
     write_workflow_parallel_state(&values[0], &state)?;
-    println!("OK: workflow parallel-transition");
+    print_workflow_parallel_action(action);
     Ok(())
 }
 

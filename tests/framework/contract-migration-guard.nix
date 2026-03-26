@@ -18,7 +18,10 @@ let
   buildCheckSources = [
     ../../tests/framework/default.nix
   ];
-  kernelSource = builtins.readFile ../../nixfied/framework/runtime/kernel/src/main.rs;
+  kernelRustSources = builtins.filter (
+    path: lib.hasSuffix ".rs" (toString path)
+  ) (lib.filesystem.listFilesRecursive ../../nixfied/framework/runtime/kernel/src);
+  kernelSource = lib.concatStringsSep "\n" (map builtins.readFile kernelRustSources);
   readyHeliosSyncGateSource = builtins.readFile ../../tests/framework/ready-helios-sync-gate-smoke.nix;
   jqMarkerLines =
     source:
@@ -134,11 +137,9 @@ assert !(pkgs.lib.hasInfix "pgIsReadyCmd" probePlanRuntimeSource);
 assert !(pkgs.lib.hasInfix "psqlQueryCmd" probePlanRuntimeSource);
 assert pkgs.lib.hasInfix "nixfied-kernel task execution-order" executorSource;
 assert pkgs.lib.hasInfix "nixfied-kernel workflow serial-init" executorSource;
-assert pkgs.lib.hasInfix "nixfied-kernel workflow serial-next" executorSource;
-assert pkgs.lib.hasInfix "nixfied-kernel workflow serial-transition" executorSource;
+assert pkgs.lib.hasInfix "nixfied-kernel workflow serial-step" executorSource;
 assert pkgs.lib.hasInfix "nixfied-kernel workflow parallel-init" executorSource;
-assert pkgs.lib.hasInfix "nixfied-kernel workflow parallel-next" executorSource;
-assert pkgs.lib.hasInfix "nixfied-kernel workflow parallel-transition" executorSource;
+assert pkgs.lib.hasInfix "nixfied-kernel workflow parallel-step" executorSource;
 assert !(pkgs.lib.hasInfix "done < <(task_needs \"$current_task\")" executorSource);
 assert !(pkgs.lib.hasInfix "done < <(task_soft_needs \"$current_task\")" executorSource);
 assert pkgs.lib.hasInfix "nixfied-kernel summary collect-steps" executorSource;
