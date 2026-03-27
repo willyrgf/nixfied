@@ -1803,3 +1803,150 @@ pub(crate) fn load_workflow_summary_plan(path: &str) -> Result<WorkflowSummaryPl
         task_runner_types: object_string_map(&value, "taskRunnerTypes", "workflow summary plan")?,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::{BTreeMap, BTreeSet};
+
+    fn workflow_unit(name: &str, task_id: &str) -> WorkflowSchedulerUnitPlan {
+        WorkflowSchedulerUnitPlan {
+            name: name.to_string(),
+            task_id: task_id.to_string(),
+            needs: Vec::new(),
+            locks: Vec::new(),
+            required_services: Vec::new(),
+            skip_if_missing_env: Vec::new(),
+            when_env_present: Vec::new(),
+            when_env_equals: BTreeMap::new(),
+            selected_services_csv: String::new(),
+            produces_json: String::new(),
+        }
+    }
+
+    #[test]
+    fn workflow_serial_skip_propagates_dependency_skips() {
+        let mut root = workflow_unit("root", "task.root");
+        root.required_services = vec!["postgres".to_string()];
+
+        let mut child = workflow_unit("child", "task.child");
+        child.needs = vec!["root".to_string()];
+
+        let mut tail = workflow_unit("tail", "task.tail");
+        tail.needs = vec!["child".to_string()];
+
+        let workflow = WorkflowSchedulerWorkflow {
+            units: vec![root, child, tail],
+        };
+        let skipped_services = BTreeSet::from(["postgres".to_string()]);
+        let mut state = build_workflow_serial_state(&workflow, false, &skipped_services);
+
+        assert_eq!(state.units["root"].state, "cancel-pending");
+        assert_eq!(state.units["root"].cancel_reason, "service-skipped");
+        assert_eq!(state.units["root"].cancel_extra_key, "serviceName");
+        assert_eq!(state.units["root"].cancel_extra_value, "postgres");
+        assert_eq!(state.units["child"].state, "cancel-pending");
+        assert_eq!(state.units["child"].cancel_reason, "dependency-skipped");
+        assert_eq!(state.units["child"].cancel_extra_value, "task.root");
+        assert_eq!(state.units["tail"].state, "cancel-pending");
+        assert_eq!(state.units["tail"].cancel_reason, "dependency-skipped");
+
+        match workflow_serial_next_action(&state) {
+            WorkflowSerialAction::Cancel {
+                unit_name, reason, ..
+            } => {
+                assert_eq!(unit_name, "root");
+                assert_eq!(reason, "service-skipped");
+            }
+            other => panic!("expected root cancel action, got {:?}", action_name(&other)),
+        }
+
+        workflow_serial_transition(&mut state, "root", "canceled", "", "", "", "")
+            .expect("root cancel should succeed");
+        workflow_serial_transition(&mut state, "child", "canceled", "", "", "", "")
+            .expect("child cancel should succeed");
+        workflow_serial_transition(&mut state, "tail", "canceled", "", "", "", "")
+            .expect("tail cancel should succeed");
+
+        match workflow_serial_next_action(&state) {
+            WorkflowSerialAction::Done { workflow_status } => assert_eq!(workflow_status, 0),
+            other => panic!("expected workflow to finish, got {:?}", action_name(&other)),
+        }
+    }
+
+    #[test]
+    fn workflow_parallel_lock_conflict_and_fail_fast() {
+        let mut first = workflow_unit("first", "task.first");
+        first.locks = vec!["db".to_string()];
+
+        let mut second = workflow_unit("second", "task.second");
+        second.locks = vec!["db".to_string()];
+
+        let third = workflow_unit("third", "task.third");
+
+        let workflow = WorkflowSchedulerWorkflow {
+            units: vec![first, second, third],
+        };
+        let mut state = build_workflow_parallel_state(&workflow, true, 2, &BTreeSet::new());
+
+        match workflow_parallel_next_action(&mut state) {
+            WorkflowParallelAction::Start { unit_name, .. } => assert_eq!(unit_name, "first"),
+            other => panic!(
+                "expected first unit to start, got {:?}",
+                action_name(&other)
+            ),
+        }
+        workflow_parallel_transition(&mut state, "first", "started", "", "", "", "")
+            .expect("first start should succeed");
+
+        match workflow_parallel_next_action(&mut state) {
+            WorkflowParallelAction::Start { unit_name, .. } => assert_eq!(unit_name, "third"),
+            other => panic!(
+                "expected third unit to start, got {:?}",
+                action_name(&other)
+            ),
+        }
+        workflow_parallel_transition(&mut state, "third", "started", "", "", "", "")
+            .expect("third start should succeed");
+
+        workflow_parallel_transition(&mut state, "first", "failed", "7", "", "", "")
+            .expect("failure transition should succeed");
+
+        assert_eq!(state.workflow_status, 7);
+        assert!(state.stop_scheduling);
+        assert_eq!(state.units["first"].state, "failed");
+        assert_eq!(state.units["third"].state, "cancel-running-requested");
+        assert_eq!(state.units["third"].cancel_reason, "fail-fast-running");
+        assert_eq!(state.units["second"].state, "cancel-pending");
+        assert_eq!(state.units["second"].cancel_reason, "fail-fast");
+
+        match workflow_parallel_next_action(&mut state) {
+            WorkflowParallelAction::SignalRunning { unit_name } => assert_eq!(unit_name, "third"),
+            other => panic!(
+                "expected running unit cancellation signal, got {:?}",
+                action_name(&other)
+            ),
+        }
+        workflow_parallel_transition(&mut state, "third", "signal-sent", "", "", "", "")
+            .expect("signal-sent transition should succeed");
+        workflow_parallel_transition(&mut state, "third", "canceled-running", "", "", "", "")
+            .expect("canceled-running transition should succeed");
+
+        match workflow_parallel_next_action(&mut state) {
+            WorkflowParallelAction::Cancel {
+                unit_name, reason, ..
+            } => {
+                assert_eq!(unit_name, "second");
+                assert_eq!(reason, "fail-fast");
+            }
+            other => panic!(
+                "expected pending unit cancellation, got {:?}",
+                action_name(&other)
+            ),
+        }
+    }
+
+    fn action_name(action: &impl std::fmt::Debug) -> String {
+        format!("{action:?}")
+    }
+}

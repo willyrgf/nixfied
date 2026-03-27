@@ -294,6 +294,15 @@ fn collect_workflow_summary(
     }
 
     let content = read_text(index_file)?;
+    collect_workflow_summary_from_text(plan, &content, run_id, attempt_id)
+}
+
+fn collect_workflow_summary_from_text(
+    plan: &WorkflowSummaryPlan,
+    content: &str,
+    run_id: &str,
+    attempt_id: &str,
+) -> Result<WorkflowCollectedSummary, String> {
     let mut active_order_seq = BTreeMap::<String, i64>::new();
     let mut active_workflow_id = BTreeMap::<String, String>::new();
     let mut active_running_epoch = BTreeMap::<String, i64>::new();
@@ -526,4 +535,57 @@ fn parse_summary_steps_file(path: &str) -> Result<Vec<JsonValue>, String> {
         }));
     }
     Ok(steps)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn summary_collects_parallelism_and_skip_classification() {
+        let mut task_runner_types = BTreeMap::new();
+        task_runner_types.insert("task.subflow".to_string(), "workflowRef".to_string());
+        let plan = WorkflowSummaryPlan { task_runner_types };
+        let index = concat!(
+            "1\t1\tworkflow\trun-1\tattempt-1\tworkflow.test.full\ttask.alpha\tqueued\t\t\n",
+            "2\t10\tworkflow\trun-1\tattempt-1\tworkflow.test.full\ttask.alpha\trunning\t\t\n",
+            "3\t2\tworkflow\trun-1\tattempt-1\tworkflow.test.full\ttask.gamma\tqueued\t\t\n",
+            "4\t12\tworkflow\trun-1\tattempt-1\tworkflow.test.full\ttask.gamma\trunning\t\t\n",
+            "5\t15\tworkflow\trun-1\tattempt-1\tworkflow.test.full\ttask.alpha\tpassed\t\t0\n",
+            "6\t3\tworkflow\trun-1\tattempt-1\tworkflow.test.full\ttask.beta\tqueued\t\t\n",
+            "7\t17\tworkflow\trun-1\tattempt-1\tworkflow.test.full\ttask.beta\tcanceled\tmissing-env\t\n",
+            "8\t4\tworkflow\trun-1\tattempt-1\tworkflow.test.full\ttask.subflow\tqueued\t\t\n",
+            "9\t13\tworkflow\trun-1\tattempt-1\tworkflow.test.full\ttask.subflow\trunning\t\t\n",
+            "10\t18\tworkflow\trun-1\tattempt-1\tworkflow.test.full\ttask.subflow\tpassed\t\t0\n",
+            "11\t16\tworkflow\trun-1\tattempt-1\tworkflow.test.full\ttask.gamma\tcanceled\tfail-fast\t130\n",
+        );
+
+        let collected = collect_workflow_summary_from_text(&plan, index, "run-1", "attempt-1")
+            .expect("summary collection should succeed");
+
+        let step_names = collected
+            .steps
+            .iter()
+            .map(|step| step.name.as_str())
+            .collect::<Vec<_>>();
+        let step_statuses = collected
+            .steps
+            .iter()
+            .map(|step| step.status.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(step_names, vec!["task.alpha", "task.gamma", "task.beta"]);
+        assert_eq!(step_statuses, vec!["passed", "canceled", "skipped"]);
+        assert_eq!(collected.passed, 1);
+        assert_eq!(collected.failed, 0);
+        assert_eq!(collected.skipped, 1);
+        assert_eq!(collected.canceled, 1);
+        assert_eq!(collected.steps_duration, 9);
+        assert_eq!(collected.peak_workers, 2);
+        assert_eq!(
+            collected.leaf_task_ids_lines,
+            "task.alpha\ntask.gamma\ntask.beta"
+        );
+    }
 }

@@ -479,6 +479,7 @@ pub(crate) fn load_line_set(path: &str) -> Result<BTreeSet<String>, String> {
         .collect())
 }
 
+#[derive(Debug)]
 enum WorkflowSerialAction {
     Execute {
         unit_name: String,
@@ -497,6 +498,7 @@ enum WorkflowSerialAction {
     },
 }
 
+#[derive(Debug)]
 enum WorkflowParallelAction {
     Start {
         unit_name: String,

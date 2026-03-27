@@ -63,6 +63,14 @@ pub(crate) fn parse_tab_separated_name_value_file(
     label: &str,
 ) -> Result<Vec<(String, String)>, String> {
     let text = read_text(path)?;
+    parse_tab_separated_name_value_text(&text, label, path)
+}
+
+pub(crate) fn parse_tab_separated_name_value_text(
+    text: &str,
+    label: &str,
+    source: &str,
+) -> Result<Vec<(String, String)>, String> {
     let mut entries = Vec::new();
     for line in text.lines() {
         if line.is_empty() {
@@ -71,7 +79,7 @@ pub(crate) fn parse_tab_separated_name_value_file(
         let (name, value) = line.split_once('\t').ok_or_else(|| {
             format!(
                 "{} {} must contain tab-separated name/value pairs",
-                label, path
+                label, source
             )
         })?;
         entries.push((name.to_string(), value.to_string()));
@@ -84,5 +92,48 @@ pub(crate) fn strip_passthrough_separator(values: &[String]) -> &[String] {
         &values[1..]
     } else {
         values
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_tab_separated_name_value_text() {
+        let entries = parse_tab_separated_name_value_text("FOO\tbar\nBAR\tbaz\n", "env", "fixture")
+            .expect("entries should parse");
+        assert_eq!(
+            entries,
+            vec![
+                ("FOO".to_string(), "bar".to_string()),
+                ("BAR".to_string(), "baz".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_tab_separated_name_value_text() {
+        let err = parse_tab_separated_name_value_text("FOO=bar\n", "env", "fixture")
+            .expect_err("invalid lines should fail");
+        assert_eq!(
+            err,
+            "env fixture must contain tab-separated name/value pairs"
+        );
+    }
+
+    #[test]
+    fn strips_passthrough_separator_only_when_present() {
+        let with_separator = vec!["--".to_string(), "alpha".to_string(), "beta".to_string()];
+        let without_separator = vec!["alpha".to_string(), "beta".to_string()];
+
+        assert_eq!(
+            strip_passthrough_separator(&with_separator),
+            &["alpha".to_string(), "beta".to_string()]
+        );
+        assert_eq!(
+            strip_passthrough_separator(&without_separator),
+            &without_separator
+        );
     }
 }

@@ -2067,3 +2067,138 @@ impl CharClass {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn validate_input_args_supports_clustered_flags_and_separator() {
+        let plan = CommandRuntimePlan {
+            allow_unknown_args: false,
+            args: vec![
+                CommandArgSpec {
+                    name: "verbose".to_string(),
+                    kind: "flag".to_string(),
+                    scalar: ScalarSpec {
+                        type_name: "bool".to_string(),
+                        values: Vec::new(),
+                        min: None,
+                        max: None,
+                    },
+                    long: "--verbose".to_string(),
+                    short: "-v".to_string(),
+                    required: false,
+                },
+                CommandArgSpec {
+                    name: "force".to_string(),
+                    kind: "flag".to_string(),
+                    scalar: ScalarSpec {
+                        type_name: "bool".to_string(),
+                        values: Vec::new(),
+                        min: None,
+                        max: None,
+                    },
+                    long: "--force".to_string(),
+                    short: "-f".to_string(),
+                    required: false,
+                },
+                CommandArgSpec {
+                    name: "target".to_string(),
+                    kind: "positional".to_string(),
+                    scalar: ScalarSpec {
+                        type_name: "string".to_string(),
+                        values: Vec::new(),
+                        min: None,
+                        max: None,
+                    },
+                    long: String::new(),
+                    short: String::new(),
+                    required: true,
+                },
+            ],
+            env: Vec::new(),
+            failure_codes: BTreeSet::new(),
+        };
+
+        let clustered = validate_input_args(&plan, &["-vf".to_string(), "deploy".to_string()])
+            .expect("clustered flags should parse");
+        let separator = validate_input_args(&plan, &["--".to_string(), "-vf".to_string()])
+            .expect("separator should stop option parsing");
+
+        let clustered_map = clustered.into_iter().collect::<BTreeMap<_, _>>();
+        let separator_map = separator.into_iter().collect::<BTreeMap<_, _>>();
+
+        assert_eq!(clustered_map["NIXFIED_ARG_VERBOSE"], "true");
+        assert_eq!(clustered_map["NIXFIED_ARG_FORCE"], "true");
+        assert_eq!(clustered_map["NIXFIED_ARG_TARGET"], "deploy");
+        assert_eq!(separator_map["NIXFIED_ARG_TARGET"], "-vf");
+        assert!(!separator_map.contains_key("NIXFIED_ARG_VERBOSE"));
+    }
+
+    #[test]
+    fn validates_closed_records_and_tagged_unions() {
+        let bundle = json!({
+            "definitions": {
+                "closedRecord": {
+                    "type": "record",
+                    "closed": true,
+                    "fields": {
+                        "name": { "type": "string", "required": true },
+                        "enabled": { "type": "bool", "required": false }
+                    }
+                },
+                "pet": {
+                    "type": "taggedunion",
+                    "tag": "kind",
+                    "variants": {
+                        "cat": {
+                            "type": "record",
+                            "closed": true,
+                            "fields": {
+                                "meows": { "type": "bool", "required": true }
+                            }
+                        },
+                        "dog": {
+                            "type": "record",
+                            "closed": true,
+                            "fields": {
+                                "barks": { "type": "bool", "required": true }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        validate_json_value_against_contract(
+            &bundle,
+            "#/definitions/closedRecord",
+            &json!({ "name": "nixfied", "enabled": true }),
+        )
+        .expect("closed record should validate");
+        validate_json_value_against_contract(
+            &bundle,
+            "#/definitions/pet",
+            &json!({ "kind": "cat", "meows": true }),
+        )
+        .expect("tagged union should validate");
+
+        let record_err = validate_json_value_against_contract(
+            &bundle,
+            "#/definitions/closedRecord",
+            &json!({ "name": "nixfied", "extra": true }),
+        )
+        .expect_err("closed record should reject extra fields");
+        let union_err = validate_json_value_against_contract(
+            &bundle,
+            "#/definitions/pet",
+            &json!({ "kind": "bird", "chirps": true }),
+        )
+        .expect_err("unknown tagged union variant should fail");
+
+        assert!(record_err.contains("unknown field"));
+        assert!(union_err.contains("unknown tagged union variant bird"));
+    }
+}
