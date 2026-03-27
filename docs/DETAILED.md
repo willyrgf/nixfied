@@ -25,6 +25,7 @@ Cheap canonical model:
 Execution-only compiled surfaces:
 
 - `compiled.services` carries heavy normalized service runtime details
+- `compiled.runtimeMetadata` carries the selected task/workflow runtime manifest consumed by shell adapters and the kernel
 - service app/hook env materialization is derived from `compiled.services` plus a selected service set
 - `runtimeHash` fingerprints the heavy runtime layer separately from `stateHash`
 
@@ -86,6 +87,7 @@ Selector-aware launcher contract:
 - `--launcher-help` shows launcher-specific help without invoking the selected app.
 - Launcher parsing stops at the first non-launcher argument or `--`, and the remaining args are forwarded unchanged to the selected app.
 - Public task/workflow surfaces are two-stage: resolve the selected app first, then execute a scoped dispatcher/orchestrator/executor runtime.
+- Selected execution manifests embed the narrowed runtime metadata the kernel consumes for task/workflow semantics.
 - The selected service set is derived from task requirements, recursive task deps, workflow unit requirements, workflow `preRun`/`postRun` tasks, `workflowRef` targets, workflow family/mode resolution, and explicit selectors.
 
 Service operation consumption:
@@ -103,9 +105,10 @@ Executor behavior:
 - hermetic `PATH` from declared `runtimeInputs`
 - deterministic defaults (`locale`, `timezone`, `umask`, workdir policy)
 - runtime variable support for `NIX_ENV` and `PROJECT_ENV`
-- workflow lifecycle phases via `preRun.tasks` and `postRun.tasks`
+- workflow lifecycle phases and scheduler driving are delegated to the kernel as one coarse workflow run operation
 - summary artifact contract at `CI_ARTIFACTS_DIR/summary.json` when enabled
 - run ids and orchestrator seeds incorporate `runtimeHash`, not only the cheap model hash
+- shell runtime metadata lookups are manifest-backed through the selected execution manifest rather than generated case tables
 
 State policy defaults:
 

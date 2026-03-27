@@ -60,7 +60,7 @@ assert !(pkgs.lib.hasInfix "json_object_from_named_env_values() {" commonSource)
 assert pkgs.lib.hasInfix "NIXFIED_RUN_ID_FILE_OVERRIDE" runtimeSource;
 assert pkgs.lib.hasInfix "NIXFIED_SUMMARY_FILE_OVERRIDE" runtimeSource;
 assert pkgs.lib.hasInfix "workflow_simple_shorthand_exists_for_family" runtimeSource;
-assert pkgs.lib.hasInfix "task_arg_long_kind" runtimeSource;
+assert pkgs.lib.hasInfix "task_validate_args \"$task_id\"" runtimeSource;
 assert (!pkgs.lib.hasInfix "NIXFIED_JSON_OUTPUT_OVERRIDE" runtimeSource);
 assert (!pkgs.lib.hasInfix "--json" runtimeSource);
 assert pkgs.lib.hasInfix "NIXFIED_ORCHESTRATOR_STOP_TIMEOUT_SECONDS" orchestratorSource;

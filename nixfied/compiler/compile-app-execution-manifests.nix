@@ -14,6 +14,7 @@
 }:
 let
   listUtils = import ../framework/core/list-utils.nix;
+  compileRuntimeMetadata = import ./compile-runtime-metadata.nix { inherit lib; };
   uniquePreserveOrder = listUtils.uniquePreserveOrder;
   uniqueSorted = listUtils.uniqueSorted;
 
@@ -104,6 +105,17 @@ let
       serviceCatalogFiltered = lib.filterAttrs (
         _: service: builtins.elem (service.name or service.id) selectedServices
       ) serviceCatalog;
+      manifestTasks = lib.getAttrs closure.taskIds tasks;
+      manifestWorkflows = lib.getAttrs closure.workflowIds workflows;
+      manifestRuntimeMetadata = compileRuntimeMetadata {
+        tasks = manifestTasks;
+        workflows = manifestWorkflows;
+        serviceCatalog = serviceCatalogFiltered;
+        inherit
+          apps
+          selectionIndex
+          ;
+      };
       manifestEvalHash = canonical.hashCanonical {
         schema = {
           kind = "nixfied-app-execution-eval";
@@ -112,8 +124,8 @@ let
         runtime = runtime;
         state = state;
         serviceCatalog = serviceCatalogFiltered;
-        tasks = lib.getAttrs closure.taskIds tasks;
-        workflows = lib.getAttrs closure.workflowIds workflows;
+        tasks = manifestTasks;
+        workflows = manifestWorkflows;
       };
       manifestIdentity = {
         projectId = resolvedIdentity.projectId;
@@ -130,8 +142,11 @@ let
         runtime = runtime;
         state = state;
         serviceCatalog = serviceCatalogFiltered;
-        tasks = lib.getAttrs closure.taskIds tasks;
-        workflows = lib.getAttrs closure.workflowIds workflows;
+        tasks = manifestTasks;
+        workflows = manifestWorkflows;
+        compiled = {
+          runtimeMetadata = manifestRuntimeMetadata;
+        };
       };
     in
     {

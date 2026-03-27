@@ -16,10 +16,11 @@ mod parse_util;
 mod policy;
 mod probe;
 mod registry;
+mod run_id;
 mod run_record;
+mod runtime_metadata;
 mod summary;
 mod task;
-mod run_id;
 mod validation;
 mod workflow;
 
@@ -72,9 +73,8 @@ fn run() -> Result<(), String> {
         "validate-input" => {
             let plan_path = args.next().ok_or_else(usage)?;
             let mode = args.next().ok_or_else(usage)?;
-            let export_path = args.next().ok_or_else(usage)?;
             let remaining = args.collect::<Vec<_>>();
-            validate_input_command(&plan_path, &mode, &export_path, &remaining)
+            validate_input_command(&plan_path, &mode, &remaining)
         }
         "validate-scalar" => {
             let spec_path = args.next().ok_or_else(usage)?;
@@ -111,7 +111,7 @@ fn usage() -> String {
         "commands:",
         "  validate-payload <bundle-file> <contract-ref> <payload-file>",
         "  validate-artifact <bundle-file> <contract-ref> <payload-file>",
-        "  validate-input <plan-file> <env|args> <export-file> [-- <args...>]",
+        "  validate-input <plan-file> <env|args> [-- <args...>]",
         "  validate-scalar <spec-file> <value>",
         "  validate-exit <plan-file> <exit-code>",
         "  run-id <envelope> ...",
@@ -119,8 +119,8 @@ fn usage() -> String {
         "  event-state <derive> ...",
         "  service-policy <runtime-event|start-service|fixture-keep-running> ...",
         "  run-record <create|transition> ...",
-        "  task <execution-order> ...",
-        "  workflow <serial-init|serial-step|parallel-init|parallel-step> ...",
+        "  task <execution-order|exists|workflow-ref|validate-args|render-help|load-runtime|load-hook> ...",
+        "  workflow <resolve-mode|load-runtime|run> ...",
         "  registry <append|replay|terminal|runtime-status> ...",
         "  summary <write|compose|collect-steps|render-human> ...",
         "  adapter decode <kind> ...",
@@ -250,11 +250,6 @@ struct TaskExecutionStep {
 }
 
 #[derive(Clone)]
-struct WorkflowSchedulerPlan {
-    workflows: BTreeMap<String, WorkflowSchedulerWorkflow>,
-}
-
-#[derive(Clone)]
 struct WorkflowSchedulerWorkflow {
     units: Vec<WorkflowSchedulerUnitPlan>,
 }
@@ -274,7 +269,6 @@ struct WorkflowSchedulerUnitPlan {
 }
 
 struct WorkflowSerialState {
-    workflow_id: String,
     fail_fast: bool,
     workflow_status: i64,
     halted: bool,
@@ -295,7 +289,6 @@ struct WorkflowSerialUnitState {
 }
 
 struct WorkflowParallelState {
-    workflow_id: String,
     fail_fast: bool,
     max_workers: i64,
     workflow_status: i64,
@@ -433,13 +426,8 @@ struct WorkflowTerminalRow {
     exit_code: String,
 }
 
-fn validate_input_command(
-    plan_path: &str,
-    mode: &str,
-    export_path: &str,
-    remaining: &[String],
-) -> Result<(), String> {
-    validation::validate_input_command(plan_path, mode, export_path, remaining)
+fn validate_input_command(plan_path: &str, mode: &str, remaining: &[String]) -> Result<(), String> {
+    validation::validate_input_command(plan_path, mode, remaining)
 }
 
 fn validate_scalar_command(spec_path: &str, value: &str) -> Result<(), String> {

@@ -115,7 +115,8 @@ let
         "$resolved_reuse" \
         "$resolved_owner" \
         "$resolved_discovery" \
-        "$ephemeral_flag"
+        "$ephemeral_flag" \
+        || return 1
     }
 
     is_numeric_pid() {
@@ -195,7 +196,8 @@ let
       nixfied_load_kernel_exports "nixfied-runtime-status" \
         ${kernelPackage}/bin/nixfied-kernel registry runtime-status \
         "$service_index_file" \
-        "$slot_index_file"
+        "$slot_index_file" \
+        || return 1
     }
   '';
 

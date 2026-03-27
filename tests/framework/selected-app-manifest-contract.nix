@@ -59,10 +59,12 @@ pkgs.runCommand "selected-app-manifest-contract" { } ''
   require_file "$manifest"
 
   "$JQ" -e '.schema.kind == "nixfied-execution-manifest"' "$manifest" > /dev/null
+  "$JQ" -e '.compiled.runtimeMetadata.schema.kind == "nixfied-runtime-metadata"' "$manifest" > /dev/null
   "$JQ" -e '(.tasks | keys) == ["task.check"]' "$manifest" > /dev/null
   "$JQ" -e '(.workflows | keys) == []' "$manifest" > /dev/null
   "$JQ" -e '(.serviceCatalog | keys) == []' "$manifest" > /dev/null
   "$JQ" -e '.tasks."task.check".runner.package | tostring | contains("nix-checks")' "$manifest" > /dev/null
+  "$JQ" -e '.compiled.runtimeMetadata.tasks."task.check".runner.type == "derivation"' "$manifest" > /dev/null
   "$JQ" -e '(.tasks | has("task.ci")) | not' "$manifest" > /dev/null
 
   selected_isolation_app="$(
@@ -106,6 +108,7 @@ pkgs.runCommand "selected-app-manifest-contract" { } ''
   "$JQ" -e '(.tasks | has("task.test.isolation.probe"))' "$isolation_manifest" > /dev/null
   "$JQ" -e '(.tasks | has("task.test.isolation.unit"))' "$isolation_manifest" > /dev/null
   "$JQ" -e '(.workflows | has("workflow.test.isolation.probe"))' "$isolation_manifest" > /dev/null
+  "$JQ" -e '.compiled.runtimeMetadata.workflows."workflow.test.isolation.probe".family == "test"' "$isolation_manifest" > /dev/null
 
   echo "OK: selected app launchers embed narrowed execution manifests" > "$out"
 ''

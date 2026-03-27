@@ -10,16 +10,16 @@ pub(crate) fn registry_command(subcommand: &str, values: &[String]) -> Result<()
     }
 }
 
-fn registry_append_command(values: &[String]) -> Result<(), String> {
-    if values.len() != 9 {
-        return Err(
-            "usage: nixfied-kernel registry append <bundle-file> <root> <run-id> <attempt-id> <workflow-id> <task-id> <state> <detail-file> <export-file>"
-                .to_string(),
-        );
-    }
-
-    let bundle_path = &values[0];
-    let root = &values[1];
+pub(crate) fn registry_append_event_internal(
+    bundle_path: &str,
+    root: &str,
+    run_id: &str,
+    attempt_id: &str,
+    workflow_id: &str,
+    task_id: &str,
+    state: &str,
+    detail: &JsonValue,
+) -> Result<String, String> {
     let seq_file = format!("{}/.seq", root);
     let events_file = format!("{}/events.ndjson", root);
     let index_file = format!("{}/events.index.tsv", root);
@@ -34,23 +34,22 @@ fn registry_append_command(values: &[String]) -> Result<(), String> {
 
     let ts = current_utc_timestamp()?;
     let ts_epoch = current_epoch_seconds()?;
-    let detail = parse_json_file(&values[7], "registry event detail file")?;
-    let detail_reason = registry_detail_reason(&detail);
-    let detail_exit_code = registry_detail_exit_code(&detail);
-    let attempt_id = nullable_string_value(&values[3]);
-    let workflow_id_val = nullable_string_value(&values[4]);
-    let task_id_val = nullable_string_value(&values[5]);
+    let detail_reason = registry_detail_reason(detail);
+    let detail_exit_code = registry_detail_exit_code(detail);
+    let attempt_id_val = nullable_string_value(attempt_id);
+    let workflow_id_val = nullable_string_value(workflow_id);
+    let task_id_val = nullable_string_value(task_id);
     let envelope = json!({
         "kind": "runtime-event",
         "version": 1,
         "payload": {
-            "runId": values[2],
-            "attemptId": attempt_id,
+            "runId": run_id,
+            "attemptId": attempt_id_val,
             "workflowId": workflow_id_val,
             "taskId": task_id_val,
             "seq": seq,
             "ts": ts,
-            "state": values[6],
+            "state": state,
             "detail": detail,
         },
     });
@@ -65,19 +64,47 @@ fn registry_append_command(values: &[String]) -> Result<(), String> {
             seq,
             ts_epoch,
             ts,
-            values[2],
-            values[3],
-            values[4],
-            values[5],
-            values[6],
+            run_id,
+            attempt_id,
+            workflow_id,
+            task_id,
+            state,
             detail_reason,
             detail_exit_code
         ),
     )?;
+
+    Ok(rendered)
+}
+
+fn registry_append_command(values: &[String]) -> Result<(), String> {
+    if values.len() != 9 {
+        return Err(
+            "usage: nixfied-kernel registry append <bundle-file> <root> <run-id> <attempt-id> <workflow-id> <task-id> <state> <detail-file> <export-file>"
+                .to_string(),
+        );
+    }
+
+    let rendered = registry_append_event_internal(
+        &values[0],
+        &values[1],
+        &values[2],
+        &values[3],
+        &values[4],
+        &values[5],
+        &values[6],
+        &parse_json_file(&values[7], "registry event detail file")?,
+    )?;
     write_shell_exports(
         &values[8],
         &[
-            ("REGISTRY_APPEND_LAST_SEQ".to_string(), seq.to_string()),
+            (
+                "REGISTRY_APPEND_LAST_SEQ".to_string(),
+                fs::read_to_string(format!("{}/.seq", &values[1]))
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string(),
+            ),
             (
                 "REGISTRY_APPEND_LAST_EVENT_JSON".to_string(),
                 rendered.to_string(),
@@ -191,9 +218,9 @@ fn registry_terminal_command(values: &[String]) -> Result<(), String> {
 }
 
 fn registry_runtime_status_command(values: &[String]) -> Result<(), String> {
-    if values.len() != 3 {
+    if values.len() != 2 {
         return Err(
-            "usage: nixfied-kernel registry runtime-status <service-index-file> <slot-index-file> <export-file>"
+            "usage: nixfied-kernel registry runtime-status <service-index-file> <slot-index-file>"
                 .to_string(),
         );
     }
@@ -254,9 +281,9 @@ fn registry_runtime_status_command(values: &[String]) -> Result<(), String> {
         String::new()
     };
 
-    write_shell_exports(
-        &values[2],
-        &[
+    print!(
+        "{}",
+        render_shell_exports(&[
             ("REGISTRY_FOUND".to_string(), registry_found),
             ("REGISTRY_RUNNING".to_string(), registry_running),
             ("REGISTRY_STATE".to_string(), registry_state),
@@ -266,9 +293,8 @@ fn registry_runtime_status_command(values: &[String]) -> Result<(), String> {
             ("WAIT_REASON".to_string(), wait_reason),
             ("LOG_PATH".to_string(), log_path),
             ("SLOT_OWNER".to_string(), slot_owner),
-        ],
-    )?;
-    println!("OK: registry runtime-status");
+        ])
+    );
     Ok(())
 }
 

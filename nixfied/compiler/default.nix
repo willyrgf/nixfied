@@ -96,6 +96,9 @@ let
       canonical
       ;
   };
+  compileRuntimeMetadata = import ./compile-runtime-metadata.nix {
+    inherit lib;
+  };
 
   compileAppExecutionManifests = import ./compile-app-execution-manifests.nix {
     inherit
@@ -362,6 +365,16 @@ rec {
           ;
       };
 
+      runtimeMetadata = compileRuntimeMetadata {
+        inherit
+          tasks
+          workflows
+          serviceCatalog
+          apps
+          selectionIndex
+          ;
+      };
+
       views = compileViews {
         inherit projectRoot;
         resolved = resolvedModuleGraph.config;
@@ -391,6 +404,7 @@ rec {
           views
           apiCatalog
           runtimeManifests
+          runtimeMetadata
           serviceSurfaceCatalog
           ;
         resolved = resolvedModuleGraph.config;

@@ -252,7 +252,8 @@ let
         ${kernelPackage}/bin/nixfied-kernel service-policy fixture-keep-running \
         "''${SERVICE_OWNER_SCOPE:-}" \
         "''${SERVICE_REUSE_POLICY:-}" \
-        "''${SERVICE_DISCOVERY_SCOPE:-}"
+        "''${SERVICE_DISCOVERY_SCOPE:-}" \
+        || return 1
       echo "$KEEP_RUNNING"
     }
   '';

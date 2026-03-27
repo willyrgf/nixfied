@@ -349,7 +349,8 @@ let
         ${kernelPackage}/bin/nixfied-kernel service-policy start-service \
         "''${SERVICE_REUSE_POLICY:-}" \
         "''${SERVICE_OWNER_SCOPE:-}" \
-        "''${SERVICE_DISCOVERY_SCOPE:-}"
+        "''${SERVICE_DISCOVERY_SCOPE:-}" \
+        || return 1
     }
 
     # start_service_should_register_cleanup [explicit_mode]

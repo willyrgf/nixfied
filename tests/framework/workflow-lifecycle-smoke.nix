@@ -5,6 +5,7 @@
   registry,
 }:
 let
+  withRuntimeMetadata = import ./lib/with-runtime-metadata.nix { inherit pkgs; };
   baseTask = model.tasks."task.check";
 
   mkShellTask =
@@ -95,77 +96,80 @@ let
       ];
     };
 
-  lifecycleModel = model // {
-    tasks = model.tasks // {
-      "task.test.lifecycle.pre.always" = mkShellTask {
-        id = "task.test.lifecycle.pre.always";
-        command = ''
-          set -euo pipefail
-          echo "pre" >> "./lifecycle-always.log"
-        '';
+  lifecycleModel = withRuntimeMetadata (
+    model
+    // {
+      tasks = model.tasks // {
+        "task.test.lifecycle.pre.always" = mkShellTask {
+          id = "task.test.lifecycle.pre.always";
+          command = ''
+            set -euo pipefail
+            echo "pre" >> "./lifecycle-always.log"
+          '';
+        };
+
+        "task.test.lifecycle.main.always" = mkShellTask {
+          id = "task.test.lifecycle.main.always";
+          command = ''
+            set -euo pipefail
+            echo "main" >> "./lifecycle-always.log"
+            exit 11
+          '';
+        };
+
+        "task.test.lifecycle.post.always" = mkShellTask {
+          id = "task.test.lifecycle.post.always";
+          command = ''
+            set -euo pipefail
+            echo "post" >> "./lifecycle-always.log"
+          '';
+        };
+
+        "task.test.lifecycle.pre.skip" = mkShellTask {
+          id = "task.test.lifecycle.pre.skip";
+          command = ''
+            set -euo pipefail
+            echo "pre" >> "./lifecycle-skip.log"
+          '';
+        };
+
+        "task.test.lifecycle.main.skip" = mkShellTask {
+          id = "task.test.lifecycle.main.skip";
+          command = ''
+            set -euo pipefail
+            echo "main" >> "./lifecycle-skip.log"
+            exit 12
+          '';
+        };
+
+        "task.test.lifecycle.post.skip" = mkShellTask {
+          id = "task.test.lifecycle.post.skip";
+          command = ''
+            set -euo pipefail
+            echo "post" >> "./lifecycle-skip.log"
+          '';
+        };
       };
 
-      "task.test.lifecycle.main.always" = mkShellTask {
-        id = "task.test.lifecycle.main.always";
-        command = ''
-          set -euo pipefail
-          echo "main" >> "./lifecycle-always.log"
-          exit 11
-        '';
-      };
+      workflows = model.workflows // {
+        "workflow.test.lifecycle.always" = mkWorkflow {
+          id = "workflow.test.lifecycle.always";
+          mainTask = "task.test.lifecycle.main.always";
+          preTask = "task.test.lifecycle.pre.always";
+          postTask = "task.test.lifecycle.post.always";
+          alwaysRun = true;
+        };
 
-      "task.test.lifecycle.post.always" = mkShellTask {
-        id = "task.test.lifecycle.post.always";
-        command = ''
-          set -euo pipefail
-          echo "post" >> "./lifecycle-always.log"
-        '';
+        "workflow.test.lifecycle.skip" = mkWorkflow {
+          id = "workflow.test.lifecycle.skip";
+          mainTask = "task.test.lifecycle.main.skip";
+          preTask = "task.test.lifecycle.pre.skip";
+          postTask = "task.test.lifecycle.post.skip";
+          alwaysRun = false;
+        };
       };
-
-      "task.test.lifecycle.pre.skip" = mkShellTask {
-        id = "task.test.lifecycle.pre.skip";
-        command = ''
-          set -euo pipefail
-          echo "pre" >> "./lifecycle-skip.log"
-        '';
-      };
-
-      "task.test.lifecycle.main.skip" = mkShellTask {
-        id = "task.test.lifecycle.main.skip";
-        command = ''
-          set -euo pipefail
-          echo "main" >> "./lifecycle-skip.log"
-          exit 12
-        '';
-      };
-
-      "task.test.lifecycle.post.skip" = mkShellTask {
-        id = "task.test.lifecycle.post.skip";
-        command = ''
-          set -euo pipefail
-          echo "post" >> "./lifecycle-skip.log"
-        '';
-      };
-    };
-
-    workflows = model.workflows // {
-      "workflow.test.lifecycle.always" = mkWorkflow {
-        id = "workflow.test.lifecycle.always";
-        mainTask = "task.test.lifecycle.main.always";
-        preTask = "task.test.lifecycle.pre.always";
-        postTask = "task.test.lifecycle.post.always";
-        alwaysRun = true;
-      };
-
-      "workflow.test.lifecycle.skip" = mkWorkflow {
-        id = "workflow.test.lifecycle.skip";
-        mainTask = "task.test.lifecycle.main.skip";
-        preTask = "task.test.lifecycle.pre.skip";
-        postTask = "task.test.lifecycle.post.skip";
-        alwaysRun = false;
-      };
-    };
-  };
+    }
+  );
 
   executor = import ../../nixfied/framework/runtime/executor.nix {
     inherit

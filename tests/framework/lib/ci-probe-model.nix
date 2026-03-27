@@ -4,6 +4,7 @@
   disableEphemeralWorkflows ? [ ],
 }:
 let
+  withRuntimeMetadata = import ./with-runtime-metadata.nix { inherit pkgs; };
   probeQualityPkg = pkgs.writeShellScriptBin "ci-quality-probe" ''
     set -euo pipefail
     artifacts_dir="''${CI_ARTIFACTS_DIR:-$REGISTRY_ROOT/artifacts/manual}"
@@ -23,27 +24,29 @@ let
       };
     };
 in
-model
-// {
-  tasks = model.tasks // {
-    "task.ci.quality" = model.tasks."task.ci.quality" // {
-      summary = "Probe quality checks";
-      description = "Probe quality step used by workflow smoke tests that validate routing instead of nested Nix evaluation.";
-      runner = {
-        type = "derivation";
-        package = probeQualityPkg;
-        command = "ci-quality-probe";
-        workflowId = null;
+withRuntimeMetadata (
+  model
+  // {
+    tasks = model.tasks // {
+      "task.ci.quality" = model.tasks."task.ci.quality" // {
+        summary = "Probe quality checks";
+        description = "Probe quality step used by workflow smoke tests that validate routing instead of nested Nix evaluation.";
+        runner = {
+          type = "derivation";
+          package = probeQualityPkg;
+          command = "ci-quality-probe";
+          workflowId = null;
+        };
       };
     };
-  };
 
-  workflows =
-    model.workflows
-    // builtins.listToAttrs (
-      map (workflowId: {
-        name = workflowId;
-        value = disableEphemeral model.workflows.${workflowId};
-      }) disableEphemeralWorkflows
-    );
-}
+    workflows =
+      model.workflows
+      // builtins.listToAttrs (
+        map (workflowId: {
+          name = workflowId;
+          value = disableEphemeral model.workflows.${workflowId};
+        }) disableEphemeralWorkflows
+      );
+  }
+)

@@ -4,6 +4,7 @@ let
   dispatcherSource = builtins.readFile ../../nixfied/framework/runtime/dispatcher.nix;
   executorSource = builtins.readFile ../../nixfied/framework/runtime/executor.nix;
   sharedRuntimeSource = builtins.readFile ../../nixfied/framework/runtime/shared-runtime-lib.nix;
+  runtimeMetadataSource = builtins.readFile ../../nixfied/framework/runtime/runtime-metadata.nix;
   hasSharedRuntimeInfix =
     pattern:
     pkgs.lib.hasInfix pattern orchestratorSource || pkgs.lib.hasInfix pattern sharedRuntimeSource;
@@ -17,24 +18,19 @@ assert pkgs.lib.hasInfix "\${pkgs.procps}/bin/ps" orchestratorSource;
 assert pkgs.lib.hasInfix "nixfied-kernel run-record create" orchestratorSource;
 assert pkgs.lib.hasInfix "nixfied-kernel run-record transition" orchestratorSource;
 assert pkgs.lib.hasInfix "stop-all-runs" orchestratorSource;
-assert pkgs.lib.hasInfix "orchestratorRuntimeShell = import ./orchestrator-runtime.nix"
-  orchestratorSource;
-assert pkgs.lib.hasInfix "\${orchestratorRuntimeShell}" orchestratorSource;
+assert pkgs.lib.hasInfix "runtimeMetadataShell = import ./runtime-metadata.nix" orchestratorSource;
+assert pkgs.lib.hasInfix "MODEL_FILE=" orchestratorSource;
+assert pkgs.lib.hasInfix "export NIXFIED_MODEL_FILE=\"$MODEL_FILE\"" orchestratorSource;
+assert pkgs.lib.hasInfix "\${runtimeMetadataShell}" orchestratorSource;
 assert pkgs.lib.hasInfix "split_process_mode \"$@\"" orchestratorSource;
 assert pkgs.lib.hasInfix "validate_typed_task_args \"$task_id\"" orchestratorSource;
 assert pkgs.lib.hasInfix "ensure_artifacts_root \"$run_id\" \"$ephemeral_enabled\""
   orchestratorSource;
 assert pkgs.lib.hasInfix "workflow_id_exists \"$workflow_id\"" orchestratorSource;
-assert (!pkgs.lib.hasInfix "NIXFIED_MODEL_FILE" orchestratorSource);
+assert (!pkgs.lib.hasInfix "workflowModesShell = import ./workflow-modes.nix" orchestratorSource);
+assert (!pkgs.lib.hasInfix "NIXFIED_MODEL_FILE" dispatcherSource);
 assert (!pkgs.lib.hasInfix "task_json() {" orchestratorSource);
 assert (!pkgs.lib.hasInfix "workflow_json() {" orchestratorSource);
-assert (!pkgs.lib.hasInfix "jq -r --arg runId" orchestratorSource);
-assert (!pkgs.lib.hasInfix "\${pkgs.jq}/bin/jq -cnS" orchestratorSource);
-assert (!pkgs.lib.hasInfix "\${pkgs.jq}/bin/jq -cS" orchestratorSource);
-assert pkgs.lib.hasInfix "run_workflow_phase_tasks() {" executorSource;
-assert pkgs.lib.hasInfix "write_workflow_summary_json() {" executorSource;
-assert pkgs.lib.hasInfix "NIXFIED_ORCHESTRATOR_RUN_ID" executorSource;
-assert pkgs.lib.hasInfix "NIXFIED_ORCHESTRATOR_ATTEMPT_ID" executorSource;
 assert pkgs.lib.hasInfix "frameworkEphemeral = import ./ephemeral.nix" orchestratorSource;
 assert pkgs.lib.hasInfix "ephemeral = model.runtime.ephemeral or { };" orchestratorSource;
 assert pkgs.lib.hasInfix "EPHEMERAL_EXECUTOR_WRAPPER=" orchestratorSource;
@@ -61,8 +57,8 @@ assert pkgs.lib.hasInfix "--refresh --" dispatcherSource;
 assert pkgs.lib.hasInfix "github:willyrgf/nixfied/dev" dispatcherSource;
 assert pkgs.lib.hasInfix "frameworkUpgradeHelpFile" dispatcherSource;
 assert pkgs.lib.hasInfix "proxyFrameworkCommand" dispatcherSource;
-assert (!pkgs.lib.hasInfix "json_quote_string" orchestratorSource);
-assert (!pkgs.lib.hasInfix "positional_args_json" orchestratorSource);
+assert pkgs.lib.hasInfix "nixfied-kernel task validate-args" runtimeMetadataSource;
+assert pkgs.lib.hasInfix "nixfied-kernel workflow resolve-mode" runtimeMetadataSource;
 pkgs.runCommand "orchestrator-lifecycle-contract" { } ''
-  echo "OK: orchestrator lifecycle contracts are stable" > "$out"
+  echo "OK: orchestrator lifecycle remains stable while workflow/task metadata is manifest-backed" > "$out"
 ''

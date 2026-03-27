@@ -1,47 +1,24 @@
 { pkgs }:
 let
-  source = builtins.readFile ../../nixfied/framework/runtime/workflow-modes.nix;
+  runtimeMetadataSource = builtins.readFile ../../nixfied/framework/runtime/runtime-metadata.nix;
 in
-assert pkgs.lib.hasInfix "selectionIndex" source;
-assert (!pkgs.lib.hasInfix "service-selection.nix" source);
-assert pkgs.lib.hasInfix "workflow_id_exists() {" source;
-assert pkgs.lib.hasInfix "workflow_mode_name() {" source;
-assert pkgs.lib.hasInfix "workflow_artifacts_root() {" source;
-assert pkgs.lib.hasInfix "workflow_ephemeral_flag() {" source;
-assert pkgs.lib.hasInfix "workflow_fail_fast() {" source;
-assert pkgs.lib.hasInfix "workflow_parallel_enabled() {" source;
-assert pkgs.lib.hasInfix "workflow_write_summary() {" source;
-assert pkgs.lib.hasInfix "task_descriptor_exists() {" source;
-assert pkgs.lib.hasInfix "task_arg_parser() {" source;
-assert pkgs.lib.hasInfix "task_arg_long_kind() {" source;
-assert pkgs.lib.hasInfix "task_runner_workflow_id() {" source;
-assert pkgs.lib.hasInfix "mergeTaskRuntimeWithRunnerPackage =" source;
-assert pkgs.lib.hasInfix "mergeHookRuntime =" source;
-assert pkgs.lib.hasInfix "renderRuntimePlanShell =" source;
-assert pkgs.lib.hasInfix "renderPhaseServiceSetRecord =" source;
-assert pkgs.lib.hasInfix "task_runtime_plan_shell() {" source;
-assert pkgs.lib.hasInfix "task_runtime_pass_through_env_names() {" source;
-assert (!pkgs.lib.hasInfix "task_runtime_json() {" source);
-assert pkgs.lib.hasInfix "task_produces_json() {" source;
-assert pkgs.lib.hasInfix "task_retry_backoff_values() {" source;
-assert pkgs.lib.hasInfix "task_needs() {" source;
-assert pkgs.lib.hasInfix "task_soft_needs() {" source;
-assert pkgs.lib.hasInfix "task_hook_count() {" source;
-assert pkgs.lib.hasInfix "task_hook_ids() {" source;
-assert pkgs.lib.hasInfix "task_hook_command() {" source;
-assert pkgs.lib.hasInfix "task_hook_runtime_plan_shell() {" source;
-assert pkgs.lib.hasInfix "task_hook_runtime_pass_through_env_names() {" source;
-assert (!pkgs.lib.hasInfix "task_hook_runtime_json() {" source);
-assert (!pkgs.lib.hasInfix "task_retry_backoff_json() {" source);
-assert pkgs.lib.hasInfix "taskHookCases = builtins.concatLists" source;
-assert pkgs.lib.hasInfix "workflowPlanCases = map" source;
-assert pkgs.lib.hasInfix "\"workflow-unit:\${workflowId}:\${unit.name}\"" source;
-assert pkgs.lib.hasInfix "workflow_plan_records() {" source;
-assert pkgs.lib.hasInfix "workflowPhaseTaskCases = builtins.concatLists" source;
-assert pkgs.lib.hasInfix "workflow_phase_tasks() {" source;
-assert pkgs.lib.hasInfix "workflow_unit_closure_selected_services() {" source;
-assert (!pkgs.lib.hasInfix "$MODEL_FILE" source);
-assert (!pkgs.lib.hasInfix "/bin/jq" source);
+assert !(builtins.pathExists ../../nixfied/framework/runtime/workflow-modes.nix);
+assert pkgs.lib.hasInfix "nixfied-kernel task load-runtime" runtimeMetadataSource;
+assert pkgs.lib.hasInfix "nixfied-kernel task load-hook" runtimeMetadataSource;
+assert pkgs.lib.hasInfix "nixfied-kernel workflow load-runtime" runtimeMetadataSource;
+assert pkgs.lib.hasInfix "nixfied-kernel workflow resolve-mode" runtimeMetadataSource;
+assert pkgs.lib.hasInfix "_nixfied_task_load_cache() {" runtimeMetadataSource;
+assert pkgs.lib.hasInfix "_nixfied_workflow_load_cache() {" runtimeMetadataSource;
+assert pkgs.lib.hasInfix "task_runtime_plan_shell() {" runtimeMetadataSource;
+assert pkgs.lib.hasInfix "task_hook_runtime_plan_shell() {" runtimeMetadataSource;
+assert pkgs.lib.hasInfix "workflow_plan_task_ids() {" runtimeMetadataSource;
+assert pkgs.lib.hasInfix "workflow_phase_tasks() {" runtimeMetadataSource;
+assert pkgs.lib.hasInfix "workflow_parallel_enabled() {" runtimeMetadataSource;
+assert pkgs.lib.hasInfix "workflow_write_summary() {" runtimeMetadataSource;
+assert (!pkgs.lib.hasInfix "case \"$task_id\"" runtimeMetadataSource);
+assert (!pkgs.lib.hasInfix "case \"$workflow_id\"" runtimeMetadataSource);
+assert (!pkgs.lib.hasInfix "workflowPlanCases =" runtimeMetadataSource);
+assert (!pkgs.lib.hasInfix "taskHookCases =" runtimeMetadataSource);
 pkgs.runCommand "workflow-modes-contract" { } ''
-  echo "OK: workflow/task runner descriptors are compiled" > "$out"
+  echo "OK: runtime metadata shell adapter replaces generated workflow/task case tables" > "$out"
 ''

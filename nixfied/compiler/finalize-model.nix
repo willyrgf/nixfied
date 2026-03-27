@@ -7,6 +7,7 @@
   runtime,
   apiCatalog ? null,
   runtimeManifests ? null,
+  runtimeMetadata ? null,
   serviceSurfaceCatalog ? null,
   services ? null,
   serviceCatalog,
@@ -95,6 +96,7 @@ let
       compiled = {
         apiCatalog = apiCatalog;
         runtimeManifests = runtimeManifests;
+        runtimeMetadata = runtimeMetadata;
         serviceSurfaceCatalog = serviceSurfaceCatalog;
       };
     }

@@ -217,10 +217,22 @@ in
       inherit responder;
 
       shellLib = ''
+        ensure_jsonrpc_stub_responder() {
+          if [ -n "''${NIXFIED_JSONRPC_RESPONDER_PATH:-}" ] && [ -x "$NIXFIED_JSONRPC_RESPONDER_PATH" ]; then
+            return 0
+          fi
+
+          local responder_path="''${TMPDIR:-/tmp}/nixfied-jsonrpc-responder-$$.sh"
+          ${pkgs.coreutils}/bin/cp ${responder} "$responder_path"
+          ${pkgs.coreutils}/bin/chmod 0555 "$responder_path"
+          export NIXFIED_JSONRPC_RESPONDER_PATH="$responder_path"
+        }
+
         start_jsonrpc_stub() {
           local port="$1"
+          ensure_jsonrpc_stub_responder
           ${pkgs.socat}/bin/socat "TCP-LISTEN:$port,bind=127.0.0.1,reuseaddr,fork" \
-            "EXEC:${responder}" \
+            "EXEC:$NIXFIED_JSONRPC_RESPONDER_PATH" \
             >/dev/null 2>&1 &
           bg_pids+=("$!")
         }

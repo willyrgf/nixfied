@@ -5,6 +5,7 @@
   registry,
 }:
 let
+  withRuntimeMetadata = import ./lib/with-runtime-metadata.nix { inherit pkgs; };
   baseTask = model.tasks."task.ci.quality";
 
   mkProbeTask =
@@ -131,49 +132,55 @@ let
   worktreeTaskId = "task.test.ephemeral.copy-mode.worktree";
   worktreeWorkflowId = "workflow.test.ephemeral.copy-mode.worktree";
 
-  trackedModel = model // {
-    runtime = model.runtime // {
-      ephemeral = (model.runtime.ephemeral or { }) // {
-        copyMode = "git-files";
-        includeUntracked = false;
+  trackedModel = withRuntimeMetadata (
+    model
+    // {
+      runtime = model.runtime // {
+        ephemeral = (model.runtime.ephemeral or { }) // {
+          copyMode = "git-files";
+          includeUntracked = false;
+        };
       };
-    };
-    tasks = model.tasks // {
-      ${trackedTaskId} = mkProbeTask {
-        taskId = trackedTaskId;
-        appName = "test-ephemeral-copy-mode-tracked";
-        expectUntracked = false;
+      tasks = model.tasks // {
+        ${trackedTaskId} = mkProbeTask {
+          taskId = trackedTaskId;
+          appName = "test-ephemeral-copy-mode-tracked";
+          expectUntracked = false;
+        };
       };
-    };
-    workflows = model.workflows // {
-      ${trackedWorkflowId} = mkProbeWorkflow {
-        workflowId = trackedWorkflowId;
-        taskId = trackedTaskId;
+      workflows = model.workflows // {
+        ${trackedWorkflowId} = mkProbeWorkflow {
+          workflowId = trackedWorkflowId;
+          taskId = trackedTaskId;
+        };
       };
-    };
-  };
+    }
+  );
 
-  worktreeModel = model // {
-    runtime = model.runtime // {
-      ephemeral = (model.runtime.ephemeral or { }) // {
-        copyMode = "git-files";
-        includeUntracked = true;
+  worktreeModel = withRuntimeMetadata (
+    model
+    // {
+      runtime = model.runtime // {
+        ephemeral = (model.runtime.ephemeral or { }) // {
+          copyMode = "git-files";
+          includeUntracked = true;
+        };
       };
-    };
-    tasks = model.tasks // {
-      ${worktreeTaskId} = mkProbeTask {
-        taskId = worktreeTaskId;
-        appName = "test-ephemeral-copy-mode-worktree";
-        expectUntracked = true;
+      tasks = model.tasks // {
+        ${worktreeTaskId} = mkProbeTask {
+          taskId = worktreeTaskId;
+          appName = "test-ephemeral-copy-mode-worktree";
+          expectUntracked = true;
+        };
       };
-    };
-    workflows = model.workflows // {
-      ${worktreeWorkflowId} = mkProbeWorkflow {
-        workflowId = worktreeWorkflowId;
-        taskId = worktreeTaskId;
+      workflows = model.workflows // {
+        ${worktreeWorkflowId} = mkProbeWorkflow {
+          workflowId = worktreeWorkflowId;
+          taskId = worktreeTaskId;
+        };
       };
-    };
-  };
+    }
+  );
 
   trackedOrchestrator = import ../../nixfied/framework/runtime/orchestrator.nix {
     inherit

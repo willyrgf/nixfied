@@ -5,6 +5,7 @@
   registry,
 }:
 let
+  withRuntimeMetadata = import ./lib/with-runtime-metadata.nix { inherit pkgs; };
   baseTask = model.tasks."task.ci.quality";
 
   failTaskId = "task.test.ephemeral.retention.fail";
@@ -79,39 +80,45 @@ let
     ];
   };
 
-  withRetentionModel = model // {
-    runtime = model.runtime // {
-      ephemeral = (model.runtime.ephemeral or { }) // {
-        copyMode = "static-excludes";
-        keepFailures = true;
-        maxFailedRoots = 2;
-        maxFailedRootAgeHours = 1;
+  withRetentionModel = withRuntimeMetadata (
+    model
+    // {
+      runtime = model.runtime // {
+        ephemeral = (model.runtime.ephemeral or { }) // {
+          copyMode = "static-excludes";
+          keepFailures = true;
+          maxFailedRoots = 2;
+          maxFailedRootAgeHours = 1;
+        };
       };
-    };
-    tasks = model.tasks // {
-      ${failTaskId} = failTask;
-    };
-    workflows = model.workflows // {
-      ${failWorkflowId} = failWorkflow;
-    };
-  };
+      tasks = model.tasks // {
+        ${failTaskId} = failTask;
+      };
+      workflows = model.workflows // {
+        ${failWorkflowId} = failWorkflow;
+      };
+    }
+  );
 
-  noRetentionModel = model // {
-    runtime = model.runtime // {
-      ephemeral = (model.runtime.ephemeral or { }) // {
-        copyMode = "static-excludes";
-        keepFailures = false;
-        maxFailedRoots = 0;
-        maxFailedRootAgeHours = 0;
+  noRetentionModel = withRuntimeMetadata (
+    model
+    // {
+      runtime = model.runtime // {
+        ephemeral = (model.runtime.ephemeral or { }) // {
+          copyMode = "static-excludes";
+          keepFailures = false;
+          maxFailedRoots = 0;
+          maxFailedRootAgeHours = 0;
+        };
       };
-    };
-    tasks = model.tasks // {
-      ${failTaskId} = failTask;
-    };
-    workflows = model.workflows // {
-      ${failWorkflowId} = failWorkflow;
-    };
-  };
+      tasks = model.tasks // {
+        ${failTaskId} = failTask;
+      };
+      workflows = model.workflows // {
+        ${failWorkflowId} = failWorkflow;
+      };
+    }
+  );
 
   orchestratorKeep = import ../../nixfied/framework/runtime/orchestrator.nix {
     inherit

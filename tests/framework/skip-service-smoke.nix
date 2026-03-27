@@ -4,6 +4,7 @@
 }:
 let
   lib = pkgs.lib;
+  withRuntimeMetadata = import ./lib/with-runtime-metadata.nix { inherit pkgs; };
   frameworkLib = import ../../nixfied/framework/core {
     inherit pkgs;
     system = pkgs.system;
@@ -60,133 +61,136 @@ let
   skipService = "postgres";
   skipEnvVar = "SKIP_${lib.toUpper skipService}";
 
-  probeModel = compiled.model // {
-    serviceCatalog = compiled.model.serviceCatalog // {
-      "service.postgres" = compiled.model.serviceCatalog."service.postgres" // {
-        enable = true;
-      };
-    };
-
-    tasks = compiled.model.tasks // {
-      "${taskSkipId}" = mkShellTask {
-        id = taskSkipId;
-        requiredServices = [ skipService ];
-        commandTail = ''
-          set -euo pipefail
-          printf '%s\n' "skip-task-main-ran"
-        '';
+  probeModel = withRuntimeMetadata (
+    compiled.model
+    // {
+      serviceCatalog = compiled.model.serviceCatalog // {
+        "service.postgres" = compiled.model.serviceCatalog."service.postgres" // {
+          enable = true;
+        };
       };
 
-      "${controlTaskId}" = mkShellTask {
-        id = controlTaskId;
-        commandTail = ''
-          set -euo pipefail
-          printf '%s\n' "control-task-ran"
-        '';
+      tasks = compiled.model.tasks // {
+        "${taskSkipId}" = mkShellTask {
+          id = taskSkipId;
+          requiredServices = [ skipService ];
+          commandTail = ''
+            set -euo pipefail
+            printf '%s\n' "skip-task-main-ran"
+          '';
+        };
+
+        "${controlTaskId}" = mkShellTask {
+          id = controlTaskId;
+          commandTail = ''
+            set -euo pipefail
+            printf '%s\n' "control-task-ran"
+          '';
+        };
+
+        "${dependencyTaskId}" = mkShellTask {
+          id = dependencyTaskId;
+          requiredServices = [ skipService ];
+          commandTail = ''
+            set -euo pipefail
+            printf '%s\n' "dependency-task-ran"
+          '';
+        };
+
+        "${consumerTaskId}" = mkShellTask {
+          id = consumerTaskId;
+          commandTail = ''
+            set -euo pipefail
+            printf '%s\n' "consumer-task-ran"
+          '';
+        };
       };
 
-      "${dependencyTaskId}" = mkShellTask {
-        id = dependencyTaskId;
-        requiredServices = [ skipService ];
-        commandTail = ''
-          set -euo pipefail
-          printf '%s\n' "dependency-task-ran"
-        '';
-      };
-
-      "${consumerTaskId}" = mkShellTask {
-        id = consumerTaskId;
-        commandTail = ''
-          set -euo pipefail
-          printf '%s\n' "consumer-task-ran"
-        '';
-      };
-    };
-
-    workflows = compiled.model.workflows // {
-      "${dependencyWorkflowId}" = {
-        id = dependencyWorkflowId;
-        summary = dependencyWorkflowId;
-        description = "Validate skipped-service hard-fail dependency behavior";
-        mode = "custom";
-        maxWorkers = 1;
-        units = {
-          "${dependencyTaskId}" = {
-            taskId = dependencyTaskId;
-            needs = [ ];
-            locks = [ ];
-            requirements.services = [ skipService ];
-            when = {
-              envEquals = { };
-              envPresent = [ ];
+      workflows = compiled.model.workflows // {
+        "${dependencyWorkflowId}" = {
+          id = dependencyWorkflowId;
+          summary = dependencyWorkflowId;
+          description = "Validate skipped-service hard-fail dependency behavior";
+          mode = "custom";
+          maxWorkers = 1;
+          units = {
+            "${dependencyTaskId}" = {
+              taskId = dependencyTaskId;
+              needs = [ ];
+              locks = [ ];
+              requirements.services = [ skipService ];
+              when = {
+                envEquals = { };
+                envPresent = [ ];
+              };
+              skipIfMissingEnv = [ ];
             };
-            skipIfMissingEnv = [ ];
+            "${consumerTaskId}" = {
+              taskId = consumerTaskId;
+              needs = [ "${dependencyTaskId}" ];
+              locks = [ ];
+              when = {
+                envEquals = { };
+                envPresent = [ ];
+              };
+              skipIfMissingEnv = [ ];
+            };
           };
-          "${consumerTaskId}" = {
-            taskId = consumerTaskId;
-            needs = [ "${dependencyTaskId}" ];
-            locks = [ ];
-            when = {
-              envEquals = { };
-              envPresent = [ ];
-            };
-            skipIfMissingEnv = [ ];
+          stages = [
+            [ "${dependencyTaskId}" ]
+            [ "${consumerTaskId}" ]
+          ];
+          preRun = {
+            tasks = [ ];
           };
-        };
-        stages = [
-          [ "${dependencyTaskId}" ]
-          [ "${consumerTaskId}" ]
-        ];
-        preRun = {
-          tasks = [ ];
-        };
-        postRun = {
-          tasks = [ ];
-          alwaysRun = false;
-        };
-        artifacts = {
-          root = "artifacts-root";
-          keepOnSuccess = false;
-          keepOnFailure = true;
-          writeSummary = true;
-        };
-        execution = {
-          parallel = false;
-          failFast = true;
-          lockPolicy = "exclusive";
-          emitRegistryEvents = true;
-          ephemeral = {
-            enable = true;
+          postRun = {
+            tasks = [ ];
+            alwaysRun = false;
           };
+          artifacts = {
+            root = "artifacts-root";
+            keepOnSuccess = false;
+            keepOnFailure = true;
+            writeSummary = true;
+          };
+          execution = {
+            parallel = false;
+            failFast = true;
+            lockPolicy = "exclusive";
+            emitRegistryEvents = true;
+            ephemeral = {
+              enable = true;
+            };
+          };
+          plan = [
+            {
+              name = "${dependencyTaskId}";
+              taskId = dependencyTaskId;
+              needs = [ ];
+              locks = [ ];
+              requirements.services = [ skipService ];
+              when = {
+                envEquals = { };
+                envPresent = [ ];
+              };
+              skipIfMissingEnv = [ ];
+            }
+            {
+              name = "${consumerTaskId}";
+              taskId = consumerTaskId;
+              needs = [ "${dependencyTaskId}" ];
+              locks = [ ];
+              when = {
+                envEquals = { };
+                envPresent = [ ];
+              };
+              skipIfMissingEnv = [ ];
+            }
+          ];
         };
-        plan = [
-          {
-            name = "${dependencyTaskId}";
-            taskId = dependencyTaskId;
-            needs = [ ];
-            locks = [ ];
-            requirements.services = [ skipService ];
-            when = {
-              envEquals = { };
-              envPresent = [ ];
-            };
-            skipIfMissingEnv = [ ];
-          }
-          {
-            name = "${consumerTaskId}";
-            taskId = consumerTaskId;
-            needs = [ "${dependencyTaskId}" ];
-            locks = [ ];
-            when = {
-              envEquals = { };
-              envPresent = [ ];
-            };
-            skipIfMissingEnv = [ ];
-          }
-        ];
       };
-    };
-  };
+    }
+  );
 
   executor = import ../../nixfied/framework/runtime/executor.nix {
     inherit

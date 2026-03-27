@@ -224,111 +224,29 @@ in
   validate_typed_task_args() {
     local task_id="$1"
     shift
-
-    local parser
-    local allow_unknown
-    local has_positional
-    local kind=""
-    local parse_opts=1
-    local arg=""
-    local key=""
+    local validate_output=""
+    local validate_rc=0
 
     if ! task_descriptor_exists "$task_id"; then
       echo "ERROR: unknown task '$task_id'"
       return 2
     fi
 
-    parser="$(task_arg_parser "$task_id")"
-    allow_unknown="$(task_arg_allow_unknown "$task_id")"
-
-    if [ "$parser" != "typed" ] || [ "$allow_unknown" = "true" ]; then
+    if validate_output="$(task_validate_args "$task_id" "$@" 2>&1)"; then
       return 0
     fi
+    validate_rc="$?"
 
-    has_positional="$(task_arg_has_positional "$task_id")"
+    case "$validate_output" in
+      "ERROR: unknown option "*)
+        validate_output="$validate_output for task '$task_id'"
+        ;;
+    esac
 
-    while [ "$#" -gt 0 ]; do
-      arg="$1"
-      shift
-
-      if [ "$parse_opts" -eq 0 ]; then
-        continue
-      fi
-
-      if [ "$arg" = "--" ]; then
-        parse_opts=0
-        continue
-      fi
-
-      case "$arg" in
-        --help|-h)
-          continue
-          ;;
-        --*=*)
-          key="''${arg%%=*}"
-          if [ "$key" = "--run-id-file" ] || [ "$key" = "--summary-file" ]; then
-            continue
-          fi
-          kind="$(task_arg_long_kind "$task_id" "$key" || true)"
-          if [ "$kind" = "option" ] || [ "$kind" = "flag" ]; then
-            continue
-          fi
-          echo "ERROR: unknown option '$key' for task '$task_id'"
-          return 2
-          ;;
-        --*)
-          if [ "$arg" = "--run-id-file" ] || [ "$arg" = "--summary-file" ]; then
-            if [ "$#" -lt 1 ]; then
-              echo "ERROR: option '$arg' requires a value"
-              return 2
-            fi
-            shift
-            continue
-          fi
-          kind="$(task_arg_long_kind "$task_id" "$arg" || true)"
-          if [ "$kind" = "flag" ]; then
-            continue
-          fi
-          if [ "$kind" = "option" ]; then
-            if [ "$#" -lt 1 ]; then
-              echo "ERROR: option '$arg' requires a value"
-              return 2
-            fi
-            shift
-            continue
-          fi
-          echo "ERROR: unknown option '$arg' for task '$task_id'"
-          return 2
-          ;;
-        -?*)
-          if [ "''${#arg}" -ne 2 ]; then
-            echo "ERROR: unknown option '$arg' for task '$task_id'"
-            return 2
-          fi
-          kind="$(task_arg_short_kind "$task_id" "$arg" || true)"
-          if [ "$kind" = "flag" ]; then
-            continue
-          fi
-          if [ "$kind" = "option" ]; then
-            if [ "$#" -lt 1 ]; then
-              echo "ERROR: option '$arg' requires a value"
-              return 2
-            fi
-            shift
-            continue
-          fi
-          echo "ERROR: unknown option '$arg' for task '$task_id'"
-          return 2
-          ;;
-        *)
-          if [ "$has_positional" = "true" ]; then
-            continue
-          fi
-          echo "ERROR: unexpected positional argument '$arg' for task '$task_id'"
-          return 2
-          ;;
-      esac
-    done
+    if [ -n "$validate_output" ]; then
+      printf '%s\n' "$validate_output"
+    fi
+    return "$validate_rc"
   }
 
   normalize_run_artifacts_dir() {
