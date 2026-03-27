@@ -87,13 +87,13 @@ jobs:
             echo "$output" | grep -Fq "$expected_header"
           } 2>&1 | tee "$log_file"
 
-      - name: Run framework shard flake-check
-        id: shard_flake_check
+      - name: Run framework shard compile
+        id: shard_compile
         continue-on-error: true
         run: |
           set -euo pipefail
-          log_file="$CI_DEBUG_DIR/framework-shard-flake-check.log"
-          nix run -L -v --log-format bar-with-logs .#framework::test -- --summary --serial --shard flake-check 2>&1 | tee "$log_file"
+          log_file="$CI_DEBUG_DIR/framework-shard-compile.log"
+          nix run -L -v --log-format bar-with-logs .#framework::test -- --summary --serial --shard compile 2>&1 | tee "$log_file"
 
       - name: Show all features
         run: |
@@ -102,29 +102,55 @@ jobs:
           nix run -L -v --log-format bar-with-logs .#features | tee "$log_file"
 
 
-      - name: Run framework shard help
-        id: shard_help
+      - name: Run framework shard manifest
+        id: shard_manifest
         continue-on-error: true
         run: |
           set -euo pipefail
-          log_file="$CI_DEBUG_DIR/framework-shard-help.log"
-          nix run -L -v --log-format bar-with-logs .#framework::test -- --summary --serial --shard help 2>&1 | tee "$log_file"
+          log_file="$CI_DEBUG_DIR/framework-shard-manifest.log"
+          nix run -L -v --log-format bar-with-logs .#framework::test -- --summary --serial --shard manifest 2>&1 | tee "$log_file"
 
-      - name: Run framework shard workflow-ci
-        id: shard_workflow_ci
+      - name: Run framework shard kernel
+        id: shard_kernel
         continue-on-error: true
         run: |
           set -euo pipefail
-          log_file="$CI_DEBUG_DIR/framework-shard-workflow-ci.log"
-          nix run -L -v --log-format bar-with-logs .#framework::test -- --summary --serial --shard workflow-ci 2>&1 | tee "$log_file"
+          log_file="$CI_DEBUG_DIR/framework-shard-kernel.log"
+          nix run -L -v --log-format bar-with-logs .#framework::test -- --summary --serial --shard kernel 2>&1 | tee "$log_file"
 
-      - name: Run framework shard self-host
-        id: shard_self_host
+      - name: Run framework shard adapters
+        id: shard_adapters
         continue-on-error: true
         run: |
           set -euo pipefail
-          log_file="$CI_DEBUG_DIR/framework-shard-self-host.log"
-          nix run -L -v --log-format bar-with-logs .#framework::test -- --summary --serial --shard self-host 2>&1 | tee "$log_file"
+          log_file="$CI_DEBUG_DIR/framework-shard-adapters.log"
+          nix run -L -v --log-format bar-with-logs .#framework::test -- --summary --serial --shard adapters 2>&1 | tee "$log_file"
+
+      - name: Run framework shard migration
+        id: shard_migration
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          log_file="$CI_DEBUG_DIR/framework-shard-migration.log"
+          nix run -L -v --log-format bar-with-logs .#framework::test -- --summary --serial --shard migration 2>&1 | tee "$log_file"
+
+      - name: Run framework shard services
+        id: shard_services
+        if: github.event_name != 'pull_request'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          log_file="$CI_DEBUG_DIR/framework-shard-services.log"
+          nix run -L -v --log-format bar-with-logs .#framework::test -- --summary --serial --shard services 2>&1 | tee "$log_file"
+
+      - name: Run framework shard e2e
+        id: shard_e2e
+        if: github.event_name != 'pull_request'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          log_file="$CI_DEBUG_DIR/framework-shard-e2e.log"
+          nix run -L -v --log-format bar-with-logs .#framework::test -- --summary --serial --shard e2e 2>&1 | tee "$log_file"
 
       - name: Verify build-and-test outcomes
         if: always()
@@ -139,6 +165,8 @@ jobs:
             local outcome="$2"
             if [ "$outcome" = "success" ]; then
               echo "OK: step passed name=$step_name"
+            elif [ "$outcome" = "skipped" ]; then
+              echo "SKIP: step skipped name=$step_name"
             else
               echo "ERROR: step failed name=$step_name outcome=$outcome"
               failed=1
@@ -147,10 +175,13 @@ jobs:
 
           {
             report_step "help-surface" "${{ steps.run_help.outcome }}"
-            report_step "framework-shard-flake-check" "${{ steps.shard_flake_check.outcome }}"
-            report_step "framework-shard-help" "${{ steps.shard_help.outcome }}"
-            report_step "framework-shard-workflow-ci" "${{ steps.shard_workflow_ci.outcome }}"
-            report_step "framework-shard-self-host" "${{ steps.shard_self_host.outcome }}"
+            report_step "framework-shard-compile" "${{ steps.shard_compile.outcome }}"
+            report_step "framework-shard-manifest" "${{ steps.shard_manifest.outcome }}"
+            report_step "framework-shard-kernel" "${{ steps.shard_kernel.outcome }}"
+            report_step "framework-shard-adapters" "${{ steps.shard_adapters.outcome }}"
+            report_step "framework-shard-migration" "${{ steps.shard_migration.outcome }}"
+            report_step "framework-shard-services" "${{ steps.shard_services.outcome }}"
+            report_step "framework-shard-e2e" "${{ steps.shard_e2e.outcome }}"
           } 2>&1 | tee "$status_file"
 
           if [ "$failed" -ne 0 ]; then

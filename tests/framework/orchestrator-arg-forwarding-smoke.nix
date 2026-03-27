@@ -32,7 +32,7 @@ pkgs.runCommand "orchestrator-arg-forwarding-smoke" { } ''
   require_contains "$TMPDIR/run-task.out" "OK: isolation probe complete"
   require_not_contains "$TMPDIR/run-task.err" "jq:"
 
-  "$FRAMEWORK_TEST_APP" --shard help > "$TMPDIR/framework-test.out" 2> "$TMPDIR/framework-test.err"
+  "$FRAMEWORK_TEST_APP" --shard manifest > "$TMPDIR/framework-test.out" 2> "$TMPDIR/framework-test.err"
   require_contains "$TMPDIR/framework-test.out" "OK: framework::test completed"
   require_not_contains "$TMPDIR/framework-test.err" "jq:"
 

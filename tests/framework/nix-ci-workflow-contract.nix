@@ -9,6 +9,16 @@ assert pkgs.lib.hasInfix
 assert !(pkgs.lib.hasInfix "nix show-config" source);
 assert pkgs.lib.hasInfix "isolation_log_source=\"$CI_DEBUG_DIR/isolation-cell.log\"" source;
 assert pkgs.lib.hasInfix "isolation_logs_dir=\"$CI_DEBUG_DIR/isolation-logs\"" source;
+assert pkgs.lib.hasInfix "framework-shard-compile.log" source;
+assert pkgs.lib.hasInfix "framework-shard-manifest.log" source;
+assert pkgs.lib.hasInfix "framework-shard-kernel.log" source;
+assert pkgs.lib.hasInfix "framework-shard-adapters.log" source;
+assert pkgs.lib.hasInfix "framework-shard-migration.log" source;
+assert pkgs.lib.hasInfix "framework-shard-services.log" source;
+assert pkgs.lib.hasInfix "framework-shard-e2e.log" source;
+assert !(pkgs.lib.hasInfix "framework-shard-flake-check.log" source);
+assert !(pkgs.lib.hasInfix "framework-shard-workflow-ci.log" source);
+assert !(pkgs.lib.hasInfix "framework-shard-self-host.log" source);
 assert pkgs.lib.hasInfix
   "sed -n 's/^INFO: test-isolation logs_root=//p' \"$isolation_log_source\" | tail -n 1"
   source;

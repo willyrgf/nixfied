@@ -41,8 +41,8 @@ pkgs.runCommand "framework-test-no-caller-compile-smoke" { } ''
       fail "framework::test should not compile the caller project"
     }
 
-    require_contains "$TMPDIR/framework-test.out" "flake-check"
-    require_contains "$TMPDIR/framework-test.out" "self-host"
+    require_contains "$TMPDIR/framework-test.out" "compile"
+    require_contains "$TMPDIR/framework-test.out" "migration"
     require_contains "$target_repo/nixfied/project/module.nix" "caller project compiled unexpectedly during framework::test"
 
     echo "OK: framework::test can run from a poisoned caller repo without compiling it" > "$out"

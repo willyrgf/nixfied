@@ -26,35 +26,34 @@ pkgs.runCommand "framework-test-cli-contract-smoke" { } ''
     mkdir -p "$REGISTRY_ROOT" "$CI_ARTIFACTS_DIR" "$HOME"
 
     "$ORCH" run-task task.framework.test --list-shards > "$TMPDIR/list-shards.out" 2>&1
-    require_contains "$TMPDIR/list-shards.out" "flake-check"
-    require_contains "$TMPDIR/list-shards.out" "launcher-pruning"
-    require_contains "$TMPDIR/list-shards.out" "help"
-    require_contains "$TMPDIR/list-shards.out" "workflow-ci"
+    require_contains "$TMPDIR/list-shards.out" "compile"
+    require_contains "$TMPDIR/list-shards.out" "manifest"
+    require_contains "$TMPDIR/list-shards.out" "kernel"
+    require_contains "$TMPDIR/list-shards.out" "adapters"
     require_contains "$TMPDIR/list-shards.out" "services"
-    require_contains "$TMPDIR/list-shards.out" "isolation"
-    require_contains "$TMPDIR/list-shards.out" "self-host"
+    require_contains "$TMPDIR/list-shards.out" "e2e"
+    require_contains "$TMPDIR/list-shards.out" "migration"
 
-    "$ORCH" run-task task.framework.test --shard help --summary > "$TMPDIR/shard-help.out" 2>&1
-    require_contains "$TMPDIR/shard-help.out" "OK: shard passed name=help"
-    require_contains "$TMPDIR/shard-help.out" "INFO: summary profile=ci mode=full executed_shards=1 failed_shards=0 exit_1_shards=0 canceled_shards=0"
+    "$ORCH" run-task task.framework.test --shard manifest --summary > "$TMPDIR/shard-manifest.out" 2>&1
+    require_contains "$TMPDIR/shard-manifest.out" "OK: shard passed name=manifest"
+    require_contains "$TMPDIR/shard-manifest.out" "INFO: summary profile=ci executed_shards=1 failed_shards=0 exit_1_shards=0 canceled_shards=0"
 
-    "$ORCH" run-task task.framework.test --shard help --summary --log-level debug --output-mode both > "$TMPDIR/shard-help-logging.out" 2>&1
-    require_contains "$TMPDIR/shard-help-logging.out" "OK: shard passed name=help"
+    "$ORCH" run-task task.framework.test --shard manifest --summary --log-level debug --output-mode both > "$TMPDIR/shard-manifest-logging.out" 2>&1
+    require_contains "$TMPDIR/shard-manifest-logging.out" "OK: shard passed name=manifest"
 
-    "$ORCH" run-task task.framework.test --shard help --serial --summary > "$TMPDIR/shard-help-serial.out" 2>&1
-    require_contains "$TMPDIR/shard-help-serial.out" "INFO: running shards serial total=1"
-    require_contains "$TMPDIR/shard-help-serial.out" "OK: shard passed name=help"
+    "$ORCH" run-task task.framework.test --shard manifest --serial --summary > "$TMPDIR/shard-manifest-serial.out" 2>&1
+    require_contains "$TMPDIR/shard-manifest-serial.out" "INFO: running shards serial total=1"
+    require_contains "$TMPDIR/shard-manifest-serial.out" "OK: shard passed name=manifest"
 
-    "$ORCH" run-task task.framework.test --shard help --max-parallel-shards auto --summary > "$TMPDIR/shard-help-auto.out" 2>&1
-    require_contains "$TMPDIR/shard-help-auto.out" "OK: shard passed name=help"
+    "$ORCH" run-task task.framework.test --shard manifest --max-parallel-shards auto --summary > "$TMPDIR/shard-manifest-auto.out" 2>&1
+    require_contains "$TMPDIR/shard-manifest-auto.out" "OK: shard passed name=manifest"
 
     summary_json="$TMPDIR/framework-summary.json"
-    "$ORCH" run-task task.framework.test --shard help --summary-json "$summary_json" > "$TMPDIR/summary-json.out" 2>&1
+    "$ORCH" run-task task.framework.test --profile full --shard manifest --summary-json "$summary_json" > "$TMPDIR/summary-json.out" 2>&1
     require_file "$summary_json"
     ${pkgs.jq}/bin/jq -e '
-      .profile == "ci"
-      and .mode == "full"
-      and .shard == "help"
+      .profile == "full"
+      and .shard == "manifest"
       and .executed_shards == 1
       and .failed_shards == 0
       and .exit_1_shards == 0
@@ -66,22 +65,13 @@ pkgs.runCommand "framework-test-cli-contract-smoke" { } ''
     ' "$summary_json" > /dev/null
 
     set +e
-    "$ORCH" run-task task.framework.test --profile full > "$TMPDIR/profile-full.out" 2>&1
+    "$ORCH" run-task task.framework.test --profile nope > "$TMPDIR/profile-nope.out" 2>&1
     profile_rc="$?"
     set -e
     if [ "$profile_rc" -eq 0 ]; then
-      fail "expected --profile full to fail"
+      fail "expected unknown profile to fail"
     fi
-    require_contains "$TMPDIR/profile-full.out" "profile 'full' is no longer supported"
-
-    set +e
-    "$ORCH" run-task task.framework.test --mode nope --shard help > "$TMPDIR/mode-nope.out" 2>&1
-    mode_rc="$?"
-    set -e
-    if [ "$mode_rc" -eq 0 ]; then
-      fail "expected unknown mode to fail"
-    fi
-    require_contains "$TMPDIR/mode-nope.out" "unknown mode 'nope'"
+    require_contains "$TMPDIR/profile-nope.out" "unknown profile 'nope'"
 
     set +e
     "$ORCH" run-task task.framework.test --shard unknown > "$TMPDIR/shard-unknown.out" 2>&1
@@ -93,7 +83,7 @@ pkgs.runCommand "framework-test-cli-contract-smoke" { } ''
     require_contains "$TMPDIR/shard-unknown.out" "unknown shard 'unknown'"
 
     set +e
-    "$ORCH" run-task task.framework.test --shard help --max-parallel-shards 0 > "$TMPDIR/max-parallel-invalid.out" 2>&1
+    "$ORCH" run-task task.framework.test --shard manifest --max-parallel-shards 0 > "$TMPDIR/max-parallel-invalid.out" 2>&1
     max_parallel_rc="$?"
     set -e
     if [ "$max_parallel_rc" -eq 0 ]; then
@@ -102,15 +92,15 @@ pkgs.runCommand "framework-test-cli-contract-smoke" { } ''
     require_contains "$TMPDIR/max-parallel-invalid.out" "invalid --max-parallel-shards '0'"
 
   set +e
-  NIXFIED_FRAMEWORK_TEST_FORCE_FAIL_SHARD=flake-check \
-    "$ORCH" run-task task.framework.test --shard flake-check > "$TMPDIR/failing-shard.out" 2>&1
+  NIXFIED_FRAMEWORK_TEST_FORCE_FAIL_SHARD=manifest \
+    "$ORCH" run-task task.framework.test --shard manifest > "$TMPDIR/failing-shard.out" 2>&1
   failing_shard_rc="$?"
   set -e
   if [ "$failing_shard_rc" -ne 17 ]; then
-    fail "expected forced flake-check shard to exit 17"
+    fail "expected forced manifest shard to exit 17"
   fi
-  require_contains "$TMPDIR/failing-shard.out" "ERROR: shard failed name=flake-check rc=17"
-  require_contains "$TMPDIR/failing-shard.out" "INFO: summary profile=ci mode=full executed_shards=0 failed_shards=1 exit_1_shards=0 canceled_shards=0"
+  require_contains "$TMPDIR/failing-shard.out" "ERROR: shard failed name=manifest rc=17"
+  require_contains "$TMPDIR/failing-shard.out" "INFO: summary profile=ci executed_shards=0 failed_shards=1 exit_1_shards=0 canceled_shards=0"
 
     echo "OK: framework::test CLI contract is validated" > "$out"
 ''

@@ -145,7 +145,7 @@ pkgs.runCommand "framework-template-install-upgrade-help-smoke" { } ''
   require_contains "$TMPDIR/framework-test-help.out" "framework::test - Run framework validation in the model"
   require_contains "$TMPDIR/framework-test-help.out" "Usage:"
   require_contains "$TMPDIR/framework-test-help.out" "  nix run .#framework::test"
-  require_contains "$TMPDIR/framework-test-help.out" "self-host"
+  require_contains "$TMPDIR/framework-test-help.out" "migration"
 
   echo "OK: template install/upgrade/help downstream contract is validated" > "$out"
 ''
