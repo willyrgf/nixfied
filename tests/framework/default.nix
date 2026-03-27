@@ -35,11 +35,7 @@ let
       || name == "workflow-modes-contract"
     then
       "migration"
-    else if
-      lib.hasInfix "manifest" name
-      || name == "runtime-service-selection-contract"
-      || name == "service-set-surface-contract"
-    then
+    else if lib.hasInfix "manifest" name || name == "runtime-service-selection-contract" then
       "manifest"
     else if
       lib.hasInfix "launcher" name
@@ -195,17 +191,27 @@ let
     };
 
     "selected-app-manifest-contract" = {
-      layer = "manifest";
+      layer = "adapter";
       proofKind = "contract";
-      canonical = true;
+      canonical = false;
       covers = [ "runtime.app-execution-manifests" ];
     };
 
     "service-set-surface-contract" = {
-      layer = "manifest";
+      layer = "e2e";
       proofKind = "contract";
-      canonical = true;
+      canonical = false;
       covers = [ "runtime.service-set-surfaces" ];
+    };
+
+    "runtime-manifest-fixture-contract" = {
+      layer = "manifest";
+      proofKind = "fixture";
+      canonical = true;
+      covers = [
+        "runtime.app-execution-manifests"
+        "runtime.service-set-surfaces"
+      ];
     };
 
     "introspection-bundle-determinism" = { };
@@ -225,7 +231,7 @@ let
     };
 
     "workflow-ref-app-manifest-contract" = {
-      layer = "manifest";
+      layer = "adapter";
       proofKind = "contract";
       covers = [ "runtime.app-execution-manifests" ];
     };
@@ -360,6 +366,10 @@ let
         pkgs
         apps
         ;
+    };
+
+    "runtime-manifest-fixture-contract" = import ./runtime-manifest-fixture-contract.nix {
+      inherit pkgs;
     };
 
     "workflow-ref-app-manifest-contract" = import ./workflow-ref-app-manifest-contract.nix {

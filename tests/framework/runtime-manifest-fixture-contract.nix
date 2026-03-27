@@ -87,13 +87,12 @@ assert checkManifest.model.compiled.runtimeMetadata.tasks."task.check".runner.ty
 assert isolationManifest.id == "test-isolation";
 assert isolationManifest.taskId == "task.ops.test-isolation";
 assert isolationManifest.workflowId == null;
-assert
-  hasSubset [
-    "task.ops.test-isolation"
-    "task.ops.validate-env"
-    "task.test.isolation.probe"
-    "task.test.isolation.unit"
-  ] (sortKeys isolationManifest.model.tasks);
+assert hasSubset [
+  "task.ops.test-isolation"
+  "task.ops.validate-env"
+  "task.test.isolation.probe"
+  "task.test.isolation.unit"
+] (sortKeys isolationManifest.model.tasks);
 assert hasSubset [ "workflow.test.isolation.probe" ] (sortKeys isolationManifest.model.workflows);
 assert
   isolationManifest.model.compiled.runtimeMetadata.workflows."workflow.test.isolation.probe".family
