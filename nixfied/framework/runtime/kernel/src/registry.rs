@@ -138,6 +138,77 @@ fn registry_replay_command(values: &[String]) -> Result<(), String> {
     }
 
     let content = read_text(&index_file)?;
+    let replay = registry_replay_map_from_index_text(&content);
+
+    println!("{}", render_json_compact(&JsonValue::Object(replay)));
+    Ok(())
+}
+
+fn registry_terminal_command(values: &[String]) -> Result<(), String> {
+    if values.len() != 3 {
+        return Err(
+            "usage: nixfied-kernel registry terminal <index-file> <run-id> <attempt-id|empty>"
+                .to_string(),
+        );
+    }
+
+    let content = read_text(&values[0])?;
+    let run_id = values[1].as_str();
+    let attempt_id = values[2].as_str();
+    let (state, exit_code) = registry_terminal_from_index_text(&content, run_id, attempt_id);
+    println!("{}\t{}", state, exit_code);
+
+    Ok(())
+}
+
+fn registry_runtime_status_command(values: &[String]) -> Result<(), String> {
+    if values.len() != 2 {
+        return Err(
+            "usage: nixfied-kernel registry runtime-status <service-index-file> <slot-index-file>"
+                .to_string(),
+        );
+    }
+
+    let service_event = registry_latest_event_from_index(&values[0])?;
+    let slot_event = registry_latest_event_from_index(&values[1])?;
+
+    print!(
+        "{}",
+        render_shell_exports(&registry_runtime_status_exports(
+            service_event.as_ref(),
+            slot_event.as_ref(),
+        )?)
+    );
+    Ok(())
+}
+
+fn registry_latest_event_from_index(path: &str) -> Result<Option<JsonValue>, String> {
+    if path.is_empty() || !Path::new(path).exists() {
+        return Ok(None);
+    }
+
+    let content = read_text(path)?;
+    let mut latest = None;
+    for line in content.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let mut parts = line.splitn(2, '\t');
+        let _seq = parts.next();
+        let Some(event_json) = parts.next() else {
+            continue;
+        };
+        latest = Some(parse_json(event_json).map_err(|err| {
+            format!(
+                "registry runtime-status index {} contains invalid json: {}",
+                path, err
+            )
+        })?);
+    }
+    Ok(latest)
+}
+
+fn registry_replay_map_from_index_text(content: &str) -> Map<String, JsonValue> {
     let mut replay = Map::new();
     for line in content.lines() {
         let parts = line.split('\t').collect::<Vec<_>>();
@@ -156,22 +227,14 @@ fn registry_replay_command(values: &[String]) -> Result<(), String> {
         };
         replay.insert(key, JsonValue::String(state.to_string()));
     }
-
-    println!("{}", render_json_compact(&JsonValue::Object(replay)));
-    Ok(())
+    replay
 }
 
-fn registry_terminal_command(values: &[String]) -> Result<(), String> {
-    if values.len() != 3 {
-        return Err(
-            "usage: nixfied-kernel registry terminal <index-file> <run-id> <attempt-id|empty>"
-                .to_string(),
-        );
-    }
-
-    let content = read_text(&values[0])?;
-    let run_id = values[1].as_str();
-    let attempt_id = values[2].as_str();
+fn registry_terminal_from_index_text(
+    content: &str,
+    run_id: &str,
+    attempt_id: &str,
+) -> (String, String) {
     let mut terminal_state = None::<String>;
     let mut exit_code = None::<String>;
 
@@ -202,32 +265,22 @@ fn registry_terminal_command(values: &[String]) -> Result<(), String> {
     }
 
     match terminal_state.as_deref() {
-        Some("passed") => println!("passed\t0"),
-        Some("canceled") => println!("canceled\t130"),
-        Some("failed") => {
-            let rendered_code = exit_code
-                .as_deref()
+        Some("passed") => ("passed".to_string(), "0".to_string()),
+        Some("canceled") => ("canceled".to_string(), "130".to_string()),
+        Some("failed") => (
+            "failed".to_string(),
+            exit_code
                 .filter(|value| !value.is_empty())
-                .unwrap_or("1");
-            println!("failed\t{}", rendered_code);
-        }
-        _ => println!("unknown\t1"),
+                .unwrap_or_else(|| "1".to_string()),
+        ),
+        _ => ("unknown".to_string(), "1".to_string()),
     }
-
-    Ok(())
 }
 
-fn registry_runtime_status_command(values: &[String]) -> Result<(), String> {
-    if values.len() != 2 {
-        return Err(
-            "usage: nixfied-kernel registry runtime-status <service-index-file> <slot-index-file>"
-                .to_string(),
-        );
-    }
-
-    let service_event = registry_latest_event_from_index(&values[0])?;
-    let slot_event = registry_latest_event_from_index(&values[1])?;
-
+fn registry_runtime_status_exports(
+    service_event: Option<&JsonValue>,
+    slot_event: Option<&JsonValue>,
+) -> Result<Vec<(String, String)>, String> {
     let mut registry_found = "0".to_string();
     let mut registry_running = "false".to_string();
     let mut registry_state = "unknown".to_string();
@@ -237,7 +290,7 @@ fn registry_runtime_status_command(values: &[String]) -> Result<(), String> {
     let mut wait_reason = String::new();
     let mut log_path = String::new();
 
-    if let Some(event) = service_event.as_ref() {
+    if let Some(event) = service_event {
         let payload = object_field(event, "payload")
             .ok_or_else(|| "registry runtime-status service event missing payload".to_string())?;
         registry_found = "1".to_string();
@@ -267,7 +320,7 @@ fn registry_runtime_status_command(values: &[String]) -> Result<(), String> {
         }
     }
 
-    let slot_owner = if let Some(event) = slot_event.as_ref() {
+    let slot_owner = if let Some(event) = slot_event {
         let payload = object_field(event, "payload")
             .ok_or_else(|| "registry runtime-status slot event missing payload".to_string())?;
         let state =
@@ -281,45 +334,72 @@ fn registry_runtime_status_command(values: &[String]) -> Result<(), String> {
         String::new()
     };
 
-    print!(
-        "{}",
-        render_shell_exports(&[
-            ("REGISTRY_FOUND".to_string(), registry_found),
-            ("REGISTRY_RUNNING".to_string(), registry_running),
-            ("REGISTRY_STATE".to_string(), registry_state),
-            ("OWNER_RUN_ID".to_string(), owner_run_id),
-            ("OWNER_SCOPE".to_string(), owner_scope),
-            ("EPHEMERAL_ROOT".to_string(), ephemeral_root),
-            ("WAIT_REASON".to_string(), wait_reason),
-            ("LOG_PATH".to_string(), log_path),
-            ("SLOT_OWNER".to_string(), slot_owner),
-        ])
-    );
-    Ok(())
+    Ok(vec![
+        ("REGISTRY_FOUND".to_string(), registry_found),
+        ("REGISTRY_RUNNING".to_string(), registry_running),
+        ("REGISTRY_STATE".to_string(), registry_state),
+        ("OWNER_RUN_ID".to_string(), owner_run_id),
+        ("OWNER_SCOPE".to_string(), owner_scope),
+        ("EPHEMERAL_ROOT".to_string(), ephemeral_root),
+        ("WAIT_REASON".to_string(), wait_reason),
+        ("LOG_PATH".to_string(), log_path),
+        ("SLOT_OWNER".to_string(), slot_owner),
+    ])
 }
 
-fn registry_latest_event_from_index(path: &str) -> Result<Option<JsonValue>, String> {
-    if path.is_empty() || !Path::new(path).exists() {
-        return Ok(None);
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    fn exports_to_map(exports: Vec<(String, String)>) -> BTreeMap<String, String> {
+        exports.into_iter().collect()
     }
 
-    let content = read_text(path)?;
-    let mut latest = None;
-    for line in content.lines() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let mut parts = line.splitn(2, '\t');
-        let _seq = parts.next();
-        let Some(event_json) = parts.next() else {
-            continue;
-        };
-        latest = Some(parse_json(event_json).map_err(|err| {
-            format!(
-                "registry runtime-status index {} contains invalid json: {}",
-                path, err
+    #[test]
+    fn registry_projects_replay_terminal_and_runtime_status() {
+        let index = concat!(
+            "1\t10\tworkflow\trun-1\tattempt-1\tworkflow.test.full\ttask.alpha\tqueued\t\t\n",
+            "2\t11\tworkflow\trun-1\tattempt-1\tworkflow.test.full\ttask.alpha\trunning\t\t\n",
+            "3\t12\tworkflow\trun-1\tattempt-1\tworkflow.test.full\ttask.alpha\tpassed\t\t0\n",
+            "4\t13\tworkflow\trun-1\tattempt-1\tworkflow.test.full\t\tfailed\t\t7\n",
+        );
+
+        let replay = registry_replay_map_from_index_text(index);
+        assert_eq!(replay["task:task.alpha"], json!("passed"));
+        assert_eq!(replay["workflow:workflow.test.full"], json!("failed"));
+
+        let terminal = registry_terminal_from_index_text(index, "run-1", "attempt-1");
+        assert_eq!(terminal, ("failed".to_string(), "7".to_string()));
+
+        let exports = exports_to_map(
+            registry_runtime_status_exports(
+                Some(&json!({
+                    "payload": {
+                        "state": "waiting",
+                        "runId": "run-1",
+                        "detail": {
+                            "ownerScope": "workflow",
+                            "ephemeralRoot": "/tmp/run-1",
+                            "waitReason": "dependency",
+                            "logPath": "/tmp/run-1/service.log"
+                        }
+                    }
+                })),
+                Some(&json!({
+                    "payload": {
+                        "state": "claimed",
+                        "runId": "run-1"
+                    }
+                })),
             )
-        })?);
+            .expect("runtime status exports should succeed"),
+        );
+        assert_eq!(exports["REGISTRY_FOUND"], "1");
+        assert_eq!(exports["REGISTRY_RUNNING"], "true");
+        assert_eq!(exports["REGISTRY_STATE"], "waiting");
+        assert_eq!(exports["OWNER_RUN_ID"], "run-1");
+        assert_eq!(exports["WAIT_REASON"], "dependency");
+        assert_eq!(exports["SLOT_OWNER"], "run-1");
     }
-    Ok(latest)
 }

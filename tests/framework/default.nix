@@ -216,6 +216,11 @@ let
 
     "introspection-bundle-determinism" = { };
 
+    "kernel-native-tests" = {
+      layer = "kernel";
+      proofKind = "contract";
+    };
+
     "run-record-validator-failure" = { };
 
     "workflow-service-set-adapter-smoke" = {
@@ -1157,6 +1162,10 @@ let
     };
 
     "run-record-validator-failure" = import ./run-record-validator-failure.nix {
+      inherit pkgs;
+    };
+
+    "kernel-native-tests" = import ./kernel-native-tests.nix {
       inherit pkgs;
     };
 
