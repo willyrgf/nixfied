@@ -261,6 +261,11 @@ let
       proofKind = "guard";
     };
 
+    "service-extractability-contract" = {
+      layer = "compile";
+      proofKind = "contract";
+    };
+
     "launcher-surface-contract" = { };
 
     "framework-utility-launcher-contract" = { };
@@ -429,6 +434,10 @@ let
     };
 
     "service-surface-catalog-contract" = import ./service-surface-catalog-contract.nix {
+      inherit pkgs;
+    };
+
+    "service-extractability-contract" = import ./service-extractability-contract.nix {
       inherit pkgs;
     };
 
