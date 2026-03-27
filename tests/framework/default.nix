@@ -29,7 +29,11 @@ let
   defaultCheckKind = name: if lib.hasInfix "smoke" name then "smoke" else "contract";
   defaultCheckLayer =
     name: kind:
-    if name == "contract-migration-guard" || name == "workflow-modes-contract" then
+    if
+      name == "contract-migration-guard"
+      || name == "framework-test-coverage-contract"
+      || name == "workflow-modes-contract"
+    then
       "migration"
     else if
       lib.hasInfix "manifest" name
@@ -80,7 +84,11 @@ let
       "compile";
   defaultProofKind =
     name: kind:
-    if name == "contract-migration-guard" || name == "workflow-modes-contract" then
+    if
+      name == "contract-migration-guard"
+      || name == "framework-test-coverage-contract"
+      || name == "workflow-modes-contract"
+    then
       "guard"
     else if lib.hasInfix "snapshot" name then
       "fixture"
@@ -178,15 +186,12 @@ let
 
     "skip-service-smoke" = {
       layer = "e2e";
-      covers = [
-        "task.framework.test"
-        "task.ops.health"
-      ];
+      proofKind = "smoke";
     };
 
     "service-requirements-contract" = {
       layer = "compile";
-      covers = [ "task.framework.test" ];
+      proofKind = "contract";
     };
 
     "selected-app-manifest-contract" = {
@@ -279,9 +284,15 @@ let
 
     "service-op-composition-contract" = { };
 
-    "runtime-service-selection-contract" = { };
+    "runtime-service-selection-contract" = {
+      layer = "manifest";
+      proofKind = "contract";
+    };
 
-    "framework-test-coverage-contract" = { };
+    "framework-test-coverage-contract" = {
+      layer = "migration";
+      proofKind = "guard";
+    };
 
     "contract-render-snapshot" = { };
 
