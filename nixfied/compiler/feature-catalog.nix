@@ -20,6 +20,7 @@
       copyMode = runtime.ephemeral.copyMode;
     };
     coverageRequired = true;
+    coverageLayer = "e2e";
     docs = [ ];
   };
 
@@ -43,6 +44,7 @@
       includeUntracked = runtime.ephemeral.includeUntracked;
     };
     coverageRequired = true;
+    coverageLayer = "e2e";
     docs = [ ];
   };
 
@@ -70,6 +72,7 @@
       envFilePath = runtime.ephemeral.envFilePath;
     };
     coverageRequired = true;
+    coverageLayer = "e2e";
     docs = [ ];
   };
 
@@ -92,6 +95,7 @@
       registryRoot = null;
     };
     coverageRequired = true;
+    coverageLayer = "e2e";
     docs = [ ];
   };
 
@@ -120,6 +124,7 @@
       appPrefix = "svc::";
     };
     coverageRequired = true;
+    coverageLayer = "adapter";
     docs = [ ];
   };
 
@@ -157,6 +162,7 @@
       ];
     };
     coverageRequired = true;
+    coverageLayer = "manifest";
     docs = [ ];
   };
 
@@ -190,6 +196,7 @@
       ];
     };
     coverageRequired = true;
+    coverageLayer = "manifest";
     docs = [ ];
   };
 
@@ -218,6 +225,7 @@
       ];
     };
     coverageRequired = true;
+    coverageLayer = "adapter";
     docs = [ ];
   };
 }
