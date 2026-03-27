@@ -330,6 +330,11 @@ let
       proofKind = "guard";
     };
 
+    "framework-test-shard-validation" = {
+      layer = "migration";
+      proofKind = "guard";
+    };
+
     "contract-render-snapshot" = { };
 
     "contract-migration-guard" = {
@@ -1215,10 +1220,7 @@ let
   baseChecks = lib.mapAttrs (
     name: drv: mkFrameworkCheck name (checkMetadata.${name} or { }) drv
   ) rawChecks;
-in
-baseChecks
-// {
-  "feature-coverage-validation" =
+  featureCoverageValidationCheck =
     mkFrameworkCheck "feature-coverage-validation"
       {
         layer = "compile";
@@ -1233,4 +1235,23 @@ baseChecks
           checks = baseChecks;
         }
       );
-}
+  frameworkTestShardValidationCheck =
+    mkFrameworkCheck "framework-test-shard-validation"
+      {
+        layer = "migration";
+        proofKind = "guard";
+      }
+      (
+        import ./framework-test-shard-validation.nix {
+          inherit pkgs;
+          checks = baseChecks // {
+            "feature-coverage-validation" = featureCoverageValidationCheck;
+          };
+        }
+      );
+  finalChecks = baseChecks // {
+    "framework-test-shard-validation" = frameworkTestShardValidationCheck;
+    "feature-coverage-validation" = featureCoverageValidationCheck;
+  };
+in
+finalChecks

@@ -2,7 +2,7 @@
 
 This directory documents the native framework test surface.
 
-## Primary command
+## Primary Command
 
 Run from repository root:
 
@@ -10,161 +10,103 @@ Run from repository root:
 nix run .#framework::test
 ```
 
-## Behavior
-
 `framework::test` is a first-class framework preset task defined in `nixfied/framework/presets/framework-test.nix`.
-By default it runs all framework shards, including the full registered framework
-suite via `nix flake check .`.
-Named shards remain available for focused debugging with stable log prefixes.
+It is organized around the post-refactor ownership model instead of the deleted shell-heavy control layers.
 
-The authoritative flake-check registry lives in `tests/framework/default.nix`.
+The authoritative check registry lives in `tests/framework/default.nix`.
+The authoritative shard catalog lives in `tests/framework/framework-test-shards.nix`.
 This README is an overview, not the canonical full check list.
 
-Available shards:
-- `flake-check`
-- `launcher-pruning`
-- `help`
-- `workflow-ci`
-- `services`
-- `isolation`
-- `self-host`
+## Profiles
 
-## Useful options
+Available profiles:
+
+- `ci`: run the ownership-layer shards for `compile`, `manifest`, `kernel`, `adapters`, and `migration`
+- `full`: run every shard, including `services` and `e2e`
+
+## Shards
+
+Available shards:
+
+- `compile`
+- `manifest`
+- `kernel`
+- `adapters`
+- `services`
+- `e2e`
+- `migration`
+
+The shards are intentionally not a second architecture model.
+They are an execution layout for `framework::test`, with `services` kept as a practical operational shard even though the service proofs it runs span multiple layers.
+
+## Useful Commands
 
 ```bash
 nix run .#framework::test -- --list-shards
-nix run .#framework::test -- --shard flake-check
-nix run .#framework::test -- --shard launcher-pruning
-nix run .#framework::test -- --shard self-host
-nix run .#framework::test -- --mode env --summary
-nix run .#framework::test -- --summary-json /tmp/framework-test-summary.json
+nix run .#framework::test -- --profile full --summary
+nix run .#framework::test -- --shard compile --summary
+nix run .#framework::test -- --shard services --summary
+nix run .#framework::test -- --shard migration --summary
+nix run .#framework::test -- --profile ci --summary-json /tmp/framework-test-summary.json
 ```
+
+## Layer Intent
+
+- `compile`: compile-time model, help, schema, documentation, and packaging proofs
+- `manifest`: runtime manifest fixtures and handoff invariants between Nix and kernel
+- `kernel`: kernel-owned workflow, validation, registry, summary, and run semantics
+- `adapters`: thin shell and launcher process-edge behavior only
+- `services`: service public surfaces, lifecycle, readiness, and extractability
+- `e2e`: user-facing public behavior, install and upgrade flows, isolation, and self-host execution
+- `migration`: deleted-seam guards and forward-only refactor regressions
+
+## Canonical Sources
+
+Use `tests/framework/default.nix` as the source of truth for:
+
+- the complete registered check list
+- the exact check names
+- proof metadata such as `layer`, `proofKind`, and `canonical`
+
+Use `tests/framework/framework-test-shards.nix` as the source of truth for:
+
+- shard order
+- shard membership
+- `ci` versus `full` profile selection
 
 ## Reuse Guides
 
-Use these checked-in guides when reviewing framework behavior or teaching an
-agent how the current framework surface works:
+Use these checked-in guides when reviewing framework behavior or teaching an agent how the current framework surface works:
 
 - `tests/framework/WORKFLOW_REUSE.md`
 - `tests/framework/SERVICE_LIFECYCLE_API.md`
 
-## Flake checks (canonical)
-
-Deterministic checks live in `tests/framework/` and run via `nix flake check .`.
-The `framework::test` default path runs every shard, with `flake-check`
-covering the full `nix flake check .` suite and the remaining shards exercising
-targeted framework runner surfaces. Named shards are still useful for focused
-debugging, such as `launcher-pruning` for launcher-driven compile-time service
-exclusion.
-
-## Launcher Pruning Proof
-
-`launcher-pruning` is the canonical executed proof for selector-aware launcher
-behavior, disabled-service runtime-surface filtering, and public help
-fast-paths.
-
-Use it when a downstream project needs confidence that:
-
-- `SKIP_<SERVICE>` launcher sugar is converted into compile-time graph exclusion
-- disabled services do not leak runtime hook env or generated service apps into
-  unrelated surfaces
-- `nix run .#ci -- --help` and `SKIP_HELIOS=1 nix run .#ci -- --help` stay on
-  the cheap public help path
-- selector-driven recompilation prunes service-gated tasks while leaving
-  unrelated tasks runnable
-
-The proof is implemented by:
-
-- `tests/framework/launcher-disabled-nginx-override.nix`
-- `tests/framework/disabled-service-runtime-surface-smoke.nix`
-- `tests/framework/launcher-skip-service-pruning-smoke.nix`
-- `tests/framework/launcher-help-fast-path-smoke.nix`
-
-Mechanism:
-
-- the disabled-service smoke poisons nginx source selection while nginx remains
-  disabled, then asserts that no `SVC_NGINX_*` hook env vars or `svc::nginx::*`
-  apps are generated
-- the pruning smoke enables Helios, verifies a Helios-gated task runs on the
-  base graph, then reruns through `SKIP_HELIOS=1` and requires that the gated
-  task disappear while a control task still runs
-- the help fast-path smoke proves both the direct launcher path and the exact
-  public `nix run .#ci -- --help` surfaces avoid `nixfied-selected-app-*`
-  when no selectors are active
-
-That combination proves the framework no longer leaks disabled services into
-runtime surface generation, keeps public help cheap, and still recompiles a
-pruned graph when selectors are actually in play.
-
-Run it directly with:
-
-```bash
-nix run .#framework::test -- --shard launcher-pruning --summary
-```
-
-Use `tests/framework/default.nix` as the source of truth for:
-- the complete registered check list
-- the exact check names
-- the import path for each check
-
 ## Contract Migration Guard
 
-`contract-migration-guard` is the repository policy gate for the final runtime
-hardening state.
+`contract-migration-guard` is the repository policy gate for deleted seams.
 
 It fails if:
 
 - framework-owned CUE files or CUE references return
 - `mkValidator.nix` or `run-registry.nix` returns
-- deprecated kernel seams such as `validate-json`, `query-json`, or
-  `json-length` are referenced from framework Nix/Bash runtime code or remain
-  in the kernel source
+- deprecated kernel seams such as `validate-json`, `query-json`, or `json-length` return
 - shell-owned `run-record`, `summary`, or `meta` sidecars return
-- framework-owned `jq` returns under framework/modules/build-check paths
-- machine output transport falls back to stdout scraping instead of the
-  declared `NIXFIED_MACHINE_OUTPUT_FILE` channel
-- any framework/runtime smoke test falls back to inline Python responders
-- authored `nixfied.apps` returns or the deleted apps module reappears
-
-That guard complements the runtime contract checks and behavior smokes. The architecture is now:
-
-- kernel-only validation and state mutation from compiled runtime assets
-- canonical command/runtime catalogs consumed directly by runtime surfaces
-- kernel-owned runtime-event policy/state derivation and status projection over append-only indices
-- kernel-owned probe evaluation for lifecycle/startup readiness paths
-- kernel-owned helper service-policy decisions for runtime and fixture behavior
-- zero framework CUE
-- zero framework `jq` in framework runtime/build-check paths
-- no validator shim
-- explicit payload-file machine output transport
-- compile-time introspection bundles with thin runtime selectors over generated assets
+- framework-owned `jq` returns under framework runtime or build-check paths
+- machine output falls back to stdout scraping instead of `NIXFIED_MACHINE_OUTPUT_FILE`
+- framework smokes fall back to inline Python responders
+- deleted authored `nixfied.apps` surfaces return
 
 Run it directly with:
 
 ```bash
-nix run .#framework::test -- --shard flake-check --summary
+nix run .#framework::test -- --shard migration --summary
 nix build .#checks.$(nix eval --impure --raw --expr builtins.currentSystem).contract-migration-guard
 ```
 
-The current surface is organized around:
-- model and compiler determinism
-- executor, env sandbox, and shell/runtime contracts
-- registry, orchestrator, and summary behavior
-- operations, readiness, and service observability
-- install/upgrade wrapper flows
-- ephemeral execution and isolation behavior
-- framework CLI and self-host smoke coverage
-- SKIP service behavior and service-skip dependency semantics
-
-Shared shell helpers live in `tests/framework/lib/harness.nix`.
-High-complexity operations smokes still have room for more harness extraction, but the harness is active and should be preferred over ad hoc duplication.
-Probe stubs should prefer `tests/framework/lib/shell-helpers.nix`
-(`jsonRpcStub` and `httpStub`) over inline interpreters when a shell-native
-responder is sufficient.
-
-## Output contract
+## Output Contract
 
 All framework-facing command output must remain ASCII and prefix-based:
+
 - `INFO:`
 - `WARN:`
 - `ERROR:`
