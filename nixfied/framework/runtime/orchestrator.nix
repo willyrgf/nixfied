@@ -27,13 +27,7 @@ let
         };
   shellCommon = import ../core/shell-common.nix { inherit pkgs; };
   registryShell = registry.events.mkShellLib { };
-  workflowModesShell = import ./workflow-modes.nix {
-    inherit
-      pkgs
-      model
-      ;
-    selectionIndex = resolvedSelectionIndex;
-  };
+  runtimeMetadataShell = import ./runtime-metadata.nix { inherit pkgs; };
   executorRuntimeShell = import ./executor-runtime.nix {
     inherit
       pkgs
@@ -53,6 +47,7 @@ let
   validationBundleFile = pkgs.writeText "nixfied-runtime-artifact-contract-bundle.json" (
     builtins.toJSON runtimeArtifactContracts.bundle
   );
+  modelFile = pkgs.writeText "nixfied-orchestrator-model.json" (builtins.toJSON model);
   executor = import ./executor.nix {
     inherit
       pkgs
@@ -117,6 +112,8 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
   ${shellCommon}
   export NIXFIED_ORCHESTRATOR_BIN="$0"
   export NIXFIED_ORCHESTRATOR_SELF="$0"
+  MODEL_FILE=${lib.escapeShellArg (builtins.toString modelFile)}
+  export NIXFIED_MODEL_FILE="$MODEL_FILE"
 
   EXECUTOR_PROGRAM=${lib.escapeShellArg "${executor}/bin/nixfied-executor"}
   export NIXFIED_EXECUTOR_BIN="$EXECUTOR_PROGRAM"
@@ -150,7 +147,7 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
   ORCHESTRATOR_STOP_TIMEOUT_SEC_DEFAULT=${lib.escapeShellArg (toString model.runtime.orchestrator.stopTimeoutSec)}
 
   ${registryShell}
-  ${workflowModesShell}
+  ${runtimeMetadataShell}
   ${executorRuntimeShell}
   ${orchestratorRuntimeShell}
   ${sharedRuntimeLibShell}

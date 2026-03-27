@@ -5,6 +5,7 @@
   registry,
 }:
 let
+  withRuntimeMetadata = import ./lib/with-runtime-metadata.nix { inherit pkgs; };
   baseTask = model.tasks."task.ci.quality";
   envFileName = ".ephemeral-secret.env";
 
@@ -122,34 +123,36 @@ let
       workflowId,
       expectSecret,
     }:
-    model
-    // {
-      runtime = model.runtime // {
-        ephemeral = (model.runtime.ephemeral or { }) // {
-          copyMode = "git-files";
-          includeUntracked = false;
-          inherit envFileMode;
-          envFilePath = envFileName;
+    withRuntimeMetadata (
+      model
+      // {
+        runtime = model.runtime // {
+          ephemeral = (model.runtime.ephemeral or { }) // {
+            copyMode = "git-files";
+            includeUntracked = false;
+            inherit envFileMode;
+            envFilePath = envFileName;
+          };
         };
-      };
-      tasks = model.tasks // {
-        ${taskId} = mkProbeTask {
-          inherit
-            taskId
-            appName
-            expectSecret
-            ;
+        tasks = model.tasks // {
+          ${taskId} = mkProbeTask {
+            inherit
+              taskId
+              appName
+              expectSecret
+              ;
+          };
         };
-      };
-      workflows = model.workflows // {
-        ${workflowId} = mkProbeWorkflow {
-          inherit
-            workflowId
-            taskId
-            ;
+        workflows = model.workflows // {
+          ${workflowId} = mkProbeWorkflow {
+            inherit
+              workflowId
+              taskId
+              ;
+          };
         };
-      };
-    };
+      }
+    );
 
   disabledModel = mkEphemeralModel {
     envFileMode = "disabled";

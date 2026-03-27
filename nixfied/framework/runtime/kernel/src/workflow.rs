@@ -1,6 +1,12 @@
 use super::*;
+use crate::registry::registry_append_event_internal;
+use crate::runtime_metadata::{
+    load_runtime_metadata, runtime_metadata_task, runtime_metadata_workflow,
+    runtime_workflow_modes_for_family,
+};
 
 use std::collections::BTreeMap;
+use std::process::{self, Command};
 
 pub(crate) trait WorkflowUnitStateCommon {
     fn state(&self) -> &str;
@@ -95,227 +101,1109 @@ pub(crate) fn mark_failed_unit<U: WorkflowUnitStateCommon>(
 
 pub(crate) fn workflow_command(subcommand: &str, values: &[String]) -> Result<(), String> {
     match subcommand {
-        "serial-init" => workflow_serial_init_command(values),
-        "serial-step" => workflow_serial_step_command(values),
-        "parallel-init" => workflow_parallel_init_command(values),
-        "parallel-step" => workflow_parallel_step_command(values),
+        "resolve-mode" => workflow_resolve_mode_command(values),
+        "load-runtime" => workflow_load_runtime_command(values),
+        "run" => workflow_run_command(values),
         other => Err(format!("unknown workflow subcommand: {}", other)),
     }
 }
 
-pub(crate) fn workflow_serial_init_command(values: &[String]) -> Result<(), String> {
-    if values.len() != 5 {
-        return Err(
-            "usage: nixfied-kernel workflow serial-init <plan-file> <skipped-services-file> <workflow-id> <fail-fast> <state-file>"
-                .to_string(),
-        );
-    }
-
-    let plan = load_workflow_scheduler_plan(&values[0])?;
-    let skipped_services = load_line_set(&values[1])?;
-    let workflow = plan
-        .workflows
-        .get(&values[2])
-        .ok_or_else(|| format!("unknown workflow '{}'", values[2]))?;
-    let state = build_workflow_serial_state(
-        workflow,
-        &values[2],
-        parse_bool_flag(&values[3])?,
-        &skipped_services,
-    );
-    write_workflow_serial_state(&values[4], &state)?;
-    println!("OK: workflow serial-init");
-    Ok(())
-}
-
-fn print_workflow_serial_action(action: WorkflowSerialAction) {
-    match action {
-        WorkflowSerialAction::Execute {
-            unit_name,
-            task_id,
-            selected_services_csv,
-        } => println!(
-            "execute\u{1f}{}\u{1f}{}\u{1f}{}",
-            unit_name, task_id, selected_services_csv
-        ),
-        WorkflowSerialAction::Cancel {
-            unit_name,
-            task_id,
-            reason,
-            extra_key,
-            extra_value,
-        } => println!(
-            "cancel\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
-            unit_name, task_id, reason, extra_key, extra_value
-        ),
-        WorkflowSerialAction::Done { workflow_status } => {
-            println!("done\u{1f}{}", workflow_status)
-        }
+fn workflow_family_from_id(workflow_id: &str) -> String {
+    let mut parts = workflow_id.split('.');
+    match (parts.next(), parts.next(), parts.next()) {
+        (Some("workflow"), Some(family), Some(_)) => family.to_string(),
+        _ => String::new(),
     }
 }
 
-pub(crate) fn workflow_serial_step_command(values: &[String]) -> Result<(), String> {
-    if values.len() != 7 {
-        return Err(
-            "usage: nixfied-kernel workflow serial-step <state-file> <unit-name|empty> <status|empty> <exit-code|empty> <reason|empty> <extra-key|empty> <extra-value|empty>"
-                .to_string(),
-        );
+fn workflow_resolve_mode(
+    metadata: &JsonValue,
+    workflow_id: &str,
+    mode_override: &str,
+) -> Result<String, String> {
+    runtime_metadata_workflow(metadata, workflow_id)?;
+    if mode_override.is_empty() {
+        return Ok(workflow_id.to_string());
     }
 
-    let mut state = load_workflow_serial_state(&values[0])?;
-    if !values[1].is_empty() {
-        workflow_serial_transition(
-            &mut state, &values[1], &values[2], &values[3], &values[4], &values[5], &values[6],
-        )?;
-        write_workflow_serial_state(&values[0], &state)?;
-    }
-    print_workflow_serial_action(workflow_serial_next_action(&state));
-    Ok(())
-}
-
-pub(crate) fn workflow_parallel_init_command(values: &[String]) -> Result<(), String> {
-    if values.len() != 6 {
-        return Err(
-            "usage: nixfied-kernel workflow parallel-init <plan-file> <skipped-services-file> <workflow-id> <fail-fast> <max-workers> <state-file>"
-                .to_string(),
-        );
-    }
-
-    let plan = load_workflow_scheduler_plan(&values[0])?;
-    let skipped_services = load_line_set(&values[1])?;
-    let workflow = plan
-        .workflows
-        .get(&values[2])
-        .ok_or_else(|| format!("unknown workflow '{}'", values[2]))?;
-    let max_workers = parse_i64_text(&values[4], "workflow parallel max-workers")?;
-    let state = build_workflow_parallel_state(
-        workflow,
-        &values[2],
-        parse_bool_flag(&values[3])?,
-        max_workers,
-        &skipped_services,
-    );
-    write_workflow_parallel_state(&values[5], &state)?;
-    println!("OK: workflow parallel-init");
-    Ok(())
-}
-
-fn print_workflow_parallel_action(action: WorkflowParallelAction) {
-    match action {
-        WorkflowParallelAction::Start {
-            unit_name,
-            task_id,
-            selected_services_csv,
-            produces_json,
-        } => println!(
-            "start\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
-            unit_name, task_id, selected_services_csv, produces_json
-        ),
-        WorkflowParallelAction::Cancel {
-            unit_name,
-            task_id,
-            reason,
-            extra_key,
-            extra_value,
-        } => println!(
-            "cancel\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
-            unit_name, task_id, reason, extra_key, extra_value
-        ),
-        WorkflowParallelAction::SignalRunning { unit_name } => {
-            println!("signal-running\u{1f}{}", unit_name)
-        }
-        WorkflowParallelAction::Wait => println!("wait"),
-        WorkflowParallelAction::Done { workflow_status } => {
-            println!("done\u{1f}{}", workflow_status)
-        }
-    }
-}
-
-pub(crate) fn workflow_parallel_step_command(values: &[String]) -> Result<(), String> {
-    if values.len() != 7 {
-        return Err(
-            "usage: nixfied-kernel workflow parallel-step <state-file> <unit-name|empty> <status|empty> <exit-code|empty> <reason|empty> <extra-key|empty> <extra-value|empty>"
-                .to_string(),
-        );
-    }
-
-    let mut state = load_workflow_parallel_state(&values[0])?;
-    if !values[1].is_empty() {
-        workflow_parallel_transition(
-            &mut state, &values[1], &values[2], &values[3], &values[4], &values[5], &values[6],
-        )?;
-    }
-    let action = workflow_parallel_next_action(&mut state);
-    write_workflow_parallel_state(&values[0], &state)?;
-    print_workflow_parallel_action(action);
-    Ok(())
-}
-
-pub(crate) fn load_workflow_scheduler_plan(path: &str) -> Result<WorkflowSchedulerPlan, String> {
-    let value = parse_json_file(path, "workflow scheduler plan")?;
-    let kind = required_string_field(&value, "kind", "workflow scheduler plan")?;
-    if kind != "nixfied-workflow-scheduler-plan" {
+    let family = workflow_family_from_id(workflow_id);
+    if family.is_empty() {
         return Err(format!(
-            "unsupported workflow scheduler plan kind: {}",
-            kind
-        ));
-    }
-    let version = object_field(&value, "version")
-        .and_then(json_value_to_i64)
-        .ok_or_else(|| "workflow scheduler plan missing integer field version".to_string())?;
-    if version != 1 {
-        return Err(format!(
-            "workflow scheduler plan version must be 1 (got {})",
-            version
+            "workflow '{}' does not support mode overrides",
+            workflow_id
         ));
     }
 
-    let workflows_value = object_field(&value, "workflows")
-        .and_then(JsonValue::as_object)
-        .ok_or_else(|| "workflow scheduler plan missing object field workflows".to_string())?;
-    let mut workflows = BTreeMap::new();
-    for (workflow_id, workflow_value) in workflows_value {
-        let units_value = object_field(workflow_value, "units")
-            .and_then(JsonValue::as_array)
-            .ok_or_else(|| {
-                format!(
-                    "workflow scheduler plan workflow '{}' missing array field units",
-                    workflow_id
-                )
-            })?;
-        let mut units = Vec::new();
-        for unit_value in units_value {
-            units.push(WorkflowSchedulerUnitPlan {
-                name: required_string_field(unit_value, "name", "workflow scheduler unit")?
-                    .to_string(),
-                task_id: required_string_field(unit_value, "taskId", "workflow scheduler unit")?
-                    .to_string(),
-                needs: array_strings(unit_value, "needs"),
-                locks: array_strings(unit_value, "locks"),
-                required_services: array_strings(unit_value, "requiredServices"),
-                skip_if_missing_env: array_strings(unit_value, "skipIfMissingEnv"),
-                when_env_present: array_strings(unit_value, "whenEnvPresent"),
-                when_env_equals: object_string_map(
-                    unit_value,
-                    "whenEnvEquals",
-                    "workflow scheduler unit",
-                )?,
-                selected_services_csv: object_string(unit_value, "selectedServicesCsv")
-                    .unwrap_or("")
-                    .to_string(),
-                produces_json: object_string(unit_value, "producesJson")
-                    .unwrap_or("{}")
-                    .to_string(),
-            });
-        }
-        workflows.insert(workflow_id.clone(), WorkflowSchedulerWorkflow { units });
+    let candidate = format!("workflow.{}.{}", family, mode_override);
+    if runtime_metadata_workflow(metadata, &candidate).is_ok() {
+        return Ok(candidate);
     }
-    Ok(WorkflowSchedulerPlan { workflows })
+
+    let expected = runtime_workflow_modes_for_family(metadata, &family).join("|");
+    if expected.is_empty() {
+        Err(format!("unknown mode '{}'", mode_override))
+    } else {
+        Err(format!(
+            "unknown mode '{}' (expected: {})",
+            mode_override, expected
+        ))
+    }
+}
+
+fn workflow_load_runtime_exports(workflow: &JsonValue) -> Vec<(String, String)> {
+    vec![
+        (
+            "WORKFLOW_MODE_NAME".to_string(),
+            object_string(workflow, "mode")
+                .unwrap_or("custom")
+                .to_string(),
+        ),
+        (
+            "WORKFLOW_FAMILY".to_string(),
+            object_string(workflow, "family").unwrap_or("").to_string(),
+        ),
+        (
+            "WORKFLOW_ARTIFACTS_ROOT".to_string(),
+            object_string(workflow, "artifactsRoot")
+                .unwrap_or("")
+                .to_string(),
+        ),
+        (
+            "WORKFLOW_EPHEMERAL_FLAG".to_string(),
+            if object_bool(workflow, "ephemeralEnabled").unwrap_or(false) {
+                "1"
+            } else {
+                "0"
+            }
+            .to_string(),
+        ),
+        (
+            "WORKFLOW_LOGGING_LEVEL_DEFAULT".to_string(),
+            object_field(workflow, "logging")
+                .and_then(|logging| object_string(logging, "levelDefault"))
+                .unwrap_or("")
+                .to_string(),
+        ),
+        (
+            "WORKFLOW_LOGGING_OUTPUT_DEFAULT".to_string(),
+            object_field(workflow, "logging")
+                .and_then(|logging| object_string(logging, "outputDefault"))
+                .unwrap_or("")
+                .to_string(),
+        ),
+        (
+            "WORKFLOW_FAIL_FAST".to_string(),
+            if object_bool(workflow, "failFast").unwrap_or(false) {
+                "true"
+            } else {
+                "false"
+            }
+            .to_string(),
+        ),
+        (
+            "WORKFLOW_PARALLEL_ENABLED".to_string(),
+            if object_bool(workflow, "parallelEnabled").unwrap_or(false) {
+                "true"
+            } else {
+                "false"
+            }
+            .to_string(),
+        ),
+        (
+            "WORKFLOW_MAX_WORKERS".to_string(),
+            object_field(workflow, "maxWorkers")
+                .and_then(json_value_to_i64)
+                .unwrap_or(1)
+                .to_string(),
+        ),
+        (
+            "WORKFLOW_WRITE_SUMMARY".to_string(),
+            if object_bool(workflow, "writeSummary").unwrap_or(false) {
+                "true"
+            } else {
+                "false"
+            }
+            .to_string(),
+        ),
+        (
+            "WORKFLOW_POST_RUN_ALWAYS".to_string(),
+            if object_bool(workflow, "postRunAlways").unwrap_or(false) {
+                "true"
+            } else {
+                "false"
+            }
+            .to_string(),
+        ),
+        (
+            "WORKFLOW_UNIT_CLOSURE_SELECTED_SERVICES_LINES".to_string(),
+            array_strings(workflow, "unitClosureSelectedServices").join("\n"),
+        ),
+        (
+            "WORKFLOW_PLAN_TASK_IDS_LINES".to_string(),
+            object_field(workflow, "plan")
+                .and_then(JsonValue::as_array)
+                .map(|plan| {
+                    plan.iter()
+                        .filter_map(|unit| object_string(unit, "taskId"))
+                        .filter(|task_id| !task_id.is_empty())
+                        .map(|task_id| task_id.to_string())
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                })
+                .unwrap_or_default(),
+        ),
+        (
+            "WORKFLOW_PHASE_PRE_TASKS_LINES".to_string(),
+            object_field(workflow, "phases")
+                .and_then(|phases| object_field(phases, "preRun"))
+                .map(|phase| array_strings(phase, "tasks").join("\n"))
+                .unwrap_or_default(),
+        ),
+        (
+            "WORKFLOW_PHASE_POST_TASKS_LINES".to_string(),
+            object_field(workflow, "phases")
+                .and_then(|phases| object_field(phases, "postRun"))
+                .map(|phase| array_strings(phase, "tasks").join("\n"))
+                .unwrap_or_default(),
+        ),
+    ]
+}
+
+fn workflow_resolve_mode_command(values: &[String]) -> Result<(), String> {
+    if values.len() != 3 {
+        return Err(
+            "usage: nixfied-kernel workflow resolve-mode <runtime-metadata-file> <workflow-id> <mode-override|empty>"
+                .to_string(),
+        );
+    }
+
+    let metadata = load_runtime_metadata(&values[0])?;
+    println!(
+        "{}",
+        workflow_resolve_mode(&metadata, &values[1], &values[2])?
+    );
+    Ok(())
+}
+
+fn workflow_load_runtime_command(values: &[String]) -> Result<(), String> {
+    if values.len() != 2 {
+        return Err(
+            "usage: nixfied-kernel workflow load-runtime <runtime-metadata-file> <workflow-id>"
+                .to_string(),
+        );
+    }
+
+    let metadata = load_runtime_metadata(&values[0])?;
+    let workflow = runtime_metadata_workflow(&metadata, &values[1])?;
+    print!(
+        "{}",
+        render_shell_exports(&workflow_load_runtime_exports(workflow))
+    );
+    Ok(())
+}
+
+#[derive(Clone)]
+struct WorkflowPhaseServiceSetEntry {
+    service_set_id: String,
+    service_set_name: String,
+    operation: String,
+    selected_services_csv: String,
+}
+
+fn workflow_scheduler_from_runtime(
+    workflow: &JsonValue,
+) -> Result<WorkflowSchedulerWorkflow, String> {
+    let units = object_field(workflow, "plan")
+        .and_then(JsonValue::as_array)
+        .ok_or_else(|| "runtime workflow descriptor missing array field plan".to_string())?
+        .iter()
+        .map(|unit| {
+            Ok(WorkflowSchedulerUnitPlan {
+                name: required_string_field(unit, "name", "runtime workflow unit")?.to_string(),
+                task_id: required_string_field(unit, "taskId", "runtime workflow unit")?
+                    .to_string(),
+                needs: array_strings(unit, "needs"),
+                locks: array_strings(unit, "locks"),
+                required_services: array_strings(unit, "requiredServices"),
+                skip_if_missing_env: array_strings(unit, "skipIfMissingEnv"),
+                when_env_present: object_field(unit, "when")
+                    .map(|when| array_strings(when, "envPresent"))
+                    .unwrap_or_default(),
+                when_env_equals: object_field(unit, "when")
+                    .map(|when| object_string_map(when, "envEquals", "runtime workflow unit"))
+                    .transpose()?
+                    .unwrap_or_default(),
+                selected_services_csv: array_strings(unit, "selectedServices").join(","),
+                produces_json: object_field(unit, "produces")
+                    .map(render_json_compact)
+                    .unwrap_or_else(|| "{}".to_string()),
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(WorkflowSchedulerWorkflow { units })
+}
+
+fn workflow_phase_tasks(workflow: &JsonValue, phase_key: &str) -> Vec<String> {
+    object_field(workflow, "phases")
+        .and_then(|phases| object_field(phases, phase_key))
+        .map(|phase| array_strings(phase, "tasks"))
+        .unwrap_or_default()
+}
+
+fn workflow_phase_service_sets(
+    workflow: &JsonValue,
+    phase_key: &str,
+) -> Vec<WorkflowPhaseServiceSetEntry> {
+    object_field(workflow, "phases")
+        .and_then(|phases| object_field(phases, phase_key))
+        .and_then(|phase| object_field(phase, "serviceSets"))
+        .and_then(JsonValue::as_array)
+        .map(|entries| {
+            entries
+                .iter()
+                .map(|entry| WorkflowPhaseServiceSetEntry {
+                    service_set_id: object_string(entry, "serviceSetId")
+                        .unwrap_or("")
+                        .to_string(),
+                    service_set_name: object_string(entry, "serviceSetName")
+                        .unwrap_or("")
+                        .to_string(),
+                    operation: object_string(entry, "operation").unwrap_or("").to_string(),
+                    selected_services_csv: array_strings(entry, "selectedServices").join(","),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn workflow_task_mode_detail() -> JsonValue {
+    json!({
+        "kind": "slotLifecycle",
+        "mode": "task",
+    })
+}
+
+fn workflow_task_pass_detail(produces_json: &str) -> JsonValue {
+    let produces = parse_json(produces_json).unwrap_or_else(|_| json!({}));
+    json!({
+        "kind": "slotLifecycle",
+        "mode": "task",
+        "produces": produces,
+    })
+}
+
+fn workflow_exit_detail(mode: &str, exit_code: i64) -> JsonValue {
+    json!({
+        "kind": "slotLifecycle",
+        "mode": mode,
+        "exitCode": exit_code,
+    })
+}
+
+fn workflow_cancel_detail(reason: &str, extra_key: &str, extra_value: &str) -> JsonValue {
+    let mut detail = json!({
+        "kind": "serviceLifecycle",
+        "reason": reason,
+    });
+    if extra_key == "dependency" {
+        if let Some(fields) = detail.as_object_mut() {
+            fields.insert(
+                "dependency".to_string(),
+                JsonValue::String(extra_value.to_string()),
+            );
+        }
+    } else if extra_key == "serviceName" {
+        if let Some(fields) = detail.as_object_mut() {
+            fields.insert(
+                "serviceName".to_string(),
+                JsonValue::String(extra_value.to_string()),
+            );
+        }
+    } else if extra_key == "missing" {
+        if let Some(fields) = detail.as_object_mut() {
+            fields.insert(
+                "missing".to_string(),
+                JsonValue::String(extra_value.to_string()),
+            );
+        }
+    }
+    detail
+}
+
+fn workflow_phase_service_set_detail(
+    phase_key: &str,
+    service_set_id: &str,
+    service_set_name: &str,
+    operation: &str,
+    exit_code: Option<i64>,
+) -> JsonValue {
+    let mut detail = json!({
+        "kind": "serviceLifecycle",
+        "eventType": phase_key,
+        "service": service_set_name,
+        "commandName": operation,
+        "ownerScope": service_set_id,
+    });
+    if let Some(exit_code) = exit_code {
+        if let Some(fields) = detail.as_object_mut() {
+            fields.insert(
+                "exitCode".to_string(),
+                JsonValue::Number(Number::from(exit_code)),
+            );
+        }
+    }
+    detail
+}
+
+fn workflow_append_event(
+    bundle_path: &str,
+    registry_root: &str,
+    run_id: &str,
+    attempt_id: &str,
+    workflow_id: &str,
+    task_id: &str,
+    state: &str,
+    detail: &JsonValue,
+) -> Result<(), String> {
+    registry_append_event_internal(
+        bundle_path,
+        registry_root,
+        run_id,
+        attempt_id,
+        workflow_id,
+        task_id,
+        state,
+        detail,
+    )?;
+    Ok(())
+}
+
+fn workflow_spawn_task_adapter(
+    task_adapter: &str,
+    task_id: &str,
+    workflow_id: &str,
+    selected_services_csv: &str,
+    passthrough_args: &[String],
+) -> Result<std::process::Child, String> {
+    let mut command = Command::new(task_adapter);
+    command
+        .arg(task_id)
+        .arg(workflow_id)
+        .arg(selected_services_csv)
+        .arg("--");
+    for arg in passthrough_args {
+        command.arg(arg);
+    }
+    command
+        .spawn()
+        .map_err(|err| format!("failed to spawn task adapter '{}': {}", task_adapter, err))
+}
+
+fn workflow_run_task_adapter(
+    task_adapter: &str,
+    task_id: &str,
+    workflow_id: &str,
+    selected_services_csv: &str,
+    passthrough_args: &[String],
+) -> Result<i64, String> {
+    let status = workflow_spawn_task_adapter(
+        task_adapter,
+        task_id,
+        workflow_id,
+        selected_services_csv,
+        passthrough_args,
+    )?
+    .wait()
+    .map_err(|err| format!("failed to wait for task adapter '{}': {}", task_id, err))?;
+    Ok(status.code().unwrap_or(1) as i64)
+}
+
+fn workflow_run_service_set_adapter(
+    service_set_adapter: &str,
+    entry: &WorkflowPhaseServiceSetEntry,
+) -> Result<i64, String> {
+    let status = Command::new(service_set_adapter)
+        .arg(&entry.service_set_id)
+        .arg(&entry.operation)
+        .arg(&entry.selected_services_csv)
+        .status()
+        .map_err(|err| {
+            format!(
+                "failed to spawn service-set adapter '{}:{}': {}",
+                entry.service_set_id, entry.operation, err
+            )
+        })?;
+    Ok(status.code().unwrap_or(1) as i64)
+}
+
+fn workflow_send_signal(pid: u32, signal_name: &str) {
+    let _ = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(format!("kill -{} {}", signal_name, pid))
+        .status();
+}
+
+fn workflow_wait_for_any_child(
+    running: &mut BTreeMap<String, WorkflowRunningUnit>,
+) -> Result<Option<(String, i64)>, String> {
+    loop {
+        let unit_names = running.keys().cloned().collect::<Vec<_>>();
+        for unit_name in unit_names {
+            let Some(unit) = running.get_mut(&unit_name) else {
+                continue;
+            };
+            match unit.child.try_wait() {
+                Ok(Some(status)) => {
+                    let exit_code = status.code().unwrap_or(1) as i64;
+                    return Ok(Some((unit_name, exit_code)));
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    return Err(format!(
+                        "failed to query workflow child status unit='{}': {}",
+                        unit_name, err
+                    ))
+                }
+            }
+        }
+        if running.is_empty() {
+            return Ok(None);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+
+struct WorkflowRunningUnit {
+    task_id: String,
+    produces_json: String,
+    child: std::process::Child,
+    cancel_requested: bool,
+}
+
+fn workflow_first_skipped_required_service(
+    metadata: &JsonValue,
+    task_id: &str,
+    skipped_services: &BTreeSet<String>,
+) -> Option<String> {
+    let task = runtime_metadata_task(metadata, task_id).ok()?;
+    array_strings(task, "requiredServices")
+        .into_iter()
+        .find(|service_name| skipped_services.contains(service_name))
+}
+
+fn workflow_phase_task_selected_services_csv(workflow: &JsonValue, task_id: &str) -> String {
+    match task_id {
+        "task.ops.ready" | "task.ops.health" => {
+            array_strings(workflow, "unitClosureSelectedServices").join(",")
+        }
+        _ => String::new(),
+    }
+}
+
+fn workflow_run_phase(
+    metadata: &JsonValue,
+    bundle_path: &str,
+    registry_root: &str,
+    run_id: &str,
+    attempt_id: &str,
+    workflow_id: &str,
+    workflow: &JsonValue,
+    skipped_services: &BTreeSet<String>,
+    task_adapter: &str,
+    service_set_adapter: &str,
+    phase_key: &str,
+    passthrough_args: &[String],
+) -> Result<i64, String> {
+    let task_phase_first = phase_key == "postRun";
+
+    let run_phase_tasks = |phase_tasks: Vec<String>| -> Result<i64, String> {
+        for phase_task in phase_tasks {
+            if let Some(service_name) =
+                workflow_first_skipped_required_service(metadata, &phase_task, skipped_services)
+            {
+                workflow_append_event(
+                    bundle_path,
+                    registry_root,
+                    run_id,
+                    attempt_id,
+                    workflow_id,
+                    &phase_task,
+                    "canceled",
+                    &workflow_cancel_detail("service-skipped", "serviceName", &service_name),
+                )?;
+                continue;
+            }
+
+            workflow_append_event(
+                bundle_path,
+                registry_root,
+                run_id,
+                attempt_id,
+                workflow_id,
+                &phase_task,
+                "queued",
+                &workflow_task_mode_detail(),
+            )?;
+            workflow_append_event(
+                bundle_path,
+                registry_root,
+                run_id,
+                attempt_id,
+                workflow_id,
+                &phase_task,
+                "running",
+                &workflow_task_mode_detail(),
+            )?;
+            let selected_services_csv =
+                workflow_phase_task_selected_services_csv(workflow, &phase_task);
+            let exit_code = workflow_run_task_adapter(
+                task_adapter,
+                &phase_task,
+                workflow_id,
+                &selected_services_csv,
+                passthrough_args,
+            )?;
+            if exit_code == 0 {
+                let produces_json = runtime_metadata_task(metadata, &phase_task)
+                    .ok()
+                    .and_then(|task| object_field(task, "produces"))
+                    .map(render_json_compact)
+                    .unwrap_or_else(|| "{}".to_string());
+                workflow_append_event(
+                    bundle_path,
+                    registry_root,
+                    run_id,
+                    attempt_id,
+                    workflow_id,
+                    &phase_task,
+                    "passed",
+                    &workflow_task_pass_detail(&produces_json),
+                )?;
+            } else {
+                workflow_append_event(
+                    bundle_path,
+                    registry_root,
+                    run_id,
+                    attempt_id,
+                    workflow_id,
+                    &phase_task,
+                    "failed",
+                    &workflow_exit_detail("task", exit_code),
+                )?;
+                return Ok(exit_code);
+            }
+        }
+        Ok(0)
+    };
+
+    let run_phase_service_sets =
+        |entries: Vec<WorkflowPhaseServiceSetEntry>| -> Result<i64, String> {
+            for entry in entries {
+                let phase_entry_id = format!("{}:{}", entry.service_set_id, entry.operation);
+                let detail = workflow_phase_service_set_detail(
+                    phase_key,
+                    &entry.service_set_id,
+                    &entry.service_set_name,
+                    &entry.operation,
+                    None,
+                );
+                workflow_append_event(
+                    bundle_path,
+                    registry_root,
+                    run_id,
+                    attempt_id,
+                    workflow_id,
+                    &phase_entry_id,
+                    "queued",
+                    &detail,
+                )?;
+                workflow_append_event(
+                    bundle_path,
+                    registry_root,
+                    run_id,
+                    attempt_id,
+                    workflow_id,
+                    &phase_entry_id,
+                    "running",
+                    &detail,
+                )?;
+                let exit_code = workflow_run_service_set_adapter(service_set_adapter, &entry)?;
+                if exit_code == 0 {
+                    workflow_append_event(
+                        bundle_path,
+                        registry_root,
+                        run_id,
+                        attempt_id,
+                        workflow_id,
+                        &phase_entry_id,
+                        "passed",
+                        &detail,
+                    )?;
+                } else {
+                    workflow_append_event(
+                        bundle_path,
+                        registry_root,
+                        run_id,
+                        attempt_id,
+                        workflow_id,
+                        &phase_entry_id,
+                        "failed",
+                        &workflow_phase_service_set_detail(
+                            phase_key,
+                            &entry.service_set_id,
+                            &entry.service_set_name,
+                            &entry.operation,
+                            Some(exit_code),
+                        ),
+                    )?;
+                    return Ok(exit_code);
+                }
+            }
+            Ok(0)
+        };
+
+    if task_phase_first {
+        let status = run_phase_tasks(workflow_phase_tasks(workflow, phase_key))?;
+        if status != 0 {
+            return Ok(status);
+        }
+        run_phase_service_sets(workflow_phase_service_sets(workflow, phase_key))
+    } else {
+        let status = run_phase_service_sets(workflow_phase_service_sets(workflow, phase_key))?;
+        if status != 0 {
+            return Ok(status);
+        }
+        run_phase_tasks(workflow_phase_tasks(workflow, phase_key))
+    }
+}
+
+fn workflow_run_serial(
+    bundle_path: &str,
+    registry_root: &str,
+    run_id: &str,
+    attempt_id: &str,
+    workflow_id: &str,
+    workflow_plan: &WorkflowSchedulerWorkflow,
+    fail_fast: bool,
+    skipped_services: &BTreeSet<String>,
+    task_adapter: &str,
+    passthrough_args: &[String],
+) -> Result<i64, String> {
+    let mut state = build_workflow_serial_state(workflow_plan, fail_fast, skipped_services);
+
+    loop {
+        match workflow_serial_next_action(&state) {
+            WorkflowSerialAction::Execute {
+                unit_name,
+                task_id,
+                selected_services_csv,
+            } => {
+                workflow_append_event(
+                    bundle_path,
+                    registry_root,
+                    run_id,
+                    attempt_id,
+                    workflow_id,
+                    &task_id,
+                    "queued",
+                    &workflow_task_mode_detail(),
+                )?;
+                workflow_append_event(
+                    bundle_path,
+                    registry_root,
+                    run_id,
+                    attempt_id,
+                    workflow_id,
+                    &task_id,
+                    "running",
+                    &workflow_task_mode_detail(),
+                )?;
+                let exit_code = workflow_run_task_adapter(
+                    task_adapter,
+                    &task_id,
+                    workflow_id,
+                    &selected_services_csv,
+                    passthrough_args,
+                )?;
+                if exit_code == 0 {
+                    let produces_json = workflow_plan
+                        .units
+                        .iter()
+                        .find(|unit| unit.name == unit_name)
+                        .map(|unit| unit.produces_json.clone())
+                        .unwrap_or_else(|| "{}".to_string());
+                    workflow_append_event(
+                        bundle_path,
+                        registry_root,
+                        run_id,
+                        attempt_id,
+                        workflow_id,
+                        &task_id,
+                        "passed",
+                        &workflow_task_pass_detail(&produces_json),
+                    )?;
+                    workflow_serial_transition(&mut state, &unit_name, "passed", "0", "", "", "")?;
+                } else {
+                    workflow_append_event(
+                        bundle_path,
+                        registry_root,
+                        run_id,
+                        attempt_id,
+                        workflow_id,
+                        &task_id,
+                        "failed",
+                        &workflow_exit_detail("task", exit_code),
+                    )?;
+                    workflow_serial_transition(
+                        &mut state,
+                        &unit_name,
+                        "failed",
+                        &exit_code.to_string(),
+                        "",
+                        "",
+                        "",
+                    )?;
+                }
+            }
+            WorkflowSerialAction::Cancel {
+                unit_name,
+                task_id,
+                reason,
+                extra_key,
+                extra_value,
+            } => {
+                workflow_append_event(
+                    bundle_path,
+                    registry_root,
+                    run_id,
+                    attempt_id,
+                    workflow_id,
+                    &task_id,
+                    "canceled",
+                    &workflow_cancel_detail(&reason, &extra_key, &extra_value),
+                )?;
+                workflow_serial_transition(
+                    &mut state,
+                    &unit_name,
+                    "canceled",
+                    "",
+                    &reason,
+                    &extra_key,
+                    &extra_value,
+                )?;
+            }
+            WorkflowSerialAction::Done { workflow_status } => return Ok(workflow_status),
+        }
+    }
+}
+
+fn workflow_run_parallel(
+    bundle_path: &str,
+    registry_root: &str,
+    run_id: &str,
+    attempt_id: &str,
+    workflow_id: &str,
+    workflow_plan: &WorkflowSchedulerWorkflow,
+    fail_fast: bool,
+    max_workers: i64,
+    skipped_services: &BTreeSet<String>,
+    task_adapter: &str,
+    passthrough_args: &[String],
+) -> Result<i64, String> {
+    let mut state =
+        build_workflow_parallel_state(workflow_plan, fail_fast, max_workers, skipped_services);
+    let mut running = BTreeMap::<String, WorkflowRunningUnit>::new();
+
+    loop {
+        loop {
+            match workflow_parallel_next_action(&mut state) {
+                WorkflowParallelAction::Start {
+                    unit_name,
+                    task_id,
+                    selected_services_csv,
+                    produces_json,
+                } => {
+                    workflow_append_event(
+                        bundle_path,
+                        registry_root,
+                        run_id,
+                        attempt_id,
+                        workflow_id,
+                        &task_id,
+                        "queued",
+                        &workflow_task_mode_detail(),
+                    )?;
+                    workflow_append_event(
+                        bundle_path,
+                        registry_root,
+                        run_id,
+                        attempt_id,
+                        workflow_id,
+                        &task_id,
+                        "running",
+                        &workflow_task_mode_detail(),
+                    )?;
+                    let child = workflow_spawn_task_adapter(
+                        task_adapter,
+                        &task_id,
+                        workflow_id,
+                        &selected_services_csv,
+                        passthrough_args,
+                    )?;
+                    workflow_parallel_transition(
+                        &mut state, &unit_name, "started", "", "", "", "",
+                    )?;
+                    running.insert(
+                        unit_name,
+                        WorkflowRunningUnit {
+                            task_id,
+                            produces_json,
+                            child,
+                            cancel_requested: false,
+                        },
+                    );
+                }
+                WorkflowParallelAction::Cancel {
+                    unit_name,
+                    task_id,
+                    reason,
+                    extra_key,
+                    extra_value,
+                } => {
+                    workflow_append_event(
+                        bundle_path,
+                        registry_root,
+                        run_id,
+                        attempt_id,
+                        workflow_id,
+                        &task_id,
+                        "canceled",
+                        &workflow_cancel_detail(&reason, &extra_key, &extra_value),
+                    )?;
+                    workflow_parallel_transition(
+                        &mut state,
+                        &unit_name,
+                        "canceled",
+                        "",
+                        &reason,
+                        &extra_key,
+                        &extra_value,
+                    )?;
+                }
+                WorkflowParallelAction::SignalRunning { unit_name } => {
+                    if let Some(unit) = running.get_mut(&unit_name) {
+                        workflow_send_signal(unit.child.id(), "TERM");
+                        unit.cancel_requested = true;
+                    }
+                    workflow_parallel_transition(
+                        &mut state,
+                        &unit_name,
+                        "signal-sent",
+                        "",
+                        "",
+                        "",
+                        "",
+                    )?;
+                }
+                WorkflowParallelAction::Wait => break,
+                WorkflowParallelAction::Done { workflow_status } => return Ok(workflow_status),
+            }
+        }
+
+        let Some((done_unit, exit_code)) = workflow_wait_for_any_child(&mut running)? else {
+            return Err("parallel workflow reached wait state without running units".to_string());
+        };
+        let Some(mut unit) = running.remove(&done_unit) else {
+            continue;
+        };
+        if unit.cancel_requested {
+            workflow_append_event(
+                bundle_path,
+                registry_root,
+                run_id,
+                attempt_id,
+                workflow_id,
+                &unit.task_id,
+                "canceled",
+                &workflow_cancel_detail("fail-fast-running", "", ""),
+            )?;
+            workflow_parallel_transition(
+                &mut state,
+                &done_unit,
+                "canceled-running",
+                &exit_code.to_string(),
+                "fail-fast-running",
+                "",
+                "",
+            )?;
+        } else if exit_code == 0 {
+            workflow_append_event(
+                bundle_path,
+                registry_root,
+                run_id,
+                attempt_id,
+                workflow_id,
+                &unit.task_id,
+                "passed",
+                &workflow_task_pass_detail(&unit.produces_json),
+            )?;
+            workflow_parallel_transition(&mut state, &done_unit, "passed", "0", "", "", "")?;
+        } else {
+            workflow_append_event(
+                bundle_path,
+                registry_root,
+                run_id,
+                attempt_id,
+                workflow_id,
+                &unit.task_id,
+                "failed",
+                &workflow_exit_detail("task", exit_code),
+            )?;
+            workflow_parallel_transition(
+                &mut state,
+                &done_unit,
+                "failed",
+                &exit_code.to_string(),
+                "",
+                "",
+                "",
+            )?;
+        }
+        let _ = unit.child.wait();
+    }
+}
+
+fn workflow_run_command(values: &[String]) -> Result<(), String> {
+    if values.len() < 11 {
+        return Err(
+            "usage: nixfied-kernel workflow run <runtime-metadata-file> <bundle-file> <registry-root> <run-id> <attempt-id|empty> <workflow-id> <skipped-services-file> <task-adapter> <service-set-adapter> <run-parallel> <max-workers> [-- <args...>]"
+                .to_string(),
+        );
+    }
+
+    let metadata = load_runtime_metadata(&values[0])?;
+    let workflow = runtime_metadata_workflow(&metadata, &values[5])?;
+    let workflow_plan = workflow_scheduler_from_runtime(workflow)?;
+    let skipped_services = load_line_set(&values[6])?;
+    let task_adapter = &values[7];
+    let service_set_adapter = &values[8];
+    let run_parallel = parse_bool_flag(&values[9])?;
+    let max_workers = parse_i64_text(&values[10], "workflow run max-workers")?;
+    let passthrough_args = strip_passthrough_separator(&values[11..]).to_vec();
+    let fail_fast = object_bool(workflow, "failFast").unwrap_or(false);
+
+    workflow_append_event(
+        &values[1],
+        &values[2],
+        &values[3],
+        &values[4],
+        &values[5],
+        "",
+        "queued",
+        &json!({
+            "kind": "slotLifecycle",
+            "mode": "workflow",
+        }),
+    )?;
+
+    let mut workflow_status = workflow_run_phase(
+        &metadata,
+        &values[1],
+        &values[2],
+        &values[3],
+        &values[4],
+        &values[5],
+        workflow,
+        &skipped_services,
+        task_adapter,
+        service_set_adapter,
+        "preRun",
+        &passthrough_args,
+    )?;
+
+    if workflow_status == 0 {
+        workflow_status = if run_parallel {
+            workflow_run_parallel(
+                &values[1],
+                &values[2],
+                &values[3],
+                &values[4],
+                &values[5],
+                &workflow_plan,
+                fail_fast,
+                max_workers,
+                &skipped_services,
+                task_adapter,
+                &passthrough_args,
+            )?
+        } else {
+            workflow_run_serial(
+                &values[1],
+                &values[2],
+                &values[3],
+                &values[4],
+                &values[5],
+                &workflow_plan,
+                fail_fast,
+                &skipped_services,
+                task_adapter,
+                &passthrough_args,
+            )?
+        };
+    }
+
+    if workflow_status == 0 || object_bool(workflow, "postRunAlways").unwrap_or(false) {
+        let post_status = workflow_run_phase(
+            &metadata,
+            &values[1],
+            &values[2],
+            &values[3],
+            &values[4],
+            &values[5],
+            workflow,
+            &skipped_services,
+            task_adapter,
+            service_set_adapter,
+            "postRun",
+            &passthrough_args,
+        )?;
+        if workflow_status == 0 && post_status != 0 {
+            workflow_status = post_status;
+        }
+    }
+
+    if workflow_status == 0 {
+        workflow_append_event(
+            &values[1],
+            &values[2],
+            &values[3],
+            &values[4],
+            &values[5],
+            "",
+            "passed",
+            &json!({
+                "kind": "slotLifecycle",
+                "mode": "workflow",
+            }),
+        )?;
+    } else {
+        workflow_append_event(
+            &values[1],
+            &values[2],
+            &values[3],
+            &values[4],
+            &values[5],
+            "",
+            "failed",
+            &workflow_exit_detail("workflow", workflow_status),
+        )?;
+    }
+
+    process::exit(workflow_status.clamp(0, 255) as i32)
 }
 
 pub(crate) fn build_workflow_serial_state(
     workflow: &WorkflowSchedulerWorkflow,
-    workflow_id: &str,
     fail_fast: bool,
     skipped_services: &BTreeSet<String>,
 ) -> WorkflowSerialState {
@@ -383,7 +1271,6 @@ pub(crate) fn build_workflow_serial_state(
     }
 
     WorkflowSerialState {
-        workflow_id: workflow_id.to_string(),
         fail_fast,
         workflow_status: 0,
         halted: false,
@@ -556,125 +1443,8 @@ pub(crate) fn workflow_serial_transition(
     Ok(())
 }
 
-pub(crate) fn load_workflow_serial_state(path: &str) -> Result<WorkflowSerialState, String> {
-    let value = parse_json_file(path, "workflow serial state")?;
-    let kind = required_string_field(&value, "kind", "workflow serial state")?;
-    if kind != "nixfied-workflow-serial-state" {
-        return Err(format!("unsupported workflow serial state kind: {}", kind));
-    }
-    let version = object_field(&value, "version")
-        .and_then(json_value_to_i64)
-        .ok_or_else(|| "workflow serial state missing integer field version".to_string())?;
-    if version != 1 {
-        return Err(format!(
-            "workflow serial state version must be 1 (got {})",
-            version
-        ));
-    }
-
-    let order = object_field(&value, "order")
-        .and_then(JsonValue::as_array)
-        .map_or(&[] as &[JsonValue], |v| v)
-        .iter()
-        .filter_map(JsonValue::as_str)
-        .map(|item| item.to_string())
-        .collect::<Vec<_>>();
-    let units_value = object_field(&value, "units")
-        .and_then(JsonValue::as_object)
-        .ok_or_else(|| "workflow serial state missing object field units".to_string())?;
-    let mut units = BTreeMap::new();
-    for (unit_name, unit_value) in units_value {
-        units.insert(
-            unit_name.clone(),
-            WorkflowSerialUnitState {
-                name: required_string_field(unit_value, "name", "workflow serial unit")?
-                    .to_string(),
-                task_id: required_string_field(unit_value, "taskId", "workflow serial unit")?
-                    .to_string(),
-                needs_left: object_field(unit_value, "needsLeft")
-                    .and_then(json_value_to_i64)
-                    .unwrap_or(0),
-                dependents: object_field(unit_value, "dependents")
-                    .and_then(JsonValue::as_array)
-                    .map_or(&[] as &[JsonValue], |v| v)
-                    .iter()
-                    .filter_map(JsonValue::as_str)
-                    .map(|item| item.to_string())
-                    .collect(),
-                state: required_string_field(unit_value, "state", "workflow serial unit")?
-                    .to_string(),
-                cancel_reason: object_string(unit_value, "cancelReason")
-                    .unwrap_or("")
-                    .to_string(),
-                cancel_extra_key: object_string(unit_value, "cancelExtraKey")
-                    .unwrap_or("")
-                    .to_string(),
-                cancel_extra_value: object_string(unit_value, "cancelExtraValue")
-                    .unwrap_or("")
-                    .to_string(),
-                selected_services_csv: object_string(unit_value, "selectedServicesCsv")
-                    .unwrap_or("")
-                    .to_string(),
-            },
-        );
-    }
-
-    Ok(WorkflowSerialState {
-        workflow_id: required_string_field(&value, "workflowId", "workflow serial state")?
-            .to_string(),
-        fail_fast: object_field(&value, "failFast")
-            .and_then(JsonValue::as_bool)
-            .unwrap_or(false),
-        workflow_status: object_field(&value, "workflowStatus")
-            .and_then(json_value_to_i64)
-            .unwrap_or(0),
-        halted: object_field(&value, "halted")
-            .and_then(JsonValue::as_bool)
-            .unwrap_or(false),
-        order,
-        units,
-    })
-}
-
-pub(crate) fn write_workflow_serial_state(
-    path: &str,
-    state: &WorkflowSerialState,
-) -> Result<(), String> {
-    let mut units = Map::new();
-    for (unit_name, unit) in &state.units {
-        let dependents: Vec<JsonValue> = unit.dependents.iter().map(|item| json!(item)).collect();
-        units.insert(
-            unit_name.clone(),
-            json!({
-                "name": unit.name,
-                "taskId": unit.task_id,
-                "needsLeft": unit.needs_left,
-                "dependents": dependents,
-                "state": unit.state,
-                "cancelReason": unit.cancel_reason,
-                "cancelExtraKey": unit.cancel_extra_key,
-                "cancelExtraValue": unit.cancel_extra_value,
-                "selectedServicesCsv": unit.selected_services_csv,
-            }),
-        );
-    }
-    let order: Vec<JsonValue> = state.order.iter().map(|item| json!(item)).collect();
-    let value = json!({
-        "kind": "nixfied-workflow-serial-state",
-        "version": 1,
-        "workflowId": state.workflow_id,
-        "failFast": state.fail_fast,
-        "workflowStatus": state.workflow_status,
-        "halted": state.halted,
-        "order": order,
-        "units": JsonValue::Object(units),
-    });
-    write_text_atomic(path, &format!("{}\n", render_json_compact(&value)))
-}
-
 pub(crate) fn build_workflow_parallel_state(
     workflow: &WorkflowSchedulerWorkflow,
-    workflow_id: &str,
     fail_fast: bool,
     max_workers: i64,
     skipped_services: &BTreeSet<String>,
@@ -747,7 +1517,6 @@ pub(crate) fn build_workflow_parallel_state(
     }
 
     WorkflowParallelState {
-        workflow_id: workflow_id.to_string(),
         fail_fast,
         max_workers: max_workers.max(1),
         workflow_status: 0,
@@ -1013,142 +1782,6 @@ pub(crate) fn workflow_parallel_transition(
     }
 
     Ok(())
-}
-
-pub(crate) fn load_workflow_parallel_state(path: &str) -> Result<WorkflowParallelState, String> {
-    let value = parse_json_file(path, "workflow parallel state")?;
-    let kind = required_string_field(&value, "kind", "workflow parallel state")?;
-    if kind != "nixfied-workflow-parallel-state" {
-        return Err(format!(
-            "unsupported workflow parallel state kind: {}",
-            kind
-        ));
-    }
-    let version = object_field(&value, "version")
-        .and_then(json_value_to_i64)
-        .ok_or_else(|| "workflow parallel state missing integer field version".to_string())?;
-    if version != 1 {
-        return Err(format!(
-            "workflow parallel state version must be 1 (got {})",
-            version
-        ));
-    }
-
-    let order = object_field(&value, "order")
-        .and_then(JsonValue::as_array)
-        .map_or(&[] as &[JsonValue], |v| v)
-        .iter()
-        .filter_map(JsonValue::as_str)
-        .map(|item| item.to_string())
-        .collect::<Vec<_>>();
-    let units_value = object_field(&value, "units")
-        .and_then(JsonValue::as_object)
-        .ok_or_else(|| "workflow parallel state missing object field units".to_string())?;
-    let mut units = BTreeMap::new();
-    for (unit_name, unit_value) in units_value {
-        units.insert(
-            unit_name.clone(),
-            WorkflowParallelUnitState {
-                name: required_string_field(unit_value, "name", "workflow parallel unit")?
-                    .to_string(),
-                task_id: required_string_field(unit_value, "taskId", "workflow parallel unit")?
-                    .to_string(),
-                needs_left: object_field(unit_value, "needsLeft")
-                    .and_then(json_value_to_i64)
-                    .unwrap_or(0),
-                dependents: object_field(unit_value, "dependents")
-                    .and_then(JsonValue::as_array)
-                    .map_or(&[] as &[JsonValue], |v| v)
-                    .iter()
-                    .filter_map(JsonValue::as_str)
-                    .map(|item| item.to_string())
-                    .collect(),
-                locks: object_field(unit_value, "locks")
-                    .and_then(JsonValue::as_array)
-                    .map_or(&[] as &[JsonValue], |v| v)
-                    .iter()
-                    .filter_map(JsonValue::as_str)
-                    .map(|item| item.to_string())
-                    .collect(),
-                state: required_string_field(unit_value, "state", "workflow parallel unit")?
-                    .to_string(),
-                cancel_reason: object_string(unit_value, "cancelReason")
-                    .unwrap_or("")
-                    .to_string(),
-                cancel_extra_key: object_string(unit_value, "cancelExtraKey")
-                    .unwrap_or("")
-                    .to_string(),
-                cancel_extra_value: object_string(unit_value, "cancelExtraValue")
-                    .unwrap_or("")
-                    .to_string(),
-                selected_services_csv: object_string(unit_value, "selectedServicesCsv")
-                    .unwrap_or("")
-                    .to_string(),
-                produces_json: object_string(unit_value, "producesJson")
-                    .unwrap_or("{}")
-                    .to_string(),
-            },
-        );
-    }
-
-    Ok(WorkflowParallelState {
-        workflow_id: required_string_field(&value, "workflowId", "workflow parallel state")?
-            .to_string(),
-        fail_fast: object_field(&value, "failFast")
-            .and_then(JsonValue::as_bool)
-            .unwrap_or(false),
-        max_workers: object_field(&value, "maxWorkers")
-            .and_then(json_value_to_i64)
-            .unwrap_or(1),
-        workflow_status: object_field(&value, "workflowStatus")
-            .and_then(json_value_to_i64)
-            .unwrap_or(0),
-        stop_scheduling: object_field(&value, "stopScheduling")
-            .and_then(JsonValue::as_bool)
-            .unwrap_or(false),
-        order,
-        units,
-    })
-}
-
-pub(crate) fn write_workflow_parallel_state(
-    path: &str,
-    state: &WorkflowParallelState,
-) -> Result<(), String> {
-    let mut units = Map::new();
-    for (unit_name, unit) in &state.units {
-        let dependents: Vec<JsonValue> = unit.dependents.iter().map(|item| json!(item)).collect();
-        let locks: Vec<JsonValue> = unit.locks.iter().map(|item| json!(item)).collect();
-        units.insert(
-            unit_name.clone(),
-            json!({
-                "name": unit.name,
-                "taskId": unit.task_id,
-                "needsLeft": unit.needs_left,
-                "dependents": dependents,
-                "locks": locks,
-                "state": unit.state,
-                "cancelReason": unit.cancel_reason,
-                "cancelExtraKey": unit.cancel_extra_key,
-                "cancelExtraValue": unit.cancel_extra_value,
-                "selectedServicesCsv": unit.selected_services_csv,
-                "producesJson": unit.produces_json,
-            }),
-        );
-    }
-    let order: Vec<JsonValue> = state.order.iter().map(|item| json!(item)).collect();
-    let value = json!({
-        "kind": "nixfied-workflow-parallel-state",
-        "version": 1,
-        "workflowId": state.workflow_id,
-        "failFast": state.fail_fast,
-        "maxWorkers": state.max_workers,
-        "workflowStatus": state.workflow_status,
-        "stopScheduling": state.stop_scheduling,
-        "order": order,
-        "units": JsonValue::Object(units),
-    });
-    write_text_atomic(path, &format!("{}\n", render_json_compact(&value)))
 }
 
 pub(crate) fn load_workflow_summary_plan(path: &str) -> Result<WorkflowSummaryPlan, String> {

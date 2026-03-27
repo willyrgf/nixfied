@@ -18,19 +18,13 @@ pkgs.runCommand "service-policy-runtime-smoke" { } ''
     local owner_scope="''${1:-}"
     local reuse_policy="''${2:-}"
     local discovery_scope="''${3:-}"
-    local export_file=""
 
-    export_file="$(mktemp "''${TMPDIR:-/tmp}/nixfied-fixture-policy-test.XXXXXX")" || return 1
-    if ! ${kernelPackage}/bin/nixfied-kernel service-policy fixture-keep-running \
+    nixfied_load_kernel_exports "nixfied-fixture-policy-test" \
+      ${kernelPackage}/bin/nixfied-kernel service-policy fixture-keep-running \
       "$owner_scope" \
       "$reuse_policy" \
       "$discovery_scope" \
-      "$export_file" >/dev/null; then
-      rm -f "$export_file"
-      return 1
-    fi
-    . "$export_file"
-    rm -f "$export_file"
+      || return 1
     printf '%s' "$KEEP_RUNNING"
   }
 

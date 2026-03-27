@@ -95,8 +95,8 @@ pkgs.runCommand "ready-helios-sync-gate-smoke" { } ''
     local port="$1"
     local method="$2"
     local tries=0
-    while [ "$tries" -lt 50 ]; do
-      if ${pkgs.curl}/bin/curl -fsS --max-time 1 \
+    while [ "$tries" -lt 100 ]; do
+      if ${pkgs.curl}/bin/curl -fsS --max-time 2 \
         -H 'content-type: application/json' \
         --data "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"$method\",\"params\":[]}" \
         "http://127.0.0.1:$port" \

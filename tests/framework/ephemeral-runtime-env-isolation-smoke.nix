@@ -5,6 +5,7 @@
   registry,
 }:
 let
+  withRuntimeMetadata = import ./lib/with-runtime-metadata.nix { inherit pkgs; };
   baseTask = model.tasks."task.ci.quality";
 
   probeTaskId = "task.test.ephemeral.runtime-env";
@@ -90,20 +91,23 @@ let
     ];
   };
 
-  probeModel = model // {
-    runtime = model.runtime // {
-      ephemeral = (model.runtime.ephemeral or { }) // {
-        copyMode = "git-files";
-        includeUntracked = false;
+  probeModel = withRuntimeMetadata (
+    model
+    // {
+      runtime = model.runtime // {
+        ephemeral = (model.runtime.ephemeral or { }) // {
+          copyMode = "git-files";
+          includeUntracked = false;
+        };
       };
-    };
-    tasks = model.tasks // {
-      ${probeTaskId} = probeTask;
-    };
-    workflows = model.workflows // {
-      ${probeWorkflowId} = probeWorkflow;
-    };
-  };
+      tasks = model.tasks // {
+        ${probeTaskId} = probeTask;
+      };
+      workflows = model.workflows // {
+        ${probeWorkflowId} = probeWorkflow;
+      };
+    }
+  );
 
   orchestrator = import ../../nixfied/framework/runtime/orchestrator.nix {
     inherit

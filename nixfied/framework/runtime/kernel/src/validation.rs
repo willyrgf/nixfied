@@ -3,7 +3,6 @@ use super::*;
 pub(crate) fn validate_input_command(
     plan_path: &str,
     mode: &str,
-    export_path: &str,
     remaining: &[String],
 ) -> Result<(), String> {
     let plan = load_command_runtime_plan(plan_path)?;
@@ -21,8 +20,7 @@ pub(crate) fn validate_input_command(
         }
     };
 
-    write_shell_exports(export_path, &exports)?;
-    println!("OK: validate-input mode={}", mode);
+    print!("{}", render_shell_exports(&exports));
     Ok(())
 }
 
@@ -1745,7 +1743,10 @@ fn json_preview(value: &JsonValue) -> String {
     }
 }
 
-pub(crate) fn resolve_json_path<'a>(value: &'a JsonValue, path_expr: &str) -> Option<&'a JsonValue> {
+pub(crate) fn resolve_json_path<'a>(
+    value: &'a JsonValue,
+    path_expr: &str,
+) -> Option<&'a JsonValue> {
     let path_expr = path_expr.trim();
     if path_expr.is_empty() || path_expr == "." {
         return Some(value);

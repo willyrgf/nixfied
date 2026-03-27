@@ -130,17 +130,19 @@ let
     inherit (pkgs) lib;
     inherit model;
   };
-
-  workflowModesShell = import ../../nixfied/framework/runtime/workflow-modes.nix {
-    inherit
-      pkgs
-      model
-      selectionIndex
-      ;
-  };
+  runtimeMetadata =
+    import ../../nixfied/compiler/compile-runtime-metadata.nix
+      {
+        inherit (pkgs) lib;
+      }
+      {
+        tasks = model.tasks;
+        workflows = model.workflows;
+        serviceCatalog = { };
+        apps = { };
+        inherit selectionIndex;
+      };
 in
-assert pkgs.lib.hasInfix "task_closure_selected_services() {" workflowModesShell;
-assert pkgs.lib.hasInfix "workflow_unit_closure_selected_services() {" workflowModesShell;
 assert runtimeSelectionIndex.taskIds == selectionIndex.taskIds;
 assert runtimeSelectionIndex.workflowIds == selectionIndex.workflowIds;
 assert runtimeSelectionIndex.workflowFamilies == selectionIndex.workflowFamilies;
@@ -205,6 +207,24 @@ assert
     "minio"
     "nginx"
   ];
+assert
+  runtimeMetadata.tasks.${rootTaskId}.closureSelectedServices
+  == selectionIndex.taskClosureServicesById.${rootTaskId};
+assert
+  runtimeMetadata.tasks.${workflowTaskId}.baseClosureSelectedServices
+  == selectionIndex.taskBaseClosureServicesById.${workflowTaskId};
+assert
+  runtimeMetadata.workflows.${workflowFullId}.unitClosureSelectedServices
+  == selectionIndex.workflowUnitClosureServicesById.${workflowFullId};
+assert
+  runtimeMetadata.workflows.${workflowFullId}.closureSelectedServices
+  == selectionIndex.workflowClosureServicesById.${workflowFullId};
+assert
+  runtimeMetadata.workflows.${workflowFullId}.referenceClosureSelectedServices
+  == selectionIndex.workflowReferenceClosureServicesById.${workflowFullId};
+assert
+  runtimeMetadata.workflows.${workflowFullId}.phases.preRun.serviceSets
+  == [ workflowPhaseServiceSet ];
 pkgs.runCommand "runtime-service-selection-contract" { } ''
-  echo "OK: runtime service selection helper covers deps, workflow refs, and workflow phases" > "$out"
+  echo "OK: runtime service selection metadata covers deps, workflow refs, and workflow phases" > "$out"
 ''

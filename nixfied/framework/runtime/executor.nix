@@ -142,13 +142,7 @@ let
   ) (builtins.toJSON model);
   shellCommon = import ../core/shell-common.nix { inherit pkgs; };
   registryShell = registry.events.mkShellLib { };
-  workflowModesShell = import ./workflow-modes.nix {
-    inherit
-      pkgs
-      model
-      ;
-    selectionIndex = resolvedSelectionIndex;
-  };
+  runtimeMetadataShell = import ./runtime-metadata.nix { inherit pkgs; };
   envSandboxShell = import ./env-sandbox.nix {
     inherit
       pkgs
@@ -180,70 +174,6 @@ let
     lib.concatStringsSep "\n" availableServiceNames
     + lib.optionalString (availableServiceNames != [ ]) "\n"
   );
-  taskDependencyPlanFile = pkgs.writeText "nixfied-task-dependency-plan.json" (
-    builtins.toJSON {
-      kind = "nixfied-task-dependency-plan";
-      version = 1;
-      tasks = builtins.mapAttrs (_: task: {
-        needs = task.needs or [ ];
-        softNeeds = task.softNeeds or [ ];
-        requiredServices = task.requirements.services or [ ];
-      }) (model.tasks or { });
-    }
-  );
-  workflowSchedulerPlanFile = pkgs.writeText "nixfied-workflow-scheduler-plan.json" (
-    builtins.toJSON {
-      kind = "nixfied-workflow-scheduler-plan";
-      version = 1;
-      workflows = builtins.mapAttrs (
-        workflowId: workflow:
-        let
-          workflowPlan = workflow.plan or [ ];
-        in
-        {
-          units = map (
-            unit:
-            let
-              taskId = unit.taskId or "";
-              task =
-                if taskId != "" && builtins.hasAttr taskId (model.tasks or { }) then model.tasks.${taskId} else { };
-              taskRunner = task.runner or { };
-              runnerType = taskRunner.type or "shell";
-              runnerWorkflowId = if runnerType == "workflowRef" then taskRunner.workflowId or "" else "";
-              unitRequiredServices = unit.requirements.services or [ ];
-              taskBaseClosureServices =
-                if taskId != "" then resolvedSelectionIndex.taskBaseClosureServicesById.${taskId} or [ ] else [ ];
-              runnerWorkflowClosureServices =
-                if runnerWorkflowId != "" then
-                  resolvedSelectionIndex.workflowClosureServicesById.${runnerWorkflowId} or [ ]
-                else
-                  [ ];
-              produces = unit.produces or { };
-              selectedServices = builtins.sort builtins.lessThan (
-                lib.unique (unitRequiredServices ++ taskBaseClosureServices ++ runnerWorkflowClosureServices)
-              );
-              when = unit.when or { };
-            in
-            {
-              name = unit.name or "";
-              taskId = taskId;
-              needs = unit.needs or [ ];
-              locks = unit.locks or [ ];
-              requiredServices = unitRequiredServices;
-              skipIfMissingEnv = unit.skipIfMissingEnv or [ ];
-              whenEnvPresent = when.envPresent or [ ];
-              whenEnvEquals = when.envEquals or { };
-              selectedServicesCsv = lib.concatStringsSep "," selectedServices;
-              producesJson = builtins.toJSON {
-                artifacts = produces.artifacts or [ ];
-                stateKeys = produces.stateKeys or [ ];
-              };
-            }
-          ) workflowPlan;
-        }
-      ) (model.workflows or { });
-    }
-  );
   workflowSummaryPlanFile = pkgs.writeText "nixfied-workflow-summary-plan.json" (
     builtins.toJSON {
       kind = "nixfied-workflow-summary-plan";
@@ -251,6 +181,12 @@ let
       taskRunnerTypes = builtins.mapAttrs (_: task: task.runner.type or "shell") (model.tasks or { });
     }
   );
+  workflowTaskAdapter = pkgs.writeShellScript "nixfied-workflow-task-adapter" ''
+    exec "$NIXFIED_EXECUTOR_SELF" run-task-leaf "$@"
+  '';
+  workflowServiceSetAdapter = pkgs.writeShellScript "nixfied-workflow-service-set-adapter" ''
+    exec "$NIXFIED_EXECUTOR_SELF" run-service-set-phase "$@"
+  '';
 in
 pkgs.writeShellScriptBin "nixfied-executor" ''
         set -euo pipefail
@@ -283,7 +219,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         RUN_ID_COUNTER_ROOT="$REGISTRY_ROOT/counters"
 
         ${registryShell}
-        ${workflowModesShell}
+        ${runtimeMetadataShell}
         ${envSandboxShell}
         ${executorRuntimeShell}
         ${sharedRuntimeLibShell}
@@ -423,29 +359,6 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           fi
 
           task_invocation_selected_services "$task_id" "$resolved_workflow_id" | selected_services_csv_from_lines
-        }
-
-        workflow_unit_selected_services_csv() {
-          local unit_json="$1"
-          local task_id=""
-          local runner_type=""
-          local workflow_id=""
-
-          task_id="$(workflow_unit_task_id "$unit_json")"
-
-          {
-            workflow_unit_required_services "$unit_json"
-
-            if [ -n "$task_id" ]; then
-              runner_type="$(task_runner_type "$task_id")"
-              if [ "$runner_type" = "workflowRef" ]; then
-                workflow_id="$(task_runner_workflow_id "$task_id")"
-              else
-                workflow_id=""
-              fi
-              task_invocation_selected_services "$task_id" "$workflow_id"
-            fi
-          } | selected_services_csv_from_lines
         }
 
         RUN_SUFFIX_REASON=""
@@ -773,7 +686,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           local export_target="$4"
 
           ${kernelPackage}/bin/nixfied-kernel task execution-order \
-            ${pkgs.lib.escapeShellArg (builtins.toString taskDependencyPlanFile)} \
+            "$MODEL_FILE" \
             "$skipped_services_file" \
             "$task_id" \
             "$plan_target" \
@@ -1162,538 +1075,109 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           return "$child_rc"
         }
 
-        workflow_unit_records() {
-          local workflow_id="$1"
-          workflow_plan_records "$workflow_id"
+        run_task_leaf() {
+          if [ "$#" -lt 3 ]; then
+            echo "ERROR: usage: run-task-leaf <task-id> <workflow-id> <selected-services-csv> [-- ...]"
+            return "$NIXFIED_EXIT_USAGE"
+          fi
+
+          local task_id="$1"
+          local workflow_id="$2"
+          local selected_services_csv="$3"
+          shift 3
+
+          if [ "$#" -gt 0 ] && [ "$1" = "--" ]; then
+            shift
+          fi
+
+          parallel_run_unit_wrapper "$task_id" "$workflow_id" "$selected_services_csv" "$@"
+        }
+
+        run_service_set_phase() {
+          if [ "$#" -ne 3 ]; then
+            echo "ERROR: usage: run-service-set-phase <service-set-id> <operation> <selected-services-csv>"
+            return "$NIXFIED_EXIT_USAGE"
+          fi
+
+          local service_set_id="$1"
+          local operation="$2"
+          local selected_services_csv="$3"
+          local program_path=""
+
+          program_path="$(workflow_phase_service_set_program "$service_set_id" "$operation" || true)"
+          if [ -z "$program_path" ]; then
+            echo "ERROR: missing service-set program serviceSetId=$service_set_id operation=$operation" >&2
+            return 1
+          fi
+
+          NIXFIED_SELECTED_SERVICES_CSV="$selected_services_csv" "$program_path"
+        }
+
+        run_workflow_kernel_impl() {
+          local run_id="$1"
+          local workflow_id="$2"
+          local run_parallel="$3"
+          local max_workers="$4"
+          shift 4
+          local -a passthrough_args
+          passthrough_args=("$@")
+          local skipped_services_file=""
+          local workflow_status=""
+          local attempt_id="''${NIXFIED_ATTEMPT_ID:-}"
+
+          skipped_services_file="$(mktemp "''${TMPDIR:-/tmp}/nixfied-workflow-skipped.XXXXXX")" || {
+            echo "ERROR: failed to create workflow skipped-services temp file"
+            return 1
+          }
+
+          if ! write_skipped_services_file "$skipped_services_file"; then
+            rm -f "$skipped_services_file"
+            return 1
+          fi
+
+          if ${kernelPackage}/bin/nixfied-kernel workflow run \
+            "$MODEL_FILE" \
+            ${lib.escapeShellArg validationBundleFile} \
+            "$REGISTRY_ROOT" \
+            "$run_id" \
+            "$attempt_id" \
+            "$workflow_id" \
+            "$skipped_services_file" \
+            ${lib.escapeShellArg (builtins.toString workflowTaskAdapter)} \
+            ${lib.escapeShellArg (builtins.toString workflowServiceSetAdapter)} \
+            "$run_parallel" \
+            "$max_workers" \
+            -- "''${passthrough_args[@]}"; then
+            workflow_status=0
+          else
+            workflow_status="$?"
+          fi
+
+          rm -f "$skipped_services_file"
+
+          return "$workflow_status"
         }
 
         run_workflow_serial_impl() {
           local run_id="$1"
           local workflow_id="$2"
-          local fail_fast="$3"
-          shift 3
-          local -a passthrough_args
-          passthrough_args=("$@")
-          local status=0
-          local workflow_status=0
-          local skipped_services_file=""
-          local state_file=""
-          local action_line=""
-          local action_kind=""
-          local unit_name=""
-          local unit_task=""
-          local field4=""
-          local field5=""
-          local field6=""
-          local detail_json=""
-          local transition_unit=""
-          local transition_status=""
-          local transition_exit_code=""
-          local transition_reason=""
-          local transition_extra_key=""
-          local transition_extra_value=""
-          cleanup_workflow_serial_tmp() {
-            rm -f "$skipped_services_file" "$state_file"
-          }
-
-          skipped_services_file="$(mktemp "''${TMPDIR:-/tmp}/nixfied-workflow-serial-skipped.XXXXXX")" || {
-            echo "ERROR: failed to create workflow serial skipped-services temp file"
-            return 1
-          }
-          state_file="$(mktemp "''${TMPDIR:-/tmp}/nixfied-workflow-serial-state.XXXXXX")" || {
-            rm -f "$skipped_services_file"
-            echo "ERROR: failed to create workflow serial state temp file"
-            return 1
-          }
-
-          if ! write_skipped_services_file "$skipped_services_file"; then
-            cleanup_workflow_serial_tmp
-            return 1
-          fi
-
-          if ! ${kernelPackage}/bin/nixfied-kernel workflow serial-init \
-            ${pkgs.lib.escapeShellArg (builtins.toString workflowSchedulerPlanFile)} \
-            "$skipped_services_file" \
-            "$workflow_id" \
-            "$fail_fast" \
-            "$state_file" \
-            >/dev/null; then
-            cleanup_workflow_serial_tmp
-            return 1
-          fi
-
-          while true; do
-            action_line="$(${kernelPackage}/bin/nixfied-kernel workflow serial-step \
-              "$state_file" \
-              "$transition_unit" \
-              "$transition_status" \
-              "$transition_exit_code" \
-              "$transition_reason" \
-              "$transition_extra_key" \
-              "$transition_extra_value")" || {
-              cleanup_workflow_serial_tmp
-              return 1
-            }
-            transition_unit=""
-            transition_status=""
-            transition_exit_code=""
-            transition_reason=""
-            transition_extra_key=""
-            transition_extra_value=""
-            IFS=$'\x1f' read -r action_kind unit_name unit_task field4 field5 field6 <<< "$action_line"
-
-            case "$action_kind" in
-              execute)
-                if [ "''${#passthrough_args[@]}" -gt 0 ]; then
-                  if NIXFIED_SELECTED_SERVICES_CSV_OVERRIDE="$field4" execute_task "$run_id" "$workflow_id" "$unit_task" "''${passthrough_args[@]}"; then
-                    status=0
-                  else
-                    status="$?"
-                  fi
-                elif NIXFIED_SELECTED_SERVICES_CSV_OVERRIDE="$field4" execute_task "$run_id" "$workflow_id" "$unit_task"; then
-                  status=0
-                else
-                  status="$?"
-                fi
-
-                transition_unit="$unit_name"
-                transition_reason=""
-                transition_extra_key=""
-                transition_extra_value=""
-                if [ "$status" -eq 0 ]; then
-                  transition_status="passed"
-                  transition_exit_code="0"
-                else
-                  transition_status="failed"
-                  transition_exit_code="$status"
-                fi
-                ;;
-              cancel)
-                if [ "$field4" = "service-skipped" ]; then
-                  echo "SKIP: task '$unit_task' (service '$field6') is skipped because service '$field6' has a skip flag enabled"
-                fi
-                if [ -n "$field5" ]; then
-                  case "$field5" in
-                    dependency)
-                      detail_json="$(kernel_event_detail serviceLifecycle --reason "$field4" --dependency "$field6")"
-                      ;;
-                    serviceName)
-                      detail_json="$(kernel_event_detail serviceLifecycle --reason "$field4" --service-name "$field6")"
-                      ;;
-                    missing)
-                      detail_json="$(kernel_event_detail serviceLifecycle --reason "$field4" --missing "$field6")"
-                      ;;
-                    *)
-                      echo "ERROR: unsupported event detail field '$field5'" >&2
-                      cleanup_workflow_serial_tmp
-                      return 1
-                      ;;
-                  esac
-                else
-                  detail_json="$(kernel_event_detail serviceLifecycle --reason "$field4")"
-                fi
-                append_event "$run_id" "$workflow_id" "$unit_task" "canceled" "$detail_json"
-                transition_unit="$unit_name"
-                transition_status="canceled"
-                transition_exit_code=""
-                transition_reason="$field4"
-                transition_extra_key="$field5"
-                transition_extra_value="$field6"
-                ;;
-              done)
-                workflow_status="''${unit_name:-0}"
-                cleanup_workflow_serial_tmp
-                return "$workflow_status"
-                ;;
-              *)
-                echo "ERROR: unsupported workflow serial action '$action_kind'"
-                cleanup_workflow_serial_tmp
-                return 1
-                ;;
-            esac
-          done
+          shift 2
+          run_workflow_kernel_impl "$run_id" "$workflow_id" "0" "1" "$@"
         }
 
         run_workflow_parallel_impl() {
           local run_id="$1"
           local workflow_id="$2"
-          local fail_fast="$3"
-          shift 3
-          local -a passthrough_args
-          passthrough_args=("$@")
-
+          shift 2
           local max_workers
-          local lock_policy
-          local workflow_status=0
-          local skipped_services_file=""
-          local state_file=""
-          local action_line=""
-          local action_kind=""
-          local unit_name=""
-          local unit_task=""
-          local field4=""
-          local field5=""
-          local field6=""
-          local field7=""
-          local detail_json=""
-          local transition_unit=""
-          local transition_status=""
-          local transition_exit_code=""
-          local transition_reason=""
-          local transition_extra_key=""
-          local transition_extra_value=""
-          local pid=""
-          local had_cancel_signals=0
-          local done_pid=""
-          local wait_rc=0
-          local done_unit=""
-          cleanup_workflow_parallel_tmp() {
-            rm -f "$skipped_services_file" "$state_file"
-          }
-
-          local -A UNIT_PID
-          local -A PID_UNIT
-          local -A UNIT_TASK
-          local -A UNIT_PRODUCES_JSON
-          local -A UNIT_CANCEL_REQUESTED
 
           if max_workers="$(resolve_effective_max_workers "$workflow_id")"; then
             :
           else
             return "$?"
           fi
-          skipped_services_file="$(mktemp "''${TMPDIR:-/tmp}/nixfied-workflow-parallel-skipped.XXXXXX")" || {
-            echo "ERROR: failed to create workflow parallel skipped-services temp file"
-            return 1
-          }
-          state_file="$(mktemp "''${TMPDIR:-/tmp}/nixfied-workflow-parallel-state.XXXXXX")" || {
-            rm -f "$skipped_services_file"
-            echo "ERROR: failed to create workflow parallel state temp file"
-            return 1
-          }
 
-          if ! write_skipped_services_file "$skipped_services_file"; then
-            cleanup_workflow_parallel_tmp
-            return 1
-          fi
-
-          if ! ${kernelPackage}/bin/nixfied-kernel workflow parallel-init \
-            ${pkgs.lib.escapeShellArg (builtins.toString workflowSchedulerPlanFile)} \
-            "$skipped_services_file" \
-            "$workflow_id" \
-            "$fail_fast" \
-            "$max_workers" \
-            "$state_file" \
-            >/dev/null; then
-            cleanup_workflow_parallel_tmp
-            return 1
-          fi
-
-          while true; do
-            had_cancel_signals=0
-            while true; do
-              action_line="$(${kernelPackage}/bin/nixfied-kernel workflow parallel-step \
-                "$state_file" \
-                "$transition_unit" \
-                "$transition_status" \
-                "$transition_exit_code" \
-                "$transition_reason" \
-                "$transition_extra_key" \
-                "$transition_extra_value")" || {
-                cleanup_workflow_parallel_tmp
-                return 1
-              }
-              transition_unit=""
-              transition_status=""
-              transition_exit_code=""
-              transition_reason=""
-              transition_extra_key=""
-              transition_extra_value=""
-              IFS=$'\x1f' read -r action_kind unit_name unit_task field4 field5 field6 field7 <<< "$action_line"
-
-              case "$action_kind" in
-                start)
-                  detail_json="$(kernel_event_detail slotLifecycle --mode "task")"
-                  append_event "$run_id" "$workflow_id" "$unit_task" "queued" "$detail_json"
-                  append_event "$run_id" "$workflow_id" "$unit_task" "running" "$detail_json"
-
-                  if [ "''${#passthrough_args[@]}" -gt 0 ]; then
-                    parallel_run_unit_wrapper "$unit_task" "$workflow_id" "$field4" "''${passthrough_args[@]}" &
-                  else
-                    parallel_run_unit_wrapper "$unit_task" "$workflow_id" "$field4" &
-                  fi
-                  pid="$!"
-
-                  UNIT_PID[$unit_name]="$pid"
-                  PID_UNIT[$pid]="$unit_name"
-                  UNIT_TASK[$unit_name]="$unit_task"
-                  UNIT_PRODUCES_JSON[$unit_name]="$field5"
-                  UNIT_CANCEL_REQUESTED[$unit_name]=0
-
-                  transition_unit="$unit_name"
-                  transition_status="started"
-                  transition_exit_code=""
-                  transition_reason=""
-                  transition_extra_key=""
-                  transition_extra_value=""
-                  ;;
-                cancel)
-                  if [ "$field4" = "service-skipped" ]; then
-                    echo "SKIP: task '$unit_task' (service '$field6') is skipped because service '$field6' has a skip flag enabled"
-                  fi
-                  if [ -n "$field5" ]; then
-                    case "$field5" in
-                      dependency)
-                        detail_json="$(kernel_event_detail serviceLifecycle --reason "$field4" --dependency "$field6")"
-                        ;;
-                      serviceName)
-                        detail_json="$(kernel_event_detail serviceLifecycle --reason "$field4" --service-name "$field6")"
-                        ;;
-                      missing)
-                        detail_json="$(kernel_event_detail serviceLifecycle --reason "$field4" --missing "$field6")"
-                        ;;
-                      *)
-                        echo "ERROR: unsupported event detail field '$field5'" >&2
-                        cleanup_workflow_parallel_tmp
-                        return 1
-                        ;;
-                    esac
-                  else
-                    detail_json="$(kernel_event_detail serviceLifecycle --reason "$field4")"
-                  fi
-                  append_event "$run_id" "$workflow_id" "$unit_task" "canceled" "$detail_json"
-                  transition_unit="$unit_name"
-                  transition_status="canceled"
-                  transition_exit_code=""
-                  transition_reason="$field4"
-                  transition_extra_key="$field5"
-                  transition_extra_value="$field6"
-                  ;;
-                signal-running)
-                  pid="''${UNIT_PID[$unit_name]:-}"
-                  if [ -n "$pid" ]; then
-                    UNIT_CANCEL_REQUESTED[$unit_name]=1
-                    kill -TERM "$pid" 2>/dev/null || true
-                    had_cancel_signals=1
-                  fi
-                  transition_unit="$unit_name"
-                  transition_status="signal-sent"
-                  transition_exit_code=""
-                  transition_reason=""
-                  transition_extra_key=""
-                  transition_extra_value=""
-                  ;;
-                wait)
-                  break
-                  ;;
-                done)
-                  workflow_status="''${unit_name:-0}"
-                  cleanup_workflow_parallel_tmp
-                  return "$workflow_status"
-                  ;;
-                *)
-                  echo "ERROR: unsupported workflow parallel action '$action_kind'"
-                  cleanup_workflow_parallel_tmp
-                  return 1
-                  ;;
-              esac
-            done
-
-            if [ "$had_cancel_signals" -eq 1 ]; then
-              sleep "$NIXFIED_RETRY_INTERVAL_DEFAULT"
-              for pid in "''${!PID_UNIT[@]}"; do
-                if kill -0 "$pid" 2>/dev/null; then
-                  parallel_signal_pid_lines KILL "$(parallel_process_tree_pids "$pid" | ${pkgs.coreutils}/bin/tac)"
-                fi
-              done
-            fi
-
-            if [ "''${#PID_UNIT[@]}" -eq 0 ]; then
-              echo "ERROR: parallel runner reached wait state without running units"
-              cleanup_workflow_parallel_tmp
-              return 1
-            fi
-
-            if wait -n -p done_pid; then
-              wait_rc=0
-            else
-              wait_rc="$?"
-            fi
-
-            done_unit="''${PID_UNIT[$done_pid]:-}"
-            if [ -z "$done_unit" ]; then
-              continue
-            fi
-
-            unset "PID_UNIT[$done_pid]"
-            unset "UNIT_PID[$done_unit]"
-
-            if [ "''${UNIT_CANCEL_REQUESTED[$done_unit]:-0}" = "1" ]; then
-              detail_json="$(kernel_event_detail serviceLifecycle --reason "fail-fast-running")"
-              append_event "$run_id" "$workflow_id" "''${UNIT_TASK[$done_unit]}" "canceled" "$detail_json"
-              transition_unit="$done_unit"
-              transition_status="canceled-running"
-              transition_exit_code="$wait_rc"
-              transition_reason="fail-fast-running"
-              transition_extra_key=""
-              transition_extra_value=""
-              continue
-            fi
-
-            if [ "$wait_rc" -eq 0 ]; then
-              detail_json="$(kernel_event_detail slotLifecycle --produces-json "''${UNIT_PRODUCES_JSON[$done_unit]}")"
-              append_event "$run_id" "$workflow_id" "''${UNIT_TASK[$done_unit]}" "passed" "$detail_json"
-              transition_unit="$done_unit"
-              transition_status="passed"
-              transition_exit_code="0"
-              transition_reason=""
-              transition_extra_key=""
-              transition_extra_value=""
-            else
-              detail_json="$(kernel_event_detail slotLifecycle --exit-code "$wait_rc")"
-              append_event "$run_id" "$workflow_id" "''${UNIT_TASK[$done_unit]}" "failed" "$detail_json"
-              transition_unit="$done_unit"
-              transition_status="failed"
-              transition_exit_code="$wait_rc"
-              transition_reason=""
-              transition_extra_key=""
-              transition_extra_value=""
-            fi
-          done
-        }
-
-        run_workflow_phase_tasks() {
-          local run_id="$1"
-          local workflow_id="$2"
-          local phase_key="$3"
-          shift 3
-          local -a passthrough_args
-          passthrough_args=("$@")
-
-          local phase_task
-          local phase_status=0
-
-          while IFS= read -r phase_task; do
-            local phase_task_skip_service
-            local phase_skip_detail
-            local phase_task_selected_services_csv=""
-
-            if [ -z "$phase_task" ]; then
-              continue
-            fi
-
-            case "$phase_task" in
-              task.ops.ready|task.ops.health)
-                phase_task_selected_services_csv="$(
-                  workflow_unit_closure_selected_services "$workflow_id" | selected_services_csv_from_lines
-                )"
-                ;;
-            esac
-
-            phase_task_skip_service="$(task_first_skipped_required_service "$phase_task" || true)"
-            if [ -n "$phase_task_skip_service" ]; then
-              phase_skip_detail="$(kernel_event_detail serviceLifecycle --reason "service-skipped" --service-name "$phase_task_skip_service")"
-              append_event "$run_id" "$workflow_id" "$phase_task" "canceled" "$phase_skip_detail"
-              echo "SKIP: task '$phase_task' (service '$phase_task_skip_service') is skipped because service '$phase_task_skip_service' has a skip flag enabled"
-              continue
-            fi
-
-            if [ "$phase_task" = "task.ops.ready" ] || [ "$phase_task" = "task.ops.health" ]; then
-              if [ "''${#passthrough_args[@]}" -gt 0 ]; then
-                if NIXFIED_SELECTED_SERVICES_CSV_OVERRIDE="$phase_task_selected_services_csv" execute_task "$run_id" "$workflow_id" "$phase_task" "''${passthrough_args[@]}"; then
-                  phase_status=0
-                else
-                  phase_status="$?"
-                  break
-                fi
-              elif NIXFIED_SELECTED_SERVICES_CSV_OVERRIDE="$phase_task_selected_services_csv" execute_task "$run_id" "$workflow_id" "$phase_task"; then
-                phase_status=0
-              else
-                phase_status="$?"
-                break
-              fi
-            elif [ "''${#passthrough_args[@]}" -gt 0 ] && execute_task "$run_id" "$workflow_id" "$phase_task" "''${passthrough_args[@]}"; then
-              phase_status=0
-            elif execute_task "$run_id" "$workflow_id" "$phase_task"; then
-              phase_status=0
-            else
-              phase_status="$?"
-              break
-            fi
-          done < <(workflow_phase_tasks "$workflow_id" "$phase_key")
-
-          return "$phase_status"
-        }
-
-        run_workflow_phase_service_sets() {
-          local run_id="$1"
-          local workflow_id="$2"
-          local phase_key="$3"
-          local phase_status=0
-          local phase_entry_tsv=""
-          local service_set_id=""
-          local service_set_name=""
-          local operation=""
-          local phase_entry_id=""
-          local selected_services_csv=""
-          local phase_detail=""
-          local failure_detail=""
-          local program_path=""
-
-          while IFS=$'\t' read -r service_set_id service_set_name operation selected_services_csv; do
-            if [ -z "$service_set_id" ]; then
-              continue
-            fi
-
-            phase_entry_id="''${service_set_id}:''${operation}"
-            phase_detail="$(workflow_phase_service_set_detail_json "$phase_key" "$service_set_id" "$service_set_name" "$operation")"
-
-            program_path="$(workflow_phase_service_set_program "$service_set_id" "$operation" || true)"
-            if [ -z "$program_path" ]; then
-              echo "ERROR: missing service-set program serviceSetId=$service_set_id operation=$operation" >&2
-              append_event "$run_id" "$workflow_id" "$phase_entry_id" "failed" "$phase_detail"
-              phase_status=1
-              break
-            fi
-
-            append_event "$run_id" "$workflow_id" "$phase_entry_id" "queued" "$phase_detail"
-            append_event "$run_id" "$workflow_id" "$phase_entry_id" "running" "$phase_detail"
-
-            if NIXFIED_SELECTED_SERVICES_CSV="$selected_services_csv" "$program_path"; then
-              append_event "$run_id" "$workflow_id" "$phase_entry_id" "passed" "$phase_detail"
-              phase_status=0
-            else
-              phase_status="$?"
-              failure_detail="$(workflow_phase_service_set_failure_json "$phase_key" "$service_set_id" "$service_set_name" "$operation" "$phase_status")"
-              append_event "$run_id" "$workflow_id" "$phase_entry_id" "failed" "$failure_detail"
-              break
-            fi
-          done < <(workflow_phase_service_sets "$workflow_id" "$phase_key")
-
-          return "$phase_status"
-        }
-
-        run_workflow_phase() {
-          local run_id="$1"
-          local workflow_id="$2"
-          local phase_key="$3"
-          shift 3
-          local -a passthrough_args
-          passthrough_args=("$@")
-
-          if [ "$phase_key" = "preRun" ]; then
-            if run_workflow_phase_service_sets "$run_id" "$workflow_id" "$phase_key"; then
-              run_workflow_phase_tasks "$run_id" "$workflow_id" "$phase_key" "''${passthrough_args[@]}"
-            else
-              return "$?"
-            fi
-          else
-            if run_workflow_phase_tasks "$run_id" "$workflow_id" "$phase_key" "''${passthrough_args[@]}"; then
-              run_workflow_phase_service_sets "$run_id" "$workflow_id" "$phase_key"
-            else
-              return "$?"
-            fi
-          fi
+          run_workflow_kernel_impl "$run_id" "$workflow_id" "1" "$max_workers" "$@"
         }
 
         is_nonneg_int() {
@@ -2194,10 +1678,6 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           export NIXFIED_RUN_ID="$run_id"
           export NIXFIED_ATTEMPT_ID="$attempt_id"
 
-          detail_json="$(kernel_event_detail slotLifecycle --mode "workflow" --suffix-reason "$RUN_SUFFIX_REASON")"
-          append_event "$run_id" "$workflow_id" "" "queued" "$detail_json"
-
-          fail_fast="$(workflow_fail_fast "$workflow_id")"
           run_parallel="$(resolve_parallel_mode "$workflow_id")"
           if [ "$run_parallel" = "1" ]; then
             local parallel_cap_error=""
@@ -2207,46 +1687,18 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
             fi
           fi
 
-          if run_workflow_phase "$run_id" "$workflow_id" "preRun" "''${passthrough_args[@]}"; then
-            status=0
-          else
-            status="$?"
-          fi
-
-          if [ "$status" -eq 0 ]; then
-            if [ "$run_parallel" = "1" ]; then
-              if run_workflow_parallel_impl "$run_id" "$workflow_id" "$fail_fast" "''${passthrough_args[@]}"; then
-                status=0
-              else
-                status="$?"
-              fi
+          if [ "$run_parallel" = "1" ]; then
+            if run_workflow_parallel_impl "$run_id" "$workflow_id" "''${passthrough_args[@]}"; then
+              status=0
             else
-              if run_workflow_serial_impl "$run_id" "$workflow_id" "$fail_fast" "''${passthrough_args[@]}"; then
-                status=0
-              else
-                status="$?"
-              fi
+              status="$?"
             fi
-          fi
-
-          post_always="$(workflow_post_run_always "$workflow_id")"
-          if [ "$post_always" = "true" ] || [ "$status" -eq 0 ]; then
-            if run_workflow_phase "$run_id" "$workflow_id" "postRun" "''${passthrough_args[@]}"; then
-              post_status=0
-            else
-              post_status="$?"
-            fi
-
-            if [ "$post_status" -ne 0 ] && [ "$status" -eq 0 ]; then
-              status="$post_status"
-            fi
-          fi
-
-          if [ "$status" -eq 0 ]; then
-            append_event "$run_id" "$workflow_id" "" "passed" "$(kernel_event_detail slotLifecycle --mode "workflow")"
           else
-            detail_json="$(kernel_event_detail slotLifecycle --exit-code "$status")"
-            append_event "$run_id" "$workflow_id" "" "failed" "$detail_json"
+            if run_workflow_serial_impl "$run_id" "$workflow_id" "''${passthrough_args[@]}"; then
+              status=0
+            else
+              status="$?"
+            fi
           fi
 
           duration_seconds="$(( $(date +%s) - started_epoch ))"
@@ -2310,7 +1762,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
         main() {
           if [ "$#" -lt 1 ]; then
-            echo "ERROR: usage: nixfied-executor <run-task|run-workflow> ..."
+            echo "ERROR: usage: nixfied-executor <run-task|run-workflow|run-task-leaf|run-service-set-phase> ..."
             exit "$NIXFIED_EXIT_USAGE"
           fi
 
@@ -2323,6 +1775,12 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
               ;;
             run-workflow)
               run_workflow "$@"
+              ;;
+            run-task-leaf)
+              run_task_leaf "$@"
+              ;;
+            run-service-set-phase)
+              run_service_set_phase "$@"
               ;;
             *)
               echo "ERROR: unknown subcommand '$subcommand'"

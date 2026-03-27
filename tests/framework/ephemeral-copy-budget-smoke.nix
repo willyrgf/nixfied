@@ -5,6 +5,7 @@
   registry,
 }:
 let
+  withRuntimeMetadata = import ./lib/with-runtime-metadata.nix { inherit pkgs; };
   baseTask = model.tasks."task.ci.quality";
 
   okTaskId = "task.test.ephemeral.copy-budget.ok";
@@ -78,39 +79,45 @@ let
     ];
   };
 
-  minFreeModel = model // {
-    runtime = model.runtime // {
-      ephemeral = (model.runtime.ephemeral or { }) // {
-        copyMode = "static-excludes";
-        keepFailures = false;
-        maxCopyBytes = 0;
-        minFreeBytesAfterCopy = 9223372036854775807;
+  minFreeModel = withRuntimeMetadata (
+    model
+    // {
+      runtime = model.runtime // {
+        ephemeral = (model.runtime.ephemeral or { }) // {
+          copyMode = "static-excludes";
+          keepFailures = false;
+          maxCopyBytes = 0;
+          minFreeBytesAfterCopy = 9223372036854775807;
+        };
       };
-    };
-    tasks = model.tasks // {
-      ${okTaskId} = okTask;
-    };
-    workflows = model.workflows // {
-      ${okWorkflowId} = okWorkflow;
-    };
-  };
+      tasks = model.tasks // {
+        ${okTaskId} = okTask;
+      };
+      workflows = model.workflows // {
+        ${okWorkflowId} = okWorkflow;
+      };
+    }
+  );
 
-  maxCopyModel = model // {
-    runtime = model.runtime // {
-      ephemeral = (model.runtime.ephemeral or { }) // {
-        copyMode = "static-excludes";
-        keepFailures = false;
-        maxCopyBytes = 1;
-        minFreeBytesAfterCopy = 0;
+  maxCopyModel = withRuntimeMetadata (
+    model
+    // {
+      runtime = model.runtime // {
+        ephemeral = (model.runtime.ephemeral or { }) // {
+          copyMode = "static-excludes";
+          keepFailures = false;
+          maxCopyBytes = 1;
+          minFreeBytesAfterCopy = 0;
+        };
       };
-    };
-    tasks = model.tasks // {
-      ${okTaskId} = okTask;
-    };
-    workflows = model.workflows // {
-      ${okWorkflowId} = okWorkflow;
-    };
-  };
+      tasks = model.tasks // {
+        ${okTaskId} = okTask;
+      };
+      workflows = model.workflows // {
+        ${okWorkflowId} = okWorkflow;
+      };
+    }
+  );
 
   orchestratorMinFree = import ../../nixfied/framework/runtime/orchestrator.nix {
     inherit

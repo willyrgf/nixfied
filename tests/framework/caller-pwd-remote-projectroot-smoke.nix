@@ -5,6 +5,7 @@
   registry,
 }:
 let
+  withRuntimeMetadata = import ./lib/with-runtime-metadata.nix { inherit pkgs; };
   baseTask = model.tasks."task.ci.quality";
 
   probeTaskId = "task.test.caller-pwd.remote-projectroot";
@@ -25,11 +26,14 @@ let
     };
   };
 
-  probeModel = model // {
-    tasks = model.tasks // {
-      ${probeTaskId} = probeTask;
-    };
-  };
+  probeModel = withRuntimeMetadata (
+    model
+    // {
+      tasks = model.tasks // {
+        ${probeTaskId} = probeTask;
+      };
+    }
+  );
 
   executor = import ../../nixfied/framework/runtime/executor.nix {
     inherit

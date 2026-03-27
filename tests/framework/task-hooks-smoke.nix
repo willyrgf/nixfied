@@ -5,6 +5,7 @@
   registry,
 }:
 let
+  withRuntimeMetadata = import ./lib/with-runtime-metadata.nix { inherit pkgs; };
   baseTask = model.tasks."task.check";
 
   mkShellTask =
@@ -33,121 +34,124 @@ let
       };
     };
 
-  hooksModel = model // {
-    tasks = model.tasks // {
-      "task.test.hooks.order" = mkShellTask {
-        id = "task.test.hooks.order";
-        command = ''
-          set -euo pipefail
-          echo "main" >> "./order.log"
-        '';
-        preHooks = {
-          "01.first" = {
-            command = ''
-              set -euo pipefail
-              echo "pre-1" >> "./order.log"
-            '';
-          };
-          "02.second" = {
-            command = ''
-              set -euo pipefail
-              echo "pre-2" >> "./order.log"
-            '';
-          };
-        };
-        postHooks = {
-          "10.final" = {
-            command = ''
-              set -euo pipefail
-              echo "post" >> "./order.log"
-            '';
-          };
-        };
-      };
-
-      "task.test.hooks.main-fails" = mkShellTask {
-        id = "task.test.hooks.main-fails";
-        command = ''
-          set -euo pipefail
-          echo "main-fail" >> "./main-fails.log"
-          exit 9
-        '';
-        postHooks = {
-          "after.main" = {
-            command = ''
-              set -euo pipefail
-              echo "post-after-main-fail" >> "./main-fails.log"
-            '';
-          };
-        };
-      };
-
-      "task.test.hooks.post-fails" = mkShellTask {
-        id = "task.test.hooks.post-fails";
-        command = ''
-          set -euo pipefail
-          echo "main-ok" >> "./post-fails.log"
-        '';
-        postHooks = {
-          "broken.post" = {
-            command = ''
-              set -euo pipefail
-              echo "post-fail" >> "./post-fails.log"
-              exit 17
-            '';
-          };
-        };
-      };
-
-      "task.test.hooks.pre-fails" = mkShellTask {
-        id = "task.test.hooks.pre-fails";
-        command = ''
-          set -euo pipefail
-          echo "main-should-not-run" >> "./pre-fails.log"
-        '';
-        preHooks = {
-          "broken.pre" = {
-            command = ''
-              set -euo pipefail
-              echo "pre-fail" >> "./pre-fails.log"
-              exit 13
-            '';
-          };
-        };
-        postHooks = {
-          "should.not.run" = {
-            command = ''
-              set -euo pipefail
-              echo "post-should-not-run" >> "./pre-fails.log"
-            '';
-          };
-        };
-      };
-
-      "task.test.hooks.unsupported-runner" = baseTask // {
-        id = "task.test.hooks.unsupported-runner";
-        summary = "hooks unsupported runner";
-        description = "hooks unsupported runner";
-        runner = {
-          type = "workflowRef";
-          command = "";
-          package = null;
-          workflowId = "workflow.ci.full";
-        };
-        runtime = baseTask.runtime // {
+  hooksModel = withRuntimeMetadata (
+    model
+    // {
+      tasks = model.tasks // {
+        "task.test.hooks.order" = mkShellTask {
+          id = "task.test.hooks.order";
+          command = ''
+            set -euo pipefail
+            echo "main" >> "./order.log"
+          '';
           preHooks = {
-            "pre.hook" = {
+            "01.first" = {
               command = ''
                 set -euo pipefail
-                echo "should-not-run"
+                echo "pre-1" >> "./order.log"
+              '';
+            };
+            "02.second" = {
+              command = ''
+                set -euo pipefail
+                echo "pre-2" >> "./order.log"
               '';
             };
           };
-          postHooks = { };
+          postHooks = {
+            "10.final" = {
+              command = ''
+                set -euo pipefail
+                echo "post" >> "./order.log"
+              '';
+            };
+          };
+        };
+
+        "task.test.hooks.main-fails" = mkShellTask {
+          id = "task.test.hooks.main-fails";
+          command = ''
+            set -euo pipefail
+            echo "main-fail" >> "./main-fails.log"
+            exit 9
+          '';
+          postHooks = {
+            "after.main" = {
+              command = ''
+                set -euo pipefail
+                echo "post-after-main-fail" >> "./main-fails.log"
+              '';
+            };
+          };
+        };
+
+        "task.test.hooks.post-fails" = mkShellTask {
+          id = "task.test.hooks.post-fails";
+          command = ''
+            set -euo pipefail
+            echo "main-ok" >> "./post-fails.log"
+          '';
+          postHooks = {
+            "broken.post" = {
+              command = ''
+                set -euo pipefail
+                echo "post-fail" >> "./post-fails.log"
+                exit 17
+              '';
+            };
+          };
+        };
+
+        "task.test.hooks.pre-fails" = mkShellTask {
+          id = "task.test.hooks.pre-fails";
+          command = ''
+            set -euo pipefail
+            echo "main-should-not-run" >> "./pre-fails.log"
+          '';
+          preHooks = {
+            "broken.pre" = {
+              command = ''
+                set -euo pipefail
+                echo "pre-fail" >> "./pre-fails.log"
+                exit 13
+              '';
+            };
+          };
+          postHooks = {
+            "should.not.run" = {
+              command = ''
+                set -euo pipefail
+                echo "post-should-not-run" >> "./pre-fails.log"
+              '';
+            };
+          };
+        };
+
+        "task.test.hooks.unsupported-runner" = baseTask // {
+          id = "task.test.hooks.unsupported-runner";
+          summary = "hooks unsupported runner";
+          description = "hooks unsupported runner";
+          runner = {
+            type = "workflowRef";
+            command = "";
+            package = null;
+            workflowId = "workflow.ci.full";
+          };
+          runtime = baseTask.runtime // {
+            preHooks = {
+              "pre.hook" = {
+                command = ''
+                  set -euo pipefail
+                  echo "should-not-run"
+                '';
+              };
+            };
+            postHooks = { };
+          };
         };
       };
-    };
-  };
+    }
+  );
 
   executor = import ../../nixfied/framework/runtime/executor.nix {
     inherit

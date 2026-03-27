@@ -735,47 +735,41 @@ let
       return 0
     }
 
-    _nixfied_contract_source_exports() {
-      local export_file="$1"
-      if [ ! -f "$export_file" ]; then
-        _nixfied_contract_err "kernel export file missing path=$export_file"
+    _nixfied_contract_eval_exports() {
+      local export_text="$1"
+
+      if [ -z "$export_text" ]; then
+        _nixfied_contract_err "kernel export stream is empty"
         return 1
       fi
-      # shellcheck source=/dev/null
-      source "$export_file"
-      return 0
+
+      eval "$export_text"
     }
 
     nixfied_contract_validate_env() {
       local contract_file="''${1:-}"
-      local export_file=""
+      local export_text=""
 
       _nixfied_contract_load_runtime_plan "$contract_file" || return 2
-      export_file="$(mktemp "''${TMPDIR:-/tmp}/nixfied-contract-env.XXXXXX")" || return 1
-      if "$NIXFIED_CONTRACT_KERNEL" validate-input "$NIXFIED_CONTRACT_PLAN_FILE" env "$export_file" >/dev/null; then
-        _nixfied_contract_source_exports "$export_file"
+      if export_text="$("$NIXFIED_CONTRACT_KERNEL" validate-input "$NIXFIED_CONTRACT_PLAN_FILE" env)"; then
+        _nixfied_contract_eval_exports "$export_text"
       else
-        rm -f "$export_file"
         return 2
       fi
-      rm -f "$export_file"
       return 0
     }
 
     nixfied_contract_validate_args() {
       local contract_file="''${1:-}"
       shift || true
-      local export_file=""
+      local export_text=""
 
       _nixfied_contract_load_runtime_plan "$contract_file" || return 2
-      export_file="$(mktemp "''${TMPDIR:-/tmp}/nixfied-contract-args.XXXXXX")" || return 1
-      if "$NIXFIED_CONTRACT_KERNEL" validate-input "$NIXFIED_CONTRACT_PLAN_FILE" args "$export_file" -- "$@" >/dev/null; then
-        _nixfied_contract_source_exports "$export_file"
+      if export_text="$("$NIXFIED_CONTRACT_KERNEL" validate-input "$NIXFIED_CONTRACT_PLAN_FILE" args -- "$@")"; then
+        _nixfied_contract_eval_exports "$export_text"
       else
-        rm -f "$export_file"
         return 2
       fi
-      rm -f "$export_file"
       return 0
     }
 

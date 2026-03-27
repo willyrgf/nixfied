@@ -30,6 +30,11 @@ pub(crate) fn write_text_atomic(path: &str, contents: &str) -> Result<(), String
 }
 
 pub(crate) fn write_shell_exports(path: &str, values: &[(String, String)]) -> Result<(), String> {
+    let rendered = render_shell_exports(values);
+    write_text_atomic(path, &rendered)
+}
+
+pub(crate) fn render_shell_exports(values: &[(String, String)]) -> String {
     let mut rendered = String::new();
     for (key, value) in values {
         rendered.push_str("export ");
@@ -38,7 +43,7 @@ pub(crate) fn write_shell_exports(path: &str, values: &[(String, String)]) -> Re
         rendered.push_str(&shell_quote(value));
         rendered.push('\n');
     }
-    write_text_atomic(path, &rendered)
+    rendered
 }
 
 pub(crate) fn shell_quote(value: &str) -> String {

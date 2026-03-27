@@ -6,25 +6,27 @@
   projectRoot ? ../../..,
 }:
 let
+  withRuntimeMetadata = import ./with-runtime-metadata.nix { inherit pkgs; };
   shellHelpers = import ./shell-helpers.nix { inherit pkgs; };
+  harnessModel = withRuntimeMetadata model;
   executor = import ../../../nixfied/framework/runtime/executor.nix {
     inherit
       pkgs
-      model
       services
       registry
       projectRoot
       ;
+    model = harnessModel;
   };
 
   orchestrator = import ../../../nixfied/framework/runtime/orchestrator.nix {
     inherit
       pkgs
-      model
       services
       registry
       projectRoot
       ;
+    model = harnessModel;
   };
 in
 {

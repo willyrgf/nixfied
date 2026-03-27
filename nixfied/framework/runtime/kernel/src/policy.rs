@@ -10,9 +10,9 @@ pub(crate) fn service_policy_command(subcommand: &str, values: &[String]) -> Res
 }
 
 pub(crate) fn service_policy_runtime_event_command(values: &[String]) -> Result<(), String> {
-    if values.len() != 5 {
+    if values.len() != 4 {
         return Err(
-            "usage: nixfied-kernel service-policy runtime-event <reuse-policy|empty> <owner-scope|empty> <discovery-scope|empty> <ephemeral-flag> <export-file>"
+            "usage: nixfied-kernel service-policy runtime-event <reuse-policy|empty> <owner-scope|empty> <discovery-scope|empty> <ephemeral-flag>"
                 .to_string(),
         );
     }
@@ -59,22 +59,21 @@ pub(crate) fn service_policy_runtime_event_command(values: &[String]) -> Result<
         false,
         false,
     )?;
-    write_shell_exports(
-        &values[4],
-        &[
+    print!(
+        "{}",
+        render_shell_exports(&[
             ("OWNER_SCOPE".to_string(), resolved_owner),
             ("DISCOVERY_SCOPE".to_string(), resolved_discovery),
             ("REUSE_POLICY".to_string(), resolved_reuse),
-        ],
-    )?;
-    println!("OK: service-policy runtime-event");
+        ])
+    );
     Ok(())
 }
 
 pub(crate) fn service_policy_start_service_command(values: &[String]) -> Result<(), String> {
-    if values.len() != 4 {
+    if values.len() != 3 {
         return Err(
-            "usage: nixfied-kernel service-policy start-service <reuse-policy|empty> <owner-scope|empty> <discovery-scope|empty> <export-file>"
+            "usage: nixfied-kernel service-policy start-service <reuse-policy|empty> <owner-scope|empty> <discovery-scope|empty>"
                 .to_string(),
         );
     }
@@ -116,23 +115,22 @@ pub(crate) fn service_policy_start_service_command(values: &[String]) -> Result<
         &resolved_owner,
         &resolved_discovery,
     )?;
-    write_shell_exports(
-        &values[3],
-        &[
+    print!(
+        "{}",
+        render_shell_exports(&[
             ("OWNER_SCOPE".to_string(), resolved_owner),
             ("DISCOVERY_SCOPE".to_string(), resolved_discovery),
             ("REUSE_POLICY".to_string(), resolved_reuse),
             ("REGISTER_CLEANUP".to_string(), register_cleanup),
-        ],
-    )?;
-    println!("OK: service-policy start-service");
+        ])
+    );
     Ok(())
 }
 
 pub(crate) fn service_policy_fixture_keep_running_command(values: &[String]) -> Result<(), String> {
-    if values.len() != 4 {
+    if values.len() != 3 {
         return Err(
-            "usage: nixfied-kernel service-policy fixture-keep-running <owner-scope|empty> <reuse-policy|empty> <discovery-scope|empty> <export-file>"
+            "usage: nixfied-kernel service-policy fixture-keep-running <owner-scope|empty> <reuse-policy|empty> <discovery-scope|empty>"
                 .to_string(),
         );
     }
@@ -143,8 +141,10 @@ pub(crate) fn service_policy_fixture_keep_running_command(values: &[String]) -> 
     let keep_running =
         service_policy_fixture_keep_running(owner_scope, reuse_policy, discovery_scope)?;
 
-    write_shell_exports(&values[3], &[("KEEP_RUNNING".to_string(), keep_running)])?;
-    println!("OK: service-policy fixture-keep-running");
+    print!(
+        "{}",
+        render_shell_exports(&[("KEEP_RUNNING".to_string(), keep_running)])
+    );
     Ok(())
 }
 
