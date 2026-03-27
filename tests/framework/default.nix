@@ -241,6 +241,26 @@ let
       covers = [ "runtime.app-execution-manifests" ];
     };
 
+    "helpers-runtime-contract" = {
+      layer = "adapter";
+      proofKind = "contract";
+    };
+
+    "runtime-events-contract" = {
+      layer = "adapter";
+      proofKind = "contract";
+    };
+
+    "registry-helper-contract" = {
+      layer = "migration";
+      proofKind = "guard";
+    };
+
+    "service-api-surface-contract" = {
+      layer = "migration";
+      proofKind = "guard";
+    };
+
     "launcher-surface-contract" = { };
 
     "framework-utility-launcher-contract" = { };
