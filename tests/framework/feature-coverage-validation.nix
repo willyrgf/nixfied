@@ -64,6 +64,7 @@ let
     || !builtins.elem proofKind validProofKinds
     || !builtins.isBool canonical
     || !builtins.isList covers
+    || (canonical && covers == [ ])
     || !builtins.isList ownerFiles
     || ownerFiles == [ ]
     || builtins.any (path: !builtins.pathExists "${safeRepoRoot}/${path}") ownerFiles
