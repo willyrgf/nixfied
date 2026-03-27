@@ -656,6 +656,236 @@ Expected result:
 - the repository protects the new layer model rather than the old one
 - future changes are pushed toward the simplified architecture
 
+## Follow-On Step: Realign The Test Suite To The New Layer Model
+
+The runtime-layer collapse is not the last step.
+
+The next step should be to reorganize the framework test suite around the target architecture rather than around the shell-heavy implementation this RFC is deleting.
+
+This matters for the same reason the runtime refactor matters:
+
+- tests are part of the framework's repeated seam tax
+- tests should stop freezing internal control layers once those layers are deleted
+- confidence should move to the layer that owns the meaning, not stay concentrated in adapter glue
+
+The suite should prove the architecture described in this RFC:
+
+- Nix owns compile-time selection and immutable runtime data
+- the kernel owns runtime semantics
+- shell owns only thin process-edge adapter behavior
+- end-to-end checks protect public behavior rather than internal control flow shape
+
+### Target Test Layers
+
+The long-term suite should be organized around five proof layers.
+
+1. Compile and model proofs
+
+- compiler passes
+- graph pruning and selection
+- help and app surfaces
+- service descriptors and compile-time contracts
+- model invariants that should fail before runtime exists
+
+2. Runtime manifest proofs
+
+- the compiled runtime manifest family
+- selected app and workflow manifests
+- runtime service-selection data
+- manifest invariants and fixture snapshots for canonical surfaces
+
+3. Kernel semantic proofs
+
+- workflow scheduling and transitions
+- run-record state transitions
+- registry replay and status projection
+- summary composition
+- validation and contract behavior
+- run-id and machine-output rules
+
+4. Thin shell adapter proofs
+
+- argument forwarding
+- environment bootstrapping
+- signal forwarding at process edges
+- launcher behavior
+- shell-native launch and service-hook edges
+
+5. End-to-end public behavior proofs
+
+- `nix run .#<cmd>` contracts
+- service selection and service-set behavior
+- stop controls
+- isolation
+- install and upgrade flows
+- self-host behavior
+- registry and summary user-facing guarantees
+
+Migration guards are still useful, but they should not be a primary proof layer.
+
+They should remain a narrow temporary bucket whose job is:
+
+- prevent deleted seams from returning
+- fail loudly if the repository slides back toward the old layer model
+
+### Test Metadata Direction
+
+The current `covers = [ ... ]` metadata is useful but too coarse.
+
+The suite should move to stronger proof metadata such as:
+
+- `layer`
+- `proofKind`
+- `canonical`
+- `covers`
+- `ownerFiles`
+
+Direction:
+
+- every required feature should have exactly one canonical proof at the correct architectural layer
+- non-canonical proofs may still cover the same feature, but they should be supplemental rather than the basis of ownership
+- feature coverage validation should fail if a required feature is covered only by the wrong layer or only by a non-canonical proof
+
+Suggested layer values:
+
+- `compile`
+- `manifest`
+- `kernel`
+- `adapter`
+- `e2e`
+- `migration`
+
+Suggested proof kinds:
+
+- `contract`
+- `fixture`
+- `unit`
+- `integration`
+- `smoke`
+- `guard`
+
+### Implementation Plan
+
+This follow-on should land as another forward-only sequence.
+
+### Phase 1: Introduce Architectural Test Metadata
+
+Goal:
+
+- classify existing checks by the layer they are supposed to prove
+
+Actions:
+
+- extend framework check metadata to record `layer`, `proofKind`, and `canonical`
+- update feature coverage validation to require canonical coverage at the intended layer
+- keep `covers` as the feature list, but stop treating it as the only ownership signal
+
+Expected result:
+
+- the suite can distinguish "this feature is mentioned somewhere" from "this feature is proven at the right boundary"
+
+### Phase 2: Add Runtime Manifest Fixture Proofs
+
+Goal:
+
+- move metadata confidence out of shell source-shape tests and into runtime manifest fixtures
+
+Actions:
+
+- add canonical fixture tests for selected app and workflow manifests
+- validate stable manifest invariants directly against compiled runtime data
+- prefer invariant-based fixtures over giant unstructured snapshots
+
+Expected result:
+
+- the suite proves commit 1 style runtime-manifest ownership directly
+- shell source grep checks stop carrying manifest confidence they should not own
+
+### Phase 3: Move Semantic Coverage Into Kernel-Native Tests
+
+Goal:
+
+- make the kernel the main proof location for runtime semantics it owns
+
+Actions:
+
+- add Rust `#[test]` coverage for workflow scheduling, run-record transitions, registry replay, summary composition, validation, and run-id rules
+- use table-driven tests wherever possible
+- keep only a small number of shell or end-to-end checks per behavior family once kernel tests exist
+
+Expected result:
+
+- semantic regressions fail in the kernel test suite first
+- shell smokes no longer have to prove scheduler internals or registry state-machine details indirectly
+
+### Phase 4: Reduce Shell Tests To Adapter Proofs
+
+Goal:
+
+- stop using shell tests as the main location for runtime meaning
+
+Actions:
+
+- keep shell checks focused on arg forwarding, env forwarding, launch edges, and signal cleanup
+- delete or shrink shell tests that freeze manifest semantics, scheduler logic, or kernel-owned state transitions
+- treat broad source-shape checks as temporary migration guards only
+
+Expected result:
+
+- shell tests become smaller, faster, and more stable
+- the suite matches the shell role defined in this RFC
+
+### Phase 5: Add Service Extractability Proofs
+
+Goal:
+
+- turn service extractability into an executable architectural test
+
+Actions:
+
+- define the public service descriptor and operation surfaces the framework is allowed to consume
+- add per-service checks that the framework depends only on those public surfaces
+- make service API checks fail if generic runtime code starts depending on service-internal layout again
+
+Expected result:
+
+- service boundaries become a tested architectural property rather than a design principle only
+
+### Phase 6: Recut Framework Test Shards Around Ownership
+
+Goal:
+
+- align `framework::test` with failure ownership instead of current operational buckets
+
+Actions:
+
+- reorganize shards around `compile`, `manifest`, `kernel`, `adapters`, `services`, `e2e`, and `migration`
+- keep `services` as a practical shard even though service proofs may span multiple architectural layers
+- run `compile`, `manifest`, `kernel`, and `adapters` on every PR
+- reserve `services` and heavier `e2e` proofs for full CI or scheduled runs where appropriate
+
+Expected result:
+
+- faster feedback on ownership regressions
+- clearer routing of failures to the layer that should fix them
+
+### Initial Migration Direction For The Current Suite
+
+The existing suite already has useful raw material.
+
+The first migration pass should treat current checks roughly like this:
+
+- compile and model: `compiler-validation`, `package-output-contract`, `project-config-boundary`, `no-legacy-project-modules`, `operations-contract`
+- manifest: `selected-app-manifest-contract`, `workflow-ref-app-manifest-contract`, `runtime-service-selection-contract`, plus new manifest fixture tests
+- kernel: current workflow, registry, summary, validation, runtime-event, and run-id checks should progressively move behind Rust tests, leaving only a small number of end-to-end proofs
+- adapter: `launcher-surface-contract`, `runtime-control-launcher-contract`, `orchestrator-arg-forwarding-smoke`, `orchestrator-signal-cleanup-smoke`, `shell-contract-contract`, and similar launch-edge proofs
+- end-to-end: service selection, stop controls, isolation, install and upgrade, self-host, and a small number of lifecycle matrix checks
+- migration: `contract-migration-guard` plus narrowly-scoped "deleted seam must not return" checks
+
+This mapping is a migration aid, not a promise that current file names or boundaries are final.
+
+The point is to move proof ownership toward the layer model, then delete checks that exist only because the old seams once existed.
+
 ## What This RFC Is Not
 
 This RFC does not propose:

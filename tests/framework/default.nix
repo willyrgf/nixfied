@@ -27,12 +27,76 @@ let
   modelExportProperties = modelExportSchema.properties or { };
 
   defaultCheckKind = name: if lib.hasInfix "smoke" name then "smoke" else "contract";
+  defaultCheckLayer =
+    name: kind:
+    if name == "contract-migration-guard" || name == "workflow-modes-contract" then
+      "migration"
+    else if
+      lib.hasInfix "manifest" name
+      || name == "runtime-service-selection-contract"
+      || name == "service-set-surface-contract"
+    then
+      "manifest"
+    else if
+      lib.hasInfix "launcher" name
+      || lib.hasInfix "dispatcher-help" name
+      || lib.hasInfix "shell-contract" name
+      || lib.hasInfix "arg-forwarding" name
+      || lib.hasInfix "signal-cleanup" name
+      || lib.hasInfix "service-hook" name
+    then
+      "adapter"
+    else if
+      lib.hasInfix "workflow-" name
+      || lib.hasInfix "registry" name
+      || lib.hasInfix "run-id" name
+      || lib.hasInfix "run-record" name
+      || lib.hasInfix "runtime-events" name
+      || lib.hasInfix "summary" name
+      || lib.hasInfix "parallel-runner" name
+      || lib.hasInfix "parallel-worker" name
+      || lib.hasInfix "executor-runtime" name
+      || lib.hasInfix "orchestrator-runtime" name
+      || lib.hasInfix "runtime-env" name
+      || lib.hasInfix "service-policy-runtime" name
+      || lib.hasInfix "postgres-kernel-probe" name
+    then
+      "kernel"
+    else if
+      name == "help-snapshot"
+      || name == "compiler-validation"
+      || lib.hasInfix "package-output" name
+      || lib.hasInfix "project-config" name
+      || lib.hasInfix "no-legacy" name
+      || lib.hasInfix "introspect" name
+      || lib.hasInfix "service-surface-catalog" name
+      || lib.hasInfix "operations-contract" name
+      || lib.hasInfix "docs-guidance" name
+    then
+      "compile"
+    else if kind == "smoke" then
+      "e2e"
+    else
+      "compile";
+  defaultProofKind =
+    name: kind:
+    if name == "contract-migration-guard" || name == "workflow-modes-contract" then
+      "guard"
+    else if lib.hasInfix "snapshot" name then
+      "fixture"
+    else if kind == "smoke" then
+      "smoke"
+    else
+      "contract";
 
   mkFrameworkCheck =
     name: metadata: drv:
     let
       existingPassThru = drv.passthru or { };
       kind = metadata.kind or defaultCheckKind name;
+      layer = metadata.layer or (defaultCheckLayer name kind);
+      proofKind = metadata.proofKind or (defaultProofKind name kind);
+      canonical = metadata.canonical or false;
       covers = listUtils.uniquePreserveOrder (metadata.covers or [ ]);
       defaultOwnerFile =
         let
@@ -51,6 +115,9 @@ let
         nixfied = {
           inherit
             kind
+            layer
+            proofKind
+            canonical
             covers
             ownerFiles
             ;
@@ -61,34 +128,56 @@ let
 
   checkMetadata = {
     "help-snapshot" = {
+      layer = "compile";
+      proofKind = "fixture";
+      canonical = true;
       covers = listUtils.uniquePreserveOrder (exposedTaskFeatureIds ++ workflowFeatureIds);
     };
 
     "compiler-validation" = {
+      layer = "compile";
+      proofKind = "contract";
+      canonical = true;
       covers = serviceFeatureIds;
     };
 
     "log-prefix-contract" = {
+      layer = "adapter";
+      proofKind = "contract";
+      canonical = true;
       covers = [ "runtime.output.prefix-contract" ];
     };
 
     "ephemeral-copy-mode-smoke" = {
+      layer = "e2e";
+      proofKind = "smoke";
+      canonical = true;
       covers = [ "runtime.ephemeral.include-untracked" ];
     };
 
     "ephemeral-env-file-mode-smoke" = {
+      layer = "e2e";
+      proofKind = "smoke";
+      canonical = true;
       covers = [ "runtime.ephemeral.env-file-loading" ];
     };
 
     "ephemeral-nix-source-smoke" = {
+      layer = "e2e";
+      proofKind = "smoke";
+      canonical = true;
       covers = [ "runtime.ephemeral.source-materialization" ];
     };
 
     "ephemeral-registry-run-isolation-smoke" = {
+      layer = "e2e";
+      proofKind = "smoke";
+      canonical = true;
       covers = [ "runtime.registry.isolation" ];
     };
 
     "skip-service-smoke" = {
+      layer = "e2e";
       covers = [
         "task.framework.test"
         "task.ops.health"
@@ -96,14 +185,21 @@ let
     };
 
     "service-requirements-contract" = {
+      layer = "compile";
       covers = [ "task.framework.test" ];
     };
 
     "selected-app-manifest-contract" = {
+      layer = "manifest";
+      proofKind = "contract";
+      canonical = true;
       covers = [ "runtime.app-execution-manifests" ];
     };
 
     "service-set-surface-contract" = {
+      layer = "manifest";
+      proofKind = "contract";
+      canonical = true;
       covers = [ "runtime.service-set-surfaces" ];
     };
 
@@ -112,14 +208,20 @@ let
     "run-record-validator-failure" = { };
 
     "workflow-service-set-adapter-smoke" = {
+      layer = "adapter";
+      proofKind = "smoke";
       covers = [ "runtime.service-set-surfaces" ];
     };
 
     "machine-output-app-smoke" = {
+      layer = "e2e";
+      proofKind = "smoke";
       covers = [ "runtime.app-execution-manifests" ];
     };
 
     "workflow-ref-app-manifest-contract" = {
+      layer = "manifest";
+      proofKind = "contract";
       covers = [ "runtime.app-execution-manifests" ];
     };
 
@@ -156,6 +258,7 @@ let
     "disabled-service-no-package-resolution-smoke" = { };
 
     "disabled-service-runtime-surface-smoke" = {
+      layer = "adapter";
       covers = [ "runtime.service-hooks" ];
     };
 
@@ -168,6 +271,9 @@ let
     "orchestrator-arg-forwarding-smoke" = { };
 
     "service-hook-env-smoke" = {
+      layer = "adapter";
+      proofKind = "smoke";
+      canonical = true;
       covers = [ "runtime.service-hooks" ];
     };
 
@@ -179,7 +285,10 @@ let
 
     "contract-render-snapshot" = { };
 
-    "contract-migration-guard" = { };
+    "contract-migration-guard" = {
+      layer = "migration";
+      proofKind = "guard";
+    };
   };
 
   rawChecks = {
@@ -1050,13 +1159,19 @@ let
 in
 baseChecks
 // {
-  "feature-coverage-validation" = mkFrameworkCheck "feature-coverage-validation" { } (
-    import ./feature-coverage-validation.nix {
-      inherit
-        pkgs
-        model
-        ;
-      checks = baseChecks;
-    }
-  );
+  "feature-coverage-validation" =
+    mkFrameworkCheck "feature-coverage-validation"
+      {
+        layer = "compile";
+        proofKind = "guard";
+      }
+      (
+        import ./feature-coverage-validation.nix {
+          inherit
+            pkgs
+            model
+            ;
+          checks = baseChecks;
+        }
+      );
 }

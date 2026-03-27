@@ -21,6 +21,9 @@ let
     "runtime.ephemeral.include-untracked"
     "runtime.ephemeral.env-file-loading"
     "runtime.registry.isolation"
+    "runtime.service-hooks"
+    "runtime.service-set-surfaces"
+    "runtime.app-execution-manifests"
     "runtime.output.prefix-contract"
   ];
 
@@ -29,6 +32,14 @@ let
     "service"
     "task"
     "workflow"
+  ];
+
+  featureCoverageLayers = [
+    "compile"
+    "manifest"
+    "kernel"
+    "adapter"
+    "e2e"
   ];
 
   tasksHaveStableIds = builtins.all (
@@ -97,6 +108,19 @@ let
     && builtins.isList (feature.ownerFiles or [ ])
     && builtins.isList (feature.modelPaths or [ ])
     && builtins.isBool (feature.coverageRequired or false)
+    && (
+      let
+        coverageLayer = feature.coverageLayer or null;
+      in
+      coverageLayer == null
+      || (builtins.isString coverageLayer && builtins.elem coverageLayer featureCoverageLayers)
+    )
+    && (
+      if feature.coverageRequired or false then
+        builtins.isString (feature.coverageLayer or null)
+      else
+        true
+    )
     && builtins.isList docs
   ) featureIds;
 

@@ -91,6 +91,7 @@ let
         expose = appExpose;
       };
       coverageRequired = appExpose;
+      coverageLayer = if appExpose then "compile" else null;
       docs = [ ];
     };
 
@@ -129,6 +130,7 @@ let
         maxWorkers = workflow.maxWorkers;
       };
       coverageRequired = true;
+      coverageLayer = "compile";
       docs = [ ];
     };
 
@@ -158,6 +160,7 @@ let
         enable = service.enable;
       };
       coverageRequired = true;
+      coverageLayer = "compile";
       docs = [ ];
     };
 
