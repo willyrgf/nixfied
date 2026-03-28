@@ -18,19 +18,27 @@ assert pkgs.lib.hasInfix
   "ERROR: usage: run-task-leaf <task-id> <workflow-id> <selected-services-csv> [-- ...]"
   source;
 assert pkgs.lib.hasInfix
+  "ERROR: usage: run-task-kernel-leaf <task-id> [-- ...]"
+  source;
+assert pkgs.lib.hasInfix
   "ERROR: usage: run-service-set-phase <service-set-id> <operation> <selected-services-csv>"
   source;
 assert !(pkgs.lib.hasInfix "runtimeMetadataShell = import ./runtime-metadata.nix" source);
 assert !(pkgs.lib.hasInfix "\${runtimeMetadataShell}" source);
+assert pkgs.lib.hasInfix "nixfied-kernel task run" source;
 assert pkgs.lib.hasInfix "nixfied-kernel workflow run" source;
 assert pkgs.lib.hasInfix "run_workflow_kernel_impl() {" source;
 assert pkgs.lib.hasInfix "run_task_leaf() {" source;
+assert pkgs.lib.hasInfix "run_task_kernel_leaf() {" source;
 assert pkgs.lib.hasInfix "run_service_set_phase() {" source;
+assert pkgs.lib.hasInfix "taskKernelAdapter = pkgs.writeShellScript" source;
 assert pkgs.lib.hasInfix "workflowTaskAdapter = pkgs.writeShellScript" source;
 assert pkgs.lib.hasInfix "workflowServiceSetAdapter = pkgs.writeShellScript" source;
 assert pkgs.lib.hasInfix "\"$MODEL_FILE\"" source;
-assert pkgs.lib.hasInfix "nixfied-kernel task execution-order" source;
-assert pkgs.lib.hasInfix "run_task_with_deps() {" source;
+assert !(pkgs.lib.hasInfix "nixfied-kernel task execution-order" source);
+assert !(pkgs.lib.hasInfix "run_task_with_deps() {" source);
+assert !(pkgs.lib.hasInfix "failed to create task execution-order temp file" source);
+assert !(pkgs.lib.hasInfix "unsupported task execution-order action" source);
 assert !(pkgs.lib.hasInfix "nixfied-task-execution-exports" source);
 assert !(pkgs.lib.hasInfix "failed to load task execution-order exports" source);
 assert pkgs.lib.hasInfix "retrying attempt=" source;
@@ -80,5 +88,5 @@ assert (!pkgs.lib.hasInfix "run_workflow_phase \"$run_id\"" source);
 assert (!pkgs.lib.hasInfix "run_workflow_phase_tasks \"$run_id\"" source);
 assert (!pkgs.lib.hasInfix "run_workflow_phase_service_sets \"$run_id\"" source);
 pkgs.runCommand "executor-contract" { } ''
-  echo "OK: executor owns a direct descriptor handoff and delegates workflow driving to one kernel run command" > "$out"
+  echo "OK: executor delegates both task and workflow driving to kernel run commands and keeps only descriptor handoff plus leaf adapters" > "$out"
 ''

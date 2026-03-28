@@ -140,7 +140,7 @@ assert !(pkgs.lib.hasInfix "jsonRpcResultCompactCmd" probePlanRuntimeSource);
 assert !(pkgs.lib.hasInfix "jsonRpcResultFalseCmd" probePlanRuntimeSource);
 assert !(pkgs.lib.hasInfix "pgIsReadyCmd" probePlanRuntimeSource);
 assert !(pkgs.lib.hasInfix "psqlQueryCmd" probePlanRuntimeSource);
-assert pkgs.lib.hasInfix "nixfied-kernel task execution-order" executorSource;
+assert pkgs.lib.hasInfix "nixfied-kernel task run" executorSource;
 assert pkgs.lib.hasInfix "nixfied-kernel workflow run" executorSource;
 assert !(pkgs.lib.hasInfix "nixfied-kernel workflow serial-init" executorSource);
 assert !(pkgs.lib.hasInfix "nixfied-kernel workflow serial-step" executorSource);
@@ -151,6 +151,7 @@ assert !(pkgs.lib.hasInfix "runtimeMetadataShell = import ./runtime-metadata.nix
 assert !(pkgs.lib.hasInfix "import ./runtime-metadata.nix" orchestratorSource);
 assert !(pkgs.lib.hasInfix "done < <(task_needs \"$current_task\")" executorSource);
 assert !(pkgs.lib.hasInfix "done < <(task_soft_needs \"$current_task\")" executorSource);
+assert !(pkgs.lib.hasInfix "nixfied-kernel task execution-order" executorSource);
 assert pkgs.lib.hasInfix "nixfied-kernel summary collect-steps" executorSource;
 assert !(pkgs.lib.hasInfix "nixfied-task-execution-exports" executorSource);
 assert !(pkgs.lib.hasInfix "nixfied-summary-exports" executorSource);
@@ -186,5 +187,5 @@ assert
 assert !(pkgs.lib.hasInfix "python3" readyHeliosSyncGateSource);
 assert !(pkgs.lib.hasInfix "http.server" readyHeliosSyncGateSource);
 pkgs.runCommand "contract-migration-guard" { } ''
-  echo "OK: hardening guards enforce deleted validators/CUE/run-registry/static service-surface/apps module, deleted runtime selection fallback/orchestrator-control/runtime-metadata seams, owner-local descriptor handoff, kernel-owned coarse workflow execution and summary derivation, jq-free runtime/build-check seams, no authored nixfied.apps, no Python responders in framework/runtime tests, and no deprecated kernel seams in framework runtime or kernel source" > "$out"
+  echo "OK: hardening guards enforce deleted validators/CUE/run-registry/static service-surface/apps module, deleted runtime selection fallback/orchestrator-control/runtime-metadata seams, owner-local descriptor handoff, kernel-owned task/workflow execution and summary derivation, jq-free runtime/build-check seams, no authored nixfied.apps, no Python responders in framework/runtime tests, and no deprecated kernel seams in framework runtime or kernel source" > "$out"
 ''
