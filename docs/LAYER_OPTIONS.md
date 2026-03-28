@@ -203,6 +203,15 @@ Why it matters:
 
 - this removes the strongest remaining echo of the old shell-owned planning era
 
+Current evidence from code:
+
+- `runtime-metadata.nix` is an internal shell getter/cache layer over kernel
+  export calls, not a product-facing public API
+- `executor.nix` and `orchestrator.nix` consume that layer because shell still
+  loads task/workflow fields piecemeal
+- this supports deleting the fine-grained metadata seam entirely rather than
+  polishing it
+
 Constraint:
 
 - the replacement must be a coarse structured handoff, not a cleaner getter API
@@ -415,6 +424,7 @@ Core idea:
 
 - after compile/runtime data is singular, move task dependency execution fully
   into the kernel
+- keep task dependency declaration at the typed authoring/compiler boundary
 - shell becomes launch, env, hooks, and process supervision only
 
 Benefits:
@@ -430,6 +440,8 @@ Costs:
 Constraint:
 
 - do not choose this before `Option D`
+- do not choose this unless kernel growth deletes an entire shell planning seam
+  rather than only moving code around
 
 ### Option C: Compiler-Owned Service Contracts
 
@@ -517,6 +529,9 @@ Why this is the new default:
 - it removes the most duplicated authorities
 - it does not depend on a larger kernel to pay off
 - it shrinks both runtime and test governance pressure
+- it matches the current working answers:
+  - no lasting fine-grained shell metadata API
+  - kernel growth only when a whole shell seam disappears
 
 ## Option Comparison
 
@@ -535,16 +550,23 @@ The best current sequencing is:
 1. land the prep-step deletions
 2. use those deletions to build `Option D`
 3. after `D`, choose deliberately between `B` and `C`
-4. prune migration-seam test governance after the deleted seams are truly gone
+4. prune migration-seam test governance after the deleted seams are truly gone,
+   while keeping feature-backed product guarantees
 
 Reason:
 
 - the prep step removes low-regret noise
 - `D` is the only option that directly attacks the largest remaining
   duplication: multiple execution representations and shell metadata transport
+- the current shell metadata layer appears to be an internal implementation seam,
+  not a product requirement
 - after `D`, the remaining choice becomes cleaner:
   - do we want even less shell execution logic
   - or do we want compiler-owned service boundaries
+- migration guards are still useful as temporary forward-only deletion policy,
+  but they are not the same thing as product guarantees
+- feature-backed proofs such as compiler/feature coverage validation should
+  remain authoritative longer than seam-freezing guards
 
 In other words:
 
@@ -560,9 +582,19 @@ To choose between the options, answer these explicitly:
    launcher selection tables should become one compiled execution authority?
    <!-- //WR: yes -->
 2. Do we want shell to keep any fine-grained metadata query API at all?
+   Working answer:
+   - no as a target architecture
+   - current evidence suggests the shell metadata layer exists because shell
+     still reads runtime fields piecemeal, not because the product needs a
+     stable query API
     <!-- //WR: no need form my PoV, but you can investigate necessity here -->
 3. Is shell-owned task dependency execution acceptable after the compiled graph
    is unified, or only as an intermediate state?
+   Working answer:
+   - acceptable only as an intermediate state
+   - task dependency authoring remains a typed public API
+   - the runtime ownership question is whether shell or kernel executes the
+     already-compiled dependency graph
    <!-- //WR: we need to expose for the user of the framework how to set their task dependencies, with that in mind with a proper well-defined API it could be only an step in the state execution workflow after compiled. But you understand the details better than me here. -->
 4. Is service split-readiness a real requirement, or should service contracts be
    simplified only as far as they delete duplicated framework glue?
@@ -574,9 +606,19 @@ To choose between the options, answer these explicitly:
      surface without deleting the current one
 5. Are we willing to grow kernel scope only when that growth deletes an entire
    shell planning seam?
+   Working answer:
+   - yes
+   - kernel growth is justified only when it reduces total authorities rather
+     than centralizing the same duplicated logic
    <!-- //WR: yes, kernel scope should only grow if it means simplifying the whole code base, increasing reusability and reproducibility/determinisnm while removing shell weak workflows. -->
 6. Which current migration-guard tests are still proving product guarantees, and
    which are only freezing temporary refactor boundaries?
+   Working answer:
+   - the `migration` shard is mostly deleted-seam and forward-only refactor
+     policy
+   - checks tied to compiled features and command surfaces are closer to product
+     guarantees and should outlive temporary seam guards
+   - migration guards should shrink as seams actually disappear
    <!-- //WR: I dont think migration-guard are actually testing product guarantees. But you can check .#features and documentation to make sure we dont have feature loss. Also the tests should be a good way to confirm it. -->
 
 ## Final Position
