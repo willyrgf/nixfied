@@ -119,7 +119,7 @@ fn usage() -> String {
         "  event-state <derive> ...",
         "  service-policy <runtime-event|start-service|fixture-keep-running> ...",
         "  run-record <create|transition> ...",
-        "  task <execution-order|validate-args> ...",
+        "  task <run|validate-args> ...",
         "  workflow <run> ...",
         "  registry <append|replay|terminal|runtime-status> ...",
         "  summary <write|compose|collect-steps|render-human> ...",
@@ -235,18 +235,6 @@ struct TaskDependencyEntry {
     needs: Vec<String>,
     soft_needs: Vec<String>,
     required_services: Vec<String>,
-}
-
-struct TaskExecutionPlan {
-    steps: Vec<TaskExecutionStep>,
-    soft_missing_lines: String,
-}
-
-struct TaskExecutionStep {
-    task_id: String,
-    action: String,
-    soft_parent_task: String,
-    skip_service: String,
 }
 
 #[derive(Clone)]

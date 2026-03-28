@@ -91,6 +91,9 @@ let
       taskRunnerTypes = builtins.mapAttrs (_: task: task.runner.type or "shell") (model.tasks or { });
     }
   );
+  taskKernelAdapter = pkgs.writeShellScript "nixfied-task-kernel-adapter" ''
+    exec "$NIXFIED_EXECUTOR_SELF" run-task-kernel-leaf "$@"
+  '';
   workflowTaskAdapter = pkgs.writeShellScript "nixfied-workflow-task-adapter" ''
     exec "$NIXFIED_EXECUTOR_SELF" run-task-leaf "$@"
   '';
@@ -547,20 +550,6 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           fi
         }
 
-        task_first_skipped_required_service() {
-          local task_id="$1"
-          local service_name=""
-
-          while IFS= read -r service_name; do
-            if [ -n "$service_name" ] && is_service_skipped "$service_name"; then
-              printf '%s' "$service_name"
-              return 0
-            fi
-          done < <(task_required_services "$task_id")
-
-          return 1
-        }
-
         workflow_unit_first_skipped_required_service() {
           local unit_json="$1"
           local service_name=""
@@ -588,18 +577,6 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           done < ${pkgs.lib.escapeShellArg (builtins.toString availableServiceNamesFile)}
         }
 
-        task_execution_plan() {
-          local task_id="$1"
-          local skipped_services_file="$2"
-          local plan_target="$3"
-
-          ${kernelPackage}/bin/nixfied-kernel task execution-order \
-            "$MODEL_FILE" \
-            "$skipped_services_file" \
-            "$task_id" \
-            "$plan_target"
-        }
-
         run_task() {
           if [ "$#" -lt 1 ]; then
             echo "ERROR: usage: run-task <task-id> [-- ...]"
@@ -616,6 +593,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           local runner_type
           local managed_by_orchestrator=0
           local NIXFIED_WORKFLOW_CONTEXT="0"
+          local skipped_services_file=""
           local -a filtered_args
           filtered_args=()
 
@@ -668,111 +646,42 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           detail_json="$(kernel_event_detail slotLifecycle --mode "task" --suffix-reason "$RUN_SUFFIX_REASON")"
           append_event "$run_id" "" "$task_id" "queued" "$detail_json"
 
-          run_task_with_deps() {
-            local root_task="$1"
-            shift
-            local skipped_services_file=""
-            local plan_file=""
-            local soft_missing_lines=""
-            local current_task=""
-            local action=""
-            local soft_parent=""
-            local skip_service=""
-            local missing_soft_parent=""
-            local missing_soft_task=""
-            local rc=0
-            local skip_detail_json
-            skipped_services_file="$(mktemp "''${TMPDIR:-/tmp}/nixfied-task-skipped-services.XXXXXX")" || {
-              echo "ERROR: failed to create task skipped-services temp file"
-              return 1
-            }
-            plan_file="$(mktemp "''${TMPDIR:-/tmp}/nixfied-task-execution-order.XXXXXX")" || {
-              rm -f "$skipped_services_file"
-              echo "ERROR: failed to create task execution-order temp file"
-              return 1
-            }
-
-            if ! write_skipped_services_file "$skipped_services_file"; then
-              rm -f "$skipped_services_file" "$plan_file"
-              return 1
-            fi
-
-            if ! soft_missing_lines="$(task_execution_plan "$root_task" "$skipped_services_file" "$plan_file")"; then
-              rm -f "$skipped_services_file" "$plan_file"
-              return 1
-            fi
-
-            if [ -n "$soft_missing_lines" ]; then
-              while IFS=$'\t' read -r missing_soft_parent missing_soft_task; do
-                if [ -z "$missing_soft_parent" ] || [ -z "$missing_soft_task" ]; then
-                  continue
-                fi
-                echo "WARN: task '$missing_soft_parent' soft dependency '$missing_soft_task' is not defined"
-              done <<EOF
-  $soft_missing_lines
-  EOF
-            fi
-
-            while IFS=$'\x1f' read -r current_task action soft_parent skip_service; do
-              [ -n "$current_task" ] || continue
-
-              case "$action" in
-                service-skipped)
-                  echo "SKIP: task '$current_task' is skipped because service '$skip_service' has a skip flag enabled"
-                  skip_detail_json="$(kernel_event_detail serviceLifecycle --reason "service-skipped" --service-name "$skip_service")"
-                  append_event "$run_id" "" "$current_task" "canceled" "$skip_detail_json"
-                  if [ -n "$soft_parent" ]; then
-                    echo "WARN: task '$soft_parent' soft dependency '$current_task' failed exitCode=3"
-                    continue
-                  fi
-                  if [ "$current_task" = "$root_task" ]; then
-                    rc=0
-                  else
-                    rc=3
-                  fi
-                  break
-                  ;;
-                execute)
-                  if [ "$current_task" = "$task_id" ] && [ "$runner_type" = "workflowRef" ]; then
-                    export NIXFIED_RUN_ID_FILE_OVERRIDE="$MACHINE_RUN_ID_FILE"
-                    export NIXFIED_SUMMARY_FILE_OVERRIDE="$MACHINE_SUMMARY_FILE"
-                  fi
-
-                  if execute_task "$run_id" "" "$current_task" "$@"; then
-                    rc=0
-                  else
-                    rc="$?"
-                  fi
-
-                  if [ "$current_task" = "$task_id" ] && [ "$runner_type" = "workflowRef" ]; then
-                    unset NIXFIED_RUN_ID_FILE_OVERRIDE || true
-                    unset NIXFIED_SUMMARY_FILE_OVERRIDE || true
-                  fi
-
-                  if [ "$rc" -ne 0 ]; then
-                    if [ -n "$soft_parent" ]; then
-                      echo "WARN: task '$soft_parent' soft dependency '$current_task' failed exitCode=$rc"
-                      continue
-                    fi
-                    break
-                  fi
-                  ;;
-                *)
-                  echo "ERROR: unsupported task execution-order action '$action'"
-                  rc=1
-                  break
-                  ;;
-              esac
-            done < "$plan_file"
-
-            rm -f "$skipped_services_file" "$plan_file"
-            return "$rc"
+          set +e
+          skipped_services_file="$(mktemp "''${TMPDIR:-/tmp}/nixfied-task-skipped-services.XXXXXX")" || {
+            echo "ERROR: failed to create task skipped-services temp file"
+            return 1
           }
 
-          set +e
-          run_task_with_deps "$task_id" "''${filtered_args[@]}"
+          if ! write_skipped_services_file "$skipped_services_file"; then
+            rm -f "$skipped_services_file"
+            return 1
+          fi
+
+          export NIXFIED_TASK_RUN_ROOT_TASK_ID="$task_id"
+          if [ -n "$MACHINE_RUN_ID_FILE" ]; then
+            export NIXFIED_TASK_RUN_MACHINE_RUN_ID_FILE="$MACHINE_RUN_ID_FILE"
+          fi
+          if [ -n "$MACHINE_SUMMARY_FILE" ]; then
+            export NIXFIED_TASK_RUN_MACHINE_SUMMARY_FILE="$MACHINE_SUMMARY_FILE"
+          fi
+
+          ${kernelPackage}/bin/nixfied-kernel task run \
+            "$MODEL_FILE" \
+            ${lib.escapeShellArg validationBundleFile} \
+            "$REGISTRY_ROOT" \
+            "$run_id" \
+            "$attempt_id" \
+            "$task_id" \
+            "$skipped_services_file" \
+            ${lib.escapeShellArg (builtins.toString taskKernelAdapter)} \
+            -- "''${filtered_args[@]}"
           status="$?"
           set -e
+
+          unset NIXFIED_TASK_RUN_ROOT_TASK_ID || true
+          unset NIXFIED_TASK_RUN_MACHINE_RUN_ID_FILE || true
+          unset NIXFIED_TASK_RUN_MACHINE_SUMMARY_FILE || true
+          rm -f "$skipped_services_file"
 
           if [ "$managed_by_orchestrator" -eq 0 ]; then
             trap - EXIT
@@ -986,6 +895,48 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           fi
 
           parallel_run_unit_wrapper "$task_id" "$workflow_id" "$selected_services_csv" "$@"
+        }
+
+        run_task_kernel_leaf() {
+          if [ "$#" -lt 1 ]; then
+            echo "ERROR: usage: run-task-kernel-leaf <task-id> [-- ...]"
+            return "$NIXFIED_EXIT_USAGE"
+          fi
+
+          local task_id="$1"
+          local selected_services_csv=""
+          local runner_type=""
+          local rc=0
+          shift
+
+          if [ "$#" -gt 0 ] && [ "$1" = "--" ]; then
+            shift
+          fi
+
+          selected_services_csv="$(task_selected_services_csv "$task_id" "$@")" || return $?
+          runner_type="$(task_runner_type "$task_id")"
+
+          if [ "''${NIXFIED_TASK_RUN_ROOT_TASK_ID:-}" = "$task_id" ] && [ "$runner_type" = "workflowRef" ]; then
+            if [ -n "''${NIXFIED_TASK_RUN_MACHINE_RUN_ID_FILE:-}" ]; then
+              export NIXFIED_RUN_ID_FILE_OVERRIDE="$NIXFIED_TASK_RUN_MACHINE_RUN_ID_FILE"
+            fi
+            if [ -n "''${NIXFIED_TASK_RUN_MACHINE_SUMMARY_FILE:-}" ]; then
+              export NIXFIED_SUMMARY_FILE_OVERRIDE="$NIXFIED_TASK_RUN_MACHINE_SUMMARY_FILE"
+            fi
+          fi
+
+          if parallel_run_unit_wrapper "$task_id" "" "$selected_services_csv" "$@"; then
+            rc=0
+          else
+            rc="$?"
+          fi
+
+          if [ "''${NIXFIED_TASK_RUN_ROOT_TASK_ID:-}" = "$task_id" ] && [ "$runner_type" = "workflowRef" ]; then
+            unset NIXFIED_RUN_ID_FILE_OVERRIDE || true
+            unset NIXFIED_SUMMARY_FILE_OVERRIDE || true
+          fi
+
+          return "$rc"
         }
 
         run_service_set_phase() {
@@ -1639,7 +1590,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
         main() {
           if [ "$#" -lt 1 ]; then
-            echo "ERROR: usage: nixfied-executor <run-task|run-workflow|run-task-leaf|run-service-set-phase> ..."
+            echo "ERROR: usage: nixfied-executor <run-task|run-workflow|run-task-leaf|run-task-kernel-leaf|run-service-set-phase> ..."
             exit "$NIXFIED_EXIT_USAGE"
           fi
 
@@ -1655,6 +1606,9 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
               ;;
             run-task-leaf)
               run_task_leaf "$@"
+              ;;
+            run-task-kernel-leaf)
+              run_task_kernel_leaf "$@"
               ;;
             run-service-set-phase)
               run_service_set_phase "$@"
