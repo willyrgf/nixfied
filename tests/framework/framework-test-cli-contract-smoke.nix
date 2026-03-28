@@ -30,9 +30,17 @@ pkgs.runCommand "framework-test-cli-contract-smoke" { } ''
     require_contains "$TMPDIR/list-shards.out" "manifest"
     require_contains "$TMPDIR/list-shards.out" "kernel"
     require_contains "$TMPDIR/list-shards.out" "adapters"
-    require_contains "$TMPDIR/list-shards.out" "services"
     require_contains "$TMPDIR/list-shards.out" "e2e"
     require_contains "$TMPDIR/list-shards.out" "migration"
+    require_not_contains "$TMPDIR/list-shards.out" "services"
+
+    "$ORCH" run-task task.framework.test --profile feature-proof --serial --summary > "$TMPDIR/profile-feature-proof.out" 2>&1
+    require_contains "$TMPDIR/profile-feature-proof.out" "INFO: running shards serial total=4"
+    require_contains "$TMPDIR/profile-feature-proof.out" "OK: shard passed name=compile"
+    require_contains "$TMPDIR/profile-feature-proof.out" "OK: shard passed name=manifest"
+    require_contains "$TMPDIR/profile-feature-proof.out" "OK: shard passed name=adapters"
+    require_contains "$TMPDIR/profile-feature-proof.out" "OK: shard passed name=e2e"
+    require_contains "$TMPDIR/profile-feature-proof.out" "INFO: summary profile=feature-proof executed_shards=4 failed_shards=0 exit_1_shards=0 canceled_shards=0"
 
     "$ORCH" run-task task.framework.test --shard manifest --summary > "$TMPDIR/shard-manifest.out" 2>&1
     require_contains "$TMPDIR/shard-manifest.out" "OK: shard passed name=manifest"

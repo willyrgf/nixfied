@@ -1,5 +1,5 @@
 let
-  subtractNames = base: excluded: builtins.filter (name: !(builtins.elem name excluded)) base;
+  listUtils = import ../../nixfied/framework/core/list-utils.nix;
 
   layerChecks = {
     compile = [
@@ -14,6 +14,7 @@ let
       "feature-coverage-validation"
       "features-surface-contract"
       "framework-selfhost-contract"
+      "framework-test-layout-validation"
       "helios-pinned-source-contract"
       "help-snapshot"
       "install-runtime-contract"
@@ -116,12 +117,12 @@ let
       "env-loader-strict-smoke"
       "ephemeral-copy-budget-smoke"
       "ephemeral-copy-mode-smoke"
-      "feature-e2e-proof"
       "ephemeral-env-file-mode-smoke"
       "ephemeral-execution-smoke"
       "ephemeral-nix-source-smoke"
       "ephemeral-registry-run-isolation-smoke"
       "ephemeral-retention-smoke"
+      "feature-e2e-proof"
       "flake-show-no-service-materialization-smoke"
       "framework-install-filter-smoke"
       "framework-install-no-caller-compile-smoke"
@@ -162,95 +163,88 @@ let
     migration = [
       "contract-migration-guard"
       "framework-test-coverage-contract"
-      "framework-test-shard-validation"
       "registry-helper-contract"
       "service-api-surface-contract"
       "workflow-modes-contract"
     ];
   };
 
-  serviceChecks = [
-    "disabled-service-no-package-resolution-smoke"
-    "disabled-service-runtime-surface-smoke"
-    "excluded-service-evaluation"
-    "flake-show-no-service-materialization-smoke"
-    "helios-pinned-source-contract"
-    "launcher-skip-service-pruning-smoke"
-    "managed-service-lifecycle-contract"
-    "nginx-site-management-contract"
-    "nginx-site-management-smoke"
-    "postgres-backup-contract"
-    "postgres-backup-restore-smoke"
-    "postgres-config-artifacts-contract"
-    "postgres-config-artifacts-smoke"
-    "postgres-kernel-probe-lifecycle-smoke"
-    "ready-health-matrix-smoke"
-    "ready-health-shutdown-smoke"
-    "ready-helios-sync-gate-smoke"
-    "runtime-controls-no-service-materialization-smoke"
-    "service-dir-isolation-smoke"
-    "service-extractability-contract"
-    "service-hook-env-smoke"
-    "service-lifecycle-matrix-smoke"
-    "service-observability-contract"
-    "service-op-composition-contract"
-    "service-policy-runtime-smoke"
-    "service-probe-overrides-contract"
-    "service-probe-overrides-smoke"
-    "service-requirements-contract"
-    "service-set-surface-contract"
-    "service-surface-catalog-contract"
-    "skip-service-smoke"
-    "supervisor-lifecycle-smoke"
-    "supervisor-runtime-contract"
-    "unselected-service-no-package-resolution-smoke"
-    "unselected-service-public-launcher-smoke"
-    "workflow-service-set-adapter-smoke"
-  ];
-
   order = [
     "compile"
     "manifest"
     "kernel"
     "adapters"
-    "services"
     "e2e"
     "migration"
   ];
 
   shardChecks = {
-    compile = subtractNames layerChecks.compile serviceChecks;
+    compile = layerChecks.compile;
     manifest = layerChecks.manifest;
-    kernel = subtractNames layerChecks.kernel serviceChecks;
-    adapters = subtractNames layerChecks.adapter serviceChecks;
-    services = serviceChecks;
-    e2e = subtractNames layerChecks.e2e serviceChecks;
+    kernel = layerChecks.kernel;
+    adapters = layerChecks.adapter;
+    e2e = layerChecks.e2e;
     migration = layerChecks.migration;
   };
+
+  canonicalFeatureProofChecks = [
+    "compiler-validation"
+    "feature-adapter-proof"
+    "feature-manifest-proof"
+    "feature-e2e-proof"
+  ];
+
+  featureProofChecks = canonicalFeatureProofChecks ++ [ "features-surface-contract" ];
+
+  allChecks = listUtils.uniquePreserveOrder (
+    builtins.concatLists (builtins.map (name: shardChecks.${name} or [ ]) order)
+  );
+
+  profiles = {
+    "feature-proof" = featureProofChecks;
+    ci = listUtils.uniquePreserveOrder (
+      canonicalFeatureProofChecks
+      ++ shardChecks.compile
+      ++ shardChecks.manifest
+      ++ shardChecks.kernel
+      ++ shardChecks.adapters
+      ++ shardChecks.migration
+    );
+    full = allChecks;
+  };
+
+  profileShardChecks = builtins.mapAttrs (
+    _: profileChecks:
+    builtins.mapAttrs (
+      _: shardCheckNames: builtins.filter (name: builtins.elem name profileChecks) shardCheckNames
+    ) shardChecks
+  ) profiles;
 in
 {
-  inherit order layerChecks serviceChecks;
+  inherit
+    order
+    layerChecks
+    allChecks
+    canonicalFeatureProofChecks
+    featureProofChecks
+    profileShardChecks
+    ;
 
   descriptions = {
-    compile = "Build compile-time model, help, schema, and documentation proofs.";
-    manifest = "Build runtime manifest fixtures and manifest handoff contracts.";
+    compile = "Build compile-time model, help, schema, documentation, and governance proofs.";
+    manifest = "Build manifest-owned feature and fixture contracts.";
     kernel = "Build kernel-owned runtime semantics, registry, and workflow proofs.";
     adapters = "Build thin launcher, shell, and process-edge adapter proofs.";
-    services = "Build service typed-contract, lifecycle, readiness, and split-readiness proofs.";
     e2e = "Build end-to-end public behavior, install, upgrade, isolation, and runtime smokes.";
     migration = "Build deleted-seam guards and ownership-migration regressions.";
   };
 
-  checks = shardChecks;
-
-  profiles = {
-    ci = [
-      "compile"
-      "manifest"
-      "kernel"
-      "adapters"
-      "migration"
-    ];
-    full = order;
+  profileDescriptions = {
+    "feature-proof" = "Run only direct feature proofs backed by covers metadata.";
+    ci = "Run canonical feature proofs plus compile, manifest, kernel, adapters, and migration shards.";
+    full = "Run every registered framework check.";
   };
+
+  checks = shardChecks;
+  profiles = profiles;
 }
