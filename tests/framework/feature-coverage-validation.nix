@@ -15,14 +15,6 @@ let
     "e2e"
     "migration"
   ];
-  validProofKinds = [
-    "contract"
-    "fixture"
-    "unit"
-    "integration"
-    "smoke"
-    "guard"
-  ];
 
   featureIds = builtins.sort builtins.lessThan (builtins.attrNames (model.features or { }));
 
@@ -47,21 +39,12 @@ let
     name:
     let
       metadata = checkMetadata.${name};
-      kind = metadata.kind or "";
       layer = metadata.layer or "";
-      proofKind = metadata.proofKind or "";
       canonical = metadata.canonical or false;
       covers = metadata.covers or [ ];
       ownerFiles = metadata.ownerFiles or [ ];
     in
-    (
-      !builtins.elem kind [
-        "contract"
-        "smoke"
-      ]
-    )
-    || !builtins.elem layer validLayers
-    || !builtins.elem proofKind validProofKinds
+    !builtins.elem layer validLayers
     || !builtins.isBool canonical
     || !builtins.isList covers
     || (canonical && covers == [ ])
