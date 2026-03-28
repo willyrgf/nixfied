@@ -983,6 +983,16 @@ fatter than the services it is trying to abstract.
 
 These constraints remain valid.
 
+### 0. No compatibility track
+
+This repository does not need a compatibility-preserving migration path for the
+next layers refactor.
+
+- no deprecation shims
+- no dual binaries
+- no old and new transport forms living side by side for safety
+- if a breaking change deletes a fake layer, take the break
+
 ### 1. New seam means old seam dies
 
 If the next refactor lands a cleaner replacement, the old boundary must be
@@ -1198,6 +1208,33 @@ It is saying something narrower and more important:
 
 the repository improved correctness and authority more than it improved
 simplicity, because it did not delete enough replaced seams.
+
+## Chosen Breaking Sequence
+
+The next round should stop treating the remaining work as one monolithic
+`Option D` migration.
+
+The sequence should be:
+
+1. delete fake runtime authorities directly
+   - runtime selection fallback
+   - duplicate runtime-control surfacing
+   - executor synthesis fallback for `serviceSetPrograms`
+2. create one compiler-owned execution authority with no top-level
+   `selectionIndex` or `appExecutionManifests` side channels
+3. delete shell metadata/export transport
+   - no `runtime-metadata.nix`
+   - no shell summary export sourcing
+   - no fine-grained kernel export getter path
+4. move root task DAG execution fully into the kernel
+5. only after runtime/control deletion, decide whether service contract cleanup
+   still removes real framework seams
+6. delete migration-policy tests as soon as the seams they freeze are gone
+
+This is a breaking-change sequence by design.
+
+It should not preserve transitional wrappers just because they exist in current
+code.
 
 ## Acceptance Criteria For The Next Round
 

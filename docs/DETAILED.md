@@ -58,7 +58,9 @@ Pure graph exclusion is configured through `nixfied.graph.excludedServices`.
 - Public flake task/workflow launchers expose explicit compile-time selectors, for example `nix run .#ci -- --exclude-services helios --mode full --summary`.
 - Launcher selector parsing is generic across public task apps and dispatcher surfaces (`run-task`, `run-workflow`, `run-workflow-parallel`).
 - Generated service apps (`svc::<service>::<op>`) participate in the same launcher model and materialize only their own service runtime.
-- Truthy `SKIP_<SERVICE>` env vars are folded into the launcher-selected exclusion set as compatibility sugar, but they are not compiler inputs by themselves.
+- Truthy `SKIP_<SERVICE>` env vars are still accepted today as launcher sugar,
+  but they are not compiler inputs and are not protected as a long-term
+  compatibility surface.
 - The canonical executed proof for that launcher path is `nix run .#framework::test -- --shard launcher-pruning`, which uses a poisoned Helios source override to verify that `SKIP_HELIOS=1` prevents Helios evaluation before selected-app compilation.
 
 ## Canonicalization Rules
@@ -70,7 +72,8 @@ Pure graph exclusion is configured through `nixfied.graph.excludedServices`.
 
 ## Runtime and Dispatch
 
-Execution is model-backed through dispatcher apps and orchestrator controls:
+Current execution is model-backed through dispatcher apps and separate
+orchestrator-control surfaces:
 
 - `nix run .#run-task -- <task-id> [-- ...]`
 - `nix run .#run-workflow -- <workflow-id> [-- ...]`
@@ -81,12 +84,14 @@ Execution is model-backed through dispatcher apps and orchestrator controls:
 
 Selector-aware launcher contract:
 
-- Public task apps and dispatcher surfaces accept leading launcher options before normal app args.
+- Public task apps and current dispatcher surfaces accept leading launcher
+  options before normal app args.
 - Public service apps do the same.
 - `--exclude-services <csv>` is the canonical compile-time selector.
 - `--launcher-help` shows launcher-specific help without invoking the selected app.
 - Launcher parsing stops at the first non-launcher argument or `--`, and the remaining args are forwarded unchanged to the selected app.
-- Public task/workflow surfaces are two-stage: resolve the selected app first, then execute a scoped dispatcher/orchestrator/executor runtime.
+- Public task/workflow surfaces are two-stage: resolve the selected app first,
+  then execute the current scoped dispatcher/orchestrator/executor runtime.
 - Selected execution manifests embed the narrowed runtime metadata the kernel consumes for task/workflow semantics.
 - The selected service set is derived from task requirements, recursive task deps, workflow unit requirements, workflow `preRun`/`postRun` tasks, `workflowRef` targets, workflow family/mode resolution, and explicit selectors.
 
@@ -106,9 +111,14 @@ Executor behavior:
 - deterministic defaults (`locale`, `timezone`, `umask`, workdir policy)
 - runtime variable support for `NIX_ENV` and `PROJECT_ENV`
 - workflow lifecycle phases and scheduler driving are delegated to the kernel as one coarse workflow run operation
+- root task dependency execution is still shell-owned today through a
+  kernel-generated plan/export path; this is transitional and slated for
+  deletion
 - summary artifact contract at `CI_ARTIFACTS_DIR/summary.json` when enabled
 - run ids and orchestrator seeds incorporate `runtimeHash`, not only the cheap model hash
-- shell runtime metadata lookups are manifest-backed through the selected execution manifest rather than generated case tables
+- shell runtime metadata lookups are manifest-backed indirectly through
+  `runtime-metadata.nix` and kernel export calls rather than generated case
+  tables; the target is to delete that getter layer entirely
 
 State policy defaults:
 

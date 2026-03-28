@@ -324,6 +324,18 @@ Before debating target architectures, fix four classification errors:
 Any option that keeps those as first-class long-term layers is not actually a
 deletion-first architecture.
 
+## Migration Stance
+
+This plan assumes full breaking changes are allowed.
+
+- no compatibility shims
+- no deprecation path
+- no transitional dual surfaces kept "for now"
+- if a new seam lands, the replaced seam dies in the same change or immediately
+  after
+- if an option needs old and new authorities to coexist for safety, reject that
+  option and delete more directly
+
 ## Service Boundary Readiness
 
 Question `4` has a working answer now:
@@ -422,8 +434,8 @@ Bundle:
 
 Core idea:
 
-- after compile/runtime data is singular, move task dependency execution fully
-  into the kernel
+- after compile/runtime data is singular and shell metadata/export transport is
+  gone, move root task dependency execution fully into the kernel
 - keep task dependency declaration at the typed authoring/compiler boundary
 - shell becomes launch, env, hooks, and process supervision only
 
@@ -439,11 +451,11 @@ Costs:
 
 Constraint:
 
-- do not choose this before `Option D`
-- do not choose this unless kernel growth deletes an entire shell planning seam
-  rather than only moving code around
+- do not choose this before both halves of `Option D`
+- do not choose this unless kernel growth deletes the shell task
+  plan/export/loop path in the same wave rather than only moving code around
 
-### Option C: Compiler-Owned Service Contracts
+### Option C: Service Contract Cleanup After Runtime Deletion
 
 Bundle:
 
@@ -452,17 +464,16 @@ Bundle:
 
 Core idea:
 
-- after compile/runtime data is singular, move service contract authority fully
-  into the compiler
-- make repository-separable service boundaries possible in principle by
-  separating contract, runtime ABI, and private implementation
+- only after runtime/control duplication is gone, decide whether service
+  contract cleanup still removes real framework seams
+- if it does, move service contract authority into pure compiler-owned or
+  module-owned contract data
 - runtime surfaces become pure projections of compiled service contracts
 
 Benefits:
 
-- strongest path to deleting service-specific framework glue
-- best path to making service boundaries real without synthetic extractability
-  proof seams
+- deletes service-specific framework glue only if direct runtime imports,
+  hardcoded service lookup, and helper-bundle coupling disappear
 - exposes and shrinks the hidden coupling now carried by `service-module.nix`,
   `serviceModulePath.nix`, helper bundles, and shell/app runtime conventions
 
@@ -470,15 +481,15 @@ Costs:
 
 - high refactor cost
 - only justified if it deletes the current duplicate service ownership
-- requires a real runtime-context contract for services instead of the current
-  `project` plus `slots` helper seam
+- requires deleting the current `project` plus `slots` helper seam rather than
+  wrapping it in a cleaner contract
 
 Constraint:
 
 - reject this if it grows a larger service meta-framework instead of reducing
   duplicated knowledge
-- repository split-readiness is not the product by itself; it is the test that
-  the service boundary is actually small and real
+- repository split-readiness is not a target by itself; it is at most a deletion
+  test that the service boundary is actually small and real
 
 ### Option D: Canonical Compiled Graph + Single Shell Runtime Authority
 
@@ -490,12 +501,19 @@ Bundle:
 
 Core idea:
 
+- `D` is not one refactor. It is two forced deletions:
+  - `D1`: create one compiler-owned execution authority with no top-level
+    `selectionIndex` or `appExecutionManifests` side channels
+  - `D2`: delete shell metadata/export transport and replace it with one coarse
+    runtime handoff only where shell still needs OS-edge inputs
 - unify execution knowledge at compile time
-- hand shell and kernel one coarse canonical compiled execution graph
+- hand shell and kernel projections of one canonical compiled execution graph
 - collapse shell runtime into one authority for OS-facing concerns only
 
 Layers that collapse hard:
 
+- top-level `selectionIndex` side-channel ownership
+- top-level `appExecutionManifests` side-channel ownership
 - separate shell runtime metadata layer
 - runtime selection fallback seam
 - separate runtime manifest family
@@ -516,13 +534,16 @@ Benefits:
 
 - deletes the largest amount of duplicated knowledge without yet forcing the
   kernel/task-execution bet
-- gives the codebase one canonical execution representation
+- gives the codebase one canonical execution representation only if both `D1`
+  and `D2` land
 - is likely mandatory regardless of whether `B` or `C` comes later
 
 Costs:
 
 - compiler refactor cost is real
 - forces manifest and runtime data shape changes
+- requires direct breaking removal of old launcher tables, query helpers, and
+  transport forms rather than compatibility preservation
 
 Why this is the new default:
 
@@ -539,40 +560,51 @@ Why this is the new default:
 | --- | --- | --- | --- | --- |
 | `Prep` | removes obvious duplicate authorities | canonical execution data still fragmented | low-medium | first |
 | `A` legacy thin shell runtime | historical cleanup framing only | does not fully solve representation duplication | medium | do not use as target |
-| `D` canonical compiled graph + single shell runtime authority | removes duplicate compile/runtime knowledge and shell metadata transport | service boundary duplication and kernel task loop still remain | high | first real target |
-| `B` kernel-led execution core | deletes most shell semantic planning | kernel growth and task-edge migration complexity | high | after `D` |
-| `C` compiler-owned service contracts | deletes duplicate service boundary glue and hidden framework-service coupling | difficult contract/runtime split plus service lookup/runtime ABI redesign | high | after `D`, or parallel after `D` |
+| `D1` one compiler-owned execution authority | removes side-channel execution ownership and parallel graph construction | shell getter/export transport still remains | high | after `Prep` |
+| `D2` no shell metadata/export transport | removes the strongest surviving shell planning/query seam | root task DAG execution still remains in shell | high | after `D1` |
+| `B` kernel-led execution core | deletes the shell task dependency loop and plan/export path | kernel growth and task-edge migration complexity | high | after `D2` |
+| `C` service contract cleanup after runtime deletion | deletes service glue only if runtime imports and helper-bundle coupling really die | contract source-of-truth and runtime ABI redesign remain hard | high | only after `B`, and only if real deletion still remains |
 
 ## Recommendation
 
 The best current sequencing is:
 
-1. land the prep-step deletions
-2. use those deletions to build `Option D`
-3. after `D`, choose deliberately between `B` and `C`
-4. prune migration-seam test governance after the deleted seams are truly gone,
+1. land the prep-step deletions directly and break any callers/tests in the same
+   change
+2. land `D1`: one compiler-owned execution authority
+3. land `D2`: no shell metadata getter and no shell export transport for runtime
+   metadata or summary composition
+4. land `B`: move root task DAG execution into the kernel and delete the shell
+   dependency loop
+5. only then decide whether `C` still deletes real service seams
+6. prune migration-seam test governance as soon as the protected seams are gone,
    while keeping feature-backed product guarantees
 
 Reason:
 
 - the prep step removes low-regret noise
-- `D` is the only option that directly attacks the largest remaining
-  duplication: multiple execution representations and shell metadata transport
+- `D1` and `D2` are the only sequence that directly attacks the largest
+  remaining duplication: multiple execution representations and shell metadata
+  transport
 - the current shell metadata layer appears to be an internal implementation seam,
   not a product requirement
-- after `D`, the remaining choice becomes cleaner:
-  - do we want even less shell execution logic
-  - or do we want compiler-owned service boundaries
+- after `D2`, the next obvious deletion is the shell task dependency loop
+- service-contract cleanup should happen only after runtime/control duplication
+  is gone, otherwise it risks building a cleaner second framework beside the
+  current one
 - migration guards are still useful as temporary forward-only deletion policy,
   but they are not the same thing as product guarantees
 - feature-backed proofs such as compiler/feature coverage validation should
   remain authoritative longer than seam-freezing guards
+- no compatibility path should slow any of these deletions down
 
 In other words:
 
 - `Prep` is cleanup
-- `D` is the real architecture correction
-- `B` and `C` are the two follow-on directional bets
+- `D1` and `D2` are the real architecture correction
+- `B` is the next meaningful runtime simplification
+- `C` is optional and justified only if it still removes duplicate framework
+  knowledge after runtime deletion
 
 ## Decision Questions
 
