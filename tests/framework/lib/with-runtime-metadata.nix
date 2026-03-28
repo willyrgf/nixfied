@@ -2,21 +2,31 @@
 model:
 let
   lib = pkgs.lib;
-  selectionIndex = import ../../../nixfied/compiler/compile-selection-index.nix { inherit lib; } {
+  execution = import ../../../nixfied/compiler/compile-execution.nix {
+    inherit lib;
+    canonical = import ../../../nixfied/framework/core/canonical.nix { inherit lib; };
+  } {
+    resolvedIdentity = model.identity or { };
+    runtime = model.runtime or { };
+    state = model.state or { };
+    serviceCatalog = model.serviceCatalog or { };
+    serviceSets = model.serviceSets or { };
+    apps = model.apps or { };
     tasks = model.tasks or { };
     workflows = model.workflows or { };
-    serviceCatalog = model.serviceCatalog or { };
   };
   runtimeMetadata = import ../../../nixfied/compiler/compile-runtime-metadata.nix { inherit lib; } {
+    apps = model.apps or { };
+    compiledExecution = execution;
     tasks = model.tasks or { };
     workflows = model.workflows or { };
     serviceCatalog = model.serviceCatalog or { };
-    selectionIndex = selectionIndex;
   };
 in
 model
 // {
   compiled = (model.compiled or { }) // {
+    inherit execution;
     inherit runtimeMetadata;
   };
 }

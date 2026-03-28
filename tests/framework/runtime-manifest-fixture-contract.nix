@@ -54,24 +54,20 @@ let
     localOverrides = [ ];
   };
 
-  manifestIds = builtins.attrNames baseCompiled.model.compiled.runtimeManifests.byApp;
-  checkManifest = baseCompiled.model.compiled.runtimeManifests.byApp.check;
-  isolationManifest = baseCompiled.model.compiled.runtimeManifests.byApp.test-isolation;
-  serviceSetManifest =
-    serviceSetOutputs.model.compiled.runtimeManifests.byServiceSet."service-set.default";
+  execution = baseCompiled.model.compiled.execution;
+  manifestIds = execution.apps.ids;
+  checkManifest = execution.apps.byId.check;
+  isolationManifest = execution.apps.byId.test-isolation;
+  serviceSetManifest = serviceSetOutputs.model.compiled.execution.serviceSets.byId."service-set.default";
   workflowFixtureManifest =
-    workflowFixtureOutputs.model.compiled.runtimeManifests.byApp."runtime-manifest-fixture";
+    workflowFixtureOutputs.model.compiled.execution.apps.byId."runtime-manifest-fixture";
 
   sortKeys = attrs: builtins.sort builtins.lessThan (builtins.attrNames attrs);
   hasSubset = expected: actual: lib.all (value: builtins.elem value actual) expected;
 in
-assert
-  baseCompiled.model.compiled.runtimeManifests.catalog.schema.kind
-  == "nixfied-runtime-manifest-catalog";
-assert baseCompiled.model.compiled.runtimeManifests.catalog.schema.version == 1;
-assert baseCompiled.model.compiled.runtimeManifests.catalog.appIds == manifestIds;
-assert
-  baseCompiled.model.compiled.runtimeManifests.catalog.manifestCount == builtins.length manifestIds;
+assert execution.schema.kind == "nixfied-execution";
+assert execution.schema.version == 1;
+assert execution.apps.ids == manifestIds;
 assert checkManifest.id == "check";
 assert checkManifest.taskId == "task.check";
 assert checkManifest.workflowId == null;
@@ -121,5 +117,5 @@ assert sortKeys workflowFixtureManifest.model.tasks == [ "task.test.runtime-mani
 assert
   sortKeys workflowFixtureManifest.model.workflows == [ "workflow.test.runtime-manifest.fixture" ];
 pkgs.runCommand "runtime-manifest-fixture-contract" { } ''
-  echo "OK: runtime manifest fixtures prove canonical app and service-set manifest invariants" > "$out"
+  echo "OK: compiled execution fixtures prove canonical app and service-set manifest invariants" > "$out"
 ''

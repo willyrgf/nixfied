@@ -90,7 +90,7 @@ let
       canonical
       ;
   };
-  compileRuntimeManifest = import ./compile-runtime-manifest.nix {
+  compileExecution = import ./compile-execution.nix {
     inherit
       lib
       canonical
@@ -98,13 +98,6 @@ let
   };
   compileRuntimeMetadata = import ./compile-runtime-metadata.nix {
     inherit lib;
-  };
-
-  compileAppExecutionManifests = import ./compile-app-execution-manifests.nix {
-    inherit
-      lib
-      canonical
-      ;
   };
 
   compileIntrospectionGraph = import ./compile-introspection-graph.nix {
@@ -121,7 +114,6 @@ let
   };
 
   compileViews = import ./compile-views.nix { inherit lib; };
-  compileSelectionIndex = import ./compile-selection-index.nix { inherit lib; };
   compileContractBundle = import ./compile-contract-bundle.nix {
     inherit
       lib
@@ -283,15 +275,7 @@ rec {
           ;
       };
 
-      selectionIndex = compileSelectionIndex {
-        inherit
-          tasks
-          workflows
-          serviceCatalog
-          ;
-      };
-
-      appExecutionManifests = compileAppExecutionManifests {
+      execution = compileExecution {
         resolvedIdentity = resolvedModuleGraph.config.identity;
         runtime = runtime;
         state = {
@@ -302,10 +286,10 @@ rec {
         };
         inherit
           serviceCatalog
+          serviceSets
           apps
           tasks
           workflows
-          selectionIndex
           ;
       };
 
@@ -326,14 +310,13 @@ rec {
           statePolicy
           runtime
           apps
-          appExecutionManifests
+          execution
           serviceSets
           tasks
           workflows
           serviceCatalog
           serviceSurfaceCatalog
           features
-          selectionIndex
           ;
         resolved = resolvedModuleGraph.config;
         localOverridesActive = localOverrides != [ ];
@@ -345,34 +328,14 @@ rec {
         inherit introspectionGraph;
       };
 
-      runtimeManifests = compileRuntimeManifest {
-        resolvedIdentity = resolvedModuleGraph.config.identity;
-        runtime = runtime;
-        state = {
-          policy = statePolicy;
-          registry = {
-            schemaVersion = 1;
-          };
-        };
-        inherit
-          serviceCatalog
-          apps
-          tasks
-          workflows
-          selectionIndex
-          serviceSets
-          appExecutionManifests
-          ;
-      };
-
       runtimeMetadata = compileRuntimeMetadata {
         inherit
           tasks
           workflows
           serviceCatalog
           apps
-          selectionIndex
           ;
+        compiledExecution = execution;
       };
 
       views = compileViews {
@@ -403,7 +366,7 @@ rec {
           features
           views
           apiCatalog
-          runtimeManifests
+          execution
           runtimeMetadata
           serviceSurfaceCatalog
           ;
@@ -416,7 +379,6 @@ rec {
       tasks = tasks;
       workflows = workflows;
       apps = apps;
-      appExecutionManifests = appExecutionManifests;
       introspectionGraph = introspectionGraph;
       introspectionBundle = introspectionBundle;
       views = views;
@@ -427,7 +389,6 @@ rec {
       serviceSets = serviceSets;
       serviceSurfaceCatalog = finalized.model.compiled.serviceSurfaceCatalog;
       features = features;
-      selectionIndex = selectionIndex;
       contractBundle = contractBundle;
       validationIr = validationIr;
       legacyLocalDefault = legacyLocalDefault;

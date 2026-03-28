@@ -6,7 +6,7 @@
   statePolicy,
   runtime,
   apiCatalog ? null,
-  runtimeManifests ? null,
+  execution ? null,
   runtimeMetadata ? null,
   serviceSurfaceCatalog ? null,
   services ? null,
@@ -29,7 +29,7 @@ let
   modelPayload = {
     schema = {
       kind = "nixfied-model";
-      version = 6;
+      version = 7;
     };
 
     identity = identityBase;
@@ -95,7 +95,7 @@ let
     // {
       compiled = {
         apiCatalog = apiCatalog;
-        runtimeManifests = runtimeManifests;
+        execution = execution;
         runtimeMetadata = runtimeMetadata;
         serviceSurfaceCatalog = serviceSurfaceCatalog;
       };

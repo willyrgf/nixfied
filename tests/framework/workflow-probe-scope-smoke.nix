@@ -125,7 +125,9 @@ let
     projectRoot = ../..;
   };
 in
-assert compiled.selectionIndex.workflowUnitClosureServicesById.${probeWorkflowId} == [ "postgres" ];
+assert
+  compiled.model.compiled.execution.workflows.byId.${probeWorkflowId}.unitClosureSelectedServices
+  == [ "postgres" ];
 pkgs.runCommand "workflow-probe-scope-smoke" { } ''
   set -euo pipefail
   ${shellHelpers.shellPrelude}

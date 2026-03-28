@@ -180,8 +180,7 @@
       }
     ];
     ownerFiles = [
-      "nixfied/compiler/compile-app-execution-manifests.nix"
-      "nixfied/compiler/compile-runtime-manifest.nix"
+      "nixfied/compiler/compile-execution.nix"
       "nixfied/framework/core/materializeExecution.nix"
       "nixfied/framework/core/mkMachineOutputPrograms.nix"
     ];

@@ -1,8 +1,8 @@
 # Shared closure-walking helpers for the compiler.
 #
-# Both compile-selection-index.nix (service-name closures) and
-# compile-app-execution-manifests.nix (task/workflow-id closures) traverse
-# the same task/workflow graph.  This module extracts the common pieces:
+# compile-execution.nix traverses the same task/workflow graph for both
+# service-name closures and task/workflow-id closures. This module extracts
+# the common pieces:
 #
 #   * workflowFamilyFromId      -- parse "workflow.<family>.<mode>" ids
 #   * workflowIdsByFamily       -- map each workflowId to sibling ids

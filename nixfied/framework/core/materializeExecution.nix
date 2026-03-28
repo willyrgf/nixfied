@@ -13,6 +13,7 @@ let
   registry = import ../runtime/registry { inherit pkgs; };
   compileServices = import ../../compiler/compile-services.nix { inherit lib; };
   compiledServiceSurfaceCatalog = compiledCore.model.compiled.serviceSurfaceCatalog or { };
+  compiledExecution = compiledCore.model.compiled.execution or { };
   normalizedSelectedServices =
     if selectedServices == null then
       null
@@ -148,7 +149,7 @@ let
         } "$@"
       '';
     }).program
-  ) (compiledCore.appExecutionManifests or { });
+  ) (compiledExecution.apps.byId or { });
 
   serviceSetPrograms = builtins.mapAttrs (
     serviceSetId: serviceSet:

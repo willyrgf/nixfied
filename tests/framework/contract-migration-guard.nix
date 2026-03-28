@@ -114,6 +114,9 @@ let
     ../../nixfied/framework/runtime/helpers/run-registry.nix
     ../../nixfied/framework/runtime/service-selection.nix
     ../../nixfied/framework/runtime/orchestrator-control.nix
+    ../../nixfied/compiler/compile-selection-index.nix
+    ../../nixfied/compiler/compile-app-execution-manifests.nix
+    ../../nixfied/compiler/compile-runtime-manifest.nix
     ../../nixfied/framework/runtime/services/public-surface.nix
     ../../nixfied/modules/apps.nix
     ../../tests/framework/snapshots/contracts/example.cue
