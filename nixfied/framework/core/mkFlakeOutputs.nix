@@ -127,7 +127,11 @@ let
     selectionIndex = compiledCore.selectionIndex;
   };
   serviceNames = launcherMetadata.enabledServices;
-  runtimeControlAppNames = launcherMetadata.runtimeControlAppNames;
+  runtimeControlAppNames = [
+    "runs"
+    "stop-run"
+    "stop-all-runs"
+  ];
   viewWrappedAppNames = launcherMetadata.viewWrappedAppNames;
   serviceWrappedAppNames = launcherMetadata.serviceWrappedAppNames;
   runtimeAppNames = launcherMetadata.runtimeAppNames;
@@ -1097,14 +1101,19 @@ let
       '';
     };
   };
-  orchestratorControl = import ../runtime/orchestrator-control.nix {
+  runtimeControlOrchestrator = import ../runtime/orchestrator.nix {
     inherit
       pkgs
       registry
+      projectRoot
       ;
     model = compiledCore.model;
+    services = { };
+    serviceSetPrograms = { };
+    serviceHookEnv = { };
+    executionEnabled = false;
   };
-  runtimeControlProgram = "${orchestratorControl}/bin/nixfied-orchestrator-control";
+  runtimeControlProgram = "${runtimeControlOrchestrator}/bin/nixfied-orchestrator";
   runtimeControlApps = builtins.listToAttrs (
     map (appName: {
       name = appName;

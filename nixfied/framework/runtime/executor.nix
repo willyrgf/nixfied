@@ -1,7 +1,6 @@
 {
   pkgs,
   model,
-  selectionIndex ? null,
   services,
   runtimeHash ? model.identity.evalHash,
   registry,
@@ -17,15 +16,6 @@ let
       model.schema.kind or ""
     else
       "";
-  resolvedSelectionIndex =
-    if selectionIndex != null then
-      selectionIndex
-    else
-      import ../../compiler/compile-selection-index.nix { inherit lib; } {
-        tasks = model.tasks or { };
-        workflows = model.workflows or { };
-        serviceCatalog = model.serviceCatalog or { };
-      };
 
   availableServiceNames = builtins.sort builtins.lessThan (
     lib.unique (
@@ -38,86 +28,7 @@ let
       ) (builtins.attrNames services)
     )
   );
-  availableServiceNameSet = builtins.listToAttrs (
-    map (serviceName: {
-      name = serviceName;
-      value = true;
-    }) availableServiceNames
-  );
-  executorResolvedServices = builtins.listToAttrs (
-    map (
-      serviceId:
-      let
-        service = model.serviceCatalog.${serviceId};
-      in
-      {
-        name = service.name;
-        value = {
-          enable = service.enable or false;
-        }
-        // (service.config or { });
-      }
-    ) (builtins.sort builtins.lessThan (builtins.attrNames (model.serviceCatalog or { })))
-  );
-  workflowPhaseServiceSetOperations = builtins.foldl' (
-    acc: workflowId:
-    let
-      workflow = model.workflows.${workflowId};
-      phaseEntries = (workflow.preRun.serviceSets or [ ]) ++ (workflow.postRun.serviceSets or [ ]);
-      addEntry =
-        phaseAcc: entry:
-        let
-          serviceSetId = entry.serviceSetId or "";
-          operation = entry.operation or "";
-          existing = phaseAcc.${serviceSetId} or [ ];
-        in
-        if serviceSetId == "" || operation == "" then
-          phaseAcc
-        else
-          phaseAcc
-          // {
-            ${serviceSetId} = builtins.sort builtins.lessThan (lib.unique (existing ++ [ operation ]));
-          };
-    in
-    builtins.foldl' addEntry acc phaseEntries
-  ) { } (builtins.sort builtins.lessThan (builtins.attrNames (model.workflows or { })));
-  synthesizedServiceSetPrograms = builtins.mapAttrs (
-    serviceSetId: serviceSet:
-    let
-      effectiveSelectedServices = builtins.filter (
-        serviceName: builtins.hasAttr serviceName availableServiceNameSet
-      ) (serviceSet.services.all or [ ]);
-      requiredOperations = workflowPhaseServiceSetOperations.${serviceSetId} or [ ];
-      serviceSetModel = model // {
-        runtime = model.runtime // {
-          directories = (model.runtime.directories or { }) // {
-            base = serviceSet.state.policy.runtimeBase;
-          };
-        };
-        state = model.state // {
-          policy = serviceSet.state.policy;
-        };
-      };
-      serviceSetRuntimeSurfaces = import ../core/mkServiceRuntimeSurfaces.nix {
-        inherit pkgs;
-        model = serviceSetModel;
-        services = services;
-        selectedServices = effectiveSelectedServices;
-      };
-    in
-    import ../core/mkServiceSetPrograms.nix {
-      inherit
-        pkgs
-        serviceSet
-        ;
-      model = serviceSetModel;
-      resolvedServices = executorResolvedServices;
-      serviceRuntimeSurfaces = serviceSetRuntimeSurfaces;
-      operations = requiredOperations;
-    }
-  ) (model.serviceSets or { });
-  effectiveServiceSetPrograms =
-    if serviceSetPrograms == { } then synthesizedServiceSetPrograms else serviceSetPrograms;
+  effectiveServiceSetPrograms = serviceSetPrograms;
 
   serviceSetProgramCases = builtins.concatLists (
     map (
