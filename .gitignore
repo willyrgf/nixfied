@@ -2,6 +2,7 @@ result
 *.log
 .ci-artifacts
 *.md
+!docs/*.md
 !AGENTS.md
 !README.md
 !RFC_*.md
