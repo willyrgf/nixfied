@@ -327,8 +327,8 @@ let
       proofKind = "guard";
     };
 
-    "framework-test-shard-validation" = {
-      layer = "migration";
+    "framework-test-layout-validation" = {
+      layer = "compile";
       proofKind = "guard";
     };
 
@@ -1250,14 +1250,14 @@ let
           checks = baseChecks;
         }
       );
-  frameworkTestShardValidationCheck =
-    mkFrameworkCheck "framework-test-shard-validation"
+  frameworkTestLayoutValidationCheck =
+    mkFrameworkCheck "framework-test-layout-validation"
       {
-        layer = "migration";
+        layer = "compile";
         proofKind = "guard";
       }
       (
-        import ./framework-test-shard-validation.nix {
+        import ./framework-test-layout-validation.nix {
           inherit pkgs;
           checks = baseChecks // {
             "feature-coverage-validation" = featureCoverageValidationCheck;
@@ -1265,7 +1265,7 @@ let
         }
       );
   finalChecks = baseChecks // {
-    "framework-test-shard-validation" = frameworkTestShardValidationCheck;
+    "framework-test-layout-validation" = frameworkTestLayoutValidationCheck;
     "feature-coverage-validation" = featureCoverageValidationCheck;
   };
 in

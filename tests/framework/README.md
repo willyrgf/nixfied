@@ -21,8 +21,9 @@ This README is an overview, not the canonical full check list.
 
 Available profiles:
 
-- `ci`: run the ownership-layer shards for `compile`, `manifest`, `kernel`, `adapters`, and `migration`
-- `full`: run every shard, including `services` and `e2e`
+- `feature-proof`: run only direct feature proofs backed by `covers`
+- `ci`: run canonical feature proofs plus the `compile`, `manifest`, `kernel`, `adapters`, and `migration` shards
+- `full`: run every registered framework check
 
 ## Shards
 
@@ -32,20 +33,19 @@ Available shards:
 - `manifest`
 - `kernel`
 - `adapters`
-- `services`
 - `e2e`
 - `migration`
 
-The shards are intentionally not a second architecture model.
-They are an execution layout for `framework::test`, with `services` kept as a practical operational shard even though the service proofs it runs span multiple layers.
+The shards are an execution layout for `framework::test`.
+They follow the real ownership layers, and `services` is intentionally gone.
 
 ## Useful Commands
 
 ```bash
 nix run .#framework::test -- --list-shards
+nix run .#framework::test -- --profile feature-proof --summary
 nix run .#framework::test -- --profile full --summary
 nix run .#framework::test -- --shard compile --summary
-nix run .#framework::test -- --shard services --summary
 nix run .#framework::test -- --shard migration --summary
 nix run .#framework::test -- --profile ci --summary-json /tmp/framework-test-summary.json
 ```
@@ -53,10 +53,9 @@ nix run .#framework::test -- --profile ci --summary-json /tmp/framework-test-sum
 ## Layer Intent
 
 - `compile`: compile-time model, help, schema, documentation, and packaging proofs
-- `manifest`: runtime manifest fixtures and handoff invariants between Nix and kernel
+- `manifest`: manifest-owned feature proofs and manifest handoff invariants between Nix and kernel
 - `kernel`: kernel-owned workflow, validation, registry, summary, and run semantics
 - `adapters`: thin shell and launcher process-edge behavior only
-- `services`: service typed contracts, lifecycle, readiness, and split-readiness
 - `e2e`: user-facing public behavior, install and upgrade flows, isolation, and self-host execution
 - `migration`: deleted-seam guards and forward-only refactor regressions
 
@@ -66,13 +65,13 @@ Use `tests/framework/default.nix` as the source of truth for:
 
 - the complete registered check list
 - the exact check names
-- proof metadata such as `layer`, `proofKind`, and `canonical`
+- proof metadata such as `layer`, `covers`, and `canonical`
 
 Use `tests/framework/framework-test-shards.nix` as the source of truth for:
 
 - shard order
 - shard membership
-- `ci` versus `full` profile selection
+- `feature-proof`, `ci`, and `full` profile selection
 
 ## Reuse Guides
 

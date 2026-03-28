@@ -11,14 +11,43 @@ let
   shellCommon = import ../core/shell-common.nix { inherit pkgs; };
   frameworkTestShardCatalog = import ../../../tests/framework/framework-test-shards.nix;
   frameworkTestShardNames = frameworkTestShardCatalog.order;
-  frameworkTestProfileNames = builtins.attrNames frameworkTestShardCatalog.profiles;
+  frameworkTestProfileNames = [
+    "feature-proof"
+    "ci"
+    "full"
+  ];
   renderShellArray =
     values: lib.concatMapStrings (value: "          ${lib.escapeShellArg value}\n") values;
-  renderCheckArgs =
-    shardName:
+  renderCheckArgsList =
+    checkNames:
     lib.concatMapStringsSep " \\\n" (
       checkName: "            ${lib.escapeShellArg ".#checks.${pkgs.system}.${checkName}"}"
-    ) frameworkTestShardCatalog.checks.${shardName};
+    ) checkNames;
+  renderCheckArgs = shardName: renderCheckArgsList frameworkTestShardCatalog.checks.${shardName};
+  renderProfileShardNames =
+    profileName:
+    builtins.filter (
+      shardName: (frameworkTestShardCatalog.profileShardChecks.${profileName}.${shardName} or [ ]) != [ ]
+    ) frameworkTestShardNames;
+  renderProfileShardBody =
+    profileName: shardName:
+    let
+      checkNames = frameworkTestShardCatalog.profileShardChecks.${profileName}.${shardName} or [ ];
+      fullE2eTail =
+        if profileName == "full" && shardName == "e2e" then
+          ''
+            nix run .#run-workflow -- workflow.test.framework.selfhost --summary
+          ''
+        else
+          "";
+    in
+    if checkNames == [ ] then
+      ''log_skip "shard has no selected checks profile=${profileName} name=${shardName}"''
+    else
+      ''
+                    run_nix_build_shard \
+        ${renderCheckArgsList checkNames}
+        ${fullE2eTail}'';
   frameworkTestMaxParallelShardsRaw = conf.frameworkTest.maxParallelShards or "auto";
   frameworkTestMaxParallelShards =
     if builtins.isInt frameworkTestMaxParallelShardsRaw then
@@ -66,7 +95,7 @@ in
           long = "--profile";
           type = "enum";
           values = frameworkTestProfileNames;
-          description = "Shard profile to run (ci or full).";
+          description = "Check profile to run (feature-proof, ci, or full).";
         }
         {
           name = "shard";
@@ -110,10 +139,12 @@ in
                         SERIAL=0
                         SHARDS=(
                 ${renderShellArray frameworkTestShardNames}        )
+                        PROFILE_FEATURE_PROOF_SHARDS=(
+                ${renderShellArray (renderProfileShardNames "feature-proof")}        )
                         PROFILE_CI_SHARDS=(
-                ${renderShellArray frameworkTestShardCatalog.profiles.ci}        )
+                ${renderShellArray (renderProfileShardNames "ci")}        )
                         PROFILE_FULL_SHARDS=(
-                ${renderShellArray frameworkTestShardCatalog.profiles.full}        )
+                ${renderShellArray (renderProfileShardNames "full")}        )
                         EXECUTED=0
                         FAILED_SHARDS=0
                         EXIT_1_SHARDS=0
@@ -126,18 +157,18 @@ in
 
                         usage() {
                           cat <<'EOF'
-        Usage: nix run .#framework::test [-- --profile <ci|full>] [--summary] [--summary-json <path>] [--shard <name>] [--max-parallel-shards <n|auto>] [--serial] [--list-shards]
+        Usage: nix run .#framework::test [-- --profile <feature-proof|ci|full>] [--summary] [--summary-json <path>] [--shard <name>] [--max-parallel-shards <n|auto>] [--serial] [--list-shards]
 
         Profiles:
-          ci          Run ownership-layer shards for compile, manifest, kernel, adapters, and migration.
-          full        Run every shard, including services and end-to-end public behavior.
+          feature-proof Run only direct feature proofs backed by covers metadata.
+          ci            Run canonical feature proofs plus compile, manifest, kernel, adapters, and migration shards.
+          full          Run every registered framework check.
 
         Shards:
-          compile     Build compile-time model, help, schema, and documentation proofs.
-          manifest    Build runtime manifest fixtures and handoff contracts.
+          compile     Build compile-time model, help, schema, documentation, and governance proofs.
+          manifest    Build manifest-owned feature and fixture contracts.
           kernel      Build kernel-owned runtime semantics, registry, and workflow proofs.
           adapters    Build thin launcher, shell, and process-edge adapter proofs.
-          services    Build service typed-contract, lifecycle, readiness, and split-readiness proofs.
           e2e         Build end-to-end public behavior, install, upgrade, isolation, and runtime smokes.
           migration   Build deleted-seam guards and ownership-migration regressions.
         EOF
@@ -163,6 +194,9 @@ in
 
                         load_profile_shards() {
                           case "$PROFILE" in
+                            feature-proof)
+                              profile_shards=("''${PROFILE_FEATURE_PROOF_SHARDS[@]}")
+                              ;;
                             ci)
                               profile_shards=("''${PROFILE_CI_SHARDS[@]}")
                               ;;
@@ -170,7 +204,7 @@ in
                               profile_shards=("''${PROFILE_FULL_SHARDS[@]}")
                               ;;
                             *)
-                              log_error "unknown profile '$PROFILE' (expected: ci|full)"
+                              log_error "unknown profile '$PROFILE' (expected: feature-proof|ci|full)"
                               exit "$NIXFIED_EXIT_USAGE"
                               ;;
                           esac
@@ -248,11 +282,6 @@ in
                 ${renderCheckArgs "adapters"}
                         }
 
-                        shard_services() {
-                          run_nix_build_shard \
-                ${renderCheckArgs "services"}
-                        }
-
                         shard_e2e() {
                           run_nix_build_shard \
                 ${renderCheckArgs "e2e"}
@@ -264,35 +293,63 @@ in
                 ${renderCheckArgs "migration"}
                         }
 
-                        run_named_shard() {
+                        run_full_shard() {
                           local shard_name="$1"
                           case "$shard_name" in
                             compile)
-                              run_shard "$shard_name" shard_compile
+                              shard_compile
                               ;;
                             manifest)
-                              run_shard "$shard_name" shard_manifest
+                              shard_manifest
                               ;;
                             kernel)
-                              run_shard "$shard_name" shard_kernel
+                              shard_kernel
                               ;;
                             adapters)
-                              run_shard "$shard_name" shard_adapters
-                              ;;
-                            services)
-                              run_shard "$shard_name" shard_services
+                              shard_adapters
                               ;;
                             e2e)
-                              run_shard "$shard_name" shard_e2e
+                              shard_e2e
                               ;;
                             migration)
-                              run_shard "$shard_name" shard_migration
+                              shard_migration
                               ;;
                             *)
                               log_error "unknown shard '$shard_name'"
                               return "$NIXFIED_EXIT_USAGE"
                               ;;
                           esac
+                        }
+
+                        run_profile_shard() {
+                          local profile_name="$1"
+                          local shard_name="$2"
+                          case "$profile_name:$shard_name" in
+        ${
+          lib.concatMapStrings (
+            profileName:
+            lib.concatMapStrings (
+              shardName:
+              let
+                body = renderProfileShardBody profileName shardName;
+              in
+              "                            ${lib.escapeShellArg "${profileName}:${shardName}"})\n${body}\n                              ;;\n"
+            ) frameworkTestShardNames
+          ) frameworkTestProfileNames
+        }                            *)
+                              log_error "unknown profile/shard selection profile=$profile_name shard=$shard_name"
+                              return "$NIXFIED_EXIT_USAGE"
+                              ;;
+                          esac
+                        }
+
+                        run_named_shard() {
+                          local shard_name="$1"
+                          if [ -n "$SHARD" ]; then
+                            run_shard "$shard_name" run_full_shard "$shard_name"
+                          else
+                            run_shard "$shard_name" run_profile_shard "$PROFILE" "$shard_name"
+                          fi
                         }
 
                         run_named_shard_recorded() {
@@ -581,6 +638,7 @@ in
         category = "framework";
         usage = [
           "nix run .#framework::test"
+          "nix run .#framework::test -- --profile feature-proof --summary"
           "nix run .#framework::test -- --profile full --summary"
           "nix run .#framework::test -- --profile ci --summary-json /tmp/framework-summary.json"
         ];
@@ -588,7 +646,6 @@ in
           "nix run .#framework::test -- --list-shards"
           "nix run .#framework::test -- --shard compile"
           "nix run .#framework::test -- --shard kernel"
-          "nix run .#framework::test -- --shard services"
           "nix run .#framework::test -- --shard e2e"
           "nix run .#framework::test -- --shard migration"
         ];
