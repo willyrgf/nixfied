@@ -606,15 +606,20 @@ In other words:
 - `C` is optional and justified only if it still removes duplicate framework
   knowledge after runtime deletion
 
-## Decision Questions
+Detailed implementation staging for this sequence lives in
+`RFC_LAYERS_REFACTOR.md` and should stay in lockstep with this document.
 
-To choose between the options, answer these explicitly:
+## Locked Decisions For Implementation
+
+These decisions are no longer open for the next refactor wave:
 
 1. Do we agree that `selectionIndex`, runtime metadata, manifest narrowing, and
    launcher selection tables should become one compiled execution authority?
+   Locked answer:
+   - yes
    <!-- //WR: yes -->
 2. Do we want shell to keep any fine-grained metadata query API at all?
-   Working answer:
+   Locked answer:
    - no as a target architecture
    - current evidence suggests the shell metadata layer exists because shell
      still reads runtime fields piecemeal, not because the product needs a
@@ -622,7 +627,7 @@ To choose between the options, answer these explicitly:
     <!-- //WR: no need form my PoV, but you can investigate necessity here -->
 3. Is shell-owned task dependency execution acceptable after the compiled graph
    is unified, or only as an intermediate state?
-   Working answer:
+   Locked answer:
    - acceptable only as an intermediate state
    - task dependency authoring remains a typed public API
    - the runtime ownership question is whether shell or kernel executes the
@@ -630,7 +635,7 @@ To choose between the options, answer these explicitly:
    <!-- //WR: we need to expose for the user of the framework how to set their task dependencies, with that in mind with a proper well-defined API it could be only an step in the state execution workflow after compiled. But you understand the details better than me here. -->
 4. Is service split-readiness a real requirement, or should service contracts be
    simplified only as far as they delete duplicated framework glue?
-   Working answer:
+   Locked answer:
    - yes, but only as a deletion test
    - repository split-readiness is justified when it forces a smaller public
      service boundary and exposes hidden framework coupling
@@ -638,14 +643,14 @@ To choose between the options, answer these explicitly:
      surface without deleting the current one
 5. Are we willing to grow kernel scope only when that growth deletes an entire
    shell planning seam?
-   Working answer:
+   Locked answer:
    - yes
    - kernel growth is justified only when it reduces total authorities rather
      than centralizing the same duplicated logic
    <!-- //WR: yes, kernel scope should only grow if it means simplifying the whole code base, increasing reusability and reproducibility/determinisnm while removing shell weak workflows. -->
 6. Which current migration-guard tests are still proving product guarantees, and
    which are only freezing temporary refactor boundaries?
-   Working answer:
+   Locked answer:
    - the `migration` shard is mostly deleted-seam and forward-only refactor
      policy
    - checks tied to compiled features and command surfaces are closer to product
