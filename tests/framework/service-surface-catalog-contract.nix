@@ -18,6 +18,8 @@ let
       builtins.attrNames (compiled.model.views.apps or { })
     )
   );
+  mkServiceRuntimeSurfacesSource =
+    builtins.readFile ../../nixfied/framework/core/mkServiceRuntimeSurfaces.nix;
   serviceNames = sortKeys (catalog.serviceApis or { });
   operationEntries = builtins.concatLists (
     map (
@@ -72,6 +74,9 @@ assert lib.all (
   )
 ) operationEntries;
 assert !(lib.hasInfix "mkServiceSurfaceCatalog.nix" mkCompiledCoreSource);
+assert !(lib.hasInfix "serviceModulePath = import ./serviceModulePath.nix;" mkServiceRuntimeSurfacesSource);
+assert !(lib.hasInfix "mkServiceApisFromModules (" mkServiceRuntimeSurfacesSource);
+assert lib.hasInfix "require compiled serviceSurfaceCatalog" mkServiceRuntimeSurfacesSource;
 pkgs.runCommand "service-surface-catalog-contract" { } ''
-  echo "OK: compiled service surface catalog matches materialized service apps, hooks, and public descriptors" > "$out"
+  echo "OK: compiled service surface catalog is the only service API source for materialized service apps, hooks, and public descriptors" > "$out"
 ''
