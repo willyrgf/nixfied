@@ -30,9 +30,8 @@ let
   modelExportRequired = modelExportSchema.required or [ ];
   modelExportProperties = modelExportSchema.properties or { };
 
-  defaultCheckKind = name: if lib.hasInfix "smoke" name then "smoke" else "contract";
   defaultCheckLayer =
-    name: kind:
+    name:
     if name == "contract-migration-guard" then
       "migration"
     else if lib.hasInfix "manifest" name then
@@ -74,28 +73,16 @@ let
       || lib.hasInfix "docs-guidance" name
     then
       "compile"
-    else if kind == "smoke" then
+    else if lib.hasInfix "smoke" name then
       "e2e"
     else
       "compile";
-  defaultProofKind =
-    name: kind:
-    if name == "contract-migration-guard" then
-      "guard"
-    else if lib.hasInfix "snapshot" name then
-      "fixture"
-    else if kind == "smoke" then
-      "smoke"
-    else
-      "contract";
 
   mkFrameworkCheck =
     name: metadata: drv:
     let
       existingPassThru = drv.passthru or { };
-      kind = metadata.kind or defaultCheckKind name;
-      layer = metadata.layer or (defaultCheckLayer name kind);
-      proofKind = metadata.proofKind or (defaultProofKind name kind);
+      layer = metadata.layer or (defaultCheckLayer name);
       canonical = metadata.canonical or false;
       covers = listUtils.uniquePreserveOrder (metadata.covers or [ ]);
       defaultOwnerFile =
@@ -114,9 +101,7 @@ let
       passthru = existingPassThru // {
         nixfied = {
           inherit
-            kind
             layer
-            proofKind
             canonical
             covers
             ownerFiles
@@ -129,135 +114,111 @@ let
   checkMetadata = {
     "help-snapshot" = {
       layer = "compile";
-      proofKind = "fixture";
     };
 
     "compiler-validation" = {
       layer = "compile";
-      proofKind = "contract";
       canonical = true;
       covers = requiredFeatureIdsByLayer "compile";
     };
 
     "features-surface-contract" = {
       layer = "compile";
-      proofKind = "contract";
       covers = requiredFeatureIds;
     };
 
     "feature-adapter-proof" = {
       layer = "adapter";
-      proofKind = "contract";
       canonical = true;
       covers = requiredFeatureIdsByLayer "adapter";
     };
 
     "feature-manifest-proof" = {
       layer = "manifest";
-      proofKind = "contract";
       canonical = true;
       covers = requiredFeatureIdsByLayer "manifest";
     };
 
     "feature-e2e-proof" = {
       layer = "e2e";
-      proofKind = "contract";
       canonical = true;
       covers = requiredFeatureIdsByLayer "e2e";
     };
 
     "log-prefix-contract" = {
       layer = "adapter";
-      proofKind = "contract";
     };
 
     "ephemeral-copy-mode-smoke" = {
       layer = "e2e";
-      proofKind = "smoke";
     };
 
     "ephemeral-env-file-mode-smoke" = {
       layer = "e2e";
-      proofKind = "smoke";
     };
 
     "ephemeral-nix-source-smoke" = {
       layer = "e2e";
-      proofKind = "smoke";
     };
 
     "ephemeral-registry-run-isolation-smoke" = {
       layer = "e2e";
-      proofKind = "smoke";
     };
 
     "skip-service-smoke" = {
       layer = "e2e";
-      proofKind = "smoke";
     };
 
     "service-requirements-contract" = {
       layer = "compile";
-      proofKind = "contract";
     };
 
     "selected-app-manifest-contract" = {
       layer = "adapter";
-      proofKind = "contract";
     };
 
     "service-set-surface-contract" = {
       layer = "e2e";
-      proofKind = "contract";
     };
 
     "runtime-manifest-fixture-contract" = {
       layer = "manifest";
-      proofKind = "fixture";
     };
 
     "introspection-bundle-determinism" = { };
 
     "kernel-native-tests" = {
       layer = "kernel";
-      proofKind = "contract";
     };
 
     "run-record-validator-failure" = { };
 
     "workflow-service-set-adapter-smoke" = {
       layer = "adapter";
-      proofKind = "smoke";
     };
 
     "machine-output-app-smoke" = {
       layer = "e2e";
-      proofKind = "smoke";
     };
 
     "workflow-ref-app-manifest-contract" = {
       layer = "adapter";
-      proofKind = "contract";
     };
 
     "helpers-runtime-contract" = {
       layer = "adapter";
-      proofKind = "contract";
     };
 
     "runtime-events-contract" = {
       layer = "adapter";
-      proofKind = "contract";
     };
 
     "service-runtime-surface-contract" = {
       layer = "adapter";
-      proofKind = "contract";
     };
 
     "service-extractability-contract" = {
       layer = "compile";
-      proofKind = "contract";
     };
 
     "launcher-surface-contract" = { };
@@ -304,26 +265,22 @@ let
 
     "service-hook-env-smoke" = {
       layer = "adapter";
-      proofKind = "smoke";
     };
 
     "service-op-composition-contract" = { };
 
     "framework-test-layout-validation" = {
       layer = "compile";
-      proofKind = "guard";
     };
 
     "contract-render-snapshot" = { };
 
     "contract-migration-guard" = {
       layer = "migration";
-      proofKind = "guard";
     };
 
     "no-legacy-project-modules" = {
       layer = "migration";
-      proofKind = "guard";
     };
   };
 
@@ -1214,7 +1171,6 @@ let
     mkFrameworkCheck "feature-coverage-validation"
       {
         layer = "compile";
-        proofKind = "guard";
       }
       (
         import ./feature-coverage-validation.nix {
@@ -1229,7 +1185,6 @@ let
     mkFrameworkCheck "framework-test-layout-validation"
       {
         layer = "compile";
-        proofKind = "guard";
       }
       (
         import ./framework-test-layout-validation.nix {
