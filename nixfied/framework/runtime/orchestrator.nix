@@ -14,8 +14,6 @@ let
   kernelPackage = import ./kernel { inherit pkgs; };
   shellCommon = import ../core/shell-common.nix { inherit pkgs; };
   registryShell = registry.events.mkShellLib { };
-  runtimeMetadataShell =
-    if executionEnabled then import ./runtime-metadata.nix { inherit pkgs; } else "";
   executorRuntimeShell =
     if executionEnabled then
       import ./executor-runtime.nix {
@@ -162,7 +160,6 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
   ORCHESTRATOR_STOP_TIMEOUT_SEC_DEFAULT=${lib.escapeShellArg (toString model.runtime.orchestrator.stopTimeoutSec)}
 
   ${registryShell}
-  ${runtimeMetadataShell}
   ${executorRuntimeShell}
   ${orchestratorRuntimeShell}
   ${sharedRuntimeLibShell}

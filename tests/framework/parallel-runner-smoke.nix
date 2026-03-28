@@ -5,6 +5,14 @@
   registry,
 }:
 let
+  runtimeMaterialization = import ./lib/runtime-materialization.nix;
+  runtimeDeps = runtimeMaterialization {
+    inherit
+      pkgs
+      model
+      services
+      ;
+  };
   executor = import ../../nixfied/framework/runtime/executor.nix {
     inherit
       pkgs
@@ -13,6 +21,10 @@ let
       registry
       ;
     projectRoot = ../..;
+    inherit (runtimeDeps)
+      serviceHookEnv
+      serviceSetPrograms
+      ;
   };
 in
 pkgs.runCommand "parallel-runner-smoke" { } ''

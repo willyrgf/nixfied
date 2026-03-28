@@ -11,8 +11,12 @@ let
     value:
     let
       valueType = builtins.typeOf value;
+      isDerivationValue =
+        valueType == "set" && lib != null && lib.isDerivation value && value ? outPath;
     in
-    if valueType == "set" then
+    if isDerivationValue then
+      builtins.toString value
+    else if valueType == "set" then
       builtins.listToAttrs (
         map (name: {
           inherit name;
@@ -32,8 +36,12 @@ let
     value:
     let
       valueType = builtins.typeOf value;
+      isDerivationValue =
+        valueType == "set" && lib != null && lib.isDerivation value && value ? outPath;
     in
-    if valueType == "set" then
+    if isDerivationValue then
+      builtins.toJSON (builtins.toString value)
+    else if valueType == "set" then
       let
         names = sortNames value;
         fields = map (name: "${renderAttrName name} = ${render value.${name}};") names;

@@ -55,18 +55,3 @@ pub(crate) fn runtime_metadata_workflow<'a>(
         .get(workflow_id)
         .ok_or_else(|| format!("unknown workflow '{}'", workflow_id))
 }
-
-pub(crate) fn runtime_task_runner_workflow_id(task: &JsonValue) -> String {
-    object_field(task, "runner")
-        .and_then(|runner| object_string(runner, "workflowId"))
-        .unwrap_or("")
-        .to_string()
-}
-
-pub(crate) fn runtime_workflow_modes_for_family(metadata: &JsonValue, family: &str) -> Vec<String> {
-    object_field(metadata, "workflowFamilies")
-        .and_then(JsonValue::as_object)
-        .and_then(|families| families.get(family))
-        .map(|entry| array_strings(entry, "modes"))
-        .unwrap_or_default()
-}

@@ -1,26 +1,20 @@
 use super::*;
 use crate::runtime_metadata::{
     load_runtime_metadata, runtime_metadata_task, runtime_metadata_tasks,
-    runtime_task_runner_workflow_id,
 };
 
 pub(crate) fn task_command(subcommand: &str, values: &[String]) -> Result<(), String> {
     match subcommand {
         "execution-order" => task_execution_order_command(values),
-        "exists" => task_exists_command(values),
-        "workflow-ref" => task_workflow_ref_command(values),
         "validate-args" => task_validate_args_command(values),
-        "render-help" => task_render_help_command(values),
-        "load-runtime" => task_load_runtime_command(values),
-        "load-hook" => task_load_hook_command(values),
         other => Err(format!("unknown task subcommand: {}", other)),
     }
 }
 
 fn task_execution_order_command(values: &[String]) -> Result<(), String> {
-    if values.len() != 5 {
+    if values.len() != 4 {
         return Err(
-            "usage: nixfied-kernel task execution-order <runtime-metadata-file> <skipped-services-file> <task-id> <order-file> <export-file>"
+            "usage: nixfied-kernel task execution-order <runtime-metadata-file> <skipped-services-file> <task-id> <order-file>"
                 .to_string(),
         );
     }
@@ -30,37 +24,7 @@ fn task_execution_order_command(values: &[String]) -> Result<(), String> {
     let skipped_services = load_line_set(&values[1])?;
     let execution_plan = collect_task_execution_plan(&plan, &skipped_services, &values[2])?;
     write_task_execution_plan_file(&values[3], &execution_plan.steps)?;
-    write_shell_exports(
-        &values[4],
-        &[(
-            "TASK_EXECUTION_PLAN_SOFT_MISSING_LINES".to_string(),
-            execution_plan.soft_missing_lines,
-        )],
-    )?;
-    println!("OK: task execution-order");
-    Ok(())
-}
-
-fn task_exists_command(values: &[String]) -> Result<(), String> {
-    if values.len() != 2 {
-        return Err(
-            "usage: nixfied-kernel task exists <runtime-metadata-file> <task-id>".to_string(),
-        );
-    }
-    let metadata = load_runtime_metadata(&values[0])?;
-    runtime_metadata_task(&metadata, &values[1])?;
-    Ok(())
-}
-
-fn task_workflow_ref_command(values: &[String]) -> Result<(), String> {
-    if values.len() != 2 {
-        return Err(
-            "usage: nixfied-kernel task workflow-ref <runtime-metadata-file> <task-id>".to_string(),
-        );
-    }
-    let metadata = load_runtime_metadata(&values[0])?;
-    let task = runtime_metadata_task(&metadata, &values[1])?;
-    println!("{}", runtime_task_runner_workflow_id(task));
+    println!("{}", execution_plan.soft_missing_lines);
     Ok(())
 }
 
@@ -84,176 +48,6 @@ fn task_validate_args_command(values: &[String]) -> Result<(), String> {
     let args = strip_passthrough_separator(&values[2..]);
     validate_typed_task_args(task, args)?;
     println!("OK: task validate-args");
-    Ok(())
-}
-
-fn task_render_help_command(values: &[String]) -> Result<(), String> {
-    if values.len() != 2 {
-        return Err(
-            "usage: nixfied-kernel task render-help <runtime-metadata-file> <task-id>".to_string(),
-        );
-    }
-
-    let metadata = load_runtime_metadata(&values[0])?;
-    let task = runtime_metadata_task(&metadata, &values[1])?;
-    let help_lines = object_field(task, "help")
-        .and_then(|help| object_array(help, "lines"))
-        .unwrap_or(&[])
-        .iter()
-        .filter_map(JsonValue::as_str)
-        .collect::<Vec<_>>();
-    println!("{}", help_lines.join("\n"));
-    Ok(())
-}
-
-fn task_load_runtime_command(values: &[String]) -> Result<(), String> {
-    if values.len() != 2 {
-        return Err(
-            "usage: nixfied-kernel task load-runtime <runtime-metadata-file> <task-id>".to_string(),
-        );
-    }
-
-    let metadata = load_runtime_metadata(&values[0])?;
-    let task = runtime_metadata_task(&metadata, &values[1])?;
-    let runner = object_field(task, "runner")
-        .ok_or_else(|| "runtime task descriptor missing object field runner".to_string())?;
-    let deps = object_field(task, "deps")
-        .ok_or_else(|| "runtime task descriptor missing object field deps".to_string())?;
-    let hooks = object_field(task, "hooks")
-        .ok_or_else(|| "runtime task descriptor missing object field hooks".to_string())?;
-    let produces = object_field(task, "produces")
-        .ok_or_else(|| "runtime task descriptor missing object field produces".to_string())?;
-    let exports = vec![
-        (
-            "TASK_RUNNER_TYPE".to_string(),
-            object_string(runner, "type").unwrap_or("shell").to_string(),
-        ),
-        (
-            "TASK_RUNNER_COMMAND".to_string(),
-            object_string(runner, "command").unwrap_or("").to_string(),
-        ),
-        (
-            "TASK_RUNNER_PACKAGE".to_string(),
-            object_string(runner, "package").unwrap_or("").to_string(),
-        ),
-        (
-            "TASK_RUNNER_WORKFLOW_ID".to_string(),
-            object_string(runner, "workflowId")
-                .unwrap_or("")
-                .to_string(),
-        ),
-        (
-            "TASK_RUNTIME_PLAN_SHELL".to_string(),
-            object_string(task, "runtimePlanShell")
-                .unwrap_or("")
-                .to_string(),
-        ),
-        (
-            "TASK_PASS_THROUGH_ENV_NAMES_LINES".to_string(),
-            array_strings(task, "passThroughEnvNames").join("\n"),
-        ),
-        (
-            "TASK_PRODUCES_JSON".to_string(),
-            render_json_compact(produces),
-        ),
-        (
-            "TASK_MAX_ATTEMPTS".to_string(),
-            object_field(task, "maxAttempts")
-                .and_then(json_value_to_i64)
-                .unwrap_or(1)
-                .to_string(),
-        ),
-        (
-            "TASK_RETRY_BACKOFF_LINES".to_string(),
-            object_field(task, "retryBackoffValues")
-                .and_then(JsonValue::as_array)
-                .map(|values| {
-                    values
-                        .iter()
-                        .filter_map(json_value_to_plain_string)
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                })
-                .unwrap_or_default(),
-        ),
-        (
-            "TASK_REQUIRED_SERVICES_LINES".to_string(),
-            array_strings(task, "requiredServices").join("\n"),
-        ),
-        (
-            "TASK_CLOSURE_SELECTED_SERVICES_LINES".to_string(),
-            array_strings(task, "closureSelectedServices").join("\n"),
-        ),
-        (
-            "TASK_BASE_CLOSURE_SELECTED_SERVICES_LINES".to_string(),
-            array_strings(task, "baseClosureSelectedServices").join("\n"),
-        ),
-        (
-            "TASK_NEEDS_LINES".to_string(),
-            array_strings(deps, "needs").join("\n"),
-        ),
-        (
-            "TASK_SOFT_NEEDS_LINES".to_string(),
-            array_strings(deps, "softNeeds").join("\n"),
-        ),
-        (
-            "TASK_HOOK_COUNT".to_string(),
-            object_field(hooks, "count")
-                .and_then(json_value_to_i64)
-                .unwrap_or(0)
-                .to_string(),
-        ),
-        (
-            "TASK_PRE_HOOK_IDS_LINES".to_string(),
-            array_strings(hooks, "preIds").join("\n"),
-        ),
-        (
-            "TASK_POST_HOOK_IDS_LINES".to_string(),
-            array_strings(hooks, "postIds").join("\n"),
-        ),
-    ];
-
-    print!("{}", render_shell_exports(&exports));
-    Ok(())
-}
-
-fn task_load_hook_command(values: &[String]) -> Result<(), String> {
-    if values.len() != 4 {
-        return Err(
-            "usage: nixfied-kernel task load-hook <runtime-metadata-file> <task-id> <pre|post> <hook-id>"
-                .to_string(),
-        );
-    }
-
-    let metadata = load_runtime_metadata(&values[0])?;
-    let task = runtime_metadata_task(&metadata, &values[1])?;
-    let phase_hooks = object_field(task, "hooks")
-        .and_then(|hooks| object_field(hooks, &values[2]))
-        .and_then(JsonValue::as_object)
-        .ok_or_else(|| format!("unknown task hook phase '{}'", values[2]))?;
-    let hook = phase_hooks.get(&values[3]).ok_or_else(|| {
-        format!(
-            "unknown task hook '{}:{}:{}'",
-            values[1], values[2], values[3]
-        )
-    })?;
-    let exports = vec![
-        (
-            "HOOK_COMMAND".to_string(),
-            object_string(hook, "command").unwrap_or("").to_string(),
-        ),
-        (
-            "HOOK_RUNTIME_PLAN_SHELL".to_string(),
-            object_string(hook, "runtimePlanShell")
-                .unwrap_or("")
-                .to_string(),
-        ),
-        (
-            "HOOK_PASS_THROUGH_ENV_NAMES_LINES".to_string(),
-            array_strings(hook, "passThroughEnvNames").join("\n"),
-        ),
-    ];
-    print!("{}", render_shell_exports(&exports));
     Ok(())
 }
 

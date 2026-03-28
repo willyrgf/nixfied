@@ -110,9 +110,9 @@ fn summary_compose_command(values: &[String]) -> Result<(), String> {
 }
 
 fn summary_collect_steps_command(values: &[String]) -> Result<(), String> {
-    if values.len() != 6 {
+    if values.len() != 5 {
         return Err(
-            "usage: nixfied-kernel summary collect-steps <plan-file> <index-file> <run-id> <attempt-id|empty> <steps-file> <export-file>"
+            "usage: nixfied-kernel summary collect-steps <plan-file> <index-file> <run-id> <attempt-id|empty> <steps-file>"
                 .to_string(),
         );
     }
@@ -120,40 +120,15 @@ fn summary_collect_steps_command(values: &[String]) -> Result<(), String> {
     let plan = load_workflow_summary_plan(&values[0])?;
     let collected = collect_workflow_summary(&plan, &values[1], &values[2], &values[3])?;
     write_workflow_collected_steps_file(&values[4], &collected.steps)?;
-    write_shell_exports(
-        &values[5],
-        &[
-            (
-                "WORKFLOW_PASSED_COUNT".to_string(),
-                collected.passed.to_string(),
-            ),
-            (
-                "WORKFLOW_FAILED_COUNT".to_string(),
-                collected.failed.to_string(),
-            ),
-            (
-                "WORKFLOW_SKIPPED_COUNT".to_string(),
-                collected.skipped.to_string(),
-            ),
-            (
-                "WORKFLOW_CANCELED_COUNT".to_string(),
-                collected.canceled.to_string(),
-            ),
-            (
-                "WORKFLOW_STEPS_DURATION".to_string(),
-                collected.steps_duration.to_string(),
-            ),
-            (
-                "WORKFLOW_PEAK_WORKERS".to_string(),
-                collected.peak_workers.to_string(),
-            ),
-            (
-                "WORKFLOW_LEAF_TASK_IDS_LINES".to_string(),
-                collected.leaf_task_ids_lines,
-            ),
-        ],
-    )?;
-    println!("OK: summary collect-steps");
+    println!(
+        "{}\t{}\t{}\t{}\t{}\t{}",
+        collected.passed,
+        collected.failed,
+        collected.skipped,
+        collected.canceled,
+        collected.steps_duration,
+        collected.peak_workers
+    );
     Ok(())
 }
 

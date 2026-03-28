@@ -6,30 +6,171 @@ let
   lib = pkgs.lib;
   commonRuntimeShell = import ./common-runtime.nix { inherit pkgs; };
   skipPolicy = import ./helpers/skip-policy.nix { inherit pkgs; };
-  workflows = if model == null then { } else model.workflows or { };
+  kernelPackage = import ./kernel { inherit pkgs; };
+  runtimeMetadata =
+    if model == null then
+      {
+        tasks = { };
+        workflows = { };
+        workflowFamilies = { };
+      }
+    else
+      ((model.compiled or { }).runtimeMetadata or {
+        tasks = { };
+        workflows = { };
+        workflowFamilies = { };
+      });
+  tasks = runtimeMetadata.tasks or { };
+  workflows = runtimeMetadata.workflows or { };
+  workflowFamilies = runtimeMetadata.workflowFamilies or { };
+  taskIds = builtins.sort builtins.lessThan (builtins.attrNames tasks);
   workflowIds = builtins.sort builtins.lessThan (builtins.attrNames workflows);
+  workflowFamilyIds = builtins.sort builtins.lessThan (builtins.attrNames workflowFamilies);
+
+  taskEntries = map (
+    taskId:
+    let
+      task = tasks.${taskId};
+      runner = task.runner or { };
+      deps = task.deps or { };
+      hooks = task.hooks or { };
+      help = task.help or { };
+    in
+    {
+      key = taskId;
+      value = {
+        helpLines = help.lines or [ ];
+        runnerType = runner.type or "shell";
+        runnerCommand = runner.command or "";
+        runnerPackage = runner.package or "";
+        runnerWorkflowId = runner.workflowId or "";
+        requiredServices = task.requiredServices or [ ];
+        closureSelectedServices = task.closureSelectedServices or [ ];
+        baseClosureSelectedServices = task.baseClosureSelectedServices or [ ];
+        runtimePlanShell = task.runtimePlanShell or "";
+        passThroughEnvNames = task.passThroughEnvNames or [ ];
+        producesJson = builtins.toJSON (task.produces or { });
+        maxAttempts = toString (task.maxAttempts or 1);
+        retryBackoffValues = map toString (task.retryBackoffValues or [ ]);
+        needs = deps.needs or [ ];
+        softNeeds = deps.softNeeds or [ ];
+        hookCount = toString (hooks.count or 0);
+        preHookIds = hooks.preIds or [ ];
+        postHookIds = hooks.postIds or [ ];
+      };
+    }
+  ) taskIds;
+
+  taskHookEntries = builtins.concatLists (
+    map (
+      taskId:
+      let
+        task = tasks.${taskId};
+        hooks = task.hooks or { };
+        mkPhaseEntries =
+          phase: phaseHooks:
+          map (
+            hookId:
+            let
+              hook = phaseHooks.${hookId};
+            in
+            {
+              key = "${taskId}:${phase}:${hookId}";
+              value = {
+                command = hook.command or "";
+                runtimePlanShell = hook.runtimePlanShell or "";
+                passThroughEnvNames = hook.passThroughEnvNames or [ ];
+              };
+            }
+          ) (builtins.sort builtins.lessThan (builtins.attrNames phaseHooks));
+      in
+      (mkPhaseEntries "pre" (hooks.pre or { })) ++ (mkPhaseEntries "post" (hooks.post or { }))
+    ) taskIds
+  );
+
+  taskHookIdEntries = builtins.concatLists (
+    map (entry: [
+      {
+        key = "${entry.key}:pre";
+        value = entry.value.preHookIds;
+      }
+      {
+        key = "${entry.key}:post";
+        value = entry.value.postHookIds;
+      }
+    ]) taskEntries
+  );
+
+  workflowEntries = map (
+    workflowId:
+    let
+      workflow = workflows.${workflowId};
+      logging = workflow.logging or { };
+      phases = workflow.phases or { };
+      preRun = phases.preRun or { };
+      postRun = phases.postRun or { };
+      plan = workflow.plan or [ ];
+    in
+    {
+      key = workflowId;
+      value = {
+        modeName = workflow.mode or "custom";
+        artifactsRoot = workflow.artifactsRoot or "";
+        ephemeralFlag = if workflow.ephemeralEnabled or false then "1" else "0";
+        loggingLevelDefault = logging.levelDefault or "";
+        loggingOutputDefault = logging.outputDefault or "";
+        failFast = if workflow.failFast or false then "true" else "false";
+        parallelEnabled = if workflow.parallelEnabled or false then "true" else "false";
+        maxWorkers = toString (workflow.maxWorkers or 1);
+        writeSummary = if workflow.writeSummary or false then "true" else "false";
+        postRunAlways = if workflow.postRunAlways or false then "true" else "false";
+        unitClosureSelectedServices = workflow.unitClosureSelectedServices or [ ];
+        planTaskIds = map (unit: unit.taskId or "") (
+          builtins.filter (unit: (unit.taskId or "") != "") plan
+        );
+        preTasks = preRun.tasks or [ ];
+        postTasks = postRun.tasks or [ ];
+      };
+    }
+  ) workflowIds;
+
+  workflowPhaseTaskEntries = builtins.concatLists (
+    map (entry: [
+      {
+        key = "${entry.key}:preRun";
+        value = entry.value.preTasks;
+      }
+      {
+        key = "${entry.key}:postRun";
+        value = entry.value.postTasks;
+      }
+    ]) workflowEntries
+  );
+
   workflowUnitEntries = builtins.concatLists (
     map (
       workflowId:
+      let
+        workflow = workflows.${workflowId};
+      in
       map (
         unit:
         let
           needs = unit.needs or [ ];
           locks = unit.locks or [ ];
-          requirements = unit.requirements or { };
-          produces = unit.produces or { };
           when = unit.when or { };
           whenEnvEquals = when.envEquals or { };
+          produces = unit.produces or { };
         in
         {
-          key = "workflow-unit:${workflowId}:${unit.name}";
+          key = "workflow-unit:${workflowId}:${unit.name or ""}";
           value = {
-            name = unit.name;
+            name = unit.name or "";
             taskId = unit.taskId or "";
             needsCount = toString (builtins.length needs);
             needs = needs;
             locks = if locks == [ ] then "" else "${lib.concatStringsSep " " locks} ";
-            requiredServices = requirements.services or [ ];
+            requiredServices = unit.requiredServices or [ ];
             producesJson = builtins.toJSON {
               artifacts = produces.artifacts or [ ];
               stateKeys = produces.stateKeys or [ ];
@@ -41,9 +182,30 @@ let
             );
           };
         }
-      ) (workflows.${workflowId}.plan or [ ])
+      ) (workflow.plan or [ ])
     ) workflowIds
   );
+
+  workflowFamilyEntries = map (
+    family:
+    {
+      key = family;
+      value = {
+        modesJoined = lib.concatStringsSep "|" (workflowFamilies.${family}.modes or [ ]);
+      };
+    }
+  ) workflowFamilyIds;
+
+  renderExistsCase =
+    keys:
+    lib.concatStringsSep "\n" (
+      map (key: ''
+        ${lib.escapeShellArg key})
+          return 0
+          ;;
+      '') keys
+    );
+
   renderCaseReturn =
     valueExpr: entries:
     lib.concatStringsSep "\n" (
@@ -54,6 +216,7 @@ let
           ;;
       '') entries
     );
+
   renderCasePrintLines =
     valuesExpr: entries:
     lib.concatStringsSep "\n" (
@@ -78,6 +241,430 @@ in
 ''
     ${commonRuntimeShell}
     ${skipPolicy.skipPolicyFunctions}
+
+    task_help_requested() {
+      local arg=""
+
+      while [ "$#" -gt 0 ]; do
+        arg="$1"
+        shift
+
+        case "$arg" in
+          --help|-h)
+            return 0
+            ;;
+          --)
+            return 1
+            ;;
+        esac
+      done
+
+      return 1
+    }
+
+    task_descriptor_exists() {
+      case "$1" in
+  ${renderExistsCase taskIds}
+        *)
+          return 1
+          ;;
+      esac
+    }
+
+    workflow_id_exists() {
+      case "$1" in
+  ${renderExistsCase workflowIds}
+        *)
+          return 1
+          ;;
+      esac
+    }
+
+    task_print_help() {
+      case "$1" in
+  ${renderCasePrintLines (entry: entry.value.helpLines) taskEntries}
+        *)
+          return 1
+          ;;
+      esac
+    }
+
+    task_validate_args() {
+      local task_id="$1"
+      shift
+
+      ${kernelPackage}/bin/nixfied-kernel task validate-args \
+        "$NIXFIED_MODEL_FILE" \
+        "$task_id" \
+        -- "$@"
+    }
+
+    task_runner_type() {
+      case "$1" in
+  ${renderCaseReturn (entry: entry.value.runnerType) taskEntries}
+        *)
+          return 1
+          ;;
+      esac
+    }
+
+    task_runner_command() {
+      case "$1" in
+  ${renderCaseReturn (entry: entry.value.runnerCommand) taskEntries}
+        *)
+          return 1
+          ;;
+      esac
+    }
+
+    task_runner_package() {
+      case "$1" in
+  ${renderCaseReturn (entry: entry.value.runnerPackage) taskEntries}
+        *)
+          return 1
+          ;;
+      esac
+    }
+
+    task_runner_workflow_id() {
+      case "$1" in
+  ${renderCaseReturn (entry: entry.value.runnerWorkflowId) taskEntries}
+        *)
+          return 1
+          ;;
+      esac
+    }
+
+    task_required_services() {
+      case "$1" in
+  ${renderCasePrintLines (entry: entry.value.requiredServices) taskEntries}
+        *)
+          return 0
+          ;;
+      esac
+    }
+
+    task_closure_selected_services() {
+      case "$1" in
+  ${renderCasePrintLines (entry: entry.value.closureSelectedServices) taskEntries}
+        *)
+          return 0
+          ;;
+      esac
+    }
+
+    task_base_closure_selected_services() {
+      case "$1" in
+  ${renderCasePrintLines (entry: entry.value.baseClosureSelectedServices) taskEntries}
+        *)
+          return 0
+          ;;
+      esac
+    }
+
+    workflow_unit_closure_selected_services() {
+      case "$1" in
+  ${renderCasePrintLines (entry: entry.value.unitClosureSelectedServices) workflowEntries}
+        *)
+          return 0
+          ;;
+      esac
+    }
+
+    workflow_plan_task_ids() {
+      case "$1" in
+  ${renderCasePrintLines (entry: entry.value.planTaskIds) workflowEntries}
+        *)
+          return 0
+          ;;
+      esac
+    }
+
+    workflow_phase_tasks() {
+      case "$1:$2" in
+  ${renderCasePrintLines (entry: entry.value) workflowPhaseTaskEntries}
+        *)
+          return 0
+          ;;
+      esac
+    }
+
+    workflow_mode_name() {
+      case "$1" in
+  ${renderCaseReturn (entry: entry.value.modeName) workflowEntries}
+        *)
+          return 1
+          ;;
+      esac
+    }
+
+    workflow_artifacts_root() {
+      case "$1" in
+  ${renderCaseReturn (entry: entry.value.artifactsRoot) workflowEntries}
+        *)
+          return 1
+          ;;
+      esac
+    }
+
+    workflow_ephemeral_flag() {
+      case "$1" in
+  ${renderCaseReturn (entry: entry.value.ephemeralFlag) workflowEntries}
+        *)
+          return 1
+          ;;
+      esac
+    }
+
+    workflow_logging_level_default() {
+      case "$1" in
+  ${renderCaseReturn (entry: entry.value.loggingLevelDefault) workflowEntries}
+        *)
+          return 1
+          ;;
+      esac
+    }
+
+    workflow_logging_output_default() {
+      case "$1" in
+  ${renderCaseReturn (entry: entry.value.loggingOutputDefault) workflowEntries}
+        *)
+          return 1
+          ;;
+      esac
+    }
+
+    workflow_fail_fast() {
+      case "$1" in
+  ${renderCaseReturn (entry: entry.value.failFast) workflowEntries}
+        *)
+          return 1
+          ;;
+      esac
+    }
+
+    workflow_parallel_enabled() {
+      case "$1" in
+  ${renderCaseReturn (entry: entry.value.parallelEnabled) workflowEntries}
+        *)
+          return 1
+          ;;
+      esac
+    }
+
+    workflow_max_workers() {
+      case "$1" in
+  ${renderCaseReturn (entry: entry.value.maxWorkers) workflowEntries}
+        *)
+          return 1
+          ;;
+      esac
+    }
+
+    workflow_write_summary() {
+      case "$1" in
+  ${renderCaseReturn (entry: entry.value.writeSummary) workflowEntries}
+        *)
+          return 1
+          ;;
+      esac
+    }
+
+    workflow_post_run_always() {
+      case "$1" in
+  ${renderCaseReturn (entry: entry.value.postRunAlways) workflowEntries}
+        *)
+          return 1
+          ;;
+      esac
+    }
+
+    workflow_family_from_id() {
+      local workflow_id="$1"
+      local remainder=""
+
+      case "$workflow_id" in
+        workflow.*.*)
+          remainder="''${workflow_id#workflow.}"
+          printf '%s' "''${remainder%%.*}"
+          ;;
+        *)
+          printf '%s' ""
+          ;;
+      esac
+    }
+
+    workflow_family_modes_joined() {
+      case "$1" in
+  ${renderCaseReturn (entry: entry.value.modesJoined) workflowFamilyEntries}
+        *)
+          printf '%s' ""
+          ;;
+      esac
+    }
+
+    workflow_simple_shorthand_exists_for_family() {
+      local workflow_id="$1"
+      local candidate="$2"
+
+      workflow_resolve_mode_id "$workflow_id" "$candidate" >/dev/null 2>&1
+    }
+
+    workflow_resolve_mode_id() {
+      local workflow_id="$1"
+      local mode_override="$2"
+      local family=""
+      local candidate=""
+      local expected_modes=""
+
+      if ! workflow_id_exists "$workflow_id"; then
+        echo "ERROR: unknown workflow '$workflow_id'" >&2
+        return 1
+      fi
+
+      if [ -z "$mode_override" ]; then
+        printf '%s' "$workflow_id"
+        return 0
+      fi
+
+      family="$(workflow_family_from_id "$workflow_id")"
+      if [ -z "$family" ]; then
+        echo "ERROR: workflow '$workflow_id' does not support mode overrides" >&2
+        return 1
+      fi
+
+      candidate="workflow.$family.$mode_override"
+      if workflow_id_exists "$candidate"; then
+        printf '%s' "$candidate"
+        return 0
+      fi
+
+      expected_modes="$(workflow_family_modes_joined "$family")"
+      if [ -n "$expected_modes" ]; then
+        echo "ERROR: unknown mode '$mode_override' (expected: $expected_modes)" >&2
+      else
+        echo "ERROR: unknown mode '$mode_override'" >&2
+      fi
+      return 1
+    }
+
+    task_invocation_selected_services() {
+      local task_id="$1"
+      local resolved_workflow_id="''${2:-}"
+
+      task_base_closure_selected_services "$task_id"
+      if [ -n "$resolved_workflow_id" ]; then
+        workflow_unit_closure_selected_services "$resolved_workflow_id"
+      fi
+    }
+
+    task_runtime_plan_shell() {
+      case "$1" in
+  ${renderCaseReturn (entry: entry.value.runtimePlanShell) taskEntries}
+        *)
+          return 1
+          ;;
+      esac
+    }
+
+    task_runtime_pass_through_env_names() {
+      case "$1" in
+  ${renderCasePrintLines (entry: entry.value.passThroughEnvNames) taskEntries}
+        *)
+          return 0
+          ;;
+      esac
+    }
+
+    task_produces_json() {
+      case "$1" in
+  ${renderCaseReturn (entry: entry.value.producesJson) taskEntries}
+        *)
+          return 1
+          ;;
+      esac
+    }
+
+    task_max_attempts() {
+      case "$1" in
+  ${renderCaseReturn (entry: entry.value.maxAttempts) taskEntries}
+        *)
+          return 1
+          ;;
+      esac
+    }
+
+    task_retry_backoff_values() {
+      case "$1" in
+  ${renderCasePrintLines (entry: entry.value.retryBackoffValues) taskEntries}
+        *)
+          return 0
+          ;;
+      esac
+    }
+
+    task_needs() {
+      case "$1" in
+  ${renderCasePrintLines (entry: entry.value.needs) taskEntries}
+        *)
+          return 0
+          ;;
+      esac
+    }
+
+    task_soft_needs() {
+      case "$1" in
+  ${renderCasePrintLines (entry: entry.value.softNeeds) taskEntries}
+        *)
+          return 0
+          ;;
+      esac
+    }
+
+    task_hook_count() {
+      case "$1" in
+  ${renderCaseReturn (entry: entry.value.hookCount) taskEntries}
+        *)
+          return 1
+          ;;
+      esac
+    }
+
+    task_hook_ids() {
+      case "$1:$2" in
+  ${renderCasePrintLines (entry: entry.value) taskHookIdEntries}
+        *)
+          return 0
+          ;;
+      esac
+    }
+
+    task_hook_command() {
+      case "$1:$2:$3" in
+  ${renderCaseReturn (entry: entry.value.command) taskHookEntries}
+        *)
+          return 1
+          ;;
+      esac
+    }
+
+    task_hook_runtime_plan_shell() {
+      case "$1:$2:$3" in
+  ${renderCaseReturn (entry: entry.value.runtimePlanShell) taskHookEntries}
+        *)
+          return 1
+          ;;
+      esac
+    }
+
+    task_hook_runtime_pass_through_env_names() {
+      case "$1:$2:$3" in
+  ${renderCasePrintLines (entry: entry.value.passThroughEnvNames) taskHookEntries}
+        *)
+          return 0
+          ;;
+      esac
+    }
 
     normalize_run_artifacts_dir() {
       local base_dir="$1"
