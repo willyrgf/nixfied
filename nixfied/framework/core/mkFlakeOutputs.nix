@@ -124,7 +124,7 @@ let
       workspaceMarkerPresent
       ;
     model = compiledCore.model;
-    selectionIndex = compiledCore.selectionIndex;
+    execution = (compiledCore.model.compiled or { }).execution or { };
   };
   serviceNames = launcherMetadata.enabledServices;
   runtimeControlAppNames = [
@@ -1217,7 +1217,6 @@ in
   serviceCatalog = compiledCore.model.serviceCatalog;
   workflows = compiledCore.model.workflows;
   features = compiledCore.model.features;
-  selectionIndex = compiledCore.selectionIndex;
   serviceSurfaceCatalog = (compiledCore.model.compiled or { }).serviceSurfaceCatalog or { };
   serviceApis = heavyOutputs.serviceApis;
   serviceHookEnv = heavyOutputs.serviceHookEnv;

@@ -1,11 +1,13 @@
 {
   lib,
   model,
-  selectionIndex,
+  execution,
   workspaceMarkerPresent,
 }:
 let
   serviceSurfaceCatalog = (model.compiled or { }).serviceSurfaceCatalog or { };
+  taskExecutionById = execution.tasks.byId or { };
+  workflowExecutionById = execution.workflows.byId or { };
   viewAppNames = builtins.sort builtins.lessThan (builtins.attrNames (model.views.apps or { }));
 
   selectorDispatcherAppNames = [
@@ -37,26 +39,24 @@ let
   );
 in
 {
-  enabledServices = selectionIndex.enabledServices or [ ];
-  taskIds =
-    if selectionIndex ? taskIds then
-      selectionIndex.taskIds
-    else
-      builtins.sort builtins.lessThan (builtins.attrNames (model.tasks or { }));
+  enabledServices = execution.enabledServices or [ ];
+  taskIds = execution.taskIds or (builtins.sort builtins.lessThan (builtins.attrNames (model.tasks or { })));
   workflowIds =
-    if selectionIndex ? workflowIds then
-      selectionIndex.workflowIds
-    else
-      builtins.sort builtins.lessThan (builtins.attrNames (model.workflows or { }));
-  workflowModesByFamily = selectionIndex.workflowModesByFamily or { };
+    execution.workflowIds
+    or (builtins.sort builtins.lessThan (builtins.attrNames (model.workflows or { })));
+  workflowModesByFamily = execution.workflowModesByFamily or { };
   workflowFamilies =
-    if selectionIndex ? workflowFamilies then
-      selectionIndex.workflowFamilies
-    else
-      builtins.sort builtins.lessThan (builtins.attrNames (selectionIndex.workflowModesByFamily or { }));
-  taskBaseClosureCsvById = selectionIndex.taskBaseClosureServicesCsvById or { };
-  taskRunnerWorkflowIdById = selectionIndex.taskRunnerWorkflowIdById or { };
-  workflowClosureCsvById = selectionIndex.workflowClosureServicesCsvById or { };
+    execution.workflowFamilies
+    or (builtins.sort builtins.lessThan (builtins.attrNames (execution.workflowModesByFamily or { })));
+  taskBaseClosureCsvById = builtins.mapAttrs (
+    _: taskExecution: taskExecution.baseClosureServicesCsv or ""
+  ) taskExecutionById;
+  taskRunnerWorkflowIdById = builtins.mapAttrs (
+    _: taskExecution: taskExecution.runnerWorkflowId or ""
+  ) taskExecutionById;
+  workflowClosureCsvById = builtins.mapAttrs (
+    _: workflowExecution: workflowExecution.closureServicesCsv or ""
+  ) workflowExecutionById;
   inherit
     selectorDispatcherAppNames
     nonSelectorAppNames

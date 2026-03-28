@@ -8,14 +8,13 @@
   statePolicy,
   runtime,
   apps,
-  appExecutionManifests,
+  execution,
   serviceSets,
   tasks,
   workflows,
   serviceCatalog,
   serviceSurfaceCatalog,
   features,
-  selectionIndex,
   localOverridesActive ? false,
   localOverrideCount ? 0,
   legacyLocalDefault ? {
@@ -33,6 +32,9 @@ let
 
   listUtils = import ../framework/core/list-utils.nix;
   uniqueSorted = listUtils.uniqueSorted;
+  appExecutionManifests = execution.apps.byId or { };
+  taskExecutionById = execution.tasks.byId or { };
+  workflowExecutionById = execution.workflows.byId or { };
 
   featureOwnerFiles =
     featureId:
@@ -213,9 +215,9 @@ let
     else if manifest != null then
       manifest.selectedServices
     else if (app.workflowId or "") != "" then
-      selectionIndex.workflowClosureServicesById.${app.workflowId} or [ ]
+      workflowExecutionById.${app.workflowId}.closureSelectedServices or [ ]
     else if (app.taskId or "") != "" then
-      selectionIndex.taskClosureServicesById.${app.taskId} or [ ]
+      taskExecutionById.${app.taskId}.closureSelectedServices or [ ]
     else
       [ ];
 
@@ -343,16 +345,16 @@ let
           runSurface = "run-task";
           mappedTaskIds = [ taskId ];
           mappedWorkflowIds = workflowIdsForTask;
-          selectedServices = selectionIndex.taskClosureServicesById.${taskId} or [ ];
+          selectedServices = taskExecutionById.${taskId}.closureSelectedServices or [ ];
         };
         closure = {
           directTaskDeps = uniqueSorted ((task.deps.needs or [ ]) ++ (task.deps.softNeeds or [ ]));
           directRuntimeTaskRefs = task.runtime.references.taskIds or [ ];
           directRuntimeWorkflowRefs = task.runtime.references.workflowIds or [ ];
           directPackageNames = uniqueSorted (map (ref: ref.name) (taskPackageRefs taskId));
-          directServices = selectionIndex.taskDirectServicesById.${taskId} or [ ];
-          baseClosureServices = selectionIndex.taskBaseClosureServicesById.${taskId} or [ ];
-          selectedServices = selectionIndex.taskClosureServicesById.${taskId} or [ ];
+          directServices = taskExecutionById.${taskId}.directServices or [ ];
+          baseClosureServices = taskExecutionById.${taskId}.baseClosureSelectedServices or [ ];
+          selectedServices = taskExecutionById.${taskId}.closureSelectedServices or [ ];
         };
       }
     ) taskIds
@@ -384,7 +386,7 @@ let
           runSurface = "run-workflow";
           mappedTaskIds = workflowTaskIds workflowId;
           mappedWorkflowIds = [ workflowId ];
-          selectedServices = selectionIndex.workflowClosureServicesById.${workflowId} or [ ];
+          selectedServices = workflowExecutionById.${workflowId}.closureSelectedServices or [ ];
         };
         closure = {
           unitTaskIds = uniqueSorted (map (unit: unit.taskId) (workflow.plan or [ ]));
@@ -392,7 +394,7 @@ let
           postRunTaskIds = workflow.postRun.tasks or [ ];
           preRunServiceSetIds = map (entry: entry.serviceSetId) (workflow.preRun.serviceSets or [ ]);
           postRunServiceSetIds = map (entry: entry.serviceSetId) (workflow.postRun.serviceSets or [ ]);
-          selectedServices = selectionIndex.workflowClosureServicesById.${workflowId} or [ ];
+          selectedServices = workflowExecutionById.${workflowId}.closureSelectedServices or [ ];
         };
       }
     ) workflowIds
@@ -521,7 +523,7 @@ let
         summary = "App execution manifest for ${appId}";
         description = "Selected-app execution serializes an app-scoped execution manifest for '${appId}'.";
         ownerFiles = [
-          "nixfied/compiler/compile-app-execution-manifests.nix"
+          "nixfied/compiler/compile-execution.nix"
           "nixfied/framework/core/materializeExecution.nix"
           "nixfied/framework/runtime/executor.nix"
         ];

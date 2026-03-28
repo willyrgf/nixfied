@@ -6,7 +6,7 @@
   workflows,
   serviceCatalog,
   apps ? { },
-  selectionIndex,
+  compiledExecution,
 }:
 let
   listUtils = import ../framework/core/list-utils.nix;
@@ -16,10 +16,10 @@ let
   taskIds = uniqueSorted (builtins.attrNames tasks);
   workflowIds = uniqueSorted (builtins.attrNames workflows);
 
-  workflowModesByFamily = selectionIndex.workflowModesByFamily or { };
+  workflowModesByFamily = compiledExecution.workflowModesByFamily or { };
   workflowFamilies =
-    if selectionIndex ? workflowFamilies then
-      selectionIndex.workflowFamilies
+    if compiledExecution ? workflowFamilies then
+      compiledExecution.workflowFamilies
     else
       uniqueSorted (builtins.attrNames workflowModesByFamily);
 
@@ -254,8 +254,10 @@ let
           allowUnknown = (commandApi.commandClass or "typed") == "passthrough";
           hasPositional = builtins.any (spec: spec.kind == "positional") specs;
           requiredServices = requiredServices;
-          closureSelectedServices = selectionIndex.taskClosureServicesById.${taskId} or [ ];
-          baseClosureSelectedServices = selectionIndex.taskBaseClosureServicesById.${taskId} or [ ];
+          closureSelectedServices =
+            ((compiledExecution.tasks.byId or { }).${taskId}.closureSelectedServices or [ ]);
+          baseClosureSelectedServices =
+            ((compiledExecution.tasks.byId or { }).${taskId}.baseClosureSelectedServices or [ ]);
           runner = {
             type = task.runner.type or "shell";
             command = if (task.runner.command or null) == null then "" else task.runner.command;
@@ -352,8 +354,8 @@ let
       workflowId:
       let
         workflow = workflows.${workflowId};
-        execution = workflow.execution or { };
-        ephemeral = execution.ephemeral or { };
+        workflowExecution = workflow.execution or { };
+        ephemeral = workflowExecution.ephemeral or { };
         artifacts = workflow.artifacts or { };
         logging = workflow.logging or { };
         postRun = workflow.postRun or { };
@@ -377,11 +379,14 @@ let
             runnerType = taskRunner.type or "shell";
             runnerWorkflowId = if runnerType == "workflowRef" then taskRunner.workflowId or "" else "";
             unitRequiredServices = unit.requirements.services or [ ];
-            taskBaseClosureServices =
-              if taskId != "" then selectionIndex.taskBaseClosureServicesById.${taskId} or [ ] else [ ];
+          taskBaseClosureServices =
+              if taskId != "" then
+                ((compiledExecution.tasks.byId or { }).${taskId}.baseClosureSelectedServices or [ ])
+              else
+                [ ];
             runnerWorkflowClosureServices =
               if runnerWorkflowId != "" then
-                selectionIndex.workflowClosureServicesById.${runnerWorkflowId} or [ ]
+                ((compiledExecution.workflows.byId or { }).${runnerWorkflowId}.closureSelectedServices or [ ])
               else
                 [ ];
             produces = unit.produces or { };
@@ -430,16 +435,18 @@ let
             levelDefault = logging.levelDefault or "";
             outputDefault = logging.outputDefault or "";
           };
-          failFast = execution.failFast or false;
-          parallelEnabled = execution.parallel or false;
+          failFast = workflowExecution.failFast or false;
+          parallelEnabled = workflowExecution.parallel or false;
           maxWorkers = workflow.maxWorkers or 1;
-          lockPolicy = execution.lockPolicy or "exclusive";
+          lockPolicy = workflowExecution.lockPolicy or "exclusive";
           writeSummary = artifacts.writeSummary or false;
           postRunAlways = postRun.alwaysRun or false;
-          closureSelectedServices = selectionIndex.workflowClosureServicesById.${workflowId} or [ ];
-          unitClosureSelectedServices = selectionIndex.workflowUnitClosureServicesById.${workflowId} or [ ];
+          closureSelectedServices =
+            ((compiledExecution.workflows.byId or { }).${workflowId}.closureSelectedServices or [ ]);
+          unitClosureSelectedServices =
+            ((compiledExecution.workflows.byId or { }).${workflowId}.unitClosureSelectedServices or [ ]);
           referenceClosureSelectedServices =
-            selectionIndex.workflowReferenceClosureServicesById.${workflowId} or [ ];
+            ((compiledExecution.workflows.byId or { }).${workflowId}.referenceClosureSelectedServices or [ ]);
           plan = map renderWorkflowUnit (workflow.plan or [ ]);
           phases = {
             preRun = {
