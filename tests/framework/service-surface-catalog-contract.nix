@@ -18,10 +18,8 @@ let
       builtins.attrNames (compiled.model.views.apps or { })
     )
   );
-  mkServiceRuntimeSurfacesSource =
-    builtins.readFile ../../nixfied/framework/core/mkServiceRuntimeSurfaces.nix;
-  compileServiceSurfaceCatalogSource =
-    builtins.readFile ../../nixfied/compiler/compile-service-surface-catalog.nix;
+  mkServiceRuntimeSurfacesSource = builtins.readFile ../../nixfied/framework/core/mkServiceRuntimeSurfaces.nix;
+  compileServiceSurfaceCatalogSource = builtins.readFile ../../nixfied/compiler/compile-service-surface-catalog.nix;
   serviceNames = sortKeys (catalog.serviceApis or { });
   operationEntries = builtins.concatLists (
     map (
@@ -76,10 +74,12 @@ assert lib.all (
   )
 ) operationEntries;
 assert lib.all (
-  serviceName: catalog.serviceApis.${serviceName}.ownerFile == "nixfied/modules/services/${serviceName}.nix"
+  serviceName:
+  catalog.serviceApis.${serviceName}.ownerFile == "nixfied/modules/services/${serviceName}.nix"
 ) serviceNames;
 assert !(lib.hasInfix "mkServiceSurfaceCatalog.nix" mkCompiledCoreSource);
-assert !(lib.hasInfix "serviceModulePath = import ./serviceModulePath.nix;" mkServiceRuntimeSurfacesSource);
+assert
+  !(lib.hasInfix "serviceModulePath = import ./serviceModulePath.nix;" mkServiceRuntimeSurfacesSource);
 assert !(lib.hasInfix "mkServiceApisFromModules (" mkServiceRuntimeSurfacesSource);
 assert lib.hasInfix "require compiled serviceSurfaceCatalog" mkServiceRuntimeSurfacesSource;
 assert !(lib.hasInfix "serviceModulePath" compileServiceSurfaceCatalogSource);

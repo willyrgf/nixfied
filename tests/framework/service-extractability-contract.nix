@@ -77,13 +77,14 @@ let
     && !(lib.hasInfix "publicApi" source)
     && !(lib.hasInfix "serviceModule" source);
 in
-assert serviceNames == [
-  "helios"
-  "minio"
-  "nginx"
-  "postgres"
-  "reth"
-];
+assert
+  serviceNames == [
+    "helios"
+    "minio"
+    "nginx"
+    "postgres"
+    "reth"
+  ];
 assert serviceNames == sortKeys compiled.serviceApis;
 assert lib.all contractOwnerMatches serviceNames;
 assert lib.all contractAdapterMatches serviceNames;

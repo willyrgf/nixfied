@@ -58,7 +58,8 @@ let
   manifestIds = execution.apps.ids;
   checkManifest = execution.apps.byId.check;
   isolationManifest = execution.apps.byId.test-isolation;
-  serviceSetManifest = serviceSetOutputs.model.compiled.execution.serviceSets.byId."service-set.default";
+  serviceSetManifest =
+    serviceSetOutputs.model.compiled.execution.serviceSets.byId."service-set.default";
   workflowFixtureManifest =
     workflowFixtureOutputs.model.compiled.execution.apps.byId."runtime-manifest-fixture";
 

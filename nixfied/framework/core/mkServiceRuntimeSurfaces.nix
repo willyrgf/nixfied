@@ -426,7 +426,9 @@ let
   mergeAdapterOperations =
     serviceName: baseOps: extraOps:
     let
-      duplicateOps = builtins.filter (opName: builtins.hasAttr opName baseOps) (builtins.attrNames extraOps);
+      duplicateOps = builtins.filter (opName: builtins.hasAttr opName baseOps) (
+        builtins.attrNames extraOps
+      );
     in
     if duplicateOps == [ ] then
       baseOps // extraOps
@@ -455,7 +457,8 @@ let
     in
     {
       version = importedAdapter.version or 1;
-      operations = mergeAdapterOperations serviceName (importedAdapter.operations or { }) observabilityOps;
+      operations = mergeAdapterOperations serviceName (importedAdapter.operations or { }
+      ) observabilityOps;
     }
   ) serviceApiCatalogEntries;
 

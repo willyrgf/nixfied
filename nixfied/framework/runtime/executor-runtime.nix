@@ -19,7 +19,8 @@ let
         tasks = { };
         workflows = { };
         workflowFamilies = { };
-      });
+      }
+      );
   tasks = runtimeMetadata.tasks or { };
   workflows = runtimeMetadata.workflows or { };
   workflowFamilies = runtimeMetadata.workflowFamilies or { };
@@ -186,15 +187,12 @@ let
     ) workflowIds
   );
 
-  workflowFamilyEntries = map (
-    family:
-    {
-      key = family;
-      value = {
-        modesJoined = lib.concatStringsSep "|" (workflowFamilies.${family}.modes or [ ]);
-      };
-    }
-  ) workflowFamilyIds;
+  workflowFamilyEntries = map (family: {
+    key = family;
+    value = {
+      modesJoined = lib.concatStringsSep "|" (workflowFamilies.${family}.modes or [ ]);
+    };
+  }) workflowFamilyIds;
 
   renderExistsCase =
     keys:

@@ -40,14 +40,15 @@ let
 in
 {
   enabledServices = execution.enabledServices or [ ];
-  taskIds = execution.taskIds or (builtins.sort builtins.lessThan (builtins.attrNames (model.tasks or { })));
+  taskIds =
+    execution.taskIds or (builtins.sort builtins.lessThan (builtins.attrNames (model.tasks or { })));
   workflowIds =
     execution.workflowIds
-    or (builtins.sort builtins.lessThan (builtins.attrNames (model.workflows or { })));
+      or (builtins.sort builtins.lessThan (builtins.attrNames (model.workflows or { })));
   workflowModesByFamily = execution.workflowModesByFamily or { };
   workflowFamilies =
     execution.workflowFamilies
-    or (builtins.sort builtins.lessThan (builtins.attrNames (execution.workflowModesByFamily or { })));
+      or (builtins.sort builtins.lessThan (builtins.attrNames (execution.workflowModesByFamily or { })));
   taskBaseClosureCsvById = builtins.mapAttrs (
     _: taskExecution: taskExecution.baseClosureServicesCsv or ""
   ) taskExecutionById;
