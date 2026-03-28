@@ -93,7 +93,11 @@ let
     serviceName: contract: opName:
     let
       opCfg = contract.operations.${opName};
-      appName = if (opCfg.appName or null) != null && opCfg.appName != "" then opCfg.appName else "svc::${serviceName}::${opName}";
+      appName =
+        if (opCfg.appName or null) != null && opCfg.appName != "" then
+          opCfg.appName
+        else
+          "svc::${serviceName}::${opName}";
       includeApp = opCfg.exposeApp or true;
       includeHook = opCfg.exposeHook or true;
       usage = opCfg.usage or [ "nix run .#${appName}" ];

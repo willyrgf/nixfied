@@ -1052,15 +1052,30 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
 
     case "$subcommand" in
       run-task)
-        ${if executionEnabled then "" else ''echo "ERROR: run-task is unavailable in control-only mode"; exit "$NIXFIED_EXIT_USAGE"''}
+        ${
+          if executionEnabled then
+            ""
+          else
+            ''echo "ERROR: run-task is unavailable in control-only mode"; exit "$NIXFIED_EXIT_USAGE"''
+        }
         run_task "$@"
         ;;
       run-workflow)
-        ${if executionEnabled then "" else ''echo "ERROR: run-workflow is unavailable in control-only mode"; exit "$NIXFIED_EXIT_USAGE"''}
+        ${
+          if executionEnabled then
+            ""
+          else
+            ''echo "ERROR: run-workflow is unavailable in control-only mode"; exit "$NIXFIED_EXIT_USAGE"''
+        }
         run_workflow "$@"
         ;;
       run-workflow-parallel)
-        ${if executionEnabled then "" else ''echo "ERROR: run-workflow-parallel is unavailable in control-only mode"; exit "$NIXFIED_EXIT_USAGE"''}
+        ${
+          if executionEnabled then
+            ""
+          else
+            ''echo "ERROR: run-workflow-parallel is unavailable in control-only mode"; exit "$NIXFIED_EXIT_USAGE"''
+        }
         NIXFIED_WORKFLOW_PARALLEL=1 run_workflow "$@"
         ;;
       runs)

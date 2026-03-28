@@ -29,24 +29,22 @@ let
     exit 0
   '';
 
-  mkContract =
-    operations:
-    {
+  mkContract = operations: {
+    version = 1;
+    service = "demo";
+    summary = "demo";
+    details = "demo service contract";
+    ownerFile = "tests/framework/service-op-composition-contract.nix";
+    adapter = {
       version = 1;
-      service = "demo";
-      summary = "demo";
-      details = "demo service contract";
-      ownerFile = "tests/framework/service-op-composition-contract.nix";
-      adapter = {
-        version = 1;
-        module = ./service-op-composition-contract.nix;
-      };
-      artifacts = { };
-      inherit
-        operations
-        runtimePrimitives
-        ;
+      module = ./service-op-composition-contract.nix;
     };
+    artifacts = { };
+    inherit
+      operations
+      runtimePrimitives
+      ;
+  };
 
   demoContract = mkContract {
     prepare = {
@@ -103,8 +101,12 @@ let
   };
 
   demoOps = serviceApi.collectServiceOps {
-    serviceContracts = { demo = demoContract; };
-    serviceAdapters = { demo = demoAdapter; };
+    serviceContracts = {
+      demo = demoContract;
+    };
+    serviceAdapters = {
+      demo = demoAdapter;
+    };
   };
 
   findOp = opName: builtins.head (builtins.filter (op: op.opName == opName) demoOps);
@@ -112,8 +114,12 @@ let
   startOp = findOp "start";
   restartOp = findOp "restart";
   hookEnv = serviceApi.mkServiceHookEnvFromContracts {
-    serviceContracts = { demo = demoContract; };
-    serviceAdapters = { demo = demoAdapter; };
+    serviceContracts = {
+      demo = demoContract;
+    };
+    serviceAdapters = {
+      demo = demoAdapter;
+    };
   };
 
   unknownRefContract = mkContract {

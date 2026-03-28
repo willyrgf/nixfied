@@ -17,7 +17,8 @@ assert pkgs.lib.hasInfix "\${pkgs.procps}/bin/ps" orchestratorSource;
 assert pkgs.lib.hasInfix "nixfied-kernel run-record create" orchestratorSource;
 assert pkgs.lib.hasInfix "nixfied-kernel run-record transition" orchestratorSource;
 assert pkgs.lib.hasInfix "stop-all-runs" orchestratorSource;
-assert !(pkgs.lib.hasInfix "runtimeMetadataShell = import ./runtime-metadata.nix" orchestratorSource);
+assert
+  !(pkgs.lib.hasInfix "runtimeMetadataShell = import ./runtime-metadata.nix" orchestratorSource);
 assert !(pkgs.lib.hasInfix "\${runtimeMetadataShell}" orchestratorSource);
 assert pkgs.lib.hasInfix "MODEL_FILE=" orchestratorSource;
 assert pkgs.lib.hasInfix "export NIXFIED_MODEL_FILE=\"$MODEL_FILE\"" orchestratorSource;

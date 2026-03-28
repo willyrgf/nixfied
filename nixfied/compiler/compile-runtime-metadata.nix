@@ -254,10 +254,12 @@ let
           allowUnknown = (commandApi.commandClass or "typed") == "passthrough";
           hasPositional = builtins.any (spec: spec.kind == "positional") specs;
           requiredServices = requiredServices;
-          closureSelectedServices =
-            ((compiledExecution.tasks.byId or { }).${taskId}.closureSelectedServices or [ ]);
-          baseClosureSelectedServices =
-            ((compiledExecution.tasks.byId or { }).${taskId}.baseClosureSelectedServices or [ ]);
+          closureSelectedServices = (
+            (compiledExecution.tasks.byId or { }).${taskId}.closureSelectedServices or [ ]
+          );
+          baseClosureSelectedServices = (
+            (compiledExecution.tasks.byId or { }).${taskId}.baseClosureSelectedServices or [ ]
+          );
           runner = {
             type = task.runner.type or "shell";
             command = if (task.runner.command or null) == null then "" else task.runner.command;
@@ -379,7 +381,7 @@ let
             runnerType = taskRunner.type or "shell";
             runnerWorkflowId = if runnerType == "workflowRef" then taskRunner.workflowId or "" else "";
             unitRequiredServices = unit.requirements.services or [ ];
-          taskBaseClosureServices =
+            taskBaseClosureServices =
               if taskId != "" then
                 ((compiledExecution.tasks.byId or { }).${taskId}.baseClosureSelectedServices or [ ])
               else
@@ -441,12 +443,15 @@ let
           lockPolicy = workflowExecution.lockPolicy or "exclusive";
           writeSummary = artifacts.writeSummary or false;
           postRunAlways = postRun.alwaysRun or false;
-          closureSelectedServices =
-            ((compiledExecution.workflows.byId or { }).${workflowId}.closureSelectedServices or [ ]);
-          unitClosureSelectedServices =
-            ((compiledExecution.workflows.byId or { }).${workflowId}.unitClosureSelectedServices or [ ]);
-          referenceClosureSelectedServices =
-            ((compiledExecution.workflows.byId or { }).${workflowId}.referenceClosureSelectedServices or [ ]);
+          closureSelectedServices = (
+            (compiledExecution.workflows.byId or { }).${workflowId}.closureSelectedServices or [ ]
+          );
+          unitClosureSelectedServices = (
+            (compiledExecution.workflows.byId or { }).${workflowId}.unitClosureSelectedServices or [ ]
+          );
+          referenceClosureSelectedServices = (
+            (compiledExecution.workflows.byId or { }).${workflowId}.referenceClosureSelectedServices or [ ]
+          );
           plan = map renderWorkflowUnit (workflow.plan or [ ]);
           phases = {
             preRun = {

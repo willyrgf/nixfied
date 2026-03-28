@@ -17,9 +17,7 @@ assert pkgs.lib.hasInfix "ERROR: usage: run-workflow <workflow-id> [-- ...]" sou
 assert pkgs.lib.hasInfix
   "ERROR: usage: run-task-leaf <task-id> <workflow-id> <selected-services-csv> [-- ...]"
   source;
-assert pkgs.lib.hasInfix
-  "ERROR: usage: run-task-kernel-leaf <task-id> [-- ...]"
-  source;
+assert pkgs.lib.hasInfix "ERROR: usage: run-task-kernel-leaf <task-id> [-- ...]" source;
 assert pkgs.lib.hasInfix
   "ERROR: usage: run-service-set-phase <service-set-id> <operation> <selected-services-csv>"
   source;

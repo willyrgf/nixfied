@@ -33,11 +33,12 @@ let
     project.id = "postgres-kernel-probe-lifecycle";
   };
 
-  postgresService = (import ../../nixfied/framework/runtime/services/postgres/default.nix {
-    inherit pkgs;
-    project = postgresProject;
-    slots = slotsStub;
-  }).operations;
+  postgresService =
+    (import ../../nixfied/framework/runtime/services/postgres/default.nix {
+      inherit pkgs;
+      project = postgresProject;
+      slots = slotsStub;
+    }).operations;
 in
 pkgs.runCommand "postgres-kernel-probe-lifecycle-smoke" { } ''
   set -euo pipefail

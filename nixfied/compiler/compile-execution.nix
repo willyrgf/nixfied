@@ -285,7 +285,9 @@ let
 
     taskRuntimeWorkflows =
       seen: task: goWorkflowExact':
-      idClosureMerge (map (wfId: goWorkflowExact' seen wfId) (task.runtime.references.workflowIds or [ ]));
+      idClosureMerge (
+        map (wfId: goWorkflowExact' seen wfId) (task.runtime.references.workflowIds or [ ])
+      );
 
     workflowUnit =
       seen: unit: goTask':
@@ -374,9 +376,7 @@ let
             goAppTask [ ] app.taskId;
         selectedServices =
           if (app.kind or "") == "workflowRef" then
-            uniqueSorted (
-              executionBase.workflows.byId.${app.workflowId}.exactClosureSelectedServices or [ ]
-            )
+            uniqueSorted (executionBase.workflows.byId.${app.workflowId}.exactClosureSelectedServices or [ ])
           else
             uniqueSorted (executionBase.tasks.byId.${app.taskId}.closureSelectedServices or [ ]);
         serviceCatalogFiltered = lib.filterAttrs (
@@ -441,18 +441,16 @@ let
     ) manifestAppIds
   );
 
-  serviceSetExecutionById = builtins.mapAttrs (
-    name: serviceSet: {
-      id = serviceSet.id or name;
-      name = serviceSet.name or name;
-      summary = serviceSet.summary or "";
-      services = serviceSet.services or { };
-      requiredServices = serviceSet.services.required or [ ];
-      optionalServices = serviceSet.services.optional or [ ];
-      allServices = serviceSet.services.all or [ ];
-      defaultOperation = serviceSet.defaultOperation or "health";
-    }
-  ) serviceSetCatalog;
+  serviceSetExecutionById = builtins.mapAttrs (name: serviceSet: {
+    id = serviceSet.id or name;
+    name = serviceSet.name or name;
+    summary = serviceSet.summary or "";
+    services = serviceSet.services or { };
+    requiredServices = serviceSet.services.required or [ ];
+    optionalServices = serviceSet.services.optional or [ ];
+    allServices = serviceSet.services.all or [ ];
+    defaultOperation = serviceSet.defaultOperation or "health";
+  }) serviceSetCatalog;
 in
 canonical.canonicalize (
   executionBase

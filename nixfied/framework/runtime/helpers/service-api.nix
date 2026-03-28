@@ -243,9 +243,9 @@ let
       ++ expect (
         (runtimePrimitives.version or null) == 1
       ) "${serviceName}: contract.runtimePrimitives.version must be 1"
-      ++ expect (
-        unknownKeys == [ ]
-      ) "${serviceName}: contract.runtimePrimitives contains unsupported keys: ${builtins.concatStringsSep ", " unknownKeys}"
+      ++
+        expect (unknownKeys == [ ])
+          "${serviceName}: contract.runtimePrimitives contains unsupported keys: ${builtins.concatStringsSep ", " unknownKeys}"
       ++ validateRuntimePrimitiveSpecErrors {
         inherit serviceName;
         primitiveName = "logLevel";
@@ -326,9 +326,9 @@ let
       ) "${serviceName}: contract.adapter.module must point to an existing file"
       ++ expect (contract ? operations) "${serviceName}: contract.operations is required"
       ++ expect (isAttrs ops) "${serviceName}: contract.operations must be an attribute set"
-      ++ expect (
-        missingLifecycleOps == [ ]
-      ) "${serviceName}: contract.operations missing required lifecycle ops: ${builtins.concatStringsSep ", " missingLifecycleOps}"
+      ++
+        expect (missingLifecycleOps == [ ])
+          "${serviceName}: contract.operations missing required lifecycle ops: ${builtins.concatStringsSep ", " missingLifecycleOps}"
       ++ expect (contract ? artifacts) "${serviceName}: contract.artifacts is required"
       ++ expect (isAttrs (
         contract.artifacts or null
@@ -394,10 +394,10 @@ let
           if runtimeOp == null || runtimeOp == "" then
             [ ]
           else
-            expect (builtins.hasAttr runtimeOp adapterOps)
-              "${serviceName}.${opName}: runtime adapter is missing operation '${runtimeOp}'"
-            ++ expect (isScriptLike (adapterOps.${runtimeOp} or null))
-              "${serviceName}.${opName}: runtime adapter operation '${runtimeOp}' must be string/path/derivation"
+            expect (builtins.hasAttr runtimeOp adapterOps) "${serviceName}.${opName}: runtime adapter is missing operation '${runtimeOp}'"
+            ++
+              expect (isScriptLike (adapterOps.${runtimeOp} or null))
+                "${serviceName}.${opName}: runtime adapter operation '${runtimeOp}' must be string/path/derivation"
         ) (builtins.attrNames ops)
       );
     in
@@ -467,10 +467,7 @@ let
     let
       runtimeOp = opCfg.runtimeOp or opName;
     in
-    if runtimeOp == null || runtimeOp == "" then
-      null
-    else
-      adapterOps.${runtimeOp} or null;
+    if runtimeOp == null || runtimeOp == "" then null else adapterOps.${runtimeOp} or null;
 
   buildExecutionPlan =
     {
@@ -482,15 +479,14 @@ let
     }:
     let
       opCfg = ops.${opName};
-      currentScript =
-        runtimeScriptFor {
-          inherit
-            serviceName
-            opName
-            opCfg
-            adapterOps
-            ;
-        };
+      currentScript = runtimeScriptFor {
+        inherit
+          serviceName
+          opName
+          opCfg
+          adapterOps
+          ;
+      };
       mkNestedPlan =
         ref:
         buildExecutionPlan {

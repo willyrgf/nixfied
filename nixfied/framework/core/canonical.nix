@@ -11,8 +11,7 @@ let
     value:
     let
       valueType = builtins.typeOf value;
-      isDerivationValue =
-        valueType == "set" && lib != null && lib.isDerivation value && value ? outPath;
+      isDerivationValue = valueType == "set" && lib != null && lib.isDerivation value && value ? outPath;
     in
     if isDerivationValue then
       builtins.toString value
@@ -36,8 +35,7 @@ let
     value:
     let
       valueType = builtins.typeOf value;
-      isDerivationValue =
-        valueType == "set" && lib != null && lib.isDerivation value && value ? outPath;
+      isDerivationValue = valueType == "set" && lib != null && lib.isDerivation value && value ? outPath;
     in
     if isDerivationValue then
       builtins.toJSON (builtins.toString value)

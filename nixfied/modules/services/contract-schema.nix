@@ -216,33 +216,31 @@ in
       inherit description;
     };
 
-  mkRuntimePrimitivesV1 =
-    runtime:
-    {
-      version = 1;
-      logLevel = {
-        env = "LOG_LEVEL";
-        aliases = [ "NIXFIED_LOG_LEVEL" ];
-        values = [
-          "error"
-          "warn"
-          "info"
-          "debug"
-          "trace"
-        ];
-        default = runtime.logging.levelDefault;
-      };
-      outputMode = {
-        env = "OUTPUT_MODE";
-        aliases = [ "NIXFIED_OUTPUT_MODE" ];
-        values = [
-          "stdout"
-          "logs"
-          "both"
-        ];
-        default = runtime.logging.outputDefault;
-      };
+  mkRuntimePrimitivesV1 = runtime: {
+    version = 1;
+    logLevel = {
+      env = "LOG_LEVEL";
+      aliases = [ "NIXFIED_LOG_LEVEL" ];
+      values = [
+        "error"
+        "warn"
+        "info"
+        "debug"
+        "trace"
+      ];
+      default = runtime.logging.levelDefault;
     };
+    outputMode = {
+      env = "OUTPUT_MODE";
+      aliases = [ "NIXFIED_OUTPUT_MODE" ];
+      values = [
+        "stdout"
+        "logs"
+        "both"
+      ];
+      default = runtime.logging.outputDefault;
+    };
+  };
 
   mkObservabilityOperations =
     {
