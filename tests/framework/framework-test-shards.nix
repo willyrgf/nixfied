@@ -25,7 +25,6 @@ let
       "managed-service-lifecycle-contract"
       "model-hash"
       "nginx-site-management-contract"
-      "no-legacy-project-modules"
       "operations-contract"
       "orchestrator-lifecycle-contract"
       "package-output-contract"
@@ -98,6 +97,7 @@ let
       "orchestrator-arg-forwarding-smoke"
       "orchestrator-signal-cleanup-smoke"
       "runtime-events-contract"
+      "service-runtime-surface-contract"
       "selected-app-manifest-contract"
       "service-hook-env-smoke"
       "shell-contract-contract"
@@ -162,10 +162,7 @@ let
 
     migration = [
       "contract-migration-guard"
-      "framework-test-coverage-contract"
-      "registry-helper-contract"
-      "service-api-surface-contract"
-      "workflow-modes-contract"
+      "no-legacy-project-modules"
     ];
   };
 

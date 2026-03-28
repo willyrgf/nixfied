@@ -65,6 +65,6 @@ assert pkgs.lib.hasInfix "status" supervisorSource;
 assert pkgs.lib.hasInfix "health" supervisorSource;
 assert pkgs.lib.hasInfix "inherit (management) restart rotateLogs;" supervisorSource;
 assert (!pkgs.lib.hasInfix "ready" supervisorSource);
-pkgs.runCommand "service-api-surface-contract" { } ''
+pkgs.runCommand "service-runtime-surface-contract" { } ''
   echo "OK: runtime service modules expose adapter-only operation maps, public service apps still track enabled services, and supervisor remains a separate runtime surface" > "$out"
 ''

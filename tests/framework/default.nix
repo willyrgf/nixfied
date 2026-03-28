@@ -33,11 +33,7 @@ let
   defaultCheckKind = name: if lib.hasInfix "smoke" name then "smoke" else "contract";
   defaultCheckLayer =
     name: kind:
-    if
-      name == "contract-migration-guard"
-      || name == "framework-test-coverage-contract"
-      || name == "workflow-modes-contract"
-    then
+    if name == "contract-migration-guard" then
       "migration"
     else if lib.hasInfix "manifest" name then
       "manifest"
@@ -84,11 +80,7 @@ let
       "compile";
   defaultProofKind =
     name: kind:
-    if
-      name == "contract-migration-guard"
-      || name == "framework-test-coverage-contract"
-      || name == "workflow-modes-contract"
-    then
+    if name == "contract-migration-guard" then
       "guard"
     else if lib.hasInfix "snapshot" name then
       "fixture"
@@ -258,14 +250,9 @@ let
       proofKind = "contract";
     };
 
-    "registry-helper-contract" = {
-      layer = "migration";
-      proofKind = "guard";
-    };
-
-    "service-api-surface-contract" = {
-      layer = "migration";
-      proofKind = "guard";
+    "service-runtime-surface-contract" = {
+      layer = "adapter";
+      proofKind = "contract";
     };
 
     "service-extractability-contract" = {
@@ -322,11 +309,6 @@ let
 
     "service-op-composition-contract" = { };
 
-    "framework-test-coverage-contract" = {
-      layer = "migration";
-      proofKind = "guard";
-    };
-
     "framework-test-layout-validation" = {
       layer = "compile";
       proofKind = "guard";
@@ -335,6 +317,11 @@ let
     "contract-render-snapshot" = { };
 
     "contract-migration-guard" = {
+      layer = "migration";
+      proofKind = "guard";
+    };
+
+    "no-legacy-project-modules" = {
       layer = "migration";
       proofKind = "guard";
     };
@@ -549,7 +536,7 @@ let
       inherit pkgs;
     };
 
-    "service-api-surface-contract" = import ./service-api-surface-contract.nix {
+    "service-runtime-surface-contract" = import ./service-runtime-surface-contract.nix {
       inherit
         pkgs
         serviceCatalog
@@ -809,10 +796,6 @@ let
       inherit pkgs;
     };
 
-    "registry-helper-contract" = import ./registry-helper-contract.nix {
-      inherit pkgs;
-    };
-
     "log-prefix-contract" = import ./log-prefix-contract.nix {
       inherit pkgs;
     };
@@ -908,10 +891,6 @@ let
         ;
     };
 
-    "workflow-modes-contract" = import ./workflow-modes-contract.nix {
-      inherit pkgs;
-    };
-
     "managed-service-lifecycle-contract" = import ./managed-service-lifecycle-contract.nix {
       inherit pkgs;
     };
@@ -944,10 +923,6 @@ let
         services
         registry
         ;
-    };
-
-    "framework-test-coverage-contract" = import ./framework-test-coverage-contract.nix {
-      inherit pkgs;
     };
 
     "framework-selfhost-contract" = import ./framework-selfhost-contract.nix {
