@@ -385,6 +385,19 @@ let
     project = serviceProject;
     hooks = { };
   };
+  runtimeEvents = import ../runtime/helpers/runtime-events.nix {
+    inherit
+      pkgs
+      ;
+    project = serviceProject;
+  };
+  observability = import ../runtime/helpers/service-observability.nix {
+    inherit
+      pkgs
+      slots
+      runtimeEvents
+      ;
+  };
 
   serviceApiCatalogEntries =
     let
@@ -410,9 +423,51 @@ let
     else
       throw "nixfied service runtime surfaces expected service APIs for all selected services in serviceSurfaceCatalog: ${builtins.concatStringsSep ", " missingServiceApis}";
 
+  mergeAdapterOperations =
+    serviceName: baseOps: extraOps:
+    let
+      duplicateOps = builtins.filter (opName: builtins.hasAttr opName baseOps) (builtins.attrNames extraOps);
+    in
+    if duplicateOps == [ ] then
+      baseOps // extraOps
+    else
+      throw "nixfied service runtime adapter for '${serviceName}' defines duplicate operations: ${builtins.concatStringsSep ", " duplicateOps}";
+
+  serviceAdapters = builtins.mapAttrs (
+    serviceName: contract:
+    let
+      adapterModule = (contract.adapter or { }).module or null;
+      importedAdapter =
+        if adapterModule == null then
+          throw "nixfied service runtime surfaces require adapter.module for service '${serviceName}'"
+        else
+          import adapterModule {
+            inherit
+              pkgs
+              slots
+              ;
+            project = serviceProject;
+          };
+      observabilityOps = {
+        log = observability.mkLogScript serviceName;
+        events = observability.mkEventsScript serviceName;
+      };
+    in
+    {
+      version = importedAdapter.version or 1;
+      operations = mergeAdapterOperations serviceName (importedAdapter.operations or { }) observabilityOps;
+    }
+  ) serviceApiCatalogEntries;
+
   serviceApis = serviceApiCatalogEntries;
-  serviceHookEnv = runtimeHelpers.serviceApi.mkServiceHookEnvFromContract serviceApis;
-  serviceApps = runtimeHelpers.serviceApi.mkServiceAppsFromContract serviceApis;
+  serviceHookEnv = runtimeHelpers.serviceApi.mkServiceHookEnvFromContracts {
+    serviceContracts = serviceApis;
+    inherit serviceAdapters;
+  };
+  serviceApps = runtimeHelpers.serviceApi.mkServiceAppsFromContracts {
+    serviceContracts = serviceApis;
+    inherit serviceAdapters;
+  };
 in
 {
   inherit

@@ -56,7 +56,7 @@ nix run .#framework::test -- --profile ci --summary-json /tmp/framework-test-sum
 - `manifest`: runtime manifest fixtures and handoff invariants between Nix and kernel
 - `kernel`: kernel-owned workflow, validation, registry, summary, and run semantics
 - `adapters`: thin shell and launcher process-edge behavior only
-- `services`: service public surfaces, lifecycle, readiness, and extractability
+- `services`: service typed contracts, lifecycle, readiness, and split-readiness
 - `e2e`: user-facing public behavior, install and upgrade flows, isolation, and self-host execution
 - `migration`: deleted-seam guards and forward-only refactor regressions
 

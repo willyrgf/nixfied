@@ -1,156 +1,117 @@
 { pkgs }:
 let
   lib = pkgs.lib;
-  project = {
-    install.deps = "";
-    tooling.runtimePackages = [ ];
-    logging = {
-      level = "info";
-      output = "stdout";
-    };
-  };
-  runtimeHelpers = import ../../nixfied/framework/runtime/helpers/default.nix {
+  frameworkLib = import ../../nixfied/framework/core {
     inherit
       pkgs
-      project
       ;
-    hooks = { };
+    system = pkgs.system;
   };
-  serviceApi = runtimeHelpers.serviceApi;
 
-  mkOpScript =
-    serviceName: opName:
-    pkgs.writeShellScript "service-extractability-${serviceName}-${opName}" ''
-      exit 0
-    '';
+  enableAllServicesModule =
+    { lib, ... }:
+    {
+      nixfied.services.postgres.enable = lib.mkForce true;
+      nixfied.services.nginx.enable = lib.mkForce true;
+      nixfied.services.minio.enable = lib.mkForce true;
+      nixfied.services.reth.enable = lib.mkForce true;
+      nixfied.services.helios.enable = lib.mkForce true;
+    };
 
-  mkFixtureApi =
+  compiled = frameworkLib.mkNixfied {
+    projectRoot = ../..;
+    projectModules = [ ../../nixfied/project/module.nix ];
+    extraModules = [ enableAllServicesModule ];
+    localOverrides = [ ];
+  };
+
+  catalog = compiled.model.compiled.serviceSurfaceCatalog;
+  sortKeys = attrs: builtins.sort builtins.lessThan (builtins.attrNames attrs);
+  serviceNames = sortKeys (catalog.serviceApis or { });
+
+  compileSource = builtins.readFile ../../nixfied/compiler/compile-service-surface-catalog.nix;
+  runtimeSurfaceSource = builtins.readFile ../../nixfied/framework/core/mkServiceRuntimeSurfaces.nix;
+
+  moduleSources = {
+    postgres = builtins.readFile ../../nixfied/modules/services/postgres.nix;
+    nginx = builtins.readFile ../../nixfied/modules/services/nginx.nix;
+    minio = builtins.readFile ../../nixfied/modules/services/minio.nix;
+    reth = builtins.readFile ../../nixfied/modules/services/reth.nix;
+    helios = builtins.readFile ../../nixfied/modules/services/helios.nix;
+  };
+
+  adapterSources = {
+    postgres = builtins.readFile ../../nixfied/framework/runtime/services/postgres/default.nix;
+    nginx = builtins.readFile ../../nixfied/framework/runtime/services/nginx/default.nix;
+    minio = builtins.readFile ../../nixfied/framework/runtime/services/minio/default.nix;
+    reth = builtins.readFile ../../nixfied/framework/runtime/services/reth/default.nix;
+    helios = builtins.readFile ../../nixfied/framework/runtime/services/helios/default.nix;
+  };
+
+  contractOwnerMatches =
     serviceName:
-    serviceApi.mkServiceApiV3 {
-      service = serviceName;
-      summary = "Fixture ${serviceName} service";
-      details = "Fixture service used to prove publicApi extractability.";
-      artifacts = {
-        endpoint = "/tmp/${serviceName}.sock";
-      };
-      runtimePrimitives = serviceApi.mkRuntimePrimitivesV1 {
-        logLevelDefault = "debug";
-        outputModeDefault = "stdout";
-      };
-      operations = {
-        start = {
-          summary = "Start ${serviceName}";
-          details = "Start fixture service ${serviceName}.";
-          script = mkOpScript serviceName "start";
-        };
-        stop = {
-          summary = "Stop ${serviceName}";
-          details = "Stop fixture service ${serviceName}.";
-          script = mkOpScript serviceName "stop";
-        };
-        status = {
-          summary = "Status ${serviceName}";
-          details = "Inspect fixture service ${serviceName}.";
-          script = mkOpScript serviceName "status";
-        };
-        sync = {
-          summary = "Sync ${serviceName}";
-          details = "Sync fixture state for ${serviceName}.";
-          script = mkOpScript serviceName "sync";
-          exposeApp = false;
-          hook = "sync";
-        };
-        describe = {
-          summary = "Describe ${serviceName}";
-          details = "Describe fixture service ${serviceName}.";
-          script = mkOpScript serviceName "describe";
-          exposeHook = false;
-          appName = "svc::${serviceName}::describe";
-        };
-      };
-    };
+    catalog.serviceApis.${serviceName}.ownerFile == "nixfied/modules/services/${serviceName}.nix";
 
-  fixtureModules = {
-    alpha = {
-      publicApi = mkFixtureApi "alpha";
-      config = throw "private touched: alpha.config";
-      exportedImpl = throw "private touched: alpha.exportedImpl";
-    };
-    beta = {
-      publicApi = mkFixtureApi "beta";
-      config = throw "private touched: beta.config";
-      exportedImpl = throw "private touched: beta.exportedImpl";
-    };
-  };
+  contractAdapterMatches =
+    serviceName:
+    builtins.match ".*framework/runtime/services/${serviceName}/default\\.nix" (
+      toString catalog.serviceApis.${serviceName}.adapter.module
+    ) != null;
 
-  serviceApis = serviceApi.validateEnabledServicesHaveContracts {
-    enabledServices = [
-      "alpha"
-      "beta"
-    ];
-    serviceApis = serviceApi.mkServiceApisFromModules fixtureModules;
-  };
-  hookEnv = serviceApi.mkServiceHookEnvFromContract serviceApis;
-  serviceApps = serviceApi.mkServiceAppsFromContract serviceApis;
+  moduleDefinesTypedContract =
+    serviceName:
+    let
+      source = moduleSources.${serviceName};
+    in
+    lib.hasInfix "contract = contractSchema.mkContractOption" source
+    && lib.hasInfix "config.nixfied.services.${serviceName}.contract = {" source
+    && lib.hasInfix "mkObservabilityOperations" source;
 
-  expectedHookNames = [
-    "SVC_ALPHA_START"
-    "SVC_ALPHA_STATUS"
-    "SVC_ALPHA_STOP"
-    "SVC_ALPHA_sync"
-    "SVC_BETA_START"
-    "SVC_BETA_STATUS"
-    "SVC_BETA_STOP"
-    "SVC_BETA_sync"
-  ];
-  expectedAppNames = [
-    "svc::alpha::describe"
-    "svc::alpha::start"
-    "svc::alpha::status"
-    "svc::alpha::stop"
-    "svc::beta::describe"
-    "svc::beta::start"
-    "svc::beta::status"
-    "svc::beta::stop"
-  ];
-  renderedAppNames = builtins.sort builtins.lessThan (builtins.attrNames serviceApps);
-  renderedHookNames = builtins.sort builtins.lessThan (builtins.attrNames hookEnv);
+  adapterIsPrivateOnly =
+    serviceName:
+    let
+      source = adapterSources.${serviceName};
+    in
+    lib.hasInfix "version = 1;" source
+    && lib.hasInfix "operations = {" source
+    && !(lib.hasInfix "publicApi" source)
+    && !(lib.hasInfix "serviceModule" source);
 in
-assert (
-  builtins.sort builtins.lessThan (builtins.attrNames serviceApis) == [
-    "alpha"
-    "beta"
-  ]
-);
-assert (
-  builtins.sort builtins.lessThan (builtins.attrNames serviceApis.alpha.operations) == [
-    "describe"
-    "start"
-    "status"
-    "stop"
-    "sync"
-  ]
-);
-assert (
-  builtins.sort builtins.lessThan (builtins.attrNames serviceApis.beta.operations) == [
-    "describe"
-    "start"
-    "status"
-    "stop"
-    "sync"
-  ]
-);
-assert renderedHookNames == expectedHookNames;
-assert renderedAppNames == expectedAppNames;
-assert serviceApps."svc::alpha::start".meta.nixfied.service == "alpha";
-assert serviceApps."svc::alpha::start".meta.nixfied.operation == "start";
-assert serviceApps."svc::beta::describe".meta.nixfied.service == "beta";
-assert serviceApps."svc::beta::describe".meta.nixfied.operation == "describe";
-assert !(builtins.hasAttr "svc::alpha::sync" serviceApps);
-assert !(builtins.hasAttr "svc::beta::sync" serviceApps);
-assert !(builtins.hasAttr "SVC_ALPHA_DESCRIBE" hookEnv);
-assert !(builtins.hasAttr "SVC_BETA_DESCRIBE" hookEnv);
-assert lib.all (hookName: hookEnv.${hookName} != "") expectedHookNames;
+assert serviceNames == [
+  "helios"
+  "minio"
+  "nginx"
+  "postgres"
+  "reth"
+];
+assert serviceNames == sortKeys compiled.serviceApis;
+assert lib.all contractOwnerMatches serviceNames;
+assert lib.all contractAdapterMatches serviceNames;
+assert lib.all moduleDefinesTypedContract serviceNames;
+assert lib.all adapterIsPrivateOnly serviceNames;
+assert !(lib.hasInfix "serviceModulePath" compileSource);
+assert !(lib.hasInfix "serviceProject =" compileSource);
+assert !(lib.hasInfix "slots =" compileSource);
+assert !(lib.hasInfix "mkServiceApisFromModules" compileSource);
+assert !(lib.hasInfix "publicApi" compileSource);
+assert lib.hasInfix "serviceDefinitions" compileSource;
+assert !(lib.hasInfix "mkServiceApisFromModules" runtimeSurfaceSource);
+assert !(lib.hasInfix "publicApi" runtimeSurfaceSource);
+assert lib.hasInfix "adapter.module" runtimeSurfaceSource;
+assert builtins.hasAttr "svc::postgres::status" compiled.apps;
+assert builtins.hasAttr "svc::nginx::site-add" compiled.apps;
+assert builtins.hasAttr "svc::minio::bucket-ensure" compiled.apps;
+assert builtins.hasAttr "svc::reth::ready" compiled.apps;
+assert builtins.hasAttr "svc::helios::ready" compiled.apps;
+assert !(builtins.hasAttr "svc::postgres::preflight-init" compiled.apps);
+assert !(builtins.hasAttr "svc::postgres::ensure-migration-tested" compiled.apps);
+assert !(builtins.hasAttr "svc::nginx::site-proxy" compiled.apps);
+assert builtins.hasAttr "SVC_POSTGRES_STATUS" compiled.serviceHookEnv;
+assert builtins.hasAttr "SVC_NGINX_SITE_ADD" compiled.serviceHookEnv;
+assert builtins.hasAttr "SVC_MINIO_BUCKET_ENSURE" compiled.serviceHookEnv;
+assert builtins.hasAttr "SVC_RETH_READY" compiled.serviceHookEnv;
+assert builtins.hasAttr "SVC_HELIOS_READY" compiled.serviceHookEnv;
+assert !(builtins.hasAttr "SVC_POSTGRES_PREFLIGHT_START" compiled.serviceHookEnv);
 pkgs.runCommand "service-extractability-contract" { } ''
-  echo "OK: framework service helpers consume declared publicApi surfaces without touching private module attrs" > "$out"
+  echo "OK: real built-in services declare typed module contracts, the compiler reads those contracts without importing runtime implementations, and runtime surfaces project through adapter-only service modules" > "$out"
 ''

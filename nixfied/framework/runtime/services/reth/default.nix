@@ -1,4 +1,4 @@
-# Reth module aggregator
+# Reth runtime adapter
 {
   pkgs,
   project,
@@ -12,7 +12,6 @@ let
     inherit (summary) summaryParser;
   };
   loggingPrelude = helpers.loggingPrelude;
-  serviceModule = import ../../helpers/service-module.nix { inherit pkgs project slots; };
   config = import ./config.nix { inherit pkgs project; };
   lifecycle = import ./lifecycle.nix {
     inherit
@@ -23,65 +22,30 @@ let
       loggingPrelude
       ;
   };
-
-  operations = import ../service-operations-builder.nix {
-    displayName = "Reth";
-    inherit lifecycle;
-    extraOperations = {
-      # Override start details to mention specific ports
-      start = {
-        script = lifecycle.startLeaf;
-        preOps = [
-          "init"
-          "check-config"
-          "preflight-start"
-        ];
-        summary = "Start Reth node";
-        details = "Starts Reth with HTTP, WS, and auth RPC listeners for the current slot/environment.";
-      };
-      # Override ready details
-      ready = {
-        script = lifecycle.ready;
-        hook = "READY";
-        summary = "Wait for Reth readiness";
-        details = "Checks that Reth responds on the configured HTTP RPC port.";
-      };
-    };
-  };
 in
-serviceModule.mkServiceModule {
-  service = "reth";
-  summaryName = "Reth";
-  summary = "Reth service management API";
-  details = "Public service contract for managing Reth across dev/prod/test/ci.";
-  artifacts = {
-    httpPortVar = slots.portVarName config.portKeyHttp;
-    wsPortVar = slots.portVarName config.portKeyWs;
-    authPortVar = slots.portVarName config.portKeyAuth;
-    serviceDir = slots.getServiceDir config.dataDirName;
-    dataDir = slots.getServiceDir config.dataDirName;
-    logFile = "${slots.getServiceDir config.dataDirName}/logs/reth.log";
-    pidFile = "${slots.getServiceDir config.dataDirName}/run/reth.pid";
-    network = config.network;
-    devMode = config.devMode;
-  };
-  inherit
-    config
-    operations
-    ;
-  exported = {
-    inherit (lifecycle)
-      reth
-      init
-      start
-      stop
-      restart
-      status
-      health
-      checkConfig
-      ready
-      fullStart
-      fullStartTest
-      ;
+{
+  version = 1;
+  operations = {
+    init = lifecycle.init;
+    preflight-start = lifecycle.preflightStart;
+    preflightStart = lifecycle.preflightStart;
+    start = lifecycle.start;
+    start-leaf = lifecycle.startLeaf;
+    startLeaf = lifecycle.startLeaf;
+    stop = lifecycle.stop;
+    restart = lifecycle.restart;
+    status = lifecycle.status;
+    health = lifecycle.health;
+    ready = lifecycle.ready;
+    check-config = lifecycle.checkConfig;
+    checkConfig = lifecycle.checkConfig;
+    full-start = lifecycle.fullStart;
+    full-start-leaf = lifecycle.fullStartLeaf;
+    fullStart = lifecycle.fullStart;
+    fullStartLeaf = lifecycle.fullStartLeaf;
+    full-start-test = lifecycle.fullStartTest;
+    full-start-test-leaf = lifecycle.fullStartTestLeaf;
+    fullStartTest = lifecycle.fullStartTest;
+    fullStartTestLeaf = lifecycle.fullStartTestLeaf;
   };
 }

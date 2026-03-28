@@ -991,6 +991,8 @@ next layers refactor.
 - no deprecation shims
 - no dual binaries
 - no old and new transport forms living side by side for safety
+- no backward-compatibility preservation for deleted framework seams
+- all breaking changes needed to delete duplicate authority are allowed
 - if a breaking change deletes a fake layer, take the break
 
 ### 1. New seam means old seam dies
@@ -1255,12 +1257,25 @@ Risk:
 
 - high
 
-### Stage 4: Optional C - service contract cleanup after runtime deletion
+### Stage 4: Optional C - compiler-owned typed service contracts after runtime deletion
 
 Goal:
 
 - only if still justified, remove the remaining framework-service glue after the
   runtime seams are already smaller
+- move public service contract authority into compiler-owned typed schema rather
+  than runtime service module imports
+
+Chosen direction for this RFC:
+
+- Stage 4, if undertaken, uses compiler-owned typed service contract schema
+- service contracts become typed module data resolved before the compiler builds
+  `serviceSurfaceCatalog`
+- runtime services keep private implementation and a small runtime adapter ABI
+  only
+- apps, hooks, and service-set wrappers become projections of compiled service
+  contracts only
+- no backward-compatibility track is preserved for the old service boundary
 
 Required deletions:
 
@@ -1268,10 +1283,14 @@ Required deletions:
   `project` and `slots` context
 - no hardcoded `serviceModulePath.nix` ownership map
 - no mixed publicApi/exported/observability object as the service boundary
+- no sidecar or runtime-owned public contract source kept beside typed module
+  schema
 
 Primary files:
 
+- `nixfied/modules/services/*`
 - `nixfied/compiler/compile-service-surface-catalog.nix`
+- `nixfied/compiler/compile-services.nix`
 - `nixfied/framework/core/mkServiceRuntimeSurfaces.nix`
 - `nixfied/framework/core/mkServiceSetPrograms.nix`
 - `nixfied/framework/core/serviceModulePath.nix`
@@ -1285,18 +1304,28 @@ Primary files:
 Must not happen:
 
 - do not build a generic service plugin platform
+- do not add sidecar contract files as a second service authority
 - do not keep helper-bundle coupling under a cleaner contract name
+- do not keep typed module schema and runtime-owned publicApi alive together for
+  safety
 - do not optimize for repository split-readiness if no duplicate authority dies
 
 Test work:
 
 - delete synthetic extractability proofs that only preserve old structure
+- add real-service checks that `serviceSurfaceCatalog` comes from typed module
+  contract data rather than runtime service imports
+- add real-service checks that runtime surfaces and service-set wrappers are
+  projections of compiled contracts only
 - keep only behavior tests that prove real public service surfaces
 
 Exit criteria:
 
-- service contracts are real compiler/module data, not runtime module imports
+- service contracts are compiler-owned typed schema, not runtime module imports
+- no compatibility bridge or parallel contract source remains
 - runtime surfaces are projections of those contracts
+- runtime services depend on a small runtime adapter ABI rather than the current
+  helper bundle as the public contract boundary
 - service split-readiness, if still claimed, is true for real services rather
   than fixtures
 
@@ -1388,6 +1417,9 @@ If the docs still describe shell as thin adapters, the code should reflect that.
 Real service modules should have to live behind small public surfaces if
 split-readiness is still a design goal.
 
+If Stage 4 proceeds, those surfaces should be expressed as compiler-owned typed
+service contract schema rather than runtime module imports.
+
 ### 5. The measurement moves in the right direction
 
 Improvement should be visible in some combination of:
@@ -1433,3 +1465,13 @@ The next step should not be "organize the layers better".
 It should be:
 
 pick one duplicated runtime seam at a time and delete it for real.
+
+For the remaining service-boundary work, this RFC now chooses the
+compiler-owned typed service contract schema path.
+
+That means Stage 4 is not a compatibility migration and not a cleaner wrapper
+around the current runtime service modules.
+
+If Stage 4 starts, it should break directly, move public service contract
+authority into typed module data, and delete the current runtime import/helper
+boundary in the same wave.

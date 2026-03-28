@@ -29,12 +29,18 @@ let
     exit 0
   '';
 
-  mkApi =
+  mkContract =
     operations:
-    serviceApi.mkServiceApiV3 {
+    {
+      version = 1;
       service = "demo";
       summary = "demo";
-      details = "demo service api";
+      details = "demo service contract";
+      ownerFile = "tests/framework/service-op-composition-contract.nix";
+      adapter = {
+        version = 1;
+        module = ./service-op-composition-contract.nix;
+      };
       artifacts = { };
       inherit
         operations
@@ -42,39 +48,40 @@ let
         ;
     };
 
-  demoApi = mkApi {
+  demoContract = mkContract {
     prepare = {
-      script = prepareScript;
+      runtimeOp = "prepare";
       summary = "prepare";
       details = "prepare";
       exposeApp = false;
       exposeHook = false;
     };
     start = {
-      script = mainScript;
+      runtimeOp = "start";
       preOps = [ "prepare" ];
       postOps = [ "finalize" ];
       summary = "start";
       details = "start";
     };
     finalize = {
-      script = finalizeScript;
+      runtimeOp = "finalize";
       summary = "finalize";
       details = "finalize";
       exposeApp = false;
       exposeHook = false;
     };
     stop = {
-      script = stopScript;
+      runtimeOp = "stop";
       summary = "stop";
       details = "stop";
     };
     status = {
-      script = statusScript;
+      runtimeOp = "status";
       summary = "status";
       details = "status";
     };
     restart = {
+      runtimeOp = null;
       preOps = [
         "stop"
         "start"
@@ -84,51 +91,69 @@ let
     };
   };
 
-  demoOps = serviceApi.collectServiceOps { demo = demoApi; };
+  demoAdapter = {
+    version = 1;
+    operations = {
+      prepare = prepareScript;
+      start = mainScript;
+      finalize = finalizeScript;
+      stop = stopScript;
+      status = statusScript;
+    };
+  };
+
+  demoOps = serviceApi.collectServiceOps {
+    serviceContracts = { demo = demoContract; };
+    serviceAdapters = { demo = demoAdapter; };
+  };
 
   findOp = opName: builtins.head (builtins.filter (op: op.opName == opName) demoOps);
 
   startOp = findOp "start";
   restartOp = findOp "restart";
-  hookEnv = serviceApi.mkServiceHookEnvFromContract { demo = demoApi; };
+  hookEnv = serviceApi.mkServiceHookEnvFromContracts {
+    serviceContracts = { demo = demoContract; };
+    serviceAdapters = { demo = demoAdapter; };
+  };
 
-  unknownRefApi = mkApi {
+  unknownRefContract = mkContract {
     start = {
-      script = mainScript;
+      runtimeOp = "start";
       preOps = [ "missing" ];
       summary = "start";
       details = "start";
     };
     stop = {
-      script = stopScript;
+      runtimeOp = "stop";
       summary = "stop";
       details = "stop";
     };
     status = {
-      script = statusScript;
+      runtimeOp = "status";
       summary = "status";
       details = "status";
     };
   };
 
-  cycleApi = mkApi {
+  cycleContract = mkContract {
     start = {
-      script = mainScript;
+      runtimeOp = "start";
       preOps = [ "restart" ];
       summary = "start";
       details = "start";
     };
     stop = {
-      script = stopScript;
+      runtimeOp = "stop";
       summary = "stop";
       details = "stop";
     };
     status = {
-      script = statusScript;
+      runtimeOp = "status";
       summary = "status";
       details = "status";
     };
     restart = {
+      runtimeOp = null;
       preOps = [ "start" ];
       summary = "restart";
       details = "restart";
@@ -136,11 +161,11 @@ let
   };
 
   unknownRefResult = builtins.tryEval (
-    builtins.deepSeq (serviceApi.validateServiceApis { demo = unknownRefApi; }) true
+    builtins.deepSeq (serviceApi.validateServiceContracts { demo = unknownRefContract; }) true
   );
 
   cycleResult = builtins.tryEval (
-    builtins.deepSeq (serviceApi.validateServiceApis { demo = cycleApi; }) true
+    builtins.deepSeq (serviceApi.validateServiceContracts { demo = cycleContract; }) true
   );
 in
 assert builtins.hasAttr "SVC_DEMO_START" hookEnv;

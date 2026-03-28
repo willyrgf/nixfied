@@ -12,14 +12,12 @@ let
   heliosSource = builtins.readFile ../../nixfied/framework/runtime/services/helios/default.nix;
   supervisorSource = builtins.readFile ../../nixfied/framework/runtime/services/supervisor/default.nix;
 
-  assertLifecycleOps =
+  assertAdapterOnlySource =
     source:
-    assert pkgs.lib.hasInfix "operations =" source;
-    assert pkgs.lib.hasInfix "start = {" source;
-    assert pkgs.lib.hasInfix "inherit (lifecycle)" source;
-    assert pkgs.lib.hasInfix "restart" source;
-    assert pkgs.lib.hasInfix "status" source;
-    assert pkgs.lib.hasInfix "health" source;
+    assert pkgs.lib.hasInfix "version = 1;" source;
+    assert pkgs.lib.hasInfix "operations = {" source;
+    assert (!pkgs.lib.hasInfix "publicApi" source);
+    assert (!pkgs.lib.hasInfix "serviceModule" source);
     true;
 
   serviceStatusAppMatchesEnable =
@@ -37,11 +35,11 @@ let
     assert (builtins.hasAttr appName apps) == expectedEnabled;
     true;
 in
-assert assertLifecycleOps postgresSource;
-assert assertLifecycleOps nginxSource;
-assert assertLifecycleOps minioSource;
-assert assertLifecycleOps rethSource;
-assert assertLifecycleOps heliosSource;
+assert assertAdapterOnlySource postgresSource;
+assert assertAdapterOnlySource nginxSource;
+assert assertAdapterOnlySource minioSource;
+assert assertAdapterOnlySource rethSource;
+assert assertAdapterOnlySource heliosSource;
 assert pkgs.lib.hasInfix "bucketMgmt = import ./bucket-management.nix" minioSource;
 assert pkgs.lib.hasInfix "runtimeDefaults = import ../../../core/runtime-defaults.nix;"
   minioBucketMgmtSource;
@@ -68,5 +66,5 @@ assert pkgs.lib.hasInfix "health" supervisorSource;
 assert pkgs.lib.hasInfix "inherit (management) restart rotateLogs;" supervisorSource;
 assert (!pkgs.lib.hasInfix "ready" supervisorSource);
 pkgs.runCommand "service-api-surface-contract" { } ''
-  echo "OK: service lifecycle surface is stable for public services, exported service apps track enabled services, and supervisor remains a separate runtime surface" > "$out"
+  echo "OK: runtime service modules expose adapter-only operation maps, public service apps still track enabled services, and supervisor remains a separate runtime surface" > "$out"
 ''

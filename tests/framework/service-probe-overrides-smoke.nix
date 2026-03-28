@@ -120,11 +120,11 @@ let
     };
   };
 
-  nginxService = import ../../nixfied/framework/runtime/services/nginx/default.nix {
+  nginxService = (import ../../nixfied/framework/runtime/services/nginx/default.nix {
     inherit pkgs;
     project = directProject;
     slots = slotsStub;
-  };
+  }).operations;
 
   aggregateHealth = compiled.apps.health.program;
   aggregateReady = compiled.apps.ready.program;

@@ -1,9 +1,17 @@
-{ lib, ... }:
+{
+  lib,
+  config,
+  ...
+}:
 let
   t = lib.types;
+  cfg = config.nixfied.services.reth;
   probeLib = import ./probes.nix { inherit lib; };
+  contractSchema = import ./contract-schema.nix { inherit lib; };
+  operationContractBuilder = import ./operation-contract-builder.nix;
   sourceOptions = import ./source-options.nix { inherit lib; };
   sourceSpec = sourceOptions.mkSourceSpec { };
+  serviceDir = contractSchema.mkServiceDirExpr cfg.dataDirName;
 in
 {
   options.nixfied.services.reth = {
@@ -52,5 +60,57 @@ in
       default = "";
     };
     probes = probeLib.probeOptions;
+    contract = contractSchema.mkContractOption "Typed Reth public contract.";
+  };
+
+  config.nixfied.services.reth.contract = {
+    version = 1;
+    service = "reth";
+    summary = "Reth service management API";
+    details = "Public service contract for managing Reth across dev/prod/test/ci.";
+    ownerFile = "nixfied/modules/services/reth.nix";
+    adapter = {
+      version = 1;
+      module = ../../framework/runtime/services/reth/default.nix;
+    };
+    artifacts = {
+      httpPortVar = contractSchema.mkPortVarName cfg.portKeyHttp;
+      wsPortVar = contractSchema.mkPortVarName cfg.portKeyWs;
+      authPortVar = contractSchema.mkPortVarName cfg.portKeyAuth;
+      serviceDir = serviceDir;
+      dataDir = serviceDir;
+      logFile = "${serviceDir}/logs/reth.log";
+      pidFile = "${serviceDir}/run/reth.pid";
+      network = cfg.network;
+      devMode = cfg.devMode;
+    };
+    runtimePrimitives = contractSchema.mkRuntimePrimitivesV1 config.nixfied.runtime;
+    operations =
+      (operationContractBuilder {
+        displayName = "Reth";
+        extraOperations = {
+          start = {
+            runtimeOp = "start-leaf";
+            preOps = [
+              "init"
+              "check-config"
+              "preflight-start"
+            ];
+            summary = "Start Reth node";
+            details = "Starts Reth with HTTP, WS, and auth RPC listeners for the current slot/environment.";
+          };
+
+          ready = {
+            runtimeOp = "ready";
+            hook = "READY";
+            summary = "Wait for Reth readiness";
+            details = "Checks that Reth responds on the configured HTTP RPC port.";
+          };
+        };
+      })
+      // contractSchema.mkObservabilityOperations {
+        service = "reth";
+        summaryName = "Reth";
+      };
   };
 }
