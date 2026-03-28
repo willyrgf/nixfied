@@ -1027,173 +1027,317 @@ depend only on public contracts and generated surfaces.
 If runtime layers stay multiplied, test metadata and shard governance can become
 yet another architecture layer instead of a safety net around a leaner design.
 
-## Candidate Deletion Program
+## Implementation Plan
 
-These are the best current deletion-first discussion candidates.
+This is no longer a candidate list.
 
-They are not yet the final chosen plan.
+The repository now has a chosen pre-implementation sequence derived from
+`docs/LAYER_OPTIONS.md`.
 
-### Candidate 1: delete runtime selection fallbacks
+The stages below are ordered, breaking by design, and intended to be completed
+before any broader feature work resumes.
 
-Remove runtime recomputation of `selectionIndex` and require compiled selection
-data everywhere.
+### Stage 0: Prep - delete fake runtime authorities
 
-Likely files:
+Goal:
+
+- remove low-regret duplicated authorities before larger representation changes
+
+Required deletions:
+
+- delete `nixfied/framework/runtime/service-selection.nix`
+- delete executor synthesis fallback for `serviceSetPrograms`
+- delete `nixfied/framework/runtime/orchestrator-control.nix` as a separate
+  program/layer
+- keep one runtime-control owner in the shell path and remove the duplicate
+  surfacing path in launchers and tests
+
+Primary files:
 
 - `nixfied/framework/runtime/service-selection.nix`
+- `nixfied/framework/runtime/executor.nix`
 - `nixfied/framework/runtime/orchestrator.nix`
-- `nixfied/framework/runtime/executor.nix`
-
-Payoff:
-
-- removes duplicated authority
-- makes "Nix is compile-time authority" real for selection
-
-Risk:
-
-- low
-
-### Candidate 2: delete executor synthesis of `serviceSetPrograms`
-
-Require compiled `serviceSetPrograms` and remove executor-side fallback
-synthesis.
-
-Likely files:
-
-- `nixfied/framework/runtime/executor.nix`
+- `nixfied/framework/runtime/orchestrator-control.nix`
+- `nixfied/framework/runtime/dispatcher.nix`
 - `nixfied/framework/core/materializeExecution.nix`
+- `nixfied/framework/core/mkFlakeOutputs.nix`
+- `tests/framework/runtime-service-selection-contract.nix`
+- `tests/framework/runtime-control-launcher-contract.nix`
+- `tests/framework/contract-migration-guard.nix`
 
-Payoff:
+Must not happen:
 
-- removes an obvious duplicate representation
+- no compatibility wrapper that preserves both run-control paths
+- no replacement fallback for deleted selection or `serviceSetPrograms`
+  synthesis
+
+Test work:
+
+- delete tests that require `service-selection.nix`
+- replace launcher-name pinning with behavior tests for `runs`, `stop-run`, and
+  `stop-all-runs`
+- update migration guards to stop preserving deleted seams
+
+Exit criteria:
+
+- no runtime recomputation/import of `compile-selection-index.nix`
+- no executor fallback synthesis of `serviceSetPrograms`
+- one shell control path owns run listing and stop behavior
 
 Risk:
 
 - low to medium
 
-### Candidate 3: choose one runtime-control surfacing path
+### Stage 1: D1 - one compiler-owned execution authority
 
-Keep either:
+Goal:
 
-- direct dispatcher ownership of runtime-control surfaces
+- replace fragmented execution ownership with one compiler-owned authority
 
-or:
+Authority to create:
 
-- `orchestrator-control` as the single runtime-control program surface
+- one canonical compiled execution object that owns:
+  - task semantic descriptors
+  - workflow semantic descriptors
+  - task/workflow/app ID closure
+  - selected-service closure
+  - workflow family/mode resolution inputs
+  - projection inputs for app manifests, launcher/help surfaces, and runtime
+    handoff
 
-But not both.
+Required deletions:
 
-Likely files:
+- no top-level `selectionIndex` side-channel ownership
+- no top-level `appExecutionManifests` side-channel ownership
+- no parallel closure walkers for launcher logic and manifest narrowing
+- no `runtimeManifests` catalog as an independent architectural family
 
-- `nixfied/framework/runtime/dispatcher.nix`
-- `nixfied/framework/runtime/orchestrator-control.nix`
+Primary files:
+
+- `nixfied/compiler/default.nix`
+- `nixfied/compiler/compile-selection-index.nix`
+- `nixfied/compiler/compile-app-execution-manifests.nix`
+- `nixfied/compiler/compile-runtime-manifest.nix`
+- `nixfied/compiler/compile-runtime-metadata.nix`
+- `nixfied/compiler/finalize-model.nix`
+- `nixfied/framework/core/mkLauncherMetadata.nix`
 - `nixfied/framework/core/mkFlakeOutputs.nix`
+- `nixfied/framework/core/materializeExecution.nix`
 
-Payoff:
+Projection rules:
 
-- removes duplicated public/internal glue
+- selected app execution manifests may remain as projections
+- launcher/help inputs must be projections of the same execution authority
+- runtime metadata may remain temporarily only as a projection, not as the new
+  canonical source of truth
+
+Must not happen:
+
+- do not keep the old side channels beside the new execution authority
+- do not move launcher tables to a different file and call that unification
+- do not canonize shell-rendered plan text as the semantic authority
+
+Test work:
+
+- keep manifest behavior tests
+- delete or rewrite tests that pin `selectionIndex` as a separate exported
+  surface
+- add checks that launcher/help selection data and manifests derive from the same
+  compiled authority
+
+Exit criteria:
+
+- one compiler-owned execution object exists
+- manifests, launchers, and runtime handoff consume projections of that object
+- no independent top-level `selectionIndex` or `appExecutionManifests`
+  ownership remains
 
 Risk:
 
-- medium
+- high
 
-### Candidate 4: delete the shell metadata getter layer
+### Stage 2: D2 - delete shell metadata and export transport
 
-Replace `runtime-metadata.nix` and kernel `load-runtime` / `load-hook`
-round-trips with one coarser runtime handoff.
+Goal:
 
-Likely files:
+- delete the strongest surviving shell planning/query seam
+
+Required deletions:
+
+- delete `nixfied/framework/runtime/runtime-metadata.nix`
+- delete fine-grained kernel runtime query/export flows used only to feed shell
+  getters
+- delete shell summary export sourcing
+- replace all of the above with one coarse structured runtime handoff only where
+  shell still needs OS-edge inputs
+
+Primary files:
 
 - `nixfied/framework/runtime/runtime-metadata.nix`
+- `nixfied/framework/runtime/executor.nix`
+- `nixfied/framework/runtime/orchestrator.nix`
+- `nixfied/framework/runtime/shared-runtime-lib.nix`
 - `nixfied/framework/runtime/kernel/src/task.rs`
 - `nixfied/framework/runtime/kernel/src/workflow.rs`
-- `nixfied/framework/runtime/executor.nix`
+- `nixfied/framework/runtime/kernel/src/summary.rs`
+- `tests/framework/workflow-modes-contract.nix`
+- `tests/framework/contract-migration-guard.nix`
 
-Payoff:
+Must not happen:
 
-- deletes an entire Nix -> shell -> kernel -> shell metadata seam
+- no cleaner replacement getter library
+- no temporary JSON-plus-export dual transport
+- no preservation of kernel `load-runtime` / `load-hook` style commands once the
+  shell getter path is gone
+
+Test work:
+
+- replace source-text assertions with behavior checks around summary artifacts
+  and runtime invocation
+- add tests for the new coarse handoff shape
+- pin run-id behavior before changing metadata recursion
+
+Exit criteria:
+
+- no `runtime-metadata.nix`
+- no shell `eval` of kernel-rendered exports for runtime metadata
+- no summary counters round-tripping through export files
 
 Risk:
 
 - high
 
-### Candidate 5: move task dependency execution fully into the kernel
+### Stage 3: B - kernel owns root task DAG execution
 
-Today the kernel computes task execution order, but shell still loops the plan
-and applies hook and failure choreography.
+Goal:
 
-The more radical option is to let the kernel own task dependency execution
-end-to-end as well.
+- finish the kernel authority move for execution semantics
 
-Likely files:
+Required deletions:
+
+- remove the shell task dependency loop
+- remove kernel-generated execution-order temp files as a shell contract
+- remove export-file choreography for root task dependency execution
+
+Primary files:
 
 - `nixfied/framework/runtime/executor.nix`
 - `nixfied/framework/runtime/kernel/src/task.rs`
+- `nixfied/framework/runtime/kernel/src/main.rs`
+- `tests/framework/*task*`
+- `tests/framework/*summary*`
 
-Payoff:
+Kernel boundary after this stage:
 
-- large shell deletion opportunity
-- fewer temp files
-- fewer export protocols
+- kernel owns workflow scheduling
+- kernel owns root task DAG execution
+- shell owns env shaping, process launch, signals, and adapter invocation only
+
+Must not happen:
+
+- do not move shell logic into Rust while preserving the same transport seams
+- do not pull sandbox assembly or unrelated service internals into the kernel
+  unless the shell implementation dies with them
+
+Test work:
+
+- add direct kernel tests for root task DAG execution, cycle detection, soft
+  dependency handling, skip propagation, and exit propagation
+- convert any remaining task dependency source checks into behavior tests
+
+Exit criteria:
+
+- no shell-owned root task dependency loop remains
+- no task execution-order temp-file contract remains
+- root task execution semantics are kernel-owned end to end
 
 Risk:
 
 - high
 
-### Candidate 6: make service boundaries real, then delete synthetic proof seams
+### Stage 4: Optional C - service contract cleanup after runtime deletion
 
-Force real service modules to expose only public contracts or generated surfaces,
-then simplify the synthetic extractability proof accordingly.
+Goal:
 
-Likely files:
+- only if still justified, remove the remaining framework-service glue after the
+  runtime seams are already smaller
 
-- `nixfied/framework/runtime/helpers/service-api.nix`
+Required deletions:
+
+- no compiler import of runtime service implementations through synthetic
+  `project` and `slots` context
+- no hardcoded `serviceModulePath.nix` ownership map
+- no mixed publicApi/exported/observability object as the service boundary
+
+Primary files:
+
+- `nixfied/compiler/compile-service-surface-catalog.nix`
 - `nixfied/framework/core/mkServiceRuntimeSurfaces.nix`
 - `nixfied/framework/core/mkServiceSetPrograms.nix`
-- `tests/framework/service-extractability-contract.nix`
+- `nixfied/framework/core/serviceModulePath.nix`
+- `nixfied/framework/runtime/helpers/service-api.nix`
+- `nixfied/framework/runtime/helpers/app-api.nix`
+- `nixfied/framework/runtime/helpers/service-module.nix`
+- `nixfied/framework/runtime/helpers/service-observability.nix`
+- `nixfied/framework/runtime/services/*`
+- `tests/framework/service-*.nix`
 
-Payoff:
+Must not happen:
 
-- turns a design aspiration into a real deletion criterion
+- do not build a generic service plugin platform
+- do not keep helper-bundle coupling under a cleaner contract name
+- do not optimize for repository split-readiness if no duplicate authority dies
+
+Test work:
+
+- delete synthetic extractability proofs that only preserve old structure
+- keep only behavior tests that prove real public service surfaces
+
+Exit criteria:
+
+- service contracts are real compiler/module data, not runtime module imports
+- runtime surfaces are projections of those contracts
+- service split-readiness, if still claimed, is true for real services rather
+  than fixtures
 
 Risk:
 
-- high
+- high and optional
 
-### Candidate 7: delete shell summary export sourcing
+### Stage Rules
 
-Let the kernel emit the final summary data directly in one form so shell stops
-loading summary counters through export files.
+- do not overlap stages in one broad refactor branch
+- each stage must leave the codebase with fewer authorities than it started
+- each stage may break callers and tests directly
+- each stage should delete seam-freezing tests in the same wave as the seam
+  deletion
+- do not start Stage 4 before Stages 0 through 3 are complete
 
-Likely files:
+### Test Strategy During Refactor
 
-- `nixfied/framework/runtime/executor.nix`
-- `nixfied/framework/runtime/kernel/src/summary.rs`
+Keep:
 
-Payoff:
+- manifest narrowing proofs
+- launcher pruning proofs
+- runtime env isolation proofs
+- service-hook env scoping proofs
+- registry/run-record behavior proofs
+- summary JSON behavior proofs
 
-- removes one more transport seam
+Delete or downgrade as seams disappear:
 
-Risk:
+- migration guards that pin deleted imports or helper names
+- runtime-control launcher binary-name pinning
+- runtime selection fallback equality checks
+- shard taxonomy governance that exists only to freeze the current seam map
 
-- medium
+Add:
 
-## Discussion Questions
-
-These are the questions that should drive the next design conversation.
-
-1. Do we want the kernel to own just workflow scheduling, or full task and
-   workflow execution?
-2. If shell must remain the live process supervisor, what exact control flow is
-   still allowed to live there?
-3. Should `nixfied-runtime-metadata` survive as a separate runtime family, or
-   should it be absorbed into a single execution manifest family?
-4. Which runtime transport forms are acceptable to keep?
-5. Is service split-readiness a real goal, or just a cleanliness metaphor?
-6. How much architecture-governance machinery in `tests/framework` is worth
-   carrying if the runtime stack itself stays large?
-7. Which seams can be deleted with low risk right now, before any deeper kernel
-   expansion is attempted?
+- behavior tests for the single remaining run-control surface
+- behavior tests for the new coarse runtime handoff
+- kernel tests for root task DAG execution
+- direct tests that prove manifest, launcher, and runtime handoff share the same
+  execution authority
 
 ## What This RFC Is Not Saying
 
@@ -1208,33 +1352,6 @@ It is saying something narrower and more important:
 
 the repository improved correctness and authority more than it improved
 simplicity, because it did not delete enough replaced seams.
-
-## Chosen Breaking Sequence
-
-The next round should stop treating the remaining work as one monolithic
-`Option D` migration.
-
-The sequence should be:
-
-1. delete fake runtime authorities directly
-   - runtime selection fallback
-   - duplicate runtime-control surfacing
-   - executor synthesis fallback for `serviceSetPrograms`
-2. create one compiler-owned execution authority with no top-level
-   `selectionIndex` or `appExecutionManifests` side channels
-3. delete shell metadata/export transport
-   - no `runtime-metadata.nix`
-   - no shell summary export sourcing
-   - no fine-grained kernel export getter path
-4. move root task DAG execution fully into the kernel
-5. only after runtime/control deletion, decide whether service contract cleanup
-   still removes real framework seams
-6. delete migration-policy tests as soon as the seams they freeze are gone
-
-This is a breaking-change sequence by design.
-
-It should not preserve transitional wrappers just because they exist in current
-code.
 
 ## Acceptance Criteria For The Next Round
 
