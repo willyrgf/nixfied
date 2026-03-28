@@ -212,25 +212,52 @@ Constraint:
 Primary effect:
 
 - move service boundary authority into the compiler
+- make the service boundary repository-separable in principle rather than only
+  syntactically extractable
 - stop importing service modules twice for contract extraction and runtime
   materialization
 - stop regenerating service apps and hook env from the same knowledge in
   multiple layers
+- split services into:
+  - standalone contract data
+  - minimal runtime context ABI
+  - private service implementation
+  - framework-side projections derived only from the contract
 
 Files under pressure:
 
 - `nixfied/compiler/compile-service-surface-catalog.nix`
 - `nixfied/framework/core/mkServiceRuntimeSurfaces.nix`
 - `nixfied/framework/core/mkServiceSetPrograms.nix`
+- `nixfied/framework/core/serviceModulePath.nix`
 - `nixfied/framework/runtime/helpers/service-api.nix`
+- `nixfied/framework/runtime/helpers/app-api.nix`
 - `nixfied/framework/runtime/helpers/service-module.nix`
+- `nixfied/framework/runtime/helpers/service-observability.nix`
 - `nixfied/framework/runtime/services/*`
+- `tests/framework/service-*.nix`
 
 Why it matters:
 
 - this is valid only if it deletes duplicate framework knowledge
 - if it merely adds a cleaner service platform beside the current one, it is a
   regression
+
+Current evidence from code:
+
+- `service-module.nix` still mixes contract construction with observability
+  injection and private exported implementation
+- `compile-service-surface-catalog.nix` still imports real service modules
+  through synthetic `project` and `slots` context
+- `serviceModulePath.nix` hardcodes built-in service locations, which is
+  incompatible with repository-separable service ownership
+- `mkServiceRuntimeSurfaces.nix` still regenerates apps and hook env and can
+  fall back to re-importing service modules
+- real services still depend on broad helper/runtime surfaces such as
+  `managedServiceLifecycle`, `slotEnvRuntime`, `slots.getSlotInfo`, and
+  `slots.getServiceDir`
+- `service-api.nix` and `app-api.nix` still tie service contracts to shell/app
+  runtime primitive conventions
 
 ### Candidate 7: move task dependency execution fully into kernel
 
@@ -287,6 +314,39 @@ Before debating target architectures, fix four classification errors:
 
 Any option that keeps those as first-class long-term layers is not actually a
 deletion-first architecture.
+
+## Service Boundary Readiness
+
+Question `4` has a working answer now:
+
+- service split-readiness is a real requirement, but only as a deletion test
+- it is not justified as a packaging goal by itself
+
+Use split-readiness to force these properties:
+
+- a service can declare its public contract without importing framework runtime
+  helpers
+- the compiler can consume the contract without synthesizing fake `project` or
+  `slots` context
+- runtime can surface apps, hooks, and service-set wrappers from compiled
+  service contracts only
+- service implementation depends on one small runtime context ABI instead of the
+  current helper bundle
+- service lookup is declared ownership, not hardcoded framework path knowledge
+
+Reject the broader version:
+
+- do not build a larger service plugin platform
+- do not add a second service SDK next to the current one
+- do not treat "movable to another repo" as success if the same framework glue
+  still exists under a cleaner name
+
+Practical reading:
+
+- if split-readiness deletes hidden framework-service coupling, it is a valid
+  architectural requirement
+- if it only makes services nicer to package, service contracts should be
+  simplified only as far as they delete duplicated framework glue
 
 ## Target Architectures
 
@@ -382,6 +442,8 @@ Core idea:
 
 - after compile/runtime data is singular, move service contract authority fully
   into the compiler
+- make repository-separable service boundaries possible in principle by
+  separating contract, runtime ABI, and private implementation
 - runtime surfaces become pure projections of compiled service contracts
 
 Benefits:
@@ -389,16 +451,22 @@ Benefits:
 - strongest path to deleting service-specific framework glue
 - best path to making service boundaries real without synthetic extractability
   proof seams
+- exposes and shrinks the hidden coupling now carried by `service-module.nix`,
+  `serviceModulePath.nix`, helper bundles, and shell/app runtime conventions
 
 Costs:
 
 - high refactor cost
 - only justified if it deletes the current duplicate service ownership
+- requires a real runtime-context contract for services instead of the current
+  `project` plus `slots` helper seam
 
 Constraint:
 
 - reject this if it grows a larger service meta-framework instead of reducing
   duplicated knowledge
+- repository split-readiness is not the product by itself; it is the test that
+  the service boundary is actually small and real
 
 ### Option D: Canonical Compiled Graph + Single Shell Runtime Authority
 
@@ -458,7 +526,7 @@ Why this is the new default:
 | `A` legacy thin shell runtime | historical cleanup framing only | does not fully solve representation duplication | medium | do not use as target |
 | `D` canonical compiled graph + single shell runtime authority | removes duplicate compile/runtime knowledge and shell metadata transport | service boundary duplication and kernel task loop still remain | high | first real target |
 | `B` kernel-led execution core | deletes most shell semantic planning | kernel growth and task-edge migration complexity | high | after `D` |
-| `C` compiler-owned service contracts | deletes duplicate service boundary glue | difficult contract/runtime split in service modules | high | after `D`, or parallel after `D` |
+| `C` compiler-owned service contracts | deletes duplicate service boundary glue and hidden framework-service coupling | difficult contract/runtime split plus service lookup/runtime ABI redesign | high | after `D`, or parallel after `D` |
 
 ## Recommendation
 
@@ -498,6 +566,12 @@ To choose between the options, answer these explicitly:
    <!-- //WR: we need to expose for the user of the framework how to set their task dependencies, with that in mind with a proper well-defined API it could be only an step in the state execution workflow after compiled. But you understand the details better than me here. -->
 4. Is service split-readiness a real requirement, or should service contracts be
    simplified only as far as they delete duplicated framework glue?
+   Working answer:
+   - yes, but only as a deletion test
+   - repository split-readiness is justified when it forces a smaller public
+     service boundary and exposes hidden framework coupling
+   - reject any broader service-platform generalization that adds new framework
+     surface without deleting the current one
 5. Are we willing to grow kernel scope only when that growth deletes an entire
    shell planning seam?
    <!-- //WR: yes, kernel scope should only grow if it means simplifying the whole code base, increasing reusability and reproducibility/determinisnm while removing shell weak workflows. -->
@@ -522,7 +596,8 @@ The more accurate decision structure is:
   one real authority
 - then choose between:
   - `B`: push task dependency execution further into kernel
-  - `C`: push service contracts fully into the compiler
+  - `C`: push service contracts fully into the compiler and make service
+    boundaries repository-separable in principle
 
 The strongest default recommendation is therefore no longer `A` first.
 
