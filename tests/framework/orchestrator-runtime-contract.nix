@@ -1,7 +1,6 @@
 { pkgs }:
 let
   orchestratorSource = builtins.readFile ../../nixfied/framework/runtime/orchestrator.nix;
-  controlSource = builtins.readFile ../../nixfied/framework/runtime/orchestrator-control.nix;
   runtimeSource = builtins.readFile ../../nixfied/framework/runtime/orchestrator-runtime.nix;
   commonSource = builtins.readFile ../../nixfied/framework/runtime/common-runtime.nix;
 in
@@ -32,11 +31,6 @@ assert (!pkgs.lib.hasInfix "\${pkgs.jq}/bin/jq -cS" orchestratorSource);
 assert (
   !pkgs.lib.hasInfix "while IFS=$'\\t' read -r seq ts_epoch ts event_run_id" orchestratorSource
 );
-assert pkgs.lib.hasInfix "registry_events_index_snapshot" controlSource;
-assert pkgs.lib.hasInfix "nixfied-kernel registry terminal" controlSource;
-assert (!pkgs.lib.hasInfix "jq -r --arg runId" controlSource);
-assert (!pkgs.lib.hasInfix "\${pkgs.jq}/bin/jq -cS" controlSource);
-assert (!pkgs.lib.hasInfix "while IFS=$'\\t' read -r seq ts_epoch ts event_run_id" controlSource);
 assert pkgs.lib.hasInfix "commonRuntimeShell = import ./common-runtime.nix" runtimeSource;
 assert pkgs.lib.hasInfix "\${commonRuntimeShell}" runtimeSource;
 assert pkgs.lib.hasInfix "split_process_mode() {" runtimeSource;

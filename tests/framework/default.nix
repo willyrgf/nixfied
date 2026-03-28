@@ -35,7 +35,7 @@ let
       || name == "workflow-modes-contract"
     then
       "migration"
-    else if lib.hasInfix "manifest" name || name == "runtime-service-selection-contract" then
+    else if lib.hasInfix "manifest" name then
       "manifest"
     else if
       lib.hasInfix "launcher" name
@@ -278,8 +278,6 @@ let
 
     "framework-upgrade-no-caller-compile-smoke" = { };
 
-    "runtime-control-launcher-contract" = { };
-
     "runtime-controls-no-service-materialization-smoke" = { };
 
     "flake-show-no-service-materialization-smoke" = { };
@@ -319,11 +317,6 @@ let
     };
 
     "service-op-composition-contract" = { };
-
-    "runtime-service-selection-contract" = {
-      layer = "manifest";
-      proofKind = "contract";
-    };
 
     "framework-test-coverage-contract" = {
       layer = "migration";
@@ -470,13 +463,6 @@ let
             registry
             ;
         };
-
-    "runtime-control-launcher-contract" = import ./runtime-control-launcher-contract.nix {
-      inherit
-        pkgs
-        apps
-        ;
-    };
 
     "runtime-controls-no-service-materialization-smoke" =
       import ./runtime-controls-no-service-materialization-smoke.nix
@@ -654,10 +640,6 @@ let
     };
 
     "service-op-composition-contract" = import ./service-op-composition-contract.nix {
-      inherit pkgs;
-    };
-
-    "runtime-service-selection-contract" = import ./runtime-service-selection-contract.nix {
       inherit pkgs;
     };
 

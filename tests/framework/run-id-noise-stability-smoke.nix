@@ -40,7 +40,6 @@ let
       registry
       ;
     model = compiled.model;
-    selectionIndex = compiled.selectionIndex;
     services = compiled.services;
     projectRoot = ../..;
   };

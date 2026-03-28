@@ -1,7 +1,6 @@
 {
   pkgs,
   model,
-  selectionIndex,
   services,
   runtimeHash ? model.identity.evalHash,
   projectRoot,
@@ -22,7 +21,6 @@ let
     inherit
       pkgs
       model
-      selectionIndex
       services
       runtimeHash
       registry

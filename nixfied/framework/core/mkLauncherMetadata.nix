@@ -19,12 +19,6 @@ let
     "framework::upgrade"
   ];
 
-  runtimeControlAppNames = [
-    "runs"
-    "stop-run"
-    "stop-all-runs"
-  ];
-
   runtimeProxyAppNames = if workspaceMarkerPresent then [ ] else nonSelectorAppNames;
 
   viewWrappedAppNames = builtins.sort builtins.lessThan (
@@ -66,7 +60,6 @@ in
   inherit
     selectorDispatcherAppNames
     nonSelectorAppNames
-    runtimeControlAppNames
     runtimeProxyAppNames
     viewWrappedAppNames
     serviceWrappedAppNames

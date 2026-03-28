@@ -44,7 +44,6 @@ let
 
     manifest = [
       "runtime-manifest-fixture-contract"
-      "runtime-service-selection-contract"
     ];
 
     kernel = [
@@ -94,7 +93,6 @@ let
       "log-prefix-contract"
       "orchestrator-arg-forwarding-smoke"
       "orchestrator-signal-cleanup-smoke"
-      "runtime-control-launcher-contract"
       "runtime-events-contract"
       "selected-app-manifest-contract"
       "service-hook-env-smoke"

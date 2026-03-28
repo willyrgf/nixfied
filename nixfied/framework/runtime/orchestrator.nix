@@ -1,110 +1,121 @@
 {
   pkgs,
   model,
-  selectionIndex ? null,
   services,
   runtimeHash ? model.identity.evalHash,
   registry,
   projectRoot,
   serviceSetPrograms ? { },
   serviceHookEnv ? { },
+  executionEnabled ? true,
 }:
 let
   lib = pkgs.lib;
   kernelPackage = import ./kernel { inherit pkgs; };
-  resolvedSelectionIndex =
-    if selectionIndex != null then
-      selectionIndex
-    else
-      import ../../compiler/compile-selection-index.nix
-        {
-          inherit (pkgs) lib;
-        }
-        {
-          tasks = model.tasks or { };
-          workflows = model.workflows or { };
-          serviceCatalog = model.serviceCatalog or { };
-        };
   shellCommon = import ../core/shell-common.nix { inherit pkgs; };
   registryShell = registry.events.mkShellLib { };
-  runtimeMetadataShell = import ./runtime-metadata.nix { inherit pkgs; };
-  executorRuntimeShell = import ./executor-runtime.nix {
-    inherit
-      pkgs
-      model
-      ;
-  };
+  runtimeMetadataShell =
+    if executionEnabled then import ./runtime-metadata.nix { inherit pkgs; } else "";
+  executorRuntimeShell =
+    if executionEnabled then
+      import ./executor-runtime.nix {
+        inherit
+          pkgs
+          model
+          ;
+      }
+    else
+      "";
   orchestratorRuntimeShell = import ./orchestrator-runtime.nix { inherit pkgs; };
-  sharedRuntimeLibShell = import ./shared-runtime-lib.nix {
-    inherit
-      pkgs
-      model
-      runtimeHash
-      ;
-    runCounterLockPurpose = "orchestrator-run-counter";
-  };
+  sharedRuntimeLibShell =
+    if executionEnabled then
+      import ./shared-runtime-lib.nix {
+        inherit
+          pkgs
+          model
+          runtimeHash
+          ;
+        runCounterLockPurpose = "orchestrator-run-counter";
+      }
+    else
+      "";
   runtimeArtifactContracts = import ../contracts/runtime-artifact-contracts.nix { inherit pkgs; };
   validationBundleFile = pkgs.writeText "nixfied-runtime-artifact-contract-bundle.json" (
     builtins.toJSON runtimeArtifactContracts.bundle
   );
-  modelFile = pkgs.writeText "nixfied-orchestrator-model.json" (builtins.toJSON model);
-  executor = import ./executor.nix {
-    inherit
-      pkgs
-      model
-      services
-      registry
-      projectRoot
-      serviceSetPrograms
-      serviceHookEnv
-      ;
-    selectionIndex = resolvedSelectionIndex;
-  };
-  frameworkEphemeral = import ./ephemeral.nix {
-    inherit
-      pkgs
-      projectRoot
-      ;
-    project = {
-      project = {
-        id = model.identity.projectId;
-        slotVar = model.runtime.slot.var;
-        envVar = model.runtime.env.var;
-      };
-      state = {
-        policy = model.state.policy;
-      };
-      slots = {
-        max = model.runtime.slot.max;
-      };
-      install = {
-        deps = "";
-      };
-      tooling = {
-        runtimePackages = [
-          pkgs.coreutils
-          pkgs.findutils
-          pkgs.gnused
-          pkgs.gnugrep
-          pkgs.gawk
-          pkgs.git
-        ];
-      };
-      ephemeral = model.runtime.ephemeral or { };
-    };
-  };
-  ephemeralExecutorWrapper = frameworkEphemeral.mkEphemeralWrapper {
-    name = "orchestrator-executor";
-    installDeps = false;
-    script = ''
-      ${shellCommon}
-      if [ "$#" -lt 1 ]; then
-        nixfied_exit_usage "missing command for ephemeral wrapper"
-      fi
-      export NIXFIED_CALLER_PWD="$(pwd -P)"
-      exec "$@"
-    '';
-  };
+  modelFile =
+    if executionEnabled then
+      pkgs.writeText "nixfied-orchestrator-model.json" (builtins.toJSON model)
+    else
+      null;
+  executor =
+    if executionEnabled then
+      import ./executor.nix {
+        inherit
+          pkgs
+          model
+          services
+          registry
+          projectRoot
+          serviceSetPrograms
+          serviceHookEnv
+          ;
+      }
+    else
+      null;
+  frameworkEphemeral =
+    if executionEnabled then
+      import ./ephemeral.nix {
+        inherit
+          pkgs
+          projectRoot
+          ;
+        project = {
+          project = {
+            id = model.identity.projectId;
+            slotVar = model.runtime.slot.var;
+            envVar = model.runtime.env.var;
+          };
+          state = {
+            policy = model.state.policy;
+          };
+          slots = {
+            max = model.runtime.slot.max;
+          };
+          install = {
+            deps = "";
+          };
+          tooling = {
+            runtimePackages = [
+              pkgs.coreutils
+              pkgs.findutils
+              pkgs.gnused
+              pkgs.gnugrep
+              pkgs.gawk
+              pkgs.git
+            ];
+          };
+          ephemeral = model.runtime.ephemeral or { };
+        };
+      }
+    else
+      null;
+  ephemeralExecutorWrapper =
+    if executionEnabled then
+      frameworkEphemeral.mkEphemeralWrapper {
+        name = "orchestrator-executor";
+        installDeps = false;
+        script = ''
+          ${shellCommon}
+          if [ "$#" -lt 1 ]; then
+            nixfied_exit_usage "missing command for ephemeral wrapper"
+          fi
+          export NIXFIED_CALLER_PWD="$(pwd -P)"
+          exec "$@"
+        '';
+      }
+    else
+      "";
   setsidBin = if pkgs ? util-linux then "${pkgs.util-linux}/bin/setsid" else "";
 in
 pkgs.writeShellScriptBin "nixfied-orchestrator" ''
@@ -112,12 +123,16 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
   ${shellCommon}
   export NIXFIED_ORCHESTRATOR_BIN="$0"
   export NIXFIED_ORCHESTRATOR_SELF="$0"
-  MODEL_FILE=${lib.escapeShellArg (builtins.toString modelFile)}
-  export NIXFIED_MODEL_FILE="$MODEL_FILE"
+  ${lib.optionalString executionEnabled ''
+    MODEL_FILE=${lib.escapeShellArg (builtins.toString modelFile)}
+    export NIXFIED_MODEL_FILE="$MODEL_FILE"
+  ''}
 
-  EXECUTOR_PROGRAM=${lib.escapeShellArg "${executor}/bin/nixfied-executor"}
-  export NIXFIED_EXECUTOR_BIN="$EXECUTOR_PROGRAM"
-  EPHEMERAL_EXECUTOR_WRAPPER=${lib.escapeShellArg (builtins.toString ephemeralExecutorWrapper)}
+  ${lib.optionalString executionEnabled ''
+    EXECUTOR_PROGRAM=${lib.escapeShellArg "${executor}/bin/nixfied-executor"}
+    export NIXFIED_EXECUTOR_BIN="$EXECUTOR_PROGRAM"
+    EPHEMERAL_EXECUTOR_WRAPPER=${lib.escapeShellArg (builtins.toString ephemeralExecutorWrapper)}
+  ''}
   PROJECT_ROOT=${lib.escapeShellArg (builtins.toString projectRoot)}
   REGISTRY_ROOT_DEFAULT="${model.state.policy.registryRoot}"
   ARTIFACTS_ROOT_DEFAULT="${model.state.policy.artifactsRoot}"
@@ -1040,12 +1055,15 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
 
     case "$subcommand" in
       run-task)
+        ${if executionEnabled then "" else ''echo "ERROR: run-task is unavailable in control-only mode"; exit "$NIXFIED_EXIT_USAGE"''}
         run_task "$@"
         ;;
       run-workflow)
+        ${if executionEnabled then "" else ''echo "ERROR: run-workflow is unavailable in control-only mode"; exit "$NIXFIED_EXIT_USAGE"''}
         run_workflow "$@"
         ;;
       run-workflow-parallel)
+        ${if executionEnabled then "" else ''echo "ERROR: run-workflow-parallel is unavailable in control-only mode"; exit "$NIXFIED_EXIT_USAGE"''}
         NIXFIED_WORKFLOW_PARALLEL=1 run_workflow "$@"
         ;;
       runs)

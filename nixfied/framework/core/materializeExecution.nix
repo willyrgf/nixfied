@@ -227,7 +227,6 @@ let
 
   baseApps = runner.mkApps {
     model = compiledCore.model;
-    selectionIndex = compiledCore.selectionIndex;
     services = services;
     inherit
       runtimeHash
