@@ -137,7 +137,7 @@ Shards:
   manifest    Build runtime manifest fixtures and handoff contracts.
   kernel      Build kernel-owned runtime semantics, registry, and workflow proofs.
   adapters    Build thin launcher, shell, and process-edge adapter proofs.
-  services    Build service public-surface, lifecycle, readiness, and extractability proofs.
+  services    Build service typed-contract, lifecycle, readiness, and split-readiness proofs.
   e2e         Build end-to-end public behavior, install, upgrade, isolation, and runtime smokes.
   migration   Build deleted-seam guards and ownership-migration regressions.
 EOF

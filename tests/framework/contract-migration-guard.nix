@@ -109,12 +109,15 @@ let
   deletedHelperPaths = [
     ../../nixfied/framework/core/machine-output-validate.py
     ../../nixfied/framework/core/introspection-query.py
+    ../../nixfied/framework/core/serviceModulePath.nix
     ../../nixfied/framework/contracts/mkValidator.nix
     ../../nixfied/framework/contracts/render-cue.nix
     ../../nixfied/framework/runtime/helpers/run-registry.nix
+    ../../nixfied/framework/runtime/helpers/service-module.nix
     ../../nixfied/framework/runtime/service-selection.nix
     ../../nixfied/framework/runtime/orchestrator-control.nix
     ../../nixfied/framework/runtime/runtime-metadata.nix
+    ../../nixfied/framework/runtime/services/service-operations-builder.nix
     ../../nixfied/compiler/compile-selection-index.nix
     ../../nixfied/compiler/compile-app-execution-manifests.nix
     ../../nixfied/compiler/compile-runtime-manifest.nix

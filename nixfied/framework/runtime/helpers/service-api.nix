@@ -1,4 +1,4 @@
-# Nixfied service API contract helpers (validation + app/hook generation)
+# Nixfied service contract helpers (validation + runtime projection)
 {
   pkgs,
   appApi ? null,
@@ -48,8 +48,8 @@ let
   normalizeStringSet = listUtils.uniqueSorted;
   sameStringSet = expected: actual: normalizeStringSet expected == normalizeStringSet actual;
   isListOfOpNames = values: builtins.isList values && isListOfNonEmptyStrings values;
-
   isScriptLike = x: (builtins.isString x) || (builtins.isPath x) || (builtins.isAttrs x);
+
   opPreRefs = op: op.preOps or [ ];
   opPostRefs = op: op.postOps or [ ];
   opRefs = op: (opPreRefs op) ++ (opPostRefs op);
@@ -57,22 +57,23 @@ let
 
   validateOpErrors =
     {
-      service,
+      serviceName,
       opName,
       op,
     }:
     let
-      prefix = "${service}.${opName}";
+      prefix = "${serviceName}.${opName}";
+      runtimeOp = op.runtimeOp or opName;
     in
     if !isAttrs op then
-      [ "${prefix}: op must be an attribute set" ]
+      [ "${prefix}: operation must be an attribute set" ]
     else
       expect (
-        (op ? script) || opHasComposition op
-      ) "${prefix}: script is required when preOps/postOps are not defined"
+        runtimeOp != null || opHasComposition op
+      ) "${prefix}: runtimeOp is required when preOps/postOps are not defined"
       ++ expect (
-        !(op ? script) || isScriptLike (op.script or null)
-      ) "${prefix}: script must be string/path/derivation"
+        !(op ? runtimeOp) || runtimeOp == null || isNonEmptyString runtimeOp
+      ) "${prefix}: runtimeOp must be null or a non-empty string"
       ++ expect (op ? summary) "${prefix}: summary is required"
       ++ expect (isNonEmptyString (op.summary or "")) "${prefix}: summary must be a non-empty string"
       ++ expect (op ? details) "${prefix}: details is required"
@@ -95,9 +96,9 @@ let
       ++ expect (optionalAttrSatisfies op "env"
         isKVSpecList
       ) "${prefix}: env must be a list of { name, description }"
-      ++ expect (optionalAttrSatisfies op "category"
-        isNonEmptyString
-      ) "${prefix}: category must be a non-empty string"
+      ++ expect (
+        !(op ? category) || op.category == null || isNonEmptyString op.category
+      ) "${prefix}: category must be null or a non-empty string"
       ++ expect (optionalAttrSatisfies op "class"
         isNonEmptyString
       ) "${prefix}: class must be a non-empty string"
@@ -113,12 +114,12 @@ let
       ++ expect (optionalAttrSatisfies op "exposeHook"
         builtins.isBool
       ) "${prefix}: exposeHook must be a boolean"
-      ++ expect (optionalAttrSatisfies op "appName"
-        isNonEmptyString
-      ) "${prefix}: appName must be a non-empty string"
-      ++ expect (optionalAttrSatisfies op "hook"
-        isNonEmptyString
-      ) "${prefix}: hook must be a non-empty string";
+      ++ expect (
+        !(op ? appName) || op.appName == null || isNonEmptyString op.appName
+      ) "${prefix}: appName must be null or a non-empty string"
+      ++ expect (
+        !(op ? hook) || op.hook == null || isNonEmptyString op.hook
+      ) "${prefix}: hook must be null or a non-empty string";
 
   validateOpCompositionErrors =
     {
@@ -126,7 +127,7 @@ let
       ops,
     }:
     let
-      names = opNames ops;
+      names = builtins.attrNames ops;
       nameSet = builtins.listToAttrs (
         map (name: {
           inherit name;
@@ -177,7 +178,7 @@ let
       expectedValues,
     }:
     let
-      prefix = "${serviceName}: publicApi.runtimePrimitives.${primitiveName}";
+      prefix = "${serviceName}: contract.runtimePrimitives.${primitiveName}";
       envName = primitiveSpec.env or "";
       aliases = primitiveSpec.aliases or [ ];
       values = primitiveSpec.values or [ ];
@@ -229,22 +230,22 @@ let
           null;
     in
     if runtimePrimitives == null then
-      [ "${serviceName}: publicApi.runtimePrimitives is required" ]
+      [ "${serviceName}: contract.runtimePrimitives is required" ]
     else if !isAttrs runtimePrimitives then
-      [ "${serviceName}: publicApi.runtimePrimitives must be an attribute set" ]
+      [ "${serviceName}: contract.runtimePrimitives must be an attribute set" ]
     else
       expect (
         runtimePrimitives ? version
-      ) "${serviceName}: publicApi.runtimePrimitives.version is required"
+      ) "${serviceName}: contract.runtimePrimitives.version is required"
       ++ expect (builtins.isInt (
         runtimePrimitives.version or null
-      )) "${serviceName}: publicApi.runtimePrimitives.version must be an integer"
+      )) "${serviceName}: contract.runtimePrimitives.version must be an integer"
       ++ expect (
         (runtimePrimitives.version or null) == 1
-      ) "${serviceName}: publicApi.runtimePrimitives.version must be 1"
-      ++
-        expect (unknownKeys == [ ])
-          "${serviceName}: publicApi.runtimePrimitives contains unsupported keys: ${builtins.concatStringsSep ", " unknownKeys}"
+      ) "${serviceName}: contract.runtimePrimitives.version must be 1"
+      ++ expect (
+        unknownKeys == [ ]
+      ) "${serviceName}: contract.runtimePrimitives contains unsupported keys: ${builtins.concatStringsSep ", " unknownKeys}"
       ++ validateRuntimePrimitiveSpecErrors {
         inherit serviceName;
         primitiveName = "logLevel";
@@ -262,194 +263,192 @@ let
         expectedValues = runtimeOutputModes;
       };
 
-  opNames = ops: builtins.attrNames ops;
-
-  validateServiceApiErrors =
-    { serviceName, api }:
+  validateServiceContractErrors =
+    { serviceName, contract }:
     let
-      base = [ ];
-      version = api.version or null;
-      profiles = api.profiles or [ ];
-      ops = api.operations or { };
-      runtimePrimitives = api.runtimePrimitives or null;
+      version = contract.version or null;
+      profiles = contract.profiles or [ ];
+      ops = contract.operations or { };
+      runtimePrimitives = contract.runtimePrimitives or null;
       missingLifecycleOps = builtins.filter (op: !(builtins.hasAttr op ops)) requiredLifecycleOps;
       opErrs = builtins.concatLists (
         map (
           name:
           validateOpErrors {
-            service = serviceName;
+            inherit serviceName;
             opName = name;
             op = ops.${name};
           }
-        ) (opNames ops)
+        ) (builtins.attrNames ops)
       );
       compositionErrs = validateOpCompositionErrors { inherit serviceName ops; };
       runtimeErrs = validateRuntimePrimitivesErrors { inherit serviceName runtimePrimitives; };
+      adapter = contract.adapter or null;
     in
-    if api == null then
-      [ "${serviceName}: missing publicApi" ]
-    else if !isAttrs api then
-      [ "${serviceName}: publicApi must be an attribute set" ]
+    if contract == null then
+      [ "${serviceName}: missing contract" ]
+    else if !isAttrs contract then
+      [ "${serviceName}: contract must be an attribute set" ]
     else
-      base
-      ++ expect (api ? version) "${serviceName}: publicApi.version is required"
+      expect (contract ? version) "${serviceName}: contract.version is required"
       ++ expect (builtins.isInt (
-        api.version or null
-      )) "${serviceName}: publicApi.version must be an integer"
-      ++ expect (version == 3) "${serviceName}: publicApi.version must be 3"
-      ++ expect (api ? service) "${serviceName}: publicApi.service is required"
+        contract.version or null
+      )) "${serviceName}: contract.version must be an integer"
+      ++ expect (version == 1) "${serviceName}: contract.version must be 1"
+      ++ expect (contract ? service) "${serviceName}: contract.service is required"
       ++ expect (isNonEmptyString (
-        api.service or ""
-      )) "${serviceName}: publicApi.service must be a non-empty string"
+        contract.service or ""
+      )) "${serviceName}: contract.service must be a non-empty string"
       ++ expect (
-        (api.service or "") == serviceName
-      ) "${serviceName}: publicApi.service must match service key (${serviceName})"
-      ++ expect (api ? summary) "${serviceName}: publicApi.summary is required"
+        (contract.service or "") == serviceName
+      ) "${serviceName}: contract.service must match service key (${serviceName})"
+      ++ expect (contract ? summary) "${serviceName}: contract.summary is required"
       ++ expect (isNonEmptyString (
-        api.summary or ""
-      )) "${serviceName}: publicApi.summary must be a non-empty string"
-      ++ expect (api ? details) "${serviceName}: publicApi.details is required"
+        contract.summary or ""
+      )) "${serviceName}: contract.summary must be a non-empty string"
+      ++ expect (contract ? details) "${serviceName}: contract.details is required"
       ++ expect (builtins.isString (
-        api.details or null
-      )) "${serviceName}: publicApi.details must be a string"
+        contract.details or null
+      )) "${serviceName}: contract.details must be a string"
       ++ expect (
-        !(api ? profiles) || isListOfNonEmptyStrings profiles
-      ) "${serviceName}: publicApi.profiles must be a list of non-empty strings when set"
-      ++ expect (api ? operations) "${serviceName}: publicApi.operations is required"
-      ++ expect (isAttrs ops) "${serviceName}: publicApi.operations must be an attribute set"
-      ++
-        expect (missingLifecycleOps == [ ])
-          "${serviceName}: publicApi.operations missing required lifecycle ops: ${builtins.concatStringsSep ", " missingLifecycleOps}"
-      ++ expect (api ? artifacts) "${serviceName}: publicApi.artifacts is required"
+        !(contract ? profiles) || isListOfNonEmptyStrings profiles
+      ) "${serviceName}: contract.profiles must be a list of non-empty strings when set"
+      ++ expect (contract ? ownerFile) "${serviceName}: contract.ownerFile is required"
+      ++ expect (isNonEmptyString (
+        contract.ownerFile or ""
+      )) "${serviceName}: contract.ownerFile must be a non-empty string"
+      ++ expect (contract ? adapter) "${serviceName}: contract.adapter is required"
+      ++ expect (isAttrs adapter) "${serviceName}: contract.adapter must be an attribute set"
+      ++ expect ((adapter.version or null) == 1) "${serviceName}: contract.adapter.version must be 1"
+      ++ expect (adapter ? module) "${serviceName}: contract.adapter.module is required"
+      ++ expect (
+        !(adapter ? module) || builtins.pathExists adapter.module
+      ) "${serviceName}: contract.adapter.module must point to an existing file"
+      ++ expect (contract ? operations) "${serviceName}: contract.operations is required"
+      ++ expect (isAttrs ops) "${serviceName}: contract.operations must be an attribute set"
+      ++ expect (
+        missingLifecycleOps == [ ]
+      ) "${serviceName}: contract.operations missing required lifecycle ops: ${builtins.concatStringsSep ", " missingLifecycleOps}"
+      ++ expect (contract ? artifacts) "${serviceName}: contract.artifacts is required"
       ++ expect (isAttrs (
-        api.artifacts or null
-      )) "${serviceName}: publicApi.artifacts must be an attribute set"
+        contract.artifacts or null
+      )) "${serviceName}: contract.artifacts must be an attribute set"
       ++ opErrs
       ++ compositionErrs
       ++ runtimeErrs;
 
-  validateServiceApi =
-    { serviceName, api }:
+  validateServiceContract =
+    { serviceName, contract }:
     let
-      errs = validateServiceApiErrors { inherit serviceName api; };
+      errs = validateServiceContractErrors { inherit serviceName contract; };
     in
     if errs == [ ] then
-      api
+      contract
     else
       throw ''
-        Nixfied service API contract violated for "${serviceName}":
+        Nixfied service contract violated for "${serviceName}":
         ${renderErrors errs}
 
         Fix:
-          - Define ${serviceName}.publicApi with:
-            - version=3 + operations + artifacts
+          - Define ${serviceName}.contract with version=1, operations, artifacts, runtimePrimitives, and adapter.module.
       '';
 
-  validateServiceApis =
-    serviceApis:
+  validateServiceContracts =
+    serviceContracts:
     let
-      names = sortedAttrNames serviceApis;
+      names = sortedAttrNames serviceContracts;
       errs = builtins.concatLists (
         map (
           serviceName:
-          validateServiceApiErrors {
+          validateServiceContractErrors {
             inherit serviceName;
-            api = serviceApis.${serviceName};
+            contract = serviceContracts.${serviceName};
           }
         ) names
       );
     in
     if errs == [ ] then
-      serviceApis
+      serviceContracts
     else
       throw ''
-        Nixfied service API contract violated:
+        Nixfied service contract violated:
         ${renderErrors errs}
       '';
 
-  validateEnabledServicesHaveContracts =
+  validateServiceAdapterErrors =
     {
-      enabledServices,
-      serviceApis,
+      serviceName,
+      contract,
+      adapter,
     }:
     let
-      missing = builtins.filter (name: !(builtins.hasAttr name serviceApis)) enabledServices;
-      _ = validateServiceApis serviceApis;
-    in
-    if missing == [ ] then
-      serviceApis
-    else
-      throw ''
-        Nixfied service API contract violated:
-          - Missing publicApi for enabled services: ${builtins.concatStringsSep ", " missing}
-      '';
-
-  mkRuntimePrimitivesV1 =
-    {
-      logLevelDefault ? runtimeLogLevelDefault,
-      outputModeDefault ? runtimeOutputModeDefault,
-    }:
-    shellContract.mkServiceRuntimePrimitivesV1 {
-      inherit
-        logLevelDefault
-        outputModeDefault
-        ;
-    };
-
-  mkServiceApiV3 =
-    {
-      service,
-      summary,
-      details,
-      artifacts,
-      operations,
-      profiles ? [ ],
-      runtimePrimitives ? mkRuntimePrimitivesV1 { },
-    }:
-    {
-      version = 3;
-      inherit
-        service
-        summary
-        details
-        profiles
-        artifacts
-        operations
-        runtimePrimitives
-        ;
-    };
-
-  mkServiceApisFromModules =
-    modules:
-    let
-      names = sortedAttrNames modules;
-      pairs = builtins.concatLists (
+      ops = contract.operations or { };
+      adapterOps = adapter.operations or { };
+      adapterOpErrors = builtins.concatLists (
         map (
-          name:
+          opName:
           let
-            mod = modules.${name};
+            opCfg = ops.${opName};
+            runtimeOp = opCfg.runtimeOp or opName;
           in
-          if mod == null then
+          if runtimeOp == null || runtimeOp == "" then
             [ ]
           else
-            [
-              {
-                inherit name;
-                value = mod.publicApi or null;
-              }
-            ]
+            expect (builtins.hasAttr runtimeOp adapterOps)
+              "${serviceName}.${opName}: runtime adapter is missing operation '${runtimeOp}'"
+            ++ expect (isScriptLike (adapterOps.${runtimeOp} or null))
+              "${serviceName}.${opName}: runtime adapter operation '${runtimeOp}' must be string/path/derivation"
+        ) (builtins.attrNames ops)
+      );
+    in
+    if adapter == null then
+      [ "${serviceName}: runtime adapter is required" ]
+    else if !isAttrs adapter then
+      [ "${serviceName}: runtime adapter must be an attribute set" ]
+    else
+      expect ((adapter.version or null) == 1) "${serviceName}: runtime adapter version must be 1"
+      ++ expect (adapter ? operations) "${serviceName}: runtime adapter operations are required"
+      ++ expect (isAttrs adapterOps) "${serviceName}: runtime adapter operations must be an attribute set"
+      ++ adapterOpErrors;
+
+  validateServiceAdapters =
+    {
+      serviceContracts,
+      serviceAdapters,
+    }:
+    let
+      validatedContracts = validateServiceContracts serviceContracts;
+      names = sortedAttrNames validatedContracts;
+      errs = builtins.concatLists (
+        map (
+          serviceName:
+          validateServiceAdapterErrors {
+            inherit serviceName;
+            contract = validatedContracts.${serviceName};
+            adapter = serviceAdapters.${serviceName} or null;
+          }
         ) names
       );
     in
-    builtins.listToAttrs pairs;
+    if errs == [ ] then
+      serviceAdapters
+    else
+      throw ''
+        Nixfied service runtime adapter violated:
+        ${renderErrors errs}
+      '';
 
-  serviceOps = api: api.operations or { };
+  serviceOps = contract: contract.operations or { };
 
   hookNameFor =
-    service: opName: opCfg:
+    serviceName: opName: opCfg:
     let
-      prefix = normalizeToken service;
-      suffix = if opCfg ? hook then opCfg.hook else normalizeToken opName;
+      prefix = normalizeToken serviceName;
+      suffix =
+        if (opCfg.hook or null) != null && (opCfg.hook or "") != "" then
+          opCfg.hook
+        else
+          normalizeToken opName;
     in
     "SVC_${prefix}_${suffix}";
 
@@ -458,46 +457,67 @@ let
   launcherNameFor =
     serviceName: opName: "service-op-${sanitizeScriptToken serviceName}-${sanitizeScriptToken opName}";
 
-  noopScriptFor =
-    serviceName: opName:
-    pkgs.writeShellScript (launcherNameFor serviceName "${opName}-noop") ''
-      exit 0
-    '';
-
-  scriptForOp =
-    serviceName: opName: opCfg:
-    if opCfg ? script then opCfg.script else noopScriptFor serviceName opName;
+  runtimeScriptFor =
+    {
+      serviceName,
+      opName,
+      opCfg,
+      adapterOps,
+    }:
+    let
+      runtimeOp = opCfg.runtimeOp or opName;
+    in
+    if runtimeOp == null || runtimeOp == "" then
+      null
+    else
+      adapterOps.${runtimeOp} or null;
 
   buildExecutionPlan =
     {
       serviceName,
       ops,
+      adapterOps,
       opName,
       passArgs ? true,
     }:
     let
       opCfg = ops.${opName};
+      currentScript =
+        runtimeScriptFor {
+          inherit
+            serviceName
+            opName
+            opCfg
+            adapterOps
+            ;
+        };
       mkNestedPlan =
         ref:
         buildExecutionPlan {
           inherit
             serviceName
             ops
+            adapterOps
             ;
           opName = ref;
           passArgs = false;
         };
+      currentStep =
+        if currentScript == null then
+          [ ]
+        else
+          [
+            {
+              inherit
+                opName
+                passArgs
+                ;
+              script = currentScript;
+            }
+          ];
     in
     builtins.concatLists (map mkNestedPlan (opPreRefs opCfg))
-    ++ [
-      {
-        inherit
-          opName
-          passArgs
-          ;
-        script = scriptForOp serviceName opName opCfg;
-      }
-    ]
+    ++ currentStep
     ++ builtins.concatLists (map mkNestedPlan (opPostRefs opCfg));
 
   mkServiceOpLauncher =
@@ -523,24 +543,42 @@ let
     '';
 
   collectServiceOps =
-    serviceApis:
+    {
+      serviceContracts,
+      serviceAdapters,
+    }:
     let
-      names = sortedAttrNames serviceApis;
-      validated = validateServiceApis serviceApis;
+      names = sortedAttrNames serviceContracts;
+      validatedContracts = validateServiceContracts serviceContracts;
+      validatedAdapters = validateServiceAdapters {
+        serviceContracts = validatedContracts;
+        inherit serviceAdapters;
+      };
       toOps =
         serviceName:
         let
-          ops = serviceOps validated.${serviceName};
+          contract = validatedContracts.${serviceName};
+          ops = serviceOps contract;
+          adapterOps = validatedAdapters.${serviceName}.operations;
           opNamesSorted = sortedAttrNames ops;
         in
         map (
           opName:
           let
             opCfg = ops.${opName};
-            appName = if opCfg ? appName then opCfg.appName else "svc::${serviceName}::${opName}";
-            opRuntimePrimitives = validated.${serviceName}.runtimePrimitives;
+            appName =
+              if (opCfg.appName or null) != null && opCfg.appName != "" then
+                opCfg.appName
+              else
+                "svc::${serviceName}::${opName}";
+            opRuntimePrimitives = contract.runtimePrimitives;
             plan = buildExecutionPlan {
-              inherit serviceName ops opName;
+              inherit
+                serviceName
+                ops
+                adapterOps
+                opName
+                ;
             };
           in
           {
@@ -554,7 +592,7 @@ let
             hookName = hookNameFor serviceName opName opCfg;
             includeApp = opCfg.exposeApp or true;
             usage = if opCfg ? usage then opCfg.usage else [ "nix run .#${appName}" ];
-            category = if opCfg ? category then opCfg.category else serviceName;
+            category = if (opCfg.category or "") != "" then opCfg.category else serviceName;
             class = opCfg.class or "passthrough";
             idempotent = opCfg.idempotent or false;
             includeHook = opCfg.exposeHook or true;
@@ -572,10 +610,10 @@ let
     in
     builtins.concatLists (map toOps names);
 
-  mkServiceHookEnvFromContract =
-    serviceApis:
+  mkServiceHookEnvFromContracts =
+    args:
     let
-      ops = builtins.filter (op: op.includeHook) (collectServiceOps serviceApis);
+      ops = builtins.filter (op: op.includeHook) (collectServiceOps args);
       pairs = map (op: {
         name = op.hookName;
         value = toString op.launcher;
@@ -583,7 +621,7 @@ let
       dedup =
         acc: pair:
         if builtins.hasAttr pair.name acc then
-          throw "Nixfied service API hook name collision: ${pair.name}"
+          throw "Nixfied service contract hook name collision: ${pair.name}"
         else
           acc
           // (builtins.listToAttrs [
@@ -595,23 +633,20 @@ let
     in
     builtins.foldl' dedup { } pairs;
 
-  mkServiceAppsFromContract =
-    serviceApis:
+  mkServiceAppsFromContracts =
+    args:
     let
-      _ = if appApi == null then throw "mkServiceAppsFromContract requires appApi" else null;
-      ops = builtins.filter (op: op.includeApp) (collectServiceOps serviceApis);
+      _ = if appApi == null then throw "mkServiceAppsFromContracts requires appApi" else null;
+      ops = builtins.filter (op: op.includeApp) (collectServiceOps args);
       pairs = map (op: {
         name = op.appName;
-        value = appApi.mkNixfiedApp {
+        value = appApi.mkContractBackedApp {
           name = op.appName;
           script = ''
             exec ${toString op.launcher} "$@"
           '';
-          env = { };
-          useDeps = false;
-          api = appApi.mkCommandApi {
+          contract = {
             class = op.class;
-            name = op.appName;
             summary = op.opCfg.summary;
             details = op.opCfg.details;
             usage = op.usage;
@@ -621,6 +656,8 @@ let
             category = op.category;
             idempotent = op.idempotent;
           };
+          env = { };
+          useDeps = false;
           meta = {
             nixfied = {
               service = op.serviceName;
@@ -631,17 +668,27 @@ let
       }) ops;
     in
     builtins.listToAttrs pairs;
+
+  mkRuntimePrimitivesV1 =
+    {
+      logLevelDefault ? runtimeLogLevelDefault,
+      outputModeDefault ? runtimeOutputModeDefault,
+    }:
+    shellContract.mkServiceRuntimePrimitivesV1 {
+      inherit
+        logLevelDefault
+        outputModeDefault
+        ;
+    };
 in
 {
   inherit
     collectServiceOps
-    validateServiceApi
-    validateServiceApis
-    validateEnabledServicesHaveContracts
+    validateServiceContract
+    validateServiceContracts
+    validateServiceAdapters
     mkRuntimePrimitivesV1
-    mkServiceApiV3
-    mkServiceApisFromModules
-    mkServiceHookEnvFromContract
-    mkServiceAppsFromContract
+    mkServiceHookEnvFromContracts
+    mkServiceAppsFromContracts
     ;
 }

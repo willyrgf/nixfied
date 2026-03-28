@@ -407,11 +407,11 @@ let
     };
   };
 
-  postgresService = import ../../nixfied/framework/runtime/services/postgres/default.nix {
+  postgresService = (import ../../nixfied/framework/runtime/services/postgres/default.nix {
     inherit pkgs;
     project = projectBase;
     slots = slotsStub;
-  };
+  }).operations;
 
   nginxSummary = import ../../nixfied/framework/runtime/helpers/summary.nix {
     inherit pkgs;
@@ -443,29 +443,29 @@ let
     loggingPrelude = nginxHelpers.loggingPrelude;
   };
 
-  nginxService = import ../../nixfied/framework/runtime/services/nginx/default.nix {
+  nginxService = (import ../../nixfied/framework/runtime/services/nginx/default.nix {
     inherit pkgs;
     project = nginxProject;
     slots = slotsStub;
-  };
+  }).operations;
 
-  minioService = import ../../nixfied/framework/runtime/services/minio/default.nix {
+  minioService = (import ../../nixfied/framework/runtime/services/minio/default.nix {
     inherit pkgs;
     project = minioProject;
     slots = slotsStub;
-  };
+  }).operations;
 
-  rethService = import ../../nixfied/framework/runtime/services/reth/default.nix {
+  rethService = (import ../../nixfied/framework/runtime/services/reth/default.nix {
     inherit pkgs;
     project = rethProject;
     slots = slotsStub;
-  };
+  }).operations;
 
-  heliosService = import ../../nixfied/framework/runtime/services/helios/default.nix {
+  heliosService = (import ../../nixfied/framework/runtime/services/helios/default.nix {
     inherit pkgs;
     project = heliosProject;
     slots = slotsStub;
-  };
+  }).operations;
 in
 pkgs.runCommand "service-lifecycle-matrix-smoke" { } ''
   set -euo pipefail

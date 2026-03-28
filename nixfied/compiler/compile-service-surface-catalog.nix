@@ -3,14 +3,11 @@
   pkgs,
 }:
 {
-  resolvedIdentity,
-  runtime,
-  statePolicy,
   services,
+  serviceDefinitions,
 }:
 let
-  serviceModulePath = import ../framework/core/serviceModulePath.nix;
-
+  serviceApi = import ../framework/runtime/helpers/service-api.nix { inherit pkgs; };
   tokenLib = import ../framework/runtime/helpers/normalize-token.nix { inherit lib; };
   normalizeToken = tokenLib.normalizeToken;
 
@@ -18,7 +15,11 @@ let
     serviceName: opName: opCfg:
     let
       prefix = normalizeToken serviceName;
-      suffix = normalizeToken (if (opCfg.hook or "") != "" then opCfg.hook else opName);
+      suffix =
+        if (opCfg.hook or null) != null && (opCfg.hook or "") != "" then
+          opCfg.hook
+        else
+          normalizeToken opName;
     in
     "SVC_${prefix}_${suffix}";
 
@@ -26,79 +27,31 @@ let
     builtins.filter (serviceId: services.${serviceId}.enable or false) (builtins.attrNames services)
   );
 
-  slotInfo = pkgs.writeShellScript "service-surface-slot-info" ''
-    printf 'SLOT=%q\n' "0"
-    printf 'ENV=%q\n' ${lib.escapeShellArg runtime.env.default}
-    printf 'RUN_DIR=%q\n' "/tmp"
-    printf 'LOG_DIR=%q\n' "/tmp"
-    printf 'CONFIG_DIR=%q\n' "/tmp"
-  '';
-
-  slotInfoJson = pkgs.writeShellScript "service-surface-slot-info-json" ''
-    printf '{"slot":"0","env":"%s","ports":{},"directories":{"run":"/tmp","log":"/tmp","config":"/tmp"}}\n' \
-      ${lib.escapeShellArg runtime.env.default}
-  '';
-
-  serviceProject = {
-    project = {
-      id = resolvedIdentity.projectId;
-      slotVar = runtime.slot.var;
-      envVar = runtime.env.var;
-    };
-    logging = {
-      level = runtime.logging.levelDefault;
-      output = runtime.logging.outputDefault;
-    };
-    state = {
-      policy = statePolicy;
-    };
-    ci = {
-      artifacts = {
-        dir = statePolicy.artifactsRoot;
-      };
-    };
-    directories = {
-      base = runtime.directories.base;
-    };
-    inherit services;
-  };
-
-  slots = {
-    getSlotInfo = slotInfo;
-    getSlotInfoJson = slotInfoJson;
-    portVarName = portKey: "${normalizeToken portKey}_PORT";
-    getServiceDir = dataDirName: "\${NIXFIED_SERVICE_ROOT}/${dataDirName}";
-  };
-
-  runtimeHelpers = import ../framework/runtime/helpers/default.nix {
-    inherit pkgs;
-    project = serviceProject;
-    hooks = { };
-  };
-
-  serviceModules = builtins.listToAttrs (
+  serviceContracts = builtins.listToAttrs (
     map (
       serviceId:
       let
         service = services.${serviceId};
         serviceName = service.name or (lib.removePrefix "service." serviceId);
+        serviceDefinition =
+          if builtins.hasAttr serviceName serviceDefinitions then
+            serviceDefinitions.${serviceName}
+          else
+            throw "nixfied service surface catalog: missing typed service definition for '${serviceName}'";
+        contract = serviceDefinition.contract or null;
       in
       {
         name = serviceName;
-        value = import (serviceModulePath serviceName) {
-          inherit
-            pkgs
-            slots
-            ;
-          project = serviceProject;
-        };
+        value =
+          if contract == null then
+            throw "nixfied service surface catalog: service '${serviceName}' is missing typed contract data"
+          else
+            contract;
       }
     ) enabledServiceIds
   );
 
-  serviceApis = runtimeHelpers.serviceApi.validateServiceApis (
-    runtimeHelpers.serviceApi.mkServiceApisFromModules serviceModules
-  );
+  validatedServiceContracts = serviceApi.validateServiceContracts serviceContracts;
 
   mkCommandApi =
     {
@@ -137,15 +90,15 @@ let
     };
 
   mkOperationRecord =
-    serviceName: api: opName:
+    serviceName: contract: opName:
     let
-      opCfg = api.operations.${opName};
-      appName = if (opCfg.appName or "") != "" then opCfg.appName else "svc::${serviceName}::${opName}";
+      opCfg = contract.operations.${opName};
+      appName = if (opCfg.appName or null) != null && opCfg.appName != "" then opCfg.appName else "svc::${serviceName}::${opName}";
       includeApp = opCfg.exposeApp or true;
       includeHook = opCfg.exposeHook or true;
       usage = opCfg.usage or [ "nix run .#${appName}" ];
       examples = opCfg.examples or [ ];
-      category = opCfg.category or serviceName;
+      category = if (opCfg.category or "") != "" then opCfg.category else serviceName;
     in
     {
       inherit
@@ -165,10 +118,10 @@ let
       details = opCfg.details;
       args = opCfg.args or [ ];
       env = opCfg.env or [ ];
-      ownerFile = builtins.toString (serviceModulePath serviceName);
-      artifacts = api.artifacts or { };
-      profiles = api.profiles or [ ];
-      runtimePrimitives = api.runtimePrimitives or { };
+      ownerFile = contract.ownerFile;
+      artifacts = contract.artifacts or { };
+      profiles = contract.profiles or [ ];
+      runtimePrimitives = contract.runtimePrimitives or { };
       commandApi = mkCommandApi {
         inherit
           appName
@@ -183,14 +136,14 @@ let
     };
 
   operationCatalog = builtins.mapAttrs (
-    serviceName: api:
+    serviceName: contract:
     builtins.listToAttrs (
       map (opName: {
         name = opName;
-        value = mkOperationRecord serviceName api opName;
-      }) (builtins.sort builtins.lessThan (builtins.attrNames (api.operations or { })))
+        value = mkOperationRecord serviceName contract opName;
+      }) (builtins.sort builtins.lessThan (builtins.attrNames (contract.operations or { })))
     )
-  ) serviceApis;
+  ) validatedServiceContracts;
 
   appEntries = builtins.concatLists (
     map (
@@ -234,8 +187,8 @@ let
 in
 {
   appNames = builtins.sort builtins.lessThan (builtins.attrNames appServiceByName);
+  serviceApis = validatedServiceContracts;
   inherit
-    serviceApis
     appServiceByName
     appsByName
     operationCatalog

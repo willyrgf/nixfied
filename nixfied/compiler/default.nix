@@ -220,12 +220,8 @@ rec {
       };
 
       serviceSurfaceCatalog = compileServiceSurfaceCatalog {
-        resolvedIdentity = resolvedModuleGraph.config.identity;
-        inherit
-          runtime
-          statePolicy
-          ;
         services = resolvedServices;
+        serviceDefinitions = resolvedModuleGraph.config.services or { };
       };
 
       taskCompilation = compileTasks {

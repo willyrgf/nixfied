@@ -1,7 +1,14 @@
-{ lib, ... }:
+{
+  lib,
+  config,
+  ...
+}:
 let
   t = lib.types;
+  cfg = config.nixfied.services.helios;
   probeLib = import ./probes.nix { inherit lib; };
+  contractSchema = import ./contract-schema.nix { inherit lib; };
+  operationContractBuilder = import ./operation-contract-builder.nix;
   sourceOptions = import ./source-options.nix { inherit lib; };
   sourceSpec = sourceOptions.mkSourceSpec { };
   sourceKindType = t.enum [
@@ -15,6 +22,7 @@ let
     "mock"
     "unknown"
   ];
+  serviceDir = contractSchema.mkServiceDirExpr cfg.dataDirName;
 in
 {
   options.nixfied.services.helios = {
@@ -97,5 +105,64 @@ in
     };
 
     probes = probeLib.probeOptions;
+    contract = contractSchema.mkContractOption "Typed Helios public contract.";
+  };
+
+  config.nixfied.services.helios.contract = {
+    version = 1;
+    service = "helios";
+    summary = "Helios service management API";
+    details = "Public service contract for managing Helios across dev/prod/test/ci.";
+    ownerFile = "nixfied/modules/services/helios.nix";
+    adapter = {
+      version = 1;
+      module = ../../framework/runtime/services/helios/default.nix;
+    };
+    artifacts = {
+      rpcPortVar = contractSchema.mkPortVarName cfg.portKeyRpc;
+      executionPortVar = contractSchema.mkPortVarName cfg.executionRpcPortKey;
+      serviceDir = serviceDir;
+      dataDir = serviceDir;
+      logFile = "${serviceDir}/logs/helios.log";
+      pidFile = "${serviceDir}/run/helios.pid";
+      network = cfg.network;
+    };
+    runtimePrimitives = contractSchema.mkRuntimePrimitivesV1 config.nixfied.runtime;
+    operations =
+      (operationContractBuilder {
+        displayName = "Helios";
+        extraOperations = {
+          start = {
+            runtimeOp = "start-leaf";
+            preOps = [
+              "init"
+              "check-config"
+              "preflight-start"
+            ];
+            summary = "Start Helios node";
+            details = "Starts Helios RPC for the current slot/environment.";
+          };
+
+          ready = {
+            runtimeOp = "ready";
+            hook = "READY";
+            summary = "Wait for Helios readiness";
+            details = ''
+              Waits until Helios can answer `eth_blockNumber` successfully.
+
+              Note: framework fixtures intentionally skip Helios start/readiness checks
+              for `network=local` when a beacon consensus endpoint is unavailable.
+
+              Tunables:
+              - `HELIOS_READY_TIMEOUT_SECS` (default: 300)
+              - `HELIOS_READY_INTERVAL_SECS` (default: 1)
+            '';
+          };
+        };
+      })
+      // contractSchema.mkObservabilityOperations {
+        service = "helios";
+        summaryName = "Helios";
+      };
   };
 }

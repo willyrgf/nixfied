@@ -1,7 +1,14 @@
-{ lib, ... }:
+{
+  lib,
+  config,
+  ...
+}:
 let
   t = lib.types;
+  cfg = config.nixfied.services.postgres;
   probeLib = import ./probes.nix { inherit lib; };
+  contractSchema = import ./contract-schema.nix { inherit lib; };
+  operationContractBuilder = import ./operation-contract-builder.nix;
   sourceOptions = import ./source-options.nix { inherit lib; };
   sourceSpec = sourceOptions.mkSourceSpec { };
   envConfigSpec = t.submodule {
@@ -10,6 +17,7 @@ let
       default = "";
     };
   };
+  serviceDir = contractSchema.mkServiceDirExpr cfg.dataDirName;
 in
 {
   options.nixfied.services.postgres = {
@@ -72,5 +80,174 @@ in
       default = "";
     };
     probes = probeLib.probeOptions;
+    contract = contractSchema.mkContractOption "Typed PostgreSQL public contract.";
+  };
+
+  config.nixfied.services.postgres.contract = {
+    version = 1;
+    service = "postgres";
+    summary = "PostgreSQL service management API";
+    details = "Public service contract for managing PostgreSQL across dev/prod/test/ci.";
+    ownerFile = "nixfied/modules/services/postgres.nix";
+    adapter = {
+      version = 1;
+      module = ../../framework/runtime/services/postgres/default.nix;
+    };
+    artifacts = {
+      portKey = cfg.portKey;
+      portVar = contractSchema.mkPortVarName cfg.portKey;
+      serviceDir = serviceDir;
+      dataDir = serviceDir;
+      logFile = "${serviceDir}/postgres.log";
+      pidFile = "${serviceDir}/postmaster.pid";
+      defaultDatabase = cfg.database;
+      testDatabase = cfg.testDatabase;
+    };
+    runtimePrimitives = contractSchema.mkRuntimePrimitivesV1 config.nixfied.runtime;
+    operations =
+      (operationContractBuilder {
+        displayName = "PostgreSQL";
+        extraOperations = {
+          init = {
+            runtimeOp = "init-leaf";
+            preOps = [ "preflight-init" ];
+            summary = "Initialize PostgreSQL data directory";
+            details = "Initializes PGDATA and writes environment-specific PostgreSQL configuration.";
+          };
+
+          preflight-init = {
+            runtimeOp = "preflight-init";
+            summary = "Validate PostgreSQL init preconditions";
+            details = "Checks deterministic blockers before PostgreSQL initialization for the current slot and environment.";
+            exposeApp = false;
+            exposeHook = false;
+          };
+
+          start = {
+            runtimeOp = "start-leaf";
+            preOps = [
+              "init"
+              "check-config"
+              "preflight-start"
+            ];
+            summary = "Start PostgreSQL server";
+            details = "Starts PostgreSQL for the current slot and environment.";
+          };
+
+          full-start = {
+            runtimeOp = "full-start-leaf";
+            hook = "FULL_START";
+            preOps = [ "start" ];
+            summary = "Init, start, and set up PostgreSQL";
+            details = "Performs init/start/setup-db in one operation.";
+          };
+
+          full-start-test = {
+            runtimeOp = "full-start-test-leaf";
+            hook = "FULL_START_TEST";
+            preOps = [ "start" ];
+            summary = "Init/start/setup for test database";
+            details = "Performs init/start/setup-db using the configured test database.";
+          };
+
+          setup-db = {
+            runtimeOp = "setup-db";
+            hook = "SETUP_DB";
+            summary = "Create and configure database";
+            details = "Creates the configured database and required extensions.";
+          };
+
+          ready-test = {
+            runtimeOp = "ready-test";
+            hook = "READY_TEST";
+            summary = "Wait for PostgreSQL test-database readiness";
+            details = "Checks PostgreSQL and the configured test database accept local SQL queries.";
+          };
+
+          list-instances = {
+            runtimeOp = "list-instances";
+            hook = "LIST_INSTANCES";
+            summary = "List PostgreSQL instances";
+            details = "Lists PostgreSQL instances managed by Nixfied.";
+          };
+
+          backup = {
+            runtimeOp = "backup";
+            summary = "Create PostgreSQL backup";
+            details = "Creates a backup for the current slot and environment.";
+            usage = [ "nix run .#svc::postgres::backup -- <args>" ];
+          };
+
+          restore = {
+            runtimeOp = "restore";
+            summary = "Restore PostgreSQL backup";
+            details = "Restores PostgreSQL data from a selected backup.";
+            usage = [ "nix run .#svc::postgres::restore -- <backup-path>" ];
+          };
+
+          list-backups = {
+            runtimeOp = "list-backups";
+            hook = "LIST_BACKUPS";
+            summary = "List PostgreSQL backups";
+            details = "Lists backups for the current slot and environment.";
+          };
+
+          verify-backup = {
+            runtimeOp = "verify-backup";
+            summary = "Verify PostgreSQL backup";
+            details = "Verifies backup archive integrity.";
+            usage = [ "nix run .#svc::postgres::verify-backup -- <backup-path>" ];
+          };
+
+          cleanup-backups = {
+            runtimeOp = "cleanup-backups";
+            summary = "Prune old PostgreSQL backups";
+            details = "Removes old backups while keeping the requested number of newest snapshots.";
+            usage = [ "nix run .#svc::postgres::cleanup-backups -- <keep-count>" ];
+          };
+
+          test-migrations = {
+            runtimeOp = "test-migrations";
+            hook = "TEST_MIGRATIONS";
+            summary = "Test PostgreSQL migrations";
+            details = "Runs migrations against a temporary copy of the source database.";
+          };
+
+          ensure-migration-tested = {
+            runtimeOp = "ensure-migration-tested";
+            hook = "ENSURE_MIGRATION_TESTED";
+            summary = "Ensure migrations were tested";
+            details = "Fails when migration hashes were not previously tested.";
+            exposeApp = false;
+          };
+
+          check-port = {
+            runtimeOp = "check-port";
+            hook = "CHECK_PORT";
+            summary = "Check PostgreSQL port usage";
+            details = "Checks whether a port is already in use.";
+            usage = [ "nix run .#svc::postgres::check-port -- <port>" ];
+          };
+
+          kill-port = {
+            runtimeOp = "kill-port";
+            hook = "KILL_PORT";
+            summary = "Kill processes bound to a port";
+            details = "Stops processes listening on a given port.";
+            usage = [ "nix run .#svc::postgres::kill-port -- <port>" ];
+          };
+
+          shell = {
+            runtimeOp = "shell";
+            summary = "Open PostgreSQL shell";
+            details = "Opens psql connected to the configured slot/environment database.";
+            usage = [ "nix run .#svc::postgres::shell -- <psql-args>" ];
+          };
+        };
+      })
+      // contractSchema.mkObservabilityOperations {
+        service = "postgres";
+        summaryName = "PostgreSQL";
+      };
   };
 }
