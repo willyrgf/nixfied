@@ -114,6 +114,7 @@ let
     ../../nixfied/framework/runtime/helpers/run-registry.nix
     ../../nixfied/framework/runtime/service-selection.nix
     ../../nixfied/framework/runtime/orchestrator-control.nix
+    ../../nixfied/framework/runtime/runtime-metadata.nix
     ../../nixfied/compiler/compile-selection-index.nix
     ../../nixfied/compiler/compile-app-execution-manifests.nix
     ../../nixfied/compiler/compile-runtime-manifest.nix
@@ -146,11 +147,15 @@ assert !(pkgs.lib.hasInfix "nixfied-kernel workflow serial-step" executorSource)
 assert !(pkgs.lib.hasInfix "nixfied-kernel workflow parallel-init" executorSource);
 assert !(pkgs.lib.hasInfix "nixfied-kernel workflow parallel-step" executorSource);
 assert !(builtins.pathExists ../../nixfied/framework/runtime/workflow-modes.nix);
-assert pkgs.lib.hasInfix "runtimeMetadataShell = import ./runtime-metadata.nix" executorSource;
-assert pkgs.lib.hasInfix "if executionEnabled then import ./runtime-metadata.nix { inherit pkgs; } else \"\"" orchestratorSource;
+assert !(pkgs.lib.hasInfix "runtimeMetadataShell = import ./runtime-metadata.nix" executorSource);
+assert !(pkgs.lib.hasInfix "import ./runtime-metadata.nix" orchestratorSource);
 assert !(pkgs.lib.hasInfix "done < <(task_needs \"$current_task\")" executorSource);
 assert !(pkgs.lib.hasInfix "done < <(task_soft_needs \"$current_task\")" executorSource);
 assert pkgs.lib.hasInfix "nixfied-kernel summary collect-steps" executorSource;
+assert !(pkgs.lib.hasInfix "nixfied-task-execution-exports" executorSource);
+assert !(pkgs.lib.hasInfix "nixfied-summary-exports" executorSource);
+assert !(pkgs.lib.hasInfix "failed to load task execution-order exports" executorSource);
+assert !(pkgs.lib.hasInfix "failed to load workflow summary exports" executorSource);
 assert !(pkgs.lib.hasInfix "workflow_step_status() {" executorSource);
 assert !(pkgs.lib.hasInfix "workflow_step_records_tsv() {" executorSource);
 assert !(pkgs.lib.hasInfix "workflow_peak_workers() {" executorSource);
@@ -181,5 +186,5 @@ assert
 assert !(pkgs.lib.hasInfix "python3" readyHeliosSyncGateSource);
 assert !(pkgs.lib.hasInfix "http.server" readyHeliosSyncGateSource);
 pkgs.runCommand "contract-migration-guard" { } ''
-  echo "OK: hardening guards enforce deleted validators/CUE/run-registry/static service-surface/apps module, deleted runtime selection fallback/orchestrator-control seams, manifest-backed runtime metadata, kernel-owned coarse workflow execution/executor summary/orchestrator reads, jq-free runtime/build-check seams, no authored nixfied.apps, no Python responders in framework/runtime tests, and no deprecated kernel seams in framework runtime or kernel source" > "$out"
+  echo "OK: hardening guards enforce deleted validators/CUE/run-registry/static service-surface/apps module, deleted runtime selection fallback/orchestrator-control/runtime-metadata seams, owner-local descriptor handoff, kernel-owned coarse workflow execution and summary derivation, jq-free runtime/build-check seams, no authored nixfied.apps, no Python responders in framework/runtime tests, and no deprecated kernel seams in framework runtime or kernel source" > "$out"
 ''

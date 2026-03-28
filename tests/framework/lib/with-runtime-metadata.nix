@@ -25,7 +25,11 @@ let
 in
 model
 // {
-  compiled = (model.compiled or { }) // {
+  compiled = (builtins.removeAttrs (model.compiled or { }) [
+    "execution"
+    "runtimeMetadata"
+    "runtimeManifests"
+  ]) // {
     inherit execution;
     inherit runtimeMetadata;
   };

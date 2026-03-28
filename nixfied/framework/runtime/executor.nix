@@ -53,7 +53,6 @@ let
   ) (builtins.toJSON model);
   shellCommon = import ../core/shell-common.nix { inherit pkgs; };
   registryShell = registry.events.mkShellLib { };
-  runtimeMetadataShell = import ./runtime-metadata.nix { inherit pkgs; };
   envSandboxShell = import ./env-sandbox.nix {
     inherit
       pkgs
@@ -130,7 +129,6 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         RUN_ID_COUNTER_ROOT="$REGISTRY_ROOT/counters"
 
         ${registryShell}
-        ${runtimeMetadataShell}
         ${envSandboxShell}
         ${executorRuntimeShell}
         ${sharedRuntimeLibShell}
@@ -594,15 +592,12 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           local task_id="$1"
           local skipped_services_file="$2"
           local plan_target="$3"
-          local export_target="$4"
 
           ${kernelPackage}/bin/nixfied-kernel task execution-order \
             "$MODEL_FILE" \
             "$skipped_services_file" \
             "$task_id" \
-            "$plan_target" \
-            "$export_target" \
-            >/dev/null
+            "$plan_target"
         }
 
         run_task() {
@@ -678,7 +673,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
             shift
             local skipped_services_file=""
             local plan_file=""
-            local export_file=""
+            local soft_missing_lines=""
             local current_task=""
             local action=""
             local soft_parent=""
@@ -696,36 +691,25 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
               echo "ERROR: failed to create task execution-order temp file"
               return 1
             }
-            export_file="$(mktemp "''${TMPDIR:-/tmp}/nixfied-task-execution-exports.XXXXXX")" || {
-              rm -f "$skipped_services_file" "$plan_file"
-              echo "ERROR: failed to create task execution-order export temp file"
-              return 1
-            }
 
             if ! write_skipped_services_file "$skipped_services_file"; then
-              rm -f "$skipped_services_file" "$plan_file" "$export_file"
+              rm -f "$skipped_services_file" "$plan_file"
               return 1
             fi
 
-            if ! task_execution_plan "$root_task" "$skipped_services_file" "$plan_file" "$export_file"; then
-              rm -f "$skipped_services_file" "$plan_file" "$export_file"
+            if ! soft_missing_lines="$(task_execution_plan "$root_task" "$skipped_services_file" "$plan_file")"; then
+              rm -f "$skipped_services_file" "$plan_file"
               return 1
             fi
 
-            if ! . "$export_file"; then
-              rm -f "$skipped_services_file" "$plan_file" "$export_file"
-              echo "ERROR: failed to load task execution-order exports"
-              return 1
-            fi
-
-            if [ -n "''${TASK_EXECUTION_PLAN_SOFT_MISSING_LINES:-}" ]; then
+            if [ -n "$soft_missing_lines" ]; then
               while IFS=$'\t' read -r missing_soft_parent missing_soft_task; do
                 if [ -z "$missing_soft_parent" ] || [ -z "$missing_soft_task" ]; then
                   continue
                 fi
                 echo "WARN: task '$missing_soft_parent' soft dependency '$missing_soft_task' is not defined"
               done <<EOF
-  ''${TASK_EXECUTION_PLAN_SOFT_MISSING_LINES}
+  $soft_missing_lines
   EOF
             fi
 
@@ -781,7 +765,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
               esac
             done < "$plan_file"
 
-            rm -f "$skipped_services_file" "$plan_file" "$export_file"
+            rm -f "$skipped_services_file" "$plan_file"
             return "$rc"
           }
 
@@ -1147,7 +1131,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           local steps_target="$3"
           local actual_steps_target="$steps_target"
           local cleanup_steps_target=0
-          local export_file=""
+          local summary_counts=""
           local attempt_id="''${NIXFIED_ATTEMPT_ID:-}"
 
           WORKFLOW_PASSED_COUNT=0
@@ -1156,7 +1140,6 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           WORKFLOW_CANCELED_COUNT=0
           WORKFLOW_STEPS_DURATION=0
           WORKFLOW_PEAK_WORKERS=0
-          WORKFLOW_LEAF_TASK_IDS_LINES=""
 
           if [ ! -f "$events_index_file" ]; then
             if [ -n "$steps_target" ]; then
@@ -1175,39 +1158,26 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
             : > "$actual_steps_target" || return 1
           fi
 
-          export_file="$(mktemp "''${TMPDIR:-/tmp}/nixfied-summary-exports.XXXXXX")" || {
-            if [ "$cleanup_steps_target" -eq 1 ]; then
-              rm -f "$actual_steps_target"
-            fi
-            echo "ERROR: failed to create workflow summary export temp file"
-            return 1
-          }
-
-          if ! ${kernelPackage}/bin/nixfied-kernel summary collect-steps \
+          if ! summary_counts="$(${kernelPackage}/bin/nixfied-kernel summary collect-steps \
             ${pkgs.lib.escapeShellArg (builtins.toString workflowSummaryPlanFile)} \
             "$events_index_file" \
             "$run_id" \
             "$attempt_id" \
-            "$actual_steps_target" \
-            "$export_file" \
-            >/dev/null; then
-            rm -f "$export_file"
+            "$actual_steps_target")"; then
             if [ "$cleanup_steps_target" -eq 1 ]; then
               rm -f "$actual_steps_target"
             fi
             return 1
           fi
 
-          if ! . "$export_file"; then
-            rm -f "$export_file"
-            if [ "$cleanup_steps_target" -eq 1 ]; then
-              rm -f "$actual_steps_target"
-            fi
-            echo "ERROR: failed to load workflow summary exports"
-            return 1
-          fi
+          IFS=$'\t' read -r \
+            WORKFLOW_PASSED_COUNT \
+            WORKFLOW_FAILED_COUNT \
+            WORKFLOW_SKIPPED_COUNT \
+            WORKFLOW_CANCELED_COUNT \
+            WORKFLOW_STEPS_DURATION \
+            WORKFLOW_PEAK_WORKERS <<< "$summary_counts"
 
-          rm -f "$export_file"
           if [ "$cleanup_steps_target" -eq 1 ]; then
             rm -f "$actual_steps_target"
           fi
@@ -1315,7 +1285,6 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           local parallel_max_workers
           local parallel_peak_workers
           local parallel_canceled_count
-          local leaf_task_ids_lines=""
           local events_index_file=""
           local setup_timing_fields
           local attempt_id="''${NIXFIED_ATTEMPT_ID:-}"
@@ -1368,7 +1337,6 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
               canceled="$WORKFLOW_CANCELED_COUNT"
               steps_duration="$WORKFLOW_STEPS_DURATION"
               parallel_peak_workers="$WORKFLOW_PEAK_WORKERS"
-              leaf_task_ids_lines="$WORKFLOW_LEAF_TASK_IDS_LINES"
             else
               echo "WARN: failed to collect step summary from '$events_index_file'; using empty step list"
               passed=0
@@ -1377,7 +1345,6 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
               canceled=0
               steps_duration=0
               parallel_peak_workers=0
-              leaf_task_ids_lines=""
               : > "$summary_steps_tmp"
             fi
           else
@@ -1387,7 +1354,6 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
             canceled=0
             steps_duration=0
             parallel_peak_workers=0
-            leaf_task_ids_lines=""
             : > "$summary_steps_tmp"
           fi
           accounted_duration="$(( setup_duration + steps_duration + teardown_duration ))"

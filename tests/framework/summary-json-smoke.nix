@@ -12,6 +12,14 @@ let
       ;
     disableEphemeralWorkflows = [ "workflow.ci.basic" ];
   };
+  runtimeMaterialization = import ./lib/runtime-materialization.nix;
+  runtimeDeps = runtimeMaterialization {
+    inherit
+      pkgs
+      services
+      ;
+    model = probeModel;
+  };
 
   orchestrator = import ../../nixfied/framework/runtime/orchestrator.nix {
     inherit
@@ -21,6 +29,10 @@ let
     model = probeModel;
     inherit services;
     projectRoot = ../..;
+    inherit (runtimeDeps)
+      serviceHookEnv
+      serviceSetPrograms
+      ;
   };
 in
 pkgs.runCommand "summary-json-smoke" { } ''

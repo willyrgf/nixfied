@@ -29,9 +29,9 @@ pkgs.runCommand "registry-detail-derivation-smoke" { } ''
   ATTEMPT_ID="attempt-123"
   WORKFLOW_ID="workflow.test"
   EXPORT_FILE="$TMPDIR/registry.exports"
-  SUMMARY_EXPORTS="$TMPDIR/summary.exports"
   INDEX_FILE="$ROOT/events.index.tsv"
   STEPS_FILE="$TMPDIR/steps.tsv"
+  SUMMARY_COUNTS="$TMPDIR/summary-counts.tsv"
 
   mkdir -p "$ROOT"
 
@@ -57,8 +57,8 @@ pkgs.runCommand "registry-detail-derivation-smoke" { } ''
   terminal_status="$(read_trimmed_file "$TMPDIR/terminal.out")"
   [ "$terminal_status" = "$(printf 'failed\t7')" ] || fail "registry terminal should preserve derived exit code (got '$terminal_status')"
 
-  "$KERNEL" summary collect-steps ${pkgs.lib.escapeShellArg summaryPlanFile} "$INDEX_FILE" "$RUN_ID" "$ATTEMPT_ID" "$STEPS_FILE" "$SUMMARY_EXPORTS" > /dev/null
-  . "$SUMMARY_EXPORTS"
+  "$KERNEL" summary collect-steps ${pkgs.lib.escapeShellArg summaryPlanFile} "$INDEX_FILE" "$RUN_ID" "$ATTEMPT_ID" "$STEPS_FILE" > "$SUMMARY_COUNTS"
+  IFS=$'\t' read -r WORKFLOW_PASSED_COUNT WORKFLOW_FAILED_COUNT WORKFLOW_SKIPPED_COUNT WORKFLOW_CANCELED_COUNT _SUMMARY_STEPS_DURATION _SUMMARY_PEAK_WORKERS < "$SUMMARY_COUNTS"
 
   [ "$WORKFLOW_PASSED_COUNT" = "0" ] || fail "unexpected passed count '$WORKFLOW_PASSED_COUNT'"
   [ "$WORKFLOW_FAILED_COUNT" = "1" ] || fail "unexpected failed count '$WORKFLOW_FAILED_COUNT'"

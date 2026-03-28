@@ -7,8 +7,16 @@
 }:
 let
   withRuntimeMetadata = import ./with-runtime-metadata.nix { inherit pkgs; };
+  runtimeMaterialization = import ./runtime-materialization.nix;
   shellHelpers = import ./shell-helpers.nix { inherit pkgs; };
   harnessModel = withRuntimeMetadata model;
+  runtimeDeps = runtimeMaterialization {
+    inherit
+      pkgs
+      services
+      ;
+    model = harnessModel;
+  };
   executor = import ../../../nixfied/framework/runtime/executor.nix {
     inherit
       pkgs
@@ -17,6 +25,10 @@ let
       projectRoot
       ;
     model = harnessModel;
+    inherit (runtimeDeps)
+      serviceHookEnv
+      serviceSetPrograms
+      ;
   };
 
   orchestrator = import ../../../nixfied/framework/runtime/orchestrator.nix {
@@ -27,6 +39,10 @@ let
       projectRoot
       ;
     model = harnessModel;
+    inherit (runtimeDeps)
+      serviceHookEnv
+      serviceSetPrograms
+      ;
   };
 in
 {
