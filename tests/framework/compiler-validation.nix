@@ -15,6 +15,26 @@ let
   workflowIds = builtins.attrNames model.workflows;
   serviceIds = builtins.attrNames serviceCatalog;
   featureIds = builtins.attrNames (model.features or { });
+  requiredCompileFeatureIds = builtins.sort builtins.lessThan (
+    builtins.filter (
+      featureId:
+      let
+        feature = model.features.${featureId};
+      in
+      (feature.coverageRequired or false) && (feature.coverageLayer or "") == "compile"
+    ) featureIds
+  );
+  expectedCompileFeatureIds = builtins.sort builtins.lessThan (
+    builtins.filter (featureId: featureId != null && featureId != "") (
+      builtins.concatLists [
+        (builtins.map (appName: model.views.apps.${appName}.taskId) (
+          builtins.attrNames (model.views.apps or { })
+        ))
+        workflowIds
+        serviceIds
+      ]
+    )
+  );
   safeRepoRoot = builtins.unsafeDiscardStringContext (builtins.toString ../..);
   expectedRuntimeFeatureIds = [
     "runtime.ephemeral.source-materialization"
@@ -299,6 +319,7 @@ assert serviceFeaturesPresent;
 assert workflowFeaturesPresent;
 assert exposedTaskFeaturesPresent;
 assert runtimeFeaturesPresent;
+assert requiredCompileFeatureIds == expectedCompileFeatureIds;
 assert invalidMachineOutputContractRef.success == false;
 pkgs.runCommand "compiler-validation" { } ''
   echo "OK: compiler task, workflow, and feature contracts are stable" > "$out"

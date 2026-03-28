@@ -13,15 +13,19 @@ let
   lib = pkgs.lib;
   listUtils = import ../../nixfied/framework/core/list-utils.nix;
 
-  exposedTaskFeatureIds = builtins.sort builtins.lessThan (
-    builtins.filter (taskId: taskId != null && taskId != "") (
-      builtins.map (appName: model.views.apps.${appName}.taskId) (
-        builtins.attrNames (model.views.apps or { })
-      )
-    )
-  );
-  workflowFeatureIds = builtins.sort builtins.lessThan (builtins.attrNames model.workflows);
-  serviceFeatureIds = builtins.sort builtins.lessThan (builtins.attrNames serviceCatalog);
+  featureIds = builtins.sort builtins.lessThan (builtins.attrNames (model.features or { }));
+  requiredFeatureIds = builtins.filter (
+    featureId: model.features.${featureId}.coverageRequired or false
+  ) featureIds;
+  requiredFeatureIdsByLayer =
+    layer:
+    builtins.filter (
+      featureId:
+      let
+        feature = model.features.${featureId};
+      in
+      (feature.coverageRequired or false) && (feature.coverageLayer or "") == layer
+    ) featureIds;
   modelExportSchema = builtins.fromJSON (builtins.readFile ../../nixfied/schemas/model-export.json);
   modelExportRequired = modelExportSchema.required or [ ];
   modelExportProperties = modelExportSchema.properties or { };
@@ -134,50 +138,65 @@ let
     "help-snapshot" = {
       layer = "compile";
       proofKind = "fixture";
-      canonical = true;
-      covers = listUtils.uniquePreserveOrder (exposedTaskFeatureIds ++ workflowFeatureIds);
     };
 
     "compiler-validation" = {
       layer = "compile";
       proofKind = "contract";
       canonical = true;
-      covers = serviceFeatureIds;
+      covers = requiredFeatureIdsByLayer "compile";
+    };
+
+    "features-surface-contract" = {
+      layer = "compile";
+      proofKind = "contract";
+      covers = requiredFeatureIds;
+    };
+
+    "feature-adapter-proof" = {
+      layer = "adapter";
+      proofKind = "contract";
+      canonical = true;
+      covers = requiredFeatureIdsByLayer "adapter";
+    };
+
+    "feature-manifest-proof" = {
+      layer = "manifest";
+      proofKind = "contract";
+      canonical = true;
+      covers = requiredFeatureIdsByLayer "manifest";
+    };
+
+    "feature-e2e-proof" = {
+      layer = "e2e";
+      proofKind = "contract";
+      canonical = true;
+      covers = requiredFeatureIdsByLayer "e2e";
     };
 
     "log-prefix-contract" = {
       layer = "adapter";
       proofKind = "contract";
-      canonical = true;
-      covers = [ "runtime.output.prefix-contract" ];
     };
 
     "ephemeral-copy-mode-smoke" = {
       layer = "e2e";
       proofKind = "smoke";
-      canonical = true;
-      covers = [ "runtime.ephemeral.include-untracked" ];
     };
 
     "ephemeral-env-file-mode-smoke" = {
       layer = "e2e";
       proofKind = "smoke";
-      canonical = true;
-      covers = [ "runtime.ephemeral.env-file-loading" ];
     };
 
     "ephemeral-nix-source-smoke" = {
       layer = "e2e";
       proofKind = "smoke";
-      canonical = true;
-      covers = [ "runtime.ephemeral.source-materialization" ];
     };
 
     "ephemeral-registry-run-isolation-smoke" = {
       layer = "e2e";
       proofKind = "smoke";
-      canonical = true;
-      covers = [ "runtime.registry.isolation" ];
     };
 
     "skip-service-smoke" = {
@@ -193,25 +212,16 @@ let
     "selected-app-manifest-contract" = {
       layer = "adapter";
       proofKind = "contract";
-      canonical = false;
-      covers = [ "runtime.app-execution-manifests" ];
     };
 
     "service-set-surface-contract" = {
       layer = "e2e";
       proofKind = "contract";
-      canonical = false;
-      covers = [ "runtime.service-set-surfaces" ];
     };
 
     "runtime-manifest-fixture-contract" = {
       layer = "manifest";
       proofKind = "fixture";
-      canonical = true;
-      covers = [
-        "runtime.app-execution-manifests"
-        "runtime.service-set-surfaces"
-      ];
     };
 
     "introspection-bundle-determinism" = { };
@@ -226,19 +236,16 @@ let
     "workflow-service-set-adapter-smoke" = {
       layer = "adapter";
       proofKind = "smoke";
-      covers = [ "runtime.service-set-surfaces" ];
     };
 
     "machine-output-app-smoke" = {
       layer = "e2e";
       proofKind = "smoke";
-      covers = [ "runtime.app-execution-manifests" ];
     };
 
     "workflow-ref-app-manifest-contract" = {
       layer = "adapter";
       proofKind = "contract";
-      covers = [ "runtime.app-execution-manifests" ];
     };
 
     "helpers-runtime-contract" = {
@@ -298,7 +305,6 @@ let
 
     "disabled-service-runtime-surface-smoke" = {
       layer = "adapter";
-      covers = [ "runtime.service-hooks" ];
     };
 
     "launcher-skip-service-pruning-smoke" = { };
@@ -312,8 +318,6 @@ let
     "service-hook-env-smoke" = {
       layer = "adapter";
       proofKind = "smoke";
-      canonical = true;
-      covers = [ "runtime.service-hooks" ];
     };
 
     "service-op-composition-contract" = { };
@@ -370,6 +374,14 @@ let
         pkgs
         serviceCatalog
         packages
+        apps
+        ;
+    };
+
+    "features-surface-contract" = import ./features-surface-contract.nix {
+      inherit
+        pkgs
+        model
         apps
         ;
     };
@@ -591,6 +603,27 @@ let
         model
         services
         serviceCatalog
+        ;
+    };
+
+    "feature-adapter-proof" = import ./feature-adapter-proof.nix {
+      inherit
+        pkgs
+        model
+        ;
+    };
+
+    "feature-manifest-proof" = import ./feature-manifest-proof.nix {
+      inherit
+        pkgs
+        model
+        ;
+    };
+
+    "feature-e2e-proof" = import ./feature-e2e-proof.nix {
+      inherit
+        pkgs
+        model
         ;
     };
 
