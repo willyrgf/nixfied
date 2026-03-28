@@ -12,6 +12,7 @@ let
       "excluded-service-evaluation"
       "executor-contract"
       "feature-coverage-validation"
+      "features-surface-contract"
       "framework-selfhost-contract"
       "helios-pinned-source-contract"
       "help-snapshot"
@@ -43,6 +44,7 @@ let
     ];
 
     manifest = [
+      "feature-manifest-proof"
       "runtime-manifest-fixture-contract"
     ];
 
@@ -85,6 +87,7 @@ let
     adapter = [
       "disabled-service-runtime-surface-smoke"
       "dispatcher-help-fast-path-smoke"
+      "feature-adapter-proof"
       "framework-utility-launcher-contract"
       "helpers-runtime-contract"
       "launcher-help-fast-path-smoke"
@@ -113,6 +116,7 @@ let
       "env-loader-strict-smoke"
       "ephemeral-copy-budget-smoke"
       "ephemeral-copy-mode-smoke"
+      "feature-e2e-proof"
       "ephemeral-env-file-mode-smoke"
       "ephemeral-execution-smoke"
       "ephemeral-nix-source-smoke"
