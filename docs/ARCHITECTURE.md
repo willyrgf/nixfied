@@ -9,7 +9,7 @@ The canonical model is intentionally cheap: heavy service runtime normalization 
 
 `modules -> resolved config -> compiler passes -> cheap nixfiedModel + scoped runtime materialization -> stateHash + runtimeHash + apps + execution manifests + introspection`
 
-Compiler pass order:
+Compiler pass order (high-level core flow):
 
 1. `resolve-modules`
 2. `normalize-runtime`
@@ -22,6 +22,11 @@ Compiler pass order:
 9. `finalize-model`
 
 Each pass is pure and deterministic.
+
+This is not a literal exhaustive call graph of `nixfied/compiler/default.nix`.
+Additional derived compiled surfaces are still built around this core flow today,
+including selection, app execution manifests, introspection, runtime manifests,
+and runtime metadata.
 
 ## Model Separation
 
@@ -70,13 +75,19 @@ Task/workflow execution is process-first and uses:
 
 Runtime path:
 
-- public names remain dispatcher -> orchestrator -> executor
-- public flake launcher -> selector-aware pure app selection -> scoped dispatcher -> orchestrator -> executor -> coarse kernel runtime
+- current public names still remain dispatcher -> orchestrator -> executor
+- current public runtime path is public flake launcher -> selector-aware pure
+  app selection -> scoped dispatcher -> orchestrator -> executor -> coarse
+  kernel runtime
+- `dispatcher` and separate runtime-control surfacing are current-state seams,
+  not target architecture
 - service contract -> generated `svc::...` apps / `SVC_...` hooks -> task runtime shell
 
 Service selection and env scoping:
 
-- `nixfied/framework/runtime/service-selection.nix` derives sorted service sets from task requirements, recursive task deps, workflow units, workflow `preRun`/`postRun` tasks, `workflowRef` targets, workflow mode resolution, and explicit launcher selectors.
+- `nixfied/framework/runtime/service-selection.nix` still exists today, but it
+  is only a runtime alias over compiler selection data and is a deletion target,
+  not a long-term layer.
 - Public task apps plus `run-task`, `run-workflow`, and `run-workflow-parallel` are two-stage surfaces: select first, then execute a scoped runtime.
 - `svc::<service>::<op>` surfaces are single-service scoped.
 - Per-service `SVC_*` hook env and `NIXFIED_SERVICE_*` env are exported only for the selected service set of the current invocation.
@@ -85,8 +96,15 @@ Service selection and env scoping:
 Execution contracts:
 
 - Orchestrator-owned run lifecycle/state for all execution surfaces.
-- Kernel-owned workflow driving, workflow phases, scheduler transitions, registry append/detail derivation, summary composition, and contract validation.
-- Shell runtime layers are thin adapters for process launch edges, shell-native env bootstrapping, signal forwarding, and service lifecycle commands.
+- Kernel-owned workflow driving, workflow phases, scheduler transitions,
+  registry append/detail derivation, summary composition, and contract
+  validation.
+- Root task dependency execution is not yet kernel-owned end to end; current
+  code still crosses shell through a kernel-generated plan/export path.
+- Shell runtime is not thin yet. It still owns process supervision, run
+  inventory, stop controls, hook choreography, task launch edges, and some
+  summary/metadata transport. The target architecture is to shrink shell to
+  OS-edge concerns only.
 - Foreground/background process policy (`--fg` / `--bg`) with run inventory and stop controls.
 - Hermetic runtime inputs for each task.
 - Deterministic defaults for locale, timezone, umask, and workdir policy.
@@ -105,9 +123,15 @@ Machine-facing boundaries are contract-owned.
 - Machine-output transport is explicit: target apps write the payload to `NIXFIED_MACHINE_OUTPUT_FILE`, and the wrapper validates that declared file instead of recovering payloads from stdout.
 - Workflow machine output is sidecar-only: `run-workflow` writes `--run-id-file` and `--summary-file`, and no longer exposes a stdout JSON result surface.
 - `nixfied-kernel` owns framework validation, coarse workflow execution, run-record transitions, registry append/replay/status projection, summary composition, runtime-event policy/state derivation, and probe execution.
-- Workflow summaries, service-set JSON export, orchestrator run records, registry events, and introspection JSON are versioned validated envelopes. Shell runtime code reads kernel-exported fields, validated envelopes, or append-only indices; it does not re-derive framework semantics.
+- Workflow summaries, service-set JSON export, orchestrator run records,
+  registry events, and introspection JSON are versioned validated envelopes.
+  Shell runtime code still reads some kernel-exported fields through
+  `runtime-metadata.nix` and export files today; the target is one coarse
+  structured handoff rather than a fine-grained getter layer.
 - `introspect` is backed by a compile-time bundle plus a thin runtime selector, and its generated JSON assets are validated against the contract bundle at build time.
-- Repository guard tests and runtime contracts prevent deleted Python helpers, stdout-filter fallback transport, deprecated shell semantic seams, and framework `jq` usage in runtime/build-check paths from reappearing.
+- Repository guard tests and runtime contracts currently mix product guarantees
+  with temporary deletion policy. The long-term harness should keep behavior
+  proofs and shed seam-freezing guards as seams disappear.
 
 ## Generated App Surfaces
 
