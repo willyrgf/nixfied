@@ -12,6 +12,15 @@ let
       (feature.coverageRequired or false) && (feature.coverageLayer or "") == "manifest"
     ) (builtins.attrNames (model.features or { }))
   );
+  assertFeature =
+    feature: expected:
+    assert feature.kind == "runtime";
+    assert feature.summary == expected.summary;
+    assert feature.ownerFiles == expected.ownerFiles;
+    assert feature.modelPaths == expected.modelPaths;
+    assert feature.defaults == expected.defaults;
+    assert feature.surfaces == expected.surfaces;
+    true;
   appExecutionManifests = model.features."runtime.app-execution-manifests";
   serviceSetSurfaces = model.features."runtime.service-set-surfaces";
 in
@@ -20,19 +29,15 @@ assert
     "runtime.app-execution-manifests"
     "runtime.service-set-surfaces"
   ];
-assert appExecutionManifests.kind == "runtime";
-assert
-  appExecutionManifests.summary
-  == "App-scoped execution manifests for selected launchers and machine-output wrappers";
-assert
-  appExecutionManifests.ownerFiles == [
+assert assertFeature appExecutionManifests {
+  summary = "App-scoped execution manifests for selected launchers and machine-output wrappers";
+  ownerFiles = [
     "nixfied/compiler/compile-execution.nix"
     "nixfied/framework/core/materializeExecution.nix"
     "nixfied/framework/core/mkMachineOutputPrograms.nix"
   ];
-assert appExecutionManifests.modelPaths == [ "apps" ];
-assert
-  appExecutionManifests.defaults == {
+  modelPaths = [ "apps" ];
+  defaults = {
     manifestScope = "app";
     wrapperKinds = [
       "taskRef"
@@ -40,10 +45,7 @@ assert
       "machineOutput"
     ];
   };
-assert appExecutionManifests.coverageRequired == true;
-assert appExecutionManifests.coverageLayer == "manifest";
-assert
-  appExecutionManifests.surfaces == [
+  surfaces = [
     {
       kind = "app";
       name = "selected-app";
@@ -53,21 +55,18 @@ assert
       name = "app-manifest";
     }
   ];
-assert serviceSetSurfaces.kind == "runtime";
-assert
-  serviceSetSurfaces.summary
-  == "Grouped service-set lifecycle, export, and workflow adapter surfaces";
-assert
-  serviceSetSurfaces.ownerFiles == [
+};
+assert assertFeature serviceSetSurfaces {
+  summary = "Grouped service-set lifecycle, export, and workflow adapter surfaces";
+  ownerFiles = [
     "nixfied/modules/service-sets.nix"
     "nixfied/framework/core/mkServiceSetPrograms.nix"
     "nixfied/framework/core/materializeExecution.nix"
     "nixfied/compiler/compile-service-sets.nix"
     "nixfied/compiler/compile-workflows.nix"
   ];
-assert serviceSetSurfaces.modelPaths == [ "serviceSets" ];
-assert
-  serviceSetSurfaces.defaults == {
+  modelPaths = [ "serviceSets" ];
+  defaults = {
     appPrefix = "svcset::";
     operations = [
       "start"
@@ -78,10 +77,7 @@ assert
       "export"
     ];
   };
-assert serviceSetSurfaces.coverageRequired == true;
-assert serviceSetSurfaces.coverageLayer == "manifest";
-assert
-  serviceSetSurfaces.surfaces == [
+  surfaces = [
     {
       kind = "app";
       name = "svcset::<service-set>::<operation>";
@@ -91,6 +87,7 @@ assert
       name = "preRun.serviceSets/postRun.serviceSets";
     }
   ];
+};
 pkgs.runCommand "feature-manifest-proof" { } ''
   echo "OK: manifest-layer runtime feature inventory is stable" > "$out"
 ''

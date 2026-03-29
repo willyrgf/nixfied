@@ -62,8 +62,7 @@ let
     then
       "kernel"
     else if
-      name == "help-snapshot"
-      || name == "compiler-validation"
+      name == "compiler-validation"
       || lib.hasInfix "package-output" name
       || lib.hasInfix "project-config" name
       || lib.hasInfix "no-legacy" name
@@ -112,10 +111,6 @@ let
     };
 
   checkMetadata = {
-    "help-snapshot" = {
-      layer = "compile";
-    };
-
     "compiler-validation" = {
       layer = "compile";
       canonical = true;
@@ -145,23 +140,7 @@ let
       covers = requiredFeatureIdsByLayer "e2e";
     };
 
-    "log-prefix-contract" = {
-      layer = "adapter";
-    };
-
-    "ephemeral-copy-mode-smoke" = {
-      layer = "e2e";
-    };
-
-    "ephemeral-env-file-mode-smoke" = {
-      layer = "e2e";
-    };
-
-    "ephemeral-nix-source-smoke" = {
-      layer = "e2e";
-    };
-
-    "ephemeral-registry-run-isolation-smoke" = {
+    "ephemeral-runtime-behavior-smoke" = {
       layer = "e2e";
     };
 
@@ -198,10 +177,6 @@ let
     };
 
     "runtime-events-contract" = {
-      layer = "adapter";
-    };
-
-    "service-runtime-surface-contract" = {
       layer = "adapter";
     };
 
@@ -458,26 +433,11 @@ let
       inherit pkgs;
     };
 
-    "service-runtime-surface-contract" = import ./service-runtime-surface-contract.nix {
-      inherit
-        pkgs
-        serviceCatalog
-        apps
-        ;
-    };
-
     "vendored-metadata-contract" = import ./vendored-metadata-contract.nix {
       inherit pkgs;
     };
 
     "scheduler-order" = import ./scheduler-order.nix {
-      inherit
-        pkgs
-        model
-        ;
-    };
-
-    "help-snapshot" = import ./help-snapshot.nix {
       inherit
         pkgs
         model
@@ -715,10 +675,6 @@ let
     };
 
     "registry-detail-derivation-smoke" = import ./registry-detail-derivation-smoke.nix {
-      inherit pkgs;
-    };
-
-    "log-prefix-contract" = import ./log-prefix-contract.nix {
       inherit pkgs;
     };
 
@@ -1028,7 +984,7 @@ let
         ;
     };
 
-    "ephemeral-env-file-mode-smoke" = import ./ephemeral-env-file-mode-smoke.nix {
+    "ephemeral-runtime-behavior-smoke" = import ./ephemeral-runtime-behavior-smoke.nix {
       inherit
         pkgs
         model
@@ -1038,33 +994,6 @@ let
     };
 
     "runtime-env-isolation-smoke" = import ./runtime-env-isolation-smoke.nix {
-      inherit
-        pkgs
-        model
-        services
-        registry
-        ;
-    };
-
-    "ephemeral-registry-run-isolation-smoke" = import ./ephemeral-registry-run-isolation-smoke.nix {
-      inherit
-        pkgs
-        model
-        services
-        registry
-        ;
-    };
-
-    "ephemeral-copy-mode-smoke" = import ./ephemeral-copy-mode-smoke.nix {
-      inherit
-        pkgs
-        model
-        services
-        registry
-        ;
-    };
-
-    "ephemeral-nix-source-smoke" = import ./ephemeral-nix-source-smoke.nix {
       inherit
         pkgs
         model
