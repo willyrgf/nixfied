@@ -1,8 +1,6 @@
 use super::*;
+use crate::execution_metadata::{execution_task, execution_workflow, load_execution_metadata};
 use crate::registry::registry_append_event_internal;
-use crate::runtime_metadata::{
-    load_runtime_metadata, runtime_metadata_task, runtime_metadata_workflow,
-};
 
 use std::collections::BTreeMap;
 use std::process::{self, Command};
@@ -119,9 +117,16 @@ pub(crate) fn workflow_family_from_id(workflow_id: &str) -> Option<String> {
 }
 
 fn workflow_family_modes(metadata: &JsonValue, family: &str) -> Vec<String> {
-    object_field(metadata, "workflowFamilies")
+    object_field(metadata, "workflowModesByFamily")
         .and_then(|families| object_field(families, family))
-        .map(|entry| array_strings(entry, "modes"))
+        .and_then(JsonValue::as_array)
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(JsonValue::as_str)
+                .map(|mode| mode.to_string())
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -130,7 +135,7 @@ pub(crate) fn workflow_resolve_mode_id(
     workflow_id: &str,
     mode_override: &str,
 ) -> Result<String, String> {
-    runtime_metadata_workflow(metadata, workflow_id)?;
+    execution_workflow(metadata, workflow_id)?;
     if mode_override.is_empty() {
         return Ok(workflow_id.to_string());
     }
@@ -138,7 +143,7 @@ pub(crate) fn workflow_resolve_mode_id(
     let family = workflow_family_from_id(workflow_id)
         .ok_or_else(|| format!("workflow '{}' does not support mode overrides", workflow_id))?;
     let candidate = format!("workflow.{}.{}", family, mode_override);
-    if runtime_metadata_workflow(metadata, &candidate).is_ok() {
+    if execution_workflow(metadata, &candidate).is_ok() {
         return Ok(candidate);
     }
 
@@ -156,12 +161,12 @@ pub(crate) fn workflow_resolve_mode_id(
 fn workflow_resolve_mode_command(values: &[String]) -> Result<(), String> {
     if values.len() != 3 {
         return Err(
-            "usage: nixfied-kernel workflow resolve-mode <runtime-metadata-file> <workflow-id> <mode-override>"
+            "usage: nixfied-kernel workflow resolve-mode <execution-source-file> <workflow-id> <mode-override>"
                 .to_string(),
         );
     }
 
-    let metadata = load_runtime_metadata(&values[0])?;
+    let metadata = load_execution_metadata(&values[0])?;
     let resolved = workflow_resolve_mode_id(&metadata, &values[1], &values[2])?;
     println!("{}", resolved);
     Ok(())
@@ -170,15 +175,15 @@ fn workflow_resolve_mode_command(values: &[String]) -> Result<(), String> {
 fn workflow_handoff_command(values: &[String]) -> Result<(), String> {
     if values.len() != 3 {
         return Err(
-            "usage: nixfied-kernel workflow handoff <runtime-metadata-file> <workflow-id> <output-dir>"
+            "usage: nixfied-kernel workflow handoff <execution-source-file> <workflow-id> <output-dir>"
                 .to_string(),
         );
     }
 
-    let metadata = load_runtime_metadata(&values[0])?;
+    let metadata = load_execution_metadata(&values[0])?;
     let workflow_id = &values[1];
     let output_dir = &values[2];
-    let workflow = runtime_metadata_workflow(&metadata, workflow_id)?;
+    let workflow = execution_workflow(&metadata, workflow_id)?;
     let logging = object_field(workflow, "logging")
         .cloned()
         .unwrap_or_else(|| json!({}));
@@ -253,12 +258,12 @@ fn workflow_handoff_command(values: &[String]) -> Result<(), String> {
 fn workflow_env_names_command(values: &[String]) -> Result<(), String> {
     if values.len() != 2 {
         return Err(
-            "usage: nixfied-kernel workflow env-names <runtime-metadata-file> <workflow-id>"
+            "usage: nixfied-kernel workflow env-names <execution-source-file> <workflow-id>"
                 .to_string(),
         );
     }
 
-    let metadata = load_runtime_metadata(&values[0])?;
+    let metadata = load_execution_metadata(&values[0])?;
     let mut env_names = std::collections::BTreeSet::new();
     let mut seen_tasks = std::collections::BTreeSet::new();
     let mut seen_workflows = std::collections::BTreeSet::new();
@@ -286,7 +291,7 @@ fn workflow_collect_env_names(
         return Ok(());
     }
 
-    let workflow = runtime_metadata_workflow(metadata, workflow_id)?;
+    let workflow = execution_workflow(metadata, workflow_id)?;
     for task_id in workflow_phase_tasks(workflow, "preRun") {
         workflow_collect_task_env_names(metadata, &task_id, seen_tasks, seen_workflows, env_names)?;
     }
@@ -323,7 +328,7 @@ fn workflow_collect_task_env_names(
         return Ok(());
     }
 
-    let task = runtime_metadata_task(metadata, task_id)?;
+    let task = execution_task(metadata, task_id)?;
     env_names.extend(array_strings(task, "passThroughEnvNames"));
 
     if let Some(hooks) = object_field(task, "hooks") {
@@ -659,7 +664,7 @@ fn workflow_first_skipped_required_service(
     task_id: &str,
     skipped_services: &BTreeSet<String>,
 ) -> Option<String> {
-    let task = runtime_metadata_task(metadata, task_id).ok()?;
+    let task = execution_task(metadata, task_id).ok()?;
     array_strings(task, "requiredServices")
         .into_iter()
         .find(|service_name| skipped_services.contains(service_name))
@@ -738,7 +743,7 @@ fn workflow_run_phase(
                 passthrough_args,
             )?;
             if exit_code == 0 {
-                let produces_json = runtime_metadata_task(metadata, &phase_task)
+                let produces_json = execution_task(metadata, &phase_task)
                     .ok()
                     .and_then(|task| object_field(task, "produces"))
                     .map(render_json_compact)
@@ -1150,13 +1155,13 @@ fn workflow_run_parallel(
 fn workflow_run_command(values: &[String]) -> Result<(), String> {
     if values.len() < 11 {
         return Err(
-            "usage: nixfied-kernel workflow run <runtime-metadata-file> <bundle-file> <registry-root> <run-id> <attempt-id|empty> <workflow-id> <skipped-services-file> <task-adapter> <service-set-adapter> <run-parallel> <max-workers> [-- <args...>]"
+            "usage: nixfied-kernel workflow run <execution-source-file> <bundle-file> <registry-root> <run-id> <attempt-id|empty> <workflow-id> <skipped-services-file> <task-adapter> <service-set-adapter> <run-parallel> <max-workers> [-- <args...>]"
                 .to_string(),
         );
     }
 
-    let metadata = load_runtime_metadata(&values[0])?;
-    let workflow = runtime_metadata_workflow(&metadata, &values[5])?;
+    let metadata = load_execution_metadata(&values[0])?;
+    let workflow = execution_workflow(&metadata, &values[5])?;
     let workflow_plan = workflow_scheduler_from_runtime(workflow)?;
     let skipped_services = load_line_set(&values[6])?;
     let task_adapter = &values[7];

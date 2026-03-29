@@ -75,7 +75,7 @@ The current stack can be decomposed as:
 7. dispatcher layer
 8. orchestrator layer
 9. executor layer
-10. runtime metadata projection and shell query layer
+10. execution descriptor and runtime handoff layer
 11. env and isolation layer
 12. kernel runtime layer
 13. service boundary helper layer
@@ -207,7 +207,7 @@ Necessary:
 Accidental:
 
 - distinct manifest families when one would do
-- runtime metadata forms that exist only because shell still wants a metadata API
+- execution descriptor forms that exist only because shell still wants a runtime handoff API
 - compile outputs duplicated again later by runtime fallbacks
 
 Keep:
@@ -319,8 +319,7 @@ Accidental:
 
 - shell selection CSV logic still lives in launcher wrappers and app-resolution
   paths
-- narrowed execution manifests and nested runtime metadata projections still
-  exist beside the canonical execution graph
+- narrowed execution manifests still exist beside the canonical execution graph
 - selected-service closure logic is still spread across compiler execution data,
   launcher resolution, and runtime materialization
 - the named `service-selection.nix` seam is gone, but the duplicated selection
@@ -472,7 +471,7 @@ Minimal retained role:
 What to evaluate in solutions:
 
 - should the kernel own task dependency execution fully?
-- should summary and runtime metadata stop round-tripping through shell exports?
+- should summary and execution handoff data stop round-tripping through shell exports?
 
 ### 10. Runtime Metadata Projection And Runtime Handoff Layer
 
@@ -495,10 +494,8 @@ Necessary if shell remains large:
 
 Accidental:
 
-- top-level runtime metadata compilation remaining separate from the canonical
-  execution graph
 - shell still needing a runtime handoff layer for OS-edge task and workflow execution
-- loader commands and runtime projections surviving after the named
+- loader commands and execution projections surviving after the named
   `runtime-metadata.nix` file was deleted
 
 Keep:
@@ -894,7 +891,7 @@ Necessary:
 
 Accidental:
 
-- some fixture-heavy layering if it exists only because runtime metadata and app
+- some fixture-heavy layering if it exists only because execution descriptors and app
   execution are separate families
 
 Keep:
@@ -1056,7 +1053,7 @@ Collapse/Delete pressure:
 
 ### Layers or seams under strongest collapse pressure
 
-- separate shell runtime metadata layer
+- separate shell runtime handoff layer
 - runtime selection fallback recomputation
 - executor-side service-set synthesis fallback
 - duplicate runtime-control surfacing
@@ -1087,7 +1084,7 @@ Based on the current decomposition, the lowest-regret simplification targets are
 1. delete runtime selection fallback recomputation
 2. delete executor synthesis fallback for `serviceSetPrograms`
 3. choose one runtime-control surfacing path
-4. collapse or delete the shell runtime metadata getter layer
+4. collapse or delete the shell runtime handoff layer
 5. remove shell summary export sourcing
 
 The higher-risk, higher-payoff targets are:

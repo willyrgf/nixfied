@@ -24,7 +24,6 @@ model
   compiled =
     (builtins.removeAttrs (model.compiled or { }) [
       "execution"
-      "runtimeMetadata"
       "runtimeManifests"
     ])
     // {

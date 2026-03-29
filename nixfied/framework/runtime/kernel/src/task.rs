@@ -1,8 +1,8 @@
 use super::*;
-use crate::registry::registry_append_event_internal;
-use crate::runtime_metadata::{
-    load_runtime_metadata, runtime_metadata_task, runtime_metadata_tasks, runtime_metadata_workflow,
+use crate::execution_metadata::{
+    execution_task, execution_tasks, execution_workflow, load_execution_metadata,
 };
+use crate::registry::registry_append_event_internal;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::process::{self, Command};
@@ -67,12 +67,12 @@ struct TaskRunContext<'a> {
 fn task_run_command(values: &[String]) -> Result<(), String> {
     if values.len() < 8 {
         return Err(
-            "usage: nixfied-kernel task run <runtime-metadata-file> <bundle-file> <registry-root> <run-id> <attempt-id|empty> <task-id> <skipped-services-file> <task-adapter> [-- <args...>]"
+            "usage: nixfied-kernel task run <execution-source-file> <bundle-file> <registry-root> <run-id> <attempt-id|empty> <task-id> <skipped-services-file> <task-adapter> [-- <args...>]"
                 .to_string(),
         );
     }
 
-    let metadata = load_runtime_metadata(&values[0])?;
+    let metadata = load_execution_metadata(&values[0])?;
     let plan = load_task_dependency_plan(&metadata)?;
     let skipped_services = load_line_set(&values[6])?;
     let passthrough_args = strip_passthrough_separator(&values[8..]).to_vec();
@@ -103,13 +103,13 @@ fn task_run_command(values: &[String]) -> Result<(), String> {
 fn task_validate_args_command(values: &[String]) -> Result<(), String> {
     if values.len() < 2 {
         return Err(
-            "usage: nixfied-kernel task validate-args <runtime-metadata-file> <task-id> [-- <args...>]"
+            "usage: nixfied-kernel task validate-args <execution-source-file> <task-id> [-- <args...>]"
                 .to_string(),
         );
     }
 
-    let metadata = load_runtime_metadata(&values[0])?;
-    let task = runtime_metadata_task(&metadata, &values[1])?;
+    let metadata = load_execution_metadata(&values[0])?;
+    let task = execution_task(&metadata, &values[1])?;
     let parser = object_string(task, "parser").unwrap_or("typed");
     let allow_unknown = object_bool(task, "allowUnknown").unwrap_or(false);
     if parser != "typed" || allow_unknown {
@@ -126,15 +126,15 @@ fn task_validate_args_command(values: &[String]) -> Result<(), String> {
 fn task_handoff_command(values: &[String]) -> Result<(), String> {
     if values.len() != 3 {
         return Err(
-            "usage: nixfied-kernel task handoff <runtime-metadata-file> <task-id> <output-dir>"
+            "usage: nixfied-kernel task handoff <execution-source-file> <task-id> <output-dir>"
                 .to_string(),
         );
     }
 
-    let metadata = load_runtime_metadata(&values[0])?;
+    let metadata = load_execution_metadata(&values[0])?;
     let task_id = &values[1];
     let output_dir = &values[2];
-    let task = runtime_metadata_task(&metadata, task_id)?;
+    let task = execution_task(&metadata, task_id)?;
     let runner = object_field(task, "runner")
         .ok_or_else(|| format!("runtime task '{}' missing object field runner", task_id))?;
     let hooks = object_field(task, "hooks")
@@ -247,11 +247,11 @@ fn task_write_hook_handoffs(
 fn task_env_names_command(values: &[String]) -> Result<(), String> {
     if values.len() != 2 {
         return Err(
-            "usage: nixfied-kernel task env-names <runtime-metadata-file> <task-id>".to_string(),
+            "usage: nixfied-kernel task env-names <execution-source-file> <task-id>".to_string(),
         );
     }
 
-    let metadata = load_runtime_metadata(&values[0])?;
+    let metadata = load_execution_metadata(&values[0])?;
     let mut env_names = BTreeSet::new();
     let mut seen_tasks = BTreeSet::new();
     let mut seen_workflows = BTreeSet::new();
@@ -287,7 +287,7 @@ fn collect_task_env_names(
         return Ok(());
     }
 
-    let task = runtime_metadata_task(metadata, task_id)?;
+    let task = execution_task(metadata, task_id)?;
     env_names.extend(array_strings(task, "passThroughEnvNames"));
 
     if let Some(hooks) = object_field(task, "hooks") {
@@ -339,7 +339,7 @@ fn collect_workflow_env_names(
         return Ok(());
     }
 
-    let workflow = runtime_metadata_workflow(metadata, workflow_id)?;
+    let workflow = execution_workflow(metadata, workflow_id)?;
     for dependency in task_workflow_phase_tasks(workflow, "preRun") {
         collect_task_env_names(metadata, &dependency, seen_tasks, seen_workflows, env_names)?;
     }
@@ -369,7 +369,7 @@ fn task_workflow_phase_tasks(workflow: &JsonValue, phase_key: &str) -> Vec<Strin
 
 fn load_task_dependency_plan(metadata: &JsonValue) -> Result<TaskDependencyPlan, String> {
     let mut tasks = BTreeMap::new();
-    for (task_id, task_value) in runtime_metadata_tasks(metadata)? {
+    for (task_id, task_value) in execution_tasks(metadata)? {
         let deps = object_field(task_value, "deps")
             .ok_or_else(|| format!("runtime task '{}' missing object field deps", task_id))?;
         tasks.insert(
@@ -505,7 +505,7 @@ fn task_run_visit(
         .tasks
         .get(task_id)
         .ok_or_else(|| format!("unknown task '{}'", task_id))?;
-    let task = runtime_metadata_task(context.metadata, task_id)?;
+    let task = execution_task(context.metadata, task_id)?;
     active.insert(task_id.to_string());
 
     if let Some(skip_service) = task_plan

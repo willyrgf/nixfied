@@ -77,6 +77,7 @@ let
     || !(builtins.all (snippet: lib.hasInfix snippet source) entry.snippets)
   ) jqAllowlist;
   machineOutputSource = builtins.readFile ../../nixfied/framework/core/mkMachineOutputPrograms.nix;
+  compileExecutionSource = builtins.readFile ../../nixfied/compiler/compile-execution.nix;
   compilerDefaultSource = builtins.readFile ../../nixfied/compiler/default.nix;
   finalizeModelSource = builtins.readFile ../../nixfied/compiler/finalize-model.nix;
   mkFlakeOutputsSource = builtins.readFile ../../nixfied/framework/core/mkFlakeOutputs.nix;
@@ -145,6 +146,8 @@ assert filesWithDeprecatedKernelMarkers == [ ];
 assert !kernelSourceHasDeprecatedMarkers;
 assert pkgs.lib.hasInfix "nixfied-kernel machine-output run" machineOutputSource;
 assert !(pkgs.lib.hasInfix "validatorProgram" machineOutputSource);
+assert !(pkgs.lib.hasInfix "runtimeMetadata =" compileExecutionSource);
+assert !(pkgs.lib.hasInfix "nixfied-runtime-metadata" compileExecutionSource);
 assert !(pkgs.lib.hasInfix "runtimeMetadata = compileRuntimeMetadata" compilerDefaultSource);
 assert !(pkgs.lib.hasInfix "runtimeMetadata ? null" finalizeModelSource);
 assert !(pkgs.lib.hasInfix "runtimeMetadata = runtimeMetadata;" finalizeModelSource);
