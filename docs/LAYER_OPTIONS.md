@@ -2,7 +2,7 @@
 
 Status: working note
 
-Date: 2026-03-28
+Date: 2026-03-29
 
 ## Purpose
 
@@ -98,7 +98,9 @@ Primary effect:
 
 Files under pressure:
 
-- `nixfied/framework/runtime/service-selection.nix`
+- `nixfied/compiler/compile-execution.nix`
+- `nixfied/framework/core/mkFlakeOutputs.nix`
+- `nixfied/framework/core/materializeExecution.nix`
 - `nixfied/framework/runtime/orchestrator.nix`
 - `nixfied/framework/runtime/executor.nix`
 
@@ -130,13 +132,13 @@ Why it matters:
 
 Primary effect:
 
-- delete `orchestrator-control.nix` as a separate runtime authority
+- finish collapsing the already-removed `orchestrator-control.nix` seam
 - route `runs`, `stop-run`, and `stop-all-runs` through one shell runtime owner
 
 Files under pressure:
 
 - `nixfied/framework/runtime/orchestrator.nix`
-- `nixfied/framework/runtime/orchestrator-control.nix`
+- `nixfied/framework/runtime/orchestrator-runtime.nix`
 - `nixfied/framework/runtime/dispatcher.nix`
 - `nixfied/framework/core/mkFlakeOutputs.nix`
 
@@ -150,10 +152,9 @@ Why it matters:
 Primary effect:
 
 - replace the current family of:
-  - `selectionIndex`
-  - `compiled.runtimeMetadata`
-  - app-specific recomputed runtime metadata
-  - `runtimeManifests`
+  - compiler execution data
+  - top-level `compiled.runtimeMetadata`
+  - app-specific embedded runtime metadata
   - launcher CSV lookup tables
 - with one canonical compiled execution graph
 
@@ -167,13 +168,13 @@ What that graph should own:
 
 Files under pressure:
 
-- `nixfied/compiler/compile-selection-index.nix`
+- `nixfied/compiler/default.nix`
+- `nixfied/compiler/compile-execution.nix`
 - `nixfied/compiler/compile-runtime-metadata.nix`
-- `nixfied/compiler/compile-app-execution-manifests.nix`
-- `nixfied/compiler/compile-runtime-manifest.nix`
 - `nixfied/compiler/finalize-model.nix`
 - `nixfied/framework/core/mkLauncherMetadata.nix`
 - `nixfied/framework/core/mkFlakeOutputs.nix`
+- `nixfied/framework/core/materializeExecution.nix`
 
 Why it matters:
 
@@ -185,14 +186,15 @@ Why it matters:
 
 Primary effect:
 
-- remove `runtime-metadata.nix` as a layer
+- remove the remaining runtime metadata query seam as a layer
 - stop shell from loading task and workflow runtime via fine-grained kernel
   export calls
 - stop summary counters from round-tripping through shell export files
 
 Files under pressure:
 
-- `nixfied/framework/runtime/runtime-metadata.nix`
+- `nixfied/compiler/default.nix`
+- `nixfied/compiler/compile-runtime-metadata.nix`
 - `nixfied/framework/runtime/executor.nix`
 - `nixfied/framework/runtime/orchestrator.nix`
 - `nixfied/framework/runtime/kernel/src/task.rs`
@@ -205,10 +207,11 @@ Why it matters:
 
 Current evidence from code:
 
-- `runtime-metadata.nix` is an internal shell getter/cache layer over kernel
-  export calls, not a product-facing public API
-- `executor.nix` and `orchestrator.nix` consume that layer because shell still
-  loads task/workflow fields piecemeal
+- the named `runtime-metadata.nix` file is already gone, but the seam remains as
+  a separate `compile-runtime-metadata.nix` projection plus shell loader/query
+  paths
+- `executor.nix` and `orchestrator.nix` still rely on fine-grained task and
+  workflow runtime loads because shell reads runtime fields piecemeal
 - this supports deleting the fine-grained metadata seam entirely rather than
   polishing it
 
@@ -236,12 +239,12 @@ Primary effect:
 Files under pressure:
 
 - `nixfied/compiler/compile-service-surface-catalog.nix`
+- `nixfied/compiler/compile-services.nix`
 - `nixfied/framework/core/mkServiceRuntimeSurfaces.nix`
 - `nixfied/framework/core/mkServiceSetPrograms.nix`
-- `nixfied/framework/core/serviceModulePath.nix`
+- `nixfied/framework/core/service-config.nix`
 - `nixfied/framework/runtime/helpers/service-api.nix`
 - `nixfied/framework/runtime/helpers/app-api.nix`
-- `nixfied/framework/runtime/helpers/service-module.nix`
 - `nixfied/framework/runtime/helpers/service-observability.nix`
 - `nixfied/framework/runtime/services/*`
 - `tests/framework/service-*.nix`
@@ -254,19 +257,15 @@ Why it matters:
 
 Current evidence from code:
 
-- `service-module.nix` still mixes contract construction with observability
-  injection and private exported implementation
 - `compile-service-surface-catalog.nix` still imports real service modules
   through synthetic `project` and `slots` context
-- `serviceModulePath.nix` hardcodes built-in service locations, which is
-  incompatible with repository-separable service ownership
 - `mkServiceRuntimeSurfaces.nix` still regenerates apps and hook env and can
   fall back to re-importing service modules
 - real services still depend on broad helper/runtime surfaces such as
   `managedServiceLifecycle`, `slotEnvRuntime`, `slots.getSlotInfo`, and
   `slots.getServiceDir`
-- `service-api.nix` and `app-api.nix` still tie service contracts to shell/app
-  runtime primitive conventions
+- `service-api.nix`, `app-api.nix`, and `service-observability.nix` still tie
+  service contracts to shell/app runtime primitive conventions
 
 ### Candidate 7: move task dependency execution fully into kernel
 
@@ -299,7 +298,7 @@ Files under pressure:
 
 - `tests/framework/contract-migration-guard.nix`
 - `tests/framework/framework-test-shards.nix`
-- `tests/framework/framework-test-coverage-contract.nix`
+- `tests/framework/framework-test-layout-validation.nix`
 - `tests/framework/feature-coverage-validation.nix`
 
 Why it matters:
@@ -318,8 +317,10 @@ Before debating target architectures, fix four classification errors:
    It is query glue over compiled data and kernel exports.
 3. `runtime manifests` are not a separate target abstraction
    They are projections of execution data, not a second authority.
-4. `orchestrator-control` is not a separate abstraction
-   It duplicates run control already present in orchestrator.
+4. `orchestrator-control` was not a separate abstraction
+   The file is already gone; any remaining duplicated run-control surfacing
+   should now be treated as residual glue inside orchestrator, runtime wrappers,
+   and launcher generation.
 
 Any option that keeps those as first-class long-term layers is not actually a
 deletion-first architecture.
@@ -474,8 +475,9 @@ Benefits:
 
 - deletes service-specific framework glue only if direct runtime imports,
   hardcoded service lookup, and helper-bundle coupling disappear
-- exposes and shrinks the hidden coupling now carried by `service-module.nix`,
-  `serviceModulePath.nix`, helper bundles, and shell/app runtime conventions
+- exposes and shrinks the hidden coupling now carried by helper bundles,
+  service config glue, runtime service imports, and shell/app runtime
+  conventions
 
 Costs:
 
