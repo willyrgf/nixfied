@@ -152,6 +152,8 @@ assert !(pkgs.lib.hasInfix "nixfied-runtime-metadata" compileExecutionSource);
 assert !(pkgs.lib.hasInfix "runtimeMetadata = compileRuntimeMetadata" compilerDefaultSource);
 assert !(pkgs.lib.hasInfix "runtimeMetadata ? null" finalizeModelSource);
 assert !(pkgs.lib.hasInfix "runtimeMetadata = runtimeMetadata;" finalizeModelSource);
+assert !(pkgs.lib.hasInfix "workflowSummaryPlanFile = pkgs.writeText" executorSource);
+assert !(pkgs.lib.hasInfix "nixfied-workflow-summary-plan" kernelSource);
 assert pkgs.lib.hasInfix "includeRuntimeControlApps = false;" materializeExecutionSource;
 assert
   !(pkgs.lib.hasInfix "runtimeControlOrchestrator = import ../runtime/orchestrator.nix" mkFlakeOutputsSource);

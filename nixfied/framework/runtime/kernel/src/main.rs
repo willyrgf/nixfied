@@ -376,11 +376,6 @@ impl WorkflowUnitStateCommon for WorkflowParallelUnitState {
 }
 
 #[derive(Clone)]
-struct WorkflowSummaryPlan {
-    task_runner_types: BTreeMap<String, String>,
-}
-
-#[derive(Clone)]
 struct WorkflowCollectedStep {
     name: String,
     status: String,

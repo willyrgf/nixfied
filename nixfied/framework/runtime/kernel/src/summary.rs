@@ -1,5 +1,5 @@
 use super::*;
-use crate::workflow::load_workflow_summary_plan;
+use crate::execution_metadata::{execution_task, load_execution_metadata};
 
 pub(crate) fn summary_command(subcommand: &str, values: &[String]) -> Result<(), String> {
     match subcommand {
@@ -112,13 +112,13 @@ fn summary_compose_command(values: &[String]) -> Result<(), String> {
 fn summary_collect_steps_command(values: &[String]) -> Result<(), String> {
     if values.len() != 5 {
         return Err(
-            "usage: nixfied-kernel summary collect-steps <plan-file> <index-file> <run-id> <attempt-id|empty> <steps-file>"
+            "usage: nixfied-kernel summary collect-steps <execution-source-file> <index-file> <run-id> <attempt-id|empty> <steps-file>"
                 .to_string(),
         );
     }
 
-    let plan = load_workflow_summary_plan(&values[0])?;
-    let collected = collect_workflow_summary(&plan, &values[1], &values[2], &values[3])?;
+    let execution = load_execution_metadata(&values[0])?;
+    let collected = collect_workflow_summary(&execution, &values[1], &values[2], &values[3])?;
     write_workflow_collected_steps_file(&values[4], &collected.steps)?;
     println!(
         "{}\t{}\t{}\t{}\t{}\t{}",
@@ -236,6 +236,15 @@ fn summary_render_human_command(values: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+fn workflow_summary_runner_type(execution: &JsonValue, task_id: &str) -> String {
+    execution_task(execution, task_id)
+        .ok()
+        .and_then(|task| object_field(task, "runner"))
+        .and_then(|runner| object_string(runner, "type"))
+        .unwrap_or("shell")
+        .to_string()
+}
+
 fn workflow_step_status_from_state_reason(state: &str, reason: &str) -> String {
     if state == "canceled"
         && matches!(
@@ -250,7 +259,7 @@ fn workflow_step_status_from_state_reason(state: &str, reason: &str) -> String {
 }
 
 fn collect_workflow_summary(
-    plan: &WorkflowSummaryPlan,
+    execution: &JsonValue,
     index_file: &str,
     run_id: &str,
     attempt_id: &str,
@@ -269,11 +278,11 @@ fn collect_workflow_summary(
     }
 
     let content = read_text(index_file)?;
-    collect_workflow_summary_from_text(plan, &content, run_id, attempt_id)
+    collect_workflow_summary_from_text(execution, &content, run_id, attempt_id)
 }
 
 fn collect_workflow_summary_from_text(
-    plan: &WorkflowSummaryPlan,
+    execution: &JsonValue,
     content: &str,
     run_id: &str,
     attempt_id: &str,
@@ -311,11 +320,7 @@ fn collect_workflow_summary_from_text(
             continue;
         }
 
-        let runner_type = plan
-            .task_runner_types
-            .get(task_id)
-            .map(|value| value.as_str())
-            .unwrap_or("shell");
+        let runner_type = workflow_summary_runner_type(execution, task_id);
         let counts_for_peak = runner_type != "workflowRef";
         if counts_for_peak {
             match state {
@@ -403,11 +408,7 @@ fn collect_workflow_summary_from_text(
     let mut leaf_task_ids = Vec::new();
 
     for row in terminal_rows {
-        let runner_type = plan
-            .task_runner_types
-            .get(&row.name)
-            .map(|value| value.as_str())
-            .unwrap_or("shell");
+        let runner_type = workflow_summary_runner_type(execution, &row.name);
         if runner_type == "workflowRef" {
             continue;
         }
@@ -515,13 +516,20 @@ fn parse_summary_steps_file(path: &str) -> Result<Vec<JsonValue>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
 
     #[test]
     fn summary_collects_parallelism_and_skip_classification() {
-        let mut task_runner_types = BTreeMap::new();
-        task_runner_types.insert("task.subflow".to_string(), "workflowRef".to_string());
-        let plan = WorkflowSummaryPlan { task_runner_types };
+        let execution = json!({
+            "tasks": {
+                "byId": {
+                    "task.subflow": {
+                        "runner": {
+                            "type": "workflowRef"
+                        }
+                    }
+                }
+            }
+        });
         let index = concat!(
             "1\t1\tworkflow\trun-1\tattempt-1\tworkflow.test.full\ttask.alpha\tqueued\t\t\n",
             "2\t10\tworkflow\trun-1\tattempt-1\tworkflow.test.full\ttask.alpha\trunning\t\t\n",
@@ -536,7 +544,7 @@ mod tests {
             "11\t16\tworkflow\trun-1\tattempt-1\tworkflow.test.full\ttask.gamma\tcanceled\tfail-fast\t130\n",
         );
 
-        let collected = collect_workflow_summary_from_text(&plan, index, "run-1", "attempt-1")
+        let collected = collect_workflow_summary_from_text(&execution, index, "run-1", "attempt-1")
             .expect("summary collection should succeed");
 
         let step_names = collected
