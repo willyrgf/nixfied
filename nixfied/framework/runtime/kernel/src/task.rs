@@ -1,7 +1,7 @@
 use super::*;
 use crate::registry::registry_append_event_internal;
 use crate::runtime_metadata::{
-    load_runtime_metadata, runtime_metadata_task, runtime_metadata_tasks,
+    load_runtime_metadata, runtime_metadata_task, runtime_metadata_tasks, runtime_metadata_workflow,
 };
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -9,6 +9,8 @@ use std::process::{self, Command};
 
 pub(crate) fn task_command(subcommand: &str, values: &[String]) -> Result<(), String> {
     match subcommand {
+        "handoff" => task_handoff_command(values),
+        "env-names" => task_env_names_command(values),
         "run" => task_run_command(values),
         "validate-args" => task_validate_args_command(values),
         other => Err(format!("unknown task subcommand: {}", other)),
@@ -119,6 +121,250 @@ fn task_validate_args_command(values: &[String]) -> Result<(), String> {
     validate_typed_task_args(task, args)?;
     println!("OK: task validate-args");
     Ok(())
+}
+
+fn task_handoff_command(values: &[String]) -> Result<(), String> {
+    if values.len() != 3 {
+        return Err(
+            "usage: nixfied-kernel task handoff <runtime-metadata-file> <task-id> <output-dir>"
+                .to_string(),
+        );
+    }
+
+    let metadata = load_runtime_metadata(&values[0])?;
+    let task_id = &values[1];
+    let output_dir = &values[2];
+    let task = runtime_metadata_task(&metadata, task_id)?;
+    let runner = object_field(task, "runner")
+        .ok_or_else(|| format!("runtime task '{}' missing object field runner", task_id))?;
+    let hooks = object_field(task, "hooks")
+        .ok_or_else(|| format!("runtime task '{}' missing object field hooks", task_id))?;
+    let help = object_field(task, "help")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let produces = object_field(task, "produces")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+
+    let exports = vec![
+        ("NIXFIED_TASK_ID".to_string(), task_id.to_string()),
+        (
+            "NIXFIED_TASK_RUNNER_TYPE".to_string(),
+            object_string(runner, "type").unwrap_or("shell").to_string(),
+        ),
+        (
+            "NIXFIED_TASK_RUNNER_COMMAND".to_string(),
+            object_string(runner, "command").unwrap_or("").to_string(),
+        ),
+        (
+            "NIXFIED_TASK_RUNNER_PACKAGE".to_string(),
+            object_string(runner, "package").unwrap_or("").to_string(),
+        ),
+        (
+            "NIXFIED_TASK_RUNNER_WORKFLOW_ID".to_string(),
+            object_string(runner, "workflowId")
+                .unwrap_or("")
+                .to_string(),
+        ),
+        (
+            "NIXFIED_TASK_MAX_ATTEMPTS".to_string(),
+            task.get("maxAttempts")
+                .and_then(JsonValue::as_i64)
+                .unwrap_or(1)
+                .max(1)
+                .to_string(),
+        ),
+        (
+            "NIXFIED_TASK_HOOK_COUNT".to_string(),
+            hooks
+                .get("count")
+                .and_then(JsonValue::as_i64)
+                .unwrap_or(0)
+                .max(0)
+                .to_string(),
+        ),
+        (
+            "NIXFIED_TASK_PRODUCES_JSON".to_string(),
+            render_json_compact(&produces),
+        ),
+    ];
+
+    write_shell_exports(&format!("{}/exports.sh", output_dir), &exports)?;
+    write_text_atomic(
+        &format!("{}/runtime-plan.sh", output_dir),
+        object_string(task, "runtimePlanShell").unwrap_or(""),
+    )?;
+    write_lines_atomic(
+        &format!("{}/help.txt", output_dir),
+        &array_strings(&help, "lines"),
+    )?;
+    write_lines_atomic(
+        &format!("{}/base-closure-selected-services.txt", output_dir),
+        &array_strings(task, "baseClosureSelectedServices"),
+    )?;
+    write_lines_atomic(
+        &format!("{}/retry-backoff-values.txt", output_dir),
+        &task_retry_backoff_values(task),
+    )?;
+    write_lines_atomic(
+        &format!("{}/pre-hook-ids.txt", output_dir),
+        &array_strings(hooks, "preIds"),
+    )?;
+    write_lines_atomic(
+        &format!("{}/post-hook-ids.txt", output_dir),
+        &array_strings(hooks, "postIds"),
+    )?;
+
+    task_write_hook_handoffs(output_dir, hooks, "pre")?;
+    task_write_hook_handoffs(output_dir, hooks, "post")?;
+    Ok(())
+}
+
+fn task_write_hook_handoffs(
+    output_dir: &str,
+    hooks: &JsonValue,
+    phase_key: &str,
+) -> Result<(), String> {
+    let phase_hooks = object_field(hooks, phase_key)
+        .and_then(JsonValue::as_object)
+        .cloned()
+        .unwrap_or_default();
+    for (hook_id, hook) in phase_hooks {
+        let hook_dir = format!("{}/hooks/{}/{}", output_dir, phase_key, hook_id);
+        let exports = vec![(
+            "NIXFIED_TASK_HOOK_COMMAND".to_string(),
+            object_string(&hook, "command").unwrap_or("").to_string(),
+        )];
+        write_shell_exports(&format!("{}/exports.sh", hook_dir), &exports)?;
+        write_text_atomic(
+            &format!("{}/runtime-plan.sh", hook_dir),
+            object_string(&hook, "runtimePlanShell").unwrap_or(""),
+        )?;
+    }
+    Ok(())
+}
+
+fn task_env_names_command(values: &[String]) -> Result<(), String> {
+    if values.len() != 2 {
+        return Err(
+            "usage: nixfied-kernel task env-names <runtime-metadata-file> <task-id>".to_string(),
+        );
+    }
+
+    let metadata = load_runtime_metadata(&values[0])?;
+    let mut env_names = BTreeSet::new();
+    let mut seen_tasks = BTreeSet::new();
+    let mut seen_workflows = BTreeSet::new();
+    collect_task_env_names(
+        &metadata,
+        &values[1],
+        &mut seen_tasks,
+        &mut seen_workflows,
+        &mut env_names,
+    )?;
+    for env_name in env_names {
+        println!("{}", env_name);
+    }
+    Ok(())
+}
+
+fn task_retry_backoff_values(task: &JsonValue) -> Vec<String> {
+    object_array(task, "retryBackoffValues")
+        .unwrap_or(&[])
+        .iter()
+        .filter_map(json_value_to_plain_string)
+        .collect()
+}
+
+fn collect_task_env_names(
+    metadata: &JsonValue,
+    task_id: &str,
+    seen_tasks: &mut BTreeSet<String>,
+    seen_workflows: &mut BTreeSet<String>,
+    env_names: &mut BTreeSet<String>,
+) -> Result<(), String> {
+    if task_id.is_empty() || !seen_tasks.insert(task_id.to_string()) {
+        return Ok(());
+    }
+
+    let task = runtime_metadata_task(metadata, task_id)?;
+    env_names.extend(array_strings(task, "passThroughEnvNames"));
+
+    if let Some(hooks) = object_field(task, "hooks") {
+        for phase_key in ["pre", "post"] {
+            if let Some(phase_hooks) = object_field(hooks, phase_key).and_then(JsonValue::as_object)
+            {
+                for hook in phase_hooks.values() {
+                    env_names.extend(array_strings(hook, "passThroughEnvNames"));
+                }
+            }
+        }
+    }
+
+    if let Some(deps) = object_field(task, "deps") {
+        for dependency in array_strings(deps, "needs") {
+            collect_task_env_names(metadata, &dependency, seen_tasks, seen_workflows, env_names)?;
+        }
+        for dependency in array_strings(deps, "softNeeds") {
+            collect_task_env_names(metadata, &dependency, seen_tasks, seen_workflows, env_names)?;
+        }
+    }
+
+    if let Some(runner) = object_field(task, "runner") {
+        if object_string(runner, "type") == Some("workflowRef") {
+            let workflow_id = object_string(runner, "workflowId").unwrap_or("");
+            if !workflow_id.is_empty() {
+                collect_workflow_env_names(
+                    metadata,
+                    workflow_id,
+                    seen_tasks,
+                    seen_workflows,
+                    env_names,
+                )?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn collect_workflow_env_names(
+    metadata: &JsonValue,
+    workflow_id: &str,
+    seen_tasks: &mut BTreeSet<String>,
+    seen_workflows: &mut BTreeSet<String>,
+    env_names: &mut BTreeSet<String>,
+) -> Result<(), String> {
+    if workflow_id.is_empty() || !seen_workflows.insert(workflow_id.to_string()) {
+        return Ok(());
+    }
+
+    let workflow = runtime_metadata_workflow(metadata, workflow_id)?;
+    for dependency in task_workflow_phase_tasks(workflow, "preRun") {
+        collect_task_env_names(metadata, &dependency, seen_tasks, seen_workflows, env_names)?;
+    }
+
+    if let Some(plan) = object_field(workflow, "plan").and_then(JsonValue::as_array) {
+        for unit in plan {
+            let task_id = object_string(unit, "taskId").unwrap_or("");
+            if !task_id.is_empty() {
+                collect_task_env_names(metadata, task_id, seen_tasks, seen_workflows, env_names)?;
+            }
+        }
+    }
+
+    for dependency in task_workflow_phase_tasks(workflow, "postRun") {
+        collect_task_env_names(metadata, &dependency, seen_tasks, seen_workflows, env_names)?;
+    }
+
+    Ok(())
+}
+
+fn task_workflow_phase_tasks(workflow: &JsonValue, phase_key: &str) -> Vec<String> {
+    object_field(workflow, "phases")
+        .and_then(|phases| object_field(phases, phase_key))
+        .map(|phase| array_strings(phase, "tasks"))
+        .unwrap_or_default()
 }
 
 fn load_task_dependency_plan(metadata: &JsonValue) -> Result<TaskDependencyPlan, String> {

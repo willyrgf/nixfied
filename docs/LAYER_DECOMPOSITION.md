@@ -434,7 +434,7 @@ What to evaluate in solutions:
 Current files:
 
 - `nixfied/framework/runtime/executor.nix`
-- `nixfied/framework/runtime/executor-runtime.nix`
+- `nixfied/framework/runtime/runtime-handoff.nix`
 
 Necessary:
 
@@ -474,7 +474,7 @@ What to evaluate in solutions:
 - should the kernel own task dependency execution fully?
 - should summary and runtime metadata stop round-tripping through shell exports?
 
-### 10. Runtime Metadata Projection And Shell Query Layer
+### 10. Runtime Metadata Projection And Runtime Handoff Layer
 
 Current files:
 
@@ -497,7 +497,7 @@ Accidental:
 
 - top-level runtime metadata compilation remaining separate from the canonical
   execution graph
-- shell still asking the kernel for task and workflow runtime fields piecemeal
+- shell still needing a runtime handoff layer for OS-edge task and workflow execution
 - loader commands and runtime projections surviving after the named
   `runtime-metadata.nix` file was deleted
 
@@ -512,7 +512,7 @@ Collapse/Delete pressure:
 Minimal retained role:
 
 - ideally none
-- next best would be one coarse runtime handoff rather than a getter library
+- current fallback is one coarse runtime handoff rather than a getter library
 
 What to evaluate in solutions:
 

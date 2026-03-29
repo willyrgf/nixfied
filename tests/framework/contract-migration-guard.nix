@@ -84,7 +84,7 @@ let
   probePlanRuntimeSource = builtins.readFile ../../nixfied/framework/runtime/helpers/probe-plan-runtime.nix;
   dispatcherSource = builtins.readFile ../../nixfied/framework/runtime/dispatcher.nix;
   executorSource = builtins.readFile ../../nixfied/framework/runtime/executor.nix;
-  executorRuntimeSource = builtins.readFile ../../nixfied/framework/runtime/executor-runtime.nix;
+  runtimeHandoffSource = builtins.readFile ../../nixfied/framework/runtime/runtime-handoff.nix;
   orchestratorSource = builtins.readFile ../../nixfied/framework/runtime/orchestrator.nix;
   orchestratorRuntimeSource = builtins.readFile ../../nixfied/framework/runtime/orchestrator-runtime.nix;
   replaySource = builtins.readFile ../../nixfied/framework/runtime/registry/replay.nix;
@@ -124,6 +124,7 @@ let
     ../../nixfied/framework/runtime/service-selection.nix
     ../../nixfied/framework/runtime/orchestrator-control.nix
     ../../nixfied/framework/runtime/runtime-metadata.nix
+    ../../nixfied/framework/runtime/executor-runtime.nix
     ../../nixfied/framework/runtime/services/service-operations-builder.nix
     ../../nixfied/compiler/compile-selection-index.nix
     ../../nixfied/compiler/compile-app-execution-manifests.nix
@@ -147,7 +148,8 @@ assert !(pkgs.lib.hasInfix "validatorProgram" machineOutputSource);
 assert !(pkgs.lib.hasInfix "runtimeMetadata = compileRuntimeMetadata" compilerDefaultSource);
 assert !(pkgs.lib.hasInfix "runtimeMetadata ? null" finalizeModelSource);
 assert !(pkgs.lib.hasInfix "runtimeMetadata = runtimeMetadata;" finalizeModelSource);
-assert !(pkgs.lib.hasInfix "runtimeControlOrchestrator = import ../runtime/orchestrator.nix" mkFlakeOutputsSource);
+assert
+  !(pkgs.lib.hasInfix "runtimeControlOrchestrator = import ../runtime/orchestrator.nix" mkFlakeOutputsSource);
 assert !(pkgs.lib.hasInfix "runtimeControlApps = builtins.listToAttrs" mkFlakeOutputsSource);
 assert !(pkgs.lib.hasInfix "runtimeControlHelpFiles = {" mkFlakeOutputsSource);
 assert !(pkgs.lib.hasInfix "\"flake-check\"" frameworkTestPresetSource);
@@ -178,16 +180,17 @@ assert pkgs.lib.hasInfix "\"runs\" = mkShellApp" dispatcherSource;
 assert pkgs.lib.hasInfix "\"stop-run\" = mkShellApp" dispatcherSource;
 assert pkgs.lib.hasInfix "\"stop-all-runs\" = mkShellApp" dispatcherSource;
 assert pkgs.lib.hasInfix "executionEnabled ? true" dispatcherSource;
-assert pkgs.lib.hasInfix "workflow_family_from_id() {" executorRuntimeSource;
-assert pkgs.lib.hasInfix "workflow_family_modes_joined() {" executorRuntimeSource;
-assert pkgs.lib.hasInfix "workflow_simple_shorthand_exists_for_family() {" executorRuntimeSource;
-assert pkgs.lib.hasInfix "workflow_resolve_mode_id() {" executorRuntimeSource;
-assert pkgs.lib.hasInfix "((model.compiled or { }).execution or { })" executorRuntimeSource;
-assert !(pkgs.lib.hasInfix "((model.compiled or { }).runtimeMetadata or {" executorRuntimeSource);
-assert !(pkgs.lib.hasInfix "nixfied-kernel workflow resolve-mode" executorRuntimeSource);
-assert !(pkgs.lib.hasInfix "nixfied-kernel workflow load-runtime" executorRuntimeSource);
-assert !(pkgs.lib.hasInfix "nixfied-kernel task load-runtime" executorRuntimeSource);
-assert !(pkgs.lib.hasInfix "nixfied-kernel task load-hook" executorRuntimeSource);
+assert pkgs.lib.hasInfix "task_handoff_ensure() {" runtimeHandoffSource;
+assert pkgs.lib.hasInfix "workflow_handoff_ensure() {" runtimeHandoffSource;
+assert pkgs.lib.hasInfix "workflow_simple_shorthand_exists_for_family() {" runtimeHandoffSource;
+assert pkgs.lib.hasInfix "workflow_resolve_mode_id() {" runtimeHandoffSource;
+assert pkgs.lib.hasInfix "nixfied-kernel task handoff" runtimeHandoffSource;
+assert pkgs.lib.hasInfix "nixfied-kernel workflow handoff" runtimeHandoffSource;
+assert pkgs.lib.hasInfix "nixfied-kernel workflow resolve-mode" runtimeHandoffSource;
+assert !(pkgs.lib.hasInfix "renderCaseReturn =" runtimeHandoffSource);
+assert !(pkgs.lib.hasInfix "renderCasePrintLines =" runtimeHandoffSource);
+assert !(pkgs.lib.hasInfix "workflow-unit:" runtimeHandoffSource);
+assert !(pkgs.lib.hasInfix "((model.compiled or { }).execution or { })" runtimeHandoffSource);
 assert !(pkgs.lib.hasInfix "runtimeMetadataShell = import ./runtime-metadata.nix" executorSource);
 assert !(pkgs.lib.hasInfix "import ./runtime-metadata.nix" orchestratorSource);
 assert !(pkgs.lib.hasInfix "done < <(task_needs \"$current_task\")" executorSource);
@@ -229,5 +232,5 @@ assert
 assert !(pkgs.lib.hasInfix "python3" readyHeliosSyncGateSource);
 assert !(pkgs.lib.hasInfix "http.server" readyHeliosSyncGateSource);
 pkgs.runCommand "contract-migration-guard" { } ''
-  echo "OK: hardening guards enforce deleted validators/CUE/run-registry/static service-surface/apps module, deleted workflow-mode/runtime-metadata seams, explicit framework::test profile layout, owner-local descriptor handoff, kernel-owned task/workflow execution and registry replay, jq-free runtime/build-check seams, no authored nixfied.apps, no Python responders in framework/runtime tests, and no deprecated kernel seams in framework runtime or kernel source" > "$out"
+  echo "OK: hardening guards enforce deleted validators/CUE/run-registry/static service-surface/apps module, deleted workflow-mode/runtime-metadata and executor-runtime seams, explicit framework::test profile layout, cached kernel-backed runtime handoff, kernel-owned task/workflow execution and registry replay, jq-free runtime/build-check seams, no authored nixfied.apps, no Python responders in framework/runtime tests, and no deprecated kernel seams in framework runtime or kernel source" > "$out"
 ''
