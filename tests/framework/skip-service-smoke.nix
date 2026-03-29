@@ -4,7 +4,7 @@
 }:
 let
   lib = pkgs.lib;
-  withRuntimeMetadata = import ./lib/with-runtime-metadata.nix { inherit pkgs; };
+  withCompiledExecution = import ./lib/with-compiled-execution.nix { inherit pkgs; };
   frameworkLib = import ../../nixfied/framework/core {
     inherit pkgs;
     system = pkgs.system;
@@ -61,7 +61,7 @@ let
   skipService = "postgres";
   skipEnvVar = "SKIP_${lib.toUpper skipService}";
 
-  probeModel = withRuntimeMetadata (
+  probeModel = withCompiledExecution (
     compiled.model
     // {
       serviceCatalog = compiled.model.serviceCatalog // {
