@@ -189,7 +189,6 @@ Current files:
 - `nixfied/compiler/finalize-model.nix`
 - `nixfied/compiler/compile-execution.nix`
 - `nixfied/compiler/compile-validation-ir.nix`
-- `nixfied/compiler/compile-runtime-metadata.nix`
 - `nixfied/compiler/compile-service-catalog.nix`
 - `nixfied/compiler/compile-service-sets.nix`
 - `nixfied/compiler/compile-service-surface-catalog.nix`
@@ -307,7 +306,6 @@ What to evaluate in solutions:
 Current files:
 
 - `nixfied/compiler/compile-execution.nix`
-- `nixfied/compiler/compile-runtime-metadata.nix`
 - `nixfied/framework/core/mkFlakeOutputs.nix`
 - `nixfied/framework/core/materializeExecution.nix`
 
@@ -321,8 +319,8 @@ Accidental:
 
 - shell selection CSV logic still lives in launcher wrappers and app-resolution
   paths
-- narrowed execution manifests and top-level runtime metadata still exist beside
-  the canonical execution graph
+- narrowed execution manifests and nested runtime metadata projections still
+  exist beside the canonical execution graph
 - selected-service closure logic is still spread across compiler execution data,
   launcher resolution, and runtime materialization
 - the named `service-selection.nix` seam is gone, but the duplicated selection
@@ -481,7 +479,7 @@ What to evaluate in solutions:
 Current files:
 
 - `nixfied/compiler/default.nix`
-- `nixfied/compiler/compile-runtime-metadata.nix`
+- `nixfied/compiler/compile-execution.nix`
 - `nixfied/framework/runtime/executor.nix`
 - `nixfied/framework/runtime/orchestrator.nix`
 - `nixfied/framework/runtime/kernel/src/task.rs`

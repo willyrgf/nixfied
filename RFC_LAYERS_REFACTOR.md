@@ -304,10 +304,11 @@ The deleted `workflow-modes.nix` responsibilities did not vanish.
 
 They were reintroduced in compiled form via:
 
-- `nixfied/compiler/compile-runtime-metadata.nix`
+- `nixfied/compiler/compile-execution.nix`
 
-This file now owns the merged task runtime, hook runtime, and shell-plan
-rendering logic that used to live in the old workflow modes layer.
+That file now owns the merged task runtime, hook runtime, and shell-plan
+rendering logic as a nested `runtimeMetadata` projection that used to live in
+the old workflow modes layer.
 
 ### 2. A compiled runtime metadata projection plus a shell case-table API
 
@@ -316,12 +317,12 @@ gone.
 
 Its responsibilities still survive through:
 
-- `nixfied/compiler/compile-runtime-metadata.nix`
+- `nixfied/compiler/compile-execution.nix`
 - `nixfied/framework/runtime/executor-runtime.nix`
 - `nixfied/framework/runtime/kernel/src/runtime_metadata.rs`
 
-`compile-runtime-metadata.nix` still materializes merged task, hook, and
-workflow runtime data as a separate projection family.
+`compile-execution.nix` still materializes merged task, hook, and workflow
+runtime data as a nested `runtimeMetadata` projection family.
 
 `executor-runtime.nix` then turns that projection into shell case tables and
 helper functions that the executor and orchestrator use in-process.
@@ -365,7 +366,7 @@ must carry.
 ### Runtime-plan generation
 
 Three representative functions moved almost directly from the deleted
-`workflow-modes.nix` into `compile-runtime-metadata.nix`:
+`workflow-modes.nix` into `compile-execution.nix`:
 
 - `mergeTaskRuntimeWithRunnerPackage`
 - `mergeHookRuntime`
@@ -1128,7 +1129,6 @@ Primary files:
 
 - `nixfied/compiler/default.nix`
 - `nixfied/compiler/compile-execution.nix`
-- `nixfied/compiler/compile-runtime-metadata.nix`
 - `nixfied/compiler/finalize-model.nix`
 - `nixfied/framework/core/mkLauncherMetadata.nix`
 - `nixfied/framework/core/mkFlakeOutputs.nix`
@@ -1178,8 +1178,8 @@ Goal:
 
 Required deletions:
 
-- delete `nixfied/compiler/compile-runtime-metadata.nix` as a separate
-  architecture family
+- delete the remaining nested `runtimeMetadata` projection inside
+  `nixfied/compiler/compile-execution.nix`
 - delete `nixfied/framework/runtime/executor-runtime.nix` as a shell metadata
   case-table layer
 - delete fine-grained runtime metadata loads and helpers used only to feed shell
@@ -1191,7 +1191,7 @@ Required deletions:
 Primary files:
 
 - `nixfied/compiler/default.nix`
-- `nixfied/compiler/compile-runtime-metadata.nix`
+- `nixfied/compiler/compile-execution.nix`
 - `nixfied/framework/runtime/executor-runtime.nix`
 - `nixfied/framework/runtime/executor.nix`
 - `nixfied/framework/runtime/orchestrator.nix`

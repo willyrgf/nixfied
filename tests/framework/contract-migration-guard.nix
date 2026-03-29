@@ -130,6 +130,7 @@ let
     ../../nixfied/compiler/compile-runtime-manifest.nix
     ../../nixfied/framework/runtime/services/public-surface.nix
     ../../nixfied/modules/apps.nix
+    ../../nixfied/compiler/compile-runtime-metadata.nix
     ../../tests/framework/snapshots/contracts/example.cue
   ];
 in
