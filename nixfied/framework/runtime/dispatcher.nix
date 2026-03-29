@@ -10,6 +10,7 @@
   serviceSetPrograms ? { },
   serviceHookEnv ? { },
   executionEnabled ? true,
+  includeRuntimeControlApps ? true,
 }:
 let
   lib = pkgs.lib;
@@ -291,6 +292,28 @@ in
     '';
   };
 
+  "help" = mkShellApp {
+    appName = "help";
+    body = ''
+      cat ${helpFile}
+    '';
+  };
+
+  "docs" = mkShellApp {
+    appName = "docs";
+    body = ''
+      cat ${docsFile}
+    '';
+  };
+
+  "features" = mkShellApp {
+    appName = "features";
+    body = ''
+      cat ${featuresFile}
+    '';
+  };
+}
+// lib.optionalAttrs includeRuntimeControlApps {
   "runs" = mkShellApp {
     appName = "runs";
     body = ''
@@ -345,27 +368,6 @@ in
         nixfied_exit_usage "usage: stop-all-runs"
       fi
       NIXFIED_CALLER_PWD="$PWD" exec ${orchestratorProgram} stop-all-runs
-    '';
-  };
-
-  "help" = mkShellApp {
-    appName = "help";
-    body = ''
-      cat ${helpFile}
-    '';
-  };
-
-  "docs" = mkShellApp {
-    appName = "docs";
-    body = ''
-      cat ${docsFile}
-    '';
-  };
-
-  "features" = mkShellApp {
-    appName = "features";
-    body = ''
-      cat ${featuresFile}
     '';
   };
 }

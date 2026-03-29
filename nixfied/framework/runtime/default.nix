@@ -13,6 +13,7 @@
       appPrograms ? { },
       serviceSetPrograms ? { },
       serviceHookEnv ? { },
+      includeRuntimeControlApps ? true,
     }:
     import ./dispatcher.nix {
       inherit
@@ -26,6 +27,7 @@
         appPrograms
         serviceSetPrograms
         serviceHookEnv
+        includeRuntimeControlApps
         ;
     };
 }

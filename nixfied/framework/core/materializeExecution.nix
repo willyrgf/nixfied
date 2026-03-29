@@ -236,6 +236,7 @@ let
     appPrograms = appPrograms;
     serviceSetPrograms = serviceSetPrograms;
     serviceHookEnv = serviceRuntimeSurfaces.serviceHookEnv;
+    includeRuntimeControlApps = false;
   };
 in
 {
