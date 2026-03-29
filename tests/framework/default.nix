@@ -54,7 +54,7 @@ let
       || lib.hasInfix "summary" name
       || lib.hasInfix "parallel-runner" name
       || lib.hasInfix "parallel-worker" name
-      || lib.hasInfix "executor-runtime" name
+      || lib.hasInfix "runtime-handoff" name
       || lib.hasInfix "orchestrator-runtime" name
       || lib.hasInfix "runtime-env" name
       || lib.hasInfix "service-policy-runtime" name
@@ -500,7 +500,7 @@ let
       inherit pkgs;
     };
 
-    "executor-runtime-contract" = import ./executor-runtime-contract.nix {
+    "runtime-handoff-contract" = import ./runtime-handoff-contract.nix {
       inherit pkgs;
     };
 

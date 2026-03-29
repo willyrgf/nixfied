@@ -14,9 +14,7 @@
 #   - RUN_SUFFIX_REASON  (set to "" by caller before compute_run_id)
 #   - sha256_text()
 #   - registry_lock_acquire / registry_lock_release
-#   - task_runtime_pass_through_env_names, task_hook_runtime_pass_through_env_names,
-#     task_hook_ids, task_needs, task_soft_needs, task_runner_type,
-#     task_runner_workflow_id, workflow_phase_tasks, workflow_plan_task_ids
+#   - NIXFIED_MODEL_FILE
 #   - ${kernelPackage}/bin/nixfied-kernel  (interpolated by Nix)
 #   - ${pkgs.coreutils}/bin/sort           (interpolated by Nix)
 {
@@ -70,85 +68,18 @@ in
     local task_id="$3"
     local env_file=""
     local env_names_file=""
-    local env_name=""
-    local dep_task_id=""
-    local phase=""
-    local hook_id=""
-    local runner_type=""
-    local nested_workflow_id=""
-    local unit_json=""
-    local unit_task_id=""
-    local -A seen_tasks
-    local -A seen_workflows
-
-    collect_task_env_names() {
-      local current_task_id="$1"
-
-      if [ -z "$current_task_id" ] || [ -n "''${seen_tasks[$current_task_id]:-}" ]; then
-        return 0
-      fi
-      seen_tasks[$current_task_id]=1
-
-      task_runtime_pass_through_env_names "$current_task_id"
-
-      for phase in pre post; do
-        while IFS= read -r hook_id; do
-          [ -n "$hook_id" ] || continue
-          task_hook_runtime_pass_through_env_names "$current_task_id" "$phase" "$hook_id"
-        done < <(task_hook_ids "$current_task_id" "$phase" 2>/dev/null || true)
-      done
-
-      while IFS= read -r dep_task_id; do
-        [ -n "$dep_task_id" ] || continue
-        collect_task_env_names "$dep_task_id"
-      done < <(task_needs "$current_task_id" 2>/dev/null || true)
-
-      while IFS= read -r dep_task_id; do
-        [ -n "$dep_task_id" ] || continue
-        collect_task_env_names "$dep_task_id"
-      done < <(task_soft_needs "$current_task_id" 2>/dev/null || true)
-
-      runner_type="$(task_runner_type "$current_task_id")"
-      if [ "$runner_type" = "workflowRef" ]; then
-        nested_workflow_id="$(task_runner_workflow_id "$current_task_id")"
-        if [ -n "$nested_workflow_id" ]; then
-          collect_workflow_env_names "$nested_workflow_id"
-        fi
-      fi
-    }
-
-    collect_workflow_env_names() {
-      local current_workflow_id="$1"
-
-      if [ -z "$current_workflow_id" ] || [ -n "''${seen_workflows[$current_workflow_id]:-}" ]; then
-        return 0
-      fi
-      seen_workflows[$current_workflow_id]=1
-
-      while IFS= read -r dep_task_id; do
-        [ -n "$dep_task_id" ] || continue
-        collect_task_env_names "$dep_task_id"
-      done < <(workflow_phase_tasks "$current_workflow_id" preRun 2>/dev/null || true)
-
-      while IFS= read -r unit_task_id; do
-        [ -n "$unit_task_id" ] || continue
-        collect_task_env_names "$unit_task_id"
-      done < <(workflow_plan_task_ids "$current_workflow_id" 2>/dev/null || true)
-
-      while IFS= read -r dep_task_id; do
-        [ -n "$dep_task_id" ] || continue
-        collect_task_env_names "$dep_task_id"
-      done < <(workflow_phase_tasks "$current_workflow_id" postRun 2>/dev/null || true)
-    }
 
     env_names_file="$(mktemp "''${TMPDIR:-/tmp}/nixfied-run-id-env-names.XXXXXX")" || return 1
 
     case "$run_kind" in
       task)
-        collect_task_env_names "$task_id"
+        ${kernelPackage}/bin/nixfied-kernel task env-names "$NIXFIED_MODEL_FILE" "$task_id"
         ;;
       workflow)
-        collect_workflow_env_names "$workflow_id"
+        ${kernelPackage}/bin/nixfied-kernel workflow env-names "$NIXFIED_MODEL_FILE" "$workflow_id"
+        ;;
+      *)
+        :
         ;;
     esac | ${pkgs.coreutils}/bin/sort -u > "$env_names_file"
 

@@ -49,7 +49,7 @@ let
 
     kernel = [
       "ephemeral-runtime-env-isolation-smoke"
-      "executor-runtime-contract"
+      "runtime-handoff-contract"
       "isolation-nested-run-id-smoke"
       "kernel-native-tests"
       "nix-checks-parent-workflow-skip-smoke"

@@ -14,7 +14,8 @@ pub(crate) fn load_runtime_metadata(path: &str) -> Result<JsonValue, String> {
         "runtime metadata source missing object field compiled.execution".to_string()
     })?;
     let metadata = object_field(execution, "runtimeMetadata").ok_or_else(|| {
-        "runtime metadata source missing object field compiled.execution.runtimeMetadata".to_string()
+        "runtime metadata source missing object field compiled.execution.runtimeMetadata"
+            .to_string()
     })?;
     let kind = object_field(metadata, "schema")
         .and_then(|schema| object_string(schema, "kind"))

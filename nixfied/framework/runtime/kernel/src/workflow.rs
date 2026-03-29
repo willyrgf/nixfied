@@ -1,6 +1,8 @@
 use super::*;
 use crate::registry::registry_append_event_internal;
-use crate::runtime_metadata::{load_runtime_metadata, runtime_metadata_task, runtime_metadata_workflow};
+use crate::runtime_metadata::{
+    load_runtime_metadata, runtime_metadata_task, runtime_metadata_workflow,
+};
 
 use std::collections::BTreeMap;
 use std::process::{self, Command};
@@ -98,9 +100,280 @@ pub(crate) fn mark_failed_unit<U: WorkflowUnitStateCommon>(
 
 pub(crate) fn workflow_command(subcommand: &str, values: &[String]) -> Result<(), String> {
     match subcommand {
+        "env-names" => workflow_env_names_command(values),
+        "handoff" => workflow_handoff_command(values),
+        "resolve-mode" => workflow_resolve_mode_command(values),
         "run" => workflow_run_command(values),
         other => Err(format!("unknown workflow subcommand: {}", other)),
     }
+}
+
+pub(crate) fn workflow_family_from_id(workflow_id: &str) -> Option<String> {
+    let mut parts = workflow_id.split('.');
+    match (parts.next(), parts.next(), parts.next()) {
+        (Some("workflow"), Some(family), Some(_mode)) if !family.is_empty() => {
+            Some(family.to_string())
+        }
+        _ => None,
+    }
+}
+
+fn workflow_family_modes(metadata: &JsonValue, family: &str) -> Vec<String> {
+    object_field(metadata, "workflowFamilies")
+        .and_then(|families| object_field(families, family))
+        .map(|entry| array_strings(entry, "modes"))
+        .unwrap_or_default()
+}
+
+pub(crate) fn workflow_resolve_mode_id(
+    metadata: &JsonValue,
+    workflow_id: &str,
+    mode_override: &str,
+) -> Result<String, String> {
+    runtime_metadata_workflow(metadata, workflow_id)?;
+    if mode_override.is_empty() {
+        return Ok(workflow_id.to_string());
+    }
+
+    let family = workflow_family_from_id(workflow_id)
+        .ok_or_else(|| format!("workflow '{}' does not support mode overrides", workflow_id))?;
+    let candidate = format!("workflow.{}.{}", family, mode_override);
+    if runtime_metadata_workflow(metadata, &candidate).is_ok() {
+        return Ok(candidate);
+    }
+
+    let expected_modes = workflow_family_modes(metadata, &family).join("|");
+    if expected_modes.is_empty() {
+        Err(format!("unknown mode '{}'", mode_override))
+    } else {
+        Err(format!(
+            "unknown mode '{}' (expected: {})",
+            mode_override, expected_modes
+        ))
+    }
+}
+
+fn workflow_resolve_mode_command(values: &[String]) -> Result<(), String> {
+    if values.len() != 3 {
+        return Err(
+            "usage: nixfied-kernel workflow resolve-mode <runtime-metadata-file> <workflow-id> <mode-override>"
+                .to_string(),
+        );
+    }
+
+    let metadata = load_runtime_metadata(&values[0])?;
+    let resolved = workflow_resolve_mode_id(&metadata, &values[1], &values[2])?;
+    println!("{}", resolved);
+    Ok(())
+}
+
+fn workflow_handoff_command(values: &[String]) -> Result<(), String> {
+    if values.len() != 3 {
+        return Err(
+            "usage: nixfied-kernel workflow handoff <runtime-metadata-file> <workflow-id> <output-dir>"
+                .to_string(),
+        );
+    }
+
+    let metadata = load_runtime_metadata(&values[0])?;
+    let workflow_id = &values[1];
+    let output_dir = &values[2];
+    let workflow = runtime_metadata_workflow(&metadata, workflow_id)?;
+    let logging = object_field(workflow, "logging")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let exports = vec![
+        ("NIXFIED_WORKFLOW_ID".to_string(), workflow_id.to_string()),
+        (
+            "NIXFIED_WORKFLOW_MODE_NAME".to_string(),
+            object_string(workflow, "mode")
+                .unwrap_or("custom")
+                .to_string(),
+        ),
+        (
+            "NIXFIED_WORKFLOW_ARTIFACTS_ROOT".to_string(),
+            object_string(workflow, "artifactsRoot")
+                .unwrap_or("")
+                .to_string(),
+        ),
+        (
+            "NIXFIED_WORKFLOW_EPHEMERAL_FLAG".to_string(),
+            if object_bool(workflow, "ephemeralEnabled").unwrap_or(false) {
+                "1".to_string()
+            } else {
+                "0".to_string()
+            },
+        ),
+        (
+            "NIXFIED_WORKFLOW_LOGGING_LEVEL_DEFAULT".to_string(),
+            object_string(&logging, "levelDefault")
+                .unwrap_or("")
+                .to_string(),
+        ),
+        (
+            "NIXFIED_WORKFLOW_LOGGING_OUTPUT_DEFAULT".to_string(),
+            object_string(&logging, "outputDefault")
+                .unwrap_or("")
+                .to_string(),
+        ),
+        (
+            "NIXFIED_WORKFLOW_PARALLEL_ENABLED".to_string(),
+            if object_bool(workflow, "parallelEnabled").unwrap_or(false) {
+                "true".to_string()
+            } else {
+                "false".to_string()
+            },
+        ),
+        (
+            "NIXFIED_WORKFLOW_MAX_WORKERS".to_string(),
+            workflow
+                .get("maxWorkers")
+                .and_then(JsonValue::as_i64)
+                .unwrap_or(1)
+                .max(1)
+                .to_string(),
+        ),
+        (
+            "NIXFIED_WORKFLOW_WRITE_SUMMARY".to_string(),
+            if object_bool(workflow, "writeSummary").unwrap_or(false) {
+                "true".to_string()
+            } else {
+                "false".to_string()
+            },
+        ),
+    ];
+    write_shell_exports(&format!("{}/exports.sh", output_dir), &exports)?;
+    write_lines_atomic(
+        &format!("{}/unit-closure-selected-services.txt", output_dir),
+        &array_strings(workflow, "unitClosureSelectedServices"),
+    )?;
+    Ok(())
+}
+
+fn workflow_env_names_command(values: &[String]) -> Result<(), String> {
+    if values.len() != 2 {
+        return Err(
+            "usage: nixfied-kernel workflow env-names <runtime-metadata-file> <workflow-id>"
+                .to_string(),
+        );
+    }
+
+    let metadata = load_runtime_metadata(&values[0])?;
+    let mut env_names = std::collections::BTreeSet::new();
+    let mut seen_tasks = std::collections::BTreeSet::new();
+    let mut seen_workflows = std::collections::BTreeSet::new();
+    workflow_collect_env_names(
+        &metadata,
+        &values[1],
+        &mut seen_tasks,
+        &mut seen_workflows,
+        &mut env_names,
+    )?;
+    for env_name in env_names {
+        println!("{}", env_name);
+    }
+    Ok(())
+}
+
+fn workflow_collect_env_names(
+    metadata: &JsonValue,
+    workflow_id: &str,
+    seen_tasks: &mut std::collections::BTreeSet<String>,
+    seen_workflows: &mut std::collections::BTreeSet<String>,
+    env_names: &mut std::collections::BTreeSet<String>,
+) -> Result<(), String> {
+    if workflow_id.is_empty() || !seen_workflows.insert(workflow_id.to_string()) {
+        return Ok(());
+    }
+
+    let workflow = runtime_metadata_workflow(metadata, workflow_id)?;
+    for task_id in workflow_phase_tasks(workflow, "preRun") {
+        workflow_collect_task_env_names(metadata, &task_id, seen_tasks, seen_workflows, env_names)?;
+    }
+
+    if let Some(plan) = object_field(workflow, "plan").and_then(JsonValue::as_array) {
+        for unit in plan {
+            let task_id = object_string(unit, "taskId").unwrap_or("");
+            if !task_id.is_empty() {
+                workflow_collect_task_env_names(
+                    metadata,
+                    task_id,
+                    seen_tasks,
+                    seen_workflows,
+                    env_names,
+                )?;
+            }
+        }
+    }
+
+    for task_id in workflow_phase_tasks(workflow, "postRun") {
+        workflow_collect_task_env_names(metadata, &task_id, seen_tasks, seen_workflows, env_names)?;
+    }
+    Ok(())
+}
+
+fn workflow_collect_task_env_names(
+    metadata: &JsonValue,
+    task_id: &str,
+    seen_tasks: &mut std::collections::BTreeSet<String>,
+    seen_workflows: &mut std::collections::BTreeSet<String>,
+    env_names: &mut std::collections::BTreeSet<String>,
+) -> Result<(), String> {
+    if task_id.is_empty() || !seen_tasks.insert(task_id.to_string()) {
+        return Ok(());
+    }
+
+    let task = runtime_metadata_task(metadata, task_id)?;
+    env_names.extend(array_strings(task, "passThroughEnvNames"));
+
+    if let Some(hooks) = object_field(task, "hooks") {
+        for phase_key in ["pre", "post"] {
+            if let Some(phase_hooks) = object_field(hooks, phase_key).and_then(JsonValue::as_object)
+            {
+                for hook in phase_hooks.values() {
+                    env_names.extend(array_strings(hook, "passThroughEnvNames"));
+                }
+            }
+        }
+    }
+
+    if let Some(deps) = object_field(task, "deps") {
+        for dependency in array_strings(deps, "needs") {
+            workflow_collect_task_env_names(
+                metadata,
+                &dependency,
+                seen_tasks,
+                seen_workflows,
+                env_names,
+            )?;
+        }
+        for dependency in array_strings(deps, "softNeeds") {
+            workflow_collect_task_env_names(
+                metadata,
+                &dependency,
+                seen_tasks,
+                seen_workflows,
+                env_names,
+            )?;
+        }
+    }
+
+    if let Some(runner) = object_field(task, "runner") {
+        if object_string(runner, "type") == Some("workflowRef") {
+            let nested_workflow_id = object_string(runner, "workflowId").unwrap_or("");
+            if !nested_workflow_id.is_empty() {
+                workflow_collect_env_names(
+                    metadata,
+                    nested_workflow_id,
+                    seen_tasks,
+                    seen_workflows,
+                    env_names,
+                )?;
+            }
+        }
+    }
+
+    Ok(())
 }
 
 #[derive(Clone)]

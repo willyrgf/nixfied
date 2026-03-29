@@ -2,7 +2,7 @@
 let
   orchestratorSource = builtins.readFile ../../nixfied/framework/runtime/orchestrator.nix;
   dispatcherSource = builtins.readFile ../../nixfied/framework/runtime/dispatcher.nix;
-  executorRuntimeSource = builtins.readFile ../../nixfied/framework/runtime/executor-runtime.nix;
+  runtimeHandoffSource = builtins.readFile ../../nixfied/framework/runtime/runtime-handoff.nix;
   sharedRuntimeSource = builtins.readFile ../../nixfied/framework/runtime/shared-runtime-lib.nix;
   hasSharedRuntimeInfix =
     pattern:
@@ -58,9 +58,10 @@ assert pkgs.lib.hasInfix "--refresh --" dispatcherSource;
 assert pkgs.lib.hasInfix "github:willyrgf/nixfied/dev" dispatcherSource;
 assert pkgs.lib.hasInfix "frameworkUpgradeHelpFile" dispatcherSource;
 assert pkgs.lib.hasInfix "proxyFrameworkCommand" dispatcherSource;
-assert pkgs.lib.hasInfix "task_print_help() {" executorRuntimeSource;
-assert pkgs.lib.hasInfix "workflow_resolve_mode_id() {" executorRuntimeSource;
-assert !(pkgs.lib.hasInfix "nixfied-kernel workflow resolve-mode" executorRuntimeSource);
+assert pkgs.lib.hasInfix "task_print_help() {" runtimeHandoffSource;
+assert pkgs.lib.hasInfix "workflow_resolve_mode_id() {" runtimeHandoffSource;
+assert pkgs.lib.hasInfix "nixfied-kernel workflow resolve-mode" runtimeHandoffSource;
+assert pkgs.lib.hasInfix "nixfied-kernel workflow handoff" runtimeHandoffSource;
 pkgs.runCommand "orchestrator-lifecycle-contract" { } ''
-  echo "OK: orchestrator lifecycle remains stable while workflow and task descriptor lookup is owner-local" > "$out"
+  echo "OK: orchestrator lifecycle remains stable while workflow and task descriptor lookup is cached through the runtime handoff seam" > "$out"
 ''

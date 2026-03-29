@@ -1,7 +1,7 @@
 { pkgs }:
 let
   source = builtins.readFile ../../nixfied/framework/runtime/executor.nix;
-  runtimeSource = builtins.readFile ../../nixfied/framework/runtime/executor-runtime.nix;
+  runtimeSource = builtins.readFile ../../nixfied/framework/runtime/runtime-handoff.nix;
   sharedRuntimeSource = builtins.readFile ../../nixfied/framework/runtime/shared-runtime-lib.nix;
   hasSharedRuntimeInfix =
     pattern: pkgs.lib.hasInfix pattern source || pkgs.lib.hasInfix pattern sharedRuntimeSource;
@@ -71,10 +71,14 @@ assert pkgs.lib.hasInfix "task_hook_runtime_plan_shell() {" runtimeSource;
 assert pkgs.lib.hasInfix "workflow_parallel_enabled() {" runtimeSource;
 assert pkgs.lib.hasInfix "workflow_resolve_mode_id() {" runtimeSource;
 assert pkgs.lib.hasInfix "task_validate_args() {" runtimeSource;
-assert !(pkgs.lib.hasInfix "nixfied-kernel task load-runtime" runtimeSource);
-assert !(pkgs.lib.hasInfix "nixfied-kernel task load-hook" runtimeSource);
-assert !(pkgs.lib.hasInfix "nixfied-kernel workflow load-runtime" runtimeSource);
-assert !(pkgs.lib.hasInfix "nixfied-kernel workflow resolve-mode" runtimeSource);
+assert pkgs.lib.hasInfix "task_handoff_ensure() {" runtimeSource;
+assert pkgs.lib.hasInfix "workflow_handoff_ensure() {" runtimeSource;
+assert pkgs.lib.hasInfix "nixfied-kernel task handoff" runtimeSource;
+assert pkgs.lib.hasInfix "nixfied-kernel workflow handoff" runtimeSource;
+assert pkgs.lib.hasInfix "nixfied-kernel workflow resolve-mode" runtimeSource;
+assert !(pkgs.lib.hasInfix "renderCaseReturn =" runtimeSource);
+assert !(pkgs.lib.hasInfix "renderCasePrintLines =" runtimeSource);
+assert !(pkgs.lib.hasInfix "workflow-unit:" runtimeSource);
 assert (!pkgs.lib.hasInfix "workflowModesShell = import ./workflow-modes.nix" source);
 assert (!pkgs.lib.hasInfix "nixfied-kernel workflow serial-init" source);
 assert (!pkgs.lib.hasInfix "nixfied-kernel workflow serial-step" source);
@@ -86,5 +90,5 @@ assert (!pkgs.lib.hasInfix "run_workflow_phase \"$run_id\"" source);
 assert (!pkgs.lib.hasInfix "run_workflow_phase_tasks \"$run_id\"" source);
 assert (!pkgs.lib.hasInfix "run_workflow_phase_service_sets \"$run_id\"" source);
 pkgs.runCommand "executor-contract" { } ''
-  echo "OK: executor delegates both task and workflow driving to kernel run commands and keeps only descriptor handoff plus leaf adapters" > "$out"
+  echo "OK: executor delegates both task and workflow driving to kernel run commands and keeps only cached runtime handoff plus leaf adapters" > "$out"
 ''

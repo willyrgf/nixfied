@@ -62,12 +62,7 @@ let
       serviceHookEnv
       ;
   };
-  executorRuntimeShell = import ./executor-runtime.nix {
-    inherit
-      pkgs
-      model
-      ;
-  };
+  runtimeHandoffShell = import ./runtime-handoff.nix { inherit pkgs; };
   sharedRuntimeLibShell = import ./shared-runtime-lib.nix {
     inherit
       pkgs
@@ -133,7 +128,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
         ${registryShell}
         ${envSandboxShell}
-        ${executorRuntimeShell}
+        ${runtimeHandoffShell}
         ${sharedRuntimeLibShell}
 
         sha256_text() {
@@ -548,20 +543,6 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
             append_event "$run_id" "$workflow_id" "$task_id" "failed" "$detail_json"
             return "$exit_code"
           fi
-        }
-
-        workflow_unit_first_skipped_required_service() {
-          local unit_json="$1"
-          local service_name=""
-
-          while IFS= read -r service_name; do
-            if [ -n "$service_name" ] && is_service_skipped "$service_name"; then
-              printf '%s' "$service_name"
-              return 0
-            fi
-          done < <(workflow_unit_required_services "$unit_json")
-
-          return 1
         }
 
         write_skipped_services_file() {
