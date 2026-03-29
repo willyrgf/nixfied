@@ -9,6 +9,7 @@
   appPrograms ? { },
   serviceSetPrograms ? { },
   serviceHookEnv ? { },
+  executionEnabled ? true,
 }:
 let
   lib = pkgs.lib;
@@ -27,6 +28,7 @@ let
       projectRoot
       serviceSetPrograms
       serviceHookEnv
+      executionEnabled
       ;
   };
 
@@ -164,35 +166,76 @@ let
     NIXFIED_CALLER_PWD="$PWD" exec ${pkgs.nix}/bin/nix run "''${framework_source_flake_ref}#run-task" --refresh -- ${lib.escapeShellArg taskId} "$@"
   '';
 
-  viewLaunchApps = builtins.listToAttrs (
-    map (
-      appName:
-      let
-        appModel = appModels.${appName} or null;
-        launchCommand =
-          if appModel == null then
-            throw "dispatcher: missing app model for '${appName}'"
-          else
-            ''
-              exec ${appPrograms.${appName}} "$@"
-            '';
-      in
-      {
-        name = appName;
-        value = mkShellApp {
-          inherit appName;
-          body = ''
-            export NIXFIED_CALLER_PWD="$PWD"
-            ${launchCommand}
-          '';
-        };
-      }
-    ) viewAppNames
-  );
+  viewLaunchApps =
+    if !executionEnabled then
+      { }
+    else
+      builtins.listToAttrs (
+        map (
+          appName:
+          let
+            appModel = appModels.${appName} or null;
+            launchCommand =
+              if appModel == null then
+                throw "dispatcher: missing app model for '${appName}'"
+              else
+                ''
+                  exec ${appPrograms.${appName}} "$@"
+                '';
+          in
+          {
+            name = appName;
+            value = mkShellApp {
+              inherit appName;
+              body = ''
+                export NIXFIED_CALLER_PWD="$PWD"
+                ${launchCommand}
+              '';
+            };
+          }
+        ) viewAppNames
+      );
 
   helpText = builtins.concatStringsSep "\n" model.views.help.lines;
   docsText = builtins.concatStringsSep "\n" model.views.docs.lines;
   featuresText = builtins.concatStringsSep "\n" model.views.features.lines;
+  mkStaticHelpFile =
+    name: text:
+    pkgs.writeText "nixfied-help-${builtins.substring 0 10 (builtins.hashString "sha256" name)}.txt" ''
+      ${text}
+    '';
+  runtimeControlHelpFiles = {
+    "runs" = mkStaticHelpFile "runs" ''
+      runs - List runs or show one run by id
+
+      Usage:
+        nix run .#runs
+        nix run .#runs -- <run-id>
+
+      Options:
+        -h, --help: Show this help.
+    '';
+
+    "stop-run" = mkStaticHelpFile "stop-run" ''
+      stop-run - Stop one running or queued run
+
+      Usage:
+        nix run .#stop-run -- <run-id>
+
+      Options:
+        -h, --help: Show this help.
+    '';
+
+    "stop-all-runs" = mkStaticHelpFile "stop-all-runs" ''
+      stop-all-runs - Stop all running or queued runs
+
+      Usage:
+        nix run .#stop-all-runs
+
+      Options:
+        -h, --help: Show this help.
+    '';
+  };
 
   helpFile = pkgs.writeText "nixfied-help.txt" "${helpText}\n";
   docsFile = pkgs.writeText "nixfied-docs.md" "${docsText}\n";
@@ -251,6 +294,18 @@ in
   "runs" = mkShellApp {
     appName = "runs";
     body = ''
+      ${shellCommon}
+      if [ "$#" -eq 1 ]; then
+        case "$1" in
+          --help|-h)
+            cat ${runtimeControlHelpFiles.runs}
+            exit 0
+            ;;
+        esac
+      fi
+      if [ "$#" -gt 1 ]; then
+        nixfied_exit_usage "usage: runs [run-id]"
+      fi
       NIXFIED_CALLER_PWD="$PWD" exec ${orchestratorProgram} runs "$@"
     '';
   };
@@ -259,6 +314,14 @@ in
     appName = "stop-run";
     body = ''
       ${shellCommon}
+      if [ "$#" -eq 1 ]; then
+        case "$1" in
+          --help|-h)
+            cat ${runtimeControlHelpFiles."stop-run"}
+            exit 0
+            ;;
+        esac
+      fi
       if [ "$#" -ne 1 ]; then
         nixfied_exit_usage "usage: stop-run <run-id>"
       fi
@@ -270,6 +333,14 @@ in
     appName = "stop-all-runs";
     body = ''
       ${shellCommon}
+      if [ "$#" -eq 1 ]; then
+        case "$1" in
+          --help|-h)
+            cat ${runtimeControlHelpFiles."stop-all-runs"}
+            exit 0
+            ;;
+        esac
+      fi
       if [ "$#" -ne 0 ]; then
         nixfied_exit_usage "usage: stop-all-runs"
       fi

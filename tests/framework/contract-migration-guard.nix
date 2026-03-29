@@ -77,8 +77,10 @@ let
     || !(builtins.all (snippet: lib.hasInfix snippet source) entry.snippets)
   ) jqAllowlist;
   machineOutputSource = builtins.readFile ../../nixfied/framework/core/mkMachineOutputPrograms.nix;
+  mkFlakeOutputsSource = builtins.readFile ../../nixfied/framework/core/mkFlakeOutputs.nix;
   frameworkTestPresetSource = builtins.readFile ../../nixfied/framework/presets/framework-test.nix;
   probePlanRuntimeSource = builtins.readFile ../../nixfied/framework/runtime/helpers/probe-plan-runtime.nix;
+  dispatcherSource = builtins.readFile ../../nixfied/framework/runtime/dispatcher.nix;
   executorSource = builtins.readFile ../../nixfied/framework/runtime/executor.nix;
   executorRuntimeSource = builtins.readFile ../../nixfied/framework/runtime/executor-runtime.nix;
   orchestratorSource = builtins.readFile ../../nixfied/framework/runtime/orchestrator.nix;
@@ -139,6 +141,9 @@ assert filesWithDeprecatedKernelMarkers == [ ];
 assert !kernelSourceHasDeprecatedMarkers;
 assert pkgs.lib.hasInfix "nixfied-kernel machine-output run" machineOutputSource;
 assert !(pkgs.lib.hasInfix "validatorProgram" machineOutputSource);
+assert !(pkgs.lib.hasInfix "runtimeControlOrchestrator = import ../runtime/orchestrator.nix" mkFlakeOutputsSource);
+assert !(pkgs.lib.hasInfix "runtimeControlApps = builtins.listToAttrs" mkFlakeOutputsSource);
+assert !(pkgs.lib.hasInfix "runtimeControlHelpFiles = {" mkFlakeOutputsSource);
 assert !(pkgs.lib.hasInfix "\"flake-check\"" frameworkTestPresetSource);
 assert !(pkgs.lib.hasInfix "\"launcher-pruning\"" frameworkTestPresetSource);
 assert !(pkgs.lib.hasInfix "\"help\"" frameworkTestPresetSource);
@@ -163,6 +168,10 @@ assert !(pkgs.lib.hasInfix "nixfied-kernel workflow parallel-init" executorSourc
 assert !(pkgs.lib.hasInfix "nixfied-kernel workflow parallel-step" executorSource);
 assert !(builtins.pathExists ../../nixfied/framework/runtime/workflow-modes.nix);
 assert !(builtins.pathExists ../../nixfied/framework/runtime/runtime-metadata.nix);
+assert pkgs.lib.hasInfix "\"runs\" = mkShellApp" dispatcherSource;
+assert pkgs.lib.hasInfix "\"stop-run\" = mkShellApp" dispatcherSource;
+assert pkgs.lib.hasInfix "\"stop-all-runs\" = mkShellApp" dispatcherSource;
+assert pkgs.lib.hasInfix "executionEnabled ? true" dispatcherSource;
 assert pkgs.lib.hasInfix "workflow_family_from_id() {" executorRuntimeSource;
 assert pkgs.lib.hasInfix "workflow_family_modes_joined() {" executorRuntimeSource;
 assert pkgs.lib.hasInfix "workflow_simple_shorthand_exists_for_family() {" executorRuntimeSource;

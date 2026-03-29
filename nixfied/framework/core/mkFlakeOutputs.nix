@@ -313,39 +313,6 @@ let
     '';
   };
 
-  runtimeControlHelpFiles = {
-    "runs" = mkStaticHelpFile "runs" ''
-      runs - List runs or show one run by id
-
-      Usage:
-        nix run .#runs
-        nix run .#runs -- <run-id>
-
-      Options:
-        -h, --help: Show this help.
-    '';
-
-    "stop-run" = mkStaticHelpFile "stop-run" ''
-      stop-run - Stop one running or queued run
-
-      Usage:
-        nix run .#stop-run -- <run-id>
-
-      Options:
-        -h, --help: Show this help.
-    '';
-
-    "stop-all-runs" = mkStaticHelpFile "stop-all-runs" ''
-      stop-all-runs - Stop all running or queued runs
-
-      Usage:
-        nix run .#stop-all-runs
-
-      Options:
-        -h, --help: Show this help.
-    '';
-  };
-
   renderTaskHelpCases = builtins.concatStringsSep "\n" (
     map (taskId: ''
       ${lib.escapeShellArg taskId})
@@ -1101,40 +1068,28 @@ let
       '';
     };
   };
-  runtimeControlOrchestrator = import ../runtime/orchestrator.nix {
-    inherit
-      pkgs
-      registry
-      projectRoot
-      ;
-    model = compiledCore.model;
-    services = { };
-    serviceSetPrograms = { };
-    serviceHookEnv = { };
-    executionEnabled = false;
-  };
-  runtimeControlProgram = "${runtimeControlOrchestrator}/bin/nixfied-orchestrator";
-  runtimeControlApps = builtins.listToAttrs (
-    map (appName: {
-      name = appName;
-      value = mkShellApp {
-        inherit appName;
-        binPrefix = "nixfied-control";
-        body = ''
-          if [ "$#" -eq 1 ]; then
-            case "$1" in
-              --help|-h)
-                cat ${lib.escapeShellArg (builtins.toString runtimeControlHelpFiles.${appName})}
-                exit 0
-                ;;
-            esac
-          fi
-
-          exec ${lib.escapeShellArg runtimeControlProgram} ${lib.escapeShellArg appName} "$@"
-        '';
+  controlOnlyDispatcherApps =
+    let
+      controlDispatcher = import ../runtime/dispatcher.nix {
+        inherit
+          pkgs
+          projectRoot
+          registry
+          ;
+        model = compiledCore.model;
+        services = { };
+        appPrograms = { };
+        serviceSetPrograms = { };
+        serviceHookEnv = { };
+        executionEnabled = false;
       };
-    }) runtimeControlAppNames
-  );
+    in
+    builtins.listToAttrs (
+      map (appName: {
+        name = appName;
+        value = controlDispatcher.${appName};
+      }) runtimeControlAppNames
+    );
   heavyOutputs =
     let
       materializedExecution = import ./materializeExecution.nix {
@@ -1243,7 +1198,7 @@ in
       // coreSurfaces.apps
       // viewSelectorLauncherApps
       // runtimeLauncherApps
-      // runtimeControlApps
+      // controlOnlyDispatcherApps
       // frameworkUtilityApps
       // heavyOutputs.frameworkWorkspaceApps
       // {
@@ -1251,7 +1206,7 @@ in
       }
     else
       heavyOutputs.directApps
-      // runtimeControlApps
+      // controlOnlyDispatcherApps
       // frameworkUtilityApps
       // heavyOutputs.frameworkWorkspaceApps;
   legacyPackages = {
