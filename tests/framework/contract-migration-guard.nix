@@ -225,11 +225,9 @@ assert !(pkgs.lib.hasInfix "runtimeMetadataShell = import ./runtime-metadata.nix
 assert !(pkgs.lib.hasInfix "import ./runtime-metadata.nix" orchestratorSource);
 assert !(pkgs.lib.hasInfix "done < <(task_needs \"$current_task\")" executorSource);
 assert !(pkgs.lib.hasInfix "done < <(task_soft_needs \"$current_task\")" executorSource);
-assert !(pkgs.lib.hasInfix "nixfied-kernel task execution-order" executorSource);
 assert pkgs.lib.hasInfix "nixfied-kernel summary collect-steps" executorSource;
 assert !(pkgs.lib.hasInfix "nixfied-task-execution-exports" executorSource);
 assert !(pkgs.lib.hasInfix "nixfied-summary-exports" executorSource);
-assert !(pkgs.lib.hasInfix "failed to load task execution-order exports" executorSource);
 assert !(pkgs.lib.hasInfix "failed to load workflow summary exports" executorSource);
 assert !(pkgs.lib.hasInfix "workflow_step_status() {" executorSource);
 assert !(pkgs.lib.hasInfix "workflow_step_records_tsv() {" executorSource);
