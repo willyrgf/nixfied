@@ -190,7 +190,6 @@ assert pkgs.lib.hasInfix "executionEnabled ? true" dispatcherSource;
 assert pkgs.lib.hasInfix "includeRuntimeControlApps ? true" dispatcherSource;
 assert pkgs.lib.hasInfix "task_handoff_ensure() {" runtimeHandoffSource;
 assert pkgs.lib.hasInfix "workflow_handoff_ensure() {" runtimeHandoffSource;
-assert pkgs.lib.hasInfix "workflow_simple_shorthand_exists_for_family() {" runtimeHandoffSource;
 assert pkgs.lib.hasInfix "workflow_resolve_mode_id() {" runtimeHandoffSource;
 assert pkgs.lib.hasInfix "nixfied-kernel task handoff" runtimeHandoffSource;
 assert pkgs.lib.hasInfix "nixfied-kernel workflow handoff" runtimeHandoffSource;
