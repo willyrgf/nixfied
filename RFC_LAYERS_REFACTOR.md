@@ -772,14 +772,13 @@ be.
 
 ### 6. Service extractability is still more claimed than proven
 
-The current extractability proof in
-`tests/framework/service-extractability-contract.nix` uses fixture modules that
-throw if private attributes are touched.
+The synthetic extractability proof was deleted because it mostly froze fixture
+module shape and adapter source shape.
 
-That proves the helper layer can consume a fake public API.
+That deletion did not solve the underlying architecture claim.
 
-It does not prove the real service implementations are already behind small
-enough public boundaries to split cleanly.
+The remaining proof burden is still on real compiled service contracts and real
+runtime surface behavior, not on fake extractability fixtures.
 
 ### 7. The test suite now carries architecture-governance machinery
 

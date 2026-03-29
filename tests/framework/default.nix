@@ -180,10 +180,6 @@ let
       layer = "adapter";
     };
 
-    "service-extractability-contract" = {
-      layer = "compile";
-    };
-
     "launcher-surface-contract" = { };
 
     "framework-utility-launcher-contract" = { };
@@ -332,10 +328,6 @@ let
     };
 
     "service-surface-catalog-contract" = import ./service-surface-catalog-contract.nix {
-      inherit pkgs;
-    };
-
-    "service-extractability-contract" = import ./service-extractability-contract.nix {
       inherit pkgs;
     };
 

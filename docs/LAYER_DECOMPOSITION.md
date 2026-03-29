@@ -1012,7 +1012,7 @@ What to evaluate in solutions:
 
 Current files:
 
-- `tests/framework/service-extractability-contract.nix`
+- none; the synthetic extractability proof was deleted
 
 Necessary:
 
@@ -1020,8 +1020,8 @@ Necessary:
 
 Accidental:
 
-- current proof uses fixture modules, so it proves helper behavior more than it
-  proves real service extractability
+- source-shaped fixture proofs prove helper behavior more than real service
+  extractability
 
 Keep:
 

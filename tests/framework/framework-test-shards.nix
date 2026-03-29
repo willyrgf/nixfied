@@ -31,7 +31,6 @@ let
       "postgres-config-artifacts-contract"
       "project-config-boundary"
       "scheduler-order"
-      "service-extractability-contract"
       "service-observability-contract"
       "service-op-composition-contract"
       "service-probe-overrides-contract"
