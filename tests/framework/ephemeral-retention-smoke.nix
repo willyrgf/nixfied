@@ -5,7 +5,7 @@
   registry,
 }:
 let
-  withRuntimeMetadata = import ./lib/with-runtime-metadata.nix { inherit pkgs; };
+  withCompiledExecution = import ./lib/with-compiled-execution.nix { inherit pkgs; };
   baseTask = model.tasks."task.ci.quality";
 
   failTaskId = "task.test.ephemeral.retention.fail";
@@ -80,7 +80,7 @@ let
     ];
   };
 
-  withRetentionModel = withRuntimeMetadata (
+  withRetentionModel = withCompiledExecution (
     model
     // {
       runtime = model.runtime // {
@@ -100,7 +100,7 @@ let
     }
   );
 
-  noRetentionModel = withRuntimeMetadata (
+  noRetentionModel = withCompiledExecution (
     model
     // {
       runtime = model.runtime // {

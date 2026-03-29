@@ -6,10 +6,10 @@
   projectRoot ? ../../..,
 }:
 let
-  withRuntimeMetadata = import ./with-runtime-metadata.nix { inherit pkgs; };
+  withCompiledExecution = import ./with-compiled-execution.nix { inherit pkgs; };
   runtimeMaterialization = import ./runtime-materialization.nix;
   shellHelpers = import ./shell-helpers.nix { inherit pkgs; };
-  harnessModel = withRuntimeMetadata model;
+  harnessModel = withCompiledExecution model;
   runtimeDeps = runtimeMaterialization {
     inherit
       pkgs

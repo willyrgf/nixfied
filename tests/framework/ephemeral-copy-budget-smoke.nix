@@ -5,7 +5,7 @@
   registry,
 }:
 let
-  withRuntimeMetadata = import ./lib/with-runtime-metadata.nix { inherit pkgs; };
+  withCompiledExecution = import ./lib/with-compiled-execution.nix { inherit pkgs; };
   baseTask = model.tasks."task.ci.quality";
 
   okTaskId = "task.test.ephemeral.copy-budget.ok";
@@ -79,7 +79,7 @@ let
     ];
   };
 
-  minFreeModel = withRuntimeMetadata (
+  minFreeModel = withCompiledExecution (
     model
     // {
       runtime = model.runtime // {
@@ -99,7 +99,7 @@ let
     }
   );
 
-  maxCopyModel = withRuntimeMetadata (
+  maxCopyModel = withCompiledExecution (
     model
     // {
       runtime = model.runtime // {

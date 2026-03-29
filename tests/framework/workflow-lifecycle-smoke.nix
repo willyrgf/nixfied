@@ -5,7 +5,7 @@
   registry,
 }:
 let
-  withRuntimeMetadata = import ./lib/with-runtime-metadata.nix { inherit pkgs; };
+  withCompiledExecution = import ./lib/with-compiled-execution.nix { inherit pkgs; };
   baseTask = model.tasks."task.check";
 
   mkShellTask =
@@ -96,7 +96,7 @@ let
       ];
     };
 
-  lifecycleModel = withRuntimeMetadata (
+  lifecycleModel = withCompiledExecution (
     model
     // {
       tasks = model.tasks // {
