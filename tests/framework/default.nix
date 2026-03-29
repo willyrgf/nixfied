@@ -173,15 +173,7 @@ let
       layer = "compile";
     };
 
-    "selected-app-manifest-contract" = {
-      layer = "adapter";
-    };
-
-    "service-set-surface-contract" = {
-      layer = "e2e";
-    };
-
-    "runtime-manifest-fixture-contract" = {
+    "selected-execution-contract" = {
       layer = "manifest";
     };
 
@@ -193,16 +185,12 @@ let
 
     "run-record-validator-failure" = { };
 
-    "workflow-service-set-adapter-smoke" = {
-      layer = "adapter";
+    "service-set-behavior-contract" = {
+      layer = "e2e";
     };
 
     "machine-output-app-smoke" = {
       layer = "e2e";
-    };
-
-    "workflow-ref-app-manifest-contract" = {
-      layer = "adapter";
     };
 
     "helpers-runtime-contract" = {
@@ -250,10 +238,6 @@ let
     "selected-source-only-resolution-smoke" = { };
 
     "disabled-service-no-package-resolution-smoke" = { };
-
-    "disabled-service-runtime-surface-smoke" = {
-      layer = "adapter";
-    };
 
     "launcher-skip-service-pruning-smoke" = { };
 
@@ -345,26 +329,11 @@ let
       inherit pkgs;
     };
 
-    "selected-app-manifest-contract" = import ./selected-app-manifest-contract.nix {
-      inherit
-        pkgs
-        apps
-        ;
-    };
-
-    "runtime-manifest-fixture-contract" = import ./runtime-manifest-fixture-contract.nix {
+    "selected-execution-contract" = import ./selected-execution-contract.nix {
       inherit pkgs;
     };
 
-    "workflow-ref-app-manifest-contract" = import ./workflow-ref-app-manifest-contract.nix {
-      inherit pkgs;
-    };
-
-    "service-set-surface-contract" = import ./service-set-surface-contract.nix {
-      inherit pkgs;
-    };
-
-    "workflow-service-set-adapter-smoke" = import ./workflow-service-set-adapter-smoke.nix {
+    "service-set-behavior-contract" = import ./service-set-behavior-contract.nix {
       inherit pkgs;
     };
 
@@ -472,10 +441,6 @@ let
         {
           inherit pkgs;
         };
-
-    "disabled-service-runtime-surface-smoke" = import ./disabled-service-runtime-surface-smoke.nix {
-      inherit pkgs;
-    };
 
     "launcher-skip-service-pruning-smoke" = import ./launcher-skip-service-pruning-smoke.nix {
       inherit pkgs;

@@ -45,7 +45,7 @@ let
 
     manifest = [
       "feature-manifest-proof"
-      "runtime-manifest-fixture-contract"
+      "selected-execution-contract"
     ];
 
     kernel = [
@@ -85,7 +85,6 @@ let
     ];
 
     adapter = [
-      "disabled-service-runtime-surface-smoke"
       "dispatcher-help-fast-path-smoke"
       "feature-adapter-proof"
       "framework-utility-launcher-contract"
@@ -98,13 +97,10 @@ let
       "orchestrator-signal-cleanup-smoke"
       "runtime-events-contract"
       "service-runtime-surface-contract"
-      "selected-app-manifest-contract"
       "service-hook-env-smoke"
       "shell-contract-contract"
       "shell-contract-runtime-smoke"
       "unselected-service-public-launcher-smoke"
-      "workflow-ref-app-manifest-contract"
-      "workflow-service-set-adapter-smoke"
     ];
 
     e2e = [
@@ -151,7 +147,7 @@ let
       "service-dir-isolation-smoke"
       "service-lifecycle-matrix-smoke"
       "service-probe-overrides-smoke"
-      "service-set-surface-contract"
+      "service-set-behavior-contract"
       "skip-service-smoke"
       "slot-env-runtime-smoke"
       "supervisor-lifecycle-smoke"
