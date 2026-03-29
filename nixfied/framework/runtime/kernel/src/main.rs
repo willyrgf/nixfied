@@ -9,6 +9,7 @@ use std::time::Duration;
 
 mod adapter;
 mod event;
+mod execution_metadata;
 mod io_util;
 mod json_util;
 mod machine_output;
@@ -18,7 +19,6 @@ mod probe;
 mod registry;
 mod run_id;
 mod run_record;
-mod runtime_metadata;
 mod summary;
 mod task;
 mod validation;

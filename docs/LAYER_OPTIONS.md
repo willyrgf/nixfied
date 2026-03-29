@@ -41,7 +41,7 @@ The smallest stable architecture visible in the current codebase is closer to:
 That means several current named layers are not real target abstractions:
 
 - dispatcher
-- shell runtime metadata
+- shell runtime handoff
 - runtime manifests as a separate family
 - orchestrator-control as a separate runtime authority
 - executor-side service-set synthesis
@@ -153,8 +153,7 @@ Primary effect:
 
 - replace the current family of:
   - compiler execution data
-  - top-level `compiled.runtimeMetadata`
-  - app-specific embedded runtime metadata
+  - app-specific narrowed execution manifests
   - launcher CSV lookup tables
 - with one canonical compiled execution graph
 
@@ -185,9 +184,8 @@ Why it matters:
 
 Primary effect:
 
-- remove the remaining runtime metadata query seam as a layer
-- stop shell from loading task and workflow runtime via fine-grained kernel
-  export calls
+- remove the remaining shell runtime handoff seam as a layer
+- stop shell from loading task and workflow runtime via kernel handoff materialization
 - stop summary counters from round-tripping through shell export files
 
 Files under pressure:
@@ -206,12 +204,12 @@ Why it matters:
 
 Current evidence from code:
 
-- the named `runtime-metadata.nix` file is already gone, but the seam remains as
-  a nested `runtimeMetadata` projection in `compile-execution.nix` plus shell
-  loader/query paths
+- the named `runtime-metadata.nix` file is already gone, and the nested
+  `runtimeMetadata` projection is now gone too, but the shell still consumes a
+  cached runtime handoff plus summary export paths
 - `executor.nix` and `orchestrator.nix` still rely on fine-grained task and
-  workflow runtime loads because shell reads runtime fields piecemeal
-- this supports deleting the fine-grained metadata seam entirely rather than
+  workflow handoffs because shell still needs runtime fields at launch edges
+- this supports deleting the remaining handoff weight entirely rather than
   polishing it
 
 Constraint:
@@ -312,8 +310,8 @@ Before debating target architectures, fix four classification errors:
 1. `dispatcher` is not a runtime authority
    It is a wrapper/surfacing veneer and should either collapse into flake
    launchers or remain as a very small app wrapper.
-2. `shell runtime metadata` is not a layer
-   It is query glue over compiled data and kernel exports.
+2. `shell runtime handoff` is not a layer
+   It is transport glue over compiled execution data and kernel handoffs.
 3. `runtime manifests` are not a separate target abstraction
    They are projections of execution data, not a second authority.
 4. `orchestrator-control` was not a separate abstraction
@@ -515,7 +513,7 @@ Layers that collapse hard:
 
 - top-level `selectionIndex` side-channel ownership
 - top-level `appExecutionManifests` side-channel ownership
-- separate shell runtime metadata layer
+- separate shell runtime handoff layer
 - runtime selection fallback seam
 - separate runtime manifest family
 - dispatcher as an architectural runtime layer
@@ -614,7 +612,7 @@ Detailed implementation staging for this sequence lives in
 
 These decisions are no longer open for the next refactor wave:
 
-1. Do we agree that `selectionIndex`, runtime metadata, manifest narrowing, and
+1. Do we agree that `selectionIndex`, execution descriptors, manifest narrowing, and
    launcher selection tables should become one compiled execution authority?
    Locked answer:
    - yes

@@ -39,11 +39,10 @@ let
   appIds = builtins.sort builtins.lessThan (builtins.attrNames appSet);
   serviceSetIds = builtins.sort builtins.lessThan (builtins.attrNames serviceSetCatalog);
 
-  buildRuntimeMetadataProjection =
+  buildExecutionDescriptors =
     {
       tasks,
       workflows,
-      serviceCatalog,
       apps ? { },
       compiledExecution,
     }:
@@ -504,29 +503,8 @@ let
       );
     in
     {
-      schema = {
-        kind = "nixfied-runtime-metadata";
-        version = 1;
-      };
       tasks = taskDescriptorById;
       workflows = workflowDescriptorById;
-      workflowFamilies = builtins.listToAttrs (
-        map (family: {
-          name = family;
-          value = {
-            modes = workflowModesByFamily.${family} or [ ];
-          };
-        }) workflowFamilies
-      );
-      availableServices = uniqueSorted (
-        map (
-          serviceId:
-          let
-            service = serviceCatalog.${serviceId};
-          in
-          service.name or serviceId
-        ) (builtins.attrNames serviceCatalog)
-      );
     };
 
   workflowModesByFamily = builtins.foldl' (
@@ -908,16 +886,26 @@ let
           byId = lib.getAttrs projectionWorkflowIds executionBase.workflows.byId;
         };
       };
+      executionDescriptors = buildExecutionDescriptors {
+        apps = appSet;
+        compiledExecution = projectionExecution;
+        tasks = projectionTasks;
+        workflows = projectionWorkflows;
+      };
     in
     canonical.canonicalize (
       projectionExecution
       // {
-        runtimeMetadata = buildRuntimeMetadataProjection {
-          apps = appSet;
-          compiledExecution = projectionExecution;
-          tasks = projectionTasks;
-          workflows = projectionWorkflows;
-          serviceCatalog = projectionServiceCatalog;
+        tasks = {
+          byId = builtins.mapAttrs (
+            taskId: taskExecution: taskExecution // (executionDescriptors.tasks.${taskId} or { })
+          ) projectionExecution.tasks.byId;
+        };
+        workflows = {
+          byId = builtins.mapAttrs (
+            workflowId: workflowExecution:
+            workflowExecution // (executionDescriptors.workflows.${workflowId} or { })
+          ) projectionExecution.workflows.byId;
         };
       }
     );
@@ -946,9 +934,7 @@ let
               compiledExecution.workflows.byId.${app.workflowId}.exactClosureSelectedServices or [ ]
             )
           else
-            uniqueSorted (
-              compiledExecution.tasks.byId.${app.taskId}.closureSelectedServices or [ ]
-            );
+            uniqueSorted (compiledExecution.tasks.byId.${app.taskId}.closureSelectedServices or [ ]);
         serviceCatalogFiltered = lib.filterAttrs (
           _: service: builtins.elem (service.name or service.id) selectedServices
         ) catalog;

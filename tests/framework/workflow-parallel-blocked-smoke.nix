@@ -8,80 +8,102 @@ let
   validationBundleFile = pkgs.writeText "nixfied-runtime-artifact-contract-bundle.json" (
     builtins.toJSON runtimeArtifactContracts.bundle
   );
-  runtimeMetadataFile = pkgs.writeText "nixfied-runtime-metadata-blocked-workflow.json" (
+  executionFile = pkgs.writeText "nixfied-execution-blocked-workflow.json" (
     builtins.toJSON {
       schema = {
-        kind = "nixfied-runtime-metadata";
+        kind = "nixfied-execution";
         version = 1;
       };
-      tasks = { };
-      workflows."workflow.test.parallel.blocked" = {
-        mode = "test";
-        family = "test";
-        artifactsRoot = "";
-        ephemeralEnabled = true;
-        logging = {
-          levelDefault = "";
-          outputDefault = "";
-        };
-        failFast = false;
-        parallelEnabled = true;
-        maxWorkers = 2;
-        lockPolicy = "exclusive";
-        writeSummary = false;
-        postRunAlways = false;
-        closureSelectedServices = [ ];
-        unitClosureSelectedServices = [ ];
-        referenceClosureSelectedServices = [ ];
-        phases = {
-          preRun = {
-            tasks = [ ];
-            serviceSets = [ ];
-          };
-          postRun = {
-            tasks = [ ];
-            serviceSets = [ ];
-          };
-        };
-        plan = [
-          {
-            name = "a";
-            taskId = "task.test.parallel.blocked-a";
-            needs = [ "b" ];
-            locks = [ ];
-            requiredServices = [ ];
-            skipIfMissingEnv = [ ];
-            when = {
-              envPresent = [ ];
-              envEquals = { };
-            };
-            selectedServices = [ ];
-            produces = {
-              artifacts = [ ];
-              stateKeys = [ ];
-            };
-          }
-          {
-            name = "b";
-            taskId = "task.test.parallel.blocked-b";
-            needs = [ "a" ];
-            locks = [ ];
-            requiredServices = [ ];
-            skipIfMissingEnv = [ ];
-            when = {
-              envPresent = [ ];
-              envEquals = { };
-            };
-            selectedServices = [ ];
-            produces = {
-              artifacts = [ ];
-              stateKeys = [ ];
-            };
-          }
-        ];
+      enabledServices = [ ];
+      taskIds = [ ];
+      workflowIds = [ "workflow.test.parallel.blocked" ];
+      workflowFamilies = [ "test" ];
+      workflowIdsByFamily = {
+        test = [ "workflow.test.parallel.blocked" ];
       };
-      workflowFamilies.test.modes = [ "parallel" ];
-      availableServices = [ ];
+      workflowModesByFamily = {
+        test = [ "parallel.blocked" ];
+      };
+      tasks = {
+        byId = { };
+      };
+      workflows = {
+        byId."workflow.test.parallel.blocked" = {
+          mode = "test";
+          family = "test";
+          artifactsRoot = "";
+          ephemeralEnabled = true;
+          logging = {
+            levelDefault = "";
+            outputDefault = "";
+          };
+          failFast = false;
+          parallelEnabled = true;
+          maxWorkers = 2;
+          lockPolicy = "exclusive";
+          writeSummary = false;
+          postRunAlways = false;
+          closureSelectedServices = [ ];
+          unitClosureSelectedServices = [ ];
+          referenceClosureSelectedServices = [ ];
+          phases = {
+            preRun = {
+              tasks = [ ];
+              serviceSets = [ ];
+            };
+            postRun = {
+              tasks = [ ];
+              serviceSets = [ ];
+            };
+          };
+          plan = [
+            {
+              name = "a";
+              taskId = "task.test.parallel.blocked-a";
+              needs = [ "b" ];
+              locks = [ ];
+              requiredServices = [ ];
+              skipIfMissingEnv = [ ];
+              when = {
+                envPresent = [ ];
+                envEquals = { };
+              };
+              selectedServices = [ ];
+              produces = {
+                artifacts = [ ];
+                stateKeys = [ ];
+              };
+            }
+            {
+              name = "b";
+              taskId = "task.test.parallel.blocked-b";
+              needs = [ "a" ];
+              locks = [ ];
+              requiredServices = [ ];
+              skipIfMissingEnv = [ ];
+              when = {
+                envPresent = [ ];
+                envEquals = { };
+              };
+              selectedServices = [ ];
+              produces = {
+                artifacts = [ ];
+                stateKeys = [ ];
+              };
+            }
+          ];
+          exactClosureSelectedServices = [ ];
+          closureServicesCsv = "";
+        };
+      };
+      apps = {
+        ids = [ ];
+        byId = { };
+      };
+      serviceSets = {
+        ids = [ ];
+        byId = { };
+      };
     }
   );
   skippedServicesFile = pkgs.writeText "nixfied-workflow-skipped-services.txt" "";
@@ -114,7 +136,7 @@ pkgs.runCommand "workflow-parallel-blocked-smoke" { } ''
 
   set +e
   "$KERNEL" workflow run \
-    ${pkgs.lib.escapeShellArg runtimeMetadataFile} \
+    ${pkgs.lib.escapeShellArg executionFile} \
     ${pkgs.lib.escapeShellArg validationBundleFile} \
     "$ROOT" \
     "$RUN_ID" \

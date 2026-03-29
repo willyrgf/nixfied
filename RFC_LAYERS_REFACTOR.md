@@ -45,9 +45,9 @@ It is a repository-specific diagnosis based on:
   `53.5k` to `62.5k`.
 - One important seam truly died: the shell-owned stepwise workflow driver and
   its old `workflow-modes.nix` planning surface.
-- Most of the deleted responsibility reappeared as compiled runtime metadata, a
-  shell metadata query layer, broader kernel query/load commands, and more test
-  machinery.
+- Most of the deleted responsibility reappeared as compiled execution
+  descriptors, a runtime handoff layer, broader kernel handoff commands, and
+  more test machinery.
 - The runtime path still effectively remains:
   `launcher -> selector -> dispatcher -> orchestrator -> executor -> kernel`.
 - Shell is no longer the scheduler of record, but it still owns too much
@@ -299,7 +299,7 @@ That is a real reduction in certain runtime transport forms.
 
 ## What Was Added
 
-### 1. Compiled runtime metadata
+### 1. Compiled execution descriptors
 
 The deleted `workflow-modes.nix` responsibilities did not vanish.
 
@@ -308,10 +308,10 @@ They were reintroduced in compiled form via:
 - `nixfied/compiler/compile-execution.nix`
 
 That file now owns the merged task runtime, hook runtime, and shell-plan
-rendering logic as a nested `runtimeMetadata` projection that used to live in
-the old workflow modes layer.
+rendering logic as execution descriptors on the canonical compiled execution
+object that used to live in the old workflow modes layer.
 
-### 2. A compiled runtime metadata projection plus a cached runtime handoff
+### 2. A compiled execution authority plus a cached runtime handoff
 
 The named `nixfied/framework/runtime/runtime-metadata.nix` file is already
 gone.
@@ -320,16 +320,17 @@ Its responsibilities still survive through:
 
 - `nixfied/compiler/compile-execution.nix`
 - `nixfied/framework/runtime/runtime-handoff.nix`
-- `nixfied/framework/runtime/kernel/src/runtime_metadata.rs`
+- `nixfied/framework/runtime/kernel/src/execution_metadata.rs`
 
-`compile-execution.nix` still materializes merged task, hook, and workflow
-runtime data as a nested `runtimeMetadata` projection family.
+`compile-execution.nix` now materializes merged task, hook, and workflow
+runtime data directly onto `compiled.execution.tasks.byId` and
+`compiled.execution.workflows.byId`.
 
 `runtime-handoff.nix` now materializes coarse cached task and workflow handoffs
 through kernel commands for the executor and orchestrator.
 
-So the old generated shell query API died, but the metadata seam still exists
-in a cleaner compiled form.
+So the old generated shell query API died, and the remaining seam is now the
+runtime handoff itself rather than a separate runtime metadata family.
 
 ### 3. A broader kernel metadata/query surface
 
@@ -396,8 +397,7 @@ The surrounding shell control plane did not.
 Selection and execution knowledge still exists in more than one place:
 
 - `nixfied/compiler/compile-execution.nix`
-- `compiled.execution.runtimeMetadata`
-- per-app execution manifests with embedded runtime metadata
+- per-app execution manifests narrowed from compiled execution
 - launcher metadata and static help generation in `mkLauncherMetadata.nix` and
   `mkFlakeOutputs.nix`
 
@@ -531,11 +531,10 @@ Current notable manifest or metadata families include:
 - `nixfied-machine-output-plan`
 - `nixfied-probe-execution-plan`
 - `nixfied-runtime-manifest-catalog`
-- `nixfied-runtime-metadata`
 - `nixfied-validation-ir`
 - `nixfied-workflow-summary-plan`
 
-That is `9` relevant manifest or metadata forms in the current runtime path.
+That is `8` relevant manifest or metadata forms in the current runtime path.
 
 The pre-RFC shape had `14` in the equivalent family if you include the now
 deleted workflow and task planning/state forms.
@@ -595,11 +594,11 @@ What did not disappear:
 
 This is a partial collapse, not an end-to-end collapse.
 
-### Trace 2: Task runtime metadata and hooks
+### Trace 2: Task execution descriptors and hooks
 
 Current path:
 
-1. Nix compiles task, hook, and workflow runtime metadata
+1. Nix compiles task, hook, and workflow execution descriptors
 2. `runtime-handoff.nix` asks the kernel to materialize cached task and workflow handoffs
 3. executor and orchestrator load those handoffs in-process
 4. executor uses the resulting values to build runtime shell and invoke hooks
@@ -610,7 +609,6 @@ What improved:
 
 What did not disappear:
 
-- a separate runtime metadata projection family
 - a shell runtime handoff layer in `runtime-handoff.nix`
 - shell caching and indirection layer
 
@@ -726,24 +724,24 @@ The old runtime selection fallback imports are already gone.
 The remaining duplication is now between:
 
 - `nixfied/compiler/compile-execution.nix`
-- `compiled.execution.runtimeMetadata`
-- per-app execution manifests that embed runtime metadata
+- per-app execution manifests narrowed from compiled execution
 - launcher metadata tables and static help projections
 
 That is better than runtime recomputation, but it is still not one execution
 authority.
 
-### 3. Runtime metadata is still a separate architecture family
+### 3. Runtime execution data still has multiple projections
 
-`nixfied/compiler/default.nix` still emits `compiled.execution.runtimeMetadata`.
+`compile-execution.nix` now emits runtime descriptors directly on
+`compiled.execution`.
 
-`compile-execution.nix` also embeds manifest-local runtime metadata.
+App manifests still embed narrowed execution projections.
 
-`runtime-handoff.nix` then re-expresses that data as cached shell handoffs.
+`runtime-handoff.nix` then re-expresses those descriptors as cached shell
+handoffs.
 
-This is cleaner than the old runtime getter layer, but it still means runtime
-metadata survives as its own architectural family instead of being absorbed
-into one canonical execution object.
+This is cleaner than the old runtime getter layer, but execution knowledge
+still has multiple projected forms instead of one fully shared transport.
 
 ### 4. Runtime control is still surfaced through more than one seam
 
@@ -821,7 +819,7 @@ generated case tables.
 That is true, but incomplete.
 
 The shell still retains a runtime handoff layer through `runtime-handoff.nix`
-backed by `compiled.execution.runtimeMetadata`.
+backed by `compiled.execution`.
 
 The representation is cleaner.
 
@@ -900,9 +898,9 @@ control plane around it.
 
 `workflow-modes.nix` died, but the same runtime planning knowledge came back as:
 
-- compiled runtime metadata
-- shell query helpers
-- kernel load commands
+- compiled execution descriptors
+- shell runtime handoff helpers
+- kernel handoff commands
 
 ### 3. Stronger guarantees created multi-layer guarantee tax
 
@@ -1137,7 +1135,7 @@ Projection rules:
 
 - selected app execution manifests may remain as projections
 - launcher/help inputs must be projections of the same execution authority
-- runtime metadata may remain temporarily only as a projection, not as the new
+- runtime handoff may remain temporarily only as a projection, not as the new
   canonical source of truth
 
 Must not happen:
@@ -1150,7 +1148,7 @@ Test work:
 
 - keep manifest behavior tests
 - keep direct feature proofs for compile and manifest ownership
-- delete or rewrite any test that still treats runtime metadata as a standalone
+- delete or rewrite any test that still treats execution descriptors as a standalone
   public surface
 - add checks that launcher/help selection data and manifests derive from the same
   compiled authority
@@ -1159,7 +1157,7 @@ Exit criteria:
 
 - one compiler-owned execution object exists
 - manifests, launchers, and runtime handoff consume projections of that object
-- no independent top-level runtime metadata or embedded manifest metadata
+- no independent runtime descriptor side channel or embedded manifest metadata
   ownership remains
 
 Risk:
@@ -1174,8 +1172,8 @@ Goal:
 
 Required deletions:
 
-- delete the remaining nested `runtimeMetadata` projection inside
-  `nixfied/compiler/compile-execution.nix`
+- keep execution descriptors on the canonical `compiled.execution` object and
+  do not reintroduce side-channel runtime metadata projections
 - keep `nixfied/framework/runtime/runtime-handoff.nix` only as a coarse cached
   handoff layer until the shell no longer needs runtime descriptors
 - delete fine-grained runtime metadata loads and helpers used only to feed shell
@@ -1192,7 +1190,7 @@ Primary files:
 - `nixfied/framework/runtime/executor.nix`
 - `nixfied/framework/runtime/orchestrator.nix`
 - `nixfied/framework/runtime/shared-runtime-lib.nix`
-- `nixfied/framework/runtime/kernel/src/runtime_metadata.rs`
+- `nixfied/framework/runtime/kernel/src/execution_metadata.rs`
 - `nixfied/framework/runtime/kernel/src/task.rs`
 - `nixfied/framework/runtime/kernel/src/workflow.rs`
 - `nixfied/framework/runtime/kernel/src/summary.rs`
@@ -1204,7 +1202,7 @@ Must not happen:
 
 - no cleaner replacement getter library
 - no temporary JSON-plus-export dual transport
-- no preservation of runtime metadata query commands once the shell getter path
+- no preservation of fine-grained execution query commands once the shell getter path
   is gone
 
 Test work:
@@ -1216,7 +1214,7 @@ Test work:
 
 Exit criteria:
 
-- no separate runtime metadata projection family
+- no separate runtime descriptor projection family
 - no case-table runtime metadata layer
 - no summary counters round-tripping through export files
 - shell gets one coarse structured runtime handoff only where OS-edge inputs are
