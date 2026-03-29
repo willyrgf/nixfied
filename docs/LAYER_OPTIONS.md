@@ -170,7 +170,6 @@ Files under pressure:
 
 - `nixfied/compiler/default.nix`
 - `nixfied/compiler/compile-execution.nix`
-- `nixfied/compiler/compile-runtime-metadata.nix`
 - `nixfied/compiler/finalize-model.nix`
 - `nixfied/framework/core/mkLauncherMetadata.nix`
 - `nixfied/framework/core/mkFlakeOutputs.nix`
@@ -194,7 +193,7 @@ Primary effect:
 Files under pressure:
 
 - `nixfied/compiler/default.nix`
-- `nixfied/compiler/compile-runtime-metadata.nix`
+- `nixfied/compiler/compile-execution.nix`
 - `nixfied/framework/runtime/executor.nix`
 - `nixfied/framework/runtime/orchestrator.nix`
 - `nixfied/framework/runtime/kernel/src/task.rs`
@@ -208,8 +207,8 @@ Why it matters:
 Current evidence from code:
 
 - the named `runtime-metadata.nix` file is already gone, but the seam remains as
-  a separate `compile-runtime-metadata.nix` projection plus shell loader/query
-  paths
+  a nested `runtimeMetadata` projection in `compile-execution.nix` plus shell
+  loader/query paths
 - `executor.nix` and `orchestrator.nix` still rely on fine-grained task and
   workflow runtime loads because shell reads runtime fields piecemeal
 - this supports deleting the fine-grained metadata seam entirely rather than
