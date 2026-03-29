@@ -404,8 +404,13 @@ let
       requestedServiceNames = builtins.map (entry: entry.name) serviceEntries;
       compiledServiceApis =
         if serviceSurfaceCatalog == null then null else serviceSurfaceCatalog.serviceApis or { };
+      compiledOperationCatalog =
+        if serviceSurfaceCatalog == null then null else serviceSurfaceCatalog.operationCatalog or { };
       missingServiceApis = builtins.filter (
         name: !(builtins.hasAttr name compiledServiceApis)
+      ) requestedServiceNames;
+      missingOperationCatalogs = builtins.filter (
+        name: !(builtins.hasAttr name compiledOperationCatalog)
       ) requestedServiceNames;
       serviceEntriesFromCatalog = builtins.listToAttrs (
         map (serviceName: {
@@ -418,6 +423,8 @@ let
       throw "nixfied service runtime surfaces require compiled serviceSurfaceCatalog"
     else if requestedServiceNames == [ ] then
       { }
+    else if missingOperationCatalogs != [ ] then
+      throw "nixfied service runtime surfaces expected operation catalogs for all selected services in serviceSurfaceCatalog: ${builtins.concatStringsSep ", " missingOperationCatalogs}"
     else if missingServiceApis == [ ] then
       serviceEntriesFromCatalog
     else
@@ -463,12 +470,20 @@ let
   ) serviceApiCatalogEntries;
 
   serviceApis = serviceApiCatalogEntries;
-  serviceHookEnv = runtimeHelpers.serviceApi.mkServiceHookEnvFromContracts {
+  serviceOperationCatalogEntries = builtins.listToAttrs (
+    map (serviceName: {
+      name = serviceName;
+      value = serviceSurfaceCatalog.operationCatalog.${serviceName};
+    }) (builtins.attrNames serviceApis)
+  );
+  serviceHookEnv = runtimeHelpers.serviceApi.mkServiceHookEnvFromCatalog {
     serviceContracts = serviceApis;
+    operationCatalog = serviceOperationCatalogEntries;
     inherit serviceAdapters;
   };
-  serviceAppPrograms = runtimeHelpers.serviceApi.mkServiceAppProgramsFromContracts {
+  serviceAppPrograms = runtimeHelpers.serviceApi.mkServiceAppProgramsFromCatalog {
     serviceContracts = serviceApis;
+    operationCatalog = serviceOperationCatalogEntries;
     inherit serviceAdapters;
   };
 in
