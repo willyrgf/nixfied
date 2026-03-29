@@ -132,16 +132,6 @@ in
     NIXFIED_WORKFLOW_HANDOFF_CURRENT_DIR="$dir"
   }
 
-  task_hook_handoff_dir() {
-    local task_id="$1"
-    local phase="$2"
-    local hook_id="$3"
-    local dir=""
-
-    dir="$(task_handoff_ensure "$task_id")" || return 1
-    printf '%s/hooks/%s/%s' "$dir" "$phase" "$hook_id"
-  }
-
   task_descriptor_exists() {
     task_handoff_ensure "$1" >/dev/null 2>&1
   }
@@ -174,13 +164,6 @@ in
       "$NIXFIED_MODEL_FILE" \
       "$workflow_id" \
       "$mode_override"
-  }
-
-  workflow_simple_shorthand_exists_for_family() {
-    local workflow_id="$1"
-    local candidate="$2"
-
-    workflow_resolve_mode_id "$workflow_id" "$candidate" >/dev/null 2>&1
   }
 
   normalize_run_artifacts_dir() {
