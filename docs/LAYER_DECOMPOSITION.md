@@ -2,7 +2,7 @@
 
 Status: working note
 
-Date: 2026-03-27
+Date: 2026-03-29
 
 ## Purpose
 
@@ -47,10 +47,10 @@ bridges, or duplicate authority, it is under deletion pressure.
 These current facts matter when evaluating options:
 
 - public flake apps stayed flat at `38`
-- shell-heavy runtime control files still total `4,770` LOC, or `5,688` if
-  `runtime/env-sandbox.nix` is included
-- generic service glue around runtime surfaces totals about `3,160` LOC
-- sampled service implementation files total about `1,543` LOC
+- shell-heavy runtime control files still total about `4,738` LOC, or `5,656`
+  if `runtime/env-sandbox.nix` is included
+- generic service glue around runtime surfaces still totals about `3,143` LOC
+- sampled service implementation files total about `1,118` LOC
 - the kernel currently exposes `34` concrete leaf operations across validation,
   run-record, task, workflow, registry, summary, probe, and machine-output
   families
@@ -75,7 +75,7 @@ The current stack can be decomposed as:
 7. dispatcher layer
 8. orchestrator layer
 9. executor layer
-10. shell runtime metadata layer
+10. runtime metadata projection and shell query layer
 11. env and isolation layer
 12. kernel runtime layer
 13. service boundary helper layer
@@ -187,11 +187,9 @@ Current files:
 - `nixfied/compiler/default.nix`
 - `nixfied/compiler/resolve-modules.nix`
 - `nixfied/compiler/finalize-model.nix`
-- `nixfied/compiler/compile-selection-index.nix`
+- `nixfied/compiler/compile-execution.nix`
 - `nixfied/compiler/compile-validation-ir.nix`
-- `nixfied/compiler/compile-runtime-manifest.nix`
 - `nixfied/compiler/compile-runtime-metadata.nix`
-- `nixfied/compiler/compile-app-execution-manifests.nix`
 - `nixfied/compiler/compile-service-catalog.nix`
 - `nixfied/compiler/compile-service-sets.nix`
 - `nixfied/compiler/compile-service-surface-catalog.nix`
@@ -308,9 +306,9 @@ What to evaluate in solutions:
 
 Current files:
 
-- `nixfied/compiler/compile-selection-index.nix`
-- `nixfied/compiler/compile-app-execution-manifests.nix`
-- `nixfied/framework/runtime/service-selection.nix`
+- `nixfied/compiler/compile-execution.nix`
+- `nixfied/compiler/compile-runtime-metadata.nix`
+- `nixfied/framework/core/mkFlakeOutputs.nix`
 - `nixfied/framework/core/materializeExecution.nix`
 
 Necessary:
@@ -321,14 +319,14 @@ Necessary:
 
 Accidental:
 
-- runtime fallback recomputation of the selection index
-- selection logic spread across launcher metadata, execution manifests, and
-  runtime helpers
-- `nixfied/framework/runtime/service-selection.nix` existing as a runtime layer
-  even though it is only a thin alias over `compile-selection-index.nix`
-- `selectionIndex` currently appears to be passed through `orchestrator.nix` and
-  `executor.nix` without being consumed by the analyzed shell path, which makes
-  the fallback recomputation look close to dead code already
+- shell selection CSV logic still lives in launcher wrappers and app-resolution
+  paths
+- narrowed execution manifests and top-level runtime metadata still exist beside
+  the canonical execution graph
+- selected-service closure logic is still spread across compiler execution data,
+  launcher resolution, and runtime materialization
+- the named `service-selection.nix` seam is gone, but the duplicated selection
+  authority still exists
 
 Keep:
 
@@ -354,7 +352,7 @@ What to evaluate in solutions:
 | Dispatcher | Keep only if truly thin | public shell entrypoints and usage framing |
 | Orchestrator | Keep unless kernel takes over process supervision | run lifecycle and stop controls |
 | Executor | Keep unless kernel takes over execution edges | task launch, hooks, service-set adapter launch |
-| Runtime metadata shell API | Strong collapse pressure | cache and query shell-facing runtime metadata |
+| Runtime metadata projection and shell query glue | Strong collapse pressure | project compiled runtime data into shell-consumable query paths |
 | Env and isolation | Keep | shell-native env bootstrapping and isolation |
 | Shared/common runtime helpers | Keep selectively | atomic file writes, common shell utilities, run-id env prep |
 
@@ -398,7 +396,6 @@ Current files:
 
 - `nixfied/framework/runtime/orchestrator.nix`
 - `nixfied/framework/runtime/orchestrator-runtime.nix`
-- `nixfied/framework/runtime/orchestrator-control.nix`
 
 Necessary:
 
@@ -479,11 +476,16 @@ What to evaluate in solutions:
 - should the kernel own task dependency execution fully?
 - should summary and runtime metadata stop round-tripping through shell exports?
 
-### 10. Shell Runtime Metadata Layer
+### 10. Runtime Metadata Projection And Shell Query Layer
 
 Current files:
 
-- `nixfied/framework/runtime/runtime-metadata.nix`
+- `nixfied/compiler/default.nix`
+- `nixfied/compiler/compile-runtime-metadata.nix`
+- `nixfied/framework/runtime/executor.nix`
+- `nixfied/framework/runtime/orchestrator.nix`
+- `nixfied/framework/runtime/kernel/src/task.rs`
+- `nixfied/framework/runtime/kernel/src/workflow.rs`
 
 Necessary:
 
@@ -495,10 +497,11 @@ Necessary if shell remains large:
 
 Accidental:
 
-- shell caching of runtime state that originates in compiled metadata
-- `eval` of kernel-rendered exports
-- fine-grained task and workflow metadata query API surviving after
-  `workflow-modes.nix` was deleted
+- top-level runtime metadata compilation remaining separate from the canonical
+  execution graph
+- shell still asking the kernel for task and workflow runtime fields piecemeal
+- loader commands and runtime projections surviving after the named
+  `runtime-metadata.nix` file was deleted
 
 Keep:
 
@@ -881,7 +884,7 @@ Collapse/Delete pressure:
 Current files:
 
 - `tests/framework/compiler-validation.nix`
-- `tests/framework/runtime-service-selection-contract.nix`
+- `tests/framework/feature-manifest-proof.nix`
 - `tests/framework/selected-app-manifest-contract.nix`
 - `tests/framework/workflow-ref-app-manifest-contract.nix`
 - `tests/framework/runtime-manifest-fixture-contract.nix`
