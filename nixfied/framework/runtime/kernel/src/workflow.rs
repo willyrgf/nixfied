@@ -2005,6 +2005,83 @@ mod tests {
         }
     }
 
+    #[test]
+    fn workflow_parallel_marks_deadlocked_units_blocked() {
+        let mut first = workflow_unit("first", "task.first");
+        first.needs = vec!["second".to_string()];
+
+        let mut second = workflow_unit("second", "task.second");
+        second.needs = vec!["first".to_string()];
+
+        let workflow = WorkflowSchedulerWorkflow {
+            units: vec![first, second],
+        };
+        let mut state = build_workflow_parallel_state(&workflow, false, 2, &BTreeSet::new());
+
+        assert_eq!(state.units["first"].state, "pending");
+        assert_eq!(state.units["second"].state, "pending");
+
+        match workflow_parallel_next_action(&mut state) {
+            WorkflowParallelAction::Cancel {
+                unit_name,
+                task_id,
+                reason,
+                extra_key,
+                extra_value,
+            } => {
+                assert_eq!(unit_name, "first");
+                assert_eq!(task_id, "task.first");
+                assert_eq!(reason, "blocked");
+                assert_eq!(extra_key, "");
+                assert_eq!(extra_value, "");
+            }
+            other => panic!(
+                "expected first blocked cancellation, got {:?}",
+                action_name(&other)
+            ),
+        }
+
+        assert_eq!(state.workflow_status, 1);
+        assert_eq!(state.units["first"].state, "cancel-pending");
+        assert_eq!(state.units["first"].cancel_reason, "blocked");
+        assert_eq!(state.units["second"].state, "cancel-pending");
+        assert_eq!(state.units["second"].cancel_reason, "blocked");
+
+        workflow_parallel_transition(&mut state, "first", "canceled", "", "blocked", "", "")
+            .expect("first blocked cancellation should succeed");
+
+        match workflow_parallel_next_action(&mut state) {
+            WorkflowParallelAction::Cancel {
+                unit_name,
+                task_id,
+                reason,
+                extra_key,
+                extra_value,
+            } => {
+                assert_eq!(unit_name, "second");
+                assert_eq!(task_id, "task.second");
+                assert_eq!(reason, "blocked");
+                assert_eq!(extra_key, "");
+                assert_eq!(extra_value, "");
+            }
+            other => panic!(
+                "expected second blocked cancellation, got {:?}",
+                action_name(&other)
+            ),
+        }
+
+        workflow_parallel_transition(&mut state, "second", "canceled", "", "blocked", "", "")
+            .expect("second blocked cancellation should succeed");
+
+        match workflow_parallel_next_action(&mut state) {
+            WorkflowParallelAction::Done { workflow_status } => assert_eq!(workflow_status, 1),
+            other => panic!(
+                "expected blocked workflow to finish, got {:?}",
+                action_name(&other)
+            ),
+        }
+    }
+
     fn action_name(action: &impl std::fmt::Debug) -> String {
         format!("{action:?}")
     }
