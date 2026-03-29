@@ -934,7 +934,8 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
 
     if [ -n "$workflow_ref" ]; then
       execution_mode="workflow"
-      ephemeral_enabled="$(workflow_ephemeral_flag "$workflow_ref")"
+      workflow_handoff_use "$workflow_ref" || return 1
+      ephemeral_enabled="$NIXFIED_WORKFLOW_EPHEMERAL_FLAG"
     fi
 
     if [ "$task_id" = "task.ops.test-isolation" ]; then
@@ -1003,7 +1004,8 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
       mode="workflow-parallel"
     fi
 
-    ephemeral_enabled="$(workflow_ephemeral_flag "$workflow_id")"
+    workflow_handoff_use "$workflow_id" || return 1
+    ephemeral_enabled="$NIXFIED_WORKFLOW_EPHEMERAL_FLAG"
     mapfile -t run_id_args < <(call_with_array_args FORWARD_ARGS filter_run_id_args)
     run_id="$(call_with_array_args run_id_args compute_run_id "workflow" "$workflow_id" "")"
     attempt_id="$(compute_attempt_id)"
