@@ -42,16 +42,19 @@ let
 in
 assert baseExecution.schema.kind == "nixfied-execution";
 assert baseExecution.schema.version == 1;
+assert !(baseOutputs.model.compiled ? runtimeMetadata);
+assert baseOutputs.model.compiled.execution ? runtimeMetadata;
 assert lib.hasInfix "run-selected-app.nix" checkProgram;
 assert !(lib.hasInfix "run-selected-app.nix" workflowProgram);
 assert checkExecution.taskId == "task.check";
 assert checkExecution.workflowId == null;
 assert checkExecution.taskIds == [ "task.check" ];
 assert checkExecution.workflowIds == [ ];
+assert !(checkExecution.model.compiled ? runtimeMetadata);
 assert sortKeys checkExecution.model.tasks == [ "task.check" ];
 assert sortKeys checkExecution.model.workflows == [ ];
 assert sortKeys checkExecution.model.serviceCatalog == [ ];
-assert checkExecution.model.compiled.runtimeMetadata.tasks."task.check".runner.type == "derivation";
+assert checkExecution.model.compiled.execution.runtimeMetadata.tasks."task.check".runner.type == "derivation";
 assert builtins.elem "task.ops.test-isolation" (sortKeys isolationExecution.model.tasks);
 assert builtins.elem "task.ops.validate-env" (sortKeys isolationExecution.model.tasks);
 assert builtins.elem "task.test.isolation.probe" (sortKeys isolationExecution.model.tasks);
@@ -59,7 +62,7 @@ assert builtins.elem "task.test.isolation.unit" (sortKeys isolationExecution.mod
 assert !(builtins.elem "task.ci" (sortKeys isolationExecution.model.tasks));
 assert hasSubset [ "workflow.test.isolation.probe" ] (sortKeys isolationExecution.model.workflows);
 assert
-  isolationExecution.model.compiled.runtimeMetadata.workflows."workflow.test.isolation.probe".family
+  isolationExecution.model.compiled.execution.runtimeMetadata.workflows."workflow.test.isolation.probe".family
   == "test";
 assert workflowExecution.taskId == null;
 assert workflowExecution.workflowId == "workflow.ci.full";
@@ -67,7 +70,8 @@ assert workflowExecution.taskIds != [ ];
 assert workflowExecution.workflowIds == [ "workflow.ci.full" ];
 assert sortKeys workflowExecution.model.workflows == [ "workflow.ci.full" ];
 assert
-  workflowExecution.model.compiled.runtimeMetadata.workflows."workflow.ci.full".family == "ci";
+  workflowExecution.model.compiled.execution.runtimeMetadata.workflows."workflow.ci.full".family
+  == "ci";
 pkgs.runCommand "selected-execution-contract" { } ''
   echo "OK: selected execution stays narrowed for taskRef and workflowRef apps" > "$out"
 ''

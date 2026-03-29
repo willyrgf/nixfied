@@ -7,20 +7,24 @@ let
   commonRuntimeShell = import ./common-runtime.nix { inherit pkgs; };
   skipPolicy = import ./helpers/skip-policy.nix { inherit pkgs; };
   kernelPackage = import ./kernel { inherit pkgs; };
-  runtimeMetadata =
+  compiledExecution =
     if model == null then
+      { }
+    else
+      ((model.compiled or { }).execution or { });
+  runtimeMetadata =
+    if compiledExecution == { } then
       {
         tasks = { };
         workflows = { };
         workflowFamilies = { };
       }
     else
-      ((model.compiled or { }).runtimeMetadata or {
+      (compiledExecution.runtimeMetadata or {
         tasks = { };
         workflows = { };
         workflowFamilies = { };
-      }
-      );
+      });
   tasks = runtimeMetadata.tasks or { };
   workflows = runtimeMetadata.workflows or { };
   workflowFamilies = runtimeMetadata.workflowFamilies or { };

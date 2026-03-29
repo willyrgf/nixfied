@@ -217,6 +217,8 @@ assert model.apps."framework::test".taskId == frameworkTask.id;
 assert model ? compiled;
 assert model.compiled ? apiCatalog;
 assert model.compiled ? execution;
+assert model.compiled.execution ? runtimeMetadata;
+assert !(model.compiled ? runtimeMetadata);
 assert !(model.compiled ? runtimeManifests);
 assert model.compiled ? serviceSurfaceCatalog;
 assert builtins.isList (model.compiled.serviceSurfaceCatalog.appNames or [ ]);

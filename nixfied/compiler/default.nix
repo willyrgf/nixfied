@@ -96,10 +96,6 @@ let
       canonical
       ;
   };
-  compileRuntimeMetadata = import ./compile-runtime-metadata.nix {
-    inherit lib;
-  };
-
   compileIntrospectionGraph = import ./compile-introspection-graph.nix {
     inherit
       lib
@@ -324,16 +320,6 @@ rec {
         inherit introspectionGraph;
       };
 
-      runtimeMetadata = compileRuntimeMetadata {
-        inherit
-          tasks
-          workflows
-          serviceCatalog
-          apps
-          ;
-        compiledExecution = execution;
-      };
-
       views = compileViews {
         inherit projectRoot;
         resolved = resolvedModuleGraph.config;
@@ -363,7 +349,6 @@ rec {
           views
           apiCatalog
           execution
-          runtimeMetadata
           serviceSurfaceCatalog
           ;
         resolved = resolvedModuleGraph.config;

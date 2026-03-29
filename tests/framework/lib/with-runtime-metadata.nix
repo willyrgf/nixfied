@@ -18,13 +18,6 @@ let
         tasks = model.tasks or { };
         workflows = model.workflows or { };
       };
-  runtimeMetadata = import ../../../nixfied/compiler/compile-runtime-metadata.nix { inherit lib; } {
-    apps = model.apps or { };
-    compiledExecution = execution;
-    tasks = model.tasks or { };
-    workflows = model.workflows or { };
-    serviceCatalog = model.serviceCatalog or { };
-  };
 in
 model
 // {
@@ -36,6 +29,5 @@ model
     ])
     // {
       inherit execution;
-      inherit runtimeMetadata;
     };
 }
