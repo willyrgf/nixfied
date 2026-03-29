@@ -77,6 +77,8 @@ let
     || !(builtins.all (snippet: lib.hasInfix snippet source) entry.snippets)
   ) jqAllowlist;
   machineOutputSource = builtins.readFile ../../nixfied/framework/core/mkMachineOutputPrograms.nix;
+  compilerDefaultSource = builtins.readFile ../../nixfied/compiler/default.nix;
+  finalizeModelSource = builtins.readFile ../../nixfied/compiler/finalize-model.nix;
   mkFlakeOutputsSource = builtins.readFile ../../nixfied/framework/core/mkFlakeOutputs.nix;
   frameworkTestPresetSource = builtins.readFile ../../nixfied/framework/presets/framework-test.nix;
   probePlanRuntimeSource = builtins.readFile ../../nixfied/framework/runtime/helpers/probe-plan-runtime.nix;
@@ -141,6 +143,9 @@ assert filesWithDeprecatedKernelMarkers == [ ];
 assert !kernelSourceHasDeprecatedMarkers;
 assert pkgs.lib.hasInfix "nixfied-kernel machine-output run" machineOutputSource;
 assert !(pkgs.lib.hasInfix "validatorProgram" machineOutputSource);
+assert !(pkgs.lib.hasInfix "runtimeMetadata = compileRuntimeMetadata" compilerDefaultSource);
+assert !(pkgs.lib.hasInfix "runtimeMetadata ? null" finalizeModelSource);
+assert !(pkgs.lib.hasInfix "runtimeMetadata = runtimeMetadata;" finalizeModelSource);
 assert !(pkgs.lib.hasInfix "runtimeControlOrchestrator = import ../runtime/orchestrator.nix" mkFlakeOutputsSource);
 assert !(pkgs.lib.hasInfix "runtimeControlApps = builtins.listToAttrs" mkFlakeOutputsSource);
 assert !(pkgs.lib.hasInfix "runtimeControlHelpFiles = {" mkFlakeOutputsSource);
@@ -176,6 +181,8 @@ assert pkgs.lib.hasInfix "workflow_family_from_id() {" executorRuntimeSource;
 assert pkgs.lib.hasInfix "workflow_family_modes_joined() {" executorRuntimeSource;
 assert pkgs.lib.hasInfix "workflow_simple_shorthand_exists_for_family() {" executorRuntimeSource;
 assert pkgs.lib.hasInfix "workflow_resolve_mode_id() {" executorRuntimeSource;
+assert pkgs.lib.hasInfix "((model.compiled or { }).execution or { })" executorRuntimeSource;
+assert !(pkgs.lib.hasInfix "((model.compiled or { }).runtimeMetadata or {" executorRuntimeSource);
 assert !(pkgs.lib.hasInfix "nixfied-kernel workflow resolve-mode" executorRuntimeSource);
 assert !(pkgs.lib.hasInfix "nixfied-kernel workflow load-runtime" executorRuntimeSource);
 assert !(pkgs.lib.hasInfix "nixfied-kernel task load-runtime" executorRuntimeSource);

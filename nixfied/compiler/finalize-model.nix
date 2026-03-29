@@ -7,7 +7,6 @@
   runtime,
   apiCatalog ? null,
   execution ? null,
-  runtimeMetadata ? null,
   serviceSurfaceCatalog ? null,
   services ? null,
   serviceCatalog,
@@ -96,7 +95,6 @@ let
       compiled = {
         apiCatalog = apiCatalog;
         execution = execution;
-        runtimeMetadata = runtimeMetadata;
         serviceSurfaceCatalog = serviceSurfaceCatalog;
       };
     }

@@ -22,6 +22,12 @@ let
     inherit tasks workflows;
   };
   inherit (closureLib) workflowFamilyFromId;
+  workflowModeFromId =
+    workflowId:
+    let
+      match = builtins.match "^workflow\\.([^.]+)\\.(.+)$" workflowId;
+    in
+    if match == null then "" else builtins.elemAt match 1;
 
   taskSet = if tasks == null then { } else tasks;
   workflowSet = if workflows == null then { } else workflows;
@@ -364,6 +370,77 @@ let
     };
   };
 
+  mkExecutionProjection =
+    {
+      projectionTaskIds,
+      projectionWorkflowIds,
+      projectionTasks,
+      projectionWorkflows,
+      projectionServiceCatalog,
+    }:
+    let
+      projectionWorkflowFamilies = uniqueSorted (
+        builtins.filter (family: family != "") (map workflowFamilyFromId projectionWorkflowIds)
+      );
+      projectionWorkflowIdsByFamily = builtins.listToAttrs (
+        map (family: {
+          name = family;
+          value = builtins.filter (
+            workflowId: workflowFamilyFromId workflowId == family
+          ) projectionWorkflowIds;
+        }) projectionWorkflowFamilies
+      );
+      projectionWorkflowModesByFamily = builtins.listToAttrs (
+        map (family: {
+          name = family;
+          value = uniqueSorted (map workflowModeFromId (projectionWorkflowIdsByFamily.${family} or [ ]));
+        }) projectionWorkflowFamilies
+      );
+      projectionExecution = {
+        inherit (executionBase) schema;
+        enabledServices = uniqueSorted (
+          map (
+            serviceId:
+            let
+              service = projectionServiceCatalog.${serviceId};
+            in
+            service.name or serviceId
+          ) (builtins.attrNames projectionServiceCatalog)
+        );
+        taskIds = projectionTaskIds;
+        workflowIds = projectionWorkflowIds;
+        workflowFamilies = projectionWorkflowFamilies;
+        workflowIdsByFamily = projectionWorkflowIdsByFamily;
+        workflowModesByFamily = projectionWorkflowModesByFamily;
+        tasks = {
+          byId = lib.getAttrs projectionTaskIds executionBase.tasks.byId;
+        };
+        workflows = {
+          byId = lib.getAttrs projectionWorkflowIds executionBase.workflows.byId;
+        };
+      };
+    in
+    canonical.canonicalize (
+      projectionExecution
+      // {
+        runtimeMetadata = compileRuntimeMetadata {
+          apps = appSet;
+          compiledExecution = projectionExecution;
+          tasks = projectionTasks;
+          workflows = projectionWorkflows;
+          serviceCatalog = projectionServiceCatalog;
+        };
+      }
+    );
+
+  compiledExecution = mkExecutionProjection {
+    projectionTaskIds = taskIds;
+    projectionWorkflowIds = workflowIds;
+    projectionTasks = taskSet;
+    projectionWorkflows = workflowSet;
+    projectionServiceCatalog = catalog;
+  };
+
   appExecutionById = builtins.listToAttrs (
     map (
       appId:
@@ -376,20 +453,24 @@ let
             goAppTask [ ] app.taskId;
         selectedServices =
           if (app.kind or "") == "workflowRef" then
-            uniqueSorted (executionBase.workflows.byId.${app.workflowId}.exactClosureSelectedServices or [ ])
+            uniqueSorted (
+              compiledExecution.workflows.byId.${app.workflowId}.exactClosureSelectedServices or [ ]
+            )
           else
-            uniqueSorted (executionBase.tasks.byId.${app.taskId}.closureSelectedServices or [ ]);
+            uniqueSorted (
+              compiledExecution.tasks.byId.${app.taskId}.closureSelectedServices or [ ]
+            );
         serviceCatalogFiltered = lib.filterAttrs (
           _: service: builtins.elem (service.name or service.id) selectedServices
         ) catalog;
         manifestTasks = lib.getAttrs closure.taskIds taskSet;
         manifestWorkflows = lib.getAttrs closure.workflowIds workflowSet;
-        manifestRuntimeMetadata = compileRuntimeMetadata {
-          apps = appSet;
-          compiledExecution = executionBase;
-          tasks = manifestTasks;
-          workflows = manifestWorkflows;
-          serviceCatalog = serviceCatalogFiltered;
+        manifestExecution = mkExecutionProjection {
+          projectionTaskIds = closure.taskIds;
+          projectionWorkflowIds = closure.workflowIds;
+          projectionTasks = manifestTasks;
+          projectionWorkflows = manifestWorkflows;
+          projectionServiceCatalog = serviceCatalogFiltered;
         };
         manifestEvalHash = canonical.hashCanonical {
           schema = {
@@ -420,7 +501,7 @@ let
           tasks = manifestTasks;
           workflows = manifestWorkflows;
           compiled = {
-            runtimeMetadata = manifestRuntimeMetadata;
+            execution = manifestExecution;
           };
         };
       in
@@ -453,7 +534,7 @@ let
   }) serviceSetCatalog;
 in
 canonical.canonicalize (
-  executionBase
+  compiledExecution
   // {
     apps = {
       ids = manifestAppIds;
