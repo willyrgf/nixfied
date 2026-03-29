@@ -532,9 +532,8 @@ Current notable manifest or metadata families include:
 - `nixfied-probe-execution-plan`
 - `nixfied-runtime-manifest-catalog`
 - `nixfied-validation-ir`
-- `nixfied-workflow-summary-plan`
 
-That is `8` relevant manifest or metadata forms in the current runtime path.
+That is `7` relevant manifest or metadata forms in the current runtime path.
 
 The pre-RFC shape had `14` in the equivalent family if you include the now
 deleted workflow and task planning/state forms.

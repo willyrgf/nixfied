@@ -1863,26 +1863,6 @@ pub(crate) fn workflow_parallel_transition(
     Ok(())
 }
 
-pub(crate) fn load_workflow_summary_plan(path: &str) -> Result<WorkflowSummaryPlan, String> {
-    let value = parse_json_file(path, "workflow summary plan")?;
-    let kind = required_string_field(&value, "kind", "workflow summary plan")?;
-    if kind != "nixfied-workflow-summary-plan" {
-        return Err(format!("unsupported workflow summary plan kind: {}", kind));
-    }
-    let version = object_field(&value, "version")
-        .and_then(json_value_to_i64)
-        .ok_or_else(|| "workflow summary plan missing integer field version".to_string())?;
-    if version != 1 {
-        return Err(format!(
-            "workflow summary plan version must be 1 (got {})",
-            version
-        ));
-    }
-    Ok(WorkflowSummaryPlan {
-        task_runner_types: object_string_map(&value, "taskRunnerTypes", "workflow summary plan")?,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

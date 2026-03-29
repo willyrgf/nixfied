@@ -8,13 +8,41 @@ let
   validationBundleFile = pkgs.writeText "nixfied-runtime-artifact-contract-bundle.json" (
     builtins.toJSON runtimeArtifactContracts.bundle
   );
-  summaryPlanFile = pkgs.writeText "nixfied-workflow-summary-plan.json" (
+  executionSourceFile = pkgs.writeText "nixfied-execution.json" (
     builtins.toJSON {
-      kind = "nixfied-workflow-summary-plan";
-      version = 1;
-      taskRunnerTypes = {
-        "task.skip" = "shell";
-        "task.fail" = "shell";
+      schema = {
+        kind = "nixfied-execution";
+        version = 1;
+      };
+      tasks = {
+        ids = [
+          "task.fail"
+          "task.skip"
+        ];
+        byId = {
+          "task.skip" = {
+            runner = {
+              type = "shell";
+            };
+          };
+          "task.fail" = {
+            runner = {
+              type = "shell";
+            };
+          };
+        };
+      };
+      workflows = {
+        ids = [ ];
+        byId = { };
+      };
+      apps = {
+        ids = [ ];
+        byId = { };
+      };
+      serviceSets = {
+        ids = [ ];
+        byId = { };
       };
     }
   );
@@ -57,7 +85,7 @@ pkgs.runCommand "registry-detail-derivation-smoke" { } ''
   terminal_status="$(read_trimmed_file "$TMPDIR/terminal.out")"
   [ "$terminal_status" = "$(printf 'failed\t7')" ] || fail "registry terminal should preserve derived exit code (got '$terminal_status')"
 
-  "$KERNEL" summary collect-steps ${pkgs.lib.escapeShellArg summaryPlanFile} "$INDEX_FILE" "$RUN_ID" "$ATTEMPT_ID" "$STEPS_FILE" > "$SUMMARY_COUNTS"
+  "$KERNEL" summary collect-steps ${pkgs.lib.escapeShellArg executionSourceFile} "$INDEX_FILE" "$RUN_ID" "$ATTEMPT_ID" "$STEPS_FILE" > "$SUMMARY_COUNTS"
   IFS=$'\t' read -r WORKFLOW_PASSED_COUNT WORKFLOW_FAILED_COUNT WORKFLOW_SKIPPED_COUNT WORKFLOW_CANCELED_COUNT _SUMMARY_STEPS_DURATION _SUMMARY_PEAK_WORKERS < "$SUMMARY_COUNTS"
 
   [ "$WORKFLOW_PASSED_COUNT" = "0" ] || fail "unexpected passed count '$WORKFLOW_PASSED_COUNT'"

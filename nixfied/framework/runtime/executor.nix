@@ -79,13 +79,6 @@ let
     lib.concatStringsSep "\n" availableServiceNames
     + lib.optionalString (availableServiceNames != [ ]) "\n"
   );
-  workflowSummaryPlanFile = pkgs.writeText "nixfied-workflow-summary-plan.json" (
-    builtins.toJSON {
-      kind = "nixfied-workflow-summary-plan";
-      version = 1;
-      taskRunnerTypes = builtins.mapAttrs (_: task: task.runner.type or "shell") (model.tasks or { });
-    }
-  );
   taskKernelAdapter = pkgs.writeShellScript "nixfied-task-kernel-adapter" ''
     exec "$NIXFIED_EXECUTOR_SELF" run-task-kernel-leaf "$@"
   '';
@@ -1091,7 +1084,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           fi
 
           if ! summary_counts="$(${kernelPackage}/bin/nixfied-kernel summary collect-steps \
-            ${pkgs.lib.escapeShellArg (builtins.toString workflowSummaryPlanFile)} \
+            "$MODEL_FILE" \
             "$events_index_file" \
             "$run_id" \
             "$attempt_id" \
