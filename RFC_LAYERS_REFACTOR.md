@@ -2,7 +2,7 @@
 
 Status: discussion draft
 
-Date: 2026-03-27
+Date: 2026-03-29
 
 Supersedes: the earlier draft of this file
 
@@ -31,7 +31,7 @@ It is a repository-specific diagnosis based on:
 - `RFC_LAYERS_REFACTOR.md`
 - `docs/ARCHITECTURE.md`
 - `docs/DETAILED.md`
-- the current codebase on 2026-03-27
+- the current codebase on 2026-03-29
 - normalized LOC measurements
 - git history through the kernelization and follow-on cleanup period
 
@@ -92,8 +92,8 @@ It is a repository-specific diagnosis based on:
   parallel workflow kernelization
 - `8b4bbd4`:
   RFC-branch layer-collapse commit
-- `bdfc68a`:
-  current branch tip at time of investigation
+- `9fb5196`:
+  current branch tip at time of rewrite
 
 ### Measurement method
 
@@ -309,21 +309,25 @@ They were reintroduced in compiled form via:
 This file now owns the merged task runtime, hook runtime, and shell-plan
 rendering logic that used to live in the old workflow modes layer.
 
-### 2. A shell metadata query API backed by the kernel
+### 2. A compiled runtime metadata projection plus a shell case-table API
 
-The current runtime still exposes a framework metadata API to shell through:
+The named `nixfied/framework/runtime/runtime-metadata.nix` file is already
+gone.
 
-- `nixfied/framework/runtime/runtime-metadata.nix`
+Its responsibilities still survive through:
 
-This layer caches task and workflow runtime state in shell variables and loads
-them by calling:
+- `nixfied/compiler/compile-runtime-metadata.nix`
+- `nixfied/framework/runtime/executor-runtime.nix`
+- `nixfied/framework/runtime/kernel/src/runtime_metadata.rs`
 
-- `nixfied-kernel task load-runtime`
-- `nixfied-kernel task load-hook`
-- `nixfied-kernel workflow load-runtime`
+`compile-runtime-metadata.nix` still materializes merged task, hook, and
+workflow runtime data as a separate projection family.
 
-So the old generated shell query API died, but a new shell query API replaced
-it.
+`executor-runtime.nix` then turns that projection into shell case tables and
+helper functions that the executor and orchestrator use in-process.
+
+So the old generated shell query API died, but the metadata seam still exists
+in a cleaner compiled form.
 
 ### 3. A broader kernel metadata/query surface
 
@@ -347,11 +351,11 @@ still more kernel API surface than "kernel is just the runtime executor".
 `tests/framework` grew because the refactor added:
 
 - migration guards
-- runtime manifest fixtures
+- direct feature proofs
 - kernel-native proofs
 - test ownership metadata
-- shard validation
-- service extractability proofs
+- layout validation
+- selected execution and service-set behavior contracts
 
 This bought stronger guarantees, but it is still real code that the repository
 must carry.
@@ -390,12 +394,13 @@ The surrounding shell control plane did not.
 
 ### Runtime selection
 
-Selection knowledge still exists in more than one place:
+Selection and execution knowledge still exists in more than one place:
 
-- compiled selection data
-- runtime imports of `compile-selection-index.nix`
-- selected execution manifests
-- workflow mode resolution helpers
+- `nixfied/compiler/compile-execution.nix`
+- top-level `compiled.runtimeMetadata`
+- per-app execution manifests with embedded runtime metadata
+- launcher metadata and static help generation in `mkLauncherMetadata.nix` and
+  `mkFlakeOutputs.nix`
 
 The model is cleaner than before, but not yet singular.
 
@@ -433,16 +438,15 @@ The current shell-heavy runtime control files are still large:
 
 | File | LOC |
 | --- | ---: |
-| `nixfied/framework/runtime/dispatcher.nix` | 316 |
-| `nixfied/framework/runtime/orchestrator.nix` | 1,090 |
+| `nixfied/framework/runtime/dispatcher.nix` | 314 |
+| `nixfied/framework/runtime/orchestrator.nix` | 1,120 |
 | `nixfied/framework/runtime/orchestrator-runtime.nix` | 409 |
-| `nixfied/framework/runtime/orchestrator-control.nix` | 385 |
-| `nixfied/framework/runtime/executor.nix` | 1,793 |
-| `nixfied/framework/runtime/executor-runtime.nix` | 455 |
-| `nixfied/framework/runtime/runtime-metadata.nix` | 322 |
-| subtotal | 4,770 |
+| `nixfied/framework/runtime/executor.nix` | 1,624 |
+| `nixfied/framework/runtime/executor-runtime.nix` | 1,040 |
+| `nixfied/framework/runtime/shared-runtime-lib.nix` | 231 |
+| subtotal | 4,738 |
 | `nixfied/framework/runtime/env-sandbox.nix` | 918 |
-| subtotal including env sandbox | 5,688 |
+| subtotal including env sandbox | 5,656 |
 
 That is not "shell as a tiny adapter only".
 
@@ -598,12 +602,10 @@ This is a partial collapse, not an end-to-end collapse.
 
 Current path:
 
-1. Nix compiles task runtime and hook runtime metadata
-2. shell asks `runtime-metadata.nix` for task runtime information
-3. that shell library calls `nixfied-kernel task load-runtime`
-4. kernel prints shell exports
-5. shell `eval`s the exports into cache variables
-6. executor uses those variables to build runtime shell and invoke hooks
+1. Nix compiles task, hook, and workflow runtime metadata
+2. `executor-runtime.nix` turns `compiled.runtimeMetadata` into shell case tables
+3. executor and orchestrator query those case tables in-process
+4. executor uses the resulting values to build runtime shell and invoke hooks
 
 What improved:
 
@@ -611,8 +613,8 @@ What improved:
 
 What did not disappear:
 
-- shell metadata API
-- export rendering protocol
+- a separate runtime metadata projection family
+- a shell metadata API in `executor-runtime.nix`
 - shell caching and indirection layer
 
 This is better authority with only partial seam deletion.
@@ -720,31 +722,39 @@ Examples:
 
 This is classic accidental framework fat.
 
-### 2. Selection is still recomputable at runtime
+### 2. Execution knowledge still lives in multiple compiled projections
 
-Both:
+The old runtime selection fallback imports are already gone.
 
-- `nixfied/framework/runtime/orchestrator.nix`
-- `nixfied/framework/runtime/executor.nix`
+The remaining duplication is now between:
 
-can still fall back to importing `compile-selection-index.nix` if a compiled
-selection index was not passed in.
+- `nixfied/compiler/compile-execution.nix`
+- top-level `compiled.runtimeMetadata`
+- per-app execution manifests that embed runtime metadata
+- launcher metadata tables and static help projections
 
-That means the compile-time authority is still not singular in practice.
+That is better than runtime recomputation, but it is still not one execution
+authority.
 
-### 3. `serviceSetPrograms` still have dual authorities
+### 3. Runtime metadata is still a separate architecture family
 
-`nixfied/framework/core/materializeExecution.nix` compiles `serviceSetPrograms`.
+`nixfied/compiler/default.nix` still emits top-level `compiled.runtimeMetadata`.
 
-But `nixfied/framework/runtime/executor.nix` can synthesize them again if the
-compiled value is empty.
+`compile-execution.nix` also embeds manifest-local runtime metadata.
 
-That is a textbook example of duplicated responsibility surviving a refactor.
+`executor-runtime.nix` then re-expresses that data as shell case tables.
 
-### 4. Runtime control is surfaced through more than one seam
+This is cleaner than the old runtime getter layer, but it still means runtime
+metadata survives as its own architectural family instead of being absorbed
+into one canonical execution object.
 
-`nixfied/framework/core/mkFlakeOutputs.nix` builds runtime control apps through
-`orchestrator-control`.
+### 4. Runtime control is still surfaced through more than one seam
+
+The dedicated `orchestrator-control.nix` file is gone.
+
+But `nixfied/framework/core/mkFlakeOutputs.nix` still owns the visible
+runtime-control app/help surface, while `dispatcher.nix` and `orchestrator.nix`
+own the behavior for:
 
 At the same time, `dispatcher.nix` still defines shell app surfaces for:
 
@@ -782,10 +792,9 @@ enough public boundaries to split cleanly.
 The test suite gained:
 
 - per-check layer metadata
-- proof-kind metadata
 - canonical coverage metadata
 - owner-file metadata
-- shard validation
+- profile and layout validation
 
 This is useful, but it is still code paid to manage architecture that remained
 too layered.
@@ -814,7 +823,8 @@ generated case tables.
 
 That is true, but incomplete.
 
-The shell still retains a metadata API layer through `runtime-metadata.nix`.
+The shell still retains a metadata API layer through `executor-runtime.nix`
+backed by `compiled.runtimeMetadata`.
 
 The representation is cleaner.
 
@@ -955,26 +965,25 @@ Generic framework glue around services:
 | File | LOC |
 | --- | ---: |
 | `nixfied/framework/runtime/env-sandbox.nix` | 918 |
-| `nixfied/framework/core/mkServiceRuntimeSurfaces.nix` | 442 |
+| `nixfied/framework/core/mkServiceRuntimeSurfaces.nix` | 482 |
 | `nixfied/framework/core/mkServiceSetPrograms.nix` | 756 |
-| `nixfied/framework/runtime/helpers/service-api.nix` | 647 |
-| `nixfied/framework/runtime/services/service-operations-builder.nix` | 100 |
+| `nixfied/framework/runtime/helpers/service-api.nix` | 690 |
 | `nixfied/framework/runtime/services/service-config-builder.nix` | 46 |
 | `nixfied/framework/core/materializeExecution.nix` | 251 |
-| total | 3,160 |
+| total | 3,143 |
 
 Sampled service implementation files:
 
 | File | LOC |
 | --- | ---: |
-| `runtime/services/postgres/default.nix` | 289 |
+| `runtime/services/postgres/default.nix` | 124 |
 | `runtime/services/postgres/config.nix` | 114 |
 | `runtime/services/postgres/lifecycle.nix` | 601 |
-| `runtime/services/nginx/default.nix` | 211 |
-| `runtime/services/minio/default.nix` | 142 |
-| `runtime/services/reth/default.nix` | 87 |
-| `runtime/services/helios/default.nix` | 99 |
-| total | 1,543 |
+| `runtime/services/nginx/default.nix` | 100 |
+| `runtime/services/minio/default.nix` | 72 |
+| `runtime/services/reth/default.nix` | 51 |
+| `runtime/services/helios/default.nix` | 56 |
+| total | 1,118 |
 
 This is strong evidence that the framework platform around services is still
 fatter than the services it is trying to abstract.
@@ -1039,52 +1048,51 @@ The repository now has a chosen pre-implementation sequence derived from
 The stages below are ordered, breaking by design, and intended to be completed
 before any broader feature work resumes.
 
-### Stage 0: Prep - delete fake runtime authorities
+### Stage 0: Prep - delete remaining fake shell runtime authorities
 
 Goal:
 
-- remove low-regret duplicated authorities before larger representation changes
+- finish low-regret authority deletions before larger representation changes
 
 Required deletions:
 
-- delete `nixfied/framework/runtime/service-selection.nix`
-- delete executor synthesis fallback for `serviceSetPrograms`
-- delete `nixfied/framework/runtime/orchestrator-control.nix` as a separate
-  program/layer
-- keep one runtime-control owner in the shell path and remove the duplicate
-  surfacing path in launchers and tests
+- delete any remaining split ownership of `runs`, `stop-run`, and
+  `stop-all-runs` across flake-surface projection and shell runtime behavior
+- keep `serviceSetPrograms` compiler-owned and prevent runtime re-synthesis from
+  returning
+- keep runtime selection compile-only and prevent runtime re-materialization
+  from returning
 
 Primary files:
 
-- `nixfied/framework/runtime/service-selection.nix`
+- `nixfied/compiler/default.nix`
 - `nixfied/framework/runtime/executor.nix`
 - `nixfied/framework/runtime/orchestrator.nix`
-- `nixfied/framework/runtime/orchestrator-control.nix`
 - `nixfied/framework/runtime/dispatcher.nix`
 - `nixfied/framework/core/materializeExecution.nix`
 - `nixfied/framework/core/mkFlakeOutputs.nix`
-- `tests/framework/runtime-service-selection-contract.nix`
-- `tests/framework/runtime-control-launcher-contract.nix`
+- `tests/framework/framework-test-cli-contract-smoke.nix`
+- `tests/framework/selected-execution-contract.nix`
 - `tests/framework/contract-migration-guard.nix`
 
 Must not happen:
 
-- no compatibility wrapper that preserves both run-control paths
+- no compatibility wrapper that preserves duplicate run-control owners
 - no replacement fallback for deleted selection or `serviceSetPrograms`
-  synthesis
+  materialization
+- no new helper file that merely renames the same shell runtime-control split
 
 Test work:
 
-- delete tests that require `service-selection.nix`
-- replace launcher-name pinning with behavior tests for `runs`, `stop-run`, and
-  `stop-all-runs`
+- keep behavior tests for `runs`, `stop-run`, and `stop-all-runs`
+- keep `selected-execution-contract` proving selected execution stays narrow
 - update migration guards to stop preserving deleted seams
 
 Exit criteria:
 
-- no runtime recomputation/import of `compile-selection-index.nix`
+- no runtime re-materialization of selection data
 - no executor fallback synthesis of `serviceSetPrograms`
-- one shell control path owns run listing and stop behavior
+- one shell control path owns run listing and stop behavior end to end
 
 Risk:
 
@@ -1109,22 +1117,25 @@ Authority to create:
 
 Required deletions:
 
-- no top-level `selectionIndex` side-channel ownership
-- no top-level `appExecutionManifests` side-channel ownership
-- no parallel closure walkers for launcher logic and manifest narrowing
-- no `runtimeManifests` catalog as an independent architectural family
+- no top-level `compiled.runtimeMetadata` side-channel ownership
+- no per-app embedded runtime metadata that can diverge from the compiler-owned
+  execution authority
+- no parallel closure walkers for launcher logic, manifest narrowing, and help
+  surfacing
+- no separate execution metadata family beside the canonical execution object
 
 Primary files:
 
 - `nixfied/compiler/default.nix`
-- `nixfied/compiler/compile-selection-index.nix`
-- `nixfied/compiler/compile-app-execution-manifests.nix`
-- `nixfied/compiler/compile-runtime-manifest.nix`
+- `nixfied/compiler/compile-execution.nix`
 - `nixfied/compiler/compile-runtime-metadata.nix`
 - `nixfied/compiler/finalize-model.nix`
 - `nixfied/framework/core/mkLauncherMetadata.nix`
 - `nixfied/framework/core/mkFlakeOutputs.nix`
 - `nixfied/framework/core/materializeExecution.nix`
+- `tests/framework/compiler-validation.nix`
+- `tests/framework/features-surface-contract.nix`
+- `tests/framework/selected-execution-contract.nix`
 
 Projection rules:
 
@@ -1142,8 +1153,9 @@ Must not happen:
 Test work:
 
 - keep manifest behavior tests
-- delete or rewrite tests that pin `selectionIndex` as a separate exported
-  surface
+- keep direct feature proofs for compile and manifest ownership
+- delete or rewrite any test that still treats runtime metadata as a standalone
+  public surface
 - add checks that launcher/help selection data and manifests derive from the same
   compiled authority
 
@@ -1151,14 +1163,14 @@ Exit criteria:
 
 - one compiler-owned execution object exists
 - manifests, launchers, and runtime handoff consume projections of that object
-- no independent top-level `selectionIndex` or `appExecutionManifests`
+- no independent top-level runtime metadata or embedded manifest metadata
   ownership remains
 
 Risk:
 
 - high
 
-### Stage 2: D2 - delete shell metadata and export transport
+### Stage 2: D2 - delete shell runtime metadata projection and export transport
 
 Goal:
 
@@ -1166,8 +1178,11 @@ Goal:
 
 Required deletions:
 
-- delete `nixfied/framework/runtime/runtime-metadata.nix`
-- delete fine-grained kernel runtime query/export flows used only to feed shell
+- delete `nixfied/compiler/compile-runtime-metadata.nix` as a separate
+  architecture family
+- delete `nixfied/framework/runtime/executor-runtime.nix` as a shell metadata
+  case-table layer
+- delete fine-grained runtime metadata loads and helpers used only to feed shell
   getters
 - delete shell summary export sourcing
 - replace all of the above with one coarse structured runtime handoff only where
@@ -1175,35 +1190,41 @@ Required deletions:
 
 Primary files:
 
-- `nixfied/framework/runtime/runtime-metadata.nix`
+- `nixfied/compiler/default.nix`
+- `nixfied/compiler/compile-runtime-metadata.nix`
+- `nixfied/framework/runtime/executor-runtime.nix`
 - `nixfied/framework/runtime/executor.nix`
 - `nixfied/framework/runtime/orchestrator.nix`
 - `nixfied/framework/runtime/shared-runtime-lib.nix`
+- `nixfied/framework/runtime/kernel/src/runtime_metadata.rs`
 - `nixfied/framework/runtime/kernel/src/task.rs`
 - `nixfied/framework/runtime/kernel/src/workflow.rs`
 - `nixfied/framework/runtime/kernel/src/summary.rs`
-- `tests/framework/workflow-modes-contract.nix`
+- `tests/framework/framework-test-cli-contract-smoke.nix`
+- `tests/framework/summary-json-smoke.nix`
 - `tests/framework/contract-migration-guard.nix`
 
 Must not happen:
 
 - no cleaner replacement getter library
 - no temporary JSON-plus-export dual transport
-- no preservation of kernel `load-runtime` / `load-hook` style commands once the
-  shell getter path is gone
+- no preservation of runtime metadata query commands once the shell getter path
+  is gone
 
 Test work:
 
-- replace source-text assertions with behavior checks around summary artifacts
-  and runtime invocation
+- replace projection and source-text assertions with behavior checks around
+  summary artifacts and runtime invocation
 - add tests for the new coarse handoff shape
 - pin run-id behavior before changing metadata recursion
 
 Exit criteria:
 
-- no `runtime-metadata.nix`
-- no shell `eval` of kernel-rendered exports for runtime metadata
+- no separate runtime metadata projection family
+- no `executor-runtime.nix` case-table metadata layer
 - no summary counters round-tripping through export files
+- shell gets one coarse structured runtime handoff only where OS-edge inputs are
+  still required
 
 Risk:
 
@@ -1281,7 +1302,7 @@ Required deletions:
 
 - no compiler import of runtime service implementations through synthetic
   `project` and `slots` context
-- no hardcoded `serviceModulePath.nix` ownership map
+- no hardcoded service ownership map kept beside typed contract data
 - no mixed publicApi/exported/observability object as the service boundary
 - no sidecar or runtime-owned public contract source kept beside typed module
   schema
@@ -1293,10 +1314,8 @@ Primary files:
 - `nixfied/compiler/compile-services.nix`
 - `nixfied/framework/core/mkServiceRuntimeSurfaces.nix`
 - `nixfied/framework/core/mkServiceSetPrograms.nix`
-- `nixfied/framework/core/serviceModulePath.nix`
 - `nixfied/framework/runtime/helpers/service-api.nix`
 - `nixfied/framework/runtime/helpers/app-api.nix`
-- `nixfied/framework/runtime/helpers/service-module.nix`
 - `nixfied/framework/runtime/helpers/service-observability.nix`
 - `nixfied/framework/runtime/services/*`
 - `tests/framework/service-*.nix`
@@ -1346,7 +1365,10 @@ Risk:
 
 Keep:
 
-- manifest narrowing proofs
+- direct feature proofs
+- `tests/framework/selected-execution-contract.nix`
+- `tests/framework/service-set-behavior-contract.nix`
+- `tests/framework/ephemeral-runtime-behavior-smoke.nix`
 - launcher pruning proofs
 - runtime env isolation proofs
 - service-hook env scoping proofs
@@ -1356,8 +1378,9 @@ Keep:
 Delete or downgrade as seams disappear:
 
 - migration guards that pin deleted imports or helper names
+- pure snapshot or source-shape freezes
 - runtime-control launcher binary-name pinning
-- runtime selection fallback equality checks
+- non-feature architecture tests carrying feature ownership metadata
 - shard taxonomy governance that exists only to freeze the current seam map
 
 Add:
@@ -1367,6 +1390,15 @@ Add:
 - kernel tests for root task DAG execution
 - direct tests that prove manifest, launcher, and runtime handoff share the same
   execution authority
+
+### Success Metrics Per Stage
+
+- each stage must be net-negative repo LOC
+- the retained non-feature test bucket must shrink after every seam-deletion
+  wave
+- no stage may leave stale references to deleted seams in docs, shards, or
+  migration guards
+- the `feature-proof` profile must stay small and direct throughout the refactor
 
 ## What This RFC Is Not Saying
 
