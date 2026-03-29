@@ -17,14 +17,14 @@ pub(crate) fn task_command(subcommand: &str, values: &[String]) -> Result<(), St
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum TaskVisitKind {
     Passed,
     ServiceSkipped,
     Failed,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct TaskVisitOutcome {
     exit_code: i64,
     kind: TaskVisitKind,
@@ -647,4 +647,282 @@ fn task_cancel_detail(reason: &str, extra_key: &str, extra_value: &str) -> JsonV
         }
     }
     detail
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::env;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static NEXT_FIXTURE_ID: AtomicU64 = AtomicU64::new(0);
+
+    struct TaskRunFixture {
+        root: PathBuf,
+        bundle_path: PathBuf,
+        registry_root: PathBuf,
+        adapter_path: PathBuf,
+        adapter_log_path: PathBuf,
+    }
+
+    impl TaskRunFixture {
+        fn new(exit_codes: &[(&str, i64)]) -> Self {
+            let root = unique_temp_dir("kernel-task-tests");
+            let bundle_path = root.join("bundle.json");
+            let registry_root = root.join("registry");
+            let adapter_path = root.join("task-adapter.sh");
+            let adapter_log_path = root.join("task-adapter.log");
+
+            write_text(
+                &bundle_path,
+                &render_json_compact(&json!({
+                    "definitions": {
+                        "runtime.registryEvent": {
+                            "type": "record",
+                            "closed": false,
+                            "fields": {}
+                        }
+                    }
+                })),
+            );
+            fs::create_dir_all(&registry_root).expect("registry root should be created");
+            write_task_adapter_script(&adapter_path, &adapter_log_path, exit_codes);
+
+            Self {
+                root,
+                bundle_path,
+                registry_root,
+                adapter_path,
+                adapter_log_path,
+            }
+        }
+
+        fn context<'a>(
+            &'a self,
+            metadata: &'a JsonValue,
+            skipped_services: &'a BTreeSet<String>,
+        ) -> TaskRunContext<'a> {
+            TaskRunContext {
+                metadata,
+                bundle_path: self
+                    .bundle_path
+                    .to_str()
+                    .expect("bundle path should be utf-8"),
+                registry_root: self
+                    .registry_root
+                    .to_str()
+                    .expect("registry root should be utf-8"),
+                run_id: "run-1",
+                attempt_id: "attempt-1",
+                skipped_services,
+                task_adapter: self
+                    .adapter_path
+                    .to_str()
+                    .expect("adapter path should be utf-8"),
+                passthrough_args: &[],
+            }
+        }
+
+        fn adapter_log_lines(&self) -> Vec<String> {
+            read_lines(&self.adapter_log_path)
+        }
+
+        fn registry_index_lines(&self) -> Vec<String> {
+            read_lines(&self.registry_root.join("events.index.tsv"))
+        }
+    }
+
+    impl Drop for TaskRunFixture {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn unique_temp_dir(prefix: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after unix epoch")
+            .as_nanos();
+        let seq = NEXT_FIXTURE_ID.fetch_add(1, Ordering::Relaxed);
+        let path = env::temp_dir().join(format!(
+            "{}-{}-{}",
+            prefix,
+            std::process::id(),
+            nanos + seq as u128
+        ));
+        fs::create_dir_all(&path).expect("fixture temp dir should be created");
+        path
+    }
+
+    fn write_text(path: &Path, contents: &str) {
+        fs::write(path, contents).unwrap_or_else(|err| {
+            panic!("failed to write {}: {}", path.display(), err);
+        });
+    }
+
+    fn write_task_adapter_script(path: &Path, log_path: &Path, exit_codes: &[(&str, i64)]) {
+        let mut script = String::from("#!/bin/sh\nset -eu\n");
+        script.push_str(&format!(
+            "printf '%s\\n' \"$1\" >> '{}'\n",
+            log_path.display()
+        ));
+        script.push_str("case \"$1\" in\n");
+        for (task_id, exit_code) in exit_codes {
+            script.push_str(&format!("  '{}') exit {} ;;\n", task_id, exit_code));
+        }
+        script.push_str("  *) exit 0 ;;\n");
+        script.push_str("esac\n");
+
+        write_text(path, &script);
+        let mut permissions = fs::metadata(path)
+            .expect("adapter metadata should exist")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(path, permissions).expect("adapter should be executable");
+    }
+
+    fn read_lines(path: &Path) -> Vec<String> {
+        match fs::read_to_string(path) {
+            Ok(contents) => contents
+                .lines()
+                .map(|line| line.to_string())
+                .collect::<Vec<_>>(),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(err) => panic!("failed to read {}: {}", path.display(), err),
+        }
+    }
+
+    fn shell_task(needs: &[&str], soft_needs: &[&str], required_services: &[&str]) -> JsonValue {
+        json!({
+            "deps": {
+                "needs": needs,
+                "softNeeds": soft_needs,
+            },
+            "requiredServices": required_services,
+            "produces": {},
+        })
+    }
+
+    fn execution_metadata(tasks: &[(&str, JsonValue)]) -> JsonValue {
+        let task_map = tasks
+            .iter()
+            .map(|(task_id, task)| ((*task_id).to_string(), task.clone()))
+            .collect::<serde_json::Map<_, _>>();
+        json!({
+            "schema": {
+                "kind": "nixfied-execution",
+                "version": 1,
+            },
+            "tasks": {
+                "byId": task_map,
+            },
+            "workflows": {
+                "byId": {},
+            },
+        })
+    }
+
+    #[test]
+    fn task_run_visit_detects_cycles_before_execution() {
+        let metadata = execution_metadata(&[
+            ("task.root", shell_task(&["task.dep"], &[], &[])),
+            ("task.dep", shell_task(&["task.root"], &[], &[])),
+        ]);
+        let plan = load_task_dependency_plan(&metadata).expect("plan should load");
+        let fixture = TaskRunFixture::new(&[]);
+        let skipped_services = BTreeSet::new();
+        let context = fixture.context(&metadata, &skipped_services);
+        let mut active = BTreeSet::new();
+        let mut results = BTreeMap::new();
+
+        let err = task_run_visit(&context, &plan, "task.root", &mut active, &mut results)
+            .expect_err("cyclic dependency should fail");
+
+        assert!(err.contains("cyclic task dependency detected"));
+        assert!(fixture.adapter_log_lines().is_empty());
+        assert!(fixture.registry_index_lines().is_empty());
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn task_run_visit_propagates_hard_dependency_failure() {
+        let metadata = execution_metadata(&[
+            ("task.root", shell_task(&["task.dep"], &[], &[])),
+            ("task.dep", shell_task(&[], &[], &[])),
+        ]);
+        let plan = load_task_dependency_plan(&metadata).expect("plan should load");
+        let fixture = TaskRunFixture::new(&[("task.dep", 17)]);
+        let skipped_services = BTreeSet::new();
+        let context = fixture.context(&metadata, &skipped_services);
+        let mut active = BTreeSet::new();
+        let mut results = BTreeMap::new();
+
+        let outcome = task_run_visit(&context, &plan, "task.root", &mut active, &mut results)
+            .expect("hard dependency failure should return an outcome");
+
+        assert_eq!(outcome.exit_code, 17);
+        assert!(matches!(outcome.kind, TaskVisitKind::Failed));
+        assert_eq!(fixture.adapter_log_lines(), vec!["task.dep"]);
+        assert_eq!(results["task.dep"].exit_code, 17);
+        assert_eq!(results["task.root"].exit_code, 17);
+        let index = fixture.registry_index_lines();
+        assert_eq!(index.len(), 2);
+        assert!(index[0].contains("\trun-1\tattempt-1\t\ttask.dep\trunning\t\t"));
+        assert!(index[1].contains("\trun-1\tattempt-1\t\ttask.dep\tfailed\t\t17"));
+    }
+
+    #[test]
+    fn task_run_visit_allows_soft_dependency_failure_and_runs_root() {
+        let metadata = execution_metadata(&[
+            ("task.root", shell_task(&[], &["task.soft"], &[])),
+            ("task.soft", shell_task(&[], &[], &[])),
+        ]);
+        let plan = load_task_dependency_plan(&metadata).expect("plan should load");
+        let fixture = TaskRunFixture::new(&[("task.soft", 9)]);
+        let skipped_services = BTreeSet::new();
+        let context = fixture.context(&metadata, &skipped_services);
+        let mut active = BTreeSet::new();
+        let mut results = BTreeMap::new();
+
+        let outcome = task_run_visit(&context, &plan, "task.root", &mut active, &mut results)
+            .expect("soft dependency failure should not fail the root task");
+
+        assert_eq!(outcome.exit_code, 0);
+        assert!(matches!(outcome.kind, TaskVisitKind::Passed));
+        assert_eq!(fixture.adapter_log_lines(), vec!["task.soft", "task.root"]);
+        assert_eq!(results["task.soft"].exit_code, 9);
+        assert_eq!(results["task.root"].exit_code, 0);
+        let index = fixture.registry_index_lines();
+        assert_eq!(index.len(), 4);
+        assert!(index[1].contains("\ttask.soft\tfailed\t\t9"));
+        assert!(index[2].contains("\ttask.root\trunning\t\t"));
+        assert!(index[3].contains("\ttask.root\tpassed\t\t"));
+    }
+
+    #[test]
+    fn task_run_visit_skips_required_service_without_running_adapter() {
+        let metadata =
+            execution_metadata(&[("task.root", shell_task(&[], &[], &["service.redis"]))]);
+        let plan = load_task_dependency_plan(&metadata).expect("plan should load");
+        let fixture = TaskRunFixture::new(&[]);
+        let skipped_services = BTreeSet::from(["service.redis".to_string()]);
+        let context = fixture.context(&metadata, &skipped_services);
+        let mut active = BTreeSet::new();
+        let mut results = BTreeMap::new();
+
+        let outcome = task_run_visit(&context, &plan, "task.root", &mut active, &mut results)
+            .expect("service skip should return an outcome");
+
+        assert_eq!(outcome.exit_code, 3);
+        assert!(matches!(outcome.kind, TaskVisitKind::ServiceSkipped));
+        assert!(fixture.adapter_log_lines().is_empty());
+        assert_eq!(results["task.root"].exit_code, 3);
+        let index = fixture.registry_index_lines();
+        assert_eq!(index.len(), 1);
+        assert!(index[0].contains("\ttask.root\tcanceled\tservice-skipped\t"));
+    }
 }
