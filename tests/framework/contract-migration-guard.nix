@@ -81,6 +81,7 @@ let
   compilerDefaultSource = builtins.readFile ../../nixfied/compiler/default.nix;
   finalizeModelSource = builtins.readFile ../../nixfied/compiler/finalize-model.nix;
   mkFlakeOutputsSource = builtins.readFile ../../nixfied/framework/core/mkFlakeOutputs.nix;
+  materializeExecutionSource = builtins.readFile ../../nixfied/framework/core/materializeExecution.nix;
   frameworkTestPresetSource = builtins.readFile ../../nixfied/framework/presets/framework-test.nix;
   probePlanRuntimeSource = builtins.readFile ../../nixfied/framework/runtime/helpers/probe-plan-runtime.nix;
   dispatcherSource = builtins.readFile ../../nixfied/framework/runtime/dispatcher.nix;
@@ -151,6 +152,7 @@ assert !(pkgs.lib.hasInfix "nixfied-runtime-metadata" compileExecutionSource);
 assert !(pkgs.lib.hasInfix "runtimeMetadata = compileRuntimeMetadata" compilerDefaultSource);
 assert !(pkgs.lib.hasInfix "runtimeMetadata ? null" finalizeModelSource);
 assert !(pkgs.lib.hasInfix "runtimeMetadata = runtimeMetadata;" finalizeModelSource);
+assert pkgs.lib.hasInfix "includeRuntimeControlApps = false;" materializeExecutionSource;
 assert
   !(pkgs.lib.hasInfix "runtimeControlOrchestrator = import ../runtime/orchestrator.nix" mkFlakeOutputsSource);
 assert !(pkgs.lib.hasInfix "runtimeControlApps = builtins.listToAttrs" mkFlakeOutputsSource);
@@ -183,6 +185,7 @@ assert pkgs.lib.hasInfix "\"runs\" = mkShellApp" dispatcherSource;
 assert pkgs.lib.hasInfix "\"stop-run\" = mkShellApp" dispatcherSource;
 assert pkgs.lib.hasInfix "\"stop-all-runs\" = mkShellApp" dispatcherSource;
 assert pkgs.lib.hasInfix "executionEnabled ? true" dispatcherSource;
+assert pkgs.lib.hasInfix "includeRuntimeControlApps ? true" dispatcherSource;
 assert pkgs.lib.hasInfix "task_handoff_ensure() {" runtimeHandoffSource;
 assert pkgs.lib.hasInfix "workflow_handoff_ensure() {" runtimeHandoffSource;
 assert pkgs.lib.hasInfix "workflow_simple_shorthand_exists_for_family() {" runtimeHandoffSource;
