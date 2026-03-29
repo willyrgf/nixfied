@@ -60,15 +60,20 @@ assert pkgs.lib.hasInfix "INFO: task context runId=" source;
 assert pkgs.lib.hasInfix "run_task_hooks() {" source;
 assert pkgs.lib.hasInfix "INFO: hook $phase $hook_id start" source;
 assert pkgs.lib.hasInfix "ERROR: hook $phase $hook_id failed exitCode=$hook_exit_code" source;
-assert pkgs.lib.hasInfix "runtime_plan_shell=\"$(task_runtime_plan_shell \"$task_id\")\"" source;
+assert pkgs.lib.hasInfix
+  "runtime_plan_shell=\"$(cat \"$NIXFIED_TASK_HANDOFF_CURRENT_DIR/runtime-plan.sh\")\""
+  source;
 assert pkgs.lib.hasInfix "command=\"$NIXFIED_TASK_RUNNER_COMMAND\"" source;
 assert pkgs.lib.hasInfix "package_path=\"$NIXFIED_TASK_RUNNER_PACKAGE\"" source;
-assert pkgs.lib.hasInfix "done < <(task_hook_ids \"$task_id\" \"$phase\")" source;
+assert pkgs.lib.hasInfix "cat \"$task_handoff_dir/base-closure-selected-services.txt\"" source;
+assert pkgs.lib.hasInfix
+  "cat \"$NIXFIED_WORKFLOW_HANDOFF_CURRENT_DIR/unit-closure-selected-services.txt\""
+  source;
+assert pkgs.lib.hasInfix "hook_ids_file=\"$task_handoff_dir/$phase-hook-ids.txt\"" source;
+assert pkgs.lib.hasInfix "done < \"$hook_ids_file\"" source;
 assert pkgs.lib.hasInfix "task_handoff_use \"$task_id\" || return 3" source;
 assert pkgs.lib.hasInfix "workflow_handoff_use \"$workflow_id\" || return 1" source;
 assert pkgs.lib.hasInfix "task_print_help() {" runtimeSource;
-assert pkgs.lib.hasInfix "task_runtime_plan_shell() {" runtimeSource;
-assert pkgs.lib.hasInfix "task_hook_runtime_plan_shell() {" runtimeSource;
 assert pkgs.lib.hasInfix "workflow_resolve_mode_id() {" runtimeSource;
 assert pkgs.lib.hasInfix "task_validate_args() {" runtimeSource;
 assert pkgs.lib.hasInfix "task_handoff_ensure() {" runtimeSource;
@@ -76,6 +81,14 @@ assert pkgs.lib.hasInfix "workflow_handoff_ensure() {" runtimeSource;
 assert pkgs.lib.hasInfix "nixfied-kernel task handoff" runtimeSource;
 assert pkgs.lib.hasInfix "nixfied-kernel workflow handoff" runtimeSource;
 assert pkgs.lib.hasInfix "nixfied-kernel workflow resolve-mode" runtimeSource;
+assert !(pkgs.lib.hasInfix "task_base_closure_selected_services() {" runtimeSource);
+assert !(pkgs.lib.hasInfix "workflow_unit_closure_selected_services() {" runtimeSource);
+assert !(pkgs.lib.hasInfix "task_invocation_selected_services() {" runtimeSource);
+assert !(pkgs.lib.hasInfix "task_runtime_plan_shell() {" runtimeSource);
+assert !(pkgs.lib.hasInfix "task_retry_backoff_values() {" runtimeSource);
+assert !(pkgs.lib.hasInfix "task_hook_ids() {" runtimeSource);
+assert !(pkgs.lib.hasInfix "task_hook_command() {" runtimeSource);
+assert !(pkgs.lib.hasInfix "task_hook_runtime_plan_shell() {" runtimeSource);
 assert !(pkgs.lib.hasInfix "task_runner_type() {" runtimeSource);
 assert !(pkgs.lib.hasInfix "task_runner_command() {" runtimeSource);
 assert !(pkgs.lib.hasInfix "task_runner_package() {" runtimeSource);

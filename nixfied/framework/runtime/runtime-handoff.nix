@@ -166,18 +166,6 @@ in
       -- "$@"
   }
 
-  task_base_closure_selected_services() {
-    local dir=""
-    dir="$(task_handoff_ensure "$1")" || return 1
-    cat "$dir/base-closure-selected-services.txt"
-  }
-
-  workflow_unit_closure_selected_services() {
-    local dir=""
-    dir="$(workflow_handoff_ensure "$1")" || return 1
-    cat "$dir/unit-closure-selected-services.txt"
-  }
-
   workflow_resolve_mode_id() {
     local workflow_id="$1"
     local mode_override="''${2:-}"
@@ -193,61 +181,6 @@ in
     local candidate="$2"
 
     workflow_resolve_mode_id "$workflow_id" "$candidate" >/dev/null 2>&1
-  }
-
-  task_invocation_selected_services() {
-    local task_id="$1"
-    local resolved_workflow_id="''${2:-}"
-
-    task_base_closure_selected_services "$task_id"
-    if [ -n "$resolved_workflow_id" ]; then
-      workflow_unit_closure_selected_services "$resolved_workflow_id"
-    fi
-  }
-
-  task_runtime_plan_shell() {
-    local dir=""
-    dir="$(task_handoff_ensure "$1")" || return 1
-    cat "$dir/runtime-plan.sh"
-  }
-
-  task_retry_backoff_values() {
-    local dir=""
-    dir="$(task_handoff_ensure "$1")" || return 1
-    cat "$dir/retry-backoff-values.txt"
-  }
-
-  task_hook_ids() {
-    local task_id="$1"
-    local phase="$2"
-    local dir=""
-
-    dir="$(task_handoff_ensure "$task_id")" || return 1
-    case "$phase" in
-      pre)
-        cat "$dir/pre-hook-ids.txt"
-        ;;
-      post)
-        cat "$dir/post-hook-ids.txt"
-        ;;
-      *)
-        return 1
-        ;;
-    esac
-  }
-
-  task_hook_command() {
-    local hook_dir=""
-    hook_dir="$(task_hook_handoff_dir "$1" "$2" "$3")" || return 1
-    [ -f "$hook_dir/exports.sh" ] || return 1
-    . "$hook_dir/exports.sh"
-    printf '%s' "$NIXFIED_TASK_HOOK_COMMAND"
-  }
-
-  task_hook_runtime_plan_shell() {
-    local hook_dir=""
-    hook_dir="$(task_hook_handoff_dir "$1" "$2" "$3")" || return 1
-    cat "$hook_dir/runtime-plan.sh"
   }
 
   normalize_run_artifacts_dir() {
