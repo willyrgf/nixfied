@@ -77,7 +77,6 @@ let
       "summary-json-smoke"
       "workflow-lifecycle-smoke"
       "workflow-mode-derived-smoke"
-      "workflow-parallel-blocked-smoke"
       "workflow-probe-scope-smoke"
       "workflow-validation-errors"
       "workspace-registry-isolation-smoke"

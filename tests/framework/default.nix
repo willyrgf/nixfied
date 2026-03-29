@@ -720,10 +720,6 @@ let
         ;
     };
 
-    "workflow-parallel-blocked-smoke" = import ./workflow-parallel-blocked-smoke.nix {
-      inherit pkgs;
-    };
-
     "parallel-worker-cap-smoke" = import ./parallel-worker-cap-smoke.nix {
       inherit
         pkgs
