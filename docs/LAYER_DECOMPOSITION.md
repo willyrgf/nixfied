@@ -885,9 +885,8 @@ Current files:
 
 - `tests/framework/compiler-validation.nix`
 - `tests/framework/feature-manifest-proof.nix`
-- `tests/framework/selected-app-manifest-contract.nix`
-- `tests/framework/workflow-ref-app-manifest-contract.nix`
-- `tests/framework/runtime-manifest-fixture-contract.nix`
+- `tests/framework/selected-execution-contract.nix`
+- `tests/framework/service-set-behavior-contract.nix`
 
 Necessary:
 
