@@ -670,10 +670,6 @@ let
       inherit pkgs;
     };
 
-    "service-observability-contract" = import ./service-observability-contract.nix {
-      inherit pkgs;
-    };
-
     "runtime-events-contract" = import ./runtime-events-contract.nix {
       inherit pkgs;
     };
