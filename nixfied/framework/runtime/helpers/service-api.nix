@@ -629,38 +629,44 @@ let
     in
     builtins.foldl' dedup { } pairs;
 
-  mkServiceAppsFromContracts =
+  mkServiceAppProgramsFromContracts =
     args:
     let
-      _ = if appApi == null then throw "mkServiceAppsFromContracts requires appApi" else null;
+      _ =
+        if appApi == null then
+          throw "mkServiceAppProgramsFromContracts requires appApi"
+        else
+          null;
       ops = builtins.filter (op: op.includeApp) (collectServiceOps args);
       pairs = map (op: {
         name = op.appName;
-        value = appApi.mkContractBackedApp {
-          name = op.appName;
-          script = ''
-            exec ${toString op.launcher} "$@"
-          '';
-          contract = {
-            class = op.class;
-            summary = op.opCfg.summary;
-            details = op.opCfg.details;
-            usage = op.usage;
-            examples = op.opCfg.examples or [ ];
-            args = op.opCfg.args or [ ];
-            env = op.opCfg.env or [ ];
-            category = op.category;
-            idempotent = op.idempotent;
-          };
-          env = { };
-          useDeps = false;
-          meta = {
-            nixfied = {
-              service = op.serviceName;
-              operation = op.opName;
+        value = (
+          appApi.mkContractBackedApp {
+            name = op.appName;
+            script = ''
+              exec ${toString op.launcher} "$@"
+            '';
+            contract = {
+              class = op.class;
+              summary = op.opCfg.summary;
+              details = op.opCfg.details;
+              usage = op.usage;
+              examples = op.opCfg.examples or [ ];
+              args = op.opCfg.args or [ ];
+              env = op.opCfg.env or [ ];
+              category = op.category;
+              idempotent = op.idempotent;
             };
-          };
-        };
+            env = { };
+            useDeps = false;
+            meta = {
+              nixfied = {
+                service = op.serviceName;
+                operation = op.opName;
+              };
+            };
+          }
+        ).program;
       }) ops;
     in
     builtins.listToAttrs pairs;
@@ -685,6 +691,6 @@ in
     validateServiceAdapters
     mkRuntimePrimitivesV1
     mkServiceHookEnvFromContracts
-    mkServiceAppsFromContracts
+    mkServiceAppProgramsFromContracts
     ;
 }
