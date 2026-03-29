@@ -166,26 +166,6 @@ in
       -- "$@"
   }
 
-  task_runner_type() {
-    task_handoff_use "$1" || return 1
-    printf '%s' "$NIXFIED_TASK_RUNNER_TYPE"
-  }
-
-  task_runner_command() {
-    task_handoff_use "$1" || return 1
-    printf '%s' "$NIXFIED_TASK_RUNNER_COMMAND"
-  }
-
-  task_runner_package() {
-    task_handoff_use "$1" || return 1
-    printf '%s' "$NIXFIED_TASK_RUNNER_PACKAGE"
-  }
-
-  task_runner_workflow_id() {
-    task_handoff_use "$1" || return 1
-    printf '%s' "$NIXFIED_TASK_RUNNER_WORKFLOW_ID"
-  }
-
   task_base_closure_selected_services() {
     local dir=""
     dir="$(task_handoff_ensure "$1")" || return 1
@@ -231,25 +211,10 @@ in
     cat "$dir/runtime-plan.sh"
   }
 
-  task_produces_json() {
-    task_handoff_use "$1" || return 1
-    printf '%s' "$NIXFIED_TASK_PRODUCES_JSON"
-  }
-
-  task_max_attempts() {
-    task_handoff_use "$1" || return 1
-    printf '%s' "$NIXFIED_TASK_MAX_ATTEMPTS"
-  }
-
   task_retry_backoff_values() {
     local dir=""
     dir="$(task_handoff_ensure "$1")" || return 1
     cat "$dir/retry-backoff-values.txt"
-  }
-
-  task_hook_count() {
-    task_handoff_use "$1" || return 1
-    printf '%s' "$NIXFIED_TASK_HOOK_COUNT"
   }
 
   task_hook_ids() {
@@ -283,46 +248,6 @@ in
     local hook_dir=""
     hook_dir="$(task_hook_handoff_dir "$1" "$2" "$3")" || return 1
     cat "$hook_dir/runtime-plan.sh"
-  }
-
-  workflow_mode_name() {
-    workflow_handoff_use "$1" || return 1
-    printf '%s' "$NIXFIED_WORKFLOW_MODE_NAME"
-  }
-
-  workflow_artifacts_root() {
-    workflow_handoff_use "$1" || return 1
-    printf '%s' "$NIXFIED_WORKFLOW_ARTIFACTS_ROOT"
-  }
-
-  workflow_ephemeral_flag() {
-    workflow_handoff_use "$1" || return 1
-    printf '%s' "$NIXFIED_WORKFLOW_EPHEMERAL_FLAG"
-  }
-
-  workflow_logging_level_default() {
-    workflow_handoff_use "$1" || return 1
-    printf '%s' "$NIXFIED_WORKFLOW_LOGGING_LEVEL_DEFAULT"
-  }
-
-  workflow_logging_output_default() {
-    workflow_handoff_use "$1" || return 1
-    printf '%s' "$NIXFIED_WORKFLOW_LOGGING_OUTPUT_DEFAULT"
-  }
-
-  workflow_parallel_enabled() {
-    workflow_handoff_use "$1" || return 1
-    printf '%s' "$NIXFIED_WORKFLOW_PARALLEL_ENABLED"
-  }
-
-  workflow_max_workers() {
-    workflow_handoff_use "$1" || return 1
-    printf '%s' "$NIXFIED_WORKFLOW_MAX_WORKERS"
-  }
-
-  workflow_write_summary() {
-    workflow_handoff_use "$1" || return 1
-    printf '%s' "$NIXFIED_WORKFLOW_WRITE_SUMMARY"
   }
 
   normalize_run_artifacts_dir() {
@@ -362,7 +287,8 @@ in
     fi
 
     if [ -n "$workflow_id" ]; then
-      configured_root="$(workflow_artifacts_root "$workflow_id")"
+      workflow_handoff_use "$workflow_id" || return 1
+      configured_root="$NIXFIED_WORKFLOW_ARTIFACTS_ROOT"
     fi
 
     if [ -n "$caller_root" ]; then

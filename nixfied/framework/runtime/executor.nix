@@ -249,9 +249,10 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           local mode_override=""
           local resolved_workflow_id=""
 
-          runner_type="$(task_runner_type "$task_id")"
+          task_handoff_use "$task_id" || return 1
+          runner_type="$NIXFIED_TASK_RUNNER_TYPE"
           if [ "$runner_type" = "workflowRef" ]; then
-            workflow_id="$(task_runner_workflow_id "$task_id")"
+            workflow_id="$NIXFIED_TASK_RUNNER_WORKFLOW_ID"
             if [ -n "$workflow_id" ]; then
               mode_override="$(workflow_mode_override_from_args "$workflow_id" "$@")"
               resolved_workflow_id="$(resolve_workflow_mode "$workflow_id" "$mode_override")" || return $?
@@ -291,10 +292,8 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         }
 
         task_has_hooks() {
-          local hook_count
-
-          hook_count="$(task_hook_count "$1")"
-          if [ "$hook_count" -gt 0 ]; then
+          task_handoff_use "$1" || return 1
+          if [ "''${NIXFIED_TASK_HOOK_COUNT:-0}" -gt 0 ]; then
             return 0
           fi
           return 1
@@ -338,7 +337,8 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
             printf '%s' '{}'
             return 0
           fi
-          task_produces_json "$task_id"
+          task_handoff_use "$task_id" || return 1
+          printf '%s' "$NIXFIED_TASK_PRODUCES_JSON"
         }
 
         task_retry_backoff_for_attempt() {
@@ -374,7 +374,8 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           local main_exit_code
           local post_exit_code
 
-          runner_type="$(task_runner_type "$task_id")"
+          task_handoff_use "$task_id" || return 3
+          runner_type="$NIXFIED_TASK_RUNNER_TYPE"
           if [ "$runner_type" != "shell" ] && task_has_hooks "$task_id"; then
             echo "ERROR: task '$task_id' defines runtime hooks but runner type '$runner_type' is unsupported"
             return 3
@@ -385,7 +386,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           case "$runner_type" in
             shell)
               if run_task_hooks "$task_id" "pre" "$@"; then
-                command="$(task_runner_command "$task_id")"
+                command="$NIXFIED_TASK_RUNNER_COMMAND"
                 run_in_sandbox_runtime "$runtime_plan_shell" "$command" "$@"
                 main_exit_code="$?"
 
@@ -408,7 +409,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
               fi
               ;;
             workflowRef)
-              nested_workflow="$(task_runner_workflow_id "$task_id")"
+              nested_workflow="$NIXFIED_TASK_RUNNER_WORKFLOW_ID"
               if [ -z "$nested_workflow" ]; then
                 echo "ERROR: task '$task_id' runner.workflowId is empty"
                 exit_code=3
@@ -422,8 +423,8 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
               fi
               ;;
             derivation)
-              package_path="$(task_runner_package "$task_id")"
-              command="$(task_runner_command "$task_id")"
+              package_path="$NIXFIED_TASK_RUNNER_PACKAGE"
+              command="$NIXFIED_TASK_RUNNER_COMMAND"
               if [ -z "$package_path" ]; then
                 echo "ERROR: task '$task_id' derivation runner requires runner.package"
                 exit_code=3
@@ -460,7 +461,8 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
             return "$NIXFIED_EXIT_USAGE"
           fi
 
-          max_attempts="$(task_max_attempts "$task_id")"
+          task_handoff_use "$task_id" || return 3
+          max_attempts="$NIXFIED_TASK_MAX_ATTEMPTS"
 
           while [ "$attempt" -le "$max_attempts" ]; do
             if execute_task_once "$task_id" "$@"; then
@@ -587,7 +589,8 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
             fi
             return 0
           fi
-          runner_type="$(task_runner_type "$task_id")"
+          task_handoff_use "$task_id" || return 3
+          runner_type="$NIXFIED_TASK_RUNNER_TYPE"
 
           if [ "$runner_type" != "workflowRef" ] && [ -n "$MACHINE_SUMMARY_FILE" ]; then
             echo "ERROR: --summary-file is only supported for workflow runs"
@@ -679,7 +682,8 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           local override_name=""
           local override_value=""
 
-          workflow_max_workers="$(workflow_max_workers "$workflow_id")"
+          workflow_handoff_use "$workflow_id" || return 1
+          workflow_max_workers="$NIXFIED_WORKFLOW_MAX_WORKERS"
           if ! [[ "$workflow_max_workers" =~ ^[0-9]+$ ]] || [ "$workflow_max_workers" -lt 1 ]; then
             workflow_max_workers=1
           fi
@@ -737,7 +741,8 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           local env_override
           local run_parallel=0
 
-          configured_parallel="$(workflow_parallel_enabled "$workflow_id")"
+          workflow_handoff_use "$workflow_id" || return 1
+          configured_parallel="$NIXFIED_WORKFLOW_PARALLEL_ENABLED"
           if [ "$configured_parallel" = "true" ]; then
             run_parallel=1
           fi
@@ -888,7 +893,8 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           fi
 
           selected_services_csv="$(task_selected_services_csv "$task_id" "$@")" || return $?
-          runner_type="$(task_runner_type "$task_id")"
+          task_handoff_use "$task_id" || return 3
+          runner_type="$NIXFIED_TASK_RUNNER_TYPE"
 
           if [ "''${NIXFIED_TASK_RUN_ROOT_TASK_ID:-}" = "$task_id" ] && [ "$runner_type" = "workflowRef" ]; then
             if [ -n "''${NIXFIED_TASK_RUN_MACHINE_RUN_ID_FILE:-}" ]; then
@@ -1221,12 +1227,13 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           LAST_WORKFLOW_SUMMARY_SKIPPED_COUNT="0"
           LAST_WORKFLOW_SUMMARY_CANCELED_COUNT="0"
 
-          should_write="$(workflow_write_summary "$workflow_id")"
+          workflow_handoff_use "$workflow_id" || return 1
+          should_write="$NIXFIED_WORKFLOW_WRITE_SUMMARY"
           if [ "$should_write" != "true" ]; then
             return 0
           fi
 
-          mode="$(workflow_mode_name "$workflow_id")"
+          mode="$NIXFIED_WORKFLOW_MODE_NAME"
           artifacts_dir="''${CI_ARTIFACTS_DIR:-}"
           if [ -z "$artifacts_dir" ]; then
             echo "ERROR: CI_ARTIFACTS_DIR is not set for run '$run_id'"
@@ -1451,8 +1458,9 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
             echo "ERROR: unknown workflow '$workflow_id'"
             return "$NIXFIED_EXIT_USAGE"
           fi
-          NIXFIED_WORKFLOW_LOG_LEVEL_DEFAULT="$(workflow_logging_level_default "$workflow_id")"
-          NIXFIED_WORKFLOW_OUTPUT_MODE_DEFAULT="$(workflow_logging_output_default "$workflow_id")"
+          workflow_handoff_use "$workflow_id" || return 1
+          NIXFIED_WORKFLOW_LOG_LEVEL_DEFAULT="$NIXFIED_WORKFLOW_LOGGING_LEVEL_DEFAULT"
+          NIXFIED_WORKFLOW_OUTPUT_MODE_DEFAULT="$NIXFIED_WORKFLOW_LOGGING_OUTPUT_DEFAULT"
 
           started_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
           started_epoch="$(date +%s)"
