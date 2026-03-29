@@ -467,7 +467,7 @@ let
     serviceContracts = serviceApis;
     inherit serviceAdapters;
   };
-  serviceApps = runtimeHelpers.serviceApi.mkServiceAppsFromContracts {
+  serviceAppPrograms = runtimeHelpers.serviceApi.mkServiceAppProgramsFromContracts {
     serviceContracts = serviceApis;
     inherit serviceAdapters;
   };
@@ -475,7 +475,7 @@ in
 {
   inherit
     serviceApis
-    serviceApps
+    serviceAppPrograms
     serviceHookEnv
     slots
     ;

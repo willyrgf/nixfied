@@ -152,8 +152,8 @@ let
         let
           appName = "svc::${serviceName}::${operation}";
           program =
-            if builtins.hasAttr appName serviceRuntimeSurfaces.serviceApps then
-              serviceRuntimeSurfaces.serviceApps.${appName}.program
+            if builtins.hasAttr appName serviceRuntimeSurfaces.serviceAppPrograms then
+              serviceRuntimeSurfaces.serviceAppPrograms.${appName}
             else
               "";
         in
