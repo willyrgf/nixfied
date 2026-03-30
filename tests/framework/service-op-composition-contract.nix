@@ -1,6 +1,9 @@
 { pkgs }:
 let
   serviceApi = import ../../nixfied/framework/runtime/helpers/service-api.nix { inherit pkgs; };
+  serviceContractValidation = import ../../nixfied/framework/core/service-contract-validation.nix {
+    inherit pkgs;
+  };
   shellHelpers = import ./lib/shell-helpers.nix { inherit pkgs; };
   runtimePrimitives = serviceApi.mkRuntimePrimitivesV1 { };
 
@@ -167,11 +170,11 @@ let
   };
 
   unknownRefResult = builtins.tryEval (
-    builtins.deepSeq (serviceApi.validateServiceContracts { demo = unknownRefContract; }) true
+    builtins.deepSeq (serviceContractValidation.validateServiceContracts { demo = unknownRefContract; }) true
   );
 
   cycleResult = builtins.tryEval (
-    builtins.deepSeq (serviceApi.validateServiceContracts { demo = cycleContract; }) true
+    builtins.deepSeq (serviceContractValidation.validateServiceContracts { demo = cycleContract; }) true
   );
 in
 assert builtins.hasAttr "SVC_DEMO_START" hookEnv;
