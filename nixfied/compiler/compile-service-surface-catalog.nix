@@ -7,7 +7,9 @@
   serviceDefinitions,
 }:
 let
-  serviceApi = import ../framework/runtime/helpers/service-api.nix { inherit pkgs; };
+  serviceContractValidation = import ../framework/core/service-contract-validation.nix {
+    inherit pkgs;
+  };
   tokenLib = import ../framework/runtime/helpers/normalize-token.nix { inherit lib; };
   normalizeToken = tokenLib.normalizeToken;
 
@@ -51,7 +53,7 @@ let
     ) enabledServiceIds
   );
 
-  validatedServiceContracts = serviceApi.validateServiceContracts serviceContracts;
+  validatedServiceContracts = serviceContractValidation.validateServiceContracts serviceContracts;
 
   mkCommandApi =
     {

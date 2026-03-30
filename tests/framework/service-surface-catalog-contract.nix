@@ -85,6 +85,8 @@ assert lib.hasInfix "require compiled serviceSurfaceCatalog" mkServiceRuntimeSur
 assert !(lib.hasInfix "serviceModulePath" compileServiceSurfaceCatalogSource);
 assert !(lib.hasInfix "mkServiceApisFromModules" compileServiceSurfaceCatalogSource);
 assert !(lib.hasInfix "publicApi" compileServiceSurfaceCatalogSource);
+assert !(lib.hasInfix "runtime/helpers/service-api.nix" compileServiceSurfaceCatalogSource);
+assert lib.hasInfix "service-contract-validation.nix" compileServiceSurfaceCatalogSource;
 assert lib.hasInfix "serviceDefinitions" compileServiceSurfaceCatalogSource;
 pkgs.runCommand "service-surface-catalog-contract" { } ''
   echo "OK: compiled service surface catalog is the only service API source for materialized service apps, hooks, and public descriptors" > "$out"
