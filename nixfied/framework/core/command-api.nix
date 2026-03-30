@@ -1,12 +1,10 @@
-{
-  pkgs,
-  shellContract ? import ../runtime/helpers/shell-contract.nix { inherit pkgs; },
-}:
+{ pkgs }:
 let
   lib = pkgs.lib;
   exitCodes = import ./exit-codes.nix;
+  runtimePrimitives = import ./runtime-primitives.nix { };
 
-  runtimeEnvSpecs = shellContract.mkRuntimePrimitiveEnvSpecs { };
+  runtimeEnvSpecs = runtimePrimitives.mkRuntimePrimitiveEnvSpecs { };
 
   normalizeEnvSpec =
     spec:

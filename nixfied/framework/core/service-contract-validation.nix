@@ -1,8 +1,6 @@
-{
-  pkgs,
-  shellContract ? import ../runtime/helpers/shell-contract.nix { inherit pkgs; },
-}:
+{ pkgs }:
 let
+  runtimePrimitives = import ./runtime-primitives.nix { };
   validation = import ../runtime/helpers/validation.nix { inherit pkgs; };
   inherit (validation)
     isNonEmptyString
@@ -25,12 +23,14 @@ let
     "json"
     "batch-runner"
   ];
-  runtimeLogLevels = shellContract.runtimeLogLevels;
-  runtimeOutputModes = shellContract.runtimeOutputModes;
-  runtimeLogLevelEnvName = shellContract.runtimeLogLevelEnvName;
-  runtimeLogLevelAliases = shellContract.runtimeLogLevelAliases;
-  runtimeOutputModeEnvName = shellContract.runtimeOutputModeEnvName;
-  runtimeOutputModeAliases = shellContract.runtimeOutputModeAliases;
+  inherit (runtimePrimitives)
+    runtimeLogLevels
+    runtimeOutputModes
+    runtimeLogLevelEnvName
+    runtimeLogLevelAliases
+    runtimeOutputModeEnvName
+    runtimeOutputModeAliases
+    ;
   supportedRuntimePrimitiveKeys = [
     "version"
     "logLevel"
