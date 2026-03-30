@@ -391,20 +391,14 @@ let
     hooks = { };
     inherit (summary) summaryParser;
   };
-  fixtures = import ../runtime/helpers/fixtures.nix {
-    inherit pkgs;
-    project = serviceProject;
-  };
-  builders = import ../runtime/helpers/builders.nix {
+  commandWrapper = import ../runtime/helpers/command-wrapper.nix {
     inherit
       pkgs
       shellContract
       ;
     project = serviceProject;
-    fixtureLib = fixtures;
     inherit (helpers)
       loadEnv
-      loadEnvFile
       helpersScript
       hookExports
       ;
@@ -414,7 +408,6 @@ let
       pkgs
       shellContract
       ;
-    inherit (builders) mkApp;
   };
   serviceApi = import ../runtime/helpers/service-api.nix {
     inherit
@@ -519,35 +512,33 @@ let
     inherit serviceAdapters;
   };
   serviceHookEnv = serviceApi.mkServiceHookEnv serviceOps;
-  mkServiceRuntimeApp =
+  mkServiceRuntimeCommandApi =
     op:
     (
-      appApi.mkContractBackedApp {
+      appApi.mkCommandApi {
+        class = op.class;
         name = op.appName;
+        summary = op.opMetadata.summary;
+        details = op.opMetadata.details;
+        usage = op.usage;
+        examples = op.opMetadata.examples or [ ];
+        args = op.opMetadata.args or [ ];
+        env = op.opMetadata.env or [ ];
+        category = op.category;
+        idempotent = op.idempotent;
+      }
+    ).commandApi;
+  mkServiceRuntimeApp =
+    op:
+    toString (
+      commandWrapper.mkCommandWrappedScript {
+        name = op.appName;
+        commandApi = mkServiceRuntimeCommandApi op;
         script = ''
           exec ${toString op.launcher} "$@"
         '';
-        contract = {
-          class = op.class;
-          summary = op.opMetadata.summary;
-          details = op.opMetadata.details;
-          usage = op.usage;
-          examples = op.opMetadata.examples or [ ];
-          args = op.opMetadata.args or [ ];
-          env = op.opMetadata.env or [ ];
-          category = op.category;
-          idempotent = op.idempotent;
-        };
-        env = { };
-        useDeps = false;
-        meta = {
-          nixfied = {
-            service = op.serviceName;
-            operation = op.opName;
-          };
-        };
       }
-    ).program;
+    );
   serviceAppPrograms = builtins.listToAttrs (
     map (op: {
       name = op.appName;

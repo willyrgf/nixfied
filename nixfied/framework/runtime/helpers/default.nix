@@ -28,7 +28,6 @@ let
     fixtureLib = fixtures;
     inherit (helpers)
       loadEnv
-      loadEnvFile
       helpersScript
       hookExports
       ;

@@ -2,6 +2,7 @@
 let
   shellContractSource = builtins.readFile ../../nixfied/framework/runtime/helpers/shell-contract.nix;
   buildersSource = builtins.readFile ../../nixfied/framework/runtime/helpers/builders.nix;
+  commandWrapperSource = builtins.readFile ../../nixfied/framework/runtime/helpers/command-wrapper.nix;
   ephemeralSource = builtins.readFile ../../nixfied/framework/runtime/ephemeral.nix;
 in
 assert pkgs.lib.hasInfix "mkContractRuntime =" shellContractSource;
@@ -21,7 +22,8 @@ assert !(pkgs.lib.hasInfix "NIXFIED_CONTRACT_FAILURE_CODE" shellContractSource);
 assert !(pkgs.lib.hasInfix "(.env // [])[]" shellContractSource);
 assert !(pkgs.lib.hasInfix "(.args // [])[]" shellContractSource);
 assert !(pkgs.lib.hasInfix "any(.value == $code)" shellContractSource);
-assert pkgs.lib.hasInfix "NIXFIED_COMMAND_API_RUNTIME" buildersSource;
+assert pkgs.lib.hasInfix "command-wrapper.nix" buildersSource;
+assert pkgs.lib.hasInfix "NIXFIED_COMMAND_API_RUNTIME" commandWrapperSource;
 assert pkgs.lib.hasInfix "NIXFIED_COMMAND_API_RUNTIME" ephemeralSource;
 pkgs.runCommand "shell-contract-contract" { } ''
   echo "OK: shell contract runtime uses direct kernel export streams" > "$out"

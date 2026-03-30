@@ -1,7 +1,7 @@
 {
   pkgs,
   shellContract ? import ./shell-contract.nix { inherit pkgs; },
-  mkApp,
+  mkApp ? null,
 }:
 let
   lib = pkgs.lib;
@@ -97,6 +97,9 @@ let
       meta ? { },
       api ? null,
     }:
+    if mkApp == null then
+      throw "mkNixfiedApp requires mkApp"
+    else
     mkApp {
       inherit
         name
@@ -123,6 +126,9 @@ let
       description ? null,
       meta ? { },
     }:
+    if mkApp == null then
+      throw "mkContractBackedApp requires mkApp"
+    else
     mkNixfiedApp {
       inherit
         name
