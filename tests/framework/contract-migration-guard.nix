@@ -83,7 +83,7 @@ let
   mkFlakeOutputsSource = builtins.readFile ../../nixfied/framework/core/mkFlakeOutputs.nix;
   materializeExecutionSource = builtins.readFile ../../nixfied/framework/core/materializeExecution.nix;
   frameworkTestPresetSource = builtins.readFile ../../nixfied/framework/presets/framework-test.nix;
-  probePlanRuntimeSource = builtins.readFile ../../nixfied/framework/runtime/helpers/probe-plan-runtime.nix;
+  probePlanRuntimeSource = builtins.readFile ../../nixfied/framework/core/probe-plan-runtime.nix;
   dispatcherSource = builtins.readFile ../../nixfied/framework/runtime/dispatcher.nix;
   executorSource = builtins.readFile ../../nixfied/framework/runtime/executor.nix;
   runtimeHandoffSource = builtins.readFile ../../nixfied/framework/runtime/runtime-handoff.nix;
@@ -123,6 +123,8 @@ let
     ../../nixfied/framework/contracts/render-cue.nix
     ../../nixfied/framework/runtime/helpers/run-registry.nix
     ../../nixfied/framework/runtime/helpers/service-module.nix
+    ../../nixfied/framework/runtime/helpers/probe-commands.nix
+    ../../nixfied/framework/runtime/helpers/probe-plan-runtime.nix
     ../../nixfied/framework/runtime/service-selection.nix
     ../../nixfied/framework/runtime/orchestrator-control.nix
     ../../nixfied/framework/runtime/runtime-metadata.nix

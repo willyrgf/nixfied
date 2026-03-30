@@ -11,9 +11,9 @@
   serviceConfigLib,
 }:
 let
-  probeCommands = import ../../framework/runtime/helpers/probe-commands.nix { inherit pkgs; };
+  probeCommands = import ../../framework/core/probe-commands.nix { inherit pkgs; };
   postgresProbePkg = if pkgs ? postgresql_16 then pkgs.postgresql_16 else pkgs.postgresql;
-  probePlanRuntime = import ../../framework/runtime/helpers/probe-plan-runtime.nix {
+  probePlanRuntime = import ../../framework/core/probe-plan-runtime.nix {
     inherit
       lib
       pkgs

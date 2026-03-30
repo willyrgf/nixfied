@@ -3,8 +3,8 @@
 }:
 
 let
-  kernelPackage = import ../kernel { inherit pkgs; };
-  runtimeDefaults = import ../../core/runtime-defaults.nix;
+  kernelPackage = import ../runtime/kernel { inherit pkgs; };
+  runtimeDefaults = import ./runtime-defaults.nix;
   jsonRpcProbePlan =
     probeKind:
     pkgs.writeText "nixfied-probe-${probeKind}.json" (
