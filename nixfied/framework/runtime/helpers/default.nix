@@ -10,15 +10,10 @@
 
 let
   shellContract = import ./shell-contract.nix { inherit pkgs; };
-  baseLoggingPrelude =
-    (import ./helpers.nix {
-      inherit pkgs project;
-      hooks = { };
-      summaryParser = "";
-    }).loggingPrelude;
+  loggingRuntime = import ./logging-runtime.nix { inherit pkgs; };
   summary = import ./summary.nix {
     inherit pkgs project;
-    loggingPrelude = baseLoggingPrelude;
+    inherit (loggingRuntime) loggingPrelude;
   };
   helpers = import ./helpers.nix {
     inherit pkgs project hooks;
