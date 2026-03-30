@@ -10,7 +10,7 @@ let
   services = config.nixfied.services;
   exitCodes = import ../framework/core/exit-codes.nix;
   shellCommon = import ../framework/core/shell-common.nix { inherit pkgs; };
-  skipPolicy = import ../framework/runtime/helpers/skip-policy.nix { inherit pkgs; };
+  skipPolicy = import ../framework/core/skip-policy.nix { inherit pkgs; };
   serviceConfigLib = import ../framework/core/service-config.nix { inherit lib; };
   testIsolationRuntime = import ../framework/runtime/helpers/test-isolation-runtime.nix {
     inherit lib pkgs;

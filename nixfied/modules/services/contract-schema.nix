@@ -1,7 +1,7 @@
 { lib }:
 let
   t = lib.types;
-  tokenLib = import ../../framework/runtime/helpers/normalize-token.nix { inherit lib; };
+  tokenLib = import ../../framework/core/normalize-token.nix { inherit lib; };
   normalizeToken = tokenLib.normalizeToken;
 
   kvSpecType = t.submodule {

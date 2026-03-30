@@ -9,9 +9,9 @@ let
   lib = pkgs.lib;
   listUtils = import ./list-utils.nix;
   commonRuntimeShell = import ../runtime/common-runtime.nix { inherit pkgs; };
-  shellJson = import ../runtime/helpers/shell-json.nix { };
+  shellJson = import ./shell-json.nix { };
 
-  tokenLib = import ../runtime/helpers/normalize-token.nix { inherit lib; };
+  tokenLib = import ./normalize-token.nix { inherit lib; };
   normalizeToken = tokenLib.normalizeToken;
 
   serviceIds = builtins.sort builtins.lessThan (builtins.attrNames (services));

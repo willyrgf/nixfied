@@ -9,7 +9,7 @@ let
   runtimeDefaults = import ../../core/runtime-defaults.nix;
   kernelPackage = import ../kernel { inherit pkgs; };
 
-  tokenLib = import ./normalize-token.nix { inherit lib; };
+  tokenLib = import ../../core/normalize-token.nix { inherit lib; };
   normalizeEnvToken = tokenLib.normalizeToken;
 
   endpointProtocol =
