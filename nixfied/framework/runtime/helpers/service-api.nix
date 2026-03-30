@@ -14,7 +14,6 @@ let
   };
   inherit (serviceContractValidation)
     sortedAttrNames
-    validateServiceContract
     validateServiceContracts
     validateServiceAdapters
     ;
@@ -414,9 +413,6 @@ in
   inherit
     collectServiceOps
     collectServiceOpsFromCatalog
-    validateServiceContract
-    validateServiceContracts
-    validateServiceAdapters
     mkRuntimePrimitivesV1
     mkServiceHookEnvFromContracts
     mkServiceHookEnvFromCatalog
