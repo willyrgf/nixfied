@@ -1,7 +1,7 @@
 { lib, pkgs }:
 
 let
-  shellCommon = import ../../core/shell-common.nix { inherit pkgs; };
+  shellCommon = import ../../framework/core/shell-common.nix { inherit pkgs; };
 in
 {
   mkIsolationScript =
