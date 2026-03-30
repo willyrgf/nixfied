@@ -1,10 +1,10 @@
 {
   pkgs,
-  shellContract ? import ./shell-contract.nix { inherit pkgs; },
+  shellContract ? import ../runtime/helpers/shell-contract.nix { inherit pkgs; },
 }:
 let
   lib = pkgs.lib;
-  exitCodes = import ../../core/exit-codes.nix;
+  exitCodes = import ./exit-codes.nix;
 
   runtimeEnvSpecs = shellContract.mkRuntimePrimitiveEnvSpecs { };
 

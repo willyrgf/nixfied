@@ -10,7 +10,7 @@ let
   serviceContractValidation = import ../framework/core/service-contract-validation.nix {
     inherit pkgs;
   };
-  commandApi = import ../framework/runtime/helpers/command-api.nix { inherit pkgs; };
+  commandApi = import ../framework/core/command-api.nix { inherit pkgs; };
   tokenLib = import ../framework/runtime/helpers/normalize-token.nix { inherit lib; };
   inherit (commandApi) mkCommandApi;
   normalizeToken = tokenLib.normalizeToken;
