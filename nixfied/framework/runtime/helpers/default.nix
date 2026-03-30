@@ -53,7 +53,7 @@ let
     inherit pkgs project;
     inherit (helpers) loggingPrelude;
   };
-  runtimeEvents = import ./runtime-events.nix {
+  runtimeEvents = import ../../core/runtime-events.nix {
     inherit pkgs project;
     inherit (helpers) loggingPrelude;
   };

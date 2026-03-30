@@ -52,6 +52,7 @@ let
       "nixfied-model.json"
   ) (builtins.toJSON model);
   shellCommon = import ../core/shell-common.nix { inherit pkgs; };
+  skipPolicy = import ../core/skip-policy.nix { inherit pkgs; };
   registryShell = registry.events.mkShellLib { };
   envSandboxShell = import ./env-sandbox.nix {
     inherit
@@ -123,6 +124,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         ${envSandboxShell}
         ${runtimeHandoffShell}
         ${sharedRuntimeLibShell}
+        ${skipPolicy.skipPolicyFunctions}
 
         sha256_text() {
           printf '%s' "$1" | ${pkgs.coreutils}/bin/sha256sum | ${pkgs.gawk}/bin/awk '{print $1}'

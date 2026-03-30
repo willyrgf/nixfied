@@ -45,18 +45,10 @@ let
     inherit pkgs project;
     loggingPrelude = resolvedLoggingPrelude;
   };
-  runtimeEvents =
-    if builtins.pathExists ./helpers/runtime-events.nix then
-      import ./helpers/runtime-events.nix {
-        inherit pkgs project;
-        loggingPrelude = resolvedLoggingPrelude;
-      }
-    else
-      {
-        emitEvent = pkgs.writeShellScript "emit-event-noop" ''
-          exit 0
-        '';
-      };
+  runtimeEvents = import ../core/runtime-events.nix {
+    inherit pkgs project;
+    loggingPrelude = resolvedLoggingPrelude;
+  };
   shellContract = import ../core/shell-contract.nix { inherit pkgs; };
   sourceMaterialization = import ./helpers/ephemeral-materialization.nix {
     inherit

@@ -1,7 +1,7 @@
 { pkgs }:
 let
   shellHelpers = import ./lib/shell-helpers.nix { inherit pkgs; };
-  runtimeEvents = import ../../nixfied/framework/runtime/helpers/runtime-events.nix {
+  runtimeEvents = import ../../nixfied/framework/core/runtime-events.nix {
     inherit pkgs;
     project = {
       project.id = "runtime-events-status-smoke";

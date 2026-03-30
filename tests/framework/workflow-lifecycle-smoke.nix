@@ -6,6 +6,7 @@
 }:
 let
   withCompiledExecution = import ./lib/with-compiled-execution.nix { inherit pkgs; };
+  runtimeMaterialization = import ./lib/runtime-materialization.nix;
   baseTask = model.tasks."task.check";
 
   mkShellTask =
@@ -170,6 +171,13 @@ let
       };
     }
   );
+  runtimeDeps = runtimeMaterialization {
+    inherit
+      pkgs
+      services
+      ;
+    model = lifecycleModel;
+  };
 
   executor = import ../../nixfied/framework/runtime/executor.nix {
     inherit
@@ -179,6 +187,10 @@ let
     model = lifecycleModel;
     inherit services;
     projectRoot = ../..;
+    inherit (runtimeDeps)
+      serviceHookEnv
+      serviceSetPrograms
+      ;
   };
 in
 pkgs.runCommand "workflow-lifecycle-smoke" { } ''

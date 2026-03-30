@@ -50,13 +50,6 @@ let
       taskIds = uniqueSorted (builtins.attrNames tasks);
       workflowIds = uniqueSorted (builtins.attrNames workflows);
 
-      workflowModesByFamily = compiledExecution.workflowModesByFamily or { };
-      workflowFamilies =
-        if compiledExecution ? workflowFamilies then
-          compiledExecution.workflowFamilies
-        else
-          uniqueSorted (builtins.attrNames workflowModesByFamily);
-
       normalizeTaskArgSpec =
         spec:
         let

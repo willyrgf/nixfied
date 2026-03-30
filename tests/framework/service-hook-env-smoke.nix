@@ -11,18 +11,19 @@ let
   postgresHookTaskId = "task.test.service-hooks.postgres";
   depClosureHookTaskId = "task.test.service-hooks.dep-closure";
 
-  envKeysFor = services:
+  envKeysFor =
+    services:
     builtins.concatStringsSep "\n" (
       builtins.sort builtins.lessThan (
         [ "NIXFIED_SERVICE_ROOT" ]
         ++ builtins.concatMap (
-        service:
-        map (suffix: "NIXFIED_SERVICE_${lib.toUpper service}_${suffix}") [
-          "DATA_DIR"
-          "LOG_DIR"
-          "STATE_DIR"
-        ]
-      ) services
+          service:
+          map (suffix: "NIXFIED_SERVICE_${lib.toUpper service}_${suffix}") [
+            "DATA_DIR"
+            "LOG_DIR"
+            "STATE_DIR"
+          ]
+        ) services
       )
     );
 
@@ -147,9 +148,10 @@ assert builtins.hasAttr "svc::postgres::status" compiledIncluded.apps;
 assert builtins.hasAttr "svc::nginx::status" compiledIncluded.apps;
 assert builtins.hasAttr "svc::postgres::status" compiledExcluded.apps;
 assert !(builtins.hasAttr "svc::nginx::status" compiledExcluded.apps);
-assert !(builtins.any (
-  key: lib.hasPrefix "SVC_NGINX_" key
-) (builtins.attrNames (compiledExcluded.model.runtime.hookEnv or { })));
+assert
+  !(builtins.any (key: lib.hasPrefix "SVC_NGINX_" key) (
+    builtins.attrNames (compiledExcluded.model.runtime.hookEnv or { })
+  ));
 pkgs.runCommand "service-hook-env-smoke" { } ''
   set -euo pipefail
   ${shellHelpers.shellPrelude}

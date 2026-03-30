@@ -402,7 +402,7 @@ let
       shellContract
       ;
   };
-  runtimeEvents = import ../runtime/helpers/runtime-events.nix {
+  runtimeEvents = import ./runtime-events.nix {
     inherit
       pkgs
       ;

@@ -180,6 +180,10 @@ let
       layer = "adapter";
     };
 
+    "runtime-event-policy-contract" = {
+      layer = "compile";
+    };
+
     "launcher-surface-contract" = { };
 
     "framework-utility-launcher-contract" = { };
@@ -671,6 +675,10 @@ let
     };
 
     "runtime-events-contract" = import ./runtime-events-contract.nix {
+      inherit pkgs;
+    };
+
+    "runtime-event-policy-contract" = import ./runtime-event-policy-contract.nix {
       inherit pkgs;
     };
 

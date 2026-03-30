@@ -65,20 +65,18 @@ let
       category,
       examples,
     }:
-    (
-      mkCommandApi {
-        class = opCfg.class or "passthrough";
-        name = appName;
-        summary = opCfg.summary;
-        details = opCfg.details or "";
-        usage = usage;
-        examples = examples;
-        args = opCfg.args or [ ];
-        env = opCfg.env or [ ];
-        category = category;
-        idempotent = opCfg.idempotent or false;
-      }
-    ).commandApi;
+    (mkCommandApi {
+      class = opCfg.class or "passthrough";
+      name = appName;
+      summary = opCfg.summary;
+      details = opCfg.details or "";
+      usage = usage;
+      examples = examples;
+      args = opCfg.args or [ ];
+      env = opCfg.env or [ ];
+      category = category;
+      idempotent = opCfg.idempotent or false;
+    }).commandApi;
 
   mkOperationRecord =
     serviceName: contract: opName:

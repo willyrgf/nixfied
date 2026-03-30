@@ -332,6 +332,18 @@ through kernel commands for the executor and orchestrator.
 So the old generated shell query API died, and the remaining seam is now the
 runtime handoff itself rather than a separate runtime metadata family.
 
+The runtime event seam also got narrower:
+
+- `nixfied/framework/core/runtime-event-policy.nix` now owns registry roots,
+  runtime base/artifact roots, slot/env variable names, and index layout rules
+- `nixfied/framework/core/runtime-events.nix` is the public import surface for
+  shell-facing event helpers
+- `nixfied/framework/runtime/runtime-events-programs.nix` is now the runtime IO
+  edge that appends registry events and resolves runtime status/logs
+
+That is a real split. Policy/layout authority moved to core; runtime event IO
+stayed runtime-owned.
+
 ### 3. A broader kernel metadata/query surface
 
 The task family widened substantially.

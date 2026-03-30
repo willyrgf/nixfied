@@ -201,7 +201,9 @@ let
   };
 
   unknownRefResult = builtins.tryEval (
-    builtins.deepSeq (serviceContractValidation.validateServiceContracts { demo = unknownRefContract; }) true
+    builtins.deepSeq (serviceContractValidation.validateServiceContracts {
+      demo = unknownRefContract;
+    }) true
   );
 
   cycleResult = builtins.tryEval (
