@@ -1,6 +1,6 @@
 {
   pkgs,
-  shellContract ? import ../runtime/helpers/shell-contract.nix { inherit pkgs; },
+  shellContract ? import ./shell-contract.nix { inherit pkgs; },
   mkApp ? null,
 }:
 let

@@ -1,7 +1,7 @@
 # Nixfied service contract runtime projection helpers
 {
   pkgs,
-  shellContract ? import ../runtime/helpers/shell-contract.nix { inherit pkgs; },
+  shellContract ? import ./shell-contract.nix { inherit pkgs; },
 }:
 
 let

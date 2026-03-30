@@ -807,7 +807,7 @@ What to evaluate in solutions:
 
 Current files:
 
-- `nixfied/framework/runtime/helpers/service-api.nix`
+- `nixfied/framework/core/service-api.nix`
 - `nixfied/framework/runtime/services/service-operations-builder.nix`
 - `nixfied/framework/runtime/services/service-config-builder.nix`
 

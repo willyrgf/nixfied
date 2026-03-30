@@ -9,7 +9,7 @@
 }:
 
 let
-  shellContract = import ./shell-contract.nix { inherit pkgs; };
+  shellContract = import ../../core/shell-contract.nix { inherit pkgs; };
   loggingRuntime = import ./logging-runtime.nix { inherit pkgs; };
   summary = import ./summary.nix {
     inherit pkgs project;

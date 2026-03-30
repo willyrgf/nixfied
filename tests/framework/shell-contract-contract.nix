@@ -1,6 +1,6 @@
 { pkgs }:
 let
-  shellContractSource = builtins.readFile ../../nixfied/framework/runtime/helpers/shell-contract.nix;
+  shellContractSource = builtins.readFile ../../nixfied/framework/core/shell-contract.nix;
   buildersSource = builtins.readFile ../../nixfied/framework/runtime/helpers/builders.nix;
   commandWrapperSource = builtins.readFile ../../nixfied/framework/runtime/helpers/command-wrapper.nix;
   ephemeralSource = builtins.readFile ../../nixfied/framework/runtime/ephemeral.nix;

@@ -378,7 +378,7 @@ let
     getServiceDir = dataDirName: "$(${serviceDirResolver} ${lib.escapeShellArg dataDirName})";
   };
 
-  shellContract = import ../runtime/helpers/shell-contract.nix { inherit pkgs; };
+  shellContract = import ./shell-contract.nix { inherit pkgs; };
   commandRuntime = import ../runtime/helpers/command-runtime.nix {
     inherit pkgs;
     project = serviceProject;
