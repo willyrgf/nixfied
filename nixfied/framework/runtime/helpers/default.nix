@@ -43,12 +43,6 @@ let
     inherit shellContract;
     inherit (builders) mkApp;
   };
-  serviceApi = import ./service-api.nix {
-    inherit
-      pkgs
-      shellContract
-      ;
-  };
   discovery = import ./discovery.nix {
     inherit pkgs project;
     inherit (helpers) loggingPrelude;
@@ -98,7 +92,6 @@ in
   inherit fixtures;
   inherit shellContract;
   inherit appApi;
-  inherit serviceApi;
   inherit discovery;
   inherit managedServiceLifecycle;
   inherit (process) mkSignalHandler mkProcessManager;
