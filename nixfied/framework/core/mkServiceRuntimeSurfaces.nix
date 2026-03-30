@@ -379,17 +379,10 @@ let
   };
 
   shellContract = import ../runtime/helpers/shell-contract.nix { inherit pkgs; };
-  loggingRuntime = import ../runtime/helpers/logging-runtime.nix { inherit pkgs; };
-  summary = import ../runtime/helpers/summary.nix {
-    inherit pkgs;
-    project = serviceProject;
-    inherit (loggingRuntime) loggingPrelude;
-  };
-  helpers = import ../runtime/helpers/helpers.nix {
+  commandRuntime = import ../runtime/helpers/command-runtime.nix {
     inherit pkgs;
     project = serviceProject;
     hooks = { };
-    inherit (summary) summaryParser;
   };
   commandWrapper = import ../runtime/helpers/command-wrapper.nix {
     inherit
@@ -397,11 +390,11 @@ let
       shellContract
       ;
     project = serviceProject;
-    inherit (helpers)
+    inherit (commandRuntime)
       loadEnv
-      helpersScript
       hookExports
       ;
+    helpersScript = commandRuntime.commandHelpersScript;
   };
   appApi = import ../runtime/helpers/app-api.nix {
     inherit
