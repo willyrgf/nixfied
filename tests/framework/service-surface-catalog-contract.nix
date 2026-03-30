@@ -21,8 +21,8 @@ let
   mkServiceRuntimeSurfacesSource = builtins.readFile ../../nixfied/framework/core/mkServiceRuntimeSurfaces.nix;
   compileServiceSurfaceCatalogSource = builtins.readFile ../../nixfied/compiler/compile-service-surface-catalog.nix;
   serviceContractValidationSource = builtins.readFile ../../nixfied/framework/core/service-contract-validation.nix;
-  serviceApiSource = builtins.readFile ../../nixfied/framework/runtime/helpers/service-api.nix;
-  appApiSource = builtins.readFile ../../nixfied/framework/runtime/helpers/app-api.nix;
+  serviceApiSource = builtins.readFile ../../nixfied/framework/core/service-api.nix;
+  appApiSource = builtins.readFile ../../nixfied/framework/core/app-api.nix;
   commandWrapperSource = builtins.readFile ../../nixfied/framework/runtime/helpers/command-wrapper.nix;
   commandRuntimeSource = builtins.readFile ../../nixfied/framework/runtime/helpers/command-runtime.nix;
   serviceNames = sortKeys (catalog.serviceApis or { });
@@ -105,7 +105,7 @@ assert lib.hasInfix "service-contract-validation.nix" compileServiceSurfaceCatal
 assert lib.hasInfix "serviceDefinitions" compileServiceSurfaceCatalogSource;
 assert !(lib.hasInfix "../runtime/helpers/validation.nix" serviceContractValidationSource);
 assert lib.hasInfix "./validation.nix" serviceContractValidationSource;
-assert lib.hasInfix "core/command-api.nix" appApiSource;
+assert lib.hasInfix "./command-api.nix" appApiSource;
 assert !(lib.hasInfix "appApi ? null" serviceApiSource);
 assert !(lib.hasInfix "mkServiceAppProgramsFromCatalog" serviceApiSource);
 assert lib.hasInfix "mkServiceHookEnv =" serviceApiSource;

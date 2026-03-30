@@ -32,7 +32,7 @@ let
       hookExports
       ;
   };
-  appApi = import ./app-api.nix {
+  appApi = import ../../core/app-api.nix {
     inherit pkgs;
     inherit shellContract;
     inherit (builders) mkApp;

@@ -241,7 +241,7 @@ Files under pressure:
 - `nixfied/framework/core/mkServiceSetPrograms.nix`
 - `nixfied/framework/core/service-config.nix`
 - `nixfied/framework/runtime/helpers/service-api.nix`
-- `nixfied/framework/runtime/helpers/app-api.nix`
+- `nixfied/framework/core/app-api.nix`
 - `nixfied/framework/core/service-observability.nix`
 - `nixfied/framework/runtime/services/*`
 - `tests/framework/service-*.nix`

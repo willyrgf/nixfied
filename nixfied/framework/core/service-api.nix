@@ -1,12 +1,12 @@
 # Nixfied service contract runtime projection helpers
 {
   pkgs,
-  shellContract ? import ./shell-contract.nix { inherit pkgs; },
+  shellContract ? import ../runtime/helpers/shell-contract.nix { inherit pkgs; },
 }:
 
 let
-  runtimePrimitives = import ../../core/runtime-primitives.nix { };
-  serviceContractValidation = import ../../core/service-contract-validation.nix {
+  runtimePrimitives = import ./runtime-primitives.nix { };
+  serviceContractValidation = import ./service-contract-validation.nix {
     inherit pkgs;
   };
   inherit (serviceContractValidation)

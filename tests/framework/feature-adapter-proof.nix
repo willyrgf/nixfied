@@ -56,7 +56,7 @@ assert assertFeature serviceHooks {
   summary = "Generated service hook env vars and service operation apps";
   ownerFiles = [
     "nixfied/framework/core/mkServiceRuntimeSurfaces.nix"
-    "nixfied/framework/runtime/helpers/service-api.nix"
+    "nixfied/framework/core/service-api.nix"
     "nixfied/framework/runtime/env-sandbox.nix"
   ];
   modelPaths = [ "services" ];
