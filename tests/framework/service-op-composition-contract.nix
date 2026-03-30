@@ -103,10 +103,40 @@ let
     };
   };
 
-  demoOps = serviceApi.collectServiceOps {
+  mkDemoOperationMetadata =
+    opName: opCfg:
+    let
+      appName =
+        if (opCfg.appName or null) != null && opCfg.appName != "" then
+          opCfg.appName
+        else
+          "svc::demo::${opName}";
+    in
+    {
+      inherit appName;
+      hookName = "SVC_DEMO_${pkgs.lib.toUpper opName}";
+      includeApp = opCfg.exposeApp or true;
+      includeHook = opCfg.exposeHook or true;
+      usage = opCfg.usage or [ "nix run .#${appName}" ];
+      category = if (opCfg.category or "") != "" then opCfg.category else "demo";
+      class = opCfg.class or "passthrough";
+      idempotent = opCfg.idempotent or false;
+      summary = opCfg.summary;
+      details = opCfg.details;
+      examples = opCfg.examples or [ ];
+      args = opCfg.args or [ ];
+      env = opCfg.env or [ ];
+    };
+
+  demoOperationCatalog = {
+    demo = builtins.mapAttrs mkDemoOperationMetadata demoContract.operations;
+  };
+
+  demoOps = serviceApi.collectServiceOpsFromCatalog {
     serviceContracts = {
       demo = demoContract;
     };
+    operationCatalog = demoOperationCatalog;
     serviceAdapters = {
       demo = demoAdapter;
     };
@@ -116,10 +146,11 @@ let
 
   startOp = findOp "start";
   restartOp = findOp "restart";
-  hookEnv = serviceApi.mkServiceHookEnvFromContracts {
+  hookEnv = serviceApi.mkServiceHookEnvFromCatalog {
     serviceContracts = {
       demo = demoContract;
     };
+    operationCatalog = demoOperationCatalog;
     serviceAdapters = {
       demo = demoAdapter;
     };

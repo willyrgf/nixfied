@@ -17,27 +17,12 @@ let
     validateServiceContracts
     validateServiceAdapters
     ;
-  runtimeLogLevels = shellContract.runtimeLogLevels;
   runtimeLogLevelDefault = shellContract.runtimeLogLevelDefault;
   runtimeOutputModeDefault = shellContract.runtimeOutputModeDefault;
 
-  tokenLib = import ./normalize-token.nix { lib = pkgs.lib; };
-  normalizeToken = tokenLib.normalizeToken;
   serviceOps = contract: contract.operations or { };
   opPreRefs = op: op.preOps or [ ];
   opPostRefs = op: op.postOps or [ ];
-
-  hookNameFor =
-    serviceName: opName: opCfg:
-    let
-      prefix = normalizeToken serviceName;
-      suffix =
-        if (opCfg.hook or null) != null && (opCfg.hook or "") != "" then
-          opCfg.hook
-        else
-          normalizeToken opName;
-    in
-    "SVC_${prefix}_${suffix}";
 
   sanitizeScriptToken = x: pkgs.lib.replaceStrings [ "/" ":" "." " " ] [ "-" "-" "-" "-" ] x;
 
@@ -125,74 +110,6 @@ let
       ${builtins.concatStringsSep "\n" (map renderPlanStep plan)}
     '';
 
-  collectServiceOps =
-    {
-      serviceContracts,
-      serviceAdapters,
-    }:
-    let
-      names = sortedAttrNames serviceContracts;
-      validatedContracts = validateServiceContracts serviceContracts;
-      validatedAdapters = validateServiceAdapters {
-        serviceContracts = validatedContracts;
-        inherit serviceAdapters;
-      };
-      toOps =
-        serviceName:
-        let
-          contract = validatedContracts.${serviceName};
-          ops = serviceOps contract;
-          adapterOps = validatedAdapters.${serviceName}.operations;
-          opNamesSorted = sortedAttrNames ops;
-        in
-        map (
-          opName:
-          let
-            opCfg = ops.${opName};
-            appName =
-              if (opCfg.appName or null) != null && opCfg.appName != "" then
-                opCfg.appName
-              else
-                "svc::${serviceName}::${opName}";
-            opRuntimePrimitives = contract.runtimePrimitives;
-            plan = buildExecutionPlan {
-              inherit
-                serviceName
-                ops
-                adapterOps
-                opName
-                ;
-            };
-          in
-          {
-            inherit
-              serviceName
-              opName
-              opCfg
-              appName
-              plan
-              ;
-            hookName = hookNameFor serviceName opName opCfg;
-            includeApp = opCfg.exposeApp or true;
-            usage = if opCfg ? usage then opCfg.usage else [ "nix run .#${appName}" ];
-            category = if (opCfg.category or "") != "" then opCfg.category else serviceName;
-            class = opCfg.class or "passthrough";
-            idempotent = opCfg.idempotent or false;
-            includeHook = opCfg.exposeHook or true;
-            runtimePrimitives = opRuntimePrimitives;
-            launcher = mkServiceOpLauncher {
-              inherit
-                serviceName
-                opName
-                plan
-                ;
-              runtimePrimitives = opRuntimePrimitives;
-            };
-          }
-        ) opNamesSorted;
-    in
-    builtins.concatLists (map toOps names);
-
   collectServiceOpsFromCatalog =
     {
       serviceContracts,
@@ -267,29 +184,6 @@ let
     in
     builtins.concatLists (map toOps names);
 
-  mkServiceHookEnvFromContracts =
-    args:
-    let
-      ops = builtins.filter (op: op.includeHook) (collectServiceOps args);
-      pairs = map (op: {
-        name = op.hookName;
-        value = toString op.launcher;
-      }) ops;
-      dedup =
-        acc: pair:
-        if builtins.hasAttr pair.name acc then
-          throw "Nixfied service contract hook name collision: ${pair.name}"
-        else
-          acc
-          // (builtins.listToAttrs [
-            {
-              name = pair.name;
-              value = pair.value;
-            }
-          ]);
-    in
-    builtins.foldl' dedup { } pairs;
-
   mkServiceHookEnvFromCatalog =
     args:
     let
@@ -312,48 +206,6 @@ let
           ]);
     in
     builtins.foldl' dedup { } pairs;
-
-  mkServiceAppProgramsFromContracts =
-    args:
-    let
-      _ =
-        if appApi == null then
-          throw "mkServiceAppProgramsFromContracts requires appApi"
-        else
-          null;
-      ops = builtins.filter (op: op.includeApp) (collectServiceOps args);
-      pairs = map (op: {
-        name = op.appName;
-        value = (
-          appApi.mkContractBackedApp {
-            name = op.appName;
-            script = ''
-              exec ${toString op.launcher} "$@"
-            '';
-            contract = {
-              class = op.class;
-              summary = op.opCfg.summary;
-              details = op.opCfg.details;
-              usage = op.usage;
-              examples = op.opCfg.examples or [ ];
-              args = op.opCfg.args or [ ];
-              env = op.opCfg.env or [ ];
-              category = op.category;
-              idempotent = op.idempotent;
-            };
-            env = { };
-            useDeps = false;
-            meta = {
-              nixfied = {
-                service = op.serviceName;
-                operation = op.opName;
-              };
-            };
-          }
-        ).program;
-      }) ops;
-    in
-    builtins.listToAttrs pairs;
 
   mkServiceAppProgramsFromCatalog =
     args:
@@ -411,12 +263,9 @@ let
 in
 {
   inherit
-    collectServiceOps
     collectServiceOpsFromCatalog
     mkRuntimePrimitivesV1
-    mkServiceHookEnvFromContracts
     mkServiceHookEnvFromCatalog
-    mkServiceAppProgramsFromContracts
     mkServiceAppProgramsFromCatalog
     ;
 }
