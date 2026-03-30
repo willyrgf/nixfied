@@ -22,6 +22,7 @@ let
   compileServiceSurfaceCatalogSource = builtins.readFile ../../nixfied/compiler/compile-service-surface-catalog.nix;
   serviceApiSource = builtins.readFile ../../nixfied/framework/runtime/helpers/service-api.nix;
   commandWrapperSource = builtins.readFile ../../nixfied/framework/runtime/helpers/command-wrapper.nix;
+  commandRuntimeSource = builtins.readFile ../../nixfied/framework/runtime/helpers/command-runtime.nix;
   serviceNames = sortKeys (catalog.serviceApis or { });
   operationEntries = builtins.concatLists (
     map (
@@ -86,6 +87,10 @@ assert !(lib.hasInfix "mkServiceApisFromModules (" mkServiceRuntimeSurfacesSourc
 assert lib.hasInfix "require compiled serviceSurfaceCatalog" mkServiceRuntimeSurfacesSource;
 assert lib.hasInfix "collectServiceOpsFromCatalog" mkServiceRuntimeSurfacesSource;
 assert lib.hasInfix "command-wrapper.nix" mkServiceRuntimeSurfacesSource;
+assert lib.hasInfix "command-runtime.nix" mkServiceRuntimeSurfacesSource;
+assert !(lib.hasInfix "summary.nix" mkServiceRuntimeSurfacesSource);
+assert !(lib.hasInfix "helpers.nix" mkServiceRuntimeSurfacesSource);
+assert lib.hasInfix "commandHelpersScript" mkServiceRuntimeSurfacesSource;
 assert lib.hasInfix "mkCommandWrappedScript" mkServiceRuntimeSurfacesSource;
 assert lib.hasInfix "appApi.mkCommandApi" mkServiceRuntimeSurfacesSource;
 assert !(lib.hasInfix "serviceModulePath" compileServiceSurfaceCatalogSource);
@@ -98,6 +103,8 @@ assert !(lib.hasInfix "appApi ? null" serviceApiSource);
 assert !(lib.hasInfix "mkServiceAppProgramsFromCatalog" serviceApiSource);
 assert lib.hasInfix "mkServiceHookEnv =" serviceApiSource;
 assert lib.hasInfix "NIXFIED_COMMAND_API_RUNTIME" commandWrapperSource;
+assert lib.hasInfix "kernel-export-runtime.nix" commandRuntimeSource;
+assert lib.hasInfix "commandHelpersScript" commandRuntimeSource;
 pkgs.runCommand "service-surface-catalog-contract" { } ''
   echo "OK: compiled service surface catalog is the only service API source for materialized service apps, hooks, and public descriptors" > "$out"
 ''
