@@ -92,12 +92,13 @@ assert !(lib.hasInfix "summary.nix" mkServiceRuntimeSurfacesSource);
 assert !(lib.hasInfix "helpers.nix" mkServiceRuntimeSurfacesSource);
 assert lib.hasInfix "commandHelpersScript" mkServiceRuntimeSurfacesSource;
 assert lib.hasInfix "mkCommandWrappedScript" mkServiceRuntimeSurfacesSource;
-assert lib.hasInfix "command-api.nix" mkServiceRuntimeSurfacesSource;
-assert lib.hasInfix "commandApi.mkCommandApi" mkServiceRuntimeSurfacesSource;
+assert !(lib.hasInfix "command-api.nix" mkServiceRuntimeSurfacesSource);
+assert !(lib.hasInfix "commandApi.mkCommandApi" mkServiceRuntimeSurfacesSource);
 assert !(lib.hasInfix "serviceModulePath" compileServiceSurfaceCatalogSource);
 assert !(lib.hasInfix "mkServiceApisFromModules" compileServiceSurfaceCatalogSource);
 assert !(lib.hasInfix "publicApi" compileServiceSurfaceCatalogSource);
 assert !(lib.hasInfix "runtime/helpers/service-api.nix" compileServiceSurfaceCatalogSource);
+assert lib.hasInfix "runtime/helpers/command-api.nix" compileServiceSurfaceCatalogSource;
 assert lib.hasInfix "service-contract-validation.nix" compileServiceSurfaceCatalogSource;
 assert lib.hasInfix "serviceDefinitions" compileServiceSurfaceCatalogSource;
 assert !(lib.hasInfix "appApi ? null" serviceApiSource);
@@ -106,6 +107,14 @@ assert lib.hasInfix "mkServiceHookEnv =" serviceApiSource;
 assert lib.hasInfix "NIXFIED_COMMAND_API_RUNTIME" commandWrapperSource;
 assert lib.hasInfix "kernel-export-runtime.nix" commandRuntimeSource;
 assert lib.hasInfix "commandHelpersScript" commandRuntimeSource;
+assert lib.all (entry: (entry.commandApi.version or null) == 2) operationEntries;
+assert lib.all (
+  entry:
+  let
+    catalogApp = (catalog.appsByName or { }).${entry.appName} or null;
+  in
+  catalogApp == null || catalogApp.commandApi == entry.commandApi
+) operationEntries;
 pkgs.runCommand "service-surface-catalog-contract" { } ''
   echo "OK: compiled service surface catalog is the only service API source for materialized service apps, hooks, and public descriptors" > "$out"
 ''
