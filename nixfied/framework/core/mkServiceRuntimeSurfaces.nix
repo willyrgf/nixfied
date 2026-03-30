@@ -408,7 +408,7 @@ let
       ;
     project = serviceProject;
   };
-  observability = import ../runtime/helpers/service-observability.nix {
+  observability = import ./service-observability.nix {
     inherit
       pkgs
       slots
