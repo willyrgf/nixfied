@@ -12,12 +12,12 @@ let
   kernelPackage = import ../runtime/kernel { inherit pkgs; };
   shellCommon = import ./shell-common.nix { inherit pkgs; };
   commonRuntimeShell = import ../runtime/common-runtime.nix { inherit pkgs; };
-  shellJson = import ../runtime/helpers/shell-json.nix { };
+  shellJson = import ./shell-json.nix { };
   runtimeArtifactContracts = import ../contracts/runtime-artifact-contracts.nix { inherit pkgs; };
   validationBundleFile = pkgs.writeText "nixfied-runtime-artifact-contract-bundle.json" (
     builtins.toJSON runtimeArtifactContracts.bundle
   );
-  skipPolicy = import ../runtime/helpers/skip-policy.nix { inherit pkgs; };
+  skipPolicy = import ./skip-policy.nix { inherit pkgs; };
   serviceConfigLib = import ./service-config.nix {
     inherit
       lib
@@ -50,7 +50,7 @@ let
       ]
     else
       listUtils.uniqueSorted operations;
-  tokenLib = import ../runtime/helpers/normalize-token.nix { inherit lib; };
+  tokenLib = import ./normalize-token.nix { inherit lib; };
   normalizeToken = tokenLib.normalizeToken;
 
   slotEnvPrelude = ''

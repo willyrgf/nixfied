@@ -16,7 +16,7 @@ let
   resolvedCommandSurfaces = cfg.commandSurfaces or commandSurfaces;
   resolvedFeatureInventory = cfg.featureInventory or featureInventory;
   commonRuntimeShell = import ../common-runtime.nix { inherit pkgs; };
-  shellJson = import ./shell-json.nix { };
+  shellJson = import ../../core/shell-json.nix { };
 
   defaultRequiredDocs = [
     "README.md"

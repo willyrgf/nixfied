@@ -13,7 +13,7 @@
 let
   lib = pkgs.lib;
   mkShellApp = import ./mk-shell-app.nix { inherit pkgs; };
-  skipPolicy = import ../runtime/helpers/skip-policy.nix { inherit pkgs; };
+  skipPolicy = import ./skip-policy.nix { inherit pkgs; };
   canonical = import ./canonical.nix { inherit lib; };
   workspaceMarker = import ../workspace-marker.nix;
   registry = import ../runtime/registry { inherit pkgs; };
