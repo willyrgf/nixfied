@@ -96,7 +96,7 @@ let
         ${renderErrors allErrs}
       '';
 
-  valueStrings = import ./value-string.nix;
+  valueStrings = import ../../core/value-string.nix;
   valueToString = valueStrings.toShellEnvString;
 
   allowSpecNames = map (spec: spec.name) (
