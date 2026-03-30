@@ -491,7 +491,7 @@ let
       };
     };
 
-  valueStrings = import ../runtime/helpers/value-string.nix;
+  valueStrings = import ./value-string.nix;
   valueToString = valueStrings.toContractString;
 
   normalizeArgSpec =
