@@ -396,7 +396,7 @@ let
       ;
     helpersScript = commandRuntime.commandHelpersScript;
   };
-  appApi = import ../runtime/helpers/app-api.nix {
+  commandApi = import ../runtime/helpers/command-api.nix {
     inherit
       pkgs
       shellContract
@@ -508,7 +508,7 @@ let
   mkServiceRuntimeCommandApi =
     op:
     (
-      appApi.mkCommandApi {
+      commandApi.mkCommandApi {
         class = op.class;
         name = op.appName;
         summary = op.opMetadata.summary;
