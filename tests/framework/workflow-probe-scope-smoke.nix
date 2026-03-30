@@ -4,6 +4,7 @@
 }:
 let
   shellHelpers = import ./lib/shell-helpers.nix { inherit pkgs; };
+  runtimeMaterialization = import ./lib/runtime-materialization.nix;
   frameworkLib = import ../../nixfied/framework/core {
     inherit pkgs;
     system = pkgs.system;
@@ -123,6 +124,15 @@ let
     model = compiled.model;
     services = compiled.services;
     projectRoot = ../..;
+    inherit
+      (runtimeMaterialization {
+        inherit pkgs;
+        model = compiled.model;
+        services = compiled.services;
+      })
+      serviceHookEnv
+      serviceSetPrograms
+      ;
   };
 in
 assert

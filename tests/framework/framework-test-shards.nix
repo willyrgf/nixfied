@@ -30,6 +30,7 @@ let
       "postgres-backup-contract"
       "postgres-config-artifacts-contract"
       "project-config-boundary"
+      "runtime-event-policy-contract"
       "scheduler-order"
       "service-op-composition-contract"
       "service-probe-overrides-contract"

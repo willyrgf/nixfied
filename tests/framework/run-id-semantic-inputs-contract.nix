@@ -8,6 +8,7 @@ let
     system = pkgs.system;
   };
   shellHelpers = import ./lib/shell-helpers.nix { inherit pkgs; };
+  runtimeMaterialization = import ./lib/runtime-materialization.nix;
 
   taskId = "task.test.run-id.semantic";
   workflowId = "workflow.test.run-id.semantic";
@@ -67,6 +68,13 @@ let
 
   mkOrchestrator =
     compiled:
+    let
+      runtimeDeps = runtimeMaterialization {
+        inherit pkgs;
+        model = compiled.model;
+        services = compiled.services;
+      };
+    in
     import ../../nixfied/framework/runtime/orchestrator.nix {
       inherit
         pkgs
@@ -75,6 +83,10 @@ let
       model = compiled.model;
       services = compiled.services;
       projectRoot = ../..;
+      inherit (runtimeDeps)
+        serviceHookEnv
+        serviceSetPrograms
+        ;
     };
 
   orchestratorBase = mkOrchestrator compiledBase;

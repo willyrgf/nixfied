@@ -2,9 +2,39 @@
   pkgs,
   model,
   services,
+  resolvedServices ? null,
 }:
 let
+  lib = pkgs.lib;
   serviceSurfaceCatalog = (model.compiled or { }).serviceSurfaceCatalog or { };
+  normalizedResolvedServices =
+    if resolvedServices != null then
+      resolvedServices
+    else
+      builtins.listToAttrs (
+        map (
+          serviceId:
+          let
+            service = services.${serviceId};
+            serviceName =
+              if lib.hasPrefix "service." serviceId then
+                builtins.substring 8 ((builtins.stringLength serviceId) - 8) serviceId
+              else
+                service.name or serviceId;
+          in
+          {
+            name = serviceName;
+            value =
+              if service ? config then
+                (service.config or { })
+                // {
+                  enable = service.enable or false;
+                }
+              else
+                service;
+          }
+        ) (builtins.attrNames services)
+      );
 
   mkRuntimeSurfaces =
     runtimeModel: selectedServices:
@@ -43,7 +73,7 @@ let
         serviceSet
         ;
       model = serviceSetModel;
-      resolvedServices = model.resolvedServices or { };
+      resolvedServices = normalizedResolvedServices;
       serviceRuntimeSurfaces = serviceSetRuntimeSurfaces;
     }
   ) (model.serviceSets or { });

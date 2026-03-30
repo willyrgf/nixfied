@@ -209,6 +209,10 @@ Current evidence from code:
   cached runtime handoff plus summary export paths
 - `executor.nix` and `orchestrator.nix` still rely on fine-grained task and
   workflow handoffs because shell still needs runtime fields at launch edges
+- the old `runtime/helpers/runtime-events.nix` path is also gone; event layout
+  policy now lives in `framework/core/runtime-event-policy.nix` behind
+  `framework/core/runtime-events.nix`, while registry/status shell programs
+  live in `framework/runtime/runtime-events-programs.nix`
 - this supports deleting the remaining handoff weight entirely rather than
   polishing it
 

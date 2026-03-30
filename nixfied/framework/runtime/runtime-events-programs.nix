@@ -3,53 +3,21 @@
   pkgs,
   project ? { },
   loggingPrelude ? null,
+  policy ? import ../core/runtime-event-policy.nix { inherit pkgs project; },
 }:
 
 let
-  projectMeta = project.project or { };
-  projectId = projectMeta.id or "project";
-  kernelExportRuntime = import ./kernel-export-runtime.nix { };
-  kernelPackage = import ../kernel { inherit pkgs; };
-  id = import ./id.nix {
+  kernelExportRuntime = import ./helpers/kernel-export-runtime.nix { };
+  kernelPackage = import ./kernel { inherit pkgs; };
+  id = import ./helpers/id.nix {
     inherit pkgs project;
   };
-  registry = import ../registry/events.nix { inherit pkgs; };
-  projectIdUpper =
-    let
-      replaced = pkgs.lib.replaceStrings [ "-" "." ] [ "_" "_" ] projectId;
-    in
-    pkgs.lib.strings.toUpper replaced;
-  slotVar = projectMeta.slotVar or "NIX_ENV";
-  envVar = projectMeta.envVar or "PROJECT_ENV";
-  processCfg = project.process or { };
-  registryRoot =
-    if project ? state && project.state ? policy && project.state.policy ? registryRoot then
-      project.state.policy.registryRoot
-    else if project ? state && project.state ? registry && project.state.registry ? root then
-      project.state.registry.root
-    else if project ? state && project.state ? registryRoot then
-      project.state.registryRoot
-    else
-      processCfg.registryRoot
-        or "\${NIX_BUILD_TOP:-\${XDG_CACHE_HOME:-$HOME/.cache}}/nixfied-runtime/${projectId}/registry";
-  baseDirExpr =
-    if project ? state && project.state ? policy && project.state.policy ? runtimeBase then
-      project.state.policy.runtimeBase
-    else
-      (project.directories.base or "\${XDG_DATA_HOME:-$HOME/.local/share}/${projectId}");
-  ciCfg = project.ci or { };
-  artifactsCfg = ciCfg.artifacts or { };
-  artifactsRootExpr =
-    if project ? state && project.state ? policy && project.state.policy ? artifactsRoot then
-      project.state.policy.artifactsRoot
-    else
-      artifactsCfg.dir or "/tmp/ci-artifacts";
-  ephemeralPrefix = "/tmp/${projectId}-ephemeral-";
+  registry = import ./registry/events.nix { inherit pkgs; };
   resolvedLoggingPrelude =
     if loggingPrelude != null && loggingPrelude != "" then
       loggingPrelude
     else
-      (import ./helpers.nix {
+      (import ./helpers/helpers.nix {
         inherit pkgs project;
         hooks = { };
         summaryParser = "";
@@ -62,23 +30,24 @@ let
 
     set -euo pipefail
 
-    REGISTRY_ROOT_DEFAULT="${registryRoot}"
+    REGISTRY_ROOT_DEFAULT="${policy.registryRoot}"
     if [ -n "''${NIXFIED_RUNTIME_REGISTRY_ROOT+x}" ]; then
       REGISTRY_ROOT_DEFAULT="$NIXFIED_RUNTIME_REGISTRY_ROOT"
     elif [ -n "''${NIXFIED_RUNTIME_DIR_BASE+x}" ]; then
       REGISTRY_ROOT_DEFAULT="$NIXFIED_RUNTIME_DIR_BASE/registry"
     fi
     REGISTRY_ROOT="''${REGISTRY_ROOT:-$REGISTRY_ROOT_DEFAULT}"
-    PROJECT_ID="${projectId}"
-    BASE_DIR_DEFAULT="${baseDirExpr}"
-    CI_ARTIFACTS_BASE_DEFAULT="${artifactsRootExpr}"
-    EPHEMERAL_PREFIX="${ephemeralPrefix}"
-    SLOT_VAR="${slotVar}"
-    ENV_VAR="${envVar}"
-    EPHEMERAL_FLAG_VAR="${projectIdUpper}_EPHEMERAL"
-    EPHEMERAL_ROOT_VAR="${projectIdUpper}_EPHEMERAL_ROOT"
+    PROJECT_ID="${policy.projectId}"
+    BASE_DIR_DEFAULT="${policy.baseDirExpr}"
+    CI_ARTIFACTS_BASE_DEFAULT="${policy.artifactsRootExpr}"
+    EPHEMERAL_PREFIX="${policy.ephemeralPrefix}"
+    SLOT_VAR="${policy.slotVar}"
+    ENV_VAR="${policy.envVar}"
+    EPHEMERAL_FLAG_VAR="${policy.ephemeralFlagVar}"
+    EPHEMERAL_ROOT_VAR="${policy.ephemeralRootVar}"
 
     ${registryShell}
+    ${policy.indexShellFunctions}
 
     normalize_bool() {
       case "''${1:-}" in
@@ -124,47 +93,6 @@ let
         ""|*[!0-9]*) return 1 ;;
         *) return 0 ;;
       esac
-    }
-
-    runtime_index_segment() {
-      local value="$1"
-      if [ -z "$value" ]; then
-        printf '%s' "__empty__"
-        return 0
-      fi
-      value="''${value//\//_}"
-      value="''${value//$'\n'/_}"
-      value="''${value//$'\r'/_}"
-      value="''${value//$'\t'/_}"
-      printf '%s' "$value"
-    }
-
-    runtime_events_index_root() {
-      printf '%s/runtime-events' "$REGISTRY_ROOT"
-    }
-
-    service_events_root_for() {
-      local service_name="$1"
-      printf '%s/services/%s' "$(runtime_events_index_root)" "$(runtime_index_segment "$service_name")"
-    }
-
-    service_events_index_file_for() {
-      local service_name="$1"
-      local slot_name="$2"
-      local env_name="$3"
-      printf '%s/%s/%s/events.tsv' \
-        "$(service_events_root_for "$service_name")" \
-        "$(runtime_index_segment "$slot_name")" \
-        "$(runtime_index_segment "$env_name")"
-    }
-
-    slot_events_index_file_for() {
-      local slot_name="$1"
-      local env_name="$2"
-      printf '%s/slots/%s/%s/events.tsv' \
-        "$(runtime_events_index_root)" \
-        "$(runtime_index_segment "$slot_name")" \
-        "$(runtime_index_segment "$env_name")"
     }
 
     append_index_line_locked() {
@@ -686,7 +614,6 @@ let
 in
 {
   inherit
-    registryRoot
     emitEvent
     serviceEvents
     serviceLogs

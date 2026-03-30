@@ -294,7 +294,9 @@ let
           echo "ERROR: intentional failure to preserve ephemeral state" >&2
           exit 1
         '';
-        runtimeExtra.passThroughEnv = (baseTask.runtime.passThroughEnv or [ ]) ++ [ "NIXFIED_EPHEMERAL_GATE_DIR" ];
+        runtimeExtra.passThroughEnv = (baseTask.runtime.passThroughEnv or [ ]) ++ [
+          "NIXFIED_EPHEMERAL_GATE_DIR"
+        ];
       };
     };
     workflows = model.workflows // {

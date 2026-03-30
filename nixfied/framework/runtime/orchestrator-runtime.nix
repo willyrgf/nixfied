@@ -349,9 +349,13 @@ in
       return
     fi
 
-    runner_type="$(task_runner_type "$task_id")"
+    task_handoff_use "$task_id" >/dev/null 2>&1 || {
+      printf '%s' ""
+      return
+    }
+    runner_type="$NIXFIED_TASK_RUNNER_TYPE"
     if [ "$runner_type" = "workflowRef" ]; then
-      task_runner_workflow_id "$task_id"
+      printf '%s' "$NIXFIED_TASK_RUNNER_WORKFLOW_ID"
       return
     fi
 

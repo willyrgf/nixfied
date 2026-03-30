@@ -623,6 +623,14 @@ Current files:
 - `nixfied/framework/runtime/kernel/src/event.rs`
 - `nixfied/framework/runtime/kernel/src/policy.rs`
 
+Current live split around shell-facing runtime events:
+
+- core-owned event layout and naming policy now lives in:
+  - `nixfied/framework/core/runtime-event-policy.nix`
+  - `nixfied/framework/core/runtime-events.nix`
+- runtime-owned shell and registry IO now lives in:
+  - `nixfied/framework/runtime/runtime-events-programs.nix`
+
 Necessary:
 
 - canonical event detail derivation
@@ -640,6 +648,8 @@ Keep:
 Collapse/Delete pressure:
 
 - medium on shell-export rendering, not on semantic ownership
+- low on the remaining runtime-events programs layer itself, provided policy and
+  layout stay core-owned and no duplicate helper facade returns
 
 ### 15. Run-Record, Registry, And Summary Layer
 
