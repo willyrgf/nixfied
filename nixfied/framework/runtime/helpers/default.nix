@@ -58,7 +58,7 @@ let
     inherit (helpers) loggingPrelude;
   };
   managedServiceLifecycle = import ./managed-service-lifecycle.nix { inherit pkgs; };
-  slotEnvRuntime = import ./slot-env-runtime.nix { inherit pkgs; };
+  slotEnvRuntime = import ../../core/slot-env-runtime.nix { inherit pkgs; };
   portUtils = import ./port-utils.nix {
     inherit pkgs;
     inherit (helpers) loggingPrelude;

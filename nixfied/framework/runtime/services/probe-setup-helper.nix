@@ -34,7 +34,7 @@ let
       ;
     postgresProbePkg = if pkgs ? postgresql_16 then pkgs.postgresql_16 else pkgs.postgresql;
   };
-  slotEnvRuntime = import ../helpers/slot-env-runtime.nix { inherit pkgs; };
+  slotEnvRuntime = import ../../core/slot-env-runtime.nix { inherit pkgs; };
   runtimeEvents = import ../helpers/runtime-events.nix { inherit pkgs project; };
   observability = import ../../core/service-observability.nix {
     inherit

@@ -1,6 +1,6 @@
 { pkgs }:
 let
-  source = builtins.readFile ../../nixfied/framework/runtime/helpers/slot-env-runtime.nix;
+  source = builtins.readFile ../../nixfied/framework/core/slot-env-runtime.nix;
   surfaceSource = builtins.readFile ../../nixfied/framework/core/mkServiceRuntimeSurfaces.nix;
 in
 assert !(pkgs.lib.hasInfix "\${pkgs.jq}/bin/jq" source);
