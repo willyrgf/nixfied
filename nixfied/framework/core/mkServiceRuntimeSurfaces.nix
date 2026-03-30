@@ -396,12 +396,6 @@ let
       ;
     helpersScript = commandRuntime.commandHelpersScript;
   };
-  commandApi = import ../runtime/helpers/command-api.nix {
-    inherit
-      pkgs
-      shellContract
-      ;
-  };
   serviceApi = import ../runtime/helpers/service-api.nix {
     inherit
       pkgs
@@ -505,28 +499,15 @@ let
     inherit serviceAdapters;
   };
   serviceHookEnv = serviceApi.mkServiceHookEnv serviceOps;
-  mkServiceRuntimeCommandApi =
-    op:
-    (
-      commandApi.mkCommandApi {
-        class = op.class;
-        name = op.appName;
-        summary = op.opMetadata.summary;
-        details = op.opMetadata.details;
-        usage = op.usage;
-        examples = op.opMetadata.examples or [ ];
-        args = op.opMetadata.args or [ ];
-        env = op.opMetadata.env or [ ];
-        category = op.category;
-        idempotent = op.idempotent;
-      }
-    ).commandApi;
   mkServiceRuntimeApp =
     op:
     toString (
       commandWrapper.mkCommandWrappedScript {
         name = op.appName;
-        commandApi = mkServiceRuntimeCommandApi op;
+        commandApi =
+          op.opMetadata.commandApi or (throw ''
+            nixfied service runtime surfaces expected compiled commandApi for service '${op.serviceName}' operation '${op.opName}'
+          '');
         script = ''
           exec ${toString op.launcher} "$@"
         '';

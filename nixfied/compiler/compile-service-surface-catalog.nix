@@ -10,7 +10,9 @@ let
   serviceContractValidation = import ../framework/core/service-contract-validation.nix {
     inherit pkgs;
   };
+  commandApi = import ../framework/runtime/helpers/command-api.nix { inherit pkgs; };
   tokenLib = import ../framework/runtime/helpers/normalize-token.nix { inherit lib; };
+  inherit (commandApi) mkCommandApi;
   normalizeToken = tokenLib.normalizeToken;
 
   normalizeHookName =
@@ -55,41 +57,28 @@ let
 
   validatedServiceContracts = serviceContractValidation.validateServiceContracts serviceContracts;
 
-  mkCommandApi =
+  mkServiceOperationCommandApi =
     {
       appName,
-      serviceName,
-      opName,
       opCfg,
       usage,
       category,
       examples,
     }:
-    {
-      version = 1;
-      commandClass = opCfg.class or "passthrough";
-      summary = opCfg.summary;
-      details = opCfg.details;
-      inherit
-        usage
-        examples
-        category
-        ;
-      args = opCfg.args or [ ];
-      env = opCfg.env or [ ];
-      outputs = null;
-      behavior = {
+    (
+      mkCommandApi {
+        class = opCfg.class or "passthrough";
+        name = appName;
+        summary = opCfg.summary;
+        details = opCfg.details or "";
+        usage = usage;
+        examples = examples;
+        args = opCfg.args or [ ];
+        env = opCfg.env or [ ];
+        category = category;
         idempotent = opCfg.idempotent or false;
-        effects = [ "none" ];
-        timeoutSec = 0;
-      };
-      errors = {
-        codes = { };
-      };
-      service = serviceName;
-      operation = opName;
-      appName = appName;
-    };
+      }
+    ).commandApi;
 
   mkOperationRecord =
     serviceName: contract: opName:
@@ -128,11 +117,9 @@ let
       artifacts = contract.artifacts or { };
       profiles = contract.profiles or [ ];
       runtimePrimitives = contract.runtimePrimitives or { };
-      commandApi = mkCommandApi {
+      commandApi = mkServiceOperationCommandApi {
         inherit
           appName
-          serviceName
-          opName
           opCfg
           usage
           category
