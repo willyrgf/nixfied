@@ -129,6 +129,7 @@ let
     ../../nixfied/framework/runtime/helpers/service-api.nix
     ../../nixfied/framework/runtime/helpers/app-api.nix
     ../../nixfied/framework/runtime/helpers/slot-env-runtime.nix
+    ../../nixfied/framework/runtime/helpers/shell-contract.nix
     ../../nixfied/framework/runtime/service-selection.nix
     ../../nixfied/framework/runtime/orchestrator-control.nix
     ../../nixfied/framework/runtime/runtime-metadata.nix

@@ -57,7 +57,7 @@ let
           exit 0
         '';
       };
-  shellContract = import ./helpers/shell-contract.nix { inherit pkgs; };
+  shellContract = import ../core/shell-contract.nix { inherit pkgs; };
   sourceMaterialization = import ./helpers/ephemeral-materialization.nix {
     inherit
       pkgs

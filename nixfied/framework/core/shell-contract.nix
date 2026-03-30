@@ -3,10 +3,10 @@
 
 let
   lib = pkgs.lib;
-  kernelPackage = import ../kernel { inherit pkgs; };
-  exitCodes = import ../../core/exit-codes.nix;
-  runtimePrimitives = import ../../core/runtime-primitives.nix { };
-  validation = import ../../core/validation.nix { inherit pkgs; };
+  kernelPackage = import ../runtime/kernel { inherit pkgs; };
+  exitCodes = import ./exit-codes.nix;
+  runtimePrimitives = import ./runtime-primitives.nix { };
+  validation = import ./validation.nix { inherit pkgs; };
   inherit (validation)
     expect
     renderErrors
@@ -87,7 +87,7 @@ let
       value: (builtins.length (builtins.filter (candidate: candidate == value) values)) > 1
     ) uniq;
 
-  listUtils = import ../../core/list-utils.nix;
+  listUtils = import ./list-utils.nix;
   normalizeStringSet = listUtils.uniqueSorted;
 
   sameStringSet = expected: actual: normalizeStringSet expected == normalizeStringSet actual;
@@ -491,7 +491,7 @@ let
       };
     };
 
-  valueStrings = import ./value-string.nix;
+  valueStrings = import ../runtime/helpers/value-string.nix;
   valueToString = valueStrings.toContractString;
 
   normalizeArgSpec =
