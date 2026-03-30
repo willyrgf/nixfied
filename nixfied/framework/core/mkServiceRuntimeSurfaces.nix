@@ -425,7 +425,6 @@ let
     inherit
       pkgs
       shellContract
-      appApi
       ;
   };
   runtimeEvents = import ../runtime/helpers/runtime-events.nix {
@@ -519,16 +518,47 @@ let
       value = serviceSurfaceCatalog.operationCatalog.${serviceName};
     }) (builtins.attrNames serviceApis)
   );
-  serviceHookEnv = serviceApi.mkServiceHookEnvFromCatalog {
+  serviceOps = serviceApi.collectServiceOpsFromCatalog {
     serviceContracts = serviceApis;
     operationCatalog = serviceOperationCatalogEntries;
     inherit serviceAdapters;
   };
-  serviceAppPrograms = serviceApi.mkServiceAppProgramsFromCatalog {
-    serviceContracts = serviceApis;
-    operationCatalog = serviceOperationCatalogEntries;
-    inherit serviceAdapters;
-  };
+  serviceHookEnv = serviceApi.mkServiceHookEnv serviceOps;
+  mkServiceRuntimeApp =
+    op:
+    (
+      appApi.mkContractBackedApp {
+        name = op.appName;
+        script = ''
+          exec ${toString op.launcher} "$@"
+        '';
+        contract = {
+          class = op.class;
+          summary = op.opMetadata.summary;
+          details = op.opMetadata.details;
+          usage = op.usage;
+          examples = op.opMetadata.examples or [ ];
+          args = op.opMetadata.args or [ ];
+          env = op.opMetadata.env or [ ];
+          category = op.category;
+          idempotent = op.idempotent;
+        };
+        env = { };
+        useDeps = false;
+        meta = {
+          nixfied = {
+            service = op.serviceName;
+            operation = op.opName;
+          };
+        };
+      }
+    ).program;
+  serviceAppPrograms = builtins.listToAttrs (
+    map (op: {
+      name = op.appName;
+      value = mkServiceRuntimeApp op;
+    }) (builtins.filter (op: op.includeApp) serviceOps)
+  );
 in
 {
   inherit

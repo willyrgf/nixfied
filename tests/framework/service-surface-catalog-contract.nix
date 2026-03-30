@@ -20,6 +20,7 @@ let
   );
   mkServiceRuntimeSurfacesSource = builtins.readFile ../../nixfied/framework/core/mkServiceRuntimeSurfaces.nix;
   compileServiceSurfaceCatalogSource = builtins.readFile ../../nixfied/compiler/compile-service-surface-catalog.nix;
+  serviceApiSource = builtins.readFile ../../nixfied/framework/runtime/helpers/service-api.nix;
   serviceNames = sortKeys (catalog.serviceApis or { });
   operationEntries = builtins.concatLists (
     map (
@@ -82,12 +83,17 @@ assert
   !(lib.hasInfix "serviceModulePath = import ./serviceModulePath.nix;" mkServiceRuntimeSurfacesSource);
 assert !(lib.hasInfix "mkServiceApisFromModules (" mkServiceRuntimeSurfacesSource);
 assert lib.hasInfix "require compiled serviceSurfaceCatalog" mkServiceRuntimeSurfacesSource;
+assert lib.hasInfix "collectServiceOpsFromCatalog" mkServiceRuntimeSurfacesSource;
+assert lib.hasInfix "appApi.mkContractBackedApp" mkServiceRuntimeSurfacesSource;
 assert !(lib.hasInfix "serviceModulePath" compileServiceSurfaceCatalogSource);
 assert !(lib.hasInfix "mkServiceApisFromModules" compileServiceSurfaceCatalogSource);
 assert !(lib.hasInfix "publicApi" compileServiceSurfaceCatalogSource);
 assert !(lib.hasInfix "runtime/helpers/service-api.nix" compileServiceSurfaceCatalogSource);
 assert lib.hasInfix "service-contract-validation.nix" compileServiceSurfaceCatalogSource;
 assert lib.hasInfix "serviceDefinitions" compileServiceSurfaceCatalogSource;
+assert !(lib.hasInfix "appApi ? null" serviceApiSource);
+assert !(lib.hasInfix "mkServiceAppProgramsFromCatalog" serviceApiSource);
+assert lib.hasInfix "mkServiceHookEnv =" serviceApiSource;
 pkgs.runCommand "service-surface-catalog-contract" { } ''
   echo "OK: compiled service surface catalog is the only service API source for materialized service apps, hooks, and public descriptors" > "$out"
 ''

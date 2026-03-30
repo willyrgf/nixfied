@@ -1,7 +1,6 @@
 # Nixfied service contract runtime projection helpers
 {
   pkgs,
-  appApi ? null,
   shellContract ? import ./shell-contract.nix { inherit pkgs; },
 }:
 
@@ -184,14 +183,13 @@ let
     in
     builtins.concatLists (map toOps names);
 
-  mkServiceHookEnvFromCatalog =
-    args:
+  mkServiceHookEnv =
+    ops:
     let
-      ops = builtins.filter (op: op.includeHook) (collectServiceOpsFromCatalog args);
       pairs = map (op: {
         name = op.hookName;
         value = toString op.launcher;
-      }) ops;
+      }) (builtins.filter (op: op.includeHook) ops);
       dedup =
         acc: pair:
         if builtins.hasAttr pair.name acc then
@@ -207,47 +205,7 @@ let
     in
     builtins.foldl' dedup { } pairs;
 
-  mkServiceAppProgramsFromCatalog =
-    args:
-    let
-      _ =
-        if appApi == null then
-          throw "mkServiceAppProgramsFromCatalog requires appApi"
-        else
-          null;
-      ops = builtins.filter (op: op.includeApp) (collectServiceOpsFromCatalog args);
-      pairs = map (op: {
-        name = op.appName;
-        value = (
-          appApi.mkContractBackedApp {
-            name = op.appName;
-            script = ''
-              exec ${toString op.launcher} "$@"
-            '';
-            contract = {
-              class = op.class;
-              summary = op.opMetadata.summary;
-              details = op.opMetadata.details;
-              usage = op.usage;
-              examples = op.opMetadata.examples or [ ];
-              args = op.opMetadata.args or [ ];
-              env = op.opMetadata.env or [ ];
-              category = op.category;
-              idempotent = op.idempotent;
-            };
-            env = { };
-            useDeps = false;
-            meta = {
-              nixfied = {
-                service = op.serviceName;
-                operation = op.opName;
-              };
-            };
-          }
-        ).program;
-      }) ops;
-    in
-    builtins.listToAttrs pairs;
+  mkServiceHookEnvFromCatalog = args: mkServiceHookEnv (collectServiceOpsFromCatalog args);
 
   mkRuntimePrimitivesV1 =
     {
@@ -264,8 +222,8 @@ in
 {
   inherit
     collectServiceOpsFromCatalog
+    mkServiceHookEnv
     mkRuntimePrimitivesV1
     mkServiceHookEnvFromCatalog
-    mkServiceAppProgramsFromCatalog
     ;
 }
