@@ -8,7 +8,7 @@
 let
   lib = pkgs.lib;
   kernelPackage = import ../kernel { inherit pkgs; };
-  inherit (import ./validation.nix { inherit pkgs; })
+  inherit (import ../../core/validation.nix { inherit pkgs; })
     expect
     renderErrors
     isEnvVarName

@@ -6,7 +6,7 @@ let
   kernelPackage = import ../kernel { inherit pkgs; };
   exitCodes = import ../../core/exit-codes.nix;
   runtimePrimitives = import ../../core/runtime-primitives.nix { };
-  validation = import ./validation.nix { inherit pkgs; };
+  validation = import ../../core/validation.nix { inherit pkgs; };
   inherit (validation)
     expect
     renderErrors

@@ -1,7 +1,7 @@
 { pkgs }:
 let
   runtimePrimitives = import ./runtime-primitives.nix { };
-  validation = import ../runtime/helpers/validation.nix { inherit pkgs; };
+  validation = import ./validation.nix { inherit pkgs; };
   inherit (validation)
     isNonEmptyString
     expect
