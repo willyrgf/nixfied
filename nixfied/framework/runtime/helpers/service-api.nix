@@ -5,19 +5,20 @@
 }:
 
 let
+  runtimePrimitives = import ../../core/runtime-primitives.nix { };
   serviceContractValidation = import ../../core/service-contract-validation.nix {
-    inherit
-      pkgs
-      shellContract
-      ;
+    inherit pkgs;
   };
   inherit (serviceContractValidation)
     sortedAttrNames
     validateServiceContracts
     validateServiceAdapters
     ;
-  runtimeLogLevelDefault = shellContract.runtimeLogLevelDefault;
-  runtimeOutputModeDefault = shellContract.runtimeOutputModeDefault;
+  inherit (runtimePrimitives)
+    runtimeLogLevelDefault
+    runtimeOutputModeDefault
+    mkServiceRuntimePrimitivesV1
+    ;
 
   serviceOps = contract: contract.operations or { };
   opPreRefs = op: op.preOps or [ ];
@@ -206,18 +207,8 @@ let
     builtins.foldl' dedup { } pairs;
 
   mkServiceHookEnvFromCatalog = args: mkServiceHookEnv (collectServiceOpsFromCatalog args);
+  mkRuntimePrimitivesV1 = mkServiceRuntimePrimitivesV1;
 
-  mkRuntimePrimitivesV1 =
-    {
-      logLevelDefault ? runtimeLogLevelDefault,
-      outputModeDefault ? runtimeOutputModeDefault,
-    }:
-    shellContract.mkServiceRuntimePrimitivesV1 {
-      inherit
-        logLevelDefault
-        outputModeDefault
-        ;
-    };
 in
 {
   inherit

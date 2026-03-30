@@ -5,10 +5,7 @@
 }:
 let
   commandApi = import ../../core/command-api.nix {
-    inherit
-      pkgs
-      shellContract
-      ;
+    inherit pkgs;
   };
   inherit (commandApi) mkCommandApi;
 
