@@ -25,8 +25,8 @@ let
   lib = pkgs.lib;
   runtimeDefaults = import ../../core/runtime-defaults.nix;
   managedServiceLifecycle = import ../helpers/managed-service-lifecycle.nix { inherit pkgs; };
-  probeCommands = import ../helpers/probe-commands.nix { inherit pkgs; };
-  probePlanRuntime = import ../helpers/probe-plan-runtime.nix {
+  probeCommands = import ../../core/probe-commands.nix { inherit pkgs; };
+  probePlanRuntime = import ../../core/probe-plan-runtime.nix {
     inherit
       lib
       pkgs
