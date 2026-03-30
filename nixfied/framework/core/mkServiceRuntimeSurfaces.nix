@@ -379,16 +379,11 @@ let
   };
 
   shellContract = import ../runtime/helpers/shell-contract.nix { inherit pkgs; };
-  baseHelpers = import ../runtime/helpers/helpers.nix {
-    inherit pkgs;
-    project = serviceProject;
-    hooks = { };
-    summaryParser = "";
-  };
+  loggingRuntime = import ../runtime/helpers/logging-runtime.nix { inherit pkgs; };
   summary = import ../runtime/helpers/summary.nix {
     inherit pkgs;
     project = serviceProject;
-    inherit (baseHelpers) loggingPrelude;
+    inherit (loggingRuntime) loggingPrelude;
   };
   helpers = import ../runtime/helpers/helpers.nix {
     inherit pkgs;
