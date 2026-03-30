@@ -36,7 +36,7 @@ let
   };
   slotEnvRuntime = import ../helpers/slot-env-runtime.nix { inherit pkgs; };
   runtimeEvents = import ../helpers/runtime-events.nix { inherit pkgs project; };
-  observability = import ../helpers/service-observability.nix {
+  observability = import ../../core/service-observability.nix {
     inherit
       pkgs
       slots

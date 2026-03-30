@@ -1308,7 +1308,7 @@ Primary files:
 - `nixfied/framework/core/mkServiceSetPrograms.nix`
 - `nixfied/framework/runtime/helpers/service-api.nix`
 - `nixfied/framework/runtime/helpers/app-api.nix`
-- `nixfied/framework/runtime/helpers/service-observability.nix`
+- `nixfied/framework/core/service-observability.nix`
 - `nixfied/framework/runtime/services/*`
 - `tests/framework/service-*.nix`
 
