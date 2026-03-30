@@ -10,7 +10,7 @@
 let
   pc = pkgs.process-compose;
   serviceScripts = import ../../helpers/managed-service-lifecycle.nix { inherit pkgs; };
-  slotEnvRuntime = import ../../helpers/slot-env-runtime.nix { inherit pkgs; };
+  slotEnvRuntime = import ../../../core/slot-env-runtime.nix { inherit pkgs; };
   ports = project.ports or { };
   portNames = builtins.attrNames ports;
   orphanCleanupBody =
