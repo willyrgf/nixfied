@@ -378,12 +378,55 @@ let
     getServiceDir = dataDirName: "$(${serviceDirResolver} ${lib.escapeShellArg dataDirName})";
   };
 
-  runtimeHelpers = import ../runtime/helpers/default.nix {
-    inherit
-      pkgs
-      ;
+  shellContract = import ../runtime/helpers/shell-contract.nix { inherit pkgs; };
+  baseHelpers = import ../runtime/helpers/helpers.nix {
+    inherit pkgs;
     project = serviceProject;
     hooks = { };
+    summaryParser = "";
+  };
+  summary = import ../runtime/helpers/summary.nix {
+    inherit pkgs;
+    project = serviceProject;
+    inherit (baseHelpers) loggingPrelude;
+  };
+  helpers = import ../runtime/helpers/helpers.nix {
+    inherit pkgs;
+    project = serviceProject;
+    hooks = { };
+    inherit (summary) summaryParser;
+  };
+  fixtures = import ../runtime/helpers/fixtures.nix {
+    inherit pkgs;
+    project = serviceProject;
+  };
+  builders = import ../runtime/helpers/builders.nix {
+    inherit
+      pkgs
+      shellContract
+      ;
+    project = serviceProject;
+    fixtureLib = fixtures;
+    inherit (helpers)
+      loadEnv
+      loadEnvFile
+      helpersScript
+      hookExports
+      ;
+  };
+  appApi = import ../runtime/helpers/app-api.nix {
+    inherit
+      pkgs
+      shellContract
+      ;
+    inherit (builders) mkApp;
+  };
+  serviceApi = import ../runtime/helpers/service-api.nix {
+    inherit
+      pkgs
+      shellContract
+      appApi
+      ;
   };
   runtimeEvents = import ../runtime/helpers/runtime-events.nix {
     inherit
@@ -476,12 +519,12 @@ let
       value = serviceSurfaceCatalog.operationCatalog.${serviceName};
     }) (builtins.attrNames serviceApis)
   );
-  serviceHookEnv = runtimeHelpers.serviceApi.mkServiceHookEnvFromCatalog {
+  serviceHookEnv = serviceApi.mkServiceHookEnvFromCatalog {
     serviceContracts = serviceApis;
     operationCatalog = serviceOperationCatalogEntries;
     inherit serviceAdapters;
   };
-  serviceAppPrograms = runtimeHelpers.serviceApi.mkServiceAppProgramsFromCatalog {
+  serviceAppPrograms = serviceApi.mkServiceAppProgramsFromCatalog {
     serviceContracts = serviceApis;
     operationCatalog = serviceOperationCatalogEntries;
     inherit serviceAdapters;
