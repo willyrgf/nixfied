@@ -1,6 +1,6 @@
 { pkgs }:
 let
-  serviceApi = import ../../nixfied/framework/runtime/helpers/service-api.nix { inherit pkgs; };
+  serviceApi = import ../../nixfied/framework/core/service-api.nix { inherit pkgs; };
   serviceContractValidation = import ../../nixfied/framework/core/service-contract-validation.nix {
     inherit pkgs;
   };

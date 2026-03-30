@@ -960,7 +960,7 @@ Generic framework glue around services:
 | `nixfied/framework/runtime/env-sandbox.nix` | 918 |
 | `nixfied/framework/core/mkServiceRuntimeSurfaces.nix` | 482 |
 | `nixfied/framework/core/mkServiceSetPrograms.nix` | 756 |
-| `nixfied/framework/runtime/helpers/service-api.nix` | 690 |
+| `nixfied/framework/core/service-api.nix` | 690 |
 | `nixfied/framework/runtime/services/service-config-builder.nix` | 46 |
 | `nixfied/framework/core/materializeExecution.nix` | 251 |
 | total | 3,143 |
@@ -1306,8 +1306,8 @@ Primary files:
 - `nixfied/compiler/compile-services.nix`
 - `nixfied/framework/core/mkServiceRuntimeSurfaces.nix`
 - `nixfied/framework/core/mkServiceSetPrograms.nix`
-- `nixfied/framework/runtime/helpers/service-api.nix`
-- `nixfied/framework/runtime/helpers/app-api.nix`
+- `nixfied/framework/core/service-api.nix`
+- `nixfied/framework/core/app-api.nix`
 - `nixfied/framework/core/service-observability.nix`
 - `nixfied/framework/runtime/services/*`
 - `tests/framework/service-*.nix`

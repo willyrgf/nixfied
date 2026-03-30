@@ -1,10 +1,10 @@
 {
   pkgs,
-  shellContract ? import ./shell-contract.nix { inherit pkgs; },
+  shellContract ? import ../runtime/helpers/shell-contract.nix { inherit pkgs; },
   mkApp ? null,
 }:
 let
-  commandApi = import ../../core/command-api.nix {
+  commandApi = import ./command-api.nix {
     inherit pkgs;
   };
   inherit (commandApi) mkCommandApi;

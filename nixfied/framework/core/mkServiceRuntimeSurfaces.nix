@@ -396,7 +396,7 @@ let
       ;
     helpersScript = commandRuntime.commandHelpersScript;
   };
-  serviceApi = import ../runtime/helpers/service-api.nix {
+  serviceApi = import ./service-api.nix {
     inherit
       pkgs
       shellContract
