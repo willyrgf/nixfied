@@ -4,7 +4,7 @@
   mkApp ? null,
 }:
 let
-  commandApi = import ./command-api.nix {
+  commandApi = import ../../core/command-api.nix {
     inherit
       pkgs
       shellContract
