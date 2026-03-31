@@ -106,6 +106,7 @@ in
 
     probes = probeLib.probeOptions;
     contract = contractSchema.mkContractOption "Typed Helios public contract.";
+    implementation = contractSchema.mkImplementationOption "Private Helios runtime implementation.";
   };
 
   config.nixfied.services.helios.contract = {
@@ -114,10 +115,6 @@ in
     summary = "Helios service management API";
     details = "Public service contract for managing Helios across dev/prod/test/ci.";
     ownerFile = "nixfied/modules/services/helios.nix";
-    adapter = {
-      version = 1;
-      module = ../../framework/runtime/services/helios/default.nix;
-    };
     artifacts = {
       rpcPortVar = contractSchema.mkPortVarName cfg.portKeyRpc;
       executionPortVar = contractSchema.mkPortVarName cfg.executionRpcPortKey;
@@ -164,5 +161,10 @@ in
         service = "helios";
         summaryName = "Helios";
       };
+  };
+
+  config.nixfied.services.helios.implementation = {
+    version = 1;
+    module = ./runtime/helios/default.nix;
   };
 }

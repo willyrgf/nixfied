@@ -2,6 +2,7 @@
   pkgs,
   model,
   services,
+  serviceDefinitions,
   registry,
 }:
 let
@@ -11,6 +12,7 @@ let
       pkgs
       model
       services
+      serviceDefinitions
       registry
       ;
     projectRoot = ../..;

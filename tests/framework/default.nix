@@ -2,6 +2,7 @@
   pkgs,
   model,
   services,
+  serviceDefinitions,
   serviceCatalog,
   stateHash,
   canonical,
@@ -509,6 +510,7 @@ let
         pkgs
         model
         services
+        serviceDefinitions
         registry
         ;
     };
@@ -571,6 +573,7 @@ let
         pkgs
         model
         services
+        serviceDefinitions
         registry
         ;
     };
@@ -703,6 +706,7 @@ let
         pkgs
         model
         services
+        serviceDefinitions
         registry
         ;
     };
@@ -712,6 +716,7 @@ let
         pkgs
         model
         services
+        serviceDefinitions
         registry
         ;
     };
@@ -721,6 +726,7 @@ let
         pkgs
         model
         services
+        serviceDefinitions
         registry
         ;
     };
@@ -730,6 +736,7 @@ let
         pkgs
         model
         services
+        serviceDefinitions
         registry
         ;
     };
@@ -739,6 +746,7 @@ let
         pkgs
         model
         services
+        serviceDefinitions
         registry
         ;
     };
@@ -748,6 +756,7 @@ let
         pkgs
         model
         services
+        serviceDefinitions
         registry
         ;
     };
@@ -757,12 +766,9 @@ let
         pkgs
         model
         services
+        serviceDefinitions
         registry
         ;
-    };
-
-    "managed-service-lifecycle-contract" = import ./managed-service-lifecycle-contract.nix {
-      inherit pkgs;
     };
 
     "service-lifecycle-matrix-smoke" = import ./service-lifecycle-matrix-smoke.nix {
@@ -770,10 +776,6 @@ let
     };
 
     "supervisor-lifecycle-smoke" = import ./supervisor-lifecycle-smoke.nix {
-      inherit pkgs;
-    };
-
-    "supervisor-runtime-contract" = import ./supervisor-runtime-contract.nix {
       inherit pkgs;
     };
 
@@ -791,6 +793,7 @@ let
         pkgs
         model
         services
+        serviceDefinitions
         registry
         ;
     };
@@ -816,6 +819,7 @@ let
         pkgs
         model
         services
+        serviceDefinitions
         registry
         ;
     };
@@ -844,6 +848,7 @@ let
             pkgs
             model
             services
+            serviceDefinitions
             registry
             ;
         };
@@ -853,6 +858,7 @@ let
         pkgs
         model
         services
+        serviceDefinitions
         registry
         ;
     };
@@ -865,10 +871,6 @@ let
       inherit pkgs;
     };
 
-    "postgres-backup-contract" = import ./postgres-backup-contract.nix {
-      inherit pkgs;
-    };
-
     "postgres-config-artifacts-contract" = import ./postgres-config-artifacts-contract.nix {
       inherit pkgs;
     };
@@ -878,10 +880,6 @@ let
     };
 
     "nginx-site-management-smoke" = import ./nginx-site-management-smoke.nix {
-      inherit pkgs;
-    };
-
-    "nginx-site-management-contract" = import ./nginx-site-management-contract.nix {
       inherit pkgs;
     };
 
@@ -898,6 +896,7 @@ let
         pkgs
         model
         services
+        serviceDefinitions
         registry
         ;
     };
@@ -907,6 +906,7 @@ let
         pkgs
         model
         services
+        serviceDefinitions
         registry
         ;
     };
@@ -916,6 +916,7 @@ let
         pkgs
         model
         services
+        serviceDefinitions
         registry
         ;
     };
@@ -925,6 +926,7 @@ let
         pkgs
         model
         services
+        serviceDefinitions
         registry
         ;
     };
@@ -934,6 +936,7 @@ let
         pkgs
         model
         services
+        serviceDefinitions
         registry
         ;
     };
@@ -950,6 +953,7 @@ let
         pkgs
         model
         services
+        serviceDefinitions
         registry
         ;
     };
@@ -981,6 +985,7 @@ let
         pkgs
         model
         services
+        serviceDefinitions
         registry
         ;
     };
@@ -990,6 +995,7 @@ let
         pkgs
         model
         services
+        serviceDefinitions
         registry
         ;
     };
@@ -1024,6 +1030,7 @@ let
         pkgs
         model
         services
+        serviceDefinitions
         registry
         ;
     };
@@ -1045,6 +1052,7 @@ let
         pkgs
         model
         services
+        serviceDefinitions
         registry
         ;
     };

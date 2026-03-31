@@ -16,7 +16,7 @@ let
       portVarName = _: "POSTGRES_PORT";
     };
 
-  backupMod = import ../../nixfied/framework/runtime/services/postgres/backup.nix {
+  backupMod = import ../../nixfied/modules/services/runtime/postgres/backup.nix {
     inherit pkgs;
     project = { };
     slots = slotsStub;

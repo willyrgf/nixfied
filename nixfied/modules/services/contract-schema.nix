@@ -151,6 +151,18 @@ let
     t.int
   ];
 
+  serviceImplementationType = t.submodule {
+    options = {
+      version = lib.mkOption {
+        type = t.int;
+      };
+
+      module = lib.mkOption {
+        type = t.path;
+      };
+    };
+  };
+
   serviceContractType = t.submodule {
     options = {
       version = lib.mkOption {
@@ -171,16 +183,6 @@ let
 
       ownerFile = lib.mkOption {
         type = t.str;
-      };
-
-      adapter = {
-        version = lib.mkOption {
-          type = t.int;
-        };
-
-        module = lib.mkOption {
-          type = t.path;
-        };
       };
 
       profiles = lib.mkOption {
@@ -206,11 +208,21 @@ let
 in
 {
   serviceContractType = serviceContractType;
+  serviceImplementationType = serviceImplementationType;
 
   mkContractOption =
     description:
     lib.mkOption {
       type = serviceContractType;
+      readOnly = true;
+      visible = false;
+      inherit description;
+    };
+
+  mkImplementationOption =
+    description:
+    lib.mkOption {
+      type = serviceImplementationType;
       readOnly = true;
       visible = false;
       inherit description;

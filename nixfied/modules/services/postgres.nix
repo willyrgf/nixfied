@@ -81,6 +81,7 @@ in
     };
     probes = probeLib.probeOptions;
     contract = contractSchema.mkContractOption "Typed PostgreSQL public contract.";
+    implementation = contractSchema.mkImplementationOption "Private PostgreSQL runtime implementation.";
   };
 
   config.nixfied.services.postgres.contract = {
@@ -89,10 +90,6 @@ in
     summary = "PostgreSQL service management API";
     details = "Public service contract for managing PostgreSQL across dev/prod/test/ci.";
     ownerFile = "nixfied/modules/services/postgres.nix";
-    adapter = {
-      version = 1;
-      module = ../../framework/runtime/services/postgres/default.nix;
-    };
     artifacts = {
       portKey = cfg.portKey;
       portVar = contractSchema.mkPortVarName cfg.portKey;
@@ -249,5 +246,10 @@ in
         service = "postgres";
         summaryName = "PostgreSQL";
       };
+  };
+
+  config.nixfied.services.postgres.implementation = {
+    version = 1;
+    module = ./runtime/postgres/default.nix;
   };
 }

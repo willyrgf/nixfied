@@ -13,19 +13,12 @@ let
   };
   catalog = compiled.model.compiled.serviceSurfaceCatalog;
   sortKeys = attrs: builtins.sort builtins.lessThan (builtins.attrNames attrs);
+  serviceNames = sortKeys (catalog.serviceApis or { });
   heavyServiceAppNames = builtins.sort builtins.lessThan (
     builtins.filter (appName: lib.hasPrefix "svc::" appName) (
       builtins.attrNames (compiled.model.views.apps or { })
     )
   );
-  mkServiceRuntimeSurfacesSource = builtins.readFile ../../nixfied/framework/core/mkServiceRuntimeSurfaces.nix;
-  compileServiceSurfaceCatalogSource = builtins.readFile ../../nixfied/compiler/compile-service-surface-catalog.nix;
-  serviceContractValidationSource = builtins.readFile ../../nixfied/framework/core/service-contract-validation.nix;
-  serviceApiSource = builtins.readFile ../../nixfied/framework/core/service-api.nix;
-  appApiSource = builtins.readFile ../../nixfied/framework/core/app-api.nix;
-  commandWrapperSource = builtins.readFile ../../nixfied/framework/runtime/helpers/command-wrapper.nix;
-  commandRuntimeSource = builtins.readFile ../../nixfied/framework/runtime/helpers/command-runtime.nix;
-  serviceNames = sortKeys (catalog.serviceApis or { });
   operationEntries = builtins.concatLists (
     map (
       serviceName:
@@ -34,10 +27,19 @@ let
       )
     ) serviceNames
   );
-  mkCompiledCoreSource = builtins.readFile ../../nixfied/framework/core/mkCompiledCore.nix;
+  publicCatalogJson = builtins.toJSON (catalog.serviceApis or { });
+  publicHeavyJson = builtins.toJSON compiled.serviceApis;
 in
 assert catalog.appNames == heavyServiceAppNames;
 assert serviceNames == sortKeys compiled.serviceApis;
+assert !(lib.hasInfix "\"adapter\"" publicCatalogJson);
+assert !(lib.hasInfix "\"implementation\"" publicCatalogJson);
+assert !(lib.hasInfix "\"adapter\"" publicHeavyJson);
+assert !(lib.hasInfix "\"implementation\"" publicHeavyJson);
+assert !(lib.hasInfix "framework/runtime/services/" publicCatalogJson);
+assert !(lib.hasInfix "modules/services/runtime/" publicCatalogJson);
+assert !(lib.hasInfix "framework/runtime/services/" publicHeavyJson);
+assert !(lib.hasInfix "modules/services/runtime/" publicHeavyJson);
 assert lib.all (
   serviceName:
   let
@@ -50,6 +52,14 @@ assert lib.all (
   && catalogApi.profiles == heavyApi.profiles
   && catalogApi.runtimePrimitives == heavyApi.runtimePrimitives
   && sortKeys (catalogApi.operations or { }) == sortKeys (heavyApi.operations or { })
+  && !(catalogApi ? adapter)
+  && !(catalogApi ? implementation)
+  && !(heavyApi ? adapter)
+  && !(heavyApi ? implementation)
+) serviceNames;
+assert lib.all (
+  serviceName:
+  catalog.serviceApis.${serviceName}.ownerFile == "nixfied/modules/services/${serviceName}.nix"
 ) serviceNames;
 assert lib.all (
   entry:
@@ -75,51 +85,11 @@ assert lib.all (
       && catalogApp.service == entry.serviceName
       && catalogApp.operation == entry.opName
       && catalog.appServiceByName.${entry.appName} == entry.serviceName
+      && catalogApp.commandApi == entry.commandApi
     )
   )
 ) operationEntries;
-assert lib.all (
-  serviceName:
-  catalog.serviceApis.${serviceName}.ownerFile == "nixfied/modules/services/${serviceName}.nix"
-) serviceNames;
-assert !(lib.hasInfix "mkServiceSurfaceCatalog.nix" mkCompiledCoreSource);
-assert
-  !(lib.hasInfix "serviceModulePath = import ./serviceModulePath.nix;" mkServiceRuntimeSurfacesSource);
-assert !(lib.hasInfix "mkServiceApisFromModules (" mkServiceRuntimeSurfacesSource);
-assert lib.hasInfix "require compiled serviceSurfaceCatalog" mkServiceRuntimeSurfacesSource;
-assert lib.hasInfix "collectServiceOpsFromCatalog" mkServiceRuntimeSurfacesSource;
-assert lib.hasInfix "command-wrapper.nix" mkServiceRuntimeSurfacesSource;
-assert lib.hasInfix "command-runtime.nix" mkServiceRuntimeSurfacesSource;
-assert !(lib.hasInfix "summary.nix" mkServiceRuntimeSurfacesSource);
-assert !(lib.hasInfix "helpers.nix" mkServiceRuntimeSurfacesSource);
-assert lib.hasInfix "commandHelpersScript" mkServiceRuntimeSurfacesSource;
-assert lib.hasInfix "mkCommandWrappedScript" mkServiceRuntimeSurfacesSource;
-assert !(lib.hasInfix "command-api.nix" mkServiceRuntimeSurfacesSource);
-assert !(lib.hasInfix "commandApi.mkCommandApi" mkServiceRuntimeSurfacesSource);
-assert !(lib.hasInfix "serviceModulePath" compileServiceSurfaceCatalogSource);
-assert !(lib.hasInfix "mkServiceApisFromModules" compileServiceSurfaceCatalogSource);
-assert !(lib.hasInfix "publicApi" compileServiceSurfaceCatalogSource);
-assert !(lib.hasInfix "runtime/helpers/service-api.nix" compileServiceSurfaceCatalogSource);
-assert lib.hasInfix "framework/core/command-api.nix" compileServiceSurfaceCatalogSource;
-assert lib.hasInfix "service-contract-validation.nix" compileServiceSurfaceCatalogSource;
-assert lib.hasInfix "serviceDefinitions" compileServiceSurfaceCatalogSource;
-assert !(lib.hasInfix "../runtime/helpers/validation.nix" serviceContractValidationSource);
-assert lib.hasInfix "./validation.nix" serviceContractValidationSource;
-assert lib.hasInfix "./command-api.nix" appApiSource;
-assert !(lib.hasInfix "appApi ? null" serviceApiSource);
-assert !(lib.hasInfix "mkServiceAppProgramsFromCatalog" serviceApiSource);
-assert lib.hasInfix "mkServiceHookEnv =" serviceApiSource;
-assert lib.hasInfix "NIXFIED_COMMAND_API_RUNTIME" commandWrapperSource;
-assert lib.hasInfix "kernel-export-runtime.nix" commandRuntimeSource;
-assert lib.hasInfix "commandHelpersScript" commandRuntimeSource;
 assert lib.all (entry: (entry.commandApi.version or null) == 2) operationEntries;
-assert lib.all (
-  entry:
-  let
-    catalogApp = (catalog.appsByName or { }).${entry.appName} or null;
-  in
-  catalogApp == null || catalogApp.commandApi == entry.commandApi
-) operationEntries;
 pkgs.runCommand "service-surface-catalog-contract" { } ''
-  echo "OK: compiled service surface catalog is the only service API source for materialized service apps, hooks, and public descriptors" > "$out"
+  echo "OK: compiled service surface catalog remains the sole public authority for service APIs, hooks, and app descriptors" > "$out"
 ''

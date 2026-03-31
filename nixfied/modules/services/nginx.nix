@@ -45,6 +45,7 @@ in
     };
     probes = probeLib.probeOptions;
     contract = contractSchema.mkContractOption "Typed nginx public contract.";
+    implementation = contractSchema.mkImplementationOption "Private nginx runtime implementation.";
   };
 
   config.nixfied.services.nginx.contract = {
@@ -53,10 +54,6 @@ in
     summary = "Nginx service management API";
     details = "Public service contract for managing nginx across dev/prod/test/ci.";
     ownerFile = "nixfied/modules/services/nginx.nix";
-    adapter = {
-      version = 1;
-      module = ../../framework/runtime/services/nginx/default.nix;
-    };
     artifacts = {
       httpPortVar = contractSchema.mkPortVarName cfg.portKeyHttp;
       httpsPortVar = contractSchema.mkPortVarName cfg.portKeyHttps;
@@ -184,5 +181,10 @@ in
         service = "nginx";
         summaryName = "nginx";
       };
+  };
+
+  config.nixfied.services.nginx.implementation = {
+    version = 1;
+    module = ./runtime/nginx/default.nix;
   };
 }

@@ -121,7 +121,7 @@ let
   };
 
   nginxService =
-    (import ../../nixfied/framework/runtime/services/nginx/default.nix {
+    (import ../../nixfied/modules/services/runtime/nginx/default.nix {
       inherit pkgs;
       project = directProject;
       slots = slotsStub;

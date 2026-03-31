@@ -4,6 +4,7 @@
   services,
   selectedServices ? null,
   serviceSurfaceCatalog ? null,
+  serviceDefinitions ? { },
 }:
 let
   lib = pkgs.lib;
@@ -447,7 +448,7 @@ let
     else
       throw "nixfied service runtime surfaces expected service APIs for all selected services in serviceSurfaceCatalog: ${builtins.concatStringsSep ", " missingServiceApis}";
 
-  mergeAdapterOperations =
+  mergeImplementationOperations =
     serviceName: baseOps: extraOps:
     let
       duplicateOps = builtins.filter (opName: builtins.hasAttr opName baseOps) (
@@ -457,17 +458,24 @@ let
     if duplicateOps == [ ] then
       baseOps // extraOps
     else
-      throw "nixfied service runtime adapter for '${serviceName}' defines duplicate operations: ${builtins.concatStringsSep ", " duplicateOps}";
+      throw "nixfied service runtime implementation for '${serviceName}' defines duplicate operations: ${builtins.concatStringsSep ", " duplicateOps}";
 
-  serviceAdapters = builtins.mapAttrs (
+  serviceImplementations = builtins.mapAttrs (
     serviceName: contract:
     let
-      adapterModule = (contract.adapter or { }).module or null;
-      importedAdapter =
-        if adapterModule == null then
-          throw "nixfied service runtime surfaces require adapter.module for service '${serviceName}'"
+      serviceDefinition = serviceDefinitions.${serviceName} or null;
+      implementationModule =
+        if serviceDefinition == null then
+          null
         else
-          import adapterModule {
+          (serviceDefinition.implementation or { }).module or null;
+      importedImplementation =
+        if serviceDefinition == null then
+          throw "nixfied service runtime surfaces require private implementation data for service '${serviceName}'"
+        else if implementationModule == null then
+          throw "nixfied service runtime surfaces require implementation.module for service '${serviceName}'"
+        else
+          import implementationModule {
             inherit
               pkgs
               slots
@@ -480,8 +488,8 @@ let
       };
     in
     {
-      version = importedAdapter.version or 1;
-      operations = mergeAdapterOperations serviceName (importedAdapter.operations or { }
+      version = importedImplementation.version or 1;
+      operations = mergeImplementationOperations serviceName (importedImplementation.operations or { }
       ) observabilityOps;
     }
   ) serviceApiCatalogEntries;
@@ -496,7 +504,7 @@ let
   serviceOps = serviceApi.collectServiceOpsFromCatalog {
     serviceContracts = serviceApis;
     operationCatalog = serviceOperationCatalogEntries;
-    inherit serviceAdapters;
+    inherit serviceImplementations;
   };
   serviceHookEnv = serviceApi.mkServiceHookEnv serviceOps;
   mkServiceRuntimeApp =

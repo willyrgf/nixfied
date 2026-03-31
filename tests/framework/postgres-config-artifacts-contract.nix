@@ -1,10 +1,10 @@
 { pkgs }:
 let
-  config = import ../../nixfied/framework/runtime/services/postgres/config.nix {
+  config = import ../../nixfied/modules/services/runtime/postgres/config.nix {
     inherit pkgs;
     project = { };
   };
-  lifecycleSource = builtins.readFile ../../nixfied/framework/runtime/services/postgres/lifecycle.nix;
+  lifecycleSource = builtins.readFile ../../nixfied/modules/services/runtime/postgres/lifecycle.nix;
   devConfText = config.devConf;
   prodConfText = config.prodConf;
   testConfText = config.testConf;

@@ -8,7 +8,7 @@
 }:
 
 let
-  probeSetup = import ../probe-setup-helper.nix {
+  probeSetup = import ../../../../framework/runtime/services/probe-setup-helper.nix {
     inherit
       pkgs
       project

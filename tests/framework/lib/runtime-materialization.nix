@@ -2,6 +2,7 @@
   pkgs,
   model,
   services,
+  serviceDefinitions ? null,
   resolvedServices ? null,
 }:
 let
@@ -35,6 +36,13 @@ let
           }
         ) (builtins.attrNames services)
       );
+  normalizedServiceDefinitions =
+    if serviceDefinitions != null then
+      serviceDefinitions
+    else if resolvedServices != null then
+      resolvedServices
+    else
+      { };
 
   mkRuntimeSurfaces =
     runtimeModel: selectedServices:
@@ -44,6 +52,7 @@ let
         serviceSurfaceCatalog
         ;
       model = runtimeModel;
+      serviceDefinitions = normalizedServiceDefinitions;
       inherit
         services
         selectedServices

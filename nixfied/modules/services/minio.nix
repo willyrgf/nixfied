@@ -59,6 +59,7 @@ in
     };
     probes = probeLib.probeOptions;
     contract = contractSchema.mkContractOption "Typed MinIO public contract.";
+    implementation = contractSchema.mkImplementationOption "Private MinIO runtime implementation.";
   };
 
   config.nixfied.services.minio.contract = {
@@ -67,10 +68,6 @@ in
     summary = "MinIO service management API";
     details = "Public service contract for managing MinIO across dev/prod/test/ci.";
     ownerFile = "nixfied/modules/services/minio.nix";
-    adapter = {
-      version = 1;
-      module = ../../framework/runtime/services/minio/default.nix;
-    };
     profiles = [
       "dev"
       "prod"
@@ -153,5 +150,10 @@ in
         service = "minio";
         summaryName = "MinIO";
       };
+  };
+
+  config.nixfied.services.minio.implementation = {
+    version = 1;
+    module = ./runtime/minio/default.nix;
   };
 }

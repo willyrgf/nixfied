@@ -34,7 +34,7 @@ let
   };
 
   postgresService =
-    (import ../../nixfied/framework/runtime/services/postgres/default.nix {
+    (import ../../nixfied/modules/services/runtime/postgres/default.nix {
       inherit pkgs;
       project = postgresProject;
       slots = slotsStub;

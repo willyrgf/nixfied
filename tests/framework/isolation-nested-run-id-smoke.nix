@@ -2,6 +2,7 @@
   pkgs,
   model,
   services,
+  serviceDefinitions,
   registry,
 }:
 let
@@ -154,7 +155,10 @@ let
       registry
       ;
     model = nestedModel;
-    inherit services;
+    inherit
+      services
+      serviceDefinitions
+      ;
     projectRoot = ../..;
   };
 in
