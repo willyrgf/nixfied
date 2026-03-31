@@ -1,14 +1,15 @@
 # RFC: Layers Refactor
 
-Status: discussion draft
+Status: implemented
 
-Date: 2026-03-29
+Date: 2026-03-31
 
 Supersedes: the earlier draft of this file
 
 ## Purpose
 
-This document rewrites the previous RFC as a forensic architecture record.
+This document began as a forensic architecture record for the layer refactor and
+now closes that refactor as implemented.
 
 The earlier draft became stale while the refactor was landing. It still described
 seams that have already been deleted, and it did not clearly separate:
@@ -22,7 +23,8 @@ This rewrite is intentionally blunt.
 
 Its job is to explain why a refactor whose stated goal was to delete generic
 framework fat mostly relocated complexity instead of cashing out into major
-deletion, and to define the problem space for the next round of solutions.
+deletion, to record the staged deletions that did land, and to define the final
+service-boundary state after Stage 4 completion.
 
 This is not a generic design critique.
 
@@ -61,6 +63,12 @@ It is a repository-specific diagnosis based on:
 - If the goal is still deletion rather than better-organized machinery, the
   next round must remove whole seams, not add a cleaner version alongside the
   old one.
+- Stages 0 through 4 are now landed on `rfc-layer`.
+- Public service contract authority now lives only in `nixfied/modules/services/*.nix`.
+- Private built-in service implementations now live in
+  `nixfied/modules/services/runtime/<service>/**`.
+- `framework/runtime/services/**` is now shared runtime infra only.
+- `contract.adapter.module` is gone from the typed public service surface.
 
 ## Investigation Basis
 
@@ -1282,38 +1290,39 @@ Risk:
 
 - high
 
-### Stage 4: Optional C - compiler-owned typed service contracts after runtime deletion
+### Stage 4: Completed C - compiler-owned typed service contracts after runtime deletion
 
 Goal:
 
-- only if still justified, remove the remaining framework-service glue after the
-  runtime seams are already smaller
+- remove the remaining framework-service glue after the runtime seams were
+  already smaller
 - move public service contract authority into compiler-owned typed schema rather
   than runtime service module imports
 
-Chosen direction for this RFC:
+Landed result:
 
-- Stage 4, if undertaken, uses compiler-owned typed service contract schema
-- service contracts become typed module data resolved before the compiler builds
+- service contracts are typed module data resolved before the compiler builds
   `serviceSurfaceCatalog`
-- runtime services keep private implementation and a small runtime adapter ABI
-  only
-- apps, hooks, and service-set wrappers become projections of compiled service
-  contracts only
-- no backward-compatibility track is preserved for the old service boundary
+- built-in services expose hidden private
+  `implementation = { version = 1; module = ...; }` module data
+- apps, hooks, and service-set wrappers are projections of compiled public
+  contracts plus private implementation operations
+- no backward-compatibility track was kept for the old service boundary
 
-Required deletions:
+Deleted authority:
 
 - no compiler import of runtime service implementations through synthetic
   `project` and `slots` context
-- no hardcoded service ownership map kept beside typed contract data
+- no public `contract.adapter.module`
 - no mixed publicApi/exported/observability object as the service boundary
-- no sidecar or runtime-owned public contract source kept beside typed module
-  schema
+- no sidecar or runtime-owned public contract source beside typed module schema
+- no built-in service runtime authority under
+  `nixfied/framework/runtime/services/{nginx,postgres,minio,reth,helios}`
 
 Primary files:
 
 - `nixfied/modules/services/*`
+- `nixfied/modules/services/runtime/*`
 - `nixfied/compiler/compile-service-surface-catalog.nix`
 - `nixfied/compiler/compile-services.nix`
 - `nixfied/framework/core/mkServiceRuntimeSurfaces.nix`
@@ -1324,7 +1333,7 @@ Primary files:
 - `nixfied/framework/runtime/services/*`
 - `tests/framework/service-*.nix`
 
-Must not happen:
+Guardrails that were enforced:
 
 - do not build a generic service plugin platform
 - do not add sidecar contract files as a second service authority
@@ -1333,7 +1342,7 @@ Must not happen:
   safety
 - do not optimize for repository split-readiness if no duplicate authority dies
 
-Test work:
+Test work that landed:
 
 - delete synthetic extractability proofs that only preserve old structure
 - add real-service checks that `serviceSurfaceCatalog` comes from typed module
@@ -1342,19 +1351,19 @@ Test work:
   projections of compiled contracts only
 - keep only behavior tests that prove real public service surfaces
 
-Exit criteria:
+Exit criteria met:
 
 - service contracts are compiler-owned typed schema, not runtime module imports
 - no compatibility bridge or parallel contract source remains
 - runtime surfaces are projections of those contracts
-- runtime services depend on a small runtime adapter ABI rather than the current
-  helper bundle as the public contract boundary
-- service split-readiness, if still claimed, is true for real services rather
-  than fixtures
+- runtime services depend on a small private implementation ABI rather than the
+  old public runtime-module boundary
+- service split-readiness, where still claimed, is now true for real built-in
+  services rather than fixtures
 
 Risk:
 
-- high and optional
+- high and completed
 
 ### Stage Rules
 
@@ -1363,7 +1372,7 @@ Risk:
 - each stage may break callers and tests directly
 - each stage should delete seam-freezing tests in the same wave as the seam
   deletion
-- do not start Stage 4 before Stages 0 through 3 are complete
+- Stage 4 is now complete; no further compatibility stage remains in this RFC
 
 ### Test Strategy During Refactor
 
@@ -1453,8 +1462,11 @@ If the docs still describe shell as thin adapters, the code should reflect that.
 Real service modules should have to live behind small public surfaces if
 split-readiness is still a design goal.
 
-If Stage 4 proceeds, those surfaces should be expressed as compiler-owned typed
-service contract schema rather than runtime module imports.
+This is now the landed state:
+
+- public contracts live in `nixfied/modules/services/*.nix`
+- private implementations live in `nixfied/modules/services/runtime/*`
+- shared runtime infra only lives in `nixfied/framework/runtime/services/*`
 
 ### 5. The measurement moves in the right direction
 
@@ -1502,12 +1514,11 @@ It should be:
 
 pick one duplicated runtime seam at a time and delete it for real.
 
-For the remaining service-boundary work, this RFC now chooses the
-compiler-owned typed service contract schema path.
+The remaining service-boundary work described earlier in this RFC has now
+landed through the compiler-owned typed service contract schema path.
 
-That means Stage 4 is not a compatibility migration and not a cleaner wrapper
-around the current runtime service modules.
+That means this RFC is closed:
 
-If Stage 4 starts, it should break directly, move public service contract
-authority into typed module data, and delete the current runtime import/helper
-boundary in the same wave.
+- public service contract authority moved into typed module data
+- the old public runtime import/helper boundary was deleted in the same wave
+- only shared runtime infra remains under `framework/runtime/services`

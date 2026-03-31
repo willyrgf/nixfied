@@ -8,7 +8,7 @@
 }:
 
 let
-  probeSetup = import ../probe-setup-helper.nix {
+  probeSetup = import ../../../../framework/runtime/services/probe-setup-helper.nix {
     inherit
       pkgs
       project
@@ -37,7 +37,7 @@ let
     readyPlanBody
     ;
 
-  kernelPackage = import ../../kernel { inherit pkgs; };
+  kernelPackage = import ../../../../framework/runtime/kernel { inherit pkgs; };
   helios = config.package;
   rpcPortVar = slots.portVarName config.portKeyRpc;
   executionRpcPortVar = slots.portVarName config.executionRpcPortKey;
@@ -59,7 +59,7 @@ let
     } >/dev/null 2>&1
   '';
 
-  runtimePrelude = import ../service-runtime-prelude.nix {
+  runtimePrelude = import ../../../../framework/runtime/services/service-runtime-prelude.nix {
     inherit slotEnvRuntime slots observability;
     serviceName = "helios";
     serviceNameUpper = "HELIOS";

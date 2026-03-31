@@ -129,6 +129,7 @@ let
         inherit pkgs;
         model = compiled.model;
         services = compiled.services;
+        serviceDefinitions = compiled.serviceDefinitions;
       })
       serviceHookEnv
       serviceSetPrograms

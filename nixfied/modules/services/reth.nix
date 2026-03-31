@@ -61,6 +61,7 @@ in
     };
     probes = probeLib.probeOptions;
     contract = contractSchema.mkContractOption "Typed Reth public contract.";
+    implementation = contractSchema.mkImplementationOption "Private Reth runtime implementation.";
   };
 
   config.nixfied.services.reth.contract = {
@@ -69,10 +70,6 @@ in
     summary = "Reth service management API";
     details = "Public service contract for managing Reth across dev/prod/test/ci.";
     ownerFile = "nixfied/modules/services/reth.nix";
-    adapter = {
-      version = 1;
-      module = ../../framework/runtime/services/reth/default.nix;
-    };
     artifacts = {
       httpPortVar = contractSchema.mkPortVarName cfg.portKeyHttp;
       wsPortVar = contractSchema.mkPortVarName cfg.portKeyWs;
@@ -112,5 +109,10 @@ in
         service = "reth";
         summaryName = "Reth";
       };
+  };
+
+  config.nixfied.services.reth.implementation = {
+    version = 1;
+    module = ./runtime/reth/default.nix;
   };
 }

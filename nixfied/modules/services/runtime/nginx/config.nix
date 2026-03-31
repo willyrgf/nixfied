@@ -1,7 +1,7 @@
 # Nginx module config defaults
 { pkgs, project }:
 
-import ../service-config-builder.nix {
+import ../../../../framework/runtime/services/service-config-builder.nix {
   inherit pkgs project;
   name = "nginx";
   defaults = cfg: {

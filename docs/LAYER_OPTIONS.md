@@ -237,6 +237,10 @@ Primary effect:
   - private service implementation
   - framework-side projections derived only from the contract
 
+Status:
+
+- implemented
+
 Files under pressure:
 
 - `nixfied/compiler/compile-service-surface-catalog.nix`
@@ -256,17 +260,26 @@ Why it matters:
 - if it merely adds a cleaner service platform beside the current one, it is a
   regression
 
-Current evidence from code:
+Landed result in code:
 
-- `compile-service-surface-catalog.nix` still imports real service modules
-  through synthetic `project` and `slots` context
-- `mkServiceRuntimeSurfaces.nix` still regenerates apps and hook env and can
-  fall back to re-importing service modules
-- real services still depend on broad helper/runtime surfaces such as
-  `managedServiceLifecycle`, `slotEnvRuntime`, `slots.getSlotInfo`, and
-  `slots.getServiceDir`
-- `service-api.nix`, `app-api.nix`, and `service-observability.nix` still tie
-  service contracts to shell/app runtime primitive conventions
+- public `contract.adapter.module` is gone from the typed service schema
+- public service contract authority now lives in `nixfied/modules/services/*.nix`
+- private built-in runtime implementations now live in
+  `nixfied/modules/services/runtime/*`
+- `compile-service-surface-catalog.nix` now compiles public service contracts
+  only
+- `mkServiceRuntimeSurfaces.nix` now combines the compiled service catalog with
+  resolved private implementations instead of importing public runtime modules
+- `framework/runtime/services/*` is reduced to shared infra such as supervisor,
+  prelude, probe setup, and config helpers
+
+Residual pressure:
+
+- `mkServiceRuntimeSurfaces.nix` still carries non-trivial generic service glue
+- real services still depend on shared runtime surfaces such as
+  `managedServiceLifecycle`, `slotEnvRuntime`, and `service-runtime-prelude`
+- the remaining slimming work is now about shared runtime helper size, not about
+  duplicate public contract authority
 
 ### Candidate 7: move task dependency execution fully into kernel
 

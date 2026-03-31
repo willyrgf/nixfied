@@ -19,8 +19,8 @@ rustPlatform.buildRustPackage {
   cargoHash = "sha256-6ssu32jTArgyXCVWAulL2hT6SoaTxgfvsR22/ozDM0Y=";
 
   patches = [
-    ../../framework/runtime/services/helios/patches/0001-disable-reqwest-hickory-dns.patch
-    ../../framework/runtime/services/helios/patches/0002-limit-light-client-updates-request.patch
+    ../../modules/services/runtime/helios/patches/0001-disable-reqwest-hickory-dns.patch
+    ../../modules/services/runtime/helios/patches/0002-limit-light-client-updates-request.patch
   ];
 
   cargoBuildFlags = [

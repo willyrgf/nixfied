@@ -6,9 +6,9 @@
 }:
 
 let
-  runtimeDefaults = import ../../../core/runtime-defaults.nix;
-  summary = import ../../helpers/summary.nix { inherit pkgs project; };
-  helpers = import ../../helpers/helpers.nix {
+  runtimeDefaults = import ../../../../framework/core/runtime-defaults.nix;
+  summary = import ../../../../framework/runtime/helpers/summary.nix { inherit pkgs project; };
+  helpers = import ../../../../framework/runtime/helpers/helpers.nix {
     inherit pkgs project;
     inherit (summary) summaryParser;
   };

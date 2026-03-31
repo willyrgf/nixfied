@@ -2,6 +2,7 @@
   pkgs,
   model,
   services,
+  serviceDefinitions,
   registry,
 }:
 let
@@ -175,6 +176,7 @@ let
     inherit
       pkgs
       services
+      serviceDefinitions
       ;
     model = lifecycleModel;
   };

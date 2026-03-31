@@ -408,7 +408,7 @@ let
   };
 
   postgresService =
-    (import ../../nixfied/framework/runtime/services/postgres/default.nix {
+    (import ../../nixfied/modules/services/runtime/postgres/default.nix {
       inherit pkgs;
       project = projectBase;
       slots = slotsStub;
@@ -425,17 +425,17 @@ let
     inherit (nginxSummary) summaryParser;
   };
 
-  nginxConfig = import ../../nixfied/framework/runtime/services/nginx/config.nix {
+  nginxConfig = import ../../nixfied/modules/services/runtime/nginx/config.nix {
     inherit pkgs;
     project = nginxProject;
   };
 
-  nginxTemplates = import ../../nixfied/framework/runtime/services/nginx/templates.nix {
+  nginxTemplates = import ../../nixfied/modules/services/runtime/nginx/templates.nix {
     inherit pkgs;
     package = nginxConfig.package or pkgs.nginx;
   };
 
-  nginxLifecycle = import ../../nixfied/framework/runtime/services/nginx/lifecycle.nix {
+  nginxLifecycle = import ../../nixfied/modules/services/runtime/nginx/lifecycle.nix {
     inherit pkgs;
     project = nginxProject;
     slots = slotsStub;
@@ -445,28 +445,28 @@ let
   };
 
   nginxService =
-    (import ../../nixfied/framework/runtime/services/nginx/default.nix {
+    (import ../../nixfied/modules/services/runtime/nginx/default.nix {
       inherit pkgs;
       project = nginxProject;
       slots = slotsStub;
     }).operations;
 
   minioService =
-    (import ../../nixfied/framework/runtime/services/minio/default.nix {
+    (import ../../nixfied/modules/services/runtime/minio/default.nix {
       inherit pkgs;
       project = minioProject;
       slots = slotsStub;
     }).operations;
 
   rethService =
-    (import ../../nixfied/framework/runtime/services/reth/default.nix {
+    (import ../../nixfied/modules/services/runtime/reth/default.nix {
       inherit pkgs;
       project = rethProject;
       slots = slotsStub;
     }).operations;
 
   heliosService =
-    (import ../../nixfied/framework/runtime/services/helios/default.nix {
+    (import ../../nixfied/modules/services/runtime/helios/default.nix {
       inherit pkgs;
       project = heliosProject;
       slots = slotsStub;

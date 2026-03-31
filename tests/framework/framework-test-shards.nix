@@ -21,13 +21,10 @@ let
       "introspection-bundle-determinism"
       "introspection-schema"
       "local-override-introspect-contract"
-      "managed-service-lifecycle-contract"
       "model-hash"
-      "nginx-site-management-contract"
       "operations-contract"
       "orchestrator-lifecycle-contract"
       "package-output-contract"
-      "postgres-backup-contract"
       "postgres-config-artifacts-contract"
       "project-config-boundary"
       "runtime-event-policy-contract"
@@ -37,7 +34,6 @@ let
       "service-requirements-contract"
       "service-surface-catalog-contract"
       "slot-env-runtime-contract"
-      "supervisor-runtime-contract"
       "vendored-metadata-contract"
     ];
 

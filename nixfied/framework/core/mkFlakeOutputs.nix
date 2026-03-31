@@ -1169,6 +1169,7 @@ in
   runtimeHash = heavyOutputs.runtimeHash;
   tasks = compiledCore.model.tasks;
   services = heavyOutputs.services;
+  serviceDefinitions = compiledCore.resolved.services or { };
   serviceCatalog = compiledCore.model.serviceCatalog;
   workflows = compiledCore.model.workflows;
   features = compiledCore.model.features;

@@ -49,6 +49,7 @@ let
       ;
     model = probeModelA;
     services = compiledA.services;
+    serviceDefinitions = compiledA.serviceDefinitions;
     projectRoot = sourceRoot;
   };
 in

@@ -38,10 +38,6 @@ let
     summary = "demo";
     details = "demo service contract";
     ownerFile = "tests/framework/service-op-composition-contract.nix";
-    adapter = {
-      version = 1;
-      module = ./service-op-composition-contract.nix;
-    };
     artifacts = { };
     inherit
       operations
@@ -92,7 +88,7 @@ let
     };
   };
 
-  demoAdapter = {
+  demoImplementation = {
     version = 1;
     operations = {
       prepare = prepareScript;
@@ -137,8 +133,8 @@ let
       demo = demoContract;
     };
     operationCatalog = demoOperationCatalog;
-    serviceAdapters = {
-      demo = demoAdapter;
+    serviceImplementations = {
+      demo = demoImplementation;
     };
   };
 
@@ -151,8 +147,8 @@ let
       demo = demoContract;
     };
     operationCatalog = demoOperationCatalog;
-    serviceAdapters = {
-      demo = demoAdapter;
+    serviceImplementations = {
+      demo = demoImplementation;
     };
   };
 

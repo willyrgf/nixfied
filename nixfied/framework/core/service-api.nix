@@ -12,7 +12,7 @@ let
   inherit (serviceContractValidation)
     sortedAttrNames
     validateServiceContracts
-    validateServiceAdapters
+    validateServiceImplementations
     ;
   inherit (runtimePrimitives)
     runtimeLogLevelDefault
@@ -34,18 +34,18 @@ let
       serviceName,
       opName,
       opCfg,
-      adapterOps,
+      implementationOps,
     }:
     let
       runtimeOp = opCfg.runtimeOp or opName;
     in
-    if runtimeOp == null || runtimeOp == "" then null else adapterOps.${runtimeOp} or null;
+    if runtimeOp == null || runtimeOp == "" then null else implementationOps.${runtimeOp} or null;
 
   buildExecutionPlan =
     {
       serviceName,
       ops,
-      adapterOps,
+      implementationOps,
       opName,
       passArgs ? true,
     }:
@@ -56,7 +56,7 @@ let
           serviceName
           opName
           opCfg
-          adapterOps
+          implementationOps
           ;
       };
       mkNestedPlan =
@@ -65,7 +65,7 @@ let
           inherit
             serviceName
             ops
-            adapterOps
+            implementationOps
             ;
           opName = ref;
           passArgs = false;
@@ -114,21 +114,21 @@ let
     {
       serviceContracts,
       operationCatalog,
-      serviceAdapters,
+      serviceImplementations,
     }:
     let
       names = sortedAttrNames serviceContracts;
       validatedContracts = validateServiceContracts serviceContracts;
-      validatedAdapters = validateServiceAdapters {
+      validatedImplementations = validateServiceImplementations {
         serviceContracts = validatedContracts;
-        inherit serviceAdapters;
+        inherit serviceImplementations;
       };
       toOps =
         serviceName:
         let
           contract = validatedContracts.${serviceName};
           ops = serviceOps contract;
-          adapterOps = validatedAdapters.${serviceName}.operations;
+          implementationOps = validatedImplementations.${serviceName}.operations;
           opCatalog = operationCatalog.${serviceName} or { };
           opNamesSorted = sortedAttrNames ops;
           missingCatalogOps = builtins.filter (opName: !(builtins.hasAttr opName opCatalog)) opNamesSorted;
@@ -149,7 +149,7 @@ let
                 inherit
                   serviceName
                   ops
-                  adapterOps
+                  implementationOps
                   opName
                   ;
               };

@@ -52,6 +52,7 @@
               ;
             model = frameworkOutputs.model;
             services = frameworkOutputs.services;
+            serviceDefinitions = frameworkOutputs.serviceDefinitions;
             serviceCatalog = frameworkOutputs.serviceCatalog;
             apps = frameworkOutputs.apps;
             packages = frameworkOutputs.packages;

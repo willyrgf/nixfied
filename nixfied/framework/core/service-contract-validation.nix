@@ -276,7 +276,6 @@ let
       );
       compositionErrs = validateOpCompositionErrors { inherit serviceName ops; };
       runtimeErrs = validateRuntimePrimitivesErrors { inherit serviceName runtimePrimitives; };
-      adapter = contract.adapter or null;
     in
     if contract == null then
       [ "${serviceName}: missing contract" ]
@@ -310,13 +309,6 @@ let
       ++ expect (isNonEmptyString (
         contract.ownerFile or ""
       )) "${serviceName}: contract.ownerFile must be a non-empty string"
-      ++ expect (contract ? adapter) "${serviceName}: contract.adapter is required"
-      ++ expect (isAttrs adapter) "${serviceName}: contract.adapter must be an attribute set"
-      ++ expect ((adapter.version or null) == 1) "${serviceName}: contract.adapter.version must be 1"
-      ++ expect (adapter ? module) "${serviceName}: contract.adapter.module is required"
-      ++ expect (
-        !(adapter ? module) || builtins.pathExists adapter.module
-      ) "${serviceName}: contract.adapter.module must point to an existing file"
       ++ expect (contract ? operations) "${serviceName}: contract.operations is required"
       ++ expect (isAttrs ops) "${serviceName}: contract.operations must be an attribute set"
       ++
@@ -343,7 +335,7 @@ let
         ${renderErrors errs}
 
         Fix:
-          - Define ${serviceName}.contract with version=1, operations, artifacts, runtimePrimitives, and adapter.module.
+          - Define ${serviceName}.contract with version=1, operations, artifacts, and runtimePrimitives.
       '';
 
   validateServiceContracts =
@@ -368,16 +360,16 @@ let
         ${renderErrors errs}
       '';
 
-  validateServiceAdapterErrors =
+  validateServiceImplementationErrors =
     {
       serviceName,
       contract,
-      adapter,
+      implementation,
     }:
     let
       ops = contract.operations or { };
-      adapterOps = adapter.operations or { };
-      adapterOpErrors = builtins.concatLists (
+      implementationOps = implementation.operations or { };
+      implementationOpErrors = builtins.concatLists (
         map (
           opName:
           let
@@ -387,27 +379,31 @@ let
           if runtimeOp == null || runtimeOp == "" then
             [ ]
           else
-            expect (builtins.hasAttr runtimeOp adapterOps) "${serviceName}.${opName}: runtime adapter is missing operation '${runtimeOp}'"
+            expect (builtins.hasAttr runtimeOp implementationOps) "${serviceName}.${opName}: runtime implementation is missing operation '${runtimeOp}'"
             ++
-              expect (isScriptLike (adapterOps.${runtimeOp} or null))
-                "${serviceName}.${opName}: runtime adapter operation '${runtimeOp}' must be string/path/derivation"
+              expect (isScriptLike (implementationOps.${runtimeOp} or null))
+                "${serviceName}.${opName}: runtime implementation operation '${runtimeOp}' must be string/path/derivation"
         ) (builtins.attrNames ops)
       );
     in
-    if adapter == null then
-      [ "${serviceName}: runtime adapter is required" ]
-    else if !isAttrs adapter then
-      [ "${serviceName}: runtime adapter must be an attribute set" ]
+    if implementation == null then
+      [ "${serviceName}: runtime implementation is required" ]
+    else if !isAttrs implementation then
+      [ "${serviceName}: runtime implementation must be an attribute set" ]
     else
-      expect ((adapter.version or null) == 1) "${serviceName}: runtime adapter version must be 1"
-      ++ expect (adapter ? operations) "${serviceName}: runtime adapter operations are required"
-      ++ expect (isAttrs adapterOps) "${serviceName}: runtime adapter operations must be an attribute set"
-      ++ adapterOpErrors;
+      expect (
+        (implementation.version or null) == 1
+      ) "${serviceName}: runtime implementation version must be 1"
+      ++ expect (
+        implementation ? operations
+      ) "${serviceName}: runtime implementation operations are required"
+      ++ expect (isAttrs implementationOps) "${serviceName}: runtime implementation operations must be an attribute set"
+      ++ implementationOpErrors;
 
-  validateServiceAdapters =
+  validateServiceImplementations =
     {
       serviceContracts,
-      serviceAdapters,
+      serviceImplementations,
     }:
     let
       validatedContracts = validateServiceContracts serviceContracts;
@@ -415,19 +411,19 @@ let
       errs = builtins.concatLists (
         map (
           serviceName:
-          validateServiceAdapterErrors {
+          validateServiceImplementationErrors {
             inherit serviceName;
             contract = validatedContracts.${serviceName};
-            adapter = serviceAdapters.${serviceName} or null;
+            implementation = serviceImplementations.${serviceName} or null;
           }
         ) names
       );
     in
     if errs == [ ] then
-      serviceAdapters
+      serviceImplementations
     else
       throw ''
-        Nixfied service runtime adapter violated:
+        Nixfied service runtime implementation violated:
         ${renderErrors errs}
       '';
 in
@@ -436,6 +432,6 @@ in
     sortedAttrNames
     validateServiceContract
     validateServiceContracts
-    validateServiceAdapters
+    validateServiceImplementations
     ;
 }

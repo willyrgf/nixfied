@@ -137,6 +137,11 @@ let
     ../../nixfied/framework/runtime/runtime-metadata.nix
     ../../nixfied/framework/runtime/executor-runtime.nix
     ../../nixfied/framework/runtime/services/service-operations-builder.nix
+    ../../nixfied/framework/runtime/services/nginx
+    ../../nixfied/framework/runtime/services/postgres
+    ../../nixfied/framework/runtime/services/minio
+    ../../nixfied/framework/runtime/services/reth
+    ../../nixfied/framework/runtime/services/helios
     ../../nixfied/compiler/compile-selection-index.nix
     ../../nixfied/compiler/compile-app-execution-manifests.nix
     ../../nixfied/compiler/compile-runtime-manifest.nix

@@ -8,7 +8,7 @@
 }:
 
 let
-  runtimeDefaults = import ../../../core/runtime-defaults.nix;
+  runtimeDefaults = import ../../../../framework/core/runtime-defaults.nix;
   postgres = config.package or pkgs.postgresql_16;
   migrationsCfg = config.migrations or { };
   migrateCommand = migrationsCfg.command or "";

@@ -14,6 +14,7 @@ let
   compileServices = import ../../compiler/compile-services.nix { inherit lib; };
   compiledServiceSurfaceCatalog = compiledCore.model.compiled.serviceSurfaceCatalog or { };
   compiledExecution = compiledCore.model.compiled.execution or { };
+  serviceDefinitions = compiledCore.resolved.services or { };
   normalizedSelectedServices =
     if selectedServices == null then
       null
@@ -89,6 +90,7 @@ let
       selectedServices
       ;
     serviceSurfaceCatalog = compiledServiceSurfaceCatalog;
+    inherit serviceDefinitions;
     model = compiledCore.model;
     services = services;
   };
@@ -120,6 +122,7 @@ let
           pkgs
           ;
         serviceSurfaceCatalog = compiledServiceSurfaceCatalog;
+        inherit serviceDefinitions;
         model = manifest.model;
         selectedServices = effectiveSelectedServices;
         services = appServices;
@@ -178,6 +181,7 @@ let
       serviceSetRuntimeSurfaces = import ./mkServiceRuntimeSurfaces.nix {
         inherit pkgs;
         serviceSurfaceCatalog = compiledServiceSurfaceCatalog;
+        inherit serviceDefinitions;
         model = serviceSetModel;
         services = serviceSetServices;
         selectedServices = effectiveSelectedServices;

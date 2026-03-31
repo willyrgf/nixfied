@@ -809,27 +809,32 @@ What to evaluate in solutions:
 
 | Layer | Keep? | Why it exists |
 | --- | --- | --- |
-| Service API helpers | Keep, but shrink | turn service contracts into service apps and env surfaces |
-| Service runtime surfaces | Keep, but simplify | expose service-specific runtime hooks and apps |
+| Service API helpers | Keep, but shrink | turn compiled public service contracts plus private implementations into service apps and env surfaces |
+| Service runtime surfaces | Keep, but simplify | expose selected-service runtime hooks and apps from compiled catalog + private implementations |
 | Service-set program generation | Keep, but make singular | generate service-set operations once |
 
 ### 20. Service API Helpers
 
 Current files:
 
+- `nixfied/modules/services/*.nix`
+- `nixfied/modules/services/runtime/*`
 - `nixfied/framework/core/service-api.nix`
+- `nixfied/framework/core/service-contract-validation.nix`
 - `nixfied/framework/runtime/services/service-operations-builder.nix`
 - `nixfied/framework/runtime/services/service-config-builder.nix`
 
 Necessary:
 
-- convert service contracts into public ops and hook env
-- validate enabled services expose the expected public contract
+- convert compiler-owned public service contracts plus private runtime
+  implementations into public ops and hook env
+- validate enabled services expose the expected public contract and matching
+  private implementation ops
 
 Accidental:
 
-- broad framework-level service glue because real services are not yet forced
-  behind tiny public surfaces
+- broad framework-level service glue that still remains after public service
+  authority moved into typed module data
 - helper surface that is larger than the public API it is trying to describe
 
 Keep:
@@ -842,7 +847,8 @@ Collapse/Delete pressure:
 
 What to evaluate in solutions:
 
-- can real services depend only on public contracts and generated surfaces?
+- can shared helper glue shrink further now that real services already depend on
+  typed public contracts plus private implementation modules?
 
 ### 21. Service Runtime Surface And Service-Set Generation
 
@@ -854,13 +860,15 @@ Current files:
 
 Necessary:
 
-- generate service apps and hook env for the selected service scope
+- generate service apps and hook env for the selected service scope from the
+  compiled service catalog plus resolved private implementations
 - generate service-set operations
 
 Accidental:
 
 - executor fallback synthesis of service-set programs
-- large generic glue layer compared to actual service implementation code
+- large generic glue layer compared to actual service implementation code even
+  after the service boundary moved into `modules/services/*`
 
 Keep:
 

@@ -73,6 +73,7 @@ let
         inherit pkgs;
         model = compiled.model;
         services = compiled.services;
+        serviceDefinitions = compiled.serviceDefinitions;
       };
     in
     import ../../nixfied/framework/runtime/orchestrator.nix {

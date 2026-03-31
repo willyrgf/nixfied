@@ -8,7 +8,7 @@
 }:
 
 let
-  probeSetup = import ../probe-setup-helper.nix {
+  probeSetup = import ../../../../framework/runtime/services/probe-setup-helper.nix {
     inherit
       pkgs
       project
@@ -57,7 +57,7 @@ let
       }}
     } >/dev/null 2>&1
   '';
-  runtimePrelude = import ../service-runtime-prelude.nix {
+  runtimePrelude = import ../../../../framework/runtime/services/service-runtime-prelude.nix {
     inherit slotEnvRuntime slots observability;
     serviceName = "reth";
     serviceNameUpper = "RETH";

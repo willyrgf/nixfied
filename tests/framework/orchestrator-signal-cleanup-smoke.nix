@@ -2,6 +2,7 @@
   pkgs,
   model,
   services,
+  serviceDefinitions,
   registry,
 }:
 let
@@ -117,7 +118,10 @@ let
       registry
       ;
     model = signalModel;
-    inherit services;
+    inherit
+      services
+      serviceDefinitions
+      ;
     projectRoot = ../..;
   };
 in

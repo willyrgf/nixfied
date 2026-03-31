@@ -2,6 +2,7 @@
   pkgs,
   model,
   services,
+  serviceDefinitions ? null,
   registry,
   projectRoot ? ../../..,
 }:
@@ -16,6 +17,7 @@ let
       services
       ;
     model = harnessModel;
+    inherit serviceDefinitions;
   };
   executor = import ../../../nixfied/framework/runtime/executor.nix {
     inherit
