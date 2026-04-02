@@ -3,7 +3,8 @@
   model,
   services,
   selectedServices ? null,
-  serviceSurfaceCatalog ? null,
+  serviceApis ? null,
+  operationCatalog ? null,
   serviceDefinitions ? { },
 }:
 let
@@ -15,7 +16,7 @@ let
   runtimePrimitiveDefaults = import ./runtime-primitives.nix { };
   inherit (serviceContractValidation)
     sortedAttrNames
-    validateServiceImplementations
+    validateServiceImplementationsAgainstCatalog
     ;
   inherit (runtimePrimitiveDefaults)
     runtimeLogLevelDefault
@@ -525,36 +526,32 @@ let
     in
     builtins.foldl' dedup { } pairs;
 
-  serviceContractsFromCatalog =
-    let
-      requestedServiceNames = builtins.map (entry: entry.name) serviceEntries;
-      compiledServiceApis =
-        if serviceSurfaceCatalog == null then null else serviceSurfaceCatalog.serviceApis or { };
-      compiledOperationCatalog =
-        if serviceSurfaceCatalog == null then null else serviceSurfaceCatalog.operationCatalog or { };
-      missingServiceApis = builtins.filter (
-        name: !(builtins.hasAttr name compiledServiceApis)
-      ) requestedServiceNames;
-      missingOperationCatalogs = builtins.filter (
-        name: !(builtins.hasAttr name compiledOperationCatalog)
-      ) requestedServiceNames;
-      serviceEntriesFromCatalog = builtins.listToAttrs (
+  requestedServiceNames = builtins.map (entry: entry.name) serviceEntries;
+  compiledServiceApis = if serviceApis == null then { } else serviceApis;
+  compiledOperationCatalog = if operationCatalog == null then { } else operationCatalog;
+  missingServiceApis = builtins.filter (
+    name: !(builtins.hasAttr name compiledServiceApis)
+  ) requestedServiceNames;
+  missingOperationCatalogs = builtins.filter (
+    name: !(builtins.hasAttr name compiledOperationCatalog)
+  ) requestedServiceNames;
+
+  runtimeServiceApis =
+    if serviceApis == null then
+      throw "nixfied service runtime surfaces require compiled serviceApis"
+    else if requestedServiceNames == [ ] then
+      { }
+    else if missingOperationCatalogs != [ ] then
+      throw "nixfied service runtime surfaces expected operation catalogs for all selected services in compiled operationCatalog: ${builtins.concatStringsSep ", " missingOperationCatalogs}"
+    else if missingServiceApis == [ ] then
+      builtins.listToAttrs (
         map (serviceName: {
           name = serviceName;
           value = compiledServiceApis.${serviceName};
         }) requestedServiceNames
-      );
-    in
-    if serviceSurfaceCatalog == null then
-      throw "nixfied service runtime surfaces require compiled serviceSurfaceCatalog"
-    else if requestedServiceNames == [ ] then
-      { }
-    else if missingOperationCatalogs != [ ] then
-      throw "nixfied service runtime surfaces expected operation catalogs for all selected services in serviceSurfaceCatalog: ${builtins.concatStringsSep ", " missingOperationCatalogs}"
-    else if missingServiceApis == [ ] then
-      serviceEntriesFromCatalog
+      )
     else
-      throw "nixfied service runtime surfaces expected service APIs for all selected services in serviceSurfaceCatalog: ${builtins.concatStringsSep ", " missingServiceApis}";
+      throw "nixfied service runtime surfaces expected service APIs for all selected services in compiled serviceApis: ${builtins.concatStringsSep ", " missingServiceApis}";
 
   mergeImplementationOperations =
     serviceName: baseOps: extraOps:
@@ -600,26 +597,25 @@ let
       operations = mergeImplementationOperations serviceName (importedImplementation.operations or { }
       ) observabilityOps;
     }
-  ) serviceContractsFromCatalog;
+  ) runtimeServiceApis;
 
-  serviceApis = serviceContractsFromCatalog;
-  validatedServiceImplementations = validateServiceImplementations {
-    serviceContracts = serviceApis;
+  validatedServiceImplementations = validateServiceImplementationsAgainstCatalog {
+    serviceApis = runtimeServiceApis;
     inherit serviceImplementations;
   };
   serviceOperationCatalogEntries = builtins.listToAttrs (
     map (serviceName: {
       name = serviceName;
-      value = serviceSurfaceCatalog.operationCatalog.${serviceName};
-    }) (builtins.attrNames serviceApis)
+      value = compiledOperationCatalog.${serviceName};
+    }) (builtins.attrNames runtimeServiceApis)
   );
   serviceRuntimeOps =
     let
-      serviceNames = sortedAttrNames serviceApis;
+      serviceNames = sortedAttrNames runtimeServiceApis;
       toOps =
         serviceName:
         let
-          contract = serviceApis.${serviceName};
+          contract = runtimeServiceApis.${serviceName};
           ops = contractOps contract;
           implementationOps = validatedServiceImplementations.${serviceName}.operations;
           opCatalog = serviceOperationCatalogEntries.${serviceName} or { };
@@ -699,8 +695,8 @@ let
   );
 in
 {
+  serviceApis = runtimeServiceApis;
   inherit
-    serviceApis
     serviceAppPrograms
     serviceHookEnv
     slots

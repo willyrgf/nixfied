@@ -360,14 +360,14 @@ let
         ${renderErrors errs}
       '';
 
-  validateServiceImplementationErrors =
+  validateServiceImplementationMatchesCatalogErrors =
     {
       serviceName,
-      contract,
+      serviceApi,
       implementation,
     }:
     let
-      ops = contract.operations or { };
+      ops = serviceApi.operations or { };
       implementationOps = implementation.operations or { };
       implementationOpErrors = builtins.concatLists (
         map (
@@ -400,6 +400,32 @@ let
       ++ expect (isAttrs implementationOps) "${serviceName}: runtime implementation operations must be an attribute set"
       ++ implementationOpErrors;
 
+  validateServiceImplementationsAgainstCatalog =
+    {
+      serviceApis,
+      serviceImplementations,
+    }:
+    let
+      names = sortedAttrNames serviceApis;
+      errs = builtins.concatLists (
+        map (
+          serviceName:
+          validateServiceImplementationMatchesCatalogErrors {
+            inherit serviceName;
+            serviceApi = serviceApis.${serviceName};
+            implementation = serviceImplementations.${serviceName} or null;
+          }
+        ) names
+      );
+    in
+    if errs == [ ] then
+      serviceImplementations
+    else
+      throw ''
+        Nixfied service runtime implementation violated:
+        ${renderErrors errs}
+      '';
+
   validateServiceImplementations =
     {
       serviceContracts,
@@ -411,9 +437,9 @@ let
       errs = builtins.concatLists (
         map (
           serviceName:
-          validateServiceImplementationErrors {
+          validateServiceImplementationMatchesCatalogErrors {
             inherit serviceName;
-            contract = validatedContracts.${serviceName};
+            serviceApi = validatedContracts.${serviceName};
             implementation = serviceImplementations.${serviceName} or null;
           }
         ) names
@@ -432,6 +458,7 @@ in
     sortedAttrNames
     validateServiceContract
     validateServiceContracts
+    validateServiceImplementationsAgainstCatalog
     validateServiceImplementations
     ;
 }
