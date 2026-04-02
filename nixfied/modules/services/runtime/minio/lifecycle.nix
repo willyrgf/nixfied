@@ -8,7 +8,7 @@
 }:
 
 let
-  probeSetup = import ../../../../framework/runtime/services/probe-setup-helper.nix {
+  probeSetup = import ../shared/probe-setup-helper.nix {
     inherit
       pkgs
       project
@@ -47,7 +47,7 @@ let
     } >/dev/null 2>&1
   '';
 
-  runtimePrelude = import ../../../../framework/runtime/services/service-runtime-prelude.nix {
+  runtimePrelude = import ../shared/service-runtime-prelude.nix {
     inherit slotEnvRuntime slots observability;
     serviceName = "minio";
     serviceNameUpper = "MINIO";

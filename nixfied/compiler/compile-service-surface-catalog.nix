@@ -7,7 +7,7 @@
   serviceDefinitions,
 }:
 let
-  serviceContractValidation = import ../framework/core/service-contract-validation.nix {
+  serviceContractValidation = import ./service-contract-validation.nix {
     inherit pkgs;
   };
   commandApi = import ../framework/core/command-api.nix { inherit pkgs; };

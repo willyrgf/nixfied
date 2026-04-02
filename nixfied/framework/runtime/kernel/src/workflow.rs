@@ -99,7 +99,9 @@ pub(crate) fn mark_failed_unit<U: WorkflowUnitStateCommon>(
 pub(crate) fn workflow_command(subcommand: &str, values: &[String]) -> Result<(), String> {
     match subcommand {
         "export" => workflow_export_command(values),
+        "export-resolved" => workflow_export_resolved_command(values),
         "unit-closure-selected-services" => workflow_unit_closure_selected_services_command(values),
+        "selected-services-csv" => workflow_selected_services_csv_command(values),
         "env-names" => workflow_env_names_command(values),
         "resolve-mode" => workflow_resolve_mode_command(values),
         "run" => workflow_run_command(values),
@@ -156,6 +158,83 @@ pub(crate) fn workflow_resolve_mode_id(
             "unknown mode '{}' (expected: {})",
             mode_override, expected_modes
         ))
+    }
+}
+
+pub(crate) fn workflow_mode_override_from_args(
+    metadata: &JsonValue,
+    workflow_id: &str,
+    values: &[String],
+) -> String {
+    let mut parse_options = true;
+    let mut index = 0usize;
+    let mut mode_override = String::new();
+
+    while index < values.len() {
+        let arg = &values[index];
+        index += 1;
+
+        if !parse_options {
+            continue;
+        }
+
+        match arg.as_str() {
+            "--mode" => {
+                if let Some(value) = values.get(index) {
+                    mode_override = value.clone();
+                    index += 1;
+                } else {
+                    break;
+                }
+            }
+            "--summary" => {}
+            "--" => {
+                parse_options = false;
+            }
+            _ => {
+                if let Some(value) = arg.strip_prefix("--mode=") {
+                    mode_override = value.to_string();
+                } else if let Some(candidate) = arg.strip_prefix("--") {
+                    if !candidate.is_empty()
+                        && workflow_resolve_mode_id(metadata, workflow_id, candidate).is_ok()
+                    {
+                        mode_override = candidate.to_string();
+                    }
+                }
+            }
+        }
+    }
+
+    mode_override
+}
+
+pub(crate) fn workflow_resolved_id_from_args_lenient(
+    metadata: &JsonValue,
+    workflow_id: &str,
+    values: &[String],
+) -> Result<String, String> {
+    execution_workflow(metadata, workflow_id)?;
+    let mode_override = workflow_mode_override_from_args(metadata, workflow_id, values);
+    if mode_override.is_empty() {
+        Ok(workflow_id.to_string())
+    } else if let Ok(resolved) = workflow_resolve_mode_id(metadata, workflow_id, &mode_override) {
+        Ok(resolved)
+    } else {
+        Ok(workflow_id.to_string())
+    }
+}
+
+pub(crate) fn workflow_resolved_id_from_args_strict(
+    metadata: &JsonValue,
+    workflow_id: &str,
+    values: &[String],
+) -> Result<String, String> {
+    execution_workflow(metadata, workflow_id)?;
+    let mode_override = workflow_mode_override_from_args(metadata, workflow_id, values);
+    if mode_override.is_empty() {
+        Ok(workflow_id.to_string())
+    } else {
+        workflow_resolve_mode_id(metadata, workflow_id, &mode_override)
     }
 }
 
@@ -254,6 +333,23 @@ fn workflow_export_command(values: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+fn workflow_export_resolved_command(values: &[String]) -> Result<(), String> {
+    if values.len() < 2 {
+        return Err(
+            "usage: nixfied-kernel workflow export-resolved <execution-source-file> <workflow-id> [-- <args...>]"
+                .to_string(),
+        );
+    }
+
+    let metadata = load_execution_metadata(&values[0])?;
+    let resolved_workflow_id =
+        workflow_resolved_id_from_args_strict(&metadata, &values[1], strip_passthrough_separator(&values[2..]))?;
+    let workflow = execution_workflow(&metadata, &resolved_workflow_id)?;
+    let exports = workflow_exports(&resolved_workflow_id, workflow);
+    print!("{}", render_shell_exports(&exports));
+    Ok(())
+}
+
 fn workflow_unit_closure_selected_services_command(values: &[String]) -> Result<(), String> {
     if values.len() != 2 {
         return Err(
@@ -268,6 +364,25 @@ fn workflow_unit_closure_selected_services_command(values: &[String]) -> Result<
         "{}",
         render_lines(&array_strings(workflow, "unitClosureSelectedServices"))
     );
+    Ok(())
+}
+
+fn workflow_selected_services_csv_command(values: &[String]) -> Result<(), String> {
+    if values.len() < 2 {
+        return Err(
+            "usage: nixfied-kernel workflow selected-services-csv <execution-source-file> <workflow-id> [-- <args...>]"
+                .to_string(),
+        );
+    }
+
+    let metadata = load_execution_metadata(&values[0])?;
+    let resolved_workflow_id =
+        workflow_resolved_id_from_args_lenient(&metadata, &values[1], strip_passthrough_separator(&values[2..]))?;
+    let workflow = execution_workflow(&metadata, &resolved_workflow_id)?;
+    let mut selected_services = array_strings(workflow, "unitClosureSelectedServices");
+    selected_services.sort();
+    selected_services.dedup();
+    print!("{}", selected_services.join(","));
     Ok(())
 }
 

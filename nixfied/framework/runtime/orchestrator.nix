@@ -16,6 +16,8 @@ let
   registryShell = registry.events.mkShellLib { };
   runtimeHandoffShell =
     if executionEnabled then import ./runtime-handoff.nix { inherit pkgs; } else "";
+  artifactsRuntimeShell =
+    if executionEnabled then import ./artifacts-runtime.nix { inherit pkgs; } else "";
   orchestratorRuntimeShell = import ./orchestrator-runtime.nix { inherit pkgs; };
   sharedRuntimeLibShell =
     if executionEnabled then
@@ -153,6 +155,7 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
 
   ${registryShell}
   ${runtimeHandoffShell}
+  ${artifactsRuntimeShell}
   ${orchestratorRuntimeShell}
   ${sharedRuntimeLibShell}
 
@@ -934,7 +937,8 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
 
     if [ -n "$workflow_ref" ]; then
       execution_mode="workflow"
-      workflow_handoff_use "$workflow_ref" || return 1
+      call_with_array_args FORWARD_ARGS workflow_handoff_use_resolved "$workflow_ref" || return 1
+      workflow_ref="$NIXFIED_WORKFLOW_ID"
       ephemeral_enabled="$NIXFIED_WORKFLOW_EPHEMERAL_FLAG"
     fi
 
@@ -962,7 +966,7 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
     export NIXFIED_WORKFLOW_SETUP_STARTED_AT="$command_started_at"
     export NIXFIED_WORKFLOW_SETUP_STARTED_EPOCH="$command_started_epoch"
 
-    ensure_artifacts_root "$run_id" "$ephemeral_enabled" "$workflow_ref"
+    ensure_orchestrator_artifacts_root "$run_id" "$ephemeral_enabled" "$workflow_ref"
 
     if [ "$ephemeral_enabled" = "1" ]; then
       call_with_array_args FORWARD_ARGS launch_command "$run_id" "$PROCESS_MODE" "$workflow_ref" "$task_id" "$EPHEMERAL_EXECUTOR_WRAPPER" "$EXECUTOR_PROGRAM" run-task "$task_id"
@@ -1004,7 +1008,8 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
       mode="workflow-parallel"
     fi
 
-    workflow_handoff_use "$workflow_id" || return 1
+    call_with_array_args FORWARD_ARGS workflow_handoff_use_resolved "$workflow_id" || return 1
+    workflow_id="$NIXFIED_WORKFLOW_ID"
     ephemeral_enabled="$NIXFIED_WORKFLOW_EPHEMERAL_FLAG"
     mapfile -t run_id_args < <(call_with_array_args FORWARD_ARGS filter_run_id_args)
     run_id="$(call_with_array_args run_id_args compute_run_id "workflow" "$workflow_id" "")"
@@ -1026,7 +1031,7 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
     export NIXFIED_WORKFLOW_SETUP_STARTED_AT="$command_started_at"
     export NIXFIED_WORKFLOW_SETUP_STARTED_EPOCH="$command_started_epoch"
 
-    ensure_artifacts_root "$run_id" "$ephemeral_enabled" "$workflow_id"
+    ensure_orchestrator_artifacts_root "$run_id" "$ephemeral_enabled" "$workflow_id"
 
     if [ "$ephemeral_enabled" = "1" ]; then
       call_with_array_args FORWARD_ARGS launch_command "$run_id" "$PROCESS_MODE" "$workflow_id" "" "$EPHEMERAL_EXECUTOR_WRAPPER" "$EXECUTOR_PROGRAM" run-workflow "$workflow_id"

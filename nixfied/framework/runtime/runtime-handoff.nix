@@ -52,6 +52,16 @@ in
     ${kernelPackage}/bin/nixfied-kernel workflow export "$NIXFIED_MODEL_FILE" "$1"
   }
 
+  workflow_export_resolved_text() {
+    local workflow_id="$1"
+    shift
+
+    ${kernelPackage}/bin/nixfied-kernel workflow export-resolved \
+      "$NIXFIED_MODEL_FILE" \
+      "$workflow_id" \
+      -- "$@"
+  }
+
   task_descriptor_exists() {
     task_export_text "$1" >/dev/null 2>&1
   }
@@ -64,12 +74,18 @@ in
     ${kernelPackage}/bin/nixfied-kernel task runtime-plan "$NIXFIED_MODEL_FILE" "$1"
   }
 
-  task_base_closure_selected_services() {
-    ${kernelPackage}/bin/nixfied-kernel task base-closure-selected-services "$NIXFIED_MODEL_FILE" "$1"
-  }
-
   task_retry_backoff_values() {
     ${kernelPackage}/bin/nixfied-kernel task retry-backoff-values "$NIXFIED_MODEL_FILE" "$1"
+  }
+
+  task_selected_services_csv() {
+    local task_id="$1"
+    shift
+
+    ${kernelPackage}/bin/nixfied-kernel task selected-services-csv \
+      "$NIXFIED_MODEL_FILE" \
+      "$task_id" \
+      -- "$@"
   }
 
   task_hook_ids() {
@@ -112,12 +128,28 @@ in
     NIXFIED_WORKFLOW_HANDOFF_CURRENT_ID="$workflow_id"
   }
 
+  workflow_handoff_use_resolved() {
+    local workflow_id="$1"
+    shift
+    local export_text=""
+
+    export_text="$(workflow_export_resolved_text "$workflow_id" "$@")" || return 1
+    eval_kernel_exports "$export_text" || return 1
+    NIXFIED_WORKFLOW_HANDOFF_CURRENT_ID="$NIXFIED_WORKFLOW_ID"
+  }
+
   workflow_id_exists() {
     workflow_resolve_mode_id "$1" "" >/dev/null 2>&1
   }
 
-  workflow_unit_closure_selected_services() {
-    ${kernelPackage}/bin/nixfied-kernel workflow unit-closure-selected-services "$NIXFIED_MODEL_FILE" "$1"
+  workflow_selected_services_csv() {
+    local workflow_id="$1"
+    shift
+
+    ${kernelPackage}/bin/nixfied-kernel workflow selected-services-csv \
+      "$NIXFIED_MODEL_FILE" \
+      "$workflow_id" \
+      -- "$@"
   }
 
   task_validate_args() {
@@ -138,85 +170,6 @@ in
       "$NIXFIED_MODEL_FILE" \
       "$workflow_id" \
       "$mode_override"
-  }
-
-  normalize_run_artifacts_dir() {
-    local base_dir="$1"
-    local run_id="$2"
-    local attempt_id="$3"
-
-    if [ -z "$attempt_id" ]; then
-      attempt_id="$run_id"
-    fi
-
-    case "$base_dir" in
-      */"$attempt_id")
-        printf '%s' "$base_dir"
-        ;;
-      */"$run_id")
-        printf '%s/%s' "$base_dir" "$attempt_id"
-        ;;
-      *)
-        printf '%s/%s/%s' "$base_dir" "$run_id" "$attempt_id"
-        ;;
-    esac
-  }
-
-  resolve_run_artifacts_dir() {
-    local run_id="$1"
-    local workflow_id="$2"
-    local caller_root="''${CI_ARTIFACTS_ROOT:-}"
-    local caller_dir="''${CI_ARTIFACTS_DIR:-}"
-    local attempt_id="''${NIXFIED_ATTEMPT_ID:-''${NIXFIED_ORCHESTRATOR_ATTEMPT_ID:-}}"
-    local configured_root=""
-    local base_dir=""
-
-    if [ -n "$caller_root" ] && [ -n "$caller_dir" ]; then
-      echo "ERROR: CI_ARTIFACTS_ROOT and CI_ARTIFACTS_DIR cannot both be set"
-      return 2
-    fi
-
-    if [ -n "$workflow_id" ]; then
-      workflow_handoff_use "$workflow_id" || return 1
-      configured_root="$NIXFIED_WORKFLOW_ARTIFACTS_ROOT"
-    fi
-
-    if [ -n "$caller_root" ]; then
-      base_dir="$caller_root"
-    elif [ -n "$caller_dir" ]; then
-      base_dir="$caller_dir"
-    elif [ -n "$configured_root" ]; then
-      base_dir="$configured_root"
-    elif [ "$REGISTRY_ROOT_EXPLICIT" = "1" ]; then
-      base_dir="$REGISTRY_ROOT/artifacts"
-    else
-      base_dir="$ARTIFACTS_ROOT_DEFAULT"
-    fi
-
-    normalize_run_artifacts_dir "$base_dir" "$run_id" "$attempt_id"
-  }
-
-  ensure_run_artifacts_dir() {
-    local run_id="$1"
-    local workflow_id="$2"
-    local managed_by_orchestrator="$3"
-    local artifacts_dir
-
-    if [ -n "''${CI_ARTIFACTS_DIR:-}" ] && {
-      [ "$managed_by_orchestrator" = "1" ] ||
-      [ "''${NIXFIED_WORKFLOW_NESTED:-0}" = "1" ] ||
-      [ "''${NIXFIED_EXECUTION_EPHEMERAL:-0}" = "1" ]
-    }; then
-      mkdir -p "$CI_ARTIFACTS_DIR"
-      return 0
-    fi
-
-    artifacts_dir="$(resolve_run_artifacts_dir "$run_id" "$workflow_id")" || return $?
-    export CI_ARTIFACTS_DIR="$artifacts_dir"
-    if ! mkdir -p "$CI_ARTIFACTS_DIR"; then
-      echo "ERROR: failed to create artifacts directory '$CI_ARTIFACTS_DIR'"
-      return 1
-    fi
   }
 
   extract_logging_override_args() {

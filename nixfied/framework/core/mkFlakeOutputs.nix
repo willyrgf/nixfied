@@ -121,7 +121,6 @@ let
   compiledExecution = (compiledCore.model.compiled or { }).execution or { };
   serviceSurfaceCatalog = (compiledCore.model.compiled or { }).serviceSurfaceCatalog or { };
   taskExecutionById = compiledExecution.tasks.byId or { };
-  workflowExecutionById = compiledExecution.workflows.byId or { };
   viewAppNames = builtins.sort builtins.lessThan (
     builtins.attrNames (compiledCore.model.views.apps or { })
   );
@@ -223,22 +222,9 @@ let
     '') taskIds
   );
 
-  workflowIds =
-    compiledExecution.workflowIds
-      or (builtins.sort builtins.lessThan (builtins.attrNames workflowExecutionById));
-  workflowModesByFamily = compiledExecution.workflowModesByFamily or { };
-  workflowFamilies =
-    compiledExecution.workflowFamilies
-      or (builtins.sort builtins.lessThan (builtins.attrNames workflowModesByFamily));
-  taskBaseClosureCsvById = builtins.mapAttrs (
-    _: taskExecution: taskExecution.baseClosureServicesCsv or ""
-  ) taskExecutionById;
-  taskRunnerWorkflowIdById = builtins.mapAttrs (
-    _: taskExecution: taskExecution.runnerWorkflowId or ""
-  ) taskExecutionById;
-  workflowClosureCsvById = builtins.mapAttrs (
-    _: workflowExecution: workflowExecution.closureServicesCsv or ""
-  ) workflowExecutionById;
+  compiledExecutionFile = pkgs.writeText "nixfied-compiled-execution.json" (
+    builtins.toJSON compiledExecution
+  );
   serviceSetServicesCsvById = builtins.mapAttrs (
     _: serviceSet: builtins.concatStringsSep "," (serviceSet.services.all or [ ])
   ) (compiledCore.serviceSets or { });
@@ -418,259 +404,22 @@ let
                   esac
                 }
 
-                merge_services_csv() {
-                  local csv=""
-                  local token=""
-                  local old_ifs="$IFS"
-                  local csv_parts=()
-
-                  (
-                    for csv in "$@"; do
-                      [ -n "$csv" ] || continue
-                      IFS=','
-                      read -r -a csv_parts <<< "$csv"
-                      IFS="$old_ifs"
-
-                      for token in "''${csv_parts[@]}"; do
-                        token="$(printf '%s' "$token" | ${pkgs.coreutils}/bin/tr -d '[:space:]')"
-                        [ -n "$token" ] || continue
-                        printf '%s\n' "$token"
-                      done
-                    done
-                  ) | ${pkgs.coreutils}/bin/sort -u | ${pkgs.coreutils}/bin/paste -sd, -
-                }
-
-                workflow_family_from_id() {
-                  local workflow_id="$1"
-                  if [[ "$workflow_id" =~ ^workflow\.([^.]+)\..+$ ]]; then
-                    printf '%s' "''${BASH_REMATCH[1]}"
-                    return 0
-                  fi
-                  return 1
-                }
-
-                workflow_id_exists() {
-                  local workflow_id="$1"
-                  case "$workflow_id" in
-        ${builtins.concatStringsSep "\n" (
-          map (workflowId: ''
-            ${lib.escapeShellArg workflowId})
-              return 0
-              ;;
-          '') workflowIds
-        )}
-                    *)
-                      return 1
-                      ;;
-                  esac
-                }
-
-                workflow_modes_for_family() {
-                  local family="$1"
-                  case "$family" in
-        ${builtins.concatStringsSep "\n" (
-          map (family: ''
-                ${lib.escapeShellArg family})
-            ${builtins.concatStringsSep "\n" (
-              map (mode: "              printf '%s\\n' ${lib.escapeShellArg mode}") (
-                workflowModesByFamily.${family} or [ ]
-              )
-            )}
-                  return 0
-                  ;;
-          '') workflowFamilies
-        )}
-                    *)
-                      return 0
-                      ;;
-                  esac
-                }
-
-                workflow_mode_is_simple_shorthand() {
-                  local mode="$1"
-                  [[ "$mode" =~ ^[a-z0-9-]+$ ]]
-                }
-
-                workflow_simple_shorthand_exists_for_family() {
-                  local workflow_id="$1"
-                  local candidate="$2"
-                  local family=""
-                  local mode=""
-
-                  family="$(workflow_family_from_id "$workflow_id" || true)"
-                  [ -n "$family" ] || return 1
-
-                  while IFS= read -r mode; do
-                    if [ "$mode" = "$candidate" ] && workflow_mode_is_simple_shorthand "$mode"; then
-                      return 0
-                    fi
-                  done < <(workflow_modes_for_family "$family")
-
-                  return 1
-                }
-
-                workflow_resolve_mode_id() {
-                  local workflow_id="$1"
-                  local mode_override="$2"
-                  local family=""
-                  local candidate=""
-
-                  if [ -z "$mode_override" ]; then
-                    printf '%s' "$workflow_id"
-                    return 0
-                  fi
-
-                  family="$(workflow_family_from_id "$workflow_id" || true)"
-                  [ -n "$family" ] || return 1
-
-                  candidate="workflow.$family.$mode_override"
-                  if workflow_id_exists "$candidate"; then
-                    printf '%s' "$candidate"
-                    return 0
-                  fi
-
-                  return 1
-                }
-
-                workflow_mode_override_from_args() {
-                  local workflow_id="$1"
-                  shift
-
-                  local parse_options=1
-                  local arg=""
-                  local shorthand_mode=""
-                  local mode_override=""
-
-                  while [ "$#" -gt 0 ]; do
-                    arg="$1"
-                    shift
-
-                    if [ "$parse_options" -eq 0 ]; then
-                      continue
-                    fi
-
-                    case "$arg" in
-                      --mode)
-                        if [ "$#" -lt 1 ]; then
-                          break
-                        fi
-                        mode_override="$1"
-                        shift
-                        ;;
-                      --mode=*)
-                        mode_override="''${arg#--mode=}"
-                        ;;
-                      --summary)
-                        ;;
-                      --)
-                        parse_options=0
-                        ;;
-                      --*)
-                        shorthand_mode="''${arg#--}"
-                        if workflow_simple_shorthand_exists_for_family "$workflow_id" "$shorthand_mode"; then
-                          mode_override="$shorthand_mode"
-                        fi
-                        ;;
-                    esac
-                  done
-
-                  printf '%s' "$mode_override"
-                }
-
-                dispatcher_task_base_closure_services_csv() {
-                  local task_id="$1"
-                  case "$task_id" in
-        ${builtins.concatStringsSep "\n" (
-          map (taskId: ''
-            ${lib.escapeShellArg taskId})
-              printf '%s' ${lib.escapeShellArg (taskBaseClosureCsvById.${taskId} or "")}
-              return 0
-              ;;
-          '') taskIds
-        )}
-                    *)
-                      printf '%s' ""
-                      return 0
-                      ;;
-                  esac
-                }
-
-                dispatcher_task_runner_workflow_id() {
-                  local task_id="$1"
-                  case "$task_id" in
-        ${builtins.concatStringsSep "\n" (
-          map (taskId: ''
-            ${lib.escapeShellArg taskId})
-              printf '%s' ${lib.escapeShellArg (taskRunnerWorkflowIdById.${taskId} or "")}
-              return 0
-              ;;
-          '') taskIds
-        )}
-                    *)
-                      printf '%s' ""
-                      return 0
-                      ;;
-                  esac
-                }
-
-                workflow_closure_services_csv() {
-                  local workflow_id="$1"
-                  case "$workflow_id" in
-        ${builtins.concatStringsSep "\n" (
-          map (workflowId: ''
-            ${lib.escapeShellArg workflowId})
-              printf '%s' ${lib.escapeShellArg (workflowClosureCsvById.${workflowId} or "")}
-              return 0
-              ;;
-          '') workflowIds
-        )}
-                    *)
-                      printf '%s' ""
-                      return 0
-                      ;;
-                  esac
-                }
-
-                task_selected_services_csv_for_launcher() {
+                launcher_task_selected_services_csv() {
                   local task_id="$1"
                   shift
 
-                  local task_base_csv=""
-                  local task_workflow_id=""
-                  local mode_override=""
-                  local resolved_workflow_id=""
-                  local workflow_csv=""
-
-                  task_base_csv="$(dispatcher_task_base_closure_services_csv "$task_id")"
-                  task_workflow_id="$(dispatcher_task_runner_workflow_id "$task_id")"
-
-                  if [ -z "$task_workflow_id" ]; then
-                    printf '%s' "$task_base_csv"
-                    return 0
+                  if ! ${kernelPackage}/bin/nixfied-kernel task selected-services-csv ${lib.escapeShellArg (builtins.toString compiledExecutionFile)} "$task_id" -- "$@" 2>/dev/null; then
+                    printf '%s' ""
                   fi
-
-                  mode_override="$(workflow_mode_override_from_args "$task_workflow_id" "$@")"
-                  resolved_workflow_id="$task_workflow_id"
-                  if resolved_workflow_id_candidate="$(workflow_resolve_mode_id "$task_workflow_id" "$mode_override" 2>/dev/null)"; then
-                    resolved_workflow_id="$resolved_workflow_id_candidate"
-                  fi
-                  workflow_csv="$(workflow_closure_services_csv "$resolved_workflow_id")"
-                  merge_services_csv "$task_base_csv" "$workflow_csv"
                 }
 
-                workflow_selected_services_csv_for_launcher() {
+                launcher_workflow_selected_services_csv() {
                   local workflow_id="$1"
                   shift
 
-                  local mode_override=""
-                  local resolved_workflow_id="$workflow_id"
-
-                  mode_override="$(workflow_mode_override_from_args "$workflow_id" "$@")"
-                  if resolved_workflow_id_candidate="$(workflow_resolve_mode_id "$workflow_id" "$mode_override" 2>/dev/null)"; then
-                    resolved_workflow_id="$resolved_workflow_id_candidate"
+                  if ! ${kernelPackage}/bin/nixfied-kernel workflow selected-services-csv ${lib.escapeShellArg (builtins.toString compiledExecutionFile)} "$workflow_id" -- "$@" 2>/dev/null; then
+                    printf '%s' ""
                   fi
-
-                  workflow_closure_services_csv "$resolved_workflow_id"
                 }
 
                 launcher_selected_services_csv() {
@@ -678,7 +427,7 @@ let
                   local workflow_id=""
 
                   if [ -n ${lib.escapeShellArg launcherTaskId} ]; then
-                    task_selected_services_csv_for_launcher ${lib.escapeShellArg launcherTaskId} "$@"
+                    launcher_task_selected_services_csv ${lib.escapeShellArg launcherTaskId} "$@"
                     return 0
                   fi
 
@@ -702,7 +451,7 @@ let
                         return 0
                       fi
                       shift
-                      task_selected_services_csv_for_launcher "$task_id" "$@"
+                      launcher_task_selected_services_csv "$task_id" "$@"
                       ;;
                     run-workflow|run-workflow-parallel)
                       workflow_id="''${1:-}"
@@ -711,7 +460,7 @@ let
                         return 0
                       fi
                       shift
-                      workflow_selected_services_csv_for_launcher "$workflow_id" "$@"
+                      launcher_workflow_selected_services_csv "$workflow_id" "$@"
                       ;;
                     *)
                       printf '%s' ""

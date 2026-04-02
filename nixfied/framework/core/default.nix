@@ -16,8 +16,7 @@ in
   compileExecution =
     args:
     import ../../compiler/compile-execution.nix {
-      inherit
-        (pkgs)
+      inherit (pkgs)
         lib
         ;
       inherit canonical;

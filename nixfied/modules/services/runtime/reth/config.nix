@@ -1,7 +1,7 @@
 # Reth module config defaults
 { pkgs, project }:
 
-import ../../../../framework/runtime/services/service-config-builder.nix {
+import ../shared/service-config-builder.nix {
   inherit pkgs project;
   name = "reth";
   defaults = cfg: {

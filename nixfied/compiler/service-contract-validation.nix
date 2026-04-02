@@ -1,7 +1,7 @@
 { pkgs }:
 let
-  runtimePrimitives = import ./runtime-primitives.nix { };
-  validation = import ./validation.nix { inherit pkgs; };
+  runtimePrimitives = import ../framework/core/runtime-primitives.nix { };
+  validation = import ../framework/core/validation.nix { inherit pkgs; };
   inherit (validation)
     isNonEmptyString
     expect
@@ -11,7 +11,7 @@ let
     isListOfNonEmptyStrings
     isKVSpecList
     ;
-  listUtils = import ./list-utils.nix;
+  listUtils = import ../framework/core/list-utils.nix;
   requiredLifecycleOps = [
     "start"
     "stop"
@@ -41,7 +41,6 @@ let
   normalizeStringSet = listUtils.uniqueSorted;
   sameStringSet = expected: actual: normalizeStringSet expected == normalizeStringSet actual;
   isListOfOpNames = values: builtins.isList values && isListOfNonEmptyStrings values;
-  isScriptLike = x: (builtins.isString x) || (builtins.isPath x) || (builtins.isAttrs x);
 
   opPreRefs = op: op.preOps or [ ];
   opPostRefs = op: op.postOps or [ ];
@@ -359,106 +358,11 @@ let
         Nixfied service contract violated:
         ${renderErrors errs}
       '';
-
-  validateServiceImplementationMatchesCatalogErrors =
-    {
-      serviceName,
-      serviceApi,
-      implementation,
-    }:
-    let
-      ops = serviceApi.operations or { };
-      implementationOps = implementation.operations or { };
-      implementationOpErrors = builtins.concatLists (
-        map (
-          opName:
-          let
-            opCfg = ops.${opName};
-            runtimeOp = opCfg.runtimeOp or opName;
-          in
-          if runtimeOp == null || runtimeOp == "" then
-            [ ]
-          else
-            expect (builtins.hasAttr runtimeOp implementationOps) "${serviceName}.${opName}: runtime implementation is missing operation '${runtimeOp}'"
-            ++
-              expect (isScriptLike (implementationOps.${runtimeOp} or null))
-                "${serviceName}.${opName}: runtime implementation operation '${runtimeOp}' must be string/path/derivation"
-        ) (builtins.attrNames ops)
-      );
-    in
-    if implementation == null then
-      [ "${serviceName}: runtime implementation is required" ]
-    else if !isAttrs implementation then
-      [ "${serviceName}: runtime implementation must be an attribute set" ]
-    else
-      expect (
-        (implementation.version or null) == 1
-      ) "${serviceName}: runtime implementation version must be 1"
-      ++ expect (
-        implementation ? operations
-      ) "${serviceName}: runtime implementation operations are required"
-      ++ expect (isAttrs implementationOps) "${serviceName}: runtime implementation operations must be an attribute set"
-      ++ implementationOpErrors;
-
-  validateServiceImplementationsAgainstCatalog =
-    {
-      serviceApis,
-      serviceImplementations,
-    }:
-    let
-      names = sortedAttrNames serviceApis;
-      errs = builtins.concatLists (
-        map (
-          serviceName:
-          validateServiceImplementationMatchesCatalogErrors {
-            inherit serviceName;
-            serviceApi = serviceApis.${serviceName};
-            implementation = serviceImplementations.${serviceName} or null;
-          }
-        ) names
-      );
-    in
-    if errs == [ ] then
-      serviceImplementations
-    else
-      throw ''
-        Nixfied service runtime implementation violated:
-        ${renderErrors errs}
-      '';
-
-  validateServiceImplementations =
-    {
-      serviceContracts,
-      serviceImplementations,
-    }:
-    let
-      validatedContracts = validateServiceContracts serviceContracts;
-      names = sortedAttrNames validatedContracts;
-      errs = builtins.concatLists (
-        map (
-          serviceName:
-          validateServiceImplementationMatchesCatalogErrors {
-            inherit serviceName;
-            serviceApi = validatedContracts.${serviceName};
-            implementation = serviceImplementations.${serviceName} or null;
-          }
-        ) names
-      );
-    in
-    if errs == [ ] then
-      serviceImplementations
-    else
-      throw ''
-        Nixfied service runtime implementation violated:
-        ${renderErrors errs}
-      '';
 in
 {
   inherit
     sortedAttrNames
     validateServiceContract
     validateServiceContracts
-    validateServiceImplementationsAgainstCatalog
-    validateServiceImplementations
     ;
 }

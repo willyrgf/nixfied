@@ -1,14 +1,13 @@
 { pkgs }:
 let
-  mkServiceRuntimeSurfaces = import ../../nixfied/framework/core/mkServiceRuntimeSurfaces.nix;
-  commandApi = import ../../nixfied/framework/core/command-api.nix { inherit pkgs; };
-  serviceContractValidation = import ../../nixfied/framework/core/service-contract-validation.nix {
+  compileServiceSurfaceCatalog = import ../../nixfied/compiler/compile-service-surface-catalog.nix {
+    lib = pkgs.lib;
     inherit pkgs;
   };
+  mkServiceRuntimeSurfaces = import ../../nixfied/framework/core/mkServiceRuntimeSurfaces.nix;
   runtimePrimitives = import ../../nixfied/framework/core/runtime-primitives.nix { };
   shellHelpers = import ./lib/shell-helpers.nix { inherit pkgs; };
   serviceRuntimePrimitives = runtimePrimitives.mkServiceRuntimePrimitivesV1 { };
-  inherit (commandApi) mkCommandApi;
 
   prepareScript = pkgs.writeShellScript "service-op-prepare" ''
     set -euo pipefail
@@ -103,47 +102,28 @@ let
     }
   '';
 
-  mkDemoOperationMetadata =
-    opName: opCfg:
-    let
-      appName =
-        if (opCfg.appName or null) != null && opCfg.appName != "" then
-          opCfg.appName
-        else
-          "svc::demo::${opName}";
-      category = if (opCfg.category or "") != "" then opCfg.category else "demo";
-    in
-    {
-      inherit appName;
-      hookName = "SVC_DEMO_${pkgs.lib.toUpper opName}";
-      includeApp = opCfg.exposeApp or true;
-      includeHook = opCfg.exposeHook or true;
-      usage = opCfg.usage or [ "nix run .#${appName}" ];
-      inherit category;
-      class = opCfg.class or "passthrough";
-      idempotent = opCfg.idempotent or false;
-      summary = opCfg.summary;
-      details = opCfg.details;
-      examples = opCfg.examples or [ ];
-      args = opCfg.args or [ ];
-      env = opCfg.env or [ ];
-      commandApi =
-        (mkCommandApi {
-          class = opCfg.class or "passthrough";
-          name = appName;
-          summary = opCfg.summary;
-          details = opCfg.details or "";
-          usage = opCfg.usage or [ "nix run .#${appName}" ];
-          examples = opCfg.examples or [ ];
-          args = opCfg.args or [ ];
-          env = opCfg.env or [ ];
-          inherit category;
-          idempotent = opCfg.idempotent or false;
-        }).commandApi;
+  demoServices = {
+    "service.demo" = {
+      enable = true;
+      name = "demo";
+      config = {
+        dataDirName = "demo";
+      };
     };
+  };
 
-  demoOperationCatalog = {
-    demo = builtins.mapAttrs mkDemoOperationMetadata demoContract.operations;
+  demoServiceDefinitions = {
+    demo = {
+      contract = demoContract;
+      implementation = {
+        module = demoImplementationModule;
+      };
+    };
+  };
+
+  demoCatalog = compileServiceSurfaceCatalog {
+    services = demoServices;
+    serviceDefinitions = demoServiceDefinitions;
   };
 
   demoRuntimeSurfaces = mkServiceRuntimeSurfaces {
@@ -182,26 +162,10 @@ let
         };
       };
     };
-    services = {
-      demo = {
-        enable = true;
-        name = "demo";
-        config = {
-          dataDirName = "demo";
-        };
-      };
-    };
-    serviceApis = {
-      demo = demoContract;
-    };
-    operationCatalog = demoOperationCatalog;
-    serviceDefinitions = {
-      demo = {
-        implementation = {
-          module = demoImplementationModule;
-        };
-      };
-    };
+    services = demoServices;
+    serviceApis = demoCatalog.serviceApis;
+    operationCatalog = demoCatalog.operationCatalog;
+    serviceDefinitions = demoServiceDefinitions;
   };
   hookEnv = demoRuntimeSurfaces.serviceHookEnv;
   startProgram = hookEnv.SVC_DEMO_START;
@@ -251,15 +215,22 @@ let
     };
   };
 
+  compileInvalidCatalog =
+    contract:
+    compileServiceSurfaceCatalog {
+      services = demoServices;
+      serviceDefinitions = {
+        demo = {
+          inherit contract;
+        };
+      };
+    };
+
   unknownRefResult = builtins.tryEval (
-    builtins.deepSeq (serviceContractValidation.validateServiceContracts {
-      demo = unknownRefContract;
-    }) true
+    builtins.deepSeq (compileInvalidCatalog unknownRefContract) true
   );
 
-  cycleResult = builtins.tryEval (
-    builtins.deepSeq (serviceContractValidation.validateServiceContracts { demo = cycleContract; }) true
-  );
+  cycleResult = builtins.tryEval (builtins.deepSeq (compileInvalidCatalog cycleContract) true);
 in
 assert builtins.hasAttr "SVC_DEMO_START" hookEnv;
 assert builtins.hasAttr "SVC_DEMO_RESTART" hookEnv;

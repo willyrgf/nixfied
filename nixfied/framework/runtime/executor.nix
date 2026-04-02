@@ -64,6 +64,7 @@ let
       ;
   };
   runtimeHandoffShell = import ./runtime-handoff.nix { inherit pkgs; };
+  artifactsRuntimeShell = import ./artifacts-runtime.nix { inherit pkgs; };
   sharedRuntimeLibShell = import ./shared-runtime-lib.nix {
     inherit
       pkgs
@@ -123,6 +124,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         ${registryShell}
         ${envSandboxShell}
         ${runtimeHandoffShell}
+        ${artifactsRuntimeShell}
         ${sharedRuntimeLibShell}
         ${skipPolicy.skipPolicyFunctions}
 
@@ -132,21 +134,6 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
 
         kernel_event_detail() {
           ${kernelPackage}/bin/nixfied-kernel event-detail render "$@"
-        }
-
-        selected_services_csv_from_lines() {
-          local service_name=""
-          local services_csv=""
-
-          services_csv="$(
-            while IFS= read -r service_name; do
-              if [ -n "$service_name" ]; then
-                printf '%s\n' "$service_name"
-              fi
-            done | ${pkgs.coreutils}/bin/sort -u | ${pkgs.coreutils}/bin/paste -sd, -
-          )"
-
-          printf '%s' "$services_csv"
         }
 
         workflow_phase_service_set_program() {
@@ -195,78 +182,6 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
             --command-name "$operation" \
             --owner-scope "$service_set_id" \
             --exit-code "$exit_code"
-        }
-
-        workflow_mode_override_from_args() {
-          local workflow_id="$1"
-          shift
-
-          local parse_options=1
-          local arg=""
-          local shorthand_mode=""
-          local mode_override=""
-
-          while [ "$#" -gt 0 ]; do
-            arg="$1"
-            shift
-
-            if [ "$parse_options" -eq 0 ]; then
-              continue
-            fi
-
-            case "$arg" in
-              --mode)
-                if [ "$#" -lt 1 ]; then
-                  break
-                fi
-                mode_override="$1"
-                shift
-                ;;
-              --mode=*)
-                mode_override="''${arg#--mode=}"
-                ;;
-              --summary)
-                ;;
-              --)
-                parse_options=0
-                ;;
-              --*)
-                shorthand_mode="''${arg#--}"
-                if workflow_simple_shorthand_exists_for_family "$workflow_id" "$shorthand_mode"; then
-                  mode_override="$shorthand_mode"
-                fi
-                ;;
-            esac
-          done
-
-          printf '%s' "$mode_override"
-        }
-
-        task_selected_services_csv() {
-          local task_id="$1"
-          shift
-
-          local runner_type=""
-          local workflow_id=""
-          local mode_override=""
-          local resolved_workflow_id=""
-
-          task_handoff_use "$task_id" || return 1
-          runner_type="$NIXFIED_TASK_RUNNER_TYPE"
-          if [ "$runner_type" = "workflowRef" ]; then
-            workflow_id="$NIXFIED_TASK_RUNNER_WORKFLOW_ID"
-            if [ -n "$workflow_id" ]; then
-              mode_override="$(workflow_mode_override_from_args "$workflow_id" "$@")"
-              resolved_workflow_id="$(resolve_workflow_mode "$workflow_id" "$mode_override")" || return $?
-            fi
-          fi
-
-          {
-            task_base_closure_selected_services "$task_id"
-            if [ -n "$resolved_workflow_id" ]; then
-              workflow_unit_closure_selected_services "$resolved_workflow_id"
-            fi
-          } | selected_services_csv_from_lines
         }
 
         RUN_SUFFIX_REASON=""
@@ -617,7 +532,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
             attempt_id="$(compute_attempt_id)"
           fi
 
-          ensure_run_artifacts_dir "$run_id" "" "$managed_by_orchestrator" || return $?
+          ensure_executor_run_artifacts_dir "$run_id" "" "$managed_by_orchestrator" || return $?
           export NIXFIED_RUN_ID="$run_id"
           export NIXFIED_ATTEMPT_ID="$attempt_id"
 
@@ -671,13 +586,6 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           fi
 
           return "$status"
-        }
-
-        resolve_workflow_mode() {
-          local workflow_id="$1"
-          local mode_override="$2"
-
-          workflow_resolve_mode_id "$workflow_id" "$mode_override"
         }
 
         resolve_effective_max_workers() {
@@ -1374,11 +1282,12 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           local workflow_id="$1"
           shift
 
-          local mode_override=""
           local print_summary=0
           local parse_options=1
           local -a input_args
           input_args=()
+          local -a workflow_args
+          workflow_args=()
           local -a passthrough_args
           passthrough_args=()
           local arg
@@ -1388,7 +1297,8 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           input_args=("''${LOGGING_FILTERED_ARGS[@]}")
           extract_machine_output_args "''${input_args[@]}" || return $?
           input_args=("''${MACHINE_FILTERED_ARGS[@]}")
-          set -- "''${input_args[@]}"
+          workflow_args=("''${input_args[@]}")
+          set -- "''${workflow_args[@]}"
 
           while [ "$#" -gt 0 ]; do
             arg="$1"
@@ -1405,12 +1315,9 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
                   echo "ERROR: --mode requires a value"
                   return "$NIXFIED_EXIT_USAGE"
                 fi
-                mode_override="$1"
                 shift
                 ;;
-              --mode=*)
-                mode_override="''${arg#--mode=}"
-                ;;
+              --mode=*) ;;
               --summary)
                 print_summary=1
                 ;;
@@ -1419,9 +1326,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
                 ;;
               --*)
                 shorthand_mode="''${arg#--}"
-                if workflow_simple_shorthand_exists_for_family "$workflow_id" "$shorthand_mode"; then
-                  mode_override="$shorthand_mode"
-                else
+                if ! workflow_resolve_mode_id "$workflow_id" "$shorthand_mode" >/dev/null 2>&1; then
                   echo "ERROR: unknown option '$arg'"
                   return "$NIXFIED_EXIT_USAGE"
                 fi
@@ -1435,8 +1340,6 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
                 ;;
             esac
           done
-
-          workflow_id="$(resolve_workflow_mode "$workflow_id" "$mode_override")" || return $?
 
           local run_id
           local detail_json
@@ -1463,7 +1366,8 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
             echo "ERROR: unknown workflow '$workflow_id'"
             return "$NIXFIED_EXIT_USAGE"
           fi
-          workflow_handoff_use "$workflow_id" || return 1
+          workflow_handoff_use_resolved "$workflow_id" "''${workflow_args[@]}" || return 1
+          workflow_id="$NIXFIED_WORKFLOW_ID"
           NIXFIED_WORKFLOW_LOG_LEVEL_DEFAULT="$NIXFIED_WORKFLOW_LOGGING_LEVEL_DEFAULT"
           NIXFIED_WORKFLOW_OUTPUT_MODE_DEFAULT="$NIXFIED_WORKFLOW_LOGGING_OUTPUT_DEFAULT"
 
@@ -1489,7 +1393,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
             write_text_file_atomic "$MACHINE_RUN_ID_FILE" "$run_id" || return $?
           fi
 
-          ensure_run_artifacts_dir "$run_id" "$workflow_id" "$managed_by_orchestrator" || return $?
+          ensure_executor_run_artifacts_dir "$run_id" "$workflow_id" "$managed_by_orchestrator" || return $?
           export NIXFIED_RUN_ID="$run_id"
           export NIXFIED_ATTEMPT_ID="$attempt_id"
 
