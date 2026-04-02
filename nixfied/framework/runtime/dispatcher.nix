@@ -18,6 +18,20 @@ let
   shellCommon = import ../core/shell-common.nix { inherit pkgs; };
   workspaceMarker = import ../workspace-marker.nix;
   workspaceMarkerPresent = workspaceMarker.isPresent projectRoot;
+  compiledExecution = (model.compiled or { }).execution or { };
+  taskExecutionById = (compiledExecution.tasks or { }).byId or { };
+  taskHelpFiles = builtins.mapAttrs (
+    taskId: taskExecution:
+    pkgs.writeText "nixfied-task-help-${builtins.substring 0 10 (builtins.hashString "sha256" taskId)}.txt" ''
+      ${builtins.concatStringsSep "\n" (((taskExecution.help or { }).lines or [ ]))}
+    ''
+  ) taskExecutionById;
+  taskHelpFileFor =
+    taskId:
+    if builtins.hasAttr taskId taskHelpFiles then
+      builtins.toString taskHelpFiles.${taskId}
+    else
+      throw "dispatcher: missing compiled task help file for '${taskId}'";
 
   orchestrator = import ./orchestrator.nix {
     inherit
@@ -38,115 +52,8 @@ let
   viewApps = model.views.apps;
   viewAppNames = builtins.sort builtins.lessThan (builtins.attrNames viewApps);
   appModels = model.apps or { };
-  taskModels = model.tasks or { };
-
-  taskAppIds =
-    taskId:
-    builtins.sort builtins.lessThan (
-      builtins.filter (
-        appId:
-        let
-          app = appModels.${appId};
-        in
-        (app.kind or "") == "taskRef" && (app.taskId or "") == taskId
-      ) (builtins.attrNames appModels)
-    );
-
-  preferredTaskApp =
-    taskId:
-    let
-      appIds = taskAppIds taskId;
-    in
-    if appIds == [ ] then null else appModels.${builtins.head appIds};
-
-  renderTaskHelpText =
-    taskId:
-    let
-      task = taskModels.${taskId};
-      app = preferredTaskApp taskId;
-      commandApi = task.commandApi or { };
-      usageLines = if app == null then [ ] else app.usage or [ ];
-      exampleLines = if app == null then [ ] else app.examples or [ ];
-      argSpecs = commandApi.args or [ ];
-      renderOptionLine =
-        spec:
-        let
-          hasLong = (spec ? long) && spec.long != null && spec.long != "";
-          hasShort = (spec ? short) && spec.short != null && spec.short != "";
-          kind =
-            if (spec ? kind) && spec.kind != null then
-              spec.kind
-            else if hasLong || hasShort then
-              "option"
-            else
-              "positional";
-          tokens = lib.filter (token: token != "") [
-            (if hasLong then spec.long else "")
-            (if hasShort then spec.short else "")
-          ];
-          valueType = if (spec ? type) && spec.type != null && spec.type != "" then spec.type else "value";
-          valueSuffix = if kind == "option" then " <${valueType}>" else "";
-          label = "${builtins.concatStringsSep ", " tokens}${valueSuffix}";
-          description = spec.description or "";
-        in
-        if kind == "positional" || tokens == [ ] then
-          null
-        else if description == "" then
-          "  ${label}"
-        else
-          "  ${label}: ${description}";
-      optionLines = builtins.filter (line: line != null) (map renderOptionLine argSpecs) ++ [
-        "  -h, --help: Show this help."
-      ];
-      appName = if app == null then taskId else app.id or taskId;
-      summary =
-        if app == null then
-          commandApi.summary or task.summary or ""
-        else
-          app.summary or commandApi.summary or task.summary or "";
-      description =
-        if app == null then
-          commandApi.details or task.description or ""
-        else
-          app.description or commandApi.details or task.description or "";
-    in
-    builtins.concatStringsSep "\n" (
-      [ "${appName} - ${summary}" ]
-      ++ lib.optionals (description != "") [
-        ""
-        description
-      ]
-      ++ lib.optionals (usageLines != [ ]) (
-        [
-          ""
-          "Usage:"
-        ]
-        ++ map (line: "  ${line}") usageLines
-      )
-      ++ lib.optionals (optionLines != [ ]) (
-        [
-          ""
-          "Options:"
-        ]
-        ++ optionLines
-      )
-      ++ lib.optionals (exampleLines != [ ]) (
-        [
-          ""
-          "Examples:"
-        ]
-        ++ map (line: "  ${line}") exampleLines
-      )
-    );
-
-  mkTaskHelpFile =
-    taskId:
-    pkgs.writeText "nixfied-task-help-${builtins.substring 0 10 (builtins.hashString "sha256" taskId)}.txt" ''
-      ${renderTaskHelpText taskId}
-    '';
-
-  frameworkInstallHelpFile = mkTaskHelpFile "task.framework.install";
-  frameworkUpgradeHelpFile = mkTaskHelpFile "task.framework.upgrade";
+  frameworkInstallHelpFile = taskHelpFileFor "task.framework.install";
+  frameworkUpgradeHelpFile = taskHelpFileFor "task.framework.upgrade";
   frameworkSourceFlakeRefValue =
     if frameworkSourceFlakeRef != null && frameworkSourceFlakeRef != "" then
       frameworkSourceFlakeRef

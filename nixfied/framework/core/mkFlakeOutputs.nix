@@ -758,18 +758,6 @@ let
                   esac
                 done
 
-                for service in "''${known_services[@]}"; do
-                  if is_service_skipped "$service"; then
-                    requested_excluded_services+=("$service")
-                  fi
-                done
-
-                excluded_services_csv="$(build_excluded_services_csv)"
-                selected_services_csv="$(launcher_selected_services_csv "''${forwarded_args[@]}")"
-                if [ -n "$excluded_services_csv" ] && [ -z "$selected_services_csv" ]; then
-                  selected_services_csv="__ALL__"
-                fi
-
                 if [ -n ${lib.escapeShellArg dispatcherHelpFile} ] \
                   && forwarded_args_only_help_flag "''${forwarded_args[@]}"; then
                   cat ${lib.escapeShellArg dispatcherHelpFile}
@@ -786,6 +774,19 @@ let
                     && print_fast_task_help "''${forwarded_args[0]:-}"; then
                     exit 0
                   fi
+                fi
+
+                for service in "''${known_services[@]}"; do
+                  if is_service_skipped "$service"; then
+                    requested_excluded_services+=("$service")
+                  fi
+                done
+
+                excluded_services_csv="$(build_excluded_services_csv)"
+
+                selected_services_csv="$(launcher_selected_services_csv "''${forwarded_args[@]}")"
+                if [ -n "$excluded_services_csv" ] && [ -z "$selected_services_csv" ]; then
+                  selected_services_csv="__ALL__"
                 fi
 
                 ${launcherRootResolverScript}
