@@ -54,28 +54,20 @@ in
   operations = {
     init = lifecycle.init;
     preflight-start = lifecycle.preflightStart;
-    preflightStart = lifecycle.preflightStart;
     start = lifecycle.start;
     start-leaf = lifecycle.startLeaf;
-    startLeaf = lifecycle.startLeaf;
     stop = lifecycle.stop;
     restart = lifecycle.restart;
     status = lifecycle.status;
     health = lifecycle.health;
     ready = lifecycle.ready;
     check-config = lifecycle.checkConfig;
-    checkConfig = lifecycle.checkConfig;
     reload = lifecycle.reload;
     full-start = lifecycle.fullStart;
     full-start-leaf = lifecycle.fullStartLeaf;
-    fullStart = lifecycle.fullStart;
-    fullStartLeaf = lifecycle.fullStartLeaf;
     full-start-test = lifecycle.fullStartTest;
     full-start-test-leaf = lifecycle.fullStartTestLeaf;
-    fullStartTest = lifecycle.fullStartTest;
-    fullStartTestLeaf = lifecycle.fullStartTestLeaf;
     list-instances = lifecycle.listInstances;
-    listInstances = lifecycle.listInstances;
     site-proxy = siteMgmt.writeProxySite;
     site-static = siteMgmt.writeStaticSite;
     site-add = siteMgmt.addSite;
@@ -83,18 +75,8 @@ in
     site-enable = siteMgmt.enableSite;
     site-disable = siteMgmt.disableSite;
     site-list = siteMgmt.listSites;
-    siteProxy = siteMgmt.writeProxySite;
-    siteStatic = siteMgmt.writeStaticSite;
-    siteAdd = siteMgmt.addSite;
-    siteRemove = siteMgmt.removeSite;
-    siteEnable = siteMgmt.enableSite;
-    siteDisable = siteMgmt.disableSite;
-    siteList = siteMgmt.listSites;
     cert-obtain = ssl.obtainCert;
     cert-renew = ssl.renewCerts;
     cert-status = ssl.certStatus;
-    certObtain = ssl.obtainCert;
-    certRenew = ssl.renewCerts;
-    certStatus = ssl.certStatus;
   };
 }

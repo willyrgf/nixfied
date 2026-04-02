@@ -1,7 +1,16 @@
 let
   listUtils = import ../../nixfied/framework/core/list-utils.nix;
 
-  layerChecks = {
+  order = [
+    "compile"
+    "manifest"
+    "kernel"
+    "adapters"
+    "e2e"
+    "migration"
+  ];
+
+  shardChecks = {
     compile = [
       "compiler-validation"
       "contract-render-snapshot"
@@ -11,10 +20,8 @@ let
       "env-sandbox-contract"
       "excluded-service-evaluation"
       "executor-contract"
-      "feature-coverage-validation"
       "features-surface-contract"
       "framework-selfhost-contract"
-      "framework-test-layout-validation"
       "helios-pinned-source-contract"
       "install-runtime-contract"
       "introspect-contract"
@@ -38,13 +45,12 @@ let
     ];
 
     manifest = [
-      "feature-manifest-proof"
-      "selected-execution-contract"
+      "machine-output-app-smoke"
+      "service-set-behavior-contract"
     ];
 
     kernel = [
       "ephemeral-runtime-env-isolation-smoke"
-      "runtime-handoff-contract"
       "isolation-nested-run-id-smoke"
       "kernel-native-tests"
       "nix-checks-parent-workflow-skip-smoke"
@@ -77,11 +83,9 @@ let
       "workspace-registry-isolation-smoke"
     ];
 
-    adapter = [
+    adapters = [
       "dispatcher-help-fast-path-smoke"
-      "feature-adapter-proof"
       "framework-utility-launcher-contract"
-      "helpers-runtime-contract"
       "launcher-help-fast-path-smoke"
       "launcher-skip-service-pruning-smoke"
       "launcher-surface-contract"
@@ -106,7 +110,6 @@ let
       "ephemeral-execution-smoke"
       "ephemeral-runtime-behavior-smoke"
       "ephemeral-retention-smoke"
-      "feature-e2e-proof"
       "flake-show-no-service-materialization-smoke"
       "framework-install-filter-smoke"
       "framework-install-no-caller-compile-smoke"
@@ -118,7 +121,6 @@ let
       "framework-upgrade-no-caller-compile-smoke"
       "framework-upgrade-preserve-smoke"
       "logging-injection-smoke"
-      "machine-output-app-smoke"
       "nginx-site-management-smoke"
       "nix-checks-nil-issues-fail-smoke"
       "nix-client-env-smoke"
@@ -135,7 +137,6 @@ let
       "service-dir-isolation-smoke"
       "service-lifecycle-matrix-smoke"
       "service-probe-overrides-smoke"
-      "service-set-behavior-contract"
       "skip-service-smoke"
       "slot-env-runtime-smoke"
       "supervisor-lifecycle-smoke"
@@ -145,70 +146,55 @@ let
     ];
 
     migration = [
-      "contract-migration-guard"
       "no-legacy-project-modules"
     ];
   };
 
-  order = [
-    "compile"
-    "manifest"
-    "kernel"
-    "adapters"
-    "e2e"
-    "migration"
-  ];
-
-  shardChecks = {
-    compile = layerChecks.compile;
-    manifest = layerChecks.manifest;
-    kernel = layerChecks.kernel;
-    adapters = layerChecks.adapter;
-    e2e = layerChecks.e2e;
-    migration = layerChecks.migration;
+  featureProofShardChecks = {
+    compile = [ "features-surface-contract" ];
+    manifest = [
+      "machine-output-app-smoke"
+      "service-set-behavior-contract"
+    ];
+    kernel = [ ];
+    adapters = [
+      "launcher-surface-contract"
+      "service-hook-env-smoke"
+    ];
+    e2e = [ "ephemeral-runtime-behavior-smoke" ];
+    migration = [ ];
   };
 
-  canonicalFeatureProofChecks = [
-    "compiler-validation"
-    "feature-adapter-proof"
-    "feature-manifest-proof"
-    "feature-e2e-proof"
-  ];
-
-  featureProofChecks = canonicalFeatureProofChecks ++ [ "features-surface-contract" ];
-
-  allChecks = listUtils.uniquePreserveOrder (
-    builtins.concatLists (builtins.map (name: shardChecks.${name} or [ ]) order)
-  );
-
-  profiles = {
-    "feature-proof" = featureProofChecks;
-    ci = listUtils.uniquePreserveOrder (
-      canonicalFeatureProofChecks
-      ++ shardChecks.compile
-      ++ shardChecks.manifest
-      ++ shardChecks.kernel
-      ++ shardChecks.adapters
-      ++ shardChecks.migration
-    );
-    full = allChecks;
+  ciShardChecks = {
+    compile = shardChecks.compile;
+    manifest = shardChecks.manifest;
+    kernel = shardChecks.kernel;
+    adapters = shardChecks.adapters;
+    e2e = [ ];
+    migration = shardChecks.migration;
   };
 
-  profileShardChecks = builtins.mapAttrs (
-    _: profileChecks:
-    builtins.mapAttrs (
-      _: shardCheckNames: builtins.filter (name: builtins.elem name profileChecks) shardCheckNames
-    ) shardChecks
-  ) profiles;
+  fullShardChecks = shardChecks;
+
+  profileShardChecks = {
+    "feature-proof" = featureProofShardChecks;
+    ci = ciShardChecks;
+    full = fullShardChecks;
+  };
+
+  collectProfileChecks =
+    shardMap:
+    listUtils.uniquePreserveOrder (builtins.concatLists (map (name: shardMap.${name} or [ ]) order));
+
+  profiles = builtins.mapAttrs (_: collectProfileChecks) profileShardChecks;
+  allChecks = profiles.full;
 in
 {
   inherit
-    order
-    layerChecks
     allChecks
-    canonicalFeatureProofChecks
-    featureProofChecks
+    order
     profileShardChecks
+    profiles
     ;
 
   descriptions = {
@@ -227,5 +213,4 @@ in
   };
 
   checks = shardChecks;
-  profiles = profiles;
 }

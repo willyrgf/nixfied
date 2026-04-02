@@ -4,8 +4,9 @@ let
   serviceContractValidation = import ../../nixfied/framework/core/service-contract-validation.nix {
     inherit pkgs;
   };
+  runtimePrimitives = import ../../nixfied/framework/core/runtime-primitives.nix { };
   shellHelpers = import ./lib/shell-helpers.nix { inherit pkgs; };
-  runtimePrimitives = serviceApi.mkRuntimePrimitivesV1 { };
+  serviceRuntimePrimitives = runtimePrimitives.mkServiceRuntimePrimitivesV1 { };
 
   prepareScript = pkgs.writeShellScript "service-op-prepare" ''
     set -euo pipefail
@@ -39,10 +40,8 @@ let
     details = "demo service contract";
     ownerFile = "tests/framework/service-op-composition-contract.nix";
     artifacts = { };
-    inherit
-      operations
-      runtimePrimitives
-      ;
+    inherit operations;
+    runtimePrimitives = serviceRuntimePrimitives;
   };
 
   demoContract = mkContract {
