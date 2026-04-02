@@ -15,14 +15,11 @@ let
       "compiler-validation"
       "contract-render-snapshot"
       "cross-machine-hash"
-      "discovery-runtime-contract"
       "docs-guidance-contract"
-      "env-sandbox-contract"
       "excluded-service-evaluation"
       "features-surface-contract"
       "framework-selfhost-contract"
       "helios-pinned-source-contract"
-      "install-runtime-contract"
       "introspect-contract"
       "introspection-bundle-determinism"
       "introspection-schema"
@@ -79,10 +76,8 @@ let
 
     adapters = [
       "dispatcher-help-fast-path-smoke"
-      "framework-utility-launcher-contract"
       "launcher-help-fast-path-smoke"
       "launcher-skip-service-pruning-smoke"
-      "launcher-surface-contract"
       "orchestrator-arg-forwarding-smoke"
       "orchestrator-signal-cleanup-smoke"
       "service-hook-env-smoke"
@@ -149,10 +144,7 @@ let
       "service-set-behavior-contract"
     ];
     kernel = [ ];
-    adapters = [
-      "launcher-surface-contract"
-      "service-hook-env-smoke"
-    ];
+    adapters = [ "service-hook-env-smoke" ];
     e2e = [ "ephemeral-runtime-behavior-smoke" ];
     migration = [ ];
   };

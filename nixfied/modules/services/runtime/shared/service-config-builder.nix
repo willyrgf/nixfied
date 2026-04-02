@@ -3,7 +3,7 @@
 # getProjectServiceConfig, and merging user overrides with defaults.
 #
 # Usage:
-#   import ../service-config-builder.nix {
+#   import ../shared/service-config-builder.nix {
 #     inherit pkgs project;
 #     name = "reth";
 #     defaults = cfg: {
@@ -14,7 +14,7 @@
 #   }
 #
 # The `defaults` function receives `cfg` (the project service config
-# attrset) and must return the final config attrset.  probePlans,
+# attrset) and must return the final config attrset. probePlans,
 # resolvedEndpoints, and defaultSource are appended automatically.
 {
   pkgs,
@@ -25,7 +25,7 @@
 }:
 
 let
-  serviceConfig = import ../../core/service-config.nix {
+  serviceConfig = import ../../../../framework/core/service-config.nix {
     lib = pkgs.lib;
     inherit pkgs;
   };

@@ -13,6 +13,7 @@ pub(crate) fn task_command(subcommand: &str, values: &[String]) -> Result<(), St
         "help" => task_help_command(values),
         "runtime-plan" => task_runtime_plan_command(values),
         "base-closure-selected-services" => task_base_closure_selected_services_command(values),
+        "selected-services-csv" => task_selected_services_csv_command(values),
         "retry-backoff-values" => task_retry_backoff_values_command(values),
         "hook-ids" => task_hook_ids_command(values),
         "hook-export" => task_hook_export_command(values),
@@ -267,6 +268,46 @@ fn task_base_closure_selected_services_command(values: &[String]) -> Result<(), 
         "{}",
         render_lines(&array_strings(task, "baseClosureSelectedServices"))
     );
+    Ok(())
+}
+
+fn task_selected_services_csv_command(values: &[String]) -> Result<(), String> {
+    if values.len() < 2 {
+        return Err(
+            "usage: nixfied-kernel task selected-services-csv <execution-source-file> <task-id> [-- <args...>]"
+                .to_string(),
+        );
+    }
+
+    let metadata = load_execution_metadata(&values[0])?;
+    let task = execution_task(&metadata, &values[1])?;
+    let mut selected_services = BTreeSet::new();
+
+    for service_name in array_strings(task, "baseClosureSelectedServices") {
+        if !service_name.is_empty() {
+            selected_services.insert(service_name);
+        }
+    }
+
+    if let Some(runner) = object_field(task, "runner") {
+        let workflow_id = object_string(runner, "workflowId").unwrap_or("");
+        if !workflow_id.is_empty() {
+            let resolved_workflow_id = crate::workflow::workflow_resolved_id_from_args_lenient(
+                &metadata,
+                workflow_id,
+                strip_passthrough_separator(&values[2..]),
+            )?;
+            let workflow = execution_workflow(&metadata, &resolved_workflow_id)?;
+            for service_name in array_strings(workflow, "unitClosureSelectedServices") {
+                if !service_name.is_empty() {
+                    selected_services.insert(service_name);
+                }
+            }
+        }
+    }
+
+    let services_csv = selected_services.into_iter().collect::<Vec<_>>().join(",");
+    print!("{}", services_csv);
     Ok(())
 }
 

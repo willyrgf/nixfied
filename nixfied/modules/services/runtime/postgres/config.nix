@@ -91,7 +91,7 @@ let
   '';
 
   # Use shared builder for probe/source fields
-  probeFields = import ../../../../framework/runtime/services/service-config-builder.nix {
+  probeFields = import ../shared/service-config-builder.nix {
     inherit pkgs project;
     name = "postgres";
     defaults = _cfg: { };

@@ -3,7 +3,7 @@
 # wiring shared across all pid-file managed services.
 #
 # Usage:
-#   prelude = import ../service-runtime-prelude.nix {
+#   prelude = import ../shared/service-runtime-prelude.nix {
 #     inherit slotEnvRuntime slots observability;
 #     serviceName = "reth";
 #     serviceNameUpper = "RETH";

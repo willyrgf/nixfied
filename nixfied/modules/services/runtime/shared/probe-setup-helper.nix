@@ -3,13 +3,13 @@
 # that every service lifecycle.nix duplicates.
 #
 # Usage:
-#   probeSetup = import ../probe-setup-helper.nix {
+#   probeSetup = import ../shared/probe-setup-helper.nix {
 #     inherit pkgs project slots config;
 #     serviceName = "reth";
 #     endpointMapping = {
-#       http  = "$RETH_HTTP_PORT";
-#       ws    = "$RETH_WS_PORT";
-#       auth  = "$RETH_AUTH_PORT";
+#       http = "$RETH_HTTP_PORT";
+#       ws = "$RETH_WS_PORT";
+#       auth = "$RETH_AUTH_PORT";
 #     };
 #   };
 {
@@ -23,10 +23,14 @@
 
 let
   lib = pkgs.lib;
-  runtimeDefaults = import ../../core/runtime-defaults.nix;
-  managedServiceLifecycle = import ../helpers/managed-service-lifecycle.nix { inherit pkgs; };
-  probeCommands = import ../../core/probe-commands.nix { inherit pkgs; };
-  probePlanRuntime = import ../../core/probe-plan-runtime.nix {
+  runtimeDefaults = import ../../../../framework/core/runtime-defaults.nix;
+  managedServiceLifecycle =
+    import ../../../../framework/runtime/helpers/managed-service-lifecycle.nix
+      {
+        inherit pkgs;
+      };
+  probeCommands = import ../../../../framework/core/probe-commands.nix { inherit pkgs; };
+  probePlanRuntime = import ../../../../framework/core/probe-plan-runtime.nix {
     inherit
       lib
       pkgs
@@ -34,9 +38,9 @@ let
       ;
     postgresProbePkg = if pkgs ? postgresql_16 then pkgs.postgresql_16 else pkgs.postgresql;
   };
-  slotEnvRuntime = import ../../core/slot-env-runtime.nix { inherit pkgs; };
-  runtimeEvents = import ../../core/runtime-events.nix { inherit pkgs project; };
-  observability = import ../../core/service-observability.nix {
+  slotEnvRuntime = import ../../../../framework/core/slot-env-runtime.nix { inherit pkgs; };
+  runtimeEvents = import ../../../../framework/core/runtime-events.nix { inherit pkgs project; };
+  observability = import ../../../../framework/core/service-observability.nix {
     inherit
       pkgs
       slots

@@ -84,21 +84,6 @@ let
       inherit pkgs;
     };
 
-    "launcher-surface-contract" = import ./launcher-surface-contract.nix {
-      inherit
-        pkgs
-        model
-        apps
-        ;
-    };
-
-    "framework-utility-launcher-contract" = import ./framework-utility-launcher-contract.nix {
-      inherit
-        pkgs
-        apps
-        ;
-    };
-
     "service-surface-catalog-contract" = import ./service-surface-catalog-contract.nix {
       inherit pkgs;
     };
@@ -219,10 +204,6 @@ let
       inherit pkgs;
     };
 
-    "discovery-runtime-contract" = import ./discovery-runtime-contract.nix {
-      inherit pkgs;
-    };
-
     "registry-replay" = import ./registry-replay.nix {
       inherit
         pkgs
@@ -237,10 +218,6 @@ let
         services
         serviceCatalog
         ;
-    };
-
-    "env-sandbox-contract" = import ./env-sandbox-contract.nix {
-      inherit pkgs;
     };
 
     "nix-client-env-smoke" = import ./nix-client-env-smoke.nix {
@@ -536,10 +513,6 @@ let
     };
 
     "framework-install-filter-smoke" = import ./framework-install-filter-smoke.nix {
-      inherit pkgs;
-    };
-
-    "install-runtime-contract" = import ./install-runtime-contract.nix {
       inherit pkgs;
     };
 

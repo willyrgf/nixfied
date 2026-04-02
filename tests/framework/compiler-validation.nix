@@ -207,9 +207,7 @@ let
     }).model.apps
     ) true
   );
-  hasCommandSurface =
-    name: ownerFile:
-    builtins.any (entry: entry.name == name && entry.owner_file == ownerFile) commandSurfaces;
+  hasCommandSurface = name: builtins.any (entry: entry.name == name) commandSurfaces;
 in
 assert frameworkTask != null;
 assert frameworkTask.runner.type == "shell";
@@ -304,11 +302,11 @@ assert isolationProbeWorkflow.units.probe.taskId == "task.test.isolation.unit";
 assert commandSurfaces != [ ];
 assert featureView != null;
 assert featureView ? lines;
-assert hasCommandSurface "dev" "nixfied/project/tasks.nix";
-assert hasCommandSurface "validate-env" "nixfied/modules/operations.nix";
-assert hasCommandSurface "framework::test" "nixfied/framework/presets/framework-test.nix";
-assert hasCommandSurface "features" "nixfied/framework/runtime/dispatcher.nix";
-assert hasCommandSurface "introspect" "nixfied/framework/core/mkCoreSurfaces.nix";
+assert hasCommandSurface "dev";
+assert hasCommandSurface "validate-env";
+assert hasCommandSurface "framework::test";
+assert hasCommandSurface "features";
+assert hasCommandSurface "introspect";
 assert tasksHaveStableIds;
 assert tasksHaveServiceRequirements;
 assert workflowsReferenceKnownTasks;

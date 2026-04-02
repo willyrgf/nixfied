@@ -12,9 +12,9 @@ let
   listUtils = import ./list-utils.nix;
   commonRuntimeShell = import ../runtime/common-runtime.nix { inherit pkgs; };
   shellJson = import ./shell-json.nix { };
-  serviceContractValidation = import ./service-contract-validation.nix { inherit pkgs; };
+  serviceImplementationValidation = import ./service-implementation-validation.nix { inherit pkgs; };
   runtimePrimitiveDefaults = import ./runtime-primitives.nix { };
-  inherit (serviceContractValidation)
+  inherit (serviceImplementationValidation)
     sortedAttrNames
     validateServiceImplementationsAgainstCatalog
     ;
