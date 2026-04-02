@@ -17,7 +17,6 @@ let
   inherit (runtimePrimitives)
     runtimeLogLevelDefault
     runtimeOutputModeDefault
-    mkServiceRuntimePrimitivesV1
     ;
 
   serviceOps = contract: contract.operations or { };
@@ -207,14 +206,12 @@ let
     builtins.foldl' dedup { } pairs;
 
   mkServiceHookEnvFromCatalog = args: mkServiceHookEnv (collectServiceOpsFromCatalog args);
-  mkRuntimePrimitivesV1 = mkServiceRuntimePrimitivesV1;
 
 in
 {
   inherit
     collectServiceOpsFromCatalog
     mkServiceHookEnv
-    mkRuntimePrimitivesV1
     mkServiceHookEnvFromCatalog
     ;
 }

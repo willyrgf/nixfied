@@ -960,7 +960,7 @@ pkgs.runCommand "service-lifecycle-matrix-smoke" { } ''
     run_service_case \
       postgres \
       "${postgresService.init}" \
-      "${postgresService.checkConfig}" \
+      "${postgresService."check-config"}" \
       "${postgresService.start}" \
       "${postgresService.status}" \
       "${postgresService.health}" \
@@ -972,7 +972,7 @@ pkgs.runCommand "service-lifecycle-matrix-smoke" { } ''
     run_full_start_case \
       postgres \
       full-start \
-      "${postgresService.fullStart}" \
+      "${postgresService."full-start"}" \
       "${postgresService.status}" \
       "${postgresService.health}" \
       "${postgresService.ready}" \
@@ -983,7 +983,7 @@ pkgs.runCommand "service-lifecycle-matrix-smoke" { } ''
   run_service_case \
     nginx \
     "${nginxService.init}" \
-    "${nginxService.checkConfig}" \
+    "${nginxService."check-config"}" \
     "${nginxService.start}" \
     "${nginxService.status}" \
     "${nginxService.health}" \
@@ -1003,7 +1003,7 @@ pkgs.runCommand "service-lifecycle-matrix-smoke" { } ''
   run_service_case \
     minio \
     "${minioService.init}" \
-    "${minioService.checkConfig}" \
+    "${minioService."check-config"}" \
     "${minioService.start}" \
     "${minioService.status}" \
     "${minioService.health}" \
@@ -1013,7 +1013,7 @@ pkgs.runCommand "service-lifecycle-matrix-smoke" { } ''
   run_full_start_case \
     minio \
     full-start \
-    "${minioService.fullStart}" \
+    "${minioService."full-start"}" \
     "${minioService.status}" \
     "${minioService.health}" \
     "${minioService.ready}" \
@@ -1021,7 +1021,7 @@ pkgs.runCommand "service-lifecycle-matrix-smoke" { } ''
   run_full_start_case \
     minio \
     full-start-test \
-    "${minioService.fullStartTest}" \
+    "${minioService."full-start-test"}" \
     "${minioService.status}" \
     "${minioService.health}" \
     "${minioService.ready}" \
@@ -1031,7 +1031,7 @@ pkgs.runCommand "service-lifecycle-matrix-smoke" { } ''
   run_service_case \
     reth \
     "${rethService.init}" \
-    "${rethService.checkConfig}" \
+    "${rethService."check-config"}" \
     "${rethService.start}" \
     "${rethService.status}" \
     "${rethService.health}" \
@@ -1041,7 +1041,7 @@ pkgs.runCommand "service-lifecycle-matrix-smoke" { } ''
   run_full_start_case \
     reth \
     full-start \
-    "${rethService.fullStart}" \
+    "${rethService."full-start"}" \
     "${rethService.status}" \
     "${rethService.health}" \
     "${rethService.ready}" \
@@ -1049,7 +1049,7 @@ pkgs.runCommand "service-lifecycle-matrix-smoke" { } ''
   run_full_start_case \
     reth \
     full-start-test \
-    "${rethService.fullStartTest}" \
+    "${rethService."full-start-test"}" \
     "${rethService.status}" \
     "${rethService.health}" \
     "${rethService.ready}" \
@@ -1060,7 +1060,7 @@ pkgs.runCommand "service-lifecycle-matrix-smoke" { } ''
   run_service_case \
     helios \
     "${heliosService.init}" \
-    "${heliosService.checkConfig}" \
+    "${heliosService."check-config"}" \
     "${heliosService.start}" \
     "${heliosService.status}" \
     "${heliosService.health}" \
@@ -1070,7 +1070,7 @@ pkgs.runCommand "service-lifecycle-matrix-smoke" { } ''
   run_full_start_case \
     helios \
     full-start \
-    "${heliosService.fullStart}" \
+    "${heliosService."full-start"}" \
     "${heliosService.status}" \
     "${heliosService.health}" \
     "${heliosService.ready}" \
@@ -1078,7 +1078,7 @@ pkgs.runCommand "service-lifecycle-matrix-smoke" { } ''
   run_full_start_case \
     helios \
     full-start-test \
-    "${heliosService.fullStartTest}" \
+    "${heliosService."full-start-test"}" \
     "${heliosService.status}" \
     "${heliosService.health}" \
     "${heliosService.ready}" \

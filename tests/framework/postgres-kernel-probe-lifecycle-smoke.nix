@@ -56,7 +56,7 @@ pkgs.runCommand "postgres-kernel-probe-lifecycle-smoke" { } ''
   export CONFIG_DIR="$TMPDIR/config"
   mkdir -p "$SERVICE_ROOT" "$RUN_DIR" "$LOG_DIR" "$CONFIG_DIR"
 
-  "${postgresService.fullStartTest}" > "$TMPDIR/full-start-test.out" 2>&1 || {
+  "${postgresService."full-start-test"}" > "$TMPDIR/full-start-test.out" 2>&1 || {
     cat "$TMPDIR/full-start-test.out" >&2
     fail "postgres full-start-test should succeed"
   }
@@ -68,7 +68,7 @@ pkgs.runCommand "postgres-kernel-probe-lifecycle-smoke" { } ''
   require_contains "$TMPDIR/status-running.out" "service=postgres"
   require_contains "$TMPDIR/status-running.out" "running=true"
 
-  "${postgresService.readyTest}" > "$TMPDIR/ready-test.out" 2>&1 || {
+  "${postgresService."ready-test"}" > "$TMPDIR/ready-test.out" 2>&1 || {
     cat "$TMPDIR/ready-test.out" >&2
     fail "postgres ready-test should succeed after full-start-test"
   }

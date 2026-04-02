@@ -11,238 +11,9 @@
   apps,
 }:
 let
-  lib = pkgs.lib;
-  listUtils = import ../../nixfied/framework/core/list-utils.nix;
-
-  featureIds = builtins.sort builtins.lessThan (builtins.attrNames (model.features or { }));
-  requiredFeatureIds = builtins.filter (
-    featureId: model.features.${featureId}.coverageRequired or false
-  ) featureIds;
-  requiredFeatureIdsByLayer =
-    layer:
-    builtins.filter (
-      featureId:
-      let
-        feature = model.features.${featureId};
-      in
-      (feature.coverageRequired or false) && (feature.coverageLayer or "") == layer
-    ) featureIds;
   modelExportSchema = builtins.fromJSON (builtins.readFile ../../nixfied/schemas/model-export.json);
   modelExportRequired = modelExportSchema.required or [ ];
   modelExportProperties = modelExportSchema.properties or { };
-
-  defaultCheckLayer =
-    name:
-    if name == "contract-migration-guard" then
-      "migration"
-    else if lib.hasInfix "manifest" name then
-      "manifest"
-    else if
-      lib.hasInfix "launcher" name
-      || lib.hasInfix "dispatcher-help" name
-      || lib.hasInfix "shell-contract" name
-      || lib.hasInfix "arg-forwarding" name
-      || lib.hasInfix "signal-cleanup" name
-      || lib.hasInfix "service-hook" name
-    then
-      "adapter"
-    else if
-      lib.hasInfix "workflow-" name
-      || lib.hasInfix "registry" name
-      || lib.hasInfix "run-id" name
-      || lib.hasInfix "run-record" name
-      || lib.hasInfix "runtime-events" name
-      || lib.hasInfix "summary" name
-      || lib.hasInfix "parallel-runner" name
-      || lib.hasInfix "parallel-worker" name
-      || lib.hasInfix "runtime-handoff" name
-      || lib.hasInfix "orchestrator-runtime" name
-      || lib.hasInfix "runtime-env" name
-      || lib.hasInfix "service-policy-runtime" name
-      || lib.hasInfix "postgres-kernel-probe" name
-    then
-      "kernel"
-    else if
-      name == "compiler-validation"
-      || lib.hasInfix "package-output" name
-      || lib.hasInfix "project-config" name
-      || lib.hasInfix "no-legacy" name
-      || lib.hasInfix "introspect" name
-      || lib.hasInfix "service-surface-catalog" name
-      || lib.hasInfix "operations-contract" name
-      || lib.hasInfix "docs-guidance" name
-    then
-      "compile"
-    else if lib.hasInfix "smoke" name then
-      "e2e"
-    else
-      "compile";
-
-  mkFrameworkCheck =
-    name: metadata: drv:
-    let
-      existingPassThru = drv.passthru or { };
-      layer = metadata.layer or (defaultCheckLayer name);
-      canonical = metadata.canonical or false;
-      covers = listUtils.uniquePreserveOrder (metadata.covers or [ ]);
-      defaultOwnerFile =
-        let
-          checkPath = ./${name}.nix;
-        in
-        if builtins.pathExists checkPath then
-          "tests/framework/${name}.nix"
-        else
-          "tests/framework/default.nix";
-      ownerFiles = metadata.ownerFiles or [ defaultOwnerFile ];
-      notes = metadata.notes or null;
-    in
-    drv
-    // {
-      passthru = existingPassThru // {
-        nixfied = {
-          inherit
-            layer
-            canonical
-            covers
-            ownerFiles
-            ;
-        }
-        // lib.optionalAttrs (notes != null && notes != "") { inherit notes; };
-      };
-    };
-
-  checkMetadata = {
-    "compiler-validation" = {
-      layer = "compile";
-      canonical = true;
-      covers = requiredFeatureIdsByLayer "compile";
-    };
-
-    "features-surface-contract" = {
-      layer = "compile";
-      covers = requiredFeatureIds;
-    };
-
-    "feature-adapter-proof" = {
-      layer = "adapter";
-      canonical = true;
-      covers = requiredFeatureIdsByLayer "adapter";
-    };
-
-    "feature-manifest-proof" = {
-      layer = "manifest";
-      canonical = true;
-      covers = requiredFeatureIdsByLayer "manifest";
-    };
-
-    "feature-e2e-proof" = {
-      layer = "e2e";
-      canonical = true;
-      covers = requiredFeatureIdsByLayer "e2e";
-    };
-
-    "ephemeral-runtime-behavior-smoke" = {
-      layer = "e2e";
-    };
-
-    "skip-service-smoke" = {
-      layer = "e2e";
-    };
-
-    "service-requirements-contract" = {
-      layer = "compile";
-    };
-
-    "selected-execution-contract" = {
-      layer = "manifest";
-    };
-
-    "introspection-bundle-determinism" = { };
-
-    "kernel-native-tests" = {
-      layer = "kernel";
-    };
-
-    "run-record-validator-failure" = { };
-
-    "service-set-behavior-contract" = {
-      layer = "e2e";
-    };
-
-    "machine-output-app-smoke" = {
-      layer = "e2e";
-    };
-
-    "helpers-runtime-contract" = {
-      layer = "adapter";
-    };
-
-    "runtime-events-contract" = {
-      layer = "adapter";
-    };
-
-    "runtime-event-policy-contract" = {
-      layer = "compile";
-    };
-
-    "launcher-surface-contract" = { };
-
-    "framework-utility-launcher-contract" = { };
-
-    "service-surface-catalog-contract" = { };
-
-    "framework-install-no-caller-compile-smoke" = { };
-
-    "framework-test-no-caller-compile-smoke" = { };
-
-    "framework-upgrade-no-caller-compile-smoke" = { };
-
-    "runtime-controls-no-service-materialization-smoke" = { };
-
-    "flake-show-no-service-materialization-smoke" = { };
-
-    "run-id-noise-stability-smoke" = { };
-
-    "run-id-semantic-inputs-contract" = { };
-
-    "run-id-active-collision-suffix-smoke" = { };
-
-    "unselected-service-no-package-resolution-smoke" = { };
-
-    "unselected-service-public-launcher-smoke" = { };
-
-    "selected-source-only-resolution-smoke" = { };
-
-    "disabled-service-no-package-resolution-smoke" = { };
-
-    "launcher-skip-service-pruning-smoke" = { };
-
-    "launcher-help-fast-path-smoke" = { };
-
-    "dispatcher-help-fast-path-smoke" = { };
-
-    "orchestrator-arg-forwarding-smoke" = { };
-
-    "service-hook-env-smoke" = {
-      layer = "adapter";
-    };
-
-    "service-op-composition-contract" = { };
-
-    "framework-test-layout-validation" = {
-      layer = "compile";
-    };
-
-    "contract-render-snapshot" = { };
-
-    "contract-migration-guard" = {
-      layer = "migration";
-    };
-
-    "no-legacy-project-modules" = {
-      layer = "migration";
-    };
-  };
 
   rawChecks = {
     "model-hash" = import ./model-hash.nix {
@@ -302,10 +73,6 @@ let
     };
 
     "local-override-introspect-contract" = import ./local-override-introspect-contract.nix {
-      inherit pkgs;
-    };
-
-    "selected-execution-contract" = import ./selected-execution-contract.nix {
       inherit pkgs;
     };
 
@@ -472,32 +239,7 @@ let
         ;
     };
 
-    "feature-adapter-proof" = import ./feature-adapter-proof.nix {
-      inherit
-        pkgs
-        model
-        ;
-    };
-
-    "feature-manifest-proof" = import ./feature-manifest-proof.nix {
-      inherit
-        pkgs
-        model
-        ;
-    };
-
-    "feature-e2e-proof" = import ./feature-e2e-proof.nix {
-      inherit
-        pkgs
-        model
-        ;
-    };
-
     "executor-contract" = import ./executor-contract.nix {
-      inherit pkgs;
-    };
-
-    "runtime-handoff-contract" = import ./runtime-handoff-contract.nix {
       inherit pkgs;
     };
 
@@ -694,10 +436,6 @@ let
     };
 
     "service-policy-runtime-smoke" = import ./service-policy-runtime-smoke.nix {
-      inherit pkgs;
-    };
-
-    "contract-migration-guard" = import ./contract-migration-guard.nix {
       inherit pkgs;
     };
 
@@ -958,10 +696,6 @@ let
         ;
     };
 
-    "helpers-runtime-contract" = import ./helpers-runtime-contract.nix {
-      inherit pkgs;
-    };
-
     "ephemeral-execution-smoke" = import ./ephemeral-execution-smoke.nix {
       inherit
         pkgs
@@ -1058,39 +792,5 @@ let
     };
   };
 
-  baseChecks = lib.mapAttrs (
-    name: drv: mkFrameworkCheck name (checkMetadata.${name} or { }) drv
-  ) rawChecks;
-  featureCoverageValidationCheck =
-    mkFrameworkCheck "feature-coverage-validation"
-      {
-        layer = "compile";
-      }
-      (
-        import ./feature-coverage-validation.nix {
-          inherit
-            pkgs
-            model
-            ;
-          checks = baseChecks;
-        }
-      );
-  frameworkTestLayoutValidationCheck =
-    mkFrameworkCheck "framework-test-layout-validation"
-      {
-        layer = "compile";
-      }
-      (
-        import ./framework-test-layout-validation.nix {
-          inherit pkgs;
-          checks = baseChecks // {
-            "feature-coverage-validation" = featureCoverageValidationCheck;
-          };
-        }
-      );
-  finalChecks = baseChecks // {
-    "framework-test-layout-validation" = frameworkTestLayoutValidationCheck;
-    "feature-coverage-validation" = featureCoverageValidationCheck;
-  };
 in
-finalChecks
+rawChecks

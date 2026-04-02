@@ -1,6 +1,7 @@
 { lib }:
 let
   t = lib.types;
+  runtimePrimitives = import ../../framework/core/runtime-primitives.nix { };
   tokenLib = import ../../framework/core/normalize-token.nix { inherit lib; };
   normalizeToken = tokenLib.normalizeToken;
 
@@ -228,31 +229,12 @@ in
       inherit description;
     };
 
-  mkRuntimePrimitivesV1 = runtime: {
-    version = 1;
-    logLevel = {
-      env = "LOG_LEVEL";
-      aliases = [ "NIXFIED_LOG_LEVEL" ];
-      values = [
-        "error"
-        "warn"
-        "info"
-        "debug"
-        "trace"
-      ];
-      default = runtime.logging.levelDefault;
+  mkRuntimePrimitivesV1 =
+    runtime:
+    runtimePrimitives.mkServiceRuntimePrimitivesV1 {
+      logLevelDefault = runtime.logging.levelDefault;
+      outputModeDefault = runtime.logging.outputDefault;
     };
-    outputMode = {
-      env = "OUTPUT_MODE";
-      aliases = [ "NIXFIED_OUTPUT_MODE" ];
-      values = [
-        "stdout"
-        "logs"
-        "both"
-      ];
-      default = runtime.logging.outputDefault;
-    };
-  };
 
   mkObservabilityOperations =
     {
