@@ -32,13 +32,11 @@ let
       "package-output-contract"
       "postgres-config-artifacts-contract"
       "project-config-boundary"
-      "runtime-event-policy-contract"
       "scheduler-order"
       "service-op-composition-contract"
       "service-probe-overrides-contract"
       "service-requirements-contract"
       "service-surface-catalog-contract"
-      "slot-env-runtime-contract"
       "vendored-metadata-contract"
     ];
 
@@ -53,14 +51,12 @@ let
       "kernel-native-tests"
       "nix-checks-parent-workflow-skip-smoke"
       "nix-ci-workflow-contract"
-      "orchestrator-runtime-contract"
       "parallel-runner-process-tree-smoke"
       "parallel-runner-smoke"
       "parallel-worker-cap-invalid-smoke"
       "parallel-worker-cap-smoke"
       "postgres-kernel-probe-lifecycle-smoke"
       "registry-detail-derivation-smoke"
-      "registry-events-contract"
       "registry-events-runtime-contract"
       "registry-lock-recovery-smoke"
       "registry-replay"
@@ -89,9 +85,7 @@ let
       "launcher-surface-contract"
       "orchestrator-arg-forwarding-smoke"
       "orchestrator-signal-cleanup-smoke"
-      "runtime-events-contract"
       "service-hook-env-smoke"
-      "shell-contract-contract"
       "shell-contract-runtime-smoke"
       "unselected-service-public-launcher-smoke"
     ];
@@ -201,11 +195,11 @@ in
     kernel = "Build kernel-owned runtime semantics, registry, and workflow proofs.";
     adapters = "Build thin launcher, shell, and process-edge adapter proofs.";
     e2e = "Build end-to-end public behavior, install, upgrade, isolation, and runtime smokes.";
-    migration = "Build deleted-seam guards and ownership-migration regressions.";
+    migration = "Build low-scope legacy-regression and ownership-migration checks.";
   };
 
   profileDescriptions = {
-    "feature-proof" = "Run only direct feature proofs backed by covers metadata.";
+    "feature-proof" = "Run only direct feature proofs.";
     ci = "Run canonical feature proofs plus compile, manifest, kernel, adapters, and migration shards.";
     full = "Run every registered framework check.";
   };

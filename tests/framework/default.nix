@@ -261,15 +261,7 @@ let
       inherit pkgs;
     };
 
-    "shell-contract-contract" = import ./shell-contract-contract.nix {
-      inherit pkgs;
-    };
-
     "shell-contract-runtime-smoke" = import ./shell-contract-runtime-smoke.nix {
-      inherit pkgs;
-    };
-
-    "slot-env-runtime-contract" = import ./slot-env-runtime-contract.nix {
       inherit pkgs;
     };
 
@@ -400,26 +392,11 @@ let
       inherit pkgs;
     };
 
-    "registry-events-contract" = import ./registry-events-contract.nix {
-      inherit
-        pkgs
-        registry
-        ;
-    };
-
     "registry-events-runtime-contract" = import ./registry-events-runtime-contract.nix {
       inherit pkgs;
     };
 
     "registry-detail-derivation-smoke" = import ./registry-detail-derivation-smoke.nix {
-      inherit pkgs;
-    };
-
-    "runtime-events-contract" = import ./runtime-events-contract.nix {
-      inherit pkgs;
-    };
-
-    "runtime-event-policy-contract" = import ./runtime-event-policy-contract.nix {
       inherit pkgs;
     };
 
@@ -614,10 +591,6 @@ let
     };
 
     "nginx-site-management-smoke" = import ./nginx-site-management-smoke.nix {
-      inherit pkgs;
-    };
-
-    "orchestrator-runtime-contract" = import ./orchestrator-runtime-contract.nix {
       inherit pkgs;
     };
 

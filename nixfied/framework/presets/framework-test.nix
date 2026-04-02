@@ -160,7 +160,7 @@ in
         Usage: nix run .#framework::test [-- --profile <feature-proof|ci|full>] [--summary] [--summary-json <path>] [--shard <name>] [--max-parallel-shards <n|auto>] [--serial] [--list-shards]
 
         Profiles:
-          feature-proof Run only direct feature proofs backed by covers metadata.
+          feature-proof Run only direct feature proofs.
           ci            Run canonical feature proofs plus compile, manifest, kernel, adapters, and migration shards.
           full          Run every registered framework check.
 
@@ -170,7 +170,7 @@ in
           kernel      Build kernel-owned runtime semantics, registry, and workflow proofs.
           adapters    Build thin launcher, shell, and process-edge adapter proofs.
           e2e         Build end-to-end public behavior, install, upgrade, isolation, and runtime smokes.
-          migration   Build deleted-seam guards and ownership-migration regressions.
+          migration   Build low-scope legacy-regression and ownership-migration checks.
         EOF
                         }
 
