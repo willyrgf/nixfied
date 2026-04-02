@@ -89,7 +89,8 @@ let
       pkgs
       selectedServices
       ;
-    serviceSurfaceCatalog = compiledServiceSurfaceCatalog;
+    serviceApis = compiledServiceSurfaceCatalog.serviceApis or { };
+    operationCatalog = compiledServiceSurfaceCatalog.operationCatalog or { };
     inherit serviceDefinitions;
     model = compiledCore.model;
     services = services;
@@ -121,7 +122,8 @@ let
         inherit
           pkgs
           ;
-        serviceSurfaceCatalog = compiledServiceSurfaceCatalog;
+        serviceApis = compiledServiceSurfaceCatalog.serviceApis or { };
+        operationCatalog = compiledServiceSurfaceCatalog.operationCatalog or { };
         inherit serviceDefinitions;
         model = manifest.model;
         selectedServices = effectiveSelectedServices;
@@ -180,7 +182,8 @@ let
 
       serviceSetRuntimeSurfaces = import ./mkServiceRuntimeSurfaces.nix {
         inherit pkgs;
-        serviceSurfaceCatalog = compiledServiceSurfaceCatalog;
+        serviceApis = compiledServiceSurfaceCatalog.serviceApis or { };
+        operationCatalog = compiledServiceSurfaceCatalog.operationCatalog or { };
         inherit serviceDefinitions;
         model = serviceSetModel;
         services = serviceSetServices;

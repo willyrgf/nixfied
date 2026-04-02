@@ -6,8 +6,11 @@
   resolvedServices ? null,
 }:
 let
+  frameworkLib = import ../../../nixfied/framework/core {
+    inherit pkgs;
+    system = pkgs.system;
+  };
   lib = pkgs.lib;
-  serviceSurfaceCatalog = (model.compiled or { }).serviceSurfaceCatalog or { };
   normalizedResolvedServices =
     if resolvedServices != null then
       resolvedServices
@@ -36,58 +39,22 @@ let
           }
         ) (builtins.attrNames services)
       );
-  normalizedServiceDefinitions =
-    if serviceDefinitions != null then
-      serviceDefinitions
-    else if resolvedServices != null then
-      resolvedServices
-    else
-      { };
 
-  mkRuntimeSurfaces =
-    runtimeModel: selectedServices:
-    import ../../../nixfied/framework/core/mkServiceRuntimeSurfaces.nix {
-      inherit
-        pkgs
-        serviceSurfaceCatalog
-        ;
-      model = runtimeModel;
-      serviceDefinitions = normalizedServiceDefinitions;
-      inherit
-        services
-        selectedServices
-        ;
+  compiledCore = {
+    inherit model;
+    serviceSets = model.serviceSets or { };
+    resolved = {
+      services = if serviceDefinitions != null then serviceDefinitions else normalizedResolvedServices;
     };
+    contractBundle = (model.compiled or { }).contractBundle or { };
+  };
 
-  baseRuntimeSurfaces = mkRuntimeSurfaces model null;
-
-  serviceSetPrograms = builtins.mapAttrs (
-    _: serviceSet:
-    let
-      serviceSetModel = model // {
-        runtime = model.runtime // {
-          directories = (model.runtime.directories or { }) // {
-            base = serviceSet.state.policy.runtimeBase;
-          };
-        };
-        state = model.state // {
-          policy = serviceSet.state.policy;
-        };
-      };
-      serviceSetRuntimeSurfaces = mkRuntimeSurfaces serviceSetModel (serviceSet.services.all or [ ]);
-    in
-    import ../../../nixfied/framework/core/mkServiceSetPrograms.nix {
-      inherit
-        pkgs
-        serviceSet
-        ;
-      model = serviceSetModel;
-      resolvedServices = normalizedResolvedServices;
-      serviceRuntimeSurfaces = serviceSetRuntimeSurfaces;
-    }
-  ) (model.serviceSets or { });
+  materialized = frameworkLib.materializeExecution {
+    projectRoot = ../../..;
+    compiledCore = compiledCore;
+  };
 in
 {
-  serviceHookEnv = baseRuntimeSurfaces.serviceHookEnv;
-  inherit serviceSetPrograms;
+  serviceHookEnv = materialized.serviceHookEnv;
+  inherit (materialized) serviceSetPrograms;
 }

@@ -13,6 +13,16 @@ in
     inherit (pkgs) lib;
   };
 
+  compileExecution =
+    args:
+    import ../../compiler/compile-execution.nix {
+      inherit
+        (pkgs)
+        lib
+        ;
+      inherit canonical;
+    } args;
+
   mkCompiledCore =
     args:
     import ./mkCompiledCore.nix (

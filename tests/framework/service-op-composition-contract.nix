@@ -191,12 +191,10 @@ let
         };
       };
     };
-    serviceSurfaceCatalog = {
-      serviceApis = {
-        demo = demoContract;
-      };
-      operationCatalog = demoOperationCatalog;
+    serviceApis = {
+      demo = demoContract;
     };
+    operationCatalog = demoOperationCatalog;
     serviceDefinitions = {
       demo = {
         implementation = {
