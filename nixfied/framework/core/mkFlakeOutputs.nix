@@ -118,23 +118,41 @@ let
   localOverrideSpecsJson = builtins.toJSON (map encodeModuleSpec localOverrides);
 
   workspaceMarkerPresent = workspaceMarker.isPresent projectRoot;
-  launcherMetadata = import ./mkLauncherMetadata.nix {
-    inherit
-      lib
-      workspaceMarkerPresent
-      ;
-    model = compiledCore.model;
-    execution = (compiledCore.model.compiled or { }).execution or { };
-  };
-  serviceNames = launcherMetadata.enabledServices;
+  compiledExecution = (compiledCore.model.compiled or { }).execution or { };
+  serviceSurfaceCatalog = (compiledCore.model.compiled or { }).serviceSurfaceCatalog or { };
+  taskExecutionById = compiledExecution.tasks.byId or { };
+  workflowExecutionById = compiledExecution.workflows.byId or { };
+  viewAppNames = builtins.sort builtins.lessThan (
+    builtins.attrNames (compiledCore.model.views.apps or { })
+  );
+  selectorDispatcherAppNames = [
+    "run-task"
+    "run-workflow"
+    "run-workflow-parallel"
+  ];
+  nonSelectorAppNames = [
+    "framework::install"
+    "framework::upgrade"
+  ];
+  runtimeProxyAppNames = if workspaceMarkerPresent then [ ] else nonSelectorAppNames;
+  serviceNames = compiledExecution.enabledServices or [ ];
   runtimeControlAppNames = [
     "runs"
     "stop-run"
     "stop-all-runs"
   ];
-  viewWrappedAppNames = launcherMetadata.viewWrappedAppNames;
-  serviceWrappedAppNames = launcherMetadata.serviceWrappedAppNames;
-  runtimeAppNames = launcherMetadata.runtimeAppNames;
+  viewWrappedAppNames = builtins.sort builtins.lessThan (
+    builtins.filter (appName: !(builtins.elem appName nonSelectorAppNames)) (
+      lib.unique (viewAppNames ++ selectorDispatcherAppNames)
+    )
+  );
+  serviceWrappedAppNames = builtins.sort builtins.lessThan (serviceSurfaceCatalog.appNames or [ ]);
+  runtimeAppNames = builtins.sort builtins.lessThan (
+    lib.unique (
+      runtimeProxyAppNames
+      ++ builtins.filter (appName: builtins.elem appName nonSelectorAppNames) viewAppNames
+    )
+  );
   internalBaseTargetName =
     appName: "base${builtins.substring 0 10 (builtins.hashString "sha256" appName)}";
 
@@ -148,132 +166,15 @@ let
     map (serviceName: "    ${lib.escapeShellArg serviceName}") serviceNames
   );
 
-  taskIds = launcherMetadata.taskIds;
-  appModels = compiledCore.model.apps or { };
-
-  taskAppIds =
-    taskId:
-    builtins.sort builtins.lessThan (
-      builtins.filter (
-        appId:
-        let
-          app = appModels.${appId};
-        in
-        (app.kind or "") == "taskRef" && (app.taskId or "") == taskId
-      ) (builtins.attrNames appModels)
-    );
-
-  preferredTaskApp =
-    taskId:
-    let
-      appIds = taskAppIds taskId;
-    in
-    if appIds == [ ] then null else appModels.${builtins.head appIds};
-
-  normalizeTaskArgSpec =
-    spec:
-    let
-      hasLong = (spec ? long) && spec.long != null && spec.long != "";
-      hasShort = (spec ? short) && spec.short != null && spec.short != "";
-      kind =
-        if (spec ? kind) && spec.kind != null then
-          spec.kind
-        else if hasLong || hasShort then
-          "option"
-        else
-          "positional";
-    in
-    {
-      inherit kind;
-      long = if hasLong then spec.long else "";
-      short = if hasShort then spec.short else "";
-      type = if (spec ? type) && spec.type != null && spec.type != "" then toString spec.type else "";
-      values = if (spec ? values) && spec.values != null then map toString spec.values else [ ];
-      description = if (spec ? description) && spec.description != null then spec.description else "";
-    };
-
-  formatTaskArgHelpLine =
-    spec:
-    let
-      tokens =
-        (lib.optionals (spec.short != "") [ spec.short ])
-        ++ (lib.optionals (spec.long != "") [ spec.long ]);
-      valueLabel =
-        if spec.kind != "option" then
-          ""
-        else if spec.values != [ ] then
-          "<${builtins.concatStringsSep "|" spec.values}>"
-        else if spec.type != "" then
-          "<${spec.type}>"
-        else
-          "<value>";
-      descriptionSuffix = if spec.description != "" then ": ${spec.description}" else "";
-    in
-    "  ${builtins.concatStringsSep ", " tokens}${
-        lib.optionalString (valueLabel != "") " ${valueLabel}"
-      }${descriptionSuffix}";
-
-  renderTaskHelpText =
-    taskId:
-    let
-      task = compiledCore.model.tasks.${taskId};
-      app = preferredTaskApp taskId;
-      commandApi = task.commandApi or { };
-      specs = map normalizeTaskArgSpec (commandApi.args or [ ]);
-      displayName = if app == null then taskId else app.id or taskId;
-      usageLines =
-        let
-          configuredUsage = if app == null then [ ] else app.usage or [ ];
-        in
-        if configuredUsage != [ ] then configuredUsage else [ "nix run .#run-task -- ${taskId} [-- ...]" ];
-      exampleLines = if app == null then [ ] else app.examples or [ ];
-      optionLines = map formatTaskArgHelpLine specs ++ [
-        "  -h, --help: Show this help."
-      ];
-      summary =
-        if app == null then
-          commandApi.summary or task.summary or ""
-        else
-          app.summary or commandApi.summary or task.summary or "";
-      description =
-        if app == null then
-          commandApi.details or task.description or ""
-        else
-          app.description or commandApi.details or task.description or "";
-    in
-    builtins.concatStringsSep "\n" (
-      [ "${displayName} - ${summary}" ]
-      ++ lib.optionals (description != "") [
-        ""
-        description
-      ]
-      ++ [
-        ""
-        "Usage:"
-      ]
-      ++ map (line: "  ${line}") usageLines
-      ++ [
-        ""
-        "Options:"
-      ]
-      ++ optionLines
-      ++ lib.optionals (exampleLines != [ ]) (
-        [
-          ""
-          "Examples:"
-        ]
-        ++ map (line: "  ${line}") exampleLines
-      )
-    );
-
-  taskHelpFiles = builtins.listToAttrs (
-    map (taskId: {
-      name = taskId;
-      value = pkgs.writeText "nixfied-task-help-${builtins.substring 0 10 (builtins.hashString "sha256" taskId)}.txt" ''
-        ${renderTaskHelpText taskId}
-      '';
-    }) taskIds
-  );
+  taskIds =
+    compiledExecution.taskIds
+      or (builtins.sort builtins.lessThan (builtins.attrNames taskExecutionById));
+  taskHelpFiles = builtins.mapAttrs (
+    taskId: taskExecution:
+    pkgs.writeText "nixfied-task-help-${builtins.substring 0 10 (builtins.hashString "sha256" taskId)}.txt" ''
+      ${builtins.concatStringsSep "\n" (((taskExecution.help or { }).lines or [ ]))}
+    ''
+  ) taskExecutionById;
 
   mkStaticHelpFile =
     name: text:
@@ -322,12 +223,22 @@ let
     '') taskIds
   );
 
-  workflowIds = launcherMetadata.workflowIds;
-  workflowModesByFamily = launcherMetadata.workflowModesByFamily;
-  workflowFamilies = launcherMetadata.workflowFamilies;
-  taskBaseClosureCsvById = launcherMetadata.taskBaseClosureCsvById;
-  taskRunnerWorkflowIdById = launcherMetadata.taskRunnerWorkflowIdById;
-  workflowClosureCsvById = launcherMetadata.workflowClosureCsvById;
+  workflowIds =
+    compiledExecution.workflowIds
+      or (builtins.sort builtins.lessThan (builtins.attrNames workflowExecutionById));
+  workflowModesByFamily = compiledExecution.workflowModesByFamily or { };
+  workflowFamilies =
+    compiledExecution.workflowFamilies
+      or (builtins.sort builtins.lessThan (builtins.attrNames workflowModesByFamily));
+  taskBaseClosureCsvById = builtins.mapAttrs (
+    _: taskExecution: taskExecution.baseClosureServicesCsv or ""
+  ) taskExecutionById;
+  taskRunnerWorkflowIdById = builtins.mapAttrs (
+    _: taskExecution: taskExecution.runnerWorkflowId or ""
+  ) taskExecutionById;
+  workflowClosureCsvById = builtins.mapAttrs (
+    _: workflowExecution: workflowExecution.closureServicesCsv or ""
+  ) workflowExecutionById;
   serviceSetServicesCsvById = builtins.mapAttrs (
     _: serviceSet: builtins.concatStringsSep "," (serviceSet.services.all or [ ])
   ) (compiledCore.serviceSets or { });

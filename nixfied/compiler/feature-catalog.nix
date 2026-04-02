@@ -114,7 +114,6 @@
     ];
     ownerFiles = [
       "nixfied/framework/core/mkServiceRuntimeSurfaces.nix"
-      "nixfied/framework/core/service-api.nix"
       "nixfied/framework/runtime/env-sandbox.nix"
     ];
     modelPaths = [ "services" ];

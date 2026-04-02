@@ -1,12 +1,14 @@
 { pkgs }:
 let
-  serviceApi = import ../../nixfied/framework/core/service-api.nix { inherit pkgs; };
+  mkServiceRuntimeSurfaces = import ../../nixfied/framework/core/mkServiceRuntimeSurfaces.nix;
+  commandApi = import ../../nixfied/framework/core/command-api.nix { inherit pkgs; };
   serviceContractValidation = import ../../nixfied/framework/core/service-contract-validation.nix {
     inherit pkgs;
   };
   runtimePrimitives = import ../../nixfied/framework/core/runtime-primitives.nix { };
   shellHelpers = import ./lib/shell-helpers.nix { inherit pkgs; };
   serviceRuntimePrimitives = runtimePrimitives.mkServiceRuntimePrimitivesV1 { };
+  inherit (commandApi) mkCommandApi;
 
   prepareScript = pkgs.writeShellScript "service-op-prepare" ''
     set -euo pipefail
@@ -87,16 +89,19 @@ let
     };
   };
 
-  demoImplementation = {
-    version = 1;
-    operations = {
-      prepare = prepareScript;
-      start = mainScript;
-      finalize = finalizeScript;
-      stop = stopScript;
-      status = statusScript;
-    };
-  };
+  demoImplementationModule = pkgs.writeText "demo-service-implementation.nix" ''
+    { pkgs, slots, project }:
+    {
+      version = 1;
+      operations = {
+        prepare = ${prepareScript};
+        start = ${mainScript};
+        finalize = ${finalizeScript};
+        stop = ${stopScript};
+        status = ${statusScript};
+      };
+    }
+  '';
 
   mkDemoOperationMetadata =
     opName: opCfg:
@@ -106,6 +111,7 @@ let
           opCfg.appName
         else
           "svc::demo::${opName}";
+      category = if (opCfg.category or "") != "" then opCfg.category else "demo";
     in
     {
       inherit appName;
@@ -113,7 +119,7 @@ let
       includeApp = opCfg.exposeApp or true;
       includeHook = opCfg.exposeHook or true;
       usage = opCfg.usage or [ "nix run .#${appName}" ];
-      category = if (opCfg.category or "") != "" then opCfg.category else "demo";
+      inherit category;
       class = opCfg.class or "passthrough";
       idempotent = opCfg.idempotent or false;
       summary = opCfg.summary;
@@ -121,35 +127,87 @@ let
       examples = opCfg.examples or [ ];
       args = opCfg.args or [ ];
       env = opCfg.env or [ ];
+      commandApi =
+        (mkCommandApi {
+          class = opCfg.class or "passthrough";
+          name = appName;
+          summary = opCfg.summary;
+          details = opCfg.details or "";
+          usage = opCfg.usage or [ "nix run .#${appName}" ];
+          examples = opCfg.examples or [ ];
+          args = opCfg.args or [ ];
+          env = opCfg.env or [ ];
+          inherit category;
+          idempotent = opCfg.idempotent or false;
+        }).commandApi;
     };
 
   demoOperationCatalog = {
     demo = builtins.mapAttrs mkDemoOperationMetadata demoContract.operations;
   };
 
-  demoOps = serviceApi.collectServiceOpsFromCatalog {
-    serviceContracts = {
-      demo = demoContract;
+  demoRuntimeSurfaces = mkServiceRuntimeSurfaces {
+    inherit pkgs;
+    model = {
+      identity = {
+        projectId = "demo";
+      };
+      runtime = {
+        ports = { };
+        env = {
+          offsets = {
+            dev = 0;
+          };
+          var = "PROJECT_ENV";
+          default = "dev";
+          names = [ "dev" ];
+        };
+        slot = {
+          var = "NIX_ENV";
+          default = 0;
+          stride = 100;
+          max = 8;
+        };
+        directories = {
+          base = "/tmp/nixfied-demo";
+        };
+        logging = {
+          levelDefault = "info";
+          outputDefault = "stdout";
+        };
+      };
+      state = {
+        policy = {
+          artifactsRoot = "/tmp/nixfied-demo/artifacts";
+        };
+      };
     };
-    operationCatalog = demoOperationCatalog;
-    serviceImplementations = {
-      demo = demoImplementation;
+    services = {
+      demo = {
+        enable = true;
+        name = "demo";
+        config = {
+          dataDirName = "demo";
+        };
+      };
+    };
+    serviceSurfaceCatalog = {
+      serviceApis = {
+        demo = demoContract;
+      };
+      operationCatalog = demoOperationCatalog;
+    };
+    serviceDefinitions = {
+      demo = {
+        implementation = {
+          module = demoImplementationModule;
+        };
+      };
     };
   };
-
-  findOp = opName: builtins.head (builtins.filter (op: op.opName == opName) demoOps);
-
-  startOp = findOp "start";
-  restartOp = findOp "restart";
-  hookEnv = serviceApi.mkServiceHookEnvFromCatalog {
-    serviceContracts = {
-      demo = demoContract;
-    };
-    operationCatalog = demoOperationCatalog;
-    serviceImplementations = {
-      demo = demoImplementation;
-    };
-  };
+  hookEnv = demoRuntimeSurfaces.serviceHookEnv;
+  startProgram = hookEnv.SVC_DEMO_START;
+  restartProgram = hookEnv.SVC_DEMO_RESTART;
 
   unknownRefContract = mkContract {
     start = {
@@ -217,9 +275,11 @@ pkgs.runCommand "service-op-composition-contract" { } ''
   ${shellHelpers.shellPrelude}
 
   export COMPOSITION_LOG="$TMPDIR/composition.log"
+  export LOG_LEVEL=info
+  export OUTPUT_MODE=stdout
   : > "$COMPOSITION_LOG"
 
-  "${startOp.launcher}" alpha beta > "$TMPDIR/start.out" 2>&1 || {
+  "${startProgram}" alpha beta > "$TMPDIR/start.out" 2>&1 || {
     cat "$TMPDIR/start.out" >&2
     fail "start launcher should succeed"
   }
@@ -233,7 +293,7 @@ pkgs.runCommand "service-op-composition-contract" { } ''
 
   : > "$COMPOSITION_LOG"
 
-  "${restartOp.launcher}" ignored > "$TMPDIR/restart.out" 2>&1 || {
+  "${restartProgram}" ignored > "$TMPDIR/restart.out" 2>&1 || {
     cat "$TMPDIR/restart.out" >&2
     fail "restart launcher should succeed"
   }

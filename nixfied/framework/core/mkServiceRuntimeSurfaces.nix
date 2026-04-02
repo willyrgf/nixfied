@@ -11,6 +11,16 @@ let
   listUtils = import ./list-utils.nix;
   commonRuntimeShell = import ../runtime/common-runtime.nix { inherit pkgs; };
   shellJson = import ./shell-json.nix { };
+  serviceContractValidation = import ./service-contract-validation.nix { inherit pkgs; };
+  runtimePrimitiveDefaults = import ./runtime-primitives.nix { };
+  inherit (serviceContractValidation)
+    sortedAttrNames
+    validateServiceImplementations
+    ;
+  inherit (runtimePrimitiveDefaults)
+    runtimeLogLevelDefault
+    runtimeOutputModeDefault
+    ;
 
   tokenLib = import ./normalize-token.nix { inherit lib; };
   normalizeToken = tokenLib.normalizeToken;
@@ -397,12 +407,6 @@ let
       ;
     helpersScript = commandRuntime.commandHelpersScript;
   };
-  serviceApi = import ./service-api.nix {
-    inherit
-      pkgs
-      shellContract
-      ;
-  };
   runtimeEvents = import ./runtime-events.nix {
     inherit
       pkgs
@@ -417,7 +421,111 @@ let
       ;
   };
 
-  serviceApiCatalogEntries =
+  contractOps = contract: contract.operations or { };
+  opPreRefs = op: op.preOps or [ ];
+  opPostRefs = op: op.postOps or [ ];
+  sanitizeScriptToken = x: lib.replaceStrings [ "/" ":" "." " " ] [ "-" "-" "-" "-" ] x;
+  launcherNameFor =
+    serviceName: opName: "service-op-${sanitizeScriptToken serviceName}-${sanitizeScriptToken opName}";
+  runtimeScriptFor =
+    {
+      opName,
+      opCfg,
+      implementationOps,
+    }:
+    let
+      runtimeOp = opCfg.runtimeOp or opName;
+    in
+    if runtimeOp == null || runtimeOp == "" then null else implementationOps.${runtimeOp} or null;
+  buildExecutionPlan =
+    {
+      serviceName,
+      ops,
+      implementationOps,
+      opName,
+      passArgs ? true,
+    }:
+    let
+      opCfg = ops.${opName};
+      currentScript = runtimeScriptFor {
+        inherit
+          opName
+          opCfg
+          implementationOps
+          ;
+      };
+      mkNestedPlan =
+        ref:
+        buildExecutionPlan {
+          inherit
+            serviceName
+            ops
+            implementationOps
+            ;
+          opName = ref;
+          passArgs = false;
+        };
+      currentStep =
+        if currentScript == null then
+          [ ]
+        else
+          [
+            {
+              inherit
+                opName
+                passArgs
+                ;
+              script = currentScript;
+            }
+          ];
+    in
+    builtins.concatLists (map mkNestedPlan (opPreRefs opCfg))
+    ++ currentStep
+    ++ builtins.concatLists (map mkNestedPlan (opPostRefs opCfg));
+  mkServiceOpLauncher =
+    {
+      serviceName,
+      opName,
+      plan,
+      runtimePrimitives,
+    }:
+    let
+      logLevelDefault = runtimePrimitives.logLevel.default or runtimeLogLevelDefault;
+      outputModeDefault = runtimePrimitives.outputMode.default or runtimeOutputModeDefault;
+      renderPlanStep =
+        step: if step.passArgs then ''${toString step.script} "$@"'' else "${toString step.script}";
+    in
+    pkgs.writeShellScript (launcherNameFor serviceName opName) ''
+      set -euo pipefail
+
+      source ${toString shellContract.runtime}
+      nixfied_contract_resolve_runtime_primitives "${logLevelDefault}" "${outputModeDefault}"
+
+      ${builtins.concatStringsSep "\n" (map renderPlanStep plan)}
+    '';
+  mkServiceHookEnv =
+    ops:
+    let
+      pairs = map (op: {
+        name = op.hookName;
+        value = toString op.launcher;
+      }) (builtins.filter (op: op.includeHook) ops);
+      dedup =
+        acc: pair:
+        if builtins.hasAttr pair.name acc then
+          throw "Nixfied service contract hook name collision: ${pair.name}"
+        else
+          acc
+          // (builtins.listToAttrs [
+            {
+              name = pair.name;
+              value = pair.value;
+            }
+          ]);
+    in
+    builtins.foldl' dedup { } pairs;
+
+  serviceContractsFromCatalog =
     let
       requestedServiceNames = builtins.map (entry: entry.name) serviceEntries;
       compiledServiceApis =
@@ -461,7 +569,7 @@ let
       throw "nixfied service runtime implementation for '${serviceName}' defines duplicate operations: ${builtins.concatStringsSep ", " duplicateOps}";
 
   serviceImplementations = builtins.mapAttrs (
-    serviceName: contract:
+    serviceName: _contract:
     let
       serviceDefinition = serviceDefinitions.${serviceName} or null;
       implementationModule =
@@ -492,21 +600,83 @@ let
       operations = mergeImplementationOperations serviceName (importedImplementation.operations or { }
       ) observabilityOps;
     }
-  ) serviceApiCatalogEntries;
+  ) serviceContractsFromCatalog;
 
-  serviceApis = serviceApiCatalogEntries;
+  serviceApis = serviceContractsFromCatalog;
+  validatedServiceImplementations = validateServiceImplementations {
+    serviceContracts = serviceApis;
+    inherit serviceImplementations;
+  };
   serviceOperationCatalogEntries = builtins.listToAttrs (
     map (serviceName: {
       name = serviceName;
       value = serviceSurfaceCatalog.operationCatalog.${serviceName};
     }) (builtins.attrNames serviceApis)
   );
-  serviceOps = serviceApi.collectServiceOpsFromCatalog {
-    serviceContracts = serviceApis;
-    operationCatalog = serviceOperationCatalogEntries;
-    inherit serviceImplementations;
-  };
-  serviceHookEnv = serviceApi.mkServiceHookEnv serviceOps;
+  serviceRuntimeOps =
+    let
+      serviceNames = sortedAttrNames serviceApis;
+      toOps =
+        serviceName:
+        let
+          contract = serviceApis.${serviceName};
+          ops = contractOps contract;
+          implementationOps = validatedServiceImplementations.${serviceName}.operations;
+          opCatalog = serviceOperationCatalogEntries.${serviceName} or { };
+          opNamesSorted = sortedAttrNames ops;
+          missingCatalogOps = builtins.filter (opName: !(builtins.hasAttr opName opCatalog)) opNamesSorted;
+        in
+        if missingCatalogOps != [ ] then
+          throw ''
+            Nixfied service surface catalog is missing operation entries for "${serviceName}":
+            ${builtins.concatStringsSep ", " missingCatalogOps}
+          ''
+        else
+          map (
+            opName:
+            let
+              opCfg = ops.${opName};
+              opMetadata = opCatalog.${opName};
+              opRuntimePrimitives = contract.runtimePrimitives;
+              plan = buildExecutionPlan {
+                inherit
+                  serviceName
+                  ops
+                  implementationOps
+                  opName
+                  ;
+              };
+            in
+            {
+              inherit
+                serviceName
+                opName
+                opCfg
+                plan
+                opMetadata
+                ;
+              appName = opMetadata.appName;
+              hookName = opMetadata.hookName;
+              includeApp = opMetadata.includeApp or false;
+              usage = opMetadata.usage or [ "nix run .#${opMetadata.appName}" ];
+              category = opMetadata.category or serviceName;
+              class = opMetadata.class or "passthrough";
+              idempotent = opMetadata.idempotent or false;
+              includeHook = opMetadata.includeHook or false;
+              runtimePrimitives = opRuntimePrimitives;
+              launcher = mkServiceOpLauncher {
+                inherit
+                  serviceName
+                  opName
+                  plan
+                  ;
+                runtimePrimitives = opRuntimePrimitives;
+              };
+            }
+          ) opNamesSorted;
+    in
+    builtins.concatLists (map toOps serviceNames);
+  serviceHookEnv = mkServiceHookEnv serviceRuntimeOps;
   mkServiceRuntimeApp =
     op:
     toString (
@@ -525,7 +695,7 @@ let
     map (op: {
       name = op.appName;
       value = mkServiceRuntimeApp op;
-    }) (builtins.filter (op: op.includeApp) serviceOps)
+    }) (builtins.filter (op: op.includeApp) serviceRuntimeOps)
   );
 in
 {
