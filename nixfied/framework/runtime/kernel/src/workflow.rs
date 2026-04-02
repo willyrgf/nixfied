@@ -98,8 +98,9 @@ pub(crate) fn mark_failed_unit<U: WorkflowUnitStateCommon>(
 
 pub(crate) fn workflow_command(subcommand: &str, values: &[String]) -> Result<(), String> {
     match subcommand {
+        "export" => workflow_export_command(values),
+        "unit-closure-selected-services" => workflow_unit_closure_selected_services_command(values),
         "env-names" => workflow_env_names_command(values),
-        "handoff" => workflow_handoff_command(values),
         "resolve-mode" => workflow_resolve_mode_command(values),
         "run" => workflow_run_command(values),
         other => Err(format!("unknown workflow subcommand: {}", other)),
@@ -172,22 +173,11 @@ fn workflow_resolve_mode_command(values: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-fn workflow_handoff_command(values: &[String]) -> Result<(), String> {
-    if values.len() != 3 {
-        return Err(
-            "usage: nixfied-kernel workflow handoff <execution-source-file> <workflow-id> <output-dir>"
-                .to_string(),
-        );
-    }
-
-    let metadata = load_execution_metadata(&values[0])?;
-    let workflow_id = &values[1];
-    let output_dir = &values[2];
-    let workflow = execution_workflow(&metadata, workflow_id)?;
+fn workflow_exports(workflow_id: &str, workflow: &JsonValue) -> Vec<(String, String)> {
     let logging = object_field(workflow, "logging")
         .cloned()
         .unwrap_or_else(|| json!({}));
-    let exports = vec![
+    vec![
         ("NIXFIED_WORKFLOW_ID".to_string(), workflow_id.to_string()),
         (
             "NIXFIED_WORKFLOW_MODE_NAME".to_string(),
@@ -246,12 +236,38 @@ fn workflow_handoff_command(values: &[String]) -> Result<(), String> {
                 "false".to_string()
             },
         ),
-    ];
-    write_shell_exports(&format!("{}/exports.sh", output_dir), &exports)?;
-    write_lines_atomic(
-        &format!("{}/unit-closure-selected-services.txt", output_dir),
-        &array_strings(workflow, "unitClosureSelectedServices"),
-    )?;
+    ]
+}
+
+fn workflow_export_command(values: &[String]) -> Result<(), String> {
+    if values.len() != 2 {
+        return Err(
+            "usage: nixfied-kernel workflow export <execution-source-file> <workflow-id>"
+                .to_string(),
+        );
+    }
+
+    let metadata = load_execution_metadata(&values[0])?;
+    let workflow = execution_workflow(&metadata, &values[1])?;
+    let exports = workflow_exports(&values[1], workflow);
+    print!("{}", render_shell_exports(&exports));
+    Ok(())
+}
+
+fn workflow_unit_closure_selected_services_command(values: &[String]) -> Result<(), String> {
+    if values.len() != 2 {
+        return Err(
+            "usage: nixfied-kernel workflow unit-closure-selected-services <execution-source-file> <workflow-id>"
+                .to_string(),
+        );
+    }
+
+    let metadata = load_execution_metadata(&values[0])?;
+    let workflow = execution_workflow(&metadata, &values[1])?;
+    print!(
+        "{}",
+        render_lines(&array_strings(workflow, "unitClosureSelectedServices"))
+    );
     Ok(())
 }
 

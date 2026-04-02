@@ -246,13 +246,11 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           local task_id="$1"
           shift
 
-          local task_handoff_dir=""
           local runner_type=""
           local workflow_id=""
           local mode_override=""
           local resolved_workflow_id=""
 
-          task_handoff_dir="$(task_handoff_ensure "$task_id")" || return 1
           task_handoff_use "$task_id" || return 1
           runner_type="$NIXFIED_TASK_RUNNER_TYPE"
           if [ "$runner_type" = "workflowRef" ]; then
@@ -264,10 +262,9 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           fi
 
           {
-            cat "$task_handoff_dir/base-closure-selected-services.txt"
+            task_base_closure_selected_services "$task_id"
             if [ -n "$resolved_workflow_id" ]; then
-              workflow_handoff_use "$resolved_workflow_id" || return 1
-              cat "$NIXFIED_WORKFLOW_HANDOFF_CURRENT_DIR/unit-closure-selected-services.txt"
+              workflow_unit_closure_selected_services "$resolved_workflow_id"
             fi
           } | selected_services_csv_from_lines
         }
@@ -314,16 +311,8 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           local phase="$2"
           shift 2
 
-          local task_handoff_dir=""
-          local hook_ids_file=""
-          local hook_dir=""
           local hook_id
-          local hook_command
-          local hook_runtime_plan_shell
           local hook_exit_code
-
-          task_handoff_dir="$(task_handoff_ensure "$task_id")" || return 3
-          hook_ids_file="$task_handoff_dir/$phase-hook-ids.txt"
 
           while IFS= read -r hook_id; do
             if [ -z "$hook_id" ]; then
@@ -331,13 +320,8 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
             fi
 
             echo "INFO: hook $phase $hook_id start"
-            hook_dir="$task_handoff_dir/hooks/$phase/$hook_id"
-            [ -f "$hook_dir/exports.sh" ] || return 3
-            . "$hook_dir/exports.sh"
-            hook_command="$NIXFIED_TASK_HOOK_COMMAND"
-            hook_runtime_plan_shell="$(cat "$hook_dir/runtime-plan.sh")" || return 3
-
-            run_in_sandbox_runtime "$hook_runtime_plan_shell" "$hook_command" "$@"
+            task_hook_use "$task_id" "$phase" "$hook_id" || return 3
+            run_in_sandbox_runtime "$NIXFIED_TASK_HOOK_RUNTIME_PLAN_SHELL" "$NIXFIED_TASK_HOOK_COMMAND" "$@"
             hook_exit_code="$?"
             if [ "$hook_exit_code" -ne 0 ]; then
               echo "ERROR: hook $phase $hook_id failed exitCode=$hook_exit_code"
@@ -345,7 +329,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
             fi
 
             echo "OK: hook $phase $hook_id done"
-          done < "$hook_ids_file"
+          done < <(task_hook_ids "$task_id" "$phase")
 
           return 0
         }
@@ -363,19 +347,15 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         task_retry_backoff_for_attempt() {
           local task_id="$1"
           local retry_index="$2"
-          local task_handoff_dir=""
-          local backoff_file=""
           local backoff_value=""
           local -a backoff_values=()
 
           task_handoff_use "$task_id" || return 1
-          task_handoff_dir="$NIXFIED_TASK_HANDOFF_CURRENT_DIR"
-          backoff_file="$task_handoff_dir/retry-backoff-values.txt"
 
           while IFS= read -r backoff_value; do
             [ -n "$backoff_value" ] || continue
             backoff_values+=("$backoff_value")
-          done < "$backoff_file"
+          done < <(task_retry_backoff_values "$task_id")
 
           if [ "''${#backoff_values[@]}" -eq 0 ]; then
             printf '%s' "0"
@@ -405,7 +385,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
             echo "ERROR: task '$task_id' defines runtime hooks but runner type '$runner_type' is unsupported"
             return 3
           fi
-          runtime_plan_shell="$(cat "$NIXFIED_TASK_HANDOFF_CURRENT_DIR/runtime-plan.sh")" || return 3
+          runtime_plan_shell="$(task_runtime_plan_shell "$task_id")" || return 3
 
           set +e
           case "$runner_type" in
