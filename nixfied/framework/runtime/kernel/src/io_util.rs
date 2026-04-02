@@ -34,10 +34,6 @@ pub(crate) fn write_shell_exports(path: &str, values: &[(String, String)]) -> Re
     write_text_atomic(path, &rendered)
 }
 
-pub(crate) fn write_lines_atomic(path: &str, lines: &[String]) -> Result<(), String> {
-    write_text_atomic(path, &render_lines(lines))
-}
-
 pub(crate) fn render_shell_exports(values: &[(String, String)]) -> String {
     let mut rendered = String::new();
     for (key, value) in values {

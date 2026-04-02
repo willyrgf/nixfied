@@ -239,10 +239,6 @@ let
         ;
     };
 
-    "executor-contract" = import ./executor-contract.nix {
-      inherit pkgs;
-    };
-
     "env-sandbox-contract" = import ./env-sandbox-contract.nix {
       inherit pkgs;
     };
@@ -618,10 +614,6 @@ let
     };
 
     "nginx-site-management-smoke" = import ./nginx-site-management-smoke.nix {
-      inherit pkgs;
-    };
-
-    "orchestrator-lifecycle-contract" = import ./orchestrator-lifecycle-contract.nix {
       inherit pkgs;
     };
 

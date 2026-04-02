@@ -9,7 +9,13 @@ use std::process::{self, Command};
 
 pub(crate) fn task_command(subcommand: &str, values: &[String]) -> Result<(), String> {
     match subcommand {
-        "handoff" => task_handoff_command(values),
+        "export" => task_export_command(values),
+        "help" => task_help_command(values),
+        "runtime-plan" => task_runtime_plan_command(values),
+        "base-closure-selected-services" => task_base_closure_selected_services_command(values),
+        "retry-backoff-values" => task_retry_backoff_values_command(values),
+        "hook-ids" => task_hook_ids_command(values),
+        "hook-export" => task_hook_export_command(values),
         "env-names" => task_env_names_command(values),
         "run" => task_run_command(values),
         "validate-args" => task_validate_args_command(values),
@@ -123,30 +129,16 @@ fn task_validate_args_command(values: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-fn task_handoff_command(values: &[String]) -> Result<(), String> {
-    if values.len() != 3 {
-        return Err(
-            "usage: nixfied-kernel task handoff <execution-source-file> <task-id> <output-dir>"
-                .to_string(),
-        );
-    }
-
-    let metadata = load_execution_metadata(&values[0])?;
-    let task_id = &values[1];
-    let output_dir = &values[2];
-    let task = execution_task(&metadata, task_id)?;
+fn task_exports(task_id: &str, task: &JsonValue) -> Result<Vec<(String, String)>, String> {
     let runner = object_field(task, "runner")
         .ok_or_else(|| format!("runtime task '{}' missing object field runner", task_id))?;
     let hooks = object_field(task, "hooks")
         .ok_or_else(|| format!("runtime task '{}' missing object field hooks", task_id))?;
-    let help = object_field(task, "help")
-        .cloned()
-        .unwrap_or_else(|| json!({}));
     let produces = object_field(task, "produces")
         .cloned()
         .unwrap_or_else(|| json!({}));
 
-    let exports = vec![
+    Ok(vec![
         ("NIXFIED_TASK_ID".to_string(), task_id.to_string()),
         (
             "NIXFIED_TASK_RUNNER_TYPE".to_string(),
@@ -187,60 +179,151 @@ fn task_handoff_command(values: &[String]) -> Result<(), String> {
             "NIXFIED_TASK_PRODUCES_JSON".to_string(),
             render_json_compact(&produces),
         ),
-    ];
+    ])
+}
 
-    write_shell_exports(&format!("{}/exports.sh", output_dir), &exports)?;
-    write_text_atomic(
-        &format!("{}/runtime-plan.sh", output_dir),
-        object_string(task, "runtimePlanShell").unwrap_or(""),
-    )?;
-    write_lines_atomic(
-        &format!("{}/help.txt", output_dir),
-        &array_strings(&help, "lines"),
-    )?;
-    write_lines_atomic(
-        &format!("{}/base-closure-selected-services.txt", output_dir),
-        &array_strings(task, "baseClosureSelectedServices"),
-    )?;
-    write_lines_atomic(
-        &format!("{}/retry-backoff-values.txt", output_dir),
-        &task_retry_backoff_values(task),
-    )?;
-    write_lines_atomic(
-        &format!("{}/pre-hook-ids.txt", output_dir),
-        &array_strings(hooks, "preIds"),
-    )?;
-    write_lines_atomic(
-        &format!("{}/post-hook-ids.txt", output_dir),
-        &array_strings(hooks, "postIds"),
-    )?;
+fn task_hook_exports(hook: &JsonValue) -> Vec<(String, String)> {
+    vec![
+        (
+            "NIXFIED_TASK_HOOK_COMMAND".to_string(),
+            object_string(hook, "command").unwrap_or("").to_string(),
+        ),
+        (
+            "NIXFIED_TASK_HOOK_RUNTIME_PLAN_SHELL".to_string(),
+            object_string(hook, "runtimePlanShell")
+                .unwrap_or("")
+                .to_string(),
+        ),
+    ]
+}
 
-    task_write_hook_handoffs(output_dir, hooks, "pre")?;
-    task_write_hook_handoffs(output_dir, hooks, "post")?;
+fn task_hook_phase<'a>(hooks: &'a JsonValue, phase_key: &str) -> Result<&'a JsonValue, String> {
+    object_field(hooks, phase_key)
+        .ok_or_else(|| format!("runtime task hooks missing object field {}", phase_key))
+}
+
+fn task_hook_phase_ids_key(phase_key: &str) -> Result<&'static str, String> {
+    match phase_key {
+        "pre" => Ok("preIds"),
+        "post" => Ok("postIds"),
+        other => Err(format!("unsupported task hook phase '{}'", other)),
+    }
+}
+
+fn task_export_command(values: &[String]) -> Result<(), String> {
+    if values.len() != 2 {
+        return Err(
+            "usage: nixfied-kernel task export <execution-source-file> <task-id>".to_string(),
+        );
+    }
+
+    let metadata = load_execution_metadata(&values[0])?;
+    let task = execution_task(&metadata, &values[1])?;
+    let exports = task_exports(&values[1], task)?;
+    print!("{}", render_shell_exports(&exports));
     Ok(())
 }
 
-fn task_write_hook_handoffs(
-    output_dir: &str,
-    hooks: &JsonValue,
-    phase_key: &str,
-) -> Result<(), String> {
-    let phase_hooks = object_field(hooks, phase_key)
-        .and_then(JsonValue::as_object)
+fn task_help_command(values: &[String]) -> Result<(), String> {
+    if values.len() != 2 {
+        return Err(
+            "usage: nixfied-kernel task help <execution-source-file> <task-id>".to_string(),
+        );
+    }
+
+    let metadata = load_execution_metadata(&values[0])?;
+    let task = execution_task(&metadata, &values[1])?;
+    let help = object_field(task, "help")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    print!("{}", render_lines(&array_strings(&help, "lines")));
+    Ok(())
+}
+
+fn task_runtime_plan_command(values: &[String]) -> Result<(), String> {
+    if values.len() != 2 {
+        return Err(
+            "usage: nixfied-kernel task runtime-plan <execution-source-file> <task-id>".to_string(),
+        );
+    }
+
+    let metadata = load_execution_metadata(&values[0])?;
+    let task = execution_task(&metadata, &values[1])?;
+    print!("{}", object_string(task, "runtimePlanShell").unwrap_or(""));
+    Ok(())
+}
+
+fn task_base_closure_selected_services_command(values: &[String]) -> Result<(), String> {
+    if values.len() != 2 {
+        return Err(
+            "usage: nixfied-kernel task base-closure-selected-services <execution-source-file> <task-id>"
+                .to_string(),
+        );
+    }
+
+    let metadata = load_execution_metadata(&values[0])?;
+    let task = execution_task(&metadata, &values[1])?;
+    print!(
+        "{}",
+        render_lines(&array_strings(task, "baseClosureSelectedServices"))
+    );
+    Ok(())
+}
+
+fn task_retry_backoff_values_command(values: &[String]) -> Result<(), String> {
+    if values.len() != 2 {
+        return Err(
+            "usage: nixfied-kernel task retry-backoff-values <execution-source-file> <task-id>"
+                .to_string(),
+        );
+    }
+
+    let metadata = load_execution_metadata(&values[0])?;
+    let task = execution_task(&metadata, &values[1])?;
+    print!("{}", render_lines(&task_retry_backoff_values(task)));
+    Ok(())
+}
+
+fn task_hook_ids_command(values: &[String]) -> Result<(), String> {
+    if values.len() != 3 {
+        return Err(
+            "usage: nixfied-kernel task hook-ids <execution-source-file> <task-id> <pre|post>"
+                .to_string(),
+        );
+    }
+
+    let metadata = load_execution_metadata(&values[0])?;
+    let task = execution_task(&metadata, &values[1])?;
+    let hooks = object_field(task, "hooks")
+        .ok_or_else(|| format!("runtime task '{}' missing object field hooks", values[1]))?;
+    let ids_key = task_hook_phase_ids_key(&values[2])?;
+    print!("{}", render_lines(&array_strings(hooks, ids_key)));
+    Ok(())
+}
+
+fn task_hook_export_command(values: &[String]) -> Result<(), String> {
+    if values.len() != 4 {
+        return Err(
+            "usage: nixfied-kernel task hook-export <execution-source-file> <task-id> <pre|post> <hook-id>"
+                .to_string(),
+        );
+    }
+
+    let metadata = load_execution_metadata(&values[0])?;
+    let task = execution_task(&metadata, &values[1])?;
+    let hooks = object_field(task, "hooks")
+        .ok_or_else(|| format!("runtime task '{}' missing object field hooks", values[1]))?;
+    let phase_hooks = task_hook_phase(hooks, &values[2])?
+        .as_object()
         .cloned()
         .unwrap_or_default();
-    for (hook_id, hook) in phase_hooks {
-        let hook_dir = format!("{}/hooks/{}/{}", output_dir, phase_key, hook_id);
-        let exports = vec![(
-            "NIXFIED_TASK_HOOK_COMMAND".to_string(),
-            object_string(&hook, "command").unwrap_or("").to_string(),
-        )];
-        write_shell_exports(&format!("{}/exports.sh", hook_dir), &exports)?;
-        write_text_atomic(
-            &format!("{}/runtime-plan.sh", hook_dir),
-            object_string(&hook, "runtimePlanShell").unwrap_or(""),
-        )?;
-    }
+    let hook = phase_hooks.get(&values[3]).ok_or_else(|| {
+        format!(
+            "unknown task hook '{}:{}:{}'",
+            values[1], values[2], values[3]
+        )
+    })?;
+    print!("{}", render_shell_exports(&task_hook_exports(hook)));
     Ok(())
 }
 

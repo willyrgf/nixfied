@@ -7,9 +7,7 @@ in
   ${commonRuntimeShell}
 
   NIXFIED_TASK_HANDOFF_CURRENT_ID=""
-  NIXFIED_TASK_HANDOFF_CURRENT_DIR=""
   NIXFIED_WORKFLOW_HANDOFF_CURRENT_ID=""
-  NIXFIED_WORKFLOW_HANDOFF_CURRENT_DIR=""
   LOGGING_FILTERED_ARGS=()
   MACHINE_FILTERED_ARGS=()
   MACHINE_RUN_ID_FILE=""
@@ -35,115 +33,91 @@ in
     return 1
   }
 
-  runtime_handoff_root() {
-    if [ -z "''${NIXFIED_RUNTIME_HANDOFF_ROOT:-}" ]; then
-      NIXFIED_RUNTIME_HANDOFF_ROOT="$(mktemp -d "''${TMPDIR:-/tmp}/nixfied-runtime-handoff.XXXXXX")" || {
-        echo "ERROR: failed to create runtime handoff cache"
-        return 1
-      }
-      export NIXFIED_RUNTIME_HANDOFF_ROOT
+  eval_kernel_exports() {
+    local export_text="$1"
+
+    if [ -z "$export_text" ]; then
+      echo "ERROR: kernel export stream is empty"
+      return 1
     fi
 
-    printf '%s' "$NIXFIED_RUNTIME_HANDOFF_ROOT"
+    eval "$export_text"
   }
 
-  runtime_handoff_key() {
-    local key="$1"
-    key="''${key//\//_}"
-    key="''${key//:/_}"
-    printf '%s' "$key"
+  task_export_text() {
+    ${kernelPackage}/bin/nixfied-kernel task export "$NIXFIED_MODEL_FILE" "$1"
   }
 
-  task_handoff_dir() {
+  workflow_export_text() {
+    ${kernelPackage}/bin/nixfied-kernel workflow export "$NIXFIED_MODEL_FILE" "$1"
+  }
+
+  task_descriptor_exists() {
+    task_export_text "$1" >/dev/null 2>&1
+  }
+
+  task_print_help() {
+    ${kernelPackage}/bin/nixfied-kernel task help "$NIXFIED_MODEL_FILE" "$1"
+  }
+
+  task_runtime_plan_shell() {
+    ${kernelPackage}/bin/nixfied-kernel task runtime-plan "$NIXFIED_MODEL_FILE" "$1"
+  }
+
+  task_base_closure_selected_services() {
+    ${kernelPackage}/bin/nixfied-kernel task base-closure-selected-services "$NIXFIED_MODEL_FILE" "$1"
+  }
+
+  task_retry_backoff_values() {
+    ${kernelPackage}/bin/nixfied-kernel task retry-backoff-values "$NIXFIED_MODEL_FILE" "$1"
+  }
+
+  task_hook_ids() {
+    ${kernelPackage}/bin/nixfied-kernel task hook-ids "$NIXFIED_MODEL_FILE" "$1" "$2"
+  }
+
+  task_hook_use() {
     local task_id="$1"
-    local root=""
-    root="$(runtime_handoff_root)" || return 1
-    printf '%s/tasks/%s' "$root" "$(runtime_handoff_key "$task_id")"
-  }
+    local phase="$2"
+    local hook_id="$3"
+    local export_text=""
 
-  workflow_handoff_dir() {
-    local workflow_id="$1"
-    local root=""
-    root="$(runtime_handoff_root)" || return 1
-    printf '%s/workflows/%s' "$root" "$(runtime_handoff_key "$workflow_id")"
-  }
-
-  task_handoff_ensure() {
-    local task_id="$1"
-    local dir=""
-    local ready_file=""
-
-    dir="$(task_handoff_dir "$task_id")" || return 1
-    ready_file="$dir/.ready"
-    if [ ! -f "$ready_file" ]; then
-      mkdir -p "$dir" || return 1
-      if ! ${kernelPackage}/bin/nixfied-kernel task handoff "$NIXFIED_MODEL_FILE" "$task_id" "$dir"; then
-        return 1
-      fi
-      : > "$ready_file"
-    fi
-
-    printf '%s' "$dir"
-  }
-
-  workflow_handoff_ensure() {
-    local workflow_id="$1"
-    local dir=""
-    local ready_file=""
-
-    dir="$(workflow_handoff_dir "$workflow_id")" || return 1
-    ready_file="$dir/.ready"
-    if [ ! -f "$ready_file" ]; then
-      mkdir -p "$dir" || return 1
-      if ! ${kernelPackage}/bin/nixfied-kernel workflow handoff "$NIXFIED_MODEL_FILE" "$workflow_id" "$dir"; then
-        return 1
-      fi
-      : > "$ready_file"
-    fi
-
-    printf '%s' "$dir"
+    export_text="$(${kernelPackage}/bin/nixfied-kernel task hook-export "$NIXFIED_MODEL_FILE" "$task_id" "$phase" "$hook_id")" || return 1
+    eval_kernel_exports "$export_text"
   }
 
   task_handoff_use() {
     local task_id="$1"
-    local dir=""
+    local export_text=""
 
-    if [ "$NIXFIED_TASK_HANDOFF_CURRENT_ID" = "$task_id" ] && [ -n "$NIXFIED_TASK_HANDOFF_CURRENT_DIR" ]; then
+    if [ "$NIXFIED_TASK_HANDOFF_CURRENT_ID" = "$task_id" ]; then
       return 0
     fi
 
-    dir="$(task_handoff_ensure "$task_id")" || return 1
-    . "$dir/exports.sh"
+    export_text="$(task_export_text "$task_id")" || return 1
+    eval_kernel_exports "$export_text" || return 1
     NIXFIED_TASK_HANDOFF_CURRENT_ID="$task_id"
-    NIXFIED_TASK_HANDOFF_CURRENT_DIR="$dir"
   }
 
   workflow_handoff_use() {
     local workflow_id="$1"
-    local dir=""
+    local export_text=""
 
-    if [ "$NIXFIED_WORKFLOW_HANDOFF_CURRENT_ID" = "$workflow_id" ] && [ -n "$NIXFIED_WORKFLOW_HANDOFF_CURRENT_DIR" ]; then
+    if [ "$NIXFIED_WORKFLOW_HANDOFF_CURRENT_ID" = "$workflow_id" ]; then
       return 0
     fi
 
-    dir="$(workflow_handoff_ensure "$workflow_id")" || return 1
-    . "$dir/exports.sh"
+    export_text="$(workflow_export_text "$workflow_id")" || return 1
+    eval_kernel_exports "$export_text" || return 1
     NIXFIED_WORKFLOW_HANDOFF_CURRENT_ID="$workflow_id"
-    NIXFIED_WORKFLOW_HANDOFF_CURRENT_DIR="$dir"
-  }
-
-  task_descriptor_exists() {
-    task_handoff_ensure "$1" >/dev/null 2>&1
   }
 
   workflow_id_exists() {
     workflow_resolve_mode_id "$1" "" >/dev/null 2>&1
   }
 
-  task_print_help() {
-    local dir=""
-    dir="$(task_handoff_ensure "$1")" || return 1
-    cat "$dir/help.txt"
+  workflow_unit_closure_selected_services() {
+    ${kernelPackage}/bin/nixfied-kernel workflow unit-closure-selected-services "$NIXFIED_MODEL_FILE" "$1"
   }
 
   task_validate_args() {
