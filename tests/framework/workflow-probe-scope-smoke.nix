@@ -124,12 +124,16 @@ let
     model = compiled.model;
     services = compiled.services;
     projectRoot = ../..;
-    inherit (runtimeFixture.runtimeMaterialization {
-      inherit pkgs;
-      model = compiled.model;
-      services = compiled.services;
-      serviceDefinitions = compiled.serviceDefinitions;
-    }) serviceHookEnv serviceSetPrograms;
+    inherit
+      (runtimeFixture.runtimeMaterialization {
+        inherit pkgs;
+        model = compiled.model;
+        services = compiled.services;
+        serviceDefinitions = compiled.serviceDefinitions;
+      })
+      serviceHookEnv
+      serviceSetPrograms
+      ;
   };
 in
 assert

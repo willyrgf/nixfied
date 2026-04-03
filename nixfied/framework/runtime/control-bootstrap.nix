@@ -1,4 +1,9 @@
-{ pkgs, model, projectRoot, modelFile }:
+{
+  pkgs,
+  model,
+  projectRoot,
+  modelFile,
+}:
 let
   kernelPackage = import ./kernel { inherit pkgs; };
 in
