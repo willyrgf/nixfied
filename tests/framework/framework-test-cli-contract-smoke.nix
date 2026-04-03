@@ -6,7 +6,7 @@
   registry,
 }:
 let
-  frameworkTestShardCatalog = import ./framework-test-shards.nix;
+  frameworkTestShardCatalog = import ./framework-test-catalog.nix;
   featureProofShardNames = builtins.filter (
     shardName: (frameworkTestShardCatalog.profileShardChecks."feature-proof".${shardName} or [ ]) != [ ]
   ) frameworkTestShardCatalog.order;

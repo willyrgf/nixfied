@@ -13,8 +13,8 @@ nix run .#framework::test
 `framework::test` is a first-class framework preset task defined in `nixfied/framework/presets/framework-test.nix`.
 It is organized around the current ownership model instead of the deleted shell-heavy control layers.
 
-The authoritative check registry lives in `tests/framework/default.nix`.
-The authoritative shard catalog lives in `tests/framework/framework-test-shards.nix`.
+The authoritative check registry and shard catalog live in `tests/framework/framework-test-catalog.nix`.
+`tests/framework/default.nix` is a thin projection over that catalog.
 This README is an overview, not the canonical full check list.
 
 ## Profiles
@@ -63,7 +63,7 @@ nix run .#framework::test -- --profile ci --summary-json /tmp/framework-test-sum
 
 Use `tests/framework/default.nix` as the source of truth for the complete registered check list and exact check names.
 
-Use `tests/framework/framework-test-shards.nix` as the source of truth for:
+Use `tests/framework/framework-test-catalog.nix` as the source of truth for:
 
 - shard order
 - shard membership
