@@ -40,6 +40,18 @@ let
       pkgs.writeText "nixfied-orchestrator-model.json" (builtins.toJSON model)
     else
       null;
+  controlBootstrapShell =
+    if executionEnabled then
+      import ./control-bootstrap.nix {
+        inherit
+          pkgs
+          model
+          projectRoot
+          modelFile
+          ;
+      }
+    else
+      "";
   executor =
     if executionEnabled then
       import ./executor.nix {
@@ -115,41 +127,17 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
   ${shellCommon}
   export NIXFIED_ORCHESTRATOR_BIN="$0"
   export NIXFIED_ORCHESTRATOR_SELF="$0"
-  ${lib.optionalString executionEnabled ''
-    MODEL_FILE=${lib.escapeShellArg (builtins.toString modelFile)}
-    export NIXFIED_MODEL_FILE="$MODEL_FILE"
-  ''}
 
   ${lib.optionalString executionEnabled ''
     EXECUTOR_PROGRAM=${lib.escapeShellArg "${executor}/bin/nixfied-executor"}
     export NIXFIED_EXECUTOR_BIN="$EXECUTOR_PROGRAM"
     EPHEMERAL_EXECUTOR_WRAPPER=${lib.escapeShellArg (builtins.toString ephemeralExecutorWrapper)}
   ''}
-  PROJECT_ROOT=${lib.escapeShellArg (builtins.toString projectRoot)}
-  REGISTRY_ROOT_DEFAULT="${model.state.policy.registryRoot}"
-  ARTIFACTS_ROOT_DEFAULT="${model.state.policy.artifactsRoot}"
-  if [ -n "''${NIXFIED_RUNTIME_REGISTRY_ROOT+x}" ]; then
-    REGISTRY_ROOT_DEFAULT="$NIXFIED_RUNTIME_REGISTRY_ROOT"
-  elif [ -n "''${NIXFIED_RUNTIME_DIR_BASE+x}" ]; then
-    REGISTRY_ROOT_DEFAULT="$NIXFIED_RUNTIME_DIR_BASE/registry"
-  fi
-  if [ -n "''${NIXFIED_RUNTIME_ARTIFACTS_DIR+x}" ]; then
-    ARTIFACTS_ROOT_DEFAULT="$NIXFIED_RUNTIME_ARTIFACTS_DIR"
-  elif [ -n "''${NIXFIED_RUNTIME_DIR_BASE+x}" ]; then
-    ARTIFACTS_ROOT_DEFAULT="$NIXFIED_RUNTIME_DIR_BASE/artifacts"
-  fi
-  if [ -n "''${REGISTRY_ROOT+x}" ]; then
-    REGISTRY_ROOT_EXPLICIT=1
-  else
-    REGISTRY_ROOT_EXPLICIT=0
-  fi
-  REGISTRY_ROOT="''${REGISTRY_ROOT:-$REGISTRY_ROOT_DEFAULT}"
+  ${controlBootstrapShell}
 
   RUNS_DIR="$REGISTRY_ROOT/orchestrator/runs"
   RUN_LOCKS_DIR="$REGISTRY_ROOT/orchestrator/locks"
   RUN_LOG_DIR="$REGISTRY_ROOT/orchestrator/logs"
-  RUN_ID_ACTIVE_ROOT="$REGISTRY_ROOT/active"
-  RUN_ID_COUNTER_ROOT="$REGISTRY_ROOT/counters"
   SETSID_BIN=${lib.escapeShellArg setsidBin}
   ORCHESTRATOR_STOP_TIMEOUT_SEC_DEFAULT=${lib.escapeShellArg (toString model.runtime.orchestrator.stopTimeoutSec)}
 
@@ -171,20 +159,6 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
   FOREGROUND_SIGNAL_NAME=""
   RUN_SUFFIX_REASON=""
 
-  sha256_text() {
-    printf '%s' "$1" | ${pkgs.coreutils}/bin/sha256sum | ${pkgs.gawk}/bin/awk '{print $1}'
-  }
-
-  compute_attempt_id() {
-    local attempt_dir
-    local attempt_name
-
-    attempt_dir="$(mktemp -d "''${TMPDIR:-/tmp}/nixfied-attempt.XXXXXX")" || return 1
-    attempt_name="$(basename "$attempt_dir")"
-    rmdir "$attempt_dir"
-    printf '%s' "attempt-''${attempt_name#nixfied-attempt.}"
-  }
-
   write_args_list_file() {
     local target_file="$1"
     shift
@@ -194,10 +168,6 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
       printf '%s\n' "$1" >> "$target_file" || return 1
       shift
     done
-  }
-
-  kernel_event_detail() {
-    ${kernelPackage}/bin/nixfied-kernel event-detail render "$@"
   }
 
   filter_run_id_args() {
