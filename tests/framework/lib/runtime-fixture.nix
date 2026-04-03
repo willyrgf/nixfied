@@ -36,6 +36,7 @@ let
     {
       model,
       services,
+      pkgs ? null,
       serviceDefinitions ? null,
       resolvedServices ? null,
     }:

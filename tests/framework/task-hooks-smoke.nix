@@ -5,7 +5,7 @@
   registry,
 }:
 let
-  withCompiledExecution = import ./lib/with-compiled-execution.nix { inherit pkgs; };
+  runtimeFixture = import ./lib/runtime-fixture.nix { inherit pkgs; };
   baseTask = model.tasks."task.check";
 
   mkShellTask =
@@ -34,7 +34,7 @@ let
       };
     };
 
-  hooksModel = withCompiledExecution (
+  hooksModel = runtimeFixture.withCompiledExecution (
     model
     // {
       tasks = model.tasks // {

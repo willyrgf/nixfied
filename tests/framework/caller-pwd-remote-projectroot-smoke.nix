@@ -5,7 +5,7 @@
   registry,
 }:
 let
-  withCompiledExecution = import ./lib/with-compiled-execution.nix { inherit pkgs; };
+  runtimeFixture = import ./lib/runtime-fixture.nix { inherit pkgs; };
   baseTask = model.tasks."task.ci.quality";
 
   probeTaskId = "task.test.caller-pwd.remote-projectroot";
@@ -26,7 +26,7 @@ let
     };
   };
 
-  probeModel = withCompiledExecution (
+  probeModel = runtimeFixture.withCompiledExecution (
     model
     // {
       tasks = model.tasks // {

@@ -5,7 +5,7 @@
   registry,
 }:
 let
-  withCompiledExecution = import ./lib/with-compiled-execution.nix { inherit pkgs; };
+  runtimeFixture = import ./lib/runtime-fixture.nix { inherit pkgs; };
   baseTask = model.tasks."task.ci.quality";
 
   failTaskId = "task.test.ephemeral.retention.fail";
@@ -80,7 +80,7 @@ let
     ];
   };
 
-  withRetentionModel = withCompiledExecution (
+  withRetentionModel = runtimeFixture.withCompiledExecution (
     model
     // {
       runtime = model.runtime // {
@@ -100,7 +100,7 @@ let
     }
   );
 
-  noRetentionModel = withCompiledExecution (
+  noRetentionModel = runtimeFixture.withCompiledExecution (
     model
     // {
       runtime = model.runtime // {

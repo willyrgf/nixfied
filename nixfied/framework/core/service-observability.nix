@@ -125,29 +125,6 @@ let
     }
   '';
 
-  mkLogEventExtensions =
-    {
-      service,
-      summaryName,
-      logScript,
-      eventsScript,
-    }:
-    {
-      log = {
-        script = logScript;
-        hook = "LOG";
-        summary = "Show ${summaryName} log";
-        details = "Shows ${summaryName} runtime log for the current slot/environment.";
-        usage = [ "nix run .#svc::${service}::log -- [--lines N] [--follow]" ];
-      };
-      events = {
-        script = eventsScript;
-        hook = "EVENTS";
-        summary = "Show ${summaryName} lifecycle events";
-        details = "Shows ${summaryName} lifecycle events from the global process registry for the current slot/environment.";
-        usage = [ "nix run .#svc::${service}::events -- [--limit N]" ];
-      };
-    };
 in
 {
   inherit
@@ -156,6 +133,5 @@ in
     mkStatusMergeBlock
     mkStatusLine
     mkEmitServiceEventFunction
-    mkLogEventExtensions
     ;
 }

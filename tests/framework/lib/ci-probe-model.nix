@@ -4,7 +4,7 @@
   disableEphemeralWorkflows ? [ ],
 }:
 let
-  withCompiledExecution = import ./with-compiled-execution.nix { inherit pkgs; };
+  runtimeFixture = import ./runtime-fixture.nix { inherit pkgs; };
   probeQualityPkg = pkgs.writeShellScriptBin "ci-quality-probe" ''
     set -euo pipefail
     artifacts_dir="''${CI_ARTIFACTS_DIR:-$REGISTRY_ROOT/artifacts/manual}"
@@ -24,7 +24,7 @@ let
       };
     };
 in
-withCompiledExecution (
+runtimeFixture.withCompiledExecution (
   model
   // {
     tasks = model.tasks // {

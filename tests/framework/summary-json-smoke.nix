@@ -13,8 +13,8 @@ let
       ;
     disableEphemeralWorkflows = [ "workflow.ci.basic" ];
   };
-  runtimeMaterialization = import ./lib/runtime-materialization.nix;
-  runtimeDeps = runtimeMaterialization {
+  runtimeFixture = import ./lib/runtime-fixture.nix { inherit pkgs; };
+  runtimeDeps = runtimeFixture.runtimeMaterialization {
     inherit
       pkgs
       services

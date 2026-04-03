@@ -19,19 +19,13 @@ let
   workspaceMarker = import ../workspace-marker.nix;
   workspaceMarkerPresent = workspaceMarker.isPresent projectRoot;
   compiledExecution = (model.compiled or { }).execution or { };
-  taskExecutionById = (compiledExecution.tasks or { }).byId or { };
-  taskHelpFiles = builtins.mapAttrs (
-    taskId: taskExecution:
-    pkgs.writeText "nixfied-task-help-${builtins.substring 0 10 (builtins.hashString "sha256" taskId)}.txt" ''
-      ${builtins.concatStringsSep "\n" (((taskExecution.help or { }).lines or [ ]))}
-    ''
-  ) taskExecutionById;
-  taskHelpFileFor =
-    taskId:
-    if builtins.hasAttr taskId taskHelpFiles then
-      builtins.toString taskHelpFiles.${taskId}
-    else
-      throw "dispatcher: missing compiled task help file for '${taskId}'";
+  taskHelpSupport = import ../core/mkTaskHelpFiles.nix {
+    inherit
+      pkgs
+      compiledExecution
+      ;
+  };
+  taskHelpFileFor = taskHelpSupport.taskHelpFileFor;
 
   orchestrator = import ./orchestrator.nix {
     inherit

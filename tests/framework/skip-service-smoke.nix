@@ -4,7 +4,7 @@
 }:
 let
   lib = pkgs.lib;
-  withCompiledExecution = import ./lib/with-compiled-execution.nix { inherit pkgs; };
+  runtimeFixture = import ./lib/runtime-fixture.nix { inherit pkgs; };
   frameworkLib = import ../../nixfied/framework/core {
     inherit pkgs;
     system = pkgs.system;
@@ -61,7 +61,7 @@ let
   skipService = "postgres";
   skipEnvVar = "SKIP_${lib.toUpper skipService}";
 
-  probeModel = withCompiledExecution (
+  probeModel = runtimeFixture.withCompiledExecution (
     compiled.model
     // {
       serviceCatalog = compiled.model.serviceCatalog // {
