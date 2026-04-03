@@ -8,7 +8,7 @@ let
     system = pkgs.system;
   };
   shellHelpers = import ./lib/shell-helpers.nix { inherit pkgs; };
-  runtimeMaterialization = import ./lib/runtime-materialization.nix;
+  runtimeFixture = import ./lib/runtime-fixture.nix { inherit pkgs; };
 
   taskId = "task.test.run-id.semantic";
   workflowId = "workflow.test.run-id.semantic";
@@ -69,7 +69,7 @@ let
   mkOrchestrator =
     compiled:
     let
-      runtimeDeps = runtimeMaterialization {
+      runtimeDeps = runtimeFixture.runtimeMaterialization {
         inherit pkgs;
         model = compiled.model;
         services = compiled.services;

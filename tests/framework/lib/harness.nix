@@ -7,11 +7,10 @@
   projectRoot ? ../../..,
 }:
 let
-  withCompiledExecution = import ./with-compiled-execution.nix { inherit pkgs; };
-  runtimeMaterialization = import ./runtime-materialization.nix;
+  runtimeFixture = import ./runtime-fixture.nix { inherit pkgs; };
   shellHelpers = import ./shell-helpers.nix { inherit pkgs; };
-  harnessModel = withCompiledExecution model;
-  runtimeDeps = runtimeMaterialization {
+  harnessModel = runtimeFixture.withCompiledExecution model;
+  runtimeDeps = runtimeFixture.runtimeMaterialization {
     inherit
       pkgs
       services

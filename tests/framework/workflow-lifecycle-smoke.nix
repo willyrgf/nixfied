@@ -6,8 +6,7 @@
   registry,
 }:
 let
-  withCompiledExecution = import ./lib/with-compiled-execution.nix { inherit pkgs; };
-  runtimeMaterialization = import ./lib/runtime-materialization.nix;
+  runtimeFixture = import ./lib/runtime-fixture.nix { inherit pkgs; };
   baseTask = model.tasks."task.check";
 
   mkShellTask =
@@ -98,7 +97,7 @@ let
       ];
     };
 
-  lifecycleModel = withCompiledExecution (
+  lifecycleModel = runtimeFixture.withCompiledExecution (
     model
     // {
       tasks = model.tasks // {
@@ -172,7 +171,7 @@ let
       };
     }
   );
-  runtimeDeps = runtimeMaterialization {
+  runtimeDeps = runtimeFixture.runtimeMaterialization {
     inherit
       pkgs
       services

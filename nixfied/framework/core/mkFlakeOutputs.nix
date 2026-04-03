@@ -165,15 +165,14 @@ let
     map (serviceName: "    ${lib.escapeShellArg serviceName}") serviceNames
   );
 
-  taskIds =
-    compiledExecution.taskIds
-      or (builtins.sort builtins.lessThan (builtins.attrNames taskExecutionById));
-  taskHelpFiles = builtins.mapAttrs (
-    taskId: taskExecution:
-    pkgs.writeText "nixfied-task-help-${builtins.substring 0 10 (builtins.hashString "sha256" taskId)}.txt" ''
-      ${builtins.concatStringsSep "\n" (((taskExecution.help or { }).lines or [ ]))}
-    ''
-  ) taskExecutionById;
+  taskHelpSupport = import ./mkTaskHelpFiles.nix {
+    inherit
+      pkgs
+      compiledExecution
+      ;
+  };
+  taskIds = taskHelpSupport.taskIds;
+  taskHelpFiles = taskHelpSupport.taskHelpFiles;
 
   mkStaticHelpFile =
     name: text:
@@ -212,15 +211,6 @@ let
         -h, --help: Show this help.
     '';
   };
-
-  renderTaskHelpCases = builtins.concatStringsSep "\n" (
-    map (taskId: ''
-      ${lib.escapeShellArg taskId})
-        cat ${lib.escapeShellArg (builtins.toString taskHelpFiles.${taskId})}
-        return 0
-        ;;
-    '') taskIds
-  );
 
   compiledExecutionFile = pkgs.writeText "nixfied-compiled-execution.json" (
     builtins.toJSON compiledExecution
@@ -397,7 +387,7 @@ let
                 print_fast_task_help() {
                   local task_id="$1"
                   case "$task_id" in
-        ${renderTaskHelpCases}
+        ${taskHelpSupport.renderTaskHelpCases}
                     *)
                       return 1
                       ;;
@@ -700,7 +690,7 @@ let
         if [ "$#" -gt 0 ]; then
           case "$1" in
             --help|-h)
-              cat ${lib.escapeShellArg (builtins.toString taskHelpFiles."task.framework.install")}
+              cat ${lib.escapeShellArg (taskHelpSupport.taskHelpFileFor "task.framework.install")}
               exit 0
               ;;
           esac
@@ -717,7 +707,7 @@ let
         if [ "$#" -gt 0 ]; then
           case "$1" in
             --help|-h)
-              cat ${lib.escapeShellArg (builtins.toString taskHelpFiles."task.framework.upgrade")}
+              cat ${lib.escapeShellArg (taskHelpSupport.taskHelpFileFor "task.framework.upgrade")}
               exit 0
               ;;
           esac
@@ -791,7 +781,7 @@ let
                 if [ "$#" -gt 0 ]; then
                   case "$1" in
                     --help|-h)
-                      cat ${lib.escapeShellArg (builtins.toString taskHelpFiles."task.framework.test")}
+                      cat ${lib.escapeShellArg (taskHelpSupport.taskHelpFileFor "task.framework.test")}
                       exit 0
                       ;;
                   esac

@@ -5,7 +5,7 @@
   registry,
 }:
 let
-  withCompiledExecution = import ./lib/with-compiled-execution.nix { inherit pkgs; };
+  runtimeFixture = import ./lib/runtime-fixture.nix { inherit pkgs; };
   baseTask = model.tasks."task.ci.quality";
 
   okTaskId = "task.test.ephemeral.copy-budget.ok";
@@ -79,7 +79,7 @@ let
     ];
   };
 
-  minFreeModel = withCompiledExecution (
+  minFreeModel = runtimeFixture.withCompiledExecution (
     model
     // {
       runtime = model.runtime // {
@@ -99,7 +99,7 @@ let
     }
   );
 
-  maxCopyModel = withCompiledExecution (
+  maxCopyModel = runtimeFixture.withCompiledExecution (
     model
     // {
       runtime = model.runtime // {
