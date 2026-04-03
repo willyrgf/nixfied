@@ -120,7 +120,6 @@ let
   workspaceMarkerPresent = workspaceMarker.isPresent projectRoot;
   compiledExecution = (compiledCore.model.compiled or { }).execution or { };
   serviceSurfaceCatalog = (compiledCore.model.compiled or { }).serviceSurfaceCatalog or { };
-  taskExecutionById = compiledExecution.tasks.byId or { };
   viewAppNames = builtins.sort builtins.lessThan (
     builtins.attrNames (compiledCore.model.views.apps or { })
   );
@@ -171,7 +170,6 @@ let
       compiledExecution
       ;
   };
-  taskIds = taskHelpSupport.taskIds;
   taskHelpFiles = taskHelpSupport.taskHelpFiles;
 
   mkStaticHelpFile =
