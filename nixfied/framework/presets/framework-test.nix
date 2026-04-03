@@ -9,13 +9,9 @@
 let
   plainShellLogging = import ../core/plain-shell-logging.nix;
   shellCommon = import ../core/shell-common.nix { inherit pkgs; };
-  frameworkTestShardCatalog = import ../../../tests/framework/framework-test-shards.nix;
+  frameworkTestShardCatalog = import ../../../tests/framework/framework-test-catalog.nix;
   frameworkTestShardNames = frameworkTestShardCatalog.order;
-  frameworkTestProfileNames = [
-    "feature-proof"
-    "ci"
-    "full"
-  ];
+  frameworkTestProfileNames = frameworkTestShardCatalog.profileNames;
   renderShellArray =
     values: lib.concatMapStrings (value: "          ${lib.escapeShellArg value}\n") values;
   renderCheckArgsList =
