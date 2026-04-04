@@ -336,7 +336,6 @@ supervise, and query that graph as if they were a second runtime authority.
   - `tests/framework/launcher-help-fast-path-smoke.nix`
   - `tests/framework/dispatcher-help-fast-path-smoke.nix`
   - `tests/framework/framework-install-no-caller-compile-smoke.nix`
-  - `tests/framework/framework-test-no-caller-compile-smoke.nix`
   - `tests/framework/framework-upgrade-no-caller-compile-smoke.nix`
   - `tests/framework/runtime-controls-no-service-materialization-smoke.nix`
   - `tests/framework/flake-show-no-service-materialization-smoke.nix`
@@ -424,8 +423,8 @@ Everything else is a candidate to collapse into one of those.
 | selection and narrowing | compiler only |
 | run inventory | single runtime engine |
 | stop controls | single runtime engine |
-| framework test catalog | `tests/framework/framework-test-catalog.nix` |
-| framework test execution | one `framework::test` runner over the catalog |
+| framework test catalog | `nixfied/framework/testing/catalog.nix` projected into `tests/framework/framework-test-catalog.nix` |
+| framework test execution | one public `test` surface over `workflow.test.<mode>` plus internal `task.test.framework.<profile>.<shard>` debug entrypoints |
 | guarantee harness | `tests/framework` focused on user-facing behavior proofs |
 
 ### Ownership comments

@@ -1,20 +1,20 @@
 # Framework Tests
 
-This directory documents the native framework test surface.
+This directory documents the framework repository test surface.
 
 ## Primary Command
 
 Run from repository root:
 
 ```bash
-nix run .#framework::test
+nix run .#test -- --mode full --summary
 ```
 
-`framework::test` is a first-class framework preset task defined in `nixfied/framework/presets/framework-test.nix`.
-It is organized around the current ownership model instead of the deleted shell-heavy control layers.
+The public source-repo entrypoint is `test`.
+It resolves to the native `workflow.test.<mode>` family through `nixfied/framework/testing/repo-overlay.nix`.
 
-The authoritative check registry and shard catalog live in `tests/framework/framework-test-catalog.nix`.
-`tests/framework/default.nix` is a thin projection over that catalog.
+The authoritative selection catalog lives in `nixfied/framework/testing/catalog.nix`.
+`tests/framework/framework-test-catalog.nix` is a thin projection that adds the concrete flake check imports, and `tests/framework/default.nix` is the final flake-check projection.
 This README is an overview, not the canonical full check list.
 
 ## Profiles
@@ -22,8 +22,8 @@ This README is an overview, not the canonical full check list.
 Available profiles:
 
 - `feature-proof`: run only direct feature proofs
-- `ci`: run canonical feature proofs plus the `compile`, `manifest`, `kernel`, `adapters`, and `migration` shards
-- `full`: run every registered framework check
+- `ci`: run canonical PR coverage
+- `full`: run every registered framework check plus the self-host step
 
 ## Shards
 
@@ -36,18 +36,19 @@ Available shards:
 - `e2e`
 - `migration`
 
-The shards are an execution layout for `framework::test`.
+The shards are an internal execution layout for the source-repo framework workflows.
 They follow the current ownership layers, and `services` is intentionally gone.
+Shard targeting is internal now and exposed through `run-task` rather than a separate public app.
 
 ## Useful Commands
 
 ```bash
-nix run .#framework::test -- --list-shards
-nix run .#framework::test -- --profile feature-proof --summary
-nix run .#framework::test -- --profile full --summary
-nix run .#framework::test -- --shard compile --summary
-nix run .#framework::test -- --shard migration --summary
-nix run .#framework::test -- --profile ci --summary-json /tmp/framework-test-summary.json
+nix run .#test -- --mode feature-proof --summary
+nix run .#test -- --mode ci --summary
+nix run .#test -- --mode full --summary
+nix run .#run-task -- task.test.framework.feature-proof.compile --summary
+nix run .#run-task -- task.test.framework.ci.kernel --summary
+nix run .#run-task -- task.test.framework.full.e2e --summary
 ```
 
 ## Layer Intent
@@ -63,7 +64,7 @@ nix run .#framework::test -- --profile ci --summary-json /tmp/framework-test-sum
 
 Use `tests/framework/default.nix` as the source of truth for the complete registered check list and exact check names.
 
-Use `tests/framework/framework-test-catalog.nix` as the source of truth for:
+Use `nixfied/framework/testing/catalog.nix` as the source of truth for:
 
 - shard order
 - shard membership

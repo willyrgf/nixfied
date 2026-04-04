@@ -5,7 +5,7 @@
 - Keep CLI output plain ASCII and grep-friendly with stable prefixes: `INFO:`, `WARN:`, `ERROR:`, `OK:`, `SKIP:`.
 - Prefer boring, explicit, idempotent behavior; fail fast on invalid config and avoid partial side effects.
 - Keep state isolated to project/ephemeral roots; do not leak secrets in logs.
-- Define project-owned tasks/workflows in `nixfied/project/{tasks,workflows}.nix`; `nixfied/project/module.nix` composes the project layer and framework presets.
+- Define project-owned tasks/workflows in `nixfied/project/{tasks,workflows}.nix`; source-repo framework test composition lives in `nixfied/framework/testing/repo-overlay.nix`.
 - Keep exposed app names lowercase via `nixfied.apps.<name>.name`.
 - When users name a skill (or task clearly matches one), open its `SKILL.md` and follow it for that turn.
 
@@ -24,7 +24,7 @@
 ## Commands
 - `nix run .#help`: list available commands.
 - `nix run .#dev`: dev workflow.
-- `nix run .#test`: tests (defaults to `ci -- --mode full --summary`).
+- `nix run .#test`: framework repository tests (`--mode feature-proof|ci|full` in this repo).
 - `nix run .#build`: build/prod workflow.
 - `nix run .#check`: quality checks.
 - `nix run .#format`: format workflow.
@@ -35,19 +35,19 @@
 - `nix run .#introspect -- <query>`, `nix run .#stateHash`, `nix run .#schema`: introspection surfaces.
 - `nix run .#run-task -- <task-id>` and `nix run .#run-workflow -- <workflow-id>`: dispatcher surfaces.
 - `NIX_ENV` defaults to slot `0`; `PROJECT_ENV` defaults to `dev` unless overridden.
-- Framework-only commands (require a workspace marker; canonical path is repo-root `.workspace`): `framework::test`, `framework::install`.
+- Framework-only commands (require a workspace marker; canonical path is repo-root `.workspace`): `framework::install`.
 
 ## Coding, Testing, and PRs
 - Format Nix: `find . -name '*.nix' -print0 | xargs -0 nixfmt --`.
 - Common checks: `nix flake check && nix flake show && nix run .#help`.
-- Framework tests: `nix run .#framework::test`.
+- Framework tests: `nix run .#test -- --mode full --summary`.
 - Prefer deterministic checks in `tests/framework/` and keep help snapshots current.
 - Keep commits small, imperative, and lowercase (for example, `expand framework test coverage`).
 - PRs should include intent, affected commands/modules, test notes, and config rationale when `nixfied/project/` changes.
 
 ## Configuration
 - Main project config: `nixfied/project/conf.nix`.
-- Task/workflow and app behavior: `nixfied/project/{tasks,workflows}.nix`, composed via `nixfied/project/module.nix`, plus framework-owned presets under `nixfied/framework/presets/`.
+- Task/workflow and app behavior: `nixfied/project/{tasks,workflows}.nix`, composed via `nixfied/project/module.nix`, plus the source-repo test overlay under `nixfied/framework/testing/`.
 - If exposing a new app, define it under `nixfied.apps` and keep `tests/framework/snapshots/help.txt` current.
 
 ## Skills

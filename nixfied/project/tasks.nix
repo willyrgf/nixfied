@@ -8,8 +8,6 @@
   defaultTaskPassThroughEnv,
   nixFormatterPkg,
   frameworkInstallPreset,
-  frameworkTestPreset,
-  frameworkSelfhostPreset,
 }:
 let
   tasks = {
@@ -429,7 +427,6 @@ let
 in
 {
   config = {
-    nixfied.tasks =
-      tasks // frameworkInstallPreset.tasks // frameworkTestPreset.tasks // frameworkSelfhostPreset.tasks;
+    nixfied.tasks = tasks // frameworkInstallPreset.tasks;
   };
 }

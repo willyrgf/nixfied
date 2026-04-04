@@ -9,16 +9,14 @@ assert pkgs.lib.hasInfix
 assert !(pkgs.lib.hasInfix "nix show-config" source);
 assert pkgs.lib.hasInfix "isolation_log_source=\"$CI_DEBUG_DIR/isolation-cell.log\"" source;
 assert pkgs.lib.hasInfix "isolation_logs_dir=\"$CI_DEBUG_DIR/isolation-logs\"" source;
-assert pkgs.lib.hasInfix "framework-shard-compile.log" source;
-assert pkgs.lib.hasInfix "framework-shard-manifest.log" source;
-assert pkgs.lib.hasInfix "framework-shard-kernel.log" source;
-assert pkgs.lib.hasInfix "framework-shard-adapters.log" source;
-assert pkgs.lib.hasInfix "framework-shard-migration.log" source;
-assert pkgs.lib.hasInfix "framework-shard-services.log" source;
-assert pkgs.lib.hasInfix "framework-shard-e2e.log" source;
-assert !(pkgs.lib.hasInfix "framework-shard-flake-check.log" source);
-assert !(pkgs.lib.hasInfix "framework-shard-workflow-ci.log" source);
-assert !(pkgs.lib.hasInfix "framework-shard-self-host.log" source);
+assert pkgs.lib.hasInfix "test-mode-ci.log" source;
+assert pkgs.lib.hasInfix "test-mode-full.log" source;
+assert pkgs.lib.hasInfix "nix run -L -v --log-format bar-with-logs .#test -- --summary --mode ci"
+  source;
+assert pkgs.lib.hasInfix "nix run -L -v --log-format bar-with-logs .#test -- --summary --mode full"
+  source;
+assert !(pkgs.lib.hasInfix "framework-shard-" source);
+assert !(pkgs.lib.hasInfix ".#framework::test" source);
 assert pkgs.lib.hasInfix
   "sed -n 's/^INFO: test-isolation logs_root=//p' \"$isolation_log_source\" | tail -n 1"
   source;
@@ -31,5 +29,5 @@ assert pkgs.lib.hasInfix
   "find \"$isolation_logs_dir\" -type f -path '*/registry/events.ndjson' | sort"
   source;
 pkgs.runCommand "nix-ci-workflow-contract" { } ''
-  echo "OK: nix CI workflow keeps shard usage in sync and captures isolation diagnostics" > "$out"
+  echo "OK: nix CI workflow runs the public test modes and captures isolation diagnostics" > "$out"
 ''

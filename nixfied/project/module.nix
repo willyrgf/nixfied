@@ -346,23 +346,6 @@ let
       ;
   };
 
-  frameworkTestPreset = import ../framework/presets/framework-test.nix {
-    inherit
-      lib
-      pkgs
-      conf
-      mkCommandTask
-      mkTaskLauncher
-      ;
-  };
-
-  frameworkSelfhostPreset = import ../framework/presets/selfhost.nix {
-    inherit
-      mkCommandTask
-      commonRuntimeInputs
-      ;
-  };
-
   projectRuntimeModule = import ./runtime.nix {
     inherit
       conf
@@ -392,14 +375,12 @@ let
       defaultTaskPassThroughEnv
       nixFormatterPkg
       frameworkInstallPreset
-      frameworkTestPreset
-      frameworkSelfhostPreset
       ;
   };
 
   workspaceStatePolicyPreset = import ../framework/presets/state-policies/workspace-scoped.nix;
 
-  projectWorkflowsModule = import ./workflows.nix { inherit frameworkSelfhostPreset; };
+  projectWorkflowsModule = import ./workflows.nix;
 in
 {
   imports = [

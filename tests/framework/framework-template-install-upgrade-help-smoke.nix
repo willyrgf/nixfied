@@ -128,7 +128,7 @@ pkgs.runCommand "framework-template-install-upgrade-help-smoke" { } ''
   run_nix_checked "$TMPDIR/upgrade-help.out" "$template_repo" run .#framework::upgrade -- --help
   run_nix_checked "$TMPDIR/upgrade-app-first.out" "${sourceRoot}" run .#framework::upgrade -- --target "$template_repo"
   run_nix_checked "$TMPDIR/upgrade-app-second.out" "${sourceRoot}" run .#framework::upgrade -- --target "$template_repo"
-  run_nix_checked "$TMPDIR/framework-test-help.out" "${sourceRoot}" run .#framework::test -- --help
+  run_nix_checked "$TMPDIR/source-test-help.out" "${sourceRoot}" run .#test -- --help
   require_contains "$TMPDIR/help.out" "Core apps:"
   require_contains "$TMPDIR/help.out" "framework::upgrade - Upgrade vendored wrapper in-place"
   require_not_contains "$TMPDIR/help.out" "framework::install -"
@@ -144,10 +144,11 @@ pkgs.runCommand "framework-template-install-upgrade-help-smoke" { } ''
   require_contains "$TMPDIR/upgrade-app-first.out" "OK: vendored wrapper upgraded at $template_repo/flake.nix"
   require_contains "$TMPDIR/upgrade-app-second.out" "INFO: upgrading vendored wrapper (preserving nixfied/project/ and nixfied/local/)"
   require_contains "$TMPDIR/upgrade-app-second.out" "OK: vendored wrapper upgraded at $template_repo/flake.nix"
-  require_contains "$TMPDIR/framework-test-help.out" "framework::test - Run framework validation in the model"
-  require_contains "$TMPDIR/framework-test-help.out" "Usage:"
-  require_contains "$TMPDIR/framework-test-help.out" "  nix run .#framework::test"
-  require_contains "$TMPDIR/framework-test-help.out" "migration"
+  require_contains "$TMPDIR/source-test-help.out" "test - Run tests"
+  require_contains "$TMPDIR/source-test-help.out" "Usage:"
+  require_contains "$TMPDIR/source-test-help.out" "  nix run .#test -- --mode feature-proof --summary"
+  require_contains "$TMPDIR/source-test-help.out" "feature-proof|ci|full"
+  require_not_contains "$TMPDIR/source-test-help.out" "basic|app|env"
 
   echo "OK: template install/upgrade/help downstream contract is validated" > "$out"
 ''

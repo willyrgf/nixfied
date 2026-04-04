@@ -16,7 +16,6 @@ let
 
   frameworkHiddenApps = [
     "framework::install"
-    "framework::test"
   ];
 
   isFrameworkHiddenApp = appName: builtins.elem appName frameworkHiddenApps;
