@@ -196,6 +196,12 @@ between compile-time truth and runtime truth. The single biggest architectural
 mistake still present is dual runtime ownership: the compiler already knows the
 execution graph, but shell layers still re-select, re-export, re-hydrate,
 supervise, and query that graph as if they were a second runtime authority.
+This RFC should therefore be read as "delete duplicate authorities in the
+middle of the stack", not as "delete service reuse or runtime lifecycle
+guarantees themselves". Public service reuse, `SKIP_<SERVICE>` in env and CI,
+env isolation, artifact placement, process setup, process-group tracking,
+slot-scoped run visibility, and stop behavior are all real product concerns
+that should survive under one owner.
 
 ## 2. Current Stack Truth
 
@@ -392,10 +398,11 @@ five layers only:
 - runtime-handoff as a layer
 - selector launchers as a first-class layer
 - per-app execution-manifest models
-- generated `serviceHookEnv` as an authority
-- generated `serviceSetPrograms` as an authority
-- generated `svcset::*` app platform
-- current ambient `SVC_*` hook transport as a framework-wide contract
+- generated `serviceHookEnv` as a separate authority
+- generated `serviceSetPrograms` as a separate authority
+- duplicate generated service wrapper families as parallel authorities
+- the current ambient `SVC_*` hook transport as a framework-wide implicit
+  contract, if one explicit runtime ABI replaces it
 
 ### Smallest necessary top-level layers starting from product needs
 
@@ -410,18 +417,40 @@ needs only:
 
 Everything else is a candidate to collapse into one of those.
 
+### Product constraints that must survive the deletion
+
+- users still need one supported service-facing interface to reuse, adapt, and
+  customize service setup, configuration, and operations
+- `SKIP_<SERVICE>` in env and CI is a public contract to preserve, even if its
+  implementation owner changes
+- env isolation, artifact placement, process setup, process-group lifecycle,
+  slot-scoped run tracking, and stop semantics are real runtime
+  responsibilities
+- the redesign target is one owner for each concern, not removal of those
+  capabilities
+- per-app execution manifests still look like compatibility transport rather
+  than a product requirement
+- the strongest remaining deletion targets are launcher recompilation,
+  runtime-handoff export and getter transport, duplicate service wrapper
+  platforms, and split runtime control ownership
+
 ## 5. Canonical Ownership Map
 
 | Responsibility | One surviving owner |
 | --- | --- |
 | compiled execution | compiler-owned canonical execution graph |
 | service contracts | typed service modules compiled by `compile-service-surface-catalog.nix` |
-| service runtime materialization | compiler-owned service operation plans embedded in the execution graph |
+| service public surface | one compiler-defined service ABI exposed through one supported packaging and runtime contract |
+| service runtime materialization | compiler-owned service operation plans consumed directly by the runtime engine |
 | task execution | single runtime engine |
 | workflow execution | single runtime engine |
 | help rendering | compiler, from the same execution graph |
-| selection and narrowing | compiler only |
-| run inventory | single runtime engine |
+| selection and narrowing | compiler-owned selection metadata applied by the single runtime engine |
+| service-skip public API (`SKIP_<SERVICE>`) | one normalized invocation contract interpreted once by the single runtime engine |
+| env isolation | single runtime engine |
+| artifact placement | single runtime engine |
+| process setup and process-group lifecycle | single runtime engine |
+| slot-scoped run inventory and visibility | single runtime engine |
 | stop controls | single runtime engine |
 | framework test catalog | `nixfied/framework/testing/catalog.nix` projected into `tests/framework/framework-test-catalog.nix` |
 | framework test execution | one public `test` surface over `workflow.test.<mode>` plus internal `task.test.framework.<profile>.<shard>` debug entrypoints |
@@ -436,11 +465,17 @@ Everything else is a candidate to collapse into one of those.
   - launcher parsing in `mkFlakeOutputs.nix`
   - selected app recompilation in `run-selected-app.nix`
   - kernel selected-service getters
+- invocation-time `SKIP_<SERVICE>` input can stay public, but it should be
+  normalized once and not reinterpreted in launcher glue
 - service runtime materialization should stop being split across:
   - compiler contract compilation
   - framework runtime surface generation
   - shell hook env materialization
   - service-set program generation
+- service reuse itself should not be deleted; only duplicate wrapper families
+  and ambient transport should be targeted
+- env, artifacts, process setup, process-group tracking, and slot-scoped run
+  visibility should stop being split across shell helper layers
 
 ## 6. Deletion Waves
 
@@ -475,7 +510,9 @@ the file-edit level.
 ### Wave 2: delete launcher and selection as a layer
 
 - goal
-  - make app surfacing thin and stop recursing back into Nix for selection
+  - make app surfacing thin, stop recursing back into Nix for selection, and
+    preserve `SKIP_<SERVICE>` as a public input while deleting launcher-side
+    ownership of it
 - whole authorities to delete
   - selector-aware launchers
   - runtime launcher indirection
@@ -491,7 +528,8 @@ the file-edit level.
   - public app names
   - `--exclude-services`
   - `--launcher-help`
-  - launcher sugar based on `SKIP_<SERVICE>`
+  - launcher-side implementation details for `SKIP_<SERVICE>`, while preserving
+    the env and CI contract itself
 - estimated LOC win
   - about `1.0k` to `1.8k`
 - risk
@@ -503,7 +541,8 @@ the file-edit level.
 
 - goal
   - remove the dispatcher plus orchestrator plus executor split and leave one
-    runtime owner
+    runtime owner for execution, env, artifacts, process setup, process-group
+    lifecycle, run inventory, and stop control
 - whole authorities to delete
   - dispatcher
   - runtime-handoff
@@ -519,9 +558,15 @@ the file-edit level.
   - `nixfied/framework/runtime/kernel/src/summary.rs`
 - expected breakages
   - runtime CLI shape
-  - stop control behavior
+  - internal stop-control plumbing
   - run-record write path
   - summary output path
+- required semantics to preserve
+  - env isolation
+  - artifact placement
+  - process setup and process-group tracking
+  - slot-scoped run inventory and framework API visibility
+  - reliable stop semantics
 - estimated LOC win
   - about `2.5k` to `4.5k`
 - risk
@@ -532,28 +577,33 @@ the file-edit level.
 ### Wave 4: collapse service runtime surface generation
 
 - goal
-  - stop treating generated service surfaces as a first-class framework platform
+  - stop treating duplicate generated service surfaces as a first-class
+    framework platform and leave one supported service reuse surface
 - whole authorities to delete
-  - `serviceHookEnv`
-  - generated service app wrappers as a separate ownership layer
-  - generated `serviceSetPrograms`
-  - the `svcset::*` app platform
+  - ambient or generated `serviceHookEnv` as a separate authority
+  - generated service app wrappers as a parallel ownership layer
+  - generated `serviceSetPrograms` as a separate authority
+  - duplicate public service entrypoint families when one narrower service ABI
+    can replace them
 - main write set
   - `nixfied/framework/core/materializeExecution.nix`
   - `nixfied/framework/core/mkServiceRuntimeSurfaces.nix`
   - `nixfied/framework/core/mkServiceSetPrograms.nix`
   - `nixfied/compiler/compile-service-surface-catalog.nix`
 - expected breakages
-  - `svc::*` apps
-  - `svcset::*` apps
-  - `SVC_*` task hook env contract
+  - current `svc::*` or `svcset::*` entrypoint shapes if they are not chosen as
+    the surviving public surface
+  - the current ambient `SVC_*` task hook env transport if it is replaced by
+    explicit runtime inputs
+  - internal wrapper-composition APIs
 - estimated LOC win
   - about `1.5k` to `3.0k`
 - risk
   - very high
 - why it is worth the churn
   - service contracts are now compiler-owned enough that the extra runtime
-    platform layer is more transport than authority
+    platform layer is more transport than authority, but service reuse itself
+    must survive
 
 ### Wave 5: prune seam-freezing tests
 
@@ -657,7 +707,10 @@ Choose this:
 - typed authoring boundary in Nix
 - one compiler that emits one canonical execution graph
 - one runtime engine that owns task execution, workflow execution, service
-  execution, run inventory, stop controls, and summary composition
+  execution, env isolation, artifact placement, process setup, process-group
+  lifecycle, slot-scoped run inventory, stop controls, and summary composition
+- one supported public service surface, not multiple generated wrapper
+  platforms
 - thin flake packaging that only execs the runtime
 - user-facing guarantee tests only
 
@@ -666,6 +719,9 @@ Choose this:
 Yes, major simplification is still available.
 
 No, the remaining stack is not mostly glue overall.
+
+This is a delete-duplicate-authorities RFC, not a delete-service-capabilities
+RFC.
 
 The remaining fat is concentrated in the space between the compiler and the
 runtime, where the repository still pays for:
