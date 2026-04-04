@@ -1,4 +1,4 @@
-{ frameworkSelfhostPreset }:
+{ ... }:
 let
   workflowProbePhases = {
     preRun.serviceSets = [
@@ -396,7 +396,6 @@ in
           emitRegistryEvents = true;
         };
       };
-    }
-    // frameworkSelfhostPreset.workflows;
+    };
   };
 }

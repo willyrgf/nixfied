@@ -41,7 +41,7 @@
           frameworkOutputs = frameworkLib.mkFlakeOutputs {
             projectRoot = ./.;
             projectModules = [ ./nixfied/project/module.nix ];
-            extraModules = [ ];
+            extraModules = [ ./nixfied/framework/testing/repo-overlay.nix ];
             localOverrides = [ ];
             frameworkSourceRevision = frameworkRevision;
           };

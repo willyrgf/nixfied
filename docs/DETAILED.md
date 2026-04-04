@@ -61,7 +61,7 @@ Pure graph exclusion is configured through `nixfied.graph.excludedServices`.
 - Truthy `SKIP_<SERVICE>` env vars are still accepted today as launcher sugar,
   but they are not compiler inputs and are not protected as a long-term
   compatibility surface.
-- The canonical executed proof for that launcher path is `nix run .#framework::test -- --shard launcher-pruning`, which uses a poisoned Helios source override to verify that `SKIP_HELIOS=1` prevents Helios evaluation before selected-app compilation.
+- The canonical executed proof for that launcher path runs through the source-repo framework test workflow surface, for example `nix run .#run-task -- task.test.framework.feature-proof.e2e --summary`, which builds the poisoned-Helios proof in `tests/framework/launcher-skip-service-pruning-smoke.nix`.
 
 ## Canonicalization Rules
 
@@ -181,7 +181,6 @@ Exposed core apps:
 - `dev`
 - `format`
 - `framework::install`
-- `framework::test`
 - `framework::upgrade`
 - `health`
 - `ports`
@@ -272,13 +271,12 @@ Write and lock guarantees:
 
 ## Framework Validation
 
-`framework::test` provides shard execution with configurable parallelism:
+The source repository exposes framework validation through the public `test` app:
 
-- `flake-check`
-- `help`
-- `workflow-ci`
-- `isolation`
-- `self-host`
+- `nix run .#test -- --mode feature-proof`
+- `nix run .#test -- --mode ci`
+- `nix run .#test -- --mode full`
 
-Determinism and contract checks live under `tests/framework/` and are exposed via flake checks.
-The `flake-check` shard evaluates that flake check graph with `nix flake check . --no-build` so `framework::test` does not recursively rebuild workflow-heavy checks that are already covered by the other shards and by direct `nix flake check` usage.
+Those modes resolve to the native `workflow.test.<mode>` family. Internal shard targeting remains available for maintainers through `run-task`, for example `task.test.framework.ci.compile` or `task.test.framework.full.e2e`.
+
+The authoritative coverage catalog lives in `nixfied/framework/testing/catalog.nix`, and `tests/framework/default.nix` projects that catalog into flake `checks`.

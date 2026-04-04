@@ -10,8 +10,8 @@ let
   frameworkOutputs = frameworkLib.mkFlakeOutputs {
     projectRoot = ../..;
     projectModules = [ ../../nixfied/project/module.nix ];
-    extraModules = [ ];
-    localOverrides = [ ];
+    extraModules = [ ../../nixfied/framework/testing/repo-overlay.nix ];
+    localOverrides = [ ./lib/test-probe-overrides.nix ];
   };
 in
 pkgs.runCommand "orchestrator-arg-forwarding-smoke" { } ''
@@ -19,7 +19,8 @@ pkgs.runCommand "orchestrator-arg-forwarding-smoke" { } ''
   ${shellHelpers.shellPrelude}
 
   RUN_TASK_APP="${frameworkOutputs.apps.run-task.program}"
-  FRAMEWORK_TEST_APP="${frameworkOutputs.apps."framework::test".program}"
+  TEST_APP="${frameworkOutputs.apps.test.program}"
+  JQ="${pkgs.jq}/bin/jq"
 
   export REGISTRY_ROOT="$TMPDIR/registry"
   export CI_ARTIFACTS_ROOT="$TMPDIR/ci-artifacts"
@@ -32,9 +33,16 @@ pkgs.runCommand "orchestrator-arg-forwarding-smoke" { } ''
   require_contains "$TMPDIR/run-task.out" "OK: isolation probe complete"
   require_not_contains "$TMPDIR/run-task.err" "jq:"
 
-  "$FRAMEWORK_TEST_APP" --shard manifest > "$TMPDIR/framework-test.out" 2> "$TMPDIR/framework-test.err"
-  require_contains "$TMPDIR/framework-test.out" "OK: framework::test completed"
-  require_not_contains "$TMPDIR/framework-test.err" "jq:"
+  "$TEST_APP" --mode feature-proof --summary --summary-file "$TMPDIR/test.summary.json" > "$TMPDIR/test.out" 2> "$TMPDIR/test.err"
+  require_file "$TMPDIR/test.summary.json"
+  "$JQ" -e '
+    .kind == "workflow-summary"
+    and .payload.workflow_id == "workflow.test.feature-proof"
+    and .payload.mode == "test"
+    and .payload.exit_code == 0
+  ' "$TMPDIR/test.summary.json" > /dev/null
+  require_contains "$TMPDIR/test.out" "OK: Exit code: 0"
+  require_not_contains "$TMPDIR/test.err" "jq:"
 
   echo "OK: orchestrator handles empty and option-like forwarded args without jq noise" > "$out"
 ''

@@ -11,6 +11,7 @@ let
       ;
     system = pkgs.system;
   };
+  testCatalog = import ../../nixfied/framework/testing/catalog.nix;
   taskIds = builtins.attrNames model.tasks;
   workflowIds = builtins.attrNames model.workflows;
   serviceIds = builtins.attrNames serviceCatalog;
@@ -61,6 +62,23 @@ let
     "adapter"
     "e2e"
   ];
+
+  nonEmptyShardNames =
+    profileName:
+    builtins.filter (
+      shardName: (testCatalog.profileShardChecks.${profileName}.${shardName} or [ ]) != [ ]
+    ) testCatalog.order;
+
+  expectedFrameworkTaskIds = builtins.concatLists (
+    map (
+      profileName:
+      map (shardName: "task.test.framework.${profileName}.${shardName}") (nonEmptyShardNames profileName)
+    ) testCatalog.profileNames
+  );
+
+  expectedFrameworkWorkflowIds = map (
+    profileName: "workflow.test.${profileName}"
+  ) testCatalog.profileNames;
 
   tasksHaveStableIds = builtins.all (
     taskId:
@@ -170,7 +188,6 @@ let
     builtins.any (path: !builtins.pathExists "${safeRepoRoot}/${path}") ownerFiles
   ) featureIds;
 
-  frameworkTask = model.tasks."task.framework.test" or null;
   formatTask = model.tasks."task.format" or null;
   checkTask = model.tasks."task.check" or null;
   testTask = model.tasks."task.test" or null;
@@ -179,6 +196,7 @@ let
   validateEnvTask = model.tasks."task.ops.validate-env" or null;
   testIsolationTask = model.tasks."task.ops.test-isolation" or null;
   selfhostTask = model.tasks."task.test.framework.selfhost" or null;
+  selfhostWorkflow = model.workflows."workflow.test.framework.selfhost" or null;
   isolationProbeTask = model.tasks."task.test.isolation.probe" or null;
   isolationProbeUnit = model.tasks."task.test.isolation.unit" or null;
   isolationProbeWorkflow = model.workflows."workflow.test.isolation.probe" or null;
@@ -208,10 +226,14 @@ let
     ) true
   );
   hasCommandSurface = name: builtins.any (entry: entry.name == name) commandSurfaces;
+  findCommandArg =
+    task: name:
+    let
+      matches = builtins.filter (arg: (arg.name or "") == name) (task.commandApi.args or [ ]);
+    in
+    if matches == [ ] then null else builtins.head matches;
+  testModeArg = if testTask == null then null else findCommandArg testTask "mode";
 in
-assert frameworkTask != null;
-assert frameworkTask.runner.type == "shell";
-assert model.apps."framework::test".taskId == frameworkTask.id;
 assert model ? compiled;
 assert model.compiled ? apiCatalog;
 assert model.compiled ? execution;
@@ -281,7 +303,15 @@ assert checkTask.runner.type == "derivation";
 assert checkTask.runner.command == "nix-checks";
 assert pkgs.lib.hasInfix "nix-checks" (checkTask.runner.package or "");
 assert testTask.runner.type == "workflowRef";
-assert testTask.runner.workflowId == "workflow.ci.full";
+assert testTask.runner.workflowId == "workflow.test.full";
+assert testModeArg != null;
+assert
+  testModeArg.values == [
+    "feature-proof"
+    "ci"
+    "full"
+  ];
+assert !(builtins.any (arg: (arg.long or "") == "--basic") (testTask.commandApi.args or [ ]));
 assert ciTask.runner.type == "workflowRef";
 assert ciTask.runner.workflowId == "workflow.ci.full";
 assert qualityTask.runner.type == "derivation";
@@ -295,6 +325,8 @@ assert
 assert testIsolationTask.runtime.references.workflowIds == [ ];
 assert selfhostTask.runtime.references.taskIds == [ "task.dev" ];
 assert selfhostTask.runtime.references.workflowIds == [ "workflow.ci.basic" ];
+assert selfhostWorkflow != null;
+assert selfhostWorkflow.units.main.taskId == "task.test.framework.selfhost";
 assert isolationProbeTask.runner.type == "workflowRef";
 assert isolationProbeTask.runner.workflowId == "workflow.test.isolation.probe";
 assert isolationProbeUnit.runner.type == "shell";
@@ -304,7 +336,13 @@ assert featureView != null;
 assert featureView ? lines;
 assert hasCommandSurface "dev";
 assert hasCommandSurface "validate-env";
-assert hasCommandSurface "framework::test";
+assert hasCommandSurface "test";
+assert !hasCommandSurface "framework::test";
+assert !(builtins.hasAttr "framework::test" model.apps);
+assert builtins.all (taskId: builtins.hasAttr taskId model.tasks) expectedFrameworkTaskIds;
+assert builtins.all (
+  workflowId: builtins.hasAttr workflowId model.workflows
+) expectedFrameworkWorkflowIds;
 assert hasCommandSurface "features";
 assert hasCommandSurface "introspect";
 assert tasksHaveStableIds;

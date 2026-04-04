@@ -300,12 +300,5 @@ rec {
     cleanupActions = [ ];
   };
 
-  # Framework test runner configuration (nix run .#framework::test)
-  frameworkTest = {
-    # Default shard parallelism used when --max-parallel-shards is not passed.
-    # Supported values: "auto" or a positive integer.
-    maxParallelShards = 1;
-  };
-
   packages = { };
 }

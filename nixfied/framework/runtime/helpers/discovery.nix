@@ -41,13 +41,13 @@ let
       risk = "Primary command/task/workflow surface.";
       required_checks = [
         "nix run .#help"
-        "nix run .#framework::test"
+        "nix run .#test -- --mode full --summary"
         "nix run .#ci -- --summary"
       ];
     }
     {
       path = "nixfied/framework";
-      risk = "Framework-owned presets, runtime, and install internals; avoid direct edits in installed repos.";
+      risk = "Framework-owned runtime, install internals, and source-repo test overlay; avoid direct edits in installed repos.";
       required_checks = [
         "nix run .#help"
       ];
@@ -612,7 +612,6 @@ let
           echo '- `nix run .#ports`'
           echo '- `nix run .#check-ports`'
           echo '- `nix run .#features`'
-          echo '- `nix run .#framework::test`'
           echo '- `nix run .#framework::install`'
           echo '- `nix run .#framework::upgrade`'
           echo ""

@@ -7,7 +7,8 @@ Framework-owned code now has an explicit home:
 - `nixfied/framework/core/`: compiler-facing core helpers and `mkNixfied`
 - `nixfied/framework/runtime/`: dispatcher, executor, registry, runtime helpers, and service runtimes
 - `nixfied/framework/install/`: wrapper/install internals
-- `nixfied/framework/presets/`: framework-owned install/test/self-host presets
+- `nixfied/framework/presets/`: framework-owned install and state-policy presets
+- `nixfied/framework/testing/`: source-repo framework test catalog and overlay
 
 Project-owned customization is now separated from framework-owned behavior:
 
@@ -90,7 +91,7 @@ Common examples:
 
 ## Recommended Validation
 
-- `nix run .#framework::test`
+- `nix run .#test -- --mode full --summary`
 - `nix flake check . -L`
 - `nix run .#run-workflow -- <workflow-id> --summary`
 - Re-run one workflow with explicit `REGISTRY_ROOT` and one with explicit `CI_ARTIFACTS_DIR` to confirm downstream expectations.

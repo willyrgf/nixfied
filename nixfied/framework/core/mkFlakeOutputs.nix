@@ -767,31 +767,7 @@ let
             else
               materializedExecution.baseApps.help;
         };
-      frameworkWorkspaceApps =
-        if
-          workspaceMarkerPresent && builtins.hasAttr "framework::test" (compiledCore.model.views.apps or { })
-        then
-          {
-            "framework::test" = mkShellApp {
-              appName = "framework::test";
-              binPrefix = "nixfied-framework";
-              body = ''
-                if [ "$#" -gt 0 ]; then
-                  case "$1" in
-                    --help|-h)
-                      cat ${lib.escapeShellArg (taskHelpSupport.taskHelpFileFor "task.framework.test")}
-                      exit 0
-                      ;;
-                  esac
-                fi
-
-                cd ${lib.escapeShellArg projectRootAbs}
-                exec ${lib.escapeShellArg materializedExecution.baseApps."framework::test".program} "$@"
-              '';
-            };
-          }
-        else
-          { };
+      frameworkWorkspaceApps = { };
     };
   internalBasePackages =
     if !launchersSupported then

@@ -24,7 +24,6 @@ Model-generated app surfaces:
 - `nix run .#dev`
 - `nix run .#format`
 - `nix run .#framework::install`
-- `nix run .#framework::test`
 - `nix run .#framework::upgrade`
 - `nix run .#health`
 - `nix run .#ports`
@@ -178,7 +177,7 @@ nixfied.lib.mkNixfied {
 
 ```bash
 nix run .#ci -- --exclude-services helios --mode full --summary
-nix run .#run-task -- --exclude-services helios task.framework.test --summary
+nix run .#run-task -- --exclude-services helios task.test.framework.feature-proof.e2e --summary
 ```
 
 Compiled outputs also export service operation surfaces and task-runtime hook env vars for the surviving service graph:
@@ -242,4 +241,5 @@ For serial debugging, override the workflow setting:
 NIXFIED_WORKFLOW_PARALLEL=0 nix run .#ci -- --mode full --summary
 ```
 
-One extra note: GitHub Actions currently runs `nix flake check` + `nix run .#framework::test -- --summary`.
+In the source repo, `nix run .#test` is the public framework validation surface and accepts `--mode feature-proof|ci|full`.
+GitHub Actions runs `nix run .#test -- --mode ci --summary` on pull requests and `nix run .#test -- --mode full --summary` on branch builds.
