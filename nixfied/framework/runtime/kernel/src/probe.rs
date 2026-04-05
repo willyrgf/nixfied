@@ -107,9 +107,6 @@ fn execute_probe_execution_step(
         "tcp" => execute_probe_tcp_step(step, probe_source),
         "http" => execute_probe_http_step(plan, step, probe_source),
         "jsonrpc" => execute_probe_jsonrpc_step(plan, step, probe_source),
-        "postgres-pg-isready" => execute_probe_pg_isready_step(plan, step, probe_source),
-        "postgres-query" => execute_probe_postgres_query_step(plan, step, probe_source),
-        "helios-ready" => execute_probe_helios_ready_step(plan, step, probe_source),
         "exec" => execute_probe_exec_step(plan, step, probe_source),
         other => Err(format!("unsupported probe execution step kind={}", other)),
     }
@@ -242,204 +239,6 @@ fn execute_probe_jsonrpc_step(
         );
         Ok(())
     }
-}
-
-fn execute_probe_pg_isready_step(
-    plan: &ProbeExecutionPlan,
-    step: &ProbeExecutionStep,
-    probe_source: &str,
-) -> Result<(), String> {
-    let host = probe_step_required_field(step, "host", step.host.as_deref())?;
-    let port_env_var = probe_step_required_field(step, "portEnvVar", step.port_env_var.as_deref())?;
-    let port = required_port_from_env(port_env_var)?;
-    let failure_suffix = step.failure_suffix.as_deref().unwrap_or("");
-
-    println!(
-        "INFO: checking {} {} port={} source={}",
-        step.service_label, step.phase_label, port, probe_source
-    );
-
-    let args = vec![
-        "-U".to_string(),
-        "postgres".to_string(),
-        "-h".to_string(),
-        host.to_string(),
-        "-p".to_string(),
-        port.clone(),
-        "-q".to_string(),
-    ];
-    let output = run_captured_program(&plan.pg_is_ready_bin, &args, &[])?;
-    if output.status.success() {
-        println!(
-            "OK: {} {} port={}",
-            step.service_label, step.success_label, port
-        );
-        Ok(())
-    } else {
-        Err(format!(
-            "{} {} port={}{}",
-            step.service_label, step.failure_label, port, failure_suffix
-        ))
-    }
-}
-
-fn execute_probe_postgres_query_step(
-    plan: &ProbeExecutionPlan,
-    step: &ProbeExecutionStep,
-    probe_source: &str,
-) -> Result<(), String> {
-    let host = probe_step_required_field(step, "host", step.host.as_deref())?;
-    let port_env_var = probe_step_required_field(step, "portEnvVar", step.port_env_var.as_deref())?;
-    let port = required_port_from_env(port_env_var)?;
-    let database = probe_step_required_field(step, "database", step.database.as_deref())?;
-    let query = probe_step_required_field(step, "query", step.query.as_deref())?;
-    let failure_suffix = step.failure_suffix.as_deref().unwrap_or("");
-
-    println!(
-        "INFO: checking {} {} port={} source={}",
-        step.service_label, step.phase_label, port, probe_source
-    );
-
-    let args = vec![
-        "-h".to_string(),
-        host.to_string(),
-        "-p".to_string(),
-        port.clone(),
-        "-U".to_string(),
-        "postgres".to_string(),
-        "-d".to_string(),
-        database.to_string(),
-        "-Atqc".to_string(),
-        query.to_string(),
-    ];
-    let output = run_captured_program(&plan.psql_bin, &args, &[])?;
-    if output.status.success() {
-        println!(
-            "OK: {} {} port={}",
-            step.service_label, step.success_label, port
-        );
-        Ok(())
-    } else {
-        Err(format!(
-            "{} {} port={}{}",
-            step.service_label, step.failure_label, port, failure_suffix
-        ))
-    }
-}
-
-fn execute_probe_helios_ready_step(
-    plan: &ProbeExecutionPlan,
-    step: &ProbeExecutionStep,
-    probe_source: &str,
-) -> Result<(), String> {
-    let host = probe_step_required_field(step, "host", step.host.as_deref())?;
-    let port_env_var = probe_step_required_field(step, "portEnvVar", step.port_env_var.as_deref())?;
-    let port = required_port_from_env(port_env_var)?;
-    let _ = step
-        .execution_port_env_var
-        .as_deref()
-        .map(required_port_from_env)
-        .transpose()?;
-    let max_time = probe_step_max_time(step)?;
-    let profile = step.readiness_profile.as_deref().unwrap_or("fast");
-    let source_kind = step
-        .source_kinds
-        .get(probe_source)
-        .map(|value| value.as_str())
-        .unwrap_or("unknown");
-    let url = build_probe_url("http", host, &port, "");
-
-    println!(
-        "INFO: checking {} {} port={} source={} source_kind={} profile={}",
-        step.service_label, step.phase_label, port, probe_source, source_kind, profile
-    );
-
-    if step
-        .disallow_source_kinds
-        .iter()
-        .any(|value| value == source_kind)
-    {
-        return Err(format!(
-            "{} {} port={} source={} source_kind={} profile={} (source kind disallowed)",
-            step.service_label, step.failure_label, port, probe_source, source_kind, profile
-        ));
-    }
-
-    let block_number = request_jsonrpc_payload(&plan.curl_bin, &url, "eth_blockNumber", max_time)
-        .ok()
-        .and_then(|payload| resolve_json_path(&payload, ".result").cloned())
-        .and_then(|value| match value {
-            JsonValue::String(text) if is_hex_prefixed(&text) => Some(text),
-            _ => None,
-        });
-    let block_number_valid = block_number.is_some();
-
-    if let Some(block_number) = &block_number {
-        println!(
-            "OK: {} {} port={} block_number={}",
-            step.service_label, step.success_label, port, block_number
-        );
-    } else if step.allow_local_health_fallback
-        && !step.require_not_syncing
-        && request_jsonrpc_payload(&plan.curl_bin, &url, "eth_chainId", max_time)
-            .ok()
-            .and_then(|payload| resolve_json_path(&payload, ".result").cloned())
-            .filter(|value| !matches!(value, JsonValue::Null))
-            .is_some()
-    {
-        println!(
-            "OK: {} {} port={} mode=local_chainid_fallback",
-            step.service_label, step.success_label, port
-        );
-        return Ok(());
-    } else if step.require_not_syncing {
-        println!(
-            "WARN: {} block number unavailable port={} source={} source_kind={} profile={}; continuing to sync gate",
-            step.service_label, port, probe_source, source_kind, profile
-        );
-    } else {
-        return Err(format!(
-            "{} {} port={} source={} source_kind={} (invalid eth_blockNumber result)",
-            step.service_label, step.failure_label, port, probe_source, source_kind
-        ));
-    }
-
-    if step.require_not_syncing {
-        let syncing_payload =
-            request_jsonrpc_payload(&plan.curl_bin, &url, "eth_syncing", max_time).ok();
-        let syncing_value = syncing_payload
-            .as_ref()
-            .and_then(|payload| resolve_json_path(payload, ".result"));
-        let syncing_result = syncing_value.map(render_json_compact).unwrap_or_default();
-        if !matches!(syncing_value, Some(JsonValue::Bool(false))) {
-            return Err(format!(
-                "{} {} port={} source={} source_kind={} profile={} (eth_syncing={})",
-                step.service_label,
-                step.failure_label,
-                port,
-                probe_source,
-                source_kind,
-                profile,
-                syncing_result
-            ));
-        }
-        if !block_number_valid {
-            return Err(format!(
-                "{} {} port={} source={} source_kind={} profile={} (invalid eth_blockNumber result)",
-                step.service_label,
-                step.failure_label,
-                port,
-                probe_source,
-                source_kind,
-                profile
-            ));
-        }
-        println!("OK: {} sync status ready port={}", step.service_label, port);
-    } else {
-        println!("SKIP: helios sync gate disabled profile={}", profile);
-    }
-
-    Ok(())
 }
 
 fn execute_probe_exec_step(
@@ -645,9 +444,6 @@ fn load_probe_execution_plan_from_value(value: &JsonValue) -> Result<ProbeExecut
         curl_bin: required_string_field(value, "curlBin", "probe execution plan")?.to_string(),
         runtime_shell_bin: required_string_field(value, "runtimeShellBin", "probe execution plan")?
             .to_string(),
-        pg_is_ready_bin: required_string_field(value, "pgIsReadyBin", "probe execution plan")?
-            .to_string(),
-        psql_bin: required_string_field(value, "psqlBin", "probe execution plan")?.to_string(),
         steps,
     })
 }
@@ -668,18 +464,7 @@ fn parse_probe_execution_step(
         path: object_string(value, "path").map(|text| text.to_string()),
         method: object_string(value, "method").map(|text| text.to_string()),
         port_env_var: object_string(value, "portEnvVar").map(|text| text.to_string()),
-        execution_port_env_var: object_string(value, "executionPortEnvVar")
-            .map(|text| text.to_string()),
-        source_kinds: object_string_map(value, "sourceKinds", &label)?,
-        readiness_profile: object_string(value, "readinessProfile").map(|text| text.to_string()),
-        require_not_syncing: object_bool(value, "requireNotSyncing").unwrap_or(false),
-        allow_local_health_fallback: object_bool(value, "allowLocalHealthFallback")
-            .unwrap_or(false),
-        disallow_source_kinds: array_strings(value, "disallowSourceKinds"),
         max_time_seconds: object_field(value, "maxTimeSeconds").and_then(json_value_to_i64),
-        database: object_string(value, "database").map(|text| text.to_string()),
-        query: object_string(value, "query").map(|text| text.to_string()),
-        failure_suffix: object_string(value, "failureSuffix").map(|text| text.to_string()),
         command: object_string(value, "command").map(|text| text.to_string()),
     })
 }

@@ -16,6 +16,14 @@ let
         type = t.ints.positive;
         default = 1;
       };
+      timeoutEnvVar = lib.mkOption {
+        type = t.nullOr t.str;
+        default = null;
+      };
+      intervalEnvVar = lib.mkOption {
+        type = t.nullOr t.str;
+        default = null;
+      };
     };
   };
 
@@ -26,17 +34,10 @@ let
           "tcp"
           "http"
           "jsonrpc"
-          "postgres-pg-isready"
-          "postgres-query"
-          "helios-ready"
           "exec"
         ];
       };
       endpoint = lib.mkOption {
-        type = t.nullOr t.str;
-        default = null;
-      };
-      executionEndpoint = lib.mkOption {
         type = t.nullOr t.str;
         default = null;
       };
@@ -56,61 +57,15 @@ let
         type = t.str;
         default = "";
       };
-      database = lib.mkOption {
-        type = t.nullOr t.str;
-        default = null;
-      };
-      query = lib.mkOption {
-        type = t.lines;
-        default = "";
-      };
       command = lib.mkOption {
         type = t.lines;
         default = "";
       };
-      sourceKinds = lib.mkOption {
-        type = t.attrsOf (
-          t.enum [
-            "real"
-            "shim"
-            "mock"
-            "unknown"
-          ]
-        );
-        default = { };
-      };
-      readinessProfile = lib.mkOption {
-        type = t.str;
-        default = "fast";
-      };
-      requireNotSyncing = lib.mkOption {
-        type = t.bool;
-        default = false;
-      };
-      disallowSourceKinds = lib.mkOption {
-        type = t.listOf (
-          t.enum [
-            "real"
-            "shim"
-            "mock"
-            "unknown"
-          ]
-        );
-        default = [ ];
-      };
     };
   };
 
-  probeOverrideSpec = t.submodule {
+  probePlanSpec = t.submodule {
     options = {
-      strategy = lib.mkOption {
-        type = t.enum [
-          "replace"
-          "prepend"
-          "append"
-        ];
-        default = "replace";
-      };
       steps = lib.mkOption {
         type = t.listOf probeStepSpec;
         default = [ ];
@@ -123,14 +78,17 @@ let
   };
 in
 {
+  probeWaitSpec = probeWaitSpec;
+  probeStepSpec = probeStepSpec;
+  probePlanSpec = probePlanSpec;
   probeOptions = {
     health = lib.mkOption {
-      type = t.nullOr probeOverrideSpec;
-      default = null;
+      type = probePlanSpec;
+      default = { };
     };
     ready = lib.mkOption {
-      type = t.nullOr probeOverrideSpec;
-      default = null;
+      type = probePlanSpec;
+      default = { };
     };
   };
 }

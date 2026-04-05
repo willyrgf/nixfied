@@ -48,13 +48,30 @@ let
       loggingPrelude
       ;
   };
+  preStart = pkgs.writeShellScript "nginx-pre-start" ''
+    ${loggingPrelude}
+
+    set -euo pipefail
+
+    ${lifecycle.init}
+    ${lifecycle.checkConfig}
+    exec ${lifecycle.preflightStart}
+  '';
+  preStop = pkgs.writeShellScript "nginx-pre-stop" ''
+    ${loggingPrelude}
+
+    set -euo pipefail
+    :
+  '';
 in
 {
   version = 1;
   operations = {
     init = lifecycle.init;
+    pre-start = preStart;
+    pre-stop = preStop;
     preflight-start = lifecycle.preflightStart;
-    start = lifecycle.start;
+    start = lifecycle.startLeaf;
     start-leaf = lifecycle.startLeaf;
     stop = lifecycle.stop;
     restart = lifecycle.restart;

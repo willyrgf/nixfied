@@ -68,15 +68,32 @@ let
 
     exec ${pgPackage}/bin/psql "postgresql://${runtimeDefaults.hosts.localhost}:$PGPORT/$PGDATABASE" "$@"
   '';
+  preStart = pkgs.writeShellScript "postgres-pre-start" ''
+    ${loggingPrelude}
+
+    set -euo pipefail
+
+    ${lifecycle.init}
+    ${lifecycle.checkConfig}
+    exec ${lifecycle.preflightStart}
+  '';
+  preStop = pkgs.writeShellScript "postgres-pre-stop" ''
+    ${loggingPrelude}
+
+    set -euo pipefail
+    :
+  '';
 in
 {
   version = 1;
   operations = {
     init = lifecycle.init;
+    pre-start = preStart;
+    pre-stop = preStop;
     init-leaf = lifecycle.initLeaf;
     preflight-init = lifecycle.preflightInit;
     preflight-start = lifecycle.preflightStart;
-    start = lifecycle.start;
+    start = lifecycle.startLeaf;
     start-leaf = lifecycle.startLeaf;
     stop = lifecycle.stop;
     restart = lifecycle.restart;

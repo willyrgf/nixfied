@@ -19,7 +19,6 @@
     # Lifecycle policy invariants:
     # - start ops may return before the service is externally ready.
     # - READY/HEALTH ops must be safe to poll and deterministic when not ready.
-    # - profile-specific readiness ops (for example ready-test) take precedence when present.
     # - fixtures must poll READY/HEALTH with timeout loops after start (never one-shot checks).
     # - failure diagnostics must not introduce secondary errors (for example tailing missing logs).
     fixture_start_service() {
@@ -52,48 +51,17 @@
       require_positive_number "interval" "$interval" || return 1
 
       local start_op=""
-      local init_op="init"
-      local check_op="check-config"
       local stop_op="stop"
       local health_op="health"
       local ready_op="ready"
-      local profile_ready_op=""
       local wait_op=""
-      local op=""
-      local -a start_ops=()
       local -a start_cmd=()
 
-      case "$profile" in
-        test)
-          start_ops=(full-start-test full-start start)
-          profile_ready_op="ready-test"
-          ;;
-        *)
-          start_ops=(full-start start)
-          ;;
-      esac
-
-      for op in "''${start_ops[@]}"; do
-        if _service_op_available "$service" "$op"; then
-          start_op="$op"
-          break
-        fi
-      done
-
-      if [ -z "$start_op" ]; then
-        log_error "fixture_start_service could not resolve start op service=$service profile=$profile"
+      if _service_op_available "$service" start; then
+        start_op="start"
+      else
+        log_error "fixture_start_service could not resolve canonical start op service=$service profile=$profile"
         return 1
-      fi
-
-      if [ -n "$profile_ready_op" ] && ! _service_op_available "$service" "$profile_ready_op"; then
-        profile_ready_op=""
-      fi
-
-      if _service_op_available "$service" "$init_op"; then
-        svc "$service" "$init_op"
-      fi
-      if _service_op_available "$service" "$check_op"; then
-        svc "$service" "$check_op"
       fi
 
       start_cmd=("$NIXFIED_RUNTIME_BIN" run-service "$service" "$start_op")
@@ -125,9 +93,7 @@
         fi
       fi
 
-      if [ -n "$profile_ready_op" ]; then
-        wait_op="$profile_ready_op"
-      elif _service_op_available "$service" "$ready_op"; then
+      if _service_op_available "$service" "$ready_op"; then
         wait_op="$ready_op"
       elif _service_op_available "$service" "$health_op"; then
         wait_op="$health_op"

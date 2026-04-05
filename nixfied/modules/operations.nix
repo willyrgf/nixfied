@@ -11,17 +11,16 @@ let
   exitCodes = import ../framework/core/exit-codes.nix;
   shellCommon = import ../framework/core/shell-common.nix { inherit pkgs; };
   skipPolicy = import ../framework/core/skip-policy.nix { inherit pkgs; };
-  serviceConfigLib = import ../framework/core/service-config.nix { inherit lib; };
   testIsolationRuntime = import ./operations/test-isolation-runtime.nix {
     inherit lib pkgs;
   };
+  serviceConfigLib = import ../framework/core/service-config.nix { inherit lib pkgs; };
 
-  configuredServiceNames = builtins.attrNames services;
+  configuredServiceNames = builtins.sort builtins.lessThan (builtins.attrNames services);
   excludedServices = config.nixfied.graph.excludedServices or [ ];
   serviceNames = builtins.filter (
-    serviceName:
-    builtins.elem serviceName configuredServiceNames && !(builtins.elem serviceName excludedServices)
-  ) serviceConfigLib.supportedServiceNames;
+    serviceName: !(builtins.elem serviceName excludedServices)
+  ) configuredServiceNames;
 
   resolvePortBase =
     key:
@@ -38,15 +37,25 @@ let
     else
       throw "nixfied.operations: netcat package is required for readiness probes";
 
-  postgresProbePkg = if pkgs ? postgresql_16 then pkgs.postgresql_16 else pkgs.postgresql;
-  serviceProbeRuntimeInputs = [
-    pkgs.coreutils
-    pkgs.gnugrep
-    pkgs.gnused
-    pkgs.curl
-    netcatPkg
-    postgresProbePkg
-  ];
+  serviceCheckRuntimeInputs = builtins.concatLists (
+    map (
+      serviceName:
+      (serviceConfigLib.normalizeServiceConfig {
+        name = serviceName;
+        config = services.${serviceName};
+      }).checkRuntimeInputs or [ ]
+    ) serviceNames
+  );
+  serviceProbeRuntimeInputs = lib.unique (
+    [
+      pkgs.coreutils
+      pkgs.gnugrep
+      pkgs.gnused
+      pkgs.curl
+      netcatPkg
+    ]
+    ++ serviceCheckRuntimeInputs
+  );
 
   envNames = runtime.env.names;
   envPattern =
@@ -547,9 +556,7 @@ in
         id = "task.ops.health";
         summary = "Run service health checks";
         description = ''
-          Runs health checks for selected enabled services:
-          postgres, nginx (http+https), minio (api+console),
-          reth (http+ws+auth), and helios (rpc+execution).
+          Runs health checks for selected enabled services declared under nixfied.services.
           Optional selectors: --service <name|all> and --source <key>.
           One service selector is accepted per invocation.
         '';
@@ -579,9 +586,7 @@ in
         id = "task.ops.ready";
         summary = "Run service readiness checks";
         description = ''
-          Runs readiness checks for selected enabled services:
-          postgres, nginx (http+https), minio (api+console),
-          reth (http+ws+auth), and helios (rpc+execution).
+          Runs readiness checks for selected enabled services declared under nixfied.services.
           Optional selectors: --service <name|all> and --source <key>.
           One service selector is accepted per invocation.
         '';

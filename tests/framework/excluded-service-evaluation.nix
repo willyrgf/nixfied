@@ -22,13 +22,16 @@ let
   throwingProjectModule = {
     imports = [
       (import ../../nixfied/project/services.nix {
+        inherit pkgs;
         conf = {
           services = {
             postgres = { };
             nginx = { };
             minio = { };
             reth = { };
-            helios = throw "helios evaluated unexpectedly";
+            helios = {
+              dataDirName = throw "helios evaluated unexpectedly";
+            };
           };
         };
         inherit
@@ -45,7 +48,7 @@ let
       projectModules = [ throwingProjectModule ];
       extraModules = [ ];
       localOverrides = [ ];
-    }).model.serviceCatalog
+    }).model.serviceCatalog."service.helios".config.dataDirName
   );
 
   compiledThrowingWithExclusion = builtins.tryEval (

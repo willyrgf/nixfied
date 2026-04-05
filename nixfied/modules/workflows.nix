@@ -1,9 +1,25 @@
-{ lib, ... }:
+{ lib, config, ... }:
 let
   t = lib.types;
   launcherOptions = import ./lib/launcher-options.nix { inherit lib; };
-  serviceConfigLib = import ../framework/core/service-config.nix { inherit lib; };
-  serviceRequirementType = t.enum serviceConfigLib.supportedServiceNames;
+  serviceRequirementType = t.str;
+  configuredServiceNames = builtins.sort builtins.lessThan (
+    builtins.attrNames (config.nixfied.services or { })
+  );
+  validateServiceNames =
+    context: names:
+    let
+      unknown = builtins.filter (name: !(builtins.elem name configuredServiceNames)) (
+        builtins.sort builtins.lessThan names
+      );
+    in
+    if unknown == [ ] then
+      names
+    else
+      throw ''
+        ${context} references unknown services: ${builtins.concatStringsSep ", " unknown}
+        known services: ${builtins.concatStringsSep ", " configuredServiceNames}
+      '';
   serviceSetPhaseEntry = t.submodule {
     options = {
       serviceSetId = lib.mkOption {
@@ -43,37 +59,40 @@ let
     };
   };
 
-  workflowUnit = t.submodule (
-    { ... }:
-    {
-      options = {
-        taskId = lib.mkOption { type = t.str; };
-        needs = lib.mkOption {
-          type = t.listOf t.str;
-          default = [ ];
-        };
-        locks = lib.mkOption {
-          type = t.listOf t.str;
-          default = [ ];
-        };
-        when = lib.mkOption {
-          type = whenSpec;
-          default = { };
-        };
-        skipIfMissingEnv = lib.mkOption {
-          type = t.listOf t.str;
-          default = [ ];
-        };
-        requirements = {
-          services = lib.mkOption {
-            type = t.listOf serviceRequirementType;
+  workflowUnit =
+    workflowName:
+    t.submodule (
+      { name, ... }:
+      {
+        options = {
+          taskId = lib.mkOption { type = t.str; };
+          needs = lib.mkOption {
+            type = t.listOf t.str;
             default = [ ];
-            description = "Hard service capability requirements used for graph exclusion and runtime skip.";
+          };
+          locks = lib.mkOption {
+            type = t.listOf t.str;
+            default = [ ];
+          };
+          when = lib.mkOption {
+            type = whenSpec;
+            default = { };
+          };
+          skipIfMissingEnv = lib.mkOption {
+            type = t.listOf t.str;
+            default = [ ];
+          };
+          requirements = {
+            services = lib.mkOption {
+              type = t.listOf serviceRequirementType;
+              default = [ ];
+              apply = validateServiceNames "nixfied.workflows.${workflowName}.units.${name}.requirements.services";
+              description = "Hard service capability requirements used for graph exclusion and runtime skip.";
+            };
           };
         };
-      };
-    }
-  );
+      }
+    );
 in
 {
   options.nixfied.workflows = lib.mkOption {
@@ -121,7 +140,7 @@ in
             };
 
             units = lib.mkOption {
-              type = t.attrsOf workflowUnit;
+              type = t.attrsOf (workflowUnit name);
               default = { };
             };
 

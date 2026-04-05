@@ -176,7 +176,7 @@ pkgs.runCommand "ready-health-matrix-smoke" { } ''
           fi
 
           case "$mode" in
-            nginx|both)
+            nginx)
               expected_port="$(compute_port "$base_port" "$slot" "$env_offset")"
               require_contains "$ready_log" "ERROR: nginx not ready port=$expected_port"
               require_contains "$health_log" "ERROR: nginx unhealthy port=$expected_port"
@@ -185,6 +185,20 @@ pkgs.runCommand "ready-health-matrix-smoke" { } ''
               expected_port="$(compute_port "$((base_port + 2))" "$slot" "$env_offset")"
               require_contains "$ready_log" "ERROR: minio not ready port=$expected_port"
               require_contains "$health_log" "ERROR: minio unhealthy port=$expected_port"
+              ;;
+            both)
+              nginx_port="$(compute_port "$base_port" "$slot" "$env_offset")"
+              minio_port="$(compute_port "$((base_port + 2))" "$slot" "$env_offset")"
+              if ! ${pkgs.gnugrep}/bin/grep -Fq "ERROR: nginx not ready port=$nginx_port" "$ready_log" \
+                && ! ${pkgs.gnugrep}/bin/grep -Fq "ERROR: minio not ready port=$minio_port" "$ready_log"; then
+                cat "$ready_log"
+                fail "expected both-mode ready failure for nginx or minio"
+              fi
+              if ! ${pkgs.gnugrep}/bin/grep -Fq "ERROR: nginx unhealthy port=$nginx_port" "$health_log" \
+                && ! ${pkgs.gnugrep}/bin/grep -Fq "ERROR: minio unhealthy port=$minio_port" "$health_log"; then
+                cat "$health_log"
+                fail "expected both-mode health failure for nginx or minio"
+              fi
               ;;
             *)
               echo "unsupported mode '$mode'"

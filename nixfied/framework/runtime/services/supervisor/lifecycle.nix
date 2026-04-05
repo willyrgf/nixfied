@@ -39,6 +39,20 @@ let
     includeLogDir = true;
     includeConfig = true;
     body = ''
+      wait_for_daemon_exit() {
+        local exit_code=0
+        set +e
+        wait "$DAEMON_PID"
+        exit_code="$?"
+        set -e
+        printf '%s' "$exit_code"
+      }
+
+      print_supervisor_failure_logs() {
+        print_log_tail "$DAEMON_LOG_FILE" 200 "supervisor daemon"
+        print_log_tail "$LOG_DIR/supervisor.log" 200 "supervisor"
+      }
+
       PID_FILE="$(supervisor_pid_file)"
 
       # Check if already running via socket.
@@ -58,13 +72,16 @@ let
       # Fail fast if the daemon exits immediately (common config/startup error case).
       sleep 1
       if ! kill -0 "$DAEMON_PID" 2>/dev/null; then
-        log_error "Supervisor failed to start (PID $DAEMON_PID exited). See: $DAEMON_LOG_FILE"
+        DAEMON_EXIT_CODE="$(wait_for_daemon_exit)"
+        log_error "Supervisor failed to start pid=$DAEMON_PID exit=$DAEMON_EXIT_CODE"
+        print_supervisor_failure_logs
         rm -f "$PID_FILE" 2>/dev/null || true
         exit 1
       fi
 
       if ! supervisor_wait_process_api_ready 40 0.25; then
         log_error "Supervisor did not expose process API socket=$PC_SOCKET_PATH"
+        print_supervisor_failure_logs
         kill -TERM "$DAEMON_PID" 2>/dev/null || true
         rm -f "$PID_FILE" 2>/dev/null || true
         exit 1
