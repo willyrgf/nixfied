@@ -1,52 +1,74 @@
-# Shared shell helpers for SKIP_<SERVICE> env var parsing.
+# Shared shell helpers for runtime-owned service exclusion parsing.
 { pkgs }:
 
 {
   skipPolicyFunctions = ''
-    workflow_service_skip_env_var() {
+    normalize_excluded_service_name() {
       local service_name="$1"
-      local safe_service_name
-      if [ -z "$service_name" ]; then
-        printf '%s' ""
-        return 0
-      fi
-
-      safe_service_name="$(printf '%s' "$service_name" | ${pkgs.coreutils}/bin/tr '[:lower:]' '[:upper:]' | ${pkgs.coreutils}/bin/tr -cs 'A-Z0-9_' '_')"
-      if [ -z "$safe_service_name" ]; then
-        printf '%s' ""
-        return 0
-      fi
-      printf 'SKIP_%s' "$safe_service_name"
+      printf '%s' "$service_name" | ${pkgs.coreutils}/bin/tr -d '[:space:]'
     }
 
-    is_truthy_skip_value() {
-      local raw_value="$1"
-      local normalized_value
-
-      normalized_value="$(printf '%s' "$raw_value" | ${pkgs.coreutils}/bin/tr '[:upper:]' '[:lower:]' | ${pkgs.coreutils}/bin/tr -d '[:space:]')"
-      case "$normalized_value" in
-        1|true|yes|on)
-          return 0
-          ;;
-        *)
-          return 1
-          ;;
-      esac
-    }
-
-    is_service_skipped() {
+    excluded_services_contains() {
       local service_name="$1"
-      local env_name
-      local env_value
+      local normalized_service=""
+      local excluded_csv="''${NIXFIED_EXCLUDED_SERVICES_CSV:-}"
+      local old_ifs="$IFS"
+      local excluded_parts=()
+      local candidate=""
 
-      env_name="$(workflow_service_skip_env_var "$service_name")"
-      if [ -z "$env_name" ]; then
+      normalized_service="$(normalize_excluded_service_name "$service_name")"
+      if [ -z "$normalized_service" ] || [ -z "$excluded_csv" ]; then
         return 1
       fi
 
-      env_value="''${!env_name:-}"
-      is_truthy_skip_value "$env_value" && return 0
+      IFS=','
+      read -r -a excluded_parts <<< "$excluded_csv"
+      IFS="$old_ifs"
+
+      for candidate in "''${excluded_parts[@]}"; do
+        candidate="$(normalize_excluded_service_name "$candidate")"
+        if [ -n "$candidate" ] && [ "$candidate" = "$normalized_service" ]; then
+          return 0
+        fi
+      done
+
       return 1
+    }
+
+    filter_excluded_services_csv() {
+      local input_csv="$1"
+      local old_ifs="$IFS"
+      local parts=()
+      local filtered=()
+      local service_name=""
+
+      if [ -z "$input_csv" ]; then
+        printf '%s' ""
+        return 0
+      fi
+
+      IFS=','
+      read -r -a parts <<< "$input_csv"
+      IFS="$old_ifs"
+
+      for service_name in "''${parts[@]}"; do
+        service_name="$(normalize_excluded_service_name "$service_name")"
+        if [ -z "$service_name" ]; then
+          continue
+        fi
+        if excluded_services_contains "$service_name"; then
+          continue
+        fi
+        filtered+=("$service_name")
+      done
+
+      IFS=','
+      printf '%s' "''${filtered[*]}"
+      IFS="$old_ifs"
+    }
+
+    is_service_skipped() {
+      excluded_services_contains "$1"
     }
   '';
 }

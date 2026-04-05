@@ -29,6 +29,7 @@ in
     FORWARD_ARGS=()
     MACHINE_RUN_ID_FILE="''${NIXFIED_RUN_ID_FILE_OVERRIDE:-}"
     MACHINE_SUMMARY_FILE="''${NIXFIED_SUMMARY_FILE_OVERRIDE:-}"
+    EXCLUDED_SERVICES_CSV="''${NIXFIED_EXCLUDED_SERVICES_CSV:-}"
 
     local parse_opts=1
     local arg
@@ -73,6 +74,19 @@ in
             MACHINE_SUMMARY_FILE="''${arg#--summary-file=}"
             continue
             ;;
+          --exclude-services)
+            if [ "$#" -lt 1 ]; then
+              echo "ERROR: --exclude-services requires a value"
+              return 2
+            fi
+            EXCLUDED_SERVICES_CSV="$1"
+            shift
+            continue
+            ;;
+          --exclude-services=*)
+            EXCLUDED_SERVICES_CSV="''${arg#--exclude-services=}"
+            continue
+            ;;
           --)
             parse_opts=0
             FORWARD_ARGS+=("--")
@@ -94,6 +108,12 @@ in
       export NIXFIED_SUMMARY_FILE_OVERRIDE="$MACHINE_SUMMARY_FILE"
     else
       unset NIXFIED_SUMMARY_FILE_OVERRIDE || true
+    fi
+
+    if [ -n "$EXCLUDED_SERVICES_CSV" ]; then
+      export NIXFIED_EXCLUDED_SERVICES_CSV="$EXCLUDED_SERVICES_CSV"
+    else
+      unset NIXFIED_EXCLUDED_SERVICES_CSV || true
     fi
   }
 
@@ -180,6 +200,15 @@ in
           shift
           ;;
         --summary-file=*)
+          ;;
+        --exclude-services)
+          if [ "$#" -lt 1 ]; then
+            echo "ERROR: --exclude-services requires a value"
+            return 2
+          fi
+          shift
+          ;;
+        --exclude-services=*)
           ;;
         --log-level)
           if [ "$#" -lt 1 ]; then

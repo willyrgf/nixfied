@@ -11,21 +11,7 @@ let
     inherit pkgs;
   };
   commandApi = import ../framework/core/command-api.nix { inherit pkgs; };
-  tokenLib = import ../framework/core/normalize-token.nix { inherit lib; };
   inherit (commandApi) mkCommandApi;
-  normalizeToken = tokenLib.normalizeToken;
-
-  normalizeHookName =
-    serviceName: opName: opCfg:
-    let
-      prefix = normalizeToken serviceName;
-      suffix =
-        if (opCfg.hook or null) != null && (opCfg.hook or "") != "" then
-          opCfg.hook
-        else
-          normalizeToken opName;
-    in
-    "SVC_${prefix}_${suffix}";
 
   enabledServiceIds = builtins.sort builtins.lessThan (
     builtins.filter (serviceId: services.${serviceId}.enable or false) (builtins.attrNames services)
@@ -88,7 +74,6 @@ let
         else
           "svc::${serviceName}::${opName}";
       includeApp = opCfg.exposeApp or true;
-      includeHook = opCfg.exposeHook or true;
       usage = opCfg.usage or [ "nix run .#${appName}" ];
       examples = opCfg.examples or [ ];
       category = if (opCfg.category or "") != "" then opCfg.category else serviceName;
@@ -99,12 +84,10 @@ let
         opName
         appName
         includeApp
-        includeHook
         usage
         examples
         category
         ;
-      hookName = normalizeHookName serviceName opName opCfg;
       class = opCfg.class or "passthrough";
       idempotent = opCfg.idempotent or false;
       summary = opCfg.summary;

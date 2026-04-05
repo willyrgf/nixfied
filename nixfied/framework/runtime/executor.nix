@@ -5,17 +5,12 @@
   runtimeHash ? model.identity.evalHash,
   registry,
   projectRoot,
-  serviceSetPrograms ? { },
-  serviceHookEnv ? { },
+  serviceDispatcherProgram ? null,
+  runtimeBin ? null,
 }:
 let
   lib = pkgs.lib;
   kernelPackage = import ./kernel { inherit pkgs; };
-  modelSchemaKind =
-    if builtins.isAttrs model && model ? schema && builtins.isAttrs model.schema then
-      model.schema.kind or ""
-    else
-      "";
 
   availableServiceNames = builtins.sort builtins.lessThan (
     lib.unique (
@@ -28,29 +23,8 @@ let
       ) (builtins.attrNames services)
     )
   );
-  effectiveServiceSetPrograms = serviceSetPrograms;
 
-  serviceSetProgramCases = builtins.concatLists (
-    map (
-      serviceSetId:
-      let
-        operations = builtins.sort builtins.lessThan (
-          builtins.attrNames (effectiveServiceSetPrograms.${serviceSetId}.programsByOperation or { })
-        );
-      in
-      map (operation: {
-        key = "${serviceSetId}:${operation}";
-        value = effectiveServiceSetPrograms.${serviceSetId}.programsByOperation.${operation}.program;
-      }) operations
-    ) (builtins.sort builtins.lessThan (builtins.attrNames effectiveServiceSetPrograms))
-  );
-
-  modelFile = pkgs.writeText (
-    if modelSchemaKind == "nixfied-execution-manifest" then
-      "nixfied-execution-manifest.json"
-    else
-      "nixfied-model.json"
-  ) (builtins.toJSON model);
+  modelFile = pkgs.writeText "nixfied-model.json" (builtins.toJSON model);
   controlBootstrapShell = import ./control-bootstrap.nix {
     inherit
       pkgs
@@ -68,10 +42,10 @@ let
       projectRoot
       model
       services
-      serviceHookEnv
+      runtimeBin
       ;
   };
-  runtimeHandoffShell = import ./runtime-handoff.nix { inherit pkgs; };
+  executionQueryShell = import ./execution-query.nix { inherit pkgs; };
   artifactsRuntimeShell = import ./artifacts-runtime.nix { inherit pkgs; };
   sharedRuntimeLibShell = import ./shared-runtime-lib.nix {
     inherit
@@ -108,58 +82,10 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
         ${controlBootstrapShell}
         ${registryShell}
         ${envSandboxShell}
-        ${runtimeHandoffShell}
+        ${executionQueryShell}
         ${artifactsRuntimeShell}
         ${sharedRuntimeLibShell}
         ${skipPolicy.skipPolicyFunctions}
-
-        workflow_phase_service_set_program() {
-          local service_set_id="$1"
-          local operation="$2"
-          case "$service_set_id:$operation" in
-      ${builtins.concatStringsSep "\n" (
-        map (entry: ''
-          ${pkgs.lib.escapeShellArg entry.key})
-            printf '%s' ${pkgs.lib.escapeShellArg entry.value}
-            return 0
-            ;;
-        '') serviceSetProgramCases
-      )}
-            *)
-              return 1
-              ;;
-          esac
-        }
-
-        workflow_phase_service_set_detail_json() {
-          local phase="$1"
-          local service_set_id="$2"
-          local service_set_name="$3"
-          local operation="$4"
-
-          kernel_event_detail \
-            serviceLifecycle \
-            --event-type "$phase" \
-            --service "$service_set_name" \
-            --command-name "$operation" \
-            --owner-scope "$service_set_id"
-        }
-
-        workflow_phase_service_set_failure_json() {
-          local phase="$1"
-          local service_set_id="$2"
-          local service_set_name="$3"
-          local operation="$4"
-          local exit_code="$5"
-
-          kernel_event_detail \
-            serviceLifecycle \
-            --event-type "$phase" \
-            --service "$service_set_name" \
-            --command-name "$operation" \
-            --owner-scope "$service_set_id" \
-            --exit-code "$exit_code"
-        }
 
         RUN_SUFFIX_REASON=""
         LAST_WORKFLOW_SUMMARY_FILE=""
@@ -400,7 +326,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
           echo "INFO: task context runId=$run_id workflowId=$effective_workflow_id taskId=$task_id"
 
           if [ -n "''${NIXFIED_SELECTED_SERVICES_CSV_OVERRIDE+x}" ]; then
-            selected_services_csv="''${NIXFIED_SELECTED_SERVICES_CSV_OVERRIDE}"
+            selected_services_csv="$(filter_excluded_services_csv "''${NIXFIED_SELECTED_SERVICES_CSV_OVERRIDE}")"
           else
             selected_services_csv="$(task_selected_services_csv "$task_id" "$@")"
           fi
@@ -753,6 +679,7 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
             shift
           fi
 
+          selected_services_csv="$(filter_excluded_services_csv "$selected_services_csv")"
           parallel_run_unit_wrapper "$task_id" "$workflow_id" "$selected_services_csv" "$@"
         }
 
@@ -805,18 +732,55 @@ pkgs.writeShellScriptBin "nixfied-executor" ''
             return "$NIXFIED_EXIT_USAGE"
           fi
 
-          local service_set_id="$1"
-          local operation="$2"
-          local selected_services_csv="$3"
-          local program_path=""
-
-          program_path="$(workflow_phase_service_set_program "$service_set_id" "$operation" || true)"
-          if [ -z "$program_path" ]; then
-            echo "ERROR: missing service-set program serviceSetId=$service_set_id operation=$operation" >&2
+          if [ -z ${
+            lib.escapeShellArg (
+              if serviceDispatcherProgram == null then "" else builtins.toString serviceDispatcherProgram
+            )
+          } ]; then
+            echo "ERROR: workflow service phases require a configured service dispatcher"
             return 1
           fi
 
-          NIXFIED_SELECTED_SERVICES_CSV="$selected_services_csv" "$program_path"
+          local service_set_id="$1"
+          local operation="$2"
+          local selected_services_csv=""
+          local service_set_name=""
+          local service_set_services_csv=""
+          local filtered_services_csv=""
+          local old_ifs="$IFS"
+          local service_name=""
+
+          selected_services_csv="$(filter_excluded_services_csv "$3")"
+          service_set_name="$(service_set_name "$service_set_id")"
+          service_set_services_csv="$(service_set_all_services_csv "$service_set_id")"
+
+          if [ -z "$service_set_name" ]; then
+            echo "ERROR: unknown service set '$service_set_id'" >&2
+            return 1
+          fi
+
+          filtered_services_csv="$("$JQ_BIN" -rn --arg left "$service_set_services_csv" --arg right "$selected_services_csv" '
+            def csv_set($csv):
+              $csv
+              | split(",")
+              | map(gsub("^\\s+|\\s+$"; "") | select(. != ""));
+            [ csv_set($left)[] | select((csv_set($right) | index(.)) != null) ] | unique | join(",")
+          ')"
+
+          if [ -z "$filtered_services_csv" ]; then
+            echo "SKIP: service-set phase serviceSet=$service_set_name operation=$operation reason=all-services-excluded"
+            return 0
+          fi
+
+          IFS=','
+          for service_name in $filtered_services_csv; do
+            if [ -z "$service_name" ]; then
+              continue
+            fi
+            NIXFIED_SELECTED_SERVICES_CSV="$filtered_services_csv" \
+              ${lib.escapeShellArg (builtins.toString serviceDispatcherProgram)} run-service "$service_name" "$operation"
+          done
+          IFS="$old_ifs"
         }
 
         run_workflow_kernel_impl() {

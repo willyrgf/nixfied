@@ -53,7 +53,7 @@ let
 
     log_error "Migrations have not been tested against a database copy"
     echo "   Hash: $HASH" >&2
-    echo "   Run 'run_hook SVC_POSTGRES_TEST_MIGRATIONS' first" >&2
+    echo "   Run 'svc postgres test-migrations' first" >&2
     exit 1
   '';
 

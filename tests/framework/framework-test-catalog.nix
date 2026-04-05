@@ -83,10 +83,6 @@ selectionCatalog
         inherit pkgs;
       };
 
-      "service-set-behavior-contract" = import ./service-set-behavior-contract.nix {
-        inherit pkgs;
-      };
-
       "machine-output-app-smoke" = import ./machine-output-app-smoke.nix {
         inherit pkgs;
       };
@@ -98,35 +94,6 @@ selectionCatalog
       "contract-render-snapshot" = import ./contract-render-snapshot.nix {
         inherit pkgs;
       };
-
-      "framework-install-no-caller-compile-smoke" =
-        import ./framework-install-no-caller-compile-smoke.nix
-          {
-            inherit pkgs;
-          };
-
-      "framework-upgrade-no-caller-compile-smoke" =
-        import ./framework-upgrade-no-caller-compile-smoke.nix
-          {
-            inherit
-              pkgs
-              model
-              services
-              registry
-              ;
-          };
-
-      "runtime-controls-no-service-materialization-smoke" =
-        import ./runtime-controls-no-service-materialization-smoke.nix
-          {
-            inherit pkgs;
-          };
-
-      "flake-show-no-service-materialization-smoke" =
-        import ./flake-show-no-service-materialization-smoke.nix
-          {
-            inherit pkgs;
-          };
 
       "run-id-noise-stability-smoke" = import ./run-id-noise-stability-smoke.nix {
         inherit
@@ -149,16 +116,6 @@ selectionCatalog
           ;
       };
 
-      "unselected-service-no-package-resolution-smoke" =
-        import ./unselected-service-no-package-resolution-smoke.nix
-          {
-            inherit pkgs;
-          };
-
-      "unselected-service-public-launcher-smoke" = import ./unselected-service-public-launcher-smoke.nix {
-        inherit pkgs;
-      };
-
       "selected-source-only-resolution-smoke" = import ./selected-source-only-resolution-smoke.nix {
         inherit pkgs;
       };
@@ -168,18 +125,6 @@ selectionCatalog
           {
             inherit pkgs;
           };
-
-      "launcher-skip-service-pruning-smoke" = import ./launcher-skip-service-pruning-smoke.nix {
-        inherit pkgs;
-      };
-
-      "launcher-help-fast-path-smoke" = import ./launcher-help-fast-path-smoke.nix {
-        inherit pkgs;
-      };
-
-      "dispatcher-help-fast-path-smoke" = import ./dispatcher-help-fast-path-smoke.nix {
-        inherit pkgs;
-      };
 
       "orchestrator-arg-forwarding-smoke" = import ./orchestrator-arg-forwarding-smoke.nix {
         inherit pkgs;
@@ -218,7 +163,7 @@ selectionCatalog
         inherit
           pkgs
           model
-          services
+          serviceDefinitions
           serviceCatalog
           ;
       };
@@ -242,14 +187,6 @@ selectionCatalog
       };
 
       "shell-contract-runtime-smoke" = import ./shell-contract-runtime-smoke.nix {
-        inherit pkgs;
-      };
-
-      "service-hook-env-smoke" = import ./service-hook-env-smoke.nix {
-        inherit pkgs;
-      };
-
-      "service-op-composition-contract" = import ./service-op-composition-contract.nix {
         inherit pkgs;
       };
 
@@ -290,13 +227,6 @@ selectionCatalog
 
       "nix-checks-nil-issues-fail-smoke" = import ./nix-checks-nil-issues-fail-smoke.nix {
         inherit pkgs;
-      };
-
-      "skip-service-smoke" = import ./skip-service-smoke.nix {
-        inherit
-          pkgs
-          registry
-          ;
       };
 
       "excluded-service-evaluation" = import ./excluded-service-evaluation.nix {

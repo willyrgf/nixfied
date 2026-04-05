@@ -2,6 +2,7 @@
   pkgs,
   project ? { },
   hooks ? { },
+  runtimeBin ? null,
 }:
 
 let
@@ -12,6 +13,13 @@ let
     loggingPrelude = loggingPrelude;
   };
   hookEnv = hooks.env or { };
+  runtimeBinExport =
+    if runtimeBin == null then
+      ""
+    else
+      ''
+        export NIXFIED_RUNTIME_BIN="${toString runtimeBin}"
+      '';
   hookExports = pkgs.lib.concatMapStringsSep "\n" (key: ''
     # Always pin framework hook paths for deterministic app behavior.
     # User shell/.env hook overrides can route commands to stale scripts.
@@ -25,6 +33,27 @@ let
   commandHelpersScript = pkgs.writeShellScript "nixfied-command-helpers" ''
     ${loggingPrelude}
     ${kernelExportRuntime.kernelExportRuntime}
+    ${runtimeBinExport}
+
+    # svc SERVICE OP [args...]
+    # - execute a compiled service operation through the runtime-owned ABI.
+    svc() {
+      local service="$1"
+      local op="$2"
+      shift 2 || true
+
+      if [ -z "$service" ] || [ -z "$op" ]; then
+        echo "usage: svc <service> <op> [args...]" >&2
+        return 1
+      fi
+
+      if [ -z "''${NIXFIED_RUNTIME_BIN:-}" ]; then
+        log_error "Runtime service invocation is unavailable: NIXFIED_RUNTIME_BIN is unset"
+        return 1
+      fi
+
+      "$NIXFIED_RUNTIME_BIN" run-service "$service" "$op" "$@"
+    }
 
     # require_env VAR [message]
     # - fail if VAR is unset/empty; prints message to stderr.

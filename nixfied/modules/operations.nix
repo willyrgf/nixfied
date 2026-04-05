@@ -81,16 +81,6 @@ let
       envName: "    ${envName}) env_offset=${toString (runtime.env.offsets.${envName} or 0)} ;;"
     ) envNames
   );
-  serviceSkipEnvVars = lib.unique (
-    builtins.map (
-      serviceName:
-      let
-        safeServiceName = lib.toUpper (lib.replaceStrings [ "." "-" ] [ "_" "_" ] serviceName);
-      in
-      "SKIP_${safeServiceName}"
-    ) serviceNames
-  );
-
   slotEnvPrelude = ''
         ${shellCommon}
         slot_var=${lib.escapeShellArg runtime.slot.var}
@@ -249,8 +239,7 @@ let
         passThroughEnv = [
           runtime.env.var
           runtime.slot.var
-        ]
-        ++ serviceSkipEnvVars;
+        ];
         references = {
           taskIds = [ ];
           workflowIds = [ ];

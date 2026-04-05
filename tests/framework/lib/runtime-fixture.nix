@@ -85,8 +85,9 @@ let
       };
     in
     {
-      serviceHookEnv = materialized.serviceHookEnv;
-      inherit (materialized) serviceSetPrograms;
+      inherit (materialized) services;
+      serviceDispatcherProgram = "${materialized.serviceDispatcher}/bin/nixfied-service-dispatcher";
+      runtimeEngineProgram = "${materialized.runtimeEngine}/bin/nixfied-runtime";
     };
 in
 {

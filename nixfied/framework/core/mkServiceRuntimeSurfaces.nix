@@ -504,28 +504,6 @@ let
 
       ${builtins.concatStringsSep "\n" (map renderPlanStep plan)}
     '';
-  mkServiceHookEnv =
-    ops:
-    let
-      pairs = map (op: {
-        name = op.hookName;
-        value = toString op.launcher;
-      }) (builtins.filter (op: op.includeHook) ops);
-      dedup =
-        acc: pair:
-        if builtins.hasAttr pair.name acc then
-          throw "Nixfied service contract hook name collision: ${pair.name}"
-        else
-          acc
-          // (builtins.listToAttrs [
-            {
-              name = pair.name;
-              value = pair.value;
-            }
-          ]);
-    in
-    builtins.foldl' dedup { } pairs;
-
   requestedServiceNames = builtins.map (entry: entry.name) serviceEntries;
   compiledServiceApis = if serviceApis == null then { } else serviceApis;
   compiledOperationCatalog = if operationCatalog == null then { } else operationCatalog;
@@ -652,13 +630,11 @@ let
                 opMetadata
                 ;
               appName = opMetadata.appName;
-              hookName = opMetadata.hookName;
               includeApp = opMetadata.includeApp or false;
               usage = opMetadata.usage or [ "nix run .#${opMetadata.appName}" ];
               category = opMetadata.category or serviceName;
               class = opMetadata.class or "passthrough";
               idempotent = opMetadata.idempotent or false;
-              includeHook = opMetadata.includeHook or false;
               runtimePrimitives = opRuntimePrimitives;
               launcher = mkServiceOpLauncher {
                 inherit
@@ -672,7 +648,6 @@ let
           ) opNamesSorted;
     in
     builtins.concatLists (map toOps serviceNames);
-  serviceHookEnv = mkServiceHookEnv serviceRuntimeOps;
   mkServiceRuntimeApp =
     op:
     toString (
@@ -698,7 +673,6 @@ in
   serviceApis = runtimeServiceApis;
   inherit
     serviceAppPrograms
-    serviceHookEnv
     slots
     ;
 }

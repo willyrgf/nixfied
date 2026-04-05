@@ -303,7 +303,7 @@ let
             lsof -ti:$PGPORT 2>/dev/null | xargs kill -TERM 2>/dev/null || true
             sleep 2
           else
-            echo "   Use 'run_hook SVC_POSTGRES_CHECK_PORT' to investigate" >&2
+            echo "   Use 'svc postgres check-port' to investigate" >&2
             exit 1
           fi
         fi

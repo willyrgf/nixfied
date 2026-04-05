@@ -488,6 +488,8 @@ pkgs.runCommand "service-lifecycle-matrix-smoke" { } ''
   export ENV=test
   export REGISTRY_ROOT="$TMPDIR/registry"
   FULL_START_TIMEOUT_SECS=15
+  TEST_PORT_SEED="$(${pkgs.coreutils}/bin/printf '%s' "$TMPDIR" | ${pkgs.coreutils}/bin/cksum | ${pkgs.gawk}/bin/awk '{ print $1 }')"
+  TEST_PORT_BASE="$((32000 + (TEST_PORT_SEED % 8000)))"
   mkdir -p "$HOME" "$REGISTRY_ROOT"
 
   wait_for_success() {
@@ -956,7 +958,7 @@ pkgs.runCommand "service-lifecycle-matrix-smoke" { } ''
   }
 
   if [ "$POSTGRES_LIVE_AVAILABLE" -eq 1 ]; then
-    export POSTGRES_PORT=55433
+    export POSTGRES_PORT="$TEST_PORT_BASE"
     run_service_case \
       postgres \
       "${postgresService.init}" \
@@ -979,7 +981,7 @@ pkgs.runCommand "service-lifecycle-matrix-smoke" { } ''
       "${postgresService.stop}"
   fi
 
-  export HTTP_PORT=28080 HTTPS_PORT=28443
+  export HTTP_PORT="$((TEST_PORT_BASE + 100))" HTTPS_PORT="$((TEST_PORT_BASE + 101))"
   run_service_case \
     nginx \
     "${nginxService.init}" \
@@ -999,7 +1001,7 @@ pkgs.runCommand "service-lifecycle-matrix-smoke" { } ''
     "${nginxService.ready}" \
     "${nginxService.stop}"
 
-  export MINIO_API_PORT=29000 MINIO_CONSOLE_PORT=29001
+  export MINIO_API_PORT="$((TEST_PORT_BASE + 200))" MINIO_CONSOLE_PORT="$((TEST_PORT_BASE + 201))"
   run_service_case \
     minio \
     "${minioService.init}" \
@@ -1027,7 +1029,7 @@ pkgs.runCommand "service-lifecycle-matrix-smoke" { } ''
     "${minioService.ready}" \
     "${minioService.stop}"
 
-  export RETH_HTTP_PORT=29100 RETH_WS_PORT=29101 RETH_AUTH_PORT=29102
+  export RETH_HTTP_PORT="$((TEST_PORT_BASE + 300))" RETH_WS_PORT="$((TEST_PORT_BASE + 301))" RETH_AUTH_PORT="$((TEST_PORT_BASE + 302))"
   run_service_case \
     reth \
     "${rethService.init}" \
@@ -1055,7 +1057,7 @@ pkgs.runCommand "service-lifecycle-matrix-smoke" { } ''
     "${rethService.ready}" \
     "${rethService.stop}"
 
-  export HELIOSRPC_PORT=29200 RETH_HTTP_PORT=29210
+  export HELIOSRPC_PORT="$((TEST_PORT_BASE + 400))" RETH_HTTP_PORT="$((TEST_PORT_BASE + 410))"
   export HELIOS_READY_TIMEOUT_SECS=3 HELIOS_READY_INTERVAL_SECS=0.2
   run_service_case \
     helios \

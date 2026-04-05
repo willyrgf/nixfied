@@ -13,8 +13,6 @@
 }:
 let
   canonical = import ./canonical.nix { inherit (pkgs) lib; };
-  frameworkSourceFlakeRef = null;
-
   compiledCore = import ./mkCompiledCore.nix {
     inherit
       pkgs
@@ -28,12 +26,10 @@ let
       ;
   };
 
-  execution = import ./materializeExecution.nix {
+  runtimeArtifacts = import ./materializeExecution.nix {
     inherit
       pkgs
       projectRoot
-      selectedServices
-      frameworkSourceFlakeRef
       ;
     compiledCore = compiledCore;
   };
@@ -46,11 +42,19 @@ let
     compiledCore = compiledCore;
   };
 
+  runtimeApps = import ./mkRuntimeAppSet.nix {
+    inherit pkgs;
+    orchestratorProgram = "${runtimeArtifacts.orchestrator}/bin/nixfied-orchestrator";
+    serviceDispatcherProgram = "${runtimeArtifacts.serviceDispatcher}/bin/nixfied-service-dispatcher";
+    model = compiledCore.model;
+    contractBundle = compiledCore.contractBundle;
+  };
+
   apps =
-    execution.baseApps
+    runtimeApps
     // coreSurfaces.apps
     // {
-      default = if execution.baseApps ? help then execution.baseApps.help else execution.baseApps.default;
+      default = if runtimeApps ? help then runtimeApps.help else coreSurfaces.apps.help;
     };
 
   packages = coreSurfaces.packages // {
@@ -64,9 +68,9 @@ in
   model = compiledCore.model;
   statePolicy = compiledCore.model.state.policy;
   stateHash = compiledCore.stateHash;
-  runtimeHash = execution.runtimeHash or compiledCore.model.identity.evalHash;
+  runtimeHash = runtimeArtifacts.runtimeHash or compiledCore.model.identity.evalHash;
   tasks = compiledCore.model.tasks;
-  services = execution.services;
+  services = runtimeArtifacts.services;
   serviceDefinitions = compiledCore.resolved.services or { };
   serviceCatalog = compiledCore.model.serviceCatalog;
   workflows = compiledCore.model.workflows;
@@ -74,8 +78,8 @@ in
   introspectionGraph = compiledCore.introspectionGraph;
   introspectionBundle = compiledCore.introspectionBundle;
   serviceSurfaceCatalog = (compiledCore.model.compiled or { }).serviceSurfaceCatalog or { };
-  serviceApis = execution.serviceApis;
-  serviceHookEnv = execution.serviceHookEnv;
+  serviceApis =
+    ((compiledCore.model.compiled or { }).serviceSurfaceCatalog or { }).serviceApis or { };
 
   inherit
     apps

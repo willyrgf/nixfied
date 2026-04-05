@@ -575,15 +575,14 @@ let
             echo "- (none detected)"
           fi
           echo ""
-          echo "## Dispatcher and Introspection"
-          echo '- `run-task -- <task-id> [-- ...]` from `nixfied/framework/runtime/dispatcher.nix`'
-          echo '- `run-workflow -- <workflow-id> [-- ...]` from `nixfied/framework/runtime/dispatcher.nix`'
-          echo '- `run-workflow-parallel -- <workflow-id> [-- ...]` from `nixfied/framework/runtime/dispatcher.nix`'
-          echo '- `runs [run-id]` from `nixfied/framework/runtime/dispatcher.nix`'
-          echo '- `stop-run -- <run-id>` from `nixfied/framework/runtime/dispatcher.nix`'
-          echo '- `stop-all-runs` from `nixfied/framework/runtime/dispatcher.nix`'
-          echo '- `features` from `nixfied/framework/runtime/dispatcher.nix`'
-          echo '- `introspect`, `stateHash`, `schema` from `nixfied/framework/core/mkNixfied.nix`'
+          echo "## Runtime and Introspection"
+          echo '- `run-task -- <task-id> [--exclude-services <csv>] [-- ...]` from `nixfied/framework/runtime/engine.nix`'
+          echo '- `run-workflow -- <workflow-id> [--exclude-services <csv>] [-- ...]` from `nixfied/framework/runtime/engine.nix`'
+          echo '- `run-workflow-parallel -- <workflow-id> [--exclude-services <csv>] [-- ...]` from `nixfied/framework/runtime/engine.nix`'
+          echo '- `runs [run-id]` from `nixfied/framework/runtime/engine.nix`'
+          echo '- `stop-run -- <run-id>` from `nixfied/framework/runtime/engine.nix`'
+          echo '- `stop-all-runs` from `nixfied/framework/runtime/engine.nix`'
+          echo '- `docs`, `features`, `help`, `introspect`, `stateHash`, `schema` from `nixfied/framework/core/mkCoreSurfaces.nix`'
           echo ""
           echo "## Sensitive Zones"
           if [ -s "$RISK_TSV" ]; then

@@ -5,8 +5,8 @@
   runtimeHash ? model.identity.evalHash,
   registry,
   projectRoot,
-  serviceSetPrograms ? { },
-  serviceHookEnv ? { },
+  serviceDispatcherProgram ? null,
+  runtimeBin ? null,
   executionEnabled ? true,
 }:
 let
@@ -14,8 +14,8 @@ let
   kernelPackage = import ./kernel { inherit pkgs; };
   shellCommon = import ../core/shell-common.nix { inherit pkgs; };
   registryShell = registry.events.mkShellLib { };
-  runtimeHandoffShell =
-    if executionEnabled then import ./runtime-handoff.nix { inherit pkgs; } else "";
+  executionQueryShell =
+    if executionEnabled then import ./execution-query.nix { inherit pkgs; } else "";
   artifactsRuntimeShell =
     if executionEnabled then import ./artifacts-runtime.nix { inherit pkgs; } else "";
   orchestratorRuntimeShell = import ./orchestrator-runtime.nix { inherit pkgs; };
@@ -61,8 +61,8 @@ let
           services
           registry
           projectRoot
-          serviceSetPrograms
-          serviceHookEnv
+          serviceDispatcherProgram
+          runtimeBin
           ;
       }
     else
@@ -142,7 +142,7 @@ pkgs.writeShellScriptBin "nixfied-orchestrator" ''
   ORCHESTRATOR_STOP_TIMEOUT_SEC_DEFAULT=${lib.escapeShellArg (toString model.runtime.orchestrator.stopTimeoutSec)}
 
   ${registryShell}
-  ${runtimeHandoffShell}
+  ${executionQueryShell}
   ${artifactsRuntimeShell}
   ${orchestratorRuntimeShell}
   ${sharedRuntimeLibShell}

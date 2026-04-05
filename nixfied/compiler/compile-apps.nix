@@ -11,20 +11,10 @@
   contractBundle,
 }:
 let
-  serviceSetOperationNames = [
-    "start"
-    "stop"
-    "status"
-    "health"
-    "ready"
-    "export"
-  ];
-
   rawMachineOutputs = resolved.machineOutputs or { };
   machineOutputNames = builtins.sort builtins.lessThan (builtins.attrNames rawMachineOutputs);
   taskIds = builtins.sort builtins.lessThan (builtins.attrNames tasks);
   workflowIds = builtins.sort builtins.lessThan (builtins.attrNames workflows);
-  serviceSetIds = builtins.sort builtins.lessThan (builtins.attrNames serviceSets);
 
   normalizeUsage = appId: values: if values != [ ] then values else [ "nix run .#${appId}" ];
 
@@ -91,114 +81,12 @@ let
         ownerFile = normalizeOwnerFile (launcher.ownerFile or null);
       };
 
-  usageForServiceSet =
-    serviceSetName: operation:
-    if operation == "export" then
-      [ "nix run .#svcset::${serviceSetName}::export -- --format json" ]
-    else if operation == "health" || operation == "ready" then
-      [ "nix run .#svcset::${serviceSetName}::${operation} -- --service all" ]
-    else
-      [ "nix run .#svcset::${serviceSetName}::${operation}" ];
-
-  normalizeServiceSetLauncher =
-    serviceSetId: operation:
-    let
-      serviceSet = serviceSets.${serviceSetId};
-      appId = "svcset::${serviceSet.name}::${operation}";
-    in
-    canonical.canonicalize {
-      id = appId;
-      kind = "serviceSetRef";
-      serviceSetId = serviceSetId;
-      operation = operation;
-      summary = "${serviceSet.summary} ${operation}";
-      description = if serviceSet.description == "" then "" else "${serviceSet.description}\n";
-      category = "core";
-      usage = usageForServiceSet serviceSet.name operation;
-      examples = usageForServiceSet serviceSet.name operation;
-      ownerFile = normalizeOwnerFile (serviceSet.ownerFile or null);
-    };
-
-  defaultServiceSetAliases =
-    let
-      defaultServiceSets = builtins.filter (
-        serviceSetId: (serviceSets.${serviceSetId}.name or "") == "default"
-      ) serviceSetIds;
-    in
-    if defaultServiceSets == [ ] then
-      [ ]
-    else
-      let
-        serviceSetId = builtins.head defaultServiceSets;
-        serviceSet = serviceSets.${serviceSetId};
-      in
-      [
-        (canonical.canonicalize {
-          id = "services-start";
-          kind = "serviceSetRef";
-          inherit serviceSetId;
-          operation = "start";
-          summary = "Start the default service set";
-          description = "Starts required services in the default service set.";
-          category = "core";
-          usage = [ "nix run .#services-start" ];
-          examples = [ ];
-          ownerFile = normalizeOwnerFile (serviceSet.ownerFile or null);
-        })
-        (canonical.canonicalize {
-          id = "services-stop";
-          kind = "serviceSetRef";
-          inherit serviceSetId;
-          operation = "stop";
-          summary = "Stop the default service set";
-          description = "Stops required services in the default service set.";
-          category = "core";
-          usage = [ "nix run .#services-stop" ];
-          examples = [ ];
-          ownerFile = normalizeOwnerFile (serviceSet.ownerFile or null);
-        })
-        (canonical.canonicalize {
-          id = "services-status";
-          kind = "serviceSetRef";
-          inherit serviceSetId;
-          operation = "status";
-          summary = "Show status for the default service set";
-          description = "Shows per-service status for the default service set.";
-          category = "core";
-          usage = [ "nix run .#services-status" ];
-          examples = [ ];
-          ownerFile = normalizeOwnerFile (serviceSet.ownerFile or null);
-        })
-        (canonical.canonicalize {
-          id = "services-export";
-          kind = "serviceSetRef";
-          inherit serviceSetId;
-          operation = "export";
-          summary = "Export the default service set contract";
-          description = "Prints per-service handoff data for the default service set.";
-          category = "core";
-          usage = [
-            "nix run .#services-export -- --format json"
-            "nix run .#services-export -- --format env"
-          ];
-          examples = [ "nix run .#services-export -- --format json" ];
-          ownerFile = normalizeOwnerFile (serviceSet.ownerFile or null);
-        })
-      ];
-
   serviceOperationApps = builtins.attrValues (serviceSurfaceCatalog.appsByName or { });
 
   generatedApps =
     (builtins.filter (app: app != null) (map normalizeTaskLauncher taskIds))
     ++ (builtins.filter (app: app != null) (map normalizeWorkflowLauncher workflowIds))
-    ++ serviceOperationApps
-    ++ (builtins.concatLists (
-      map (
-        serviceSetId:
-        map (operation: normalizeServiceSetLauncher serviceSetId operation) serviceSetOperationNames
-      ) serviceSetIds
-    ))
-    ++ defaultServiceSetAliases;
+    ++ serviceOperationApps;
 
   generatedPreviewAppsById = builtins.listToAttrs (
     map (app: {

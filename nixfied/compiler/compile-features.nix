@@ -79,7 +79,7 @@ let
         else
           [
             {
-              kind = "dispatcher";
+              kind = "runtime";
               name = "run-task";
             }
           ];
@@ -119,7 +119,7 @@ let
         {
           kind = "workflow";
           name = workflowId;
-          dispatcher = "run-workflow";
+          runtime = "run-workflow";
         }
       ];
       ownerFiles = ownerFiles;

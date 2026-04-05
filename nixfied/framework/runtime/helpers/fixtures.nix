@@ -98,7 +98,7 @@ let
       region = serviceSpec.region or "us-east-1";
     in
     ''
-      eval "$(run_hook SVC_MINIO_EXPORT_S3_ENV ${quote bucket} ${quote prefix} ${quote region})"
+      eval "$(svc minio export-s3-env ${quote bucket} ${quote prefix} ${quote region})"
     '';
 
   mkBootstrapScript =
@@ -130,7 +130,7 @@ let
               bucketName = action.name or (throw "Fixture bootstrap kind=bucket requires `name`");
             in
             ''
-              run_hook SVC_MINIO_BUCKET_ENSURE ${quote bucketName}
+              svc minio bucket-ensure ${quote bucketName}
             ''
         else
           throw "Unsupported fixture bootstrap kind for `${serviceName}`: ${kind}";

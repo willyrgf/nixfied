@@ -638,7 +638,7 @@ fn task_run_visit(
         .find(|service_name| context.skipped_services.contains(*service_name))
     {
         println!(
-            "SKIP: task '{}' is skipped because service '{}' has a skip flag enabled",
+            "SKIP: task '{}' is skipped because service '{}' is excluded",
             task_id, skip_service
         );
         task_append_event(

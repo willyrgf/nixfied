@@ -32,11 +32,11 @@ Model-generated app surfaces:
 - `nix run .#test-isolation`
 - `nix run .#validate-env`
 
-Dispatcher surfaces:
+Runtime surfaces:
 
-- `nix run .#run-task -- <task-id> [-- ...]`
-- `nix run .#run-workflow -- <workflow-id> [-- ...]`
-- `nix run .#run-workflow-parallel -- <workflow-id> [-- ...]`
+- `nix run .#run-task -- <task-id> [--exclude-services <csv>] [-- ...]`
+- `nix run .#run-workflow -- <workflow-id> [--exclude-services <csv>] [-- ...]`
+- `nix run .#run-workflow-parallel -- <workflow-id> [--exclude-services <csv>] [-- ...]`
 - `nix run .#runs [-- <run-id>]`
 - `nix run .#stop-run -- <run-id>`
 - `nix run .#stop-all-runs`
@@ -70,37 +70,32 @@ Service configuration and selectors:
 - `nix run .#ready -- --service <name|all> [--source <key>]`
 - See `docs/modules/README.md` for service-specific configuration details.
 
-Service skip controls:
+Service exclusion controls:
 
-- Set any service to skip at runtime with `SKIP_<SERVICE_NAME>=...`.
-- Accepted truthy values: `1`, `true`, `TRUE`, `yes`, `on`.
-- Service names are normalized with:
-  - upper-casing
-  - non-alphanumerics converted to `_`
-- A true skip only affects runtime execution. It suppresses service build/setup/ready/health operations for that run and prevents service-specific operations work from running.
-- To exclude a service from the compiled graph entirely, set `nixfied.graph.excludedServices = [ "<service>" ]`.
+- Invocation-time exclusion is `--exclude-services <csv>`.
+- Static repo-owned graph exclusion is `nixfied.graph.excludedServices = [ "<service>" ]`.
+- Runtime exclusion suppresses service operations for that invocation only.
 - Graph exclusion happens before project service projection and is the correct mechanism when a service branch must not be evaluated at all.
 
 Examples:
 
 ```bash
-# Skip API service during workflow execution.
-SKIP_API=true nix run .#run-workflow -- workflow.ci.full
+# Exclude api during one workflow run.
+nix run .#run-workflow -- workflow.ci.full --exclude-services api
 
-# Skip cache service in a single task run.
-SKIP_CACHE=yes nix run .#run-task -- <task-id>
+# Exclude cache during one task run.
+nix run .#run-task -- <task-id> --exclude-services cache
 
-# Skip health probes for Redis when checking all services.
-SKIP_REDIS=on nix run .#health -- --service all
+# Exclude multiple services for one run.
+nix run .#ci -- --exclude-services helios,reth --summary
 ```
 
-If a workflow unit depends on a skipped service unit, its dependents are cascade-skipped with reason `dependency-skipped`. A skip-only workflow exits 0.
-Covered by `tests/framework/skip-service-smoke`.
+If a workflow unit depends on an excluded service unit, its dependents are cascade-skipped with reason `dependency-skipped`. An exclusion-only workflow exits 0.
 
 Task and workflow service requirements:
 
 - Use `requirements.services = [ "<service>" ... ]` on tasks and workflow units to declare hard service capability requirements.
-- Compile-time graph exclusion and runtime `SKIP_<SERVICE>` both use those requirements.
+- Compile-time graph exclusion and runtime `--exclude-services` both use those requirements.
 
 Ephemeral execution defaults (configured in `nixfied/project/conf.nix`):
 
@@ -123,10 +118,11 @@ Ephemeral runtime behavior:
 - Modules: `lib.evalModules` + typed options from `nixfied/modules/*.nix`.
 - Compiler: deterministic pass pipeline in `nixfied/compiler/*.nix`.
 - Hashing: `stateHash = sha256(toCanonicalNix(model))`.
-- Runner: dispatcher routes to orchestrator, then executor (`dispatcher -> orchestrator -> executor`).
+- Runtime engine: public flake apps exec one runtime entrypoint, which owns invocation-time selection, run inventory, stop controls, summaries, and service dispatch.
 - Registry: append-only NDJSON event stream with replay support.
 - Runtime semantics: `nixfied-kernel` is the framework-owned validation and runtime-semantics layer for scheduling, run-record/registry/summary state, runtime-event policy/status projection, and probe execution; shell launchers stage env/path/process orchestration and invoke kernel commands.
 - Runtime inputs: the kernel consumes compiled runtime assets only; it does not evaluate modules, run compiler passes, or regenerate launchers.
+- Compiler-owned published artifacts include the execution graph, service surface catalog, validation IR, contract bundle/docs, and introspection graph/bundle.
 - Ownership: framework-owned code lives under `nixfied/framework/{core,runtime,install,presets}`; `nixfied/project/` is the downstream composition/customization layer.
 
 ## Runtime Policy
@@ -134,7 +130,8 @@ Ephemeral runtime behavior:
 - Zero framework CUE.
 - Zero framework `jq` in framework runtime/build-check paths.
 - No validator shim or shell-owned semantic sidecars/engines for run records, summaries, registry/runtime status, or service-policy/probe behavior.
-- Public flake command names stay stable; internal runtime seams are free to narrow around compiled assets and kernel commands.
+- The surviving public service ABI is `svc::<service>::<op>`.
+- The surviving public invocation-time service selector is `--exclude-services <csv>`.
 
 ## Docs
 
@@ -173,21 +170,20 @@ nixfied.lib.mkNixfied {
 
 `localOverrides` is explicit. The default repository flake passes `[]`, so `nixfied/local/default.nix` is preserved template space, not an auto-loaded module.
 
-`mkFlakeOutputs` wraps public task/workflow flake apps in thin selector-aware launchers. The canonical compile-time graph selector is `--exclude-services <csv>`, for example:
+`mkFlakeOutputs` publishes thin runtime-backed apps. The surviving invocation-time selector is `--exclude-services <csv>`, for example:
 
 ```bash
 nix run .#ci -- --exclude-services helios --mode full --summary
-nix run .#run-task -- --exclude-services helios task.test.framework.feature-proof.e2e --summary
+nix run .#run-task -- task.test.framework.feature-proof.e2e --exclude-services helios --summary
 ```
 
-Compiled outputs also export service operation surfaces and task-runtime hook env vars for the surviving service graph:
+Compiled outputs also export the surviving public service operation surfaces:
 
 ```bash
 nix run .#svc::postgres::status
-"$SVC_POSTGRES_FULL_START"
 ```
 
-Project tasks should prefer service hook env vars or `svc::...` apps over importing `nixfied/framework/runtime/services/...` directly. That keeps excluded services out of the compiled closure.
+Project tasks should prefer `svc <service> <op>` or `svc::...` apps over importing `nixfied/framework/runtime/services/...` directly. That keeps excluded services out of the compiled closure.
 
 Returned attributes:
 

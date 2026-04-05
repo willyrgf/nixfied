@@ -67,9 +67,7 @@ assert lib.all (
     viewApp = (compiled.model.views.apps or { }).${entry.appName} or null;
     catalogApp = (catalog.appsByName or { }).${entry.appName} or null;
   in
-  (builtins.hasAttr entry.hookName compiled.serviceHookEnv) == (entry.includeHook or false)
-  &&
-    (builtins.hasAttr entry.appName (compiled.model.views.apps or { })) == (entry.includeApp or false)
+  (builtins.hasAttr entry.appName (compiled.model.views.apps or { })) == (entry.includeApp or false)
   && (
     !(entry.includeApp or false)
     || (
@@ -89,7 +87,8 @@ assert lib.all (
     )
   )
 ) operationEntries;
+assert lib.all (entry: !(entry ? hookName) && !(entry ? includeHook)) operationEntries;
 assert lib.all (entry: (entry.commandApi.version or null) == 2) operationEntries;
 pkgs.runCommand "service-surface-catalog-contract" { } ''
-  echo "OK: compiled service surface catalog remains the sole public authority for service APIs, hooks, and app descriptors" > "$out"
+  echo "OK: compiled service surface catalog remains the sole public authority for service APIs and svc app descriptors" > "$out"
 ''
