@@ -183,8 +183,6 @@ struct ProbeExecutionPlan {
     source_env_var: String,
     curl_bin: String,
     runtime_shell_bin: String,
-    pg_is_ready_bin: String,
-    psql_bin: String,
     steps: Vec<ProbeExecutionStep>,
 }
 
@@ -200,16 +198,7 @@ struct ProbeExecutionStep {
     path: Option<String>,
     method: Option<String>,
     port_env_var: Option<String>,
-    execution_port_env_var: Option<String>,
-    source_kinds: BTreeMap<String, String>,
-    readiness_profile: Option<String>,
-    require_not_syncing: bool,
-    allow_local_health_fallback: bool,
-    disallow_source_kinds: Vec<String>,
     max_time_seconds: Option<i64>,
-    database: Option<String>,
-    query: Option<String>,
-    failure_suffix: Option<String>,
     command: Option<String>,
 }
 

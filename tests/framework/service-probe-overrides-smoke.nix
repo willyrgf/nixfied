@@ -52,25 +52,21 @@ let
           nixfied.services.reth.enable = lib.mkForce false;
           nixfied.services.helios.enable = lib.mkForce false;
 
-          nixfied.services.nginx.probes = {
-            health = {
-              strategy = "replace";
-              steps = [
-                {
-                  kind = "exec";
-                  command = ''
-                    test "$NIXFIED_PROBE_MODE" = "health" &&
-                    test "$NIXFIED_PROBE_SERVICE" = "nginx" &&
-                    test "$NIXFIED_PROBE_SOURCE" = "nixpkgs" &&
-                    test -n "$NIXFIED_PROBE_HTTP_PORT" &&
-                    test -n "$NIXFIED_PROBE_HTTPS_PORT"
-                  '';
-                }
-              ];
-            };
+          nixfied.services.nginx.checks = {
+            health.steps = [
+              {
+                kind = "exec";
+                command = ''
+                  test "$NIXFIED_PROBE_MODE" = "health" &&
+                  test "$NIXFIED_PROBE_SERVICE" = "nginx" &&
+                  test "$NIXFIED_PROBE_SOURCE" = "nixpkgs" &&
+                  test -n "$NIXFIED_PROBE_HTTP_PORT" &&
+                  test -n "$NIXFIED_PROBE_HTTPS_PORT"
+                '';
+              }
+            ];
 
             ready = {
-              strategy = "replace";
               wait = {
                 enabled = true;
                 timeoutSeconds = 3;

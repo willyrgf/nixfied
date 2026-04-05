@@ -75,6 +75,10 @@ let
     let
       service = services.${entry.id};
       config = service.config or { };
+      requiredArtifacts = config.requiredSourceArtifacts or [ ];
+      missingArtifacts = builtins.filter (
+        artifactName: (config.${artifactName} or null) == null
+      ) requiredArtifacts;
       fail =
         requirement:
         throw ''
@@ -82,22 +86,10 @@ let
           Configure nixfied.services.${entry.name}.sources.<source>.package, packageAttr, or packageFactory and defaultSource, or disable the service.
         '';
     in
-    if entry.name == "nginx" then
-      if (config.package or null) != null || pkgs ? nginx then true else fail "a runtime package"
-    else if entry.name == "reth" then
-      if (config.package or null) != null || pkgs ? reth then true else fail "a runtime package"
-    else if entry.name == "minio" then
-      if
-        ((config.package or null) != null || pkgs ? minio)
-        && ((config.clientPackage or null) != null || pkgs ? minio-client)
-      then
-        true
-      else if !((config.package or null) != null || pkgs ? minio) then
-        fail "a server package"
-      else
-        fail "a client package"
+    if missingArtifacts == [ ] then
+      true
     else
-      true;
+      fail "required source artifacts (${builtins.concatStringsSep ", " missingArtifacts})";
 
   serviceEntries =
     let

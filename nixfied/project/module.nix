@@ -358,6 +358,7 @@ let
 
   projectServicesModule = import ./services.nix {
     inherit
+      pkgs
       conf
       normalizeSourceKeys
       normalizePostgresEnvConfigs

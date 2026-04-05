@@ -14,12 +14,7 @@ let
     serviceCfg:
     uniqueSorted ((serviceCfg.sourceKeys or [ ]) ++ builtins.attrNames (serviceCfg.sources or { }));
 
-  probeModesFor =
-    serviceCfg:
-    uniqueSorted (
-      builtins.attrNames (serviceCfg.probes or { })
-      ++ builtins.attrNames (serviceCfg.operationProbes or { })
-    );
+  probeModesFor = serviceCfg: uniqueSorted (builtins.attrNames (serviceCfg.checks or { }));
 in
 builtins.listToAttrs (
   map (

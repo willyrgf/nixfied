@@ -8,40 +8,9 @@ let
   kernelExportRuntime = import ./kernel-export-runtime.nix { };
   lib = pkgs.lib;
   kernelPackage = import ../kernel { inherit pkgs; };
-  runtimeDefaults = import ../../core/runtime-defaults.nix;
   serviceConfig = import ../../core/service-config.nix {
     inherit lib pkgs;
   };
-
-  postgresCfg = serviceConfig.getProjectServiceConfig {
-    inherit project;
-    name = "postgres";
-  };
-  minioCfg = serviceConfig.getProjectServiceConfig {
-    inherit project;
-    name = "minio";
-  };
-  rethCfg = serviceConfig.getProjectServiceConfig {
-    inherit project;
-    name = "reth";
-  };
-  heliosCfg = serviceConfig.getProjectServiceConfig {
-    inherit project;
-    name = "helios";
-  };
-  defaultPostgresDatabase = postgresCfg.testDatabase or (postgresCfg.database or "app_test");
-
-  portVarFromKey =
-    key:
-    let
-      replaced = lib.replaceStrings [ "-" "." ":" "/" " " ] [ "_" "_" "_" "_" "_" ] (toString key);
-    in
-    lib.strings.toUpper replaced + "_PORT";
-
-  postgresPortVar = portVarFromKey (postgresCfg.portKey or "postgres");
-  minioApiPortVar = portVarFromKey (minioCfg.portKeyApi or "minioApi");
-  rethHttpPortVar = portVarFromKey (rethCfg.portKeyHttp or "rethHttp");
-  heliosRpcPortVar = portVarFromKey (heliosCfg.portKeyRpc or "heliosRpc");
 
   isEnvName = name: builtins.match "^[A-Za-z_][A-Za-z0-9_]*$" name != null;
 
@@ -54,86 +23,206 @@ let
     else
       throw "Fixture service entry must be a string or attrset";
 
+  getProjectServiceEntry =
+    name:
+    serviceConfig.getProjectServiceEntry {
+      inherit project name;
+    };
+
+  getProjectServiceConfig =
+    name:
+    serviceConfig.getProjectServiceConfig {
+      inherit project name;
+    };
+
+  getFixtureMetadata =
+    serviceName:
+    let
+      cfg = getProjectServiceConfig serviceName;
+    in
+    cfg.resolved.fixture or { };
+
   assertService =
     serviceSpec:
     let
       name = serviceSpec.name or (throw "Fixture service entry missing `name`");
-      cfg = serviceConfig.getProjectServiceEntry {
-        inherit project name;
-      };
+      entry = getProjectServiceEntry name;
       enabled = serviceConfig.isProjectServiceEnabled {
         inherit project name;
       };
     in
-    if cfg == null then
+    if entry == null then
       throw "Unknown fixture service: ${name}"
     else if !enabled then
       throw "Fixture service `${name}` requires services.${name}.enable = true"
     else
       serviceSpec;
 
-  quote = v: lib.escapeShellArg (toString v);
+  quote = value: lib.escapeShellArg (toString value);
 
-  mkPortValueExportFromPortVar = key: portVar: valueExpr: ''
-    _fixture_port_var="${portVar}"
-    _fixture_port_val="''${!_fixture_port_var:-}"
-    export ${key}="${valueExpr}"
-  '';
+  coerceFixtureScalar =
+    label: value:
+    if builtins.isString value || builtins.isInt value || builtins.isBool value then
+      toString value
+    else
+      throw "${label} must be a string, int, or bool";
 
-  mkLocalPostgresUrlExportFromPortVar =
-    key: portVar: dbName:
-    mkPortValueExportFromPortVar key portVar
-      "postgresql://postgres:postgres@${runtimeDefaults.hosts.loopbackIp}:\${_fixture_port_val}/${dbName}";
-
-  mkLocalHttpUrlExportFromPortVar =
-    key: portVar:
-    mkPortValueExportFromPortVar key portVar
-      "http://${runtimeDefaults.hosts.loopbackIp}:\${_fixture_port_val}";
-
-  mkMinioExportScript =
-    serviceSpec:
+  resolveInvocationArg =
+    {
+      label,
+      argumentName,
+      defaults,
+      sourceAttrs,
+    }:
     let
-      bucket = serviceSpec.bucket or "";
-      prefix = serviceSpec.prefix or "";
-      region = serviceSpec.region or "us-east-1";
+      rawValue =
+        if builtins.hasAttr argumentName sourceAttrs then
+          sourceAttrs.${argumentName}
+        else if builtins.hasAttr argumentName defaults then
+          defaults.${argumentName}
+        else
+          null;
     in
-    ''
-      eval "$(svc minio export-s3-env ${quote bucket} ${quote prefix} ${quote region})"
-    '';
+    if rawValue == null then
+      throw "${label} is missing required argument `${argumentName}`"
+    else
+      coerceFixtureScalar "${label}.${argumentName}" rawValue;
+
+  renderInvocationArgAssignments =
+    {
+      label,
+      argumentFields,
+      defaults ? { },
+      sourceAttrs ? { },
+    }:
+    builtins.concatStringsSep "\n" (
+      map (
+        argumentName:
+        if !isEnvName argumentName then
+          throw "${label} uses non-shell-safe argument name `${argumentName}`"
+        else
+          "${argumentName}=${
+            quote (resolveInvocationArg {
+              inherit
+                label
+                argumentName
+                defaults
+                sourceAttrs
+                ;
+            })
+          }"
+      ) argumentFields
+    );
+
+  renderInvocationArgs =
+    {
+      label,
+      argumentFields,
+      defaults ? { },
+      sourceAttrs ? { },
+    }:
+    builtins.concatStringsSep " " (
+      map (
+        argumentName:
+        quote (resolveInvocationArg {
+          inherit
+            label
+            argumentName
+            defaults
+            sourceAttrs
+            ;
+        })
+      ) argumentFields
+    );
+
+  parseFixtureRef =
+    from:
+    let
+      matches = builtins.match "^([A-Za-z0-9_-]+)\\.([A-Za-z0-9_.-]+)$" from;
+    in
+    if matches == null then
+      throw "Unsupported fixtures.env.from value: ${from}"
+    else
+      {
+        serviceName = builtins.elemAt matches 0;
+        refName = builtins.elemAt matches 1;
+      };
+
+  normalizeBootstrapAction =
+    {
+      serviceName,
+      metadata,
+      action,
+    }:
+    let
+      availableKinds = builtins.sort builtins.lessThan (builtins.attrNames metadata);
+      inferredKind =
+        if metadata ? default then
+          "default"
+        else if builtins.length availableKinds == 1 then
+          builtins.head availableKinds
+        else
+          throw "Fixture bootstrap action for `${serviceName}` must specify `kind`";
+    in
+    if builtins.isString action then
+      {
+        kind = inferredKind;
+        name = action;
+      }
+    else if builtins.isAttrs action then
+      action // { kind = action.kind or inferredKind; }
+    else
+      throw "Fixture bootstrap action for `${serviceName}` must be string or attrset";
+
+  mkExportTokenScript =
+    {
+      serviceName,
+      serviceSpec,
+      token,
+    }:
+    let
+      metadata = (getFixtureMetadata serviceName).exports or { };
+      tokenCfg =
+        metadata.${token}
+          or (throw "Unsupported fixture export token `${token}` for service `${serviceName}`");
+      args = renderInvocationArgs {
+        label = "fixture export ${serviceName}.${token}";
+        argumentFields = tokenCfg.argumentFields or [ ];
+        defaults = tokenCfg.defaults or { };
+        sourceAttrs = serviceSpec;
+      };
+    in
+    ''eval "$(svc ${quote serviceName} ${quote tokenCfg.operation}${
+      lib.optionalString (args != "") " ${args}"
+    })"'';
 
   mkBootstrapScript =
     serviceName: bootstrap:
     let
-      normalizeAction =
-        action:
-        if builtins.isString action then
-          {
-            kind = "bucket";
-            name = action;
-          }
-        else if builtins.isAttrs action then
-          action
-        else
-          throw "Fixture bootstrap action for `${serviceName}` must be string or attrset";
-
+      metadata = (getFixtureMetadata serviceName).bootstrap or { };
       renderAction =
-        action0:
+        action:
         let
-          action = normalizeAction action0;
-          kind = action.kind or (throw "Fixture bootstrap action for `${serviceName}` missing `kind`");
+          normalized = normalizeBootstrapAction {
+            inherit
+              serviceName
+              metadata
+              action
+              ;
+          };
+          kind = normalized.kind or (throw "Fixture bootstrap action for `${serviceName}` missing `kind`");
+          bootstrapCfg =
+            metadata.${kind} or (throw "Unsupported fixture bootstrap kind for `${serviceName}`: ${kind}");
+          args = renderInvocationArgs {
+            label = "fixture bootstrap ${serviceName}.${kind}";
+            argumentFields = bootstrapCfg.argumentFields or [ ];
+            defaults = bootstrapCfg.defaults or { };
+            sourceAttrs = normalized;
+          };
         in
-        if kind == "bucket" then
-          if serviceName != "minio" then
-            throw "Fixture bootstrap kind=bucket only supported for service=minio"
-          else
-            let
-              bucketName = action.name or (throw "Fixture bootstrap kind=bucket requires `name`");
-            in
-            ''
-              svc minio bucket-ensure ${quote bucketName}
-            ''
-        else
-          throw "Unsupported fixture bootstrap kind for `${serviceName}`: ${kind}";
+        "svc ${quote serviceName} ${quote bootstrapCfg.operation}${
+          lib.optionalString (args != "") " ${args}"
+        }";
     in
     lib.concatMapStringsSep "\n" renderAction bootstrap;
 
@@ -168,14 +257,14 @@ let
           "${logPrefix}-${toString idx}-${serviceName}.log";
 
       exportScript = lib.concatMapStringsSep "\n" (
-        exportToken:
-        if exportToken == "s3" then
-          if serviceName != "minio" then
-            throw "Fixture exports=[\"s3\"] is only supported for service=minio"
-          else
-            mkMinioExportScript serviceSpec
-        else
-          throw "Unsupported fixture export token `${exportToken}` for service `${serviceName}`"
+        token:
+        mkExportTokenScript {
+          inherit
+            serviceName
+            serviceSpec
+            token
+            ;
+        }
       ) exportsList;
 
       bootstrapScript = mkBootstrapScript serviceName bootstrap;
@@ -186,11 +275,6 @@ let
         ${lib.optionalString logsEnabled ''
           _fixture_log_file="$(artifact_path ${quote logName})"
         ''}
-        # Lifecycle contract for fixture services:
-        # - start may be asynchronous.
-        # - fixture_start_service should prefer profile-specific READY hooks when available.
-        # - fixture_start_service must poll READY/HEALTH with timeout.
-        # - diagnostics must stay robust when log files are missing.
         _fixture_keep_running="$(_fixture_keep_running_from_policy)"
         log_info "fixture service start name=${serviceName} profile=${profile}"
         fixture_start_service ${quote serviceName} ${quote profile} ${quote timeout} ${quote interval} "$_fixture_log_file" "$_fixture_keep_running"
@@ -209,30 +293,7 @@ let
       let
         from = value.from or (throw "fixtures.env.${key} requires `from` when value is an attrset");
       in
-      if from == "postgres.url" then
-        let
-          dbName = value.database or defaultPostgresDatabase;
-        in
-        mkLocalPostgresUrlExportFromPortVar key postgresPortVar dbName
-      else if from == "reth.httpUrl" then
-        mkLocalHttpUrlExportFromPortVar key rethHttpPortVar
-      else if from == "helios.rpcUrl" then
-        mkLocalHttpUrlExportFromPortVar key heliosRpcPortVar
-      else if from == "minio.endpoint" then
-        mkLocalHttpUrlExportFromPortVar key minioApiPortVar
-      else if from == "minio.bucket" then
-        ''
-          export ${key}="''${MINIO_BUCKET:-}"
-        ''
-      else if from == "minio.region" then
-        ''
-          export ${key}="''${MINIO_REGION:-us-east-1}"
-        ''
-      else if from == "minio.prefix" then
-        ''
-          export ${key}="''${MINIO_PREFIX:-}"
-        ''
-      else if from == "env" then
+      if from == "env" then
         let
           varName = value.var or (throw "fixtures.env.${key} with from=\"env\" requires `var`");
         in
@@ -240,7 +301,26 @@ let
           export ${key}="''${${varName}:-}"
         ''
       else
-        throw "Unsupported fixtures.env.${key}.from value: ${from}"
+        let
+          ref = parseFixtureRef from;
+          _ = assertService { name = ref.serviceName; };
+          refMetadata = (getFixtureMetadata ref.serviceName).refs or { };
+          refCfg = refMetadata.${ref.refName} or (throw "Unsupported fixture ref `${from}`");
+          argAssignments = renderInvocationArgAssignments {
+            label = "fixture ref ${from}";
+            argumentFields = refCfg.argumentFields or [ ];
+            defaults = refCfg.defaults or { };
+            sourceAttrs = builtins.removeAttrs value [ "from" ];
+          };
+        in
+        ''
+          {
+            ${argAssignments}
+            export ${key}="$(
+              ${refCfg.script}
+            )"
+          }
+        ''
     else
       throw "fixtures.env.${key} must be a scalar or attrset";
 

@@ -1,6 +1,10 @@
 { pkgs }:
 let
   shellHelpers = import ./lib/shell-helpers.nix { inherit pkgs; };
+  frameworkLib = import ../../nixfied/framework/core {
+    inherit pkgs;
+    system = pkgs.system;
+  };
   slotsStub =
     let
       slotInfo = pkgs.writeShellScript "service-lifecycle-slot-info" ''
@@ -70,6 +74,59 @@ let
       id = "service-lifecycle-matrix";
     };
   };
+
+  mkCompiled =
+    {
+      serviceName,
+      serviceConfig ? { },
+    }:
+    frameworkLib.mkNixfied {
+      projectRoot = ../..;
+      projectModules = [ ../../nixfied/project/module.nix ];
+      extraModules = [
+        (
+          { lib, ... }:
+          {
+            nixfied.services = builtins.listToAttrs (
+              map
+                (name: {
+                  inherit name;
+                  value =
+                    if name == serviceName then
+                      serviceConfig
+                      // {
+                        enable = lib.mkForce true;
+                      }
+                    else
+                      {
+                        enable = lib.mkForce false;
+                      };
+                })
+                [
+                  "postgres"
+                  "nginx"
+                  "minio"
+                  "reth"
+                  "helios"
+                ]
+            );
+          }
+        )
+      ];
+      localOverrides = [ ];
+    };
+
+  mkRuntimeProject =
+    serviceName: compiled:
+    projectBase
+    // {
+      services = {
+        ${serviceName} = {
+          enable = true;
+          config = compiled.services."service.${serviceName}".config;
+        };
+      };
+    };
 
   mkPackageWithScript =
     {
@@ -371,46 +428,52 @@ let
     script = heliosStubScript;
   };
 
-  nginxProject = projectBase // {
-    services.nginx = {
-      defaultSource = "stub";
-      sources = {
-        stub.package = nginxStub;
-      };
+  postgresCompiled = mkCompiled {
+    serviceName = "postgres";
+  };
+
+  nginxCompiled = mkCompiled {
+    serviceName = "nginx";
+    serviceConfig = {
+      defaultSource = pkgs.lib.mkForce "stub";
+      sources.stub.package = nginxStub;
     };
   };
 
-  minioProject = projectBase // {
-    services.minio = {
-      defaultSource = "stub";
-      sources = {
-        stub.package = minioStub;
-      };
+  minioCompiled = mkCompiled {
+    serviceName = "minio";
+    serviceConfig = {
+      defaultSource = pkgs.lib.mkForce "stub";
+      sources.stub.package = minioStub;
     };
   };
 
-  rethProject = projectBase // {
-    services.reth = {
-      defaultSource = "stub";
-      sources = {
-        stub.package = rethStub;
-      };
+  rethCompiled = mkCompiled {
+    serviceName = "reth";
+    serviceConfig = {
+      defaultSource = pkgs.lib.mkForce "stub";
+      sources.stub.package = rethStub;
     };
   };
 
-  heliosProject = projectBase // {
-    services.helios = {
-      defaultSource = "stub";
-      sources = {
-        stub.package = heliosStub;
-      };
+  heliosCompiled = mkCompiled {
+    serviceName = "helios";
+    serviceConfig = {
+      defaultSource = pkgs.lib.mkForce "stub";
+      sources.stub.package = heliosStub;
     };
   };
+
+  postgresProject = mkRuntimeProject "postgres" postgresCompiled;
+  nginxProject = mkRuntimeProject "nginx" nginxCompiled;
+  minioProject = mkRuntimeProject "minio" minioCompiled;
+  rethProject = mkRuntimeProject "reth" rethCompiled;
+  heliosProject = mkRuntimeProject "helios" heliosCompiled;
 
   postgresService =
     (import ../../nixfied/modules/services/runtime/postgres/default.nix {
       inherit pkgs;
-      project = projectBase;
+      project = postgresProject;
       slots = slotsStub;
     }).operations;
 

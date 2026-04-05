@@ -208,6 +208,10 @@ let
   };
 in
 {
+  kvSpecType = kvSpecType;
+  operationType = operationType;
+  artifactValueType = artifactValueType;
+  runtimePrimitivesType = runtimePrimitivesType;
   serviceContractType = serviceContractType;
   serviceImplementationType = serviceImplementationType;
 

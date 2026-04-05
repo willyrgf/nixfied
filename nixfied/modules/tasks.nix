@@ -1,10 +1,26 @@
-{ lib, ... }:
+{ lib, config, ... }:
 let
   t = lib.types;
-  serviceConfigLib = import ../framework/core/service-config.nix { inherit lib; };
   apiOptions = import ./lib/api-options.nix { inherit lib; };
   launcherOptions = import ./lib/launcher-options.nix { inherit lib; };
-  serviceRequirementType = t.enum serviceConfigLib.supportedServiceNames;
+  serviceRequirementType = t.str;
+  configuredServiceNames = builtins.sort builtins.lessThan (
+    builtins.attrNames (config.nixfied.services or { })
+  );
+  validateServiceNames =
+    context: names:
+    let
+      unknown = builtins.filter (name: !(builtins.elem name configuredServiceNames)) (
+        builtins.sort builtins.lessThan names
+      );
+    in
+    if unknown == [ ] then
+      names
+    else
+      throw ''
+        ${context} references unknown services: ${builtins.concatStringsSep ", " unknown}
+        known services: ${builtins.concatStringsSep ", " configuredServiceNames}
+      '';
   runtimeWorkdirType = t.enum [
     "projectRoot"
     "stateRoot"
@@ -84,6 +100,7 @@ in
               services = lib.mkOption {
                 type = t.listOf serviceRequirementType;
                 default = [ ];
+                apply = validateServiceNames "nixfied.tasks.${name}.requirements.services";
                 description = "Hard service capability requirements used for graph exclusion and runtime skip.";
               };
             };

@@ -2,7 +2,6 @@
   lib,
   pkgs,
   probeCommands,
-  postgresProbePkg,
 }:
 
 let
@@ -90,35 +89,6 @@ let
         portEnvVar = portEnvVarFor step.endpoint;
         maxTimeSeconds = runtimeDefaults.probes.httpMaxTimeSeconds;
       }
-    else if step.kind == "postgres-pg-isready" then
-      base
-      // {
-        host = step.host or hostDefault;
-        portEnvVar = portEnvVarFor step.endpoint;
-        failureSuffix = step.failureSuffix or "";
-      }
-    else if step.kind == "postgres-query" then
-      base
-      // {
-        host = step.host or hostDefault;
-        portEnvVar = portEnvVarFor step.endpoint;
-        database = step.database;
-        query = step.query;
-        failureSuffix = step.failureSuffix or "";
-      }
-    else if step.kind == "helios-ready" then
-      base
-      // {
-        host = hostDefault;
-        portEnvVar = portEnvVarFor step.endpoint;
-        executionPortEnvVar = portEnvVarFor step.executionEndpoint;
-        sourceKinds = step.sourceKinds or { };
-        readinessProfile = step.readinessProfile or "fast";
-        requireNotSyncing = step.requireNotSyncing or false;
-        allowLocalHealthFallback = step.allowLocalHealthFallback or false;
-        disallowSourceKinds = step.disallowSourceKinds or [ ];
-        maxTimeSeconds = runtimeDefaults.probes.httpMaxTimeSeconds;
-      }
     else if step.kind == "exec" then
       base
       // {
@@ -144,8 +114,6 @@ let
       sourceEnvVar = "NIXFIED_PROBE_SOURCE";
       curlBin = "${pkgs.curl}/bin/curl";
       runtimeShellBin = "${pkgs.runtimeShell}";
-      pgIsReadyBin = "${postgresProbePkg}/bin/pg_isready";
-      psqlBin = "${postgresProbePkg}/bin/psql";
       steps = map (
         step:
         mkStepSpec {

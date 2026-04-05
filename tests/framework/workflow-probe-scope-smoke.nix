@@ -26,54 +26,42 @@ let
           nixfied.services.reth.enable = lib.mkForce false;
           nixfied.services.helios.enable = lib.mkForce false;
 
-          nixfied.services.postgres.probes = {
-            health = {
-              strategy = "replace";
-              steps = [
-                {
-                  kind = "exec";
-                  command = ''
-                    echo "MARKER: postgres health"
-                  '';
-                }
-              ];
-            };
-            ready = {
-              strategy = "replace";
-              steps = [
-                {
-                  kind = "exec";
-                  command = ''
-                    echo "MARKER: postgres ready"
-                  '';
-                }
-              ];
-            };
+          nixfied.services.postgres.checks = {
+            health.steps = [
+              {
+                kind = "exec";
+                command = ''
+                  echo "MARKER: postgres health"
+                '';
+              }
+            ];
+            ready.steps = [
+              {
+                kind = "exec";
+                command = ''
+                  echo "MARKER: postgres ready"
+                '';
+              }
+            ];
           };
 
-          nixfied.services.nginx.probes = {
-            health = {
-              strategy = "replace";
-              steps = [
-                {
-                  kind = "exec";
-                  command = ''
-                    echo "MARKER: nginx health"
-                  '';
-                }
-              ];
-            };
-            ready = {
-              strategy = "replace";
-              steps = [
-                {
-                  kind = "exec";
-                  command = ''
-                    echo "MARKER: nginx ready"
-                  '';
-                }
-              ];
-            };
+          nixfied.services.nginx.checks = {
+            health.steps = [
+              {
+                kind = "exec";
+                command = ''
+                  echo "MARKER: nginx health"
+                '';
+              }
+            ];
+            ready.steps = [
+              {
+                kind = "exec";
+                command = ''
+                  echo "MARKER: nginx ready"
+                '';
+              }
+            ];
           };
 
           nixfied.tasks."test.workflow.probe-scope" = {

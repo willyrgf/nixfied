@@ -17,24 +17,18 @@ let
     { lib, ... }:
     {
       nixfied.services.nginx.enable = lib.mkForce true;
-      nixfied.services.nginx.probes.health = {
-        strategy = "replace";
-        steps = [
-          {
-            kind = "exec";
-            command = throw "nginx health probe normalized unexpectedly";
-          }
-        ];
-      };
-      nixfied.services.nginx.probes.ready = {
-        strategy = "replace";
-        steps = [
-          {
-            kind = "exec";
-            command = throw "nginx readiness probe normalized unexpectedly";
-          }
-        ];
-      };
+      nixfied.services.nginx.checks.health.steps = [
+        {
+          kind = "exec";
+          command = throw "nginx health check normalized unexpectedly";
+        }
+      ];
+      nixfied.services.nginx.checks.ready.steps = [
+        {
+          kind = "exec";
+          command = throw "nginx readiness check normalized unexpectedly";
+        }
+      ];
     };
 
   poisoned = compiler.compileCore {

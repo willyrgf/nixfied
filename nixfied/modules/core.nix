@@ -1,24 +1,40 @@
-{ lib, ... }:
+{
+  lib,
+  config,
+  ...
+}:
 let
   t = lib.types;
-  serviceConfigLib = import ../framework/core/service-config.nix { inherit lib; };
   moduleContracts = import ./contracts.nix { inherit lib; };
   contractDefinitionType = moduleContracts.contractOptions.contractDefinition;
+  configuredServiceNames = builtins.sort builtins.lessThan (
+    builtins.attrNames (config.nixfied.services or { })
+  );
+  validateServiceNames =
+    context: names:
+    let
+      unknown = builtins.filter (name: !(builtins.elem name configuredServiceNames)) (
+        builtins.sort builtins.lessThan names
+      );
+    in
+    if unknown == [ ] then
+      names
+    else
+      throw ''
+        ${context} references unknown services: ${builtins.concatStringsSep ", " unknown}
+        known services: ${builtins.concatStringsSep ", " configuredServiceNames}
+      '';
 in
 {
   imports = [
     ./machine-outputs.nix
+    ./service-definitions.nix
     ./service-sets.nix
     ./state.nix
     ./runtime.nix
     ./tasks.nix
     ./workflows.nix
     ./operations.nix
-    ./services/postgres.nix
-    ./services/nginx.nix
-    ./services/minio.nix
-    ./services/reth.nix
-    ./services/helios.nix
   ];
 
   options.nixfied = {
@@ -80,8 +96,9 @@ in
 
     graph = {
       excludedServices = lib.mkOption {
-        type = t.listOf (t.enum serviceConfigLib.supportedServiceNames);
+        type = t.listOf t.str;
         default = [ ];
+        apply = validateServiceNames "nixfied.graph.excludedServices";
         description = "Pure graph-time service exclusions applied before project service projection.";
       };
     };

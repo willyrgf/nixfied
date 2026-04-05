@@ -6,10 +6,24 @@
 let
   t = lib.types;
   statePolicyOptions = import ./lib/state-policy-options.nix { inherit lib; };
-  serviceConfigLib = import ../framework/core/service-config.nix { inherit lib; };
-  serviceRequirementType = t.enum serviceConfigLib.supportedServiceNames;
+  serviceRequirementType = t.str;
 
   configuredServices = config.nixfied.services or { };
+  configuredServiceNames = builtins.sort builtins.lessThan (builtins.attrNames configuredServices);
+  validateServiceNames =
+    context: names:
+    let
+      unknown = builtins.filter (name: !(builtins.elem name configuredServiceNames)) (
+        builtins.sort builtins.lessThan names
+      );
+    in
+    if unknown == [ ] then
+      names
+    else
+      throw ''
+        ${context} references unknown services: ${builtins.concatStringsSep ", " unknown}
+        known services: ${builtins.concatStringsSep ", " configuredServiceNames}
+      '';
   excludedServices = config.nixfied.graph.excludedServices or [ ];
   enabledServiceNames = builtins.filter (
     serviceName:
@@ -39,11 +53,13 @@ let
           required = lib.mkOption {
             type = t.listOf serviceRequirementType;
             default = [ ];
+            apply = validateServiceNames "nixfied.serviceSets.${name}.services.required";
           };
 
           optional = lib.mkOption {
             type = t.listOf serviceRequirementType;
             default = [ ];
+            apply = validateServiceNames "nixfied.serviceSets.${name}.services.optional";
           };
         };
 

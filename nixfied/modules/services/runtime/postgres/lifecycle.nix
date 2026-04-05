@@ -28,7 +28,6 @@ let
     observability
     serviceSource
     readyPlan
-    renderProbeStep
     healthPlanBody
     readyPlanBody
     ;
@@ -41,56 +40,16 @@ let
   database = config.database or "app";
   testDatabase = config.testDatabase or "${database}_test";
   extensions = config.extensions or [ ];
-  renderQuietProbeStep = mode: step: ''
-    {
-      service_source=${pkgs.lib.escapeShellArg serviceSource}
-      ${renderProbeStep mode step}
-    } >/dev/null 2>&1
+  startupPgIsReadyCommand = ''
+    ${postgres}/bin/pg_isready -U postgres -h ${runtimeDefaults.hosts.localhost} -p "$PGPORT" -q >/dev/null 2>&1
   '';
-  startupPgIsReadyCommand = renderQuietProbeStep "health" {
-    kind = "postgres-pg-isready";
-    endpoint = "primary";
-    serviceLabel = "postgres";
-    phaseLabel = "health";
-    successLabel = "healthy";
-    failureLabel = "unhealthy";
-    host = runtimeDefaults.hosts.localhost;
-    failureSuffix = "";
-  };
-  readyTestPgIsReadyCommand = renderQuietProbeStep "ready" {
-    kind = "postgres-pg-isready";
-    endpoint = "primary";
-    serviceLabel = "postgres";
-    phaseLabel = "readiness";
-    successLabel = "ready";
-    failureLabel = "not ready";
-    host = runtimeDefaults.hosts.localhost;
-    failureSuffix = " (pg_isready failed)";
-  };
-  readyTestMaintenanceQueryCommand = renderQuietProbeStep "ready" {
-    kind = "postgres-query";
-    endpoint = "primary";
-    serviceLabel = "postgres";
-    phaseLabel = "readiness";
-    successLabel = "ready";
-    failureLabel = "not ready";
-    host = runtimeDefaults.hosts.localhost;
-    database = "postgres";
-    query = "select 1;";
-    failureSuffix = " (maintenance query failed)";
-  };
-  readyTestDatabaseQueryCommand = renderQuietProbeStep "ready" {
-    kind = "postgres-query";
-    endpoint = "primary";
-    serviceLabel = "postgres";
-    phaseLabel = "readiness";
-    successLabel = "ready";
-    failureLabel = "not ready";
-    host = runtimeDefaults.hosts.localhost;
-    database = testDatabase;
-    query = "select 1;";
-    failureSuffix = " (database query failed)";
-  };
+  readyTestPgIsReadyCommand = startupPgIsReadyCommand;
+  readyTestMaintenanceQueryCommand = ''
+    ${postgres}/bin/psql -h ${runtimeDefaults.hosts.localhost} -p "$PGPORT" -U postgres -d postgres -Atqc 'select 1;' >/dev/null 2>&1
+  '';
+  readyTestDatabaseQueryCommand = ''
+    ${postgres}/bin/psql -h ${runtimeDefaults.hosts.localhost} -p "$PGPORT" -U postgres -d ${pkgs.lib.escapeShellArg testDatabase} -Atqc 'select 1;' >/dev/null 2>&1
+  '';
   mkWrappedScript =
     {
       name,

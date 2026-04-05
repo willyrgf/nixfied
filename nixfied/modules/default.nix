@@ -3,17 +3,11 @@
   machineOutputs = import ./machine-outputs.nix;
   runtime = import ./runtime.nix;
   serviceSets = import ./service-sets.nix;
+  serviceDefinitions = import ./service-definitions.nix;
   tasks = import ./tasks.nix;
   workflows = import ./workflows.nix;
   operations = import ./operations.nix;
-
-  services = {
-    postgres = import ./services/postgres.nix;
-    nginx = import ./services/nginx.nix;
-    minio = import ./services/minio.nix;
-    reth = import ./services/reth.nix;
-    helios = import ./services/helios.nix;
-  };
+  services = import ./services;
 
   profiles = {
     webapp = import ./profiles/webapp.nix;
