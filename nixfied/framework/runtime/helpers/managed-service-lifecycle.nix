@@ -207,6 +207,15 @@ let
         exit 1
       fi
 
+      # A concurrent stop can land after the probe succeeds but before this
+      # wrapper commits readiness. Do not resurrect runtime status with a late
+      # ready event once the child is already gone.
+      if ! kill -0 "$CHILD_PID" 2>/dev/null; then
+        emit_service_event service_stopped --pid "$CHILD_PID" --log-path "$LOG_FILE"
+        log_warn "${serviceLabel} stopped before readiness commit"
+        exit 0
+      fi
+
       emit_service_event service_ready --pid "$CHILD_PID" --log-path "$LOG_FILE"
       ${successBody}
       log_info "${successMessage}"
