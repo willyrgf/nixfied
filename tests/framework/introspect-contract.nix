@@ -18,7 +18,7 @@ pkgs.runCommand "introspect-contract" { } ''
   "$INTROSPECT" app:check --json > "$TMPDIR/check.json"
   "$JQ" -e '.kind == "introspection-response" and .version == 1' "$TMPDIR/check.json" > /dev/null
   "$JQ" -e '.payload.resolved.nodeId == "app:check"' "$TMPDIR/check.json" > /dev/null
-  "$JQ" -e '.payload.execution.launcherClass == "selected-app"' "$TMPDIR/check.json" > /dev/null
+  "$JQ" -e '.payload.execution.launcherClass == "runtime-wrapper"' "$TMPDIR/check.json" > /dev/null
   "$JQ" -e '.payload.diagnostics.policyKind == "workspace-scoped"' "$TMPDIR/check.json" > /dev/null
   "$JQ" -e '.payload.diagnostics.legacyLocalDefault.path == "nixfied/local/default.nix"' "$TMPDIR/check.json" > /dev/null
   "$JQ" -e '.payload.diagnostics.legacyLocalDefault.present == true' "$TMPDIR/check.json" > /dev/null
@@ -30,7 +30,9 @@ pkgs.runCommand "introspect-contract" { } ''
   "$JQ" -e '.kind == "introspection-response" and .version == 1' "$TMPDIR/why.json" > /dev/null
   "$JQ" -e '.payload.closure.target.nodeId == "package:nix-checks"' "$TMPDIR/why.json" > /dev/null
   "$JQ" -e '.payload.closure.reasonChains | length > 0' "$TMPDIR/why.json" > /dev/null
-  "$JQ" -e '[.payload.closure.reasonChains[].nodes[].nodeId] | index("execution:app-manifest:check") != null' "$TMPDIR/why.json" > /dev/null
+  "$JQ" -e '[.payload.closure.reasonChains[].nodes[].nodeId] | index("app:check") != null' "$TMPDIR/why.json" > /dev/null
+  "$JQ" -e '[.payload.closure.reasonChains[].nodes[].nodeId] | index("task:task.check") != null' "$TMPDIR/why.json" > /dev/null
+  "$JQ" -e 'any(.payload.closure.reasonChains[]; (.nodes | map(.nodeId)) == ["app:check", "task:task.check", "package:nix-checks"])' "$TMPDIR/why.json" > /dev/null
   "$JQ" -e '[.payload.closure.reasonChains[].nodes[].nodeId] | index("execution:full-model-manifest") == null' "$TMPDIR/why.json" > /dev/null
 
   "$INTROSPECT" reverse package:nix-checks --json > "$TMPDIR/reverse.json"

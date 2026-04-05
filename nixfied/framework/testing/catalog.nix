@@ -34,7 +34,6 @@ let
       "postgres-config-artifacts-contract"
       "project-config-boundary"
       "scheduler-order"
-      "service-op-composition-contract"
       "service-probe-overrides-contract"
       "service-requirements-contract"
       "service-surface-catalog-contract"
@@ -43,7 +42,6 @@ let
 
     manifest = [
       "machine-output-app-smoke"
-      "service-set-behavior-contract"
     ];
 
     kernel = [
@@ -79,14 +77,9 @@ let
     ];
 
     adapters = [
-      "dispatcher-help-fast-path-smoke"
-      "launcher-help-fast-path-smoke"
-      "launcher-skip-service-pruning-smoke"
       "orchestrator-arg-forwarding-smoke"
       "orchestrator-signal-cleanup-smoke"
-      "service-hook-env-smoke"
       "shell-contract-runtime-smoke"
-      "unselected-service-public-launcher-smoke"
     ];
 
     e2e = [
@@ -101,13 +94,10 @@ let
       "ephemeral-execution-smoke"
       "ephemeral-runtime-behavior-smoke"
       "ephemeral-retention-smoke"
-      "flake-show-no-service-materialization-smoke"
       "framework-install-filter-smoke"
-      "framework-install-no-caller-compile-smoke"
       "framework-install-thin-smoke"
       "framework-install-vendor-smoke"
       "framework-template-install-upgrade-help-smoke"
-      "framework-upgrade-no-caller-compile-smoke"
       "framework-upgrade-preserve-smoke"
       "logging-injection-smoke"
       "nginx-site-management-smoke"
@@ -119,19 +109,16 @@ let
       "ready-health-matrix-smoke"
       "ready-health-shutdown-smoke"
       "ready-helios-sync-gate-smoke"
-      "runtime-controls-no-service-materialization-smoke"
       "runtime-owned-env-blocked-smoke"
       "selected-source-only-resolution-smoke"
       "sensitive-pass-through-smoke"
       "service-dir-isolation-smoke"
       "service-lifecycle-matrix-smoke"
       "service-probe-overrides-smoke"
-      "skip-service-smoke"
       "slot-env-runtime-smoke"
       "supervisor-lifecycle-smoke"
       "task-hooks-smoke"
       "test-mode-cli-contract-smoke"
-      "unselected-service-no-package-resolution-smoke"
       "vendored-metadata-packaged-source-smoke"
     ];
 
@@ -142,12 +129,9 @@ let
 
   featureProofShardChecks = {
     compile = [ "features-surface-contract" ];
-    manifest = [
-      "machine-output-app-smoke"
-      "service-set-behavior-contract"
-    ];
+    manifest = [ "machine-output-app-smoke" ];
     kernel = [ ];
-    adapters = [ "service-hook-env-smoke" ];
+    adapters = [ ];
     e2e = [ "ephemeral-runtime-behavior-smoke" ];
     migration = [ ];
   };

@@ -31,10 +31,8 @@ let
     model = probeModel;
     inherit services;
     projectRoot = ../..;
-    inherit (runtimeDeps)
-      serviceHookEnv
-      serviceSetPrograms
-      ;
+    serviceDispatcherProgram = runtimeDeps.serviceDispatcherProgram;
+    runtimeBin = runtimeDeps.runtimeEngineProgram;
   };
 in
 pkgs.runCommand "summary-json-smoke" { } ''

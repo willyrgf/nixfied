@@ -32,7 +32,6 @@ let
 
   listUtils = import ../framework/core/list-utils.nix;
   uniqueSorted = listUtils.uniqueSorted;
-  appExecutionManifests = execution.apps.byId or { };
   taskExecutionById = execution.tasks.byId or { };
   workflowExecutionById = execution.workflows.byId or { };
 
@@ -163,12 +162,9 @@ let
     appId:
     let
       app = apps.${appId};
-      manifest = appExecutionManifests.${appId} or null;
     in
     if (app.kind or "") == "machineOutput" then
       uniqueSorted (builtins.concatLists (map appResolvedTaskIds (appReferencedAppIds app)))
-    else if manifest != null then
-      manifest.taskIds or [ ]
     else if (app.taskId or "") != "" then
       [ app.taskId ]
     else
@@ -178,12 +174,9 @@ let
     appId:
     let
       app = apps.${appId};
-      manifest = appExecutionManifests.${appId} or null;
     in
     if (app.kind or "") == "machineOutput" then
       uniqueSorted (builtins.concatLists (map appResolvedWorkflowIds (appReferencedAppIds app)))
-    else if manifest != null then
-      manifest.workflowIds or [ ]
     else if (app.workflowId or "") != "" then
       [ app.workflowId ]
     else
@@ -196,8 +189,6 @@ let
     in
     if (app.kind or "") == "machineOutput" then
       uniqueSorted (builtins.concatLists (map appResolvedServiceSetIds (appReferencedAppIds app)))
-    else if (app.serviceSetId or "") != "" then
-      [ app.serviceSetId ]
     else
       [ ];
 
@@ -205,15 +196,11 @@ let
     appId:
     let
       app = apps.${appId};
-      manifest = appExecutionManifests.${appId} or null;
-      serviceSet = if (app.serviceSetId or "") != "" then serviceSets.${app.serviceSetId} else null;
     in
     if (app.kind or "") == "machineOutput" then
       uniqueSorted (builtins.concatLists (map appResolvedSelectedServices (appReferencedAppIds app)))
-    else if serviceSet != null then
-      serviceSet.services.all
-    else if manifest != null then
-      manifest.selectedServices
+    else if (app.kind or "") == "serviceOp" then
+      [ app.service ]
     else if (app.workflowId or "") != "" then
       workflowExecutionById.${app.workflowId}.closureSelectedServices or [ ]
     else if (app.taskId or "") != "" then
@@ -231,8 +218,6 @@ let
       appId:
       let
         app = apps.${appId};
-        manifest = appExecutionManifests.${appId} or null;
-        serviceSet = if (app.serviceSetId or "") != "" then serviceSets.${app.serviceSetId} else null;
         directTaskIds = appResolvedTaskIds appId;
         directWorkflowIds = appResolvedWorkflowIds appId;
         directServiceSetIds = appResolvedServiceSetIds appId;
@@ -250,7 +235,7 @@ let
           category = app.category or "core";
           taskId = app.taskId or null;
           workflowId = app.workflowId or null;
-          serviceSetId = app.serviceSetId or null;
+          service = app.service or null;
           operation = app.operation or null;
           targetAppId = app.targetAppId or null;
           contractRef = ((app.validation or { }).contractRef or null);
@@ -260,11 +245,11 @@ let
           examples = app.examples or [ ];
         };
         execution = {
-          launcherClass = "selected-app";
+          launcherClass = "runtime-wrapper";
           launcherTarget = appId;
           runSurface =
-            if (app.kind or "") == "serviceSetRef" then
-              "service-set"
+            if (app.kind or "") == "serviceOp" then
+              "svc::<service>::<op>"
             else if (app.kind or "") == "workflowRef" then
               "run-workflow"
             else if (app.kind or "") == "machineOutput" then
@@ -276,17 +261,12 @@ let
           mappedServiceSetIds = directServiceSetIds;
           selectedServices = selectedServices;
           runtimeRoots = {
-            policyId = if serviceSet == null then statePolicy.id else serviceSet.state.policy.id;
-            policyKind = if serviceSet == null then statePolicy.kind else serviceSet.state.policy.kind;
-            workspaceId =
-              if serviceSet == null then statePolicy.workspaceId else serviceSet.state.policy.workspaceId;
-            runtimeBase =
-              if serviceSet == null then statePolicy.runtimeBase else serviceSet.state.policy.runtimeBase;
-            registryRoot =
-              if serviceSet == null then statePolicy.registryRoot else serviceSet.state.policy.registryRoot;
-            artifactsRoot =
-              if serviceSet == null then statePolicy.artifactsRoot else serviceSet.state.policy.artifactsRoot;
-            manifestHash = if manifest == null then "" else manifest.modelHash;
+            policyId = statePolicy.id;
+            policyKind = statePolicy.kind;
+            workspaceId = statePolicy.workspaceId;
+            runtimeBase = statePolicy.runtimeBase;
+            registryRoot = statePolicy.registryRoot;
+            artifactsRoot = statePolicy.artifactsRoot;
           };
           workspaceMarkerPresent = workspaceMarkerPresent;
           localOverrides = {
@@ -340,7 +320,7 @@ let
           };
         };
         execution = {
-          launcherClass = "dispatcher";
+          launcherClass = "runtime-engine";
           launcherTarget = "run-task";
           runSurface = "run-task";
           mappedTaskIds = [ taskId ];
@@ -381,7 +361,7 @@ let
           postRunServiceSetIds = map (entry: entry.serviceSetId) (workflow.postRun.serviceSets or [ ]);
         };
         execution = {
-          launcherClass = "dispatcher";
+          launcherClass = "runtime-engine";
           launcherTarget = "run-workflow";
           runSurface = "run-workflow";
           mappedTaskIds = workflowTaskIds workflowId;
@@ -459,9 +439,9 @@ let
           optionalServices = serviceSet.services.optional;
         };
         execution = {
-          launcherClass = "grouped-service-set";
-          launcherTarget = serviceSet.name;
-          runSurface = "service-set";
+          launcherClass = "workflow-policy";
+          launcherTarget = null;
+          runSurface = null;
           mappedTaskIds = [ ];
           mappedWorkflowIds = [ ];
           selectedServices = serviceSet.services.all;
@@ -491,102 +471,37 @@ let
     ) packageNames
   );
 
-  executionNodeList =
-    (map (
-      appId:
-      mkNode {
-        nodeId = "execution:selected-app-launcher:${appId}";
-        kind = "execution";
-        id = "selected-app-launcher:${appId}";
-        label = "selected-app-launcher:${appId}";
-        summary = "Selected app launcher for ${appId}";
-        description = "Public app '${appId}' resolves through the selector launcher built from framework/launch/run-selected-app.nix.";
-        ownerFiles = [
-          "nixfied/framework/core/mkFlakeOutputs.nix"
-          "nixfied/framework/launch/run-selected-app.nix"
-        ];
-        data = { };
-        execution = null;
-        closure = null;
-      }
-    ) appIds)
-    ++ map (
+  executionNodeList = builtins.filter (node: node != null) (
+    map (
       appId:
       let
-        manifest = appExecutionManifests.${appId};
+        app = apps.${appId};
       in
-      mkNode {
-        nodeId = "execution:app-manifest:${appId}";
-        kind = "execution";
-        id = "app-manifest:${appId}";
-        label = "app-manifest:${appId}";
-        summary = "App execution manifest for ${appId}";
-        description = "Selected-app execution serializes an app-scoped execution manifest for '${appId}'.";
-        ownerFiles = [
-          "nixfied/compiler/compile-execution.nix"
-          "nixfied/framework/core/materializeExecution.nix"
-          "nixfied/framework/runtime/executor.nix"
-        ];
-        data = {
-          modelHash = manifest.modelHash;
-          taskIds = manifest.taskIds;
-          workflowIds = manifest.workflowIds;
-          selectedServices = manifest.selectedServices;
-        };
-        execution = null;
-        closure = null;
-      }
-    ) (builtins.sort builtins.lessThan (builtins.attrNames appExecutionManifests))
-    ++ builtins.filter (node: node != null) (
-      map (
-        appId:
-        let
-          app = apps.${appId};
-        in
-        if (app.kind or "") == "serviceSetRef" then
-          mkNode {
-            nodeId = "execution:service-set-runtime:${appId}";
-            kind = "execution";
-            id = "service-set-runtime:${appId}";
-            label = "service-set-runtime:${appId}";
-            summary = "Service-set runtime for ${appId}";
-            description = "Selected-app execution materializes grouped runtime surfaces for the '${app.serviceSetId}' service set.";
-            ownerFiles = [
-              "nixfied/framework/core/materializeExecution.nix"
-              "nixfied/framework/core/mkServiceSetPrograms.nix"
-            ];
-            data = {
-              serviceSetId = app.serviceSetId;
-              operation = app.operation;
-            };
-            execution = null;
-            closure = null;
-          }
-        else if (app.kind or "") == "machineOutput" then
-          mkNode {
-            nodeId = "execution:machine-output:${appId}";
-            kind = "execution";
-            id = "machine-output:${appId}";
-            label = "machine-output:${appId}";
-            summary = "Machine-output wrapper for ${appId}";
-            description = "Selected-app execution materializes a strict JSON wrapper for '${appId}'.";
-            ownerFiles = [
-              "nixfied/framework/core/materializeExecution.nix"
-              "nixfied/framework/core/mkMachineOutputPrograms.nix"
-            ];
-            data = {
-              targetAppId = app.targetAppId;
-              contractRef = ((app.validation or { }).contractRef or null);
-              setupAppIds = app.setupAppIds or [ ];
-              teardownAppIds = app.teardownAppIds or [ ];
-            };
-            execution = null;
-            closure = null;
-          }
-        else
-          null
-      ) appIds
-    );
+      if (app.kind or "") == "machineOutput" then
+        mkNode {
+          nodeId = "execution:machine-output:${appId}";
+          kind = "execution";
+          id = "machine-output:${appId}";
+          label = "machine-output:${appId}";
+          summary = "Machine-output wrapper for ${appId}";
+          description = "Thin packaging publishes a strict JSON wrapper for '${appId}'.";
+          ownerFiles = [
+            "nixfied/framework/core/mkFlakeOutputs.nix"
+            "nixfied/framework/core/mkMachineOutputPrograms.nix"
+          ];
+          data = {
+            targetAppId = app.targetAppId;
+            contractRef = ((app.validation or { }).contractRef or null);
+            setupAppIds = app.setupAppIds or [ ];
+            teardownAppIds = app.teardownAppIds or [ ];
+          };
+          execution = null;
+          closure = null;
+        }
+      else
+        null
+    ) appIds
+  );
 
   executionNodes = builtins.listToAttrs executionNodeList;
 
@@ -654,31 +569,13 @@ let
       let
         app = apps.${appId};
       in
-      if (app.kind or "") == "serviceSetRef" then
+      if (app.kind or "") == "serviceOp" then
         [
           (mkEdge {
             from = "app:${appId}";
-            to = "service-set:${serviceSets.${app.serviceSetId}.name}";
-            kind = "app-service-set";
-            reason = "app '${appId}' resolves to service set '${app.serviceSetId}'";
-          })
-          (mkEdge {
-            from = "app:${appId}";
-            to = "execution:selected-app-launcher:${appId}";
-            kind = "app-execution";
-            reason = "app '${appId}' runs through the selected-app launcher";
-          })
-          (mkEdge {
-            from = "execution:selected-app-launcher:${appId}";
-            to = "execution:service-set-runtime:${appId}";
-            kind = "execution-service-set";
-            reason = "selected-app execution materializes grouped runtime surfaces for '${app.serviceSetId}'";
-          })
-          (mkEdge {
-            from = "execution:service-set-runtime:${appId}";
-            to = "service-set:${serviceSets.${app.serviceSetId}.name}";
-            kind = "runtime-service-set";
-            reason = "service-set runtime for '${appId}' uses service set '${app.serviceSetId}'";
+            to = "service:${app.service}";
+            kind = "app-service";
+            reason = "app '${appId}' resolves to service '${app.service}' operation '${app.operation}'";
           })
         ]
       else if (app.kind or "") == "workflowRef" then
@@ -688,18 +585,6 @@ let
             to = "workflow:${app.workflowId}";
             kind = "app-workflow";
             reason = "app '${appId}' resolves to workflow '${app.workflowId}'";
-          })
-          (mkEdge {
-            from = "app:${appId}";
-            to = "execution:selected-app-launcher:${appId}";
-            kind = "app-execution";
-            reason = "app '${appId}' runs through the selected-app launcher";
-          })
-          (mkEdge {
-            from = "execution:selected-app-launcher:${appId}";
-            to = "execution:app-manifest:${appId}";
-            kind = "execution-manifest";
-            reason = "selected-app execution materializes the app-scoped execution manifest for '${appId}'";
           })
         ]
       else if (app.kind or "") == "machineOutput" then
@@ -712,15 +597,9 @@ let
           })
           (mkEdge {
             from = "app:${appId}";
-            to = "execution:selected-app-launcher:${appId}";
-            kind = "app-execution";
-            reason = "app '${appId}' runs through the selected-app launcher";
-          })
-          (mkEdge {
-            from = "execution:selected-app-launcher:${appId}";
             to = "execution:machine-output:${appId}";
             kind = "execution-machine-output";
-            reason = "selected-app execution materializes the machine-output wrapper for '${appId}'";
+            reason = "thin packaging publishes the machine-output wrapper for '${appId}'";
           })
         ]
         ++ map (
@@ -751,34 +630,9 @@ let
             kind = "app-task";
             reason = "app '${appId}' resolves to task '${app.taskId}'";
           })
-          (mkEdge {
-            from = "app:${appId}";
-            to = "execution:selected-app-launcher:${appId}";
-            kind = "app-execution";
-            reason = "app '${appId}' runs through the selected-app launcher";
-          })
-          (mkEdge {
-            from = "execution:selected-app-launcher:${appId}";
-            to = "execution:app-manifest:${appId}";
-            kind = "execution-manifest";
-            reason = "selected-app execution materializes the app-scoped execution manifest for '${appId}'";
-          })
         ]
       else
-        [
-          (mkEdge {
-            from = "app:${appId}";
-            to = "execution:selected-app-launcher:${appId}";
-            kind = "app-execution";
-            reason = "app '${appId}' runs through the selected-app launcher";
-          })
-          (mkEdge {
-            from = "execution:selected-app-launcher:${appId}";
-            to = "execution:app-manifest:${appId}";
-            kind = "execution-manifest";
-            reason = "selected-app execution materializes the app-scoped execution manifest for '${appId}'";
-          })
-        ]
+        [ ]
     ) appIds
   );
 
@@ -961,32 +815,7 @@ let
     ) serviceSetIds
   );
 
-  executionEdges = builtins.concatLists (
-    map (
-      appId:
-      let
-        manifest = appExecutionManifests.${appId};
-      in
-      (map (
-        taskId:
-        mkEdge {
-          from = "execution:app-manifest:${appId}";
-          to = "task:${taskId}";
-          kind = "manifest-task";
-          reason = "the app execution manifest for '${appId}' includes task '${taskId}'";
-        }
-      ) manifest.taskIds)
-      ++ map (
-        workflowId:
-        mkEdge {
-          from = "execution:app-manifest:${appId}";
-          to = "workflow:${workflowId}";
-          kind = "manifest-workflow";
-          reason = "the app execution manifest for '${appId}' includes workflow '${workflowId}'";
-        }
-      ) manifest.workflowIds
-    ) (builtins.sort builtins.lessThan (builtins.attrNames appExecutionManifests))
-  );
+  executionEdges = [ ];
 
   edges = sortEdges (
     dedupeEdges (appEdges ++ taskEdges ++ workflowEdges ++ serviceSetEdges ++ executionEdges)

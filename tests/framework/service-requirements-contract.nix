@@ -10,6 +10,7 @@ let
     system = pkgs.system;
   };
   shellHelpers = import ./lib/shell-helpers.nix { inherit pkgs; };
+  runtimeFixture = import ./lib/runtime-fixture.nix { inherit pkgs; };
 
   multiTaskId = "task.test.requirements.multi";
   singleTaskId = "task.test.requirements.single";
@@ -192,6 +193,20 @@ let
     model = compiled.model;
     services = compiled.services;
     projectRoot = ../..;
+    serviceDispatcherProgram =
+      (runtimeFixture.runtimeMaterialization {
+        inherit pkgs;
+        model = compiled.model;
+        services = compiled.services;
+        serviceDefinitions = compiled.serviceDefinitions;
+      }).serviceDispatcherProgram;
+    runtimeBin =
+      (runtimeFixture.runtimeMaterialization {
+        inherit pkgs;
+        model = compiled.model;
+        services = compiled.services;
+        serviceDefinitions = compiled.serviceDefinitions;
+      }).runtimeEngineProgram;
   };
 in
 assert
@@ -225,7 +240,7 @@ pkgs.runCommand "service-requirements-contract" { } ''
   mkdir -p "$REGISTRY_ROOT" "$CI_ARTIFACTS_ROOT" "$NIXFIED_RUNTIME_DIR_SCOPE_OVERRIDE"
 
   set +e
-  SKIP_HELIOS=1 "$EXECUTOR" run-task "${multiTaskId}" > "$TMPDIR/multi-task.out" 2>&1
+  "$EXECUTOR" run-task "${multiTaskId}" --exclude-services helios > "$TMPDIR/multi-task.out" 2>&1
   multi_rc="$?"
   set -e
   if [ "$multi_rc" -ne 0 ]; then
@@ -233,11 +248,11 @@ pkgs.runCommand "service-requirements-contract" { } ''
     cat "$TMPDIR/multi-task.out"
     exit 1
   fi
-  require_contains "$TMPDIR/multi-task.out" "SKIP: task '${multiTaskId}' is skipped because service 'helios' has a skip flag enabled"
+  require_contains "$TMPDIR/multi-task.out" "SKIP: task '${multiTaskId}' is skipped because service 'helios' is excluded"
   require_not_contains "$TMPDIR/multi-task.out" "multi-task-ran"
 
   set +e
-  SKIP_POSTGRES=1 "$EXECUTOR" run-task "${singleTaskId}" > "$TMPDIR/single-task.out" 2>&1
+  "$EXECUTOR" run-task "${singleTaskId}" --exclude-services postgres > "$TMPDIR/single-task.out" 2>&1
   single_rc="$?"
   set -e
   if [ "$single_rc" -ne 0 ]; then
@@ -245,10 +260,10 @@ pkgs.runCommand "service-requirements-contract" { } ''
     cat "$TMPDIR/single-task.out"
     exit 1
   fi
-  require_contains "$TMPDIR/single-task.out" "SKIP: task '${singleTaskId}' is skipped because service 'postgres' has a skip flag enabled"
+  require_contains "$TMPDIR/single-task.out" "SKIP: task '${singleTaskId}' is skipped because service 'postgres' is excluded"
   require_not_contains "$TMPDIR/single-task.out" "single-task-ran"
 
-  SKIP_HELIOS=1 "$EXECUTOR" run-workflow "${workflowId}" > "$TMPDIR/workflow.out" 2>&1
+  "$EXECUTOR" run-workflow "${workflowId}" --exclude-services helios > "$TMPDIR/workflow.out" 2>&1
   require_contains "$TMPDIR/workflow.out" "control-task-ran"
   require_not_contains "$TMPDIR/workflow.out" "workflow-task-ran"
 

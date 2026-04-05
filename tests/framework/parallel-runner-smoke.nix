@@ -23,10 +23,8 @@ let
       registry
       ;
     projectRoot = ../..;
-    inherit (runtimeDeps)
-      serviceHookEnv
-      serviceSetPrograms
-      ;
+    serviceDispatcherProgram = runtimeDeps.serviceDispatcherProgram;
+    runtimeBin = runtimeDeps.runtimeEngineProgram;
   };
 in
 pkgs.runCommand "parallel-runner-smoke" { } ''

@@ -21,29 +21,25 @@ let
   executor = import ../../../nixfied/framework/runtime/executor.nix {
     inherit
       pkgs
-      services
       registry
       projectRoot
       ;
+    services = runtimeDeps.services;
     model = harnessModel;
-    inherit (runtimeDeps)
-      serviceHookEnv
-      serviceSetPrograms
-      ;
+    serviceDispatcherProgram = runtimeDeps.serviceDispatcherProgram;
+    runtimeBin = runtimeDeps.runtimeEngineProgram;
   };
 
   orchestrator = import ../../../nixfied/framework/runtime/orchestrator.nix {
     inherit
       pkgs
-      services
       registry
       projectRoot
       ;
+    services = runtimeDeps.services;
     model = harnessModel;
-    inherit (runtimeDeps)
-      serviceHookEnv
-      serviceSetPrograms
-      ;
+    serviceDispatcherProgram = runtimeDeps.serviceDispatcherProgram;
+    runtimeBin = runtimeDeps.runtimeEngineProgram;
   };
 in
 {

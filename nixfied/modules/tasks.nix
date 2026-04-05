@@ -160,12 +160,12 @@ in
                 taskIds = lib.mkOption {
                   type = t.listOf t.str;
                   default = [ ];
-                  description = "Additional task ids invoked through dispatcher/executor at runtime.";
+                  description = "Additional task ids invoked through the runtime engine at execution time.";
                 };
                 workflowIds = lib.mkOption {
                   type = t.listOf t.str;
                   default = [ ];
-                  description = "Additional workflow ids invoked through dispatcher/executor at runtime.";
+                  description = "Additional workflow ids invoked through the runtime engine at execution time.";
                 };
               };
               allowSensitivePassThrough = lib.mkOption {

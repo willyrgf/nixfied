@@ -188,10 +188,8 @@ let
     model = lifecycleModel;
     inherit services;
     projectRoot = ../..;
-    inherit (runtimeDeps)
-      serviceHookEnv
-      serviceSetPrograms
-      ;
+    serviceDispatcherProgram = runtimeDeps.serviceDispatcherProgram;
+    runtimeBin = runtimeDeps.runtimeEngineProgram;
   };
 in
 pkgs.runCommand "workflow-lifecycle-smoke" { } ''

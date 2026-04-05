@@ -193,7 +193,7 @@ let
             enable = true;
             appId = "workflow-smoke";
             summary = "Workflow app runtime smoke";
-            description = "Runs a workflowRef app through the selected-app launcher.";
+            description = "Runs a workflowRef app through the runtime-backed workflow app surface.";
             usage = [ "nix run .#workflow-smoke" ];
             ownerFile = "tests/framework/machine-output-app-smoke.nix";
           };

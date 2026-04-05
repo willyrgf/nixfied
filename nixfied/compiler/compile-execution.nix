@@ -36,7 +36,6 @@ let
 
   taskIds = builtins.sort builtins.lessThan (builtins.attrNames taskSet);
   workflowIds = builtins.sort builtins.lessThan (builtins.attrNames workflowSet);
-  appIds = builtins.sort builtins.lessThan (builtins.attrNames appSet);
   serviceSetIds = builtins.sort builtins.lessThan (builtins.attrNames serviceSetCatalog);
 
   buildExecutionDescriptors =
@@ -718,74 +717,6 @@ let
 
   servicesToCsv = serviceNames: builtins.concatStringsSep "," (uniqueSorted serviceNames);
 
-  idClosureEmpty = {
-    taskIds = [ ];
-    workflowIds = [ ];
-  };
-
-  idClosureMerge =
-    results:
-    let
-      nonEmpty = builtins.filter (r: r.taskIds != [ ] || r.workflowIds != [ ]) results;
-    in
-    {
-      taskIds = uniquePreserveOrder (builtins.concatLists (map (r: r.taskIds) nonEmpty));
-      workflowIds = uniquePreserveOrder (builtins.concatLists (map (r: r.workflowIds) nonEmpty));
-    };
-
-  appWalker = closureLib.mkClosureWalker {
-    empty = idClosureEmpty;
-    merge = idClosureMerge;
-
-    taskContrib = taskId: _task: {
-      taskIds = [ taskId ];
-      workflowIds = [ ];
-    };
-
-    taskWorkflowRef =
-      seen: task: goWorkflowReference':
-      if (task.runner.type or "") == "workflowRef" && (task.runner.workflowId or "") != "" then
-        goWorkflowReference' seen task.runner.workflowId
-      else
-        idClosureEmpty;
-
-    taskRuntimeWorkflows =
-      seen: task: goWorkflowExact':
-      idClosureMerge (
-        map (wfId: goWorkflowExact' seen wfId) (task.runtime.references.workflowIds or [ ])
-      );
-
-    workflowUnit =
-      seen: unit: goTask':
-      goTask' seen (unit.taskId or "");
-
-    workflowPhase =
-      seen: workflow: goTask':
-      let
-        phaseTaskIds = (workflow.preRun.tasks or [ ]) ++ (workflow.postRun.tasks or [ ]);
-      in
-      idClosureMerge (map (taskId: goTask' seen taskId) phaseTaskIds);
-
-    workflowPhaseServiceSets = _workflow: idClosureEmpty;
-
-    workflowSelf = workflowId: inner: {
-      taskIds = inner.taskIds;
-      workflowIds = uniquePreserveOrder ([ workflowId ] ++ inner.workflowIds);
-    };
-  };
-  goAppWorkflowExact = appWalker.goWorkflowExact;
-  goAppTask = appWalker.goTask;
-
-  manifestAppIds = builtins.filter (
-    appId:
-    let
-      app = appSet.${appId};
-      kind = app.kind or "";
-    in
-    (kind == "taskRef" && (app.taskId or "") != "")
-    || (kind == "workflowRef" && (app.workflowId or "") != "")
-  ) appIds;
-
   executionBase = {
     schema = {
       kind = "nixfied-execution";
@@ -911,85 +842,6 @@ let
     projectionServiceCatalog = catalog;
   };
 
-  appExecutionById = builtins.listToAttrs (
-    map (
-      appId:
-      let
-        app = appSet.${appId};
-        closure =
-          if (app.kind or "") == "workflowRef" then
-            goAppWorkflowExact [ ] app.workflowId
-          else
-            goAppTask [ ] app.taskId;
-        selectedServices =
-          if (app.kind or "") == "workflowRef" then
-            uniqueSorted (
-              compiledExecution.workflows.byId.${app.workflowId}.exactClosureSelectedServices or [ ]
-            )
-          else
-            uniqueSorted (compiledExecution.tasks.byId.${app.taskId}.closureSelectedServices or [ ]);
-        serviceCatalogFiltered = lib.filterAttrs (
-          _: service: builtins.elem (service.name or service.id) selectedServices
-        ) catalog;
-        manifestTasks = lib.getAttrs closure.taskIds taskSet;
-        manifestWorkflows = lib.getAttrs closure.workflowIds workflowSet;
-        manifestExecution = mkExecutionProjection {
-          projectionTaskIds = closure.taskIds;
-          projectionWorkflowIds = closure.workflowIds;
-          projectionTasks = manifestTasks;
-          projectionWorkflows = manifestWorkflows;
-          projectionServiceCatalog = serviceCatalogFiltered;
-        };
-        manifestEvalHash = canonical.hashCanonical {
-          schema = {
-            kind = "nixfied-app-execution-eval";
-            version = 1;
-          };
-          runtime = runtime;
-          state = state;
-          serviceCatalog = serviceCatalogFiltered;
-          tasks = manifestTasks;
-          workflows = manifestWorkflows;
-        };
-        manifestIdentity = {
-          projectId = resolvedIdentity.projectId;
-          projectName = resolvedIdentity.projectName;
-          description = resolvedIdentity.description;
-          evalHash = manifestEvalHash;
-        };
-        manifestModel = canonical.canonicalize {
-          schema = {
-            kind = "nixfied-execution-manifest";
-            version = 1;
-          };
-          identity = manifestIdentity;
-          runtime = runtime;
-          state = state;
-          serviceCatalog = serviceCatalogFiltered;
-          tasks = manifestTasks;
-          workflows = manifestWorkflows;
-          compiled = {
-            execution = manifestExecution;
-          };
-        };
-      in
-      {
-        name = appId;
-        value = {
-          id = appId;
-          taskId = if (app.taskId or "") == "" then null else app.taskId;
-          workflowId = if (app.workflowId or "") == "" then null else app.workflowId;
-          taskIds = closure.taskIds;
-          workflowIds = closure.workflowIds;
-          selectedServices = selectedServices;
-          model = manifestModel;
-          evalHash = manifestEvalHash;
-          modelHash = canonical.hashCanonical manifestModel;
-        };
-      }
-    ) manifestAppIds
-  );
-
   serviceSetExecutionById = builtins.mapAttrs (name: serviceSet: {
     id = serviceSet.id or name;
     name = serviceSet.name or name;
@@ -1004,10 +856,6 @@ in
 canonical.canonicalize (
   compiledExecution
   // {
-    apps = {
-      ids = manifestAppIds;
-      byId = appExecutionById;
-    };
     serviceSets = {
       ids = serviceSetIds;
       byId = serviceSetExecutionById;

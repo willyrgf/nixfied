@@ -1,7 +1,7 @@
 {
   pkgs,
   model,
-  services,
+  serviceDefinitions,
   serviceCatalog,
 }:
 let
@@ -10,6 +10,10 @@ let
       pkgs
       ;
     system = pkgs.system;
+  };
+  serviceConfigLib = import ../../nixfied/framework/core/service-config.nix {
+    inherit pkgs;
+    lib = pkgs.lib;
   };
   testCatalog = import ../../nixfied/framework/testing/catalog.nix;
   taskIds = builtins.attrNames model.tasks;
@@ -42,9 +46,8 @@ let
     "runtime.ephemeral.include-untracked"
     "runtime.ephemeral.env-file-loading"
     "runtime.registry.isolation"
-    "runtime.service-hooks"
-    "runtime.service-set-surfaces"
-    "runtime.app-execution-manifests"
+    "runtime.service-operations"
+    "runtime.workflow-service-phases"
     "runtime.output.prefix-contract"
   ];
 
@@ -202,8 +205,33 @@ let
   isolationProbeWorkflow = model.workflows."workflow.test.isolation.probe" or null;
   commandSurfaces = model.views.help.commandSurfaces or [ ];
   featureView = model.views.features or null;
-  nginxService = services."service.nginx" or null;
-  heliosService = services."service.helios" or null;
+  normalizeServiceDefinition =
+    serviceName:
+    let
+      serviceDefinition = serviceDefinitions.${serviceName} or null;
+      serviceEnabled = if serviceDefinition == null then false else serviceDefinition.enable or false;
+      rawConfig =
+        if serviceDefinition == null then null else pkgs.lib.removeAttrs serviceDefinition [ "enable" ];
+      configInput =
+        if rawConfig == null then
+          null
+        else if serviceEnabled then
+          rawConfig
+        else
+          rawConfig // { defaultSource = ""; };
+    in
+    if configInput == null then
+      null
+    else
+      {
+        enable = serviceEnabled;
+        config = serviceConfigLib.normalizeServiceConfig {
+          name = serviceName;
+          config = configInput;
+        };
+      };
+  nginxService = normalizeServiceDefinition "nginx";
+  heliosService = normalizeServiceDefinition "helios";
   invalidMachineOutputContractRef = builtins.tryEval (
     builtins.deepSeq ((frameworkLib.mkNixfied {
       projectRoot = ../..;

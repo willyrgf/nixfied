@@ -49,11 +49,12 @@ pkgs.runCommand "postgres-kernel-probe-lifecycle-smoke" { } ''
 
   export SLOT=0
   export ENV=test
-  export POSTGRES_PORT=55433
   export SERVICE_ROOT="$TMPDIR/service-root"
   export RUN_DIR="$TMPDIR/run"
   export LOG_DIR="$TMPDIR/log"
   export CONFIG_DIR="$TMPDIR/config"
+  TEST_PORT_SEED="$(${pkgs.coreutils}/bin/printf '%s' "$TMPDIR" | ${pkgs.coreutils}/bin/cksum | ${pkgs.gawk}/bin/awk '{ print $1 }')"
+  export POSTGRES_PORT="$((31000 + (TEST_PORT_SEED % 10000)))"
   mkdir -p "$SERVICE_ROOT" "$RUN_DIR" "$LOG_DIR" "$CONFIG_DIR"
 
   "${postgresService."full-start-test"}" > "$TMPDIR/full-start-test.out" 2>&1 || {
@@ -72,7 +73,7 @@ pkgs.runCommand "postgres-kernel-probe-lifecycle-smoke" { } ''
     cat "$TMPDIR/ready-test.out" >&2
     fail "postgres ready-test should succeed after full-start-test"
   }
-  require_contains "$TMPDIR/ready-test.out" "OK: PostgreSQL ready for test db port=55433 database="
+  require_contains "$TMPDIR/ready-test.out" "OK: PostgreSQL ready for test db port=$POSTGRES_PORT database="
 
   "${postgresService.stop}" > "$TMPDIR/stop.out" 2>&1 || {
     cat "$TMPDIR/stop.out" >&2

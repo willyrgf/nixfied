@@ -3,7 +3,7 @@
   projectRoot,
   model,
   services,
-  serviceHookEnv ? { },
+  runtimeBin ? null,
 }:
 let
   lib = pkgs.lib;
@@ -19,9 +19,6 @@ let
       builtins.toJSON value
     else
       toString value;
-
-  normalizeStaticToken =
-    value: lib.toUpper (lib.replaceStrings [ "." "-" ":" "/" " " ] [ "_" "_" "_" "_" "_" ] value);
 
   runtimeEnvOffsetNames = builtins.sort builtins.lessThan (
     builtins.attrNames (model.runtime.env.offsets or { })
@@ -70,35 +67,6 @@ let
       in
       "${service.name}\t${service.config.dataDirName or service.name}"
     ) serviceIds
-  );
-
-  serviceHookEntries = builtins.concatLists (
-    map (
-      serviceId:
-      let
-        service = services.${serviceId};
-        serviceName = service.name;
-        serviceToken = normalizeStaticToken serviceName;
-        hookNames = builtins.filter (hookName: lib.hasPrefix "SVC_${serviceToken}_" hookName) (
-          builtins.attrNames serviceHookEnv
-        );
-      in
-      map (hookName: {
-        inherit
-          serviceName
-          hookName
-          ;
-        value = serviceHookEnv.${hookName};
-      }) hookNames
-    ) serviceIds
-  );
-
-  staticServiceHookEnvCmds = lib.concatStringsSep "\n" (
-    map (entry: ''
-      if runtime_service_selected ${lib.escapeShellArg entry.serviceName}; then
-        env_cmd+=(${lib.escapeShellArg "${entry.hookName}=${entry.value}"})
-      fi
-    '') serviceHookEntries
   );
 
 in
@@ -197,9 +165,6 @@ in
           return 0
           ;;
         NIXFIED_WORKFLOW_SETUP_STARTED_AT|NIXFIED_WORKFLOW_SETUP_STARTED_EPOCH)
-          return 0
-          ;;
-        SVC_*)
           return 0
           ;;
         *)
@@ -765,6 +730,13 @@ in
       if [ -n "''${NIXFIED_MODEL_FILE:-}" ]; then
         env_cmd+=("NIXFIED_MODEL_FILE=$NIXFIED_MODEL_FILE")
       fi
+      if [ -n ${
+        lib.escapeShellArg (if runtimeBin == null then "" else builtins.toString runtimeBin)
+      } ]; then
+        env_cmd+=("NIXFIED_RUNTIME_BIN=${
+          lib.escapeShellArg (if runtimeBin == null then "" else builtins.toString runtimeBin)
+        }")
+      fi
       if [ -n "''${NIXFIED_RUN_ID:-}" ]; then
         env_cmd+=("NIXFIED_RUN_ID=$NIXFIED_RUN_ID")
       fi
@@ -851,8 +823,6 @@ in
         env_cmd+=("NIXFIED_SERVICE_''${service_token}_STATE_DIR=$service_state_dir")
         env_cmd+=("NIXFIED_SERVICE_''${service_token}_LOG_DIR=$service_log_dir")
       done <<< "$ENV_SANDBOX_STATIC_SERVICE_NAMES"
-
-  ${staticServiceHookEnvCmds}
 
       while IFS= read -r pass_name || [ -n "$pass_name" ]; do
         if [ -z "$pass_name" ]; then

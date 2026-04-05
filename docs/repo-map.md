@@ -21,8 +21,8 @@ Generated from `docs/repo-index.json`.
 - `check-ports` from `nixfied/modules/operations.nix`
 - `ci` from `nixfied/project/tasks.nix`
 - `dev` from `nixfied/project/tasks.nix`
-- `docs` from `nixfied/framework/runtime/dispatcher.nix`
-- `features` from `nixfied/framework/runtime/dispatcher.nix`
+- `docs` from `nixfied/framework/core/mkCoreSurfaces.nix`
+- `features` from `nixfied/framework/core/mkCoreSurfaces.nix`
 - `format` from `nixfied/project/tasks.nix`
 - `framework::install` from `nixfied/framework/presets/install.nix`
 - `framework::upgrade` from `nixfied/framework/presets/install.nix`
@@ -31,30 +31,19 @@ Generated from `docs/repo-index.json`.
 - `ports` from `nixfied/modules/operations.nix`
 - `ready` from `nixfied/modules/operations.nix`
 - `schema` from `nixfied/framework/core/mkNixfied.nix`
-- `services-export` from `nixfied/modules/service-sets.nix`
-- `services-start` from `nixfied/modules/service-sets.nix`
-- `services-status` from `nixfied/modules/service-sets.nix`
-- `services-stop` from `nixfied/modules/service-sets.nix`
 - `stateHash` from `nixfied/framework/core/mkNixfied.nix`
-- `svcset::default::export` from `nixfied/modules/service-sets.nix`
-- `svcset::default::health` from `nixfied/modules/service-sets.nix`
-- `svcset::default::ready` from `nixfied/modules/service-sets.nix`
-- `svcset::default::start` from `nixfied/modules/service-sets.nix`
-- `svcset::default::status` from `nixfied/modules/service-sets.nix`
-- `svcset::default::stop` from `nixfied/modules/service-sets.nix`
 - `test` from `nixfied/framework/testing/repo-overlay.nix`
 - `test-isolation` from `nixfied/modules/operations.nix`
 - `validate-env` from `nixfied/modules/operations.nix`
 
 ## Features
-- `runtime.app-execution-manifests` [runtime] - App-scoped execution manifests for selected launchers and machine-output wrappers (coverage required)
 - `runtime.ephemeral.env-file-loading` [runtime] - Ephemeral host env file loading policy (coverage required)
 - `runtime.ephemeral.include-untracked` [runtime] - Ephemeral worktree copy policy (coverage required)
 - `runtime.ephemeral.source-materialization` [runtime] - Ephemeral source materialization defaults (coverage required)
 - `runtime.output.prefix-contract` [runtime] - Stable ASCII log prefix contract (coverage required)
 - `runtime.registry.isolation` [runtime] - Run-scoped registry isolation (coverage required)
-- `runtime.service-hooks` [runtime] - Generated service hook env vars and service operation apps (coverage required)
-- `runtime.service-set-surfaces` [runtime] - Grouped service-set lifecycle, export, and workflow adapter surfaces (coverage required)
+- `runtime.service-operations` [runtime] - Compiler-published service operation ABI and runtime service dispatch (coverage required)
+- `runtime.workflow-service-phases` [runtime] - Workflow preRun/postRun service phases over compiled service-set policy (coverage required)
 - `service.helios` [service] - Service configuration and runtime surface for helios (coverage required)
 - `service.minio` [service] - Service configuration and runtime surface for minio (coverage required)
 - `service.nginx` [service] - Service configuration and runtime surface for nginx (coverage required)
@@ -83,7 +72,6 @@ Generated from `docs/repo-index.json`.
 - `task.test.framework.ci.kernel` [task] - Framework kernel checks (ci)
 - `task.test.framework.ci.manifest` [task] - Framework manifest checks (ci)
 - `task.test.framework.ci.migration` [task] - Framework migration checks (ci)
-- `task.test.framework.feature-proof.adapters` [task] - Framework adapters checks (feature-proof)
 - `task.test.framework.feature-proof.compile` [task] - Framework compile checks (feature-proof)
 - `task.test.framework.feature-proof.e2e` [task] - Framework e2e checks (feature-proof)
 - `task.test.framework.feature-proof.manifest` [task] - Framework manifest checks (feature-proof)
@@ -116,15 +104,14 @@ Generated from `docs/repo-index.json`.
 - `workflow.test.parallel.failfast` [workflow] - Parallel runner fail-fast workflow (coverage required)
 - `workflow.test.parallel.smoke` [workflow] - Parallel runner smoke workflow (coverage required)
 
-## Dispatcher and Introspection
-- `run-task -- <task-id> [-- ...]` from `nixfied/framework/runtime/dispatcher.nix`
-- `run-workflow -- <workflow-id> [-- ...]` from `nixfied/framework/runtime/dispatcher.nix`
-- `run-workflow-parallel -- <workflow-id> [-- ...]` from `nixfied/framework/runtime/dispatcher.nix`
-- `runs [run-id]` from `nixfied/framework/runtime/dispatcher.nix`
-- `stop-run -- <run-id>` from `nixfied/framework/runtime/dispatcher.nix`
-- `stop-all-runs` from `nixfied/framework/runtime/dispatcher.nix`
-- `features` from `nixfied/framework/runtime/dispatcher.nix`
-- `introspect`, `stateHash`, `schema` from `nixfied/framework/core/mkNixfied.nix`
+## Runtime and Introspection
+- `run-task -- <task-id> [--exclude-services <csv>] [-- ...]` from `nixfied/framework/runtime/engine.nix`
+- `run-workflow -- <workflow-id> [--exclude-services <csv>] [-- ...]` from `nixfied/framework/runtime/engine.nix`
+- `run-workflow-parallel -- <workflow-id> [--exclude-services <csv>] [-- ...]` from `nixfied/framework/runtime/engine.nix`
+- `runs [run-id]` from `nixfied/framework/runtime/engine.nix`
+- `stop-run -- <run-id>` from `nixfied/framework/runtime/engine.nix`
+- `stop-all-runs` from `nixfied/framework/runtime/engine.nix`
+- `docs`, `features`, `help`, `introspect`, `stateHash`, `schema` from `nixfied/framework/core/mkCoreSurfaces.nix`
 
 ## Sensitive Zones
 - `nixfied/framework` - Framework-owned runtime, install internals, and source-repo test overlay; avoid direct edits in installed repos. (checks: nix run .#help)

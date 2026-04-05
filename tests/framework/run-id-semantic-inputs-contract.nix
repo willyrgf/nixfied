@@ -84,10 +84,8 @@ let
       model = compiled.model;
       services = compiled.services;
       projectRoot = ../..;
-      inherit (runtimeDeps)
-        serviceHookEnv
-        serviceSetPrograms
-        ;
+      serviceDispatcherProgram = runtimeDeps.serviceDispatcherProgram;
+      runtimeBin = runtimeDeps.runtimeEngineProgram;
     };
 
   orchestratorBase = mkOrchestrator compiledBase;

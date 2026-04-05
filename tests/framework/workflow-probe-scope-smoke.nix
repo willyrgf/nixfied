@@ -124,16 +124,20 @@ let
     model = compiled.model;
     services = compiled.services;
     projectRoot = ../..;
-    inherit
+    serviceDispatcherProgram =
       (runtimeFixture.runtimeMaterialization {
         inherit pkgs;
         model = compiled.model;
         services = compiled.services;
         serviceDefinitions = compiled.serviceDefinitions;
-      })
-      serviceHookEnv
-      serviceSetPrograms
-      ;
+      }).serviceDispatcherProgram;
+    runtimeBin =
+      (runtimeFixture.runtimeMaterialization {
+        inherit pkgs;
+        model = compiled.model;
+        services = compiled.services;
+        serviceDefinitions = compiled.serviceDefinitions;
+      }).runtimeEngineProgram;
   };
 in
 assert

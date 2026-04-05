@@ -44,15 +44,13 @@ let
               "workflow"
             else if app.kind == "serviceOp" then
               "service"
-            else if app.kind == "serviceSetRef" then
-              "service-set"
             else if app.kind == "machineOutput" then
               "machine-output"
             else
               app.kind;
           taskId = app.taskId or null;
           workflowId = app.workflowId or null;
-          serviceSetId = app.serviceSetId or null;
+          service = app.service or null;
           operation = app.operation or null;
           targetAppId = app.targetAppId or null;
           summary = app.summary;
@@ -85,7 +83,7 @@ let
             {
               name = "framework::upgrade";
               summary = upgradeFallbackSummary;
-              owner_file = "nixfied/framework/runtime/dispatcher.nix";
+              owner_file = "nixfied/framework/core/mkFlakeOutputs.nix";
             }
           ]
         else
@@ -102,12 +100,12 @@ let
     {
       name = "docs";
       summary = "Render detailed model documentation";
-      owner_file = "nixfied/framework/runtime/dispatcher.nix";
+      owner_file = "nixfied/framework/core/mkCoreSurfaces.nix";
     }
     {
       name = "features";
       summary = "List compiled feature inventory";
-      owner_file = "nixfied/framework/runtime/dispatcher.nix";
+      owner_file = "nixfied/framework/core/mkCoreSurfaces.nix";
     }
     {
       name = "schema";
@@ -145,10 +143,10 @@ let
   ++ map (entry: "  ${entry.name} - ${entry.summary}") introspectionCommands
   ++ [
     ""
-    "Dispatcher:"
-    "  run-task <task-id> [-- ...]"
-    "  run-workflow <workflow-id> [-- ...]"
-    "  run-workflow-parallel <workflow-id> [-- ...]"
+    "Runtime:"
+    "  run-task <task-id> [--exclude-services <csv>] [-- ...]"
+    "  run-workflow <workflow-id> [--exclude-services <csv>] [-- ...]"
+    "  run-workflow-parallel <workflow-id> [--exclude-services <csv>] [-- ...]"
     "  runs [run-id]"
     "  stop-run <run-id>"
     "  stop-all-runs"
