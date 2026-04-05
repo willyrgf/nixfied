@@ -188,24 +188,43 @@ fn registry_latest_event_from_index(path: &str) -> Result<Option<JsonValue>, Str
     }
 
     let content = read_text(path)?;
-    let mut latest = None;
+    registry_latest_event_from_index_text(path, &content)
+}
+
+fn registry_latest_event_from_index_text(
+    path: &str,
+    content: &str,
+) -> Result<Option<JsonValue>, String> {
+    let mut latest = None::<(i64, JsonValue)>;
     for line in content.lines() {
         if line.trim().is_empty() {
             continue;
         }
         let mut parts = line.splitn(2, '\t');
-        let _seq = parts.next();
+        let Some(seq_raw) = parts.next() else {
+            continue;
+        };
         let Some(event_json) = parts.next() else {
             continue;
         };
-        latest = Some(parse_json(event_json).map_err(|err| {
+        let Ok(seq) = seq_raw.parse::<i64>() else {
+            continue;
+        };
+        let event = parse_json(event_json).map_err(|err| {
             format!(
                 "registry runtime-status index {} contains invalid json: {}",
                 path, err
             )
-        })?);
+        })?;
+        let should_replace = match latest.as_ref() {
+            Some((latest_seq, _)) => seq >= *latest_seq,
+            None => true,
+        };
+        if should_replace {
+            latest = Some((seq, event));
+        }
     }
-    Ok(latest)
+    Ok(latest.map(|(_, event)| event))
 }
 
 fn registry_replay_map_from_index_text(content: &str) -> Map<String, JsonValue> {
@@ -401,5 +420,21 @@ mod tests {
         assert_eq!(exports["OWNER_RUN_ID"], "run-1");
         assert_eq!(exports["WAIT_REASON"], "dependency");
         assert_eq!(exports["SLOT_OWNER"], "run-1");
+    }
+
+    #[test]
+    fn registry_runtime_status_uses_highest_seq_not_last_line() {
+        let latest = registry_latest_event_from_index_text(
+            "service-events.tsv",
+            concat!(
+                "11\t{\"payload\":{\"state\":\"stopped\",\"runId\":\"run-stop\"}}\n",
+                "10\t{\"payload\":{\"state\":\"ready\",\"runId\":\"run-ready\"}}\n",
+            ),
+        )
+        .expect("latest event parse should succeed")
+        .expect("latest event should exist");
+
+        assert_eq!(latest["payload"]["state"], json!("stopped"));
+        assert_eq!(latest["payload"]["runId"], json!("run-stop"));
     }
 }
