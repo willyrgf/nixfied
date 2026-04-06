@@ -95,6 +95,7 @@ pkgs.runCommand "nix-checks-deadnix-issues-fail-smoke" { } ''
 
   ${pkgs.gnugrep}/bin/grep -Fq "ERROR: deadnix reported issues files=1" "$TMPDIR/nix-checks.out"
   ${pkgs.gnugrep}/bin/grep -Fq "ERROR: deadnix reported file=./flake.nix" "$TMPDIR/nix-checks.out"
+  ${pkgs.gnugrep}/bin/grep -Fq "unused binding" "$TMPDIR/nix-checks.out"
   if ${pkgs.gnugrep}/bin/grep -Fq "unexpected nix invocation" "$TMPDIR/nix-checks.out"; then
     cat "$TMPDIR/nix-checks.out"
     exit 1

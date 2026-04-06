@@ -48,7 +48,31 @@ pkgs.writeShellScriptBin name ''
     done < <(${pkgs.findutils}/bin/find . -type f -name '*.nix' | ${pkgs.coreutils}/bin/sort)
   }
 
-    run_nixfmt_check() {
+  run_and_capture_output() {
+    local target_name="$1"
+    local -n target_ref="$target_name"
+    local output_file
+    local status
+
+    shift || true
+
+    target_ref=""
+    output_file="$(${pkgs.coreutils}/bin/mktemp "''${TMPDIR:-/tmp}/nix-checks-output.XXXXXX")"
+
+    set +e
+    "$@" 2>&1 | ${pkgs.coreutils}/bin/tee "$output_file"
+    status=$?
+    set -e
+
+    if [ -s "$output_file" ]; then
+      target_ref="$(${pkgs.coreutils}/bin/cat "$output_file")"
+    fi
+
+    ${pkgs.coreutils}/bin/rm -f "$output_file"
+    return "$status"
+  }
+
+  run_nixfmt_check() {
     local -a nix_files
 
     read_nix_files nix_files
@@ -80,7 +104,7 @@ pkgs.writeShellScriptBin name ''
     fi
 
     log_info "checking dead code files=''${#nix_files[@]}"
-    if aggregate_output="$(${deadnixPkg}/bin/deadnix "''${nix_files[@]}" 2>&1)"; then
+    if run_and_capture_output aggregate_output ${deadnixPkg}/bin/deadnix "''${nix_files[@]}"; then
       aggregate_status=0
     else
       aggregate_status=$?
@@ -133,11 +157,11 @@ pkgs.writeShellScriptBin name ''
     fi
 
     log_info "checking statix lints files=''${#nix_files[@]}"
-      if aggregate_output="$(${statixPkg}/bin/statix check . 2>&1)"; then
-        aggregate_status=0
-      else
-        aggregate_status=$?
-      fi
+    if run_and_capture_output aggregate_output ${statixPkg}/bin/statix check .; then
+      aggregate_status=0
+    else
+      aggregate_status=$?
+    fi
 
     if [ "$aggregate_status" -eq 0 ] && [ -z "$aggregate_output" ]; then
       log_ok "statix lint check passed files=''${#nix_files[@]}"
@@ -186,7 +210,7 @@ pkgs.writeShellScriptBin name ''
     fi
 
     log_info "checking nil diagnostics files=''${#nix_files[@]}"
-    if aggregate_output="$(${nilPkg}/bin/nil diagnostics "''${nix_files[@]}" 2>&1)"; then
+    if run_and_capture_output aggregate_output ${nilPkg}/bin/nil diagnostics "''${nix_files[@]}"; then
       aggregate_status=0
     else
       aggregate_status=$?
@@ -224,7 +248,7 @@ pkgs.writeShellScriptBin name ''
 
   run_flake_show_check() {
     log_info "checking flake output surface ref=$flake_ref"
-    ${pkgs.nix}/bin/nix flake show --no-write-lock-file "$flake_ref" > /dev/null
+    ${pkgs.nix}/bin/nix flake show --no-write-lock-file "$flake_ref"
     log_ok "flake output surface check passed ref=$flake_ref"
   }
 
@@ -232,7 +256,7 @@ pkgs.writeShellScriptBin name ''
     local help_ref
     help_ref="$flake_ref#help"
     log_info "checking help surface ref=$help_ref"
-    ${pkgs.nix}/bin/nix run "$help_ref" > /dev/null
+    ${pkgs.nix}/bin/nix run "$help_ref"
     log_ok "help surface check passed ref=$help_ref"
   }
 

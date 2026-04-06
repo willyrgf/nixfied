@@ -225,6 +225,10 @@ selectionCatalog
           ;
       };
 
+      "nix-checks-visible-output-smoke" = import ./nix-checks-visible-output-smoke.nix {
+        inherit pkgs;
+      };
+
       "nix-checks-nil-issues-fail-smoke" = import ./nix-checks-nil-issues-fail-smoke.nix {
         inherit pkgs;
       };

@@ -18,7 +18,6 @@ let
 
   fakeStatix = pkgs.writeShellScriptBin "statix" ''
     set -euo pipefail
-
     if [ "$#" -lt 2 ] || [ "$1" != "check" ]; then
       echo "unexpected statix args: $*" >&2
       exit 1
@@ -27,31 +26,47 @@ let
 
   fakeNil = pkgs.writeShellScriptBin "nil" ''
     set -euo pipefail
-
     if [ "$#" -lt 2 ] || [ "$1" != "diagnostics" ]; then
       echo "unexpected nil args: $*" >&2
       exit 1
     fi
-
-    shift
-    for path in "$@"; do
-      if [ "$path" = "./flake.nix" ]; then
-        echo "warning[unused_rec]: Unused \`rec\`"
-        exit 0
-      fi
-    done
   '';
 
   fakeNix = pkgs.writeShellScriptBin "nix" ''
     set -euo pipefail
-    echo "unexpected nix invocation: $*" >&2
-    exit 99
+
+    case "$1" in
+      flake)
+        case "''${2:-}" in
+          show)
+            echo "flake show output"
+            exit 0
+            ;;
+          check)
+            echo "flake check output"
+            exit 0
+            ;;
+          *)
+            echo "unexpected flake subcommand: $*" >&2
+            exit 1
+            ;;
+        esac
+        ;;
+      run)
+        echo "help output"
+        exit 0
+        ;;
+      *)
+        echo "unexpected nix invocation: $*" >&2
+        exit 1
+        ;;
+    esac
   '';
 
   fakePkgs = pkgs // {
     deadnix = fakeDeadnix;
-    nil = fakeNil;
     nix = fakeNix;
+    nil = fakeNil;
     statix = fakeStatix;
   };
 
@@ -65,7 +80,7 @@ let
         formatterPkg = fakeFormatter;
       };
 in
-pkgs.runCommand "nix-checks-nil-issues-fail-smoke" { } ''
+pkgs.runCommand "nix-checks-visible-output-smoke" { } ''
   set -euo pipefail
 
   repo="$TMPDIR/repo"
@@ -75,31 +90,17 @@ pkgs.runCommand "nix-checks-nil-issues-fail-smoke" { } ''
     description = "fixture";
   }
   EOF
-  cat > "$repo/extra.nix" <<'EOF'
-  { }:
-  { }
-  EOF
 
-  set +e
   (
     cd "$repo"
+    unset NIX_BUILD_TOP
+    unset NIXFIED_PARENT_WORKFLOW_ID
     ${fakeNixChecksPkg}/bin/nix-checks --mode full > "$TMPDIR/nix-checks.out" 2>&1
   )
-  rc="$?"
-  set -e
 
-  if [ "$rc" -eq 0 ]; then
-    cat "$TMPDIR/nix-checks.out"
-    exit 1
-  fi
+  ${pkgs.gnugrep}/bin/grep -Fq "flake show output" "$TMPDIR/nix-checks.out"
+  ${pkgs.gnugrep}/bin/grep -Fq "help output" "$TMPDIR/nix-checks.out"
+  ${pkgs.gnugrep}/bin/grep -Fq "flake check output" "$TMPDIR/nix-checks.out"
 
-  ${pkgs.gnugrep}/bin/grep -Fq "ERROR: nil diagnostics reported issues files=1" "$TMPDIR/nix-checks.out"
-  ${pkgs.gnugrep}/bin/grep -Fq "ERROR: nil diagnostics reported file=./flake.nix" "$TMPDIR/nix-checks.out"
-  ${pkgs.gnugrep}/bin/grep -Fq "warning[unused_rec]: Unused \`rec\`" "$TMPDIR/nix-checks.out"
-  if ${pkgs.gnugrep}/bin/grep -Fq "unexpected nix invocation" "$TMPDIR/nix-checks.out"; then
-    cat "$TMPDIR/nix-checks.out"
-    exit 1
-  fi
-
-  echo "OK: nil diagnostics warnings fail nix-checks before flake commands" > "$out"
+  echo "OK: nix-checks emits flake show, help, and flake check output" > "$out"
 ''

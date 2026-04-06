@@ -103,6 +103,7 @@ let
       "framework-upgrade-preserve-smoke"
       "logging-injection-smoke"
       "nix-checks-deadnix-issues-fail-smoke"
+      "nix-checks-visible-output-smoke"
       "nginx-site-management-smoke"
       "nix-checks-nil-issues-fail-smoke"
       "nix-checks-statix-issues-fail-smoke"
