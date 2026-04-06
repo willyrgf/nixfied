@@ -1,8 +1,8 @@
 { pkgs }:
 let
-  lib = pkgs.lib;
+  inherit (pkgs) lib;
   registryLocksShell = import ./events-locks.nix { inherit pkgs; };
-  registrySnapshotShell = import ./events-snapshot.nix { inherit pkgs; };
+  registrySnapshotShell = import ./events-snapshot.nix { };
   registryLockMetaSuffix = ".meta";
   registryLocksDirName = "locks";
   registrySeqFileName = ".seq";
@@ -19,7 +19,7 @@ let
 in
 {
   mkShellLib =
-    { }:
+    _:
     ''
       REGISTRY_LOCK_META_SUFFIX=${lib.escapeShellArg registryLockMetaSuffix}
       REGISTRY_LOCKS_DIR_NAME=${lib.escapeShellArg registryLocksDirName}

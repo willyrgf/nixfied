@@ -10,14 +10,14 @@
   executionEnabled ? true,
 }:
 let
-  lib = pkgs.lib;
+  inherit (pkgs) lib;
   kernelPackage = import ./kernel { inherit pkgs; };
   shellCommon = import ../core/shell-common.nix { inherit pkgs; };
   registryShell = registry.events.mkShellLib { };
   executionQueryShell =
     if executionEnabled then import ./execution-query.nix { inherit pkgs; } else "";
   artifactsRuntimeShell =
-    if executionEnabled then import ./artifacts-runtime.nix { inherit pkgs; } else "";
+    if executionEnabled then import ./artifacts-runtime.nix { } else "";
   orchestratorRuntimeShell = import ./orchestrator-runtime.nix { inherit pkgs; };
   sharedRuntimeLibShell =
     if executionEnabled then
@@ -81,10 +81,10 @@ let
             envVar = model.runtime.env.var;
           };
           state = {
-            policy = model.state.policy;
+            inherit (model.state) policy;
           };
           slots = {
-            max = model.runtime.slot.max;
+            inherit (model.runtime.slot) max;
           };
           install = {
             deps = "";

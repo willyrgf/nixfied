@@ -9,7 +9,7 @@
   runtimeBin ? null,
 }:
 let
-  lib = pkgs.lib;
+  inherit (pkgs) lib;
   kernelPackage = import ./kernel { inherit pkgs; };
 
   availableServiceNames = builtins.sort builtins.lessThan (
@@ -46,7 +46,7 @@ let
       ;
   };
   executionQueryShell = import ./execution-query.nix { inherit pkgs; };
-  artifactsRuntimeShell = import ./artifacts-runtime.nix { inherit pkgs; };
+  artifactsRuntimeShell = import ./artifacts-runtime.nix { };
   sharedRuntimeLibShell = import ./shared-runtime-lib.nix {
     inherit
       pkgs
