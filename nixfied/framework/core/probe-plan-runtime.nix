@@ -55,14 +55,8 @@ let
       step,
     }:
     let
-      base = {
-        kind = step.kind;
-        serviceLabel = step.serviceLabel;
-        phaseLabel = step.phaseLabel;
-        successLabel = step.successLabel;
-        failureLabel = step.failureLabel;
-      };
-      portEnvVarFor = endpointName: endpointPortEnvName endpointName;
+      base = { inherit (step) kind serviceLabel phaseLabel successLabel failureLabel; };
+      portEnvVarFor = endpointPortEnvName;
       hostDefault = runtimeDefaults.hosts.loopbackIp;
     in
     if step.kind == "tcp" then
@@ -76,7 +70,7 @@ let
       // {
         host = hostDefault;
         scheme = endpointProtocol endpoints step.endpoint;
-        path = step.path;
+        inherit (step) path;
         portEnvVar = portEnvVarFor step.endpoint;
         maxTimeSeconds = runtimeDefaults.probes.httpMaxTimeSeconds;
       }
@@ -85,14 +79,14 @@ let
       // {
         host = hostDefault;
         scheme = endpointProtocol endpoints step.endpoint;
-        method = step.method;
+        inherit (step) method;
         portEnvVar = portEnvVarFor step.endpoint;
         maxTimeSeconds = runtimeDefaults.probes.httpMaxTimeSeconds;
       }
     else if step.kind == "exec" then
       base
       // {
-        command = step.command;
+        inherit (step) command;
       }
     else
       throw "probe-plan-runtime: unsupported probe kind '${step.kind}' for service '${base.serviceLabel}'";

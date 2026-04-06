@@ -2,10 +2,9 @@
   pkgs,
   projectRoot,
   compiledCore,
-  frameworkSourceFlakeRef ? null,
 }:
 let
-  lib = pkgs.lib;
+  inherit (pkgs) lib;
   canonical = import ./canonical.nix { inherit lib; };
   registry = import ../runtime/registry { inherit pkgs; };
   compileServices = import ../../compiler/compile-services.nix { inherit lib; };
@@ -33,7 +32,7 @@ let
 
   services = compileServices {
     inherit pkgs;
-    resolved = compiledCore.resolved;
+    inherit (compiledCore) resolved;
     selectedServices = runtimeServiceNames;
   };
 
@@ -51,7 +50,7 @@ let
       serviceDefinitions
       services
       ;
-    model = compiledCore.model;
+    inherit (compiledCore) model;
     serviceApis = compiledServiceSurfaceCatalog.serviceApis or { };
     operationCatalog = compiledServiceSurfaceCatalog.operationCatalog or { };
   };
@@ -72,15 +71,15 @@ let
       runtimeHash
       services
       ;
-    model = compiledCore.model;
-    serviceDispatcherProgram = serviceDispatcherProgram;
+    inherit (compiledCore) model;
+    inherit serviceDispatcherProgram;
     runtimeBin = serviceDispatcherProgram;
   };
 
   runtimeEngine = import ../runtime/engine.nix {
     inherit pkgs;
     orchestratorProgram = "${orchestrator}/bin/nixfied-orchestrator";
-    serviceDispatcherProgram = serviceDispatcherProgram;
+    inherit serviceDispatcherProgram;
   };
 in
 {
