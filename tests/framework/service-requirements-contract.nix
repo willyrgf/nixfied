@@ -92,6 +92,13 @@ let
     localOverrides = [ ];
   };
 
+  frameworkOutputs = frameworkLib.mkFlakeOutputs {
+    projectRoot = ../..;
+    projectModules = [ ../../nixfied/project/module.nix ];
+    extraModules = [ requirementsModule ];
+    localOverrides = [ ];
+  };
+
   compiledExcluded = frameworkLib.mkNixfied {
     projectRoot = ../..;
     projectModules = [ ../../nixfied/project/module.nix ];
@@ -206,7 +213,7 @@ let
         model = compiled.model;
         services = compiled.services;
         serviceDefinitions = compiled.serviceDefinitions;
-      }).runtimeEngineProgram;
+      }).serviceDispatcherProgram;
   };
 in
 assert
@@ -234,6 +241,8 @@ pkgs.runCommand "service-requirements-contract" { } ''
   ${shellHelpers.shellPrelude}
 
   EXECUTOR="${executor}/bin/nixfied-executor"
+  RUN_TASK_APP="${frameworkOutputs.apps.run-task.program}"
+  RUN_WORKFLOW_APP="${frameworkOutputs.apps."run-workflow".program}"
   export REGISTRY_ROOT="$TMPDIR/registry"
   export CI_ARTIFACTS_ROOT="$TMPDIR/ci-artifacts"
   export NIXFIED_RUNTIME_DIR_SCOPE_OVERRIDE="$TMPDIR/runtime-scope"
@@ -266,6 +275,34 @@ pkgs.runCommand "service-requirements-contract" { } ''
   "$EXECUTOR" run-workflow "${workflowId}" --exclude-services helios > "$TMPDIR/workflow.out" 2>&1
   require_contains "$TMPDIR/workflow.out" "control-task-ran"
   require_not_contains "$TMPDIR/workflow.out" "workflow-task-ran"
+
+  set +e
+  "$RUN_TASK_APP" "${multiTaskId}" --exclude-services helios > "$TMPDIR/public-multi-task.out" 2>&1
+  public_multi_rc="$?"
+  set -e
+  if [ "$public_multi_rc" -ne 0 ]; then
+    echo "expected public multi-requirement task skip to exit 0, got $public_multi_rc"
+    cat "$TMPDIR/public-multi-task.out"
+    exit 1
+  fi
+  require_contains "$TMPDIR/public-multi-task.out" "SKIP: task '${multiTaskId}' is skipped because service 'helios' is excluded"
+  require_not_contains "$TMPDIR/public-multi-task.out" "multi-task-ran"
+
+  set +e
+  "$RUN_TASK_APP" "${singleTaskId}" --exclude-services postgres > "$TMPDIR/public-single-task.out" 2>&1
+  public_single_rc="$?"
+  set -e
+  if [ "$public_single_rc" -ne 0 ]; then
+    echo "expected public single-requirement task skip to exit 0, got $public_single_rc"
+    cat "$TMPDIR/public-single-task.out"
+    exit 1
+  fi
+  require_contains "$TMPDIR/public-single-task.out" "SKIP: task '${singleTaskId}' is skipped because service 'postgres' is excluded"
+  require_not_contains "$TMPDIR/public-single-task.out" "single-task-ran"
+
+  "$RUN_WORKFLOW_APP" "${workflowId}" --exclude-services helios > "$TMPDIR/public-workflow.out" 2>&1
+  require_contains "$TMPDIR/public-workflow.out" "control-task-ran"
+  require_not_contains "$TMPDIR/public-workflow.out" "workflow-task-ran"
 
   echo "OK: service requirements validate, exclude, and skip correctly" > "$out"
 ''

@@ -95,7 +95,7 @@ Inside task shells, the helper:
 
 - `svc <service> <op> [args...]`
 
-forwards to the same runtime-owned dispatch path.
+forwards through the internal service dispatcher path exposed by `NIXFIED_RUNTIME_BIN`.
 
 Removed public contracts:
 

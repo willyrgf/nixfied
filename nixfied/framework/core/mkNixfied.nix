@@ -44,8 +44,7 @@ let
 
   runtimeApps = import ./mkRuntimeAppSet.nix {
     inherit pkgs;
-    orchestratorProgram = "${runtimeArtifacts.orchestrator}/bin/nixfied-orchestrator";
-    serviceDispatcherProgram = "${runtimeArtifacts.serviceDispatcher}/bin/nixfied-service-dispatcher";
+    runtimeProgram = "${runtimeArtifacts.runtimeEngine}/bin/nixfied-runtime";
     model = compiledCore.model;
     contractBundle = compiledCore.contractBundle;
   };

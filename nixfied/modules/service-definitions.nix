@@ -38,7 +38,6 @@ let
       defaultSummary,
       defaultDetails,
       defaultExposeApp ? true,
-      defaultExposeHook ? false,
     }:
     t.submodule {
       options = {
@@ -99,15 +98,7 @@ let
           type = t.bool;
           default = defaultExposeApp;
         };
-        exposeHook = lib.mkOption {
-          type = t.bool;
-          default = defaultExposeHook;
-        };
         appName = lib.mkOption {
-          type = t.nullOr t.str;
-          default = null;
-        };
-        hook = lib.mkOption {
           type = t.nullOr t.str;
           default = null;
         };
@@ -179,15 +170,7 @@ let
           type = t.bool;
           default = true;
         };
-        exposeHook = lib.mkOption {
-          type = t.bool;
-          default = false;
-        };
         appName = lib.mkOption {
-          type = t.nullOr t.str;
-          default = null;
-        };
-        hook = lib.mkOption {
           type = t.nullOr t.str;
           default = null;
         };
@@ -263,15 +246,7 @@ let
           type = t.bool;
           default = true;
         };
-        exposeHook = lib.mkOption {
-          type = t.bool;
-          default = false;
-        };
         appName = lib.mkOption {
-          type = t.nullOr t.str;
-          default = null;
-        };
-        hook = lib.mkOption {
           type = t.nullOr t.str;
           default = null;
         };

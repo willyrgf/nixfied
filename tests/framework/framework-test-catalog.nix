@@ -243,6 +243,14 @@ selectionCatalog
           ;
       };
 
+      "service-op-composition-contract" = import ./service-op-composition-contract.nix {
+        inherit pkgs;
+      };
+
+      "service-set-behavior-contract" = import ./service-set-behavior-contract.nix {
+        inherit pkgs;
+      };
+
       "operations-contract" = import ./operations-contract.nix {
         inherit
           pkgs

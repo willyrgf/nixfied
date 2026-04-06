@@ -128,17 +128,7 @@ let
           default = true;
         };
 
-        exposeHook = lib.mkOption {
-          type = t.bool;
-          default = true;
-        };
-
         appName = lib.mkOption {
-          type = t.nullOr t.str;
-          default = null;
-        };
-
-        hook = lib.mkOption {
           type = t.nullOr t.str;
           default = null;
         };
@@ -248,7 +238,6 @@ in
     {
       log = {
         runtimeOp = "log";
-        hook = "LOG";
         summary = "Show ${summaryName} log";
         details = "Shows ${summaryName} runtime log for the current slot/environment.";
         usage = [ "nix run .#svc::${service}::log -- [--lines N] [--follow]" ];
@@ -256,7 +245,6 @@ in
 
       events = {
         runtimeOp = "events";
-        hook = "EVENTS";
         summary = "Show ${summaryName} lifecycle events";
         details = "Shows ${summaryName} lifecycle events from the global process registry for the current slot/environment.";
         usage = [ "nix run .#svc::${service}::events -- [--limit N]" ];

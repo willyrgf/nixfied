@@ -125,7 +125,7 @@ let
         model = compiled.model;
         services = compiled.services;
         serviceDefinitions = compiled.serviceDefinitions;
-      }).runtimeEngineProgram;
+      }).serviceDispatcherProgram;
   };
 in
 assert

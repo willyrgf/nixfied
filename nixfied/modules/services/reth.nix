@@ -99,7 +99,6 @@ in
 
           ready = {
             runtimeOp = "ready";
-            hook = "READY";
             summary = "Wait for Reth readiness";
             details = "Checks that Reth responds on the configured HTTP RPC port.";
           };

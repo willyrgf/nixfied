@@ -51,7 +51,6 @@ let
   mkFullStartOp =
     {
       runtimeOp,
-      hook,
       displayName,
       summary,
       details,
@@ -59,7 +58,6 @@ let
     {
       inherit
         runtimeOp
-        hook
         summary
         details
         ;
@@ -218,14 +216,12 @@ in
 
         "setup-db" = {
           runtimeOp = "setup-db";
-          hook = "SETUP_DB";
           summary = "Create and configure PostgreSQL database";
           details = "Creates the configured database and required extensions.";
         };
 
         "full-start" = mkFullStartOp {
           runtimeOp = "full-start";
-          hook = "FULL_START";
           displayName = "PostgreSQL";
           summary = "Init, start, and set up PostgreSQL";
           details = "Performs init/start/setup-db in one operation.";
@@ -233,7 +229,6 @@ in
 
         "full-start-test" = mkFullStartOp {
           runtimeOp = "full-start-test";
-          hook = "FULL_START_TEST";
           displayName = "PostgreSQL";
           summary = "Init/start/setup PostgreSQL test database";
           details = "Performs init/start/setup-db using the configured test database.";
@@ -241,14 +236,12 @@ in
 
         "ready-test" = {
           runtimeOp = "ready-test";
-          hook = "READY_TEST";
           summary = "Wait for PostgreSQL test-database readiness";
           details = "Checks PostgreSQL and the configured test database accept local SQL queries.";
         };
 
         "list-instances" = {
           runtimeOp = "list-instances";
-          hook = "LIST_INSTANCES";
           summary = "List PostgreSQL instances";
           details = "Lists PostgreSQL instances managed by Nixfied.";
         };
@@ -269,7 +262,6 @@ in
 
         "list-backups" = {
           runtimeOp = "list-backups";
-          hook = "LIST_BACKUPS";
           summary = "List PostgreSQL backups";
           details = "Lists backups for the current slot and environment.";
         };
@@ -290,14 +282,12 @@ in
 
         "test-migrations" = {
           runtimeOp = "test-migrations";
-          hook = "TEST_MIGRATIONS";
           summary = "Test PostgreSQL migrations";
           details = "Runs migrations against a temporary copy of the source database.";
         };
 
         "ensure-migration-tested" = {
           runtimeOp = "ensure-migration-tested";
-          hook = "ENSURE_MIGRATION_TESTED";
           summary = "Ensure migrations were tested";
           details = "Fails when migration hashes were not previously tested.";
           exposeApp = false;
@@ -305,7 +295,6 @@ in
 
         "check-port" = {
           runtimeOp = "check-port";
-          hook = "CHECK_PORT";
           summary = "Check PostgreSQL port usage";
           details = "Checks whether a port is already in use.";
           usage = [ "nix run .#svc::postgres::check-port -- <port>" ];
@@ -313,7 +302,6 @@ in
 
         "kill-port" = {
           runtimeOp = "kill-port";
-          hook = "KILL_PORT";
           summary = "Kill processes bound to a port";
           details = "Stops processes listening on a given port.";
           usage = [ "nix run .#svc::postgres::kill-port -- <port>" ];
@@ -412,7 +400,6 @@ in
 
         "full-start" = mkFullStartOp {
           runtimeOp = "full-start";
-          hook = "FULL_START";
           displayName = "nginx";
           summary = "Init/check/start nginx";
           details = "Performs init, configuration validation, and startup for nginx.";
@@ -420,7 +407,6 @@ in
 
         "full-start-test" = mkFullStartOp {
           runtimeOp = "full-start-test";
-          hook = "FULL_START_TEST";
           displayName = "nginx";
           summary = "Init/check/start nginx for test profile";
           details = "Performs init, configuration validation, and startup for nginx using the test profile.";
@@ -428,14 +414,12 @@ in
 
         "list-instances" = {
           runtimeOp = "list-instances";
-          hook = "LIST_INSTANCES";
           summary = "List nginx instances";
           details = "Lists nginx instances managed by Nixfied.";
         };
 
         "site-proxy" = {
           runtimeOp = "site-proxy";
-          hook = "SITE_PROXY";
           summary = "Write proxy site configuration";
           details = "Writes a proxy site config and enables it.";
           exposeApp = false;
@@ -444,7 +428,6 @@ in
 
         "site-static" = {
           runtimeOp = "site-static";
-          hook = "SITE_STATIC";
           summary = "Write static site configuration";
           details = "Writes a static site config and enables it.";
           exposeApp = false;
@@ -453,7 +436,6 @@ in
 
         "site-add" = {
           runtimeOp = "site-add";
-          hook = "SITE_ADD";
           summary = "Add proxy nginx site";
           details = "Adds a proxy site and enables it.";
           usage = [ "nix run .#svc::nginx::site-add -- <domain> <upstream-host> <upstream-port>" ];
@@ -461,7 +443,6 @@ in
 
         "site-remove" = {
           runtimeOp = "site-remove";
-          hook = "SITE_REMOVE";
           summary = "Remove nginx site";
           details = "Removes nginx site configuration.";
           usage = [ "nix run .#svc::nginx::site-remove -- <domain>" ];
@@ -469,14 +450,12 @@ in
 
         "site-list" = {
           runtimeOp = "site-list";
-          hook = "SITE_LIST";
           summary = "List nginx sites";
           details = "Lists configured nginx sites.";
         };
 
         "site-enable" = {
           runtimeOp = "site-enable";
-          hook = "SITE_ENABLE";
           summary = "Enable nginx site";
           details = "Enables an existing nginx site.";
           usage = [ "nix run .#svc::nginx::site-enable -- <domain>" ];
@@ -484,7 +463,6 @@ in
 
         "site-disable" = {
           runtimeOp = "site-disable";
-          hook = "SITE_DISABLE";
           summary = "Disable nginx site";
           details = "Disables an existing nginx site.";
           usage = [ "nix run .#svc::nginx::site-disable -- <domain>" ];
@@ -492,7 +470,6 @@ in
 
         "cert-obtain" = {
           runtimeOp = "cert-obtain";
-          hook = "CERT_OBTAIN";
           summary = "Obtain SSL certificate";
           details = "Obtains a Let's Encrypt certificate for a domain.";
           usage = [ "nix run .#svc::nginx::cert-obtain -- <domain> <email> [--staging]" ];
@@ -500,14 +477,12 @@ in
 
         "cert-renew" = {
           runtimeOp = "cert-renew";
-          hook = "CERT_RENEW";
           summary = "Renew SSL certificates";
           details = "Renews certificates for configured sites.";
         };
 
         "cert-status" = {
           runtimeOp = "cert-status";
-          hook = "CERT_STATUS";
           summary = "Show SSL certificate status";
           details = "Prints certificate status for configured domains.";
         };
@@ -593,7 +568,6 @@ in
 
         "full-start" = mkFullStartOp {
           runtimeOp = "full-start";
-          hook = "FULL_START";
           displayName = "MinIO";
           summary = "Init/check/start MinIO";
           details = "Performs init, configuration validation, and startup for MinIO.";
@@ -601,7 +575,6 @@ in
 
         "full-start-test" = mkFullStartOp {
           runtimeOp = "full-start-test";
-          hook = "FULL_START_TEST";
           displayName = "MinIO";
           summary = "Init/check/start MinIO for test profile";
           details = "Performs init, configuration validation, and startup for MinIO using the test profile.";
@@ -609,7 +582,6 @@ in
 
         "export-s3-env" = {
           runtimeOp = "export-s3-env";
-          hook = "EXPORT_S3_ENV";
           summary = "Export S3-compatible environment from MinIO";
           details = "Prints shell exports for AWS/S3 variables targeting the current MinIO endpoint.";
           usage = [ "eval \"$(nix run .#svc::minio::export-s3-env -- <bucket> <prefix> <region>)\"" ];
@@ -617,7 +589,6 @@ in
 
         "bucket-ensure" = {
           runtimeOp = "bucket-ensure";
-          hook = "BUCKET_ENSURE";
           summary = "Ensure MinIO bucket exists";
           details = "Creates bucket when missing and succeeds when already present.";
           usage = [ "nix run .#svc::minio::bucket-ensure -- <bucket>" ];
@@ -625,7 +596,6 @@ in
 
         "bucket-create" = {
           runtimeOp = "bucket-create";
-          hook = "BUCKET_CREATE";
           summary = "Create MinIO bucket";
           details = "Creates a bucket in the running MinIO instance.";
           usage = [ "nix run .#svc::minio::bucket-create -- <bucket>" ];
@@ -633,7 +603,6 @@ in
 
         "bucket-delete" = {
           runtimeOp = "bucket-delete";
-          hook = "BUCKET_DELETE";
           summary = "Delete MinIO bucket";
           details = "Deletes a bucket from the running MinIO instance.";
           usage = [ "nix run .#svc::minio::bucket-delete -- <bucket>" ];
@@ -641,14 +610,12 @@ in
 
         "bucket-list" = {
           runtimeOp = "bucket-list";
-          hook = "BUCKET_LIST";
           summary = "List MinIO buckets";
           details = "Lists buckets from the running MinIO instance.";
         };
 
         "policy-apply" = {
           runtimeOp = "policy-apply";
-          hook = "POLICY_APPLY";
           summary = "Apply MinIO bucket policy";
           details = "Applies a JSON policy file to a MinIO bucket.";
           usage = [ "nix run .#svc::minio::policy-apply -- <bucket> <policy-file>" ];
@@ -792,7 +759,6 @@ in
 
         "full-start" = mkFullStartOp {
           runtimeOp = "full-start";
-          hook = "FULL_START";
           displayName = "Reth";
           summary = "Init/check/start Reth";
           details = "Performs init, configuration validation, and startup for Reth.";
@@ -800,7 +766,6 @@ in
 
         "full-start-test" = mkFullStartOp {
           runtimeOp = "full-start-test";
-          hook = "FULL_START_TEST";
           displayName = "Reth";
           summary = "Init/check/start Reth for test profile";
           details = "Performs init, configuration validation, and startup for Reth using the test profile.";
@@ -954,7 +919,6 @@ in
 
         "full-start" = mkFullStartOp {
           runtimeOp = "full-start";
-          hook = "FULL_START";
           displayName = "Helios";
           summary = "Init/check/start Helios";
           details = "Performs init, configuration validation, and startup for Helios.";
@@ -962,7 +926,6 @@ in
 
         "full-start-test" = mkFullStartOp {
           runtimeOp = "full-start-test";
-          hook = "FULL_START_TEST";
           displayName = "Helios";
           summary = "Init/check/start Helios for test profile";
           details = "Performs init, configuration validation, and startup for Helios using the test profile.";

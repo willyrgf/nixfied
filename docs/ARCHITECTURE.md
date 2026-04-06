@@ -112,7 +112,7 @@ Task and workflow service requirements are declared through `requirements.servic
 
 Public runtime flow:
 
-`flake app -> nixfied-runtime -> orchestrator/executor leaf logic -> nixfied-kernel`
+`flake app -> nixfied-runtime -> orchestrator or service-dispatch leaf logic -> nixfied-kernel`
 
 The runtime engine is the only public owner for task/workflow execution, service dispatch, run inventory, stop controls, summaries, ephemeral runs, and invocation-time service exclusion.
 
@@ -122,7 +122,7 @@ The kernel remains the framework-owned semantics layer for workflow driving, reg
 
 The only surviving public service ABI is `svc::<service>::<op>`.
 
-Inside task shells, the runtime helper `svc <service> <op>` forwards to the same runtime-owned dispatch path. Ambient `SVC_*` hook env vars are not a public contract.
+Inside task shells, the runtime helper `svc <service> <op>` forwards through the internal service dispatcher path exposed by `NIXFIED_RUNTIME_BIN`. Ambient `SVC_*` hook env vars are not a public contract.
 
 Workflow pre/post service phases use compiled service-set policy internally, but service-set app families are not published.
 

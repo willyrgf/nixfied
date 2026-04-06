@@ -103,15 +103,9 @@ let
       ++ expect (optionalAttrSatisfies op "exposeApp"
         builtins.isBool
       ) "${prefix}: exposeApp must be a boolean"
-      ++ expect (optionalAttrSatisfies op "exposeHook"
-        builtins.isBool
-      ) "${prefix}: exposeHook must be a boolean"
       ++ expect (
         !(op ? appName) || op.appName == null || isNonEmptyString op.appName
-      ) "${prefix}: appName must be null or a non-empty string"
-      ++ expect (
-        !(op ? hook) || op.hook == null || isNonEmptyString op.hook
-      ) "${prefix}: hook must be null or a non-empty string";
+      ) "${prefix}: appName must be null or a non-empty string";
 
   validateOpCompositionErrors =
     {

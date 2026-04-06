@@ -118,7 +118,7 @@ Ephemeral runtime behavior:
 - Modules: `lib.evalModules` + typed options from `nixfied/modules/*.nix`.
 - Compiler: deterministic pass pipeline in `nixfied/compiler/*.nix`.
 - Hashing: `stateHash = sha256(toCanonicalNix(model))`.
-- Runtime engine: public flake apps exec one runtime entrypoint, which owns invocation-time selection, run inventory, stop controls, summaries, and service dispatch.
+- Runtime engine: public flake apps exec the `nixfied-runtime` entrypoint, which owns invocation-time selection, run inventory, stop controls, summaries, and service dispatch.
 - Registry: append-only NDJSON event stream with replay support.
 - Runtime semantics: `nixfied-kernel` is the framework-owned validation and runtime-semantics layer for scheduling, run-record/registry/summary state, runtime-event policy/status projection, and probe execution; shell launchers stage env/path/process orchestration and invoke kernel commands.
 - Runtime inputs: the kernel consumes compiled runtime assets only; it does not evaluate modules, run compiler passes, or regenerate launchers.
@@ -177,10 +177,10 @@ nix run .#ci -- --exclude-services helios --mode full --summary
 nix run .#run-task -- task.test.framework.feature-proof.e2e --exclude-services helios --summary
 ```
 
-Compiled outputs also export the surviving public service operation surfaces:
+Compiled outputs also export the surviving public service operation surfaces for enabled services:
 
 ```bash
-nix run .#svc::postgres::status
+nix run .#svc::<service>::<op>
 ```
 
 Project tasks should prefer `svc <service> <op>` or `svc::...` apps over importing `nixfied/framework/runtime/services/...` directly. That keeps excluded services out of the compiled closure.
