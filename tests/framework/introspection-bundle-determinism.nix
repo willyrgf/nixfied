@@ -2,7 +2,7 @@
 let
   frameworkLib = import ../../nixfied/framework/core {
     inherit pkgs;
-    system = pkgs.system;
+    inherit (pkgs) system;
   };
 
   firstOutputs = frameworkLib.mkFlakeOutputs {

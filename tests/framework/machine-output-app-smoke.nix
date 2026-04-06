@@ -2,7 +2,7 @@
 let
   frameworkLib = import ../../nixfied/framework/core {
     inherit pkgs;
-    system = pkgs.system;
+    inherit (pkgs) system;
   };
   contractTypes = frameworkLib.contracts.types;
   shellHelpers = import ./lib/shell-helpers.nix { inherit pkgs; };
@@ -21,299 +21,302 @@ let
     projectModules = [ ../../nixfied/project/module.nix ];
     extraModules = [
       {
-        nixfied.contracts.definitions."machineOutput.result" = contractTypes.record {
-          doc = "Validated machine-output payload.";
-          fields = {
-            ok = contractTypes.field {
-              schema = contractTypes.bool { };
-            };
-            kind = contractTypes.field {
-              schema = contractTypes.enum {
-                values = [
-                  "task"
-                  "workflow"
-                ];
+        nixfied = {
+          contracts.definitions."machineOutput.result" = contractTypes.record {
+            doc = "Validated machine-output payload.";
+            fields = {
+              ok = contractTypes.field {
+                schema = contractTypes.bool { };
+              };
+              kind = contractTypes.field {
+                schema = contractTypes.enum {
+                  values = [
+                    "task"
+                    "workflow"
+                  ];
+                };
               };
             };
           };
-        };
-
-        nixfied.tasks."test.machine-output.workflow-body" = {
-          id = workflowTaskId;
-          summary = "machine-output workflow body";
-          description = "Emits a marker so workflowRef app execution stays testable.";
-          runner.command = ''
-            set -euo pipefail
-            printf '%s\n' "WORKFLOW_BODY"
-          '';
-        };
-
-        nixfied.tasks."test.machine-output.json-body" = {
-          id = jsonTaskId;
-          summary = "machine-output json body";
-          description = "Emits strict JSON to the declared machine channel.";
-          commandApi.outputs = {
-            mode = "json";
-            channels = "stdout";
-            keys = [
-              "ok"
-              "kind"
-            ];
-          };
-          runner.command = ''
-            set -euo pipefail
-            if [ -n "''${NIXFIED_MACHINE_OUTPUT_FILE:-}" ]; then
-              printf '%s\n' "json-body human log"
-              printf '%s\n' '{"ok":true,"kind":"task"}' > "$NIXFIED_MACHINE_OUTPUT_FILE"
-            else
-              printf '%s\n' '{"ok":true,"kind":"task"}'
-            fi
-          '';
-        };
-
-        nixfied.tasks."test.machine-output.invalid-json-body" = {
-          id = invalidJsonTaskId;
-          summary = "machine-output invalid json body";
-          description = "Emits JSON with an invalid type to the declared machine channel.";
-          commandApi.outputs = {
-            mode = "json";
-            channels = "stdout";
-            keys = [
-              "ok"
-              "kind"
-            ];
-          };
-          runner.command = ''
-            set -euo pipefail
-            if [ -n "''${NIXFIED_MACHINE_OUTPUT_FILE:-}" ]; then
-              printf '%s\n' "invalid-json-body human log"
-              printf '%s\n' '{"ok":"yes","kind":"task"}' > "$NIXFIED_MACHINE_OUTPUT_FILE"
-            else
-              printf '%s\n' '{"ok":"yes","kind":"task"}'
-            fi
-          '';
-        };
-
-        nixfied.tasks."test.machine-output.unknown-field-body" = {
-          id = unknownFieldTaskId;
-          summary = "machine-output unknown-field body";
-          description = "Emits JSON with an unexpected field to the declared machine channel.";
-          commandApi.outputs = {
-            mode = "json";
-            channels = "stdout";
-            keys = [
-              "ok"
-              "kind"
-              "extra"
-            ];
-          };
-          runner.command = ''
-            set -euo pipefail
-            if [ -n "''${NIXFIED_MACHINE_OUTPUT_FILE:-}" ]; then
-              printf '%s\n' "unknown-field-body human log"
-              printf '%s\n' '{"ok":true,"kind":"task","extra":"boom"}' > "$NIXFIED_MACHINE_OUTPUT_FILE"
-            else
-              printf '%s\n' '{"ok":true,"kind":"task","extra":"boom"}'
-            fi
-          '';
-        };
-
-        nixfied.tasks."test.machine-output.log-on-machine-channel" = {
-          id = machineLogTaskId;
-          summary = "machine-output log on machine channel";
-          description = "Writes human log text to the machine channel so validation rejects it.";
-          commandApi.outputs = {
-            mode = "json";
-            channels = "stdout";
-            keys = [
-              "ok"
-              "kind"
-            ];
-          };
-          runner.command = ''
-            set -euo pipefail
-            if [ -n "''${NIXFIED_MACHINE_OUTPUT_FILE:-}" ]; then
-              printf '%s\n' "INFO: this is not json" > "$NIXFIED_MACHINE_OUTPUT_FILE"
-            else
-              printf '%s\n' "INFO: this is not json"
-            fi
-          '';
-        };
-
-        nixfied.tasks."test.machine-output.setup" = {
-          id = setupTaskId;
-          summary = "machine-output setup";
-          description = "Creates setup marker files and emits stdout noise.";
-          runtime.passThroughEnv = [ "MACHINE_OUTPUT_TEST_DIR" ];
-          commandApi.env = [
-            {
-              name = "MACHINE_OUTPUT_TEST_DIR";
-              type = "pathAbs";
-              required = true;
-              description = "Test output directory for machine-output smoke checks.";
-            }
-          ];
-          runner.command = ''
-            set -euo pipefail
-            : "''${MACHINE_OUTPUT_TEST_DIR:?}"
-            ${pkgs.coreutils}/bin/mkdir -p "$MACHINE_OUTPUT_TEST_DIR"
-            printf '%s\n' "setup-noise"
-            printf '%s\n' "setup" > "$MACHINE_OUTPUT_TEST_DIR/setup.txt"
-          '';
-        };
-
-        nixfied.tasks."test.machine-output.teardown" = {
-          id = teardownTaskId;
-          summary = "machine-output teardown";
-          description = "Creates teardown marker files and emits stdout noise.";
-          runtime.passThroughEnv = [ "MACHINE_OUTPUT_TEST_DIR" ];
-          commandApi.env = [
-            {
-              name = "MACHINE_OUTPUT_TEST_DIR";
-              type = "pathAbs";
-              required = true;
-              description = "Test output directory for machine-output smoke checks.";
-            }
-          ];
-          runner.command = ''
-            set -euo pipefail
-            : "''${MACHINE_OUTPUT_TEST_DIR:?}"
-            ${pkgs.coreutils}/bin/mkdir -p "$MACHINE_OUTPUT_TEST_DIR"
-            printf '%s\n' "teardown-noise"
-            printf '%s\n' "teardown" > "$MACHINE_OUTPUT_TEST_DIR/teardown.txt"
-          '';
-        };
-
-        nixfied.workflows."test.machine-output.sample" = {
-          id = workflowId;
-          summary = "Machine-output workflow smoke";
-          description = "Exercises workflowRef and machineOutput app kinds.";
-          units.main.taskId = workflowTaskId;
-          launcher = {
-            enable = true;
-            appId = "workflow-smoke";
-            summary = "Workflow app runtime smoke";
-            description = "Runs a workflowRef app through the runtime-backed workflow app surface.";
-            usage = [ "nix run .#workflow-smoke" ];
-            ownerFile = "tests/framework/machine-output-app-smoke.nix";
-          };
-        };
-
-        nixfied.tasks."test.machine-output.json-body".launcher = {
-          enable = true;
-          appId = "json-body";
-          summary = "JSON task app runtime smoke";
-          description = "Runs a taskRef app that emits strict JSON.";
-          usage = [ "nix run .#json-body" ];
-          ownerFile = "tests/framework/machine-output-app-smoke.nix";
-        };
-
-        nixfied.tasks."test.machine-output.setup".launcher = {
-          enable = true;
-          appId = "machine-output-setup";
-          summary = "Machine-output setup app";
-          description = "Setup helper for machine-output app smoke coverage.";
-          usage = [ "nix run .#machine-output-setup" ];
-          ownerFile = "tests/framework/machine-output-app-smoke.nix";
-        };
-
-        nixfied.tasks."test.machine-output.teardown".launcher = {
-          enable = true;
-          appId = "machine-output-teardown";
-          summary = "Machine-output teardown app";
-          description = "Teardown helper for machine-output app smoke coverage.";
-          usage = [ "nix run .#machine-output-teardown" ];
-          ownerFile = "tests/framework/machine-output-app-smoke.nix";
-        };
-
-        nixfied.tasks."test.machine-output.invalid-json-body".launcher = {
-          enable = true;
-          appId = "json-body-invalid";
-          summary = "Invalid JSON task app";
-          description = "Runs a taskRef app that violates the machine-output contract.";
-          usage = [ "nix run .#json-body-invalid" ];
-          ownerFile = "tests/framework/machine-output-app-smoke.nix";
-        };
-
-        nixfied.tasks."test.machine-output.unknown-field-body".launcher = {
-          enable = true;
-          appId = "json-body-unknown-field";
-          summary = "Unknown-field JSON task app";
-          description = "Runs a taskRef app that emits an unknown field.";
-          usage = [ "nix run .#json-body-unknown-field" ];
-          ownerFile = "tests/framework/machine-output-app-smoke.nix";
-        };
-
-        nixfied.tasks."test.machine-output.log-on-machine-channel".launcher = {
-          enable = true;
-          appId = "json-body-log-on-machine-channel";
-          summary = "Log-text machine channel app";
-          description = "Runs a taskRef app that writes log text to the machine channel.";
-          usage = [ "nix run .#json-body-log-on-machine-channel" ];
-          ownerFile = "tests/framework/machine-output-app-smoke.nix";
-        };
-
-        nixfied.machineOutputs = {
-          "machine-json" = {
-            id = "machine-json";
-            targetAppId = "json-body";
-            setupAppIds = [ "machine-output-setup" ];
-            teardownAppIds = [ "machine-output-teardown" ];
-            validation = {
-              contractRef = "machineOutput.result";
+          tasks = {
+            "test.machine-output.workflow-body" = {
+              id = workflowTaskId;
+              summary = "machine-output workflow body";
+              description = "Emits a marker so workflowRef app execution stays testable.";
+              runner.command = ''
+                set -euo pipefail
+                printf '%s\n' "WORKFLOW_BODY"
+              '';
             };
-            summary = "Machine-output app smoke";
-            description = "Wraps a JSON-emitting task app with setup and teardown helpers.";
-            usage = [ "nix run .#machine-json" ];
-            ownerFile = "tests/framework/machine-output-app-smoke.nix";
+
+            "test.machine-output.json-body" = {
+              id = jsonTaskId;
+              summary = "machine-output json body";
+              description = "Emits strict JSON to the declared machine channel.";
+              commandApi.outputs = {
+                mode = "json";
+                channels = "stdout";
+                keys = [
+                  "ok"
+                  "kind"
+                ];
+              };
+              runner.command = ''
+                set -euo pipefail
+                if [ -n "''${NIXFIED_MACHINE_OUTPUT_FILE:-}" ]; then
+                  printf '%s\n' "json-body human log"
+                  printf '%s\n' '{"ok":true,"kind":"task"}' > "$NIXFIED_MACHINE_OUTPUT_FILE"
+                else
+                  printf '%s\n' '{"ok":true,"kind":"task"}'
+                fi
+              '';
+            };
+
+            "test.machine-output.invalid-json-body" = {
+              id = invalidJsonTaskId;
+              summary = "machine-output invalid json body";
+              description = "Emits JSON with an invalid type to the declared machine channel.";
+              commandApi.outputs = {
+                mode = "json";
+                channels = "stdout";
+                keys = [
+                  "ok"
+                  "kind"
+                ];
+              };
+              runner.command = ''
+                set -euo pipefail
+                if [ -n "''${NIXFIED_MACHINE_OUTPUT_FILE:-}" ]; then
+                  printf '%s\n' "invalid-json-body human log"
+                  printf '%s\n' '{"ok":"yes","kind":"task"}' > "$NIXFIED_MACHINE_OUTPUT_FILE"
+                else
+                  printf '%s\n' '{"ok":"yes","kind":"task"}'
+                fi
+              '';
+            };
+
+            "test.machine-output.unknown-field-body" = {
+              id = unknownFieldTaskId;
+              summary = "machine-output unknown-field body";
+              description = "Emits JSON with an unexpected field to the declared machine channel.";
+              commandApi.outputs = {
+                mode = "json";
+                channels = "stdout";
+                keys = [
+                  "ok"
+                  "kind"
+                  "extra"
+                ];
+              };
+              runner.command = ''
+                set -euo pipefail
+                if [ -n "''${NIXFIED_MACHINE_OUTPUT_FILE:-}" ]; then
+                  printf '%s\n' "unknown-field-body human log"
+                  printf '%s\n' '{"ok":true,"kind":"task","extra":"boom"}' > "$NIXFIED_MACHINE_OUTPUT_FILE"
+                else
+                  printf '%s\n' '{"ok":true,"kind":"task","extra":"boom"}'
+                fi
+              '';
+            };
+
+            "test.machine-output.log-on-machine-channel" = {
+              id = machineLogTaskId;
+              summary = "machine-output log on machine channel";
+              description = "Writes human log text to the machine channel so validation rejects it.";
+              commandApi.outputs = {
+                mode = "json";
+                channels = "stdout";
+                keys = [
+                  "ok"
+                  "kind"
+                ];
+              };
+              runner.command = ''
+                set -euo pipefail
+                if [ -n "''${NIXFIED_MACHINE_OUTPUT_FILE:-}" ]; then
+                  printf '%s\n' "INFO: this is not json" > "$NIXFIED_MACHINE_OUTPUT_FILE"
+                else
+                  printf '%s\n' "INFO: this is not json"
+                fi
+              '';
+            };
+
+            "test.machine-output.setup" = {
+              id = setupTaskId;
+              summary = "machine-output setup";
+              description = "Creates setup marker files and emits stdout noise.";
+              runtime.passThroughEnv = [ "MACHINE_OUTPUT_TEST_DIR" ];
+              commandApi.env = [
+                {
+                  name = "MACHINE_OUTPUT_TEST_DIR";
+                  type = "pathAbs";
+                  required = true;
+                  description = "Test output directory for machine-output smoke checks.";
+                }
+              ];
+              runner.command = ''
+                set -euo pipefail
+                : "''${MACHINE_OUTPUT_TEST_DIR:?}"
+                ${pkgs.coreutils}/bin/mkdir -p "$MACHINE_OUTPUT_TEST_DIR"
+                printf '%s\n' "setup-noise"
+                printf '%s\n' "setup" > "$MACHINE_OUTPUT_TEST_DIR/setup.txt"
+              '';
+            };
+
+            "test.machine-output.teardown" = {
+              id = teardownTaskId;
+              summary = "machine-output teardown";
+              description = "Creates teardown marker files and emits stdout noise.";
+              runtime.passThroughEnv = [ "MACHINE_OUTPUT_TEST_DIR" ];
+              commandApi.env = [
+                {
+                  name = "MACHINE_OUTPUT_TEST_DIR";
+                  type = "pathAbs";
+                  required = true;
+                  description = "Test output directory for machine-output smoke checks.";
+                }
+              ];
+              runner.command = ''
+                set -euo pipefail
+                : "''${MACHINE_OUTPUT_TEST_DIR:?}"
+                ${pkgs.coreutils}/bin/mkdir -p "$MACHINE_OUTPUT_TEST_DIR"
+                printf '%s\n' "teardown-noise"
+                printf '%s\n' "teardown" > "$MACHINE_OUTPUT_TEST_DIR/teardown.txt"
+              '';
+            };
+
+            "test.machine-output.json-body".launcher = {
+              enable = true;
+              appId = "json-body";
+              summary = "JSON task app runtime smoke";
+              description = "Runs a taskRef app that emits strict JSON.";
+              usage = [ "nix run .#json-body" ];
+              ownerFile = "tests/framework/machine-output-app-smoke.nix";
+            };
+
+            "test.machine-output.setup".launcher = {
+              enable = true;
+              appId = "machine-output-setup";
+              summary = "Machine-output setup app";
+              description = "Setup helper for machine-output app smoke coverage.";
+              usage = [ "nix run .#machine-output-setup" ];
+              ownerFile = "tests/framework/machine-output-app-smoke.nix";
+            };
+
+            "test.machine-output.teardown".launcher = {
+              enable = true;
+              appId = "machine-output-teardown";
+              summary = "Machine-output teardown app";
+              description = "Teardown helper for machine-output app smoke coverage.";
+              usage = [ "nix run .#machine-output-teardown" ];
+              ownerFile = "tests/framework/machine-output-app-smoke.nix";
+            };
+
+            "test.machine-output.invalid-json-body".launcher = {
+              enable = true;
+              appId = "json-body-invalid";
+              summary = "Invalid JSON task app";
+              description = "Runs a taskRef app that violates the machine-output contract.";
+              usage = [ "nix run .#json-body-invalid" ];
+              ownerFile = "tests/framework/machine-output-app-smoke.nix";
+            };
+
+            "test.machine-output.unknown-field-body".launcher = {
+              enable = true;
+              appId = "json-body-unknown-field";
+              summary = "Unknown-field JSON task app";
+              description = "Runs a taskRef app that emits an unknown field.";
+              usage = [ "nix run .#json-body-unknown-field" ];
+              ownerFile = "tests/framework/machine-output-app-smoke.nix";
+            };
+
+            "test.machine-output.log-on-machine-channel".launcher = {
+              enable = true;
+              appId = "json-body-log-on-machine-channel";
+              summary = "Log-text machine channel app";
+              description = "Runs a taskRef app that writes log text to the machine channel.";
+              usage = [ "nix run .#json-body-log-on-machine-channel" ];
+              ownerFile = "tests/framework/machine-output-app-smoke.nix";
+            };
           };
 
-          "machine-json-invalid-payload" = {
-            id = "machine-json-invalid-payload";
-            targetAppId = "json-body-invalid";
-            validation = {
-              contractRef = "machineOutput.result";
+          workflows."test.machine-output.sample" = {
+            id = workflowId;
+            summary = "Machine-output workflow smoke";
+            description = "Exercises workflowRef and machineOutput app kinds.";
+            units.main.taskId = workflowTaskId;
+            launcher = {
+              enable = true;
+              appId = "workflow-smoke";
+              summary = "Workflow app runtime smoke";
+              description = "Runs a workflowRef app through the runtime-backed workflow app surface.";
+              usage = [ "nix run .#workflow-smoke" ];
+              ownerFile = "tests/framework/machine-output-app-smoke.nix";
             };
-            summary = "Machine-output invalid-payload smoke";
-            description = "Shows that contract-invalid machine output fails cleanly.";
-            usage = [ "nix run .#machine-json-invalid-payload" ];
-            ownerFile = "tests/framework/machine-output-app-smoke.nix";
           };
 
-          "machine-json-unknown-field" = {
-            id = "machine-json-unknown-field";
-            targetAppId = "json-body-unknown-field";
-            validation = {
-              contractRef = "machineOutput.result";
+          machineOutputs = {
+            "machine-json" = {
+              id = "machine-json";
+              targetAppId = "json-body";
+              setupAppIds = [ "machine-output-setup" ];
+              teardownAppIds = [ "machine-output-teardown" ];
+              validation = {
+                contractRef = "machineOutput.result";
+              };
+              summary = "Machine-output app smoke";
+              description = "Wraps a JSON-emitting task app with setup and teardown helpers.";
+              usage = [ "nix run .#machine-json" ];
+              ownerFile = "tests/framework/machine-output-app-smoke.nix";
             };
-            summary = "Machine-output unknown-field smoke";
-            description = "Shows that unknown fields are rejected on closed machine-output payloads.";
-            usage = [ "nix run .#machine-json-unknown-field" ];
-            ownerFile = "tests/framework/machine-output-app-smoke.nix";
-          };
 
-          "workflow-machine-invalid" = {
-            id = "workflow-machine-invalid";
-            targetAppId = "workflow-smoke";
-            validation = {
-              contractRef = "machineOutput.result";
+            "machine-json-invalid-payload" = {
+              id = "machine-json-invalid-payload";
+              targetAppId = "json-body-invalid";
+              validation = {
+                contractRef = "machineOutput.result";
+              };
+              summary = "Machine-output invalid-payload smoke";
+              description = "Shows that contract-invalid machine output fails cleanly.";
+              usage = [ "nix run .#machine-json-invalid-payload" ];
+              ownerFile = "tests/framework/machine-output-app-smoke.nix";
             };
-            summary = "Workflow machine-output failure smoke";
-            description = "Shows that workflowRef targets fail cleanly when they do not emit strict JSON.";
-            usage = [ "nix run .#workflow-machine-invalid" ];
-            ownerFile = "tests/framework/machine-output-app-smoke.nix";
-          };
 
-          "machine-json-log-on-machine-channel" = {
-            id = "machine-json-log-on-machine-channel";
-            targetAppId = "json-body-log-on-machine-channel";
-            validation = {
-              contractRef = "machineOutput.result";
+            "machine-json-unknown-field" = {
+              id = "machine-json-unknown-field";
+              targetAppId = "json-body-unknown-field";
+              validation = {
+                contractRef = "machineOutput.result";
+              };
+              summary = "Machine-output unknown-field smoke";
+              description = "Shows that unknown fields are rejected on closed machine-output payloads.";
+              usage = [ "nix run .#machine-json-unknown-field" ];
+              ownerFile = "tests/framework/machine-output-app-smoke.nix";
             };
-            summary = "Machine-output log-text failure smoke";
-            description = "Shows that log text on the machine channel fails validation.";
-            usage = [ "nix run .#machine-json-log-on-machine-channel" ];
-            ownerFile = "tests/framework/machine-output-app-smoke.nix";
+
+            "workflow-machine-invalid" = {
+              id = "workflow-machine-invalid";
+              targetAppId = "workflow-smoke";
+              validation = {
+                contractRef = "machineOutput.result";
+              };
+              summary = "Workflow machine-output failure smoke";
+              description = "Shows that workflowRef targets fail cleanly when they do not emit strict JSON.";
+              usage = [ "nix run .#workflow-machine-invalid" ];
+              ownerFile = "tests/framework/machine-output-app-smoke.nix";
+            };
+
+            "machine-json-log-on-machine-channel" = {
+              id = "machine-json-log-on-machine-channel";
+              targetAppId = "json-body-log-on-machine-channel";
+              validation = {
+                contractRef = "machineOutput.result";
+              };
+              summary = "Machine-output log-text failure smoke";
+              description = "Shows that log text on the machine channel fails validation.";
+              usage = [ "nix run .#machine-json-log-on-machine-channel" ];
+              ownerFile = "tests/framework/machine-output-app-smoke.nix";
+            };
           };
         };
       }

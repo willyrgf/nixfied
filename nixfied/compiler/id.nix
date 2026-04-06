@@ -1,4 +1,7 @@
-{ lib, canonical }:
+{
+  lib,
+  ...
+}:
 let
   sanitize =
     raw:

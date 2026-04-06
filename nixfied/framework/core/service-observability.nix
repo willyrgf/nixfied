@@ -6,7 +6,7 @@
 }:
 
 let
-  lib = pkgs.lib;
+  inherit (pkgs) lib;
   slotEnvRuntime = import ./slot-env-runtime.nix { inherit pkgs; };
   mkLogScript =
     service:

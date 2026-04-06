@@ -1,11 +1,11 @@
 { pkgs, model }:
 let
-  lib = pkgs.lib;
+  inherit (pkgs) lib;
   compiler = import ../../nixfied/compiler {
     inherit pkgs;
     canonical = import ../../nixfied/framework/core/canonical.nix { inherit lib; };
     modules = import ../../nixfied/modules;
-    system = pkgs.system;
+    inherit (pkgs) system;
     projectRoot = ../..;
     frameworkSourceRevision = import ../../nixfied/framework/core/framework-revision.nix {
       sourcePath = ../../.;
@@ -16,19 +16,25 @@ let
   poisonModule =
     { lib, ... }:
     {
-      nixfied.services.nginx.enable = lib.mkForce true;
-      nixfied.services.nginx.checks.health.steps = [
-        {
-          kind = "exec";
-          command = throw "nginx health check normalized unexpectedly";
-        }
-      ];
-      nixfied.services.nginx.checks.ready.steps = [
-        {
-          kind = "exec";
-          command = throw "nginx readiness check normalized unexpectedly";
-        }
-      ];
+      nixfied = {
+        services.nginx = {
+          enable = lib.mkForce true;
+          checks = {
+            health.steps = [
+              {
+                kind = "exec";
+                command = throw "nginx health check normalized unexpectedly";
+              }
+            ];
+            ready.steps = [
+              {
+                kind = "exec";
+                command = throw "nginx readiness check normalized unexpectedly";
+              }
+            ];
+          };
+        };
+      };
     };
 
   poisoned = compiler.compileCore {

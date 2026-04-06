@@ -1,6 +1,6 @@
 { pkgs }:
 let
-  lib = pkgs.lib;
+  inherit (pkgs) lib;
   exitCodes = import ./exit-codes.nix;
   runtimePrimitives = import ./runtime-primitives.nix { };
 

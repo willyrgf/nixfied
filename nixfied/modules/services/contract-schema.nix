@@ -3,7 +3,7 @@ let
   t = lib.types;
   runtimePrimitives = import ../../framework/core/runtime-primitives.nix { };
   tokenLib = import ../../framework/core/normalize-token.nix { inherit lib; };
-  normalizeToken = tokenLib.normalizeToken;
+  inherit (tokenLib) normalizeToken;
 
   kvSpecType = t.submodule {
     options = {
@@ -198,12 +198,12 @@ let
   };
 in
 {
-  kvSpecType = kvSpecType;
-  operationType = operationType;
-  artifactValueType = artifactValueType;
-  runtimePrimitivesType = runtimePrimitivesType;
-  serviceContractType = serviceContractType;
-  serviceImplementationType = serviceImplementationType;
+  inherit kvSpecType;
+  inherit operationType;
+  inherit artifactValueType;
+  inherit runtimePrimitivesType;
+  inherit serviceContractType;
+  inherit serviceImplementationType;
 
   mkContractOption =
     description:

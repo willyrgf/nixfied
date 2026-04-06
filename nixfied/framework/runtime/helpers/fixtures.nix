@@ -6,7 +6,7 @@
 
 let
   kernelExportRuntime = import ./kernel-export-runtime.nix { };
-  lib = pkgs.lib;
+  inherit (pkgs) lib;
   kernelPackage = import ../kernel { inherit pkgs; };
   serviceConfig = import ../../core/service-config.nix {
     inherit lib pkgs;
@@ -243,12 +243,7 @@ let
       exportsList = serviceSpec.exports or [ ];
       bootstrap = serviceSpec.bootstrap or [ ];
       logsEnabled =
-        if serviceSpec ? logs then
-          serviceSpec.logs
-        else if globalArtifacts ? logs then
-          globalArtifacts.logs
-        else
-          defaultLogs;
+        serviceSpec.logs or (globalArtifacts.logs or defaultLogs);
       logPrefix = if globalArtifacts ? prefix then toString globalArtifacts.prefix else contextName;
       logName =
         if serviceSpec ? logName then
@@ -303,7 +298,6 @@ let
       else
         let
           ref = parseFixtureRef from;
-          _ = assertService { name = ref.serviceName; };
           refMetadata = (getFixtureMetadata ref.serviceName).refs or { };
           refCfg = refMetadata.${ref.refName} or (throw "Unsupported fixture ref `${from}`");
           argAssignments = renderInvocationArgAssignments {
@@ -364,8 +358,7 @@ let
       );
     in
     lib.concatStringsSep "\n" (
-      [ ]
-      ++ (if keepRunningScript == "" then [ ] else [ keepRunningScript ])
+      (if keepRunningScript == "" then [ ] else [ keepRunningScript ])
       ++ (if services == [ ] then [ ] else serviceScripts)
       ++ (if envExports == "" then [ ] else [ envExports ])
     );

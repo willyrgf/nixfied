@@ -1,6 +1,6 @@
 {
-  lib,
   canonical,
+  ...
 }:
 {
   projectRoot,
@@ -69,7 +69,7 @@ let
     canonical.canonicalize {
       id = taskId;
       kind = "task";
-      summary = task.summary;
+      inherit (task) summary;
       surfaces =
         if appExpose then
           map (appId: {
@@ -114,7 +114,7 @@ let
     canonical.canonicalize {
       id = workflowId;
       kind = "workflow";
-      summary = workflow.summary;
+      inherit (workflow) summary;
       surfaces = [
         {
           kind = "workflow";
@@ -122,12 +122,12 @@ let
           runtime = "run-workflow";
         }
       ];
-      ownerFiles = ownerFiles;
+      inherit ownerFiles;
       modelPaths = [ "workflows.${workflowId}" ];
       status = "stable";
       defaults = {
-        mode = workflow.mode;
-        maxWorkers = workflow.maxWorkers;
+        inherit (workflow) mode;
+        inherit (workflow) maxWorkers;
       };
       coverageRequired = true;
       coverageLayer = "compile";
@@ -147,7 +147,7 @@ let
       surfaces = [
         {
           kind = "service";
-          name = service.name;
+          inherit (service) name;
         }
       ];
       ownerFiles = maybeExistingPaths [
@@ -157,7 +157,7 @@ let
       modelPaths = [ "services.${serviceId}" ];
       status = "stable";
       defaults = {
-        enable = service.enable;
+        inherit (service) enable;
       };
       coverageRequired = true;
       coverageLayer = "compile";

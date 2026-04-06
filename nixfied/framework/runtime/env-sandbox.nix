@@ -6,7 +6,7 @@
   runtimeBin ? null,
 }:
 let
-  lib = pkgs.lib;
+  inherit (pkgs) lib;
   commonRuntimeShell = import ./common-runtime.nix { inherit pkgs; };
 
   valueToString =
@@ -29,7 +29,7 @@ let
   runtimePortNames = builtins.sort builtins.lessThan (
     builtins.attrNames (model.runtime.ports or { })
   );
-  serviceIds = builtins.sort builtins.lessThan (builtins.attrNames (services));
+  serviceIds = builtins.sort builtins.lessThan (builtins.attrNames services);
 
   staticRuntimePackagesPath = lib.concatStringsSep ":" (
     map (runtimeInput: "${runtimeInput}/bin") model.runtime.runtimePackages

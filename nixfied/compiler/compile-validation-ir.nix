@@ -1,6 +1,6 @@
 {
-  lib,
   canonical,
+  ...
 }:
 {
   contractBundle,
@@ -31,8 +31,8 @@ in
 canonical.canonicalize {
   kind = "nixfied-validation-ir";
   version = 1;
-  definitionNames = definitionNames;
-  definitions = definitions;
+  inherit definitionNames;
+  inherit definitions;
   validationSchemas = irValidationSchemas;
   docs = if (contractBundle ? docs) then contractBundle.docs else "";
 }

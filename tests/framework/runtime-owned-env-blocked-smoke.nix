@@ -5,7 +5,7 @@
 let
   frameworkLib = import ../../nixfied/framework/core {
     inherit pkgs;
-    system = pkgs.system;
+    inherit (pkgs) system;
   };
 
   compiled = frameworkLib.mkNixfied {
@@ -13,67 +13,66 @@ let
     projectModules = [ ../../nixfied/project/module.nix ];
     extraModules = [
       (
-        { ... }:
+        _:
         {
-          nixfied.tasks.runtime-owned-pass-through-blocked = {
-            id = "task.test.runtime-owned.pass-through";
-            kind = "internal";
-            summary = "Runtime-owned pass-through blocked task";
-            runner = {
-              type = "shell";
-              command = ''
-                set -euo pipefail
-                echo "OK: runtime-owned pass-through should not execute"
-              '';
+          nixfied.tasks = {
+            runtime-owned-pass-through-blocked = {
+              id = "task.test.runtime-owned.pass-through";
+              kind = "internal";
+              summary = "Runtime-owned pass-through blocked task";
+              runner = {
+                type = "shell";
+                command = ''
+                  set -euo pipefail
+                  echo "OK: runtime-owned pass-through should not execute"
+                '';
+              };
+              runtime.passThroughEnv = [ "HOME" ];
             };
-            runtime.passThroughEnv = [ "HOME" ];
-          };
-
-          nixfied.tasks.runtime-owned-env-blocked = {
-            id = "task.test.runtime-owned.env";
-            kind = "internal";
-            summary = "Runtime-owned env override blocked task";
-            runner = {
-              type = "shell";
-              command = ''
-                set -euo pipefail
-                echo "OK: runtime-owned env override should not execute"
-              '';
+            runtime-owned-env-blocked = {
+              id = "task.test.runtime-owned.env";
+              kind = "internal";
+              summary = "Runtime-owned env override blocked task";
+              runner = {
+                type = "shell";
+                command = ''
+                  set -euo pipefail
+                  echo "OK: runtime-owned env override should not execute"
+                '';
+              };
+              runtime.env = {
+                HOME = "/tmp/forbidden-home";
+              };
             };
-            runtime.env = {
-              HOME = "/tmp/forbidden-home";
+            runtime-owned-scope-pass-through-blocked = {
+              id = "task.test.runtime-owned.scope-pass-through";
+              kind = "internal";
+              summary = "Runtime-owned scope pass-through blocked task";
+              runner = {
+                type = "shell";
+                command = ''
+                  set -euo pipefail
+                  echo "OK: runtime-owned scope pass-through should not execute"
+                '';
+              };
+              runtime.passThroughEnv = [ "NIXFIED_RUNTIME_DIR_SCOPE_OVERRIDE" ];
             };
-          };
-
-          nixfied.tasks.runtime-owned-scope-pass-through-blocked = {
-            id = "task.test.runtime-owned.scope-pass-through";
-            kind = "internal";
-            summary = "Runtime-owned scope pass-through blocked task";
-            runner = {
-              type = "shell";
-              command = ''
-                set -euo pipefail
-                echo "OK: runtime-owned scope pass-through should not execute"
-              '';
-            };
-            runtime.passThroughEnv = [ "NIXFIED_RUNTIME_DIR_SCOPE_OVERRIDE" ];
-          };
-
-          nixfied.tasks.nix-build-top-pass-through = {
-            id = "task.test.nix-build-top.pass-through";
-            kind = "internal";
-            summary = "Nix build sandbox marker pass-through task";
-            runner = {
-              type = "shell";
-              command = ''
-                set -euo pipefail
-                if [ -z "''${NIX_BUILD_TOP:-}" ]; then
-                  echo "ERROR: NIX_BUILD_TOP is not set"
-                  exit 1
-                fi
-                echo "INFO: nix_build_top=$NIX_BUILD_TOP"
-                echo "OK: nix build top pass-through probe complete"
-              '';
+            "nix-build-top-pass-through" = {
+              id = "task.test.nix-build-top.pass-through";
+              kind = "internal";
+              summary = "Nix build sandbox marker pass-through task";
+              runner = {
+                type = "shell";
+                command = ''
+                  set -euo pipefail
+                  if [ -z "''${NIX_BUILD_TOP:-}" ]; then
+                    echo "ERROR: NIX_BUILD_TOP is not set"
+                    exit 1
+                  fi
+                  echo "INFO: nix_build_top=$NIX_BUILD_TOP"
+                  echo "OK: nix build top pass-through probe complete"
+                '';
+              };
             };
           };
         }
@@ -87,8 +86,8 @@ let
       pkgs
       registry
       ;
-    model = compiled.model;
-    services = compiled.services;
+    inherit (compiled) model;
+    inherit (compiled) services;
     projectRoot = ../..;
   };
 in

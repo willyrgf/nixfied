@@ -59,7 +59,7 @@ let
     import ../../nixfied/framework/core/mkNixChecks.nix
       {
         pkgs = fakePkgs;
-        lib = pkgs.lib;
+        inherit (pkgs) lib;
       }
       {
         formatterPkg = fakeFormatter;

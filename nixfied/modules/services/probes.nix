@@ -78,9 +78,9 @@ let
   };
 in
 {
-  probeWaitSpec = probeWaitSpec;
-  probeStepSpec = probeStepSpec;
-  probePlanSpec = probePlanSpec;
+  inherit probeWaitSpec;
+  inherit probeStepSpec;
+  inherit probePlanSpec;
   probeOptions = {
     health = lib.mkOption {
       type = probePlanSpec;

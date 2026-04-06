@@ -1,4 +1,4 @@
-{ lib }:
+_:
 let
   compilePolicy =
     {
@@ -29,14 +29,14 @@ let
           template;
     in
     {
-      id = policy.id;
-      kind = policy.kind;
-      source = policy.source;
-      ownerScope = policy.ownerScope;
-      discoveryScope = policy.discoveryScope;
+      inherit (policy) id;
+      inherit (policy) kind;
+      inherit (policy) source;
+      inherit (policy) ownerScope;
+      inherit (policy) discoveryScope;
       workspace = {
-        mode = policy.workspace.mode;
-        hashLength = policy.workspace.hashLength;
+        inherit (policy.workspace) mode;
+        inherit (policy.workspace) hashLength;
         value = policy.workspace.value or null;
       };
       roots = {
@@ -44,7 +44,7 @@ let
         registryRootTemplate = policy.roots.registryRoot;
         artifactsRootTemplate = policy.roots.artifactsRoot;
       };
-      workspaceId = workspaceId;
+      inherit workspaceId;
       runtimeBase = replaceTokens policy.roots.runtimeBase;
       registryRoot = replaceTokens policy.roots.registryRoot;
       artifactsRoot = replaceTokens policy.roots.artifactsRoot;

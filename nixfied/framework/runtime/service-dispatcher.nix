@@ -4,7 +4,7 @@
   serviceOperationPrograms,
 }:
 let
-  lib = pkgs.lib;
+  inherit (pkgs) lib;
   skipPolicy = import ../core/skip-policy.nix { inherit pkgs; };
 
   operationEntries = builtins.concatLists (

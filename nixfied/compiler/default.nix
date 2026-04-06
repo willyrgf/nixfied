@@ -5,10 +5,9 @@
   system,
   projectRoot,
   frameworkSourceRevision,
-  selectedServices ? null,
 }:
 let
-  lib = pkgs.lib;
+  inherit (pkgs) lib;
   contracts = import ../contracts {
     inherit
       lib
@@ -122,10 +121,8 @@ let
   };
 
   finalizeModel = import ./finalize-model.nix {
-    inherit
-      lib
-      canonical
-      ;
+    inherit canonical;
+    _lib = lib;
   };
 in
 rec {
@@ -225,16 +222,16 @@ rec {
         inherit runtime;
       };
 
-      tasks = taskCompilation.tasks;
+      inherit (taskCompilation) tasks;
 
       workflows = compileWorkflows {
         resolved = resolvedModuleGraph.config;
         inherit tasks;
         inherit serviceSets;
-        allTasks = taskCompilation.allTasks;
-        declaredTaskIds = taskCompilation.declaredTaskIds;
-        prunedTaskIds = taskCompilation.prunedTaskIds;
-        pruneReasonsByTaskId = taskCompilation.pruneReasonsByTaskId;
+        inherit (taskCompilation) allTasks;
+        inherit (taskCompilation) declaredTaskIds;
+        inherit (taskCompilation) prunedTaskIds;
+        inherit (taskCompilation) pruneReasonsByTaskId;
       };
 
       contractBundle = compileContractBundle {
@@ -248,9 +245,9 @@ rec {
 
       apps = compileApps {
         resolved = resolvedModuleGraph.config;
+        _serviceSets = serviceSets;
         inherit
           serviceSurfaceCatalog
-          serviceSets
           tasks
           workflows
           contractBundle
@@ -269,7 +266,7 @@ rec {
 
       execution = compileExecution {
         resolvedIdentity = resolvedModuleGraph.config.identity;
-        runtime = runtime;
+        inherit runtime;
         state = {
           policy = statePolicy;
           registry = {
@@ -337,7 +334,6 @@ rec {
       finalized = finalizeModel {
         inherit
           system
-          projectRoot
           statePolicy
           runtime
           serviceCatalog
@@ -351,28 +347,29 @@ rec {
           execution
           serviceSurfaceCatalog
           ;
+        _projectRoot = projectRoot;
         resolved = resolvedModuleGraph.config;
       };
     in
     finalized
     // {
       resolved = resolvedModuleGraph.config;
-      tasks = tasks;
-      workflows = workflows;
-      apps = apps;
-      introspectionGraph = introspectionGraph;
-      introspectionBundle = introspectionBundle;
-      views = views;
-      runtime = runtime;
-      statePolicy = statePolicy;
-      serviceCatalog = serviceCatalog;
-      resolvedServices = resolvedServices;
-      serviceSets = serviceSets;
-      serviceSurfaceCatalog = finalized.model.compiled.serviceSurfaceCatalog;
-      features = features;
-      contractBundle = contractBundle;
-      validationIr = validationIr;
-      legacyLocalDefault = legacyLocalDefault;
+      inherit tasks;
+      inherit workflows;
+      inherit apps;
+      inherit introspectionGraph;
+      inherit introspectionBundle;
+      inherit views;
+      inherit runtime;
+      inherit statePolicy;
+      inherit serviceCatalog;
+      inherit resolvedServices;
+      inherit serviceSets;
+      inherit (finalized.model.compiled) serviceSurfaceCatalog;
+      inherit features;
+      inherit contractBundle;
+      inherit validationIr;
+      inherit legacyLocalDefault;
     };
 
   compileServicesResolved =
@@ -391,7 +388,7 @@ rec {
           kind = "nixfied-runtime";
           version = 1;
         };
-        services = services;
+        inherit services;
       };
     in
     core

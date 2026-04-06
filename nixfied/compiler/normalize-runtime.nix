@@ -14,51 +14,51 @@ let
 in
 {
   slot = {
-    var = resolved.runtime.slot.var;
-    default = resolved.runtime.slot.default;
-    max = resolved.runtime.slot.max;
-    stride = resolved.runtime.slot.stride;
+    inherit (resolved.runtime.slot) var;
+    inherit (resolved.runtime.slot) default;
+    inherit (resolved.runtime.slot) max;
+    inherit (resolved.runtime.slot) stride;
   };
 
   env = {
-    var = resolved.runtime.env.var;
+    inherit (resolved.runtime.env) var;
     names = envNames;
     offsets = envOffsets;
-    default = resolved.runtime.env.default;
+    inherit (resolved.runtime.env) default;
   };
 
   logging = {
-    levelDefault = resolved.runtime.logging.levelDefault;
-    outputDefault = resolved.runtime.logging.outputDefault;
+    inherit (resolved.runtime.logging) levelDefault;
+    inherit (resolved.runtime.logging) outputDefault;
   };
 
   orchestrator = {
-    stopTimeoutSec = resolved.runtime.orchestrator.stopTimeoutSec;
+    inherit (resolved.runtime.orchestrator) stopTimeoutSec;
   };
 
   primitives = {
-    version = resolved.runtime.primitives.version;
-    defs = resolved.runtime.primitives.defs;
+    inherit (resolved.runtime.primitives) version;
+    inherit (resolved.runtime.primitives) defs;
   };
 
-  ports = resolved.runtime.ports;
+  inherit (resolved.runtime) ports;
 
   directories = {
     base = statePolicy.runtimeBase;
   };
 
   ephemeral = {
-    copyMode = resolved.runtime.ephemeral.copyMode;
-    includeUntracked = resolved.runtime.ephemeral.includeUntracked;
-    excludePatterns = resolved.runtime.ephemeral.excludePatterns;
-    extraDirs = resolved.runtime.ephemeral.extraDirs;
-    keepFailures = resolved.runtime.ephemeral.keepFailures;
-    maxFailedRoots = resolved.runtime.ephemeral.maxFailedRoots;
-    maxFailedRootAgeHours = resolved.runtime.ephemeral.maxFailedRootAgeHours;
-    maxCopyBytes = resolved.runtime.ephemeral.maxCopyBytes;
-    minFreeBytesAfterCopy = resolved.runtime.ephemeral.minFreeBytesAfterCopy;
-    envFileMode = resolved.runtime.ephemeral.envFileMode;
-    envFilePath = resolved.runtime.ephemeral.envFilePath;
+    inherit (resolved.runtime.ephemeral) copyMode;
+    inherit (resolved.runtime.ephemeral) includeUntracked;
+    inherit (resolved.runtime.ephemeral) excludePatterns;
+    inherit (resolved.runtime.ephemeral) extraDirs;
+    inherit (resolved.runtime.ephemeral) keepFailures;
+    inherit (resolved.runtime.ephemeral) maxFailedRoots;
+    inherit (resolved.runtime.ephemeral) maxFailedRootAgeHours;
+    inherit (resolved.runtime.ephemeral) maxCopyBytes;
+    inherit (resolved.runtime.ephemeral) minFreeBytesAfterCopy;
+    inherit (resolved.runtime.ephemeral) envFileMode;
+    inherit (resolved.runtime.ephemeral) envFilePath;
   };
 
   runtimePackages = map builtins.toString (resolved.tooling.runtimePackages or [ ]);

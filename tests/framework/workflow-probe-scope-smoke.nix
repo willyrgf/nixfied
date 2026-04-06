@@ -20,82 +20,86 @@ let
       (
         { lib, ... }:
         {
-          nixfied.services.postgres.enable = lib.mkForce true;
-          nixfied.services.nginx.enable = lib.mkForce true;
-          nixfied.services.minio.enable = lib.mkForce false;
-          nixfied.services.reth.enable = lib.mkForce false;
-          nixfied.services.helios.enable = lib.mkForce false;
-
-          nixfied.services.postgres.checks = {
-            health.steps = [
-              {
-                kind = "exec";
-                command = ''
-                  echo "MARKER: postgres health"
-                '';
-              }
-            ];
-            ready.steps = [
-              {
-                kind = "exec";
-                command = ''
-                  echo "MARKER: postgres ready"
-                '';
-              }
-            ];
-          };
-
-          nixfied.services.nginx.checks = {
-            health.steps = [
-              {
-                kind = "exec";
-                command = ''
-                  echo "MARKER: nginx health"
-                '';
-              }
-            ];
-            ready.steps = [
-              {
-                kind = "exec";
-                command = ''
-                  echo "MARKER: nginx ready"
-                '';
-              }
-            ];
-          };
-
-          nixfied.tasks."test.workflow.probe-scope" = {
-            id = probeTaskId;
-            summary = "Workflow probe scope unit";
-            description = "Used to validate workflow-scoped ready and health probes.";
-            runner.command = ''
-              set -euo pipefail
-              echo "MARKER: workflow unit"
-            '';
-          };
-
-          nixfied.workflows."test.workflow.probe-scope" = {
-            id = probeWorkflowId;
-            summary = "Workflow probe scope smoke";
-            description = "Exercises workflow-scoped ready and health probes. The workflow should only probe its unit requirements.";
-            mode = "custom";
-            maxWorkers = 1;
-            units.probe = {
-              taskId = probeTaskId;
-              needs = [ ];
-              locks = [ ];
-              when = {
-                envEquals = { };
-                envPresent = [ ];
+          nixfied = {
+            services = {
+              postgres = {
+                enable = lib.mkForce true;
+                checks = {
+                  health.steps = [
+                    {
+                      kind = "exec";
+                      command = ''
+                        echo "MARKER: postgres health"
+                      '';
+                    }
+                  ];
+                  ready.steps = [
+                    {
+                      kind = "exec";
+                      command = ''
+                        echo "MARKER: postgres ready"
+                      '';
+                    }
+                  ];
+                };
               };
-              skipIfMissingEnv = [ ];
-              requirements.services = [ "postgres" ];
+              nginx = {
+                enable = lib.mkForce true;
+                checks = {
+                  health.steps = [
+                    {
+                      kind = "exec";
+                      command = ''
+                        echo "MARKER: nginx health"
+                      '';
+                    }
+                  ];
+                  ready.steps = [
+                    {
+                      kind = "exec";
+                      command = ''
+                        echo "MARKER: nginx ready"
+                      '';
+                    }
+                  ];
+                };
+              };
+              minio.enable = lib.mkForce false;
+              reth.enable = lib.mkForce false;
+              helios.enable = lib.mkForce false;
             };
-            stages = [ ];
-            preRun.tasks = [ "task.ops.ready" ];
-            postRun = {
-              tasks = [ "task.ops.health" ];
-              alwaysRun = true;
+            tasks."test.workflow.probe-scope" = {
+              id = probeTaskId;
+              summary = "Workflow probe scope unit";
+              description = "Used to validate workflow-scoped ready and health probes.";
+              runner.command = ''
+                set -euo pipefail
+                echo "MARKER: workflow unit"
+              '';
+            };
+            workflows."test.workflow.probe-scope" = {
+              id = probeWorkflowId;
+              summary = "Workflow probe scope smoke";
+              description = "Exercises workflow-scoped ready and health probes. The workflow should only probe its unit requirements.";
+              mode = "custom";
+              maxWorkers = 1;
+              units.probe = {
+                taskId = probeTaskId;
+                needs = [ ];
+                locks = [ ];
+                when = {
+                  envEquals = { };
+                  envPresent = [ ];
+                };
+                skipIfMissingEnv = [ ];
+                requirements.services = [ "postgres" ];
+              };
+              stages = [ ];
+              preRun.tasks = [ "task.ops.ready" ];
+              postRun = {
+                tasks = [ "task.ops.health" ];
+                alwaysRun = true;
+              };
             };
           };
         }

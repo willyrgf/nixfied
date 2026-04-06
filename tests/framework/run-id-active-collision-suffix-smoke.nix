@@ -5,7 +5,7 @@
 let
   frameworkLib = import ../../nixfied/framework/core {
     inherit pkgs;
-    system = pkgs.system;
+    inherit (pkgs) system;
   };
   taskId = "task.test.run-id.active-collision";
   workflowId = "workflow.test.run-id.active-collision";
@@ -15,7 +15,7 @@ let
     projectModules = [ ../../nixfied/project/module.nix ];
     extraModules = [
       (
-        { ... }:
+        _:
         {
           nixfied.tasks."test.run-id.active-collision" = {
             id = taskId;
@@ -41,7 +41,7 @@ let
             mode = "custom";
             maxWorkers = 1;
             units.main = {
-              taskId = taskId;
+              inherit taskId;
               needs = [ ];
               locks = [ ];
               when = {
@@ -68,9 +68,9 @@ let
       pkgs
       registry
       ;
-    model = compiled.model;
-    services = compiled.services;
-    serviceDefinitions = compiled.serviceDefinitions;
+    inherit (compiled) model;
+    inherit (compiled) services;
+    inherit (compiled) serviceDefinitions;
     projectRoot = ../..;
   };
 in

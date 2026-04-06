@@ -11,7 +11,7 @@ let
     inherit pkgs project;
     inherit (summary) summaryParser;
   };
-  loggingPrelude = helpers.loggingPrelude;
+  inherit (helpers) loggingPrelude;
   config = import ./config.nix { inherit pkgs project; };
   lifecycle = import ./lifecycle.nix {
     inherit
@@ -50,17 +50,17 @@ in
 {
   version = 1;
   operations = {
-    init = lifecycle.init;
+    inherit (lifecycle) init;
     pre-start = preStart;
     pre-stop = preStop;
     preflight-start = lifecycle.preflightStart;
     start = lifecycle.startLeaf;
     start-leaf = lifecycle.startLeaf;
-    stop = lifecycle.stop;
-    restart = lifecycle.restart;
-    status = lifecycle.status;
-    health = lifecycle.health;
-    ready = lifecycle.ready;
+    inherit (lifecycle) stop;
+    inherit (lifecycle) restart;
+    inherit (lifecycle) status;
+    inherit (lifecycle) health;
+    inherit (lifecycle) ready;
     check-config = lifecycle.checkConfig;
     full-start = lifecycle.fullStart;
     full-start-leaf = lifecycle.fullStartLeaf;

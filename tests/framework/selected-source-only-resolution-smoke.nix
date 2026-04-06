@@ -1,7 +1,7 @@
 { pkgs }:
 let
   serviceConfigLib = import ../../nixfied/framework/core/service-config.nix {
-    lib = pkgs.lib;
+    inherit (pkgs) lib;
     inherit pkgs;
   };
 

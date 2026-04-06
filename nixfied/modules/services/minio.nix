@@ -77,7 +77,7 @@ in
     artifacts = {
       apiPortVar = contractSchema.mkPortVarName cfg.portKeyApi;
       consolePortVar = contractSchema.mkPortVarName cfg.portKeyConsole;
-      serviceDir = serviceDir;
+      inherit serviceDir;
       dataDir = serviceDir;
       logFile = "${serviceDir}/logs/minio.log";
       pidFile = "${serviceDir}/run/minio.pid";

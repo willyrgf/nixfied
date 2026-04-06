@@ -1,7 +1,6 @@
 # Summary parser - render the validated summary envelope through the kernel.
 {
   pkgs,
-  project ? { },
   loggingPrelude ? "",
 }:
 

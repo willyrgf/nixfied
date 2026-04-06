@@ -1,17 +1,4 @@
-{
-  pkgs,
-  project,
-  lib,
-  slots ? null,
-  hooks ? null,
-  postgres ? null,
-  nginx ? null,
-  minio ? null,
-  reth ? null,
-  helios ? null,
-  supervisor ? null,
-  ephemeral ? null,
-}:
+_:
 
 {
   # Optional user-owned extension point.

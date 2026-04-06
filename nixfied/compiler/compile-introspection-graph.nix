@@ -1,12 +1,11 @@
 {
   lib,
   canonical,
+  ...
 }:
 {
   projectRoot,
-  resolved,
   statePolicy,
-  runtime,
   apps,
   execution,
   serviceSets,
@@ -25,13 +24,14 @@
     status = "missing";
     message = "legacy local/default.nix is absent";
   },
+  ...
 }:
 let
   workspaceMarker = import ../framework/workspace-marker.nix;
   workspaceMarkerPresent = workspaceMarker.isPresent projectRoot;
 
   listUtils = import ../framework/core/list-utils.nix;
-  uniqueSorted = listUtils.uniqueSorted;
+  inherit (listUtils) uniqueSorted;
   taskExecutionById = execution.tasks.byId or { };
   workflowExecutionById = execution.workflows.byId or { };
 
@@ -228,8 +228,8 @@ let
         kind = "app";
         id = appId;
         label = appId;
-        summary = app.summary;
-        description = app.description;
+        inherit (app) summary;
+        inherit (app) description;
         ownerFiles = lib.optionals ((app.ownerFile or null) != null) [ app.ownerFile ];
         data = {
           category = app.category or "core";
@@ -238,7 +238,7 @@ let
           service = app.service or null;
           operation = app.operation or null;
           targetAppId = app.targetAppId or null;
-          contractRef = ((app.validation or { }).contractRef or null);
+          contractRef = (app.validation or { }).contractRef or null;
           setupAppIds = app.setupAppIds or [ ];
           teardownAppIds = app.teardownAppIds or [ ];
           usage = app.usage or [ ];
@@ -259,25 +259,25 @@ let
           mappedTaskIds = directTaskIds;
           mappedWorkflowIds = directWorkflowIds;
           mappedServiceSetIds = directServiceSetIds;
-          selectedServices = selectedServices;
+          inherit selectedServices;
           runtimeRoots = {
             policyId = statePolicy.id;
             policyKind = statePolicy.kind;
-            workspaceId = statePolicy.workspaceId;
-            runtimeBase = statePolicy.runtimeBase;
-            registryRoot = statePolicy.registryRoot;
-            artifactsRoot = statePolicy.artifactsRoot;
+            inherit (statePolicy) workspaceId;
+            inherit (statePolicy) runtimeBase;
+            inherit (statePolicy) registryRoot;
+            inherit (statePolicy) artifactsRoot;
           };
-          workspaceMarkerPresent = workspaceMarkerPresent;
+          inherit workspaceMarkerPresent;
           localOverrides = {
             active = localOverridesActive;
             count = localOverrideCount;
           };
         };
         closure = {
-          directTaskIds = directTaskIds;
-          directWorkflowIds = directWorkflowIds;
-          directServiceSetIds = directServiceSetIds;
+          inherit directTaskIds;
+          inherit directWorkflowIds;
+          inherit directServiceSetIds;
           directPackageNames =
             if directTaskIds == [ ] then
               [ ]
@@ -285,7 +285,7 @@ let
               uniqueSorted (
                 builtins.concatLists (map (taskId: map (ref: ref.name) (taskPackageRefs taskId)) directTaskIds)
               );
-          selectedServices = selectedServices;
+          inherit selectedServices;
         };
       }
     ) appIds
@@ -305,8 +305,8 @@ let
         kind = "task";
         id = taskId;
         label = taskId;
-        summary = task.summary;
-        description = task.description;
+        inherit (task) summary;
+        inherit (task) description;
         ownerFiles = featureOwnerFiles taskId;
         data = {
           taskKind = task.kind or "command";
@@ -351,8 +351,8 @@ let
         kind = "workflow";
         id = workflowId;
         label = workflowId;
-        summary = workflow.summary;
-        description = workflow.description;
+        inherit (workflow) summary;
+        inherit (workflow) description;
         ownerFiles = featureOwnerFiles workflowId;
         data = {
           mode = workflow.mode or "custom";
@@ -396,7 +396,7 @@ let
         description = "Compiled service catalog entry for ${serviceName}.";
         ownerFiles = featureOwnerFiles serviceId;
         data = {
-          serviceId = serviceId;
+          inherit serviceId;
           enable = service.enable or false;
           defaultSource = service.config.defaultSource or "";
           sourceKeys = service.config.sourceKeys or [ ];
@@ -429,12 +429,12 @@ let
         kind = "service-set";
         id = serviceSet.name;
         label = serviceSet.name;
-        summary = serviceSet.summary;
-        description = serviceSet.description;
+        inherit (serviceSet) summary;
+        inherit (serviceSet) description;
         ownerFiles = lib.optionals ((serviceSet.ownerFile or null) != null) [ serviceSet.ownerFile ];
         data = {
           serviceSetId = serviceSet.id;
-          defaultOperation = serviceSet.defaultOperation;
+          inherit (serviceSet) defaultOperation;
           requiredServices = serviceSet.services.required;
           optionalServices = serviceSet.services.optional;
         };
@@ -490,8 +490,8 @@ let
             "nixfied/framework/core/mkMachineOutputPrograms.nix"
           ];
           data = {
-            targetAppId = app.targetAppId;
-            contractRef = ((app.validation or { }).contractRef or null);
+            inherit (app) targetAppId;
+            contractRef = (app.validation or { }).contractRef or null;
             setupAppIds = app.setupAppIds or [ ];
             teardownAppIds = app.teardownAppIds or [ ];
           };
@@ -701,9 +701,9 @@ let
           mkEdge {
             from = "task:${taskId}";
             to = "package:${ref.name}";
-            kind = ref.kind;
-            via = ref.via;
-            reason = ref.reason;
+            inherit (ref) kind;
+            inherit (ref) via;
+            inherit (ref) reason;
           }
         ) (taskPackageRefs taskId);
       in
@@ -830,28 +830,28 @@ canonical.canonicalize {
     policyId = statePolicy.id;
     policyKind = statePolicy.kind;
     policySource = statePolicy.source;
-    ownerScope = statePolicy.ownerScope;
-    discoveryScope = statePolicy.discoveryScope;
-    workspaceId = statePolicy.workspaceId;
-    runtimeBase = statePolicy.runtimeBase;
-    registryRoot = statePolicy.registryRoot;
-    artifactsRoot = statePolicy.artifactsRoot;
-    workspaceMarkerPresent = workspaceMarkerPresent;
+    inherit (statePolicy) ownerScope;
+    inherit (statePolicy) discoveryScope;
+    inherit (statePolicy) workspaceId;
+    inherit (statePolicy) runtimeBase;
+    inherit (statePolicy) registryRoot;
+    inherit (statePolicy) artifactsRoot;
+    inherit workspaceMarkerPresent;
   };
   localOverrides = {
     active = localOverridesActive;
     count = localOverrideCount;
   };
-  legacyLocalDefault = legacyLocalDefault;
+  inherit legacyLocalDefault;
   resolution = {
-    appIds = appIds;
-    serviceSetIds = serviceSetIds;
-    taskIds = taskIds;
-    workflowIds = workflowIds;
-    serviceIds = serviceIds;
-    serviceNames = serviceNames;
-    packageNames = packageNames;
+    inherit appIds;
+    inherit serviceSetIds;
+    inherit taskIds;
+    inherit workflowIds;
+    inherit serviceIds;
+    inherit serviceNames;
+    inherit packageNames;
   };
-  nodes = nodes;
-  edges = edges;
+  inherit nodes;
+  inherit edges;
 }

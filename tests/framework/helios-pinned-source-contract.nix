@@ -1,9 +1,9 @@
 { pkgs }:
 let
   conf = import ../../nixfied/project/conf.nix { inherit pkgs; };
-  helios = conf.services.helios;
-  postgres = conf.services.postgres;
-  minio = conf.services.minio;
+  inherit (conf.services) helios;
+  inherit (conf.services) postgres;
+  inherit (conf.services) minio;
   heliosHasNixpkgsSource = helios.sources ? nixpkgs;
 in
 assert helios.sources ? pinned;

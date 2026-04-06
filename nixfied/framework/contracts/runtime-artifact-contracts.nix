@@ -1,6 +1,6 @@
 { pkgs }:
 let
-  lib = pkgs.lib;
+  inherit (pkgs) lib;
   canonical = import ../core/canonical.nix { inherit lib; };
   contracts = import ../../contracts {
     inherit

@@ -1,6 +1,5 @@
 # Shared shell JSON helpers for runtime-generated scripts.
-{
-}:
+_:
 ''
   json_quote_string() {
     local value="$1"

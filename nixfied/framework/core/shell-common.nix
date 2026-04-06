@@ -1,7 +1,7 @@
 {
-  pkgs,
   exitCodes ? import ./exit-codes.nix,
   runtimeDefaults ? import ./runtime-defaults.nix,
+  ...
 }:
 ''
   NIXFIED_EXIT_GENERIC=${toString exitCodes.generic}

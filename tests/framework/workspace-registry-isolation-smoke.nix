@@ -3,10 +3,10 @@
   registry,
 }:
 let
-  lib = pkgs.lib;
+  inherit (pkgs) lib;
   frameworkLib = import ../../nixfied/framework/core {
     inherit pkgs;
-    system = pkgs.system;
+    inherit (pkgs) system;
   };
 
   sourceRoot = ../..;
@@ -39,7 +39,7 @@ let
 
   probeModelA = import ./lib/ci-probe-model.nix {
     inherit pkgs;
-    model = compiledA.model;
+    inherit (compiledA) model;
   };
 
   harnessA = import ./lib/harness.nix {
@@ -48,8 +48,8 @@ let
       registry
       ;
     model = probeModelA;
-    services = compiledA.services;
-    serviceDefinitions = compiledA.serviceDefinitions;
+    inherit (compiledA) services;
+    inherit (compiledA) serviceDefinitions;
     projectRoot = sourceRoot;
   };
 in

@@ -41,9 +41,9 @@ let
     {
       type = "string";
     }
-    // lib.optionalAttrs (node ? minLength) { minLength = node.minLength; }
-    // lib.optionalAttrs (node ? maxLength) { maxLength = node.maxLength; }
-    // lib.optionalAttrs (node ? pattern) { pattern = node.pattern; }
+    // lib.optionalAttrs (node ? minLength) { inherit (node) minLength; }
+    // lib.optionalAttrs (node ? maxLength) { inherit (node) maxLength; }
+    // lib.optionalAttrs (node ? pattern) { inherit (node) pattern; }
     // lib.optionalAttrs (node ? doc) { description = node.doc; };
 
   renderNode =
@@ -59,15 +59,15 @@ let
       {
         type = "integer";
       }
-      // lib.optionalAttrs (node ? minimum) { minimum = node.minimum; }
-      // lib.optionalAttrs (node ? maximum) { maximum = node.maximum; }
+      // lib.optionalAttrs (node ? minimum) { inherit (node) minimum; }
+      // lib.optionalAttrs (node ? maximum) { inherit (node) maximum; }
       // baseDescription
     else if node.kind == "number" then
       {
         type = "number";
       }
-      // lib.optionalAttrs (node ? minimum) { minimum = node.minimum; }
-      // lib.optionalAttrs (node ? maximum) { maximum = node.maximum; }
+      // lib.optionalAttrs (node ? minimum) { inherit (node) minimum; }
+      // lib.optionalAttrs (node ? maximum) { inherit (node) maximum; }
       // baseDescription
     else if node.kind == "null" then
       baseDescription // { type = "null"; }
@@ -84,8 +84,8 @@ let
         type = "array";
         items = renderNode bundle node.elem;
       }
-      // lib.optionalAttrs (node ? minItems) { minItems = node.minItems; }
-      // lib.optionalAttrs (node ? maxItems) { maxItems = node.maxItems; }
+      // lib.optionalAttrs (node ? minItems) { inherit (node) minItems; }
+      // lib.optionalAttrs (node ? maxItems) { inherit (node) maxItems; }
       // baseDescription
     else if node.kind == "map" then
       {
@@ -121,7 +121,7 @@ let
       in
       {
         type = "object";
-        additionalProperties = !(node.closed);
+        additionalProperties = !node.closed;
         inherit properties;
       }
       // lib.optionalAttrs (required != [ ]) { inherit required; }

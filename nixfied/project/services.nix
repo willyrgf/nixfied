@@ -2,6 +2,7 @@
   pkgs,
   conf,
   normalizePostgresEnvConfigs,
+  ...
 }:
 {
   lib,
@@ -121,7 +122,9 @@ let
 in
 {
   config = {
-    nixfied.services.postgres = {
+    nixfied = {
+      services = {
+        postgres = {
       enable = conf.services.postgres.enable or false;
       displayName = "PostgreSQL";
       summary = "PostgreSQL service management API";
@@ -338,7 +341,7 @@ in
       };
     };
 
-    nixfied.services.nginx = {
+        nginx = {
       enable = conf.services.nginx.enable or false;
       displayName = "nginx";
       summary = "nginx service management API";
@@ -500,7 +503,7 @@ in
       };
     };
 
-    nixfied.services.minio = {
+        minio = {
       enable = conf.services.minio.enable or false;
       displayName = "MinIO";
       summary = "MinIO service management API";
@@ -682,7 +685,7 @@ in
       };
     };
 
-    nixfied.services.reth = {
+        reth = {
       enable = conf.services.reth.enable or false;
       displayName = "Reth";
       summary = "Reth service management API";
@@ -795,7 +798,7 @@ in
       };
     };
 
-    nixfied.services.helios = {
+        helios = {
       enable = conf.services.helios.enable or false;
       displayName = "Helios";
       summary = "Helios service management API";
@@ -952,6 +955,8 @@ in
       implementation = {
         version = 1;
         module = ../modules/services/runtime/helios/default.nix;
+      };
+        };
       };
     };
   };

@@ -11,15 +11,15 @@
       identity = {
         projectId = project.id;
         projectName = project.name;
-        description = project.description;
+        inherit (project) description;
       };
 
       runtime = {
         slot = {
           var = project.slotVar;
-          default = conf.slots.default;
-          max = conf.slots.max;
-          stride = conf.slots.stride;
+          inherit (conf.slots) default;
+          inherit (conf.slots) max;
+          inherit (conf.slots) stride;
         };
 
         env = {
@@ -34,7 +34,7 @@
           outputDefault = conf.logging.output;
         };
 
-        ports = conf.ports;
+        inherit (conf) ports;
         ephemeral = {
           copyMode = conf.ephemeral.copyMode or "nix-source";
           includeUntracked = conf.ephemeral.includeUntracked or false;
@@ -64,9 +64,9 @@
       };
 
       tooling = {
-        runtimePackages = conf.tooling.runtimePackages;
-        devShellPackages = conf.tooling.devShellPackages;
-        devShellHook = conf.tooling.devShellHook;
+        inherit (conf.tooling) runtimePackages;
+        inherit (conf.tooling) devShellPackages;
+        inherit (conf.tooling) devShellHook;
       };
 
       packages = {

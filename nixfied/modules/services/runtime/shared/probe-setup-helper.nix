@@ -22,7 +22,7 @@
 }:
 
 let
-  lib = pkgs.lib;
+  inherit (pkgs) lib;
   runtimeDefaults = import ../../../../framework/core/runtime-defaults.nix;
   managedServiceLifecycle =
     import ../../../../framework/runtime/helpers/managed-service-lifecycle.nix

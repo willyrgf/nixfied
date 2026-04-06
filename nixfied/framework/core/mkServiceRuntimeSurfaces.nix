@@ -8,7 +8,7 @@
   serviceDefinitions ? { },
 }:
 let
-  lib = pkgs.lib;
+  inherit (pkgs) lib;
   listUtils = import ./list-utils.nix;
   commonRuntimeShell = import ../runtime/common-runtime.nix { inherit pkgs; };
   shellJson = import ./shell-json.nix { };
@@ -24,9 +24,9 @@ let
     ;
 
   tokenLib = import ./normalize-token.nix { inherit lib; };
-  normalizeToken = tokenLib.normalizeToken;
+  inherit (tokenLib) normalizeToken;
 
-  serviceIds = builtins.sort builtins.lessThan (builtins.attrNames (services));
+  serviceIds = builtins.sort builtins.lessThan (builtins.attrNames services);
   selectedServiceNames =
     if selectedServices == null then null else listUtils.uniqueSorted selectedServices;
   selectedServiceSet =
@@ -352,7 +352,7 @@ let
       output = model.runtime.logging.outputDefault;
     };
     state = {
-      policy = model.state.policy;
+      inherit (model.state) policy;
     };
     ci = {
       artifacts = {
@@ -360,7 +360,7 @@ let
       };
     };
     directories = {
-      base = model.runtime.directories.base;
+      inherit (model.runtime.directories) base;
     };
     services =
       if selectedServiceNames == null then
@@ -621,7 +621,7 @@ let
                 plan
                 opMetadata
                 ;
-              appName = opMetadata.appName;
+              inherit (opMetadata) appName;
               includeApp = opMetadata.includeApp or false;
               usage = opMetadata.usage or [ "nix run .#${opMetadata.appName}" ];
               category = opMetadata.category or serviceName;

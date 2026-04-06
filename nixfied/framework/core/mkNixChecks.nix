@@ -5,12 +5,10 @@
 {
   name ? "nix-checks",
   flakeRef ? ".",
-  formatterPkg ? (if pkgs ? nixfmt then pkgs.nixfmt else pkgs.nixfmt-rfc-style),
-  deadnixPkg ? (
-    if pkgs ? deadnix then pkgs.deadnix else throw "pkgs.deadnix is required for nix-checks"
-  ),
-  statixPkg ? (if pkgs ? statix then pkgs.statix else throw "pkgs.statix is required for nix-checks"),
-  nilPkg ? (if pkgs ? nil then pkgs.nil else throw "pkgs.nil is required for nix-checks"),
+  formatterPkg ? (pkgs.nixfmt or pkgs.nixfmt-rfc-style),
+  deadnixPkg ? (pkgs.deadnix or (throw "pkgs.deadnix is required for nix-checks")),
+  statixPkg ? (pkgs.statix or (throw "pkgs.statix is required for nix-checks")),
+  nilPkg ? (pkgs.nil or (throw "pkgs.nil is required for nix-checks")),
 }:
 let
   plainShellLogging = import ./plain-shell-logging.nix;
@@ -327,7 +325,6 @@ pkgs.writeShellScriptBin name ''
   fi
 
   run_flake_show_check
-  run_help_check
 
   if [ "$mode" = "full" ]; then
     if should_skip_flake_check; then

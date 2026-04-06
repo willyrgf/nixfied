@@ -9,7 +9,7 @@ rec {
   sortedAttrNames = attrs: pkgs.lib.sort (a: b: a < b) (builtins.attrNames attrs);
   optionalAttrSatisfies =
     attrs: field: pred:
-    !(builtins.hasAttr field attrs) || pred (attrs.${field});
+    !(builtins.hasAttr field attrs) || pred attrs.${field};
   isEnvVarName =
     value: builtins.isString value && (builtins.match "^[A-Z_][A-Z0-9_]*$" value) != null;
   isScalar =

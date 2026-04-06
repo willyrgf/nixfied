@@ -1,7 +1,7 @@
 { pkgs }:
 let
   shellHelpers = import ./lib/shell-helpers.nix { inherit pkgs; };
-  loggingPrelude = shellHelpers.loggingPrelude;
+  inherit (shellHelpers) loggingPrelude;
 
   compiledDiscovery = import ../../nixfied/framework/runtime/helpers/discovery.nix {
     inherit pkgs loggingPrelude;

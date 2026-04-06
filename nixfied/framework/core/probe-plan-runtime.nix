@@ -1,7 +1,7 @@
 {
   lib,
   pkgs,
-  probeCommands,
+  ...
 }:
 
 let

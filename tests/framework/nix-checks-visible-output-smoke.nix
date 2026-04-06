@@ -74,7 +74,7 @@ let
     import ../../nixfied/framework/core/mkNixChecks.nix
       {
         pkgs = fakePkgs;
-        lib = pkgs.lib;
+        inherit (pkgs) lib;
       }
       {
         formatterPkg = fakeFormatter;
@@ -99,8 +99,9 @@ pkgs.runCommand "nix-checks-visible-output-smoke" { } ''
   )
 
   ${pkgs.gnugrep}/bin/grep -Fq "flake show output" "$TMPDIR/nix-checks.out"
-  ${pkgs.gnugrep}/bin/grep -Fq "help output" "$TMPDIR/nix-checks.out"
+  ${pkgs.gnugrep}/bin/grep -Fq "OK: flake output surface check passed ref=." "$TMPDIR/nix-checks.out"
   ${pkgs.gnugrep}/bin/grep -Fq "flake check output" "$TMPDIR/nix-checks.out"
+  ${pkgs.gnugrep}/bin/grep -Fq "OK: nix checks passed mode=full flake=." "$TMPDIR/nix-checks.out"
 
   echo "OK: nix-checks emits flake show, help, and flake check output" > "$out"
 ''

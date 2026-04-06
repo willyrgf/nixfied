@@ -6,7 +6,7 @@
   registry,
 }:
 let
-  lib = pkgs.lib;
+  inherit (pkgs) lib;
   harness = import ./lib/harness.nix {
     inherit
       pkgs
@@ -28,7 +28,7 @@ let
   };
   frameworkLib = import ../../nixfied/framework/core {
     inherit pkgs;
-    system = pkgs.system;
+    inherit (pkgs) system;
   };
   repoRoot = builtins.toString ../..;
   frameworkOutputs = frameworkLib.mkFlakeOutputs {

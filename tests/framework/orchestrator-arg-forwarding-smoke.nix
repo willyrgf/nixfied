@@ -2,7 +2,7 @@
 let
   frameworkLib = import ../../nixfied/framework/core {
     inherit pkgs;
-    system = pkgs.system;
+    inherit (pkgs) system;
   };
   shellHelpers = import ./lib/shell-helpers.nix { inherit pkgs; };
   repoRoot = builtins.toString ../..;

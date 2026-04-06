@@ -2,7 +2,7 @@
 { pkgs }:
 
 let
-  lib = pkgs.lib;
+  inherit (pkgs) lib;
   exitCodes = import ../../core/exit-codes.nix;
 
   assertUnique =

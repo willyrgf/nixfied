@@ -31,7 +31,7 @@ let
       pkgs
       projectRoot
       ;
-    compiledCore = compiledCore;
+    inherit compiledCore;
   };
 
   coreSurfaces = import ./mkCoreSurfaces.nix {
@@ -39,21 +39,21 @@ let
       pkgs
       canonical
       ;
-    compiledCore = compiledCore;
+    inherit compiledCore;
   };
 
   runtimeApps = import ./mkRuntimeAppSet.nix {
     inherit pkgs;
     runtimeProgram = "${runtimeArtifacts.runtimeEngine}/bin/nixfied-runtime";
-    model = compiledCore.model;
-    contractBundle = compiledCore.contractBundle;
+    inherit (compiledCore) model;
+    inherit (compiledCore) contractBundle;
   };
 
   apps =
     runtimeApps
     // coreSurfaces.apps
     // {
-      default = if runtimeApps ? help then runtimeApps.help else coreSurfaces.apps.help;
+      default = runtimeApps.help or coreSurfaces.apps.help;
     };
 
   packages = coreSurfaces.packages // {
@@ -64,18 +64,18 @@ let
   };
 in
 {
-  model = compiledCore.model;
+  inherit (compiledCore) model;
   statePolicy = compiledCore.model.state.policy;
-  stateHash = compiledCore.stateHash;
+  inherit (compiledCore) stateHash;
   runtimeHash = runtimeArtifacts.runtimeHash or compiledCore.model.identity.evalHash;
-  tasks = compiledCore.model.tasks;
-  services = runtimeArtifacts.services;
+  inherit (compiledCore.model) tasks;
+  inherit (runtimeArtifacts) services;
   serviceDefinitions = compiledCore.resolved.services or { };
-  serviceCatalog = compiledCore.model.serviceCatalog;
-  workflows = compiledCore.model.workflows;
-  features = compiledCore.model.features;
-  introspectionGraph = compiledCore.introspectionGraph;
-  introspectionBundle = compiledCore.introspectionBundle;
+  inherit (compiledCore.model) serviceCatalog;
+  inherit (compiledCore.model) workflows;
+  inherit (compiledCore.model) features;
+  inherit (compiledCore) introspectionGraph;
+  inherit (compiledCore) introspectionBundle;
   serviceSurfaceCatalog = (compiledCore.model.compiled or { }).serviceSurfaceCatalog or { };
   serviceApis =
     ((compiledCore.model.compiled or { }).serviceSurfaceCatalog or { }).serviceApis or { };
@@ -84,7 +84,7 @@ in
     apps
     packages
     ;
-  checks = coreSurfaces.checks;
-  devShells = coreSurfaces.devShells;
-  schema = coreSurfaces.schema;
+  inherit (coreSurfaces) checks;
+  inherit (coreSurfaces) devShells;
+  inherit (coreSurfaces) schema;
 }

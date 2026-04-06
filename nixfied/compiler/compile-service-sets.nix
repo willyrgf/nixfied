@@ -34,7 +34,7 @@ let
   );
 
   listUtils = import ../framework/core/list-utils.nix;
-  uniqueSorted = listUtils.uniqueSorted;
+  inherit (listUtils) uniqueSorted;
 
   normalizeServiceSet =
     name:
@@ -60,7 +60,7 @@ let
           statePolicyLib.compilePolicy {
             inherit projectRoot;
             identity = resolvedIdentity;
-            policy = raw.state.policy;
+            inherit (raw.state) policy;
           };
     in
     if unknownServices != [ ] then
@@ -72,7 +72,7 @@ let
     else
       canonical.canonicalize {
         id = serviceSetId;
-        name = name;
+        inherit name;
         summary = raw.summary or "Service set ${name}";
         description = raw.description or "";
         services = {
@@ -85,11 +85,11 @@ let
           policy = effectivePolicy;
         };
         export = {
-          defaultFormat = ((raw.export or { }).defaultFormat or "json");
+          defaultFormat = (raw.export or { }).defaultFormat or "json";
         };
         failureLogs = {
-          capture = ((raw.failureLogs or { }).capture or true);
-          tailLines = ((raw.failureLogs or { }).tailLines or 40);
+          capture = (raw.failureLogs or { }).capture or true;
+          tailLines = (raw.failureLogs or { }).tailLines or 40;
         };
         ownerFile = if (raw.ownerFile or null) == null || raw.ownerFile == "" then null else raw.ownerFile;
       };

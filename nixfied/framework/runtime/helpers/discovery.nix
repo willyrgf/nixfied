@@ -8,7 +8,7 @@
 }:
 
 let
-  lib = pkgs.lib;
+  inherit (pkgs) lib;
   cfg = project.discovery or { };
   enabled = cfg.enable or true;
   strict = cfg.strict or true;
@@ -91,7 +91,7 @@ let
               key:
               (resolvedFeatureInventory.${key} or { })
               // {
-                id = (resolvedFeatureInventory.${key}.id or key);
+                id = resolvedFeatureInventory.${key}.id or key;
               }
             ) (builtins.attrNames resolvedFeatureInventory);
         normalized = builtins.foldl' (

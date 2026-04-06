@@ -3,12 +3,12 @@
   registry,
 }:
 let
-  lib = pkgs.lib;
+  inherit (pkgs) lib;
   frameworkLib = import ../../nixfied/framework/core {
     inherit
       pkgs
       ;
-    system = pkgs.system;
+    inherit (pkgs) system;
   };
   shellHelpers = import ./lib/shell-helpers.nix { inherit pkgs; };
 
@@ -42,30 +42,26 @@ let
     ];
   };
 
-  compiledThrowingWithoutExclusion = builtins.tryEval (
-    (frameworkLib.mkNixfied {
+  compiledThrowingWithoutExclusion = builtins.tryEval (frameworkLib.mkNixfied {
       projectRoot = ../..;
       projectModules = [ throwingProjectModule ];
       extraModules = [ ];
       localOverrides = [ ];
-    }).model.serviceCatalog."service.helios".config.dataDirName
-  );
+    }).model.serviceCatalog."service.helios".config.dataDirName;
 
-  compiledThrowingWithExclusion = builtins.tryEval (
-    (frameworkLib.mkNixfied {
+  compiledThrowingWithExclusion = builtins.tryEval (frameworkLib.mkNixfied {
       projectRoot = ../..;
       projectModules = [ throwingProjectModule ];
       extraModules = [ ];
       localOverrides = [
         (
-          { ... }:
+          _:
           {
             nixfied.graph.excludedServices = [ "helios" ];
           }
         )
       ];
-    }).model.serviceCatalog
-  );
+    }).model.serviceCatalog;
 
   excludedTaskId = "task.test.excluded.helios";
   hardTaskId = "task.test.hard.needs.helios";
@@ -191,7 +187,7 @@ let
     extraModules = [ graphTestModule ];
     localOverrides = [
       (
-        { ... }:
+        _:
         {
           nixfied.graph.excludedServices = [ "helios" ];
         }
@@ -209,12 +205,12 @@ let
       pkgs
       registry
       ;
-    model = compiledExcluded.model;
-    services = compiledExcluded.services;
+    inherit (compiledExcluded) model;
+    inherit (compiledExcluded) services;
     projectRoot = ../..;
   };
 in
-assert compiledThrowingWithoutExclusion.success == false;
+assert !compiledThrowingWithoutExclusion.success;
 assert compiledThrowingWithExclusion.success;
 assert !(builtins.hasAttr "service.helios" compiledThrowingWithExclusion.value);
 assert !(builtins.hasAttr "service.helios" compiledExcluded.model.serviceCatalog);

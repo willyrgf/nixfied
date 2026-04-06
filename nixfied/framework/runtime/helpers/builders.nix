@@ -65,7 +65,7 @@ let
         inherit fixtures;
         defaultProfile = fixtureProfile;
         defaultLogs = true;
-        script = script;
+        inherit script;
       };
     in
     commandWrapper.mkCommandWrappedScript {

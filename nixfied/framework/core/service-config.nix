@@ -5,7 +5,7 @@
 let
   runtimeDefaults = import ./runtime-defaults.nix;
   listUtils = import ./list-utils.nix;
-  uniqueSorted = listUtils.uniqueSorted;
+  inherit (listUtils) uniqueSorted;
 
   packagePath =
     {
@@ -197,11 +197,11 @@ let
     wait:
     defaultWait
     // dropNulls {
-      enabled = if wait ? enabled then wait.enabled else null;
-      timeoutSeconds = if wait ? timeoutSeconds then wait.timeoutSeconds else null;
-      intervalSeconds = if wait ? intervalSeconds then wait.intervalSeconds else null;
-      timeoutEnvVar = if wait ? timeoutEnvVar then wait.timeoutEnvVar else null;
-      intervalEnvVar = if wait ? intervalEnvVar then wait.intervalEnvVar else null;
+      enabled = wait.enabled or null;
+      timeoutSeconds = wait.timeoutSeconds or null;
+      intervalSeconds = wait.intervalSeconds or null;
+      timeoutEnvVar = wait.timeoutEnvVar or null;
+      intervalEnvVar = wait.intervalEnvVar or null;
     };
 
   modePhaseLabel = mode: if mode == "health" then "health" else "readiness";
@@ -301,7 +301,7 @@ let
     builtins.mapAttrs (endpointName: endpoint: {
       protocol = endpoint.protocol or "http";
       portKey = requireValue {
-        serviceName = serviceName;
+        inherit serviceName;
         mode = endpointName;
         kind = "endpoint";
         field = "portKey";
@@ -343,20 +343,20 @@ let
     // {
       sources = normalizedSources;
       sourceKeys = keys;
-      package = package;
-      clientPackage = clientPackage;
+      inherit package;
+      inherit clientPackage;
       resolved = {
         sources = normalizedSources;
-        selectedSource = selected.selectedSource;
+        inherit (selected) selectedSource;
         endpoints = normalizedEndpoints;
         checks = {
           health = resolveCheckSummary probePlans.health;
           ready = resolveCheckSummary probePlans.ready;
         };
-        probePlans = probePlans;
+        inherit probePlans;
         operationProbes = probePlans;
         paths = {
-          dataDirName = cfgWithDefaults.dataDirName;
+          inherit (cfgWithDefaults) dataDirName;
         };
         runtime = dropNulls {
           inherit package clientPackage;

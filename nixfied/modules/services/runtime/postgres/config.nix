@@ -6,7 +6,7 @@
 
 let
   serviceConfig = import ../../../../framework/core/service-config.nix {
-    lib = pkgs.lib;
+    inherit (pkgs) lib;
     inherit pkgs;
   };
   cfg = serviceConfig.getProjectServiceConfig {

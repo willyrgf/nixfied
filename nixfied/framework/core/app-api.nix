@@ -1,6 +1,5 @@
 {
   pkgs,
-  shellContract ? import ./shell-contract.nix { inherit pkgs; },
   mkApp ? null,
 }:
 let
@@ -67,7 +66,7 @@ let
         api = mkCommandApi {
           class = contract.class or "typed";
           inherit name;
-          summary = contract.summary;
+          inherit (contract) summary;
           details = contract.details or "";
           usage = contract.usage or [ ];
           examples = contract.examples or [ ];

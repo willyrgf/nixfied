@@ -272,8 +272,8 @@ let
         };
       };
       stages = [ ];
-      preRun = workflowProbePhases.preRun;
-      postRun = workflowProbePhases.postRun;
+      inherit (workflowProbePhases) preRun;
+      inherit (workflowProbePhases) postRun;
       artifacts = {
         root = "/tmp/ci-artifacts";
         keepOnSuccess = false;

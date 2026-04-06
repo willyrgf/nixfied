@@ -1,4 +1,4 @@
-{ lib }:
+_:
 {
   projectRoot,
   resolved,
@@ -7,8 +7,8 @@
   runtime,
   services,
   apps,
-  tasks,
   workflows,
+  ...
 }:
 let
   workspaceMarker = import ../framework/workspace-marker.nix;
@@ -53,12 +53,12 @@ let
           service = app.service or null;
           operation = app.operation or null;
           targetAppId = app.targetAppId or null;
-          summary = app.summary;
-          description = app.description;
+          inherit (app) summary;
+          inherit (app) description;
           category = app.category or "core";
           usage = app.usage or [ ];
           examples = app.examples or [ ];
-          ownerFile = ownerFile;
+          inherit ownerFile;
         };
       }
   ) { } appIds;
@@ -72,7 +72,7 @@ let
     let
       fromApps = map (appName: {
         name = appName;
-        summary = visibleApps.${appName}.summary;
+        inherit (visibleApps.${appName}) summary;
         owner_file = visibleApps.${appName}.ownerFile;
       }) appNames;
 
@@ -257,9 +257,9 @@ in
     lines = featureLines;
     entries = map (featureId: {
       id = featureId;
-      kind = features.${featureId}.kind;
-      summary = features.${featureId}.summary;
-      status = features.${featureId}.status;
+      inherit (features.${featureId}) kind;
+      inherit (features.${featureId}) summary;
+      inherit (features.${featureId}) status;
       coverageRequired = features.${featureId}.coverageRequired or false;
     }) featureIds;
   };

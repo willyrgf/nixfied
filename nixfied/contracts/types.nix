@@ -133,7 +133,7 @@ let
       variant = normalizeNodeImpl "${context}.variants.${variantName}" (
         raw
         // {
-          closed = if raw ? closed then raw.closed else closed;
+          closed = raw.closed or closed;
         }
       );
       tagField =

@@ -9,11 +9,11 @@ let
     inherit
       pkgs
       ;
-    system = pkgs.system;
+    inherit (pkgs) system;
   };
   serviceConfigLib = import ../../nixfied/framework/core/service-config.nix {
     inherit pkgs;
-    lib = pkgs.lib;
+    inherit (pkgs) lib;
   };
   testCatalog = import ../../nixfied/framework/testing/catalog.nix;
   taskIds = builtins.attrNames model.tasks;
@@ -96,7 +96,7 @@ let
     let
       task = model.tasks.${taskId};
     in
-    builtins.isList ((((task.requirements or { }).services))) && !(task ? serviceName)
+    builtins.isList (task.requirements or { }).services && !(task ? serviceName)
   ) taskIds;
 
   workflowsReferenceKnownTasks = builtins.all (
@@ -125,7 +125,7 @@ let
       let
         unit = workflow.units.${unitName};
       in
-      builtins.isList ((((unit.requirements or { }).services))) && !(unit ? serviceName)
+      builtins.isList (unit.requirements or { }).services && !(unit ? serviceName)
     ) (builtins.attrNames workflow.units)
   ) workflowIds;
 
@@ -174,7 +174,7 @@ let
   exposedTaskFeaturesPresent = builtins.all (
     appName:
     let
-      taskId = model.views.apps.${appName}.taskId;
+      inherit (model.views.apps.${appName}) taskId;
     in
     taskId == null || builtins.hasAttr taskId model.features
   ) (builtins.attrNames (model.views.apps or { }));
@@ -233,7 +233,7 @@ let
   nginxService = normalizeServiceDefinition "nginx";
   heliosService = normalizeServiceDefinition "helios";
   invalidMachineOutputContractRef = builtins.tryEval (
-    builtins.deepSeq ((frameworkLib.mkNixfied {
+    builtins.deepSeq (frameworkLib.mkNixfied {
       projectRoot = ../..;
       projectModules = [ ../../nixfied/project/module.nix ];
       extraModules = [
@@ -250,8 +250,7 @@ let
         }
       ];
       localOverrides = [ ];
-    }).model.apps
-    ) true
+    }).model.apps true
   );
   hasCommandSurface = name: builtins.any (entry: entry.name == name) commandSurfaces;
   findCommandArg =
@@ -315,7 +314,7 @@ assert
   == nginxService.config.resolved.operationProbes.health.count;
 assert heliosService.config.resolved.operationProbes.ready.count == 2;
 assert heliosService.config.resolved.probePlans.ready.count == 2;
-assert heliosService.config.resolved.probePlans.ready.wait.enabled == true;
+assert heliosService.config.resolved.probePlans.ready.wait.enabled;
 assert
   heliosService.config.resolved.probePlans.ready.wait.timeoutEnvVar == "HELIOS_READY_TIMEOUT_SECS";
 assert
@@ -328,7 +327,7 @@ assert formatTask.runtime ? postHooks;
 assert formatTask.runtime.postHooks ? "framework.nixfmt";
 assert pkgs.lib.hasInfix "nixfmt --" formatTask.runtime.postHooks."framework.nixfmt".command;
 assert checkTask.runner.type == "derivation";
-assert checkTask.runner.command == "nix-checks";
+assert checkTask.runner.command == "nix-checks \"$@\"";
 assert pkgs.lib.hasInfix "nix-checks" (checkTask.runner.package or "");
 assert testTask.runner.type == "workflowRef";
 assert testTask.runner.workflowId == "workflow.test.full";
@@ -387,7 +386,7 @@ assert workflowFeaturesPresent;
 assert exposedTaskFeaturesPresent;
 assert runtimeFeaturesPresent;
 assert requiredCompileFeatureIds == expectedCompileFeatureIds;
-assert invalidMachineOutputContractRef.success == false;
+assert !invalidMachineOutputContractRef.success;
 pkgs.runCommand "compiler-validation" { } ''
   echo "OK: compiler task, workflow, and feature contracts are stable" > "$out"
 ''

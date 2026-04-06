@@ -72,7 +72,7 @@ let
     taskId = resolveDeclaredTaskId unit.taskId;
     needs = listUtils.uniquePreserveOrder unit.needs;
     locks = listUtils.uniquePreserveOrder unit.locks;
-    when = unit.when;
+    inherit (unit) when;
     skipIfMissingEnv = listUtils.uniquePreserveOrder unit.skipIfMissingEnv;
     requirements = unit.requirements or { } // {
       services = listUtils.uniquePreserveOrder (unit.requirements.services or [ ]);
@@ -210,7 +210,7 @@ let
               (canonical.canonicalize {
                 serviceSetId = serviceSet.id;
                 serviceSetName = serviceSet.name;
-                operation = operation;
+                inherit operation;
                 selectedServices = serviceSet.services.all or [ ];
               })
             ];
@@ -290,7 +290,7 @@ let
     builtins.foldl' (
       acc: unitName:
       let
-        taskId = units.${unitName}.taskId;
+        inherit (units.${unitName}) taskId;
         existing = acc.${taskId} or [ ];
       in
       acc
@@ -325,7 +325,7 @@ let
         else if (!usesUnits) && (!usesStages) then
           throw "workflow '${workflowId}' must define units or stages"
         else if usesUnits then
-          builtins.mapAttrs (_: unit: normalizeUnit unit) raw.units
+          builtins.mapAttrs (_: normalizeUnit) raw.units
         else
           unitsFromStages raw.stages;
 
@@ -362,7 +362,7 @@ let
             if isPrunedTaskId unit.taskId then
               {
                 reason = "task-pruned";
-                taskId = unit.taskId;
+                inherit (unit) taskId;
                 taskReason = pruneReasonsByTaskId.${unit.taskId} or null;
               }
             else if excludedRequirements != [ ] then
@@ -394,13 +394,13 @@ let
               );
         in
         {
-          taskId = unit.taskId;
+          inherit (unit) taskId;
           explicitNeeds = unit.needs;
           hardNeeds = listUtils.uniquePreserveOrder (unit.needs ++ hardTaskNeeds);
           softNeeds = listUtils.uniquePreserveOrder softTaskNeeds;
           locks = listUtils.uniquePreserveOrder (unit.locks ++ (taskScheduling.locks or [ ]));
-          when = unit.when;
-          skipIfMissingEnv = unit.skipIfMissingEnv;
+          inherit (unit) when;
+          inherit (unit) skipIfMissingEnv;
           requirements = {
             services = effectiveRequiredServices;
           };
@@ -412,7 +412,7 @@ let
           };
           deps = taskDeps;
           produces = taskProduces;
-          initialPruneReason = initialPruneReason;
+          inherit initialPruneReason;
         }
       ) authoredUnits;
 
@@ -498,16 +498,16 @@ let
           {
             name = unitName;
             value = canonical.canonicalize {
-              taskId = unit.taskId;
+              inherit (unit) taskId;
               needs = listUtils.uniquePreserveOrder (unit.hardNeeds ++ softNeeds);
-              locks = unit.locks;
-              when = unit.when;
-              skipIfMissingEnv = unit.skipIfMissingEnv;
-              requirements = unit.requirements;
-              priority = unit.priority;
-              scheduling = unit.scheduling;
-              deps = unit.deps;
-              produces = unit.produces;
+              inherit (unit) locks;
+              inherit (unit) when;
+              inherit (unit) skipIfMissingEnv;
+              inherit (unit) requirements;
+              inherit (unit) priority;
+              inherit (unit) scheduling;
+              inherit (unit) deps;
+              inherit (unit) produces;
             };
           }
         ) survivingUnitNames
@@ -555,28 +555,28 @@ let
               {
                 name = unitName;
                 stage = stageIndexByUnit.${unitName};
-                taskId = unit.taskId;
-                needs = unit.needs;
-                locks = unit.locks;
-                when = unit.when;
-                skipIfMissingEnv = unit.skipIfMissingEnv;
-                requirements = unit.requirements;
-                priority = unit.priority;
-                scheduling = unit.scheduling;
-                deps = unit.deps;
-                produces = unit.produces;
+                inherit (unit) taskId;
+                inherit (unit) needs;
+                inherit (unit) locks;
+                inherit (unit) when;
+                inherit (unit) skipIfMissingEnv;
+                inherit (unit) requirements;
+                inherit (unit) priority;
+                inherit (unit) scheduling;
+                inherit (unit) deps;
+                inherit (unit) produces;
               }
             ) order
           );
     in
     canonical.canonicalize {
       id = workflowId;
-      summary = raw.summary;
-      description = raw.description;
-      launcher = raw.launcher;
-      mode = raw.mode;
+      inherit (raw) summary;
+      inherit (raw) description;
+      inherit (raw) launcher;
+      inherit (raw) mode;
       maxWorkers = if raw.maxWorkers < 1 then 1 else raw.maxWorkers;
-      logging = raw.logging;
+      inherit (raw) logging;
       units = finalUnits;
       stages = workflowStages;
       preRun = (raw.preRun or { }) // {
@@ -587,16 +587,16 @@ let
         tasks = survivingPostRunTasks;
         serviceSets = normalizedPostRunServiceSets;
       };
-      artifacts = raw.artifacts;
-      execution = raw.execution;
-      plan = plan;
+      inherit (raw) artifacts;
+      inherit (raw) execution;
+      inherit plan;
     };
 
   addWorkflow =
     acc: name:
     let
       workflow = compileWorkflow name;
-      id = workflow.id;
+      inherit (workflow) id;
     in
     if builtins.hasAttr id acc then
       if canonical.toCanonicalNix acc.${id} == canonical.toCanonicalNix workflow then

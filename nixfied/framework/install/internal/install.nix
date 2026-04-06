@@ -9,8 +9,8 @@
 let
   inherit (lib.appApi) mkNixfiedApp;
   installManifest = import ./install-manifest.nix { inherit pkgs; };
-  projectTemplates = installManifest.projectTemplates;
-  frameworkHelpers = installManifest.frameworkHelpers;
+  inherit (installManifest) projectTemplates;
+  inherit (installManifest) frameworkHelpers;
   optionalTemplates = builtins.filter (t: !(t.required or false)) projectTemplates;
   renderShellWords = values: builtins.concatStringsSep " " (map pkgs.lib.escapeShellArg values);
   templateFilterRequiredKeysShell = renderShellWords installManifest.templateFilterPlanData.requiredKeys;
@@ -200,8 +200,8 @@ let
   mkFrameworkHelperApp =
     helper:
     mkNixfiedApp {
-      name = helper.name;
-      api = helper.api;
+      inherit (helper) name;
+      inherit (helper) api;
       env = helper.env or { };
       useDeps = false;
       script = helperScriptFor helper;
@@ -209,7 +209,7 @@ let
 in
 builtins.listToAttrs (
   map (helper: {
-    name = helper.name;
+    inherit (helper) name;
     value = mkFrameworkHelperApp helper;
   }) frameworkHelpers
 )

@@ -54,13 +54,13 @@ let
     (mkCommandApi {
       class = opCfg.class or "passthrough";
       name = appName;
-      summary = opCfg.summary;
+      inherit (opCfg) summary;
       details = opCfg.details or "";
-      usage = usage;
-      examples = examples;
+      inherit usage;
+      inherit examples;
       args = opCfg.args or [ ];
       env = opCfg.env or [ ];
-      category = category;
+      inherit category;
       idempotent = opCfg.idempotent or false;
     }).commandApi;
 
@@ -90,11 +90,11 @@ let
         ;
       class = opCfg.class or "passthrough";
       idempotent = opCfg.idempotent or false;
-      summary = opCfg.summary;
-      details = opCfg.details;
+      inherit (opCfg) summary;
+      inherit (opCfg) details;
       args = opCfg.args or [ ];
       env = opCfg.env or [ ];
-      ownerFile = contract.ownerFile;
+      inherit (contract) ownerFile;
       artifacts = contract.artifacts or { };
       profiles = contract.profiles or [ ];
       runtimePrimitives = contract.runtimePrimitives or { };
@@ -141,13 +141,13 @@ let
         kind = "serviceOp";
         service = entry.serviceName;
         operation = entry.opName;
-        summary = entry.summary;
+        inherit (entry) summary;
         description = entry.details;
-        category = entry.category;
-        usage = entry.usage;
-        examples = entry.examples;
-        ownerFile = entry.ownerFile;
-        commandApi = entry.commandApi;
+        inherit (entry) category;
+        inherit (entry) usage;
+        inherit (entry) examples;
+        inherit (entry) ownerFile;
+        inherit (entry) commandApi;
       };
     }) appEntries
   );

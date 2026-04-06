@@ -12,7 +12,7 @@
   },
 }:
 let
-  lib = pkgs.lib;
+  inherit (pkgs) lib;
   modules = import ../../modules;
   canonical = import ./canonical.nix { inherit lib; };
 

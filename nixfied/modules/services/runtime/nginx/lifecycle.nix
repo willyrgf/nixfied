@@ -39,7 +39,7 @@ let
   # Nginx lifecycle historically named this `serviceScripts`
   serviceScripts = managedServiceLifecycle;
 
-  nginx = templates.nginx;
+  inherit (templates) nginx;
   portVarHttp = slots.portVarName (config.portKeyHttp or "http");
   portVarHttps = slots.portVarName (config.portKeyHttps or "https");
   dataDirName = config.dataDirName or "nginx";

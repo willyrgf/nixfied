@@ -1,7 +1,4 @@
-{
-  lib,
-  canonical,
-}:
+{ canonical, ... }:
 {
   resolved ? null,
   tasks ? { },
@@ -15,19 +12,19 @@ let
     if resolved == null || !(builtins.isAttrs resolved) then null else resolved.identity or null;
 
   taskCatalog = builtins.mapAttrs (_name: task: {
-    id = task.id;
+    inherit (task) id;
     kind = task.kind or "command";
     commandApi = task.commandApi or null;
   }) tasks;
 
   appCatalog = builtins.mapAttrs (_name: app: {
-    id = app.id;
+    inherit (app) id;
     kind = app.kind or "taskRef";
     commandApi = app.commandApi or null;
   }) apps;
 
   workflowCatalog = builtins.mapAttrs (_name: workflow: {
-    id = workflow.id;
+    inherit (workflow) id;
     kind = workflow.kind or "workflow";
     commandApi = workflow.commandApi or null;
   }) workflows;

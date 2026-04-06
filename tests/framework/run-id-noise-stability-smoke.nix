@@ -5,7 +5,7 @@
 let
   frameworkLib = import ../../nixfied/framework/core {
     inherit pkgs;
-    system = pkgs.system;
+    inherit (pkgs) system;
   };
   shellHelpers = import ./lib/shell-helpers.nix { inherit pkgs; };
 
@@ -16,7 +16,7 @@ let
     projectModules = [ ../../nixfied/project/module.nix ];
     extraModules = [
       (
-        { ... }:
+        _:
         {
           nixfied.tasks."test.run-id.noise" = {
             id = taskId;
@@ -39,8 +39,8 @@ let
       pkgs
       registry
       ;
-    model = compiled.model;
-    services = compiled.services;
+    inherit (compiled) model;
+    inherit (compiled) services;
     projectRoot = ../..;
   };
 in

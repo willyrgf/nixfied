@@ -110,7 +110,7 @@ let
     docs = docsFile;
     introspectionGraph = introspectionGraphFile;
     introspectionBundle = introspectionBundleFile;
-    introspectionAssets = introspectionAssets;
+    inherit introspectionAssets;
     stateHash = pkgs.writeText "nixfied-state-hash.txt" "${compiledCore.stateHash}\n";
     features = pkgs.writeText "nixfied-features.txt" "${featuresTable}\n";
     schema = schemaDir;

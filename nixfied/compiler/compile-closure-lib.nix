@@ -12,14 +12,15 @@
 # graph node contributes and how results are merged.  See the inline
 # documentation below for the full strategy interface.
 #
-{ lib }:
+_:
 {
   tasks,
   workflows,
+  ...
 }:
 let
   listUtils = import ../framework/core/list-utils.nix;
-  uniquePreserveOrder = listUtils.uniquePreserveOrder;
+  inherit (listUtils) uniquePreserveOrder;
 
   taskSet = if tasks == null then { } else tasks;
   workflowSet = if workflows == null then { } else workflows;
@@ -135,7 +136,7 @@ let
             nextSeen = seen ++ [ token ];
             unitNames = builtins.sort builtins.lessThan (builtins.attrNames (workflow.units or { }));
             unitResults = map (
-              unitName: strategy.workflowUnit nextSeen (workflow.units.${unitName}) goTask
+              unitName: strategy.workflowUnit nextSeen workflow.units.${unitName} goTask
             ) unitNames;
             phaseResult = strategy.workflowPhase nextSeen workflow goTask;
             phaseServiceSetResult = strategy.workflowPhaseServiceSets workflow;

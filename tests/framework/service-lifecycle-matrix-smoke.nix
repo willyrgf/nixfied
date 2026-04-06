@@ -3,7 +3,7 @@ let
   shellHelpers = import ./lib/shell-helpers.nix { inherit pkgs; };
   frameworkLib = import ../../nixfied/framework/core {
     inherit pkgs;
-    system = pkgs.system;
+    inherit (pkgs) system;
   };
   slotsStub =
     let
@@ -123,7 +123,7 @@ let
       services = {
         ${serviceName} = {
           enable = true;
-          config = compiled.services."service.${serviceName}".config;
+          inherit (compiled.services."service.${serviceName}") config;
         };
       };
     };
@@ -504,7 +504,7 @@ let
     slots = slotsStub;
     config = nginxConfig;
     templates = nginxTemplates;
-    loggingPrelude = nginxHelpers.loggingPrelude;
+    inherit (nginxHelpers) loggingPrelude;
   };
 
   nginxService =

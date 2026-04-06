@@ -1,10 +1,13 @@
-{ lib }:
-{ resolved }:
+_:
+{
+  resolved,
+  ...
+}:
 let
   services = resolved.services or { };
   excludedServices = resolved.graph.excludedServices or [ ];
   listUtils = import ../framework/core/list-utils.nix;
-  uniqueSorted = listUtils.uniqueSorted;
+  inherit (listUtils) uniqueSorted;
 
   names = builtins.sort builtins.lessThan (
     builtins.filter (name: !(builtins.elem name excludedServices)) (builtins.attrNames services)
@@ -26,7 +29,7 @@ builtins.listToAttrs (
       name = "service.${name}";
       value = {
         id = "service.${name}";
-        name = name;
+        inherit name;
         enable = serviceCfg.enable or false;
         config = {
           dataDirName = serviceCfg.dataDirName or name;

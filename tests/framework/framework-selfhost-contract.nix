@@ -2,10 +2,10 @@
 let
   workflow = model.workflows."workflow.test.framework.selfhost";
   task = model.tasks."task.test.framework.selfhost";
-  command = task.runner.command;
+  inherit (task.runner) command;
 in
 assert workflow.units.main.taskId == "task.test.framework.selfhost";
-assert workflow.execution.ephemeral.enable == true;
+assert workflow.execution.ephemeral.enable;
 assert task.runner.type == "shell";
 assert pkgs.lib.hasInfix ''"$NIXFIED_EXECUTOR_SELF" run-task task.dev'' command;
 assert pkgs.lib.hasInfix ''"$NIXFIED_EXECUTOR_SELF" run-workflow workflow.ci.basic --summary''

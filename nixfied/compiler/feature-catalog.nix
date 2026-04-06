@@ -17,7 +17,7 @@
     modelPaths = [ "runtime.ephemeral.copyMode" ];
     status = "stable";
     defaults = {
-      copyMode = runtime.ephemeral.copyMode;
+      inherit (runtime.ephemeral) copyMode;
     };
     coverageRequired = true;
     coverageLayer = "e2e";
@@ -41,7 +41,7 @@
     modelPaths = [ "runtime.ephemeral.includeUntracked" ];
     status = "stable";
     defaults = {
-      includeUntracked = runtime.ephemeral.includeUntracked;
+      inherit (runtime.ephemeral) includeUntracked;
     };
     coverageRequired = true;
     coverageLayer = "e2e";
@@ -68,8 +68,8 @@
     ];
     status = "stable";
     defaults = {
-      envFileMode = runtime.ephemeral.envFileMode;
-      envFilePath = runtime.ephemeral.envFilePath;
+      inherit (runtime.ephemeral) envFileMode;
+      inherit (runtime.ephemeral) envFilePath;
     };
     coverageRequired = true;
     coverageLayer = "e2e";

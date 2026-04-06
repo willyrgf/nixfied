@@ -1,7 +1,6 @@
-{ lib, canonical }:
+{ canonical, ... }:
 {
   system,
-  projectRoot,
   resolved,
   statePolicy,
   runtime,
@@ -16,13 +15,14 @@
   workflows,
   features,
   views,
+  ...
 }:
 let
   identityBase = {
-    projectId = resolved.identity.projectId;
-    projectName = resolved.identity.projectName;
-    description = resolved.identity.description;
-    system = system;
+    inherit (resolved.identity) projectId;
+    inherit (resolved.identity) projectName;
+    inherit (resolved.identity) description;
+    inherit system;
   };
 
   modelPayload = {
@@ -33,19 +33,19 @@ let
 
     identity = identityBase;
 
-    runtime = runtime;
+    inherit runtime;
 
-    serviceCatalog = serviceCatalog;
-    serviceSets = serviceSets;
-    apps = apps;
-    tasks = tasks;
-    workflows = workflows;
-    features = features;
+    inherit serviceCatalog;
+    inherit serviceSets;
+    inherit apps;
+    inherit tasks;
+    inherit workflows;
+    inherit features;
     views = {
-      apps = views.apps;
-      help = views.help;
-      docs = views.docs;
-      features = views.features;
+      inherit (views) apps;
+      inherit (views) help;
+      inherit (views) docs;
+      inherit (views) features;
     };
 
     state = {
@@ -65,7 +65,7 @@ let
           kind = "nixfied-runtime";
           version = 1;
         };
-        services = services;
+        inherit services;
       };
 
   evalHash = canonical.hashCanonical {
@@ -73,19 +73,19 @@ let
       kind = "nixfied-model-eval";
       version = 1;
     };
-    identity = resolved.identity;
-    runtime = runtime;
+    inherit (resolved) identity;
+    inherit runtime;
     services = serviceCatalog;
-    serviceSets = serviceSets;
-    apps = apps;
-    tasks = tasks;
-    workflows = workflows;
-    features = features;
+    inherit serviceSets;
+    inherit apps;
+    inherit tasks;
+    inherit workflows;
+    inherit features;
   };
 
   modelPayloadWithEvalHash = modelPayload // {
     identity = modelPayload.identity // {
-      evalHash = evalHash;
+      inherit evalHash;
     };
   };
 
@@ -93,9 +93,9 @@ let
     modelPayloadWithEvalHash
     // {
       compiled = {
-        apiCatalog = apiCatalog;
-        execution = execution;
-        serviceSurfaceCatalog = serviceSurfaceCatalog;
+        inherit apiCatalog;
+        inherit execution;
+        inherit serviceSurfaceCatalog;
       };
     }
   );

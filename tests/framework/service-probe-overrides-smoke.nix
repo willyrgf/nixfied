@@ -6,7 +6,7 @@ let
   shellHelpers = import ./lib/shell-helpers.nix { inherit pkgs; };
   frameworkLib = import ../../nixfied/framework/core {
     inherit pkgs;
-    system = pkgs.system;
+    inherit (pkgs) system;
   };
   slotsStub = {
     getSlotInfo = pkgs.writeShellScript "service-probe-overrides-slot-info" ''
@@ -46,62 +46,67 @@ let
       (
         { lib, ... }:
         {
-          nixfied.services.postgres.enable = lib.mkForce false;
-          nixfied.services.nginx.enable = lib.mkForce true;
-          nixfied.services.minio.enable = lib.mkForce false;
-          nixfied.services.reth.enable = lib.mkForce false;
-          nixfied.services.helios.enable = lib.mkForce false;
+          nixfied = {
+            services = {
+              postgres.enable = lib.mkForce false;
+              nginx = {
+                enable = lib.mkForce true;
+                checks = {
+                  health.steps = [
+                    {
+                      kind = "exec";
+                      command = ''
+                        test "$NIXFIED_PROBE_MODE" = "health" &&
+                        test "$NIXFIED_PROBE_SERVICE" = "nginx" &&
+                        test "$NIXFIED_PROBE_SOURCE" = "nixpkgs" &&
+                        test -n "$NIXFIED_PROBE_HTTP_PORT" &&
+                        test -n "$NIXFIED_PROBE_HTTPS_PORT"
+                      '';
+                    }
+                  ];
 
-          nixfied.services.nginx.checks = {
-            health.steps = [
-              {
-                kind = "exec";
-                command = ''
-                  test "$NIXFIED_PROBE_MODE" = "health" &&
-                  test "$NIXFIED_PROBE_SERVICE" = "nginx" &&
-                  test "$NIXFIED_PROBE_SOURCE" = "nixpkgs" &&
-                  test -n "$NIXFIED_PROBE_HTTP_PORT" &&
-                  test -n "$NIXFIED_PROBE_HTTPS_PORT"
-                '';
-              }
-            ];
-
-            ready = {
-              wait = {
-                enabled = true;
-                timeoutSeconds = 3;
-                intervalSeconds = 1;
+                  ready = {
+                    wait = {
+                      enabled = true;
+                      timeoutSeconds = 3;
+                      intervalSeconds = 1;
+                    };
+                    steps = [
+                      {
+                        kind = "exec";
+                        command = ''
+                          count_file="''${TMPDIR:?}/nixfied-nginx-ready-count"
+                          count="$(${pkgs.coreutils}/bin/cat "$count_file" 2>/dev/null || echo 0)"
+                          count=$((count + 1))
+                          printf '%s' "$count" > "$count_file"
+                          test "$NIXFIED_PROBE_MODE" = "ready" &&
+                          test "$NIXFIED_PROBE_SERVICE" = "nginx" &&
+                          test "$NIXFIED_PROBE_SOURCE" = "nixpkgs" &&
+                          test -n "$NIXFIED_PROBE_HTTP_PORT" &&
+                          test -n "$NIXFIED_PROBE_HTTPS_PORT" &&
+                          [ "$count" -ge 2 ]
+                        '';
+                      }
+                    ];
+                  };
+                };
               };
-              steps = [
-                {
-                  kind = "exec";
-                  command = ''
-                    count_file="''${TMPDIR:?}/nixfied-nginx-ready-count"
-                    count="$(${pkgs.coreutils}/bin/cat "$count_file" 2>/dev/null || echo 0)"
-                    count=$((count + 1))
-                    printf '%s' "$count" > "$count_file"
-                    test "$NIXFIED_PROBE_MODE" = "ready" &&
-                    test "$NIXFIED_PROBE_SERVICE" = "nginx" &&
-                    test "$NIXFIED_PROBE_SOURCE" = "nixpkgs" &&
-                    test -n "$NIXFIED_PROBE_HTTP_PORT" &&
-                    test -n "$NIXFIED_PROBE_HTTPS_PORT" &&
-                    [ "$count" -ge 2 ]
-                  '';
-                }
-              ];
+              minio.enable = lib.mkForce false;
+              reth.enable = lib.mkForce false;
+              helios.enable = lib.mkForce false;
             };
-          };
 
-          nixfied.runtime.ports = lib.mkForce {
-            http = 27100;
-            https = 27101;
-            minioApi = 27102;
-            minioConsole = 27103;
-            postgres = 27104;
-            rethHttp = 27105;
-            rethWs = 27106;
-            rethAuth = 27107;
-            heliosRpc = 27108;
+            runtime.ports = lib.mkForce {
+              http = 27100;
+              https = 27101;
+              minioApi = 27102;
+              minioConsole = 27103;
+              postgres = 27104;
+              rethHttp = 27105;
+              rethWs = 27106;
+              rethAuth = 27107;
+              heliosRpc = 27108;
+            };
           };
         }
       )
@@ -112,7 +117,7 @@ let
   directProject = {
     services.nginx = {
       enable = true;
-      config = compiled.services."service.nginx".config;
+      inherit (compiled.services."service.nginx") config;
     };
   };
 

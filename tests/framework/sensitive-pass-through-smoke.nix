@@ -5,7 +5,7 @@
 let
   frameworkLib = import ../../nixfied/framework/core {
     inherit pkgs;
-    system = pkgs.system;
+    inherit (pkgs) system;
   };
 
   compiled = frameworkLib.mkNixfied {
@@ -13,68 +13,67 @@ let
     projectModules = [ ../../nixfied/project/module.nix ];
     extraModules = [
       (
-        { ... }:
+        _:
         {
-          nixfied.tasks.sensitive-pass-through-blocked = {
-            id = "task.test.sensitive.blocked";
-            kind = "internal";
-            summary = "Sensitive pass-through blocked task";
-            runner = {
-              type = "shell";
-              command = ''
-                set -euo pipefail
-                echo "OK: blocked task command should not execute"
-              '';
+          nixfied.tasks = {
+            sensitive-pass-through-blocked = {
+              id = "task.test.sensitive.blocked";
+              kind = "internal";
+              summary = "Sensitive pass-through blocked task";
+              runner = {
+                type = "shell";
+                command = ''
+                  set -euo pipefail
+                  echo "OK: blocked task command should not execute"
+                '';
+              };
+              runtime.passThroughEnv = [ "API_KEY" ];
             };
-            runtime.passThroughEnv = [ "API_KEY" ];
-          };
-
-          nixfied.tasks.sensitive-pass-through-allowed = {
-            id = "task.test.sensitive.allowed";
-            kind = "internal";
-            summary = "Sensitive pass-through allowed task";
-            runner = {
-              type = "shell";
-              command = ''
-                set -euo pipefail
-                if [ -z "''${API_KEY:-}" ]; then
-                  echo "ERROR: API_KEY missing inside allowed task"
-                  exit 1
-                fi
-                echo "OK: allowed task received API_KEY"
-              '';
+            sensitive-pass-through-allowed = {
+              id = "task.test.sensitive.allowed";
+              kind = "internal";
+              summary = "Sensitive pass-through allowed task";
+              runner = {
+                type = "shell";
+                command = ''
+                  set -euo pipefail
+                  if [ -z "''${API_KEY:-}" ]; then
+                    echo "ERROR: API_KEY missing inside allowed task"
+                    exit 1
+                  fi
+                  echo "OK: allowed task received API_KEY"
+                '';
+              };
+              runtime.passThroughEnv = [ "API_KEY" ];
+              runtime.allowSensitivePassThrough = true;
             };
-            runtime.passThroughEnv = [ "API_KEY" ];
-            runtime.allowSensitivePassThrough = true;
-          };
-
-          nixfied.tasks.runtime-owned-pass-through-blocked = {
-            id = "task.test.runtime-owned.blocked";
-            kind = "internal";
-            summary = "Runtime-owned pass-through blocked task";
-            runner = {
-              type = "shell";
-              command = ''
-                set -euo pipefail
-                echo "OK: runtime-owned blocked task command should not execute"
-              '';
+            runtime-owned-pass-through-blocked = {
+              id = "task.test.runtime-owned.blocked";
+              kind = "internal";
+              summary = "Runtime-owned pass-through blocked task";
+              runner = {
+                type = "shell";
+                command = ''
+                  set -euo pipefail
+                  echo "OK: runtime-owned blocked task command should not execute"
+                '';
+              };
+              runtime.passThroughEnv = [ "HOME" ];
             };
-            runtime.passThroughEnv = [ "HOME" ];
-          };
-
-          nixfied.tasks.runtime-owned-env-override-blocked = {
-            id = "task.test.runtime-owned.env-override";
-            kind = "internal";
-            summary = "Runtime-owned env override blocked task";
-            runner = {
-              type = "shell";
-              command = ''
-                set -euo pipefail
-                echo "OK: runtime-owned env override task command should not execute"
-              '';
-            };
-            runtime.env = {
-              XDG_CACHE_HOME = "/tmp/runtime-owned-override";
+            runtime-owned-env-override-blocked = {
+              id = "task.test.runtime-owned.env-override";
+              kind = "internal";
+              summary = "Runtime-owned env override blocked task";
+              runner = {
+                type = "shell";
+                command = ''
+                  set -euo pipefail
+                  echo "OK: runtime-owned env override task command should not execute"
+                '';
+              };
+              runtime.env = {
+                XDG_CACHE_HOME = "/tmp/runtime-owned-override";
+              };
             };
           };
         }
@@ -88,8 +87,8 @@ let
       pkgs
       registry
       ;
-    model = compiled.model;
-    services = compiled.services;
+    inherit (compiled) model;
+    inherit (compiled) services;
     projectRoot = ../..;
   };
 in

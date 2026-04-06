@@ -12,7 +12,7 @@ let
     inherit pkgs project;
     inherit (summary) summaryParser;
   };
-  loggingPrelude = helpers.loggingPrelude;
+  inherit (helpers) loggingPrelude;
   config = import ./config.nix { inherit pkgs project; };
   pgPackage = config.package or pkgs.postgresql_16;
   pgDatabase = config.database or "app";
@@ -87,7 +87,7 @@ in
 {
   version = 1;
   operations = {
-    init = lifecycle.init;
+    inherit (lifecycle) init;
     pre-start = preStart;
     pre-stop = preStop;
     init-leaf = lifecycle.initLeaf;
@@ -95,11 +95,11 @@ in
     preflight-start = lifecycle.preflightStart;
     start = lifecycle.startLeaf;
     start-leaf = lifecycle.startLeaf;
-    stop = lifecycle.stop;
-    restart = lifecycle.restart;
-    status = lifecycle.status;
-    health = lifecycle.health;
-    ready = lifecycle.ready;
+    inherit (lifecycle) stop;
+    inherit (lifecycle) restart;
+    inherit (lifecycle) status;
+    inherit (lifecycle) health;
+    inherit (lifecycle) ready;
     ready-test = lifecycle.readyTest;
     check-config = lifecycle.checkConfig;
     setup-db = lifecycle.setupDb;
@@ -108,9 +108,9 @@ in
     full-start-test = lifecycle.fullStartTest;
     full-start-test-leaf = lifecycle.fullStartTestLeaf;
     list-instances = lifecycle.listInstances;
-    shell = shell;
-    backup = backupMod.backup;
-    restore = backupMod.restore;
+    inherit shell;
+    inherit (backupMod) backup;
+    inherit (backupMod) restore;
     list-backups = backupMod.listBackups;
     verify-backup = backupMod.verifyBackup;
     cleanup-backups = backupMod.cleanupBackups;

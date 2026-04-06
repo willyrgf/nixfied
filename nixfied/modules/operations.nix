@@ -6,8 +6,8 @@
 }:
 let
   cfg = config.nixfied.operations;
-  runtime = config.nixfied.runtime;
-  services = config.nixfied.services;
+  inherit (config.nixfied) runtime;
+  inherit (config.nixfied) services;
   exitCodes = import ../framework/core/exit-codes.nix;
   shellCommon = import ../framework/core/shell-common.nix { inherit pkgs; };
   skipPolicy = import ../framework/core/skip-policy.nix { inherit pkgs; };
@@ -30,12 +30,7 @@ let
       throw "nixfied.operations: port key '${key}' is not defined in nixfied.runtime.ports";
 
   netcatPkg =
-    if pkgs ? netcat then
-      pkgs.netcat
-    else if pkgs ? netcat-openbsd then
-      pkgs.netcat-openbsd
-    else
-      throw "nixfied.operations: netcat package is required for readiness probes";
+    pkgs.netcat or (pkgs.netcat-openbsd or (throw "nixfied.operations: netcat package is required for readiness probes"));
 
   serviceCheckRuntimeInputs = builtins.concatLists (
     map (
@@ -189,8 +184,8 @@ let
       ;
   };
 
-  serviceSelectionContractArgs = probeHelpers.serviceSelectionContractArgs;
-  mkProbeScript = probeHelpers.mkProbeScript;
+  inherit (probeHelpers) serviceSelectionContractArgs;
+  inherit (probeHelpers) mkProbeScript;
 
   mkTask =
     {
@@ -211,12 +206,12 @@ let
       kind = "utility";
       runner = {
         type = "shell";
-        command = command;
+        inherit command;
       };
       commandApi = {
         version = 2;
         commandClass = "typed";
-        summary = summary;
+        inherit summary;
         details = description;
         usage = [ ];
         examples = [ ];
@@ -244,7 +239,7 @@ let
         slotEnv = "optional";
         workdir = "projectRoot";
         hermetic = true;
-        runtimeInputs = runtimeInputs;
+        inherit runtimeInputs;
         passThroughEnv = [
           runtime.env.var
           runtime.slot.var
@@ -379,75 +374,77 @@ in
       default = true;
     };
 
-    testIsolation.enable = lib.mkOption {
-      type = lib.types.bool;
-      default = true;
-    };
+    testIsolation = {
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+      };
 
-    testIsolation.slots = lib.mkOption {
-      type = lib.types.listOf lib.types.int;
-      default = [ runtime.slot.default ];
-    };
+      slots = lib.mkOption {
+        type = lib.types.listOf lib.types.int;
+        default = [ runtime.slot.default ];
+      };
 
-    testIsolation.envs = lib.mkOption {
-      type = lib.types.listOf lib.types.str;
-      default = runtime.env.names;
-    };
+      envs = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = runtime.env.names;
+      };
 
-    testIsolation.logsDir = lib.mkOption {
-      type = lib.types.str;
-      default = "/tmp/${config.nixfied.identity.projectId}-isolation";
-    };
+      logsDir = lib.mkOption {
+        type = lib.types.str;
+        default = "/tmp/${config.nixfied.identity.projectId}-isolation";
+      };
 
-    testIsolation.keepLogsOnSuccess = lib.mkOption {
-      type = lib.types.bool;
-      default = false;
-    };
+      keepLogsOnSuccess = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+      };
 
-    testIsolation.keepLogsOnFailure = lib.mkOption {
-      type = lib.types.bool;
-      default = true;
-    };
+      keepLogsOnFailure = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+      };
 
-    testIsolation.maxParallel = lib.mkOption {
-      type = lib.types.ints.positive;
-      default = 4;
-    };
+      maxParallel = lib.mkOption {
+        type = lib.types.ints.positive;
+        default = 4;
+      };
 
-    testIsolation.runTaskId = lib.mkOption {
-      type = lib.types.str;
-      default = "task.ci";
-    };
+      runTaskId = lib.mkOption {
+        type = lib.types.str;
+        default = "task.ci";
+      };
 
-    testIsolation.runApp = lib.mkOption {
-      type = lib.types.str;
-      default = "ci";
-    };
+      runApp = lib.mkOption {
+        type = lib.types.str;
+        default = "ci";
+      };
 
-    testIsolation.runArgs = lib.mkOption {
-      type = lib.types.listOf lib.types.str;
-      default = [ "--summary" ];
-    };
+      runArgs = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [ "--summary" ];
+      };
 
-    testIsolation.validateApp = lib.mkOption {
-      type = lib.types.str;
-      default = "validate-env";
-    };
+      validateApp = lib.mkOption {
+        type = lib.types.str;
+        default = "validate-env";
+      };
 
-    testIsolation.validateTaskId = lib.mkOption {
-      type = lib.types.str;
-      default = "task.ops.validate-env";
-    };
+      validateTaskId = lib.mkOption {
+        type = lib.types.str;
+        default = "task.ops.validate-env";
+      };
 
-    testIsolation.runEnv = lib.mkOption {
-      type = lib.types.attrsOf (
-        lib.types.oneOf [
-          lib.types.str
-          lib.types.int
-          lib.types.bool
-        ]
-      );
-      default = { };
+      runEnv = lib.mkOption {
+        type = lib.types.attrsOf (
+          lib.types.oneOf [
+            lib.types.str
+            lib.types.int
+            lib.types.bool
+          ]
+        );
+        default = { };
+      };
     };
 
     ports.enable = lib.mkOption {
@@ -539,7 +536,7 @@ in
           pkgs.coreutils
           pkgs.gnugrep
           pkgs.gnused
-          (if pkgs ? lsof then pkgs.lsof else pkgs.coreutils)
+          (pkgs.lsof or pkgs.coreutils)
         ];
         launcher = {
           enable = true;

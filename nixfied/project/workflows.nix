@@ -1,4 +1,4 @@
-{ ... }:
+_:
 let
   workflowProbePhases = {
     preRun.serviceSets = [
@@ -50,8 +50,8 @@ in
           };
         };
         stages = [ ];
-        preRun = workflowProbePhases.preRun;
-        postRun = workflowProbePhases.postRun;
+        inherit (workflowProbePhases) preRun;
+        inherit (workflowProbePhases) postRun;
         artifacts = {
           keepOnSuccess = false;
           keepOnFailure = true;
@@ -105,8 +105,8 @@ in
           };
         };
         stages = [ ];
-        preRun = workflowProbePhases.preRun;
-        postRun = workflowProbePhases.postRun;
+        inherit (workflowProbePhases) preRun;
+        inherit (workflowProbePhases) postRun;
         artifacts = {
           keepOnSuccess = false;
           keepOnFailure = true;
@@ -170,8 +170,8 @@ in
           };
         };
         stages = [ ];
-        preRun = workflowProbePhases.preRun;
-        postRun = workflowProbePhases.postRun;
+        inherit (workflowProbePhases) preRun;
+        inherit (workflowProbePhases) postRun;
         artifacts = {
           keepOnSuccess = false;
           keepOnFailure = true;
@@ -203,8 +203,8 @@ in
             "task.ci.nginx-proxy"
           ]
         ];
-        preRun = workflowProbePhases.preRun;
-        postRun = workflowProbePhases.postRun;
+        inherit (workflowProbePhases) preRun;
+        inherit (workflowProbePhases) postRun;
         artifacts = {
           keepOnSuccess = false;
           keepOnFailure = true;
@@ -320,8 +320,8 @@ in
           };
         };
         stages = [ ];
-        preRun = workflowProbePhases.preRun;
-        postRun = workflowProbePhases.postRun;
+        inherit (workflowProbePhases) preRun;
+        inherit (workflowProbePhases) postRun;
         artifacts = {
           keepOnSuccess = false;
           keepOnFailure = true;
@@ -383,8 +383,8 @@ in
           };
         };
         stages = [ ];
-        preRun = workflowProbePhases.preRun;
-        postRun = workflowProbePhases.postRun;
+        inherit (workflowProbePhases) preRun;
+        inherit (workflowProbePhases) postRun;
         artifacts = {
           keepOnSuccess = false;
           keepOnFailure = true;

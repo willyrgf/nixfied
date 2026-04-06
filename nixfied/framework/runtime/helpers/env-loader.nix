@@ -6,7 +6,7 @@
 }:
 
 let
-  lib = pkgs.lib;
+  inherit (pkgs) lib;
   kernelPackage = import ../kernel { inherit pkgs; };
   inherit (import ../../core/validation.nix { inherit pkgs; })
     expect
@@ -15,7 +15,7 @@ let
     isScalar
     ;
 
-  envFileCfg = ((project.tooling or { }).envFile or { });
+  envFileCfg = (project.tooling or { }).envFile or { };
   envFileEnabled = envFileCfg.enable or true;
   envFileStrict = envFileCfg.strict or false;
   allowSpecsRawValue = envFileCfg.allow or [ ];
@@ -104,7 +104,7 @@ let
   );
   allowSpecFiles = builtins.listToAttrs (
     map (spec: {
-      name = spec.name;
+      inherit (spec) name;
       value = pkgs.writeText "nixfied-env-spec-${spec.name}.json" (
         builtins.toJSON (
           (
@@ -116,10 +116,10 @@ let
               values = spec.values or [ ];
             }
             // lib.optionalAttrs (spec.min != null) {
-              min = spec.min;
+              inherit (spec) min;
             }
             // lib.optionalAttrs (spec.max != null) {
-              max = spec.max;
+              inherit (spec) max;
             }
           )
           // lib.optionalAttrs spec.hasDefault {
@@ -143,7 +143,7 @@ let
       map (
         spec:
         let
-          name = spec.name;
+          inherit (spec) name;
         in
         ''
           NIXFIED_ENV_SPEC_TYPE[${lib.escapeShellArg name}]=${lib.escapeShellArg spec.type}

@@ -4,11 +4,12 @@
 }:
 {
   resolved,
-  serviceSets,
+  
   serviceSurfaceCatalog ? { },
   tasks,
   workflows,
   contractBundle,
+  ...
 }:
 let
   rawMachineOutputs = resolved.machineOutputs or { };
@@ -39,7 +40,7 @@ let
       canonical.canonicalize {
         id = appId;
         kind = "taskRef";
-        taskId = taskId;
+        inherit taskId;
         summary =
           if (launcher.summary or "") != "" then
             launcher.summary
@@ -71,7 +72,7 @@ let
       canonical.canonicalize {
         id = appId;
         kind = "workflowRef";
-        workflowId = workflowId;
+        inherit workflowId;
         summary = if (launcher.summary or "") != "" then launcher.summary else workflow.summary or appId;
         description =
           if (launcher.description or "") != "" then launcher.description else workflow.description or "";
@@ -92,7 +93,7 @@ let
     map (app: {
       name = app.id;
       value = {
-        kind = app.kind;
+        inherit (app) kind;
         taskId = app.taskId or "";
         workflowId = app.workflowId or "";
         serviceSetId = app.serviceSetId or "";
@@ -129,7 +130,7 @@ let
       targetArgs = raw.targetArgs or [ ];
       setupAppIds = normalizeAppRefs (raw.setupAppIds or [ ]);
       teardownAppIds = normalizeAppRefs (raw.teardownAppIds or [ ]);
-      contractRef = ((raw.validation or { }).contractRef or "");
+      contractRef = (raw.validation or { }).contractRef or "";
       validationSchema =
         if contractRef == "" then
           null
@@ -161,10 +162,10 @@ let
       canonical.canonicalize {
         id = appId;
         kind = "machineOutput";
-        targetAppId = targetAppId;
-        targetArgs = targetArgs;
-        setupAppIds = setupAppIds;
-        teardownAppIds = teardownAppIds;
+        inherit targetAppId;
+        inherit targetArgs;
+        inherit setupAppIds;
+        inherit teardownAppIds;
         validation = {
           inherit contractRef;
         }

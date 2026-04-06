@@ -57,7 +57,7 @@ in
     artifacts = {
       httpPortVar = contractSchema.mkPortVarName cfg.portKeyHttp;
       httpsPortVar = contractSchema.mkPortVarName cfg.portKeyHttps;
-      serviceDir = serviceDir;
+      inherit serviceDir;
       dataDir = serviceDir;
       logFile = "${serviceDir}/logs/error.log";
       pidFile = "${serviceDir}/run/nginx.pid";

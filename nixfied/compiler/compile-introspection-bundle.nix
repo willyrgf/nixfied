@@ -1,6 +1,6 @@
 {
-  lib,
   canonical,
+  ...
 }:
 {
   introspectionGraph,
@@ -18,7 +18,7 @@ let
 
   sortNames = attrs: builtins.sort builtins.lessThan (builtins.attrNames attrs);
   listUtils = import ../framework/core/list-utils.nix;
-  uniqueSorted = listUtils.uniqueSorted;
+  inherit (listUtils) uniqueSorted;
   nonEmptyStrings = values: builtins.filter (value: value != null && value != "") values;
   joinCsv = values: builtins.concatStringsSep "," values;
   stringOrEmpty = value: if value == null then "" else value;
@@ -89,10 +89,10 @@ let
   mkResolved =
     node:
     canonical.canonicalize {
-      nodeId = node.nodeId;
-      kind = node.kind;
-      id = node.id;
-      label = node.label;
+      inherit (node) nodeId;
+      inherit (node) kind;
+      inherit (node) id;
+      inherit (node) label;
     };
 
   mkResolution =
@@ -114,9 +114,9 @@ let
   mkTarget =
     node:
     canonical.canonicalize {
-      nodeId = node.nodeId;
-      kind = node.kind;
-      id = node.id;
+      inherit (node) nodeId;
+      inherit (node) kind;
+      inherit (node) id;
     };
 
   renderNodeCoreLines =
@@ -183,19 +183,19 @@ let
           node = introspectionGraph.nodes.${nodeId};
         in
         canonical.canonicalize {
-          nodeId = node.nodeId;
-          kind = node.kind;
-          id = node.id;
-          label = node.label;
+          inherit (node) nodeId;
+          inherit (node) kind;
+          inherit (node) id;
+          inherit (node) label;
         }
       ) visitedNodeIds;
       chainEdges = map (
         edge:
         canonical.canonicalize {
-          from = edge.from;
-          to = edge.to;
-          kind = edge.kind;
-          reason = edge.reason;
+          inherit (edge) from;
+          inherit (edge) to;
+          inherit (edge) kind;
+          inherit (edge) reason;
           via = edge.via or null;
         }
       ) pathEdges;
@@ -424,18 +424,18 @@ let
           uniqueSorted (nonEmptyStrings [ node.id ]);
       explicitEntries = map (value: {
         token = "${node.kind}:${value}";
-        kind = node.kind;
+        inherit (node) kind;
         entry = canonical.canonicalize {
-          nodeId = node.nodeId;
+          inherit (node) nodeId;
           sourceKind = "explicit";
           selector = node.kind;
         };
       }) tokenValues;
       bareEntries = map (value: {
         token = value;
-        kind = node.kind;
+        inherit (node) kind;
         entry = canonical.canonicalize {
-          nodeId = node.nodeId;
+          inherit (node) nodeId;
           sourceKind = "bare";
           selector = node.kind;
         };
@@ -546,7 +546,7 @@ canonical.canonicalize {
     version = 1;
   };
   validKinds = kindNames;
-  diagnosticsHumanLines = diagnosticsHumanLines;
+  inherit diagnosticsHumanLines;
   resolutionIndex = {
     explicit = buildExplicitLookup explicitEntries;
     bare = {
@@ -568,6 +568,6 @@ canonical.canonicalize {
       );
     };
   };
-  nodeViews = nodeViews;
-  reverseViews = reverseViews;
+  inherit nodeViews;
+  inherit reverseViews;
 }

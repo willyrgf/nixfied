@@ -51,7 +51,7 @@ builtins.listToAttrs (
       name = "service.${name}";
       value = {
         id = "service.${name}";
-        name = name;
+        inherit name;
         enable = serviceEnabled;
         config = serviceConfig.normalizeServiceConfig {
           discardContext = true;

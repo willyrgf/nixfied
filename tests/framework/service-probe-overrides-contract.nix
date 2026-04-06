@@ -1,6 +1,6 @@
 { pkgs }:
 let
-  lib = pkgs.lib;
+  inherit (pkgs) lib;
   serviceConfigLib = import ../../nixfied/framework/core/service-config.nix { inherit lib; };
 
   nginxConfig = serviceConfigLib.normalizeServiceConfig {
@@ -110,18 +110,18 @@ assert (builtins.elemAt nginxConfig.resolved.probePlans.health.steps 0).kind == 
 assert nginxConfig.resolved.checks.ready == "exec";
 assert nginxConfig.resolved.probePlans.ready.count == 1;
 assert (builtins.elemAt nginxConfig.resolved.probePlans.ready.steps 0).kind == "exec";
-assert nginxConfig.resolved.probePlans.ready.wait.enabled == true;
+assert nginxConfig.resolved.probePlans.ready.wait.enabled;
 assert nginxConfig.resolved.probePlans.ready.wait.timeoutSeconds == 9;
 assert nginxConfig.resolved.probePlans.ready.wait.intervalSeconds == 2;
 assert postgresConfig.resolved.checks.ready == "exec";
 assert postgresConfig.resolved.probePlans.ready.count == 1;
 assert (builtins.elemAt postgresConfig.resolved.probePlans.ready.steps 0).kind == "exec";
-assert postgresConfig.resolved.probePlans.ready.wait.enabled == true;
+assert postgresConfig.resolved.probePlans.ready.wait.enabled;
 assert postgresConfig.resolved.probePlans.ready.wait.timeoutSeconds == 12;
 assert postgresConfig.resolved.probePlans.ready.wait.intervalSeconds == 3;
 assert heliosConfig.resolved.checks.ready == "composite";
 assert heliosConfig.resolved.probePlans.ready.count == 2;
-assert heliosConfig.resolved.probePlans.ready.wait.enabled == true;
+assert heliosConfig.resolved.probePlans.ready.wait.enabled;
 assert heliosConfig.resolved.probePlans.ready.wait.timeoutEnvVar == "HELIOS_READY_TIMEOUT_SECS";
 assert heliosConfig.resolved.probePlans.ready.wait.intervalEnvVar == "HELIOS_READY_INTERVAL_SECS";
 assert (builtins.elemAt heliosConfig.resolved.probePlans.ready.steps 0).kind == "exec";

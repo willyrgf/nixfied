@@ -2,7 +2,7 @@
 { pkgs }:
 
 let
-  lib = pkgs.lib;
+  inherit (pkgs) lib;
   kernelPackage = import ../runtime/kernel { inherit pkgs; };
   exitCodes = import ./exit-codes.nix;
   runtimePrimitives = import ./runtime-primitives.nix { };
@@ -127,7 +127,7 @@ let
     ++ expect (
       envSpec == null || sameStringSet values actualValues
     ) "${prefix}: values must be exactly [${builtins.concatStringsSep ", " values}]"
-    ++ expect (envSpec == null || actualRequired == false) "${prefix}: required must be false"
+    ++ expect (envSpec == null || !actualRequired) "${prefix}: required must be false"
     ++ expect (
       envSpec == null || actualDefault == null || builtins.elem actualDefault values
     ) "${prefix}: default must be one of [${builtins.concatStringsSep ", " values}] when set";
@@ -334,22 +334,22 @@ let
         !(contract ? idempotent) || builtins.isBool (contract.idempotent or null)
       ) "${name}: commandApi.idempotent must be a boolean when set"
       ++ expect (
-        commandClass != "typed" || allowUnknownArgs == false
+        commandClass != "typed" || !allowUnknownArgs
       ) "${name}: commandApi.commandClass=typed requires allowUnknownArgs=false"
       ++ expect (
         commandClass != "typed" || mode != "json"
       ) "${name}: commandApi.commandClass=typed cannot use outputs.mode=json"
       ++ expect (
-        commandClass != "passthrough" || allowUnknownArgs == true
+        commandClass != "passthrough" || allowUnknownArgs
       ) "${name}: commandApi.commandClass=passthrough requires allowUnknownArgs=true"
       ++ expect (
         commandClass != "json" || mode == "json"
       ) "${name}: commandApi.commandClass=json requires outputs.mode=json"
       ++ expect (
-        commandClass != "json" || allowUnknownArgs == false
+        commandClass != "json" || !allowUnknownArgs
       ) "${name}: commandApi.commandClass=json requires allowUnknownArgs=false"
       ++ expect (
-        commandClass != "batch-runner" || allowUnknownArgs == false
+        commandClass != "batch-runner" || !allowUnknownArgs
       ) "${name}: commandApi.commandClass=batch-runner requires allowUnknownArgs=false"
       ++ validateFailureCodesErrors {
         appName = name;
@@ -514,8 +514,8 @@ let
       short = argSpec.short or "";
       required = argSpec.required or false;
       values = argSpec.values or [ ];
-      min = if argSpec ? min then argSpec.min else null;
-      max = if argSpec ? max then argSpec.max else null;
+      min = argSpec.min or null;
+      max = argSpec.max or null;
     };
 
   normalizeEnvSpec = envSpec: {
@@ -523,9 +523,9 @@ let
     type = envSpec.type or "string";
     required = envSpec.required or false;
     hasDefault = envSpec ? default;
-    default = if envSpec ? default then envSpec.default else null;
-    min = if envSpec ? min then envSpec.min else null;
-    max = if envSpec ? max then envSpec.max else null;
+    default = envSpec.default or null;
+    min = envSpec.min or null;
+    max = envSpec.max or null;
     values = envSpec.values or [ ];
     aliases = envSpec.aliases or [ ];
   };

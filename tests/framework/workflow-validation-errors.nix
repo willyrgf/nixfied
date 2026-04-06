@@ -6,7 +6,7 @@ let
     inherit
       pkgs
       ;
-    system = pkgs.system;
+    inherit (pkgs) system;
   };
   compilerSource = builtins.readFile ../../nixfied/compiler/compile-workflows.nix;
   workflowModuleSource = builtins.readFile ../../nixfied/modules/workflows.nix;
@@ -15,13 +15,12 @@ let
   evalWorkflows =
     extraModule:
     builtins.tryEval (
-      builtins.deepSeq ((frameworkLib.mkNixfied {
+      builtins.deepSeq (frameworkLib.mkNixfied {
         projectRoot = ../..;
         projectModules = [ ../../nixfied/project/module.nix ];
         extraModules = [ extraModule ];
         localOverrides = [ ];
-      }).model.workflows
-      ) true
+      }).model.workflows true
     );
 
   emptyUnitTask = evalWorkflows {
@@ -139,12 +138,12 @@ let
     };
   };
 in
-assert emptyUnitTask.success == false;
-assert emptyPreRunTask.success == false;
-assert emptyStageEntry.success == false;
-assert dependencyCycle.success == false;
-assert unknownPreRunServiceSet.success == false;
-assert unsupportedLockPolicy.success == false;
+assert !emptyUnitTask.success;
+assert !emptyPreRunTask.success;
+assert !emptyStageEntry.success;
+assert !dependencyCycle.success;
+assert !unknownPreRunServiceSet.success;
+assert !unsupportedLockPolicy.success;
 assert pkgs.lib.hasInfix "unit '\${unitName}' has an empty taskId" compilerSource;
 assert pkgs.lib.hasInfix "\${phaseName}.tasks references an empty task id" compilerSource;
 assert pkgs.lib.hasInfix "\${phaseName}.serviceSets references unknown service set" compilerSource;

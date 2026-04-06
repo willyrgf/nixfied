@@ -11,7 +11,7 @@ let
     inherit pkgs project;
     inherit (summary) summaryParser;
   };
-  loggingPrelude = helpers.loggingPrelude;
+  inherit (helpers) loggingPrelude;
   config = import ./config.nix { inherit pkgs project slots; };
   runtime = import ./runtime.nix {
     inherit

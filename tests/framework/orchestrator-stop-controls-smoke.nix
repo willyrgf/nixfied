@@ -21,7 +21,7 @@ let
       description = id;
       runner = {
         type = "shell";
-        command = command;
+        inherit command;
         package = null;
         workflowId = null;
       };

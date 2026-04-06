@@ -11,7 +11,7 @@
   },
 }:
 let
-  lib = pkgs.lib;
+  inherit (pkgs) lib;
   mkShellApp = import ./mk-shell-app.nix { inherit pkgs; };
   canonical = import ./canonical.nix { inherit lib; };
   kernelPackage = import ../runtime/kernel { inherit pkgs; };
@@ -48,7 +48,7 @@ let
       pkgs
       canonical
       ;
-    compiledCore = compiledCore;
+    inherit compiledCore;
   };
 
   compiledExecution = (compiledCore.model.compiled or { }).execution or { };
@@ -64,14 +64,14 @@ let
       pkgs
       projectRoot
       ;
-    compiledCore = compiledCore;
+    inherit compiledCore;
   };
 
   runtimeApps = import ./mkRuntimeAppSet.nix {
     inherit pkgs;
     runtimeProgram = "${runtimeArtifacts.runtimeEngine}/bin/nixfied-runtime";
-    model = compiledCore.model;
-    contractBundle = compiledCore.contractBundle;
+    inherit (compiledCore) model;
+    inherit (compiledCore) contractBundle;
   };
 
   frameworkUtilityApps = {
@@ -130,15 +130,15 @@ let
   };
 in
 {
-  model = compiledCore.model;
-  stateHash = compiledCore.stateHash;
+  inherit (compiledCore) model;
+  inherit (compiledCore) stateHash;
   runtimeHash = runtimeArtifacts.runtimeHash or compiledCore.model.identity.evalHash;
-  tasks = compiledCore.model.tasks;
-  services = runtimeArtifacts.services;
+  inherit (compiledCore.model) tasks;
+  inherit (runtimeArtifacts) services;
   serviceDefinitions = compiledCore.resolved.services or { };
-  serviceCatalog = compiledCore.model.serviceCatalog;
-  workflows = compiledCore.model.workflows;
-  features = compiledCore.model.features;
+  inherit (compiledCore.model) serviceCatalog;
+  inherit (compiledCore.model) workflows;
+  inherit (compiledCore.model) features;
   serviceSurfaceCatalog = (compiledCore.model.compiled or { }).serviceSurfaceCatalog or { };
   serviceApis =
     ((compiledCore.model.compiled or { }).serviceSurfaceCatalog or { }).serviceApis or { };
@@ -146,9 +146,9 @@ in
     packages
     apps
     ;
-  validationIr = compiledCore.validationIr;
-  checks = coreSurfaces.checks;
-  devShells = coreSurfaces.devShells;
-  schema = coreSurfaces.schema;
+  inherit (compiledCore) validationIr;
+  inherit (coreSurfaces) checks;
+  inherit (coreSurfaces) devShells;
+  inherit (coreSurfaces) schema;
   legacyPackages = { };
 }

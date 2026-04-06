@@ -91,14 +91,14 @@ in
     details = "Public service contract for managing PostgreSQL across dev/prod/test/ci.";
     ownerFile = "nixfied/modules/services/postgres.nix";
     artifacts = {
-      portKey = cfg.portKey;
+      inherit (cfg) portKey;
       portVar = contractSchema.mkPortVarName cfg.portKey;
-      serviceDir = serviceDir;
+      inherit serviceDir;
       dataDir = serviceDir;
       logFile = "${serviceDir}/postgres.log";
       pidFile = "${serviceDir}/postmaster.pid";
       defaultDatabase = cfg.database;
-      testDatabase = cfg.testDatabase;
+      inherit (cfg) testDatabase;
     };
     runtimePrimitives = contractSchema.mkRuntimePrimitivesV1 config.nixfied.runtime;
     operations =

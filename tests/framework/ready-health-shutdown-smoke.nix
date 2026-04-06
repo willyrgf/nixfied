@@ -6,7 +6,7 @@
 let
   frameworkLib = import ../../nixfied/framework/core {
     inherit pkgs;
-    system = pkgs.system;
+    inherit (pkgs) system;
   };
   shellHelpers = import ./lib/shell-helpers.nix { inherit pkgs; };
 
@@ -19,29 +19,32 @@ let
       (
         { lib, ... }:
         {
-          nixfied.services.postgres = {
-            enable = lib.mkForce true;
-            database = lib.mkForce "postgres";
-          };
-          nixfied.services.nginx.enable = lib.mkForce true;
-          nixfied.services.minio.enable = lib.mkForce true;
-          nixfied.services.reth.enable = lib.mkForce true;
-          nixfied.services.helios = {
-            enable = lib.mkForce true;
-            executionRpcPortKey = lib.mkForce "heliosExec";
-          };
-
-          nixfied.runtime.ports = lib.mkForce {
-            http = basePort + 0;
-            https = basePort + 1;
-            minioApi = basePort + 2;
-            minioConsole = basePort + 3;
-            postgres = basePort + 4;
-            rethHttp = basePort + 5;
-            rethWs = basePort + 6;
-            rethAuth = basePort + 7;
-            heliosRpc = basePort + 8;
-            heliosExec = basePort + 9;
+          nixfied = {
+            services = {
+              postgres = {
+                enable = lib.mkForce true;
+                database = lib.mkForce "postgres";
+              };
+              nginx.enable = lib.mkForce true;
+              minio.enable = lib.mkForce true;
+              reth.enable = lib.mkForce true;
+              helios = {
+                enable = lib.mkForce true;
+                executionRpcPortKey = lib.mkForce "heliosExec";
+              };
+            };
+            runtime.ports = lib.mkForce {
+              http = basePort + 0;
+              https = basePort + 1;
+              minioApi = basePort + 2;
+              minioConsole = basePort + 3;
+              postgres = basePort + 4;
+              rethHttp = basePort + 5;
+              rethWs = basePort + 6;
+              rethAuth = basePort + 7;
+              heliosRpc = basePort + 8;
+              heliosExec = basePort + 9;
+            };
           };
         }
       )
@@ -54,15 +57,15 @@ let
       pkgs
       registry
       ;
-    model = compiled.model;
-    services = compiled.services;
+    inherit (compiled) model;
+    inherit (compiled) services;
     projectRoot = ../..;
   };
 
   runtimeSlotStride = toString compiled.model.runtime.slot.stride;
   runtimeEnvDevOffset = toString (compiled.model.runtime.env.offsets.dev or 0);
-  netcatPkg = if pkgs ? netcat then pkgs.netcat else pkgs.netcat-openbsd;
-  postgresPkg = if pkgs ? postgresql_16 then pkgs.postgresql_16 else pkgs.postgresql;
+  netcatPkg = pkgs.netcat or pkgs.netcat-openbsd;
+  postgresPkg = pkgs.postgresql_16 or pkgs.postgresql;
 in
 pkgs.runCommand "ready-health-shutdown-smoke" { } ''
     set -euo pipefail

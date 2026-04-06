@@ -7,7 +7,7 @@ let
   shellHelpers = import ./lib/shell-helpers.nix { inherit pkgs; };
   frameworkLib = import ../../nixfied/framework/core {
     inherit pkgs;
-    system = pkgs.system;
+    inherit (pkgs) system;
   };
 
   mkCompiled =
@@ -23,11 +23,13 @@ let
         (
           { lib, ... }:
           {
-            nixfied.services.postgres.enable = lib.mkForce false;
-            nixfied.services.nginx.enable = lib.mkForce enableNginx;
-            nixfied.services.minio.enable = lib.mkForce enableMinio;
-            nixfied.services.reth.enable = lib.mkForce false;
-            nixfied.services.helios.enable = lib.mkForce false;
+            nixfied.services = {
+              postgres.enable = lib.mkForce false;
+              nginx.enable = lib.mkForce enableNginx;
+              minio.enable = lib.mkForce enableMinio;
+              reth.enable = lib.mkForce false;
+              helios.enable = lib.mkForce false;
+            };
 
             nixfied.runtime.ports = lib.mkForce {
               http = basePort + 0;
@@ -81,8 +83,8 @@ let
         pkgs
         registry
         ;
-      model = compiled.model;
-      services = compiled.services;
+      inherit (compiled) model;
+      inherit (compiled) services;
       projectRoot = ../..;
     };
 

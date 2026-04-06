@@ -118,11 +118,11 @@ in
     artifacts = {
       rpcPortVar = contractSchema.mkPortVarName cfg.portKeyRpc;
       executionPortVar = contractSchema.mkPortVarName cfg.executionRpcPortKey;
-      serviceDir = serviceDir;
+      inherit serviceDir;
       dataDir = serviceDir;
       logFile = "${serviceDir}/logs/helios.log";
       pidFile = "${serviceDir}/run/helios.pid";
-      network = cfg.network;
+      inherit (cfg) network;
     };
     runtimePrimitives = contractSchema.mkRuntimePrimitivesV1 config.nixfied.runtime;
     operations =

@@ -305,7 +305,7 @@ let
         start = config.lifecycle.start // {
           preOps = lib.unique ([ "pre-start" ] ++ (config.lifecycle.start.preOps or [ ]));
         };
-        status = config.lifecycle.status;
+        inherit (config.lifecycle) status;
         "pre-stop" = config.lifecycle.preStop;
         stop = config.lifecycle.stop // {
           preOps = lib.unique ([ "pre-stop" ] ++ (config.lifecycle.stop.preOps or [ ]));
@@ -526,12 +526,12 @@ let
         contract = {
           version = 1;
           service = name;
-          summary = config.summary;
-          details = config.details;
-          ownerFile = config.ownerFile;
-          profiles = config.profiles;
+          inherit (config) summary;
+          inherit (config) details;
+          inherit (config) ownerFile;
+          inherit (config) profiles;
           artifacts = {
-            serviceDir = serviceDir;
+            inherit serviceDir;
             dataDir = serviceDir;
           }
           // config.artifacts;

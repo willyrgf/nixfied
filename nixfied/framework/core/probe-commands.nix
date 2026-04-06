@@ -21,12 +21,7 @@ let
   jsonRpcResultBoolFalsePlan = jsonRpcProbePlan "jsonrpc-result-bool-false";
 
   netcatPkg =
-    if pkgs ? netcat then
-      pkgs.netcat
-    else if pkgs ? netcat-openbsd then
-      pkgs.netcat-openbsd
-    else
-      throw "probe-commands: netcat package is required";
+    pkgs.netcat or (pkgs.netcat-openbsd or (throw "probe-commands: netcat package is required"));
 in
 rec {
   jsonRpcProbePlans = {

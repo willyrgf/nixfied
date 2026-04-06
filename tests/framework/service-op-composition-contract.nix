@@ -2,7 +2,7 @@
 let
   frameworkLib = import ../../nixfied/framework/core {
     inherit pkgs;
-    system = pkgs.system;
+    inherit (pkgs) system;
   };
   shellHelpers = import ./lib/shell-helpers.nix { inherit pkgs; };
 
@@ -124,7 +124,7 @@ let
         };
       };
 
-      extraOps = extraOps;
+      inherit extraOps;
 
       implementation = {
         version = 1;
@@ -144,7 +144,7 @@ let
   restartProgram = frameworkOutputs.apps."svc::demo::restart".program;
 
   unknownRefResult = builtins.tryEval (
-    builtins.deepSeq ((frameworkLib.mkNixfied {
+    builtins.deepSeq (frameworkLib.mkNixfied {
       projectRoot = ../..;
       projectModules = [ ../../nixfied/project/module.nix ];
       extraModules = [
@@ -158,12 +158,11 @@ let
         ))
       ];
       localOverrides = [ ];
-    }).model.compiled.serviceSurfaceCatalog
-    ) true
+    }).model.compiled.serviceSurfaceCatalog true
   );
 
   cycleResult = builtins.tryEval (
-    builtins.deepSeq ((frameworkLib.mkNixfied {
+    builtins.deepSeq (frameworkLib.mkNixfied {
       projectRoot = ../..;
       projectModules = [ ../../nixfied/project/module.nix ];
       extraModules = [
@@ -180,8 +179,7 @@ let
         ))
       ];
       localOverrides = [ ];
-    }).model.compiled.serviceSurfaceCatalog
-    ) true
+    }).model.compiled.serviceSurfaceCatalog true
   );
 in
 assert builtins.hasAttr "svc::demo::start" frameworkOutputs.apps;
@@ -189,8 +187,8 @@ assert builtins.hasAttr "svc::demo::restart" frameworkOutputs.apps;
 assert builtins.hasAttr "svc::demo::status" frameworkOutputs.apps;
 assert !(builtins.hasAttr "svc::demo::prepare" frameworkOutputs.apps);
 assert !(builtins.hasAttr "svc::demo::finalize" frameworkOutputs.apps);
-assert unknownRefResult.success == false;
-assert cycleResult.success == false;
+assert !unknownRefResult.success;
+assert !cycleResult.success;
 pkgs.runCommand "service-op-composition-contract" { } ''
   set -euo pipefail
   ${shellHelpers.shellPrelude}

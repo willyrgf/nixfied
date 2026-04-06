@@ -22,15 +22,15 @@ let
       description = id;
       runner = {
         type = "shell";
-        command = command;
+        inherit command;
         package = null;
         workflowId = null;
       };
       runtime = baseTask.runtime // {
         workdir = "stateRoot";
         customWorkdir = null;
-        preHooks = preHooks;
-        postHooks = postHooks;
+        inherit preHooks;
+        inherit postHooks;
       };
     };
 
@@ -165,7 +165,7 @@ let
 
   frameworkLib = import ../../nixfied/framework/core {
     inherit pkgs;
-    system = pkgs.system;
+    inherit (pkgs) system;
   };
 
   overrideCompiled = frameworkLib.mkNixfied {

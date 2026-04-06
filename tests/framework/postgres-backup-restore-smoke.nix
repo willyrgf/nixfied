@@ -25,7 +25,7 @@ let
       portKey = "postgres";
       dataDirName = "postgres";
     };
-    loggingPrelude = shellHelpers.loggingPrelude;
+    inherit (shellHelpers) loggingPrelude;
   };
 in
 pkgs.runCommand "postgres-backup-restore-smoke" { } ''

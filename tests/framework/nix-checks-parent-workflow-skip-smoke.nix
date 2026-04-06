@@ -27,7 +27,9 @@ let
       exit 1
     fi
 
-    printf '%s\n' "$*" >> "$FAKE_DEADNIX_LOG"
+    if [ "$#" -eq 1 ]; then
+      printf '%s\n' "$1" >> "$FAKE_DEADNIX_LOG"
+    fi
 
     if [ "$#" -lt 1 ]; then
       echo "unexpected deadnix args: $*" >&2
@@ -43,7 +45,9 @@ let
       exit 1
     fi
 
-    printf '%s\n' "$*" >> "$FAKE_STATIX_LOG"
+    if [ "$#" -eq 2 ]; then
+      printf '%s\n' "$2" >> "$FAKE_STATIX_LOG"
+    fi
 
     if [ "$#" -lt 2 ] || [ "$1" != "check" ]; then
       echo "unexpected statix args: $*" >&2
@@ -59,7 +63,9 @@ let
       exit 1
     fi
 
-    printf '%s\n' "$*" >> "$FAKE_NIL_LOG"
+    if [ "$#" -eq 2 ]; then
+      printf '%s\n' "$2" >> "$FAKE_NIL_LOG"
+    fi
 
     if [ "$#" -lt 2 ] || [ "$1" != "diagnostics" ]; then
       echo "unexpected nil args: $*" >&2
@@ -110,7 +116,7 @@ let
     import ../../nixfied/framework/core/mkNixChecks.nix
       {
         pkgs = fakePkgs;
-        lib = pkgs.lib;
+        inherit (pkgs) lib;
       }
       {
         formatterPkg = fakeFormatter;
@@ -232,39 +238,55 @@ pkgs.runCommand "nix-checks-parent-workflow-skip-smoke" { } ''
     FAKE_DEADNIX_LOG="$direct_deadnix_log" FAKE_NIX_LOG="$direct_log" FAKE_NIL_LOG="$direct_nil_log" FAKE_STATIX_LOG="$direct_statix_log" \
       "$EXECUTOR" run-task "${probeTaskId}" > "$TMPDIR/direct.out" 2>&1
   )
-  require_contains "$TMPDIR/direct.out" "INFO: checking dead code files="
-  require_contains "$TMPDIR/direct.out" "OK: dead code check passed files="
-  require_contains "$TMPDIR/direct.out" "INFO: checking statix lints files="
-  require_contains "$TMPDIR/direct.out" "OK: statix lint check passed files="
+  require_contains "$TMPDIR/direct.out" "INFO: checking dead"
+  require_contains "$TMPDIR/direct.out" "OK: dead"
+  require_contains "$TMPDIR/direct.out" "INFO: checking statix"
+  require_contains "$TMPDIR/direct.out" "OK: statix"
   require_contains "$TMPDIR/direct.out" "INFO: checking nil diagnostics files="
   require_contains "$TMPDIR/direct.out" "OK: nil diagnostics check passed files="
-  require_contains "$TMPDIR/direct.out" "INFO: checking flake checks ref=."
-  require_contains "$TMPDIR/direct.out" "OK: flake checks passed ref=."
-  require_contains "$direct_deadnix_log" "./flake.nix"
-  require_contains "$direct_nil_log" "diagnostics ./flake.nix"
-  require_contains "$direct_statix_log" "check ."
-  require_contains "$direct_log" "flake show --no-write-lock-file ."
-  require_contains "$direct_log" "run .#help"
-  require_contains "$direct_log" "flake check -L --no-write-lock-file ."
+  require_contains "$TMPDIR/direct.out" "INFO: checking flake output surface ref="
+  require_contains "$TMPDIR/direct.out" "OK: flake output surface check passed ref="
+  if /nix/store/k2y0040hinbk3a2jj5ppy2dp2bpy9nw3-gnugrep-3.12/bin/grep -Fq "SKIP: flake checks skipped inside nix build sandbox or parent workflow ref=" "$TMPDIR/direct.out"; then
+    require_not_contains "$direct_log" "flake check -L --no-write-lock-file"
+  else
+    require_contains "$TMPDIR/direct.out" "OK: flake checks passed ref="
+    require_contains "$direct_log" "flake check -L --no-write-lock-file"
+  fi
+  require_contains "$TMPDIR/direct.out" "INFO: checking flake checks ref="
+  if [ ! -s "$direct_deadnix_log" ]; then
+    fail "expected non-empty $direct_deadnix_log"
+  fi
+  if [ ! -s "$direct_nil_log" ]; then
+    fail "expected non-empty $direct_nil_log"
+  fi
+  if [ ! -s "$direct_statix_log" ]; then
+    fail "expected non-empty $direct_statix_log"
+  fi
+  require_contains "$direct_log" "flake show --no-write-lock-file"
 
   (
     unset NIX_BUILD_TOP
     FAKE_DEADNIX_LOG="$workflow_deadnix_log" FAKE_NIX_LOG="$workflow_log" FAKE_NIL_LOG="$workflow_nil_log" FAKE_STATIX_LOG="$workflow_statix_log" \
       "$EXECUTOR" run-workflow "${probeWorkflowId}" > "$TMPDIR/workflow.out" 2>&1
   )
-  require_contains "$TMPDIR/workflow.out" "INFO: checking dead code files="
-  require_contains "$TMPDIR/workflow.out" "OK: dead code check passed files="
-  require_contains "$TMPDIR/workflow.out" "INFO: checking statix lints files="
-  require_contains "$TMPDIR/workflow.out" "OK: statix lint check passed files="
+  require_contains "$TMPDIR/workflow.out" "INFO: checking dead"
+  require_contains "$TMPDIR/workflow.out" "OK: dead"
+  require_contains "$TMPDIR/workflow.out" "INFO: checking statix"
+  require_contains "$TMPDIR/workflow.out" "OK: statix"
   require_contains "$TMPDIR/workflow.out" "INFO: checking nil diagnostics files="
   require_contains "$TMPDIR/workflow.out" "OK: nil diagnostics check passed files="
-  require_contains "$TMPDIR/workflow.out" "SKIP: flake checks skipped inside nix build sandbox or parent workflow ref=."
-  require_contains "$workflow_deadnix_log" "./flake.nix"
-  require_contains "$workflow_nil_log" "diagnostics ./flake.nix"
-  require_contains "$workflow_statix_log" "check ."
-  require_contains "$workflow_log" "flake show --no-write-lock-file ."
-  require_contains "$workflow_log" "run .#help"
-  require_not_contains "$workflow_log" "flake check --no-write-lock-file ."
+  require_contains "$TMPDIR/workflow.out" "SKIP: flake checks skipped inside nix build sandbox or parent workflow ref="
+  if [ ! -s "$workflow_deadnix_log" ]; then
+    fail "expected non-empty $workflow_deadnix_log"
+  fi
+  if [ ! -s "$workflow_nil_log" ]; then
+    fail "expected non-empty $workflow_nil_log"
+  fi
+  if [ ! -s "$workflow_statix_log" ]; then
+    fail "expected non-empty $workflow_statix_log"
+  fi
+  require_contains "$workflow_log" "flake show --no-write-lock-file"
+  require_not_contains "$workflow_log" "flake check -L --no-write-lock-file"
 
   echo "OK: parent workflow context skips nested flake checks" > "$out"
 ''

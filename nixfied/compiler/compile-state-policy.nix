@@ -5,6 +5,6 @@ let
 in
 statePolicyLib.compilePolicy {
   inherit projectRoot;
-  identity = resolved.identity;
-  policy = resolved.state.policy;
+  inherit (resolved) identity;
+  inherit (resolved.state) policy;
 }

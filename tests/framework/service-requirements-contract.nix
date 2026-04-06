@@ -111,7 +111,7 @@ let
   };
 
   invalidTaskServiceName = builtins.tryEval (
-    builtins.deepSeq ((frameworkLib.mkNixfied {
+    builtins.deepSeq (frameworkLib.mkNixfied {
       projectRoot = ../..;
       projectModules = [ ../../nixfied/project/module.nix ];
       extraModules = [
@@ -127,12 +127,11 @@ let
         }
       ];
       localOverrides = [ ];
-    }).model.tasks
-    ) true
+    }).model.tasks true
   );
 
   invalidWorkflowServiceName = builtins.tryEval (
-    builtins.deepSeq ((frameworkLib.mkNixfied {
+    builtins.deepSeq (frameworkLib.mkNixfied {
       projectRoot = ../..;
       projectModules = [ ../../nixfied/project/module.nix ];
       extraModules = [
@@ -155,12 +154,11 @@ let
         }
       ];
       localOverrides = [ ];
-    }).model.workflows
-    ) true
+    }).model.workflows true
   );
 
   invalidWorkflowRequirement = builtins.tryEval (
-    builtins.deepSeq ((frameworkLib.mkNixfied {
+    builtins.deepSeq (frameworkLib.mkNixfied {
       projectRoot = ../..;
       projectModules = [ ../../nixfied/project/module.nix ];
       extraModules = [
@@ -183,8 +181,7 @@ let
         }
       ];
       localOverrides = [ ];
-    }).model.workflows
-    ) true
+    }).model.workflows true
   );
 
   workflowUnit = compiled.model.workflows.${workflowId}.units."required.unit";

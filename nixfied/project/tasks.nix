@@ -60,7 +60,7 @@ let
       runner = {
         type = "derivation";
         package = nixChecksPkg;
-        command = "nix-checks";
+        command = ''nix-checks "$@"'';
         workflowId = null;
       };
       contractArgs = nixChecksContractArgs;

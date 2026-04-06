@@ -7,7 +7,7 @@ let
 
   frameworkLib = import ../../nixfied/framework/core {
     inherit pkgs;
-    system = pkgs.system;
+    inherit (pkgs) system;
   };
 
   compiled = frameworkLib.mkNixfied {
@@ -29,9 +29,9 @@ let
       pkgs
       registry
       ;
-    model = compiled.model;
-    services = compiled.services;
-    serviceDefinitions = compiled.serviceDefinitions;
+    inherit (compiled) model;
+    inherit (compiled) services;
+    inherit (compiled) serviceDefinitions;
     projectRoot = ../..;
   };
 in

@@ -6,7 +6,7 @@ let
   shellHelpers = import ./lib/shell-helpers.nix { inherit pkgs; };
   frameworkLib = import ../../nixfied/framework/core {
     inherit pkgs;
-    system = pkgs.system;
+    inherit (pkgs) system;
   };
 
   basePort = 27200;
@@ -18,40 +18,43 @@ let
       (
         { lib, ... }:
         {
-          nixfied.services.postgres.enable = lib.mkForce false;
-          nixfied.services.nginx.enable = lib.mkForce false;
-          nixfied.services.minio.enable = lib.mkForce false;
-          nixfied.services.reth.enable = lib.mkForce false;
-          nixfied.services.helios = {
-            enable = lib.mkForce true;
-            executionRpcPortKey = lib.mkForce "heliosExec";
-            sourceKeys = lib.mkForce [
-              "real"
-              "shim"
-            ];
-            defaultSource = lib.mkForce "shim";
-            sourceKinds = lib.mkForce {
-              real = "real";
-              shim = "shim";
+          nixfied = {
+            services = {
+              postgres.enable = lib.mkForce false;
+              nginx.enable = lib.mkForce false;
+              minio.enable = lib.mkForce false;
+              reth.enable = lib.mkForce false;
+              helios = {
+                enable = lib.mkForce true;
+                executionRpcPortKey = lib.mkForce "heliosExec";
+                sourceKeys = lib.mkForce [
+                  "real"
+                  "shim"
+                ];
+                defaultSource = lib.mkForce "shim";
+                sourceKinds = lib.mkForce {
+                  real = "real";
+                  shim = "shim";
+                };
+                readiness = lib.mkForce {
+                  profile = "strict";
+                  requireNotSyncing = false;
+                  disallowSourceKinds = [ ];
+                };
+              };
             };
-            readiness = lib.mkForce {
-              profile = "strict";
-              requireNotSyncing = false;
-              disallowSourceKinds = [ ];
+            runtime.ports = lib.mkForce {
+              http = basePort + 0;
+              https = basePort + 1;
+              minioApi = basePort + 2;
+              minioConsole = basePort + 3;
+              postgres = basePort + 4;
+              rethHttp = basePort + 5;
+              rethWs = basePort + 6;
+              rethAuth = basePort + 7;
+              heliosRpc = basePort + 8;
+              heliosExec = basePort + 9;
             };
-          };
-
-          nixfied.runtime.ports = lib.mkForce {
-            http = basePort + 0;
-            https = basePort + 1;
-            minioApi = basePort + 2;
-            minioConsole = basePort + 3;
-            postgres = basePort + 4;
-            rethHttp = basePort + 5;
-            rethWs = basePort + 6;
-            rethAuth = basePort + 7;
-            heliosRpc = basePort + 8;
-            heliosExec = basePort + 9;
           };
         }
       )
@@ -59,9 +62,7 @@ let
     localOverrides = [ ];
   };
 
-  readyTask = pkgs.writeShellScript "ready-helios-sync-gate-task" (
-    compiled.model.tasks."task.ops.ready".runner.command
-  );
+  readyTask = pkgs.writeShellScript "ready-helios-sync-gate-task" compiled.model.tasks."task.ops.ready".runner.command;
 
   runtimeSlotStride = toString compiled.model.runtime.slot.stride;
   runtimeEnvDevOffset = toString (compiled.model.runtime.env.offsets.dev or 0);

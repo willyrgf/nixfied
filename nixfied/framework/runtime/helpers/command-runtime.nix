@@ -10,7 +10,7 @@ let
   loggingRuntime = import ./logging-runtime.nix { inherit pkgs; };
   envLoader = import ./env-loader.nix {
     inherit pkgs project;
-    loggingPrelude = loggingPrelude;
+    inherit loggingPrelude;
   };
   hookEnv = hooks.env or { };
   runtimeBinExport =
@@ -26,9 +26,9 @@ let
     export ${key}="${toString hookEnv.${key}}"
   '') (pkgs.lib.sort (a: b: a < b) (builtins.attrNames hookEnv));
 
-  loadEnv = envLoader.loadEnv;
-  loadEnvFile = envLoader.loadEnvFile;
-  loggingPrelude = loggingRuntime.loggingPrelude;
+  inherit (envLoader) loadEnv;
+  inherit (envLoader) loadEnvFile;
+  inherit (loggingRuntime) loggingPrelude;
 
   commandHelpersScript = pkgs.writeShellScript "nixfied-command-helpers" ''
     ${loggingPrelude}

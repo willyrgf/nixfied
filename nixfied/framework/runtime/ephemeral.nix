@@ -78,7 +78,7 @@ let
   refEphSlot = "\$${projectIdUpper}_EPHEMERAL_SLOT";
   refLockFd = "\$${projectIdUpper}_SLOT_LOCK_FD";
 
-  mkUniqueId = id.mkUniqueId;
+  inherit (id) mkUniqueId;
 
   acquireSlotLock = pkgs.writeShellScript "acquire-slot-lock" ''
     ${resolvedLoggingPrelude}
@@ -154,7 +154,7 @@ let
     echo "$EPHEMERAL_ROOT"
   '';
 
-  mkSourceCopy = sourceMaterialization.mkSourceCopy;
+  inherit (sourceMaterialization) mkSourceCopy;
 
   mkConditionalCleanup = pkgs.writeShellScript "mk-conditional-cleanup" ''
     ${resolvedLoggingPrelude}

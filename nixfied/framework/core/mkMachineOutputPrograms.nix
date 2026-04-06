@@ -8,10 +8,10 @@
   teardownPrograms ? [ ],
 }:
 let
-  lib = pkgs.lib;
+  inherit (pkgs) lib;
   mkShellApp = import ./mk-shell-app.nix { inherit pkgs; };
   kernelPackage = import ../runtime/kernel { inherit pkgs; };
-  contractRef = ((app.validation or { }).contractRef or "");
+  contractRef = (app.validation or { }).contractRef or "";
   bundleFile = pkgs.writeText "nixfied-machine-output-contract-bundle.json" (
     builtins.toJSON contractBundle.bundle
   );
@@ -19,13 +19,13 @@ let
     builtins.toJSON {
       kind = "nixfied-machine-output-plan";
       version = 1;
-      appId = appId;
+      inherit appId;
       targetAppId = app.targetAppId or "";
       inherit contractRef;
-      bundleFile = bundleFile;
-      targetProgram = targetProgram;
-      setupPrograms = setupPrograms;
-      teardownPrograms = teardownPrograms;
+      inherit bundleFile;
+      inherit targetProgram;
+      inherit setupPrograms;
+      inherit teardownPrograms;
       targetArgs = app.targetArgs or [ ];
     }
   );

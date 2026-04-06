@@ -4,11 +4,11 @@
   bundle,
 }:
 let
-  lib = pkgs.lib;
+  inherit (pkgs) lib;
 
   listUtils = import ../core/list-utils.nix;
   sortNames = attrs: builtins.sort builtins.lessThan (builtins.attrNames attrs);
-  uniqueSorted = listUtils.uniqueSorted;
+  inherit (listUtils) uniqueSorted;
   modeNames = [
     "default"
     "resolution"
@@ -42,7 +42,7 @@ let
         view
         // {
           closure = {
-            target = reverseView.target;
+            inherit (reverseView) target;
             summary = closureView.summary or null;
             reasonChains = reverseView.reasonChainsBySource.${sourceNodeId} or [ ];
           };

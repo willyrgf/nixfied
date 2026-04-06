@@ -45,7 +45,7 @@ let
     };
     templates = { };
     lifecycle = lifecycleStub;
-    loggingPrelude = shellHelpers.loggingPrelude;
+    inherit (shellHelpers) loggingPrelude;
   };
 in
 pkgs.runCommand "nginx-site-management-smoke" { } ''

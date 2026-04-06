@@ -1,7 +1,3 @@
-{
-  pkgs,
-  projectRoot,
-  registry,
-}:
+_:
 {
 }

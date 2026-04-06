@@ -4,7 +4,7 @@
 { pkgs }:
 
 let
-  lib = pkgs.lib;
+  inherit (pkgs) lib;
   runtimeDefaults = import ../../core/runtime-defaults.nix;
 
   mkStopOutcomeBody =

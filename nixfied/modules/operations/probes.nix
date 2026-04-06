@@ -120,7 +120,7 @@ let
           };
     in
     {
-      count = if plan ? count then plan.count else builtins.length (plan.steps or [ ]);
+      count = plan.count or (builtins.length (plan.steps or [ ]));
       body = ''
         service_source="$(resolve_service_source "${serviceName}")"
         if [ -z "$service_source" ]; then

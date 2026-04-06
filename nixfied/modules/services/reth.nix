@@ -74,12 +74,12 @@ in
       httpPortVar = contractSchema.mkPortVarName cfg.portKeyHttp;
       wsPortVar = contractSchema.mkPortVarName cfg.portKeyWs;
       authPortVar = contractSchema.mkPortVarName cfg.portKeyAuth;
-      serviceDir = serviceDir;
+      inherit serviceDir;
       dataDir = serviceDir;
       logFile = "${serviceDir}/logs/reth.log";
       pidFile = "${serviceDir}/run/reth.pid";
-      network = cfg.network;
-      devMode = cfg.devMode;
+      inherit (cfg) network;
+      inherit (cfg) devMode;
     };
     runtimePrimitives = contractSchema.mkRuntimePrimitivesV1 config.nixfied.runtime;
     operations =

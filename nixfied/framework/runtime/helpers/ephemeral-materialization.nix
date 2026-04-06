@@ -6,7 +6,7 @@
 }:
 
 let
-  lib = pkgs.lib;
+  inherit (pkgs) lib;
   ephemeralCfg = project.ephemeral or { };
   copyMode = ephemeralCfg.copyMode or "nix-source";
   includeUntracked = ephemeralCfg.includeUntracked or false;
@@ -30,7 +30,7 @@ let
   envFilePath = ephemeralCfg.envFilePath or ".env";
   envLoader = import ./env-loader.nix {
     inherit pkgs project;
-    loggingPrelude = loggingPrelude;
+    inherit loggingPrelude;
   };
 
   matchesPattern =
