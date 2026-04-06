@@ -229,6 +229,14 @@ selectionCatalog
         inherit pkgs;
       };
 
+      "nix-checks-deadnix-issues-fail-smoke" = import ./nix-checks-deadnix-issues-fail-smoke.nix {
+        inherit pkgs;
+      };
+
+      "nix-checks-statix-issues-fail-smoke" = import ./nix-checks-statix-issues-fail-smoke.nix {
+        inherit pkgs;
+      };
+
       "excluded-service-evaluation" = import ./excluded-service-evaluation.nix {
         inherit
           pkgs

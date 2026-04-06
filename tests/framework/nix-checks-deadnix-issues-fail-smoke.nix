@@ -10,10 +10,18 @@ let
 
   fakeDeadnix = pkgs.writeShellScriptBin "deadnix" ''
     set -euo pipefail
+
     if [ "$#" -lt 1 ]; then
       echo "unexpected deadnix args: $*" >&2
       exit 1
     fi
+
+    for path in "$@"; do
+      if [ "$path" = "./flake.nix" ]; then
+        echo "unused binding"
+        exit 1
+      fi
+    done
   '';
 
   fakeStatix = pkgs.writeShellScriptBin "statix" ''
@@ -32,14 +40,6 @@ let
       echo "unexpected nil args: $*" >&2
       exit 1
     fi
-
-    shift
-    for path in "$@"; do
-      if [ "$path" = "./flake.nix" ]; then
-        echo "warning[unused_rec]: Unused \`rec\`"
-        exit 0
-      fi
-    done
   '';
 
   fakeNix = pkgs.writeShellScriptBin "nix" ''
@@ -65,7 +65,7 @@ let
         formatterPkg = fakeFormatter;
       };
 in
-pkgs.runCommand "nix-checks-nil-issues-fail-smoke" { } ''
+pkgs.runCommand "nix-checks-deadnix-issues-fail-smoke" { } ''
   set -euo pipefail
 
   repo="$TMPDIR/repo"
@@ -93,12 +93,12 @@ pkgs.runCommand "nix-checks-nil-issues-fail-smoke" { } ''
     exit 1
   fi
 
-  ${pkgs.gnugrep}/bin/grep -Fq "ERROR: nil diagnostics reported issues files=1" "$TMPDIR/nix-checks.out"
-  ${pkgs.gnugrep}/bin/grep -Fq "ERROR: nil diagnostics reported file=./flake.nix" "$TMPDIR/nix-checks.out"
+  ${pkgs.gnugrep}/bin/grep -Fq "ERROR: deadnix reported issues files=1" "$TMPDIR/nix-checks.out"
+  ${pkgs.gnugrep}/bin/grep -Fq "ERROR: deadnix reported file=./flake.nix" "$TMPDIR/nix-checks.out"
   if ${pkgs.gnugrep}/bin/grep -Fq "unexpected nix invocation" "$TMPDIR/nix-checks.out"; then
     cat "$TMPDIR/nix-checks.out"
     exit 1
   fi
 
-  echo "OK: nil diagnostics warnings fail nix-checks before flake commands" > "$out"
+  echo "OK: deadnix issues fail nix-checks before flake commands" > "$out"
 ''

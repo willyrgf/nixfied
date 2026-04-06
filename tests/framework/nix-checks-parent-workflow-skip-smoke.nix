@@ -19,6 +19,38 @@ let
     fi
   '';
 
+  fakeDeadnix = pkgs.writeShellScriptBin "deadnix" ''
+    set -euo pipefail
+
+    if [ -z "''${FAKE_DEADNIX_LOG:-}" ]; then
+      echo "FAKE_DEADNIX_LOG is required" >&2
+      exit 1
+    fi
+
+    printf '%s\n' "$*" >> "$FAKE_DEADNIX_LOG"
+
+    if [ "$#" -lt 1 ]; then
+      echo "unexpected deadnix args: $*" >&2
+      exit 1
+    fi
+  '';
+
+  fakeStatix = pkgs.writeShellScriptBin "statix" ''
+    set -euo pipefail
+
+    if [ -z "''${FAKE_STATIX_LOG:-}" ]; then
+      echo "FAKE_STATIX_LOG is required" >&2
+      exit 1
+    fi
+
+    printf '%s\n' "$*" >> "$FAKE_STATIX_LOG"
+
+    if [ "$#" -lt 2 ] || [ "$1" != "check" ]; then
+      echo "unexpected statix args: $*" >&2
+      exit 1
+    fi
+  '';
+
   fakeNil = pkgs.writeShellScriptBin "nil" ''
     set -euo pipefail
 
@@ -68,8 +100,10 @@ let
   '';
 
   fakePkgs = pkgs // {
+    deadnix = fakeDeadnix;
     nix = fakeNix;
     nil = fakeNil;
+    statix = fakeStatix;
   };
 
   fakeNixChecksPkg =
@@ -92,8 +126,10 @@ let
     };
     runtime = (baseTask.runtime or { }) // {
       passThroughEnv = (baseTask.runtime.passThroughEnv or [ ]) ++ [
+        "FAKE_DEADNIX_LOG"
         "FAKE_NIX_LOG"
         "FAKE_NIL_LOG"
+        "FAKE_STATIX_LOG"
       ];
     };
   };
@@ -183,33 +219,49 @@ pkgs.runCommand "nix-checks-parent-workflow-skip-smoke" { } ''
   mkdir -p "$REGISTRY_ROOT" "$CI_ARTIFACTS_ROOT"
 
   direct_log="$TMPDIR/direct-fake-nix.log"
+  direct_deadnix_log="$TMPDIR/direct-fake-deadnix.log"
   workflow_log="$TMPDIR/workflow-fake-nix.log"
+  workflow_deadnix_log="$TMPDIR/workflow-fake-deadnix.log"
   direct_nil_log="$TMPDIR/direct-fake-nil.log"
   workflow_nil_log="$TMPDIR/workflow-fake-nil.log"
+  direct_statix_log="$TMPDIR/direct-fake-statix.log"
+  workflow_statix_log="$TMPDIR/workflow-fake-statix.log"
 
   (
     unset NIX_BUILD_TOP
-    FAKE_NIX_LOG="$direct_log" FAKE_NIL_LOG="$direct_nil_log" \
+    FAKE_DEADNIX_LOG="$direct_deadnix_log" FAKE_NIX_LOG="$direct_log" FAKE_NIL_LOG="$direct_nil_log" FAKE_STATIX_LOG="$direct_statix_log" \
       "$EXECUTOR" run-task "${probeTaskId}" > "$TMPDIR/direct.out" 2>&1
   )
+  require_contains "$TMPDIR/direct.out" "INFO: checking dead code files="
+  require_contains "$TMPDIR/direct.out" "OK: dead code check passed files="
+  require_contains "$TMPDIR/direct.out" "INFO: checking statix lints files="
+  require_contains "$TMPDIR/direct.out" "OK: statix lint check passed files="
   require_contains "$TMPDIR/direct.out" "INFO: checking nil diagnostics files="
   require_contains "$TMPDIR/direct.out" "OK: nil diagnostics check passed files="
   require_contains "$TMPDIR/direct.out" "INFO: checking flake checks ref=."
   require_contains "$TMPDIR/direct.out" "OK: flake checks passed ref=."
+  require_contains "$direct_deadnix_log" "./flake.nix"
   require_contains "$direct_nil_log" "diagnostics ./flake.nix"
+  require_contains "$direct_statix_log" "check ."
   require_contains "$direct_log" "flake show --no-write-lock-file ."
   require_contains "$direct_log" "run .#help"
   require_contains "$direct_log" "flake check -L --no-write-lock-file ."
 
   (
     unset NIX_BUILD_TOP
-    FAKE_NIX_LOG="$workflow_log" FAKE_NIL_LOG="$workflow_nil_log" \
+    FAKE_DEADNIX_LOG="$workflow_deadnix_log" FAKE_NIX_LOG="$workflow_log" FAKE_NIL_LOG="$workflow_nil_log" FAKE_STATIX_LOG="$workflow_statix_log" \
       "$EXECUTOR" run-workflow "${probeWorkflowId}" > "$TMPDIR/workflow.out" 2>&1
   )
+  require_contains "$TMPDIR/workflow.out" "INFO: checking dead code files="
+  require_contains "$TMPDIR/workflow.out" "OK: dead code check passed files="
+  require_contains "$TMPDIR/workflow.out" "INFO: checking statix lints files="
+  require_contains "$TMPDIR/workflow.out" "OK: statix lint check passed files="
   require_contains "$TMPDIR/workflow.out" "INFO: checking nil diagnostics files="
   require_contains "$TMPDIR/workflow.out" "OK: nil diagnostics check passed files="
   require_contains "$TMPDIR/workflow.out" "SKIP: flake checks skipped inside nix build sandbox or parent workflow ref=."
+  require_contains "$workflow_deadnix_log" "./flake.nix"
   require_contains "$workflow_nil_log" "diagnostics ./flake.nix"
+  require_contains "$workflow_statix_log" "check ."
   require_contains "$workflow_log" "flake show --no-write-lock-file ."
   require_contains "$workflow_log" "run .#help"
   require_not_contains "$workflow_log" "flake check --no-write-lock-file ."
