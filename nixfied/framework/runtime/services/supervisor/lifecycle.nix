@@ -1,11 +1,7 @@
 # Supervisor lifecycle - start, stop, startDaemon with orphan cleanup
 {
-  pkgs,
-  project,
-  slots,
-  config,
   runtime,
-  loggingPrelude,
+  ...
 }:
 
 let

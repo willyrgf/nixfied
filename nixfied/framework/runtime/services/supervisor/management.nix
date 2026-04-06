@@ -1,10 +1,8 @@
 # Supervisor management - restart, log rotation
 {
   pkgs,
-  slots,
-  config,
   runtime,
-  loggingPrelude,
+  ...
 }:
 
 let

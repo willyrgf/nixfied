@@ -1,10 +1,8 @@
 # Supervisor status and log viewing
 {
   pkgs,
-  slots,
-  config,
   runtime,
-  loggingPrelude,
+  ...
 }:
 
 let
