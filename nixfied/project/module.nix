@@ -7,10 +7,9 @@
 let
   conf = import ./conf.nix { inherit pkgs; };
   exitCodes = import ../framework/core/exit-codes.nix;
-  project = conf.project;
+  inherit (conf) project;
   envNames = builtins.attrNames conf.envs;
   envOffsets = lib.mapAttrs (_: value: value.offset or 0) conf.envs;
-  normalizeSourceKeys = sources: builtins.sort builtins.lessThan (builtins.attrNames sources);
   normalizePostgresEnvConfigs = lib.mapAttrs (
     _: envCfg: {
       extraConfig = envCfg.extraConfig or "";
@@ -24,7 +23,7 @@ let
     pkgs.gnugrep
   ];
 
-  nixFormatterPkg = if pkgs ? nixfmt then pkgs.nixfmt else pkgs.nixfmt-rfc-style;
+  nixFormatterPkg = pkgs.nixfmt or pkgs.nixfmt-rfc-style;
   nixChecksPkg = import ../framework/core/mkNixChecks.nix {
     inherit
       pkgs
@@ -93,7 +92,7 @@ let
       argIdentity =
         arg:
         let
-          argName = if arg ? name then arg.name else "";
+          argName = arg.name or "";
           argLong = if (arg ? long) && arg.long != null then arg.long else "";
         in
         "${argName}|${argLong}";
@@ -208,7 +207,7 @@ let
       passThroughEnv ? defaultTaskPassThroughEnv,
       allowSensitivePassThrough ? false,
       launcher ? null,
-      ownerFile ? "nixfied/project/tasks.nix",
+      ...
     }:
     let
       taskSupportsHooks =
@@ -229,18 +228,18 @@ let
         else if workflowId == null then
           {
             type = "shell";
-            command = command;
+            inherit command;
           }
         else
           {
             type = "workflowRef";
-            workflowId = workflowId;
+            inherit workflowId;
           };
 
       commandApi = {
         version = 2;
         commandClass = "typed";
-        summary = summary;
+        inherit summary;
         details = description;
         usage = [ ];
         examples = [ ];
@@ -270,9 +269,11 @@ let
         slotEnv = "optional";
         workdir = "projectRoot";
         hermetic = true;
-        runtimeInputs = runtimeInputs;
-        passThroughEnv = passThroughEnv;
-        allowSensitivePassThrough = allowSensitivePassThrough;
+        inherit
+          runtimeInputs
+          passThroughEnv
+          allowSensitivePassThrough
+          ;
         logging = {
           levelDefault = logging.levelDefault or null;
           outputDefault = logging.outputDefault or null;
@@ -293,7 +294,7 @@ let
             )
           else
             preHooks;
-        postHooks = postHooks;
+        inherit postHooks;
       };
 
       scheduling = {
@@ -326,7 +327,7 @@ let
     }:
     {
       enable = true;
-      appId = appId;
+      inherit appId;
       inherit
         summary
         description
@@ -360,7 +361,6 @@ let
     inherit
       pkgs
       conf
-      normalizeSourceKeys
       normalizePostgresEnvConfigs
       ;
   };

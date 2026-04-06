@@ -1,7 +1,6 @@
 {
   pkgs,
   conf,
-  normalizeSourceKeys,
   normalizePostgresEnvConfigs,
 }:
 {
@@ -14,7 +13,7 @@ let
   runtimeDefaults = import ../framework/core/runtime-defaults.nix;
 
   servicesCfg = config.nixfied.services;
-  postgresPkg = if pkgs ? postgresql_16 then pkgs.postgresql_16 else pkgs.postgresql;
+  postgresPkg = pkgs.postgresql_16 or pkgs.postgresql;
   localhost = runtimeDefaults.hosts.loopbackIp;
 
   mkPortVar = contractSchema.mkPortVarName;
@@ -26,7 +25,7 @@ let
       serviceDir = mkServiceDir serviceName;
     in
     {
-      serviceDir = serviceDir;
+      inherit serviceDir;
       dataDir = serviceDir;
     };
 
@@ -51,9 +50,9 @@ let
   mkFullStartOp =
     {
       runtimeOp,
-      displayName,
       summary,
       details,
+      ...
     }:
     {
       inherit
@@ -147,17 +146,24 @@ in
 
       endpoints.primary = {
         protocol = "postgres";
-        portKey = servicesCfg.postgres.portKey;
+        inherit (servicesCfg.postgres) portKey;
       };
 
-      artifacts = mkCommonArtifacts "postgres" // {
-        portKey = servicesCfg.postgres.portKey;
-        portVar = mkPortVar servicesCfg.postgres.portKey;
-        logFile = "${mkServiceDir "postgres"}/postgres.log";
-        pidFile = "${mkServiceDir "postgres"}/postmaster.pid";
-        defaultDatabase = servicesCfg.postgres.database;
-        testDatabase = servicesCfg.postgres.testDatabase;
-      };
+      artifacts =
+        let
+          inherit (servicesCfg.postgres)
+            portKey
+            testDatabase
+            ;
+          defaultDatabase = servicesCfg.postgres.database;
+        in
+        mkCommonArtifacts "postgres" // {
+          inherit portKey;
+          portVar = mkPortVar portKey;
+          logFile = "${mkServiceDir "postgres"}/postgres.log";
+          pidFile = "${mkServiceDir "postgres"}/postmaster.pid";
+          inherit defaultDatabase testDatabase;
+        };
 
       lifecycle = {
         preStart = {
@@ -715,8 +721,10 @@ in
         authPortVar = mkPortVar servicesCfg.reth.portKeyAuth;
         logFile = "${mkServiceDir "reth"}/logs/reth.log";
         pidFile = "${mkServiceDir "reth"}/run/reth.pid";
-        network = servicesCfg.reth.network;
-        devMode = servicesCfg.reth.devMode;
+        inherit (servicesCfg.reth)
+          network
+          devMode
+          ;
       };
 
       checks = {
@@ -826,7 +834,7 @@ in
         executionPortVar = mkPortVar servicesCfg.helios.executionRpcPortKey;
         logFile = "${mkServiceDir "helios"}/logs/helios.log";
         pidFile = "${mkServiceDir "helios"}/run/helios.pid";
-        network = servicesCfg.helios.network;
+        inherit (servicesCfg.helios) network;
       };
 
       checks = {
