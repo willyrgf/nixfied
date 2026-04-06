@@ -23,7 +23,7 @@ let
       ;
     inherit (runtimeDeps) services serviceDispatcherProgram;
     model = harnessModel;
-    runtimeBin = serviceDispatcherProgram;
+    runtimeBin = runtimeDeps.serviceDispatcherProgram;
   };
 
   orchestrator = import ../../../nixfied/framework/runtime/orchestrator.nix {
@@ -34,7 +34,7 @@ let
       ;
     inherit (runtimeDeps) services serviceDispatcherProgram;
     model = harnessModel;
-    runtimeBin = serviceDispatcherProgram;
+    runtimeBin = runtimeDeps.serviceDispatcherProgram;
   };
 in
 {

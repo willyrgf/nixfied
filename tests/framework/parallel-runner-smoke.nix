@@ -23,7 +23,7 @@ let
       ;
     projectRoot = ../..;
     inherit (runtimeDeps) serviceDispatcherProgram;
-    runtimeBin = serviceDispatcherProgram;
+    runtimeBin = runtimeDeps.serviceDispatcherProgram;
   };
 in
 pkgs.runCommand "parallel-runner-smoke" { } ''

@@ -81,7 +81,7 @@ let
       inherit (compiled) model services;
       projectRoot = ../..;
       inherit (runtimeDeps) serviceDispatcherProgram;
-      runtimeBin = serviceDispatcherProgram;
+      runtimeBin = runtimeDeps.serviceDispatcherProgram;
     };
 
   orchestratorBase = mkOrchestrator compiledBase;
