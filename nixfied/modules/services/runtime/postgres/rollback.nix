@@ -1,10 +1,10 @@
 # PostgreSQL rollback - git-integrated rollback with backup manifests
 {
   pkgs,
-  project,
   slots,
   config,
   loggingPrelude,
+  ...
 }:
 
 let

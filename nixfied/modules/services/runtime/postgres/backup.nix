@@ -1,10 +1,10 @@
 # PostgreSQL backup infrastructure - WAL archiving, base backups, PITR restore
 {
   pkgs,
-  project,
   slots,
   config,
   loggingPrelude,
+  ...
 }:
 
 let

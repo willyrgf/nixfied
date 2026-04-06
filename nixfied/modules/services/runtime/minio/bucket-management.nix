@@ -1,10 +1,10 @@
 # MinIO bucket management
 {
   pkgs,
-  project,
   slots,
   config,
   loggingPrelude,
+  ...
 }:
 
 let

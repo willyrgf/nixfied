@@ -1,11 +1,11 @@
 # Nginx SSL management - Let's Encrypt / certbot integration
 {
   pkgs,
-  project,
   slots,
   config,
   lifecycle,
   loggingPrelude,
+  ...
 }:
 
 let

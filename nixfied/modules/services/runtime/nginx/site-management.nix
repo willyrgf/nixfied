@@ -1,12 +1,12 @@
 # Nginx site management - CRUD for sites
 {
   pkgs,
-  project,
   slots,
   config,
   templates,
   lifecycle,
   loggingPrelude,
+  ...
 }:
 
 let

@@ -1,10 +1,10 @@
 # PostgreSQL migration testing - test migrations against DB copy
 {
   pkgs,
-  project,
   slots,
   config,
   loggingPrelude,
+  ...
 }:
 
 let

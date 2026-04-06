@@ -1,10 +1,9 @@
 # PostgreSQL migration safety - hash-based tracking, prod blocking
 {
   pkgs,
-  project,
-  slots,
   config,
   loggingPrelude,
+  ...
 }:
 
 let
