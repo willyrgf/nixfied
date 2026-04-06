@@ -4,10 +4,8 @@
 }:
 let
   frameworkLib = import ../../nixfied/framework/core {
-    inherit
-      pkgs
-      ;
-    system = pkgs.system;
+    inherit pkgs;
+    inherit (pkgs) system;
   };
   shellHelpers = import ./lib/shell-helpers.nix { inherit pkgs; };
   runtimeFixture = import ./lib/runtime-fixture.nix { inherit pkgs; };
@@ -105,8 +103,7 @@ let
     extraModules = [ requirementsModule ];
     localOverrides = [
       (
-        { ... }:
-        {
+        _: {
           nixfied.graph.excludedServices = [ "helios" ];
         }
       )
@@ -192,28 +189,19 @@ let
 
   workflowUnit = compiled.model.workflows.${workflowId}.units."required.unit";
 
+  runtimeDeps = runtimeFixture.runtimeMaterialization {
+    inherit (compiled) model services serviceDefinitions;
+  };
+
   executor = import ../../nixfied/framework/runtime/executor.nix {
     inherit
       pkgs
       registry
       ;
-    model = compiled.model;
-    services = compiled.services;
+    inherit (compiled) model services;
     projectRoot = ../..;
-    serviceDispatcherProgram =
-      (runtimeFixture.runtimeMaterialization {
-        inherit pkgs;
-        model = compiled.model;
-        services = compiled.services;
-        serviceDefinitions = compiled.serviceDefinitions;
-      }).serviceDispatcherProgram;
-    runtimeBin =
-      (runtimeFixture.runtimeMaterialization {
-        inherit pkgs;
-        model = compiled.model;
-        services = compiled.services;
-        serviceDefinitions = compiled.serviceDefinitions;
-      }).serviceDispatcherProgram;
+    inherit (runtimeDeps) serviceDispatcherProgram;
+    runtimeBin = serviceDispatcherProgram;
   };
 in
 assert
@@ -233,9 +221,9 @@ assert !(builtins.hasAttr multiTaskId compiledExcluded.model.tasks);
 assert builtins.hasAttr workflowTaskId compiledExcluded.model.tasks;
 assert !(builtins.hasAttr "required.unit" compiledExcluded.model.workflows.${workflowId}.units);
 assert builtins.hasAttr "control.unit" compiledExcluded.model.workflows.${workflowId}.units;
-assert invalidTaskServiceName.success == false;
-assert invalidWorkflowServiceName.success == false;
-assert invalidWorkflowRequirement.success == false;
+assert !invalidTaskServiceName.success;
+assert !invalidWorkflowServiceName.success;
+assert !invalidWorkflowRequirement.success;
 pkgs.runCommand "service-requirements-contract" { } ''
   set -euo pipefail
   ${shellHelpers.shellPrelude}

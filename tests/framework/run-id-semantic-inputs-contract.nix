@@ -5,7 +5,7 @@
 let
   frameworkLib = import ../../nixfied/framework/core {
     inherit pkgs;
-    system = pkgs.system;
+    inherit (pkgs) system;
   };
   shellHelpers = import ./lib/shell-helpers.nix { inherit pkgs; };
   runtimeFixture = import ./lib/runtime-fixture.nix { inherit pkgs; };
@@ -20,7 +20,7 @@ let
       projectModules = [ ../../nixfied/project/module.nix ];
       extraModules = [
         (
-          { ... }:
+          _:
           {
             nixfied.tasks."test.run-id.semantic" = {
               id = taskId;
@@ -41,7 +41,7 @@ let
               mode = "custom";
               maxWorkers = 1;
               units.main = {
-                taskId = taskId;
+                inherit taskId;
                 needs = [ ];
                 locks = [ ];
                 when = {
@@ -70,10 +70,7 @@ let
     compiled:
     let
       runtimeDeps = runtimeFixture.runtimeMaterialization {
-        inherit pkgs;
-        model = compiled.model;
-        services = compiled.services;
-        serviceDefinitions = compiled.serviceDefinitions;
+        inherit (compiled) model services serviceDefinitions;
       };
     in
     import ../../nixfied/framework/runtime/orchestrator.nix {
@@ -81,11 +78,10 @@ let
         pkgs
         registry
         ;
-      model = compiled.model;
-      services = compiled.services;
+      inherit (compiled) model services;
       projectRoot = ../..;
-      serviceDispatcherProgram = runtimeDeps.serviceDispatcherProgram;
-      runtimeBin = runtimeDeps.serviceDispatcherProgram;
+      inherit (runtimeDeps) serviceDispatcherProgram;
+      runtimeBin = serviceDispatcherProgram;
     };
 
   orchestratorBase = mkOrchestrator compiledBase;

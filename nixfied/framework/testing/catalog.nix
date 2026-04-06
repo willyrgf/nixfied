@@ -141,12 +141,14 @@ let
   };
 
   ciShardChecks = {
-    compile = shardChecks.compile;
-    manifest = shardChecks.manifest;
-    kernel = shardChecks.kernel;
-    adapters = shardChecks.adapters;
+    inherit (shardChecks)
+      compile
+      manifest
+      kernel
+      adapters
+      migration
+      ;
     e2e = [ ];
-    migration = shardChecks.migration;
   };
 
   profileShardChecks = {

@@ -2,9 +2,9 @@
 let
   frameworkLib = import ../../../nixfied/framework/core {
     inherit pkgs;
-    system = pkgs.system;
+    inherit (pkgs) system;
   };
-  lib = pkgs.lib;
+  inherit (pkgs) lib;
 
   withCompiledExecution =
     model:
@@ -36,7 +36,6 @@ let
     {
       model,
       services,
-      pkgs ? null,
       serviceDefinitions ? null,
       resolvedServices ? null,
     }:
@@ -81,7 +80,7 @@ let
 
       materialized = frameworkLib.materializeExecution {
         projectRoot = ../../..;
-        compiledCore = compiledCore;
+        inherit compiledCore;
       };
     in
     {

@@ -21,7 +21,7 @@ let
       description = id;
       runner = {
         type = "shell";
-        command = command;
+        inherit command;
         package = null;
         workflowId = null;
       };
@@ -65,7 +65,7 @@ let
       };
       postRun = {
         tasks = [ postTask ];
-        alwaysRun = alwaysRun;
+        inherit alwaysRun;
       };
       artifacts = {
         root = "artifacts-root";
@@ -173,7 +173,6 @@ let
   );
   runtimeDeps = runtimeFixture.runtimeMaterialization {
     inherit
-      pkgs
       services
       serviceDefinitions
       ;
@@ -188,8 +187,8 @@ let
     model = lifecycleModel;
     inherit services;
     projectRoot = ../..;
-    serviceDispatcherProgram = runtimeDeps.serviceDispatcherProgram;
-    runtimeBin = runtimeDeps.serviceDispatcherProgram;
+    inherit (runtimeDeps) serviceDispatcherProgram;
+    runtimeBin = serviceDispatcherProgram;
   };
 in
 pkgs.runCommand "workflow-lifecycle-smoke" { } ''

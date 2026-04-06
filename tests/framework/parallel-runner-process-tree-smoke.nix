@@ -9,7 +9,6 @@ let
   runtimeFixture = import ./lib/runtime-fixture.nix { inherit pkgs; };
   runtimeDeps = runtimeFixture.runtimeMaterialization {
     inherit
-      pkgs
       model
       services
       serviceDefinitions
@@ -23,8 +22,8 @@ let
       registry
       ;
     projectRoot = ../..;
-    serviceDispatcherProgram = runtimeDeps.serviceDispatcherProgram;
-    runtimeBin = runtimeDeps.serviceDispatcherProgram;
+    inherit (runtimeDeps) serviceDispatcherProgram;
+    runtimeBin = serviceDispatcherProgram;
   };
 in
 pkgs.runCommand "parallel-runner-process-tree-smoke" { } ''

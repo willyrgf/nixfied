@@ -7,7 +7,7 @@ let
   runtimeFixture = import ./lib/runtime-fixture.nix { inherit pkgs; };
   frameworkLib = import ../../nixfied/framework/core {
     inherit pkgs;
-    system = pkgs.system;
+    inherit (pkgs) system;
   };
 
   probeTaskId = "task.test.workflow.probe-scope";
@@ -109,23 +109,14 @@ let
       pkgs
       registry
       ;
-    model = compiled.model;
-    services = compiled.services;
+    inherit (compiled) model services;
     projectRoot = ../..;
-    serviceDispatcherProgram =
-      (runtimeFixture.runtimeMaterialization {
-        inherit pkgs;
-        model = compiled.model;
-        services = compiled.services;
-        serviceDefinitions = compiled.serviceDefinitions;
-      }).serviceDispatcherProgram;
-    runtimeBin =
-      (runtimeFixture.runtimeMaterialization {
-        inherit pkgs;
-        model = compiled.model;
-        services = compiled.services;
-        serviceDefinitions = compiled.serviceDefinitions;
-      }).serviceDispatcherProgram;
+    inherit (runtimeDeps) serviceDispatcherProgram;
+    runtimeBin = serviceDispatcherProgram;
+  };
+
+  runtimeDeps = runtimeFixture.runtimeMaterialization {
+    inherit (compiled) model services serviceDefinitions;
   };
 in
 assert

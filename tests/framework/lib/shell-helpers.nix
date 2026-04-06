@@ -2,7 +2,7 @@
 let
   plainShellLogging = import ../../../nixfied/framework/core/plain-shell-logging.nix;
   shellCommon = import ../../../nixfied/framework/core/shell-common.nix { inherit pkgs; };
-  postgresPkg = if pkgs ? postgresql_16 then pkgs.postgresql_16 else pkgs.postgresql;
+  postgresPkg = pkgs.postgresql_16 or pkgs.postgresql;
 
   mkShellPrelude =
     {

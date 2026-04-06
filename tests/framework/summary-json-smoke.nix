@@ -16,7 +16,6 @@ let
   runtimeFixture = import ./lib/runtime-fixture.nix { inherit pkgs; };
   runtimeDeps = runtimeFixture.runtimeMaterialization {
     inherit
-      pkgs
       services
       serviceDefinitions
       ;
@@ -31,8 +30,8 @@ let
     model = probeModel;
     inherit services;
     projectRoot = ../..;
-    serviceDispatcherProgram = runtimeDeps.serviceDispatcherProgram;
-    runtimeBin = runtimeDeps.serviceDispatcherProgram;
+    inherit (runtimeDeps) serviceDispatcherProgram;
+    runtimeBin = serviceDispatcherProgram;
   };
 in
 pkgs.runCommand "summary-json-smoke" { } ''

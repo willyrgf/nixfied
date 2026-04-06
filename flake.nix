@@ -15,9 +15,9 @@
     }:
     let
       supportedSystems = flake-utils.lib.defaultSystems;
-      canonicalLib = import ./nixfied/framework/core/canonical.nix { lib = nixpkgs.lib; };
+      canonicalLib = import ./nixfied/framework/core/canonical.nix { inherit (nixpkgs) lib; };
       contractsLib = import ./nixfied/contracts {
-        lib = nixpkgs.lib;
+        inherit (nixpkgs) lib;
         canonical = canonicalLib;
       };
 
@@ -50,14 +50,16 @@
             inherit
               pkgs
               ;
-            model = frameworkOutputs.model;
-            services = frameworkOutputs.services;
-            serviceDefinitions = frameworkOutputs.serviceDefinitions;
-            serviceCatalog = frameworkOutputs.serviceCatalog;
-            apps = frameworkOutputs.apps;
-            packages = frameworkOutputs.packages;
-            stateHash = frameworkOutputs.stateHash;
-            canonical = frameworkLib.canonical;
+            inherit (frameworkOutputs)
+              model
+              services
+              serviceDefinitions
+              serviceCatalog
+              apps
+              packages
+              stateHash
+              ;
+            inherit (frameworkLib) canonical;
             registry = import ./nixfied/framework/runtime/registry {
               inherit
                 pkgs
@@ -66,11 +68,13 @@
           };
         in
         {
-          apps = frameworkOutputs.apps;
-          packages = frameworkOutputs.packages;
-          legacyPackages = frameworkOutputs.legacyPackages;
+          inherit (frameworkOutputs)
+            apps
+            packages
+            legacyPackages
+            devShells
+            ;
           checks = frameworkChecks;
-          devShells = frameworkOutputs.devShells;
         };
     in
     (flake-utils.lib.eachSystem supportedSystems mkForSystem)
@@ -131,8 +135,7 @@
               frameworkSourceRevision
               ;
           };
-
-        canonical = import ./nixfied/framework/core/canonical.nix { lib = nixpkgs.lib; };
+        canonical = import ./nixfied/framework/core/canonical.nix { inherit (nixpkgs) lib; };
         contracts = contractsLib;
       };
 

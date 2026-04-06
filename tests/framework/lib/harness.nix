@@ -11,10 +11,7 @@ let
   shellHelpers = import ./shell-helpers.nix { inherit pkgs; };
   harnessModel = runtimeFixture.withCompiledExecution model;
   runtimeDeps = runtimeFixture.runtimeMaterialization {
-    inherit
-      pkgs
-      services
-      ;
+    inherit services;
     model = harnessModel;
     inherit serviceDefinitions;
   };
@@ -24,10 +21,9 @@ let
       registry
       projectRoot
       ;
-    services = runtimeDeps.services;
+    inherit (runtimeDeps) services serviceDispatcherProgram;
     model = harnessModel;
-    serviceDispatcherProgram = runtimeDeps.serviceDispatcherProgram;
-    runtimeBin = runtimeDeps.serviceDispatcherProgram;
+    runtimeBin = serviceDispatcherProgram;
   };
 
   orchestrator = import ../../../nixfied/framework/runtime/orchestrator.nix {
@@ -36,10 +32,9 @@ let
       registry
       projectRoot
       ;
-    services = runtimeDeps.services;
+    inherit (runtimeDeps) services serviceDispatcherProgram;
     model = harnessModel;
-    serviceDispatcherProgram = runtimeDeps.serviceDispatcherProgram;
-    runtimeBin = runtimeDeps.serviceDispatcherProgram;
+    runtimeBin = serviceDispatcherProgram;
   };
 in
 {
