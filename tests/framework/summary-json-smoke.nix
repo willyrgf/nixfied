@@ -32,7 +32,7 @@ let
     inherit services;
     projectRoot = ../..;
     serviceDispatcherProgram = runtimeDeps.serviceDispatcherProgram;
-    runtimeBin = runtimeDeps.runtimeEngineProgram;
+    runtimeBin = runtimeDeps.serviceDispatcherProgram;
   };
 in
 pkgs.runCommand "summary-json-smoke" { } ''

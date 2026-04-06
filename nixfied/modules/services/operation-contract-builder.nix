@@ -15,7 +15,6 @@ let
       summary = "Validate ${displayName} start preconditions";
       details = "Checks deterministic blockers before ${displayName} startup for the current slot/environment.";
       exposeApp = false;
-      exposeHook = false;
     };
 
     start = {
@@ -65,7 +64,6 @@ let
 
     full-start = {
       runtimeOp = "full-start-leaf";
-      hook = "FULL_START";
       preOps = [
         "init"
         "check-config"
@@ -77,7 +75,6 @@ let
 
     full-start-test = {
       runtimeOp = "full-start-test-leaf";
-      hook = "FULL_START_TEST";
       preOps = [
         "init"
         "check-config"
@@ -89,7 +86,6 @@ let
 
     ready = {
       runtimeOp = "ready";
-      hook = "READY";
       summary = "Wait for ${displayName} readiness";
       details = "Waits for ${displayName} to be ready for the current slot/environment.";
     };

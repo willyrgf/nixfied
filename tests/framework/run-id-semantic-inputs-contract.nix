@@ -85,7 +85,7 @@ let
       services = compiled.services;
       projectRoot = ../..;
       serviceDispatcherProgram = runtimeDeps.serviceDispatcherProgram;
-      runtimeBin = runtimeDeps.runtimeEngineProgram;
+      runtimeBin = runtimeDeps.serviceDispatcherProgram;
     };
 
   orchestratorBase = mkOrchestrator compiledBase;

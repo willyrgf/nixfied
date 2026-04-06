@@ -79,6 +79,8 @@ let
     adapters = [
       "orchestrator-arg-forwarding-smoke"
       "orchestrator-signal-cleanup-smoke"
+      "service-op-composition-contract"
+      "service-set-behavior-contract"
       "shell-contract-runtime-smoke"
     ];
 

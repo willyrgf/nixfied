@@ -27,7 +27,7 @@ let
     services = runtimeDeps.services;
     model = harnessModel;
     serviceDispatcherProgram = runtimeDeps.serviceDispatcherProgram;
-    runtimeBin = runtimeDeps.runtimeEngineProgram;
+    runtimeBin = runtimeDeps.serviceDispatcherProgram;
   };
 
   orchestrator = import ../../../nixfied/framework/runtime/orchestrator.nix {
@@ -39,7 +39,7 @@ let
     services = runtimeDeps.services;
     model = harnessModel;
     serviceDispatcherProgram = runtimeDeps.serviceDispatcherProgram;
-    runtimeBin = runtimeDeps.runtimeEngineProgram;
+    runtimeBin = runtimeDeps.serviceDispatcherProgram;
   };
 in
 {

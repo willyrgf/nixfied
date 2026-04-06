@@ -92,14 +92,12 @@ in
 
           list-instances = {
             runtimeOp = "list-instances";
-            hook = "LIST_INSTANCES";
             summary = "List nginx instances";
             details = "Lists nginx instances managed by Nixfied.";
           };
 
           site-proxy = {
             runtimeOp = "site-proxy";
-            hook = "SITE_PROXY";
             summary = "Write proxy site configuration";
             details = "Writes a proxy site config and enables it.";
             exposeApp = false;
@@ -108,7 +106,6 @@ in
 
           site-static = {
             runtimeOp = "site-static";
-            hook = "SITE_STATIC";
             summary = "Write static site configuration";
             details = "Writes a static site config and enables it.";
             exposeApp = false;
@@ -117,7 +114,6 @@ in
 
           site-add = {
             runtimeOp = "site-add";
-            hook = "SITE_ADD";
             summary = "Add proxy nginx site";
             details = "Adds a proxy site and enables it.";
             usage = [ "nix run .#svc::nginx::site-add -- <domain> <upstream-host> <upstream-port>" ];
@@ -125,7 +121,6 @@ in
 
           site-remove = {
             runtimeOp = "site-remove";
-            hook = "SITE_REMOVE";
             summary = "Remove nginx site";
             details = "Removes nginx site configuration.";
             usage = [ "nix run .#svc::nginx::site-remove -- <domain>" ];
@@ -133,14 +128,12 @@ in
 
           site-list = {
             runtimeOp = "site-list";
-            hook = "SITE_LIST";
             summary = "List nginx sites";
             details = "Lists configured nginx sites.";
           };
 
           site-enable = {
             runtimeOp = "site-enable";
-            hook = "SITE_ENABLE";
             summary = "Enable nginx site";
             details = "Enables an existing nginx site.";
             usage = [ "nix run .#svc::nginx::site-enable -- <domain>" ];
@@ -148,7 +141,6 @@ in
 
           site-disable = {
             runtimeOp = "site-disable";
-            hook = "SITE_DISABLE";
             summary = "Disable nginx site";
             details = "Disables an existing nginx site.";
             usage = [ "nix run .#svc::nginx::site-disable -- <domain>" ];
@@ -156,7 +148,6 @@ in
 
           cert-obtain = {
             runtimeOp = "cert-obtain";
-            hook = "CERT_OBTAIN";
             summary = "Obtain SSL certificate";
             details = "Obtains a Let's Encrypt certificate for a domain.";
             usage = [ "nix run .#svc::nginx::cert-obtain -- <domain> <email> [--staging]" ];
@@ -164,14 +155,12 @@ in
 
           cert-renew = {
             runtimeOp = "cert-renew";
-            hook = "CERT_RENEW";
             summary = "Renew SSL certificates";
             details = "Renews certificates for configured sites.";
           };
 
           cert-status = {
             runtimeOp = "cert-status";
-            hook = "CERT_STATUS";
             summary = "Show SSL certificate status";
             details = "Prints certificate status for configured domains.";
           };

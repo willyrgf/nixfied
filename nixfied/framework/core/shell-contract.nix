@@ -672,8 +672,7 @@ let
       local export_text="$1"
 
       if [ -z "$export_text" ]; then
-        _nixfied_contract_err "kernel export stream is empty"
-        return 1
+        return 0
       fi
 
       eval "$export_text"

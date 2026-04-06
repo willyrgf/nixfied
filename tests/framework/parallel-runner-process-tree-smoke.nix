@@ -24,7 +24,7 @@ let
       ;
     projectRoot = ../..;
     serviceDispatcherProgram = runtimeDeps.serviceDispatcherProgram;
-    runtimeBin = runtimeDeps.runtimeEngineProgram;
+    runtimeBin = runtimeDeps.serviceDispatcherProgram;
   };
 in
 pkgs.runCommand "parallel-runner-process-tree-smoke" { } ''

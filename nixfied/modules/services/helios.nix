@@ -142,7 +142,6 @@ in
 
           ready = {
             runtimeOp = "ready";
-            hook = "READY";
             summary = "Wait for Helios readiness";
             details = ''
               Waits until Helios can answer `eth_blockNumber` successfully.

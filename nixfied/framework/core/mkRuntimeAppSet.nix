@@ -1,43 +1,32 @@
 {
   pkgs,
-  orchestratorProgram,
-  serviceDispatcherProgram,
+  runtimeProgram,
   model,
   contractBundle,
 }:
 let
   mkShellApp = import ./mk-shell-app.nix { inherit pkgs; };
 
-  orchestratorProgramPath = builtins.toString orchestratorProgram;
-  serviceDispatcherProgramPath = builtins.toString serviceDispatcherProgram;
+  runtimeProgramPath = builtins.toString runtimeProgram;
   modelApps = model.apps or { };
 
-  mkOrchestratorExecApp =
-    appName: body:
+  mkRuntimeExecApp =
+    appName: command:
     mkShellApp {
       inherit appName;
       body = ''
-        exec ${pkgs.lib.escapeShellArg orchestratorProgramPath} ${body} "$@"
-      '';
-    };
-
-  mkServiceExecApp =
-    appName: serviceName: operation:
-    mkShellApp {
-      inherit appName;
-      body = ''
-        exec ${pkgs.lib.escapeShellArg serviceDispatcherProgramPath} run-service ${pkgs.lib.escapeShellArg serviceName} ${pkgs.lib.escapeShellArg operation} "$@"
+        exec ${pkgs.lib.escapeShellArg runtimeProgramPath} ${command} "$@"
       '';
     };
 
   directApps = builtins.mapAttrs (
     appId: app:
     if (app.kind or "") == "taskRef" then
-      mkOrchestratorExecApp appId "run-task ${pkgs.lib.escapeShellArg app.taskId}"
+      mkRuntimeExecApp appId "run-task ${pkgs.lib.escapeShellArg app.taskId}"
     else if (app.kind or "") == "workflowRef" then
-      mkOrchestratorExecApp appId "run-workflow ${pkgs.lib.escapeShellArg app.workflowId}"
+      mkRuntimeExecApp appId "run-workflow ${pkgs.lib.escapeShellArg app.workflowId}"
     else if (app.kind or "") == "serviceOp" then
-      mkServiceExecApp appId app.service app.operation
+      mkRuntimeExecApp appId "run-service ${pkgs.lib.escapeShellArg app.service} ${pkgs.lib.escapeShellArg app.operation}"
     else if (app.kind or "") == "machineOutput" then
       null
     else
@@ -82,10 +71,10 @@ let
 in
 appSet
 // {
-  "run-task" = mkOrchestratorExecApp "run-task" "run-task";
-  "run-workflow" = mkOrchestratorExecApp "run-workflow" "run-workflow";
-  "run-workflow-parallel" = mkOrchestratorExecApp "run-workflow-parallel" "run-workflow-parallel";
-  "runs" = mkOrchestratorExecApp "runs" "runs";
-  "stop-run" = mkOrchestratorExecApp "stop-run" "stop-run";
-  "stop-all-runs" = mkOrchestratorExecApp "stop-all-runs" "stop-all-runs";
+  "run-task" = mkRuntimeExecApp "run-task" "run-task";
+  "run-workflow" = mkRuntimeExecApp "run-workflow" "run-workflow";
+  "run-workflow-parallel" = mkRuntimeExecApp "run-workflow-parallel" "run-workflow-parallel";
+  "runs" = mkRuntimeExecApp "runs" "runs";
+  "stop-run" = mkRuntimeExecApp "stop-run" "stop-run";
+  "stop-all-runs" = mkRuntimeExecApp "stop-all-runs" "stop-all-runs";
 }

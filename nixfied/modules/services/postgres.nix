@@ -117,7 +117,6 @@ in
             summary = "Validate PostgreSQL init preconditions";
             details = "Checks deterministic blockers before PostgreSQL initialization for the current slot and environment.";
             exposeApp = false;
-            exposeHook = false;
           };
 
           start = {
@@ -133,7 +132,6 @@ in
 
           full-start = {
             runtimeOp = "full-start-leaf";
-            hook = "FULL_START";
             preOps = [ "start" ];
             summary = "Init, start, and set up PostgreSQL";
             details = "Performs init/start/setup-db in one operation.";
@@ -141,7 +139,6 @@ in
 
           full-start-test = {
             runtimeOp = "full-start-test-leaf";
-            hook = "FULL_START_TEST";
             preOps = [ "start" ];
             summary = "Init/start/setup for test database";
             details = "Performs init/start/setup-db using the configured test database.";
@@ -149,21 +146,18 @@ in
 
           setup-db = {
             runtimeOp = "setup-db";
-            hook = "SETUP_DB";
             summary = "Create and configure database";
             details = "Creates the configured database and required extensions.";
           };
 
           ready-test = {
             runtimeOp = "ready-test";
-            hook = "READY_TEST";
             summary = "Wait for PostgreSQL test-database readiness";
             details = "Checks PostgreSQL and the configured test database accept local SQL queries.";
           };
 
           list-instances = {
             runtimeOp = "list-instances";
-            hook = "LIST_INSTANCES";
             summary = "List PostgreSQL instances";
             details = "Lists PostgreSQL instances managed by Nixfied.";
           };
@@ -184,7 +178,6 @@ in
 
           list-backups = {
             runtimeOp = "list-backups";
-            hook = "LIST_BACKUPS";
             summary = "List PostgreSQL backups";
             details = "Lists backups for the current slot and environment.";
           };
@@ -205,14 +198,12 @@ in
 
           test-migrations = {
             runtimeOp = "test-migrations";
-            hook = "TEST_MIGRATIONS";
             summary = "Test PostgreSQL migrations";
             details = "Runs migrations against a temporary copy of the source database.";
           };
 
           ensure-migration-tested = {
             runtimeOp = "ensure-migration-tested";
-            hook = "ENSURE_MIGRATION_TESTED";
             summary = "Ensure migrations were tested";
             details = "Fails when migration hashes were not previously tested.";
             exposeApp = false;
@@ -220,7 +211,6 @@ in
 
           check-port = {
             runtimeOp = "check-port";
-            hook = "CHECK_PORT";
             summary = "Check PostgreSQL port usage";
             details = "Checks whether a port is already in use.";
             usage = [ "nix run .#svc::postgres::check-port -- <port>" ];
@@ -228,7 +218,6 @@ in
 
           kill-port = {
             runtimeOp = "kill-port";
-            hook = "KILL_PORT";
             summary = "Kill processes bound to a port";
             details = "Stops processes listening on a given port.";
             usage = [ "nix run .#svc::postgres::kill-port -- <port>" ];

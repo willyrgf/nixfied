@@ -71,6 +71,7 @@ Common migrations:
 - Replace `SKIP_<SERVICE>` with `--exclude-services <csv>`
 - Replace `SVC_<SERVICE>_<OP>` with `svc::<service>::<op>` or `svc <service> <op>`
 - Replace `svcset::*` and `services-*` invocations with explicit `svc::<service>::<op>` calls
+- Remove dead service-operation `hook` / `exposeHook` config fields
 - Stop depending on app-scoped execution manifests or launcher-specific selection behavior
 - Stop assuming packaging owns semantic service selection
 
@@ -79,6 +80,7 @@ Common migrations:
 - Replace any `SKIP_<SERVICE>` usage.
 - Replace any `SVC_<SERVICE>_<OP>` usage.
 - Replace any `svcset::*` or `services-*` usage.
+- Remove any service-operation `hook` or `exposeHook` configuration.
 - Use `nixfied.graph.excludedServices` for repo-owned static graph exclusion.
 - Use `--exclude-services <csv>` for invocation-time exclusion.
 - Use `svc::<service>::<op>` or in-task `svc <service> <op>` for service operations.
