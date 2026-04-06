@@ -1,3 +1,4 @@
+_:
 ''
   normalize_run_artifacts_dir() {
     local base_dir="$1"

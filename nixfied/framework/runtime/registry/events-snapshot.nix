@@ -1,3 +1,4 @@
+_:
 ''
   registry_events_snapshot() {
     local root="$1"
