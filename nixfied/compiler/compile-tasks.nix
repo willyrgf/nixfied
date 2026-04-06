@@ -5,7 +5,6 @@
 }:
 {
   resolved,
-  runtime,
 }:
 let
   listUtils = import ../framework/core/list-utils.nix;
@@ -17,12 +16,12 @@ let
   normalizeHooks =
     hooks:
     builtins.mapAttrs (_: hook: {
-      command = hook.command;
+      inherit (hook) command;
       runtimeInputs = map builtins.toString hook.runtimeInputs;
-      passThroughEnv = hook.passThroughEnv;
-      env = hook.env;
-      workdir = hook.workdir;
-      customWorkdir = hook.customWorkdir;
+      inherit (hook) passThroughEnv;
+      inherit (hook) env;
+      inherit (hook) workdir;
+      inherit (hook) customWorkdir;
     }) hooks;
 
   normalizeId =
@@ -42,57 +41,57 @@ let
     canonical.canonicalize {
       inherit id;
 
-      kind = raw.kind;
+      inherit (raw) kind;
       requirements = raw.requirements // {
         services = requiredServices;
       };
-      summary = raw.summary;
-      description = raw.description;
-      tags = raw.tags;
+      inherit (raw) summary;
+      inherit (raw) description;
+      inherit (raw) tags;
 
       runner = {
-        type = raw.runner.type;
-        command = raw.runner.command;
+        inherit (raw.runner) type;
+        inherit (raw.runner) command;
         package = if raw.runner.package == null then null else builtins.toString raw.runner.package;
-        workflowId = raw.runner.workflowId;
+        inherit (raw.runner) workflowId;
       };
 
-      commandApi = raw.commandApi;
-      launcher = raw.launcher;
+      inherit (raw) commandApi;
+      inherit (raw) launcher;
 
       runtime = {
-        slotEnv = raw.runtime.slotEnv;
-        workdir = raw.runtime.workdir;
-        customWorkdir = raw.runtime.customWorkdir;
-        hermetic = raw.runtime.hermetic;
+        inherit (raw.runtime) slotEnv;
+        inherit (raw.runtime) workdir;
+        inherit (raw.runtime) customWorkdir;
+        inherit (raw.runtime) hermetic;
         runtimeInputs = listUtils.uniquePreserveOrder (
           map builtins.toString raw.runtime.runtimeInputs ++ globalRuntimeInputs
         );
-        passThroughEnv = raw.runtime.passThroughEnv;
+        inherit (raw.runtime) passThroughEnv;
         references = {
           taskIds = raw.runtime.references.taskIds or [ ];
           workflowIds = raw.runtime.references.workflowIds or [ ];
         };
-        allowSensitivePassThrough = raw.runtime.allowSensitivePassThrough;
-        logging = raw.runtime.logging;
-        env = raw.runtime.env;
-        umask = raw.runtime.umask;
-        locale = raw.runtime.locale;
-        timezone = raw.runtime.timezone;
+        inherit (raw.runtime) allowSensitivePassThrough;
+        inherit (raw.runtime) logging;
+        inherit (raw.runtime) env;
+        inherit (raw.runtime) umask;
+        inherit (raw.runtime) locale;
+        inherit (raw.runtime) timezone;
         preHooks = normalizeHooks raw.runtime.preHooks;
         postHooks = normalizeHooks raw.runtime.postHooks;
       };
 
-      scheduling = raw.scheduling;
-      deps = raw.deps;
-      produces = raw.produces;
+      inherit (raw) scheduling;
+      inherit (raw) deps;
+      inherit (raw) produces;
     };
 
   addTask =
     acc: name:
     let
       task = normalizeTaskBase name;
-      id = task.id;
+      inherit (task) id;
     in
     if builtins.hasAttr id acc then
       if canonical.toCanonicalNix acc.${id} == canonical.toCanonicalNix task then
@@ -151,27 +150,6 @@ let
   ) tasksByIdRaw;
 
   ids = builtins.sort builtins.lessThan (builtins.attrNames tasksById);
-
-  _validateDependencies = map (
-    taskId:
-    let
-      task = tasksById.${taskId};
-      validateDep =
-        depTaskId:
-        if builtins.hasAttr depTaskId tasksById then
-          true
-        else
-          throw "task '${taskId}' depends on unknown task '${depTaskId}'";
-      validateRuntimeTaskRef =
-        refTaskId:
-        if builtins.hasAttr refTaskId tasksById then
-          true
-        else
-          throw "task '${taskId}' runtime references unknown task '${refTaskId}'";
-    in
-    map validateDep ((task.deps.needs or [ ]) ++ (task.deps.softNeeds or [ ]))
-    ++ map validateRuntimeTaskRef (task.runtime.references.taskIds or [ ])
-  ) ids;
 
   initialPruneReasons = builtins.listToAttrs (
     builtins.concatLists (
@@ -245,6 +223,6 @@ in
   allTasks = tasksById;
   tasks = survivingTasks;
   declaredTaskIds = ids;
-  prunedTaskIds = prunedTaskIds;
-  pruneReasonsByTaskId = pruneReasonsByTaskId;
+  inherit prunedTaskIds;
+  inherit pruneReasonsByTaskId;
 }

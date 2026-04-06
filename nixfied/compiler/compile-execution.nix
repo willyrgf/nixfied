@@ -3,9 +3,6 @@
   canonical,
 }:
 {
-  resolvedIdentity,
-  runtime,
-  state,
   serviceCatalog,
   serviceSets ? { },
   apps,
@@ -14,8 +11,8 @@
 }:
 let
   listUtils = import ../framework/core/list-utils.nix;
-  uniquePreserveOrder = listUtils.uniquePreserveOrder;
-  uniqueSorted = listUtils.uniqueSorted;
+  inherit (listUtils) uniquePreserveOrder;
+  inherit (listUtils) uniqueSorted;
 
   closureLib = import ./compile-closure-lib.nix { inherit lib; } {
     inherit tasks workflows;
@@ -126,7 +123,7 @@ let
           taskCustomWorkdir = taskRuntime.customWorkdir or null;
         in
         {
-          slotEnv = taskRuntime.slotEnv;
+          inherit (taskRuntime) slotEnv;
           workdir = if hookWorkdir == null then taskRuntime.workdir else hookWorkdir;
           customWorkdir =
             if hookCustomWorkdir != null then
@@ -137,7 +134,7 @@ let
               taskCustomWorkdir
             else
               null;
-          hermetic = taskRuntime.hermetic;
+          inherit (taskRuntime) hermetic;
           runtimeInputs = (taskRuntime.runtimeInputs or [ ]) ++ (hook.runtimeInputs or [ ]);
           passThroughEnv = (taskRuntime.passThroughEnv or [ ]) ++ (hook.passThroughEnv or [ ]);
           allowSensitivePassThrough = taskRuntime.allowSensitivePassThrough or false;
@@ -234,7 +231,7 @@ let
             specs = map normalizeTaskArgSpec (commandApi.args or [ ]);
             preHookIds = uniqueSorted (builtins.attrNames (task.runtime.preHooks or { }));
             postHookIds = uniqueSorted (builtins.attrNames (task.runtime.postHooks or { }));
-            requiredServices = uniquePreserveOrder ((task.requirements.services or [ ]));
+            requiredServices = uniquePreserveOrder (task.requirements.services or [ ]);
             displayName = if app == null then taskId else app.id or taskId;
             usageLines =
               let
@@ -254,7 +251,7 @@ let
                 app.description or commandApi.details or task.description or "";
             runtimePlan = mergeTaskRuntimeWithRunnerPackage task;
             hooksForPhase =
-              phase: hooks:
+              _phase: hooks:
               builtins.listToAttrs (
                 map (
                   hookId:
@@ -265,7 +262,7 @@ let
                   {
                     name = hookId;
                     value = {
-                      command = hook.command;
+                      inherit (hook) command;
                       runtimePlanShell = renderRuntimePlanShell hookRuntime;
                       passThroughEnvNames = hookRuntime.passThroughEnv or [ ];
                     };
@@ -279,13 +276,9 @@ let
               parser = commandApi.commandClass or "typed";
               allowUnknown = (commandApi.commandClass or "typed") == "passthrough";
               hasPositional = builtins.any (spec: spec.kind == "positional") specs;
-              requiredServices = requiredServices;
-              closureSelectedServices = (
-                (compiledExecution.tasks.byId or { }).${taskId}.closureSelectedServices or [ ]
-              );
-              baseClosureSelectedServices = (
-                (compiledExecution.tasks.byId or { }).${taskId}.baseClosureSelectedServices or [ ]
-              );
+              inherit requiredServices;
+              closureSelectedServices = (compiledExecution.tasks.byId or { }).${taskId}.closureSelectedServices or [ ];
+              baseClosureSelectedServices = (compiledExecution.tasks.byId or { }).${taskId}.baseClosureSelectedServices or [ ];
               runner = {
                 type = task.runner.type or "shell";
                 command = if (task.runner.command or null) == null then "" else task.runner.command;
@@ -309,7 +302,7 @@ let
                 softNeeds = task.deps.softNeeds or [ ];
               };
               args = {
-                specs = specs;
+                inherit specs;
                 longKinds = builtins.listToAttrs (
                   builtins.concatLists (
                     map (
@@ -345,7 +338,7 @@ let
                 count = builtins.length preHookIds + builtins.length postHookIds;
               };
               help = {
-                displayName = displayName;
+                inherit displayName;
                 lines = [
                   "${displayName} - ${helpSummary}"
                 ]
@@ -422,7 +415,7 @@ let
               in
               {
                 name = unit.name or "";
-                taskId = taskId;
+                inherit taskId;
                 needs = unit.needs or [ ];
                 locks = unit.locks or [ ];
                 requiredServices = unitRequiredServices;
@@ -451,7 +444,7 @@ let
           {
             name = workflowId;
             value = {
-              mode = mode;
+              inherit mode;
               family =
                 if builtins.match "^workflow\\.([^.]+)\\..+$" workflowId != null then
                   builtins.elemAt (builtins.match "^workflow\\.([^.]+)\\..+$" workflowId) 0
@@ -469,15 +462,9 @@ let
               lockPolicy = workflowExecution.lockPolicy or "exclusive";
               writeSummary = artifacts.writeSummary or false;
               postRunAlways = postRun.alwaysRun or false;
-              closureSelectedServices = (
-                (compiledExecution.workflows.byId or { }).${workflowId}.closureSelectedServices or [ ]
-              );
-              unitClosureSelectedServices = (
-                (compiledExecution.workflows.byId or { }).${workflowId}.unitClosureSelectedServices or [ ]
-              );
-              referenceClosureSelectedServices = (
-                (compiledExecution.workflows.byId or { }).${workflowId}.referenceClosureSelectedServices or [ ]
-              );
+              closureSelectedServices = (compiledExecution.workflows.byId or { }).${workflowId}.closureSelectedServices or [ ];
+              unitClosureSelectedServices = (compiledExecution.workflows.byId or { }).${workflowId}.unitClosureSelectedServices or [ ];
+              referenceClosureSelectedServices = (compiledExecution.workflows.byId or { }).${workflowId}.referenceClosureSelectedServices or [ ];
               plan = map renderWorkflowUnit (workflow.plan or [ ]);
               phases = {
                 preRun = {
@@ -538,7 +525,7 @@ let
   );
 
   taskDirectServicesById = builtins.mapAttrs (
-    _: task: uniquePreserveOrder (((task.requirements or { }).services or [ ]))
+    _: task: uniquePreserveOrder ((task.requirements or { }).services or [ ])
   ) taskSet;
 
   svcEmpty = [ ];
@@ -612,10 +599,10 @@ let
     workflowSelf = _workflowId: inner: inner;
   };
 
-  goTask = fullWalker.goTask;
-  goWorkflow = fullWalker.goWorkflow;
-  goWorkflowExact = fullWalker.goWorkflowExact;
-  goWorkflowReference = fullWalker.goWorkflowReference;
+  inherit (fullWalker) goTask;
+  inherit (fullWalker) goWorkflow;
+  inherit (fullWalker) goWorkflowExact;
+  inherit (fullWalker) goWorkflowReference;
 
   unitsOnlyWalker = closureLib.mkClosureWalker {
     empty = svcEmpty;
@@ -658,20 +645,6 @@ let
       value = goTaskBase [ ] taskId;
     }) taskIds
   );
-
-  _validateTaskRuntimeWorkflowReferences = map (
-    taskId:
-    let
-      task = taskSet.${taskId};
-      validateWorkflowRef =
-        workflowId:
-        if builtins.hasAttr workflowId workflowSet then
-          true
-        else
-          throw "task '${taskId}' runtime references unknown workflow '${workflowId}'";
-    in
-    map validateWorkflowRef (task.runtime.references.workflowIds or [ ])
-  ) taskIds;
 
   taskClosureServicesById = builtins.listToAttrs (
     map (taskId: {
