@@ -27,11 +27,13 @@
         };
       in
       {
-        apps = frameworkOutputs.apps;
-        packages = frameworkOutputs.packages;
-        checks = frameworkOutputs.checks;
-        devShells = frameworkOutputs.devShells;
-        legacyPackages = frameworkOutputs.legacyPackages;
+        inherit (frameworkOutputs)
+          apps
+          packages
+          checks
+          devShells
+          legacyPackages
+          ;
       }
     );
 }
