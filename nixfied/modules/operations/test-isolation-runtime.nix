@@ -175,7 +175,17 @@ in
             fi
 
             run_scope="''${NIXFIED_RUN_ID:-run-$(${pkgs.coreutils}/bin/date -u +%Y%m%d-%H%M%S)-$$}"
-            logs_root="$logs_root_base/$run_scope"
+            logs_root_base_effective="$logs_root_base"
+            if [ -d "$logs_root_base_effective" ] && [ ! -w "$logs_root_base_effective" ]; then
+              logs_root_base_effective="''${TMPDIR:-/tmp}/nixfied-isolation-user-''${UID:-0}"
+              echo "WARN: test-isolation logsDir is not writable base=$logs_root_base using=$logs_root_base_effective"
+            fi
+            if ! mkdir -p "$logs_root_base_effective" 2>/dev/null; then
+              logs_root_base_effective="''${TMPDIR:-/tmp}/nixfied-isolation-user-''${UID:-0}"
+              mkdir -p "$logs_root_base_effective"
+              echo "WARN: test-isolation logsDir create failed base=$logs_root_base using=$logs_root_base_effective"
+            fi
+            logs_root="$logs_root_base_effective/$run_scope"
             mkdir -p "$logs_root"
             echo "INFO: test-isolation matrix slots=''${#isolation_slots[@]} envs=''${#isolation_envs[@]} max_parallel=$effective_max_parallel"
             echo "INFO: test-isolation logs_root=$logs_root"
