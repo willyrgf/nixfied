@@ -19,11 +19,13 @@ The right target is:
 - one checked-in example workspace fixture
 - using only public framework surfaces
 - exercised by a few explicit proof scenarios
-- backed by a smaller set of non-workspace tests for compile guarantees, negative safety rules, and kernel-native semantics
+- backed by a much smaller set of non-workspace unit tests for compile metadata, local helper semantics, and kernel-native logic
 
 The proof workspace should become the backbone of runtime and end-to-end coverage.
 
 It should not become the entire test strategy.
+
+If a test shells through public apps or manages runtime state, it does not qualify as one of those surviving non-workspace tests.
 
 ## Problem
 
@@ -106,14 +108,15 @@ So the correct object under test is a proof workspace, not an app.
 - Exercise the framework through public interfaces, not private harness-only paths.
 - Make cross-feature regressions obvious.
 - Keep PR coverage fast and deterministic.
-- Preserve explicit guarantees for isolation, reproducibility, idempotence, stable CLI behavior, and process cleanup.
+- Preserve explicit guarantees for isolation, reproducibility, idempotence, stable CLI behavior, and process cleanup without snapshotting exact help/error wording by default.
 
 ## Non-Goals
 
 - Do not replace compile/eval proofs with end-to-end smoke.
 - Do not force one scenario to prove every branch and every negative case.
 - Do not make the proof workspace depend on heavyweight real services unless the service-specific behavior is itself the product guarantee.
-- Do not treat every built-in service as equally important on every PR.
+- Do not require every PR to boot heavyweight real-package variants of every service. The proof workspace must still touch every built-in service through the generic lifecycle path.
+- Do not keep standalone help or error wording contract tests unless a specific string is explicitly promoted to API.
 
 ## What The Proof Workspace Should Prove
 
@@ -135,6 +138,8 @@ The workspace should prove that the generated public surfaces are usable togethe
 - `stop-run`
 
 This is a stronger proof than isolated command help assertions because it checks that the public surface is not only present but operational.
+
+The proof here is command viability and coherent behavior, not exact help text or error text snapshots.
 
 ### 2. Runtime Isolation And Placement
 
@@ -190,38 +195,53 @@ The workspace should prove:
 
 This is a framework product promise, not a side detail.
 
-## What The Proof Workspace Should Not Be Asked To Prove
+## What Still Lives Outside The Proof Workspace
 
-Some classes of tests should remain outside the proof workspace.
+Only unit-test-like checks should survive outside the proof workspace.
 
-### Compile/Eval Proofs
+That means:
 
-Keep direct compile proofs for:
+- pure compile/eval proofs
+- pure normalization/serialization/helper proofs
+- kernel-native Rust unit tests
+
+Everything else should move into proof workspace scenarios.
+
+This includes negative behavior.
+
+The framework should not keep a second pile of integration-smoke tests just because the path is a failure path instead of a happy path.
+
+### Compile/Eval Unit Proofs
+
+Keep small deterministic proofs for:
 
 - model determinism
 - state hash determinism
 - service surface catalog publication
 - introspection bundle/schema publication
-- feature inventory publication
+- feature inventory metadata publication
 - contract rendering determinism
 
 These are cheaper and clearer at compile/eval time.
 
-### Negative Safety Rules
+### Runtime Helper And Normalization Unit Proofs
 
-Keep direct targeted tests for:
+Keep small local tests for:
 
-- blocked runtime-owned env overrides
-- blocked sensitive passthrough
-- invalid workflow definitions
-- invalid shell contract args/env
-- invalid run-record payloads
+- shell contract runtime helpers
+- service policy resolution
+- service probe normalization
+- vendored metadata rendering
+- runtime-event helper policy/status derivation
+- small compile-time normalization rules
 
-A proof workspace is bad at negative combinatorics.
+These should prove one local invariant each.
 
-### Kernel-Native Semantics
+They should not materialize a full workspace, orchestrate a long workflow, or depend on exact CLI wording.
 
-Keep Rust-native tests for:
+### Kernel-Native Unit Tests
+
+Keep Rust-native unit tests for:
 
 - run-id semantics
 - summary composition
@@ -232,23 +252,33 @@ Keep Rust-native tests for:
 
 If the semantics already live in the kernel, the strongest cheap proof should live there too.
 
-### Service-Specific Exceptional Behavior
+### Negative And Failure Paths Move Into Workspace Scenarios
 
-Do not force one proof workspace to exercise every built-in service in depth.
+The following kinds of behavior should be proven through the proof workspace, not through standalone Nix integration smokes:
 
-Service-specific tests should survive only where the service has framework-specific exceptional behavior, for example:
+- blocked runtime-owned env overrides
+- blocked sensitive passthrough
+- invalid mode or arg combinations on public commands
+- interruption and cancellation behavior
+- process-tree cleanup behavior
+- install/upgrade misuse paths
+- lifecycle ordering failures visible through public commands
 
-- PostgreSQL backup/restore or test-db lifecycle
-- Helios readiness/sync gating or source-kind rules
-- supervisor/process-compose behavior if it remains a public promise
-
-Everything else should be covered by representative service orchestration inside the proof workspace.
+The proof workspace should own public failure behavior because those failures are part of the framework product surface.
 
 ## Capability Inventory Gaps To Fix First
 
-The current `features` output is useful but incomplete as a test-planning tool.
+The current `features` output is useful but incomplete as a capability inventory.
 
-It exposes major runtime features, but it does not yet model several important guarantees as first-class capabilities.
+All framework capabilities should come from metadata.
+
+Tests consume that metadata.
+
+Tests do not define the capability model.
+
+This is product metadata first, not a second handwritten test taxonomy.
+
+The current inventory exposes major runtime features, but it does not yet model several important guarantees as first-class capabilities.
 
 Before the proof workspace becomes the backbone of the suite, add explicit capability entries for:
 
@@ -266,12 +296,19 @@ Without those entries, the proof workspace would carry implicit coverage instead
 
 ## Proposed Fixture Shape
 
+The proof workspace should live in a dedicated top-level folder.
+
+Recommended path:
+
+- `proof-workspace/`
+
 The proof workspace should be tracked as a seed fixture and materialized into a temp git repo during tests.
 
 Recommended layout:
 
 ```text
-tests/proof-workspace/
+proof-workspace/
+  README.md
   seed/
     flake.nix
     README.md
@@ -288,10 +325,20 @@ tests/proof-workspace/
       workflows.nix
     app/
     fixtures/
+  scenarios/
   lib/
     materialize.nix
     assert.sh
 ```
+
+This is intentionally not under `tests/`.
+
+Reason:
+
+- it is a repository-shaped artifact, not just a test helper
+- it should be possible to recreate a fresh repository from it
+- it should support install/bootstrap round trips
+- it should carry its own `nixfied/project/` ownership clearly
 
 Key rules:
 
@@ -300,9 +347,49 @@ Key rules:
 - the fixture must be deterministic and self-contained
 - the fixture must not depend on developer-local tools or secrets
 
+### Bootstrap Modes
+
+The proof workspace should support two bootstrap modes:
+
+#### 1. Seed Copy Mode
+
+- copy `proof-workspace/seed/` into a temp directory
+- initialize a git repo
+- run proof scenarios directly
+
+This is the fast path for most scenarios.
+
+#### 2. Install Bootstrap Mode
+
+- start from an empty temp directory
+- run `framework::install`
+- materialize the proof workspace project files into the installed wrapper
+- run the same proof scenarios
+
+This is the path that proves repository recreation and wrapper viability.
+
 ## Service Strategy Inside The Proof Workspace
 
-The proof workspace should use deterministic stub-backed services by default.
+All built-in services are product surface at least at the generic lifecycle level.
+
+In the current repository, that means at minimum:
+
+- `helios`
+- `minio`
+- `nginx`
+- `postgres`
+- `reth`
+- supervisor-backed lifecycle execution where it participates in service orchestration
+
+That means the proof workspace must exercise all built-in services through:
+
+- setup/startup
+- ready checks
+- health checks
+- stop/teardown
+- workflow phase integration where relevant
+
+The proof workspace should use deterministic and lightweight implementations where possible.
 
 Why:
 
@@ -311,24 +398,19 @@ Why:
 - clearer failure modes
 - lower CI variance
 
-The workspace should still exercise real framework service orchestration:
+But "lightweight" must not mean "bypass the framework lifecycle."
 
-- setup
-- status
-- ready
-- health
-- stop
-- workflow pre/post phase integration
+The proof workspace still needs to drive the actual framework-owned setup/start/check/stop paths for every shipped service.
 
-But it should not boot heavyweight real packages just to prove generic orchestration.
+Deep service-specific branches beyond the generic lifecycle path do not need to run on every PR.
 
-Recommended representative service mix:
+Examples:
 
-- one plain HTTP/port-bound service
-- one multi-step readiness service
-- one long-running process that spawns a child process for stop/process-tree validation
+- PostgreSQL backup/restore
+- Helios sync gating details
+- supervisor/process-compose edge behavior
 
-Real service packages should be reserved for the few capabilities that truly depend on them.
+Those can be covered by dedicated proof-workspace scenario variants or by unit tests when the logic is local enough.
 
 ## Proposed Proof Scenarios
 
@@ -355,14 +437,17 @@ Representative flow:
 - `nix run .#run-task -- <task-id>`
 - `nix run .#run-workflow -- <workflow-id> --summary`
 - `nix run .#runs`
+- `nix run .#svc::<service>::<op>` for representative service ops across all built-in services
 
 Assertions:
 
 - expected commands exist and execute
 - summary file shape is correct
 - registry events are written
+- all built-in services prove setup/start/ready/health/stop/teardown viability
 - services run in the expected order
 - artifacts land in the expected per-run paths
+- direct command-surface smokes for `help`, `features`, `introspect`, and machine-readable summary output stop being necessary once this is green
 
 ### Scenario 2: Interruption And Process Cleanup
 
@@ -447,6 +532,27 @@ Assertions:
 - project-owned files are preserved when promised
 - framework-owned files are refreshed when promised
 
+### Scenario 6: Failure Path And Guardrail Scenario
+
+Purpose:
+
+- replace the current pile of negative integration tests
+- prove public failures through the same repository-shaped workspace
+
+Representative flow:
+
+- invoke blocked runtime-owned env and sensitive passthrough cases through public commands
+- invoke invalid mode and invalid arg combinations on public commands
+- trigger cancellation and guardrail paths in a real run
+- trigger install/upgrade misuse paths through public commands where relevant
+
+Assertions:
+
+- failure happens at the public boundary, not only in a private helper
+- failure leaves no leaked processes behind
+- failure leaves no corrupted registry or artifact state behind
+- the failure class is stable enough to diagnose without depending on exact wording
+
 ## What The Proof Workspace Can Replace
 
 It should be able to replace large parts of the current runtime/e2e sprawl, especially tests that are really fragments of one bigger guarantee:
@@ -459,20 +565,11 @@ It should be able to replace large parts of the current runtime/e2e sprawl, espe
 - stop/interruption/process cleanup smoke
 - ready/health orchestration matrix smoke
 - wrapper runnability smoke
+- public negative-path and guardrail smokes
 
 This does not mean one scenario replaces every current test file one-for-one.
 
 It means the proof workspace should become the primary evidence for those behaviors, and overlapping narrower tests should be deleted aggressively.
-
-## What Should Still Stay Outside
-
-The following should survive as separate tests if they remain real guarantees:
-
-- compile/eval publication proofs
-- negative env/safety tests
-- kernel-native tests
-- service-specific exceptional behavior tests
-- a few direct CLI contract checks where exact help/error wording is the product contract
 
 ## CI Implications
 
@@ -484,13 +581,14 @@ Recommended model:
 - kernel native tests
 - proof workspace happy path
 - proof workspace interruption/process cleanup
+- proof workspace failure-path/guardrail scenario
 
 ### Path-Triggered PR Or Pre-Merge
 
 - proof workspace ephemeral scenario
 - proof workspace isolation scenario
 - wrapper round-trip scenario
-- service-specific exceptional scenarios
+- service-specific exceptional scenario variants that are too heavy for every PR
 
 ### Nightly Or Release
 
@@ -510,10 +608,10 @@ This is much leaner than running dozens of unrelated smokes on every PR while st
 
 ### Stage 2: Create The Seed Workspace
 
-- add `tests/proof-workspace/seed/`
+- add `proof-workspace/seed/`
 - use only public framework surfaces
 - keep it deterministic and readable
-- add stub-backed services for representative orchestration patterns
+- make every built-in service visible through the generic lifecycle path
 
 ### Stage 3: Add The First Two Proof Scenarios
 
@@ -522,16 +620,23 @@ This is much leaner than running dozens of unrelated smokes on every PR while st
 
 These two scenarios should be enough to start deleting a meaningful subset of current runtime/e2e smokes.
 
-### Stage 4: Add Ephemeral And Isolation Scenarios
+This is the first real cutover point. Do not wait for every later scenario before deleting the obvious runtime duplication.
+
+### Stage 4: Add The Failure-Path Scenario
+
+- move negative integration coverage into the proof workspace
+- stop keeping separate negative-path smokes for public runtime behavior
+
+### Stage 5: Add Ephemeral And Isolation Scenarios
 
 - move fragmented ephemeral assertions into one coherent proof workspace story
 - move fragmented isolation assertions into the public `test-isolation` path
 
-### Stage 5: Add Wrapper Round-Trip
+### Stage 6: Add Wrapper Round-Trip
 
 - prove install and upgrade using the same seed workspace
 
-### Stage 6: Delete Aggressively
+### Stage 7: Delete Aggressively
 
 Delete old tests if:
 
@@ -541,21 +646,33 @@ Delete old tests if:
 
 ## Decision Rules
 
-When deciding whether to keep an old test after the proof workspace lands, ask:
+Use a shape-based routing rule, not a vague "useful test" rule.
 
-1. Is this proving a real user-visible or framework-stability guarantee?
-2. Is the proof workspace already proving that guarantee through a stronger boundary?
-3. Could this be proven cheaper at compile/eval or kernel-native level?
-4. Is this mostly an implementation-shape assertion?
+A test is allowed to survive outside the proof workspace only if all of the following are true:
 
-If the answers are:
+1. It evaluates compiler output, helper logic, or kernel logic in isolation.
+2. It proves one local invariant with one local reason for failure.
+3. It does not require a materialized repository, `git init`, installed wrapper, or workspace marker.
+4. It does not invoke a public app as the thing under test.
+5. It does not depend on runtime roots, registry side effects, artifact placement, service lifecycle, process cleanup, install/upgrade, slot/env isolation, or ephemeral execution.
+6. It does not primarily verify exact help or error wording.
+7. It is materially cheaper and clearer than proving the same thing through the proof workspace.
 
-- no
-- yes
-- yes
-- yes
+If a test does any of the following, it belongs in the proof workspace instead:
 
-then delete it.
+- shells through `nix run .#...`
+- proves command composition across multiple public surfaces
+- proves ready/health/service setup/start/stop/teardown
+- proves registry/artifact/runtime-root placement
+- proves isolation, ephemeral behavior, interruption, or cleanup
+- proves install/upgrade or wrapper runnability
+- proves public failure behavior
+
+It should be:
+
+- deleted
+- replaced by a proof-workspace scenario
+- or rewritten into a smaller unit test
 
 ## Risks
 
@@ -586,18 +703,215 @@ Mitigation:
 
 - use the same seed workspace for wrapper round-trip tests instead of separate custom fixtures
 
-## Open Questions
+## Resolved Decisions
 
-1. Which built-in services are true product surface versus examples or convenience integrations?
-<!-- We want to use all services, at least the setup/startup process, checks and teardown process. -->
-2. Which exact help/error strings are contractual enough to justify direct contract tests?
-<!-- Cant imagine one -->
-3. Should the proof workspace live under `tests/proof-workspace/` or another dedicated top-level folder?
-<!-- I think a dedicated top-level folder is required, it also allows us to recreate a new repository from scratch using the top-level folder + the install process of the framework, the own project module.nix etc... -->
-4. How much of the current `features` inventory should become test-planning metadata?
-<!-- All features should come from metadata. Not really an test thing. -->
-5. Which current tests should be the first deletion targets once the first two proof scenarios are green?
-<!-- I want your help to describe exactly all tests that should be deleted (most of them) and the little unit test alike ones that should be maintained. -->
+1. All built-in services are framework product surface at least for setup/startup, checks, and teardown. In the current repo that means `helios`, `minio`, `nginx`, `postgres`, `reth`, plus supervisor-backed lifecycle execution where relevant. The proof workspace must touch all of them at that level.
+2. No standalone exact help/error string contract tests are justified by default. The contract is behavior and surface viability, not wording. If a string ever becomes contractual, that should be an explicit policy decision, not a testing accident.
+3. The proof workspace should live in a dedicated top-level folder, not under `tests/`.
+4. All framework capabilities should come from metadata. Tests consume that metadata; they do not define it.
+5. The current-suite keep/delete plan is explicit below.
+
+## Current Suite Triage
+
+### Keep As Unit-Style Anchors
+
+These are the current tests that fit the intended surviving shape, either as-is or with only minor shrinkage:
+
+```text
+tests/framework/contract-render-snapshot.nix
+tests/framework/cross-machine-hash.nix
+tests/framework/helios-pinned-source-contract.nix
+tests/framework/introspection-bundle-determinism.nix
+tests/framework/kernel-native-tests.nix
+tests/framework/model-hash.nix
+tests/framework/registry-replay.nix
+tests/framework/run-record-validator-failure.nix
+tests/framework/runtime-events-policy-smoke.nix
+tests/framework/runtime-events-status-smoke.nix
+tests/framework/scheduler-order.nix
+tests/framework/service-policy-runtime-smoke.nix
+tests/framework/service-probe-overrides-contract.nix
+tests/framework/service-surface-catalog-contract.nix
+tests/framework/vendored-metadata-contract.nix
+```
+
+Also keep the pure eval proof for the introspection schema shape.
+
+Also keep a pure eval proof that capability metadata is complete and structurally valid. That is the replacement concept for the current `features` surface snapshot style of testing.
+
+Some of these files still carry legacy `-smoke` names, but their shape is local/helper-level and that is what matters.
+
+### Rewrite Into Smaller Unit Tests, Then Delete The Current File Form
+
+These files are proving real things, but the current form is too broad or too presentation-coupled:
+
+```text
+tests/framework/compiler-validation.nix
+tests/framework/excluded-service-evaluation.nix
+tests/framework/features-surface-contract.nix
+tests/framework/package-output-contract.nix
+tests/framework/postgres-config-artifacts-contract.nix
+tests/framework/service-requirements-contract.nix
+tests/framework/shell-contract-runtime-smoke.nix
+tests/framework/workflow-validation-errors.nix
+```
+
+The goal is to split these into small local invariants, not keep the current monoliths.
+
+In particular:
+
+- `features-surface-contract.nix` should become a pure metadata proof over `model.features`, not a public CLI snapshot.
+- `package-output-contract.nix` should become pure publication checks over apps/packages, not `--help` grep.
+- `shell-contract-runtime-smoke.nix` should keep env/arg/exit semantics but stop asserting exact rendered error lines.
+- `workflow-validation-errors.nix` should keep invalid-model evaluation failures and stop grepping source text for message literals.
+
+### Delete Once The Proof Workspace Scenarios Are Green
+
+These are the current tests that should be removed from the suite once the proof workspace covers the corresponding behavior:
+
+```text
+tests/framework/artifacts-root-override-isolation-smoke.nix
+tests/framework/artifacts-run-isolation-smoke.nix
+tests/framework/caller-pwd-remote-projectroot-smoke.nix
+tests/framework/ci-mode-matrix-smoke.nix
+tests/framework/disabled-service-no-package-resolution-smoke.nix
+tests/framework/discovery-command-surfaces-smoke.nix
+tests/framework/docs-guidance-contract.nix
+tests/framework/env-loader-strict-smoke.nix
+tests/framework/ephemeral-copy-budget-smoke.nix
+tests/framework/ephemeral-execution-smoke.nix
+tests/framework/ephemeral-retention-smoke.nix
+tests/framework/ephemeral-runtime-behavior-smoke.nix
+tests/framework/ephemeral-runtime-env-isolation-smoke.nix
+tests/framework/framework-install-filter-smoke.nix
+tests/framework/framework-install-thin-smoke.nix
+tests/framework/framework-install-vendor-smoke.nix
+tests/framework/framework-selfhost-contract.nix
+tests/framework/framework-template-install-upgrade-help-smoke.nix
+tests/framework/framework-upgrade-preserve-smoke.nix
+tests/framework/introspect-contract.nix
+tests/framework/isolation-nested-run-id-smoke.nix
+tests/framework/local-override-introspect-contract.nix
+tests/framework/logging-injection-smoke.nix
+tests/framework/machine-output-app-smoke.nix
+tests/framework/nginx-site-management-smoke.nix
+tests/framework/nix-checks-deadnix-issues-fail-smoke.nix
+tests/framework/nix-checks-nil-issues-fail-smoke.nix
+tests/framework/nix-checks-parent-workflow-skip-smoke.nix
+tests/framework/nix-checks-statix-issues-fail-smoke.nix
+tests/framework/nix-checks-visible-output-smoke.nix
+tests/framework/nix-ci-workflow-contract.nix
+tests/framework/nix-client-env-smoke.nix
+tests/framework/no-legacy-project-modules.nix
+tests/framework/operations-contract.nix
+tests/framework/orchestrator-arg-forwarding-smoke.nix
+tests/framework/orchestrator-signal-cleanup-smoke.nix
+tests/framework/orchestrator-stop-controls-smoke.nix
+tests/framework/parallel-runner-process-tree-smoke.nix
+tests/framework/parallel-runner-smoke.nix
+tests/framework/parallel-worker-cap-invalid-smoke.nix
+tests/framework/parallel-worker-cap-smoke.nix
+tests/framework/postgres-backup-restore-smoke.nix
+tests/framework/postgres-config-artifacts-smoke.nix
+tests/framework/postgres-kernel-probe-lifecycle-smoke.nix
+tests/framework/project-config-boundary.nix
+tests/framework/ready-health-matrix-smoke.nix
+tests/framework/ready-health-shutdown-smoke.nix
+tests/framework/ready-helios-sync-gate-smoke.nix
+tests/framework/registry-detail-derivation-smoke.nix
+tests/framework/registry-events-runtime-contract.nix
+tests/framework/registry-lock-recovery-smoke.nix
+tests/framework/run-id-active-collision-suffix-smoke.nix
+tests/framework/run-id-noise-stability-smoke.nix
+tests/framework/run-id-semantic-inputs-contract.nix
+tests/framework/run-record-atomicity-smoke.nix
+tests/framework/runtime-env-isolation-smoke.nix
+tests/framework/runtime-owned-env-blocked-smoke.nix
+tests/framework/selected-source-only-resolution-smoke.nix
+tests/framework/sensitive-pass-through-smoke.nix
+tests/framework/service-dir-isolation-smoke.nix
+tests/framework/service-lifecycle-matrix-smoke.nix
+tests/framework/service-op-composition-contract.nix
+tests/framework/service-probe-overrides-smoke.nix
+tests/framework/service-set-behavior-contract.nix
+tests/framework/slot-env-runtime-smoke.nix
+tests/framework/summary-json-smoke.nix
+tests/framework/supervisor-lifecycle-smoke.nix
+tests/framework/task-hooks-smoke.nix
+tests/framework/test-mode-cli-contract-smoke.nix
+tests/framework/vendored-metadata-packaged-source-smoke.nix
+tests/framework/workflow-lifecycle-smoke.nix
+tests/framework/workflow-mode-derived-smoke.nix
+tests/framework/workflow-probe-scope-smoke.nix
+tests/framework/workspace-registry-isolation-smoke.nix
+```
+
+This delete list is intentionally large. Most of the current suite is integration-shaped and should not survive once the proof workspace exists.
+
+### First Deletion Block Once Scenarios 1 And 2 Are Green
+
+These are the earliest high-confidence deletion targets after the happy-path and interruption scenarios exist:
+
+```text
+tests/framework/ci-mode-matrix-smoke.nix
+tests/framework/discovery-command-surfaces-smoke.nix
+tests/framework/introspect-contract.nix
+tests/framework/local-override-introspect-contract.nix
+tests/framework/machine-output-app-smoke.nix
+tests/framework/operations-contract.nix
+tests/framework/orchestrator-arg-forwarding-smoke.nix
+tests/framework/orchestrator-signal-cleanup-smoke.nix
+tests/framework/orchestrator-stop-controls-smoke.nix
+tests/framework/parallel-runner-process-tree-smoke.nix
+tests/framework/parallel-runner-smoke.nix
+tests/framework/parallel-worker-cap-invalid-smoke.nix
+tests/framework/parallel-worker-cap-smoke.nix
+tests/framework/ready-health-matrix-smoke.nix
+tests/framework/ready-health-shutdown-smoke.nix
+tests/framework/registry-detail-derivation-smoke.nix
+tests/framework/registry-events-runtime-contract.nix
+tests/framework/run-id-semantic-inputs-contract.nix
+tests/framework/run-record-atomicity-smoke.nix
+tests/framework/service-lifecycle-matrix-smoke.nix
+tests/framework/service-op-composition-contract.nix
+tests/framework/service-set-behavior-contract.nix
+tests/framework/summary-json-smoke.nix
+tests/framework/task-hooks-smoke.nix
+tests/framework/workflow-lifecycle-smoke.nix
+tests/framework/workflow-mode-derived-smoke.nix
+tests/framework/workflow-probe-scope-smoke.nix
+```
+
+### Later Deletion Blocks
+
+- After Scenario 3 and 4: delete the fragmented ephemeral, env-loader, slot/env, registry/artifact isolation, and `test-isolation`-adjacent smokes.
+- After Scenario 5: delete the install, vendor, thin-wrapper, self-host, and upgrade preservation smokes.
+- After Scenario 6: delete the blocked-env, sensitive passthrough, invalid-cap, and other public negative-path smokes.
+
+### Support Files To Delete Or Move With The Integration Suite
+
+These are not standalone tests, but they exist only to support the integration-heavy suite that this RFC is replacing:
+
+```text
+tests/framework/launcher-disabled-nginx-override.nix
+tests/framework/launcher-helios-task-module.nix
+tests/framework/launcher-skip-helios-override.nix
+tests/framework/poison-helios-source-override.nix
+tests/framework/poison-package.nix
+tests/framework/service-set-enabled-module.nix
+tests/framework/lib/ci-probe-model.nix
+tests/framework/lib/harness.nix
+tests/framework/lib/runtime-fixture.nix
+tests/framework/lib/test-probe-overrides.nix
+```
+
+`tests/framework/lib/shell-helpers.nix` should either be trimmed down for surviving unit tests or replaced by `proof-workspace/lib/assert.sh`.
+
+`tests/framework/default.nix`, `tests/framework/framework-test-catalog.nix`, and `nixfied/framework/testing/catalog.nix` will need to be rebuilt around the new split:
+
+- proof-workspace scenarios
+- surviving unit tests
+- profile selection based on capability metadata
 
 ## Current Recommendation
 
@@ -607,4 +921,6 @@ Do not adopt the "single app proves everything" model.
 
 Use one canonical workspace fixture plus a small scenario suite as the primary runtime/e2e proof system for the framework.
 
-Keep compile proofs, negative safety tests, and kernel-native tests outside that system.
+Keep only small compile/helper/kernel unit tests outside that system.
+
+Do not preserve a separate class of standalone negative integration smokes.
