@@ -11,23 +11,34 @@
     "scenario-1-public-surface-happy-path" = {
       checkName = "proof-workspace-scenario-1-public-surface-happy-path";
       ownerFile = "proof-workspace/scenarios/scenario-1-public-surface-happy-path.nix";
-      profiles = [ ];
-      enabled = false;
+      profiles = [
+        "feature-proof"
+        "ci"
+        "full"
+      ];
+      enabled = true;
       tier = "pr";
     };
 
     "scenario-2-interruption-process-cleanup" = {
       checkName = "proof-workspace-scenario-2-interruption-process-cleanup";
       ownerFile = "proof-workspace/scenarios/scenario-2-interruption-process-cleanup.nix";
-      profiles = [ ];
-      enabled = false;
+      profiles = [
+        "feature-proof"
+        "ci"
+        "full"
+      ];
+      enabled = true;
       tier = "pr";
     };
 
     "scenario-3-ephemeral-workspace" = {
       checkName = "proof-workspace-scenario-3-ephemeral-workspace";
       ownerFile = "proof-workspace/scenarios/scenario-3-ephemeral-workspace.nix";
-      profiles = [ ];
+      profiles = [
+        "ci"
+        "full"
+      ];
       enabled = false;
       tier = "pre-merge";
     };
@@ -35,7 +46,10 @@
     "scenario-4-isolation-matrix" = {
       checkName = "proof-workspace-scenario-4-isolation-matrix";
       ownerFile = "proof-workspace/scenarios/scenario-4-isolation-matrix.nix";
-      profiles = [ ];
+      profiles = [
+        "ci"
+        "full"
+      ];
       enabled = false;
       tier = "pre-merge";
     };
@@ -43,7 +57,7 @@
     "scenario-5-wrapper-roundtrip" = {
       checkName = "proof-workspace-scenario-5-wrapper-roundtrip";
       ownerFile = "proof-workspace/scenarios/scenario-5-wrapper-roundtrip.nix";
-      profiles = [ ];
+      profiles = [ "full" ];
       enabled = false;
       tier = "pre-merge";
     };
@@ -51,8 +65,12 @@
     "scenario-6-failure-guardrails" = {
       checkName = "proof-workspace-scenario-6-failure-guardrails";
       ownerFile = "proof-workspace/scenarios/scenario-6-failure-guardrails.nix";
-      profiles = [ ];
-      enabled = false;
+      profiles = [
+        "feature-proof"
+        "ci"
+        "full"
+      ];
+      enabled = true;
       tier = "pr";
     };
   };
