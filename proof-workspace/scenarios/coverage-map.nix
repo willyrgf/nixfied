@@ -18,6 +18,14 @@
       ];
       enabled = true;
       tier = "pr";
+      assertedCapabilities = [
+        "runtime.machine-output-behavior"
+        "runtime.output.prefix-contract"
+        "runtime.service-operations"
+        "runtime.summary-sidecars"
+        "runtime.task-hooks"
+        "runtime.workflow-service-phases"
+      ];
     };
 
     "scenario-2-interruption-process-cleanup" = {
@@ -30,6 +38,12 @@
       ];
       enabled = true;
       tier = "pr";
+      assertedCapabilities = [
+        "runtime.process-group-cleanup"
+        "runtime.stop-run-semantics"
+        "runtime.summary-sidecars"
+        "runtime.workflow-interruption-semantics"
+      ];
     };
 
     "scenario-3-ephemeral-workspace" = {
@@ -41,6 +55,11 @@
       ];
       enabled = true;
       tier = "pre-merge";
+      assertedCapabilities = [
+        "runtime.ephemeral.env-file-loading"
+        "runtime.ephemeral.include-untracked"
+        "runtime.ephemeral.source-materialization"
+      ];
     };
 
     "scenario-4-isolation-matrix" = {
@@ -52,6 +71,10 @@
       ];
       enabled = true;
       tier = "pre-merge";
+      assertedCapabilities = [
+        "runtime.artifact-placement-semantics"
+        "runtime.registry.isolation"
+      ];
     };
 
     "scenario-5-wrapper-roundtrip" = {
@@ -60,6 +83,10 @@
       profiles = [ "full" ];
       enabled = true;
       tier = "pre-merge";
+      assertedCapabilities = [
+        "runtime.install-semantics"
+        "runtime.upgrade-semantics"
+      ];
     };
 
     "scenario-6-failure-guardrails" = {
@@ -72,6 +99,11 @@
       ];
       enabled = true;
       tier = "pr";
+      assertedCapabilities = [
+        "runtime.machine-output-behavior"
+        "runtime.output.prefix-contract"
+        "runtime.workflow-interruption-semantics"
+      ];
     };
   };
 
