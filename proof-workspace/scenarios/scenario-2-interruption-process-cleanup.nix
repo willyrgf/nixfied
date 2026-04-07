@@ -1,10 +1,4 @@
-{
-  pkgs,
-  model,
-  services,
-  serviceDefinitions,
-  registry,
-}:
+{ pkgs, ... }:
 let
   materialize = import ../lib/materialize.nix {
     inherit pkgs;
