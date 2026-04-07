@@ -175,6 +175,19 @@ selectionCatalog
           ;
       };
 
+      "proof-workspace-scenario-1-public-surface-happy-path" =
+        import ../../proof-workspace/scenarios/scenario-1-public-surface-happy-path.nix
+          {
+            inherit
+              pkgs
+              model
+              services
+              serviceDefinitions
+              registry
+              apps
+              ;
+          };
+
       "nix-client-env-smoke" = import ./nix-client-env-smoke.nix {
         inherit
           pkgs
