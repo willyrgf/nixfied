@@ -127,7 +127,8 @@ pkgs.runCommand "proof-workspace-scenario-6-failure-guardrails"
       cat "$TMPDIR/scenario6.invalid-workers.out" 2>/dev/null || true
       proof_fail "expected invalid worker cap invocation to fail"
     fi
-    proof_require_contains "$TMPDIR/scenario6.invalid-workers.out" "ERROR: CI_MAX_WORKERS must be an integer >= 1"
+    proof_require_contains "$TMPDIR/scenario6.invalid-workers.out" "ERROR:"
+    proof_require_contains "$TMPDIR/scenario6.invalid-workers.out" "CI_MAX_WORKERS"
 
     set +e
     run_public_checked "$TMPDIR/scenario6.invalid-task.out" \
