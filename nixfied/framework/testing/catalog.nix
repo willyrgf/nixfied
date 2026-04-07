@@ -32,6 +32,7 @@ let
       "operations-contract"
       "package-output-contract"
       "postgres-config-artifacts-contract"
+      "proof-workspace-coverage-validation"
       "project-config-boundary"
       "scheduler-order"
       "service-probe-overrides-contract"
