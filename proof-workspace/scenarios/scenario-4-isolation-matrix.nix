@@ -97,6 +97,7 @@ pkgs.runCommand "proof-workspace-scenario-4-isolation-matrix"
       pkgs.git
       pkgs.gnugrep
       pkgs.gnused
+      pkgs.nix
     ];
   }
   ''
@@ -112,6 +113,19 @@ pkgs.runCommand "proof-workspace-scenario-4-isolation-matrix"
 
     workspace="$TMPDIR/proof-seed"
     proof_workspace_bootstrap_seed_copy "$workspace"
+
+    mkdir -p "$workspace/.proof-home/.cache"
+    if ! (
+      cd "$workspace"
+      HOME="$workspace/.proof-home" XDG_CACHE_HOME="$workspace/.proof-home/.cache" \
+        nix run "path:$workspace#test-isolation" -- --slot 5 --env dev --max-parallel 1 > "$TMPDIR/scenario4.public-app.out" 2>&1
+    ); then
+      cat "$TMPDIR/scenario4.public-app.out" 2>/dev/null || true
+      exit 1
+    fi
+    proof_require_file "$TMPDIR/scenario4.public-app.out"
+    proof_require_contains "$TMPDIR/scenario4.public-app.out" "INFO: test-isolation logs_root="
+    proof_require_contains "$TMPDIR/scenario4.public-app.out" "OK: test-isolation completed total=1"
 
     logs_root="$TMPDIR/isolation-logs"
     mkdir -p "$logs_root"
