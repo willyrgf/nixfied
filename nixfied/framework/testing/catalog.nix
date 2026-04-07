@@ -1,6 +1,10 @@
 let
   coverageMap = import ../../../proof-workspace/scenarios/coverage-map.nix;
   coverageScenarios = coverageMap.scenarios or { };
+  coverageCapabilities = coverageMap.capabilities or { };
+  deletionEligibility = coverageMap.deletionEligibility or { };
+  deletionRequiredProfiles = deletionEligibility.requiredProfiles or [ ];
+  firstBlockDeletionEntries = deletionEligibility.firstBlock or [ ];
   scenarioIds = builtins.sort builtins.lessThan (builtins.attrNames coverageScenarios);
 
   appendUnique =
@@ -39,7 +43,7 @@ let
     "full"
   ];
 
-  shardChecks = {
+  baseShardChecks = {
     compile = [
       "compiler-validation"
       "contract-render-snapshot"
@@ -159,7 +163,7 @@ let
     ];
   };
 
-  featureProofShardChecks = {
+  baseFeatureProofShardChecks = {
     compile = [ "features-surface-contract" ];
     manifest = [ "machine-output-app-smoke" ];
     kernel = [ ];
@@ -168,8 +172,8 @@ let
     migration = [ ];
   };
 
-  ciShardChecks = {
-    inherit (shardChecks)
+  baseCiShardChecks = {
+    inherit (baseShardChecks)
       compile
       manifest
       kernel
@@ -178,6 +182,79 @@ let
       ;
     e2e = enabledScenarioChecksForProfile "ci";
   };
+
+  baseProfileShardChecks = {
+    "feature-proof" = baseFeatureProofShardChecks;
+    ci = baseCiShardChecks;
+    full = baseShardChecks;
+  };
+
+  allProfileChecksFrom =
+    profileShardChecks: profileName:
+    builtins.concatLists (map (shardName: profileShardChecks.${profileName}.${shardName} or [ ]) order);
+
+  replacementCapabilityIsGreen =
+    requiredProfiles: capabilityId:
+    let
+      capabilityExists = builtins.hasAttr capabilityId coverageCapabilities;
+      capability =
+        if capabilityExists then
+          coverageCapabilities.${capabilityId}
+        else
+          { };
+      layer = capability.layer or "";
+      scenarioRefs = capability.scenarios or [ ];
+      scenarioCheckForProfile =
+        profileName:
+        builtins.any (
+          scenarioId:
+          if !(builtins.hasAttr scenarioId coverageScenarios) then
+            false
+          else
+            let
+              scenario = coverageScenarios.${scenarioId};
+              enabled = scenario.enabled or false;
+              checkName = scenario.checkName or "";
+            in
+            enabled && builtins.elem checkName (allProfileChecksFrom baseProfileShardChecks profileName)
+        ) scenarioRefs;
+    in
+    capabilityExists
+    && layer == "proof-workspace"
+    && scenarioRefs != [ ]
+    && requiredProfiles != [ ]
+    && builtins.all scenarioCheckForProfile requiredProfiles;
+
+  deleteCheckEntryIsGreen =
+    entry:
+    let
+      checkName = entry.checkName or "";
+      replacementCapabilities = entry.replacementCapabilities or [ ];
+      requiredProfiles = entry.requiredProfiles or deletionRequiredProfiles;
+    in
+    checkName != ""
+    && replacementCapabilities != [ ]
+    && builtins.all (capabilityId: replacementCapabilityIsGreen requiredProfiles capabilityId) replacementCapabilities;
+
+  firstBlockDeletedChecks =
+    builtins.foldl'
+      (
+        acc: entry:
+        let
+          checkName = entry.checkName or "";
+        in
+        if deleteCheckEntryIsGreen entry && !(builtins.elem checkName acc) then acc ++ [ checkName ] else acc
+      )
+      [ ]
+      firstBlockDeletionEntries;
+
+  removeDeletedChecks = checks: builtins.filter (checkName: !(builtins.elem checkName firstBlockDeletedChecks)) checks;
+
+  shardChecks = builtins.mapAttrs (_: checks: removeDeletedChecks checks) baseShardChecks;
+
+  featureProofShardChecks = builtins.mapAttrs (_: checks: removeDeletedChecks checks) baseFeatureProofShardChecks;
+
+  ciShardChecks = builtins.mapAttrs (_: checks: removeDeletedChecks checks) baseCiShardChecks;
 
   profileShardChecks = {
     "feature-proof" = featureProofShardChecks;
