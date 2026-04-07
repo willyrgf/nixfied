@@ -48,6 +48,15 @@ let
     "runtime.registry.isolation"
     "runtime.service-operations"
     "runtime.workflow-service-phases"
+    "runtime.machine-output-behavior"
+    "runtime.summary-sidecars"
+    "runtime.task-hooks"
+    "runtime.stop-run-semantics"
+    "runtime.process-group-cleanup"
+    "runtime.install-semantics"
+    "runtime.upgrade-semantics"
+    "runtime.workflow-interruption-semantics"
+    "runtime.artifact-placement-semantics"
     "runtime.output.prefix-contract"
   ];
 
