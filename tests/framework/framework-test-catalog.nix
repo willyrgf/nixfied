@@ -188,6 +188,18 @@ selectionCatalog
               ;
           };
 
+      "proof-workspace-scenario-2-interruption-process-cleanup" =
+        import ../../proof-workspace/scenarios/scenario-2-interruption-process-cleanup.nix
+          {
+            inherit
+              pkgs
+              model
+              services
+              serviceDefinitions
+              registry
+              ;
+          };
+
       "nix-client-env-smoke" = import ./nix-client-env-smoke.nix {
         inherit
           pkgs
