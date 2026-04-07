@@ -87,6 +87,36 @@ let
     )
   ) (builtins.attrNames capabilities);
 
+  capabilityHasAssertionOwnership =
+    capabilityId:
+    let
+      capability = capabilities.${capabilityId};
+      scenarioRefs = capability.scenarios or [ ];
+    in
+    builtins.any (
+      scenarioId:
+      if !(builtins.hasAttr scenarioId scenarios) then
+        false
+      else
+        let
+          scenario = scenarios.${scenarioId};
+          assertedCapabilities = scenario.assertedCapabilities or [ ];
+        in
+        builtins.elem capabilityId assertedCapabilities
+    ) scenarioRefs;
+
+  capabilitiesMissingAssertionOwnership = builtins.filter (
+    capabilityId:
+    let
+      capability = capabilities.${capabilityId};
+      layer = capability.layer or "";
+      scenarioRefs = capability.scenarios or [ ];
+    in
+    layer == "proof-workspace"
+    && scenarioRefs != [ ]
+    && !(capabilityHasAssertionOwnership capabilityId)
+  ) (builtins.attrNames capabilities);
+
   deletionEligibility = coverageMap.deletionEligibility or { };
   defaultRequiredProfiles = deletionEligibility.requiredProfiles or [ ];
   deletionEntries = (deletionEligibility.firstBlock or [ ]) ++ (deletionEligibility.remaining or [ ]);
@@ -160,6 +190,8 @@ assert (scenariosMissingProfileScheduling == [ ])
   || throw "proof-workspace coverage validation failed: enabled scenario profiles are not scheduled in catalog: ${showList scenariosMissingProfileScheduling}";
 assert (capabilitiesMissingScenarioOwnership == [ ])
   || throw "proof-workspace coverage validation failed: proof-workspace capabilities reference missing scenarios: ${showList capabilitiesMissingScenarioOwnership}";
+assert (capabilitiesMissingAssertionOwnership == [ ])
+  || throw "proof-workspace coverage validation failed: proof-workspace capabilities missing explicit scenario assertion ownership: ${showList capabilitiesMissingAssertionOwnership}";
 assert (deletionMissingReplacementCapabilities == [ ])
   || throw "proof-workspace coverage validation failed: deleted checks missing replacement capabilities: ${showDeletionEntries deletionMissingReplacementCapabilities}";
 assert (deletionMissingGreenCoverage == [ ])
