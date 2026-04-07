@@ -168,6 +168,13 @@ selectionCatalog
           ;
       };
 
+      "proof-workspace-coverage-validation" = import ./proof-workspace-coverage-validation.nix {
+        inherit
+          pkgs
+          model
+          ;
+      };
+
       "nix-client-env-smoke" = import ./nix-client-env-smoke.nix {
         inherit
           pkgs
