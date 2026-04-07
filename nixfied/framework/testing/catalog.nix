@@ -1,4 +1,29 @@
 let
+  coverageMap = import ../../../proof-workspace/scenarios/coverage-map.nix;
+  coverageScenarios = coverageMap.scenarios or { };
+  scenarioIds = builtins.sort builtins.lessThan (builtins.attrNames coverageScenarios);
+
+  appendUnique =
+    base: additions:
+    base ++ builtins.filter (checkName: !(builtins.elem checkName base)) additions;
+
+  enabledScenarioChecksForProfile =
+    profileName:
+    builtins.sort builtins.lessThan (
+      builtins.concatLists (
+        map (
+          scenarioId:
+          let
+            scenario = coverageScenarios.${scenarioId};
+            enabled = scenario.enabled or false;
+            profiles = scenario.profiles or [ ];
+            checkName = scenario.checkName or "";
+          in
+          if enabled && checkName != "" && builtins.elem profileName profiles then [ checkName ] else [ ]
+        ) scenarioIds
+      )
+    );
+
   order = [
     "compile"
     "manifest"
@@ -126,7 +151,8 @@ let
       "task-hooks-smoke"
       "test-mode-cli-contract-smoke"
       "vendored-metadata-packaged-source-smoke"
-    ];
+    ]
+    ++ enabledScenarioChecksForProfile "full";
 
     migration = [
       "no-legacy-project-modules"
@@ -138,7 +164,7 @@ let
     manifest = [ "machine-output-app-smoke" ];
     kernel = [ ];
     adapters = [ ];
-    e2e = [ "ephemeral-runtime-behavior-smoke" ];
+    e2e = appendUnique [ "ephemeral-runtime-behavior-smoke" ] (enabledScenarioChecksForProfile "feature-proof");
     migration = [ ];
   };
 
@@ -150,7 +176,7 @@ let
       adapters
       migration
       ;
-    e2e = [ ];
+    e2e = enabledScenarioChecksForProfile "ci";
   };
 
   profileShardChecks = {
