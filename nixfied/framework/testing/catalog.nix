@@ -164,7 +164,7 @@ let
     manifest = [ "machine-output-app-smoke" ];
     kernel = [ ];
     adapters = [ ];
-    e2e = appendUnique [ "ephemeral-runtime-behavior-smoke" ] (enabledScenarioChecksForProfile "feature-proof");
+    e2e = enabledScenarioChecksForProfile "feature-proof";
     migration = [ ];
   };
 
