@@ -294,6 +294,39 @@ Before the proof workspace becomes the backbone of the suite, add explicit capab
 
 Without those entries, the proof workspace would carry implicit coverage instead of explicit coverage.
 
+### Coverage Mapping Contract (Required Before Deletions)
+
+Capability metadata is necessary but not sufficient.
+
+We also need an explicit capability -> scenario ownership map that CI can validate.
+
+Recommended file:
+
+- `proof-workspace/scenarios/coverage-map.nix`
+
+Recommended shape:
+
+```nix
+{
+  "runtime.workflow-interruption" = {
+    layer = "proof-workspace";
+    scenarios = [ "scenario-2-interruption-process-cleanup" ];
+    replaces = [
+      "tests/framework/orchestrator-signal-cleanup-smoke.nix"
+      "tests/framework/orchestrator-stop-controls-smoke.nix"
+    ];
+  };
+}
+```
+
+Required CI gates before deleting any overlapping tests:
+
+- every `coverageRequired = true` capability is mapped to at least one proof scenario or a surviving unit/kernel test with explicit rationale
+- every mapped proof scenario runs in at least one CI profile
+- deletion PRs fail unless each deleted test has a mapped replacement capability and a currently green proving scenario
+
+This keeps deletion behavior explicit and mechanically enforced instead of policy-only.
+
 ## Proposed Fixture Shape
 
 The proof workspace should live in a dedicated top-level folder.
@@ -354,7 +387,7 @@ The proof workspace should support two bootstrap modes:
 #### 1. Seed Copy Mode
 
 - copy `proof-workspace/seed/` into a temp directory
-- initialize a git repo
+- initialize a git repo and commit a baseline (`git init`, `git add .`, `git commit`)
 - run proof scenarios directly
 
 This is the fast path for most scenarios.
@@ -362,11 +395,14 @@ This is the fast path for most scenarios.
 #### 2. Install Bootstrap Mode
 
 - start from an empty temp directory
-- run `framework::install`
+- run `framework::install` through a fully qualified app reference, for example `nix run github:willyrgf/nixfied#framework::install -- --vendor --target "$TMPDIR/proof-wrapper"`
 - materialize the proof workspace project files into the installed wrapper
+- run scenarios from the wrapper root (`cd "$TMPDIR/proof-wrapper"`)
 - run the same proof scenarios
 
 This is the path that proves repository recreation and wrapper viability.
+
+The RFC should treat these command forms as canonical to avoid ambiguity across test environments.
 
 ## Service Strategy Inside The Proof Workspace
 
@@ -412,6 +448,19 @@ Examples:
 
 Those can be covered by dedicated proof-workspace scenario variants or by unit tests when the logic is local enough.
 
+### Runtime Budget And Tiering
+
+To keep this maintainable, scenario scope and runtime cost must be explicit.
+
+Recommended guardrails:
+
+- Scenario 1 + 2 + 6 total PR budget target: <= 15 minutes
+- Scenario 3 + 4 run on path-triggered pre-merge unless changed files force PR execution
+- Scenario 5 defaults to pre-merge/nightly unless install/upgrade code paths changed
+- heavier service-specific variants run nightly/release only unless the relevant service files changed
+
+If a scenario regularly exceeds its budget, split or retier it instead of silently growing PR latency.
+
 ## Proposed Proof Scenarios
 
 The proof workspace should be driven by a small scenario suite, not one mega-test.
@@ -436,6 +485,7 @@ Representative flow:
 - `nix run .#health`
 - `nix run .#run-task -- <task-id>`
 - `nix run .#run-workflow -- <workflow-id> --summary`
+- `nix run .#run-workflow-parallel -- <workflow-id>`
 - `nix run .#runs`
 - `nix run .#svc::<service>::<op>` for representative service ops across all built-in services
 
@@ -447,6 +497,7 @@ Assertions:
 - all built-in services prove setup/start/ready/health/stop/teardown viability
 - services run in the expected order
 - artifacts land in the expected per-run paths
+- `run-workflow-parallel` executes with the expected workflow semantics
 - direct command-surface smokes for `help`, `features`, `introspect`, and machine-readable summary output stop being necessary once this is green
 
 ### Scenario 2: Interruption And Process Cleanup
@@ -466,6 +517,8 @@ Representative flow:
 - assert the run reaches canceled state
 - assert child process tree is gone
 - assert stop reason and event details are correct
+- start multiple long-running runs and issue `stop-all-runs`
+- assert all tracked runs reach canceled state and process trees are gone
 
 Assertions:
 
@@ -482,6 +535,9 @@ Purpose:
 
 Representative flow:
 
+- create a committed tracked fixture baseline in the temp git repo
+- create explicit untracked sentinel files under known paths
+- create an explicit env file fixture used only for this scenario
 - run a workflow with default ephemeral behavior
 - run again with worktree/untracked behavior enabled
 - run again with env-file loading explicitly enabled
@@ -492,6 +548,7 @@ Assertions:
 - untracked files are excluded by default and included only when configured
 - host env file behavior matches config
 - runtime directories, registry, and artifacts remain isolated
+- scenario assertions are against explicit sentinel files, not inferred from incidental repo state
 
 ### Scenario 4: Isolation Matrix Scenario
 
@@ -552,6 +609,13 @@ Assertions:
 - failure leaves no leaked processes behind
 - failure leaves no corrupted registry or artifact state behind
 - the failure class is stable enough to diagnose without depending on exact wording
+- failure assertions use stable fields and codes, not prose matching
+
+Failure contract requirements for this scenario:
+
+- text mode: non-zero exit + `ERROR:` prefixed diagnostic surface
+- machine/json mode (where supported): stable structured fields such as failure `code`, `stage`, and relevant target identifiers
+- usage/precondition/validation/runtime-interruption classes are asserted by class and code, not by exact sentence wording
 
 ## What The Proof Workspace Can Replace
 
@@ -582,6 +646,7 @@ Recommended model:
 - proof workspace happy path
 - proof workspace interruption/process cleanup
 - proof workspace failure-path/guardrail scenario
+- coverage-map validation gate (capability -> scenario ownership + deletion eligibility checks)
 
 ### Path-Triggered PR Or Pre-Merge
 
@@ -589,6 +654,7 @@ Recommended model:
 - proof workspace isolation scenario
 - wrapper round-trip scenario
 - service-specific exceptional scenario variants that are too heavy for every PR
+- over-budget scenario reruns promoted from PR tier when changed paths require stronger confidence
 
 ### Nightly Or Release
 
@@ -605,6 +671,8 @@ This is much leaner than running dozens of unrelated smokes on every PR while st
 - make the capability inventory explicit enough to plan coverage
 - add missing capability entries for stop/summary/hooks/install/upgrade/machine-output
 - mark which capabilities are expected to be proven by the proof workspace
+- add `proof-workspace/scenarios/coverage-map.nix`
+- add CI validation that blocks deletions without mapped, green replacement coverage
 
 ### Stage 2: Create The Seed Workspace
 
@@ -618,7 +686,7 @@ This is much leaner than running dozens of unrelated smokes on every PR while st
 - happy path
 - interruption/process cleanup
 
-These two scenarios should be enough to start deleting a meaningful subset of current runtime/e2e smokes.
+These two scenarios should be enough to start deleting a meaningful subset of current runtime/e2e smokes, but only for capabilities already mapped and green in CI.
 
 This is the first real cutover point. Do not wait for every later scenario before deleting the obvious runtime duplication.
 
@@ -643,6 +711,7 @@ Delete old tests if:
 - the proof workspace already covers the capability more directly
 - the old test is proving implementation shape rather than behavior
 - the old test exists only because the suite did not previously have a coherent workspace proof
+- the coverage map explicitly marks a replacement and CI proves that replacement path is currently green
 
 ## Decision Rules
 
@@ -710,6 +779,7 @@ Mitigation:
 3. The proof workspace should live in a dedicated top-level folder, not under `tests/`.
 4. All framework capabilities should come from metadata. Tests consume that metadata; they do not define it.
 5. The current-suite keep/delete plan is explicit below.
+6. Coverage-driven deletion is gated by a checked-in capability-to-scenario map and CI validation; "scenario exists" is not enough.
 
 ## Current Suite Triage
 
@@ -720,10 +790,17 @@ These are the current tests that fit the intended surviving shape, either as-is 
 ```text
 tests/framework/contract-render-snapshot.nix
 tests/framework/cross-machine-hash.nix
+tests/framework/docs-guidance-contract.nix
 tests/framework/helios-pinned-source-contract.nix
 tests/framework/introspection-bundle-determinism.nix
 tests/framework/kernel-native-tests.nix
 tests/framework/model-hash.nix
+tests/framework/nix-checks-deadnix-issues-fail-smoke.nix
+tests/framework/nix-checks-nil-issues-fail-smoke.nix
+tests/framework/nix-checks-parent-workflow-skip-smoke.nix
+tests/framework/nix-checks-statix-issues-fail-smoke.nix
+tests/framework/nix-checks-visible-output-smoke.nix
+tests/framework/no-legacy-project-modules.nix
 tests/framework/registry-replay.nix
 tests/framework/run-record-validator-failure.nix
 tests/framework/runtime-events-policy-smoke.nix
@@ -751,6 +828,8 @@ tests/framework/excluded-service-evaluation.nix
 tests/framework/features-surface-contract.nix
 tests/framework/package-output-contract.nix
 tests/framework/postgres-config-artifacts-contract.nix
+tests/framework/operations-contract.nix
+tests/framework/run-id-semantic-inputs-contract.nix
 tests/framework/service-requirements-contract.nix
 tests/framework/shell-contract-runtime-smoke.nix
 tests/framework/workflow-validation-errors.nix
@@ -764,6 +843,8 @@ In particular:
 - `package-output-contract.nix` should become pure publication checks over apps/packages, not `--help` grep.
 - `shell-contract-runtime-smoke.nix` should keep env/arg/exit semantics but stop asserting exact rendered error lines.
 - `workflow-validation-errors.nix` should keep invalid-model evaluation failures and stop grepping source text for message literals.
+- `operations-contract.nix` should keep compile-level operation wiring checks and drop presentation-coupled script text assertions.
+- `run-id-semantic-inputs-contract.nix` should be split into smaller kernel/runtime invariants so run-id semantics are proven without broad integration harnessing.
 
 ### Delete Once The Proof Workspace Scenarios Are Green
 
@@ -776,7 +857,6 @@ tests/framework/caller-pwd-remote-projectroot-smoke.nix
 tests/framework/ci-mode-matrix-smoke.nix
 tests/framework/disabled-service-no-package-resolution-smoke.nix
 tests/framework/discovery-command-surfaces-smoke.nix
-tests/framework/docs-guidance-contract.nix
 tests/framework/env-loader-strict-smoke.nix
 tests/framework/ephemeral-copy-budget-smoke.nix
 tests/framework/ephemeral-execution-smoke.nix
@@ -795,15 +875,8 @@ tests/framework/local-override-introspect-contract.nix
 tests/framework/logging-injection-smoke.nix
 tests/framework/machine-output-app-smoke.nix
 tests/framework/nginx-site-management-smoke.nix
-tests/framework/nix-checks-deadnix-issues-fail-smoke.nix
-tests/framework/nix-checks-nil-issues-fail-smoke.nix
-tests/framework/nix-checks-parent-workflow-skip-smoke.nix
-tests/framework/nix-checks-statix-issues-fail-smoke.nix
-tests/framework/nix-checks-visible-output-smoke.nix
 tests/framework/nix-ci-workflow-contract.nix
 tests/framework/nix-client-env-smoke.nix
-tests/framework/no-legacy-project-modules.nix
-tests/framework/operations-contract.nix
 tests/framework/orchestrator-arg-forwarding-smoke.nix
 tests/framework/orchestrator-signal-cleanup-smoke.nix
 tests/framework/orchestrator-stop-controls-smoke.nix
@@ -823,7 +896,6 @@ tests/framework/registry-events-runtime-contract.nix
 tests/framework/registry-lock-recovery-smoke.nix
 tests/framework/run-id-active-collision-suffix-smoke.nix
 tests/framework/run-id-noise-stability-smoke.nix
-tests/framework/run-id-semantic-inputs-contract.nix
 tests/framework/run-record-atomicity-smoke.nix
 tests/framework/runtime-env-isolation-smoke.nix
 tests/framework/runtime-owned-env-blocked-smoke.nix
@@ -857,8 +929,6 @@ tests/framework/ci-mode-matrix-smoke.nix
 tests/framework/discovery-command-surfaces-smoke.nix
 tests/framework/introspect-contract.nix
 tests/framework/local-override-introspect-contract.nix
-tests/framework/machine-output-app-smoke.nix
-tests/framework/operations-contract.nix
 tests/framework/orchestrator-arg-forwarding-smoke.nix
 tests/framework/orchestrator-signal-cleanup-smoke.nix
 tests/framework/orchestrator-stop-controls-smoke.nix
@@ -868,10 +938,6 @@ tests/framework/parallel-worker-cap-invalid-smoke.nix
 tests/framework/parallel-worker-cap-smoke.nix
 tests/framework/ready-health-matrix-smoke.nix
 tests/framework/ready-health-shutdown-smoke.nix
-tests/framework/registry-detail-derivation-smoke.nix
-tests/framework/registry-events-runtime-contract.nix
-tests/framework/run-id-semantic-inputs-contract.nix
-tests/framework/run-record-atomicity-smoke.nix
 tests/framework/service-lifecycle-matrix-smoke.nix
 tests/framework/service-op-composition-contract.nix
 tests/framework/service-set-behavior-contract.nix
@@ -881,6 +947,17 @@ tests/framework/workflow-lifecycle-smoke.nix
 tests/framework/workflow-mode-derived-smoke.nix
 tests/framework/workflow-probe-scope-smoke.nix
 ```
+
+These are still subject to the coverage-map gate. A file being in this block is not permission to delete it without mapped green replacement coverage.
+
+### Defer From Early Cutover
+
+Do not include the following in the first deletion block:
+
+- `machine-output-app-smoke.nix` until machine-output capability coverage is explicit in the map and proven by Scenario 1 or 6
+- `operations-contract.nix` until the narrower compile-level replacement exists
+- `run-id-semantic-inputs-contract.nix` until run-id semantic invariants are migrated to smaller kernel/runtime proofs
+- docs and `nix-checks` behavior contract tests that remain local/package-level invariants
 
 ### Later Deletion Blocks
 
