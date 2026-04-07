@@ -200,6 +200,18 @@ selectionCatalog
               ;
           };
 
+      "proof-workspace-scenario-6-failure-guardrails" =
+        import ../../proof-workspace/scenarios/scenario-6-failure-guardrails.nix
+          {
+            inherit
+              pkgs
+              model
+              services
+              serviceDefinitions
+              registry
+              ;
+          };
+
       "nix-client-env-smoke" = import ./nix-client-env-smoke.nix {
         inherit
           pkgs
