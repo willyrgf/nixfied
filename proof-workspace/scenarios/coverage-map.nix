@@ -254,6 +254,10 @@
         replacementCapabilities = [ "runtime.output.prefix-contract" ];
       }
       {
+        checkName = "nix-checks-parent-workflow-skip-smoke";
+        replacementCapabilities = [ "runtime.workflow-service-phases" ];
+      }
+      {
         checkName = "orchestrator-arg-forwarding-smoke";
         replacementCapabilities = [ "runtime.workflow-service-phases" ];
       }
