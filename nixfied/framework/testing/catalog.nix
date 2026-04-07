@@ -5,11 +5,9 @@ let
   deletionEligibility = coverageMap.deletionEligibility or { };
   deletionRequiredProfiles = deletionEligibility.requiredProfiles or [ ];
   firstBlockDeletionEntries = deletionEligibility.firstBlock or [ ];
+  remainingDeletionEntries = deletionEligibility.remaining or [ ];
+  gatedDeletionEntries = firstBlockDeletionEntries ++ remainingDeletionEntries;
   scenarioIds = builtins.sort builtins.lessThan (builtins.attrNames coverageScenarios);
-
-  appendUnique =
-    base: additions:
-    base ++ builtins.filter (checkName: !(builtins.elem checkName base)) additions;
 
   enabledScenarioChecksForProfile =
     profileName:
@@ -236,7 +234,7 @@ let
     && replacementCapabilities != [ ]
     && builtins.all (capabilityId: replacementCapabilityIsGreen requiredProfiles capabilityId) replacementCapabilities;
 
-  firstBlockDeletedChecks =
+  gatedDeletedChecks =
     builtins.foldl'
       (
         acc: entry:
@@ -246,15 +244,15 @@ let
         if deleteCheckEntryIsGreen entry && !(builtins.elem checkName acc) then acc ++ [ checkName ] else acc
       )
       [ ]
-      firstBlockDeletionEntries;
+      gatedDeletionEntries;
 
-  removeDeletedChecks = checks: builtins.filter (checkName: !(builtins.elem checkName firstBlockDeletedChecks)) checks;
+  removeDeletedChecks = checks: builtins.filter (checkName: !(builtins.elem checkName gatedDeletedChecks)) checks;
 
-  shardChecks = builtins.mapAttrs (_: checks: removeDeletedChecks checks) baseShardChecks;
+  shardChecks = builtins.mapAttrs (_: removeDeletedChecks) baseShardChecks;
 
-  featureProofShardChecks = builtins.mapAttrs (_: checks: removeDeletedChecks checks) baseFeatureProofShardChecks;
+  featureProofShardChecks = builtins.mapAttrs (_: removeDeletedChecks) baseFeatureProofShardChecks;
 
-  ciShardChecks = builtins.mapAttrs (_: checks: removeDeletedChecks checks) baseCiShardChecks;
+  ciShardChecks = builtins.mapAttrs (_: removeDeletedChecks) baseCiShardChecks;
 
   profileShardChecks = {
     "feature-proof" = featureProofShardChecks;

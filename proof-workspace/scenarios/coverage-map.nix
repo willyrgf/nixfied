@@ -39,7 +39,7 @@
         "ci"
         "full"
       ];
-      enabled = false;
+      enabled = true;
       tier = "pre-merge";
     };
 
@@ -50,7 +50,7 @@
         "ci"
         "full"
       ];
-      enabled = false;
+      enabled = true;
       tier = "pre-merge";
     };
 
@@ -58,7 +58,7 @@
       checkName = "proof-workspace-scenario-5-wrapper-roundtrip";
       ownerFile = "proof-workspace/scenarios/scenario-5-wrapper-roundtrip.nix";
       profiles = [ "full" ];
-      enabled = false;
+      enabled = true;
       tier = "pre-merge";
     };
 
@@ -336,6 +336,112 @@
       }
     ];
 
-    remaining = [ ];
+    remaining = [
+      {
+        checkName = "artifacts-root-override-isolation-smoke";
+        replacementCapabilities = [ "runtime.artifact-placement-semantics" ];
+      }
+      {
+        checkName = "artifacts-run-isolation-smoke";
+        replacementCapabilities = [ "runtime.artifact-placement-semantics" ];
+      }
+      {
+        checkName = "env-loader-strict-smoke";
+        requiredProfiles = [
+          "ci"
+          "full"
+        ];
+        replacementCapabilities = [ "runtime.ephemeral.env-file-loading" ];
+      }
+      {
+        checkName = "ephemeral-copy-budget-smoke";
+        requiredProfiles = [
+          "ci"
+          "full"
+        ];
+        replacementCapabilities = [ "runtime.ephemeral.source-materialization" ];
+      }
+      {
+        checkName = "ephemeral-execution-smoke";
+        requiredProfiles = [
+          "ci"
+          "full"
+        ];
+        replacementCapabilities = [ "runtime.ephemeral.source-materialization" ];
+      }
+      {
+        checkName = "ephemeral-retention-smoke";
+        requiredProfiles = [
+          "ci"
+          "full"
+        ];
+        replacementCapabilities = [ "runtime.ephemeral.source-materialization" ];
+      }
+      {
+        checkName = "ephemeral-runtime-behavior-smoke";
+        requiredProfiles = [
+          "ci"
+          "full"
+        ];
+        replacementCapabilities = [ "runtime.ephemeral.include-untracked" ];
+      }
+      {
+        checkName = "ephemeral-runtime-env-isolation-smoke";
+        requiredProfiles = [
+          "ci"
+          "full"
+        ];
+        replacementCapabilities = [ "runtime.ephemeral.env-file-loading" ];
+      }
+      {
+        checkName = "framework-install-filter-smoke";
+        requiredProfiles = [ "full" ];
+        replacementCapabilities = [ "runtime.install-semantics" ];
+      }
+      {
+        checkName = "framework-install-thin-smoke";
+        requiredProfiles = [ "full" ];
+        replacementCapabilities = [ "runtime.install-semantics" ];
+      }
+      {
+        checkName = "framework-install-vendor-smoke";
+        requiredProfiles = [ "full" ];
+        replacementCapabilities = [ "runtime.install-semantics" ];
+      }
+      {
+        checkName = "framework-template-install-upgrade-help-smoke";
+        requiredProfiles = [ "full" ];
+        replacementCapabilities = [ "runtime.upgrade-semantics" ];
+      }
+      {
+        checkName = "framework-upgrade-preserve-smoke";
+        requiredProfiles = [ "full" ];
+        replacementCapabilities = [ "runtime.upgrade-semantics" ];
+      }
+      {
+        checkName = "machine-output-app-smoke";
+        replacementCapabilities = [ "runtime.machine-output-behavior" ];
+      }
+      {
+        checkName = "service-dir-isolation-smoke";
+        requiredProfiles = [
+          "ci"
+          "full"
+        ];
+        replacementCapabilities = [ "runtime.registry.isolation" ];
+      }
+      {
+        checkName = "test-mode-cli-contract-smoke";
+        replacementCapabilities = [ "runtime.output.prefix-contract" ];
+      }
+      {
+        checkName = "workspace-registry-isolation-smoke";
+        requiredProfiles = [
+          "ci"
+          "full"
+        ];
+        replacementCapabilities = [ "runtime.registry.isolation" ];
+      }
+    ];
   };
 }

@@ -28,7 +28,8 @@ in
 
     proof_workspace_bootstrap_install() {
       local target_root="$1"
-      proof_bootstrap_install "$target_root" "$PROOF_WORKSPACE_REPO_ROOT"
+      local install_mode="''${2:-vendor}"
+      proof_bootstrap_install "$target_root" "$PROOF_WORKSPACE_REPO_ROOT" "$install_mode"
     }
   '';
 }

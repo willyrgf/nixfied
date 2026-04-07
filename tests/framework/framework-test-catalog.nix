@@ -184,12 +184,47 @@ selectionCatalog
               services
               serviceDefinitions
               registry
-              apps
               ;
           };
 
       "proof-workspace-scenario-2-interruption-process-cleanup" =
         import ../../proof-workspace/scenarios/scenario-2-interruption-process-cleanup.nix
+          {
+            inherit
+              pkgs
+              model
+              services
+              serviceDefinitions
+              registry
+              ;
+          };
+
+      "proof-workspace-scenario-3-ephemeral-workspace" =
+        import ../../proof-workspace/scenarios/scenario-3-ephemeral-workspace.nix
+          {
+            inherit
+              pkgs
+              model
+              services
+              serviceDefinitions
+              registry
+              ;
+          };
+
+      "proof-workspace-scenario-4-isolation-matrix" =
+        import ../../proof-workspace/scenarios/scenario-4-isolation-matrix.nix
+          {
+            inherit
+              pkgs
+              model
+              services
+              serviceDefinitions
+              registry
+              ;
+          };
+
+      "proof-workspace-scenario-5-wrapper-roundtrip" =
+        import ../../proof-workspace/scenarios/scenario-5-wrapper-roundtrip.nix
           {
             inherit
               pkgs

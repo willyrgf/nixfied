@@ -4,7 +4,6 @@
   services,
   serviceDefinitions,
   registry,
-  apps,
 }:
 let
   materialize = import ../lib/materialize.nix {
