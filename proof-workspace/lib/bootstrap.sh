@@ -88,12 +88,31 @@ proof_bootstrap_seed_copy() {
 proof_bootstrap_install() {
   local target_root="$1"
   local repo_root="$2"
+  local install_mode="${3:-vendor}"
+  local -a install_args
+  local proof_home
+
+  case "$install_mode" in
+    vendor)
+      install_args=(--vendor)
+      ;;
+    thin)
+      install_args=()
+      ;;
+    *)
+      proof_log_error "unknown install mode: $install_mode"
+      exit 2
+      ;;
+  esac
 
   rm -rf "$target_root"
   mkdir -p "$target_root"
+  proof_home="$target_root/.proof-home"
+  mkdir -p "$proof_home/.cache"
 
-  proof_log_info "running fully-qualified framework::install bootstrap"
-  nix run "path:${repo_root}#framework::install" -- --vendor --target "$target_root" > "$target_root/.proof-install.out" 2>&1 || {
+  proof_log_info "running fully-qualified framework::install bootstrap mode=$install_mode"
+  HOME="$proof_home" XDG_CACHE_HOME="$proof_home/.cache" \
+    nix run "path:${repo_root}#framework::install" -- "${install_args[@]}" --target "$target_root" > "$target_root/.proof-install.out" 2>&1 || {
     proof_log_error "framework::install bootstrap failed"
     cat "$target_root/.proof-install.out" >&2
     exit 1
@@ -102,7 +121,7 @@ proof_bootstrap_install() {
   proof_materialize_project_files "$target_root" "$repo_root"
   proof_init_git_baseline "$target_root"
 
-  proof_log_ok "install bootstrap ready at $target_root"
+  proof_log_ok "install bootstrap ready mode=$install_mode at $target_root"
 }
 
 if [ "$#" -ge 1 ]; then
@@ -118,11 +137,11 @@ if [ "$#" -ge 1 ]; then
       proof_bootstrap_seed_copy "$1" "$2"
       ;;
     install)
-      [ "$#" -eq 2 ] || {
-        proof_log_error "usage: bootstrap.sh install <target-root> <repo-root>"
+      [ "$#" -ge 2 ] && [ "$#" -le 3 ] || {
+        proof_log_error "usage: bootstrap.sh install <target-root> <repo-root> [thin|vendor]"
         exit 2
       }
-      proof_bootstrap_install "$1" "$2"
+      proof_bootstrap_install "$1" "$2" "${3:-vendor}"
       ;;
     *)
       proof_log_error "unknown mode: $mode"
