@@ -49,6 +49,10 @@ proof_materialize_project_files() {
 
   mkdir -p "$target_root/nixfied/project"
   cp -R "$repo_root/nixfied/project/." "$target_root/nixfied/project/"
+  mkdir -p "$target_root/nixfied/modules"
+  cp -R "$repo_root/nixfied/modules/." "$target_root/nixfied/modules/"
+  mkdir -p "$target_root/nixfied/framework"
+  cp -R "$repo_root/nixfied/framework/." "$target_root/nixfied/framework/"
 }
 
 proof_init_git_baseline() {

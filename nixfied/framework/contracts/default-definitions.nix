@@ -66,6 +66,7 @@ let
     values = [
       "task"
       "workflow"
+      "workflow-parallel"
     ];
   };
   workflowMode = t.enum {
