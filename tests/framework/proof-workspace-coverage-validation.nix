@@ -157,7 +157,15 @@ let
   ) (builtins.attrNames capabilities);
 
   modelServiceCatalog = model.serviceCatalog or { };
-  modelServiceIds = builtins.sort builtins.lessThan (builtins.attrNames modelServiceCatalog);
+  normalizeServiceName =
+    serviceId:
+    let
+      prefixed = builtins.match "^service\\.(.+)$" serviceId;
+    in
+    if prefixed == null then serviceId else builtins.elemAt prefixed 0;
+  modelServiceNames = builtins.sort builtins.lessThan (
+    builtins.map normalizeServiceName (builtins.attrNames modelServiceCatalog)
+  );
   serviceOperationsCapability =
     if builtins.hasAttr "runtime.service-operations" capabilities then
       capabilities."runtime.service-operations"
@@ -173,24 +181,22 @@ let
   serviceOperationGenericScenarioValid =
     serviceOperationGenericScenarioId != ""
     && builtins.hasAttr serviceOperationGenericScenarioId scenarios
-    && builtins.elem "runtime.service-operations" (
-      (scenarios.${serviceOperationGenericScenarioId}.assertedCapabilities or [ ])
-    );
+    && builtins.elem "runtime.service-operations" (scenarios.${serviceOperationGenericScenarioId}.assertedCapabilities or [ ]);
 
   missingServiceOperationGenericCoverage = builtins.filter (
     serviceId:
     !(builtins.elem serviceId serviceOperationGenericServices)
-  ) modelServiceIds;
+  ) modelServiceNames;
 
   unknownServiceOperationGenericCoverage = builtins.filter (
     serviceId:
-    !(builtins.elem serviceId modelServiceIds)
+    !(builtins.elem serviceId modelServiceNames)
   ) serviceOperationGenericServices;
 
   missingServiceOperationDeepPathPolicy = builtins.filter (
     serviceId:
     !(builtins.hasAttr serviceId serviceOperationDeepPathVariants)
-  ) modelServiceIds;
+  ) modelServiceNames;
 
   invalidServiceOperationDeepPathPolicy = builtins.filter (
     serviceId:
@@ -204,12 +210,12 @@ let
     !(builtins.elem status [ "covered" "deferred" ])
     || !(builtins.isList variants)
     || (status == "deferred" && (tier == "" || rationale == "" || variants == [ ]))
-  ) (builtins.filter (serviceId: builtins.hasAttr serviceId serviceOperationDeepPathVariants) modelServiceIds);
+  ) (builtins.filter (serviceId: builtins.hasAttr serviceId serviceOperationDeepPathVariants) modelServiceNames);
 
   deferredServiceOperationDeepPathServices = builtins.filter (
     serviceId:
     (serviceOperationDeepPathVariants.${serviceId}.status or "") == "deferred"
-  ) (builtins.filter (serviceId: builtins.hasAttr serviceId serviceOperationDeepPathVariants) modelServiceIds);
+  ) (builtins.filter (serviceId: builtins.hasAttr serviceId serviceOperationDeepPathVariants) modelServiceNames);
 
   serviceOperationSupervisorCoverageValid =
     (serviceOperationSupervisorCoverage.status or "") == "covered"
