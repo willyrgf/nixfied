@@ -156,6 +156,66 @@ let
     && !(capabilityHasAssertionOwnership capabilityId)
   ) (builtins.attrNames capabilities);
 
+  modelServiceCatalog = model.serviceCatalog or { };
+  modelServiceIds = builtins.sort builtins.lessThan (builtins.attrNames modelServiceCatalog);
+  serviceOperationsCapability =
+    if builtins.hasAttr "runtime.service-operations" capabilities then
+      capabilities."runtime.service-operations"
+    else
+      { };
+  serviceOperationCoverage = serviceOperationsCapability.serviceOperationCoverage or { };
+  serviceOperationGenericLifecycle = serviceOperationCoverage.genericLifecycle or { };
+  serviceOperationGenericScenarioId = serviceOperationGenericLifecycle.scenario or "";
+  serviceOperationGenericServices = builtins.sort builtins.lessThan (serviceOperationGenericLifecycle.services or [ ]);
+  serviceOperationSupervisorCoverage = serviceOperationGenericLifecycle.supervisorOrchestration or { };
+  serviceOperationDeepPathVariants = serviceOperationCoverage.deepPathVariants or { };
+
+  serviceOperationGenericScenarioValid =
+    serviceOperationGenericScenarioId != ""
+    && builtins.hasAttr serviceOperationGenericScenarioId scenarios
+    && builtins.elem "runtime.service-operations" (
+      (scenarios.${serviceOperationGenericScenarioId}.assertedCapabilities or [ ])
+    );
+
+  missingServiceOperationGenericCoverage = builtins.filter (
+    serviceId:
+    !(builtins.elem serviceId serviceOperationGenericServices)
+  ) modelServiceIds;
+
+  unknownServiceOperationGenericCoverage = builtins.filter (
+    serviceId:
+    !(builtins.elem serviceId modelServiceIds)
+  ) serviceOperationGenericServices;
+
+  missingServiceOperationDeepPathPolicy = builtins.filter (
+    serviceId:
+    !(builtins.hasAttr serviceId serviceOperationDeepPathVariants)
+  ) modelServiceIds;
+
+  invalidServiceOperationDeepPathPolicy = builtins.filter (
+    serviceId:
+    let
+      policy = serviceOperationDeepPathVariants.${serviceId};
+      status = policy.status or "";
+      tier = policy.tier or "";
+      variants = policy.variants or [ ];
+      rationale = policy.rationale or "";
+    in
+    !(builtins.elem status [ "covered" "deferred" ])
+    || !(builtins.isList variants)
+    || (status == "deferred" && (tier == "" || rationale == "" || variants == [ ]))
+  ) (builtins.filter (serviceId: builtins.hasAttr serviceId serviceOperationDeepPathVariants) modelServiceIds);
+
+  deferredServiceOperationDeepPathServices = builtins.filter (
+    serviceId:
+    (serviceOperationDeepPathVariants.${serviceId}.status or "") == "deferred"
+  ) (builtins.filter (serviceId: builtins.hasAttr serviceId serviceOperationDeepPathVariants) modelServiceIds);
+
+  serviceOperationSupervisorCoverageValid =
+    (serviceOperationSupervisorCoverage.status or "") == "covered"
+    && (serviceOperationSupervisorCoverage.scenario or "") != ""
+    && builtins.hasAttr (serviceOperationSupervisorCoverage.scenario or "") scenarios;
+
   deletionEligibility = coverageMap.deletionEligibility or { };
   defaultRequiredProfiles = deletionEligibility.requiredProfiles or [ ];
   deletionEntries = (deletionEligibility.firstBlock or [ ]) ++ (deletionEligibility.remaining or [ ]);
@@ -260,6 +320,20 @@ assert (capabilitiesMissingScenarioOwnership == [ ])
   || throw "proof-workspace coverage validation failed: proof-workspace capabilities reference missing scenarios: ${showList capabilitiesMissingScenarioOwnership}";
 assert (capabilitiesMissingAssertionOwnership == [ ])
   || throw "proof-workspace coverage validation failed: proof-workspace capabilities missing explicit scenario assertion ownership: ${showList capabilitiesMissingAssertionOwnership}";
+assert serviceOperationGenericScenarioValid
+  || throw "proof-workspace coverage validation failed: runtime.service-operations generic lifecycle scenario is missing or does not assert runtime.service-operations";
+assert (missingServiceOperationGenericCoverage == [ ])
+  || throw "proof-workspace coverage validation failed: runtime.service-operations generic lifecycle coverage missing services: ${showList missingServiceOperationGenericCoverage}";
+assert (unknownServiceOperationGenericCoverage == [ ])
+  || throw "proof-workspace coverage validation failed: runtime.service-operations generic lifecycle coverage has unknown services: ${showList unknownServiceOperationGenericCoverage}";
+assert (missingServiceOperationDeepPathPolicy == [ ])
+  || throw "proof-workspace coverage validation failed: runtime.service-operations deep-path policy missing services: ${showList missingServiceOperationDeepPathPolicy}";
+assert (invalidServiceOperationDeepPathPolicy == [ ])
+  || throw "proof-workspace coverage validation failed: runtime.service-operations deep-path policy entries are invalid for services: ${showList invalidServiceOperationDeepPathPolicy}";
+assert (deferredServiceOperationDeepPathServices != [ ])
+  || throw "proof-workspace coverage validation failed: runtime.service-operations deep-path policy must keep at least one service deferred per RFC budget tiering";
+assert serviceOperationSupervisorCoverageValid
+  || throw "proof-workspace coverage validation failed: runtime.service-operations supervisorOrchestration coverage must be explicitly covered with a valid scenario";
 assert (deletionMissingReplacementCapabilities == [ ])
   || throw "proof-workspace coverage validation failed: deleted checks missing replacement capabilities: ${showDeletionEntries deletionMissingReplacementCapabilities}";
 assert (deletionMissingGreenCoverage == [ ])
