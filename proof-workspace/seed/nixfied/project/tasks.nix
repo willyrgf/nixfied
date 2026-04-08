@@ -62,6 +62,27 @@ let
 in
 {
   config = {
+    nixfied.contracts.definitions."machineOutput.result" = {
+      kind = "record";
+      doc = "Validated machine-output payload.";
+      fields = {
+        ok = {
+          schema = {
+            kind = "bool";
+          };
+        };
+        kind = {
+          schema = {
+            kind = "enum";
+            values = [
+              "task"
+              "workflow"
+            ];
+          };
+        };
+      };
+    };
+
     nixfied.tasks = {
       "framework-install" = {
         id = "task.framework.install";
@@ -298,6 +319,162 @@ in
         passThroughEnv = commonPassThroughEnv ++ [ "PROOF_WORKFLOW_PHASE_LOG_FILE" ];
       };
 
+      "test-runtime-owned-pass-through-blocked" = mkShellTask {
+        id = "task.test.runtime-owned.pass-through";
+        summary = "Runtime-owned pass-through blocked task";
+        description = "Proof task that must fail before execution when HOME is requested as pass-through.";
+        command = ''
+          set -euo pipefail
+          echo "OK: runtime-owned pass-through should not execute"
+        '';
+        passThroughEnv = commonPassThroughEnv ++ [ "HOME" ];
+      };
+
+      "test-runtime-owned-env-blocked" =
+        let
+          baseTask = mkShellTask {
+            id = "task.test.runtime-owned.env";
+            summary = "Runtime-owned env override blocked task";
+            description = "Proof task that must fail before execution when HOME is overridden.";
+            command = ''
+              set -euo pipefail
+              echo "OK: runtime-owned env override should not execute"
+            '';
+          };
+        in
+        baseTask
+        // {
+          runtime =
+            baseTask.runtime
+            // {
+              env = {
+                HOME = "/tmp/forbidden-home";
+              };
+            };
+        };
+
+      "test-runtime-owned-scope-pass-through-blocked" = mkShellTask {
+        id = "task.test.runtime-owned.scope-pass-through";
+        summary = "Runtime-owned scope pass-through blocked task";
+        description = "Proof task that must fail before execution when runtime scope override is requested.";
+        command = ''
+          set -euo pipefail
+          echo "OK: runtime-owned scope pass-through should not execute"
+        '';
+        passThroughEnv = commonPassThroughEnv ++ [ "NIXFIED_RUNTIME_DIR_SCOPE_OVERRIDE" ];
+      };
+
+      "test-sensitive-pass-through-blocked" = mkShellTask {
+        id = "task.test.sensitive.blocked";
+        summary = "Sensitive pass-through blocked task";
+        description = "Proof task that must fail before execution when a sensitive env var is requested without opt-in.";
+        command = ''
+          set -euo pipefail
+          echo "OK: blocked task command should not execute"
+        '';
+        passThroughEnv = commonPassThroughEnv ++ [ "API_KEY" ];
+      };
+
+      "test-sensitive-pass-through-allowed" =
+        let
+          baseTask = mkShellTask {
+            id = "task.test.sensitive.allowed";
+            summary = "Sensitive pass-through allowed task";
+            description = "Proof task that receives a sensitive env var only when explicit opt-in is enabled.";
+            command = ''
+              set -euo pipefail
+              if [ -z "''${API_KEY:-}" ]; then
+                echo "ERROR: API_KEY missing inside allowed task"
+                exit 1
+              fi
+              echo "OK: allowed task received API_KEY"
+            '';
+            passThroughEnv = commonPassThroughEnv ++ [ "API_KEY" ];
+          };
+        in
+        baseTask
+        // {
+          runtime =
+            baseTask.runtime
+            // {
+              allowSensitivePassThrough = true;
+            };
+        };
+
+      "test-machine-output-json-body" =
+        let
+          baseTask = mkShellTask {
+            id = "task.test.machine-output.json-body";
+            summary = "Machine-output JSON task";
+            description = "Emits strict JSON to the declared machine-output channel.";
+            command = ''
+              set -euo pipefail
+              if [ -n "''${NIXFIED_MACHINE_OUTPUT_FILE:-}" ]; then
+                printf '%s\n' "json-body human log"
+                printf '%s\n' '{"ok":true,"kind":"task"}' > "$NIXFIED_MACHINE_OUTPUT_FILE"
+              else
+                printf '%s\n' '{"ok":true,"kind":"task"}'
+              fi
+            '';
+          };
+        in
+        baseTask
+        // {
+          commandApi.outputs = {
+            mode = "json";
+            channels = "stdout";
+            keys = [
+              "ok"
+              "kind"
+            ];
+          };
+          launcher = {
+            enable = true;
+            appId = "json-body";
+            summary = "JSON task app";
+            description = "Runs a task app that emits strict JSON for machine-output validation.";
+            usage = [ "nix run .#json-body" ];
+            ownerFile = "proof-workspace/seed/nixfied/project/tasks.nix";
+          };
+        };
+
+      "test-machine-output-invalid-json-body" =
+        let
+          baseTask = mkShellTask {
+            id = "task.test.machine-output.invalid-json-body";
+            summary = "Machine-output invalid JSON task";
+            description = "Emits a contract-invalid JSON payload to the declared machine-output channel.";
+            command = ''
+              set -euo pipefail
+              if [ -n "''${NIXFIED_MACHINE_OUTPUT_FILE:-}" ]; then
+                printf '%s\n' "invalid-json-body human log"
+                printf '%s\n' '{"ok":"yes","kind":"task"}' > "$NIXFIED_MACHINE_OUTPUT_FILE"
+              else
+                printf '%s\n' '{"ok":"yes","kind":"task"}'
+              fi
+            '';
+          };
+        in
+        baseTask
+        // {
+          commandApi.outputs = {
+            mode = "json";
+            channels = "stdout";
+            keys = [
+              "ok"
+              "kind"
+            ];
+          };
+          launcher = {
+            enable = true;
+            appId = "json-body-invalid";
+            summary = "Invalid JSON task app";
+            description = "Runs a task app that violates the machine-output contract.";
+            usage = [ "nix run .#json-body-invalid" ];
+            ownerFile = "proof-workspace/seed/nixfied/project/tasks.nix";
+          };
+        };
+
       "test-parallel-sleep-a" = mkShellTask {
         id = "task.test.parallel.sleep-a";
         summary = "Parallel smoke unit A";
@@ -403,6 +580,28 @@ in
           sleep 10
           echo "OK: fail-fast slow-b done"
         '';
+      };
+    };
+
+    nixfied.machineOutputs = {
+      "machine-json" = {
+        id = "machine-json";
+        targetAppId = "json-body";
+        validation.contractRef = "machineOutput.result";
+        summary = "Machine-output happy-path app";
+        description = "Wraps the proof JSON task app with strict machine-output validation.";
+        usage = [ "nix run .#machine-json" ];
+        ownerFile = "proof-workspace/seed/nixfied/project/tasks.nix";
+      };
+
+      "machine-json-invalid-payload" = {
+        id = "machine-json-invalid-payload";
+        targetAppId = "json-body-invalid";
+        validation.contractRef = "machineOutput.result";
+        summary = "Machine-output invalid-payload app";
+        description = "Wraps a contract-invalid JSON task app and exposes the structured validation failure envelope.";
+        usage = [ "nix run .#machine-json-invalid-payload" ];
+        ownerFile = "proof-workspace/seed/nixfied/project/tasks.nix";
       };
     };
   };
