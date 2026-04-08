@@ -2,18 +2,16 @@
   pkgs,
   model,
   services,
-  registry,
 }:
 let
   runtimeFixture = import ./lib/runtime-fixture.nix { inherit pkgs; };
+  shellHelpers = import ./lib/shell-helpers.nix { inherit pkgs; };
   baseTask = model.tasks."task.ci.quality";
-
   probeTaskId = "task.test.caller-pwd.remote-projectroot";
-
   probeTask = baseTask // {
     id = probeTaskId;
     summary = "remote caller pwd workdir probe";
-    description = "Verifies proxied framework tasks default projectRoot workdir to the caller checkout.";
+    description = "Verifies store-backed project-root tasks resolve workdir from the caller checkout.";
     runner = {
       type = "shell";
       command = ''
@@ -25,7 +23,6 @@ let
       workflowId = null;
     };
   };
-
   probeModel = runtimeFixture.withCompiledExecution (
     model
     // {
@@ -34,48 +31,43 @@ let
       };
     }
   );
-
-  executor = import ../../nixfied/framework/runtime/executor.nix {
+  runtimePlanShell = probeModel.compiled.execution.tasks.byId.${probeTaskId}.runtimePlanShell;
+  envSandboxShell = import ../../nixfied/framework/runtime/env-sandbox.nix {
     inherit
       pkgs
-      registry
+      services
       ;
     model = probeModel;
-    inherit services;
     projectRoot = ../..;
   };
 in
 pkgs.runCommand "caller-pwd-remote-projectroot-smoke" { } ''
   set -euo pipefail
+  ${shellHelpers.shellPrelude}
+  ${envSandboxShell}
 
-  EXECUTOR="${executor}/bin/nixfied-executor"
-  export REGISTRY_ROOT="$TMPDIR/registry"
   export NIXFIED_RUNTIME_DIR_SCOPE_OVERRIDE="$TMPDIR/runtime-scope"
-  mkdir -p "$REGISTRY_ROOT"
   mkdir -p "$NIXFIED_RUNTIME_DIR_SCOPE_OVERRIDE"
 
   caller_repo="$TMPDIR/caller-repo"
   mkdir -p "$caller_repo/subdir"
 
-  set +e
-  NIXFIED_CALLER_PWD="$caller_repo/subdir" "$EXECUTOR" run-task "${probeTaskId}" > "$TMPDIR/probe.out" 2>&1
-  probe_rc="$?"
-  set -e
-  if [ "$probe_rc" -ne 0 ]; then
-    echo "probe task failed rc=$probe_rc"
-    cat "$TMPDIR/probe.out"
-    exit 1
-  fi
+  NIXFIED_CALLER_PWD="$caller_repo/subdir" \
+    run_in_sandbox_runtime \
+      ${pkgs.lib.escapeShellArg runtimePlanShell} \
+      ${pkgs.lib.escapeShellArg probeTask.runner.command} > "$TMPDIR/probe.out" 2>&1 || {
+      cat "$TMPDIR/probe.out"
+      fail "caller pwd probe should succeed through env-sandbox workdir resolution"
+    }
 
   sandbox_pwd="$(${pkgs.gnused}/bin/sed -n 's/^INFO: sandbox_pwd=//p' "$TMPDIR/probe.out" | ${pkgs.coreutils}/bin/tail -n 1)"
   if [ "$sandbox_pwd" != "$caller_repo/subdir" ]; then
-    echo "expected sandbox workdir to follow caller pwd for store-backed project roots"
     echo "sandbox_pwd=$sandbox_pwd"
     cat "$TMPDIR/probe.out"
-    exit 1
+    fail "expected sandbox workdir to follow caller pwd for store-backed project roots"
   fi
 
-  ${pkgs.gnugrep}/bin/grep -Fq "OK: caller pwd probe task complete" "$TMPDIR/probe.out"
+  require_contains "$TMPDIR/probe.out" "OK: caller pwd probe task complete"
 
-  echo "OK: remote projectRoot workdir honors caller pwd by default" > "$out"
+  echo "OK: env sandbox resolves store-backed project roots against caller pwd" > "$out"
 ''

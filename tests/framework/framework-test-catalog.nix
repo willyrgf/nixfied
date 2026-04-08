@@ -64,7 +64,6 @@ selectionCatalog
         inherit
           pkgs
           model
-          apps
           ;
       };
 
@@ -248,8 +247,6 @@ selectionCatalog
           pkgs
           model
           services
-          serviceDefinitions
-          registry
           ;
       };
 
@@ -458,8 +455,6 @@ selectionCatalog
           pkgs
           model
           services
-          serviceDefinitions
-          registry
           ;
       };
 
@@ -527,7 +522,6 @@ selectionCatalog
           pkgs
           model
           services
-          registry
           ;
       };
 

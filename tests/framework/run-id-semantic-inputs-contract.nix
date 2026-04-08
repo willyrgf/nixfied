@@ -8,7 +8,6 @@ let
     inherit (pkgs) system;
   };
   shellHelpers = import ./lib/shell-helpers.nix { inherit pkgs; };
-  runtimeFixture = import ./lib/runtime-fixture.nix { inherit pkgs; };
 
   taskId = "task.test.run-id.semantic";
   workflowId = "workflow.test.run-id.semantic";
@@ -66,60 +65,113 @@ let
   compiledBase = mkCompiled "Run id semantic probe";
   compiledChanged = mkCompiled "Run id semantic probe changed";
 
-  mkOrchestrator =
-    compiled:
-    let
-      runtimeDeps = runtimeFixture.runtimeMaterialization {
-        inherit (compiled) model services serviceDefinitions;
-      };
-    in
-    import ../../nixfied/framework/runtime/orchestrator.nix {
-      inherit
-        pkgs
-        registry
-        ;
-      inherit (compiled) model services;
-      projectRoot = ../..;
-      inherit (runtimeDeps) serviceDispatcherProgram;
-      runtimeBin = runtimeDeps.serviceDispatcherProgram;
-    };
+  baseModelFile = pkgs.writeText "run-id-semantic-base-model.json" (builtins.toJSON compiledBase.model);
+  changedModelFile = pkgs.writeText "run-id-semantic-changed-model.json" (
+    builtins.toJSON compiledChanged.model
+  );
 
-  orchestratorBase = mkOrchestrator compiledBase;
-  orchestratorChanged = mkOrchestrator compiledChanged;
+  baseControlBootstrap = import ../../nixfied/framework/runtime/control-bootstrap.nix {
+    inherit pkgs;
+    model = compiledBase.model;
+    projectRoot = ../..;
+    modelFile = baseModelFile;
+  };
+  changedControlBootstrap = import ../../nixfied/framework/runtime/control-bootstrap.nix {
+    inherit pkgs;
+    model = compiledChanged.model;
+    projectRoot = ../..;
+    modelFile = changedModelFile;
+  };
+
+  sharedRuntimeBase = import ../../nixfied/framework/runtime/shared-runtime-lib.nix {
+    inherit pkgs;
+    model = compiledBase.model;
+    runCounterLockPurpose = "run-id-semantic-inputs-base";
+  };
+  sharedRuntimeChanged = import ../../nixfied/framework/runtime/shared-runtime-lib.nix {
+    inherit pkgs;
+    model = compiledChanged.model;
+    runCounterLockPurpose = "run-id-semantic-inputs-changed";
+  };
 in
 pkgs.runCommand "run-id-semantic-inputs-contract" { } ''
   set -euo pipefail
   ${shellHelpers.shellPrelude}
+  ${registry.events.mkShellLib { }}
 
-  ORCH_BASE="${orchestratorBase}/bin/nixfied-orchestrator"
-  ORCH_CHANGED="${orchestratorChanged}/bin/nixfied-orchestrator"
-  export REGISTRY_ROOT="$TMPDIR/registry"
-  export CI_ARTIFACTS_DIR="$TMPDIR/artifacts"
-  export NIXFIED_RUNTIME_DIR_SCOPE_OVERRIDE="$TMPDIR/runtime-scope"
-  mkdir -p "$REGISTRY_ROOT" "$CI_ARTIFACTS_DIR" "$NIXFIED_RUNTIME_DIR_SCOPE_OVERRIDE"
+  compute_with_base() {
+    local registry_root="$1"
+    shift
 
-  RUN_ID_INPUT=alpha "$ORCH_BASE" run-workflow "${workflowId}" --run-id-file "$TMPDIR/workflow-base.run-id" --summary -- --probe one > "$TMPDIR/workflow-base.out" 2>&1
-  RUN_ID_INPUT=alpha "$ORCH_BASE" run-workflow "${workflowId}" --run-id-file "$TMPDIR/workflow-summary.run-id" --summary --log-level debug --output-mode both -- --probe one > "$TMPDIR/workflow-summary.out" 2>&1
+    (
+      export REGISTRY_ROOT="$registry_root"
+      mkdir -p "$REGISTRY_ROOT"
+      ${baseControlBootstrap}
+      ${sharedRuntimeBase}
+      RUN_SUFFIX_REASON=""
+      run_id="$(compute_run_id "$@")" || exit 1
+      deactivate_run "$run_id"
+      printf '%s' "$run_id"
+    )
+  }
 
-  RUN_ID_INPUT=alpha "$ORCH_BASE" run-task "${taskId}" --run-id-file "$TMPDIR/base.run-id" -- --probe one > "$TMPDIR/base.out" 2>&1
-  RUN_ID_INPUT=beta "$ORCH_BASE" run-task "${taskId}" --run-id-file "$TMPDIR/pass.run-id" -- --probe one > "$TMPDIR/pass.out" 2>&1
-  RUN_ID_INPUT=alpha "$ORCH_BASE" run-task "${taskId}" --run-id-file "$TMPDIR/arg.run-id" -- --probe two > "$TMPDIR/arg.out" 2>&1
-  RUN_ID_INPUT=alpha PROJECT_ENV=test "$ORCH_BASE" run-task "${taskId}" --run-id-file "$TMPDIR/env.run-id" -- --probe one > "$TMPDIR/env.out" 2>&1
-  RUN_ID_INPUT=alpha NIX_ENV=1 "$ORCH_BASE" run-task "${taskId}" --run-id-file "$TMPDIR/slot.run-id" -- --probe one > "$TMPDIR/slot.out" 2>&1
-  RUN_ID_INPUT=alpha "$ORCH_CHANGED" run-task "${taskId}" --run-id-file "$TMPDIR/model.run-id" -- --probe one > "$TMPDIR/model.out" 2>&1
+  compute_with_changed() {
+    local registry_root="$1"
+    shift
 
-  workflow_base_id="$(read_trimmed_file "$TMPDIR/workflow-base.run-id")"
-  workflow_summary_id="$(read_trimmed_file "$TMPDIR/workflow-summary.run-id")"
-  base_id="$(read_trimmed_file "$TMPDIR/base.run-id")"
-  pass_id="$(read_trimmed_file "$TMPDIR/pass.run-id")"
-  arg_id="$(read_trimmed_file "$TMPDIR/arg.run-id")"
-  env_id="$(read_trimmed_file "$TMPDIR/env.run-id")"
-  slot_id="$(read_trimmed_file "$TMPDIR/slot.run-id")"
-  model_id="$(read_trimmed_file "$TMPDIR/model.run-id")"
+    (
+      export REGISTRY_ROOT="$registry_root"
+      mkdir -p "$REGISTRY_ROOT"
+      ${changedControlBootstrap}
+      ${sharedRuntimeChanged}
+      RUN_SUFFIX_REASON=""
+      run_id="$(compute_run_id "$@")" || exit 1
+      deactivate_run "$run_id"
+      printf '%s' "$run_id"
+    )
+  }
 
-  if [ "$workflow_base_id" != "$workflow_summary_id" ]; then
-    printf 'workflow_base=%s\nworkflow_summary=%s\n' "$workflow_base_id" "$workflow_summary_id"
-    fail "summary/logging output controls should not change run id"
+  workflow_base_id="$(
+    RUN_ID_INPUT=alpha \
+      compute_with_base "$TMPDIR/workflow-registry" workflow "${workflowId}" "" -- --probe one
+  )"
+  workflow_controls_id="$(
+    RUN_ID_INPUT=alpha \
+    LOG_LEVEL=debug \
+    OUTPUT_MODE=both \
+      compute_with_base "$TMPDIR/workflow-registry" workflow "${workflowId}" "" -- --probe one
+  )"
+
+  base_id="$(
+    RUN_ID_INPUT=alpha \
+      compute_with_base "$TMPDIR/task-registry" task "" "${taskId}" -- --probe one
+  )"
+  pass_id="$(
+    RUN_ID_INPUT=beta \
+      compute_with_base "$TMPDIR/task-registry" task "" "${taskId}" -- --probe one
+  )"
+  arg_id="$(
+    RUN_ID_INPUT=alpha \
+      compute_with_base "$TMPDIR/task-registry" task "" "${taskId}" -- --probe two
+  )"
+  env_id="$(
+    RUN_ID_INPUT=alpha \
+    PROJECT_ENV=test \
+      compute_with_base "$TMPDIR/task-registry" task "" "${taskId}" -- --probe one
+  )"
+  slot_id="$(
+    RUN_ID_INPUT=alpha \
+    NIX_ENV=1 \
+      compute_with_base "$TMPDIR/task-registry" task "" "${taskId}" -- --probe one
+  )"
+  model_id="$(
+    RUN_ID_INPUT=alpha \
+      compute_with_changed "$TMPDIR/task-registry-changed" task "" "${taskId}" -- --probe one
+  )"
+
+  if [ "$workflow_base_id" != "$workflow_controls_id" ]; then
+    printf 'workflow_base=%s\nworkflow_controls=%s\n' "$workflow_base_id" "$workflow_controls_id"
+    fail "workflow logging and output controls should not change run id"
   fi
 
   if [ "$base_id" = "$pass_id" ]; then
@@ -138,5 +190,5 @@ pkgs.runCommand "run-id-semantic-inputs-contract" { } ''
     fail "compiled model changes should change run id"
   fi
 
-  echo "OK: run id tracks semantic invocation inputs only" > "$out"
+  echo "OK: run id helper tracks semantic inputs without orchestrator integration" > "$out"
 ''

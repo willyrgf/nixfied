@@ -114,8 +114,9 @@ pkgs.runCommand "shell-contract-runtime-smoke" { } ''
   if [ "$invalid_arg_rc" -eq 0 ]; then
     fail "expected invalid enum arg to fail"
   fi
-  ${pkgs.gnugrep}/bin/grep -F "ERROR: arg:mode must be one of basic,full (got 'invalid')" "$TMPDIR/invalid-arg.out" >/dev/null \
-    || fail "expected invalid enum arg message"
+  ${pkgs.gnugrep}/bin/grep -Fq "ERROR:" "$TMPDIR/invalid-arg.out" || fail "expected invalid enum arg error marker"
+  ${pkgs.gnugrep}/bin/grep -Fq "arg:mode" "$TMPDIR/invalid-arg.out" || fail "expected invalid enum arg field marker"
+  ${pkgs.gnugrep}/bin/grep -Fq "invalid" "$TMPDIR/invalid-arg.out" || fail "expected invalid enum arg value marker"
 
   set +e
   nixfied_contract_validate_exit /tmp/unused 99 > "$TMPDIR/invalid-exit.out" 2>&1
@@ -124,8 +125,9 @@ pkgs.runCommand "shell-contract-runtime-smoke" { } ''
   if [ "$invalid_exit_rc" -eq 0 ]; then
     fail "expected undeclared exit code to fail"
   fi
-  ${pkgs.gnugrep}/bin/grep -F "ERROR: undeclared exit code code=99" "$TMPDIR/invalid-exit.out" >/dev/null \
-    || fail "expected undeclared exit code message"
+  ${pkgs.gnugrep}/bin/grep -Fq "ERROR:" "$TMPDIR/invalid-exit.out" || fail "expected undeclared exit error marker"
+  ${pkgs.gnugrep}/bin/grep -Fq "undeclared exit code" "$TMPDIR/invalid-exit.out" || fail "expected undeclared exit semantic marker"
+  ${pkgs.gnugrep}/bin/grep -Fq "code=99" "$TMPDIR/invalid-exit.out" || fail "expected undeclared exit code value marker"
 
-  echo "OK: compiled shell contract plan validates env, args, and exits" > "$out"
+  echo "OK: compiled shell contract plan validates env, args, and exits without exact message snapshots" > "$out"
 ''

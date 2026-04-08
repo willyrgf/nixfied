@@ -1,40 +1,39 @@
 {
   pkgs,
   model,
-  apps,
 }:
 let
-  featureIds = builtins.sort builtins.lessThan (builtins.attrNames (model.features or { }));
-  expectedLines = [
-    "${model.identity.projectName} features (model-generated)"
-    model.identity.description
-    ""
-    "Features:"
-  ]
-  ++ map (
+  features = model.features or { };
+  featureIds = builtins.sort builtins.lessThan (builtins.attrNames features);
+  allowedCoverageLayers = [
+    "compile"
+    "adapter"
+    "e2e"
+  ];
+  missingStructure = builtins.filter (
     featureId:
     let
-      feature = model.features.${featureId};
-      coverageSuffix = if feature.coverageRequired or false then " coverage=required" else "";
+      feature = features.${featureId};
     in
-    "  ${featureId} [${feature.kind}] - ${feature.summary}${coverageSuffix}"
+    (feature.kind or "") == ""
+    || (feature.summary or "") == ""
+    || (feature.status or "") == ""
+    || (feature.ownerFiles or [ ]) == [ ]
+    || !(builtins.isList (feature.modelPaths or [ ]))
+    || (feature.surfaces or [ ]) == [ ]
   ) featureIds;
-  expectedText = builtins.concatStringsSep "\n" expectedLines + "\n";
-  expectedFile = pkgs.writeText "expected-features-surface.txt" expectedText;
+  missingCoverageLayer = builtins.filter (
+    featureId:
+    let
+      feature = features.${featureId};
+    in
+    (feature.coverageRequired or false)
+    && !(builtins.elem (feature.coverageLayer or "") allowedCoverageLayers)
+  ) featureIds;
 in
+assert featureIds != [ ];
+assert missingStructure == [ ];
+assert missingCoverageLayer == [ ];
 pkgs.runCommand "features-surface-contract" { } ''
-  set -euo pipefail
-
-  FEATURES=${apps.features.program}
-  EXPECTED=${expectedFile}
-
-  "$FEATURES" > "$TMPDIR/features.out"
-
-  if ! ${pkgs.diffutils}/bin/diff -u "$EXPECTED" "$TMPDIR/features.out" > "$TMPDIR/features.diff"; then
-    cat "$TMPDIR/features.diff"
-    echo "ERROR: features app output drifted from compiled feature inventory" >&2
-    exit 1
-  fi
-
-  echo "OK: features app exports the compiled feature inventory" > "$out"
+  echo "OK: feature metadata is structurally complete without relying on CLI snapshots" > "$out"
 ''

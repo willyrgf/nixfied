@@ -3,14 +3,9 @@
 }:
 let
   frameworkLib = import ../../nixfied/framework/core {
-    inherit
-      pkgs
-      ;
+    inherit pkgs;
     inherit (pkgs) system;
   };
-  compilerSource = builtins.readFile ../../nixfied/compiler/compile-workflows.nix;
-  workflowModuleSource = builtins.readFile ../../nixfied/modules/workflows.nix;
-  workflowSchemaSource = builtins.readFile ../../nixfied/schemas/workflow-contract.json;
 
   evalWorkflows =
     extraModule:
@@ -22,6 +17,21 @@ let
         localOverrides = [ ];
       }).model.workflows true
     );
+
+  validUnitTask = evalWorkflows {
+    nixfied.tasks."test.workflow.errors.base" = {
+      id = "task.test.workflow.errors.base";
+      runner.command = ''
+        set -euo pipefail
+        printf '%s\n' "base"
+      '';
+    };
+
+    nixfied.workflows."test.workflow.errors.valid-unit" = {
+      id = "workflow.test.workflow.errors.valid-unit";
+      units.main.taskId = "task.test.workflow.errors.base";
+    };
+  };
 
   emptyUnitTask = evalWorkflows {
     nixfied.tasks."test.workflow.errors.base" = {
@@ -35,6 +45,31 @@ let
     nixfied.workflows."test.workflow.errors.empty-unit" = {
       id = "workflow.test.workflow.errors.empty-unit";
       units.main.taskId = "";
+    };
+  };
+
+  validPreRunTask = evalWorkflows {
+    nixfied.tasks = {
+      "test.workflow.errors.base" = {
+        id = "task.test.workflow.errors.base";
+        runner.command = ''
+          set -euo pipefail
+          printf '%s\n' "base"
+        '';
+      };
+      "test.workflow.errors.pre" = {
+        id = "task.test.workflow.errors.pre";
+        runner.command = ''
+          set -euo pipefail
+          printf '%s\n' "pre"
+        '';
+      };
+    };
+
+    nixfied.workflows."test.workflow.errors.valid-prerun" = {
+      id = "workflow.test.workflow.errors.valid-prerun";
+      units.main.taskId = "task.test.workflow.errors.base";
+      preRun.tasks = [ "task.test.workflow.errors.pre" ];
     };
   };
 
@@ -54,6 +89,21 @@ let
     };
   };
 
+  validStageEntry = evalWorkflows {
+    nixfied.tasks."test.workflow.errors.base" = {
+      id = "task.test.workflow.errors.base";
+      runner.command = ''
+        set -euo pipefail
+        printf '%s\n' "base"
+      '';
+    };
+
+    nixfied.workflows."test.workflow.errors.valid-stage" = {
+      id = "workflow.test.workflow.errors.valid-stage";
+      stages = [ [ "task.test.workflow.errors.base" ] ];
+    };
+  };
+
   emptyStageEntry = evalWorkflows {
     nixfied.tasks."test.workflow.errors.base" = {
       id = "task.test.workflow.errors.base";
@@ -66,6 +116,39 @@ let
     nixfied.workflows."test.workflow.errors.empty-stage" = {
       id = "workflow.test.workflow.errors.empty-stage";
       stages = [ [ "" ] ];
+    };
+  };
+
+  validDependencyGraph = evalWorkflows {
+    nixfied.tasks = {
+      "test.workflow.errors.a" = {
+        id = "task.test.workflow.errors.a";
+        runner.command = ''
+          set -euo pipefail
+          printf '%s\n' "a"
+        '';
+      };
+      "test.workflow.errors.b" = {
+        id = "task.test.workflow.errors.b";
+        runner.command = ''
+          set -euo pipefail
+          printf '%s\n' "b"
+        '';
+      };
+    };
+
+    nixfied.workflows."test.workflow.errors.valid-cycle" = {
+      id = "workflow.test.workflow.errors.valid-cycle";
+      units = {
+        a = {
+          taskId = "task.test.workflow.errors.a";
+          needs = [ ];
+        };
+        b = {
+          taskId = "task.test.workflow.errors.b";
+          needs = [ "a" ];
+        };
+      };
     };
   };
 
@@ -102,6 +185,27 @@ let
     };
   };
 
+  validPreRunServiceSet = evalWorkflows {
+    nixfied.tasks."test.workflow.errors.base" = {
+      id = "task.test.workflow.errors.base";
+      runner.command = ''
+        set -euo pipefail
+        printf '%s\n' "base"
+      '';
+    };
+
+    nixfied.workflows."test.workflow.errors.valid-service-set" = {
+      id = "workflow.test.workflow.errors.valid-service-set";
+      units.main.taskId = "task.test.workflow.errors.base";
+      preRun.serviceSets = [
+        {
+          serviceSetId = "service-set.default";
+          operation = "status";
+        }
+      ];
+    };
+  };
+
   unknownPreRunServiceSet = evalWorkflows {
     nixfied.tasks."test.workflow.errors.base" = {
       id = "task.test.workflow.errors.base";
@@ -117,8 +221,25 @@ let
       preRun.serviceSets = [
         {
           serviceSetId = "missing";
+          operation = "status";
         }
       ];
+    };
+  };
+
+  validLockPolicy = evalWorkflows {
+    nixfied.tasks."test.workflow.errors.base" = {
+      id = "task.test.workflow.errors.base";
+      runner.command = ''
+        set -euo pipefail
+        printf '%s\n' "base"
+      '';
+    };
+
+    nixfied.workflows."test.workflow.errors.valid-lock-policy" = {
+      id = "workflow.test.workflow.errors.valid-lock-policy";
+      units.main.taskId = "task.test.workflow.errors.base";
+      execution.lockPolicy = "exclusive";
     };
   };
 
@@ -138,21 +259,18 @@ let
     };
   };
 in
+assert validUnitTask.success;
 assert !emptyUnitTask.success;
+assert validPreRunTask.success;
 assert !emptyPreRunTask.success;
+assert validStageEntry.success;
 assert !emptyStageEntry.success;
+assert validDependencyGraph.success;
 assert !dependencyCycle.success;
+assert validPreRunServiceSet.success;
 assert !unknownPreRunServiceSet.success;
+assert validLockPolicy.success;
 assert !unsupportedLockPolicy.success;
-assert pkgs.lib.hasInfix "unit '\${unitName}' has an empty taskId" compilerSource;
-assert pkgs.lib.hasInfix "\${phaseName}.tasks references an empty task id" compilerSource;
-assert pkgs.lib.hasInfix "\${phaseName}.serviceSets references unknown service set" compilerSource;
-assert pkgs.lib.hasInfix "workflow stage entries must not be empty" compilerSource;
-assert pkgs.lib.hasInfix "workflow '\${workflowId}' has a dependency cycle" compilerSource;
-assert pkgs.lib.hasInfix "\"exclusive\"" workflowModuleSource;
-assert (!pkgs.lib.hasInfix "\"shared-aware\"" workflowModuleSource);
-assert pkgs.lib.hasInfix "\"exclusive\"" workflowSchemaSource;
-assert (!pkgs.lib.hasInfix "\"shared-aware\"" workflowSchemaSource);
 pkgs.runCommand "workflow-validation-errors" { } ''
-  echo "OK: workflow validation rejects invalid refs, cycles, and unsupported lock policy" > "$out"
+  echo "OK: workflow validation distinguishes valid local shapes from invalid refs, cycles, and lock policies" > "$out"
 ''
