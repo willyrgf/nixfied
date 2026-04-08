@@ -2,6 +2,16 @@ let
   coverageMap = import ../../../proof-workspace/scenarios/coverage-map.nix;
   coverageScenarios = coverageMap.scenarios or { };
   coverageCapabilities = coverageMap.capabilities or { };
+  safeRepoRoot = builtins.unsafeDiscardStringContext (builtins.toString ../../..);
+  historicalGreenEvidence = coverageMap.historicalGreenEvidence or { };
+  historicalArtifactRelPath = historicalGreenEvidence.artifactFile or "";
+  historicalArtifactPath =
+    if historicalArtifactRelPath == "" then "" else "${safeRepoRoot}/${historicalArtifactRelPath}";
+  historicalGreenRecords =
+    if historicalArtifactRelPath != "" && builtins.pathExists historicalArtifactPath then
+      (builtins.fromJSON (builtins.readFile historicalArtifactPath)).records or [ ]
+    else
+      [ ];
   deletionEligibility = coverageMap.deletionEligibility or { };
   deletionRequiredProfiles = deletionEligibility.requiredProfiles or [ ];
   firstBlockDeletionEntries = deletionEligibility.firstBlock or [ ];
@@ -191,6 +201,17 @@ let
     profileShardChecks: profileName:
     builtins.concatLists (map (shardName: profileShardChecks.${profileName}.${shardName} or [ ]) order);
 
+  scenarioHasHistoricalGreenRecord =
+    scenarioId: profileName:
+    builtins.any (
+      record:
+      (record.scenarioId or "") == scenarioId
+      && (record.profile or "") == profileName
+      && (record.status or "") == "green"
+      && builtins.isAttrs (record.runState or { })
+      && (record.runState.result or "") != ""
+    ) historicalGreenRecords;
+
   replacementCapabilityIsGreen =
     requiredProfiles: capabilityId:
     let
@@ -214,7 +235,9 @@ let
               enabled = scenario.enabled or false;
               checkName = scenario.checkName or "";
             in
-            enabled && builtins.elem checkName (allProfileChecksFrom baseProfileShardChecks profileName)
+            enabled
+            && builtins.elem checkName (allProfileChecksFrom baseProfileShardChecks profileName)
+            && scenarioHasHistoricalGreenRecord scenarioId profileName
         ) scenarioRefs;
     in
     capabilityExists

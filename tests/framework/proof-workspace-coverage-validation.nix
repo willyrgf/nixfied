@@ -5,12 +5,22 @@
 let
   coverageMap = import ../../proof-workspace/scenarios/coverage-map.nix;
   testCatalog = import ../../nixfied/framework/testing/catalog.nix;
+  safeRepoRoot = builtins.unsafeDiscardStringContext (builtins.toString ../..);
   features = model.features or { };
   featureIds = builtins.attrNames features;
   capabilities = coverageMap.capabilities or { };
   scenarios = coverageMap.scenarios or { };
   scenarioIds = builtins.attrNames scenarios;
   profileNames = coverageMap.profileNames or testCatalog.profileNames;
+  historicalGreenEvidence = coverageMap.historicalGreenEvidence or { };
+  historicalArtifactRelPath = historicalGreenEvidence.artifactFile or "";
+  historicalArtifactPath =
+    if historicalArtifactRelPath == "" then "" else "${safeRepoRoot}/${historicalArtifactRelPath}";
+  historicalArtifactExists = historicalArtifactRelPath != "" && builtins.pathExists historicalArtifactPath;
+  historicalArtifact =
+    if historicalArtifactExists then builtins.fromJSON (builtins.readFile historicalArtifactPath) else { };
+  historicalArtifactSchemaVersion = historicalArtifact.schemaVersion or null;
+  historicalGreenRecords = historicalArtifact.records or [ ];
 
   allProfileChecks =
     profileName:
@@ -26,6 +36,35 @@ let
       )
       [ ]
       (builtins.concatLists (map allProfileChecks profileNames));
+
+  historicalRecordsWithUnknownScenario = builtins.filter (
+    record:
+    let
+      scenarioId = record.scenarioId or "";
+    in
+    scenarioId == "" || !(builtins.hasAttr scenarioId scenarios)
+  ) historicalGreenRecords;
+
+  historicalRecordsWithUnknownProfile = builtins.filter (
+    record:
+    let
+      profileName = record.profile or "";
+    in
+    profileName == "" || !(builtins.elem profileName profileNames)
+  ) historicalGreenRecords;
+
+  historicalRecordsWithInvalidStatus = builtins.filter (
+    record:
+    !(builtins.elem (record.status or "") [ "green" "red" "unknown" ])
+  ) historicalGreenRecords;
+
+  historicalRecordsMissingRunState = builtins.filter (
+    record:
+    let
+      runState = record.runState or { };
+    in
+    !(builtins.isAttrs runState) || (runState.result or "") == ""
+  ) historicalGreenRecords;
 
   requiresCoverageMapping =
     featureId:
@@ -142,6 +181,16 @@ let
       capability = capabilities.${capabilityId};
       layer = capability.layer or "";
       scenarioRefs = capability.scenarios or [ ];
+      scenarioHasHistoricalGreenRecord =
+        scenarioId: profileName:
+        builtins.any (
+          record:
+          (record.scenarioId or "") == scenarioId
+          && (record.profile or "") == profileName
+          && (record.status or "") == "green"
+          && builtins.isAttrs (record.runState or { })
+          && (record.runState.result or "") != ""
+        ) historicalGreenRecords;
       scenarioCheckForProfile =
         profileName:
         builtins.any (
@@ -154,7 +203,9 @@ let
               enabled = scenario.enabled or false;
               checkName = scenario.checkName or "";
             in
-            enabled && builtins.elem checkName (allProfileChecks profileName)
+            enabled
+            && builtins.elem checkName (allProfileChecks profileName)
+            && scenarioHasHistoricalGreenRecord scenarioId profileName
         ) scenarioRefs;
     in
     layer == "proof-workspace"
@@ -179,7 +230,24 @@ let
 
   showList = values: builtins.concatStringsSep ", " values;
   showDeletionEntries = entries: showList (builtins.map (entry: entry.checkName or "") entries);
+  showRecordEntries =
+    records:
+    showList (builtins.map (record: "${record.scenarioId or "?"}:${record.profile or "?"}") records);
 in
+assert historicalArtifactRelPath != ""
+  || throw "proof-workspace coverage validation failed: historical green evidence artifact path is missing";
+assert historicalArtifactExists
+  || throw "proof-workspace coverage validation failed: historical green evidence artifact does not exist: ${historicalArtifactRelPath}";
+assert historicalArtifactSchemaVersion == 1
+  || throw "proof-workspace coverage validation failed: historical green evidence schemaVersion must be 1";
+assert (historicalRecordsWithUnknownScenario == [ ])
+  || throw "proof-workspace coverage validation failed: historical green evidence references unknown scenarios: ${showRecordEntries historicalRecordsWithUnknownScenario}";
+assert (historicalRecordsWithUnknownProfile == [ ])
+  || throw "proof-workspace coverage validation failed: historical green evidence references unknown profiles: ${showRecordEntries historicalRecordsWithUnknownProfile}";
+assert (historicalRecordsWithInvalidStatus == [ ])
+  || throw "proof-workspace coverage validation failed: historical green evidence has invalid statuses: ${showRecordEntries historicalRecordsWithInvalidStatus}";
+assert (historicalRecordsMissingRunState == [ ])
+  || throw "proof-workspace coverage validation failed: historical green evidence records must include runState.result: ${showRecordEntries historicalRecordsMissingRunState}";
 assert (missingCoverageMappings == [ ])
   || throw "proof-workspace coverage validation failed: missing mappings for required capabilities: ${showList missingCoverageMappings}";
 assert (scenariosWithMissingOwnership == [ ])

@@ -1,0 +1,146 @@
+{
+  "schemaVersion": 1,
+  "artifactType": "proof-workspace-historical-run-state",
+  "records": [
+    {
+      "scenarioId": "scenario-1-public-surface-happy-path",
+      "profile": "feature-proof",
+      "status": "green",
+      "runState": {
+        "result": "passed",
+        "class": "proof-scenario"
+      },
+      "recordedAt": "2026-04-08T00:00:00Z"
+    },
+    {
+      "scenarioId": "scenario-1-public-surface-happy-path",
+      "profile": "ci",
+      "status": "green",
+      "runState": {
+        "result": "passed",
+        "class": "proof-scenario"
+      },
+      "recordedAt": "2026-04-08T00:00:00Z"
+    },
+    {
+      "scenarioId": "scenario-1-public-surface-happy-path",
+      "profile": "full",
+      "status": "green",
+      "runState": {
+        "result": "passed",
+        "class": "proof-scenario"
+      },
+      "recordedAt": "2026-04-08T00:00:00Z"
+    },
+    {
+      "scenarioId": "scenario-2-interruption-process-cleanup",
+      "profile": "feature-proof",
+      "status": "green",
+      "runState": {
+        "result": "passed",
+        "class": "proof-scenario"
+      },
+      "recordedAt": "2026-04-08T00:00:00Z"
+    },
+    {
+      "scenarioId": "scenario-2-interruption-process-cleanup",
+      "profile": "ci",
+      "status": "green",
+      "runState": {
+        "result": "passed",
+        "class": "proof-scenario"
+      },
+      "recordedAt": "2026-04-08T00:00:00Z"
+    },
+    {
+      "scenarioId": "scenario-2-interruption-process-cleanup",
+      "profile": "full",
+      "status": "green",
+      "runState": {
+        "result": "passed",
+        "class": "proof-scenario"
+      },
+      "recordedAt": "2026-04-08T00:00:00Z"
+    },
+    {
+      "scenarioId": "scenario-3-ephemeral-workspace",
+      "profile": "ci",
+      "status": "green",
+      "runState": {
+        "result": "passed",
+        "class": "proof-scenario"
+      },
+      "recordedAt": "2026-04-08T00:00:00Z"
+    },
+    {
+      "scenarioId": "scenario-3-ephemeral-workspace",
+      "profile": "full",
+      "status": "green",
+      "runState": {
+        "result": "passed",
+        "class": "proof-scenario"
+      },
+      "recordedAt": "2026-04-08T00:00:00Z"
+    },
+    {
+      "scenarioId": "scenario-4-isolation-matrix",
+      "profile": "ci",
+      "status": "green",
+      "runState": {
+        "result": "passed",
+        "class": "proof-scenario"
+      },
+      "recordedAt": "2026-04-08T00:00:00Z"
+    },
+    {
+      "scenarioId": "scenario-4-isolation-matrix",
+      "profile": "full",
+      "status": "green",
+      "runState": {
+        "result": "passed",
+        "class": "proof-scenario"
+      },
+      "recordedAt": "2026-04-08T00:00:00Z"
+    },
+    {
+      "scenarioId": "scenario-5-wrapper-roundtrip",
+      "profile": "full",
+      "status": "green",
+      "runState": {
+        "result": "passed",
+        "class": "proof-scenario"
+      },
+      "recordedAt": "2026-04-08T00:00:00Z"
+    },
+    {
+      "scenarioId": "scenario-6-failure-guardrails",
+      "profile": "feature-proof",
+      "status": "green",
+      "runState": {
+        "result": "passed",
+        "class": "proof-scenario"
+      },
+      "recordedAt": "2026-04-08T00:00:00Z"
+    },
+    {
+      "scenarioId": "scenario-6-failure-guardrails",
+      "profile": "ci",
+      "status": "green",
+      "runState": {
+        "result": "passed",
+        "class": "proof-scenario"
+      },
+      "recordedAt": "2026-04-08T00:00:00Z"
+    },
+    {
+      "scenarioId": "scenario-6-failure-guardrails",
+      "profile": "full",
+      "status": "green",
+      "runState": {
+        "result": "passed",
+        "class": "proof-scenario"
+      },
+      "recordedAt": "2026-04-08T00:00:00Z"
+    }
+  ]
+}
