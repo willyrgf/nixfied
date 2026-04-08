@@ -30,19 +30,6 @@ proof_require_file() {
   }
 }
 
-proof_write_seed_flake() {
-  local target_root="$1"
-  local repo_root="$2"
-  local seed_flake="$target_root/flake.nix"
-
-  proof_require_file "$seed_flake"
-
-  sed -i.bak \
-    "s|path:/tmp/nixfied-source-not-materialized|path:${repo_root}|g" \
-    "$seed_flake"
-  rm -f "$seed_flake.bak"
-}
-
 proof_copy_seed_workspace() {
   local seed_root="$1"
   local target_root="$2"
@@ -113,7 +100,6 @@ proof_bootstrap_seed_copy() {
   proof_require_dir "$seed_root"
 
   proof_copy_seed_workspace "$seed_root" "$target_root"
-  proof_write_seed_flake "$target_root" "$repo_root"
   proof_init_git_baseline "$target_root"
 
   proof_log_ok "seed-copy bootstrap ready at $target_root"

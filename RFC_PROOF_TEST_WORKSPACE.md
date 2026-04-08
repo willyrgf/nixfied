@@ -678,7 +678,7 @@ Current green state:
 
 Still to do before this RFC can be treated as fully implemented:
 
-- [ ] Make `proof-workspace/seed/` a self-contained checked-in canonical workspace instead of relying on bootstrap to copy live `nixfied/project`, `nixfied/modules`, and `nixfied/framework` trees from the source repository.
+- [x] Make `proof-workspace/seed/` a self-contained checked-in canonical workspace instead of relying on bootstrap to copy live `nixfied/project`, `nixfied/modules`, and `nixfied/framework` trees from the source repository.
 - [x] Make Scenario 1 actually prove the capabilities it currently claims:
   - invoke representative `svc::<service>::<op>` public surfaces
   - exercise built-in service lifecycle viability for `helios`, `minio`, `nginx`, `postgres`, and `reth`
