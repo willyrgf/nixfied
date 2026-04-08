@@ -693,21 +693,11 @@ Still to do before this RFC can be treated as fully implemented:
   - install/upgrade misuse paths
   - machine/json assertions over stable `code`, `stage`, and target identifiers where supported
 - [x] Extend Scenario 5 so thin and vendored wrappers rerun at least one canonical happy-path proof flow, not just `validate-env` plus a single `run-task`.
-- [ ] Finish deleting the remaining legacy integration-shaped checks that are still scheduled outside proof-workspace in `full`:
-  - `caller-pwd-remote-projectroot-smoke.nix`
-  - `disabled-service-no-package-resolution-smoke.nix`
-  - `logging-injection-smoke.nix`
-  - `nginx-site-management-smoke.nix`
-  - `nix-client-env-smoke.nix`
-  - `postgres-backup-restore-smoke.nix`
-  - `postgres-config-artifacts-smoke.nix`
-  - `ready-helios-sync-gate-smoke.nix`
-  - `selected-source-only-resolution-smoke.nix`
-  - `service-probe-overrides-smoke.nix`
-  - `slot-env-runtime-smoke.nix`
-  - `supervisor-lifecycle-smoke.nix`
-  - `vendored-metadata-packaged-source-smoke.nix`
-- [ ] Rewrite the remaining broad or presentation-coupled tests into smaller local proofs:
+- [x] Finish deleting the remaining legacy integration-shaped checks that are still scheduled outside proof-workspace in `full`:
+  - delete the proof-workspace-replaced public negative-path smokes
+  - rewrite the env-sandbox/public-shape holdouts into smaller local proofs
+  - reclassify targeted module/helper proofs out of the proof-workspace deletion bucket
+- [x] Rewrite the remaining broad or presentation-coupled tests into smaller local proofs:
   - `features-surface-contract.nix`
   - `package-output-contract.nix`
   - `shell-contract-runtime-smoke.nix`
@@ -864,6 +854,24 @@ Also keep the pure eval proof for the introspection schema shape.
 
 Also keep a pure eval proof that capability metadata is complete and structurally valid. That is the replacement concept for the current `features` surface snapshot style of testing.
 
+Also keep these targeted local/helper proofs. They still have some legacy `-smoke` names, but they are not proof-workspace deletion targets:
+
+```text
+tests/framework/caller-pwd-remote-projectroot-smoke.nix
+tests/framework/disabled-service-no-package-resolution-smoke.nix
+tests/framework/logging-injection-smoke.nix
+tests/framework/nginx-site-management-smoke.nix
+tests/framework/nix-client-env-smoke.nix
+tests/framework/postgres-backup-restore-smoke.nix
+tests/framework/postgres-config-artifacts-smoke.nix
+tests/framework/ready-helios-sync-gate-smoke.nix
+tests/framework/selected-source-only-resolution-smoke.nix
+tests/framework/service-probe-overrides-smoke.nix
+tests/framework/slot-env-runtime-smoke.nix
+tests/framework/supervisor-lifecycle-smoke.nix
+tests/framework/vendored-metadata-packaged-source-smoke.nix
+```
+
 Some of these files still carry legacy `-smoke` names, but their shape is local/helper-level and that is what matters.
 
 ### Rewrite Into Smaller Unit Tests, Then Delete The Current File Form
@@ -873,26 +881,24 @@ These files are proving real things, but the current form is too broad or too pr
 ```text
 tests/framework/compiler-validation.nix
 tests/framework/excluded-service-evaluation.nix
-tests/framework/features-surface-contract.nix
-tests/framework/package-output-contract.nix
 tests/framework/postgres-config-artifacts-contract.nix
 tests/framework/operations-contract.nix
-tests/framework/run-id-semantic-inputs-contract.nix
 tests/framework/service-requirements-contract.nix
-tests/framework/shell-contract-runtime-smoke.nix
-tests/framework/workflow-validation-errors.nix
 ```
 
 The goal is to split these into small local invariants, not keep the current monoliths.
 
-In particular:
+The already-completed local-proof rewrites are:
 
-- `features-surface-contract.nix` should become a pure metadata proof over `model.features`, not a public CLI snapshot.
-- `package-output-contract.nix` should become pure publication checks over apps/packages, not `--help` grep.
-- `shell-contract-runtime-smoke.nix` should keep env/arg/exit semantics but stop asserting exact rendered error lines.
-- `workflow-validation-errors.nix` should keep invalid-model evaluation failures and stop grepping source text for message literals.
-- `operations-contract.nix` should keep compile-level operation wiring checks and drop presentation-coupled script text assertions.
-- `run-id-semantic-inputs-contract.nix` should be split into smaller kernel/runtime invariants so run-id semantics are proven without broad integration harnessing.
+```text
+tests/framework/features-surface-contract.nix
+tests/framework/package-output-contract.nix
+tests/framework/run-id-semantic-inputs-contract.nix
+tests/framework/shell-contract-runtime-smoke.nix
+tests/framework/workflow-validation-errors.nix
+```
+
+`operations-contract.nix` should keep compile-level operation wiring checks and drop presentation-coupled script text assertions.
 
 ### Delete Once The Proof Workspace Scenarios Are Green
 
@@ -901,9 +907,7 @@ These are the current tests that should be removed from the suite once the proof
 ```text
 tests/framework/artifacts-root-override-isolation-smoke.nix
 tests/framework/artifacts-run-isolation-smoke.nix
-tests/framework/caller-pwd-remote-projectroot-smoke.nix
 tests/framework/ci-mode-matrix-smoke.nix
-tests/framework/disabled-service-no-package-resolution-smoke.nix
 tests/framework/discovery-command-surfaces-smoke.nix
 tests/framework/env-loader-strict-smoke.nix
 tests/framework/ephemeral-copy-budget-smoke.nix
@@ -920,10 +924,7 @@ tests/framework/framework-upgrade-preserve-smoke.nix
 tests/framework/introspect-contract.nix
 tests/framework/isolation-nested-run-id-smoke.nix
 tests/framework/local-override-introspect-contract.nix
-tests/framework/logging-injection-smoke.nix
-tests/framework/nginx-site-management-smoke.nix
 tests/framework/nix-ci-workflow-contract.nix
-tests/framework/nix-client-env-smoke.nix
 tests/framework/orchestrator-arg-forwarding-smoke.nix
 tests/framework/orchestrator-signal-cleanup-smoke.nix
 tests/framework/orchestrator-stop-controls-smoke.nix
@@ -931,13 +932,10 @@ tests/framework/parallel-runner-process-tree-smoke.nix
 tests/framework/parallel-runner-smoke.nix
 tests/framework/parallel-worker-cap-invalid-smoke.nix
 tests/framework/parallel-worker-cap-smoke.nix
-tests/framework/postgres-backup-restore-smoke.nix
-tests/framework/postgres-config-artifacts-smoke.nix
 tests/framework/postgres-kernel-probe-lifecycle-smoke.nix
 tests/framework/project-config-boundary.nix
 tests/framework/ready-health-matrix-smoke.nix
 tests/framework/ready-health-shutdown-smoke.nix
-tests/framework/ready-helios-sync-gate-smoke.nix
 tests/framework/registry-detail-derivation-smoke.nix
 tests/framework/registry-events-runtime-contract.nix
 tests/framework/registry-lock-recovery-smoke.nix
@@ -945,18 +943,13 @@ tests/framework/run-id-active-collision-suffix-smoke.nix
 tests/framework/run-id-noise-stability-smoke.nix
 tests/framework/run-record-atomicity-smoke.nix
 tests/framework/runtime-env-isolation-smoke.nix
-tests/framework/selected-source-only-resolution-smoke.nix
 tests/framework/service-dir-isolation-smoke.nix
 tests/framework/service-lifecycle-matrix-smoke.nix
 tests/framework/service-op-composition-contract.nix
-tests/framework/service-probe-overrides-smoke.nix
 tests/framework/service-set-behavior-contract.nix
-tests/framework/slot-env-runtime-smoke.nix
 tests/framework/summary-json-smoke.nix
-tests/framework/supervisor-lifecycle-smoke.nix
 tests/framework/task-hooks-smoke.nix
 tests/framework/test-mode-cli-contract-smoke.nix
-tests/framework/vendored-metadata-packaged-source-smoke.nix
 tests/framework/workflow-lifecycle-smoke.nix
 tests/framework/workflow-mode-derived-smoke.nix
 tests/framework/workflow-probe-scope-smoke.nix
@@ -1000,14 +993,13 @@ These are still subject to the coverage-map gate. A file being in this block is 
 Do not include the following in the first deletion block:
 
 - `operations-contract.nix` until the narrower compile-level replacement exists
-- `run-id-semantic-inputs-contract.nix` until run-id semantic invariants are migrated to smaller kernel/runtime proofs
 - docs and `nix-checks` behavior contract tests that remain local/package-level invariants
 
 ### Later Deletion Blocks
 
 - After Scenario 3 and 4: delete the fragmented ephemeral, env-loader, slot/env, registry/artifact isolation, and `test-isolation`-adjacent smokes.
 - After Scenario 5: delete the install, vendor, thin-wrapper, self-host, and upgrade preservation smokes.
-- After Scenario 6: delete the blocked-env, sensitive passthrough, invalid-cap, and other public negative-path smokes.
+- After Scenario 6: delete the remaining invalid-cap and other public negative-path smokes that are still integration-shaped.
 
 ### Support Files To Delete Or Move With The Integration Suite
 
