@@ -1,39 +1,40 @@
 {
-  description = "Nixfied proof workspace seed";
+  description = "Nixfied vendored wrapper";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
-    # Proof bootstrap rewrites this to the current source-repo path.
-    nixfied.url = "path:/tmp/nixfied-source-not-materialized";
   };
 
-  outputs =
-    {
-      flake-utils,
-      nixfied,
-      ...
-    }:
-    flake-utils.lib.eachDefaultSystem (
-      system:
+  outputs = { self, nixpkgs, flake-utils }:
+    flake-utils.lib.eachDefaultSystem (system:
       let
-        frameworkOutputs = nixfied.lib.mkFlakeOutputs {
-          inherit system;
+        pkgs = import nixpkgs { inherit system; };
+        nixfiedLib = import ./nixfied/framework/core/default.nix {
+          inherit
+            pkgs
+            system
+            ;
+        };
+        frameworkSourceRevision = import ./nixfied/framework/core/framework-revision.nix {
+          sourcePath = ./nixfied;
+          metadataPath = ./nixfied/VENDORED.txt;
+        };
+        frameworkOutputs = nixfiedLib.mkFlakeOutputs {
           projectRoot = ./.;
           projectModules = [ ./nixfied/project/module.nix ];
           extraModules = [ ];
+          # Module overrides only. ./nixfied/local/default.nix is a legacy
+          # extension file and is not loaded by the default flake outputs.
           localOverrides = [ ];
-          frameworkSourceRevision = "proof-seed";
+          inherit frameworkSourceRevision;
         };
-      in
-      {
-        inherit (frameworkOutputs)
-          apps
-          packages
-          checks
-          devShells
-          legacyPackages
-          ;
-      }
-    );
+      in {
+        apps = frameworkOutputs.apps;
+        packages = frameworkOutputs.packages;
+        legacyPackages = frameworkOutputs.legacyPackages;
+        checks = frameworkOutputs.checks;
+        devShells = frameworkOutputs.devShells;
+      });
 }
+

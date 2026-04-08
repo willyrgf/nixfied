@@ -1,0 +1,24 @@
+Vendored Framework
+==================
+
+This repository vendors the Nixfied framework under `nixfied/`.
+
+Framework source revision (install/upgrade):
+- c7523a0a02b6adbac4518dc70e2d1098a228a93f
+
+Recent framework changes:
+- exact git history unavailable from packaged source
+
+Framework source revision workflow:
+- initialized via `framework::install`
+- upgraded via `framework::upgrade` (preserves `nixfied/project/` and `nixfied/local/` by default)
+
+Framework-owned paths:
+- `flake.nix`, `flake.lock`
+- framework-owned files under `nixfied/` except `nixfied/project/` and `nixfied/local/`
+
+User-owned customization paths:
+- `nixfied/project/` (primary command/task/workflow customization surface)
+- `nixfied/local/` (optional extensions)
+
+Prefer editing `nixfied/project/` and `nixfied/local/` over direct framework internals.
