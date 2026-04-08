@@ -159,16 +159,17 @@ in
         if [ "$vendor" -eq 1 ]; then
           stage_dir="$(mktemp -d)"
           cleanup_stage() {
-            rm -rf "$stage_dir"
+            chmod -R u+w "$stage_dir" >/dev/null 2>&1 || true
+            rm -rf "$stage_dir" >/dev/null 2>&1 || true
           }
           trap cleanup_stage EXIT
 
           mkdir -p "$stage_dir/nixfied"
           cp -R "$source_root/." "$stage_dir/nixfied"
+          chmod -R u+w "$stage_dir/nixfied" 2>/dev/null || true
           if [ -f "$repo_root/README.md" ]; then
             cp "$repo_root/README.md" "$stage_dir/nixfied/README.md"
           fi
-          chmod -R u+w "$stage_dir/nixfied" 2>/dev/null || true
           rm -rf "$stage_dir/nixfied/.git"
           rm -f "$stage_dir/nixfied/result"
           rm -f "$stage_dir/.workspace"

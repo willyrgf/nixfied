@@ -62,7 +62,7 @@ pkgs.runCommand "proof-workspace-scenario-1-public-surface-happy-path"
     run_public_checked "$TMPDIR/scenario1.features.out" \
       nix run "path:$workspace#features"
     run_public_checked "$TMPDIR/scenario1.introspect.out" \
-      nix run "path:$workspace#introspect" -- check
+      nix run "path:$workspace#introspect" -- app:validate-env --json
     run_public_checked "$TMPDIR/scenario1.validate-env.out" \
       nix run "path:$workspace#validate-env"
     run_public_checked "$TMPDIR/scenario1.ports.out" \

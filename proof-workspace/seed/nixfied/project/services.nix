@@ -1,4 +1,6 @@
-_:
+{ conf }:
 {
-  # Materialized from source-repo project config by bootstrap helpers.
+  config = {
+    nixfied.services = conf.services or { };
+  };
 }

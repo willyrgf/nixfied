@@ -43,16 +43,55 @@ proof_write_seed_flake() {
   rm -f "$seed_flake.bak"
 }
 
-proof_materialize_project_files() {
+proof_copy_seed_workspace() {
+  local seed_root="$1"
+  local target_root="$2"
+
+  rm -rf "$target_root"
+  mkdir -p "$target_root"
+  cp -R "$seed_root/." "$target_root/"
+  chmod -R u+w "$target_root" >/dev/null 2>&1 || true
+}
+
+proof_overlay_seed_workspace() {
+  local seed_root="$1"
+  local target_root="$2"
+  local root_entry=""
+
+  mkdir -p "$target_root"
+
+  for root_entry in AGENTS.md README.md app docs fixtures; do
+    if [ -e "$seed_root/$root_entry" ]; then
+      rm -rf "$target_root/$root_entry"
+      cp -R "$seed_root/$root_entry" "$target_root/$root_entry"
+    fi
+  done
+
+  mkdir -p "$target_root/nixfied"
+  rm -rf "$target_root/nixfied/project"
+  if [ -d "$seed_root/nixfied/project" ]; then
+    cp -R "$seed_root/nixfied/project" "$target_root/nixfied/project"
+  fi
+
+  rm -rf "$target_root/nixfied/local"
+  if [ -d "$seed_root/nixfied/local" ]; then
+    cp -R "$seed_root/nixfied/local" "$target_root/nixfied/local"
+  fi
+
+  chmod -R u+w "$target_root" >/dev/null 2>&1 || true
+}
+
+proof_rewrite_thin_install_flake() {
   local target_root="$1"
   local repo_root="$2"
+  local target_flake="$target_root/flake.nix"
 
-  mkdir -p "$target_root/nixfied/project"
-  cp -R "$repo_root/nixfied/project/." "$target_root/nixfied/project/"
-  mkdir -p "$target_root/nixfied/modules"
-  cp -R "$repo_root/nixfied/modules/." "$target_root/nixfied/modules/"
-  mkdir -p "$target_root/nixfied/framework"
-  cp -R "$repo_root/nixfied/framework/." "$target_root/nixfied/framework/"
+  proof_require_file "$target_flake"
+
+  sed -i.bak \
+    "s|github:willyrgf/nixfied/dev|path:${repo_root}|g" \
+    "$target_flake"
+  rm -f "$target_flake.bak"
 }
 
 proof_init_git_baseline() {
@@ -73,12 +112,7 @@ proof_bootstrap_seed_copy() {
 
   proof_require_dir "$seed_root"
 
-  rm -rf "$target_root"
-  mkdir -p "$target_root"
-  cp -R "$seed_root/." "$target_root/"
-  chmod -R u+w "$target_root" >/dev/null 2>&1 || true
-
-  proof_materialize_project_files "$target_root" "$repo_root"
+  proof_copy_seed_workspace "$seed_root" "$target_root"
   proof_write_seed_flake "$target_root" "$repo_root"
   proof_init_git_baseline "$target_root"
 
@@ -91,6 +125,9 @@ proof_bootstrap_install() {
   local install_mode="${3:-vendor}"
   local -a install_args
   local proof_home
+  local seed_root="$repo_root/proof-workspace/seed"
+
+  proof_require_dir "$seed_root"
 
   case "$install_mode" in
     vendor)
@@ -118,7 +155,10 @@ proof_bootstrap_install() {
     exit 1
   }
 
-  proof_materialize_project_files "$target_root" "$repo_root"
+  if [ "$install_mode" = "thin" ]; then
+    proof_rewrite_thin_install_flake "$target_root" "$repo_root"
+  fi
+  proof_overlay_seed_workspace "$seed_root" "$target_root"
   proof_init_git_baseline "$target_root"
 
   proof_log_ok "install bootstrap ready mode=$install_mode at $target_root"

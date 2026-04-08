@@ -1,10 +1,10 @@
 {
-  description = "Nixfied proof workspace seed placeholder";
+  description = "Nixfied proof workspace seed";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
-    # Bootstrap helpers rewrite this to the current source-repo path.
+    # Proof bootstrap rewrites this to the current source-repo path.
     nixfied.url = "path:/tmp/nixfied-source-not-materialized";
   };
 

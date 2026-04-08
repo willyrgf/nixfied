@@ -1,9 +1,10 @@
 # Proof Workspace Seed
 
-This seed is intentionally small and deterministic.
+This seed is a real checked-in workspace fixture.
 
-Scenario bootstrap copies this directory to a temporary workspace and then:
+Scenario bootstrap uses it in two modes:
 
-1. materializes canonical `nixfied/project` files from the source repository,
-2. initializes a baseline git commit,
-3. executes scenario assertions through public framework surfaces.
+1. `seed-copy`: copy this workspace, rewrite the local `nixfied` flake input to the source repository under test, and initialize a baseline git commit.
+2. `install`: generate a thin or vendored wrapper with `framework::install`, overlay this workspace's proof-owned project files and docs, and initialize a baseline git commit.
+
+The fixture content in `nixfied/project/` is the canonical proof workspace. Bootstrap no longer pulls live `nixfied/project`, `nixfied/modules`, or `nixfied/framework` trees from the source repository.
