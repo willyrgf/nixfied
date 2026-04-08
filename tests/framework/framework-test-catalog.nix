@@ -83,10 +83,6 @@ selectionCatalog
         inherit pkgs;
       };
 
-      "machine-output-app-smoke" = import ./machine-output-app-smoke.nix {
-        inherit pkgs;
-      };
-
       "service-surface-catalog-contract" = import ./service-surface-catalog-contract.nix {
         inherit pkgs;
       };
@@ -274,20 +270,6 @@ selectionCatalog
       };
 
       "workspace-registry-isolation-smoke" = import ./workspace-registry-isolation-smoke.nix {
-        inherit
-          pkgs
-          registry
-          ;
-      };
-
-      "sensitive-pass-through-smoke" = import ./sensitive-pass-through-smoke.nix {
-        inherit
-          pkgs
-          registry
-          ;
-      };
-
-      "runtime-owned-env-blocked-smoke" = import ./runtime-owned-env-blocked-smoke.nix {
         inherit
           pkgs
           registry

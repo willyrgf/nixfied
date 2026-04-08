@@ -702,9 +702,7 @@ Still to do before this RFC can be treated as fully implemented:
   - `postgres-backup-restore-smoke.nix`
   - `postgres-config-artifacts-smoke.nix`
   - `ready-helios-sync-gate-smoke.nix`
-  - `runtime-owned-env-blocked-smoke.nix`
   - `selected-source-only-resolution-smoke.nix`
-  - `sensitive-pass-through-smoke.nix`
   - `service-probe-overrides-smoke.nix`
   - `slot-env-runtime-smoke.nix`
   - `supervisor-lifecycle-smoke.nix`
@@ -923,7 +921,6 @@ tests/framework/introspect-contract.nix
 tests/framework/isolation-nested-run-id-smoke.nix
 tests/framework/local-override-introspect-contract.nix
 tests/framework/logging-injection-smoke.nix
-tests/framework/machine-output-app-smoke.nix
 tests/framework/nginx-site-management-smoke.nix
 tests/framework/nix-ci-workflow-contract.nix
 tests/framework/nix-client-env-smoke.nix
@@ -948,9 +945,7 @@ tests/framework/run-id-active-collision-suffix-smoke.nix
 tests/framework/run-id-noise-stability-smoke.nix
 tests/framework/run-record-atomicity-smoke.nix
 tests/framework/runtime-env-isolation-smoke.nix
-tests/framework/runtime-owned-env-blocked-smoke.nix
 tests/framework/selected-source-only-resolution-smoke.nix
-tests/framework/sensitive-pass-through-smoke.nix
 tests/framework/service-dir-isolation-smoke.nix
 tests/framework/service-lifecycle-matrix-smoke.nix
 tests/framework/service-op-composition-contract.nix
@@ -1004,7 +999,6 @@ These are still subject to the coverage-map gate. A file being in this block is 
 
 Do not include the following in the first deletion block:
 
-- `machine-output-app-smoke.nix` until machine-output capability coverage is explicit in the map and proven by Scenario 1 or 6
 - `operations-contract.nix` until the narrower compile-level replacement exists
 - `run-id-semantic-inputs-contract.nix` until run-id semantic invariants are migrated to smaller kernel/runtime proofs
 - docs and `nix-checks` behavior contract tests that remain local/package-level invariants
