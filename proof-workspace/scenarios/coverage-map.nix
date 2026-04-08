@@ -202,6 +202,55 @@
     "runtime.service-operations" = {
       layer = "proof-workspace";
       scenarios = [ "scenario-1-public-surface-happy-path" ];
+      serviceOperationCoverage = {
+        genericLifecycle = {
+          scenario = "scenario-1-public-surface-happy-path";
+          services = [
+            "helios"
+            "minio"
+            "nginx"
+            "postgres"
+            "reth"
+          ];
+          supervisorOrchestration = {
+            status = "covered";
+            scenario = "scenario-1-public-surface-happy-path";
+          };
+        };
+
+        deepPathVariants = {
+          helios = {
+            status = "deferred";
+            tier = "nightly";
+            variants = [ "sync-gating-details" ];
+            rationale = "Real-service helios sync-gating branches are tiered beyond per-PR runtime budgets.";
+          };
+          minio = {
+            status = "deferred";
+            tier = "nightly";
+            variants = [ "real-storage-backend-behavior" ];
+            rationale = "Real-service minio deep data-plane branches are tiered beyond per-PR runtime budgets.";
+          };
+          nginx = {
+            status = "deferred";
+            tier = "nightly";
+            variants = [ "site-management-real-runtime-paths" ];
+            rationale = "Real-service nginx deep site-management branches are tiered beyond per-PR runtime budgets.";
+          };
+          postgres = {
+            status = "deferred";
+            tier = "nightly";
+            variants = [ "backup-restore" ];
+            rationale = "Real-service postgres deep backup/restore branches are tiered beyond per-PR runtime budgets.";
+          };
+          reth = {
+            status = "deferred";
+            tier = "nightly";
+            variants = [ "chain-sync-and-authrpc-edge-behavior" ];
+            rationale = "Real-service reth deep sync branches are tiered beyond per-PR runtime budgets.";
+          };
+        };
+      };
       replaces = [
         "tests/framework/service-op-composition-contract.nix"
         "tests/framework/service-lifecycle-matrix-smoke.nix"
