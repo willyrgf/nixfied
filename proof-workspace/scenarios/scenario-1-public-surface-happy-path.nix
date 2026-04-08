@@ -58,6 +58,15 @@ pkgs.runCommand "proof-workspace-scenario-1-public-surface-happy-path"
       printf '%s\n' "$run_json" > "$out_file"
     }
 
+    extract_last_json_line() {
+      local input_file="$1"
+      local output_file="$2"
+      local json_line=""
+      json_line="$(${pkgs.gnused}/bin/sed -n '/^{/p' "$input_file" | ${pkgs.coreutils}/bin/tail -n 1)"
+      proof_require_non_empty "$json_line" "json line from $input_file"
+      printf '%s\n' "$json_line" > "$output_file"
+    }
+
     run_public_checked "$TMPDIR/scenario1.help.out" \
       nix run --no-write-lock-file "path:$workspace#help"
     run_public_checked "$TMPDIR/scenario1.features.out" \
@@ -66,6 +75,8 @@ pkgs.runCommand "proof-workspace-scenario-1-public-surface-happy-path"
       nix run --no-write-lock-file "path:$workspace#introspect" -- app:validate-env --json
     run_public_checked "$TMPDIR/scenario1.validate-env.out" \
       nix run --no-write-lock-file "path:$workspace#validate-env"
+    run_public_checked "$TMPDIR/scenario1.machine-output.out" \
+      nix run --no-write-lock-file "path:$workspace#machine-json"
     run_public_checked "$TMPDIR/scenario1.ports.out" \
       nix run --no-write-lock-file "path:$workspace#ports"
     run_public_checked "$TMPDIR/scenario1.check-ports.out" \
@@ -81,6 +92,14 @@ pkgs.runCommand "proof-workspace-scenario-1-public-surface-happy-path"
     proof_require_contains "$TMPDIR/scenario1.features.out" "runtime.workflow-interruption-semantics"
     proof_require_contains "$TMPDIR/scenario1.features.out" "runtime.artifact-placement-semantics"
     proof_require_contains "$TMPDIR/scenario1.validate-env.out" "OK:"
+    proof_require_contains "$TMPDIR/scenario1.machine-output.out" "json-body human log"
+    extract_last_json_line \
+      "$TMPDIR/scenario1.machine-output.out" \
+      "$TMPDIR/scenario1.machine-output.json"
+    ${pkgs.jq}/bin/jq -e '.ok == true and .kind == "task"' "$TMPDIR/scenario1.machine-output.json" >/dev/null
+    if ${pkgs.gnugrep}/bin/grep -Fq "json-body human log" "$TMPDIR/scenario1.machine-output.json"; then
+      proof_fail "machine-output happy path must keep human log text off the JSON payload"
+    fi
 
     task_run_id_file="$TMPDIR/scenario1.task.run-id"
     seq_run_id_file="$TMPDIR/scenario1.seq.run-id"
