@@ -7,6 +7,11 @@
     "full"
   ];
 
+  historicalGreenEvidence = {
+    schemaVersion = 1;
+    artifactFile = "proof-workspace/scenarios/historical-green-runs.json";
+  };
+
   scenarios = {
     "scenario-1-public-surface-happy-path" = {
       checkName = "proof-workspace-scenario-1-public-surface-happy-path";
