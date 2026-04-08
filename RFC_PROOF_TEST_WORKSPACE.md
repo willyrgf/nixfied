@@ -687,7 +687,7 @@ Still to do before this RFC can be treated as fully implemented:
 - [ ] Add real machine-output coverage before treating `machine-output-app-smoke.nix` as fully replaced:
   - exercise at least one `machine-output:<app-id>` happy path
   - exercise at least one structured machine-output failure path with stable fields/codes
-- [ ] Extend Scenario 6 so the negative-path migration is real rather than partial:
+- [x] Extend Scenario 6 so the negative-path migration is real rather than partial:
   - blocked runtime-owned env overrides
   - blocked sensitive passthrough
   - install/upgrade misuse paths
