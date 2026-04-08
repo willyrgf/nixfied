@@ -2,4 +2,4 @@
 
 - Keep this seed small and deterministic.
 - Do not commit local machine-specific paths or secrets.
-- Scenario bootstrap is responsible for materializing live project files.
+- Keep proof behavior owned by checked-in fixture content under `nixfied/project/`.
