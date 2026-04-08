@@ -679,7 +679,7 @@ Current green state:
 Still to do before this RFC can be treated as fully implemented:
 
 - [ ] Make `proof-workspace/seed/` a self-contained checked-in canonical workspace instead of relying on bootstrap to copy live `nixfied/project`, `nixfied/modules`, and `nixfied/framework` trees from the source repository.
-- [ ] Make Scenario 1 actually prove the capabilities it currently claims:
+- [x] Make Scenario 1 actually prove the capabilities it currently claims:
   - invoke representative `svc::<service>::<op>` public surfaces
   - exercise built-in service lifecycle viability for `helios`, `minio`, `nginx`, `postgres`, and `reth`
   - prove non-placeholder `ready`/`health` behavior where service-operation coverage is claimed
@@ -692,7 +692,7 @@ Still to do before this RFC can be treated as fully implemented:
   - blocked sensitive passthrough
   - install/upgrade misuse paths
   - machine/json assertions over stable `code`, `stage`, and target identifiers where supported
-- [ ] Extend Scenario 5 so thin and vendored wrappers rerun at least one canonical happy-path proof flow, not just `validate-env` plus a single `run-task`.
+- [x] Extend Scenario 5 so thin and vendored wrappers rerun at least one canonical happy-path proof flow, not just `validate-env` plus a single `run-task`.
 - [ ] Finish deleting the remaining legacy integration-shaped checks that are still scheduled outside proof-workspace in `full`:
   - `caller-pwd-remote-projectroot-smoke.nix`
   - `disabled-service-no-package-resolution-smoke.nix`

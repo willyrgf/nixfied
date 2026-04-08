@@ -36,6 +36,10 @@ let
   };
 
   projectServicesModule = import ./services.nix {
+    inherit
+      lib
+      pkgs
+      ;
     inherit conf;
   };
 

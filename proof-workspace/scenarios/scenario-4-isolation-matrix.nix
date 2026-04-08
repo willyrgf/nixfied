@@ -29,7 +29,7 @@ pkgs.runCommand "proof-workspace-scenario-4-isolation-matrix"
     proof_require_dir "$workspace/.git"
     proof_require_file "$workspace/flake.nix"
 
-    proof_home="$workspace/.proof-home"
+    proof_home="$TMPDIR/proof-home"
     mkdir -p "$proof_home/.cache"
 
     conf_file="$workspace/nixfied/project/conf.nix"

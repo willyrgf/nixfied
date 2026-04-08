@@ -24,7 +24,6 @@
       enabled = true;
       tier = "pr";
       assertedCapabilities = [
-        "runtime.machine-output-behavior"
         "runtime.output.prefix-contract"
         "runtime.service-operations"
         "runtime.summary-sidecars"
@@ -105,7 +104,6 @@
       enabled = true;
       tier = "pr";
       assertedCapabilities = [
-        "runtime.machine-output-behavior"
         "runtime.output.prefix-contract"
         "runtime.workflow-interruption-semantics"
       ];
@@ -161,12 +159,9 @@
     };
 
     "runtime.machine-output-behavior" = {
-      layer = "proof-workspace";
-      scenarios = [
-        "scenario-1-public-surface-happy-path"
-        "scenario-6-failure-guardrails"
-      ];
-      replaces = [ "tests/framework/machine-output-app-smoke.nix" ];
+      layer = "legacy";
+      scenarios = [ ];
+      replaces = [ ];
     };
 
     "runtime.output.prefix-contract" = {
@@ -280,7 +275,7 @@
     "runtime.task-hooks" = {
       layer = "proof-workspace";
       scenarios = [ "scenario-1-public-surface-happy-path" ];
-      replaces = [ "tests/framework/task-hooks-smoke.nix" ];
+      replaces = [ ];
     };
 
     "runtime.upgrade-semantics" = {

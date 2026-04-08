@@ -13,6 +13,8 @@ let
     "NIXFIED_CI_MAX_WORKERS"
     "NIXFIED_PARALLEL_SMOKE"
     "NIXFIED_PARALLEL_SKIP"
+    "PROOF_HOOK_LOG_FILE"
+    "PROOF_WORKFLOW_PHASE_LOG_FILE"
   ];
 
   mkShellTask =
@@ -213,6 +215,87 @@ in
           type = "workflowRef";
           workflowId = "workflow.test.isolation.probe";
         };
+      };
+
+      "test-hooks-order" =
+        let
+          baseTask = mkShellTask {
+            id = "task.test.hooks.order";
+            summary = "Task hook order proof";
+            description = "Writes a deterministic hook execution order log through runtime pre/post hooks.";
+            command = ''
+              set -euo pipefail
+              : "''${PROOF_HOOK_LOG_FILE:?PROOF_HOOK_LOG_FILE is required}"
+              printf 'main\n' >> "$PROOF_HOOK_LOG_FILE"
+              echo "OK: hook order main complete"
+            '';
+            passThroughEnv = commonPassThroughEnv ++ [ "PROOF_HOOK_LOG_FILE" ];
+          };
+        in
+        baseTask
+        // {
+          runtime =
+            baseTask.runtime
+            // {
+              preHooks = {
+                "01.pre" = {
+                  command = ''
+                    set -euo pipefail
+                    : "''${PROOF_HOOK_LOG_FILE:?PROOF_HOOK_LOG_FILE is required}"
+                    printf 'pre-1\n' >> "$PROOF_HOOK_LOG_FILE"
+                  '';
+                };
+                "02.pre" = {
+                  command = ''
+                    set -euo pipefail
+                    : "''${PROOF_HOOK_LOG_FILE:?PROOF_HOOK_LOG_FILE is required}"
+                    printf 'pre-2\n' >> "$PROOF_HOOK_LOG_FILE"
+                  '';
+                };
+              };
+              postHooks = {
+                "10.post" = {
+                  command = ''
+                    set -euo pipefail
+                    : "''${PROOF_HOOK_LOG_FILE:?PROOF_HOOK_LOG_FILE is required}"
+                    printf 'post\n' >> "$PROOF_HOOK_LOG_FILE"
+                  '';
+                };
+              };
+            };
+        };
+
+      "test-workflow-marker" = mkShellTask {
+        id = "task.test.workflow.marker";
+        summary = "Workflow phase marker";
+        description = "Writes a marker between workflow service phases.";
+        command = ''
+          set -euo pipefail
+          : "''${PROOF_WORKFLOW_PHASE_LOG_FILE:?PROOF_WORKFLOW_PHASE_LOG_FILE is required}"
+          printf 'unit\n' >> "$PROOF_WORKFLOW_PHASE_LOG_FILE"
+          echo "OK: workflow marker written"
+        '';
+        passThroughEnv = commonPassThroughEnv ++ [ "PROOF_WORKFLOW_PHASE_LOG_FILE" ];
+      };
+
+      "test-workflow-service-ready" = mkShellTask {
+        id = "task.test.workflow.service.ready";
+        summary = "Workflow service ready proof";
+        description = "Runs proof service ready checks within a workflow run.";
+        command = ''
+          set -euo pipefail
+          if [ -z "''${NIXFIED_RUNTIME_BIN:-}" ]; then
+            echo "ERROR: NIXFIED_RUNTIME_BIN is required"
+            exit 1
+          fi
+          "$NIXFIED_RUNTIME_BIN" run-service helios ready
+          "$NIXFIED_RUNTIME_BIN" run-service minio ready
+          "$NIXFIED_RUNTIME_BIN" run-service nginx ready
+          "$NIXFIED_RUNTIME_BIN" run-service postgres ready
+          "$NIXFIED_RUNTIME_BIN" run-service reth ready
+          echo "OK: workflow service readiness complete"
+        '';
+        passThroughEnv = commonPassThroughEnv ++ [ "PROOF_WORKFLOW_PHASE_LOG_FILE" ];
       };
 
       "test-parallel-sleep-a" = mkShellTask {

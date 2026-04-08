@@ -29,7 +29,7 @@ pkgs.runCommand "proof-workspace-scenario-3-ephemeral-workspace"
     proof_require_dir "$workspace/.git"
     proof_require_file "$workspace/flake.nix"
 
-    proof_home="$workspace/.proof-home"
+    proof_home="$TMPDIR/proof-home"
     mkdir -p "$proof_home/.cache"
 
     scenario_module="$workspace/nixfied/project/proof-scenario3-module.nix"

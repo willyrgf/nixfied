@@ -78,7 +78,8 @@ let
       ${envExports}
       export NIXFIED_LOG_TRACE="''${NIXFIED_LOG_TRACE:-0}"
       export COMMAND_NAME="''${COMMAND_NAME:-${name}}"
-      if [ "''${OUTPUT_MODE}" != "stdout" ]; then
+      _nixfied_wrapper_output_mode="''${OUTPUT_MODE:-''${NIXFIED_OUTPUT_MODE:-stdout}}"
+      if [ "$_nixfied_wrapper_output_mode" != "stdout" ]; then
         if [ -z "''${NIXFIED_LOG_FILE:-}" ]; then
           _nixfied_slot="''${NIX_ENV:-0}"
           _nixfied_env="''${PROJECT_ENV:-default}"

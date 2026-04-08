@@ -9,6 +9,7 @@ pkgs.runCommand "proof-workspace-scenario-1-public-surface-happy-path"
   {
     nativeBuildInputs = [
       pkgs.coreutils
+      pkgs.diffutils
       pkgs.git
       pkgs.gnugrep
       pkgs.gnused
@@ -29,7 +30,7 @@ pkgs.runCommand "proof-workspace-scenario-1-public-surface-happy-path"
     proof_require_dir "$workspace/.git"
     proof_require_file "$workspace/flake.nix"
 
-    proof_home="$workspace/.proof-home"
+    proof_home="$TMPDIR/proof-home"
     mkdir -p "$proof_home/.cache"
 
     run_public_checked() {
@@ -51,28 +52,24 @@ pkgs.runCommand "proof-workspace-scenario-1-public-surface-happy-path"
       local out_file="$2"
       local raw_out="$out_file.raw"
       local run_json=""
-      run_public_checked "$raw_out" nix run "path:$workspace#runs" -- "$run_id"
+      run_public_checked "$raw_out" nix run --no-write-lock-file "path:$workspace#runs" -- "$run_id"
       run_json="$(${pkgs.gnused}/bin/sed -n '/^{/p' "$raw_out" | ${pkgs.coreutils}/bin/tail -n 1)"
       proof_require_non_empty "$run_json" "run record json for $run_id"
       printf '%s\n' "$run_json" > "$out_file"
     }
 
     run_public_checked "$TMPDIR/scenario1.help.out" \
-      nix run "path:$workspace#help"
+      nix run --no-write-lock-file "path:$workspace#help"
     run_public_checked "$TMPDIR/scenario1.features.out" \
-      nix run "path:$workspace#features"
+      nix run --no-write-lock-file "path:$workspace#features"
     run_public_checked "$TMPDIR/scenario1.introspect.out" \
-      nix run "path:$workspace#introspect" -- app:validate-env --json
+      nix run --no-write-lock-file "path:$workspace#introspect" -- app:validate-env --json
     run_public_checked "$TMPDIR/scenario1.validate-env.out" \
-      nix run "path:$workspace#validate-env"
+      nix run --no-write-lock-file "path:$workspace#validate-env"
     run_public_checked "$TMPDIR/scenario1.ports.out" \
-      nix run "path:$workspace#ports"
+      nix run --no-write-lock-file "path:$workspace#ports"
     run_public_checked "$TMPDIR/scenario1.check-ports.out" \
-      nix run "path:$workspace#check-ports"
-    run_public_checked "$TMPDIR/scenario1.ready.out" \
-      nix run "path:$workspace#ready"
-    run_public_checked "$TMPDIR/scenario1.health.out" \
-      nix run "path:$workspace#health"
+      nix run --no-write-lock-file "path:$workspace#check-ports"
 
     proof_require_contains "$TMPDIR/scenario1.features.out" "runtime.machine-output-behavior"
     proof_require_contains "$TMPDIR/scenario1.features.out" "runtime.summary-sidecars"
@@ -84,24 +81,103 @@ pkgs.runCommand "proof-workspace-scenario-1-public-surface-happy-path"
     proof_require_contains "$TMPDIR/scenario1.features.out" "runtime.workflow-interruption-semantics"
     proof_require_contains "$TMPDIR/scenario1.features.out" "runtime.artifact-placement-semantics"
     proof_require_contains "$TMPDIR/scenario1.validate-env.out" "OK:"
-    proof_require_contains "$TMPDIR/scenario1.ready.out" "SKIP:"
-    proof_require_contains "$TMPDIR/scenario1.health.out" "SKIP:"
 
     task_run_id_file="$TMPDIR/scenario1.task.run-id"
     seq_run_id_file="$TMPDIR/scenario1.seq.run-id"
     par_run_id_file="$TMPDIR/scenario1.par.run-id"
+    hook_log_file="$TMPDIR/scenario1.hooks.log"
+    workflow_phase_log_file="$TMPDIR/scenario1.workflow-phase.log"
+
+    for service in helios minio nginx postgres reth; do
+      run_public_checked "$TMPDIR/scenario1.$service.full-start.out" \
+        nix run --no-write-lock-file "path:$workspace#svc::$service::full-start"
+      proof_require_contains "$TMPDIR/scenario1.$service.full-start.out" "OK:"
+
+      run_public_checked "$TMPDIR/scenario1.$service.status.running.out" \
+        nix run --no-write-lock-file "path:$workspace#svc::$service::status"
+      proof_require_contains "$TMPDIR/scenario1.$service.status.running.out" "INFO:"
+      proof_require_contains "$TMPDIR/scenario1.$service.status.running.out" "state=running"
+
+      run_public_checked "$TMPDIR/scenario1.$service.ready.op.out" \
+        nix run --no-write-lock-file "path:$workspace#svc::$service::ready"
+      proof_require_contains "$TMPDIR/scenario1.$service.ready.op.out" "OK:"
+
+      run_public_checked "$TMPDIR/scenario1.$service.health.op.out" \
+        nix run --no-write-lock-file "path:$workspace#svc::$service::health"
+      proof_require_contains "$TMPDIR/scenario1.$service.health.op.out" "OK:"
+    done
+
+    run_public_checked "$TMPDIR/scenario1.postgres.setup-db.out" \
+      nix run --no-write-lock-file "path:$workspace#svc::postgres::setup-db"
+    proof_require_contains "$TMPDIR/scenario1.postgres.setup-db.out" "OK:"
+
+    run_public_checked "$TMPDIR/scenario1.minio.bucket-ensure.out" \
+      nix run --no-write-lock-file "path:$workspace#svc::minio::bucket-ensure" -- proof-bucket
+    proof_require_contains "$TMPDIR/scenario1.minio.bucket-ensure.out" "OK:"
+
+    run_public_checked "$TMPDIR/scenario1.nginx.site-add.out" \
+      nix run --no-write-lock-file "path:$workspace#svc::nginx::site-add" -- proof.local 127.0.0.1 3000
+    proof_require_contains "$TMPDIR/scenario1.nginx.site-add.out" "OK:"
+
+    run_public_checked "$TMPDIR/scenario1.nginx.site-list.out" \
+      nix run --no-write-lock-file "path:$workspace#svc::nginx::site-list"
+    proof_require_contains "$TMPDIR/scenario1.nginx.site-list.out" "proof.local"
+
+    run_public_checked "$TMPDIR/scenario1.ready.out" \
+      nix run --no-write-lock-file "path:$workspace#ready"
+    run_public_checked "$TMPDIR/scenario1.health.out" \
+      nix run --no-write-lock-file "path:$workspace#health"
+    proof_require_contains "$TMPDIR/scenario1.ready.out" "OK:"
+    proof_require_contains "$TMPDIR/scenario1.health.out" "OK:"
+    if ${pkgs.gnugrep}/bin/grep -Fq "SKIP:" "$TMPDIR/scenario1.ready.out"; then
+      proof_fail "scenario1 ready must not skip with enabled proof services"
+    fi
+    if ${pkgs.gnugrep}/bin/grep -Fq "SKIP:" "$TMPDIR/scenario1.health.out"; then
+      proof_fail "scenario1 health must not skip with enabled proof services"
+    fi
+    for service in helios minio nginx postgres reth; do
+      proof_require_contains "$TMPDIR/scenario1.ready.out" "$service"
+      proof_require_contains "$TMPDIR/scenario1.health.out" "$service"
+    done
 
     run_public_checked "$TMPDIR/scenario1.run-task.out" \
-      nix run "path:$workspace#run-task" -- task.test.isolation.unit --run-id-file "$task_run_id_file"
-    proof_require_contains "$TMPDIR/scenario1.run-task.out" "OK: isolation probe complete"
+      env PROOF_HOOK_LOG_FILE="$hook_log_file" \
+      nix run --no-write-lock-file "path:$workspace#run-task" -- task.test.hooks.order --run-id-file "$task_run_id_file"
+    proof_require_contains "$TMPDIR/scenario1.run-task.out" "OK: hook order main complete"
+    proof_require_file "$hook_log_file"
+    cat > "$TMPDIR/scenario1.hooks.expected" <<'EOF'
+pre-1
+pre-2
+main
+post
+EOF
+    if ! ${pkgs.diffutils}/bin/diff -u "$TMPDIR/scenario1.hooks.expected" "$hook_log_file"; then
+      proof_fail "unexpected hook execution order"
+    fi
 
     run_public_checked "$TMPDIR/scenario1.run-workflow.out" \
-      nix run "path:$workspace#run-workflow" -- workflow.test.isolation.probe --run-id-file "$seq_run_id_file" --summary
+      env PROOF_WORKFLOW_PHASE_LOG_FILE="$workflow_phase_log_file" \
+      nix run --no-write-lock-file "path:$workspace#run-workflow" -- workflow.test.service.phase.probe --run-id-file "$seq_run_id_file" --summary
     proof_require_contains "$TMPDIR/scenario1.run-workflow.out" "INFO: summary_json="
+    proof_require_file "$workflow_phase_log_file"
+    unit_line="$(grep -n '^unit$' "$workflow_phase_log_file" | cut -d: -f1)"
+    proof_require_non_empty "$unit_line" "scenario1 workflow unit marker"
+    for service in helios minio nginx postgres reth; do
+      ready_line="$(grep -n "^ready:$service$" "$workflow_phase_log_file" | cut -d: -f1)"
+      health_line="$(grep -n "^health:$service$" "$workflow_phase_log_file" | cut -d: -f1)"
+      proof_require_non_empty "$ready_line" "ready phase marker for $service"
+      proof_require_non_empty "$health_line" "health phase marker for $service"
+      if [ "$ready_line" -ge "$unit_line" ]; then
+        proof_fail "ready phase must happen before workflow unit for $service"
+      fi
+      if [ "$health_line" -le "$unit_line" ]; then
+        proof_fail "health phase must happen after workflow unit for $service"
+      fi
+    done
 
     run_public_checked "$TMPDIR/scenario1.run-workflow-parallel.out" \
       env NIXFIED_WORKFLOW_PARALLEL=1 NIXFIED_PARALLEL_SMOKE=1 CI_MAX_WORKERS=2 \
-      nix run "path:$workspace#run-workflow-parallel" -- workflow.test.parallel.smoke --run-id-file "$par_run_id_file"
+      nix run --no-write-lock-file "path:$workspace#run-workflow-parallel" -- workflow.test.parallel.smoke --run-id-file "$par_run_id_file"
     proof_require_contains "$TMPDIR/scenario1.run-workflow-parallel.out" "INFO: summary_json="
 
     proof_require_file "$task_run_id_file"
@@ -115,7 +191,7 @@ pkgs.runCommand "proof-workspace-scenario-1-public-surface-happy-path"
     proof_require_non_empty "$par_run_id" "scenario1 parallel workflow run id"
 
     run_public_checked "$TMPDIR/scenario1.runs.list.out" \
-      nix run "path:$workspace#runs"
+      nix run --no-write-lock-file "path:$workspace#runs"
     proof_require_contains "$TMPDIR/scenario1.runs.list.out" "$task_run_id"
     proof_require_contains "$TMPDIR/scenario1.runs.list.out" "$seq_run_id"
     proof_require_contains "$TMPDIR/scenario1.runs.list.out" "$par_run_id"
@@ -124,8 +200,18 @@ pkgs.runCommand "proof-workspace-scenario-1-public-surface-happy-path"
     read_run_record "$seq_run_id" "$TMPDIR/scenario1.seq.run-record.json"
     read_run_record "$par_run_id" "$TMPDIR/scenario1.par.run-record.json"
     ${pkgs.jq}/bin/jq -e '.payload.command == "run-task" and .payload.state == "passed"' "$TMPDIR/scenario1.task.run-record.json" >/dev/null
-    ${pkgs.jq}/bin/jq -e '.payload.command == "run-workflow" and .payload.state == "passed"' "$TMPDIR/scenario1.seq.run-record.json" >/dev/null
+    ${pkgs.jq}/bin/jq -e '.payload.command == "run-workflow" and .payload.workflow_id == "workflow.test.service.phase.probe" and .payload.state == "passed"' "$TMPDIR/scenario1.seq.run-record.json" >/dev/null
     ${pkgs.jq}/bin/jq -e '.payload.command == "run-workflow" and .payload.execution_mode == "workflow-parallel" and .payload.state == "passed"' "$TMPDIR/scenario1.par.run-record.json" >/dev/null
+
+    for service in helios minio nginx postgres reth; do
+      run_public_checked "$TMPDIR/scenario1.$service.stop.out" \
+        nix run --no-write-lock-file "path:$workspace#svc::$service::stop"
+      proof_require_contains "$TMPDIR/scenario1.$service.stop.out" "OK:"
+
+      run_public_checked "$TMPDIR/scenario1.$service.status.stopped.out" \
+        nix run --no-write-lock-file "path:$workspace#svc::$service::status"
+      proof_require_contains "$TMPDIR/scenario1.$service.status.stopped.out" "state=stopped"
+    done
 
     echo "OK: proof workspace scenario 1 public surface happy path passed" > "$out"
   ''
