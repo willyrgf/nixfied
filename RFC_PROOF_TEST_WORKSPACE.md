@@ -666,6 +666,56 @@ This is much leaner than running dozens of unrelated smokes on every PR while st
 
 ## Migration Plan
 
+### Current Status And Remaining Checklist (Updated 2026-04-08)
+
+Current green state:
+
+- [x] `nix run .#test -- --mode feature-proof --summary`
+- [x] `nix run .#test -- --mode ci --summary`
+- [x] `nix run .#test -- --mode full --summary`
+- [x] Capability metadata, `proof-workspace/scenarios/coverage-map.nix`, historical green evidence, and CI deletion gating are in place.
+- [x] Scenarios 1 through 6 exist and are scheduled in the intended profiles.
+
+Still to do before this RFC can be treated as fully implemented:
+
+- [ ] Make `proof-workspace/seed/` a self-contained checked-in canonical workspace instead of relying on bootstrap to copy live `nixfied/project`, `nixfied/modules`, and `nixfied/framework` trees from the source repository.
+- [ ] Make Scenario 1 actually prove the capabilities it currently claims:
+  - invoke representative `svc::<service>::<op>` public surfaces
+  - exercise built-in service lifecycle viability for `helios`, `minio`, `nginx`, `postgres`, and `reth`
+  - prove non-placeholder `ready`/`health` behavior where service-operation coverage is claimed
+  - add a real task-hook proof instead of relying on `task.test.isolation.unit`
+- [ ] Add real machine-output coverage before treating `machine-output-app-smoke.nix` as fully replaced:
+  - exercise at least one `machine-output:<app-id>` happy path
+  - exercise at least one structured machine-output failure path with stable fields/codes
+- [ ] Extend Scenario 6 so the negative-path migration is real rather than partial:
+  - blocked runtime-owned env overrides
+  - blocked sensitive passthrough
+  - install/upgrade misuse paths
+  - machine/json assertions over stable `code`, `stage`, and target identifiers where supported
+- [ ] Extend Scenario 5 so thin and vendored wrappers rerun at least one canonical happy-path proof flow, not just `validate-env` plus a single `run-task`.
+- [ ] Finish deleting the remaining legacy integration-shaped checks that are still scheduled outside proof-workspace in `full`:
+  - `caller-pwd-remote-projectroot-smoke.nix`
+  - `disabled-service-no-package-resolution-smoke.nix`
+  - `logging-injection-smoke.nix`
+  - `nginx-site-management-smoke.nix`
+  - `nix-client-env-smoke.nix`
+  - `postgres-backup-restore-smoke.nix`
+  - `postgres-config-artifacts-smoke.nix`
+  - `ready-helios-sync-gate-smoke.nix`
+  - `runtime-owned-env-blocked-smoke.nix`
+  - `selected-source-only-resolution-smoke.nix`
+  - `sensitive-pass-through-smoke.nix`
+  - `service-probe-overrides-smoke.nix`
+  - `slot-env-runtime-smoke.nix`
+  - `supervisor-lifecycle-smoke.nix`
+  - `vendored-metadata-packaged-source-smoke.nix`
+- [ ] Rewrite the remaining broad or presentation-coupled tests into smaller local proofs:
+  - `features-surface-contract.nix`
+  - `package-output-contract.nix`
+  - `shell-contract-runtime-smoke.nix`
+  - `workflow-validation-errors.nix`
+  - `run-id-semantic-inputs-contract.nix`
+
 ### Stage 1: Define Capability Ownership
 
 - make the capability inventory explicit enough to plan coverage
