@@ -78,9 +78,7 @@ let
       "vendored-metadata-contract"
     ];
 
-    manifest = [
-      "machine-output-app-smoke"
-    ];
+    manifest = [ ];
 
     kernel = [
       "ephemeral-runtime-env-isolation-smoke"
@@ -152,9 +150,7 @@ let
       "ready-health-matrix-smoke"
       "ready-health-shutdown-smoke"
       "ready-helios-sync-gate-smoke"
-      "runtime-owned-env-blocked-smoke"
       "selected-source-only-resolution-smoke"
-      "sensitive-pass-through-smoke"
       "service-dir-isolation-smoke"
       "service-lifecycle-matrix-smoke"
       "service-probe-overrides-smoke"
@@ -173,7 +169,7 @@ let
 
   baseFeatureProofShardChecks = {
     compile = [ "features-surface-contract" ];
-    manifest = [ "machine-output-app-smoke" ];
+    manifest = [ ];
     kernel = [ ];
     adapters = [ ];
     e2e = enabledScenarioChecksForProfile "feature-proof";

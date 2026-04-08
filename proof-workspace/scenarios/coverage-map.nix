@@ -107,6 +107,8 @@
       assertedCapabilities = [
         "runtime.machine-output-behavior"
         "runtime.output.prefix-contract"
+        "runtime.runtime-owned-env-guardrails"
+        "runtime.sensitive-pass-through-guardrails"
         "runtime.workflow-interruption-semantics"
       ];
     };
@@ -169,6 +171,12 @@
       replaces = [ "tests/framework/machine-output-app-smoke.nix" ];
     };
 
+    "runtime.runtime-owned-env-guardrails" = {
+      layer = "proof-workspace";
+      scenarios = [ "scenario-6-failure-guardrails" ];
+      replaces = [ "tests/framework/runtime-owned-env-blocked-smoke.nix" ];
+    };
+
     "runtime.output.prefix-contract" = {
       layer = "proof-workspace";
       scenarios = [
@@ -188,6 +196,12 @@
         "tests/framework/orchestrator-signal-cleanup-smoke.nix"
         "tests/framework/parallel-runner-process-tree-smoke.nix"
       ];
+    };
+
+    "runtime.sensitive-pass-through-guardrails" = {
+      layer = "proof-workspace";
+      scenarios = [ "scenario-6-failure-guardrails" ];
+      replaces = [ "tests/framework/sensitive-pass-through-smoke.nix" ];
     };
 
     "runtime.registry.isolation" = {
@@ -509,12 +523,20 @@
         replacementCapabilities = [ "runtime.machine-output-behavior" ];
       }
       {
+        checkName = "runtime-owned-env-blocked-smoke";
+        replacementCapabilities = [ "runtime.runtime-owned-env-guardrails" ];
+      }
+      {
         checkName = "service-dir-isolation-smoke";
         requiredProfiles = [
           "ci"
           "full"
         ];
         replacementCapabilities = [ "runtime.registry.isolation" ];
+      }
+      {
+        checkName = "sensitive-pass-through-smoke";
+        replacementCapabilities = [ "runtime.sensitive-pass-through-guardrails" ];
       }
       {
         checkName = "test-mode-cli-contract-smoke";
