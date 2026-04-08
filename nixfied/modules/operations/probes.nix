@@ -335,6 +335,12 @@ let
       set -euo pipefail
       ${shellCommon}
       ${slotEnvPrelude}
+      if [ -n "''${NIXFIED_RUNTIME_DIR_BASE:-}" ]; then
+        probe_runtime_scope="$NIXFIED_RUNTIME_DIR_BASE/$env_value/slot-$slot_value"
+        export NIXFIED_RUNTIME_DIR_SCOPE="$probe_runtime_scope"
+        export NIXFIED_RUNTIME_SERVICE_ROOT="$probe_runtime_scope/services"
+        export NIXFIED_SERVICE_ROOT="$probe_runtime_scope/services"
+      fi
       ${serviceSelectionPrelude}
 
       if [ "$target_service" = "all" ] && [ ${toString (builtins.length enabledServiceNames)} -eq 0 ]; then

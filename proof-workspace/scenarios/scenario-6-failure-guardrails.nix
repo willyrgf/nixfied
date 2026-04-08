@@ -30,7 +30,7 @@ pkgs.runCommand "proof-workspace-scenario-6-failure-guardrails"
     proof_require_dir "$workspace/.git"
     proof_require_file "$workspace/flake.nix"
 
-    proof_home="$workspace/.proof-home"
+    proof_home="$TMPDIR/proof-home"
     mkdir -p "$proof_home/.cache"
 
     run_public_checked() {

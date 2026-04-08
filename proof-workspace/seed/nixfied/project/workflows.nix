@@ -1,19 +1,33 @@
 _:
 let
-  workflowProbePhases = {
-    preRun.serviceSets = [
-      {
-        serviceSetId = "service-set.default";
-        operation = "ready";
-      }
-    ];
+  serviceWorkflowPhases = {
+    preRun = {
+      tasks = [ "task.test.workflow.service.ready" ];
+      serviceSets = [
+        {
+          serviceSetId = "service-set.default";
+          operation = "start";
+        }
+      ];
+    };
     postRun = {
+      tasks = [ ];
       serviceSets = [
         {
           serviceSetId = "service-set.default";
           operation = "health";
         }
       ];
+      alwaysRun = true;
+    };
+  };
+
+  noPhaseTasks = {
+    preRun = {
+      tasks = [ ];
+    };
+    postRun = {
+      tasks = [ ];
       alwaysRun = true;
     };
   };
@@ -40,13 +54,8 @@ in
           };
         };
         stages = [ ];
-        preRun = {
-          tasks = [ ];
-        };
-        postRun = {
-          tasks = [ ];
-          alwaysRun = true;
-        };
+        inherit (noPhaseTasks) preRun;
+        inherit (noPhaseTasks) postRun;
         artifacts = {
           keepOnSuccess = false;
           keepOnFailure = true;
@@ -58,6 +67,40 @@ in
           lockPolicy = "exclusive";
           emitRegistryEvents = true;
           ephemeral.enable = true;
+        };
+      };
+
+      "test-service-phase-probe" = {
+        id = "workflow.test.service.phase.probe";
+        summary = "Workflow service phase proof";
+        description = "Proves workflow preRun/postRun service-set phases over enabled proof services.";
+        mode = "custom";
+        maxWorkers = 1;
+        units = {
+          marker = {
+            taskId = "task.test.workflow.marker";
+            needs = [ ];
+            locks = [ ];
+            when = {
+              envEquals = { };
+              envPresent = [ "PROOF_WORKFLOW_PHASE_LOG_FILE" ];
+            };
+            skipIfMissingEnv = [ ];
+          };
+        };
+        stages = [ ];
+        inherit (serviceWorkflowPhases) preRun;
+        inherit (serviceWorkflowPhases) postRun;
+        artifacts = {
+          keepOnSuccess = false;
+          keepOnFailure = true;
+          writeSummary = true;
+        };
+        execution = {
+          parallel = false;
+          failFast = true;
+          lockPolicy = "exclusive";
+          emitRegistryEvents = true;
         };
       };
 
@@ -122,8 +165,8 @@ in
           };
         };
         stages = [ ];
-        inherit (workflowProbePhases) preRun;
-        inherit (workflowProbePhases) postRun;
+        inherit (noPhaseTasks) preRun;
+        inherit (noPhaseTasks) postRun;
         artifacts = {
           keepOnSuccess = false;
           keepOnFailure = true;
@@ -185,8 +228,8 @@ in
           };
         };
         stages = [ ];
-        inherit (workflowProbePhases) preRun;
-        inherit (workflowProbePhases) postRun;
+        inherit (noPhaseTasks) preRun;
+        inherit (noPhaseTasks) postRun;
         artifacts = {
           keepOnSuccess = false;
           keepOnFailure = true;
