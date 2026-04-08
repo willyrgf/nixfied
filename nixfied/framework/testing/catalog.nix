@@ -113,6 +113,9 @@ let
     ];
 
     adapters = [
+      "caller-pwd-remote-projectroot-smoke"
+      "logging-injection-smoke"
+      "nix-client-env-smoke"
       "orchestrator-arg-forwarding-smoke"
       "orchestrator-signal-cleanup-smoke"
       "service-op-composition-contract"
@@ -123,7 +126,6 @@ let
     e2e = [
       "artifacts-root-override-isolation-smoke"
       "artifacts-run-isolation-smoke"
-      "caller-pwd-remote-projectroot-smoke"
       "ci-mode-matrix-smoke"
       "disabled-service-no-package-resolution-smoke"
       "discovery-command-surfaces-smoke"
@@ -137,13 +139,11 @@ let
       "framework-install-vendor-smoke"
       "framework-template-install-upgrade-help-smoke"
       "framework-upgrade-preserve-smoke"
-      "logging-injection-smoke"
       "nix-checks-deadnix-issues-fail-smoke"
       "nix-checks-visible-output-smoke"
       "nginx-site-management-smoke"
       "nix-checks-nil-issues-fail-smoke"
       "nix-checks-statix-issues-fail-smoke"
-      "nix-client-env-smoke"
       "orchestrator-stop-controls-smoke"
       "postgres-backup-restore-smoke"
       "postgres-config-artifacts-smoke"

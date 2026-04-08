@@ -2,14 +2,12 @@
   pkgs,
   model,
   services,
-  serviceDefinitions,
-  registry,
 }:
 let
+  runtimeFixture = import ./lib/runtime-fixture.nix { inherit pkgs; };
+  shellHelpers = import ./lib/shell-helpers.nix { inherit pkgs; };
   baseTask = model.tasks."task.ci.quality";
-
   probeTaskId = "task.test.nix-client-env.probe";
-
   probeTask = baseTask // {
     id = probeTaskId;
     summary = "nix client env probe";
@@ -27,50 +25,50 @@ let
       workflowId = null;
     };
   };
-
-  probeModel = model // {
-    tasks = model.tasks // {
-      ${probeTaskId} = probeTask;
-    };
-  };
-
-  harness = import ./lib/harness.nix {
+  probeModel = runtimeFixture.withCompiledExecution (
+    model
+    // {
+      tasks = model.tasks // {
+        ${probeTaskId} = probeTask;
+      };
+    }
+  );
+  runtimePlanShell = probeModel.compiled.execution.tasks.byId.${probeTaskId}.runtimePlanShell;
+  envSandboxShell = import ../../nixfied/framework/runtime/env-sandbox.nix {
     inherit
       pkgs
-      registry
+      services
       ;
     model = probeModel;
-    inherit
-      services
-      serviceDefinitions
-      ;
     projectRoot = ../..;
   };
 in
 pkgs.runCommand "nix-client-env-smoke" { } ''
   set -euo pipefail
-  ${harness.shellPrelude}
+  ${shellHelpers.shellPrelude}
+  ${envSandboxShell}
 
-  EXECUTOR="${harness.executor}/bin/nixfied-executor"
-
-  mkdir -p "$TMPDIR/registry" "$TMPDIR/artifacts" "$TMPDIR/host-home"
+  mkdir -p "$TMPDIR/host-home"
   touch "$TMPDIR/nix-client.conf" "$TMPDIR/nix-client-cert.pem"
   nix_config_value='experimental-features = nix-command flakes'
 
   PROJECT_ENV=prod \
   NIX_ENV=3 \
   HOME="$TMPDIR/host-home" \
-  REGISTRY_ROOT="$TMPDIR/registry" \
-  CI_ARTIFACTS_DIR="$TMPDIR/artifacts" \
   NIX_USER_CONF_FILES="$TMPDIR/nix-client.conf" \
   NIX_CONFIG="$nix_config_value" \
   NIX_SSL_CERT_FILE="$TMPDIR/nix-client-cert.pem" \
-    "$EXECUTOR" run-task "${probeTaskId}" > "$TMPDIR/probe.out" 2>&1
+    run_in_sandbox_runtime \
+      ${pkgs.lib.escapeShellArg runtimePlanShell} \
+      ${pkgs.lib.escapeShellArg probeTask.runner.command} > "$TMPDIR/probe.out" 2>&1 || {
+      cat "$TMPDIR/probe.out"
+      fail "expected env sandbox to preserve host Nix client env"
+    }
 
   require_contains "$TMPDIR/probe.out" "INFO: sandbox_nix_user_conf_files=$TMPDIR/nix-client.conf"
   require_contains "$TMPDIR/probe.out" "INFO: sandbox_nix_config=$nix_config_value"
   require_contains "$TMPDIR/probe.out" "INFO: sandbox_nix_ssl_cert_file=$TMPDIR/nix-client-cert.pem"
   require_contains "$TMPDIR/probe.out" "OK: nix client env probe complete"
 
-  echo "OK: runtime sandbox preserves host Nix client env" > "$out"
+  echo "OK: env sandbox preserves host Nix client env without executor indirection" > "$out"
 ''
