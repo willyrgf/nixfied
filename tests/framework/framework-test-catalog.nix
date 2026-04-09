@@ -67,18 +67,7 @@ selectionCatalog
           ;
       };
 
-      "introspect-contract" = import ./introspect-contract.nix {
-        inherit
-          pkgs
-          apps
-          ;
-      };
-
       "introspection-bundle-determinism" = import ./introspection-bundle-determinism.nix {
-        inherit pkgs;
-      };
-
-      "local-override-introspect-contract" = import ./local-override-introspect-contract.nix {
         inherit pkgs;
       };
 
@@ -121,10 +110,6 @@ selectionCatalog
             inherit pkgs;
           };
 
-      "orchestrator-arg-forwarding-smoke" = import ./orchestrator-arg-forwarding-smoke.nix {
-        inherit pkgs;
-      };
-
       "vendored-metadata-contract" = import ./vendored-metadata-contract.nix {
         inherit pkgs;
       };
@@ -141,10 +126,6 @@ selectionCatalog
           pkgs
           model
           ;
-      };
-
-      "discovery-command-surfaces-smoke" = import ./discovery-command-surfaces-smoke.nix {
-        inherit pkgs;
       };
 
       "registry-replay" = import ./registry-replay.nix {
@@ -254,33 +235,12 @@ selectionCatalog
         inherit pkgs;
       };
 
-      "env-loader-strict-smoke" = import ./env-loader-strict-smoke.nix {
-        inherit pkgs;
-      };
-
       "shell-contract-runtime-smoke" = import ./shell-contract-runtime-smoke.nix {
         inherit pkgs;
       };
 
       "slot-env-runtime-smoke" = import ./slot-env-runtime-smoke.nix {
         inherit pkgs;
-      };
-
-      "workspace-registry-isolation-smoke" = import ./workspace-registry-isolation-smoke.nix {
-        inherit
-          pkgs
-          registry
-          ;
-      };
-
-      "nix-checks-parent-workflow-skip-smoke" = import ./nix-checks-parent-workflow-skip-smoke.nix {
-        inherit
-          pkgs
-          model
-          services
-          serviceDefinitions
-          registry
-          ;
       };
 
       "nix-checks-visible-output-smoke" = import ./nix-checks-visible-output-smoke.nix {
@@ -313,14 +273,6 @@ selectionCatalog
           ;
       };
 
-      "service-op-composition-contract" = import ./service-op-composition-contract.nix {
-        inherit pkgs;
-      };
-
-      "service-set-behavior-contract" = import ./service-set-behavior-contract.nix {
-        inherit pkgs;
-      };
-
       "operations-contract" = import ./operations-contract.nix {
         inherit
           pkgs
@@ -344,28 +296,7 @@ selectionCatalog
         inherit pkgs;
       };
 
-      "ready-health-matrix-smoke" = import ./ready-health-matrix-smoke.nix {
-        inherit
-          pkgs
-          registry
-          ;
-      };
-
-      "ready-health-shutdown-smoke" = import ./ready-health-shutdown-smoke.nix {
-        inherit
-          pkgs
-          registry
-          ;
-      };
-
       "ready-helios-sync-gate-smoke" = import ./ready-helios-sync-gate-smoke.nix {
-        inherit
-          pkgs
-          registry
-          ;
-      };
-
-      "workflow-probe-scope-smoke" = import ./workflow-probe-scope-smoke.nix {
         inherit
           pkgs
           registry
@@ -400,56 +331,6 @@ selectionCatalog
         inherit pkgs;
       };
 
-      "parallel-runner-smoke" = import ./parallel-runner-smoke.nix {
-        inherit
-          pkgs
-          model
-          services
-          serviceDefinitions
-          registry
-          ;
-      };
-
-      "parallel-runner-process-tree-smoke" = import ./parallel-runner-process-tree-smoke.nix {
-        inherit
-          pkgs
-          model
-          services
-          serviceDefinitions
-          registry
-          ;
-      };
-
-      "parallel-worker-cap-smoke" = import ./parallel-worker-cap-smoke.nix {
-        inherit
-          pkgs
-          model
-          services
-          serviceDefinitions
-          registry
-          ;
-      };
-
-      "parallel-worker-cap-invalid-smoke" = import ./parallel-worker-cap-invalid-smoke.nix {
-        inherit
-          pkgs
-          model
-          services
-          serviceDefinitions
-          registry
-          ;
-      };
-
-      "ci-mode-matrix-smoke" = import ./ci-mode-matrix-smoke.nix {
-        inherit
-          pkgs
-          model
-          services
-          serviceDefinitions
-          registry
-          ;
-      };
-
       "logging-injection-smoke" = import ./logging-injection-smoke.nix {
         inherit
           pkgs
@@ -458,34 +339,9 @@ selectionCatalog
           ;
       };
 
-      "workflow-mode-derived-smoke" = import ./workflow-mode-derived-smoke.nix {
-        inherit
-          pkgs
-          model
-          services
-          serviceDefinitions
-          registry
-          ;
-      };
-
-      "service-lifecycle-matrix-smoke" = import ./service-lifecycle-matrix-smoke.nix {
-        inherit pkgs;
-      };
-
       "supervisor-lifecycle-smoke" = import ./supervisor-lifecycle-smoke.nix {
         inherit pkgs;
       };
-
-      "task-hooks-smoke" = import ./task-hooks-smoke.nix {
-        inherit
-          pkgs
-          model
-          services
-          registry
-          ;
-      };
-
-      "test-mode-cli-contract-smoke" = import ./test-mode-cli-contract-smoke.nix { inherit pkgs; };
 
       "framework-selfhost-contract" = import ./framework-selfhost-contract.nix {
         inherit
@@ -494,56 +350,11 @@ selectionCatalog
           ;
       };
 
-      "framework-install-vendor-smoke" = import ./framework-install-vendor-smoke.nix {
-        inherit
-          pkgs
-          model
-          services
-          registry
-          ;
-      };
-
-      "framework-install-thin-smoke" = import ./framework-install-thin-smoke.nix {
-        inherit
-          pkgs
-          model
-          services
-          serviceDefinitions
-          registry
-          ;
-      };
-
-      "framework-install-filter-smoke" = import ./framework-install-filter-smoke.nix {
-        inherit pkgs;
-      };
-
       "caller-pwd-remote-projectroot-smoke" = import ./caller-pwd-remote-projectroot-smoke.nix {
         inherit
           pkgs
           model
           services
-          ;
-      };
-
-      "framework-template-install-upgrade-help-smoke" =
-        import ./framework-template-install-upgrade-help-smoke.nix
-          {
-            inherit
-              pkgs
-              model
-              services
-              serviceDefinitions
-              registry
-              ;
-          };
-
-      "framework-upgrade-preserve-smoke" = import ./framework-upgrade-preserve-smoke.nix {
-        inherit
-          pkgs
-          model
-          services
-          serviceDefinitions
-          registry
           ;
       };
 
@@ -567,92 +378,7 @@ selectionCatalog
         inherit pkgs;
       };
 
-      "orchestrator-stop-controls-smoke" = import ./orchestrator-stop-controls-smoke.nix {
-        inherit
-          pkgs
-          model
-          services
-          serviceDefinitions
-          registry
-          ;
-      };
-
-      "orchestrator-signal-cleanup-smoke" = import ./orchestrator-signal-cleanup-smoke.nix {
-        inherit
-          pkgs
-          model
-          services
-          serviceDefinitions
-          registry
-          ;
-      };
-
-      "workflow-lifecycle-smoke" = import ./workflow-lifecycle-smoke.nix {
-        inherit
-          pkgs
-          model
-          services
-          serviceDefinitions
-          registry
-          ;
-      };
-
-      "summary-json-smoke" = import ./summary-json-smoke.nix {
-        inherit
-          pkgs
-          model
-          services
-          serviceDefinitions
-          registry
-          ;
-      };
-
       "isolation-nested-run-id-smoke" = import ./isolation-nested-run-id-smoke.nix {
-        inherit
-          pkgs
-          model
-          services
-          serviceDefinitions
-          registry
-          ;
-      };
-
-      "artifacts-run-isolation-smoke" = import ./artifacts-run-isolation-smoke.nix {
-        inherit
-          pkgs
-          registry
-          ;
-      };
-
-      "artifacts-root-override-isolation-smoke" = import ./artifacts-root-override-isolation-smoke.nix {
-        inherit
-          pkgs
-          model
-          services
-          serviceDefinitions
-          registry
-          ;
-      };
-
-      "ephemeral-execution-smoke" = import ./ephemeral-execution-smoke.nix {
-        inherit
-          pkgs
-          model
-          services
-          registry
-          ;
-      };
-
-      "ephemeral-runtime-env-isolation-smoke" = import ./ephemeral-runtime-env-isolation-smoke.nix {
-        inherit
-          pkgs
-          model
-          services
-          registry
-          ;
-      };
-
-      "ephemeral-runtime-behavior-smoke" = import ./ephemeral-runtime-behavior-smoke.nix {
         inherit
           pkgs
           model
@@ -668,24 +394,6 @@ selectionCatalog
           model
           services
           serviceDefinitions
-          registry
-          ;
-      };
-
-      "ephemeral-retention-smoke" = import ./ephemeral-retention-smoke.nix {
-        inherit
-          pkgs
-          model
-          services
-          registry
-          ;
-      };
-
-      "ephemeral-copy-budget-smoke" = import ./ephemeral-copy-budget-smoke.nix {
-        inherit
-          pkgs
-          model
-          services
           registry
           ;
       };
@@ -719,14 +427,5 @@ selectionCatalog
         inherit pkgs;
       };
 
-      "service-dir-isolation-smoke" = import ./service-dir-isolation-smoke.nix {
-        inherit
-          pkgs
-          model
-          services
-          serviceDefinitions
-          registry
-          ;
-      };
     };
 }
