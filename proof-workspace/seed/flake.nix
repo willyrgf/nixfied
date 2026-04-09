@@ -1,26 +1,36 @@
 {
-  description = "Nixfied vendored wrapper";
+  description = "Nixfied proof workspace seed";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
+    nixfied.url = "github:willyrgf/nixfied/dev";
   };
 
-  outputs = { self, nixpkgs, flake-utils }:
+  outputs = {
+    self,
+    nixpkgs,
+    flake-utils,
+    nixfied,
+  }:
     flake-utils.lib.eachDefaultSystem (system:
       let
-        pkgs = import nixpkgs { inherit system; };
-        nixfiedLib = import ./nixfied/framework/core/default.nix {
-          inherit
-            pkgs
-            system
-            ;
-        };
-        frameworkSourceRevision = import ./nixfied/framework/core/framework-revision.nix {
-          sourcePath = ./nixfied;
-          metadataPath = ./nixfied/VENDORED.txt;
-        };
-        frameworkOutputs = nixfiedLib.mkFlakeOutputs {
+        frameworkSourceRevision =
+          let
+            dirtyRev = if nixfied ? dirtyRev then nixfied.dirtyRev else null;
+            rev = if nixfied ? rev then nixfied.rev else null;
+            fallbackRevision = builtins.substring 0 12 (
+              builtins.hashString "sha256" (builtins.toString nixfied.outPath)
+            );
+          in
+          if dirtyRev != null then
+            dirtyRev
+          else if rev != null then
+            rev
+          else
+            fallbackRevision;
+        frameworkOutputs = nixfied.lib.mkFlakeOutputs {
+          inherit system;
           projectRoot = ./.;
           projectModules = [ ./nixfied/project/module.nix ];
           extraModules = [ ];
@@ -37,4 +47,3 @@
         devShells = frameworkOutputs.devShells;
       });
 }
-

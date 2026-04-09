@@ -16,7 +16,7 @@ The right target is not "one app that uses all features."
 
 The right target is:
 
-- one checked-in example workspace fixture
+- one checked-in minimal project fixture
 - using only public framework surfaces
 - exercised by a few explicit proof scenarios
 - backed by a much smaller set of non-workspace unit tests for compile metadata, local helper semantics, and kernel-native logic
@@ -117,6 +117,8 @@ So the correct object under test is a proof workspace, not an app.
 - Do not make the proof workspace depend on heavyweight real services unless the service-specific behavior is itself the product guarantee.
 - Do not require every PR to boot heavyweight real-package variants of every service. The proof workspace must still touch every built-in service through the generic lifecycle path.
 - Do not keep standalone help or error wording contract tests unless a specific string is explicitly promoted to API.
+- Do not turn `proof-workspace/seed/` into a second checked-in distribution of framework-owned source.
+- Do not check in vendored copies of framework-owned trees such as `nixfied/framework`, `nixfied/modules`, `nixfied/compiler`, runtime kernel sources, or installed-wrapper contents under `proof-workspace/seed/`.
 
 ## What The Proof Workspace Should Prove
 
@@ -335,7 +337,7 @@ Recommended path:
 
 - `proof-workspace/`
 
-The proof workspace should be tracked as a seed fixture and materialized into a temp git repo during tests.
+The proof workspace should be tracked as a minimal seed fixture and materialized into a temp git repo during tests.
 
 Recommended layout:
 
@@ -373,21 +375,31 @@ Reason:
 - it should support install/bootstrap round trips
 - it should carry its own `nixfied/project/` ownership clearly
 
+The seed is a project fixture, not a framework snapshot.
+
+That means:
+
+- `proof-workspace/seed/` contains project-owned files only
+- the framework is supplied to the seed through one explicit harness-owned mechanism such as a path input override, overlay, or bootstrap rewrite
+- framework-owned files may be materialized into temp directories during `framework::install` and `framework::upgrade` proofs
+- those materialized framework-owned files are test artifacts, not checked-in fixture content
+
 Key rules:
 
 - the seed stays small and readable
 - tests copy it into `$TMPDIR`, initialize a real git repo, and run through public commands
-- the fixture must be deterministic and self-contained
+- the fixture must be deterministic and self-contained as a project fixture, not as a vendored fork of framework-owned source
 - the fixture must not depend on developer-local tools or secrets
 
 ### Bootstrap Modes
 
 The proof workspace should support two bootstrap modes:
 
-#### 1. Seed Copy Mode
+#### 1. Source-Backed Seed Mode
 
 - copy `proof-workspace/seed/` into a temp directory
 - initialize a git repo and commit a baseline (`git init`, `git add .`, `git commit`)
+- inject the framework into that temp repo through one explicit source-backed reference supplied by the harness
 - run proof scenarios directly
 
 This is the fast path for most scenarios.
@@ -399,6 +411,8 @@ This is the fast path for most scenarios.
 - materialize the proof workspace project files into the installed wrapper
 - run scenarios from the wrapper root (`cd "$TMPDIR/proof-wrapper"`)
 - run the same proof scenarios
+
+This materialization is ephemeral. The installed wrapper contents and any framework-owned generated files belong only in the temp directory used by the test.
 
 This is the path that proves repository recreation and wrapper viability.
 
@@ -666,7 +680,7 @@ This is much leaner than running dozens of unrelated smokes on every PR while st
 
 ## Migration Plan
 
-### Current Status And Remaining Checklist (Updated 2026-04-08)
+### Current Status And Remaining Checklist (Updated 2026-04-09)
 
 Current green state:
 
@@ -678,7 +692,10 @@ Current green state:
 
 Still to do before this RFC can be treated as fully implemented:
 
-- [x] Make `proof-workspace/seed/` a self-contained checked-in canonical workspace instead of relying on bootstrap to copy live `nixfied/project`, `nixfied/modules`, and `nixfied/framework` trees from the source repository.
+- [x] Replace the checked-in vendored framework snapshot under `proof-workspace/seed/` with a minimal project-only seed fixture.
+  - keep only project-owned proof workspace files under `proof-workspace/seed/`
+  - supply framework-owned source through one explicit harness-owned path input / overlay / bootstrap rewrite
+  - do not check in `seed/nixfied/framework`, `seed/nixfied/modules`, `seed/nixfied/compiler`, installed-wrapper contents, or runtime kernel source copies
 - [x] Make Scenario 1 actually prove the capabilities it currently claims:
   - invoke representative `svc::<service>::<op>` public surfaces
   - exercise built-in service lifecycle viability for `helios`, `minio`, `nginx`, `postgres`, and `reth`
@@ -692,7 +709,10 @@ Still to do before this RFC can be treated as fully implemented:
   - blocked sensitive passthrough
   - install/upgrade misuse paths
   - machine/json assertions over stable `code`, `stage`, and target identifiers where supported
-- [x] Extend Scenario 5 so thin and vendored wrappers rerun at least one canonical happy-path proof flow, not just `validate-env` plus a single `run-task`.
+- [x] Constrain Scenario 5 to temp install/upgrade materializations only.
+  - the scenario may create thin and vendored wrappers in temp directories
+  - the scenario may rerun canonical proof flows from those temp wrappers
+  - the repository seed itself must remain minimal and must not contain a checked-in installed wrapper or vendored framework tree
 - [x] Finish deleting the remaining legacy integration-shaped checks that are still scheduled outside proof-workspace in `full`:
   - delete the proof-workspace-replaced public negative-path smokes
   - rewrite the env-sandbox/public-shape holdouts into smaller local proofs
@@ -716,6 +736,7 @@ Still to do before this RFC can be treated as fully implemented:
 
 - add `proof-workspace/seed/`
 - use only public framework surfaces
+- keep the seed project-owned only; no checked-in framework snapshot
 - keep it deterministic and readable
 - make every built-in service visible through the generic lifecycle path
 
@@ -740,7 +761,7 @@ This is the first real cutover point. Do not wait for every later scenario befor
 
 ### Stage 6: Add Wrapper Round-Trip
 
-- prove install and upgrade using the same seed workspace
+- prove install and upgrade using the same minimal seed workspace, but only through temp materializations
 
 ### Stage 7: Delete Aggressively
 
@@ -810,6 +831,14 @@ Mitigation:
 
 - use the same seed workspace for wrapper round-trip tests instead of separate custom fixtures
 
+### Risk 5: The Seed Becomes A Second Framework Snapshot
+
+Mitigation:
+
+- keep only project-owned files under `proof-workspace/seed/`
+- inject framework source explicitly at bootstrap time instead of checking it into the seed
+- materialize framework-owned files only inside temp install/upgrade scenarios
+
 ## Resolved Decisions
 
 1. All built-in services are framework product surface at least for setup/startup, checks, and teardown. In the current repo that means `helios`, `minio`, `nginx`, `postgres`, `reth`, plus supervisor-backed lifecycle execution where relevant. The proof workspace must touch all of them at that level.
@@ -818,6 +847,7 @@ Mitigation:
 4. All framework capabilities should come from metadata. Tests consume that metadata; they do not define it.
 5. The current-suite keep/delete plan is explicit below.
 6. Coverage-driven deletion is gated by a checked-in capability-to-scenario map and CI validation; "scenario exists" is not enough.
+7. `proof-workspace/seed/` is not a second framework distribution channel. It contains project-owned fixture files only; framework-owned files may be materialized only inside temp install/upgrade scenarios.
 
 ## Current Suite Triage
 

@@ -434,7 +434,7 @@ in
             summary = "JSON task app";
             description = "Runs a task app that emits strict JSON for machine-output validation.";
             usage = [ "nix run .#json-body" ];
-            ownerFile = "proof-workspace/seed/nixfied/project/tasks.nix";
+            ownerFile = "nixfied/project/tasks.nix";
           };
         };
 
@@ -471,7 +471,7 @@ in
             summary = "Invalid JSON task app";
             description = "Runs a task app that violates the machine-output contract.";
             usage = [ "nix run .#json-body-invalid" ];
-            ownerFile = "proof-workspace/seed/nixfied/project/tasks.nix";
+            ownerFile = "nixfied/project/tasks.nix";
           };
         };
 
@@ -591,7 +591,7 @@ in
         summary = "Machine-output happy-path app";
         description = "Wraps the proof JSON task app with strict machine-output validation.";
         usage = [ "nix run .#machine-json" ];
-        ownerFile = "proof-workspace/seed/nixfied/project/tasks.nix";
+        ownerFile = "nixfied/project/tasks.nix";
       };
 
       "machine-json-invalid-payload" = {
@@ -601,7 +601,7 @@ in
         summary = "Machine-output invalid-payload app";
         description = "Wraps a contract-invalid JSON task app and exposes the structured validation failure envelope.";
         usage = [ "nix run .#machine-json-invalid-payload" ];
-        ownerFile = "proof-workspace/seed/nixfied/project/tasks.nix";
+        ownerFile = "nixfied/project/tasks.nix";
       };
     };
   };

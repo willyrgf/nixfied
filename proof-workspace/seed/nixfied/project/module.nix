@@ -14,7 +14,7 @@ let
     config.nixfied.state.policy = {
       id = "workspace-scoped";
       kind = "workspace-scoped";
-      source = "proof-workspace/seed/nixfied/project/module.nix";
+      source = "nixfied/project/module.nix";
       ownerScope = "workspace";
       discoveryScope = "workspace";
       workspace.mode = "project-root-hash";
