@@ -33,6 +33,12 @@ pkgs.runCommand "framework-install-vendor-smoke" { } ''
     exit 1
   fi
 
+  if ! [ -f "$target/flake.lock" ]; then
+    echo "missing generated flake.lock"
+    cat "$TMPDIR/install.out"
+    exit 1
+  fi
+
   if ! [ -f "$target/nixfied/framework/runtime/default.nix" ]; then
     echo "missing vendored framework/runtime/default.nix"
     exit 1

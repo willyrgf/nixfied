@@ -68,12 +68,37 @@ proof_overlay_seed_workspace() {
   chmod -R u+w "$target_root" >/dev/null 2>&1 || true
 }
 
-proof_rewrite_thin_install_flake() {
+proof_assert_minimal_seed() {
+  local seed_root="$1"
+  local seed_nixfied_root="$seed_root/nixfied"
+  local entry=""
+
+  proof_require_dir "$seed_nixfied_root"
+
+  for entry in "$seed_nixfied_root"/*; do
+    [ -e "$entry" ] || continue
+    case "$(basename "$entry")" in
+      project|local)
+        ;;
+      *)
+        proof_log_error "proof seed must keep only nixfied/project and nixfied/local; found $entry"
+        exit 1
+        ;;
+    esac
+  done
+}
+
+proof_rewrite_framework_input() {
   local target_root="$1"
   local repo_root="$2"
   local target_flake="$target_root/flake.nix"
 
   proof_require_file "$target_flake"
+
+  if ! grep -Fq 'github:willyrgf/nixfied/dev' "$target_flake"; then
+    proof_log_error "expected thin-style nixfied input in $target_flake"
+    exit 1
+  fi
 
   sed -i.bak \
     "s|github:willyrgf/nixfied/dev|path:${repo_root}|g" \
@@ -98,8 +123,10 @@ proof_bootstrap_seed_copy() {
   local seed_root="$repo_root/proof-workspace/seed"
 
   proof_require_dir "$seed_root"
+  proof_assert_minimal_seed "$seed_root"
 
   proof_copy_seed_workspace "$seed_root" "$target_root"
+  proof_rewrite_framework_input "$target_root" "$repo_root"
   proof_init_git_baseline "$target_root"
 
   proof_log_ok "seed-copy bootstrap ready at $target_root"
@@ -142,7 +169,7 @@ proof_bootstrap_install() {
   }
 
   if [ "$install_mode" = "thin" ]; then
-    proof_rewrite_thin_install_flake "$target_root" "$repo_root"
+    proof_rewrite_framework_input "$target_root" "$repo_root"
   fi
   proof_overlay_seed_workspace "$seed_root" "$target_root"
   proof_init_git_baseline "$target_root"

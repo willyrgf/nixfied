@@ -4,7 +4,7 @@
   conf,
 }:
 let
-  ownerFile = "proof-workspace/seed/nixfied/project/services.nix";
+  ownerFile = "nixfied/project/services.nix";
 
   mkShimPackage =
     name:

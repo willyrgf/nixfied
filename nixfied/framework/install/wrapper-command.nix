@@ -156,6 +156,10 @@ in
 
         mkdir -p "$target"
 
+        if [ -f "$repo_root/flake.lock" ]; then
+          cp -f "$repo_root/flake.lock" "$target/flake.lock"
+        fi
+
         if [ "$vendor" -eq 1 ]; then
           stage_dir="$(mktemp -d)"
           cleanup_stage() {

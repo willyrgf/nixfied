@@ -29,6 +29,7 @@ pkgs.runCommand "framework-install-thin-smoke" { } ''
   "$ORCH" run-task task.framework.install --target "$target" > "$TMPDIR/thin-install.out" 2>&1
 
   require_file "$target/flake.nix"
+  require_file "$target/flake.lock"
   require_contains "$target/flake.nix" 'description = "Nixfied thin wrapper";'
   require_contains "$target/flake.nix" 'nixfied.url = "github:willyrgf/nixfied/dev";'
   require_contains "$target/flake.nix" 'projectModules = [ ./nixfied/project/module.nix ];'

@@ -2,5 +2,5 @@
 
 - Keep this seed small and deterministic.
 - Do not commit local machine-specific paths or secrets.
-- Keep proof behavior owned by checked-in fixture content under `nixfied/project/`.
-- Keep the checked-in vendored `nixfied/` snapshot aligned with the current framework revision when seed runtime behavior changes.
+- Keep proof behavior owned by checked-in fixture content under `nixfied/project/` and `nixfied/local/`.
+- Keep `proof-workspace/seed/nixfied/` limited to `project/` and `local/`; framework-owned trees belong only in temporary install/upgrade materializations.
