@@ -21,7 +21,7 @@ let
     logFileName = "postgres.log";
     pidFileName = "postgres.pid";
   };
-  mkCommand = base.mkCommand;
+  inherit (base) mkCommand;
 in
 {
   version = 1;

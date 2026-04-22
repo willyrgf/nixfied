@@ -46,9 +46,9 @@ Shard targeting is internal now and exposed through `run-task` rather than a sep
 nix run .#test -- --mode feature-proof --summary
 nix run .#test -- --mode ci --summary
 nix run .#test -- --mode full --summary
-nix run .#run-task -- task.test.framework.feature-proof.compile --summary
-nix run .#run-task -- task.test.framework.ci.kernel --summary
-nix run .#run-task -- task.test.framework.full.e2e --summary
+nix run .#run-task -- task.test.framework.feature-proof.compile
+nix run .#run-task -- task.test.framework.ci.kernel
+nix run .#run-task -- task.test.framework.full.e2e
 ```
 
 ## Layer Intent

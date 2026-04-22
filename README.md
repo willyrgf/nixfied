@@ -174,7 +174,7 @@ nixfied.lib.mkNixfied {
 
 ```bash
 nix run .#ci -- --exclude-services helios --mode full --summary
-nix run .#run-task -- task.test.framework.feature-proof.e2e --exclude-services helios --summary
+nix run .#run-task -- task.test.framework.feature-proof.e2e --exclude-services helios
 ```
 
 Compiled outputs also export the surviving public service operation surfaces for enabled services:

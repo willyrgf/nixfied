@@ -21,7 +21,7 @@ let
     logFileName = "minio.log";
     pidFileName = "minio.pid";
   };
-  mkCommand = base.mkCommand;
+  inherit (base) mkCommand;
 in
 {
   version = 1;

@@ -31,7 +31,8 @@ let
       };
     }
   );
-  runtimePlanShell = probeModel.compiled.execution.tasks.byId.${probeTaskId}.runtimePlanShell;
+  probeExecutionTask = probeModel.compiled.execution.tasks.byId.${probeTaskId};
+  inherit (probeExecutionTask) runtimePlanShell;
   envSandboxShell = import ../../nixfied/framework/runtime/env-sandbox.nix {
     inherit
       pkgs

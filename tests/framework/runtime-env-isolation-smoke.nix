@@ -57,7 +57,7 @@ pkgs.runCommand "runtime-env-isolation-smoke" { } ''
   ${harness.shellPrelude}
 
   EXECUTOR="${harness.executor}/bin/nixfied-executor"
-  runtime_base=${pkgs.lib.escapeShellArg probeModel.runtime.directories.base}
+  runtime_base="${probeModel.runtime.directories.base}"
 
   host_home="$TMPDIR/host-home"
   host_tmp="$TMPDIR/host-tmp"

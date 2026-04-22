@@ -72,25 +72,25 @@ let
 
   baseControlBootstrap = import ../../nixfied/framework/runtime/control-bootstrap.nix {
     inherit pkgs;
-    model = compiledBase.model;
+    inherit (compiledBase) model;
     projectRoot = ../..;
     modelFile = baseModelFile;
   };
   changedControlBootstrap = import ../../nixfied/framework/runtime/control-bootstrap.nix {
     inherit pkgs;
-    model = compiledChanged.model;
+    inherit (compiledChanged) model;
     projectRoot = ../..;
     modelFile = changedModelFile;
   };
 
   sharedRuntimeBase = import ../../nixfied/framework/runtime/shared-runtime-lib.nix {
     inherit pkgs;
-    model = compiledBase.model;
+    inherit (compiledBase) model;
     runCounterLockPurpose = "run-id-semantic-inputs-base";
   };
   sharedRuntimeChanged = import ../../nixfied/framework/runtime/shared-runtime-lib.nix {
     inherit pkgs;
-    model = compiledChanged.model;
+    inherit (compiledChanged) model;
     runCounterLockPurpose = "run-id-semantic-inputs-changed";
   };
 in

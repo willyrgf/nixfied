@@ -5,7 +5,7 @@
 }:
 let
   conf = import ./conf.nix { inherit pkgs; };
-  project = conf.project;
+  inherit (conf) project;
   envNames = builtins.attrNames conf.envs;
   envOffsets = lib.mapAttrs (_: value: value.offset or 0) conf.envs;
   commonRuntimeInputs = conf.tooling.runtimePackages or [ ];
