@@ -21,7 +21,7 @@ let
     logFileName = "error.log";
     pidFileName = "nginx.pid";
   };
-  mkCommand = base.mkCommand;
+  inherit (base) mkCommand;
 in
 {
   version = 1;

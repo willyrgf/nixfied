@@ -24,5 +24,5 @@ let
 in
 {
   version = 1;
-  operations = base.operations;
+  inherit (base) operations;
 }

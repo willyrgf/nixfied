@@ -1,11 +1,10 @@
 {
-  pkgs,
   conf,
   commonRuntimeInputs,
   ...
 }:
 let
-  project = conf.project;
+  inherit (conf) project;
   commonPassThroughEnv = [
     project.envVar
     project.slotVar
@@ -61,8 +60,8 @@ let
     };
 in
 {
-  config = {
-    nixfied.contracts.definitions."machineOutput.result" = {
+  config.nixfied = {
+    contracts.definitions."machineOutput.result" = {
       kind = "record";
       doc = "Validated machine-output payload.";
       fields = {
@@ -83,7 +82,7 @@ in
       };
     };
 
-    nixfied.tasks = {
+    tasks = {
       "framework-install" = {
         id = "task.framework.install";
         kind = "utility";
@@ -583,7 +582,7 @@ in
       };
     };
 
-    nixfied.machineOutputs = {
+    machineOutputs = {
       "machine-json" = {
         id = "machine-json";
         targetAppId = "json-body";

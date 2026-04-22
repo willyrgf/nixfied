@@ -8,17 +8,16 @@
   };
 
   outputs = {
-    self,
-    nixpkgs,
     flake-utils,
     nixfied,
+    ...
   }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         frameworkSourceRevision =
           let
-            dirtyRev = if nixfied ? dirtyRev then nixfied.dirtyRev else null;
-            rev = if nixfied ? rev then nixfied.rev else null;
+            dirtyRev = nixfied.dirtyRev or null;
+            rev = nixfied.rev or null;
             fallbackRevision = builtins.substring 0 12 (
               builtins.hashString "sha256" (builtins.toString nixfied.outPath)
             );
@@ -40,10 +39,12 @@
           inherit frameworkSourceRevision;
         };
       in {
-        apps = frameworkOutputs.apps;
-        packages = frameworkOutputs.packages;
-        legacyPackages = frameworkOutputs.legacyPackages;
-        checks = frameworkOutputs.checks;
-        devShells = frameworkOutputs.devShells;
+        inherit (frameworkOutputs)
+          apps
+          packages
+          legacyPackages
+          checks
+          devShells
+          ;
       });
 }
