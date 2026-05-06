@@ -62,6 +62,37 @@ Nixfied is not primarily a task runner, service template collection, CI wrapper,
 
 9. **Proof through real execution.** The primary proof is a canonical workspace that exercises envs, slots, services, workflows, state, registry, cancellation, summaries, and install/upgrade through public surfaces.
 
+## Adapter Strategy
+
+Concrete service declarations should not live in framework project configuration. `framework/` must stay minimal and adapter-free.
+
+Core owns only the adapter contract:
+
+- service model shape
+- lifecycle phases and required operation classes
+- `svc::<service>::<op>` ABI publication
+- registry and ownership expectations
+- adapter validation rules
+- generated docs/schema for adapter contracts
+
+Concrete adapters live under `adapters/` and are opt-in only. A minimal Nixfied project must not evaluate postgres, nginx, minio, reth, helios, or any other concrete adapter by default.
+
+Best-practice usage lives under `examples/`, not in framework-owned project config. Examples are downstream-shaped workspaces with their own `flake.nix`, `framework/`, `README.md`, and `AGENTS.md`.
+
+Initial examples:
+
+- `examples/minimal`
+- `examples/postgres-api`
+- `examples/web-nginx`
+- `examples/object-storage`
+- `examples/polyglot-stack`
+
+Postgres should be the canonical reference adapter example because it demonstrates ports, state, lifecycle, readiness, health, workflows, and persistence. Other examples should stay smaller and adapter-specific.
+
+Proofs must cover the core adapter contract without concrete services, each adapter in isolation, and at least one downstream-shaped example that consumes a real adapter through public APIs.
+
+Adapter docs should be generated from typed metadata: operations, env vars, ports, lifecycle support, readiness/health behavior, state roots, and examples.
+
 ## Design Consequences
 
 The public API should be derived from the execution model, not from the current command list.
