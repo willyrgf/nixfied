@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use nixfied_model::{CleanupPolicy, Model};
+use nixfied_runtime::control::clean_reconciled_state;
 use nixfied_runtime::registry::{Registry, RegistryIdentity};
 use nixfied_runtime::state::{
     MARKER_FILE_NAME, StateIdentity, StateMarker, clean_marked_state, derive_host_placement,
@@ -262,6 +263,78 @@ fn cleanup_deletes_matching_inactive_state() {
         .expect("events should collect");
     assert_eq!(events, ["cleanup.intent", "cleanup.deleted"]);
     assert!(!fixture.layout.state_root.exists());
+}
+
+#[test]
+fn clean_reconciles_stale_refs_before_marker_owned_delete() {
+    let fixture = StateFixture::new();
+    let mut registry = fixture.registry();
+    registry
+        .connection_mut()
+        .execute_batch(
+            "
+            INSERT INTO runs (
+              run_id, status, model_path, computed_model_hash, runtime_abi,
+              toolchain_id, generator_json, target_json, source_json, summary_path
+            ) VALUES (
+              'run-stale', 'service-starting', '/nix/store/test-model/model.json',
+              'computed-hash', 'nixfied-runtime-abi:m0:1',
+              'nixfied-toolchain:m0:1', '{}', '{}', '[]', NULL
+            );
+            INSERT INTO services (
+              service_instance_id, service_name, service_address_hash,
+              endpoint_identity_hash, state_identity_hash, runtime_compatibility_hash,
+              target_identity_hash, status, endpoint_json, state_root
+            ) VALUES (
+              'service-stale', 'synthetic', 'address', 'endpoint', 'state',
+              'runtime', 'target', 'probe-ready', '{}', '/tmp/stale'
+            );
+            INSERT INTO processes (
+              process_key, pid, pgid, start_identity, command_json,
+              run_id, service_instance_id, status
+            ) VALUES (
+              'process-stale', 999999, 999999,
+              '{\"platformStart\":\"missing\"}', '{}',
+              'run-stale', 'service-stale', 'running'
+            );
+            INSERT INTO ports (
+              endpoint_key, service_instance_id, address, port, status, owner_process_key
+            ) VALUES (
+              'endpoint-stale', 'service-stale', '127.0.0.1', 38190,
+              'active', 'process-stale'
+            );
+            ",
+        )
+        .expect("stale refs should be inserted");
+
+    let outcome = clean_reconciled_state(
+        &mut registry,
+        &fixture.layout.state_base,
+        &fixture.layout.state_root,
+        &fixture.identity,
+    )
+    .expect("stale refs should reconcile before cleanup");
+
+    assert!(outcome.cleanup_id.starts_with("cleanup-"));
+    assert!(!fixture.layout.state_root.exists());
+    let process_status: String = registry
+        .connection()
+        .query_row(
+            "SELECT status FROM processes WHERE process_key = 'process-stale'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("process status should query");
+    let port_status: String = registry
+        .connection()
+        .query_row(
+            "SELECT status FROM ports WHERE endpoint_key = 'endpoint-stale'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("port status should query");
+    assert_eq!(process_status, "stale");
+    assert_eq!(port_status, "released");
 }
 
 fn assert_cleanup_refused_with_active_ref(sql: &str) {

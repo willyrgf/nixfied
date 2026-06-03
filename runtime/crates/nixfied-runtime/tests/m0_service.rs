@@ -14,6 +14,8 @@ use nixfied_runtime::state::{derive_host_placement, materialize_run_roots};
 use nixfied_runtime::{Admission, ErrorCode};
 use serde_json::{Value, json};
 
+use nixfied_runtime::control::{down_owned_process_groups, ps};
+
 #[test]
 fn starts_foreground_service_in_owned_process_group_and_records_before_ready() {
     let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 38180);
@@ -799,6 +801,160 @@ fn duplicate_active_service_start_is_refused() {
     service
         .stop(&mut fixture.registry, 1000)
         .expect("service should stop");
+}
+
+#[test]
+fn ps_reconciles_dead_owned_process_as_stale_and_releases_port() {
+    let mut fixture = ServiceFixture::new("/bin/sleep", &["1"], 38187);
+    let service = start_synthetic_service(
+        &fixture.model,
+        &fixture.admission,
+        &fixture.placement,
+        &mut fixture.registry,
+        "run-ps-stale",
+        38187,
+    )
+    .expect("foreground service should start");
+    thread::sleep(Duration::from_millis(1300));
+
+    let report = ps(&mut fixture.registry).expect("ps should reconcile");
+
+    let observed = report
+        .processes
+        .iter()
+        .find(|process| process.process_key == service.process_key)
+        .expect("process should be reported");
+    assert!(!observed.live);
+    assert_eq!(observed.reconciled_status, "stale");
+    let process_status: String = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT status FROM processes WHERE process_key = ?1",
+            [&service.process_key],
+            |row| row.get(0),
+        )
+        .expect("process status should query");
+    let service_status: String = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT status FROM services WHERE service_instance_id = ?1",
+            [&service.service_instance_id],
+            |row| row.get(0),
+        )
+        .expect("service status should query");
+    let released_ports: i64 = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT count(*) FROM ports WHERE status = 'released'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("port status should query");
+    let stale_events: i64 = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT count(*) FROM events WHERE event_type = 'process.stale'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("events should query");
+    assert_eq!(process_status, "stale");
+    assert_eq!(service_status, "stale");
+    assert_eq!(released_ports, 1);
+    assert_eq!(stale_events, 1);
+}
+
+#[test]
+fn down_stops_verified_owned_process_group_only() {
+    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 38188);
+    let service = start_synthetic_service(
+        &fixture.model,
+        &fixture.admission,
+        &fixture.placement,
+        &mut fixture.registry,
+        "run-down",
+        38188,
+    )
+    .expect("foreground service should start");
+
+    let report =
+        down_owned_process_groups(&mut fixture.registry, 1000).expect("down should stop service");
+
+    assert_eq!(report.stopped, vec![service.process_key.clone()]);
+    let process_status: String = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT status FROM processes WHERE process_key = ?1",
+            [&service.process_key],
+            |row| row.get(0),
+        )
+        .expect("process status should query");
+    let service_status: String = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT status FROM services WHERE service_instance_id = ?1",
+            [&service.service_instance_id],
+            |row| row.get(0),
+        )
+        .expect("service status should query");
+    let released_ports: i64 = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT count(*) FROM ports WHERE status = 'released'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("port status should query");
+    assert_eq!(process_status, "stopped");
+    assert_eq!(service_status, "stopped");
+    assert_eq!(released_ports, 1);
+}
+
+#[test]
+fn down_escalates_until_owned_process_group_is_empty() {
+    let marker = {
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "nixfied-survivor-{}-{}",
+            std::process::id(),
+            unique_suffix()
+        ));
+        path
+    };
+    let marker_arg = marker.to_string_lossy().to_string();
+    let script = "trap 'exit 0' TERM; /bin/sh -c 'trap \"\" TERM; sleep 2; touch \"$1\"; sleep 30' child \"$1\" & wait";
+    let mut fixture = ServiceFixture::new(
+        "/bin/sh",
+        &["-c", script, "parent", marker_arg.as_str()],
+        38189,
+    );
+    let service = start_synthetic_service(
+        &fixture.model,
+        &fixture.admission,
+        &fixture.placement,
+        &mut fixture.registry,
+        "run-down-escalate",
+        38189,
+    )
+    .expect("foreground service should start");
+
+    let report = down_owned_process_groups(&mut fixture.registry, 200)
+        .expect("down should escalate and stop the process group");
+    thread::sleep(Duration::from_millis(2300));
+
+    assert_eq!(report.stopped, vec![service.process_key.clone()]);
+    assert!(
+        !marker.exists(),
+        "child that ignored TERM should have been killed before touching marker"
+    );
+    let _ = fs::remove_file(marker);
 }
 
 struct ServiceFixture {
