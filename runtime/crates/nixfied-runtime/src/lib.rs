@@ -1,6 +1,7 @@
 pub mod admission;
 pub mod error;
 pub mod model_loader;
+pub mod registry;
 
 pub use admission::{Admission, AdmissionContext, StoreOriginPolicy};
 pub use error::{ErrorCode, RuntimeError, RuntimeResult};

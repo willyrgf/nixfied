@@ -15,6 +15,7 @@ pub enum ErrorCode {
     SourceMismatch,
     PlatformUnsupported,
     ClosureMissing,
+    RegistryCorrupt,
 }
 
 #[derive(Debug, Error, Serialize)]

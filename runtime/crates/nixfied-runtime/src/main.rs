@@ -103,5 +103,6 @@ fn exit_code(error: &RuntimeError) -> i32 {
         nixfied_runtime::ErrorCode::ClosureMissing => 16,
         nixfied_runtime::ErrorCode::SourceMismatch => 17,
         nixfied_runtime::ErrorCode::ModelAdmission => 18,
+        nixfied_runtime::ErrorCode::RegistryCorrupt => 19,
     }
 }
