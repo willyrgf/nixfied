@@ -16,10 +16,12 @@ use crate::admission::Admission;
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::registry::Registry;
 use crate::service::identity::{service_address_hash, service_instance_id};
+use crate::service::ownership::{ExpectedEndpointOwner, verify_endpoint_ownership};
 use crate::service::readiness::wait_for_readiness_probe;
 use crate::service::registry::{
-    ProcessRecord, RunRecord, ServiceRecord, ensure_service_start_allowed, mark_process_escape,
-    mark_service_failed, mark_service_probe_ready, mark_service_stopped, record_service_start,
+    ProcessRecord, RunRecord, ServiceRecord, ensure_service_start_allowed,
+    mark_endpoint_owner_verified, mark_process_escape, mark_service_failed,
+    mark_service_probe_ready, mark_service_stopped, record_service_start,
 };
 use crate::state::HostPlacement;
 
@@ -43,6 +45,7 @@ pub struct StartedService {
     pub process_key: String,
     pub pid: u32,
     pub pgid: i32,
+    pub platform_start_identity: Option<String>,
     pub selected_endpoint: SelectedEndpoint,
     pub computed_model_hash: String,
 }
@@ -93,6 +96,40 @@ impl StartedService {
             self.cleanup_after_escape();
             return Err(error);
         }
+        let ownership = match verify_endpoint_ownership(
+            endpoint,
+            self.selected_endpoint.port,
+            &ExpectedEndpointOwner {
+                pid: self.pid,
+                pgid: self.pgid,
+                process_key: &self.process_key,
+                platform_start_identity: self.platform_start_identity.as_deref(),
+            },
+        ) {
+            Ok(ownership) => ownership,
+            Err(error) => {
+                if let Some(error) = self.escape_error(registry) {
+                    self.cleanup_after_escape();
+                    return Err(error);
+                }
+                self.ensure_alive_or_record_escape(registry)?;
+                self.cleanup_after_readiness_failure(registry, &error);
+                return Err(error);
+            }
+        };
+        mark_endpoint_owner_verified(
+            registry,
+            &endpoint_key(
+                &self.service_instance_id,
+                &self.selected_endpoint.endpoint_id,
+            ),
+            &self.run_id,
+            &self.service_instance_id,
+            &self.process_key,
+            &self.computed_model_hash,
+            &serde_json::to_string(&ownership)
+                .map_err(|error| RuntimeError::new(ErrorCode::ModelAdmission, error.to_string()))?,
+        )?;
         mark_service_probe_ready(
             registry,
             &self.run_id,
@@ -333,7 +370,8 @@ pub fn start_synthetic_service(
             return Err(error);
         }
     };
-    let start_identity = process_start_identity(pid, pgid);
+    let platform_start = platform_start_identity(pid);
+    let start_identity = process_start_identity(pid, pgid, platform_start.as_deref());
     let process_key = format!("process-{run_id}-{pid}-{pgid}");
     let endpoint_json = serde_json::to_string(&selected_endpoint)
         .map_err(|error| RuntimeError::new(ErrorCode::ModelAdmission, error.to_string()))?;
@@ -352,6 +390,9 @@ pub fn start_synthetic_service(
             service,
             endpoint_json: &endpoint_json,
             state_root: &placement.state_root,
+            endpoint_key: &endpoint_key(&service_instance_id, &selected_endpoint.endpoint_id),
+            endpoint_address: &selected_endpoint.host,
+            endpoint_port: selected_endpoint.port,
         },
         &ProcessRecord {
             process_key: &process_key,
@@ -376,6 +417,7 @@ pub fn start_synthetic_service(
         process_key,
         pid,
         pgid,
+        platform_start_identity: platform_start,
         selected_endpoint,
         computed_model_hash: admission.computed_model_hash.clone(),
     };
@@ -458,6 +500,10 @@ fn operation_args(base_args: &[String], op_args: &[String], selected_port: u16) 
         .collect()
 }
 
+fn endpoint_key(service_instance_id: &str, endpoint_id: &str) -> String {
+    format!("{service_instance_id}:{endpoint_id}")
+}
+
 fn create_log_file(path: &Path) -> RuntimeResult<File> {
     File::create(path).map_err(|error| {
         RuntimeError::new(
@@ -476,7 +522,7 @@ fn get_process_group(pid: u32) -> RuntimeResult<i32> {
     })
 }
 
-fn process_group(pid: u32) -> RuntimeResult<Option<i32>> {
+pub(crate) fn process_group(pid: u32) -> RuntimeResult<Option<i32>> {
     let pgid = unsafe { libc::getpgid(pid as libc::pid_t) };
     if pgid < 0 {
         let error = std::io::Error::last_os_error();
@@ -541,7 +587,7 @@ fn terminate_process_group(pgid: i32, timeout_ms: u64) -> RuntimeResult<()> {
     signal_process_group(pgid, libc::SIGKILL)
 }
 
-fn wait_for_child_exit(child: &mut Child, timeout_ms: u64) -> RuntimeResult<bool> {
+pub(crate) fn wait_for_child_exit(child: &mut Child, timeout_ms: u64) -> RuntimeResult<bool> {
     let deadline = Instant::now() + Duration::from_millis(timeout_ms);
     while Instant::now() < deadline {
         if child
@@ -556,7 +602,7 @@ fn wait_for_child_exit(child: &mut Child, timeout_ms: u64) -> RuntimeResult<bool
     Ok(false)
 }
 
-fn signal_process_group(pgid: i32, signal: i32) -> RuntimeResult<()> {
+pub(crate) fn signal_process_group(pgid: i32, signal: i32) -> RuntimeResult<()> {
     let result = unsafe { libc::kill(-pgid, signal) };
     if result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
         Ok(())
@@ -815,7 +861,7 @@ fn descendant_pids(_pid: u32) -> RuntimeResult<Vec<u32>> {
     Ok(Vec::new())
 }
 
-fn process_start_identity(pid: u32, pgid: i32) -> String {
+fn process_start_identity(pid: u32, pgid: i32, platform_start: Option<&str>) -> String {
     let observed_at = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
@@ -823,14 +869,14 @@ fn process_start_identity(pid: u32, pgid: i32) -> String {
     serde_json::json!({
         "pid": pid,
         "pgid": pgid,
-        "platformStart": platform_start_identity(pid),
+        "platformStart": platform_start,
         "observedAtNanos": observed_at,
     })
     .to_string()
 }
 
 #[cfg(target_os = "linux")]
-fn platform_start_identity(pid: u32) -> Option<String> {
+pub(crate) fn platform_start_identity(pid: u32) -> Option<String> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     let fields_after_comm = stat.rsplit_once(") ")?.1;
     let start_time_ticks = fields_after_comm.split_whitespace().nth(19)?;
@@ -838,7 +884,7 @@ fn platform_start_identity(pid: u32) -> Option<String> {
 }
 
 #[cfg(target_os = "macos")]
-fn platform_start_identity(pid: u32) -> Option<String> {
+pub(crate) fn platform_start_identity(pid: u32) -> Option<String> {
     let info = process_bsd_info(pid)?;
     Some(format!(
         "macos-start-time:{}:{}",
@@ -866,7 +912,7 @@ fn process_bsd_info(pid: u32) -> Option<libc::proc_bsdinfo> {
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn platform_start_identity(_pid: u32) -> Option<String> {
+pub(crate) fn platform_start_identity(_pid: u32) -> Option<String> {
     None
 }
 

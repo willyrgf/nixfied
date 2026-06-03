@@ -7,7 +7,9 @@ use std::time::Duration;
 
 use nixfied_model::Model;
 use nixfied_runtime::registry::{Registry, RegistryIdentity};
-use nixfied_runtime::service::{start_synthetic_service, wait_for_readiness_probe};
+use nixfied_runtime::service::{
+    run_dependent_task, start_synthetic_service, wait_for_readiness_probe,
+};
 use nixfied_runtime::state::{derive_host_placement, materialize_run_roots};
 use nixfied_runtime::{Admission, ErrorCode};
 use serde_json::{Value, json};
@@ -98,10 +100,15 @@ fn starts_foreground_service_in_owned_process_group_and_records_before_ready() {
 }
 
 #[test]
-fn tcp_readiness_probe_marks_probe_ready_without_endpoint_ownership() {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("listener should bind");
+fn readiness_probe_marks_ready_only_after_endpoint_ownership() {
+    let Some(python) = python3_path() else {
+        return;
+    };
+    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
     let port = listener.local_addr().expect("local addr").port();
-    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], port);
+    drop(listener);
+    let script = python_listener_script();
+    let mut fixture = ServiceFixture::new(python, &["-c", script, "${port}"], port);
     let mut service = start_synthetic_service(
         &fixture.model,
         &fixture.admission,
@@ -114,7 +121,7 @@ fn tcp_readiness_probe_marks_probe_ready_without_endpoint_ownership() {
 
     service
         .wait_for_probe_ready(&fixture.model, &mut fixture.registry)
-        .expect("external listener satisfies plain TCP probe");
+        .expect("owned listener should satisfy readiness");
     let service_status: String = fixture
         .registry
         .connection()
@@ -124,12 +131,255 @@ fn tcp_readiness_probe_marks_probe_ready_without_endpoint_ownership() {
             |row| row.get(0),
         )
         .expect("service status should query");
+    let port_status: String = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT status FROM ports WHERE owner_process_key = ?1",
+            [&service.process_key],
+            |row| row.get(0),
+        )
+        .expect("port status should query");
+    let verified_events: i64 = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT count(*) FROM events WHERE event_type = 'port.owner-verified'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("events should query");
 
     assert_eq!(service_status, "probe-ready");
+    assert_eq!(port_status, "active");
+    assert_eq!(verified_events, 1);
     service
         .stop(&mut fixture.registry, 1000)
         .expect("service should stop");
+    let released_ports: i64 = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT count(*) FROM ports WHERE status = 'released'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("port status should query");
+    assert_eq!(released_ports, 1);
+}
+
+#[test]
+fn external_listener_does_not_satisfy_endpoint_ownership() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("listener should bind");
+    let port = listener.local_addr().expect("local addr").port();
+    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], port);
+    let mut service = start_synthetic_service(
+        &fixture.model,
+        &fixture.admission,
+        &fixture.placement,
+        &mut fixture.registry,
+        "run-external-listener",
+        port,
+    )
+    .expect("foreground service should start");
+
+    let error = service
+        .wait_for_probe_ready(&fixture.model, &mut fixture.registry)
+        .expect_err("external listener must not satisfy ownership");
+
+    assert_eq!(error.code, ErrorCode::PortUnverifiable);
+    let service_status: String = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT status FROM services WHERE service_instance_id = ?1",
+            [&service.service_instance_id],
+            |row| row.get(0),
+        )
+        .expect("service status should query");
+    let ready_events: i64 = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT count(*) FROM events WHERE event_type = 'service.probe-ready'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("events should query");
+
+    assert_eq!(service_status, "failed");
+    assert_eq!(ready_events, 0);
     drop(listener);
+}
+
+#[test]
+fn wildcard_listener_does_not_satisfy_loopback_endpoint_ownership() {
+    let Some(python) = python3_path() else {
+        return;
+    };
+    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
+    let port = listener.local_addr().expect("local addr").port();
+    drop(listener);
+    let script = python_wildcard_listener_script();
+    let mut fixture = ServiceFixture::new(python, &["-c", script, "${port}"], port);
+    let mut service = start_synthetic_service(
+        &fixture.model,
+        &fixture.admission,
+        &fixture.placement,
+        &mut fixture.registry,
+        "run-wildcard-listener",
+        port,
+    )
+    .expect("foreground service should start");
+
+    let error = service
+        .wait_for_probe_ready(&fixture.model, &mut fixture.registry)
+        .expect_err("wildcard listener must not satisfy declared loopback endpoint");
+
+    assert_eq!(error.code, ErrorCode::PortUnverifiable);
+    let ready_events: i64 = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT count(*) FROM events WHERE event_type = 'service.probe-ready'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("events should query");
+    let service_status: String = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT status FROM services WHERE service_instance_id = ?1",
+            [&service.service_instance_id],
+            |row| row.get(0),
+        )
+        .expect("service status should query");
+    assert_eq!(ready_events, 0);
+    assert_eq!(service_status, "failed");
+}
+
+#[test]
+fn dependent_task_runs_after_owned_service_is_ready() {
+    let Some(python) = python3_path() else {
+        return;
+    };
+    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
+    let port = listener.local_addr().expect("local addr").port();
+    drop(listener);
+    let script = python_listener_script();
+    let mut fixture = ServiceFixture::new(python, &["-c", script, "${port}"], port);
+    fixture
+        .model
+        .tasks
+        .get_mut("smoke")
+        .expect("fixture has task")
+        .args = vec![
+        "-c".to_string(),
+        "import sys; sys.stdout.write('task-ok')".to_string(),
+    ];
+    let mut service = start_synthetic_service(
+        &fixture.model,
+        &fixture.admission,
+        &fixture.placement,
+        &mut fixture.registry,
+        "run-task",
+        port,
+    )
+    .expect("foreground service should start");
+    service
+        .wait_for_probe_ready(&fixture.model, &mut fixture.registry)
+        .expect("owned listener should become ready");
+
+    let task = run_dependent_task(
+        &fixture.model,
+        &fixture.placement,
+        &mut fixture.registry,
+        &service,
+        "smoke",
+    )
+    .expect("ready dependent task should run");
+
+    assert!(task.success);
+    assert_eq!(task.exit_code, Some(0));
+    assert_eq!(
+        fs::read_to_string(&task.stdout_path).expect("stdout should read"),
+        "task-ok"
+    );
+    assert!(task.stderr_path.exists());
+    assert!(task.summary_path.exists());
+    let task_events: i64 = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT count(*) FROM events WHERE event_type IN ('task.running','task.succeeded')",
+            [],
+            |row| row.get(0),
+        )
+        .expect("events should query");
+    let process_status: String = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT status FROM processes WHERE process_key = ?1",
+            [&task.process_key],
+            |row| row.get(0),
+        )
+        .expect("process status should query");
+    let run_status: String = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT status FROM runs WHERE run_id = 'run-task'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("run status should query");
+
+    assert_eq!(task_events, 2);
+    assert_eq!(process_status, "succeeded");
+    assert_eq!(run_status, "task-succeeded");
+    service
+        .stop(&mut fixture.registry, 1000)
+        .expect("service should stop");
+}
+
+#[test]
+fn dependent_task_refuses_to_run_before_service_ready() {
+    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 38186);
+    let service = start_synthetic_service(
+        &fixture.model,
+        &fixture.admission,
+        &fixture.placement,
+        &mut fixture.registry,
+        "run-task-not-ready",
+        38186,
+    )
+    .expect("foreground service should start");
+
+    let error = run_dependent_task(
+        &fixture.model,
+        &fixture.placement,
+        &mut fixture.registry,
+        &service,
+        "smoke",
+    )
+    .expect_err("task should wait for probe-ready service");
+
+    assert_eq!(error.code, ErrorCode::ModelAdmission);
+    let task_events: i64 = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT count(*) FROM events WHERE event_type LIKE 'task.%'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("events should query");
+    assert_eq!(task_events, 0);
+    service
+        .stop(&mut fixture.registry, 1000)
+        .expect("service should stop");
 }
 
 #[test]
@@ -842,6 +1092,25 @@ fn host_os() -> &'static str {
         "linux" => "linux",
         other => other,
     }
+}
+
+fn python3_path() -> Option<&'static str> {
+    [
+        "/opt/homebrew/bin/python3",
+        "/usr/local/bin/python3",
+        "/usr/bin/python3",
+        "/bin/python3",
+    ]
+    .into_iter()
+    .find(|path| Path::new(path).exists())
+}
+
+fn python_listener_script() -> &'static str {
+    "import socket, sys, time; s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(('127.0.0.1', int(sys.argv[1]))); s.listen(16); time.sleep(30)"
+}
+
+fn python_wildcard_listener_script() -> &'static str {
+    "import socket, sys, time; s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(('0.0.0.0', int(sys.argv[1]))); s.listen(16); time.sleep(30)"
 }
 
 struct TempDir {
