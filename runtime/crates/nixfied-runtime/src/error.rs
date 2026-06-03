@@ -19,6 +19,8 @@ pub enum ErrorCode {
     StateUnwritable,
     StateUnowned,
     CleanupRefused,
+    ProcEscape,
+    ReadinessTimeout,
 }
 
 #[derive(Debug, Error, Serialize)]
