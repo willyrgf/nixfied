@@ -1,3 +1,49 @@
-{ ... }:
+{ model }:
+
 {
+  schema = {
+    schemaVersion = 1;
+    source = "model.json";
+    runtimeInputs = model.runtimeConstraints;
+    surfaces = model.surfaces;
+    modelTypes = {
+      modelVersion = model.modelVersion;
+      runtimeAbi = model.runtimeAbi;
+      toolchainId = model.toolchainId;
+      primitives = [
+        "ExecSpec"
+        "EndpointSpec"
+        "ProbeSpec"
+        "LifecycleOpSpec"
+        "ServiceSpec"
+        "TaskSpec"
+      ];
+    };
+  };
+
+  capabilities = model.capabilities;
+
+  docs = ''
+    # ${model.docs.title}
+
+    ${model.docs.summary}
+
+    ## Target
+
+    - system: ${model.target.system}
+    - runtime ABI: ${model.runtimeAbi}
+    - toolchain: ${model.toolchainId}
+
+    ## M0 Surfaces
+
+    ${builtins.concatStringsSep "\n" (map (surface: "- ${surface.name}") model.surfaces)}
+
+    ## Services
+
+    ${builtins.concatStringsSep "\n" (map (service: "- ${service}") model.capabilities.services)}
+
+    ## Tasks
+
+    ${builtins.concatStringsSep "\n" (map (task: "- ${task}") model.capabilities.tasks)}
+  '';
 }
