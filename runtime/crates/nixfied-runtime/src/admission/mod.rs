@@ -1,0 +1,85 @@
+pub mod abi;
+pub mod closures;
+pub mod origin;
+pub mod secrets;
+pub mod source;
+pub mod target;
+
+use std::path::PathBuf;
+
+use nixfied_model::Model;
+
+use crate::error::RuntimeResult;
+use crate::model_loader::LoadedModel;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StoreOriginPolicy {
+    RequireStore,
+    AllowNonStoreForTests,
+}
+
+#[derive(Debug, Clone)]
+pub struct AdmissionContext {
+    pub policy: StoreOriginPolicy,
+    pub store_root: PathBuf,
+    pub host_system: String,
+}
+
+impl AdmissionContext {
+    pub fn current(policy: StoreOriginPolicy) -> Self {
+        Self {
+            policy,
+            store_root: PathBuf::from("/nix/store"),
+            host_system: host_system(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Admission {
+    pub model_path: PathBuf,
+    pub computed_model_hash: String,
+    pub raw_len: usize,
+    pub project_id: String,
+    pub runtime_abi: String,
+    pub toolchain_id: String,
+    pub target_system: String,
+}
+
+impl Admission {
+    pub fn check(loaded: &LoadedModel, context: &AdmissionContext) -> RuntimeResult<Self> {
+        origin::check_store_origin(loaded, context)?;
+        abi::check_abi(&loaded.model, loaded)?;
+        target::check_target(&loaded.model, loaded, context)?;
+        source::check_source(&loaded.model, loaded)?;
+        closures::check_closures(&loaded.model, loaded, context)?;
+        secrets::check_secrets(&loaded.model, loaded)?;
+        Ok(from_loaded(&loaded.model, loaded))
+    }
+}
+
+fn from_loaded(model: &Model, loaded: &LoadedModel) -> Admission {
+    Admission {
+        model_path: loaded.path.clone(),
+        computed_model_hash: loaded.computed_model_hash.clone(),
+        raw_len: loaded.raw_len,
+        project_id: model.project.project_id.clone(),
+        runtime_abi: model.runtime_abi.clone(),
+        toolchain_id: model.toolchain_id.clone(),
+        target_system: model.target.system.clone(),
+    }
+}
+
+fn host_system() -> String {
+    let arch = match std::env::consts::ARCH {
+        "aarch64" => "aarch64",
+        "x86_64" => "x86_64",
+        other => other,
+    };
+    let os = match std::env::consts::OS {
+        "macos" => "darwin",
+        "linux" => "linux",
+        other => other,
+    };
+    format!("{arch}-{os}")
+}
