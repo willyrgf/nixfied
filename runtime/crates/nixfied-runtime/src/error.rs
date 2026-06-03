@@ -16,6 +16,9 @@ pub enum ErrorCode {
     PlatformUnsupported,
     ClosureMissing,
     RegistryCorrupt,
+    StateUnwritable,
+    StateUnowned,
+    CleanupRefused,
 }
 
 #[derive(Debug, Error, Serialize)]
