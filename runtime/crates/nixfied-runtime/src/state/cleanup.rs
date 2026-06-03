@@ -2,13 +2,15 @@ use std::path::{Path, PathBuf};
 
 use nixfied_model::CleanupPolicy;
 use rusqlite::params;
+use serde::Serialize;
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::registry::Registry;
 use crate::state::marker::{StateIdentity, StateMarker, read_marker};
 use crate::state::placement::canonicalize_existing;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CleanupOutcome {
     pub cleanup_id: String,
     pub deleted_path: PathBuf,

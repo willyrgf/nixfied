@@ -538,6 +538,29 @@ pub(crate) fn process_group(pid: u32) -> RuntimeResult<Option<i32>> {
     }
 }
 
+pub(crate) fn process_is_live_with_identity(
+    pid: u32,
+    pgid: i32,
+    platform_start: Option<&str>,
+) -> RuntimeResult<bool> {
+    let Some(current_pgid) = process_group(pid)? else {
+        return Ok(false);
+    };
+    if current_pgid != pgid {
+        return Ok(false);
+    }
+    if let Some(expected) = platform_start {
+        if platform_start_identity(pid).as_deref() != Some(expected) {
+            return Ok(false);
+        }
+    }
+    Ok(!process_is_zombie(pid))
+}
+
+pub(crate) fn process_group_has_live_member(pgid: i32) -> RuntimeResult<bool> {
+    process_group_has_live_member_impl(pgid)
+}
+
 fn ensure_foreground_child_alive(service: &mut StartedService) -> RuntimeResult<()> {
     thread::sleep(FOREGROUND_GRACE);
     match service.child.try_wait().map_err(|error| {
@@ -883,6 +906,41 @@ pub(crate) fn platform_start_identity(pid: u32) -> Option<String> {
     Some(format!("linux-start-ticks:{start_time_ticks}"))
 }
 
+#[cfg(target_os = "linux")]
+fn process_is_zombie(pid: u32) -> bool {
+    let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+        return false;
+    };
+    stat.rsplit_once(") ")
+        .and_then(|(_, fields)| fields.split_whitespace().next())
+        == Some("Z")
+}
+
+#[cfg(target_os = "linux")]
+fn process_group_has_live_member_impl(pgid: i32) -> RuntimeResult<bool> {
+    let entries = std::fs::read_dir("/proc").map_err(|error| {
+        RuntimeError::new(
+            ErrorCode::ProcEscape,
+            format!("failed to inspect /proc while checking process group {pgid}: {error}"),
+        )
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            RuntimeError::new(
+                ErrorCode::ProcEscape,
+                format!("failed to inspect /proc while checking process group {pgid}: {error}"),
+            )
+        })?;
+        let Some(pid) = entry.file_name().to_string_lossy().parse::<u32>().ok() else {
+            continue;
+        };
+        if process_group(pid)? == Some(pgid) && !process_is_zombie(pid) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 #[cfg(target_os = "macos")]
 pub(crate) fn platform_start_identity(pid: u32) -> Option<String> {
     let info = process_bsd_info(pid)?;
@@ -890,6 +948,46 @@ pub(crate) fn platform_start_identity(pid: u32) -> Option<String> {
         "macos-start-time:{}:{}",
         info.pbi_start_tvsec, info.pbi_start_tvusec
     ))
+}
+
+#[cfg(target_os = "macos")]
+fn process_is_zombie(pid: u32) -> bool {
+    process_bsd_info(pid)
+        .map(|info| info.pbi_status == libc::SZOMB)
+        .unwrap_or(false)
+}
+
+#[cfg(target_os = "macos")]
+fn process_group_has_live_member_impl(pgid: i32) -> RuntimeResult<bool> {
+    let capacity = 8192usize;
+    let mut buffer = vec![0 as libc::pid_t; capacity];
+    let count = unsafe {
+        libc::proc_listallpids(
+            buffer.as_mut_ptr().cast(),
+            (capacity * std::mem::size_of::<libc::pid_t>()) as libc::c_int,
+        )
+    };
+    if count < 0 {
+        return Err(RuntimeError::new(
+            ErrorCode::ProcEscape,
+            format!(
+                "failed to list pids while checking process group {pgid}: {}",
+                std::io::Error::last_os_error()
+            ),
+        ));
+    }
+    for pid in buffer.into_iter().take(count as usize) {
+        let Ok(pid) = u32::try_from(pid) else {
+            continue;
+        };
+        if pid == 0 {
+            continue;
+        }
+        if process_group(pid)? == Some(pgid) && !process_is_zombie(pid) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 #[cfg(target_os = "macos")]
@@ -914,6 +1012,16 @@ fn process_bsd_info(pid: u32) -> Option<libc::proc_bsdinfo> {
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub(crate) fn platform_start_identity(_pid: u32) -> Option<String> {
     None
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn process_is_zombie(_pid: u32) -> bool {
+    false
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn process_group_has_live_member_impl(_pgid: i32) -> RuntimeResult<bool> {
+    Ok(false)
 }
 
 #[derive(Serialize)]

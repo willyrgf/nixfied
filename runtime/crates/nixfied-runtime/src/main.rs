@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use nixfied_runtime::registry::{Registry, RegistryIdentity};
+use nixfied_runtime::state::{StateIdentity, derive_host_placement, state_base_from_env};
 use nixfied_runtime::{
     Admission, AdmissionContext, RuntimeError, StoreOriginPolicy, parse_loaded_model,
     read_raw_model,
@@ -33,6 +35,9 @@ fn run() -> Result<(), RuntimeError> {
     let command = args.first().map(String::as_str).unwrap_or("check");
     match command {
         "check" => check(args.get(1..).unwrap_or(&[])),
+        "ps" => run_control(ControlCommand::Ps, args.get(1..).unwrap_or(&[])),
+        "down" => run_control(ControlCommand::Down, args.get(1..).unwrap_or(&[])),
+        "clean" => run_control(ControlCommand::Clean, args.get(1..).unwrap_or(&[])),
         _ => Err(RuntimeError::new(
             nixfied_runtime::ErrorCode::ModelAdmission,
             format!("unsupported M0 runtime command: {command}"),
@@ -68,16 +73,7 @@ fn check(args: &[String]) -> Result<(), RuntimeError> {
             "missing --model path",
         )
     })?;
-    let policy = if allow_non_store {
-        StoreOriginPolicy::AllowNonStoreForTests
-    } else {
-        StoreOriginPolicy::RequireStore
-    };
-    let context = AdmissionContext::current(policy);
-    let raw_model = read_raw_model(&model_path)?;
-    nixfied_runtime::admission::origin::check_raw_store_origin(&raw_model, &context)?;
-    let loaded = parse_loaded_model(raw_model)?;
-    let admission = Admission::check(&loaded, &context)?;
+    let (_loaded, admission) = load_admitted_model(model_path, allow_non_store)?;
     let output = CheckOutput {
         model_path: admission.model_path,
         computed_model_hash: admission.computed_model_hash,
@@ -90,6 +86,140 @@ fn check(args: &[String]) -> Result<(), RuntimeError> {
     println!(
         "{}",
         serde_json::to_string_pretty(&output).expect("check output should serialize")
+    );
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ControlCommand {
+    Ps,
+    Down,
+    Clean,
+}
+
+struct ControlOptions {
+    model_path: PathBuf,
+    allow_non_store: bool,
+    state_base: PathBuf,
+    timeout_ms: u64,
+}
+
+fn run_control(command: ControlCommand, args: &[String]) -> Result<(), RuntimeError> {
+    let options = parse_control_options(command, args)?;
+    let (loaded, admission) =
+        load_admitted_model(options.model_path.clone(), options.allow_non_store)?;
+    let placement = derive_host_placement(&loaded.model, "control", &options.state_base)?;
+    let mut registry = Registry::open_or_create(
+        placement.registry_path(),
+        &RegistryIdentity::m0(
+            &loaded.model.project.project_id,
+            &loaded.model.runtime_abi,
+            &loaded.model.toolchain_id,
+        ),
+    )?;
+    match command {
+        ControlCommand::Ps => print_json(&nixfied_runtime::control::ps(&mut registry)?),
+        ControlCommand::Down => print_json(&nixfied_runtime::control::down_owned_process_groups(
+            &mut registry,
+            options.timeout_ms,
+        )?),
+        ControlCommand::Clean => {
+            let identity = StateIdentity::from_model(&loaded.model, &admission);
+            print_json(&nixfied_runtime::control::clean_reconciled_state(
+                &mut registry,
+                &placement.state_base,
+                &placement.state_root,
+                &identity,
+            )?)
+        }
+    }
+}
+
+fn parse_control_options(
+    command: ControlCommand,
+    args: &[String],
+) -> Result<ControlOptions, RuntimeError> {
+    let mut model_path = None;
+    let mut allow_non_store = false;
+    let mut state_base = None;
+    let mut timeout_ms = 5000;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--model" => {
+                index += 1;
+                model_path = args.get(index).map(PathBuf::from);
+            }
+            "--allow-non-store-model" => {
+                allow_non_store = true;
+            }
+            "--state-base" => {
+                index += 1;
+                state_base = args.get(index).map(PathBuf::from);
+            }
+            "--timeout-ms" if matches!(command, ControlCommand::Down) => {
+                index += 1;
+                let value = args.get(index).ok_or_else(|| {
+                    RuntimeError::new(
+                        nixfied_runtime::ErrorCode::ModelAdmission,
+                        "missing --timeout-ms value",
+                    )
+                })?;
+                timeout_ms = value.parse::<u64>().map_err(|error| {
+                    RuntimeError::new(
+                        nixfied_runtime::ErrorCode::ModelAdmission,
+                        format!("invalid --timeout-ms value {value}: {error}"),
+                    )
+                })?;
+            }
+            other => {
+                return Err(RuntimeError::new(
+                    nixfied_runtime::ErrorCode::ModelAdmission,
+                    format!("unknown control argument: {other}"),
+                ));
+            }
+        }
+        index += 1;
+    }
+    let model_path = model_path.ok_or_else(|| {
+        RuntimeError::new(
+            nixfied_runtime::ErrorCode::ModelAdmission,
+            "missing --model path",
+        )
+    })?;
+    let state_base = state_base.map(Ok).unwrap_or_else(state_base_from_env)?;
+    Ok(ControlOptions {
+        model_path,
+        allow_non_store,
+        state_base,
+        timeout_ms,
+    })
+}
+
+fn load_admitted_model(
+    model_path: PathBuf,
+    allow_non_store: bool,
+) -> Result<(nixfied_runtime::model_loader::LoadedModel, Admission), RuntimeError> {
+    let policy = if allow_non_store {
+        StoreOriginPolicy::AllowNonStoreForTests
+    } else {
+        StoreOriginPolicy::RequireStore
+    };
+    let context = AdmissionContext::current(policy);
+    let raw_model = read_raw_model(&model_path)?;
+    nixfied_runtime::admission::origin::check_raw_store_origin(&raw_model, &context)?;
+    let loaded = parse_loaded_model(raw_model)?;
+    let admission = Admission::check(&loaded, &context)?;
+    Ok((loaded, admission))
+}
+
+fn print_json(value: &impl Serialize) -> Result<(), RuntimeError> {
+    println!(
+        "{}",
+        serde_json::to_string_pretty(value).map_err(|error| RuntimeError::new(
+            nixfied_runtime::ErrorCode::ModelAdmission,
+            error.to_string()
+        ))?
     );
     Ok(())
 }
