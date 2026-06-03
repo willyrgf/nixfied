@@ -19,6 +19,8 @@ pub enum ErrorCode {
     StateUnwritable,
     StateUnowned,
     CleanupRefused,
+    PortConflict,
+    PortUnverifiable,
     ProcEscape,
     ReadinessTimeout,
 }

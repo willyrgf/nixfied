@@ -22,6 +22,9 @@ pub struct ServiceRecord<'a> {
     pub service: &'a ServiceSpec,
     pub endpoint_json: &'a str,
     pub state_root: &'a Path,
+    pub endpoint_key: &'a str,
+    pub endpoint_address: &'a str,
+    pub endpoint_port: u16,
 }
 
 pub struct ProcessRecord<'a> {
@@ -55,6 +58,11 @@ pub fn record_service_start(
     let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
     ensure_no_existing_run_transaction(&transaction, run.run_id)?;
     ensure_no_active_service_transaction(&transaction, service.service_instance_id)?;
+    ensure_no_active_port_transaction(
+        &transaction,
+        service.endpoint_address,
+        service.endpoint_port,
+    )?;
     transaction
         .execute(
             "
@@ -117,6 +125,21 @@ pub fn record_service_start(
             ],
         )
         .map_err(sql_error)?;
+    transaction
+        .execute(
+            "
+            INSERT OR REPLACE INTO ports (
+              endpoint_key, service_instance_id, address, port, status, owner_process_key
+            ) VALUES (?1, ?2, ?3, ?4, 'reserved', NULL)
+            ",
+            params![
+                service.endpoint_key,
+                service.service_instance_id,
+                service.endpoint_address,
+                service.endpoint_port,
+            ],
+        )
+        .map_err(sql_error)?;
     insert_event(
         &transaction,
         "run.admitted",
@@ -134,6 +157,39 @@ pub fn record_service_start(
         Some(process.process_key),
         Some(&run.admission.computed_model_hash),
         process.command_json,
+    )?;
+    transaction.commit().map_err(sql_error)?;
+    Ok(())
+}
+
+pub fn mark_endpoint_owner_verified(
+    registry: &mut Registry,
+    endpoint_key: &str,
+    run_id: &str,
+    service_instance_id: &str,
+    process_key: &str,
+    computed_model_hash: &str,
+    payload_json: &str,
+) -> RuntimeResult<()> {
+    let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
+    transaction
+        .execute(
+            "
+            UPDATE ports
+            SET status = 'active', owner_process_key = ?2
+            WHERE endpoint_key = ?1
+            ",
+            params![endpoint_key, process_key],
+        )
+        .map_err(sql_error)?;
+    insert_event(
+        &transaction,
+        "port.owner-verified",
+        Some(run_id),
+        Some(service_instance_id),
+        Some(process_key),
+        Some(computed_model_hash),
+        payload_json,
     )?;
     transaction.commit().map_err(sql_error)?;
     Ok(())
@@ -186,6 +242,7 @@ pub fn mark_service_stopped(
             params![service_instance_id],
         )
         .map_err(sql_error)?;
+    release_service_ports(&transaction, service_instance_id)?;
     insert_event(
         &transaction,
         "service.stopped",
@@ -220,6 +277,7 @@ pub fn mark_service_failed(
             params![service_instance_id],
         )
         .map_err(sql_error)?;
+    release_service_ports(&transaction, service_instance_id)?;
     insert_event(
         &transaction,
         "service.failed",
@@ -254,11 +312,119 @@ pub fn mark_process_escape(
             params![service_instance_id],
         )
         .map_err(sql_error)?;
+    release_service_ports(&transaction, service_instance_id)?;
     insert_event(
         &transaction,
         "service.proc-escape",
         Some(run_id),
         Some(service_instance_id),
+        Some(process_key),
+        Some(computed_model_hash),
+        payload_json,
+    )?;
+    transaction.commit().map_err(sql_error)?;
+    Ok(())
+}
+
+pub fn ensure_service_instance_probe_ready(
+    registry: &Registry,
+    service_name: &str,
+    service_instance_id: &str,
+) -> RuntimeResult<()> {
+    let status = registry
+        .connection()
+        .query_row(
+            "SELECT status FROM services WHERE service_instance_id = ?1",
+            params![service_instance_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(sql_error)?;
+    match status.as_deref() {
+        Some("probe-ready") => Ok(()),
+        Some(status) => Err(RuntimeError::new(
+            ErrorCode::ModelAdmission,
+            format!("service {service_name} is {status}, not probe-ready"),
+        )),
+        None => Err(RuntimeError::new(
+            ErrorCode::ModelAdmission,
+            format!("service {service_name} has not been started"),
+        )),
+    }
+}
+
+pub fn record_task_started(
+    registry: &mut Registry,
+    run_id: &str,
+    process_key: &str,
+    pid: u32,
+    pgid: i32,
+    start_identity: &str,
+    command_json: &str,
+    computed_model_hash: &str,
+) -> RuntimeResult<()> {
+    let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
+    transaction
+        .execute(
+            "
+            INSERT INTO processes (
+              process_key, pid, pgid, start_identity, command_json,
+              run_id, service_instance_id, status
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, 'running')
+            ",
+            params![process_key, pid, pgid, start_identity, command_json, run_id],
+        )
+        .map_err(sql_error)?;
+    insert_event(
+        &transaction,
+        "task.running",
+        Some(run_id),
+        None,
+        Some(process_key),
+        Some(computed_model_hash),
+        command_json,
+    )?;
+    transaction.commit().map_err(sql_error)?;
+    Ok(())
+}
+
+pub fn mark_task_finished(
+    registry: &mut Registry,
+    run_id: &str,
+    process_key: &str,
+    computed_model_hash: &str,
+    success: bool,
+    payload_json: &str,
+) -> RuntimeResult<()> {
+    let status = if success { "succeeded" } else { "failed" };
+    let event_type = if success {
+        "task.succeeded"
+    } else {
+        "task.failed"
+    };
+    let run_status = if success {
+        "task-succeeded"
+    } else {
+        "task-failed"
+    };
+    let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
+    transaction
+        .execute(
+            "UPDATE processes SET status = ?2 WHERE process_key = ?1",
+            params![process_key, status],
+        )
+        .map_err(sql_error)?;
+    transaction
+        .execute(
+            "UPDATE runs SET status = ?2 WHERE run_id = ?1",
+            params![run_id, run_status],
+        )
+        .map_err(sql_error)?;
+    insert_event(
+        &transaction,
+        event_type,
+        Some(run_id),
+        None,
         Some(process_key),
         Some(computed_model_hash),
         payload_json,
@@ -381,6 +547,52 @@ fn refuse_active_service(service_instance_id: &str, existing: Option<String>) ->
     } else {
         Ok(())
     }
+}
+
+fn ensure_no_active_port_transaction(
+    transaction: &Transaction<'_>,
+    address: &str,
+    port: u16,
+) -> RuntimeResult<()> {
+    let existing = transaction
+        .query_row(
+            "
+            SELECT endpoint_key, status FROM ports
+            WHERE address = ?1 AND port = ?2
+            ORDER BY endpoint_key
+            LIMIT 1
+            ",
+            params![address, port],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()
+        .map_err(sql_error)?;
+    if let Some((endpoint_key, status)) = existing {
+        if matches!(status.as_str(), "reserved" | "binding" | "bound" | "active") {
+            return Err(RuntimeError::new(
+                ErrorCode::PortConflict,
+                format!("endpoint {endpoint_key} already has active port {address}:{port}"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn release_service_ports(
+    transaction: &rusqlite::Transaction<'_>,
+    service_instance_id: &str,
+) -> RuntimeResult<()> {
+    transaction
+        .execute(
+            "
+            UPDATE ports
+            SET status = 'released'
+            WHERE service_instance_id = ?1
+            ",
+            params![service_instance_id],
+        )
+        .map_err(sql_error)?;
+    Ok(())
 }
 
 fn sql_error(error: rusqlite::Error) -> RuntimeError {
