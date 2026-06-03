@@ -107,5 +107,7 @@ fn exit_code(error: &RuntimeError) -> i32 {
         nixfied_runtime::ErrorCode::StateUnwritable => 20,
         nixfied_runtime::ErrorCode::StateUnowned => 21,
         nixfied_runtime::ErrorCode::CleanupRefused => 22,
+        nixfied_runtime::ErrorCode::ProcEscape => 23,
+        nixfied_runtime::ErrorCode::ReadinessTimeout => 24,
     }
 }
