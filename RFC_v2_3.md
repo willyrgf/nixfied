@@ -1,8 +1,8 @@
-# RFC v2.2: Single-Model Greenfield Nixfied Build Spec
+# RFC v2.3: Hardened Single-Model Greenfield Nixfied Build Spec
 
 Date: 2026-06-03
-Status: Draft (architecture-ready; Milestone 0 details still open)
-Derives from: `RFC_v2.md` after architecture review and simplification.
+Status: Draft (selected architecture; Milestone 0 details still open)
+Derives from: `RFC_v2.md` after architecture review and simplification, with selected hardening from `RFC_v2_2.md`.
 Supersedes: all prior Nixfied implementation. This branch is a from-scratch rebuild; nothing from v1 is preserved except the lessons captured in [Constraints From v1](#constraints-from-v1).
 
 ## Decision Summary
@@ -14,11 +14,13 @@ The load-bearing architecture decision:
 - **Nix is the user-facing integration and correctness layer.** Users integrate Nixfied by importing/extending Nix modules in their own project, with their own project shape and toolchain choices. Nix is programmable, open, typed, reproducible, and already the natural place for users to describe arbitrary environments.
 - **Rust is the hidden generic execution runtime.** The runtime does not know Postgres, Node, Python, nginx, or any project-specific convention. It executes a small set of generic primitives compiled by Nix into `model.json`.
 - **`model.json` is the only required semantic seam.** There is no required `manifest.json`, `schema.json`, or `capabilities.json`. Schema, docs, and capabilities are model sections or generated views over the model.
-- **`model.json` is produced as a Nix store output.** The normal runtime path admits only a `model.json` that lives under `/nix/store` (or the platform's Nix store root). This keeps the seam Nix-produced without adding a separate manifest format.
+- **`model.json` carries the full admission contract.** Source/codebase identity, target identity, closure metadata, generator/toolchain identity, runtime capabilities, service identity, state cleanup policy, and secret references are first-class model fields and are included in the raw-byte model hash.
+- **`model.json` is normally produced as a Nix store output.** The normal runtime path admits only a `model.json` that lives under `/nix/store` (or the platform's Nix store root). This keeps the seam Nix-produced without adding a separate manifest format. A deliberately unstable `--allow-non-store-model` escape hatch may exist only for framework tests and local model development.
 - **No cross-version compatibility is promised.** This is a greenfield system. A model is valid only for the exact `runtimeAbi` / `toolchainId` that produced it. Updating Nixfied means recompiling the model.
 - **The runtime computes provenance, not self-hashes.** `model.json` does not contain `modelHash`. At admission the runtime hashes the raw model bytes and records the computed hash in the registry, summaries, logs, and error payloads.
 - **The runtime never invokes Nix.** Nix evaluation, build, and realisation happen in `nixfied compile` / prepare surfaces before `nixfied-runtime` starts. Runtime admission verifies already-realised store paths.
 - **Mutable runtime state is owned by Rust.** Runtime state, process ownership, ports, leases, reconciliation, cleanup, logs, artifacts, and summaries are Rust responsibilities.
+- **A manifest is not required for Milestone 0.** If Nixfied later needs portable compiled-output bundles, cache export/import, standalone distribution outside the Nix store, or integrity-bound materialized views, a minimal non-semantic manifest envelope may be added. It must bind artifact bytes only; `model.json` remains the semantic authority.
 
 This is a build spec, not a migration plan.
 
@@ -92,7 +94,9 @@ The model seam is enforced by these rules:
 
 > **Invariant MODEL-SEAM-1:** `model.json` is the only required semantic artifact consumed by `nixfied-runtime`.
 
-> **Invariant MODEL-ORIGIN-1:** Normal runtime admission requires `model.json` to be a Nix store output. The runtime refuses non-store model paths.
+> **Invariant MODEL-ORIGIN-1:** Normal runtime admission requires `model.json` to be a Nix store output. The runtime refuses non-store model paths unless an explicitly unstable framework-development/test flag is used.
+
+> **Invariant MODEL-CONTRACT-1:** The model itself carries the admission contract: generator/toolchain identity, runtime ABI, target identity, runtime capability requirements, source/codebase policy, closure metadata, service runtime identity, state cleanup policy, and secret descriptors. These fields are semantic and covered by the runtime-computed raw-byte model hash.
 
 > **Invariant HASH-1:** `model.json` does not contain `modelHash`. The runtime computes `modelHash = sha256(raw model.json bytes)` at admission and records it as provenance.
 
@@ -130,11 +134,13 @@ Dynamic adapter executable protocols may be added later, but they are not part o
 
 - **Model:** `model.json`, the compiled semantic contract for what exists and how it can run.
 - **Model hash:** a runtime-computed SHA-256 hash of raw `model.json` bytes, recorded for provenance but not embedded in the model.
+- **Admission contract:** the model fields the runtime must validate before any process starts: exact ABI/toolchain identity, target identity, runtime capabilities, source policy, closure metadata, state policy, and secret descriptors.
 - **Toolchain identity:** exact Nixfied compiler/runtime identity that produced the model.
 - **Runtime ABI:** exact runtime model ABI expected by `nixfied-runtime`; no compatibility negotiation.
-- **Closure:** an already-realised executable, helper, generated wrapper, or dependency produced by Nix and referenced by concrete store path.
+- **Closure:** an already-realised executable, helper, generated wrapper, or dependency produced by Nix and referenced by concrete store path plus model metadata describing its purpose, executable path, target system, and expected use.
 - **Codebase / source identity:** a first-class model entry describing a logical codebase, its source mode, allowed live-workspace policy, and the source fingerprint or snapshot identity an admitted run may observe.
 - **Target identity:** Nix `system`, OS family, architecture, runtime capability requirements, and closure system for which the model is valid.
+- **Generated view:** schema, docs, capability, or other projection derived from `model.json`. Generated views may be materialised for humans and agents, but they are not independent semantic authority.
 - **Environment:** a named mode of operation, such as `dev`, `test`, `ci`, preview, or prod-like.
 - **Slot:** a deterministic parallel instance of an environment, identified by an integer index.
 - **Run:** one runtime invocation with a unique run identity (`runId`).
@@ -159,13 +165,13 @@ Nix correctness + compiler passes
       v
 Nix store output
       model.json          # only required semantic seam
-      docs/views          # optional/generated from model
+      docs/views          # optional/generated from model; not semantic authority
       realised closures   # referenced by store path in model
       |
       v
 nixfied-runtime
       model loader + raw hash
-      ABI/toolchain/model-origin checks
+      ABI/toolchain/model-origin/admission-contract checks
       admission: source, target, state, ports, registry, closures
       generic executor: services, tasks, workflows, probes
       process owner + reconciler + cleanup
@@ -181,6 +187,7 @@ SQLite registry, state roots, logs, artifacts, summaries
 - The runtime reads one model file and performs all impure execution.
 - The runtime never invokes Nix, imports Nix modules, shells to `nix eval`, shells to `nix-store`, builds a flake reference, realises a `.drv`, or mutates the model.
 - The runtime records the model path, computed `modelHash`, `toolchainId`, `runtimeAbi`, source fingerprints, and target identity for every admitted run.
+- The runtime validates the model-origin rule, exact ABI/toolchain identity, target compatibility, runtime capabilities, source policy, closure metadata, and state/secret admission constraints before any long-lived process starts.
 - Schema, docs, and capabilities are model sections or generated views, not separate correctness artifacts.
 
 ## The Model Contract
@@ -190,8 +197,9 @@ SQLite registry, state roots, logs, artifacts, summaries
 - `modelVersion` - integer, initially `1`. Exact match only.
 - `toolchainId` - exact Nixfied compiler/toolchain identity.
 - `runtimeAbi` - exact runtime ABI expected by this model.
+- `generator` - Nixfied compiler version, source/release identity when available, and model emitter identity.
 - `project` - stable project metadata and `projectId`.
-- `target` - Nix `system`, OS family, architecture, closure system, and required runtime capabilities.
+- `target` - Nix `system`, OS family, architecture, ABI/libc where relevant, closure system, and required runtime capabilities.
 - `codebases` - source identities and admission policies. Runtime operations observe source only through declared `codebaseId` plus relative paths, never implicit cwd.
 - `environments` - named environment definitions.
 - `slotPolicy` - slot index range, defaults, and placement-relevant slot policy.
@@ -201,12 +209,27 @@ SQLite registry, state roots, logs, artifacts, summaries
 - `placement` - logical run-independent roots, layouts, registry keys, and candidate port windows. No host-absolute paths.
 - `state` - state policy, ownership markers, cleanup policy, persistence, retention, and explicit purge rules.
 - `secrets` - secret descriptors and injection targets only. Secret values are never serialized into the model.
-- `closures` - already-realised store paths for runtime-dispatched commands, helpers, wrappers, and dependencies.
+- `closures` - already-realised store paths for runtime-dispatched commands, helpers, wrappers, and dependencies, with closure ID, target system, executable paths, operation binding, effects classification, and optional content/NAR metadata when available.
 - `execs` - reusable `ExecSpec` entries.
 - `services` - declared `ServiceSpec` models.
 - `tasks` - declared bounded `TaskSpec` models.
 - `workflows` - declared `WorkflowSpec` graphs.
 - `docs` - generated documentation metadata or rendered doc fragments when useful.
+
+### Admission Contract Fields
+
+The runtime must validate the admission contract before any process starts:
+
+- exact `modelVersion`, `runtimeAbi`, and `toolchainId` match;
+- `generator` identity is present and recorded for provenance;
+- `target` matches the host/runtime capability set;
+- `codebases` satisfy the declared source/dirty policy;
+- every referenced closure is already realised, executable when required, compatible with `target`, and declared in `closures`;
+- every runtime operation observes source only through declared `codebaseId`s;
+- state roots are derived from model placement and guarded by the declared marker/cleanup policy;
+- secret descriptors are resolvable without serializing secret values into the model, argv, store paths, docs, generated views, registry, summaries, or persisted errors.
+
+These checks replace the need for a required M0 manifest. The model is not merely the execution graph; it is also the runtime admission contract.
 
 ### Generated Views
 
@@ -221,6 +244,19 @@ These views may be materialised for convenience, but they are not required seman
 
 > **Invariant SINGLE-MODEL-1:** `model.json` is the only source of semantic truth at the Nix/Rust boundary. Schema, docs, and capabilities are generated from it.
 
+If generated views are materialised as files, they must remain disposable projections. A view may embed the `modelHash` it was generated from, and `nixfied` may refuse a stale view, but `nixfied-runtime` admits the model, not the view.
+
+### Optional Manifest Envelope
+
+No manifest is required for Milestone 0. A later compiled-output bundle may add a minimal manifest when the product needs portable bundles, cache export/import, standalone distribution outside the Nix store, or integrity-bound materialised views.
+
+If introduced, the manifest is a non-semantic byte envelope:
+
+- it may record `manifestVersion`, `hashAlgorithm`, `modelHash`, `toolchainId`, `runtimeAbi`, `target`, `generator`, `sourceSetHash`, `closureSetHash`, and optional view hashes;
+- it must not contain any semantic field that is absent from `model.json`;
+- it must be validated before deserializing bundled artifacts when used;
+- it must not replace `model.json` as the runtime authority.
+
 ### Model Hashing
 
 `modelHash` is provenance, not an artifact field.
@@ -228,6 +264,7 @@ These views may be materialised for convenience, but they are not required seman
 - The runtime reads raw `model.json` bytes from the Nix store path.
 - It computes `sha256(raw bytes)`.
 - It records the hash in registry events, summaries, logs, and error payloads.
+- The hash covers the full admission contract because those fields live in the model.
 - It never reserializes the model to validate the hash.
 
 This avoids circularity without adding another artifact.
@@ -240,6 +277,7 @@ Nixfied v2 has no cross-version compatibility goal.
 - Unknown, old, or future model versions are refused.
 - There is no migration layer for model artifacts.
 - Updating Nixfied means updating the Nix flake input and recompiling the model.
+- The ergonomic `nixfied` command must pair compiled models with the matching runtime from the same toolchain whenever it delegates.
 - Install/upgrade surfaces may help update pins/import shims, but they do not promise old models continue to run on new runtimes.
 
 > **Invariant ABI-1:** No cross-version model/runtime compatibility is promised. Exact `toolchainId` and `runtimeAbi` match is required.
@@ -252,7 +290,7 @@ Nixfied v2 separates desired-state correctness from observed-runtime correctness
 
 1. **Model correctness (Nix).** Reject invalid names, broken references, invalid workflow edges, malformed state/placement policy, missing closures, invalid generic primitive declarations, and invalid source/target policy before runtime is possible.
 2. **Closure correctness (Nix).** Reproducibly construct and realise the executable store paths the runtime may execute.
-3. **Admission correctness (Rust).** Host-specific checks Nix cannot prove: Nix-store model origin, exact ABI match, source policy, target/runtime capability support, already-realised closure availability, writable state roots, SQLite registry acquisition, port ownership strategy, stale-lease reconciliation, and ownership conflicts.
+3. **Admission correctness (Rust).** Host-specific checks Nix cannot prove: Nix-store model origin, exact ABI/toolchain match, generator provenance recording, source policy, target/runtime capability support, closure metadata and already-realised closure availability, writable marker-owned state roots, SQLite registry acquisition, port ownership strategy, stale-lease reconciliation, secret resolution/redaction boundaries, and ownership conflicts.
 4. **Execution correctness (Rust).** The impure graph: process groups, signals, readiness/health, task execution, workflow cancellation, registry events, summaries, cleanup, and reconciliation.
 
 This keeps Nix central to project evolution and codification while preventing Nix from becoming a live process supervisor.
@@ -275,8 +313,9 @@ Operational rules:
 - Compile failures are typed and actionable, surfaced before any process starts.
 - `nixfied validate --deep` may re-evaluate Nix and check live filesystem assumptions.
 - Shallow `nixfied check` validates an already-compiled store model and host assumptions without invoking Nix from the runtime.
-- `nixfied up` may compile by default when the current model is stale, then exec the runtime.
+- `nixfied up` may compile by default when the current model is stale, then exec the matching runtime from the same toolchain.
 - `--no-compile` admits an existing Nix-store model without recompiling.
+- `--allow-non-store-model` is reserved for framework tests and local model development; it is not a stable user-facing runtime mode.
 
 ## Identity & Placement
 
@@ -321,6 +360,8 @@ serviceInstanceId  = hash(serviceAddress, serviceRuntimeHash, logicalPortSet, ta
 There is no compatibility override. If the service runtime hash changes, the runtime treats it as a different service instance.
 
 > **Invariant SVC-ID-1:** Service reuse is allowed only when `serviceRuntimeHash`, logical port set, target identity, and service address match exactly.
+
+Later milestones may add adapter-declared compatibility rules for safe reuse across service runtime hash changes, but M0 has no implicit compatibility. A changed hash means a different instance.
 
 ### Placement
 
@@ -367,11 +408,14 @@ The registry is a durable record, not a liveness oracle. The OS owns liveness.
 - **Storage:** one SQLite WAL database per `(projectId, env, slot)`.
 - **Ordering:** every state-mutating event has a total per-slot sequence. Timestamps are diagnostic only.
 - **Transactions:** reservations, lease updates, process registration, service state transitions, and cleanup records are transactional.
+- **Durability & integrity:** SQLite WAL provides crash recovery and atomic commits. Registry schema version is explicit; incompatible or corrupt registries fail with typed errors instead of being silently treated as live truth.
 - **Ownership keys:** reservations and leases attach to `serviceInstanceId`, not just `runId`.
 - **Process identity:** every process record carries enough to survive PID reuse: pid, process-group id, start-time or platform equivalent, optional pidfd/stable handle, command metadata, owning run ID, and service instance where applicable.
 - **Reconciliation:** `ps` reconciles records against the OS before reporting `running`, `stopped`, `stale`, `canceled`, or `orphaned`.
 
 > **Invariant REG-1:** One transactional per-slot SQLite registry owns shared mutable runtime state.
+
+> **Invariant REG-ORDER-1:** Every state-mutating event has a total per-slot order. Wall-clock timestamps are diagnostic evidence only.
 
 > **Invariant LIVE-1:** Liveness is always reconciled against the OS before being reported.
 
@@ -417,6 +461,10 @@ Containment is a runtime capability, not a universal promise.
 
 > **Invariant PROC-1:** Every spawned process belongs to a runtime-owned process group.
 
+> **Invariant PROC-2:** Cancellation propagates to the whole tracked process group.
+
+> **Invariant PROC-3:** A long-lived process is considered started only after it has a registry process record, and no workflow node may depend on an untracked service process.
+
 > **Invariant PROC-CAP-1:** Admission fails if a service requires stronger containment than the host runtime supports.
 
 ## Secrets Boundary
@@ -425,8 +473,9 @@ Full secrets management is deferred, but secret non-leakage is not.
 
 - The model may contain secret descriptors (`SecretRef`, env var name, file injection target, required/optional, source policy), never values.
 - Secret values are resolved by the runtime at admission and injected only through approved channels.
-- Secret values are forbidden in argv, store paths, docs, capabilities, registry events, summaries, operation results, and persisted error payloads.
-- Logs, errors, adapter results, registry writes, and summaries are redacted before persistence.
+- Approved injection channels are runtime-owned environment variables or runtime-created secret files with restrictive permissions. Secret values are forbidden in argv, store paths, docs, capabilities, generated views, registry events, summaries, operation results, and persisted error payloads.
+- Logs, child stderr/stdout capture, errors, adapter results, registry writes, summaries, and persisted diagnostics are redacted before persistence.
+- Platform process inspection can expose environment values to sufficiently privileged local users; this is documented as a local-host limitation, not treated as a remote secrecy guarantee.
 
 > **Invariant SECRET-1:** `model.json` may contain secret references, never secret values.
 
@@ -473,10 +522,11 @@ The engine emits stable, machine-readable error categories, each with a stable c
 
 - `MODEL_NOT_STORE_OUTPUT` - admitted model path is not a Nix store output.
 - `MODEL_INVALID` - model failed parse, type, or structural validation.
+- `MODEL_ADMISSION` - model-origin, generator/toolchain, target, source, closure metadata, state policy, or secret admission contract failed before execution.
 - `RUNTIME_ABI_MISMATCH` - `runtimeAbi` or `toolchainId` does not exactly match the runtime.
 - `SOURCE_MISMATCH` - admitted source fingerprint does not satisfy source/dirty policy.
 - `PLATFORM_UNSUPPORTED` - target identity or required runtime capability does not match this host/runtime.
-- `CLOSURE_MISSING` - an expected realised store path is unavailable or not executable when required.
+- `CLOSURE_MISSING` - an expected realised store path is unavailable, not declared in model closure metadata, incompatible with target, or not executable when required.
 - `PORT_CONFLICT` - no endpoint in the window could be owned within policy.
 - `PORT_UNVERIFIABLE` - listener ownership cannot be matched to the service process identity or containment domain.
 - `STATE_UNWRITABLE` - resolved state root cannot be created or written.
@@ -493,7 +543,9 @@ The engine emits stable, machine-readable error categories, each with a stable c
 ## Runtime Invariants
 
 - **MODEL-SEAM-1:** `model.json` is the only required semantic artifact consumed by the runtime.
-- **MODEL-ORIGIN-1:** Runtime admission requires `model.json` to be a Nix store output.
+- **MODEL-ORIGIN-1:** Normal runtime admission requires `model.json` to be a Nix store output; non-store admission is an unstable framework-development/test mode only.
+- **MODEL-CONTRACT-1:** The model carries the full admission contract: generator/toolchain identity, runtime ABI, target identity, runtime capabilities, source policy, closure metadata, service runtime identity, state cleanup policy, and secret descriptors.
+- **SINGLE-MODEL-1:** Generated schema, docs, and capability outputs are views over `model.json`, not separate semantic authorities.
 - **HASH-1:** `modelHash` is computed from raw model bytes and is never embedded in `model.json`.
 - **ABI-1:** Exact `runtimeAbi` and `toolchainId` match is required; no compatibility promise exists.
 - **SEAM-1:** `nixfied-runtime` never invokes Nix.
@@ -503,9 +555,12 @@ The engine emits stable, machine-readable error categories, each with a stable c
 - **SVC-ID-1:** Service reuse requires exact `serviceRuntimeHash`, logical port set, target identity, and service address match.
 - **PORT-1:** Readiness requires verified endpoint ownership.
 - **REG-1:** One transactional per-slot SQLite registry owns shared mutable runtime state.
+- **REG-ORDER-1:** Every state-mutating event has a total per-slot order; timestamps are diagnostic evidence only.
 - **LIVE-1:** Liveness is reconciled against OS reality before reporting.
 - **LEASE-1:** GC may reap only policy-eligible services with no live borrower/service lease protection.
 - **PROC-1:** Every spawned process belongs to a runtime-owned process group.
+- **PROC-2:** Cancellation propagates to the whole tracked process group.
+- **PROC-3:** Long-lived processes are considered started only after registry process records exist.
 - **PROC-CAP-1:** Admission fails when required containment exceeds host capability.
 - **GC-1:** Cleanup is idempotent and crash-safe.
 - **GC-2:** Cleanup is path-confined, marker-gated, lease-gated, process-gated, and policy-gated.
@@ -523,15 +578,17 @@ Ordering hardens failure and lifecycle semantics before the first real stateful 
 
 M0 implementation must not start until these are decided:
 
-1. Final `model.json` shape and exact `runtimeAbi` / `toolchainId` fields.
-2. Nix-store model output path and runtime admission rules.
-3. Generic primitive schema for `ExecSpec`, `ServiceSpec`, `TaskSpec`, `WorkflowSpec`, `ProbeSpec`, `StateSpec`, `SurfaceSpec`, and `SecretRef`.
-4. SQLite registry M0 schema and supported filesystem assumptions.
-5. M0 process identity and containment matrix for Linux and macOS.
-6. Source/codebase identity and dirty/source mismatch policy.
-7. Target identity fields and runtime capability checks.
-8. Secrets non-leakage and redaction contract.
-9. State ownership marker and cleanup refusal rules.
+1. Final `model.json` shape, including admission contract fields.
+2. Exact `runtimeAbi` / `toolchainId` / `generator` identity format.
+3. Nix-store model output path, normal admission rules, and unstable non-store test/dev escape hatch.
+4. Generic primitive schema for `ExecSpec`, `ServiceSpec`, `TaskSpec`, `WorkflowSpec`, `ProbeSpec`, `StateSpec`, `SurfaceSpec`, and `SecretRef`.
+5. Closure metadata shape and already-realised closure verification rules.
+6. SQLite registry M0 schema, total ordering, migrations, and supported filesystem assumptions.
+7. M0 process identity and containment matrix for Linux and macOS.
+8. Source/codebase identity and dirty/source mismatch policy.
+9. Target identity fields and runtime capability checks.
+10. Secrets non-leakage, injection channel, and redaction contract.
+11. State ownership marker and cleanup refusal rules.
 
 ### Milestone 0 - Walking Skeleton
 
@@ -539,6 +596,7 @@ Smallest end-to-end vertical slice:
 
 - one typed Nix project module -> one Nix-store `model.json`;
 - one exact `runtimeAbi` / `toolchainId` check;
+- one generator identity, target identity, source policy, closure metadata, state policy, and secret descriptor admission check;
 - `nixfied-runtime` refuses non-store model paths;
 - one env (`dev`), one slot (`0`), one task, one foreground synthetic service;
 - one `ExecSpec`, one `ServiceSpec`, one `ProbeSpec`, one `TaskSpec`;
@@ -549,9 +607,9 @@ Smallest end-to-end vertical slice:
 - `model`, `schema`, `docs`, and `capabilities` views generated from `model.json`;
 - runtime works with `nix` unavailable when all referenced closures are already realised.
 
-Complete when a downstream-shaped minimal example can compile a Nix-store model, start a foreground service, verify endpoint ownership at readiness, run a dependent task, write SQLite registry events and a summary, stop the owned service, record model path / model hash / runtime ABI / source fingerprints / target, clean only marker-owned state, and report no live owned processes after reconciliation.
+Complete when a downstream-shaped minimal example can compile a Nix-store model, validate the model admission contract, start a foreground service, verify endpoint ownership at readiness, run a dependent task, write SQLite registry events and a summary, stop the owned service, record model path / model hash / generator / runtime ABI / source fingerprints / target, clean only marker-owned state, and report no live owned processes after reconciliation.
 
-No concrete adapters, runtime adapter ABI, workflow reuse, install/upgrade polish, or crash-hardening GC yet.
+No required manifest, concrete adapters, runtime adapter ABI, workflow reuse, install/upgrade polish, or crash-hardening GC yet.
 
 ### Subsequent Milestones
 
@@ -561,14 +619,15 @@ No concrete adapters, runtime adapter ABI, workflow reuse, install/upgrade polis
 4. **Workflow graphs** - dependency-aware workflows with bounded tasks, service requirements, readiness gates, cancellation, artifacts, summaries, and cleanup policy.
 5. **Installable downstream wrapper** - adoption/upgrade through Nixfied-owned flake input/import shims without overwriting project-owned declarations.
 6. **Polyglot example** - `examples/polyglot-stack`.
-7. **Optional runtime adapter protocol** - only if direct generic primitives prove insufficient.
+7. **Optional manifest envelope** - only if portable bundles, cache export/import, standalone distribution outside the Nix store, or integrity-bound materialised views need it.
+8. **Optional runtime adapter protocol** - only if direct generic primitives prove insufficient.
 
 ## Proof Strategy
 
 Proofs should be tiered, not one monolithic proof workspace.
 
-- Nix compiler proofs - model validation, generic primitive validation, closure construction, exact raw-byte model emission.
-- Runtime unit proofs - model origin checks, ABI mismatch refusal, placement composition, port ownership, SQLite registry transactions, process identity, reconciliation, lease policy, marker-gated cleanup.
+- Nix compiler proofs - model validation, admission contract validation, generic primitive validation, closure construction, exact raw-byte model emission.
+- Runtime unit proofs - model origin checks, ABI/toolchain mismatch refusal, target/source/closure admission refusal, placement composition, port ownership, SQLite registry transactions, total event ordering, process identity, reconciliation, lease policy, marker-gated cleanup.
 - Generic primitive proofs - `ExecSpec`, `ServiceSpec`, `ProbeSpec`, `TaskSpec`, and `WorkflowSpec` execute without project-specific runtime logic.
 - Nix-side adapter proofs - concrete Nix modules generate valid generic primitives without being required by minimal projects.
 - Downstream-shaped examples exercising public APIs only.
@@ -576,12 +635,13 @@ Proofs should be tiered, not one monolithic proof workspace.
 ### Adversarial / Negative Proofs
 
 - non-store `model.json` is refused;
+- non-store model admission is accepted only behind the unstable test/dev escape hatch;
 - malformed model is refused;
 - mismatched `runtimeAbi` / `toolchainId` is refused;
 - runtime with `nix` unavailable still runs an already-realised store model;
 - source mismatch / dirty-policy violation is refused;
 - target mismatch is refused;
-- missing executable store path is refused;
+- missing, undeclared, target-incompatible, or non-executable closure path is refused;
 - port conflict at bind time is recorded and handled;
 - open port owned by unrelated process fails readiness;
 - service daemonization/double-fork attempt is detected or refused;
@@ -593,7 +653,8 @@ Proofs should be tiered, not one monolithic proof workspace.
 
 ## Definition Of Done
 
-- **Model:** Nix compiles typed intent into one Nix-store `model.json`; runtime refuses non-store, malformed, or ABI-mismatched models.
+- **Model:** Nix compiles typed intent into one Nix-store `model.json`; runtime refuses non-store, malformed, ABI-mismatched, target-mismatched, source-mismatched, or closure-invalid models before execution.
+- **Admission contract:** generator/toolchain identity, runtime ABI, target identity, source policy, closure metadata, state policy, and secret descriptors are model fields validated before any process starts.
 - **Nix integration:** a downstream project can import Nixfied modules and generate a model without adopting a prescribed repo layout or vendoring framework internals.
 - **Generic runtime:** service/task/workflow behavior is expressed through generic model primitives, not runtime service-specific code.
 - **Discoverability:** `model`, `schema`, `docs`, and `capabilities` views expose environments, slots, services, tasks, workflows, source policy, state policy, secrets policy, target identity, and surfaces without reading project source.
@@ -613,6 +674,7 @@ flake.nix                  # apps, devShell, packages, model builder
 nix/
   modules/                 # typed user-facing modules
   compiler/                # resolve -> validate -> derive -> emit model
+  spec/                    # versioned model/primitive/admission-contract definitions
   lib/                     # pure helpers
   adapters/                # Nix-side model generators (postgres first)
 runtime/
@@ -640,6 +702,7 @@ Install and upgrade are Nix adoption surfaces, not compatibility machinery.
 - No compatibility with the current repository layout.
 - No migration layer for v1 commands.
 - No cross-version model/runtime compatibility.
+- No required manifest envelope in M0.
 - No required service adapter for a minimal project.
 - No runtime service-specific adapter logic in M0.
 - No daemon requirement for the initial runtime.
@@ -660,45 +723,51 @@ Real and intentionally out of v2's first cut:
 - Multi-host / remote execution.
 - Persistent daemon as a required runtime substrate.
 - UI / dashboard surfaces.
+- Manifest-sealed compiled-output bundles, unless portable bundles/cache export/import or standalone distribution require them.
 - Runtime adapter protocol, unless generic primitives prove insufficient.
 
 ## Open Questions
 
 ### Must Decide Before Milestone 0
 
-1. Exact `model.json` schema and primitive shapes.
-2. Exact `runtimeAbi` / `toolchainId` format.
+1. Exact `model.json` schema, admission contract fields, and primitive shapes.
+2. Exact `runtimeAbi` / `toolchainId` / `generator` format.
 3. Whether the model builder is only a Nix derivation output or also has a CLI convenience output.
-4. SQLite registry M0 schema and migrations.
-5. Minimum process identity and port-owner strategy on Linux and macOS.
-6. Default source dirty policy for `dev`, `test`, and `ci`.
-7. Target identity fields and runtime capability checks.
-8. State marker schema.
+4. Shape and safeguards for the unstable non-store model test/dev escape hatch.
+5. Closure metadata schema and already-realised closure verification rules.
+6. SQLite registry M0 schema, total ordering, and migrations.
+7. Minimum process identity and port-owner strategy on Linux and macOS.
+8. Default source dirty policy for `dev`, `test`, and `ci`.
+9. Target identity fields and runtime capability checks.
+10. Secret injection channels and redaction boundaries.
+11. State marker schema.
 
 ### Before Slot Isolation / Cancellation & GC
 
-9. Port-window base, size, and slot stride.
-10. Default run lease TTL, service lease policy defaults, borrower lease expiry, and opportunistic GC cadence.
-11. SQLite compaction/vacuum/export policy.
-12. Explicit persistent purge command shape.
+12. Port-window base, size, and slot stride.
+13. Default run lease TTL, service lease policy defaults, borrower lease expiry, and opportunistic GC cadence.
+14. SQLite compaction/vacuum/export policy.
+15. Explicit persistent purge command shape.
 
 ### Before Adapter / Workflow
 
-13. How much service-dependency behavior belongs in workflow vs deferred.
-14. Borrower lease / service lease handoff state machine.
-15. Minimal Postgres Nix adapter shape as a model generator.
+16. How much service-dependency behavior belongs in workflow vs deferred.
+17. Borrower lease / service lease handoff state machine.
+18. Minimal Postgres Nix adapter shape as a model generator.
+19. Adapter-declared compatibility rules, if exact `serviceRuntimeHash` reuse becomes too rigid.
 
 ### Before Install
 
-16. `nixfied` / `nixfied-runtime` distribution: flake only vs standalone release artifacts.
-17. Install/upgrade ownership markers and rollback behavior.
+20. `nixfied` / `nixfied-runtime` distribution: flake only vs standalone release artifacts.
+21. Install/upgrade ownership markers and rollback behavior.
+22. Whether standalone distribution requires a minimal non-semantic manifest envelope.
 
 ## Constraints From v1
 
 Captured so the rebuild does not repeat history:
 
 - Runtime semantics drifted into shell helpers and Nix builders, with no single owner. Hence SEAM-1, SHELL-1, NIX-1, and the two-binary split.
-- Artifact sealing could grow into a mini package format. Hence the single-model seam and runtime-computed provenance hash.
+- Artifact sealing could grow into a mini package format. Hence the single-model seam, runtime-computed provenance hash, and model-owned admission contract.
 - Live checkout state was implicit. Hence first-class `codebases`.
 - The registry was treated as the source of truth for liveness. Hence OS reconciliation.
 - Pure port derivation was treated as sufficient. Hence ownership-verified readiness.
@@ -712,17 +781,19 @@ Captured so the rebuild does not repeat history:
 
 ## Success Criteria
 
-A downstream project can import Nixfied into its own Nix setup, define multiple codebases, tasks, workflows, services, environments, slots, machine outputs, realised runtime closures, secret references, target requirements, and state policy in typed Nix; evaluate it for static correctness; compile it into one Nix-store `model.json`; then execute that admitted model through one generic, Nix-free Rust runtime with isolated placement, SQLite-backed lifecycle records, process-aware reconciliation, exact service reuse identity, clean cancellation, marker-gated crash-safe cleanup, durable registry history, redacted persistent outputs, and reproducible summaries.
+A downstream project can import Nixfied into its own Nix setup, define multiple codebases, tasks, workflows, services, environments, slots, machine outputs, realised runtime closures, secret references, target requirements, source policy, generator/toolchain identity, and state policy in typed Nix; evaluate it for static correctness; compile it into one Nix-store `model.json` whose admission contract is validated before execution; then execute that admitted model through one generic, Nix-free Rust runtime with isolated placement, SQLite-backed lifecycle records, process-aware reconciliation, exact service reuse identity, clean cancellation, marker-gated crash-safe cleanup, durable registry history, redacted persistent outputs, and reproducible summaries.
 
 ## Decision Log
 
-- **Many artifacts -> one model.** `model.json` is the only required semantic seam. `schema`, `docs`, and `capabilities` are views over the model; no required `manifest.json`.
+- **Many artifacts -> one semantic model.** `model.json` is the only required semantic seam. `schema`, `docs`, and `capabilities` are views over the model; no required M0 `manifest.json`.
+- **Manifest hardening -> model-owned admission contract.** Source identity, target identity, generator/toolchain identity, closure metadata, runtime capabilities, service runtime identity, state policy, and secret descriptors live in `model.json` and are covered by the runtime-computed raw-byte hash.
 - **Self-hash -> runtime provenance hash.** `modelHash` is not embedded. The runtime computes `sha256(raw model bytes)` and records it.
-- **Model origin -> Nix store output.** Normal runtime admission requires `model.json` to be produced by Nix and live in the Nix store.
+- **Model origin -> Nix store output.** Normal runtime admission requires `model.json` to be produced by Nix and live in the Nix store; non-store admission is an unstable framework-development/test escape hatch.
+- **Optional manifest -> non-semantic future envelope.** A manifest may be added later for portable bundles, cache export/import, standalone distribution outside the Nix store, or integrity-bound materialised views, but it must not become semantic authority.
 - **Compatibility -> exact ABI.** No cross-version compatibility is promised. Exact `runtimeAbi` and `toolchainId` match is required.
 - **Runtime role -> generic executor.** Rust executes generic primitives only. Concrete adapters are Nix-side model generators unless a later milestone proves a runtime adapter protocol is necessary.
 - **Nix role -> open integration API.** Users integrate Nixfied through Nix modules and their own flake/project shape.
 - **Runtime Nix usage -> none.** `nixfied-runtime` never invokes Nix; closures are realised before runtime.
 - **Registry storage -> per-slot SQLite WAL.** SQLite owns transactional reservations, leases, events, process records, and cleanup state.
-- **Service identity -> exact runtime hash.** Reuse is gated by exact service runtime identity, not broad compatibility.
-- **Milestone order -> generic spine first.** Skeleton -> slot isolation -> cancellation/GC -> Nix-side Postgres adapter -> workflows -> install -> polyglot -> optional runtime adapter protocol.
+- **Service identity -> exact runtime hash for M0.** Reuse is gated by exact service runtime identity. Adapter-declared compatibility rules are deferred until a concrete need appears.
+- **Milestone order -> generic spine first.** Skeleton -> slot isolation -> cancellation/GC -> Nix-side Postgres adapter -> workflows -> install -> polyglot -> optional manifest envelope -> optional runtime adapter protocol.
