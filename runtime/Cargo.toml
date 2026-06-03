@@ -1,0 +1,12 @@
+[workspace]
+resolver = "3"
+members = [
+  "crates/nixfied-cli",
+  "crates/nixfied-model",
+  "crates/nixfied-runtime",
+]
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+rust-version = "1.91"

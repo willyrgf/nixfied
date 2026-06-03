@@ -10,4 +10,5 @@ result
 !docs/DETAILED.md
 !docs/UPGRADE.md
 !docs/repo-map.md
-nixfied/framework/runtime/kernel/target/
+/runtime/target/
+result-*
