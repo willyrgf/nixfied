@@ -99,7 +99,6 @@ fn valid_model_json() -> Value {
             "targetSystem": "aarch64-darwin",
             "operationBindings": [
                 "service.synthetic.start",
-                "service.synthetic.ready",
                 "service.synthetic.stop",
                 "task.smoke.run"
             ],
@@ -130,6 +129,7 @@ fn valid_model_json() -> Value {
                         "operationId": "service.synthetic.start",
                         "class": "start",
                         "execId": "m0-helper",
+                        "execArgs": ["service", "--host", "127.0.0.1", "--port", "${port}"],
                         "probeId": null,
                         "terminal": {
                             "success": "spawned",
@@ -140,6 +140,7 @@ fn valid_model_json() -> Value {
                         "operationId": "service.synthetic.ready",
                         "class": "ready",
                         "execId": null,
+                        "execArgs": [],
                         "probeId": "synthetic-tcp",
                         "terminal": {
                             "success": "ready",
@@ -150,6 +151,7 @@ fn valid_model_json() -> Value {
                         "operationId": "service.synthetic.stop",
                         "class": "stop",
                         "execId": "m0-helper",
+                        "execArgs": ["stop"],
                         "probeId": null,
                         "terminal": {
                             "success": "stopped",
@@ -202,6 +204,7 @@ fn valid_model_json() -> Value {
                 "taskId": "smoke",
                 "operationId": "task.smoke.run",
                 "execId": "m0-helper",
+                "args": ["task", "--host", "127.0.0.1", "--port", "${port}"],
                 "dependsOnServicesReady": ["synthetic"],
                 "exitPolicy": {
                     "successCodes": [0]
@@ -301,7 +304,7 @@ fn closure_bindings_must_reference_declared_operations() {
         ValidationError::UnsupportedValue {
             field: "closures[0].operationBindings",
             expected: "exact M0 values",
-            actual: "[\"service.synthetic.start\", \"service.synthetic.ready\", \"service.synthetic.stop\", \"task.smoke.run\", \"workflow.deferred.run\"]".to_string(),
+            actual: "[\"service.synthetic.start\", \"service.synthetic.stop\", \"task.smoke.run\", \"workflow.deferred.run\"]".to_string(),
         }
     );
 }

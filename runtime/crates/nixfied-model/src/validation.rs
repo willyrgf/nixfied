@@ -282,7 +282,6 @@ fn validate_m0_exec_and_closure(model: &Model) -> Result<(), ValidationError> {
         "closures[0].operationBindings",
         &[
             "service.synthetic.start",
-            "service.synthetic.ready",
             "service.synthetic.stop",
             "task.smoke.run",
         ],
@@ -353,6 +352,11 @@ fn validate_m0_service_and_task(model: &Model) -> Result<(), ValidationError> {
         &task.operation_id,
     )?;
     expect_string("tasks.smoke.execId", "m0-helper", &task.exec_id)?;
+    expect_vec(
+        "tasks.smoke.args",
+        &["task", "--host", "127.0.0.1", "--port", "${port}"],
+        &task.args,
+    )?;
     expect_vec(
         "tasks.smoke.dependsOnServicesReady",
         &["synthetic"],
@@ -461,6 +465,7 @@ fn validate_m0_lifecycle(lifecycle: &[LifecycleOpSpec]) -> Result<(), Validation
         "service.synthetic.start",
         LifecycleOpClass::Start,
         Some("m0-helper"),
+        &["service", "--host", "127.0.0.1", "--port", "${port}"],
         None,
     )?;
     validate_lifecycle_op(
@@ -468,6 +473,7 @@ fn validate_m0_lifecycle(lifecycle: &[LifecycleOpSpec]) -> Result<(), Validation
         "service.synthetic.ready",
         LifecycleOpClass::Ready,
         None,
+        &[],
         Some("synthetic-tcp"),
     )?;
     validate_lifecycle_op(
@@ -475,6 +481,7 @@ fn validate_m0_lifecycle(lifecycle: &[LifecycleOpSpec]) -> Result<(), Validation
         "service.synthetic.stop",
         LifecycleOpClass::Stop,
         Some("m0-helper"),
+        &["stop"],
         None,
     )?;
     Ok(())
@@ -485,6 +492,7 @@ fn validate_lifecycle_op(
     operation_id: &'static str,
     class: LifecycleOpClass,
     exec_id: Option<&'static str>,
+    exec_args: &[&'static str],
     probe_id: Option<&'static str>,
 ) -> Result<(), ValidationError> {
     let op = by_id
@@ -501,6 +509,7 @@ fn validate_lifecycle_op(
         });
     }
     expect_option("lifecycle.execId", exec_id, op.exec_id.as_deref())?;
+    expect_vec("lifecycle.execArgs", exec_args, &op.exec_args)?;
     expect_option("lifecycle.probeId", probe_id, op.probe_id.as_deref())?;
     Ok(())
 }

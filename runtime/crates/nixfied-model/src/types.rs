@@ -355,6 +355,7 @@ pub struct LifecycleOpSpec {
     pub operation_id: String,
     pub class: LifecycleOpClass,
     pub exec_id: Option<String>,
+    pub exec_args: Vec<String>,
     pub probe_id: Option<String>,
     pub terminal: TerminalSemantics,
 }
@@ -426,6 +427,7 @@ pub struct TaskSpec {
     pub task_id: String,
     pub operation_id: String,
     pub exec_id: String,
+    pub args: Vec<String>,
     pub depends_on_services_ready: Vec<String>,
     pub exit_policy: ExitPolicy,
     pub output_capture: OutputCapture,
