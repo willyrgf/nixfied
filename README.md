@@ -1,0 +1,136 @@
+# Nixfied
+
+Nixfied v2 is a greenfield rebuild around one boundary: typed Nix emits one
+semantic `model.json`, and a generic Rust runtime admits and executes that model.
+
+Current status: **Milestone 0 is implemented**. This repository proves the
+minimal vertical spine from a downstream-shaped Nix module to a Nix-store
+`model.json`, Rust admission, SQLite registry state, a synthetic foreground
+service, endpoint ownership verification, a dependent task, and `ps` / `down` /
+`clean` reconciliation.
+
+The broader RFC roadmap is not implemented yet.
+
+## Core Rules
+
+- `RFC_v2.md` is the product source of truth.
+- `model.json` is the only semantic seam between Nix and Rust.
+- Generated `schema`, `docs`, and `capabilities` outputs are views over
+  `model.json`, not independent authority.
+- `nixfied-runtime` must never call Nix, `nix-store`, `nix build`, or
+  `nix eval`.
+- There is no v1 compatibility promise and no model/runtime compatibility
+  across toolchain or ABI changes.
+- M0 does not implement workflows, adapters, service reuse, real secrets,
+  multi-slot execution, SQLite migrations, or runtime adapter protocols.
+
+## Repository Layout
+
+```text
+nix/                         typed modules, compiler passes, model spec
+runtime/crates/nixfied-model shared serde contract for model.json
+runtime/crates/nixfied-runtime
+                             generic M0 runtime and control commands
+runtime/crates/nixfied-cli   placeholder ergonomic CLI crate
+examples/m0-minimal          downstream-shaped minimal example
+tests/m0                     end-to-end M0 proof scripts
+RFC_v2.md                    architecture source of truth
+RFC_v2_implementation_plan.md
+                             completed M0 execution plan
+```
+
+## Prerequisites
+
+- Nix with flakes enabled.
+- Rust toolchain compatible with the workspace in `runtime/Cargo.toml`.
+- SQLite development/runtime support available through the normal system or
+  `nix develop`.
+
+Use the development shell if you want the expected Rust and SQLite tools:
+
+```sh
+nix develop
+```
+
+## Build The M0 Model
+
+From the repository root:
+
+```sh
+nix build .#m0-minimal-model
+```
+
+The output contains:
+
+```text
+model.json
+views/schema.json
+views/docs.md
+views/capabilities.json
+```
+
+There is intentionally no required `manifest.json`.
+
+The downstream-shaped example can also build through its own flake:
+
+```sh
+nix build --no-link --print-out-paths ./examples/m0-minimal#model
+```
+
+## Run Runtime Checks
+
+Build the runtime:
+
+```sh
+cargo build --manifest-path runtime/Cargo.toml -p nixfied-runtime
+```
+
+Admit a store model and print the computed model identity:
+
+```sh
+model_out="$(nix build --no-link --print-out-paths .#m0-minimal-model)"
+runtime/target/debug/nixfied-runtime check --model "$model_out/model.json"
+```
+
+M0 runtime control commands are:
+
+```sh
+runtime/target/debug/nixfied-runtime check --model "$model_out/model.json"
+runtime/target/debug/nixfied-runtime ps --model "$model_out/model.json"
+runtime/target/debug/nixfied-runtime down --model "$model_out/model.json"
+runtime/target/debug/nixfied-runtime clean --model "$model_out/model.json"
+```
+
+Use `NIXFIED_STATE_DIR` to place runtime state in a temporary directory while
+testing.
+
+## Verification
+
+Run the Rust workspace checks:
+
+```sh
+cargo fmt --manifest-path runtime/Cargo.toml --all --check
+cargo check --manifest-path runtime/Cargo.toml
+cargo test --manifest-path runtime/Cargo.toml
+```
+
+Run the Nix and M0 proof checks:
+
+```sh
+nix flake check
+tests/m0/prove-downstream-minimal.sh
+tests/m0/prove-runtime-without-nix.sh
+```
+
+The no-Nix proof builds and realises the model first, then places a failing fake
+`nix` executable earlier in `PATH` to prove `nixfied-runtime` does not invoke
+Nix after admission begins.
+
+## What Comes Next
+
+The next RFC milestones are slot isolation, cancellation and cleanup hardening,
+Nix-side adapters, workflow graphs, installable downstream wrappers, and
+optional manifest or runtime adapter work only if future milestones prove they
+are needed.
+
+Do not treat those future milestones as implemented by M0.
