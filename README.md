@@ -35,7 +35,7 @@ runtime/crates/nixfied-cli   placeholder ergonomic CLI crate
 examples/m0-minimal          downstream-shaped minimal example
 tests/m0                     end-to-end M0 proof scripts
 RFC_v2.md                    architecture source of truth
-RFC_v2_implementation_plan.md
+RFC_v2_implementation_plan_M0.md
                              completed M0 execution plan
 ```
 
