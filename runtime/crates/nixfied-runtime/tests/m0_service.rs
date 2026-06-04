@@ -13,7 +13,8 @@ use nixfied_runtime::service::{
 };
 use nixfied_runtime::slot::select_slot;
 use nixfied_runtime::state::{
-    derive_host_placement, derive_host_placement_for_slot, materialize_run_roots,
+    StateIdentity, clean_marked_state, derive_host_placement, derive_host_placement_for_slot,
+    materialize_run_roots, write_slot_marker,
 };
 use nixfied_runtime::{Admission, AdmittedSource, ErrorCode};
 use serde_json::{Value, json};
@@ -358,6 +359,100 @@ fn slot_one_service_uses_slot_placement_port_window() {
         1,
         &["runs", "services", "processes", "ports", "events"],
     );
+}
+
+#[test]
+fn two_slots_keep_services_state_and_controls_isolated() {
+    let python = python3_path()
+        .map(str::to_string)
+        .or_else(python3_from_path)
+        .expect("python3 is required for the M1 slot isolation proof");
+    let tmp = TempDir::new();
+    let mut value = fixture_model(&python, &["-c", python_listener_script(), "${port}"], 38210);
+    value["services"]["synthetic"]["endpoints"][0]["port"] = json!({
+        "kind": "candidate-window",
+        "start": 38210,
+        "end": 38210
+    });
+    add_slot_one(&mut value, 38310, 38320);
+    let model: Model = serde_json::from_value(value).expect("fixture model should parse");
+    let admission = admission(&model, &tmp.path);
+
+    let mut slot0 = StartedSlot::start(&model, &admission, &tmp.path, 0, "run-slot-0", 38210);
+    let mut slot1 = StartedSlot::start(&model, &admission, &tmp.path, 1, "run-slot-1", 38310);
+
+    assert_ne!(slot0.placement.state_root, slot1.placement.state_root);
+    assert_ne!(
+        slot0.placement.registry_path(),
+        slot1.placement.registry_path()
+    );
+    assert_ne!(slot0.placement.run_dir, slot1.placement.run_dir);
+    assert_ne!(slot0.placement.logs_dir, slot1.placement.logs_dir);
+    assert_ne!(slot0.placement.artifacts_dir, slot1.placement.artifacts_dir);
+    assert_ne!(slot0.placement.summary_path, slot1.placement.summary_path);
+    assert_ne!(
+        slot0.service.selected_endpoint.port,
+        slot1.service.selected_endpoint.port
+    );
+    assert_ne!(
+        slot0.service.service_instance_id,
+        slot1.service.service_instance_id
+    );
+
+    let slot0_ps = ps(&mut slot0.registry).expect("slot 0 ps should reconcile");
+    let slot1_ps = ps(&mut slot1.registry).expect("slot 1 ps should reconcile");
+    assert!(slot0_ps.processes.iter().any(|process| process.live));
+    assert!(slot1_ps.processes.iter().any(|process| process.live));
+
+    down_owned_process_groups(&mut slot0.registry, 1000).expect("slot 0 down should stop slot 0");
+    drop(slot0.service);
+    let slot0_after_down = ps(&mut slot0.registry).expect("slot 0 ps should reconcile after down");
+    let slot1_after_down = ps(&mut slot1.registry).expect("slot 1 ps should remain live");
+    assert!(
+        slot0_after_down
+            .processes
+            .iter()
+            .all(|process| !process.live)
+    );
+    assert!(
+        slot1_after_down
+            .processes
+            .iter()
+            .any(|process| process.live)
+    );
+
+    let slot0_identity = StateIdentity::from_selected_slot(&model, &admission, &slot0.selected);
+    clean_marked_state(
+        &slot0.placement.state_base,
+        &slot0.placement.state_root,
+        &slot0_identity,
+        &mut slot0.registry,
+    )
+    .expect("slot 0 cleanup should succeed after down");
+    assert!(!slot0.placement.state_root.exists());
+    assert!(slot1.placement.state_root.exists());
+
+    let slot1_identity = StateIdentity::from_selected_slot(&model, &admission, &slot1.selected);
+    clean_marked_state(
+        &slot1.placement.state_base,
+        &slot1.placement.state_root,
+        &slot0_identity,
+        &mut slot1.registry,
+    )
+    .expect_err("slot 0 identity must not clean slot 1 state");
+    assert!(slot1.placement.state_root.exists());
+
+    slot1
+        .service
+        .stop(&mut slot1.registry, 1000)
+        .expect("slot 1 service should stop");
+    clean_marked_state(
+        &slot1.placement.state_base,
+        &slot1.placement.state_root,
+        &slot1_identity,
+        &mut slot1.registry,
+    )
+    .expect("slot 1 cleanup should succeed after stop");
 }
 
 #[test]
@@ -1110,6 +1205,61 @@ impl ServiceFixture {
     }
 }
 
+struct StartedSlot<'a> {
+    selected: nixfied_runtime::slot::SelectedSlot<'a>,
+    placement: nixfied_runtime::state::HostPlacement,
+    registry: Registry,
+    service: nixfied_runtime::service::StartedService,
+}
+
+impl<'a> StartedSlot<'a> {
+    fn start(
+        model: &'a Model,
+        admission: &Admission,
+        state_base: &Path,
+        slot: u32,
+        run_id: &str,
+        selected_port: u16,
+    ) -> Self {
+        let selected = select_slot(model, Some(slot)).expect("slot should select");
+        let placement = derive_host_placement_for_slot(model, &selected, run_id, state_base)
+            .expect("slot placement should derive");
+        materialize_run_roots(&placement).expect("slot roots should materialize");
+        let identity = StateIdentity::from_selected_slot(model, admission, &selected);
+        write_slot_marker(&placement, &identity).expect("slot marker should be written");
+        let mut registry = Registry::open_or_create(
+            placement.registry_path(),
+            &RegistryIdentity::for_slot(
+                &model.project.project_id,
+                selected.environment,
+                selected.slot,
+                &model.runtime_abi,
+                &model.toolchain_id,
+            ),
+        )
+        .expect("slot registry should open");
+        let mut service = start_synthetic_service_for_slot(
+            model,
+            admission,
+            &placement,
+            &mut registry,
+            run_id,
+            &selected,
+            selected_port,
+        )
+        .expect("slot service should start");
+        service
+            .wait_for_probe_ready(model, &mut registry)
+            .expect("slot service should become ready");
+        Self {
+            selected,
+            placement,
+            registry,
+            service,
+        }
+    }
+}
+
 fn admission(model: &Model, source_root: &Path) -> Admission {
     Admission {
         model_path: PathBuf::from("/nix/store/test-model/model.json"),
@@ -1481,6 +1631,15 @@ fn python3_path() -> Option<&'static str> {
     ]
     .into_iter()
     .find(|path| Path::new(path).exists())
+}
+
+fn python3_from_path() -> Option<String> {
+    std::env::var_os("PATH")?
+        .to_string_lossy()
+        .split(':')
+        .map(|dir| Path::new(dir).join("python3"))
+        .find(|path| path.is_file())
+        .map(|path| path.to_string_lossy().to_string())
 }
 
 fn python_listener_script() -> &'static str {
