@@ -5,13 +5,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::Duration;
 
-use nixfied_model::Model;
+use nixfied_model::{DirtyPolicy, Model, SourceMode};
 use nixfied_runtime::registry::{Registry, RegistryIdentity};
 use nixfied_runtime::service::{
     run_dependent_task, start_synthetic_service, wait_for_readiness_probe,
 };
 use nixfied_runtime::state::{derive_host_placement, materialize_run_roots};
-use nixfied_runtime::{Admission, ErrorCode};
+use nixfied_runtime::{Admission, AdmittedSource, ErrorCode};
 use serde_json::{Value, json};
 
 use nixfied_runtime::control::{down_owned_process_groups, ps};
@@ -75,6 +75,22 @@ fn starts_foreground_service_in_owned_process_group_and_records_before_ready() {
             .join("service.synthetic.stderr.log")
             .exists()
     );
+    let command_json: Value = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT command_json FROM processes WHERE process_key = ?1",
+            [&service.process_key],
+            |row| {
+                let payload: String = row.get(0)?;
+                Ok(serde_json::from_str(&payload).expect("command JSON should parse"))
+            },
+        )
+        .expect("process command should exist");
+    assert_eq!(
+        command_json["cwd"],
+        json!(fixture.admission.source.observed_root.to_string_lossy())
+    );
 
     service
         .stop(&mut fixture.registry, 1000)
@@ -99,6 +115,34 @@ fn starts_foreground_service_in_owned_process_group_and_records_before_ready() {
         .expect("stopped service row should exist");
     assert_eq!(stopped_process_status, "stopped");
     assert_eq!(stopped_service_status, "stopped");
+}
+
+#[test]
+fn service_start_rejects_exec_cwd_escape() {
+    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 38180);
+    fixture
+        .model
+        .execs
+        .get_mut("m0-helper")
+        .expect("fixture exec should exist")
+        .cwd = "..".to_string();
+
+    let error = match start_synthetic_service(
+        &fixture.model,
+        &fixture.admission,
+        &fixture.placement,
+        &mut fixture.registry,
+        "run-cwd-escape",
+        38180,
+    ) {
+        Ok(service) => {
+            let _ = service.stop(&mut fixture.registry, 1000);
+            panic!("escaped exec cwd should fail before process start");
+        }
+        Err(error) => error,
+    };
+
+    assert_eq!(error.code, ErrorCode::SourceMismatch);
 }
 
 #[test]
@@ -969,7 +1013,7 @@ impl ServiceFixture {
     fn new(executable: &str, start_args: &[&str], port: u16) -> Self {
         let tmp = TempDir::new();
         let model = model(executable, start_args, port);
-        let admission = admission(&model);
+        let admission = admission(&model, &tmp.path);
         let placement =
             derive_host_placement(&model, "run-service", &tmp.path).expect("layout should derive");
         materialize_run_roots(&placement).expect("roots should materialize");
@@ -992,7 +1036,7 @@ impl ServiceFixture {
     }
 }
 
-fn admission(model: &Model) -> Admission {
+fn admission(model: &Model, source_root: &Path) -> Admission {
     Admission {
         model_path: PathBuf::from("/nix/store/test-model/model.json"),
         computed_model_hash: "computed-hash".to_string(),
@@ -1001,6 +1045,21 @@ fn admission(model: &Model) -> Admission {
         runtime_abi: model.runtime_abi.clone(),
         toolchain_id: model.toolchain_id.clone(),
         target_system: model.target.system.clone(),
+        source: admitted_source(source_root),
+    }
+}
+
+fn admitted_source(source_root: &Path) -> AdmittedSource {
+    AdmittedSource {
+        codebase_id: "main".to_string(),
+        logical_root: ".".to_string(),
+        observed_root: source_root
+            .canonicalize()
+            .expect("source root should canonicalize"),
+        source_mode: SourceMode::LiveWorkspace,
+        source_identity: "live".to_string(),
+        dirty_policy: DirtyPolicy::Warn,
+        admission_fingerprint_policy: "m0-placeholder".to_string(),
     }
 }
 

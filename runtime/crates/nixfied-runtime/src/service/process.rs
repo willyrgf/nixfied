@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::os::unix::process::CommandExt;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -48,6 +48,7 @@ pub struct StartedService {
     pub platform_start_identity: Option<String>,
     pub selected_endpoint: SelectedEndpoint,
     pub computed_model_hash: String,
+    pub source_root: PathBuf,
 }
 
 impl StartedService {
@@ -324,6 +325,7 @@ pub fn start_synthetic_service(
         )
     })?;
     let selected_endpoint = select_endpoint(service, selected_port)?;
+    let command_cwd = resolve_exec_cwd(&admission.source.observed_root, &exec.cwd)?;
     let address_hash = service_address_hash(model, service_name);
     let service_instance_id = service_instance_id(&address_hash, &service.identity);
     ensure_service_start_allowed(registry, &run_id, &service_instance_id)?;
@@ -333,7 +335,7 @@ pub fn start_synthetic_service(
     let command_json = serde_json::to_string(&CommandRecord {
         executable: exec.executable.as_str(),
         args: &args,
-        cwd: exec.cwd.as_str(),
+        cwd: command_cwd.as_path(),
         stdout_path: stdout_path.as_path(),
         stderr_path: stderr_path.as_path(),
     })
@@ -341,7 +343,7 @@ pub fn start_synthetic_service(
     let mut command = Command::new(&exec.executable);
     command
         .args(&args)
-        .current_dir(&exec.cwd)
+        .current_dir(&command_cwd)
         .envs(&exec.env)
         .stdin(Stdio::null())
         .stdout(Stdio::from(create_log_file(&stdout_path)?))
@@ -420,6 +422,7 @@ pub fn start_synthetic_service(
         platform_start_identity: platform_start,
         selected_endpoint,
         computed_model_hash: admission.computed_model_hash.clone(),
+        source_root: admission.source.observed_root.clone(),
     };
     if let Err(error) = ensure_foreground_child_alive(&mut started) {
         let payload = serde_json::json!({
@@ -498,6 +501,48 @@ fn operation_args(base_args: &[String], op_args: &[String], selected_port: u16) 
         .chain(op_args.iter())
         .map(|arg| arg.replace("${port}", &selected_port.to_string()))
         .collect()
+}
+
+pub(crate) fn resolve_exec_cwd(source_root: &Path, exec_cwd: &str) -> RuntimeResult<PathBuf> {
+    let relative = Path::new(exec_cwd);
+    if exec_cwd.is_empty()
+        || relative.is_absolute()
+        || relative.components().any(disallowed_component)
+    {
+        return Err(RuntimeError::new(
+            ErrorCode::SourceMismatch,
+            format!("exec cwd must be a confined relative path: {exec_cwd}"),
+        ));
+    }
+    let source_root = source_root.canonicalize().map_err(|error| {
+        RuntimeError::new(
+            ErrorCode::SourceMismatch,
+            format!(
+                "failed to canonicalize admitted source root {}: {error}",
+                source_root.display()
+            ),
+        )
+    })?;
+    let cwd = source_root.join(relative).canonicalize().map_err(|error| {
+        RuntimeError::new(
+            ErrorCode::SourceMismatch,
+            format!("failed to resolve exec cwd {exec_cwd}: {error}"),
+        )
+    })?;
+    if !cwd.is_dir() || !cwd.starts_with(&source_root) {
+        return Err(RuntimeError::new(
+            ErrorCode::SourceMismatch,
+            format!("exec cwd {} escaped admitted source root", cwd.display()),
+        ));
+    }
+    Ok(cwd)
+}
+
+fn disallowed_component(component: Component<'_>) -> bool {
+    matches!(
+        component,
+        Component::ParentDir | Component::RootDir | Component::Prefix(_)
+    )
 }
 
 fn endpoint_key(service_instance_id: &str, endpoint_id: &str) -> String {
@@ -1029,7 +1074,7 @@ fn process_group_has_live_member_impl(_pgid: i32) -> RuntimeResult<bool> {
 struct CommandRecord<'a> {
     executable: &'a str,
     args: &'a [String],
-    cwd: &'a str,
+    cwd: &'a Path,
     stdout_path: &'a Path,
     stderr_path: &'a Path,
 }
