@@ -4,6 +4,8 @@ use crate::constants::{MODEL_VERSION, RUNTIME_ABI, TOOLCHAIN_ID};
 use crate::error::ValidationError;
 use crate::types::*;
 
+const M0_SURFACES: &[&str] = &["model", "check", "run", "ps", "down", "clean"];
+
 pub trait ValidateM0 {
     fn validate_m0(&self) -> Result<(), ValidationError>;
 }
@@ -178,6 +180,11 @@ fn validate_m0_discoverability(model: &Model) -> Result<(), ValidationError> {
             field: "capabilities.workflows",
         });
     }
+    expect_vec(
+        "capabilities.surfaces",
+        M0_SURFACES,
+        &model.capabilities.surfaces,
+    )?;
     let surface_names = model
         .surfaces
         .iter()
@@ -189,6 +196,33 @@ fn validate_m0_discoverability(model: &Model) -> Result<(), ValidationError> {
             expected: "model.surfaces names",
             actual: format!("{:?}", model.capabilities.surfaces),
         });
+    }
+    expect_vec("surfaces", M0_SURFACES, &surface_names)?;
+    for surface in &model.surfaces {
+        if !surface.aliases.is_empty() {
+            return Err(ValidationError::MustBeEmpty {
+                field: "surfaces.aliases",
+            });
+        }
+        expect_vec(
+            "surfaces.exitClasses",
+            &["ok", "error"],
+            &surface.exit_classes,
+        )?;
+        if surface.evaluation_permission != EvaluationPermission::Never {
+            return Err(ValidationError::UnsupportedValue {
+                field: "surfaces.evaluationPermission",
+                expected: "never",
+                actual: format!("{:?}", surface.evaluation_permission),
+            });
+        }
+        if surface.maturity != SurfaceMaturity::M0 {
+            return Err(ValidationError::UnsupportedValue {
+                field: "surfaces.maturity",
+                expected: "m0",
+                actual: format!("{:?}", surface.maturity),
+            });
+        }
     }
     Ok(())
 }

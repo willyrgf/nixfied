@@ -54,7 +54,7 @@ fn valid_model_json() -> Value {
             "services": ["synthetic"],
             "tasks": ["smoke"],
             "workflows": [],
-            "surfaces": ["model"]
+            "surfaces": m0_surface_names()
         },
         "runtimeConstraints": {
             "allowedEnvironments": ["dev"],
@@ -64,15 +64,7 @@ fn valid_model_json() -> Value {
             "allowPortOverride": false,
             "collisionPolicy": "fail"
         },
-        "surfaces": [{
-            "name": "model",
-            "aliases": [],
-            "inputSchema": {},
-            "outputSchema": {},
-            "exitClasses": ["ok", "error"],
-            "evaluationPermission": "never",
-            "maturity": "m0"
-        }],
+        "surfaces": m0_surfaces(),
         "placement": {
             "stateRootTemplate": "${projectId}/${environment}/${slot}",
             "registryDir": "registry",
@@ -223,6 +215,27 @@ fn valid_model_json() -> Value {
     })
 }
 
+fn m0_surface_names() -> Vec<&'static str> {
+    vec!["model", "check", "run", "ps", "down", "clean"]
+}
+
+fn m0_surfaces() -> Vec<Value> {
+    m0_surface_names()
+        .into_iter()
+        .map(|name| {
+            json!({
+                "name": name,
+                "aliases": [],
+                "inputSchema": {},
+                "outputSchema": {},
+                "exitClasses": ["ok", "error"],
+                "evaluationPermission": "never",
+                "maturity": "m0"
+            })
+        })
+        .collect()
+}
+
 fn parse_valid_model() -> Model {
     serde_json::from_value(valid_model_json()).expect("valid model JSON should deserialize")
 }
@@ -232,6 +245,29 @@ fn parses_and_validates_m0_contract() {
     parse_valid_model()
         .validate_m0()
         .expect("valid M0 model should pass contract validation");
+}
+
+#[test]
+fn old_single_surface_contract_is_rejected() {
+    let mut model = parse_valid_model();
+    model.capabilities.surfaces = vec!["model".to_string()];
+    model.surfaces.retain(|surface| surface.name == "model");
+
+    let error = model
+        .validate_m0()
+        .expect_err("M0 runtime surfaces must be explicit");
+    match error {
+        ValidationError::UnsupportedValue {
+            field,
+            expected,
+            actual,
+        } => {
+            assert_eq!(field, "capabilities.surfaces");
+            assert_eq!(expected, "exact M0 values");
+            assert_eq!(actual, "[\"model\"]");
+        }
+        other => panic!("unexpected validation error: {other:?}"),
+    }
 }
 
 #[test]

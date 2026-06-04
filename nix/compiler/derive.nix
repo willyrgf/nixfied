@@ -9,6 +9,26 @@
 let
   targetLib = import ../lib/target.nix { inherit lib; };
   identifiers = import ../lib/identifiers.nix;
+  surfaceNames = [
+    "model"
+    "check"
+    "run"
+    "ps"
+    "down"
+    "clean"
+  ];
+  surfaceSpec = name: {
+    inherit name;
+    aliases = [ ];
+    inputSchema = { };
+    outputSchema = { };
+    exitClasses = [
+      "ok"
+      "error"
+    ];
+    evaluationPermission = "never";
+    maturity = "m0";
+  };
   target = targetLib.fromSystem config.nixfied.target.system;
   closure = import ../lib/closures.nix {
     inherit pkgs target;
@@ -106,7 +126,7 @@ in
       services = [ "synthetic" ];
       tasks = [ "smoke" ];
       workflows = [ ];
-      surfaces = [ "model" ];
+      surfaces = surfaceNames;
     };
     runtimeConstraints = {
       allowedEnvironments = [ "dev" ];
@@ -116,20 +136,7 @@ in
       allowPortOverride = false;
       collisionPolicy = "fail";
     };
-    surfaces = [
-      {
-        name = "model";
-        aliases = [ ];
-        inputSchema = { };
-        outputSchema = { };
-        exitClasses = [
-          "ok"
-          "error"
-        ];
-        evaluationPermission = "never";
-        maturity = "m0";
-      }
-    ];
+    surfaces = map surfaceSpec surfaceNames;
     placement = {
       stateRootTemplate = "\${projectId}/\${environment}/\${slot}";
       registryDir = "registry";
