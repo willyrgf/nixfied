@@ -4,6 +4,7 @@ set -euo pipefail
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/nixfied-m0-proof.XXXXXX")"
 trap 'rm -rf "$tmp"' EXIT
+cd "$repo"
 
 model_out="$(nix build --no-link --no-write-lock-file --print-out-paths "$repo/examples/m0-minimal#model")"
 case "$model_out" in
@@ -50,35 +51,24 @@ cp "$model_out/model.json" "$model_only"
 "$runtime_bin" check --allow-non-store-model --model "$model_only" >/dev/null
 
 state_base="$tmp/state"
+run_json="$tmp/run.json"
+NIXFIED_STATE_DIR="$state_base" "$runtime_bin" run --model "$model_out/model.json" >"$run_json"
 NIXFIED_STATE_DIR="$state_base" "$runtime_bin" ps --model "$model_out/model.json" >/dev/null
 NIXFIED_STATE_DIR="$state_base" "$runtime_bin" down --model "$model_out/model.json" >/dev/null
-python3 - "$model_out/model.json" "$check_json" "$state_base" <<'PY'
+python3 - "$model_out/model.json" "$check_json" "$run_json" "$state_base" <<'PY'
 import json
 import pathlib
 import sys
 
 model = json.loads(pathlib.Path(sys.argv[1]).read_text())
 check = json.loads(pathlib.Path(sys.argv[2]).read_text())
-state_base = pathlib.Path(sys.argv[3])
+run = json.loads(pathlib.Path(sys.argv[3]).read_text())
+state_base = pathlib.Path(sys.argv[4])
 state_root = state_base / model["project"]["projectId"] / "dev" / "0"
-state_root.mkdir(parents=True, exist_ok=True)
-marker = {
-    "markerVersion": 1,
-    "markerIdentity": model["state"]["markerIdentity"],
-    "projectId": model["project"]["projectId"],
-    "environment": "dev",
-    "slot": 0,
-    "stateKind": "slot",
-    "serviceInstanceId": None,
-    "stateEpoch": model["state"]["stateEpoch"],
-    "cleanupPolicy": model["state"]["cleanupPolicy"],
-    "modelPath": check["modelPath"],
-    "computedModelHash": check["computedModelHash"],
-    "runtimeAbi": model["runtimeAbi"],
-    "toolchainId": model["toolchainId"],
-    "target": model["target"],
-}
-(state_root / ".nixfied-state.json").write_text(json.dumps(marker, sort_keys=True))
+assert check["computedModelHash"] == run["computedModelHash"]
+assert run["task"]["success"] is True
+assert pathlib.Path(run["summaryPath"]).is_file()
+assert (state_root / ".nixfied-state.json").is_file()
 PY
 NIXFIED_STATE_DIR="$state_base" "$runtime_bin" clean --model "$model_out/model.json" >/dev/null
 test ! -e "$state_base/m0-minimal/dev/0"

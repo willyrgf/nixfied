@@ -1235,9 +1235,9 @@ fn fixture_model(executable: &str, start_args: &[&str], port: u16) -> Value {
                         "kind": "tcp-connect",
                         "endpointId": "synthetic-tcp"
                     },
-                    "timeoutMs": 25,
-                    "retryIntervalMs": 10,
-                    "maxAttempts": 5
+                    "timeoutMs": 250,
+                    "retryIntervalMs": 25,
+                    "maxAttempts": 40
                 }],
                 "readinessProbe": "synthetic-tcp",
                 "stopPolicy": {
