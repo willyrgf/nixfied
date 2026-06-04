@@ -1,6 +1,7 @@
 use rusqlite::{Connection, params};
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
+use crate::registry::RegistryIdentity;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EventInsert {
@@ -25,7 +26,11 @@ impl EventInsert {
     }
 }
 
-pub fn append_event(conn: &mut Connection, event: &EventInsert) -> RuntimeResult<i64> {
+pub fn append_event(
+    conn: &mut Connection,
+    identity: &RegistryIdentity,
+    event: &EventInsert,
+) -> RuntimeResult<i64> {
     let transaction = conn
         .transaction()
         .map_err(|error| RuntimeError::new(ErrorCode::RegistryCorrupt, error.to_string()))?;
@@ -33,13 +38,15 @@ pub fn append_event(conn: &mut Connection, event: &EventInsert) -> RuntimeResult
         .execute(
             "
             INSERT INTO events (
-              at, event_type, run_id, service_instance_id, process_key,
-              computed_model_hash, payload_json
+              at, environment, slot, event_type, run_id, service_instance_id,
+              process_key, computed_model_hash, payload_json
             ) VALUES (
-              strftime('%Y-%m-%dT%H:%M:%fZ','now'), ?1, ?2, ?3, ?4, ?5, ?6
+              strftime('%Y-%m-%dT%H:%M:%fZ','now'), ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8
             )
             ",
             params![
+                identity.environment,
+                identity.slot,
                 event.event_type,
                 event.run_id,
                 event.service_instance_id,

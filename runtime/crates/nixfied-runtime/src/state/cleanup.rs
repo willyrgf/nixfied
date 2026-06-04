@@ -5,7 +5,7 @@ use rusqlite::params;
 use serde::Serialize;
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
-use crate::registry::Registry;
+use crate::registry::{Registry, RegistryIdentity};
 use crate::state::marker::{StateIdentity, StateMarker, read_marker};
 use crate::state::placement::canonicalize_existing;
 
@@ -167,19 +167,28 @@ fn record_cleanup_intent(
             format!("failed to serialize cleanup marker: {error}"),
         )
     })?;
+    let identity = registry.identity().clone();
     let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
     transaction
         .execute(
             "
             INSERT INTO cleanups (
-              cleanup_id, target_path, marker_json, status, refusal_reason
-            ) VALUES (?1, ?2, ?3, 'intent', NULL)
+              cleanup_id, environment, slot, target_path, marker_json, status,
+              refusal_reason
+            ) VALUES (?1, ?2, ?3, ?4, ?5, 'intent', NULL)
             ",
-            params![cleanup_id, target.display().to_string(), marker_json],
+            params![
+                cleanup_id,
+                identity.environment.as_str(),
+                identity.slot,
+                target.display().to_string(),
+                marker_json
+            ],
         )
         .map_err(sql_error)?;
     insert_cleanup_event(
         &transaction,
+        &identity,
         "cleanup.intent",
         &marker.computed_model_hash,
         payload_json,
@@ -196,6 +205,7 @@ fn record_cleanup_terminal(
     status: &str,
     refusal_reason: Option<&str>,
 ) -> RuntimeResult<()> {
+    let identity = registry.identity().clone();
     let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
     transaction
         .execute(
@@ -212,13 +222,20 @@ fn record_cleanup_terminal(
         "failed" => "cleanup.failed",
         _ => "cleanup.terminal",
     };
-    insert_cleanup_event(&transaction, event_type, computed_model_hash, payload_json)?;
+    insert_cleanup_event(
+        &transaction,
+        &identity,
+        event_type,
+        computed_model_hash,
+        payload_json,
+    )?;
     transaction.commit().map_err(sql_error)?;
     Ok(())
 }
 
 fn insert_cleanup_event(
     transaction: &rusqlite::Transaction<'_>,
+    identity: &RegistryIdentity,
     event_type: &str,
     computed_model_hash: &str,
     payload_json: &str,
@@ -227,13 +244,19 @@ fn insert_cleanup_event(
         .execute(
             "
             INSERT INTO events (
-              at, event_type, run_id, service_instance_id, process_key,
-              computed_model_hash, payload_json
+              at, environment, slot, event_type, run_id, service_instance_id,
+              process_key, computed_model_hash, payload_json
             ) VALUES (
-              strftime('%Y-%m-%dT%H:%M:%fZ','now'), ?1, NULL, NULL, NULL, ?2, ?3
+              strftime('%Y-%m-%dT%H:%M:%fZ','now'), ?1, ?2, ?3, NULL, NULL, NULL, ?4, ?5
             )
             ",
-            params![event_type, computed_model_hash, payload_json],
+            params![
+                identity.environment.as_str(),
+                identity.slot,
+                event_type,
+                computed_model_hash,
+                payload_json
+            ],
         )
         .map_err(sql_error)?;
     Ok(())

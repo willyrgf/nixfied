@@ -48,6 +48,8 @@ pub fn initialize(conn: &mut Connection, identity: &RegistryIdentity) -> Runtime
             CREATE TABLE IF NOT EXISTS events (
               seq INTEGER PRIMARY KEY,
               at TEXT NOT NULL,
+              environment TEXT NOT NULL,
+              slot INTEGER NOT NULL CHECK (slot >= 0),
               event_type TEXT NOT NULL,
               run_id TEXT,
               service_instance_id TEXT,
@@ -58,6 +60,8 @@ pub fn initialize(conn: &mut Connection, identity: &RegistryIdentity) -> Runtime
 
             CREATE TABLE IF NOT EXISTS runs (
               run_id TEXT PRIMARY KEY,
+              environment TEXT NOT NULL,
+              slot INTEGER NOT NULL CHECK (slot >= 0),
               status TEXT NOT NULL,
               model_path TEXT NOT NULL,
               computed_model_hash TEXT NOT NULL,
@@ -71,6 +75,8 @@ pub fn initialize(conn: &mut Connection, identity: &RegistryIdentity) -> Runtime
 
             CREATE TABLE IF NOT EXISTS services (
               service_instance_id TEXT PRIMARY KEY,
+              environment TEXT NOT NULL,
+              slot INTEGER NOT NULL CHECK (slot >= 0),
               service_name TEXT NOT NULL,
               service_address_hash TEXT NOT NULL,
               endpoint_identity_hash TEXT NOT NULL,
@@ -84,6 +90,8 @@ pub fn initialize(conn: &mut Connection, identity: &RegistryIdentity) -> Runtime
 
             CREATE TABLE IF NOT EXISTS processes (
               process_key TEXT PRIMARY KEY,
+              environment TEXT NOT NULL,
+              slot INTEGER NOT NULL CHECK (slot >= 0),
               pid INTEGER NOT NULL,
               pgid INTEGER NOT NULL,
               start_identity TEXT NOT NULL,
@@ -95,6 +103,8 @@ pub fn initialize(conn: &mut Connection, identity: &RegistryIdentity) -> Runtime
 
             CREATE TABLE IF NOT EXISTS ports (
               endpoint_key TEXT PRIMARY KEY,
+              environment TEXT NOT NULL,
+              slot INTEGER NOT NULL CHECK (slot >= 0),
               service_instance_id TEXT NOT NULL,
               address TEXT NOT NULL,
               port INTEGER NOT NULL,
@@ -104,6 +114,8 @@ pub fn initialize(conn: &mut Connection, identity: &RegistryIdentity) -> Runtime
 
             CREATE TABLE IF NOT EXISTS run_leases (
               run_id TEXT PRIMARY KEY,
+              environment TEXT NOT NULL,
+              slot INTEGER NOT NULL CHECK (slot >= 0),
               owner_token TEXT NOT NULL,
               heartbeat_at TEXT NOT NULL,
               expires_at TEXT NOT NULL
@@ -111,6 +123,8 @@ pub fn initialize(conn: &mut Connection, identity: &RegistryIdentity) -> Runtime
 
             CREATE TABLE IF NOT EXISTS cleanups (
               cleanup_id TEXT PRIMARY KEY,
+              environment TEXT NOT NULL,
+              slot INTEGER NOT NULL CHECK (slot >= 0),
               target_path TEXT NOT NULL,
               marker_json TEXT,
               status TEXT NOT NULL,
@@ -164,7 +178,44 @@ pub fn verify_existing(conn: &Connection) -> RuntimeResult<()> {
             format!("expected registry user_version {SCHEMA_VERSION}, got {user_version}"),
         ));
     }
+    verify_required_columns(conn)?;
     Ok(())
+}
+
+fn verify_required_columns(conn: &Connection) -> RuntimeResult<()> {
+    for (table, columns) in [
+        ("events", &["environment", "slot"][..]),
+        ("runs", &["environment", "slot"][..]),
+        ("services", &["environment", "slot"][..]),
+        ("processes", &["environment", "slot"][..]),
+        ("ports", &["environment", "slot"][..]),
+        ("run_leases", &["environment", "slot"][..]),
+        ("cleanups", &["environment", "slot"][..]),
+    ] {
+        for column in columns {
+            if !has_column(conn, table, column)? {
+                return Err(RuntimeError::new(
+                    ErrorCode::RegistryCorrupt,
+                    format!("registry table {table} is missing required column {column}"),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn has_column(conn: &Connection, table: &str, column: &str) -> RuntimeResult<bool> {
+    let mut statement = conn
+        .prepare(&format!("PRAGMA table_info({table})"))
+        .map_err(sql_error)?;
+    let mut rows = statement.query([]).map_err(sql_error)?;
+    while let Some(row) = rows.next().map_err(sql_error)? {
+        let name = row.get::<_, String>(1).map_err(sql_error)?;
+        if name == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn verify_identity(conn: &Connection, identity: &RegistryIdentity) -> RuntimeResult<()> {

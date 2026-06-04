@@ -5,7 +5,7 @@ use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::admission::Admission;
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
-use crate::registry::Registry;
+use crate::registry::{Registry, RegistryIdentity};
 use crate::state::HostPlacement;
 
 pub struct RunRecord<'a> {
@@ -65,6 +65,7 @@ pub fn record_service_start(
     let generator_json = serde_json::to_string(&run.model.generator).map_err(json_error)?;
     let target_json = serde_json::to_string(&run.model.target).map_err(json_error)?;
     let source_json = serde_json::to_string(&run.admission.source).map_err(json_error)?;
+    let identity = registry.identity().clone();
     let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
     ensure_no_existing_run_transaction(&transaction, run.run_id)?;
     ensure_no_active_service_transaction(&transaction, service.service_instance_id)?;
@@ -77,12 +78,15 @@ pub fn record_service_start(
         .execute(
             "
             INSERT INTO runs (
-              run_id, status, model_path, computed_model_hash, runtime_abi,
-              toolchain_id, generator_json, target_json, source_json, summary_path
-            ) VALUES (?1, 'service-starting', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+              run_id, environment, slot, status, model_path, computed_model_hash,
+              runtime_abi, toolchain_id, generator_json, target_json, source_json,
+              summary_path
+            ) VALUES (?1, ?2, ?3, 'service-starting', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
             ",
             params![
                 run.run_id,
+                identity.environment.as_str(),
+                identity.slot,
                 run.admission.model_path.display().to_string(),
                 run.admission.computed_model_hash.as_str(),
                 run.admission.runtime_abi.as_str(),
@@ -98,13 +102,16 @@ pub fn record_service_start(
         .execute(
             "
             INSERT OR REPLACE INTO services (
-              service_instance_id, service_name, service_address_hash,
-              endpoint_identity_hash, state_identity_hash, runtime_compatibility_hash,
-              target_identity_hash, status, endpoint_json, state_root
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'starting', ?8, ?9)
+              service_instance_id, environment, slot, service_name,
+              service_address_hash, endpoint_identity_hash, state_identity_hash,
+              runtime_compatibility_hash, target_identity_hash, status,
+              endpoint_json, state_root
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'starting', ?10, ?11)
             ",
             params![
                 service.service_instance_id,
+                identity.environment.as_str(),
+                identity.slot,
                 service.service_name,
                 service.service_address_hash,
                 service.service.identity.endpoint_identity_hash.as_str(),
@@ -120,12 +127,14 @@ pub fn record_service_start(
         .execute(
             "
             INSERT OR REPLACE INTO processes (
-              process_key, pid, pgid, start_identity, command_json,
-              run_id, service_instance_id, status
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'running')
+              process_key, environment, slot, pid, pgid, start_identity,
+              command_json, run_id, service_instance_id, status
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'running')
             ",
             params![
                 process.process_key,
+                identity.environment.as_str(),
+                identity.slot,
                 process.pid,
                 process.pgid,
                 process.start_identity,
@@ -139,11 +148,14 @@ pub fn record_service_start(
         .execute(
             "
             INSERT OR REPLACE INTO ports (
-              endpoint_key, service_instance_id, address, port, status, owner_process_key
-            ) VALUES (?1, ?2, ?3, ?4, 'reserved', NULL)
+              endpoint_key, environment, slot, service_instance_id, address, port,
+              status, owner_process_key
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'reserved', NULL)
             ",
             params![
                 service.endpoint_key,
+                identity.environment.as_str(),
+                identity.slot,
                 service.service_instance_id,
                 service.endpoint_address,
                 service.endpoint_port,
@@ -152,21 +164,27 @@ pub fn record_service_start(
         .map_err(sql_error)?;
     insert_event(
         &transaction,
-        "run.admitted",
-        Some(run.run_id),
-        None,
-        None,
-        Some(&run.admission.computed_model_hash),
-        "{}",
+        &identity,
+        EventRecord {
+            event_type: "run.admitted",
+            run_id: Some(run.run_id),
+            service_instance_id: None,
+            process_key: None,
+            computed_model_hash: Some(&run.admission.computed_model_hash),
+            payload_json: "{}",
+        },
     )?;
     insert_event(
         &transaction,
-        "service.starting",
-        Some(run.run_id),
-        Some(service.service_instance_id),
-        Some(process.process_key),
-        Some(&run.admission.computed_model_hash),
-        process.command_json,
+        &identity,
+        EventRecord {
+            event_type: "service.starting",
+            run_id: Some(run.run_id),
+            service_instance_id: Some(service.service_instance_id),
+            process_key: Some(process.process_key),
+            computed_model_hash: Some(&run.admission.computed_model_hash),
+            payload_json: process.command_json,
+        },
     )?;
     transaction.commit().map_err(sql_error)?;
     Ok(())
@@ -181,6 +199,7 @@ pub fn mark_endpoint_owner_verified(
     computed_model_hash: &str,
     payload_json: &str,
 ) -> RuntimeResult<()> {
+    let identity = registry.identity().clone();
     let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
     transaction
         .execute(
@@ -194,12 +213,15 @@ pub fn mark_endpoint_owner_verified(
         .map_err(sql_error)?;
     insert_event(
         &transaction,
-        "port.owner-verified",
-        Some(run_id),
-        Some(service_instance_id),
-        Some(process_key),
-        Some(computed_model_hash),
-        payload_json,
+        &identity,
+        EventRecord {
+            event_type: "port.owner-verified",
+            run_id: Some(run_id),
+            service_instance_id: Some(service_instance_id),
+            process_key: Some(process_key),
+            computed_model_hash: Some(computed_model_hash),
+            payload_json,
+        },
     )?;
     transaction.commit().map_err(sql_error)?;
     Ok(())
@@ -212,6 +234,7 @@ pub fn mark_service_probe_ready(
     process_key: &str,
     computed_model_hash: &str,
 ) -> RuntimeResult<()> {
+    let identity = registry.identity().clone();
     let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
     transaction
         .execute(
@@ -221,12 +244,15 @@ pub fn mark_service_probe_ready(
         .map_err(sql_error)?;
     insert_event(
         &transaction,
-        "service.probe-ready",
-        Some(run_id),
-        Some(service_instance_id),
-        Some(process_key),
-        Some(computed_model_hash),
-        "{}",
+        &identity,
+        EventRecord {
+            event_type: "service.probe-ready",
+            run_id: Some(run_id),
+            service_instance_id: Some(service_instance_id),
+            process_key: Some(process_key),
+            computed_model_hash: Some(computed_model_hash),
+            payload_json: "{}",
+        },
     )?;
     transaction.commit().map_err(sql_error)?;
     Ok(())
@@ -239,6 +265,7 @@ pub fn mark_service_stopped(
     process_key: &str,
     computed_model_hash: &str,
 ) -> RuntimeResult<()> {
+    let identity = registry.identity().clone();
     let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
     transaction
         .execute(
@@ -255,12 +282,15 @@ pub fn mark_service_stopped(
     release_service_ports(&transaction, service_instance_id)?;
     insert_event(
         &transaction,
-        "service.stopped",
-        Some(run_id),
-        Some(service_instance_id),
-        Some(process_key),
-        Some(computed_model_hash),
-        "{}",
+        &identity,
+        EventRecord {
+            event_type: "service.stopped",
+            run_id: Some(run_id),
+            service_instance_id: Some(service_instance_id),
+            process_key: Some(process_key),
+            computed_model_hash: Some(computed_model_hash),
+            payload_json: "{}",
+        },
     )?;
     transaction.commit().map_err(sql_error)?;
     Ok(())
@@ -274,6 +304,7 @@ pub fn mark_service_failed(
     computed_model_hash: &str,
     payload_json: &str,
 ) -> RuntimeResult<()> {
+    let identity = registry.identity().clone();
     let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
     transaction
         .execute(
@@ -290,12 +321,15 @@ pub fn mark_service_failed(
     release_service_ports(&transaction, service_instance_id)?;
     insert_event(
         &transaction,
-        "service.failed",
-        Some(run_id),
-        Some(service_instance_id),
-        Some(process_key),
-        Some(computed_model_hash),
-        payload_json,
+        &identity,
+        EventRecord {
+            event_type: "service.failed",
+            run_id: Some(run_id),
+            service_instance_id: Some(service_instance_id),
+            process_key: Some(process_key),
+            computed_model_hash: Some(computed_model_hash),
+            payload_json,
+        },
     )?;
     transaction.commit().map_err(sql_error)?;
     Ok(())
@@ -309,6 +343,7 @@ pub fn mark_process_escape(
     computed_model_hash: &str,
     payload_json: &str,
 ) -> RuntimeResult<()> {
+    let identity = registry.identity().clone();
     let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
     transaction
         .execute(
@@ -325,12 +360,15 @@ pub fn mark_process_escape(
     release_service_ports(&transaction, service_instance_id)?;
     insert_event(
         &transaction,
-        "service.proc-escape",
-        Some(run_id),
-        Some(service_instance_id),
-        Some(process_key),
-        Some(computed_model_hash),
-        payload_json,
+        &identity,
+        EventRecord {
+            event_type: "service.proc-escape",
+            run_id: Some(run_id),
+            service_instance_id: Some(service_instance_id),
+            process_key: Some(process_key),
+            computed_model_hash: Some(computed_model_hash),
+            payload_json,
+        },
     )?;
     transaction.commit().map_err(sql_error)?;
     Ok(())
@@ -367,17 +405,20 @@ pub fn record_task_started(
     registry: &mut Registry,
     process: &TaskProcessRecord<'_>,
 ) -> RuntimeResult<()> {
+    let identity = registry.identity().clone();
     let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
     transaction
         .execute(
             "
             INSERT INTO processes (
-              process_key, pid, pgid, start_identity, command_json,
-              run_id, service_instance_id, status
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, 'running')
+              process_key, environment, slot, pid, pgid, start_identity,
+              command_json, run_id, service_instance_id, status
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, 'running')
             ",
             params![
                 process.process_key,
+                identity.environment.as_str(),
+                identity.slot,
                 process.pid,
                 process.pgid,
                 process.start_identity,
@@ -388,12 +429,15 @@ pub fn record_task_started(
         .map_err(sql_error)?;
     insert_event(
         &transaction,
-        "task.running",
-        Some(process.run_id),
-        None,
-        Some(process.process_key),
-        Some(process.computed_model_hash),
-        process.command_json,
+        &identity,
+        EventRecord {
+            event_type: "task.running",
+            run_id: Some(process.run_id),
+            service_instance_id: None,
+            process_key: Some(process.process_key),
+            computed_model_hash: Some(process.computed_model_hash),
+            payload_json: process.command_json,
+        },
     )?;
     transaction.commit().map_err(sql_error)?;
     Ok(())
@@ -418,6 +462,7 @@ pub fn mark_task_finished(
     } else {
         "task-failed"
     };
+    let identity = registry.identity().clone();
     let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
     transaction
         .execute(
@@ -433,12 +478,15 @@ pub fn mark_task_finished(
         .map_err(sql_error)?;
     insert_event(
         &transaction,
-        event_type,
-        Some(run_id),
-        None,
-        Some(process_key),
-        Some(computed_model_hash),
-        payload_json,
+        &identity,
+        EventRecord {
+            event_type,
+            run_id: Some(run_id),
+            service_instance_id: None,
+            process_key: Some(process_key),
+            computed_model_hash: Some(computed_model_hash),
+            payload_json,
+        },
     )?;
     transaction.commit().map_err(sql_error)?;
     Ok(())
@@ -446,34 +494,41 @@ pub fn mark_task_finished(
 
 fn insert_event(
     transaction: &rusqlite::Transaction<'_>,
-    event_type: &str,
-    run_id: Option<&str>,
-    service_instance_id: Option<&str>,
-    process_key: Option<&str>,
-    computed_model_hash: Option<&str>,
-    payload_json: &str,
+    identity: &RegistryIdentity,
+    event: EventRecord<'_>,
 ) -> RuntimeResult<()> {
     transaction
         .execute(
             "
             INSERT INTO events (
-              at, event_type, run_id, service_instance_id, process_key,
-              computed_model_hash, payload_json
+              at, environment, slot, event_type, run_id, service_instance_id,
+              process_key, computed_model_hash, payload_json
             ) VALUES (
-              strftime('%Y-%m-%dT%H:%M:%fZ','now'), ?1, ?2, ?3, ?4, ?5, ?6
+              strftime('%Y-%m-%dT%H:%M:%fZ','now'), ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8
             )
             ",
             params![
-                event_type,
-                run_id,
-                service_instance_id,
-                process_key,
-                computed_model_hash,
-                payload_json,
+                identity.environment.as_str(),
+                identity.slot,
+                event.event_type,
+                event.run_id,
+                event.service_instance_id,
+                event.process_key,
+                event.computed_model_hash,
+                event.payload_json,
             ],
         )
         .map_err(sql_error)?;
     Ok(())
+}
+
+struct EventRecord<'a> {
+    event_type: &'a str,
+    run_id: Option<&'a str>,
+    service_instance_id: Option<&'a str>,
+    process_key: Option<&'a str>,
+    computed_model_hash: Option<&'a str>,
+    payload_json: &'a str,
 }
 
 fn ensure_no_existing_run_conn(conn: &Connection, run_id: &str) -> RuntimeResult<()> {
