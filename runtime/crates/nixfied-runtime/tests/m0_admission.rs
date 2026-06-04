@@ -11,8 +11,8 @@ use serde_json::{Value, json};
 fn fixture_model() -> Value {
     json!({
         "modelVersion": 1,
-        "toolchainId": "nixfied-toolchain:m0:2",
-        "runtimeAbi": "nixfied-runtime-abi:m0:2",
+        "toolchainId": "nixfied-toolchain:m1:1",
+        "runtimeAbi": "nixfied-runtime-abi:m1:1",
         "generator": {
             "name": "nixfied",
             "version": "m0",
@@ -81,6 +81,20 @@ fn fixture_model() -> Value {
             "candidatePorts": {
                 "start": 38080,
                 "end": 38090
+            },
+            "slotPlacements": {
+                "0": {
+                    "slot": 0,
+                    "stateRootTemplate": "${projectId}/${environment}/${slot}",
+                    "registryDir": "registry",
+                    "runDirTemplate": "runs/${runId}",
+                    "logsDirTemplate": "runs/${runId}/logs",
+                    "artifactsDirTemplate": "runs/${runId}/artifacts",
+                    "candidatePorts": {
+                        "start": 38080,
+                        "end": 38090
+                    }
+                }
             }
         },
         "state": {

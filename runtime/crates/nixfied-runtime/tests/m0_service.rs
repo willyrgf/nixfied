@@ -1071,8 +1071,8 @@ fn model(executable: &str, start_args: &[&str], port: u16) -> Model {
 fn fixture_model(executable: &str, start_args: &[&str], port: u16) -> Value {
     json!({
         "modelVersion": 1,
-        "toolchainId": "nixfied-toolchain:m0:2",
-        "runtimeAbi": "nixfied-runtime-abi:m0:2",
+        "toolchainId": "nixfied-toolchain:m1:1",
+        "runtimeAbi": "nixfied-runtime-abi:m1:1",
         "generator": {
             "name": "nixfied",
             "version": "m0",
@@ -1141,6 +1141,20 @@ fn fixture_model(executable: &str, start_args: &[&str], port: u16) -> Value {
             "candidatePorts": {
                 "start": port,
                 "end": port
+            },
+            "slotPlacements": {
+                "0": {
+                    "slot": 0,
+                    "stateRootTemplate": "${projectId}/${environment}/${slot}",
+                    "registryDir": "registry",
+                    "runDirTemplate": "runs/${runId}",
+                    "logsDirTemplate": "runs/${runId}/logs",
+                    "artifactsDirTemplate": "runs/${runId}/artifacts",
+                    "candidatePorts": {
+                        "start": port,
+                        "end": port
+                    }
+                }
             }
         },
         "state": {
