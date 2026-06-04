@@ -23,6 +23,7 @@ use crate::service::registry::{
     mark_endpoint_owner_verified, mark_process_escape, mark_service_failed,
     mark_service_probe_ready, mark_service_stopped, record_service_start,
 };
+use crate::slot::{SelectedSlot, select_slot};
 use crate::state::HostPlacement;
 
 const FOREGROUND_GRACE: Duration = Duration::from_millis(100);
@@ -297,6 +298,27 @@ pub fn start_synthetic_service(
     run_id: impl Into<String>,
     selected_port: u16,
 ) -> RuntimeResult<StartedService> {
+    let selected_slot = select_slot(model, None)?;
+    start_synthetic_service_for_slot(
+        model,
+        admission,
+        placement,
+        registry,
+        run_id,
+        &selected_slot,
+        selected_port,
+    )
+}
+
+pub fn start_synthetic_service_for_slot(
+    model: &Model,
+    admission: &Admission,
+    placement: &HostPlacement,
+    registry: &mut Registry,
+    run_id: impl Into<String>,
+    selected_slot: &SelectedSlot<'_>,
+    selected_port: u16,
+) -> RuntimeResult<StartedService> {
     let run_id = run_id.into();
     let service_name = "synthetic";
     let service = model.services.get(service_name).ok_or_else(|| {
@@ -321,9 +343,14 @@ pub fn start_synthetic_service(
             format!("service start exec {exec_id} is missing"),
         )
     })?;
-    let selected_endpoint = select_endpoint(service, selected_port)?;
+    let selected_endpoint = select_endpoint(service, selected_slot, selected_port)?;
     let command_cwd = resolve_exec_cwd(&admission.source.observed_root, &exec.cwd)?;
-    let address_hash = service_address_hash(model, service_name);
+    let address_hash = service_address_hash(
+        model,
+        selected_slot.environment,
+        selected_slot.slot,
+        service_name,
+    );
     let service_instance_id = service_instance_id(&address_hash, &service.identity);
     ensure_service_start_allowed(registry, &run_id, &service_instance_id)?;
     let args = operation_args(&exec.args, &start_op.exec_args, selected_port);
@@ -460,8 +487,19 @@ fn lifecycle_op(
 
 fn select_endpoint(
     service: &nixfied_model::ServiceSpec,
+    selected_slot: &SelectedSlot<'_>,
     selected_port: u16,
 ) -> RuntimeResult<SelectedEndpoint> {
+    let window = &selected_slot.placement.candidate_ports;
+    if selected_port < window.start || selected_port > window.end {
+        return Err(RuntimeError::new(
+            ErrorCode::ModelAdmission,
+            format!(
+                "selected port {selected_port} is outside slot {} candidate window {}-{}",
+                selected_slot.slot, window.start, window.end
+            ),
+        ));
+    }
     let endpoint = service.endpoints.first().ok_or_else(|| {
         RuntimeError::new(
             ErrorCode::ModelAdmission,
@@ -475,14 +513,7 @@ fn select_endpoint(
                 format!("selected port {selected_port} does not match fixed port {port}"),
             ));
         }
-        PortPolicy::CandidateWindow { start, end }
-            if selected_port < *start || selected_port > *end =>
-        {
-            return Err(RuntimeError::new(
-                ErrorCode::ModelAdmission,
-                format!("selected port {selected_port} is outside candidate window {start}-{end}"),
-            ));
-        }
+        PortPolicy::CandidateWindow { .. } => {}
         _ => {}
     }
     Ok(SelectedEndpoint {

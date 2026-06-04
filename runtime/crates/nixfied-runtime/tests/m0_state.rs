@@ -5,9 +5,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use nixfied_model::{CleanupPolicy, DirtyPolicy, Model, SourceMode};
 use nixfied_runtime::control::clean_reconciled_state;
 use nixfied_runtime::registry::{Registry, RegistryIdentity};
+use nixfied_runtime::slot::{first_candidate_port, select_slot};
 use nixfied_runtime::state::{
     MARKER_FILE_NAME, StateIdentity, StateMarker, clean_marked_state, derive_host_placement,
-    inspect_cleanup_target, materialize_run_roots, write_slot_marker,
+    derive_host_placement_for_slot, inspect_cleanup_target, materialize_run_roots,
+    write_slot_marker,
 };
 use nixfied_runtime::{Admission, AdmittedSource, ErrorCode};
 use serde_json::{Value, json};
@@ -57,6 +59,53 @@ fn materializes_m0_roots_and_slot_marker() {
     assert_eq!(marker.slot, 0);
     assert_eq!(marker.state_epoch, "m0");
     assert_eq!(marker.cleanup_policy, CleanupPolicy::DeleteOnClean);
+}
+
+#[test]
+fn selects_explicit_slot_placement() {
+    let tmp = TempDir::new();
+    let mut value = fixture_model();
+    add_slot_one(&mut value, 38180, 38190);
+    let model: Model = serde_json::from_value(value).expect("model should parse");
+    let selected = select_slot(&model, Some(1)).expect("slot 1 should select");
+
+    let layout = derive_host_placement_for_slot(&model, &selected, "run-2", &tmp.path)
+        .expect("slot placement should derive");
+
+    assert_eq!(selected.slot, 1);
+    assert_eq!(layout.state_root, tmp.path.join("runtime-test/dev/1"));
+    assert_eq!(
+        first_candidate_port(&selected.placement.candidate_ports).expect("port should select"),
+        38180
+    );
+}
+
+#[test]
+fn slot_one_marker_records_selected_identity() {
+    let tmp = TempDir::new();
+    let mut value = fixture_model();
+    add_slot_one(&mut value, 38180, 38190);
+    let model: Model = serde_json::from_value(value).expect("model should parse");
+    let admission = admission(&model, &tmp.path);
+    let selected = select_slot(&model, Some(1)).expect("slot 1 should select");
+    let layout = derive_host_placement_for_slot(&model, &selected, "run-2", &tmp.path)
+        .expect("slot placement should derive");
+    materialize_run_roots(&layout).expect("roots should materialize");
+    let identity = StateIdentity::from_selected_slot(&model, &admission, &selected);
+
+    let marker = write_slot_marker(&layout, &identity).expect("marker should be written");
+
+    assert_eq!(marker.environment, "dev");
+    assert_eq!(marker.slot, 1);
+    assert!(marker.matches_identity(&identity));
+}
+
+#[test]
+fn slot_out_of_range_is_refused() {
+    let model = model();
+    let error = select_slot(&model, Some(1)).expect_err("slot 1 is outside default M1 fixture");
+
+    assert_eq!(error.code, ErrorCode::ModelAdmission);
 }
 
 #[test]
@@ -383,8 +432,10 @@ impl StateFixture {
     fn registry(&self) -> Registry {
         Registry::open_or_create(
             self.layout.registry_path(),
-            &RegistryIdentity::m0(
+            &RegistryIdentity::for_slot(
                 &self.identity.project_id,
+                &self.identity.environment,
+                self.identity.slot,
                 &self.identity.runtime_abi,
                 &self.identity.toolchain_id,
             ),
@@ -422,6 +473,24 @@ fn admitted_source(source_root: &Path) -> AdmittedSource {
 
 fn model() -> Model {
     serde_json::from_value(fixture_model()).expect("fixture model should parse")
+}
+
+fn add_slot_one(value: &mut Value, start: u16, end: u16) {
+    value["slotPolicy"]["max"] = json!(1);
+    value["runtimeConstraints"]["slotMax"] = json!(1);
+    value["capabilities"]["slots"] = json!([0, 1]);
+    value["placement"]["slotPlacements"]["1"] = json!({
+        "slot": 1,
+        "stateRootTemplate": "${projectId}/${environment}/${slot}",
+        "registryDir": "registry",
+        "runDirTemplate": "runs/${runId}",
+        "logsDirTemplate": "runs/${runId}/logs",
+        "artifactsDirTemplate": "runs/${runId}/artifacts",
+        "candidatePorts": {
+            "start": start,
+            "end": end
+        }
+    });
 }
 
 fn fixture_model() -> Value {

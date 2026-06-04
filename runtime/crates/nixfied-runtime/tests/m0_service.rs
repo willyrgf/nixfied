@@ -8,9 +8,13 @@ use std::time::Duration;
 use nixfied_model::{DirtyPolicy, Model, SourceMode};
 use nixfied_runtime::registry::{Registry, RegistryIdentity};
 use nixfied_runtime::service::{
-    run_dependent_task, start_synthetic_service, wait_for_readiness_probe,
+    run_dependent_task, service_address_hash, service_instance_id, start_synthetic_service,
+    start_synthetic_service_for_slot, wait_for_readiness_probe,
 };
-use nixfied_runtime::state::{derive_host_placement, materialize_run_roots};
+use nixfied_runtime::slot::select_slot;
+use nixfied_runtime::state::{
+    derive_host_placement, derive_host_placement_for_slot, materialize_run_roots,
+};
 use nixfied_runtime::{Admission, AdmittedSource, ErrorCode};
 use serde_json::{Value, json};
 
@@ -303,6 +307,71 @@ fn wildcard_listener_does_not_satisfy_loopback_endpoint_ownership() {
         .expect("service status should query");
     assert_eq!(ready_events, 0);
     assert_eq!(service_status, "failed");
+}
+
+#[test]
+fn slot_one_service_uses_slot_placement_port_window() {
+    let tmp = TempDir::new();
+    let mut value = fixture_model("/bin/sleep", &["30"], 38180);
+    value["services"]["synthetic"]["endpoints"][0]["port"] = json!({
+        "kind": "candidate-window",
+        "start": 38180,
+        "end": 38180
+    });
+    add_slot_one(&mut value, 38280, 38280);
+    let model: Model = serde_json::from_value(value).expect("fixture model should parse");
+    let admission = admission(&model, &tmp.path);
+    let selected_slot = select_slot(&model, Some(1)).expect("slot 1 should select");
+    let placement = derive_host_placement_for_slot(&model, &selected_slot, "run-slot-1", &tmp.path)
+        .expect("slot 1 layout should derive");
+    materialize_run_roots(&placement).expect("roots should materialize");
+    let mut registry = Registry::open_or_create(
+        placement.registry_path(),
+        &RegistryIdentity::for_slot(
+            &model.project.project_id,
+            selected_slot.environment,
+            selected_slot.slot,
+            &model.runtime_abi,
+            &model.toolchain_id,
+        ),
+    )
+    .expect("registry should open");
+
+    let service = start_synthetic_service_for_slot(
+        &model,
+        &admission,
+        &placement,
+        &mut registry,
+        "run-slot-1",
+        &selected_slot,
+        38280,
+    )
+    .expect("slot 1 service should accept slot placement port");
+
+    assert_eq!(service.selected_endpoint.port, 38280);
+    assert_eq!(placement.state_root, tmp.path.join("runtime-test/dev/1"));
+    service
+        .stop(&mut registry, 1000)
+        .expect("service should stop");
+}
+
+#[test]
+fn service_instance_identity_includes_selected_slot() {
+    let mut value = fixture_model("/bin/sleep", &["30"], 38180);
+    add_slot_one(&mut value, 38280, 38280);
+    let model: Model = serde_json::from_value(value).expect("fixture model should parse");
+    let service = model
+        .services
+        .get("synthetic")
+        .expect("fixture has synthetic service");
+
+    let slot_0_address = service_address_hash(&model, "dev", 0, "synthetic");
+    let slot_1_address = service_address_hash(&model, "dev", 1, "synthetic");
+    let slot_0_instance = service_instance_id(&slot_0_address, &service.identity);
+    let slot_1_instance = service_instance_id(&slot_1_address, &service.identity);
+
+    assert_ne!(slot_0_address, slot_1_address);
+    assert_ne!(slot_0_instance, slot_1_instance);
 }
 
 #[test]
@@ -1066,6 +1135,24 @@ fn admitted_source(source_root: &Path) -> AdmittedSource {
 fn model(executable: &str, start_args: &[&str], port: u16) -> Model {
     serde_json::from_value(fixture_model(executable, start_args, port))
         .expect("fixture model should parse")
+}
+
+fn add_slot_one(value: &mut Value, start: u16, end: u16) {
+    value["slotPolicy"]["max"] = json!(1);
+    value["runtimeConstraints"]["slotMax"] = json!(1);
+    value["capabilities"]["slots"] = json!([0, 1]);
+    value["placement"]["slotPlacements"]["1"] = json!({
+        "slot": 1,
+        "stateRootTemplate": "${projectId}/${environment}/${slot}",
+        "registryDir": "registry",
+        "runDirTemplate": "runs/${runId}",
+        "logsDirTemplate": "runs/${runId}/logs",
+        "artifactsDirTemplate": "runs/${runId}/artifacts",
+        "candidatePorts": {
+            "start": start,
+            "end": end
+        }
+    });
 }
 
 fn fixture_model(executable: &str, start_args: &[&str], port: u16) -> Value {

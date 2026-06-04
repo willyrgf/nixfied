@@ -1,9 +1,10 @@
 use std::path::PathBuf;
 
 use nixfied_runtime::registry::{Registry, RegistryIdentity};
-use nixfied_runtime::service::{run_dependent_task, start_synthetic_service};
+use nixfied_runtime::service::{run_dependent_task, start_synthetic_service_for_slot};
+use nixfied_runtime::slot::{first_candidate_port, select_slot};
 use nixfied_runtime::state::{
-    StateIdentity, derive_host_placement, materialize_run_roots, state_base_from_env,
+    StateIdentity, derive_host_placement_for_slot, materialize_run_roots, state_base_from_env,
     write_slot_marker,
 };
 use nixfied_runtime::{
@@ -22,6 +23,8 @@ struct CheckOutput {
     runtime_abi: String,
     toolchain_id: String,
     target_system: String,
+    environment: String,
+    slot: u32,
 }
 
 #[derive(Debug, Serialize)]
@@ -35,6 +38,11 @@ struct RunOutput {
     selected_endpoint: nixfied_runtime::service::SelectedEndpoint,
     task: nixfied_runtime::service::task::TaskRun,
     summary_path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RuntimeSelection {
+    slot: Option<u32>,
 }
 
 fn main() {
@@ -67,6 +75,7 @@ fn run() -> Result<(), RuntimeError> {
 fn check(args: &[String]) -> Result<(), RuntimeError> {
     let mut model_path = None;
     let mut allow_non_store = false;
+    let mut slot = None;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
@@ -76,6 +85,10 @@ fn check(args: &[String]) -> Result<(), RuntimeError> {
             }
             "--allow-non-store-model" => {
                 allow_non_store = true;
+            }
+            "--slot" => {
+                index += 1;
+                slot = Some(parse_slot_arg(args.get(index), "--slot")?);
             }
             other => {
                 return Err(RuntimeError::new(
@@ -92,7 +105,8 @@ fn check(args: &[String]) -> Result<(), RuntimeError> {
             "missing --model path",
         )
     })?;
-    let (_loaded, admission) = load_admitted_model(model_path, allow_non_store)?;
+    let (loaded, admission) = load_admitted_model(model_path, allow_non_store)?;
+    let selected_slot = select_slot(&loaded.model, slot)?;
     let output = CheckOutput {
         model_path: admission.model_path,
         computed_model_hash: admission.computed_model_hash,
@@ -101,6 +115,8 @@ fn check(args: &[String]) -> Result<(), RuntimeError> {
         runtime_abi: admission.runtime_abi,
         toolchain_id: admission.toolchain_id,
         target_system: admission.target_system,
+        environment: selected_slot.environment.to_string(),
+        slot: selected_slot.slot,
     };
     println!(
         "{}",
@@ -127,25 +143,30 @@ fn run_m0_admitted(
     options: &RunOptions,
     run_id: String,
 ) -> Result<RunOutput, RuntimeError> {
-    let placement = derive_host_placement(model, &run_id, &options.state_base)?;
+    let selected_slot = select_slot(model, options.selection.slot)?;
+    let placement =
+        derive_host_placement_for_slot(model, &selected_slot, &run_id, &options.state_base)?;
     materialize_run_roots(&placement)?;
-    let identity = StateIdentity::from_model(model, admission);
+    let identity = StateIdentity::from_selected_slot(model, admission, &selected_slot);
     write_slot_marker(&placement, &identity)?;
     let mut registry = Registry::open_or_create(
         placement.registry_path(),
-        &RegistryIdentity::m0(
+        &RegistryIdentity::for_slot(
             &model.project.project_id,
+            selected_slot.environment,
+            selected_slot.slot,
             &model.runtime_abi,
             &model.toolchain_id,
         ),
     )?;
-    let selected_port = first_candidate_port(model)?;
-    let mut service = start_synthetic_service(
+    let selected_port = first_candidate_port(&selected_slot.placement.candidate_ports)?;
+    let mut service = start_synthetic_service_for_slot(
         model,
         admission,
         &placement,
         &mut registry,
         run_id.clone(),
+        &selected_slot,
         selected_port,
     )?;
     if let Err(error) = service.wait_for_probe_ready(model, &mut registry) {
@@ -185,6 +206,7 @@ struct ControlOptions {
     allow_non_store: bool,
     state_base: PathBuf,
     timeout_ms: u64,
+    selection: RuntimeSelection,
 }
 
 struct RunOptions {
@@ -192,6 +214,7 @@ struct RunOptions {
     allow_non_store: bool,
     state_base: PathBuf,
     timeout_ms: u64,
+    selection: RuntimeSelection,
 }
 
 fn run_control(command: ControlCommand, args: &[String]) -> Result<(), RuntimeError> {
@@ -210,11 +233,15 @@ fn run_control_admitted(
     admission: &Admission,
     options: &ControlOptions,
 ) -> Result<(), RuntimeError> {
-    let placement = derive_host_placement(model, "control", &options.state_base)?;
+    let selected_slot = select_slot(model, options.selection.slot)?;
+    let placement =
+        derive_host_placement_for_slot(model, &selected_slot, "control", &options.state_base)?;
     let mut registry = Registry::open_or_create(
         placement.registry_path(),
-        &RegistryIdentity::m0(
+        &RegistryIdentity::for_slot(
             &model.project.project_id,
+            selected_slot.environment,
+            selected_slot.slot,
             &model.runtime_abi,
             &model.toolchain_id,
         ),
@@ -226,7 +253,7 @@ fn run_control_admitted(
             options.timeout_ms,
         )?),
         ControlCommand::Clean => {
-            let identity = StateIdentity::from_model(model, admission);
+            let identity = StateIdentity::from_selected_slot(model, admission, &selected_slot);
             print_json(&nixfied_runtime::control::clean_reconciled_state(
                 &mut registry,
                 &placement.state_base,
@@ -242,6 +269,7 @@ fn parse_run_options(args: &[String]) -> Result<RunOptions, RuntimeError> {
     let mut allow_non_store = false;
     let mut state_base = None;
     let mut timeout_ms = 5000;
+    let mut slot = None;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
@@ -255,6 +283,10 @@ fn parse_run_options(args: &[String]) -> Result<RunOptions, RuntimeError> {
             "--state-base" => {
                 index += 1;
                 state_base = args.get(index).map(PathBuf::from);
+            }
+            "--slot" => {
+                index += 1;
+                slot = Some(parse_slot_arg(args.get(index), "--slot")?);
             }
             "--timeout-ms" => {
                 index += 1;
@@ -292,6 +324,7 @@ fn parse_run_options(args: &[String]) -> Result<RunOptions, RuntimeError> {
         allow_non_store,
         state_base,
         timeout_ms,
+        selection: RuntimeSelection { slot },
     })
 }
 
@@ -303,6 +336,7 @@ fn parse_control_options(
     let mut allow_non_store = false;
     let mut state_base = None;
     let mut timeout_ms = 5000;
+    let mut slot = None;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
@@ -316,6 +350,10 @@ fn parse_control_options(
             "--state-base" => {
                 index += 1;
                 state_base = args.get(index).map(PathBuf::from);
+            }
+            "--slot" => {
+                index += 1;
+                slot = Some(parse_slot_arg(args.get(index), "--slot")?);
             }
             "--timeout-ms" if matches!(command, ControlCommand::Down) => {
                 index += 1;
@@ -353,19 +391,23 @@ fn parse_control_options(
         allow_non_store,
         state_base,
         timeout_ms,
+        selection: RuntimeSelection { slot },
     })
 }
 
-fn first_candidate_port(model: &nixfied_model::Model) -> Result<u16, RuntimeError> {
-    let start = model.placement.candidate_ports.start;
-    let end = model.placement.candidate_ports.end;
-    if start == 0 || start > end {
-        return Err(RuntimeError::new(
+fn parse_slot_arg(value: Option<&String>, flag: &str) -> Result<u32, RuntimeError> {
+    let value = value.ok_or_else(|| {
+        RuntimeError::new(
             nixfied_runtime::ErrorCode::ModelAdmission,
-            format!("invalid M0 candidate port window {start}-{end}"),
-        ));
-    }
-    Ok(start)
+            format!("missing {flag} value"),
+        )
+    })?;
+    value.parse::<u32>().map_err(|error| {
+        RuntimeError::new(
+            nixfied_runtime::ErrorCode::ModelAdmission,
+            format!("invalid {flag} value {value}: {error}"),
+        )
+    })
 }
 
 fn new_run_id() -> String {
