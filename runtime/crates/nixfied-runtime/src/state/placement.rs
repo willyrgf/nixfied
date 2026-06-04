@@ -22,19 +22,19 @@ impl HostPlacement {
 }
 
 pub fn state_base_from_env() -> RuntimeResult<PathBuf> {
-    if let Some(value) = std::env::var_os("NIXFIED_STATE_DIR") {
-        if !value.is_empty() {
-            return Ok(PathBuf::from(value));
-        }
+    if let Some(value) = std::env::var_os("NIXFIED_STATE_DIR")
+        && !value.is_empty()
+    {
+        return Ok(PathBuf::from(value));
     }
     default_state_base()
 }
 
 pub fn default_state_base() -> RuntimeResult<PathBuf> {
-    if let Some(value) = std::env::var_os("XDG_STATE_HOME") {
-        if !value.is_empty() {
-            return Ok(PathBuf::from(value).join("nixfied"));
-        }
+    if let Some(value) = std::env::var_os("XDG_STATE_HOME")
+        && !value.is_empty()
+    {
+        return Ok(PathBuf::from(value).join("nixfied"));
     }
     let home = std::env::var_os("HOME").ok_or_else(|| {
         RuntimeError::new(
@@ -241,13 +241,13 @@ fn reject_existing_symlink_components(owner_root: &Path, path: &Path) -> Runtime
                 ));
             }
         }
-        if let Ok(metadata) = std::fs::symlink_metadata(&current) {
-            if metadata.file_type().is_symlink() {
-                return Err(RuntimeError::new(
-                    ErrorCode::StateUnwritable,
-                    format!("state path traverses symlink {}", current.display()),
-                ));
-            }
+        if let Ok(metadata) = std::fs::symlink_metadata(&current)
+            && metadata.file_type().is_symlink()
+        {
+            return Err(RuntimeError::new(
+                ErrorCode::StateUnwritable,
+                format!("state path traverses symlink {}", current.display()),
+            ));
         }
     }
     Ok(())

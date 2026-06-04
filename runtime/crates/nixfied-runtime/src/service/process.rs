@@ -145,19 +145,16 @@ impl StartedService {
             self.cleanup_after_escape();
             return Err(error);
         }
-        match self.child.try_wait().map_err(|error| {
+        if let Some(status) = self.child.try_wait().map_err(|error| {
             RuntimeError::new(
                 ErrorCode::ProcEscape,
                 format!("failed to inspect foreground service child: {error}"),
             )
         })? {
-            Some(status) => {
-                let message = format!("foreground service exited before stop: {status}");
-                let error = self.record_escape(registry, message, Vec::new());
-                self.cleanup_after_escape();
-                return Err(error);
-            }
-            None => {}
+            let message = format!("foreground service exited before stop: {status}");
+            let error = self.record_escape(registry, message, Vec::new());
+            self.cleanup_after_escape();
+            return Err(error);
         }
         signal_process_group(self.pgid, libc::SIGTERM)?;
         if !wait_for_child_exit(&mut self.child, timeout_ms)? {
@@ -594,10 +591,10 @@ pub(crate) fn process_is_live_with_identity(
     if current_pgid != pgid {
         return Ok(false);
     }
-    if let Some(expected) = platform_start {
-        if platform_start_identity(pid).as_deref() != Some(expected) {
-            return Ok(false);
-        }
+    if let Some(expected) = platform_start
+        && platform_start_identity(pid).as_deref() != Some(expected)
+    {
+        return Ok(false);
     }
     Ok(!process_is_zombie(pid))
 }
@@ -762,10 +759,10 @@ fn collect_process_tree(pid: u32, expected_pgid: i32, state: &Arc<Mutex<ProcessM
     };
     let mut escaped = Vec::new();
     for descendant in &descendants {
-        if let Ok(Some(pgid)) = process_group(*descendant) {
-            if pgid != expected_pgid {
-                escaped.push(monitored_process(*descendant));
-            }
+        if let Ok(Some(pgid)) = process_group(*descendant)
+            && pgid != expected_pgid
+        {
+            escaped.push(monitored_process(*descendant));
         }
     }
     if let Ok(mut state) = state.lock() {
@@ -816,10 +813,10 @@ fn same_process_identity(process: &MonitoredProcess) -> bool {
 fn escaped_descendants(pid: u32, expected_pgid: i32) -> RuntimeResult<Vec<u32>> {
     let mut escaped = Vec::new();
     for descendant in descendant_pids(pid)? {
-        if let Some(pgid) = process_group(descendant)? {
-            if pgid != expected_pgid {
-                escaped.push(descendant);
-            }
+        if let Some(pgid) = process_group(descendant)?
+            && pgid != expected_pgid
+        {
+            escaped.push(descendant);
         }
     }
     Ok(escaped)

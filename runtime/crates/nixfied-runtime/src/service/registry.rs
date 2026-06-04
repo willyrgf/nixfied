@@ -37,6 +37,16 @@ pub struct ProcessRecord<'a> {
     pub service_instance_id: &'a str,
 }
 
+pub struct TaskProcessRecord<'a> {
+    pub run_id: &'a str,
+    pub process_key: &'a str,
+    pub pid: u32,
+    pub pgid: i32,
+    pub start_identity: &'a str,
+    pub command_json: &'a str,
+    pub computed_model_hash: &'a str,
+}
+
 pub fn ensure_service_start_allowed(
     registry: &Registry,
     run_id: &str,
@@ -355,13 +365,7 @@ pub fn ensure_service_instance_probe_ready(
 
 pub fn record_task_started(
     registry: &mut Registry,
-    run_id: &str,
-    process_key: &str,
-    pid: u32,
-    pgid: i32,
-    start_identity: &str,
-    command_json: &str,
-    computed_model_hash: &str,
+    process: &TaskProcessRecord<'_>,
 ) -> RuntimeResult<()> {
     let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
     transaction
@@ -372,17 +376,24 @@ pub fn record_task_started(
               run_id, service_instance_id, status
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, 'running')
             ",
-            params![process_key, pid, pgid, start_identity, command_json, run_id],
+            params![
+                process.process_key,
+                process.pid,
+                process.pgid,
+                process.start_identity,
+                process.command_json,
+                process.run_id
+            ],
         )
         .map_err(sql_error)?;
     insert_event(
         &transaction,
         "task.running",
-        Some(run_id),
+        Some(process.run_id),
         None,
-        Some(process_key),
-        Some(computed_model_hash),
-        command_json,
+        Some(process.process_key),
+        Some(process.computed_model_hash),
+        process.command_json,
     )?;
     transaction.commit().map_err(sql_error)?;
     Ok(())
@@ -567,13 +578,13 @@ fn ensure_no_active_port_transaction(
         )
         .optional()
         .map_err(sql_error)?;
-    if let Some((endpoint_key, status)) = existing {
-        if matches!(status.as_str(), "reserved" | "binding" | "bound" | "active") {
-            return Err(RuntimeError::new(
-                ErrorCode::PortConflict,
-                format!("endpoint {endpoint_key} already has active port {address}:{port}"),
-            ));
-        }
+    if let Some((endpoint_key, status)) = existing
+        && matches!(status.as_str(), "reserved" | "binding" | "bound" | "active")
+    {
+        return Err(RuntimeError::new(
+            ErrorCode::PortConflict,
+            format!("endpoint {endpoint_key} already has active port {address}:{port}"),
+        ));
     }
     Ok(())
 }
