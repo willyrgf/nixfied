@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::admission::Admission;
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
+use crate::slot::SelectedSlot;
 use crate::state::placement::HostPlacement;
 
 pub const MARKER_FILE_NAME: &str = ".nixfied-state.json";
@@ -27,11 +28,28 @@ pub struct StateIdentity {
 
 impl StateIdentity {
     pub fn from_model(model: &Model, admission: &Admission) -> Self {
+        Self::for_slot(model, admission, "dev", 0)
+    }
+
+    pub fn from_selected_slot(
+        model: &Model,
+        admission: &Admission,
+        selected_slot: &SelectedSlot<'_>,
+    ) -> Self {
+        Self::for_slot(
+            model,
+            admission,
+            selected_slot.environment,
+            selected_slot.slot,
+        )
+    }
+
+    pub fn for_slot(model: &Model, admission: &Admission, environment: &str, slot: u32) -> Self {
         Self {
             marker_identity: model.state.marker_identity.clone(),
             project_id: model.project.project_id.clone(),
-            environment: "dev".to_string(),
-            slot: 0,
+            environment: environment.to_string(),
+            slot,
             state_epoch: model.state.state_epoch.clone(),
             cleanup_policy: model.state.cleanup_policy.clone(),
             model_path: admission.model_path.clone(),

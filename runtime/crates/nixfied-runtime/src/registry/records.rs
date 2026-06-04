@@ -8,17 +8,27 @@ pub struct RegistryIdentity {
 }
 
 impl RegistryIdentity {
-    pub fn m0(
+    pub fn for_slot(
         project_id: impl Into<String>,
+        environment: impl Into<String>,
+        slot: u32,
         runtime_abi: impl Into<String>,
         toolchain_id: impl Into<String>,
     ) -> Self {
         Self {
             project_id: project_id.into(),
-            environment: "dev".to_string(),
-            slot: 0,
+            environment: environment.into(),
+            slot: i64::from(slot),
             runtime_abi: runtime_abi.into(),
             toolchain_id: toolchain_id.into(),
         }
+    }
+
+    pub fn m0(
+        project_id: impl Into<String>,
+        runtime_abi: impl Into<String>,
+        toolchain_id: impl Into<String>,
+    ) -> Self {
+        Self::for_slot(project_id, "dev", 0, runtime_abi, toolchain_id)
     }
 }

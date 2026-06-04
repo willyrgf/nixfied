@@ -70,6 +70,40 @@ fn rejects_incompatible_registry_identity() {
 }
 
 #[test]
+fn records_and_checks_selected_slot_identity() {
+    let tmp = TempDir::new();
+    let path = tmp.path.join("registry.sqlite3");
+    let identity = RegistryIdentity::for_slot(
+        "m0-minimal",
+        "dev",
+        1,
+        "nixfied-runtime-abi:m1:1",
+        "nixfied-toolchain:m1:1",
+    );
+    let registry = Registry::open_or_create(&path, &identity).expect("registry should open");
+    let slot: i64 = registry
+        .connection()
+        .query_row("SELECT slot FROM registry_meta WHERE id = 1", [], |row| {
+            row.get(0)
+        })
+        .expect("slot should be readable");
+    assert_eq!(slot, 1);
+    drop(registry);
+
+    let wrong_slot = RegistryIdentity::m0(
+        "m0-minimal",
+        "nixfied-runtime-abi:m1:1",
+        "nixfied-toolchain:m1:1",
+    );
+    let error = match Registry::open_or_create(&path, &wrong_slot) {
+        Ok(_) => panic!("slot mismatch should fail"),
+        Err(error) => error,
+    };
+
+    assert_eq!(error.code, ErrorCode::RegistryCorrupt);
+}
+
+#[test]
 fn rejects_incompatible_user_version() {
     let tmp = TempDir::new();
     let path = tmp.path.join("registry.sqlite3");

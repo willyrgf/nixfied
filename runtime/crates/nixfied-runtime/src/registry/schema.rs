@@ -38,8 +38,8 @@ pub fn initialize(conn: &mut Connection, identity: &RegistryIdentity) -> Runtime
               id INTEGER PRIMARY KEY CHECK (id = 1),
               schema_version INTEGER NOT NULL CHECK (schema_version = 1),
               project_id TEXT NOT NULL,
-              environment TEXT NOT NULL CHECK (environment = 'dev'),
-              slot INTEGER NOT NULL CHECK (slot = 0),
+              environment TEXT NOT NULL,
+              slot INTEGER NOT NULL CHECK (slot >= 0),
               runtime_abi TEXT NOT NULL,
               toolchain_id TEXT NOT NULL,
               created_at TEXT NOT NULL
@@ -201,7 +201,7 @@ fn verify_identity(conn: &Connection, identity: &RegistryIdentity) -> RuntimeRes
     {
         return Err(RuntimeError::new(
             ErrorCode::RegistryCorrupt,
-            "registry metadata does not match the M0 identity",
+            "registry metadata does not match the selected identity",
         ));
     }
     Ok(())

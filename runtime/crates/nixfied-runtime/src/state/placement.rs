@@ -3,6 +3,7 @@ use std::path::{Component, Path, PathBuf};
 use nixfied_model::Model;
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
+use crate::slot::SelectedSlot;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostPlacement {
@@ -55,11 +56,21 @@ pub fn derive_host_placement(
     run_id: &str,
     state_base: impl AsRef<Path>,
 ) -> RuntimeResult<HostPlacement> {
+    let selected_slot = crate::slot::select_slot(model, None)?;
+    derive_host_placement_for_slot(model, &selected_slot, run_id, state_base)
+}
+
+pub fn derive_host_placement_for_slot(
+    model: &Model,
+    selected_slot: &SelectedSlot<'_>,
+    run_id: &str,
+    state_base: impl AsRef<Path>,
+) -> RuntimeResult<HostPlacement> {
     validate_m0_placement_templates(model)?;
     let vars = TemplateVars {
         project_id: &model.project.project_id,
-        environment: "dev",
-        slot: "0",
+        environment: selected_slot.environment,
+        slot: &selected_slot.slot.to_string(),
         run_id,
     };
     let state_base = state_base.as_ref().to_path_buf();
@@ -70,28 +81,28 @@ pub fn derive_host_placement(
         ));
     }
     let state_root = state_base.join(relative_template_path(
-        "placement.stateRootTemplate",
-        &model.placement.state_root_template,
+        "placement.slotPlacements.stateRootTemplate",
+        &selected_slot.placement.state_root_template,
         &vars,
     )?);
     let registry_dir = state_root.join(relative_template_path(
-        "placement.registryDir",
-        &model.placement.registry_dir,
+        "placement.slotPlacements.registryDir",
+        &selected_slot.placement.registry_dir,
         &vars,
     )?);
     let run_dir = state_root.join(relative_template_path(
-        "placement.runDirTemplate",
-        &model.placement.run_dir_template,
+        "placement.slotPlacements.runDirTemplate",
+        &selected_slot.placement.run_dir_template,
         &vars,
     )?);
     let logs_dir = state_root.join(relative_template_path(
-        "placement.logsDirTemplate",
-        &model.placement.logs_dir_template,
+        "placement.slotPlacements.logsDirTemplate",
+        &selected_slot.placement.logs_dir_template,
         &vars,
     )?);
     let artifacts_dir = state_root.join(relative_template_path(
-        "placement.artifactsDirTemplate",
-        &model.placement.artifacts_dir_template,
+        "placement.slotPlacements.artifactsDirTemplate",
+        &selected_slot.placement.artifacts_dir_template,
         &vars,
     )?);
     let summary_path = run_dir.join("summary.json");
