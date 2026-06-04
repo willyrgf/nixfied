@@ -17,6 +17,7 @@
         "LifecycleOpSpec"
         "ServiceSpec"
         "TaskSpec"
+        "SlotPlacement"
       ];
     };
   };

@@ -74,6 +74,20 @@ fn valid_model_json() -> Value {
             "candidatePorts": {
                 "start": 38080,
                 "end": 38090
+            },
+            "slotPlacements": {
+                "0": {
+                    "slot": 0,
+                    "stateRootTemplate": "${projectId}/${environment}/${slot}",
+                    "registryDir": "registry",
+                    "runDirTemplate": "runs/${runId}",
+                    "logsDirTemplate": "runs/${runId}/logs",
+                    "artifactsDirTemplate": "runs/${runId}/artifacts",
+                    "candidatePorts": {
+                        "start": 38080,
+                        "end": 38090
+                    }
+                }
             }
         },
         "state": {
@@ -250,6 +264,25 @@ fn parse_valid_model() -> Model {
     serde_json::from_value(valid_model_json()).expect("valid model JSON should deserialize")
 }
 
+fn add_slot_one(model: &mut Model, start: u16, end: u16) {
+    model.slot_policy.max = 1;
+    model.runtime_constraints.slot_max = 1;
+    model.capabilities.slots = vec![0, 1];
+    let mut placement = model
+        .placement
+        .slot_placements
+        .get("0")
+        .expect("fixture has slot 0 placement")
+        .clone();
+    placement.slot = 1;
+    placement.candidate_ports.start = start;
+    placement.candidate_ports.end = end;
+    model
+        .placement
+        .slot_placements
+        .insert("1".to_string(), placement);
+}
+
 #[test]
 fn parses_and_validates_m0_contract() {
     parse_valid_model()
@@ -300,6 +333,103 @@ fn capabilities_surfaces_must_match_model_surface_names() {
         }
         other => panic!("unexpected validation error: {other:?}"),
     }
+}
+
+#[test]
+fn validates_explicit_slot_placement_range() {
+    let mut model = parse_valid_model();
+    add_slot_one(&mut model, 38180, 38190);
+
+    model
+        .validate_m0()
+        .expect("explicit slot placements should cover the slot range");
+}
+
+#[test]
+fn capabilities_slots_must_match_slot_policy_range() {
+    let mut model = parse_valid_model();
+    add_slot_one(&mut model, 38180, 38190);
+    model.capabilities.slots = vec![0];
+
+    assert_eq!(
+        model
+            .validate_m0()
+            .expect_err("capabilities slots must mirror slot policy"),
+        ValidationError::UnsupportedValue {
+            field: "capabilities.slots",
+            expected: "slotPolicy range",
+            actual: "[0]".to_string(),
+        }
+    );
+}
+
+#[test]
+fn slot_placements_must_cover_slot_policy_range() {
+    let mut model = parse_valid_model();
+    model.slot_policy.max = 1;
+    model.runtime_constraints.slot_max = 1;
+    model.capabilities.slots = vec![0, 1];
+
+    let error = model
+        .validate_m0()
+        .expect_err("slot placement for slot 1 is required");
+    match error {
+        ValidationError::UnsupportedValue {
+            field,
+            expected,
+            actual,
+        } => {
+            assert_eq!(field, "placement.slotPlacements");
+            assert_eq!(expected, "exact slotPolicy range");
+            assert_eq!(actual, "{\"0\"}");
+        }
+        other => panic!("unexpected validation error: {other:?}"),
+    }
+}
+
+#[test]
+fn slot_candidate_windows_must_not_overlap() {
+    let mut model = parse_valid_model();
+    add_slot_one(&mut model, 38085, 38095);
+
+    let error = model
+        .validate_m0()
+        .expect_err("slot candidate windows must be disjoint");
+    match error {
+        ValidationError::UnsupportedValue {
+            field,
+            expected,
+            actual,
+        } => {
+            assert_eq!(field, "placement.slotPlacements.candidatePorts");
+            assert_eq!(expected, "non-overlapping windows");
+            assert!(actual.contains("38085"));
+        }
+        other => panic!("unexpected validation error: {other:?}"),
+    }
+}
+
+#[test]
+fn slot_candidate_windows_must_not_use_zero_port() {
+    let mut model = parse_valid_model();
+    model
+        .placement
+        .slot_placements
+        .get_mut("0")
+        .expect("fixture has slot 0 placement")
+        .candidate_ports
+        .start = 0;
+
+    assert_eq!(
+        model
+            .validate_m0()
+            .expect_err("slot port 0 must be rejected"),
+        ValidationError::UnsupportedValue {
+            field: "placement.slotPlacements.candidatePorts",
+            expected: "ports in 1..65535 with start <= end",
+            actual: "start=0, end=38090".to_string(),
+        }
+    );
 }
 
 #[test]

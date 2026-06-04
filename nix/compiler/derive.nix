@@ -36,16 +36,45 @@ let
   closure = import ../lib/closures.nix {
     inherit pkgs target;
   };
-  portWindow = config.nixfied.services.synthetic.portWindow;
+  slotPolicy = config.nixfied.slotPolicy;
+  slots = lib.range slotPolicy.min slotPolicy.max;
+  portPolicy = config.nixfied.placement.ports;
+  slotWindow =
+    slot:
+    let
+      start = portPolicy.base + (slot * portPolicy.slotStride);
+    in
+    {
+      inherit start;
+      end = start + portPolicy.windowSize - 1;
+    };
+  slotPlacement =
+    slot:
+    {
+      inherit slot;
+      stateRootTemplate = "\${projectId}/\${environment}/\${slot}";
+      registryDir = "registry";
+      runDirTemplate = "runs/\${runId}";
+      logsDirTemplate = "runs/\${runId}/logs";
+      artifactsDirTemplate = "runs/\${runId}/artifacts";
+      candidatePorts = slotWindow slot;
+    };
+  slotPlacements = builtins.listToAttrs (
+    map (slot: {
+      name = builtins.toString slot;
+      value = slotPlacement slot;
+    }) slots
+  );
+  defaultPortWindow = slotWindow slotPolicy.default;
   serviceIdentityInputs = {
     projectId = config.nixfied.project.projectId;
     environment = "dev";
-    slot = 0;
+    slot = slotPolicy.default;
     service = "synthetic";
     endpoint = {
       protocol = "tcp";
       host = "127.0.0.1";
-      inherit (portWindow) start end;
+      inherit (defaultPortWindow) start end;
     };
     state = {
       inherit (config.nixfied.state) stateEpoch cleanupPolicy persistence;
@@ -122,10 +151,10 @@ in
         inherit (config.nixfied.environments.dev) services tasks;
       };
     };
-    inherit (config.nixfied) slotPolicy;
+    inherit slotPolicy;
     capabilities = {
       environments = [ "dev" ];
-      slots = [ 0 ];
+      inherit slots;
       services = [ "synthetic" ];
       tasks = [ "smoke" ];
       workflows = [ ];
@@ -133,9 +162,9 @@ in
     };
     runtimeConstraints = {
       allowedEnvironments = [ "dev" ];
-      slotMin = 0;
-      slotDefault = 0;
-      slotMax = 0;
+      slotMin = slotPolicy.min;
+      slotDefault = slotPolicy.default;
+      slotMax = slotPolicy.max;
       allowPortOverride = false;
       collisionPolicy = "fail";
     };
@@ -147,8 +176,9 @@ in
       logsDirTemplate = "runs/\${runId}/logs";
       artifactsDirTemplate = "runs/\${runId}/artifacts";
       candidatePorts = {
-        inherit (portWindow) start end;
+        inherit (defaultPortWindow) start end;
       };
+      inherit slotPlacements;
     };
     state = {
       inherit (config.nixfied.state)
@@ -221,7 +251,7 @@ in
             host = "127.0.0.1";
             port = {
               kind = "candidate-window";
-              inherit (portWindow) start end;
+              inherit (defaultPortWindow) start end;
             };
             ownershipVerification = "required";
             socketActivation = "disabled";

@@ -58,8 +58,8 @@ fn rejects_incompatible_registry_identity() {
     Registry::open_or_create(&path, &identity).expect("registry should open");
     let bad = RegistryIdentity::m0(
         "other-project",
-        "nixfied-runtime-abi:m0:2",
-        "nixfied-toolchain:m0:2",
+        "nixfied-runtime-abi:m1:1",
+        "nixfied-toolchain:m1:1",
     );
     let error = match Registry::open_or_create(&path, &bad) {
         Ok(_) => panic!("identity mismatch should fail"),
@@ -139,8 +139,8 @@ fn rejects_nonempty_unversioned_registry() {
 fn identity() -> RegistryIdentity {
     RegistryIdentity::m0(
         "m0-minimal",
-        "nixfied-runtime-abi:m0:2",
-        "nixfied-toolchain:m0:2",
+        "nixfied-runtime-abi:m1:1",
+        "nixfied-toolchain:m1:1",
     )
 }
 

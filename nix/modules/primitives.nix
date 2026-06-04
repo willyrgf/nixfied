@@ -6,20 +6,6 @@ let
 in
 {
   options.nixfied.services.synthetic = {
-    portWindow = {
-      start = mkOption {
-        type = port;
-        default = 38080;
-        description = "Start of the M0 synthetic service candidate port window.";
-      };
-
-      end = mkOption {
-        type = port;
-        default = 38090;
-        description = "End of the M0 synthetic service candidate port window.";
-      };
-    };
-
     readiness = {
       timeoutMs = mkOption {
         type = positiveInt;
@@ -44,6 +30,26 @@ in
       type = positiveInt;
       default = 5000;
       description = "M0 synthetic service stop timeout.";
+    };
+  };
+
+  options.nixfied.placement.ports = {
+    base = mkOption {
+      type = port;
+      default = 38080;
+      description = "Base TCP port for the first slot's candidate window.";
+    };
+
+    windowSize = mkOption {
+      type = positiveInt;
+      default = 11;
+      description = "Number of candidate ports assigned to each slot.";
+    };
+
+    slotStride = mkOption {
+      type = positiveInt;
+      default = 100;
+      description = "Port offset between adjacent slot candidate windows.";
     };
   };
 

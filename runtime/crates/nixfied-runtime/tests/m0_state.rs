@@ -278,8 +278,8 @@ fn clean_reconciles_stale_refs_before_marker_owned_delete() {
               toolchain_id, generator_json, target_json, source_json, summary_path
             ) VALUES (
               'run-stale', 'service-starting', '/nix/store/test-model/model.json',
-              'computed-hash', 'nixfied-runtime-abi:m0:2',
-              'nixfied-toolchain:m0:2', '{}', '{}', '[]', NULL
+              'computed-hash', 'nixfied-runtime-abi:m1:1',
+              'nixfied-toolchain:m1:1', '{}', '{}', '[]', NULL
             );
             INSERT INTO services (
               service_instance_id, service_name, service_address_hash,
@@ -427,8 +427,8 @@ fn model() -> Model {
 fn fixture_model() -> Value {
     json!({
         "modelVersion": 1,
-        "toolchainId": "nixfied-toolchain:m0:2",
-        "runtimeAbi": "nixfied-runtime-abi:m0:2",
+        "toolchainId": "nixfied-toolchain:m1:1",
+        "runtimeAbi": "nixfied-runtime-abi:m1:1",
         "generator": {
             "name": "nixfied",
             "version": "m0",
@@ -497,6 +497,20 @@ fn fixture_model() -> Value {
             "candidatePorts": {
                 "start": 38080,
                 "end": 38090
+            },
+            "slotPlacements": {
+                "0": {
+                    "slot": 0,
+                    "stateRootTemplate": "${projectId}/${environment}/${slot}",
+                    "registryDir": "registry",
+                    "runDirTemplate": "runs/${runId}",
+                    "logsDirTemplate": "runs/${runId}/logs",
+                    "artifactsDirTemplate": "runs/${runId}/artifacts",
+                    "candidatePorts": {
+                        "start": 38080,
+                        "end": 38090
+                    }
+                }
             }
         },
         "state": {

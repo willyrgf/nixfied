@@ -28,9 +28,10 @@ impl ValidateM0 for Model {
         validate_m0_discoverability(self)?;
         validate_m0_runtime_constraints(self)?;
         validate_m0_state_policy(self)?;
+        validate_no_host_absolute_placement(&self.placement)?;
+        validate_slot_placements(self)?;
         validate_m0_exec_and_closure(self)?;
         validate_m0_service_and_task(self)?;
-        validate_no_host_absolute_placement(&self.placement)?;
         validate_references(self)?;
         Ok(())
     }
@@ -114,16 +115,7 @@ fn validate_m0_shape(model: &Model) -> Result<(), ValidationError> {
     let env = &model.environments["dev"];
     expect_string("environments.dev.environmentId", "dev", &env.environment_id)?;
 
-    if model.slot_policy.min != 0 || model.slot_policy.default != 0 || model.slot_policy.max != 0 {
-        return Err(ValidationError::UnsupportedValue {
-            field: "slotPolicy",
-            expected: "min=0, default=0, max=0",
-            actual: format!(
-                "min={}, default={}, max={}",
-                model.slot_policy.min, model.slot_policy.default, model.slot_policy.max
-            ),
-        });
-    }
+    validate_slot_policy(&model.slot_policy)?;
 
     if model.services.len() != 1 || !model.services.contains_key("synthetic") {
         return Err(ValidationError::UnsupportedValue {
@@ -178,10 +170,11 @@ fn validate_m0_discoverability(model: &Model) -> Result<(), ValidationError> {
         &model.capabilities.services,
     )?;
     expect_vec("capabilities.tasks", &["smoke"], &model.capabilities.tasks)?;
-    if model.capabilities.slots != [0] {
+    let slots = expected_slots(&model.slot_policy)?;
+    if model.capabilities.slots != slots {
         return Err(ValidationError::UnsupportedValue {
             field: "capabilities.slots",
-            expected: "[0]",
+            expected: "slotPolicy range",
             actual: format!("{:?}", model.capabilities.slots),
         });
     }
@@ -243,13 +236,13 @@ fn validate_m0_runtime_constraints(model: &Model) -> Result<(), ValidationError>
         &["dev"],
         &model.runtime_constraints.allowed_environments,
     )?;
-    if model.runtime_constraints.slot_min != 0
-        || model.runtime_constraints.slot_default != 0
-        || model.runtime_constraints.slot_max != 0
+    if model.runtime_constraints.slot_min != model.slot_policy.min
+        || model.runtime_constraints.slot_default != model.slot_policy.default
+        || model.runtime_constraints.slot_max != model.slot_policy.max
     {
         return Err(ValidationError::UnsupportedValue {
             field: "runtimeConstraints.slot",
-            expected: "slotMin=0, slotDefault=0, slotMax=0",
+            expected: "slotPolicy min/default/max",
             actual: format!(
                 "slotMin={}, slotDefault={}, slotMax={}",
                 model.runtime_constraints.slot_min,
@@ -281,6 +274,159 @@ fn validate_m0_runtime_constraints(model: &Model) -> Result<(), ValidationError>
                 "processGroup={}, tcpPortOwnership={}, sqliteWal={}",
                 caps.process_group, caps.tcp_port_ownership, caps.sqlite_wal
             ),
+        });
+    }
+    Ok(())
+}
+
+fn validate_slot_policy(slot_policy: &SlotPolicy) -> Result<(), ValidationError> {
+    if slot_policy.max < slot_policy.min {
+        return Err(ValidationError::UnsupportedValue {
+            field: "slotPolicy",
+            expected: "max >= min",
+            actual: format!(
+                "min={}, default={}, max={}",
+                slot_policy.min, slot_policy.default, slot_policy.max
+            ),
+        });
+    }
+    if slot_policy.default < slot_policy.min || slot_policy.default > slot_policy.max {
+        return Err(ValidationError::UnsupportedValue {
+            field: "slotPolicy.default",
+            expected: "within slotPolicy range",
+            actual: slot_policy.default.to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn expected_slots(slot_policy: &SlotPolicy) -> Result<Vec<u32>, ValidationError> {
+    validate_slot_policy(slot_policy)?;
+    Ok((slot_policy.min..=slot_policy.max).collect())
+}
+
+fn validate_slot_placements(model: &Model) -> Result<(), ValidationError> {
+    validate_candidate_port_window("placement.candidatePorts", &model.placement.candidate_ports)?;
+    let slots = expected_slots(&model.slot_policy)?;
+    let expected_keys = slots.iter().map(u32::to_string).collect::<BTreeSet<_>>();
+    let actual_keys = model
+        .placement
+        .slot_placements
+        .keys()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if actual_keys != expected_keys {
+        return Err(ValidationError::UnsupportedValue {
+            field: "placement.slotPlacements",
+            expected: "exact slotPolicy range",
+            actual: format!("{:?}", actual_keys),
+        });
+    }
+
+    let mut windows = Vec::new();
+    for slot in slots {
+        let key = slot.to_string();
+        let placement = model.placement.slot_placements.get(&key).ok_or_else(|| {
+            ValidationError::UnsupportedValue {
+                field: "placement.slotPlacements",
+                expected: "slotPolicy range",
+                actual: format!("missing slot {slot}"),
+            }
+        })?;
+        if placement.slot != slot {
+            return Err(ValidationError::UnsupportedValue {
+                field: "placement.slotPlacements.slot",
+                expected: "map key slot",
+                actual: placement.slot.to_string(),
+            });
+        }
+        for (field, expected, actual) in [
+            (
+                "placement.slotPlacements.stateRootTemplate",
+                model.placement.state_root_template.as_str(),
+                placement.state_root_template.as_str(),
+            ),
+            (
+                "placement.slotPlacements.registryDir",
+                model.placement.registry_dir.as_str(),
+                placement.registry_dir.as_str(),
+            ),
+            (
+                "placement.slotPlacements.runDirTemplate",
+                model.placement.run_dir_template.as_str(),
+                placement.run_dir_template.as_str(),
+            ),
+            (
+                "placement.slotPlacements.logsDirTemplate",
+                model.placement.logs_dir_template.as_str(),
+                placement.logs_dir_template.as_str(),
+            ),
+            (
+                "placement.slotPlacements.artifactsDirTemplate",
+                model.placement.artifacts_dir_template.as_str(),
+                placement.artifacts_dir_template.as_str(),
+            ),
+        ] {
+            if actual != expected {
+                return Err(ValidationError::UnsupportedValue {
+                    field,
+                    expected: "common placement template",
+                    actual: actual.to_string(),
+                });
+            }
+        }
+        validate_candidate_port_window(
+            "placement.slotPlacements.candidatePorts",
+            &placement.candidate_ports,
+        )?;
+        windows.push((
+            placement.candidate_ports.start,
+            placement.candidate_ports.end,
+        ));
+    }
+
+    let default_key = model.slot_policy.default.to_string();
+    let default = model
+        .placement
+        .slot_placements
+        .get(&default_key)
+        .ok_or_else(|| ValidationError::UnsupportedValue {
+            field: "placement.slotPlacements",
+            expected: "default slot placement",
+            actual: format!("missing slot {}", model.slot_policy.default),
+        })?;
+    if model.placement.candidate_ports != default.candidate_ports {
+        return Err(ValidationError::UnsupportedValue {
+            field: "placement.candidatePorts",
+            expected: "default slot candidatePorts",
+            actual: format!("{:?}", model.placement.candidate_ports),
+        });
+    }
+
+    windows.sort_unstable_by_key(|(start, _)| *start);
+    for pair in windows.windows(2) {
+        let (_, previous_end) = pair[0];
+        let (next_start, _) = pair[1];
+        if next_start <= previous_end {
+            return Err(ValidationError::UnsupportedValue {
+                field: "placement.slotPlacements.candidatePorts",
+                expected: "non-overlapping windows",
+                actual: format!("{windows:?}"),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn validate_candidate_port_window(
+    field: &'static str,
+    window: &CandidatePortWindow,
+) -> Result<(), ValidationError> {
+    if window.start == 0 || window.start > window.end {
+        return Err(ValidationError::UnsupportedValue {
+            field,
+            expected: "ports in 1..65535 with start <= end",
+            actual: format!("start={}, end={}", window.start, window.end),
         });
     }
     Ok(())
@@ -657,6 +803,37 @@ fn validate_no_host_absolute_placement(placement: &Placement) -> Result<(), Vali
                 field,
                 value: value.clone(),
             });
+        }
+    }
+    for slot_placement in placement.slot_placements.values() {
+        for (field, value) in [
+            (
+                "placement.slotPlacements.stateRootTemplate",
+                &slot_placement.state_root_template,
+            ),
+            (
+                "placement.slotPlacements.registryDir",
+                &slot_placement.registry_dir,
+            ),
+            (
+                "placement.slotPlacements.runDirTemplate",
+                &slot_placement.run_dir_template,
+            ),
+            (
+                "placement.slotPlacements.logsDirTemplate",
+                &slot_placement.logs_dir_template,
+            ),
+            (
+                "placement.slotPlacements.artifactsDirTemplate",
+                &slot_placement.artifacts_dir_template,
+            ),
+        ] {
+            if value.starts_with('/') {
+                return Err(ValidationError::HostAbsolutePath {
+                    field,
+                    value: value.clone(),
+                });
+            }
         }
     }
     Ok(())
