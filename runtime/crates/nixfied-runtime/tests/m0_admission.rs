@@ -61,7 +61,7 @@ fn fixture_model() -> Value {
             "services": ["synthetic"],
             "tasks": ["smoke"],
             "workflows": [],
-            "surfaces": ["model"]
+            "surfaces": m0_surface_names()
         },
         "runtimeConstraints": {
             "allowedEnvironments": ["dev"],
@@ -71,15 +71,7 @@ fn fixture_model() -> Value {
             "allowPortOverride": false,
             "collisionPolicy": "fail"
         },
-        "surfaces": [{
-            "name": "model",
-            "aliases": [],
-            "inputSchema": {},
-            "outputSchema": {},
-            "exitClasses": ["ok", "error"],
-            "evaluationPermission": "never",
-            "maturity": "m0"
-        }],
+        "surfaces": m0_surfaces(),
         "placement": {
             "stateRootTemplate": "${projectId}/${environment}/${slot}",
             "registryDir": "registry",
@@ -228,6 +220,27 @@ fn fixture_model() -> Value {
             "summary": "Runtime admission fixture."
         }
     })
+}
+
+fn m0_surface_names() -> Vec<&'static str> {
+    vec!["model", "check", "run", "ps", "down", "clean"]
+}
+
+fn m0_surfaces() -> Vec<Value> {
+    m0_surface_names()
+        .into_iter()
+        .map(|name| {
+            json!({
+                "name": name,
+                "aliases": [],
+                "inputSchema": {},
+                "outputSchema": {},
+                "exitClasses": ["ok", "error"],
+                "evaluationPermission": "never",
+                "maturity": "m0"
+            })
+        })
+        .collect()
 }
 
 #[test]
