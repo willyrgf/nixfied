@@ -6,7 +6,7 @@ RFC-shaped, and explicit.
 ## Authority
 
 - Read `RFC_v2.md` before architectural work. It is the source of truth.
-- `RFC_v2_implementation_plan.md` records the selected Milestone 0 execution
+- `RFC_v2_implementation_plan_M0.md` records the selected Milestone 0 execution
   plan. M0 is complete; do not silently widen it.
 - If the RFC and existing code disagree, stop and make the disagreement clear
   before changing architecture.
