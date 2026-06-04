@@ -11,8 +11,8 @@ use serde::Serialize;
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::registry::Registry;
 use crate::service::process::{
-    SelectedEndpoint, StartedService, platform_start_identity, process_group, signal_process_group,
-    wait_for_child_exit,
+    SelectedEndpoint, StartedService, platform_start_identity, process_group, resolve_exec_cwd,
+    signal_process_group, wait_for_child_exit,
 };
 use crate::service::registry::{
     ensure_service_instance_probe_ready, mark_task_finished, record_task_started,
@@ -59,16 +59,17 @@ pub fn run_dependent_task(
         .logs_dir
         .join(format!("task.{task_id}.stderr.log"));
     let args = task_args(exec, task, &service.selected_endpoint);
+    let command_cwd = resolve_exec_cwd(&service.source_root, &exec.cwd)?;
     let command_json = serde_json::to_string(&TaskCommandRecord {
         task_id,
         executable: exec.executable.as_str(),
         args: &args,
-        cwd: exec.cwd.as_str(),
+        cwd: command_cwd.as_path(),
         stdout_path: stdout_path.as_path(),
         stderr_path: stderr_path.as_path(),
     })
     .map_err(|error| RuntimeError::new(ErrorCode::ModelAdmission, error.to_string()))?;
-    let mut child = spawn_task(exec, &args, &stdout_path, &stderr_path)?;
+    let mut child = spawn_task(exec, &args, &command_cwd, &stdout_path, &stderr_path)?;
     let pid = child.id();
     let pgid = process_group(pid)?
         .ok_or_else(|| RuntimeError::new(ErrorCode::ProcEscape, "task process disappeared"))?;
@@ -157,13 +158,14 @@ fn ensure_task_dependencies(
 fn spawn_task(
     exec: &ExecSpec,
     args: &[String],
+    command_cwd: &Path,
     stdout_path: &Path,
     stderr_path: &Path,
 ) -> RuntimeResult<Child> {
     let mut command = Command::new(&exec.executable);
     command
         .args(args)
-        .current_dir(&exec.cwd)
+        .current_dir(command_cwd)
         .envs(&exec.env)
         .stdin(Stdio::null())
         .stdout(Stdio::from(create_log_file(stdout_path)?))
@@ -271,7 +273,7 @@ struct TaskCommandRecord<'a> {
     task_id: &'a str,
     executable: &'a str,
     args: &'a [String],
-    cwd: &'a str,
+    cwd: &'a Path,
     stdout_path: &'a Path,
     stderr_path: &'a Path,
 }

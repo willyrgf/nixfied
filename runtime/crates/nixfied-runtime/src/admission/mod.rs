@@ -44,6 +44,7 @@ pub struct Admission {
     pub runtime_abi: String,
     pub toolchain_id: String,
     pub target_system: String,
+    pub source: source::AdmittedSource,
 }
 
 impl Admission {
@@ -51,14 +52,14 @@ impl Admission {
         origin::check_store_origin(loaded, context)?;
         abi::check_abi(&loaded.model, loaded)?;
         target::check_target(&loaded.model, loaded, context)?;
-        source::check_source(&loaded.model, loaded)?;
+        let source = source::check_source(&loaded.model, loaded)?;
         closures::check_closures(&loaded.model, loaded, context)?;
         secrets::check_secrets(&loaded.model, loaded)?;
-        Ok(from_loaded(&loaded.model, loaded))
+        Ok(from_loaded(&loaded.model, loaded, source))
     }
 }
 
-fn from_loaded(model: &Model, loaded: &LoadedModel) -> Admission {
+fn from_loaded(model: &Model, loaded: &LoadedModel, source: source::AdmittedSource) -> Admission {
     Admission {
         model_path: loaded.path.clone(),
         computed_model_hash: loaded.computed_model_hash.clone(),
@@ -67,6 +68,7 @@ fn from_loaded(model: &Model, loaded: &LoadedModel) -> Admission {
         runtime_abi: model.runtime_abi.clone(),
         toolchain_id: model.toolchain_id.clone(),
         target_system: model.target.system.clone(),
+        source,
     }
 }
 

@@ -319,6 +319,64 @@ fn unstable_escape_hatch_admits_non_store_model() {
 }
 
 #[test]
+fn source_admission_records_invocation_root() {
+    let (_tmp, model_path, closure_root) = write_fixture_model(fixture_model(), true);
+    let loaded = load_model(&model_path).expect("fixture should load");
+    let context = AdmissionContext {
+        policy: StoreOriginPolicy::AllowNonStoreForTests,
+        store_root: closure_root.parent().unwrap().to_path_buf(),
+        host_system: host_system(),
+    };
+    let admission = Admission::check(&loaded, &context).expect("source should admit");
+    let invocation_root = std::env::current_dir()
+        .expect("current dir should exist")
+        .canonicalize()
+        .expect("current dir should canonicalize");
+
+    assert_eq!(admission.source.codebase_id, "main");
+    assert_eq!(admission.source.logical_root, ".");
+    assert_eq!(admission.source.observed_root, invocation_root);
+}
+
+#[test]
+fn dirty_policy_reject_fails_closed() {
+    let mut model = fixture_model();
+    model["codebases"][0]["sourcePolicy"]["dirtyPolicy"] = json!("reject");
+    let (_tmp, model_path, closure_root) = write_fixture_model(model, true);
+    let loaded = load_model(&model_path).expect("fixture should load");
+    let context = AdmissionContext {
+        policy: StoreOriginPolicy::AllowNonStoreForTests,
+        store_root: closure_root.parent().unwrap().to_path_buf(),
+        host_system: host_system(),
+    };
+    let error =
+        Admission::check(&loaded, &context).expect_err("dirtyPolicy=reject cannot be proven in M0");
+
+    assert_eq!(error.code, ErrorCode::SourceMismatch);
+    assert_eq!(
+        error.computed_model_hash.as_deref(),
+        Some(loaded.computed_model_hash.as_str())
+    );
+}
+
+#[test]
+fn logical_root_escape_is_rejected() {
+    let mut model = fixture_model();
+    model["codebases"][0]["logicalRoot"] = json!("..");
+    let (_tmp, model_path, closure_root) = write_fixture_model(model, true);
+    let loaded = load_model(&model_path).expect("fixture should load");
+    let context = AdmissionContext {
+        policy: StoreOriginPolicy::AllowNonStoreForTests,
+        store_root: closure_root.parent().unwrap().to_path_buf(),
+        host_system: host_system(),
+    };
+    let error = Admission::check(&loaded, &context)
+        .expect_err("logicalRoot must not escape invocation root");
+
+    assert_eq!(error.code, ErrorCode::SourceMismatch);
+}
+
+#[test]
 fn abi_mismatch_is_runtime_abi_error() {
     let mut model = fixture_model();
     model["runtimeAbi"] = json!("nixfied-runtime-abi:m0:2");

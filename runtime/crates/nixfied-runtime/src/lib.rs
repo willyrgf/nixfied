@@ -6,6 +6,6 @@ pub mod registry;
 pub mod service;
 pub mod state;
 
-pub use admission::{Admission, AdmissionContext, StoreOriginPolicy};
+pub use admission::{Admission, AdmissionContext, StoreOriginPolicy, source::AdmittedSource};
 pub use error::{ErrorCode, RuntimeError, RuntimeResult};
 pub use model_loader::{LoadedModel, RawModel, load_model, parse_loaded_model, read_raw_model};

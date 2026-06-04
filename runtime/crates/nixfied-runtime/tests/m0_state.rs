@@ -1,15 +1,15 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use nixfied_model::{CleanupPolicy, Model};
+use nixfied_model::{CleanupPolicy, DirtyPolicy, Model, SourceMode};
 use nixfied_runtime::control::clean_reconciled_state;
 use nixfied_runtime::registry::{Registry, RegistryIdentity};
 use nixfied_runtime::state::{
     MARKER_FILE_NAME, StateIdentity, StateMarker, clean_marked_state, derive_host_placement,
     inspect_cleanup_target, materialize_run_roots, write_slot_marker,
 };
-use nixfied_runtime::{Admission, ErrorCode};
+use nixfied_runtime::{Admission, AdmittedSource, ErrorCode};
 use serde_json::{Value, json};
 
 #[test]
@@ -367,7 +367,7 @@ impl StateFixture {
     fn new() -> Self {
         let tmp = TempDir::new();
         let model = model();
-        let admission = admission(&model);
+        let admission = admission(&model, &tmp.path);
         let layout =
             derive_host_placement(&model, "run-1", &tmp.path).expect("layout should derive");
         materialize_run_roots(&layout).expect("roots should materialize");
@@ -393,7 +393,7 @@ impl StateFixture {
     }
 }
 
-fn admission(model: &Model) -> Admission {
+fn admission(model: &Model, source_root: &Path) -> Admission {
     Admission {
         model_path: PathBuf::from("/nix/store/test-model/model.json"),
         computed_model_hash: "computed-hash".to_string(),
@@ -402,6 +402,21 @@ fn admission(model: &Model) -> Admission {
         runtime_abi: model.runtime_abi.clone(),
         toolchain_id: model.toolchain_id.clone(),
         target_system: model.target.system.clone(),
+        source: admitted_source(source_root),
+    }
+}
+
+fn admitted_source(source_root: &Path) -> AdmittedSource {
+    AdmittedSource {
+        codebase_id: "main".to_string(),
+        logical_root: ".".to_string(),
+        observed_root: source_root
+            .canonicalize()
+            .expect("source root should canonicalize"),
+        source_mode: SourceMode::LiveWorkspace,
+        source_identity: "live".to_string(),
+        dirty_policy: DirtyPolicy::Warn,
+        admission_fingerprint_policy: "m0-placeholder".to_string(),
     }
 }
 

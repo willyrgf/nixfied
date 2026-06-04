@@ -54,7 +54,7 @@ pub fn record_service_start(
 ) -> RuntimeResult<()> {
     let generator_json = serde_json::to_string(&run.model.generator).map_err(json_error)?;
     let target_json = serde_json::to_string(&run.model.target).map_err(json_error)?;
-    let source_json = serde_json::to_string(&run.model.codebases).map_err(json_error)?;
+    let source_json = serde_json::to_string(&run.admission.source).map_err(json_error)?;
     let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
     ensure_no_existing_run_transaction(&transaction, run.run_id)?;
     ensure_no_active_service_transaction(&transaction, service.service_instance_id)?;
