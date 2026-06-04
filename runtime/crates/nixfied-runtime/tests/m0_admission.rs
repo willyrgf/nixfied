@@ -11,8 +11,8 @@ use serde_json::{Value, json};
 fn fixture_model() -> Value {
     json!({
         "modelVersion": 1,
-        "toolchainId": "nixfied-toolchain:m0:1",
-        "runtimeAbi": "nixfied-runtime-abi:m0:1",
+        "toolchainId": "nixfied-toolchain:m0:2",
+        "runtimeAbi": "nixfied-runtime-abi:m0:2",
         "generator": {
             "name": "nixfied",
             "version": "m0",
@@ -223,7 +223,17 @@ fn fixture_model() -> Value {
 }
 
 fn m0_surface_names() -> Vec<&'static str> {
-    vec!["model", "check", "run", "ps", "down", "clean"]
+    vec![
+        "model",
+        "schema",
+        "docs",
+        "capabilities",
+        "check",
+        "run",
+        "ps",
+        "down",
+        "clean",
+    ]
 }
 
 fn m0_surfaces() -> Vec<Value> {
@@ -392,7 +402,7 @@ fn logical_root_escape_is_rejected() {
 #[test]
 fn abi_mismatch_is_runtime_abi_error() {
     let mut model = fixture_model();
-    model["runtimeAbi"] = json!("nixfied-runtime-abi:m0:2");
+    model["runtimeAbi"] = json!("nixfied-runtime-abi:m0:1");
     let (_tmp, model_path, _closure) = write_fixture_model(model, true);
     let error = load_model(&model_path).expect_err("ABI mismatch should fail during load");
 

@@ -278,8 +278,8 @@ fn clean_reconciles_stale_refs_before_marker_owned_delete() {
               toolchain_id, generator_json, target_json, source_json, summary_path
             ) VALUES (
               'run-stale', 'service-starting', '/nix/store/test-model/model.json',
-              'computed-hash', 'nixfied-runtime-abi:m0:1',
-              'nixfied-toolchain:m0:1', '{}', '{}', '[]', NULL
+              'computed-hash', 'nixfied-runtime-abi:m0:2',
+              'nixfied-toolchain:m0:2', '{}', '{}', '[]', NULL
             );
             INSERT INTO services (
               service_instance_id, service_name, service_address_hash,
@@ -427,8 +427,8 @@ fn model() -> Model {
 fn fixture_model() -> Value {
     json!({
         "modelVersion": 1,
-        "toolchainId": "nixfied-toolchain:m0:1",
-        "runtimeAbi": "nixfied-runtime-abi:m0:1",
+        "toolchainId": "nixfied-toolchain:m0:2",
+        "runtimeAbi": "nixfied-runtime-abi:m0:2",
         "generator": {
             "name": "nixfied",
             "version": "m0",
@@ -639,7 +639,17 @@ fn fixture_model() -> Value {
 }
 
 fn m0_surface_names() -> Vec<&'static str> {
-    vec!["model", "check", "run", "ps", "down", "clean"]
+    vec![
+        "model",
+        "schema",
+        "docs",
+        "capabilities",
+        "check",
+        "run",
+        "ps",
+        "down",
+        "clean",
+    ]
 }
 
 fn m0_surfaces() -> Vec<Value> {

@@ -216,7 +216,17 @@ fn valid_model_json() -> Value {
 }
 
 fn m0_surface_names() -> Vec<&'static str> {
-    vec!["model", "check", "run", "ps", "down", "clean"]
+    vec![
+        "model",
+        "schema",
+        "docs",
+        "capabilities",
+        "check",
+        "run",
+        "ps",
+        "down",
+        "clean",
+    ]
 }
 
 fn m0_surfaces() -> Vec<Value> {
@@ -271,6 +281,28 @@ fn old_single_surface_contract_is_rejected() {
 }
 
 #[test]
+fn capabilities_surfaces_must_match_model_surface_names() {
+    let mut model = parse_valid_model();
+    model.capabilities.surfaces.push("view-only".to_string());
+
+    let error = model
+        .validate_m0()
+        .expect_err("capabilities cannot add view-only surfaces");
+    match error {
+        ValidationError::UnsupportedValue {
+            field,
+            expected,
+            actual,
+        } => {
+            assert_eq!(field, "capabilities.surfaces");
+            assert_eq!(expected, "exact M0 values");
+            assert!(actual.contains("view-only"));
+        }
+        other => panic!("unexpected validation error: {other:?}"),
+    }
+}
+
+#[test]
 fn unknown_top_level_field_is_invalid() {
     let mut value = valid_model_json();
     value["computedModelHash"] = json!("must-not-be-embedded");
@@ -282,13 +314,13 @@ fn unknown_top_level_field_is_invalid() {
 #[test]
 fn abi_mismatch_is_contract_error() {
     let mut model = parse_valid_model();
-    model.runtime_abi = "nixfied-runtime-abi:m0:2".to_string();
+    model.runtime_abi = "nixfied-runtime-abi:m0:1".to_string();
 
     assert_eq!(
         model.validate_m0().expect_err("ABI mismatch should fail"),
         ValidationError::RuntimeAbi {
             expected: RUNTIME_ABI,
-            actual: "nixfied-runtime-abi:m0:2".to_string(),
+            actual: "nixfied-runtime-abi:m0:1".to_string(),
         }
     );
 }

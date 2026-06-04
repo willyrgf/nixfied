@@ -11,6 +11,9 @@ let
   identifiers = import ../lib/identifiers.nix;
   surfaceNames = [
     "model"
+    "schema"
+    "docs"
+    "capabilities"
     "check"
     "run"
     "ps"
