@@ -15,7 +15,7 @@ use crate::service::process::{
     signal_process_group, wait_for_child_exit,
 };
 use crate::service::registry::{
-    ensure_service_instance_probe_ready, mark_task_finished, record_task_started,
+    TaskProcessRecord, ensure_service_instance_probe_ready, mark_task_finished, record_task_started,
 };
 use crate::state::HostPlacement;
 
@@ -77,13 +77,15 @@ pub fn run_dependent_task(
     let start_identity = process_start_identity(pid, pgid, platform_start_identity(pid).as_deref());
     if let Err(error) = record_task_started(
         registry,
-        &service.run_id,
-        &process_key,
-        pid,
-        pgid,
-        &start_identity,
-        &command_json,
-        &service.computed_model_hash,
+        &TaskProcessRecord {
+            run_id: &service.run_id,
+            process_key: &process_key,
+            pid,
+            pgid,
+            start_identity: &start_identity,
+            command_json: &command_json,
+            computed_model_hash: &service.computed_model_hash,
+        },
     ) {
         let _ = signal_process_group(pgid, libc::SIGKILL);
         let _ = child.wait();

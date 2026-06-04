@@ -716,21 +716,21 @@ fn validate_references(model: &Model) -> Result<(), ValidationError> {
         }
         for lifecycle in &service.lifecycle {
             declared_operations.insert(lifecycle.operation_id.as_str());
-            if let Some(exec_id) = &lifecycle.exec_id {
-                if !exec_ids.contains(exec_id.as_str()) {
-                    return Err(ValidationError::UndeclaredReference {
-                        reference_kind: "lifecycle.execId",
-                        id: exec_id.clone(),
-                    });
-                }
+            if let Some(exec_id) = &lifecycle.exec_id
+                && !exec_ids.contains(exec_id.as_str())
+            {
+                return Err(ValidationError::UndeclaredReference {
+                    reference_kind: "lifecycle.execId",
+                    id: exec_id.clone(),
+                });
             }
-            if let Some(probe_id) = &lifecycle.probe_id {
-                if !probe_ids.contains(probe_id.as_str()) {
-                    return Err(ValidationError::UndeclaredReference {
-                        reference_kind: "lifecycle.probeId",
-                        id: probe_id.clone(),
-                    });
-                }
+            if let Some(probe_id) = &lifecycle.probe_id
+                && !probe_ids.contains(probe_id.as_str())
+            {
+                return Err(ValidationError::UndeclaredReference {
+                    reference_kind: "lifecycle.probeId",
+                    id: probe_id.clone(),
+                });
             }
         }
         if !probe_ids.contains(service.readiness_probe.as_str()) {

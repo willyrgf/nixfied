@@ -73,11 +73,7 @@ fn from_loaded(model: &Model, loaded: &LoadedModel, source: source::AdmittedSour
 }
 
 fn host_system() -> String {
-    let arch = match std::env::consts::ARCH {
-        "aarch64" => "aarch64",
-        "x86_64" => "x86_64",
-        other => other,
-    };
+    let arch = std::env::consts::ARCH;
     let os = match std::env::consts::OS {
         "macos" => "darwin",
         "linux" => "linux",
