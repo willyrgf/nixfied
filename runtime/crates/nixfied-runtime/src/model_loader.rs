@@ -52,19 +52,29 @@ pub fn parse_loaded_model(raw_model: RawModel) -> RuntimeResult<LoadedModel> {
         .with_model(&raw_model.path, &raw_model.computed_model_hash)
     })?;
     model.validate_m0().map_err(|error| {
-        let code = match &error {
+        let message = format!("model contract validation failed: {error}");
+        let runtime_error = match &error {
             nixfied_model::ValidationError::RuntimeAbi { .. }
             | nixfied_model::ValidationError::ToolchainId { .. }
-            | nixfied_model::ValidationError::ModelVersion { .. } => ErrorCode::RuntimeAbiMismatch,
+            | nixfied_model::ValidationError::ModelVersion { .. } => {
+                RuntimeError::new(ErrorCode::RuntimeAbiMismatch, message)
+            }
+            nixfied_model::ValidationError::MustBeEmpty { field } if *field == "secrets" => {
+                RuntimeError::unsupported_feature("secrets", message)
+                    .with_detail("secretCount", model.secrets.len())
+            }
+            nixfied_model::ValidationError::MustBeEmpty { field } if *field == "workflows" => {
+                RuntimeError::unsupported_feature("workflows", message)
+                    .with_detail("workflowCount", model.workflows.len())
+            }
             nixfied_model::ValidationError::MustBeEmpty { field }
                 if *field == "secrets" || *field == "workflows" =>
             {
-                ErrorCode::ModelAdmission
+                RuntimeError::new(ErrorCode::ModelAdmission, message)
             }
-            _ => ErrorCode::ModelInvalid,
+            _ => RuntimeError::new(ErrorCode::ModelInvalid, message),
         };
-        RuntimeError::new(code, format!("model contract validation failed: {error}"))
-            .with_model(&raw_model.path, &raw_model.computed_model_hash)
+        runtime_error.with_model(&raw_model.path, &raw_model.computed_model_hash)
     })?;
 
     let raw_len = raw_model.raw_len();
