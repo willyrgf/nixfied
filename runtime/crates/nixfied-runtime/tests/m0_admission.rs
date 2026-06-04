@@ -413,6 +413,15 @@ fn non_empty_secrets_are_admission_error() {
 
     assert_eq!(error.code, ErrorCode::ModelAdmission);
     assert!(error.computed_model_hash.is_some());
+    let payload = serde_json::to_value(&error).expect("error should serialize");
+    assert_eq!(payload["exitClass"], json!("error"));
+    assert_eq!(payload["details"]["unsupportedFeature"], json!("secrets"));
+    assert_eq!(payload["details"]["secretCount"], json!(1));
+    assert_eq!(payload["modelPath"], json!(model_path));
+    assert_eq!(
+        payload["computedModelHash"],
+        json!(error.computed_model_hash.as_deref().unwrap())
+    );
 }
 
 #[test]

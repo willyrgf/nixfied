@@ -56,10 +56,11 @@ fn run() -> Result<(), RuntimeError> {
         "ps" => run_control(ControlCommand::Ps, args.get(1..).unwrap_or(&[])),
         "down" => run_control(ControlCommand::Down, args.get(1..).unwrap_or(&[])),
         "clean" => run_control(ControlCommand::Clean, args.get(1..).unwrap_or(&[])),
-        _ => Err(RuntimeError::new(
-            nixfied_runtime::ErrorCode::ModelAdmission,
+        _ => Err(RuntimeError::unsupported_feature(
+            "runtime.command",
             format!("unsupported M0 runtime command: {command}"),
-        )),
+        )
+        .with_detail("command", command)),
     }
 }
 
@@ -113,33 +114,45 @@ fn run_m0(args: &[String]) -> Result<(), RuntimeError> {
     let run_id = new_run_id();
     let (loaded, admission) =
         load_admitted_model(options.model_path.clone(), options.allow_non_store)?;
-    let placement = derive_host_placement(&loaded.model, &run_id, &options.state_base)?;
+    let model_path = admission.model_path.clone();
+    let computed_model_hash = admission.computed_model_hash.clone();
+    let output = run_m0_admitted(&loaded.model, &admission, &options, run_id)
+        .map_err(|error| error.with_model_if_missing(model_path, computed_model_hash))?;
+    print_json(&output)
+}
+
+fn run_m0_admitted(
+    model: &nixfied_model::Model,
+    admission: &Admission,
+    options: &RunOptions,
+    run_id: String,
+) -> Result<RunOutput, RuntimeError> {
+    let placement = derive_host_placement(model, &run_id, &options.state_base)?;
     materialize_run_roots(&placement)?;
-    let identity = StateIdentity::from_model(&loaded.model, &admission);
+    let identity = StateIdentity::from_model(model, admission);
     write_slot_marker(&placement, &identity)?;
     let mut registry = Registry::open_or_create(
         placement.registry_path(),
         &RegistryIdentity::m0(
-            &loaded.model.project.project_id,
-            &loaded.model.runtime_abi,
-            &loaded.model.toolchain_id,
+            &model.project.project_id,
+            &model.runtime_abi,
+            &model.toolchain_id,
         ),
     )?;
-    let selected_port = first_candidate_port(&loaded.model)?;
+    let selected_port = first_candidate_port(model)?;
     let mut service = start_synthetic_service(
-        &loaded.model,
-        &admission,
+        model,
+        admission,
         &placement,
         &mut registry,
         run_id.clone(),
         selected_port,
     )?;
-    if let Err(error) = service.wait_for_probe_ready(&loaded.model, &mut registry) {
+    if let Err(error) = service.wait_for_probe_ready(model, &mut registry) {
         let _ = service.stop(&mut registry, options.timeout_ms);
         return Err(error);
     }
-    let task = match run_dependent_task(&loaded.model, &placement, &mut registry, &service, "smoke")
-    {
+    let task = match run_dependent_task(model, &placement, &mut registry, &service, "smoke") {
         Ok(task) => task,
         Err(error) => {
             let _ = service.stop(&mut registry, options.timeout_ms);
@@ -157,7 +170,7 @@ fn run_m0(args: &[String]) -> Result<(), RuntimeError> {
         task,
     };
     service.stop(&mut registry, options.timeout_ms)?;
-    print_json(&output)
+    Ok(output)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -185,13 +198,25 @@ fn run_control(command: ControlCommand, args: &[String]) -> Result<(), RuntimeEr
     let options = parse_control_options(command, args)?;
     let (loaded, admission) =
         load_admitted_model(options.model_path.clone(), options.allow_non_store)?;
-    let placement = derive_host_placement(&loaded.model, "control", &options.state_base)?;
+    let model_path = admission.model_path.clone();
+    let computed_model_hash = admission.computed_model_hash.clone();
+    run_control_admitted(command, &loaded.model, &admission, &options)
+        .map_err(|error| error.with_model_if_missing(model_path, computed_model_hash))
+}
+
+fn run_control_admitted(
+    command: ControlCommand,
+    model: &nixfied_model::Model,
+    admission: &Admission,
+    options: &ControlOptions,
+) -> Result<(), RuntimeError> {
+    let placement = derive_host_placement(model, "control", &options.state_base)?;
     let mut registry = Registry::open_or_create(
         placement.registry_path(),
         &RegistryIdentity::m0(
-            &loaded.model.project.project_id,
-            &loaded.model.runtime_abi,
-            &loaded.model.toolchain_id,
+            &model.project.project_id,
+            &model.runtime_abi,
+            &model.toolchain_id,
         ),
     )?;
     match command {
@@ -201,7 +226,7 @@ fn run_control(command: ControlCommand, args: &[String]) -> Result<(), RuntimeEr
             options.timeout_ms,
         )?),
         ControlCommand::Clean => {
-            let identity = StateIdentity::from_model(&loaded.model, &admission);
+            let identity = StateIdentity::from_model(model, admission);
             print_json(&nixfied_runtime::control::clean_reconciled_state(
                 &mut registry,
                 &placement.state_base,
