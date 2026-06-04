@@ -2,6 +2,8 @@ use std::ffi::OsString;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
+use serde_json::{Value, json};
+
 const DEFAULT_NIXFIED_URL: &str = "github:willyrgf/nixfied";
 
 fn main() {
@@ -18,6 +20,16 @@ fn run(args: Vec<OsString>) -> Result<(), CliError> {
         return Ok(());
     };
     match command {
+        "model" | "schema" | "docs" | "capabilities" => {
+            if args[1..].iter().any(|arg| arg == "-h" || arg == "--help") {
+                print_view_usage(command);
+                return Ok(());
+            }
+            let options = ViewOptions::parse(&args[1..])?;
+            let output = render_view(command, &options)?;
+            print!("{output}");
+            Ok(())
+        }
         "install" => {
             if args[1..].iter().any(|arg| arg == "-h" || arg == "--help") {
                 print_install_usage();
@@ -36,6 +48,159 @@ fn run(args: Vec<OsString>) -> Result<(), CliError> {
             "unsupported nixfied command: {other}"
         ))),
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ViewOptions {
+    model: PathBuf,
+}
+
+impl ViewOptions {
+    fn parse(args: &[OsString]) -> Result<Self, CliError> {
+        let mut model = None;
+        let mut index = 0;
+        while index < args.len() {
+            let Some(arg) = args[index].to_str() else {
+                return Err(CliError::usage("arguments must be valid UTF-8"));
+            };
+            match arg {
+                "--model" => {
+                    index += 1;
+                    model = Some(take_value(args, index, "--model")?.into());
+                }
+                other => {
+                    return Err(CliError::usage(format!("unknown view argument: {other}")));
+                }
+            }
+            index += 1;
+        }
+        let Some(model) = model else {
+            return Err(CliError::usage("missing --model PATH"));
+        };
+        Ok(Self { model })
+    }
+}
+
+fn render_view(command: &str, options: &ViewOptions) -> Result<String, CliError> {
+    let model = read_model_json(&options.model)?;
+    match command {
+        "model" => json_output(&model),
+        "schema" => json_output(&schema_view(&model)?),
+        "docs" => docs_view(&model),
+        "capabilities" => json_output(model_field(&model, "capabilities")?),
+        other => Err(CliError::usage(format!(
+            "unsupported nixfied view command: {other}"
+        ))),
+    }
+}
+
+fn read_model_json(path: &Path) -> Result<Value, CliError> {
+    let contents = std::fs::read_to_string(path)
+        .map_err(|error| CliError::io(format!("failed to read {}: {error}", path.display())))?;
+    serde_json::from_str(&contents)
+        .map_err(|error| CliError::usage(format!("failed to parse {}: {error}", path.display())))
+}
+
+fn schema_view(model: &Value) -> Result<Value, CliError> {
+    Ok(json!({
+        "schemaVersion": 1,
+        "source": "model.json",
+        "runtimeInputs": model_field(model, "runtimeConstraints")?.clone(),
+        "surfaces": model_field(model, "surfaces")?.clone(),
+        "modelTypes": {
+            "modelVersion": model_field(model, "modelVersion")?.clone(),
+            "runtimeAbi": model_field(model, "runtimeAbi")?.clone(),
+            "toolchainId": model_field(model, "toolchainId")?.clone(),
+            "primitives": [
+                "ExecSpec",
+                "EndpointSpec",
+                "ProbeSpec",
+                "LifecycleOpSpec",
+                "ServiceSpec",
+                "TaskSpec"
+            ]
+        }
+    }))
+}
+
+fn docs_view(model: &Value) -> Result<String, CliError> {
+    let docs = model_field(model, "docs")?;
+    let title = string_field(docs, "title")?;
+    let summary = string_field(docs, "summary")?;
+    let target = model_field(model, "target")?;
+    let target_system = string_field(target, "system")?;
+    let runtime_abi = string_field(model, "runtimeAbi")?;
+    let toolchain_id = string_field(model, "toolchainId")?;
+    let surfaces = array_field(model, "surfaces")?;
+    let capabilities = model_field(model, "capabilities")?;
+    let services = array_field(capabilities, "services")?;
+    let tasks = array_field(capabilities, "tasks")?;
+
+    let mut output = String::new();
+    let _ = writeln!(output, "# {title}");
+    let _ = writeln!(output);
+    let _ = writeln!(output, "{summary}");
+    let _ = writeln!(output);
+    let _ = writeln!(output, "## Target");
+    let _ = writeln!(output);
+    let _ = writeln!(output, "- system: {target_system}");
+    let _ = writeln!(output, "- runtime ABI: {runtime_abi}");
+    let _ = writeln!(output, "- toolchain: {toolchain_id}");
+    let _ = writeln!(output);
+    let _ = writeln!(output, "## M0 Surfaces");
+    let _ = writeln!(output);
+    for surface in surfaces {
+        let name = string_field(surface, "name")?;
+        let _ = writeln!(output, "- {name}");
+    }
+    let _ = writeln!(output);
+    let _ = writeln!(output, "## Services");
+    let _ = writeln!(output);
+    for service in services {
+        let Some(name) = service.as_str() else {
+            return Err(CliError::usage(
+                "capabilities.services entries must be strings",
+            ));
+        };
+        let _ = writeln!(output, "- {name}");
+    }
+    let _ = writeln!(output);
+    let _ = writeln!(output, "## Tasks");
+    let _ = writeln!(output);
+    for task in tasks {
+        let Some(name) = task.as_str() else {
+            return Err(CliError::usage(
+                "capabilities.tasks entries must be strings",
+            ));
+        };
+        let _ = writeln!(output, "- {name}");
+    }
+    Ok(output)
+}
+
+fn json_output(value: &Value) -> Result<String, CliError> {
+    serde_json::to_string_pretty(value)
+        .map(|json| format!("{json}\n"))
+        .map_err(|error| CliError::io(format!("failed to render JSON: {error}")))
+}
+
+fn model_field<'a>(model: &'a Value, field: &'static str) -> Result<&'a Value, CliError> {
+    model
+        .get(field)
+        .ok_or_else(|| CliError::usage(format!("model is missing {field}")))
+}
+
+fn array_field<'a>(model: &'a Value, field: &'static str) -> Result<&'a [Value], CliError> {
+    model_field(model, field)?
+        .as_array()
+        .map(Vec::as_slice)
+        .ok_or_else(|| CliError::usage(format!("{field} must be an array")))
+}
+
+fn string_field<'a>(model: &'a Value, field: &'static str) -> Result<&'a str, CliError> {
+    model_field(model, field)?
+        .as_str()
+        .ok_or_else(|| CliError::usage(format!("{field} must be a string")))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -320,7 +485,15 @@ fn print_install_outcome(outcome: &InstallOutcome) {
 
 fn print_usage() {
     println!("nixfied");
+    print_view_usage("model");
+    print_view_usage("schema");
+    print_view_usage("docs");
+    print_view_usage("capabilities");
     print_install_usage();
+}
+
+fn print_view_usage(command: &str) {
+    println!("usage: nixfied {command} --model PATH");
 }
 
 fn print_install_usage() {
@@ -460,6 +633,124 @@ mod tests {
         assert_eq!(options.project_id.as_deref(), Some("proj"));
         assert_eq!(options.name.as_deref(), Some("Project"));
         assert_eq!(options.nixfied_url, "path:/repo");
+    }
+
+    #[test]
+    fn parses_view_options() {
+        let options =
+            ViewOptions::parse(&["--model".into(), "model.json".into()]).expect("args parse");
+
+        assert_eq!(options.model, PathBuf::from("model.json"));
+    }
+
+    #[test]
+    fn renders_model_from_model_json() {
+        let tmp = TempDir::new();
+        let model_path = tmp.path.join("model.json");
+        std::fs::write(&model_path, model_fixture()).unwrap();
+
+        let output = render_view("model", &ViewOptions { model: model_path })
+            .expect("model view should render");
+        let output: serde_json::Value = serde_json::from_str(&output).unwrap();
+
+        assert_eq!(output["project"]["projectId"], "view-test");
+        assert_eq!(output["capabilities"]["surfaces"][0], "model");
+    }
+
+    #[test]
+    fn renders_schema_from_model_json() {
+        let tmp = TempDir::new();
+        let model_path = tmp.path.join("model.json");
+        std::fs::write(&model_path, model_fixture()).unwrap();
+
+        let output = render_view("schema", &ViewOptions { model: model_path })
+            .expect("schema view should render");
+        let output: serde_json::Value = serde_json::from_str(&output).unwrap();
+
+        assert_eq!(output["source"], "model.json");
+        assert_eq!(
+            output["modelTypes"]["runtimeAbi"],
+            "nixfied-runtime-abi:m0:2"
+        );
+        assert_eq!(output["surfaces"][1]["name"], "schema");
+    }
+
+    #[test]
+    fn renders_capabilities_from_model_json() {
+        let tmp = TempDir::new();
+        let model_path = tmp.path.join("model.json");
+        std::fs::write(&model_path, model_fixture()).unwrap();
+
+        let output = render_view("capabilities", &ViewOptions { model: model_path })
+            .expect("capabilities view should render");
+        let output: serde_json::Value = serde_json::from_str(&output).unwrap();
+
+        assert_eq!(output["services"], serde_json::json!(["synthetic"]));
+        assert_eq!(output["surfaces"][3], "capabilities");
+    }
+
+    #[test]
+    fn renders_docs_from_model_json() {
+        let tmp = TempDir::new();
+        let model_path = tmp.path.join("model.json");
+        std::fs::write(&model_path, model_fixture()).unwrap();
+
+        let output =
+            render_view("docs", &ViewOptions { model: model_path }).expect("docs view renders");
+
+        assert!(output.contains("# View Test"));
+        assert!(output.contains("- schema"));
+        assert!(output.contains("- synthetic"));
+        assert!(output.contains("- smoke"));
+    }
+
+    fn model_fixture() -> String {
+        serde_json::json!({
+            "modelVersion": 1,
+            "toolchainId": "nixfied-toolchain:m0:2",
+            "runtimeAbi": "nixfied-runtime-abi:m0:2",
+            "project": {
+                "projectId": "view-test",
+                "name": "View Test"
+            },
+            "target": {
+                "system": "aarch64-darwin"
+            },
+            "capabilities": {
+                "services": ["synthetic"],
+                "tasks": ["smoke"],
+                "surfaces": [
+                    "model",
+                    "schema",
+                    "docs",
+                    "capabilities",
+                    "check",
+                    "run",
+                    "ps",
+                    "down",
+                    "clean"
+                ]
+            },
+            "runtimeConstraints": {
+                "allowedEnvironments": ["dev"]
+            },
+            "surfaces": [
+                { "name": "model" },
+                { "name": "schema" },
+                { "name": "docs" },
+                { "name": "capabilities" },
+                { "name": "check" },
+                { "name": "run" },
+                { "name": "ps" },
+                { "name": "down" },
+                { "name": "clean" }
+            ],
+            "docs": {
+                "title": "View Test",
+                "summary": "Generated from model.json."
+            }
+        })
+        .to_string()
     }
 
     fn read(path: &Path) -> String {
