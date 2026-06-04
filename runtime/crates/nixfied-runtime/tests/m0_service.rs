@@ -353,6 +353,11 @@ fn slot_one_service_uses_slot_placement_port_window() {
     service
         .stop(&mut registry, 1000)
         .expect("service should stop");
+    assert_registry_tables_scoped_to_slot(
+        &registry,
+        1,
+        &["runs", "services", "processes", "ports", "events"],
+    );
 }
 
 #[test]
@@ -1153,6 +1158,40 @@ fn add_slot_one(value: &mut Value, start: u16, end: u16) {
             "end": end
         }
     });
+}
+
+fn assert_registry_tables_scoped_to_slot(registry: &Registry, slot: i64, tables: &[&str]) {
+    for table in tables {
+        let (min_environment, max_environment, min_slot, max_slot, count): (
+            String,
+            String,
+            i64,
+            i64,
+            i64,
+        ) = registry
+            .connection()
+            .query_row(
+                &format!(
+                    "SELECT min(environment), max(environment), min(slot), max(slot), count(*) FROM {table}"
+                ),
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, i64>(4)?,
+                    ))
+                },
+            )
+            .unwrap_or_else(|error| panic!("{table} scope query should succeed: {error}"));
+        assert!(count > 0, "{table} should have at least one row");
+        assert_eq!(min_environment, "dev", "{table} min environment");
+        assert_eq!(max_environment, "dev", "{table} max environment");
+        assert_eq!(min_slot, slot, "{table} min slot");
+        assert_eq!(max_slot, slot, "{table} max slot");
+    }
 }
 
 fn fixture_model(executable: &str, start_args: &[&str], port: u16) -> Value {

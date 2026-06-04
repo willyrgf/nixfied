@@ -255,18 +255,21 @@ fn cleanup_refuses_symlink_traversal() {
 #[test]
 fn cleanup_refuses_active_registry_refs() {
     assert_cleanup_refused_with_active_ref(
-        "INSERT INTO run_leases (run_id, owner_token, heartbeat_at, expires_at)
-         VALUES ('run-1', 'owner', 'now', 'later')",
+        "INSERT INTO run_leases (
+           run_id, environment, slot, owner_token, heartbeat_at, expires_at
+         ) VALUES ('run-1', 'dev', 0, 'owner', 'now', 'later')",
     );
     assert_cleanup_refused_with_active_ref(
         "INSERT INTO processes (
-           process_key, pid, pgid, start_identity, command_json, run_id, status
-         ) VALUES ('process-1', 1, 1, 'start', '{}', 'run-1', 'running')",
+           process_key, environment, slot, pid, pgid, start_identity, command_json,
+           run_id, status
+         ) VALUES ('process-1', 'dev', 0, 1, 1, 'start', '{}', 'run-1', 'running')",
     );
     assert_cleanup_refused_with_active_ref(
         "INSERT INTO ports (
-           endpoint_key, service_instance_id, address, port, status, owner_process_key
-         ) VALUES ('endpoint-1', 'service-1', '127.0.0.1', 38080, 'reserved', NULL)",
+           endpoint_key, environment, slot, service_instance_id, address, port,
+           status, owner_process_key
+         ) VALUES ('endpoint-1', 'dev', 0, 'service-1', '127.0.0.1', 38080, 'reserved', NULL)",
     );
 }
 
@@ -293,11 +296,20 @@ fn cleanup_deletes_matching_inactive_state() {
         )
         .expect("cleanup status should be recorded");
     assert_eq!(cleanup_status, "deleted");
+    let cleanup_scope: (String, i64) = registry
+        .connection()
+        .query_row(
+            "SELECT environment, slot FROM cleanups WHERE cleanup_id = ?1",
+            [&outcome.cleanup_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("cleanup scope should be recorded");
+    assert_eq!(cleanup_scope, ("dev".to_string(), 0));
     let mut statement = registry
         .connection()
         .prepare(
             "
-            SELECT event_type FROM events
+            SELECT event_type, environment, slot FROM events
             WHERE payload_json LIKE ?1
             ORDER BY seq
             ",
@@ -305,12 +317,22 @@ fn cleanup_deletes_matching_inactive_state() {
         .expect("events should be queryable");
     let events = statement
         .query_map([format!("%{}%", outcome.cleanup_id)], |row| {
-            row.get::<_, String>(0)
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
         })
         .expect("events should query")
         .collect::<Result<Vec<_>, _>>()
         .expect("events should collect");
-    assert_eq!(events, ["cleanup.intent", "cleanup.deleted"]);
+    assert_eq!(
+        events,
+        [
+            ("cleanup.intent".to_string(), "dev".to_string(), 0),
+            ("cleanup.deleted".to_string(), "dev".to_string(), 0),
+        ]
+    );
     assert!(!fixture.layout.state_root.exists());
 }
 
@@ -323,33 +345,36 @@ fn clean_reconciles_stale_refs_before_marker_owned_delete() {
         .execute_batch(
             "
             INSERT INTO runs (
-              run_id, status, model_path, computed_model_hash, runtime_abi,
-              toolchain_id, generator_json, target_json, source_json, summary_path
+              run_id, environment, slot, status, model_path, computed_model_hash,
+              runtime_abi, toolchain_id, generator_json, target_json, source_json,
+              summary_path
             ) VALUES (
-              'run-stale', 'service-starting', '/nix/store/test-model/model.json',
+              'run-stale', 'dev', 0, 'service-starting', '/nix/store/test-model/model.json',
               'computed-hash', 'nixfied-runtime-abi:m1:1',
               'nixfied-toolchain:m1:1', '{}', '{}', '[]', NULL
             );
             INSERT INTO services (
-              service_instance_id, service_name, service_address_hash,
-              endpoint_identity_hash, state_identity_hash, runtime_compatibility_hash,
-              target_identity_hash, status, endpoint_json, state_root
+              service_instance_id, environment, slot, service_name,
+              service_address_hash, endpoint_identity_hash, state_identity_hash,
+              runtime_compatibility_hash, target_identity_hash, status,
+              endpoint_json, state_root
             ) VALUES (
-              'service-stale', 'synthetic', 'address', 'endpoint', 'state',
+              'service-stale', 'dev', 0, 'synthetic', 'address', 'endpoint', 'state',
               'runtime', 'target', 'probe-ready', '{}', '/tmp/stale'
             );
             INSERT INTO processes (
-              process_key, pid, pgid, start_identity, command_json,
+              process_key, environment, slot, pid, pgid, start_identity, command_json,
               run_id, service_instance_id, status
             ) VALUES (
-              'process-stale', 999999, 999999,
+              'process-stale', 'dev', 0, 999999, 999999,
               '{\"platformStart\":\"missing\"}', '{}',
               'run-stale', 'service-stale', 'running'
             );
             INSERT INTO ports (
-              endpoint_key, service_instance_id, address, port, status, owner_process_key
+              endpoint_key, environment, slot, service_instance_id, address, port,
+              status, owner_process_key
             ) VALUES (
-              'endpoint-stale', 'service-stale', '127.0.0.1', 38190,
+              'endpoint-stale', 'dev', 0, 'service-stale', '127.0.0.1', 38190,
               'active', 'process-stale'
             );
             ",

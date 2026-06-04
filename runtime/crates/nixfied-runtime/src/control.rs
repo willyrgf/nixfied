@@ -6,7 +6,7 @@ use rusqlite::params;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
-use crate::registry::Registry;
+use crate::registry::{Registry, RegistryIdentity};
 use crate::service::process::{
     process_group_has_live_member, process_is_live_with_identity, signal_process_group,
 };
@@ -239,6 +239,7 @@ fn process_rows(registry: &Registry) -> RuntimeResult<Vec<ProcessRow>> {
 }
 
 fn mark_process_stale(registry: &mut Registry, row: &ProcessRow) -> RuntimeResult<()> {
+    let identity = registry.identity().clone();
     let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
     transaction
         .execute(
@@ -264,20 +265,24 @@ fn mark_process_stale(registry: &mut Registry, row: &ProcessRow) -> RuntimeResul
             )
             .map_err(sql_error)?;
     }
+    let payload_json = serde_json::json!({
+        "pid": row.pid,
+        "pgid": row.pgid,
+        "previousStatus": row.status,
+        "command": row.command_json,
+    })
+    .to_string();
     insert_event(
         &transaction,
-        "process.stale",
-        &row.run_id,
-        row.service_instance_id.as_deref(),
-        &row.process_key,
-        &row.computed_model_hash,
-        &serde_json::json!({
-            "pid": row.pid,
-            "pgid": row.pgid,
-            "previousStatus": row.status,
-            "command": row.command_json,
-        })
-        .to_string(),
+        &identity,
+        ControlEvent {
+            event_type: "process.stale",
+            run_id: &row.run_id,
+            service_instance_id: row.service_instance_id.as_deref(),
+            process_key: &row.process_key,
+            computed_model_hash: &row.computed_model_hash,
+            payload_json: &payload_json,
+        },
     )?;
     transaction.commit().map_err(sql_error)?;
     Ok(())
@@ -298,34 +303,41 @@ fn mark_stopped(registry: &mut Registry, row: &ProcessRow) -> RuntimeResult<()> 
 
 fn insert_event(
     transaction: &rusqlite::Transaction<'_>,
-    event_type: &str,
-    run_id: &str,
-    service_instance_id: Option<&str>,
-    process_key: &str,
-    computed_model_hash: &str,
-    payload_json: &str,
+    identity: &RegistryIdentity,
+    event: ControlEvent<'_>,
 ) -> RuntimeResult<()> {
     transaction
         .execute(
             "
             INSERT INTO events (
-              at, event_type, run_id, service_instance_id, process_key,
-              computed_model_hash, payload_json
+              at, environment, slot, event_type, run_id, service_instance_id,
+              process_key, computed_model_hash, payload_json
             ) VALUES (
-              strftime('%Y-%m-%dT%H:%M:%fZ','now'), ?1, ?2, ?3, ?4, ?5, ?6
+              strftime('%Y-%m-%dT%H:%M:%fZ','now'), ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8
             )
             ",
             params![
-                event_type,
-                run_id,
-                service_instance_id,
-                process_key,
-                computed_model_hash,
-                payload_json,
+                identity.environment.as_str(),
+                identity.slot,
+                event.event_type,
+                event.run_id,
+                event.service_instance_id,
+                event.process_key,
+                event.computed_model_hash,
+                event.payload_json,
             ],
         )
         .map_err(sql_error)?;
     Ok(())
+}
+
+struct ControlEvent<'a> {
+    event_type: &'a str,
+    run_id: &'a str,
+    service_instance_id: Option<&'a str>,
+    process_key: &'a str,
+    computed_model_hash: &'a str,
+    payload_json: &'a str,
 }
 
 fn is_active_status(status: &str) -> bool {

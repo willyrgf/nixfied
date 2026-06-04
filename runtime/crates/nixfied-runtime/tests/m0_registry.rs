@@ -46,8 +46,19 @@ fn appends_events_with_total_ordering() {
     let second = registry
         .append_event(&EventInsert::new("second", "{}"))
         .expect("second event should append");
+    let scopes = registry
+        .connection()
+        .prepare("SELECT environment, slot FROM events ORDER BY seq")
+        .expect("events should prepare")
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })
+        .expect("events should query")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("events should collect");
 
     assert_eq!(first + 1, second);
+    assert_eq!(scopes, [("dev".to_string(), 0), ("dev".to_string(), 0)]);
 }
 
 #[test]
@@ -123,7 +134,7 @@ fn rejects_incompatible_user_version() {
 }
 
 #[test]
-fn rejects_existing_v1_registry_missing_metadata() {
+fn rejects_existing_v1_registry_missing_required_shape() {
     let tmp = TempDir::new();
     let path = tmp.path.join("registry.sqlite3");
     {
@@ -147,7 +158,7 @@ fn rejects_existing_v1_registry_missing_metadata() {
     }
 
     let error = match Registry::open_or_create(&path, &identity()) {
-        Ok(_) => panic!("existing v1 registry without metadata should fail"),
+        Ok(_) => panic!("existing v1 registry without required shape should fail"),
         Err(error) => error,
     };
     assert_eq!(error.code, ErrorCode::RegistryCorrupt);

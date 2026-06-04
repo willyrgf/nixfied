@@ -10,6 +10,7 @@ use crate::registry::schema;
 pub struct Registry {
     path: PathBuf,
     conn: Connection,
+    identity: RegistryIdentity,
 }
 
 impl Registry {
@@ -32,7 +33,11 @@ impl Registry {
         let mut conn = Connection::open(&path)
             .map_err(|error| RuntimeError::new(ErrorCode::RegistryCorrupt, error.to_string()))?;
         schema::initialize(&mut conn, identity)?;
-        Ok(Self { path, conn })
+        Ok(Self {
+            path,
+            conn,
+            identity: identity.clone(),
+        })
     }
 
     pub fn path(&self) -> &Path {
@@ -47,7 +52,11 @@ impl Registry {
         &mut self.conn
     }
 
+    pub fn identity(&self) -> &RegistryIdentity {
+        &self.identity
+    }
+
     pub fn append_event(&mut self, event: &EventInsert) -> RuntimeResult<i64> {
-        append_event(&mut self.conn, event)
+        append_event(&mut self.conn, &self.identity, event)
     }
 }
