@@ -1,7 +1,11 @@
 use std::path::PathBuf;
 
 use nixfied_runtime::registry::{Registry, RegistryIdentity};
-use nixfied_runtime::state::{StateIdentity, derive_host_placement, state_base_from_env};
+use nixfied_runtime::service::{run_dependent_task, start_synthetic_service};
+use nixfied_runtime::state::{
+    StateIdentity, derive_host_placement, materialize_run_roots, state_base_from_env,
+    write_slot_marker,
+};
 use nixfied_runtime::{
     Admission, AdmissionContext, RuntimeError, StoreOriginPolicy, parse_loaded_model,
     read_raw_model,
@@ -20,6 +24,19 @@ struct CheckOutput {
     target_system: String,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RunOutput {
+    run_id: String,
+    model_path: PathBuf,
+    computed_model_hash: String,
+    service_instance_id: String,
+    process_key: String,
+    selected_endpoint: nixfied_runtime::service::SelectedEndpoint,
+    task: nixfied_runtime::service::task::TaskRun,
+    summary_path: PathBuf,
+}
+
 fn main() {
     if let Err(error) = run() {
         eprintln!(
@@ -35,6 +52,7 @@ fn run() -> Result<(), RuntimeError> {
     let command = args.first().map(String::as_str).unwrap_or("check");
     match command {
         "check" => check(args.get(1..).unwrap_or(&[])),
+        "run" => run_m0(args.get(1..).unwrap_or(&[])),
         "ps" => run_control(ControlCommand::Ps, args.get(1..).unwrap_or(&[])),
         "down" => run_control(ControlCommand::Down, args.get(1..).unwrap_or(&[])),
         "clean" => run_control(ControlCommand::Clean, args.get(1..).unwrap_or(&[])),
@@ -90,6 +108,58 @@ fn check(args: &[String]) -> Result<(), RuntimeError> {
     Ok(())
 }
 
+fn run_m0(args: &[String]) -> Result<(), RuntimeError> {
+    let options = parse_run_options(args)?;
+    let run_id = new_run_id();
+    let (loaded, admission) =
+        load_admitted_model(options.model_path.clone(), options.allow_non_store)?;
+    let placement = derive_host_placement(&loaded.model, &run_id, &options.state_base)?;
+    materialize_run_roots(&placement)?;
+    let identity = StateIdentity::from_model(&loaded.model, &admission);
+    write_slot_marker(&placement, &identity)?;
+    let mut registry = Registry::open_or_create(
+        placement.registry_path(),
+        &RegistryIdentity::m0(
+            &loaded.model.project.project_id,
+            &loaded.model.runtime_abi,
+            &loaded.model.toolchain_id,
+        ),
+    )?;
+    let selected_port = first_candidate_port(&loaded.model)?;
+    let mut service = start_synthetic_service(
+        &loaded.model,
+        &admission,
+        &placement,
+        &mut registry,
+        run_id.clone(),
+        selected_port,
+    )?;
+    if let Err(error) = service.wait_for_probe_ready(&loaded.model, &mut registry) {
+        let _ = service.stop(&mut registry, options.timeout_ms);
+        return Err(error);
+    }
+    let task = match run_dependent_task(&loaded.model, &placement, &mut registry, &service, "smoke")
+    {
+        Ok(task) => task,
+        Err(error) => {
+            let _ = service.stop(&mut registry, options.timeout_ms);
+            return Err(error);
+        }
+    };
+    let output = RunOutput {
+        run_id,
+        model_path: admission.model_path.clone(),
+        computed_model_hash: admission.computed_model_hash.clone(),
+        service_instance_id: service.service_instance_id.clone(),
+        process_key: service.process_key.clone(),
+        selected_endpoint: service.selected_endpoint.clone(),
+        summary_path: task.summary_path.clone(),
+        task,
+    };
+    service.stop(&mut registry, options.timeout_ms)?;
+    print_json(&output)
+}
+
 #[derive(Debug, Clone, Copy)]
 enum ControlCommand {
     Ps,
@@ -98,6 +168,13 @@ enum ControlCommand {
 }
 
 struct ControlOptions {
+    model_path: PathBuf,
+    allow_non_store: bool,
+    state_base: PathBuf,
+    timeout_ms: u64,
+}
+
+struct RunOptions {
     model_path: PathBuf,
     allow_non_store: bool,
     state_base: PathBuf,
@@ -133,6 +210,64 @@ fn run_control(command: ControlCommand, args: &[String]) -> Result<(), RuntimeEr
             )?)
         }
     }
+}
+
+fn parse_run_options(args: &[String]) -> Result<RunOptions, RuntimeError> {
+    let mut model_path = None;
+    let mut allow_non_store = false;
+    let mut state_base = None;
+    let mut timeout_ms = 5000;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--model" => {
+                index += 1;
+                model_path = args.get(index).map(PathBuf::from);
+            }
+            "--allow-non-store-model" => {
+                allow_non_store = true;
+            }
+            "--state-base" => {
+                index += 1;
+                state_base = args.get(index).map(PathBuf::from);
+            }
+            "--timeout-ms" => {
+                index += 1;
+                let value = args.get(index).ok_or_else(|| {
+                    RuntimeError::new(
+                        nixfied_runtime::ErrorCode::ModelAdmission,
+                        "missing --timeout-ms value",
+                    )
+                })?;
+                timeout_ms = value.parse::<u64>().map_err(|error| {
+                    RuntimeError::new(
+                        nixfied_runtime::ErrorCode::ModelAdmission,
+                        format!("invalid --timeout-ms value {value}: {error}"),
+                    )
+                })?;
+            }
+            other => {
+                return Err(RuntimeError::new(
+                    nixfied_runtime::ErrorCode::ModelAdmission,
+                    format!("unknown run argument: {other}"),
+                ));
+            }
+        }
+        index += 1;
+    }
+    let model_path = model_path.ok_or_else(|| {
+        RuntimeError::new(
+            nixfied_runtime::ErrorCode::ModelAdmission,
+            "missing --model path",
+        )
+    })?;
+    let state_base = state_base.map(Ok).unwrap_or_else(state_base_from_env)?;
+    Ok(RunOptions {
+        model_path,
+        allow_non_store,
+        state_base,
+        timeout_ms,
+    })
 }
 
 fn parse_control_options(
@@ -194,6 +329,26 @@ fn parse_control_options(
         state_base,
         timeout_ms,
     })
+}
+
+fn first_candidate_port(model: &nixfied_model::Model) -> Result<u16, RuntimeError> {
+    let start = model.placement.candidate_ports.start;
+    let end = model.placement.candidate_ports.end;
+    if start == 0 || start > end {
+        return Err(RuntimeError::new(
+            nixfied_runtime::ErrorCode::ModelAdmission,
+            format!("invalid M0 candidate port window {start}-{end}"),
+        ));
+    }
+    Ok(start)
+}
+
+fn new_run_id() -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    format!("run-{}-{now}", std::process::id())
 }
 
 fn load_admitted_model(
