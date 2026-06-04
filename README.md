@@ -52,6 +52,22 @@ Use the development shell if you want the expected Rust and SQLite tools:
 nix develop
 ```
 
+## Install Into Another Project
+
+From another project repository, scaffold the minimal Nixfied integration:
+
+```sh
+nix run github:willyrgf/nixfied#install
+```
+
+The installer creates `flake.nix` and `nixfied.nix` only when they are absent.
+If `flake.nix` already exists, it refuses to edit it and prints the snippet to
+merge manually. The generated project builds its model with:
+
+```sh
+nix build .#model
+```
+
 ## Build The M0 Model
 
 From the repository root:
@@ -120,6 +136,7 @@ Run the Nix and M0 proof checks:
 nix flake check
 tests/m0/prove-downstream-minimal.sh
 tests/m0/prove-runtime-without-nix.sh
+tests/m0/prove-install-scaffold.sh
 ```
 
 The no-Nix proof builds and realises the model first, then places a failing fake

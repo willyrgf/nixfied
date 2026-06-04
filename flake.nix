@@ -42,10 +42,27 @@
         let
           nixfiedLib = mkNixfiedLib { inherit pkgs system; };
           m0MinimalModel = nixfiedLib.compileModel ./examples/m0-minimal/nixfied.nix;
+          nixfiedInstall = pkgs.writeShellApplication {
+            name = "nixfied-install";
+            runtimeInputs = [ pkgs.coreutils ];
+            text = builtins.readFile ./nix/install/install.sh;
+          };
         in
         {
           default = m0MinimalModel;
+          install = nixfiedInstall;
           m0-minimal-model = m0MinimalModel;
+        }
+      );
+
+      apps = forAllSystems (
+        { system, ... }:
+        {
+          install = {
+            type = "app";
+            program = "${self.packages.${system}.install}/bin/nixfied-install";
+            meta.description = "Install Nixfied scaffold files into a downstream project";
+          };
         }
       );
 

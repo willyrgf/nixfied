@@ -120,6 +120,7 @@ cargo test --manifest-path runtime/Cargo.toml
 nix flake check
 tests/m0/prove-downstream-minimal.sh
 tests/m0/prove-runtime-without-nix.sh
+tests/m0/prove-install-scaffold.sh
 ```
 
 Focused runtime tests:
