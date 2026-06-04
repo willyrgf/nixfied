@@ -1071,8 +1071,8 @@ fn model(executable: &str, start_args: &[&str], port: u16) -> Model {
 fn fixture_model(executable: &str, start_args: &[&str], port: u16) -> Value {
     json!({
         "modelVersion": 1,
-        "toolchainId": "nixfied-toolchain:m0:1",
-        "runtimeAbi": "nixfied-runtime-abi:m0:1",
+        "toolchainId": "nixfied-toolchain:m0:2",
+        "runtimeAbi": "nixfied-runtime-abi:m0:2",
         "generator": {
             "name": "nixfied",
             "version": "m0",
@@ -1282,7 +1282,17 @@ fn fixture_model(executable: &str, start_args: &[&str], port: u16) -> Value {
 }
 
 fn m0_surface_names() -> Vec<&'static str> {
-    vec!["model", "check", "run", "ps", "down", "clean"]
+    vec![
+        "model",
+        "schema",
+        "docs",
+        "capabilities",
+        "check",
+        "run",
+        "ps",
+        "down",
+        "clean",
+    ]
 }
 
 fn m0_surfaces() -> Vec<Value> {

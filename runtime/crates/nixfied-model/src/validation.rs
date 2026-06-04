@@ -4,7 +4,17 @@ use crate::constants::{MODEL_VERSION, RUNTIME_ABI, TOOLCHAIN_ID};
 use crate::error::ValidationError;
 use crate::types::*;
 
-const M0_SURFACES: &[&str] = &["model", "check", "run", "ps", "down", "clean"];
+const M0_SURFACES: &[&str] = &[
+    "model",
+    "schema",
+    "docs",
+    "capabilities",
+    "check",
+    "run",
+    "ps",
+    "down",
+    "clean",
+];
 
 pub trait ValidateM0 {
     fn validate_m0(&self) -> Result<(), ValidationError>;
