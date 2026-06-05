@@ -1547,7 +1547,7 @@ fn duplicate_active_service_start_is_refused() {
 }
 
 #[test]
-fn ps_reconciles_dead_owned_process_as_stale_and_releases_port() {
+fn ps_reconciles_dead_owned_process_and_port_as_stale() {
     let mut fixture = ServiceFixture::new("/bin/sleep", &["1"], 38187);
     let service = start_synthetic_service(
         &fixture.model,
@@ -1587,11 +1587,11 @@ fn ps_reconciles_dead_owned_process_as_stale_and_releases_port() {
             |row| row.get(0),
         )
         .expect("service status should query");
-    let released_ports: i64 = fixture
+    let stale_ports: i64 = fixture
         .registry
         .connection()
         .query_row(
-            "SELECT count(*) FROM ports WHERE status = 'released'",
+            "SELECT count(*) FROM ports WHERE status = 'stale'",
             [],
             |row| row.get(0),
         )
@@ -1607,7 +1607,7 @@ fn ps_reconciles_dead_owned_process_as_stale_and_releases_port() {
         .expect("events should query");
     assert_eq!(process_status, "stale");
     assert_eq!(service_status, "stale");
-    assert_eq!(released_ports, 1);
+    assert_eq!(stale_ports, 1);
     assert_eq!(stale_events, 1);
 }
 
@@ -2365,8 +2365,8 @@ fn assert_registry_tables_scoped_to_slot(registry: &Registry, slot: i64, tables:
 fn fixture_model(executable: &str, start_args: &[&str], port: u16) -> Value {
     json!({
         "modelVersion": 1,
-        "toolchainId": "nixfied-toolchain:m2a:1",
-        "runtimeAbi": "nixfied-runtime-abi:m2a:1",
+        "toolchainId": "nixfied-toolchain:m2b:1",
+        "runtimeAbi": "nixfied-runtime-abi:m2b:1",
         "generator": {
             "name": "nixfied",
             "version": "m0",

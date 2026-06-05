@@ -1,7 +1,7 @@
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
-use nixfied_model::{CleanupPolicy, Model, Target};
+use nixfied_model::{CleanupPolicy, Model, PersistencePolicy, Target};
 use serde::{Deserialize, Serialize};
 
 use crate::admission::Admission;
@@ -19,6 +19,7 @@ pub struct StateIdentity {
     pub slot: u32,
     pub state_epoch: String,
     pub cleanup_policy: CleanupPolicy,
+    pub persistence: PersistencePolicy,
     pub model_path: PathBuf,
     pub computed_model_hash: String,
     pub runtime_abi: String,
@@ -52,6 +53,7 @@ impl StateIdentity {
             slot,
             state_epoch: model.state.state_epoch.clone(),
             cleanup_policy: model.state.cleanup_policy.clone(),
+            persistence: model.state.persistence.clone(),
             model_path: admission.model_path.clone(),
             computed_model_hash: admission.computed_model_hash.clone(),
             runtime_abi: admission.runtime_abi.clone(),
@@ -73,6 +75,7 @@ pub struct StateMarker {
     pub service_instance_id: Option<String>,
     pub state_epoch: String,
     pub cleanup_policy: CleanupPolicy,
+    pub persistence: PersistencePolicy,
     pub model_path: PathBuf,
     pub computed_model_hash: String,
     pub runtime_abi: String,
@@ -92,6 +95,7 @@ impl StateMarker {
             service_instance_id: None,
             state_epoch: identity.state_epoch.clone(),
             cleanup_policy: identity.cleanup_policy.clone(),
+            persistence: identity.persistence.clone(),
             model_path: identity.model_path.clone(),
             computed_model_hash: identity.computed_model_hash.clone(),
             runtime_abi: identity.runtime_abi.clone(),
@@ -109,6 +113,7 @@ impl StateMarker {
             && self.state_kind == StateKind::Slot
             && self.service_instance_id.is_none()
             && self.state_epoch == identity.state_epoch
+            && self.persistence == identity.persistence
             && self.model_path == identity.model_path
             && self.computed_model_hash == identity.computed_model_hash
             && self.runtime_abi == identity.runtime_abi

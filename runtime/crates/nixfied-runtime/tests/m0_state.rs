@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use nixfied_model::{CleanupPolicy, DirtyPolicy, Model, SourceMode};
+use nixfied_model::{CleanupPolicy, DirtyPolicy, Model, PersistencePolicy, SourceMode};
 use nixfied_runtime::control::clean_reconciled_state;
 use nixfied_runtime::registry::{Registry, RegistryIdentity};
 use nixfied_runtime::slot::{first_candidate_port, select_slot};
@@ -59,6 +59,7 @@ fn materializes_m0_roots_and_slot_marker() {
     assert_eq!(marker.slot, 0);
     assert_eq!(marker.state_epoch, "m0");
     assert_eq!(marker.cleanup_policy, CleanupPolicy::DeleteOnClean);
+    assert_eq!(marker.persistence, PersistencePolicy::RunScoped);
 }
 
 #[test]
@@ -232,6 +233,29 @@ fn cleanup_refuses_protected_state() {
     assert!(fixture.layout.state_root.exists());
 }
 
+#[test]
+fn cleanup_refuses_persistent_state() {
+    let fixture = StateFixture::new();
+    let mut persistent = fixture.identity.clone();
+    persistent.persistence = PersistencePolicy::Persistent;
+    let marker = StateMarker::slot(&persistent);
+    fs::write(
+        fixture.layout.state_root.join(MARKER_FILE_NAME),
+        serde_json::to_vec_pretty(&marker).expect("marker JSON"),
+    )
+    .expect("marker should be replaced");
+
+    let error = inspect_cleanup_target(
+        &fixture.layout.state_base,
+        &fixture.layout.state_root,
+        &persistent,
+    )
+    .expect_err("persistent state should be refused");
+
+    assert_eq!(error.code, ErrorCode::CleanupRefused);
+    assert!(fixture.layout.state_root.exists());
+}
+
 #[cfg(unix)]
 #[test]
 fn cleanup_refuses_symlink_traversal() {
@@ -335,6 +359,16 @@ fn cleanup_deletes_matching_inactive_state() {
         ]
     );
     assert!(!fixture.layout.state_root.exists());
+    drop(statement);
+
+    let repeated = clean_marked_state(
+        &fixture.layout.state_base,
+        &fixture.layout.state_root,
+        &fixture.identity,
+        &mut registry,
+    )
+    .expect("repeated cleanup should use prior deletion evidence");
+    assert_eq!(repeated, outcome);
 }
 
 #[test]
@@ -351,8 +385,8 @@ fn clean_reconciles_stale_refs_before_marker_owned_delete() {
               summary_path
             ) VALUES (
               'run-stale', 'dev', 0, 'service-starting', '/nix/store/test-model/model.json',
-              'computed-hash', 'nixfied-runtime-abi:m2a:1',
-              'nixfied-toolchain:m2a:1', '{}', '{}', '[]', NULL
+              'computed-hash', 'nixfied-runtime-abi:m2b:1',
+              'nixfied-toolchain:m2b:1', '{}', '{}', '[]', NULL
             );
             INSERT INTO services (
               service_instance_id, environment, slot, service_name,
@@ -409,7 +443,136 @@ fn clean_reconciles_stale_refs_before_marker_owned_delete() {
         )
         .expect("port status should query");
     assert_eq!(process_status, "stale");
-    assert_eq!(port_status, "released");
+    assert_eq!(port_status, "stale");
+}
+
+#[test]
+fn cleanup_finishes_interrupted_delete_when_target_is_already_absent() {
+    let fixture = StateFixture::new();
+    let mut registry = fixture.registry();
+    let marker = StateMarker::slot(&fixture.identity);
+    let marker_json = serde_json::to_string(&marker).expect("marker should serialize");
+    let target_path = fixture
+        .layout
+        .state_root
+        .canonicalize()
+        .expect("state root should canonicalize")
+        .display()
+        .to_string();
+    registry
+        .connection_mut()
+        .execute(
+            "
+            INSERT INTO cleanups (
+              cleanup_id, environment, slot, target_path, marker_json, status, refusal_reason
+            ) VALUES ('cleanup-interrupted', 'dev', 0, ?1, ?2, 'intent', NULL)
+            ",
+            [&target_path, &marker_json],
+        )
+        .expect("interrupted cleanup intent should be inserted");
+    fs::remove_dir_all(&fixture.layout.state_root).expect("interrupted delete should remove root");
+
+    let outcome = clean_marked_state(
+        &fixture.layout.state_base,
+        &fixture.layout.state_root,
+        &fixture.identity,
+        &mut registry,
+    )
+    .expect("missing target with intent evidence should finish as deleted");
+    let cleanup_status: String = registry
+        .connection()
+        .query_row(
+            "SELECT status FROM cleanups WHERE cleanup_id = 'cleanup-interrupted'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("cleanup status should query");
+    let deleted_events: i64 = registry
+        .connection()
+        .query_row(
+            "SELECT count(*) FROM events WHERE event_type = 'cleanup.deleted'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("cleanup events should query");
+
+    assert_eq!(outcome.cleanup_id, "cleanup-interrupted");
+    assert_eq!(cleanup_status, "deleted");
+    assert_eq!(deleted_events, 1);
+}
+
+#[test]
+fn clean_marks_active_port_stale_after_owner_process_is_proven_dead() {
+    let fixture = StateFixture::new();
+    let mut registry = fixture.registry();
+    registry
+        .connection_mut()
+        .execute_batch(
+            "
+            INSERT INTO runs (
+              run_id, environment, slot, status, model_path, computed_model_hash,
+              runtime_abi, toolchain_id, generator_json, target_json, source_json,
+              summary_path
+            ) VALUES (
+              'run-stale-port', 'dev', 0, 'service-starting', '/nix/store/test-model/model.json',
+              'computed-hash', 'nixfied-runtime-abi:m2b:1',
+              'nixfied-toolchain:m2b:1', '{}', '{}', '[]', NULL
+            );
+            INSERT INTO services (
+              service_instance_id, environment, slot, service_name,
+              service_address_hash, endpoint_identity_hash, state_identity_hash,
+              runtime_compatibility_hash, target_identity_hash, status,
+              endpoint_json, state_root
+            ) VALUES (
+              'service-stale-port', 'dev', 0, 'synthetic', 'address', 'endpoint', 'state',
+              'runtime', 'target', 'stopped', '{}', '/tmp/stale-port'
+            );
+            INSERT INTO processes (
+              process_key, environment, slot, pid, pgid, start_identity, command_json,
+              run_id, service_instance_id, status
+            ) VALUES (
+              'process-stale-port', 'dev', 0, 999998, 999998,
+              '{\"platformStart\":\"missing\"}', '{}',
+              'run-stale-port', 'service-stale-port', 'stopped'
+            );
+            INSERT INTO ports (
+              endpoint_key, environment, slot, service_instance_id, address, port,
+              status, owner_process_key
+            ) VALUES (
+              'endpoint-stale-port', 'dev', 0, 'service-stale-port', '127.0.0.1', 38191,
+              'active', 'process-stale-port'
+            );
+            ",
+        )
+        .expect("stale port refs should be inserted");
+
+    let outcome = clean_reconciled_state(
+        &mut registry,
+        &fixture.layout.state_base,
+        &fixture.layout.state_root,
+        &fixture.identity,
+    )
+    .expect("stale port should reconcile before cleanup");
+    let port_status: String = registry
+        .connection()
+        .query_row(
+            "SELECT status FROM ports WHERE endpoint_key = 'endpoint-stale-port'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("port status should query");
+    let port_events: i64 = registry
+        .connection()
+        .query_row(
+            "SELECT count(*) FROM events WHERE event_type = 'port.stale'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("port events should query");
+
+    assert!(outcome.cleanup_id.starts_with("cleanup-"));
+    assert_eq!(port_status, "stale");
+    assert_eq!(port_events, 1);
 }
 
 fn assert_cleanup_refused_with_active_ref(sql: &str) {
@@ -522,8 +685,8 @@ fn add_slot_one(value: &mut Value, start: u16, end: u16) {
 fn fixture_model() -> Value {
     json!({
         "modelVersion": 1,
-        "toolchainId": "nixfied-toolchain:m2a:1",
-        "runtimeAbi": "nixfied-runtime-abi:m2a:1",
+        "toolchainId": "nixfied-toolchain:m2b:1",
+        "runtimeAbi": "nixfied-runtime-abi:m2b:1",
         "generator": {
             "name": "nixfied",
             "version": "m0",

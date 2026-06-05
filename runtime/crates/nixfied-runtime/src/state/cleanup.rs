@@ -1,6 +1,7 @@
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
-use nixfied_model::CleanupPolicy;
+use nixfied_model::{CleanupPolicy, PersistencePolicy};
 use rusqlite::params;
 use serde::Serialize;
 
@@ -44,12 +45,8 @@ pub fn inspect_cleanup_target(
             "state marker identity does not match the requested cleanup identity",
         ));
     }
-    if marker.cleanup_policy != CleanupPolicy::DeleteOnClean {
-        return Err(RuntimeError::new(
-            ErrorCode::CleanupRefused,
-            "state cleanup policy requires explicit purge, which M0 does not implement",
-        ));
-    }
+    refuse_cleanup_policy(&marker.cleanup_policy, &marker.persistence)?;
+    refuse_cleanup_policy(&expected.cleanup_policy, &expected.persistence)?;
     Ok(marker)
 }
 
@@ -60,6 +57,9 @@ pub fn clean_marked_state(
     registry: &mut Registry,
 ) -> RuntimeResult<CleanupOutcome> {
     let target = target.as_ref();
+    if target_is_missing(target)? {
+        return finish_missing_target_cleanup(state_base.as_ref(), target, expected, registry);
+    }
     let marker = inspect_cleanup_target(state_base, target, expected)?;
     refuse_active_refs(registry)?;
     let canonical_target = canonicalize_existing("cleanup target", target)?;
@@ -106,6 +106,150 @@ pub fn clean_marked_state(
         cleanup_id,
         deleted_path: canonical_target,
     })
+}
+
+fn finish_missing_target_cleanup(
+    state_base: &Path,
+    target: &Path,
+    expected: &StateIdentity,
+    registry: &mut Registry,
+) -> RuntimeResult<CleanupOutcome> {
+    let canonical_target = canonicalize_missing_target(state_base, target)?;
+    refuse_active_refs(registry)?;
+    refuse_cleanup_policy(&expected.cleanup_policy, &expected.persistence)?;
+    let cleanup = find_prior_cleanup(registry, &canonical_target, expected)?;
+    if cleanup.status == "intent" {
+        let payload_json = cleanup_payload_json(&cleanup.cleanup_id, &canonical_target);
+        record_cleanup_terminal(
+            registry,
+            &cleanup.cleanup_id,
+            &cleanup.marker.computed_model_hash,
+            &payload_json,
+            "deleted",
+            None,
+        )?;
+    }
+    Ok(CleanupOutcome {
+        cleanup_id: cleanup.cleanup_id,
+        deleted_path: canonical_target,
+    })
+}
+
+#[derive(Debug)]
+struct PriorCleanup {
+    cleanup_id: String,
+    status: String,
+    marker: StateMarker,
+}
+
+fn target_is_missing(target: &Path) -> RuntimeResult<bool> {
+    match std::fs::symlink_metadata(target) {
+        Ok(_) => Ok(false),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(true),
+        Err(error) => Err(RuntimeError::new(
+            ErrorCode::StateUnowned,
+            format!(
+                "failed to inspect cleanup target {}: {error}",
+                target.display()
+            ),
+        )),
+    }
+}
+
+fn canonicalize_missing_target(state_base: &Path, target: &Path) -> RuntimeResult<PathBuf> {
+    let canonical_base = canonicalize_existing("state base", state_base)?;
+    let parent = target.parent().ok_or_else(|| {
+        RuntimeError::new(
+            ErrorCode::StateUnowned,
+            format!("cleanup target {} has no parent", target.display()),
+        )
+    })?;
+    let name = target.file_name().ok_or_else(|| {
+        RuntimeError::new(
+            ErrorCode::StateUnowned,
+            format!("cleanup target {} has no final component", target.display()),
+        )
+    })?;
+    let canonical_parent = canonicalize_existing("cleanup target parent", parent)?;
+    if !canonical_parent.starts_with(&canonical_base) {
+        return Err(RuntimeError::new(
+            ErrorCode::StateUnowned,
+            format!(
+                "cleanup target {} escapes state base {}",
+                canonical_parent.join(name).display(),
+                canonical_base.display()
+            ),
+        ));
+    }
+    Ok(canonical_parent.join(name))
+}
+
+fn find_prior_cleanup(
+    registry: &Registry,
+    canonical_target: &Path,
+    expected: &StateIdentity,
+) -> RuntimeResult<PriorCleanup> {
+    let rows = {
+        let mut statement = registry
+            .connection()
+            .prepare(
+                "
+                SELECT cleanup_id, marker_json, status
+                FROM cleanups
+                WHERE target_path = ?1 AND status IN ('intent', 'deleted')
+                ORDER BY rowid DESC
+                ",
+            )
+            .map_err(sql_error)?;
+        statement
+            .query_map([canonical_target.display().to_string()], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(sql_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(sql_error)?
+    };
+    for (cleanup_id, marker_json, status) in rows {
+        let marker = serde_json::from_str::<StateMarker>(&marker_json).map_err(|error| {
+            RuntimeError::new(
+                ErrorCode::RegistryCorrupt,
+                format!("cleanup {cleanup_id} has invalid marker evidence: {error}"),
+            )
+        })?;
+        if marker.matches_declared_marker(expected) {
+            return Ok(PriorCleanup {
+                cleanup_id,
+                status,
+                marker,
+            });
+        }
+    }
+    Err(RuntimeError::new(
+        ErrorCode::StateUnowned,
+        format!(
+            "cleanup target {} is absent without matching cleanup evidence",
+            canonical_target.display()
+        ),
+    ))
+}
+
+fn refuse_cleanup_policy(
+    cleanup_policy: &CleanupPolicy,
+    persistence: &PersistencePolicy,
+) -> RuntimeResult<()> {
+    if cleanup_policy == &CleanupPolicy::DeleteOnClean
+        && persistence == &PersistencePolicy::RunScoped
+    {
+        return Ok(());
+    }
+    Err(RuntimeError::new(
+        ErrorCode::CleanupRefused,
+        "state cleanup policy requires explicit purge, which is not implemented",
+    ))
 }
 
 fn refuse_active_refs(registry: &Registry) -> RuntimeResult<()> {
