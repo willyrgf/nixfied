@@ -8,11 +8,12 @@ use std::time::{Duration, Instant};
 use nixfied_model::{ExecSpec, Model, TaskSpec};
 use serde::Serialize;
 
+use crate::cancellation::{CancellationToken, canceled_error};
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::registry::Registry;
 use crate::service::process::{
     SelectedEndpoint, StartedService, platform_start_identity, process_group, resolve_exec_cwd,
-    signal_process_group, wait_for_child_exit,
+    terminate_process_group, wait_for_child_exit,
 };
 use crate::service::registry::{
     TaskProcessRecord, ensure_service_instance_probe_ready, mark_task_finished, record_task_started,
@@ -39,6 +40,25 @@ pub fn run_dependent_task(
     service: &StartedService,
     task_id: &str,
 ) -> RuntimeResult<TaskRun> {
+    run_dependent_task_cancellable(
+        model,
+        placement,
+        registry,
+        service,
+        task_id,
+        &CancellationToken::new(),
+    )
+}
+
+pub fn run_dependent_task_cancellable(
+    model: &Model,
+    placement: &HostPlacement,
+    registry: &mut Registry,
+    service: &StartedService,
+    task_id: &str,
+    cancellation: &CancellationToken,
+) -> RuntimeResult<TaskRun> {
+    cancellation.check()?;
     let task = model.tasks.get(task_id).ok_or_else(|| {
         RuntimeError::new(
             ErrorCode::ModelAdmission,
@@ -69,6 +89,7 @@ pub fn run_dependent_task(
         stderr_path: stderr_path.as_path(),
     })
     .map_err(|error| RuntimeError::new(ErrorCode::ModelAdmission, error.to_string()))?;
+    cancellation.check()?;
     let mut child = spawn_task(exec, &args, &command_cwd, &stdout_path, &stderr_path)?;
     let pid = child.id();
     let pgid = process_group(pid)?
@@ -87,12 +108,13 @@ pub fn run_dependent_task(
             computed_model_hash: &service.computed_model_hash,
         },
     ) {
-        let _ = signal_process_group(pgid, libc::SIGKILL);
+        let _ = terminate_process_group(pgid, 1000);
         let _ = child.wait();
         return Err(error);
     }
-    let outcome = wait_for_task(&mut child, pgid, exec.timeout_ms)?;
+    let outcome = wait_for_task(&mut child, pgid, exec.timeout_ms, cancellation)?;
     let success = !outcome.timed_out
+        && !outcome.canceled
         && outcome
             .exit_code
             .map(|code| task.exit_policy.success_codes.contains(&code))
@@ -101,6 +123,8 @@ pub fn run_dependent_task(
     let timed_out = outcome.timed_out;
     let failure_message = if timed_out {
         format!("task {task_id} timed out after {}ms", exec.timeout_ms)
+    } else if outcome.canceled {
+        "run was canceled".to_string()
     } else {
         format!(
             "task {task_id} exited with code {}",
@@ -132,6 +156,8 @@ pub fn run_dependent_task(
     )?;
     if success {
         Ok(run)
+    } else if outcome.canceled {
+        Err(canceled_error())
     } else {
         Err(RuntimeError::new(
             ErrorCode::ModelAdmission,
@@ -189,10 +215,24 @@ fn spawn_task(
     })
 }
 
-fn wait_for_task(child: &mut Child, pgid: i32, timeout_ms: u64) -> RuntimeResult<TaskOutcome> {
+fn wait_for_task(
+    child: &mut Child,
+    pgid: i32,
+    timeout_ms: u64,
+    cancellation: &CancellationToken,
+) -> RuntimeResult<TaskOutcome> {
     let timeout = Duration::from_millis(timeout_ms);
     let deadline = Instant::now() + timeout;
     loop {
+        if cancellation.is_canceled() {
+            terminate_process_group(pgid, 1000)?;
+            let _ = wait_for_child_exit(child, 1000);
+            return Ok(TaskOutcome {
+                exit_code: None,
+                timed_out: false,
+                canceled: true,
+            });
+        }
         if let Some(status) = child.try_wait().map_err(|error| {
             RuntimeError::new(
                 ErrorCode::ProcEscape,
@@ -202,14 +242,16 @@ fn wait_for_task(child: &mut Child, pgid: i32, timeout_ms: u64) -> RuntimeResult
             return Ok(TaskOutcome {
                 exit_code: status.code(),
                 timed_out: false,
+                canceled: false,
             });
         }
         if Instant::now() >= deadline {
-            let _ = signal_process_group(pgid, libc::SIGKILL);
+            terminate_process_group(pgid, 1000)?;
             let _ = wait_for_child_exit(child, 1000);
             return Ok(TaskOutcome {
                 exit_code: None,
                 timed_out: true,
+                canceled: false,
             });
         }
         thread::sleep(Duration::from_millis(10));
@@ -219,6 +261,7 @@ fn wait_for_task(child: &mut Child, pgid: i32, timeout_ms: u64) -> RuntimeResult
 struct TaskOutcome {
     exit_code: Option<i32>,
     timed_out: bool,
+    canceled: bool,
 }
 
 fn task_args(exec: &ExecSpec, task: &TaskSpec, endpoint: &SelectedEndpoint) -> Vec<String> {

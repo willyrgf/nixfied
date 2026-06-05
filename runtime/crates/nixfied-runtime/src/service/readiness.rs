@@ -1,15 +1,29 @@
 use std::net::{SocketAddr, TcpStream};
-use std::thread;
 use std::time::Duration;
 
 use nixfied_model::{EndpointSpec, ProbeSpec, ProbeTarget, ServiceSpec};
 
+use crate::cancellation::{CancellationToken, sleep_cancellable};
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 
 pub fn wait_for_readiness_probe(
     service: &ServiceSpec,
     selected_endpoint: &EndpointSpec,
     selected_port: u16,
+) -> RuntimeResult<()> {
+    wait_for_readiness_probe_cancellable(
+        service,
+        selected_endpoint,
+        selected_port,
+        &CancellationToken::new(),
+    )
+}
+
+pub fn wait_for_readiness_probe_cancellable(
+    service: &ServiceSpec,
+    selected_endpoint: &EndpointSpec,
+    selected_port: u16,
+    cancellation: &CancellationToken,
 ) -> RuntimeResult<()> {
     let probe = service
         .probes
@@ -21,13 +35,14 @@ pub fn wait_for_readiness_probe(
                 format!("readiness probe {} is missing", service.readiness_probe),
             )
         })?;
-    wait_for_probe(probe, selected_endpoint, selected_port)
+    wait_for_probe(probe, selected_endpoint, selected_port, cancellation)
 }
 
 fn wait_for_probe(
     probe: &ProbeSpec,
     selected_endpoint: &EndpointSpec,
     selected_port: u16,
+    cancellation: &CancellationToken,
 ) -> RuntimeResult<()> {
     match &probe.target {
         ProbeTarget::TcpConnect { endpoint_id } => {
@@ -40,7 +55,7 @@ fn wait_for_probe(
                     ),
                 ));
             }
-            wait_for_tcp(probe, selected_endpoint, selected_port)
+            wait_for_tcp(probe, selected_endpoint, selected_port, cancellation)
         }
         ProbeTarget::HttpGet { .. } => Err(RuntimeError::new(
             ErrorCode::ModelAdmission,
@@ -53,6 +68,7 @@ fn wait_for_tcp(
     probe: &ProbeSpec,
     selected_endpoint: &EndpointSpec,
     selected_port: u16,
+    cancellation: &CancellationToken,
 ) -> RuntimeResult<()> {
     let address = format!("{}:{selected_port}", selected_endpoint.host);
     let socket_addr = address.parse::<SocketAddr>().map_err(|error| {
@@ -66,11 +82,12 @@ fn wait_for_tcp(
     let attempts = probe.max_attempts.max(1);
     let mut last_error = None;
     for _ in 0..attempts {
+        cancellation.check()?;
         match TcpStream::connect_timeout(&socket_addr, timeout) {
             Ok(_) => return Ok(()),
             Err(error) => {
                 last_error = Some(error);
-                thread::sleep(retry_interval);
+                sleep_cancellable(retry_interval, cancellation)?;
             }
         }
     }

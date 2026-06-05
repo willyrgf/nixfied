@@ -24,6 +24,7 @@ pub enum ErrorCode {
     PortUnverifiable,
     ProcEscape,
     ReadinessTimeout,
+    Canceled,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

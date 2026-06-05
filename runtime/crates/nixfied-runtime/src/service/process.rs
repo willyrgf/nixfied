@@ -13,11 +13,12 @@ use nixfied_model::{LifecycleOpClass, LifecycleOpSpec, Model, PortPolicy};
 use serde::Serialize;
 
 use crate::admission::Admission;
+use crate::cancellation::CancellationToken;
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::registry::Registry;
 use crate::service::identity::{service_address_hash, service_instance_id};
 use crate::service::ownership::{ExpectedEndpointOwner, verify_endpoint_ownership};
-use crate::service::readiness::wait_for_readiness_probe;
+use crate::service::readiness::wait_for_readiness_probe_cancellable;
 use crate::service::registry::{
     ProcessRecord, RunRecord, ServiceRecord, ensure_service_start_allowed,
     mark_endpoint_owner_verified, mark_process_escape, mark_service_failed,
@@ -58,6 +59,15 @@ impl StartedService {
         model: &Model,
         registry: &mut Registry,
     ) -> RuntimeResult<()> {
+        self.wait_for_probe_ready_cancellable(model, registry, &CancellationToken::new())
+    }
+
+    pub fn wait_for_probe_ready_cancellable(
+        &mut self,
+        model: &Model,
+        registry: &mut Registry,
+        cancellation: &CancellationToken,
+    ) -> RuntimeResult<()> {
         let service = model.services.get(&self.service_name).ok_or_else(|| {
             RuntimeError::new(
                 ErrorCode::ModelAdmission,
@@ -78,9 +88,17 @@ impl StartedService {
             self.cleanup_after_escape();
             return Err(error);
         }
+        cancellation.check()?;
         self.ensure_alive_or_record_escape(registry)?;
-        if let Err(error) = wait_for_readiness_probe(service, endpoint, self.selected_endpoint.port)
-        {
+        if let Err(error) = wait_for_readiness_probe_cancellable(
+            service,
+            endpoint,
+            self.selected_endpoint.port,
+            cancellation,
+        ) {
+            if error.code == ErrorCode::Canceled {
+                return Err(error);
+            }
             if let Some(error) = self.escape_error(registry) {
                 self.cleanup_after_escape();
                 return Err(error);
@@ -93,6 +111,7 @@ impl StartedService {
             self.cleanup_after_escape();
             return Err(error);
         }
+        cancellation.check()?;
         self.ensure_alive_or_record_escape(registry)?;
         if let Some(error) = self.escape_error(registry) {
             self.cleanup_after_escape();
@@ -141,6 +160,13 @@ impl StartedService {
         )
     }
 
+    pub fn cancel(&mut self, timeout_ms: u64) -> RuntimeResult<()> {
+        terminate_process_group(self.pgid, timeout_ms)?;
+        let _ = wait_for_child_exit(&mut self.child, 1000)?;
+        self.monitor.stop();
+        Ok(())
+    }
+
     pub fn stop(mut self, registry: &mut Registry, timeout_ms: u64) -> RuntimeResult<()> {
         if let Some(error) = self.escape_error(registry) {
             self.cleanup_after_escape();
@@ -157,16 +183,8 @@ impl StartedService {
             self.cleanup_after_escape();
             return Err(error);
         }
-        signal_process_group(self.pgid, libc::SIGTERM)?;
-        if !wait_for_child_exit(&mut self.child, timeout_ms)? {
-            signal_process_group(self.pgid, libc::SIGKILL)?;
-            if !wait_for_child_exit(&mut self.child, 1000)? {
-                return Err(RuntimeError::new(
-                    ErrorCode::ProcEscape,
-                    format!("failed to stop foreground service process {}", self.pid),
-                ));
-            }
-        }
+        terminate_process_group(self.pgid, timeout_ms)?;
+        let _ = wait_for_child_exit(&mut self.child, 1000)?;
         if let Some(error) = self.escape_error(registry) {
             self.cleanup_after_escape();
             return Err(error);
@@ -253,11 +271,8 @@ impl StartedService {
     }
 
     fn cleanup_after_readiness_failure(&mut self, registry: &mut Registry, error: &RuntimeError) {
-        let _ = signal_process_group(self.pgid, libc::SIGTERM);
-        if wait_for_child_exit(&mut self.child, 1000).ok() != Some(true) {
-            let _ = signal_process_group(self.pgid, libc::SIGKILL);
-            let _ = wait_for_child_exit(&mut self.child, 1000);
-        }
+        let _ = terminate_process_group(self.pgid, 1000);
+        let _ = wait_for_child_exit(&mut self.child, 1000);
         self.monitor.stop();
         let payload = serde_json::json!({
             "pid": self.pid,
@@ -671,16 +686,33 @@ fn ensure_foreground_child_alive(service: &mut StartedService) -> RuntimeResult<
     Ok(())
 }
 
-fn terminate_process_group(pgid: i32, timeout_ms: u64) -> RuntimeResult<()> {
+pub(crate) fn terminate_process_group(pgid: i32, timeout_ms: u64) -> RuntimeResult<()> {
     signal_process_group(pgid, libc::SIGTERM)?;
+    if wait_until_process_group_empty(pgid, timeout_ms)? {
+        return Ok(());
+    }
+    signal_process_group(pgid, libc::SIGKILL)?;
+    if wait_until_process_group_empty(pgid, 1000)? {
+        Ok(())
+    } else {
+        Err(RuntimeError::new(
+            ErrorCode::ProcEscape,
+            format!("failed to terminate owned process group {pgid}"),
+        ))
+    }
+}
+
+pub(crate) fn wait_until_process_group_empty(pgid: i32, timeout_ms: u64) -> RuntimeResult<bool> {
     let deadline = Instant::now() + Duration::from_millis(timeout_ms);
-    while Instant::now() < deadline {
-        if process_group_is_gone(pgid) {
-            return Ok(());
+    loop {
+        if !process_group_has_live_member(pgid)? {
+            return Ok(true);
+        }
+        if Instant::now() >= deadline {
+            return Ok(false);
         }
         thread::sleep(Duration::from_millis(25));
     }
-    signal_process_group(pgid, libc::SIGKILL)
 }
 
 pub(crate) fn wait_for_child_exit(child: &mut Child, timeout_ms: u64) -> RuntimeResult<bool> {
@@ -711,11 +743,6 @@ pub(crate) fn signal_process_group(pgid: i32, signal: i32) -> RuntimeResult<()> 
             ),
         ))
     }
-}
-
-fn process_group_is_gone(pgid: i32) -> bool {
-    let result = unsafe { libc::kill(-pgid, 0) };
-    result != 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
