@@ -132,6 +132,17 @@ fn valid_model_json() -> Value {
                 "foreground": true,
                 "lifecycle": [
                     {
+                        "operationId": "service.synthetic.prepare",
+                        "class": "prepare",
+                        "execId": null,
+                        "execArgs": [],
+                        "probeId": null,
+                        "terminal": {
+                            "success": "prepared",
+                            "failure": "failed"
+                        }
+                    },
+                    {
                         "operationId": "service.synthetic.start",
                         "class": "start",
                         "execId": "m0-helper",
@@ -154,6 +165,17 @@ fn valid_model_json() -> Value {
                         }
                     },
                     {
+                        "operationId": "service.synthetic.health",
+                        "class": "health",
+                        "execId": null,
+                        "execArgs": [],
+                        "probeId": "synthetic-tcp",
+                        "terminal": {
+                            "success": "healthy",
+                            "failure": "unhealthy"
+                        }
+                    },
+                    {
                         "operationId": "service.synthetic.stop",
                         "class": "stop",
                         "execId": "m0-helper",
@@ -161,6 +183,17 @@ fn valid_model_json() -> Value {
                         "probeId": null,
                         "terminal": {
                             "success": "stopped",
+                            "failure": "failed"
+                        }
+                    },
+                    {
+                        "operationId": "service.synthetic.clean",
+                        "class": "clean",
+                        "execId": null,
+                        "execArgs": [],
+                        "probeId": null,
+                        "terminal": {
+                            "success": "cleaned",
                             "failure": "failed"
                         }
                     }
@@ -188,6 +221,7 @@ fn valid_model_json() -> Value {
                     "maxAttempts": 20
                 }],
                 "readinessProbe": "synthetic-tcp",
+                "healthPolicy": "explicit",
                 "stopPolicy": {
                     "signal": "TERM",
                     "timeoutMs": 5000
@@ -283,11 +317,44 @@ fn add_slot_one(model: &mut Model, start: u16, end: u16) {
         .insert("1".to_string(), placement);
 }
 
+fn lifecycle_op_mut<'a>(
+    model: &'a mut Model,
+    operation_id: &str,
+) -> &'a mut nixfied_model::LifecycleOpSpec {
+    model
+        .services
+        .get_mut("synthetic")
+        .expect("fixture has service")
+        .lifecycle
+        .iter_mut()
+        .find(|op| op.operation_id == operation_id)
+        .expect("fixture has lifecycle operation")
+}
+
 #[test]
 fn parses_and_validates_m0_contract() {
-    parse_valid_model()
+    let model = parse_valid_model();
+
+    model
         .validate_m0()
         .expect("valid M0 model should pass contract validation");
+
+    let classes = model.services["synthetic"]
+        .lifecycle
+        .iter()
+        .map(|op| op.class.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        classes,
+        [
+            nixfied_model::LifecycleOpClass::Prepare,
+            nixfied_model::LifecycleOpClass::Start,
+            nixfied_model::LifecycleOpClass::Ready,
+            nixfied_model::LifecycleOpClass::Health,
+            nixfied_model::LifecycleOpClass::Stop,
+            nixfied_model::LifecycleOpClass::Clean,
+        ]
+    );
 }
 
 #[test]
@@ -547,12 +614,7 @@ fn runtime_constraints_must_remain_m0() {
 #[test]
 fn lifecycle_must_have_ready_probe_binding() {
     let mut model = parse_valid_model();
-    model
-        .services
-        .get_mut("synthetic")
-        .expect("fixture has service")
-        .lifecycle[1]
-        .probe_id = None;
+    lifecycle_op_mut(&mut model, "service.synthetic.ready").probe_id = None;
 
     assert_eq!(
         model
@@ -562,6 +624,120 @@ fn lifecycle_must_have_ready_probe_binding() {
             field: "lifecycle.probeId",
             expected: "synthetic-tcp",
             actual: "null".to_string(),
+        }
+    );
+}
+
+#[test]
+fn lifecycle_must_have_full_generic_class_set() {
+    let mut model = parse_valid_model();
+    model
+        .services
+        .get_mut("synthetic")
+        .expect("fixture has service")
+        .lifecycle
+        .retain(|op| op.operation_id != "service.synthetic.clean");
+
+    assert_eq!(
+        model
+            .validate_m0()
+            .expect_err("full lifecycle contract requires clean declaration"),
+        ValidationError::ExpectedLen {
+            field: "services.synthetic.lifecycle",
+            expected: 6,
+            actual: 5,
+        }
+    );
+}
+
+#[test]
+fn lifecycle_operation_ids_must_be_unique() {
+    let mut model = parse_valid_model();
+    lifecycle_op_mut(&mut model, "service.synthetic.health").operation_id =
+        "service.synthetic.ready".to_string();
+
+    assert_eq!(
+        model
+            .validate_m0()
+            .expect_err("duplicate lifecycle operation IDs must be rejected"),
+        ValidationError::UnsupportedValue {
+            field: "lifecycle.operationId",
+            expected: "unique operation IDs",
+            actual: "service.synthetic.ready".to_string(),
+        }
+    );
+}
+
+#[test]
+fn health_policy_must_be_explicit_for_declared_health() {
+    let mut model = parse_valid_model();
+    model
+        .services
+        .get_mut("synthetic")
+        .expect("fixture has service")
+        .health_policy = nixfied_model::HealthPolicy::Unsupported;
+
+    assert_eq!(
+        model
+            .validate_m0()
+            .expect_err("declared M2C health uses an explicit typed policy"),
+        ValidationError::UnsupportedValue {
+            field: "services.synthetic.healthPolicy",
+            expected: "explicit",
+            actual: "Unsupported".to_string(),
+        }
+    );
+}
+
+#[test]
+fn ready_and_health_must_remain_distinct_operation_classes() {
+    let mut model = parse_valid_model();
+    lifecycle_op_mut(&mut model, "service.synthetic.health").class =
+        nixfied_model::LifecycleOpClass::Ready;
+
+    assert_eq!(
+        model
+            .validate_m0()
+            .expect_err("health must not be conflated with readiness"),
+        ValidationError::UnsupportedValue {
+            field: "lifecycle.class",
+            expected: "service.synthetic.health",
+            actual: "Ready".to_string(),
+        }
+    );
+}
+
+#[test]
+fn health_operation_must_bind_declared_probe_contract() {
+    let mut model = parse_valid_model();
+    lifecycle_op_mut(&mut model, "service.synthetic.health").probe_id =
+        Some("missing-probe".to_string());
+
+    assert_eq!(
+        model
+            .validate_m0()
+            .expect_err("health operation must bind the declared health probe"),
+        ValidationError::UnsupportedValue {
+            field: "lifecycle.probeId",
+            expected: "synthetic-tcp",
+            actual: "missing-probe".to_string(),
+        }
+    );
+}
+
+#[test]
+fn clean_operation_uses_marker_gated_runtime_cleanup_contract() {
+    let mut model = parse_valid_model();
+    lifecycle_op_mut(&mut model, "service.synthetic.clean").exec_id = Some("m0-helper".to_string());
+
+    assert_eq!(
+        model
+            .validate_m0()
+            .expect_err("clean must stay a runtime cleanup primitive in this contract"),
+        ValidationError::UnsupportedValue {
+            field: "lifecycle.execId",
+            expected: "null",
+            actual: "m0-helper".to_string(),
         }
     );
 }

@@ -15,6 +15,9 @@
         "EndpointSpec"
         "ProbeSpec"
         "LifecycleOpSpec"
+        "LifecycleOpClass"
+        "TerminalSemantics"
+        "HealthPolicy"
         "ServiceSpec"
         "TaskSpec"
         "SlotPlacement"
@@ -42,6 +45,19 @@
     ## Services
 
     ${builtins.concatStringsSep "\n" (map (service: "- ${service}") model.capabilities.services)}
+
+    ## Lifecycle
+
+    ${builtins.concatStringsSep "\n" (
+      map (
+        service:
+        let
+          serviceSpec = model.services.${service};
+          classes = map (op: op.class) serviceSpec.lifecycle;
+        in
+        "- ${service}: readiness ${serviceSpec.readinessProbe}; health ${serviceSpec.healthPolicy}; operations ${builtins.concatStringsSep ", " classes}"
+      ) model.capabilities.services
+    )}
 
     ## Tasks
 

@@ -116,6 +116,9 @@ fn schema_view(model: &Value) -> Result<Value, CliError> {
                 "EndpointSpec",
                 "ProbeSpec",
                 "LifecycleOpSpec",
+                "LifecycleOpClass",
+                "TerminalSemantics",
+                "HealthPolicy",
                 "ServiceSpec",
                 "TaskSpec",
                 "SlotPlacement"
@@ -164,6 +167,32 @@ fn docs_view(model: &Value) -> Result<String, CliError> {
             ));
         };
         let _ = writeln!(output, "- {name}");
+    }
+    if let Some(service_specs) = model.get("services").and_then(Value::as_object) {
+        let _ = writeln!(output);
+        let _ = writeln!(output, "## Lifecycle");
+        let _ = writeln!(output);
+        for service in services {
+            let Some(name) = service.as_str() else {
+                return Err(CliError::usage(
+                    "capabilities.services entries must be strings",
+                ));
+            };
+            let Some(spec) = service_specs.get(name) else {
+                continue;
+            };
+            let readiness = string_field(spec, "readinessProbe")?;
+            let health_policy = string_field(spec, "healthPolicy")?;
+            let classes = array_field(spec, "lifecycle")?
+                .iter()
+                .map(|operation| string_field(operation, "class"))
+                .collect::<Result<Vec<_>, _>>()?
+                .join(", ");
+            let _ = writeln!(
+                output,
+                "- {name}: readiness {readiness}; health {health_policy}; operations {classes}"
+            );
+        }
     }
     let _ = writeln!(output);
     let _ = writeln!(output, "## Tasks");
@@ -671,7 +700,7 @@ mod tests {
         assert_eq!(output["source"], "model.json");
         assert_eq!(
             output["modelTypes"]["runtimeAbi"],
-            "nixfied-runtime-abi:m2b:1"
+            "nixfied-runtime-abi:m2c:1"
         );
         assert_eq!(output["surfaces"][1]["name"], "schema");
     }
@@ -708,8 +737,8 @@ mod tests {
     fn model_fixture() -> String {
         serde_json::json!({
             "modelVersion": 1,
-            "toolchainId": "nixfied-toolchain:m2b:1",
-            "runtimeAbi": "nixfied-runtime-abi:m2b:1",
+            "toolchainId": "nixfied-toolchain:m2c:1",
+            "runtimeAbi": "nixfied-runtime-abi:m2c:1",
             "project": {
                 "projectId": "view-test",
                 "name": "View Test"

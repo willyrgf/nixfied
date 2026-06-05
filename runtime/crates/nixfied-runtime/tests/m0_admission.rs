@@ -12,8 +12,8 @@ use serde_json::{Value, json};
 fn fixture_model() -> Value {
     json!({
         "modelVersion": 1,
-        "toolchainId": "nixfied-toolchain:m2b:1",
-        "runtimeAbi": "nixfied-runtime-abi:m2b:1",
+        "toolchainId": "nixfied-toolchain:m2c:1",
+        "runtimeAbi": "nixfied-runtime-abi:m2c:1",
         "generator": {
             "name": "nixfied",
             "version": "m0",
@@ -140,6 +140,17 @@ fn fixture_model() -> Value {
                 "foreground": true,
                 "lifecycle": [
                     {
+                        "operationId": "service.synthetic.prepare",
+                        "class": "prepare",
+                        "execId": null,
+                        "execArgs": [],
+                        "probeId": null,
+                        "terminal": {
+                            "success": "prepared",
+                            "failure": "failed"
+                        }
+                    },
+                    {
                         "operationId": "service.synthetic.start",
                         "class": "start",
                         "execId": "m0-helper",
@@ -162,6 +173,17 @@ fn fixture_model() -> Value {
                         }
                     },
                     {
+                        "operationId": "service.synthetic.health",
+                        "class": "health",
+                        "execId": null,
+                        "execArgs": [],
+                        "probeId": "synthetic-tcp",
+                        "terminal": {
+                            "success": "healthy",
+                            "failure": "unhealthy"
+                        }
+                    },
+                    {
                         "operationId": "service.synthetic.stop",
                         "class": "stop",
                         "execId": "m0-helper",
@@ -169,6 +191,17 @@ fn fixture_model() -> Value {
                         "probeId": null,
                         "terminal": {
                             "success": "stopped",
+                            "failure": "failed"
+                        }
+                    },
+                    {
+                        "operationId": "service.synthetic.clean",
+                        "class": "clean",
+                        "execId": null,
+                        "execArgs": [],
+                        "probeId": null,
+                        "terminal": {
+                            "success": "cleaned",
                             "failure": "failed"
                         }
                     }
@@ -196,6 +229,7 @@ fn fixture_model() -> Value {
                     "maxAttempts": 20
                 }],
                 "readinessProbe": "synthetic-tcp",
+                "healthPolicy": "explicit",
                 "stopPolicy": {
                     "signal": "TERM",
                     "timeoutMs": 5000

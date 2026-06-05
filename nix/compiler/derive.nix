@@ -81,23 +81,31 @@ let
     };
     runtime = {
       exec = closure.spec.executable;
-        lifecycle = closure.spec.operationBindings;
+      lifecycle = [
+        "prepare"
+        "start"
+        "ready"
+        "health"
+        "stop"
+        "clean"
+      ];
+      operationBindings = closure.spec.operationBindings;
       operationArgs = {
-          start = [
-            "service"
-            "--host"
-            "127.0.0.1"
-            "--port"
-            "\${port}"
-          ];
-          stop = [ "stop" ];
-          task = [
-            "task"
-            "--host"
-            "127.0.0.1"
-            "--port"
-            "\${port}"
-          ];
+        start = [
+          "service"
+          "--host"
+          "127.0.0.1"
+          "--port"
+          "\${port}"
+        ];
+        stop = [ "stop" ];
+        task = [
+          "task"
+          "--host"
+          "127.0.0.1"
+          "--port"
+          "\${port}"
+        ];
       };
       readiness = {
         probe = {
@@ -110,6 +118,7 @@ let
           maxAttempts
           ;
       };
+      healthPolicy = "explicit";
       stopPolicy = {
         signal = "TERM";
         timeoutMs = config.nixfied.services.synthetic.stopTimeoutMs;
@@ -211,6 +220,17 @@ in
         foreground = true;
         lifecycle = [
           {
+            operationId = "service.synthetic.prepare";
+            class = "prepare";
+            execId = null;
+            execArgs = [ ];
+            probeId = null;
+            terminal = {
+              success = "prepared";
+              failure = "failed";
+            };
+          }
+          {
             operationId = "service.synthetic.start";
             class = "start";
             execId = "m0-helper";
@@ -233,6 +253,17 @@ in
             };
           }
           {
+            operationId = "service.synthetic.health";
+            class = "health";
+            execId = null;
+            execArgs = [ ];
+            probeId = "synthetic-tcp";
+            terminal = {
+              success = "healthy";
+              failure = "unhealthy";
+            };
+          }
+          {
             operationId = "service.synthetic.stop";
             class = "stop";
             execId = "m0-helper";
@@ -240,6 +271,17 @@ in
             probeId = null;
             terminal = {
               success = "stopped";
+              failure = "failed";
+            };
+          }
+          {
+            operationId = "service.synthetic.clean";
+            class = "clean";
+            execId = null;
+            execArgs = [ ];
+            probeId = null;
+            terminal = {
+              success = "cleaned";
               failure = "failed";
             };
           }
@@ -272,6 +314,7 @@ in
           }
         ];
         readinessProbe = "synthetic-tcp";
+        healthPolicy = serviceIdentityInputs.runtime.healthPolicy;
         stopPolicy = {
           inherit (serviceIdentityInputs.runtime.stopPolicy) signal timeoutMs;
         };
