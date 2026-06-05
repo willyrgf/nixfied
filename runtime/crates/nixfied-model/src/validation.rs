@@ -27,7 +27,6 @@ impl ValidateM0 for Model {
         validate_m0_shape(self)?;
         validate_m0_discoverability(self)?;
         validate_m0_runtime_constraints(self)?;
-        validate_m0_state_policy(self)?;
         validate_no_host_absolute_placement(&self.placement)?;
         validate_slot_placements(self)?;
         validate_m0_exec_and_closure(self)?;
@@ -427,24 +426,6 @@ fn validate_candidate_port_window(
             field,
             expected: "ports in 1..65535 with start <= end",
             actual: format!("start={}, end={}", window.start, window.end),
-        });
-    }
-    Ok(())
-}
-
-fn validate_m0_state_policy(model: &Model) -> Result<(), ValidationError> {
-    if model.state.cleanup_policy != CleanupPolicy::DeleteOnClean {
-        return Err(ValidationError::UnsupportedValue {
-            field: "state.cleanupPolicy",
-            expected: "delete-on-clean",
-            actual: format!("{:?}", model.state.cleanup_policy),
-        });
-    }
-    if model.state.persistence != PersistencePolicy::RunScoped {
-        return Err(ValidationError::UnsupportedValue {
-            field: "state.persistence",
-            expected: "run-scoped",
-            actual: format!("{:?}", model.state.persistence),
         });
     }
     Ok(())

@@ -3,6 +3,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use nixfied_model::{CleanupPolicy, PersistencePolicy};
 use nixfied_runtime::{
     Admission, AdmissionContext, ErrorCode, StoreOriginPolicy, load_model, read_raw_model,
 };
@@ -11,8 +12,8 @@ use serde_json::{Value, json};
 fn fixture_model() -> Value {
     json!({
         "modelVersion": 1,
-        "toolchainId": "nixfied-toolchain:m2a:1",
-        "runtimeAbi": "nixfied-runtime-abi:m2a:1",
+        "toolchainId": "nixfied-toolchain:m2b:1",
+        "runtimeAbi": "nixfied-runtime-abi:m2b:1",
         "generator": {
             "name": "nixfied",
             "version": "m0",
@@ -411,6 +412,27 @@ fn logical_root_escape_is_rejected() {
         .expect_err("logicalRoot must not escape invocation root");
 
     assert_eq!(error.code, ErrorCode::SourceMismatch);
+}
+
+#[test]
+fn protected_persistent_state_is_valid_model_data() {
+    let mut model = fixture_model();
+    model["state"]["cleanupPolicy"] = json!("protected");
+    model["state"]["persistence"] = json!("persistent");
+    let (_tmp, model_path, closure_root) = write_fixture_model(model, true);
+    let loaded = load_model(&model_path).expect("protected persistent state should load");
+    let context = AdmissionContext {
+        policy: StoreOriginPolicy::AllowNonStoreForTests,
+        store_root: closure_root.parent().unwrap().to_path_buf(),
+        host_system: host_system(),
+    };
+    Admission::check(&loaded, &context).expect("protected persistent state should admit");
+
+    assert_eq!(loaded.model.state.cleanup_policy, CleanupPolicy::Protected);
+    assert_eq!(
+        loaded.model.state.persistence,
+        PersistencePolicy::Persistent
+    );
 }
 
 #[test]

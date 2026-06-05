@@ -71,6 +71,7 @@ pub fn reconcile_registry(registry: &mut Registry) -> RuntimeResult<PsReport> {
         });
     }
     reconcile_expired_run_leases(registry)?;
+    reconcile_stale_port_reservations(registry)?;
     Ok(PsReport {
         processes: observations,
     })
@@ -146,6 +147,16 @@ struct RunLeaseRow {
     expires_at: String,
     status: String,
     computed_model_hash: String,
+}
+
+#[derive(Debug)]
+struct PortRow {
+    endpoint_key: String,
+    service_instance_id: String,
+    address: String,
+    port: u16,
+    status: String,
+    owner_process_key: Option<String>,
 }
 
 impl ProcessRow {
@@ -267,8 +278,9 @@ fn mark_process_stale(registry: &mut Registry, row: &ProcessRow) -> RuntimeResul
             .execute(
                 "
                 UPDATE ports
-                SET status = 'released'
+                SET status = 'stale'
                 WHERE service_instance_id = ?1
+                  AND status IN ('reserved', 'binding', 'bound', 'active')
                 ",
                 params![service_instance_id],
             )
@@ -308,6 +320,34 @@ fn reconcile_expired_run_leases(registry: &mut Registry) -> RuntimeResult<()> {
     Ok(())
 }
 
+fn reconcile_stale_port_reservations(registry: &mut Registry) -> RuntimeResult<()> {
+    let ports = active_port_rows(registry)?;
+    let processes = process_rows(registry)?;
+    for port in ports {
+        let mut proof_process = None;
+        let mut live_owner = false;
+        for process in processes
+            .iter()
+            .filter(|process| port.is_owned_by_process(process))
+        {
+            if process.is_live()? {
+                live_owner = true;
+                break;
+            }
+            if proof_process.is_none() {
+                proof_process = Some(process);
+            }
+        }
+        if live_owner {
+            continue;
+        }
+        if let Some(process) = proof_process {
+            mark_port_stale(registry, &port, process)?;
+        }
+    }
+    Ok(())
+}
+
 fn expired_run_leases(registry: &Registry) -> RuntimeResult<Vec<RunLeaseRow>> {
     let mut statement = registry
         .connection()
@@ -340,6 +380,34 @@ fn expired_run_leases(registry: &Registry) -> RuntimeResult<Vec<RunLeaseRow>> {
         .map_err(sql_error)
 }
 
+fn active_port_rows(registry: &Registry) -> RuntimeResult<Vec<PortRow>> {
+    let mut statement = registry
+        .connection()
+        .prepare(
+            "
+            SELECT endpoint_key, service_instance_id, address, port, status, owner_process_key
+            FROM ports
+            WHERE status IN ('reserved', 'binding', 'bound', 'active')
+            ORDER BY endpoint_key
+            ",
+        )
+        .map_err(sql_error)?;
+    statement
+        .query_map([], |row| {
+            Ok(PortRow {
+                endpoint_key: row.get(0)?,
+                service_instance_id: row.get(1)?,
+                address: row.get(2)?,
+                port: row.get::<_, u16>(3)?,
+                status: row.get(4)?,
+                owner_process_key: row.get(5)?,
+            })
+        })
+        .map_err(sql_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(sql_error)
+}
+
 fn run_has_live_process(registry: &Registry, run_id: &str) -> RuntimeResult<bool> {
     for row in process_rows(registry)? {
         if row.run_id == run_id && is_active_status(&row.status) && row.is_live()? {
@@ -347,6 +415,15 @@ fn run_has_live_process(registry: &Registry, run_id: &str) -> RuntimeResult<bool
         }
     }
     Ok(false)
+}
+
+impl PortRow {
+    fn is_owned_by_process(&self, process: &ProcessRow) -> bool {
+        if let Some(owner_process_key) = self.owner_process_key.as_deref() {
+            return owner_process_key == process.process_key;
+        }
+        process.service_instance_id.as_deref() == Some(self.service_instance_id.as_str())
+    }
 }
 
 fn mark_run_lease_stale(registry: &mut Registry, lease: &RunLeaseRow) -> RuntimeResult<()> {
@@ -389,6 +466,48 @@ fn mark_run_lease_stale(registry: &mut Registry, lease: &RunLeaseRow) -> Runtime
             service_instance_id: Some(&lease.service_instance_id),
             process_key: None,
             computed_model_hash: Some(&lease.computed_model_hash),
+            payload_json: &payload_json,
+        },
+    )?;
+    transaction.commit().map_err(sql_error)?;
+    Ok(())
+}
+
+fn mark_port_stale(
+    registry: &mut Registry,
+    port: &PortRow,
+    process: &ProcessRow,
+) -> RuntimeResult<()> {
+    let identity = registry.identity().clone();
+    let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
+    transaction
+        .execute(
+            "
+            UPDATE ports
+            SET status = 'stale'
+            WHERE endpoint_key = ?1
+              AND status IN ('reserved', 'binding', 'bound', 'active')
+            ",
+            params![port.endpoint_key.as_str()],
+        )
+        .map_err(sql_error)?;
+    let payload_json = serde_json::json!({
+        "endpointKey": port.endpoint_key.as_str(),
+        "address": port.address.as_str(),
+        "port": port.port,
+        "previousStatus": port.status.as_str(),
+        "ownerProcessKey": port.owner_process_key.as_deref(),
+    })
+    .to_string();
+    insert_event(
+        &transaction,
+        &identity,
+        ControlEvent {
+            event_type: "port.stale",
+            run_id: &process.run_id,
+            service_instance_id: Some(&port.service_instance_id),
+            process_key: Some(&process.process_key),
+            computed_model_hash: Some(&process.computed_model_hash),
             payload_json: &payload_json,
         },
     )?;

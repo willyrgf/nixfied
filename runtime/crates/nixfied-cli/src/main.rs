@@ -671,7 +671,7 @@ mod tests {
         assert_eq!(output["source"], "model.json");
         assert_eq!(
             output["modelTypes"]["runtimeAbi"],
-            "nixfied-runtime-abi:m2a:1"
+            "nixfied-runtime-abi:m2b:1"
         );
         assert_eq!(output["surfaces"][1]["name"], "schema");
     }
@@ -708,8 +708,8 @@ mod tests {
     fn model_fixture() -> String {
         serde_json::json!({
             "modelVersion": 1,
-            "toolchainId": "nixfied-toolchain:m2a:1",
-            "runtimeAbi": "nixfied-runtime-abi:m2a:1",
+            "toolchainId": "nixfied-toolchain:m2b:1",
+            "runtimeAbi": "nixfied-runtime-abi:m2b:1",
             "project": {
                 "projectId": "view-test",
                 "name": "View Test"

@@ -69,8 +69,8 @@ fn rejects_incompatible_registry_identity() {
     Registry::open_or_create(&path, &identity).expect("registry should open");
     let bad = RegistryIdentity::m0(
         "other-project",
-        "nixfied-runtime-abi:m2a:1",
-        "nixfied-toolchain:m2a:1",
+        "nixfied-runtime-abi:m2b:1",
+        "nixfied-toolchain:m2b:1",
     );
     let error = match Registry::open_or_create(&path, &bad) {
         Ok(_) => panic!("identity mismatch should fail"),
@@ -88,8 +88,8 @@ fn records_and_checks_selected_slot_identity() {
         "m0-minimal",
         "dev",
         1,
-        "nixfied-runtime-abi:m2a:1",
-        "nixfied-toolchain:m2a:1",
+        "nixfied-runtime-abi:m2b:1",
+        "nixfied-toolchain:m2b:1",
     );
     let registry = Registry::open_or_create(&path, &identity).expect("registry should open");
     let slot: i64 = registry
@@ -103,8 +103,8 @@ fn records_and_checks_selected_slot_identity() {
 
     let wrong_slot = RegistryIdentity::m0(
         "m0-minimal",
-        "nixfied-runtime-abi:m2a:1",
-        "nixfied-toolchain:m2a:1",
+        "nixfied-runtime-abi:m2b:1",
+        "nixfied-toolchain:m2b:1",
     );
     let error = match Registry::open_or_create(&path, &wrong_slot) {
         Ok(_) => panic!("slot mismatch should fail"),
@@ -184,8 +184,8 @@ fn rejects_nonempty_unversioned_registry() {
 fn identity() -> RegistryIdentity {
     RegistryIdentity::m0(
         "m0-minimal",
-        "nixfied-runtime-abi:m2a:1",
-        "nixfied-toolchain:m2a:1",
+        "nixfied-runtime-abi:m2b:1",
+        "nixfied-toolchain:m2b:1",
     )
 }
 
