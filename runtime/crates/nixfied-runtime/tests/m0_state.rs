@@ -386,8 +386,8 @@ fn clean_reconciles_stale_refs_before_marker_owned_delete() {
               summary_path
             ) VALUES (
               'run-stale', 'dev', 0, 'service-starting', '/nix/store/test-model/model.json',
-              'computed-hash', 'nixfied-runtime-abi:m2b:1',
-              'nixfied-toolchain:m2b:1', '{}', '{}', '[]', NULL
+              'computed-hash', 'nixfied-runtime-abi:m2c:1',
+              'nixfied-toolchain:m2c:1', '{}', '{}', '[]', NULL
             );
             INSERT INTO services (
               service_instance_id, environment, slot, service_name,
@@ -577,8 +577,8 @@ fn clean_marks_active_port_stale_after_owner_process_is_proven_dead() {
               summary_path
             ) VALUES (
               'run-stale-port', 'dev', 0, 'service-starting', '/nix/store/test-model/model.json',
-              'computed-hash', 'nixfied-runtime-abi:m2b:1',
-              'nixfied-toolchain:m2b:1', '{}', '{}', '[]', NULL
+              'computed-hash', 'nixfied-runtime-abi:m2c:1',
+              'nixfied-toolchain:m2c:1', '{}', '{}', '[]', NULL
             );
             INSERT INTO services (
               service_instance_id, environment, slot, service_name,
@@ -758,8 +758,8 @@ fn add_slot_one(value: &mut Value, start: u16, end: u16) {
 fn fixture_model() -> Value {
     json!({
         "modelVersion": 1,
-        "toolchainId": "nixfied-toolchain:m2b:1",
-        "runtimeAbi": "nixfied-runtime-abi:m2b:1",
+        "toolchainId": "nixfied-toolchain:m2c:1",
+        "runtimeAbi": "nixfied-runtime-abi:m2c:1",
         "generator": {
             "name": "nixfied",
             "version": "m0",
@@ -886,6 +886,17 @@ fn fixture_model() -> Value {
                 "foreground": true,
                 "lifecycle": [
                     {
+                        "operationId": "service.synthetic.prepare",
+                        "class": "prepare",
+                        "execId": null,
+                        "execArgs": [],
+                        "probeId": null,
+                        "terminal": {
+                            "success": "prepared",
+                            "failure": "failed"
+                        }
+                    },
+                    {
                         "operationId": "service.synthetic.start",
                         "class": "start",
                         "execId": "m0-helper",
@@ -908,6 +919,17 @@ fn fixture_model() -> Value {
                         }
                     },
                     {
+                        "operationId": "service.synthetic.health",
+                        "class": "health",
+                        "execId": null,
+                        "execArgs": [],
+                        "probeId": "synthetic-tcp",
+                        "terminal": {
+                            "success": "healthy",
+                            "failure": "unhealthy"
+                        }
+                    },
+                    {
                         "operationId": "service.synthetic.stop",
                         "class": "stop",
                         "execId": "m0-helper",
@@ -915,6 +937,17 @@ fn fixture_model() -> Value {
                         "probeId": null,
                         "terminal": {
                             "success": "stopped",
+                            "failure": "failed"
+                        }
+                    },
+                    {
+                        "operationId": "service.synthetic.clean",
+                        "class": "clean",
+                        "execId": null,
+                        "execArgs": [],
+                        "probeId": null,
+                        "terminal": {
+                            "success": "cleaned",
                             "failure": "failed"
                         }
                     }
@@ -942,6 +975,7 @@ fn fixture_model() -> Value {
                     "maxAttempts": 20
                 }],
                 "readinessProbe": "synthetic-tcp",
+                "healthPolicy": "explicit",
                 "stopPolicy": {
                     "signal": "TERM",
                     "timeoutMs": 5000

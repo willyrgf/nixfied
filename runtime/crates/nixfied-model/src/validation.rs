@@ -499,12 +499,19 @@ fn validate_m0_service_and_task(model: &Model) -> Result<(), ValidationError> {
     let service = &model.services["synthetic"];
     expect_len("services.synthetic.endpoints", 1, service.endpoints.len())?;
     expect_len("services.synthetic.probes", 1, service.probes.len())?;
-    expect_len("services.synthetic.lifecycle", 3, service.lifecycle.len())?;
+    expect_len("services.synthetic.lifecycle", 6, service.lifecycle.len())?;
     expect_string(
         "services.synthetic.readinessProbe",
         "synthetic-tcp",
         &service.readiness_probe,
     )?;
+    if service.health_policy != HealthPolicy::Explicit {
+        return Err(ValidationError::UnsupportedValue {
+            field: "services.synthetic.healthPolicy",
+            expected: "explicit",
+            actual: format!("{:?}", service.health_policy),
+        });
+    }
     if service.containment != ContainmentRequirement::ProcessGroup {
         return Err(ValidationError::UnsupportedValue {
             field: "services.synthetic.containment",
@@ -627,10 +634,30 @@ fn validate_m0_probe(probe: &ProbeSpec) -> Result<(), ValidationError> {
 }
 
 fn validate_m0_lifecycle(lifecycle: &[LifecycleOpSpec]) -> Result<(), ValidationError> {
+    let mut seen_ids = BTreeSet::new();
+    for op in lifecycle {
+        if !seen_ids.insert(op.operation_id.as_str()) {
+            return Err(ValidationError::UnsupportedValue {
+                field: "lifecycle.operationId",
+                expected: "unique operation IDs",
+                actual: op.operation_id.clone(),
+            });
+        }
+    }
+
     let by_id = lifecycle
         .iter()
         .map(|op| (op.operation_id.as_str(), op))
         .collect::<BTreeMap<_, _>>();
+    validate_lifecycle_op(
+        &by_id,
+        "service.synthetic.prepare",
+        LifecycleOpClass::Prepare,
+        None,
+        &[],
+        None,
+        ("prepared", "failed"),
+    )?;
     validate_lifecycle_op(
         &by_id,
         "service.synthetic.start",
@@ -638,6 +665,7 @@ fn validate_m0_lifecycle(lifecycle: &[LifecycleOpSpec]) -> Result<(), Validation
         Some("m0-helper"),
         &["service", "--host", "127.0.0.1", "--port", "${port}"],
         None,
+        ("spawned", "failed"),
     )?;
     validate_lifecycle_op(
         &by_id,
@@ -646,6 +674,16 @@ fn validate_m0_lifecycle(lifecycle: &[LifecycleOpSpec]) -> Result<(), Validation
         None,
         &[],
         Some("synthetic-tcp"),
+        ("ready", "not-ready"),
+    )?;
+    validate_lifecycle_op(
+        &by_id,
+        "service.synthetic.health",
+        LifecycleOpClass::Health,
+        None,
+        &[],
+        Some("synthetic-tcp"),
+        ("healthy", "unhealthy"),
     )?;
     validate_lifecycle_op(
         &by_id,
@@ -654,6 +692,16 @@ fn validate_m0_lifecycle(lifecycle: &[LifecycleOpSpec]) -> Result<(), Validation
         Some("m0-helper"),
         &["stop"],
         None,
+        ("stopped", "failed"),
+    )?;
+    validate_lifecycle_op(
+        &by_id,
+        "service.synthetic.clean",
+        LifecycleOpClass::Clean,
+        None,
+        &[],
+        None,
+        ("cleaned", "failed"),
     )?;
     Ok(())
 }
@@ -665,6 +713,7 @@ fn validate_lifecycle_op(
     exec_id: Option<&'static str>,
     exec_args: &[&'static str],
     probe_id: Option<&'static str>,
+    terminal: (&'static str, &'static str),
 ) -> Result<(), ValidationError> {
     let op = by_id
         .get(operation_id)
@@ -682,6 +731,16 @@ fn validate_lifecycle_op(
     expect_option("lifecycle.execId", exec_id, op.exec_id.as_deref())?;
     expect_vec("lifecycle.execArgs", exec_args, &op.exec_args)?;
     expect_option("lifecycle.probeId", probe_id, op.probe_id.as_deref())?;
+    expect_string(
+        "lifecycle.terminal.success",
+        terminal.0,
+        &op.terminal.success,
+    )?;
+    expect_string(
+        "lifecycle.terminal.failure",
+        terminal.1,
+        &op.terminal.failure,
+    )?;
     Ok(())
 }
 

@@ -376,9 +376,12 @@ pub struct LifecycleOpSpec {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum LifecycleOpClass {
+    Prepare,
     Start,
     Ready,
+    Health,
     Stop,
+    Clean,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -397,12 +400,20 @@ pub struct ServiceSpec {
     pub endpoints: Vec<EndpointSpec>,
     pub probes: Vec<ProbeSpec>,
     pub readiness_probe: String,
+    pub health_policy: HealthPolicy,
     pub stop_policy: StopPolicy,
     pub state_refs: Vec<String>,
     pub log_refs: Vec<String>,
     pub containment: ContainmentRequirement,
     pub lifetime: ServiceLifetime,
     pub identity: ServiceIdentity,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum HealthPolicy {
+    Explicit,
+    Unsupported,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
