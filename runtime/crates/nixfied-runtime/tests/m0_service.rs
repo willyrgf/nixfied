@@ -1612,6 +1612,74 @@ fn ps_reconciles_dead_owned_process_and_port_as_stale() {
 }
 
 #[test]
+fn ps_rejects_live_process_with_mismatched_start_identity_as_stale() {
+    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 38233);
+    let service = start_synthetic_service(
+        &fixture.model,
+        &fixture.admission,
+        &fixture.placement,
+        &mut fixture.registry,
+        "run-ps-pid-reuse",
+        38233,
+    )
+    .expect("foreground service should start");
+    assert!(
+        process_group_has_non_zombie_member(service.pgid),
+        "test service process group should be live before identity mutation"
+    );
+    let mismatched_identity = json!({
+        "pid": service.pid,
+        "pgid": service.pgid,
+        "platformStart": "not-the-recorded-process-start",
+        "observedAtNanos": unique_suffix(),
+    })
+    .to_string();
+    fixture
+        .registry
+        .connection()
+        .execute(
+            "UPDATE processes SET start_identity = ?2 WHERE process_key = ?1",
+            (&service.process_key, &mismatched_identity),
+        )
+        .expect("test should corrupt start identity");
+
+    let report = ps(&mut fixture.registry).expect("ps should reconcile mismatched identity");
+
+    let observed = report
+        .processes
+        .iter()
+        .find(|process| process.process_key == service.process_key)
+        .expect("process should be reported");
+    let process_status: String = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT status FROM processes WHERE process_key = ?1",
+            [&service.process_key],
+            |row| row.get(0),
+        )
+        .expect("process status should query");
+    let stale_ports: i64 = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT count(*) FROM ports WHERE status = 'stale'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("port status should query");
+
+    assert!(!observed.live);
+    assert_eq!(observed.reconciled_status, "stale");
+    assert_eq!(process_status, "stale");
+    assert_eq!(stale_ports, 1);
+    assert!(
+        process_group_has_non_zombie_member(service.pgid),
+        "OS process group should still be live; stale status must come from identity mismatch"
+    );
+}
+
+#[test]
 fn ps_marks_expired_dead_run_lease_as_stale() {
     let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 38228);
     let service = start_synthetic_service(

@@ -1,4 +1,5 @@
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -502,6 +503,67 @@ fn cleanup_finishes_interrupted_delete_when_target_is_already_absent() {
 }
 
 #[test]
+fn cleanup_delete_failure_records_failed_without_deleted_success() {
+    let fixture = StateFixture::new();
+    let mut registry = fixture.registry();
+    let state_parent = fixture
+        .layout
+        .state_root
+        .parent()
+        .expect("state root should have parent")
+        .to_path_buf();
+    let original_mode = fs::metadata(&state_parent)
+        .expect("state parent metadata should read")
+        .permissions()
+        .mode();
+    let restore = PermissionRestore {
+        path: state_parent.clone(),
+        mode: original_mode,
+    };
+    fs::set_permissions(&state_parent, fs::Permissions::from_mode(0o500))
+        .expect("state parent should be made non-writable");
+
+    let result = clean_marked_state(
+        &fixture.layout.state_base,
+        &fixture.layout.state_root,
+        &fixture.identity,
+        &mut registry,
+    );
+    drop(restore);
+    let error = result.expect_err("delete failure should refuse cleanup");
+    let cleanup_status: String = registry
+        .connection()
+        .query_row(
+            "SELECT status FROM cleanups ORDER BY rowid DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .expect("cleanup status should query");
+    let failed_events: i64 = registry
+        .connection()
+        .query_row(
+            "SELECT count(*) FROM events WHERE event_type = 'cleanup.failed'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("failed cleanup events should query");
+    let deleted_events: i64 = registry
+        .connection()
+        .query_row(
+            "SELECT count(*) FROM events WHERE event_type = 'cleanup.deleted'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("deleted cleanup events should query");
+
+    assert_eq!(error.code, ErrorCode::CleanupRefused);
+    assert_eq!(cleanup_status, "failed");
+    assert_eq!(failed_events, 1);
+    assert_eq!(deleted_events, 0);
+    assert!(fixture.layout.state_root.exists());
+}
+
+#[test]
 fn clean_marks_active_port_stale_after_owner_process_is_proven_dead() {
     let fixture = StateFixture::new();
     let mut registry = fixture.registry();
@@ -593,6 +655,17 @@ fn assert_cleanup_refused_with_active_ref(sql: &str) {
 
     assert_eq!(error.code, ErrorCode::CleanupRefused);
     assert!(fixture.layout.state_root.exists());
+}
+
+struct PermissionRestore {
+    path: PathBuf,
+    mode: u32,
+}
+
+impl Drop for PermissionRestore {
+    fn drop(&mut self) {
+        let _ = fs::set_permissions(&self.path, fs::Permissions::from_mode(self.mode));
+    }
 }
 
 struct StateFixture {
