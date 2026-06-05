@@ -1,6 +1,7 @@
 use std::fs;
 use std::net::TcpListener;
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -10,6 +11,7 @@ use std::time::{Duration, Instant};
 use nixfied_model::{DirtyPolicy, Model, SourceMode};
 use nixfied_runtime::cancellation::CancellationToken;
 use nixfied_runtime::registry::{Registry, RegistryIdentity};
+use nixfied_runtime::service::registry::{TaskProcessRecord, record_task_started};
 use nixfied_runtime::service::{
     run_dependent_task, run_dependent_task_cancellable, service_address_hash, service_instance_id,
     start_synthetic_service, start_synthetic_service_for_slot, wait_for_readiness_probe,
@@ -707,7 +709,7 @@ fn cancellation_interrupts_readiness_and_terminates_service_group() {
         .expect_err("readiness should be canceled");
     handle.join().expect("canceler should join");
     service
-        .cancel(200)
+        .cancel(&mut fixture.registry, 200, "test readiness cancellation")
         .expect("canceled service should be terminated");
     thread::sleep(Duration::from_millis(2300));
     let report = ps(&mut fixture.registry).expect("ps should reconcile canceled service");
@@ -716,9 +718,40 @@ fn cancellation_interrupts_readiness_and_terminates_service_group() {
         .iter()
         .find(|process| process.process_key == service.process_key)
         .expect("service process should be reported");
+    let service_status: String = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT status FROM services WHERE service_instance_id = ?1",
+            [&service.service_instance_id],
+            |row| row.get(0),
+        )
+        .expect("service status should query");
+    let lease_status: String = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT status FROM run_leases WHERE run_id = ?1",
+            [&service.run_id],
+            |row| row.get(0),
+        )
+        .expect("lease status should query");
+    let cancel_events: i64 = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT count(*) FROM events WHERE event_type IN ('service.canceling','service.canceled')",
+            [],
+            |row| row.get(0),
+        )
+        .expect("events should query");
 
     assert_eq!(error.code, ErrorCode::Canceled);
     assert!(!observed.live);
+    assert_eq!(observed.registry_status, "canceled");
+    assert_eq!(service_status, "canceled");
+    assert_eq!(lease_status, "canceled");
+    assert_eq!(cancel_events, 2);
     assert!(
         !process_group_has_non_zombie_member(pgid),
         "canceled service process group should be empty"
@@ -798,6 +831,28 @@ fn cancellation_interrupts_task_and_terminates_task_group() {
             |row| row.get(0),
         )
         .expect("task status should query");
+    let lease_status: String = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT status FROM run_leases WHERE run_id = ?1",
+            [&service.run_id],
+            |row| row.get(0),
+        )
+        .expect("lease status should query");
+    let task_events: i64 = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT count(*) FROM events WHERE event_type IN ('task.canceling','task.canceled')",
+            [],
+            |row| row.get(0),
+        )
+        .expect("events should query");
+    let summary: Value = serde_json::from_slice(
+        &fs::read(&fixture.placement.summary_path).expect("summary should read"),
+    )
+    .expect("summary should parse");
 
     assert_eq!(error.code, ErrorCode::Canceled);
     assert!(!task_observations.is_empty());
@@ -812,7 +867,124 @@ fn cancellation_interrupts_task_and_terminates_task_group() {
         !marker.exists(),
         "task child that ignored TERM should have been killed before touching marker"
     );
-    assert_eq!(task_status, "failed");
+    assert_eq!(task_status, "canceled");
+    assert_eq!(lease_status, "canceled");
+    assert_eq!(task_events, 2);
+    assert_eq!(summary["canceled"], json!(true));
+    let _ = fs::remove_file(marker);
+    service
+        .stop(&mut fixture.registry, 1000)
+        .expect("service should stop");
+}
+
+#[test]
+fn task_timeout_records_canceled_summary_and_terminates_task_group() {
+    let python = python3_path()
+        .map(str::to_string)
+        .or_else(python3_from_path)
+        .expect("python3 is required for task timeout proof");
+    let marker = temp_marker("nixfied-timeout-task-survivor");
+    let marker_arg = marker.to_string_lossy().to_string();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
+    let port = listener.local_addr().expect("local addr").port();
+    drop(listener);
+    let mut fixture =
+        ServiceFixture::new(&python, &["-c", python_listener_script(), "${port}"], port);
+    fixture
+        .model
+        .execs
+        .get_mut("m0-helper")
+        .expect("fixture has exec")
+        .timeout_ms = 100;
+    fixture
+        .model
+        .tasks
+        .get_mut("smoke")
+        .expect("fixture has task")
+        .args = vec![
+        "-c".to_string(),
+        "import subprocess, sys; subprocess.Popen(['/bin/sh', '-c', 'trap \"\" TERM; sleep 2; touch \"$1\"; sleep 30', 'child', sys.argv[1]]).wait()".to_string(),
+        marker_arg.clone(),
+    ];
+    let mut service = start_synthetic_service(
+        &fixture.model,
+        &fixture.admission,
+        &fixture.placement,
+        &mut fixture.registry,
+        "run-task-timeout",
+        port,
+    )
+    .expect("foreground service should start");
+    service
+        .wait_for_probe_ready(&fixture.model, &mut fixture.registry)
+        .expect("owned listener should become ready");
+
+    let error = run_dependent_task(
+        &fixture.model,
+        &fixture.placement,
+        &mut fixture.registry,
+        &service,
+        "smoke",
+    )
+    .expect_err("task should time out as cancellation");
+    thread::sleep(Duration::from_millis(2300));
+    let report = ps(&mut fixture.registry).expect("ps should reconcile timed-out task");
+    let task_observations = report
+        .processes
+        .iter()
+        .filter(|process| process.service_instance_id.is_none())
+        .collect::<Vec<_>>();
+    let task_status: String = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT status FROM processes WHERE service_instance_id IS NULL",
+            [],
+            |row| row.get(0),
+        )
+        .expect("task status should query");
+    let lease_status: String = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT status FROM run_leases WHERE run_id = ?1",
+            [&service.run_id],
+            |row| row.get(0),
+        )
+        .expect("lease status should query");
+    let task_events: i64 = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT count(*) FROM events WHERE event_type IN ('task.canceling','task.canceled')",
+            [],
+            |row| row.get(0),
+        )
+        .expect("events should query");
+    let summary: Value = serde_json::from_slice(
+        &fs::read(&fixture.placement.summary_path).expect("summary should read"),
+    )
+    .expect("summary should parse");
+
+    assert_eq!(error.code, ErrorCode::Canceled);
+    assert!(error.message.contains("timed out"));
+    assert!(!task_observations.is_empty());
+    assert!(task_observations.iter().all(|process| !process.live));
+    for process in &task_observations {
+        assert!(
+            !process_group_has_non_zombie_member(process.pgid),
+            "timed-out task process group should be empty"
+        );
+    }
+    assert_eq!(task_status, "canceled");
+    assert_eq!(lease_status, "canceled");
+    assert_eq!(task_events, 2);
+    assert_eq!(summary["timedOut"], json!(true));
+    assert_eq!(summary["canceled"], json!(true));
+    assert!(
+        !marker.exists(),
+        "task timeout should kill TERM-ignoring descendants before marker"
+    );
     let _ = fs::remove_file(marker);
     service
         .stop(&mut fixture.registry, 1000)
@@ -913,6 +1085,7 @@ fn cli_signal_cancels_run_and_empties_service_group() {
         .as_i64()
         .expect("reported process should include pgid") as i32;
     assert_eq!(process["live"], json!(false));
+    assert_eq!(process["registryStatus"], json!("canceled"));
     assert!(
         !process_group_has_non_zombie_member(pgid),
         "CLI-canceled service process group should be empty"
@@ -924,6 +1097,106 @@ fn cli_signal_cancels_run_and_empties_service_group() {
     );
     let _ = fs::remove_file(marker);
     let _ = fs::remove_file(started);
+}
+
+#[test]
+fn cli_signal_during_shutdown_records_canceled_terminal_state() {
+    let Some(shell) = nix_store_executable(&["sh", "bash"]) else {
+        return;
+    };
+    let python = python3_path()
+        .map(str::to_string)
+        .or_else(python3_from_path)
+        .expect("python3 is required for shutdown cancellation proof");
+    let closure_root = closure_root_for_store_executable(&shell)
+        .expect("store executable should have a closure root");
+    let started = temp_marker("nixfied-cli-shutdown-started");
+    let stopping = temp_marker("nixfied-cli-shutdown-stopping");
+    let started_arg = started.to_string_lossy().to_string();
+    let stopping_arg = stopping.to_string_lossy().to_string();
+    let script = "started=\"$1\"; stopping=\"$2\"; python=\"$3\"; cmd=\"$4\"; if [ \"$cmd\" = service ]; then port=\"$8\"; touch \"$started\"; trap 'touch \"$2\"; sleep 30' TERM; \"$python\" -c 'import socket, sys, time; s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind((\"127.0.0.1\", int(sys.argv[1]))); s.listen(16); time.sleep(30)' \"$port\" & wait; elif [ \"$cmd\" = task ]; then exit 0; elif [ \"$cmd\" = stop ]; then exit 0; else exit 1; fi";
+    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
+    let port = listener.local_addr().expect("local addr").port();
+    drop(listener);
+    let mut value = fixture_model(
+        &shell.to_string_lossy(),
+        &["service", "--host", "127.0.0.1", "--port", "${port}"],
+        port,
+    );
+    value["closures"][0]["storePath"] = json!(closure_root.to_string_lossy());
+    value["closures"][0]["executable"] = json!(shell.to_string_lossy());
+    value["execs"]["m0-helper"]["executable"] = json!(shell.to_string_lossy());
+    value["execs"]["m0-helper"]["args"] =
+        json!(["-c", script, "wrapper", started_arg, stopping_arg, python]);
+    let model: Model = serde_json::from_value(value).expect("CLI fixture model should parse");
+    let tmp = TempDir::new();
+    let model_path = tmp.path.join("model.json");
+    let state_base = tmp.path.join("state");
+    fs::create_dir_all(&state_base).expect("state base should be created");
+    fs::write(
+        &model_path,
+        serde_json::to_vec_pretty(&model).expect("model should serialize"),
+    )
+    .expect("model should be written");
+
+    let child = Command::new(runtime_binary())
+        .arg("run")
+        .arg("--allow-non-store-model")
+        .arg("--model")
+        .arg(&model_path)
+        .arg("--state-base")
+        .arg(&state_base)
+        .arg("--timeout-ms")
+        .arg("1000")
+        .current_dir(&tmp.path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("runtime run should spawn");
+    assert!(
+        wait_for_path(&started, Duration::from_secs(3)),
+        "service should start before shutdown proof"
+    );
+    assert!(
+        wait_for_path(&stopping, Duration::from_secs(5)),
+        "service should enter stop handling before signal"
+    );
+    let signal_result = unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
+    assert_eq!(signal_result, 0, "SIGTERM should be delivered to runtime");
+    let output = wait_for_child_output(child, Duration::from_secs(6));
+    assert_eq!(output.status.code(), Some(27));
+    let error: Value =
+        serde_json::from_slice(&output.stderr).expect("stderr should be runtime error JSON");
+    assert_eq!(error["code"], json!("CANCELED"));
+
+    let ps_output = Command::new(runtime_binary())
+        .arg("ps")
+        .arg("--allow-non-store-model")
+        .arg("--model")
+        .arg(&model_path)
+        .arg("--state-base")
+        .arg(&state_base)
+        .current_dir(&tmp.path)
+        .output()
+        .expect("runtime ps should run");
+    assert!(
+        ps_output.status.success(),
+        "ps failed\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&ps_output.stdout),
+        String::from_utf8_lossy(&ps_output.stderr)
+    );
+    let ps_report: Value =
+        serde_json::from_slice(&ps_output.stdout).expect("ps stdout should be JSON");
+    let process = ps_report["processes"]
+        .as_array()
+        .expect("ps processes should be an array")
+        .iter()
+        .find(|process| process["serviceInstanceId"].is_string())
+        .expect("service process should be reported");
+    assert_eq!(process["live"], json!(false));
+    assert_eq!(process["registryStatus"], json!("canceled"));
+    let _ = fs::remove_file(started);
+    let _ = fs::remove_file(stopping);
 }
 
 #[test]
@@ -1256,7 +1529,7 @@ fn duplicate_active_service_start_is_refused() {
         Err(error) => error,
     };
 
-    assert_eq!(error.code, ErrorCode::ModelAdmission);
+    assert_eq!(error.code, ErrorCode::LeaseConflict);
     let running_processes: i64 = fixture
         .registry
         .connection()
@@ -1339,6 +1612,212 @@ fn ps_reconciles_dead_owned_process_as_stale_and_releases_port() {
 }
 
 #[test]
+fn ps_marks_expired_dead_run_lease_as_stale() {
+    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 38228);
+    let service = start_synthetic_service(
+        &fixture.model,
+        &fixture.admission,
+        &fixture.placement,
+        &mut fixture.registry,
+        "run-lease-stale",
+        38228,
+    )
+    .expect("foreground service should start");
+    unsafe {
+        libc::kill(-service.pgid, libc::SIGKILL);
+    }
+    thread::sleep(Duration::from_millis(100));
+    fixture
+        .registry
+        .connection()
+        .execute(
+            "
+            UPDATE run_leases
+            SET expires_at = strftime('%Y-%m-%dT%H:%M:%fZ','now','-1 seconds')
+            WHERE run_id = ?1
+            ",
+            [&service.run_id],
+        )
+        .expect("test should expire lease");
+
+    let report = ps(&mut fixture.registry).expect("ps should reconcile expired dead lease");
+    let observed = report
+        .processes
+        .iter()
+        .find(|process| process.process_key == service.process_key)
+        .expect("service process should be reported");
+    let lease_status: String = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT status FROM run_leases WHERE run_id = ?1",
+            [&service.run_id],
+            |row| row.get(0),
+        )
+        .expect("lease status should query");
+    let run_status: String = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT status FROM runs WHERE run_id = ?1",
+            [&service.run_id],
+            |row| row.get(0),
+        )
+        .expect("run status should query");
+    let lease_stale_events: i64 = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT count(*) FROM events WHERE event_type = 'run.lease-stale'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("events should query");
+    let lease_stale_hash: Option<String> = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT computed_model_hash FROM events WHERE event_type = 'run.lease-stale'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("lease stale event hash should query");
+
+    assert!(!observed.live);
+    assert_eq!(observed.reconciled_status, "stale");
+    assert_eq!(lease_status, "stale");
+    assert_eq!(run_status, "stale");
+    assert_eq!(lease_stale_events, 1);
+    assert_eq!(lease_stale_hash.as_deref(), Some("computed-hash"));
+
+    let restarted = start_synthetic_service(
+        &fixture.model,
+        &fixture.admission,
+        &fixture.placement,
+        &mut fixture.registry,
+        "run-after-stale-lease",
+        38228,
+    )
+    .expect("expired dead lease should reconcile before new service start");
+    restarted
+        .stop(&mut fixture.registry, 1000)
+        .expect("restarted service should stop");
+}
+
+#[test]
+fn active_run_lease_refuses_new_service_start_even_after_terminal_service_row() {
+    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 38229);
+    let mut service = start_synthetic_service(
+        &fixture.model,
+        &fixture.admission,
+        &fixture.placement,
+        &mut fixture.registry,
+        "run-active-lease",
+        38229,
+    )
+    .expect("foreground service should start");
+    fixture
+        .registry
+        .connection()
+        .execute(
+            "UPDATE services SET status = 'stopped' WHERE service_instance_id = ?1",
+            [&service.service_instance_id],
+        )
+        .expect("test should terminalize service row");
+    fixture
+        .registry
+        .connection()
+        .execute(
+            "UPDATE processes SET status = 'stopped' WHERE process_key = ?1",
+            [&service.process_key],
+        )
+        .expect("test should terminalize process row");
+    fixture
+        .registry
+        .connection()
+        .execute(
+            "UPDATE ports SET status = 'released' WHERE service_instance_id = ?1",
+            [&service.service_instance_id],
+        )
+        .expect("test should release port row");
+
+    let error = match start_synthetic_service(
+        &fixture.model,
+        &fixture.admission,
+        &fixture.placement,
+        &mut fixture.registry,
+        "run-lease-conflict",
+        38229,
+    ) {
+        Ok(_) => panic!("active lease should refuse new owner"),
+        Err(error) => error,
+    };
+
+    assert_eq!(error.code, ErrorCode::LeaseConflict);
+    assert!(error.message.contains("active run lease"));
+    service
+        .cancel(&mut fixture.registry, 1000, "test lease conflict cleanup")
+        .expect("original service should cancel");
+}
+
+#[test]
+fn expired_live_run_lease_still_refuses_new_service_start() {
+    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 38230);
+    let mut service = start_synthetic_service(
+        &fixture.model,
+        &fixture.admission,
+        &fixture.placement,
+        &mut fixture.registry,
+        "run-expired-live-lease",
+        38230,
+    )
+    .expect("foreground service should start");
+    fixture
+        .registry
+        .connection()
+        .execute(
+            "
+            UPDATE run_leases
+            SET expires_at = strftime('%Y-%m-%dT%H:%M:%fZ','now','-1 seconds')
+            WHERE run_id = ?1
+            ",
+            [&service.run_id],
+        )
+        .expect("test should expire lease");
+
+    let error = match start_synthetic_service(
+        &fixture.model,
+        &fixture.admission,
+        &fixture.placement,
+        &mut fixture.registry,
+        "run-expired-live-conflict",
+        38230,
+    ) {
+        Ok(_) => panic!("expired but live lease should refuse new owner"),
+        Err(error) => error,
+    };
+    let lease_status: String = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT status FROM run_leases WHERE run_id = ?1",
+            [&service.run_id],
+            |row| row.get(0),
+        )
+        .expect("lease status should query");
+
+    assert_eq!(error.code, ErrorCode::LeaseConflict);
+    assert_eq!(lease_status, "active");
+    service
+        .cancel(
+            &mut fixture.registry,
+            1000,
+            "test expired live lease cleanup",
+        )
+        .expect("original service should cancel");
+}
+
+#[test]
 fn down_stops_verified_owned_process_group_only() {
     let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 38188);
     let service = start_synthetic_service(
@@ -1385,6 +1864,288 @@ fn down_stops_verified_owned_process_group_only() {
     assert_eq!(process_status, "stopped");
     assert_eq!(service_status, "stopped");
     assert_eq!(released_ports, 1);
+}
+
+#[test]
+fn down_completes_canceling_lease_and_unblocks_cleanup() {
+    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 38231);
+    let service = start_synthetic_service(
+        &fixture.model,
+        &fixture.admission,
+        &fixture.placement,
+        &mut fixture.registry,
+        "run-down-canceling-lease",
+        38231,
+    )
+    .expect("foreground service should start");
+    fixture
+        .registry
+        .connection()
+        .execute(
+            "UPDATE runs SET status = 'canceling' WHERE run_id = ?1",
+            [&service.run_id],
+        )
+        .expect("test should mark run canceling");
+    fixture
+        .registry
+        .connection()
+        .execute(
+            "UPDATE run_leases SET status = 'canceling' WHERE run_id = ?1",
+            [&service.run_id],
+        )
+        .expect("test should mark lease canceling");
+    write_slot_marker(
+        &fixture.placement,
+        &StateIdentity::from_model(&fixture.model, &fixture.admission),
+    )
+    .expect("slot marker should be written for cleanup proof");
+
+    let report =
+        down_owned_process_groups(&mut fixture.registry, 1000).expect("down should stop service");
+    let lease_status: String = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT status FROM run_leases WHERE run_id = ?1",
+            [&service.run_id],
+            |row| row.get(0),
+        )
+        .expect("lease status should query");
+    let run_status: String = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT status FROM runs WHERE run_id = ?1",
+            [&service.run_id],
+            |row| row.get(0),
+        )
+        .expect("run status should query");
+    let process_status: String = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT status FROM processes WHERE process_key = ?1",
+            [&service.process_key],
+            |row| row.get(0),
+        )
+        .expect("process status should query");
+    let service_status: String = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT status FROM services WHERE service_instance_id = ?1",
+            [&service.service_instance_id],
+            |row| row.get(0),
+        )
+        .expect("service status should query");
+    let canceled_events: i64 = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT count(*) FROM events WHERE event_type = 'service.canceled'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("event count should query");
+    let cleanup = clean_marked_state(
+        &fixture.placement.state_base,
+        &fixture.placement.state_root,
+        &StateIdentity::from_model(&fixture.model, &fixture.admission),
+        &mut fixture.registry,
+    )
+    .expect("canceled lease should not block cleanup");
+
+    assert_eq!(report.stopped, vec![service.process_key.clone()]);
+    assert_eq!(lease_status, "canceled");
+    assert_eq!(run_status, "canceled");
+    assert_eq!(process_status, "canceled");
+    assert_eq!(service_status, "canceled");
+    assert_eq!(canceled_events, 1);
+    assert!(cleanup.deleted_path.ends_with("runtime-test/dev/0"));
+    assert!(!fixture.placement.state_root.exists());
+}
+
+#[test]
+fn down_cancels_live_task_process_group_and_unblocks_cleanup() {
+    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 38232);
+    let service = start_synthetic_service(
+        &fixture.model,
+        &fixture.admission,
+        &fixture.placement,
+        &mut fixture.registry,
+        "run-down-task-canceling",
+        38232,
+    )
+    .expect("foreground service should start");
+    let mut command = Command::new("/bin/sleep");
+    command
+        .arg("30")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setpgid(0, 0) == 0 {
+                Ok(())
+            } else {
+                Err(std::io::Error::last_os_error())
+            }
+        });
+    }
+    let mut task_child = command.spawn().expect("task process should spawn");
+    let task_pid = task_child.id();
+    let task_pgid = unsafe { libc::getpgid(task_pid as libc::pid_t) };
+    assert!(task_pgid > 0, "task process group should exist");
+    let task_process_key = format!(
+        "process-{}-task-smoke-{}-{}",
+        service.run_id, task_pid, task_pgid
+    );
+    let task_start_identity = json!({
+        "pid": task_pid,
+        "pgid": task_pgid,
+        "platformStart": null,
+        "observedAtNanos": unique_suffix(),
+    })
+    .to_string();
+    let task_command_json = json!({
+        "taskId": "smoke",
+        "executable": "/bin/sleep",
+        "args": ["30"],
+        "cwd": fixture.admission.source.observed_root.to_string_lossy(),
+        "stdoutPath": fixture.placement.logs_dir.join("task.smoke.stdout.log").to_string_lossy(),
+        "stderrPath": fixture.placement.logs_dir.join("task.smoke.stderr.log").to_string_lossy(),
+    })
+    .to_string();
+    record_task_started(
+        &mut fixture.registry,
+        &TaskProcessRecord {
+            run_id: &service.run_id,
+            process_key: &task_process_key,
+            pid: task_pid,
+            pgid: task_pgid,
+            start_identity: &task_start_identity,
+            command_json: &task_command_json,
+            computed_model_hash: &service.computed_model_hash,
+        },
+    )
+    .expect("task process should be recorded");
+    fixture
+        .registry
+        .connection()
+        .execute(
+            "UPDATE runs SET status = 'canceling' WHERE run_id = ?1",
+            [&service.run_id],
+        )
+        .expect("test should mark run canceling");
+    fixture
+        .registry
+        .connection()
+        .execute(
+            "UPDATE run_leases SET status = 'canceling' WHERE run_id = ?1",
+            [&service.run_id],
+        )
+        .expect("test should mark lease canceling");
+    write_slot_marker(
+        &fixture.placement,
+        &StateIdentity::from_model(&fixture.model, &fixture.admission),
+    )
+    .expect("slot marker should be written for cleanup proof");
+
+    let report = down_owned_process_groups(&mut fixture.registry, 1000)
+        .expect("down should stop service and task");
+    let _ = task_child.wait();
+    let lease_status: String = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT status FROM run_leases WHERE run_id = ?1",
+            [&service.run_id],
+            |row| row.get(0),
+        )
+        .expect("lease status should query");
+    let run_status: String = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT status FROM runs WHERE run_id = ?1",
+            [&service.run_id],
+            |row| row.get(0),
+        )
+        .expect("run status should query");
+    let service_process_status: String = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT status FROM processes WHERE process_key = ?1",
+            [&service.process_key],
+            |row| row.get(0),
+        )
+        .expect("service process status should query");
+    let task_process_status: String = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT status FROM processes WHERE process_key = ?1",
+            [&task_process_key],
+            |row| row.get(0),
+        )
+        .expect("task process status should query");
+    let service_status: String = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT status FROM services WHERE service_instance_id = ?1",
+            [&service.service_instance_id],
+            |row| row.get(0),
+        )
+        .expect("service status should query");
+    let service_canceled_events: i64 = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT count(*) FROM events WHERE event_type = 'service.canceled'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("service event count should query");
+    let task_canceled_events: i64 = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT count(*) FROM events WHERE event_type = 'task.canceled'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("task event count should query");
+    let cleanup = clean_marked_state(
+        &fixture.placement.state_base,
+        &fixture.placement.state_root,
+        &StateIdentity::from_model(&fixture.model, &fixture.admission),
+        &mut fixture.registry,
+    )
+    .expect("canceled task lease should not block cleanup");
+
+    assert_eq!(
+        report.stopped,
+        vec![service.process_key.clone(), task_process_key.clone()]
+    );
+    assert_eq!(lease_status, "canceled");
+    assert_eq!(run_status, "canceled");
+    assert_eq!(service_process_status, "canceled");
+    assert_eq!(task_process_status, "canceled");
+    assert_eq!(service_status, "canceled");
+    assert_eq!(service_canceled_events, 1);
+    assert_eq!(task_canceled_events, 1);
+    assert!(
+        !process_group_has_non_zombie_member(service.pgid),
+        "down should empty service process group"
+    );
+    assert!(
+        !process_group_has_non_zombie_member(task_pgid),
+        "down should empty task process group"
+    );
+    assert!(cleanup.deleted_path.ends_with("runtime-test/dev/0"));
+    assert!(!fixture.placement.state_root.exists());
 }
 
 #[test]
@@ -1604,8 +2365,8 @@ fn assert_registry_tables_scoped_to_slot(registry: &Registry, slot: i64, tables:
 fn fixture_model(executable: &str, start_args: &[&str], port: u16) -> Value {
     json!({
         "modelVersion": 1,
-        "toolchainId": "nixfied-toolchain:m1:1",
-        "runtimeAbi": "nixfied-runtime-abi:m1:1",
+        "toolchainId": "nixfied-toolchain:m2a:1",
+        "runtimeAbi": "nixfied-runtime-abi:m2a:1",
         "generator": {
             "name": "nixfied",
             "version": "m0",

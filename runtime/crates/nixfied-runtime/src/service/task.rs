@@ -16,7 +16,8 @@ use crate::service::process::{
     terminate_process_group, wait_for_child_exit,
 };
 use crate::service::registry::{
-    TaskProcessRecord, ensure_service_instance_probe_ready, mark_task_finished, record_task_started,
+    TaskProcessRecord, TaskTerminalStatus, ensure_service_instance_probe_ready, mark_task_finished,
+    record_task_canceling, record_task_started,
 };
 use crate::state::HostPlacement;
 
@@ -27,6 +28,7 @@ pub struct TaskRun {
     pub process_key: String,
     pub exit_code: Option<i32>,
     pub timed_out: bool,
+    pub canceled: bool,
     pub success: bool,
     pub stdout_path: PathBuf,
     pub stderr_path: PathBuf,
@@ -112,9 +114,21 @@ pub fn run_dependent_task_cancellable(
         let _ = child.wait();
         return Err(error);
     }
-    let outcome = wait_for_task(&mut child, pgid, exec.timeout_ms, cancellation)?;
-    let success = !outcome.timed_out
-        && !outcome.canceled
+    let outcome = wait_for_task(
+        registry,
+        &mut child,
+        pgid,
+        exec.timeout_ms,
+        cancellation,
+        TaskCancellationContext {
+            run_id: &service.run_id,
+            task_id,
+            process_key: &process_key,
+            computed_model_hash: &service.computed_model_hash,
+        },
+    )?;
+    let canceled = outcome.timed_out || outcome.canceled;
+    let success = !canceled
         && outcome
             .exit_code
             .map(|code| task.exit_policy.success_codes.contains(&code))
@@ -138,6 +152,7 @@ pub fn run_dependent_task_cancellable(
         process_key: process_key.clone(),
         exit_code,
         timed_out,
+        canceled,
         success,
         stdout_path,
         stderr_path,
@@ -151,18 +166,33 @@ pub fn run_dependent_task_cancellable(
         &service.run_id,
         &process_key,
         &service.computed_model_hash,
-        success,
+        task_terminal_status(success, canceled),
         &payload_json,
     )?;
     if success {
         Ok(run)
-    } else if outcome.canceled {
-        Err(canceled_error())
+    } else if canceled {
+        let message = if timed_out {
+            failure_message
+        } else {
+            canceled_error().message
+        };
+        Err(RuntimeError::new(ErrorCode::Canceled, message))
     } else {
         Err(RuntimeError::new(
             ErrorCode::ModelAdmission,
             failure_message,
         ))
+    }
+}
+
+fn task_terminal_status(success: bool, canceled: bool) -> TaskTerminalStatus {
+    if success {
+        TaskTerminalStatus::Succeeded
+    } else if canceled {
+        TaskTerminalStatus::Canceled
+    } else {
+        TaskTerminalStatus::Failed
     }
 }
 
@@ -216,15 +246,18 @@ fn spawn_task(
 }
 
 fn wait_for_task(
+    registry: &mut Registry,
     child: &mut Child,
     pgid: i32,
     timeout_ms: u64,
     cancellation: &CancellationToken,
+    context: TaskCancellationContext<'_>,
 ) -> RuntimeResult<TaskOutcome> {
     let timeout = Duration::from_millis(timeout_ms);
     let deadline = Instant::now() + timeout;
     loop {
         if cancellation.is_canceled() {
+            record_task_cancellation_intent(registry, &context, pgid, "run canceled")?;
             terminate_process_group(pgid, 1000)?;
             let _ = wait_for_child_exit(child, 1000);
             return Ok(TaskOutcome {
@@ -246,6 +279,7 @@ fn wait_for_task(
             });
         }
         if Instant::now() >= deadline {
+            record_task_cancellation_intent(registry, &context, pgid, "task timeout")?;
             terminate_process_group(pgid, 1000)?;
             let _ = wait_for_child_exit(child, 1000);
             return Ok(TaskOutcome {
@@ -256,6 +290,35 @@ fn wait_for_task(
         }
         thread::sleep(Duration::from_millis(10));
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TaskCancellationContext<'a> {
+    run_id: &'a str,
+    task_id: &'a str,
+    process_key: &'a str,
+    computed_model_hash: &'a str,
+}
+
+fn record_task_cancellation_intent(
+    registry: &mut Registry,
+    context: &TaskCancellationContext<'_>,
+    pgid: i32,
+    reason: &str,
+) -> RuntimeResult<()> {
+    let payload = serde_json::json!({
+        "taskId": context.task_id,
+        "pgid": pgid,
+        "reason": reason,
+    })
+    .to_string();
+    record_task_canceling(
+        registry,
+        context.run_id,
+        context.process_key,
+        context.computed_model_hash,
+        &payload,
+    )
 }
 
 struct TaskOutcome {

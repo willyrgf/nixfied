@@ -256,8 +256,9 @@ fn cleanup_refuses_symlink_traversal() {
 fn cleanup_refuses_active_registry_refs() {
     assert_cleanup_refused_with_active_ref(
         "INSERT INTO run_leases (
-           run_id, environment, slot, owner_token, heartbeat_at, expires_at
-         ) VALUES ('run-1', 'dev', 0, 'owner', 'now', 'later')",
+           run_id, environment, slot, service_instance_id, owner_token, heartbeat_at, expires_at,
+           status
+         ) VALUES ('run-1', 'dev', 0, 'service-1', 'owner', 'now', 'later', 'active')",
     );
     assert_cleanup_refused_with_active_ref(
         "INSERT INTO processes (
@@ -350,8 +351,8 @@ fn clean_reconciles_stale_refs_before_marker_owned_delete() {
               summary_path
             ) VALUES (
               'run-stale', 'dev', 0, 'service-starting', '/nix/store/test-model/model.json',
-              'computed-hash', 'nixfied-runtime-abi:m1:1',
-              'nixfied-toolchain:m1:1', '{}', '{}', '[]', NULL
+              'computed-hash', 'nixfied-runtime-abi:m2a:1',
+              'nixfied-toolchain:m2a:1', '{}', '{}', '[]', NULL
             );
             INSERT INTO services (
               service_instance_id, environment, slot, service_name,
@@ -521,8 +522,8 @@ fn add_slot_one(value: &mut Value, start: u16, end: u16) {
 fn fixture_model() -> Value {
     json!({
         "modelVersion": 1,
-        "toolchainId": "nixfied-toolchain:m1:1",
-        "runtimeAbi": "nixfied-runtime-abi:m1:1",
+        "toolchainId": "nixfied-toolchain:m2a:1",
+        "runtimeAbi": "nixfied-runtime-abi:m2a:1",
         "generator": {
             "name": "nixfied",
             "version": "m0",

@@ -5,11 +5,13 @@ use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::admission::Admission;
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
+use crate::registry::leases::lease_ttl_modifier;
 use crate::registry::{Registry, RegistryIdentity};
 use crate::state::HostPlacement;
 
 pub struct RunRecord<'a> {
     pub run_id: &'a str,
+    pub owner_token: &'a str,
     pub model: &'a Model,
     pub admission: &'a Admission,
     pub placement: &'a HostPlacement,
@@ -47,12 +49,20 @@ pub struct TaskProcessRecord<'a> {
     pub computed_model_hash: &'a str,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskTerminalStatus {
+    Succeeded,
+    Failed,
+    Canceled,
+}
+
 pub fn ensure_service_start_allowed(
     registry: &Registry,
     run_id: &str,
     service_instance_id: &str,
 ) -> RuntimeResult<()> {
     ensure_no_existing_run_conn(registry.connection(), run_id)?;
+    ensure_no_active_lease_conn(registry.connection(), service_instance_id)?;
     ensure_no_active_service_conn(registry.connection(), service_instance_id)
 }
 
@@ -68,6 +78,7 @@ pub fn record_service_start(
     let identity = registry.identity().clone();
     let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
     ensure_no_existing_run_transaction(&transaction, run.run_id)?;
+    ensure_no_active_lease_transaction(&transaction, service.service_instance_id)?;
     ensure_no_active_service_transaction(&transaction, service.service_instance_id)?;
     ensure_no_active_port_transaction(
         &transaction,
@@ -95,6 +106,29 @@ pub fn record_service_start(
                 target_json,
                 source_json,
                 run.placement.summary_path.display().to_string(),
+            ],
+        )
+        .map_err(sql_error)?;
+    transaction
+        .execute(
+            "
+            INSERT INTO run_leases (
+              run_id, environment, slot, service_instance_id, owner_token,
+              heartbeat_at, expires_at, status
+            ) VALUES (
+              ?1, ?2, ?3, ?4, ?5,
+              strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+              strftime('%Y-%m-%dT%H:%M:%fZ','now', ?6),
+              'active'
+            )
+            ",
+            params![
+                run.run_id,
+                identity.environment.as_str(),
+                identity.slot,
+                service.service_instance_id,
+                run.owner_token,
+                lease_ttl_modifier(),
             ],
         )
         .map_err(sql_error)?;
@@ -267,16 +301,51 @@ pub fn mark_service_stopped(
 ) -> RuntimeResult<()> {
     let identity = registry.identity().clone();
     let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
+    let run_was_canceling = matches!(
+        transaction
+            .query_row(
+                "SELECT status FROM runs WHERE run_id = ?1",
+                params![run_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(sql_error)?
+            .as_deref(),
+        Some("canceling" | "canceled")
+    );
+    let (terminal_status, lease_status, event_type) = if run_was_canceling {
+        ("canceled", "canceled", "service.canceled")
+    } else {
+        ("stopped", "completed", "service.stopped")
+    };
     transaction
         .execute(
-            "UPDATE processes SET status = 'stopped' WHERE process_key = ?1",
-            params![process_key],
+            "UPDATE processes SET status = ?2 WHERE process_key = ?1",
+            params![process_key, terminal_status],
         )
         .map_err(sql_error)?;
     transaction
         .execute(
-            "UPDATE services SET status = 'stopped' WHERE service_instance_id = ?1",
-            params![service_instance_id],
+            "UPDATE services SET status = ?2 WHERE service_instance_id = ?1",
+            params![service_instance_id, terminal_status],
+        )
+        .map_err(sql_error)?;
+    if run_was_canceling {
+        transaction
+            .execute(
+                "UPDATE runs SET status = 'canceled' WHERE run_id = ?1",
+                params![run_id],
+            )
+            .map_err(sql_error)?;
+    }
+    transaction
+        .execute(
+            "
+            UPDATE run_leases
+            SET status = ?3
+            WHERE run_id = ?1 AND service_instance_id = ?2 AND status IN ('active', 'canceling')
+            ",
+            params![run_id, service_instance_id, lease_status],
         )
         .map_err(sql_error)?;
     release_service_ports(&transaction, service_instance_id)?;
@@ -284,12 +353,150 @@ pub fn mark_service_stopped(
         &transaction,
         &identity,
         EventRecord {
-            event_type: "service.stopped",
+            event_type,
             run_id: Some(run_id),
             service_instance_id: Some(service_instance_id),
             process_key: Some(process_key),
             computed_model_hash: Some(computed_model_hash),
             payload_json: "{}",
+        },
+    )?;
+    transaction.commit().map_err(sql_error)?;
+    Ok(())
+}
+
+pub fn record_service_canceling(
+    registry: &mut Registry,
+    run_id: &str,
+    service_instance_id: &str,
+    process_key: &str,
+    computed_model_hash: &str,
+    payload_json: &str,
+) -> RuntimeResult<()> {
+    let identity = registry.identity().clone();
+    let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
+    transaction
+        .execute(
+            "UPDATE runs SET status = 'canceling' WHERE run_id = ?1",
+            params![run_id],
+        )
+        .map_err(sql_error)?;
+    transaction
+        .execute(
+            "
+            UPDATE run_leases
+            SET status = 'canceling'
+            WHERE run_id = ?1 AND service_instance_id = ?2 AND status = 'active'
+            ",
+            params![run_id, service_instance_id],
+        )
+        .map_err(sql_error)?;
+    insert_event(
+        &transaction,
+        &identity,
+        EventRecord {
+            event_type: "service.canceling",
+            run_id: Some(run_id),
+            service_instance_id: Some(service_instance_id),
+            process_key: Some(process_key),
+            computed_model_hash: Some(computed_model_hash),
+            payload_json,
+        },
+    )?;
+    transaction.commit().map_err(sql_error)?;
+    Ok(())
+}
+
+pub fn mark_service_canceled(
+    registry: &mut Registry,
+    run_id: &str,
+    service_instance_id: &str,
+    process_key: &str,
+    computed_model_hash: &str,
+    payload_json: &str,
+) -> RuntimeResult<()> {
+    let identity = registry.identity().clone();
+    let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
+    transaction
+        .execute(
+            "UPDATE processes SET status = 'canceled' WHERE process_key = ?1",
+            params![process_key],
+        )
+        .map_err(sql_error)?;
+    transaction
+        .execute(
+            "UPDATE services SET status = 'canceled' WHERE service_instance_id = ?1",
+            params![service_instance_id],
+        )
+        .map_err(sql_error)?;
+    transaction
+        .execute(
+            "UPDATE runs SET status = 'canceled' WHERE run_id = ?1",
+            params![run_id],
+        )
+        .map_err(sql_error)?;
+    transaction
+        .execute(
+            "
+            UPDATE run_leases
+            SET status = 'canceled'
+            WHERE run_id = ?1 AND service_instance_id = ?2 AND status IN ('active', 'canceling')
+            ",
+            params![run_id, service_instance_id],
+        )
+        .map_err(sql_error)?;
+    release_service_ports(&transaction, service_instance_id)?;
+    insert_event(
+        &transaction,
+        &identity,
+        EventRecord {
+            event_type: "service.canceled",
+            run_id: Some(run_id),
+            service_instance_id: Some(service_instance_id),
+            process_key: Some(process_key),
+            computed_model_hash: Some(computed_model_hash),
+            payload_json,
+        },
+    )?;
+    transaction.commit().map_err(sql_error)?;
+    Ok(())
+}
+
+pub fn record_task_canceling(
+    registry: &mut Registry,
+    run_id: &str,
+    process_key: &str,
+    computed_model_hash: &str,
+    payload_json: &str,
+) -> RuntimeResult<()> {
+    let identity = registry.identity().clone();
+    let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
+    transaction
+        .execute(
+            "UPDATE runs SET status = 'canceling' WHERE run_id = ?1",
+            params![run_id],
+        )
+        .map_err(sql_error)?;
+    transaction
+        .execute(
+            "
+            UPDATE run_leases
+            SET status = 'canceling'
+            WHERE run_id = ?1 AND status = 'active'
+            ",
+            params![run_id],
+        )
+        .map_err(sql_error)?;
+    insert_event(
+        &transaction,
+        &identity,
+        EventRecord {
+            event_type: "task.canceling",
+            run_id: Some(run_id),
+            service_instance_id: None,
+            process_key: Some(process_key),
+            computed_model_hash: Some(computed_model_hash),
+            payload_json,
         },
     )?;
     transaction.commit().map_err(sql_error)?;
@@ -316,6 +523,22 @@ pub fn mark_service_failed(
         .execute(
             "UPDATE services SET status = 'failed' WHERE service_instance_id = ?1",
             params![service_instance_id],
+        )
+        .map_err(sql_error)?;
+    transaction
+        .execute(
+            "UPDATE runs SET status = 'service-failed' WHERE run_id = ?1",
+            params![run_id],
+        )
+        .map_err(sql_error)?;
+    transaction
+        .execute(
+            "
+            UPDATE run_leases
+            SET status = 'failed'
+            WHERE run_id = ?1 AND service_instance_id = ?2 AND status IN ('active', 'canceling')
+            ",
+            params![run_id, service_instance_id],
         )
         .map_err(sql_error)?;
     release_service_ports(&transaction, service_instance_id)?;
@@ -355,6 +578,22 @@ pub fn mark_process_escape(
         .execute(
             "UPDATE services SET status = 'escaped' WHERE service_instance_id = ?1",
             params![service_instance_id],
+        )
+        .map_err(sql_error)?;
+    transaction
+        .execute(
+            "UPDATE runs SET status = 'proc-escaped' WHERE run_id = ?1",
+            params![run_id],
+        )
+        .map_err(sql_error)?;
+    transaction
+        .execute(
+            "
+            UPDATE run_leases
+            SET status = 'failed'
+            WHERE run_id = ?1 AND service_instance_id = ?2 AND status IN ('active', 'canceling')
+            ",
+            params![run_id, service_instance_id],
         )
         .map_err(sql_error)?;
     release_service_ports(&transaction, service_instance_id)?;
@@ -448,19 +687,13 @@ pub fn mark_task_finished(
     run_id: &str,
     process_key: &str,
     computed_model_hash: &str,
-    success: bool,
+    terminal_status: TaskTerminalStatus,
     payload_json: &str,
 ) -> RuntimeResult<()> {
-    let status = if success { "succeeded" } else { "failed" };
-    let event_type = if success {
-        "task.succeeded"
-    } else {
-        "task.failed"
-    };
-    let run_status = if success {
-        "task-succeeded"
-    } else {
-        "task-failed"
+    let (status, event_type, run_status, lease_status) = match terminal_status {
+        TaskTerminalStatus::Succeeded => ("succeeded", "task.succeeded", "task-succeeded", None),
+        TaskTerminalStatus::Failed => ("failed", "task.failed", "task-failed", Some("failed")),
+        TaskTerminalStatus::Canceled => ("canceled", "task.canceled", "canceled", Some("canceled")),
     };
     let identity = registry.identity().clone();
     let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
@@ -476,6 +709,18 @@ pub fn mark_task_finished(
             params![run_id, run_status],
         )
         .map_err(sql_error)?;
+    if let Some(lease_status) = lease_status {
+        transaction
+            .execute(
+                "
+                UPDATE run_leases
+                SET status = ?2
+                WHERE run_id = ?1 AND status IN ('active', 'canceling')
+                ",
+                params![run_id, lease_status],
+            )
+            .map_err(sql_error)?;
+    }
     insert_event(
         &transaction,
         &identity,
@@ -601,7 +846,10 @@ fn ensure_no_active_service_transaction(
 
 fn refuse_active_service(service_instance_id: &str, existing: Option<String>) -> RuntimeResult<()> {
     if let Some(status) = existing {
-        if matches!(status.as_str(), "stopped" | "escaped" | "failed") {
+        if matches!(
+            status.as_str(),
+            "stopped" | "escaped" | "failed" | "stale" | "canceled"
+        ) {
             return Ok(());
         }
         Err(RuntimeError::new(
@@ -613,6 +861,58 @@ fn refuse_active_service(service_instance_id: &str, existing: Option<String>) ->
     } else {
         Ok(())
     }
+}
+
+fn ensure_no_active_lease_conn(conn: &Connection, service_instance_id: &str) -> RuntimeResult<()> {
+    let existing = conn
+        .query_row(
+            "
+            SELECT run_id, status FROM run_leases
+            WHERE service_instance_id = ?1 AND status IN ('active', 'canceling')
+            ORDER BY run_id
+            LIMIT 1
+            ",
+            params![service_instance_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()
+        .map_err(sql_error)?;
+    refuse_active_lease(service_instance_id, existing)
+}
+
+fn ensure_no_active_lease_transaction(
+    transaction: &Transaction<'_>,
+    service_instance_id: &str,
+) -> RuntimeResult<()> {
+    let existing = transaction
+        .query_row(
+            "
+            SELECT run_id, status FROM run_leases
+            WHERE service_instance_id = ?1 AND status IN ('active', 'canceling')
+            ORDER BY run_id
+            LIMIT 1
+            ",
+            params![service_instance_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()
+        .map_err(sql_error)?;
+    refuse_active_lease(service_instance_id, existing)
+}
+
+fn refuse_active_lease(
+    service_instance_id: &str,
+    existing: Option<(String, String)>,
+) -> RuntimeResult<()> {
+    if let Some((run_id, status)) = existing {
+        return Err(RuntimeError::new(
+            ErrorCode::LeaseConflict,
+            format!(
+                "service instance {service_instance_id} has active run lease {run_id} with status {status}"
+            ),
+        ));
+    }
+    Ok(())
 }
 
 fn ensure_no_active_port_transaction(

@@ -10,7 +10,7 @@ use crate::registry::{Registry, RegistryIdentity};
 use crate::service::process::{
     process_group_has_live_member, process_is_live_with_identity, signal_process_group,
 };
-use crate::service::registry::mark_service_stopped;
+use crate::service::registry::{TaskTerminalStatus, mark_service_stopped, mark_task_finished};
 use crate::state::{CleanupOutcome, StateIdentity, clean_marked_state};
 
 const ACTIVE_PROCESS_STATUSES: &[&str] = &["starting", "running", "ready"];
@@ -70,6 +70,7 @@ pub fn reconcile_registry(registry: &mut Registry) -> RuntimeResult<PsReport> {
             live,
         });
     }
+    reconcile_expired_run_leases(registry)?;
     Ok(PsReport {
         processes: observations,
     })
@@ -88,10 +89,7 @@ pub fn down_owned_process_groups(
         .collect::<Vec<_>>();
     let rows = process_rows(registry)?;
     let mut stopped = Vec::new();
-    for row in rows
-        .into_iter()
-        .filter(|row| row.service_instance_id.is_some() && is_active_status(&row.status))
-    {
+    for row in rows.into_iter().filter(|row| is_active_status(&row.status)) {
         if !row.is_live()? {
             mark_process_stale(registry, &row)?;
             stale.push(row.process_key);
@@ -135,6 +133,17 @@ struct ProcessRow {
     command_json: String,
     run_id: String,
     service_instance_id: Option<String>,
+    status: String,
+    computed_model_hash: String,
+}
+
+#[derive(Debug)]
+struct RunLeaseRow {
+    run_id: String,
+    service_instance_id: String,
+    owner_token: String,
+    heartbeat_at: String,
+    expires_at: String,
     status: String,
     computed_model_hash: String,
 }
@@ -279,8 +288,107 @@ fn mark_process_stale(registry: &mut Registry, row: &ProcessRow) -> RuntimeResul
             event_type: "process.stale",
             run_id: &row.run_id,
             service_instance_id: row.service_instance_id.as_deref(),
-            process_key: &row.process_key,
-            computed_model_hash: &row.computed_model_hash,
+            process_key: Some(&row.process_key),
+            computed_model_hash: Some(&row.computed_model_hash),
+            payload_json: &payload_json,
+        },
+    )?;
+    transaction.commit().map_err(sql_error)?;
+    Ok(())
+}
+
+fn reconcile_expired_run_leases(registry: &mut Registry) -> RuntimeResult<()> {
+    let leases = expired_run_leases(registry)?;
+    for lease in leases {
+        if run_has_live_process(registry, &lease.run_id)? {
+            continue;
+        }
+        mark_run_lease_stale(registry, &lease)?;
+    }
+    Ok(())
+}
+
+fn expired_run_leases(registry: &Registry) -> RuntimeResult<Vec<RunLeaseRow>> {
+    let mut statement = registry
+        .connection()
+        .prepare(
+            "
+            SELECT l.run_id, l.service_instance_id, l.owner_token, l.heartbeat_at,
+                   l.expires_at, l.status, r.computed_model_hash
+            FROM run_leases l
+            JOIN runs r ON r.run_id = l.run_id
+            WHERE l.status IN ('active', 'canceling')
+              AND l.expires_at <= strftime('%Y-%m-%dT%H:%M:%fZ','now')
+            ORDER BY l.run_id
+            ",
+        )
+        .map_err(sql_error)?;
+    statement
+        .query_map([], |row| {
+            Ok(RunLeaseRow {
+                run_id: row.get(0)?,
+                service_instance_id: row.get(1)?,
+                owner_token: row.get(2)?,
+                heartbeat_at: row.get(3)?,
+                expires_at: row.get(4)?,
+                status: row.get(5)?,
+                computed_model_hash: row.get(6)?,
+            })
+        })
+        .map_err(sql_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(sql_error)
+}
+
+fn run_has_live_process(registry: &Registry, run_id: &str) -> RuntimeResult<bool> {
+    for row in process_rows(registry)? {
+        if row.run_id == run_id && is_active_status(&row.status) && row.is_live()? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn mark_run_lease_stale(registry: &mut Registry, lease: &RunLeaseRow) -> RuntimeResult<()> {
+    let identity = registry.identity().clone();
+    let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
+    transaction
+        .execute(
+            "
+            UPDATE run_leases
+            SET status = 'stale'
+            WHERE run_id = ?1 AND status IN ('active', 'canceling')
+            ",
+            params![lease.run_id.as_str()],
+        )
+        .map_err(sql_error)?;
+    transaction
+        .execute(
+            "
+            UPDATE runs
+            SET status = 'stale'
+            WHERE run_id = ?1 AND status NOT IN ('canceled', 'task-failed', 'service-failed', 'proc-escaped')
+            ",
+            params![lease.run_id.as_str()],
+        )
+        .map_err(sql_error)?;
+    let payload_json = serde_json::json!({
+        "serviceInstanceId": lease.service_instance_id.as_str(),
+        "ownerToken": lease.owner_token.as_str(),
+        "heartbeatAt": lease.heartbeat_at.as_str(),
+        "expiresAt": lease.expires_at.as_str(),
+        "previousStatus": lease.status.as_str(),
+    })
+    .to_string();
+    insert_event(
+        &transaction,
+        &identity,
+        ControlEvent {
+            event_type: "run.lease-stale",
+            run_id: &lease.run_id,
+            service_instance_id: Some(&lease.service_instance_id),
+            process_key: None,
+            computed_model_hash: Some(&lease.computed_model_hash),
             payload_json: &payload_json,
         },
     )?;
@@ -289,15 +397,29 @@ fn mark_process_stale(registry: &mut Registry, row: &ProcessRow) -> RuntimeResul
 }
 
 fn mark_stopped(registry: &mut Registry, row: &ProcessRow) -> RuntimeResult<()> {
-    let Some(service_instance_id) = row.service_instance_id.as_deref() else {
-        return Ok(());
-    };
-    mark_service_stopped(
+    if let Some(service_instance_id) = row.service_instance_id.as_deref() {
+        return mark_service_stopped(
+            registry,
+            &row.run_id,
+            service_instance_id,
+            &row.process_key,
+            &row.computed_model_hash,
+        );
+    }
+    let payload_json = serde_json::json!({
+        "pid": row.pid,
+        "pgid": row.pgid,
+        "reason": "down",
+        "command": row.command_json,
+    })
+    .to_string();
+    mark_task_finished(
         registry,
         &row.run_id,
-        service_instance_id,
         &row.process_key,
         &row.computed_model_hash,
+        TaskTerminalStatus::Canceled,
+        &payload_json,
     )
 }
 
@@ -335,8 +457,8 @@ struct ControlEvent<'a> {
     event_type: &'a str,
     run_id: &'a str,
     service_instance_id: Option<&'a str>,
-    process_key: &'a str,
-    computed_model_hash: &'a str,
+    process_key: Option<&'a str>,
+    computed_model_hash: Option<&'a str>,
     payload_json: &'a str,
 }
 
