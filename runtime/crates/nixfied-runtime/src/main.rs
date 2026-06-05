@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 
+use nixfied_runtime::cancellation::{CancellationToken, ProcessSignalGuard};
 use nixfied_runtime::registry::{Registry, RegistryIdentity};
-use nixfied_runtime::service::{run_dependent_task, start_synthetic_service_for_slot};
+use nixfied_runtime::service::{run_dependent_task_cancellable, start_synthetic_service_for_slot};
 use nixfied_runtime::slot::{first_candidate_port, select_slot};
 use nixfied_runtime::state::{
     StateIdentity, derive_host_placement_for_slot, materialize_run_roots, state_base_from_env,
@@ -127,12 +128,14 @@ fn check(args: &[String]) -> Result<(), RuntimeError> {
 
 fn run_m0(args: &[String]) -> Result<(), RuntimeError> {
     let options = parse_run_options(args)?;
+    let _signals = ProcessSignalGuard::install()?;
+    let cancellation = CancellationToken::new();
     let run_id = new_run_id();
     let (loaded, admission) =
         load_admitted_model(options.model_path.clone(), options.allow_non_store)?;
     let model_path = admission.model_path.clone();
     let computed_model_hash = admission.computed_model_hash.clone();
-    let output = run_m0_admitted(&loaded.model, &admission, &options, run_id)
+    let output = run_m0_admitted(&loaded.model, &admission, &options, run_id, &cancellation)
         .map_err(|error| error.with_model_if_missing(model_path, computed_model_hash))?;
     print_json(&output)
 }
@@ -142,7 +145,9 @@ fn run_m0_admitted(
     admission: &Admission,
     options: &RunOptions,
     run_id: String,
+    cancellation: &CancellationToken,
 ) -> Result<RunOutput, RuntimeError> {
+    cancellation.check()?;
     let selected_slot = select_slot(model, options.selection.slot)?;
     let placement =
         derive_host_placement_for_slot(model, &selected_slot, &run_id, &options.state_base)?;
@@ -169,14 +174,34 @@ fn run_m0_admitted(
         &selected_slot,
         selected_port,
     )?;
-    if let Err(error) = service.wait_for_probe_ready(model, &mut registry) {
-        let _ = service.stop(&mut registry, options.timeout_ms);
+    if let Err(error) = service.wait_for_probe_ready_cancellable(model, &mut registry, cancellation)
+    {
+        if error.code == nixfied_runtime::ErrorCode::Canceled {
+            service.cancel(options.timeout_ms)?;
+        } else {
+            let _ = service.stop(&mut registry, options.timeout_ms);
+        }
         return Err(error);
     }
-    let task = match run_dependent_task(model, &placement, &mut registry, &service, "smoke") {
+    if let Err(error) = cancellation.check() {
+        service.cancel(options.timeout_ms)?;
+        return Err(error);
+    }
+    let task = match run_dependent_task_cancellable(
+        model,
+        &placement,
+        &mut registry,
+        &service,
+        "smoke",
+        cancellation,
+    ) {
         Ok(task) => task,
         Err(error) => {
-            let _ = service.stop(&mut registry, options.timeout_ms);
+            if error.code == nixfied_runtime::ErrorCode::Canceled {
+                service.cancel(options.timeout_ms)?;
+            } else {
+                let _ = service.stop(&mut registry, options.timeout_ms);
+            }
             return Err(error);
         }
     };
@@ -190,6 +215,10 @@ fn run_m0_admitted(
         summary_path: task.summary_path.clone(),
         task,
     };
+    if cancellation.is_canceled() {
+        service.cancel(options.timeout_ms)?;
+        return Err(nixfied_runtime::cancellation::canceled_error());
+    }
     service.stop(&mut registry, options.timeout_ms)?;
     Ok(output)
 }
@@ -463,5 +492,6 @@ fn exit_code(error: &RuntimeError) -> i32 {
         nixfied_runtime::ErrorCode::PortUnverifiable => 24,
         nixfied_runtime::ErrorCode::ProcEscape => 25,
         nixfied_runtime::ErrorCode::ReadinessTimeout => 26,
+        nixfied_runtime::ErrorCode::Canceled => 27,
     }
 }

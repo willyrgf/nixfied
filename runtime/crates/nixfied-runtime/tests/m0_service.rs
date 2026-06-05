@@ -1,15 +1,18 @@
 use std::fs;
 use std::net::TcpListener;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use nixfied_model::{DirtyPolicy, Model, SourceMode};
+use nixfied_runtime::cancellation::CancellationToken;
 use nixfied_runtime::registry::{Registry, RegistryIdentity};
 use nixfied_runtime::service::{
-    run_dependent_task, service_address_hash, service_instance_id, start_synthetic_service,
-    start_synthetic_service_for_slot, wait_for_readiness_probe,
+    run_dependent_task, run_dependent_task_cancellable, service_address_hash, service_instance_id,
+    start_synthetic_service, start_synthetic_service_for_slot, wait_for_readiness_probe,
 };
 use nixfied_runtime::slot::select_slot;
 use nixfied_runtime::state::{
@@ -667,6 +670,260 @@ fn readiness_timeout_stops_started_service_and_records_failed() {
     assert_eq!(process_status, "failed");
     assert_eq!(service_status, "failed");
     assert_eq!(failure_events, 1);
+}
+
+#[test]
+fn cancellation_interrupts_readiness_and_terminates_service_group() {
+    let marker = temp_marker("nixfied-cancel-survivor");
+    let marker_arg = marker.to_string_lossy().to_string();
+    let script = "trap 'exit 0' TERM; /bin/sh -c 'trap \"\" TERM; sleep 2; touch \"$1\"; sleep 30' child \"$1\" & wait";
+    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
+    let port = listener.local_addr().expect("local addr").port();
+    drop(listener);
+    let mut fixture = ServiceFixture::new(
+        "/bin/sh",
+        &["-c", script, "parent", marker_arg.as_str()],
+        port,
+    );
+    let mut service = start_synthetic_service(
+        &fixture.model,
+        &fixture.admission,
+        &fixture.placement,
+        &mut fixture.registry,
+        "run-readiness-canceled",
+        port,
+    )
+    .expect("service should initially start");
+    let pgid = service.pgid;
+    let cancellation = CancellationToken::new();
+    let canceler = cancellation.clone();
+    let handle = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(80));
+        canceler.cancel();
+    });
+
+    let error = service
+        .wait_for_probe_ready_cancellable(&fixture.model, &mut fixture.registry, &cancellation)
+        .expect_err("readiness should be canceled");
+    handle.join().expect("canceler should join");
+    service
+        .cancel(200)
+        .expect("canceled service should be terminated");
+    thread::sleep(Duration::from_millis(2300));
+    let report = ps(&mut fixture.registry).expect("ps should reconcile canceled service");
+    let observed = report
+        .processes
+        .iter()
+        .find(|process| process.process_key == service.process_key)
+        .expect("service process should be reported");
+
+    assert_eq!(error.code, ErrorCode::Canceled);
+    assert!(!observed.live);
+    assert!(
+        !process_group_has_non_zombie_member(pgid),
+        "canceled service process group should be empty"
+    );
+    assert!(
+        !marker.exists(),
+        "child that ignored TERM should have been killed before touching marker"
+    );
+    let _ = fs::remove_file(marker);
+}
+
+#[test]
+fn cancellation_interrupts_task_and_terminates_task_group() {
+    let python = python3_path()
+        .map(str::to_string)
+        .or_else(python3_from_path)
+        .expect("python3 is required for task cancellation proof");
+    let marker = temp_marker("nixfied-cancel-task-survivor");
+    let marker_arg = marker.to_string_lossy().to_string();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
+    let port = listener.local_addr().expect("local addr").port();
+    drop(listener);
+    let mut fixture =
+        ServiceFixture::new(&python, &["-c", python_listener_script(), "${port}"], port);
+    fixture
+        .model
+        .tasks
+        .get_mut("smoke")
+        .expect("fixture has task")
+        .args = vec![
+        "-c".to_string(),
+        "import signal, subprocess, sys; signal.signal(signal.SIGTERM, lambda *_: sys.exit(0)); subprocess.Popen(['/bin/sh', '-c', 'trap \"\" TERM; sleep 2; touch \"$1\"; sleep 30', 'child', sys.argv[1]]).wait()".to_string(),
+        marker_arg.clone(),
+    ];
+    let mut service = start_synthetic_service(
+        &fixture.model,
+        &fixture.admission,
+        &fixture.placement,
+        &mut fixture.registry,
+        "run-task-canceled",
+        port,
+    )
+    .expect("foreground service should start");
+    service
+        .wait_for_probe_ready(&fixture.model, &mut fixture.registry)
+        .expect("owned listener should become ready");
+    let cancellation = CancellationToken::new();
+    let canceler = cancellation.clone();
+    let handle = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(80));
+        canceler.cancel();
+    });
+
+    let error = run_dependent_task_cancellable(
+        &fixture.model,
+        &fixture.placement,
+        &mut fixture.registry,
+        &service,
+        "smoke",
+        &cancellation,
+    )
+    .expect_err("task should be canceled");
+    handle.join().expect("canceler should join");
+    thread::sleep(Duration::from_millis(2300));
+    let report = ps(&mut fixture.registry).expect("ps should reconcile canceled task");
+    let task_observations = report
+        .processes
+        .iter()
+        .filter(|process| process.service_instance_id.is_none())
+        .collect::<Vec<_>>();
+    let task_status: String = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT status FROM processes WHERE service_instance_id IS NULL",
+            [],
+            |row| row.get(0),
+        )
+        .expect("task status should query");
+
+    assert_eq!(error.code, ErrorCode::Canceled);
+    assert!(!task_observations.is_empty());
+    assert!(task_observations.iter().all(|process| !process.live));
+    for process in &task_observations {
+        assert!(
+            !process_group_has_non_zombie_member(process.pgid),
+            "canceled task process group should be empty"
+        );
+    }
+    assert!(
+        !marker.exists(),
+        "task child that ignored TERM should have been killed before touching marker"
+    );
+    assert_eq!(task_status, "failed");
+    let _ = fs::remove_file(marker);
+    service
+        .stop(&mut fixture.registry, 1000)
+        .expect("service should stop");
+}
+
+#[test]
+fn cli_signal_cancels_run_and_empties_service_group() {
+    let Some(shell) = nix_store_executable(&["sh", "bash"]) else {
+        return;
+    };
+    let closure_root = closure_root_for_store_executable(&shell)
+        .expect("store executable should have a closure root");
+    let marker = temp_marker("nixfied-cli-cancel-survivor");
+    let started = temp_marker("nixfied-cli-cancel-started");
+    let marker_arg = marker.to_string_lossy().to_string();
+    let started_arg = started.to_string_lossy().to_string();
+    let script = "touch \"$2\"; trap 'exit 0' TERM; /bin/sh -c 'trap \"\" TERM; sleep 2; touch \"$1\"; sleep 30' child \"$1\" & wait";
+    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
+    let port = listener.local_addr().expect("local addr").port();
+    drop(listener);
+    let mut value = fixture_model(
+        &shell.to_string_lossy(),
+        &["service", "--host", "127.0.0.1", "--port", "${port}"],
+        port,
+    );
+    value["closures"][0]["storePath"] = json!(closure_root.to_string_lossy());
+    value["closures"][0]["executable"] = json!(shell.to_string_lossy());
+    value["execs"]["m0-helper"]["executable"] = json!(shell.to_string_lossy());
+    value["execs"]["m0-helper"]["args"] = json!(["-c", script, "parent", marker_arg, started_arg]);
+    let model: Model = serde_json::from_value(value).expect("CLI fixture model should parse");
+    let tmp = TempDir::new();
+    let model_path = tmp.path.join("model.json");
+    let state_base = tmp.path.join("state");
+    fs::create_dir_all(&state_base).expect("state base should be created");
+    fs::write(
+        &model_path,
+        serde_json::to_vec_pretty(&model).expect("model should serialize"),
+    )
+    .expect("model should be written");
+
+    let mut child = Command::new(runtime_binary())
+        .arg("run")
+        .arg("--allow-non-store-model")
+        .arg("--model")
+        .arg(&model_path)
+        .arg("--state-base")
+        .arg(&state_base)
+        .arg("--timeout-ms")
+        .arg("200")
+        .current_dir(&tmp.path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("runtime run should spawn");
+    if !wait_for_path(&started, Duration::from_secs(3)) {
+        let _ = child.kill();
+        let output = wait_for_child_output(child, Duration::from_secs(1));
+        panic!(
+            "service did not start before signal\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let signal_result = unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
+    assert_eq!(signal_result, 0, "SIGTERM should be delivered to runtime");
+    let output = wait_for_child_output(child, Duration::from_secs(6));
+    assert_eq!(output.status.code(), Some(27));
+    let error: Value =
+        serde_json::from_slice(&output.stderr).expect("stderr should be runtime error JSON");
+    assert_eq!(error["code"], json!("CANCELED"));
+
+    let ps_output = Command::new(runtime_binary())
+        .arg("ps")
+        .arg("--allow-non-store-model")
+        .arg("--model")
+        .arg(&model_path)
+        .arg("--state-base")
+        .arg(&state_base)
+        .current_dir(&tmp.path)
+        .output()
+        .expect("runtime ps should run");
+    assert!(
+        ps_output.status.success(),
+        "ps failed\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&ps_output.stdout),
+        String::from_utf8_lossy(&ps_output.stderr)
+    );
+    let ps_report: Value =
+        serde_json::from_slice(&ps_output.stdout).expect("ps stdout should be JSON");
+    let process = ps_report["processes"]
+        .as_array()
+        .expect("ps processes should be an array")
+        .iter()
+        .find(|process| process["serviceInstanceId"].is_string())
+        .expect("service process should be reported");
+    let pgid = process["pgid"]
+        .as_i64()
+        .expect("reported process should include pgid") as i32;
+    assert_eq!(process["live"], json!(false));
+    assert!(
+        !process_group_has_non_zombie_member(pgid),
+        "CLI-canceled service process group should be empty"
+    );
+    thread::sleep(Duration::from_millis(2300));
+    assert!(
+        !marker.exists(),
+        "CLI signal cancellation should kill TERM-ignoring descendants before marker"
+    );
+    let _ = fs::remove_file(marker);
+    let _ = fs::remove_file(started);
 }
 
 #[test]
@@ -1513,8 +1770,9 @@ fn fixture_model(executable: &str, start_args: &[&str], port: u16) -> Value {
                     "protocol": "tcp",
                     "host": "127.0.0.1",
                     "port": {
-                        "kind": "fixed",
-                        "port": port
+                        "kind": "candidate-window",
+                        "start": port,
+                        "end": port
                     },
                     "ownershipVerification": "required",
                     "socketActivation": "disabled"
@@ -1680,4 +1938,127 @@ fn unique_suffix() -> u128 {
         .expect("time should be available")
         .as_nanos();
     now + u128::from(NEXT_ID.fetch_add(1, Ordering::Relaxed))
+}
+
+fn temp_marker(prefix: &str) -> PathBuf {
+    let mut path = std::env::temp_dir();
+    path.push(format!(
+        "{prefix}-{}-{}",
+        std::process::id(),
+        unique_suffix()
+    ));
+    path
+}
+
+fn runtime_binary() -> PathBuf {
+    if let Some(path) = option_env!("CARGO_BIN_EXE_nixfied-runtime") {
+        return PathBuf::from(path);
+    }
+    let current = std::env::current_exe().expect("current test executable should be known");
+    current
+        .parent()
+        .and_then(Path::parent)
+        .expect("test binary should be inside target profile directory")
+        .join("nixfied-runtime")
+}
+
+fn nix_store_executable(names: &[&str]) -> Option<PathBuf> {
+    if let Some(executable) = std::env::var_os("PATH")
+        .into_iter()
+        .flat_map(|paths| std::env::split_paths(&paths).collect::<Vec<_>>())
+        .find_map(|dir| executable_from_dir(&dir, names))
+    {
+        return Some(executable);
+    }
+    fs::read_dir("/nix/store").ok()?.find_map(|entry| {
+        let package_root = entry.ok()?.path();
+        executable_from_dir(&package_root.join("bin"), names)
+    })
+}
+
+fn executable_from_dir(dir: &Path, names: &[&str]) -> Option<PathBuf> {
+    for name in names {
+        let candidate = dir.join(name);
+        let Ok(metadata) = fs::metadata(&candidate) else {
+            continue;
+        };
+        if metadata.permissions().mode() & 0o111 == 0 {
+            continue;
+        }
+        let Ok(canonical) = candidate.canonicalize() else {
+            continue;
+        };
+        if canonical.starts_with("/nix/store") {
+            return Some(canonical);
+        }
+    }
+    None
+}
+
+fn closure_root_for_store_executable(executable: &Path) -> Option<PathBuf> {
+    let rest = executable.to_str()?.strip_prefix("/nix/store/")?;
+    let package = rest.split('/').next()?;
+    Some(Path::new("/nix/store").join(package))
+}
+
+fn wait_for_path(path: &Path, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if path.exists() {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn wait_for_child_output(mut child: Child, timeout: Duration) -> Output {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if child
+            .try_wait()
+            .expect("child status should be inspectable")
+            .is_some()
+        {
+            return child
+                .wait_with_output()
+                .expect("child output should be collected");
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let output = child
+                .wait_with_output()
+                .expect("timed-out child output should be collected");
+            panic!(
+                "child did not exit before timeout\nstdout: {}\nstderr: {}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn process_group_has_non_zombie_member(pgid: i32) -> bool {
+    let output = Command::new("ps")
+        .arg("-axo")
+        .arg("pgid=,stat=")
+        .output()
+        .expect("ps should inspect process groups");
+    assert!(
+        output.status.success(),
+        "ps failed while inspecting process groups: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let current_pgid = fields.next()?.parse::<i32>().ok()?;
+            let stat = fields.next().unwrap_or("");
+            Some((current_pgid, stat.to_string()))
+        })
+        .any(|(current_pgid, stat)| current_pgid == pgid && !stat.starts_with('Z'))
 }
