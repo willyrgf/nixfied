@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use nixfied_runtime::cancellation::{CancellationToken, ProcessSignalGuard};
-use nixfied_runtime::registry::{Registry, RegistryIdentity};
+use nixfied_runtime::registry::{Registry, RegistryIdentity, RunLeaseHeartbeat};
 use nixfied_runtime::service::{run_dependent_task_cancellable, start_synthetic_service_for_slot};
 use nixfied_runtime::slot::{first_candidate_port, select_slot};
 use nixfied_runtime::state::{
@@ -164,6 +164,7 @@ fn run_m0_admitted(
             &model.toolchain_id,
         ),
     )?;
+    let _ = nixfied_runtime::control::reconcile_registry(&mut registry)?;
     let selected_port = first_candidate_port(&selected_slot.placement.candidate_ports)?;
     let mut service = start_synthetic_service_for_slot(
         model,
@@ -174,17 +175,34 @@ fn run_m0_admitted(
         &selected_slot,
         selected_port,
     )?;
+    let lease_heartbeat = RunLeaseHeartbeat::start(
+        placement.registry_path().to_path_buf(),
+        registry.identity().clone(),
+        service.run_id.clone(),
+        service.owner_token.clone(),
+    );
     if let Err(error) = service.wait_for_probe_ready_cancellable(model, &mut registry, cancellation)
     {
         if error.code == nixfied_runtime::ErrorCode::Canceled {
-            service.cancel(options.timeout_ms)?;
+            lease_heartbeat.stop()?;
+            service.cancel(
+                &mut registry,
+                options.timeout_ms,
+                "run canceled during readiness",
+            )?;
         } else {
+            lease_heartbeat.stop()?;
             let _ = service.stop(&mut registry, options.timeout_ms);
         }
         return Err(error);
     }
     if let Err(error) = cancellation.check() {
-        service.cancel(options.timeout_ms)?;
+        lease_heartbeat.stop()?;
+        service.cancel(
+            &mut registry,
+            options.timeout_ms,
+            "run canceled after readiness",
+        )?;
         return Err(error);
     }
     let task = match run_dependent_task_cancellable(
@@ -198,8 +216,14 @@ fn run_m0_admitted(
         Ok(task) => task,
         Err(error) => {
             if error.code == nixfied_runtime::ErrorCode::Canceled {
-                service.cancel(options.timeout_ms)?;
+                lease_heartbeat.stop()?;
+                service.cancel(
+                    &mut registry,
+                    options.timeout_ms,
+                    "run canceled during task",
+                )?;
             } else {
+                lease_heartbeat.stop()?;
                 let _ = service.stop(&mut registry, options.timeout_ms);
             }
             return Err(error);
@@ -216,10 +240,16 @@ fn run_m0_admitted(
         task,
     };
     if cancellation.is_canceled() {
-        service.cancel(options.timeout_ms)?;
+        lease_heartbeat.stop()?;
+        service.cancel(
+            &mut registry,
+            options.timeout_ms,
+            "run canceled during shutdown",
+        )?;
         return Err(nixfied_runtime::cancellation::canceled_error());
     }
-    service.stop(&mut registry, options.timeout_ms)?;
+    lease_heartbeat.stop()?;
+    service.stop_cancellable(&mut registry, options.timeout_ms, cancellation)?;
     Ok(output)
 }
 
@@ -493,5 +523,7 @@ fn exit_code(error: &RuntimeError) -> i32 {
         nixfied_runtime::ErrorCode::ProcEscape => 25,
         nixfied_runtime::ErrorCode::ReadinessTimeout => 26,
         nixfied_runtime::ErrorCode::Canceled => 27,
+        nixfied_runtime::ErrorCode::LeaseStale => 28,
+        nixfied_runtime::ErrorCode::LeaseConflict => 29,
     }
 }

@@ -13,7 +13,8 @@ use nixfied_model::{LifecycleOpClass, LifecycleOpSpec, Model, PortPolicy};
 use serde::Serialize;
 
 use crate::admission::Admission;
-use crate::cancellation::CancellationToken;
+use crate::cancellation::{CancellationToken, canceled_error};
+use crate::control::reconcile_registry;
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::registry::Registry;
 use crate::service::identity::{service_address_hash, service_instance_id};
@@ -21,8 +22,8 @@ use crate::service::ownership::{ExpectedEndpointOwner, verify_endpoint_ownership
 use crate::service::readiness::wait_for_readiness_probe_cancellable;
 use crate::service::registry::{
     ProcessRecord, RunRecord, ServiceRecord, ensure_service_start_allowed,
-    mark_endpoint_owner_verified, mark_process_escape, mark_service_failed,
-    mark_service_probe_ready, mark_service_stopped, record_service_start,
+    mark_endpoint_owner_verified, mark_process_escape, mark_service_canceled, mark_service_failed,
+    mark_service_probe_ready, mark_service_stopped, record_service_canceling, record_service_start,
 };
 use crate::slot::{SelectedSlot, select_slot};
 use crate::state::HostPlacement;
@@ -51,6 +52,7 @@ pub struct StartedService {
     pub selected_endpoint: SelectedEndpoint,
     pub computed_model_hash: String,
     pub source_root: PathBuf,
+    pub owner_token: String,
 }
 
 impl StartedService {
@@ -160,17 +162,67 @@ impl StartedService {
         )
     }
 
-    pub fn cancel(&mut self, timeout_ms: u64) -> RuntimeResult<()> {
+    pub fn cancel(
+        &mut self,
+        registry: &mut Registry,
+        timeout_ms: u64,
+        reason: &str,
+    ) -> RuntimeResult<()> {
+        let payload = serde_json::json!({
+            "pid": self.pid,
+            "pgid": self.pgid,
+            "reason": reason,
+        })
+        .to_string();
+        record_service_canceling(
+            registry,
+            &self.run_id,
+            &self.service_instance_id,
+            &self.process_key,
+            &self.computed_model_hash,
+            &payload,
+        )?;
         terminate_process_group(self.pgid, timeout_ms)?;
         let _ = wait_for_child_exit(&mut self.child, 1000)?;
         self.monitor.stop();
-        Ok(())
+        mark_service_canceled(
+            registry,
+            &self.run_id,
+            &self.service_instance_id,
+            &self.process_key,
+            &self.computed_model_hash,
+            &payload,
+        )
     }
 
     pub fn stop(mut self, registry: &mut Registry, timeout_ms: u64) -> RuntimeResult<()> {
+        self.stop_with_cancellation(registry, timeout_ms, None)
+    }
+
+    pub fn stop_cancellable(
+        mut self,
+        registry: &mut Registry,
+        timeout_ms: u64,
+        cancellation: &CancellationToken,
+    ) -> RuntimeResult<()> {
+        self.stop_with_cancellation(registry, timeout_ms, Some(cancellation))
+    }
+
+    fn stop_with_cancellation(
+        &mut self,
+        registry: &mut Registry,
+        timeout_ms: u64,
+        cancellation: Option<&CancellationToken>,
+    ) -> RuntimeResult<()> {
         if let Some(error) = self.escape_error(registry) {
             self.cleanup_after_escape();
             return Err(error);
+        }
+        if let Some(cancellation) = cancellation
+            && cancellation.is_canceled()
+        {
+            self.cancel(registry, timeout_ms, "run canceled during shutdown")?;
+            return Err(canceled_error());
         }
         if let Some(status) = self.child.try_wait().map_err(|error| {
             RuntimeError::new(
@@ -185,6 +237,34 @@ impl StartedService {
         }
         terminate_process_group(self.pgid, timeout_ms)?;
         let _ = wait_for_child_exit(&mut self.child, 1000)?;
+        if let Some(cancellation) = cancellation
+            && cancellation.is_canceled()
+        {
+            let payload = serde_json::json!({
+                "pid": self.pid,
+                "pgid": self.pgid,
+                "reason": "run canceled during shutdown",
+            })
+            .to_string();
+            record_service_canceling(
+                registry,
+                &self.run_id,
+                &self.service_instance_id,
+                &self.process_key,
+                &self.computed_model_hash,
+                &payload,
+            )?;
+            self.monitor.stop();
+            mark_service_canceled(
+                registry,
+                &self.run_id,
+                &self.service_instance_id,
+                &self.process_key,
+                &self.computed_model_hash,
+                &payload,
+            )?;
+            return Err(canceled_error());
+        }
         if let Some(error) = self.escape_error(registry) {
             self.cleanup_after_escape();
             return Err(error);
@@ -367,7 +447,9 @@ pub fn start_synthetic_service_for_slot(
         service_name,
     );
     let service_instance_id = service_instance_id(&address_hash, &service.identity);
+    reconcile_registry(registry)?;
     ensure_service_start_allowed(registry, &run_id, &service_instance_id)?;
+    let owner_token = run_owner_token(&run_id);
     let args = operation_args(&exec.args, &start_op.exec_args, selected_port);
     let stdout_path = placement.logs_dir.join("service.synthetic.stdout.log");
     let stderr_path = placement.logs_dir.join("service.synthetic.stderr.log");
@@ -420,6 +502,7 @@ pub fn start_synthetic_service_for_slot(
         registry,
         &RunRecord {
             run_id: &run_id,
+            owner_token: &owner_token,
             model,
             admission,
             placement,
@@ -462,6 +545,7 @@ pub fn start_synthetic_service_for_slot(
         selected_endpoint,
         computed_model_hash: admission.computed_model_hash.clone(),
         source_root: admission.source.observed_root.clone(),
+        owner_token,
     };
     if let Err(error) = ensure_foreground_child_alive(&mut started) {
         let payload = serde_json::json!({
@@ -482,6 +566,10 @@ pub fn start_synthetic_service_for_slot(
         return Err(error);
     }
     Ok(started)
+}
+
+fn run_owner_token(run_id: &str) -> String {
+    format!("{run_id}:runtime-pid-{}", std::process::id())
 }
 
 fn lifecycle_op(

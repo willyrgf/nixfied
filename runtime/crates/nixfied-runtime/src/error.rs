@@ -25,6 +25,8 @@ pub enum ErrorCode {
     ProcEscape,
     ReadinessTimeout,
     Canceled,
+    LeaseStale,
+    LeaseConflict,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

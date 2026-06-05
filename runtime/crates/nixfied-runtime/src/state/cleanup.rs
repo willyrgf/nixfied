@@ -111,9 +111,11 @@ pub fn clean_marked_state(
 fn refuse_active_refs(registry: &Registry) -> RuntimeResult<()> {
     let active_lease_count = registry
         .connection()
-        .query_row("SELECT count(*) FROM run_leases", [], |row| {
-            row.get::<_, i64>(0)
-        })
+        .query_row(
+            "SELECT count(*) FROM run_leases WHERE status IN ('active', 'canceling')",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
         .map_err(sql_error)?;
     if active_lease_count > 0 {
         return Err(RuntimeError::new(

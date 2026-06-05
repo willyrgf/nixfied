@@ -11,8 +11,8 @@ use serde_json::{Value, json};
 fn fixture_model() -> Value {
     json!({
         "modelVersion": 1,
-        "toolchainId": "nixfied-toolchain:m1:1",
-        "runtimeAbi": "nixfied-runtime-abi:m1:1",
+        "toolchainId": "nixfied-toolchain:m2a:1",
+        "runtimeAbi": "nixfied-runtime-abi:m2a:1",
         "generator": {
             "name": "nixfied",
             "version": "m0",

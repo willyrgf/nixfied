@@ -1,6 +1,6 @@
 pub const MODEL_VERSION: u32 = 1;
-pub const TOOLCHAIN_ID: &str = "nixfied-toolchain:m1:1";
-pub const RUNTIME_ABI: &str = "nixfied-runtime-abi:m1:1";
+pub const TOOLCHAIN_ID: &str = "nixfied-toolchain:m2a:1";
+pub const RUNTIME_ABI: &str = "nixfied-runtime-abi:m2a:1";
 
 pub fn expected_model_version() -> u32 {
     MODEL_VERSION
