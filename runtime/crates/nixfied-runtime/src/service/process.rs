@@ -9,7 +9,7 @@ use std::thread;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use nixfied_model::{LifecycleOpClass, LifecycleOpSpec, Model, PortPolicy};
+use nixfied_model::{EndpointSpec, LifecycleOpClass, LifecycleOpSpec, Model, PortPolicy, ServiceSpec};
 use serde::Serialize;
 
 use crate::admission::Admission;
@@ -19,17 +19,19 @@ use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::registry::Registry;
 use crate::service::identity::{service_address_hash, service_instance_id};
 use crate::service::ownership::{ExpectedEndpointOwner, verify_endpoint_ownership};
-use crate::service::readiness::wait_for_readiness_probe_cancellable;
+use crate::service::readiness::wait_for_service_probe_by_id_cancellable;
 use crate::service::registry::{
     ProcessRecord, RunRecord, ServiceRecord, ensure_service_start_allowed,
     mark_endpoint_owner_verified, mark_process_escape, mark_service_canceled, mark_service_failed,
-    mark_service_probe_ready, mark_service_stopped, record_service_canceling, record_service_start,
+    mark_service_probe_ready, mark_service_stopped, record_service_canceling,
+    record_service_lifecycle_event, record_service_start,
 };
 use crate::slot::{SelectedSlot, select_slot};
-use crate::state::HostPlacement;
+use crate::state::{CleanupOutcome, HostPlacement, StateIdentity, clean_marked_state};
 
 const FOREGROUND_GRACE: Duration = Duration::from_millis(100);
 const MONITOR_INTERVAL: Duration = Duration::from_millis(1);
+const SYNTHETIC_SERVICE_NAME: &str = "synthetic";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -53,6 +55,7 @@ pub struct StartedService {
     pub computed_model_hash: String,
     pub source_root: PathBuf,
     pub owner_token: String,
+    stop_operation: LifecycleOpSpec,
 }
 
 impl StartedService {
@@ -70,32 +73,27 @@ impl StartedService {
         registry: &mut Registry,
         cancellation: &CancellationToken,
     ) -> RuntimeResult<()> {
-        let service = model.services.get(&self.service_name).ok_or_else(|| {
-            RuntimeError::new(
-                ErrorCode::ModelAdmission,
-                format!("service {} is missing", self.service_name),
-            )
-        })?;
-        let endpoint = service
-            .endpoints
-            .iter()
-            .find(|endpoint| endpoint.endpoint_id == self.selected_endpoint.endpoint_id)
-            .ok_or_else(|| {
-                RuntimeError::new(
-                    ErrorCode::ModelAdmission,
-                    format!("endpoint {} is missing", self.selected_endpoint.endpoint_id),
-                )
-            })?;
+        let (service, endpoint) = self.service_and_endpoint(model)?;
+        let operation = lifecycle_op(service, LifecycleOpClass::Ready)?;
+        let context = self.lifecycle_event_context();
+        record_lifecycle_started(registry, &context, operation)?;
         if let Some(error) = self.escape_error(registry) {
             self.cleanup_after_escape();
+            let _ = record_lifecycle_failure(registry, &context, operation, &error);
             return Err(error);
         }
         cancellation.check()?;
-        self.ensure_alive_or_record_escape(registry)?;
-        if let Err(error) = wait_for_readiness_probe_cancellable(
+        if let Err(error) = self.ensure_alive_or_record_escape(registry) {
+            let _ = record_lifecycle_failure(registry, &context, operation, &error);
+            return Err(error);
+        }
+        if let Err(error) = execute_lifecycle_operation(
+            model,
+            &self.source_root,
             service,
             endpoint,
             self.selected_endpoint.port,
+            operation,
             cancellation,
         ) {
             if error.code == ErrorCode::Canceled {
@@ -103,39 +101,45 @@ impl StartedService {
             }
             if let Some(error) = self.escape_error(registry) {
                 self.cleanup_after_escape();
+                let _ = record_lifecycle_failure(registry, &context, operation, &error);
                 return Err(error);
             }
-            self.ensure_alive_or_record_escape(registry)?;
+            if let Err(error) = self.ensure_alive_or_record_escape(registry) {
+                let _ = record_lifecycle_failure(registry, &context, operation, &error);
+                return Err(error);
+            }
+            let _ = record_lifecycle_failure(registry, &context, operation, &error);
             self.cleanup_after_readiness_failure(registry, &error);
             return Err(error);
         }
         if let Some(error) = self.escape_error(registry) {
             self.cleanup_after_escape();
+            let _ = record_lifecycle_failure(registry, &context, operation, &error);
             return Err(error);
         }
         cancellation.check()?;
-        self.ensure_alive_or_record_escape(registry)?;
-        if let Some(error) = self.escape_error(registry) {
-            self.cleanup_after_escape();
+        if let Err(error) = self.ensure_alive_or_record_escape(registry) {
+            let _ = record_lifecycle_failure(registry, &context, operation, &error);
             return Err(error);
         }
-        let ownership = match verify_endpoint_ownership(
-            endpoint,
-            self.selected_endpoint.port,
-            &ExpectedEndpointOwner {
-                pid: self.pid,
-                pgid: self.pgid,
-                process_key: &self.process_key,
-                platform_start_identity: self.platform_start_identity.as_deref(),
-            },
-        ) {
-            Ok(ownership) => ownership,
+        if let Some(error) = self.escape_error(registry) {
+            self.cleanup_after_escape();
+            let _ = record_lifecycle_failure(registry, &context, operation, &error);
+            return Err(error);
+        }
+        let ownership_json = match self.verify_selected_endpoint_ownership_json(endpoint, registry) {
+            Ok(payload) => payload,
             Err(error) => {
                 if let Some(error) = self.escape_error(registry) {
                     self.cleanup_after_escape();
+                    let _ = record_lifecycle_failure(registry, &context, operation, &error);
                     return Err(error);
                 }
-                self.ensure_alive_or_record_escape(registry)?;
+                if let Err(error) = self.ensure_alive_or_record_escape(registry) {
+                    let _ = record_lifecycle_failure(registry, &context, operation, &error);
+                    return Err(error);
+                }
+                let _ = record_lifecycle_failure(registry, &context, operation, &error);
                 self.cleanup_after_readiness_failure(registry, &error);
                 return Err(error);
             }
@@ -150,8 +154,7 @@ impl StartedService {
             &self.service_instance_id,
             &self.process_key,
             &self.computed_model_hash,
-            &serde_json::to_string(&ownership)
-                .map_err(|error| RuntimeError::new(ErrorCode::ModelAdmission, error.to_string()))?,
+            &ownership_json,
         )?;
         mark_service_probe_ready(
             registry,
@@ -159,7 +162,60 @@ impl StartedService {
             &self.service_instance_id,
             &self.process_key,
             &self.computed_model_hash,
-        )
+        )?;
+        record_lifecycle_success(registry, &context, operation)
+    }
+
+    pub fn check_health(
+        &mut self,
+        model: &Model,
+        registry: &mut Registry,
+    ) -> RuntimeResult<()> {
+        self.check_health_cancellable(model, registry, &CancellationToken::new())
+    }
+
+    pub fn check_health_cancellable(
+        &mut self,
+        model: &Model,
+        registry: &mut Registry,
+        cancellation: &CancellationToken,
+    ) -> RuntimeResult<()> {
+        let (service, endpoint) = self.service_and_endpoint(model)?;
+        let operation = lifecycle_op(service, LifecycleOpClass::Health)?;
+        let context = self.lifecycle_event_context();
+        record_lifecycle_started(registry, &context, operation)?;
+        if let Some(error) = self.escape_error(registry) {
+            self.cleanup_after_escape();
+            let _ = record_lifecycle_failure(registry, &context, operation, &error);
+            return Err(error);
+        }
+        cancellation.check()?;
+        if let Err(error) = self.ensure_alive_or_record_escape(registry) {
+            let _ = record_lifecycle_failure(registry, &context, operation, &error);
+            return Err(error);
+        }
+        if let Err(error) = execute_lifecycle_operation(
+            model,
+            &self.source_root,
+            service,
+            endpoint,
+            self.selected_endpoint.port,
+            operation,
+            cancellation,
+        ) {
+            if error.code == ErrorCode::Canceled {
+                return Err(error);
+            }
+            let _ = record_lifecycle_failure(registry, &context, operation, &error);
+            return Err(error);
+        }
+        if operation.probe_id.is_some() {
+            if let Err(error) = self.verify_selected_endpoint_ownership_json(endpoint, registry) {
+                let _ = record_lifecycle_failure(registry, &context, operation, &error);
+                return Err(error);
+            }
+        }
+        record_lifecycle_success(registry, &context, operation)
     }
 
     pub fn cancel(
@@ -214,8 +270,10 @@ impl StartedService {
         timeout_ms: u64,
         cancellation: Option<&CancellationToken>,
     ) -> RuntimeResult<()> {
+        let context = self.lifecycle_event_context();
         if let Some(error) = self.escape_error(registry) {
             self.cleanup_after_escape();
+            let _ = record_lifecycle_failure(registry, &context, &self.stop_operation, &error);
             return Err(error);
         }
         if let Some(cancellation) = cancellation
@@ -224,6 +282,7 @@ impl StartedService {
             self.cancel(registry, timeout_ms, "run canceled during shutdown")?;
             return Err(canceled_error());
         }
+        record_lifecycle_started(registry, &context, &self.stop_operation)?;
         if let Some(status) = self.child.try_wait().map_err(|error| {
             RuntimeError::new(
                 ErrorCode::ProcEscape,
@@ -233,9 +292,13 @@ impl StartedService {
             let message = format!("foreground service exited before stop: {status}");
             let error = self.record_escape(registry, message, Vec::new());
             self.cleanup_after_escape();
+            let _ = record_lifecycle_failure(registry, &context, &self.stop_operation, &error);
             return Err(error);
         }
-        terminate_process_group(self.pgid, timeout_ms)?;
+        if let Err(error) = terminate_process_group(self.pgid, timeout_ms) {
+            let _ = record_lifecycle_failure(registry, &context, &self.stop_operation, &error);
+            return Err(error);
+        }
         let _ = wait_for_child_exit(&mut self.child, 1000)?;
         if let Some(cancellation) = cancellation
             && cancellation.is_canceled()
@@ -263,10 +326,13 @@ impl StartedService {
                 &self.computed_model_hash,
                 &payload,
             )?;
-            return Err(canceled_error());
+            let error = canceled_error();
+            let _ = record_lifecycle_failure(registry, &context, &self.stop_operation, &error);
+            return Err(error);
         }
         if let Some(error) = self.escape_error(registry) {
             self.cleanup_after_escape();
+            let _ = record_lifecycle_failure(registry, &context, &self.stop_operation, &error);
             return Err(error);
         }
         self.monitor.stop();
@@ -276,7 +342,8 @@ impl StartedService {
             &self.service_instance_id,
             &self.process_key,
             &self.computed_model_hash,
-        )
+        )?;
+        record_lifecycle_success(registry, &context, &self.stop_operation)
     }
 
     fn escape_error(&mut self, registry: &mut Registry) -> Option<RuntimeError> {
@@ -370,6 +437,64 @@ impl StartedService {
             &payload,
         );
     }
+
+    fn service_and_endpoint<'a>(
+        &self,
+        model: &'a Model,
+    ) -> RuntimeResult<(&'a ServiceSpec, &'a EndpointSpec)> {
+        let service = model.services.get(&self.service_name).ok_or_else(|| {
+            RuntimeError::new(
+                ErrorCode::ModelAdmission,
+                format!("service {} is missing", self.service_name),
+            )
+        })?;
+        let endpoint = service
+            .endpoints
+            .iter()
+            .find(|endpoint| endpoint.endpoint_id == self.selected_endpoint.endpoint_id)
+            .ok_or_else(|| {
+                RuntimeError::new(
+                    ErrorCode::ModelAdmission,
+                    format!("endpoint {} is missing", self.selected_endpoint.endpoint_id),
+                )
+            })?;
+        Ok((service, endpoint))
+    }
+
+    fn lifecycle_event_context(&self) -> LifecycleEventContext {
+        LifecycleEventContext {
+            run_id: Some(self.run_id.clone()),
+            service_instance_id: self.service_instance_id.clone(),
+            process_key: Some(self.process_key.clone()),
+            computed_model_hash: self.computed_model_hash.clone(),
+        }
+    }
+
+    fn verify_selected_endpoint_ownership_json(
+        &mut self,
+        endpoint: &EndpointSpec,
+        registry: &mut Registry,
+    ) -> RuntimeResult<String> {
+        let ownership = verify_endpoint_ownership(
+            endpoint,
+            self.selected_endpoint.port,
+            &ExpectedEndpointOwner {
+                pid: self.pid,
+                pgid: self.pgid,
+                process_key: &self.process_key,
+                platform_start_identity: self.platform_start_identity.as_deref(),
+            },
+        )
+        .map_err(|error| {
+            if let Some(error) = self.escape_error(registry) {
+                self.cleanup_after_escape();
+                return error;
+            }
+            error
+        })?;
+        serde_json::to_string(&ownership)
+            .map_err(|error| RuntimeError::new(ErrorCode::ModelAdmission, error.to_string()))
+    }
 }
 
 impl Drop for StartedService {
@@ -415,7 +540,7 @@ pub fn start_synthetic_service_for_slot(
     selected_port: u16,
 ) -> RuntimeResult<StartedService> {
     let run_id = run_id.into();
-    let service_name = "synthetic";
+    let service_name = SYNTHETIC_SERVICE_NAME;
     let service = model.services.get(service_name).ok_or_else(|| {
         RuntimeError::new(ErrorCode::ModelAdmission, "M0 synthetic service is missing")
     })?;
@@ -426,6 +551,7 @@ pub fn start_synthetic_service_for_slot(
         ));
     }
     let start_op = lifecycle_op(service, LifecycleOpClass::Start)?;
+    let stop_operation = lifecycle_op(service, LifecycleOpClass::Stop)?.clone();
     let exec_id = start_op.exec_id.as_deref().ok_or_else(|| {
         RuntimeError::new(
             ErrorCode::ModelAdmission,
@@ -450,6 +576,29 @@ pub fn start_synthetic_service_for_slot(
     reconcile_registry(registry)?;
     ensure_service_start_allowed(registry, &run_id, &service_instance_id)?;
     let owner_token = run_owner_token(&run_id);
+    let lifecycle_context = LifecycleEventContext {
+        run_id: Some(run_id.clone()),
+        service_instance_id: service_instance_id.clone(),
+        process_key: None,
+        computed_model_hash: admission.computed_model_hash.clone(),
+    };
+    if let Some(prepare_op) = lifecycle_op_optional(service, LifecycleOpClass::Prepare) {
+        record_lifecycle_started(registry, &lifecycle_context, prepare_op)?;
+        if let Err(error) = execute_lifecycle_operation(
+            model,
+            &admission.source.observed_root,
+            service,
+            &selected_endpoint.as_endpoint_spec(),
+            selected_port,
+            prepare_op,
+            &CancellationToken::new(),
+        ) {
+            let _ = record_lifecycle_failure(registry, &lifecycle_context, prepare_op, &error);
+            return Err(error);
+        }
+        record_lifecycle_success(registry, &lifecycle_context, prepare_op)?;
+    }
+    record_lifecycle_started(registry, &lifecycle_context, start_op)?;
     let args = operation_args(&exec.args, &start_op.exec_args, selected_port);
     let stdout_path = placement.logs_dir.join("service.synthetic.stdout.log");
     let stderr_path = placement.logs_dir.join("service.synthetic.stderr.log");
@@ -479,10 +628,12 @@ pub fn start_synthetic_service_for_slot(
         });
     }
     let mut child = command.spawn().map_err(|error| {
-        RuntimeError::new(
+        let error = RuntimeError::new(
             ErrorCode::ProcEscape,
             format!("failed to spawn synthetic service: {error}"),
-        )
+        );
+        let _ = record_lifecycle_failure(registry, &lifecycle_context, start_op, &error);
+        error
     })?;
     let pid = child.id();
     let pgid = match get_process_group(pid) {
@@ -490,12 +641,19 @@ pub fn start_synthetic_service_for_slot(
         Err(error) => {
             let _ = child.kill();
             let _ = child.wait();
+            let _ = record_lifecycle_failure(registry, &lifecycle_context, start_op, &error);
             return Err(error);
         }
     };
     let platform_start = platform_start_identity(pid);
     let start_identity = process_start_identity(pid, pgid, platform_start.as_deref());
     let process_key = format!("process-{run_id}-{pid}-{pgid}");
+    let started_context = LifecycleEventContext {
+        run_id: Some(run_id.clone()),
+        service_instance_id: service_instance_id.clone(),
+        process_key: Some(process_key.clone()),
+        computed_model_hash: admission.computed_model_hash.clone(),
+    };
     let endpoint_json = serde_json::to_string(&selected_endpoint)
         .map_err(|error| RuntimeError::new(ErrorCode::ModelAdmission, error.to_string()))?;
     if let Err(error) = record_service_start(
@@ -530,6 +688,7 @@ pub fn start_synthetic_service_for_slot(
     ) {
         let _ = terminate_process_group(pgid, 1000);
         let _ = child.wait();
+        let _ = record_lifecycle_failure(registry, &started_context, start_op, &error);
         return Err(error);
     }
     let mut started = StartedService {
@@ -546,6 +705,7 @@ pub fn start_synthetic_service_for_slot(
         computed_model_hash: admission.computed_model_hash.clone(),
         source_root: admission.source.observed_root.clone(),
         owner_token,
+        stop_operation,
     };
     if let Err(error) = ensure_foreground_child_alive(&mut started) {
         let payload = serde_json::json!({
@@ -563,19 +723,74 @@ pub fn start_synthetic_service_for_slot(
             &payload,
         );
         started.cleanup_after_escape();
+        let _ = record_lifecycle_failure(registry, &started_context, start_op, &error);
         return Err(error);
     }
+    record_lifecycle_success(registry, &started_context, start_op)?;
     Ok(started)
+}
+
+pub fn run_synthetic_service_clean_for_slot(
+    model: &Model,
+    admission: &Admission,
+    placement: &HostPlacement,
+    registry: &mut Registry,
+    selected_slot: &SelectedSlot<'_>,
+) -> RuntimeResult<CleanupOutcome> {
+    let service_name = SYNTHETIC_SERVICE_NAME;
+    let service = model.services.get(service_name).ok_or_else(|| {
+        RuntimeError::new(ErrorCode::ModelAdmission, "M0 synthetic service is missing")
+    })?;
+    let clean_op = lifecycle_op(service, LifecycleOpClass::Clean)?;
+    let selected_port = selected_slot.placement.candidate_ports.start;
+    let address_hash = service_address_hash(
+        model,
+        selected_slot.environment,
+        selected_slot.slot,
+        service_name,
+    );
+    let service_instance_id = service_instance_id(&address_hash, &service.identity);
+    let lifecycle_context = LifecycleEventContext {
+        run_id: None,
+        service_instance_id: service_instance_id.clone(),
+        process_key: None,
+        computed_model_hash: admission.computed_model_hash.clone(),
+    };
+    record_lifecycle_started(registry, &lifecycle_context, clean_op)?;
+    if clean_op.exec_id.is_some() {
+        if let Err(error) = run_lifecycle_exec(
+            model,
+            &admission.source.observed_root,
+            clean_op,
+            selected_port,
+            &CancellationToken::new(),
+        ) {
+            let _ = record_lifecycle_failure(registry, &lifecycle_context, clean_op, &error);
+            return Err(error);
+        }
+    }
+    let identity = StateIdentity::from_selected_slot(model, admission, selected_slot);
+    let cleanup = match clean_marked_state(
+        &placement.state_base,
+        &placement.state_root,
+        &identity,
+        registry,
+    ) {
+        Ok(cleanup) => cleanup,
+        Err(error) => {
+            let _ = record_lifecycle_failure(registry, &lifecycle_context, clean_op, &error);
+            return Err(error);
+        }
+    };
+    record_lifecycle_success(registry, &lifecycle_context, clean_op)?;
+    Ok(cleanup)
 }
 
 fn run_owner_token(run_id: &str) -> String {
     format!("{run_id}:runtime-pid-{}", std::process::id())
 }
 
-fn lifecycle_op(
-    service: &nixfied_model::ServiceSpec,
-    class: LifecycleOpClass,
-) -> RuntimeResult<&LifecycleOpSpec> {
+fn lifecycle_op(service: &ServiceSpec, class: LifecycleOpClass) -> RuntimeResult<&LifecycleOpSpec> {
     service
         .lifecycle
         .iter()
@@ -588,8 +803,15 @@ fn lifecycle_op(
         })
 }
 
+fn lifecycle_op_optional(service: &ServiceSpec, class: LifecycleOpClass) -> Option<&LifecycleOpSpec> {
+    service
+        .lifecycle
+        .iter()
+        .find(|operation| operation.class == class)
+}
+
 fn select_endpoint(
-    service: &nixfied_model::ServiceSpec,
+    service: &ServiceSpec,
     selected_slot: &SelectedSlot<'_>,
     selected_port: u16,
 ) -> RuntimeResult<SelectedEndpoint> {
@@ -669,6 +891,131 @@ pub(crate) fn resolve_exec_cwd(source_root: &Path, exec_cwd: &str) -> RuntimeRes
     Ok(cwd)
 }
 
+fn execute_lifecycle_operation(
+    model: &Model,
+    source_root: &Path,
+    service: &ServiceSpec,
+    selected_endpoint: &EndpointSpec,
+    selected_port: u16,
+    operation: &LifecycleOpSpec,
+    cancellation: &CancellationToken,
+) -> RuntimeResult<()> {
+    if let Some(probe_id) = operation.probe_id.as_deref() {
+        return wait_for_service_probe_by_id_cancellable(
+            service,
+            probe_id,
+            selected_endpoint,
+            selected_port,
+            cancellation,
+        );
+    }
+    if operation.exec_id.is_some() {
+        return run_lifecycle_exec(model, source_root, operation, selected_port, cancellation);
+    }
+    Ok(())
+}
+
+fn run_lifecycle_exec(
+    model: &Model,
+    source_root: &Path,
+    operation: &LifecycleOpSpec,
+    selected_port: u16,
+    cancellation: &CancellationToken,
+) -> RuntimeResult<()> {
+    let exec_id = operation.exec_id.as_deref().ok_or_else(|| {
+        RuntimeError::new(
+            ErrorCode::ModelAdmission,
+            format!("service lifecycle operation {} has no exec binding", operation.operation_id),
+        )
+    })?;
+    let exec = model.execs.get(exec_id).ok_or_else(|| {
+        RuntimeError::new(
+            ErrorCode::ModelAdmission,
+            format!("service lifecycle exec {exec_id} is missing"),
+        )
+    })?;
+    let command_cwd = resolve_exec_cwd(source_root, &exec.cwd)?;
+    let args = operation_args(&exec.args, &operation.exec_args, selected_port);
+    let mut command = Command::new(&exec.executable);
+    command
+        .args(&args)
+        .current_dir(&command_cwd)
+        .envs(&exec.env)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setpgid(0, 0) == 0 {
+                Ok(())
+            } else {
+                Err(std::io::Error::last_os_error())
+            }
+        });
+    }
+    let mut child = command.spawn().map_err(|error| {
+        RuntimeError::new(
+            ErrorCode::ProcEscape,
+            format!(
+                "failed to spawn lifecycle operation {}: {error}",
+                operation.operation_id
+            ),
+        )
+    })?;
+    let pgid = match get_process_group(child.id()) {
+        Ok(pgid) => pgid,
+        Err(error) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
+        }
+    };
+    let deadline = Instant::now() + Duration::from_millis(exec.timeout_ms);
+    loop {
+        if cancellation.is_canceled() {
+            let _ = terminate_process_group(pgid, 1000);
+            let _ = wait_for_child_exit(&mut child, 1000);
+            return Err(canceled_error());
+        }
+        if let Some(status) = child.try_wait().map_err(|error| {
+            RuntimeError::new(
+                ErrorCode::ProcEscape,
+                format!(
+                    "failed to inspect lifecycle operation {}: {error}",
+                    operation.operation_id
+                ),
+            )
+        })? {
+            if status.success() {
+                return Ok(());
+            }
+            return Err(RuntimeError::new(
+                ErrorCode::ModelAdmission,
+                format!(
+                    "service lifecycle operation {} exited with code {}",
+                    operation.operation_id,
+                    status
+                        .code()
+                        .map(|code| code.to_string())
+                        .unwrap_or_else(|| "unknown".to_string())
+                ),
+            ));
+        }
+        if Instant::now() >= deadline {
+            let _ = terminate_process_group(pgid, 1000);
+            let _ = wait_for_child_exit(&mut child, 1000);
+            return Err(RuntimeError::new(
+                ErrorCode::ModelAdmission,
+                format!(
+                    "service lifecycle operation {} timed out after {}ms",
+                    operation.operation_id, exec.timeout_ms
+                ),
+            ));
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
 fn disallowed_component(component: Component<'_>) -> bool {
     matches!(
         component,
@@ -678,6 +1025,102 @@ fn disallowed_component(component: Component<'_>) -> bool {
 
 fn endpoint_key(service_instance_id: &str, endpoint_id: &str) -> String {
     format!("{service_instance_id}:{endpoint_id}")
+}
+
+struct LifecycleEventContext {
+    run_id: Option<String>,
+    service_instance_id: String,
+    process_key: Option<String>,
+    computed_model_hash: String,
+}
+
+fn record_lifecycle_started(
+    registry: &mut Registry,
+    context: &LifecycleEventContext,
+    operation: &LifecycleOpSpec,
+) -> RuntimeResult<()> {
+    let payload_json = serde_json::to_string(&serde_json::json!({
+        "operationId": operation.operation_id,
+        "class": operation.class,
+    }))
+    .map_err(|error| RuntimeError::new(ErrorCode::ModelAdmission, error.to_string()))?;
+    record_service_lifecycle_event(
+        registry,
+        "service.lifecycle.started",
+        context.run_id.as_deref(),
+        &context.service_instance_id,
+        context.process_key.as_deref(),
+        &context.computed_model_hash,
+        &payload_json,
+    )
+}
+
+fn record_lifecycle_success(
+    registry: &mut Registry,
+    context: &LifecycleEventContext,
+    operation: &LifecycleOpSpec,
+) -> RuntimeResult<()> {
+    record_lifecycle_terminal(
+        registry,
+        context,
+        operation,
+        operation.terminal.success.as_str(),
+        None,
+    )
+}
+
+fn record_lifecycle_failure(
+    registry: &mut Registry,
+    context: &LifecycleEventContext,
+    operation: &LifecycleOpSpec,
+    error: &RuntimeError,
+) -> RuntimeResult<()> {
+    record_lifecycle_terminal(
+        registry,
+        context,
+        operation,
+        operation.terminal.failure.as_str(),
+        Some(error),
+    )
+}
+
+fn record_lifecycle_terminal(
+    registry: &mut Registry,
+    context: &LifecycleEventContext,
+    operation: &LifecycleOpSpec,
+    terminal_result: &str,
+    error: Option<&RuntimeError>,
+) -> RuntimeResult<()> {
+    let payload_json = serde_json::to_string(&serde_json::json!({
+        "operationId": operation.operation_id,
+        "class": operation.class,
+        "terminalResult": terminal_result,
+        "errorCode": error.map(|error| error.code),
+        "message": error.map(|error| error.message.as_str()),
+    }))
+    .map_err(|error| RuntimeError::new(ErrorCode::ModelAdmission, error.to_string()))?;
+    record_service_lifecycle_event(
+        registry,
+        "service.lifecycle.terminal",
+        context.run_id.as_deref(),
+        &context.service_instance_id,
+        context.process_key.as_deref(),
+        &context.computed_model_hash,
+        &payload_json,
+    )
+}
+
+impl SelectedEndpoint {
+    fn as_endpoint_spec(&self) -> EndpointSpec {
+        EndpointSpec {
+            endpoint_id: self.endpoint_id.clone(),
+            protocol: nixfied_model::EndpointProtocol::Tcp,
+            host: self.host.clone(),
+            port: PortPolicy::Fixed { port: self.port },
+            ownership_verification: nixfied_model::OwnershipVerification::Required,
+            socket_activation: nixfied_model::SocketActivation::Disabled,
+        }
+    }
 }
 
 fn create_log_file(path: &Path) -> RuntimeResult<File> {

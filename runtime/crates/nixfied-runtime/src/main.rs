@@ -2,7 +2,10 @@ use std::path::PathBuf;
 
 use nixfied_runtime::cancellation::{CancellationToken, ProcessSignalGuard};
 use nixfied_runtime::registry::{Registry, RegistryIdentity, RunLeaseHeartbeat};
-use nixfied_runtime::service::{run_dependent_task_cancellable, start_synthetic_service_for_slot};
+use nixfied_runtime::service::{
+    run_dependent_task_cancellable, run_synthetic_service_clean_for_slot,
+    start_synthetic_service_for_slot,
+};
 use nixfied_runtime::slot::{first_candidate_port, select_slot};
 use nixfied_runtime::state::{
     StateIdentity, derive_host_placement_for_slot, materialize_run_roots, state_base_from_env,
@@ -196,6 +199,20 @@ fn run_m0_admitted(
         }
         return Err(error);
     }
+    if let Err(error) = service.check_health_cancellable(model, &mut registry, cancellation) {
+        if error.code == nixfied_runtime::ErrorCode::Canceled {
+            lease_heartbeat.stop()?;
+            service.cancel(
+                &mut registry,
+                options.timeout_ms,
+                "run canceled during health check",
+            )?;
+        } else {
+            lease_heartbeat.stop()?;
+            let _ = service.stop(&mut registry, options.timeout_ms);
+        }
+        return Err(error);
+    }
     if let Err(error) = cancellation.check() {
         lease_heartbeat.stop()?;
         service.cancel(
@@ -312,12 +329,12 @@ fn run_control_admitted(
             options.timeout_ms,
         )?),
         ControlCommand::Clean => {
-            let identity = StateIdentity::from_selected_slot(model, admission, &selected_slot);
-            print_json(&nixfied_runtime::control::clean_reconciled_state(
+            print_json(&run_synthetic_service_clean_for_slot(
+                model,
+                admission,
+                &placement,
                 &mut registry,
-                &placement.state_base,
-                &placement.state_root,
-                &identity,
+                &selected_slot,
             )?)
         }
     }
