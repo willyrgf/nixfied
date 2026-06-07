@@ -25,14 +25,45 @@ pub fn wait_for_readiness_probe_cancellable(
     selected_port: u16,
     cancellation: &CancellationToken,
 ) -> RuntimeResult<()> {
+    wait_for_service_probe_by_id_cancellable(
+        service,
+        service.readiness_probe.as_str(),
+        selected_endpoint,
+        selected_port,
+        cancellation,
+    )
+}
+
+pub fn wait_for_service_probe_by_id(
+    service: &ServiceSpec,
+    probe_id: &str,
+    selected_endpoint: &EndpointSpec,
+    selected_port: u16,
+) -> RuntimeResult<()> {
+    wait_for_service_probe_by_id_cancellable(
+        service,
+        probe_id,
+        selected_endpoint,
+        selected_port,
+        &CancellationToken::new(),
+    )
+}
+
+pub fn wait_for_service_probe_by_id_cancellable(
+    service: &ServiceSpec,
+    probe_id: &str,
+    selected_endpoint: &EndpointSpec,
+    selected_port: u16,
+    cancellation: &CancellationToken,
+) -> RuntimeResult<()> {
     let probe = service
         .probes
         .iter()
-        .find(|probe| probe.probe_id == service.readiness_probe)
+        .find(|probe| probe.probe_id == probe_id)
         .ok_or_else(|| {
             RuntimeError::new(
                 ErrorCode::ModelAdmission,
-                format!("readiness probe {} is missing", service.readiness_probe),
+                format!("lifecycle probe {probe_id} is missing"),
             )
         })?;
     wait_for_probe(probe, selected_endpoint, selected_port, cancellation)

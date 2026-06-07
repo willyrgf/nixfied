@@ -462,6 +462,33 @@ pub fn mark_service_canceled(
     Ok(())
 }
 
+pub fn record_service_lifecycle_event(
+    registry: &mut Registry,
+    event_type: &str,
+    run_id: Option<&str>,
+    service_instance_id: &str,
+    process_key: Option<&str>,
+    computed_model_hash: &str,
+    payload_json: &str,
+) -> RuntimeResult<()> {
+    let identity = registry.identity().clone();
+    let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
+    insert_event(
+        &transaction,
+        &identity,
+        EventRecord {
+            event_type,
+            run_id,
+            service_instance_id: Some(service_instance_id),
+            process_key,
+            computed_model_hash: Some(computed_model_hash),
+            payload_json,
+        },
+    )?;
+    transaction.commit().map_err(sql_error)?;
+    Ok(())
+}
+
 pub fn record_task_canceling(
     registry: &mut Registry,
     run_id: &str,

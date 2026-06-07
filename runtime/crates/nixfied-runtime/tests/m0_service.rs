@@ -8,13 +8,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use nixfied_model::{DirtyPolicy, Model, SourceMode};
+use nixfied_model::{DirtyPolicy, LifecycleOpClass, Model, SourceMode};
 use nixfied_runtime::cancellation::CancellationToken;
 use nixfied_runtime::registry::{Registry, RegistryIdentity};
 use nixfied_runtime::service::registry::{TaskProcessRecord, record_task_started};
 use nixfied_runtime::service::{
-    run_dependent_task, run_dependent_task_cancellable, service_address_hash, service_instance_id,
-    start_synthetic_service, start_synthetic_service_for_slot, wait_for_readiness_probe,
+    run_dependent_task, run_dependent_task_cancellable, run_synthetic_service_clean_for_slot,
+    service_address_hash, service_instance_id, start_synthetic_service,
+    start_synthetic_service_for_slot, wait_for_readiness_probe,
 };
 use nixfied_runtime::slot::select_slot;
 use nixfied_runtime::state::{
@@ -222,6 +223,247 @@ fn readiness_probe_marks_ready_only_after_endpoint_ownership() {
         )
         .expect("port status should query");
     assert_eq!(released_ports, 1);
+}
+
+#[test]
+fn lifecycle_events_follow_declared_class_order_and_clean_terminal() {
+    let Some(python) = python3_path() else {
+        return;
+    };
+    let port = 45000 + (unique_suffix() % 1000) as u16;
+    let script = python_listener_script();
+    let mut fixture = ServiceFixture::new(python, &["-c", script, "${port}"], port);
+    let mut service = start_synthetic_service(
+        &fixture.model,
+        &fixture.admission,
+        &fixture.placement,
+        &mut fixture.registry,
+        "run-lifecycle-order",
+        port,
+    )
+    .expect("foreground service should start");
+
+    service
+        .wait_for_probe_ready(&fixture.model, &mut fixture.registry)
+        .expect("service should become ready");
+    service
+        .check_health(&fixture.model, &mut fixture.registry)
+        .expect("service health should pass");
+    service
+        .stop(&mut fixture.registry, 1000)
+        .expect("service should stop");
+
+    let selected = select_slot(&fixture.model, None).expect("default slot should select");
+    let identity = StateIdentity::from_selected_slot(&fixture.model, &fixture.admission, &selected);
+    write_slot_marker(&fixture.placement, &identity).expect("slot marker should be written");
+    let cleanup = run_synthetic_service_clean_for_slot(
+        &fixture.model,
+        &fixture.admission,
+        &fixture.placement,
+        &mut fixture.registry,
+        &selected,
+    )
+    .expect("clean lifecycle should succeed");
+
+    assert!(cleanup.deleted_path.ends_with("runtime-test/dev/0"));
+    assert!(!fixture.placement.state_root.exists());
+    assert_eq!(
+        lifecycle_events(&fixture.registry),
+        vec![
+            LifecycleEvent {
+                event_type: "service.lifecycle.started".to_string(),
+                class: "prepare".to_string(),
+                terminal_result: None,
+                error_code: None,
+            },
+            LifecycleEvent {
+                event_type: "service.lifecycle.terminal".to_string(),
+                class: "prepare".to_string(),
+                terminal_result: Some("prepared".to_string()),
+                error_code: None,
+            },
+            LifecycleEvent {
+                event_type: "service.lifecycle.started".to_string(),
+                class: "start".to_string(),
+                terminal_result: None,
+                error_code: None,
+            },
+            LifecycleEvent {
+                event_type: "service.lifecycle.terminal".to_string(),
+                class: "start".to_string(),
+                terminal_result: Some("spawned".to_string()),
+                error_code: None,
+            },
+            LifecycleEvent {
+                event_type: "service.lifecycle.started".to_string(),
+                class: "ready".to_string(),
+                terminal_result: None,
+                error_code: None,
+            },
+            LifecycleEvent {
+                event_type: "service.lifecycle.terminal".to_string(),
+                class: "ready".to_string(),
+                terminal_result: Some("ready".to_string()),
+                error_code: None,
+            },
+            LifecycleEvent {
+                event_type: "service.lifecycle.started".to_string(),
+                class: "health".to_string(),
+                terminal_result: None,
+                error_code: None,
+            },
+            LifecycleEvent {
+                event_type: "service.lifecycle.terminal".to_string(),
+                class: "health".to_string(),
+                terminal_result: Some("healthy".to_string()),
+                error_code: None,
+            },
+            LifecycleEvent {
+                event_type: "service.lifecycle.started".to_string(),
+                class: "stop".to_string(),
+                terminal_result: None,
+                error_code: None,
+            },
+            LifecycleEvent {
+                event_type: "service.lifecycle.terminal".to_string(),
+                class: "stop".to_string(),
+                terminal_result: Some("stopped".to_string()),
+                error_code: None,
+            },
+            LifecycleEvent {
+                event_type: "service.lifecycle.started".to_string(),
+                class: "clean".to_string(),
+                terminal_result: None,
+                error_code: None,
+            },
+            LifecycleEvent {
+                event_type: "service.lifecycle.terminal".to_string(),
+                class: "clean".to_string(),
+                terminal_result: Some("cleaned".to_string()),
+                error_code: None,
+            },
+        ]
+    );
+    let cleanup_events: Vec<String> = fixture
+        .registry
+        .connection()
+        .prepare(
+            "SELECT event_type FROM events WHERE event_type LIKE 'cleanup.%' ORDER BY rowid",
+        )
+        .expect("cleanup statement should prepare")
+        .query_map([], |row| row.get::<_, String>(0))
+        .expect("cleanup events should query")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("cleanup events should collect");
+    assert_eq!(cleanup_events, vec!["cleanup.intent", "cleanup.deleted"]);
+}
+
+#[test]
+fn health_failure_after_ready_records_distinct_lifecycle_failure() {
+    let Some(python) = python3_path() else {
+        return;
+    };
+    let port = 46000 + (unique_suffix() % 1000) as u16;
+    let script = python_listener_script();
+    let mut fixture = ServiceFixture::new(python, &["-c", script, "${port}"], port);
+    fixture.model.execs.insert(
+        "m0-health-fail".to_string(),
+        fixture
+            .model
+            .execs
+            .get("m0-helper")
+            .expect("helper exec should exist")
+            .clone(),
+    );
+    fixture
+        .model
+        .execs
+        .get_mut("m0-health-fail")
+        .expect("health exec should exist")
+        .executable = "/usr/bin/false".to_string();
+    fixture
+        .model
+        .execs
+        .get_mut("m0-health-fail")
+        .expect("health exec should exist")
+        .args = Vec::new();
+    let service_spec = fixture
+        .model
+        .services
+        .get_mut("synthetic")
+        .expect("synthetic service should exist");
+    let health_op = service_spec
+        .lifecycle
+        .iter_mut()
+        .find(|operation| operation.class == LifecycleOpClass::Health)
+        .expect("health op should exist");
+    health_op.exec_id = Some("m0-health-fail".to_string());
+    health_op.probe_id = None;
+
+    let mut service = start_synthetic_service(
+        &fixture.model,
+        &fixture.admission,
+        &fixture.placement,
+        &mut fixture.registry,
+        "run-health-failure",
+        port,
+    )
+    .expect("foreground service should start");
+
+    service
+        .wait_for_probe_ready(&fixture.model, &mut fixture.registry)
+        .expect("service should become ready");
+    let health_error = service
+        .check_health(&fixture.model, &mut fixture.registry)
+        .expect_err("health check should fail after readiness");
+
+    assert_eq!(health_error.code, ErrorCode::ModelAdmission);
+    let service_status: String = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT status FROM services WHERE service_instance_id = ?1",
+            [&service.service_instance_id],
+            |row| row.get(0),
+        )
+        .expect("service status should query");
+    let ready_events: i64 = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT count(*) FROM events WHERE event_type = 'service.probe-ready'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("readiness event count should query");
+    let failed_events: i64 = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT count(*) FROM events WHERE event_type = 'service.failed'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("failed event count should query");
+    let latest_health_terminal = lifecycle_events(&fixture.registry)
+        .into_iter()
+        .filter(|event| {
+            event.class == "health" && event.event_type == "service.lifecycle.terminal"
+        })
+        .last()
+        .expect("health terminal event should exist");
+
+    assert_eq!(service_status, "probe-ready");
+    assert_eq!(ready_events, 1);
+    assert_eq!(failed_events, 0);
+    assert_eq!(latest_health_terminal.terminal_result.as_deref(), Some("unhealthy"));
+    assert_eq!(
+        latest_health_terminal.error_code.as_deref(),
+        Some("MODEL_ADMISSION")
+    );
+    service
+        .stop(&mut fixture.registry, 1000)
+        .expect("service should stop after health failure");
 }
 
 #[test]
@@ -2769,6 +3011,50 @@ fn python_listener_script() -> &'static str {
 
 fn python_wildcard_listener_script() -> &'static str {
     "import socket, sys, time; s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(('0.0.0.0', int(sys.argv[1]))); s.listen(16); time.sleep(30)"
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct LifecycleEvent {
+    event_type: String,
+    class: String,
+    terminal_result: Option<String>,
+    error_code: Option<String>,
+}
+
+fn lifecycle_events(registry: &Registry) -> Vec<LifecycleEvent> {
+    registry
+        .connection()
+        .prepare(
+            "
+            SELECT event_type, payload_json
+            FROM events
+            WHERE event_type LIKE 'service.lifecycle.%'
+            ORDER BY rowid
+            ",
+        )
+        .expect("lifecycle statement should prepare")
+        .query_map([], |row| {
+            let event_type: String = row.get(0)?;
+            let payload_json: String = row.get(1)?;
+            let payload: Value =
+                serde_json::from_str(&payload_json).expect("lifecycle payload should parse");
+            Ok(LifecycleEvent {
+                event_type,
+                class: payload["class"]
+                    .as_str()
+                    .expect("class should be present")
+                    .to_string(),
+                terminal_result: payload["terminalResult"]
+                    .as_str()
+                    .map(|value| value.to_string()),
+                error_code: payload["errorCode"]
+                    .as_str()
+                    .map(|value| value.to_string()),
+            })
+        })
+        .expect("lifecycle events should query")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("lifecycle events should collect")
 }
 
 struct TempDir {
