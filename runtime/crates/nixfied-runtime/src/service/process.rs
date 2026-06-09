@@ -56,6 +56,7 @@ pub struct StartedService {
     pub selected_endpoint: SelectedEndpoint,
     pub computed_model_hash: String,
     pub source_root: PathBuf,
+    pub state_root: PathBuf,
     pub owner_token: String,
     stop_operation: LifecycleOpSpec,
 }
@@ -92,6 +93,7 @@ impl StartedService {
         if let Err(error) = execute_lifecycle_operation(
             model,
             &self.source_root,
+            &self.state_root,
             service,
             endpoint,
             self.selected_endpoint.port,
@@ -196,6 +198,7 @@ impl StartedService {
         if let Err(error) = execute_lifecycle_operation(
             model,
             &self.source_root,
+            &self.state_root,
             service,
             endpoint,
             self.selected_endpoint.port,
@@ -614,6 +617,7 @@ pub fn start_service_for_slot(
         if let Err(error) = execute_lifecycle_operation(
             model,
             &admission.source.observed_root,
+            &placement.state_root,
             service,
             &selected_endpoint.as_endpoint_spec(),
             selected_port,
@@ -626,7 +630,12 @@ pub fn start_service_for_slot(
         record_lifecycle_success(registry, &lifecycle_context, prepare_op)?;
     }
     record_lifecycle_started(registry, &lifecycle_context, start_op)?;
-    let args = operation_args(&exec.args, &start_op.exec_args, selected_port);
+    let args = operation_args(
+        &exec.args,
+        &start_op.exec_args,
+        selected_port,
+        &placement.state_root,
+    );
     let stdout_path = placement
         .logs_dir
         .join(format!("service.{service_name}.stdout.log"));
@@ -735,6 +744,7 @@ pub fn start_service_for_slot(
         selected_endpoint,
         computed_model_hash: admission.computed_model_hash.clone(),
         source_root: admission.source.observed_root.clone(),
+        state_root: placement.state_root.clone(),
         owner_token,
         stop_operation,
     };
@@ -913,12 +923,25 @@ fn select_endpoint(
     })
 }
 
-fn operation_args(base_args: &[String], op_args: &[String], selected_port: u16) -> Vec<String> {
+fn operation_args(
+    base_args: &[String],
+    op_args: &[String],
+    selected_port: u16,
+    state_root: &Path,
+) -> Vec<String> {
     base_args
         .iter()
         .chain(op_args.iter())
-        .map(|arg| arg.replace("${port}", &selected_port.to_string()))
+        .map(|arg| substitute_arg(arg, selected_port, state_root))
         .collect()
+}
+
+/// Generic placeholder substitution shared by lifecycle and task args:
+/// `${port}` resolves to the runtime-selected port, `${stateDir}` to the
+/// host-materialised slot state root so stateful services can locate their data.
+pub(crate) fn substitute_arg(arg: &str, selected_port: u16, state_root: &Path) -> String {
+    arg.replace("${port}", &selected_port.to_string())
+        .replace("${stateDir}", &state_root.to_string_lossy())
 }
 
 pub(crate) fn resolve_exec_cwd(source_root: &Path, exec_cwd: &str) -> RuntimeResult<PathBuf> {
@@ -956,9 +979,11 @@ pub(crate) fn resolve_exec_cwd(source_root: &Path, exec_cwd: &str) -> RuntimeRes
     Ok(cwd)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn execute_lifecycle_operation(
     model: &Model,
     source_root: &Path,
+    state_root: &Path,
     service: &ServiceSpec,
     selected_endpoint: &EndpointSpec,
     selected_port: u16,
@@ -975,7 +1000,14 @@ fn execute_lifecycle_operation(
         );
     }
     if operation.exec_id.is_some() {
-        return run_lifecycle_exec(model, source_root, operation, selected_port, cancellation);
+        return run_lifecycle_exec(
+            model,
+            source_root,
+            state_root,
+            operation,
+            selected_port,
+            cancellation,
+        );
     }
     Ok(())
 }
@@ -983,6 +1015,7 @@ fn execute_lifecycle_operation(
 fn run_lifecycle_exec(
     model: &Model,
     source_root: &Path,
+    state_root: &Path,
     operation: &LifecycleOpSpec,
     selected_port: u16,
     cancellation: &CancellationToken,
@@ -1003,7 +1036,7 @@ fn run_lifecycle_exec(
         )
     })?;
     let command_cwd = resolve_exec_cwd(source_root, &exec.cwd)?;
-    let args = operation_args(&exec.args, &operation.exec_args, selected_port);
+    let args = operation_args(&exec.args, &operation.exec_args, selected_port, state_root);
     let mut command = Command::new(&exec.executable);
     command
         .args(&args)
