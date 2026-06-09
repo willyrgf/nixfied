@@ -3,13 +3,17 @@
 Nixfied v2 is a greenfield rebuild around one boundary: typed Nix emits one
 semantic `model.json`, and a generic Rust runtime admits and executes that model.
 
-Current status: **Milestone 0 is implemented**. This repository proves the
-minimal vertical spine from a downstream-shaped Nix module to a Nix-store
-`model.json`, Rust admission, SQLite registry state, a synthetic foreground
-service, endpoint ownership verification, a dependent task, and `ps` / `down` /
-`clean` reconciliation.
+Current status: **M0 through M2 are implemented**. The M0 spine runs from a
+downstream-shaped Nix module to a Nix-store `model.json`, Rust admission, SQLite
+registry state, a synthetic foreground service, endpoint ownership verification,
+a dependent task, and `ps` / `down` / `clean` reconciliation. On top of that,
+slot isolation (M1) and cancellation plus GC hardening with a generic lifecycle
+operation contract (M2) are also implemented and proved.
 
-The broader RFC roadmap is not implemented yet.
+Still to come: the Nix-side Postgres adapter (M3), workflow graphs (M4),
+installable-wrapper upgrade hardening (M5 currently ships only the install
+scaffold), the polyglot example (M6), and the optional manifest envelope (M7,
+deferred). See `RFC_v2_implementation_plan_M1to7.md` for the current checkpoint.
 
 ## Core Rules
 
@@ -137,6 +141,11 @@ nix flake check
 tests/m0/prove-downstream-minimal.sh
 tests/m0/prove-runtime-without-nix.sh
 tests/m0/prove-install-scaffold.sh
+tests/pre-m1/prove-view-surfaces.sh
+tests/m1/prove-slot-isolation.sh
+tests/m2/prove-cancellation.sh
+tests/m2/prove-gc-hardening.sh
+tests/m2/prove-lifecycle-ops.sh
 ```
 
 The no-Nix proof builds and realises the model first, then places a failing fake
@@ -145,9 +154,10 @@ Nix after admission begins.
 
 ## What Comes Next
 
-The next RFC milestones are slot isolation, cancellation and cleanup hardening,
-Nix-side adapters, workflow graphs, installable downstream wrappers, and
+Slot isolation (M1) and cancellation/cleanup hardening (M2) are implemented. The
+remaining RFC milestones are the Nix-side Postgres adapter (M3), workflow graphs
+(M4), installable-wrapper upgrade hardening (M5), the polyglot example (M6), and
 optional manifest or runtime adapter work only if future milestones prove they
-are needed.
+are needed (M7+).
 
-Do not treat those future milestones as implemented by M0.
+Do not treat those remaining milestones as implemented.
