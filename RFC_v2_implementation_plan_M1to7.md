@@ -5,23 +5,26 @@ Source of truth for scope and architecture remains `RFC_v2.md`.
 ## Current Progress Checkpoint
 
 Status reflects the `v2` branch as of 2026-06-09. The full capability line (M1-M6,
-M7 deferred) and the consolidation phase (C1, C2) are implemented and verified green:
-`cargo test`, `cargo clippy -D warnings`, `nix flake check`, every `tests/*` proof, and
-`nix run .#conformance` (5/5) all pass.
+M7 deferred) is implemented and verified green: `cargo test`, `cargo clippy -D warnings`,
+`nix flake check`, and every `tests/*` capability proof pass. C2 de-milestoning is complete
+across **both** product and test surfaces. C1 is being **redesigned**: the e2e gate moves
+from a bespoke `nix run .#conformance` harness to a **self-hosted dogfood gate** — nixfied's
+own repo is a nixfied project whose `conformance` workflow tests the framework through its
+own surfaces (see "Consolidation C1" below).
 
 | Milestone | State | Evidence |
 | --- | --- | --- |
-| M0 walking skeleton | Done | `tests/m0/*`, full runtime spine |
-| Pre-M1 view surfaces | Done | `tests/pre-m1/prove-view-surfaces.sh` |
-| M1 slot isolation | Done | `tests/m1/prove-slot-isolation.sh` |
-| M2 cancellation & GC hardening | Done | `tests/m2/{prove-cancellation,prove-gc-hardening,prove-lifecycle-ops}.sh` |
-| M3 Nix-side Postgres adapter | Done | `nix/adapters/postgres.nix`, `tests/m3/prove-postgres-adapter.sh` |
-| M4 workflow graphs | Done | `examples/workflow`, `tests/m4/prove-workflow-graphs.sh` |
-| M5 installable downstream wrapper | Done | `nix/install/upgrade.sh`, `tests/m5/prove-install-upgrade.sh` |
-| M6 polyglot example | Done | `examples/polyglot-stack`, `tests/m6/prove-polyglot-stack.sh` |
+| M0 walking skeleton | Done | `tests/minimal/`, `tests/runtime/`, full runtime spine |
+| Pre-M1 view surfaces | Done | `tests/views/prove-view-surfaces.sh` |
+| M1 slot isolation | Done | `tests/slots/prove-slot-isolation.sh` |
+| M2 cancellation & GC hardening | Done | `tests/lifecycle/{prove-cancellation,prove-gc-hardening,prove-lifecycle-ops}.sh` |
+| M3 Nix-side Postgres adapter | Done | `nix/adapters/postgres.nix`, `tests/postgres/prove-postgres-adapter.sh` |
+| M4 workflow graphs | Done | `examples/workflow`, `tests/workflows/prove-workflow-graphs.sh` |
+| M5 installable downstream wrapper | Done | `nix/install/upgrade.sh`, `tests/install/prove-upgrade.sh` |
+| M6 polyglot example | Done | `examples/polyglot-stack`, `tests/polyglot/prove-polyglot-stack.sh` |
 | M7 optional manifest envelope | Deferred by decision | none |
-| C1 downstream conformance suite | Done | `nix run .#conformance`, `runtime/crates/nixfied-conformance` |
-| C2 de-milestone product surface | Done (product surface); test-layout tail open | `tests/guard-no-milestone-tokens.sh` |
+| C1 self-hosted conformance gate | In progress (redesign) | interim `runtime/crates/nixfied-conformance`; self-hosted `conformance` workflow planned |
+| C2 de-milestone product + tests | Done | `tests/guard-no-milestone-tokens.sh` (covers product + test surfaces) |
 
 Notes:
 
@@ -32,18 +35,20 @@ Notes:
   therefore first replaced exact-match validation with a structural contract, introduced a
   generic Nix declaration surface (`closures`/`execs`/`services`/`tasks` + `nix/adapters/`),
   and made the runtime drive arbitrary multi-service/multi-task models. See M3 below.
-- `tests/m3`, `tests/m4`, `tests/m5`, and `tests/m6` directories now exist with their proofs.
-  `tests/m7` is intentionally absent (M7 deferred).
+- The shell proofs now live under capability-named directories
+  (`tests/{minimal,runtime,views,slots,lifecycle,install,postgres,workflows,polyglot}/`) and
+  the runtime unit tests are capability-named (`admission.rs`, `state.rs`, `service.rs`,
+  `registry.rs`, `model_contract.rs`). The C2 guard covers product **and** test surfaces;
+  milestone vocabulary survives only in true history (this file, the RFC plans, git).
 - Two capability-adjacent runtime changes were required and landed generically (no
   service-specific code): a `process-tree` containment mode (multi-process supervisors like
   Postgres whose children form their own process groups) and multiple services per run
   (idempotent run/lease registry rows). Both are documented in M3/M6 below.
-- **Open C2 tail (test-layout only):** the interim shell proofs still live under
-  `tests/m0|pre-m1|m1|m2|m3|m4|m5|m6/` with milestone names and the runtime unit tests are
-  still `m0_*.rs` files. The product/consumer surfaces are fully de-milestoned and guarded;
-  folding those shell proofs into C1 scenarios and renaming the test files/dirs is the only
-  remaining piece. The guard (`tests/guard-no-milestone-tokens.sh`) is scoped to product
-  surfaces and treats the milestone-named test scaffolding as development history.
+- **The C1 redesign supersedes the bespoke e2e gate.** The interim `nixfied-conformance`
+  crate and the `nix run .#conformance` flake app were a stepping stone; the agreed gate is
+  nixfied testing itself (a `conformance` workflow run by the runtime under test). The
+  bespoke crate's assertion logic is reused as task closures; the `#conformance` flake-app
+  interface is removed. See "Consolidation C1".
 - M7 stays deferred until a concrete need (portable bundles, cache export/import,
   standalone distribution outside the Nix store, or integrity-bound materialised views)
   appears.
@@ -62,8 +67,8 @@ This continuation plan covers milestone work through M7 and keeps M0 constraints
 *6. M6: polyglot example. (done)*
 *7. M7: optional manifest envelope (only if triggered by concrete need). (deferred)*
 
-Consolidation: *C1 conformance suite (done), C2 de-milestone product surface (done;
-test-layout fold/rename open).*
+Consolidation: *C1 self-hosted conformance gate (in progress — redesign), C2 de-milestone
+product + test surfaces (done).*
 
 After the capability line (M1-M6; M7 deferred) is complete, a **Consolidation Phase**
 (C1-C2) retires development scaffolding from the product: a first-class downstream
@@ -457,15 +462,18 @@ Two debts have accumulated and must be paid once the capability line is done:
    or non-semantic compiler changes"). The state epoch is `nixfied-m0`, the helper closure
    is `m0-helper`, model `maturity` is `m0`, and the example is `m0-minimal`. Milestone
    progress is being conflated with contract versioning and product identity.
-2. End-to-end behavior is proved by a "bunch of shell scripts" (`tests/mX/prove-*.sh`).
+2. End-to-end behavior is proved by a "bunch of shell scripts" (`tests/*/prove-*.sh`).
    For a framework of this capability that is not acceptable as the primary acceptance
    gate: shell `grep`-assertions are brittle, give no structured reporting, share no
-   fixture model, and do not actually simulate a real downstream adopter's repository.
+   fixture model, and do not actually simulate a real downstream adopter operating the
+   product. The chosen resolution is **self-hosted conformance**: nixfied tests itself
+   through its own task/workflow surfaces (C1 below), so the gate *is* the product running.
 
-The phase is two milestones, executed **C1 then C2**. C1 builds the real conformance
-suite first so that C2's renames are provably behavior-preserving (green suite before and
-after). This inverts the order the debts were listed in, deliberately: never run a
-repository-wide rename without an executable safety net already in place.
+The phase is two milestones. In execution they landed C2-then-C1-redesign: the capability
+line shipped with interim shell proofs, C2 de-milestoned the product and test surfaces under
+the guard, and C1 is now being rebuilt as the self-hosted gate. The original ordering
+intent — never run a repository-wide rename without an executable safety net — was honored
+by the interim shell proofs + `cargo test` acting as that net during C2.
 
 ### Scope Boundary For The Whole Phase
 
@@ -476,122 +484,122 @@ repository-wide rename without an executable safety net already in place.
   file, and git history are development history and are *not* rewritten. Milestone
   vocabulary is retired only from the live product surface, not from the project's memory.
 
-## Consolidation C1: Downstream Conformance Suite (Done, with deviations)
+## Consolidation C1: Self-Hosted Conformance — nixfied Tests Itself (In Progress)
 
 ### Product Purpose
 
-Replace the ad hoc end-to-end shell proofs with a first-class, black-box conformance
-harness that simulates a real downstream project adopting and operating Nixfied purely
-through public surfaces, with structured fixtures, golden artifacts, and machine-readable
-reporting.
+Make nixfied's end-to-end gate *be the product running itself*. A "CI job" in nixfied's own
+vocabulary is a **task**, and a CI pipeline is a **workflow**. So the gate is not a bespoke
+external harness — the nixfied repository is itself a nixfied project whose `conformance`
+workflow exercises the framework end to end (install, all adapters, workflows, slots,
+cancellation, cleanup), executed by the very `nixfied-runtime` under test and invoked through
+the same surfaces every adopter uses. No new public interface; maximal reuse; the framework's
+own `nixfied.nix` becomes the canonical, copy-paste adopter example.
 
-### Delivered
+This supersedes the interim bespoke harness. The `nix run .#conformance` flake app and the
+`#conformance` interface are removed; the Rust assertion logic in
+`runtime/crates/nixfied-conformance` is retained but reused as **task closures**, not a
+standalone app.
 
-- `c1: add downstream conformance suite over public surfaces` — `runtime/crates/nixfied-conformance`,
-  a black-box harness exposed as `nix run .#conformance`. Scenarios are declarative data; for
-  each it builds the example model via `nix build`, runs the real `nixfied-runtime` binary,
-  and asserts on operator-observable outputs (run JSON: services set, task success, workflow
-  node order; the written summary; the marker-gated clean result). It emits a structured JSON
-  report (per-scenario pass/fail, reason, timing, computed model hash) and exits non-zero on
-  failure.
-- Scenarios: `minimal-service`, `postgres-adapter`, `workflow-graph`, `polyglot-stack`, and a
-  `negative-unknown-workflow` self-test (a `run --workflow <missing>` that must fail), proving
-  the harness distinguishes pass from fail.
+### What Is Reused (the point)
 
-### Deviations From The Original C1 Spec
+Environments, tasks, workflows, service-requirement readiness gates, the topological
+scheduler, per-task and per-workflow summaries, artifacts, cancellation/teardown, and the
+`run --workflow` surface all do double duty: they orchestrate nixfied's own conformance.
+Dogfooding removes the bespoke *interface and orchestrator*; the assertion *logic*
+(install-driving, registry-sqlite checks, golden-view diffs) remains, as closures behind
+tasks.
 
-These were scoped down to land C1 within the session; they are the documented gaps, not
-silent omissions:
+### Trust Model (resolving self-certification)
 
-- The harness does **not** scaffold a throwaway git repo and run the **installer** per
-  scenario. It drives the public surfaces by building the in-repo example models and running
-  the runtime binary. (The install + non-destructive upgrade path is covered by
-  `tests/m5/prove-install-upgrade.sh`, not yet a conformance scenario.)
-- No **golden/snapshot** artifacts or `--update-goldens` workflow yet; assertions are
-  structural on the run/summary JSON rather than snapshot diffs.
-- It is **not** wired as an entry of `nix flake check`: the suite drives real `nix build` +
-  the runtime binary, which the nix-build sandbox cannot host (nested nix). `nix flake check`
-  instead gates that the conformance app **wrapper builds** (`checks.conformance-app`); the
-  suite runs via `nix run .#conformance`.
-- The interim `tests/mX/prove-*.sh` shell proofs are **kept**, not migrated-and-deleted. They
-  cover behavior C1's five model scenarios do not (cancellation, GC hardening, lifecycle-op
-  ordering via cargo tests, slot isolation, install scaffold/upgrade, view surfaces).
+A system cannot fully certify itself: a bug in the runtime's scheduler or exit-policy could
+run the broken code to "prove" itself and report a false pass. The gate is therefore layered,
+and CI runs the layers in order:
 
-### Strict Boundary
+1. **Trusted bootstrap — `cargo test`.** The white-box unit/integration tests verify the
+   runtime's own primitives (admission, the workflow scheduler, task exit policy, registry
+   events, marker-gated cleanup) *without the runtime grading itself*. This is the floor and
+   must pass first.
+2. **Dogfood gate — `nixfied-runtime run --workflow conformance`.** Because the bootstrap
+   establishes the orchestration primitives are sound, the product can be trusted to
+   orchestrate its own e2e. The conformance tasks additionally write **ground-truth
+   artifacts** (per-check verdicts) so the result is independently inspectable, not only
+   "the workflow said ok".
+3. **`nix flake check`** keeps cheap structural gates: every example model builds, the
+   nix-packaged binaries compile, and the de-milestoning guard passes.
 
-Included:
+The NixOS-VM option was considered and rejected: the no-limitations execution the gate needs
+(a real Nix daemon, ports, multi-process supervisors, the installer's nested `nix`) is
+already available in a normal shell, so a VM unlocks nothing here; hermeticity comes from
+pinned inputs + nix-built binaries + throwaway repos/state + clean CI runners, not a VM.
 
-- A dedicated Rust harness crate (working name `nixfied-conformance`) exposed as
-  `nix run .#conformance` and wired as the single end-to-end entry of `nix flake check`.
-- A **downstream-repo fixture**: the harness scaffolds a throwaway git repository in a
-  temp dir, pins `nixfied` as a flake input (a `path:` pin to the checkout under test),
-  runs the **real installer**, then drives only public surfaces from that point on
-  (`nix build .#model`, the runtime binary, operator-observable registry/summary/views).
-- **Scenarios as declarative data**, not scripts. Each scenario names a downstream model
-  declaration and its expected observable outcome: lifecycle event sequence, registry rows
-  (runs/services/processes/ports/events/leases/cleanups), summary shape, endpoint-ownership
-  verdict, and cleanup result. The harness runs all scenarios through one uniform engine.
-- **Golden / snapshot artifacts** for summaries, `schema`/`docs`/`capabilities` views, and
-  event sequences, with a documented `--update-goldens` workflow.
-- **Structured JSON reporting** per scenario: pass/fail, reason, timing, and the computed
-  model hash, suitable for CI consumption.
-- Migration of the existing `tests/mX/prove-*.sh` end-to-end checks into harness scenarios,
-  after which those shell scripts are deleted.
+### Components
 
-Excluded:
+- **Reproducible, host-toolchain-free binaries.** A pinned `rust-overlay` flake input builds
+  `nixfied-runtime` (and the conformance closure) as nix store packages, so the gate — and
+  `#install`-ed downstream projects — need only `nix`, not a host Rust toolchain. (nixpkgs
+  25.05 ships an rustc older than the workspace's let-chain requirement, so a pinned
+  toolchain is required regardless.)
+- **The framework's self-project.** A repo-root `nixfied.nix` declares the `conformance`
+  workflow. Its nodes are tasks bound to closures: capability checks (drive each example
+  through every public surface) plus an **adoption** task that runs the real `#install` +
+  `#upgrade` into a throwaway git repo pinned to `path:<checkout>`.
+- **The downstream worked example.** `examples/downstream/` — a realistic "small system"
+  (Postgres + services + a workflow + multi-slot) that the adoption task installs and drives,
+  doubling as the integration guide other teams copy.
+- **Assertions.** The retained `nixfied-conformance` code becomes the closure invoked by
+  tasks (e.g. `nixfied-conformance --check postgres`), asserting only on operator-observable
+  surfaces (run JSON, registry sqlite, summaries) plus golden snapshots of the
+  `schema`/`docs`/`capabilities` views, with `--update-goldens`.
 
-- White-box crate tests. The per-crate `#[test]` unit/integration tests stay as they are;
-  they legitimately test internals. C1 only replaces the *black-box end-to-end* layer.
-- Any harness access to `nixfied-model` / `nixfied-runtime` internals for behavior
-  assertions. The harness asserts only on operator-observable surfaces — that is what makes
-  it a real usage simulation rather than a privileged white-box test. (Reading the registry
-  SQLite and summary JSON is allowed: those are documented operator surfaces.)
+### Honest Weak Points
 
-### Design Principles
+- **Self-cert blind spot.** Narrowed by the cargo bootstrap (which covers exit-policy /
+  scheduler correctness) and the ground-truth artifacts, but not zero. Making it zero would
+  require a non-nixfied orchestrator — exactly the bespoke harness we are removing.
+- **Bootstrap dependency.** If the model compiler or runtime cannot launch the workflow, the
+  gate yields no signal — but `cargo test` runs first and fails earlier with a clearer reason.
+- **Nesting.** `nixfied-runtime` runs tasks that run `nixfied-runtime` against throwaway
+  projects; each needs an isolated `NIXFIED_STATE_DIR` and its own slot/port window so inner
+  and outer runs do not collide.
+- **The logic does not vanish.** Dogfooding removes the bespoke interface, not the
+  install-driving / sqlite-asserting / golden-diffing code.
+- **`path:` self-pin.** Building the throwaway project pins the working tree, so the gate
+  tests the checkout, not a committed rev — correct for CI, stated for clarity.
 
-- **Public-surface contract is enforced structurally**, e.g. the harness crate does not
-  depend on the internal crates as libraries; it shells the built `nixfied` binary the way
-  an operator would.
-- **One toolchain.** The harness is Rust to match the runtime; no second test language.
-- **Scenarios own their fixtures.** Adding a scenario adds data + golden files, not a new
-  bespoke script.
+### Execution Plan (commit-by-commit)
 
-### Sequencing: Interim Shell Proofs, Then One Strong Suite
+1. **Packaging.** Add a pinned `rust-overlay` input; build `packages.nixfied-runtime` (and
+   the conformance closure) via `buildRustPackage`/crane; verify `nix build` yields a working
+   runtime binary. *(load-bearing risk; prove first.)*
+2. **Worked example.** Add `examples/downstream/` (Postgres + services + workflow +
+   multi-slot) and a short README that is the adoption guide.
+3. **Self-project + workflow.** Add the repo-root `nixfied.nix` declaring the `conformance`
+   workflow: capability-check tasks + the install/upgrade adoption task, bound to the
+   conformance closure and the packaged runtime.
+4. **Assertion closure.** Recast `nixfied-conformance` as a per-check closure (`--check
+   <name>`, `--update-goldens`); add the install/upgrade adoption check and golden snapshots;
+   remove the `#conformance` flake app and `apps.conformance`.
+5. **Gate wiring + CI.** CI = `cargo test` (floor) then build the self-model + `nixfied-runtime
+   run --workflow conformance`. `nix flake check` keeps model builds + binary compile + guard.
+   Migrate the capability shell proofs into the workflow's tasks and delete the ones the
+   workflow subsumes.
+6. **Docs.** Record the self-hosted gate in this plan, `AGENTS.md`, and the example README.
 
-Each capability milestone (M3, M4, M5, M6) keeps shipping its own `tests/mX/prove-*.sh`
-script as **interim, intentionally weak** coverage while that milestone is in flight. The
-shell proofs exist to catch gross regressions during development; they are explicitly not
-the final acceptance gate. C1 is built **once the whole capability line (M1-M6) is
-implemented and weakly proved this way**, not incrementally per milestone.
+### Proof
 
-At that point C1 defines the meaningful, strong scenarios on top of real, installable
-**example/simulation projects** — downstream-shaped repositories that the harness installs
-the framework into and then exercises end to end (minimal service, postgres adapter,
-workflow graph, slot isolation, cancellation/GC, install upgrade, polyglot). When a
-scenario covers what a shell proof covered, that shell proof is migrated into the scenario
-and deleted. Concretely:
-
-- Subsumes the M5 upgrade proof: install + non-destructive upgrade become conformance
-  scenarios rather than a separate `tests/m5/` script.
-- Becomes the home for the M3/M4/M6 end-to-end proofs (postgres adapter, workflow graph,
-  polyglot). Their interim `tests/m3|m4|m6/prove-*.sh` scripts are superseded and removed
-  only when the corresponding conformance scenario exists and is green.
-
-### Proof Of The Suite Itself
-
-- `nix run .#conformance` runs green across all migrated scenarios.
-- `nix flake check` invokes the suite and fails on any scenario regression.
-- A deliberately broken scenario fixture makes the suite fail with a structured reason
-  (negative self-test).
+- `cargo test` green (trusted floor).
+- `nixfied-runtime run --workflow conformance` green: the framework installs, builds, runs,
+  upgrades, and cleans itself end to end through its own surfaces; ground-truth artifacts are
+  present; a deliberately broken check fails the workflow with a structured reason.
+- `nix flake check` green: example models build, binaries compile, the guard passes.
 
 ### Dependencies
 
-- Lands after the full capability line (M1-M6) is implemented and weakly proved by interim
-  shell scripts. C1 is a single consolidation effort, not bootstrapped or grown per
-  milestone — its value is defining strong scenarios over the complete capability set on
-  real installable example projects.
+- The completed capability line (M1-M6) and C2 de-milestoning. Reuses M4 workflows and M2
+  cancellation as the orchestration substrate it runs on.
 
-## Consolidation C2: De-Milestone The Product Surface (Done for product surface; test-layout tail open)
+## Consolidation C2: De-Milestone The Product Surface (Done)
 
 ### Product Purpose
 
@@ -620,17 +628,24 @@ version**, **product identity**, and **development history**.
 The conformance suite was green before and after; the only intended behavior change is the
 contract-version bump (old-ABI models stop admitting).
 
-### Open Tail (test layout only)
+### Test-Layout De-Milestoning (Done)
 
-Not done, and intentionally guard-exempt as development history:
+A follow-up pass closed the test-layout tail:
 
-- The interim shell proofs still live under `tests/m0|pre-m1|m1|m2|m3|m4|m5|m6/` with
-  milestone names, and the runtime unit tests are still `m0_*.rs` files. The Classification
-  Rule below assigns these to "folded into C1 / capability-named files"; that fold + rename
-  is the remaining work. Because C1 was scoped down (see its deviations) and does not yet
-  subsume the shell proofs, deleting them would lose coverage, so they were kept.
-- `AGENTS.md` still references the old `tests/m0` layout and `m2c`/`M0` common checks and
-  should be refreshed when the tail is closed.
+- Runtime unit-test files renamed to capability names (`admission.rs`, `state.rs`,
+  `service.rs`, `registry.rs`, `model_contract.rs`).
+- Shell proofs reorganized into capability directories
+  (`tests/{minimal,runtime,views,slots,lifecycle,install,postgres,workflows,polyglot}/`),
+  fixing the cross-references to renamed cargo test targets.
+- Milestone tokens cleaned out of test fixtures (e.g. `m0-helper` -> `synthetic-helper`,
+  `nixfied-m0` -> `nixfied-state`, retired ABI values -> `legacy`).
+- The guard (`tests/guard-no-milestone-tokens.sh`) was extended to cover the test surfaces
+  (`tests/` + `runtime/crates/*/tests`), excluding only itself.
+- `AGENTS.md` refreshed to the capability-named layout and current checks.
+
+Milestone vocabulary now survives only in true history (this file, the RFC plan documents,
+and git). The shell proofs are retained until the C1 self-hosted workflow subsumes them
+(its Execution Plan migrates the capability proofs into workflow tasks).
 
 ### Classification Rule (drives every rename)
 
@@ -670,11 +685,10 @@ Not done, and intentionally guard-exempt as development history:
 - Conformance suite (`nix run .#conformance`) green before and after; only the
   contract-version bump changed behavior.
 - Old-ABI (`m2c`) model is refused, new-ABI model admits (`abi_mismatch_is_contract_error`).
-- `tests/guard-no-milestone-tokens.sh` passes: no `\bm[0-9]+\b` / `:mN:` / `pre-mN` token in
-  **product surfaces** (`nix/`, `examples/`, `flake.nix`, `runtime/crates/*/src`).
-- Not yet satisfied: the full "no `mX` outside history files" bar. Milestone tokens remain in
-  the interim `tests/mX/` shell proofs and `m0_*.rs` unit-test files (the guard exempts them
-  as development history pending the C1 fold; see "Open Tail" above).
+- `tests/guard-no-milestone-tokens.sh` passes across **product and test surfaces** (`nix/`,
+  `examples/`, `flake.nix`, `runtime/crates/*/src`, `tests/`, `runtime/crates/*/tests`): no
+  `\bm[0-9]+\b` / `:mN:` / `pre-mN` token outside true history files.
+- The full "no `mX` outside history files" bar is met (the test-layout pass closed it).
 
 ### Dependencies
 
