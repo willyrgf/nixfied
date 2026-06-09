@@ -363,6 +363,57 @@ fn accepts_arbitrary_service_and_exec_names() {
 }
 
 #[test]
+fn service_may_not_reference_another_services_probe() {
+    // Probe ids are service-local. A second service pointing its readinessProbe at
+    // the first service's probe must be rejected at admission (fail closed), not
+    // admitted and then fail when the runtime resolves it within the ServiceSpec.
+    let mut value = valid_model_json();
+    add_worker_service(&mut value);
+    // Point the worker's readiness and ready/health probes at the synthetic
+    // service's probe (self-consistent within the worker, but cross-service).
+    value["services"]["worker"]["readinessProbe"] = json!("synthetic-tcp");
+    for op in value["services"]["worker"]["lifecycle"]
+        .as_array_mut()
+        .unwrap()
+    {
+        if op["probeId"].is_string() {
+            op["probeId"] = json!("synthetic-tcp");
+        }
+    }
+    let model: Model = serde_json::from_value(value).expect("model should deserialize");
+
+    assert_eq!(
+        model
+            .validate()
+            .expect_err("cross-service probe reference must be rejected"),
+        ValidationError::UndeclaredReference {
+            reference_kind: "lifecycle.probeId",
+            id: "synthetic-tcp".to_string(),
+        }
+    );
+}
+
+#[test]
+fn probe_may_not_target_another_services_endpoint() {
+    // Endpoint ids are service-local too: a probe may only target an endpoint its
+    // own service declares.
+    let mut value = valid_model_json();
+    add_worker_service(&mut value);
+    value["services"]["worker"]["probes"][0]["target"]["endpointId"] = json!("synthetic-tcp");
+    let model: Model = serde_json::from_value(value).expect("model should deserialize");
+
+    assert_eq!(
+        model
+            .validate()
+            .expect_err("cross-service endpoint reference must be rejected"),
+        ValidationError::UndeclaredReference {
+            reference_kind: "probe.endpointId",
+            id: "synthetic-tcp".to_string(),
+        }
+    );
+}
+
+#[test]
 fn prepare_operation_may_bind_an_exec() {
     // initdb-style preparation: the prepare class is allowed to bind an exec.
     let mut model = parse_valid_model();
