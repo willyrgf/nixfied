@@ -538,15 +538,43 @@ pub fn start_synthetic_service_for_slot(
     selected_slot: &SelectedSlot<'_>,
     selected_port: u16,
 ) -> RuntimeResult<StartedService> {
+    start_service_for_slot(
+        model,
+        admission,
+        placement,
+        registry,
+        run_id,
+        selected_slot,
+        SYNTHETIC_SERVICE_NAME,
+        selected_port,
+    )
+}
+
+/// Start any declared foreground service generically: the runtime selects the
+/// service by name from the model, executes its prepare/start lifecycle
+/// operations over the bound generic primitives, and tracks the owned process.
+#[allow(clippy::too_many_arguments)]
+pub fn start_service_for_slot(
+    model: &Model,
+    admission: &Admission,
+    placement: &HostPlacement,
+    registry: &mut Registry,
+    run_id: impl Into<String>,
+    selected_slot: &SelectedSlot<'_>,
+    service_name: &str,
+    selected_port: u16,
+) -> RuntimeResult<StartedService> {
     let run_id = run_id.into();
-    let service_name = SYNTHETIC_SERVICE_NAME;
     let service = model.services.get(service_name).ok_or_else(|| {
-        RuntimeError::new(ErrorCode::ModelAdmission, "M0 synthetic service is missing")
+        RuntimeError::new(
+            ErrorCode::ModelAdmission,
+            format!("service {service_name} is missing"),
+        )
     })?;
     if !service.foreground {
         return Err(RuntimeError::new(
             ErrorCode::ProcEscape,
-            "M0 services must run in the foreground",
+            "services must run in the foreground",
         ));
     }
     let start_op = lifecycle_op(service, LifecycleOpClass::Start)?;
@@ -599,8 +627,12 @@ pub fn start_synthetic_service_for_slot(
     }
     record_lifecycle_started(registry, &lifecycle_context, start_op)?;
     let args = operation_args(&exec.args, &start_op.exec_args, selected_port);
-    let stdout_path = placement.logs_dir.join("service.synthetic.stdout.log");
-    let stderr_path = placement.logs_dir.join("service.synthetic.stderr.log");
+    let stdout_path = placement
+        .logs_dir
+        .join(format!("service.{service_name}.stdout.log"));
+    let stderr_path = placement
+        .logs_dir
+        .join(format!("service.{service_name}.stderr.log"));
     let command_json = serde_json::to_string(&CommandRecord {
         executable: exec.executable.as_str(),
         args: &args,
@@ -629,7 +661,7 @@ pub fn start_synthetic_service_for_slot(
     let mut child = command.spawn().map_err(|error| {
         let error = RuntimeError::new(
             ErrorCode::ProcEscape,
-            format!("failed to spawn synthetic service: {error}"),
+            format!("failed to spawn service {service_name}: {error}"),
         );
         let _ = record_lifecycle_failure(registry, &lifecycle_context, start_op, &error);
         error
@@ -729,6 +761,27 @@ pub fn start_synthetic_service_for_slot(
     Ok(started)
 }
 
+/// Clean every service declared in the selected slot's environment, then clean
+/// the marker-owned slot state once. Each service's clean lifecycle operation is
+/// a marker-gated runtime cleanup primitive (no exec).
+pub fn run_slot_clean(
+    model: &Model,
+    admission: &Admission,
+    placement: &HostPlacement,
+    registry: &mut Registry,
+    selected_slot: &SelectedSlot<'_>,
+) -> RuntimeResult<CleanupOutcome> {
+    let services = model
+        .environments
+        .get(selected_slot.environment)
+        .map(|env| env.services.clone())
+        .unwrap_or_default();
+    for service_name in &services {
+        record_service_clean(model, admission, registry, selected_slot, service_name)?;
+    }
+    clean_marked_slot_state(model, admission, placement, registry, selected_slot)
+}
+
 pub fn run_synthetic_service_clean_for_slot(
     model: &Model,
     admission: &Admission,
@@ -736,12 +789,31 @@ pub fn run_synthetic_service_clean_for_slot(
     registry: &mut Registry,
     selected_slot: &SelectedSlot<'_>,
 ) -> RuntimeResult<CleanupOutcome> {
-    let service_name = SYNTHETIC_SERVICE_NAME;
+    record_service_clean(
+        model,
+        admission,
+        registry,
+        selected_slot,
+        SYNTHETIC_SERVICE_NAME,
+    )?;
+    clean_marked_slot_state(model, admission, placement, registry, selected_slot)
+}
+
+/// Record the marker-gated clean lifecycle operation for one service.
+fn record_service_clean(
+    model: &Model,
+    admission: &Admission,
+    registry: &mut Registry,
+    selected_slot: &SelectedSlot<'_>,
+    service_name: &str,
+) -> RuntimeResult<()> {
     let service = model.services.get(service_name).ok_or_else(|| {
-        RuntimeError::new(ErrorCode::ModelAdmission, "M0 synthetic service is missing")
+        RuntimeError::new(
+            ErrorCode::ModelAdmission,
+            format!("service {service_name} is missing"),
+        )
     })?;
     let clean_op = lifecycle_op(service, LifecycleOpClass::Clean)?;
-    let selected_port = selected_slot.placement.candidate_ports.start;
     let address_hash = service_address_hash(
         model,
         selected_slot.environment,
@@ -751,38 +823,29 @@ pub fn run_synthetic_service_clean_for_slot(
     let service_instance_id = service_instance_id(&address_hash, &service.identity);
     let lifecycle_context = LifecycleEventContext {
         run_id: None,
-        service_instance_id: service_instance_id.clone(),
+        service_instance_id,
         process_key: None,
         computed_model_hash: admission.computed_model_hash.clone(),
     };
     record_lifecycle_started(registry, &lifecycle_context, clean_op)?;
-    if clean_op.exec_id.is_some()
-        && let Err(error) = run_lifecycle_exec(
-            model,
-            &admission.source.observed_root,
-            clean_op,
-            selected_port,
-            &CancellationToken::new(),
-        )
-    {
-        let _ = record_lifecycle_failure(registry, &lifecycle_context, clean_op, &error);
-        return Err(error);
-    }
+    record_lifecycle_success(registry, &lifecycle_context, clean_op)
+}
+
+/// Clean the marker-owned state root for the selected slot.
+fn clean_marked_slot_state(
+    model: &Model,
+    admission: &Admission,
+    placement: &HostPlacement,
+    registry: &mut Registry,
+    selected_slot: &SelectedSlot<'_>,
+) -> RuntimeResult<CleanupOutcome> {
     let identity = StateIdentity::from_selected_slot(model, admission, selected_slot);
-    let cleanup = match clean_marked_state(
+    clean_marked_state(
         &placement.state_base,
         &placement.state_root,
         &identity,
         registry,
-    ) {
-        Ok(cleanup) => cleanup,
-        Err(error) => {
-            let _ = record_lifecycle_failure(registry, &lifecycle_context, clean_op, &error);
-            return Err(error);
-        }
-    };
-    record_lifecycle_success(registry, &lifecycle_context, clean_op)?;
-    Ok(cleanup)
+    )
 }
 
 fn run_owner_token(run_id: &str) -> String {
@@ -830,7 +893,7 @@ fn select_endpoint(
     let endpoint = service.endpoints.first().ok_or_else(|| {
         RuntimeError::new(
             ErrorCode::ModelAdmission,
-            "M0 synthetic service requires one endpoint",
+            "service requires at least one endpoint",
         )
     })?;
     match &endpoint.port {

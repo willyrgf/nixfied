@@ -292,10 +292,12 @@ for left, right in distinct_pairs:
     assert left.exists(), left
     assert right.exists(), right
 
-assert run0["selectedEndpoint"]["port"] == 39180
-assert run1["selectedEndpoint"]["port"] == 39280
-assert run0["selectedEndpoint"]["port"] != run1["selectedEndpoint"]["port"]
-assert run0["serviceInstanceId"] != run1["serviceInstanceId"]
+svc0 = run0["services"][0]
+svc1 = run1["services"][0]
+assert svc0["selectedEndpoint"]["port"] == 39180
+assert svc1["selectedEndpoint"]["port"] == 39280
+assert svc0["selectedEndpoint"]["port"] != svc1["selectedEndpoint"]["port"]
+assert svc0["serviceInstanceId"] != svc1["serviceInstanceId"]
 
 for slot, root in enumerate(roots):
     db = root / "registry" / "registry.sqlite3"
