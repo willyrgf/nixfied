@@ -96,8 +96,10 @@ in
         execArgs = [
           "-D"
           pgdata
-          "-k"
-          "\${stateDir}"
+          # Connect over TCP only; disabling the Unix socket avoids the macOS
+          # sun_path length limit under deep state directories.
+          "-c"
+          "unix_socket_directories="
           "-h"
           "127.0.0.1"
           "-p"
