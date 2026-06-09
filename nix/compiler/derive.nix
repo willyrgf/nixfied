@@ -207,8 +207,20 @@ let
     inherit (env) services tasks;
   }) config.nixfied.environments;
 
+  workflowSpec = name: workflow: {
+    workflowId = name;
+    servicesRequired = workflow.servicesRequired;
+    nodes = map (node: {
+      nodeId = node.nodeId;
+      taskId = node.taskId;
+      dependsOn = node.dependsOn;
+    }) workflow.nodes;
+  };
+  workflows = mapAttrs workflowSpec config.nixfied.workflows;
+
   serviceNames = attrNames config.nixfied.services;
   taskNames = attrNames config.nixfied.tasks;
+  workflowNames = attrNames config.nixfied.workflows;
 in
 {
   packages = closurePackages;
@@ -243,7 +255,7 @@ in
       inherit slots;
       services = serviceNames;
       tasks = taskNames;
-      workflows = [ ];
+      workflows = workflowNames;
       surfaces = surfaceNames;
     };
     runtimeConstraints = {
@@ -275,8 +287,13 @@ in
         ;
     };
     secrets = [ ];
-    inherit closures execs services tasks;
-    workflows = { };
+    inherit
+      closures
+      execs
+      services
+      tasks
+      workflows
+      ;
     docs = {
       title = config.nixfied.project.name;
       summary = "Compiled model for ${config.nixfied.project.projectId}.";
