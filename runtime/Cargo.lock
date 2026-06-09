@@ -157,6 +157,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "nixfied-conformance"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "nixfied-model"
 version = "0.1.0"
 dependencies = [
