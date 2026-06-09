@@ -1,5 +1,5 @@
 {
-  description = "Nixfied v2 greenfield Milestone 0 workspace";
+  description = "Nixfied v2 greenfield workspace";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
@@ -41,7 +41,7 @@
         { pkgs, system }:
         let
           nixfiedLib = mkNixfiedLib { inherit pkgs system; };
-          m0MinimalModel = nixfiedLib.compileModel ./examples/m0-minimal/nixfied.nix;
+          minimalModel = nixfiedLib.compileModel ./examples/minimal/nixfied.nix;
           postgresModel = nixfiedLib.compileModel ./examples/postgres/nixfied.nix;
           workflowModel = nixfiedLib.compileModel ./examples/workflow/nixfied.nix;
           polyglotModel = nixfiedLib.compileModel ./examples/polyglot-stack/nixfied.nix;
@@ -75,11 +75,11 @@
           };
         in
         {
-          default = m0MinimalModel;
+          default = minimalModel;
           install = nixfiedInstall;
           upgrade = nixfiedUpgrade;
           conformance = nixfiedConformance;
-          m0-minimal-model = m0MinimalModel;
+          minimal-model = minimalModel;
           postgres-model = postgresModel;
           workflow-model = workflowModel;
           polyglot-stack-model = polyglotModel;
@@ -110,7 +110,7 @@
       checks = forAllSystems (
         { pkgs, system }:
         {
-          m0-minimal-model = self.packages.${system}.m0-minimal-model;
+          minimal-model = self.packages.${system}.minimal-model;
           # The conformance suite itself runs via `nix run .#conformance` (it
           # drives real nix builds + the runtime binary, which the nix-build
           # sandbox cannot host); here we at least gate that its wrapper builds.

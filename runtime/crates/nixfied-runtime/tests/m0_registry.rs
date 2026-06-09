@@ -85,7 +85,7 @@ fn records_and_checks_selected_slot_identity() {
     let tmp = TempDir::new();
     let path = tmp.path.join("registry.sqlite3");
     let identity = RegistryIdentity::for_slot(
-        "m0-minimal",
+        "minimal",
         "dev",
         1,
         "nixfied-runtime-abi:1",
@@ -101,11 +101,8 @@ fn records_and_checks_selected_slot_identity() {
     assert_eq!(slot, 1);
     drop(registry);
 
-    let wrong_slot = RegistryIdentity::default_slot(
-        "m0-minimal",
-        "nixfied-runtime-abi:1",
-        "nixfied-toolchain:1",
-    );
+    let wrong_slot =
+        RegistryIdentity::default_slot("minimal", "nixfied-runtime-abi:1", "nixfied-toolchain:1");
     let error = match Registry::open_or_create(&path, &wrong_slot) {
         Ok(_) => panic!("slot mismatch should fail"),
         Err(error) => error,
@@ -182,7 +179,7 @@ fn rejects_nonempty_unversioned_registry() {
 }
 
 fn identity() -> RegistryIdentity {
-    RegistryIdentity::default_slot("m0-minimal", "nixfied-runtime-abi:1", "nixfied-toolchain:1")
+    RegistryIdentity::default_slot("minimal", "nixfied-runtime-abi:1", "nixfied-toolchain:1")
 }
 
 struct TempDir {

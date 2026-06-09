@@ -2,7 +2,7 @@
 {
   imports = [ adapters.synthetic ];
 
-  nixfied.project.projectId = "m0-minimal";
-  nixfied.project.name = "M0 Minimal";
+  nixfied.project.projectId = "minimal";
+  nixfied.project.name = "Minimal";
   nixfied.codebases.main.logicalRoot = ".";
 }

@@ -6,7 +6,7 @@ tmp="$(mktemp -d "${TMPDIR:-/tmp}/nixfied-pre-m1-views.XXXXXX")"
 trap 'rm -rf "$tmp"' EXIT
 cd "$repo"
 
-model_out="$(nix build --no-link --no-write-lock-file --print-out-paths "$repo#m0-minimal-model")"
+model_out="$(nix build --no-link --no-write-lock-file --print-out-paths "$repo#minimal-model")"
 case "$model_out" in
   /nix/store/*) ;;
   *)
