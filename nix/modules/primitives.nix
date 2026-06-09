@@ -432,8 +432,40 @@ in
   };
 
   options.nixfied.workflows = mkOption {
-    type = types.attrs;
+    type = types.attrsOf (
+      types.submodule {
+        options = {
+          servicesRequired = mkOption {
+            type = types.listOf types.str;
+            default = [ ];
+            description = "Services that must be ready before any node runs.";
+          };
+          nodes = mkOption {
+            type = types.listOf (
+              types.submodule {
+                options = {
+                  nodeId = mkOption {
+                    type = types.nonEmptyStr;
+                    description = "Unique workflow node id.";
+                  };
+                  taskId = mkOption {
+                    type = types.nonEmptyStr;
+                    description = "Task this node runs.";
+                  };
+                  dependsOn = mkOption {
+                    type = types.listOf types.str;
+                    default = [ ];
+                    description = "Node ids that must succeed before this node.";
+                  };
+                };
+              }
+            );
+            description = "Bounded acyclic task dependency graph.";
+          };
+        };
+      }
+    );
     default = { };
-    description = "Workflow declarations are deferred to M4; must remain empty.";
+    description = "Declared workflows, keyed by workflow id.";
   };
 }

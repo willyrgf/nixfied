@@ -43,6 +43,7 @@
           nixfiedLib = mkNixfiedLib { inherit pkgs system; };
           m0MinimalModel = nixfiedLib.compileModel ./examples/m0-minimal/nixfied.nix;
           postgresModel = nixfiedLib.compileModel ./examples/postgres/nixfied.nix;
+          workflowModel = nixfiedLib.compileModel ./examples/workflow/nixfied.nix;
           nixfiedInstall = pkgs.writeShellApplication {
             name = "nixfied-install";
             runtimeInputs = [ pkgs.coreutils ];
@@ -64,6 +65,7 @@
           upgrade = nixfiedUpgrade;
           m0-minimal-model = m0MinimalModel;
           postgres-model = postgresModel;
+          workflow-model = workflowModel;
         }
       );
 
