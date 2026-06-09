@@ -41,6 +41,14 @@ struct ServiceRunOutput {
     selected_endpoint: SelectedEndpoint,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NodeResult {
+    node_id: String,
+    task_id: String,
+    success: bool,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RunOutput {
@@ -53,6 +61,25 @@ struct RunOutput {
     task: Option<TaskRun>,
     #[serde(skip_serializing_if = "Option::is_none")]
     summary_path: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    workflow_id: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    workflow_nodes: Vec<NodeResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    workflow_summary_path: Option<PathBuf>,
+}
+
+/// One node to run: a stable node id and the task it executes. For the default
+/// (non-workflow) run, each environment task is its own node.
+struct PlanNode {
+    node_id: String,
+    task_id: String,
+}
+
+struct RunPlan {
+    service_names: Vec<String>,
+    nodes: Vec<PlanNode>,
+    workflow_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -189,13 +216,17 @@ fn run_m0_admitted(
                 format!("environment {} is missing", selected_slot.environment),
             )
         })?;
+
+    // A run drives either the environment's services+tasks, or a single workflow
+    // (its required services plus a topologically ordered node graph of tasks).
+    let plan = run_plan(model, environment, options.workflow.as_deref())?;
     let window = &selected_slot.placement.candidate_ports;
 
-    // Start every service in the environment, each on a distinct port within the
-    // slot's candidate window, waiting readiness then health before the next.
+    // Start each required service on a distinct port within the slot's candidate
+    // window, waiting readiness then health before the next.
     let mut started: Vec<StartedService> = Vec::new();
     let mut lease: Option<RunLeaseHeartbeat> = None;
-    for (index, service_name) in environment.services.iter().enumerate() {
+    for (index, service_name) in plan.service_names.iter().enumerate() {
         let offset = u16::try_from(index).ok().filter(|offset| {
             window
                 .start
@@ -210,7 +241,7 @@ fn run_m0_admitted(
                     selected_slot.slot,
                     window.start,
                     window.end,
-                    environment.services.len()
+                    plan.service_names.len()
                 ),
             );
             teardown(&mut started, &mut registry, options.timeout_ms, false);
@@ -283,10 +314,13 @@ fn run_m0_admitted(
         return Err(error);
     }
 
-    // Run every task, gating each on the readiness of its declared service
-    // dependency (the first dependency provides ${port}/${host} substitution).
+    // Run each node in dependency order, gating each task on the readiness of its
+    // declared service dependency (the first dependency provides ${port}/${host}
+    // substitution). The plan's order already honors workflow node dependencies.
     let mut task_runs: Vec<TaskRun> = Vec::new();
-    for task_id in &environment.tasks {
+    let mut node_results: Vec<NodeResult> = Vec::new();
+    for node in &plan.nodes {
+        let task_id = &node.task_id;
         let task = model.tasks.get(task_id).ok_or_else(|| {
             RuntimeError::new(
                 nixfied_runtime::ErrorCode::ModelAdmission,
@@ -314,7 +348,14 @@ fn run_m0_admitted(
             task_id,
             cancellation,
         ) {
-            Ok(task_run) => task_runs.push(task_run),
+            Ok(task_run) => {
+                node_results.push(NodeResult {
+                    node_id: node.node_id.clone(),
+                    task_id: task_id.clone(),
+                    success: task_run.success,
+                });
+                task_runs.push(task_run);
+            }
             Err(error) => {
                 teardown(
                     &mut started,
@@ -327,6 +368,16 @@ fn run_m0_admitted(
             }
         }
     }
+
+    let workflow_summary_path = match &plan.workflow_id {
+        Some(workflow_id) => Some(write_workflow_summary(
+            &placement,
+            workflow_id,
+            &run_id,
+            &node_results,
+        )?),
+        None => None,
+    };
 
     let services_output = started
         .iter()
@@ -346,6 +397,9 @@ fn run_m0_admitted(
         summary_path: primary_task.as_ref().map(|task| task.summary_path.clone()),
         task: primary_task,
         tasks: task_runs,
+        workflow_id: plan.workflow_id.clone(),
+        workflow_nodes: node_results,
+        workflow_summary_path,
     };
 
     if cancellation.is_canceled() {
@@ -385,6 +439,124 @@ fn stop_lease(lease: Option<RunLeaseHeartbeat>) -> Result<(), RuntimeError> {
     Ok(())
 }
 
+/// Build the run plan: either the selected workflow (required services + topo-
+/// ordered nodes) or the environment's services and tasks.
+fn run_plan(
+    model: &nixfied_model::Model,
+    environment: &nixfied_model::Environment,
+    workflow: Option<&str>,
+) -> Result<RunPlan, RuntimeError> {
+    match workflow {
+        Some(workflow_id) => {
+            let workflow = model.workflows.get(workflow_id).ok_or_else(|| {
+                RuntimeError::new(
+                    nixfied_runtime::ErrorCode::ModelAdmission,
+                    format!("workflow {workflow_id} is missing"),
+                )
+            })?;
+            let nodes = topological_order(workflow).ok_or_else(|| {
+                RuntimeError::new(
+                    nixfied_runtime::ErrorCode::ModelAdmission,
+                    format!("workflow {workflow_id} graph is not acyclic"),
+                )
+            })?;
+            Ok(RunPlan {
+                service_names: workflow.services_required.clone(),
+                nodes,
+                workflow_id: Some(workflow_id.to_string()),
+            })
+        }
+        None => Ok(RunPlan {
+            service_names: environment.services.clone(),
+            nodes: environment
+                .tasks
+                .iter()
+                .map(|task_id| PlanNode {
+                    node_id: task_id.clone(),
+                    task_id: task_id.clone(),
+                })
+                .collect(),
+            workflow_id: None,
+        }),
+    }
+}
+
+/// Deterministic topological order of workflow nodes; `None` on a cycle.
+fn topological_order(workflow: &nixfied_model::WorkflowSpec) -> Option<Vec<PlanNode>> {
+    use std::collections::{BTreeMap, BTreeSet};
+    let mut pending: BTreeMap<&str, BTreeSet<&str>> = workflow
+        .nodes
+        .iter()
+        .map(|node| {
+            (
+                node.node_id.as_str(),
+                node.depends_on.iter().map(String::as_str).collect(),
+            )
+        })
+        .collect();
+    let task_by_node: BTreeMap<&str, &str> = workflow
+        .nodes
+        .iter()
+        .map(|node| (node.node_id.as_str(), node.task_id.as_str()))
+        .collect();
+    let mut ordered = Vec::new();
+    while !pending.is_empty() {
+        let ready: Vec<&str> = pending
+            .iter()
+            .filter(|(_, deps)| deps.is_empty())
+            .map(|(id, _)| *id)
+            .collect();
+        if ready.is_empty() {
+            return None;
+        }
+        for node_id in ready {
+            pending.remove(node_id);
+            for deps in pending.values_mut() {
+                deps.remove(node_id);
+            }
+            ordered.push(PlanNode {
+                node_id: node_id.to_string(),
+                task_id: task_by_node[node_id].to_string(),
+            });
+        }
+    }
+    Some(ordered)
+}
+
+/// Write an aggregate per-workflow summary recording the run id and node results.
+fn write_workflow_summary(
+    placement: &nixfied_runtime::state::HostPlacement,
+    workflow_id: &str,
+    run_id: &str,
+    nodes: &[NodeResult],
+) -> Result<PathBuf, RuntimeError> {
+    let path = placement
+        .artifacts_dir
+        .join(format!("workflow-{workflow_id}.json"));
+    let summary = serde_json::json!({
+        "workflowId": workflow_id,
+        "runId": run_id,
+        "nodes": nodes,
+        "success": nodes.iter().all(|node| node.success),
+    });
+    let bytes = serde_json::to_vec_pretty(&summary).map_err(|error| {
+        RuntimeError::new(
+            nixfied_runtime::ErrorCode::ModelAdmission,
+            error.to_string(),
+        )
+    })?;
+    std::fs::write(&path, bytes).map_err(|error| {
+        RuntimeError::new(
+            nixfied_runtime::ErrorCode::StateUnwritable,
+            format!(
+                "failed to write workflow summary {}: {error}",
+                path.display()
+            ),
+        )
+    })?;
+    Ok(path)
+}
+
 #[derive(Debug, Clone, Copy)]
 enum ControlCommand {
     Ps,
@@ -406,6 +578,7 @@ struct RunOptions {
     state_base: PathBuf,
     timeout_ms: u64,
     selection: RuntimeSelection,
+    workflow: Option<String>,
 }
 
 fn run_control(command: ControlCommand, args: &[String]) -> Result<(), RuntimeError> {
@@ -459,6 +632,7 @@ fn parse_run_options(args: &[String]) -> Result<RunOptions, RuntimeError> {
     let mut state_base = None;
     let mut timeout_ms = 5000;
     let mut slot = None;
+    let mut workflow = None;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
@@ -476,6 +650,19 @@ fn parse_run_options(args: &[String]) -> Result<RunOptions, RuntimeError> {
             "--slot" => {
                 index += 1;
                 slot = Some(parse_slot_arg(args.get(index), "--slot")?);
+            }
+            "--workflow" => {
+                index += 1;
+                workflow = Some(
+                    args.get(index)
+                        .ok_or_else(|| {
+                            RuntimeError::new(
+                                nixfied_runtime::ErrorCode::ModelAdmission,
+                                "missing --workflow value",
+                            )
+                        })?
+                        .clone(),
+                );
             }
             "--timeout-ms" => {
                 index += 1;
@@ -514,6 +701,7 @@ fn parse_run_options(args: &[String]) -> Result<RunOptions, RuntimeError> {
         state_base,
         timeout_ms,
         selection: RuntimeSelection { slot },
+        workflow,
     })
 }
 
