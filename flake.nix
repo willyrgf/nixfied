@@ -72,6 +72,7 @@
           postgresModel = nixfiedLib.compileModel ./examples/postgres/nixfied.nix;
           workflowModel = nixfiedLib.compileModel ./examples/workflow/nixfied.nix;
           polyglotModel = nixfiedLib.compileModel ./examples/polyglot-stack/nixfied.nix;
+          downstreamModel = nixfiedLib.compileModel ./examples/downstream/nixfied.nix;
           nixfiedInstall = pkgs.writeShellApplication {
             name = "nixfied-install";
             runtimeInputs = [ pkgs.coreutils ];
@@ -111,6 +112,7 @@
           postgres-model = postgresModel;
           workflow-model = workflowModel;
           polyglot-stack-model = polyglotModel;
+          downstream-model = downstreamModel;
         }
       );
 
