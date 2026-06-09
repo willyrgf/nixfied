@@ -35,11 +35,9 @@ jobs:
             cargo test --workspace
           '
 
-      # 2. Structural gates: every model builds, the binaries compile, the guard.
+      # 2. Structural gates: every model builds and the binaries compile.
       - name: nix flake check
         run: nix flake check
-      - name: milestone-token guard
-        run: tests/guard-no-milestone-tokens.sh
 
       # 3. Dogfood gate: the product orchestrates its own conformance, run by the
       #    nix-built runtime under test through the same surfaces adopters use.

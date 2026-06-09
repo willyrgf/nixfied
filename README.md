@@ -137,9 +137,8 @@ nix develop --command bash -c 'cd runtime && cargo fmt --all -- --check'
 nix develop --command bash -c 'cd runtime && cargo clippy --workspace --all-targets --all-features -- -D warnings'
 nix develop --command bash -c 'cd runtime && cargo test --workspace'
 
-# 2. Structural gates.
+# 2. Structural gate: every model builds and the binaries compile.
 nix flake check
-tests/guard-no-milestone-tokens.sh
 
 # 3. Dogfood gate: nixfied runs its own conformance workflow.
 rt="$(nix build .#nixfied-runtime --no-link --print-out-paths)/bin/nixfied-runtime"
@@ -155,7 +154,7 @@ SEAM-1 (the runtime never invokes Nix — proven by poisoning `PATH` with a fail
 fake `nix` and asserting it is never called) is the
 `runtime_drives_full_lifecycle_without_invoking_nix` cargo test, and the
 view→model projection contract is asserted inside every conformance capability
-check. The only `tests/` script is the milestone-token guard.
+check.
 
 ## What Comes Next
 

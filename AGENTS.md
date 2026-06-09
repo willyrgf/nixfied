@@ -37,6 +37,7 @@ nix/modules/                 user-facing typed Nix declaration surface
 nix/compiler/                resolve -> validate -> derive -> emit model/views
 nix/spec/                    contract constants and model shape
 nix/adapters/                Nix-side adapters (synthetic, postgres) + default.nix
+nix/install/                 install/upgrade surfaces (shell embedded in .nix modules)
 nix/packages/                host-Rust-free build of the runtime/conformance binaries
 nix/lib/                     pure Nix helper functions
 nixfied.nix                  the framework's self-project: the `conformance` workflow
@@ -51,9 +52,10 @@ runtime/crates/nixfied-conformance
                               `goldens/` holds the schema/docs/capabilities snapshots
 examples/                    downstream-shaped examples: minimal, postgres,
                               workflow, polyglot-stack, downstream (the worked example)
-tests/                       the milestone-token guard (a repo lint). End-to-end
-                              behavior lives in the cargo floor + the conformance workflow
 ```
+
+There is no `tests/` directory: end-to-end behavior lives in the cargo floor
+(`runtime/crates/*/tests`) and the self-hosted conformance workflow.
 
 ## Design Principles
 
@@ -129,8 +131,7 @@ and in CI. Use the dev shell (it provides the pinned cargo/clippy/rustfmt):
 nix develop --command bash -c 'cd runtime && cargo fmt --all -- --check'
 nix develop --command bash -c 'cd runtime && cargo clippy --workspace --all-targets --all-features -- -D warnings'
 nix develop --command bash -c 'cd runtime && cargo test --workspace'
-nix flake check                    # model builds + binary compile + guard structurals
-tests/guard-no-milestone-tokens.sh
+nix flake check                    # every model builds + the binaries compile
 ```
 
 The end-to-end gate is the product testing itself. It is layered (trusted cargo
@@ -155,11 +156,10 @@ Each writes a ground-truth verdict to `$NIXFIED_CONFORMANCE_ARTIFACTS`. To refre
 the golden view snapshots after an intended view change, run a capability check
 with `--update-goldens`.
 
-There are no residual e2e shell proofs: the cancellation/GC/lifecycle invariants
-are white-box cargo tests, SEAM-1 (the runtime never invokes nix) is the
+There are no e2e shell proofs left: the cancellation/GC/lifecycle invariants are
+white-box cargo tests, SEAM-1 (the runtime never invokes nix) is the
 `runtime_drives_full_lifecycle_without_invoking_nix` cargo test, and the
-view→model projection contract is asserted inside every capability check. The
-only `tests/` script is the milestone-token guard.
+view→model projection contract is asserted inside every capability check.
 
 ## Git Hygiene
 

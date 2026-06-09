@@ -62,20 +62,8 @@
           # The framework's own project: a `conformance` workflow that drives the
           # examples + adoption through the nix-built runtime. This is the gate.
           selfModel = nixfiedLib.compileModel ./nixfied.nix;
-          nixfiedInstall = pkgs.writeShellApplication {
-            name = "nixfied-install";
-            runtimeInputs = [ pkgs.coreutils ];
-            text = builtins.readFile ./nix/install/install.sh;
-          };
-          nixfiedUpgrade = pkgs.writeShellApplication {
-            name = "nixfied-upgrade";
-            runtimeInputs = [
-              pkgs.coreutils
-              pkgs.gnugrep
-              pkgs.nix
-            ];
-            text = builtins.readFile ./nix/install/upgrade.sh;
-          };
+          nixfiedInstall = import ./nix/install/install.nix { inherit pkgs; };
+          nixfiedUpgrade = import ./nix/install/upgrade.nix { inherit pkgs; };
         in
         {
           default = minimalModel;
