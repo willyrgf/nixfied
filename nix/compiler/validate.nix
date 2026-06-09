@@ -28,9 +28,17 @@ let
     (expect windowsInRange "per-slot candidate port windows must be in 1..65535")
     (expect windowsDoNotOverlap "per-slot candidate port windows must not overlap")
     (expect (
-      config.nixfied.environments.dev.services == [ "synthetic" ]
-      && config.nixfied.environments.dev.tasks == [ "smoke" ]
-    ) "M0 dev environment must contain only synthetic service and smoke task")
+      builtins.attrNames config.nixfied.environments == [ "dev" ]
+    ) "a single 'dev' environment is supported")
+    (expect (config.nixfied.services != { }) "at least one service must be declared")
+    (expect (
+      lib.all (
+        service: builtins.hasAttr service config.nixfied.services
+      ) config.nixfied.environments.dev.services
+    ) "dev environment services must be declared")
+    (expect (
+      lib.all (task: builtins.hasAttr task config.nixfied.tasks) config.nixfied.environments.dev.tasks
+    ) "dev environment tasks must be declared")
   ];
 in
 lib.foldl' (acc: check: lib.seq check acc) config checks

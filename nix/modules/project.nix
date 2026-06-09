@@ -26,24 +26,26 @@ in
     description = "Nix target system for the M0 model and runtime closures.";
   };
 
-  options.nixfied.environments.dev = mkOption {
-    type = types.submodule {
-      options = {
-        services = mkOption {
-          type = types.listOf types.str;
-          default = [ "synthetic" ];
-          description = "M0 services in the dev environment.";
-        };
+  options.nixfied.environments = mkOption {
+    type = types.attrsOf (
+      types.submodule {
+        options = {
+          services = mkOption {
+            type = types.listOf types.str;
+            default = [ ];
+            description = "Services composing this environment.";
+          };
 
-        tasks = mkOption {
-          type = types.listOf types.str;
-          default = [ "smoke" ];
-          description = "M0 tasks in the dev environment.";
+          tasks = mkOption {
+            type = types.listOf types.str;
+            default = [ ];
+            description = "Tasks composing this environment.";
+          };
         };
-      };
-    };
+      }
+    );
     default = { };
-    description = "The single M0 environment.";
+    description = "Named environments. A single `dev` environment is supported for now.";
   };
 
   options.nixfied.slotPolicy = {

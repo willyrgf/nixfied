@@ -8,7 +8,9 @@ let
 in
 pkgs.runCommand "nixfied-model"
   {
-    m0Helper = derived.package;
+    # Keep every realised closure in the build closure; the runtime requires
+    # each referenced store path to already exist before it starts.
+    buildInputs = derived.packages;
     passAsFile = [
       "modelJson"
       "schemaJson"
