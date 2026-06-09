@@ -525,12 +525,8 @@ fn validate_services(model: &Model) -> Result<(), ValidationError> {
                 actual: format!("{:?}", service.lifetime),
             });
         }
-        if service.containment != ContainmentRequirement::ProcessGroup {
-            return Err(ValidationError::UnsupportedValue {
-                field: "services.containment",
-                expected: "process-group",
-                actual: format!("{:?}", service.containment),
-            });
+        match service.containment {
+            ContainmentRequirement::ProcessGroup | ContainmentRequirement::ProcessTree => {}
         }
         if service.health_policy != HealthPolicy::Explicit {
             return Err(ValidationError::UnsupportedValue {

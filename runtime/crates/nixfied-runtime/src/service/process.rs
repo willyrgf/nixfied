@@ -10,7 +10,8 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use nixfied_model::{
-    EndpointSpec, LifecycleOpClass, LifecycleOpSpec, Model, PortPolicy, ServiceSpec,
+    ContainmentRequirement, EndpointSpec, LifecycleOpClass, LifecycleOpSpec, Model, PortPolicy,
+    ServiceSpec,
 };
 use serde::Serialize;
 
@@ -58,6 +59,7 @@ pub struct StartedService {
     pub source_root: PathBuf,
     pub state_root: PathBuf,
     pub owner_token: String,
+    containment: ContainmentRequirement,
     stop_operation: LifecycleOpSpec,
 }
 
@@ -240,7 +242,7 @@ impl StartedService {
             &self.computed_model_hash,
             &payload,
         )?;
-        terminate_process_group(self.pgid, timeout_ms)?;
+        self.terminate_owned(timeout_ms)?;
         let _ = wait_for_child_exit(&mut self.child, 1000)?;
         self.monitor.stop();
         mark_service_canceled(
@@ -297,7 +299,7 @@ impl StartedService {
             let _ = record_lifecycle_failure(registry, &context, &self.stop_operation, &error);
             return Err(error);
         }
-        if let Err(error) = terminate_process_group(self.pgid, timeout_ms) {
+        if let Err(error) = self.terminate_owned(timeout_ms) {
             let _ = record_lifecycle_failure(registry, &context, &self.stop_operation, &error);
             return Err(error);
         }
@@ -414,13 +416,13 @@ impl StartedService {
             }
         }
         best_effort_kill_processes(&descendants.into_values().collect::<Vec<_>>());
-        let _ = terminate_process_group(self.pgid, 1000);
+        let _ = self.terminate_owned(1000);
         let _ = self.child.wait();
         self.monitor.stop();
     }
 
     fn cleanup_after_readiness_failure(&mut self, registry: &mut Registry, error: &RuntimeError) {
-        let _ = terminate_process_group(self.pgid, 1000);
+        let _ = self.terminate_owned(1000);
         let _ = wait_for_child_exit(&mut self.child, 1000);
         self.monitor.stop();
         let payload = serde_json::json!({
@@ -438,6 +440,17 @@ impl StartedService {
             &self.computed_model_hash,
             &payload,
         );
+    }
+
+    /// Terminate the owned process(es) according to containment: a single
+    /// process group, or the whole supervised process tree.
+    fn terminate_owned(&self, timeout_ms: u64) -> RuntimeResult<()> {
+        match self.containment {
+            ContainmentRequirement::ProcessGroup => terminate_process_group(self.pgid, timeout_ms),
+            ContainmentRequirement::ProcessTree => {
+                terminate_process_tree(self.pid, self.pgid, timeout_ms)
+            }
+        }
     }
 
     fn service_and_endpoint<'a>(
@@ -731,9 +744,11 @@ pub fn start_service_for_slot(
         let _ = record_lifecycle_failure(registry, &started_context, start_op, &error);
         return Err(error);
     }
+    let containment = service.containment.clone();
+    let strict_process_group = matches!(containment, ContainmentRequirement::ProcessGroup);
     let mut started = StartedService {
         child,
-        monitor: spawn_process_monitor(pid, pgid),
+        monitor: spawn_process_monitor(pid, pgid, strict_process_group),
         run_id,
         service_name: service_name.to_string(),
         service_instance_id,
@@ -747,6 +762,7 @@ pub fn start_service_for_slot(
         state_root: placement.state_root.clone(),
         owner_token,
         stop_operation,
+        containment,
     };
     if let Err(error) = ensure_foreground_child_alive(&mut started) {
         let payload = serde_json::json!({
@@ -1305,17 +1321,73 @@ fn ensure_foreground_child_alive(service: &mut StartedService) -> RuntimeResult<
             ),
         ));
     }
-    let escaped = escaped_descendants(service.pid, service.pgid)?;
-    if !escaped.is_empty() {
-        return Err(RuntimeError::new(
-            ErrorCode::ProcEscape,
-            format!(
-                "service process {} has descendants outside pgid {}: {:?}",
-                service.pid, service.pgid, escaped
-            ),
-        ));
+    // Under process-tree containment the supervisor's children legitimately form
+    // their own process groups, so only strict process-group services are held to
+    // the single-group invariant here.
+    if matches!(service.containment, ContainmentRequirement::ProcessGroup) {
+        let escaped = escaped_descendants(service.pid, service.pgid)?;
+        if !escaped.is_empty() {
+            return Err(RuntimeError::new(
+                ErrorCode::ProcEscape,
+                format!(
+                    "service process {} has descendants outside pgid {}: {:?}",
+                    service.pid, service.pgid, escaped
+                ),
+            ));
+        }
     }
     Ok(())
+}
+
+/// Terminate a process tree rooted at a supervisor whose children may live in
+/// their own process groups. SIGTERM the supervisor's group first (a well-behaved
+/// supervisor shuts its tree down), then escalate to SIGKILL across the tree.
+pub(crate) fn terminate_process_tree(pid: u32, pgid: i32, timeout_ms: u64) -> RuntimeResult<()> {
+    let snapshot = descendant_pids(pid).unwrap_or_default();
+    signal_process_group(pgid, libc::SIGTERM)?;
+    if wait_until_process_tree_empty(pid, pgid, timeout_ms)? {
+        return Ok(());
+    }
+    let mut to_kill = descendant_pids(pid).unwrap_or(snapshot);
+    for descendant in to_kill.drain(..) {
+        unsafe {
+            libc::kill(descendant as libc::pid_t, libc::SIGKILL);
+        }
+    }
+    signal_process_group(pgid, libc::SIGKILL)?;
+    if wait_until_process_tree_empty(pid, pgid, 1000)? {
+        Ok(())
+    } else {
+        Err(RuntimeError::new(
+            ErrorCode::ProcEscape,
+            format!("failed to terminate owned process tree rooted at {pid}"),
+        ))
+    }
+}
+
+fn wait_until_process_tree_empty(pid: u32, pgid: i32, timeout_ms: u64) -> RuntimeResult<bool> {
+    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+    loop {
+        let root_alive = process_group(pid)?.is_some() && !process_is_zombie(pid);
+        let descendants_alive = descendant_pids(pid)
+            .unwrap_or_default()
+            .into_iter()
+            .any(|child| {
+                process_group(child)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|_| !process_is_zombie(child))
+            });
+        // Once the supervisor is gone its children have been reaped by it; the
+        // process group emptying is the final confirmation.
+        if !root_alive && !descendants_alive && !process_group_has_live_member(pgid)? {
+            return Ok(true);
+        }
+        if Instant::now() >= deadline {
+            return Ok(false);
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
 }
 
 pub(crate) fn terminate_process_group(pgid: i32, timeout_ms: u64) -> RuntimeResult<()> {
@@ -1424,17 +1496,21 @@ impl Drop for ProcessMonitor {
     }
 }
 
-fn spawn_process_monitor(pid: u32, expected_pgid: i32) -> ProcessMonitor {
+fn spawn_process_monitor(
+    pid: u32,
+    expected_pgid: i32,
+    strict_process_group: bool,
+) -> ProcessMonitor {
     let state = Arc::new(Mutex::new(ProcessMonitorState::default()));
     let stop = Arc::new(AtomicBool::new(false));
     let thread_state = Arc::clone(&state);
     let thread_stop = Arc::clone(&stop);
     let handle = thread::spawn(move || {
         while !thread_stop.load(Ordering::SeqCst) {
-            collect_process_tree(pid, expected_pgid, &thread_state);
+            collect_process_tree(pid, expected_pgid, strict_process_group, &thread_state);
             thread::sleep(MONITOR_INTERVAL);
         }
-        collect_process_tree(pid, expected_pgid, &thread_state);
+        collect_process_tree(pid, expected_pgid, strict_process_group, &thread_state);
     });
     ProcessMonitor {
         state,
@@ -1443,16 +1519,26 @@ fn spawn_process_monitor(pid: u32, expected_pgid: i32) -> ProcessMonitor {
     }
 }
 
-fn collect_process_tree(pid: u32, expected_pgid: i32, state: &Arc<Mutex<ProcessMonitorState>>) {
+fn collect_process_tree(
+    pid: u32,
+    expected_pgid: i32,
+    strict_process_group: bool,
+    state: &Arc<Mutex<ProcessMonitorState>>,
+) {
     let Ok(descendants) = descendant_pids(pid) else {
         return;
     };
+    // Under process-tree containment, supervised children may form their own
+    // process groups; that is not an escape. Strict process-group services still
+    // flag any descendant that leaves the owned group.
     let mut escaped = Vec::new();
-    for descendant in &descendants {
-        if let Ok(Some(pgid)) = process_group(*descendant)
-            && pgid != expected_pgid
-        {
-            escaped.push(monitored_process(*descendant));
+    if strict_process_group {
+        for descendant in &descendants {
+            if let Ok(Some(pgid)) = process_group(*descendant)
+                && pgid != expected_pgid
+            {
+                escaped.push(monitored_process(*descendant));
+            }
         }
     }
     if let Ok(mut state) = state.lock() {

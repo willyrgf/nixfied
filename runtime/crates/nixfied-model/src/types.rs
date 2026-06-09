@@ -426,7 +426,12 @@ pub struct StopPolicy {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ContainmentRequirement {
+    /// All spawned processes must stay in the single runtime-owned process group.
     ProcessGroup,
+    /// The service's direct child is a stable supervisor of its own descendant
+    /// tree (children may form their own process groups, e.g. Postgres). The
+    /// runtime contains and reconciles the whole process tree.
+    ProcessTree,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
