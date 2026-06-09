@@ -58,10 +58,11 @@ pub enum TaskTerminalStatus {
 
 pub fn ensure_service_start_allowed(
     registry: &Registry,
-    run_id: &str,
+    _run_id: &str,
     service_instance_id: &str,
 ) -> RuntimeResult<()> {
-    ensure_no_existing_run_conn(registry.connection(), run_id)?;
+    // The run row is created idempotently (a run may own several services), so the
+    // safety gates are per service instance: no active lease and no live service.
     ensure_no_active_lease_conn(registry.connection(), service_instance_id)?;
     ensure_no_active_service_conn(registry.connection(), service_instance_id)
 }
@@ -77,7 +78,6 @@ pub fn record_service_start(
     let source_json = serde_json::to_string(&run.admission.source).map_err(json_error)?;
     let identity = registry.identity().clone();
     let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
-    ensure_no_existing_run_transaction(&transaction, run.run_id)?;
     ensure_no_active_lease_transaction(&transaction, service.service_instance_id)?;
     ensure_no_active_service_transaction(&transaction, service.service_instance_id)?;
     ensure_no_active_port_transaction(
@@ -88,7 +88,7 @@ pub fn record_service_start(
     transaction
         .execute(
             "
-            INSERT INTO runs (
+            INSERT OR IGNORE INTO runs (
               run_id, environment, slot, status, model_path, computed_model_hash,
               runtime_abi, toolchain_id, generator_json, target_json, source_json,
               summary_path
@@ -112,7 +112,7 @@ pub fn record_service_start(
     transaction
         .execute(
             "
-            INSERT INTO run_leases (
+            INSERT OR IGNORE INTO run_leases (
               run_id, environment, slot, service_instance_id, owner_token,
               heartbeat_at, expires_at, status
             ) VALUES (
@@ -801,44 +801,6 @@ struct EventRecord<'a> {
     process_key: Option<&'a str>,
     computed_model_hash: Option<&'a str>,
     payload_json: &'a str,
-}
-
-fn ensure_no_existing_run_conn(conn: &Connection, run_id: &str) -> RuntimeResult<()> {
-    let existing = conn
-        .query_row(
-            "SELECT status FROM runs WHERE run_id = ?1",
-            params![run_id],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()
-        .map_err(sql_error)?;
-    refuse_existing_run(run_id, existing)
-}
-
-fn ensure_no_existing_run_transaction(
-    transaction: &Transaction<'_>,
-    run_id: &str,
-) -> RuntimeResult<()> {
-    let existing = transaction
-        .query_row(
-            "SELECT status FROM runs WHERE run_id = ?1",
-            params![run_id],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()
-        .map_err(sql_error)?;
-    refuse_existing_run(run_id, existing)
-}
-
-fn refuse_existing_run(run_id: &str, existing: Option<String>) -> RuntimeResult<()> {
-    if let Some(status) = existing {
-        Err(RuntimeError::new(
-            ErrorCode::ModelAdmission,
-            format!("run {run_id} already exists with status {status}"),
-        ))
-    } else {
-        Ok(())
-    }
 }
 
 fn ensure_no_active_service_conn(
