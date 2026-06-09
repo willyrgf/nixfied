@@ -47,10 +47,20 @@
             runtimeInputs = [ pkgs.coreutils ];
             text = builtins.readFile ./nix/install/install.sh;
           };
+          nixfiedUpgrade = pkgs.writeShellApplication {
+            name = "nixfied-upgrade";
+            runtimeInputs = [
+              pkgs.coreutils
+              pkgs.gnugrep
+              pkgs.nix
+            ];
+            text = builtins.readFile ./nix/install/upgrade.sh;
+          };
         in
         {
           default = m0MinimalModel;
           install = nixfiedInstall;
+          upgrade = nixfiedUpgrade;
           m0-minimal-model = m0MinimalModel;
         }
       );
@@ -62,6 +72,11 @@
             type = "app";
             program = "${self.packages.${system}.install}/bin/nixfied-install";
             meta.description = "Install Nixfied scaffold files into a downstream project";
+          };
+          upgrade = {
+            type = "app";
+            program = "${self.packages.${system}.upgrade}/bin/nixfied-upgrade";
+            meta.description = "Repin the Nixfied flake input without touching project-owned declarations";
           };
         }
       );
