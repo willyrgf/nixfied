@@ -82,7 +82,7 @@ fn install_handler(signal: libc::c_int) -> RuntimeResult<(libc::c_int, libc::sig
     unsafe {
         let mut action: libc::sigaction = mem::zeroed();
         let mut previous: libc::sigaction = mem::zeroed();
-        action.sa_sigaction = handle_signal as usize;
+        action.sa_sigaction = handle_signal as *const () as usize;
         action.sa_flags = 0;
         libc::sigemptyset(&mut action.sa_mask);
         if libc::sigaction(signal, &action, &mut previous) == 0 {

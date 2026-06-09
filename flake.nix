@@ -128,7 +128,7 @@
           # runs identically on every host and in CI, independent of host Rust.
           default = pkgs.mkShell {
             packages = [
-              (pkgs.rust-bin.stable."1.91.0".minimal.override {
+              (pkgs.rust-bin.stable."1.96.0".minimal.override {
                 extensions = [
                   "clippy"
                   "rustfmt"

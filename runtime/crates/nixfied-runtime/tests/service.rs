@@ -445,8 +445,7 @@ fn health_failure_after_ready_records_distinct_lifecycle_failure() {
         .expect("failed event count should query");
     let latest_health_terminal = lifecycle_events(&fixture.registry)
         .into_iter()
-        .filter(|event| event.class == "health" && event.event_type == "service.lifecycle.terminal")
-        .next_back()
+        .rfind(|event| event.class == "health" && event.event_type == "service.lifecycle.terminal")
         .expect("health terminal event should exist");
 
     assert_eq!(service_status, "probe-ready");

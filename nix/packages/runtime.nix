@@ -8,7 +8,7 @@
 # compiles SQLite from the nix stdenv C toolchain (no system sqlite/pkg-config).
 { pkgs }:
 let
-  rustToolchain = pkgs.rust-bin.stable."1.91.0".minimal;
+  rustToolchain = pkgs.rust-bin.stable."1.96.0".minimal;
   rustPlatform = pkgs.makeRustPlatform {
     cargo = rustToolchain;
     rustc = rustToolchain;
