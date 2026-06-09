@@ -51,28 +51,17 @@
         { pkgs, system }:
         let
           nixfiedLib = mkNixfiedLib { inherit pkgs system; };
-          # Pinned toolchain >= the workspace rust-version. The runtime is built
-          # from the nix stdenv C toolchain (rusqlite's `bundled` feature compiles
-          # SQLite from source; no system sqlite/pkg-config is consumed).
-          rustToolchain = pkgs.rust-bin.stable."1.91.0".minimal;
-          rustPlatform = pkgs.makeRustPlatform {
-            cargo = rustToolchain;
-            rustc = rustToolchain;
-          };
-          nixfiedRuntime = rustPlatform.buildRustPackage {
-            pname = "nixfied-runtime";
-            version = "0.1.0";
-            src = ./runtime;
-            cargoLock.lockFile = ./runtime/Cargo.lock;
-            # The white-box `cargo test` floor runs outside the build sandbox (it
-            # binds ports and spawns process groups); here we only compile.
-            doCheck = false;
-          };
+          # The nix-built runtime/conformance binaries (host-Rust-free), shared
+          # with the self-project conformance workflow.
+          nixfiedRuntime = import ./nix/packages/runtime.nix { inherit pkgs; };
           minimalModel = nixfiedLib.compileModel ./examples/minimal/nixfied.nix;
           postgresModel = nixfiedLib.compileModel ./examples/postgres/nixfied.nix;
           workflowModel = nixfiedLib.compileModel ./examples/workflow/nixfied.nix;
           polyglotModel = nixfiedLib.compileModel ./examples/polyglot-stack/nixfied.nix;
           downstreamModel = nixfiedLib.compileModel ./examples/downstream/nixfied.nix;
+          # The framework's own project: a `conformance` workflow that drives the
+          # examples + adoption through the nix-built runtime. This is the gate.
+          selfModel = nixfiedLib.compileModel ./nixfied.nix;
           nixfiedInstall = pkgs.writeShellApplication {
             name = "nixfied-install";
             runtimeInputs = [ pkgs.coreutils ];
@@ -113,6 +102,7 @@
           workflow-model = workflowModel;
           polyglot-stack-model = polyglotModel;
           downstream-model = downstreamModel;
+          self-model = selfModel;
         }
       );
 
@@ -143,6 +133,8 @@
           minimal-model = self.packages.${system}.minimal-model;
           # The nix-packaged runtime binary must compile reproducibly.
           nixfied-runtime = self.packages.${system}.nixfied-runtime;
+          # The self-project conformance model must build (the gate's input).
+          self-model = self.packages.${system}.self-model;
           # The conformance suite itself runs via `nix run .#conformance` (it
           # drives real nix builds + the runtime binary, which the nix-build
           # sandbox cannot host); here we at least gate that its wrapper builds.
