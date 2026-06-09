@@ -97,8 +97,12 @@ EOF
 
 print_nixfied_module() {
   cat <<EOF
-{ ... }:
+{ adapters, ... }:
 {
+  # The synthetic adapter is a runnable starter service. Replace it with your
+  # own service/task declarations or another adapter (e.g. adapters.postgres).
+  imports = [ adapters.synthetic ];
+
   nixfied.project.projectId = "$project_id_escaped";
   nixfied.project.name = "$project_name_escaped";
   nixfied.codebases.main.logicalRoot = ".";

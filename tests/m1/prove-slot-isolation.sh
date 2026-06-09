@@ -56,8 +56,9 @@ cat >"$project/flake.nix" <<EOF
 EOF
 
 cat >"$project/nixfied.nix" <<'EOF'
-{ ... }:
+{ adapters, ... }:
 {
+  imports = [ adapters.synthetic ];
   nixfied.project.projectId = "m1-slot-isolation";
   nixfied.project.name = "M1 Slot Isolation";
   nixfied.codebases.main.logicalRoot = ".";

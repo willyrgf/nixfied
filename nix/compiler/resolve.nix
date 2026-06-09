@@ -8,6 +8,7 @@
 lib.evalModules {
   specialArgs = {
     inherit pkgs system;
+    adapters = import ../adapters/default.nix;
   };
   modules = [
     ../modules/default.nix
