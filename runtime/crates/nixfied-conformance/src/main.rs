@@ -22,7 +22,7 @@
 //! rewrites the committed view snapshots instead of comparing them.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command, Stdio};
 
 use serde::Serialize;
 use serde_json::Value;
@@ -93,6 +93,7 @@ fn run_check(args: &Args) -> Result<Observed, String> {
             &[],
             &["db-check", "api-check", "worker-check"],
         ),
+        "slots" => slots(args),
         "negative" => negative(args),
         "adoption" => adoption(),
         other => Err(format!("unknown check: {other}")),
@@ -183,6 +184,63 @@ fn negative(args: &Args) -> Result<Observed, String> {
     }
 }
 
+/// Slot isolation: run two slots of a multi-slot model concurrently against one
+/// shared state base and assert disjoint placement (distinct ports, service
+/// instances, and state roots), then clean each slot independently.
+fn slots(args: &Args) -> Result<Observed, String> {
+    let model_json = args
+        .model
+        .as_ref()
+        .ok_or_else(|| "slots check requires --model".to_string())?;
+    let project_id = read_project_id(model_json)?;
+    let state = scratch_dir("slots-state")?;
+    let work0 = scratch_dir("slots-work0")?;
+    let work1 = scratch_dir("slots-work1")?;
+
+    let child0 = spawn_run_slot(model_json, 0, &state, &work0)?;
+    let child1 = spawn_run_slot(model_json, 1, &state, &work1)?;
+    let run0 = wait_run(child0, 0)?;
+    let run1 = wait_run(child1, 1)?;
+
+    assert_tasks_succeeded(&run0)?;
+    assert_tasks_succeeded(&run1)?;
+    let ports0 = service_ports(&run0);
+    let ports1 = service_ports(&run1);
+    if ports0.is_empty() || ports1.is_empty() {
+        return Err("a slot run reported no service endpoints".into());
+    }
+    if ports0.iter().any(|port| ports1.contains(port)) {
+        return Err(format!(
+            "slot port windows overlapped: {ports0:?} vs {ports1:?}"
+        ));
+    }
+    let instances0 = string_array(&run0, "services", "serviceInstanceId");
+    let instances1 = string_array(&run1, "services", "serviceInstanceId");
+    if instances0.iter().any(|id| instances1.contains(id)) {
+        return Err("slots shared a serviceInstanceId".into());
+    }
+
+    let root0 = state.join(&project_id).join("dev").join("0");
+    let root1 = state.join(&project_id).join("dev").join("1");
+    if !root0.exists() || !root1.exists() {
+        return Err("a slot state root was not materialized".into());
+    }
+
+    clean_model_slot(model_json, 0, &state, &work0)?;
+    if root0.exists() || !root1.exists() {
+        return Err("cleaning slot 0 disturbed slot 1 or left slot 0 behind".into());
+    }
+    clean_model_slot(model_json, 1, &state, &work1)?;
+    if root1.exists() {
+        return Err("clean did not remove slot 1 state root".into());
+    }
+
+    for dir in [state, work0, work1] {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+    Ok(Observed::default())
+}
+
 /// Scaffold a throwaway git repo, run the real `#install` + `#upgrade` pinning
 /// `path:<checkout>`, build, run, and rebuild - the full adoption loop.
 fn adoption() -> Result<Observed, String> {
@@ -216,6 +274,11 @@ fn adoption_inner(checkout: &Path, pin: &str, project: &Path) -> Result<Observed
     )?;
     git(project, &["add", "-A"])?;
     git(project, &["commit", "-q", "-m", "scaffold"])?;
+
+    // Re-running install must refuse to clobber the project-owned flake.nix.
+    if nix_run(checkout, "install", &["--root", &project.to_string_lossy()]).is_ok() {
+        return Err("re-running install did not refuse an existing flake.nix".into());
+    }
 
     let model = nix_build_model(project)?;
     let state = scratch_dir("adopt-state")?;
@@ -298,11 +361,26 @@ fn run_model(
 }
 
 fn clean_model(model_json: &Path, state: &Path, work: &Path) -> Result<(), String> {
+    clean_model_inner(model_json, None, state, work)
+}
+
+fn clean_model_slot(model_json: &Path, slot: u32, state: &Path, work: &Path) -> Result<(), String> {
+    clean_model_inner(model_json, Some(slot), state, work)
+}
+
+fn clean_model_inner(
+    model_json: &Path,
+    slot: Option<u32>,
+    state: &Path,
+    work: &Path,
+) -> Result<(), String> {
     let runtime = runtime_bin()?;
-    let output = Command::new(&runtime)
-        .arg("clean")
-        .arg("--model")
-        .arg(model_json)
+    let mut command = Command::new(&runtime);
+    command.arg("clean").arg("--model").arg(model_json);
+    if let Some(slot) = slot {
+        command.arg("--slot").arg(slot.to_string());
+    }
+    let output = command
         .current_dir(work)
         .env("NIXFIED_STATE_DIR", state)
         .output()
@@ -314,6 +392,61 @@ fn clean_model(model_json: &Path, state: &Path, work: &Path) -> Result<(), Strin
         ));
     }
     Ok(())
+}
+
+/// Spawn `run --slot <slot>` without blocking, so two slots can race.
+fn spawn_run_slot(
+    model_json: &Path,
+    slot: u32,
+    state: &Path,
+    work: &Path,
+) -> Result<Child, String> {
+    let runtime = runtime_bin()?;
+    Command::new(&runtime)
+        .arg("run")
+        .arg("--model")
+        .arg(model_json)
+        .arg("--slot")
+        .arg(slot.to_string())
+        .arg("--timeout-ms")
+        .arg("60000")
+        .current_dir(work)
+        .env("NIXFIED_STATE_DIR", state)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("failed to spawn runtime for slot {slot}: {error}"))
+}
+
+fn wait_run(child: Child, slot: u32) -> Result<Value, String> {
+    let output = child
+        .wait_with_output()
+        .map_err(|error| format!("failed to wait for slot {slot}: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "slot {slot} run failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("slot {slot} run output was not valid JSON: {error}"))
+}
+
+fn service_ports(run: &Value) -> Vec<u64> {
+    run.get("services")
+        .and_then(Value::as_array)
+        .map(|services| {
+            services
+                .iter()
+                .filter_map(|service| {
+                    service
+                        .get("selectedEndpoint")
+                        .and_then(|endpoint| endpoint.get("port"))
+                        .and_then(Value::as_u64)
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn nix_run(checkout: &Path, app: &str, app_args: &[&str]) -> Result<(), String> {

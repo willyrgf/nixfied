@@ -81,6 +81,7 @@ in
       "task.conformance.workflow.run"
       "task.conformance.polyglot.run"
       "task.conformance.downstream.run"
+      "task.conformance.slots.run"
       "task.conformance.adoption.run"
       "task.conformance.negative.run"
     ];
@@ -103,6 +104,8 @@ in
   nixfied.tasks.check-workflow = conformanceCheck "workflow" models.workflow;
   nixfied.tasks.check-polyglot = conformanceCheck "polyglot" models.polyglot;
   nixfied.tasks.check-downstream = conformanceCheck "downstream" models.downstream;
+  # Slot isolation: two slots of the multi-slot downstream model run concurrently.
+  nixfied.tasks.check-slots = conformanceCheck "slots" models.downstream;
   # The adoption check scaffolds a throwaway git repo and runs the real
   # `#install` + `#upgrade` against `path:<checkout>`; it derives the checkout
   # from its working directory, so no example model is baked in.
@@ -143,9 +146,14 @@ in
         dependsOn = [ "postgres" ];
       }
       {
+        nodeId = "slots";
+        taskId = "check-slots";
+        dependsOn = [ "downstream" ];
+      }
+      {
         nodeId = "negative";
         taskId = "check-negative";
-        dependsOn = [ "downstream" ];
+        dependsOn = [ "slots" ];
       }
       {
         nodeId = "adoption";
