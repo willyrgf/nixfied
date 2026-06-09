@@ -149,11 +149,13 @@ NIXFIED_CONFORMANCE_CHECKOUT="$PWD" \
   "$rt" run --model "$self" --workflow conformance --timeout-ms 600000
 ```
 
-`.github/workflows/conformance.yml` runs exactly this. The residual e2e proofs
-not subsumed by the workflow live under `tests/` (`runtime/prove-without-nix.sh`,
-`views/`, `lifecycle/`). The no-Nix proof builds and realises the model first,
-then places a failing fake `nix` executable earlier in `PATH` to prove
-`nixfied-runtime` does not invoke Nix after admission begins.
+`.github/workflows/conformance.yml` runs exactly this. There are no residual e2e
+shell proofs: lifecycle/cancellation/GC invariants are white-box cargo tests,
+SEAM-1 (the runtime never invokes Nix — proven by poisoning `PATH` with a failing
+fake `nix` and asserting it is never called) is the
+`runtime_drives_full_lifecycle_without_invoking_nix` cargo test, and the
+view→model projection contract is asserted inside every conformance capability
+check. The only `tests/` script is the milestone-token guard.
 
 ## What Comes Next
 

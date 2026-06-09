@@ -152,6 +152,7 @@ fn capability(
         ));
     }
 
+    assert_views_project_model(model_json, model_dir)?;
     diff_goldens(&args.check, model_dir, args.update_goldens)?;
 
     let _ = std::fs::remove_dir_all(&state);
@@ -577,6 +578,33 @@ fn string_array(run: &Value, array: &str, field: &str) -> Vec<String> {
 }
 
 // ----- golden view snapshots -----------------------------------------------
+
+/// The generated views must stay disposable projections of `model.json`: the
+/// schema view names model.json as its source and mirrors the contract identity,
+/// and the capabilities view equals `model.capabilities` exactly. (Folded in from
+/// the former `tests/views/prove-view-surfaces.sh`, now run for every example.)
+fn assert_views_project_model(model_json: &Path, model_dir: &Path) -> Result<(), String> {
+    let model = read_json(model_json)?;
+    let schema = read_json(&model_dir.join("views").join("schema.json"))?;
+    if schema.get("source").and_then(Value::as_str) != Some("model.json") {
+        return Err("schema view source is not model.json".into());
+    }
+    let model_types = schema
+        .get("modelTypes")
+        .ok_or_else(|| "schema view has no modelTypes".to_string())?;
+    for field in ["modelVersion", "runtimeAbi", "toolchainId"] {
+        if model_types.get(field) != model.get(field) {
+            return Err(format!(
+                "schema view modelTypes.{field} is not the model's {field}"
+            ));
+        }
+    }
+    let capabilities = read_json(&model_dir.join("views").join("capabilities.json"))?;
+    if model.get("capabilities") != Some(&capabilities) {
+        return Err("capabilities view does not equal model.capabilities".into());
+    }
+    Ok(())
+}
 
 const GOLDEN_VIEWS: [&str; 3] = ["schema.json", "capabilities.json", "docs.md"];
 

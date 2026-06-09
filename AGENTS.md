@@ -51,8 +51,8 @@ runtime/crates/nixfied-conformance
                               `goldens/` holds the schema/docs/capabilities snapshots
 examples/                    downstream-shaped examples: minimal, postgres,
                               workflow, polyglot-stack, downstream (the worked example)
-tests/                       residual end-to-end proofs not subsumed by the
-                              conformance workflow (runtime, views, lifecycle) + guard
+tests/                       the milestone-token guard (a repo lint). End-to-end
+                              behavior lives in the cargo floor + the conformance workflow
 ```
 
 ## Design Principles
@@ -155,13 +155,11 @@ Each writes a ground-truth verdict to `$NIXFIED_CONFORMANCE_ARTIFACTS`. To refre
 the golden view snapshots after an intended view change, run a capability check
 with `--update-goldens`.
 
-Residual e2e invariants the workflow does not subsume:
-
-```sh
-tests/runtime/prove-without-nix.sh    # SEAM-1: runtime runs with nix unavailable
-tests/views/prove-view-surfaces.sh    # views are disposable model projections
-tests/lifecycle/prove-cancellation.sh tests/lifecycle/prove-gc-hardening.sh tests/lifecycle/prove-lifecycle-ops.sh
-```
+There are no residual e2e shell proofs: the cancellation/GC/lifecycle invariants
+are white-box cargo tests, SEAM-1 (the runtime never invokes nix) is the
+`runtime_drives_full_lifecycle_without_invoking_nix` cargo test, and the
+view→model projection contract is asserted inside every capability check. The
+only `tests/` script is the milestone-token guard.
 
 ## Git Hygiene
 

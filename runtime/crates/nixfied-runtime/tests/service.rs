@@ -2671,6 +2671,133 @@ fn assert_registry_tables_scoped_to_slot(registry: &Registry, slot: i64, tables:
     }
 }
 
+/// SEAM-1: the runtime never invokes `nix`. Poison `PATH` with failing
+/// `nix`/`nix-store`/`nix-build` shims that touch a sentinel, then drive the full
+/// lifecycle (check -> run -> clean) through the binary and assert the sentinel is
+/// never created. Service/task execs run by absolute store path, so poisoning
+/// `PATH` cannot starve them - only a nix invocation would trip the sentinel.
+#[test]
+fn runtime_drives_full_lifecycle_without_invoking_nix() {
+    let Some(python) = nix_store_executable(&["python3"]) else {
+        return;
+    };
+    let closure_root = closure_root_for_store_executable(&python)
+        .expect("store executable should have a closure root");
+    let script = [
+        "import socket, sys, time",
+        "cmd = sys.argv[1]",
+        "if cmd == 'service':",
+        "    s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)",
+        "    s.bind(('127.0.0.1', int(sys.argv[2]))); s.listen(16); time.sleep(30)",
+        "elif cmd == 'task':",
+        "    socket.create_connection(('127.0.0.1', int(sys.argv[2])), timeout=5).close()",
+    ]
+    .join("\n");
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
+    let port = listener.local_addr().expect("local addr").port();
+    drop(listener);
+
+    let mut value = fixture_model(&python.to_string_lossy(), &["service", "${port}"], port);
+    value["closures"][0]["storePath"] = json!(closure_root.to_string_lossy());
+    value["execs"]["synthetic-helper"]["args"] = json!(["-c", script]);
+    value["tasks"]["smoke"]["args"] = json!(["task", "${port}"]);
+    let model: Model = serde_json::from_value(value).expect("seam fixture model should parse");
+
+    let tmp = TempDir::new();
+    let model_path = tmp.path.join("model.json");
+    let state_base = tmp.path.join("state");
+    fs::create_dir_all(&state_base).expect("state base should be created");
+    fs::write(
+        &model_path,
+        serde_json::to_vec_pretty(&model).expect("model should serialize"),
+    )
+    .expect("model should be written");
+
+    // A PATH whose nix tools fail loudly and record that they were called.
+    let fake_bin = tmp.path.join("fake-bin");
+    fs::create_dir_all(&fake_bin).expect("fake bin dir should be created");
+    let sentinel = tmp.path.join("nix-was-invoked");
+    for tool in ["nix", "nix-store", "nix-build"] {
+        let shim = fake_bin.join(tool);
+        fs::write(
+            &shim,
+            format!(
+                "#!/bin/sh\ntouch {sentinel:?}\necho '{tool} must not be invoked by nixfied-runtime' >&2\nexit 127\n"
+            ),
+        )
+        .expect("shim should be written");
+        fs::set_permissions(&shim, fs::Permissions::from_mode(0o755))
+            .expect("shim should be executable");
+    }
+    let poisoned_path = match std::env::var_os("PATH") {
+        Some(existing) => {
+            let mut dirs = vec![fake_bin.clone()];
+            dirs.extend(std::env::split_paths(&existing));
+            std::env::join_paths(dirs).expect("PATH should join")
+        }
+        None => fake_bin.as_os_str().to_os_string(),
+    };
+
+    let run_binary = |command: &str, extra: &[&str]| -> Output {
+        let mut invocation = Command::new(runtime_binary());
+        invocation
+            .arg(command)
+            .arg("--allow-non-store-model")
+            .arg("--model")
+            .arg(&model_path)
+            .args(extra)
+            .current_dir(&tmp.path)
+            .env("PATH", &poisoned_path)
+            .env("NIXFIED_STATE_DIR", &state_base)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        invocation.output().expect("runtime should run")
+    };
+
+    let check = run_binary("check", &[]);
+    assert!(
+        check.status.success(),
+        "check failed: {}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+
+    let run = run_binary("run", &["--timeout-ms", "5000"]);
+    assert!(
+        run.status.success(),
+        "run failed: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let run_json: Value =
+        serde_json::from_slice(&run.stdout).expect("run output should be valid JSON");
+    assert_eq!(
+        run_json["task"]["success"],
+        json!(true),
+        "smoke task should succeed: {run_json}"
+    );
+    let state_root = state_base.join("runtime-test").join("dev").join("0");
+    assert!(
+        state_root.join(".nixfied-state.json").is_file(),
+        "slot marker should exist after run"
+    );
+
+    let clean = run_binary("clean", &[]);
+    assert!(
+        clean.status.success(),
+        "clean failed: {}",
+        String::from_utf8_lossy(&clean.stderr)
+    );
+    assert!(
+        !state_root.exists(),
+        "clean should remove the slot state root"
+    );
+
+    assert!(
+        !sentinel.exists(),
+        "runtime invoked a nix tool (sentinel was touched), violating SEAM-1"
+    );
+}
+
 fn fixture_model(executable: &str, start_args: &[&str], port: u16) -> Value {
     json!({
         "modelVersion": 1,
