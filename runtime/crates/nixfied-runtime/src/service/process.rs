@@ -9,7 +9,9 @@ use std::thread;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use nixfied_model::{EndpointSpec, LifecycleOpClass, LifecycleOpSpec, Model, PortPolicy, ServiceSpec};
+use nixfied_model::{
+    EndpointSpec, LifecycleOpClass, LifecycleOpSpec, Model, PortPolicy, ServiceSpec,
+};
 use serde::Serialize;
 
 use crate::admission::Admission;
@@ -127,7 +129,8 @@ impl StartedService {
             let _ = record_lifecycle_failure(registry, &context, operation, &error);
             return Err(error);
         }
-        let ownership_json = match self.verify_selected_endpoint_ownership_json(endpoint, registry) {
+        let ownership_json = match self.verify_selected_endpoint_ownership_json(endpoint, registry)
+        {
             Ok(payload) => payload,
             Err(error) => {
                 if let Some(error) = self.escape_error(registry) {
@@ -166,11 +169,7 @@ impl StartedService {
         record_lifecycle_success(registry, &context, operation)
     }
 
-    pub fn check_health(
-        &mut self,
-        model: &Model,
-        registry: &mut Registry,
-    ) -> RuntimeResult<()> {
+    pub fn check_health(&mut self, model: &Model, registry: &mut Registry) -> RuntimeResult<()> {
         self.check_health_cancellable(model, registry, &CancellationToken::new())
     }
 
@@ -209,11 +208,11 @@ impl StartedService {
             let _ = record_lifecycle_failure(registry, &context, operation, &error);
             return Err(error);
         }
-        if operation.probe_id.is_some() {
-            if let Err(error) = self.verify_selected_endpoint_ownership_json(endpoint, registry) {
-                let _ = record_lifecycle_failure(registry, &context, operation, &error);
-                return Err(error);
-            }
+        if operation.probe_id.is_some()
+            && let Err(error) = self.verify_selected_endpoint_ownership_json(endpoint, registry)
+        {
+            let _ = record_lifecycle_failure(registry, &context, operation, &error);
+            return Err(error);
         }
         record_lifecycle_success(registry, &context, operation)
     }
@@ -757,17 +756,17 @@ pub fn run_synthetic_service_clean_for_slot(
         computed_model_hash: admission.computed_model_hash.clone(),
     };
     record_lifecycle_started(registry, &lifecycle_context, clean_op)?;
-    if clean_op.exec_id.is_some() {
-        if let Err(error) = run_lifecycle_exec(
+    if clean_op.exec_id.is_some()
+        && let Err(error) = run_lifecycle_exec(
             model,
             &admission.source.observed_root,
             clean_op,
             selected_port,
             &CancellationToken::new(),
-        ) {
-            let _ = record_lifecycle_failure(registry, &lifecycle_context, clean_op, &error);
-            return Err(error);
-        }
+        )
+    {
+        let _ = record_lifecycle_failure(registry, &lifecycle_context, clean_op, &error);
+        return Err(error);
     }
     let identity = StateIdentity::from_selected_slot(model, admission, selected_slot);
     let cleanup = match clean_marked_state(
@@ -803,7 +802,10 @@ fn lifecycle_op(service: &ServiceSpec, class: LifecycleOpClass) -> RuntimeResult
         })
 }
 
-fn lifecycle_op_optional(service: &ServiceSpec, class: LifecycleOpClass) -> Option<&LifecycleOpSpec> {
+fn lifecycle_op_optional(
+    service: &ServiceSpec,
+    class: LifecycleOpClass,
+) -> Option<&LifecycleOpSpec> {
     service
         .lifecycle
         .iter()
@@ -925,7 +927,10 @@ fn run_lifecycle_exec(
     let exec_id = operation.exec_id.as_deref().ok_or_else(|| {
         RuntimeError::new(
             ErrorCode::ModelAdmission,
-            format!("service lifecycle operation {} has no exec binding", operation.operation_id),
+            format!(
+                "service lifecycle operation {} has no exec binding",
+                operation.operation_id
+            ),
         )
     })?;
     let exec = model.execs.get(exec_id).ok_or_else(|| {

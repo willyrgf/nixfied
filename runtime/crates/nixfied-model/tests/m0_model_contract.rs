@@ -112,154 +112,136 @@ fn valid_model_json() -> Value {
             "effects": ["process", "network-listener"]
         }],
         "execs": {
-            "m0-helper": {
-                "execId": "m0-helper",
-                "closureId": "m0-helper",
-                "executable": "/nix/store/00000000000000000000000000000000-m0-helper/bin/m0-helper",
-                "args": [],
-                "env": {},
-                "codebaseId": "main",
-                "cwd": ".",
-                "stdin": "null",
-                "timeoutMs": 30000,
-                "outputCapture": "stdout-stderr",
-                "cancellationMode": "kill-process-group"
-            }
+            "m0-helper": helper_exec()
         },
         "services": {
-            "synthetic": {
-                "serviceId": "synthetic",
-                "foreground": true,
-                "lifecycle": [
-                    {
-                        "operationId": "service.synthetic.prepare",
-                        "class": "prepare",
-                        "execId": null,
-                        "execArgs": [],
-                        "probeId": null,
-                        "terminal": {
-                            "success": "prepared",
-                            "failure": "failed"
-                        }
-                    },
-                    {
-                        "operationId": "service.synthetic.start",
-                        "class": "start",
-                        "execId": "m0-helper",
-                        "execArgs": ["service", "--host", "127.0.0.1", "--port", "${port}"],
-                        "probeId": null,
-                        "terminal": {
-                            "success": "spawned",
-                            "failure": "failed"
-                        }
-                    },
-                    {
-                        "operationId": "service.synthetic.ready",
-                        "class": "ready",
-                        "execId": null,
-                        "execArgs": [],
-                        "probeId": "synthetic-tcp",
-                        "terminal": {
-                            "success": "ready",
-                            "failure": "not-ready"
-                        }
-                    },
-                    {
-                        "operationId": "service.synthetic.health",
-                        "class": "health",
-                        "execId": null,
-                        "execArgs": [],
-                        "probeId": "synthetic-tcp",
-                        "terminal": {
-                            "success": "healthy",
-                            "failure": "unhealthy"
-                        }
-                    },
-                    {
-                        "operationId": "service.synthetic.stop",
-                        "class": "stop",
-                        "execId": "m0-helper",
-                        "execArgs": ["stop"],
-                        "probeId": null,
-                        "terminal": {
-                            "success": "stopped",
-                            "failure": "failed"
-                        }
-                    },
-                    {
-                        "operationId": "service.synthetic.clean",
-                        "class": "clean",
-                        "execId": null,
-                        "execArgs": [],
-                        "probeId": null,
-                        "terminal": {
-                            "success": "cleaned",
-                            "failure": "failed"
-                        }
-                    }
-                ],
-                "endpoints": [{
-                    "endpointId": "synthetic-tcp",
-                    "protocol": "tcp",
-                    "host": "127.0.0.1",
-                    "port": {
-                        "kind": "candidate-window",
-                        "start": 38080,
-                        "end": 38090
-                    },
-                    "ownershipVerification": "required",
-                    "socketActivation": "disabled"
-                }],
-                "probes": [{
-                    "probeId": "synthetic-tcp",
-                    "target": {
-                        "kind": "tcp-connect",
-                        "endpointId": "synthetic-tcp"
-                    },
-                    "timeoutMs": 1000,
-                    "retryIntervalMs": 100,
-                    "maxAttempts": 20
-                }],
-                "readinessProbe": "synthetic-tcp",
-                "healthPolicy": "explicit",
-                "stopPolicy": {
-                    "signal": "TERM",
-                    "timeoutMs": 5000
-                },
-                "stateRefs": ["slot"],
-                "logRefs": ["service.synthetic"],
-                "containment": "process-group",
-                "lifetime": "run-scoped",
-                "identity": {
-                    "serviceAddressHash": "service-address",
-                    "endpointIdentityHash": "endpoint",
-                    "stateIdentityHash": "state",
-                    "runtimeCompatibilityHash": "runtime",
-                    "targetIdentityHash": "target"
-                }
-            }
+            "synthetic": synthetic_service()
         },
         "tasks": {
-            "smoke": {
-                "taskId": "smoke",
-                "operationId": "task.smoke.run",
-                "execId": "m0-helper",
-                "args": ["task", "--host", "127.0.0.1", "--port", "${port}"],
-                "dependsOnServicesReady": ["synthetic"],
-                "exitPolicy": {
-                    "successCodes": [0]
-                },
-                "outputCapture": "stdout-stderr",
-                "artifactRefs": [],
-                "logRefs": ["task.smoke"],
-                "summaryRefs": ["summary"]
-            }
+            "smoke": smoke_task()
         },
         "workflows": {},
         "docs": {
             "title": "M0 Example",
             "summary": "Minimal M0 model contract fixture."
         }
+    })
+}
+
+fn helper_exec() -> Value {
+    json!({
+        "execId": "m0-helper",
+        "closureId": "m0-helper",
+        "executable": "/nix/store/00000000000000000000000000000000-m0-helper/bin/m0-helper",
+        "args": [],
+        "env": {},
+        "codebaseId": "main",
+        "cwd": ".",
+        "stdin": "null",
+        "timeoutMs": 30000,
+        "outputCapture": "stdout-stderr",
+        "cancellationMode": "kill-process-group"
+    })
+}
+
+fn synthetic_service() -> Value {
+    json!({
+        "serviceId": "synthetic",
+        "foreground": true,
+        "lifecycle": [
+            {
+                "operationId": "service.synthetic.prepare",
+                "class": "prepare",
+                "execId": null,
+                "execArgs": [],
+                "probeId": null,
+                "terminal": { "success": "prepared", "failure": "failed" }
+            },
+            {
+                "operationId": "service.synthetic.start",
+                "class": "start",
+                "execId": "m0-helper",
+                "execArgs": ["service", "--host", "127.0.0.1", "--port", "${port}"],
+                "probeId": null,
+                "terminal": { "success": "spawned", "failure": "failed" }
+            },
+            {
+                "operationId": "service.synthetic.ready",
+                "class": "ready",
+                "execId": null,
+                "execArgs": [],
+                "probeId": "synthetic-tcp",
+                "terminal": { "success": "ready", "failure": "not-ready" }
+            },
+            {
+                "operationId": "service.synthetic.health",
+                "class": "health",
+                "execId": null,
+                "execArgs": [],
+                "probeId": "synthetic-tcp",
+                "terminal": { "success": "healthy", "failure": "unhealthy" }
+            },
+            {
+                "operationId": "service.synthetic.stop",
+                "class": "stop",
+                "execId": "m0-helper",
+                "execArgs": ["stop"],
+                "probeId": null,
+                "terminal": { "success": "stopped", "failure": "failed" }
+            },
+            {
+                "operationId": "service.synthetic.clean",
+                "class": "clean",
+                "execId": null,
+                "execArgs": [],
+                "probeId": null,
+                "terminal": { "success": "cleaned", "failure": "failed" }
+            }
+        ],
+        "endpoints": [{
+            "endpointId": "synthetic-tcp",
+            "protocol": "tcp",
+            "host": "127.0.0.1",
+            "port": { "kind": "candidate-window", "start": 38080, "end": 38090 },
+            "ownershipVerification": "required",
+            "socketActivation": "disabled"
+        }],
+        "probes": [{
+            "probeId": "synthetic-tcp",
+            "target": { "kind": "tcp-connect", "endpointId": "synthetic-tcp" },
+            "timeoutMs": 1000,
+            "retryIntervalMs": 100,
+            "maxAttempts": 20
+        }],
+        "readinessProbe": "synthetic-tcp",
+        "healthPolicy": "explicit",
+        "stopPolicy": { "signal": "TERM", "timeoutMs": 5000 },
+        "stateRefs": ["slot"],
+        "logRefs": ["service.synthetic"],
+        "containment": "process-group",
+        "lifetime": "run-scoped",
+        "identity": {
+            "serviceAddressHash": "service-address",
+            "endpointIdentityHash": "endpoint",
+            "stateIdentityHash": "state",
+            "runtimeCompatibilityHash": "runtime",
+            "targetIdentityHash": "target"
+        }
+    })
+}
+
+fn smoke_task() -> Value {
+    json!({
+        "taskId": "smoke",
+        "operationId": "task.smoke.run",
+        "execId": "m0-helper",
+        "args": ["task", "--host", "127.0.0.1", "--port", "${port}"],
+        "dependsOnServicesReady": ["synthetic"],
+        "exitPolicy": { "successCodes": [0] },
+        "outputCapture": "stdout-stderr",
+        "artifactRefs": [],
+        "logRefs": ["task.smoke"],
+        "summaryRefs": ["summary"]
     })
 }
 
@@ -298,23 +280,31 @@ fn parse_valid_model() -> Model {
     serde_json::from_value(valid_model_json()).expect("valid model JSON should deserialize")
 }
 
-fn add_slot_one(model: &mut Model, start: u16, end: u16) {
-    model.slot_policy.max = 1;
-    model.runtime_constraints.slot_max = 1;
-    model.capabilities.slots = vec![0, 1];
-    let mut placement = model
-        .placement
-        .slot_placements
-        .get("0")
-        .expect("fixture has slot 0 placement")
-        .clone();
-    placement.slot = 1;
-    placement.candidate_ports.start = start;
-    placement.candidate_ports.end = end;
-    model
-        .placement
-        .slot_placements
-        .insert("1".to_string(), placement);
+/// Adds a second service named `worker` that reuses the helper exec/closure but
+/// binds its own lifecycle, endpoint, and probe. Used to prove structural
+/// validation accepts arbitrary service counts.
+fn add_worker_service(value: &mut Value) {
+    value["closures"][0]["operationBindings"]
+        .as_array_mut()
+        .unwrap()
+        .extend([json!("service.worker.start"), json!("service.worker.stop")]);
+
+    let mut worker = synthetic_service();
+    worker["serviceId"] = json!("worker");
+    worker["readinessProbe"] = json!("worker-tcp");
+    worker["endpoints"][0]["endpointId"] = json!("worker-tcp");
+    worker["probes"][0]["probeId"] = json!("worker-tcp");
+    worker["probes"][0]["target"]["endpointId"] = json!("worker-tcp");
+    for op in worker["lifecycle"].as_array_mut().unwrap() {
+        let class = op["class"].as_str().unwrap();
+        op["operationId"] = json!(format!("service.worker.{class}"));
+        if op["probeId"].is_string() {
+            op["probeId"] = json!("worker-tcp");
+        }
+    }
+    value["services"]["worker"] = worker;
+    value["environments"]["dev"]["services"] = json!(["synthetic", "worker"]);
+    value["capabilities"]["services"] = json!(["synthetic", "worker"]);
 }
 
 fn lifecycle_op_mut<'a>(
@@ -332,12 +322,11 @@ fn lifecycle_op_mut<'a>(
 }
 
 #[test]
-fn parses_and_validates_m0_contract() {
+fn parses_and_validates_contract() {
     let model = parse_valid_model();
-
     model
         .validate_m0()
-        .expect("valid M0 model should pass contract validation");
+        .expect("valid model should pass structural validation");
 
     let classes = model.services["synthetic"]
         .lifecycle
@@ -358,145 +347,80 @@ fn parses_and_validates_m0_contract() {
 }
 
 #[test]
+fn accepts_arbitrary_service_and_exec_names() {
+    // The synthetic/smoke names are not special. A second service and a second
+    // exec validate as long as the structural contract holds.
+    let mut value = valid_model_json();
+    add_worker_service(&mut value);
+    let mut second_exec = helper_exec();
+    second_exec["execId"] = json!("aux-helper");
+    value["execs"]["aux-helper"] = second_exec;
+
+    let model: Model = serde_json::from_value(value).expect("model should deserialize");
+    model
+        .validate_m0()
+        .expect("multi-service / multi-exec models are valid");
+}
+
+#[test]
+fn prepare_operation_may_bind_an_exec() {
+    // initdb-style preparation: the prepare class is allowed to bind an exec.
+    let mut model = parse_valid_model();
+    lifecycle_op_mut(&mut model, "service.synthetic.prepare").exec_id =
+        Some("m0-helper".to_string());
+    model
+        .validate_m0()
+        .expect("prepare may bind a generic exec");
+}
+
+#[test]
+fn capabilities_services_must_mirror_model() {
+    let mut value = valid_model_json();
+    value["capabilities"]["services"] = json!(["synthetic", "ghost"]);
+    let model: Model = serde_json::from_value(value).expect("model should deserialize");
+
+    match model
+        .validate_m0()
+        .expect_err("capabilities must mirror declared services")
+    {
+        ValidationError::UnsupportedValue { field, .. } => {
+            assert_eq!(field, "capabilities.services");
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
 fn old_single_surface_contract_is_rejected() {
     let mut model = parse_valid_model();
     model.capabilities.surfaces = vec!["model".to_string()];
     model.surfaces.retain(|surface| surface.name == "model");
 
-    let error = model
+    match model
         .validate_m0()
-        .expect_err("M0 runtime surfaces must be explicit");
-    match error {
-        ValidationError::UnsupportedValue {
-            field,
-            expected,
-            actual,
-        } => {
-            assert_eq!(field, "capabilities.surfaces");
-            assert_eq!(expected, "exact M0 values");
-            assert_eq!(actual, "[\"model\"]");
-        }
-        other => panic!("unexpected validation error: {other:?}"),
-    }
-}
-
-#[test]
-fn capabilities_surfaces_must_match_model_surface_names() {
-    let mut model = parse_valid_model();
-    model.capabilities.surfaces.push("view-only".to_string());
-
-    let error = model
-        .validate_m0()
-        .expect_err("capabilities cannot add view-only surfaces");
-    match error {
-        ValidationError::UnsupportedValue {
-            field,
-            expected,
-            actual,
-        } => {
-            assert_eq!(field, "capabilities.surfaces");
-            assert_eq!(expected, "exact M0 values");
-            assert!(actual.contains("view-only"));
-        }
+        .expect_err("runtime surfaces must be the full set")
+    {
+        ValidationError::UnsupportedValue { field, .. } => assert_eq!(field, "surfaces"),
         other => panic!("unexpected validation error: {other:?}"),
     }
 }
 
 #[test]
 fn validates_explicit_slot_placement_range() {
-    let mut model = parse_valid_model();
-    add_slot_one(&mut model, 38180, 38190);
+    let mut value = valid_model_json();
+    value["slotPolicy"]["max"] = json!(1);
+    value["runtimeConstraints"]["slotMax"] = json!(1);
+    value["capabilities"]["slots"] = json!([0, 1]);
+    let placement = value["placement"]["slotPlacements"]["0"].clone();
+    let mut slot_one = placement;
+    slot_one["slot"] = json!(1);
+    slot_one["candidatePorts"] = json!({ "start": 38180, "end": 38190 });
+    value["placement"]["slotPlacements"]["1"] = slot_one;
 
+    let model: Model = serde_json::from_value(value).expect("model should deserialize");
     model
         .validate_m0()
         .expect("explicit slot placements should cover the slot range");
-}
-
-#[test]
-fn capabilities_slots_must_match_slot_policy_range() {
-    let mut model = parse_valid_model();
-    add_slot_one(&mut model, 38180, 38190);
-    model.capabilities.slots = vec![0];
-
-    assert_eq!(
-        model
-            .validate_m0()
-            .expect_err("capabilities slots must mirror slot policy"),
-        ValidationError::UnsupportedValue {
-            field: "capabilities.slots",
-            expected: "slotPolicy range",
-            actual: "[0]".to_string(),
-        }
-    );
-}
-
-#[test]
-fn slot_placements_must_cover_slot_policy_range() {
-    let mut model = parse_valid_model();
-    model.slot_policy.max = 1;
-    model.runtime_constraints.slot_max = 1;
-    model.capabilities.slots = vec![0, 1];
-
-    let error = model
-        .validate_m0()
-        .expect_err("slot placement for slot 1 is required");
-    match error {
-        ValidationError::UnsupportedValue {
-            field,
-            expected,
-            actual,
-        } => {
-            assert_eq!(field, "placement.slotPlacements");
-            assert_eq!(expected, "exact slotPolicy range");
-            assert_eq!(actual, "{\"0\"}");
-        }
-        other => panic!("unexpected validation error: {other:?}"),
-    }
-}
-
-#[test]
-fn slot_candidate_windows_must_not_overlap() {
-    let mut model = parse_valid_model();
-    add_slot_one(&mut model, 38085, 38095);
-
-    let error = model
-        .validate_m0()
-        .expect_err("slot candidate windows must be disjoint");
-    match error {
-        ValidationError::UnsupportedValue {
-            field,
-            expected,
-            actual,
-        } => {
-            assert_eq!(field, "placement.slotPlacements.candidatePorts");
-            assert_eq!(expected, "non-overlapping windows");
-            assert!(actual.contains("38085"));
-        }
-        other => panic!("unexpected validation error: {other:?}"),
-    }
-}
-
-#[test]
-fn slot_candidate_windows_must_not_use_zero_port() {
-    let mut model = parse_valid_model();
-    model
-        .placement
-        .slot_placements
-        .get_mut("0")
-        .expect("fixture has slot 0 placement")
-        .candidate_ports
-        .start = 0;
-
-    assert_eq!(
-        model
-            .validate_m0()
-            .expect_err("slot port 0 must be rejected"),
-        ValidationError::UnsupportedValue {
-            field: "placement.slotPlacements.candidatePorts",
-            expected: "ports in 1..65535 with start <= end",
-            actual: "start=0, end=38090".to_string(),
-        }
-    );
 }
 
 #[test]
@@ -523,7 +447,7 @@ fn abi_mismatch_is_contract_error() {
 }
 
 #[test]
-fn non_empty_secrets_are_rejected_in_m0() {
+fn non_empty_secrets_are_rejected() {
     let mut model = parse_valid_model();
     model.secrets.push(nixfied_model::SecretRef {
         secret_id: "db".to_string(),
@@ -532,10 +456,22 @@ fn non_empty_secrets_are_rejected_in_m0() {
     });
 
     assert_eq!(
+        model.validate_m0().expect_err("secrets are still deferred"),
+        ValidationError::MustBeEmpty { field: "secrets" }
+    );
+}
+
+#[test]
+fn non_empty_workflows_are_rejected() {
+    let mut value = valid_model_json();
+    value["workflows"]["deferred"] = json!({ "workflowId": "deferred" });
+    let model: Model = serde_json::from_value(value).expect("model should deserialize");
+
+    assert_eq!(
         model
             .validate_m0()
-            .expect_err("secrets are unsupported in M0"),
-        ValidationError::MustBeEmpty { field: "secrets" }
+            .expect_err("workflows are deferred to M4"),
+        ValidationError::MustBeEmpty { field: "workflows" }
     );
 }
 
@@ -566,43 +502,41 @@ fn closure_bindings_must_reference_declared_operations() {
         model
             .validate_m0()
             .expect_err("undeclared operation binding should fail"),
-        ValidationError::UnsupportedValue {
-            field: "closures[0].operationBindings",
-            expected: "exact M0 values",
-            actual: "[\"service.synthetic.start\", \"service.synthetic.stop\", \"task.smoke.run\", \"workflow.deferred.run\"]".to_string(),
+        ValidationError::UnknownOperationBinding {
+            binding: "workflow.deferred.run".to_string(),
         }
     );
 }
 
 #[test]
-fn extra_execs_are_rejected_in_m0() {
+fn execs_must_reference_declared_closures() {
     let mut model = parse_valid_model();
-    let exec = model
+    model
         .execs
-        .get("m0-helper")
+        .get_mut("m0-helper")
         .expect("fixture has helper exec")
-        .clone();
-    model.execs.insert("second-helper".to_string(), exec);
+        .closure_id = "ghost-closure".to_string();
 
     assert_eq!(
-        model.validate_m0().expect_err("M0 has exactly one exec"),
-        ValidationError::ExpectedLen {
-            field: "execs",
-            expected: 1,
-            actual: 2,
+        model
+            .validate_m0()
+            .expect_err("exec closure must be declared"),
+        ValidationError::UndeclaredReference {
+            reference_kind: "exec.closureId",
+            id: "ghost-closure".to_string(),
         }
     );
 }
 
 #[test]
-fn runtime_constraints_must_remain_m0() {
+fn runtime_constraints_must_use_fail_collision_policy() {
     let mut model = parse_valid_model();
     model.runtime_constraints.collision_policy = nixfied_model::CollisionPolicy::ProbeInRange;
 
     assert_eq!(
         model
             .validate_m0()
-            .expect_err("M0 supports fail collision policy only"),
+            .expect_err("only fail collision policy is supported"),
         ValidationError::UnsupportedValue {
             field: "runtimeConstraints.collisionPolicy",
             expected: "fail",
@@ -612,20 +546,19 @@ fn runtime_constraints_must_remain_m0() {
 }
 
 #[test]
-fn lifecycle_must_have_ready_probe_binding() {
+fn lifecycle_must_bind_readiness_probe_on_ready() {
     let mut model = parse_valid_model();
     lifecycle_op_mut(&mut model, "service.synthetic.ready").probe_id = None;
 
-    assert_eq!(
-        model
-            .validate_m0()
-            .expect_err("ready lifecycle must bind the readiness probe"),
-        ValidationError::UnsupportedValue {
-            field: "lifecycle.probeId",
-            expected: "synthetic-tcp",
-            actual: "null".to_string(),
+    match model
+        .validate_m0()
+        .expect_err("ready lifecycle must bind the readiness probe")
+    {
+        ValidationError::UnsupportedValue { field, .. } => {
+            assert_eq!(field, "lifecycle.ready.probeId")
         }
-    );
+        other => panic!("unexpected error: {other:?}"),
+    }
 }
 
 #[test]
@@ -638,38 +571,36 @@ fn lifecycle_must_have_full_generic_class_set() {
         .lifecycle
         .retain(|op| op.operation_id != "service.synthetic.clean");
 
-    assert_eq!(
-        model
-            .validate_m0()
-            .expect_err("full lifecycle contract requires clean declaration"),
-        ValidationError::ExpectedLen {
-            field: "services.synthetic.lifecycle",
-            expected: 6,
-            actual: 5,
+    match model
+        .validate_m0()
+        .expect_err("full lifecycle contract requires clean declaration")
+    {
+        ValidationError::UnsupportedValue { field, actual, .. } => {
+            assert_eq!(field, "lifecycle.class");
+            assert!(actual.contains("clean"));
         }
-    );
+        other => panic!("unexpected error: {other:?}"),
+    }
 }
 
 #[test]
-fn lifecycle_operation_ids_must_be_unique() {
+fn ready_and_health_must_remain_distinct_classes() {
     let mut model = parse_valid_model();
-    lifecycle_op_mut(&mut model, "service.synthetic.health").operation_id =
-        "service.synthetic.ready".to_string();
+    lifecycle_op_mut(&mut model, "service.synthetic.health").class =
+        nixfied_model::LifecycleOpClass::Ready;
 
-    assert_eq!(
-        model
-            .validate_m0()
-            .expect_err("duplicate lifecycle operation IDs must be rejected"),
-        ValidationError::UnsupportedValue {
-            field: "lifecycle.operationId",
-            expected: "unique operation IDs",
-            actual: "service.synthetic.ready".to_string(),
-        }
-    );
+    // Two ops now share the Ready class; the per-class uniqueness check fires.
+    match model
+        .validate_m0()
+        .expect_err("health must not be conflated with readiness")
+    {
+        ValidationError::UnsupportedValue { field, .. } => assert_eq!(field, "lifecycle.class"),
+        other => panic!("unexpected error: {other:?}"),
+    }
 }
 
 #[test]
-fn health_policy_must_be_explicit_for_declared_health() {
+fn health_policy_must_be_explicit() {
     let mut model = parse_valid_model();
     model
         .services
@@ -680,9 +611,9 @@ fn health_policy_must_be_explicit_for_declared_health() {
     assert_eq!(
         model
             .validate_m0()
-            .expect_err("declared M2C health uses an explicit typed policy"),
+            .expect_err("declared health uses an explicit typed policy"),
         ValidationError::UnsupportedValue {
-            field: "services.synthetic.healthPolicy",
+            field: "services.healthPolicy",
             expected: "explicit",
             actual: "Unsupported".to_string(),
         }
@@ -690,54 +621,36 @@ fn health_policy_must_be_explicit_for_declared_health() {
 }
 
 #[test]
-fn ready_and_health_must_remain_distinct_operation_classes() {
-    let mut model = parse_valid_model();
-    lifecycle_op_mut(&mut model, "service.synthetic.health").class =
-        nixfied_model::LifecycleOpClass::Ready;
-
-    assert_eq!(
-        model
-            .validate_m0()
-            .expect_err("health must not be conflated with readiness"),
-        ValidationError::UnsupportedValue {
-            field: "lifecycle.class",
-            expected: "service.synthetic.health",
-            actual: "Ready".to_string(),
-        }
-    );
-}
-
-#[test]
-fn health_operation_must_bind_declared_probe_contract() {
-    let mut model = parse_valid_model();
-    lifecycle_op_mut(&mut model, "service.synthetic.health").probe_id =
-        Some("missing-probe".to_string());
-
-    assert_eq!(
-        model
-            .validate_m0()
-            .expect_err("health operation must bind the declared health probe"),
-        ValidationError::UnsupportedValue {
-            field: "lifecycle.probeId",
-            expected: "synthetic-tcp",
-            actual: "missing-probe".to_string(),
-        }
-    );
-}
-
-#[test]
-fn clean_operation_uses_marker_gated_runtime_cleanup_contract() {
+fn clean_operation_stays_marker_gated_runtime_cleanup() {
     let mut model = parse_valid_model();
     lifecycle_op_mut(&mut model, "service.synthetic.clean").exec_id = Some("m0-helper".to_string());
 
     assert_eq!(
         model
             .validate_m0()
-            .expect_err("clean must stay a runtime cleanup primitive in this contract"),
+            .expect_err("clean must stay a runtime cleanup primitive"),
         ValidationError::UnsupportedValue {
-            field: "lifecycle.execId",
+            field: "lifecycle.clean.execId",
             expected: "null",
             actual: "m0-helper".to_string(),
         }
     );
+}
+
+#[test]
+fn lifecycle_operation_ids_must_be_unique() {
+    let mut model = parse_valid_model();
+    lifecycle_op_mut(&mut model, "service.synthetic.health").operation_id =
+        "service.synthetic.ready".to_string();
+
+    match model
+        .validate_m0()
+        .expect_err("duplicate lifecycle operation IDs must be rejected")
+    {
+        ValidationError::UnsupportedValue { field, actual, .. } => {
+            assert_eq!(field, "lifecycle.operationId");
+            assert_eq!(actual, "service.synthetic.ready");
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
 }

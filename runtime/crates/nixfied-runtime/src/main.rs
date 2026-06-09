@@ -328,15 +328,13 @@ fn run_control_admitted(
             &mut registry,
             options.timeout_ms,
         )?),
-        ControlCommand::Clean => {
-            print_json(&run_synthetic_service_clean_for_slot(
-                model,
-                admission,
-                &placement,
-                &mut registry,
-                &selected_slot,
-            )?)
-        }
+        ControlCommand::Clean => print_json(&run_synthetic_service_clean_for_slot(
+            model,
+            admission,
+            &placement,
+            &mut registry,
+            &selected_slot,
+        )?),
     }
 }
 

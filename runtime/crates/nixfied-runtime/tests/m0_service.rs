@@ -347,9 +347,7 @@ fn lifecycle_events_follow_declared_class_order_and_clean_terminal() {
     let cleanup_events: Vec<String> = fixture
         .registry
         .connection()
-        .prepare(
-            "SELECT event_type FROM events WHERE event_type LIKE 'cleanup.%' ORDER BY rowid",
-        )
+        .prepare("SELECT event_type FROM events WHERE event_type LIKE 'cleanup.%' ORDER BY rowid")
         .expect("cleanup statement should prepare")
         .query_map([], |row| row.get::<_, String>(0))
         .expect("cleanup events should query")
@@ -447,16 +445,17 @@ fn health_failure_after_ready_records_distinct_lifecycle_failure() {
         .expect("failed event count should query");
     let latest_health_terminal = lifecycle_events(&fixture.registry)
         .into_iter()
-        .filter(|event| {
-            event.class == "health" && event.event_type == "service.lifecycle.terminal"
-        })
-        .last()
+        .filter(|event| event.class == "health" && event.event_type == "service.lifecycle.terminal")
+        .next_back()
         .expect("health terminal event should exist");
 
     assert_eq!(service_status, "probe-ready");
     assert_eq!(ready_events, 1);
     assert_eq!(failed_events, 0);
-    assert_eq!(latest_health_terminal.terminal_result.as_deref(), Some("unhealthy"));
+    assert_eq!(
+        latest_health_terminal.terminal_result.as_deref(),
+        Some("unhealthy")
+    );
     assert_eq!(
         latest_health_terminal.error_code.as_deref(),
         Some("MODEL_ADMISSION")
@@ -3047,9 +3046,7 @@ fn lifecycle_events(registry: &Registry) -> Vec<LifecycleEvent> {
                 terminal_result: payload["terminalResult"]
                     .as_str()
                     .map(|value| value.to_string()),
-                error_code: payload["errorCode"]
-                    .as_str()
-                    .map(|value| value.to_string()),
+                error_code: payload["errorCode"].as_str().map(|value| value.to_string()),
             })
         })
         .expect("lifecycle events should query")
