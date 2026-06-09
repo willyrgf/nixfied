@@ -196,7 +196,10 @@ let
         description = "Log roots the service writes.";
       };
       containment = mkOption {
-        type = types.enum [ "process-group" ];
+        type = types.enum [
+          "process-group"
+          "process-tree"
+        ];
         default = "process-group";
         description = "Containment requirement.";
       };

@@ -4,4 +4,5 @@
 # without vendoring framework internals.
 {
   synthetic = import ./synthetic.nix;
+  postgres = import ./postgres.nix;
 }
