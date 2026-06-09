@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# M5 proof: upgrading the Nixfied input pin is non-destructive.
+# proof: upgrading the Nixfied input pin is non-destructive.
 #
 # The upgrade surface owns only the flake input/import wiring. It must repin the
 # nixfied input and leave the project-owned nixfied.nix byte-for-byte untouched,
@@ -12,7 +12,7 @@ tmp_base="${NIXFIED_TEST_TMPDIR:-${TMPDIR:-/tmp}}"
 if [[ -d /private/tmp ]]; then
   tmp_base="/private/tmp"
 fi
-tmp="$(mktemp -d "$tmp_base/nixfied-m5-upgrade.XXXXXX")"
+tmp="$(mktemp -d "$tmp_base/nixfied-upgrade.XXXXXX")"
 tmp="$(cd "$tmp" && pwd -P)"
 trap 'rm -rf "$tmp"' EXIT
 
@@ -79,4 +79,4 @@ fi
 grep -F "No files were changed." "$refusal" >/dev/null
 test ! -e "$empty/nixfied.nix"
 
-echo "M5 install upgrade proof passed"
+echo "install upgrade proof passed"

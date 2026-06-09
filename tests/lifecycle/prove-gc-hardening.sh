@@ -7,7 +7,7 @@ if [[ "$(uname -s)" == "Darwin" && "$tmp_root" == /var/* && -d /private/tmp ]]; 
   tmp_root="/private/tmp"
 fi
 tmp_root="$(cd "$tmp_root" && pwd -P)"
-tmp="$(mktemp -d "$tmp_root/nixfied-m2-gc-proof.XXXXXX")"
+tmp="$(mktemp -d "$tmp_root/nixfied-gc-proof.XXXXXX")"
 live_pids=()
 live_pgids=()
 cleanup() {
@@ -218,24 +218,24 @@ PY
   test ! -e "$state_base/minimal/dev/0"
 }
 
-run_exact_test m0_state cleanup_refuses_unmarked_roots
-run_exact_test m0_state cleanup_refuses_path_escape
-run_exact_test m0_state cleanup_refuses_marker_mismatch
-run_exact_test m0_state cleanup_refuses_protected_state
-run_exact_test m0_state cleanup_refuses_persistent_state
-run_exact_test m0_state cleanup_refuses_symlink_traversal
-run_exact_test m0_state cleanup_refuses_active_registry_refs
-run_exact_test m0_state cleanup_deletes_matching_inactive_state
-run_exact_test m0_state cleanup_finishes_interrupted_delete_when_target_is_already_absent
-run_exact_test m0_state cleanup_delete_failure_records_failed_without_deleted_success
-run_exact_test m0_state clean_reconciles_stale_refs_before_marker_owned_delete
-run_exact_test m0_state clean_marks_active_port_stale_after_owner_process_is_proven_dead
-run_exact_test m0_registry rejects_incompatible_registry_identity
-run_exact_test m0_registry rejects_incompatible_user_version
-run_exact_test m0_registry rejects_existing_v1_registry_missing_required_shape
-run_exact_test m0_registry rejects_nonempty_unversioned_registry
-run_exact_test m0_service ps_reconciles_dead_owned_process_and_port_as_stale
-run_exact_test m0_service down_completes_canceling_lease_and_unblocks_cleanup
-run_exact_test m0_service down_cancels_live_task_process_group_and_unblocks_cleanup
+run_exact_test state cleanup_refuses_unmarked_roots
+run_exact_test state cleanup_refuses_path_escape
+run_exact_test state cleanup_refuses_marker_mismatch
+run_exact_test state cleanup_refuses_protected_state
+run_exact_test state cleanup_refuses_persistent_state
+run_exact_test state cleanup_refuses_symlink_traversal
+run_exact_test state cleanup_refuses_active_registry_refs
+run_exact_test state cleanup_deletes_matching_inactive_state
+run_exact_test state cleanup_finishes_interrupted_delete_when_target_is_already_absent
+run_exact_test state cleanup_delete_failure_records_failed_without_deleted_success
+run_exact_test state clean_reconciles_stale_refs_before_marker_owned_delete
+run_exact_test state clean_marks_active_port_stale_after_owner_process_is_proven_dead
+run_exact_test registry rejects_incompatible_registry_identity
+run_exact_test registry rejects_incompatible_user_version
+run_exact_test registry rejects_existing_v1_registry_missing_required_shape
+run_exact_test registry rejects_nonempty_unversioned_registry
+run_exact_test service ps_reconciles_dead_owned_process_and_port_as_stale
+run_exact_test service down_completes_canceling_lease_and_unblocks_cleanup
+run_exact_test service down_cancels_live_task_process_group_and_unblocks_cleanup
 
 prove_kill9_crash_reconciliation

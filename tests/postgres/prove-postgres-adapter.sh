@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# M3 proof: a concrete Postgres service is expressible purely as a Nix adapter
+# proof: a concrete Postgres service is expressible purely as a Nix adapter
 # that emits generic primitives, and the generic runtime starts/readies/queries/
 # stops it without any Postgres-specific code path. A minimal non-Postgres
 # project still compiles without the adapter.
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-tmp="$(mktemp -d "${TMPDIR:-/tmp}/nixfied-m3-postgres.XXXXXX")"
+tmp="$(mktemp -d "${TMPDIR:-/tmp}/nixfied-postgres.XXXXXX")"
 trap 'rm -rf "$tmp"' EXIT
 cd "$repo"
 
@@ -110,4 +110,4 @@ assert "postgres" not in model["services"], "minimal project must not require th
 assert list(model["services"]) == ["synthetic"], model["services"]
 PY
 
-echo "M3 postgres adapter proof passed"
+echo "postgres adapter proof passed"

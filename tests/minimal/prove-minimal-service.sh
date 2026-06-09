@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-tmp="$(mktemp -d "${TMPDIR:-/tmp}/nixfied-m0-proof.XXXXXX")"
+tmp="$(mktemp -d "${TMPDIR:-/tmp}/nixfied-minimal-proof.XXXXXX")"
 trap 'rm -rf "$tmp"' EXIT
 cd "$repo"
 
@@ -73,5 +73,5 @@ PY
 NIXFIED_STATE_DIR="$state_base" "$runtime_bin" clean --model "$model_out/model.json" >/dev/null
 test ! -e "$state_base/minimal/dev/0"
 
-cargo test --manifest-path "$repo/runtime/Cargo.toml" -p nixfied-runtime --test m0_service
-cargo test --manifest-path "$repo/runtime/Cargo.toml" -p nixfied-runtime --test m0_state
+cargo test --manifest-path "$repo/runtime/Cargo.toml" -p nixfied-runtime --test service
+cargo test --manifest-path "$repo/runtime/Cargo.toml" -p nixfied-runtime --test state

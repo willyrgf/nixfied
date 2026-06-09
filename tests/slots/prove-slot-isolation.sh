@@ -7,7 +7,7 @@ if [[ "$(uname -s)" == "Darwin" && "$tmp_root" == /var/* && -d /private/tmp ]]; 
   tmp_root="/private/tmp"
 fi
 tmp_root="$(cd "$tmp_root" && pwd -P)"
-tmp="$(mktemp -d "$tmp_root/nixfied-m1-slot-proof.XXXXXX")"
+tmp="$(mktemp -d "$tmp_root/nixfied-slot-proof.XXXXXX")"
 live_pids=()
 cleanup() {
   for pid in "${live_pids[@]:-}"; do
@@ -24,7 +24,7 @@ project="$tmp/project"
 mkdir -p "$project"
 cat >"$project/flake.nix" <<EOF
 {
-  description = "Nixfied M1 slot isolation proof project";
+  description = "Nixfied slot isolation proof project";
 
   inputs = {
     nixfied.url = "git+file://$repo";
@@ -59,8 +59,8 @@ cat >"$project/nixfied.nix" <<'EOF'
 { adapters, ... }:
 {
   imports = [ adapters.synthetic ];
-  nixfied.project.projectId = "m1-slot-isolation";
-  nixfied.project.name = "M1 Slot Isolation";
+  nixfied.project.projectId = "slot-isolation";
+  nixfied.project.name = "Slot Isolation";
   nixfied.codebases.main.logicalRoot = ".";
   nixfied.slotPolicy.max = 1;
   nixfied.placement.ports.base = 39180;
@@ -183,8 +183,8 @@ live_pids+=("$live_pid0")
 ) &
 live_pid1=$!
 live_pids+=("$live_pid1")
-wait_for_process_row_and_stop "$live_pid0" "$live_state_base/m1-slot-isolation/dev/0/registry/registry.sqlite3"
-wait_for_process_row_and_stop "$live_pid1" "$live_state_base/m1-slot-isolation/dev/1/registry/registry.sqlite3"
+wait_for_process_row_and_stop "$live_pid0" "$live_state_base/slot-isolation/dev/0/registry/registry.sqlite3"
+wait_for_process_row_and_stop "$live_pid1" "$live_state_base/slot-isolation/dev/1/registry/registry.sqlite3"
 (
   cd "$project"
   NIXFIED_STATE_DIR="$live_state_base" "$runtime_bin" ps --model "$model_out/model.json" --slot 0 >"$tmp/live-ps-slot-0.json"
@@ -318,13 +318,13 @@ PY
   cd "$project"
   NIXFIED_STATE_DIR="$state_base" "$runtime_bin" clean --model "$model_out/model.json" --slot 0 >"$tmp/clean-slot-0.json"
 )
-test ! -e "$state_base/m1-slot-isolation/dev/0"
-test -e "$state_base/m1-slot-isolation/dev/1"
+test ! -e "$state_base/slot-isolation/dev/0"
+test -e "$state_base/slot-isolation/dev/1"
 
 (
   cd "$project"
   NIXFIED_STATE_DIR="$state_base" "$runtime_bin" clean --model "$model_out/model.json" --slot 1 >"$tmp/clean-slot-1.json"
 )
-test ! -e "$state_base/m1-slot-isolation/dev/1"
+test ! -e "$state_base/slot-isolation/dev/1"
 
-cargo test --manifest-path "$repo/runtime/Cargo.toml" -p nixfied-runtime --test m0_service two_slots_keep_services_state_and_controls_isolated
+cargo test --manifest-path "$repo/runtime/Cargo.toml" -p nixfied-runtime --test service two_slots_keep_services_state_and_controls_isolated
