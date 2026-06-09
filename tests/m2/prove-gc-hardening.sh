@@ -175,11 +175,11 @@ PY
 
 prove_kill9_crash_reconciliation() {
   local model_out runtime_bin state_base db runtime_pid service_pgid
-  model_out="$(nix build --no-link --no-write-lock-file --print-out-paths "$repo#m0-minimal-model")"
+  model_out="$(nix build --no-link --no-write-lock-file --print-out-paths "$repo#minimal-model")"
   cargo build --manifest-path "$repo/runtime/Cargo.toml" -p nixfied-runtime
   runtime_bin="$repo/runtime/target/debug/nixfied-runtime"
   state_base="$tmp/state"
-  db="$state_base/m0-minimal/dev/0/registry/registry.sqlite3"
+  db="$state_base/minimal/dev/0/registry/registry.sqlite3"
 
   NIXFIED_STATE_DIR="$state_base" "$runtime_bin" run --model "$model_out/model.json" >"$tmp/run.json" 2>"$tmp/run.err" &
   runtime_pid=$!
@@ -215,7 +215,7 @@ PY
   NIXFIED_STATE_DIR="$state_base" "$runtime_bin" down --model "$model_out/model.json" >"$tmp/down-after-stale.json"
   assert_down_reports_stale "$tmp/down-after-stale.json"
   NIXFIED_STATE_DIR="$state_base" "$runtime_bin" clean --model "$model_out/model.json" >"$tmp/clean-after-stale.json"
-  test ! -e "$state_base/m0-minimal/dev/0"
+  test ! -e "$state_base/minimal/dev/0"
 }
 
 run_exact_test m0_state cleanup_refuses_unmarked_roots

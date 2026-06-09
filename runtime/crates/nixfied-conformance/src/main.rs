@@ -30,8 +30,8 @@ fn scenarios() -> Vec<Scenario> {
     vec![
         Scenario {
             name: "minimal-service",
-            project_id: "m0-minimal",
-            model_attr: "m0-minimal-model",
+            project_id: "minimal",
+            model_attr: "minimal-model",
             workflow: None,
             expect_services: &["synthetic"],
             expect_nodes: &[],
@@ -68,8 +68,8 @@ fn scenarios() -> Vec<Scenario> {
         // the harness distinguishes pass from fail with a structured reason.
         Scenario {
             name: "negative-unknown-workflow",
-            project_id: "m0-minimal",
-            model_attr: "m0-minimal-model",
+            project_id: "minimal",
+            model_attr: "minimal-model",
             workflow: Some("does-not-exist"),
             expect_services: &[],
             expect_nodes: &[],

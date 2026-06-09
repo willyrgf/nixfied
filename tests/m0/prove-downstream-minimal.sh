@@ -6,7 +6,7 @@ tmp="$(mktemp -d "${TMPDIR:-/tmp}/nixfied-m0-proof.XXXXXX")"
 trap 'rm -rf "$tmp"' EXIT
 cd "$repo"
 
-model_out="$(nix build --no-link --no-write-lock-file --print-out-paths "$repo/examples/m0-minimal#model")"
+model_out="$(nix build --no-link --no-write-lock-file --print-out-paths "$repo/examples/minimal#model")"
 case "$model_out" in
   /nix/store/*) ;;
   *)
@@ -71,7 +71,7 @@ assert pathlib.Path(run["summaryPath"]).is_file()
 assert (state_root / ".nixfied-state.json").is_file()
 PY
 NIXFIED_STATE_DIR="$state_base" "$runtime_bin" clean --model "$model_out/model.json" >/dev/null
-test ! -e "$state_base/m0-minimal/dev/0"
+test ! -e "$state_base/minimal/dev/0"
 
 cargo test --manifest-path "$repo/runtime/Cargo.toml" -p nixfied-runtime --test m0_service
 cargo test --manifest-path "$repo/runtime/Cargo.toml" -p nixfied-runtime --test m0_state

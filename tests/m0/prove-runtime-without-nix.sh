@@ -6,7 +6,7 @@ tmp="$(mktemp -d "${TMPDIR:-/tmp}/nixfied-m0-no-nix.XXXXXX")"
 trap 'rm -rf "$tmp"' EXIT
 cd "$repo"
 
-model_out="$(nix build --no-link --print-out-paths "$repo#m0-minimal-model")"
+model_out="$(nix build --no-link --print-out-paths "$repo#minimal-model")"
 cargo build --manifest-path "$repo/runtime/Cargo.toml" -p nixfied-runtime
 runtime_bin="$repo/runtime/target/debug/nixfied-runtime"
 
@@ -46,7 +46,7 @@ assert pathlib.Path(run["summaryPath"]).is_file()
 assert (state_root / ".nixfied-state.json").is_file()
 PY
 PATH="$fake_bin:$PATH" NIXFIED_STATE_DIR="$state_base" "$runtime_bin" clean --model "$model_out/model.json" >/dev/null
-test ! -e "$state_base/m0-minimal/dev/0"
+test ! -e "$state_base/minimal/dev/0"
 
 if [[ -e "$sentinel" ]]; then
   echo "fake nix sentinel was touched; runtime invoked nix" >&2

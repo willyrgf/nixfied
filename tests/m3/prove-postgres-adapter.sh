@@ -99,7 +99,7 @@ PY
 test ! -e "$state_base/postgres-example/dev/0"
 
 # A minimal non-Postgres project still compiles without the adapter.
-minimal_out="$(nix build --no-link --no-write-lock-file --print-out-paths "$repo#m0-minimal-model")"
+minimal_out="$(nix build --no-link --no-write-lock-file --print-out-paths "$repo#minimal-model")"
 python3 - "$minimal_out/model.json" <<'PY'
 import json
 import pathlib
