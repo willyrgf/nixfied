@@ -671,7 +671,8 @@ fn health_policy_must_be_explicit() {
 #[test]
 fn clean_operation_stays_marker_gated_runtime_cleanup() {
     let mut model = parse_valid_model();
-    lifecycle_op_mut(&mut model, "service.synthetic.clean").exec_id = Some("synthetic-helper".to_string());
+    lifecycle_op_mut(&mut model, "service.synthetic.clean").exec_id =
+        Some("synthetic-helper".to_string());
 
     assert_eq!(
         model
