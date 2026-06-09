@@ -6,7 +6,7 @@ tmp_base="${NIXFIED_TEST_TMPDIR:-${TMPDIR:-/tmp}}"
 if [[ -d /private/tmp ]]; then
   tmp_base="/private/tmp"
 fi
-tmp="$(mktemp -d "$tmp_base/nixfied-m0-install.XXXXXX")"
+tmp="$(mktemp -d "$tmp_base/nixfied-install.XXXXXX")"
 tmp="$(cd "$tmp" && pwd -P)"
 trap 'rm -rf "$tmp"' EXIT
 

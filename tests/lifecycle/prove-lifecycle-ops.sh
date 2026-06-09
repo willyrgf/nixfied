@@ -16,5 +16,5 @@ run_exact_test() {
   cargo test --manifest-path "$repo/runtime/Cargo.toml" -p nixfied-runtime --test "$test_target" "$test_name" -- --exact
 }
 
-run_exact_test m0_service lifecycle_events_follow_declared_class_order_and_clean_terminal
-run_exact_test m0_service health_failure_after_ready_records_distinct_lifecycle_failure
+run_exact_test service lifecycle_events_follow_declared_class_order_and_clean_terminal
+run_exact_test service health_failure_after_ready_records_distinct_lifecycle_failure

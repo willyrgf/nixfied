@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# M6 proof: a polyglot stack (a Python service and a Perl service, each with a
+# proof: a polyglot stack (a Python service and a Perl service, each with a
 # dependent task) compiles to one store model and runs end to end through the
 # public runtime surfaces using only already-shipped generic primitives.
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-tmp="$(mktemp -d "${TMPDIR:-/tmp}/nixfied-m6-polyglot.XXXXXX")"
+tmp="$(mktemp -d "${TMPDIR:-/tmp}/nixfied-polyglot.XXXXXX")"
 trap 'rm -rf "$tmp"' EXIT
 cd "$repo"
 
@@ -72,4 +72,4 @@ grep -q "perl-ok" "$worker_log"
 )
 test ! -e "$state_base/polyglot-stack/dev/0"
 
-echo "M6 polyglot stack proof passed"
+echo "polyglot stack proof passed"

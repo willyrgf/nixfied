@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# M4 proof: a workflow is a bounded acyclic graph over generic tasks with a
+# proof: a workflow is a bounded acyclic graph over generic tasks with a
 # service-requirement readiness gate. The generic runtime starts the required
 # service, runs the nodes in dependency order, records per-node results and a
 # workflow summary, then stops and marker-gated cleans.
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-tmp="$(mktemp -d "${TMPDIR:-/tmp}/nixfied-m4-workflow.XXXXXX")"
+tmp="$(mktemp -d "${TMPDIR:-/tmp}/nixfied-workflow.XXXXXX")"
 trap 'rm -rf "$tmp"' EXIT
 cd "$repo"
 
@@ -76,4 +76,4 @@ PY
 )
 test ! -e "$state_base/workflow-example/dev/0"
 
-echo "M4 workflow graphs proof passed"
+echo "workflow graphs proof passed"

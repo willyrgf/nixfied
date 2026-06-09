@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-tmp="$(mktemp -d "${TMPDIR:-/tmp}/nixfied-m0-no-nix.XXXXXX")"
+tmp="$(mktemp -d "${TMPDIR:-/tmp}/nixfied-no-nix.XXXXXX")"
 trap 'rm -rf "$tmp"' EXIT
 cd "$repo"
 
