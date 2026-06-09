@@ -17,6 +17,8 @@ Status reflects the `v2` branch as of this revision.
 | M5 installable downstream wrapper | Partial (scaffold only) | `nix/install/install.sh`, `tests/m0/prove-install-scaffold.sh` |
 | M6 polyglot example | Not started | proof `tests/m6/prove-polyglot-stack.sh` (to create) |
 | M7 optional manifest envelope | Deferred by decision | none |
+| C1 downstream conformance suite | Not started | `nix run .#conformance` (to create) |
+| C2 de-milestone product surface | Not started | repo-wide rename under C1 guard |
 
 Notes:
 
@@ -42,6 +44,11 @@ This continuation plan covers milestone work through M7 and keeps M0 constraints
 *5. M5: installable downstream wrapper hardening.*
 *6. M6: polyglot example.*
 *7. M7: optional manifest envelope (only if triggered by concrete need).*
+
+After the capability line (M1-M6; M7 deferred) is complete, a **Consolidation Phase**
+(C1-C2) retires development scaffolding from the product: a first-class downstream
+conformance suite replaces the ad hoc shell proofs, and a de-milestoning pass removes
+`mX` vocabulary from every consumer-observable surface. See "Consolidation Phase" below.
 
 The optional runtime adapter protocol remains deferred beyond this plan's main M1-M7
 line. It is included as an appendix because RFC v2 lists it as a possible future
@@ -348,6 +355,176 @@ materialised views.
 ### Dependencies
 
 - None blocking; intentionally deferred.
+
+## Consolidation Phase (Post-Implementation)
+
+### Why A Consolidation Phase Exists
+
+Milestone identifiers (`m0`, `m1`, `m2`, `pre-m1`, ...) are *project-management* artifacts:
+they record the order work landed. They are not *product* concepts. A shipped framework
+must be named by capability and contract, not by the sprint that delivered a capability.
+Two debts have accumulated and must be paid once the capability line is done:
+
+1. `mX` names have leaked across the repository, including into consumer-observable and
+   admission-gating surfaces. The clearest symptom: the admission contract strings are
+   `nixfied-toolchain:m2c:1` / `nixfied-runtime-abi:m2c:1` — they have churned `m0 -> m2c`
+   across milestones, which RFC v2 explicitly forbids ("should not churn for rendered docs
+   or non-semantic compiler changes"). The state epoch is `nixfied-m0`, the helper closure
+   is `m0-helper`, model `maturity` is `m0`, and the example is `m0-minimal`. Milestone
+   progress is being conflated with contract versioning and product identity.
+2. End-to-end behavior is proved by a "bunch of shell scripts" (`tests/mX/prove-*.sh`).
+   For a framework of this capability that is not acceptable as the primary acceptance
+   gate: shell `grep`-assertions are brittle, give no structured reporting, share no
+   fixture model, and do not actually simulate a real downstream adopter's repository.
+
+The phase is two milestones, executed **C1 then C2**. C1 builds the real conformance
+suite first so that C2's renames are provably behavior-preserving (green suite before and
+after). This inverts the order the debts were listed in, deliberately: never run a
+repository-wide rename without an executable safety net already in place.
+
+### Scope Boundary For The Whole Phase
+
+- No new runtime or model *capability*. This phase is naming + test-architecture only.
+- The one intentional behavior change is the contract-version rename in C2 (old models
+  stop admitting), which is the correct, documented consequence of exact-match ABI policy.
+- Historical records keep their milestone names: `RFC_v2_implementation_plan_M*.md`, this
+  file, and git history are development history and are *not* rewritten. Milestone
+  vocabulary is retired only from the live product surface, not from the project's memory.
+
+## Consolidation C1: Downstream Conformance Suite
+
+### Product Purpose
+
+Replace the ad hoc end-to-end shell proofs with a first-class, black-box conformance
+harness that simulates a real downstream project adopting and operating Nixfied purely
+through public surfaces, with structured fixtures, golden artifacts, and machine-readable
+reporting.
+
+### Strict Boundary
+
+Included:
+
+- A dedicated Rust harness crate (working name `nixfied-conformance`) exposed as
+  `nix run .#conformance` and wired as the single end-to-end entry of `nix flake check`.
+- A **downstream-repo fixture**: the harness scaffolds a throwaway git repository in a
+  temp dir, pins `nixfied` as a flake input (a `path:` pin to the checkout under test),
+  runs the **real installer**, then drives only public surfaces from that point on
+  (`nix build .#model`, the runtime binary, operator-observable registry/summary/views).
+- **Scenarios as declarative data**, not scripts. Each scenario names a downstream model
+  declaration and its expected observable outcome: lifecycle event sequence, registry rows
+  (runs/services/processes/ports/events/leases/cleanups), summary shape, endpoint-ownership
+  verdict, and cleanup result. The harness runs all scenarios through one uniform engine.
+- **Golden / snapshot artifacts** for summaries, `schema`/`docs`/`capabilities` views, and
+  event sequences, with a documented `--update-goldens` workflow.
+- **Structured JSON reporting** per scenario: pass/fail, reason, timing, and the computed
+  model hash, suitable for CI consumption.
+- Migration of the existing `tests/mX/prove-*.sh` end-to-end checks into harness scenarios,
+  after which those shell scripts are deleted.
+
+Excluded:
+
+- White-box crate tests. The per-crate `#[test]` unit/integration tests stay as they are;
+  they legitimately test internals. C1 only replaces the *black-box end-to-end* layer.
+- Any harness access to `nixfied-model` / `nixfied-runtime` internals for behavior
+  assertions. The harness asserts only on operator-observable surfaces — that is what makes
+  it a real usage simulation rather than a privileged white-box test. (Reading the registry
+  SQLite and summary JSON is allowed: those are documented operator surfaces.)
+
+### Design Principles
+
+- **Public-surface contract is enforced structurally**, e.g. the harness crate does not
+  depend on the internal crates as libraries; it shells the built `nixfied` binary the way
+  an operator would.
+- **One toolchain.** The harness is Rust to match the runtime; no second test language.
+- **Scenarios own their fixtures.** Adding a scenario adds data + golden files, not a new
+  bespoke script.
+
+### Sequencing: Interim Shell Proofs, Then One Strong Suite
+
+Each capability milestone (M3, M4, M5, M6) keeps shipping its own `tests/mX/prove-*.sh`
+script as **interim, intentionally weak** coverage while that milestone is in flight. The
+shell proofs exist to catch gross regressions during development; they are explicitly not
+the final acceptance gate. C1 is built **once the whole capability line (M1-M6) is
+implemented and weakly proved this way**, not incrementally per milestone.
+
+At that point C1 defines the meaningful, strong scenarios on top of real, installable
+**example/simulation projects** — downstream-shaped repositories that the harness installs
+the framework into and then exercises end to end (minimal service, postgres adapter,
+workflow graph, slot isolation, cancellation/GC, install upgrade, polyglot). When a
+scenario covers what a shell proof covered, that shell proof is migrated into the scenario
+and deleted. Concretely:
+
+- Subsumes the M5 upgrade proof: install + non-destructive upgrade become conformance
+  scenarios rather than a separate `tests/m5/` script.
+- Becomes the home for the M3/M4/M6 end-to-end proofs (postgres adapter, workflow graph,
+  polyglot). Their interim `tests/m3|m4|m6/prove-*.sh` scripts are superseded and removed
+  only when the corresponding conformance scenario exists and is green.
+
+### Proof Of The Suite Itself
+
+- `nix run .#conformance` runs green across all migrated scenarios.
+- `nix flake check` invokes the suite and fails on any scenario regression.
+- A deliberately broken scenario fixture makes the suite fail with a structured reason
+  (negative self-test).
+
+### Dependencies
+
+- Lands after the full capability line (M1-M6) is implemented and weakly proved by interim
+  shell scripts. C1 is a single consolidation effort, not bootstrapped or grown per
+  milestone — its value is defining strong scenarios over the complete capability set on
+  real installable example projects.
+
+## Consolidation C2: De-Milestone The Product Surface
+
+### Product Purpose
+
+Remove `mX` vocabulary from every consumer-observable and internal-but-product surface,
+and split the three concerns that milestone numbers currently conflate: **contract
+version**, **product identity**, and **development history**.
+
+### Classification Rule (drives every rename)
+
+| Surface (current) | Class | Target |
+| --- | --- | --- |
+| `nixfied-toolchain:m2c:1`, `nixfied-runtime-abi:m2c:1` (`nix/spec/constants.nix`, `constants.rs`) | Contract version | Milestone-free monotonic version, e.g. `nixfied-runtime-abi:1`, bumped only on real breaking change |
+| `stateEpoch = "nixfied-m0"` (`nix/modules/state.nix`), `maturity = "m0"` (`derive.nix`) | Contract/identity | Real epoch + maturity tokens decoupled from milestones |
+| `m0-helper` / `nixfied-m0-helper` closure + execId (`nix/lib/closures.nix`, `derive.nix`) | Product identity | Capability name (e.g. `synthetic-helper`) |
+| `m0-placeholder` source default (`nix/modules/source.nix`) | Product identity | Capability/intent name |
+| `examples/m0-minimal`, flake attrs `m0-minimal-model` / `m0MinimalModel` | Public consumer surface | `examples/minimal`, `minimal-model` |
+| `validate_m0` (`validation.rs`), `records::m0` (`records.rs`), `m0_*.rs` test files | Internal symbols | Capability names (`validate`, contract-named constructors, `admission.rs`, ...) |
+| `tests/m0|pre-m1|m1|m2/` dirs | Test layout | Folded into C1 conformance scenarios |
+| `RFC_v2_implementation_plan_M*.md`, this file, git history, commit messages | Development history | **Unchanged** — milestone names are correct here |
+
+### Contract-Version Policy (the one behavior change)
+
+- Define a versioning scheme independent of milestones: `runtimeAbi` and `toolchainId`
+  carry an integer that increments **only** on a real breaking change to the
+  model/executor contract, never per milestone or per docs rebuild.
+- The Nix constant and the Rust constant change in lockstep; the generated model must still
+  match the runtime exactly. A conformance scenario asserts admission succeeds on the new
+  value and refuses a model carrying the old value (`RUNTIME_ABI_MISMATCH`).
+- `stateEpoch` becomes a real epoch token with the existing cross-epoch refusal stance
+  preserved.
+
+### Execution Discipline
+
+- Land **after C1 is green**. Run the conformance suite before and after; for every rename
+  except the intentional contract-version bump, the suite output must be identical.
+- Do it as one coherent, reviewable refactor (or a tight sequence) so the repository is
+  never half-renamed. No `mX` token may remain in any non-history file at the end.
+- Add a guard (e.g. a conformance/CI check or a simple repo lint) that fails if `mX`
+  milestone tokens reappear in product surfaces, so the debt cannot silently return.
+
+### Proof
+
+- Conformance suite green before and after, with only the documented ABI-mismatch scenario
+  changing.
+- Repo-wide check: no `\bm[0-9]\b` / `:mX:` / `pre-m1` tokens outside history files.
+- Old-ABI model is refused; new-ABI model admits.
+
+### Dependencies
+
+- Requires C1 (the suite is the safety net) and the completed capability line.
 
 ## Appendix: Optional Runtime Adapter Protocol
 
