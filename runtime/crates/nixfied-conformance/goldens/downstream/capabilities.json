@@ -1,0 +1,1 @@
+{"environments":["dev"],"services":["api","postgres","worker"],"slots":[0,1],"surfaces":["model","schema","docs","capabilities","check","run","ps","down","clean"],"tasks":["ping-api","ping-worker","smoke-query"],"workflows":["release"]}
