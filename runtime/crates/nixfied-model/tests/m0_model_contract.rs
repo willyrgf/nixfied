@@ -461,17 +461,69 @@ fn non_empty_secrets_are_rejected() {
     );
 }
 
-#[test]
-fn non_empty_workflows_are_rejected() {
-    let mut value = valid_model_json();
-    value["workflows"]["deferred"] = json!({ "workflowId": "deferred" });
-    let model: Model = serde_json::from_value(value).expect("model should deserialize");
+fn with_workflow(value: &mut Value, nodes: Value) {
+    value["workflows"]["pipeline"] = json!({
+        "workflowId": "pipeline",
+        "servicesRequired": ["synthetic"],
+        "nodes": nodes,
+    });
+    value["capabilities"]["workflows"] = json!(["pipeline"]);
+}
 
+#[test]
+fn accepts_a_bounded_acyclic_workflow() {
+    let mut value = valid_model_json();
+    with_workflow(
+        &mut value,
+        json!([
+            { "nodeId": "first", "taskId": "smoke", "dependsOn": [] },
+            { "nodeId": "second", "taskId": "smoke", "dependsOn": ["first"] }
+        ]),
+    );
+    let model: Model = serde_json::from_value(value).expect("model should deserialize");
+    model
+        .validate_m0()
+        .expect("a bounded acyclic workflow is valid");
+}
+
+#[test]
+fn rejects_cyclic_workflow() {
+    let mut value = valid_model_json();
+    with_workflow(
+        &mut value,
+        json!([
+            { "nodeId": "a", "taskId": "smoke", "dependsOn": ["b"] },
+            { "nodeId": "b", "taskId": "smoke", "dependsOn": ["a"] }
+        ]),
+    );
+    let model: Model = serde_json::from_value(value).expect("model should deserialize");
+    match model
+        .validate_m0()
+        .expect_err("cyclic workflow must be rejected")
+    {
+        ValidationError::UnsupportedValue { field, .. } => {
+            assert_eq!(field, "workflows.nodes.dependsOn")
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn workflow_nodes_must_reference_declared_tasks() {
+    let mut value = valid_model_json();
+    with_workflow(
+        &mut value,
+        json!([{ "nodeId": "n", "taskId": "ghost", "dependsOn": [] }]),
+    );
+    let model: Model = serde_json::from_value(value).expect("model should deserialize");
     assert_eq!(
         model
             .validate_m0()
-            .expect_err("workflows are deferred to M4"),
-        ValidationError::MustBeEmpty { field: "workflows" }
+            .expect_err("workflow node task must be declared"),
+        ValidationError::UndeclaredReference {
+            reference_kind: "workflow.node.taskId",
+            id: "ghost".to_string(),
+        }
     );
 }
 

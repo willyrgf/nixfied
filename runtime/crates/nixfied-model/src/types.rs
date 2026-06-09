@@ -475,6 +475,19 @@ pub struct ExitPolicy {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WorkflowSpec {
     pub workflow_id: String,
+    /// Services that must be started and ready before any node runs.
+    pub services_required: Vec<String>,
+    /// Bounded acyclic dependency graph of task nodes.
+    pub nodes: Vec<WorkflowNode>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowNode {
+    pub node_id: String,
+    pub task_id: String,
+    /// Other node ids in the same workflow that must succeed first.
+    pub depends_on: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
