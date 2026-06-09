@@ -1017,8 +1017,6 @@ fn validate_references(model: &Model) -> Result<(), ValidationError> {
         .map(String::as_str)
         .collect::<BTreeSet<_>>();
     let mut declared_operations = BTreeSet::new();
-    let mut probe_ids = BTreeSet::new();
-    let mut endpoint_ids = BTreeSet::new();
 
     for exec in model.execs.values() {
         if !closure_ids.contains(exec.closure_id.as_str()) {
@@ -1046,9 +1044,15 @@ fn validate_references(model: &Model) -> Result<(), ValidationError> {
     }
 
     for service in model.services.values() {
+        // Endpoint and probe ids are service-local: a service may reference only
+        // the probes/endpoints it declares, matching how the runtime resolves
+        // them within the ServiceSpec. Fail closed - a cross-service reference is
+        // rejected at admission, never surfaced at execution.
+        let mut endpoint_ids = BTreeSet::new();
         for endpoint in &service.endpoints {
             endpoint_ids.insert(endpoint.endpoint_id.as_str());
         }
+        let mut probe_ids = BTreeSet::new();
         for probe in &service.probes {
             probe_ids.insert(probe.probe_id.as_str());
         }
@@ -1082,6 +1086,19 @@ fn validate_references(model: &Model) -> Result<(), ValidationError> {
                 reference_kind: "service.readinessProbe",
                 id: service.readiness_probe.clone(),
             });
+        }
+        for probe in &service.probes {
+            match &probe.target {
+                ProbeTarget::TcpConnect { endpoint_id }
+                | ProbeTarget::HttpGet { endpoint_id, .. } => {
+                    if !endpoint_ids.contains(endpoint_id.as_str()) {
+                        return Err(ValidationError::UndeclaredReference {
+                            reference_kind: "probe.endpointId",
+                            id: endpoint_id.clone(),
+                        });
+                    }
+                }
+            }
         }
     }
 
@@ -1124,22 +1141,6 @@ fn validate_references(model: &Model) -> Result<(), ValidationError> {
                     reference_kind: "environment.tasks",
                     id: task_id.clone(),
                 });
-            }
-        }
-    }
-
-    for service in model.services.values() {
-        for probe in &service.probes {
-            match &probe.target {
-                ProbeTarget::TcpConnect { endpoint_id }
-                | ProbeTarget::HttpGet { endpoint_id, .. } => {
-                    if !endpoint_ids.contains(endpoint_id.as_str()) {
-                        return Err(ValidationError::UndeclaredReference {
-                            reference_kind: "probe.endpointId",
-                            id: endpoint_id.clone(),
-                        });
-                    }
-                }
             }
         }
     }
