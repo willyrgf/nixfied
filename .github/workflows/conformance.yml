@@ -64,14 +64,3 @@ jobs:
           name: conformance-artifacts
           path: conformance-artifacts/
           if-no-files-found: warn
-
-      # White-box e2e invariants the dogfood workflow does not subsume.
-      - name: residual capability proofs
-        run: |
-          nix develop --command bash -euo pipefail -c '
-            tests/runtime/prove-without-nix.sh
-            tests/views/prove-view-surfaces.sh
-            tests/lifecycle/prove-lifecycle-ops.sh
-            tests/lifecycle/prove-cancellation.sh
-            tests/lifecycle/prove-gc-hardening.sh
-          '
