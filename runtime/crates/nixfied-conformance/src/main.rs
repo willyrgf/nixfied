@@ -139,7 +139,8 @@ fn run_check(args: &Args) -> Result<Observed, String> {
             args,
             Some("release"),
             &[],
-            &["db-check", "api-check", "worker-check"],
+            // `gate` is a task that depends on all three services (api/worker/postgres).
+            &["db-check", "api-check", "worker-check", "gate"],
         ),
         "slots" => slots(args),
         "negative" => negative(args),

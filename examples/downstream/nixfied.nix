@@ -209,6 +209,21 @@ in
     dependsOnServicesReady = [ "worker" ];
     logRefs = [ "task.ping-worker" ];
   };
+  # A release gate that requires the whole stack ready before it runs: it depends
+  # on all three services (a task may depend on more than one). The first
+  # dependency (api) is the primary, providing ${port}; it pings the api once the
+  # database and worker are also up.
+  nixfied.tasks.release-gate = {
+    operationId = "task.release-gate.run";
+    execId = "api";
+    args = taskArgs "api";
+    dependsOnServicesReady = [
+      "api"
+      "worker"
+      "postgres"
+    ];
+    logRefs = [ "task.release-gate" ];
+  };
 
   # Add the api/worker to the `dev` environment (merges with the adapter's
   # `postgres` service and `smoke-query` task).
@@ -245,6 +260,14 @@ in
         nodeId = "worker-check";
         taskId = "ping-worker";
         dependsOn = [ "db-check" ];
+      }
+      {
+        nodeId = "gate";
+        taskId = "release-gate";
+        dependsOn = [
+          "api-check"
+          "worker-check"
+        ];
       }
     ];
   };

@@ -755,7 +755,7 @@ fn dependent_task_runs_after_owned_service_is_ready() {
         &fixture.model,
         &fixture.placement,
         &mut fixture.registry,
-        &service,
+        &[&service],
         "smoke",
     )
     .expect("ready dependent task should run");
@@ -821,7 +821,7 @@ fn dependent_task_refuses_to_run_before_service_ready() {
         &fixture.model,
         &fixture.placement,
         &mut fixture.registry,
-        &service,
+        &[&service],
         "smoke",
     )
     .expect_err("task should wait for probe-ready service");
@@ -1049,7 +1049,7 @@ fn cancellation_interrupts_task_and_terminates_task_group() {
         &fixture.model,
         &fixture.placement,
         &mut fixture.registry,
-        &service,
+        &[&service],
         "smoke",
         &cancellation,
     )
@@ -1163,7 +1163,7 @@ fn task_timeout_records_canceled_summary_and_terminates_task_group() {
         &fixture.model,
         &fixture.placement,
         &mut fixture.registry,
-        &service,
+        &[&service],
         "smoke",
     )
     .expect_err("task should time out as cancellation");

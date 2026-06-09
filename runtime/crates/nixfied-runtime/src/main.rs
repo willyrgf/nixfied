@@ -327,11 +327,39 @@ fn run_m0_admitted(
                 format!("task {task_id} is missing"),
             )
         })?;
-        let dependency = match task.depends_on_services_ready.first() {
-            Some(name) => started.iter().find(|service| &service.service_name == name),
-            None => started.first(),
-        };
-        let Some(dependency) = dependency else {
+        // Resolve every service this task depends on to its started instance
+        // (the first is the primary, providing ${port}/${host}); a task without
+        // declared dependencies attaches to the first started service.
+        let mut dep_indices = Vec::new();
+        let mut missing_dependency = None;
+        if task.depends_on_services_ready.is_empty() {
+            if !started.is_empty() {
+                dep_indices.push(0);
+            }
+        } else {
+            for name in &task.depends_on_services_ready {
+                match started
+                    .iter()
+                    .position(|service| &service.service_name == name)
+                {
+                    Some(index) => dep_indices.push(index),
+                    None => {
+                        missing_dependency = Some(name.clone());
+                        break;
+                    }
+                }
+            }
+        }
+        if let Some(name) = missing_dependency {
+            let error = RuntimeError::new(
+                nixfied_runtime::ErrorCode::ModelAdmission,
+                format!("task {task_id} depends on service {name} which was not started"),
+            );
+            teardown(&mut started, &mut registry, options.timeout_ms, false);
+            stop_lease(lease)?;
+            return Err(error);
+        }
+        if dep_indices.is_empty() {
             let error = RuntimeError::new(
                 nixfied_runtime::ErrorCode::ModelAdmission,
                 format!("task {task_id} has no started service to depend on"),
@@ -339,15 +367,18 @@ fn run_m0_admitted(
             teardown(&mut started, &mut registry, options.timeout_ms, false);
             stop_lease(lease)?;
             return Err(error);
-        };
-        match run_dependent_task_cancellable(
+        }
+        let dependencies: Vec<&StartedService> =
+            dep_indices.iter().map(|&index| &started[index]).collect();
+        let task_result = run_dependent_task_cancellable(
             model,
             &placement,
             &mut registry,
-            dependency,
+            &dependencies,
             task_id,
             cancellation,
-        ) {
+        );
+        match task_result {
             Ok(task_run) => {
                 node_results.push(NodeResult {
                     node_id: node.node_id.clone(),

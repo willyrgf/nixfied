@@ -39,24 +39,28 @@ pub fn run_dependent_task(
     model: &Model,
     placement: &HostPlacement,
     registry: &mut Registry,
-    service: &StartedService,
+    dependencies: &[&StartedService],
     task_id: &str,
 ) -> RuntimeResult<TaskRun> {
     run_dependent_task_cancellable(
         model,
         placement,
         registry,
-        service,
+        dependencies,
         task_id,
         &CancellationToken::new(),
     )
 }
 
+/// Run a bounded task gated on the readiness of every service it declares in
+/// `dependsOnServicesReady`. `dependencies` lists the started services it depends
+/// on; the first is the primary, providing `${port}`/`${host}` substitution and
+/// the run/source/state context.
 pub fn run_dependent_task_cancellable(
     model: &Model,
     placement: &HostPlacement,
     registry: &mut Registry,
-    service: &StartedService,
+    dependencies: &[&StartedService],
     task_id: &str,
     cancellation: &CancellationToken,
 ) -> RuntimeResult<TaskRun> {
@@ -67,7 +71,13 @@ pub fn run_dependent_task_cancellable(
             format!("task {task_id} is missing"),
         )
     })?;
-    ensure_task_dependencies(registry, task, service)?;
+    let primary = dependencies.first().ok_or_else(|| {
+        RuntimeError::new(
+            ErrorCode::ModelAdmission,
+            format!("task {task_id} has no service context to run in"),
+        )
+    })?;
+    ensure_task_dependencies(registry, task, dependencies)?;
     let exec = model.execs.get(&task.exec_id).ok_or_else(|| {
         RuntimeError::new(
             ErrorCode::ModelAdmission,
@@ -80,8 +90,8 @@ pub fn run_dependent_task_cancellable(
     let stderr_path = placement
         .logs_dir
         .join(format!("task.{task_id}.stderr.log"));
-    let args = task_args(exec, task, &service.selected_endpoint, &service.state_root);
-    let command_cwd = resolve_exec_cwd(&service.source_root, &exec.cwd)?;
+    let args = task_args(exec, task, &primary.selected_endpoint, &primary.state_root);
+    let command_cwd = resolve_exec_cwd(&primary.source_root, &exec.cwd)?;
     let command_json = serde_json::to_string(&TaskCommandRecord {
         task_id,
         executable: exec.executable.as_str(),
@@ -96,18 +106,18 @@ pub fn run_dependent_task_cancellable(
     let pid = child.id();
     let pgid = process_group(pid)?
         .ok_or_else(|| RuntimeError::new(ErrorCode::ProcEscape, "task process disappeared"))?;
-    let process_key = format!("process-{}-task-{task_id}-{pid}-{pgid}", service.run_id);
+    let process_key = format!("process-{}-task-{task_id}-{pid}-{pgid}", primary.run_id);
     let start_identity = process_start_identity(pid, pgid, platform_start_identity(pid).as_deref());
     if let Err(error) = record_task_started(
         registry,
         &TaskProcessRecord {
-            run_id: &service.run_id,
+            run_id: &primary.run_id,
             process_key: &process_key,
             pid,
             pgid,
             start_identity: &start_identity,
             command_json: &command_json,
-            computed_model_hash: &service.computed_model_hash,
+            computed_model_hash: &primary.computed_model_hash,
         },
     ) {
         let _ = terminate_process_group(pgid, 1000);
@@ -121,10 +131,10 @@ pub fn run_dependent_task_cancellable(
         exec.timeout_ms,
         cancellation,
         TaskCancellationContext {
-            run_id: &service.run_id,
+            run_id: &primary.run_id,
             task_id,
             process_key: &process_key,
-            computed_model_hash: &service.computed_model_hash,
+            computed_model_hash: &primary.computed_model_hash,
         },
     )?;
     let canceled = outcome.timed_out || outcome.canceled;
@@ -163,9 +173,9 @@ pub fn run_dependent_task_cancellable(
         .map_err(|error| RuntimeError::new(ErrorCode::ModelAdmission, error.to_string()))?;
     mark_task_finished(
         registry,
-        &service.run_id,
+        &primary.run_id,
         &process_key,
-        &service.computed_model_hash,
+        &primary.computed_model_hash,
         task_terminal_status(success, canceled),
         &payload_json,
     )?;
@@ -196,18 +206,23 @@ fn task_terminal_status(success: bool, canceled: bool) -> TaskTerminalStatus {
     }
 }
 
+/// Verify every service the task declares as a dependency is among the started
+/// services and is probe-ready. A task may depend on more than one service.
 fn ensure_task_dependencies(
     registry: &Registry,
     task: &TaskSpec,
-    service: &StartedService,
+    dependencies: &[&StartedService],
 ) -> RuntimeResult<()> {
     for service_name in &task.depends_on_services_ready {
-        if service_name != &service.service_name {
-            return Err(RuntimeError::new(
-                ErrorCode::ModelAdmission,
-                format!("task dependency {service_name} is not the started synthetic service"),
-            ));
-        }
+        let service = dependencies
+            .iter()
+            .find(|service| &service.service_name == service_name)
+            .ok_or_else(|| {
+                RuntimeError::new(
+                    ErrorCode::ModelAdmission,
+                    format!("task dependency {service_name} was not among the started services"),
+                )
+            })?;
         ensure_service_instance_probe_ready(registry, service_name, &service.service_instance_id)?;
     }
     Ok(())
