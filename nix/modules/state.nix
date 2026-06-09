@@ -6,13 +6,13 @@ in
   options.nixfied.state = {
     markerIdentity = mkOption {
       type = types.nonEmptyStr;
-      default = "nixfied-m0";
+      default = "nixfied-state";
       description = "Marker identity written into M0 state ownership metadata.";
     };
 
     stateEpoch = mkOption {
       type = types.nonEmptyStr;
-      default = "m0";
+      default = "1";
       description = "M0 state epoch.";
     };
 

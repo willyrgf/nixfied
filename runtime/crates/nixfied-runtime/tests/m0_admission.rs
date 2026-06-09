@@ -12,8 +12,8 @@ use serde_json::{Value, json};
 fn fixture_model() -> Value {
     json!({
         "modelVersion": 1,
-        "toolchainId": "nixfied-toolchain:m2c:1",
-        "runtimeAbi": "nixfied-runtime-abi:m2c:1",
+        "toolchainId": "nixfied-toolchain:1",
+        "runtimeAbi": "nixfied-runtime-abi:1",
         "generator": {
             "name": "nixfied",
             "version": "m0",
@@ -296,7 +296,7 @@ fn m0_surfaces() -> Vec<Value> {
                 "outputSchema": {},
                 "exitClasses": ["ok", "error"],
                 "evaluationPermission": "never",
-                "maturity": "m0"
+                "maturity": "stable"
             })
         })
         .collect()

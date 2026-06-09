@@ -66,7 +66,7 @@ pub fn derive_host_placement_for_slot(
     run_id: &str,
     state_base: impl AsRef<Path>,
 ) -> RuntimeResult<HostPlacement> {
-    validate_m0_placement_templates(model)?;
+    validate_placement_templates(model)?;
     let vars = TemplateVars {
         project_id: &model.project.project_id,
         environment: selected_slot.environment,
@@ -160,7 +160,7 @@ fn relative_template_path(
     Ok(path)
 }
 
-fn validate_m0_placement_templates(model: &Model) -> RuntimeResult<()> {
+fn validate_placement_templates(model: &Model) -> RuntimeResult<()> {
     for (field, expected, actual) in [
         (
             "placement.stateRootTemplate",

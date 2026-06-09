@@ -386,8 +386,8 @@ fn clean_reconciles_stale_refs_before_marker_owned_delete() {
               summary_path
             ) VALUES (
               'run-stale', 'dev', 0, 'service-starting', '/nix/store/test-model/model.json',
-              'computed-hash', 'nixfied-runtime-abi:m2c:1',
-              'nixfied-toolchain:m2c:1', '{}', '{}', '[]', NULL
+              'computed-hash', 'nixfied-runtime-abi:1',
+              'nixfied-toolchain:1', '{}', '{}', '[]', NULL
             );
             INSERT INTO services (
               service_instance_id, environment, slot, service_name,
@@ -577,8 +577,8 @@ fn clean_marks_active_port_stale_after_owner_process_is_proven_dead() {
               summary_path
             ) VALUES (
               'run-stale-port', 'dev', 0, 'service-starting', '/nix/store/test-model/model.json',
-              'computed-hash', 'nixfied-runtime-abi:m2c:1',
-              'nixfied-toolchain:m2c:1', '{}', '{}', '[]', NULL
+              'computed-hash', 'nixfied-runtime-abi:1',
+              'nixfied-toolchain:1', '{}', '{}', '[]', NULL
             );
             INSERT INTO services (
               service_instance_id, environment, slot, service_name,
@@ -758,8 +758,8 @@ fn add_slot_one(value: &mut Value, start: u16, end: u16) {
 fn fixture_model() -> Value {
     json!({
         "modelVersion": 1,
-        "toolchainId": "nixfied-toolchain:m2c:1",
-        "runtimeAbi": "nixfied-runtime-abi:m2c:1",
+        "toolchainId": "nixfied-toolchain:1",
+        "runtimeAbi": "nixfied-runtime-abi:1",
         "generator": {
             "name": "nixfied",
             "version": "m0",
@@ -1042,7 +1042,7 @@ fn m0_surfaces() -> Vec<Value> {
                 "outputSchema": {},
                 "exitClasses": ["ok", "error"],
                 "evaluationPermission": "never",
-                "maturity": "m0"
+                "maturity": "stable"
             })
         })
         .collect()

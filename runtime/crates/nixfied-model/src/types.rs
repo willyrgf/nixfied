@@ -164,7 +164,6 @@ pub enum EvaluationPermission {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SurfaceMaturity {
-    M0,
     Experimental,
     Stable,
 }

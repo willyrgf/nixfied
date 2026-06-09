@@ -1,4 +1,4 @@
-use nixfied_model::{MODEL_VERSION, Model, RUNTIME_ABI, TOOLCHAIN_ID, ValidateM0, ValidationError};
+use nixfied_model::{MODEL_VERSION, Model, RUNTIME_ABI, TOOLCHAIN_ID, Validate, ValidationError};
 use serde_json::{Value, json};
 
 fn valid_model_json() -> Value {
@@ -270,7 +270,7 @@ fn m0_surfaces() -> Vec<Value> {
                 "outputSchema": {},
                 "exitClasses": ["ok", "error"],
                 "evaluationPermission": "never",
-                "maturity": "m0"
+                "maturity": "stable"
             })
         })
         .collect()
@@ -325,7 +325,7 @@ fn lifecycle_op_mut<'a>(
 fn parses_and_validates_contract() {
     let model = parse_valid_model();
     model
-        .validate_m0()
+        .validate()
         .expect("valid model should pass structural validation");
 
     let classes = model.services["synthetic"]
@@ -358,7 +358,7 @@ fn accepts_arbitrary_service_and_exec_names() {
 
     let model: Model = serde_json::from_value(value).expect("model should deserialize");
     model
-        .validate_m0()
+        .validate()
         .expect("multi-service / multi-exec models are valid");
 }
 
@@ -368,9 +368,7 @@ fn prepare_operation_may_bind_an_exec() {
     let mut model = parse_valid_model();
     lifecycle_op_mut(&mut model, "service.synthetic.prepare").exec_id =
         Some("m0-helper".to_string());
-    model
-        .validate_m0()
-        .expect("prepare may bind a generic exec");
+    model.validate().expect("prepare may bind a generic exec");
 }
 
 #[test]
@@ -380,7 +378,7 @@ fn capabilities_services_must_mirror_model() {
     let model: Model = serde_json::from_value(value).expect("model should deserialize");
 
     match model
-        .validate_m0()
+        .validate()
         .expect_err("capabilities must mirror declared services")
     {
         ValidationError::UnsupportedValue { field, .. } => {
@@ -397,7 +395,7 @@ fn old_single_surface_contract_is_rejected() {
     model.surfaces.retain(|surface| surface.name == "model");
 
     match model
-        .validate_m0()
+        .validate()
         .expect_err("runtime surfaces must be the full set")
     {
         ValidationError::UnsupportedValue { field, .. } => assert_eq!(field, "surfaces"),
@@ -419,7 +417,7 @@ fn validates_explicit_slot_placement_range() {
 
     let model: Model = serde_json::from_value(value).expect("model should deserialize");
     model
-        .validate_m0()
+        .validate()
         .expect("explicit slot placements should cover the slot range");
 }
 
@@ -435,13 +433,13 @@ fn unknown_top_level_field_is_invalid() {
 #[test]
 fn abi_mismatch_is_contract_error() {
     let mut model = parse_valid_model();
-    model.runtime_abi = "nixfied-runtime-abi:m0:1".to_string();
+    model.runtime_abi = "nixfied-runtime-abi:m2c:1".to_string();
 
     assert_eq!(
-        model.validate_m0().expect_err("ABI mismatch should fail"),
+        model.validate().expect_err("ABI mismatch should fail"),
         ValidationError::RuntimeAbi {
             expected: RUNTIME_ABI,
-            actual: "nixfied-runtime-abi:m0:1".to_string(),
+            actual: "nixfied-runtime-abi:m2c:1".to_string(),
         }
     );
 }
@@ -456,7 +454,7 @@ fn non_empty_secrets_are_rejected() {
     });
 
     assert_eq!(
-        model.validate_m0().expect_err("secrets are still deferred"),
+        model.validate().expect_err("secrets are still deferred"),
         ValidationError::MustBeEmpty { field: "secrets" }
     );
 }
@@ -482,7 +480,7 @@ fn accepts_a_bounded_acyclic_workflow() {
     );
     let model: Model = serde_json::from_value(value).expect("model should deserialize");
     model
-        .validate_m0()
+        .validate()
         .expect("a bounded acyclic workflow is valid");
 }
 
@@ -498,7 +496,7 @@ fn rejects_cyclic_workflow() {
     );
     let model: Model = serde_json::from_value(value).expect("model should deserialize");
     match model
-        .validate_m0()
+        .validate()
         .expect_err("cyclic workflow must be rejected")
     {
         ValidationError::UnsupportedValue { field, .. } => {
@@ -518,7 +516,7 @@ fn workflow_nodes_must_reference_declared_tasks() {
     let model: Model = serde_json::from_value(value).expect("model should deserialize");
     assert_eq!(
         model
-            .validate_m0()
+            .validate()
             .expect_err("workflow node task must be declared"),
         ValidationError::UndeclaredReference {
             reference_kind: "workflow.node.taskId",
@@ -534,7 +532,7 @@ fn host_absolute_placement_is_rejected() {
 
     assert_eq!(
         model
-            .validate_m0()
+            .validate()
             .expect_err("host absolute placement should fail"),
         ValidationError::HostAbsolutePath {
             field: "placement.stateRootTemplate",
@@ -552,7 +550,7 @@ fn closure_bindings_must_reference_declared_operations() {
 
     assert_eq!(
         model
-            .validate_m0()
+            .validate()
             .expect_err("undeclared operation binding should fail"),
         ValidationError::UnknownOperationBinding {
             binding: "workflow.deferred.run".to_string(),
@@ -570,9 +568,7 @@ fn execs_must_reference_declared_closures() {
         .closure_id = "ghost-closure".to_string();
 
     assert_eq!(
-        model
-            .validate_m0()
-            .expect_err("exec closure must be declared"),
+        model.validate().expect_err("exec closure must be declared"),
         ValidationError::UndeclaredReference {
             reference_kind: "exec.closureId",
             id: "ghost-closure".to_string(),
@@ -587,7 +583,7 @@ fn runtime_constraints_must_use_fail_collision_policy() {
 
     assert_eq!(
         model
-            .validate_m0()
+            .validate()
             .expect_err("only fail collision policy is supported"),
         ValidationError::UnsupportedValue {
             field: "runtimeConstraints.collisionPolicy",
@@ -603,7 +599,7 @@ fn lifecycle_must_bind_readiness_probe_on_ready() {
     lifecycle_op_mut(&mut model, "service.synthetic.ready").probe_id = None;
 
     match model
-        .validate_m0()
+        .validate()
         .expect_err("ready lifecycle must bind the readiness probe")
     {
         ValidationError::UnsupportedValue { field, .. } => {
@@ -624,7 +620,7 @@ fn lifecycle_must_have_full_generic_class_set() {
         .retain(|op| op.operation_id != "service.synthetic.clean");
 
     match model
-        .validate_m0()
+        .validate()
         .expect_err("full lifecycle contract requires clean declaration")
     {
         ValidationError::UnsupportedValue { field, actual, .. } => {
@@ -643,7 +639,7 @@ fn ready_and_health_must_remain_distinct_classes() {
 
     // Two ops now share the Ready class; the per-class uniqueness check fires.
     match model
-        .validate_m0()
+        .validate()
         .expect_err("health must not be conflated with readiness")
     {
         ValidationError::UnsupportedValue { field, .. } => assert_eq!(field, "lifecycle.class"),
@@ -662,7 +658,7 @@ fn health_policy_must_be_explicit() {
 
     assert_eq!(
         model
-            .validate_m0()
+            .validate()
             .expect_err("declared health uses an explicit typed policy"),
         ValidationError::UnsupportedValue {
             field: "services.healthPolicy",
@@ -679,7 +675,7 @@ fn clean_operation_stays_marker_gated_runtime_cleanup() {
 
     assert_eq!(
         model
-            .validate_m0()
+            .validate()
             .expect_err("clean must stay a runtime cleanup primitive"),
         ValidationError::UnsupportedValue {
             field: "lifecycle.clean.execId",
@@ -696,7 +692,7 @@ fn lifecycle_operation_ids_must_be_unique() {
         "service.synthetic.ready".to_string();
 
     match model
-        .validate_m0()
+        .validate()
         .expect_err("duplicate lifecycle operation IDs must be rejected")
     {
         ValidationError::UnsupportedValue { field, actual, .. } => {
