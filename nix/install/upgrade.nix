@@ -1,3 +1,15 @@
+# Nixfied upgrade surface, packaged as a shell application.
+# The repin script is embedded here (literal `${...}` is escaped as
+# `''${...}` for the Nix indented string); `nix run .#upgrade` runs it.
+{ pkgs }:
+pkgs.writeShellApplication {
+  name = "nixfied-upgrade";
+  runtimeInputs = [
+    pkgs.coreutils
+    pkgs.gnugrep
+    pkgs.nix
+  ];
+  text = ''
 set -euo pipefail
 
 # Nixfied upgrade surface.
@@ -30,11 +42,11 @@ take_value() {
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --root)
-      root="$(take_value "$1" "${2-}")"
+      root="$(take_value "$1" "''${2-}")"
       shift 2
       ;;
     --nixfied-url)
-      nixfied_url="$(take_value "$1" "${2-}")"
+      nixfied_url="$(take_value "$1" "''${2-}")"
       shift 2
       ;;
     --no-lock)
@@ -75,8 +87,8 @@ fi
 
 nix_escape() {
   local value="$1"
-  value="${value//\\/\\\\}"
-  value="${value//\"/\\\"}"
+  value="''${value//\\/\\\\}"
+  value="''${value//\"/\\\"}"
   printf '%s' "$value"
 }
 
@@ -95,9 +107,9 @@ if [[ -n "$nixfied_url" ]]; then
   while IFS= read -r line || [[ -n "$line" ]]; do
     # Compare on a whitespace-stripped form so we match the exact `nixfied.url`
     # assignment regardless of indentation/spacing, then re-emit it canonically.
-    stripped="${line//[[:space:]]/}"
+    stripped="''${line//[[:space:]]/}"
     if [[ "$stripped" == 'nixfied.url="'*'";'* ]]; then
-      indent="${line%%nixfied.url*}"
+      indent="''${line%%nixfied.url*}"
       printf '%snixfied.url = "%s";\n' "$indent" "$nixfied_url_escaped" >>"$rewritten"
       matches=$((matches + 1))
     else
@@ -122,7 +134,7 @@ fi
 if [[ "$update_lock" -eq 1 ]]; then
   if command -v nix >/dev/null 2>&1; then
     if nix flake update nixfied --flake "$root" >/dev/null 2>&1; then
-      changed="${changed:+$changed; }flake.lock (nixfied input)"
+      changed="''${changed:+$changed; }flake.lock (nixfied input)"
     else
       echo "warning: failed to refresh flake.lock for the nixfied input; run 'nix flake update nixfied' manually" >&2
     fi
@@ -143,3 +155,5 @@ if [[ -n "$preserved" ]]; then
   echo "preserved (project-owned): $preserved"
 fi
 echo "next: nix build .#model"
+  '';
+}

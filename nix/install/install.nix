@@ -1,3 +1,11 @@
+# Nixfied install surface, packaged as a shell application.
+# The scaffolding script is embedded here (literal `${...}` is escaped as
+# `''${...}` for the Nix indented string); `nix run .#install` runs it.
+{ pkgs }:
+pkgs.writeShellApplication {
+  name = "nixfied-install";
+  runtimeInputs = [ pkgs.coreutils ];
+  text = ''
 set -euo pipefail
 
 default_nixfied_url="github:willyrgf/nixfied"
@@ -23,19 +31,19 @@ take_value() {
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --root)
-      root="$(take_value "$1" "${2-}")"
+      root="$(take_value "$1" "''${2-}")"
       shift 2
       ;;
     --project-id)
-      project_id="$(take_value "$1" "${2-}")"
+      project_id="$(take_value "$1" "''${2-}")"
       shift 2
       ;;
     --name)
-      project_name="$(take_value "$1" "${2-}")"
+      project_name="$(take_value "$1" "''${2-}")"
       shift 2
       ;;
     --nixfied-url)
-      nixfied_url="$(take_value "$1" "${2-}")"
+      nixfied_url="$(take_value "$1" "''${2-}")"
       shift 2
       ;;
     -h | --help)
@@ -55,8 +63,8 @@ infer_name() {
   if [[ "$path" == "." ]]; then
     path="$PWD"
   fi
-  path="${path%/}"
-  path="${path##*/}"
+  path="''${path%/}"
+  path="''${path##*/}"
   if [[ -z "$path" ]]; then
     echo "could not infer project name from --root" >&2
     exit 2
@@ -78,8 +86,8 @@ fi
 
 nix_escape() {
   local value="$1"
-  value="${value//\\/\\\\}"
-  value="${value//\"/\\\"}"
+  value="''${value//\\/\\\\}"
+  value="''${value//\"/\\\"}"
   printf '%s' "$value"
 }
 
@@ -91,7 +99,7 @@ print_flake_snippet() {
   cat <<EOF
 inputs.nixfied.url = "$nixfied_url_escaped";
 
-packages.\${system}.model = nixfied.lib.\${system}.compileModel ./nixfied.nix;
+packages.\''${system}.model = nixfied.lib.\''${system}.compileModel ./nixfied.nix;
 EOF
 }
 
@@ -153,8 +161,8 @@ cat >"$root/flake.nix" <<EOF
     in
     {
       packages = forAllSystems (system: {
-        default = self.packages.\${system}.model;
-        model = nixfied.lib.\${system}.compileModel ./nixfied.nix;
+        default = self.packages.\''${system}.model;
+        model = nixfied.lib.\''${system}.compileModel ./nixfied.nix;
       });
     };
 }
@@ -177,3 +185,5 @@ if [[ -n "$skipped" ]]; then
   echo "skipped: $skipped"
 fi
 echo "next: nix build .#model"
+  '';
+}
