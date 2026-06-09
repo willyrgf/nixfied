@@ -141,14 +141,23 @@ nix develop --command bash -c 'cd runtime && cargo test --workspace'
 nix flake check
 
 # 3. Dogfood gate: nixfied runs its own conformance workflow.
+#    `nix run .#gate` rebuilds the runtime + self-model from the working tree,
+#    smoke-checks, then runs the workflow in a private throwaway state dir. Run it
+#    from the repo root after any significant change; forward args after `--`.
+nix run .#gate                    # or: nix run .#gate -- --timeout-ms 120000
+```
+
+The `gate` app is only a launcher (build → check → run); the orchestration is the
+runtime running its own workflow. The expanded form is what
+`.github/workflows/conformance.yml` runs:
+
+```sh
 rt="$(nix build .#nixfied-runtime --no-link --print-out-paths)/bin/nixfied-runtime"
 self="$(nix build .#self-model --no-link --print-out-paths)/model.json"
 "$rt" check --model "$self"
 NIXFIED_CONFORMANCE_CHECKOUT="$PWD" \
   "$rt" run --model "$self" --workflow conformance --timeout-ms 600000
-```
-
-`.github/workflows/conformance.yml` runs exactly this. There are no residual e2e
+``` There are no residual e2e
 shell proofs: lifecycle/cancellation/GC invariants are white-box cargo tests,
 SEAM-1 (the runtime never invokes Nix — proven by poisoning `PATH` with a failing
 fake `nix` and asserting it is never called) is the
