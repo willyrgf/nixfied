@@ -59,11 +59,26 @@
             ];
             text = builtins.readFile ./nix/install/upgrade.sh;
           };
+          # The conformance suite drives real `nix build` + the runtime binary, so
+          # it runs outside the nix-build sandbox via `nix run .#conformance`. It
+          # builds the harness/runtime from the checkout (default $PWD).
+          # Uses the host cargo toolchain (the workspace pins rust 1.91, newer than
+          # nixpkgs provides) and the host nix, the same way the shell proofs do.
+          nixfiedConformance = pkgs.writeShellApplication {
+            name = "nixfied-conformance";
+            runtimeInputs = [ pkgs.coreutils ];
+            text = ''
+              checkout="''${1:-$PWD}"
+              exec cargo run --manifest-path "$checkout/runtime/Cargo.toml" \
+                -p nixfied-conformance -- --checkout "$checkout"
+            '';
+          };
         in
         {
           default = m0MinimalModel;
           install = nixfiedInstall;
           upgrade = nixfiedUpgrade;
+          conformance = nixfiedConformance;
           m0-minimal-model = m0MinimalModel;
           postgres-model = postgresModel;
           workflow-model = workflowModel;
@@ -84,6 +99,11 @@
             program = "${self.packages.${system}.upgrade}/bin/nixfied-upgrade";
             meta.description = "Repin the Nixfied flake input without touching project-owned declarations";
           };
+          conformance = {
+            type = "app";
+            program = "${self.packages.${system}.conformance}/bin/nixfied-conformance";
+            meta.description = "Run the downstream conformance suite over public surfaces";
+          };
         }
       );
 
@@ -91,6 +111,10 @@
         { pkgs, system }:
         {
           m0-minimal-model = self.packages.${system}.m0-minimal-model;
+          # The conformance suite itself runs via `nix run .#conformance` (it
+          # drives real nix builds + the runtime binary, which the nix-build
+          # sandbox cannot host); here we at least gate that its wrapper builds.
+          conformance-app = self.packages.${system}.conformance;
           rust-workspace = pkgs.runCommand "nixfied-rust-workspace-check" { } ''
             mkdir -p "$out"
           '';
