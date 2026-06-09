@@ -2,11 +2,12 @@ use std::path::PathBuf;
 
 use nixfied_runtime::cancellation::{CancellationToken, ProcessSignalGuard};
 use nixfied_runtime::registry::{Registry, RegistryIdentity, RunLeaseHeartbeat};
+use nixfied_runtime::service::task::TaskRun;
 use nixfied_runtime::service::{
-    run_dependent_task_cancellable, run_synthetic_service_clean_for_slot,
-    start_synthetic_service_for_slot,
+    SelectedEndpoint, StartedService, run_dependent_task_cancellable, run_slot_clean,
+    start_service_for_slot,
 };
-use nixfied_runtime::slot::{first_candidate_port, select_slot};
+use nixfied_runtime::slot::select_slot;
 use nixfied_runtime::state::{
     StateIdentity, derive_host_placement_for_slot, materialize_run_roots, state_base_from_env,
     write_slot_marker,
@@ -33,15 +34,25 @@ struct CheckOutput {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct ServiceRunOutput {
+    service_id: String,
+    service_instance_id: String,
+    process_key: String,
+    selected_endpoint: SelectedEndpoint,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct RunOutput {
     run_id: String,
     model_path: PathBuf,
     computed_model_hash: String,
-    service_instance_id: String,
-    process_key: String,
-    selected_endpoint: nixfied_runtime::service::SelectedEndpoint,
-    task: nixfied_runtime::service::task::TaskRun,
-    summary_path: PathBuf,
+    services: Vec<ServiceRunOutput>,
+    tasks: Vec<TaskRun>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    task: Option<TaskRun>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    summary_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -168,106 +179,210 @@ fn run_m0_admitted(
         ),
     )?;
     let _ = nixfied_runtime::control::reconcile_registry(&mut registry)?;
-    let selected_port = first_candidate_port(&selected_slot.placement.candidate_ports)?;
-    let mut service = start_synthetic_service_for_slot(
-        model,
-        admission,
-        &placement,
-        &mut registry,
-        run_id.clone(),
-        &selected_slot,
-        selected_port,
-    )?;
-    let lease_heartbeat = RunLeaseHeartbeat::start(
-        placement.registry_path().to_path_buf(),
-        registry.identity().clone(),
-        service.run_id.clone(),
-        service.owner_token.clone(),
-    );
-    if let Err(error) = service.wait_for_probe_ready_cancellable(model, &mut registry, cancellation)
-    {
-        if error.code == nixfied_runtime::ErrorCode::Canceled {
-            lease_heartbeat.stop()?;
-            service.cancel(
-                &mut registry,
-                options.timeout_ms,
-                "run canceled during readiness",
-            )?;
-        } else {
-            lease_heartbeat.stop()?;
-            let _ = service.stop(&mut registry, options.timeout_ms);
-        }
-        return Err(error);
-    }
-    if let Err(error) = service.check_health_cancellable(model, &mut registry, cancellation) {
-        if error.code == nixfied_runtime::ErrorCode::Canceled {
-            lease_heartbeat.stop()?;
-            service.cancel(
-                &mut registry,
-                options.timeout_ms,
-                "run canceled during health check",
-            )?;
-        } else {
-            lease_heartbeat.stop()?;
-            let _ = service.stop(&mut registry, options.timeout_ms);
-        }
-        return Err(error);
-    }
-    if let Err(error) = cancellation.check() {
-        lease_heartbeat.stop()?;
-        service.cancel(
+
+    let environment = model
+        .environments
+        .get(selected_slot.environment)
+        .ok_or_else(|| {
+            RuntimeError::new(
+                nixfied_runtime::ErrorCode::ModelAdmission,
+                format!("environment {} is missing", selected_slot.environment),
+            )
+        })?;
+    let window = &selected_slot.placement.candidate_ports;
+
+    // Start every service in the environment, each on a distinct port within the
+    // slot's candidate window, waiting readiness then health before the next.
+    let mut started: Vec<StartedService> = Vec::new();
+    let mut lease: Option<RunLeaseHeartbeat> = None;
+    for (index, service_name) in environment.services.iter().enumerate() {
+        let offset = u16::try_from(index).ok().filter(|offset| {
+            window
+                .start
+                .checked_add(*offset)
+                .is_some_and(|port| port <= window.end)
+        });
+        let Some(offset) = offset else {
+            let error = RuntimeError::new(
+                nixfied_runtime::ErrorCode::PortConflict,
+                format!(
+                    "slot {} candidate window {}-{} cannot host {} services",
+                    selected_slot.slot,
+                    window.start,
+                    window.end,
+                    environment.services.len()
+                ),
+            );
+            teardown(&mut started, &mut registry, options.timeout_ms, false);
+            stop_lease(lease)?;
+            return Err(error);
+        };
+        let selected_port = window.start + offset;
+
+        let started_service = match start_service_for_slot(
+            model,
+            admission,
+            &placement,
             &mut registry,
-            options.timeout_ms,
-            "run canceled after readiness",
-        )?;
-        return Err(error);
-    }
-    let task = match run_dependent_task_cancellable(
-        model,
-        &placement,
-        &mut registry,
-        &service,
-        "smoke",
-        cancellation,
-    ) {
-        Ok(task) => task,
-        Err(error) => {
-            if error.code == nixfied_runtime::ErrorCode::Canceled {
-                lease_heartbeat.stop()?;
-                service.cancel(
+            run_id.clone(),
+            &selected_slot,
+            service_name,
+            selected_port,
+        ) {
+            Ok(service) => service,
+            Err(error) => {
+                teardown(
+                    &mut started,
                     &mut registry,
                     options.timeout_ms,
-                    "run canceled during task",
-                )?;
-            } else {
-                lease_heartbeat.stop()?;
-                let _ = service.stop(&mut registry, options.timeout_ms);
+                    cancellation.is_canceled(),
+                );
+                stop_lease(lease)?;
+                return Err(error);
             }
+        };
+        if lease.is_none() {
+            lease = Some(RunLeaseHeartbeat::start(
+                placement.registry_path().to_path_buf(),
+                registry.identity().clone(),
+                started_service.run_id.clone(),
+                started_service.owner_token.clone(),
+            ));
+        }
+        started.push(started_service);
+
+        let service = started.last_mut().expect("just pushed a service");
+        if let Err(error) =
+            service.wait_for_probe_ready_cancellable(model, &mut registry, cancellation)
+        {
+            teardown(
+                &mut started,
+                &mut registry,
+                options.timeout_ms,
+                error.code == nixfied_runtime::ErrorCode::Canceled,
+            );
+            stop_lease(lease)?;
             return Err(error);
         }
-    };
+        let service = started.last_mut().expect("just pushed a service");
+        if let Err(error) = service.check_health_cancellable(model, &mut registry, cancellation) {
+            teardown(
+                &mut started,
+                &mut registry,
+                options.timeout_ms,
+                error.code == nixfied_runtime::ErrorCode::Canceled,
+            );
+            stop_lease(lease)?;
+            return Err(error);
+        }
+    }
+
+    if let Err(error) = cancellation.check() {
+        teardown(&mut started, &mut registry, options.timeout_ms, true);
+        stop_lease(lease)?;
+        return Err(error);
+    }
+
+    // Run every task, gating each on the readiness of its declared service
+    // dependency (the first dependency provides ${port}/${host} substitution).
+    let mut task_runs: Vec<TaskRun> = Vec::new();
+    for task_id in &environment.tasks {
+        let task = model.tasks.get(task_id).ok_or_else(|| {
+            RuntimeError::new(
+                nixfied_runtime::ErrorCode::ModelAdmission,
+                format!("task {task_id} is missing"),
+            )
+        })?;
+        let dependency = match task.depends_on_services_ready.first() {
+            Some(name) => started.iter().find(|service| &service.service_name == name),
+            None => started.first(),
+        };
+        let Some(dependency) = dependency else {
+            let error = RuntimeError::new(
+                nixfied_runtime::ErrorCode::ModelAdmission,
+                format!("task {task_id} has no started service to depend on"),
+            );
+            teardown(&mut started, &mut registry, options.timeout_ms, false);
+            stop_lease(lease)?;
+            return Err(error);
+        };
+        match run_dependent_task_cancellable(
+            model,
+            &placement,
+            &mut registry,
+            dependency,
+            task_id,
+            cancellation,
+        ) {
+            Ok(task_run) => task_runs.push(task_run),
+            Err(error) => {
+                teardown(
+                    &mut started,
+                    &mut registry,
+                    options.timeout_ms,
+                    error.code == nixfied_runtime::ErrorCode::Canceled,
+                );
+                stop_lease(lease)?;
+                return Err(error);
+            }
+        }
+    }
+
+    let services_output = started
+        .iter()
+        .map(|service| ServiceRunOutput {
+            service_id: service.service_name.clone(),
+            service_instance_id: service.service_instance_id.clone(),
+            process_key: service.process_key.clone(),
+            selected_endpoint: service.selected_endpoint.clone(),
+        })
+        .collect::<Vec<_>>();
+    let primary_task = task_runs.last().cloned();
     let output = RunOutput {
         run_id,
         model_path: admission.model_path.clone(),
         computed_model_hash: admission.computed_model_hash.clone(),
-        service_instance_id: service.service_instance_id.clone(),
-        process_key: service.process_key.clone(),
-        selected_endpoint: service.selected_endpoint.clone(),
-        summary_path: task.summary_path.clone(),
-        task,
+        services: services_output,
+        summary_path: primary_task.as_ref().map(|task| task.summary_path.clone()),
+        task: primary_task,
+        tasks: task_runs,
     };
+
     if cancellation.is_canceled() {
-        lease_heartbeat.stop()?;
-        service.cancel(
-            &mut registry,
-            options.timeout_ms,
-            "run canceled during shutdown",
-        )?;
+        teardown(&mut started, &mut registry, options.timeout_ms, true);
+        stop_lease(lease)?;
         return Err(nixfied_runtime::cancellation::canceled_error());
     }
-    lease_heartbeat.stop()?;
-    service.stop_cancellable(&mut registry, options.timeout_ms, cancellation)?;
+    // Stop services in reverse start order.
+    while let Some(service) = started.pop() {
+        service.stop_cancellable(&mut registry, options.timeout_ms, cancellation)?;
+    }
+    stop_lease(lease)?;
     Ok(output)
+}
+
+/// Tear down already-started services in reverse order on a run error, either
+/// cancelling (process-group cancellation, recorded as canceled) or stopping.
+fn teardown(
+    started: &mut Vec<StartedService>,
+    registry: &mut Registry,
+    timeout_ms: u64,
+    canceled: bool,
+) {
+    while let Some(mut service) = started.pop() {
+        if canceled {
+            let _ = service.cancel(registry, timeout_ms, "run canceled");
+        } else {
+            let _ = service.stop(registry, timeout_ms);
+        }
+    }
+}
+
+fn stop_lease(lease: Option<RunLeaseHeartbeat>) -> Result<(), RuntimeError> {
+    if let Some(lease) = lease {
+        lease.stop()?;
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -328,7 +443,7 @@ fn run_control_admitted(
             &mut registry,
             options.timeout_ms,
         )?),
-        ControlCommand::Clean => print_json(&run_synthetic_service_clean_for_slot(
+        ControlCommand::Clean => print_json(&run_slot_clean(
             model,
             admission,
             &placement,
