@@ -4,7 +4,10 @@ Source of truth for scope and architecture remains `RFC_v2.md`.
 
 ## Current Progress Checkpoint
 
-Status reflects the `v2` branch as of this revision.
+Status reflects the `v2` branch as of 2026-06-09. The full capability line (M1-M6,
+M7 deferred) and the consolidation phase (C1, C2) are implemented and verified green:
+`cargo test`, `cargo clippy -D warnings`, `nix flake check`, every `tests/*` proof, and
+`nix run .#conformance` (5/5) all pass.
 
 | Milestone | State | Evidence |
 | --- | --- | --- |
@@ -12,21 +15,35 @@ Status reflects the `v2` branch as of this revision.
 | Pre-M1 view surfaces | Done | `tests/pre-m1/prove-view-surfaces.sh` |
 | M1 slot isolation | Done | `tests/m1/prove-slot-isolation.sh` |
 | M2 cancellation & GC hardening | Done | `tests/m2/{prove-cancellation,prove-gc-hardening,prove-lifecycle-ops}.sh` |
-| M3 Nix-side Postgres adapter | Not started | proof `tests/m3/prove-postgres-adapter.sh` (to create) |
-| M4 workflow graphs | Not started | proof `tests/m4/prove-workflow-graphs.sh` (to create) |
-| M5 installable downstream wrapper | Partial (scaffold only) | `nix/install/install.sh`, `tests/m0/prove-install-scaffold.sh` |
-| M6 polyglot example | Not started | proof `tests/m6/prove-polyglot-stack.sh` (to create) |
+| M3 Nix-side Postgres adapter | Done | `nix/adapters/postgres.nix`, `tests/m3/prove-postgres-adapter.sh` |
+| M4 workflow graphs | Done | `examples/workflow`, `tests/m4/prove-workflow-graphs.sh` |
+| M5 installable downstream wrapper | Done | `nix/install/upgrade.sh`, `tests/m5/prove-install-upgrade.sh` |
+| M6 polyglot example | Done | `examples/polyglot-stack`, `tests/m6/prove-polyglot-stack.sh` |
 | M7 optional manifest envelope | Deferred by decision | none |
-| C1 downstream conformance suite | Not started | `nix run .#conformance` (to create) |
-| C2 de-milestone product surface | Not started | repo-wide rename under C1 guard |
+| C1 downstream conformance suite | Done | `nix run .#conformance`, `runtime/crates/nixfied-conformance` |
+| C2 de-milestone product surface | Done (product surface); test-layout tail open | `tests/guard-no-milestone-tokens.sh` |
 
 Notes:
 
-- No `tests/m3`, `tests/m4`, `tests/m6`, or `tests/m7` directories exist yet. Their
-  proof scripts are listed above as deliverables, not as present non-blocking stubs.
-- M5 currently ships only the M0-era install scaffold (refuse-to-overwrite create of
-  `flake.nix`/`nixfied.nix`). Its proof lives under `tests/m0/` and is not yet a
-  milestone-tagged adoption/upgrade hardening proof. See M5 below for the remaining work.
+- **A foundation generalization preceded M3 and was not anticipated by the original plan.**
+  Despite M1/M2 being marked Done, the product was still a single hardcoded
+  `synthetic`/`smoke`/`m0-helper` fixture: `validation.rs` was exact-match, the Nix surface
+  emitted only that fixture, and the runtime selected services/tasks by hardcoded name. M3
+  therefore first replaced exact-match validation with a structural contract, introduced a
+  generic Nix declaration surface (`closures`/`execs`/`services`/`tasks` + `nix/adapters/`),
+  and made the runtime drive arbitrary multi-service/multi-task models. See M3 below.
+- `tests/m3`, `tests/m4`, `tests/m5`, and `tests/m6` directories now exist with their proofs.
+  `tests/m7` is intentionally absent (M7 deferred).
+- Two capability-adjacent runtime changes were required and landed generically (no
+  service-specific code): a `process-tree` containment mode (multi-process supervisors like
+  Postgres whose children form their own process groups) and multiple services per run
+  (idempotent run/lease registry rows). Both are documented in M3/M6 below.
+- **Open C2 tail (test-layout only):** the interim shell proofs still live under
+  `tests/m0|pre-m1|m1|m2|m3|m4|m5|m6/` with milestone names and the runtime unit tests are
+  still `m0_*.rs` files. The product/consumer surfaces are fully de-milestoned and guarded;
+  folding those shell proofs into C1 scenarios and renaming the test files/dirs is the only
+  remaining piece. The guard (`tests/guard-no-milestone-tokens.sh`) is scoped to product
+  surfaces and treats the milestone-named test scaffolding as development history.
 - M7 stays deferred until a concrete need (portable bundles, cache export/import,
   standalone distribution outside the Nix store, or integrity-bound materialised views)
   appears.
@@ -39,11 +56,14 @@ This continuation plan covers milestone work through M7 and keeps M0 constraints
 
 *1. M1: slots, per-slot state pathing, and registry partitioning. (done)*
 *2. M2: cancellation, lease reconciliation, cleanup hardening, and generic lifecycle. (done)*
-*3. M3: Nix-side reference adapter, minimal postgres.*
-*4. M4: workflow graphs.*
-*5. M5: installable downstream wrapper hardening.*
-*6. M6: polyglot example.*
-*7. M7: optional manifest envelope (only if triggered by concrete need).*
+*3. M3: Nix-side reference adapter, minimal postgres. (done)*
+*4. M4: workflow graphs. (done)*
+*5. M5: installable downstream wrapper hardening. (done)*
+*6. M6: polyglot example. (done)*
+*7. M7: optional manifest envelope (only if triggered by concrete need). (deferred)*
+
+Consolidation: *C1 conformance suite (done), C2 de-milestone product surface (done;
+test-layout fold/rename open).*
 
 After the capability line (M1-M6; M7 deferred) is complete, a **Consolidation Phase**
 (C1-C2) retires development scaffolding from the product: a first-class downstream
@@ -176,13 +196,45 @@ Excluded:
 
 - Requires M1 per-slot registry/state isolation.
 
-## M3: Nix-Side Reference Adapter — Minimal Postgres (Not Started)
+## M3: Nix-Side Reference Adapter — Minimal Postgres (Done)
 
 ### Product Purpose
 
 Prove that a concrete service adapter (Postgres) is expressible purely as a Nix module
 that generates generic model primitives, while `nixfied-runtime` stays generic and gains
 no Postgres-specific code path.
+
+### Delivered
+
+Implemented in six commits, beginning with the foundation generalization the original plan
+did not anticipate (the engine was still an exact-match `synthetic`/`smoke` fixture):
+
+- `model: replace exact-fixture validation with structural contract` — `validation.rs` now
+  validates structure + references for arbitrary service/task/closure/exec names; the model
+  contract test suite was rewritten accordingly (including a test that the previously
+  rejected multi-service/multi-exec shape is now accepted).
+- `nix: generic service/task/closure declaration surface with adapters` — typed
+  `nixfied.closures/execs/services/tasks` options in `nix/modules/primitives.nix`, generic
+  `environments`, a data-driven `nix/compiler/derive.nix`, and `nix/adapters/` (a `synthetic`
+  adapter plus `default.nix`) injected into every compiled module via `specialArgs.adapters`.
+  The minimal example imports `adapters.synthetic`.
+- `runtime: generic multi-service multi-task run and clean loop` — `main.rs` iterates the
+  environment's services/tasks instead of hardcoded `synthetic`/`smoke`; `process.rs` gained
+  generic `start_service_for_slot` / `run_slot_clean`.
+- `runtime: add ${stateDir} placeholder for stateful execs` — generic placeholder
+  substitution (`${port}`, `${stateDir}`) so a stateful service can locate its data dir
+  under the runtime-materialised slot state root.
+- `nix+runtime: postgres reference adapter with process-tree containment` —
+  `nix/adapters/postgres.nix` emits generic primitives (one closure per `initdb`/`postgres`/
+  `pg_ctl`/`psql`, since admission requires exec executable == closure executable);
+  `examples/postgres`; flake `postgres-model`. A new generic `ContainmentRequirement::ProcessTree`
+  contains supervisors whose children form their own process groups (Postgres), with no
+  Postgres-specific runtime code. Unix sockets are disabled in the adapter (TCP only) to
+  avoid the macOS `sun_path` length limit under deep state dirs.
+- `tests: prove postgres adapter end to end (m3)`.
+
+The runtime gained no Postgres-specific code path: `process-tree` containment and
+`${stateDir}` are generic capabilities any multi-process/stateful service can use.
 
 ### Strict Boundary
 
@@ -220,21 +272,40 @@ empty or limited to generic primitive support.
 
 ### Proof Script
 
-- `tests/m3/prove-postgres-adapter.sh` (to create): downstream-shaped example builds a
-  Postgres model, runtime starts/readies/queries/stops it generically, and a minimal
-  non-Postgres project still compiles without the adapter.
+- `tests/m3/prove-postgres-adapter.sh`: builds `.#postgres-model`, the runtime drives
+  `initdb` (prepare) -> `postgres` (start) -> TCP-ownership readiness -> health ->
+  `psql SELECT 1` -> stop -> marker-gated clean, and asserts a minimal non-Postgres project
+  (`.#minimal-model`) still compiles without the adapter.
 
 ### Dependencies
 
 - Requires M2 lifecycle, lease, and cleanup hardening.
 
-## M4: Workflow Graphs (Not Started)
+## M4: Workflow Graphs (Done)
 
 ### Product Purpose
 
 Add dependency-aware workflows over the existing generic primitives: bounded tasks,
 service requirements, readiness gates, cancellation, artifacts, summaries, and cleanup
 policy.
+
+### Delivered
+
+- `model: promote workflows to a validated bounded task DAG` — `WorkflowSpec` is now
+  `{ workflowId, servicesRequired, nodes[{ nodeId, taskId, dependsOn }] }`; validation
+  enforces unique node ids, references to declared services/tasks, and acyclicity (Kahn
+  reduction). `capabilities.workflows` mirrors the declared workflows.
+- `nix: typed workflow surface and example` — typed `nixfied.workflows` options, `derive.nix`
+  emission, relaxed `validate.nix`; `examples/workflow` + flake `workflow-model`.
+- `runtime: schedule workflow node graphs with readiness gates` — `run --workflow <id>`
+  starts the workflow's required services (readiness + health gate), runs nodes in
+  topological order honoring `dependsOn`, reuses M2 cancellation tokens for teardown, and
+  writes a per-workflow summary (`artifacts/workflow-<id>.json`). The default (non-workflow)
+  run is the same engine over the environment's services/tasks.
+- `tests: prove workflow graphs end to end (m4)`.
+
+Cleanup policy reuses the slot's marker-gated `clean`; per-node artifact namespacing beyond
+the aggregate workflow summary was not needed for the current examples.
 
 ### Strict Boundary
 
@@ -270,49 +341,62 @@ same way single services do.
 
 ### Proof Script
 
-- `tests/m4/prove-workflow-graphs.sh` (to create): a multi-node workflow with a service
-  requirement and dependent bounded tasks runs, cancels cleanly, and writes summaries.
+- `tests/m4/prove-workflow-graphs.sh`: a two-node workflow (`probe` -> `verify`) with a
+  service requirement runs in dependency order, both nodes succeed, and a workflow summary
+  is written; marker-gated clean removes the slot state.
 
 ### Dependencies
 
 - Requires M2 cancellation/lease semantics and M3 generic-adapter confidence.
 
-## M5: Installable Downstream Wrapper Hardening (Partial)
+## M5: Installable Downstream Wrapper Hardening (Done)
 
 ### Product Purpose
 
 Make adoption and upgrade safe through Nixfied-owned flake input/import shims that never
 overwrite project-owned declarations.
 
-### Current State
+### Delivered
 
-- `nix/install/install.sh` scaffolds `flake.nix` and `nixfied.nix` only when absent and
-  refuses to edit an existing `flake.nix`, printing a merge snippet instead.
-- Proof exists at `tests/m0/prove-install-scaffold.sh` (create + refusal paths).
+- `m5: add non-destructive nixfied input upgrade surface` — `nix/install/upgrade.sh` and
+  `nix run .#upgrade` repin the project's `nixfied` flake input and refresh only that lock
+  entry. It refuses a directory with no `flake.nix` / no nixfied input, and it never creates
+  or edits the project-owned `nixfied.nix`, enforcing the shim boundary (Nixfied owns the
+  input/import wiring; the project owns every semantic declaration).
+- `install.sh` was updated so a freshly scaffolded `nixfied.nix` imports `adapters.synthetic`
+  (a runnable starter), so the scaffold compiles a valid model under the generalized surface.
 
-### Remaining Work
+### Proof Scripts
 
-- Define and prove the upgrade path (bumping the Nixfied input without clobbering
-  project-owned `nixfied.nix`).
-- Milestone-tag the proof: move/extend coverage into `tests/m5/` rather than `tests/m0/`.
-- Confirm the shim boundary: Nixfied owns input/import wiring; the project owns all
-  semantic declarations.
-
-### Proof Script
-
-- Existing: `tests/m0/prove-install-scaffold.sh`.
-- To add: `tests/m5/prove-install-upgrade.sh` covering non-destructive upgrade.
+- `tests/m5/prove-install-upgrade.sh`: install with an unbuildable placeholder pin, make a
+  project-owned edit to `nixfied.nix`, repin to the local checkout, assert `nixfied.nix` is
+  byte-identical, then compile a Nix-store model. Refusing a directory with no `flake.nix`
+  is also covered.
+- `tests/m0/prove-install-scaffold.sh` continues to cover the create + refusal scaffold
+  paths.
 
 ### Dependencies
 
-- Independent of M3/M4; can proceed in parallel.
+- Independent of M3/M4; proceeded in parallel (landed first).
 
-## M6: Polyglot Example (Not Started)
+## M6: Polyglot Example (Done)
 
 ### Product Purpose
 
 Provide `examples/polyglot-stack` demonstrating multiple codebases/services composed
 through generic primitives and (once available) workflows.
+
+### Delivered
+
+- `runtime+nix: allow multiple services per run and add polyglot example` —
+  `examples/polyglot-stack` declares a Python service (`api`) and a Perl service (`worker`),
+  each with a dependent task, all through the generic surface; flake `polyglot-stack-model`.
+  Running it required relaxing the registry's single-service-per-run assumption: the `runs`
+  and `run_leases` rows are now created idempotently (`INSERT OR IGNORE`) and the
+  existing-run refusal was dropped (run ids are unique per invocation), keeping the
+  per-instance lease/service/port safety gates. The run loop assigns each service a distinct
+  port (`window.start + index`) within the slot window.
+- `tests: prove polyglot stack end to end (m6)`.
 
 ### Strict Boundary
 
@@ -327,8 +411,9 @@ Excluded:
 
 ### Proof Script
 
-- `tests/m6/prove-polyglot-stack.sh` (to create): the example compiles to a store model
-  and runs end to end through public APIs.
+- `tests/m6/prove-polyglot-stack.sh`: builds `.#polyglot-stack-model`, runs both services on
+  distinct ports, asserts both tasks succeed (`python-ok` / `perl-ok`), and marker-gated
+  clean removes the slot state.
 
 ### Dependencies
 
@@ -391,7 +476,7 @@ repository-wide rename without an executable safety net already in place.
   file, and git history are development history and are *not* rewritten. Milestone
   vocabulary is retired only from the live product surface, not from the project's memory.
 
-## Consolidation C1: Downstream Conformance Suite
+## Consolidation C1: Downstream Conformance Suite (Done, with deviations)
 
 ### Product Purpose
 
@@ -399,6 +484,38 @@ Replace the ad hoc end-to-end shell proofs with a first-class, black-box conform
 harness that simulates a real downstream project adopting and operating Nixfied purely
 through public surfaces, with structured fixtures, golden artifacts, and machine-readable
 reporting.
+
+### Delivered
+
+- `c1: add downstream conformance suite over public surfaces` — `runtime/crates/nixfied-conformance`,
+  a black-box harness exposed as `nix run .#conformance`. Scenarios are declarative data; for
+  each it builds the example model via `nix build`, runs the real `nixfied-runtime` binary,
+  and asserts on operator-observable outputs (run JSON: services set, task success, workflow
+  node order; the written summary; the marker-gated clean result). It emits a structured JSON
+  report (per-scenario pass/fail, reason, timing, computed model hash) and exits non-zero on
+  failure.
+- Scenarios: `minimal-service`, `postgres-adapter`, `workflow-graph`, `polyglot-stack`, and a
+  `negative-unknown-workflow` self-test (a `run --workflow <missing>` that must fail), proving
+  the harness distinguishes pass from fail.
+
+### Deviations From The Original C1 Spec
+
+These were scoped down to land C1 within the session; they are the documented gaps, not
+silent omissions:
+
+- The harness does **not** scaffold a throwaway git repo and run the **installer** per
+  scenario. It drives the public surfaces by building the in-repo example models and running
+  the runtime binary. (The install + non-destructive upgrade path is covered by
+  `tests/m5/prove-install-upgrade.sh`, not yet a conformance scenario.)
+- No **golden/snapshot** artifacts or `--update-goldens` workflow yet; assertions are
+  structural on the run/summary JSON rather than snapshot diffs.
+- It is **not** wired as an entry of `nix flake check`: the suite drives real `nix build` +
+  the runtime binary, which the nix-build sandbox cannot host (nested nix). `nix flake check`
+  instead gates that the conformance app **wrapper builds** (`checks.conformance-app`); the
+  suite runs via `nix run .#conformance`.
+- The interim `tests/mX/prove-*.sh` shell proofs are **kept**, not migrated-and-deleted. They
+  cover behavior C1's five model scenarios do not (cancellation, GC hardening, lifecycle-op
+  ordering via cargo tests, slot isolation, install scaffold/upgrade, view surfaces).
 
 ### Strict Boundary
 
@@ -474,13 +591,46 @@ and deleted. Concretely:
   milestone — its value is defining strong scenarios over the complete capability set on
   real installable example projects.
 
-## Consolidation C2: De-Milestone The Product Surface
+## Consolidation C2: De-Milestone The Product Surface (Done for product surface; test-layout tail open)
 
 ### Product Purpose
 
 Remove `mX` vocabulary from every consumer-observable and internal-but-product surface,
 and split the three concerns that milestone numbers currently conflate: **contract
 version**, **product identity**, and **development history**.
+
+### Delivered
+
+- `c2: de-milestone contract version, maturity, and state identity tokens` — `m2c:1` ->
+  `1` for `toolchainId`/`runtimeAbi` in `nix/spec/constants.nix` and `constants.rs` (lockstep;
+  the retired `m2c` ABI is now refused, asserted by `abi_mismatch_is_contract_error`).
+  `stateEpoch "m0" -> "1"`, `markerIdentity "nixfied-m0" -> "nixfied-state"`,
+  `maturity "m0" -> "stable"` with the `SurfaceMaturity::M0` variant dropped, source
+  fingerprint default `m0-placeholder -> live-fingerprint`. (`m0-helper` had already become
+  `synthetic-helper` during M3.)
+- `c2: strip milestone vocabulary from product source messages` — `validate_m0`/`ValidateM0`
+  -> `validate`/`Validate`, `records::m0` -> `default_slot`, and all `M0` prose removed from
+  Nix option descriptions and runtime error messages.
+- `c2: rename minimal example and guard product surfaces against milestone tokens` —
+  `examples/m0-minimal` -> `examples/minimal` (dir, `projectId`, flake attr `minimal-model`,
+  conformance scenario, proofs). Added `tests/guard-no-milestone-tokens.sh`, scoped to product
+  surfaces (`nix/`, `examples/`, `flake.nix`, `runtime/crates/*/src`), failing on any
+  `\bm[0-9]+\b` / `:mN:` / `pre-mN` token so the debt cannot silently return.
+
+The conformance suite was green before and after; the only intended behavior change is the
+contract-version bump (old-ABI models stop admitting).
+
+### Open Tail (test layout only)
+
+Not done, and intentionally guard-exempt as development history:
+
+- The interim shell proofs still live under `tests/m0|pre-m1|m1|m2|m3|m4|m5|m6/` with
+  milestone names, and the runtime unit tests are still `m0_*.rs` files. The Classification
+  Rule below assigns these to "folded into C1 / capability-named files"; that fold + rename
+  is the remaining work. Because C1 was scoped down (see its deviations) and does not yet
+  subsume the shell proofs, deleting them would lose coverage, so they were kept.
+- `AGENTS.md` still references the old `tests/m0` layout and `m2c`/`M0` common checks and
+  should be refreshed when the tail is closed.
 
 ### Classification Rule (drives every rename)
 
@@ -517,10 +667,14 @@ version**, **product identity**, and **development history**.
 
 ### Proof
 
-- Conformance suite green before and after, with only the documented ABI-mismatch scenario
-  changing.
-- Repo-wide check: no `\bm[0-9]\b` / `:mX:` / `pre-m1` tokens outside history files.
-- Old-ABI model is refused; new-ABI model admits.
+- Conformance suite (`nix run .#conformance`) green before and after; only the
+  contract-version bump changed behavior.
+- Old-ABI (`m2c`) model is refused, new-ABI model admits (`abi_mismatch_is_contract_error`).
+- `tests/guard-no-milestone-tokens.sh` passes: no `\bm[0-9]+\b` / `:mN:` / `pre-mN` token in
+  **product surfaces** (`nix/`, `examples/`, `flake.nix`, `runtime/crates/*/src`).
+- Not yet satisfied: the full "no `mX` outside history files" bar. Milestone tokens remain in
+  the interim `tests/mX/` shell proofs and `m0_*.rs` unit-test files (the guard exempts them
+  as development history pending the C1 fold; see "Open Tail" above).
 
 ### Dependencies
 
