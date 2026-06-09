@@ -64,12 +64,20 @@
           selfModel = nixfiedLib.compileModel ./nixfied.nix;
           nixfiedInstall = import ./nix/install/install.nix { inherit pkgs; };
           nixfiedUpgrade = import ./nix/install/upgrade.nix { inherit pkgs; };
+          # `nix run .#gate`: launch the self-hosted conformance gate against the
+          # current working tree (rebuilds the runtime + self-model on each run).
+          nixfiedGate = import ./nix/gate.nix {
+            inherit pkgs;
+            runtime = nixfiedRuntime;
+            model = selfModel;
+          };
         in
         {
           default = minimalModel;
           nixfied-runtime = nixfiedRuntime;
           install = nixfiedInstall;
           upgrade = nixfiedUpgrade;
+          gate = nixfiedGate;
           minimal-model = minimalModel;
           postgres-model = postgresModel;
           workflow-model = workflowModel;
@@ -91,6 +99,11 @@
             type = "app";
             program = "${self.packages.${system}.upgrade}/bin/nixfied-upgrade";
             meta.description = "Repin the Nixfied flake input without touching project-owned declarations";
+          };
+          gate = {
+            type = "app";
+            program = "${self.packages.${system}.gate}/bin/nixfied-gate";
+            meta.description = "Run the self-hosted conformance gate against the working tree";
           };
         }
       );
