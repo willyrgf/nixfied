@@ -58,7 +58,7 @@ fn materializes_m0_roots_and_slot_marker() {
     assert_eq!(marker.project_id, "runtime-test");
     assert_eq!(marker.environment, "dev");
     assert_eq!(marker.slot, 0);
-    assert_eq!(marker.state_epoch, "m0");
+    assert_eq!(marker.state_epoch, "1");
     assert_eq!(marker.cleanup_policy, CleanupPolicy::DeleteOnClean);
     assert_eq!(marker.persistence, PersistencePolicy::RunScoped);
 }
@@ -729,7 +729,7 @@ fn admitted_source(source_root: &Path) -> AdmittedSource {
         source_mode: SourceMode::LiveWorkspace,
         source_identity: "live".to_string(),
         dirty_policy: DirtyPolicy::Warn,
-        admission_fingerprint_policy: "m0-placeholder".to_string(),
+        admission_fingerprint_policy: "live-fingerprint".to_string(),
     }
 }
 
@@ -762,7 +762,7 @@ fn fixture_model() -> Value {
         "runtimeAbi": "nixfied-runtime-abi:1",
         "generator": {
             "name": "nixfied",
-            "version": "m0",
+            "version": "1",
             "emitter": "nix/compiler/emit-model.nix"
         },
         "project": {
@@ -787,7 +787,7 @@ fn fixture_model() -> Value {
             "sourceIdentity": "live",
             "sourcePolicy": {
                 "dirtyPolicy": "warn",
-                "admissionFingerprintPolicy": "m0-placeholder"
+                "admissionFingerprintPolicy": "live-fingerprint"
             }
         }],
         "environments": {
@@ -845,17 +845,17 @@ fn fixture_model() -> Value {
             }
         },
         "state": {
-            "markerIdentity": "nixfied-m0",
-            "stateEpoch": "m0",
+            "markerIdentity": "nixfied-state",
+            "stateEpoch": "1",
             "cleanupPolicy": "delete-on-clean",
             "persistence": "run-scoped"
         },
         "secrets": [],
         "closures": [{
-            "closureId": "m0-helper",
+            "closureId": "synthetic-helper",
             "kind": "executable",
-            "storePath": "/nix/store/test-m0-helper",
-            "executable": "/nix/store/test-m0-helper/bin/m0-helper",
+            "storePath": "/nix/store/test-synthetic-helper",
+            "executable": "/nix/store/test-synthetic-helper/bin/synthetic-helper",
             "targetSystem": host_system(),
             "operationBindings": [
                 "service.synthetic.start",
@@ -866,10 +866,10 @@ fn fixture_model() -> Value {
             "effects": ["process", "network-listener"]
         }],
         "execs": {
-            "m0-helper": {
-                "execId": "m0-helper",
-                "closureId": "m0-helper",
-                "executable": "/nix/store/test-m0-helper/bin/m0-helper",
+            "synthetic-helper": {
+                "execId": "synthetic-helper",
+                "closureId": "synthetic-helper",
+                "executable": "/nix/store/test-synthetic-helper/bin/synthetic-helper",
                 "args": [],
                 "env": {},
                 "codebaseId": "main",
@@ -899,7 +899,7 @@ fn fixture_model() -> Value {
                     {
                         "operationId": "service.synthetic.start",
                         "class": "start",
-                        "execId": "m0-helper",
+                        "execId": "synthetic-helper",
                         "execArgs": ["service", "--host", "127.0.0.1", "--port", "${port}"],
                         "probeId": null,
                         "terminal": {
@@ -932,7 +932,7 @@ fn fixture_model() -> Value {
                     {
                         "operationId": "service.synthetic.stop",
                         "class": "stop",
-                        "execId": "m0-helper",
+                        "execId": "synthetic-helper",
                         "execArgs": ["stop"],
                         "probeId": null,
                         "terminal": {
@@ -997,7 +997,7 @@ fn fixture_model() -> Value {
             "smoke": {
                 "taskId": "smoke",
                 "operationId": "task.smoke.run",
-                "execId": "m0-helper",
+                "execId": "synthetic-helper",
                 "args": ["task", "--host", "127.0.0.1", "--port", "${port}"],
                 "dependsOnServicesReady": ["synthetic"],
                 "exitPolicy": {

@@ -134,7 +134,7 @@ fn service_start_rejects_exec_cwd_escape() {
     fixture
         .model
         .execs
-        .get_mut("m0-helper")
+        .get_mut("synthetic-helper")
         .expect("fixture exec should exist")
         .cwd = "..".to_string();
 
@@ -365,24 +365,24 @@ fn health_failure_after_ready_records_distinct_lifecycle_failure() {
     let script = python_listener_script();
     let mut fixture = ServiceFixture::new(python, &["-c", script, "${port}"], port);
     fixture.model.execs.insert(
-        "m0-health-fail".to_string(),
+        "health-fail".to_string(),
         fixture
             .model
             .execs
-            .get("m0-helper")
+            .get("synthetic-helper")
             .expect("helper exec should exist")
             .clone(),
     );
     fixture
         .model
         .execs
-        .get_mut("m0-health-fail")
+        .get_mut("health-fail")
         .expect("health exec should exist")
         .executable = "/usr/bin/false".to_string();
     fixture
         .model
         .execs
-        .get_mut("m0-health-fail")
+        .get_mut("health-fail")
         .expect("health exec should exist")
         .args = Vec::new();
     let service_spec = fixture
@@ -395,7 +395,7 @@ fn health_failure_after_ready_records_distinct_lifecycle_failure() {
         .iter_mut()
         .find(|operation| operation.class == LifecycleOpClass::Health)
         .expect("health op should exist");
-    health_op.exec_id = Some("m0-health-fail".to_string());
+    health_op.exec_id = Some("health-fail".to_string());
     health_op.probe_id = None;
 
     let mut service = start_synthetic_service(
@@ -1134,7 +1134,7 @@ fn task_timeout_records_canceled_summary_and_terminates_task_group() {
     fixture
         .model
         .execs
-        .get_mut("m0-helper")
+        .get_mut("synthetic-helper")
         .expect("fixture has exec")
         .timeout_ms = 100;
     fixture
@@ -1254,8 +1254,8 @@ fn cli_signal_cancels_run_and_empties_service_group() {
     );
     value["closures"][0]["storePath"] = json!(closure_root.to_string_lossy());
     value["closures"][0]["executable"] = json!(shell.to_string_lossy());
-    value["execs"]["m0-helper"]["executable"] = json!(shell.to_string_lossy());
-    value["execs"]["m0-helper"]["args"] = json!(["-c", script, "parent", marker_arg, started_arg]);
+    value["execs"]["synthetic-helper"]["executable"] = json!(shell.to_string_lossy());
+    value["execs"]["synthetic-helper"]["args"] = json!(["-c", script, "parent", marker_arg, started_arg]);
     let model: Model = serde_json::from_value(value).expect("CLI fixture model should parse");
     let tmp = TempDir::new();
     let model_path = tmp.path.join("model.json");
@@ -1366,8 +1366,8 @@ fn cli_signal_during_shutdown_records_canceled_terminal_state() {
     );
     value["closures"][0]["storePath"] = json!(closure_root.to_string_lossy());
     value["closures"][0]["executable"] = json!(shell.to_string_lossy());
-    value["execs"]["m0-helper"]["executable"] = json!(shell.to_string_lossy());
-    value["execs"]["m0-helper"]["args"] =
+    value["execs"]["synthetic-helper"]["executable"] = json!(shell.to_string_lossy());
+    value["execs"]["synthetic-helper"]["args"] =
         json!(["-c", script, "wrapper", started_arg, stopping_arg, python]);
     let model: Model = serde_json::from_value(value).expect("CLI fixture model should parse");
     let tmp = TempDir::new();
@@ -2610,7 +2610,7 @@ fn admitted_source(source_root: &Path) -> AdmittedSource {
         source_mode: SourceMode::LiveWorkspace,
         source_identity: "live".to_string(),
         dirty_policy: DirtyPolicy::Warn,
-        admission_fingerprint_policy: "m0-placeholder".to_string(),
+        admission_fingerprint_policy: "live-fingerprint".to_string(),
     }
 }
 
@@ -2678,7 +2678,7 @@ fn fixture_model(executable: &str, start_args: &[&str], port: u16) -> Value {
         "runtimeAbi": "nixfied-runtime-abi:1",
         "generator": {
             "name": "nixfied",
-            "version": "m0",
+            "version": "1",
             "emitter": "nix/compiler/emit-model.nix"
         },
         "project": {
@@ -2703,7 +2703,7 @@ fn fixture_model(executable: &str, start_args: &[&str], port: u16) -> Value {
             "sourceIdentity": "live",
             "sourcePolicy": {
                 "dirtyPolicy": "warn",
-                "admissionFingerprintPolicy": "m0-placeholder"
+                "admissionFingerprintPolicy": "live-fingerprint"
             }
         }],
         "environments": {
@@ -2761,16 +2761,16 @@ fn fixture_model(executable: &str, start_args: &[&str], port: u16) -> Value {
             }
         },
         "state": {
-            "markerIdentity": "nixfied-m0",
-            "stateEpoch": "m0",
+            "markerIdentity": "nixfied-state",
+            "stateEpoch": "1",
             "cleanupPolicy": "delete-on-clean",
             "persistence": "run-scoped"
         },
         "secrets": [],
         "closures": [{
-            "closureId": "m0-helper",
+            "closureId": "synthetic-helper",
             "kind": "executable",
-            "storePath": "/nix/store/test-m0-helper",
+            "storePath": "/nix/store/test-synthetic-helper",
             "executable": executable,
             "targetSystem": host_system(),
             "operationBindings": [
@@ -2782,9 +2782,9 @@ fn fixture_model(executable: &str, start_args: &[&str], port: u16) -> Value {
             "effects": ["process", "network-listener"]
         }],
         "execs": {
-            "m0-helper": {
-                "execId": "m0-helper",
-                "closureId": "m0-helper",
+            "synthetic-helper": {
+                "execId": "synthetic-helper",
+                "closureId": "synthetic-helper",
                 "executable": executable,
                 "args": [],
                 "env": {},
@@ -2815,7 +2815,7 @@ fn fixture_model(executable: &str, start_args: &[&str], port: u16) -> Value {
                     {
                         "operationId": "service.synthetic.start",
                         "class": "start",
-                        "execId": "m0-helper",
+                        "execId": "synthetic-helper",
                         "execArgs": start_args,
                         "probeId": null,
                         "terminal": {
@@ -2848,7 +2848,7 @@ fn fixture_model(executable: &str, start_args: &[&str], port: u16) -> Value {
                     {
                         "operationId": "service.synthetic.stop",
                         "class": "stop",
-                        "execId": "m0-helper",
+                        "execId": "synthetic-helper",
                         "execArgs": ["stop"],
                         "probeId": null,
                         "terminal": {
@@ -2913,7 +2913,7 @@ fn fixture_model(executable: &str, start_args: &[&str], port: u16) -> Value {
             "smoke": {
                 "taskId": "smoke",
                 "operationId": "task.smoke.run",
-                "execId": "m0-helper",
+                "execId": "synthetic-helper",
                 "args": ["task", "--host", "127.0.0.1", "--port", "${port}"],
                 "dependsOnServicesReady": ["synthetic"],
                 "exitPolicy": {
