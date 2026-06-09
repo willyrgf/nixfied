@@ -8,7 +8,7 @@ fn valid_model_json() -> Value {
         "runtimeAbi": RUNTIME_ABI,
         "generator": {
             "name": "nixfied",
-            "version": "m0",
+            "version": "1",
             "emitter": "nix/compiler/emit-model.nix"
         },
         "project": {
@@ -33,7 +33,7 @@ fn valid_model_json() -> Value {
             "sourceIdentity": "live",
             "sourcePolicy": {
                 "dirtyPolicy": "warn",
-                "admissionFingerprintPolicy": "m0-placeholder"
+                "admissionFingerprintPolicy": "live-fingerprint"
             }
         }],
         "environments": {
@@ -91,17 +91,17 @@ fn valid_model_json() -> Value {
             }
         },
         "state": {
-            "markerIdentity": "nixfied-m0",
-            "stateEpoch": "m0",
+            "markerIdentity": "nixfied-state",
+            "stateEpoch": "1",
             "cleanupPolicy": "delete-on-clean",
             "persistence": "run-scoped"
         },
         "secrets": [],
         "closures": [{
-            "closureId": "m0-helper",
+            "closureId": "synthetic-helper",
             "kind": "executable",
-            "storePath": "/nix/store/00000000000000000000000000000000-m0-helper",
-            "executable": "/nix/store/00000000000000000000000000000000-m0-helper/bin/m0-helper",
+            "storePath": "/nix/store/00000000000000000000000000000000-synthetic-helper",
+            "executable": "/nix/store/00000000000000000000000000000000-synthetic-helper/bin/synthetic-helper",
             "targetSystem": "aarch64-darwin",
             "operationBindings": [
                 "service.synthetic.start",
@@ -112,7 +112,7 @@ fn valid_model_json() -> Value {
             "effects": ["process", "network-listener"]
         }],
         "execs": {
-            "m0-helper": helper_exec()
+            "synthetic-helper": helper_exec()
         },
         "services": {
             "synthetic": synthetic_service()
@@ -130,9 +130,9 @@ fn valid_model_json() -> Value {
 
 fn helper_exec() -> Value {
     json!({
-        "execId": "m0-helper",
-        "closureId": "m0-helper",
-        "executable": "/nix/store/00000000000000000000000000000000-m0-helper/bin/m0-helper",
+        "execId": "synthetic-helper",
+        "closureId": "synthetic-helper",
+        "executable": "/nix/store/00000000000000000000000000000000-synthetic-helper/bin/synthetic-helper",
         "args": [],
         "env": {},
         "codebaseId": "main",
@@ -160,7 +160,7 @@ fn synthetic_service() -> Value {
             {
                 "operationId": "service.synthetic.start",
                 "class": "start",
-                "execId": "m0-helper",
+                "execId": "synthetic-helper",
                 "execArgs": ["service", "--host", "127.0.0.1", "--port", "${port}"],
                 "probeId": null,
                 "terminal": { "success": "spawned", "failure": "failed" }
@@ -184,7 +184,7 @@ fn synthetic_service() -> Value {
             {
                 "operationId": "service.synthetic.stop",
                 "class": "stop",
-                "execId": "m0-helper",
+                "execId": "synthetic-helper",
                 "execArgs": ["stop"],
                 "probeId": null,
                 "terminal": { "success": "stopped", "failure": "failed" }
@@ -234,7 +234,7 @@ fn smoke_task() -> Value {
     json!({
         "taskId": "smoke",
         "operationId": "task.smoke.run",
-        "execId": "m0-helper",
+        "execId": "synthetic-helper",
         "args": ["task", "--host", "127.0.0.1", "--port", "${port}"],
         "dependsOnServicesReady": ["synthetic"],
         "exitPolicy": { "successCodes": [0] },
@@ -367,7 +367,7 @@ fn prepare_operation_may_bind_an_exec() {
     // initdb-style preparation: the prepare class is allowed to bind an exec.
     let mut model = parse_valid_model();
     lifecycle_op_mut(&mut model, "service.synthetic.prepare").exec_id =
-        Some("m0-helper".to_string());
+        Some("synthetic-helper".to_string());
     model.validate().expect("prepare may bind a generic exec");
 }
 
@@ -433,13 +433,13 @@ fn unknown_top_level_field_is_invalid() {
 #[test]
 fn abi_mismatch_is_contract_error() {
     let mut model = parse_valid_model();
-    model.runtime_abi = "nixfied-runtime-abi:m2c:1".to_string();
+    model.runtime_abi = "nixfied-runtime-abi:legacy".to_string();
 
     assert_eq!(
         model.validate().expect_err("ABI mismatch should fail"),
         ValidationError::RuntimeAbi {
             expected: RUNTIME_ABI,
-            actual: "nixfied-runtime-abi:m2c:1".to_string(),
+            actual: "nixfied-runtime-abi:legacy".to_string(),
         }
     );
 }
@@ -563,7 +563,7 @@ fn execs_must_reference_declared_closures() {
     let mut model = parse_valid_model();
     model
         .execs
-        .get_mut("m0-helper")
+        .get_mut("synthetic-helper")
         .expect("fixture has helper exec")
         .closure_id = "ghost-closure".to_string();
 
@@ -671,7 +671,7 @@ fn health_policy_must_be_explicit() {
 #[test]
 fn clean_operation_stays_marker_gated_runtime_cleanup() {
     let mut model = parse_valid_model();
-    lifecycle_op_mut(&mut model, "service.synthetic.clean").exec_id = Some("m0-helper".to_string());
+    lifecycle_op_mut(&mut model, "service.synthetic.clean").exec_id = Some("synthetic-helper".to_string());
 
     assert_eq!(
         model
@@ -680,7 +680,7 @@ fn clean_operation_stays_marker_gated_runtime_cleanup() {
         ValidationError::UnsupportedValue {
             field: "lifecycle.clean.execId",
             expected: "null",
-            actual: "m0-helper".to_string(),
+            actual: "synthetic-helper".to_string(),
         }
     );
 }

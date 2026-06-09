@@ -16,7 +16,7 @@ fn fixture_model() -> Value {
         "runtimeAbi": "nixfied-runtime-abi:1",
         "generator": {
             "name": "nixfied",
-            "version": "m0",
+            "version": "1",
             "emitter": "nix/compiler/emit-model.nix"
         },
         "project": {
@@ -41,7 +41,7 @@ fn fixture_model() -> Value {
             "sourceIdentity": "live",
             "sourcePolicy": {
                 "dirtyPolicy": "warn",
-                "admissionFingerprintPolicy": "m0-placeholder"
+                "admissionFingerprintPolicy": "live-fingerprint"
             }
         }],
         "environments": {
@@ -99,17 +99,17 @@ fn fixture_model() -> Value {
             }
         },
         "state": {
-            "markerIdentity": "nixfied-m0",
-            "stateEpoch": "m0",
+            "markerIdentity": "nixfied-state",
+            "stateEpoch": "1",
             "cleanupPolicy": "delete-on-clean",
             "persistence": "run-scoped"
         },
         "secrets": [],
         "closures": [{
-            "closureId": "m0-helper",
+            "closureId": "synthetic-helper",
             "kind": "executable",
-            "storePath": "/nix/store/test-m0-helper",
-            "executable": "/nix/store/test-m0-helper/bin/m0-helper",
+            "storePath": "/nix/store/test-synthetic-helper",
+            "executable": "/nix/store/test-synthetic-helper/bin/synthetic-helper",
             "targetSystem": host_system(),
             "operationBindings": [
                 "service.synthetic.start",
@@ -120,10 +120,10 @@ fn fixture_model() -> Value {
             "effects": ["process", "network-listener"]
         }],
         "execs": {
-            "m0-helper": {
-                "execId": "m0-helper",
-                "closureId": "m0-helper",
-                "executable": "/nix/store/test-m0-helper/bin/m0-helper",
+            "synthetic-helper": {
+                "execId": "synthetic-helper",
+                "closureId": "synthetic-helper",
+                "executable": "/nix/store/test-synthetic-helper/bin/synthetic-helper",
                 "args": [],
                 "env": {},
                 "codebaseId": "main",
@@ -153,7 +153,7 @@ fn fixture_model() -> Value {
                     {
                         "operationId": "service.synthetic.start",
                         "class": "start",
-                        "execId": "m0-helper",
+                        "execId": "synthetic-helper",
                         "execArgs": ["service", "--host", "127.0.0.1", "--port", "${port}"],
                         "probeId": null,
                         "terminal": {
@@ -186,7 +186,7 @@ fn fixture_model() -> Value {
                     {
                         "operationId": "service.synthetic.stop",
                         "class": "stop",
-                        "execId": "m0-helper",
+                        "execId": "synthetic-helper",
                         "execArgs": ["stop"],
                         "probeId": null,
                         "terminal": {
@@ -251,7 +251,7 @@ fn fixture_model() -> Value {
             "smoke": {
                 "taskId": "smoke",
                 "operationId": "task.smoke.run",
-                "execId": "m0-helper",
+                "execId": "synthetic-helper",
                 "args": ["task", "--host", "127.0.0.1", "--port", "${port}"],
                 "dependsOnServicesReady": ["synthetic"],
                 "exitPolicy": {
@@ -472,7 +472,7 @@ fn protected_persistent_state_is_valid_model_data() {
 #[test]
 fn abi_mismatch_is_runtime_abi_error() {
     let mut model = fixture_model();
-    model["runtimeAbi"] = json!("nixfied-runtime-abi:m0:1");
+    model["runtimeAbi"] = json!("nixfied-runtime-abi:legacy");
     let (_tmp, model_path, _closure) = write_fixture_model(model, true);
     let error = load_model(&model_path).expect_err("ABI mismatch should fail during load");
 
@@ -525,8 +525,8 @@ fn missing_closure_is_rejected() {
 fn closure_store_path_escape_is_rejected() {
     let tmp = TempDir::new();
     let store = tmp.path.join("store");
-    let outside_closure = tmp.path.join("outside-closure/test-m0-helper");
-    let executable = outside_closure.join("bin/m0-helper");
+    let outside_closure = tmp.path.join("outside-closure/test-synthetic-helper");
+    let executable = outside_closure.join("bin/synthetic-helper");
     fs::create_dir_all(&store).unwrap();
     fs::create_dir_all(executable.parent().unwrap()).unwrap();
     fs::write(&executable, "#!/bin/sh\nexit 0\n").unwrap();
@@ -537,15 +537,15 @@ fn closure_store_path_escape_is_rejected() {
     let mut model = fixture_model();
     model["closures"][0]["storePath"] = json!(
         store
-            .join("../outside-closure/test-m0-helper")
+            .join("../outside-closure/test-synthetic-helper")
             .to_string_lossy()
     );
     model["closures"][0]["executable"] = json!(
         store
-            .join("../outside-closure/test-m0-helper/bin/m0-helper")
+            .join("../outside-closure/test-synthetic-helper/bin/synthetic-helper")
             .to_string_lossy()
     );
-    model["execs"]["m0-helper"]["executable"] = model["closures"][0]["executable"].clone();
+    model["execs"]["synthetic-helper"]["executable"] = model["closures"][0]["executable"].clone();
     let model_path = tmp.path.join("model.json");
     fs::write(&model_path, serde_json::to_vec(&model).unwrap()).unwrap();
     let loaded = load_model(&model_path).expect("fixture should load");
@@ -564,7 +564,7 @@ fn exec_executable_must_match_declared_closure() {
     let (_tmp, model_path, closure_root) = write_fixture_model(fixture_model(), true);
     let mut value: Value =
         serde_json::from_slice(&fs::read(&model_path).unwrap()).expect("fixture JSON");
-    value["execs"]["m0-helper"]["executable"] =
+    value["execs"]["synthetic-helper"]["executable"] =
         json!(closure_root.join("bin/other-helper").to_string_lossy());
     fs::write(&model_path, serde_json::to_vec(&value).unwrap()).unwrap();
     let loaded = load_model(&model_path).expect("fixture should load");
@@ -597,11 +597,11 @@ fn target_os_and_arch_must_match_host() {
 
 fn write_fixture_model(mut value: Value, create_executable: bool) -> (TempDir, PathBuf, PathBuf) {
     let tmp = TempDir::new();
-    let closure_root = tmp.path.join("store/test-m0-helper");
-    let executable = closure_root.join("bin/m0-helper");
+    let closure_root = tmp.path.join("store/test-synthetic-helper");
+    let executable = closure_root.join("bin/synthetic-helper");
     value["closures"][0]["storePath"] = json!(closure_root.to_string_lossy());
     value["closures"][0]["executable"] = json!(executable.to_string_lossy());
-    value["execs"]["m0-helper"]["executable"] = json!(executable.to_string_lossy());
+    value["execs"]["synthetic-helper"]["executable"] = json!(executable.to_string_lossy());
     let model_path = tmp.path.join("model.json");
     if create_executable {
         fs::create_dir_all(executable.parent().expect("executable parent")).unwrap();
