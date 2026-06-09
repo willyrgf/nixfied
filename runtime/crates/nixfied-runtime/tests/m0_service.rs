@@ -2515,7 +2515,7 @@ impl ServiceFixture {
         materialize_run_roots(&placement).expect("roots should materialize");
         let registry = Registry::open_or_create(
             placement.registry_path(),
-            &RegistryIdentity::m0(
+            &RegistryIdentity::default_slot(
                 &model.project.project_id,
                 &model.runtime_abi,
                 &model.toolchain_id,

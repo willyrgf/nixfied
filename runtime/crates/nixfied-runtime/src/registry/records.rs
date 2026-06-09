@@ -24,7 +24,7 @@ impl RegistryIdentity {
         }
     }
 
-    pub fn m0(
+    pub fn default_slot(
         project_id: impl Into<String>,
         runtime_abi: impl Into<String>,
         toolchain_id: impl Into<String>,

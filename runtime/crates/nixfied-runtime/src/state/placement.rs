@@ -191,7 +191,7 @@ fn validate_placement_templates(model: &Model) -> RuntimeResult<()> {
         if actual != expected {
             return Err(RuntimeError::new(
                 ErrorCode::ModelAdmission,
-                format!("M0 requires {field} = {expected}, got {actual}"),
+                format!("requires {field} = {expected}, got {actual}"),
             ));
         }
     }

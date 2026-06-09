@@ -8,7 +8,7 @@ let
     else if lib.hasSuffix "-linux" system then
       "linux"
     else
-      throw "unsupported M0 target system: ${system}";
+      throw "unsupported target system: ${system}";
 in
 {
   fromSystem =

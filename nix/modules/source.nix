@@ -7,13 +7,13 @@ in
     logicalRoot = mkOption {
       type = types.nonEmptyStr;
       default = ".";
-      description = "Logical source root for the single M0 live workspace codebase.";
+      description = "Logical source root for the single live workspace codebase.";
     };
 
     sourceIdentity = mkOption {
       type = types.nonEmptyStr;
       default = "live";
-      description = "M0 live workspace source identity placeholder.";
+      description = "live workspace source identity placeholder.";
     };
 
     dirtyPolicy = mkOption {
@@ -23,13 +23,13 @@ in
         "reject"
       ];
       default = "warn";
-      description = "M0 dirty policy for the single live workspace codebase.";
+      description = "dirty policy for the single live workspace codebase.";
     };
 
     admissionFingerprintPolicy = mkOption {
       type = types.nonEmptyStr;
       default = "live-fingerprint";
-      description = "M0 source fingerprint policy placeholder.";
+      description = "source fingerprint policy placeholder.";
     };
   };
 }

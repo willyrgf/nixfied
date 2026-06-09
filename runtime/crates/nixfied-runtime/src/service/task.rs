@@ -205,7 +205,7 @@ fn ensure_task_dependencies(
         if service_name != &service.service_name {
             return Err(RuntimeError::new(
                 ErrorCode::ModelAdmission,
-                format!("M0 task dependency {service_name} is not the started synthetic service"),
+                format!("task dependency {service_name} is not the started synthetic service"),
             ));
         }
         ensure_service_instance_probe_ready(registry, service_name, &service.service_instance_id)?;

@@ -33,7 +33,7 @@ pub fn check_target(
     if !(caps.process_group && caps.tcp_port_ownership && caps.sqlite_wal) {
         return Err(RuntimeError::new(
             ErrorCode::PlatformUnsupported,
-            "required runtime capabilities are not the M0 capability set",
+            "required runtime capabilities are not the capability set",
         )
         .with_model(&loaded.path, &loaded.computed_model_hash));
     }

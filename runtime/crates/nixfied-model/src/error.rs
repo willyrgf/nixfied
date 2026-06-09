@@ -37,7 +37,7 @@ pub enum ValidationError {
         actual: usize,
     },
 
-    #[error("{field} must be empty in M0")]
+    #[error("{field} must be empty")]
     MustBeEmpty { field: &'static str },
 
     #[error("{field} must not contain a host-absolute path: {value}")]
