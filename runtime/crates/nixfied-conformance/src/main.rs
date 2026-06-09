@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Map, Value, json};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -35,10 +35,11 @@ struct Verdict {
     reason: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     computed_model_hash: Option<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    services: Vec<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    nodes: Vec<String>,
+    /// What the check actually observed - recorded so the depth (which services
+    /// started on which ports/PIDs, which steps ran) is inspectable in the
+    /// ground-truth artifact without re-running, not just "pass".
+    #[serde(skip_serializing_if = "Map::is_empty")]
+    observed: Map<String, Value>,
 }
 
 struct Args {
@@ -61,8 +62,7 @@ fn main() {
         status,
         reason,
         computed_model_hash: observed.computed_model_hash,
-        services: observed.services,
-        nodes: observed.nodes,
+        observed: observed.observed,
     };
     write_artifact(&args.check, &verdict);
     println!(
@@ -77,8 +77,56 @@ fn main() {
 #[derive(Default)]
 struct Observed {
     computed_model_hash: Option<String>,
-    services: Vec<String>,
-    nodes: Vec<String>,
+    observed: Map<String, Value>,
+}
+
+impl Observed {
+    fn record(&mut self, key: &str, value: Value) {
+        self.observed.insert(key.to_string(), value);
+    }
+}
+
+/// Per-service ground truth from a run's JSON: the live identity that proves a
+/// service is a distinct running instance (its selected port, runtime-assigned
+/// process key/PID, and layered service-instance id), not just a config value.
+fn service_instances(run: &Value) -> Vec<Value> {
+    run.get("services")
+        .and_then(Value::as_array)
+        .map(|services| {
+            services
+                .iter()
+                .map(|service| {
+                    json!({
+                        "serviceId": service.get("serviceId"),
+                        "port": service
+                            .get("selectedEndpoint")
+                            .and_then(|endpoint| endpoint.get("port")),
+                        "processKey": service.get("processKey"),
+                        "serviceInstanceId": service.get("serviceInstanceId"),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Per-task ground truth: id, success, and observed exit code.
+fn task_results(run: &Value) -> Vec<Value> {
+    run.get("tasks")
+        .and_then(Value::as_array)
+        .map(|tasks| {
+            tasks
+                .iter()
+                .map(|task| {
+                    json!({
+                        "taskId": task.get("taskId"),
+                        "success": task.get("success"),
+                        "exitCode": task.get("exitCode"),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn run_check(args: &Args) -> Result<Observed, String> {
@@ -143,6 +191,9 @@ fn capability(
         assert_nodes_succeeded(&run)?;
     }
 
+    let instances = service_instances(&run);
+    let tasks = task_results(&run);
+
     clean_model(model_json, &state, &work)?;
     let state_root = state.join(&project_id).join("dev").join("0");
     if state_root.exists() {
@@ -153,15 +204,31 @@ fn capability(
     }
 
     assert_views_project_model(model_json, model_dir)?;
+    let goldens = if args.update_goldens {
+        "updated"
+    } else {
+        "matched"
+    };
     diff_goldens(&args.check, model_dir, args.update_goldens)?;
 
     let _ = std::fs::remove_dir_all(&state);
     let _ = std::fs::remove_dir_all(&work);
-    Ok(Observed {
+    let mut observed = Observed {
         computed_model_hash: hash,
-        services,
-        nodes,
-    })
+        observed: Map::new(),
+    };
+    if let Some(workflow) = workflow {
+        observed.record("workflow", json!(workflow));
+    }
+    observed.record("services", json!(instances));
+    observed.record("tasks", json!(tasks));
+    if !nodes.is_empty() {
+        observed.record("nodeOrder", json!(nodes));
+    }
+    observed.record("markerGatedCleanRemovedState", json!(true));
+    observed.record("viewsProjectModel", json!(true));
+    observed.record("goldens", json!(goldens));
+    Ok(observed)
 }
 
 /// The standing proof that the gate distinguishes pass from fail: selecting an
@@ -181,7 +248,13 @@ fn negative(args: &Args) -> Result<Observed, String> {
         Ok(_) => {
             Err("expected the run to fail for an undeclared workflow, but it succeeded".into())
         }
-        Err(_) => Ok(Observed::default()),
+        Err(reason) => {
+            let mut observed = Observed::default();
+            observed.record("selectedWorkflow", json!("does-not-exist"));
+            observed.record("expectedFailure", json!(true));
+            observed.record("refusedWith", json!(reason));
+            Ok(observed)
+        }
     }
 }
 
@@ -205,6 +278,12 @@ fn slots(args: &Args) -> Result<Observed, String> {
 
     assert_tasks_succeeded(&run0)?;
     assert_tasks_succeeded(&run1)?;
+
+    // Two genuinely distinct live instances per slot: distinct selected ports,
+    // distinct runtime process keys (PIDs), and distinct layered service-instance
+    // ids - not the same process behind two config values.
+    let svc0 = service_instances(&run0);
+    let svc1 = service_instances(&run1);
     let ports0 = service_ports(&run0);
     let ports1 = service_ports(&run1);
     if ports0.is_empty() || ports1.is_empty() {
@@ -220,11 +299,23 @@ fn slots(args: &Args) -> Result<Observed, String> {
     if instances0.iter().any(|id| instances1.contains(id)) {
         return Err("slots shared a serviceInstanceId".into());
     }
+    let keys0 = string_array(&run0, "services", "processKey");
+    let keys1 = string_array(&run1, "services", "processKey");
+    if keys0.iter().any(|key| keys1.contains(key)) {
+        return Err("slots shared a service processKey (same OS process)".into());
+    }
 
     let root0 = state.join(&project_id).join("dev").join("0");
     let root1 = state.join(&project_id).join("dev").join("1");
     if !root0.exists() || !root1.exists() {
         return Err("a slot state root was not materialized".into());
+    }
+    // The downstream subject runs Postgres; each slot must own a separate on-disk
+    // data cluster (its own files), captured before the marker-gated clean.
+    let data0 = root0.join("pgdata");
+    let data1 = root1.join("pgdata");
+    if !data0.join("PG_VERSION").is_file() || !data1.join("PG_VERSION").is_file() {
+        return Err("each slot must own a separate Postgres data cluster".into());
     }
 
     clean_model_slot(model_json, 0, &state, &work0)?;
@@ -236,10 +327,35 @@ fn slots(args: &Args) -> Result<Observed, String> {
         return Err("clean did not remove slot 1 state root".into());
     }
 
+    let mut observed = Observed::default();
+    observed.record(
+        "slots",
+        json!([
+            {
+                "slot": 0,
+                "services": svc0,
+                "stateRoot": root0.to_string_lossy(),
+                "postgresDataDir": data0.to_string_lossy(),
+            },
+            {
+                "slot": 1,
+                "services": svc1,
+                "stateRoot": root1.to_string_lossy(),
+                "postgresDataDir": data1.to_string_lossy(),
+            },
+        ]),
+    );
+    observed.record("ranConcurrently", json!(true));
+    observed.record("portsDisjoint", json!(true));
+    observed.record("serviceInstancesDistinct", json!(true));
+    observed.record("processKeysDistinct", json!(true));
+    observed.record("separatePostgresDataClusters", json!(true));
+    observed.record("cleanIsolatedPerSlot", json!(true));
+
     for dir in [state, work0, work1] {
         let _ = std::fs::remove_dir_all(dir);
     }
-    Ok(Observed::default())
+    Ok(observed)
 }
 
 /// Scaffold a throwaway git repo, run the real `#install` + `#upgrade` pinning
@@ -290,6 +406,7 @@ fn adoption_inner(checkout: &Path, pin: &str, project: &Path) -> Result<Observed
         .and_then(Value::as_str)
         .map(str::to_string);
     assert_tasks_succeeded(&run)?;
+    let run_tasks = task_results(&run);
     clean_model(&model, &state, &work)?;
 
     // Real upgrade surface: repin and refresh the lock without touching the
@@ -315,16 +432,43 @@ fn adoption_inner(checkout: &Path, pin: &str, project: &Path) -> Result<Observed
     let work2 = scratch_dir("adopt-work")?;
     let rerun = run_model(&model, None, &state2, &work2)?;
     assert_tasks_succeeded(&rerun)?;
+    let rebuilt_hash = rerun
+        .get("computedModelHash")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let rerun_tasks = task_results(&rerun);
     clean_model(&model, &state2, &work2)?;
 
     for dir in [state, work, state2, work2] {
         let _ = std::fs::remove_dir_all(dir);
     }
-    Ok(Observed {
-        computed_model_hash: hash,
-        services: Vec::new(),
-        nodes: Vec::new(),
-    })
+    let mut observed = Observed {
+        computed_model_hash: hash.clone(),
+        observed: Map::new(),
+    };
+    observed.record("project", json!("adopt"));
+    observed.record("nixfiedPin", json!(pin));
+    observed.record(
+        "steps",
+        json!([
+            "install",
+            "reinstall-refused",
+            "build",
+            "run",
+            "clean",
+            "upgrade",
+            "rebuild",
+            "run",
+            "clean"
+        ]),
+    );
+    observed.record("reinstallRefused", json!(true));
+    observed.record("installModelHash", json!(hash));
+    observed.record("adoptedRunTasks", json!(run_tasks));
+    observed.record("nixfiedNixUnchangedAcrossUpgrade", json!(true));
+    observed.record("rebuiltModelHash", json!(rebuilt_hash));
+    observed.record("rebuiltRunTasks", json!(rerun_tasks));
+    Ok(observed)
 }
 
 // ----- runtime + nix drivers -----------------------------------------------
