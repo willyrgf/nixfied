@@ -16,7 +16,7 @@ let
   windowsDoNotOverlap =
     portPolicy.slotStride >= portPolicy.windowSize;
   checks = [
-    (expect (config.nixfied.target.system == system) "target.system must match the compile system in M0")
+    (expect (config.nixfied.target.system == system) "target.system must match the compile system")
     (expect (config.nixfied.secrets == [ ]) "secrets are unsupported")
     (expect (slotPolicy.min >= 0) "slotPolicy.min must be non-negative")
     (expect (slotPolicy.max >= slotPolicy.min) "slotPolicy.max must be >= min")

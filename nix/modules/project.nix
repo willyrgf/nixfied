@@ -6,7 +6,7 @@ in
   options.nixfied.project = {
     projectId = mkOption {
       type = types.strMatching "[A-Za-z0-9][A-Za-z0-9._-]*";
-      description = "Stable M0 project identifier.";
+      description = "Stable project identifier.";
     };
 
     name = mkOption {
@@ -23,7 +23,7 @@ in
       "x86_64-linux"
     ];
     default = system;
-    description = "Nix target system for the M0 model and runtime closures.";
+    description = "Nix target system for the model and runtime closures.";
   };
 
   options.nixfied.environments = mkOption {
@@ -52,19 +52,19 @@ in
     min = mkOption {
       type = types.int;
       default = 0;
-      description = "Minimum supported M0 slot.";
+      description = "Minimum supported slot.";
     };
 
     default = mkOption {
       type = types.int;
       default = 0;
-      description = "Default supported M0 slot.";
+      description = "Default supported slot.";
     };
 
     max = mkOption {
       type = types.int;
       default = 0;
-      description = "Maximum supported M0 slot.";
+      description = "Maximum supported slot.";
     };
   };
 }

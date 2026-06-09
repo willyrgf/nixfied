@@ -844,7 +844,7 @@ fn refuse_active_service(service_instance_id: &str, existing: Option<String>) ->
         Err(RuntimeError::new(
             ErrorCode::ModelAdmission,
             format!(
-                "M0 service reuse is unsupported; service instance {service_instance_id} is {status}"
+                "service reuse is unsupported; service instance {service_instance_id} is {status}"
             ),
         ))
     } else {

@@ -108,7 +108,7 @@ fn run() -> Result<(), RuntimeError> {
         "clean" => run_control(ControlCommand::Clean, args.get(1..).unwrap_or(&[])),
         _ => Err(RuntimeError::unsupported_feature(
             "runtime.command",
-            format!("unsupported M0 runtime command: {command}"),
+            format!("unsupported runtime command: {command}"),
         )
         .with_detail("command", command)),
     }

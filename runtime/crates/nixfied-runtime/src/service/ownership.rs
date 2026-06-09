@@ -87,7 +87,7 @@ fn loopback_addr(host: &str) -> RuntimeResult<IpAddr> {
     if !addr.is_loopback() {
         return Err(RuntimeError::new(
             ErrorCode::ModelAdmission,
-            format!("M0 endpoint ownership supports loopback only, got {host}"),
+            format!("endpoint ownership supports loopback only, got {host}"),
         ));
     }
     Ok(addr)

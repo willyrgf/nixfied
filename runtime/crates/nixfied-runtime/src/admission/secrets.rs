@@ -8,7 +8,7 @@ pub fn check_secrets(model: &Model, loaded: &LoadedModel) -> RuntimeResult<()> {
         Ok(())
     } else {
         Err(
-            RuntimeError::unsupported_feature("secrets", "non-empty secrets are unsupported in M0")
+            RuntimeError::unsupported_feature("secrets", "non-empty secrets are unsupported")
                 .with_detail("secretCount", model.secrets.len())
                 .with_model(&loaded.path, &loaded.computed_model_hash),
         )

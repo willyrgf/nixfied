@@ -38,7 +38,7 @@
     - runtime ABI: ${model.runtimeAbi}
     - toolchain: ${model.toolchainId}
 
-    ## M0 Surfaces
+    ## Surfaces
 
     ${builtins.concatStringsSep "\n" (map (surface: "- ${surface.name}") model.surfaces)}
 

@@ -913,7 +913,7 @@ where
     } else {
         Err(ValidationError::UnsupportedValue {
             field,
-            expected: "exact M0 values",
+            expected: "exact values",
             actual: format!("{actual:?}"),
         })
     }

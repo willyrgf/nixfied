@@ -151,7 +151,7 @@ fn docs_view(model: &Value) -> Result<String, CliError> {
     let _ = writeln!(output, "- runtime ABI: {runtime_abi}");
     let _ = writeln!(output, "- toolchain: {toolchain_id}");
     let _ = writeln!(output);
-    let _ = writeln!(output, "## M0 Surfaces");
+    let _ = writeln!(output, "## Surfaces");
     let _ = writeln!(output);
     for surface in surfaces {
         let name = string_field(surface, "name")?;
@@ -698,10 +698,7 @@ mod tests {
         let output: serde_json::Value = serde_json::from_str(&output).unwrap();
 
         assert_eq!(output["source"], "model.json");
-        assert_eq!(
-            output["modelTypes"]["runtimeAbi"],
-            "nixfied-runtime-abi:m2c:1"
-        );
+        assert_eq!(output["modelTypes"]["runtimeAbi"], "nixfied-runtime-abi:1");
         assert_eq!(output["surfaces"][1]["name"], "schema");
     }
 
@@ -737,8 +734,8 @@ mod tests {
     fn model_fixture() -> String {
         serde_json::json!({
             "modelVersion": 1,
-            "toolchainId": "nixfied-toolchain:m2c:1",
-            "runtimeAbi": "nixfied-runtime-abi:m2c:1",
+            "toolchainId": "nixfied-toolchain:1",
+            "runtimeAbi": "nixfied-runtime-abi:1",
             "project": {
                 "projectId": "view-test",
                 "name": "View Test"

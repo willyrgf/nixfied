@@ -20,16 +20,15 @@ pub struct AdmittedSource {
 
 pub fn check_source(model: &Model, loaded: &LoadedModel) -> RuntimeResult<AdmittedSource> {
     let [codebase] = model.codebases.as_slice() else {
-        return Err(RuntimeError::new(
-            ErrorCode::SourceMismatch,
-            "M0 requires exactly one codebase",
-        )
-        .with_model(&loaded.path, &loaded.computed_model_hash));
+        return Err(
+            RuntimeError::new(ErrorCode::SourceMismatch, "requires exactly one codebase")
+                .with_model(&loaded.path, &loaded.computed_model_hash),
+        );
     };
     if codebase.codebase_id != "main" || codebase.source_mode != SourceMode::LiveWorkspace {
         return Err(RuntimeError::new(
             ErrorCode::SourceMismatch,
-            "M0 requires codebase main with live-workspace sourceMode",
+            "requires codebase main with live-workspace sourceMode",
         )
         .with_model(&loaded.path, &loaded.computed_model_hash));
     }
@@ -37,7 +36,7 @@ pub fn check_source(model: &Model, loaded: &LoadedModel) -> RuntimeResult<Admitt
         DirtyPolicy::Allow | DirtyPolicy::Warn => {}
         DirtyPolicy::Reject => Err(RuntimeError::new(
             ErrorCode::SourceMismatch,
-            "M0 runtime cannot prove live workspace cleanliness for dirtyPolicy=reject",
+            "runtime cannot prove live workspace cleanliness for dirtyPolicy=reject",
         )
         .with_model(&loaded.path, &loaded.computed_model_hash))?,
     }
@@ -61,7 +60,7 @@ fn resolve_observed_root(logical_root: &str, loaded: &LoadedModel) -> RuntimeRes
     {
         return Err(RuntimeError::new(
             ErrorCode::SourceMismatch,
-            format!("M0 logicalRoot must be a confined relative path: {logical_root}"),
+            format!("logicalRoot must be a confined relative path: {logical_root}"),
         )
         .with_model(&loaded.path, &loaded.computed_model_hash));
     }

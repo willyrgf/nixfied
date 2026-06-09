@@ -7,13 +7,13 @@ in
     markerIdentity = mkOption {
       type = types.nonEmptyStr;
       default = "nixfied-state";
-      description = "Marker identity written into M0 state ownership metadata.";
+      description = "Marker identity written into state ownership metadata.";
     };
 
     stateEpoch = mkOption {
       type = types.nonEmptyStr;
       default = "1";
-      description = "M0 state epoch.";
+      description = "state epoch.";
     };
 
     cleanupPolicy = mkOption {
@@ -22,7 +22,7 @@ in
         "protected"
       ];
       default = "delete-on-clean";
-      description = "M0 state cleanup policy.";
+      description = "state cleanup policy.";
     };
 
     persistence = mkOption {
@@ -31,7 +31,7 @@ in
         "persistent"
       ];
       default = "run-scoped";
-      description = "M0 state persistence policy.";
+      description = "state persistence policy.";
     };
   };
 }

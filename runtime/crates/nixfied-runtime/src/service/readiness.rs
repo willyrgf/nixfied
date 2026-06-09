@@ -90,7 +90,7 @@ fn wait_for_probe(
         }
         ProbeTarget::HttpGet { .. } => Err(RuntimeError::new(
             ErrorCode::ModelAdmission,
-            "M0 service readiness only supports tcp-connect probes",
+            "service readiness only supports tcp-connect probes",
         )),
     }
 }

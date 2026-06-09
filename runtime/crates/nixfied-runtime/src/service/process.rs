@@ -598,7 +598,7 @@ pub fn start_service_for_slot(
     let exec_id = start_op.exec_id.as_deref().ok_or_else(|| {
         RuntimeError::new(
             ErrorCode::ModelAdmission,
-            "M0 service start operation must bind an exec",
+            "service start operation must bind an exec",
         )
     })?;
     let exec = model.execs.get(exec_id).ok_or_else(|| {
