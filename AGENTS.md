@@ -7,9 +7,9 @@ RFC-shaped, and explicit.
 
 - Read `RFC_v2.md` before architectural work. It is the source of truth.
 - `RFC_v2_implementation_plan_M1to7.md` records the executed plan: the capability
-  line (M1-M6; M7 deferred) and the consolidation phase (C1 conformance suite,
-  C2 de-milestoning) are implemented. `RFC_v2_implementation_plan_M0.md` is the
-  earlier Milestone 0 plan and is historical.
+  line (M1-M6; M7 deferred) and the consolidation phase (C1 self-hosted
+  conformance gate, C2 de-milestoning) are implemented. `RFC_v2_implementation_plan_M0.md`
+  is the earlier Milestone 0 plan and is historical.
 - If the RFC and existing code disagree, stop and make the disagreement clear
   before changing architecture.
 
@@ -37,19 +37,22 @@ nix/modules/                 user-facing typed Nix declaration surface
 nix/compiler/                resolve -> validate -> derive -> emit model/views
 nix/spec/                    contract constants and model shape
 nix/adapters/                Nix-side adapters (synthetic, postgres) + default.nix
+nix/packages/                host-Rust-free build of the runtime/conformance binaries
 nix/lib/                     pure Nix helper functions
+nixfied.nix                  the framework's self-project: the `conformance` workflow
 runtime/crates/nixfied-model serde model contract + structural validation
 runtime/crates/nixfied-runtime
                               Nix-free admission, registry, state, services,
                               endpoint ownership, tasks, workflows, and controls
 runtime/crates/nixfied-cli   placeholder CLI crate
 runtime/crates/nixfied-conformance
-                              black-box conformance harness (nix run .#conformance)
+                              per-check conformance closure (`--check <name>`) run as
+                              the task nodes of the self-hosted conformance workflow;
+                              `goldens/` holds the schema/docs/capabilities snapshots
 examples/                    downstream-shaped examples: minimal, postgres,
-                              workflow, polyglot-stack
-tests/                       capability-named end-to-end proof scripts
-                              (minimal, runtime, views, slots, lifecycle, install,
-                              postgres, workflows, polyglot) + guard
+                              workflow, polyglot-stack, downstream (the worked example)
+tests/                       residual end-to-end proofs not subsumed by the
+                              conformance workflow (runtime, views, lifecycle) + guard
 ```
 
 ## Design Principles
@@ -119,30 +122,45 @@ tests/                       capability-named end-to-end proof scripts
 
 ## Common Checks
 
-Use the narrowest relevant checks for the change, then broaden when touching
-shared behavior.
+The cargo floor runs under the pinned toolchain, so it is identical on every host
+and in CI. Use the dev shell (it provides the pinned cargo/clippy/rustfmt):
 
 ```sh
-cargo fmt --manifest-path runtime/Cargo.toml --all -- --check
-cargo clippy --manifest-path runtime/Cargo.toml --workspace --lib --examples --tests --benches --all-features -- -D warnings
-cargo check --manifest-path runtime/Cargo.toml
-cargo test --manifest-path runtime/Cargo.toml
-nix flake check
+nix develop --command bash -c 'cd runtime && cargo fmt --all -- --check'
+nix develop --command bash -c 'cd runtime && cargo clippy --workspace --all-targets --all-features -- -D warnings'
+nix develop --command bash -c 'cd runtime && cargo test --workspace'
+nix flake check                    # model builds + binary compile + guard structurals
 tests/guard-no-milestone-tokens.sh
-nix run .#conformance              # black-box end-to-end suite
-tests/minimal/prove-minimal-service.sh
-tests/runtime/prove-without-nix.sh
-tests/install/prove-scaffold.sh
 ```
 
-Capability-named end-to-end proofs live under `tests/<capability>/` (minimal,
-runtime, views, slots, lifecycle, install, postgres, workflows, polyglot).
-
-Focused runtime tests:
+The end-to-end gate is the product testing itself. It is layered (trusted cargo
+floor first, then structural gates, then the dogfood workflow) and is exactly
+what CI runs (`.github/workflows/conformance.yml`):
 
 ```sh
-cargo test --manifest-path runtime/Cargo.toml -p nixfied-runtime --test service
-cargo test --manifest-path runtime/Cargo.toml -p nixfied-runtime --test state
+# 3. Dogfood gate: nixfied runs its own `conformance` workflow.
+rt="$(nix build .#nixfied-runtime --no-link --print-out-paths)/bin/nixfied-runtime"
+self="$(nix build .#self-model --no-link --print-out-paths)/model.json"
+"$rt" check --model "$self"                                   # fast launch sanity
+NIXFIED_CONFORMANCE_CHECKOUT="$PWD" \
+NIXFIED_CONFORMANCE_ARTIFACTS="$PWD/conformance-artifacts" \
+  "$rt" run --model "$self" --workflow conformance --timeout-ms 600000
+```
+
+The workflow's nodes are per-check conformance closures: capability checks drive
+each example model (`minimal`, `workflow`, `polyglot`, `postgres`, `downstream`)
+and `slots` through the nix-built runtime, `adoption` runs the real `#install` +
+`#upgrade` against a throwaway repo, and `negative` proves the gate fails closed.
+Each writes a ground-truth verdict to `$NIXFIED_CONFORMANCE_ARTIFACTS`. To refresh
+the golden view snapshots after an intended view change, run a capability check
+with `--update-goldens`.
+
+Residual e2e invariants the workflow does not subsume:
+
+```sh
+tests/runtime/prove-without-nix.sh    # SEAM-1: runtime runs with nix unavailable
+tests/views/prove-view-surfaces.sh    # views are disposable model projections
+tests/lifecycle/prove-cancellation.sh tests/lifecycle/prove-gc-hardening.sh tests/lifecycle/prove-lifecycle-ops.sh
 ```
 
 ## Git Hygiene

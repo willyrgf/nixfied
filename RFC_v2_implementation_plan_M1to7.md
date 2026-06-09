@@ -6,11 +6,12 @@ Source of truth for scope and architecture remains `RFC_v2.md`.
 
 Status reflects the `v2` branch as of 2026-06-09. The full capability line (M1-M6,
 M7 deferred) is implemented and verified green: `cargo test`, `cargo clippy -D warnings`,
-`nix flake check`, and every `tests/*` capability proof pass. C2 de-milestoning is complete
-across **both** product and test surfaces. C1 is being **redesigned**: the e2e gate moves
-from a bespoke `nix run .#conformance` harness to a **self-hosted dogfood gate** — nixfied's
-own repo is a nixfied project whose `conformance` workflow tests the framework through its
-own surfaces (see "Consolidation C1" below).
+`nix flake check`, and every `tests/*` proof pass. C2 de-milestoning is complete
+across **both** product and test surfaces. **C1 is done**: the e2e gate is now the
+**self-hosted dogfood gate** — nixfied's own repo is a nixfied project whose
+`conformance` workflow tests the framework through its own surfaces, run by the
+nix-built runtime under test (see "Consolidation C1" below). The bespoke
+`nix run .#conformance` harness interface has been removed.
 
 | Milestone | State | Evidence |
 | --- | --- | --- |
@@ -23,7 +24,7 @@ own surfaces (see "Consolidation C1" below).
 | M5 installable downstream wrapper | Done | `nix/install/upgrade.sh`, `tests/install/prove-upgrade.sh` |
 | M6 polyglot example | Done | `examples/polyglot-stack`, `tests/polyglot/prove-polyglot-stack.sh` |
 | M7 optional manifest envelope | Deferred by decision | none |
-| C1 self-hosted conformance gate | In progress (redesign) | interim `runtime/crates/nixfied-conformance`; self-hosted `conformance` workflow planned |
+| C1 self-hosted conformance gate | Done | repo-root `nixfied.nix` `conformance` workflow; `nix/packages/runtime.nix`; per-check `nixfied-conformance` closure; `examples/downstream`; `.github/workflows/conformance.yml` |
 | C2 de-milestone product + tests | Done | `tests/guard-no-milestone-tokens.sh` (covers product + test surfaces) |
 
 Notes:
@@ -67,7 +68,7 @@ This continuation plan covers milestone work through M7 and keeps M0 constraints
 *6. M6: polyglot example. (done)*
 *7. M7: optional manifest envelope (only if triggered by concrete need). (deferred)*
 
-Consolidation: *C1 self-hosted conformance gate (in progress — redesign), C2 de-milestone
+Consolidation: *C1 self-hosted conformance gate (done), C2 de-milestone
 product + test surfaces (done).*
 
 After the capability line (M1-M6; M7 deferred) is complete, a **Consolidation Phase**
@@ -484,7 +485,7 @@ by the interim shell proofs + `cargo test` acting as that net during C2.
   file, and git history are development history and are *not* rewritten. Milestone
   vocabulary is retired only from the live product surface, not from the project's memory.
 
-## Consolidation C1: Self-Hosted Conformance — nixfied Tests Itself (In Progress)
+## Consolidation C1: Self-Hosted Conformance — nixfied Tests Itself (Done)
 
 ### Product Purpose
 
@@ -586,13 +587,42 @@ pinned inputs + nix-built binaries + throwaway repos/state + clean CI runners, n
    workflow subsumes.
 6. **Docs.** Record the self-hosted gate in this plan, `AGENTS.md`, and the example README.
 
-### Proof
+### Delivered
 
-- `cargo test` green (trusted floor).
+Landed in six commits matching the execution plan above:
+
+- `flake: package nixfied-runtime via pinned rust-overlay` — `nix/packages/runtime.nix`
+  builds the host-Rust-free `nixfied-runtime`/`nixfied-conformance`/`nixfied` binaries with
+  the pinned `rust-overlay` toolchain (rusqlite `bundled`, no system sqlite); `nix build
+  .#nixfied-runtime` yields a working binary.
+- `examples: add downstream worked-example project` — `examples/downstream/` (Postgres via
+  `adapters.postgres` + `api` + `worker` + a `release` workflow, `slotPolicy.max = 1`) with
+  its own pinning `flake.nix` and a README adoption guide; builds and runs end to end.
+- `nixfied: add self-project conformance workflow` — repo-root `nixfied.nix` whose
+  `conformance` workflow nodes are per-check tasks bound to the nix-built conformance closure,
+  each driving a baked example model store path (capability checks need no nix at run time).
+- `conformance: recast harness as per-check task closure` — `nixfied-conformance --check
+  <name> [--update-goldens]` with capability/slots/adoption/negative checks, golden
+  schema/docs/capabilities snapshots, and per-check ground-truth artifacts; the
+  `#conformance` flake app, `apps.conformance`, and `checks.conformance-app` are removed.
+- `ci: wire self-hosted conformance gate and migrate proofs` — `.github/workflows/conformance.yml`
+  (cargo floor → `nix flake check` + guard → check smoke → `run --workflow conformance`); the
+  subsumed capability shell proofs are deleted, the residual ones kept; the dev shell carries
+  the pinned toolchain.
+- `docs: document self-hosted conformance gate` — this section, `AGENTS.md`, and the
+  example README.
+
+### Proof (achieved)
+
+- `cargo test` green (trusted floor, run under the pinned toolchain).
 - `nixfied-runtime run --workflow conformance` green: the framework installs, builds, runs,
-  upgrades, and cleans itself end to end through its own surfaces; ground-truth artifacts are
-  present; a deliberately broken check fails the workflow with a structured reason.
-- `nix flake check` green: example models build, binaries compile, the guard passes.
+  upgrades, and cleans itself end to end through its own surfaces (nodes `minimal`, `workflow`,
+  `polyglot`, `postgres`, `downstream`, `slots`, `negative`, `adoption`); a ground-truth
+  verdict artifact is written per check; forcing a check to fail (e.g. a broken inner runtime)
+  fails the workflow with a structured `MODEL_ADMISSION` reason naming the task and model hash.
+- `nix flake check` green: every example + the self-model build, the binaries compile, the
+  guard passes.
+- No `#conformance` interface remains.
 
 ### Dependencies
 

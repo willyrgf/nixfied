@@ -126,31 +126,34 @@ testing.
 
 ## Verification
 
-Run the Rust workspace checks:
+The end-to-end gate is the product testing itself: nixfied's own repo is a
+nixfied project whose `conformance` workflow drives the framework through its own
+surfaces. It is layered — a trusted `cargo test` floor, then `nix flake check`
+structural gates, then the dogfood workflow run by the nix-built runtime.
 
 ```sh
-cargo fmt --manifest-path runtime/Cargo.toml --all --check
-cargo check --manifest-path runtime/Cargo.toml
-cargo test --manifest-path runtime/Cargo.toml
-```
+# 1. Trusted floor (pinned toolchain via the dev shell).
+nix develop --command bash -c 'cd runtime && cargo fmt --all -- --check'
+nix develop --command bash -c 'cd runtime && cargo clippy --workspace --all-targets --all-features -- -D warnings'
+nix develop --command bash -c 'cd runtime && cargo test --workspace'
 
-Run the Nix and M0 proof checks:
-
-```sh
+# 2. Structural gates.
 nix flake check
-tests/m0/prove-downstream-minimal.sh
-tests/m0/prove-runtime-without-nix.sh
-tests/m0/prove-install-scaffold.sh
-tests/pre-m1/prove-view-surfaces.sh
-tests/m1/prove-slot-isolation.sh
-tests/m2/prove-cancellation.sh
-tests/m2/prove-gc-hardening.sh
-tests/m2/prove-lifecycle-ops.sh
+tests/guard-no-milestone-tokens.sh
+
+# 3. Dogfood gate: nixfied runs its own conformance workflow.
+rt="$(nix build .#nixfied-runtime --no-link --print-out-paths)/bin/nixfied-runtime"
+self="$(nix build .#self-model --no-link --print-out-paths)/model.json"
+"$rt" check --model "$self"
+NIXFIED_CONFORMANCE_CHECKOUT="$PWD" \
+  "$rt" run --model "$self" --workflow conformance --timeout-ms 600000
 ```
 
-The no-Nix proof builds and realises the model first, then places a failing fake
-`nix` executable earlier in `PATH` to prove `nixfied-runtime` does not invoke
-Nix after admission begins.
+`.github/workflows/conformance.yml` runs exactly this. The residual e2e proofs
+not subsumed by the workflow live under `tests/` (`runtime/prove-without-nix.sh`,
+`views/`, `lifecycle/`). The no-Nix proof builds and realises the model first,
+then places a failing fake `nix` executable earlier in `PATH` to prove
+`nixfied-runtime` does not invoke Nix after admission begins.
 
 ## What Comes Next
 
