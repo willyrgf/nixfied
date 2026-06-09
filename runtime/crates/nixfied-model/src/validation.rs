@@ -51,6 +51,7 @@ impl ValidateM0 for Model {
         validate_closures(self)?;
         validate_services(self)?;
         validate_tasks(self)?;
+        validate_workflows(self)?;
         validate_references(self)?;
         Ok(())
     }
@@ -106,8 +107,112 @@ fn validate_deferred_features(model: &Model) -> Result<(), ValidationError> {
     if !model.secrets.is_empty() {
         return Err(ValidationError::MustBeEmpty { field: "secrets" });
     }
-    if !model.workflows.is_empty() {
-        return Err(ValidationError::MustBeEmpty { field: "workflows" });
+    Ok(())
+}
+
+/// Workflows are bounded acyclic graphs of task nodes over declared services.
+fn validate_workflows(model: &Model) -> Result<(), ValidationError> {
+    let task_ids = model
+        .tasks
+        .keys()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let service_ids = model
+        .services
+        .keys()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    for (id, workflow) in &model.workflows {
+        if &workflow.workflow_id != id {
+            return Err(ValidationError::UnsupportedValue {
+                field: "workflows.workflowId",
+                expected: "map key",
+                actual: format!("key={id}, workflowId={}", workflow.workflow_id),
+            });
+        }
+        for service in &workflow.services_required {
+            if !service_ids.contains(service.as_str()) {
+                return Err(ValidationError::UndeclaredReference {
+                    reference_kind: "workflow.servicesRequired",
+                    id: service.clone(),
+                });
+            }
+        }
+        if workflow.nodes.is_empty() {
+            return Err(ValidationError::UnsupportedValue {
+                field: "workflows.nodes",
+                expected: "at least one node",
+                actual: "[]".to_string(),
+            });
+        }
+        let mut node_ids = BTreeSet::new();
+        for node in &workflow.nodes {
+            require_non_empty("workflows.nodes.nodeId", &node.node_id)?;
+            if !node_ids.insert(node.node_id.as_str()) {
+                return Err(ValidationError::UnsupportedValue {
+                    field: "workflows.nodes.nodeId",
+                    expected: "unique node ids",
+                    actual: node.node_id.clone(),
+                });
+            }
+            if !task_ids.contains(node.task_id.as_str()) {
+                return Err(ValidationError::UndeclaredReference {
+                    reference_kind: "workflow.node.taskId",
+                    id: node.task_id.clone(),
+                });
+            }
+        }
+        for node in &workflow.nodes {
+            for dependency in &node.depends_on {
+                if !node_ids.contains(dependency.as_str()) {
+                    return Err(ValidationError::UndeclaredReference {
+                        reference_kind: "workflow.node.dependsOn",
+                        id: dependency.clone(),
+                    });
+                }
+            }
+        }
+        validate_workflow_acyclic(id, &workflow.nodes)?;
+    }
+    Ok(())
+}
+
+/// Reject cycles via Kahn-style topological reduction.
+fn validate_workflow_acyclic(
+    workflow_id: &str,
+    nodes: &[WorkflowNode],
+) -> Result<(), ValidationError> {
+    let mut remaining = nodes
+        .iter()
+        .map(|node| {
+            (
+                node.node_id.as_str(),
+                node.depends_on
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<BTreeSet<_>>(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    while !remaining.is_empty() {
+        let ready = remaining
+            .iter()
+            .filter(|(_, deps)| deps.is_empty())
+            .map(|(id, _)| *id)
+            .collect::<Vec<_>>();
+        if ready.is_empty() {
+            return Err(ValidationError::UnsupportedValue {
+                field: "workflows.nodes.dependsOn",
+                expected: "acyclic dependency graph",
+                actual: workflow_id.to_string(),
+            });
+        }
+        for id in ready {
+            remaining.remove(id);
+            for deps in remaining.values_mut() {
+                deps.remove(id);
+            }
+        }
     }
     Ok(())
 }
@@ -257,11 +362,12 @@ fn validate_capabilities(model: &Model) -> Result<(), ValidationError> {
     )?;
     let task_keys = model.tasks.keys().cloned().collect::<Vec<_>>();
     expect_string_vec("capabilities.tasks", &task_keys, &model.capabilities.tasks)?;
-    if !model.capabilities.workflows.is_empty() {
-        return Err(ValidationError::MustBeEmpty {
-            field: "capabilities.workflows",
-        });
-    }
+    let workflow_keys = model.workflows.keys().cloned().collect::<Vec<_>>();
+    expect_string_vec(
+        "capabilities.workflows",
+        &workflow_keys,
+        &model.capabilities.workflows,
+    )?;
     let slots = expected_slots(&model.slot_policy)?;
     if model.capabilities.slots != slots {
         return Err(ValidationError::UnsupportedValue {
