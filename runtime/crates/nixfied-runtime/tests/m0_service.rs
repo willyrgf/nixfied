@@ -2674,8 +2674,8 @@ fn assert_registry_tables_scoped_to_slot(registry: &Registry, slot: i64, tables:
 fn fixture_model(executable: &str, start_args: &[&str], port: u16) -> Value {
     json!({
         "modelVersion": 1,
-        "toolchainId": "nixfied-toolchain:m2c:1",
-        "runtimeAbi": "nixfied-runtime-abi:m2c:1",
+        "toolchainId": "nixfied-toolchain:1",
+        "runtimeAbi": "nixfied-runtime-abi:1",
         "generator": {
             "name": "nixfied",
             "version": "m0",
@@ -2958,7 +2958,7 @@ fn m0_surfaces() -> Vec<Value> {
                 "outputSchema": {},
                 "exitClasses": ["ok", "error"],
                 "evaluationPermission": "never",
-                "maturity": "m0"
+                "maturity": "stable"
             })
         })
         .collect()

@@ -29,12 +29,12 @@ const LIFECYCLE_CLASSES: &[LifecycleOpClass] = &[
     LifecycleOpClass::Clean,
 ];
 
-pub trait ValidateM0 {
-    fn validate_m0(&self) -> Result<(), ValidationError>;
+pub trait Validate {
+    fn validate(&self) -> Result<(), ValidationError>;
 }
 
-impl ValidateM0 for Model {
-    fn validate_m0(&self) -> Result<(), ValidationError> {
+impl Validate for Model {
+    fn validate(&self) -> Result<(), ValidationError> {
         validate_exact_identities(self)?;
         validate_required_strings(self)?;
         validate_deferred_features(self)?;
@@ -335,10 +335,10 @@ fn validate_surfaces(model: &Model) -> Result<(), ValidationError> {
                 actual: format!("{:?}", surface.evaluation_permission),
             });
         }
-        if surface.maturity != SurfaceMaturity::M0 {
+        if surface.maturity != SurfaceMaturity::Stable {
             return Err(ValidationError::UnsupportedValue {
                 field: "surfaces.maturity",
-                expected: "m0",
+                expected: "stable",
                 actual: format!("{:?}", surface.maturity),
             });
         }

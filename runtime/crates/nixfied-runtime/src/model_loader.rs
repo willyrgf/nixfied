@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use nixfied_model::{Model, ValidateM0};
+use nixfied_model::{Model, Validate};
 use sha2::{Digest, Sha256};
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
@@ -51,7 +51,7 @@ pub fn parse_loaded_model(raw_model: RawModel) -> RuntimeResult<LoadedModel> {
         )
         .with_model(&raw_model.path, &raw_model.computed_model_hash)
     })?;
-    model.validate_m0().map_err(|error| {
+    model.validate().map_err(|error| {
         let message = format!("model contract validation failed: {error}");
         let runtime_error = match &error {
             nixfied_model::ValidationError::RuntimeAbi { .. }

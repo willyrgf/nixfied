@@ -28,7 +28,7 @@ in
 
     admissionFingerprintPolicy = mkOption {
       type = types.nonEmptyStr;
-      default = "m0-placeholder";
+      default = "live-fingerprint";
       description = "M0 source fingerprint policy placeholder.";
     };
   };

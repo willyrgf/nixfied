@@ -32,7 +32,7 @@ let
       "error"
     ];
     evaluationPermission = "never";
-    maturity = "m0";
+    maturity = "stable";
   };
 
   target = targetLib.fromSystem config.nixfied.target.system;

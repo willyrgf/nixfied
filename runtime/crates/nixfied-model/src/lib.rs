@@ -9,4 +9,4 @@ pub use constants::{
 };
 pub use error::{ModelValidationError, ValidationError};
 pub use types::*;
-pub use validation::ValidateM0;
+pub use validation::Validate;
