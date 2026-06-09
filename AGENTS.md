@@ -6,8 +6,10 @@ RFC-shaped, and explicit.
 ## Authority
 
 - Read `RFC_v2.md` before architectural work. It is the source of truth.
-- `RFC_v2_implementation_plan_M0.md` records the selected Milestone 0 execution
-  plan. M0 is complete; do not silently widen it.
+- `RFC_v2_implementation_plan_M1to7.md` records the executed plan: the capability
+  line (M1-M6; M7 deferred) and the consolidation phase (C1 conformance suite,
+  C2 de-milestoning) are implemented. `RFC_v2_implementation_plan_M0.md` is the
+  earlier Milestone 0 plan and is historical.
 - If the RFC and existing code disagree, stop and make the disagreement clear
   before changing architecture.
 
@@ -22,24 +24,32 @@ RFC-shaped, and explicit.
 - Do not preserve or recreate v1 layouts, commands, fixtures, sidecars, APIs, or
   compatibility shims.
 - Do not add migrations or compatibility layers for old models.
-- Do not implement workflows, adapters, service reuse, real secrets, multi-slot
-  execution, SQLite migrations, or runtime adapter protocols unless a later
-  milestone explicitly asks for them.
+- Workflows, the Postgres adapter, multi-slot, multi-service-per-run, and the
+  generic declaration surface are now implemented. Still deferred (do not add
+  without an explicit, RFC-shaped reason): real secret injection, service reuse
+  beyond exact-match identity, SQLite migrations, runtime adapter protocols, and
+  the optional manifest envelope (M7).
 
 ## Project Map
 
 ```text
-nix/modules/                 user-facing typed Nix module surface
+nix/modules/                 user-facing typed Nix declaration surface
 nix/compiler/                resolve -> validate -> derive -> emit model/views
-nix/spec/                    M0 constants and model shape
+nix/spec/                    contract constants and model shape
+nix/adapters/                Nix-side adapters (synthetic, postgres) + default.nix
 nix/lib/                     pure Nix helper functions
-runtime/crates/nixfied-model serde model contract
+runtime/crates/nixfied-model serde model contract + structural validation
 runtime/crates/nixfied-runtime
                               Nix-free admission, registry, state, services,
-                              endpoint ownership, tasks, and controls
+                              endpoint ownership, tasks, workflows, and controls
 runtime/crates/nixfied-cli   placeholder CLI crate
-examples/m0-minimal          downstream-shaped M0 example
-tests/m0                     end-to-end proof scripts
+runtime/crates/nixfied-conformance
+                              black-box conformance harness (nix run .#conformance)
+examples/                    downstream-shaped examples: minimal, postgres,
+                              workflow, polyglot-stack
+tests/                       capability-named end-to-end proof scripts
+                              (minimal, runtime, views, slots, lifecycle, install,
+                              postgres, workflows, polyglot) + guard
 ```
 
 ## Design Principles
@@ -56,7 +66,7 @@ tests/m0                     end-to-end proof scripts
   hot paths such as admission, reconciliation, readiness, and registry loops.
   Measure before optimizing.
 - Extensibility: use traits and generic types when they improve composability,
-  but do not introduce abstractions that widen M0 or create runtime adapter
+  but do not introduce abstractions that widen scope or create runtime adapter
   protocols by accident.
 - Correctness and security first: fail closed for model admission, endpoint
   ownership, cleanup safety, process containment, and secret-related behavior.
@@ -81,12 +91,12 @@ tests/m0                     end-to-end proof scripts
 
 - Keep model structs in `nixfied-model`; runtime code should not invent ad hoc
   model schemas.
-- Deny unknown model fields and prefer exact M0 constants over compatibility
+- Deny unknown model fields and prefer exact contract constants over compatibility
   defaults.
 - Keep host-absolute paths out of `model.json`; materialise host placement in
   Rust at admission/runtime.
 - Runtime admission must fail before process start for invalid origin, ABI,
-  toolchain, target, source, closures, state policy, or unsupported M0 features.
+  toolchain, target, source, closures, state policy, or unsupported features.
 - Liveness reports must reconcile against the OS. The registry is durable
   evidence, not the liveness oracle.
 - Cleanup must be marker-gated, path-confined, policy-gated, and safe to rerun.
@@ -118,16 +128,21 @@ cargo clippy --manifest-path runtime/Cargo.toml --workspace --lib --examples --t
 cargo check --manifest-path runtime/Cargo.toml
 cargo test --manifest-path runtime/Cargo.toml
 nix flake check
-tests/m0/prove-downstream-minimal.sh
-tests/m0/prove-runtime-without-nix.sh
-tests/m0/prove-install-scaffold.sh
+tests/guard-no-milestone-tokens.sh
+nix run .#conformance              # black-box end-to-end suite
+tests/minimal/prove-minimal-service.sh
+tests/runtime/prove-without-nix.sh
+tests/install/prove-scaffold.sh
 ```
+
+Capability-named end-to-end proofs live under `tests/<capability>/` (minimal,
+runtime, views, slots, lifecycle, install, postgres, workflows, polyglot).
 
 Focused runtime tests:
 
 ```sh
-cargo test --manifest-path runtime/Cargo.toml -p nixfied-runtime --test m0_service
-cargo test --manifest-path runtime/Cargo.toml -p nixfied-runtime --test m0_state
+cargo test --manifest-path runtime/Cargo.toml -p nixfied-runtime --test service
+cargo test --manifest-path runtime/Cargo.toml -p nixfied-runtime --test state
 ```
 
 ## Git Hygiene
@@ -139,5 +154,5 @@ cargo test --manifest-path runtime/Cargo.toml -p nixfied-runtime --test m0_state
 - Keep commits focused on one architectural slice when commit-by-commit work is
   requested.
 - Before committing architecture changes, review the diff against `RFC_v2.md`,
-  M0 scope discipline, tests, regressions, and accidental compatibility
+  scope discipline, tests, regressions, and accidental compatibility
   preservation.
