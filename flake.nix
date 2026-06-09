@@ -3,10 +3,17 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
+    # Pinned Rust toolchain source. nixpkgs 25.05 ships an rustc older than the
+    # workspace's rust-version (let-chains), so the runtime/conformance binaries
+    # are built from a toolchain pinned here: host-Rust-free and reproducible.
+    rust-overlay = {
+      url = "github:oxalica/rust-overlay";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
-    { self, nixpkgs }:
+    { self, nixpkgs, rust-overlay }:
     let
       systems = [
         "aarch64-darwin"
@@ -20,7 +27,10 @@
           system:
           f {
             inherit system;
-            pkgs = import nixpkgs { inherit system; };
+            pkgs = import nixpkgs {
+              inherit system;
+              overlays = [ rust-overlay.overlays.default ];
+            };
           }
         );
       mkNixfiedLib =
@@ -41,6 +51,23 @@
         { pkgs, system }:
         let
           nixfiedLib = mkNixfiedLib { inherit pkgs system; };
+          # Pinned toolchain >= the workspace rust-version. The runtime is built
+          # from the nix stdenv C toolchain (rusqlite's `bundled` feature compiles
+          # SQLite from source; no system sqlite/pkg-config is consumed).
+          rustToolchain = pkgs.rust-bin.stable."1.91.0".minimal;
+          rustPlatform = pkgs.makeRustPlatform {
+            cargo = rustToolchain;
+            rustc = rustToolchain;
+          };
+          nixfiedRuntime = rustPlatform.buildRustPackage {
+            pname = "nixfied-runtime";
+            version = "0.1.0";
+            src = ./runtime;
+            cargoLock.lockFile = ./runtime/Cargo.lock;
+            # The white-box `cargo test` floor runs outside the build sandbox (it
+            # binds ports and spawns process groups); here we only compile.
+            doCheck = false;
+          };
           minimalModel = nixfiedLib.compileModel ./examples/minimal/nixfied.nix;
           postgresModel = nixfiedLib.compileModel ./examples/postgres/nixfied.nix;
           workflowModel = nixfiedLib.compileModel ./examples/workflow/nixfied.nix;
@@ -76,6 +103,7 @@
         in
         {
           default = minimalModel;
+          nixfied-runtime = nixfiedRuntime;
           install = nixfiedInstall;
           upgrade = nixfiedUpgrade;
           conformance = nixfiedConformance;
@@ -111,6 +139,8 @@
         { pkgs, system }:
         {
           minimal-model = self.packages.${system}.minimal-model;
+          # The nix-packaged runtime binary must compile reproducibly.
+          nixfied-runtime = self.packages.${system}.nixfied-runtime;
           # The conformance suite itself runs via `nix run .#conformance` (it
           # drives real nix builds + the runtime binary, which the nix-build
           # sandbox cannot host); here we at least gate that its wrapper builds.
