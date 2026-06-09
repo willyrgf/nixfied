@@ -13,7 +13,7 @@ use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::registry::Registry;
 use crate::service::process::{
     SelectedEndpoint, StartedService, platform_start_identity, process_group, resolve_exec_cwd,
-    terminate_process_group, wait_for_child_exit,
+    substitute_arg, terminate_process_group, wait_for_child_exit,
 };
 use crate::service::registry::{
     TaskProcessRecord, TaskTerminalStatus, ensure_service_instance_probe_ready, mark_task_finished,
@@ -80,7 +80,7 @@ pub fn run_dependent_task_cancellable(
     let stderr_path = placement
         .logs_dir
         .join(format!("task.{task_id}.stderr.log"));
-    let args = task_args(exec, task, &service.selected_endpoint);
+    let args = task_args(exec, task, &service.selected_endpoint, &service.state_root);
     let command_cwd = resolve_exec_cwd(&service.source_root, &exec.cwd)?;
     let command_json = serde_json::to_string(&TaskCommandRecord {
         task_id,
@@ -327,13 +327,17 @@ struct TaskOutcome {
     canceled: bool,
 }
 
-fn task_args(exec: &ExecSpec, task: &TaskSpec, endpoint: &SelectedEndpoint) -> Vec<String> {
+fn task_args(
+    exec: &ExecSpec,
+    task: &TaskSpec,
+    endpoint: &SelectedEndpoint,
+    state_root: &Path,
+) -> Vec<String> {
     exec.args
         .iter()
         .chain(task.args.iter())
         .map(|arg| {
-            arg.replace("${port}", &endpoint.port.to_string())
-                .replace("${host}", &endpoint.host)
+            substitute_arg(arg, endpoint.port, state_root).replace("${host}", &endpoint.host)
         })
         .collect()
 }
