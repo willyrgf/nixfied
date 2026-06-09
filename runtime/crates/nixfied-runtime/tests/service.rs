@@ -1255,7 +1255,8 @@ fn cli_signal_cancels_run_and_empties_service_group() {
     value["closures"][0]["storePath"] = json!(closure_root.to_string_lossy());
     value["closures"][0]["executable"] = json!(shell.to_string_lossy());
     value["execs"]["synthetic-helper"]["executable"] = json!(shell.to_string_lossy());
-    value["execs"]["synthetic-helper"]["args"] = json!(["-c", script, "parent", marker_arg, started_arg]);
+    value["execs"]["synthetic-helper"]["args"] =
+        json!(["-c", script, "parent", marker_arg, started_arg]);
     let model: Model = serde_json::from_value(value).expect("CLI fixture model should parse");
     let tmp = TempDir::new();
     let model_path = tmp.path.join("model.json");
