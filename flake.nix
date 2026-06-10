@@ -39,12 +39,25 @@
         );
       mkNixfiedLib =
         { pkgs, system }:
-        {
+        let
           compileModel =
             module:
             import ./nix/compiler/default.nix {
               inherit (nixpkgs) lib;
               inherit pkgs system module;
+            };
+          # The nix-built runtime an adopter's apps run against. Lazy: only forced
+          # when `projectApps` is used, so `compileModel`-only callers don't build it.
+          runtime = import ./nix/packages/runtime.nix { inherit pkgs; };
+        in
+        {
+          inherit compileModel;
+          # The uniform run/check/test/ci app set for an adopting project's model.
+          projectApps =
+            module:
+            import ./nix/project-apps.nix {
+              inherit pkgs runtime;
+              model = compileModel module;
             };
         };
     in
