@@ -1,11 +1,11 @@
-use nixfied_model::{MODEL_VERSION, Model, RUNTIME_ABI, TOOLCHAIN_ID, Validate, ValidationError};
+use nixfied_model::{MODEL_VERSION, Model, TOOLCHAIN_ID, Validate, ValidationError, runtime_abi};
 use serde_json::{Value, json};
 
 fn valid_model_json() -> Value {
     json!({
         "modelVersion": MODEL_VERSION,
         "toolchainId": TOOLCHAIN_ID,
-        "runtimeAbi": RUNTIME_ABI,
+        "runtimeAbi": runtime_abi(),
         "generator": {
             "name": "nixfied",
             "version": "1",
@@ -242,7 +242,7 @@ fn abi_mismatch_is_contract_error() {
     assert_eq!(
         model.validate().expect_err("ABI mismatch should fail"),
         ValidationError::RuntimeAbi {
-            expected: RUNTIME_ABI,
+            expected: runtime_abi(),
             actual: "nixfied-runtime-abi:legacy".to_string(),
         }
     );

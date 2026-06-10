@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use crate::constants::{MODEL_VERSION, RUNTIME_ABI, TOOLCHAIN_ID};
+use crate::constants::{MODEL_VERSION, TOOLCHAIN_ID, runtime_abi};
 use crate::error::ValidationError;
 use crate::types::*;
 
@@ -43,9 +43,9 @@ fn validate_exact_identities(model: &Model) -> Result<(), ValidationError> {
             actual: model.toolchain_id.clone(),
         });
     }
-    if model.runtime_abi != RUNTIME_ABI {
+    if model.runtime_abi != runtime_abi() {
         return Err(ValidationError::RuntimeAbi {
-            expected: RUNTIME_ABI,
+            expected: runtime_abi(),
             actual: model.runtime_abi.clone(),
         });
     }

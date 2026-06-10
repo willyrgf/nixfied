@@ -4,8 +4,8 @@ pub mod types;
 pub mod validation;
 
 pub use constants::{
-    MODEL_VERSION, RUNTIME_ABI, TOOLCHAIN_ID, expected_model_version, expected_runtime_abi,
-    expected_toolchain_id,
+    CAPABILITY_DESCRIPTOR, MODEL_VERSION, TOOLCHAIN_ID, capability_digest, expected_model_version,
+    expected_runtime_abi, expected_toolchain_id, runtime_abi,
 };
 pub use error::{ModelValidationError, ValidationError};
 pub use types::*;
