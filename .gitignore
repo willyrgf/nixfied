@@ -5,7 +5,6 @@ result
 !docs/*.md
 !AGENTS.md
 !README.md
-!RFC_*.md
 !docs/ARCHITECTURE.md
 !docs/DETAILED.md
 !docs/UPGRADE.md
