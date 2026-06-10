@@ -35,7 +35,7 @@ let
   };
 
   # `.#check`: the hermetic source gate (rustfmt/clippy/check + every build) plus
-  # the self-model admission sanity the flake checks don't cover.
+  # a runtime admission sanity on a built model that the flake checks don't cover.
   check = pkgs.writeShellApplication {
     name = "nixfied-check";
     runtimeInputs = [
@@ -45,15 +45,15 @@ let
     text = ''
       echo "==> nix flake check" >&2
       nix flake check
-      echo "==> self-model admission" >&2
-      model="$(nix build .#self-model --no-link --print-out-paths)/model.json"
+      echo "==> model admission" >&2
+      model="$(nix build .#minimal-model --no-link --print-out-paths)/model.json"
       "${runtime}/bin/nixfied-runtime" check --model "$model"
     '';
   };
 
   # `.#ci`: the whole repo, fail-fast — source gate, then the impure test floor,
-  # then the conformance gate. `writeShellApplication` runs `set -euo pipefail`, so
-  # any stage stops the chain.
+  # then the gate. `writeShellApplication` runs `set -euo pipefail`, so any stage
+  # stops the chain.
   ci = pkgs.writeShellApplication {
     name = "nixfied-ci";
     runtimeInputs = [

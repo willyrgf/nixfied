@@ -115,26 +115,21 @@ nix/spec/                    contract constants and model shape
 nix/adapters/                Nix-side adapters (synthetic, postgres) + default.nix
 nix/install/                 install/upgrade surfaces (shell embedded in .nix modules)
 nix/packages/                host-Rust-free build of the binaries + the hermetic rust-workspace check
-nix/gate.nix                 `nix run .#gate` launcher for the conformance gate
+nix/gate.nix                 the framework gate: runs the example models + slots/negative/adoption/views
 nix/dev.nix                  `.#check` / `.#test` / `.#ci` apps (framework dev loop)
 nix/project-apps.nix         `lib.projectApps`: run/check/test/ci apps for an adopter's model
 nix/lib/                     pure Nix helper functions
-nixfied.nix                  the framework's self-project: the `conformance` workflow
 runtime/crates/nixfied-model serde model contract + structural validation
 runtime/crates/nixfied-runtime
                              Nix-free admission, registry, state, services,
                              endpoint ownership, tasks, workflows, and controls
 runtime/crates/nixfied-cli   ergonomic CLI: model/schema/docs/capabilities/install
-runtime/crates/nixfied-conformance
-                             per-check conformance closure (`--check <name>`) run as
-                             the task nodes of the self-hosted conformance workflow;
-                             `goldens/` holds the schema/docs/capabilities snapshots
 examples/                    downstream-shaped examples: minimal, postgres,
                              workflow, polyglot-stack, downstream (the worked example)
 ```
 
 There is no `tests/` directory: end-to-end behavior lives in the cargo floor
-(`runtime/crates/*/tests`) and the self-hosted conformance workflow.
+(`runtime/crates/*/tests`) and the gate (`nix/gate.nix`).
 
 ## Design Principles
 
@@ -203,8 +198,8 @@ There is no `tests/` directory: end-to-end behavior lives in the cargo floor
 
 ## Common Checks
 
-One command runs the whole repo, fail-fast (source gate → test floor →
-conformance gate) — the local equivalent of CI:
+One command runs the whole repo, fail-fast (source gate → test floor → gate) —
+the local equivalent of CI:
 
 ```sh
 nix run .#ci
@@ -213,15 +208,15 @@ nix run .#ci
 Its stages also run on their own:
 
 ```sh
-nix run .#check   # nix flake check + self-model admission sanity
+nix run .#check   # nix flake check + model admission sanity
 nix run .#test    # the white-box cargo floor, pinned toolchain
-nix run .#gate    # the dogfood conformance gate (below)
+nix run .#gate    # the framework gate (below)
 ```
 
 `nix flake check` is the hermetic core of `.#check`: the `rust-workspace` check
 runs `cargo fmt --check` + `cargo clippy --all-targets -D warnings` with vendored
 deps (clippy's front end type-checks every target, so there is no separate `cargo
-check`), plus every example/self model and the debug runtime build. The cargo
+check`), plus every example model and the debug runtime build. The cargo
 *test* floor is deliberately not a flake check (it binds ports / spawns process
 groups), so `.#test` / `.#ci` run it outside the sandbox under the pinned
 toolchain. The raw forms (identical, for a dev shell) are:
@@ -232,39 +227,34 @@ nix develop --command bash -c 'cd runtime && cargo clippy --workspace --all-targ
 nix develop --command bash -c 'cd runtime && cargo test --workspace'
 ```
 
-The dogfood gate (the third `.#ci` stage, and the final CI layer after the cargo
-floor and the structural gates) is the product testing itself: the framework runs
-its own `conformance` workflow through the runtime under test
-(`.github/workflows/checks.yml`):
+The gate (the third `.#ci` stage, and the final CI layer after the cargo floor and
+the structural gates) exercises the runtime the way adopters do — it runs the
+example models as ordinary top-level runs through the runtime under test, plus the
+few checks a single run can't make on its own (`.github/workflows/checks.yml`):
 
 ```sh
-# Dogfood gate: nixfied runs its own `conformance` workflow. The one-liner
-# rebuilds the runtime + self-model from the working tree, smoke-checks, then runs
-# the workflow in a fixed state dir ($TMPDIR/nixfied-gate) wiped fresh each run and
-# kept afterward for inspection. Run from the repo root.
-nix run .#gate                     # forward args after `--`, e.g. -- --timeout-ms 120000
-
-# The `gate` app is only a launcher; the expanded form (what CI runs) is:
-rt="$(nix build .#nixfied-runtime-debug --no-link --print-out-paths)/bin/nixfied-runtime"
-self="$(nix build .#self-model --no-link --print-out-paths)/model.json"
-"$rt" check --model "$self"                                   # fast launch sanity
-NIXFIED_CONFORMANCE_CHECKOUT="$PWD" \
-NIXFIED_CONFORMANCE_ARTIFACTS="$PWD/conformance-artifacts" \
-  "$rt" run --model "$self" --workflow conformance --timeout-ms 600000
+# Builds the debug runtime + the example models from the working tree and runs
+# them against a fixed state dir ($TMPDIR/nixfied-gate), wiped fresh each run and
+# kept afterward; per-check artifacts land in $TMPDIR/nixfied-gate/artifacts/.
+nix run .#gate
 ```
 
-The workflow's nodes are per-check conformance closures: capability checks drive
-each example model (`minimal`, `workflow`, `polyglot`, `postgres`, `downstream`)
-and `slots` through the nix-built runtime, `adoption` runs the real `#install` +
-`#upgrade` against a throwaway repo, and `negative` proves the gate fails closed.
-Each writes a ground-truth verdict to `$NIXFIED_CONFORMANCE_ARTIFACTS`. To refresh
-the golden view snapshots after an intended view change, run a capability check
-with `--update-goldens`.
+For each example (`minimal`, `postgres`, `workflow`, `polyglot`, `downstream`) the
+gate runs the model + cleans it — the example is its own spec, so the run fails if
+its services/tasks fail — and diffs the emitted views against the runtime's
+re-derivation (`nixfied {schema,capabilities,docs} --model` ⟂ `<model>/views/*`).
+Then `slots` runs two concurrent slots of `downstream` and asserts full isolation
+(disjoint ports/instances/process-keys, separate Postgres data clusters, isolated
+clean) — the one genuinely cross-run check; `negative` proves the gate fails closed
+(an undeclared workflow is refused); `adoption` runs the real `#install` +
+`#upgrade` against a throwaway repo. There is no self-model and no orchestrator
+binary — it is all `nix/gate.nix`.
 
 There are no e2e shell proofs: the cancellation/GC/lifecycle invariants are
 white-box cargo tests, SEAM-1 (the runtime never invokes nix) is the
 `runtime_drives_full_lifecycle_without_invoking_nix` cargo test, and the
-view→model projection contract is asserted inside every capability check.
+view→model projection contract is the per-example `nixfied <view>` ⟂ emitted-view
+diff in the gate.
 
 **Build profiles.** `.#ci`, `nix flake check`, and the gate all build the fast
 `debug` profile (`nix/packages/runtime.nix { buildType = "debug"; }`, exposed as

@@ -4,8 +4,8 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
     # Pinned Rust toolchain source. nixpkgs 25.05 ships an rustc older than the
-    # workspace's rust-version (let-chains), so the runtime/conformance binaries
-    # are built from a toolchain pinned here: host-Rust-free and reproducible.
+    # workspace's rust-version (let-chains), so the runtime/CLI binaries are built
+    # from a toolchain pinned here: host-Rust-free and reproducible.
     rust-overlay = {
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -68,12 +68,12 @@
         { pkgs, system }:
         let
           nixfiedLib = mkNixfiedLib { inherit pkgs system; };
-          # The release runtime/conformance binaries (host-Rust-free) — what
-          # `.#install` ships to adopters and what `projectApps` runs.
+          # The release runtime/CLI binaries (host-Rust-free) — what `.#install`
+          # ships to adopters and what `projectApps` runs.
           nixfiedRuntime = import ./nix/packages/runtime.nix { inherit pkgs; };
-          # The debug build the framework's own CI path uses (flake checks, the
-          # self-model's conformance closure, the gate), so every `.#ci` compile
-          # shares one fast profile instead of also building release optimization.
+          # The debug build the framework's own CI path uses (flake checks and the
+          # gate), so every `.#ci` compile shares one fast profile instead of also
+          # building release optimization.
           nixfiedRuntimeDebug = import ./nix/packages/runtime.nix {
             inherit pkgs;
             buildType = "debug";
@@ -83,13 +83,10 @@
           workflowModel = nixfiedLib.compileModel ./examples/workflow/nixfied.nix;
           polyglotModel = nixfiedLib.compileModel ./examples/polyglot-stack/nixfied.nix;
           downstreamModel = nixfiedLib.compileModel ./examples/downstream/nixfied.nix;
-          # The framework's own project: a `conformance` workflow that drives the
-          # examples + adoption through the nix-built runtime. This is the gate.
-          selfModel = nixfiedLib.compileModel ./nixfied.nix;
           nixfiedInstall = import ./nix/install/install.nix { inherit pkgs; };
           nixfiedUpgrade = import ./nix/install/upgrade.nix { inherit pkgs; };
-          # `nix run .#gate`: launch the self-hosted conformance gate against the
-          # current working tree (rebuilds the runtime + self-model on each run).
+          # `nix run .#gate`: the framework gate — runs the example models directly
+          # (rebuilds the debug runtime + models from the working tree on each run).
           nixfiedGate = import ./nix/gate.nix {
             inherit pkgs;
             runtime = nixfiedRuntimeDebug;
@@ -126,7 +123,6 @@
           workflow-model = workflowModel;
           polyglot-stack-model = polyglotModel;
           downstream-model = downstreamModel;
-          self-model = selfModel;
         }
       );
 
@@ -146,12 +142,12 @@
           gate = {
             type = "app";
             program = "${self.packages.${system}.gate}/bin/nixfied-gate";
-            meta.description = "Run the self-hosted conformance gate against the working tree";
+            meta.description = "Run the framework gate (examples + slots/negative/adoption) against the working tree";
           };
           check = {
             type = "app";
             program = "${self.packages.${system}.check}/bin/nixfied-check";
-            meta.description = "Hermetic source gate (rustfmt/clippy/check) + self-model admission";
+            meta.description = "Hermetic source gate (rustfmt/clippy/check) + model admission";
           };
           test = {
             type = "app";
@@ -161,7 +157,7 @@
           ci = {
             type = "app";
             program = "${self.packages.${system}.ci}/bin/nixfied-ci";
-            meta.description = "Fail-fast whole-repo gate: check then test then conformance";
+            meta.description = "Fail-fast whole-repo gate: check then test then the gate";
           };
         }
       );
@@ -175,8 +171,6 @@
           # `nixfied-runtime` package); a release-only compile break is essentially
           # impossible once clippy + debug pass.
           nixfied-runtime = self.packages.${system}.nixfied-runtime-debug;
-          # The self-project conformance model must build (the gate's input).
-          self-model = self.packages.${system}.self-model;
           # Hermetic source gate: rustfmt + clippy (-D warnings) + cargo check.
           rust-workspace = import ./nix/packages/rust-workspace-check.nix { inherit pkgs; };
         }
