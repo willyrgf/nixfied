@@ -141,7 +141,8 @@ what CI runs (`.github/workflows/conformance.yml`):
 ```sh
 # 3. Dogfood gate: nixfied runs its own `conformance` workflow. The one-liner
 #    rebuilds the runtime + self-model from the working tree, smoke-checks, then
-#    runs the workflow in a private throwaway state dir. Run from the repo root.
+#    runs the workflow in a fixed state dir ($TMPDIR/nixfied-gate) wiped fresh each
+#    run and kept afterward for inspection. Run from the repo root.
 nix run .#gate                     # forward args after `--`, e.g. -- --timeout-ms 120000
 
 # The `gate` app is only a launcher; the expanded form (what CI runs) is:
