@@ -5,9 +5,9 @@
 //! reads `Model` directly.
 
 use std::collections::BTreeMap;
-use std::net::IpAddr;
 use std::time::Duration;
 
+pub use nixfied_model::LoopbackHost;
 use nixfied_model::{ContainmentRequirement, ServiceIdentity};
 
 /// The whole executable program for a run: services to start, tasks to run, the
@@ -135,57 +135,22 @@ pub struct ResolvedExec {
     pub timeout: Duration,
 }
 
-/// A tcp-connect probe. The endpoint is the service's single bound endpoint, so
-/// no http target and no cross-endpoint reference is representable.
+/// A tcp-connect probe of the service's single bound endpoint; `label` only names
+/// the op (ready/health) in diagnostics. No http target, no cross-endpoint ref.
 #[derive(Debug, Clone)]
 pub struct TcpProbe {
-    pub probe_id: String,
+    pub label: String,
     pub timeout: Duration,
     pub retry_interval: Duration,
     pub max_attempts: u32,
 }
 
-/// The endpoint the runtime binds and verifies ownership of.
+/// The endpoint the runtime binds and verifies ownership of. The port is assigned
+/// by the planner from the slot window, so it is not part of the endpoint.
 #[derive(Debug, Clone)]
 pub struct ResolvedEndpoint {
     pub endpoint_id: String,
     pub host: LoopbackHost,
-    pub port: PortConstraint,
-}
-
-/// How the endpoint's port is chosen: assigned from the slot window, or pinned
-/// to a fixed port the planner must reconcile against the window assignment.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PortConstraint {
-    Window,
-    Fixed(u16),
-}
-
-/// A loopback host: a parsed IP literal that is provably a loopback address.
-/// `"localhost"` and `"0.0.0.0"` cannot construct one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LoopbackHost(IpAddr);
-
-impl LoopbackHost {
-    pub fn parse(host: &str) -> Result<Self, String> {
-        let ip: IpAddr = host
-            .parse()
-            .map_err(|_| format!("host {host} is not an IP literal"))?;
-        if !ip.is_loopback() {
-            return Err(format!("host {host} is not a loopback address"));
-        }
-        Ok(Self(ip))
-    }
-
-    pub fn ip(&self) -> IpAddr {
-        self.0
-    }
-}
-
-impl std::fmt::Display for LoopbackHost {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
-    }
 }
 
 /// A stop signal the runtime can send. Replaces the free-form `stopPolicy.signal`

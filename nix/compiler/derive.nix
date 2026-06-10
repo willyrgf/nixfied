@@ -97,31 +97,10 @@ let
   };
   execs = mapAttrs execSpec config.nixfied.execs;
 
-  # Endpoints: inject the slot candidate window. Multiple endpoints share the
-  # window; the runtime assigns distinct ports within it per service.
   endpointSpec = endpoint: {
-    endpointId = endpoint.endpointId;
-    protocol = endpoint.protocol;
-    host = endpoint.host;
-    port = {
-      kind = "candidate-window";
-      inherit (defaultPortWindow) start end;
-    };
-    ownershipVerification = endpoint.ownershipVerification;
-    socketActivation = endpoint.socketActivation;
+    inherit (endpoint) endpointId host;
   };
-  probeSpec = probe: {
-    probeId = probe.probeId;
-    target =
-      {
-        kind = probe.target.kind;
-        endpointId = probe.target.endpointId;
-      }
-      // lib.optionalAttrs (probe.target.kind == "http-get") {
-        path = if probe.target.path == null then "/" else probe.target.path;
-      };
-    inherit (probe) timeoutMs retryIntervalMs maxAttempts;
-  };
+  probeOf = op: { inherit (op.probe) timeoutMs retryIntervalMs maxAttempts; };
   terminalOf = op: { inherit (op.terminal) success failure; };
   lifecycleSpec = lc: {
     prepare = {
@@ -133,11 +112,13 @@ let
       terminal = terminalOf lc.start;
     };
     ready = {
-      inherit (lc.ready) operationId probeId;
+      inherit (lc.ready) operationId;
+      probe = probeOf lc.ready;
       terminal = terminalOf lc.ready;
     };
     health = {
-      inherit (lc.health) operationId probeId;
+      inherit (lc.health) operationId;
+      probe = probeOf lc.health;
       terminal = terminalOf lc.health;
     };
     stop = {
@@ -153,8 +134,7 @@ let
   serviceSpec =
     name: service:
     let
-      endpoints = map endpointSpec service.endpoints;
-      probes = map probeSpec service.probes;
+      endpoint = endpointSpec service.endpoint;
       lifecycle = lifecycleSpec service.lifecycle;
       lifecycleExecIds = lib.filter (id: id != null) [
         service.lifecycle.prepare.execId
@@ -166,12 +146,11 @@ let
         slot = slotPolicy.default;
         service = name;
       };
-      endpointIdentityInputs = endpoints;
       stateIdentityInputs = {
         inherit (config.nixfied.state) stateEpoch cleanupPolicy persistence;
       };
       runtimeIdentityInputs = {
-        inherit lifecycle endpoints probes;
+        inherit lifecycle endpoint;
         foreground = service.foreground;
         healthPolicy = service.healthPolicy;
         containment = service.containment;
@@ -182,8 +161,7 @@ let
     {
       serviceId = name;
       foreground = service.foreground;
-      inherit lifecycle endpoints probes;
-      readinessProbe = service.readinessProbe;
+      inherit lifecycle endpoint;
       healthPolicy = service.healthPolicy;
       stateRefs = service.stateRefs;
       logRefs = service.logRefs;
@@ -191,7 +169,7 @@ let
       lifetime = service.lifetime;
       identity = {
         serviceAddressHash = identifiers.hashJson addressInputs;
-        endpointIdentityHash = identifiers.hashJson endpointIdentityInputs;
+        endpointIdentityHash = identifiers.hashJson endpoint;
         stateIdentityHash = identifiers.hashJson stateIdentityInputs;
         runtimeCompatibilityHash = identifiers.hashJson runtimeIdentityInputs;
         targetIdentityHash = identifiers.hashJson target;

@@ -151,27 +151,12 @@ fn synthetic_service() -> Value {
         "lifecycle": {
             "prepare": { "operationId": "service.synthetic.prepare", "execId": null, "execArgs": [], "terminal": { "success": "prepared", "failure": "failed" } },
             "start": { "operationId": "service.synthetic.start", "execId": "synthetic-helper", "execArgs": ["service", "--host", "127.0.0.1", "--port", "${port}"], "terminal": { "success": "spawned", "failure": "failed" } },
-            "ready": { "operationId": "service.synthetic.ready", "probeId": "synthetic-tcp", "terminal": { "success": "ready", "failure": "not-ready" } },
-            "health": { "operationId": "service.synthetic.health", "probeId": "synthetic-tcp", "terminal": { "success": "healthy", "failure": "unhealthy" } },
+            "ready": { "operationId": "service.synthetic.ready", "probe": { "timeoutMs": 1000, "retryIntervalMs": 100, "maxAttempts": 20 }, "terminal": { "success": "ready", "failure": "not-ready" } },
+            "health": { "operationId": "service.synthetic.health", "probe": { "timeoutMs": 1000, "retryIntervalMs": 100, "maxAttempts": 20 }, "terminal": { "success": "healthy", "failure": "unhealthy" } },
             "stop": { "operationId": "service.synthetic.stop", "signal": "TERM", "timeoutMs": 5000, "terminal": { "success": "stopped", "failure": "failed" } },
             "clean": { "operationId": "service.synthetic.clean", "terminal": { "success": "cleaned", "failure": "failed" } }
         },
-        "endpoints": [{
-            "endpointId": "synthetic-tcp",
-            "protocol": "tcp",
-            "host": "127.0.0.1",
-            "port": { "kind": "candidate-window", "start": 38080, "end": 38090 },
-            "ownershipVerification": "required",
-            "socketActivation": "disabled"
-        }],
-        "probes": [{
-            "probeId": "synthetic-tcp",
-            "target": { "kind": "tcp-connect", "endpointId": "synthetic-tcp" },
-            "timeoutMs": 1000,
-            "retryIntervalMs": 100,
-            "maxAttempts": 20
-        }],
-        "readinessProbe": "synthetic-tcp",
+        "endpoint": { "endpointId": "synthetic-tcp", "host": "127.0.0.1" },
         "healthPolicy": "explicit",
         "stateRefs": ["slot"],
         "logRefs": ["service.synthetic"],
@@ -244,19 +229,13 @@ fn add_worker_service(value: &mut Value) {
     value["closures"][0]["operationBindings"]
         .as_array_mut()
         .unwrap()
-        .extend([json!("service.worker.start"), json!("service.worker.stop")]);
+        .push(json!("service.worker.start"));
 
     let mut worker = synthetic_service();
     worker["serviceId"] = json!("worker");
-    worker["readinessProbe"] = json!("worker-tcp");
-    worker["endpoints"][0]["endpointId"] = json!("worker-tcp");
-    worker["probes"][0]["probeId"] = json!("worker-tcp");
-    worker["probes"][0]["target"]["endpointId"] = json!("worker-tcp");
+    worker["endpoint"]["endpointId"] = json!("worker-tcp");
     for (class, op) in worker["lifecycle"].as_object_mut().unwrap() {
         op["operationId"] = json!(format!("service.worker.{class}"));
-        if class == "ready" || class == "health" {
-            op["probeId"] = json!("worker-tcp");
-        }
     }
     value["services"]["worker"] = worker;
     value["environments"]["dev"]["services"] = json!(["synthetic", "worker"]);
@@ -298,51 +277,6 @@ fn accepts_arbitrary_service_and_exec_names() {
     model
         .validate()
         .expect("multi-service / multi-exec models are valid");
-}
-
-#[test]
-fn service_may_not_reference_another_services_probe() {
-    // Probe ids are service-local. A second service pointing its readinessProbe at
-    // the first service's probe must be rejected at admission (fail closed), not
-    // admitted and then fail when the runtime resolves it within the ServiceSpec.
-    let mut value = valid_model_json();
-    add_worker_service(&mut value);
-    // Point the worker's readiness and ready/health probes at the synthetic
-    // service's probe (self-consistent within the worker, but cross-service).
-    value["services"]["worker"]["readinessProbe"] = json!("synthetic-tcp");
-    value["services"]["worker"]["lifecycle"]["ready"]["probeId"] = json!("synthetic-tcp");
-    value["services"]["worker"]["lifecycle"]["health"]["probeId"] = json!("synthetic-tcp");
-    let model: Model = serde_json::from_value(value).expect("model should deserialize");
-
-    assert_eq!(
-        model
-            .validate()
-            .expect_err("cross-service probe reference must be rejected"),
-        ValidationError::UndeclaredReference {
-            reference_kind: "lifecycle.probeId",
-            id: "synthetic-tcp".to_string(),
-        }
-    );
-}
-
-#[test]
-fn probe_may_not_target_another_services_endpoint() {
-    // Endpoint ids are service-local too: a probe may only target an endpoint its
-    // own service declares.
-    let mut value = valid_model_json();
-    add_worker_service(&mut value);
-    value["services"]["worker"]["probes"][0]["target"]["endpointId"] = json!("synthetic-tcp");
-    let model: Model = serde_json::from_value(value).expect("model should deserialize");
-
-    assert_eq!(
-        model
-            .validate()
-            .expect_err("cross-service endpoint reference must be rejected"),
-        ValidationError::UndeclaredReference {
-            reference_kind: "probe.endpointId",
-            id: "synthetic-tcp".to_string(),
-        }
-    );
 }
 
 #[test]
@@ -548,26 +482,6 @@ fn env_task_service_deps_must_be_declared_in_env_services() {
 }
 
 #[test]
-fn rejects_http_get_probe_for_tcp_only_abi() {
-    let mut value = valid_model_json();
-    value["services"]["synthetic"]["probes"][0]["target"] = json!({
-        "kind": "http-get",
-        "endpointId": "synthetic-tcp",
-        "path": "/health",
-    });
-    let model: Model = serde_json::from_value(value).expect("model should deserialize");
-    match model
-        .validate()
-        .expect_err("http-get probes are not supported by the current ABI")
-    {
-        ValidationError::UnsupportedValue { field, .. } => {
-            assert_eq!(field, "services.probes.target.kind")
-        }
-        other => panic!("unexpected error: {other:?}"),
-    }
-}
-
-#[test]
 fn host_absolute_placement_is_rejected() {
     let mut model = parse_valid_model();
     model.placement.state_root_template = "/tmp/nixfied".to_string();
@@ -636,19 +550,12 @@ fn runtime_constraints_must_use_fail_collision_policy() {
 }
 
 #[test]
-fn lifecycle_must_bind_readiness_probe_on_ready() {
-    let mut model = parse_valid_model();
-    synthetic_lifecycle_mut(&mut model).ready.probe_id = "synthetic-tcp-other".to_string();
-
-    match model
-        .validate()
-        .expect_err("ready lifecycle must bind the readiness probe")
-    {
-        ValidationError::UnsupportedValue { field, .. } => {
-            assert_eq!(field, "lifecycle.ready.probeId")
-        }
-        other => panic!("unexpected error: {other:?}"),
-    }
+fn non_loopback_endpoint_host_is_rejected_at_parse() {
+    // The endpoint host is a typed loopback literal; a hostname or wildcard cannot
+    // deserialize.
+    let mut value = valid_model_json();
+    value["services"]["synthetic"]["endpoint"]["host"] = json!("localhost");
+    serde_json::from_value::<Model>(value).expect_err("a non-loopback host must not parse");
 }
 
 #[test]

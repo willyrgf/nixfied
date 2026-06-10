@@ -299,67 +299,75 @@ pub enum CancellationMode {
     KillProcess,
 }
 
+/// The single tcp endpoint a service binds. Port is assigned by the runtime from
+/// the slot window, so it is not declared; protocol/ownership/socket-activation
+/// were frozen constants and are gone.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct EndpointSpec {
+pub struct Endpoint {
     pub endpoint_id: String,
-    pub protocol: EndpointProtocol,
-    pub host: String,
-    pub port: PortPolicy,
-    pub ownership_verification: OwnershipVerification,
-    pub socket_activation: SocketActivation,
+    pub host: LoopbackHost,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum EndpointProtocol {
-    Tcp,
+/// A host that is provably an IP loopback literal — `"localhost"` and `"0.0.0.0"`
+/// cannot deserialize, so the host-parse failure is unrepresentable at the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LoopbackHost(std::net::IpAddr);
+
+impl LoopbackHost {
+    /// Construct from a string in code (e.g. tests); the same loopback check the
+    /// `Deserialize` impl applies.
+    pub fn parse(host: &str) -> Result<Self, String> {
+        let ip: std::net::IpAddr = host
+            .parse()
+            .map_err(|_| format!("host {host} is not an IP literal"))?;
+        if !ip.is_loopback() {
+            return Err(format!("host {host} is not a loopback address"));
+        }
+        Ok(Self(ip))
+    }
+
+    pub fn ip(&self) -> std::net::IpAddr {
+        self.0
+    }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(
-    tag = "kind",
-    rename_all = "kebab-case",
-    rename_all_fields = "camelCase",
-    deny_unknown_fields
-)]
-pub enum PortPolicy {
-    Fixed { port: u16 },
-    CandidateWindow { start: u16, end: u16 },
+impl std::fmt::Display for LoopbackHost {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum OwnershipVerification {
-    Required,
+impl Serialize for LoopbackHost {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(&self.0)
+    }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum SocketActivation {
-    Disabled,
+impl<'de> Deserialize<'de> for LoopbackHost {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = String::deserialize(deserializer)?;
+        let ip: std::net::IpAddr = raw
+            .parse()
+            .map_err(|_| serde::de::Error::custom(format!("host {raw} is not an IP literal")))?;
+        if !ip.is_loopback() {
+            return Err(serde::de::Error::custom(format!(
+                "host {raw} is not a loopback address"
+            )));
+        }
+        Ok(Self(ip))
+    }
 }
 
+/// The timing of a tcp-connect probe, inlined onto the ready/health ops. The
+/// probe targets the service's single endpoint by construction, so there is no
+/// probe id or target.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ProbeSpec {
-    pub probe_id: String,
-    pub target: ProbeTarget,
+pub struct ProbeTiming {
     pub timeout_ms: NonZeroU64,
     pub retry_interval_ms: NonZeroU64,
     pub max_attempts: NonZeroU32,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(
-    tag = "kind",
-    rename_all = "kebab-case",
-    rename_all_fields = "camelCase",
-    deny_unknown_fields
-)]
-pub enum ProbeTarget {
-    TcpConnect { endpoint_id: String },
-    HttpGet { endpoint_id: String, path: String },
 }
 
 /// The full lifecycle as a per-class record: each class binds exactly the
@@ -397,21 +405,21 @@ pub struct StartSpec {
     pub terminal: TerminalSemantics,
 }
 
-/// ready: wait on a probe.
+/// ready: wait on a tcp probe of the service endpoint.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReadySpec {
     pub operation_id: String,
-    pub probe_id: String,
+    pub probe: ProbeTiming,
     pub terminal: TerminalSemantics,
 }
 
-/// health: wait on a probe.
+/// health: wait on a tcp probe of the service endpoint.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HealthSpec {
     pub operation_id: String,
-    pub probe_id: String,
+    pub probe: ProbeTiming,
     pub terminal: TerminalSemantics,
 }
 
@@ -446,9 +454,7 @@ pub struct ServiceSpec {
     pub service_id: String,
     pub foreground: bool,
     pub lifecycle: Lifecycle,
-    pub endpoints: Vec<EndpointSpec>,
-    pub probes: Vec<ProbeSpec>,
-    pub readiness_probe: String,
+    pub endpoint: Endpoint,
     pub health_policy: HealthPolicy,
     pub state_refs: Vec<String>,
     pub log_refs: Vec<String>,

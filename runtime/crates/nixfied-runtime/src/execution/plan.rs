@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
-use crate::execution::types::{ExecutionModel, ExecWorkflow, PortConstraint, PortWindow};
+use crate::execution::types::{ExecutionModel, ExecWorkflow, PortWindow};
 
 /// Which program a run drives: the environment's services + tasks, or a workflow.
 #[derive(Debug, Clone, Copy)]
@@ -75,7 +75,7 @@ pub fn plan(model: &ExecutionModel, selection: Selection<'_>, slot: u32) -> Runt
         }
     };
 
-    let services = assign_ports(model, &service_names, *window, slot)?;
+    let services = assign_ports(&service_names, *window, slot)?;
     Ok(RunPlan {
         services,
         nodes,
@@ -84,9 +84,8 @@ pub fn plan(model: &ExecutionModel, selection: Selection<'_>, slot: u32) -> Runt
 }
 
 /// Assign each service the next port in the window (start + index), proving the
-/// window has capacity and reconciling any fixed-port endpoint against its slot.
+/// window has capacity for every service.
 fn assign_ports(
-    model: &ExecutionModel,
     service_names: &[String],
     window: PortWindow,
     slot: u32,
@@ -111,17 +110,6 @@ fn assign_ports(
             ));
         };
         let port = window.start + offset;
-        if let Some(service) = model.services.get(service_name)
-            && let PortConstraint::Fixed(fixed) = service.endpoint.port
-            && fixed != port
-        {
-            return Err(RuntimeError::new(
-                ErrorCode::ModelAdmission,
-                format!(
-                    "service {service_name} fixed port {fixed} cannot be assigned in slot {slot} (would be {port})"
-                ),
-            ));
-        }
         bindings.push(ServiceBinding {
             service_name: service_name.clone(),
             port,
@@ -213,14 +201,14 @@ mod tests {
 
     fn tcp_probe() -> TcpProbe {
         TcpProbe {
-            probe_id: "p".to_string(),
+            label: "ready".to_string(),
             timeout: Duration::from_millis(1000),
             retry_interval: Duration::from_millis(100),
             max_attempts: 10,
         }
     }
 
-    fn service(name: &str, port: PortConstraint) -> ExecService {
+    fn service(name: &str) -> ExecService {
         ExecService {
             name: name.to_string(),
             prepare: PrepareOp {
@@ -250,7 +238,6 @@ mod tests {
             endpoint: ResolvedEndpoint {
                 endpoint_id: "e".to_string(),
                 host: LoopbackHost::parse("127.0.0.1").unwrap(),
-                port,
             },
             containment: ContainmentRequirement::ProcessGroup,
             identity: ServiceIdentity {
@@ -264,14 +251,14 @@ mod tests {
     }
 
     fn model(
-        services: Vec<(&str, PortConstraint)>,
+        services: Vec<&str>,
         env_services: Vec<&str>,
         windows: Vec<(u32, u16, u16)>,
     ) -> ExecutionModel {
         ExecutionModel {
             services: services
                 .into_iter()
-                .map(|(name, port)| (name.to_string(), service(name, port)))
+                .map(|name| (name.to_string(), service(name)))
                 .collect(),
             tasks: BTreeMap::new(),
             environment: ExecEnvironment {
@@ -289,7 +276,7 @@ mod tests {
     #[test]
     fn assigns_ports_from_window_start_in_order() {
         let em = model(
-            vec![("a", PortConstraint::Window), ("b", PortConstraint::Window)],
+            vec!["a", "b"],
             vec!["a", "b"],
             vec![(0, 38080, 38090)],
         );
@@ -306,7 +293,7 @@ mod tests {
     #[test]
     fn rejects_when_window_cannot_host_all_services() {
         let em = model(
-            vec![("a", PortConstraint::Window), ("b", PortConstraint::Window)],
+            vec!["a", "b"],
             vec!["a", "b"],
             vec![(0, 38080, 38080)],
         );
@@ -318,7 +305,7 @@ mod tests {
     fn feasibility_is_checked_per_slot() {
         // Slot 0 fits two services; slot 1's window holds only one.
         let em = model(
-            vec![("a", PortConstraint::Window), ("b", PortConstraint::Window)],
+            vec!["a", "b"],
             vec!["a", "b"],
             vec![(0, 38080, 38090), (1, 39000, 39000)],
         );
@@ -335,30 +322,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn reconciles_a_matching_fixed_port() {
-        let em = model(
-            vec![("a", PortConstraint::Fixed(38080))],
-            vec!["a"],
-            vec![(0, 38080, 38090)],
-        );
-        assert!(plan(&em, Selection::Environment, 0).is_ok());
-    }
-
-    #[test]
-    fn rejects_a_mismatched_fixed_port() {
-        let em = model(
-            vec![("a", PortConstraint::Fixed(38085))],
-            vec!["a"],
-            vec![(0, 38080, 38090)],
-        );
-        let error = plan(&em, Selection::Environment, 0).expect_err("fixed port mismatch");
-        assert_eq!(error.code, ErrorCode::ModelAdmission);
-    }
 
     #[test]
     fn workflow_nodes_are_topologically_ordered() {
-        let mut em = model(vec![("a", PortConstraint::Window)], vec!["a"], vec![(0, 38080, 38090)]);
+        let mut em = model(vec!["a"], vec!["a"], vec![(0, 38080, 38090)]);
         em.workflows.insert(
             "wf".to_string(),
             ExecWorkflow {
@@ -385,7 +352,7 @@ mod tests {
 
     #[test]
     fn rejects_a_cyclic_workflow() {
-        let mut em = model(vec![("a", PortConstraint::Window)], vec!["a"], vec![(0, 38080, 38090)]);
+        let mut em = model(vec!["a"], vec!["a"], vec![(0, 38080, 38090)]);
         em.workflows.insert(
             "wf".to_string(),
             ExecWorkflow {

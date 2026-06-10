@@ -86,7 +86,6 @@ in
 
   nixfied.services.synthetic = {
     foreground = true;
-    readinessProbe = "synthetic-tcp";
     healthPolicy = "explicit";
     lifecycle = {
       prepare = {
@@ -113,7 +112,6 @@ in
       };
       ready = {
         operationId = "service.synthetic.ready";
-        probeId = "synthetic-tcp";
         terminal = {
           success = "ready";
           failure = "not-ready";
@@ -121,7 +119,6 @@ in
       };
       health = {
         operationId = "service.synthetic.health";
-        probeId = "synthetic-tcp";
         terminal = {
           success = "healthy";
           failure = "unhealthy";
@@ -142,22 +139,9 @@ in
         };
       };
     };
-    endpoints = [
-      {
-        endpointId = "synthetic-tcp";
-        protocol = "tcp";
-        host = "127.0.0.1";
-      }
-    ];
-    probes = [
-      {
-        probeId = "synthetic-tcp";
-        target = {
-          kind = "tcp-connect";
-          endpointId = "synthetic-tcp";
-        };
-      }
-    ];
+    endpoint = {
+      endpointId = "synthetic-tcp";
+    };
     stateRefs = [ "slot" ];
     logRefs = [ "service.synthetic" ];
   };

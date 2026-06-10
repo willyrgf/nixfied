@@ -646,112 +646,20 @@ fn validate_services(model: &Model) -> Result<(), ValidationError> {
                 actual: format!("{:?}", service.health_policy),
             });
         }
-        if service.endpoints.is_empty() {
-            return Err(ValidationError::UnsupportedValue {
-                field: "services.endpoints",
-                expected: "at least one endpoint",
-                actual: "[]".to_string(),
-            });
-        }
-        if service.probes.is_empty() {
-            return Err(ValidationError::UnsupportedValue {
-                field: "services.probes",
-                expected: "at least one probe",
-                actual: "[]".to_string(),
-            });
-        }
-        require_non_empty("services.readinessProbe", &service.readiness_probe)?;
-        for endpoint in &service.endpoints {
-            validate_endpoint(model, endpoint)?;
-        }
-        for probe in &service.probes {
-            validate_probe(probe)?;
-        }
+        require_non_empty("services.endpoint.endpointId", &service.endpoint.endpoint_id)?;
         validate_service_lifecycle(service)?;
     }
     Ok(())
 }
 
-fn validate_endpoint(model: &Model, endpoint: &EndpointSpec) -> Result<(), ValidationError> {
-    require_non_empty("services.endpoints.endpointId", &endpoint.endpoint_id)?;
-    if endpoint.protocol != EndpointProtocol::Tcp {
-        return Err(ValidationError::UnsupportedValue {
-            field: "services.endpoints.protocol",
-            expected: "tcp",
-            actual: format!("{:?}", endpoint.protocol),
-        });
-    }
-    require_non_empty("services.endpoints.host", &endpoint.host)?;
-    match &endpoint.port {
-        PortPolicy::Fixed { port } => {
-            if *port == 0 {
-                return Err(ValidationError::UnsupportedValue {
-                    field: "services.endpoints.port",
-                    expected: "non-zero fixed port",
-                    actual: "0".to_string(),
-                });
-            }
-        }
-        PortPolicy::CandidateWindow { start, end } => {
-            if *start != model.placement.candidate_ports.start
-                || *end != model.placement.candidate_ports.end
-            {
-                return Err(ValidationError::UnsupportedValue {
-                    field: "services.endpoints.port",
-                    expected: "placement candidate window",
-                    actual: format!("start={start}, end={end}"),
-                });
-            }
-        }
-    }
-    if endpoint.ownership_verification != OwnershipVerification::Required {
-        return Err(ValidationError::UnsupportedValue {
-            field: "services.endpoints.ownershipVerification",
-            expected: "required",
-            actual: format!("{:?}", endpoint.ownership_verification),
-        });
-    }
-    if endpoint.socket_activation != SocketActivation::Disabled {
-        return Err(ValidationError::UnsupportedValue {
-            field: "services.endpoints.socketActivation",
-            expected: "disabled",
-            actual: format!("{:?}", endpoint.socket_activation),
-        });
-    }
-    Ok(())
-}
-
-fn validate_probe(probe: &ProbeSpec) -> Result<(), ValidationError> {
-    require_non_empty("services.probes.probeId", &probe.probe_id)?;
-    // The current runtime ABI implements tcp-connect probes only. Reject http-get
-    // at admission so an advertised primitive cannot compile into a model that
-    // always fails its readiness/health probe at runtime.
-    if let ProbeTarget::HttpGet { .. } = probe.target {
-        return Err(ValidationError::UnsupportedValue {
-            field: "services.probes.target.kind",
-            expected: "tcp-connect",
-            actual: "http-get".to_string(),
-        });
-    }
-    Ok(())
-}
-
-/// The lifecycle's per-class shape (which class binds an exec, a probe, a signal,
-/// or nothing) is now guaranteed by the `Lifecycle` type, so only value and
-/// relational checks remain: non-empty ids/terminals, and the ready op probing
-/// the declared readiness probe.
+/// The lifecycle's per-class shape and the endpoint/probe wiring are now
+/// guaranteed by the types (single endpoint, inline probe timings, loopback
+/// host), so only non-empty value checks on ids/terminals remain.
 fn validate_service_lifecycle(service: &ServiceSpec) -> Result<(), ValidationError> {
     for (operation_id, terminal) in lifecycle_ops(&service.lifecycle) {
         require_non_empty("lifecycle.operationId", operation_id)?;
         require_non_empty("lifecycle.terminal.success", &terminal.success)?;
         require_non_empty("lifecycle.terminal.failure", &terminal.failure)?;
-    }
-    if service.lifecycle.ready.probe_id != service.readiness_probe {
-        return Err(ValidationError::UnsupportedValue {
-            field: "lifecycle.ready.probeId",
-            expected: "the service readinessProbe",
-            actual: service.lifecycle.ready.probe_id.clone(),
-        });
     }
     Ok(())
 }
@@ -951,18 +859,6 @@ fn validate_references(model: &Model) -> Result<(), ValidationError> {
     }
 
     for service in model.services.values() {
-        // Endpoint and probe ids are service-local: a service may reference only
-        // the probes/endpoints it declares, matching how the runtime resolves
-        // them within the ServiceSpec. Fail closed - a cross-service reference is
-        // rejected at admission, never surfaced at execution.
-        let mut endpoint_ids = BTreeSet::new();
-        for endpoint in &service.endpoints {
-            endpoint_ids.insert(endpoint.endpoint_id.as_str());
-        }
-        let mut probe_ids = BTreeSet::new();
-        for probe in &service.probes {
-            probe_ids.insert(probe.probe_id.as_str());
-        }
         let lifecycle = &service.lifecycle;
         for (operation_id, _) in lifecycle_ops(lifecycle) {
             if !declared_operations.insert(operation_id) {
@@ -985,36 +881,6 @@ fn validate_references(model: &Model) -> Result<(), ValidationError> {
                     reference_kind: "lifecycle.execId",
                     id: exec_id.to_string(),
                 });
-            }
-        }
-        for probe_id in [
-            lifecycle.ready.probe_id.as_str(),
-            lifecycle.health.probe_id.as_str(),
-        ] {
-            if !probe_ids.contains(probe_id) {
-                return Err(ValidationError::UndeclaredReference {
-                    reference_kind: "lifecycle.probeId",
-                    id: probe_id.to_string(),
-                });
-            }
-        }
-        if !probe_ids.contains(service.readiness_probe.as_str()) {
-            return Err(ValidationError::UndeclaredReference {
-                reference_kind: "service.readinessProbe",
-                id: service.readiness_probe.clone(),
-            });
-        }
-        for probe in &service.probes {
-            match &probe.target {
-                ProbeTarget::TcpConnect { endpoint_id }
-                | ProbeTarget::HttpGet { endpoint_id, .. } => {
-                    if !endpoint_ids.contains(endpoint_id.as_str()) {
-                        return Err(ValidationError::UndeclaredReference {
-                            reference_kind: "probe.endpointId",
-                            id: endpoint_id.clone(),
-                        });
-                    }
-                }
             }
         }
     }

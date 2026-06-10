@@ -9,8 +9,8 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use nixfied_model::{
-    EndpointSpec, ExecSpec, Lifecycle, Model, PortPolicy, ProbeSpec, ProbeTarget, ServiceSpec,
-    StopSpec, TaskSpec, TerminalSemantics, WorkflowSpec,
+    ExecSpec, Lifecycle, Model, ProbeTiming, ServiceSpec, StopSpec, TaskSpec, TerminalSemantics,
+    WorkflowSpec,
 };
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
@@ -127,9 +127,7 @@ fn lower_service(
         service_id: _,
         foreground: _,
         lifecycle,
-        endpoints,
-        probes,
-        readiness_probe,
+        endpoint,
         health_policy: _,
         state_refs: _,
         log_refs: _,
@@ -146,10 +144,10 @@ fn lower_service(
         clean,
     } = lifecycle;
 
-    // The endpoint the runtime binds is the readiness probe's target; the health
-    // probe must target the same one, or the runtime would mismatch at execution.
-    let (ready_probe, bound_endpoint_id) = lower_probe(probes, readiness_probe)?;
-    let endpoint = lower_endpoint(endpoints, &bound_endpoint_id)?;
+    let endpoint = ResolvedEndpoint {
+        endpoint_id: endpoint.endpoint_id.clone(),
+        host: endpoint.host,
+    };
 
     let prepare = PrepareOp {
         meta: op_meta(&prepare.operation_id, &prepare.terminal),
@@ -164,17 +162,11 @@ fn lower_service(
     };
     let ready = ReadyOp {
         meta: op_meta(&ready.operation_id, &ready.terminal),
-        probe: ready_probe,
+        probe: lower_probe("ready", &ready.probe),
     };
-    let (health_probe, health_endpoint_id) = lower_probe(probes, &health.probe_id)?;
-    if health_endpoint_id != bound_endpoint_id {
-        return Err(reject(format!(
-            "service {name} health probe targets endpoint {health_endpoint_id}, not the bound endpoint {bound_endpoint_id}"
-        )));
-    }
     let health = HealthOp {
         meta: op_meta(&health.operation_id, &health.terminal),
-        probe: health_probe,
+        probe: lower_probe("health", &health.probe),
     };
     let stop = lower_stop(stop);
     let clean = CleanOp {
@@ -232,60 +224,13 @@ fn lower_task(task: &TaskSpec, execs: &BTreeMap<String, ExecSpec>) -> RuntimeRes
     })
 }
 
-fn lower_endpoint(endpoints: &[EndpointSpec], endpoint_id: &str) -> RuntimeResult<ResolvedEndpoint> {
-    let endpoint = endpoints
-        .iter()
-        .find(|endpoint| endpoint.endpoint_id == endpoint_id)
-        .ok_or_else(|| reject(format!("endpoint {endpoint_id} is missing")))?;
-    let EndpointSpec {
-        endpoint_id,
-        protocol: _,
-        host,
-        port,
-        ownership_verification: _,
-        socket_activation: _,
-    } = endpoint;
-    let host = LoopbackHost::parse(host).map_err(reject)?;
-    let port = match port {
-        PortPolicy::CandidateWindow { .. } => PortConstraint::Window,
-        PortPolicy::Fixed { port } => PortConstraint::Fixed(*port),
-    };
-    Ok(ResolvedEndpoint {
-        endpoint_id: endpoint_id.clone(),
-        host,
-        port,
-    })
-}
-
-fn lower_probe(probes: &[ProbeSpec], probe_id: &str) -> RuntimeResult<(TcpProbe, String)> {
-    let probe = probes
-        .iter()
-        .find(|probe| probe.probe_id == probe_id)
-        .ok_or_else(|| reject(format!("probe {probe_id} is missing")))?;
-    let ProbeSpec {
-        probe_id,
-        target,
-        timeout_ms,
-        retry_interval_ms,
-        max_attempts,
-    } = probe;
-    let endpoint_id = match target {
-        ProbeTarget::TcpConnect { endpoint_id } => endpoint_id.clone(),
-        ProbeTarget::HttpGet { .. } => {
-            return Err(reject(format!(
-                "probe {probe_id} uses http-get, which the runtime ABI does not support"
-            )));
-        }
-    };
-    Ok((
-        TcpProbe {
-            probe_id: probe_id.clone(),
-            timeout: Duration::from_millis(timeout_ms.get()),
-            retry_interval: Duration::from_millis(retry_interval_ms.get()),
-            max_attempts: max_attempts.get(),
-        },
-        endpoint_id,
-    ))
+fn lower_probe(label: &str, probe: &ProbeTiming) -> TcpProbe {
+    TcpProbe {
+        label: label.to_string(),
+        timeout: Duration::from_millis(probe.timeout_ms.get()),
+        retry_interval: Duration::from_millis(probe.retry_interval_ms.get()),
+        max_attempts: probe.max_attempts.get(),
+    }
 }
 
 fn resolve_exec_ref(
@@ -421,21 +366,12 @@ mod tests {
             "lifecycle": {
                 "prepare": { "operationId": "svc.prepare", "execId": null, "execArgs": [], "terminal": { "success": "prepared", "failure": "failed" } },
                 "start": { "operationId": "svc.start", "execId": "svc-exec", "execArgs": ["--port", "${port}"], "terminal": { "success": "spawned", "failure": "failed" } },
-                "ready": { "operationId": "svc.ready", "probeId": "svc-tcp", "terminal": { "success": "ready", "failure": "not-ready" } },
-                "health": { "operationId": "svc.health", "probeId": "svc-tcp", "terminal": { "success": "healthy", "failure": "unhealthy" } },
+                "ready": { "operationId": "svc.ready", "probe": { "timeoutMs": 1000, "retryIntervalMs": 100, "maxAttempts": 20 }, "terminal": { "success": "ready", "failure": "not-ready" } },
+                "health": { "operationId": "svc.health", "probe": { "timeoutMs": 1000, "retryIntervalMs": 100, "maxAttempts": 20 }, "terminal": { "success": "healthy", "failure": "unhealthy" } },
                 "stop": { "operationId": "svc.stop", "signal": "TERM", "timeoutMs": 5000, "terminal": { "success": "stopped", "failure": "failed" } },
                 "clean": { "operationId": "svc.clean", "terminal": { "success": "cleaned", "failure": "failed" } }
             },
-            "endpoints": [{
-                "endpointId": "svc-tcp", "protocol": "tcp", "host": "127.0.0.1",
-                "port": { "kind": "candidate-window", "start": 38080, "end": 38090 },
-                "ownershipVerification": "required", "socketActivation": "disabled"
-            }],
-            "probes": [{
-                "probeId": "svc-tcp", "target": { "kind": "tcp-connect", "endpointId": "svc-tcp" },
-                "timeoutMs": 1000, "retryIntervalMs": 100, "maxAttempts": 20
-            }],
-            "readinessProbe": "svc-tcp",
+            "endpoint": { "endpointId": "svc-tcp", "host": "127.0.0.1" },
             "healthPolicy": "explicit",
             "stateRefs": [], "logRefs": [],
             "containment": "process-group",
@@ -456,7 +392,6 @@ mod tests {
         let em = lower(&model_from(model_value())).expect("valid model lowers");
         let svc = em.services.get("svc").expect("service lowered");
         assert_eq!(svc.endpoint.host.to_string(), "127.0.0.1");
-        assert_eq!(svc.endpoint.port, PortConstraint::Window);
         assert_eq!(svc.stop.signal, StopSignal::Term);
         assert!(svc.prepare.exec.is_none());
         // Start exec args are base ++ operation args.
@@ -469,55 +404,10 @@ mod tests {
     }
 
     #[test]
-    fn rejects_http_get_probe() {
+    fn rejects_a_missing_exec_reference() {
         let mut value = model_value();
-        value["services"]["svc"]["probes"][0]["target"] =
-            json!({ "kind": "http-get", "endpointId": "svc-tcp", "path": "/h" });
-        let error = lower(&model_from(value)).expect_err("http-get must be rejected");
+        value["services"]["svc"]["lifecycle"]["start"]["execId"] = json!("ghost");
+        let error = lower(&model_from(value)).expect_err("missing exec ref must reject");
         assert_eq!(error.code, ErrorCode::ModelAdmission);
-    }
-
-    #[test]
-    fn rejects_non_loopback_host() {
-        let mut value = model_value();
-        value["services"]["svc"]["endpoints"][0]["host"] = json!("0.0.0.0");
-        let error = lower(&model_from(value)).expect_err("non-loopback host must be rejected");
-        assert_eq!(error.code, ErrorCode::ModelAdmission);
-    }
-
-    #[test]
-    fn rejects_health_probe_on_a_different_endpoint() {
-        let mut value = model_value();
-        // Add a second endpoint and point health at it.
-        value["services"]["svc"]["endpoints"]
-            .as_array_mut()
-            .unwrap()
-            .push(json!({
-                "endpointId": "svc-alt", "protocol": "tcp", "host": "127.0.0.1",
-                "port": { "kind": "candidate-window", "start": 38080, "end": 38090 },
-                "ownershipVerification": "required", "socketActivation": "disabled"
-            }));
-        value["services"]["svc"]["probes"]
-            .as_array_mut()
-            .unwrap()
-            .push(json!({
-                "probeId": "svc-alt-tcp", "target": { "kind": "tcp-connect", "endpointId": "svc-alt" },
-                "timeoutMs": 1000, "retryIntervalMs": 100, "maxAttempts": 20
-            }));
-        value["services"]["svc"]["lifecycle"]["health"]["probeId"] = json!("svc-alt-tcp");
-        let error =
-            lower(&model_from(value)).expect_err("health on a non-bound endpoint must be rejected");
-        assert_eq!(error.code, ErrorCode::ModelAdmission);
-    }
-
-    #[test]
-    fn lowers_a_fixed_port_to_a_constraint() {
-        let mut value = model_value();
-        value["services"]["svc"]["endpoints"][0]["port"] = json!({ "kind": "fixed", "port": 38085 });
-        let em = lower(&model_from(value)).expect("fixed port lowers");
-        assert_eq!(
-            em.services["svc"].endpoint.port,
-            PortConstraint::Fixed(38085)
-        );
     }
 }
