@@ -462,8 +462,13 @@ fn flake_template(nixfied_url: &str) -> String {
 
 fn nixfied_module_template(metadata: &ProjectMetadata) -> String {
     format!(
-        r#"{{ ... }}:
+        r#"{{ adapters, ... }}:
 {{
+  # The synthetic adapter is a runnable starter service so `nix build .#model`
+  # succeeds out of the box. Replace it with your own service/task declarations
+  # or another adapter (e.g. adapters.postgres).
+  imports = [ adapters.synthetic ];
+
   nixfied.project.projectId = "{}";
   nixfied.project.name = "{}";
   nixfied.codebases.main.logicalRoot = ".";
@@ -594,10 +599,10 @@ mod tests {
         assert!(root.join("flake.nix").is_file());
         assert!(root.join("nixfied.nix").is_file());
         assert!(read(&root.join("flake.nix")).contains("nixfied.url = \"path:/repo\""));
-        assert!(
-            read(&root.join("nixfied.nix"))
-                .contains("nixfied.project.projectId = \"install-proof\"")
-        );
+        let module = read(&root.join("nixfied.nix"));
+        assert!(module.contains("nixfied.project.projectId = \"install-proof\""));
+        // The scaffold ships a runnable service so `nix build .#model` builds.
+        assert!(module.contains("imports = [ adapters.synthetic ];"));
     }
 
     #[test]
