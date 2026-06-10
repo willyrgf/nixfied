@@ -219,8 +219,9 @@ nix run .#gate    # the dogfood conformance gate (below)
 ```
 
 `nix flake check` is the hermetic core of `.#check`: the `rust-workspace` check
-runs `cargo fmt --check` + `cargo clippy -D warnings` + `cargo check` with
-vendored deps, plus every example/self model and the runtime build. The cargo
+runs `cargo fmt --check` + `cargo clippy --all-targets -D warnings` with vendored
+deps (clippy's front end type-checks every target, so there is no separate `cargo
+check`), plus every example/self model and the debug runtime build. The cargo
 *test* floor is deliberately not a flake check (it binds ports / spawns process
 groups), so `.#test` / `.#ci` run it outside the sandbox under the pinned
 toolchain. The raw forms (identical, for a dev shell) are:
@@ -234,7 +235,7 @@ nix develop --command bash -c 'cd runtime && cargo test --workspace'
 The dogfood gate (the third `.#ci` stage, and the final CI layer after the cargo
 floor and the structural gates) is the product testing itself: the framework runs
 its own `conformance` workflow through the runtime under test
-(`.github/workflows/conformance.yml`):
+(`.github/workflows/checks.yml`):
 
 ```sh
 # Dogfood gate: nixfied runs its own `conformance` workflow. The one-liner
@@ -244,7 +245,7 @@ its own `conformance` workflow through the runtime under test
 nix run .#gate                     # forward args after `--`, e.g. -- --timeout-ms 120000
 
 # The `gate` app is only a launcher; the expanded form (what CI runs) is:
-rt="$(nix build .#nixfied-runtime --no-link --print-out-paths)/bin/nixfied-runtime"
+rt="$(nix build .#nixfied-runtime-debug --no-link --print-out-paths)/bin/nixfied-runtime"
 self="$(nix build .#self-model --no-link --print-out-paths)/model.json"
 "$rt" check --model "$self"                                   # fast launch sanity
 NIXFIED_CONFORMANCE_CHECKOUT="$PWD" \
@@ -264,6 +265,16 @@ There are no e2e shell proofs: the cancellation/GC/lifecycle invariants are
 white-box cargo tests, SEAM-1 (the runtime never invokes nix) is the
 `runtime_drives_full_lifecycle_without_invoking_nix` cargo test, and the
 view→model projection contract is asserted inside every capability check.
+
+**Build profiles.** `.#ci`, `nix flake check`, and the gate all build the fast
+`debug` profile (`nix/packages/runtime.nix { buildType = "debug"; }`, exposed as
+the `.#nixfied-runtime-debug` package and the `nixfied-runtime` check), so the
+whole CI loop shares one profile and never runs release optimization. The
+optimized `release` binary — `.#nixfied-runtime`, what `.#install` and
+`lib.projectApps` ship to adopters — is built only on demand; CI verifies it
+compiles in a final `nix build .#nixfied-runtime` step. Behavior is identical
+across profiles (the runtime is I/O-bound), and a release-only compile break is
+essentially impossible once clippy + debug pass.
 
 ## Deferred
 

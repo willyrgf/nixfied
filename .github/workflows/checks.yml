@@ -1,0 +1,73 @@
+name: checks
+
+# The framework's checks, layered so a bug in the runtime cannot certify itself:
+# the trusted cargo floor grades the runtime first, then nix flake check's
+# hermetic structural gates, then the product orchestrates its own end-to-end
+# conformance. Everything here builds the fast debug profile; the release binary
+# `.#install` ships is verified by a final build step.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+      - name: Nix store cache
+        uses: DeterminateSystems/magic-nix-cache-action@main
+
+      # 1. Trusted floor: cargo grades the runtime's own primitives (debug),
+      #    independently, before the dogfood gate runs the runtime against itself.
+      #    Pinned toolchain via the dev shell. fmt + clippy run in `nix flake check`.
+      - name: cargo test floor
+        run: |
+          nix develop --command bash -euo pipefail -c '
+            cd runtime
+            cargo test --workspace
+          '
+
+      # 2. Structural gates (debug): rustfmt + clippy -D warnings + every model +
+      #    the debug runtime build, all hermetic.
+      - name: nix flake check
+        run: nix flake check
+
+      # 3. Dogfood gate (debug): the product orchestrates its own conformance, run
+      #    by the nix-built runtime under test through the same surfaces adopters
+      #    use. Uses the debug runtime built by step 2 (cached).
+      - name: build runtime (debug) + self-model
+        run: |
+          echo "RUNTIME_BIN=$(nix build .#nixfied-runtime-debug --no-link --print-out-paths)/bin/nixfied-runtime" >> "$GITHUB_ENV"
+          echo "SELF_MODEL=$(nix build .#self-model --no-link --print-out-paths)/model.json" >> "$GITHUB_ENV"
+      - name: check smoke (fast launch sanity)
+        run: |
+          "$RUNTIME_BIN" check --model "$SELF_MODEL"
+      - name: run --workflow conformance
+        env:
+          NIXFIED_CONFORMANCE_CHECKOUT: ${{ github.workspace }}
+          NIXFIED_CONFORMANCE_ARTIFACTS: ${{ github.workspace }}/conformance-artifacts
+        run: |
+          nix develop --command bash -euo pipefail -c '
+            "$RUNTIME_BIN" run --model "$SELF_MODEL" --workflow conformance --timeout-ms 600000
+          '
+      - name: ground-truth artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conformance-artifacts
+          path: conformance-artifacts/
+          if-no-files-found: warn
+
+      # 4. Release safety net: the optimized binary `.#install` ships to adopters
+      #    must compile. CI builds debug everywhere else, so this is where a
+      #    release-only break would surface before shipping.
+      - name: release runtime build
+        run: nix build .#nixfied-runtime --no-link

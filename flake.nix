@@ -105,6 +105,10 @@
         {
           default = minimalModel;
           nixfied-runtime = nixfiedRuntime;
+          # The debug runtime the framework's CI path builds (also the
+          # `nixfied-runtime` check). Adopters never use this; `.#install` ships
+          # the release `nixfied-runtime` above.
+          nixfied-runtime-debug = nixfiedRuntimeDebug;
           install = nixfiedInstall;
           upgrade = nixfiedUpgrade;
           gate = nixfiedGate;
@@ -164,10 +168,7 @@
           # debug profile (release is built on demand by `.#install` / the
           # `nixfied-runtime` package); a release-only compile break is essentially
           # impossible once clippy + debug pass.
-          nixfied-runtime = import ./nix/packages/runtime.nix {
-            inherit pkgs;
-            buildType = "debug";
-          };
+          nixfied-runtime = self.packages.${system}.nixfied-runtime-debug;
           # The self-project conformance model must build (the gate's input).
           self-model = self.packages.${system}.self-model;
           # Hermetic source gate: rustfmt + clippy (-D warnings) + cargo check.
