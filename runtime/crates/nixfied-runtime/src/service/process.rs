@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use nixfied_model::{
     ContainmentRequirement, EndpointSpec, LifecycleOpClass, LifecycleOpSpec, Model, PortPolicy,
-    ServiceSpec,
+    ProbeTarget, ServiceSpec,
 };
 use serde::Serialize;
 
@@ -901,6 +901,28 @@ fn lifecycle_op_optional(
         .find(|operation| operation.class == class)
 }
 
+/// The endpoint id the service's readiness probe targets. The readiness probe is
+/// the authority on which declared endpoint the runtime binds and verifies.
+fn readiness_endpoint_id(service: &ServiceSpec) -> RuntimeResult<&str> {
+    let probe = service
+        .probes
+        .iter()
+        .find(|probe| probe.probe_id == service.readiness_probe)
+        .ok_or_else(|| {
+            RuntimeError::new(
+                ErrorCode::ModelAdmission,
+                format!(
+                    "service readiness probe {} is missing",
+                    service.readiness_probe
+                ),
+            )
+        })?;
+    Ok(match &probe.target {
+        ProbeTarget::TcpConnect { endpoint_id } => endpoint_id,
+        ProbeTarget::HttpGet { endpoint_id, .. } => endpoint_id,
+    })
+}
+
 fn select_endpoint(
     service: &ServiceSpec,
     selected_slot: &SelectedSlot<'_>,
@@ -916,12 +938,20 @@ fn select_endpoint(
             ),
         ));
     }
-    let endpoint = service.endpoints.first().ok_or_else(|| {
-        RuntimeError::new(
-            ErrorCode::ModelAdmission,
-            "service requires at least one endpoint",
-        )
-    })?;
+    // Bind the endpoint the readiness probe targets, not simply the first one: a
+    // service may declare several endpoints and the probe may target any of them,
+    // so selecting first() would mismatch the probe at runtime.
+    let endpoint_id = readiness_endpoint_id(service)?;
+    let endpoint = service
+        .endpoints
+        .iter()
+        .find(|endpoint| endpoint.endpoint_id == endpoint_id)
+        .ok_or_else(|| {
+            RuntimeError::new(
+                ErrorCode::ModelAdmission,
+                format!("service endpoint {endpoint_id} for the readiness probe is missing"),
+            )
+        })?;
     match &endpoint.port {
         PortPolicy::Fixed { port } if *port != selected_port => {
             return Err(RuntimeError::new(
