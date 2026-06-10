@@ -113,7 +113,7 @@ nix run .#gate    # the conformance gate (below)
 `.#gate` is the product testing itself — this repo is a Nixfied project whose
 `conformance` workflow exercises the framework end to end (the examples,
 multi-slot, and a real `install` + `upgrade`), run by the runtime under test. CI
-(`.github/workflows/conformance.yml`) runs the same layered gate.
+(`.github/workflows/checks.yml`) runs the same layered gate.
 
 Note the asymmetry with the adopter surface above: the framework verifies its
 *own* Rust source with plain cargo/nix — a nixfied task cannot invoke Nix, and
