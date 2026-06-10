@@ -211,6 +211,7 @@ fn run_m0_admitted(
     for binding in &plan.services {
         let service_name = binding.service_name.as_str();
         let selected_port = binding.port;
+        eprintln!("  starting service {service_name}");
 
         let started_service = match start_service_for_slot(
             admission,
@@ -265,6 +266,13 @@ fn run_m0_admitted(
             stop_lease(lease)?;
             return Err(error);
         }
+        let service = started.last().expect("just started a service");
+        eprintln!(
+            "  service {} ready at {}:{}",
+            service.service_name(),
+            service.selected_endpoint.host,
+            service.selected_endpoint.port
+        );
     }
 
     if let Err(error) = cancellation.check() {
@@ -324,6 +332,7 @@ fn run_m0_admitted(
             source_root: &admission.source.observed_root,
             state_root: &placement.state_root,
         };
+        eprintln!("  node {} ({task_id})", node.node_id);
         let task_result = run_dependent_task_cancellable(
             &placement,
             &mut registry,
@@ -335,6 +344,7 @@ fn run_m0_admitted(
         );
         match task_result {
             Ok(task_run) => {
+                eprintln!("  node {} ok", node.node_id);
                 node_results.push(NodeResult {
                     node_id: node.node_id.clone(),
                     task_id: task_id.clone(),
@@ -343,6 +353,7 @@ fn run_m0_admitted(
                 task_runs.push(task_run);
             }
             Err(error) => {
+                eprintln!("  node {} failed", node.node_id);
                 teardown(
                     &mut started,
                     &mut registry,
@@ -355,16 +366,8 @@ fn run_m0_admitted(
         }
     }
 
-    let workflow_summary_path = match &plan.workflow_id {
-        Some(workflow_id) => Some(write_workflow_summary(
-            &placement,
-            workflow_id,
-            &run_id,
-            &node_results,
-        )?),
-        None => None,
-    };
-
+    // Built before the summary so the workflow record captures the live services
+    // (endpoints, instance ids) alongside the node and task results.
     let services_output = started
         .iter()
         .map(|service| ServiceRunOutput {
@@ -374,6 +377,18 @@ fn run_m0_admitted(
             selected_endpoint: service.selected_endpoint.clone(),
         })
         .collect::<Vec<_>>();
+
+    let workflow_summary_path = match &plan.workflow_id {
+        Some(workflow_id) => Some(write_workflow_summary(
+            &placement,
+            workflow_id,
+            &run_id,
+            &node_results,
+            &services_output,
+            &task_runs,
+        )?),
+        None => None,
+    };
     let primary_task = task_runs.last().cloned();
     let output = RunOutput {
         run_id,
@@ -425,12 +440,16 @@ fn stop_lease(lease: Option<RunLeaseHeartbeat>) -> Result<(), RuntimeError> {
     Ok(())
 }
 
-/// Write an aggregate per-workflow summary recording the run id and node results.
+/// Write an aggregate per-workflow summary: the run id, overall success, the
+/// services started (with their resolved endpoints), and the per-node and
+/// per-task results — a complete, inspectable record of the workflow execution.
 fn write_workflow_summary(
     placement: &nixfied_runtime::state::HostPlacement,
     workflow_id: &str,
     run_id: &str,
     nodes: &[NodeResult],
+    services: &[ServiceRunOutput],
+    tasks: &[TaskRun],
 ) -> Result<PathBuf, RuntimeError> {
     let path = placement
         .artifacts_dir
@@ -438,8 +457,10 @@ fn write_workflow_summary(
     let summary = serde_json::json!({
         "workflowId": workflow_id,
         "runId": run_id,
-        "nodes": nodes,
         "success": nodes.iter().all(|node| node.success),
+        "services": services,
+        "nodes": nodes,
+        "tasks": tasks,
     });
     let bytes = serde_json::to_vec_pretty(&summary).map_err(|error| {
         RuntimeError::new(

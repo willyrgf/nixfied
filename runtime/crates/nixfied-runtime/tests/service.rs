@@ -1216,8 +1216,7 @@ fn cli_signal_cancels_run_and_empties_service_group() {
     assert_eq!(signal_result, 0, "SIGTERM should be delivered to runtime");
     let output = wait_for_child_output(child, Duration::from_secs(6));
     assert_eq!(output.status.code(), Some(27));
-    let error: Value =
-        serde_json::from_slice(&output.stderr).expect("stderr should be runtime error JSON");
+    let error: Value = stderr_json(&output.stderr);
     assert_eq!(error["code"], json!("CANCELED"));
 
     let ps_output = Command::new(runtime_binary())
@@ -1328,8 +1327,7 @@ fn cli_signal_during_shutdown_records_canceled_terminal_state() {
     assert_eq!(signal_result, 0, "SIGTERM should be delivered to runtime");
     let output = wait_for_child_output(child, Duration::from_secs(6));
     assert_eq!(output.status.code(), Some(27));
-    let error: Value =
-        serde_json::from_slice(&output.stderr).expect("stderr should be runtime error JSON");
+    let error: Value = stderr_json(&output.stderr);
     assert_eq!(error["code"], json!("CANCELED"));
 
     let ps_output = Command::new(runtime_binary())
