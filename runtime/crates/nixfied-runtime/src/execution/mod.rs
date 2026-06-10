@@ -6,6 +6,8 @@
 //! it destructures every `Model` field with no `..`, so a new schema field is a
 //! compile error until the lowering consciously maps or refuses it.
 
+mod lower;
 mod types;
 
+pub use lower::lower;
 pub use types::*;
