@@ -138,74 +138,40 @@ fn fixture_model() -> Value {
             "synthetic": {
                 "serviceId": "synthetic",
                 "foreground": true,
-                "lifecycle": [
-                    {
+                "lifecycle": {
+                    "prepare": {
                         "operationId": "service.synthetic.prepare",
-                        "class": "prepare",
                         "execId": null,
                         "execArgs": [],
-                        "probeId": null,
-                        "terminal": {
-                            "success": "prepared",
-                            "failure": "failed"
-                        }
+                        "terminal": { "success": "prepared", "failure": "failed" }
                     },
-                    {
+                    "start": {
                         "operationId": "service.synthetic.start",
-                        "class": "start",
                         "execId": "synthetic-helper",
                         "execArgs": ["service", "--host", "127.0.0.1", "--port", "${port}"],
-                        "probeId": null,
-                        "terminal": {
-                            "success": "spawned",
-                            "failure": "failed"
-                        }
+                        "terminal": { "success": "spawned", "failure": "failed" }
                     },
-                    {
+                    "ready": {
                         "operationId": "service.synthetic.ready",
-                        "class": "ready",
-                        "execId": null,
-                        "execArgs": [],
                         "probeId": "synthetic-tcp",
-                        "terminal": {
-                            "success": "ready",
-                            "failure": "not-ready"
-                        }
+                        "terminal": { "success": "ready", "failure": "not-ready" }
                     },
-                    {
+                    "health": {
                         "operationId": "service.synthetic.health",
-                        "class": "health",
-                        "execId": null,
-                        "execArgs": [],
                         "probeId": "synthetic-tcp",
-                        "terminal": {
-                            "success": "healthy",
-                            "failure": "unhealthy"
-                        }
+                        "terminal": { "success": "healthy", "failure": "unhealthy" }
                     },
-                    {
+                    "stop": {
                         "operationId": "service.synthetic.stop",
-                        "class": "stop",
-                        "execId": null,
-                        "execArgs": [],
-                        "probeId": null,
-                        "terminal": {
-                            "success": "stopped",
-                            "failure": "failed"
-                        }
+                        "signal": "TERM",
+                        "timeoutMs": 5000,
+                        "terminal": { "success": "stopped", "failure": "failed" }
                     },
-                    {
+                    "clean": {
                         "operationId": "service.synthetic.clean",
-                        "class": "clean",
-                        "execId": null,
-                        "execArgs": [],
-                        "probeId": null,
-                        "terminal": {
-                            "success": "cleaned",
-                            "failure": "failed"
-                        }
+                        "terminal": { "success": "cleaned", "failure": "failed" }
                     }
-                ],
+                },
                 "endpoints": [{
                     "endpointId": "synthetic-tcp",
                     "protocol": "tcp",
@@ -230,10 +196,6 @@ fn fixture_model() -> Value {
                 }],
                 "readinessProbe": "synthetic-tcp",
                 "healthPolicy": "explicit",
-                "stopPolicy": {
-                    "signal": "TERM",
-                    "timeoutMs": 5000
-                },
                 "stateRefs": ["slot"],
                 "logRefs": ["service.synthetic"],
                 "containment": "process-group",

@@ -60,13 +60,9 @@ in
     foreground = true;
     readinessProbe = "postgres-tcp";
     healthPolicy = "explicit";
-    # Postgres fast shutdown: SIGINT rolls back in-flight transactions and exits
-    # promptly, where the default SIGTERM (smart shutdown) waits for clients.
-    stopPolicy.signal = "INT";
-    lifecycle = [
-      {
+    lifecycle = {
+      prepare = {
         operationId = "service.postgres.prepare";
-        class = "prepare";
         execId = "pg-init";
         execArgs = [
           "-D"
@@ -82,10 +78,9 @@ in
           success = "initialized";
           failure = "failed";
         };
-      }
-      {
+      };
+      start = {
         operationId = "service.postgres.start";
-        class = "start";
         execId = "pg-server";
         execArgs = [
           "-D"
@@ -103,42 +98,41 @@ in
           success = "spawned";
           failure = "failed";
         };
-      }
-      {
+      };
+      ready = {
         operationId = "service.postgres.ready";
-        class = "ready";
         probeId = "postgres-tcp";
         terminal = {
           success = "ready";
           failure = "not-ready";
         };
-      }
-      {
+      };
+      health = {
         operationId = "service.postgres.health";
-        class = "health";
         probeId = "postgres-tcp";
         terminal = {
           success = "healthy";
           failure = "unhealthy";
         };
-      }
-      {
+      };
+      stop = {
         operationId = "service.postgres.stop";
-        class = "stop";
+        # Postgres fast shutdown: SIGINT rolls back in-flight transactions and
+        # exits promptly, where SIGTERM (smart shutdown) waits for clients.
+        signal = "INT";
         terminal = {
           success = "stopped";
           failure = "failed";
         };
-      }
-      {
+      };
+      clean = {
         operationId = "service.postgres.clean";
-        class = "clean";
         terminal = {
           success = "cleaned";
           failure = "failed";
         };
-      }
-    ];
+      };
+    };
     endpoints = [
       {
         endpointId = "postgres-tcp";

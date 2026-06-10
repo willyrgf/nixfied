@@ -362,26 +362,75 @@ pub enum ProbeTarget {
     HttpGet { endpoint_id: String, path: String },
 }
 
+/// The full lifecycle as a per-class record: each class binds exactly the
+/// primitive its mechanism requires, so an illegal binding (a stop exec, a probe
+/// on start) is unrepresentable. The map key *is* the class — there is no
+/// `class` discriminant and no way to declare a class twice.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct LifecycleOpSpec {
+pub struct Lifecycle {
+    pub prepare: PrepareSpec,
+    pub start: StartSpec,
+    pub ready: ReadySpec,
+    pub health: HealthSpec,
+    pub stop: StopSpec,
+    pub clean: CleanSpec,
+}
+
+/// prepare: an optional data-dir init exec.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PrepareSpec {
     pub operation_id: String,
-    pub class: LifecycleOpClass,
     pub exec_id: Option<String>,
     pub exec_args: Vec<String>,
-    pub probe_id: Option<String>,
     pub terminal: TerminalSemantics,
 }
 
+/// start: spawn-and-own a required exec.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum LifecycleOpClass {
-    Prepare,
-    Start,
-    Ready,
-    Health,
-    Stop,
-    Clean,
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StartSpec {
+    pub operation_id: String,
+    pub exec_id: String,
+    pub exec_args: Vec<String>,
+    pub terminal: TerminalSemantics,
+}
+
+/// ready: wait on a probe.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReadySpec {
+    pub operation_id: String,
+    pub probe_id: String,
+    pub terminal: TerminalSemantics,
+}
+
+/// health: wait on a probe.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HealthSpec {
+    pub operation_id: String,
+    pub probe_id: String,
+    pub terminal: TerminalSemantics,
+}
+
+/// stop: a signal-based runtime primitive (the former `stopPolicy`, folded in).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StopSpec {
+    pub operation_id: String,
+    pub signal: StopSignal,
+    pub timeout_ms: NonZeroU64,
+    pub terminal: TerminalSemantics,
+}
+
+/// clean: a marker-gated runtime primitive that binds nothing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CleanSpec {
+    pub operation_id: String,
+    pub terminal: TerminalSemantics,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -396,12 +445,11 @@ pub struct TerminalSemantics {
 pub struct ServiceSpec {
     pub service_id: String,
     pub foreground: bool,
-    pub lifecycle: Vec<LifecycleOpSpec>,
+    pub lifecycle: Lifecycle,
     pub endpoints: Vec<EndpointSpec>,
     pub probes: Vec<ProbeSpec>,
     pub readiness_probe: String,
     pub health_policy: HealthPolicy,
-    pub stop_policy: StopPolicy,
     pub state_refs: Vec<String>,
     pub log_refs: Vec<String>,
     pub containment: ContainmentRequirement,
@@ -414,13 +462,6 @@ pub struct ServiceSpec {
 pub enum HealthPolicy {
     Explicit,
     Unsupported,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct StopPolicy {
-    pub signal: StopSignal,
-    pub timeout_ms: NonZeroU64,
 }
 
 /// The signal the runtime sends for graceful shutdown. A closed set so an

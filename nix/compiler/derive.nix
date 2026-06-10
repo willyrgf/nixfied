@@ -122,14 +122,31 @@ let
       };
     inherit (probe) timeoutMs retryIntervalMs maxAttempts;
   };
-  lifecycleSpec = op: {
-    operationId = op.operationId;
-    class = op.class;
-    execId = op.execId;
-    execArgs = op.execArgs;
-    probeId = op.probeId;
-    terminal = {
-      inherit (op.terminal) success failure;
+  terminalOf = op: { inherit (op.terminal) success failure; };
+  lifecycleSpec = lc: {
+    prepare = {
+      inherit (lc.prepare) operationId execId execArgs;
+      terminal = terminalOf lc.prepare;
+    };
+    start = {
+      inherit (lc.start) operationId execId execArgs;
+      terminal = terminalOf lc.start;
+    };
+    ready = {
+      inherit (lc.ready) operationId probeId;
+      terminal = terminalOf lc.ready;
+    };
+    health = {
+      inherit (lc.health) operationId probeId;
+      terminal = terminalOf lc.health;
+    };
+    stop = {
+      inherit (lc.stop) operationId signal timeoutMs;
+      terminal = terminalOf lc.stop;
+    };
+    clean = {
+      inherit (lc.clean) operationId;
+      terminal = terminalOf lc.clean;
     };
   };
 
@@ -138,7 +155,11 @@ let
     let
       endpoints = map endpointSpec service.endpoints;
       probes = map probeSpec service.probes;
-      lifecycle = map lifecycleSpec service.lifecycle;
+      lifecycle = lifecycleSpec service.lifecycle;
+      lifecycleExecIds = lib.filter (id: id != null) [
+        service.lifecycle.prepare.execId
+        service.lifecycle.start.execId
+      ];
       addressInputs = {
         projectId = config.nixfied.project.projectId;
         environment = "dev";
@@ -153,14 +174,9 @@ let
         inherit lifecycle endpoints probes;
         foreground = service.foreground;
         healthPolicy = service.healthPolicy;
-        stopPolicy = {
-          inherit (service.stopPolicy) signal timeoutMs;
-        };
         containment = service.containment;
         lifetime = service.lifetime;
-        execs = lib.filterAttrs (
-          id: _: builtins.any (op: op.execId == id) service.lifecycle
-        ) execs;
+        execs = lib.filterAttrs (id: _: builtins.elem id lifecycleExecIds) execs;
       };
     in
     {
@@ -169,9 +185,6 @@ let
       inherit lifecycle endpoints probes;
       readinessProbe = service.readinessProbe;
       healthPolicy = service.healthPolicy;
-      stopPolicy = {
-        inherit (service.stopPolicy) signal timeoutMs;
-      };
       stateRefs = service.stateRefs;
       logRefs = service.logRefs;
       containment = service.containment;

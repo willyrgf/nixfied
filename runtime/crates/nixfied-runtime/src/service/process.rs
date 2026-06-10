@@ -9,7 +9,7 @@ use std::thread;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use nixfied_model::{ContainmentRequirement, LifecycleOpClass, LifecycleOpSpec, Model};
+use nixfied_model::{ContainmentRequirement, Model};
 use serde::Serialize;
 
 use crate::admission::Admission;
@@ -858,8 +858,7 @@ fn record_service_clean(
             format!("service {service_name} is missing"),
         )
     })?;
-    let clean_op = lifecycle_op(service, LifecycleOpClass::Clean)?;
-    let record = LifecycleRecord::from_op(clean_op, "clean");
+    let record = LifecycleRecord::from_clean(&service.lifecycle.clean);
     let address_hash = service_address_hash(
         &model.project.project_id,
         selected_slot.environment,
@@ -896,24 +895,6 @@ fn clean_marked_slot_state(
 
 fn run_owner_token(run_id: &str) -> String {
     format!("{run_id}:runtime-pid-{}", std::process::id())
-}
-
-/// The clean lifecycle operation (the only class the marker-gated clean path still
-/// resolves from the raw `Model`).
-fn lifecycle_op(
-    service: &nixfied_model::ServiceSpec,
-    class: LifecycleOpClass,
-) -> RuntimeResult<&LifecycleOpSpec> {
-    service
-        .lifecycle
-        .iter()
-        .find(|operation| operation.class == class)
-        .ok_or_else(|| {
-            RuntimeError::new(
-                ErrorCode::ModelAdmission,
-                format!("service lifecycle operation {class:?} is missing"),
-            )
-        })
 }
 
 /// Generic placeholder substitution shared by lifecycle and task args:
@@ -1091,12 +1072,12 @@ impl LifecycleRecord {
         }
     }
 
-    fn from_op(op: &LifecycleOpSpec, class: &'static str) -> Self {
+    fn from_clean(clean: &nixfied_model::CleanSpec) -> Self {
         Self {
-            operation_id: op.operation_id.clone(),
-            class,
-            terminal_success: op.terminal.success.clone(),
-            terminal_failure: op.terminal.failure.clone(),
+            operation_id: clean.operation_id.clone(),
+            class: "clean",
+            terminal_success: clean.terminal.success.clone(),
+            terminal_failure: clean.terminal.failure.clone(),
         }
     }
 }
