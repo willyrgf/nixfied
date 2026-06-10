@@ -68,9 +68,16 @@
         { pkgs, system }:
         let
           nixfiedLib = mkNixfiedLib { inherit pkgs system; };
-          # The nix-built runtime/conformance binaries (host-Rust-free), shared
-          # with the self-project conformance workflow.
+          # The release runtime/conformance binaries (host-Rust-free) — what
+          # `.#install` ships to adopters and what `projectApps` runs.
           nixfiedRuntime = import ./nix/packages/runtime.nix { inherit pkgs; };
+          # The debug build the framework's own CI path uses (flake checks, the
+          # self-model's conformance closure, the gate), so every `.#ci` compile
+          # shares one fast profile instead of also building release optimization.
+          nixfiedRuntimeDebug = import ./nix/packages/runtime.nix {
+            inherit pkgs;
+            buildType = "debug";
+          };
           minimalModel = nixfiedLib.compileModel ./examples/minimal/nixfied.nix;
           postgresModel = nixfiedLib.compileModel ./examples/postgres/nixfied.nix;
           workflowModel = nixfiedLib.compileModel ./examples/workflow/nixfied.nix;
@@ -85,13 +92,14 @@
           # current working tree (rebuilds the runtime + self-model on each run).
           nixfiedGate = import ./nix/gate.nix {
             inherit pkgs;
-            runtime = nixfiedRuntime;
+            runtime = nixfiedRuntimeDebug;
             model = selfModel;
           };
           # `.#check` / `.#test` / `.#ci`: the framework's own source/test/CI gate.
           devApps = import ./nix/dev.nix {
             inherit pkgs;
             gate = nixfiedGate;
+            runtime = nixfiedRuntimeDebug;
           };
         in
         {
@@ -152,8 +160,14 @@
         { pkgs, system }:
         {
           minimal-model = self.packages.${system}.minimal-model;
-          # The nix-packaged runtime binary must compile reproducibly.
-          nixfied-runtime = self.packages.${system}.nixfied-runtime;
+          # The runtime workspace must compile reproducibly. CI verifies the fast
+          # debug profile (release is built on demand by `.#install` / the
+          # `nixfied-runtime` package); a release-only compile break is essentially
+          # impossible once clippy + debug pass.
+          nixfied-runtime = import ./nix/packages/runtime.nix {
+            inherit pkgs;
+            buildType = "debug";
+          };
           # The self-project conformance model must build (the gate's input).
           self-model = self.packages.${system}.self-model;
           # Hermetic source gate: rustfmt + clippy (-D warnings) + cargo check.

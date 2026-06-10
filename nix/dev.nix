@@ -5,7 +5,11 @@
 # cannot invoke nix (SEAM-1), and the runtime's own unit tests must not be measured
 # by the runtime itself. The adopter surface — where verification *is* a workflow —
 # is generated separately by `lib.projectApps`.
-{ pkgs, gate }:
+{
+  pkgs,
+  gate,
+  runtime,
+}:
 let
   rustToolchain = pkgs.rust-bin.stable."1.96.0".minimal.override {
     extensions = [
@@ -43,8 +47,7 @@ let
       nix flake check
       echo "==> self-model admission" >&2
       model="$(nix build .#self-model --no-link --print-out-paths)/model.json"
-      runtime="$(nix build .#nixfied-runtime --no-link --print-out-paths)/bin/nixfied-runtime"
-      "$runtime" check --model "$model"
+      "${runtime}/bin/nixfied-runtime" check --model "$model"
     '';
   };
 
