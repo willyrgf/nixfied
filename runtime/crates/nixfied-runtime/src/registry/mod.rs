@@ -3,6 +3,7 @@ pub mod leases;
 pub mod records;
 pub mod schema;
 pub mod sqlite;
+pub mod status;
 
 pub use events::{EventInsert, append_event};
 pub use leases::{RUN_LEASE_HEARTBEAT_SECS, RUN_LEASE_TTL_SECS, RunLeaseHeartbeat};

@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use rusqlite::{OptionalExtension, params};
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
+use crate::registry::status::{self, DbStatus, RunLeaseStatus};
 use crate::registry::{Registry, RegistryIdentity};
 
 pub const RUN_LEASE_HEARTBEAT_SECS: u64 = 5;
@@ -21,12 +22,15 @@ pub fn heartbeat_run_lease(
     let updated = registry
         .connection_mut()
         .execute(
-            "
+            &format!(
+                "
             UPDATE run_leases
             SET heartbeat_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
                 expires_at = strftime('%Y-%m-%dT%H:%M:%fZ','now', ?3)
-            WHERE run_id = ?1 AND owner_token = ?2 AND status IN ('active', 'canceling')
+            WHERE run_id = ?1 AND owner_token = ?2 AND status IN ({})
             ",
+                status::sql_in_list(status::LEASE_OPEN)
+            ),
             params![run_id, owner_token, ttl_modifier],
         )
         .map_err(sql_error)?;
@@ -56,10 +60,10 @@ fn lease_is_terminal_for_owner(
         )
         .optional()
         .map_err(sql_error)?;
-    Ok(matches!(
-        status.as_deref(),
-        Some("completed" | "canceled" | "failed" | "stale")
-    ))
+    Ok(status
+        .as_deref()
+        .and_then(RunLeaseStatus::from_db)
+        .is_some_and(|status| status::LEASE_TERMINAL.contains(&status)))
 }
 
 pub fn lease_ttl_modifier() -> String {

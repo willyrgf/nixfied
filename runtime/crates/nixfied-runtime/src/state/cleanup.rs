@@ -6,6 +6,7 @@ use rusqlite::params;
 use serde::Serialize;
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
+use crate::registry::status::{self, CleanupStatus, DbStatus};
 use crate::registry::{Registry, RegistryIdentity};
 use crate::state::marker::{StateIdentity, StateMarker, read_marker};
 use crate::state::placement::canonicalize_existing;
@@ -89,7 +90,7 @@ pub fn clean_marked_state(
             &cleanup_id,
             &marker.computed_model_hash,
             &payload_json,
-            "failed",
+            CleanupStatus::Failed,
             Some(cleanup_error.message.as_str()),
         );
         return Err(cleanup_error);
@@ -99,7 +100,7 @@ pub fn clean_marked_state(
         &cleanup_id,
         &marker.computed_model_hash,
         &payload_json,
-        "deleted",
+        CleanupStatus::Deleted,
         None,
     )?;
     Ok(CleanupOutcome {
@@ -118,14 +119,14 @@ fn finish_missing_target_cleanup(
     refuse_active_refs(registry)?;
     refuse_cleanup_policy(&expected.cleanup_policy, &expected.persistence)?;
     let cleanup = find_prior_cleanup(registry, &canonical_target, expected)?;
-    if cleanup.status == "intent" {
+    if CleanupStatus::from_db(&cleanup.status) == Some(CleanupStatus::Intent) {
         let payload_json = cleanup_payload_json(&cleanup.cleanup_id, &canonical_target);
         record_cleanup_terminal(
             registry,
             &cleanup.cleanup_id,
             &cleanup.marker.computed_model_hash,
             &payload_json,
-            "deleted",
+            CleanupStatus::Deleted,
             None,
         )?;
     }
@@ -192,14 +193,15 @@ fn find_prior_cleanup(
     let rows = {
         let mut statement = registry
             .connection()
-            .prepare(
+            .prepare(&format!(
                 "
                 SELECT cleanup_id, marker_json, status
                 FROM cleanups
-                WHERE target_path = ?1 AND status IN ('intent', 'deleted')
+                WHERE target_path = ?1 AND status IN ({})
                 ORDER BY rowid DESC
                 ",
-            )
+                status::sql_in_list(status::CLEANUP_PRIOR)
+            ))
             .map_err(sql_error)?;
         statement
             .query_map([canonical_target.display().to_string()], |row| {
@@ -256,7 +258,10 @@ fn refuse_active_refs(registry: &Registry) -> RuntimeResult<()> {
     let active_lease_count = registry
         .connection()
         .query_row(
-            "SELECT count(*) FROM run_leases WHERE status IN ('active', 'canceling')",
+            &format!(
+                "SELECT count(*) FROM run_leases WHERE status IN ({})",
+                status::sql_in_list(status::LEASE_OPEN)
+            ),
             [],
             |row| row.get::<_, i64>(0),
         )
@@ -271,7 +276,10 @@ fn refuse_active_refs(registry: &Registry) -> RuntimeResult<()> {
     let active_process_count = registry
         .connection()
         .query_row(
-            "SELECT count(*) FROM processes WHERE status IN ('starting','running','ready')",
+            &format!(
+                "SELECT count(*) FROM processes WHERE status IN ({})",
+                status::sql_in_list(status::PROCESS_ACTIVE)
+            ),
             [],
             |row| row.get::<_, i64>(0),
         )
@@ -286,7 +294,10 @@ fn refuse_active_refs(registry: &Registry) -> RuntimeResult<()> {
     let active_port_count = registry
         .connection()
         .query_row(
-            "SELECT count(*) FROM ports WHERE status IN ('reserved','binding','bound','active')",
+            &format!(
+                "SELECT count(*) FROM ports WHERE status IN ({})",
+                status::sql_in_list(status::PORT_OPEN)
+            ),
             [],
             |row| row.get::<_, i64>(0),
         )
@@ -321,14 +332,15 @@ fn record_cleanup_intent(
             INSERT INTO cleanups (
               cleanup_id, environment, slot, target_path, marker_json, status,
               refusal_reason
-            ) VALUES (?1, ?2, ?3, ?4, ?5, 'intent', NULL)
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL)
             ",
             params![
                 cleanup_id,
                 identity.environment.as_str(),
                 identity.slot,
                 target.display().to_string(),
-                marker_json
+                marker_json,
+                CleanupStatus::Intent.as_str(),
             ],
         )
         .map_err(sql_error)?;
@@ -348,7 +360,7 @@ fn record_cleanup_terminal(
     cleanup_id: &str,
     computed_model_hash: &str,
     payload_json: &str,
-    status: &str,
+    status: CleanupStatus,
     refusal_reason: Option<&str>,
 ) -> RuntimeResult<()> {
     let identity = registry.identity().clone();
@@ -360,13 +372,13 @@ fn record_cleanup_terminal(
             SET status = ?2, refusal_reason = ?3
             WHERE cleanup_id = ?1
             ",
-            params![cleanup_id, status, refusal_reason],
+            params![cleanup_id, status.as_str(), refusal_reason],
         )
         .map_err(sql_error)?;
     let event_type = match status {
-        "deleted" => "cleanup.deleted",
-        "failed" => "cleanup.failed",
-        _ => "cleanup.terminal",
+        CleanupStatus::Deleted => "cleanup.deleted",
+        CleanupStatus::Failed => "cleanup.failed",
+        CleanupStatus::Intent => "cleanup.terminal",
     };
     insert_cleanup_event(
         &transaction,
