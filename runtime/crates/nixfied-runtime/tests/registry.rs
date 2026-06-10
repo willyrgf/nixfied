@@ -6,7 +6,7 @@ use nixfied_runtime::ErrorCode;
 use nixfied_runtime::registry::{EventInsert, Registry, RegistryIdentity, SCHEMA_VERSION};
 
 #[test]
-fn creates_registry_schema_v2_with_wal() {
+fn creates_registry_schema_with_wal() {
     let tmp = TempDir::new();
     let path = tmp.path.join("registry/registry.sqlite3");
     let identity = identity();
@@ -119,7 +119,7 @@ fn rejects_incompatible_user_version() {
     let registry = Registry::open_or_create(&path, &identity).expect("registry should open");
     registry
         .connection()
-        .execute_batch("PRAGMA user_version = 3;")
+        .execute_batch("PRAGMA user_version = 99;")
         .expect("test should mutate user_version");
     drop(registry);
 

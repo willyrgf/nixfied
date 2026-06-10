@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use rusqlite::{OptionalExtension, params};
+use rusqlite::params;
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::registry::status::{self, DbStatus, RunLeaseStatus};
@@ -34,7 +34,10 @@ pub fn heartbeat_run_lease(
             params![run_id, owner_token, ttl_modifier],
         )
         .map_err(sql_error)?;
-    if updated != 1 {
+    // A run heartbeats all of its per-service leases at once; while any remains
+    // open the run still owns the slot. Only when none are open do we decide
+    // between a clean end (all terminal) and a lost lease.
+    if updated == 0 {
         if lease_is_terminal_for_owner(registry, run_id, owner_token)? {
             return Ok(());
         }
@@ -46,24 +49,28 @@ pub fn heartbeat_run_lease(
     Ok(())
 }
 
+/// The owner's leases for this run are collectively terminal: it still holds at
+/// least one lease row and every one has reached a terminal status (so the run
+/// ended rather than the lease being yanked out from under the owner).
 fn lease_is_terminal_for_owner(
     registry: &Registry,
     run_id: &str,
     owner_token: &str,
 ) -> RuntimeResult<bool> {
-    let status = registry
+    let mut statement = registry
         .connection()
-        .query_row(
-            "SELECT status FROM run_leases WHERE run_id = ?1 AND owner_token = ?2",
-            params![run_id, owner_token],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()
+        .prepare("SELECT status FROM run_leases WHERE run_id = ?1 AND owner_token = ?2")
         .map_err(sql_error)?;
-    Ok(status
-        .as_deref()
-        .and_then(RunLeaseStatus::from_db)
-        .is_some_and(|status| status::LEASE_TERMINAL.contains(&status)))
+    let statuses = statement
+        .query_map(params![run_id, owner_token], |row| row.get::<_, String>(0))
+        .map_err(sql_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(sql_error)?;
+    Ok(!statuses.is_empty()
+        && statuses.iter().all(|status| {
+            RunLeaseStatus::from_db(status)
+                .is_some_and(|status| status::LEASE_TERMINAL.contains(&status))
+        }))
 }
 
 pub fn lease_ttl_modifier() -> String {

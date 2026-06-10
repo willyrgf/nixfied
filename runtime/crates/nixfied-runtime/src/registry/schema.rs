@@ -3,7 +3,7 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::registry::records::RegistryIdentity;
 
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 
 pub fn initialize(conn: &mut Connection, identity: &RegistryIdentity) -> RuntimeResult<()> {
     conn.execute_batch(
@@ -36,7 +36,7 @@ pub fn initialize(conn: &mut Connection, identity: &RegistryIdentity) -> Runtime
             "
             CREATE TABLE IF NOT EXISTS registry_meta (
               id INTEGER PRIMARY KEY CHECK (id = 1),
-              schema_version INTEGER NOT NULL CHECK (schema_version = 2),
+              schema_version INTEGER NOT NULL,
               project_id TEXT NOT NULL,
               environment TEXT NOT NULL,
               slot INTEGER NOT NULL CHECK (slot >= 0),
@@ -112,15 +112,18 @@ pub fn initialize(conn: &mut Connection, identity: &RegistryIdentity) -> Runtime
               owner_process_key TEXT
             );
 
+            -- One lease row per (run, service): a multi-service run reserves each
+            -- service independently, so each carries its own cross-run lease.
             CREATE TABLE IF NOT EXISTS run_leases (
-              run_id TEXT PRIMARY KEY,
+              run_id TEXT NOT NULL,
               environment TEXT NOT NULL,
               slot INTEGER NOT NULL CHECK (slot >= 0),
               service_instance_id TEXT NOT NULL,
               owner_token TEXT NOT NULL,
               heartbeat_at TEXT NOT NULL,
               expires_at TEXT NOT NULL,
-              status TEXT NOT NULL
+              status TEXT NOT NULL,
+              PRIMARY KEY (run_id, service_instance_id)
             );
 
             CREATE TABLE IF NOT EXISTS cleanups (
@@ -138,12 +141,14 @@ pub fn initialize(conn: &mut Connection, identity: &RegistryIdentity) -> Runtime
 
     transaction
         .execute(
-            "
+            &format!(
+                "
             INSERT INTO registry_meta (
               id, schema_version, project_id, environment, slot,
               runtime_abi, toolchain_id, created_at
-            ) VALUES (1, 2, ?1, ?2, ?3, ?4, ?5, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-            ",
+            ) VALUES (1, {SCHEMA_VERSION}, ?1, ?2, ?3, ?4, ?5, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+            "
+            ),
             (
                 &identity.project_id,
                 &identity.environment,

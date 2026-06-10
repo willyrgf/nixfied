@@ -315,11 +315,16 @@ fn mark_process_stale(registry: &mut Registry, row: &ProcessRow) -> RuntimeResul
 
 fn reconcile_expired_run_leases(registry: &mut Registry) -> RuntimeResult<()> {
     let leases = expired_run_leases(registry)?;
+    // `mark_run_lease_stale` stales every lease of a run at once (its service
+    // leases expire together), so act only once per run even when several of its
+    // service leases are returned, to avoid duplicate stale events.
+    let mut staled = std::collections::BTreeSet::new();
     for lease in leases {
-        if run_has_live_process(registry, &lease.run_id)? {
+        if staled.contains(&lease.run_id) || run_has_live_process(registry, &lease.run_id)? {
             continue;
         }
         mark_run_lease_stale(registry, &lease)?;
+        staled.insert(lease.run_id.clone());
     }
     Ok(())
 }
