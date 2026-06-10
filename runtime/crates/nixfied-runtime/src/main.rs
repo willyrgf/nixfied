@@ -49,9 +49,9 @@ struct NodeResult {
     task_id: String,
     success: bool,
     exit_code: Option<i32>,
-    // Where the node's full execution detail lives. For a conformance check this
-    // stdout log is the check's verdict (e.g. the two per-slot Postgres in
-    // `slots`), so the summary links each node straight to its evidence.
+    // Where the node's full execution detail lives — the task's captured stdout,
+    // stderr, and summary — so the summary links each node straight to its
+    // evidence without a separate lookup.
     stdout_path: PathBuf,
     stderr_path: PathBuf,
     summary_path: PathBuf,

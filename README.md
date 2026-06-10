@@ -13,7 +13,7 @@ workflows.
 
 The capability line is implemented and shipped: services, tasks, workflow graphs,
 multi-slot isolation, the Postgres reference adapter, a polyglot example,
-non-destructive `install` / `upgrade`, and a self-hosted conformance gate.
+non-destructive `install` / `upgrade`, and a self-hosted gate.
 
 For the design rationale (the *why*) see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md);
 for the contributor contract and invariants see [`AGENTS.md`](AGENTS.md).
@@ -96,7 +96,7 @@ separate test harness to wire.
 ## Verify (working on Nixfied itself)
 
 One command runs the whole repo, fail-fast — the source gate, the test floor,
-then the conformance gate:
+then the gate:
 
 ```sh
 nix run .#ci
@@ -105,15 +105,16 @@ nix run .#ci
 Its stages also run on their own:
 
 ```sh
-nix run .#check   # nix flake check (rustfmt + clippy -D warnings + cargo check + every build) + self-model admission
+nix run .#check   # nix flake check (rustfmt + clippy -D warnings + every build) + model admission
 nix run .#test    # the white-box cargo floor (binds ports / spawns process groups)
-nix run .#gate    # the conformance gate (below)
+nix run .#gate    # the framework gate (below)
 ```
 
-`.#gate` is the product testing itself — this repo is a Nixfied project whose
-`conformance` workflow exercises the framework end to end (the examples,
-multi-slot, and a real `install` + `upgrade`), run by the runtime under test. CI
-(`.github/workflows/checks.yml`) runs the same layered gate.
+`.#gate` exercises the runtime the way adopters do — it runs the example models as
+ordinary top-level runs through the runtime under test (each example is its own
+spec) — plus the checks a single run can't make: cross-slot isolation, fail-closed,
+and a real `install` + `upgrade`. CI (`.github/workflows/checks.yml`) runs the same
+layered gate.
 
 Note the asymmetry with the adopter surface above: the framework verifies its
 *own* Rust source with plain cargo/nix — a nixfied task cannot invoke Nix, and

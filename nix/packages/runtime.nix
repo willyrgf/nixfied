@@ -1,11 +1,10 @@
 # Reproducible, host-toolchain-free build of the runtime workspace binaries
-# (`nixfied-runtime`, `nixfied-conformance`, `nixfied`). Shared by the flake's
-# `packages.nixfied-runtime` and the self-project `nixfied.nix`.
+# (`nixfied-runtime`, `nixfied`).
 #
 # `buildType` selects the cargo profile: the default `"release"` is what
-# `.#install` ships to adopters; the framework's own CI path (flake checks, the
-# self-model's conformance closure, the gate) builds `"debug"` instead, so every
-# `.#ci` compile shares one fast dev profile and no release optimization runs.
+# `.#install` ships to adopters; the framework's own CI path (flake checks and the
+# gate) builds `"debug"` instead, so every `.#ci` compile shares one fast dev
+# profile and no release optimization runs.
 #
 # `pkgs` must carry the rust-overlay overlay (it provides `rust-bin`). The
 # toolchain is pinned >= the workspace rust-version; rusqlite's `bundled` feature

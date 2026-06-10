@@ -2,9 +2,8 @@
 
 A realistic "small system" you can copy as the starting point for adopting
 Nixfied: a Postgres database, a first-party `api` service, a `worker` service,
-and a `release` workflow that ties them together. It is also the project the
-self-hosted conformance gate installs and drives to prove the framework works
-end to end (see the repo-root `nixfied.nix`).
+and a `release` workflow that ties them together. The framework gate installs and
+drives this example (among the others) to prove the framework works end to end.
 
 Everything is declared as typed Nix that compiles into the generic model
 primitives. The Rust runtime knows nothing about Postgres, the api, or the

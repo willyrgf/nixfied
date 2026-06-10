@@ -172,21 +172,24 @@ future scope.
 | Service reuse blurred incompatible configs | layered service identity, exact match (SVC-ID-1) |
 | Lease/refcount assumed a daemon | run/service/borrower lease split |
 | Adapter complexity preceded proven lifecycle | generic primitives before concrete adapters (RUNTIME-GENERIC-1) |
-| A single huge proof workspace became a second framework | tiered proofs; later, self-hosted conformance |
+| A single huge proof workspace became a second framework | tiered proofs; later, the thin self-hosted gate |
 | Duplicate command families per lifecycle action | framework-owned public surfaces (SURFACE-1) |
 
-## Self-hosted conformance (the gate)
+## The framework gate
 
 A system cannot fully certify itself, so the gate is layered and runs in order:
 (1) `cargo test` is the trusted floor — it verifies the runtime's own primitives
-without the runtime grading itself; (2) the dogfood gate runs the framework's own
-`conformance` workflow through the runtime under test, each check writing a
-ground-truth verdict artifact; (3) `nix flake check` covers structural gates. The
-repo's own `nixfied.nix` is therefore both the acceptance gate and the canonical
-adopter example. A NixOS-VM was considered and rejected: the gate's needs (a real
-Nix daemon, ports, multi-process supervisors, nested `nix`) already exist in a
-normal shell, so hermeticity comes from pinned inputs + nix-built binaries +
-throwaway repos/state, not a VM.
+without the runtime grading itself; (2) the gate runs the **example models** the
+way adopters do — as ordinary top-level runs through the runtime under test — and
+diffs each example's emitted views against the runtime's re-derivation; (3) `nix
+flake check` covers the structural gates. The examples are the spec (a run fails if
+its services/tasks fail), so the gate stays thin: the only bespoke logic is the
+genuinely cross-run `slots` isolation check, plus `negative` (fail-closed) and
+`adoption` (the real `install`/`upgrade` loop). There is no self-model and no
+orchestrator binary — the gate is `nix/gate.nix`. A NixOS-VM was considered and
+rejected: the gate's needs (a real Nix daemon, ports, multi-process supervisors,
+nested `nix`) already exist in a normal shell, so hermeticity comes from pinned
+inputs + nix-built binaries + throwaway repos/state, not a VM.
 
 ## Verification surfaces (framework vs adopter)
 
