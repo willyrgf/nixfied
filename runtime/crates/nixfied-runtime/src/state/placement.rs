@@ -87,8 +87,7 @@ pub fn derive_host_placement_for_slot(
             "state base cannot be empty",
         ));
     }
-    let state_root_relative =
-        relative_template_path("state root", STATE_ROOT_TEMPLATE, &vars)?;
+    let state_root_relative = relative_template_path("state root", STATE_ROOT_TEMPLATE, &vars)?;
     let state_root = state_base.join(&state_root_relative);
     // The registry holds cleanup evidence and must survive a slot clean, which
     // deletes the state root. Place it in a parallel tree under the state base
@@ -97,9 +96,16 @@ pub fn derive_host_placement_for_slot(
         .join(relative_template_path("registry dir", REGISTRY_DIR, &vars)?)
         .join(&state_root_relative);
     let run_dir = state_root.join(relative_template_path("run dir", RUN_DIR_TEMPLATE, &vars)?);
-    let logs_dir = state_root.join(relative_template_path("logs dir", LOGS_DIR_TEMPLATE, &vars)?);
-    let artifacts_dir =
-        state_root.join(relative_template_path("artifacts dir", ARTIFACTS_DIR_TEMPLATE, &vars)?);
+    let logs_dir = state_root.join(relative_template_path(
+        "logs dir",
+        LOGS_DIR_TEMPLATE,
+        &vars,
+    )?);
+    let artifacts_dir = state_root.join(relative_template_path(
+        "artifacts dir",
+        ARTIFACTS_DIR_TEMPLATE,
+        &vars,
+    )?);
     let summary_path = run_dir.join("summary.json");
     Ok(HostPlacement {
         state_base,

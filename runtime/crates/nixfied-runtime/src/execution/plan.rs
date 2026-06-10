@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
-use crate::execution::types::{ExecutionModel, ExecWorkflow, PortWindow};
+use crate::execution::types::{ExecWorkflow, ExecutionModel, PortWindow};
 
 /// Which program a run drives: the environment's services + tasks, or a workflow.
 #[derive(Debug, Clone, Copy)]
@@ -71,7 +71,11 @@ pub fn plan(model: &ExecutionModel, selection: Selection<'_>, slot: u32) -> Runt
                     format!("workflow {id} graph is not acyclic"),
                 )
             })?;
-            (workflow.services_required.clone(), nodes, Some(id.to_string()))
+            (
+                workflow.services_required.clone(),
+                nodes,
+                Some(id.to_string()),
+            )
         }
     };
 
@@ -275,28 +279,26 @@ mod tests {
 
     #[test]
     fn assigns_ports_from_window_start_in_order() {
-        let em = model(
-            vec!["a", "b"],
-            vec!["a", "b"],
-            vec![(0, 38080, 38090)],
-        );
+        let em = model(vec!["a", "b"], vec!["a", "b"], vec![(0, 38080, 38090)]);
         let plan = plan(&em, Selection::Environment, 0).expect("plan exists");
         assert_eq!(
             plan.services,
             vec![
-                ServiceBinding { service_name: "a".to_string(), port: 38080 },
-                ServiceBinding { service_name: "b".to_string(), port: 38081 },
+                ServiceBinding {
+                    service_name: "a".to_string(),
+                    port: 38080
+                },
+                ServiceBinding {
+                    service_name: "b".to_string(),
+                    port: 38081
+                },
             ]
         );
     }
 
     #[test]
     fn rejects_when_window_cannot_host_all_services() {
-        let em = model(
-            vec!["a", "b"],
-            vec!["a", "b"],
-            vec![(0, 38080, 38080)],
-        );
+        let em = model(vec!["a", "b"], vec!["a", "b"], vec![(0, 38080, 38080)]);
         let error = plan(&em, Selection::Environment, 0).expect_err("window too small");
         assert_eq!(error.code, ErrorCode::PortConflict);
     }
@@ -317,11 +319,12 @@ mod tests {
             ErrorCode::PortConflict
         );
         assert_eq!(
-            prove_all_plans_feasible(&em).expect_err("not all slots feasible").code,
+            prove_all_plans_feasible(&em)
+                .expect_err("not all slots feasible")
+                .code,
             ErrorCode::PortConflict
         );
     }
-
 
     #[test]
     fn workflow_nodes_are_topologically_ordered() {

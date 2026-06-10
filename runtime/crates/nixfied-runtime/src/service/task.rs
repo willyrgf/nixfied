@@ -98,7 +98,9 @@ pub fn run_dependent_task_cancellable(
     ensure_task_dependencies(registry, task, dependencies)?;
     // A service dependency provides only the endpoint to substitute; a task with
     // no services runs in the run context alone.
-    let endpoint = dependencies.first().map(|service| &service.selected_endpoint);
+    let endpoint = dependencies
+        .first()
+        .map(|service| &service.selected_endpoint);
     let exec = &task.exec;
     // Key logs by node id, not task id: a workflow may run the same task in more
     // than one node, and task-id-keyed paths would overwrite each other's logs.
@@ -164,7 +166,10 @@ pub fn run_dependent_task_cancellable(
     let exit_code = outcome.exit_code;
     let timed_out = outcome.timed_out;
     let failure_message = if timed_out {
-        format!("task {task_id} timed out after {}ms", exec.timeout.as_millis())
+        format!(
+            "task {task_id} timed out after {}ms",
+            exec.timeout.as_millis()
+        )
     } else if outcome.canceled {
         "run was canceled".to_string()
     } else {

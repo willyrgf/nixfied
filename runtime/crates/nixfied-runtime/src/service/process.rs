@@ -1236,7 +1236,10 @@ fn ensure_foreground_child_alive(service: &mut StartedService) -> RuntimeResult<
     // Under process-tree containment the supervisor's children legitimately form
     // their own process groups, so only strict process-group services are held to
     // the single-group invariant here.
-    if matches!(service.service.containment, ContainmentRequirement::ProcessGroup) {
+    if matches!(
+        service.service.containment,
+        ContainmentRequirement::ProcessGroup
+    ) {
         let escaped = escaped_descendants(service.pid, service.pgid)?;
         if !escaped.is_empty() {
             return Err(RuntimeError::new(

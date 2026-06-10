@@ -14,9 +14,8 @@ use nixfied_runtime::registry::{Registry, RegistryIdentity};
 use nixfied_runtime::service::registry::{TaskProcessRecord, record_task_started};
 use nixfied_runtime::service::{
     RunContext, run_dependent_task, run_dependent_task_cancellable,
-    run_synthetic_service_clean_for_slot,
-    service_address_hash, service_instance_id, start_synthetic_service,
-    start_synthetic_service_for_slot, wait_for_tcp_probe,
+    run_synthetic_service_clean_for_slot, service_address_hash, service_instance_id,
+    start_synthetic_service, start_synthetic_service_for_slot, wait_for_tcp_probe,
 };
 use nixfied_runtime::slot::select_slot;
 use nixfied_runtime::state::{
@@ -652,7 +651,12 @@ fn dependent_task_runs_after_owned_service_is_ready() {
         &mut fixture.registry,
         RunContext::from_service(&service),
         &[&service],
-        fixture.admission.execution_model.tasks.get("smoke").expect("smoke task"),
+        fixture
+            .admission
+            .execution_model
+            .tasks
+            .get("smoke")
+            .expect("smoke task"),
     )
     .expect("ready dependent task should run");
 
@@ -718,7 +722,12 @@ fn dependent_task_refuses_to_run_before_service_ready() {
         &mut fixture.registry,
         RunContext::from_service(&service),
         &[&service],
-        fixture.admission.execution_model.tasks.get("smoke").expect("smoke task"),
+        fixture
+            .admission
+            .execution_model
+            .tasks
+            .get("smoke")
+            .expect("smoke task"),
     )
     .expect_err("task should wait for probe-ready service");
 
@@ -950,7 +959,12 @@ fn cancellation_interrupts_task_and_terminates_task_group() {
         RunContext::from_service(&service),
         &[&service],
         "smoke",
-        fixture.admission.execution_model.tasks.get("smoke").expect("smoke task"),
+        fixture
+            .admission
+            .execution_model
+            .tasks
+            .get("smoke")
+            .expect("smoke task"),
         &cancellation,
     )
     .expect_err("task should be canceled");
@@ -1065,7 +1079,12 @@ fn task_timeout_records_canceled_summary_and_terminates_task_group() {
         &mut fixture.registry,
         RunContext::from_service(&service),
         &[&service],
-        fixture.admission.execution_model.tasks.get("smoke").expect("smoke task"),
+        fixture
+            .admission
+            .execution_model
+            .tasks
+            .get("smoke")
+            .expect("smoke task"),
     )
     .expect_err("task should time out as cancellation");
     thread::sleep(Duration::from_millis(2300));
@@ -2860,8 +2879,6 @@ fn fixture_model(executable: &str, start_args: &[&str], port: u16) -> Value {
         }
     })
 }
-
-
 
 fn host_system() -> String {
     format!("{}-{}", host_arch(), host_os())

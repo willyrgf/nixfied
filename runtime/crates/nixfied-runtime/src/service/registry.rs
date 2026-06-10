@@ -174,11 +174,7 @@ pub fn release_service_reservation(
             ",
                 status::sql_in_list(status::LEASE_OPEN)
             ),
-            params![
-                run_id,
-                service_instance_id,
-                RunLeaseStatus::Failed.as_str()
-            ],
+            params![run_id, service_instance_id, RunLeaseStatus::Failed.as_str()],
         )
         .map_err(sql_error)?;
     transaction
@@ -1147,7 +1143,8 @@ fn ensure_no_active_port_transaction(
         .optional()
         .map_err(sql_error)?;
     if let Some((endpoint_key, status)) = existing
-        && PortStatus::from_db(&status).is_some_and(|port_status| status::PORT_OPEN.contains(&port_status))
+        && PortStatus::from_db(&status)
+            .is_some_and(|port_status| status::PORT_OPEN.contains(&port_status))
     {
         return Err(RuntimeError::new(
             ErrorCode::PortConflict,

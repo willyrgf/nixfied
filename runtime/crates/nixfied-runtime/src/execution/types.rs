@@ -252,7 +252,21 @@ mod tests {
 
     #[test]
     fn port_window_capacity_is_inclusive() {
-        assert_eq!(PortWindow { start: 100, end: 100 }.capacity(), 1);
-        assert_eq!(PortWindow { start: 100, end: 109 }.capacity(), 10);
+        assert_eq!(
+            PortWindow {
+                start: 100,
+                end: 100
+            }
+            .capacity(),
+            1
+        );
+        assert_eq!(
+            PortWindow {
+                start: 100,
+                end: 109
+            }
+            .capacity(),
+            10
+        );
     }
 }

@@ -4,7 +4,6 @@ use crate::constants::{MODEL_VERSION, TOOLCHAIN_ID, runtime_abi};
 use crate::error::ValidationError;
 use crate::types::*;
 
-
 pub trait Validate {
     fn validate(&self) -> Result<(), ValidationError>;
 }
@@ -261,7 +260,10 @@ fn validate_services(model: &Model) -> Result<(), ValidationError> {
         match service.containment {
             ContainmentRequirement::ProcessGroup | ContainmentRequirement::ProcessTree => {}
         }
-        require_non_empty("services.endpoint.endpointId", &service.endpoint.endpoint_id)?;
+        require_non_empty(
+            "services.endpoint.endpointId",
+            &service.endpoint.endpoint_id,
+        )?;
         validate_service_lifecycle(service)?;
     }
     Ok(())
