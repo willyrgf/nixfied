@@ -188,6 +188,24 @@ Nix daemon, ports, multi-process supervisors, nested `nix`) already exist in a
 normal shell, so hermeticity comes from pinned inputs + nix-built binaries +
 throwaway repos/state, not a VM.
 
+## Verification surfaces (framework vs adopter)
+
+Two audiences, two surfaces, one rule. **Adopters** get `run` / `check` / `test`
+/ `ci` flake apps generated from their model (`lib.projectApps`, wired by the
+`install` scaffold); their verification *is* a workflow, because their tests are
+tasks — a 0-service `fullcheck` (lint/test), an N-service `e2e` — run by the same
+runtime that runs their app, with no separate harness. **The framework** verifies
+its own Rust/Nix with plain `nix flake check` (a hermetic rustfmt/clippy/check
+derivation), a `cargo` test floor, and the gate; it does *not* route its source
+checks through nixfied tasks. The reason is the invariant that makes the whole
+design work: a nixfied task can never invoke Nix (SEAM-1), so `nix build` /
+`nix flake check` cannot be tasks; and the runtime must not be the instrument that
+grades its own unit tests. So `.#gate` is framework-only — a system proving its
+own runtime — while an adopter's acceptance proof is simply another workflow they
+declare (run via `.#run -- --workflow <name>`). Nix is the substrate and the
+workflow engine runs *on* it: the framework's own CI lives in that substrate,
+every adopter's verification lives in the engine.
+
 ## Deferred by design
 
 The first cut intentionally omits: full secrets/credentials management;

@@ -62,6 +62,23 @@ NIXFIED_STATE_DIR=/tmp/downstream-state "$runtime" clean --model "$model"
 hash, and — for a workflow — the ordered node results). `clean` is marker-gated
 and path-confined: it only removes state roots this model owns.
 
+### With the generated apps
+
+This example's `flake.nix` wires `nixfied.lib.<system>.projectApps`, so the same
+operations are one command each — the surface every nixfied project gets:
+
+```sh
+nix run ./examples/downstream#check                      # admission only
+nix run ./examples/downstream#run                        # start services, run tasks
+nix run ./examples/downstream#run -- --workflow release  # drive the release workflow
+```
+
+`.#test` / `.#ci` run a project's `test` workflow; this example ships a `release`
+workflow instead (its acceptance gate), so it is driven via `.#run -- --workflow
+release`. A fresh `#install` scaffold ships a `test` workflow by default. State
+goes to the default location (`$XDG_STATE_HOME/nixfied`); set `NIXFIED_STATE_DIR`
+to override.
+
 ## macOS + Linux
 
 The example runs on both. Postgres is configured TCP-only (the Unix socket is
