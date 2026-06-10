@@ -44,15 +44,14 @@ let
   conformanceCheck = name: model: {
     operationId = "task.conformance.${name}.run";
     execId = "conformance";
-    args =
-      [
-        "--check"
-        name
-      ]
-      ++ pkgs.lib.optionals (model != null) [
-        "--model"
-        "${model}/model.json"
-      ];
+    args = [
+      "--check"
+      name
+    ]
+    ++ pkgs.lib.optionals (model != null) [
+      "--model"
+      "${model}/model.json"
+    ];
     dependsOnServicesReady = [ "synthetic" ];
     logRefs = [ "task.conformance.${name}" ];
   };

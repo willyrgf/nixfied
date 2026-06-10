@@ -8,7 +8,12 @@
 let
   constants = import ../spec/constants.nix;
   evaluated = import ./resolve.nix {
-    inherit lib pkgs system module;
+    inherit
+      lib
+      pkgs
+      system
+      module
+      ;
   };
   config = import ./validate.nix { inherit lib system; } evaluated.config;
   derived = import ./derive.nix {

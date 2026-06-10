@@ -11,12 +11,10 @@ let
       throw "unsupported target system: ${system}";
 in
 {
-  fromSystem =
-    system:
-    {
-      inherit system;
-      os = osFromSystem system;
-      arch = archFromSystem system;
-      closureSystem = system;
-    };
+  fromSystem = system: {
+    inherit system;
+    os = osFromSystem system;
+    arch = archFromSystem system;
+    closureSystem = system;
+  };
 }

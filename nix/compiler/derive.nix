@@ -38,7 +38,8 @@ let
 
   # Closures: realise package store paths and absolute executable paths.
   closurePackages = mapAttrsToList (_id: closure: closure.package) config.nixfied.closures;
-  closureExecutable = id: "${config.nixfied.closures.${id}.package}/${config.nixfied.closures.${id}.executable}";
+  closureExecutable =
+    id: "${config.nixfied.closures.${id}.package}/${config.nixfied.closures.${id}.executable}";
   closureSpec = id: closure: {
     kind = closure.kind;
     storePath = "${closure.package}";

@@ -274,12 +274,14 @@ let
         description = "Lifecycle/task operation ids dispatched against this closure.";
       };
       effects = mkOption {
-        type = types.listOf (types.enum [
-          "process"
-          "network-listener"
-          "source-read"
-          "file-write"
-        ]);
+        type = types.listOf (
+          types.enum [
+            "process"
+            "network-listener"
+            "source-read"
+            "file-write"
+          ]
+        );
         default = [ "process" ];
         description = "Declared closure effects.";
       };
