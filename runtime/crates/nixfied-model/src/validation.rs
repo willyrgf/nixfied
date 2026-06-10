@@ -684,7 +684,30 @@ fn validate_services(model: &Model) -> Result<(), ValidationError> {
         for probe in &service.probes {
             validate_probe(probe)?;
         }
+        validate_stop_policy(&service.stop_policy)?;
         validate_service_lifecycle(service)?;
+    }
+    Ok(())
+}
+
+/// Stop is a signal-based runtime primitive, so the declared signal must be one
+/// the runtime can send and the graceful budget must be positive.
+const STOP_SIGNALS: &[&str] = &["TERM", "INT", "QUIT", "HUP"];
+
+fn validate_stop_policy(stop_policy: &StopPolicy) -> Result<(), ValidationError> {
+    if !STOP_SIGNALS.contains(&stop_policy.signal.as_str()) {
+        return Err(ValidationError::UnsupportedValue {
+            field: "services.stopPolicy.signal",
+            expected: "one of TERM, INT, QUIT, HUP",
+            actual: stop_policy.signal.clone(),
+        });
+    }
+    if stop_policy.timeout_ms == 0 {
+        return Err(ValidationError::UnsupportedValue {
+            field: "services.stopPolicy.timeoutMs",
+            expected: "positive timeout",
+            actual: "0".to_string(),
+        });
     }
     Ok(())
 }

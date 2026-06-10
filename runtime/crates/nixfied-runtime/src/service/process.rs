@@ -62,6 +62,9 @@ pub struct StartedService {
     pub owner_token: String,
     containment: ContainmentRequirement,
     stop_operation: LifecycleOpSpec,
+    stop_signal: i32,
+    stop_signal_name: String,
+    stop_timeout_ms: u64,
 }
 
 impl StartedService {
@@ -300,10 +303,18 @@ impl StartedService {
             let _ = record_lifecycle_failure(registry, &context, &self.stop_operation, &error);
             return Err(error);
         }
-        if let Err(error) = self.terminate_owned(timeout_ms) {
-            let _ = record_lifecycle_failure(registry, &context, &self.stop_operation, &error);
-            return Err(error);
-        }
+        // Graceful shutdown is the model's declared stop signal escalated to
+        // SIGKILL. The graceful budget is the model's stopPolicy.timeoutMs, capped
+        // by the CLI timeout as an upper bound.
+        let stop_timeout = self.stop_timeout_ms.min(timeout_ms);
+        let escalated = match self.stop_owned(self.stop_signal, stop_timeout) {
+            Ok(escalated) => escalated,
+            Err(error) => {
+                let _ = record_lifecycle_failure(registry, &context, &self.stop_operation, &error);
+                return Err(error);
+            }
+        };
+        self.record_stop_signaled(registry, escalated, stop_timeout);
         let _ = wait_for_child_exit(&mut self.child, 1000)?;
         if let Some(cancellation) = cancellation
             && cancellation.is_canceled()
@@ -443,6 +454,30 @@ impl StartedService {
         );
     }
 
+    /// Record honest evidence of the stop mechanism that actually ran — the
+    /// signal sent and whether it escalated to SIGKILL — rather than a fabricated
+    /// exec terminal. Best-effort; failure to record does not fail the stop.
+    fn record_stop_signaled(&self, registry: &mut Registry, escalated: bool, timeout_ms: u64) {
+        let payload = serde_json::json!({
+            "pid": self.pid,
+            "pgid": self.pgid,
+            "signal": self.stop_signal_name,
+            "signalNumber": self.stop_signal,
+            "escalatedToKill": escalated,
+            "timeoutMs": timeout_ms,
+        })
+        .to_string();
+        let _ = record_service_lifecycle_event(
+            registry,
+            "service.stop.signaled",
+            Some(self.run_id.as_str()),
+            &self.service_instance_id,
+            Some(self.process_key.as_str()),
+            &self.computed_model_hash,
+            &payload,
+        );
+    }
+
     /// Terminate the owned process(es) according to containment: a single
     /// process group, or the whole supervised process tree.
     fn terminate_owned(&self, timeout_ms: u64) -> RuntimeResult<()> {
@@ -450,6 +485,20 @@ impl StartedService {
             ContainmentRequirement::ProcessGroup => terminate_process_group(self.pgid, timeout_ms),
             ContainmentRequirement::ProcessTree => {
                 terminate_process_tree(self.pid, self.pgid, timeout_ms)
+            }
+        }
+    }
+
+    /// Graceful shutdown: signal the owned process(es) with the model's declared
+    /// stop signal, then escalate to SIGKILL after the budget. Returns `true` if
+    /// escalation to SIGKILL was required.
+    fn stop_owned(&self, signal: i32, timeout_ms: u64) -> RuntimeResult<bool> {
+        match self.containment {
+            ContainmentRequirement::ProcessGroup => {
+                terminate_process_group_signal(self.pgid, signal, timeout_ms)
+            }
+            ContainmentRequirement::ProcessTree => {
+                terminate_process_tree_signal(self.pid, self.pgid, signal, timeout_ms)
             }
         }
     }
@@ -596,6 +645,8 @@ pub fn start_service_for_slot(
     }
     let start_op = lifecycle_op(service, LifecycleOpClass::Start)?;
     let stop_operation = lifecycle_op(service, LifecycleOpClass::Stop)?.clone();
+    let (stop_signal, stop_signal_name) = resolve_stop_signal(&service.stop_policy.signal);
+    let stop_timeout_ms = service.stop_policy.timeout_ms;
     let exec_id = start_op.exec_id.as_deref().ok_or_else(|| {
         RuntimeError::new(
             ErrorCode::ModelAdmission,
@@ -783,6 +834,9 @@ pub fn start_service_for_slot(
         owner_token,
         stop_operation,
         containment,
+        stop_signal,
+        stop_signal_name,
+        stop_timeout_ms,
     };
     if let Err(error) = ensure_foreground_child_alive(&mut started) {
         let payload = serde_json::json!({
@@ -896,6 +950,18 @@ fn clean_marked_slot_state(
 
 fn run_owner_token(run_id: &str) -> String {
     format!("{run_id}:runtime-pid-{}", std::process::id())
+}
+
+/// Map a model stop-signal name to its libc number, returning the resolved name
+/// for evidence. Unknown names fall back to SIGTERM; P0.3 restricts the schema to
+/// the supported set, which makes the fallback unreachable.
+fn resolve_stop_signal(name: &str) -> (i32, String) {
+    match name {
+        "INT" => (libc::SIGINT, "INT".to_string()),
+        "QUIT" => (libc::SIGQUIT, "QUIT".to_string()),
+        "HUP" => (libc::SIGHUP, "HUP".to_string()),
+        _ => (libc::SIGTERM, "TERM".to_string()),
+    }
 }
 
 fn lifecycle_op(service: &ServiceSpec, class: LifecycleOpClass) -> RuntimeResult<&LifecycleOpSpec> {
@@ -1393,10 +1459,21 @@ fn ensure_foreground_child_alive(service: &mut StartedService) -> RuntimeResult<
 /// their own process groups. SIGTERM the supervisor's group first (a well-behaved
 /// supervisor shuts its tree down), then escalate to SIGKILL across the tree.
 pub(crate) fn terminate_process_tree(pid: u32, pgid: i32, timeout_ms: u64) -> RuntimeResult<()> {
+    terminate_process_tree_signal(pid, pgid, libc::SIGTERM, timeout_ms).map(|_| ())
+}
+
+/// Signal the supervisor's group with `signal`, wait for the tree to drain, then
+/// escalate to SIGKILL across the tree. Returns `true` if escalation was required.
+pub(crate) fn terminate_process_tree_signal(
+    pid: u32,
+    pgid: i32,
+    signal: i32,
+    timeout_ms: u64,
+) -> RuntimeResult<bool> {
     let snapshot = descendant_pids(pid).unwrap_or_default();
-    signal_process_group(pgid, libc::SIGTERM)?;
+    signal_process_group(pgid, signal)?;
     if wait_until_process_tree_empty(pid, pgid, timeout_ms)? {
-        return Ok(());
+        return Ok(false);
     }
     let mut to_kill = descendant_pids(pid).unwrap_or(snapshot);
     for descendant in to_kill.drain(..) {
@@ -1406,7 +1483,7 @@ pub(crate) fn terminate_process_tree(pid: u32, pgid: i32, timeout_ms: u64) -> Ru
     }
     signal_process_group(pgid, libc::SIGKILL)?;
     if wait_until_process_tree_empty(pid, pgid, 1000)? {
-        Ok(())
+        Ok(true)
     } else {
         Err(RuntimeError::new(
             ErrorCode::ProcEscape,
@@ -1441,13 +1518,23 @@ fn wait_until_process_tree_empty(pid: u32, pgid: i32, timeout_ms: u64) -> Runtim
 }
 
 pub(crate) fn terminate_process_group(pgid: i32, timeout_ms: u64) -> RuntimeResult<()> {
-    signal_process_group(pgid, libc::SIGTERM)?;
+    terminate_process_group_signal(pgid, libc::SIGTERM, timeout_ms).map(|_| ())
+}
+
+/// Signal the owned process group with `signal`, wait up to `timeout_ms` for it to
+/// empty, then escalate to SIGKILL. Returns `true` if escalation was required.
+pub(crate) fn terminate_process_group_signal(
+    pgid: i32,
+    signal: i32,
+    timeout_ms: u64,
+) -> RuntimeResult<bool> {
+    signal_process_group(pgid, signal)?;
     if wait_until_process_group_empty(pgid, timeout_ms)? {
-        return Ok(());
+        return Ok(false);
     }
     signal_process_group(pgid, libc::SIGKILL)?;
     if wait_until_process_group_empty(pgid, 1000)? {
-        Ok(())
+        Ok(true)
     } else {
         Err(RuntimeError::new(
             ErrorCode::ProcEscape,
