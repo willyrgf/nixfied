@@ -428,6 +428,15 @@ fn health_failure_after_ready_records_distinct_lifecycle_failure() {
         .expect_err("health check should fail after readiness");
 
     assert_eq!(health_error.code, ErrorCode::LifecycleFailed);
+    // Lifecycle-exec output is captured to the logs dir, not discarded.
+    assert!(
+        fixture
+            .placement
+            .logs_dir
+            .join("lifecycle.service.synthetic.health.stderr.log")
+            .exists(),
+        "lifecycle exec output should be captured to the logs dir"
+    );
     let service_status: String = fixture
         .registry
         .connection()

@@ -59,6 +59,7 @@ pub struct StartedService {
     pub computed_model_hash: String,
     pub source_root: PathBuf,
     pub state_root: PathBuf,
+    logs_dir: PathBuf,
     pub owner_token: String,
     containment: ContainmentRequirement,
     stop_operation: LifecycleOpSpec,
@@ -100,6 +101,7 @@ impl StartedService {
             model,
             &self.source_root,
             &self.state_root,
+            &self.logs_dir,
             service,
             endpoint,
             self.selected_endpoint.port,
@@ -205,6 +207,7 @@ impl StartedService {
             model,
             &self.source_root,
             &self.state_root,
+            &self.logs_dir,
             service,
             endpoint,
             self.selected_endpoint.port,
@@ -695,6 +698,7 @@ pub fn start_service_for_slot(
             model,
             &admission.source.observed_root,
             &placement.state_root,
+            &placement.logs_dir,
             service,
             &selected_endpoint.as_endpoint_spec(),
             selected_port,
@@ -831,6 +835,7 @@ pub fn start_service_for_slot(
         computed_model_hash: admission.computed_model_hash.clone(),
         source_root: admission.source.observed_root.clone(),
         state_root: placement.state_root.clone(),
+        logs_dir: placement.logs_dir.clone(),
         owner_token,
         stop_operation,
         containment,
@@ -1116,6 +1121,7 @@ fn execute_lifecycle_operation(
     model: &Model,
     source_root: &Path,
     state_root: &Path,
+    logs_dir: &Path,
     service: &ServiceSpec,
     selected_endpoint: &EndpointSpec,
     selected_port: u16,
@@ -1136,6 +1142,7 @@ fn execute_lifecycle_operation(
             model,
             source_root,
             state_root,
+            logs_dir,
             operation,
             selected_port,
             cancellation,
@@ -1144,10 +1151,12 @@ fn execute_lifecycle_operation(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_lifecycle_exec(
     model: &Model,
     source_root: &Path,
     state_root: &Path,
+    logs_dir: &Path,
     operation: &LifecycleOpSpec,
     selected_port: u16,
     cancellation: &CancellationToken,
@@ -1169,14 +1178,18 @@ fn run_lifecycle_exec(
     })?;
     let command_cwd = resolve_exec_cwd(source_root, &exec.cwd)?;
     let args = operation_args(&exec.args, &operation.exec_args, selected_port, state_root);
+    // Capture lifecycle-exec output to the logs dir keyed by operation id, so a
+    // failed prepare (e.g. initdb) leaves a recoverable diagnostic trail.
+    let stdout_path = logs_dir.join(format!("lifecycle.{}.stdout.log", operation.operation_id));
+    let stderr_path = logs_dir.join(format!("lifecycle.{}.stderr.log", operation.operation_id));
     let mut command = Command::new(&exec.executable);
     command
         .args(&args)
         .current_dir(&command_cwd)
         .envs(&exec.env)
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stdout(Stdio::from(create_log_file(&stdout_path)?))
+        .stderr(Stdio::from(create_log_file(&stderr_path)?));
     unsafe {
         command.pre_exec(|| {
             if libc::setpgid(0, 0) == 0 {
