@@ -5,11 +5,11 @@ use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use nixfied_model::{ExecSpec, Model, TaskSpec};
 use serde::Serialize;
 
 use crate::cancellation::{CancellationToken, canceled_error};
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
+use crate::execution::{ExecTask, ResolvedExec};
 use crate::registry::Registry;
 use crate::service::process::{
     SelectedEndpoint, StartedService, platform_start_identity, process_group, resolve_exec_cwd,
@@ -36,20 +36,18 @@ pub struct TaskRun {
 }
 
 pub fn run_dependent_task(
-    model: &Model,
     placement: &HostPlacement,
     registry: &mut Registry,
     dependencies: &[&StartedService],
-    task_id: &str,
+    task: &ExecTask,
 ) -> RuntimeResult<TaskRun> {
     // Outside a workflow the node id is the task id.
     run_dependent_task_cancellable(
-        model,
         placement,
         registry,
         dependencies,
-        task_id,
-        task_id,
+        &task.task_id,
+        task,
         &CancellationToken::new(),
     )
 }
@@ -58,36 +56,24 @@ pub fn run_dependent_task(
 /// `dependsOnServicesReady`. `dependencies` lists the started services it depends
 /// on; the first is the primary, providing `${port}`/`${host}` substitution and
 /// the run/source/state context.
-#[allow(clippy::too_many_arguments)]
 pub fn run_dependent_task_cancellable(
-    model: &Model,
     placement: &HostPlacement,
     registry: &mut Registry,
     dependencies: &[&StartedService],
     node_id: &str,
-    task_id: &str,
+    task: &ExecTask,
     cancellation: &CancellationToken,
 ) -> RuntimeResult<TaskRun> {
     cancellation.check()?;
-    let task = model.tasks.get(task_id).ok_or_else(|| {
-        RuntimeError::new(
-            ErrorCode::ModelAdmission,
-            format!("task {task_id} is missing"),
-        )
-    })?;
+    let task_id = task.task_id.as_str();
     let primary = dependencies.first().ok_or_else(|| {
         RuntimeError::new(
-            ErrorCode::ModelAdmission,
+            ErrorCode::DependencyUnavailable,
             format!("task {task_id} has no service context to run in"),
         )
     })?;
     ensure_task_dependencies(registry, task, dependencies)?;
-    let exec = model.execs.get(&task.exec_id).ok_or_else(|| {
-        RuntimeError::new(
-            ErrorCode::ModelAdmission,
-            format!("task exec {} is missing", task.exec_id),
-        )
-    })?;
+    let exec = &task.exec;
     // Key logs by node id, not task id: a workflow may run the same task in more
     // than one node, and task-id-keyed paths would overwrite each other's logs.
     let stdout_path = placement
@@ -96,7 +82,7 @@ pub fn run_dependent_task_cancellable(
     let stderr_path = placement
         .logs_dir
         .join(format!("task.{node_id}.stderr.log"));
-    let args = task_args(exec, task, &primary.selected_endpoint, &primary.state_root);
+    let args = task_args(exec, &primary.selected_endpoint, &primary.state_root);
     let command_cwd = resolve_exec_cwd(&primary.source_root, &exec.cwd)?;
     let command_json = serde_json::to_string(&TaskCommandRecord {
         task_id,
@@ -134,7 +120,7 @@ pub fn run_dependent_task_cancellable(
         registry,
         &mut child,
         pgid,
-        exec.timeout_ms,
+        exec.timeout.as_millis() as u64,
         cancellation,
         TaskCancellationContext {
             run_id: &primary.run_id,
@@ -147,12 +133,12 @@ pub fn run_dependent_task_cancellable(
     let success = !canceled
         && outcome
             .exit_code
-            .map(|code| task.exit_policy.success_codes.contains(&code))
+            .map(|code| task.success_codes.contains(&code))
             .unwrap_or(false);
     let exit_code = outcome.exit_code;
     let timed_out = outcome.timed_out;
     let failure_message = if timed_out {
-        format!("task {task_id} timed out after {}ms", exec.timeout_ms)
+        format!("task {task_id} timed out after {}ms", exec.timeout.as_millis())
     } else if outcome.canceled {
         "run was canceled".to_string()
     } else {
@@ -213,13 +199,13 @@ fn task_terminal_status(success: bool, canceled: bool) -> TaskTerminalStatus {
 /// services and is probe-ready. A task may depend on more than one service.
 fn ensure_task_dependencies(
     registry: &Registry,
-    task: &TaskSpec,
+    task: &ExecTask,
     dependencies: &[&StartedService],
 ) -> RuntimeResult<()> {
     for service_name in &task.depends_on_services_ready {
         let service = dependencies
             .iter()
-            .find(|service| &service.service_name == service_name)
+            .find(|service| service.service_name() == service_name)
             .ok_or_else(|| {
                 RuntimeError::new(
                     ErrorCode::DependencyUnavailable,
@@ -232,7 +218,7 @@ fn ensure_task_dependencies(
 }
 
 fn spawn_task(
-    exec: &ExecSpec,
+    exec: &ResolvedExec,
     args: &[String],
     command_cwd: &Path,
     stdout_path: &Path,
@@ -351,14 +337,14 @@ struct TaskOutcome {
 }
 
 fn task_args(
-    exec: &ExecSpec,
-    task: &TaskSpec,
+    exec: &ResolvedExec,
     endpoint: &SelectedEndpoint,
     state_root: &Path,
 ) -> Vec<String> {
+    // The resolved exec already combines the base and task args; substitute the
+    // runtime placeholders here.
     exec.args
         .iter()
-        .chain(task.args.iter())
         .map(|arg| {
             substitute_arg(arg, endpoint.port, state_root).replace("${host}", &endpoint.host)
         })

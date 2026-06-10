@@ -65,7 +65,7 @@ impl PortWindow {
 #[derive(Debug, Clone)]
 pub struct ExecService {
     pub name: String,
-    pub prepare: Option<PrepareOp>,
+    pub prepare: PrepareOp,
     pub start: StartOp,
     pub ready: ReadyOp,
     pub health: HealthOp,
@@ -85,10 +85,12 @@ pub struct OpMeta {
     pub terminal_failure: String,
 }
 
+/// Prepare is always a recorded lifecycle class; its exec is optional (e.g. a
+/// data-dir init like initdb, or nothing).
 #[derive(Debug, Clone)]
 pub struct PrepareOp {
     pub meta: OpMeta,
-    pub exec: ResolvedExec,
+    pub exec: Option<ResolvedExec>,
 }
 
 #[derive(Debug, Clone)]

@@ -214,7 +214,6 @@ fn run_m0_admitted(
         let selected_port = binding.port;
 
         let started_service = match start_service_for_slot(
-            model,
             admission,
             &placement,
             &mut registry,
@@ -246,9 +245,7 @@ fn run_m0_admitted(
         started.push(started_service);
 
         let service = started.last_mut().expect("just pushed a service");
-        if let Err(error) =
-            service.wait_for_probe_ready_cancellable(model, &mut registry, cancellation)
-        {
+        if let Err(error) = service.wait_for_probe_ready_cancellable(&mut registry, cancellation) {
             teardown(
                 &mut started,
                 &mut registry,
@@ -259,7 +256,7 @@ fn run_m0_admitted(
             return Err(error);
         }
         let service = started.last_mut().expect("just pushed a service");
-        if let Err(error) = service.check_health_cancellable(model, &mut registry, cancellation) {
+        if let Err(error) = service.check_health_cancellable(&mut registry, cancellation) {
             teardown(
                 &mut started,
                 &mut registry,
@@ -284,7 +281,7 @@ fn run_m0_admitted(
     let mut node_results: Vec<NodeResult> = Vec::new();
     for node in &plan.nodes {
         let task_id = &node.task_id;
-        let task = model.tasks.get(task_id).ok_or_else(|| {
+        let task = admission.execution_model.tasks.get(task_id).ok_or_else(|| {
             RuntimeError::new(
                 nixfied_runtime::ErrorCode::ModelAdmission,
                 format!("task {task_id} is missing"),
@@ -303,7 +300,7 @@ fn run_m0_admitted(
             for name in &task.depends_on_services_ready {
                 match started
                     .iter()
-                    .position(|service| &service.service_name == name)
+                    .position(|service| service.service_name() == name)
                 {
                     Some(index) => dep_indices.push(index),
                     None => {
@@ -334,12 +331,11 @@ fn run_m0_admitted(
         let dependencies: Vec<&StartedService> =
             dep_indices.iter().map(|&index| &started[index]).collect();
         let task_result = run_dependent_task_cancellable(
-            model,
             &placement,
             &mut registry,
             &dependencies,
             &node.node_id,
-            task_id,
+            task,
             cancellation,
         );
         match task_result {
@@ -377,7 +373,7 @@ fn run_m0_admitted(
     let services_output = started
         .iter()
         .map(|service| ServiceRunOutput {
-            service_id: service.service_name.clone(),
+            service_id: service.service_name().to_string(),
             service_instance_id: service.service_instance_id.clone(),
             process_key: service.process_key.clone(),
             selected_endpoint: service.selected_endpoint.clone(),

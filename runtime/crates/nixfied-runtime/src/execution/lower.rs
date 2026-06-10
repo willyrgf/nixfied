@@ -144,12 +144,13 @@ fn lower_service(
     let (ready_probe, bound_endpoint_id) = lower_probe(probes, readiness_probe)?;
     let endpoint = lower_endpoint(endpoints, &bound_endpoint_id)?;
 
-    let prepare = match decompose_op(class_op(lifecycle, LifecycleOpClass::Prepare)?) {
-        op if op.exec_id.is_some() => Some(PrepareOp {
-            exec: resolve_exec_ref(execs, op.exec_id.unwrap(), op.exec_args)?,
-            meta: op.meta,
-        }),
-        _ => None,
+    let prepare_op = decompose_op(class_op(lifecycle, LifecycleOpClass::Prepare)?);
+    let prepare = PrepareOp {
+        exec: match prepare_op.exec_id {
+            Some(exec_id) => Some(resolve_exec_ref(execs, exec_id, prepare_op.exec_args)?),
+            None => None,
+        },
+        meta: prepare_op.meta,
     };
 
     let start_op = decompose_op(class_op(lifecycle, LifecycleOpClass::Start)?);
@@ -508,7 +509,7 @@ mod tests {
         assert_eq!(svc.endpoint.host.to_string(), "127.0.0.1");
         assert_eq!(svc.endpoint.port, PortConstraint::Window);
         assert_eq!(svc.stop.signal, StopSignal::Term);
-        assert!(svc.prepare.is_none());
+        assert!(svc.prepare.exec.is_none());
         // Start exec args are base ++ operation args.
         assert_eq!(svc.start.exec.args, vec!["serve", "--port", "${port}"]);
         assert_eq!(em.environment.services, vec!["svc".to_string()]);

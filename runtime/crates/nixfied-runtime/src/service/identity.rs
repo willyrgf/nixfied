@@ -1,8 +1,8 @@
-use nixfied_model::{Model, ServiceIdentity};
+use nixfied_model::ServiceIdentity;
 use sha2::{Digest, Sha256};
 
 pub fn service_address_hash(
-    model: &Model,
+    project_id: &str,
     environment: &str,
     slot: u32,
     service_name: &str,
@@ -10,7 +10,7 @@ pub fn service_address_hash(
     let slot = slot.to_string();
     hash_fields(&[
         "service-address",
-        &model.project.project_id,
+        project_id,
         environment,
         &slot,
         service_name,

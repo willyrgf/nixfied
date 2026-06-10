@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use nixfied_model::{Model, ServiceSpec};
+use nixfied_model::ServiceIdentity;
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::admission::Admission;
@@ -12,7 +12,6 @@ use crate::state::HostPlacement;
 pub struct RunRecord<'a> {
     pub run_id: &'a str,
     pub owner_token: &'a str,
-    pub model: &'a Model,
     pub admission: &'a Admission,
     pub placement: &'a HostPlacement,
 }
@@ -21,7 +20,7 @@ pub struct ServiceRecord<'a> {
     pub service_instance_id: &'a str,
     pub service_name: &'a str,
     pub service_address_hash: &'a str,
-    pub service: &'a ServiceSpec,
+    pub identity: &'a ServiceIdentity,
     pub endpoint_json: &'a str,
     pub state_root: &'a Path,
     pub endpoint_key: &'a str,
@@ -80,8 +79,8 @@ pub fn reserve_service_start(
     run: &RunRecord<'_>,
     service_instance_id: &str,
 ) -> RuntimeResult<()> {
-    let generator_json = serde_json::to_string(&run.model.generator).map_err(json_error)?;
-    let target_json = serde_json::to_string(&run.model.target).map_err(json_error)?;
+    let generator_json = run.admission.generator_json.as_str();
+    let target_json = run.admission.target_json.as_str();
     let source_json = serde_json::to_string(&run.admission.source).map_err(json_error)?;
     let identity = registry.identity().clone();
     let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
@@ -198,8 +197,8 @@ pub fn record_service_start(
     service: &ServiceRecord<'_>,
     process: &ProcessRecord<'_>,
 ) -> RuntimeResult<()> {
-    let generator_json = serde_json::to_string(&run.model.generator).map_err(json_error)?;
-    let target_json = serde_json::to_string(&run.model.target).map_err(json_error)?;
+    let generator_json = run.admission.generator_json.as_str();
+    let target_json = run.admission.target_json.as_str();
     let source_json = serde_json::to_string(&run.admission.source).map_err(json_error)?;
     let identity = registry.identity().clone();
     let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
@@ -273,10 +272,10 @@ pub fn record_service_start(
                 identity.slot,
                 service.service_name,
                 service.service_address_hash,
-                service.service.identity.endpoint_identity_hash.as_str(),
-                service.service.identity.state_identity_hash.as_str(),
-                service.service.identity.runtime_compatibility_hash.as_str(),
-                service.service.identity.target_identity_hash.as_str(),
+                service.identity.endpoint_identity_hash.as_str(),
+                service.identity.state_identity_hash.as_str(),
+                service.identity.runtime_compatibility_hash.as_str(),
+                service.identity.target_identity_hash.as_str(),
                 service.endpoint_json,
                 service.state_root.display().to_string(),
             ],

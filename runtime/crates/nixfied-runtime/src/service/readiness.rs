@@ -1,124 +1,34 @@
 use std::net::{SocketAddr, TcpStream};
-use std::time::Duration;
-
-use nixfied_model::{EndpointSpec, ProbeSpec, ProbeTarget, ServiceSpec};
 
 use crate::cancellation::{CancellationToken, sleep_cancellable};
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
+use crate::execution::TcpProbe;
 
-pub fn wait_for_readiness_probe(
-    service: &ServiceSpec,
-    selected_endpoint: &EndpointSpec,
-    selected_port: u16,
-) -> RuntimeResult<()> {
-    wait_for_readiness_probe_cancellable(
-        service,
-        selected_endpoint,
-        selected_port,
-        &CancellationToken::new(),
-    )
-}
-
-pub fn wait_for_readiness_probe_cancellable(
-    service: &ServiceSpec,
-    selected_endpoint: &EndpointSpec,
-    selected_port: u16,
+/// Wait for a tcp-connect probe to succeed against the service's bound endpoint.
+/// The probe is already resolved (single endpoint, tcp only) by the lowering, so
+/// there is no probe lookup or endpoint matching to do here.
+pub fn wait_for_tcp_probe(
+    probe: &TcpProbe,
+    host: &str,
+    port: u16,
     cancellation: &CancellationToken,
 ) -> RuntimeResult<()> {
-    wait_for_service_probe_by_id_cancellable(
-        service,
-        service.readiness_probe.as_str(),
-        selected_endpoint,
-        selected_port,
-        cancellation,
-    )
-}
-
-pub fn wait_for_service_probe_by_id(
-    service: &ServiceSpec,
-    probe_id: &str,
-    selected_endpoint: &EndpointSpec,
-    selected_port: u16,
-) -> RuntimeResult<()> {
-    wait_for_service_probe_by_id_cancellable(
-        service,
-        probe_id,
-        selected_endpoint,
-        selected_port,
-        &CancellationToken::new(),
-    )
-}
-
-pub fn wait_for_service_probe_by_id_cancellable(
-    service: &ServiceSpec,
-    probe_id: &str,
-    selected_endpoint: &EndpointSpec,
-    selected_port: u16,
-    cancellation: &CancellationToken,
-) -> RuntimeResult<()> {
-    let probe = service
-        .probes
-        .iter()
-        .find(|probe| probe.probe_id == probe_id)
-        .ok_or_else(|| {
-            RuntimeError::new(
-                ErrorCode::ModelAdmission,
-                format!("lifecycle probe {probe_id} is missing"),
-            )
-        })?;
-    wait_for_probe(probe, selected_endpoint, selected_port, cancellation)
-}
-
-fn wait_for_probe(
-    probe: &ProbeSpec,
-    selected_endpoint: &EndpointSpec,
-    selected_port: u16,
-    cancellation: &CancellationToken,
-) -> RuntimeResult<()> {
-    match &probe.target {
-        ProbeTarget::TcpConnect { endpoint_id } => {
-            if endpoint_id != &selected_endpoint.endpoint_id {
-                return Err(RuntimeError::new(
-                    ErrorCode::ModelAdmission,
-                    format!(
-                        "probe endpoint {endpoint_id} does not match selected endpoint {}",
-                        selected_endpoint.endpoint_id
-                    ),
-                ));
-            }
-            wait_for_tcp(probe, selected_endpoint, selected_port, cancellation)
-        }
-        ProbeTarget::HttpGet { .. } => Err(RuntimeError::new(
-            ErrorCode::ModelAdmission,
-            "service readiness only supports tcp-connect probes",
-        )),
-    }
-}
-
-fn wait_for_tcp(
-    probe: &ProbeSpec,
-    selected_endpoint: &EndpointSpec,
-    selected_port: u16,
-    cancellation: &CancellationToken,
-) -> RuntimeResult<()> {
-    let address = format!("{}:{selected_port}", selected_endpoint.host);
+    let address = format!("{host}:{port}");
     let socket_addr = address.parse::<SocketAddr>().map_err(|error| {
         RuntimeError::new(
             ErrorCode::ModelAdmission,
             format!("invalid readiness address {address}: {error}"),
         )
     })?;
-    let timeout = Duration::from_millis(probe.timeout_ms);
-    let retry_interval = Duration::from_millis(probe.retry_interval_ms);
     let attempts = probe.max_attempts.max(1);
     let mut last_error = None;
     for _ in 0..attempts {
         cancellation.check()?;
-        match TcpStream::connect_timeout(&socket_addr, timeout) {
+        match TcpStream::connect_timeout(&socket_addr, probe.timeout) {
             Ok(_) => return Ok(()),
             Err(error) => {
                 last_error = Some(error);
-                sleep_cancellable(retry_interval, cancellation)?;
+                sleep_cancellable(probe.retry_interval, cancellation)?;
             }
         }
     }

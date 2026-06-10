@@ -6,7 +6,6 @@ use std::collections::BTreeSet;
 #[cfg(target_os = "linux")]
 use std::path::Path;
 
-use nixfied_model::EndpointSpec;
 use serde::Serialize;
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
@@ -33,16 +32,17 @@ pub struct VerifiedEndpointOwnership {
 }
 
 pub fn verify_endpoint_ownership(
-    endpoint: &EndpointSpec,
+    endpoint_id: &str,
+    host: &str,
     selected_port: u16,
     expected: &ExpectedEndpointOwner<'_>,
 ) -> RuntimeResult<VerifiedEndpointOwnership> {
-    let expected_addr = loopback_addr(&endpoint.host)?;
+    let expected_addr = loopback_addr(host)?;
     let owner = resolve_listener_owner(expected_addr, selected_port)?;
     if owner.pgid != expected.pgid {
         return Err(port_unverifiable(format!(
-            "listener for {}:{selected_port} belongs to pid {} pgid {}, not service pgid {}",
-            endpoint.host, owner.pid, owner.pgid, expected.pgid
+            "listener for {host}:{selected_port} belongs to pid {} pgid {}, not service pgid {}",
+            owner.pid, owner.pgid, expected.pgid
         )));
     }
     let matched_by = if owner.pid == expected.pid {
@@ -59,8 +59,8 @@ pub fn verify_endpoint_ownership(
         "tracked-process-group"
     };
     Ok(VerifiedEndpointOwnership {
-        endpoint_id: endpoint.endpoint_id.clone(),
-        address: endpoint.host.clone(),
+        endpoint_id: endpoint_id.to_string(),
+        address: host.to_string(),
         port: selected_port,
         owner_pid: owner.pid,
         owner_pgid: owner.pgid,

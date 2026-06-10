@@ -9,20 +9,18 @@ use std::thread;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use nixfied_model::{
-    ContainmentRequirement, EndpointSpec, LifecycleOpClass, LifecycleOpSpec, Model, PortPolicy,
-    ProbeTarget, ServiceSpec,
-};
+use nixfied_model::{ContainmentRequirement, LifecycleOpClass, LifecycleOpSpec, Model};
 use serde::Serialize;
 
 use crate::admission::Admission;
 use crate::cancellation::{CancellationToken, canceled_error};
 use crate::control::reconcile_registry;
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
+use crate::execution::{ExecService, OpMeta, ResolvedExec};
 use crate::registry::Registry;
 use crate::service::identity::{service_address_hash, service_instance_id};
 use crate::service::ownership::{ExpectedEndpointOwner, verify_endpoint_ownership};
-use crate::service::readiness::wait_for_service_probe_by_id_cancellable;
+use crate::service::readiness::wait_for_tcp_probe;
 use crate::service::registry::{
     ProcessRecord, RunRecord, ServiceRecord, ensure_service_start_allowed,
     mark_endpoint_owner_verified, mark_process_escape, mark_service_canceled, mark_service_failed,
@@ -48,8 +46,10 @@ pub struct SelectedEndpoint {
 pub struct StartedService {
     child: Child,
     monitor: ProcessMonitor,
+    /// The resolved service: the executor reads lifecycle ops, the bound endpoint,
+    /// and the stop signal from here, never from the raw `Model`.
+    service: ExecService,
     pub run_id: String,
-    pub service_name: String,
     pub service_instance_id: String,
     pub process_key: String,
     pub pid: u32,
@@ -59,100 +59,77 @@ pub struct StartedService {
     pub computed_model_hash: String,
     pub source_root: PathBuf,
     pub state_root: PathBuf,
-    logs_dir: PathBuf,
     pub owner_token: String,
-    containment: ContainmentRequirement,
-    stop_operation: LifecycleOpSpec,
-    stop_signal: i32,
-    stop_signal_name: String,
-    stop_timeout_ms: u64,
 }
 
 impl StartedService {
-    pub fn wait_for_probe_ready(
-        &mut self,
-        model: &Model,
-        registry: &mut Registry,
-    ) -> RuntimeResult<()> {
-        self.wait_for_probe_ready_cancellable(model, registry, &CancellationToken::new())
+    pub fn wait_for_probe_ready(&mut self, registry: &mut Registry) -> RuntimeResult<()> {
+        self.wait_for_probe_ready_cancellable(registry, &CancellationToken::new())
     }
 
     pub fn wait_for_probe_ready_cancellable(
         &mut self,
-        model: &Model,
         registry: &mut Registry,
         cancellation: &CancellationToken,
     ) -> RuntimeResult<()> {
-        let (service, endpoint) = self.service_and_endpoint(model)?;
-        let operation = lifecycle_op(service, LifecycleOpClass::Ready)?;
+        let record = LifecycleRecord::from_meta(&self.service.ready.meta, "ready");
         let context = self.lifecycle_event_context();
-        record_lifecycle_started(registry, &context, operation)?;
+        record_lifecycle_started(registry, &context, &record)?;
         if let Some(error) = self.escape_error(registry) {
             self.cleanup_after_escape();
-            let _ = record_lifecycle_failure(registry, &context, operation, &error);
+            let _ = record_lifecycle_failure(registry, &context, &record, &error);
             return Err(error);
         }
         cancellation.check()?;
         if let Err(error) = self.ensure_alive_or_record_escape(registry) {
-            let _ = record_lifecycle_failure(registry, &context, operation, &error);
+            let _ = record_lifecycle_failure(registry, &context, &record, &error);
             return Err(error);
         }
-        if let Err(error) = execute_lifecycle_operation(
-            model,
-            &self.source_root,
-            &self.state_root,
-            &self.logs_dir,
-            service,
-            endpoint,
-            self.selected_endpoint.port,
-            operation,
-            cancellation,
-        ) {
+        if let Err(error) = self.wait_ready_probe(cancellation) {
             if error.code == ErrorCode::Canceled {
                 return Err(error);
             }
             if let Some(error) = self.escape_error(registry) {
                 self.cleanup_after_escape();
-                let _ = record_lifecycle_failure(registry, &context, operation, &error);
+                let _ = record_lifecycle_failure(registry, &context, &record, &error);
                 return Err(error);
             }
             if let Err(error) = self.ensure_alive_or_record_escape(registry) {
-                let _ = record_lifecycle_failure(registry, &context, operation, &error);
+                let _ = record_lifecycle_failure(registry, &context, &record, &error);
                 return Err(error);
             }
-            let _ = record_lifecycle_failure(registry, &context, operation, &error);
+            let _ = record_lifecycle_failure(registry, &context, &record, &error);
             self.cleanup_after_readiness_failure(registry, &error);
             return Err(error);
         }
         if let Some(error) = self.escape_error(registry) {
             self.cleanup_after_escape();
-            let _ = record_lifecycle_failure(registry, &context, operation, &error);
+            let _ = record_lifecycle_failure(registry, &context, &record, &error);
             return Err(error);
         }
         cancellation.check()?;
         if let Err(error) = self.ensure_alive_or_record_escape(registry) {
-            let _ = record_lifecycle_failure(registry, &context, operation, &error);
+            let _ = record_lifecycle_failure(registry, &context, &record, &error);
             return Err(error);
         }
         if let Some(error) = self.escape_error(registry) {
             self.cleanup_after_escape();
-            let _ = record_lifecycle_failure(registry, &context, operation, &error);
+            let _ = record_lifecycle_failure(registry, &context, &record, &error);
             return Err(error);
         }
-        let ownership_json = match self.verify_selected_endpoint_ownership_json(endpoint, registry)
-        {
+        let ownership_json = match self.verify_selected_endpoint_ownership_json(registry) {
             Ok(payload) => payload,
             Err(error) => {
                 if let Some(error) = self.escape_error(registry) {
                     self.cleanup_after_escape();
-                    let _ = record_lifecycle_failure(registry, &context, operation, &error);
+                    let _ = record_lifecycle_failure(registry, &context, &record, &error);
                     return Err(error);
                 }
                 if let Err(error) = self.ensure_alive_or_record_escape(registry) {
-                    let _ = record_lifecycle_failure(registry, &context, operation, &error);
+                    let _ = record_lifecycle_failure(registry, &context, &record, &error);
                     return Err(error);
                 }
-                let _ = record_lifecycle_failure(registry, &context, operation, &error);
+                let _ = record_lifecycle_failure(registry, &context, &record, &error);
                 self.cleanup_after_readiness_failure(registry, &error);
                 return Err(error);
             }
@@ -176,57 +153,61 @@ impl StartedService {
             &self.process_key,
             &self.computed_model_hash,
         )?;
-        record_lifecycle_success(registry, &context, operation)
+        record_lifecycle_success(registry, &context, &record)
     }
 
-    pub fn check_health(&mut self, model: &Model, registry: &mut Registry) -> RuntimeResult<()> {
-        self.check_health_cancellable(model, registry, &CancellationToken::new())
+    pub fn check_health(&mut self, registry: &mut Registry) -> RuntimeResult<()> {
+        self.check_health_cancellable(registry, &CancellationToken::new())
     }
 
     pub fn check_health_cancellable(
         &mut self,
-        model: &Model,
         registry: &mut Registry,
         cancellation: &CancellationToken,
     ) -> RuntimeResult<()> {
-        let (service, endpoint) = self.service_and_endpoint(model)?;
-        let operation = lifecycle_op(service, LifecycleOpClass::Health)?;
+        let record = LifecycleRecord::from_meta(&self.service.health.meta, "health");
         let context = self.lifecycle_event_context();
-        record_lifecycle_started(registry, &context, operation)?;
+        record_lifecycle_started(registry, &context, &record)?;
         if let Some(error) = self.escape_error(registry) {
             self.cleanup_after_escape();
-            let _ = record_lifecycle_failure(registry, &context, operation, &error);
+            let _ = record_lifecycle_failure(registry, &context, &record, &error);
             return Err(error);
         }
         cancellation.check()?;
         if let Err(error) = self.ensure_alive_or_record_escape(registry) {
-            let _ = record_lifecycle_failure(registry, &context, operation, &error);
+            let _ = record_lifecycle_failure(registry, &context, &record, &error);
             return Err(error);
         }
-        if let Err(error) = execute_lifecycle_operation(
-            model,
-            &self.source_root,
-            &self.state_root,
-            &self.logs_dir,
-            service,
-            endpoint,
-            self.selected_endpoint.port,
-            operation,
-            cancellation,
-        ) {
+        if let Err(error) = self.wait_health_probe(cancellation) {
             if error.code == ErrorCode::Canceled {
                 return Err(error);
             }
-            let _ = record_lifecycle_failure(registry, &context, operation, &error);
+            let _ = record_lifecycle_failure(registry, &context, &record, &error);
             return Err(error);
         }
-        if operation.probe_id.is_some()
-            && let Err(error) = self.verify_selected_endpoint_ownership_json(endpoint, registry)
-        {
-            let _ = record_lifecycle_failure(registry, &context, operation, &error);
+        if let Err(error) = self.verify_selected_endpoint_ownership_json(registry) {
+            let _ = record_lifecycle_failure(registry, &context, &record, &error);
             return Err(error);
         }
-        record_lifecycle_success(registry, &context, operation)
+        record_lifecycle_success(registry, &context, &record)
+    }
+
+    fn wait_ready_probe(&self, cancellation: &CancellationToken) -> RuntimeResult<()> {
+        wait_for_tcp_probe(
+            &self.service.ready.probe,
+            &self.selected_endpoint.host,
+            self.selected_endpoint.port,
+            cancellation,
+        )
+    }
+
+    fn wait_health_probe(&self, cancellation: &CancellationToken) -> RuntimeResult<()> {
+        wait_for_tcp_probe(
+            &self.service.health.probe,
+            &self.selected_endpoint.host,
+            self.selected_endpoint.port,
+            cancellation,
+        )
     }
 
     pub fn cancel(
@@ -282,9 +263,10 @@ impl StartedService {
         cancellation: Option<&CancellationToken>,
     ) -> RuntimeResult<()> {
         let context = self.lifecycle_event_context();
+        let stop_record = LifecycleRecord::from_meta(&self.service.stop.meta, "stop");
         if let Some(error) = self.escape_error(registry) {
             self.cleanup_after_escape();
-            let _ = record_lifecycle_failure(registry, &context, &self.stop_operation, &error);
+            let _ = record_lifecycle_failure(registry, &context, &stop_record, &error);
             return Err(error);
         }
         if let Some(cancellation) = cancellation
@@ -293,7 +275,7 @@ impl StartedService {
             self.cancel(registry, timeout_ms, "run canceled during shutdown")?;
             return Err(canceled_error());
         }
-        record_lifecycle_started(registry, &context, &self.stop_operation)?;
+        record_lifecycle_started(registry, &context, &stop_record)?;
         if let Some(status) = self.child.try_wait().map_err(|error| {
             RuntimeError::new(
                 ErrorCode::ProcEscape,
@@ -303,17 +285,17 @@ impl StartedService {
             let message = format!("foreground service exited before stop: {status}");
             let error = self.record_escape(registry, message, Vec::new());
             self.cleanup_after_escape();
-            let _ = record_lifecycle_failure(registry, &context, &self.stop_operation, &error);
+            let _ = record_lifecycle_failure(registry, &context, &stop_record, &error);
             return Err(error);
         }
         // Graceful shutdown is the model's declared stop signal escalated to
         // SIGKILL. The graceful budget is the model's stopPolicy.timeoutMs, capped
         // by the CLI timeout as an upper bound.
-        let stop_timeout = self.stop_timeout_ms.min(timeout_ms);
-        let escalated = match self.stop_owned(self.stop_signal, stop_timeout) {
+        let stop_timeout = (self.service.stop.timeout.as_millis() as u64).min(timeout_ms);
+        let escalated = match self.stop_owned(self.service.stop.signal.libc(), stop_timeout) {
             Ok(escalated) => escalated,
             Err(error) => {
-                let _ = record_lifecycle_failure(registry, &context, &self.stop_operation, &error);
+                let _ = record_lifecycle_failure(registry, &context, &stop_record, &error);
                 return Err(error);
             }
         };
@@ -346,12 +328,12 @@ impl StartedService {
                 &payload,
             )?;
             let error = canceled_error();
-            let _ = record_lifecycle_failure(registry, &context, &self.stop_operation, &error);
+            let _ = record_lifecycle_failure(registry, &context, &stop_record, &error);
             return Err(error);
         }
         if let Some(error) = self.escape_error(registry) {
             self.cleanup_after_escape();
-            let _ = record_lifecycle_failure(registry, &context, &self.stop_operation, &error);
+            let _ = record_lifecycle_failure(registry, &context, &stop_record, &error);
             return Err(error);
         }
         self.monitor.stop();
@@ -362,7 +344,7 @@ impl StartedService {
             &self.process_key,
             &self.computed_model_hash,
         )?;
-        record_lifecycle_success(registry, &context, &self.stop_operation)
+        record_lifecycle_success(registry, &context, &stop_record)
     }
 
     fn escape_error(&mut self, registry: &mut Registry) -> Option<RuntimeError> {
@@ -464,8 +446,8 @@ impl StartedService {
         let payload = serde_json::json!({
             "pid": self.pid,
             "pgid": self.pgid,
-            "signal": self.stop_signal_name,
-            "signalNumber": self.stop_signal,
+            "signal": self.service.stop.signal.name(),
+            "signalNumber": self.service.stop.signal.libc(),
             "escalatedToKill": escalated,
             "timeoutMs": timeout_ms,
         })
@@ -484,7 +466,7 @@ impl StartedService {
     /// Terminate the owned process(es) according to containment: a single
     /// process group, or the whole supervised process tree.
     fn terminate_owned(&self, timeout_ms: u64) -> RuntimeResult<()> {
-        match self.containment {
+        match self.service.containment {
             ContainmentRequirement::ProcessGroup => terminate_process_group(self.pgid, timeout_ms),
             ContainmentRequirement::ProcessTree => {
                 terminate_process_tree(self.pid, self.pgid, timeout_ms)
@@ -496,7 +478,7 @@ impl StartedService {
     /// stop signal, then escalate to SIGKILL after the budget. Returns `true` if
     /// escalation to SIGKILL was required.
     fn stop_owned(&self, signal: i32, timeout_ms: u64) -> RuntimeResult<bool> {
-        match self.containment {
+        match self.service.containment {
             ContainmentRequirement::ProcessGroup => {
                 terminate_process_group_signal(self.pgid, signal, timeout_ms)
             }
@@ -506,27 +488,9 @@ impl StartedService {
         }
     }
 
-    fn service_and_endpoint<'a>(
-        &self,
-        model: &'a Model,
-    ) -> RuntimeResult<(&'a ServiceSpec, &'a EndpointSpec)> {
-        let service = model.services.get(&self.service_name).ok_or_else(|| {
-            RuntimeError::new(
-                ErrorCode::ModelAdmission,
-                format!("service {} is missing", self.service_name),
-            )
-        })?;
-        let endpoint = service
-            .endpoints
-            .iter()
-            .find(|endpoint| endpoint.endpoint_id == self.selected_endpoint.endpoint_id)
-            .ok_or_else(|| {
-                RuntimeError::new(
-                    ErrorCode::ModelAdmission,
-                    format!("endpoint {} is missing", self.selected_endpoint.endpoint_id),
-                )
-            })?;
-        Ok((service, endpoint))
+    /// The service name this instance was started from.
+    pub fn service_name(&self) -> &str {
+        &self.service.name
     }
 
     fn lifecycle_event_context(&self) -> LifecycleEventContext {
@@ -540,11 +504,11 @@ impl StartedService {
 
     fn verify_selected_endpoint_ownership_json(
         &mut self,
-        endpoint: &EndpointSpec,
         registry: &mut Registry,
     ) -> RuntimeResult<String> {
         let ownership = verify_endpoint_ownership(
-            endpoint,
+            &self.selected_endpoint.endpoint_id,
+            &self.selected_endpoint.host,
             self.selected_endpoint.port,
             &ExpectedEndpointOwner {
                 pid: self.pid,
@@ -588,7 +552,6 @@ pub fn start_synthetic_service(
 ) -> RuntimeResult<StartedService> {
     let selected_slot = select_slot(model, None)?;
     start_synthetic_service_for_slot(
-        model,
         admission,
         placement,
         registry,
@@ -599,7 +562,6 @@ pub fn start_synthetic_service(
 }
 
 pub fn start_synthetic_service_for_slot(
-    model: &Model,
     admission: &Admission,
     placement: &HostPlacement,
     registry: &mut Registry,
@@ -608,7 +570,6 @@ pub fn start_synthetic_service_for_slot(
     selected_port: u16,
 ) -> RuntimeResult<StartedService> {
     start_service_for_slot(
-        model,
         admission,
         placement,
         registry,
@@ -619,12 +580,10 @@ pub fn start_synthetic_service_for_slot(
     )
 }
 
-/// Start any declared foreground service generically: the runtime selects the
-/// service by name from the model, executes its prepare/start lifecycle
-/// operations over the bound generic primitives, and tracks the owned process.
-#[allow(clippy::too_many_arguments)]
+/// Start a declared foreground service from the lowered model: run prepare,
+/// spawn-and-own the start exec, and track the process. The service is read from
+/// the admission's `ExecutionModel`, never the raw `Model`.
 pub fn start_service_for_slot(
-    model: &Model,
     admission: &Admission,
     placement: &HostPlacement,
     registry: &mut Registry,
@@ -634,38 +593,23 @@ pub fn start_service_for_slot(
     selected_port: u16,
 ) -> RuntimeResult<StartedService> {
     let run_id = run_id.into();
-    let service = model.services.get(service_name).ok_or_else(|| {
-        RuntimeError::new(
-            ErrorCode::ModelAdmission,
-            format!("service {service_name} is missing"),
-        )
-    })?;
-    if !service.foreground {
-        return Err(RuntimeError::new(
-            ErrorCode::ProcEscape,
-            "services must run in the foreground",
-        ));
-    }
-    let start_op = lifecycle_op(service, LifecycleOpClass::Start)?;
-    let stop_operation = lifecycle_op(service, LifecycleOpClass::Stop)?.clone();
-    let (stop_signal, stop_signal_name) = resolve_stop_signal(&service.stop_policy.signal);
-    let stop_timeout_ms = service.stop_policy.timeout_ms;
-    let exec_id = start_op.exec_id.as_deref().ok_or_else(|| {
-        RuntimeError::new(
-            ErrorCode::ModelAdmission,
-            "service start operation must bind an exec",
-        )
-    })?;
-    let exec = model.execs.get(exec_id).ok_or_else(|| {
-        RuntimeError::new(
-            ErrorCode::ModelAdmission,
-            format!("service start exec {exec_id} is missing"),
-        )
-    })?;
-    let selected_endpoint = select_endpoint(service, selected_slot, selected_port)?;
-    let command_cwd = resolve_exec_cwd(&admission.source.observed_root, &exec.cwd)?;
+    let service = admission
+        .execution_model
+        .services
+        .get(service_name)
+        .ok_or_else(|| {
+            RuntimeError::new(
+                ErrorCode::ModelAdmission,
+                format!("service {service_name} is missing"),
+            )
+        })?;
+    let selected_endpoint = SelectedEndpoint {
+        endpoint_id: service.endpoint.endpoint_id.clone(),
+        host: service.endpoint.host.to_string(),
+        port: selected_port,
+    };
     let address_hash = service_address_hash(
-        model,
+        &admission.project_id,
         selected_slot.environment,
         selected_slot.slot,
         service_name,
@@ -678,46 +622,49 @@ pub fn start_service_for_slot(
     // conflict gates before running any state-mutating lifecycle work, so a second
     // runtime racing the same slot is refused instead of running prepare (e.g.
     // initdb) concurrently against the same state. Released on failure below.
-    let run_record = RunRecord {
-        run_id: &run_id,
-        owner_token: &owner_token,
-        model,
-        admission,
-        placement,
-    };
-    reserve_service_start(registry, &run_record, &service_instance_id)?;
+    reserve_service_start(
+        registry,
+        &RunRecord {
+            run_id: &run_id,
+            owner_token: &owner_token,
+            admission,
+            placement,
+        },
+        &service_instance_id,
+    )?;
     let lifecycle_context = LifecycleEventContext {
         run_id: Some(run_id.clone()),
         service_instance_id: service_instance_id.clone(),
         process_key: None,
         computed_model_hash: admission.computed_model_hash.clone(),
     };
-    if let Some(prepare_op) = lifecycle_op_optional(service, LifecycleOpClass::Prepare) {
-        record_lifecycle_started(registry, &lifecycle_context, prepare_op)?;
-        if let Err(error) = execute_lifecycle_operation(
-            model,
+    let prepare_record = LifecycleRecord::from_meta(&service.prepare.meta, "prepare");
+    record_lifecycle_started(registry, &lifecycle_context, &prepare_record)?;
+    if let Some(prepare_exec) = &service.prepare.exec
+        && let Err(error) = run_resolved_exec(
+            prepare_exec,
             &admission.source.observed_root,
             &placement.state_root,
             &placement.logs_dir,
-            service,
-            &selected_endpoint.as_endpoint_spec(),
+            &service.prepare.meta.operation_id,
             selected_port,
-            prepare_op,
             &CancellationToken::new(),
-        ) {
-            let _ = record_lifecycle_failure(registry, &lifecycle_context, prepare_op, &error);
-            let _ = release_service_reservation(registry, &run_id, &service_instance_id);
-            return Err(error);
-        }
-        record_lifecycle_success(registry, &lifecycle_context, prepare_op)?;
+        )
+    {
+        let _ = record_lifecycle_failure(registry, &lifecycle_context, &prepare_record, &error);
+        let _ = release_service_reservation(registry, &run_id, &service_instance_id);
+        return Err(error);
     }
-    record_lifecycle_started(registry, &lifecycle_context, start_op)?;
-    let args = operation_args(
-        &exec.args,
-        &start_op.exec_args,
-        selected_port,
-        &placement.state_root,
-    );
+    record_lifecycle_success(registry, &lifecycle_context, &prepare_record)?;
+    let start_record = LifecycleRecord::from_meta(&service.start.meta, "start");
+    record_lifecycle_started(registry, &lifecycle_context, &start_record)?;
+    let exec = &service.start.exec;
+    let command_cwd = resolve_exec_cwd(&admission.source.observed_root, &exec.cwd)?;
+    let args: Vec<String> = exec
+        .args
+        .iter()
+        .map(|arg| substitute_arg(arg, selected_port, &placement.state_root))
+        .collect();
     let stdout_path = placement
         .logs_dir
         .join(format!("service.{service_name}.stdout.log"));
@@ -756,7 +703,7 @@ pub fn start_service_for_slot(
                 ErrorCode::ProcEscape,
                 format!("failed to spawn service {service_name}: {error}"),
             );
-            let _ = record_lifecycle_failure(registry, &lifecycle_context, start_op, &error);
+            let _ = record_lifecycle_failure(registry, &lifecycle_context, &start_record, &error);
             let _ = release_service_reservation(registry, &run_id, &service_instance_id);
             return Err(error);
         }
@@ -767,7 +714,7 @@ pub fn start_service_for_slot(
         Err(error) => {
             let _ = child.kill();
             let _ = child.wait();
-            let _ = record_lifecycle_failure(registry, &lifecycle_context, start_op, &error);
+            let _ = record_lifecycle_failure(registry, &lifecycle_context, &start_record, &error);
             let _ = release_service_reservation(registry, &run_id, &service_instance_id);
             return Err(error);
         }
@@ -788,7 +735,6 @@ pub fn start_service_for_slot(
         &RunRecord {
             run_id: &run_id,
             owner_token: &owner_token,
-            model,
             admission,
             placement,
         },
@@ -796,7 +742,7 @@ pub fn start_service_for_slot(
             service_instance_id: &service_instance_id,
             service_name,
             service_address_hash: &address_hash,
-            service,
+            identity: &service.identity,
             endpoint_json: &endpoint_json,
             state_root: &placement.state_root,
             endpoint_key: &endpoint_key(&service_instance_id, &selected_endpoint.endpoint_id),
@@ -815,17 +761,17 @@ pub fn start_service_for_slot(
     ) {
         let _ = terminate_process_group(pgid, 1000);
         let _ = child.wait();
-        let _ = record_lifecycle_failure(registry, &started_context, start_op, &error);
+        let _ = record_lifecycle_failure(registry, &started_context, &start_record, &error);
         let _ = release_service_reservation(registry, &run_id, &service_instance_id);
         return Err(error);
     }
-    let containment = service.containment.clone();
-    let strict_process_group = matches!(containment, ContainmentRequirement::ProcessGroup);
+    let strict_process_group = matches!(service.containment, ContainmentRequirement::ProcessGroup);
+    let monitor = spawn_process_monitor(pid, pgid, strict_process_group);
     let mut started = StartedService {
         child,
-        monitor: spawn_process_monitor(pid, pgid, strict_process_group),
+        monitor,
+        service: service.clone(),
         run_id,
-        service_name: service_name.to_string(),
         service_instance_id,
         process_key,
         pid,
@@ -835,13 +781,7 @@ pub fn start_service_for_slot(
         computed_model_hash: admission.computed_model_hash.clone(),
         source_root: admission.source.observed_root.clone(),
         state_root: placement.state_root.clone(),
-        logs_dir: placement.logs_dir.clone(),
         owner_token,
-        stop_operation,
-        containment,
-        stop_signal,
-        stop_signal_name,
-        stop_timeout_ms,
     };
     if let Err(error) = ensure_foreground_child_alive(&mut started) {
         let payload = serde_json::json!({
@@ -859,10 +799,10 @@ pub fn start_service_for_slot(
             &payload,
         );
         started.cleanup_after_escape();
-        let _ = record_lifecycle_failure(registry, &started_context, start_op, &error);
+        let _ = record_lifecycle_failure(registry, &started_context, &start_record, &error);
         return Err(error);
     }
-    record_lifecycle_success(registry, &started_context, start_op)?;
+    record_lifecycle_success(registry, &started_context, &start_record)?;
     Ok(started)
 }
 
@@ -919,8 +859,9 @@ fn record_service_clean(
         )
     })?;
     let clean_op = lifecycle_op(service, LifecycleOpClass::Clean)?;
+    let record = LifecycleRecord::from_op(clean_op, "clean");
     let address_hash = service_address_hash(
-        model,
+        &model.project.project_id,
         selected_slot.environment,
         selected_slot.slot,
         service_name,
@@ -932,8 +873,8 @@ fn record_service_clean(
         process_key: None,
         computed_model_hash: admission.computed_model_hash.clone(),
     };
-    record_lifecycle_started(registry, &lifecycle_context, clean_op)?;
-    record_lifecycle_success(registry, &lifecycle_context, clean_op)
+    record_lifecycle_started(registry, &lifecycle_context, &record)?;
+    record_lifecycle_success(registry, &lifecycle_context, &record)
 }
 
 /// Clean the marker-owned state root for the selected slot.
@@ -957,19 +898,12 @@ fn run_owner_token(run_id: &str) -> String {
     format!("{run_id}:runtime-pid-{}", std::process::id())
 }
 
-/// Map a model stop-signal name to its libc number, returning the resolved name
-/// for evidence. Unknown names fall back to SIGTERM; P0.3 restricts the schema to
-/// the supported set, which makes the fallback unreachable.
-fn resolve_stop_signal(name: &str) -> (i32, String) {
-    match name {
-        "INT" => (libc::SIGINT, "INT".to_string()),
-        "QUIT" => (libc::SIGQUIT, "QUIT".to_string()),
-        "HUP" => (libc::SIGHUP, "HUP".to_string()),
-        _ => (libc::SIGTERM, "TERM".to_string()),
-    }
-}
-
-fn lifecycle_op(service: &ServiceSpec, class: LifecycleOpClass) -> RuntimeResult<&LifecycleOpSpec> {
+/// The clean lifecycle operation (the only class the marker-gated clean path still
+/// resolves from the raw `Model`).
+fn lifecycle_op(
+    service: &nixfied_model::ServiceSpec,
+    class: LifecycleOpClass,
+) -> RuntimeResult<&LifecycleOpSpec> {
     service
         .lifecycle
         .iter()
@@ -980,97 +914,6 @@ fn lifecycle_op(service: &ServiceSpec, class: LifecycleOpClass) -> RuntimeResult
                 format!("service lifecycle operation {class:?} is missing"),
             )
         })
-}
-
-fn lifecycle_op_optional(
-    service: &ServiceSpec,
-    class: LifecycleOpClass,
-) -> Option<&LifecycleOpSpec> {
-    service
-        .lifecycle
-        .iter()
-        .find(|operation| operation.class == class)
-}
-
-/// The endpoint id the service's readiness probe targets. The readiness probe is
-/// the authority on which declared endpoint the runtime binds and verifies.
-fn readiness_endpoint_id(service: &ServiceSpec) -> RuntimeResult<&str> {
-    let probe = service
-        .probes
-        .iter()
-        .find(|probe| probe.probe_id == service.readiness_probe)
-        .ok_or_else(|| {
-            RuntimeError::new(
-                ErrorCode::ModelAdmission,
-                format!(
-                    "service readiness probe {} is missing",
-                    service.readiness_probe
-                ),
-            )
-        })?;
-    Ok(match &probe.target {
-        ProbeTarget::TcpConnect { endpoint_id } => endpoint_id,
-        ProbeTarget::HttpGet { endpoint_id, .. } => endpoint_id,
-    })
-}
-
-fn select_endpoint(
-    service: &ServiceSpec,
-    selected_slot: &SelectedSlot<'_>,
-    selected_port: u16,
-) -> RuntimeResult<SelectedEndpoint> {
-    let window = &selected_slot.placement.candidate_ports;
-    if selected_port < window.start || selected_port > window.end {
-        return Err(RuntimeError::new(
-            ErrorCode::ModelAdmission,
-            format!(
-                "selected port {selected_port} is outside slot {} candidate window {}-{}",
-                selected_slot.slot, window.start, window.end
-            ),
-        ));
-    }
-    // Bind the endpoint the readiness probe targets, not simply the first one: a
-    // service may declare several endpoints and the probe may target any of them,
-    // so selecting first() would mismatch the probe at runtime.
-    let endpoint_id = readiness_endpoint_id(service)?;
-    let endpoint = service
-        .endpoints
-        .iter()
-        .find(|endpoint| endpoint.endpoint_id == endpoint_id)
-        .ok_or_else(|| {
-            RuntimeError::new(
-                ErrorCode::ModelAdmission,
-                format!("service endpoint {endpoint_id} for the readiness probe is missing"),
-            )
-        })?;
-    match &endpoint.port {
-        PortPolicy::Fixed { port } if *port != selected_port => {
-            return Err(RuntimeError::new(
-                ErrorCode::ModelAdmission,
-                format!("selected port {selected_port} does not match fixed port {port}"),
-            ));
-        }
-        PortPolicy::CandidateWindow { .. } => {}
-        _ => {}
-    }
-    Ok(SelectedEndpoint {
-        endpoint_id: endpoint.endpoint_id.clone(),
-        host: endpoint.host.clone(),
-        port: selected_port,
-    })
-}
-
-fn operation_args(
-    base_args: &[String],
-    op_args: &[String],
-    selected_port: u16,
-    state_root: &Path,
-) -> Vec<String> {
-    base_args
-        .iter()
-        .chain(op_args.iter())
-        .map(|arg| substitute_arg(arg, selected_port, state_root))
-        .collect()
 }
 
 /// Generic placeholder substitution shared by lifecycle and task args:
@@ -1116,72 +959,27 @@ pub(crate) fn resolve_exec_cwd(source_root: &Path, exec_cwd: &str) -> RuntimeRes
     Ok(cwd)
 }
 
-#[allow(clippy::too_many_arguments)]
-fn execute_lifecycle_operation(
-    model: &Model,
+/// Run a resolved lifecycle exec (prepare) to completion in its own process
+/// group, capturing output to the logs dir keyed by `label` so a failed prepare
+/// (e.g. initdb) leaves a recoverable trail. Honors cancellation and the exec
+/// timeout.
+fn run_resolved_exec(
+    exec: &ResolvedExec,
     source_root: &Path,
     state_root: &Path,
     logs_dir: &Path,
-    service: &ServiceSpec,
-    selected_endpoint: &EndpointSpec,
-    selected_port: u16,
-    operation: &LifecycleOpSpec,
-    cancellation: &CancellationToken,
-) -> RuntimeResult<()> {
-    if let Some(probe_id) = operation.probe_id.as_deref() {
-        return wait_for_service_probe_by_id_cancellable(
-            service,
-            probe_id,
-            selected_endpoint,
-            selected_port,
-            cancellation,
-        );
-    }
-    if operation.exec_id.is_some() {
-        return run_lifecycle_exec(
-            model,
-            source_root,
-            state_root,
-            logs_dir,
-            operation,
-            selected_port,
-            cancellation,
-        );
-    }
-    Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-fn run_lifecycle_exec(
-    model: &Model,
-    source_root: &Path,
-    state_root: &Path,
-    logs_dir: &Path,
-    operation: &LifecycleOpSpec,
+    label: &str,
     selected_port: u16,
     cancellation: &CancellationToken,
 ) -> RuntimeResult<()> {
-    let exec_id = operation.exec_id.as_deref().ok_or_else(|| {
-        RuntimeError::new(
-            ErrorCode::ModelAdmission,
-            format!(
-                "service lifecycle operation {} has no exec binding",
-                operation.operation_id
-            ),
-        )
-    })?;
-    let exec = model.execs.get(exec_id).ok_or_else(|| {
-        RuntimeError::new(
-            ErrorCode::ModelAdmission,
-            format!("service lifecycle exec {exec_id} is missing"),
-        )
-    })?;
     let command_cwd = resolve_exec_cwd(source_root, &exec.cwd)?;
-    let args = operation_args(&exec.args, &operation.exec_args, selected_port, state_root);
-    // Capture lifecycle-exec output to the logs dir keyed by operation id, so a
-    // failed prepare (e.g. initdb) leaves a recoverable diagnostic trail.
-    let stdout_path = logs_dir.join(format!("lifecycle.{}.stdout.log", operation.operation_id));
-    let stderr_path = logs_dir.join(format!("lifecycle.{}.stderr.log", operation.operation_id));
+    let args: Vec<String> = exec
+        .args
+        .iter()
+        .map(|arg| substitute_arg(arg, selected_port, state_root))
+        .collect();
+    let stdout_path = logs_dir.join(format!("lifecycle.{label}.stdout.log"));
+    let stderr_path = logs_dir.join(format!("lifecycle.{label}.stderr.log"));
     let mut command = Command::new(&exec.executable);
     command
         .args(&args)
@@ -1202,10 +1000,7 @@ fn run_lifecycle_exec(
     let mut child = command.spawn().map_err(|error| {
         RuntimeError::new(
             ErrorCode::ProcEscape,
-            format!(
-                "failed to spawn lifecycle operation {}: {error}",
-                operation.operation_id
-            ),
+            format!("failed to spawn lifecycle operation {label}: {error}"),
         )
     })?;
     let pgid = match get_process_group(child.id()) {
@@ -1216,7 +1011,7 @@ fn run_lifecycle_exec(
             return Err(error);
         }
     };
-    let deadline = Instant::now() + Duration::from_millis(exec.timeout_ms);
+    let deadline = Instant::now() + exec.timeout;
     loop {
         if cancellation.is_canceled() {
             let _ = terminate_process_group(pgid, 1000);
@@ -1226,10 +1021,7 @@ fn run_lifecycle_exec(
         if let Some(status) = child.try_wait().map_err(|error| {
             RuntimeError::new(
                 ErrorCode::ProcEscape,
-                format!(
-                    "failed to inspect lifecycle operation {}: {error}",
-                    operation.operation_id
-                ),
+                format!("failed to inspect lifecycle operation {label}: {error}"),
             )
         })? {
             if status.success() {
@@ -1238,8 +1030,7 @@ fn run_lifecycle_exec(
             return Err(RuntimeError::new(
                 ErrorCode::LifecycleFailed,
                 format!(
-                    "service lifecycle operation {} exited with code {}",
-                    operation.operation_id,
+                    "service lifecycle operation {label} exited with code {}",
                     status
                         .code()
                         .map(|code| code.to_string())
@@ -1253,8 +1044,8 @@ fn run_lifecycle_exec(
             return Err(RuntimeError::new(
                 ErrorCode::LifecycleFailed,
                 format!(
-                    "service lifecycle operation {} timed out after {}ms",
-                    operation.operation_id, exec.timeout_ms
+                    "service lifecycle operation {label} timed out after {}ms",
+                    exec.timeout.as_millis()
                 ),
             ));
         }
@@ -1280,14 +1071,44 @@ struct LifecycleEventContext {
     computed_model_hash: String,
 }
 
+/// A lifecycle operation's identity and terminal semantics for durable event
+/// recording, owned so it does not borrow the `StartedService` across the
+/// `&mut self` calls in the lifecycle methods.
+struct LifecycleRecord {
+    operation_id: String,
+    class: &'static str,
+    terminal_success: String,
+    terminal_failure: String,
+}
+
+impl LifecycleRecord {
+    fn from_meta(meta: &OpMeta, class: &'static str) -> Self {
+        Self {
+            operation_id: meta.operation_id.clone(),
+            class,
+            terminal_success: meta.terminal_success.clone(),
+            terminal_failure: meta.terminal_failure.clone(),
+        }
+    }
+
+    fn from_op(op: &LifecycleOpSpec, class: &'static str) -> Self {
+        Self {
+            operation_id: op.operation_id.clone(),
+            class,
+            terminal_success: op.terminal.success.clone(),
+            terminal_failure: op.terminal.failure.clone(),
+        }
+    }
+}
+
 fn record_lifecycle_started(
     registry: &mut Registry,
     context: &LifecycleEventContext,
-    operation: &LifecycleOpSpec,
+    record: &LifecycleRecord,
 ) -> RuntimeResult<()> {
     let payload_json = serde_json::to_string(&serde_json::json!({
-        "operationId": operation.operation_id,
-        "class": operation.class,
+        "operationId": record.operation_id,
+        "class": record.class,
     }))
     .map_err(|error| RuntimeError::new(ErrorCode::ModelAdmission, error.to_string()))?;
     record_service_lifecycle_event(
@@ -1304,28 +1125,22 @@ fn record_lifecycle_started(
 fn record_lifecycle_success(
     registry: &mut Registry,
     context: &LifecycleEventContext,
-    operation: &LifecycleOpSpec,
+    record: &LifecycleRecord,
 ) -> RuntimeResult<()> {
-    record_lifecycle_terminal(
-        registry,
-        context,
-        operation,
-        operation.terminal.success.as_str(),
-        None,
-    )
+    record_lifecycle_terminal(registry, context, record, &record.terminal_success, None)
 }
 
 fn record_lifecycle_failure(
     registry: &mut Registry,
     context: &LifecycleEventContext,
-    operation: &LifecycleOpSpec,
+    record: &LifecycleRecord,
     error: &RuntimeError,
 ) -> RuntimeResult<()> {
     record_lifecycle_terminal(
         registry,
         context,
-        operation,
-        operation.terminal.failure.as_str(),
+        record,
+        &record.terminal_failure,
         Some(error),
     )
 }
@@ -1333,13 +1148,13 @@ fn record_lifecycle_failure(
 fn record_lifecycle_terminal(
     registry: &mut Registry,
     context: &LifecycleEventContext,
-    operation: &LifecycleOpSpec,
+    record: &LifecycleRecord,
     terminal_result: &str,
     error: Option<&RuntimeError>,
 ) -> RuntimeResult<()> {
     let payload_json = serde_json::to_string(&serde_json::json!({
-        "operationId": operation.operation_id,
-        "class": operation.class,
+        "operationId": record.operation_id,
+        "class": record.class,
         "terminalResult": terminal_result,
         "errorCode": error.map(|error| error.code),
         "message": error.map(|error| error.message.as_str()),
@@ -1354,19 +1169,6 @@ fn record_lifecycle_terminal(
         &context.computed_model_hash,
         &payload_json,
     )
-}
-
-impl SelectedEndpoint {
-    fn as_endpoint_spec(&self) -> EndpointSpec {
-        EndpointSpec {
-            endpoint_id: self.endpoint_id.clone(),
-            protocol: nixfied_model::EndpointProtocol::Tcp,
-            host: self.host.clone(),
-            port: PortPolicy::Fixed { port: self.port },
-            ownership_verification: nixfied_model::OwnershipVerification::Required,
-            socket_activation: nixfied_model::SocketActivation::Disabled,
-        }
-    }
 }
 
 fn create_log_file(path: &Path) -> RuntimeResult<File> {
@@ -1453,7 +1255,7 @@ fn ensure_foreground_child_alive(service: &mut StartedService) -> RuntimeResult<
     // Under process-tree containment the supervisor's children legitimately form
     // their own process groups, so only strict process-group services are held to
     // the single-group invariant here.
-    if matches!(service.containment, ContainmentRequirement::ProcessGroup) {
+    if matches!(service.service.containment, ContainmentRequirement::ProcessGroup) {
         let escaped = escaped_descendants(service.pid, service.pgid)?;
         if !escaped.is_empty() {
             return Err(RuntimeError::new(
