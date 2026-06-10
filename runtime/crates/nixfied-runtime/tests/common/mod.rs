@@ -236,6 +236,16 @@ impl Drop for TempDir {
     }
 }
 
+/// The trailing JSON document a runtime command writes to stderr, after any
+/// human-readable progress lines (which never contain `{`).
+pub fn stderr_json(bytes: &[u8]) -> Value {
+    let text = String::from_utf8_lossy(bytes);
+    let start = text
+        .find('{')
+        .expect("stderr should contain a JSON document");
+    serde_json::from_str(&text[start..]).expect("stderr JSON should parse")
+}
+
 /// A unique temporary path (not created) with the given prefix.
 pub fn temp_marker(prefix: &str) -> PathBuf {
     let mut path = std::env::temp_dir();
