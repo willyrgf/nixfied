@@ -736,8 +736,6 @@ fn model() -> Model {
 
 fn add_slot_one(value: &mut Value, start: u16, end: u16) {
     value["slotPolicy"]["max"] = json!(1);
-    value["runtimeConstraints"]["slotMax"] = json!(1);
-    value["capabilities"]["slots"] = json!([0, 1]);
     value["placement"]["slotPlacements"]["1"] = json!({
         "slot": 1,
         "candidatePorts": {
@@ -765,12 +763,7 @@ fn fixture_model() -> Value {
             "system": host_system(),
             "os": host_os(),
             "arch": host_arch(),
-            "closureSystem": host_system(),
-            "requiredRuntimeCapabilities": {
-                "processGroup": true,
-                "tcpPortOwnership": true,
-                "sqliteWal": true
-            }
+            "closureSystem": host_system()
         },
         "codebases": [{
             "codebaseId": "main",
@@ -784,7 +777,6 @@ fn fixture_model() -> Value {
         }],
         "environments": {
             "dev": {
-                "environmentId": "dev",
                 "services": ["synthetic"],
                 "tasks": ["smoke"]
             }
@@ -794,23 +786,6 @@ fn fixture_model() -> Value {
             "default": 0,
             "max": 0
         },
-        "capabilities": {
-            "environments": ["dev"],
-            "slots": [0],
-            "services": ["synthetic"],
-            "tasks": ["smoke"],
-            "workflows": [],
-            "surfaces": m0_surface_names()
-        },
-        "runtimeConstraints": {
-            "allowedEnvironments": ["dev"],
-            "slotMin": 0,
-            "slotDefault": 0,
-            "slotMax": 0,
-            "allowPortOverride": false,
-            "collisionPolicy": "fail"
-        },
-        "surfaces": m0_surfaces(),
         "placement": {
             "slotPlacements": {
                 "0": {
@@ -828,24 +803,23 @@ fn fixture_model() -> Value {
             "cleanupPolicy": "delete-on-clean",
             "persistence": "run-scoped"
         },
-        "secrets": [],
-        "closures": [{
-            "closureId": "synthetic-helper",
-            "kind": "executable",
-            "storePath": "/nix/store/test-synthetic-helper",
-            "executable": "/nix/store/test-synthetic-helper/bin/synthetic-helper",
-            "targetSystem": host_system(),
-            "operationBindings": [
-                "service.synthetic.start",
-                "service.synthetic.stop",
-                "task.smoke.run"
-            ],
-            "requiresExecutable": true,
-            "effects": ["process", "network-listener"]
-        }],
+        "closures": {
+            "synthetic-helper": {
+                "kind": "executable",
+                "storePath": "/nix/store/test-synthetic-helper",
+                "executable": "/nix/store/test-synthetic-helper/bin/synthetic-helper",
+                "targetSystem": host_system(),
+                "operationBindings": [
+                    "service.synthetic.start",
+                    "service.synthetic.stop",
+                    "task.smoke.run"
+                ],
+                "requiresExecutable": true,
+                "effects": ["process", "network-listener"]
+            }
+        },
         "execs": {
             "synthetic-helper": {
-                "execId": "synthetic-helper",
                 "closureId": "synthetic-helper",
                 "executable": "/nix/store/test-synthetic-helper/bin/synthetic-helper",
                 "args": [],
@@ -860,108 +834,44 @@ fn fixture_model() -> Value {
         },
         "services": {
             "synthetic": {
-                "serviceId": "synthetic",
-                "foreground": true,
-                "lifecycle": [
-                    {
+                "lifecycle": {
+                    "prepare": {
                         "operationId": "service.synthetic.prepare",
-                        "class": "prepare",
                         "execId": null,
                         "execArgs": [],
-                        "probeId": null,
-                        "terminal": {
-                            "success": "prepared",
-                            "failure": "failed"
-                        }
+                        "terminal": { "success": "prepared", "failure": "failed" }
                     },
-                    {
+                    "start": {
                         "operationId": "service.synthetic.start",
-                        "class": "start",
                         "execId": "synthetic-helper",
                         "execArgs": ["service", "--host", "127.0.0.1", "--port", "${port}"],
-                        "probeId": null,
-                        "terminal": {
-                            "success": "spawned",
-                            "failure": "failed"
-                        }
+                        "terminal": { "success": "spawned", "failure": "failed" }
                     },
-                    {
+                    "ready": {
                         "operationId": "service.synthetic.ready",
-                        "class": "ready",
-                        "execId": null,
-                        "execArgs": [],
-                        "probeId": "synthetic-tcp",
-                        "terminal": {
-                            "success": "ready",
-                            "failure": "not-ready"
-                        }
+                        "probe": { "timeoutMs": 250, "retryIntervalMs": 25, "maxAttempts": 40 },
+                        "terminal": { "success": "ready", "failure": "not-ready" }
                     },
-                    {
+                    "health": {
                         "operationId": "service.synthetic.health",
-                        "class": "health",
-                        "execId": null,
-                        "execArgs": [],
-                        "probeId": "synthetic-tcp",
-                        "terminal": {
-                            "success": "healthy",
-                            "failure": "unhealthy"
-                        }
+                        "probe": { "timeoutMs": 250, "retryIntervalMs": 25, "maxAttempts": 40 },
+                        "terminal": { "success": "healthy", "failure": "unhealthy" }
                     },
-                    {
+                    "stop": {
                         "operationId": "service.synthetic.stop",
-                        "class": "stop",
-                        "execId": "synthetic-helper",
-                        "execArgs": ["stop"],
-                        "probeId": null,
-                        "terminal": {
-                            "success": "stopped",
-                            "failure": "failed"
-                        }
+                        "signal": "TERM",
+                        "timeoutMs": 5000,
+                        "terminal": { "success": "stopped", "failure": "failed" }
                     },
-                    {
+                    "clean": {
                         "operationId": "service.synthetic.clean",
-                        "class": "clean",
-                        "execId": null,
-                        "execArgs": [],
-                        "probeId": null,
-                        "terminal": {
-                            "success": "cleaned",
-                            "failure": "failed"
-                        }
+                        "terminal": { "success": "cleaned", "failure": "failed" }
                     }
-                ],
-                "endpoints": [{
-                    "endpointId": "synthetic-tcp",
-                    "protocol": "tcp",
-                    "host": "127.0.0.1",
-                    "port": {
-                        "kind": "candidate-window",
-                        "start": 38080,
-                        "end": 38090
-                    },
-                    "ownershipVerification": "required",
-                    "socketActivation": "disabled"
-                }],
-                "probes": [{
-                    "probeId": "synthetic-tcp",
-                    "target": {
-                        "kind": "tcp-connect",
-                        "endpointId": "synthetic-tcp"
-                    },
-                    "timeoutMs": 1000,
-                    "retryIntervalMs": 100,
-                    "maxAttempts": 20
-                }],
-                "readinessProbe": "synthetic-tcp",
-                "healthPolicy": "explicit",
-                "stopPolicy": {
-                    "signal": "TERM",
-                    "timeoutMs": 5000
                 },
+                "endpoint": { "endpointId": "synthetic-tcp", "host": "127.0.0.1" },
                 "stateRefs": ["slot"],
                 "logRefs": ["service.synthetic"],
                 "containment": "process-group",
-                "lifetime": "run-scoped",
                 "identity": {
                     "serviceAddressHash": "service-address",
                     "endpointIdentityHash": "endpoint",
@@ -973,7 +883,6 @@ fn fixture_model() -> Value {
         },
         "tasks": {
             "smoke": {
-                "taskId": "smoke",
                 "operationId": "task.smoke.run",
                 "execId": "synthetic-helper",
                 "args": ["task", "--host", "127.0.0.1", "--port", "${port}"],
@@ -993,37 +902,6 @@ fn fixture_model() -> Value {
             "summary": "Runtime admission fixture."
         }
     })
-}
-
-fn m0_surface_names() -> Vec<&'static str> {
-    vec![
-        "model",
-        "schema",
-        "docs",
-        "capabilities",
-        "check",
-        "run",
-        "ps",
-        "down",
-        "clean",
-    ]
-}
-
-fn m0_surfaces() -> Vec<Value> {
-    m0_surface_names()
-        .into_iter()
-        .map(|name| {
-            json!({
-                "name": name,
-                "aliases": [],
-                "inputSchema": {},
-                "outputSchema": {},
-                "exitClasses": ["ok", "error"],
-                "evaluationPermission": "never",
-                "maturity": "stable"
-            })
-        })
-        .collect()
 }
 
 fn host_system() -> String {
