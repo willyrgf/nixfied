@@ -201,7 +201,10 @@ fn docs_view(model: &Value) -> Result<String, CliError> {
                 .map(|lifecycle| lifecycle.keys().cloned().collect::<Vec<_>>())
                 .unwrap_or_default()
                 .join(", ");
-            let _ = writeln!(output, "- {name}: endpoint {endpoint}; operations {classes}");
+            let _ = writeln!(
+                output,
+                "- {name}: endpoint {endpoint}; operations {classes}"
+            );
         }
     }
     let _ = writeln!(output);

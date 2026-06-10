@@ -228,7 +228,11 @@ mod tests {
             PortStatus::Released,
             PortStatus::Stale,
         ]);
-        assert_round_trips(&[CleanupStatus::Intent, CleanupStatus::Deleted, CleanupStatus::Failed]);
+        assert_round_trips(&[
+            CleanupStatus::Intent,
+            CleanupStatus::Deleted,
+            CleanupStatus::Failed,
+        ]);
     }
 
     #[test]

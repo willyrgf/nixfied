@@ -70,7 +70,6 @@ struct RunOutput {
     workflow_summary_path: Option<PathBuf>,
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RuntimeSelection {
     slot: Option<u32>,
@@ -281,12 +280,16 @@ fn run_m0_admitted(
     let mut node_results: Vec<NodeResult> = Vec::new();
     for node in &plan.nodes {
         let task_id = &node.task_id;
-        let task = admission.execution_model.tasks.get(task_id).ok_or_else(|| {
-            RuntimeError::new(
-                nixfied_runtime::ErrorCode::ModelAdmission,
-                format!("task {task_id} is missing"),
-            )
-        })?;
+        let task = admission
+            .execution_model
+            .tasks
+            .get(task_id)
+            .ok_or_else(|| {
+                RuntimeError::new(
+                    nixfied_runtime::ErrorCode::ModelAdmission,
+                    format!("task {task_id} is missing"),
+                )
+            })?;
         // Resolve every service this task depends on to its started instance (the
         // first is the primary, providing ${port}/${host}). A task may declare
         // zero services — it runs in the run context alone.

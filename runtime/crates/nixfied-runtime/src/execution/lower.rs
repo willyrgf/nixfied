@@ -246,11 +246,9 @@ fn resolve_exec_ref(
     exec_id: &str,
     extra_args: &[String],
 ) -> RuntimeResult<ResolvedExec> {
-    let exec = execs
-        .get(exec_id)
-        .ok_or_else(|| Rejection::MissingExec {
-            exec_id: exec_id.to_string(),
-        })?;
+    let exec = execs.get(exec_id).ok_or_else(|| Rejection::MissingExec {
+        exec_id: exec_id.to_string(),
+    })?;
     Ok(resolve_exec(exec, extra_args))
 }
 
@@ -282,15 +280,24 @@ fn resolve_exec(exec: &ExecSpec, extra_args: &[String]) -> ResolvedExec {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Rejection {
     NoEnvironment,
-    UndeclaredReference { kind: &'static str, id: String },
-    DuplicateOperationId { id: String },
-    UnknownOperationBinding { binding: String },
+    UndeclaredReference {
+        kind: &'static str,
+        id: String,
+    },
+    DuplicateOperationId {
+        id: String,
+    },
+    UnknownOperationBinding {
+        binding: String,
+    },
     ClosureTargetMismatch {
         closure_id: String,
         target_system: String,
         closure_system: String,
     },
-    MissingExec { exec_id: String },
+    MissingExec {
+        exec_id: String,
+    },
     TaskPlaceholderWithoutService {
         task_id: String,
         placeholder: &'static str,
@@ -353,10 +360,26 @@ fn prove_references(model: &Model) -> Result<(), Rejection> {
         .iter()
         .map(|codebase| codebase.codebase_id.as_str())
         .collect::<BTreeSet<_>>();
-    let closure_ids = model.closures.keys().map(String::as_str).collect::<BTreeSet<_>>();
-    let exec_ids = model.execs.keys().map(String::as_str).collect::<BTreeSet<_>>();
-    let service_ids = model.services.keys().map(String::as_str).collect::<BTreeSet<_>>();
-    let task_ids = model.tasks.keys().map(String::as_str).collect::<BTreeSet<_>>();
+    let closure_ids = model
+        .closures
+        .keys()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let exec_ids = model
+        .execs
+        .keys()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let service_ids = model
+        .services
+        .keys()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let task_ids = model
+        .tasks
+        .keys()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
     let mut declared_operations = BTreeSet::new();
 
     for exec in model.execs.values() {
@@ -411,13 +434,20 @@ fn prove_references(model: &Model) -> Result<(), Rejection> {
         }
         for service_id in &task.depends_on_services_ready {
             if !service_ids.contains(service_id.as_str()) {
-                return Err(undeclared("task.dependsOnServicesReady", service_id.clone()));
+                return Err(undeclared(
+                    "task.dependsOnServicesReady",
+                    service_id.clone(),
+                ));
             }
         }
     }
 
     for env in model.environments.values() {
-        let env_services = env.services.iter().map(String::as_str).collect::<BTreeSet<_>>();
+        let env_services = env
+            .services
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
         for service_id in &env.services {
             if !service_ids.contains(service_id.as_str()) {
                 return Err(undeclared("environment.services", service_id.clone()));
@@ -632,10 +662,7 @@ mod tests {
     fn execs_must_reference_declared_closures() {
         let mut value = model_value();
         value["execs"]["svc-exec"]["closureId"] = json!("ghost");
-        assert_eq!(
-            reject_reason(value),
-            undeclared("exec.closureId", "ghost")
-        );
+        assert_eq!(reject_reason(value), undeclared("exec.closureId", "ghost"));
     }
 
     #[test]

@@ -168,8 +168,6 @@ fn fixture_model() -> Value {
     })
 }
 
-
-
 #[test]
 fn load_model_hashes_raw_bytes() {
     let (_tmp, model_path, _closure) = write_fixture_model(fixture_model(), true);
@@ -389,7 +387,8 @@ fn closure_store_path_escape_is_rejected() {
             .join("../outside-closure/test-synthetic-helper/bin/synthetic-helper")
             .to_string_lossy()
     );
-    model["execs"]["synthetic-helper"]["executable"] = model["closures"]["synthetic-helper"]["executable"].clone();
+    model["execs"]["synthetic-helper"]["executable"] =
+        model["closures"]["synthetic-helper"]["executable"].clone();
     let model_path = tmp.path.join("model.json");
     fs::write(&model_path, serde_json::to_vec(&model).unwrap()).unwrap();
     let loaded = load_model(&model_path).expect("fixture should load");
