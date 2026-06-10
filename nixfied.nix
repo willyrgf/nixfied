@@ -39,7 +39,13 @@ let
 
   # The nix-built runtime/conformance binaries. The conformance task runs
   # `bin/nixfied-conformance`, which locates `bin/nixfied-runtime` as its sibling.
-  runtime = import ./nix/packages/runtime.nix { inherit pkgs; };
+  # This is the framework's own CI gate, so it builds the fast `debug` profile —
+  # behavior is identical to release, and it shares the one profile the rest of
+  # `.#ci` compiles. Adopters' own models build the default release runtime.
+  runtime = import ./nix/packages/runtime.nix {
+    inherit pkgs;
+    buildType = "debug";
+  };
 
   conformanceCheck = name: model: {
     operationId = "task.conformance.${name}.run";
