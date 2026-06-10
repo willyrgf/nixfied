@@ -27,8 +27,10 @@ pkgs.stdenv.mkDerivation {
   buildPhase = ''
     runHook preBuild
     cargo fmt --all -- --check
+    # `clippy` runs the full rustc front end, so `--all-targets -D warnings` also
+    # type-checks every target — a separate `cargo check` would just recompile the
+    # workspace a second time.
     cargo clippy --all-targets -- -D warnings
-    cargo check --all-targets
     runHook postBuild
   '';
   installPhase = ''
