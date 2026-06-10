@@ -1147,8 +1147,8 @@ fn cli_signal_cancels_run_and_empties_service_group() {
         &["service", "--host", "127.0.0.1", "--port", "${port}"],
         port,
     );
-    value["closures"][0]["storePath"] = json!(closure_root.to_string_lossy());
-    value["closures"][0]["executable"] = json!(shell.to_string_lossy());
+    value["closures"]["synthetic-helper"]["storePath"] = json!(closure_root.to_string_lossy());
+    value["closures"]["synthetic-helper"]["executable"] = json!(shell.to_string_lossy());
     value["execs"]["synthetic-helper"]["executable"] = json!(shell.to_string_lossy());
     value["execs"]["synthetic-helper"]["args"] =
         json!(["-c", script, "parent", marker_arg, started_arg]);
@@ -1260,8 +1260,8 @@ fn cli_signal_during_shutdown_records_canceled_terminal_state() {
         &["service", "--host", "127.0.0.1", "--port", "${port}"],
         port,
     );
-    value["closures"][0]["storePath"] = json!(closure_root.to_string_lossy());
-    value["closures"][0]["executable"] = json!(shell.to_string_lossy());
+    value["closures"]["synthetic-helper"]["storePath"] = json!(closure_root.to_string_lossy());
+    value["closures"]["synthetic-helper"]["executable"] = json!(shell.to_string_lossy());
     value["execs"]["synthetic-helper"]["executable"] = json!(shell.to_string_lossy());
     value["execs"]["synthetic-helper"]["args"] =
         json!(["-c", script, "wrapper", started_arg, stopping_arg, python]);
@@ -2603,7 +2603,7 @@ fn runtime_drives_full_lifecycle_without_invoking_nix() {
     drop(listener);
 
     let mut value = fixture_model(&python.to_string_lossy(), &["service", "${port}"], port);
-    value["closures"][0]["storePath"] = json!(closure_root.to_string_lossy());
+    value["closures"]["synthetic-helper"]["storePath"] = json!(closure_root.to_string_lossy());
     value["execs"]["synthetic-helper"]["args"] = json!(["-c", script]);
     value["tasks"]["smoke"]["args"] = json!(["task", "${port}"]);
     let model: Model = serde_json::from_value(value).expect("seam fixture model should parse");
@@ -2774,20 +2774,21 @@ fn fixture_model(executable: &str, start_args: &[&str], port: u16) -> Value {
             "cleanupPolicy": "delete-on-clean",
             "persistence": "run-scoped"
         },
-        "closures": [{
-            "closureId": "synthetic-helper",
-            "kind": "executable",
-            "storePath": "/nix/store/test-synthetic-helper",
-            "executable": executable,
-            "targetSystem": host_system(),
-            "operationBindings": [
-                "service.synthetic.start",
-                "service.synthetic.stop",
-                "task.smoke.run"
-            ],
-            "requiresExecutable": true,
-            "effects": ["process", "network-listener"]
-        }],
+        "closures": {
+            "synthetic-helper": {
+                "kind": "executable",
+                "storePath": "/nix/store/test-synthetic-helper",
+                "executable": executable,
+                "targetSystem": host_system(),
+                "operationBindings": [
+                    "service.synthetic.start",
+                    "service.synthetic.stop",
+                    "task.smoke.run"
+                ],
+                "requiresExecutable": true,
+                "effects": ["process", "network-listener"]
+            }
+        },
         "execs": {
             "synthetic-helper": {
                 "closureId": "synthetic-helper",

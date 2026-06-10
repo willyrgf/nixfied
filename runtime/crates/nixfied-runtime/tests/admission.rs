@@ -81,20 +81,21 @@ fn fixture_model() -> Value {
             "cleanupPolicy": "delete-on-clean",
             "persistence": "run-scoped"
         },
-        "closures": [{
-            "closureId": "synthetic-helper",
-            "kind": "executable",
-            "storePath": "/nix/store/test-synthetic-helper",
-            "executable": "/nix/store/test-synthetic-helper/bin/synthetic-helper",
-            "targetSystem": host_system(),
-            "operationBindings": [
-                "service.synthetic.start",
-                "service.synthetic.stop",
-                "task.smoke.run"
-            ],
-            "requiresExecutable": true,
-            "effects": ["process", "network-listener"]
-        }],
+        "closures": {
+            "synthetic-helper": {
+                "kind": "executable",
+                "storePath": "/nix/store/test-synthetic-helper",
+                "executable": "/nix/store/test-synthetic-helper/bin/synthetic-helper",
+                "targetSystem": host_system(),
+                "operationBindings": [
+                    "service.synthetic.start",
+                    "service.synthetic.stop",
+                    "task.smoke.run"
+                ],
+                "requiresExecutable": true,
+                "effects": ["process", "network-listener"]
+            }
+        },
         "execs": {
             "synthetic-helper": {
                 "closureId": "synthetic-helper",
@@ -392,17 +393,17 @@ fn closure_store_path_escape_is_rejected() {
     fs::set_permissions(&executable, perms).unwrap();
 
     let mut model = fixture_model();
-    model["closures"][0]["storePath"] = json!(
+    model["closures"]["synthetic-helper"]["storePath"] = json!(
         store
             .join("../outside-closure/test-synthetic-helper")
             .to_string_lossy()
     );
-    model["closures"][0]["executable"] = json!(
+    model["closures"]["synthetic-helper"]["executable"] = json!(
         store
             .join("../outside-closure/test-synthetic-helper/bin/synthetic-helper")
             .to_string_lossy()
     );
-    model["execs"]["synthetic-helper"]["executable"] = model["closures"][0]["executable"].clone();
+    model["execs"]["synthetic-helper"]["executable"] = model["closures"]["synthetic-helper"]["executable"].clone();
     let model_path = tmp.path.join("model.json");
     fs::write(&model_path, serde_json::to_vec(&model).unwrap()).unwrap();
     let loaded = load_model(&model_path).expect("fixture should load");
@@ -456,8 +457,8 @@ fn write_fixture_model(mut value: Value, create_executable: bool) -> (TempDir, P
     let tmp = TempDir::new();
     let closure_root = tmp.path.join("store/test-synthetic-helper");
     let executable = closure_root.join("bin/synthetic-helper");
-    value["closures"][0]["storePath"] = json!(closure_root.to_string_lossy());
-    value["closures"][0]["executable"] = json!(executable.to_string_lossy());
+    value["closures"]["synthetic-helper"]["storePath"] = json!(closure_root.to_string_lossy());
+    value["closures"]["synthetic-helper"]["executable"] = json!(executable.to_string_lossy());
     value["execs"]["synthetic-helper"]["executable"] = json!(executable.to_string_lossy());
     let model_path = tmp.path.join("model.json");
     if create_executable {

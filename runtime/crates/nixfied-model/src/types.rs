@@ -17,7 +17,7 @@ pub struct Model {
     pub slot_policy: SlotPolicy,
     pub placement: Placement,
     pub state: StatePolicy,
-    pub closures: Vec<ClosureSpec>,
+    pub closures: BTreeMap<String, ClosureSpec>,
     pub execs: BTreeMap<String, ExecSpec>,
     pub services: BTreeMap<String, ServiceSpec>,
     pub tasks: BTreeMap<String, TaskSpec>,
@@ -154,7 +154,6 @@ pub enum PersistencePolicy {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ClosureSpec {
-    pub closure_id: String,
     pub kind: ClosureKind,
     pub store_path: String,
     pub executable: String,
@@ -435,14 +434,13 @@ pub struct ExitPolicy {
 pub struct WorkflowSpec {
     /// Services that must be started and ready before any node runs.
     pub services_required: Vec<String>,
-    /// Bounded acyclic dependency graph of task nodes.
-    pub nodes: Vec<WorkflowNode>,
+    /// Bounded acyclic dependency graph of task nodes, keyed by node id.
+    pub nodes: BTreeMap<String, WorkflowNode>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WorkflowNode {
-    pub node_id: String,
     pub task_id: String,
     /// Other node ids in the same workflow that must succeed first.
     pub depends_on: Vec<String>,

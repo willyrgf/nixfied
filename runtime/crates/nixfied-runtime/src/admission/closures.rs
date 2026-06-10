@@ -12,7 +12,7 @@ pub fn check_closures(
     loaded: &LoadedModel,
     context: &AdmissionContext,
 ) -> RuntimeResult<()> {
-    for closure in &model.closures {
+    for (closure_id, closure) in &model.closures {
         let store_path =
             require_store_path("closure.storePath", &closure.store_path, loaded, context)?;
         let executable =
@@ -40,7 +40,7 @@ pub fn check_closures(
                 ErrorCode::ClosureMissing,
                 format!(
                     "closure {} targetSystem {} does not match closureSystem {}",
-                    closure.closure_id, closure.target_system, model.target.closure_system
+                    closure_id, closure.target_system, model.target.closure_system
                 ),
             )
             .with_model(&loaded.path, &loaded.computed_model_hash));
@@ -80,14 +80,14 @@ pub fn check_closures(
         for (exec_id, exec) in model
             .execs
             .iter()
-            .filter(|(_, exec)| exec.closure_id == closure.closure_id)
+            .filter(|(_, exec)| &exec.closure_id == closure_id)
         {
             if exec.executable != closure.executable {
                 return Err(RuntimeError::new(
                     ErrorCode::ClosureMissing,
                     format!(
                         "exec {} executable {} does not match closure {} executable {}",
-                        exec_id, exec.executable, closure.closure_id, closure.executable
+                        exec_id, exec.executable, closure_id, closure.executable
                     ),
                 )
                 .with_model(&loaded.path, &loaded.computed_model_hash));

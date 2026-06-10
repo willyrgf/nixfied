@@ -100,8 +100,8 @@ fn lower_workflow(workflow: &WorkflowSpec) -> ExecWorkflow {
         services_required: services_required.clone(),
         nodes: nodes
             .iter()
-            .map(|node| ExecWorkflowNode {
-                node_id: node.node_id.clone(),
+            .map(|(node_id, node)| ExecWorkflowNode {
+                node_id: node_id.clone(),
                 task_id: node.task_id.clone(),
                 depends_on: node.depends_on.clone(),
             })
@@ -306,7 +306,7 @@ mod tests {
                 "markerIdentity": "nixfied-state", "stateEpoch": "1",
                 "cleanupPolicy": "delete-on-clean", "persistence": "run-scoped"
             },
-            "closures": [],
+            "closures": {},
             "execs": {
                 "svc-exec": {
                     "closureId": "c", "executable": "/bin/svc",
