@@ -7,7 +7,9 @@
 //! compile error until the lowering consciously maps or refuses it.
 
 mod lower;
+mod plan;
 mod types;
 
 pub use lower::lower;
+pub use plan::{PlanNode, RunPlan, Selection, ServiceBinding, plan, prove_all_plans_feasible};
 pub use types::*;
