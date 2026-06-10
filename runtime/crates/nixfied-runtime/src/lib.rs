@@ -2,6 +2,7 @@ pub mod admission;
 pub mod cancellation;
 pub mod control;
 pub mod error;
+pub mod execution;
 pub mod model_loader;
 pub mod registry;
 pub mod service;
