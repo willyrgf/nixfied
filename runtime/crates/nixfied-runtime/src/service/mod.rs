@@ -12,4 +12,4 @@ pub use process::{
     start_service_for_slot, start_synthetic_service, start_synthetic_service_for_slot,
 };
 pub use readiness::wait_for_tcp_probe;
-pub use task::{run_dependent_task, run_dependent_task_cancellable};
+pub use task::{RunContext, run_dependent_task, run_dependent_task_cancellable};

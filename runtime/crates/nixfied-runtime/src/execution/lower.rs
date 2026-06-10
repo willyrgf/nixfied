@@ -209,9 +209,24 @@ fn lower_task(
         log_refs: _,
         summary_refs: _,
     } = task;
+    let exec = resolve_exec_ref(execs, exec_id, args)?;
+    // `${port}`/`${host}` resolve from the task's primary service. A task that
+    // declares no services has no endpoint, so referencing them is unrunnable —
+    // reject it here rather than fail at execution.
+    if depends_on_services_ready.is_empty() {
+        for placeholder in ["${port}", "${host}"] {
+            if exec.args.iter().any(|arg| arg.contains(placeholder)) {
+                return Err(Rejection::TaskPlaceholderWithoutService {
+                    task_id: task_id.to_string(),
+                    placeholder,
+                }
+                .into());
+            }
+        }
+    }
     Ok(ExecTask {
         task_id: task_id.to_string(),
-        exec: resolve_exec_ref(execs, exec_id, args)?,
+        exec,
         depends_on_services_ready: depends_on_services_ready.clone(),
         success_codes: exit_policy.success_codes.clone(),
     })
@@ -276,6 +291,10 @@ pub enum Rejection {
         closure_system: String,
     },
     MissingExec { exec_id: String },
+    TaskPlaceholderWithoutService {
+        task_id: String,
+        placeholder: &'static str,
+    },
 }
 
 impl Rejection {
@@ -299,6 +318,12 @@ impl Rejection {
                 "closure {closure_id} targetSystem {target_system} does not match closureSystem {closure_system}"
             ),
             Rejection::MissingExec { exec_id } => format!("exec {exec_id} is missing"),
+            Rejection::TaskPlaceholderWithoutService {
+                task_id,
+                placeholder,
+            } => format!(
+                "task {task_id} references {placeholder} but depends on no service to resolve it"
+            ),
         }
     }
 }
@@ -686,5 +711,27 @@ mod tests {
             reject_reason(value),
             undeclared("workflow.node.task.dependsOnServicesReady", "svc")
         );
+    }
+
+    #[test]
+    fn service_less_task_lowers() {
+        // A task may depend on zero services (e.g. a lint/test task) as long as it
+        // does not reference a service-derived placeholder.
+        let mut value = model_value();
+        value["tasks"]["t"]["dependsOnServicesReady"] = json!([]);
+        value["tasks"]["t"]["args"] = json!(["--check"]);
+        let em = lower(&model_from(value)).expect("a service-less task lowers");
+        assert!(em.tasks["t"].depends_on_services_ready.is_empty());
+    }
+
+    #[test]
+    fn service_less_task_using_port_is_rejected() {
+        // The fixture task's args carry "${port}"; with no service to resolve it,
+        // admission must reject rather than admit-then-fail.
+        let mut value = model_value();
+        value["tasks"]["t"]["dependsOnServicesReady"] = json!([]);
+        let error =
+            lower(&model_from(value)).expect_err("a service-less task using ${port} must reject");
+        assert_eq!(error.code, ErrorCode::ModelAdmission);
     }
 }

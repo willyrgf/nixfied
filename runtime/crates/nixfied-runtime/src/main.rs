@@ -5,7 +5,7 @@ use nixfied_runtime::execution::{Selection, plan};
 use nixfied_runtime::registry::{Registry, RegistryIdentity, RunLeaseHeartbeat};
 use nixfied_runtime::service::task::TaskRun;
 use nixfied_runtime::service::{
-    SelectedEndpoint, StartedService, run_dependent_task_cancellable, run_slot_clean,
+    RunContext, SelectedEndpoint, StartedService, run_dependent_task_cancellable, run_slot_clean,
     start_service_for_slot,
 };
 use nixfied_runtime::slot::select_slot;
@@ -287,26 +287,20 @@ fn run_m0_admitted(
                 format!("task {task_id} is missing"),
             )
         })?;
-        // Resolve every service this task depends on to its started instance
-        // (the first is the primary, providing ${port}/${host}); a task without
-        // declared dependencies attaches to the first started service.
+        // Resolve every service this task depends on to its started instance (the
+        // first is the primary, providing ${port}/${host}). A task may declare
+        // zero services — it runs in the run context alone.
         let mut dep_indices = Vec::new();
         let mut missing_dependency = None;
-        if task.depends_on_services_ready.is_empty() {
-            if !started.is_empty() {
-                dep_indices.push(0);
-            }
-        } else {
-            for name in &task.depends_on_services_ready {
-                match started
-                    .iter()
-                    .position(|service| service.service_name() == name)
-                {
-                    Some(index) => dep_indices.push(index),
-                    None => {
-                        missing_dependency = Some(name.clone());
-                        break;
-                    }
+        for name in &task.depends_on_services_ready {
+            match started
+                .iter()
+                .position(|service| service.service_name() == name)
+            {
+                Some(index) => dep_indices.push(index),
+                None => {
+                    missing_dependency = Some(name.clone());
+                    break;
                 }
             }
         }
@@ -319,20 +313,18 @@ fn run_m0_admitted(
             stop_lease(lease)?;
             return Err(error);
         }
-        if dep_indices.is_empty() {
-            let error = RuntimeError::new(
-                nixfied_runtime::ErrorCode::DependencyUnavailable,
-                format!("task {task_id} has no started service to depend on"),
-            );
-            teardown(&mut started, &mut registry, options.timeout_ms, false);
-            stop_lease(lease)?;
-            return Err(error);
-        }
         let dependencies: Vec<&StartedService> =
             dep_indices.iter().map(|&index| &started[index]).collect();
+        let run_context = RunContext {
+            run_id: &run_id,
+            computed_model_hash: &admission.computed_model_hash,
+            source_root: &admission.source.observed_root,
+            state_root: &placement.state_root,
+        };
         let task_result = run_dependent_task_cancellable(
             &placement,
             &mut registry,
+            run_context,
             &dependencies,
             &node.node_id,
             task,
