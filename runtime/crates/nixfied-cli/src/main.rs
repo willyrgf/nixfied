@@ -456,6 +456,9 @@ fn flake_template(nixfied_url: &str) -> String {
         default = self.packages.${{system}}.model;
         model = nixfied.lib.${{system}}.compileModel ./nixfied.nix;
       }});
+      # `nix run .#run` / `.#check` / `.#test` / `.#ci` — your project's run and
+      # verification surface, generated from the model.
+      apps = forAllSystems (system: nixfied.lib.${{system}}.projectApps ./nixfied.nix);
     }};
 }}
 "#,
@@ -475,6 +478,20 @@ fn nixfied_module_template(metadata: &ProjectMetadata) -> String {
   nixfied.project.projectId = "{}";
   nixfied.project.name = "{}";
   nixfied.codebases.main.logicalRoot = ".";
+
+  # `nix run .#test` runs the `test` workflow. This starter wraps the synthetic
+  # adapter's `smoke` task (it pings the service). Replace it with your own
+  # tasks: a 0-service `fullcheck` (lint/test) or an N-service `e2e`.
+  nixfied.workflows.test = {{
+    servicesRequired = [ "synthetic" ];
+    nodes = [
+      {{
+        nodeId = "smoke";
+        taskId = "smoke";
+        dependsOn = [ ];
+      }}
+    ];
+  }};
 }}
 "#,
         nix_escape(&metadata.project_id),
@@ -601,11 +618,16 @@ mod tests {
         assert_eq!(outcome.created, vec!["flake.nix", "nixfied.nix"]);
         assert!(root.join("flake.nix").is_file());
         assert!(root.join("nixfied.nix").is_file());
-        assert!(read(&root.join("flake.nix")).contains("nixfied.url = \"path:/repo\""));
+        let flake = read(&root.join("flake.nix"));
+        assert!(flake.contains("nixfied.url = \"path:/repo\""));
+        // The scaffold wires the generated run/check/test/ci app surface.
+        assert!(flake.contains("projectApps ./nixfied.nix"));
         let module = read(&root.join("nixfied.nix"));
         assert!(module.contains("nixfied.project.projectId = \"install-proof\""));
-        // The scaffold ships a runnable service so `nix build .#model` builds.
+        // The scaffold ships a runnable service so `nix build .#model` builds,
+        // and a `test` workflow so `nix run .#test` works out of the box.
         assert!(module.contains("imports = [ adapters.synthetic ];"));
+        assert!(module.contains("nixfied.workflows.test"));
     }
 
     #[test]
