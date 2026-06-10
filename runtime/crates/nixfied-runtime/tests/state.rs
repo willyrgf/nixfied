@@ -25,7 +25,7 @@ fn materializes_m0_roots_and_slot_marker() {
     );
     assert_eq!(
         fixture.layout.registry_dir,
-        fixture.layout.state_root.join("registry")
+        fixture.tmp.path.join("registry").join("runtime-test/dev/0")
     );
     assert_eq!(
         fixture.layout.registry_path(),
@@ -130,6 +130,8 @@ fn materialization_refuses_symlinked_roots() {
     let model = model();
     let layout = derive_host_placement(&model, "run-1", &tmp.path).expect("layout should derive");
     fs::create_dir_all(&layout.state_root).expect("state root should be created");
+    fs::create_dir_all(layout.registry_dir.parent().expect("registry has a parent"))
+        .expect("registry parent should be created");
     let outside = tmp.path.join("outside-registry");
     fs::create_dir_all(&outside).expect("outside dir should be created");
     std::os::unix::fs::symlink(&outside, &layout.registry_dir)
@@ -362,11 +364,16 @@ fn cleanup_deletes_matching_inactive_state() {
     assert!(!fixture.layout.state_root.exists());
     drop(statement);
 
+    // The registry lives outside the deleted state root, so a fresh handle (as a
+    // later CLI invocation would open) still finds the prior cleanup evidence and
+    // the clean stays idempotent.
+    drop(registry);
+    let mut reopened = fixture.registry();
     let repeated = clean_marked_state(
         &fixture.layout.state_base,
         &fixture.layout.state_root,
         &fixture.identity,
-        &mut registry,
+        &mut reopened,
     )
     .expect("repeated cleanup should use prior deletion evidence");
     assert_eq!(repeated, outcome);

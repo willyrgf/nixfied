@@ -80,16 +80,22 @@ pub fn derive_host_placement_for_slot(
             "state base cannot be empty",
         ));
     }
-    let state_root = state_base.join(relative_template_path(
+    let state_root_relative = relative_template_path(
         "placement.slotPlacements.stateRootTemplate",
         &selected_slot.placement.state_root_template,
         &vars,
-    )?);
-    let registry_dir = state_root.join(relative_template_path(
-        "placement.slotPlacements.registryDir",
-        &selected_slot.placement.registry_dir,
-        &vars,
-    )?);
+    )?;
+    let state_root = state_base.join(&state_root_relative);
+    // The registry holds cleanup evidence and must survive a slot clean, which
+    // deletes the state root. Place it in a parallel tree under the state base
+    // keyed by the same per-slot path, never inside the deleted state root.
+    let registry_dir = state_base
+        .join(relative_template_path(
+            "placement.slotPlacements.registryDir",
+            &selected_slot.placement.registry_dir,
+            &vars,
+        )?)
+        .join(&state_root_relative);
     let run_dir = state_root.join(relative_template_path(
         "placement.slotPlacements.runDirTemplate",
         &selected_slot.placement.run_dir_template,
@@ -120,9 +126,11 @@ pub fn derive_host_placement_for_slot(
 pub fn materialize_run_roots(placement: &HostPlacement) -> RuntimeResult<()> {
     create_dir(&placement.state_base)?;
     let base = canonicalize_materialized("state base", &placement.state_base)?;
+    // The registry lives under the state base (a sibling of the state root) so it
+    // outlives a slot clean that deletes the state root.
+    materialize_owned_dir(&placement.state_base, &base, &placement.registry_dir)?;
     materialize_owned_dir(&placement.state_base, &base, &placement.state_root)?;
     let root = canonicalize_materialized("state root", &placement.state_root)?;
-    materialize_owned_dir(&placement.state_root, &root, &placement.registry_dir)?;
     materialize_owned_dir(&placement.state_root, &root, &placement.run_dir)?;
     materialize_owned_dir(&placement.state_root, &root, &placement.logs_dir)?;
     materialize_owned_dir(&placement.state_root, &root, &placement.artifacts_dir)?;
