@@ -120,9 +120,8 @@
           nixfied-runtime = self.packages.${system}.nixfied-runtime;
           # The self-project conformance model must build (the gate's input).
           self-model = self.packages.${system}.self-model;
-          rust-workspace = pkgs.runCommand "nixfied-rust-workspace-check" { } ''
-            mkdir -p "$out"
-          '';
+          # Hermetic source gate: rustfmt + clippy (-D warnings) + cargo check.
+          rust-workspace = import ./nix/packages/rust-workspace-check.nix { inherit pkgs; };
         }
       );
 
