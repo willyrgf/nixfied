@@ -723,6 +723,7 @@ fn admission(model: &Model, source_root: &Path) -> Admission {
         toolchain_id: model.toolchain_id.clone(),
         target_system: model.target.system.clone(),
         source: admitted_source(source_root),
+        execution_model: nixfied_runtime::execution::lower(model).expect("model should lower"),
     }
 }
 
