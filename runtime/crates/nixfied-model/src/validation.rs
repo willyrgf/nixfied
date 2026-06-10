@@ -793,7 +793,7 @@ fn validate_probe(probe: &ProbeSpec) -> Result<(), ValidationError> {
 /// - start:   required exec, no probe;
 /// - ready:   the readiness probe, no exec;
 /// - health:  a probe, no exec;
-/// - stop:    required exec, no probe;
+/// - stop:    neither exec nor probe (signal-based primitive via stopPolicy);
 /// - clean:   neither exec nor probe (marker-gated runtime cleanup).
 fn validate_service_lifecycle(service: &ServiceSpec) -> Result<(), ValidationError> {
     let mut seen_ids = BTreeSet::new();
@@ -861,8 +861,10 @@ fn validate_service_lifecycle(service: &ServiceSpec) -> Result<(), ValidationErr
         });
     }
 
+    // Stop is a signal-based runtime primitive parameterized by stopPolicy, like
+    // clean: it binds neither an exec nor a probe.
     let stop = by_class[class_name(&LifecycleOpClass::Stop)];
-    require_exec("lifecycle.stop.execId", stop)?;
+    require_no_exec("lifecycle.stop.execId", stop)?;
     require_no_probe("lifecycle.stop.probeId", stop)?;
 
     let clean = by_class[class_name(&LifecycleOpClass::Clean)];

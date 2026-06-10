@@ -184,8 +184,8 @@ fn synthetic_service() -> Value {
             {
                 "operationId": "service.synthetic.stop",
                 "class": "stop",
-                "execId": "synthetic-helper",
-                "execArgs": ["stop"],
+                "execId": null,
+                "execArgs": [],
                 "probeId": null,
                 "terminal": { "success": "stopped", "failure": "failed" }
             },

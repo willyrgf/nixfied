@@ -53,15 +53,12 @@ let
       task = sub.add_parser("task")
       task.add_argument("--host", required=True)
       task.add_argument("--port", required=True, type=int)
-      stop = sub.add_parser("stop")
       args = parser.parse_args()
 
       if args.command == "service":
           run_service(args)
       elif args.command == "task":
           run_task(args)
-      elif args.command == "stop":
-          sys.exit(0)
     '';
   };
 in
@@ -73,7 +70,6 @@ in
     requiresExecutable = true;
     operationBindings = [
       "service.synthetic.start"
-      "service.synthetic.stop"
       "task.smoke.run"
     ];
     effects = [
@@ -138,8 +134,6 @@ in
       {
         operationId = "service.synthetic.stop";
         class = "stop";
-        execId = "synthetic-helper";
-        execArgs = [ "stop" ];
         terminal = {
           success = "stopped";
           failure = "failed";
