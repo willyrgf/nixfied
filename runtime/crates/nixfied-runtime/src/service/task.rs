@@ -287,6 +287,11 @@ fn wait_for_task(
                 format!("failed to inspect task process: {error}"),
             )
         })? {
+            // The direct child has exited, but a bounded task may have spawned
+            // children into its own process group. Reconcile the owned group so a
+            // task that daemonizes and exits 0 cannot leave processes behind,
+            // matching the containment services enforce.
+            let _ = terminate_process_group(pgid, 1000);
             return Ok(TaskOutcome {
                 exit_code: status.code(),
                 timed_out: false,
