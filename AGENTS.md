@@ -33,7 +33,9 @@ correctness (Rust impure graph).
 
 Two binaries: `nixfied-runtime` (hidden engine: `check`, `run`, `ps`, `down`,
 `clean`) and `nixfied` (ergonomic CLI: `model`, `schema`, `docs`, `capabilities`,
-`install`). `compile` is `nix build`; `install`/`upgrade`/`gate` are flake apps.
+`install`). `compile` is `nix build`; `install`/`upgrade`/`gate` plus the dev
+`check`/`test`/`ci` are flake apps, and adopters get `run`/`check`/`test`/`ci`
+generated from their model by `lib.projectApps`.
 
 ## Invariants (the contract)
 
@@ -112,8 +114,10 @@ nix/compiler/                resolve -> validate -> derive -> emit model/views
 nix/spec/                    contract constants and model shape
 nix/adapters/                Nix-side adapters (synthetic, postgres) + default.nix
 nix/install/                 install/upgrade surfaces (shell embedded in .nix modules)
-nix/packages/                host-Rust-free build of the runtime/cli/conformance binaries
+nix/packages/                host-Rust-free build of the binaries + the hermetic rust-workspace check
 nix/gate.nix                 `nix run .#gate` launcher for the conformance gate
+nix/dev.nix                  `.#check` / `.#test` / `.#ci` apps (framework dev loop)
+nix/project-apps.nix         `lib.projectApps`: run/check/test/ci apps for an adopter's model
 nix/lib/                     pure Nix helper functions
 nixfied.nix                  the framework's self-project: the `conformance` workflow
 runtime/crates/nixfied-model serde model contract + structural validation
@@ -199,19 +203,38 @@ There is no `tests/` directory: end-to-end behavior lives in the cargo floor
 
 ## Common Checks
 
-The cargo floor runs under the pinned toolchain, so it is identical on every host
-and in CI. Use the dev shell (it provides the pinned cargo/clippy/rustfmt):
+One command runs the whole repo, fail-fast (source gate → test floor →
+conformance gate) — the local equivalent of CI:
+
+```sh
+nix run .#ci
+```
+
+Its stages also run on their own:
+
+```sh
+nix run .#check   # nix flake check + self-model admission sanity
+nix run .#test    # the white-box cargo floor, pinned toolchain
+nix run .#gate    # the dogfood conformance gate (below)
+```
+
+`nix flake check` is the hermetic core of `.#check`: the `rust-workspace` check
+runs `cargo fmt --check` + `cargo clippy -D warnings` + `cargo check` with
+vendored deps, plus every example/self model and the runtime build. The cargo
+*test* floor is deliberately not a flake check (it binds ports / spawns process
+groups), so `.#test` / `.#ci` run it outside the sandbox under the pinned
+toolchain. The raw forms (identical, for a dev shell) are:
 
 ```sh
 nix develop --command bash -c 'cd runtime && cargo fmt --all -- --check'
-nix develop --command bash -c 'cd runtime && cargo clippy --workspace --all-targets --all-features -- -D warnings'
+nix develop --command bash -c 'cd runtime && cargo clippy --workspace --all-targets -- -D warnings'
 nix develop --command bash -c 'cd runtime && cargo test --workspace'
-nix flake check                    # every model builds + the binaries compile
 ```
 
-The end-to-end gate is the product testing itself. It is layered (trusted cargo
-floor first, then structural gates, then the dogfood workflow) and is exactly
-what CI runs (`.github/workflows/conformance.yml`):
+The dogfood gate (the third `.#ci` stage, and the final CI layer after the cargo
+floor and the structural gates) is the product testing itself: the framework runs
+its own `conformance` workflow through the runtime under test
+(`.github/workflows/conformance.yml`):
 
 ```sh
 # Dogfood gate: nixfied runs its own `conformance` workflow. The one-liner
