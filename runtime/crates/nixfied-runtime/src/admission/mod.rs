@@ -46,6 +46,10 @@ pub struct Admission {
     pub toolchain_id: String,
     pub target_system: String,
     pub source: source::AdmittedSource,
+    /// Provenance serialized once at admission for the run record, so the executor
+    /// records it without reading the raw `Model`.
+    pub generator_json: String,
+    pub target_json: String,
     /// The lowered, executable view of the model. Admission proves a concrete plan
     /// exists for every slot/selection; the executor consumes only this.
     pub execution_model: ExecutionModel,
@@ -80,6 +84,8 @@ fn from_loaded(
         toolchain_id: model.toolchain_id.clone(),
         target_system: model.target.system.clone(),
         source,
+        generator_json: serde_json::to_string(&model.generator).unwrap_or_default(),
+        target_json: serde_json::to_string(&model.target).unwrap_or_default(),
         execution_model,
     }
 }

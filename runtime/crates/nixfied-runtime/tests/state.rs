@@ -723,6 +723,8 @@ fn admission(model: &Model, source_root: &Path) -> Admission {
         toolchain_id: model.toolchain_id.clone(),
         target_system: model.target.system.clone(),
         source: admitted_source(source_root),
+        generator_json: serde_json::to_string(&model.generator).unwrap(),
+        target_json: serde_json::to_string(&model.target).unwrap(),
         execution_model: nixfied_runtime::execution::lower(model).expect("model should lower"),
     }
 }

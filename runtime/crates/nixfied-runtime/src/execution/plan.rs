@@ -223,7 +223,10 @@ mod tests {
     fn service(name: &str, port: PortConstraint) -> ExecService {
         ExecService {
             name: name.to_string(),
-            prepare: None,
+            prepare: PrepareOp {
+                meta: op_meta("prepare"),
+                exec: None,
+            },
             start: StartOp {
                 meta: op_meta("start"),
                 exec: resolved_exec(),

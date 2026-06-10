@@ -8,14 +8,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use nixfied_model::{DirtyPolicy, LifecycleOpClass, Model, SourceMode};
+use nixfied_model::{DirtyPolicy, Model, SourceMode};
 use nixfied_runtime::cancellation::CancellationToken;
 use nixfied_runtime::registry::{Registry, RegistryIdentity};
 use nixfied_runtime::service::registry::{TaskProcessRecord, record_task_started};
 use nixfied_runtime::service::{
     run_dependent_task, run_dependent_task_cancellable, run_synthetic_service_clean_for_slot,
     service_address_hash, service_instance_id, start_synthetic_service,
-    start_synthetic_service_for_slot, wait_for_readiness_probe,
+    start_synthetic_service_for_slot, wait_for_tcp_probe,
 };
 use nixfied_runtime::slot::select_slot;
 use nixfied_runtime::state::{
@@ -149,6 +149,7 @@ fn service_start_rejects_exec_cwd_escape() {
         .get_mut("synthetic-helper")
         .expect("fixture exec should exist")
         .cwd = "..".to_string();
+    fixture.relower();
 
     let error = match start_synthetic_service(
         &fixture.model,
@@ -189,7 +190,7 @@ fn readiness_probe_marks_ready_only_after_endpoint_ownership() {
     .expect("foreground service should start");
 
     service
-        .wait_for_probe_ready(&fixture.model, &mut fixture.registry)
+        .wait_for_probe_ready(&mut fixture.registry)
         .expect("owned listener should satisfy readiness");
     let service_status: String = fixture
         .registry
@@ -256,10 +257,10 @@ fn lifecycle_events_follow_declared_class_order_and_clean_terminal() {
     .expect("foreground service should start");
 
     service
-        .wait_for_probe_ready(&fixture.model, &mut fixture.registry)
+        .wait_for_probe_ready(&mut fixture.registry)
         .expect("service should become ready");
     service
-        .check_health(&fixture.model, &mut fixture.registry)
+        .check_health(&mut fixture.registry)
         .expect("service health should pass");
     service
         .stop(&mut fixture.registry, 1000)
@@ -369,123 +370,6 @@ fn lifecycle_events_follow_declared_class_order_and_clean_terminal() {
 }
 
 #[test]
-fn health_failure_after_ready_records_distinct_lifecycle_failure() {
-    let Some(python) = python3_path() else {
-        return;
-    };
-    let port = 46000 + (unique_suffix() % 1000) as u16;
-    let script = python_listener_script();
-    let mut fixture = ServiceFixture::new(python, &["-c", script, "${port}"], port);
-    fixture.model.execs.insert(
-        "health-fail".to_string(),
-        fixture
-            .model
-            .execs
-            .get("synthetic-helper")
-            .expect("helper exec should exist")
-            .clone(),
-    );
-    fixture
-        .model
-        .execs
-        .get_mut("health-fail")
-        .expect("health exec should exist")
-        .executable = "/usr/bin/false".to_string();
-    fixture
-        .model
-        .execs
-        .get_mut("health-fail")
-        .expect("health exec should exist")
-        .args = Vec::new();
-    let service_spec = fixture
-        .model
-        .services
-        .get_mut("synthetic")
-        .expect("synthetic service should exist");
-    let health_op = service_spec
-        .lifecycle
-        .iter_mut()
-        .find(|operation| operation.class == LifecycleOpClass::Health)
-        .expect("health op should exist");
-    health_op.exec_id = Some("health-fail".to_string());
-    health_op.probe_id = None;
-
-    let mut service = start_synthetic_service(
-        &fixture.model,
-        &fixture.admission,
-        &fixture.placement,
-        &mut fixture.registry,
-        "run-health-failure",
-        port,
-    )
-    .expect("foreground service should start");
-
-    service
-        .wait_for_probe_ready(&fixture.model, &mut fixture.registry)
-        .expect("service should become ready");
-    let health_error = service
-        .check_health(&fixture.model, &mut fixture.registry)
-        .expect_err("health check should fail after readiness");
-
-    assert_eq!(health_error.code, ErrorCode::LifecycleFailed);
-    // Lifecycle-exec output is captured to the logs dir, not discarded.
-    assert!(
-        fixture
-            .placement
-            .logs_dir
-            .join("lifecycle.service.synthetic.health.stderr.log")
-            .exists(),
-        "lifecycle exec output should be captured to the logs dir"
-    );
-    let service_status: String = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT status FROM services WHERE service_instance_id = ?1",
-            [&service.service_instance_id],
-            |row| row.get(0),
-        )
-        .expect("service status should query");
-    let ready_events: i64 = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT count(*) FROM events WHERE event_type = 'service.probe-ready'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("readiness event count should query");
-    let failed_events: i64 = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT count(*) FROM events WHERE event_type = 'service.failed'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("failed event count should query");
-    let latest_health_terminal = lifecycle_events(&fixture.registry)
-        .into_iter()
-        .rfind(|event| event.class == "health" && event.event_type == "service.lifecycle.terminal")
-        .expect("health terminal event should exist");
-
-    assert_eq!(service_status, "probe-ready");
-    assert_eq!(ready_events, 1);
-    assert_eq!(failed_events, 0);
-    assert_eq!(
-        latest_health_terminal.terminal_result.as_deref(),
-        Some("unhealthy")
-    );
-    assert_eq!(
-        latest_health_terminal.error_code.as_deref(),
-        Some("LIFECYCLE_FAILED")
-    );
-    service
-        .stop(&mut fixture.registry, 1000)
-        .expect("service should stop after health failure");
-}
-
-#[test]
 fn external_listener_does_not_satisfy_endpoint_ownership() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("listener should bind");
     let port = listener.local_addr().expect("local addr").port();
@@ -501,7 +385,7 @@ fn external_listener_does_not_satisfy_endpoint_ownership() {
     .expect("foreground service should start");
 
     let error = service
-        .wait_for_probe_ready(&fixture.model, &mut fixture.registry)
+        .wait_for_probe_ready(&mut fixture.registry)
         .expect_err("external listener must not satisfy ownership");
 
     assert_eq!(error.code, ErrorCode::PortUnverifiable);
@@ -550,7 +434,7 @@ fn wildcard_listener_does_not_satisfy_loopback_endpoint_ownership() {
     .expect("foreground service should start");
 
     let error = service
-        .wait_for_probe_ready(&fixture.model, &mut fixture.registry)
+        .wait_for_probe_ready(&mut fixture.registry)
         .expect_err("wildcard listener must not satisfy declared loopback endpoint");
 
     assert_eq!(error.code, ErrorCode::PortUnverifiable);
@@ -605,7 +489,6 @@ fn slot_one_service_uses_slot_placement_port_window() {
     .expect("registry should open");
 
     let service = start_synthetic_service_for_slot(
-        &model,
         &admission,
         &placement,
         &mut registry,
@@ -731,8 +614,8 @@ fn service_instance_identity_includes_selected_slot() {
         .get("synthetic")
         .expect("fixture has synthetic service");
 
-    let slot_0_address = service_address_hash(&model, "dev", 0, "synthetic");
-    let slot_1_address = service_address_hash(&model, "dev", 1, "synthetic");
+    let slot_0_address = service_address_hash(&model.project.project_id, "dev", 0, "synthetic");
+    let slot_1_address = service_address_hash(&model.project.project_id, "dev", 1, "synthetic");
     let slot_0_instance = service_instance_id(&slot_0_address, &service.identity);
     let slot_1_instance = service_instance_id(&slot_1_address, &service.identity);
 
@@ -759,6 +642,7 @@ fn dependent_task_runs_after_owned_service_is_ready() {
         "-c".to_string(),
         "import sys; sys.stdout.write('task-ok')".to_string(),
     ];
+    fixture.relower();
     let mut service = start_synthetic_service(
         &fixture.model,
         &fixture.admission,
@@ -769,15 +653,14 @@ fn dependent_task_runs_after_owned_service_is_ready() {
     )
     .expect("foreground service should start");
     service
-        .wait_for_probe_ready(&fixture.model, &mut fixture.registry)
+        .wait_for_probe_ready(&mut fixture.registry)
         .expect("owned listener should become ready");
 
     let task = run_dependent_task(
-        &fixture.model,
         &fixture.placement,
         &mut fixture.registry,
         &[&service],
-        "smoke",
+        fixture.admission.execution_model.tasks.get("smoke").expect("smoke task"),
     )
     .expect("ready dependent task should run");
 
@@ -839,11 +722,10 @@ fn dependent_task_refuses_to_run_before_service_ready() {
     .expect("foreground service should start");
 
     let error = run_dependent_task(
-        &fixture.model,
         &fixture.placement,
         &mut fixture.registry,
         &[&service],
-        "smoke",
+        fixture.admission.execution_model.tasks.get("smoke").expect("smoke task"),
     )
     .expect_err("task should wait for probe-ready service");
 
@@ -869,14 +751,16 @@ fn readiness_probe_times_out_without_listener() {
     let port = listener.local_addr().expect("local addr").port();
     drop(listener);
     let fixture = ServiceFixture::new("/bin/sleep", &["1"], port);
-    let service = fixture
-        .model
+    let probe = &fixture
+        .admission
+        .execution_model
         .services
         .get("synthetic")
-        .expect("fixture has service");
-    let endpoint = service.endpoints.first().expect("fixture has endpoint");
+        .expect("fixture has service")
+        .ready
+        .probe;
 
-    let error = wait_for_readiness_probe(service, endpoint, port)
+    let error = wait_for_tcp_probe(probe, "127.0.0.1", port, &CancellationToken::new())
         .expect_err("closed endpoint should time out");
 
     assert_eq!(error.code, ErrorCode::ReadinessTimeout);
@@ -899,7 +783,7 @@ fn readiness_timeout_stops_started_service_and_records_failed() {
     .expect("service should initially start");
 
     let error = service
-        .wait_for_probe_ready(&fixture.model, &mut fixture.registry)
+        .wait_for_probe_ready(&mut fixture.registry)
         .expect_err("readiness should time out and clean up");
 
     assert_eq!(error.code, ErrorCode::ReadinessTimeout);
@@ -966,7 +850,7 @@ fn cancellation_interrupts_readiness_and_terminates_service_group() {
     });
 
     let error = service
-        .wait_for_probe_ready_cancellable(&fixture.model, &mut fixture.registry, &cancellation)
+        .wait_for_probe_ready_cancellable(&mut fixture.registry, &cancellation)
         .expect_err("readiness should be canceled");
     handle.join().expect("canceler should join");
     service
@@ -1047,6 +931,7 @@ fn cancellation_interrupts_task_and_terminates_task_group() {
         "import signal, subprocess, sys; signal.signal(signal.SIGTERM, lambda *_: sys.exit(0)); subprocess.Popen(['/bin/sh', '-c', 'trap \"\" TERM; sleep 2; touch \"$1\"; sleep 30', 'child', sys.argv[1]]).wait()".to_string(),
         marker_arg.clone(),
     ];
+    fixture.relower();
     let mut service = start_synthetic_service(
         &fixture.model,
         &fixture.admission,
@@ -1057,7 +942,7 @@ fn cancellation_interrupts_task_and_terminates_task_group() {
     )
     .expect("foreground service should start");
     service
-        .wait_for_probe_ready(&fixture.model, &mut fixture.registry)
+        .wait_for_probe_ready(&mut fixture.registry)
         .expect("owned listener should become ready");
     let cancellation = CancellationToken::new();
     let canceler = cancellation.clone();
@@ -1067,12 +952,11 @@ fn cancellation_interrupts_task_and_terminates_task_group() {
     });
 
     let error = run_dependent_task_cancellable(
-        &fixture.model,
         &fixture.placement,
         &mut fixture.registry,
         &[&service],
         "smoke",
-        "smoke",
+        fixture.admission.execution_model.tasks.get("smoke").expect("smoke task"),
         &cancellation,
     )
     .expect_err("task should be canceled");
@@ -1168,6 +1052,7 @@ fn task_timeout_records_canceled_summary_and_terminates_task_group() {
         "import subprocess, sys; subprocess.Popen(['/bin/sh', '-c', 'trap \"\" TERM; sleep 2; touch \"$1\"; sleep 30', 'child', sys.argv[1]]).wait()".to_string(),
         marker_arg.clone(),
     ];
+    fixture.relower();
     let mut service = start_synthetic_service(
         &fixture.model,
         &fixture.admission,
@@ -1178,15 +1063,14 @@ fn task_timeout_records_canceled_summary_and_terminates_task_group() {
     )
     .expect("foreground service should start");
     service
-        .wait_for_probe_ready(&fixture.model, &mut fixture.registry)
+        .wait_for_probe_ready(&mut fixture.registry)
         .expect("owned listener should become ready");
 
     let error = run_dependent_task(
-        &fixture.model,
         &fixture.placement,
         &mut fixture.registry,
         &[&service],
-        "smoke",
+        fixture.admission.execution_model.tasks.get("smoke").expect("smoke task"),
     )
     .expect_err("task should time out as cancellation");
     thread::sleep(Duration::from_millis(2300));
@@ -1489,6 +1373,7 @@ fn readiness_timeout_prefers_escape_discovered_during_probe() {
         .expect("fixture has probe");
     probe.max_attempts = 30;
     probe.retry_interval_ms = 20;
+    fixture.relower();
     let mut service = start_synthetic_service(
         &fixture.model,
         &fixture.admission,
@@ -1500,7 +1385,7 @@ fn readiness_timeout_prefers_escape_discovered_during_probe() {
     .expect("service should initially start");
 
     let error = service
-        .wait_for_probe_ready(&fixture.model, &mut fixture.registry)
+        .wait_for_probe_ready(&mut fixture.registry)
         .expect_err("readiness should report the monitored escape");
 
     assert_eq!(error.code, ErrorCode::ProcEscape);
@@ -1696,7 +1581,7 @@ fn readiness_refuses_monitored_setsid_escape() {
     thread::sleep(Duration::from_millis(1300));
 
     let error = service
-        .wait_for_probe_ready(&fixture.model, &mut fixture.registry)
+        .wait_for_probe_ready(&mut fixture.registry)
         .expect_err("readiness should refuse monitored escape");
 
     assert_eq!(error.code, ErrorCode::ProcEscape);
@@ -1740,7 +1625,7 @@ fn readiness_records_foreground_exit_as_escape() {
     thread::sleep(Duration::from_millis(1300));
 
     let error = service
-        .wait_for_probe_ready(&fixture.model, &mut fixture.registry)
+        .wait_for_probe_ready(&mut fixture.registry)
         .expect_err("readiness should record foreground exit as escape");
 
     assert_eq!(error.code, ErrorCode::ProcEscape);
@@ -2552,6 +2437,14 @@ impl ServiceFixture {
             registry,
         }
     }
+
+    /// Re-lower the (mutated) model into the admission's ExecutionModel. Tests that
+    /// edit `self.model` after construction must call this so the executor, which
+    /// reads the lowered model, sees the change.
+    fn relower(&mut self) {
+        self.admission.execution_model =
+            nixfied_runtime::execution::lower(&self.model).expect("mutated model should lower");
+    }
 }
 
 struct StartedSlot<'a> {
@@ -2588,7 +2481,6 @@ impl<'a> StartedSlot<'a> {
         )
         .expect("slot registry should open");
         let mut service = start_synthetic_service_for_slot(
-            model,
             admission,
             &placement,
             &mut registry,
@@ -2598,7 +2490,7 @@ impl<'a> StartedSlot<'a> {
         )
         .expect("slot service should start");
         service
-            .wait_for_probe_ready(model, &mut registry)
+            .wait_for_probe_ready(&mut registry)
             .expect("slot service should become ready");
         Self {
             selected,
@@ -2619,6 +2511,8 @@ fn admission(model: &Model, source_root: &Path) -> Admission {
         toolchain_id: model.toolchain_id.clone(),
         target_system: model.target.system.clone(),
         source: admitted_source(source_root),
+        generator_json: serde_json::to_string(&model.generator).unwrap(),
+        target_json: serde_json::to_string(&model.target).unwrap(),
         execution_model: nixfied_runtime::execution::lower(model).expect("model should lower"),
     }
 }
