@@ -1157,7 +1157,7 @@ fn run_lifecycle_exec(
                 return Ok(());
             }
             return Err(RuntimeError::new(
-                ErrorCode::ModelAdmission,
+                ErrorCode::LifecycleFailed,
                 format!(
                     "service lifecycle operation {} exited with code {}",
                     operation.operation_id,
@@ -1172,7 +1172,7 @@ fn run_lifecycle_exec(
             let _ = terminate_process_group(pgid, 1000);
             let _ = wait_for_child_exit(&mut child, 1000);
             return Err(RuntimeError::new(
-                ErrorCode::ModelAdmission,
+                ErrorCode::LifecycleFailed,
                 format!(
                     "service lifecycle operation {} timed out after {}ms",
                     operation.operation_id, exec.timeout_ms

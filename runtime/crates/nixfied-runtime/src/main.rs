@@ -352,7 +352,7 @@ fn run_m0_admitted(
         }
         if let Some(name) = missing_dependency {
             let error = RuntimeError::new(
-                nixfied_runtime::ErrorCode::ModelAdmission,
+                nixfied_runtime::ErrorCode::DependencyUnavailable,
                 format!("task {task_id} depends on service {name} which was not started"),
             );
             teardown(&mut started, &mut registry, options.timeout_ms, false);
@@ -361,7 +361,7 @@ fn run_m0_admitted(
         }
         if dep_indices.is_empty() {
             let error = RuntimeError::new(
-                nixfied_runtime::ErrorCode::ModelAdmission,
+                nixfied_runtime::ErrorCode::DependencyUnavailable,
                 format!("task {task_id} has no started service to depend on"),
             );
             teardown(&mut started, &mut registry, options.timeout_ms, false);
@@ -875,5 +875,8 @@ fn exit_code(error: &RuntimeError) -> i32 {
         nixfied_runtime::ErrorCode::Canceled => 27,
         nixfied_runtime::ErrorCode::LeaseStale => 28,
         nixfied_runtime::ErrorCode::LeaseConflict => 29,
+        nixfied_runtime::ErrorCode::TaskFailed => 30,
+        nixfied_runtime::ErrorCode::LifecycleFailed => 31,
+        nixfied_runtime::ErrorCode::DependencyUnavailable => 32,
     }
 }
