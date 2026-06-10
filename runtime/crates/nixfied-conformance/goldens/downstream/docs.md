@@ -5,7 +5,7 @@ Compiled model for downstream.
 ## Target
 
 - system: <<system>>
-- runtime ABI: nixfied-runtime-abi:1
+- runtime ABI: nixfied-runtime-abi:1-1b85992d183c
 - toolchain: nixfied-toolchain:1
 
 ## Surfaces
@@ -28,9 +28,9 @@ Compiled model for downstream.
 
 ## Lifecycle
 
-- api: readiness api-tcp; health explicit; operations prepare, start, ready, health, stop, clean
-- postgres: readiness postgres-tcp; health explicit; operations prepare, start, ready, health, stop, clean
-- worker: readiness worker-tcp; health explicit; operations prepare, start, ready, health, stop, clean
+- api: endpoint api-tcp; operations clean, health, prepare, ready, start, stop
+- postgres: endpoint postgres-tcp; operations clean, health, prepare, ready, start, stop
+- worker: endpoint worker-tcp; operations clean, health, prepare, ready, start, stop
 
 ## Tasks
 
