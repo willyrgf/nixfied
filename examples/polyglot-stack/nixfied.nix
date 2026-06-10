@@ -73,8 +73,6 @@ let
   ];
 
   mkService = name: {
-    foreground = true;
-    healthPolicy = "explicit";
     lifecycle = {
       prepare = {
         operationId = "service.${name}.prepare";

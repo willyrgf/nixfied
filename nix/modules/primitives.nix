@@ -151,11 +151,6 @@ let
 
   serviceType = types.submodule {
     options = {
-      foreground = mkOption {
-        type = types.bool;
-        default = true;
-        description = "Whether the service runs in the runtime-owned foreground process group.";
-      };
       lifecycle = mkOption {
         type = lifecycleType;
         description = "Full generic lifecycle operation contract.";
@@ -163,14 +158,6 @@ let
       endpoint = mkOption {
         type = endpointType;
         description = "The single tcp loopback endpoint the service binds.";
-      };
-      healthPolicy = mkOption {
-        type = types.enum [
-          "explicit"
-          "unsupported"
-        ];
-        default = "explicit";
-        description = "Health policy.";
       };
       stateRefs = mkOption {
         type = types.listOf types.str;
@@ -189,11 +176,6 @@ let
         ];
         default = "process-group";
         description = "Containment requirement.";
-      };
-      lifetime = mkOption {
-        type = types.enum [ "run-scoped" ];
-        default = "run-scoped";
-        description = "Service lifetime policy.";
       };
     };
   };
@@ -410,12 +392,6 @@ in
       default = 100;
       description = "Port offset between adjacent slot candidate windows.";
     };
-  };
-
-  options.nixfied.secrets = mkOption {
-    type = types.listOf types.attrs;
-    default = [ ];
-    description = "Secret descriptors are still deferred; must remain empty.";
   };
 
   options.nixfied.workflows = mkOption {

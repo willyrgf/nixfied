@@ -4,20 +4,6 @@ use crate::constants::{MODEL_VERSION, RUNTIME_ABI, TOOLCHAIN_ID};
 use crate::error::ValidationError;
 use crate::types::*;
 
-/// Framework-owned public surfaces. These are not user-declarable; they are the
-/// generated view/runtime command set every model exposes.
-const REQUIRED_SURFACES: &[&str] = &[
-    "model",
-    "schema",
-    "docs",
-    "capabilities",
-    "check",
-    "run",
-    "ps",
-    "down",
-    "clean",
-];
-
 
 pub trait Validate {
     fn validate(&self) -> Result<(), ValidationError>;
@@ -27,14 +13,9 @@ impl Validate for Model {
     fn validate(&self) -> Result<(), ValidationError> {
         validate_exact_identities(self)?;
         validate_required_strings(self)?;
-        validate_deferred_features(self)?;
-        validate_target_capabilities(self)?;
         validate_codebases(self)?;
         validate_environments(self)?;
         validate_slot_policy(&self.slot_policy)?;
-        validate_runtime_constraints(self)?;
-        validate_surfaces(self)?;
-        validate_capabilities(self)?;
         validate_no_host_absolute_placement(&self.placement)?;
         validate_slot_placements(self)?;
         validate_execs(self)?;
@@ -92,14 +73,6 @@ fn require_non_empty(field: &'static str, value: &str) -> Result<(), ValidationE
     }
 }
 
-/// Features intentionally deferred beyond the current capability line.
-fn validate_deferred_features(model: &Model) -> Result<(), ValidationError> {
-    if !model.secrets.is_empty() {
-        return Err(ValidationError::MustBeEmpty { field: "secrets" });
-    }
-    Ok(())
-}
-
 /// Workflows are bounded acyclic graphs of task nodes over declared services.
 fn validate_workflows(model: &Model) -> Result<(), ValidationError> {
     let task_ids = model
@@ -113,13 +86,6 @@ fn validate_workflows(model: &Model) -> Result<(), ValidationError> {
         .map(String::as_str)
         .collect::<BTreeSet<_>>();
     for (id, workflow) in &model.workflows {
-        if &workflow.workflow_id != id {
-            return Err(ValidationError::UnsupportedValue {
-                field: "workflows.workflowId",
-                expected: "map key",
-                actual: format!("key={id}, workflowId={}", workflow.workflow_id),
-            });
-        }
         for service in &workflow.services_required {
             if !service_ids.contains(service.as_str()) {
                 return Err(ValidationError::UndeclaredReference {
@@ -229,21 +195,6 @@ fn validate_workflow_acyclic(
     Ok(())
 }
 
-fn validate_target_capabilities(model: &Model) -> Result<(), ValidationError> {
-    let caps = &model.target.required_runtime_capabilities;
-    if !(caps.process_group && caps.tcp_port_ownership && caps.sqlite_wal) {
-        return Err(ValidationError::UnsupportedValue {
-            field: "target.requiredRuntimeCapabilities",
-            expected: "processGroup=true, tcpPortOwnership=true, sqliteWal=true",
-            actual: format!(
-                "processGroup={}, tcpPortOwnership={}, sqliteWal={}",
-                caps.process_group, caps.tcp_port_ownership, caps.sqlite_wal
-            ),
-        });
-    }
-    Ok(())
-}
-
 /// A single live-workspace codebase named `main`. Multi-codebase source identity
 /// is a later milestone; the runtime admission layer still resolves one root.
 fn validate_codebases(model: &Model) -> Result<(), ValidationError> {
@@ -272,132 +223,13 @@ fn validate_environments(model: &Model) -> Result<(), ValidationError> {
             field: "environments",
         });
     }
-    let env = model
-        .environments
-        .get("dev")
-        .ok_or_else(|| ValidationError::UnsupportedValue {
+    if !model.environments.contains_key("dev") {
+        return Err(ValidationError::UnsupportedValue {
             field: "environments",
             expected: "dev",
             actual: format!("{:?}", model.environments.keys().collect::<Vec<_>>()),
-        })?;
-    expect_string("environments.dev.environmentId", "dev", &env.environment_id)?;
-    Ok(())
-}
-
-fn validate_runtime_constraints(model: &Model) -> Result<(), ValidationError> {
-    expect_vec(
-        "runtimeConstraints.allowedEnvironments",
-        &["dev"],
-        &model.runtime_constraints.allowed_environments,
-    )?;
-    if model.runtime_constraints.slot_min != model.slot_policy.min
-        || model.runtime_constraints.slot_default != model.slot_policy.default
-        || model.runtime_constraints.slot_max != model.slot_policy.max
-    {
-        return Err(ValidationError::UnsupportedValue {
-            field: "runtimeConstraints.slot",
-            expected: "slotPolicy min/default/max",
-            actual: format!(
-                "slotMin={}, slotDefault={}, slotMax={}",
-                model.runtime_constraints.slot_min,
-                model.runtime_constraints.slot_default,
-                model.runtime_constraints.slot_max
-            ),
         });
     }
-    if model.runtime_constraints.allow_port_override {
-        return Err(ValidationError::UnsupportedValue {
-            field: "runtimeConstraints.allowPortOverride",
-            expected: "false",
-            actual: "true".to_string(),
-        });
-    }
-    if model.runtime_constraints.collision_policy != CollisionPolicy::Fail {
-        return Err(ValidationError::UnsupportedValue {
-            field: "runtimeConstraints.collisionPolicy",
-            expected: "fail",
-            actual: format!("{:?}", model.runtime_constraints.collision_policy),
-        });
-    }
-    Ok(())
-}
-
-fn validate_surfaces(model: &Model) -> Result<(), ValidationError> {
-    let surface_names = model
-        .surfaces
-        .iter()
-        .map(|surface| surface.name.clone())
-        .collect::<Vec<_>>();
-    expect_vec("surfaces", REQUIRED_SURFACES, &surface_names)?;
-    for surface in &model.surfaces {
-        if !surface.aliases.is_empty() {
-            return Err(ValidationError::MustBeEmpty {
-                field: "surfaces.aliases",
-            });
-        }
-        expect_vec(
-            "surfaces.exitClasses",
-            &["ok", "error"],
-            &surface.exit_classes,
-        )?;
-        if surface.evaluation_permission != EvaluationPermission::Never {
-            return Err(ValidationError::UnsupportedValue {
-                field: "surfaces.evaluationPermission",
-                expected: "never",
-                actual: format!("{:?}", surface.evaluation_permission),
-            });
-        }
-        if surface.maturity != SurfaceMaturity::Stable {
-            return Err(ValidationError::UnsupportedValue {
-                field: "surfaces.maturity",
-                expected: "stable",
-                actual: format!("{:?}", surface.maturity),
-            });
-        }
-    }
-    Ok(())
-}
-
-/// The `capabilities` section is a generated projection of the model and must
-/// mirror it exactly (SINGLE-MODEL-1).
-fn validate_capabilities(model: &Model) -> Result<(), ValidationError> {
-    expect_vec(
-        "capabilities.environments",
-        &["dev"],
-        &model.capabilities.environments,
-    )?;
-    let service_keys = model.services.keys().cloned().collect::<Vec<_>>();
-    expect_string_vec(
-        "capabilities.services",
-        &service_keys,
-        &model.capabilities.services,
-    )?;
-    let task_keys = model.tasks.keys().cloned().collect::<Vec<_>>();
-    expect_string_vec("capabilities.tasks", &task_keys, &model.capabilities.tasks)?;
-    let workflow_keys = model.workflows.keys().cloned().collect::<Vec<_>>();
-    expect_string_vec(
-        "capabilities.workflows",
-        &workflow_keys,
-        &model.capabilities.workflows,
-    )?;
-    let slots = expected_slots(&model.slot_policy)?;
-    if model.capabilities.slots != slots {
-        return Err(ValidationError::UnsupportedValue {
-            field: "capabilities.slots",
-            expected: "slotPolicy range",
-            actual: format!("{:?}", model.capabilities.slots),
-        });
-    }
-    let surface_names = model
-        .surfaces
-        .iter()
-        .map(|surface| surface.name.clone())
-        .collect::<Vec<_>>();
-    expect_string_vec(
-        "capabilities.surfaces",
-        &surface_names,
-        &model.capabilities.surfaces,
-    )?;
     Ok(())
 }
 
@@ -564,14 +396,7 @@ fn validate_execs(model: &Model) -> Result<(), ValidationError> {
             actual: "{}".to_string(),
         });
     }
-    for (id, exec) in &model.execs {
-        if &exec.exec_id != id {
-            return Err(ValidationError::UnsupportedValue {
-                field: "execs.execId",
-                expected: "map key",
-                actual: format!("key={id}, execId={}", exec.exec_id),
-            });
-        }
+    for exec in model.execs.values() {
         require_non_empty("execs.executable", &exec.executable)?;
         require_non_empty("execs.cwd", &exec.cwd)?;
     }
@@ -614,37 +439,9 @@ fn validate_services(model: &Model) -> Result<(), ValidationError> {
             actual: "{}".to_string(),
         });
     }
-    for (id, service) in &model.services {
-        if &service.service_id != id {
-            return Err(ValidationError::UnsupportedValue {
-                field: "services.serviceId",
-                expected: "map key",
-                actual: format!("key={id}, serviceId={}", service.service_id),
-            });
-        }
-        if !service.foreground {
-            return Err(ValidationError::UnsupportedValue {
-                field: "services.foreground",
-                expected: "true",
-                actual: "false".to_string(),
-            });
-        }
-        if service.lifetime != ServiceLifetime::RunScoped {
-            return Err(ValidationError::UnsupportedValue {
-                field: "services.lifetime",
-                expected: "run-scoped",
-                actual: format!("{:?}", service.lifetime),
-            });
-        }
+    for service in model.services.values() {
         match service.containment {
             ContainmentRequirement::ProcessGroup | ContainmentRequirement::ProcessTree => {}
-        }
-        if service.health_policy != HealthPolicy::Explicit {
-            return Err(ValidationError::UnsupportedValue {
-                field: "services.healthPolicy",
-                expected: "explicit",
-                actual: format!("{:?}", service.health_policy),
-            });
         }
         require_non_empty("services.endpoint.endpointId", &service.endpoint.endpoint_id)?;
         validate_service_lifecycle(service)?;
@@ -677,14 +474,7 @@ fn lifecycle_ops(lifecycle: &Lifecycle) -> [(&str, &TerminalSemantics); 6] {
 }
 
 fn validate_tasks(model: &Model) -> Result<(), ValidationError> {
-    for (id, task) in &model.tasks {
-        if &task.task_id != id {
-            return Err(ValidationError::UnsupportedValue {
-                field: "tasks.taskId",
-                expected: "map key",
-                actual: format!("key={id}, taskId={}", task.task_id),
-            });
-        }
+    for task in model.tasks.values() {
         require_non_empty("tasks.operationId", &task.operation_id)?;
         require_non_empty("tasks.execId", &task.exec_id)?;
         if task.exit_policy.success_codes.is_empty() {
@@ -710,42 +500,6 @@ fn expect_string(
             field,
             expected,
             actual: actual.to_string(),
-        })
-    }
-}
-
-fn expect_vec<T>(
-    field: &'static str,
-    expected: &[&'static str],
-    actual: &[T],
-) -> Result<(), ValidationError>
-where
-    T: AsRef<str> + std::fmt::Debug,
-{
-    let actual_strings = actual.iter().map(AsRef::as_ref).collect::<Vec<_>>();
-    if actual_strings.as_slice() == expected {
-        Ok(())
-    } else {
-        Err(ValidationError::UnsupportedValue {
-            field,
-            expected: "exact values",
-            actual: format!("{actual:?}"),
-        })
-    }
-}
-
-fn expect_string_vec(
-    field: &'static str,
-    expected: &[String],
-    actual: &[String],
-) -> Result<(), ValidationError> {
-    if actual == expected {
-        Ok(())
-    } else {
-        Err(ValidationError::UnsupportedValue {
-            field,
-            expected: "model-derived projection",
-            actual: format!("{actual:?}"),
         })
     }
 }

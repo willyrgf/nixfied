@@ -7,33 +7,9 @@
 }:
 
 let
-  inherit (lib) mapAttrs mapAttrsToList attrNames;
+  inherit (lib) mapAttrs mapAttrsToList;
   targetLib = import ../lib/target.nix { inherit lib; };
   identifiers = import ../lib/identifiers.nix;
-
-  surfaceNames = [
-    "model"
-    "schema"
-    "docs"
-    "capabilities"
-    "check"
-    "run"
-    "ps"
-    "down"
-    "clean"
-  ];
-  surfaceSpec = name: {
-    inherit name;
-    aliases = [ ];
-    inputSchema = { };
-    outputSchema = { };
-    exitClasses = [
-      "ok"
-      "error"
-    ];
-    evaluationPermission = "never";
-    maturity = "stable";
-  };
 
   target = targetLib.fromSystem config.nixfied.target.system;
 
@@ -82,8 +58,7 @@ let
   closures = mapAttrsToList closureSpec config.nixfied.closures;
 
   # Execs: default the executable to the bound closure executable.
-  execSpec = id: exec: {
-    execId = id;
+  execSpec = _id: exec: {
     closureId = exec.closureId;
     executable = if exec.executable != null then exec.executable else closureExecutable exec.closureId;
     args = exec.args;
@@ -151,22 +126,15 @@ let
       };
       runtimeIdentityInputs = {
         inherit lifecycle endpoint;
-        foreground = service.foreground;
-        healthPolicy = service.healthPolicy;
         containment = service.containment;
-        lifetime = service.lifetime;
         execs = lib.filterAttrs (id: _: builtins.elem id lifecycleExecIds) execs;
       };
     in
     {
-      serviceId = name;
-      foreground = service.foreground;
       inherit lifecycle endpoint;
-      healthPolicy = service.healthPolicy;
       stateRefs = service.stateRefs;
       logRefs = service.logRefs;
       containment = service.containment;
-      lifetime = service.lifetime;
       identity = {
         serviceAddressHash = identifiers.hashJson addressInputs;
         endpointIdentityHash = identifiers.hashJson endpoint;
@@ -177,8 +145,7 @@ let
     };
   services = mapAttrs serviceSpec config.nixfied.services;
 
-  taskSpec = name: task: {
-    taskId = name;
+  taskSpec = _name: task: {
     operationId = task.operationId;
     execId = task.execId;
     args = task.args;
@@ -193,13 +160,11 @@ let
   };
   tasks = mapAttrs taskSpec config.nixfied.tasks;
 
-  environments = mapAttrs (name: env: {
-    environmentId = name;
+  environments = mapAttrs (_name: env: {
     inherit (env) services tasks;
   }) config.nixfied.environments;
 
-  workflowSpec = name: workflow: {
-    workflowId = name;
+  workflowSpec = _name: workflow: {
     servicesRequired = workflow.servicesRequired;
     nodes = map (node: {
       nodeId = node.nodeId;
@@ -208,10 +173,6 @@ let
     }) workflow.nodes;
   };
   workflows = mapAttrs workflowSpec config.nixfied.workflows;
-
-  serviceNames = attrNames config.nixfied.services;
-  taskNames = attrNames config.nixfied.tasks;
-  workflowNames = attrNames config.nixfied.workflows;
 in
 {
   packages = closurePackages;
@@ -241,23 +202,6 @@ in
     ];
     inherit environments;
     inherit slotPolicy;
-    capabilities = {
-      environments = attrNames environments;
-      inherit slots;
-      services = serviceNames;
-      tasks = taskNames;
-      workflows = workflowNames;
-      surfaces = surfaceNames;
-    };
-    runtimeConstraints = {
-      allowedEnvironments = attrNames environments;
-      slotMin = slotPolicy.min;
-      slotDefault = slotPolicy.default;
-      slotMax = slotPolicy.max;
-      allowPortOverride = false;
-      collisionPolicy = "fail";
-    };
-    surfaces = map surfaceSpec surfaceNames;
     placement = {
       stateRootTemplate = "\${projectId}/\${environment}/\${slot}";
       registryDir = "registry";
@@ -277,7 +221,6 @@ in
         persistence
         ;
     };
-    secrets = [ ];
     inherit
       closures
       execs

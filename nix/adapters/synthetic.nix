@@ -85,8 +85,6 @@ in
   };
 
   nixfied.services.synthetic = {
-    foreground = true;
-    healthPolicy = "explicit";
     lifecycle = {
       prepare = {
         operationId = "service.synthetic.prepare";

@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 use std::num::{NonZeroU32, NonZeroU64};
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -16,12 +15,8 @@ pub struct Model {
     pub codebases: Vec<Codebase>,
     pub environments: BTreeMap<String, Environment>,
     pub slot_policy: SlotPolicy,
-    pub capabilities: Capabilities,
-    pub runtime_constraints: RuntimeConstraints,
-    pub surfaces: Vec<SurfaceSpec>,
     pub placement: Placement,
     pub state: StatePolicy,
-    pub secrets: Vec<SecretRef>,
     pub closures: Vec<ClosureSpec>,
     pub execs: BTreeMap<String, ExecSpec>,
     pub services: BTreeMap<String, ServiceSpec>,
@@ -52,15 +47,6 @@ pub struct Target {
     pub os: String,
     pub arch: String,
     pub closure_system: String,
-    pub required_runtime_capabilities: RuntimeCapabilities,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RuntimeCapabilities {
-    pub process_group: bool,
-    pub tcp_port_ownership: bool,
-    pub sqlite_wal: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -99,7 +85,6 @@ pub enum DirtyPolicy {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Environment {
-    pub environment_id: String,
     pub services: Vec<String>,
     pub tasks: Vec<String>,
 }
@@ -110,63 +95,6 @@ pub struct SlotPolicy {
     pub min: u32,
     pub default: u32,
     pub max: u32,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct Capabilities {
-    pub environments: Vec<String>,
-    pub slots: Vec<u32>,
-    pub services: Vec<String>,
-    pub tasks: Vec<String>,
-    pub workflows: Vec<String>,
-    pub surfaces: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RuntimeConstraints {
-    pub allowed_environments: Vec<String>,
-    pub slot_min: u32,
-    pub slot_default: u32,
-    pub slot_max: u32,
-    pub allow_port_override: bool,
-    pub collision_policy: CollisionPolicy,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum CollisionPolicy {
-    Fail,
-    ProbeInRange,
-    RequestOverride,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct SurfaceSpec {
-    pub name: String,
-    pub aliases: Vec<String>,
-    pub input_schema: Value,
-    pub output_schema: Value,
-    pub exit_classes: Vec<String>,
-    pub evaluation_permission: EvaluationPermission,
-    pub maturity: SurfaceMaturity,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum EvaluationPermission {
-    Never,
-    Allowed,
-    Required,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum SurfaceMaturity {
-    Experimental,
-    Stable,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -225,14 +153,6 @@ pub enum PersistencePolicy {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct SecretRef {
-    pub secret_id: String,
-    pub target: String,
-    pub required: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ClosureSpec {
     pub closure_id: String,
     pub kind: ClosureKind,
@@ -263,7 +183,6 @@ pub enum ClosureEffect {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExecSpec {
-    pub exec_id: String,
     pub closure_id: String,
     pub executable: String,
     pub args: Vec<String>,
@@ -451,23 +370,12 @@ pub struct TerminalSemantics {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ServiceSpec {
-    pub service_id: String,
-    pub foreground: bool,
     pub lifecycle: Lifecycle,
     pub endpoint: Endpoint,
-    pub health_policy: HealthPolicy,
     pub state_refs: Vec<String>,
     pub log_refs: Vec<String>,
     pub containment: ContainmentRequirement,
-    pub lifetime: ServiceLifetime,
     pub identity: ServiceIdentity,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum HealthPolicy {
-    Explicit,
-    Unsupported,
 }
 
 /// The signal the runtime sends for graceful shutdown. A closed set so an
@@ -493,12 +401,6 @@ pub enum ContainmentRequirement {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum ServiceLifetime {
-    RunScoped,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ServiceIdentity {
     pub service_address_hash: String,
@@ -511,7 +413,6 @@ pub struct ServiceIdentity {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TaskSpec {
-    pub task_id: String,
     pub operation_id: String,
     pub exec_id: String,
     pub args: Vec<String>,
@@ -532,7 +433,6 @@ pub struct ExitPolicy {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WorkflowSpec {
-    pub workflow_id: String,
     /// Services that must be started and ready before any node runs.
     pub services_required: Vec<String>,
     /// Bounded acyclic dependency graph of task nodes.

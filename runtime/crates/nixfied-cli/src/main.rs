@@ -81,13 +81,27 @@ impl ViewOptions {
     }
 }
 
+/// Framework-owned public surfaces: the generated view/runtime command set every
+/// model exposes. A view concern, derived here rather than carried in the model.
+const SURFACE_NAMES: &[&str] = &[
+    "model",
+    "schema",
+    "docs",
+    "capabilities",
+    "check",
+    "run",
+    "ps",
+    "down",
+    "clean",
+];
+
 fn render_view(command: &str, options: &ViewOptions) -> Result<String, CliError> {
     let model = read_model_json(&options.model)?;
     match command {
         "model" => json_output(&model),
         "schema" => json_output(&schema_view(&model)?),
         "docs" => docs_view(&model),
-        "capabilities" => json_output(model_field(&model, "capabilities")?),
+        "capabilities" => json_output(&capabilities_view(&model)?),
         other => Err(CliError::usage(format!(
             "unsupported nixfied view command: {other}"
         ))),
@@ -101,24 +115,37 @@ fn read_model_json(path: &Path) -> Result<Value, CliError> {
         .map_err(|error| CliError::usage(format!("failed to parse {}: {error}", path.display())))
 }
 
+/// The capabilities view is a projection of the model, derived on demand rather
+/// than read from a redundant model section.
+fn capabilities_view(model: &Value) -> Result<Value, CliError> {
+    let slot_policy = model_field(model, "slotPolicy")?;
+    let min = u64_field(slot_policy, "min")?;
+    let max = u64_field(slot_policy, "max")?;
+    Ok(json!({
+        "environments": object_keys(model, "environments")?,
+        "slots": (min..=max).collect::<Vec<_>>(),
+        "services": object_keys(model, "services")?,
+        "tasks": object_keys(model, "tasks")?,
+        "workflows": object_keys(model, "workflows")?,
+        "surfaces": SURFACE_NAMES,
+    }))
+}
+
 fn schema_view(model: &Value) -> Result<Value, CliError> {
     Ok(json!({
         "schemaVersion": 1,
         "source": "model.json",
-        "runtimeInputs": model_field(model, "runtimeConstraints")?.clone(),
-        "surfaces": model_field(model, "surfaces")?.clone(),
+        "surfaces": SURFACE_NAMES,
         "modelTypes": {
             "modelVersion": model_field(model, "modelVersion")?.clone(),
             "runtimeAbi": model_field(model, "runtimeAbi")?.clone(),
             "toolchainId": model_field(model, "toolchainId")?.clone(),
             "primitives": [
                 "ExecSpec",
-                "EndpointSpec",
-                "ProbeSpec",
-                "LifecycleOpSpec",
-                "LifecycleOpClass",
+                "Endpoint",
+                "ProbeTiming",
+                "Lifecycle",
                 "TerminalSemantics",
-                "HealthPolicy",
                 "ServiceSpec",
                 "TaskSpec",
                 "SlotPlacement"
@@ -135,10 +162,8 @@ fn docs_view(model: &Value) -> Result<String, CliError> {
     let target_system = string_field(target, "system")?;
     let runtime_abi = string_field(model, "runtimeAbi")?;
     let toolchain_id = string_field(model, "toolchainId")?;
-    let surfaces = array_field(model, "surfaces")?;
-    let capabilities = model_field(model, "capabilities")?;
-    let services = array_field(capabilities, "services")?;
-    let tasks = array_field(capabilities, "tasks")?;
+    let services = object_keys(model, "services")?;
+    let tasks = object_keys(model, "tasks")?;
 
     let mut output = String::new();
     let _ = writeln!(output, "# {title}");
@@ -153,56 +178,36 @@ fn docs_view(model: &Value) -> Result<String, CliError> {
     let _ = writeln!(output);
     let _ = writeln!(output, "## Surfaces");
     let _ = writeln!(output);
-    for surface in surfaces {
-        let name = string_field(surface, "name")?;
+    for name in SURFACE_NAMES {
         let _ = writeln!(output, "- {name}");
     }
     let _ = writeln!(output);
     let _ = writeln!(output, "## Services");
     let _ = writeln!(output);
-    for service in services {
-        let Some(name) = service.as_str() else {
-            return Err(CliError::usage(
-                "capabilities.services entries must be strings",
-            ));
-        };
+    for name in &services {
         let _ = writeln!(output, "- {name}");
     }
     if let Some(service_specs) = model.get("services").and_then(Value::as_object) {
         let _ = writeln!(output);
         let _ = writeln!(output, "## Lifecycle");
         let _ = writeln!(output);
-        for service in services {
-            let Some(name) = service.as_str() else {
-                return Err(CliError::usage(
-                    "capabilities.services entries must be strings",
-                ));
-            };
+        for name in &services {
             let Some(spec) = service_specs.get(name) else {
                 continue;
             };
-            let readiness = string_field(spec, "readinessProbe")?;
-            let health_policy = string_field(spec, "healthPolicy")?;
-            let classes = array_field(spec, "lifecycle")?
-                .iter()
-                .map(|operation| string_field(operation, "class"))
-                .collect::<Result<Vec<_>, _>>()?
+            let endpoint = string_field(model_field(spec, "endpoint")?, "endpointId")?;
+            let classes = model_field(spec, "lifecycle")?
+                .as_object()
+                .map(|lifecycle| lifecycle.keys().cloned().collect::<Vec<_>>())
+                .unwrap_or_default()
                 .join(", ");
-            let _ = writeln!(
-                output,
-                "- {name}: readiness {readiness}; health {health_policy}; operations {classes}"
-            );
+            let _ = writeln!(output, "- {name}: endpoint {endpoint}; operations {classes}");
         }
     }
     let _ = writeln!(output);
     let _ = writeln!(output, "## Tasks");
     let _ = writeln!(output);
-    for task in tasks {
-        let Some(name) = task.as_str() else {
-            return Err(CliError::usage(
-                "capabilities.tasks entries must be strings",
-            ));
-        };
+    for name in &tasks {
         let _ = writeln!(output, "- {name}");
     }
     Ok(output)
@@ -220,17 +225,24 @@ fn model_field<'a>(model: &'a Value, field: &'static str) -> Result<&'a Value, C
         .ok_or_else(|| CliError::usage(format!("model is missing {field}")))
 }
 
-fn array_field<'a>(model: &'a Value, field: &'static str) -> Result<&'a [Value], CliError> {
-    model_field(model, field)?
-        .as_array()
-        .map(Vec::as_slice)
-        .ok_or_else(|| CliError::usage(format!("{field} must be an array")))
-}
-
 fn string_field<'a>(model: &'a Value, field: &'static str) -> Result<&'a str, CliError> {
     model_field(model, field)?
         .as_str()
         .ok_or_else(|| CliError::usage(format!("{field} must be a string")))
+}
+
+fn u64_field(model: &Value, field: &'static str) -> Result<u64, CliError> {
+    model_field(model, field)?
+        .as_u64()
+        .ok_or_else(|| CliError::usage(format!("{field} must be a non-negative integer")))
+}
+
+/// The keys of a model object section, in the model's (sorted) order.
+fn object_keys(model: &Value, field: &'static str) -> Result<Vec<String>, CliError> {
+    model_field(model, field)?
+        .as_object()
+        .map(|object| object.keys().cloned().collect())
+        .ok_or_else(|| CliError::usage(format!("{field} must be an object")))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -684,7 +696,7 @@ mod tests {
         let output: serde_json::Value = serde_json::from_str(&output).unwrap();
 
         assert_eq!(output["project"]["projectId"], "view-test");
-        assert_eq!(output["capabilities"]["surfaces"][0], "model");
+        assert!(output["services"].get("synthetic").is_some());
     }
 
     #[test]
@@ -699,7 +711,7 @@ mod tests {
 
         assert_eq!(output["source"], "model.json");
         assert_eq!(output["modelTypes"]["runtimeAbi"], "nixfied-runtime-abi:1");
-        assert_eq!(output["surfaces"][1]["name"], "schema");
+        assert_eq!(output["surfaces"][1], "schema");
     }
 
     #[test]
@@ -743,35 +755,21 @@ mod tests {
             "target": {
                 "system": "aarch64-darwin"
             },
-            "capabilities": {
-                "services": ["synthetic"],
-                "tasks": ["smoke"],
-                "surfaces": [
-                    "model",
-                    "schema",
-                    "docs",
-                    "capabilities",
-                    "check",
-                    "run",
-                    "ps",
-                    "down",
-                    "clean"
-                ]
+            "slotPolicy": { "min": 0, "default": 0, "max": 0 },
+            "environments": {
+                "dev": { "services": ["synthetic"], "tasks": ["smoke"] }
             },
-            "runtimeConstraints": {
-                "allowedEnvironments": ["dev"]
+            "services": {
+                "synthetic": {
+                    "endpoint": { "endpointId": "synthetic-tcp" },
+                    "lifecycle": {
+                        "prepare": {}, "start": {}, "ready": {},
+                        "health": {}, "stop": {}, "clean": {}
+                    }
+                }
             },
-            "surfaces": [
-                { "name": "model" },
-                { "name": "schema" },
-                { "name": "docs" },
-                { "name": "capabilities" },
-                { "name": "check" },
-                { "name": "run" },
-                { "name": "ps" },
-                { "name": "down" },
-                { "name": "clean" }
-            ],
+            "tasks": { "smoke": {} },
+            "workflows": {},
             "docs": {
                 "title": "View Test",
                 "summary": "Generated from model.json."
