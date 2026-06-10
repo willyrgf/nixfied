@@ -415,7 +415,7 @@ fn health_failure_after_ready_records_distinct_lifecycle_failure() {
         .check_health(&fixture.model, &mut fixture.registry)
         .expect_err("health check should fail after readiness");
 
-    assert_eq!(health_error.code, ErrorCode::ModelAdmission);
+    assert_eq!(health_error.code, ErrorCode::LifecycleFailed);
     let service_status: String = fixture
         .registry
         .connection()
@@ -457,7 +457,7 @@ fn health_failure_after_ready_records_distinct_lifecycle_failure() {
     );
     assert_eq!(
         latest_health_terminal.error_code.as_deref(),
-        Some("MODEL_ADMISSION")
+        Some("LIFECYCLE_FAILED")
     );
     service
         .stop(&mut fixture.registry, 1000)
@@ -826,7 +826,7 @@ fn dependent_task_refuses_to_run_before_service_ready() {
     )
     .expect_err("task should wait for probe-ready service");
 
-    assert_eq!(error.code, ErrorCode::ModelAdmission);
+    assert_eq!(error.code, ErrorCode::DependencyUnavailable);
     let task_events: i64 = fixture
         .registry
         .connection()

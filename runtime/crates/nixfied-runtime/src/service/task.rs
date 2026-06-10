@@ -195,10 +195,7 @@ pub fn run_dependent_task_cancellable(
         };
         Err(RuntimeError::new(ErrorCode::Canceled, message))
     } else {
-        Err(RuntimeError::new(
-            ErrorCode::ModelAdmission,
-            failure_message,
-        ))
+        Err(RuntimeError::new(ErrorCode::TaskFailed, failure_message))
     }
 }
 
@@ -225,7 +222,7 @@ fn ensure_task_dependencies(
             .find(|service| &service.service_name == service_name)
             .ok_or_else(|| {
                 RuntimeError::new(
-                    ErrorCode::ModelAdmission,
+                    ErrorCode::DependencyUnavailable,
                     format!("task dependency {service_name} was not among the started services"),
                 )
             })?;

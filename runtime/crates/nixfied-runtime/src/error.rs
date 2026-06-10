@@ -27,6 +27,12 @@ pub enum ErrorCode {
     Canceled,
     LeaseStale,
     LeaseConflict,
+    // Execution-class failures: the model admitted cleanly, execution failed.
+    // These must never be reported for a pre-execution (admission) problem, so
+    // that `ModelAdmission` appearing after admission is, by construction, a leak.
+    TaskFailed,
+    LifecycleFailed,
+    DependencyUnavailable,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

@@ -792,11 +792,11 @@ pub fn ensure_service_instance_probe_ready(
     match status.as_deref() {
         Some("probe-ready") => Ok(()),
         Some(status) => Err(RuntimeError::new(
-            ErrorCode::ModelAdmission,
+            ErrorCode::DependencyUnavailable,
             format!("service {service_name} is {status}, not probe-ready"),
         )),
         None => Err(RuntimeError::new(
-            ErrorCode::ModelAdmission,
+            ErrorCode::DependencyUnavailable,
             format!("service {service_name} has not been started"),
         )),
     }
