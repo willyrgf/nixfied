@@ -577,6 +577,26 @@ fn workflow_nodes_must_reference_declared_tasks() {
 }
 
 #[test]
+fn rejects_http_get_probe_for_tcp_only_abi() {
+    let mut value = valid_model_json();
+    value["services"]["synthetic"]["probes"][0]["target"] = json!({
+        "kind": "http-get",
+        "endpointId": "synthetic-tcp",
+        "path": "/health",
+    });
+    let model: Model = serde_json::from_value(value).expect("model should deserialize");
+    match model
+        .validate()
+        .expect_err("http-get probes are not supported by the current ABI")
+    {
+        ValidationError::UnsupportedValue { field, .. } => {
+            assert_eq!(field, "services.probes.target.kind")
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
 fn host_absolute_placement_is_rejected() {
     let mut model = parse_valid_model();
     model.placement.state_root_template = "/tmp/nixfied".to_string();
