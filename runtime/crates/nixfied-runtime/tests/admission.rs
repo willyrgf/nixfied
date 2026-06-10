@@ -13,7 +13,7 @@ fn fixture_model() -> Value {
     json!({
         "modelVersion": 1,
         "toolchainId": "nixfied-toolchain:1",
-        "runtimeAbi": "nixfied-runtime-abi:1",
+        "runtimeAbi": nixfied_model::runtime_abi(),
         "generator": {
             "name": "nixfied",
             "version": "1",

@@ -1,0 +1,43 @@
+nixfied capability descriptor
+model-version: 1
+
+# The wire primitives the runtime admits and lowers. A field added or removed
+# here is a contract change; editing this manifest rotates the runtime ABI digest
+# so models emitted against the old contract are rejected by the identity check.
+primitive Model: modelVersion toolchainId runtimeAbi generator project target codebases environments slotPolicy placement state closures execs services tasks workflows docs
+primitive Target: system os arch closureSystem
+primitive Environment: services tasks
+primitive SlotPolicy: min default max
+primitive Placement: slotPlacements
+primitive SlotPlacement: slot candidatePorts
+primitive CandidatePortWindow: start end
+primitive ClosureSpec: kind storePath executable targetSystem operationBindings requiresExecutable effects
+primitive ExecSpec: closureId executable args env codebaseId cwd stdin timeoutMs outputCapture cancellationMode
+primitive ServiceSpec: lifecycle endpoint stateRefs logRefs containment identity
+primitive Lifecycle: prepare start ready health stop clean
+primitive PrepareSpec: operationId execId execArgs terminal
+primitive StartSpec: operationId execId execArgs terminal
+primitive ReadySpec: operationId probe terminal
+primitive HealthSpec: operationId probe terminal
+primitive StopSpec: operationId signal timeoutMs terminal
+primitive CleanSpec: operationId terminal
+primitive Endpoint: endpointId host
+primitive ProbeTiming: timeoutMs retryIntervalMs maxAttempts
+primitive TerminalSemantics: success failure
+primitive TaskSpec: operationId execId args dependsOnServicesReady exitPolicy outputCapture artifactRefs logRefs summaryRefs
+primitive WorkflowSpec: servicesRequired nodes
+primitive WorkflowNode: taskId dependsOn
+
+# The runtime command surfaces every model exposes.
+surface: model schema docs capabilities check run ps down clean
+
+# The closed stop signals the runtime can send.
+signal: TERM INT QUIT HUP
+
+# The typed registry status domains and their wire values.
+status RunStatus: service-starting canceling canceled completed task-succeeded task-failed service-failed proc-escaped stale
+status ServiceStatus: starting probe-ready stopped canceled failed escaped stale
+status ProcessStatus: starting running ready stopped succeeded failed canceled escaped stale
+status RunLeaseStatus: active canceling canceled completed failed stale
+status PortStatus: reserved binding bound active released stale
+status CleanupStatus: intent deleted failed
