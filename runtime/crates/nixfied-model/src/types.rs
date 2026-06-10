@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::num::{NonZeroU32, NonZeroU64};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -270,7 +271,7 @@ pub struct ExecSpec {
     pub codebase_id: String,
     pub cwd: String,
     pub stdin: StdinPolicy,
-    pub timeout_ms: u64,
+    pub timeout_ms: NonZeroU64,
     pub output_capture: OutputCapture,
     pub cancellation_mode: CancellationMode,
 }
@@ -344,9 +345,9 @@ pub enum SocketActivation {
 pub struct ProbeSpec {
     pub probe_id: String,
     pub target: ProbeTarget,
-    pub timeout_ms: u64,
-    pub retry_interval_ms: u64,
-    pub max_attempts: u32,
+    pub timeout_ms: NonZeroU64,
+    pub retry_interval_ms: NonZeroU64,
+    pub max_attempts: NonZeroU32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -418,8 +419,19 @@ pub enum HealthPolicy {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StopPolicy {
-    pub signal: String,
-    pub timeout_ms: u64,
+    pub signal: StopSignal,
+    pub timeout_ms: NonZeroU64,
+}
+
+/// The signal the runtime sends for graceful shutdown. A closed set so an
+/// unsendable signal is unrepresentable at the wire boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum StopSignal {
+    Term,
+    Int,
+    Quit,
+    Hup,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

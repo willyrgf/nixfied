@@ -228,6 +228,17 @@ impl StopSignal {
     }
 }
 
+impl From<nixfied_model::StopSignal> for StopSignal {
+    fn from(signal: nixfied_model::StopSignal) -> Self {
+        match signal {
+            nixfied_model::StopSignal::Term => Self::Term,
+            nixfied_model::StopSignal::Int => Self::Int,
+            nixfied_model::StopSignal::Quit => Self::Quit,
+            nixfied_model::StopSignal::Hup => Self::Hup,
+        }
+    }
+}
+
 /// A resolved task: the combined exec/task argument template, the services it
 /// gates on, and its success codes.
 #[derive(Debug, Clone)]

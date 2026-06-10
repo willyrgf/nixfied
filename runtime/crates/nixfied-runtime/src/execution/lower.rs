@@ -182,7 +182,7 @@ fn lower_service(
         probe: health_probe,
     };
 
-    let stop = lower_stop(name, class_op(lifecycle, LifecycleOpClass::Stop)?, stop_policy)?;
+    let stop = lower_stop(class_op(lifecycle, LifecycleOpClass::Stop)?, stop_policy);
     let clean = CleanOp {
         meta: decompose_op(class_op(lifecycle, LifecycleOpClass::Clean)?).meta,
     };
@@ -201,22 +201,13 @@ fn lower_service(
     })
 }
 
-fn lower_stop(
-    service_name: &str,
-    op: &LifecycleOpSpec,
-    stop_policy: &StopPolicy,
-) -> RuntimeResult<StopOp> {
+fn lower_stop(op: &LifecycleOpSpec, stop_policy: &StopPolicy) -> StopOp {
     let StopPolicy { signal, timeout_ms } = stop_policy;
-    let signal = StopSignal::from_name(signal).ok_or_else(|| {
-        reject(format!(
-            "service {service_name} stop signal {signal} is not supported"
-        ))
-    })?;
-    Ok(StopOp {
+    StopOp {
         meta: decompose_op(op).meta,
-        signal,
-        timeout: Duration::from_millis(*timeout_ms),
-    })
+        signal: StopSignal::from(*signal),
+        timeout: Duration::from_millis(timeout_ms.get()),
+    }
 }
 
 fn lower_task(task: &TaskSpec, execs: &BTreeMap<String, ExecSpec>) -> RuntimeResult<ExecTask> {
@@ -288,9 +279,9 @@ fn lower_probe(probes: &[ProbeSpec], probe_id: &str) -> RuntimeResult<(TcpProbe,
     Ok((
         TcpProbe {
             probe_id: probe_id.clone(),
-            timeout: Duration::from_millis(*timeout_ms),
-            retry_interval: Duration::from_millis(*retry_interval_ms),
-            max_attempts: *max_attempts,
+            timeout: Duration::from_millis(timeout_ms.get()),
+            retry_interval: Duration::from_millis(retry_interval_ms.get()),
+            max_attempts: max_attempts.get(),
         },
         endpoint_id,
     ))
@@ -326,7 +317,7 @@ fn resolve_exec(exec: &ExecSpec, extra_args: &[String]) -> ResolvedExec {
         args: args.iter().chain(extra_args).cloned().collect(),
         env: env.clone(),
         cwd: cwd.clone(),
-        timeout: Duration::from_millis(*timeout_ms),
+        timeout: Duration::from_millis(timeout_ms.get()),
     }
 }
 
