@@ -25,11 +25,8 @@ let
       pkgs.sqlite
       pkgs.git
     ];
-    # `--no-fail-fast`: run every test binary even after one fails, so a failing
-    # binary can never mask failures in a later one (cargo stops at the first
-    # failing binary by default).
     text = ''
-      cargo test --no-fail-fast --manifest-path runtime/Cargo.toml --workspace "$@"
+      cargo test --manifest-path runtime/Cargo.toml --workspace "$@"
     '';
   };
 
