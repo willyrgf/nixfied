@@ -1266,19 +1266,28 @@ pub(crate) fn terminate_process_tree_signal(
     signal: i32,
     timeout_ms: u64,
 ) -> RuntimeResult<bool> {
-    let snapshot = descendant_pids(pid).unwrap_or_default();
+    // Snapshot owned descendants with their start identities BEFORE signaling. A
+    // process-tree child may reparent to init and move to its own group after the
+    // supervisor exits, making it invisible to a descendant/pgid scan; the
+    // snapshot keeps it tracked, and the identity makes the tracking pid-reuse
+    // safe (a recycled pid has a different start identity).
+    let snapshot: Vec<(u32, Option<String>)> = descendant_pids(pid)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|child| (child, platform_start_identity(child)))
+        .collect();
     signal_process_group(pgid, signal)?;
-    if wait_until_process_tree_empty(pid, pgid, timeout_ms)? {
+    if wait_until_process_tree_empty(pid, pgid, &snapshot, timeout_ms)? {
         return Ok(false);
     }
-    let mut to_kill = descendant_pids(pid).unwrap_or(snapshot);
-    for descendant in to_kill.drain(..) {
+    kill_snapshot_survivors(&snapshot);
+    for descendant in descendant_pids(pid).unwrap_or_default() {
         unsafe {
             libc::kill(descendant as libc::pid_t, libc::SIGKILL);
         }
     }
     signal_process_group(pgid, libc::SIGKILL)?;
-    if wait_until_process_tree_empty(pid, pgid, 1000)? {
+    if wait_until_process_tree_empty(pid, pgid, &snapshot, 1000)? {
         Ok(true)
     } else {
         Err(RuntimeError::new(
@@ -1288,7 +1297,41 @@ pub(crate) fn terminate_process_tree_signal(
     }
 }
 
-fn wait_until_process_tree_empty(pid: u32, pgid: i32, timeout_ms: u64) -> RuntimeResult<bool> {
+/// `true` if the snapshotted pid is still the *same* live process — including one
+/// that escaped to its own process group. A dead, zombie, or pid-reused entry
+/// (start identity no longer matches) is treated as gone.
+fn snapshot_member_alive(pid: u32, expected: &Option<String>) -> bool {
+    match expected {
+        Some(identity) => {
+            !process_is_zombie(pid)
+                && platform_start_identity(pid).as_deref() == Some(identity.as_str())
+        }
+        None => false,
+    }
+}
+
+/// SIGKILL every snapshotted descendant still running as its original process,
+/// and the group it escaped into, so an owned child cannot outlive `stop`/`down`.
+fn kill_snapshot_survivors(snapshot: &[(u32, Option<String>)]) {
+    for (pid, identity) in snapshot {
+        if !snapshot_member_alive(*pid, identity) {
+            continue;
+        }
+        if let Ok(Some(group)) = process_group(*pid) {
+            let _ = signal_process_group(group, libc::SIGKILL);
+        }
+        unsafe {
+            libc::kill(*pid as libc::pid_t, libc::SIGKILL);
+        }
+    }
+}
+
+fn wait_until_process_tree_empty(
+    pid: u32,
+    pgid: i32,
+    snapshot: &[(u32, Option<String>)],
+    timeout_ms: u64,
+) -> RuntimeResult<bool> {
     let deadline = Instant::now() + Duration::from_millis(timeout_ms);
     loop {
         let root_alive = process_group(pid)?.is_some() && !process_is_zombie(pid);
@@ -1301,9 +1344,17 @@ fn wait_until_process_tree_empty(pid: u32, pgid: i32, timeout_ms: u64) -> Runtim
                     .flatten()
                     .is_some_and(|_| !process_is_zombie(child))
             });
-        // Once the supervisor is gone its children have been reaped by it; the
-        // process group emptying is the final confirmation.
-        if !root_alive && !descendants_alive && !process_group_has_live_member(pgid)? {
+        // A child that escaped to its own group after reparenting is neither a
+        // current descendant of `pid` nor in the supervisor's group, so the
+        // snapshot is the only thing that still sees it.
+        let escapee_alive = snapshot
+            .iter()
+            .any(|(child, identity)| snapshot_member_alive(*child, identity));
+        if !root_alive
+            && !descendants_alive
+            && !escapee_alive
+            && !process_group_has_live_member(pgid)?
+        {
             return Ok(true);
         }
         if Instant::now() >= deadline {
