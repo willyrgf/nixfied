@@ -1051,6 +1051,7 @@ fn cancellation_interrupts_task_and_terminates_task_group() {
         &mut fixture.registry,
         &[&service],
         "smoke",
+        "smoke",
         &cancellation,
     )
     .expect_err("task should be canceled");
