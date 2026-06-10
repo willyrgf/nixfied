@@ -2,7 +2,6 @@
 resolver = "3"
 members = [
   "crates/nixfied-cli",
-  "crates/nixfied-conformance",
   "crates/nixfied-model",
   "crates/nixfied-runtime",
 ]
