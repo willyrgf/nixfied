@@ -93,7 +93,13 @@
           nixfiedGate = import ./nix/gate.nix {
             inherit pkgs;
             runtime = nixfiedRuntimeDebug;
-            model = selfModel;
+            models = {
+              minimal = minimalModel;
+              postgres = postgresModel;
+              workflow = workflowModel;
+              polyglot = polyglotModel;
+              downstream = downstreamModel;
+            };
           };
           # `.#check` / `.#test` / `.#ci`: the framework's own source/test/CI gate.
           devApps = import ./nix/dev.nix {
