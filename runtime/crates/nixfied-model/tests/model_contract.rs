@@ -600,6 +600,23 @@ fn workflow_nodes_must_reference_declared_tasks() {
 }
 
 #[test]
+fn env_task_service_deps_must_be_declared_in_env_services() {
+    let mut value = valid_model_json();
+    // The env runs `smoke` (which depends on `synthetic`) but does not start it.
+    value["environments"]["dev"]["services"] = json!([]);
+    let model: Model = serde_json::from_value(value).expect("model should deserialize");
+    assert_eq!(
+        model
+            .validate()
+            .expect_err("env task dependency must be in env services"),
+        ValidationError::UndeclaredReference {
+            reference_kind: "environment.task.dependsOnServicesReady",
+            id: "synthetic".to_string(),
+        }
+    );
+}
+
+#[test]
 fn rejects_http_get_probe_for_tcp_only_abi() {
     let mut value = valid_model_json();
     value["services"]["synthetic"]["probes"][0]["target"] = json!({

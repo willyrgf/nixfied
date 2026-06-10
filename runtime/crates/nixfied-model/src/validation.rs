@@ -1184,6 +1184,11 @@ fn validate_references(model: &Model) -> Result<(), ValidationError> {
     }
 
     for env in model.environments.values() {
+        let env_services = env
+            .services
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
         for service_id in &env.services {
             if !service_ids.contains(service_id.as_str()) {
                 return Err(ValidationError::UndeclaredReference {
@@ -1198,6 +1203,19 @@ fn validate_references(model: &Model) -> Result<(), ValidationError> {
                     reference_kind: "environment.tasks",
                     id: task_id.clone(),
                 });
+            }
+            // A task the environment runs can only depend on services the
+            // environment starts; otherwise the run fails mid-flight on a missing
+            // dependency. Mirrors the workflow servicesRequired check.
+            if let Some(task) = model.tasks.get(task_id) {
+                for service in &task.depends_on_services_ready {
+                    if !env_services.contains(service.as_str()) {
+                        return Err(ValidationError::UndeclaredReference {
+                            reference_kind: "environment.task.dependsOnServicesReady",
+                            id: service.clone(),
+                        });
+                    }
+                }
             }
         }
     }
