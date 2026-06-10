@@ -536,6 +536,29 @@ fn accepts_a_bounded_acyclic_workflow() {
 }
 
 #[test]
+fn workflow_node_task_service_deps_must_be_required() {
+    let mut value = valid_model_json();
+    // The node's task `smoke` depends on `synthetic`, but the workflow does not
+    // declare it in servicesRequired, so the run plan would never start it.
+    value["workflows"]["pipeline"] = json!({
+        "workflowId": "pipeline",
+        "servicesRequired": [],
+        "nodes": [{ "nodeId": "first", "taskId": "smoke", "dependsOn": [] }],
+    });
+    value["capabilities"]["workflows"] = json!(["pipeline"]);
+    let model: Model = serde_json::from_value(value).expect("model should deserialize");
+    assert_eq!(
+        model
+            .validate()
+            .expect_err("node task service dependency must be in servicesRequired"),
+        ValidationError::UndeclaredReference {
+            reference_kind: "workflow.node.task.dependsOnServicesReady",
+            id: "synthetic".to_string(),
+        }
+    );
+}
+
+#[test]
 fn rejects_cyclic_workflow() {
     let mut value = valid_model_json();
     with_workflow(

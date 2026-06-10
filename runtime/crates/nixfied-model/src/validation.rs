@@ -172,6 +172,28 @@ fn validate_workflows(model: &Model) -> Result<(), ValidationError> {
                 }
             }
         }
+        // The run plan starts only the workflow's servicesRequired, so every
+        // service a node task depends on must be declared there; otherwise the
+        // workflow would fail at runtime with a missing dependency instead of
+        // being rejected at admission.
+        let required = workflow
+            .services_required
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        for node in &workflow.nodes {
+            let Some(task) = model.tasks.get(&node.task_id) else {
+                continue;
+            };
+            for service in &task.depends_on_services_ready {
+                if !required.contains(service.as_str()) {
+                    return Err(ValidationError::UndeclaredReference {
+                        reference_kind: "workflow.node.task.dependsOnServicesReady",
+                        id: service.clone(),
+                    });
+                }
+            }
+        }
         validate_workflow_acyclic(id, &workflow.nodes)?;
     }
     Ok(())
