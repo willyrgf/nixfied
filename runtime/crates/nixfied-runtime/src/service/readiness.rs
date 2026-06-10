@@ -36,7 +36,7 @@ pub fn wait_for_tcp_probe(
         ErrorCode::ReadinessTimeout,
         format!(
             "readiness probe {} did not connect to {socket_addr}: {}",
-            probe.probe_id,
+            probe.label,
             last_error
                 .map(|error| error.to_string())
                 .unwrap_or_else(|| "no attempts made".to_string())

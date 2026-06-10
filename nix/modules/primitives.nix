@@ -52,12 +52,32 @@ let
       };
     };
   };
+  probeTimingType = types.submodule {
+    options = {
+      timeoutMs = mkOption {
+        type = positiveInt;
+        default = 1000;
+        description = "Per-attempt probe timeout.";
+      };
+      retryIntervalMs = mkOption {
+        type = positiveInt;
+        default = 100;
+        description = "Probe retry interval.";
+      };
+      maxAttempts = mkOption {
+        type = positiveInt;
+        default = 20;
+        description = "Maximum probe attempts.";
+      };
+    };
+  };
   probeOpType = types.submodule {
     options = {
       inherit operationId terminal;
-      probeId = mkOption {
-        type = types.nonEmptyStr;
-        description = "Probe waited on for this operation.";
+      probe = mkOption {
+        type = probeTimingType;
+        default = { };
+        description = "Tcp-connect probe timing for the service endpoint.";
       };
     };
   };
@@ -121,74 +141,10 @@ let
         type = types.nonEmptyStr;
         description = "Stable logical endpoint identifier.";
       };
-      protocol = mkOption {
-        type = types.enum [ "tcp" ];
-        default = "tcp";
-        description = "Endpoint protocol.";
-      };
       host = mkOption {
         type = types.nonEmptyStr;
         default = "127.0.0.1";
-        description = "Endpoint bind host.";
-      };
-      ownershipVerification = mkOption {
-        type = types.enum [ "required" ];
-        default = "required";
-        description = "Endpoint ownership verification policy.";
-      };
-      socketActivation = mkOption {
-        type = types.enum [ "disabled" ];
-        default = "disabled";
-        description = "Socket activation policy.";
-      };
-    };
-  };
-
-  probeTargetType = types.submodule {
-    options = {
-      kind = mkOption {
-        type = types.enum [
-          "tcp-connect"
-          "http-get"
-        ];
-        description = "Probe target kind.";
-      };
-      endpointId = mkOption {
-        type = types.nonEmptyStr;
-        description = "Endpoint the probe observes.";
-      };
-      path = mkOption {
-        type = types.nullOr types.str;
-        default = null;
-        description = "HTTP path for http-get probes.";
-      };
-    };
-  };
-
-  probeType = types.submodule {
-    options = {
-      probeId = mkOption {
-        type = types.nonEmptyStr;
-        description = "Stable probe identifier.";
-      };
-      target = mkOption {
-        type = probeTargetType;
-        description = "Probe target.";
-      };
-      timeoutMs = mkOption {
-        type = positiveInt;
-        default = 1000;
-        description = "Per-attempt probe timeout.";
-      };
-      retryIntervalMs = mkOption {
-        type = positiveInt;
-        default = 100;
-        description = "Probe retry interval.";
-      };
-      maxAttempts = mkOption {
-        type = positiveInt;
-        default = 20;
-        description = "Maximum probe attempts.";
+        description = "Endpoint loopback bind host.";
       };
     };
   };
@@ -204,17 +160,9 @@ let
         type = lifecycleType;
         description = "Full generic lifecycle operation contract.";
       };
-      endpoints = mkOption {
-        type = types.listOf endpointType;
-        description = "Service endpoints.";
-      };
-      probes = mkOption {
-        type = types.listOf probeType;
-        description = "Readiness/health probes.";
-      };
-      readinessProbe = mkOption {
-        type = types.nonEmptyStr;
-        description = "Probe id used to verify readiness.";
+      endpoint = mkOption {
+        type = endpointType;
+        description = "The single tcp loopback endpoint the service binds.";
       };
       healthPolicy = mkOption {
         type = types.enum [

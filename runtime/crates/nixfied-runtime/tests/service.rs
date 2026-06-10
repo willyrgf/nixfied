@@ -464,11 +464,6 @@ fn wildcard_listener_does_not_satisfy_loopback_endpoint_ownership() {
 fn slot_one_service_uses_slot_placement_port_window() {
     let tmp = TempDir::new();
     let mut value = fixture_model("/bin/sleep", &["30"], 38180);
-    value["services"]["synthetic"]["endpoints"][0]["port"] = json!({
-        "kind": "candidate-window",
-        "start": 38180,
-        "end": 38180
-    });
     add_slot_one(&mut value, 38280, 38280);
     let model: Model = serde_json::from_value(value).expect("fixture model should parse");
     let admission = admission(&model, &tmp.path);
@@ -518,11 +513,6 @@ fn two_slots_keep_services_state_and_controls_isolated() {
         .expect("python3 is required for the M1 slot isolation proof");
     let tmp = TempDir::new();
     let mut value = fixture_model(&python, &["-c", python_listener_script(), "${port}"], 38210);
-    value["services"]["synthetic"]["endpoints"][0]["port"] = json!({
-        "kind": "candidate-window",
-        "start": 38210,
-        "end": 38210
-    });
     add_slot_one(&mut value, 38310, 38320);
     let model: Model = serde_json::from_value(value).expect("fixture model should parse");
     let admission = admission(&model, &tmp.path);
@@ -1363,14 +1353,14 @@ fn readiness_timeout_prefers_escape_discovered_during_probe() {
         ],
         port,
     );
-    let probe = fixture
+    let probe = &mut fixture
         .model
         .services
         .get_mut("synthetic")
         .expect("fixture has service")
-        .probes
-        .first_mut()
-        .expect("fixture has probe");
+        .lifecycle
+        .ready
+        .probe;
     probe.max_attempts = 30u32.try_into().unwrap();
     probe.retry_interval_ms = 20u64.try_into().unwrap();
     fixture.relower();
@@ -2859,12 +2849,12 @@ fn fixture_model(executable: &str, start_args: &[&str], port: u16) -> Value {
                     },
                     "ready": {
                         "operationId": "service.synthetic.ready",
-                        "probeId": "synthetic-tcp",
+                        "probe": { "timeoutMs": 250, "retryIntervalMs": 25, "maxAttempts": 40 },
                         "terminal": { "success": "ready", "failure": "not-ready" }
                     },
                     "health": {
                         "operationId": "service.synthetic.health",
-                        "probeId": "synthetic-tcp",
+                        "probe": { "timeoutMs": 250, "retryIntervalMs": 25, "maxAttempts": 40 },
                         "terminal": { "success": "healthy", "failure": "unhealthy" }
                     },
                     "stop": {
@@ -2878,29 +2868,7 @@ fn fixture_model(executable: &str, start_args: &[&str], port: u16) -> Value {
                         "terminal": { "success": "cleaned", "failure": "failed" }
                     }
                 },
-                "endpoints": [{
-                    "endpointId": "synthetic-tcp",
-                    "protocol": "tcp",
-                    "host": "127.0.0.1",
-                    "port": {
-                        "kind": "candidate-window",
-                        "start": port,
-                        "end": port
-                    },
-                    "ownershipVerification": "required",
-                    "socketActivation": "disabled"
-                }],
-                "probes": [{
-                    "probeId": "synthetic-tcp",
-                    "target": {
-                        "kind": "tcp-connect",
-                        "endpointId": "synthetic-tcp"
-                    },
-                    "timeoutMs": 250,
-                    "retryIntervalMs": 25,
-                    "maxAttempts": 40
-                }],
-                "readinessProbe": "synthetic-tcp",
+                "endpoint": { "endpointId": "synthetic-tcp", "host": "127.0.0.1" },
                 "healthPolicy": "explicit",
                 "stateRefs": ["slot"],
                 "logRefs": ["service.synthetic"],

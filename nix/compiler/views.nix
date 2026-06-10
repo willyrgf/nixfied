@@ -55,7 +55,7 @@
           serviceSpec = model.services.${service};
           classes = builtins.attrNames serviceSpec.lifecycle;
         in
-        "- ${service}: readiness ${serviceSpec.readinessProbe}; health ${serviceSpec.healthPolicy}; operations ${builtins.concatStringsSep ", " classes}"
+        "- ${service}: endpoint ${serviceSpec.endpoint.endpointId}; health ${serviceSpec.healthPolicy}; operations ${builtins.concatStringsSep ", " classes}"
       ) model.capabilities.services
     )}
 

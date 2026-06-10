@@ -74,7 +74,6 @@ let
   # One service definition reused for the api and the worker.
   mkAppService = name: {
     foreground = true;
-    readinessProbe = "${name}-tcp";
     healthPolicy = "explicit";
     lifecycle = {
       prepare = {
@@ -95,7 +94,6 @@ let
       };
       ready = {
         operationId = "service.${name}.ready";
-        probeId = "${name}-tcp";
         terminal = {
           success = "ready";
           failure = "not-ready";
@@ -103,7 +101,6 @@ let
       };
       health = {
         operationId = "service.${name}.health";
-        probeId = "${name}-tcp";
         terminal = {
           success = "healthy";
           failure = "unhealthy";
@@ -124,22 +121,9 @@ let
         };
       };
     };
-    endpoints = [
-      {
-        endpointId = "${name}-tcp";
-        protocol = "tcp";
-        host = "127.0.0.1";
-      }
-    ];
-    probes = [
-      {
-        probeId = "${name}-tcp";
-        target = {
-          kind = "tcp-connect";
-          endpointId = "${name}-tcp";
-        };
-      }
-    ];
+    endpoint = {
+      endpointId = "${name}-tcp";
+    };
     logRefs = [ "service.${name}" ];
   };
 in

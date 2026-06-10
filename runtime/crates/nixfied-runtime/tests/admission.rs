@@ -153,12 +153,12 @@ fn fixture_model() -> Value {
                     },
                     "ready": {
                         "operationId": "service.synthetic.ready",
-                        "probeId": "synthetic-tcp",
+                        "probe": { "timeoutMs": 1000, "retryIntervalMs": 100, "maxAttempts": 20 },
                         "terminal": { "success": "ready", "failure": "not-ready" }
                     },
                     "health": {
                         "operationId": "service.synthetic.health",
-                        "probeId": "synthetic-tcp",
+                        "probe": { "timeoutMs": 1000, "retryIntervalMs": 100, "maxAttempts": 20 },
                         "terminal": { "success": "healthy", "failure": "unhealthy" }
                     },
                     "stop": {
@@ -172,29 +172,7 @@ fn fixture_model() -> Value {
                         "terminal": { "success": "cleaned", "failure": "failed" }
                     }
                 },
-                "endpoints": [{
-                    "endpointId": "synthetic-tcp",
-                    "protocol": "tcp",
-                    "host": "127.0.0.1",
-                    "port": {
-                        "kind": "candidate-window",
-                        "start": 38080,
-                        "end": 38090
-                    },
-                    "ownershipVerification": "required",
-                    "socketActivation": "disabled"
-                }],
-                "probes": [{
-                    "probeId": "synthetic-tcp",
-                    "target": {
-                        "kind": "tcp-connect",
-                        "endpointId": "synthetic-tcp"
-                    },
-                    "timeoutMs": 1000,
-                    "retryIntervalMs": 100,
-                    "maxAttempts": 20
-                }],
-                "readinessProbe": "synthetic-tcp",
+                "endpoint": { "endpointId": "synthetic-tcp", "host": "127.0.0.1" },
                 "healthPolicy": "explicit",
                 "stateRefs": ["slot"],
                 "logRefs": ["service.synthetic"],

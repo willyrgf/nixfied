@@ -58,7 +58,6 @@ in
 
   nixfied.services.postgres = {
     foreground = true;
-    readinessProbe = "postgres-tcp";
     healthPolicy = "explicit";
     lifecycle = {
       prepare = {
@@ -101,7 +100,11 @@ in
       };
       ready = {
         operationId = "service.postgres.ready";
-        probeId = "postgres-tcp";
+        probe = {
+          timeoutMs = 1000;
+          retryIntervalMs = 200;
+          maxAttempts = 60;
+        };
         terminal = {
           success = "ready";
           failure = "not-ready";
@@ -109,7 +112,11 @@ in
       };
       health = {
         operationId = "service.postgres.health";
-        probeId = "postgres-tcp";
+        probe = {
+          timeoutMs = 1000;
+          retryIntervalMs = 200;
+          maxAttempts = 60;
+        };
         terminal = {
           success = "healthy";
           failure = "unhealthy";
@@ -133,25 +140,9 @@ in
         };
       };
     };
-    endpoints = [
-      {
-        endpointId = "postgres-tcp";
-        protocol = "tcp";
-        host = "127.0.0.1";
-      }
-    ];
-    probes = [
-      {
-        probeId = "postgres-tcp";
-        target = {
-          kind = "tcp-connect";
-          endpointId = "postgres-tcp";
-        };
-        timeoutMs = 1000;
-        retryIntervalMs = 200;
-        maxAttempts = 60;
-      }
-    ];
+    endpoint = {
+      endpointId = "postgres-tcp";
+    };
     stateRefs = [ "slot" ];
     logRefs = [ "service.postgres" ];
     containment = "process-tree";
