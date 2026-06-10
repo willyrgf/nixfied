@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use nixfied_model::Model;
 
 use crate::error::RuntimeResult;
+use crate::execution::{ExecutionModel, lower, prove_all_plans_feasible};
 use crate::model_loader::LoadedModel;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,6 +46,9 @@ pub struct Admission {
     pub toolchain_id: String,
     pub target_system: String,
     pub source: source::AdmittedSource,
+    /// The lowered, executable view of the model. Admission proves a concrete plan
+    /// exists for every slot/selection; the executor consumes only this.
+    pub execution_model: ExecutionModel,
 }
 
 impl Admission {
@@ -55,11 +59,18 @@ impl Admission {
         let source = source::check_source(&loaded.model, loaded)?;
         closures::check_closures(&loaded.model, loaded, context)?;
         secrets::check_secrets(&loaded.model, loaded)?;
-        Ok(from_loaded(&loaded.model, loaded, source))
+        let execution_model = lower(&loaded.model)?;
+        prove_all_plans_feasible(&execution_model)?;
+        Ok(from_loaded(&loaded.model, loaded, source, execution_model))
     }
 }
 
-fn from_loaded(model: &Model, loaded: &LoadedModel, source: source::AdmittedSource) -> Admission {
+fn from_loaded(
+    model: &Model,
+    loaded: &LoadedModel,
+    source: source::AdmittedSource,
+    execution_model: ExecutionModel,
+) -> Admission {
     Admission {
         model_path: loaded.path.clone(),
         computed_model_hash: loaded.computed_model_hash.clone(),
@@ -69,6 +80,7 @@ fn from_loaded(model: &Model, loaded: &LoadedModel, source: source::AdmittedSour
         toolchain_id: model.toolchain_id.clone(),
         target_system: model.target.system.clone(),
         source,
+        execution_model,
     }
 }
 
