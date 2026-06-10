@@ -4,7 +4,6 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -26,6 +25,9 @@ use nixfied_runtime::{Admission, AdmittedSource, ErrorCode};
 use serde_json::{Value, json};
 
 use nixfied_runtime::control::{down_owned_process_groups, ps};
+
+mod common;
+use common::*;
 
 #[test]
 fn starts_foreground_service_in_owned_process_group_and_records_before_ready() {
@@ -2722,182 +2724,7 @@ fn runtime_drives_full_lifecycle_without_invoking_nix() {
 }
 
 fn fixture_model(executable: &str, start_args: &[&str], port: u16) -> Value {
-    json!({
-        "modelVersion": 1,
-        "toolchainId": "nixfied-toolchain:1",
-        "runtimeAbi": nixfied_model::runtime_abi(),
-        "generator": {
-            "name": "nixfied",
-            "version": "1",
-            "emitter": "nix/compiler/emit-model.nix"
-        },
-        "project": {
-            "projectId": "runtime-test",
-            "name": "Runtime Test"
-        },
-        "target": {
-            "system": host_system(),
-            "os": host_os(),
-            "arch": host_arch(),
-            "closureSystem": host_system()
-        },
-        "codebases": [{
-            "codebaseId": "main",
-            "logicalRoot": ".",
-            "sourceMode": "live-workspace",
-            "sourceIdentity": "live",
-            "sourcePolicy": {
-                "dirtyPolicy": "warn",
-                "admissionFingerprintPolicy": "live-fingerprint"
-            }
-        }],
-        "environments": {
-            "dev": {
-                "services": ["synthetic"],
-                "tasks": ["smoke"]
-            }
-        },
-        "slotPolicy": {
-            "min": 0,
-            "default": 0,
-            "max": 0
-        },
-        "placement": {
-            "slotPlacements": {
-                "0": {
-                    "slot": 0,
-                    "candidatePorts": {
-                        "start": port,
-                        "end": port
-                    }
-                }
-            }
-        },
-        "state": {
-            "markerIdentity": "nixfied-state",
-            "stateEpoch": "1",
-            "cleanupPolicy": "delete-on-clean",
-            "persistence": "run-scoped"
-        },
-        "closures": {
-            "synthetic-helper": {
-                "kind": "executable",
-                "storePath": "/nix/store/test-synthetic-helper",
-                "executable": executable,
-                "targetSystem": host_system(),
-                "operationBindings": [
-                    "service.synthetic.start",
-                    "service.synthetic.stop",
-                    "task.smoke.run"
-                ],
-                "requiresExecutable": true,
-                "effects": ["process", "network-listener"]
-            }
-        },
-        "execs": {
-            "synthetic-helper": {
-                "closureId": "synthetic-helper",
-                "executable": executable,
-                "args": [],
-                "env": {},
-                "codebaseId": "main",
-                "cwd": ".",
-                "stdin": "null",
-                "timeoutMs": 30000,
-                "outputCapture": "stdout-stderr",
-                "cancellationMode": "kill-process-group"
-            }
-        },
-        "services": {
-            "synthetic": {
-                "lifecycle": {
-                    "prepare": {
-                        "operationId": "service.synthetic.prepare",
-                        "execId": null,
-                        "execArgs": [],
-                        "terminal": { "success": "prepared", "failure": "failed" }
-                    },
-                    "start": {
-                        "operationId": "service.synthetic.start",
-                        "execId": "synthetic-helper",
-                        "execArgs": start_args,
-                        "terminal": { "success": "spawned", "failure": "failed" }
-                    },
-                    "ready": {
-                        "operationId": "service.synthetic.ready",
-                        "probe": { "timeoutMs": 250, "retryIntervalMs": 25, "maxAttempts": 40 },
-                        "terminal": { "success": "ready", "failure": "not-ready" }
-                    },
-                    "health": {
-                        "operationId": "service.synthetic.health",
-                        "probe": { "timeoutMs": 250, "retryIntervalMs": 25, "maxAttempts": 40 },
-                        "terminal": { "success": "healthy", "failure": "unhealthy" }
-                    },
-                    "stop": {
-                        "operationId": "service.synthetic.stop",
-                        "signal": "TERM",
-                        "timeoutMs": 5000,
-                        "terminal": { "success": "stopped", "failure": "failed" }
-                    },
-                    "clean": {
-                        "operationId": "service.synthetic.clean",
-                        "terminal": { "success": "cleaned", "failure": "failed" }
-                    }
-                },
-                "endpoint": { "endpointId": "synthetic-tcp", "host": "127.0.0.1" },
-                "stateRefs": ["slot"],
-                "logRefs": ["service.synthetic"],
-                "containment": "process-group",
-                "identity": {
-                    "serviceAddressHash": "service-address",
-                    "endpointIdentityHash": "endpoint",
-                    "stateIdentityHash": "state",
-                    "runtimeCompatibilityHash": "runtime",
-                    "targetIdentityHash": "target"
-                }
-            }
-        },
-        "tasks": {
-            "smoke": {
-                "operationId": "task.smoke.run",
-                "execId": "synthetic-helper",
-                "args": ["task", "--host", "127.0.0.1", "--port", "${port}"],
-                "dependsOnServicesReady": ["synthetic"],
-                "exitPolicy": {
-                    "successCodes": [0]
-                },
-                "outputCapture": "stdout-stderr",
-                "artifactRefs": [],
-                "logRefs": ["task.smoke"],
-                "summaryRefs": ["summary"]
-            }
-        },
-        "workflows": {},
-        "docs": {
-            "title": "Runtime Test",
-            "summary": "Runtime admission fixture."
-        }
-    })
-}
-
-fn host_system() -> String {
-    format!("{}-{}", host_arch(), host_os())
-}
-
-fn host_arch() -> &'static str {
-    match std::env::consts::ARCH {
-        "aarch64" => "aarch64",
-        "x86_64" => "x86_64",
-        other => other,
-    }
-}
-
-fn host_os() -> &'static str {
-    match std::env::consts::OS {
-        "macos" => "darwin",
-        "linux" => "linux",
-        other => other,
-    }
+    common::synthetic_model(executable, start_args, port, port)
 }
 
 fn python3_path() -> Option<&'static str> {
@@ -2968,48 +2795,6 @@ fn lifecycle_events(registry: &Registry) -> Vec<LifecycleEvent> {
         .expect("lifecycle events should query")
         .collect::<Result<Vec<_>, _>>()
         .expect("lifecycle events should collect")
-}
-
-struct TempDir {
-    path: PathBuf,
-}
-
-impl TempDir {
-    fn new() -> Self {
-        let mut path = std::env::temp_dir();
-        path.push(format!(
-            "nixfied-service-test-{}-{}",
-            std::process::id(),
-            unique_suffix()
-        ));
-        fs::create_dir_all(&path).expect("temp dir should be created");
-        Self { path }
-    }
-}
-
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.path);
-    }
-}
-
-fn unique_suffix() -> u128 {
-    static NEXT_ID: AtomicU64 = AtomicU64::new(0);
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("time should be available")
-        .as_nanos();
-    now + u128::from(NEXT_ID.fetch_add(1, Ordering::Relaxed))
-}
-
-fn temp_marker(prefix: &str) -> PathBuf {
-    let mut path = std::env::temp_dir();
-    path.push(format!(
-        "{prefix}-{}-{}",
-        std::process::id(),
-        unique_suffix()
-    ));
-    path
 }
 
 fn runtime_binary() -> PathBuf {

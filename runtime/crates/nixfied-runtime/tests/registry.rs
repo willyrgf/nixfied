@@ -1,9 +1,8 @@
-use std::fs;
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
-
 use nixfied_runtime::ErrorCode;
 use nixfied_runtime::registry::{EventInsert, Registry, RegistryIdentity, SCHEMA_VERSION};
+
+mod common;
+use common::*;
 
 #[test]
 fn creates_registry_schema_with_wal() {
@@ -180,36 +179,4 @@ fn rejects_nonempty_unversioned_registry() {
 
 fn identity() -> RegistryIdentity {
     RegistryIdentity::default_slot("minimal", "nixfied-runtime-abi:1", "nixfied-toolchain:1")
-}
-
-struct TempDir {
-    path: PathBuf,
-}
-
-impl TempDir {
-    fn new() -> Self {
-        let mut path = std::env::temp_dir();
-        path.push(format!(
-            "nixfied-registry-test-{}-{}",
-            std::process::id(),
-            unique_suffix()
-        ));
-        fs::create_dir_all(&path).expect("temp dir should be created");
-        Self { path }
-    }
-}
-
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.path);
-    }
-}
-
-fn unique_suffix() -> u128 {
-    static NEXT_ID: AtomicU64 = AtomicU64::new(0);
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("time should be available")
-        .as_nanos();
-    now + u128::from(NEXT_ID.fetch_add(1, Ordering::Relaxed))
 }
