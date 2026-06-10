@@ -728,8 +728,27 @@ fn string_array(run: &Value, array: &str, field: &str) -> Vec<String> {
 /// schema view names model.json as its source and mirrors the contract identity,
 /// and the capabilities view equals `model.capabilities` exactly. (Folded in from
 /// the former `tests/views/prove-view-surfaces.sh`, now run for every example.)
+/// The framework-owned public command surfaces. Mirrors the runtime's surface set
+/// and the Nix view producer; the gate asserts both views agree with it, so a
+/// drift in any one is caught.
+const FRAMEWORK_SURFACES: [&str; 9] = [
+    "model",
+    "schema",
+    "docs",
+    "capabilities",
+    "check",
+    "run",
+    "ps",
+    "down",
+    "clean",
+];
+
+/// The `schema` and `capabilities` views are pure projections of the model, so the
+/// gate re-derives them here and cross-checks the emitted views — no checked-in
+/// snapshot. (`docs.md` is the human-readable rendering and stays a golden.)
 fn assert_views_project_model(model_json: &Path, model_dir: &Path) -> Result<(), String> {
     let model = read_json(model_json)?;
+
     let schema = read_json(&model_dir.join("views").join("schema.json"))?;
     if schema.get("source").and_then(Value::as_str) != Some("model.json") {
         return Err("schema view source is not model.json".into());
@@ -744,14 +763,52 @@ fn assert_views_project_model(model_json: &Path, model_dir: &Path) -> Result<(),
             ));
         }
     }
+    if schema.get("surfaces") != Some(&json!(FRAMEWORK_SURFACES)) {
+        return Err("schema view surfaces are not the framework surface set".into());
+    }
+
     let capabilities = read_json(&model_dir.join("views").join("capabilities.json"))?;
-    if model.get("capabilities") != Some(&capabilities) {
-        return Err("capabilities view does not equal model.capabilities".into());
+    let expected = derive_capabilities(&model)?;
+    if capabilities != expected {
+        return Err(format!(
+            "capabilities view does not project the model: expected {expected}, got {capabilities}"
+        ));
     }
     Ok(())
 }
 
-const GOLDEN_VIEWS: [&str; 3] = ["schema.json", "capabilities.json", "docs.md"];
+/// Re-derive the capabilities projection from the model: the keys of each section,
+/// the slot range, and the framework surfaces.
+fn derive_capabilities(model: &Value) -> Result<Value, String> {
+    let keys = |field: &str| -> Result<Vec<String>, String> {
+        model
+            .get(field)
+            .and_then(Value::as_object)
+            .map(|object| object.keys().cloned().collect())
+            .ok_or_else(|| format!("model.{field} is not an object"))
+    };
+    let slot_policy = model
+        .get("slotPolicy")
+        .ok_or_else(|| "model has no slotPolicy".to_string())?;
+    let slot = |field: &str| -> Result<u64, String> {
+        slot_policy
+            .get(field)
+            .and_then(Value::as_u64)
+            .ok_or_else(|| format!("slotPolicy.{field} is not an integer"))
+    };
+    Ok(json!({
+        "environments": keys("environments")?,
+        "slots": (slot("min")?..=slot("max")?).collect::<Vec<_>>(),
+        "services": keys("services")?,
+        "tasks": keys("tasks")?,
+        "workflows": keys("workflows")?,
+        "surfaces": FRAMEWORK_SURFACES,
+    }))
+}
+
+/// Only the human-readable rendering is snapshotted; `schema.json` and
+/// `capabilities.json` are derivations, cross-checked in `assert_views_project_model`.
+const GOLDEN_VIEWS: [&str; 1] = ["docs.md"];
 
 fn diff_goldens(check: &str, model_dir: &Path, update: bool) -> Result<(), String> {
     let checkout = checkout()?;

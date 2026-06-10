@@ -1,1 +1,0 @@
-{"environments":["dev"],"services":["synthetic"],"slots":[0],"surfaces":["model","schema","docs","capabilities","check","run","ps","down","clean"],"tasks":["smoke"],"workflows":[]}
