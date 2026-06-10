@@ -48,6 +48,13 @@ struct NodeResult {
     node_id: String,
     task_id: String,
     success: bool,
+    exit_code: Option<i32>,
+    // Where the node's full execution detail lives. For a conformance check this
+    // stdout log is the check's verdict (e.g. the two per-slot Postgres in
+    // `slots`), so the summary links each node straight to its evidence.
+    stdout_path: PathBuf,
+    stderr_path: PathBuf,
+    summary_path: PathBuf,
 }
 
 #[derive(Debug, Serialize)]
@@ -349,6 +356,10 @@ fn run_m0_admitted(
                     node_id: node.node_id.clone(),
                     task_id: task_id.clone(),
                     success: task_run.success,
+                    exit_code: task_run.exit_code,
+                    stdout_path: task_run.stdout_path.clone(),
+                    stderr_path: task_run.stderr_path.clone(),
+                    summary_path: task_run.summary_path.clone(),
                 });
                 task_runs.push(task_run);
             }
