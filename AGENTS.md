@@ -1,34 +1,100 @@
 # AGENTS.md
 
-This repository is the Nixfied v2 greenfield implementation. Keep work small,
-RFC-shaped, and explicit.
+This repository is Nixfied: a Nix-authored project model with a generic, Nix-free
+Rust runtime. This file is the contributor/agent guide and the architectural
+contract. Keep work small, explicit, and within the invariants below.
 
-## Authority
+## Architecture
 
-- Read `RFC_v2.md` before architectural work. It is the source of truth.
-- `RFC_v2_implementation_plan_M1to7.md` records the executed plan: the capability
-  line (M1-M6; M7 deferred) and the consolidation phase (C1 self-hosted
-  conformance gate, C2 de-milestoning) are implemented. `RFC_v2_implementation_plan_M0.md`
-  is the earlier Milestone 0 plan and is historical.
-- If the RFC and existing code disagree, stop and make the disagreement clear
-  before changing architecture.
+One boundary defines the product, split by verb:
+
+| Verb | Owner |
+| --- | --- |
+| **Evaluate / build / realise** (modules → `model.json`, closures) | **Nix**, at authoring/build time |
+| **Admit / execute / reconcile / clean** (process groups, ports, registry, cleanup) | **Rust**, against `model.json` and OS reality |
+
+- **Nix is the user-facing integration and correctness layer.** Typed modules
+  evaluate to one canonical `model.json`; invalid intent never compiles into an
+  admitted model. Nix builds/realises closures and emits disposable views. Nix
+  never starts services, owns process state, mutates the registry, or reports
+  liveness.
+- **Rust is the hidden, generic runtime.** `nixfied-runtime` reads one
+  `model.json`, validates the admission contract, and owns all impure behavior. It
+  knows no domain (no Postgres/Python/etc.) — it executes generic primitives and
+  enforces typed lifecycle semantics. It never invokes Nix.
+- **`model.json` is the only semantic seam.** `schema`, `docs`, and
+  `capabilities` are disposable projections of it, not independent authority.
+
+Correctness is layered: model correctness (Nix validation) → closure correctness
+(Nix realisation) → admission correctness (Rust host checks) → execution
+correctness (Rust impure graph).
+
+Two binaries: `nixfied-runtime` (hidden engine: `check`, `run`, `ps`, `down`,
+`clean`) and `nixfied` (ergonomic CLI: `model`, `schema`, `docs`, `capabilities`,
+`install`). `compile` is `nix build`; `install`/`upgrade`/`gate` are flake apps.
+
+## Invariants (the contract)
+
+These hold across the codebase; do not weaken them without an explicit,
+deliberate change to the contract (and matching version bump + docs + tests):
+
+- **MODEL-SEAM-1 / SINGLE-MODEL-1:** `model.json` is the only required semantic
+  artifact; views are generated from it, never separate authority.
+- **MODEL-ORIGIN-1:** normal admission requires `model.json` under the Nix store;
+  non-store admission is an unstable test/dev escape hatch (`--allow-non-store-model`).
+- **MODEL-CONTRACT-1:** the model carries the full admission contract
+  (generator/toolchain, runtime ABI, target, source policy, closure metadata,
+  layered service identity, state policy, secret descriptors).
+- **HASH-1:** the runtime computes `computedModelHash = sha256(raw bytes)`; no
+  self-hash is embedded.
+- **ABI-1:** admission requires an exact `runtimeAbi` / `toolchainId` match; no
+  cross-version compatibility, no migrations.
+- **SEAM-1:** `nixfied-runtime` never invokes Nix, `nix-store`, `nix build`, or
+  `nix eval`, and never imports Nix expressions.
+- **PREPARE-1:** every referenced closure is realised before the runtime starts;
+  the runtime only verifies existence/executability/target/declaration.
+- **RUNTIME-GENERIC-1:** the runtime executes generic primitives; concrete
+  adapters are Nix-side model generators. A required runtime change for a specific
+  service is a signal to generalize the primitive set, not to specialize.
+- **NIX-API-1:** Nix modules are the integration API; project behavior is typed
+  Nix data compiled into generic primitives.
+- **SOURCE-1:** runtime operations observe source only through declared
+  `codebaseId`s.
+- **SVC-ID-1:** service reuse requires exact service address, endpoint identity,
+  state identity, runtime compatibility hash, and target identity.
+- **PORT-1:** readiness requires verified endpoint ownership, not just an open port.
+- **REG-1 / REG-ORDER-1 / LIVE-1:** one transactional per-slot SQLite registry
+  owns shared mutable state with a total per-slot event order; liveness is
+  reconciled against the OS before being reported.
+- **GC-1 / GC-2:** cleanup is idempotent, crash-safe, path-confined, marker-gated,
+  lease-gated, process-gated, and policy-gated.
+- **PROC-1..3 / PROC-CAP-1:** every spawned process belongs to a runtime-owned
+  process group; cancellation propagates to the whole group; a long-lived process
+  counts as started only after a registry process record; admission fails if a
+  service needs stronger containment than the host supports.
+- **SECRET-1 / REDACT-1:** the model holds secret references, never values;
+  persistent output is redacted before write.
+- **SURFACE-1:** a public command is stable only when declared in `model.surfaces`.
+- **SHELL-1 / NIX-1:** shell cannot own graph/registry/summary/validation/liveness/
+  cleanup semantics; Nix cannot own live supervision/liveness/cancellation/registry/
+  cleanup.
+
+The runtime error contract (stable codes/exit classes) — `MODEL_NOT_STORE_OUTPUT`,
+`MODEL_INVALID`, `MODEL_ADMISSION`, `RUNTIME_ABI_MISMATCH`, `SOURCE_MISMATCH`,
+`PLATFORM_UNSUPPORTED`, `CLOSURE_MISSING`, `PORT_CONFLICT`, `PORT_UNVERIFIABLE`,
+`STATE_UNWRITABLE`, `STATE_UNOWNED`, `LEASE_STALE`/`LEASE_CONFLICT`, `PROC_ESCAPE`,
+`READINESS_TIMEOUT`, `SECRET_UNAVAILABLE`, `SECRET_LEAK_BLOCKED`, `CANCELED`,
+`CLEANUP_REFUSED`, `REGISTRY_CORRUPT` — is public API for the current ABI.
 
 ## Non-Negotiable Boundaries
 
-- `model.json` is the only semantic seam between Nix and Rust.
-- Do not add required `manifest.json`, `schema.json`, `capabilities.json`, or
-  any other semantic authority.
+- `model.json` is the only semantic seam; do not add a required `manifest.json`,
+  `schema.json`, `capabilities.json`, or any other semantic authority.
 - Generated views are disposable projections from `model.json`.
-- `nixfied-runtime` must never invoke Nix, `nix-store`, `nix build`, or
-  `nix eval`.
+- `nixfied-runtime` must never invoke Nix in any form (SEAM-1).
 - Do not preserve or recreate v1 layouts, commands, fixtures, sidecars, APIs, or
-  compatibility shims.
-- Do not add migrations or compatibility layers for old models.
-- Workflows, the Postgres adapter, multi-slot, multi-service-per-run, and the
-  generic declaration surface are now implemented. Still deferred (do not add
-  without an explicit, RFC-shaped reason): real secret injection, service reuse
-  beyond exact-match identity, SQLite migrations, runtime adapter protocols, and
-  the optional manifest envelope (M7).
+  compatibility shims; do not add migrations or compatibility layers for old models.
+- Keep host-absolute paths out of `model.json`; materialise host placement in Rust.
 
 ## Project Map
 
@@ -38,20 +104,21 @@ nix/compiler/                resolve -> validate -> derive -> emit model/views
 nix/spec/                    contract constants and model shape
 nix/adapters/                Nix-side adapters (synthetic, postgres) + default.nix
 nix/install/                 install/upgrade surfaces (shell embedded in .nix modules)
-nix/packages/                host-Rust-free build of the runtime/conformance binaries
+nix/packages/                host-Rust-free build of the runtime/cli/conformance binaries
+nix/gate.nix                 `nix run .#gate` launcher for the conformance gate
 nix/lib/                     pure Nix helper functions
 nixfied.nix                  the framework's self-project: the `conformance` workflow
 runtime/crates/nixfied-model serde model contract + structural validation
 runtime/crates/nixfied-runtime
-                              Nix-free admission, registry, state, services,
-                              endpoint ownership, tasks, workflows, and controls
-runtime/crates/nixfied-cli   placeholder CLI crate
+                             Nix-free admission, registry, state, services,
+                             endpoint ownership, tasks, workflows, and controls
+runtime/crates/nixfied-cli   ergonomic CLI: model/schema/docs/capabilities/install
 runtime/crates/nixfied-conformance
-                              per-check conformance closure (`--check <name>`) run as
-                              the task nodes of the self-hosted conformance workflow;
-                              `goldens/` holds the schema/docs/capabilities snapshots
+                             per-check conformance closure (`--check <name>`) run as
+                             the task nodes of the self-hosted conformance workflow;
+                             `goldens/` holds the schema/docs/capabilities snapshots
 examples/                    downstream-shaped examples: minimal, postgres,
-                              workflow, polyglot-stack, downstream (the worked example)
+                             workflow, polyglot-stack, downstream (the worked example)
 ```
 
 There is no `tests/` directory: end-to-end behavior lives in the cargo floor
@@ -66,7 +133,7 @@ There is no `tests/` directory: end-to-end behavior lives in the cargo floor
   contracts or broad dynamic dispatch.
 - Explicit boundaries: keep public APIs, model fields, and CLI output schemas
   intentional. Do not leak registry, OS, or placement internals through stable
-  surfaces unless the RFC makes them part of the contract.
+  surfaces unless they are part of the contract.
 - Performance is part of correctness: avoid accidental allocation or cloning in
   hot paths such as admission, reconciliation, readiness, and registry loops.
   Measure before optimizing.
@@ -139,10 +206,10 @@ floor first, then structural gates, then the dogfood workflow) and is exactly
 what CI runs (`.github/workflows/conformance.yml`):
 
 ```sh
-# 3. Dogfood gate: nixfied runs its own `conformance` workflow. The one-liner
-#    rebuilds the runtime + self-model from the working tree, smoke-checks, then
-#    runs the workflow in a fixed state dir ($TMPDIR/nixfied-gate) wiped fresh each
-#    run and kept afterward for inspection. Run from the repo root.
+# Dogfood gate: nixfied runs its own `conformance` workflow. The one-liner
+# rebuilds the runtime + self-model from the working tree, smoke-checks, then runs
+# the workflow in a fixed state dir ($TMPDIR/nixfied-gate) wiped fresh each run and
+# kept afterward for inspection. Run from the repo root.
 nix run .#gate                     # forward args after `--`, e.g. -- --timeout-ms 120000
 
 # The `gate` app is only a launcher; the expanded form (what CI runs) is:
@@ -162,19 +229,32 @@ Each writes a ground-truth verdict to `$NIXFIED_CONFORMANCE_ARTIFACTS`. To refre
 the golden view snapshots after an intended view change, run a capability check
 with `--update-goldens`.
 
-There are no e2e shell proofs left: the cancellation/GC/lifecycle invariants are
+There are no e2e shell proofs: the cancellation/GC/lifecycle invariants are
 white-box cargo tests, SEAM-1 (the runtime never invokes nix) is the
 `runtime_drives_full_lifecycle_without_invoking_nix` cargo test, and the
 view→model projection contract is asserted inside every capability check.
+
+## Deferred
+
+Intentionally not implemented. Do not add without an explicit, deliberate,
+contract-shaped reason (and the matching validation + runtime path + proof):
+
+- ergonomic surfaces `up`, `logs`, `validate --deep`;
+- multiple environments beyond `dev`;
+- `until-idle` / `persistent-until-down` service lifetimes, service reuse, and
+  borrower leases (only `run-scoped` is implemented);
+- additional source modes (`snapshot`, `flake-input`) and non-`fail` port
+  collision policies;
+- real secret injection (the model accepts only an empty `secrets` section);
+- a portable, non-semantic manifest envelope; a dynamic runtime adapter protocol.
 
 ## Git Hygiene
 
 - Inspect `git status --short --untracked-files=all` before editing.
 - Do not revert unrelated user changes.
-- Prefer deleting incompatible old structure over wrapping it when a requested
-  milestone intentionally replaces behavior.
+- Prefer deleting incompatible old structure over wrapping it when a change
+  intentionally replaces behavior.
 - Keep commits focused on one architectural slice when commit-by-commit work is
   requested.
-- Before committing architecture changes, review the diff against `RFC_v2.md`,
-  scope discipline, tests, regressions, and accidental compatibility
-  preservation.
+- Before committing architecture changes, review the diff against the invariants
+  and boundaries above, scope discipline, tests, and regressions.

@@ -14,7 +14,7 @@ set -euo pipefail
 
 # Nixfied upgrade surface.
 #
-# Ownership boundary (RFC v2 "Install & Upgrade Ownership"):
+# Ownership boundary:
 #   - Nixfied owns the flake input pin and the import/compile wiring.
 #   - The project owns every semantic declaration in nixfied.nix.
 # This command therefore only ever rewrites the `nixfied.url` input pin and
