@@ -18,10 +18,5 @@ in
       os = osFromSystem system;
       arch = archFromSystem system;
       closureSystem = system;
-      requiredRuntimeCapabilities = {
-        processGroup = true;
-        tcpPortOwnership = true;
-        sqliteWal = true;
-      };
     };
 }

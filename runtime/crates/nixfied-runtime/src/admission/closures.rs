@@ -77,17 +77,17 @@ pub fn check_closures(
                 .with_model(&loaded.path, &loaded.computed_model_hash));
             }
         }
-        for exec in model
+        for (exec_id, exec) in model
             .execs
-            .values()
-            .filter(|exec| exec.closure_id == closure.closure_id)
+            .iter()
+            .filter(|(_, exec)| exec.closure_id == closure.closure_id)
         {
             if exec.executable != closure.executable {
                 return Err(RuntimeError::new(
                     ErrorCode::ClosureMissing,
                     format!(
                         "exec {} executable {} does not match closure {} executable {}",
-                        exec.exec_id, exec.executable, closure.closure_id, closure.executable
+                        exec_id, exec.executable, closure.closure_id, closure.executable
                     ),
                 )
                 .with_model(&loaded.path, &loaded.computed_model_hash));

@@ -27,12 +27,7 @@ fn fixture_model() -> Value {
             "system": host_system(),
             "os": host_os(),
             "arch": host_arch(),
-            "closureSystem": host_system(),
-            "requiredRuntimeCapabilities": {
-                "processGroup": true,
-                "tcpPortOwnership": true,
-                "sqliteWal": true
-            }
+            "closureSystem": host_system()
         },
         "codebases": [{
             "codebaseId": "main",
@@ -46,7 +41,6 @@ fn fixture_model() -> Value {
         }],
         "environments": {
             "dev": {
-                "environmentId": "dev",
                 "services": ["synthetic"],
                 "tasks": ["smoke"]
             }
@@ -56,23 +50,6 @@ fn fixture_model() -> Value {
             "default": 0,
             "max": 0
         },
-        "capabilities": {
-            "environments": ["dev"],
-            "slots": [0],
-            "services": ["synthetic"],
-            "tasks": ["smoke"],
-            "workflows": [],
-            "surfaces": m0_surface_names()
-        },
-        "runtimeConstraints": {
-            "allowedEnvironments": ["dev"],
-            "slotMin": 0,
-            "slotDefault": 0,
-            "slotMax": 0,
-            "allowPortOverride": false,
-            "collisionPolicy": "fail"
-        },
-        "surfaces": m0_surfaces(),
         "placement": {
             "stateRootTemplate": "${projectId}/${environment}/${slot}",
             "registryDir": "registry",
@@ -104,7 +81,6 @@ fn fixture_model() -> Value {
             "cleanupPolicy": "delete-on-clean",
             "persistence": "run-scoped"
         },
-        "secrets": [],
         "closures": [{
             "closureId": "synthetic-helper",
             "kind": "executable",
@@ -121,7 +97,6 @@ fn fixture_model() -> Value {
         }],
         "execs": {
             "synthetic-helper": {
-                "execId": "synthetic-helper",
                 "closureId": "synthetic-helper",
                 "executable": "/nix/store/test-synthetic-helper/bin/synthetic-helper",
                 "args": [],
@@ -136,8 +111,6 @@ fn fixture_model() -> Value {
         },
         "services": {
             "synthetic": {
-                "serviceId": "synthetic",
-                "foreground": true,
                 "lifecycle": {
                     "prepare": {
                         "operationId": "service.synthetic.prepare",
@@ -173,11 +146,9 @@ fn fixture_model() -> Value {
                     }
                 },
                 "endpoint": { "endpointId": "synthetic-tcp", "host": "127.0.0.1" },
-                "healthPolicy": "explicit",
                 "stateRefs": ["slot"],
                 "logRefs": ["service.synthetic"],
                 "containment": "process-group",
-                "lifetime": "run-scoped",
                 "identity": {
                     "serviceAddressHash": "service-address",
                     "endpointIdentityHash": "endpoint",
@@ -189,7 +160,6 @@ fn fixture_model() -> Value {
         },
         "tasks": {
             "smoke": {
-                "taskId": "smoke",
                 "operationId": "task.smoke.run",
                 "execId": "synthetic-helper",
                 "args": ["task", "--host", "127.0.0.1", "--port", "${port}"],
@@ -211,36 +181,7 @@ fn fixture_model() -> Value {
     })
 }
 
-fn m0_surface_names() -> Vec<&'static str> {
-    vec![
-        "model",
-        "schema",
-        "docs",
-        "capabilities",
-        "check",
-        "run",
-        "ps",
-        "down",
-        "clean",
-    ]
-}
 
-fn m0_surfaces() -> Vec<Value> {
-    m0_surface_names()
-        .into_iter()
-        .map(|name| {
-            json!({
-                "name": name,
-                "aliases": [],
-                "inputSchema": {},
-                "outputSchema": {},
-                "exitClasses": ["ok", "error"],
-                "evaluationPermission": "never",
-                "maturity": "stable"
-            })
-        })
-        .collect()
-}
 
 #[test]
 fn load_model_hashes_raw_bytes() {
@@ -418,30 +359,6 @@ fn abi_mismatch_is_runtime_abi_error() {
 
     assert_eq!(error.code, ErrorCode::RuntimeAbiMismatch);
     assert!(error.computed_model_hash.is_some());
-}
-
-#[test]
-fn non_empty_secrets_are_admission_error() {
-    let mut model = fixture_model();
-    model["secrets"] = json!([{
-        "secretId": "db",
-        "target": "env:DB_PASSWORD",
-        "required": true
-    }]);
-    let (_tmp, model_path, _closure) = write_fixture_model(model, true);
-    let error = load_model(&model_path).expect_err("M0 secrets should fail admission contract");
-
-    assert_eq!(error.code, ErrorCode::ModelAdmission);
-    assert!(error.computed_model_hash.is_some());
-    let payload = serde_json::to_value(&error).expect("error should serialize");
-    assert_eq!(payload["exitClass"], json!("error"));
-    assert_eq!(payload["details"]["unsupportedFeature"], json!("secrets"));
-    assert_eq!(payload["details"]["secretCount"], json!(1));
-    assert_eq!(payload["modelPath"], json!(model_path));
-    assert_eq!(
-        payload["computedModelHash"],
-        json!(error.computed_model_hash.as_deref().unwrap())
-    );
 }
 
 #[test]

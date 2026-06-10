@@ -1,23 +1,41 @@
 { model }:
 
+let
+  inherit (builtins) attrNames;
+  # Framework-owned public surfaces: the generated view/runtime command set every
+  # model exposes. A view concern, derived here rather than mirrored in the model.
+  surfaceNames = [
+    "model"
+    "schema"
+    "docs"
+    "capabilities"
+    "check"
+    "run"
+    "ps"
+    "down"
+    "clean"
+  ];
+  serviceNames = attrNames model.services;
+  taskNames = attrNames model.tasks;
+  slots = builtins.genList (i: model.slotPolicy.min + i) (
+    model.slotPolicy.max - model.slotPolicy.min + 1
+  );
+in
 {
   schema = {
     schemaVersion = 1;
     source = "model.json";
-    runtimeInputs = model.runtimeConstraints;
-    surfaces = model.surfaces;
+    surfaces = surfaceNames;
     modelTypes = {
       modelVersion = model.modelVersion;
       runtimeAbi = model.runtimeAbi;
       toolchainId = model.toolchainId;
       primitives = [
         "ExecSpec"
-        "EndpointSpec"
-        "ProbeSpec"
-        "LifecycleOpSpec"
-        "LifecycleOpClass"
+        "Endpoint"
+        "ProbeTiming"
+        "Lifecycle"
         "TerminalSemantics"
-        "HealthPolicy"
         "ServiceSpec"
         "TaskSpec"
         "SlotPlacement"
@@ -25,7 +43,16 @@
     };
   };
 
-  capabilities = model.capabilities;
+  # The capabilities view is a projection of the model, derived on demand rather
+  # than carried as a redundant model section.
+  capabilities = {
+    environments = attrNames model.environments;
+    inherit slots;
+    services = serviceNames;
+    tasks = taskNames;
+    workflows = attrNames model.workflows;
+    surfaces = surfaceNames;
+  };
 
   docs = ''
     # ${model.docs.title}
@@ -40,11 +67,11 @@
 
     ## Surfaces
 
-    ${builtins.concatStringsSep "\n" (map (surface: "- ${surface.name}") model.surfaces)}
+    ${builtins.concatStringsSep "\n" (map (name: "- ${name}") surfaceNames)}
 
     ## Services
 
-    ${builtins.concatStringsSep "\n" (map (service: "- ${service}") model.capabilities.services)}
+    ${builtins.concatStringsSep "\n" (map (service: "- ${service}") serviceNames)}
 
     ## Lifecycle
 
@@ -55,12 +82,12 @@
           serviceSpec = model.services.${service};
           classes = builtins.attrNames serviceSpec.lifecycle;
         in
-        "- ${service}: endpoint ${serviceSpec.endpoint.endpointId}; health ${serviceSpec.healthPolicy}; operations ${builtins.concatStringsSep ", " classes}"
-      ) model.capabilities.services
+        "- ${service}: endpoint ${serviceSpec.endpoint.endpointId}; operations ${builtins.concatStringsSep ", " classes}"
+      ) serviceNames
     )}
 
     ## Tasks
 
-    ${builtins.concatStringsSep "\n" (map (task: "- ${task}") model.capabilities.tasks)}
+    ${builtins.concatStringsSep "\n" (map (task: "- ${task}") taskNames)}
   '';
 }

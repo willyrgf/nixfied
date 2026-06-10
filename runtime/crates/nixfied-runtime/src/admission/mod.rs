@@ -1,7 +1,6 @@
 pub mod abi;
 pub mod closures;
 pub mod origin;
-pub mod secrets;
 pub mod source;
 pub mod target;
 
@@ -62,7 +61,6 @@ impl Admission {
         target::check_target(&loaded.model, loaded, context)?;
         let source = source::check_source(&loaded.model, loaded)?;
         closures::check_closures(&loaded.model, loaded, context)?;
-        secrets::check_secrets(&loaded.model, loaded)?;
         let execution_model = lower(&loaded.model)?;
         prove_all_plans_feasible(&execution_model)?;
         Ok(from_loaded(&loaded.model, loaded, source, execution_model))

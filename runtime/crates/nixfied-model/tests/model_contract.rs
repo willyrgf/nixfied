@@ -19,12 +19,7 @@ fn valid_model_json() -> Value {
             "system": "aarch64-darwin",
             "os": "darwin",
             "arch": "aarch64",
-            "closureSystem": "aarch64-darwin",
-            "requiredRuntimeCapabilities": {
-                "processGroup": true,
-                "tcpPortOwnership": true,
-                "sqliteWal": true
-            }
+            "closureSystem": "aarch64-darwin"
         },
         "codebases": [{
             "codebaseId": "main",
@@ -38,7 +33,6 @@ fn valid_model_json() -> Value {
         }],
         "environments": {
             "dev": {
-                "environmentId": "dev",
                 "services": ["synthetic"],
                 "tasks": ["smoke"]
             }
@@ -48,23 +42,6 @@ fn valid_model_json() -> Value {
             "default": 0,
             "max": 0
         },
-        "capabilities": {
-            "environments": ["dev"],
-            "slots": [0],
-            "services": ["synthetic"],
-            "tasks": ["smoke"],
-            "workflows": [],
-            "surfaces": m0_surface_names()
-        },
-        "runtimeConstraints": {
-            "allowedEnvironments": ["dev"],
-            "slotMin": 0,
-            "slotDefault": 0,
-            "slotMax": 0,
-            "allowPortOverride": false,
-            "collisionPolicy": "fail"
-        },
-        "surfaces": m0_surfaces(),
         "placement": {
             "stateRootTemplate": "${projectId}/${environment}/${slot}",
             "registryDir": "registry",
@@ -96,7 +73,6 @@ fn valid_model_json() -> Value {
             "cleanupPolicy": "delete-on-clean",
             "persistence": "run-scoped"
         },
-        "secrets": [],
         "closures": [{
             "closureId": "synthetic-helper",
             "kind": "executable",
@@ -130,7 +106,6 @@ fn valid_model_json() -> Value {
 
 fn helper_exec() -> Value {
     json!({
-        "execId": "synthetic-helper",
         "closureId": "synthetic-helper",
         "executable": "/nix/store/00000000000000000000000000000000-synthetic-helper/bin/synthetic-helper",
         "args": [],
@@ -146,8 +121,6 @@ fn helper_exec() -> Value {
 
 fn synthetic_service() -> Value {
     json!({
-        "serviceId": "synthetic",
-        "foreground": true,
         "lifecycle": {
             "prepare": { "operationId": "service.synthetic.prepare", "execId": null, "execArgs": [], "terminal": { "success": "prepared", "failure": "failed" } },
             "start": { "operationId": "service.synthetic.start", "execId": "synthetic-helper", "execArgs": ["service", "--host", "127.0.0.1", "--port", "${port}"], "terminal": { "success": "spawned", "failure": "failed" } },
@@ -157,11 +130,9 @@ fn synthetic_service() -> Value {
             "clean": { "operationId": "service.synthetic.clean", "terminal": { "success": "cleaned", "failure": "failed" } }
         },
         "endpoint": { "endpointId": "synthetic-tcp", "host": "127.0.0.1" },
-        "healthPolicy": "explicit",
         "stateRefs": ["slot"],
         "logRefs": ["service.synthetic"],
         "containment": "process-group",
-        "lifetime": "run-scoped",
         "identity": {
             "serviceAddressHash": "service-address",
             "endpointIdentityHash": "endpoint",
@@ -174,7 +145,6 @@ fn synthetic_service() -> Value {
 
 fn smoke_task() -> Value {
     json!({
-        "taskId": "smoke",
         "operationId": "task.smoke.run",
         "execId": "synthetic-helper",
         "args": ["task", "--host", "127.0.0.1", "--port", "${port}"],
@@ -185,37 +155,6 @@ fn smoke_task() -> Value {
         "logRefs": ["task.smoke"],
         "summaryRefs": ["summary"]
     })
-}
-
-fn m0_surface_names() -> Vec<&'static str> {
-    vec![
-        "model",
-        "schema",
-        "docs",
-        "capabilities",
-        "check",
-        "run",
-        "ps",
-        "down",
-        "clean",
-    ]
-}
-
-fn m0_surfaces() -> Vec<Value> {
-    m0_surface_names()
-        .into_iter()
-        .map(|name| {
-            json!({
-                "name": name,
-                "aliases": [],
-                "inputSchema": {},
-                "outputSchema": {},
-                "exitClasses": ["ok", "error"],
-                "evaluationPermission": "never",
-                "maturity": "stable"
-            })
-        })
-        .collect()
 }
 
 fn parse_valid_model() -> Model {
@@ -232,14 +171,12 @@ fn add_worker_service(value: &mut Value) {
         .push(json!("service.worker.start"));
 
     let mut worker = synthetic_service();
-    worker["serviceId"] = json!("worker");
     worker["endpoint"]["endpointId"] = json!("worker-tcp");
     for (class, op) in worker["lifecycle"].as_object_mut().unwrap() {
         op["operationId"] = json!(format!("service.worker.{class}"));
     }
     value["services"]["worker"] = worker;
     value["environments"]["dev"]["services"] = json!(["synthetic", "worker"]);
-    value["capabilities"]["services"] = json!(["synthetic", "worker"]);
 }
 
 fn synthetic_lifecycle_mut(model: &mut Model) -> &mut nixfied_model::Lifecycle {
@@ -269,9 +206,7 @@ fn accepts_arbitrary_service_and_exec_names() {
     // exec validate as long as the structural contract holds.
     let mut value = valid_model_json();
     add_worker_service(&mut value);
-    let mut second_exec = helper_exec();
-    second_exec["execId"] = json!("aux-helper");
-    value["execs"]["aux-helper"] = second_exec;
+    value["execs"]["aux-helper"] = helper_exec();
 
     let model: Model = serde_json::from_value(value).expect("model should deserialize");
     model
@@ -288,43 +223,9 @@ fn prepare_operation_may_bind_an_exec() {
 }
 
 #[test]
-fn capabilities_services_must_mirror_model() {
-    let mut value = valid_model_json();
-    value["capabilities"]["services"] = json!(["synthetic", "ghost"]);
-    let model: Model = serde_json::from_value(value).expect("model should deserialize");
-
-    match model
-        .validate()
-        .expect_err("capabilities must mirror declared services")
-    {
-        ValidationError::UnsupportedValue { field, .. } => {
-            assert_eq!(field, "capabilities.services");
-        }
-        other => panic!("unexpected error: {other:?}"),
-    }
-}
-
-#[test]
-fn old_single_surface_contract_is_rejected() {
-    let mut model = parse_valid_model();
-    model.capabilities.surfaces = vec!["model".to_string()];
-    model.surfaces.retain(|surface| surface.name == "model");
-
-    match model
-        .validate()
-        .expect_err("runtime surfaces must be the full set")
-    {
-        ValidationError::UnsupportedValue { field, .. } => assert_eq!(field, "surfaces"),
-        other => panic!("unexpected validation error: {other:?}"),
-    }
-}
-
-#[test]
 fn validates_explicit_slot_placement_range() {
     let mut value = valid_model_json();
     value["slotPolicy"]["max"] = json!(1);
-    value["runtimeConstraints"]["slotMax"] = json!(1);
-    value["capabilities"]["slots"] = json!([0, 1]);
     let placement = value["placement"]["slotPlacements"]["0"].clone();
     let mut slot_one = placement;
     slot_one["slot"] = json!(1);
@@ -360,28 +261,11 @@ fn abi_mismatch_is_contract_error() {
     );
 }
 
-#[test]
-fn non_empty_secrets_are_rejected() {
-    let mut model = parse_valid_model();
-    model.secrets.push(nixfied_model::SecretRef {
-        secret_id: "db".to_string(),
-        target: "env:DB_PASSWORD".to_string(),
-        required: true,
-    });
-
-    assert_eq!(
-        model.validate().expect_err("secrets are still deferred"),
-        ValidationError::MustBeEmpty { field: "secrets" }
-    );
-}
-
 fn with_workflow(value: &mut Value, nodes: Value) {
     value["workflows"]["pipeline"] = json!({
-        "workflowId": "pipeline",
         "servicesRequired": ["synthetic"],
         "nodes": nodes,
     });
-    value["capabilities"]["workflows"] = json!(["pipeline"]);
 }
 
 #[test]
@@ -406,11 +290,9 @@ fn workflow_node_task_service_deps_must_be_required() {
     // The node's task `smoke` depends on `synthetic`, but the workflow does not
     // declare it in servicesRequired, so the run plan would never start it.
     value["workflows"]["pipeline"] = json!({
-        "workflowId": "pipeline",
         "servicesRequired": [],
         "nodes": [{ "nodeId": "first", "taskId": "smoke", "dependsOn": [] }],
     });
-    value["capabilities"]["workflows"] = json!(["pipeline"]);
     let model: Model = serde_json::from_value(value).expect("model should deserialize");
     assert_eq!(
         model
@@ -533,23 +415,6 @@ fn execs_must_reference_declared_closures() {
 }
 
 #[test]
-fn runtime_constraints_must_use_fail_collision_policy() {
-    let mut model = parse_valid_model();
-    model.runtime_constraints.collision_policy = nixfied_model::CollisionPolicy::ProbeInRange;
-
-    assert_eq!(
-        model
-            .validate()
-            .expect_err("only fail collision policy is supported"),
-        ValidationError::UnsupportedValue {
-            field: "runtimeConstraints.collisionPolicy",
-            expected: "fail",
-            actual: "ProbeInRange".to_string(),
-        }
-    );
-}
-
-#[test]
 fn non_loopback_endpoint_host_is_rejected_at_parse() {
     // The endpoint host is a typed loopback literal; a hostname or wildcard cannot
     // deserialize.
@@ -568,27 +433,6 @@ fn lifecycle_must_have_full_generic_class_set() {
         .unwrap()
         .remove("clean");
     serde_json::from_value::<Model>(value).expect_err("a missing lifecycle class must not parse");
-}
-
-#[test]
-fn health_policy_must_be_explicit() {
-    let mut model = parse_valid_model();
-    model
-        .services
-        .get_mut("synthetic")
-        .expect("fixture has service")
-        .health_policy = nixfied_model::HealthPolicy::Unsupported;
-
-    assert_eq!(
-        model
-            .validate()
-            .expect_err("declared health uses an explicit typed policy"),
-        ValidationError::UnsupportedValue {
-            field: "services.healthPolicy",
-            expected: "explicit",
-            actual: "Unsupported".to_string(),
-        }
-    );
 }
 
 #[test]

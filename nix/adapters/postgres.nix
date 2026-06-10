@@ -57,8 +57,6 @@ in
   };
 
   nixfied.services.postgres = {
-    foreground = true;
-    healthPolicy = "explicit";
     lifecycle = {
       prepare = {
         operationId = "service.postgres.prepare";

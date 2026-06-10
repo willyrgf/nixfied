@@ -2214,7 +2214,6 @@ fn down_cancels_live_task_process_group_and_unblocks_cleanup() {
     })
     .to_string();
     let task_command_json = json!({
-        "taskId": "smoke",
         "executable": "/bin/sleep",
         "args": ["30"],
         "cwd": fixture.admission.source.observed_root.to_string_lossy(),
@@ -2528,8 +2527,6 @@ fn model(executable: &str, start_args: &[&str], port: u16) -> Model {
 
 fn add_slot_one(value: &mut Value, start: u16, end: u16) {
     value["slotPolicy"]["max"] = json!(1);
-    value["runtimeConstraints"]["slotMax"] = json!(1);
-    value["capabilities"]["slots"] = json!([0, 1]);
     value["placement"]["slotPlacements"]["1"] = json!({
         "slot": 1,
         "stateRootTemplate": "${projectId}/${environment}/${slot}",
@@ -2723,12 +2720,7 @@ fn fixture_model(executable: &str, start_args: &[&str], port: u16) -> Value {
             "system": host_system(),
             "os": host_os(),
             "arch": host_arch(),
-            "closureSystem": host_system(),
-            "requiredRuntimeCapabilities": {
-                "processGroup": true,
-                "tcpPortOwnership": true,
-                "sqliteWal": true
-            }
+            "closureSystem": host_system()
         },
         "codebases": [{
             "codebaseId": "main",
@@ -2742,7 +2734,6 @@ fn fixture_model(executable: &str, start_args: &[&str], port: u16) -> Value {
         }],
         "environments": {
             "dev": {
-                "environmentId": "dev",
                 "services": ["synthetic"],
                 "tasks": ["smoke"]
             }
@@ -2752,23 +2743,6 @@ fn fixture_model(executable: &str, start_args: &[&str], port: u16) -> Value {
             "default": 0,
             "max": 0
         },
-        "capabilities": {
-            "environments": ["dev"],
-            "slots": [0],
-            "services": ["synthetic"],
-            "tasks": ["smoke"],
-            "workflows": [],
-            "surfaces": m0_surface_names()
-        },
-        "runtimeConstraints": {
-            "allowedEnvironments": ["dev"],
-            "slotMin": 0,
-            "slotDefault": 0,
-            "slotMax": 0,
-            "allowPortOverride": false,
-            "collisionPolicy": "fail"
-        },
-        "surfaces": m0_surfaces(),
         "placement": {
             "stateRootTemplate": "${projectId}/${environment}/${slot}",
             "registryDir": "registry",
@@ -2800,7 +2774,6 @@ fn fixture_model(executable: &str, start_args: &[&str], port: u16) -> Value {
             "cleanupPolicy": "delete-on-clean",
             "persistence": "run-scoped"
         },
-        "secrets": [],
         "closures": [{
             "closureId": "synthetic-helper",
             "kind": "executable",
@@ -2817,7 +2790,6 @@ fn fixture_model(executable: &str, start_args: &[&str], port: u16) -> Value {
         }],
         "execs": {
             "synthetic-helper": {
-                "execId": "synthetic-helper",
                 "closureId": "synthetic-helper",
                 "executable": executable,
                 "args": [],
@@ -2832,8 +2804,6 @@ fn fixture_model(executable: &str, start_args: &[&str], port: u16) -> Value {
         },
         "services": {
             "synthetic": {
-                "serviceId": "synthetic",
-                "foreground": true,
                 "lifecycle": {
                     "prepare": {
                         "operationId": "service.synthetic.prepare",
@@ -2869,11 +2839,9 @@ fn fixture_model(executable: &str, start_args: &[&str], port: u16) -> Value {
                     }
                 },
                 "endpoint": { "endpointId": "synthetic-tcp", "host": "127.0.0.1" },
-                "healthPolicy": "explicit",
                 "stateRefs": ["slot"],
                 "logRefs": ["service.synthetic"],
                 "containment": "process-group",
-                "lifetime": "run-scoped",
                 "identity": {
                     "serviceAddressHash": "service-address",
                     "endpointIdentityHash": "endpoint",
@@ -2885,7 +2853,6 @@ fn fixture_model(executable: &str, start_args: &[&str], port: u16) -> Value {
         },
         "tasks": {
             "smoke": {
-                "taskId": "smoke",
                 "operationId": "task.smoke.run",
                 "execId": "synthetic-helper",
                 "args": ["task", "--host", "127.0.0.1", "--port", "${port}"],
@@ -2907,36 +2874,7 @@ fn fixture_model(executable: &str, start_args: &[&str], port: u16) -> Value {
     })
 }
 
-fn m0_surface_names() -> Vec<&'static str> {
-    vec![
-        "model",
-        "schema",
-        "docs",
-        "capabilities",
-        "check",
-        "run",
-        "ps",
-        "down",
-        "clean",
-    ]
-}
 
-fn m0_surfaces() -> Vec<Value> {
-    m0_surface_names()
-        .into_iter()
-        .map(|name| {
-            json!({
-                "name": name,
-                "aliases": [],
-                "inputSchema": {},
-                "outputSchema": {},
-                "exitClasses": ["ok", "error"],
-                "evaluationPermission": "never",
-                "maturity": "stable"
-            })
-        })
-        .collect()
-}
 
 fn host_system() -> String {
     format!("{}-{}", host_arch(), host_os())

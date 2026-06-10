@@ -59,19 +59,6 @@ pub fn parse_loaded_model(raw_model: RawModel) -> RuntimeResult<LoadedModel> {
             | nixfied_model::ValidationError::ModelVersion { .. } => {
                 RuntimeError::new(ErrorCode::RuntimeAbiMismatch, message)
             }
-            nixfied_model::ValidationError::MustBeEmpty { field } if *field == "secrets" => {
-                RuntimeError::unsupported_feature("secrets", message)
-                    .with_detail("secretCount", model.secrets.len())
-            }
-            nixfied_model::ValidationError::MustBeEmpty { field } if *field == "workflows" => {
-                RuntimeError::unsupported_feature("workflows", message)
-                    .with_detail("workflowCount", model.workflows.len())
-            }
-            nixfied_model::ValidationError::MustBeEmpty { field }
-                if *field == "secrets" || *field == "workflows" =>
-            {
-                RuntimeError::new(ErrorCode::ModelAdmission, message)
-            }
             _ => RuntimeError::new(ErrorCode::ModelInvalid, message),
         };
         runtime_error.with_model(&raw_model.path, &raw_model.computed_model_hash)

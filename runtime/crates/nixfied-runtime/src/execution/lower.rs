@@ -32,12 +32,8 @@ pub fn lower(model: &Model) -> RuntimeResult<ExecutionModel> {
         codebases: _,
         environments,
         slot_policy: _,
-        capabilities: _,
-        runtime_constraints: _,
-        surfaces: _,
         placement,
         state: _,
-        secrets: _,
         closures: _,
         execs,
         services,
@@ -53,7 +49,7 @@ pub fn lower(model: &Model) -> RuntimeResult<ExecutionModel> {
 
     let lowered_tasks = tasks
         .iter()
-        .map(|(id, task)| Ok((id.clone(), lower_task(task, execs)?)))
+        .map(|(id, task)| Ok((id.clone(), lower_task(id, task, execs)?)))
         .collect::<RuntimeResult<BTreeMap<_, _>>>()?;
 
     let lowered_workflows = workflows
@@ -88,11 +84,7 @@ pub fn lower(model: &Model) -> RuntimeResult<ExecutionModel> {
 }
 
 fn lower_environment(environment: &nixfied_model::Environment) -> ExecEnvironment {
-    let nixfied_model::Environment {
-        environment_id: _,
-        services,
-        tasks,
-    } = environment;
+    let nixfied_model::Environment { services, tasks } = environment;
     ExecEnvironment {
         services: services.clone(),
         tasks: tasks.clone(),
@@ -101,7 +93,6 @@ fn lower_environment(environment: &nixfied_model::Environment) -> ExecEnvironmen
 
 fn lower_workflow(workflow: &WorkflowSpec) -> ExecWorkflow {
     let WorkflowSpec {
-        workflow_id: _,
         services_required,
         nodes,
     } = workflow;
@@ -124,15 +115,11 @@ fn lower_service(
     execs: &BTreeMap<String, ExecSpec>,
 ) -> RuntimeResult<ExecService> {
     let ServiceSpec {
-        service_id: _,
-        foreground: _,
         lifecycle,
         endpoint,
-        health_policy: _,
         state_refs: _,
         log_refs: _,
         containment,
-        lifetime: _,
         identity,
     } = service;
     let Lifecycle {
@@ -203,9 +190,12 @@ fn op_meta(operation_id: &str, terminal: &TerminalSemantics) -> OpMeta {
     }
 }
 
-fn lower_task(task: &TaskSpec, execs: &BTreeMap<String, ExecSpec>) -> RuntimeResult<ExecTask> {
+fn lower_task(
+    task_id: &str,
+    task: &TaskSpec,
+    execs: &BTreeMap<String, ExecSpec>,
+) -> RuntimeResult<ExecTask> {
     let TaskSpec {
-        task_id,
         operation_id: _,
         exec_id,
         args,
@@ -217,7 +207,7 @@ fn lower_task(task: &TaskSpec, execs: &BTreeMap<String, ExecSpec>) -> RuntimeRes
         summary_refs: _,
     } = task;
     Ok(ExecTask {
-        task_id: task_id.clone(),
+        task_id: task_id.to_string(),
         exec: resolve_exec_ref(execs, exec_id, args)?,
         depends_on_services_ready: depends_on_services_ready.clone(),
         success_codes: exit_policy.success_codes.clone(),
@@ -246,7 +236,6 @@ fn resolve_exec_ref(
 
 fn resolve_exec(exec: &ExecSpec, extra_args: &[String]) -> ResolvedExec {
     let ExecSpec {
-        exec_id: _,
         closure_id: _,
         executable,
         args,
@@ -285,27 +274,15 @@ mod tests {
             "project": { "projectId": "p", "name": "P" },
             "target": {
                 "system": "x86_64-linux", "os": "linux", "arch": "x86_64",
-                "closureSystem": "x86_64-linux",
-                "requiredRuntimeCapabilities": {
-                    "processGroup": true, "tcpPortOwnership": true, "sqliteWal": true
-                }
+                "closureSystem": "x86_64-linux"
             },
             "codebases": [{
                 "codebaseId": "main", "logicalRoot": ".", "sourceMode": "live-workspace",
                 "sourceIdentity": "live",
                 "sourcePolicy": { "dirtyPolicy": "warn", "admissionFingerprintPolicy": "live" }
             }],
-            "environments": { "dev": { "environmentId": "dev", "services": ["svc"], "tasks": ["t"] } },
+            "environments": { "dev": { "services": ["svc"], "tasks": ["t"] } },
             "slotPolicy": { "min": 0, "default": 0, "max": 0 },
-            "capabilities": {
-                "environments": [], "slots": [], "services": [], "tasks": [],
-                "workflows": [], "surfaces": []
-            },
-            "runtimeConstraints": {
-                "allowedEnvironments": ["dev"], "slotMin": 0, "slotDefault": 0, "slotMax": 0,
-                "allowPortOverride": false, "collisionPolicy": "fail"
-            },
-            "surfaces": [],
             "placement": {
                 "stateRootTemplate": "${projectId}/${environment}/${slot}",
                 "registryDir": "registry",
@@ -329,17 +306,16 @@ mod tests {
                 "markerIdentity": "nixfied-state", "stateEpoch": "1",
                 "cleanupPolicy": "delete-on-clean", "persistence": "run-scoped"
             },
-            "secrets": [],
             "closures": [],
             "execs": {
                 "svc-exec": {
-                    "execId": "svc-exec", "closureId": "c", "executable": "/bin/svc",
+                    "closureId": "c", "executable": "/bin/svc",
                     "args": ["serve"], "env": {}, "codebaseId": "main", "cwd": ".",
                     "stdin": "null", "timeoutMs": 1000, "outputCapture": "stdout-stderr",
                     "cancellationMode": "kill-process-group"
                 },
                 "t-exec": {
-                    "execId": "t-exec", "closureId": "c", "executable": "/bin/task",
+                    "closureId": "c", "executable": "/bin/task",
                     "args": [], "env": {}, "codebaseId": "main", "cwd": ".",
                     "stdin": "null", "timeoutMs": 1000, "outputCapture": "stdout-stderr",
                     "cancellationMode": "kill-process-group"
@@ -348,7 +324,7 @@ mod tests {
             "services": { "svc": service_value() },
             "tasks": {
                 "t": {
-                    "taskId": "t", "operationId": "task.t.run", "execId": "t-exec",
+                    "operationId": "task.t.run", "execId": "t-exec",
                     "args": ["--port", "${port}"], "dependsOnServicesReady": ["svc"],
                     "exitPolicy": { "successCodes": [0] }, "outputCapture": "stdout-stderr",
                     "artifactRefs": [], "logRefs": [], "summaryRefs": []
@@ -361,8 +337,6 @@ mod tests {
 
     fn service_value() -> Value {
         json!({
-            "serviceId": "svc",
-            "foreground": true,
             "lifecycle": {
                 "prepare": { "operationId": "svc.prepare", "execId": null, "execArgs": [], "terminal": { "success": "prepared", "failure": "failed" } },
                 "start": { "operationId": "svc.start", "execId": "svc-exec", "execArgs": ["--port", "${port}"], "terminal": { "success": "spawned", "failure": "failed" } },
@@ -372,10 +346,8 @@ mod tests {
                 "clean": { "operationId": "svc.clean", "terminal": { "success": "cleaned", "failure": "failed" } }
             },
             "endpoint": { "endpointId": "svc-tcp", "host": "127.0.0.1" },
-            "healthPolicy": "explicit",
             "stateRefs": [], "logRefs": [],
             "containment": "process-group",
-            "lifetime": "run-scoped",
             "identity": {
                 "serviceAddressHash": "a", "endpointIdentityHash": "e", "stateIdentityHash": "s",
                 "runtimeCompatibilityHash": "r", "targetIdentityHash": "t"

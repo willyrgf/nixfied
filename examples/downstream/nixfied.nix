@@ -73,8 +73,6 @@ let
 
   # One service definition reused for the api and the worker.
   mkAppService = name: {
-    foreground = true;
-    healthPolicy = "explicit";
     lifecycle = {
       prepare = {
         operationId = "service.${name}.prepare";
