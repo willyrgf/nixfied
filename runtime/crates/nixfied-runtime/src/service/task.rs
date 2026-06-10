@@ -35,9 +35,36 @@ pub struct TaskRun {
     pub summary_path: PathBuf,
 }
 
+/// The run-level context a task executes in, independent of any service: the run
+/// identity, the codebase root it runs in, and the slot state root. A task may
+/// depend on zero services (e.g. a lint/test task) or many (e.g. an e2e test) — a
+/// service dependency only adds `${port}`/`${host}` substitution, never the run
+/// context.
+#[derive(Debug, Clone, Copy)]
+pub struct RunContext<'a> {
+    pub run_id: &'a str,
+    pub computed_model_hash: &'a str,
+    pub source_root: &'a Path,
+    pub state_root: &'a Path,
+}
+
+impl<'a> RunContext<'a> {
+    /// The run context as carried by an already-started service (every service in
+    /// a run shares it).
+    pub fn from_service(service: &'a StartedService) -> Self {
+        Self {
+            run_id: &service.run_id,
+            computed_model_hash: &service.computed_model_hash,
+            source_root: &service.source_root,
+            state_root: &service.state_root,
+        }
+    }
+}
+
 pub fn run_dependent_task(
     placement: &HostPlacement,
     registry: &mut Registry,
+    run_context: RunContext<'_>,
     dependencies: &[&StartedService],
     task: &ExecTask,
 ) -> RuntimeResult<TaskRun> {
@@ -45,6 +72,7 @@ pub fn run_dependent_task(
     run_dependent_task_cancellable(
         placement,
         registry,
+        run_context,
         dependencies,
         &task.task_id,
         task,
@@ -53,12 +81,13 @@ pub fn run_dependent_task(
 }
 
 /// Run a bounded task gated on the readiness of every service it declares in
-/// `dependsOnServicesReady`. `dependencies` lists the started services it depends
-/// on; the first is the primary, providing `${port}`/`${host}` substitution and
-/// the run/source/state context.
+/// `dependsOnServicesReady` (which may be empty). The run-level context comes from
+/// `run_context`; the first dependency, if any, is the primary that provides
+/// `${port}`/`${host}` substitution.
 pub fn run_dependent_task_cancellable(
     placement: &HostPlacement,
     registry: &mut Registry,
+    run_context: RunContext<'_>,
     dependencies: &[&StartedService],
     node_id: &str,
     task: &ExecTask,
@@ -66,13 +95,10 @@ pub fn run_dependent_task_cancellable(
 ) -> RuntimeResult<TaskRun> {
     cancellation.check()?;
     let task_id = task.task_id.as_str();
-    let primary = dependencies.first().ok_or_else(|| {
-        RuntimeError::new(
-            ErrorCode::DependencyUnavailable,
-            format!("task {task_id} has no service context to run in"),
-        )
-    })?;
     ensure_task_dependencies(registry, task, dependencies)?;
+    // A service dependency provides only the endpoint to substitute; a task with
+    // no services runs in the run context alone.
+    let endpoint = dependencies.first().map(|service| &service.selected_endpoint);
     let exec = &task.exec;
     // Key logs by node id, not task id: a workflow may run the same task in more
     // than one node, and task-id-keyed paths would overwrite each other's logs.
@@ -82,8 +108,8 @@ pub fn run_dependent_task_cancellable(
     let stderr_path = placement
         .logs_dir
         .join(format!("task.{node_id}.stderr.log"));
-    let args = task_args(exec, &primary.selected_endpoint, &primary.state_root);
-    let command_cwd = resolve_exec_cwd(&primary.source_root, &exec.cwd)?;
+    let args = task_args(exec, endpoint, run_context.state_root);
+    let command_cwd = resolve_exec_cwd(run_context.source_root, &exec.cwd)?;
     let command_json = serde_json::to_string(&TaskCommandRecord {
         task_id,
         executable: exec.executable.as_str(),
@@ -98,18 +124,18 @@ pub fn run_dependent_task_cancellable(
     let pid = child.id();
     let pgid = process_group(pid)?
         .ok_or_else(|| RuntimeError::new(ErrorCode::ProcEscape, "task process disappeared"))?;
-    let process_key = format!("process-{}-task-{task_id}-{pid}-{pgid}", primary.run_id);
+    let process_key = format!("process-{}-task-{task_id}-{pid}-{pgid}", run_context.run_id);
     let start_identity = process_start_identity(pid, pgid, platform_start_identity(pid).as_deref());
     if let Err(error) = record_task_started(
         registry,
         &TaskProcessRecord {
-            run_id: &primary.run_id,
+            run_id: run_context.run_id,
             process_key: &process_key,
             pid,
             pgid,
             start_identity: &start_identity,
             command_json: &command_json,
-            computed_model_hash: &primary.computed_model_hash,
+            computed_model_hash: run_context.computed_model_hash,
         },
     ) {
         let _ = terminate_process_group(pgid, 1000);
@@ -123,10 +149,10 @@ pub fn run_dependent_task_cancellable(
         exec.timeout.as_millis() as u64,
         cancellation,
         TaskCancellationContext {
-            run_id: &primary.run_id,
+            run_id: run_context.run_id,
             task_id,
             process_key: &process_key,
-            computed_model_hash: &primary.computed_model_hash,
+            computed_model_hash: run_context.computed_model_hash,
         },
     )?;
     let canceled = outcome.timed_out || outcome.canceled;
@@ -165,9 +191,9 @@ pub fn run_dependent_task_cancellable(
         .map_err(|error| RuntimeError::new(ErrorCode::ModelAdmission, error.to_string()))?;
     mark_task_finished(
         registry,
-        &primary.run_id,
+        run_context.run_id,
         &process_key,
-        &primary.computed_model_hash,
+        run_context.computed_model_hash,
         task_terminal_status(success, canceled),
         &payload_json,
     )?;
@@ -338,15 +364,20 @@ struct TaskOutcome {
 
 fn task_args(
     exec: &ResolvedExec,
-    endpoint: &SelectedEndpoint,
+    endpoint: Option<&SelectedEndpoint>,
     state_root: &Path,
 ) -> Vec<String> {
     // The resolved exec already combines the base and task args; substitute the
-    // runtime placeholders here.
+    // runtime placeholders here. `${stateDir}` is always available from the run;
+    // `${port}`/`${host}` only when the task depends on a service (admission
+    // rejects a service-less task that references them).
     exec.args
         .iter()
-        .map(|arg| {
-            substitute_arg(arg, endpoint.port, state_root).replace("${host}", &endpoint.host)
+        .map(|arg| match endpoint {
+            Some(endpoint) => {
+                substitute_arg(arg, endpoint.port, state_root).replace("${host}", &endpoint.host)
+            }
+            None => arg.replace("${stateDir}", &state_root.to_string_lossy()),
         })
         .collect()
 }

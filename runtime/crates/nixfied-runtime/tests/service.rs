@@ -13,7 +13,8 @@ use nixfied_runtime::cancellation::CancellationToken;
 use nixfied_runtime::registry::{Registry, RegistryIdentity};
 use nixfied_runtime::service::registry::{TaskProcessRecord, record_task_started};
 use nixfied_runtime::service::{
-    run_dependent_task, run_dependent_task_cancellable, run_synthetic_service_clean_for_slot,
+    RunContext, run_dependent_task, run_dependent_task_cancellable,
+    run_synthetic_service_clean_for_slot,
     service_address_hash, service_instance_id, start_synthetic_service,
     start_synthetic_service_for_slot, wait_for_tcp_probe,
 };
@@ -649,6 +650,7 @@ fn dependent_task_runs_after_owned_service_is_ready() {
     let task = run_dependent_task(
         &fixture.placement,
         &mut fixture.registry,
+        RunContext::from_service(&service),
         &[&service],
         fixture.admission.execution_model.tasks.get("smoke").expect("smoke task"),
     )
@@ -714,6 +716,7 @@ fn dependent_task_refuses_to_run_before_service_ready() {
     let error = run_dependent_task(
         &fixture.placement,
         &mut fixture.registry,
+        RunContext::from_service(&service),
         &[&service],
         fixture.admission.execution_model.tasks.get("smoke").expect("smoke task"),
     )
@@ -944,6 +947,7 @@ fn cancellation_interrupts_task_and_terminates_task_group() {
     let error = run_dependent_task_cancellable(
         &fixture.placement,
         &mut fixture.registry,
+        RunContext::from_service(&service),
         &[&service],
         "smoke",
         fixture.admission.execution_model.tasks.get("smoke").expect("smoke task"),
@@ -1059,6 +1063,7 @@ fn task_timeout_records_canceled_summary_and_terminates_task_group() {
     let error = run_dependent_task(
         &fixture.placement,
         &mut fixture.registry,
+        RunContext::from_service(&service),
         &[&service],
         fixture.admission.execution_model.tasks.get("smoke").expect("smoke task"),
     )
