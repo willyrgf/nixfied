@@ -16,7 +16,6 @@ impl Validate for Model {
         validate_codebases(self)?;
         validate_environments(self)?;
         validate_slot_policy(&self.slot_policy)?;
-        validate_no_host_absolute_placement(&self.placement)?;
         validate_slot_placements(self)?;
         validate_execs(self)?;
         validate_closures(self)?;
@@ -252,7 +251,6 @@ fn expected_slots(slot_policy: &SlotPolicy) -> Result<Vec<u32>, ValidationError>
 }
 
 fn validate_slot_placements(model: &Model) -> Result<(), ValidationError> {
-    validate_candidate_port_window("placement.candidatePorts", &model.placement.candidate_ports)?;
     let slots = expected_slots(&model.slot_policy)?;
     let expected_keys = slots.iter().map(u32::to_string).collect::<BTreeSet<_>>();
     let actual_keys = model
@@ -286,41 +284,6 @@ fn validate_slot_placements(model: &Model) -> Result<(), ValidationError> {
                 actual: placement.slot.to_string(),
             });
         }
-        for (field, expected, actual) in [
-            (
-                "placement.slotPlacements.stateRootTemplate",
-                model.placement.state_root_template.as_str(),
-                placement.state_root_template.as_str(),
-            ),
-            (
-                "placement.slotPlacements.registryDir",
-                model.placement.registry_dir.as_str(),
-                placement.registry_dir.as_str(),
-            ),
-            (
-                "placement.slotPlacements.runDirTemplate",
-                model.placement.run_dir_template.as_str(),
-                placement.run_dir_template.as_str(),
-            ),
-            (
-                "placement.slotPlacements.logsDirTemplate",
-                model.placement.logs_dir_template.as_str(),
-                placement.logs_dir_template.as_str(),
-            ),
-            (
-                "placement.slotPlacements.artifactsDirTemplate",
-                model.placement.artifacts_dir_template.as_str(),
-                placement.artifacts_dir_template.as_str(),
-            ),
-        ] {
-            if actual != expected {
-                return Err(ValidationError::UnsupportedValue {
-                    field,
-                    expected: "common placement template",
-                    actual: actual.to_string(),
-                });
-            }
-        }
         validate_candidate_port_window(
             "placement.slotPlacements.candidatePorts",
             &placement.candidate_ports,
@@ -329,24 +292,6 @@ fn validate_slot_placements(model: &Model) -> Result<(), ValidationError> {
             placement.candidate_ports.start,
             placement.candidate_ports.end,
         ));
-    }
-
-    let default_key = model.slot_policy.default.to_string();
-    let default = model
-        .placement
-        .slot_placements
-        .get(&default_key)
-        .ok_or_else(|| ValidationError::UnsupportedValue {
-            field: "placement.slotPlacements",
-            expected: "default slot placement",
-            actual: format!("missing slot {}", model.slot_policy.default),
-        })?;
-    if model.placement.candidate_ports != default.candidate_ports {
-        return Err(ValidationError::UnsupportedValue {
-            field: "placement.candidatePorts",
-            expected: "default slot candidatePorts",
-            actual: format!("{:?}", model.placement.candidate_ports),
-        });
     }
 
     windows.sort_unstable_by_key(|(start, _)| *start);
@@ -486,61 +431,6 @@ fn expect_string(
             actual: actual.to_string(),
         })
     }
-}
-
-fn validate_no_host_absolute_placement(placement: &Placement) -> Result<(), ValidationError> {
-    for (field, value) in [
-        (
-            "placement.stateRootTemplate",
-            &placement.state_root_template,
-        ),
-        ("placement.registryDir", &placement.registry_dir),
-        ("placement.runDirTemplate", &placement.run_dir_template),
-        ("placement.logsDirTemplate", &placement.logs_dir_template),
-        (
-            "placement.artifactsDirTemplate",
-            &placement.artifacts_dir_template,
-        ),
-    ] {
-        if value.starts_with('/') {
-            return Err(ValidationError::HostAbsolutePath {
-                field,
-                value: value.clone(),
-            });
-        }
-    }
-    for slot_placement in placement.slot_placements.values() {
-        for (field, value) in [
-            (
-                "placement.slotPlacements.stateRootTemplate",
-                &slot_placement.state_root_template,
-            ),
-            (
-                "placement.slotPlacements.registryDir",
-                &slot_placement.registry_dir,
-            ),
-            (
-                "placement.slotPlacements.runDirTemplate",
-                &slot_placement.run_dir_template,
-            ),
-            (
-                "placement.slotPlacements.logsDirTemplate",
-                &slot_placement.logs_dir_template,
-            ),
-            (
-                "placement.slotPlacements.artifactsDirTemplate",
-                &slot_placement.artifacts_dir_template,
-            ),
-        ] {
-            if value.starts_with('/') {
-                return Err(ValidationError::HostAbsolutePath {
-                    field,
-                    value: value.clone(),
-                });
-            }
-        }
-    }
-    Ok(())
 }
 
 fn validate_references(model: &Model) -> Result<(), ValidationError> {

@@ -284,20 +284,9 @@ mod tests {
             "environments": { "dev": { "services": ["svc"], "tasks": ["t"] } },
             "slotPolicy": { "min": 0, "default": 0, "max": 0 },
             "placement": {
-                "stateRootTemplate": "${projectId}/${environment}/${slot}",
-                "registryDir": "registry",
-                "runDirTemplate": "runs/${runId}",
-                "logsDirTemplate": "runs/${runId}/logs",
-                "artifactsDirTemplate": "runs/${runId}/artifacts",
-                "candidatePorts": { "start": 38080, "end": 38090 },
                 "slotPlacements": {
                     "0": {
                         "slot": 0,
-                        "stateRootTemplate": "${projectId}/${environment}/${slot}",
-                        "registryDir": "registry",
-                        "runDirTemplate": "runs/${runId}",
-                        "logsDirTemplate": "runs/${runId}/logs",
-                        "artifactsDirTemplate": "runs/${runId}/artifacts",
                         "candidatePorts": { "start": 38080, "end": 38090 }
                     }
                 }

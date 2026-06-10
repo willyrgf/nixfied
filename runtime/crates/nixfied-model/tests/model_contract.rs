@@ -43,23 +43,9 @@ fn valid_model_json() -> Value {
             "max": 0
         },
         "placement": {
-            "stateRootTemplate": "${projectId}/${environment}/${slot}",
-            "registryDir": "registry",
-            "runDirTemplate": "runs/${runId}",
-            "logsDirTemplate": "runs/${runId}/logs",
-            "artifactsDirTemplate": "runs/${runId}/artifacts",
-            "candidatePorts": {
-                "start": 38080,
-                "end": 38090
-            },
             "slotPlacements": {
                 "0": {
                     "slot": 0,
-                    "stateRootTemplate": "${projectId}/${environment}/${slot}",
-                    "registryDir": "registry",
-                    "runDirTemplate": "runs/${runId}",
-                    "logsDirTemplate": "runs/${runId}/logs",
-                    "artifactsDirTemplate": "runs/${runId}/artifacts",
                     "candidatePorts": {
                         "start": 38080,
                         "end": 38090
@@ -360,22 +346,6 @@ fn env_task_service_deps_must_be_declared_in_env_services() {
         ValidationError::UndeclaredReference {
             reference_kind: "environment.task.dependsOnServicesReady",
             id: "synthetic".to_string(),
-        }
-    );
-}
-
-#[test]
-fn host_absolute_placement_is_rejected() {
-    let mut model = parse_valid_model();
-    model.placement.state_root_template = "/tmp/nixfied".to_string();
-
-    assert_eq!(
-        model
-            .validate()
-            .expect_err("host absolute placement should fail"),
-        ValidationError::HostAbsolutePath {
-            field: "placement.stateRootTemplate",
-            value: "/tmp/nixfied".to_string(),
         }
     );
 }

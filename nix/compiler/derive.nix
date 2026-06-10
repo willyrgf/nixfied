@@ -27,11 +27,6 @@ let
     };
   slotPlacement = slot: {
     inherit slot;
-    stateRootTemplate = "\${projectId}/\${environment}/\${slot}";
-    registryDir = "registry";
-    runDirTemplate = "runs/\${runId}";
-    logsDirTemplate = "runs/\${runId}/logs";
-    artifactsDirTemplate = "runs/\${runId}/artifacts";
     candidatePorts = slotWindow slot;
   };
   slotPlacements = builtins.listToAttrs (
@@ -40,7 +35,6 @@ let
       value = slotPlacement slot;
     }) slots
   );
-  defaultPortWindow = slotWindow slotPolicy.default;
 
   # Closures: realise package store paths and absolute executable paths.
   closurePackages = mapAttrsToList (_id: closure: closure.package) config.nixfied.closures;
@@ -206,14 +200,6 @@ in
     inherit environments;
     inherit slotPolicy;
     placement = {
-      stateRootTemplate = "\${projectId}/\${environment}/\${slot}";
-      registryDir = "registry";
-      runDirTemplate = "runs/\${runId}";
-      logsDirTemplate = "runs/\${runId}/logs";
-      artifactsDirTemplate = "runs/\${runId}/artifacts";
-      candidatePorts = {
-        inherit (defaultPortWindow) start end;
-      };
       inherit slotPlacements;
     };
     state = {
