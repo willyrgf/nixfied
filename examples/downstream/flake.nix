@@ -14,12 +14,14 @@
         "x86_64-darwin"
         "x86_64-linux"
       ];
-      forAllSystems = f: builtins.listToAttrs (
-        map (system: {
-          name = system;
-          value = f system;
-        }) systems
-      );
+      forAllSystems =
+        f:
+        builtins.listToAttrs (
+          map (system: {
+            name = system;
+            value = f system;
+          }) systems
+        );
     in
     {
       packages = forAllSystems (system: {
