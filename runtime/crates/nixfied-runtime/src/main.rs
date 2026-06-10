@@ -375,6 +375,7 @@ fn run_m0_admitted(
             &placement,
             &mut registry,
             &dependencies,
+            &node.node_id,
             task_id,
             cancellation,
         );

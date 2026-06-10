@@ -42,11 +42,13 @@ pub fn run_dependent_task(
     dependencies: &[&StartedService],
     task_id: &str,
 ) -> RuntimeResult<TaskRun> {
+    // Outside a workflow the node id is the task id.
     run_dependent_task_cancellable(
         model,
         placement,
         registry,
         dependencies,
+        task_id,
         task_id,
         &CancellationToken::new(),
     )
@@ -56,11 +58,13 @@ pub fn run_dependent_task(
 /// `dependsOnServicesReady`. `dependencies` lists the started services it depends
 /// on; the first is the primary, providing `${port}`/`${host}` substitution and
 /// the run/source/state context.
+#[allow(clippy::too_many_arguments)]
 pub fn run_dependent_task_cancellable(
     model: &Model,
     placement: &HostPlacement,
     registry: &mut Registry,
     dependencies: &[&StartedService],
+    node_id: &str,
     task_id: &str,
     cancellation: &CancellationToken,
 ) -> RuntimeResult<TaskRun> {
@@ -84,12 +88,14 @@ pub fn run_dependent_task_cancellable(
             format!("task exec {} is missing", task.exec_id),
         )
     })?;
+    // Key logs by node id, not task id: a workflow may run the same task in more
+    // than one node, and task-id-keyed paths would overwrite each other's logs.
     let stdout_path = placement
         .logs_dir
-        .join(format!("task.{task_id}.stdout.log"));
+        .join(format!("task.{node_id}.stdout.log"));
     let stderr_path = placement
         .logs_dir
-        .join(format!("task.{task_id}.stderr.log"));
+        .join(format!("task.{node_id}.stderr.log"));
     let args = task_args(exec, task, &primary.selected_endpoint, &primary.state_root);
     let command_cwd = resolve_exec_cwd(&primary.source_root, &exec.cwd)?;
     let command_json = serde_json::to_string(&TaskCommandRecord {
