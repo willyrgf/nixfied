@@ -126,6 +126,18 @@ fn starts_foreground_service_in_owned_process_group_and_records_before_ready() {
         .expect("stopped service row should exist");
     assert_eq!(stopped_process_status, "stopped");
     assert_eq!(stopped_service_status, "stopped");
+    // Shutdown records the actual signal mechanism, not a fabricated exec terminal.
+    let stop_signal: String = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT json_extract(payload_json, '$.signal') FROM events
+             WHERE event_type = 'service.stop.signaled'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("stop should record a signal event");
+    assert_eq!(stop_signal, "TERM");
 }
 
 #[test]
