@@ -5,7 +5,7 @@ Compiled model for workflow-example.
 ## Target
 
 - system: <<system>>
-- runtime ABI: nixfied-runtime-abi:1
+- runtime ABI: nixfied-runtime-abi:1-1b85992d183c
 - toolchain: nixfied-toolchain:1
 
 ## Surfaces
@@ -26,7 +26,7 @@ Compiled model for workflow-example.
 
 ## Lifecycle
 
-- synthetic: readiness synthetic-tcp; health explicit; operations prepare, start, ready, health, stop, clean
+- synthetic: endpoint synthetic-tcp; operations clean, health, prepare, ready, start, stop
 
 ## Tasks
 

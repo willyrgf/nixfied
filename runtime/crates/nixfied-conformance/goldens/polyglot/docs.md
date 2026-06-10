@@ -5,7 +5,7 @@ Compiled model for polyglot-stack.
 ## Target
 
 - system: <<system>>
-- runtime ABI: nixfied-runtime-abi:1
+- runtime ABI: nixfied-runtime-abi:1-1b85992d183c
 - toolchain: nixfied-toolchain:1
 
 ## Surfaces
@@ -27,8 +27,8 @@ Compiled model for polyglot-stack.
 
 ## Lifecycle
 
-- api: readiness api-tcp; health explicit; operations prepare, start, ready, health, stop, clean
-- worker: readiness worker-tcp; health explicit; operations prepare, start, ready, health, stop, clean
+- api: endpoint api-tcp; operations clean, health, prepare, ready, start, stop
+- worker: endpoint worker-tcp; operations clean, health, prepare, ready, start, stop
 
 ## Tasks
 
