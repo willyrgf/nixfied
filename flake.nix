@@ -75,6 +75,11 @@
             runtime = nixfiedRuntime;
             model = selfModel;
           };
+          # `.#check` / `.#test` / `.#ci`: the framework's own source/test/CI gate.
+          devApps = import ./nix/dev.nix {
+            inherit pkgs;
+            gate = nixfiedGate;
+          };
         in
         {
           default = minimalModel;
@@ -82,6 +87,9 @@
           install = nixfiedInstall;
           upgrade = nixfiedUpgrade;
           gate = nixfiedGate;
+          check = devApps.check;
+          test = devApps.test;
+          ci = devApps.ci;
           minimal-model = minimalModel;
           postgres-model = postgresModel;
           workflow-model = workflowModel;
@@ -108,6 +116,21 @@
             type = "app";
             program = "${self.packages.${system}.gate}/bin/nixfied-gate";
             meta.description = "Run the self-hosted conformance gate against the working tree";
+          };
+          check = {
+            type = "app";
+            program = "${self.packages.${system}.check}/bin/nixfied-check";
+            meta.description = "Hermetic source gate (rustfmt/clippy/check) + self-model admission";
+          };
+          test = {
+            type = "app";
+            program = "${self.packages.${system}.test}/bin/nixfied-test";
+            meta.description = "Run the white-box cargo test floor with the pinned toolchain";
+          };
+          ci = {
+            type = "app";
+            program = "${self.packages.${system}.ci}/bin/nixfied-ci";
+            meta.description = "Fail-fast whole-repo gate: check then test then conformance";
           };
         }
       );
