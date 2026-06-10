@@ -228,7 +228,7 @@ toolchain. The raw forms (identical, for a dev shell) are:
 ```sh
 nix develop --command bash -c 'cd runtime && cargo fmt --all -- --check'
 nix develop --command bash -c 'cd runtime && cargo clippy --workspace --all-targets -- -D warnings'
-nix develop --command bash -c 'cd runtime && cargo test --workspace'
+nix develop --command bash -c 'cd runtime && cargo test --workspace --no-fail-fast'
 ```
 
 The dogfood gate (the third `.#ci` stage, and the final CI layer after the cargo
