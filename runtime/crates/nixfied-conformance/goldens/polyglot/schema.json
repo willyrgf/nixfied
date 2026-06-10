@@ -1,1 +1,0 @@
-{"modelTypes":{"modelVersion":1,"primitives":["ExecSpec","Endpoint","ProbeTiming","Lifecycle","TerminalSemantics","ServiceSpec","TaskSpec","SlotPlacement"],"runtimeAbi":"nixfied-runtime-abi:1-1b85992d183c","toolchainId":"nixfied-toolchain:1"},"schemaVersion":1,"source":"model.json","surfaces":["model","schema","docs","capabilities","check","run","ps","down","clean"]}

@@ -1,1 +1,0 @@
-{"environments":["dev"],"services":["api","worker"],"slots":[0],"surfaces":["model","schema","docs","capabilities","check","run","ps","down","clean"],"tasks":["ping-api","ping-worker"],"workflows":[]}
