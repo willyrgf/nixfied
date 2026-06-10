@@ -2529,11 +2529,6 @@ fn add_slot_one(value: &mut Value, start: u16, end: u16) {
     value["slotPolicy"]["max"] = json!(1);
     value["placement"]["slotPlacements"]["1"] = json!({
         "slot": 1,
-        "stateRootTemplate": "${projectId}/${environment}/${slot}",
-        "registryDir": "registry",
-        "runDirTemplate": "runs/${runId}",
-        "logsDirTemplate": "runs/${runId}/logs",
-        "artifactsDirTemplate": "runs/${runId}/artifacts",
         "candidatePorts": {
             "start": start,
             "end": end
@@ -2744,23 +2739,9 @@ fn fixture_model(executable: &str, start_args: &[&str], port: u16) -> Value {
             "max": 0
         },
         "placement": {
-            "stateRootTemplate": "${projectId}/${environment}/${slot}",
-            "registryDir": "registry",
-            "runDirTemplate": "runs/${runId}",
-            "logsDirTemplate": "runs/${runId}/logs",
-            "artifactsDirTemplate": "runs/${runId}/artifacts",
-            "candidatePorts": {
-                "start": port,
-                "end": port
-            },
             "slotPlacements": {
                 "0": {
                     "slot": 0,
-                    "stateRootTemplate": "${projectId}/${environment}/${slot}",
-                    "registryDir": "registry",
-                    "runDirTemplate": "runs/${runId}",
-                    "logsDirTemplate": "runs/${runId}/logs",
-                    "artifactsDirTemplate": "runs/${runId}/artifacts",
                     "candidatePorts": {
                         "start": port,
                         "end": port

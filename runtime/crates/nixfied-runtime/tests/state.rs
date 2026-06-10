@@ -110,19 +110,6 @@ fn slot_out_of_range_is_refused() {
     assert_eq!(error.code, ErrorCode::ModelAdmission);
 }
 
-#[test]
-fn placement_refuses_dot_state_root_template() {
-    let tmp = TempDir::new();
-    let mut value = fixture_model();
-    value["placement"]["stateRootTemplate"] = json!(".");
-    let model: Model = serde_json::from_value(value).expect("model should parse");
-
-    let error = derive_host_placement(&model, "run-1", &tmp.path)
-        .expect_err("dot placement must be outside M0");
-
-    assert_eq!(error.code, ErrorCode::ModelAdmission);
-}
-
 #[cfg(unix)]
 #[test]
 fn materialization_refuses_symlinked_roots() {
@@ -753,11 +740,6 @@ fn add_slot_one(value: &mut Value, start: u16, end: u16) {
     value["capabilities"]["slots"] = json!([0, 1]);
     value["placement"]["slotPlacements"]["1"] = json!({
         "slot": 1,
-        "stateRootTemplate": "${projectId}/${environment}/${slot}",
-        "registryDir": "registry",
-        "runDirTemplate": "runs/${runId}",
-        "logsDirTemplate": "runs/${runId}/logs",
-        "artifactsDirTemplate": "runs/${runId}/artifacts",
         "candidatePorts": {
             "start": start,
             "end": end
@@ -830,23 +812,9 @@ fn fixture_model() -> Value {
         },
         "surfaces": m0_surfaces(),
         "placement": {
-            "stateRootTemplate": "${projectId}/${environment}/${slot}",
-            "registryDir": "registry",
-            "runDirTemplate": "runs/${runId}",
-            "logsDirTemplate": "runs/${runId}/logs",
-            "artifactsDirTemplate": "runs/${runId}/artifacts",
-            "candidatePorts": {
-                "start": 38080,
-                "end": 38090
-            },
             "slotPlacements": {
                 "0": {
                     "slot": 0,
-                    "stateRootTemplate": "${projectId}/${environment}/${slot}",
-                    "registryDir": "registry",
-                    "runDirTemplate": "runs/${runId}",
-                    "logsDirTemplate": "runs/${runId}/logs",
-                    "artifactsDirTemplate": "runs/${runId}/artifacts",
                     "candidatePorts": {
                         "start": 38080,
                         "end": 38090

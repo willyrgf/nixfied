@@ -60,13 +60,20 @@ pub fn derive_host_placement(
     derive_host_placement_for_slot(model, &selected_slot, run_id, state_base)
 }
 
+/// The directory layout the runtime owns. These were pinned constants in every
+/// model; the runtime is their single source of truth.
+const STATE_ROOT_TEMPLATE: &str = "${projectId}/${environment}/${slot}";
+const REGISTRY_DIR: &str = "registry";
+const RUN_DIR_TEMPLATE: &str = "runs/${runId}";
+const LOGS_DIR_TEMPLATE: &str = "runs/${runId}/logs";
+const ARTIFACTS_DIR_TEMPLATE: &str = "runs/${runId}/artifacts";
+
 pub fn derive_host_placement_for_slot(
     model: &Model,
     selected_slot: &SelectedSlot<'_>,
     run_id: &str,
     state_base: impl AsRef<Path>,
 ) -> RuntimeResult<HostPlacement> {
-    validate_placement_templates(model)?;
     let vars = TemplateVars {
         project_id: &model.project.project_id,
         environment: selected_slot.environment,
@@ -80,37 +87,19 @@ pub fn derive_host_placement_for_slot(
             "state base cannot be empty",
         ));
     }
-    let state_root_relative = relative_template_path(
-        "placement.slotPlacements.stateRootTemplate",
-        &selected_slot.placement.state_root_template,
-        &vars,
-    )?;
+    let state_root_relative =
+        relative_template_path("state root", STATE_ROOT_TEMPLATE, &vars)?;
     let state_root = state_base.join(&state_root_relative);
     // The registry holds cleanup evidence and must survive a slot clean, which
     // deletes the state root. Place it in a parallel tree under the state base
     // keyed by the same per-slot path, never inside the deleted state root.
     let registry_dir = state_base
-        .join(relative_template_path(
-            "placement.slotPlacements.registryDir",
-            &selected_slot.placement.registry_dir,
-            &vars,
-        )?)
+        .join(relative_template_path("registry dir", REGISTRY_DIR, &vars)?)
         .join(&state_root_relative);
-    let run_dir = state_root.join(relative_template_path(
-        "placement.slotPlacements.runDirTemplate",
-        &selected_slot.placement.run_dir_template,
-        &vars,
-    )?);
-    let logs_dir = state_root.join(relative_template_path(
-        "placement.slotPlacements.logsDirTemplate",
-        &selected_slot.placement.logs_dir_template,
-        &vars,
-    )?);
-    let artifacts_dir = state_root.join(relative_template_path(
-        "placement.slotPlacements.artifactsDirTemplate",
-        &selected_slot.placement.artifacts_dir_template,
-        &vars,
-    )?);
+    let run_dir = state_root.join(relative_template_path("run dir", RUN_DIR_TEMPLATE, &vars)?);
+    let logs_dir = state_root.join(relative_template_path("logs dir", LOGS_DIR_TEMPLATE, &vars)?);
+    let artifacts_dir =
+        state_root.join(relative_template_path("artifacts dir", ARTIFACTS_DIR_TEMPLATE, &vars)?);
     let summary_path = run_dir.join("summary.json");
     Ok(HostPlacement {
         state_base,
@@ -166,44 +155,6 @@ fn relative_template_path(
         ));
     }
     Ok(path)
-}
-
-fn validate_placement_templates(model: &Model) -> RuntimeResult<()> {
-    for (field, expected, actual) in [
-        (
-            "placement.stateRootTemplate",
-            "${projectId}/${environment}/${slot}",
-            model.placement.state_root_template.as_str(),
-        ),
-        (
-            "placement.registryDir",
-            "registry",
-            model.placement.registry_dir.as_str(),
-        ),
-        (
-            "placement.runDirTemplate",
-            "runs/${runId}",
-            model.placement.run_dir_template.as_str(),
-        ),
-        (
-            "placement.logsDirTemplate",
-            "runs/${runId}/logs",
-            model.placement.logs_dir_template.as_str(),
-        ),
-        (
-            "placement.artifactsDirTemplate",
-            "runs/${runId}/artifacts",
-            model.placement.artifacts_dir_template.as_str(),
-        ),
-    ] {
-        if actual != expected {
-            return Err(RuntimeError::new(
-                ErrorCode::ModelAdmission,
-                format!("requires {field} = {expected}, got {actual}"),
-            ));
-        }
-    }
-    Ok(())
 }
 
 fn materialize_owned_dir(

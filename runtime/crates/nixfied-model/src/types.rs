@@ -100,24 +100,15 @@ pub struct SlotPolicy {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Placement {
-    pub state_root_template: String,
-    pub registry_dir: String,
-    pub run_dir_template: String,
-    pub logs_dir_template: String,
-    pub artifacts_dir_template: String,
-    pub candidate_ports: CandidatePortWindow,
     pub slot_placements: BTreeMap<String, SlotPlacement>,
 }
 
+/// The per-slot candidate port window. Directory layout templates were pinned
+/// constants the runtime owns, so they live there, not in the model.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SlotPlacement {
     pub slot: u32,
-    pub state_root_template: String,
-    pub registry_dir: String,
-    pub run_dir_template: String,
-    pub logs_dir_template: String,
-    pub artifacts_dir_template: String,
     pub candidate_ports: CandidatePortWindow,
 }
 
