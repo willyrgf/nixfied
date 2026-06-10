@@ -58,13 +58,138 @@ pub enum TaskTerminalStatus {
 
 pub fn ensure_service_start_allowed(
     registry: &Registry,
-    _run_id: &str,
+    run_id: &str,
     service_instance_id: &str,
 ) -> RuntimeResult<()> {
     // The run row is created idempotently (a run may own several services), so the
     // safety gates are per service instance: no active lease and no live service.
-    ensure_no_active_lease_conn(registry.connection(), service_instance_id)?;
+    // The run's own reservation lease is excluded so this stays a valid recheck
+    // after the slot is reserved ahead of prepare.
+    ensure_no_active_lease_conn(registry.connection(), service_instance_id, run_id)?;
     ensure_no_active_service_conn(registry.connection(), service_instance_id)
+}
+
+/// Reserve a service instance for a run before any state-mutating lifecycle work
+/// (e.g. prepare/initdb) runs: insert the run row and an active lease under the
+/// same conflict gates as `record_service_start`, so a second runtime racing the
+/// same slot is refused instead of running prepare concurrently. The reservation
+/// must be released (see `release_service_reservation`) if the start later fails
+/// before `record_service_start` takes ownership.
+pub fn reserve_service_start(
+    registry: &mut Registry,
+    run: &RunRecord<'_>,
+    service_instance_id: &str,
+) -> RuntimeResult<()> {
+    let generator_json = serde_json::to_string(&run.model.generator).map_err(json_error)?;
+    let target_json = serde_json::to_string(&run.model.target).map_err(json_error)?;
+    let source_json = serde_json::to_string(&run.admission.source).map_err(json_error)?;
+    let identity = registry.identity().clone();
+    let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
+    ensure_no_active_lease_transaction(&transaction, service_instance_id, run.run_id)?;
+    ensure_no_active_service_transaction(&transaction, service_instance_id)?;
+    transaction
+        .execute(
+            "
+            INSERT OR IGNORE INTO runs (
+              run_id, environment, slot, status, model_path, computed_model_hash,
+              runtime_abi, toolchain_id, generator_json, target_json, source_json,
+              summary_path
+            ) VALUES (?1, ?2, ?3, 'service-starting', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+            ",
+            params![
+                run.run_id,
+                identity.environment.as_str(),
+                identity.slot,
+                run.admission.model_path.display().to_string(),
+                run.admission.computed_model_hash.as_str(),
+                run.admission.runtime_abi.as_str(),
+                run.admission.toolchain_id.as_str(),
+                generator_json,
+                target_json,
+                source_json,
+                run.placement.summary_path.display().to_string(),
+            ],
+        )
+        .map_err(sql_error)?;
+    transaction
+        .execute(
+            "
+            INSERT OR IGNORE INTO run_leases (
+              run_id, environment, slot, service_instance_id, owner_token,
+              heartbeat_at, expires_at, status
+            ) VALUES (
+              ?1, ?2, ?3, ?4, ?5,
+              strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+              strftime('%Y-%m-%dT%H:%M:%fZ','now', ?6),
+              'active'
+            )
+            ",
+            params![
+                run.run_id,
+                identity.environment.as_str(),
+                identity.slot,
+                service_instance_id,
+                run.owner_token,
+                lease_ttl_modifier(),
+            ],
+        )
+        .map_err(sql_error)?;
+    insert_event(
+        &transaction,
+        &identity,
+        EventRecord {
+            event_type: "service.reserved",
+            run_id: Some(run.run_id),
+            service_instance_id: Some(service_instance_id),
+            process_key: None,
+            computed_model_hash: Some(&run.admission.computed_model_hash),
+            payload_json: "{}",
+        },
+    )?;
+    transaction.commit().map_err(sql_error)?;
+    Ok(())
+}
+
+/// Release a reservation taken by `reserve_service_start` when the start fails
+/// before `record_service_start` takes ownership, so the lease does not leak and
+/// block later runs.
+pub fn release_service_reservation(
+    registry: &mut Registry,
+    run_id: &str,
+    service_instance_id: &str,
+) -> RuntimeResult<()> {
+    let identity = registry.identity().clone();
+    let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
+    transaction
+        .execute(
+            "
+            UPDATE run_leases
+            SET status = 'failed'
+            WHERE run_id = ?1 AND service_instance_id = ?2 AND status IN ('active', 'canceling')
+            ",
+            params![run_id, service_instance_id],
+        )
+        .map_err(sql_error)?;
+    transaction
+        .execute(
+            "UPDATE runs SET status = 'service-failed' WHERE run_id = ?1 AND status = 'service-starting'",
+            params![run_id],
+        )
+        .map_err(sql_error)?;
+    insert_event(
+        &transaction,
+        &identity,
+        EventRecord {
+            event_type: "service.reservation-released",
+            run_id: Some(run_id),
+            service_instance_id: Some(service_instance_id),
+            process_key: None,
+            computed_model_hash: None,
+            payload_json: "{}",
+        },
+    )?;
+    transaction.commit().map_err(sql_error)?;
+    Ok(())
 }
 
 pub fn record_service_start(
@@ -78,7 +203,7 @@ pub fn record_service_start(
     let source_json = serde_json::to_string(&run.admission.source).map_err(json_error)?;
     let identity = registry.identity().clone();
     let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
-    ensure_no_active_lease_transaction(&transaction, service.service_instance_id)?;
+    ensure_no_active_lease_transaction(&transaction, service.service_instance_id, run.run_id)?;
     ensure_no_active_service_transaction(&transaction, service.service_instance_id)?;
     ensure_no_active_port_transaction(
         &transaction,
@@ -862,16 +987,23 @@ fn refuse_active_service(service_instance_id: &str, existing: Option<String>) ->
     }
 }
 
-fn ensure_no_active_lease_conn(conn: &Connection, service_instance_id: &str) -> RuntimeResult<()> {
+// The caller's own reservation lease is excluded via `own_run_id` so the start
+// path can reserve the slot before prepare and still pass its own later checks.
+// An empty `own_run_id` excludes nothing (run ids are non-empty).
+fn ensure_no_active_lease_conn(
+    conn: &Connection,
+    service_instance_id: &str,
+    own_run_id: &str,
+) -> RuntimeResult<()> {
     let existing = conn
         .query_row(
             "
             SELECT run_id, status FROM run_leases
-            WHERE service_instance_id = ?1 AND status IN ('active', 'canceling')
+            WHERE service_instance_id = ?1 AND run_id != ?2 AND status IN ('active', 'canceling')
             ORDER BY run_id
             LIMIT 1
             ",
-            params![service_instance_id],
+            params![service_instance_id, own_run_id],
             |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
         )
         .optional()
@@ -882,16 +1014,17 @@ fn ensure_no_active_lease_conn(conn: &Connection, service_instance_id: &str) -> 
 fn ensure_no_active_lease_transaction(
     transaction: &Transaction<'_>,
     service_instance_id: &str,
+    own_run_id: &str,
 ) -> RuntimeResult<()> {
     let existing = transaction
         .query_row(
             "
             SELECT run_id, status FROM run_leases
-            WHERE service_instance_id = ?1 AND status IN ('active', 'canceling')
+            WHERE service_instance_id = ?1 AND run_id != ?2 AND status IN ('active', 'canceling')
             ORDER BY run_id
             LIMIT 1
             ",
-            params![service_instance_id],
+            params![service_instance_id, own_run_id],
             |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
         )
         .optional()

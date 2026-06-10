@@ -27,7 +27,8 @@ use crate::service::registry::{
     ProcessRecord, RunRecord, ServiceRecord, ensure_service_start_allowed,
     mark_endpoint_owner_verified, mark_process_escape, mark_service_canceled, mark_service_failed,
     mark_service_probe_ready, mark_service_stopped, record_service_canceling,
-    record_service_lifecycle_event, record_service_start,
+    record_service_lifecycle_event, record_service_start, release_service_reservation,
+    reserve_service_start,
 };
 use crate::slot::{SelectedSlot, select_slot};
 use crate::state::{CleanupOutcome, HostPlacement, StateIdentity, clean_marked_state};
@@ -619,6 +620,18 @@ pub fn start_service_for_slot(
     reconcile_registry(registry)?;
     ensure_service_start_allowed(registry, &run_id, &service_instance_id)?;
     let owner_token = run_owner_token(&run_id);
+    // Reserve the service instance (run row + active lease) under the start
+    // conflict gates before running any state-mutating lifecycle work, so a second
+    // runtime racing the same slot is refused instead of running prepare (e.g.
+    // initdb) concurrently against the same state. Released on failure below.
+    let run_record = RunRecord {
+        run_id: &run_id,
+        owner_token: &owner_token,
+        model,
+        admission,
+        placement,
+    };
+    reserve_service_start(registry, &run_record, &service_instance_id)?;
     let lifecycle_context = LifecycleEventContext {
         run_id: Some(run_id.clone()),
         service_instance_id: service_instance_id.clone(),
@@ -638,6 +651,7 @@ pub fn start_service_for_slot(
             &CancellationToken::new(),
         ) {
             let _ = record_lifecycle_failure(registry, &lifecycle_context, prepare_op, &error);
+            let _ = release_service_reservation(registry, &run_id, &service_instance_id);
             return Err(error);
         }
         record_lifecycle_success(registry, &lifecycle_context, prepare_op)?;
@@ -680,14 +694,18 @@ pub fn start_service_for_slot(
             }
         });
     }
-    let mut child = command.spawn().map_err(|error| {
-        let error = RuntimeError::new(
-            ErrorCode::ProcEscape,
-            format!("failed to spawn service {service_name}: {error}"),
-        );
-        let _ = record_lifecycle_failure(registry, &lifecycle_context, start_op, &error);
-        error
-    })?;
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            let error = RuntimeError::new(
+                ErrorCode::ProcEscape,
+                format!("failed to spawn service {service_name}: {error}"),
+            );
+            let _ = record_lifecycle_failure(registry, &lifecycle_context, start_op, &error);
+            let _ = release_service_reservation(registry, &run_id, &service_instance_id);
+            return Err(error);
+        }
+    };
     let pid = child.id();
     let pgid = match get_process_group(pid) {
         Ok(pgid) => pgid,
@@ -695,6 +713,7 @@ pub fn start_service_for_slot(
             let _ = child.kill();
             let _ = child.wait();
             let _ = record_lifecycle_failure(registry, &lifecycle_context, start_op, &error);
+            let _ = release_service_reservation(registry, &run_id, &service_instance_id);
             return Err(error);
         }
     };
@@ -742,6 +761,7 @@ pub fn start_service_for_slot(
         let _ = terminate_process_group(pgid, 1000);
         let _ = child.wait();
         let _ = record_lifecycle_failure(registry, &started_context, start_op, &error);
+        let _ = release_service_reservation(registry, &run_id, &service_instance_id);
         return Err(error);
     }
     let containment = service.containment.clone();
