@@ -718,6 +718,16 @@ fn validate_endpoint(model: &Model, endpoint: &EndpointSpec) -> Result<(), Valid
 
 fn validate_probe(probe: &ProbeSpec) -> Result<(), ValidationError> {
     require_non_empty("services.probes.probeId", &probe.probe_id)?;
+    // The current runtime ABI implements tcp-connect probes only. Reject http-get
+    // at admission so an advertised primitive cannot compile into a model that
+    // always fails its readiness/health probe at runtime.
+    if let ProbeTarget::HttpGet { .. } = probe.target {
+        return Err(ValidationError::UnsupportedValue {
+            field: "services.probes.target.kind",
+            expected: "tcp-connect",
+            actual: "http-get".to_string(),
+        });
+    }
     if probe.max_attempts == 0 || probe.timeout_ms == 0 || probe.retry_interval_ms == 0 {
         return Err(ValidationError::UnsupportedValue {
             field: "services.probes.timing",
