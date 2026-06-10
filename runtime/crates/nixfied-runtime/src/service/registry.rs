@@ -6,6 +6,9 @@ use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use crate::admission::Admission;
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::registry::leases::lease_ttl_modifier;
+use crate::registry::status::{
+    self, DbStatus, PortStatus, ProcessStatus, RunLeaseStatus, RunStatus, ServiceStatus,
+};
 use crate::registry::{Registry, RegistryIdentity};
 use crate::state::HostPlacement;
 
@@ -93,7 +96,7 @@ pub fn reserve_service_start(
               run_id, environment, slot, status, model_path, computed_model_hash,
               runtime_abi, toolchain_id, generator_json, target_json, source_json,
               summary_path
-            ) VALUES (?1, ?2, ?3, 'service-starting', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+            ) VALUES (?1, ?2, ?3, ?12, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
             ",
             params![
                 run.run_id,
@@ -107,6 +110,7 @@ pub fn reserve_service_start(
                 target_json,
                 source_json,
                 run.placement.summary_path.display().to_string(),
+                RunStatus::ServiceStarting.as_str(),
             ],
         )
         .map_err(sql_error)?;
@@ -120,7 +124,7 @@ pub fn reserve_service_start(
               ?1, ?2, ?3, ?4, ?5,
               strftime('%Y-%m-%dT%H:%M:%fZ','now'),
               strftime('%Y-%m-%dT%H:%M:%fZ','now', ?6),
-              'active'
+              ?7
             )
             ",
             params![
@@ -130,6 +134,7 @@ pub fn reserve_service_start(
                 service_instance_id,
                 run.owner_token,
                 lease_ttl_modifier(),
+                RunLeaseStatus::Active.as_str(),
             ],
         )
         .map_err(sql_error)?;
@@ -161,18 +166,29 @@ pub fn release_service_reservation(
     let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
     transaction
         .execute(
-            "
+            &format!(
+                "
             UPDATE run_leases
-            SET status = 'failed'
-            WHERE run_id = ?1 AND service_instance_id = ?2 AND status IN ('active', 'canceling')
+            SET status = ?3
+            WHERE run_id = ?1 AND service_instance_id = ?2 AND status IN ({})
             ",
-            params![run_id, service_instance_id],
+                status::sql_in_list(status::LEASE_OPEN)
+            ),
+            params![
+                run_id,
+                service_instance_id,
+                RunLeaseStatus::Failed.as_str()
+            ],
         )
         .map_err(sql_error)?;
     transaction
         .execute(
-            "UPDATE runs SET status = 'service-failed' WHERE run_id = ?1 AND status = 'service-starting'",
-            params![run_id],
+            "UPDATE runs SET status = ?2 WHERE run_id = ?1 AND status = ?3",
+            params![
+                run_id,
+                RunStatus::ServiceFailed.as_str(),
+                RunStatus::ServiceStarting.as_str()
+            ],
         )
         .map_err(sql_error)?;
     insert_event(
@@ -216,7 +232,7 @@ pub fn record_service_start(
               run_id, environment, slot, status, model_path, computed_model_hash,
               runtime_abi, toolchain_id, generator_json, target_json, source_json,
               summary_path
-            ) VALUES (?1, ?2, ?3, 'service-starting', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+            ) VALUES (?1, ?2, ?3, ?12, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
             ",
             params![
                 run.run_id,
@@ -230,6 +246,7 @@ pub fn record_service_start(
                 target_json,
                 source_json,
                 run.placement.summary_path.display().to_string(),
+                RunStatus::ServiceStarting.as_str(),
             ],
         )
         .map_err(sql_error)?;
@@ -243,7 +260,7 @@ pub fn record_service_start(
               ?1, ?2, ?3, ?4, ?5,
               strftime('%Y-%m-%dT%H:%M:%fZ','now'),
               strftime('%Y-%m-%dT%H:%M:%fZ','now', ?6),
-              'active'
+              ?7
             )
             ",
             params![
@@ -253,6 +270,7 @@ pub fn record_service_start(
                 service.service_instance_id,
                 run.owner_token,
                 lease_ttl_modifier(),
+                RunLeaseStatus::Active.as_str(),
             ],
         )
         .map_err(sql_error)?;
@@ -264,7 +282,7 @@ pub fn record_service_start(
               service_address_hash, endpoint_identity_hash, state_identity_hash,
               runtime_compatibility_hash, target_identity_hash, status,
               endpoint_json, state_root
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'starting', ?10, ?11)
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?12, ?10, ?11)
             ",
             params![
                 service.service_instance_id,
@@ -278,6 +296,7 @@ pub fn record_service_start(
                 service.identity.target_identity_hash.as_str(),
                 service.endpoint_json,
                 service.state_root.display().to_string(),
+                ServiceStatus::Starting.as_str(),
             ],
         )
         .map_err(sql_error)?;
@@ -287,7 +306,7 @@ pub fn record_service_start(
             INSERT OR REPLACE INTO processes (
               process_key, environment, slot, pid, pgid, start_identity,
               command_json, run_id, service_instance_id, status
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'running')
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
             ",
             params![
                 process.process_key,
@@ -299,6 +318,7 @@ pub fn record_service_start(
                 process.command_json,
                 process.run_id,
                 process.service_instance_id,
+                ProcessStatus::Running.as_str(),
             ],
         )
         .map_err(sql_error)?;
@@ -308,7 +328,7 @@ pub fn record_service_start(
             INSERT OR REPLACE INTO ports (
               endpoint_key, environment, slot, service_instance_id, address, port,
               status, owner_process_key
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'reserved', NULL)
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL)
             ",
             params![
                 service.endpoint_key,
@@ -317,6 +337,7 @@ pub fn record_service_start(
                 service.service_instance_id,
                 service.endpoint_address,
                 service.endpoint_port,
+                PortStatus::Reserved.as_str(),
             ],
         )
         .map_err(sql_error)?;
@@ -363,10 +384,10 @@ pub fn mark_endpoint_owner_verified(
         .execute(
             "
             UPDATE ports
-            SET status = 'active', owner_process_key = ?2
+            SET status = ?3, owner_process_key = ?2
             WHERE endpoint_key = ?1
             ",
-            params![endpoint_key, process_key],
+            params![endpoint_key, process_key, PortStatus::Active.as_str()],
         )
         .map_err(sql_error)?;
     insert_event(
@@ -396,8 +417,8 @@ pub fn mark_service_probe_ready(
     let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
     transaction
         .execute(
-            "UPDATE services SET status = 'probe-ready' WHERE service_instance_id = ?1",
-            params![service_instance_id],
+            "UPDATE services SET status = ?2 WHERE service_instance_id = ?1",
+            params![service_instance_id, ServiceStatus::ProbeReady.as_str()],
         )
         .map_err(sql_error)?;
     insert_event(
@@ -425,40 +446,50 @@ pub fn mark_service_stopped(
 ) -> RuntimeResult<()> {
     let identity = registry.identity().clone();
     let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
-    let run_was_canceling = matches!(
-        transaction
-            .query_row(
-                "SELECT status FROM runs WHERE run_id = ?1",
-                params![run_id],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()
-            .map_err(sql_error)?
-            .as_deref(),
-        Some("canceling" | "canceled")
-    );
-    let (terminal_status, lease_status, event_type) = if run_was_canceling {
-        ("canceled", "canceled", "service.canceled")
+    let run_status = transaction
+        .query_row(
+            "SELECT status FROM runs WHERE run_id = ?1",
+            params![run_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(sql_error)?;
+    let run_was_canceling = run_status
+        .as_deref()
+        .and_then(RunStatus::from_db)
+        .is_some_and(|status| matches!(status, RunStatus::Canceling | RunStatus::Canceled));
+    let (process_status, service_status, lease_status, event_type) = if run_was_canceling {
+        (
+            ProcessStatus::Canceled,
+            ServiceStatus::Canceled,
+            RunLeaseStatus::Canceled,
+            "service.canceled",
+        )
     } else {
-        ("stopped", "completed", "service.stopped")
+        (
+            ProcessStatus::Stopped,
+            ServiceStatus::Stopped,
+            RunLeaseStatus::Completed,
+            "service.stopped",
+        )
     };
     transaction
         .execute(
             "UPDATE processes SET status = ?2 WHERE process_key = ?1",
-            params![process_key, terminal_status],
+            params![process_key, process_status.as_str()],
         )
         .map_err(sql_error)?;
     transaction
         .execute(
             "UPDATE services SET status = ?2 WHERE service_instance_id = ?1",
-            params![service_instance_id, terminal_status],
+            params![service_instance_id, service_status.as_str()],
         )
         .map_err(sql_error)?;
     if run_was_canceling {
         transaction
             .execute(
-                "UPDATE runs SET status = 'canceled' WHERE run_id = ?1",
-                params![run_id],
+                "UPDATE runs SET status = ?2 WHERE run_id = ?1",
+                params![run_id, RunStatus::Canceled.as_str()],
             )
             .map_err(sql_error)?;
     } else {
@@ -467,19 +498,26 @@ pub fn mark_service_stopped(
         // starting status so a task-derived terminal result is never clobbered.
         transaction
             .execute(
-                "UPDATE runs SET status = 'completed' WHERE run_id = ?1 AND status = 'service-starting'",
-                params![run_id],
+                "UPDATE runs SET status = ?2 WHERE run_id = ?1 AND status = ?3",
+                params![
+                    run_id,
+                    RunStatus::Completed.as_str(),
+                    RunStatus::ServiceStarting.as_str()
+                ],
             )
             .map_err(sql_error)?;
     }
     transaction
         .execute(
-            "
+            &format!(
+                "
             UPDATE run_leases
             SET status = ?3
-            WHERE run_id = ?1 AND service_instance_id = ?2 AND status IN ('active', 'canceling')
+            WHERE run_id = ?1 AND service_instance_id = ?2 AND status IN ({})
             ",
-            params![run_id, service_instance_id, lease_status],
+                status::sql_in_list(status::LEASE_OPEN)
+            ),
+            params![run_id, service_instance_id, lease_status.as_str()],
         )
         .map_err(sql_error)?;
     release_service_ports(&transaction, service_instance_id)?;
@@ -511,18 +549,23 @@ pub fn record_service_canceling(
     let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
     transaction
         .execute(
-            "UPDATE runs SET status = 'canceling' WHERE run_id = ?1",
-            params![run_id],
+            "UPDATE runs SET status = ?2 WHERE run_id = ?1",
+            params![run_id, RunStatus::Canceling.as_str()],
         )
         .map_err(sql_error)?;
     transaction
         .execute(
             "
             UPDATE run_leases
-            SET status = 'canceling'
-            WHERE run_id = ?1 AND service_instance_id = ?2 AND status = 'active'
+            SET status = ?3
+            WHERE run_id = ?1 AND service_instance_id = ?2 AND status = ?4
             ",
-            params![run_id, service_instance_id],
+            params![
+                run_id,
+                service_instance_id,
+                RunLeaseStatus::Canceling.as_str(),
+                RunLeaseStatus::Active.as_str()
+            ],
         )
         .map_err(sql_error)?;
     insert_event(
@@ -553,30 +596,37 @@ pub fn mark_service_canceled(
     let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
     transaction
         .execute(
-            "UPDATE processes SET status = 'canceled' WHERE process_key = ?1",
-            params![process_key],
+            "UPDATE processes SET status = ?2 WHERE process_key = ?1",
+            params![process_key, ProcessStatus::Canceled.as_str()],
         )
         .map_err(sql_error)?;
     transaction
         .execute(
-            "UPDATE services SET status = 'canceled' WHERE service_instance_id = ?1",
-            params![service_instance_id],
+            "UPDATE services SET status = ?2 WHERE service_instance_id = ?1",
+            params![service_instance_id, ServiceStatus::Canceled.as_str()],
         )
         .map_err(sql_error)?;
     transaction
         .execute(
-            "UPDATE runs SET status = 'canceled' WHERE run_id = ?1",
-            params![run_id],
+            "UPDATE runs SET status = ?2 WHERE run_id = ?1",
+            params![run_id, RunStatus::Canceled.as_str()],
         )
         .map_err(sql_error)?;
     transaction
         .execute(
-            "
+            &format!(
+                "
             UPDATE run_leases
-            SET status = 'canceled'
-            WHERE run_id = ?1 AND service_instance_id = ?2 AND status IN ('active', 'canceling')
+            SET status = ?3
+            WHERE run_id = ?1 AND service_instance_id = ?2 AND status IN ({})
             ",
-            params![run_id, service_instance_id],
+                status::sql_in_list(status::LEASE_OPEN)
+            ),
+            params![
+                run_id,
+                service_instance_id,
+                RunLeaseStatus::Canceled.as_str()
+            ],
         )
         .map_err(sql_error)?;
     release_service_ports(&transaction, service_instance_id)?;
@@ -634,18 +684,22 @@ pub fn record_task_canceling(
     let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
     transaction
         .execute(
-            "UPDATE runs SET status = 'canceling' WHERE run_id = ?1",
-            params![run_id],
+            "UPDATE runs SET status = ?2 WHERE run_id = ?1",
+            params![run_id, RunStatus::Canceling.as_str()],
         )
         .map_err(sql_error)?;
     transaction
         .execute(
             "
             UPDATE run_leases
-            SET status = 'canceling'
-            WHERE run_id = ?1 AND status = 'active'
+            SET status = ?2
+            WHERE run_id = ?1 AND status = ?3
             ",
-            params![run_id],
+            params![
+                run_id,
+                RunLeaseStatus::Canceling.as_str(),
+                RunLeaseStatus::Active.as_str()
+            ],
         )
         .map_err(sql_error)?;
     insert_event(
@@ -676,30 +730,33 @@ pub fn mark_service_failed(
     let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
     transaction
         .execute(
-            "UPDATE processes SET status = 'failed' WHERE process_key = ?1",
-            params![process_key],
+            "UPDATE processes SET status = ?2 WHERE process_key = ?1",
+            params![process_key, ProcessStatus::Failed.as_str()],
         )
         .map_err(sql_error)?;
     transaction
         .execute(
-            "UPDATE services SET status = 'failed' WHERE service_instance_id = ?1",
-            params![service_instance_id],
+            "UPDATE services SET status = ?2 WHERE service_instance_id = ?1",
+            params![service_instance_id, ServiceStatus::Failed.as_str()],
         )
         .map_err(sql_error)?;
     transaction
         .execute(
-            "UPDATE runs SET status = 'service-failed' WHERE run_id = ?1",
-            params![run_id],
+            "UPDATE runs SET status = ?2 WHERE run_id = ?1",
+            params![run_id, RunStatus::ServiceFailed.as_str()],
         )
         .map_err(sql_error)?;
     transaction
         .execute(
-            "
+            &format!(
+                "
             UPDATE run_leases
-            SET status = 'failed'
-            WHERE run_id = ?1 AND service_instance_id = ?2 AND status IN ('active', 'canceling')
+            SET status = ?3
+            WHERE run_id = ?1 AND service_instance_id = ?2 AND status IN ({})
             ",
-            params![run_id, service_instance_id],
+                status::sql_in_list(status::LEASE_OPEN)
+            ),
+            params![run_id, service_instance_id, RunLeaseStatus::Failed.as_str()],
         )
         .map_err(sql_error)?;
     release_service_ports(&transaction, service_instance_id)?;
@@ -731,30 +788,33 @@ pub fn mark_process_escape(
     let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
     transaction
         .execute(
-            "UPDATE processes SET status = 'escaped' WHERE process_key = ?1",
-            params![process_key],
+            "UPDATE processes SET status = ?2 WHERE process_key = ?1",
+            params![process_key, ProcessStatus::Escaped.as_str()],
         )
         .map_err(sql_error)?;
     transaction
         .execute(
-            "UPDATE services SET status = 'escaped' WHERE service_instance_id = ?1",
-            params![service_instance_id],
+            "UPDATE services SET status = ?2 WHERE service_instance_id = ?1",
+            params![service_instance_id, ServiceStatus::Escaped.as_str()],
         )
         .map_err(sql_error)?;
     transaction
         .execute(
-            "UPDATE runs SET status = 'proc-escaped' WHERE run_id = ?1",
-            params![run_id],
+            "UPDATE runs SET status = ?2 WHERE run_id = ?1",
+            params![run_id, RunStatus::ProcEscaped.as_str()],
         )
         .map_err(sql_error)?;
     transaction
         .execute(
-            "
+            &format!(
+                "
             UPDATE run_leases
-            SET status = 'failed'
-            WHERE run_id = ?1 AND service_instance_id = ?2 AND status IN ('active', 'canceling')
+            SET status = ?3
+            WHERE run_id = ?1 AND service_instance_id = ?2 AND status IN ({})
             ",
-            params![run_id, service_instance_id],
+                status::sql_in_list(status::LEASE_OPEN)
+            ),
+            params![run_id, service_instance_id, RunLeaseStatus::Failed.as_str()],
         )
         .map_err(sql_error)?;
     release_service_ports(&transaction, service_instance_id)?;
@@ -789,7 +849,7 @@ pub fn ensure_service_instance_probe_ready(
         .optional()
         .map_err(sql_error)?;
     match status.as_deref() {
-        Some("probe-ready") => Ok(()),
+        Some(raw) if raw == ServiceStatus::ProbeReady.as_str() => Ok(()),
         Some(status) => Err(RuntimeError::new(
             ErrorCode::DependencyUnavailable,
             format!("service {service_name} is {status}, not probe-ready"),
@@ -813,7 +873,7 @@ pub fn record_task_started(
             INSERT INTO processes (
               process_key, environment, slot, pid, pgid, start_identity,
               command_json, run_id, service_instance_id, status
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, 'running')
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9)
             ",
             params![
                 process.process_key,
@@ -823,7 +883,8 @@ pub fn record_task_started(
                 process.pgid,
                 process.start_identity,
                 process.command_json,
-                process.run_id
+                process.run_id,
+                ProcessStatus::Running.as_str(),
             ],
         )
         .map_err(sql_error)?;
@@ -851,34 +912,52 @@ pub fn mark_task_finished(
     terminal_status: TaskTerminalStatus,
     payload_json: &str,
 ) -> RuntimeResult<()> {
-    let (status, event_type, run_status, lease_status) = match terminal_status {
-        TaskTerminalStatus::Succeeded => ("succeeded", "task.succeeded", "task-succeeded", None),
-        TaskTerminalStatus::Failed => ("failed", "task.failed", "task-failed", Some("failed")),
-        TaskTerminalStatus::Canceled => ("canceled", "task.canceled", "canceled", Some("canceled")),
+    let (process_status, event_type, run_status, lease_status) = match terminal_status {
+        TaskTerminalStatus::Succeeded => (
+            ProcessStatus::Succeeded,
+            "task.succeeded",
+            RunStatus::TaskSucceeded,
+            None,
+        ),
+        TaskTerminalStatus::Failed => (
+            ProcessStatus::Failed,
+            "task.failed",
+            RunStatus::TaskFailed,
+            Some(RunLeaseStatus::Failed),
+        ),
+        TaskTerminalStatus::Canceled => (
+            ProcessStatus::Canceled,
+            "task.canceled",
+            RunStatus::Canceled,
+            Some(RunLeaseStatus::Canceled),
+        ),
     };
     let identity = registry.identity().clone();
     let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
     transaction
         .execute(
             "UPDATE processes SET status = ?2 WHERE process_key = ?1",
-            params![process_key, status],
+            params![process_key, process_status.as_str()],
         )
         .map_err(sql_error)?;
     transaction
         .execute(
             "UPDATE runs SET status = ?2 WHERE run_id = ?1",
-            params![run_id, run_status],
+            params![run_id, run_status.as_str()],
         )
         .map_err(sql_error)?;
     if let Some(lease_status) = lease_status {
         transaction
             .execute(
-                "
+                &format!(
+                    "
                 UPDATE run_leases
                 SET status = ?2
-                WHERE run_id = ?1 AND status IN ('active', 'canceling')
+                WHERE run_id = ?1 AND status IN ({})
                 ",
-                params![run_id, lease_status],
+                    status::sql_in_list(status::LEASE_OPEN)
+                ),
+                params![run_id, lease_status.as_str()],
             )
             .map_err(sql_error)?;
     }
@@ -969,10 +1048,7 @@ fn ensure_no_active_service_transaction(
 
 fn refuse_active_service(service_instance_id: &str, existing: Option<String>) -> RuntimeResult<()> {
     if let Some(status) = existing {
-        if matches!(
-            status.as_str(),
-            "stopped" | "escaped" | "failed" | "stale" | "canceled"
-        ) {
+        if ServiceStatus::from_db(&status).is_some_and(|status| !status.is_active()) {
             return Ok(());
         }
         Err(RuntimeError::new(
@@ -996,12 +1072,15 @@ fn ensure_no_active_lease_conn(
 ) -> RuntimeResult<()> {
     let existing = conn
         .query_row(
-            "
+            &format!(
+                "
             SELECT run_id, status FROM run_leases
-            WHERE service_instance_id = ?1 AND run_id != ?2 AND status IN ('active', 'canceling')
+            WHERE service_instance_id = ?1 AND run_id != ?2 AND status IN ({})
             ORDER BY run_id
             LIMIT 1
             ",
+                status::sql_in_list(status::LEASE_OPEN)
+            ),
             params![service_instance_id, own_run_id],
             |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
         )
@@ -1017,12 +1096,15 @@ fn ensure_no_active_lease_transaction(
 ) -> RuntimeResult<()> {
     let existing = transaction
         .query_row(
-            "
+            &format!(
+                "
             SELECT run_id, status FROM run_leases
-            WHERE service_instance_id = ?1 AND run_id != ?2 AND status IN ('active', 'canceling')
+            WHERE service_instance_id = ?1 AND run_id != ?2 AND status IN ({})
             ORDER BY run_id
             LIMIT 1
             ",
+                status::sql_in_list(status::LEASE_OPEN)
+            ),
             params![service_instance_id, own_run_id],
             |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
         )
@@ -1065,7 +1147,7 @@ fn ensure_no_active_port_transaction(
         .optional()
         .map_err(sql_error)?;
     if let Some((endpoint_key, status)) = existing
-        && matches!(status.as_str(), "reserved" | "binding" | "bound" | "active")
+        && PortStatus::from_db(&status).is_some_and(|port_status| status::PORT_OPEN.contains(&port_status))
     {
         return Err(RuntimeError::new(
             ErrorCode::PortConflict,
@@ -1083,10 +1165,10 @@ fn release_service_ports(
         .execute(
             "
             UPDATE ports
-            SET status = 'released'
+            SET status = ?2
             WHERE service_instance_id = ?1
             ",
-            params![service_instance_id],
+            params![service_instance_id, PortStatus::Released.as_str()],
         )
         .map_err(sql_error)?;
     Ok(())

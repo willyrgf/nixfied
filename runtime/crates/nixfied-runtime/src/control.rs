@@ -6,14 +6,15 @@ use rusqlite::params;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
+use crate::registry::status::{
+    self, DbStatus, PortStatus, ProcessStatus, RunLeaseStatus, RunStatus, ServiceStatus,
+};
 use crate::registry::{Registry, RegistryIdentity};
 use crate::service::process::{
     process_group_has_live_member, process_is_live_with_identity, signal_process_group,
 };
 use crate::service::registry::{TaskTerminalStatus, mark_service_stopped, mark_task_finished};
 use crate::state::{CleanupOutcome, StateIdentity, clean_marked_state};
-
-const ACTIVE_PROCESS_STATUSES: &[&str] = &["starting", "running", "ready"];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -53,9 +54,9 @@ pub fn reconcile_registry(registry: &mut Registry) -> RuntimeResult<PsReport> {
         let live = if active { row.is_live()? } else { false };
         let reconciled_status = if active && !live {
             mark_process_stale(registry, &row)?;
-            "stale".to_string()
+            ProcessStatus::Stale.as_str().to_string()
         } else if live {
-            "running".to_string()
+            ProcessStatus::Running.as_str().to_string()
         } else {
             row.status.clone()
         };
@@ -85,7 +86,7 @@ pub fn down_owned_process_groups(
     let mut stale = reconciled
         .processes
         .into_iter()
-        .filter(|process| process.reconciled_status == "stale")
+        .filter(|process| process.reconciled_status == ProcessStatus::Stale.as_str())
         .map(|process| process.process_key)
         .collect::<Vec<_>>();
     let rows = process_rows(registry)?;
@@ -263,26 +264,29 @@ fn mark_process_stale(registry: &mut Registry, row: &ProcessRow) -> RuntimeResul
     let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
     transaction
         .execute(
-            "UPDATE processes SET status = 'stale' WHERE process_key = ?1",
-            params![row.process_key],
+            "UPDATE processes SET status = ?2 WHERE process_key = ?1",
+            params![row.process_key, ProcessStatus::Stale.as_str()],
         )
         .map_err(sql_error)?;
     if let Some(service_instance_id) = row.service_instance_id.as_deref() {
         transaction
             .execute(
-                "UPDATE services SET status = 'stale' WHERE service_instance_id = ?1",
-                params![service_instance_id],
+                "UPDATE services SET status = ?2 WHERE service_instance_id = ?1",
+                params![service_instance_id, ServiceStatus::Stale.as_str()],
             )
             .map_err(sql_error)?;
         transaction
             .execute(
-                "
+                &format!(
+                    "
                 UPDATE ports
-                SET status = 'stale'
+                SET status = ?2
                 WHERE service_instance_id = ?1
-                  AND status IN ('reserved', 'binding', 'bound', 'active')
+                  AND status IN ({})
                 ",
-                params![service_instance_id],
+                    status::sql_in_list(status::PORT_OPEN)
+                ),
+                params![service_instance_id, PortStatus::Stale.as_str()],
             )
             .map_err(sql_error)?;
     }
@@ -351,17 +355,18 @@ fn reconcile_stale_port_reservations(registry: &mut Registry) -> RuntimeResult<(
 fn expired_run_leases(registry: &Registry) -> RuntimeResult<Vec<RunLeaseRow>> {
     let mut statement = registry
         .connection()
-        .prepare(
+        .prepare(&format!(
             "
             SELECT l.run_id, l.service_instance_id, l.owner_token, l.heartbeat_at,
                    l.expires_at, l.status, r.computed_model_hash
             FROM run_leases l
             JOIN runs r ON r.run_id = l.run_id
-            WHERE l.status IN ('active', 'canceling')
+            WHERE l.status IN ({})
               AND l.expires_at <= strftime('%Y-%m-%dT%H:%M:%fZ','now')
             ORDER BY l.run_id
             ",
-        )
+            status::sql_in_list(status::LEASE_OPEN)
+        ))
         .map_err(sql_error)?;
     statement
         .query_map([], |row| {
@@ -383,14 +388,15 @@ fn expired_run_leases(registry: &Registry) -> RuntimeResult<Vec<RunLeaseRow>> {
 fn active_port_rows(registry: &Registry) -> RuntimeResult<Vec<PortRow>> {
     let mut statement = registry
         .connection()
-        .prepare(
+        .prepare(&format!(
             "
             SELECT endpoint_key, service_instance_id, address, port, status, owner_process_key
             FROM ports
-            WHERE status IN ('reserved', 'binding', 'bound', 'active')
+            WHERE status IN ({})
             ORDER BY endpoint_key
             ",
-        )
+            status::sql_in_list(status::PORT_OPEN)
+        ))
         .map_err(sql_error)?;
     statement
         .query_map([], |row| {
@@ -431,22 +437,28 @@ fn mark_run_lease_stale(registry: &mut Registry, lease: &RunLeaseRow) -> Runtime
     let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
     transaction
         .execute(
-            "
+            &format!(
+                "
             UPDATE run_leases
-            SET status = 'stale'
-            WHERE run_id = ?1 AND status IN ('active', 'canceling')
+            SET status = ?2
+            WHERE run_id = ?1 AND status IN ({})
             ",
-            params![lease.run_id.as_str()],
+                status::sql_in_list(status::LEASE_OPEN)
+            ),
+            params![lease.run_id.as_str(), RunLeaseStatus::Stale.as_str()],
         )
         .map_err(sql_error)?;
     transaction
         .execute(
-            "
+            &format!(
+                "
             UPDATE runs
-            SET status = 'stale'
-            WHERE run_id = ?1 AND status NOT IN ('canceled', 'task-failed', 'service-failed', 'proc-escaped')
+            SET status = ?2
+            WHERE run_id = ?1 AND status NOT IN ({})
             ",
-            params![lease.run_id.as_str()],
+                status::sql_in_list(status::RUN_TERMINAL)
+            ),
+            params![lease.run_id.as_str(), RunStatus::Stale.as_str()],
         )
         .map_err(sql_error)?;
     let payload_json = serde_json::json!({
@@ -482,13 +494,16 @@ fn mark_port_stale(
     let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
     transaction
         .execute(
-            "
+            &format!(
+                "
             UPDATE ports
-            SET status = 'stale'
+            SET status = ?2
             WHERE endpoint_key = ?1
-              AND status IN ('reserved', 'binding', 'bound', 'active')
+              AND status IN ({})
             ",
-            params![port.endpoint_key.as_str()],
+                status::sql_in_list(status::PORT_OPEN)
+            ),
+            params![port.endpoint_key.as_str(), PortStatus::Stale.as_str()],
         )
         .map_err(sql_error)?;
     let payload_json = serde_json::json!({
@@ -582,7 +597,7 @@ struct ControlEvent<'a> {
 }
 
 fn is_active_status(status: &str) -> bool {
-    ACTIVE_PROCESS_STATUSES.contains(&status)
+    ProcessStatus::from_db(status).is_some_and(|status| status::PROCESS_ACTIVE.contains(&status))
 }
 
 fn sql_error(error: rusqlite::Error) -> RuntimeError {
