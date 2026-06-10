@@ -142,8 +142,9 @@ nix flake check
 
 # 3. Dogfood gate: nixfied runs its own conformance workflow.
 #    `nix run .#gate` rebuilds the runtime + self-model from the working tree,
-#    smoke-checks, then runs the workflow in a private throwaway state dir. Run it
-#    from the repo root after any significant change; forward args after `--`.
+#    smoke-checks, then runs the workflow in a fixed state dir ($TMPDIR/nixfied-gate)
+#    that is wiped fresh each run and kept afterward, so the reported summary/logs/
+#    verdicts stay inspectable. Run from the repo root; forward args after `--`.
 nix run .#gate                    # or: nix run .#gate -- --timeout-ms 120000
 ```
 

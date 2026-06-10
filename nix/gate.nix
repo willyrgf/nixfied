@@ -7,8 +7,10 @@
 # as CI does. Extra args are forwarded to `run` (e.g. `nix run .#gate -- --slot 1`).
 #
 # Run it from the repo root so the working tree is the checkout under test (the
-# adoption check installs/upgrades `path:$PWD`). Each run uses a private throwaway
-# state dir, so repeated runs never collide with each other or with prior state.
+# adoption check installs/upgrades `path:$PWD`). The run uses a fixed state dir
+# that is wiped at the start of each run (so repeated runs never collide or hit a
+# stale state marker) and KEPT afterward, so the run summary, logs, and
+# ground-truth artifacts it reports remain inspectable until the next run.
 {
   pkgs,
   runtime,
@@ -23,15 +25,22 @@ pkgs.writeShellApplication {
   text = ''
     runtime="${runtime}/bin/nixfied-runtime"
     model="${model}/model.json"
-    state="$(mktemp -d "''${TMPDIR:-/tmp}/nixfied-gate.XXXXXX")"
-    trap 'rm -rf "$state"' EXIT
+
+    # A fixed, predictable state dir: wiped fresh at the start of every run, kept
+    # afterward so the reported paths (workflow summary, task logs, ground-truth
+    # verdicts) survive for inspection.
+    state="''${TMPDIR:-/tmp}/nixfied-gate"
+    rm -rf "$state"
+    mkdir -p "$state"
     export NIXFIED_STATE_DIR="$state"
+    export NIXFIED_CONFORMANCE_ARTIFACTS="$state/conformance-artifacts"
     export NIXFIED_CONFORMANCE_CHECKOUT="''${NIXFIED_CONFORMANCE_CHECKOUT:-$PWD}"
 
     echo "==> check (launch sanity)" >&2
     "$runtime" check --model "$model" >/dev/null
     echo "==> run --workflow conformance" >&2
-    "$runtime" run \
+    echo "    state + ground-truth artifacts: $state" >&2
+    exec "$runtime" run \
       --model "$model" \
       --workflow conformance \
       --timeout-ms 600000 \
