@@ -60,10 +60,12 @@ mode:
   *disposable views*. (v1: artifact sealing kept growing toward a mini package
   format.)
 - **Manifest hardening → model-owned admission contract.** Source identity,
-  target identity, generator/toolchain identity, closure metadata, runtime
-  capabilities, layered service identity, state policy, and secret descriptors are
-  first-class `model.json` fields — so the model *is* the admission contract, not
-  just an execution graph.
+  target identity, generator/toolchain identity, closure metadata, layered service
+  identity, and state policy are first-class `model.json` fields — so the model
+  *is* the admission contract, not just an execution graph. The contract is also
+  *typed*: illegal shapes (a malformed lifecycle, a non-loopback endpoint, a zero
+  timeout) are unrepresentable rather than caught by a rule, and the
+  cross-references are proven by lowering the model into the executor's input.
 - **Self-hash → computed provenance hash.** The model embeds no self-hash
   (circular). The runtime computes `computedModelHash = sha256(raw bytes)` at
   admission and records it in registry/summaries/logs/errors.
@@ -72,9 +74,12 @@ mode:
   compiler provenance. A non-store escape hatch exists only for framework
   tests/dev (`--allow-non-store-model`).
 - **No cross-version compatibility.** A model is valid only for the exact
-  `runtimeAbi` / `toolchainId` that produced it. No migration layer; updating
-  Nixfied means recompiling. This keeps the first implementation simple and
-  honest, and the version integer bumps only on a real breaking change — never per
+  `runtimeAbi` / `toolchainId` that produced it. The `runtimeAbi` is *derived*: its
+  suffix is a digest of the capability descriptor, hashed identically by Rust and
+  Nix, so any contract change rotates it on both sides and old models are rejected.
+  No migration layer; updating Nixfied means recompiling. This keeps the first
+  implementation simple and honest, and the version integer bumps only on a real
+  breaking change — never per
   milestone or docs rebuild.
 
 ## Correctness in four layers
@@ -85,9 +90,10 @@ mode:
 2. **Closure correctness (Nix).** Reproducibly realise the store paths the runtime
    may execute.
 3. **Admission correctness (Rust).** Host checks Nix cannot prove: store origin,
-   exact ABI/toolchain, target/capability support, source policy, already-realised
-   closures, writable marker-owned state, registry acquisition, port ownership
-   strategy, stale-lease reconciliation, secret policy.
+   exact ABI/toolchain, target support, source policy, already-realised closures,
+   reference resolution (the model lowers into the executor's input only if every
+   cross-reference exists), writable marker-owned state, registry acquisition, port
+   ownership strategy, and stale-lease reconciliation.
 4. **Execution correctness (Rust).** The impure graph: process groups, signals,
    readiness/health, tasks, workflow cancellation, registry events, summaries,
    cleanup, reconciliation.
@@ -107,11 +113,13 @@ Every runtime action is scoped by `projectId / environment / slot / runId`.
   `serviceInstanceId = hash(serviceAddress, endpointIdentity, stateIdentity,
   runtimeCompatibilityHash, targetIdentity)`. Reuse requires an exact match across
   all layers. (v1: reuse blurred incompatible runtime configs.)
-- **Placement is split by phase.** Nix bakes *logical* placement (template roots,
-  relative layouts, candidate port windows) into the model; Rust materialises
-  *host-absolute* placement at admission (`$NIXFIED_STATE_DIR` or a platform
-  default); run-scoped paths use the `runId` known only at runtime. (v1: placement
-  drifted when both sides derived it.)
+- **Placement is split by phase.** Nix bakes only the *logical* placement the
+  model needs — the per-slot candidate port windows — into `model.json`; the
+  directory layout (state root, registry, run/logs/artifacts) is a runtime-owned
+  constant, and Rust materialises *host-absolute* placement at admission
+  (`$NIXFIED_STATE_DIR` or a platform default), with run-scoped paths using the
+  `runId` known only at runtime. (v1: placement drifted when both sides derived it;
+  the layout templates were later pinned constants in the model, then removed.)
 
 ## Registry, liveness, leases
 
@@ -137,19 +145,19 @@ Every runtime action is scoped by `projectId / environment / slot / runId`.
   the state base, symlink/traversal escapes, unmarked roots, marker mismatches,
   active leases/processes/reservations, and policy-protected persistent state; and
   is idempotent and crash-safe.
-- **Containment is capability-gated.** Services run foreground under a
-  runtime-owned process group; cancellation propagates to the whole group; a
-  process counts as started only after a registry record exists. A supervisor
-  whose children form their own groups uses `process-tree` containment.
-  Daemonization/double-fork without a stable handoff is refused as `PROC_ESCAPE`.
-  (v1: containment differed by platform with no single owner.)
+- **Containment is runtime-owned.** Services run foreground under a runtime-owned
+  process group; cancellation propagates to the whole group; a process counts as
+  started only after a registry record exists. A supervisor whose children form
+  their own groups uses `process-tree` containment. Daemonization/double-fork
+  without a stable handoff is refused as `PROC_ESCAPE`. (v1: containment differed
+  by platform with no single owner.)
 
 ## Secrets
 
-Full secrets management is deferred, but non-leakage is not. The model may carry
-secret *references*, never values; persistent output (logs, summaries, registry,
-errors) is redacted before write. The conservative current stance: only an empty
-`secrets` section is accepted.
+Full secrets management is deferred, but non-leakage is not. The contract carries
+no secrets section at all; persistent output (logs, summaries, registry, errors)
+is redacted before write. Reintroducing secret *references* (never values) is
+future scope.
 
 ## What v1 taught us (and the invariant each lesson produced)
 
@@ -165,7 +173,7 @@ errors) is redacted before write. The conservative current stance: only an empty
 | Lease/refcount assumed a daemon | run/service/borrower lease split |
 | Adapter complexity preceded proven lifecycle | generic primitives before concrete adapters (RUNTIME-GENERIC-1) |
 | A single huge proof workspace became a second framework | tiered proofs; later, self-hosted conformance |
-| Duplicate command families per lifecycle action | model-derived public surfaces (SURFACE-1) |
+| Duplicate command families per lifecycle action | framework-owned public surfaces (SURFACE-1) |
 
 ## Self-hosted conformance (the gate)
 

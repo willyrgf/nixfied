@@ -50,7 +50,11 @@ deliberate change to the contract (and matching version bump + docs + tests):
 - **HASH-1:** the runtime computes `computedModelHash = sha256(raw bytes)`; no
   self-hash is embedded.
 - **ABI-1:** admission requires an exact `runtimeAbi` / `toolchainId` match; no
-  cross-version compatibility, no migrations.
+  cross-version compatibility, no migrations. `runtimeAbi` is *derived*: its suffix
+  is a digest of the capability descriptor
+  (`runtime/crates/nixfied-model/capability.txt`), which Rust
+  (`nixfied-model::constants`) and Nix (`nix/spec/constants.nix`) hash identically,
+  so a contract change rotates the ABI on both sides at once.
 - **SEAM-1:** `nixfied-runtime` never invokes Nix, `nix-store`, `nix build`, or
   `nix eval`, and never imports Nix expressions.
 - **PREPARE-1:** every referenced closure is realised before the runtime starts;
@@ -74,9 +78,11 @@ deliberate change to the contract (and matching version bump + docs + tests):
   process group; cancellation propagates to the whole group; a long-lived process
   counts as started only after a registry process record; admission fails if a
   service needs stronger containment than the host supports.
-- **SECRET-1 / REDACT-1:** the model holds secret references, never values;
-  persistent output is redacted before write.
-- **SURFACE-1:** a public command is stable only when declared in `model.surfaces`.
+- **REDACT-1:** persistent output is redacted before write. (Secrets are not yet
+  part of the contract — see deferred scope; the model carries no secret section.)
+- **SURFACE-1:** the public command set (`model`, `schema`, `docs`, `capabilities`,
+  `check`, `run`, `ps`, `down`, `clean`) is framework-owned, derived in the views,
+  and listed in the capability descriptor — not user-declared in the model.
 - **SHELL-1 / NIX-1:** shell cannot own graph/registry/summary/validation/liveness/
   cleanup semantics; Nix cannot own live supervision/liveness/cancellation/registry/
   cleanup.
@@ -247,7 +253,7 @@ contract-shaped reason (and the matching validation + runtime path + proof):
   borrower leases (only `run-scoped` is implemented);
 - additional source modes (`snapshot`, `flake-input`) and non-`fail` port
   collision policies;
-- real secret injection (the model accepts only an empty `secrets` section);
+- real secret injection (secrets are not part of the contract yet);
 - a portable, non-semantic manifest envelope; a dynamic runtime adapter protocol.
 
 ## Git Hygiene
