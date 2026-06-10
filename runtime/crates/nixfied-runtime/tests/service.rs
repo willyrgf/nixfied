@@ -3050,7 +3050,23 @@ fn executable_from_dir(dir: &Path, names: &[&str]) -> Option<PathBuf> {
         let Ok(canonical) = candidate.canonicalize() else {
             continue;
         };
-        if canonical.starts_with("/nix/store") {
+        if !canonical.starts_with("/nix/store") {
+            continue;
+        }
+        // Return a /nix/store path whose *file name* is still the requested shell
+        // name, never the canonicalized target. A multi-call binary (e.g. busybox)
+        // dispatches on `argv[0]`: invoked as `.../bin/sh` it acts as a shell, but
+        // invoked by its canonical `.../bin/busybox` path it treats `-c` as an
+        // applet name and exits 127. The runtime execs this path verbatim, so the
+        // name must be preserved.
+        if candidate.starts_with("/nix/store") {
+            return Some(candidate);
+        }
+        let store_named = canonical.with_file_name(name);
+        if store_named.exists() {
+            return Some(store_named);
+        }
+        if canonical.file_name() == Some(std::ffi::OsStr::new(name)) {
             return Some(canonical);
         }
     }
