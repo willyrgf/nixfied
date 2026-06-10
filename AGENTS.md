@@ -3,6 +3,8 @@
 This repository is Nixfied: a Nix-authored project model with a generic, Nix-free
 Rust runtime. This file is the contributor/agent guide and the architectural
 contract. Keep work small, explicit, and within the invariants below.
+`docs/ARCHITECTURE.md` records the design rationale (the *why*); `README.md`
+covers usage.
 
 ## Architecture
 

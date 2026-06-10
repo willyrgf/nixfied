@@ -219,5 +219,6 @@ Intentionally not built yet (no compatibility promise either way):
 - real secret injection (the model accepts only an empty `secrets` section);
 - a portable manifest envelope and a dynamic runtime adapter protocol.
 
-`AGENTS.md` is the contributor guide and records the architecture, invariants,
-and boundaries to honor when extending the framework.
+`AGENTS.md` is the contributor guide and records the invariants, boundaries, and
+checks to honor when extending the framework. `docs/ARCHITECTURE.md` records the
+design rationale — the *why* behind those invariants.
