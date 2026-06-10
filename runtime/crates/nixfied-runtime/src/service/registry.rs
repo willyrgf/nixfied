@@ -337,6 +337,16 @@ pub fn mark_service_stopped(
                 params![run_id],
             )
             .map_err(sql_error)?;
+    } else {
+        // A run whose environment declares services but no tasks finishes here:
+        // move it out of 'service-starting' to a terminal status. Guarded on the
+        // starting status so a task-derived terminal result is never clobbered.
+        transaction
+            .execute(
+                "UPDATE runs SET status = 'completed' WHERE run_id = ?1 AND status = 'service-starting'",
+                params![run_id],
+            )
+            .map_err(sql_error)?;
     }
     transaction
         .execute(
