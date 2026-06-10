@@ -1041,7 +1041,7 @@ fn task_timeout_records_canceled_summary_and_terminates_task_group() {
         .execs
         .get_mut("synthetic-helper")
         .expect("fixture has exec")
-        .timeout_ms = 100;
+        .timeout_ms = 100u64.try_into().unwrap();
     fixture
         .model
         .tasks
@@ -1371,8 +1371,8 @@ fn readiness_timeout_prefers_escape_discovered_during_probe() {
         .probes
         .first_mut()
         .expect("fixture has probe");
-    probe.max_attempts = 30;
-    probe.retry_interval_ms = 20;
+    probe.max_attempts = 30u32.try_into().unwrap();
+    probe.retry_interval_ms = 20u64.try_into().unwrap();
     fixture.relower();
     let mut service = start_synthetic_service(
         &fixture.model,

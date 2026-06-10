@@ -584,13 +584,6 @@ fn validate_execs(model: &Model) -> Result<(), ValidationError> {
         }
         require_non_empty("execs.executable", &exec.executable)?;
         require_non_empty("execs.cwd", &exec.cwd)?;
-        if exec.timeout_ms == 0 {
-            return Err(ValidationError::UnsupportedValue {
-                field: "execs.timeoutMs",
-                expected: "positive timeout",
-                actual: "0".to_string(),
-            });
-        }
     }
     Ok(())
 }
@@ -684,30 +677,7 @@ fn validate_services(model: &Model) -> Result<(), ValidationError> {
         for probe in &service.probes {
             validate_probe(probe)?;
         }
-        validate_stop_policy(&service.stop_policy)?;
         validate_service_lifecycle(service)?;
-    }
-    Ok(())
-}
-
-/// Stop is a signal-based runtime primitive, so the declared signal must be one
-/// the runtime can send and the graceful budget must be positive.
-const STOP_SIGNALS: &[&str] = &["TERM", "INT", "QUIT", "HUP"];
-
-fn validate_stop_policy(stop_policy: &StopPolicy) -> Result<(), ValidationError> {
-    if !STOP_SIGNALS.contains(&stop_policy.signal.as_str()) {
-        return Err(ValidationError::UnsupportedValue {
-            field: "services.stopPolicy.signal",
-            expected: "one of TERM, INT, QUIT, HUP",
-            actual: stop_policy.signal.clone(),
-        });
-    }
-    if stop_policy.timeout_ms == 0 {
-        return Err(ValidationError::UnsupportedValue {
-            field: "services.stopPolicy.timeoutMs",
-            expected: "positive timeout",
-            actual: "0".to_string(),
-        });
     }
     Ok(())
 }
@@ -771,16 +741,6 @@ fn validate_probe(probe: &ProbeSpec) -> Result<(), ValidationError> {
             field: "services.probes.target.kind",
             expected: "tcp-connect",
             actual: "http-get".to_string(),
-        });
-    }
-    if probe.max_attempts == 0 || probe.timeout_ms == 0 || probe.retry_interval_ms == 0 {
-        return Err(ValidationError::UnsupportedValue {
-            field: "services.probes.timing",
-            expected: "positive timeoutMs, retryIntervalMs, maxAttempts",
-            actual: format!(
-                "timeoutMs={}, retryIntervalMs={}, maxAttempts={}",
-                probe.timeout_ms, probe.retry_interval_ms, probe.max_attempts
-            ),
         });
     }
     Ok(())
