@@ -73,20 +73,21 @@ fn valid_model_json() -> Value {
             "cleanupPolicy": "delete-on-clean",
             "persistence": "run-scoped"
         },
-        "closures": [{
-            "closureId": "synthetic-helper",
-            "kind": "executable",
-            "storePath": "/nix/store/00000000000000000000000000000000-synthetic-helper",
-            "executable": "/nix/store/00000000000000000000000000000000-synthetic-helper/bin/synthetic-helper",
-            "targetSystem": "aarch64-darwin",
-            "operationBindings": [
-                "service.synthetic.start",
-                "service.synthetic.stop",
-                "task.smoke.run"
-            ],
-            "requiresExecutable": true,
-            "effects": ["process", "network-listener"]
-        }],
+        "closures": {
+            "synthetic-helper": {
+                "kind": "executable",
+                "storePath": "/nix/store/00000000000000000000000000000000-synthetic-helper",
+                "executable": "/nix/store/00000000000000000000000000000000-synthetic-helper/bin/synthetic-helper",
+                "targetSystem": "aarch64-darwin",
+                "operationBindings": [
+                    "service.synthetic.start",
+                    "service.synthetic.stop",
+                    "task.smoke.run"
+                ],
+                "requiresExecutable": true,
+                "effects": ["process", "network-listener"]
+            }
+        },
         "execs": {
             "synthetic-helper": helper_exec()
         },
@@ -165,7 +166,7 @@ fn parse_valid_model() -> Model {
 /// binds its own lifecycle, endpoint, and probe. Used to prove structural
 /// validation accepts arbitrary service counts.
 fn add_worker_service(value: &mut Value) {
-    value["closures"][0]["operationBindings"]
+    value["closures"]["synthetic-helper"]["operationBindings"]
         .as_array_mut()
         .unwrap()
         .push(json!("service.worker.start"));
@@ -273,10 +274,10 @@ fn accepts_a_bounded_acyclic_workflow() {
     let mut value = valid_model_json();
     with_workflow(
         &mut value,
-        json!([
-            { "nodeId": "first", "taskId": "smoke", "dependsOn": [] },
-            { "nodeId": "second", "taskId": "smoke", "dependsOn": ["first"] }
-        ]),
+        json!({
+            "first": { "taskId": "smoke", "dependsOn": [] },
+            "second": { "taskId": "smoke", "dependsOn": ["first"] }
+        }),
     );
     let model: Model = serde_json::from_value(value).expect("model should deserialize");
     model
@@ -291,7 +292,7 @@ fn workflow_node_task_service_deps_must_be_required() {
     // declare it in servicesRequired, so the run plan would never start it.
     value["workflows"]["pipeline"] = json!({
         "servicesRequired": [],
-        "nodes": [{ "nodeId": "first", "taskId": "smoke", "dependsOn": [] }],
+        "nodes": { "first": { "taskId": "smoke", "dependsOn": [] } },
     });
     let model: Model = serde_json::from_value(value).expect("model should deserialize");
     assert_eq!(
@@ -310,10 +311,10 @@ fn rejects_cyclic_workflow() {
     let mut value = valid_model_json();
     with_workflow(
         &mut value,
-        json!([
-            { "nodeId": "a", "taskId": "smoke", "dependsOn": ["b"] },
-            { "nodeId": "b", "taskId": "smoke", "dependsOn": ["a"] }
-        ]),
+        json!({
+            "a": { "taskId": "smoke", "dependsOn": ["b"] },
+            "b": { "taskId": "smoke", "dependsOn": ["a"] }
+        }),
     );
     let model: Model = serde_json::from_value(value).expect("model should deserialize");
     match model
@@ -332,7 +333,7 @@ fn workflow_nodes_must_reference_declared_tasks() {
     let mut value = valid_model_json();
     with_workflow(
         &mut value,
-        json!([{ "nodeId": "n", "taskId": "ghost", "dependsOn": [] }]),
+        json!({ "n": { "taskId": "ghost", "dependsOn": [] } }),
     );
     let model: Model = serde_json::from_value(value).expect("model should deserialize");
     assert_eq!(
@@ -382,7 +383,10 @@ fn host_absolute_placement_is_rejected() {
 #[test]
 fn closure_bindings_must_reference_declared_operations() {
     let mut model = parse_valid_model();
-    model.closures[0]
+    model
+        .closures
+        .get_mut("synthetic-helper")
+        .expect("fixture closure")
         .operation_bindings
         .push("workflow.deferred.run".to_string());
 

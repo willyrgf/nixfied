@@ -98,19 +98,11 @@ fn validate_workflows(model: &Model) -> Result<(), ValidationError> {
             return Err(ValidationError::UnsupportedValue {
                 field: "workflows.nodes",
                 expected: "at least one node",
-                actual: "[]".to_string(),
+                actual: "{}".to_string(),
             });
         }
-        let mut node_ids = BTreeSet::new();
-        for node in &workflow.nodes {
-            require_non_empty("workflows.nodes.nodeId", &node.node_id)?;
-            if !node_ids.insert(node.node_id.as_str()) {
-                return Err(ValidationError::UnsupportedValue {
-                    field: "workflows.nodes.nodeId",
-                    expected: "unique node ids",
-                    actual: node.node_id.clone(),
-                });
-            }
+        // Node ids are unique by construction (map keys). Resolve task references.
+        for node in workflow.nodes.values() {
             if !task_ids.contains(node.task_id.as_str()) {
                 return Err(ValidationError::UndeclaredReference {
                     reference_kind: "workflow.node.taskId",
@@ -118,9 +110,9 @@ fn validate_workflows(model: &Model) -> Result<(), ValidationError> {
                 });
             }
         }
-        for node in &workflow.nodes {
+        for node in workflow.nodes.values() {
             for dependency in &node.depends_on {
-                if !node_ids.contains(dependency.as_str()) {
+                if !workflow.nodes.contains_key(dependency) {
                     return Err(ValidationError::UndeclaredReference {
                         reference_kind: "workflow.node.dependsOn",
                         id: dependency.clone(),
@@ -137,7 +129,7 @@ fn validate_workflows(model: &Model) -> Result<(), ValidationError> {
             .iter()
             .map(String::as_str)
             .collect::<BTreeSet<_>>();
-        for node in &workflow.nodes {
+        for node in workflow.nodes.values() {
             let Some(task) = model.tasks.get(&node.task_id) else {
                 continue;
             };
@@ -158,13 +150,13 @@ fn validate_workflows(model: &Model) -> Result<(), ValidationError> {
 /// Reject cycles via Kahn-style topological reduction.
 fn validate_workflow_acyclic(
     workflow_id: &str,
-    nodes: &[WorkflowNode],
+    nodes: &BTreeMap<String, WorkflowNode>,
 ) -> Result<(), ValidationError> {
     let mut remaining = nodes
         .iter()
-        .map(|node| {
+        .map(|(node_id, node)| {
             (
-                node.node_id.as_str(),
+                node_id.as_str(),
                 node.depends_on
                     .iter()
                     .map(String::as_str)
@@ -411,19 +403,11 @@ fn validate_closures(model: &Model) -> Result<(), ValidationError> {
         return Err(ValidationError::UnsupportedValue {
             field: "closures",
             expected: "at least one closure",
-            actual: "[]".to_string(),
+            actual: "{}".to_string(),
         });
     }
-    let mut seen = BTreeSet::new();
-    for closure in &model.closures {
-        require_non_empty("closures.closureId", &closure.closure_id)?;
-        if !seen.insert(closure.closure_id.as_str()) {
-            return Err(ValidationError::UnsupportedValue {
-                field: "closures.closureId",
-                expected: "unique closure ids",
-                actual: closure.closure_id.clone(),
-            });
-        }
+    // Closure ids are unique by construction (map keys).
+    for closure in model.closures.values() {
         require_non_empty("closures.executable", &closure.executable)?;
         require_non_empty("closures.storePath", &closure.store_path)?;
     }
@@ -567,8 +551,8 @@ fn validate_references(model: &Model) -> Result<(), ValidationError> {
         .collect::<BTreeSet<_>>();
     let closure_ids = model
         .closures
-        .iter()
-        .map(|closure| closure.closure_id.as_str())
+        .keys()
+        .map(String::as_str)
         .collect::<BTreeSet<_>>();
     let exec_ids = model
         .execs
@@ -602,10 +586,10 @@ fn validate_references(model: &Model) -> Result<(), ValidationError> {
         }
     }
 
-    for closure in &model.closures {
+    for (closure_id, closure) in &model.closures {
         if closure.target_system != model.target.closure_system {
             return Err(ValidationError::ClosureTargetMismatch {
-                closure_id: closure.closure_id.clone(),
+                closure_id: closure_id.clone(),
                 target_system: closure.target_system.clone(),
                 closure_system: model.target.closure_system.clone(),
             });
@@ -700,7 +684,7 @@ fn validate_references(model: &Model) -> Result<(), ValidationError> {
         }
     }
 
-    for closure in &model.closures {
+    for closure in model.closures.values() {
         for binding in &closure.operation_bindings {
             if !declared_operations.contains(binding.as_str()) {
                 return Err(ValidationError::UnknownOperationBinding {

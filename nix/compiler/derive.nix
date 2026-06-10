@@ -46,7 +46,6 @@ let
   closurePackages = mapAttrsToList (_id: closure: closure.package) config.nixfied.closures;
   closureExecutable = id: "${config.nixfied.closures.${id}.package}/${config.nixfied.closures.${id}.executable}";
   closureSpec = id: closure: {
-    closureId = id;
     kind = closure.kind;
     storePath = "${closure.package}";
     executable = closureExecutable id;
@@ -55,7 +54,7 @@ let
     requiresExecutable = closure.requiresExecutable;
     effects = closure.effects;
   };
-  closures = mapAttrsToList closureSpec config.nixfied.closures;
+  closures = mapAttrs closureSpec config.nixfied.closures;
 
   # Execs: default the executable to the bound closure executable.
   execSpec = _id: exec: {
@@ -166,11 +165,15 @@ let
 
   workflowSpec = _name: workflow: {
     servicesRequired = workflow.servicesRequired;
-    nodes = map (node: {
-      nodeId = node.nodeId;
-      taskId = node.taskId;
-      dependsOn = node.dependsOn;
-    }) workflow.nodes;
+    nodes = builtins.listToAttrs (
+      map (node: {
+        name = node.nodeId;
+        value = {
+          taskId = node.taskId;
+          dependsOn = node.dependsOn;
+        };
+      }) workflow.nodes
+    );
   };
   workflows = mapAttrs workflowSpec config.nixfied.workflows;
 in
