@@ -35,12 +35,6 @@ in
       "file-write"
     ];
   };
-  nixfied.closures.pg-ctl = {
-    package = postgresql;
-    executable = "bin/pg_ctl";
-    operationBindings = [ "service.postgres.stop" ];
-    effects = [ "process" ];
-  };
   nixfied.closures.pg-psql = {
     package = postgresql;
     executable = "bin/psql";
@@ -58,9 +52,6 @@ in
   nixfied.execs.pg-server = {
     closureId = "pg-server";
   };
-  nixfied.execs.pg-stop = {
-    closureId = "pg-ctl";
-  };
   nixfied.execs.pg-smoke = {
     closureId = "pg-psql";
   };
@@ -69,6 +60,9 @@ in
     foreground = true;
     readinessProbe = "postgres-tcp";
     healthPolicy = "explicit";
+    # Postgres fast shutdown: SIGINT rolls back in-flight transactions and exits
+    # promptly, where the default SIGTERM (smart shutdown) waits for clients.
+    stopPolicy.signal = "INT";
     lifecycle = [
       {
         operationId = "service.postgres.prepare";
@@ -131,14 +125,6 @@ in
       {
         operationId = "service.postgres.stop";
         class = "stop";
-        execId = "pg-stop";
-        execArgs = [
-          "-D"
-          pgdata
-          "stop"
-          "-m"
-          "fast"
-        ];
         terminal = {
           success = "stopped";
           failure = "failed";

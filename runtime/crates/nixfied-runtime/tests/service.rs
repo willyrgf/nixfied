@@ -2988,8 +2988,8 @@ fn fixture_model(executable: &str, start_args: &[&str], port: u16) -> Value {
                     {
                         "operationId": "service.synthetic.stop",
                         "class": "stop",
-                        "execId": "synthetic-helper",
-                        "execArgs": ["stop"],
+                        "execId": null,
+                        "execArgs": [],
                         "probeId": null,
                         "terminal": {
                             "success": "stopped",

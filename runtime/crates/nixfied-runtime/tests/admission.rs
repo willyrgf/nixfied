@@ -186,8 +186,8 @@ fn fixture_model() -> Value {
                     {
                         "operationId": "service.synthetic.stop",
                         "class": "stop",
-                        "execId": "synthetic-helper",
-                        "execArgs": ["stop"],
+                        "execId": null,
+                        "execArgs": [],
                         "probeId": null,
                         "terminal": {
                             "success": "stopped",
