@@ -18,16 +18,6 @@ const REQUIRED_SURFACES: &[&str] = &[
     "clean",
 ];
 
-/// Every service declares the full generic lifecycle operation contract: exactly
-/// one operation per class, in this canonical order of classes.
-const LIFECYCLE_CLASSES: &[LifecycleOpClass] = &[
-    LifecycleOpClass::Prepare,
-    LifecycleOpClass::Start,
-    LifecycleOpClass::Ready,
-    LifecycleOpClass::Health,
-    LifecycleOpClass::Stop,
-    LifecycleOpClass::Clean,
-];
 
 pub trait Validate {
     fn validate(&self) -> Result<(), ValidationError>;
@@ -746,125 +736,36 @@ fn validate_probe(probe: &ProbeSpec) -> Result<(), ValidationError> {
     Ok(())
 }
 
-/// Each service declares exactly one lifecycle operation per class with unique
-/// operation ids, and each class binds the generic primitive its semantics
-/// require:
-/// - prepare: optional exec, no probe (e.g. data-dir init);
-/// - start:   required exec, no probe;
-/// - ready:   the readiness probe, no exec;
-/// - health:  a probe, no exec;
-/// - stop:    neither exec nor probe (signal-based primitive via stopPolicy);
-/// - clean:   neither exec nor probe (marker-gated runtime cleanup).
+/// The lifecycle's per-class shape (which class binds an exec, a probe, a signal,
+/// or nothing) is now guaranteed by the `Lifecycle` type, so only value and
+/// relational checks remain: non-empty ids/terminals, and the ready op probing
+/// the declared readiness probe.
 fn validate_service_lifecycle(service: &ServiceSpec) -> Result<(), ValidationError> {
-    let mut seen_ids = BTreeSet::new();
-    for op in &service.lifecycle {
-        require_non_empty("lifecycle.operationId", &op.operation_id)?;
-        if !seen_ids.insert(op.operation_id.as_str()) {
-            return Err(ValidationError::UnsupportedValue {
-                field: "lifecycle.operationId",
-                expected: "unique operation IDs",
-                actual: op.operation_id.clone(),
-            });
-        }
-        require_non_empty("lifecycle.terminal.success", &op.terminal.success)?;
-        require_non_empty("lifecycle.terminal.failure", &op.terminal.failure)?;
+    for (operation_id, terminal) in lifecycle_ops(&service.lifecycle) {
+        require_non_empty("lifecycle.operationId", operation_id)?;
+        require_non_empty("lifecycle.terminal.success", &terminal.success)?;
+        require_non_empty("lifecycle.terminal.failure", &terminal.failure)?;
     }
-
-    let mut by_class: BTreeMap<&str, &LifecycleOpSpec> = BTreeMap::new();
-    for op in &service.lifecycle {
-        let key = class_name(&op.class);
-        if by_class.insert(key, op).is_some() {
-            return Err(ValidationError::UnsupportedValue {
-                field: "lifecycle.class",
-                expected: "exactly one operation per class",
-                actual: key.to_string(),
-            });
-        }
-    }
-    for class in LIFECYCLE_CLASSES {
-        if !by_class.contains_key(class_name(class)) {
-            return Err(ValidationError::UnsupportedValue {
-                field: "lifecycle.class",
-                expected: "full generic lifecycle class set",
-                actual: format!("missing {}", class_name(class)),
-            });
-        }
-    }
-
-    let prepare = by_class[class_name(&LifecycleOpClass::Prepare)];
-    require_no_probe("lifecycle.prepare.probeId", prepare)?;
-
-    let start = by_class[class_name(&LifecycleOpClass::Start)];
-    require_exec("lifecycle.start.execId", start)?;
-    require_no_probe("lifecycle.start.probeId", start)?;
-
-    let ready = by_class[class_name(&LifecycleOpClass::Ready)];
-    require_no_exec("lifecycle.ready.execId", ready)?;
-    match ready.probe_id.as_deref() {
-        Some(probe_id) if probe_id == service.readiness_probe => {}
-        other => {
-            return Err(ValidationError::UnsupportedValue {
-                field: "lifecycle.ready.probeId",
-                expected: "the service readinessProbe",
-                actual: other.unwrap_or("null").to_string(),
-            });
-        }
-    }
-
-    let health = by_class[class_name(&LifecycleOpClass::Health)];
-    require_no_exec("lifecycle.health.execId", health)?;
-    if health.probe_id.is_none() {
+    if service.lifecycle.ready.probe_id != service.readiness_probe {
         return Err(ValidationError::UnsupportedValue {
-            field: "lifecycle.health.probeId",
-            expected: "a declared probe",
-            actual: "null".to_string(),
-        });
-    }
-
-    // Stop is a signal-based runtime primitive parameterized by stopPolicy, like
-    // clean: it binds neither an exec nor a probe.
-    let stop = by_class[class_name(&LifecycleOpClass::Stop)];
-    require_no_exec("lifecycle.stop.execId", stop)?;
-    require_no_probe("lifecycle.stop.probeId", stop)?;
-
-    let clean = by_class[class_name(&LifecycleOpClass::Clean)];
-    require_no_exec("lifecycle.clean.execId", clean)?;
-    require_no_probe("lifecycle.clean.probeId", clean)?;
-
-    Ok(())
-}
-
-fn require_exec(field: &'static str, op: &LifecycleOpSpec) -> Result<(), ValidationError> {
-    if op.exec_id.is_none() {
-        return Err(ValidationError::UnsupportedValue {
-            field,
-            expected: "a bound exec",
-            actual: "null".to_string(),
+            field: "lifecycle.ready.probeId",
+            expected: "the service readinessProbe",
+            actual: service.lifecycle.ready.probe_id.clone(),
         });
     }
     Ok(())
 }
 
-fn require_no_exec(field: &'static str, op: &LifecycleOpSpec) -> Result<(), ValidationError> {
-    if let Some(exec_id) = &op.exec_id {
-        return Err(ValidationError::UnsupportedValue {
-            field,
-            expected: "null",
-            actual: exec_id.clone(),
-        });
-    }
-    Ok(())
-}
-
-fn require_no_probe(field: &'static str, op: &LifecycleOpSpec) -> Result<(), ValidationError> {
-    if let Some(probe_id) = &op.probe_id {
-        return Err(ValidationError::UnsupportedValue {
-            field,
-            expected: "null",
-            actual: probe_id.clone(),
-        });
-    }
-    Ok(())
+/// The (operationId, terminal) pair of each lifecycle op, in canonical order.
+fn lifecycle_ops(lifecycle: &Lifecycle) -> [(&str, &TerminalSemantics); 6] {
+    [
+        (&lifecycle.prepare.operation_id, &lifecycle.prepare.terminal),
+        (&lifecycle.start.operation_id, &lifecycle.start.terminal),
+        (&lifecycle.ready.operation_id, &lifecycle.ready.terminal),
+        (&lifecycle.health.operation_id, &lifecycle.health.terminal),
+        (&lifecycle.stop.operation_id, &lifecycle.stop.terminal),
+        (&lifecycle.clean.operation_id, &lifecycle.clean.terminal),
+    ]
 }
 
 fn validate_tasks(model: &Model) -> Result<(), ValidationError> {
@@ -887,17 +788,6 @@ fn validate_tasks(model: &Model) -> Result<(), ValidationError> {
         }
     }
     Ok(())
-}
-
-fn class_name(class: &LifecycleOpClass) -> &'static str {
-    match class {
-        LifecycleOpClass::Prepare => "prepare",
-        LifecycleOpClass::Start => "start",
-        LifecycleOpClass::Ready => "ready",
-        LifecycleOpClass::Health => "health",
-        LifecycleOpClass::Stop => "stop",
-        LifecycleOpClass::Clean => "clean",
-    }
 }
 
 fn expect_string(
@@ -1073,28 +963,38 @@ fn validate_references(model: &Model) -> Result<(), ValidationError> {
         for probe in &service.probes {
             probe_ids.insert(probe.probe_id.as_str());
         }
-        for lifecycle in &service.lifecycle {
-            if !declared_operations.insert(lifecycle.operation_id.as_str()) {
+        let lifecycle = &service.lifecycle;
+        for (operation_id, _) in lifecycle_ops(lifecycle) {
+            if !declared_operations.insert(operation_id) {
                 return Err(ValidationError::UnsupportedValue {
                     field: "lifecycle.operationId",
                     expected: "globally unique operation IDs",
-                    actual: lifecycle.operation_id.clone(),
+                    actual: operation_id.to_string(),
                 });
             }
-            if let Some(exec_id) = &lifecycle.exec_id
-                && !exec_ids.contains(exec_id.as_str())
-            {
+        }
+        for exec_id in [
+            lifecycle.prepare.exec_id.as_deref(),
+            Some(lifecycle.start.exec_id.as_str()),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if !exec_ids.contains(exec_id) {
                 return Err(ValidationError::UndeclaredReference {
                     reference_kind: "lifecycle.execId",
-                    id: exec_id.clone(),
+                    id: exec_id.to_string(),
                 });
             }
-            if let Some(probe_id) = &lifecycle.probe_id
-                && !probe_ids.contains(probe_id.as_str())
-            {
+        }
+        for probe_id in [
+            lifecycle.ready.probe_id.as_str(),
+            lifecycle.health.probe_id.as_str(),
+        ] {
+            if !probe_ids.contains(probe_id) {
                 return Err(ValidationError::UndeclaredReference {
                     reference_kind: "lifecycle.probeId",
-                    id: probe_id.clone(),
+                    id: probe_id.to_string(),
                 });
             }
         }

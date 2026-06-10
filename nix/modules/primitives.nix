@@ -17,41 +17,100 @@ let
     };
   };
 
-  lifecycleOpType = types.submodule {
+  operationId = mkOption {
+    type = types.nonEmptyStr;
+    description = "Globally unique lifecycle operation identifier.";
+  };
+  terminal = mkOption {
+    type = terminalType;
+    description = "Typed terminal result tokens.";
+  };
+  execArgs = mkOption {
+    type = types.listOf types.str;
+    default = [ ];
+    description = "Operation-specific args appended to the exec args.";
+  };
+
+  # Each lifecycle class binds exactly the primitive its mechanism needs: an
+  # illegal binding (a stop exec, a probe on start) is unrepresentable.
+  prepareOpType = types.submodule {
     options = {
-      operationId = mkOption {
-        type = types.nonEmptyStr;
-        description = "Globally unique lifecycle operation identifier.";
-      };
-      class = mkOption {
-        type = types.enum [
-          "prepare"
-          "start"
-          "ready"
-          "health"
-          "stop"
-          "clean"
-        ];
-        description = "Generic lifecycle operation class.";
-      };
+      inherit operationId terminal execArgs;
       execId = mkOption {
         type = types.nullOr types.str;
         default = null;
-        description = "Exec bound to this operation, when it executes a command.";
+        description = "Optional data-dir init exec.";
       };
-      execArgs = mkOption {
-        type = types.listOf types.str;
-        default = [ ];
-        description = "Operation-specific args appended to the exec args.";
+    };
+  };
+  startOpType = types.submodule {
+    options = {
+      inherit operationId terminal execArgs;
+      execId = mkOption {
+        type = types.nonEmptyStr;
+        description = "Exec spawned and owned as the foreground service.";
       };
+    };
+  };
+  probeOpType = types.submodule {
+    options = {
+      inherit operationId terminal;
       probeId = mkOption {
-        type = types.nullOr types.str;
-        default = null;
-        description = "Probe bound to this operation, for readiness/health.";
+        type = types.nonEmptyStr;
+        description = "Probe waited on for this operation.";
       };
-      terminal = mkOption {
-        type = terminalType;
-        description = "Typed terminal result tokens.";
+    };
+  };
+  stopOpType = types.submodule {
+    options = {
+      inherit operationId terminal;
+      signal = mkOption {
+        type = types.enum [
+          "TERM"
+          "INT"
+          "QUIT"
+          "HUP"
+        ];
+        default = "TERM";
+        description = "Graceful stop signal.";
+      };
+      timeoutMs = mkOption {
+        type = positiveInt;
+        default = 5000;
+        description = "Graceful stop timeout before SIGKILL escalation.";
+      };
+    };
+  };
+  cleanOpType = types.submodule {
+    options = {
+      inherit operationId terminal;
+    };
+  };
+  lifecycleType = types.submodule {
+    options = {
+      prepare = mkOption {
+        type = prepareOpType;
+        description = "Optional data-dir init.";
+      };
+      start = mkOption {
+        type = startOpType;
+        description = "Spawn-and-own the foreground service.";
+      };
+      ready = mkOption {
+        type = probeOpType;
+        description = "Wait on the readiness probe.";
+      };
+      health = mkOption {
+        type = probeOpType;
+        description = "Wait on a health probe.";
+      };
+      stop = mkOption {
+        type = stopOpType;
+        description = "Signal-based graceful shutdown.";
+      };
+      clean = mkOption {
+        type = cleanOpType;
+        description = "Marker-gated runtime cleanup.";
       };
     };
   };
@@ -134,21 +193,6 @@ let
     };
   };
 
-  stopPolicyType = types.submodule {
-    options = {
-      signal = mkOption {
-        type = types.nonEmptyStr;
-        default = "TERM";
-        description = "Stop signal.";
-      };
-      timeoutMs = mkOption {
-        type = positiveInt;
-        default = 5000;
-        description = "Graceful stop timeout.";
-      };
-    };
-  };
-
   serviceType = types.submodule {
     options = {
       foreground = mkOption {
@@ -157,7 +201,7 @@ let
         description = "Whether the service runs in the runtime-owned foreground process group.";
       };
       lifecycle = mkOption {
-        type = types.listOf lifecycleOpType;
+        type = lifecycleType;
         description = "Full generic lifecycle operation contract.";
       };
       endpoints = mkOption {
@@ -179,11 +223,6 @@ let
         ];
         default = "explicit";
         description = "Health policy.";
-      };
-      stopPolicy = mkOption {
-        type = stopPolicyType;
-        default = { };
-        description = "Stop policy.";
       };
       stateRefs = mkOption {
         type = types.listOf types.str;

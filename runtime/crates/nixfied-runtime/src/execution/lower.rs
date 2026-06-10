@@ -9,8 +9,8 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use nixfied_model::{
-    EndpointSpec, ExecSpec, LifecycleOpClass, LifecycleOpSpec, Model, PortPolicy, ProbeSpec,
-    ProbeTarget, ServiceSpec, StopPolicy, TaskSpec, WorkflowSpec,
+    EndpointSpec, ExecSpec, Lifecycle, Model, PortPolicy, ProbeSpec, ProbeTarget, ServiceSpec,
+    StopSpec, TaskSpec, TerminalSemantics, WorkflowSpec,
 };
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
@@ -131,60 +131,54 @@ fn lower_service(
         probes,
         readiness_probe,
         health_policy: _,
-        stop_policy,
         state_refs: _,
         log_refs: _,
         containment,
         lifetime: _,
         identity,
     } = service;
+    let Lifecycle {
+        prepare,
+        start,
+        ready,
+        health,
+        stop,
+        clean,
+    } = lifecycle;
 
     // The endpoint the runtime binds is the readiness probe's target; the health
     // probe must target the same one, or the runtime would mismatch at execution.
     let (ready_probe, bound_endpoint_id) = lower_probe(probes, readiness_probe)?;
     let endpoint = lower_endpoint(endpoints, &bound_endpoint_id)?;
 
-    let prepare_op = decompose_op(class_op(lifecycle, LifecycleOpClass::Prepare)?);
     let prepare = PrepareOp {
-        exec: match prepare_op.exec_id {
-            Some(exec_id) => Some(resolve_exec_ref(execs, exec_id, prepare_op.exec_args)?),
+        meta: op_meta(&prepare.operation_id, &prepare.terminal),
+        exec: match &prepare.exec_id {
+            Some(exec_id) => Some(resolve_exec_ref(execs, exec_id, &prepare.exec_args)?),
             None => None,
         },
-        meta: prepare_op.meta,
     };
-
-    let start_op = decompose_op(class_op(lifecycle, LifecycleOpClass::Start)?);
-    let start_exec_id = start_op
-        .exec_id
-        .ok_or_else(|| reject(format!("service {name} start operation must bind an exec")))?;
     let start = StartOp {
-        exec: resolve_exec_ref(execs, start_exec_id, start_op.exec_args)?,
-        meta: start_op.meta,
+        meta: op_meta(&start.operation_id, &start.terminal),
+        exec: resolve_exec_ref(execs, &start.exec_id, &start.exec_args)?,
     };
-
     let ready = ReadyOp {
-        meta: decompose_op(class_op(lifecycle, LifecycleOpClass::Ready)?).meta,
+        meta: op_meta(&ready.operation_id, &ready.terminal),
         probe: ready_probe,
     };
-
-    let health_op = decompose_op(class_op(lifecycle, LifecycleOpClass::Health)?);
-    let health_probe_id = health_op
-        .probe_id
-        .ok_or_else(|| reject(format!("service {name} health operation must bind a probe")))?;
-    let (health_probe, health_endpoint_id) = lower_probe(probes, health_probe_id)?;
+    let (health_probe, health_endpoint_id) = lower_probe(probes, &health.probe_id)?;
     if health_endpoint_id != bound_endpoint_id {
         return Err(reject(format!(
             "service {name} health probe targets endpoint {health_endpoint_id}, not the bound endpoint {bound_endpoint_id}"
         )));
     }
     let health = HealthOp {
-        meta: health_op.meta,
+        meta: op_meta(&health.operation_id, &health.terminal),
         probe: health_probe,
     };
-
-    let stop = lower_stop(class_op(lifecycle, LifecycleOpClass::Stop)?, stop_policy);
+    let stop = lower_stop(stop);
     let clean = CleanOp {
-        meta: decompose_op(class_op(lifecycle, LifecycleOpClass::Clean)?).meta,
+        meta: op_meta(&clean.operation_id, &clean.terminal),
     };
 
     Ok(ExecService {
@@ -201,12 +195,19 @@ fn lower_service(
     })
 }
 
-fn lower_stop(op: &LifecycleOpSpec, stop_policy: &StopPolicy) -> StopOp {
-    let StopPolicy { signal, timeout_ms } = stop_policy;
+fn lower_stop(stop: &StopSpec) -> StopOp {
     StopOp {
-        meta: decompose_op(op).meta,
-        signal: StopSignal::from(*signal),
-        timeout: Duration::from_millis(timeout_ms.get()),
+        meta: op_meta(&stop.operation_id, &stop.terminal),
+        signal: StopSignal::from(stop.signal),
+        timeout: Duration::from_millis(stop.timeout_ms.get()),
+    }
+}
+
+fn op_meta(operation_id: &str, terminal: &TerminalSemantics) -> OpMeta {
+    OpMeta {
+        operation_id: operation_id.to_string(),
+        terminal_success: terminal.success.clone(),
+        terminal_failure: terminal.failure.clone(),
     }
 }
 
@@ -321,48 +322,6 @@ fn resolve_exec(exec: &ExecSpec, extra_args: &[String]) -> ResolvedExec {
     }
 }
 
-/// The lifecycle operation of a given class. Validation guarantees exactly one;
-/// the lowering stays total by rejecting if it is absent.
-fn class_op(
-    lifecycle: &[LifecycleOpSpec],
-    class: LifecycleOpClass,
-) -> RuntimeResult<&LifecycleOpSpec> {
-    lifecycle
-        .iter()
-        .find(|op| op.class == class)
-        .ok_or_else(|| reject(format!("lifecycle operation {class:?} is missing")))
-}
-
-struct OpParts<'a> {
-    exec_id: Option<&'a str>,
-    exec_args: &'a [String],
-    probe_id: Option<&'a str>,
-    meta: OpMeta,
-}
-
-/// Destructure a lifecycle op into the parts the lowering uses, with no `..`, so
-/// a new `LifecycleOpSpec` field forces a decision here too.
-fn decompose_op(op: &LifecycleOpSpec) -> OpParts<'_> {
-    let LifecycleOpSpec {
-        operation_id,
-        class: _,
-        exec_id,
-        exec_args,
-        probe_id,
-        terminal,
-    } = op;
-    OpParts {
-        exec_id: exec_id.as_deref(),
-        exec_args,
-        probe_id: probe_id.as_deref(),
-        meta: OpMeta {
-            operation_id: operation_id.clone(),
-            terminal_success: terminal.success.clone(),
-            terminal_failure: terminal.failure.clone(),
-        },
-    }
-}
-
 fn reject(message: impl Into<String>) -> RuntimeError {
     RuntimeError::new(ErrorCode::ModelAdmission, message)
 }
@@ -459,14 +418,14 @@ mod tests {
         json!({
             "serviceId": "svc",
             "foreground": true,
-            "lifecycle": [
-                { "operationId": "svc.prepare", "class": "prepare", "execId": null, "execArgs": [], "probeId": null, "terminal": { "success": "prepared", "failure": "failed" } },
-                { "operationId": "svc.start", "class": "start", "execId": "svc-exec", "execArgs": ["--port", "${port}"], "probeId": null, "terminal": { "success": "spawned", "failure": "failed" } },
-                { "operationId": "svc.ready", "class": "ready", "execId": null, "execArgs": [], "probeId": "svc-tcp", "terminal": { "success": "ready", "failure": "not-ready" } },
-                { "operationId": "svc.health", "class": "health", "execId": null, "execArgs": [], "probeId": "svc-tcp", "terminal": { "success": "healthy", "failure": "unhealthy" } },
-                { "operationId": "svc.stop", "class": "stop", "execId": null, "execArgs": [], "probeId": null, "terminal": { "success": "stopped", "failure": "failed" } },
-                { "operationId": "svc.clean", "class": "clean", "execId": null, "execArgs": [], "probeId": null, "terminal": { "success": "cleaned", "failure": "failed" } }
-            ],
+            "lifecycle": {
+                "prepare": { "operationId": "svc.prepare", "execId": null, "execArgs": [], "terminal": { "success": "prepared", "failure": "failed" } },
+                "start": { "operationId": "svc.start", "execId": "svc-exec", "execArgs": ["--port", "${port}"], "terminal": { "success": "spawned", "failure": "failed" } },
+                "ready": { "operationId": "svc.ready", "probeId": "svc-tcp", "terminal": { "success": "ready", "failure": "not-ready" } },
+                "health": { "operationId": "svc.health", "probeId": "svc-tcp", "terminal": { "success": "healthy", "failure": "unhealthy" } },
+                "stop": { "operationId": "svc.stop", "signal": "TERM", "timeoutMs": 5000, "terminal": { "success": "stopped", "failure": "failed" } },
+                "clean": { "operationId": "svc.clean", "terminal": { "success": "cleaned", "failure": "failed" } }
+            },
             "endpoints": [{
                 "endpointId": "svc-tcp", "protocol": "tcp", "host": "127.0.0.1",
                 "port": { "kind": "candidate-window", "start": 38080, "end": 38090 },
@@ -478,7 +437,6 @@ mod tests {
             }],
             "readinessProbe": "svc-tcp",
             "healthPolicy": "explicit",
-            "stopPolicy": { "signal": "TERM", "timeoutMs": 5000 },
             "stateRefs": [], "logRefs": [],
             "containment": "process-group",
             "lifetime": "run-scoped",
@@ -546,7 +504,7 @@ mod tests {
                 "probeId": "svc-alt-tcp", "target": { "kind": "tcp-connect", "endpointId": "svc-alt" },
                 "timeoutMs": 1000, "retryIntervalMs": 100, "maxAttempts": 20
             }));
-        value["services"]["svc"]["lifecycle"][3]["probeId"] = json!("svc-alt-tcp");
+        value["services"]["svc"]["lifecycle"]["health"]["probeId"] = json!("svc-alt-tcp");
         let error =
             lower(&model_from(value)).expect_err("health on a non-bound endpoint must be rejected");
         assert_eq!(error.code, ErrorCode::ModelAdmission);

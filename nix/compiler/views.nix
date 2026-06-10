@@ -53,7 +53,7 @@
         service:
         let
           serviceSpec = model.services.${service};
-          classes = map (op: op.class) serviceSpec.lifecycle;
+          classes = builtins.attrNames serviceSpec.lifecycle;
         in
         "- ${service}: readiness ${serviceSpec.readinessProbe}; health ${serviceSpec.healthPolicy}; operations ${builtins.concatStringsSep ", " classes}"
       ) model.capabilities.services

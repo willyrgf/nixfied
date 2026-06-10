@@ -76,62 +76,54 @@ let
     foreground = true;
     readinessProbe = "${name}-tcp";
     healthPolicy = "explicit";
-    lifecycle = [
-      {
+    lifecycle = {
+      prepare = {
         operationId = "service.${name}.prepare";
-        class = "prepare";
         terminal = {
           success = "prepared";
           failure = "failed";
         };
-      }
-      {
+      };
+      start = {
         operationId = "service.${name}.start";
-        class = "start";
         execId = name;
         execArgs = serviceArgs name;
         terminal = {
           success = "spawned";
           failure = "failed";
         };
-      }
-      {
+      };
+      ready = {
         operationId = "service.${name}.ready";
-        class = "ready";
         probeId = "${name}-tcp";
         terminal = {
           success = "ready";
           failure = "not-ready";
         };
-      }
-      {
+      };
+      health = {
         operationId = "service.${name}.health";
-        class = "health";
         probeId = "${name}-tcp";
         terminal = {
           success = "healthy";
           failure = "unhealthy";
         };
-      }
-      {
+      };
+      stop = {
         operationId = "service.${name}.stop";
-        class = "stop";
-        execId = name;
-        execArgs = [ "stop" ];
         terminal = {
           success = "stopped";
           failure = "failed";
         };
-      }
-      {
+      };
+      clean = {
         operationId = "service.${name}.clean";
-        class = "clean";
         terminal = {
           success = "cleaned";
           failure = "failed";
         };
-      }
-    ];
+      };
+    };
     endpoints = [
       {
         endpointId = "${name}-tcp";
@@ -177,9 +169,7 @@ in
     executable = "bin/downstream-app";
     operationBindings = [
       "service.api.start"
-      "service.api.stop"
       "service.worker.start"
-      "service.worker.stop"
       "task.ping-api.run"
       "task.ping-worker.run"
     ];

@@ -148,56 +148,14 @@ fn synthetic_service() -> Value {
     json!({
         "serviceId": "synthetic",
         "foreground": true,
-        "lifecycle": [
-            {
-                "operationId": "service.synthetic.prepare",
-                "class": "prepare",
-                "execId": null,
-                "execArgs": [],
-                "probeId": null,
-                "terminal": { "success": "prepared", "failure": "failed" }
-            },
-            {
-                "operationId": "service.synthetic.start",
-                "class": "start",
-                "execId": "synthetic-helper",
-                "execArgs": ["service", "--host", "127.0.0.1", "--port", "${port}"],
-                "probeId": null,
-                "terminal": { "success": "spawned", "failure": "failed" }
-            },
-            {
-                "operationId": "service.synthetic.ready",
-                "class": "ready",
-                "execId": null,
-                "execArgs": [],
-                "probeId": "synthetic-tcp",
-                "terminal": { "success": "ready", "failure": "not-ready" }
-            },
-            {
-                "operationId": "service.synthetic.health",
-                "class": "health",
-                "execId": null,
-                "execArgs": [],
-                "probeId": "synthetic-tcp",
-                "terminal": { "success": "healthy", "failure": "unhealthy" }
-            },
-            {
-                "operationId": "service.synthetic.stop",
-                "class": "stop",
-                "execId": null,
-                "execArgs": [],
-                "probeId": null,
-                "terminal": { "success": "stopped", "failure": "failed" }
-            },
-            {
-                "operationId": "service.synthetic.clean",
-                "class": "clean",
-                "execId": null,
-                "execArgs": [],
-                "probeId": null,
-                "terminal": { "success": "cleaned", "failure": "failed" }
-            }
-        ],
+        "lifecycle": {
+            "prepare": { "operationId": "service.synthetic.prepare", "execId": null, "execArgs": [], "terminal": { "success": "prepared", "failure": "failed" } },
+            "start": { "operationId": "service.synthetic.start", "execId": "synthetic-helper", "execArgs": ["service", "--host", "127.0.0.1", "--port", "${port}"], "terminal": { "success": "spawned", "failure": "failed" } },
+            "ready": { "operationId": "service.synthetic.ready", "probeId": "synthetic-tcp", "terminal": { "success": "ready", "failure": "not-ready" } },
+            "health": { "operationId": "service.synthetic.health", "probeId": "synthetic-tcp", "terminal": { "success": "healthy", "failure": "unhealthy" } },
+            "stop": { "operationId": "service.synthetic.stop", "signal": "TERM", "timeoutMs": 5000, "terminal": { "success": "stopped", "failure": "failed" } },
+            "clean": { "operationId": "service.synthetic.clean", "terminal": { "success": "cleaned", "failure": "failed" } }
+        },
         "endpoints": [{
             "endpointId": "synthetic-tcp",
             "protocol": "tcp",
@@ -215,7 +173,6 @@ fn synthetic_service() -> Value {
         }],
         "readinessProbe": "synthetic-tcp",
         "healthPolicy": "explicit",
-        "stopPolicy": { "signal": "TERM", "timeoutMs": 5000 },
         "stateRefs": ["slot"],
         "logRefs": ["service.synthetic"],
         "containment": "process-group",
@@ -295,10 +252,9 @@ fn add_worker_service(value: &mut Value) {
     worker["endpoints"][0]["endpointId"] = json!("worker-tcp");
     worker["probes"][0]["probeId"] = json!("worker-tcp");
     worker["probes"][0]["target"]["endpointId"] = json!("worker-tcp");
-    for op in worker["lifecycle"].as_array_mut().unwrap() {
-        let class = op["class"].as_str().unwrap();
+    for (class, op) in worker["lifecycle"].as_object_mut().unwrap() {
         op["operationId"] = json!(format!("service.worker.{class}"));
-        if op["probeId"].is_string() {
+        if class == "ready" || class == "health" {
             op["probeId"] = json!("worker-tcp");
         }
     }
@@ -307,18 +263,12 @@ fn add_worker_service(value: &mut Value) {
     value["capabilities"]["services"] = json!(["synthetic", "worker"]);
 }
 
-fn lifecycle_op_mut<'a>(
-    model: &'a mut Model,
-    operation_id: &str,
-) -> &'a mut nixfied_model::LifecycleOpSpec {
-    model
+fn synthetic_lifecycle_mut(model: &mut Model) -> &mut nixfied_model::Lifecycle {
+    &mut model
         .services
         .get_mut("synthetic")
         .expect("fixture has service")
         .lifecycle
-        .iter_mut()
-        .find(|op| op.operation_id == operation_id)
-        .expect("fixture has lifecycle operation")
 }
 
 #[test]
@@ -328,22 +278,10 @@ fn parses_and_validates_contract() {
         .validate()
         .expect("valid model should pass structural validation");
 
-    let classes = model.services["synthetic"]
-        .lifecycle
-        .iter()
-        .map(|op| op.class.clone())
-        .collect::<Vec<_>>();
-    assert_eq!(
-        classes,
-        [
-            nixfied_model::LifecycleOpClass::Prepare,
-            nixfied_model::LifecycleOpClass::Start,
-            nixfied_model::LifecycleOpClass::Ready,
-            nixfied_model::LifecycleOpClass::Health,
-            nixfied_model::LifecycleOpClass::Stop,
-            nixfied_model::LifecycleOpClass::Clean,
-        ]
-    );
+    // The lifecycle is a per-class record: every class is present by construction.
+    let lifecycle = &model.services["synthetic"].lifecycle;
+    assert_eq!(lifecycle.start.operation_id, "service.synthetic.start");
+    assert_eq!(lifecycle.stop.signal, nixfied_model::StopSignal::Term);
 }
 
 #[test]
@@ -372,14 +310,8 @@ fn service_may_not_reference_another_services_probe() {
     // Point the worker's readiness and ready/health probes at the synthetic
     // service's probe (self-consistent within the worker, but cross-service).
     value["services"]["worker"]["readinessProbe"] = json!("synthetic-tcp");
-    for op in value["services"]["worker"]["lifecycle"]
-        .as_array_mut()
-        .unwrap()
-    {
-        if op["probeId"].is_string() {
-            op["probeId"] = json!("synthetic-tcp");
-        }
-    }
+    value["services"]["worker"]["lifecycle"]["ready"]["probeId"] = json!("synthetic-tcp");
+    value["services"]["worker"]["lifecycle"]["health"]["probeId"] = json!("synthetic-tcp");
     let model: Model = serde_json::from_value(value).expect("model should deserialize");
 
     assert_eq!(
@@ -417,8 +349,7 @@ fn probe_may_not_target_another_services_endpoint() {
 fn prepare_operation_may_bind_an_exec() {
     // initdb-style preparation: the prepare class is allowed to bind an exec.
     let mut model = parse_valid_model();
-    lifecycle_op_mut(&mut model, "service.synthetic.prepare").exec_id =
-        Some("synthetic-helper".to_string());
+    synthetic_lifecycle_mut(&mut model).prepare.exec_id = Some("synthetic-helper".to_string());
     model.validate().expect("prepare may bind a generic exec");
 }
 
@@ -707,7 +638,7 @@ fn runtime_constraints_must_use_fail_collision_policy() {
 #[test]
 fn lifecycle_must_bind_readiness_probe_on_ready() {
     let mut model = parse_valid_model();
-    lifecycle_op_mut(&mut model, "service.synthetic.ready").probe_id = None;
+    synthetic_lifecycle_mut(&mut model).ready.probe_id = "synthetic-tcp-other".to_string();
 
     match model
         .validate()
@@ -722,40 +653,14 @@ fn lifecycle_must_bind_readiness_probe_on_ready() {
 
 #[test]
 fn lifecycle_must_have_full_generic_class_set() {
-    let mut model = parse_valid_model();
-    model
-        .services
-        .get_mut("synthetic")
-        .expect("fixture has service")
-        .lifecycle
-        .retain(|op| op.operation_id != "service.synthetic.clean");
-
-    match model
-        .validate()
-        .expect_err("full lifecycle contract requires clean declaration")
-    {
-        ValidationError::UnsupportedValue { field, actual, .. } => {
-            assert_eq!(field, "lifecycle.class");
-            assert!(actual.contains("clean"));
-        }
-        other => panic!("unexpected error: {other:?}"),
-    }
-}
-
-#[test]
-fn ready_and_health_must_remain_distinct_classes() {
-    let mut model = parse_valid_model();
-    lifecycle_op_mut(&mut model, "service.synthetic.health").class =
-        nixfied_model::LifecycleOpClass::Ready;
-
-    // Two ops now share the Ready class; the per-class uniqueness check fires.
-    match model
-        .validate()
-        .expect_err("health must not be conflated with readiness")
-    {
-        ValidationError::UnsupportedValue { field, .. } => assert_eq!(field, "lifecycle.class"),
-        other => panic!("unexpected error: {other:?}"),
-    }
+    // The lifecycle is a per-class record: a missing class is a missing struct
+    // field, rejected at parse rather than by a validation rule.
+    let mut value = valid_model_json();
+    value["services"]["synthetic"]["lifecycle"]
+        .as_object_mut()
+        .unwrap()
+        .remove("clean");
+    serde_json::from_value::<Model>(value).expect_err("a missing lifecycle class must not parse");
 }
 
 #[test]
@@ -781,27 +686,16 @@ fn health_policy_must_be_explicit() {
 
 #[test]
 fn clean_operation_stays_marker_gated_runtime_cleanup() {
-    let mut model = parse_valid_model();
-    lifecycle_op_mut(&mut model, "service.synthetic.clean").exec_id =
-        Some("synthetic-helper".to_string());
-
-    assert_eq!(
-        model
-            .validate()
-            .expect_err("clean must stay a runtime cleanup primitive"),
-        ValidationError::UnsupportedValue {
-            field: "lifecycle.clean.execId",
-            expected: "null",
-            actual: "synthetic-helper".to_string(),
-        }
-    );
+    // clean binds nothing: an execId on it is an unknown field, rejected at parse.
+    let mut value = valid_model_json();
+    value["services"]["synthetic"]["lifecycle"]["clean"]["execId"] = json!("synthetic-helper");
+    serde_json::from_value::<Model>(value).expect_err("a clean exec binding must not parse");
 }
 
 #[test]
 fn lifecycle_operation_ids_must_be_unique() {
     let mut model = parse_valid_model();
-    lifecycle_op_mut(&mut model, "service.synthetic.health").operation_id =
-        "service.synthetic.ready".to_string();
+    synthetic_lifecycle_mut(&mut model).health.operation_id = "service.synthetic.ready".to_string();
 
     match model
         .validate()

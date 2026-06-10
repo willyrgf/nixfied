@@ -88,18 +88,16 @@ in
     foreground = true;
     readinessProbe = "synthetic-tcp";
     healthPolicy = "explicit";
-    lifecycle = [
-      {
+    lifecycle = {
+      prepare = {
         operationId = "service.synthetic.prepare";
-        class = "prepare";
         terminal = {
           success = "prepared";
           failure = "failed";
         };
-      }
-      {
+      };
+      start = {
         operationId = "service.synthetic.start";
-        class = "start";
         execId = "synthetic-helper";
         execArgs = [
           "service"
@@ -112,42 +110,38 @@ in
           success = "spawned";
           failure = "failed";
         };
-      }
-      {
+      };
+      ready = {
         operationId = "service.synthetic.ready";
-        class = "ready";
         probeId = "synthetic-tcp";
         terminal = {
           success = "ready";
           failure = "not-ready";
         };
-      }
-      {
+      };
+      health = {
         operationId = "service.synthetic.health";
-        class = "health";
         probeId = "synthetic-tcp";
         terminal = {
           success = "healthy";
           failure = "unhealthy";
         };
-      }
-      {
+      };
+      stop = {
         operationId = "service.synthetic.stop";
-        class = "stop";
         terminal = {
           success = "stopped";
           failure = "failed";
         };
-      }
-      {
+      };
+      clean = {
         operationId = "service.synthetic.clean";
-        class = "clean";
         terminal = {
           success = "cleaned";
           failure = "failed";
         };
-      }
-    ];
+      };
+    };
     endpoints = [
       {
         endpointId = "synthetic-tcp";
