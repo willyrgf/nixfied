@@ -40,30 +40,19 @@ jobs:
       - name: nix flake check
         run: nix flake check
 
-      # 3. Dogfood gate (debug): the product orchestrates its own conformance, run
-      #    by the nix-built runtime under test through the same surfaces adopters
-      #    use. Uses the debug runtime built by step 2 (cached).
-      - name: build runtime (debug) + self-model
-        run: |
-          echo "RUNTIME_BIN=$(nix build .#nixfied-runtime-debug --no-link --print-out-paths)/bin/nixfied-runtime" >> "$GITHUB_ENV"
-          echo "SELF_MODEL=$(nix build .#self-model --no-link --print-out-paths)/model.json" >> "$GITHUB_ENV"
-      - name: check smoke (fast launch sanity)
-        run: |
-          "$RUNTIME_BIN" check --model "$SELF_MODEL"
-      - name: run --workflow conformance
+      # 3. Gate (debug): the framework runs the example models the way adopters do
+      #    — through the runtime under test — plus the cross-slot, fail-closed, and
+      #    adoption checks. Uses the debug runtime built by step 2 (cached).
+      - name: gate
         env:
-          NIXFIED_CONFORMANCE_CHECKOUT: ${{ github.workspace }}
-          NIXFIED_CONFORMANCE_ARTIFACTS: ${{ github.workspace }}/conformance-artifacts
-        run: |
-          nix develop --command bash -euo pipefail -c '
-            "$RUNTIME_BIN" run --model "$SELF_MODEL" --workflow conformance --timeout-ms 600000
-          '
-      - name: ground-truth artifacts
+          TMPDIR: ${{ runner.temp }}
+        run: nix run .#gate
+      - name: gate artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: conformance-artifacts
-          path: conformance-artifacts/
+          name: gate-artifacts
+          path: ${{ runner.temp }}/nixfied-gate/artifacts/
           if-no-files-found: warn
 
       # 4. Release safety net: the optimized binary `.#install` ships to adopters
