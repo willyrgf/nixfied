@@ -3,6 +3,9 @@ use std::num::{NonZeroU32, NonZeroU64};
 
 use serde::{Deserialize, Serialize};
 
+use crate::ids::{ClosureId, CodebaseId, ExecId, NodeId, OperationId, ServiceId, TaskId};
+use crate::unique_vec::UniqueVec;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Model {
@@ -52,7 +55,7 @@ pub struct Target {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Codebase {
-    pub codebase_id: String,
+    pub codebase_id: CodebaseId,
     pub logical_root: String,
     pub source_mode: SourceMode,
     pub source_identity: String,
@@ -85,8 +88,8 @@ pub enum DirtyPolicy {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Environment {
-    pub services: Vec<String>,
-    pub tasks: Vec<String>,
+    pub services: UniqueVec<ServiceId>,
+    pub tasks: UniqueVec<TaskId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -149,7 +152,7 @@ pub struct ClosureSpec {
     pub store_path: String,
     pub executable: String,
     pub target_system: String,
-    pub operation_bindings: Vec<String>,
+    pub operation_bindings: UniqueVec<OperationId>,
     pub requires_executable: bool,
     pub effects: Vec<ClosureEffect>,
 }
@@ -173,39 +176,21 @@ pub enum ClosureEffect {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExecSpec {
-    pub closure_id: String,
+    pub closure_id: ClosureId,
     pub executable: String,
     pub args: Vec<String>,
     pub env: BTreeMap<String, String>,
-    pub codebase_id: String,
+    pub codebase_id: CodebaseId,
     pub cwd: String,
     pub stdin: StdinPolicy,
     pub timeout_ms: NonZeroU64,
-    pub output_capture: OutputCapture,
-    pub cancellation_mode: CancellationMode,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum StdinPolicy {
     Null,
     Inherit,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum OutputCapture {
-    None,
-    Stdout,
-    Stderr,
-    StdoutStderr,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum CancellationMode {
-    KillProcessGroup,
-    KillProcess,
 }
 
 /// The single tcp endpoint a service binds. Port is assigned by the runtime from
@@ -298,8 +283,8 @@ pub struct Lifecycle {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PrepareSpec {
-    pub operation_id: String,
-    pub exec_id: Option<String>,
+    pub operation_id: OperationId,
+    pub exec_id: Option<ExecId>,
     pub exec_args: Vec<String>,
     pub terminal: TerminalSemantics,
 }
@@ -308,8 +293,8 @@ pub struct PrepareSpec {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StartSpec {
-    pub operation_id: String,
-    pub exec_id: String,
+    pub operation_id: OperationId,
+    pub exec_id: ExecId,
     pub exec_args: Vec<String>,
     pub terminal: TerminalSemantics,
 }
@@ -318,7 +303,7 @@ pub struct StartSpec {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReadySpec {
-    pub operation_id: String,
+    pub operation_id: OperationId,
     pub probe: ProbeTiming,
     pub terminal: TerminalSemantics,
 }
@@ -327,7 +312,7 @@ pub struct ReadySpec {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HealthSpec {
-    pub operation_id: String,
+    pub operation_id: OperationId,
     pub probe: ProbeTiming,
     pub terminal: TerminalSemantics,
 }
@@ -336,7 +321,7 @@ pub struct HealthSpec {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StopSpec {
-    pub operation_id: String,
+    pub operation_id: OperationId,
     pub signal: StopSignal,
     pub timeout_ms: NonZeroU64,
     pub terminal: TerminalSemantics,
@@ -346,7 +331,7 @@ pub struct StopSpec {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CleanSpec {
-    pub operation_id: String,
+    pub operation_id: OperationId,
     pub terminal: TerminalSemantics,
 }
 
@@ -403,12 +388,11 @@ pub struct ServiceIdentity {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TaskSpec {
-    pub operation_id: String,
-    pub exec_id: String,
+    pub operation_id: OperationId,
+    pub exec_id: ExecId,
     pub args: Vec<String>,
-    pub depends_on_services_ready: Vec<String>,
+    pub depends_on_services_ready: UniqueVec<ServiceId>,
     pub exit_policy: ExitPolicy,
-    pub output_capture: OutputCapture,
     pub artifact_refs: Vec<String>,
     pub log_refs: Vec<String>,
     pub summary_refs: Vec<String>,
@@ -417,14 +401,14 @@ pub struct TaskSpec {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExitPolicy {
-    pub success_codes: Vec<i32>,
+    pub success_codes: UniqueVec<i32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WorkflowSpec {
     /// Services that must be started and ready before any node runs.
-    pub services_required: Vec<String>,
+    pub services_required: UniqueVec<ServiceId>,
     /// Bounded acyclic dependency graph of task nodes, keyed by node id.
     pub nodes: BTreeMap<String, WorkflowNode>,
 }
@@ -432,9 +416,9 @@ pub struct WorkflowSpec {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WorkflowNode {
-    pub task_id: String,
+    pub task_id: TaskId,
     /// Other node ids in the same workflow that must succeed first.
-    pub depends_on: Vec<String>,
+    pub depends_on: UniqueVec<NodeId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

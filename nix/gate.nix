@@ -129,7 +129,10 @@ pkgs.writeShellApplication {
         >> "$state/summary.txt"
     }
 
-    # Fail-closed: selecting an undeclared workflow must be refused.
+    # Fail-closed: selecting an undeclared workflow must be refused, and a workflow
+    # authored with a duplicate node id must not even compile (workflow `nodes` is
+    # an attrset keyed by node id, so a duplicate is a Nix evaluation error rather
+    # than a silent last-wins collapse).
     negative() {
       echo "  negative (undeclared workflow must be refused)" >&2
       local st="$state/negative-state"
@@ -138,6 +141,13 @@ pkgs.writeShellApplication {
             --model "${models.minimal}/model.json" --workflow does-not-exist ) \
             >/dev/null 2>&1; then
         fail "negative: the runtime accepted an undeclared workflow"
+      fi
+
+      echo "  negative (duplicate workflow node id must not compile)" >&2
+      if nix eval --expr \
+            '{ nodes = { dup = { taskId = "a"; }; dup = { taskId = "b"; }; }; }' \
+            >/dev/null 2>&1; then
+        fail "negative: a duplicate workflow node id evaluated successfully"
       fi
     }
 

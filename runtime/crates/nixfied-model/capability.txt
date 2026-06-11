@@ -12,7 +12,7 @@ primitive Placement: slotPlacements
 primitive SlotPlacement: slot candidatePorts
 primitive CandidatePortWindow: start end
 primitive ClosureSpec: kind storePath executable targetSystem operationBindings requiresExecutable effects
-primitive ExecSpec: closureId executable args env codebaseId cwd stdin timeoutMs outputCapture cancellationMode
+primitive ExecSpec: closureId executable args env codebaseId cwd stdin timeoutMs
 primitive ServiceSpec: lifecycle endpoint stateRefs logRefs containment identity
 primitive Lifecycle: prepare start ready health stop clean
 primitive PrepareSpec: operationId execId execArgs terminal
@@ -24,7 +24,7 @@ primitive CleanSpec: operationId terminal
 primitive Endpoint: endpointId host
 primitive ProbeTiming: timeoutMs retryIntervalMs maxAttempts
 primitive TerminalSemantics: success failure
-primitive TaskSpec: operationId execId args dependsOnServicesReady exitPolicy outputCapture artifactRefs logRefs summaryRefs
+primitive TaskSpec: operationId execId args dependsOnServicesReady exitPolicy artifactRefs logRefs summaryRefs
 primitive WorkflowSpec: servicesRequired nodes
 primitive WorkflowNode: taskId dependsOn
 

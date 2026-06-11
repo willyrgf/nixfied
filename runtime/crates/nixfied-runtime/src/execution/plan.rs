@@ -5,6 +5,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use nixfied_model::{NodeId, ServiceId, TaskId};
+
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::execution::types::{ExecWorkflow, ExecutionModel, PortWindow};
 
@@ -26,14 +28,14 @@ pub struct RunPlan {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServiceBinding {
-    pub service_name: String,
+    pub service_name: ServiceId,
     pub port: u16,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanNode {
-    pub node_id: String,
-    pub task_id: String,
+    pub node_id: NodeId,
+    pub task_id: TaskId,
 }
 
 pub fn plan(model: &ExecutionModel, selection: Selection<'_>, slot: u32) -> RuntimeResult<RunPlan> {
@@ -52,7 +54,7 @@ pub fn plan(model: &ExecutionModel, selection: Selection<'_>, slot: u32) -> Runt
                 .tasks
                 .iter()
                 .map(|task_id| PlanNode {
-                    node_id: task_id.clone(),
+                    node_id: NodeId::new(task_id.as_str()),
                     task_id: task_id.clone(),
                 })
                 .collect(),
@@ -90,7 +92,7 @@ pub fn plan(model: &ExecutionModel, selection: Selection<'_>, slot: u32) -> Runt
 /// Assign each service the next port in the window (start + index), proving the
 /// window has capacity for every service.
 fn assign_ports(
-    service_names: &[String],
+    service_names: &[ServiceId],
     window: PortWindow,
     slot: u32,
 ) -> RuntimeResult<Vec<ServiceBinding>> {
@@ -130,7 +132,7 @@ fn topological_order(workflow: &ExecWorkflow) -> Option<Vec<PlanNode>> {
         .map(|node| {
             (
                 node.node_id.as_str(),
-                node.depends_on.iter().map(String::as_str).collect(),
+                node.depends_on.iter().map(|id| id.as_str()).collect(),
             )
         })
         .collect();
@@ -155,8 +157,8 @@ fn topological_order(workflow: &ExecWorkflow) -> Option<Vec<PlanNode>> {
                 deps.remove(node_id);
             }
             ordered.push(PlanNode {
-                node_id: node_id.to_string(),
-                task_id: task_by_node[node_id].to_string(),
+                node_id: NodeId::new(node_id),
+                task_id: TaskId::new(task_by_node[node_id]),
             });
         }
     }
@@ -183,11 +185,13 @@ mod tests {
     use std::collections::BTreeMap;
     use std::time::Duration;
 
-    use nixfied_model::{ContainmentRequirement, ServiceIdentity};
+    use nixfied_model::{
+        ContainmentRequirement, NodeId, OperationId, ServiceId, ServiceIdentity, TaskId,
+    };
 
     fn op_meta(id: &str) -> OpMeta {
         OpMeta {
-            operation_id: id.to_string(),
+            operation_id: OperationId::new(id),
             terminal_success: "ok".to_string(),
             terminal_failure: "fail".to_string(),
         }
@@ -199,6 +203,7 @@ mod tests {
             args: Vec::new(),
             env: BTreeMap::new(),
             cwd: ".".to_string(),
+            stdin: StdinPolicy::Null,
             timeout: Duration::from_millis(1000),
         }
     }
@@ -214,7 +219,7 @@ mod tests {
 
     fn service(name: &str) -> ExecService {
         ExecService {
-            name: name.to_string(),
+            name: ServiceId::new(name),
             prepare: PrepareOp {
                 meta: op_meta("prepare"),
                 exec: None,
@@ -262,11 +267,11 @@ mod tests {
         ExecutionModel {
             services: services
                 .into_iter()
-                .map(|name| (name.to_string(), service(name)))
+                .map(|name| (ServiceId::new(name), service(name)))
                 .collect(),
             tasks: BTreeMap::new(),
             environment: ExecEnvironment {
-                services: env_services.into_iter().map(String::from).collect(),
+                services: env_services.into_iter().map(ServiceId::new).collect(),
                 tasks: Vec::new(),
             },
             workflows: BTreeMap::new(),
@@ -285,11 +290,11 @@ mod tests {
             plan.services,
             vec![
                 ServiceBinding {
-                    service_name: "a".to_string(),
+                    service_name: ServiceId::new("a"),
                     port: 38080
                 },
                 ServiceBinding {
-                    service_name: "b".to_string(),
+                    service_name: ServiceId::new("b"),
                     port: 38081
                 },
             ]
@@ -332,16 +337,16 @@ mod tests {
         em.workflows.insert(
             "wf".to_string(),
             ExecWorkflow {
-                services_required: vec!["a".to_string()],
+                services_required: vec![ServiceId::new("a")],
                 nodes: vec![
                     ExecWorkflowNode {
-                        node_id: "second".to_string(),
-                        task_id: "t".to_string(),
-                        depends_on: vec!["first".to_string()],
+                        node_id: NodeId::new("second"),
+                        task_id: TaskId::new("t"),
+                        depends_on: vec![NodeId::new("first")],
                     },
                     ExecWorkflowNode {
-                        node_id: "first".to_string(),
-                        task_id: "t".to_string(),
+                        node_id: NodeId::new("first"),
+                        task_id: TaskId::new("t"),
                         depends_on: vec![],
                     },
                 ],
@@ -359,17 +364,17 @@ mod tests {
         em.workflows.insert(
             "wf".to_string(),
             ExecWorkflow {
-                services_required: vec!["a".to_string()],
+                services_required: vec![ServiceId::new("a")],
                 nodes: vec![
                     ExecWorkflowNode {
-                        node_id: "x".to_string(),
-                        task_id: "t".to_string(),
-                        depends_on: vec!["y".to_string()],
+                        node_id: NodeId::new("x"),
+                        task_id: TaskId::new("t"),
+                        depends_on: vec![NodeId::new("y")],
                     },
                     ExecWorkflowNode {
-                        node_id: "y".to_string(),
-                        task_id: "t".to_string(),
-                        depends_on: vec!["x".to_string()],
+                        node_id: NodeId::new("y"),
+                        task_id: TaskId::new("t"),
+                        depends_on: vec![NodeId::new("x")],
                     },
                 ],
             },

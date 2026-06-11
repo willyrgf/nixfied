@@ -16,7 +16,7 @@ use crate::admission::Admission;
 use crate::cancellation::{CancellationToken, canceled_error};
 use crate::control::reconcile_registry;
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
-use crate::execution::{ExecService, OpMeta, ResolvedExec};
+use crate::execution::{ExecService, OpMeta, ResolvedExec, StdinPolicy};
 use crate::registry::Registry;
 use crate::service::identity::{service_address_hash, service_instance_id};
 use crate::service::ownership::{ExpectedEndpointOwner, verify_endpoint_ownership};
@@ -33,6 +33,15 @@ use crate::state::{CleanupOutcome, HostPlacement, StateIdentity, clean_marked_st
 
 const FOREGROUND_GRACE: Duration = Duration::from_millis(100);
 const MONITOR_INTERVAL: Duration = Duration::from_millis(1);
+
+/// The child's stdin, per the exec's declared policy: a closed `/dev/null` or the
+/// operator's inherited stdin.
+pub(crate) fn stdin_for(policy: StdinPolicy) -> Stdio {
+    match policy {
+        StdinPolicy::Null => Stdio::null(),
+        StdinPolicy::Inherit => Stdio::inherit(),
+    }
+}
 const SYNTHETIC_SERVICE_NAME: &str = "synthetic";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -490,7 +499,7 @@ impl StartedService {
 
     /// The service name this instance was started from.
     pub fn service_name(&self) -> &str {
-        &self.service.name
+        self.service.name.as_str()
     }
 
     fn lifecycle_event_context(&self) -> LifecycleEventContext {
@@ -646,7 +655,7 @@ pub fn start_service_for_slot(
             &admission.source.observed_root,
             &placement.state_root,
             &placement.logs_dir,
-            &service.prepare.meta.operation_id,
+            service.prepare.meta.operation_id.as_str(),
             selected_port,
             &CancellationToken::new(),
         )
@@ -684,7 +693,7 @@ pub fn start_service_for_slot(
         .args(&args)
         .current_dir(&command_cwd)
         .envs(&exec.env)
-        .stdin(Stdio::null())
+        .stdin(stdin_for(exec.stdin))
         .stdout(Stdio::from(create_log_file(&stdout_path)?))
         .stderr(Stdio::from(create_log_file(&stderr_path)?));
     unsafe {
@@ -816,13 +825,16 @@ pub fn run_slot_clean(
     registry: &mut Registry,
     selected_slot: &SelectedSlot<'_>,
 ) -> RuntimeResult<CleanupOutcome> {
-    let services = model
-        .environments
-        .get(selected_slot.environment)
-        .map(|env| env.services.clone())
-        .unwrap_or_default();
-    for service_name in &services {
-        record_service_clean(model, admission, registry, selected_slot, service_name)?;
+    if let Some(env) = model.environments.get(selected_slot.environment) {
+        for service_name in &env.services {
+            record_service_clean(
+                model,
+                admission,
+                registry,
+                selected_slot,
+                service_name.as_str(),
+            )?;
+        }
     }
     clean_marked_slot_state(model, admission, placement, registry, selected_slot)
 }
@@ -966,7 +978,7 @@ fn run_resolved_exec(
         .args(&args)
         .current_dir(&command_cwd)
         .envs(&exec.env)
-        .stdin(Stdio::null())
+        .stdin(stdin_for(exec.stdin))
         .stdout(Stdio::from(create_log_file(&stdout_path)?))
         .stderr(Stdio::from(create_log_file(&stderr_path)?));
     unsafe {
@@ -1065,7 +1077,7 @@ struct LifecycleRecord {
 impl LifecycleRecord {
     fn from_meta(meta: &OpMeta, class: &'static str) -> Self {
         Self {
-            operation_id: meta.operation_id.clone(),
+            operation_id: meta.operation_id.as_str().to_string(),
             class,
             terminal_success: meta.terminal_success.clone(),
             terminal_failure: meta.terminal_failure.clone(),
@@ -1074,7 +1086,7 @@ impl LifecycleRecord {
 
     fn from_clean(clean: &nixfied_model::CleanSpec) -> Self {
         Self {
-            operation_id: clean.operation_id.clone(),
+            operation_id: clean.operation_id.as_str().to_string(),
             class: "clean",
             terminal_success: clean.terminal.success.clone(),
             terminal_failure: clean.terminal.failure.clone(),

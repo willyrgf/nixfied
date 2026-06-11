@@ -34,6 +34,69 @@ fn creates_registry_schema_with_wal() {
 }
 
 #[test]
+fn open_sets_a_busy_timeout() {
+    // The run's heartbeat thread opens a second connection and writes the lease
+    // concurrently with the main thread; a non-zero busy timeout makes a writer
+    // collision wait rather than return SQLITE_BUSY (mapped to REGISTRY_CORRUPT).
+    let tmp = TempDir::new();
+    let path = tmp.path.join("registry/registry.sqlite3");
+    let identity = identity();
+    let registry = Registry::open_or_create(&path, &identity).expect("registry should open");
+    let busy_timeout: i64 = registry
+        .connection()
+        .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
+        .expect("busy_timeout should be readable");
+    assert_eq!(busy_timeout, 5000);
+    drop(registry);
+
+    // A reopened (existing) registry — the heartbeat's second-connection path —
+    // passes through the same `initialize`, so it carries the timeout too.
+    let reopened = Registry::open_or_create(&path, &identity).expect("registry should reopen");
+    let reopened_timeout: i64 = reopened
+        .connection()
+        .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
+        .expect("busy_timeout should be readable");
+    assert_eq!(reopened_timeout, 5000);
+}
+
+#[test]
+fn concurrent_writers_do_not_corrupt() {
+    // Two connections to the same registry writing at once must not surface
+    // SQLITE_BUSY as REGISTRY_CORRUPT — the busy timeout absorbs the contention.
+    let tmp = TempDir::new();
+    let path = tmp.path.join("registry.sqlite3");
+    let identity = identity();
+    Registry::open_or_create(&path, &identity).expect("registry should open");
+
+    const WRITES: usize = 200;
+    let other_path = path.clone();
+    let other_identity = identity.clone();
+    let writer = std::thread::spawn(move || {
+        let mut registry =
+            Registry::open_or_create(&other_path, &other_identity).expect("second handle opens");
+        for _ in 0..WRITES {
+            registry
+                .append_event(&EventInsert::new("writer-b", "{}"))
+                .expect("concurrent append must not fail");
+        }
+    });
+
+    let mut registry = Registry::open_or_create(&path, &identity).expect("first handle opens");
+    for _ in 0..WRITES {
+        registry
+            .append_event(&EventInsert::new("writer-a", "{}"))
+            .expect("concurrent append must not fail");
+    }
+    writer.join().expect("writer thread should not panic");
+
+    let count: i64 = registry
+        .connection()
+        .query_row("SELECT count(*) FROM events", [], |row| row.get(0))
+        .expect("event count should be readable");
+    assert_eq!(count, (WRITES * 2) as i64);
+}
+
+#[test]
 fn appends_events_with_total_ordering() {
     let tmp = TempDir::new();
     let path = tmp.path.join("registry.sqlite3");

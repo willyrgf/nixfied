@@ -2721,6 +2721,172 @@ fn runtime_drives_full_lifecycle_without_invoking_nix() {
     );
 }
 
+/// Bug #2: a selection that starts no services (an environment of only
+/// service-less tasks) must still leave a durable `runs` row — the run path used
+/// to create that row only inside the per-service loop, so a task-only run left
+/// none and `mark_task_finished`'s `UPDATE runs` was a silent no-op.
+#[test]
+fn task_only_run_records_a_durable_runs_row() {
+    let Some(python) = nix_store_executable(&["python3"]) else {
+        return;
+    };
+    let closure_root = closure_root_for_store_executable(&python)
+        .expect("store executable should have a closure root");
+    // A service-less task: it exits 0 without touching any port.
+    let script = "import sys; sys.exit(0)";
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
+    let port = listener.local_addr().expect("local addr").port();
+    drop(listener);
+
+    let mut value = fixture_model(&python.to_string_lossy(), &["service", "${port}"], port);
+    value["closures"]["synthetic-helper"]["storePath"] = json!(closure_root.to_string_lossy());
+    value["execs"]["synthetic-helper"]["args"] = json!(["-c", script]);
+    // The environment starts no services and runs only the service-less task.
+    value["environments"]["dev"]["services"] = json!([]);
+    value["tasks"]["smoke"]["dependsOnServicesReady"] = json!([]);
+    value["tasks"]["smoke"]["args"] = json!(["noservice"]);
+    let model: Model = serde_json::from_value(value).expect("task-only model should parse");
+
+    let tmp = TempDir::new();
+    let model_path = tmp.path.join("model.json");
+    let state_base = tmp.path.join("state");
+    fs::create_dir_all(&state_base).expect("state base should be created");
+    fs::write(
+        &model_path,
+        serde_json::to_vec_pretty(&model).expect("model should serialize"),
+    )
+    .expect("model should be written");
+
+    let run = Command::new(runtime_binary())
+        .arg("run")
+        .arg("--allow-non-store-model")
+        .arg("--model")
+        .arg(&model_path)
+        .arg("--timeout-ms")
+        .arg("5000")
+        .current_dir(&tmp.path)
+        .env("NIXFIED_STATE_DIR", &state_base)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("runtime should run");
+    assert!(
+        run.status.success(),
+        "task-only run failed: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let registry_path =
+        find_file(&state_base, "registry.sqlite3").expect("a registry must exist after the run");
+    let conn = rusqlite::Connection::open(&registry_path).expect("registry should open");
+    let (count, status): (i64, String) = conn
+        .query_row(
+            "SELECT count(*), coalesce(max(status), '') FROM runs",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("runs row should be queryable");
+    assert_eq!(
+        count, 1,
+        "a task-only run must leave exactly one durable runs row"
+    );
+    assert_eq!(
+        status, "task-succeeded",
+        "the run row must record the task's terminal status"
+    );
+}
+
+/// Bug #1: a task whose exec declares `stdin: inherit` must receive the operator's
+/// stdin, not a closed `/dev/null`. The runtime inherits its own stdin to the task
+/// process, so a sentinel piped to `nixfied-runtime run` reaches the task.
+#[test]
+fn inherit_stdin_reaches_a_task_process() {
+    use std::io::Write;
+
+    let Some(python) = nix_store_executable(&["python3"]) else {
+        return;
+    };
+    let closure_root = closure_root_for_store_executable(&python)
+        .expect("store executable should have a closure root");
+    // The task echoes whatever it reads on stdin to stdout (captured to its log).
+    let script = "import sys; sys.stdout.write(sys.stdin.read())";
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
+    let port = listener.local_addr().expect("local addr").port();
+    drop(listener);
+
+    let mut value = fixture_model(&python.to_string_lossy(), &["service", "${port}"], port);
+    value["closures"]["synthetic-helper"]["storePath"] = json!(closure_root.to_string_lossy());
+    value["execs"]["synthetic-helper"]["args"] = json!(["-c", script]);
+    value["execs"]["synthetic-helper"]["stdin"] = json!("inherit");
+    value["environments"]["dev"]["services"] = json!([]);
+    value["tasks"]["smoke"]["dependsOnServicesReady"] = json!([]);
+    value["tasks"]["smoke"]["args"] = json!([]);
+    let model: Model = serde_json::from_value(value).expect("inherit-stdin model should parse");
+
+    let tmp = TempDir::new();
+    let model_path = tmp.path.join("model.json");
+    let state_base = tmp.path.join("state");
+    fs::create_dir_all(&state_base).expect("state base should be created");
+    fs::write(
+        &model_path,
+        serde_json::to_vec_pretty(&model).expect("model should serialize"),
+    )
+    .expect("model should be written");
+
+    let mut child = Command::new(runtime_binary())
+        .arg("run")
+        .arg("--allow-non-store-model")
+        .arg("--model")
+        .arg(&model_path)
+        .arg("--timeout-ms")
+        .arg("5000")
+        .current_dir(&tmp.path)
+        .env("NIXFIED_STATE_DIR", &state_base)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("runtime should spawn");
+    let sentinel = "nixfied-inherited-stdin-marker\n";
+    child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(sentinel.as_bytes())
+        .expect("sentinel should be written to runtime stdin");
+    let out = child.wait_with_output().expect("runtime should complete");
+    assert!(
+        out.status.success(),
+        "inherit-stdin run failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let log =
+        find_file(&state_base, "task.smoke.stdout.log").expect("task stdout log should exist");
+    let captured = fs::read_to_string(&log).expect("task stdout log should be readable");
+    assert!(
+        captured.contains("nixfied-inherited-stdin-marker"),
+        "task with stdin=inherit did not receive the operator's stdin: {captured:?}"
+    );
+}
+
+/// Recursively locate the single file with `name` written under `root`.
+fn find_file(root: &Path, name: &str) -> Option<PathBuf> {
+    for entry in fs::read_dir(root).ok()? {
+        let path = entry.ok()?.path();
+        if path.is_dir() {
+            if let Some(found) = find_file(&path, name) {
+                return Some(found);
+            }
+        } else if path.file_name().is_some_and(|file| file == name) {
+            return Some(path);
+        }
+    }
+    None
+}
+
 fn fixture_model(executable: &str, start_args: &[&str], port: u16) -> Value {
     common::synthetic_model(executable, start_args, port, port)
 }

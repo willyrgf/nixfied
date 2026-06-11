@@ -25,7 +25,8 @@ pub fn check_source(model: &Model, loaded: &LoadedModel) -> RuntimeResult<Admitt
                 .with_model(&loaded.path, &loaded.computed_model_hash),
         );
     };
-    if codebase.codebase_id != "main" || codebase.source_mode != SourceMode::LiveWorkspace {
+    if codebase.codebase_id.as_str() != "main" || codebase.source_mode != SourceMode::LiveWorkspace
+    {
         return Err(RuntimeError::new(
             ErrorCode::SourceMismatch,
             "requires codebase main with live-workspace sourceMode",
@@ -42,7 +43,7 @@ pub fn check_source(model: &Model, loaded: &LoadedModel) -> RuntimeResult<Admitt
     }
     let observed_root = resolve_observed_root(&codebase.logical_root, loaded)?;
     Ok(AdmittedSource {
-        codebase_id: codebase.codebase_id.clone(),
+        codebase_id: codebase.codebase_id.as_str().to_string(),
         logical_root: codebase.logical_root.clone(),
         observed_root,
         source_mode: codebase.source_mode.clone(),

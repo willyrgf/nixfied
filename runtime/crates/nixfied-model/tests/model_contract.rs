@@ -100,9 +100,7 @@ fn helper_exec() -> Value {
         "codebaseId": "main",
         "cwd": ".",
         "stdin": "null",
-        "timeoutMs": 30000,
-        "outputCapture": "stdout-stderr",
-        "cancellationMode": "kill-process-group"
+        "timeoutMs": 30000
     })
 }
 
@@ -137,7 +135,6 @@ fn smoke_task() -> Value {
         "args": ["task", "--host", "127.0.0.1", "--port", "${port}"],
         "dependsOnServicesReady": ["synthetic"],
         "exitPolicy": { "successCodes": [0] },
-        "outputCapture": "stdout-stderr",
         "artifactRefs": [],
         "logRefs": ["task.smoke"],
         "summaryRefs": ["summary"]
@@ -183,7 +180,10 @@ fn parses_and_validates_contract() {
 
     // The lifecycle is a per-class record: every class is present by construction.
     let lifecycle = &model.services["synthetic"].lifecycle;
-    assert_eq!(lifecycle.start.operation_id, "service.synthetic.start");
+    assert_eq!(
+        lifecycle.start.operation_id.as_str(),
+        "service.synthetic.start"
+    );
     assert_eq!(lifecycle.stop.signal, nixfied_model::StopSignal::Term);
 }
 
@@ -205,7 +205,8 @@ fn accepts_arbitrary_service_and_exec_names() {
 fn prepare_operation_may_bind_an_exec() {
     // initdb-style preparation: the prepare class is allowed to bind an exec.
     let mut model = parse_valid_model();
-    synthetic_lifecycle_mut(&mut model).prepare.exec_id = Some("synthetic-helper".to_string());
+    synthetic_lifecycle_mut(&mut model).prepare.exec_id =
+        Some(nixfied_model::ExecId::new("synthetic-helper"));
     model.validate().expect("prepare may bind a generic exec");
 }
 
@@ -232,6 +233,27 @@ fn unknown_top_level_field_is_invalid() {
 
     let error = serde_json::from_value::<Model>(value).expect_err("unknown field must be refused");
     assert!(error.to_string().contains("computedModelHash"));
+}
+
+#[test]
+fn duplicate_environment_service_is_refused_at_the_wire() {
+    // `environment.services` is a set: a service listed twice would be admitted as
+    // feasible and then collide on its own lease at run time. Reject it at the wire
+    // so an inexpressible model never deserializes.
+    let mut value = valid_model_json();
+    value["environments"]["dev"]["services"] = json!(["synthetic", "synthetic"]);
+    let error =
+        serde_json::from_value::<Model>(value).expect_err("a duplicate service must be refused");
+    assert!(error.to_string().contains("duplicate element"));
+}
+
+#[test]
+fn duplicate_task_success_code_is_refused_at_the_wire() {
+    let mut value = valid_model_json();
+    value["tasks"]["smoke"]["exitPolicy"]["successCodes"] = json!([0, 0]);
+    let error =
+        serde_json::from_value::<Model>(value).expect_err("a duplicate exit code must be refused");
+    assert!(error.to_string().contains("duplicate element"));
 }
 
 #[test]

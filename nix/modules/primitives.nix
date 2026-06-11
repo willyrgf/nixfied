@@ -224,24 +224,6 @@ let
         default = 30000;
         description = "Exec timeout.";
       };
-      outputCapture = mkOption {
-        type = types.enum [
-          "none"
-          "stdout"
-          "stderr"
-          "stdout-stderr"
-        ];
-        default = "stdout-stderr";
-        description = "Output capture policy.";
-      };
-      cancellationMode = mkOption {
-        type = types.enum [
-          "kill-process-group"
-          "kill-process"
-        ];
-        default = "kill-process-group";
-        description = "Cancellation mode.";
-      };
     };
   };
 
@@ -323,16 +305,6 @@ let
         default = { };
         description = "Task exit policy.";
       };
-      outputCapture = mkOption {
-        type = types.enum [
-          "none"
-          "stdout"
-          "stderr"
-          "stdout-stderr"
-        ];
-        default = "stdout-stderr";
-        description = "Output capture policy.";
-      };
       artifactRefs = mkOption {
         type = types.listOf types.str;
         default = [ ];
@@ -406,13 +378,11 @@ in
             description = "Services that must be ready before any node runs.";
           };
           nodes = mkOption {
-            type = types.listOf (
+            # An attrset keyed by node id: a duplicate node id is a Nix evaluation
+            # error here, not a silent last-wins collapse downstream.
+            type = types.attrsOf (
               types.submodule {
                 options = {
-                  nodeId = mkOption {
-                    type = types.nonEmptyStr;
-                    description = "Unique workflow node id.";
-                  };
                   taskId = mkOption {
                     type = types.nonEmptyStr;
                     description = "Task this node runs.";
@@ -425,7 +395,8 @@ in
                 };
               }
             );
-            description = "Bounded acyclic task dependency graph.";
+            default = { };
+            description = "Bounded acyclic task dependency graph, keyed by node id.";
           };
         };
       }

@@ -154,6 +154,88 @@ pub fn reserve_service_start(
     Ok(())
 }
 
+/// Record the run row up front, before any service starts, so every admitted run
+/// leaves durable evidence — including a service-less selection (a workflow or
+/// environment of only service-less tasks) whose service loop never runs and so
+/// never reaches `reserve_service_start`. `INSERT OR IGNORE` keeps the later
+/// service-path inserts idempotent no-ops, preserving their semantics exactly.
+///
+/// No run lease is created here: a lease keys on a `service_instance_id`
+/// (`run_leases PRIMARY KEY (run_id, service_instance_id)`) and guards cross-run
+/// service/port/state contention, which a service-less task does not create. The
+/// per-service lease is still taken inside the service loop. This asymmetry is
+/// deliberate, not an oversight.
+pub fn record_run_created(
+    registry: &mut Registry,
+    run_id: &str,
+    admission: &Admission,
+    placement: &HostPlacement,
+) -> RuntimeResult<()> {
+    let source_json = serde_json::to_string(&admission.source).map_err(json_error)?;
+    let identity = registry.identity().clone();
+    let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
+    transaction
+        .execute(
+            "
+            INSERT OR IGNORE INTO runs (
+              run_id, environment, slot, status, model_path, computed_model_hash,
+              runtime_abi, toolchain_id, generator_json, target_json, source_json,
+              summary_path
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+            ",
+            params![
+                run_id,
+                identity.environment.as_str(),
+                identity.slot,
+                RunStatus::ServiceStarting.as_str(),
+                admission.model_path.display().to_string(),
+                admission.computed_model_hash.as_str(),
+                admission.runtime_abi.as_str(),
+                admission.toolchain_id.as_str(),
+                admission.generator_json.as_str(),
+                admission.target_json.as_str(),
+                source_json,
+                placement.summary_path.display().to_string(),
+            ],
+        )
+        .map_err(sql_error)?;
+    insert_event(
+        &transaction,
+        &identity,
+        EventRecord {
+            event_type: "run.created",
+            run_id: Some(run_id),
+            service_instance_id: None,
+            process_key: None,
+            computed_model_hash: Some(&admission.computed_model_hash),
+            payload_json: "{}",
+        },
+    )?;
+    transaction.commit().map_err(sql_error)?;
+    Ok(())
+}
+
+/// Settle a run that reached the end without a service- or task-driven terminal
+/// status (e.g. a degenerate selection with no services and no tasks) to
+/// `completed`. Guarded on `service-starting` so a task- or cancellation-derived
+/// terminal status is never clobbered, mirroring the guard in
+/// `mark_service_stopped`.
+pub fn mark_run_completed(registry: &mut Registry, run_id: &str) -> RuntimeResult<()> {
+    let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
+    transaction
+        .execute(
+            "UPDATE runs SET status = ?2 WHERE run_id = ?1 AND status = ?3",
+            params![
+                run_id,
+                RunStatus::Completed.as_str(),
+                RunStatus::ServiceStarting.as_str()
+            ],
+        )
+        .map_err(sql_error)?;
+    transaction.commit().map_err(sql_error)?;
+    Ok(())
+}
+
 /// Release a reservation taken by `reserve_service_start` when the start fails
 /// before `record_service_start` takes ownership, so the lease does not leak and
 /// block later runs.

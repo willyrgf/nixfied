@@ -211,6 +211,17 @@ fn run_m0_admitted(
     };
     let plan = plan(&admission.execution_model, selection, selected_slot.slot)?;
 
+    // Record the run row before any service starts, so even a service-less
+    // selection (a workflow/environment of only service-less tasks) leaves durable
+    // run evidence for `ps`/reconcile. `INSERT OR IGNORE` makes the service-path
+    // run-row insert a harmless no-op.
+    nixfied_runtime::service::registry::record_run_created(
+        &mut registry,
+        &run_id,
+        admission,
+        &placement,
+    )?;
+
     // Start each required service on its planned port, waiting readiness then
     // health before the next.
     let mut started: Vec<StartedService> = Vec::new();
@@ -298,7 +309,7 @@ fn run_m0_admitted(
         let task = admission
             .execution_model
             .tasks
-            .get(task_id)
+            .get(task_id.as_str())
             .ok_or_else(|| {
                 RuntimeError::new(
                     nixfied_runtime::ErrorCode::ModelAdmission,
@@ -313,7 +324,7 @@ fn run_m0_admitted(
         for name in &task.depends_on_services_ready {
             match started
                 .iter()
-                .position(|service| service.service_name() == name)
+                .position(|service| service.service_name() == name.as_str())
             {
                 Some(index) => dep_indices.push(index),
                 None => {
@@ -345,7 +356,7 @@ fn run_m0_admitted(
             &mut registry,
             run_context,
             &dependencies,
-            &node.node_id,
+            node.node_id.as_str(),
             task,
             cancellation,
         );
@@ -353,8 +364,8 @@ fn run_m0_admitted(
             Ok(task_run) => {
                 eprintln!("  node {} ok", node.node_id);
                 node_results.push(NodeResult {
-                    node_id: node.node_id.clone(),
-                    task_id: task_id.clone(),
+                    node_id: node.node_id.as_str().to_string(),
+                    task_id: task_id.as_str().to_string(),
                     success: task_run.success,
                     exit_code: task_run.exit_code,
                     stdout_path: task_run.stdout_path.clone(),
@@ -402,7 +413,7 @@ fn run_m0_admitted(
     };
     let primary_task = task_runs.last().cloned();
     let output = RunOutput {
-        run_id,
+        run_id: run_id.clone(),
         model_path: admission.model_path.clone(),
         computed_model_hash: admission.computed_model_hash.clone(),
         services: services_output,
@@ -423,6 +434,10 @@ fn run_m0_admitted(
     while let Some(service) = started.pop() {
         service.stop_cancellable(&mut registry, options.timeout_ms, cancellation)?;
     }
+    // Settle a run that no service stop and no task finalized (a degenerate
+    // selection with no services and no tasks). Guarded on `service-starting`, so
+    // a service- or task-derived terminal status is left untouched.
+    nixfied_runtime::service::registry::mark_run_completed(&mut registry, &run_id)?;
     stop_lease(lease)?;
     Ok(output)
 }

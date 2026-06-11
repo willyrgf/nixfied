@@ -74,7 +74,7 @@ pub fn run_dependent_task(
         registry,
         run_context,
         dependencies,
-        &task.task_id,
+        task.task_id.as_str(),
         task,
         &CancellationToken::new(),
     )
@@ -236,14 +236,18 @@ fn ensure_task_dependencies(
     for service_name in &task.depends_on_services_ready {
         let service = dependencies
             .iter()
-            .find(|service| service.service_name() == service_name)
+            .find(|service| service.service_name() == service_name.as_str())
             .ok_or_else(|| {
                 RuntimeError::new(
                     ErrorCode::DependencyUnavailable,
                     format!("task dependency {service_name} was not among the started services"),
                 )
             })?;
-        ensure_service_instance_probe_ready(registry, service_name, &service.service_instance_id)?;
+        ensure_service_instance_probe_ready(
+            registry,
+            service_name.as_str(),
+            &service.service_instance_id,
+        )?;
     }
     Ok(())
 }
@@ -260,7 +264,7 @@ fn spawn_task(
         .args(args)
         .current_dir(command_cwd)
         .envs(&exec.env)
-        .stdin(Stdio::null())
+        .stdin(crate::service::process::stdin_for(exec.stdin))
         .stdout(Stdio::from(create_log_file(stdout_path)?))
         .stderr(Stdio::from(create_log_file(stderr_path)?));
     unsafe {

@@ -80,7 +80,7 @@ pub fn check_closures(
         for (exec_id, exec) in model
             .execs
             .iter()
-            .filter(|(_, exec)| &exec.closure_id == closure_id)
+            .filter(|(_, exec)| exec.closure_id.as_str() == closure_id.as_str())
         {
             if exec.executable != closure.executable {
                 return Err(RuntimeError::new(
