@@ -270,6 +270,10 @@ pkgs.writeShellApplication {
         echo "    pin: $pin (--dirty: every run re-derives the closure)" >&2
       else
         pin="git+file://$checkout?rev=$(git -C "$checkout" rev-parse HEAD)"
+        # Nix refuses to fetch from shallow clones (CI checkouts) unless told.
+        if [ "$(git -C "$checkout" rev-parse --is-shallow-repository)" = true ]; then
+          pin="$pin&shallow=1"
+        fi
         if ! git -C "$checkout" diff --quiet HEAD 2>/dev/null; then
           echo "    pin: HEAD — uncommitted changes are NOT exercised here (use --dirty)" >&2
         fi

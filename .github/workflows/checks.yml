@@ -7,8 +7,6 @@ name: checks
 # `.#install` ships is verified by a final build step.
 on:
   push:
-  pull_request:
-  workflow_dispatch:
 
 concurrency:
   group: checks-${{ github.ref }}
