@@ -78,8 +78,11 @@ pkgs.writeShellApplication {
       local pid
       pid=$(jq -r '.project.projectId' "$model")
       ( cd "$wk" && NIXFIED_STATE_DIR="$st" "$rt" clean --model "$model" ) \
-        || fail "$name: clean failed"
+        > "$artifacts/$name.clean.json" || fail "$name: clean failed"
       [ ! -d "$st/$pid/dev/0" ] || fail "$name: clean left the slot state root"
+      printf '  %-11s %-44s %s\n' "$name" \
+        "$(jq -r '[.services[]? | "\(.serviceId):\(.selectedEndpoint.port)"] | join(" ")' "$artifacts/$name.json")" \
+        "$st/$pid/dev/0" >> "$state/summary.txt"
     }
 
     # The one check a single run can't make: two slots of a multi-service model
@@ -107,11 +110,11 @@ pkgs.writeShellApplication {
       { [ -f "$st/$pid/dev/0/pgdata/PG_VERSION" ] && [ -f "$st/$pid/dev/1/pgdata/PG_VERSION" ]; } \
         || fail "slots: each slot must own a separate Postgres data cluster"
       ( cd "$w0" && NIXFIED_STATE_DIR="$st" "$rt" clean --model "$model" --slot 0 ) \
-        || fail "slots: clean slot 0 failed"
+        > "$artifacts/slots-0.clean.json" || fail "slots: clean slot 0 failed"
       { [ ! -d "$st/$pid/dev/0" ] && [ -d "$st/$pid/dev/1" ]; } \
         || fail "slots: cleaning slot 0 disturbed slot 1 or left slot 0"
       ( cd "$w1" && NIXFIED_STATE_DIR="$st" "$rt" clean --model "$model" --slot 1 ) \
-        || fail "slots: clean slot 1 failed"
+        > "$artifacts/slots-1.clean.json" || fail "slots: clean slot 1 failed"
       [ ! -d "$st/$pid/dev/1" ] || fail "slots: clean did not remove slot 1"
       jq -n \
         --slurpfile a "$artifacts/slots-0.json" \
@@ -120,6 +123,10 @@ pkgs.writeShellApplication {
           slots:[{slot:0, services:$a[0].services},
                  {slot:1, services:$b[0].services}]}' \
         > "$artifacts/slots.json"
+      printf '  %-11s slot0 %-22s slot1 %s\n' slots \
+        "$(jq -r '[.services[].selectedEndpoint.port] | join(",")' "$artifacts/slots-0.json")" \
+        "$(jq -r '[.services[].selectedEndpoint.port] | join(",")' "$artifacts/slots-1.json")" \
+        >> "$state/summary.txt"
     }
 
     # Fail-closed: selecting an undeclared workflow must be refused.
@@ -158,7 +165,7 @@ pkgs.writeShellApplication {
       ( cd "$wk" && NIXFIED_STATE_DIR="$st" "$rt" run --model "$model" --timeout-ms 60000 ) \
         >/dev/null || fail "adoption: scaffolded run failed"
       ( cd "$wk" && NIXFIED_STATE_DIR="$st" "$rt" clean --model "$model" ) \
-        || fail "adoption: scaffolded clean failed"
+        >/dev/null || fail "adoption: scaffolded clean failed"
       before=$(cat "$project/nixfied.nix")
       nix run "$checkout#upgrade" -- --root "$project" --nixfied-url "$pin" \
         || fail "adoption: upgrade failed"
@@ -172,7 +179,9 @@ pkgs.writeShellApplication {
       ( cd "$wk" && NIXFIED_STATE_DIR="$st" "$rt" run --model "$model" --timeout-ms 60000 ) \
         >/dev/null || fail "adoption: post-upgrade run failed"
       ( cd "$wk" && NIXFIED_STATE_DIR="$st" "$rt" clean --model "$model" ) \
-        || fail "adoption: post-upgrade clean failed"
+        >/dev/null || fail "adoption: post-upgrade clean failed"
+      printf '  %-11s %s\n' adoption "install -> build -> run -> clean -> upgrade -> rebuild -> run -> clean" \
+        >> "$state/summary.txt"
       rm -rf "$project"
     }
 
@@ -189,5 +198,8 @@ pkgs.writeShellApplication {
     echo "==> adoption" >&2
     adoption
     echo "  gate: all checks passed" >&2
+    echo "" >&2
+    echo "  execution detail (service:port + state root per check; full JSON in $artifacts):" >&2
+    cat "$state/summary.txt" >&2
   '';
 }
