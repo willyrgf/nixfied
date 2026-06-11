@@ -66,7 +66,7 @@ let
       echo "==> test" >&2
       ${test}/bin/nixfied-test
       echo "==> gate" >&2
-      ${gate}/bin/nixfied-gate
+      ${gate}/bin/nixfied-gate "$@"
     '';
   };
 in

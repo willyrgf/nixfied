@@ -40,6 +40,18 @@ pkgs.writeShellApplication {
       exit 1
     }
 
+    # `--dirty` (or NIXFIED_GATE_DIRTY=1) pins the adoption test to the working
+    # tree (`path:`) instead of HEAD. A `path:` pin hashes the whole directory —
+    # `.git/` included — so every run re-derives the entire closure; the default
+    # rev pin keeps the store cache warm but only exercises committed code.
+    dirty="''${NIXFIED_GATE_DIRTY:-}"
+    for arg in "$@"; do
+      case "$arg" in
+        --dirty) dirty=1 ;;
+        *) fail "unknown gate argument: $arg (supported: --dirty)" ;;
+      esac
+    done
+
     # `slots-0.json` vs `slots-1.json`: is the given jq array expression disjoint?
     disjoint() {
       local inter
@@ -252,7 +264,16 @@ pkgs.writeShellApplication {
     # rebuild + run + clean.
     adoption() {
       echo "  adoption (#install + #upgrade against a throwaway repo)" >&2
-      local pin="path:$checkout" project st wk model before after
+      local pin project st wk model before after
+      if [ -n "$dirty" ]; then
+        pin="path:$checkout"
+        echo "    pin: $pin (--dirty: every run re-derives the closure)" >&2
+      else
+        pin="git+file://$checkout?rev=$(git -C "$checkout" rev-parse HEAD)"
+        if ! git -C "$checkout" diff --quiet HEAD 2>/dev/null; then
+          echo "    pin: HEAD — uncommitted changes are NOT exercised here (use --dirty)" >&2
+        fi
+      fi
       project=$(mktemp -d)
       git -C "$project" init -q
       git -C "$project" config user.email gate@nixfied
