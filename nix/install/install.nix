@@ -100,6 +100,7 @@ pkgs.writeShellApplication {
     inputs.nixfied.url = "$nixfied_url_escaped";
 
     packages.\''${system}.model = nixfied.lib.\''${system}.compileModel ./nixfied.nix;
+    apps.\''${system} = nixfied.lib.\''${system}.projectApps ./nixfied.nix;
     EOF
     }
 
@@ -164,6 +165,8 @@ pkgs.writeShellApplication {
             default = self.packages.\''${system}.model;
             model = nixfied.lib.\''${system}.compileModel ./nixfied.nix;
           });
+
+          apps = forAllSystems (system: nixfied.lib.\''${system}.projectApps ./nixfied.nix);
         };
     }
     EOF
