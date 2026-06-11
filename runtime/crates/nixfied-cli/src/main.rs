@@ -190,8 +190,13 @@ fn docs_view(model: &Model) -> String {
     for (name, spec) in &model.services {
         let _ = writeln!(
             output,
-            "- {name}: endpoint {}; operations {}",
-            spec.endpoint.endpoint_id,
+            "- {name}: endpoints {} (primary {}); operations {}",
+            spec.endpoints
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", "),
+            spec.primary_endpoint,
             lifecycle_classes(&spec.lifecycle)
         );
     }

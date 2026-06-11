@@ -171,7 +171,8 @@ pub fn synthetic_model(options: &SyntheticModelOptions) -> Value {
                         "terminal": { "success": "cleaned", "failure": "failed" }
                     }
                 },
-                "endpoint": { "endpointId": "synthetic-tcp", "host": "127.0.0.1" },
+                "endpoints": { "synthetic-tcp": { "endpointId": "synthetic-tcp", "host": "127.0.0.1" } },
+                "primaryEndpoint": "synthetic-tcp",
                 "connectsTo": [],
                 "stateRefs": ["slot"],
                 "logRefs": ["service.synthetic"],

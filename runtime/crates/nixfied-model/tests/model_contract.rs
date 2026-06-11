@@ -114,7 +114,8 @@ fn synthetic_service() -> Value {
             "stop": { "operationId": "service.synthetic.stop", "signal": "TERM", "timeoutMs": 5000, "terminal": { "success": "stopped", "failure": "failed" } },
             "clean": { "operationId": "service.synthetic.clean", "terminal": { "success": "cleaned", "failure": "failed" } }
         },
-        "endpoint": { "endpointId": "synthetic-tcp", "host": "127.0.0.1" },
+        "endpoints": { "synthetic-tcp": { "endpointId": "synthetic-tcp", "host": "127.0.0.1" } },
+        "primaryEndpoint": "synthetic-tcp",
                 "connectsTo": [],
         "stateRefs": ["slot"],
         "logRefs": ["service.synthetic"],
@@ -149,7 +150,9 @@ fn add_worker_service(value: &mut Value) {
         .push(json!("service.worker.start"));
 
     let mut worker = synthetic_service();
-    worker["endpoint"]["endpointId"] = json!("worker-tcp");
+    worker["endpoints"] =
+        json!({ "worker-tcp": { "endpointId": "worker-tcp", "host": "127.0.0.1" } });
+    worker["primaryEndpoint"] = json!("worker-tcp");
     for (class, op) in worker["lifecycle"].as_object_mut().unwrap() {
         op["operationId"] = json!(format!("service.worker.{class}"));
     }
@@ -332,7 +335,7 @@ fn non_loopback_endpoint_host_is_rejected_at_parse() {
     // The endpoint host is a typed loopback literal; a hostname or wildcard cannot
     // deserialize.
     let mut value = valid_model_json();
-    value["services"]["synthetic"]["endpoint"]["host"] = json!("localhost");
+    value["services"]["synthetic"]["endpoints"]["synthetic-tcp"]["host"] = json!("localhost");
     serde_json::from_value::<Model>(value).expect_err("a non-loopback host must not parse");
 }
 

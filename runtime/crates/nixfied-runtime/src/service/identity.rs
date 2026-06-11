@@ -39,7 +39,13 @@ pub fn compute_service_identity(
         .collect();
 
     ServiceIdentity {
-        endpoint_identity_hash: hash_json("endpoint-identity", &service.endpoint),
+        endpoint_identity_hash: hash_json(
+            "endpoint-identity",
+            &EndpointIdentityInputs {
+                endpoints: &service.endpoints,
+                primary_endpoint: &service.primary_endpoint,
+            },
+        ),
         state_identity_hash: hash_json(
             "state-identity",
             &StateIdentityInputs {
@@ -52,7 +58,8 @@ pub fn compute_service_identity(
             "runtime-compatibility",
             &RuntimeIdentityInputs {
                 lifecycle: &service.lifecycle,
-                endpoint: &service.endpoint,
+                endpoints: &service.endpoints,
+                primary_endpoint: &service.primary_endpoint,
                 containment: &service.containment,
                 connects_to: &service.connects_to,
                 execs: lifecycle_execs,
@@ -60,6 +67,15 @@ pub fn compute_service_identity(
         ),
         target_identity_hash: hash_json("target-identity", target),
     }
+}
+
+/// The endpoint inputs a reuse identity depends on: the full endpoint set and
+/// which one is primary, so adding, removing, or re-pointing an endpoint moves
+/// the identity.
+#[derive(Serialize)]
+struct EndpointIdentityInputs<'a> {
+    endpoints: &'a BTreeMap<String, Endpoint>,
+    primary_endpoint: &'a str,
 }
 
 /// The state inputs a reuse identity depends on: the epoch and the cleanup /
@@ -72,12 +88,13 @@ struct StateIdentityInputs<'a> {
     persistence: &'a PersistencePolicy,
 }
 
-/// The behavioral contract a reuse identity depends on: the lifecycle, endpoint,
+/// The behavioral contract a reuse identity depends on: the lifecycle, endpoints,
 /// containment, wiring, and the execs the lifecycle invokes.
 #[derive(Serialize)]
 struct RuntimeIdentityInputs<'a> {
     lifecycle: &'a Lifecycle,
-    endpoint: &'a Endpoint,
+    endpoints: &'a BTreeMap<String, Endpoint>,
+    primary_endpoint: &'a str,
     containment: &'a ContainmentRequirement,
     connects_to: &'a UniqueVec<ServiceId>,
     execs: BTreeMap<&'a str, &'a ExecSpec>,

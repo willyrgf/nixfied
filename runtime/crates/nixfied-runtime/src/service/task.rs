@@ -113,8 +113,12 @@ pub fn run_dependent_task_cancellable(
             )
         })
         .collect();
+    // A task binds no endpoints of its own, so the `${port:<name>}` namespace is
+    // its declared dependencies only.
+    let own_endpoints = std::collections::BTreeMap::new();
     let substitution = ExecSubstitution {
-        own: endpoint,
+        own_primary: endpoint,
+        own_endpoints: &own_endpoints,
         named: &named,
         state_root: run_context.state_root,
     };

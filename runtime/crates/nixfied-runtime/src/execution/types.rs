@@ -87,8 +87,14 @@ pub struct ExecService {
     pub health: HealthOp,
     pub stop: StopOp,
     pub clean: CleanOp,
-    /// The single endpoint bound by the readiness probe.
-    pub endpoint: ResolvedEndpoint,
+    /// The loopback endpoints the service binds, keyed by endpointId. Each is
+    /// assigned a port from the service's contiguous slot block, reserved, and
+    /// ownership-verified.
+    pub endpoints: BTreeMap<String, ResolvedEndpoint>,
+    /// The endpoint bare `${port}`/`${host}` and the tcp readiness/health probe
+    /// resolve to, and the one a `connectsTo` dependent reaches by service id. A
+    /// key in `endpoints`.
+    pub primary_endpoint: String,
     /// Same-slot services this service connects to; gates named endpoint
     /// placeholder resolution and orders service startup.
     pub connects_to: Vec<ServiceId>,

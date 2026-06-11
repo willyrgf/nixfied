@@ -13,7 +13,7 @@ primitive SlotPlacement: slot candidatePorts
 primitive CandidatePortWindow: start end
 primitive ClosureSpec: kind storePath executable targetSystem operationBindings requiresExecutable effects
 primitive ExecSpec: closureId executable args env codebaseId cwd stdin timeoutMs
-primitive ServiceSpec: lifecycle endpoint connectsTo stateRefs logRefs containment
+primitive ServiceSpec: lifecycle endpoints primaryEndpoint connectsTo stateRefs logRefs containment
 primitive Lifecycle: prepare start ready health stop clean
 primitive PrepareSpec: operationId execId execArgs terminal
 primitive StartSpec: operationId execId execArgs terminal
@@ -29,10 +29,11 @@ primitive WorkflowSpec: servicesRequired nodes
 primitive WorkflowNode: taskId dependsOn
 
 # The exec arg/env placeholder grammar the runtime substitutes. Bare forms
-# resolve to the exec's own endpoint (services) or the primary dependency
-# (tasks); named forms resolve any service declared via connectsTo (services)
-# or dependsOnServicesReady (tasks) to its slot-plan endpoint.
-substitution: ${port} ${host} ${stateDir} ${port:<serviceId>} ${host:<serviceId>}
+# resolve to the exec's own primary endpoint (services) or the primary dependency
+# (tasks). The named form ${port:<name>} resolves <name> first against the exec's
+# own endpoint ids (services), then against a service declared via connectsTo
+# (services) or dependsOnServicesReady (tasks) — its primary slot-plan endpoint.
+substitution: ${port} ${host} ${stateDir} ${port:<name>} ${host:<name>}
 
 # The runtime command surfaces every model exposes.
 surface: model schema docs capabilities check run ps down clean

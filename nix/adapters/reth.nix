@@ -7,12 +7,12 @@
 # same probe as a dependent task, and cleanup is the marker-gated runtime
 # primitive that removes the slot state.
 #
-# Port headroom caveat: reth needs four listeners (http, ws, authrpc, p2p).
-# The model assigns only the http port; the wrapper derives the others as
-# +1/+2/+3, which the planner does NOT reserve. Give a reth project a dedicated
-# `nixfied.placement.ports.base` so the derived ports cannot collide with other
-# services in the same window; folding them into the plan needs model-level
-# multi-endpoint support, which is out of scope for this adapter.
+# Reth in `--dev` binds three TCP listeners (http, ws, authrpc) and no p2p socket
+# (the dev chain is peerless, with discovery disabled). All three are modelled
+# endpoints: the planner assigns each a port from the service's contiguous slot
+# block, so every listener is reserved, conflict-checked against other
+# services/slots, and ownership-verified after readiness. The wrapper receives the
+# three planned ports as arguments and derives nothing.
 #
 # The data directory lives under `${stateDir}/reth`, so marker-gated cleanup
 # removes it. The IPC socket lives under /tmp keyed by the http port: a deep
@@ -28,6 +28,8 @@ let
     ];
     text = ''
       http_port=""
+      ws_port=""
+      auth_port=""
       state_dir=""
       host="127.0.0.1"
 
@@ -35,6 +37,14 @@ let
         case "$1" in
           --http-port)
             http_port="''${2:?missing --http-port value}"
+            shift 2
+            ;;
+          --ws-port)
+            ws_port="''${2:?missing --ws-port value}"
+            shift 2
+            ;;
+          --authrpc-port)
+            auth_port="''${2:?missing --authrpc-port value}"
             shift 2
             ;;
           --state-dir)
@@ -52,14 +62,11 @@ let
         esac
       done
 
-      if [[ -z "$http_port" || -z "$state_dir" ]]; then
-        echo "missing required --http-port or --state-dir argument" >&2
+      if [[ -z "$http_port" || -z "$ws_port" || -z "$auth_port" || -z "$state_dir" ]]; then
+        echo "missing required --http-port/--ws-port/--authrpc-port/--state-dir argument" >&2
         exit 64
       fi
 
-      ws_port=$((http_port + 1))
-      auth_port=$((http_port + 2))
-      p2p_port=$((http_port + 3))
       reth_dir="$state_dir/reth"
       jwt_file="$reth_dir/config/jwt.hex"
       ipc_path="/tmp/nixfied-reth-$http_port.ipc"
@@ -71,10 +78,11 @@ let
       chmod 600 "$jwt_file" 2>/dev/null || true
       rm -f "$ipc_path"
 
+      # `--dev` runs a peerless instant-seal chain, so reth binds no p2p TCP
+      # listener; only the http, ws, and authrpc endpoints are modelled.
       exec reth node \
         --datadir "$reth_dir/data" \
         --ipcpath "$ipc_path" \
-        --port "$p2p_port" \
         --http \
         --http.addr "$host" \
         --http.port "$http_port" \
@@ -146,7 +154,11 @@ in
         execId = "reth-node";
         execArgs = [
           "--http-port"
-          "\${port}"
+          "\${port:reth-http}"
+          "--ws-port"
+          "\${port:reth-ws}"
+          "--authrpc-port"
+          "\${port:reth-authrpc}"
           "--state-dir"
           "\${stateDir}"
         ];
@@ -204,9 +216,12 @@ in
         };
       };
     };
-    endpoint = {
-      endpointId = "reth-http";
+    endpoints = {
+      reth-http = { };
+      reth-ws = { };
+      reth-authrpc = { };
     };
+    primaryEndpoint = "reth-http";
     stateRefs = [ "slot" ];
     logRefs = [ "service.reth" ];
     containment = "process-tree";

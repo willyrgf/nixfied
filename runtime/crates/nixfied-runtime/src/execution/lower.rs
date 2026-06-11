@@ -232,7 +232,8 @@ fn lower_service(
 ) -> RuntimeResult<ExecService> {
     let ServiceSpec {
         lifecycle,
-        endpoint,
+        endpoints,
+        primary_endpoint,
         connects_to,
         state_refs: _,
         log_refs: _,
@@ -247,10 +248,18 @@ fn lower_service(
         clean,
     } = lifecycle;
 
-    let endpoint = ResolvedEndpoint {
-        endpoint_id: endpoint.endpoint_id.clone(),
-        host: endpoint.host,
-    };
+    let endpoints: BTreeMap<String, ResolvedEndpoint> = endpoints
+        .iter()
+        .map(|(id, endpoint)| {
+            (
+                id.clone(),
+                ResolvedEndpoint {
+                    endpoint_id: endpoint.endpoint_id.clone(),
+                    host: endpoint.host,
+                },
+            )
+        })
+        .collect();
 
     let prepare = PrepareOp {
         meta: op_meta(&prepare.operation_id, &prepare.terminal),
@@ -280,11 +289,16 @@ fn lower_service(
         meta: op_meta(&clean.operation_id, &clean.terminal),
     };
 
-    // Named endpoint placeholders in lifecycle exec args/env (including exec
-    // probe args) may only reference declared connectsTo dependencies; reject
-    // the model here rather than fail (or silently leak the literal
-    // placeholder) at execution.
-    let allowed: BTreeSet<&str> = connects_to.iter().map(|id| id.as_str()).collect();
+    // Named endpoint placeholders `${port:<name>}` in lifecycle exec args/env
+    // (including exec probe args) resolve against the service's own endpoint ids
+    // or its declared connectsTo dependencies; reject any other reference here
+    // rather than fail (or silently leak the literal placeholder) at execution.
+    // Validation already proved own endpoint ids and connectsTo ids are disjoint.
+    let allowed: BTreeSet<&str> = endpoints
+        .keys()
+        .map(String::as_str)
+        .chain(connects_to.iter().map(|id| id.as_str()))
+        .collect();
     for exec in prepare
         .exec
         .iter()
@@ -292,7 +306,12 @@ fn lower_service(
         .chain(probe_exec(&ready.probe))
         .chain(probe_exec(&health.probe))
     {
-        require_named_refs_in_scope(|| format!("service {name}"), "connectsTo", exec, &allowed)?;
+        require_named_refs_in_scope(
+            || format!("service {name}"),
+            "own endpoints or connectsTo",
+            exec,
+            &allowed,
+        )?;
     }
 
     Ok(ExecService {
@@ -303,7 +322,8 @@ fn lower_service(
         health,
         stop,
         clean,
-        endpoint,
+        endpoints,
+        primary_endpoint: primary_endpoint.clone(),
         connects_to: connects_to.iter().cloned().collect(),
         containment: containment.clone(),
         identity: crate::service::identity::compute_service_identity(service, execs, state, target),
@@ -889,7 +909,8 @@ mod tests {
                 "stop": { "operationId": "svc.stop", "signal": "TERM", "timeoutMs": 5000, "terminal": { "success": "stopped", "failure": "failed" } },
                 "clean": { "operationId": "svc.clean", "terminal": { "success": "cleaned", "failure": "failed" } }
             },
-            "endpoint": { "endpointId": "svc-tcp", "host": "127.0.0.1" },
+            "endpoints": { "svc-tcp": { "endpointId": "svc-tcp", "host": "127.0.0.1" } },
+            "primaryEndpoint": "svc-tcp",
             "connectsTo": [],
             "stateRefs": [], "logRefs": [],
             "containment": "process-group"
@@ -904,7 +925,8 @@ mod tests {
     fn lowers_a_valid_model() {
         let em = lower(&model_from(model_value())).expect("valid model lowers");
         let svc = em.services.get("svc").expect("service lowered");
-        assert_eq!(svc.endpoint.host.to_string(), "127.0.0.1");
+        assert_eq!(svc.endpoints["svc-tcp"].host.to_string(), "127.0.0.1");
+        assert_eq!(svc.primary_endpoint, "svc-tcp");
         assert_eq!(svc.stop.signal, StopSignal::Term);
         assert!(svc.prepare.exec.is_none());
         // Start exec args are base ++ operation args.
@@ -1212,7 +1234,8 @@ mod tests {
     fn environment_must_start_connects_to_dependencies() {
         let mut value = model_value();
         let mut dep = service_value();
-        dep["endpoint"]["endpointId"] = json!("dep-tcp");
+        dep["endpoints"] = json!({ "dep-tcp": { "endpointId": "dep-tcp", "host": "127.0.0.1" } });
+        dep["primaryEndpoint"] = json!("dep-tcp");
         for (class, op) in dep["lifecycle"].as_object_mut().unwrap() {
             op["operationId"] = json!(format!("dep.{class}"));
         }
@@ -1228,7 +1251,8 @@ mod tests {
     fn named_ref_inside_connects_to_lowers_with_env() {
         let mut value = model_value();
         let mut dep = service_value();
-        dep["endpoint"]["endpointId"] = json!("dep-tcp");
+        dep["endpoints"] = json!({ "dep-tcp": { "endpointId": "dep-tcp", "host": "127.0.0.1" } });
+        dep["primaryEndpoint"] = json!("dep-tcp");
         for (class, op) in dep["lifecycle"].as_object_mut().unwrap() {
             op["operationId"] = json!(format!("dep.{class}"));
         }

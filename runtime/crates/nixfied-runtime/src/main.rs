@@ -275,8 +275,9 @@ fn run_m0_placed(
         placement,
     )?;
 
-    // The slot's full endpoint map, known deterministically before anything
-    // spawns: named placeholder substitution addresses it by service id.
+    // The slot's cross-service endpoint map, known deterministically before
+    // anything spawns: `${port:<serviceId>}` substitution addresses each service's
+    // primary endpoint by service id.
     let slot_endpoints: nixfied_runtime::service::SlotEndpoints = plan
         .services
         .iter()
@@ -285,24 +286,25 @@ fn run_m0_placed(
                 .execution_model
                 .services
                 .get(binding.service_name.as_str())?;
+            let primary = service.endpoints.get(&service.primary_endpoint)?;
+            let port = *binding.endpoint_ports.get(&service.primary_endpoint)?;
             Some((
                 binding.service_name.clone(),
                 nixfied_runtime::service::SelectedEndpoint {
-                    endpoint_id: service.endpoint.endpoint_id.clone(),
-                    host: service.endpoint.host.to_string(),
-                    port: binding.port,
+                    endpoint_id: primary.endpoint_id.clone(),
+                    host: primary.host.to_string(),
+                    port,
                 },
             ))
         })
         .collect();
 
-    // Start each required service on its planned port, waiting readiness then
-    // health before the next.
+    // Start each required service on its planned port block, waiting readiness
+    // then health before the next.
     let mut started: Vec<StartedService> = Vec::new();
     let mut lease: Option<RunLeaseHeartbeat> = None;
     for binding in &plan.services {
         let service_name = binding.service_name.as_str();
-        let selected_port = binding.port;
         eprintln!("  starting service {service_name}");
 
         let started_service = match start_service_for_slot(
@@ -313,7 +315,7 @@ fn run_m0_placed(
             selected_slot,
             &nixfied_runtime::service::process::ServiceSelection {
                 service_name,
-                selected_port,
+                endpoint_ports: &binding.endpoint_ports,
                 slot_endpoints: &slot_endpoints,
             },
         ) {

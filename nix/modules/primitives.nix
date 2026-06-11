@@ -167,6 +167,18 @@ let
     };
   };
 
+  # A multi-endpoint service keys its endpoints by id (the attr name), so the
+  # submodule carries only the bind host.
+  namedEndpointType = types.submodule {
+    options = {
+      host = mkOption {
+        type = types.nonEmptyStr;
+        default = "127.0.0.1";
+        description = "Endpoint loopback bind host.";
+      };
+    };
+  };
+
   serviceType = types.submodule {
     options = {
       lifecycle = mkOption {
@@ -174,8 +186,33 @@ let
         description = "Full generic lifecycle operation contract.";
       };
       endpoint = mkOption {
-        type = endpointType;
-        description = "The single tcp loopback endpoint the service binds.";
+        type = types.nullOr endpointType;
+        default = null;
+        description = ''
+          Single-endpoint sugar: the one tcp loopback endpoint the service binds.
+          Mutually exclusive with `endpoints`/`primaryEndpoint`; exactly one form
+          must be set.
+        '';
+      };
+      endpoints = mkOption {
+        type = types.attrsOf namedEndpointType;
+        default = { };
+        description = ''
+          The tcp loopback endpoints the service binds, keyed by endpointId. The
+          planner reserves a contiguous port block — one port per endpoint — so
+          every listener is modelled and conflict-checked. Own endpoints are
+          addressable in exec args/env via ''${port:<endpointId>} and
+          ''${host:<endpointId>}. Set `primaryEndpoint` to name the primary.
+        '';
+      };
+      primaryEndpoint = mkOption {
+        type = types.nullOr types.nonEmptyStr;
+        default = null;
+        description = ''
+          The endpoint bare ''${port}/''${host} resolve to, the tcp readiness/health
+          probe target, and the endpoint a connectsTo dependent reaches by service
+          id. Required with `endpoints`; must name one of its keys.
+        '';
       };
       connectsTo = mkOption {
         type = types.listOf types.nonEmptyStr;

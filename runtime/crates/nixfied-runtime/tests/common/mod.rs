@@ -88,6 +88,9 @@ pub fn start_synthetic_service_for_slot(
     selected_slot: &SelectedSlot<'_>,
     selected_port: u16,
 ) -> RuntimeResult<StartedService> {
+    // The synthetic fixture binds a single endpoint, `synthetic-tcp`.
+    let endpoint_ports =
+        std::collections::BTreeMap::from([("synthetic-tcp".to_string(), selected_port)]);
     start_service_for_slot(
         admission,
         placement,
@@ -96,7 +99,7 @@ pub fn start_synthetic_service_for_slot(
         selected_slot,
         &ServiceSelection {
             service_name: SYNTHETIC_SERVICE_NAME,
-            selected_port,
+            endpoint_ports: &endpoint_ports,
             slot_endpoints: &SlotEndpoints::new(),
         },
     )

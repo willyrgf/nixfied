@@ -64,9 +64,6 @@ let
   };
   execs = mapAttrs execSpec config.nixfied.execs;
 
-  endpointSpec = endpoint: {
-    inherit (endpoint) endpointId host;
-  };
   # Mirror the runtime's serde skip rules (exec fields only on exec probes) so
   # nix-emitted and runtime-rederived views stay byte-comparable.
   probeOf =
@@ -115,14 +112,36 @@ let
   # Service identity is no longer emitted: the runtime derives a service's reuse
   # identity from its own lowered contract, so the model carries no identity
   # hashes for it to trust.
+  #
+  # `endpoint` (single) is sugar for the common one-endpoint service; `endpoints`
+  # (keyed by id) + `primaryEndpoint` is the multi-endpoint form. Exactly one must
+  # be set; both compile to the same wire shape — an `endpoints` map plus a
+  # `primaryEndpoint`.
   serviceSpec =
-    _name: service:
+    name: service:
     let
-      endpoint = endpointSpec service.endpoint;
       lifecycle = lifecycleSpec service.lifecycle;
+      singular = service.endpoint != null;
+      multi = service.endpoints != { };
+      endpoints =
+        if singular then
+          {
+            ${service.endpoint.endpointId} = {
+              inherit (service.endpoint) endpointId host;
+            };
+          }
+        else
+          builtins.mapAttrs (id: ep: { endpointId = id; inherit (ep) host; }) service.endpoints;
+      primaryEndpoint = if singular then service.endpoint.endpointId else service.primaryEndpoint;
     in
+    assert lib.assertMsg (
+      singular != multi
+    ) "service ${name}: set exactly one of `endpoint` or `endpoints`";
+    assert lib.assertMsg (
+      !multi || service.primaryEndpoint != null
+    ) "service ${name}: `endpoints` requires `primaryEndpoint`";
     {
-      inherit lifecycle endpoint;
+      inherit lifecycle endpoints primaryEndpoint;
       connectsTo = service.connectsTo;
       stateRefs = service.stateRefs;
       logRefs = service.logRefs;

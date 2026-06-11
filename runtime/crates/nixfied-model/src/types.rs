@@ -364,7 +364,16 @@ pub struct TerminalSemantics {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ServiceSpec {
     pub lifecycle: Lifecycle,
-    pub endpoint: Endpoint,
+    /// The loopback endpoints the service binds, keyed by endpointId. The planner
+    /// assigns each one a port from a contiguous per-service block, so every
+    /// listener is reserved and conflict-checked — no service runs an unmodeled
+    /// port. Own endpoints are addressable in exec args/env via
+    /// `${port:<endpointId>}`/`${host:<endpointId>}`.
+    pub endpoints: BTreeMap<String, Endpoint>,
+    /// The endpoint bare `${port}`/`${host}` resolve to, the target of the tcp
+    /// readiness/health probe, and the endpoint a `connectsTo` dependent reaches
+    /// via `${port:<serviceId>}`. Must be a key in `endpoints`.
+    pub primary_endpoint: String,
     /// Same-slot services this service connects to; the declaration gates
     /// `${port:<serviceId>}`/`${host:<serviceId>}` resolution and start order.
     pub connects_to: UniqueVec<ServiceId>,

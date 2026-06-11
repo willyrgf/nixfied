@@ -41,9 +41,17 @@ let
       in
       octets != null && lib.all (octet: lib.toInt octet <= 255) octets
     );
-  endpointHostsLoopback = lib.all (name: isLoopbackHost services.${name}.endpoint.host) (
-    builtins.attrNames services
-  );
+  # A service declares either the single-endpoint `endpoint` sugar or the
+  # multi-endpoint `endpoints` map; collect the bind hosts from whichever form.
+  serviceHosts =
+    service:
+    if service.endpoint != null then
+      [ service.endpoint.host ]
+    else
+      map (ep: ep.host) (builtins.attrValues service.endpoints);
+  endpointHostsLoopback = lib.all (
+    name: lib.all isLoopbackHost (serviceHosts services.${name})
+  ) (builtins.attrNames services);
   checks = [
     (expect (config.nixfied.target.system == system) "target.system must match the compile system")
     (expect (slotPolicy.min >= 0) "slotPolicy.min must be non-negative")

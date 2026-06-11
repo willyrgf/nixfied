@@ -306,17 +306,57 @@ fn validate_services(model: &Model) -> Result<(), ValidationError> {
             actual: "{}".to_string(),
         });
     }
-    for service in model.services.values() {
+    for (name, service) in &model.services {
         match service.containment {
             ContainmentRequirement::ProcessGroup | ContainmentRequirement::ProcessTree => {}
         }
-        require_non_empty(
-            "services.endpoint.endpointId",
-            &service.endpoint.endpoint_id,
-        )?;
+        validate_service_endpoints(name, service)?;
         validate_service_lifecycle(service)?;
     }
     validate_connects_to(model)?;
+    Ok(())
+}
+
+/// A service binds at least one endpoint; each map key equals its endpointId, the
+/// primary names a declared endpoint, and no endpointId collides with a
+/// `connectsTo` serviceId (the two share the `${port:<name>}` namespace, resolved
+/// own-endpoint first, so a collision would be ambiguous).
+fn validate_service_endpoints(name: &str, service: &ServiceSpec) -> Result<(), ValidationError> {
+    if service.endpoints.is_empty() {
+        return Err(ValidationError::UnsupportedValue {
+            field: "services.endpoints",
+            expected: "at least one endpoint",
+            actual: format!("{name}: {{}}"),
+        });
+    }
+    for (id, endpoint) in &service.endpoints {
+        require_non_empty("services.endpoints.endpointId", &endpoint.endpoint_id)?;
+        if endpoint.endpoint_id != *id {
+            return Err(ValidationError::UnsupportedValue {
+                field: "services.endpoints",
+                expected: "map key equal to endpointId",
+                actual: format!("{id} -> {}", endpoint.endpoint_id),
+            });
+        }
+        if service
+            .connects_to
+            .iter()
+            .any(|target| target.as_str() == id)
+        {
+            return Err(ValidationError::UnsupportedValue {
+                field: "services.endpoints",
+                expected: "endpointId distinct from every connectsTo serviceId",
+                actual: format!("{name}: {id}"),
+            });
+        }
+    }
+    if !service.endpoints.contains_key(&service.primary_endpoint) {
+        return Err(ValidationError::UnsupportedValue {
+            field: "services.primaryEndpoint",
+            expected: "a declared endpoint id",
+            actual: format!("{name}: {}", service.primary_endpoint),
+        });
+    }
     Ok(())
 }
 

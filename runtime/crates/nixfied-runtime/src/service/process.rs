@@ -71,7 +71,12 @@ pub struct StartedService {
     pub pid: u32,
     pub pgid: i32,
     pub platform_start_identity: Option<String>,
+    /// The primary endpoint: the tcp probe target and the endpoint recorded as the
+    /// service's address.
     pub selected_endpoint: SelectedEndpoint,
+    /// Every endpoint the service binds (including the primary), each reserved and
+    /// ownership-verified after readiness.
+    pub selected_endpoints: Vec<SelectedEndpoint>,
     pub computed_model_hash: String,
     pub source_root: PathBuf,
     pub state_root: PathBuf,
@@ -133,7 +138,7 @@ impl StartedService {
             let _ = record_lifecycle_failure(registry, &context, &record, &error);
             return Err(error);
         }
-        let ownership_json = match self.verify_selected_endpoint_ownership_json(registry) {
+        let ownership_json = match self.verify_endpoint_ownerships(registry) {
             Ok(payload) => payload,
             Err(error) => {
                 if let Some(error) = self.escape_error(registry) {
@@ -150,18 +155,17 @@ impl StartedService {
                 return Err(error);
             }
         };
-        mark_endpoint_owner_verified(
-            registry,
-            &endpoint_key(
+        for (key, ownership_json) in &ownership_json {
+            mark_endpoint_owner_verified(
+                registry,
+                key,
+                &self.run_id,
                 &self.service_instance_id,
-                &self.selected_endpoint.endpoint_id,
-            ),
-            &self.run_id,
-            &self.service_instance_id,
-            &self.process_key,
-            &self.computed_model_hash,
-            &ownership_json,
-        )?;
+                &self.process_key,
+                &self.computed_model_hash,
+                ownership_json,
+            )?;
+        }
         mark_service_probe_ready(
             registry,
             &self.run_id,
@@ -202,7 +206,7 @@ impl StartedService {
             self.cleanup_after_probe_failure(registry, &error);
             return Err(error);
         }
-        if let Err(error) = self.verify_selected_endpoint_ownership_json(registry) {
+        if let Err(error) = self.verify_endpoint_ownerships(registry) {
             let _ = record_lifecycle_failure(registry, &context, &record, &error);
             self.cleanup_after_probe_failure(registry, &error);
             return Err(error);
@@ -524,30 +528,44 @@ impl StartedService {
         }
     }
 
-    fn verify_selected_endpoint_ownership_json(
+    /// Verify that every modelled endpoint's listener is owned by this service's
+    /// process group, returning each endpoint's registry key and ownership JSON so
+    /// the caller can mark them. Every declared listener is proven — not just the
+    /// primary — so a service cannot pass readiness while a modelled port is held
+    /// by someone else. On any failure an escape is recorded first if present.
+    fn verify_endpoint_ownerships(
         &mut self,
         registry: &mut Registry,
-    ) -> RuntimeResult<String> {
-        let ownership = verify_endpoint_ownership(
-            &self.selected_endpoint.endpoint_id,
-            &self.selected_endpoint.host,
-            self.selected_endpoint.port,
-            &ExpectedEndpointOwner {
-                pid: self.pid,
-                pgid: self.pgid,
-                process_key: &self.process_key,
-                platform_start_identity: self.platform_start_identity.as_deref(),
-            },
-        )
-        .map_err(|error| {
-            if let Some(error) = self.escape_error(registry) {
-                self.cleanup_after_escape();
-                return error;
-            }
-            error
-        })?;
-        serde_json::to_string(&ownership)
-            .map_err(|error| RuntimeError::new(ErrorCode::ModelAdmission, error.to_string()))
+    ) -> RuntimeResult<Vec<(String, String)>> {
+        let endpoints = self.selected_endpoints.clone();
+        let mut verified = Vec::with_capacity(endpoints.len());
+        for endpoint in &endpoints {
+            let ownership = verify_endpoint_ownership(
+                &endpoint.endpoint_id,
+                &endpoint.host,
+                endpoint.port,
+                &ExpectedEndpointOwner {
+                    pid: self.pid,
+                    pgid: self.pgid,
+                    process_key: &self.process_key,
+                    platform_start_identity: self.platform_start_identity.as_deref(),
+                },
+            )
+            .map_err(|error| {
+                if let Some(error) = self.escape_error(registry) {
+                    self.cleanup_after_escape();
+                    return error;
+                }
+                error
+            })?;
+            let json = serde_json::to_string(&ownership)
+                .map_err(|error| RuntimeError::new(ErrorCode::ModelAdmission, error.to_string()))?;
+            verified.push((
+                endpoint_key(&self.service_instance_id, &endpoint.endpoint_id),
+                json,
+            ));
+        }
+        Ok(verified)
     }
 }
 
@@ -564,11 +582,12 @@ impl Drop for StartedService {
     }
 }
 
-/// One service's slice of the slot plan: its name, its deterministic port, and
-/// the slot endpoint map named placeholders resolve against.
+/// One service's slice of the slot plan: its name, the planned port for each of
+/// its endpoints (keyed by endpointId), and the cross-service slot endpoint map
+/// `${port:<serviceId>}` resolves against.
 pub struct ServiceSelection<'a> {
     pub service_name: &'a str,
-    pub selected_port: u16,
+    pub endpoint_ports: &'a BTreeMap<String, u16>,
     pub slot_endpoints: &'a SlotEndpoints,
 }
 
@@ -587,7 +606,7 @@ pub fn start_service_for_slot(
     let source = admission.require_source()?;
     let ServiceSelection {
         service_name,
-        selected_port,
+        endpoint_ports,
         slot_endpoints,
     } = *selection;
     let service = admission
@@ -600,20 +619,48 @@ pub fn start_service_for_slot(
                 format!("service {service_name} is missing"),
             )
         })?;
-    let selected_endpoint = SelectedEndpoint {
-        endpoint_id: service.endpoint.endpoint_id.clone(),
-        host: service.endpoint.host.to_string(),
-        port: selected_port,
-    };
+    // Bind every modelled endpoint to its planned port. The map is keyed by
+    // endpointId, the scope `${port:<endpointId>}` resolves against.
+    let mut own_endpoints: BTreeMap<String, SelectedEndpoint> = BTreeMap::new();
+    for (endpoint_id, endpoint) in &service.endpoints {
+        let port = endpoint_ports.get(endpoint_id).copied().ok_or_else(|| {
+            RuntimeError::new(
+                ErrorCode::ModelAdmission,
+                format!("service {service_name} endpoint {endpoint_id} has no planned port"),
+            )
+        })?;
+        own_endpoints.insert(
+            endpoint_id.clone(),
+            SelectedEndpoint {
+                endpoint_id: endpoint.endpoint_id.clone(),
+                host: endpoint.host.to_string(),
+                port,
+            },
+        );
+    }
+    let selected_endpoint = own_endpoints
+        .get(&service.primary_endpoint)
+        .cloned()
+        .ok_or_else(|| {
+            RuntimeError::new(
+                ErrorCode::ModelAdmission,
+                format!(
+                    "service {service_name} primary endpoint {} is missing",
+                    service.primary_endpoint
+                ),
+            )
+        })?;
+    let selected_endpoints: Vec<SelectedEndpoint> = own_endpoints.values().cloned().collect();
     // The named substitution scope is the declared connectsTo set; lowering
-    // proved every named placeholder references a member of it.
+    // proved every cross-service placeholder references a member of it.
     let named: SlotEndpoints = slot_endpoints
         .iter()
         .filter(|(id, _)| service.connects_to.contains(id))
         .map(|(id, endpoint)| (id.clone(), endpoint.clone()))
         .collect();
     let substitution = ExecSubstitution {
-        own: Some(&selected_endpoint),
+        own_primary: Some(&selected_endpoint),
+        own_endpoints: &own_endpoints,
         named: &named,
         state_root: &placement.state_root,
     };
@@ -628,15 +675,33 @@ pub fn start_service_for_slot(
         service_name,
     );
     let service_instance_id = service_instance_id(&address_hash, &service.identity);
-    let endpoint_key = endpoint_key(&service_instance_id, &selected_endpoint.endpoint_id);
+    // Stable backing storage for the per-endpoint reservation keys.
+    let reservation_keys: Vec<(String, String, u16)> = selected_endpoints
+        .iter()
+        .map(|endpoint| {
+            (
+                endpoint_key(&service_instance_id, &endpoint.endpoint_id),
+                endpoint.host.clone(),
+                endpoint.port,
+            )
+        })
+        .collect();
+    let reservations: Vec<PortReservation<'_>> = reservation_keys
+        .iter()
+        .map(|(key, address, port)| PortReservation {
+            endpoint_key: key,
+            address,
+            port: *port,
+        })
+        .collect();
     reconcile_registry(registry)?;
     ensure_service_start_allowed(registry, &run_id, &service_instance_id)?;
     let owner_token = run_owner_token(&run_id);
-    // Reserve the service instance (run row + active lease) AND its endpoint port
+    // Reserve the service instance (run row + active lease) AND every endpoint port
     // under the start conflict gates before running any state-mutating lifecycle
-    // work, so a second runtime racing the same slot — or a port already held by
-    // another active service — is refused before prepare (e.g. initdb) and spawn
-    // run, never discovered afterward. Released on failure below.
+    // work, so a second runtime racing the same slot — or any modelled port already
+    // held by another active service — is refused before prepare (e.g. initdb) and
+    // spawn run, never discovered afterward. Released on failure below.
     reserve_service_start(
         registry,
         &RunRecord {
@@ -646,11 +711,7 @@ pub fn start_service_for_slot(
             placement,
         },
         &service_instance_id,
-        &[PortReservation {
-            endpoint_key: &endpoint_key,
-            address: &selected_endpoint.host,
-            port: selected_endpoint.port,
-        }],
+        &reservations,
     )?;
     let lifecycle_context = LifecycleEventContext {
         run_id: Some(run_id.clone()),
@@ -807,6 +868,7 @@ pub fn start_service_for_slot(
         pgid,
         platform_start_identity: platform_start,
         selected_endpoint,
+        selected_endpoints,
         computed_model_hash: admission.computed_model_hash.clone(),
         source_root: source.observed_root.clone(),
         state_root: placement.state_root.clone(),
@@ -925,15 +987,17 @@ fn run_owner_token(run_id: &str) -> String {
 pub type SlotEndpoints = std::collections::BTreeMap<nixfied_model::ServiceId, SelectedEndpoint>;
 
 /// Placeholder substitution shared by lifecycle and task exec args/env values.
-/// Bare `${port}`/`${host}` resolve to `own` (the exec's own endpoint for a
-/// service, the primary dependency for a task); `${port:<serviceId>}` /
-/// `${host:<serviceId>}` resolve any endpoint in `named` (the slot plan map
-/// restricted to the exec's declared dependencies); `${stateDir}` resolves to
-/// the host-materialised slot state root. Lowering already proved every named
-/// reference is declared, so a leftover named placeholder here is a leak — fail
-/// closed rather than hand the literal string to the child.
+/// Bare `${port}`/`${host}` resolve to `own_primary` (the exec's own primary
+/// endpoint for a service, the primary dependency for a task). `${port:<name>}` /
+/// `${host:<name>}` resolve `<name>` first against `own_endpoints` (the service's
+/// own endpoints by id), then against `named` (the connectsTo/dependency slot-plan
+/// endpoints by service id). `${stateDir}` resolves to the host-materialised slot
+/// state root. Lowering already proved every named reference is declared, so a
+/// leftover named placeholder here is a leak — fail closed rather than hand the
+/// literal string to the child.
 pub(crate) struct ExecSubstitution<'a> {
-    pub own: Option<&'a SelectedEndpoint>,
+    pub own_primary: Option<&'a SelectedEndpoint>,
+    pub own_endpoints: &'a BTreeMap<String, SelectedEndpoint>,
     pub named: &'a SlotEndpoints,
     pub state_root: &'a Path,
 }
@@ -941,6 +1005,17 @@ pub(crate) struct ExecSubstitution<'a> {
 impl ExecSubstitution<'_> {
     pub(crate) fn value(&self, value: &str) -> RuntimeResult<String> {
         let mut out = value.to_string();
+        // Own endpoints win the `${port:<name>}` namespace; validation proved no
+        // own endpointId collides with a connectsTo serviceId, so order is moot
+        // for correctness, but resolving own first keeps the intent explicit.
+        for (endpoint_id, endpoint) in self.own_endpoints {
+            out = out
+                .replace(
+                    &format!("${{port:{endpoint_id}}}"),
+                    &endpoint.port.to_string(),
+                )
+                .replace(&format!("${{host:{endpoint_id}}}"), &endpoint.host);
+        }
         for (service, endpoint) in self.named {
             out = out
                 .replace(
@@ -949,7 +1024,7 @@ impl ExecSubstitution<'_> {
                 )
                 .replace(&format!("${{host:{}}}", service.as_str()), &endpoint.host);
         }
-        if let Some(own) = self.own {
+        if let Some(own) = self.own_primary {
             out = out
                 .replace("${port}", &own.port.to_string())
                 .replace("${host}", &own.host);
@@ -1993,7 +2068,8 @@ mod tests {
             .into_iter()
             .collect();
         let substitution = ExecSubstitution {
-            own: Some(&own),
+            own_primary: Some(&own),
+            own_endpoints: &BTreeMap::new(),
             named: &named,
             state_root: Path::new("/state"),
         };
@@ -2007,12 +2083,35 @@ mod tests {
     }
 
     #[test]
+    fn substitutes_own_endpoints_by_id() {
+        let http = endpoint("127.0.0.1", 25080);
+        let own_endpoints: BTreeMap<String, SelectedEndpoint> = [
+            ("http".to_string(), http.clone()),
+            ("ws".to_string(), endpoint("127.0.0.1", 25081)),
+            ("authrpc".to_string(), endpoint("127.0.0.1", 25082)),
+        ]
+        .into_iter()
+        .collect();
+        let substitution = ExecSubstitution {
+            own_primary: Some(&http),
+            own_endpoints: &own_endpoints,
+            named: &SlotEndpoints::new(),
+            state_root: Path::new("/state"),
+        };
+        let value = substitution
+            .value("--http ${port} --ws ${port:ws} --auth ${port:authrpc}")
+            .expect("own endpoint placeholders substitute");
+        assert_eq!(value, "--http 25080 --ws 25081 --auth 25082");
+    }
+
+    #[test]
     fn env_values_are_substituted() {
         let named: SlotEndpoints = [(ServiceId::new("db"), endpoint("127.0.0.1", 23081))]
             .into_iter()
             .collect();
         let substitution = ExecSubstitution {
-            own: None,
+            own_primary: None,
+            own_endpoints: &BTreeMap::new(),
             named: &named,
             state_root: Path::new("/state"),
         };
@@ -2029,7 +2128,8 @@ mod tests {
     #[test]
     fn unresolved_named_placeholder_fails_closed() {
         let substitution = ExecSubstitution {
-            own: None,
+            own_primary: None,
+            own_endpoints: &BTreeMap::new(),
             named: &SlotEndpoints::new(),
             state_root: Path::new("/state"),
         };

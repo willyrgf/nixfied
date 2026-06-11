@@ -29,7 +29,10 @@ pub struct RunPlan {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServiceBinding {
     pub service_name: ServiceId,
-    pub port: u16,
+    /// The port assigned to each of the service's endpoints, keyed by endpointId.
+    /// Ports come from the service's contiguous block in the slot window, so every
+    /// modelled listener has a reserved, conflict-checked port.
+    pub endpoint_ports: BTreeMap<String, u16>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,7 +89,7 @@ pub fn plan(model: &ExecutionModel, selection: Selection<'_>, slot: u32) -> Runt
     // reordered for start so every connectsTo dependency is ready before its
     // dependent spawns. Lowering proved the graph acyclic and closed under the
     // selection, so the sort always completes.
-    let services = order_for_start(assign_ports(&service_names, *window, slot)?, model);
+    let services = order_for_start(assign_ports(&service_names, model, *window, slot)?, model);
     Ok(RunPlan {
         services,
         nodes,
@@ -124,37 +127,63 @@ fn order_for_start(bindings: Vec<ServiceBinding>, model: &ExecutionModel) -> Vec
     ordered
 }
 
-/// Assign each service the next port in the window (start + index), proving the
-/// window has capacity for every service.
+/// Assign each service a contiguous block of ports from the window — one per
+/// endpoint, in endpointId order — advancing a single cursor across services in
+/// declared order. Proves the window has capacity for every modelled listener, so
+/// a service can never run an unreserved port.
 fn assign_ports(
     service_names: &[ServiceId],
+    model: &ExecutionModel,
     window: PortWindow,
     slot: u32,
 ) -> RuntimeResult<Vec<ServiceBinding>> {
     let mut bindings = Vec::with_capacity(service_names.len());
-    for (index, service_name) in service_names.iter().enumerate() {
-        let offset = u16::try_from(index).ok().filter(|offset| {
-            window
-                .start
-                .checked_add(*offset)
-                .is_some_and(|port| port <= window.end)
-        });
-        let Some(offset) = offset else {
-            return Err(RuntimeError::new(
-                ErrorCode::PortConflict,
-                format!(
-                    "slot {slot} candidate window {}-{} cannot host {} services",
-                    window.start,
-                    window.end,
-                    service_names.len()
-                ),
-            ));
-        };
-        let port = window.start + offset;
+    let mut cursor = window.start;
+    let mut exhausted = false;
+    for service_name in service_names {
+        // Lowering proved every selected service resolves; an absent one would be
+        // a planner/lowering skew, so treat it as an empty endpoint set.
+        let endpoint_ids = model
+            .services
+            .get(service_name)
+            .map(|service| service.endpoints.keys().cloned().collect::<Vec<_>>())
+            .unwrap_or_default();
+        let mut endpoint_ports = BTreeMap::new();
+        for endpoint_id in endpoint_ids {
+            if exhausted || cursor > window.end {
+                exhausted = true;
+                break;
+            }
+            endpoint_ports.insert(endpoint_id, cursor);
+            match cursor.checked_add(1) {
+                Some(next) => cursor = next,
+                None => exhausted = true,
+            }
+        }
         bindings.push(ServiceBinding {
             service_name: service_name.clone(),
-            port,
+            endpoint_ports,
         });
+    }
+    let demand: usize = bindings
+        .iter()
+        .map(|binding| binding.endpoint_ports.len())
+        .sum();
+    let assigned: usize = service_names
+        .iter()
+        .filter_map(|name| model.services.get(name))
+        .map(|service| service.endpoints.len())
+        .sum();
+    if exhausted || demand != assigned {
+        return Err(RuntimeError::new(
+            ErrorCode::PortConflict,
+            format!(
+                "slot {slot} candidate window {}-{} cannot host {assigned} endpoints across {} services",
+                window.start,
+                window.end,
+                service_names.len()
+            ),
+        ));
     }
     Ok(bindings)
 }
@@ -279,10 +308,14 @@ mod tests {
             clean: CleanOp {
                 meta: op_meta("clean"),
             },
-            endpoint: ResolvedEndpoint {
-                endpoint_id: "e".to_string(),
-                host: LoopbackHost::parse("127.0.0.1").unwrap(),
-            },
+            endpoints: BTreeMap::from([(
+                "e".to_string(),
+                ResolvedEndpoint {
+                    endpoint_id: "e".to_string(),
+                    host: LoopbackHost::parse("127.0.0.1").unwrap(),
+                },
+            )]),
+            primary_endpoint: "e".to_string(),
             connects_to: Vec::new(),
             containment: ContainmentRequirement::ProcessGroup,
             identity: ServiceIdentity {
@@ -326,11 +359,11 @@ mod tests {
             vec![
                 ServiceBinding {
                     service_name: ServiceId::new("a"),
-                    port: 23080
+                    endpoint_ports: BTreeMap::from([("e".to_string(), 23080)]),
                 },
                 ServiceBinding {
                     service_name: ServiceId::new("b"),
-                    port: 23081
+                    endpoint_ports: BTreeMap::from([("e".to_string(), 23081)]),
                 },
             ]
         );
@@ -436,13 +469,73 @@ mod tests {
             vec![
                 ServiceBinding {
                     service_name: ServiceId::new("db"),
-                    port: 23081
+                    endpoint_ports: BTreeMap::from([("e".to_string(), 23081)]),
                 },
                 ServiceBinding {
                     service_name: ServiceId::new("app"),
-                    port: 23080
+                    endpoint_ports: BTreeMap::from([("e".to_string(), 23080)]),
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn assigns_a_contiguous_block_per_multi_endpoint_service() {
+        // `multi` declares three endpoints, so it consumes a three-port block; the
+        // single-endpoint `solo` takes the next port after the block.
+        let mut em = model(
+            vec!["multi", "solo"],
+            vec!["multi", "solo"],
+            vec![(0, 23080, 23090)],
+        );
+        let multi = em
+            .services
+            .get_mut(&ServiceId::new("multi"))
+            .expect("multi exists");
+        for id in ["a", "b", "c"] {
+            multi.endpoints.insert(
+                id.to_string(),
+                ResolvedEndpoint {
+                    endpoint_id: id.to_string(),
+                    host: LoopbackHost::parse("127.0.0.1").unwrap(),
+                },
+            );
+        }
+        multi.endpoints.remove("e");
+        multi.primary_endpoint = "a".to_string();
+        let plan = plan(&em, Selection::Environment, 0).expect("plan exists");
+        let multi_ports = &plan
+            .services
+            .iter()
+            .find(|b| b.service_name.as_str() == "multi")
+            .expect("multi binding")
+            .endpoint_ports;
+        assert_eq!(
+            multi_ports,
+            &BTreeMap::from([
+                ("a".to_string(), 23080),
+                ("b".to_string(), 23081),
+                ("c".to_string(), 23082),
+            ])
+        );
+        let solo_ports = &plan
+            .services
+            .iter()
+            .find(|b| b.service_name.as_str() == "solo")
+            .expect("solo binding")
+            .endpoint_ports;
+        assert_eq!(solo_ports, &BTreeMap::from([("e".to_string(), 23083)]));
+    }
+
+    #[test]
+    fn rejects_when_window_cannot_host_all_endpoints() {
+        // Two single-endpoint services need two ports; a one-port window cannot.
+        let em = model(vec!["a", "b"], vec!["a", "b"], vec![(0, 23080, 23080)]);
+        assert_eq!(
+            plan(&em, Selection::Environment, 0)
+                .expect_err("window too small for the endpoint block")
+                .code,
+            ErrorCode::PortConflict
         );
     }
 }
