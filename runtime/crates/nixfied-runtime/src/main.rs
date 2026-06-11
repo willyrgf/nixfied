@@ -10,8 +10,8 @@ use nixfied_runtime::service::{
 };
 use nixfied_runtime::slot::select_slot;
 use nixfied_runtime::state::{
-    StateIdentity, derive_host_placement_for_slot, materialize_run_roots, state_base_from_env,
-    write_slot_marker,
+    StateIdentity, derive_host_placement_for_slot, materialize_registry_root, prepare_slot_state,
+    state_base_from_env,
 };
 use nixfied_runtime::{
     Admission, AdmissionContext, RuntimeError, StoreOriginPolicy, parse_loaded_model,
@@ -187,9 +187,11 @@ fn run_m0_admitted(
     let selected_slot = select_slot(model, options.selection.slot)?;
     let placement =
         derive_host_placement_for_slot(model, &selected_slot, &run_id, &options.state_base)?;
-    materialize_run_roots(&placement)?;
+    // The registry opens before the marker decision: when the slot was last
+    // used by a different model build, the upgrade path needs registry evidence
+    // to tear down what that build left running.
+    materialize_registry_root(&placement)?;
     let identity = StateIdentity::from_selected_slot(model, admission, &selected_slot);
-    write_slot_marker(&placement, &identity)?;
     let mut registry = Registry::open_or_create(
         placement.registry_path(),
         &RegistryIdentity::for_slot(
@@ -201,6 +203,18 @@ fn run_m0_admitted(
         ),
     )?;
     let _ = nixfied_runtime::control::reconcile_registry(&mut registry)?;
+    let upgrade = prepare_slot_state(&placement, &identity, &mut registry, options.timeout_ms)?;
+    if upgrade.upgraded {
+        eprintln!(
+            "  upgraded slot state from model {} (state {})",
+            upgrade.from_model_hash.as_deref().unwrap_or("unknown"),
+            if upgrade.cleaned {
+                "cleaned: state epoch changed"
+            } else {
+                "preserved"
+            }
+        );
+    }
 
     // A run drives either the environment's services+tasks, or a single workflow.
     // The plan (service ports + task order) is a pure function of the lowered

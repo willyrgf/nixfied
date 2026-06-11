@@ -40,7 +40,9 @@ pub fn inspect_cleanup_target(
     reject_target_symlink(target)?;
     reject_tree_symlinks(&canonical_target)?;
     let marker = read_marker(&canonical_target)?;
-    if !marker.matches_identity(expected) {
+    // Cleanup is gated on ownership, not provenance: the slot's current owner
+    // may clean a state root last used by an older build of the same model.
+    if !marker.matches_ownership(expected) {
         return Err(RuntimeError::new(
             ErrorCode::StateUnowned,
             "state marker identity does not match the requested cleanup identity",
@@ -222,7 +224,7 @@ fn find_prior_cleanup(
                 format!("cleanup {cleanup_id} has invalid marker evidence: {error}"),
             )
         })?;
-        if marker.matches_declared_marker(expected) {
+        if marker.matches_ownership(expected) {
             return Ok(PriorCleanup {
                 cleanup_id,
                 status,

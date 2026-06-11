@@ -104,7 +104,11 @@ impl StateMarker {
         }
     }
 
-    pub fn matches_identity(&self, identity: &StateIdentity) -> bool {
+    /// Whether this marker's state root belongs to the requested identity at
+    /// all: same project, environment, slot, and marker scheme. Ownership is
+    /// deliberately blind to which model build last used the root — a model
+    /// evolves, its slot does not.
+    pub fn matches_ownership(&self, identity: &StateIdentity) -> bool {
         self.marker_version == 1
             && self.marker_identity == identity.marker_identity
             && self.project_id == identity.project_id
@@ -112,18 +116,61 @@ impl StateMarker {
             && self.slot == identity.slot
             && self.state_kind == StateKind::Slot
             && self.service_instance_id.is_none()
-            && self.state_epoch == identity.state_epoch
-            && self.persistence == identity.persistence
-            && self.model_path == identity.model_path
-            && self.computed_model_hash == identity.computed_model_hash
-            && self.runtime_abi == identity.runtime_abi
-            && self.toolchain_id == identity.toolchain_id
-            && self.target == identity.target
     }
 
-    pub fn matches_declared_marker(&self, identity: &StateIdentity) -> bool {
-        self.matches_identity(identity) && self.cleanup_policy == identity.cleanup_policy
+    /// Classify this marker against the requested identity. Ownership and
+    /// runtime ABI gate access; everything else is provenance — a difference
+    /// there means the same slot was last used by another model build and
+    /// must be upgraded in place, not refused. A state-epoch difference is the
+    /// model's declared state-compatibility boundary, so it upgrades with a
+    /// state clean.
+    pub fn compare(&self, identity: &StateIdentity) -> MarkerComparison {
+        if !self.matches_ownership(identity) {
+            return MarkerComparison::RefuseOwnership;
+        }
+        if self.runtime_abi != identity.runtime_abi {
+            return MarkerComparison::RefuseAbi;
+        }
+        if self.state_epoch != identity.state_epoch {
+            return MarkerComparison::UpgradeEpoch;
+        }
+        let provenance_matches = self.model_path == identity.model_path
+            && self.computed_model_hash == identity.computed_model_hash
+            && self.toolchain_id == identity.toolchain_id
+            && self.target == identity.target
+            && self.persistence == identity.persistence
+            && self.cleanup_policy == identity.cleanup_policy;
+        if provenance_matches {
+            MarkerComparison::Match
+        } else {
+            MarkerComparison::UpgradeProvenance
+        }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MarkerComparison {
+    Match,
+    UpgradeProvenance,
+    UpgradeEpoch,
+    RefuseOwnership,
+    RefuseAbi,
+}
+
+/// What a run must do with the slot's state root before using it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MarkerDecision {
+    /// No marker on disk — first use of the slot.
+    Fresh,
+    /// The marker matches the requested identity exactly.
+    Adopt(StateMarker),
+    /// Same owner, different model build: tear down what the old model left
+    /// behind, clean the state root when the state epoch changed, and rewrite
+    /// the marker.
+    Upgrade {
+        clean_state: bool,
+        existing: StateMarker,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -132,11 +179,14 @@ pub enum StateKind {
     Slot,
 }
 
-pub fn write_slot_marker(
+/// Inspect the slot's marker (read-only) and classify what the run must do
+/// before using the state root. Refusals are ownership or runtime-ABI
+/// mismatches; a provenance mismatch is returned as an upgrade decision for
+/// the caller to process, never silently absorbed.
+pub fn evaluate_slot_marker(
     placement: &HostPlacement,
     identity: &StateIdentity,
-) -> RuntimeResult<StateMarker> {
-    let marker = StateMarker::slot(identity);
+) -> RuntimeResult<MarkerDecision> {
     let path = marker_path(&placement.state_root);
     match std::fs::symlink_metadata(&path) {
         Ok(metadata) => {
@@ -146,22 +196,55 @@ pub fn write_slot_marker(
                     format!("state marker is a symlink at {}", path.display()),
                 ));
             }
-            let existing = read_marker(&placement.state_root)?;
-            if !existing.matches_declared_marker(identity) {
-                return Err(RuntimeError::new(
-                    ErrorCode::StateUnowned,
-                    "existing state marker does not match the requested state identity",
-                ));
-            }
-            return Ok(existing);
         }
-        Err(error) if error.kind() == ErrorKind::NotFound => {}
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            return Ok(MarkerDecision::Fresh);
+        }
         Err(error) => {
             return Err(RuntimeError::new(
                 ErrorCode::StateUnowned,
                 format!("failed to inspect state marker {}: {error}", path.display()),
             ));
         }
+    }
+    let existing = read_marker(&placement.state_root)?;
+    match existing.compare(identity) {
+        MarkerComparison::Match => Ok(MarkerDecision::Adopt(existing)),
+        MarkerComparison::UpgradeProvenance => Ok(MarkerDecision::Upgrade {
+            clean_state: false,
+            existing,
+        }),
+        MarkerComparison::UpgradeEpoch => Ok(MarkerDecision::Upgrade {
+            clean_state: true,
+            existing,
+        }),
+        MarkerComparison::RefuseOwnership => Err(RuntimeError::new(
+            ErrorCode::StateUnowned,
+            "existing state marker is owned by a different project/environment/slot identity",
+        )),
+        MarkerComparison::RefuseAbi => Err(RuntimeError::new(
+            ErrorCode::StateUnowned,
+            "existing state marker was written under a different runtime ABI",
+        )),
+    }
+}
+
+/// Write the slot marker for the requested identity, overwriting any previous
+/// marker. The caller must have processed an [`evaluate_slot_marker`] decision
+/// first — this is the post-decision commit, not a guard.
+pub fn commit_slot_marker(
+    placement: &HostPlacement,
+    identity: &StateIdentity,
+) -> RuntimeResult<StateMarker> {
+    let marker = StateMarker::slot(identity);
+    let path = marker_path(&placement.state_root);
+    if let Ok(metadata) = std::fs::symlink_metadata(&path)
+        && metadata.file_type().is_symlink()
+    {
+        return Err(RuntimeError::new(
+            ErrorCode::StateUnowned,
+            format!("state marker is a symlink at {}", path.display()),
+        ));
     }
     let bytes = serde_json::to_vec_pretty(&marker).map_err(|error| {
         RuntimeError::new(

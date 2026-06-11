@@ -119,11 +119,26 @@ pub fn derive_host_placement_for_slot(
 }
 
 pub fn materialize_run_roots(placement: &HostPlacement) -> RuntimeResult<()> {
+    materialize_registry_root(placement)?;
+    materialize_state_root(placement)
+}
+
+/// Materialize only the state base and registry dir. The registry must exist
+/// before the slot marker is evaluated: the marker decision may need registry
+/// evidence (stale processes from an older model build), and the registry
+/// outlives a slot clean that deletes the state root.
+pub fn materialize_registry_root(placement: &HostPlacement) -> RuntimeResult<()> {
     create_dir(&placement.state_base)?;
     let base = canonicalize_materialized("state base", &placement.state_base)?;
-    // The registry lives under the state base (a sibling of the state root) so it
-    // outlives a slot clean that deletes the state root.
-    materialize_owned_dir(&placement.state_base, &base, &placement.registry_dir)?;
+    materialize_owned_dir(&placement.state_base, &base, &placement.registry_dir)
+}
+
+/// Materialize the state root and this run's run/logs/artifacts dirs. Runs
+/// after the marker decision so an upgrade-clean can delete the previous state
+/// root before the new one is created.
+pub fn materialize_state_root(placement: &HostPlacement) -> RuntimeResult<()> {
+    create_dir(&placement.state_base)?;
+    let base = canonicalize_materialized("state base", &placement.state_base)?;
     materialize_owned_dir(&placement.state_base, &base, &placement.state_root)?;
     let root = canonicalize_materialized("state root", &placement.state_root)?;
     materialize_owned_dir(&placement.state_root, &root, &placement.run_dir)?;

@@ -18,8 +18,8 @@ use nixfied_runtime::service::{
 };
 use nixfied_runtime::slot::select_slot;
 use nixfied_runtime::state::{
-    StateIdentity, clean_marked_state, derive_host_placement, derive_host_placement_for_slot,
-    materialize_run_roots, write_slot_marker,
+    StateIdentity, clean_marked_state, commit_slot_marker, derive_host_placement,
+    derive_host_placement_for_slot, materialize_run_roots,
 };
 use nixfied_runtime::{Admission, AdmittedSource, ErrorCode};
 use serde_json::{Value, json};
@@ -270,7 +270,7 @@ fn lifecycle_events_follow_declared_class_order_and_clean_terminal() {
 
     let selected = select_slot(&fixture.model, None).expect("default slot should select");
     let identity = StateIdentity::from_selected_slot(&fixture.model, &fixture.admission, &selected);
-    write_slot_marker(&fixture.placement, &identity).expect("slot marker should be written");
+    commit_slot_marker(&fixture.placement, &identity).expect("slot marker should be written");
     let cleanup = run_synthetic_service_clean_for_slot(
         &fixture.model,
         &fixture.admission,
@@ -2136,7 +2136,7 @@ fn down_completes_canceling_lease_and_unblocks_cleanup() {
             [&service.run_id],
         )
         .expect("test should mark lease canceling");
-    write_slot_marker(
+    commit_slot_marker(
         &fixture.placement,
         &StateIdentity::from_model(&fixture.model, &fixture.admission),
     )
@@ -2286,7 +2286,7 @@ fn down_cancels_live_task_process_group_and_unblocks_cleanup() {
             [&service.run_id],
         )
         .expect("test should mark lease canceling");
-    write_slot_marker(
+    commit_slot_marker(
         &fixture.placement,
         &StateIdentity::from_model(&fixture.model, &fixture.admission),
     )
@@ -2493,7 +2493,7 @@ impl<'a> StartedSlot<'a> {
             .expect("slot placement should derive");
         materialize_run_roots(&placement).expect("slot roots should materialize");
         let identity = StateIdentity::from_selected_slot(model, admission, &selected);
-        write_slot_marker(&placement, &identity).expect("slot marker should be written");
+        commit_slot_marker(&placement, &identity).expect("slot marker should be written");
         let mut registry = Registry::open_or_create(
             placement.registry_path(),
             &RegistryIdentity::for_slot(

@@ -78,10 +78,38 @@ pub fn reconcile_registry(registry: &mut Registry) -> RuntimeResult<PsReport> {
     })
 }
 
+/// Which registry processes a teardown acts on.
+#[derive(Debug, Clone, Copy)]
+pub enum ProcessFilter<'a> {
+    All,
+    /// Only processes started by a run of a different model hash — the
+    /// upgrade path's teardown of what an older model build left running.
+    ModelHashNot(&'a str),
+}
+
+impl ProcessFilter<'_> {
+    fn matches(&self, row: &ProcessRow) -> bool {
+        match self {
+            ProcessFilter::All => true,
+            ProcessFilter::ModelHashNot(hash) => row.computed_model_hash != *hash,
+        }
+    }
+}
+
 pub fn down_owned_process_groups(
     registry: &mut Registry,
     timeout_ms: u64,
 ) -> RuntimeResult<DownReport> {
+    down_processes(registry, timeout_ms, ProcessFilter::All)
+}
+
+pub fn down_processes(
+    registry: &mut Registry,
+    timeout_ms: u64,
+    filter: ProcessFilter<'_>,
+) -> RuntimeResult<DownReport> {
+    // Reconciliation marks dead rows stale regardless of the teardown filter;
+    // the filter only scopes which live processes are signaled.
     let reconciled = reconcile_registry(registry)?;
     let mut stale = reconciled
         .processes
@@ -91,7 +119,10 @@ pub fn down_owned_process_groups(
         .collect::<Vec<_>>();
     let rows = process_rows(registry)?;
     let mut stopped = Vec::new();
-    for row in rows.into_iter().filter(|row| is_active_status(&row.status)) {
+    for row in rows
+        .into_iter()
+        .filter(|row| is_active_status(&row.status) && filter.matches(row))
+    {
         if !row.is_live()? {
             mark_process_stale(registry, &row)?;
             stale.push(row.process_key);

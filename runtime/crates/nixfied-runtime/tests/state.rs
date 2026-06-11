@@ -7,9 +7,9 @@ use nixfied_runtime::control::clean_reconciled_state;
 use nixfied_runtime::registry::{Registry, RegistryIdentity};
 use nixfied_runtime::slot::{first_candidate_port, select_slot};
 use nixfied_runtime::state::{
-    MARKER_FILE_NAME, StateIdentity, StateMarker, clean_marked_state, derive_host_placement,
-    derive_host_placement_for_slot, inspect_cleanup_target, materialize_run_roots,
-    write_slot_marker,
+    MARKER_FILE_NAME, MarkerComparison, StateIdentity, StateMarker, clean_marked_state,
+    commit_slot_marker, derive_host_placement, derive_host_placement_for_slot,
+    evaluate_slot_marker, inspect_cleanup_target, materialize_run_roots,
 };
 use nixfied_runtime::{Admission, AdmittedSource, ErrorCode};
 use serde_json::{Value, json};
@@ -55,7 +55,7 @@ fn materializes_m0_roots_and_slot_marker() {
     let marker: StateMarker =
         serde_json::from_slice(&fs::read(marker_path).expect("marker should be readable"))
             .expect("marker should parse");
-    assert!(marker.matches_identity(&fixture.identity));
+    assert_eq!(marker.compare(&fixture.identity), MarkerComparison::Match);
     assert_eq!(marker.marker_version, 1);
     assert_eq!(marker.project_id, "runtime-test");
     assert_eq!(marker.environment, "dev");
@@ -97,11 +97,11 @@ fn slot_one_marker_records_selected_identity() {
     materialize_run_roots(&layout).expect("roots should materialize");
     let identity = StateIdentity::from_selected_slot(&model, &admission, &selected);
 
-    let marker = write_slot_marker(&layout, &identity).expect("marker should be written");
+    let marker = commit_slot_marker(&layout, &identity).expect("marker should be written");
 
     assert_eq!(marker.environment, "dev");
     assert_eq!(marker.slot, 1);
-    assert!(marker.matches_identity(&identity));
+    assert_eq!(marker.compare(&identity), MarkerComparison::Match);
 }
 
 #[test]
@@ -132,13 +132,13 @@ fn materialization_refuses_symlinked_roots() {
 }
 
 #[test]
-fn marker_write_refuses_existing_marker_mismatch() {
+fn marker_evaluate_refuses_foreign_ownership() {
     let fixture = StateFixture::new();
     let mut other = fixture.identity.clone();
     other.project_id = "other-project".to_string();
 
-    let error = write_slot_marker(&fixture.layout, &other)
-        .expect_err("marker mismatch must not be overwritten");
+    let error = evaluate_slot_marker(&fixture.layout, &other)
+        .expect_err("ownership mismatch must be refused");
 
     assert_eq!(error.code, ErrorCode::StateUnowned);
     let marker: StateMarker = serde_json::from_slice(
@@ -147,6 +147,29 @@ fn marker_write_refuses_existing_marker_mismatch() {
     )
     .expect("marker should parse");
     assert_eq!(marker.project_id, "runtime-test");
+}
+
+#[test]
+fn clean_accepts_old_provenance_marker() {
+    let fixture = StateFixture::new();
+    let mut registry = fixture.registry();
+    // The marker on disk was written by an older build of the same model:
+    // cleanup is gated on ownership, so the current build may still clean it.
+    let mut old = fixture.identity.clone();
+    old.computed_model_hash = "older-model-hash".to_string();
+    old.model_path = PathBuf::from("/nix/store/older-model/model.json");
+    commit_slot_marker(&fixture.layout, &old).expect("old-provenance marker should be written");
+
+    let outcome = clean_marked_state(
+        &fixture.layout.state_base,
+        &fixture.layout.state_root,
+        &fixture.identity,
+        &mut registry,
+    )
+    .expect("old-provenance marker should be cleanable by the slot owner");
+
+    assert!(outcome.cleanup_id.starts_with("cleanup-"));
+    assert!(!fixture.layout.state_root.exists());
 }
 
 #[test]
@@ -679,7 +702,7 @@ impl StateFixture {
             derive_host_placement(&model, "run-1", &tmp.path).expect("layout should derive");
         materialize_run_roots(&layout).expect("roots should materialize");
         let identity = StateIdentity::from_model(&model, &admission);
-        write_slot_marker(&layout, &identity).expect("marker should be written");
+        commit_slot_marker(&layout, &identity).expect("marker should be written");
         Self {
             tmp,
             layout,
