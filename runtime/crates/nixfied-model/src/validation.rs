@@ -252,12 +252,14 @@ fn validate_closures(model: &Model) -> Result<(), ValidationError> {
     Ok(())
 }
 
-/// At least one service, each declaring the full generic lifecycle contract.
+/// At least one runnable unit: services may be empty as long as bounded tasks
+/// exist (the compiler admits task-only models). Each declared service carries
+/// the full generic lifecycle contract.
 fn validate_services(model: &Model) -> Result<(), ValidationError> {
-    if model.services.is_empty() {
+    if model.services.is_empty() && model.tasks.is_empty() {
         return Err(ValidationError::UnsupportedValue {
             field: "services",
-            expected: "at least one service",
+            expected: "at least one service or task",
             actual: "{}".to_string(),
         });
     }

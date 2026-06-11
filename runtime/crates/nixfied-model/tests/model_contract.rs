@@ -203,6 +203,32 @@ fn accepts_arbitrary_service_and_exec_names() {
 }
 
 #[test]
+fn accepts_task_only_models() {
+    // The compiler admits a model with no services as long as bounded tasks
+    // exist; the structural validator must honor the same contract.
+    let mut value = valid_model_json();
+    value["services"] = json!({});
+    value["environments"]["dev"]["services"] = json!([]);
+
+    let model: Model = serde_json::from_value(value).expect("model should deserialize");
+    model.validate().expect("task-only models are valid");
+}
+
+#[test]
+fn rejects_models_with_nothing_to_run() {
+    let mut value = valid_model_json();
+    value["services"] = json!({});
+    value["environments"]["dev"]["services"] = json!([]);
+    value["tasks"] = json!({});
+    value["environments"]["dev"]["tasks"] = json!([]);
+
+    let model: Model = serde_json::from_value(value).expect("model should deserialize");
+    model
+        .validate()
+        .expect_err("a model with no services and no tasks has nothing to run");
+}
+
+#[test]
 fn prepare_operation_may_bind_an_exec() {
     // initdb-style preparation: the prepare class is allowed to bind an exec.
     let mut model = parse_valid_model();
