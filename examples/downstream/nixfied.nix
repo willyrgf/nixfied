@@ -171,7 +171,7 @@ in
   };
 
   # A dedicated candidate window keeps this example off the default range.
-  nixfied.placement.ports.base = 39880;
+  nixfied.placement.ports.base = 24880;
 
   nixfied.closures.app = {
     package = appHelper;

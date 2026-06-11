@@ -320,18 +320,18 @@ mod tests {
 
     #[test]
     fn assigns_ports_from_window_start_in_order() {
-        let em = model(vec!["a", "b"], vec!["a", "b"], vec![(0, 38080, 38090)]);
+        let em = model(vec!["a", "b"], vec!["a", "b"], vec![(0, 23080, 23090)]);
         let plan = plan(&em, Selection::Environment, 0).expect("plan exists");
         assert_eq!(
             plan.services,
             vec![
                 ServiceBinding {
                     service_name: ServiceId::new("a"),
-                    port: 38080
+                    port: 23080
                 },
                 ServiceBinding {
                     service_name: ServiceId::new("b"),
-                    port: 38081
+                    port: 23081
                 },
             ]
         );
@@ -339,7 +339,7 @@ mod tests {
 
     #[test]
     fn rejects_when_window_cannot_host_all_services() {
-        let em = model(vec!["a", "b"], vec!["a", "b"], vec![(0, 38080, 38080)]);
+        let em = model(vec!["a", "b"], vec!["a", "b"], vec![(0, 23080, 23080)]);
         let error = plan(&em, Selection::Environment, 0).expect_err("window too small");
         assert_eq!(error.code, ErrorCode::PortConflict);
     }
@@ -350,7 +350,7 @@ mod tests {
         let em = model(
             vec!["a", "b"],
             vec!["a", "b"],
-            vec![(0, 38080, 38090), (1, 39000, 39000)],
+            vec![(0, 23080, 23090), (1, 24000, 24000)],
         );
         assert!(plan(&em, Selection::Environment, 0).is_ok());
         assert_eq!(
@@ -369,7 +369,7 @@ mod tests {
 
     #[test]
     fn workflow_nodes_are_topologically_ordered() {
-        let mut em = model(vec!["a"], vec!["a"], vec![(0, 38080, 38090)]);
+        let mut em = model(vec!["a"], vec!["a"], vec![(0, 23080, 23090)]);
         em.workflows.insert(
             "wf".to_string(),
             ExecWorkflow {
@@ -396,7 +396,7 @@ mod tests {
 
     #[test]
     fn rejects_a_cyclic_workflow() {
-        let mut em = model(vec!["a"], vec!["a"], vec![(0, 38080, 38090)]);
+        let mut em = model(vec!["a"], vec!["a"], vec![(0, 23080, 23090)]);
         em.workflows.insert(
             "wf".to_string(),
             ExecWorkflow {

@@ -47,8 +47,8 @@ fn valid_model_json() -> Value {
                 "0": {
                     "slot": 0,
                     "candidatePorts": {
-                        "start": 38080,
-                        "end": 38090
+                        "start": 23080,
+                        "end": 23090
                     }
                 }
             }
@@ -218,7 +218,7 @@ fn validates_explicit_slot_placement_range() {
     let placement = value["placement"]["slotPlacements"]["0"].clone();
     let mut slot_one = placement;
     slot_one["slot"] = json!(1);
-    slot_one["candidatePorts"] = json!({ "start": 38180, "end": 38190 });
+    slot_one["candidatePorts"] = json!({ "start": 23180, "end": 23190 });
     value["placement"]["slotPlacements"]["1"] = slot_one;
 
     let model: Model = serde_json::from_value(value).expect("model should deserialize");

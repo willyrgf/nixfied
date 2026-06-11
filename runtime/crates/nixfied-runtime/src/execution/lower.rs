@@ -700,7 +700,7 @@ mod tests {
                 "slotPlacements": {
                     "0": {
                         "slot": 0,
-                        "candidatePorts": { "start": 38080, "end": 38090 }
+                        "candidatePorts": { "start": 23080, "end": 23090 }
                     }
                 }
             },
@@ -778,7 +778,7 @@ mod tests {
         assert_eq!(svc.start.exec.args, vec!["serve", "--port", "${port}"]);
         assert_eq!(svc.start.exec.stdin, StdinPolicy::Null);
         assert_eq!(em.environment.services, vec![ServiceId::new("svc")]);
-        assert_eq!(em.slot_windows[&0].start, 38080);
+        assert_eq!(em.slot_windows[&0].start, 23080);
         let task = em.tasks.get("t").expect("task lowered");
         assert_eq!(task.success_codes, vec![0]);
         assert_eq!(task.exec.args, vec!["--port", "${port}"]);

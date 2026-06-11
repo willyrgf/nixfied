@@ -31,14 +31,14 @@ use common::*;
 
 #[test]
 fn starts_foreground_service_in_owned_process_group_and_records_before_ready() {
-    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 38180);
+    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 23180);
     let service = start_synthetic_service(
         &fixture.model,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
         "run-service",
-        38180,
+        23180,
     )
     .expect("foreground service should start");
 
@@ -144,7 +144,7 @@ fn starts_foreground_service_in_owned_process_group_and_records_before_ready() {
 
 #[test]
 fn service_start_rejects_exec_cwd_escape() {
-    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 38180);
+    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 23180);
     fixture
         .model
         .execs
@@ -159,7 +159,7 @@ fn service_start_rejects_exec_cwd_escape() {
         &fixture.placement,
         &mut fixture.registry,
         "run-cwd-escape",
-        38180,
+        23180,
     ) {
         Ok(service) => {
             let _ = service.stop(&mut fixture.registry, 1000);
@@ -465,8 +465,8 @@ fn wildcard_listener_does_not_satisfy_loopback_endpoint_ownership() {
 #[test]
 fn slot_one_service_uses_slot_placement_port_window() {
     let tmp = TempDir::new();
-    let mut value = fixture_model("/bin/sleep", &["30"], 38180);
-    add_slot_one(&mut value, 38280, 38280);
+    let mut value = fixture_model("/bin/sleep", &["30"], 23180);
+    add_slot_one(&mut value, 23280, 23280);
     let model: Model = serde_json::from_value(value).expect("fixture model should parse");
     let admission = admission(&model, &tmp.path);
     let selected_slot = select_slot(&model, Some(1)).expect("slot 1 should select");
@@ -491,11 +491,11 @@ fn slot_one_service_uses_slot_placement_port_window() {
         &mut registry,
         "run-slot-1",
         &selected_slot,
-        38280,
+        23280,
     )
     .expect("slot 1 service should accept slot placement port");
 
-    assert_eq!(service.selected_endpoint.port, 38280);
+    assert_eq!(service.selected_endpoint.port, 23280);
     assert_eq!(placement.state_root, tmp.path.join("runtime-test/dev/1"));
     service
         .stop(&mut registry, 1000)
@@ -514,13 +514,13 @@ fn two_slots_keep_services_state_and_controls_isolated() {
         .or_else(python3_from_path)
         .expect("python3 is required for the M1 slot isolation proof");
     let tmp = TempDir::new();
-    let mut value = fixture_model(&python, &["-c", python_listener_script(), "${port}"], 38210);
-    add_slot_one(&mut value, 38310, 38320);
+    let mut value = fixture_model(&python, &["-c", python_listener_script(), "${port}"], 23210);
+    add_slot_one(&mut value, 23310, 23320);
     let model: Model = serde_json::from_value(value).expect("fixture model should parse");
     let admission = admission(&model, &tmp.path);
 
-    let mut slot0 = StartedSlot::start(&model, &admission, &tmp.path, 0, "run-slot-0", 38210);
-    let mut slot1 = StartedSlot::start(&model, &admission, &tmp.path, 1, "run-slot-1", 38310);
+    let mut slot0 = StartedSlot::start(&model, &admission, &tmp.path, 0, "run-slot-0", 23210);
+    let mut slot1 = StartedSlot::start(&model, &admission, &tmp.path, 1, "run-slot-1", 23310);
 
     assert_ne!(slot0.placement.state_root, slot1.placement.state_root);
     assert_ne!(
@@ -598,8 +598,8 @@ fn two_slots_keep_services_state_and_controls_isolated() {
 
 #[test]
 fn service_instance_identity_includes_selected_slot() {
-    let mut value = fixture_model("/bin/sleep", &["30"], 38180);
-    add_slot_one(&mut value, 38280, 38280);
+    let mut value = fixture_model("/bin/sleep", &["30"], 23180);
+    add_slot_one(&mut value, 23280, 23280);
     let model: Model = serde_json::from_value(value).expect("fixture model should parse");
     let service = model
         .services
@@ -708,14 +708,14 @@ fn dependent_task_runs_after_owned_service_is_ready() {
 
 #[test]
 fn dependent_task_refuses_to_run_before_service_ready() {
-    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 38186);
+    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 23186);
     let service = start_synthetic_service(
         &fixture.model,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
         "run-task-not-ready",
-        38186,
+        23186,
     )
     .expect("foreground service should start");
 
@@ -1449,7 +1449,7 @@ fn readiness_timeout_prefers_escape_discovered_during_probe() {
 
 #[test]
 fn daemonizing_service_escape_is_recorded_and_refused() {
-    let mut fixture = ServiceFixture::new("/bin/sh", &["-c", "sleep 30 & exit 0"], 38182);
+    let mut fixture = ServiceFixture::new("/bin/sh", &["-c", "sleep 30 & exit 0"], 23182);
 
     let error = match start_synthetic_service(
         &fixture.model,
@@ -1457,7 +1457,7 @@ fn daemonizing_service_escape_is_recorded_and_refused() {
         &fixture.placement,
         &mut fixture.registry,
         "run-escape",
-        38182,
+        23182,
     ) {
         Ok(_) => panic!("daemonizing service should be refused"),
         Err(error) => error,
@@ -1499,7 +1499,7 @@ fn setsid_descendant_escape_is_recorded_and_refused() {
             "-e",
             "if (fork() == 0) { setsid(); sleep 30; exit 0; } sleep 30;",
         ],
-        38183,
+        23183,
     );
 
     let error = match start_synthetic_service(
@@ -1508,7 +1508,7 @@ fn setsid_descendant_escape_is_recorded_and_refused() {
         &fixture.placement,
         &mut fixture.registry,
         "run-setsid-escape",
-        38183,
+        23183,
     ) {
         Ok(_) => panic!("setsid descendant should be refused"),
         Err(error) => error,
@@ -1539,7 +1539,7 @@ fn stop_refuses_delayed_setsid_escape() {
             "-e",
             "sleep 1; if (fork() == 0) { setsid(); sleep 30; exit 0; } sleep 1; exit 0;",
         ],
-        38185,
+        23185,
     );
     let service = start_synthetic_service(
         &fixture.model,
@@ -1547,7 +1547,7 @@ fn stop_refuses_delayed_setsid_escape() {
         &fixture.placement,
         &mut fixture.registry,
         "run-delayed-escape",
-        38185,
+        23185,
     )
     .expect("service should initially pass handoff");
     thread::sleep(Duration::from_millis(1300));
@@ -1680,14 +1680,14 @@ fn readiness_records_foreground_exit_as_escape() {
 
 #[test]
 fn duplicate_active_service_start_is_refused() {
-    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 38184);
+    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 23184);
     let service = start_synthetic_service(
         &fixture.model,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
         "run-first",
-        38184,
+        23184,
     )
     .expect("first foreground service should start");
 
@@ -1697,7 +1697,7 @@ fn duplicate_active_service_start_is_refused() {
         &fixture.placement,
         &mut fixture.registry,
         "run-second",
-        38184,
+        23184,
     ) {
         Ok(_) => panic!("duplicate active service should be refused"),
         Err(error) => error,
@@ -1722,14 +1722,14 @@ fn duplicate_active_service_start_is_refused() {
 
 #[test]
 fn ps_reconciles_dead_owned_process_and_port_as_stale() {
-    let mut fixture = ServiceFixture::new("/bin/sleep", &["1"], 38187);
+    let mut fixture = ServiceFixture::new("/bin/sleep", &["1"], 23187);
     let service = start_synthetic_service(
         &fixture.model,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
         "run-ps-stale",
-        38187,
+        23187,
     )
     .expect("foreground service should start");
     thread::sleep(Duration::from_millis(1300));
@@ -1787,14 +1787,14 @@ fn ps_reconciles_dead_owned_process_and_port_as_stale() {
 
 #[test]
 fn ps_rejects_live_process_with_mismatched_start_identity_as_stale() {
-    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 38233);
+    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 23233);
     let service = start_synthetic_service(
         &fixture.model,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
         "run-ps-pid-reuse",
-        38233,
+        23233,
     )
     .expect("foreground service should start");
     assert!(
@@ -1855,14 +1855,14 @@ fn ps_rejects_live_process_with_mismatched_start_identity_as_stale() {
 
 #[test]
 fn ps_marks_expired_dead_run_lease_as_stale() {
-    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 38228);
+    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 23228);
     let service = start_synthetic_service(
         &fixture.model,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
         "run-lease-stale",
-        38228,
+        23228,
     )
     .expect("foreground service should start");
     unsafe {
@@ -1938,7 +1938,7 @@ fn ps_marks_expired_dead_run_lease_as_stale() {
         &fixture.placement,
         &mut fixture.registry,
         "run-after-stale-lease",
-        38228,
+        23228,
     )
     .expect("expired dead lease should reconcile before new service start");
     restarted
@@ -1948,14 +1948,14 @@ fn ps_marks_expired_dead_run_lease_as_stale() {
 
 #[test]
 fn active_run_lease_refuses_new_service_start_even_after_terminal_service_row() {
-    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 38229);
+    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 23229);
     let mut service = start_synthetic_service(
         &fixture.model,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
         "run-active-lease",
-        38229,
+        23229,
     )
     .expect("foreground service should start");
     fixture
@@ -1989,7 +1989,7 @@ fn active_run_lease_refuses_new_service_start_even_after_terminal_service_row() 
         &fixture.placement,
         &mut fixture.registry,
         "run-lease-conflict",
-        38229,
+        23229,
     ) {
         Ok(_) => panic!("active lease should refuse new owner"),
         Err(error) => error,
@@ -2004,14 +2004,14 @@ fn active_run_lease_refuses_new_service_start_even_after_terminal_service_row() 
 
 #[test]
 fn expired_live_run_lease_still_refuses_new_service_start() {
-    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 38230);
+    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 23230);
     let mut service = start_synthetic_service(
         &fixture.model,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
         "run-expired-live-lease",
-        38230,
+        23230,
     )
     .expect("foreground service should start");
     fixture
@@ -2033,7 +2033,7 @@ fn expired_live_run_lease_still_refuses_new_service_start() {
         &fixture.placement,
         &mut fixture.registry,
         "run-expired-live-conflict",
-        38230,
+        23230,
     ) {
         Ok(_) => panic!("expired but live lease should refuse new owner"),
         Err(error) => error,
@@ -2061,14 +2061,14 @@ fn expired_live_run_lease_still_refuses_new_service_start() {
 
 #[test]
 fn down_stops_verified_owned_process_group_only() {
-    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 38188);
+    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 23188);
     let service = start_synthetic_service(
         &fixture.model,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
         "run-down",
-        38188,
+        23188,
     )
     .expect("foreground service should start");
 
@@ -2110,14 +2110,14 @@ fn down_stops_verified_owned_process_group_only() {
 
 #[test]
 fn down_completes_canceling_lease_and_unblocks_cleanup() {
-    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 38231);
+    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 23231);
     let service = start_synthetic_service(
         &fixture.model,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
         "run-down-canceling-lease",
-        38231,
+        23231,
     )
     .expect("foreground service should start");
     fixture
@@ -2209,14 +2209,14 @@ fn down_completes_canceling_lease_and_unblocks_cleanup() {
 
 #[test]
 fn down_cancels_live_task_process_group_and_unblocks_cleanup() {
-    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 38232);
+    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 23232);
     let service = start_synthetic_service(
         &fixture.model,
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
         "run-down-task-canceling",
-        38232,
+        23232,
     )
     .expect("foreground service should start");
     let mut command = Command::new("/bin/sleep");
@@ -2405,7 +2405,7 @@ fn down_escalates_until_owned_process_group_is_empty() {
     let mut fixture = ServiceFixture::new(
         "/bin/sh",
         &["-c", script, "parent", marker_arg.as_str()],
-        38189,
+        23189,
     );
     let service = start_synthetic_service(
         &fixture.model,
@@ -2413,7 +2413,7 @@ fn down_escalates_until_owned_process_group_is_empty() {
         &fixture.placement,
         &mut fixture.registry,
         "run-down-escalate",
-        38189,
+        23189,
     )
     .expect("foreground service should start");
 

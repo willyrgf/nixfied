@@ -69,7 +69,7 @@ fn materializes_m0_roots_and_slot_marker() {
 fn selects_explicit_slot_placement() {
     let tmp = TempDir::new();
     let mut value = fixture_model();
-    add_slot_one(&mut value, 38180, 38190);
+    add_slot_one(&mut value, 23180, 23190);
     let model: Model = serde_json::from_value(value).expect("model should parse");
     let selected = select_slot(&model, Some(1)).expect("slot 1 should select");
 
@@ -80,7 +80,7 @@ fn selects_explicit_slot_placement() {
     assert_eq!(layout.state_root, tmp.path.join("runtime-test/dev/1"));
     assert_eq!(
         first_candidate_port(&selected.placement.candidate_ports).expect("port should select"),
-        38180
+        23180
     );
 }
 
@@ -88,7 +88,7 @@ fn selects_explicit_slot_placement() {
 fn slot_one_marker_records_selected_identity() {
     let tmp = TempDir::new();
     let mut value = fixture_model();
-    add_slot_one(&mut value, 38180, 38190);
+    add_slot_one(&mut value, 23180, 23190);
     let model: Model = serde_json::from_value(value).expect("model should parse");
     let admission = admission(&model, &tmp.path);
     let selected = select_slot(&model, Some(1)).expect("slot 1 should select");
@@ -286,7 +286,7 @@ fn cleanup_refuses_active_registry_refs() {
         "INSERT INTO ports (
            endpoint_key, environment, slot, service_instance_id, address, port,
            status, owner_process_key
-         ) VALUES ('endpoint-1', 'dev', 0, 'service-1', '127.0.0.1', 38080, 'reserved', NULL)",
+         ) VALUES ('endpoint-1', 'dev', 0, 'service-1', '127.0.0.1', 23080, 'reserved', NULL)",
     );
 }
 
@@ -406,7 +406,7 @@ fn clean_reconciles_stale_refs_before_marker_owned_delete() {
               endpoint_key, environment, slot, service_instance_id, address, port,
               status, owner_process_key
             ) VALUES (
-              'endpoint-stale', 'dev', 0, 'service-stale', '127.0.0.1', 38190,
+              'endpoint-stale', 'dev', 0, 'service-stale', '127.0.0.1', 23190,
               'active', 'process-stale'
             );
             ",
@@ -597,7 +597,7 @@ fn clean_marks_active_port_stale_after_owner_process_is_proven_dead() {
               endpoint_key, environment, slot, service_instance_id, address, port,
               status, owner_process_key
             ) VALUES (
-              'endpoint-stale-port', 'dev', 0, 'service-stale-port', '127.0.0.1', 38191,
+              'endpoint-stale-port', 'dev', 0, 'service-stale-port', '127.0.0.1', 23191,
               'active', 'process-stale-port'
             );
             ",
@@ -748,5 +748,5 @@ fn add_slot_one(value: &mut Value, start: u16, end: u16) {
 }
 
 fn fixture_model() -> Value {
-    common::synthetic_model_default(38080, 38090)
+    common::synthetic_model_default(23080, 23090)
 }

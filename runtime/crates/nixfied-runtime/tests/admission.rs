@@ -12,7 +12,7 @@ mod common;
 use common::*;
 
 fn fixture_model() -> Value {
-    common::synthetic_model_default(38080, 38090)
+    common::synthetic_model_default(23080, 23090)
 }
 
 #[test]

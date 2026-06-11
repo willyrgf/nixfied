@@ -129,7 +129,7 @@ in
   nixfied.project.projectId = "polyglot-stack";
   nixfied.project.name = "Polyglot Stack";
   nixfied.codebases.main.logicalRoot = ".";
-  nixfied.placement.ports.base = 39780;
+  nixfied.placement.ports.base = 24780;
 
   nixfied.closures.api = {
     package = pythonService;

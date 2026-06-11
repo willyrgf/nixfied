@@ -8,5 +8,5 @@
 
   # A dedicated candidate window keeps the example from contending with other
   # examples/proofs for the default port range.
-  nixfied.placement.ports.base = 39580;
+  nixfied.placement.ports.base = 24580;
 }

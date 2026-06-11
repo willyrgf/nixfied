@@ -361,7 +361,7 @@ in
   options.nixfied.placement.ports = {
     base = mkOption {
       type = port;
-      default = 38080;
+      default = 23080;
       description = "Base TCP port for the first slot's candidate window.";
     };
 
