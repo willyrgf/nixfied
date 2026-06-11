@@ -484,13 +484,12 @@ fn nixfied_module_template(metadata: &ProjectMetadata) -> String {
   # tasks: a 0-service `fullcheck` (lint/test) or an N-service `e2e`.
   nixfied.workflows.test = {{
     servicesRequired = [ "synthetic" ];
-    nodes = [
-      {{
-        nodeId = "smoke";
+    nodes = {{
+      smoke = {{
         taskId = "smoke";
         dependsOn = [ ];
-      }}
-    ];
+      }};
+    }};
   }};
 }}
 "#,
