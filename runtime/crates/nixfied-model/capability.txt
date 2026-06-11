@@ -13,7 +13,7 @@ primitive SlotPlacement: slot candidatePorts
 primitive CandidatePortWindow: start end
 primitive ClosureSpec: kind storePath executable targetSystem operationBindings requiresExecutable effects
 primitive ExecSpec: closureId executable args env codebaseId cwd stdin timeoutMs
-primitive ServiceSpec: lifecycle endpoint connectsTo stateRefs logRefs containment identity
+primitive ServiceSpec: lifecycle endpoint connectsTo stateRefs logRefs containment
 primitive Lifecycle: prepare start ready health stop clean
 primitive PrepareSpec: operationId execId execArgs terminal
 primitive StartSpec: operationId execId execArgs terminal

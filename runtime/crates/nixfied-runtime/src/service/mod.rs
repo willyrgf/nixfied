@@ -5,7 +5,7 @@ pub mod readiness;
 pub mod registry;
 pub mod task;
 
-pub use identity::{service_address_hash, service_instance_id};
+pub use identity::{compute_service_identity, service_address_hash, service_instance_id};
 pub use ownership::verify_endpoint_ownership;
 pub use process::{
     SelectedEndpoint, ServiceSelection, SlotEndpoints, StartedService, run_slot_clean,

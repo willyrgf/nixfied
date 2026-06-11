@@ -118,14 +118,7 @@ fn synthetic_service() -> Value {
                 "connectsTo": [],
         "stateRefs": ["slot"],
         "logRefs": ["service.synthetic"],
-        "containment": "process-group",
-        "identity": {
-            "serviceAddressHash": "service-address",
-            "endpointIdentityHash": "endpoint",
-            "stateIdentityHash": "state",
-            "runtimeCompatibilityHash": "runtime",
-            "targetIdentityHash": "target"
-        }
+        "containment": "process-group"
     })
 }
 

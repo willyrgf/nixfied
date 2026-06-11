@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use nixfied_model::{
     Environment, ExecSpec, Lifecycle, Model, OperationId, ProbeKind, ProbeSpec, ServiceId,
-    ServiceSpec, StopSpec, TaskId, TaskSpec, TerminalSemantics, WorkflowSpec,
+    ServiceSpec, StatePolicy, StopSpec, Target, TaskId, TaskSpec, TerminalSemantics, WorkflowSpec,
 };
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
@@ -31,12 +31,12 @@ pub fn lower(model: &Model) -> RuntimeResult<ExecutionModel> {
         runtime_abi: _,
         generator: _,
         project: _,
-        target: _,
+        target,
         codebases: _,
         environments,
         slot_policy: _,
         placement,
-        state: _,
+        state,
         closures: _,
         execs,
         services,
@@ -47,7 +47,12 @@ pub fn lower(model: &Model) -> RuntimeResult<ExecutionModel> {
 
     let lowered_services = services
         .iter()
-        .map(|(name, service)| Ok((ServiceId::new(name), lower_service(name, service, execs)?)))
+        .map(|(name, service)| {
+            Ok((
+                ServiceId::new(name),
+                lower_service(name, service, execs, state, target)?,
+            ))
+        })
         .collect::<RuntimeResult<BTreeMap<_, _>>>()?;
 
     let lowered_tasks = tasks
@@ -222,6 +227,8 @@ fn lower_service(
     name: &str,
     service: &ServiceSpec,
     execs: &BTreeMap<String, ExecSpec>,
+    state: &StatePolicy,
+    target: &Target,
 ) -> RuntimeResult<ExecService> {
     let ServiceSpec {
         lifecycle,
@@ -230,7 +237,6 @@ fn lower_service(
         state_refs: _,
         log_refs: _,
         containment,
-        identity,
     } = service;
     let Lifecycle {
         prepare,
@@ -300,7 +306,7 @@ fn lower_service(
         endpoint,
         connects_to: connects_to.iter().cloned().collect(),
         containment: containment.clone(),
-        identity: identity.clone(),
+        identity: crate::service::identity::compute_service_identity(service, execs, state, target),
     })
 }
 
@@ -886,11 +892,7 @@ mod tests {
             "endpoint": { "endpointId": "svc-tcp", "host": "127.0.0.1" },
             "connectsTo": [],
             "stateRefs": [], "logRefs": [],
-            "containment": "process-group",
-            "identity": {
-                "serviceAddressHash": "a", "endpointIdentityHash": "e", "stateIdentityHash": "s",
-                "runtimeCompatibilityHash": "r", "targetIdentityHash": "t"
-            }
+            "containment": "process-group"
         })
     }
 

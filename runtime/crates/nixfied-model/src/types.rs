@@ -371,7 +371,6 @@ pub struct ServiceSpec {
     pub state_refs: Vec<String>,
     pub log_refs: Vec<String>,
     pub containment: ContainmentRequirement,
-    pub identity: ServiceIdentity,
 }
 
 /// The signal the runtime sends for graceful shutdown. A closed set so an
@@ -394,16 +393,6 @@ pub enum ContainmentRequirement {
     /// tree (children may form their own process groups, e.g. Postgres). The
     /// runtime contains and reconciles the whole process tree.
     ProcessTree,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ServiceIdentity {
-    pub service_address_hash: String,
-    pub endpoint_identity_hash: String,
-    pub state_identity_hash: String,
-    pub runtime_compatibility_hash: String,
-    pub target_identity_hash: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

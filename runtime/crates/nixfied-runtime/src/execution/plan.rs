@@ -220,9 +220,9 @@ mod tests {
     use std::collections::BTreeMap;
     use std::time::Duration;
 
-    use nixfied_model::{
-        ContainmentRequirement, NodeId, OperationId, ServiceId, ServiceIdentity, TaskId,
-    };
+    use nixfied_model::{ContainmentRequirement, NodeId, OperationId, ServiceId, TaskId};
+
+    use crate::execution::ServiceIdentity;
 
     fn op_meta(id: &str) -> OpMeta {
         OpMeta {
@@ -286,7 +286,6 @@ mod tests {
             connects_to: Vec::new(),
             containment: ContainmentRequirement::ProcessGroup,
             identity: ServiceIdentity {
-                service_address_hash: "a".to_string(),
                 endpoint_identity_hash: "e".to_string(),
                 state_identity_hash: "s".to_string(),
                 runtime_compatibility_hash: "r".to_string(),

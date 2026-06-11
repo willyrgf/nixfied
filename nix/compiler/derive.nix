@@ -9,7 +9,6 @@
 let
   inherit (lib) mapAttrs mapAttrsToList;
   targetLib = import ../lib/target.nix { inherit lib; };
-  identifiers = import ../lib/identifiers.nix;
 
   target = targetLib.fromSystem config.nixfied.target.system;
 
@@ -113,30 +112,14 @@ let
     };
   };
 
+  # Service identity is no longer emitted: the runtime derives a service's reuse
+  # identity from its own lowered contract, so the model carries no identity
+  # hashes for it to trust.
   serviceSpec =
-    name: service:
+    _name: service:
     let
       endpoint = endpointSpec service.endpoint;
       lifecycle = lifecycleSpec service.lifecycle;
-      lifecycleExecIds = lib.filter (id: id != null) [
-        service.lifecycle.prepare.execId
-        service.lifecycle.start.execId
-      ];
-      addressInputs = {
-        projectId = config.nixfied.project.projectId;
-        environment = "dev";
-        slot = slotPolicy.default;
-        service = name;
-      };
-      stateIdentityInputs = {
-        inherit (config.nixfied.state) stateEpoch cleanupPolicy persistence;
-      };
-      runtimeIdentityInputs = {
-        inherit lifecycle endpoint;
-        containment = service.containment;
-        connectsTo = service.connectsTo;
-        execs = lib.filterAttrs (id: _: builtins.elem id lifecycleExecIds) execs;
-      };
     in
     {
       inherit lifecycle endpoint;
@@ -144,13 +127,6 @@ let
       stateRefs = service.stateRefs;
       logRefs = service.logRefs;
       containment = service.containment;
-      identity = {
-        serviceAddressHash = identifiers.hashJson addressInputs;
-        endpointIdentityHash = identifiers.hashJson endpoint;
-        stateIdentityHash = identifiers.hashJson stateIdentityInputs;
-        runtimeCompatibilityHash = identifiers.hashJson runtimeIdentityInputs;
-        targetIdentityHash = identifiers.hashJson target;
-      };
     };
   services = mapAttrs serviceSpec config.nixfied.services;
 

@@ -7,10 +7,22 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use nixfied_model::{
-    ContainmentRequirement, NodeId, OperationId, ServiceId, ServiceIdentity, TaskId,
-};
+use nixfied_model::{ContainmentRequirement, NodeId, OperationId, ServiceId, TaskId};
 pub use nixfied_model::{LoopbackHost, StdinPolicy};
+
+/// A service's reuse identity, computed by the lowering from the service's actual
+/// contract — never supplied by the model. The four components hash the endpoint,
+/// the state policy, the behavioral runtime contract (lifecycle/wiring/execs), and
+/// the build target; the runtime folds them with the slot address into the
+/// `service_instance_id` registry key, so the reuse boundary is a pure function of
+/// the contract the runtime executes, not of values the model carries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServiceIdentity {
+    pub endpoint_identity_hash: String,
+    pub state_identity_hash: String,
+    pub runtime_compatibility_hash: String,
+    pub target_identity_hash: String,
+}
 
 /// The whole executable program for a run: services to start, tasks to run, the
 /// environment and workflow plans, and the per-slot port windows the planner

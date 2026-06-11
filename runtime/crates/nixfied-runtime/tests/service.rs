@@ -14,8 +14,8 @@ use nixfied_runtime::service::registry::{
     PortReservation, RunRecord, TaskProcessRecord, record_task_started, reserve_service_start,
 };
 use nixfied_runtime::service::{
-    RunContext, run_dependent_task, run_dependent_task_cancellable, service_address_hash,
-    service_instance_id, wait_for_tcp_probe,
+    RunContext, compute_service_identity, run_dependent_task, run_dependent_task_cancellable,
+    service_address_hash, service_instance_id, wait_for_tcp_probe,
 };
 use nixfied_runtime::slot::select_slot;
 use nixfied_runtime::state::{
@@ -614,10 +614,11 @@ fn service_instance_identity_includes_selected_slot() {
         .get("synthetic")
         .expect("fixture has synthetic service");
 
+    let identity = compute_service_identity(service, &model.execs, &model.state, &model.target);
     let slot_0_address = service_address_hash(&model.project.project_id, "dev", 0, "synthetic");
     let slot_1_address = service_address_hash(&model.project.project_id, "dev", 1, "synthetic");
-    let slot_0_instance = service_instance_id(&slot_0_address, &service.identity);
-    let slot_1_instance = service_instance_id(&slot_1_address, &service.identity);
+    let slot_0_instance = service_instance_id(&slot_0_address, &identity);
+    let slot_1_instance = service_instance_id(&slot_1_address, &identity);
 
     assert_ne!(slot_0_address, slot_1_address);
     assert_ne!(slot_0_instance, slot_1_instance);

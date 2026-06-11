@@ -1,5 +1,95 @@
-use nixfied_model::ServiceIdentity;
+use std::collections::BTreeMap;
+
+use nixfied_model::{
+    CleanupPolicy, ContainmentRequirement, Endpoint, ExecSpec, Lifecycle, PersistencePolicy,
+    ServiceId, ServiceSpec, StatePolicy, Target, UniqueVec,
+};
+use serde::Serialize;
 use sha2::{Digest, Sha256};
+
+use crate::execution::ServiceIdentity;
+
+/// Compute a service's reuse identity from its actual lowered contract, replacing
+/// the hashes the model used to carry. The components mirror the wire contract a
+/// service reuse must be sensitive to — endpoint, state policy, behavioral runtime
+/// contract, and build target — but are derived here, so the `service_instance_id`
+/// registry key is a pure function of what the runtime executes. The values are
+/// only ever fed into `service_instance_id`; nothing compares them across the
+/// Nix/runtime boundary, so the runtime owns the scheme outright.
+pub fn compute_service_identity(
+    service: &ServiceSpec,
+    execs: &BTreeMap<String, ExecSpec>,
+    state: &StatePolicy,
+    target: &Target,
+) -> ServiceIdentity {
+    // The execs the lifecycle actually invokes (prepare/start); a wiring or exec
+    // change must move the identity, so they are part of the runtime contract.
+    let lifecycle_exec_ids: Vec<&str> = [
+        service.lifecycle.prepare.exec_id.as_ref(),
+        Some(&service.lifecycle.start.exec_id),
+    ]
+    .into_iter()
+    .flatten()
+    .map(|id| id.as_str())
+    .collect();
+    let lifecycle_execs: BTreeMap<&str, &ExecSpec> = execs
+        .iter()
+        .filter(|(id, _)| lifecycle_exec_ids.contains(&id.as_str()))
+        .map(|(id, exec)| (id.as_str(), exec))
+        .collect();
+
+    ServiceIdentity {
+        endpoint_identity_hash: hash_json("endpoint-identity", &service.endpoint),
+        state_identity_hash: hash_json(
+            "state-identity",
+            &StateIdentityInputs {
+                state_epoch: &state.state_epoch,
+                cleanup_policy: &state.cleanup_policy,
+                persistence: &state.persistence,
+            },
+        ),
+        runtime_compatibility_hash: hash_json(
+            "runtime-compatibility",
+            &RuntimeIdentityInputs {
+                lifecycle: &service.lifecycle,
+                endpoint: &service.endpoint,
+                containment: &service.containment,
+                connects_to: &service.connects_to,
+                execs: lifecycle_execs,
+            },
+        ),
+        target_identity_hash: hash_json("target-identity", target),
+    }
+}
+
+/// The state inputs a reuse identity depends on: the epoch and the cleanup /
+/// persistence policies. The marker identity is deliberately excluded — it is a
+/// separate ownership concern, not part of the service contract.
+#[derive(Serialize)]
+struct StateIdentityInputs<'a> {
+    state_epoch: &'a str,
+    cleanup_policy: &'a CleanupPolicy,
+    persistence: &'a PersistencePolicy,
+}
+
+/// The behavioral contract a reuse identity depends on: the lifecycle, endpoint,
+/// containment, wiring, and the execs the lifecycle invokes.
+#[derive(Serialize)]
+struct RuntimeIdentityInputs<'a> {
+    lifecycle: &'a Lifecycle,
+    endpoint: &'a Endpoint,
+    containment: &'a ContainmentRequirement,
+    connects_to: &'a UniqueVec<ServiceId>,
+    execs: BTreeMap<&'a str, &'a ExecSpec>,
+}
+
+/// Hash a serializable identity component under a domain tag. Serialization of
+/// these admitted-model structs cannot fail; an empty string on the impossible
+/// error path still yields a deterministic digest.
+fn hash_json<T: Serialize>(tag: &str, value: &T) -> String {
+    let json = serde_json::to_string(value).unwrap_or_default();
+    hash_fields(&[tag, &json])
+}
 
 pub fn service_address_hash(
     project_id: &str,

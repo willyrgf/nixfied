@@ -1,7 +1,8 @@
 use std::path::Path;
 
-use nixfied_model::ServiceIdentity;
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
+
+use crate::execution::ServiceIdentity;
 
 use crate::admission::Admission;
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};

@@ -18,7 +18,9 @@ use crate::control::reconcile_registry;
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::execution::{ExecProbe, ExecService, OpMeta, Probe, ResolvedExec, StdinPolicy};
 use crate::registry::{Registry, RunLeaseHeartbeat};
-use crate::service::identity::{service_address_hash, service_instance_id};
+use crate::service::identity::{
+    compute_service_identity, service_address_hash, service_instance_id,
+};
 use crate::service::ownership::{ExpectedEndpointOwner, verify_endpoint_ownership};
 use crate::service::readiness::{wait_for_exec_probe, wait_for_tcp_probe};
 use crate::service::registry::{
@@ -878,7 +880,10 @@ fn record_service_clean(
         selected_slot.slot,
         service_name,
     );
-    let service_instance_id = service_instance_id(&address_hash, &service.identity);
+    // Recompute the same identity the lowering derived for this service so the
+    // clean path keys on the exact registry instance the start path created.
+    let identity = compute_service_identity(service, &model.execs, &model.state, &model.target);
+    let service_instance_id = service_instance_id(&address_hash, &identity);
     let lifecycle_context = LifecycleEventContext {
         run_id: None,
         service_instance_id,
