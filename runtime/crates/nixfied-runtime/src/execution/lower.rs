@@ -346,7 +346,12 @@ fn lower_task(
     // reject it here rather than fail at execution.
     if depends_on_services_ready.is_empty() {
         for placeholder in ["${port}", "${host}"] {
-            if exec.args.iter().any(|arg| arg.contains(placeholder)) {
+            if exec
+                .args
+                .iter()
+                .chain(exec.env.values())
+                .any(|value| value.contains(placeholder))
+            {
                 return Err(Rejection::TaskPlaceholderWithoutService {
                     task_id: task_id.to_string(),
                     placeholder,
@@ -1067,6 +1072,19 @@ mod tests {
         value["tasks"]["t"]["dependsOnServicesReady"] = json!([]);
         let error =
             lower(&model_from(value)).expect_err("a service-less task using ${port} must reject");
+        assert_eq!(error.code, ErrorCode::ModelAdmission);
+    }
+
+    #[test]
+    fn service_less_task_using_port_in_env_is_rejected() {
+        // Env values substitute like args; a bare ${port} with no service would
+        // otherwise run with the literal placeholder in the environment.
+        let mut value = model_value();
+        value["tasks"]["t"]["dependsOnServicesReady"] = json!([]);
+        value["tasks"]["t"]["args"] = json!(["--check"]);
+        value["execs"]["t-exec"]["env"] = json!({ "PORT": "${port}" });
+        let error = lower(&model_from(value))
+            .expect_err("a service-less task using ${port} in env must reject");
         assert_eq!(error.code, ErrorCode::ModelAdmission);
     }
 
