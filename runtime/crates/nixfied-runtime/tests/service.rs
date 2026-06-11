@@ -12,9 +12,8 @@ use nixfied_runtime::cancellation::CancellationToken;
 use nixfied_runtime::registry::{Registry, RegistryIdentity};
 use nixfied_runtime::service::registry::{TaskProcessRecord, record_task_started};
 use nixfied_runtime::service::{
-    RunContext, run_dependent_task, run_dependent_task_cancellable,
-    run_synthetic_service_clean_for_slot, service_address_hash, service_instance_id,
-    start_synthetic_service, start_synthetic_service_for_slot, wait_for_tcp_probe,
+    RunContext, run_dependent_task, run_dependent_task_cancellable, service_address_hash,
+    service_instance_id, wait_for_tcp_probe,
 };
 use nixfied_runtime::slot::select_slot;
 use nixfied_runtime::state::{

@@ -28,7 +28,7 @@ use crate::service::registry::{
     record_service_lifecycle_event, record_service_start, release_service_reservation,
     reserve_service_start,
 };
-use crate::slot::{SelectedSlot, select_slot};
+use crate::slot::SelectedSlot;
 use crate::state::{CleanupOutcome, HostPlacement, StateIdentity, clean_marked_state};
 
 const FOREGROUND_GRACE: Duration = Duration::from_millis(100);
@@ -42,7 +42,6 @@ pub(crate) fn stdin_for(policy: StdinPolicy) -> Stdio {
         StdinPolicy::Inherit => Stdio::inherit(),
     }
 }
-const SYNTHETIC_SERVICE_NAME: &str = "synthetic";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -563,47 +562,6 @@ impl Drop for StartedService {
     }
 }
 
-pub fn start_synthetic_service(
-    model: &Model,
-    admission: &Admission,
-    placement: &HostPlacement,
-    registry: &mut Registry,
-    run_id: impl Into<String>,
-    selected_port: u16,
-) -> RuntimeResult<StartedService> {
-    let selected_slot = select_slot(model, None)?;
-    start_synthetic_service_for_slot(
-        admission,
-        placement,
-        registry,
-        run_id,
-        &selected_slot,
-        selected_port,
-    )
-}
-
-pub fn start_synthetic_service_for_slot(
-    admission: &Admission,
-    placement: &HostPlacement,
-    registry: &mut Registry,
-    run_id: impl Into<String>,
-    selected_slot: &SelectedSlot<'_>,
-    selected_port: u16,
-) -> RuntimeResult<StartedService> {
-    start_service_for_slot(
-        admission,
-        placement,
-        registry,
-        run_id,
-        selected_slot,
-        &ServiceSelection {
-            service_name: SYNTHETIC_SERVICE_NAME,
-            selected_port,
-            slot_endpoints: &SlotEndpoints::new(),
-        },
-    )
-}
-
 /// One service's slice of the slot plan: its name, its deterministic port, and
 /// the slot endpoint map named placeholders resolve against.
 pub struct ServiceSelection<'a> {
@@ -891,23 +849,6 @@ pub fn run_slot_clean(
             )?;
         }
     }
-    clean_marked_slot_state(model, admission, placement, registry, selected_slot)
-}
-
-pub fn run_synthetic_service_clean_for_slot(
-    model: &Model,
-    admission: &Admission,
-    placement: &HostPlacement,
-    registry: &mut Registry,
-    selected_slot: &SelectedSlot<'_>,
-) -> RuntimeResult<CleanupOutcome> {
-    record_service_clean(
-        model,
-        admission,
-        registry,
-        selected_slot,
-        SYNTHETIC_SERVICE_NAME,
-    )?;
     clean_marked_slot_state(model, admission, placement, registry, selected_slot)
 }
 

@@ -10,7 +10,6 @@ use std::time::{Duration, Instant};
 
 use nixfied_model::{CleanupPolicy, DirtyPolicy, Model, SourceMode};
 use nixfied_runtime::registry::{Registry, RegistryIdentity};
-use nixfied_runtime::service::start_synthetic_service;
 use nixfied_runtime::state::{
     HostPlacement, MARKER_FILE_NAME, StateIdentity, StateMarker, commit_slot_marker,
     derive_host_placement, materialize_registry_root, materialize_run_roots, prepare_slot_state,

@@ -43,6 +43,78 @@ pub fn synthetic_model_default(port_start: u16, port_end: u16) -> Value {
 
 pub use nixfied_model::fixtures::{host_arch, host_os, host_system};
 
+use nixfied_model::Model;
+use nixfied_runtime::registry::Registry;
+use nixfied_runtime::service::{
+    ServiceSelection, SlotEndpoints, StartedService, run_slot_clean, start_service_for_slot,
+};
+use nixfied_runtime::slot::{SelectedSlot, select_slot};
+use nixfied_runtime::state::{CleanupOutcome, HostPlacement};
+use nixfied_runtime::{Admission, RuntimeResult};
+
+/// The fixture service name. The production runtime crate is service-name
+/// agnostic — it starts whatever `ServiceSelection` names — so the concrete
+/// `synthetic` name lives here in test support, not in the runtime.
+pub const SYNTHETIC_SERVICE_NAME: &str = "synthetic";
+
+/// Start the fixture's `synthetic` service on the default slot through the
+/// generic runtime API.
+pub fn start_synthetic_service(
+    model: &Model,
+    admission: &Admission,
+    placement: &HostPlacement,
+    registry: &mut Registry,
+    run_id: impl Into<String>,
+    selected_port: u16,
+) -> RuntimeResult<StartedService> {
+    let selected_slot = select_slot(model, None)?;
+    start_synthetic_service_for_slot(
+        admission,
+        placement,
+        registry,
+        run_id,
+        &selected_slot,
+        selected_port,
+    )
+}
+
+/// Start the fixture's `synthetic` service on a chosen slot through the generic
+/// runtime API, with no wired endpoints.
+pub fn start_synthetic_service_for_slot(
+    admission: &Admission,
+    placement: &HostPlacement,
+    registry: &mut Registry,
+    run_id: impl Into<String>,
+    selected_slot: &SelectedSlot<'_>,
+    selected_port: u16,
+) -> RuntimeResult<StartedService> {
+    start_service_for_slot(
+        admission,
+        placement,
+        registry,
+        run_id,
+        selected_slot,
+        &ServiceSelection {
+            service_name: SYNTHETIC_SERVICE_NAME,
+            selected_port,
+            slot_endpoints: &SlotEndpoints::new(),
+        },
+    )
+}
+
+/// Clean the synthetic fixture's slot. The fixture's `dev` environment is exactly
+/// `[synthetic]`, so the generic slot clean equals cleaning the single service
+/// plus the slot state.
+pub fn run_synthetic_service_clean_for_slot(
+    model: &Model,
+    admission: &Admission,
+    placement: &HostPlacement,
+    registry: &mut Registry,
+    selected_slot: &SelectedSlot<'_>,
+) -> RuntimeResult<CleanupOutcome> {
+    run_slot_clean(model, admission, placement, registry, selected_slot)
+}
+
 /// A unique temporary directory removed on drop.
 pub struct TempDir {
     pub path: PathBuf,
