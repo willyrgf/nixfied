@@ -917,6 +917,10 @@ fn clean_marked_slot_state(
     selected_slot: &SelectedSlot<'_>,
 ) -> RuntimeResult<CleanupOutcome> {
     let identity = StateIdentity::from_selected_slot(model, admission, selected_slot);
+    // Reconcile first so rows left active by a crashed runtime (no live OS
+    // process) are marked stale instead of tripping the active-refs refusal,
+    // sparing the operator a manual ps/down before clean can proceed.
+    reconcile_registry(registry)?;
     clean_marked_state(
         &placement.state_base,
         &placement.state_root,
