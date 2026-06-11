@@ -3021,17 +3021,33 @@ fn executable_from_dir(dir: &Path, names: &[&str]) -> Option<PathBuf> {
         // applet name and exits 127. The runtime execs this path verbatim, so the
         // name must be preserved.
         if candidate.starts_with("/nix/store") {
-            return Some(candidate);
+            if spawnable(&candidate) {
+                return Some(candidate);
+            }
+            continue;
         }
         let store_named = canonical.with_file_name(name);
-        if store_named.exists() {
+        if store_named.exists() && spawnable(&store_named) {
             return Some(store_named);
         }
-        if canonical.file_name() == Some(std::ffi::OsStr::new(name)) {
+        if canonical.file_name() == Some(std::ffi::OsStr::new(name)) && spawnable(&canonical) {
             return Some(canonical);
         }
     }
     None
+}
+
+/// The store scan can surface binaries for a foreign architecture (e.g. an
+/// x86-64 python3 in an aarch64 host's store, pulled in by a cross or remote
+/// build); spawning is the only reliable arch check.
+fn spawnable(path: &Path) -> bool {
+    Command::new(path)
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok()
 }
 
 fn closure_root_for_store_executable(executable: &Path) -> Option<PathBuf> {
