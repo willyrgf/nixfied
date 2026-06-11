@@ -521,6 +521,10 @@ fn flake_merge_snippet(nixfied_url: &str) -> String {
         r#"inputs.nixfied.url = "{}";
 
 packages.${{system}}.model = nixfied.lib.${{system}}.compileModel ./nixfied.nix;
+
+# `nix run .#run` / `.#check` / `.#test` / `.#ci` — your project's run and
+# verification surface, generated from the model.
+apps.${{system}} = nixfied.lib.${{system}}.projectApps ./nixfied.nix;
 "#,
         nix_escape(nixfied_url)
     )
@@ -648,6 +652,14 @@ mod tests {
         assert!(!root.join("nixfied.nix").exists());
         assert_eq!(read(&root.join("flake.nix")), "{}\n");
         assert!(error.message.contains("No files were changed."));
+        // The merge instructions must wire the same surface the fresh-flake
+        // template does: the model package and the generated apps.
+        assert!(error.message.contains("compileModel ./nixfied.nix"));
+        assert!(
+            error
+                .message
+                .contains("apps.${system} = nixfied.lib.${system}.projectApps ./nixfied.nix;")
+        );
     }
 
     #[test]
