@@ -791,151 +791,16 @@ mod tests {
         assert!(output.contains("- smoke"));
     }
 
-    /// A fully valid model — the views parse against the typed contract, so the
-    /// fixture must be one the runtime would admit. Mirrors the runtime's
-    /// canonical `synthetic_model` test fixture.
+    /// The shared synthetic fixture from nixfied-model — valid by construction,
+    /// so the views (which enforce the typed contract) accept it.
     fn model_fixture() -> String {
-        serde_json::json!({
-            "modelVersion": nixfied_model::MODEL_VERSION,
-            "toolchainId": nixfied_model::TOOLCHAIN_ID,
-            "runtimeAbi": nixfied_model::runtime_abi(),
-            "generator": {
-                "name": "nixfied",
-                "version": "1",
-                "emitter": "nix/compiler/emit-model.nix"
-            },
-            "project": {
-                "projectId": "view-test",
-                "name": "View Test"
-            },
-            "target": {
-                "system": "aarch64-darwin",
-                "os": "darwin",
-                "arch": "aarch64",
-                "closureSystem": "aarch64-darwin"
-            },
-            "codebases": [{
-                "codebaseId": "main",
-                "logicalRoot": ".",
-                "sourceMode": "live-workspace",
-                "sourceIdentity": "live",
-                "sourcePolicy": {
-                    "dirtyPolicy": "warn",
-                    "admissionFingerprintPolicy": "live-fingerprint"
-                }
-            }],
-            "environments": {
-                "dev": { "services": ["synthetic"], "tasks": ["smoke"] }
-            },
-            "slotPolicy": { "min": 0, "default": 0, "max": 0 },
-            "placement": {
-                "slotPlacements": {
-                    "0": {
-                        "slot": 0,
-                        "candidatePorts": { "start": 42000, "end": 42063 }
-                    }
-                }
-            },
-            "state": {
-                "markerIdentity": "nixfied-state",
-                "stateEpoch": "1",
-                "cleanupPolicy": "delete-on-clean",
-                "persistence": "run-scoped"
-            },
-            "closures": {
-                "synthetic-helper": {
-                    "kind": "executable",
-                    "storePath": "/nix/store/test-synthetic-helper",
-                    "executable": "/nix/store/test-synthetic-helper/bin/synthetic-helper",
-                    "targetSystem": "aarch64-darwin",
-                    "operationBindings": [
-                        "service.synthetic.start",
-                        "service.synthetic.stop",
-                        "task.smoke.run"
-                    ],
-                    "requiresExecutable": true,
-                    "effects": ["process", "network-listener"]
-                }
-            },
-            "execs": {
-                "synthetic-helper": {
-                    "closureId": "synthetic-helper",
-                    "executable": "/nix/store/test-synthetic-helper/bin/synthetic-helper",
-                    "args": [],
-                    "env": {},
-                    "codebaseId": "main",
-                    "cwd": ".",
-                    "stdin": "null",
-                    "timeoutMs": 30000
-                }
-            },
-            "services": {
-                "synthetic": {
-                    "lifecycle": {
-                        "prepare": {
-                            "operationId": "service.synthetic.prepare",
-                            "execId": null,
-                            "execArgs": [],
-                            "terminal": { "success": "prepared", "failure": "failed" }
-                        },
-                        "start": {
-                            "operationId": "service.synthetic.start",
-                            "execId": "synthetic-helper",
-                            "execArgs": ["service"],
-                            "terminal": { "success": "spawned", "failure": "failed" }
-                        },
-                        "ready": {
-                            "operationId": "service.synthetic.ready",
-                            "probe": { "kind": "tcp", "timeoutMs": 250, "retryIntervalMs": 25, "maxAttempts": 40 },
-                            "terminal": { "success": "ready", "failure": "not-ready" }
-                        },
-                        "health": {
-                            "operationId": "service.synthetic.health",
-                            "probe": { "kind": "tcp", "timeoutMs": 250, "retryIntervalMs": 25, "maxAttempts": 40 },
-                            "terminal": { "success": "healthy", "failure": "unhealthy" }
-                        },
-                        "stop": {
-                            "operationId": "service.synthetic.stop",
-                            "signal": "TERM",
-                            "timeoutMs": 5000,
-                            "terminal": { "success": "stopped", "failure": "failed" }
-                        },
-                        "clean": {
-                            "operationId": "service.synthetic.clean",
-                            "terminal": { "success": "cleaned", "failure": "failed" }
-                        }
-                    },
-                    "endpoint": { "endpointId": "synthetic-tcp", "host": "127.0.0.1" },
-                    "connectsTo": [],
-                    "stateRefs": ["slot"],
-                    "logRefs": ["service.synthetic"],
-                    "containment": "process-group",
-                    "identity": {
-                        "serviceAddressHash": "service-address",
-                        "endpointIdentityHash": "endpoint",
-                        "stateIdentityHash": "state",
-                        "runtimeCompatibilityHash": "runtime",
-                        "targetIdentityHash": "target"
-                    }
-                }
-            },
-            "tasks": {
-                "smoke": {
-                    "operationId": "task.smoke.run",
-                    "execId": "synthetic-helper",
-                    "args": ["task"],
-                    "dependsOnServicesReady": ["synthetic"],
-                    "exitPolicy": { "successCodes": [0] },
-                    "artifactRefs": [],
-                    "logRefs": ["task.smoke"],
-                    "summaryRefs": ["summary"]
-                }
-            },
-            "workflows": {},
-            "docs": {
-                "title": "View Test",
-                "summary": "Generated from model.json."
-            }
+        use nixfied_model::fixtures::{SyntheticModelOptions, synthetic_model};
+        synthetic_model(&SyntheticModelOptions {
+            project_id: "view-test".to_string(),
+            project_name: "View Test".to_string(),
+            docs_title: "View Test".to_string(),
+            docs_summary: "Generated from model.json.".to_string(),
+            ..SyntheticModelOptions::default()
         })
         .to_string()
     }

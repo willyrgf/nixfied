@@ -9,6 +9,9 @@ rust-version.workspace = true
 nixfied-model = { path = "../nixfied-model" }
 serde_json = "1.0"
 
+[dev-dependencies]
+nixfied-model = { path = "../nixfied-model", features = ["test-fixtures"] }
+
 [[bin]]
 name = "nixfied"
 path = "src/main.rs"

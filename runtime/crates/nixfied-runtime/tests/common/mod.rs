@@ -2,181 +2,32 @@
 //! pulls this in with `mod common;`; no single binary uses every item, so dead
 //! code is expected here rather than a sign of rot.
 #![allow(dead_code)]
+#![allow(unused_imports)]
 
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use serde_json::{Value, json};
+use serde_json::Value;
 
-/// The synthetic-service executable the default fixture binds.
-pub const SYNTHETIC_EXECUTABLE: &str = "/nix/store/test-synthetic-helper/bin/synthetic-helper";
-/// The synthetic service's start arguments.
-pub const SYNTHETIC_START_ARGS: &[&str] = &["service", "--host", "127.0.0.1", "--port", "${port}"];
+use nixfied_model::fixtures::{self, SyntheticModelOptions};
+pub use nixfied_model::fixtures::{SYNTHETIC_EXECUTABLE, SYNTHETIC_START_ARGS};
 
 /// The canonical admission fixture — a `synthetic` foreground service plus a
-/// `smoke` task in slot 0 over the given candidate port window. This is the single
-/// source of truth for the current model shape across the integration tests; keep
-/// it in step with the `Model` serde contract.
+/// `smoke` task in slot 0 over the given candidate port window. Delegates to
+/// `nixfied_model::fixtures`, the single source of truth for the model shape.
 pub fn synthetic_model(
     executable: &str,
     start_args: &[&str],
     port_start: u16,
     port_end: u16,
 ) -> Value {
-    json!({
-        "modelVersion": 1,
-        "toolchainId": "nixfied-toolchain:1",
-        "runtimeAbi": nixfied_model::runtime_abi(),
-        "generator": {
-            "name": "nixfied",
-            "version": "1",
-            "emitter": "nix/compiler/emit-model.nix"
-        },
-        "project": {
-            "projectId": "runtime-test",
-            "name": "Runtime Test"
-        },
-        "target": {
-            "system": host_system(),
-            "os": host_os(),
-            "arch": host_arch(),
-            "closureSystem": host_system()
-        },
-        "codebases": [{
-            "codebaseId": "main",
-            "logicalRoot": ".",
-            "sourceMode": "live-workspace",
-            "sourceIdentity": "live",
-            "sourcePolicy": {
-                "dirtyPolicy": "warn",
-                "admissionFingerprintPolicy": "live-fingerprint"
-            }
-        }],
-        "environments": {
-            "dev": {
-                "services": ["synthetic"],
-                "tasks": ["smoke"]
-            }
-        },
-        "slotPolicy": {
-            "min": 0,
-            "default": 0,
-            "max": 0
-        },
-        "placement": {
-            "slotPlacements": {
-                "0": {
-                    "slot": 0,
-                    "candidatePorts": {
-                        "start": port_start,
-                        "end": port_end
-                    }
-                }
-            }
-        },
-        "state": {
-            "markerIdentity": "nixfied-state",
-            "stateEpoch": "1",
-            "cleanupPolicy": "delete-on-clean",
-            "persistence": "run-scoped"
-        },
-        "closures": {
-            "synthetic-helper": {
-                "kind": "executable",
-                "storePath": "/nix/store/test-synthetic-helper",
-                "executable": executable,
-                "targetSystem": host_system(),
-                "operationBindings": [
-                    "service.synthetic.start",
-                    "service.synthetic.stop",
-                    "task.smoke.run"
-                ],
-                "requiresExecutable": true,
-                "effects": ["process", "network-listener"]
-            }
-        },
-        "execs": {
-            "synthetic-helper": {
-                "closureId": "synthetic-helper",
-                "executable": executable,
-                "args": [],
-                "env": {},
-                "codebaseId": "main",
-                "cwd": ".",
-                "stdin": "null",
-                "timeoutMs": 30000
-            }
-        },
-        "services": {
-            "synthetic": {
-                "lifecycle": {
-                    "prepare": {
-                        "operationId": "service.synthetic.prepare",
-                        "execId": null,
-                        "execArgs": [],
-                        "terminal": { "success": "prepared", "failure": "failed" }
-                    },
-                    "start": {
-                        "operationId": "service.synthetic.start",
-                        "execId": "synthetic-helper",
-                        "execArgs": start_args,
-                        "terminal": { "success": "spawned", "failure": "failed" }
-                    },
-                    "ready": {
-                        "operationId": "service.synthetic.ready",
-                        "probe": { "kind": "tcp", "timeoutMs": 250, "retryIntervalMs": 25, "maxAttempts": 40 },
-                        "terminal": { "success": "ready", "failure": "not-ready" }
-                    },
-                    "health": {
-                        "operationId": "service.synthetic.health",
-                        "probe": { "kind": "tcp", "timeoutMs": 250, "retryIntervalMs": 25, "maxAttempts": 40 },
-                        "terminal": { "success": "healthy", "failure": "unhealthy" }
-                    },
-                    "stop": {
-                        "operationId": "service.synthetic.stop",
-                        "signal": "TERM",
-                        "timeoutMs": 5000,
-                        "terminal": { "success": "stopped", "failure": "failed" }
-                    },
-                    "clean": {
-                        "operationId": "service.synthetic.clean",
-                        "terminal": { "success": "cleaned", "failure": "failed" }
-                    }
-                },
-                "endpoint": { "endpointId": "synthetic-tcp", "host": "127.0.0.1" },
-                "connectsTo": [],
-                "stateRefs": ["slot"],
-                "logRefs": ["service.synthetic"],
-                "containment": "process-group",
-                "identity": {
-                    "serviceAddressHash": "service-address",
-                    "endpointIdentityHash": "endpoint",
-                    "stateIdentityHash": "state",
-                    "runtimeCompatibilityHash": "runtime",
-                    "targetIdentityHash": "target"
-                }
-            }
-        },
-        "tasks": {
-            "smoke": {
-                "operationId": "task.smoke.run",
-                "execId": "synthetic-helper",
-                "args": ["task", "--host", "127.0.0.1", "--port", "${port}"],
-                "dependsOnServicesReady": ["synthetic"],
-                "exitPolicy": {
-                    "successCodes": [0]
-                },
-                "artifactRefs": [],
-                "logRefs": ["task.smoke"],
-                "summaryRefs": ["summary"]
-            }
-        },
-        "workflows": {},
-        "docs": {
-            "title": "Runtime Test",
-            "summary": "Runtime admission fixture."
-        }
+    fixtures::synthetic_model(&SyntheticModelOptions {
+        executable: executable.to_string(),
+        start_args: start_args.iter().map(|s| s.to_string()).collect(),
+        port_start,
+        port_end,
+        ..SyntheticModelOptions::default()
     })
 }
 
@@ -190,25 +41,7 @@ pub fn synthetic_model_default(port_start: u16, port_end: u16) -> Value {
     )
 }
 
-pub fn host_system() -> String {
-    format!("{}-{}", host_arch(), host_os())
-}
-
-pub fn host_arch() -> &'static str {
-    match std::env::consts::ARCH {
-        "aarch64" => "aarch64",
-        "x86_64" => "x86_64",
-        other => other,
-    }
-}
-
-pub fn host_os() -> &'static str {
-    match std::env::consts::OS {
-        "macos" => "darwin",
-        "linux" => "linux",
-        other => other,
-    }
-}
+pub use nixfied_model::fixtures::{host_arch, host_os, host_system};
 
 /// A unique temporary directory removed on drop.
 pub struct TempDir {

@@ -1,5 +1,7 @@
 pub mod constants;
 pub mod error;
+#[cfg(feature = "test-fixtures")]
+pub mod fixtures;
 pub mod ids;
 pub mod types;
 pub mod unique_vec;
