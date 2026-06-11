@@ -566,9 +566,9 @@ impl Rejection {
             Rejection::OperationUnbound {
                 operation_id,
                 closure_id,
-            } => format!(
-                "operation {operation_id} is not bound by its exec's closure {closure_id}"
-            ),
+            } => {
+                format!("operation {operation_id} is not bound by its exec's closure {closure_id}")
+            }
         }
     }
 }

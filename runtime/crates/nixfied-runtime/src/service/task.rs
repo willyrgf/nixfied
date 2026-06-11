@@ -231,8 +231,10 @@ pub fn run_dependent_task_cancellable(
     if success {
         Ok(run)
     } else if canceled {
-        Err(RuntimeError::new(ErrorCode::Canceled, canceled_error().message)
-            .with_detail("taskRun", &run))
+        Err(
+            RuntimeError::new(ErrorCode::Canceled, canceled_error().message)
+                .with_detail("taskRun", &run),
+        )
     } else {
         Err(RuntimeError::new(ErrorCode::TaskFailed, failure_message).with_detail("taskRun", &run))
     }

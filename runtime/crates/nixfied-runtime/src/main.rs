@@ -637,7 +637,16 @@ fn write_failure_workflow_summary(
     // The run is failing regardless of what the recorded nodes say — a service
     // or spawn failure can leave zero failed nodes, which must not read as
     // success.
-    write_workflow_summary(placement, workflow_id, run_id, false, nodes, &services, tasks).ok()
+    write_workflow_summary(
+        placement,
+        workflow_id,
+        run_id,
+        false,
+        nodes,
+        &services,
+        tasks,
+    )
+    .ok()
 }
 
 fn with_failure_summary(error: RuntimeError, summary_path: Option<PathBuf>) -> RuntimeError {
