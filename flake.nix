@@ -84,6 +84,43 @@
           polyglotModel = nixfiedLib.compileModel ./examples/polyglot-stack/nixfied.nix;
           downstreamModel = nixfiedLib.compileModel ./examples/downstream/nixfied.nix;
           rethModel = nixfiedLib.compileModel ./examples/reth/nixfied.nix;
+          # Gate-only variants of the example models, for the state lifecycle
+          # shard: a provenance-only delta (same identity, new model hash), an
+          # epoch bump (declared state-compatibility boundary), and a postgres
+          # whose smoke query sleeps long enough to interrupt mid-run.
+          minimalModelB = nixfiedLib.compileModel (
+            { lib, ... }:
+            {
+              imports = [ ./examples/minimal/nixfied.nix ];
+              nixfied.project.name = lib.mkForce "Minimal B";
+            }
+          );
+          minimalModelEpoch2 = nixfiedLib.compileModel (
+            { ... }:
+            {
+              imports = [ ./examples/minimal/nixfied.nix ];
+              nixfied.state.stateEpoch = "2";
+            }
+          );
+          postgresSlowModel = nixfiedLib.compileModel (
+            { lib, ... }:
+            {
+              imports = [ ./examples/postgres/nixfied.nix ];
+              nixfied.tasks.smoke-query.args = lib.mkForce [
+                "-h"
+                "127.0.0.1"
+                "-p"
+                "\${port}"
+                "-U"
+                "postgres"
+                "-d"
+                "postgres"
+                "-w"
+                "-tAc"
+                "SELECT pg_sleep(120)"
+              ];
+            }
+          );
           nixfiedInstall = import ./nix/install/install.nix { inherit pkgs; };
           nixfiedUpgrade = import ./nix/install/upgrade.nix { inherit pkgs; };
           # `nix run .#gate`: the framework gate — runs the example models directly
@@ -98,6 +135,9 @@
               polyglot = polyglotModel;
               downstream = downstreamModel;
               reth = rethModel;
+              minimalB = minimalModelB;
+              minimalEpoch2 = minimalModelEpoch2;
+              postgresSlow = postgresSlowModel;
             };
           };
           # `.#check` / `.#test` / `.#ci`: the framework's own source/test/CI gate.

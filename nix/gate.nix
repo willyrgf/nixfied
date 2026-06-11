@@ -21,6 +21,7 @@ pkgs.writeShellApplication {
     pkgs.jq
     pkgs.coreutils
     pkgs.diffutils
+    pkgs.sqlite
   ];
   text = ''
     rt="${runtime}/bin/nixfied-runtime"
@@ -157,6 +158,95 @@ pkgs.writeShellApplication {
       fi
     }
 
+    # The state lifecycle matrix over one shared state dir: second run (adopt),
+    # changed model hash (in-place upgrade preserving state), changed state
+    # epoch (upgrade with clean), an interrupted run recovered by the next
+    # model's run (live old-model service torn down through the registry), and
+    # tampered-marker refusals. This is the repeatability story the first
+    # adopter's review demanded proven end-to-end.
+    lifecycle() {
+      echo "  lifecycle (second run: marker adopted)" >&2
+      local st="$state/lifecycle-state" root marker hash1 hash2
+      mkdir -p "$st"
+      root="$st/minimal/dev/0"
+      marker="$root/.nixfied-state.json"
+      NIXFIED_STATE_DIR="$st" "$rt" run --model "${models.minimal}/model.json" \
+        >/dev/null || fail "lifecycle: first run failed"
+      touch "$root/sentinel"
+      hash1=$(jq -r .computedModelHash "$marker")
+      NIXFIED_STATE_DIR="$st" "$rt" run --model "${models.minimal}/model.json" \
+        >/dev/null || fail "lifecycle: second run of the same model failed"
+      [ -e "$root/sentinel" ] || fail "lifecycle: second run lost the state root"
+      [ "$(jq -r .computedModelHash "$marker")" = "$hash1" ] \
+        || fail "lifecycle: second run rewrote marker provenance"
+
+      echo "  lifecycle (changed model hash: in-place upgrade, state preserved)" >&2
+      NIXFIED_STATE_DIR="$st" "$rt" run --model "${models.minimalB}/model.json" \
+        >/dev/null || fail "lifecycle: changed-model run was refused"
+      [ -e "$root/sentinel" ] \
+        || fail "lifecycle: same-epoch upgrade cleaned the state root"
+      hash2=$(jq -r .computedModelHash "$marker")
+      [ "$hash2" != "$hash1" ] || fail "lifecycle: upgrade did not rewrite provenance"
+      upgrades=$(sqlite3 "$st/registry/minimal/dev/0/registry.sqlite3" \
+        "SELECT count(*) FROM events WHERE event_type = 'state.upgraded'")
+      [ "$upgrades" -ge 1 ] || fail "lifecycle: upgrade left no state.upgraded event"
+
+      echo "  lifecycle (changed state epoch: upgrade with clean)" >&2
+      NIXFIED_STATE_DIR="$st" "$rt" run --model "${models.minimalEpoch2}/model.json" \
+        >/dev/null || fail "lifecycle: epoch-change run was refused"
+      [ ! -e "$root/sentinel" ] \
+        || fail "lifecycle: epoch upgrade preserved state across the declared boundary"
+      [ "$(jq -r .stateEpoch "$marker")" = "2" ] \
+        || fail "lifecycle: epoch upgrade did not record the new epoch"
+
+      echo "  lifecycle (interrupted run: live old-model service recovered)" >&2
+      local pst="$state/lifecycle-interrupt-state" ppid live
+      mkdir -p "$pst"
+      NIXFIED_STATE_DIR="$pst" "$rt" run --model "${models.postgresSlow}/model.json" \
+        >"$artifacts/lifecycle-interrupt.json" 2>&1 &
+      ppid=$!
+      for _ in $(seq 1 300); do
+        if (echo > /dev/tcp/127.0.0.1/24580) 2>/dev/null; then break; fi
+        sleep 0.2
+      done
+      (echo > /dev/tcp/127.0.0.1/24580) 2>/dev/null \
+        || fail "lifecycle: interrupted-run postgres never came up"
+      kill -9 "$ppid" 2>/dev/null || true
+      wait "$ppid" 2>/dev/null || true
+      live=$(NIXFIED_STATE_DIR="$pst" "$rt" ps --model "${models.postgresSlow}/model.json" \
+        | jq '[.processes[] | select(.live)] | length')
+      [ "$live" -ge 1 ] || fail "lifecycle: interrupted run left no live service to recover"
+      # The next model's run must recover on its own: reconcile the dead
+      # runtime's evidence, stop the orphaned postgres, adopt pgdata (same
+      # epoch + idempotent prepare), and proceed.
+      NIXFIED_STATE_DIR="$pst" "$rt" run --model "${models.postgres}/model.json" \
+        >/dev/null || fail "lifecycle: recovery run after interrupt failed"
+      [ -s "$pst/postgres-example/dev/0/pgdata/PG_VERSION" ] \
+        || fail "lifecycle: recovery run did not adopt the existing cluster"
+      NIXFIED_STATE_DIR="$pst" "$rt" clean --model "${models.postgres}/model.json" \
+        >/dev/null || fail "lifecycle: clean after recovery failed"
+      [ ! -e "$pst/postgres-example/dev/0" ] || fail "lifecycle: clean left the state root"
+
+      echo "  lifecycle (tampered marker: ownership and ABI refusals)" >&2
+      local code
+      jq '.projectId = "intruder"' "$marker" > "$marker.tmp" && mv "$marker.tmp" "$marker"
+      code=0
+      NIXFIED_STATE_DIR="$st" "$rt" run --model "${models.minimalEpoch2}/model.json" \
+        >/dev/null 2>"$artifacts/lifecycle-tamper-owner.json" || code=$?
+      [ "$code" -eq 21 ] \
+        || fail "lifecycle: tampered ownership exited $code, want 21 (STATE_UNOWNED)"
+      jq '.projectId = "minimal" | .runtimeAbi = "nixfied-runtime-abi:0-foreign"' \
+        "$marker" > "$marker.tmp" && mv "$marker.tmp" "$marker"
+      code=0
+      NIXFIED_STATE_DIR="$st" "$rt" run --model "${models.minimalEpoch2}/model.json" \
+        >/dev/null 2>"$artifacts/lifecycle-tamper-abi.json" || code=$?
+      [ "$code" -eq 21 ] \
+        || fail "lifecycle: tampered runtime ABI exited $code, want 21 (STATE_UNOWNED)"
+      printf '  %-11s %s\n' lifecycle \
+        "adopt -> upgrade(preserve) -> upgrade(epoch clean) -> interrupt+recover -> tamper refused" \
+        >> "$state/summary.txt"
+    }
+
     # The real adoption loop: scaffold a throwaway repo pinning the checkout, build
     # + run + clean, then upgrade (must not touch the project-owned nixfied.nix),
     # rebuild + run + clean.
@@ -218,6 +308,8 @@ pkgs.writeShellApplication {
     slots
     echo "==> negative" >&2
     negative
+    echo "==> lifecycle" >&2
+    lifecycle
     echo "==> adoption" >&2
     adoption
     echo "  gate: all checks passed" >&2
