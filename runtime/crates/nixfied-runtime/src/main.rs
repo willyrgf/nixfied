@@ -222,6 +222,27 @@ fn run_m0_admitted(
         &placement,
     )?;
 
+    // The slot's full endpoint map, known deterministically before anything
+    // spawns: named placeholder substitution addresses it by service id.
+    let slot_endpoints: nixfied_runtime::service::SlotEndpoints = plan
+        .services
+        .iter()
+        .filter_map(|binding| {
+            let service = admission
+                .execution_model
+                .services
+                .get(binding.service_name.as_str())?;
+            Some((
+                binding.service_name.clone(),
+                nixfied_runtime::service::SelectedEndpoint {
+                    endpoint_id: service.endpoint.endpoint_id.clone(),
+                    host: service.endpoint.host.to_string(),
+                    port: binding.port,
+                },
+            ))
+        })
+        .collect();
+
     // Start each required service on its planned port, waiting readiness then
     // health before the next.
     let mut started: Vec<StartedService> = Vec::new();
@@ -237,8 +258,11 @@ fn run_m0_admitted(
             &mut registry,
             run_id.clone(),
             &selected_slot,
-            service_name,
-            selected_port,
+            &nixfied_runtime::service::process::ServiceSelection {
+                service_name,
+                selected_port,
+                slot_endpoints: &slot_endpoints,
+            },
         ) {
             Ok(service) => service,
             Err(error) => {

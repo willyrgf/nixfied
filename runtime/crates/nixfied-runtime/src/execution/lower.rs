@@ -115,10 +115,37 @@ fn lower_environment(
         .iter()
         .map(|id| require_task("environment.tasks", tasks, id))
         .collect::<Result<Vec<_>, Rejection>>()?;
+    require_connects_to_closed("environment.services", &resolved_services, services)?;
     Ok(ExecEnvironment {
         services: resolved_services,
         tasks: resolved_tasks,
     })
+}
+
+/// Every started service's `connectsTo` dependency must itself be started by
+/// the same selection, or its named endpoint placeholders would have no
+/// slot-plan entry to resolve against.
+fn require_connects_to_closed(
+    scope: &'static str,
+    selected: &[ServiceId],
+    services: &BTreeMap<ServiceId, ExecService>,
+) -> RuntimeResult<()> {
+    for id in selected {
+        let Some(service) = services.get(id) else {
+            continue;
+        };
+        for target in &service.connects_to {
+            if !selected.contains(target) {
+                return Err(Rejection::ConnectsToNotStarted {
+                    scope,
+                    service: id.as_str().to_string(),
+                    target: target.as_str().to_string(),
+                }
+                .into());
+            }
+        }
+    }
+    Ok(())
 }
 
 fn lower_workflow(
@@ -157,6 +184,7 @@ fn lower_workflow(
             })
         })
         .collect::<Result<Vec<_>, Rejection>>()?;
+    require_connects_to_closed("workflow.servicesRequired", &resolved_services, services)?;
     Ok(ExecWorkflow {
         services_required: resolved_services,
         nodes: resolved_nodes,
@@ -246,6 +274,14 @@ fn lower_service(
         meta: op_meta(&clean.operation_id, &clean.terminal),
     };
 
+    // Named endpoint placeholders in lifecycle exec args/env may only reference
+    // declared connectsTo dependencies; reject the model here rather than fail
+    // (or silently leak the literal placeholder) at execution.
+    let allowed: BTreeSet<&str> = connects_to.iter().map(|id| id.as_str()).collect();
+    for exec in prepare.exec.iter().chain(std::iter::once(&start.exec)) {
+        require_named_refs_in_scope(|| format!("service {name}"), "connectsTo", exec, &allowed)?;
+    }
+
     Ok(ExecService {
         name: ServiceId::new(name),
         prepare,
@@ -312,6 +348,18 @@ fn lower_task(
             }
         }
     }
+    // Named endpoint placeholders may only reference declared service
+    // dependencies (any of them, not just the primary).
+    let allowed: BTreeSet<&str> = depends_on_services_ready
+        .iter()
+        .map(|id| id.as_str())
+        .collect();
+    require_named_refs_in_scope(
+        || format!("task {task_id}"),
+        "dependsOnServicesReady",
+        &exec,
+        &allowed,
+    )?;
     Ok(ExecTask {
         task_id: TaskId::new(task_id),
         exec,
@@ -389,6 +437,16 @@ pub enum Rejection {
         task_id: String,
         placeholder: &'static str,
     },
+    PlaceholderOutOfScope {
+        owner: String,
+        scope: &'static str,
+        service: String,
+    },
+    ConnectsToNotStarted {
+        scope: &'static str,
+        service: String,
+        target: String,
+    },
 }
 
 impl Rejection {
@@ -418,6 +476,18 @@ impl Rejection {
             } => format!(
                 "task {task_id} references {placeholder} but depends on no service to resolve it"
             ),
+            Rejection::PlaceholderOutOfScope {
+                owner,
+                scope,
+                service,
+            } => format!(
+                "{owner} references the endpoint of {service} without declaring it in {scope}"
+            ),
+            Rejection::ConnectsToNotStarted {
+                scope,
+                service,
+                target,
+            } => format!("{scope} starts {service} but not its connectsTo dependency {target}"),
         }
     }
 }
@@ -426,6 +496,43 @@ impl From<Rejection> for RuntimeError {
     fn from(rejection: Rejection) -> Self {
         RuntimeError::new(ErrorCode::ModelAdmission, rejection.message())
     }
+}
+
+/// Service ids referenced by named endpoint placeholders (`${port:<id>}` /
+/// `${host:<id>}`) in one exec value.
+pub(crate) fn named_endpoint_refs(value: &str) -> Vec<&str> {
+    let mut refs = Vec::new();
+    for prefix in ["${port:", "${host:"] {
+        let mut rest = value;
+        while let Some(start) = rest.find(prefix) {
+            rest = &rest[start + prefix.len()..];
+            let Some(end) = rest.find('}') else { break };
+            refs.push(&rest[..end]);
+            rest = &rest[end..];
+        }
+    }
+    refs
+}
+
+fn require_named_refs_in_scope(
+    owner: impl Fn() -> String,
+    scope: &'static str,
+    exec: &ResolvedExec,
+    allowed: &BTreeSet<&str>,
+) -> RuntimeResult<()> {
+    for value in exec.args.iter().chain(exec.env.values()) {
+        for reference in named_endpoint_refs(value) {
+            if !allowed.contains(reference) {
+                return Err(Rejection::PlaceholderOutOfScope {
+                    owner: owner(),
+                    scope,
+                    service: reference.to_string(),
+                }
+                .into());
+            }
+        }
+    }
+    Ok(())
 }
 
 fn undeclared(kind: &'static str, id: impl Into<String>) -> Rejection {
@@ -807,5 +914,71 @@ mod tests {
         let error =
             lower(&model_from(value)).expect_err("a service-less task using ${port} must reject");
         assert_eq!(error.code, ErrorCode::ModelAdmission);
+    }
+
+    #[test]
+    fn named_endpoint_refs_are_extracted() {
+        assert_eq!(
+            named_endpoint_refs("--db ${host:postgres}:${port:postgres} --cache ${port:redis}"),
+            vec!["postgres", "redis", "postgres"]
+        );
+        assert!(named_endpoint_refs("--port ${port}").is_empty());
+    }
+
+    #[test]
+    fn task_named_ref_outside_dependencies_is_rejected() {
+        let mut value = model_value();
+        value["tasks"]["t"]["args"] = json!(["--db", "${port:ghost}"]);
+        let error = lower(&model_from(value)).expect_err("out-of-scope named ref must reject");
+        assert_eq!(error.code, ErrorCode::ModelAdmission);
+        assert!(error.message.contains("ghost"));
+    }
+
+    #[test]
+    fn service_named_ref_outside_connects_to_is_rejected() {
+        let mut value = model_value();
+        value["services"]["svc"]["lifecycle"]["start"]["execArgs"] =
+            json!(["--db", "${port:ghost}"]);
+        let error = lower(&model_from(value)).expect_err("out-of-scope named ref must reject");
+        assert_eq!(error.code, ErrorCode::ModelAdmission);
+        assert!(error.message.contains("ghost"));
+    }
+
+    #[test]
+    fn environment_must_start_connects_to_dependencies() {
+        let mut value = model_value();
+        let mut dep = service_value();
+        dep["endpoint"]["endpointId"] = json!("dep-tcp");
+        for (class, op) in dep["lifecycle"].as_object_mut().unwrap() {
+            op["operationId"] = json!(format!("dep.{class}"));
+        }
+        value["services"]["dep"] = dep;
+        value["services"]["svc"]["connectsTo"] = json!(["dep"]);
+        // dev environment starts only svc: the wiring target is missing.
+        let error = lower(&model_from(value)).expect_err("unstarted connectsTo must reject");
+        assert_eq!(error.code, ErrorCode::ModelAdmission);
+        assert!(error.message.contains("dep"));
+    }
+
+    #[test]
+    fn named_ref_inside_connects_to_lowers_with_env() {
+        let mut value = model_value();
+        let mut dep = service_value();
+        dep["endpoint"]["endpointId"] = json!("dep-tcp");
+        for (class, op) in dep["lifecycle"].as_object_mut().unwrap() {
+            op["operationId"] = json!(format!("dep.{class}"));
+        }
+        // dep gets its own exec: the named-ref env below belongs to svc only.
+        dep["lifecycle"]["start"]["execId"] = json!("dep-exec");
+        value["execs"]["dep-exec"] = value["execs"]["svc-exec"].clone();
+        value["services"]["dep"] = dep;
+        value["services"]["svc"]["connectsTo"] = json!(["dep"]);
+        value["services"]["svc"]["lifecycle"]["start"]["execArgs"] =
+            json!(["--db", "${host:dep}:${port:dep}"]);
+        value["execs"]["svc-exec"]["env"] = json!({ "DB_URL": "tcp://${host:dep}:${port:dep}" });
+        value["environments"]["dev"]["services"] = json!(["svc", "dep"]);
+        let em = lower(&model_from(value)).expect("declared named refs lower");
+        let svc = em.services.get("svc").expect("service lowered");
+        assert_eq!(svc.connects_to, vec![ServiceId::new("dep")]);
     }
 }

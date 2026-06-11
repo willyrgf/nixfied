@@ -584,9 +584,20 @@ pub fn start_synthetic_service_for_slot(
         registry,
         run_id,
         selected_slot,
-        SYNTHETIC_SERVICE_NAME,
-        selected_port,
+        &ServiceSelection {
+            service_name: SYNTHETIC_SERVICE_NAME,
+            selected_port,
+            slot_endpoints: &SlotEndpoints::new(),
+        },
     )
+}
+
+/// One service's slice of the slot plan: its name, its deterministic port, and
+/// the slot endpoint map named placeholders resolve against.
+pub struct ServiceSelection<'a> {
+    pub service_name: &'a str,
+    pub selected_port: u16,
+    pub slot_endpoints: &'a SlotEndpoints,
 }
 
 /// Start a declared foreground service from the lowered model: run prepare,
@@ -598,10 +609,14 @@ pub fn start_service_for_slot(
     registry: &mut Registry,
     run_id: impl Into<String>,
     selected_slot: &SelectedSlot<'_>,
-    service_name: &str,
-    selected_port: u16,
+    selection: &ServiceSelection<'_>,
 ) -> RuntimeResult<StartedService> {
     let run_id = run_id.into();
+    let ServiceSelection {
+        service_name,
+        selected_port,
+        slot_endpoints,
+    } = *selection;
     let service = admission
         .execution_model
         .services
@@ -616,6 +631,18 @@ pub fn start_service_for_slot(
         endpoint_id: service.endpoint.endpoint_id.clone(),
         host: service.endpoint.host.to_string(),
         port: selected_port,
+    };
+    // The named substitution scope is the declared connectsTo set; lowering
+    // proved every named placeholder references a member of it.
+    let named: SlotEndpoints = slot_endpoints
+        .iter()
+        .filter(|(id, _)| service.connects_to.contains(id))
+        .map(|(id, endpoint)| (id.clone(), endpoint.clone()))
+        .collect();
+    let substitution = ExecSubstitution {
+        own: Some(&selected_endpoint),
+        named: &named,
+        state_root: &placement.state_root,
     };
     let address_hash = service_address_hash(
         &admission.project_id,
@@ -664,10 +691,9 @@ pub fn start_service_for_slot(
         let prepare_result = run_resolved_exec(
             prepare_exec,
             &admission.source.observed_root,
-            &placement.state_root,
             &placement.logs_dir,
             service.prepare.meta.operation_id.as_str(),
-            &selected_endpoint,
+            &substitution,
             &CancellationToken::new(),
         );
         let heartbeat_result = prepare_heartbeat.stop();
@@ -682,18 +708,8 @@ pub fn start_service_for_slot(
     record_lifecycle_started(registry, &lifecycle_context, &start_record)?;
     let exec = &service.start.exec;
     let command_cwd = resolve_exec_cwd(&admission.source.observed_root, &exec.cwd)?;
-    let args: Vec<String> = exec
-        .args
-        .iter()
-        .map(|arg| {
-            substitute_arg(
-                arg,
-                &selected_endpoint.host,
-                selected_port,
-                &placement.state_root,
-            )
-        })
-        .collect();
+    let args = substitution.args(&exec.args)?;
+    let env = substitution.env(&exec.env)?;
     let stdout_path = placement
         .logs_dir
         .join(format!("service.{service_name}.stdout.log"));
@@ -712,7 +728,7 @@ pub fn start_service_for_slot(
     command
         .args(&args)
         .current_dir(&command_cwd)
-        .envs(&exec.env)
+        .envs(&env)
         .stdin(stdin_for(exec.stdin))
         .stdout(Stdio::from(create_log_file(&stdout_path)?))
         .stderr(Stdio::from(create_log_file(&stderr_path)?));
@@ -933,19 +949,63 @@ fn run_owner_token(run_id: &str) -> String {
     format!("{run_id}:runtime-pid-{}", std::process::id())
 }
 
-/// Generic placeholder substitution shared by lifecycle and task args:
-/// `${port}` resolves to the runtime-selected port, `${host}` to the endpoint
-/// host, and `${stateDir}` to the host-materialised slot state root so
-/// stateful services can locate their data.
-pub(crate) fn substitute_arg(
-    arg: &str,
-    host: &str,
-    selected_port: u16,
-    state_root: &Path,
-) -> String {
-    arg.replace("${port}", &selected_port.to_string())
-        .replace("${host}", host)
-        .replace("${stateDir}", &state_root.to_string_lossy())
+/// The slot plan's endpoint map: every service selected for the run, resolved
+/// to its deterministic host/port before anything spawns. Named placeholder
+/// substitution addresses this map by service id.
+pub type SlotEndpoints = std::collections::BTreeMap<nixfied_model::ServiceId, SelectedEndpoint>;
+
+/// Placeholder substitution shared by lifecycle and task exec args/env values.
+/// Bare `${port}`/`${host}` resolve to `own` (the exec's own endpoint for a
+/// service, the primary dependency for a task); `${port:<serviceId>}` /
+/// `${host:<serviceId>}` resolve any endpoint in `named` (the slot plan map
+/// restricted to the exec's declared dependencies); `${stateDir}` resolves to
+/// the host-materialised slot state root. Lowering already proved every named
+/// reference is declared, so a leftover named placeholder here is a leak — fail
+/// closed rather than hand the literal string to the child.
+pub(crate) struct ExecSubstitution<'a> {
+    pub own: Option<&'a SelectedEndpoint>,
+    pub named: &'a SlotEndpoints,
+    pub state_root: &'a Path,
+}
+
+impl ExecSubstitution<'_> {
+    pub(crate) fn value(&self, value: &str) -> RuntimeResult<String> {
+        let mut out = value.to_string();
+        for (service, endpoint) in self.named {
+            out = out
+                .replace(
+                    &format!("${{port:{}}}", service.as_str()),
+                    &endpoint.port.to_string(),
+                )
+                .replace(&format!("${{host:{}}}", service.as_str()), &endpoint.host);
+        }
+        if let Some(own) = self.own {
+            out = out
+                .replace("${port}", &own.port.to_string())
+                .replace("${host}", &own.host);
+        }
+        out = out.replace("${stateDir}", &self.state_root.to_string_lossy());
+        if out.contains("${port:") || out.contains("${host:") {
+            return Err(RuntimeError::new(
+                ErrorCode::ModelAdmission,
+                format!("unresolved endpoint placeholder in exec value: {value}"),
+            ));
+        }
+        Ok(out)
+    }
+
+    pub(crate) fn args(&self, args: &[String]) -> RuntimeResult<Vec<String>> {
+        args.iter().map(|arg| self.value(arg)).collect()
+    }
+
+    pub(crate) fn env(
+        &self,
+        env: &BTreeMap<String, String>,
+    ) -> RuntimeResult<BTreeMap<String, String>> {
+        env.iter()
+            .map(|(key, value)| Ok((key.clone(), self.value(value)?)))
+            .collect()
+    }
 }
 
 pub(crate) fn resolve_exec_cwd(source_root: &Path, exec_cwd: &str) -> RuntimeResult<PathBuf> {
@@ -990,25 +1050,21 @@ pub(crate) fn resolve_exec_cwd(source_root: &Path, exec_cwd: &str) -> RuntimeRes
 fn run_resolved_exec(
     exec: &ResolvedExec,
     source_root: &Path,
-    state_root: &Path,
     logs_dir: &Path,
     label: &str,
-    endpoint: &SelectedEndpoint,
+    substitution: &ExecSubstitution<'_>,
     cancellation: &CancellationToken,
 ) -> RuntimeResult<()> {
     let command_cwd = resolve_exec_cwd(source_root, &exec.cwd)?;
-    let args: Vec<String> = exec
-        .args
-        .iter()
-        .map(|arg| substitute_arg(arg, &endpoint.host, endpoint.port, state_root))
-        .collect();
+    let args = substitution.args(&exec.args)?;
+    let env = substitution.env(&exec.env)?;
     let stdout_path = logs_dir.join(format!("lifecycle.{label}.stdout.log"));
     let stderr_path = logs_dir.join(format!("lifecycle.{label}.stderr.log"));
     let mut command = Command::new(&exec.executable);
     command
         .args(&args)
         .current_dir(&command_cwd)
-        .envs(&exec.env)
+        .envs(&env)
         .stdin(stdin_for(exec.stdin))
         .stdout(Stdio::from(create_log_file(&stdout_path)?))
         .stderr(Stdio::from(create_log_file(&stderr_path)?));
@@ -1880,4 +1936,71 @@ struct CommandRecord<'a> {
     cwd: &'a Path,
     stdout_path: &'a Path,
     stderr_path: &'a Path,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nixfied_model::ServiceId;
+
+    fn endpoint(host: &str, port: u16) -> SelectedEndpoint {
+        SelectedEndpoint {
+            endpoint_id: format!("{host}:{port}"),
+            host: host.to_string(),
+            port,
+        }
+    }
+
+    #[test]
+    fn substitutes_bare_named_and_state_placeholders() {
+        let own = endpoint("127.0.0.1", 23080);
+        let named: SlotEndpoints = [(ServiceId::new("postgres"), endpoint("::1", 23081))]
+            .into_iter()
+            .collect();
+        let substitution = ExecSubstitution {
+            own: Some(&own),
+            named: &named,
+            state_root: Path::new("/state"),
+        };
+        let value = substitution
+            .value("--listen ${host}:${port} --db ${host:postgres}:${port:postgres} --data ${stateDir}")
+            .expect("declared placeholders substitute");
+        assert_eq!(
+            value,
+            "--listen 127.0.0.1:23080 --db ::1:23081 --data /state"
+        );
+    }
+
+    #[test]
+    fn env_values_are_substituted() {
+        let named: SlotEndpoints = [(ServiceId::new("db"), endpoint("127.0.0.1", 23081))]
+            .into_iter()
+            .collect();
+        let substitution = ExecSubstitution {
+            own: None,
+            named: &named,
+            state_root: Path::new("/state"),
+        };
+        let env: BTreeMap<String, String> = [(
+            "DB_URL".to_string(),
+            "tcp://${host:db}:${port:db}".to_string(),
+        )]
+        .into_iter()
+        .collect();
+        let env = substitution.env(&env).expect("env substitutes");
+        assert_eq!(env["DB_URL"], "tcp://127.0.0.1:23081");
+    }
+
+    #[test]
+    fn unresolved_named_placeholder_fails_closed() {
+        let substitution = ExecSubstitution {
+            own: None,
+            named: &SlotEndpoints::new(),
+            state_root: Path::new("/state"),
+        };
+        let error = substitution
+            .value("--db ${port:ghost}")
+            .expect_err("an undeclared named placeholder must not leak to the child");
+        assert_eq!(error.code, ErrorCode::ModelAdmission);
+    }
 }

@@ -12,14 +12,15 @@ use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::execution::{ExecTask, ResolvedExec};
 use crate::registry::Registry;
 use crate::service::process::{
-    SelectedEndpoint, StartedService, platform_start_identity, process_group, resolve_exec_cwd,
-    substitute_arg, terminate_process_group, wait_for_child_exit,
+    ExecSubstitution, SlotEndpoints, StartedService, platform_start_identity, process_group,
+    resolve_exec_cwd, terminate_process_group, wait_for_child_exit,
 };
 use crate::service::registry::{
     TaskProcessRecord, TaskTerminalStatus, ensure_service_instance_probe_ready, mark_task_finished,
     record_task_canceling, record_task_started,
 };
 use crate::state::HostPlacement;
+use nixfied_model::ServiceId;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -96,11 +97,27 @@ pub fn run_dependent_task_cancellable(
     cancellation.check()?;
     let task_id = task.task_id.as_str();
     ensure_task_dependencies(registry, task, dependencies)?;
-    // A service dependency provides only the endpoint to substitute; a task with
-    // no services runs in the run context alone.
+    // The first dependency is the primary, providing bare ${port}/${host};
+    // every declared dependency is addressable by name via ${port:<serviceId>}
+    // and ${host:<serviceId>}. A task with no services runs in the run context
+    // alone.
     let endpoint = dependencies
         .first()
         .map(|service| &service.selected_endpoint);
+    let named: SlotEndpoints = dependencies
+        .iter()
+        .map(|service| {
+            (
+                ServiceId::new(service.service_name()),
+                service.selected_endpoint.clone(),
+            )
+        })
+        .collect();
+    let substitution = ExecSubstitution {
+        own: endpoint,
+        named: &named,
+        state_root: run_context.state_root,
+    };
     let exec = &task.exec;
     // Key logs by node id, not task id: a workflow may run the same task in more
     // than one node, and task-id-keyed paths would overwrite each other's logs.
@@ -110,7 +127,8 @@ pub fn run_dependent_task_cancellable(
     let stderr_path = placement
         .logs_dir
         .join(format!("task.{node_id}.stderr.log"));
-    let args = task_args(exec, endpoint, run_context.state_root);
+    let args = substitution.args(&exec.args)?;
+    let env = substitution.env(&exec.env)?;
     let command_cwd = resolve_exec_cwd(run_context.source_root, &exec.cwd)?;
     let command_json = serde_json::to_string(&TaskCommandRecord {
         task_id,
@@ -122,7 +140,7 @@ pub fn run_dependent_task_cancellable(
     })
     .map_err(|error| RuntimeError::new(ErrorCode::ModelAdmission, error.to_string()))?;
     cancellation.check()?;
-    let mut child = spawn_task(exec, &args, &command_cwd, &stdout_path, &stderr_path)?;
+    let mut child = spawn_task(exec, &args, &env, &command_cwd, &stdout_path, &stderr_path)?;
     let pid = child.id();
     let pgid = process_group(pid)?
         .ok_or_else(|| RuntimeError::new(ErrorCode::ProcEscape, "task process disappeared"))?;
@@ -260,6 +278,7 @@ fn ensure_task_dependencies(
 fn spawn_task(
     exec: &ResolvedExec,
     args: &[String],
+    env: &std::collections::BTreeMap<String, String>,
     command_cwd: &Path,
     stdout_path: &Path,
     stderr_path: &Path,
@@ -268,7 +287,7 @@ fn spawn_task(
     command
         .args(args)
         .current_dir(command_cwd)
-        .envs(&exec.env)
+        .envs(env)
         .stdin(crate::service::process::stdin_for(exec.stdin))
         .stdout(Stdio::from(create_log_file(stdout_path)?))
         .stderr(Stdio::from(create_log_file(stderr_path)?));
@@ -374,24 +393,6 @@ struct TaskOutcome {
     exit_code: Option<i32>,
     timed_out: bool,
     canceled: bool,
-}
-
-fn task_args(
-    exec: &ResolvedExec,
-    endpoint: Option<&SelectedEndpoint>,
-    state_root: &Path,
-) -> Vec<String> {
-    // The resolved exec already combines the base and task args; substitute the
-    // runtime placeholders here. `${stateDir}` is always available from the run;
-    // `${port}`/`${host}` only when the task depends on a service (admission
-    // rejects a service-less task that references them).
-    exec.args
-        .iter()
-        .map(|arg| match endpoint {
-            Some(endpoint) => substitute_arg(arg, &endpoint.host, endpoint.port, state_root),
-            None => arg.replace("${stateDir}", &state_root.to_string_lossy()),
-        })
-        .collect()
 }
 
 fn process_start_identity(pid: u32, pgid: i32, platform_start: Option<&str>) -> String {
