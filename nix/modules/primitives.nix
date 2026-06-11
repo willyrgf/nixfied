@@ -214,11 +214,9 @@ let
         type = types.nonEmptyStr;
         description = "Closure providing the executable.";
       };
-      executable = mkOption {
-        type = types.nullOr types.str;
-        default = null;
-        description = "Absolute executable path; defaults to the closure executable.";
-      };
+      # No `executable` override: an exec always runs its closure's declared
+      # executable. Admission enforces that exact pairing, so an override could
+      # only produce a model that evaluates but never admits.
       args = mkOption {
         type = types.listOf types.str;
         default = [ ];

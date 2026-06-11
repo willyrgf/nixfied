@@ -51,10 +51,11 @@ let
   };
   closures = mapAttrs closureSpec config.nixfied.closures;
 
-  # Execs: default the executable to the bound closure executable.
+  # Execs: the executable is always the bound closure's executable — admission
+  # rejects any other pairing, so the option does not exist.
   execSpec = _id: exec: {
     closureId = exec.closureId;
-    executable = if exec.executable != null then exec.executable else closureExecutable exec.closureId;
+    executable = closureExecutable exec.closureId;
     args = exec.args;
     env = exec.env;
     codebaseId = exec.codebaseId;
