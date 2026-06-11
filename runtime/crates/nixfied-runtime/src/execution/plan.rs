@@ -81,12 +81,47 @@ pub fn plan(model: &ExecutionModel, selection: Selection<'_>, slot: u32) -> Runt
         }
     };
 
-    let services = assign_ports(&service_names, *window, slot)?;
+    // Ports are assigned by *declared* order (stable, predictable addressing —
+    // wiring changes never move a service's port), then the bindings are
+    // reordered for start so every connectsTo dependency is ready before its
+    // dependent spawns. Lowering proved the graph acyclic and closed under the
+    // selection, so the sort always completes.
+    let services = order_for_start(assign_ports(&service_names, *window, slot)?, model);
     Ok(RunPlan {
         services,
         nodes,
         workflow_id,
     })
+}
+
+/// Stable topological order over the connectsTo graph: among services whose
+/// dependencies are all started, declared order wins, so a wiring-free model
+/// keeps exactly its declared start order.
+fn order_for_start(bindings: Vec<ServiceBinding>, model: &ExecutionModel) -> Vec<ServiceBinding> {
+    let mut remaining = bindings;
+    let mut ordered = Vec::with_capacity(remaining.len());
+    let mut started: BTreeSet<ServiceId> = BTreeSet::new();
+    while !remaining.is_empty() {
+        let ready = remaining.iter().position(|binding| {
+            model
+                .services
+                .get(&binding.service_name)
+                .map(|service| {
+                    service.connects_to.iter().all(|target| {
+                        started.contains(target)
+                            || !remaining.iter().any(|other| other.service_name == *target)
+                    })
+                })
+                .unwrap_or(true)
+        });
+        // Lowering guarantees acyclicity; a missing ready node would mean a
+        // cycle leaked through, so falling back to declared order is the only
+        // defensive option left.
+        let next = remaining.remove(ready.unwrap_or(0));
+        started.insert(next.service_name.clone());
+        ordered.push(next);
+    }
+    ordered
 }
 
 /// Assign each service the next port in the window (start + index), proving the
@@ -381,5 +416,34 @@ mod tests {
             },
         );
         assert!(plan(&em, Selection::Workflow("wf"), 0).is_err());
+    }
+
+    #[test]
+    fn start_order_honors_connects_to_but_ports_stay_declared() {
+        // app is declared first (and keeps the first port), but connects to db,
+        // so db must start first.
+        let mut em = model(
+            vec!["app", "db"],
+            vec!["app", "db"],
+            vec![(0, 23080, 23090)],
+        );
+        em.services
+            .get_mut(&ServiceId::new("app"))
+            .expect("app exists")
+            .connects_to = vec![ServiceId::new("db")];
+        let plan = plan(&em, Selection::Environment, 0).expect("plan exists");
+        assert_eq!(
+            plan.services,
+            vec![
+                ServiceBinding {
+                    service_name: ServiceId::new("db"),
+                    port: 23081
+                },
+                ServiceBinding {
+                    service_name: ServiceId::new("app"),
+                    port: 23080
+                },
+            ]
+        );
     }
 }
