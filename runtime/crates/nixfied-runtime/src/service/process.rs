@@ -656,7 +656,7 @@ pub fn start_service_for_slot(
             &placement.state_root,
             &placement.logs_dir,
             service.prepare.meta.operation_id.as_str(),
-            selected_port,
+            &selected_endpoint,
             &CancellationToken::new(),
         )
     {
@@ -672,7 +672,14 @@ pub fn start_service_for_slot(
     let args: Vec<String> = exec
         .args
         .iter()
-        .map(|arg| substitute_arg(arg, selected_port, &placement.state_root))
+        .map(|arg| {
+            substitute_arg(
+                arg,
+                &selected_endpoint.host,
+                selected_port,
+                &placement.state_root,
+            )
+        })
         .collect();
     let stdout_path = placement
         .logs_dir
@@ -910,10 +917,17 @@ fn run_owner_token(run_id: &str) -> String {
 }
 
 /// Generic placeholder substitution shared by lifecycle and task args:
-/// `${port}` resolves to the runtime-selected port, `${stateDir}` to the
-/// host-materialised slot state root so stateful services can locate their data.
-pub(crate) fn substitute_arg(arg: &str, selected_port: u16, state_root: &Path) -> String {
+/// `${port}` resolves to the runtime-selected port, `${host}` to the endpoint
+/// host, and `${stateDir}` to the host-materialised slot state root so
+/// stateful services can locate their data.
+pub(crate) fn substitute_arg(
+    arg: &str,
+    host: &str,
+    selected_port: u16,
+    state_root: &Path,
+) -> String {
     arg.replace("${port}", &selected_port.to_string())
+        .replace("${host}", host)
         .replace("${stateDir}", &state_root.to_string_lossy())
 }
 
@@ -962,14 +976,14 @@ fn run_resolved_exec(
     state_root: &Path,
     logs_dir: &Path,
     label: &str,
-    selected_port: u16,
+    endpoint: &SelectedEndpoint,
     cancellation: &CancellationToken,
 ) -> RuntimeResult<()> {
     let command_cwd = resolve_exec_cwd(source_root, &exec.cwd)?;
     let args: Vec<String> = exec
         .args
         .iter()
-        .map(|arg| substitute_arg(arg, selected_port, state_root))
+        .map(|arg| substitute_arg(arg, &endpoint.host, endpoint.port, state_root))
         .collect();
     let stdout_path = logs_dir.join(format!("lifecycle.{label}.stdout.log"));
     let stderr_path = logs_dir.join(format!("lifecycle.{label}.stderr.log"));

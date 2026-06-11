@@ -383,9 +383,7 @@ fn task_args(
     exec.args
         .iter()
         .map(|arg| match endpoint {
-            Some(endpoint) => {
-                substitute_arg(arg, endpoint.port, state_root).replace("${host}", &endpoint.host)
-            }
+            Some(endpoint) => substitute_arg(arg, &endpoint.host, endpoint.port, state_root),
             None => arg.replace("${stateDir}", &state_root.to_string_lossy()),
         })
         .collect()
