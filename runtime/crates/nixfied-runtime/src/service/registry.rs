@@ -26,9 +26,15 @@ pub struct ServiceRecord<'a> {
     pub identity: &'a ServiceIdentity,
     pub endpoint_json: &'a str,
     pub state_root: &'a Path,
+}
+
+/// One endpoint's reservation: the registry key, bind address, and port a service
+/// will own. Reserved alongside the run lease before any process starts, so a port
+/// conflict is refused before prepare and spawn rather than discovered afterward.
+pub struct PortReservation<'a> {
     pub endpoint_key: &'a str,
-    pub endpoint_address: &'a str,
-    pub endpoint_port: u16,
+    pub address: &'a str,
+    pub port: u16,
 }
 
 pub struct ProcessRecord<'a> {
@@ -84,6 +90,7 @@ pub fn reserve_service_start(
     registry: &mut Registry,
     run: &RunRecord<'_>,
     service_instance_id: &str,
+    endpoints: &[PortReservation<'_>],
 ) -> RuntimeResult<()> {
     let generator_json = run.admission.generator_json.as_str();
     let target_json = run.admission.target_json.as_str();
@@ -141,6 +148,33 @@ pub fn reserve_service_start(
             ],
         )
         .map_err(sql_error)?;
+    // Reserve every endpoint port in the same transaction as the lease: a port
+    // already held by another active service refuses the start here, before any
+    // prepare or spawn runs. A Reserved row blocks competing reservations (it is in
+    // PORT_OPEN); it is released by `release_service_reservation` on a failed start
+    // and staled with the lease on a crash before the process is recorded.
+    for endpoint in endpoints {
+        ensure_no_active_port_transaction(&transaction, endpoint.address, endpoint.port)?;
+        transaction
+            .execute(
+                "
+                INSERT OR REPLACE INTO ports (
+                  endpoint_key, environment, slot, service_instance_id, address, port,
+                  status, owner_process_key
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL)
+                ",
+                params![
+                    endpoint.endpoint_key,
+                    identity.environment.as_str(),
+                    identity.slot,
+                    service_instance_id,
+                    endpoint.address,
+                    endpoint.port,
+                    PortStatus::Reserved.as_str(),
+                ],
+            )
+            .map_err(sql_error)?;
+    }
     insert_event(
         &transaction,
         &identity,
@@ -272,6 +306,9 @@ pub fn release_service_reservation(
             ],
         )
         .map_err(sql_error)?;
+    // Release the endpoint ports reserved in `reserve_service_start` so a start
+    // that fails before the process is recorded does not leak the port.
+    release_service_ports(&transaction, service_instance_id)?;
     insert_event(
         &transaction,
         &identity,
@@ -301,11 +338,6 @@ pub fn record_service_start(
     let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
     ensure_no_active_lease_transaction(&transaction, service.service_instance_id, run.run_id)?;
     ensure_no_active_service_transaction(&transaction, service.service_instance_id)?;
-    ensure_no_active_port_transaction(
-        &transaction,
-        service.endpoint_address,
-        service.endpoint_port,
-    )?;
     transaction
         .execute(
             "
@@ -400,25 +432,6 @@ pub fn record_service_start(
                 process.run_id,
                 process.service_instance_id,
                 ProcessStatus::Running.as_str(),
-            ],
-        )
-        .map_err(sql_error)?;
-    transaction
-        .execute(
-            "
-            INSERT OR REPLACE INTO ports (
-              endpoint_key, environment, slot, service_instance_id, address, port,
-              status, owner_process_key
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL)
-            ",
-            params![
-                service.endpoint_key,
-                identity.environment.as_str(),
-                identity.slot,
-                service.service_instance_id,
-                service.endpoint_address,
-                service.endpoint_port,
-                PortStatus::Reserved.as_str(),
             ],
         )
         .map_err(sql_error)?;

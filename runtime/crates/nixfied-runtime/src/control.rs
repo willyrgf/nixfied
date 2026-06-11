@@ -497,6 +497,27 @@ fn mark_run_lease_stale(registry: &mut Registry, lease: &RunLeaseRow) -> Runtime
             params![lease.run_id.as_str(), RunStatus::Stale.as_str()],
         )
         .map_err(sql_error)?;
+    // Release ports reserved by this run. A port reserved before the process row
+    // exists (a crash between `reserve_service_start` and `record_service_start`)
+    // has no owning process for `reconcile_stale_port_reservations` to key on, so
+    // the lease — which the reservation is taken under — is what reclaims it. Only
+    // reached when the run has no live process, so releasing its ports is safe.
+    transaction
+        .execute(
+            &format!(
+                "
+            UPDATE ports
+            SET status = ?2
+            WHERE service_instance_id IN (
+              SELECT service_instance_id FROM run_leases WHERE run_id = ?1
+            )
+              AND status IN ({})
+            ",
+                status::sql_in_list(status::PORT_OPEN)
+            ),
+            params![lease.run_id.as_str(), PortStatus::Stale.as_str()],
+        )
+        .map_err(sql_error)?;
     let payload_json = serde_json::json!({
         "serviceInstanceId": lease.service_instance_id.as_str(),
         "ownerToken": lease.owner_token.as_str(),

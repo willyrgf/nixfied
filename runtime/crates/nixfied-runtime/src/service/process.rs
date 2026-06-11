@@ -22,7 +22,7 @@ use crate::service::identity::{service_address_hash, service_instance_id};
 use crate::service::ownership::{ExpectedEndpointOwner, verify_endpoint_ownership};
 use crate::service::readiness::{wait_for_exec_probe, wait_for_tcp_probe};
 use crate::service::registry::{
-    ProcessRecord, RunRecord, ServiceRecord, ensure_service_start_allowed,
+    PortReservation, ProcessRecord, RunRecord, ServiceRecord, ensure_service_start_allowed,
     mark_endpoint_owner_verified, mark_process_escape, mark_service_canceled, mark_service_failed,
     mark_service_probe_ready, mark_service_stopped, record_service_canceling,
     record_service_lifecycle_event, record_service_start, release_service_reservation,
@@ -626,13 +626,15 @@ pub fn start_service_for_slot(
         service_name,
     );
     let service_instance_id = service_instance_id(&address_hash, &service.identity);
+    let endpoint_key = endpoint_key(&service_instance_id, &selected_endpoint.endpoint_id);
     reconcile_registry(registry)?;
     ensure_service_start_allowed(registry, &run_id, &service_instance_id)?;
     let owner_token = run_owner_token(&run_id);
-    // Reserve the service instance (run row + active lease) under the start
-    // conflict gates before running any state-mutating lifecycle work, so a second
-    // runtime racing the same slot is refused instead of running prepare (e.g.
-    // initdb) concurrently against the same state. Released on failure below.
+    // Reserve the service instance (run row + active lease) AND its endpoint port
+    // under the start conflict gates before running any state-mutating lifecycle
+    // work, so a second runtime racing the same slot — or a port already held by
+    // another active service — is refused before prepare (e.g. initdb) and spawn
+    // run, never discovered afterward. Released on failure below.
     reserve_service_start(
         registry,
         &RunRecord {
@@ -642,6 +644,11 @@ pub fn start_service_for_slot(
             placement,
         },
         &service_instance_id,
+        &[PortReservation {
+            endpoint_key: &endpoint_key,
+            address: &selected_endpoint.host,
+            port: selected_endpoint.port,
+        }],
     )?;
     let lifecycle_context = LifecycleEventContext {
         run_id: Some(run_id.clone()),
@@ -765,9 +772,6 @@ pub fn start_service_for_slot(
             identity: &service.identity,
             endpoint_json: &endpoint_json,
             state_root: &placement.state_root,
-            endpoint_key: &endpoint_key(&service_instance_id, &selected_endpoint.endpoint_id),
-            endpoint_address: &selected_endpoint.host,
-            endpoint_port: selected_endpoint.port,
         },
         &ProcessRecord {
             process_key: &process_key,

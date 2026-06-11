@@ -10,7 +10,9 @@ use std::time::{Duration, Instant};
 use nixfied_model::{DirtyPolicy, Model, SourceMode};
 use nixfied_runtime::cancellation::CancellationToken;
 use nixfied_runtime::registry::{Registry, RegistryIdentity};
-use nixfied_runtime::service::registry::{TaskProcessRecord, record_task_started};
+use nixfied_runtime::service::registry::{
+    PortReservation, RunRecord, TaskProcessRecord, record_task_started, reserve_service_start,
+};
 use nixfied_runtime::service::{
     RunContext, run_dependent_task, run_dependent_task_cancellable, service_address_hash,
     service_instance_id, wait_for_tcp_probe,
@@ -2755,6 +2757,52 @@ impl<'a> StartedSlot<'a> {
             service,
         }
     }
+}
+
+#[test]
+fn endpoint_port_is_reserved_before_start_and_refuses_a_second_holder() {
+    // The port is reserved in the same transaction as the run lease, before any
+    // prepare or spawn. A different service instance cannot take a port already
+    // held in the slot: the conflict is refused at reservation, not discovered
+    // after a process has already been started.
+    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 24222);
+    let run_a = RunRecord {
+        run_id: "reserve-a",
+        owner_token: "owner-a",
+        admission: &fixture.admission,
+        placement: &fixture.placement,
+    };
+    reserve_service_start(
+        &mut fixture.registry,
+        &run_a,
+        "service-instance-a",
+        &[PortReservation {
+            endpoint_key: "service-instance-a:endpoint",
+            address: "127.0.0.1",
+            port: 24222,
+        }],
+    )
+    .expect("first reservation should hold the port");
+
+    let run_b = RunRecord {
+        run_id: "reserve-b",
+        owner_token: "owner-b",
+        admission: &fixture.admission,
+        placement: &fixture.placement,
+    };
+    let error = reserve_service_start(
+        &mut fixture.registry,
+        &run_b,
+        "service-instance-b",
+        &[PortReservation {
+            endpoint_key: "service-instance-b:endpoint",
+            address: "127.0.0.1",
+            port: 24222,
+        }],
+    )
+    .expect_err("a second instance cannot reserve a held port");
+
+    assert_eq!(error.code, ErrorCode::PortConflict);
 }
 
 fn admission(model: &Model, source_root: &Path) -> Admission {
