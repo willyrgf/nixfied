@@ -15,9 +15,10 @@
 # three planned ports as arguments and derives nothing.
 #
 # The data directory lives under `${stateDir}/reth`, so marker-gated cleanup
-# removes it. The IPC socket lives under /tmp keyed by the http port: a deep
-# state directory would exceed the Unix socket sun_path limit (notably on
-# macOS), and a stale socket from an interrupted run is removed before start.
+# removes it. The IPC-RPC server is disabled (`--ipcdisable`): the adapter drives
+# reth over the modelled http/ws/authrpc endpoints, so the unused IPC socket would
+# only be an out-of-band file under /tmp that the runtime cannot reserve, verify,
+# or clean — a bypass of runtime-owned cleanup with no benefit.
 { pkgs, ... }:
 let
   rethNode = pkgs.writeShellApplication {
@@ -69,20 +70,19 @@ let
 
       reth_dir="$state_dir/reth"
       jwt_file="$reth_dir/config/jwt.hex"
-      ipc_path="/tmp/nixfied-reth-$http_port.ipc"
 
       mkdir -p "$reth_dir/data" "$reth_dir/config"
       if [[ ! -s "$jwt_file" ]]; then
         printf '%064x\n' 0 > "$jwt_file"
       fi
       chmod 600 "$jwt_file" 2>/dev/null || true
-      rm -f "$ipc_path"
 
       # `--dev` runs a peerless instant-seal chain, so reth binds no p2p TCP
-      # listener; only the http, ws, and authrpc endpoints are modelled.
+      # listener; only the http, ws, and authrpc endpoints are modelled. IPC is
+      # disabled so no out-of-band socket escapes runtime-owned cleanup.
       exec reth node \
         --datadir "$reth_dir/data" \
-        --ipcpath "$ipc_path" \
+        --ipcdisable \
         --http \
         --http.addr "$host" \
         --http.port "$http_port" \
