@@ -507,7 +507,7 @@ pub enum Rejection {
         service: String,
         class: &'static str,
     },
-    ProbeOperationUnbound {
+    OperationUnbound {
         operation_id: String,
         closure_id: String,
     },
@@ -558,11 +558,11 @@ impl Rejection {
             Rejection::ProbeExecMissing { service, class } => {
                 format!("service {service} {class} probe is exec but declares no execId")
             }
-            Rejection::ProbeOperationUnbound {
+            Rejection::OperationUnbound {
                 operation_id,
                 closure_id,
             } => format!(
-                "probe operation {operation_id} is not bound by its exec's closure {closure_id}"
+                "operation {operation_id} is not bound by its exec's closure {closure_id}"
             ),
         }
     }
@@ -734,12 +734,39 @@ fn prove_references(model: &Model) -> Result<(), Rejection> {
         }
     }
 
-    // An exec probe runs through a closure like any lifecycle exec: the closure
-    // its exec references must explicitly bind the ready/health operation it
-    // probes for. Dangling exec/closure references are rejected by the
-    // per-reference resolvers, so only the binding coverage is proven here.
+    // Every operation that runs through an exec runs through a closure: the
+    // closure must explicitly bind that operation, or the model is executing a
+    // closure for an operation it never declared. Dangling exec/closure
+    // references are rejected by the per-reference resolvers, so only the
+    // binding coverage is proven here.
+    let require_bound = |exec_id: &str, operation_id: &str| -> Result<(), Rejection> {
+        let Some(exec) = model.execs.get(exec_id) else {
+            return Ok(());
+        };
+        let Some(closure) = model.closures.get(exec.closure_id.as_str()) else {
+            return Ok(());
+        };
+        if !closure
+            .operation_bindings
+            .iter()
+            .any(|binding| binding.as_str() == operation_id)
+        {
+            return Err(Rejection::OperationUnbound {
+                operation_id: operation_id.to_string(),
+                closure_id: exec.closure_id.to_string(),
+            });
+        }
+        Ok(())
+    };
     for service in model.services.values() {
         let lifecycle = &service.lifecycle;
+        if let Some(exec_id) = &lifecycle.prepare.exec_id {
+            require_bound(exec_id.as_str(), lifecycle.prepare.operation_id.as_str())?;
+        }
+        require_bound(
+            lifecycle.start.exec_id.as_str(),
+            lifecycle.start.operation_id.as_str(),
+        )?;
         for (probe, operation_id) in [
             (&lifecycle.ready.probe, &lifecycle.ready.operation_id),
             (&lifecycle.health.probe, &lifecycle.health.operation_id),
@@ -750,23 +777,11 @@ fn prove_references(model: &Model) -> Result<(), Rejection> {
             let Some(exec_id) = &probe.exec_id else {
                 continue;
             };
-            let Some(exec) = model.execs.get(exec_id.as_str()) else {
-                continue;
-            };
-            let Some(closure) = model.closures.get(exec.closure_id.as_str()) else {
-                continue;
-            };
-            if !closure
-                .operation_bindings
-                .iter()
-                .any(|binding| binding.as_str() == operation_id.as_str())
-            {
-                return Err(Rejection::ProbeOperationUnbound {
-                    operation_id: operation_id.to_string(),
-                    closure_id: exec.closure_id.to_string(),
-                });
-            }
+            require_bound(exec_id.as_str(), operation_id.as_str())?;
         }
+    }
+    for task in model.tasks.values() {
+        require_bound(task.exec_id.as_str(), task.operation_id.as_str())?;
     }
 
     Ok(())
@@ -961,6 +976,34 @@ mod tests {
             reject_reason(value),
             Rejection::UnknownOperationBinding {
                 binding: "ghost.op".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn start_operation_must_be_bound_by_its_closure() {
+        // The closure no longer binds svc.start, so the start exec would run a
+        // closure for an operation it never declared.
+        let mut value = model_value();
+        value["closures"]["c"]["operationBindings"] = json!(["task.t.run"]);
+        assert_eq!(
+            reject_reason(value),
+            Rejection::OperationUnbound {
+                operation_id: "svc.start".to_string(),
+                closure_id: "c".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn task_operation_must_be_bound_by_its_closure() {
+        let mut value = model_value();
+        value["closures"]["c"]["operationBindings"] = json!(["svc.start"]);
+        assert_eq!(
+            reject_reason(value),
+            Rejection::OperationUnbound {
+                operation_id: "task.t.run".to_string(),
+                closure_id: "c".to_string()
             }
         );
     }
@@ -1172,6 +1215,10 @@ mod tests {
         // dep gets its own exec: the named-ref env below belongs to svc only.
         dep["lifecycle"]["start"]["execId"] = json!("dep-exec");
         value["execs"]["dep-exec"] = value["execs"]["svc-exec"].clone();
+        value["closures"]["c"]["operationBindings"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("dep.start"));
         value["services"]["dep"] = dep;
         value["services"]["svc"]["connectsTo"] = json!(["dep"]);
         value["services"]["svc"]["lifecycle"]["start"]["execArgs"] =
