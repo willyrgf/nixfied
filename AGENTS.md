@@ -93,8 +93,12 @@ The runtime error contract (stable codes/exit classes) — `MODEL_NOT_STORE_OUTP
 `MODEL_INVALID`, `MODEL_ADMISSION`, `RUNTIME_ABI_MISMATCH`, `SOURCE_MISMATCH`,
 `PLATFORM_UNSUPPORTED`, `CLOSURE_MISSING`, `PORT_CONFLICT`, `PORT_UNVERIFIABLE`,
 `STATE_UNWRITABLE`, `STATE_UNOWNED`, `LEASE_STALE`/`LEASE_CONFLICT`, `PROC_ESCAPE`,
-`READINESS_TIMEOUT`, `SECRET_UNAVAILABLE`, `SECRET_LEAK_BLOCKED`, `CANCELED`,
-`CLEANUP_REFUSED`, `REGISTRY_CORRUPT` — is public API for the current ABI.
+`READINESS_TIMEOUT`, `CANCELED`, `CLEANUP_REFUSED`, `REGISTRY_CORRUPT`, plus the
+execution-class codes `TASK_FAILED`, `LIFECYCLE_FAILED`, `DEPENDENCY_UNAVAILABLE`
+(admission passed, execution failed — `MODEL_ADMISSION` after admission is, by
+construction, a leak) — is public API for the current ABI. `SECRET_UNAVAILABLE`
+and `SECRET_LEAK_BLOCKED` are reserved for the deferred secrets scope and do not
+exist in the runtime yet.
 
 ## Non-Negotiable Boundaries
 
@@ -288,5 +292,7 @@ contract-shaped reason (and the matching validation + runtime path + proof):
   intentionally replaces behavior.
 - Keep commits focused on one architectural slice when commit-by-commit work is
   requested.
+- Commit messages: a single concise line, no body, no author or other
+  trailers.
 - Before committing architecture changes, review the diff against the invariants
   and boundaries above, scope discipline, tests, and regressions.

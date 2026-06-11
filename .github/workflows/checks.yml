@@ -3,7 +3,7 @@ name: checks
 # The framework's checks, layered so a bug in the runtime cannot certify itself:
 # the trusted cargo floor grades the runtime first, then nix flake check's
 # hermetic structural gates, then the product orchestrates its own end-to-end
-# conformance. Everything here builds the fast debug profile; the release binary
+# framework gate. Everything here builds the fast debug profile; the release binary
 # `.#install` ships is verified by a final build step.
 on:
   push:

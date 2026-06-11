@@ -1,5 +1,5 @@
 {
-  description = "Nixfied v2 greenfield workspace";
+  description = "Nixfied v2 workspace";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
