@@ -796,7 +796,36 @@ fn load_admitted_model(
     nixfied_runtime::admission::origin::check_raw_store_origin(&raw_model, &context)?;
     let loaded = parse_loaded_model(raw_model)?;
     let admission = Admission::check(&loaded, &context)?;
+    warn_on_ephemeral_port_overlap(&loaded.model);
     Ok((loaded, admission))
+}
+
+/// Warn (stderr, non-fatal) when a slot's candidate port window overlaps the
+/// host's ephemeral port range: the kernel hands out ports in that range to
+/// any process, so a deterministic window inside it can collide with unrelated
+/// ephemeral allocations. The range is host state only Linux exposes a stable
+/// path for; elsewhere the check is silently skipped.
+fn warn_on_ephemeral_port_overlap(model: &nixfied_model::Model) {
+    let Some((low, high)) = host_ephemeral_port_range() else {
+        return;
+    };
+    for placement in model.placement.slot_placements.values() {
+        let window = &placement.candidate_ports;
+        if u32::from(window.start) <= high && u32::from(window.end) >= low {
+            eprintln!(
+                "warning: slot {} candidate port window {}-{} overlaps the host ephemeral port range {low}-{high}; deterministic ports may collide with ephemeral allocations (set nixfied.placement.ports.base outside the range)",
+                placement.slot, window.start, window.end
+            );
+        }
+    }
+}
+
+fn host_ephemeral_port_range() -> Option<(u32, u32)> {
+    let contents = std::fs::read_to_string("/proc/sys/net/ipv4/ip_local_port_range").ok()?;
+    let mut parts = contents.split_whitespace();
+    let low = parts.next()?.parse().ok()?;
+    let high = parts.next()?.parse().ok()?;
+    (low <= high).then_some((low, high))
 }
 
 fn print_json(value: &impl Serialize) -> Result<(), RuntimeError> {
