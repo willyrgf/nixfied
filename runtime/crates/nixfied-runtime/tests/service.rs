@@ -1006,7 +1006,13 @@ fn cancellation_interrupts_task_and_terminates_task_group() {
         )
         .expect("events should query");
     let summary: Value = serde_json::from_slice(
-        &fs::read(&fixture.placement.summary_path).expect("summary should read"),
+        &fs::read(
+            fixture
+                .placement
+                .summary_path
+                .with_file_name("summary.smoke.json"),
+        )
+        .expect("summary should read"),
     )
     .expect("summary should parse");
 
@@ -1124,7 +1130,13 @@ fn task_timeout_records_canceled_summary_and_terminates_task_group() {
         )
         .expect("events should query");
     let summary: Value = serde_json::from_slice(
-        &fs::read(&fixture.placement.summary_path).expect("summary should read"),
+        &fs::read(
+            fixture
+                .placement
+                .summary_path
+                .with_file_name("summary.smoke.json"),
+        )
+        .expect("summary should read"),
     )
     .expect("summary should parse");
 

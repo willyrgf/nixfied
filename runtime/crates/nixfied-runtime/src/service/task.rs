@@ -189,7 +189,12 @@ pub fn run_dependent_task_cancellable(
         success,
         stdout_path,
         stderr_path,
-        summary_path: placement.summary_path.clone(),
+        // Key the summary by node id like the logs: nodes in a workflow share
+        // the run dir, and a single run-level summary.json would be
+        // overwritten by each node, losing per-node evidence.
+        summary_path: placement
+            .summary_path
+            .with_file_name(format!("summary.{node_id}.json")),
     };
     write_summary(&run)?;
     let payload_json = serde_json::to_string(&run)
