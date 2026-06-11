@@ -55,7 +55,16 @@ pub fn check_closures(
             )
             .with_model(&loaded.path, &loaded.computed_model_hash));
         }
-        if closure.requires_executable {
+        // A closure invoked by any exec is later run via `Command::new`, so it
+        // must carry the executable bit no matter what `requiresExecutable`
+        // declares. Enforce it at admission (CLOSURE_MISSING) instead of trusting
+        // the Nix default and letting a non-executable invoked closure surface as
+        // a ProcEscape after the model has already been admitted.
+        let exec_bound = model
+            .execs
+            .values()
+            .any(|exec| exec.closure_id.as_str() == closure_id.as_str());
+        if closure.requires_executable || exec_bound {
             let metadata = executable.metadata().map_err(|error| {
                 RuntimeError::new(
                     ErrorCode::ClosureMissing,

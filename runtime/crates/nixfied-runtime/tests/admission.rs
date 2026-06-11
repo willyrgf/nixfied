@@ -270,6 +270,32 @@ fn exec_executable_must_match_declared_closure() {
 }
 
 #[test]
+fn exec_bound_closure_without_executable_bit_is_rejected() {
+    // requiresExecutable=false must not let an invoked closure skip the
+    // executable-bit check: it is run via Command::new, so admission has to fail
+    // closed (CLOSURE_MISSING) rather than defer to a runtime ProcEscape.
+    let (_tmp, model_path, closure_root) = write_fixture_model(fixture_model(), true);
+    let executable = closure_root.join("bin/synthetic-helper");
+    let mut perms = fs::metadata(&executable).unwrap().permissions();
+    perms.set_mode(0o644);
+    fs::set_permissions(&executable, perms).unwrap();
+    let mut value: Value =
+        serde_json::from_slice(&fs::read(&model_path).unwrap()).expect("fixture JSON");
+    value["closures"]["synthetic-helper"]["requiresExecutable"] = json!(false);
+    fs::write(&model_path, serde_json::to_vec(&value).unwrap()).unwrap();
+    let loaded = load_model(&model_path).expect("fixture should load");
+    let context = AdmissionContext {
+        policy: StoreOriginPolicy::AllowNonStoreForTests,
+        store_root: closure_root.parent().unwrap().to_path_buf(),
+        host_system: host_system(),
+    };
+    let error = Admission::check(&loaded, &context)
+        .expect_err("non-executable exec-bound closure should fail");
+
+    assert_eq!(error.code, ErrorCode::ClosureMissing);
+}
+
+#[test]
 fn target_os_and_arch_must_match_host() {
     let mut model = fixture_model();
     model["target"]["os"] = json!("definitely-not-this-os");
