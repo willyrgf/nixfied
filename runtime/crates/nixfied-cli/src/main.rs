@@ -143,7 +143,7 @@ fn schema_view(model: &Value) -> Result<Value, CliError> {
             "primitives": [
                 "ExecSpec",
                 "Endpoint",
-                "ProbeTiming",
+                "ProbeSpec",
                 "Lifecycle",
                 "TerminalSemantics",
                 "ServiceSpec",

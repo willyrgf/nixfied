@@ -16,11 +16,11 @@ use crate::admission::Admission;
 use crate::cancellation::{CancellationToken, canceled_error};
 use crate::control::reconcile_registry;
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
-use crate::execution::{ExecService, OpMeta, ResolvedExec, StdinPolicy};
+use crate::execution::{ExecProbe, ExecService, OpMeta, Probe, ResolvedExec, StdinPolicy};
 use crate::registry::{Registry, RunLeaseHeartbeat};
 use crate::service::identity::{service_address_hash, service_instance_id};
 use crate::service::ownership::{ExpectedEndpointOwner, verify_endpoint_ownership};
-use crate::service::readiness::wait_for_tcp_probe;
+use crate::service::readiness::{wait_for_exec_probe, wait_for_tcp_probe};
 use crate::service::registry::{
     ProcessRecord, RunRecord, ServiceRecord, ensure_service_start_allowed,
     mark_endpoint_owner_verified, mark_process_escape, mark_service_canceled, mark_service_failed,
@@ -58,6 +58,12 @@ pub struct StartedService {
     /// The resolved service: the executor reads lifecycle ops, the bound endpoint,
     /// and the stop signal from here, never from the raw `Model`.
     service: ExecService,
+    /// The ready/health probes with exec args/env already substituted against
+    /// the slot plan at start time.
+    ready_probe: Probe,
+    health_probe: Probe,
+    /// Where probe attempt output is captured, alongside the service logs.
+    logs_dir: PathBuf,
     pub run_id: String,
     pub service_instance_id: String,
     pub process_key: String,
@@ -202,21 +208,25 @@ impl StartedService {
     }
 
     fn wait_ready_probe(&self, cancellation: &CancellationToken) -> RuntimeResult<()> {
-        wait_for_tcp_probe(
-            &self.service.ready.probe,
-            &self.selected_endpoint.host,
-            self.selected_endpoint.port,
-            cancellation,
-        )
+        self.wait_probe(&self.ready_probe, cancellation)
     }
 
     fn wait_health_probe(&self, cancellation: &CancellationToken) -> RuntimeResult<()> {
-        wait_for_tcp_probe(
-            &self.service.health.probe,
-            &self.selected_endpoint.host,
-            self.selected_endpoint.port,
-            cancellation,
-        )
+        self.wait_probe(&self.health_probe, cancellation)
+    }
+
+    fn wait_probe(&self, probe: &Probe, cancellation: &CancellationToken) -> RuntimeResult<()> {
+        match probe {
+            Probe::Tcp(probe) => wait_for_tcp_probe(
+                probe,
+                &self.selected_endpoint.host,
+                self.selected_endpoint.port,
+                cancellation,
+            ),
+            Probe::Exec(probe) => {
+                wait_for_exec_probe(probe, &self.source_root, &self.logs_dir, cancellation)
+            }
+        }
     }
 
     pub fn cancel(
@@ -644,6 +654,10 @@ pub fn start_service_for_slot(
         named: &named,
         state_root: &placement.state_root,
     };
+    // Exec probe args/env are substituted once here, with the same scope as the
+    // start exec, so probe attempts later need no endpoint context.
+    let ready_probe = substituted_probe(&service.ready.probe, &substitution)?;
+    let health_probe = substituted_probe(&service.health.probe, &substitution)?;
     let address_hash = service_address_hash(
         &admission.project_id,
         selected_slot.environment,
@@ -816,6 +830,9 @@ pub fn start_service_for_slot(
         child,
         monitor,
         service: service.clone(),
+        ready_probe,
+        health_probe,
+        logs_dir: placement.logs_dir.clone(),
         run_id,
         service_instance_id,
         process_key,
@@ -1043,31 +1060,61 @@ pub(crate) fn resolve_exec_cwd(source_root: &Path, exec_cwd: &str) -> RuntimeRes
     Ok(cwd)
 }
 
-/// Run a resolved lifecycle exec (prepare) to completion in its own process
-/// group, capturing output to the logs dir keyed by `label` so a failed prepare
-/// (e.g. initdb) leaves a recoverable trail. Honors cancellation and the exec
-/// timeout.
-fn run_resolved_exec(
-    exec: &ResolvedExec,
-    source_root: &Path,
-    logs_dir: &Path,
-    label: &str,
-    substitution: &ExecSubstitution<'_>,
+/// Clone a probe with its exec args/env substituted against the slot plan. A
+/// tcp probe carries no substitutable values and passes through unchanged.
+fn substituted_probe(probe: &Probe, substitution: &ExecSubstitution<'_>) -> RuntimeResult<Probe> {
+    match probe {
+        Probe::Tcp(tcp) => Ok(Probe::Tcp(tcp.clone())),
+        Probe::Exec(exec_probe) => {
+            let mut exec = exec_probe.exec.clone();
+            exec.args = substitution.args(&exec.args)?;
+            exec.env = substitution.env(&exec.env)?;
+            Ok(Probe::Exec(ExecProbe {
+                exec,
+                ..exec_probe.clone()
+            }))
+        }
+    }
+}
+
+/// A fully-substituted short-lived command with its own kill-after deadline and
+/// capture paths: the shared spawn/wait core of lifecycle execs and exec probe
+/// attempts.
+pub(crate) struct BoundedExec<'a> {
+    pub executable: &'a str,
+    pub args: &'a [String],
+    pub env: &'a BTreeMap<String, String>,
+    pub cwd: &'a Path,
+    pub stdin: StdinPolicy,
+    pub timeout: Duration,
+    pub stdout_path: &'a Path,
+    pub stderr_path: &'a Path,
+    /// Names the operation in spawn/inspect failures.
+    pub label: &'a str,
+}
+
+pub(crate) enum BoundedExecOutcome {
+    Exited(std::process::ExitStatus),
+    TimedOut,
+}
+
+/// Spawn the bounded exec in its own process group, wait for exit or deadline
+/// (killing the group on timeout or cancellation), and report how it ended.
+/// Exit-status policy is the caller's: a lifecycle exec treats non-zero as
+/// failure, a probe attempt treats it as retry.
+pub(crate) fn run_bounded_exec(
+    spec: &BoundedExec<'_>,
     cancellation: &CancellationToken,
-) -> RuntimeResult<()> {
-    let command_cwd = resolve_exec_cwd(source_root, &exec.cwd)?;
-    let args = substitution.args(&exec.args)?;
-    let env = substitution.env(&exec.env)?;
-    let stdout_path = logs_dir.join(format!("lifecycle.{label}.stdout.log"));
-    let stderr_path = logs_dir.join(format!("lifecycle.{label}.stderr.log"));
-    let mut command = Command::new(&exec.executable);
+) -> RuntimeResult<BoundedExecOutcome> {
+    let label = spec.label;
+    let mut command = Command::new(spec.executable);
     command
-        .args(&args)
-        .current_dir(&command_cwd)
-        .envs(&env)
-        .stdin(stdin_for(exec.stdin))
-        .stdout(Stdio::from(create_log_file(&stdout_path)?))
-        .stderr(Stdio::from(create_log_file(&stderr_path)?));
+        .args(spec.args)
+        .current_dir(spec.cwd)
+        .envs(spec.env)
+        .stdin(stdin_for(spec.stdin))
+        .stdout(Stdio::from(create_log_file(spec.stdout_path)?))
+        .stderr(Stdio::from(create_log_file(spec.stderr_path)?));
     unsafe {
         command.pre_exec(|| {
             if libc::setpgid(0, 0) == 0 {
@@ -1091,7 +1138,7 @@ fn run_resolved_exec(
             return Err(error);
         }
     };
-    let deadline = Instant::now() + exec.timeout;
+    let deadline = Instant::now() + spec.timeout;
     loop {
         if cancellation.is_canceled() {
             let _ = terminate_process_group(pgid, 1000);
@@ -1104,32 +1151,67 @@ fn run_resolved_exec(
                 format!("failed to inspect lifecycle operation {label}: {error}"),
             )
         })? {
-            if status.success() {
-                return Ok(());
-            }
-            return Err(RuntimeError::new(
-                ErrorCode::LifecycleFailed,
-                format!(
-                    "service lifecycle operation {label} exited with code {}",
-                    status
-                        .code()
-                        .map(|code| code.to_string())
-                        .unwrap_or_else(|| "unknown".to_string())
-                ),
-            ));
+            return Ok(BoundedExecOutcome::Exited(status));
         }
         if Instant::now() >= deadline {
             let _ = terminate_process_group(pgid, 1000);
             let _ = wait_for_child_exit(&mut child, 1000);
-            return Err(RuntimeError::new(
-                ErrorCode::LifecycleFailed,
-                format!(
-                    "service lifecycle operation {label} timed out after {}ms",
-                    exec.timeout.as_millis()
-                ),
-            ));
+            return Ok(BoundedExecOutcome::TimedOut);
         }
         thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// Run a resolved lifecycle exec (prepare) to completion in its own process
+/// group, capturing output to the logs dir keyed by `label` so a failed prepare
+/// (e.g. initdb) leaves a recoverable trail. Honors cancellation and the exec
+/// timeout.
+fn run_resolved_exec(
+    exec: &ResolvedExec,
+    source_root: &Path,
+    logs_dir: &Path,
+    label: &str,
+    substitution: &ExecSubstitution<'_>,
+    cancellation: &CancellationToken,
+) -> RuntimeResult<()> {
+    let command_cwd = resolve_exec_cwd(source_root, &exec.cwd)?;
+    let args = substitution.args(&exec.args)?;
+    let env = substitution.env(&exec.env)?;
+    let stdout_path = logs_dir.join(format!("lifecycle.{label}.stdout.log"));
+    let stderr_path = logs_dir.join(format!("lifecycle.{label}.stderr.log"));
+    let outcome = run_bounded_exec(
+        &BoundedExec {
+            executable: &exec.executable,
+            args: &args,
+            env: &env,
+            cwd: &command_cwd,
+            stdin: exec.stdin,
+            timeout: exec.timeout,
+            stdout_path: &stdout_path,
+            stderr_path: &stderr_path,
+            label,
+        },
+        cancellation,
+    )?;
+    match outcome {
+        BoundedExecOutcome::Exited(status) if status.success() => Ok(()),
+        BoundedExecOutcome::Exited(status) => Err(RuntimeError::new(
+            ErrorCode::LifecycleFailed,
+            format!(
+                "service lifecycle operation {label} exited with code {}",
+                status
+                    .code()
+                    .map(|code| code.to_string())
+                    .unwrap_or_else(|| "unknown".to_string())
+            ),
+        )),
+        BoundedExecOutcome::TimedOut => Err(RuntimeError::new(
+            ErrorCode::LifecycleFailed,
+            format!(
+                "service lifecycle operation {label} timed out after {}ms",
+                exec.timeout.as_millis()
+            ),
+        )),
     }
 }
 

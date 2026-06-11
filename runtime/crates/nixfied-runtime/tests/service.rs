@@ -755,14 +755,17 @@ fn readiness_probe_times_out_without_listener() {
     let port = listener.local_addr().expect("local addr").port();
     drop(listener);
     let fixture = ServiceFixture::new("/bin/sleep", &["1"], port);
-    let probe = &fixture
+    let nixfied_runtime::execution::Probe::Tcp(probe) = &fixture
         .admission
         .execution_model
         .services
         .get("synthetic")
         .expect("fixture has service")
         .ready
-        .probe;
+        .probe
+    else {
+        panic!("fixture ready probe should be tcp");
+    };
 
     let error = wait_for_tcp_probe(probe, "127.0.0.1", port, &CancellationToken::new())
         .expect_err("closed endpoint should time out");
@@ -821,6 +824,133 @@ fn readiness_timeout_stops_started_service_and_records_failed() {
     assert_eq!(process_status, "failed");
     assert_eq!(service_status, "failed");
     assert_eq!(failure_events, 1);
+}
+
+/// The fixture model with an exec-based ready probe: a /bin/sh exec whose
+/// args are supplied per test. The probe's operation is bound on the closure,
+/// as admission requires.
+fn exec_probe_fixture_value(
+    executable: &str,
+    start_args: &[&str],
+    port: u16,
+    probe_args: Value,
+    probe_attempts: u32,
+) -> Value {
+    let mut value = fixture_model(executable, start_args, port);
+    value["closures"]["synthetic-helper"]["operationBindings"]
+        .as_array_mut()
+        .expect("bindings should be an array")
+        .push(json!("service.synthetic.ready"));
+    value["execs"]["probe-exec"] = json!({
+        "closureId": "synthetic-helper", "executable": "/bin/sh",
+        "args": [], "env": {}, "codebaseId": "main", "cwd": ".",
+        "stdin": "null", "timeoutMs": 30000
+    });
+    value["services"]["synthetic"]["lifecycle"]["ready"]["probe"] = json!({
+        "kind": "exec", "execId": "probe-exec", "execArgs": probe_args,
+        "timeoutMs": 1000, "retryIntervalMs": 50, "maxAttempts": probe_attempts
+    });
+    value
+}
+
+#[test]
+fn exec_ready_probe_gates_on_flag_and_marks_ready() {
+    let Some(python) = python3_path() else {
+        return;
+    };
+    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
+    let port = listener.local_addr().expect("local addr").port();
+    drop(listener);
+    // The service binds its endpoint immediately but signals readiness only via
+    // the flag file it touches afterwards — exactly what a tcp probe cannot see.
+    let script = "import socket, sys, time, pathlib; s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(('127.0.0.1', int(sys.argv[1]))); s.listen(16); time.sleep(0.3); pathlib.Path(sys.argv[2]).touch(); time.sleep(30)";
+    let value = exec_probe_fixture_value(
+        python,
+        &["-c", script, "${port}", "${stateDir}/ready-flag"],
+        port,
+        json!([
+            "-c",
+            "exec test -e \"$1\"",
+            "probe",
+            "${stateDir}/ready-flag"
+        ]),
+        60,
+    );
+    let mut fixture = ServiceFixture::from_value(value);
+    let mut service = start_synthetic_service(
+        &fixture.model,
+        &fixture.admission,
+        &fixture.placement,
+        &mut fixture.registry,
+        "run-exec-probe",
+        port,
+    )
+    .expect("service should start");
+
+    service
+        .wait_for_probe_ready(&mut fixture.registry)
+        .expect("exec probe should succeed once the flag appears");
+
+    let service_status: String = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT status FROM services WHERE service_instance_id = ?1",
+            [&service.service_instance_id],
+            |row| row.get(0),
+        )
+        .expect("service status should query");
+    assert_eq!(service_status, "probe-ready");
+    assert!(
+        fixture
+            .placement
+            .logs_dir
+            .join("lifecycle.ready.probe.stdout.log")
+            .exists(),
+        "probe attempts should leave captured output"
+    );
+    service
+        .stop(&mut fixture.registry, 1000)
+        .expect("service should stop");
+}
+
+#[test]
+fn exec_ready_probe_failure_times_out_and_records_failed() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
+    let port = listener.local_addr().expect("local addr").port();
+    drop(listener);
+    let value = exec_probe_fixture_value("/bin/sleep", &["30"], port, json!(["-c", "exit 7"]), 3);
+    let mut fixture = ServiceFixture::from_value(value);
+    let mut service = start_synthetic_service(
+        &fixture.model,
+        &fixture.admission,
+        &fixture.placement,
+        &mut fixture.registry,
+        "run-exec-probe-fail",
+        port,
+    )
+    .expect("service should initially start");
+
+    let error = service
+        .wait_for_probe_ready(&mut fixture.registry)
+        .expect_err("a failing exec probe should time out and clean up");
+
+    assert_eq!(error.code, ErrorCode::ReadinessTimeout);
+    assert!(
+        error.message.contains("exited with code 7"),
+        "failure should carry the last attempt's exit code: {}",
+        error.message
+    );
+    let service_status: String = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT status FROM services WHERE service_instance_id = ?1",
+            [&service.service_instance_id],
+            |row| row.get(0),
+        )
+        .expect("service status should query");
+    assert_eq!(service_status, "failed");
 }
 
 #[test]
@@ -2439,8 +2569,15 @@ struct ServiceFixture {
 
 impl ServiceFixture {
     fn new(executable: &str, start_args: &[&str], port: u16) -> Self {
+        Self::from_model(model(executable, start_args, port))
+    }
+
+    fn from_value(value: Value) -> Self {
+        Self::from_model(serde_json::from_value(value).expect("fixture model should parse"))
+    }
+
+    fn from_model(model: Model) -> Self {
         let tmp = TempDir::new();
-        let model = model(executable, start_args, port);
         let admission = admission(&model, &tmp.path);
         let placement =
             derive_host_placement(&model, "run-service", &tmp.path).expect("layout should derive");

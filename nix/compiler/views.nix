@@ -33,7 +33,7 @@ in
       primitives = [
         "ExecSpec"
         "Endpoint"
-        "ProbeTiming"
+        "ProbeSpec"
         "Lifecycle"
         "TerminalSemantics"
         "ServiceSpec"

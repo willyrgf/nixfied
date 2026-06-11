@@ -109,8 +109,8 @@ fn synthetic_service() -> Value {
         "lifecycle": {
             "prepare": { "operationId": "service.synthetic.prepare", "execId": null, "execArgs": [], "terminal": { "success": "prepared", "failure": "failed" } },
             "start": { "operationId": "service.synthetic.start", "execId": "synthetic-helper", "execArgs": ["service", "--host", "127.0.0.1", "--port", "${port}"], "terminal": { "success": "spawned", "failure": "failed" } },
-            "ready": { "operationId": "service.synthetic.ready", "probe": { "timeoutMs": 1000, "retryIntervalMs": 100, "maxAttempts": 20 }, "terminal": { "success": "ready", "failure": "not-ready" } },
-            "health": { "operationId": "service.synthetic.health", "probe": { "timeoutMs": 1000, "retryIntervalMs": 100, "maxAttempts": 20 }, "terminal": { "success": "healthy", "failure": "unhealthy" } },
+            "ready": { "operationId": "service.synthetic.ready", "probe": { "kind": "tcp", "timeoutMs": 1000, "retryIntervalMs": 100, "maxAttempts": 20 }, "terminal": { "success": "ready", "failure": "not-ready" } },
+            "health": { "operationId": "service.synthetic.health", "probe": { "kind": "tcp", "timeoutMs": 1000, "retryIntervalMs": 100, "maxAttempts": 20 }, "terminal": { "success": "healthy", "failure": "unhealthy" } },
             "stop": { "operationId": "service.synthetic.stop", "signal": "TERM", "timeoutMs": 5000, "terminal": { "success": "stopped", "failure": "failed" } },
             "clean": { "operationId": "service.synthetic.clean", "terminal": { "success": "cleaned", "failure": "failed" } }
         },
@@ -313,6 +313,47 @@ fn lifecycle_must_have_full_generic_class_set() {
         .unwrap()
         .remove("clean");
     serde_json::from_value::<Model>(value).expect_err("a missing lifecycle class must not parse");
+}
+
+#[test]
+fn probe_kind_is_required_on_the_wire() {
+    // The emitter always writes the discriminator; a probe without it is an
+    // out-of-contract document, rejected at parse.
+    let mut value = valid_model_json();
+    value["services"]["synthetic"]["lifecycle"]["ready"]["probe"] = json!({
+        "timeoutMs": 1000, "retryIntervalMs": 100, "maxAttempts": 20
+    });
+    serde_json::from_value::<Model>(value).expect_err("a kind-less probe must not parse");
+}
+
+#[test]
+fn probe_rejects_unknown_fields() {
+    let mut value = valid_model_json();
+    value["services"]["synthetic"]["lifecycle"]["ready"]["probe"]["httpPath"] = json!("/health");
+    serde_json::from_value::<Model>(value).expect_err("an unknown probe field must not parse");
+}
+
+#[test]
+fn exec_probe_round_trips() {
+    let mut value = valid_model_json();
+    value["services"]["synthetic"]["lifecycle"]["ready"]["probe"] = json!({
+        "kind": "exec", "execId": "synthetic-helper", "execArgs": ["ping", "-p", "${port}"],
+        "timeoutMs": 2000, "retryIntervalMs": 200, "maxAttempts": 30
+    });
+    let model: Model = serde_json::from_value(value).expect("an exec probe should parse");
+    let probe = &model.services["synthetic"].lifecycle.ready.probe;
+    assert_eq!(probe.kind, nixfied_model::ProbeKind::Exec);
+    let emitted = serde_json::to_value(&model).expect("model should serialize");
+    assert_eq!(
+        emitted["services"]["synthetic"]["lifecycle"]["ready"]["probe"]["execId"],
+        json!("synthetic-helper")
+    );
+    // A tcp probe round-trips without exec-field noise (serde skip rules the
+    // Nix emitter mirrors).
+    let health = &emitted["services"]["synthetic"]["lifecycle"]["health"]["probe"];
+    assert_eq!(health["kind"], json!("tcp"));
+    assert!(health.get("execId").is_none());
+    assert!(health.get("execArgs").is_none());
 }
 
 #[test]

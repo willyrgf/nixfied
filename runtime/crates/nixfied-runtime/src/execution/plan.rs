@@ -265,11 +265,11 @@ mod tests {
             },
             ready: ReadyOp {
                 meta: op_meta("ready"),
-                probe: tcp_probe(),
+                probe: Probe::Tcp(tcp_probe()),
             },
             health: HealthOp {
                 meta: op_meta("health"),
-                probe: tcp_probe(),
+                probe: Probe::Tcp(tcp_probe()),
             },
             stop: StopOp {
                 meta: op_meta("stop"),

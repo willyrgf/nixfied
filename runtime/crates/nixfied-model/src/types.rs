@@ -253,15 +253,33 @@ impl<'de> Deserialize<'de> for LoopbackHost {
     }
 }
 
-/// The timing of a tcp-connect probe, inlined onto the ready/health ops. The
-/// probe targets the service's single endpoint by construction, so there is no
-/// probe id or target.
+/// How a ready/health op decides the service answers, inlined onto the op. A
+/// `tcp` probe connects to the service's single endpoint by construction (no
+/// probe id or target); an `exec` probe runs a bound short-lived command (e.g.
+/// `pg_isready`) whose exit 0 is success. The wire shape is one closed struct
+/// with a `kind` discriminator — `deny_unknown_fields` does not compose with
+/// tagged enums — and kind/field coherence is proven at lowering, where the
+/// executor side becomes a real tagged enum.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ProbeTiming {
+pub struct ProbeSpec {
+    pub kind: ProbeKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exec_id: Option<ExecId>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exec_args: Vec<String>,
+    /// Per-attempt budget: the tcp connect timeout, or the exec attempt's
+    /// kill-after deadline (the exec spec's own timeoutMs does not apply).
     pub timeout_ms: NonZeroU64,
     pub retry_interval_ms: NonZeroU64,
     pub max_attempts: NonZeroU32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProbeKind {
+    Tcp,
+    Exec,
 }
 
 /// The full lifecycle as a per-class record: each class binds exactly the
@@ -299,21 +317,21 @@ pub struct StartSpec {
     pub terminal: TerminalSemantics,
 }
 
-/// ready: wait on a tcp probe of the service endpoint.
+/// ready: wait on a probe (tcp connect or bound exec) of the service.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReadySpec {
     pub operation_id: OperationId,
-    pub probe: ProbeTiming,
+    pub probe: ProbeSpec,
     pub terminal: TerminalSemantics,
 }
 
-/// health: wait on a tcp probe of the service endpoint.
+/// health: wait on a probe (tcp connect or bound exec) of the service.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HealthSpec {
     pub operation_id: OperationId,
-    pub probe: ProbeTiming,
+    pub probe: ProbeSpec,
     pub terminal: TerminalSemantics,
 }
 

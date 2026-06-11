@@ -125,12 +125,12 @@ pub fn synthetic_model(
                     },
                     "ready": {
                         "operationId": "service.synthetic.ready",
-                        "probe": { "timeoutMs": 250, "retryIntervalMs": 25, "maxAttempts": 40 },
+                        "probe": { "kind": "tcp", "timeoutMs": 250, "retryIntervalMs": 25, "maxAttempts": 40 },
                         "terminal": { "success": "ready", "failure": "not-ready" }
                     },
                     "health": {
                         "operationId": "service.synthetic.health",
-                        "probe": { "timeoutMs": 250, "retryIntervalMs": 25, "maxAttempts": 40 },
+                        "probe": { "kind": "tcp", "timeoutMs": 250, "retryIntervalMs": 25, "maxAttempts": 40 },
                         "terminal": { "success": "healthy", "failure": "unhealthy" }
                     },
                     "stop": {

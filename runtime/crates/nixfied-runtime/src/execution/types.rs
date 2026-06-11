@@ -109,13 +109,35 @@ pub struct StartOp {
 #[derive(Debug, Clone)]
 pub struct ReadyOp {
     pub meta: OpMeta,
-    pub probe: TcpProbe,
+    pub probe: Probe,
 }
 
 #[derive(Debug, Clone)]
 pub struct HealthOp {
     pub meta: OpMeta,
-    pub probe: TcpProbe,
+    pub probe: Probe,
+}
+
+/// The closed set of probe mechanisms the executor honors. The wire shape is a
+/// kind-discriminated struct; the lowering proves coherence and produces this
+/// enum, so an exec-less exec probe (or a tcp probe carrying an exec) is
+/// unrepresentable past admission.
+#[derive(Debug, Clone)]
+pub enum Probe {
+    Tcp(TcpProbe),
+    Exec(ExecProbe),
+}
+
+/// A short-lived bound command probe (e.g. `pg_isready`): success is exit 0.
+/// `timeout` is the per-attempt kill-after deadline — the exec spec's own
+/// timeout does not apply to probe attempts.
+#[derive(Debug, Clone)]
+pub struct ExecProbe {
+    pub label: String,
+    pub exec: ResolvedExec,
+    pub timeout: Duration,
+    pub retry_interval: Duration,
+    pub max_attempts: u32,
 }
 
 #[derive(Debug, Clone)]

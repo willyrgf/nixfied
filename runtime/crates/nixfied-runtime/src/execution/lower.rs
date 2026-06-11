@@ -9,8 +9,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use nixfied_model::{
-    Environment, ExecSpec, Lifecycle, Model, OperationId, ProbeTiming, ServiceId, ServiceSpec,
-    StopSpec, TaskId, TaskSpec, TerminalSemantics, WorkflowSpec,
+    Environment, ExecSpec, Lifecycle, Model, OperationId, ProbeKind, ProbeSpec, ServiceId,
+    ServiceSpec, StopSpec, TaskId, TaskSpec, TerminalSemantics, WorkflowSpec,
 };
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
@@ -263,22 +263,29 @@ fn lower_service(
     };
     let ready = ReadyOp {
         meta: op_meta(&ready.operation_id, &ready.terminal),
-        probe: lower_probe("ready", &ready.probe),
+        probe: lower_probe(name, "ready", &ready.probe, execs)?,
     };
     let health = HealthOp {
         meta: op_meta(&health.operation_id, &health.terminal),
-        probe: lower_probe("health", &health.probe),
+        probe: lower_probe(name, "health", &health.probe, execs)?,
     };
     let stop = lower_stop(stop);
     let clean = CleanOp {
         meta: op_meta(&clean.operation_id, &clean.terminal),
     };
 
-    // Named endpoint placeholders in lifecycle exec args/env may only reference
-    // declared connectsTo dependencies; reject the model here rather than fail
-    // (or silently leak the literal placeholder) at execution.
+    // Named endpoint placeholders in lifecycle exec args/env (including exec
+    // probe args) may only reference declared connectsTo dependencies; reject
+    // the model here rather than fail (or silently leak the literal
+    // placeholder) at execution.
     let allowed: BTreeSet<&str> = connects_to.iter().map(|id| id.as_str()).collect();
-    for exec in prepare.exec.iter().chain(std::iter::once(&start.exec)) {
+    for exec in prepare
+        .exec
+        .iter()
+        .chain(std::iter::once(&start.exec))
+        .chain(probe_exec(&ready.probe))
+        .chain(probe_exec(&health.probe))
+    {
         require_named_refs_in_scope(|| format!("service {name}"), "connectsTo", exec, &allowed)?;
     }
 
@@ -368,12 +375,57 @@ fn lower_task(
     })
 }
 
-fn lower_probe(label: &str, probe: &ProbeTiming) -> TcpProbe {
-    TcpProbe {
-        label: label.to_string(),
-        timeout: Duration::from_millis(probe.timeout_ms.get()),
-        retry_interval: Duration::from_millis(probe.retry_interval_ms.get()),
-        max_attempts: probe.max_attempts.get(),
+/// Lower the kind-discriminated wire probe into the executor's closed enum,
+/// proving kind/field coherence: a tcp probe must not carry exec fields, an
+/// exec probe must resolve its exec. The probe's own timing governs every
+/// attempt — the referenced exec spec's timeout is overridden.
+fn lower_probe(
+    service: &str,
+    class: &'static str,
+    probe: &ProbeSpec,
+    execs: &BTreeMap<String, ExecSpec>,
+) -> RuntimeResult<Probe> {
+    let timeout = Duration::from_millis(probe.timeout_ms.get());
+    let retry_interval = Duration::from_millis(probe.retry_interval_ms.get());
+    let max_attempts = probe.max_attempts.get();
+    match probe.kind {
+        ProbeKind::Tcp => {
+            if probe.exec_id.is_some() || !probe.exec_args.is_empty() {
+                return Err(Rejection::ProbeExecOnTcp {
+                    service: service.to_string(),
+                    class,
+                }
+                .into());
+            }
+            Ok(Probe::Tcp(TcpProbe {
+                label: class.to_string(),
+                timeout,
+                retry_interval,
+                max_attempts,
+            }))
+        }
+        ProbeKind::Exec => {
+            let exec_id = probe.exec_id.as_ref().ok_or(Rejection::ProbeExecMissing {
+                service: service.to_string(),
+                class,
+            })?;
+            let mut exec = resolve_exec_ref(execs, exec_id.as_str(), &probe.exec_args)?;
+            exec.timeout = timeout;
+            Ok(Probe::Exec(ExecProbe {
+                label: class.to_string(),
+                exec,
+                timeout,
+                retry_interval,
+                max_attempts,
+            }))
+        }
+    }
+}
+
+fn probe_exec(probe: &Probe) -> Option<&ResolvedExec> {
+    match probe {
+        Probe::Exec(probe) => Some(&probe.exec),
+        Probe::Tcp(_) => None,
     }
 }
 
@@ -447,6 +499,18 @@ pub enum Rejection {
         service: String,
         target: String,
     },
+    ProbeExecOnTcp {
+        service: String,
+        class: &'static str,
+    },
+    ProbeExecMissing {
+        service: String,
+        class: &'static str,
+    },
+    ProbeOperationUnbound {
+        operation_id: String,
+        closure_id: String,
+    },
 }
 
 impl Rejection {
@@ -488,6 +552,18 @@ impl Rejection {
                 service,
                 target,
             } => format!("{scope} starts {service} but not its connectsTo dependency {target}"),
+            Rejection::ProbeExecOnTcp { service, class } => {
+                format!("service {service} {class} probe is tcp but carries an exec reference")
+            }
+            Rejection::ProbeExecMissing { service, class } => {
+                format!("service {service} {class} probe is exec but declares no execId")
+            }
+            Rejection::ProbeOperationUnbound {
+                operation_id,
+                closure_id,
+            } => format!(
+                "probe operation {operation_id} is not bound by its exec's closure {closure_id}"
+            ),
         }
     }
 }
@@ -658,6 +734,41 @@ fn prove_references(model: &Model) -> Result<(), Rejection> {
         }
     }
 
+    // An exec probe runs through a closure like any lifecycle exec: the closure
+    // its exec references must explicitly bind the ready/health operation it
+    // probes for. Dangling exec/closure references are rejected by the
+    // per-reference resolvers, so only the binding coverage is proven here.
+    for service in model.services.values() {
+        let lifecycle = &service.lifecycle;
+        for (probe, operation_id) in [
+            (&lifecycle.ready.probe, &lifecycle.ready.operation_id),
+            (&lifecycle.health.probe, &lifecycle.health.operation_id),
+        ] {
+            if probe.kind != nixfied_model::ProbeKind::Exec {
+                continue;
+            }
+            let Some(exec_id) = &probe.exec_id else {
+                continue;
+            };
+            let Some(exec) = model.execs.get(exec_id.as_str()) else {
+                continue;
+            };
+            let Some(closure) = model.closures.get(exec.closure_id.as_str()) else {
+                continue;
+            };
+            if !closure
+                .operation_bindings
+                .iter()
+                .any(|binding| binding.as_str() == operation_id.as_str())
+            {
+                return Err(Rejection::ProbeOperationUnbound {
+                    operation_id: operation_id.to_string(),
+                    closure_id: exec.closure_id.to_string(),
+                });
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -747,8 +858,8 @@ mod tests {
             "lifecycle": {
                 "prepare": { "operationId": "svc.prepare", "execId": null, "execArgs": [], "terminal": { "success": "prepared", "failure": "failed" } },
                 "start": { "operationId": "svc.start", "execId": "svc-exec", "execArgs": ["--port", "${port}"], "terminal": { "success": "spawned", "failure": "failed" } },
-                "ready": { "operationId": "svc.ready", "probe": { "timeoutMs": 1000, "retryIntervalMs": 100, "maxAttempts": 20 }, "terminal": { "success": "ready", "failure": "not-ready" } },
-                "health": { "operationId": "svc.health", "probe": { "timeoutMs": 1000, "retryIntervalMs": 100, "maxAttempts": 20 }, "terminal": { "success": "healthy", "failure": "unhealthy" } },
+                "ready": { "operationId": "svc.ready", "probe": { "kind": "tcp", "timeoutMs": 1000, "retryIntervalMs": 100, "maxAttempts": 20 }, "terminal": { "success": "ready", "failure": "not-ready" } },
+                "health": { "operationId": "svc.health", "probe": { "kind": "tcp", "timeoutMs": 1000, "retryIntervalMs": 100, "maxAttempts": 20 }, "terminal": { "success": "healthy", "failure": "unhealthy" } },
                 "stop": { "operationId": "svc.stop", "signal": "TERM", "timeoutMs": 5000, "terminal": { "success": "stopped", "failure": "failed" } },
                 "clean": { "operationId": "svc.clean", "terminal": { "success": "cleaned", "failure": "failed" } }
             },
@@ -914,6 +1025,96 @@ mod tests {
         let error =
             lower(&model_from(value)).expect_err("a service-less task using ${port} must reject");
         assert_eq!(error.code, ErrorCode::ModelAdmission);
+    }
+
+    /// Rewrite the fixture's ready probe as an exec probe bound to closure `c`.
+    fn with_exec_ready_probe(value: &mut Value) {
+        value["services"]["svc"]["lifecycle"]["ready"]["probe"] = json!({
+            "kind": "exec", "execId": "svc-exec", "execArgs": ["ping"],
+            "timeoutMs": 500, "retryIntervalMs": 100, "maxAttempts": 5
+        });
+        value["closures"]["c"]["operationBindings"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("svc.ready"));
+    }
+
+    #[test]
+    fn exec_probe_lowers_to_exec_variant() {
+        let mut value = model_value();
+        with_exec_ready_probe(&mut value);
+        let em = lower(&model_from(value)).expect("exec probe lowers");
+        let svc = em.services.get("svc").expect("service lowered");
+        let Probe::Exec(probe) = &svc.ready.probe else {
+            panic!("ready probe should lower to the exec variant");
+        };
+        // Probe args are exec base args ++ probe args; the probe's per-attempt
+        // timeout overrides the exec spec's own timeout.
+        assert_eq!(probe.exec.args, vec!["serve", "ping"]);
+        assert_eq!(probe.exec.timeout, Duration::from_millis(500));
+        assert_eq!(probe.max_attempts, 5);
+        assert!(matches!(svc.health.probe, Probe::Tcp(_)));
+    }
+
+    #[test]
+    fn tcp_probe_with_exec_id_is_rejected() {
+        let mut value = model_value();
+        value["services"]["svc"]["lifecycle"]["ready"]["probe"] = json!({
+            "kind": "tcp", "execId": "svc-exec",
+            "timeoutMs": 500, "retryIntervalMs": 100, "maxAttempts": 5
+        });
+        let error = lower(&model_from(value)).expect_err("tcp probe with exec must reject");
+        assert_eq!(error.code, ErrorCode::ModelAdmission);
+        assert!(error.message.contains("tcp but carries an exec"));
+    }
+
+    #[test]
+    fn exec_probe_without_exec_id_is_rejected() {
+        let mut value = model_value();
+        value["services"]["svc"]["lifecycle"]["ready"]["probe"] = json!({
+            "kind": "exec",
+            "timeoutMs": 500, "retryIntervalMs": 100, "maxAttempts": 5
+        });
+        // The op must still be bound for prove_references to pass first.
+        value["closures"]["c"]["operationBindings"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("svc.ready"));
+        let error = lower(&model_from(value)).expect_err("exec probe without exec must reject");
+        assert_eq!(error.code, ErrorCode::ModelAdmission);
+        assert!(error.message.contains("declares no execId"));
+    }
+
+    #[test]
+    fn exec_probe_missing_exec_is_rejected() {
+        let mut value = model_value();
+        with_exec_ready_probe(&mut value);
+        value["services"]["svc"]["lifecycle"]["ready"]["probe"]["execId"] = json!("ghost");
+        let error = lower(&model_from(value)).expect_err("dangling probe exec must reject");
+        assert_eq!(error.code, ErrorCode::ModelAdmission);
+    }
+
+    #[test]
+    fn exec_probe_op_must_be_bound_by_its_closure() {
+        let mut value = model_value();
+        with_exec_ready_probe(&mut value);
+        // Remove the binding again: the probe's closure no longer authorizes
+        // the ready operation.
+        value["closures"]["c"]["operationBindings"] = json!(["svc.start", "task.t.run"]);
+        let error = lower(&model_from(value)).expect_err("unbound probe op must reject");
+        assert_eq!(error.code, ErrorCode::ModelAdmission);
+        assert!(error.message.contains("not bound"));
+    }
+
+    #[test]
+    fn exec_probe_named_ref_outside_connects_to_is_rejected() {
+        let mut value = model_value();
+        with_exec_ready_probe(&mut value);
+        value["services"]["svc"]["lifecycle"]["ready"]["probe"]["execArgs"] =
+            json!(["--db", "${port:ghost}"]);
+        let error = lower(&model_from(value)).expect_err("out-of-scope named ref must reject");
+        assert_eq!(error.code, ErrorCode::ModelAdmission);
+        assert!(error.message.contains("ghost"));
     }
 
     #[test]

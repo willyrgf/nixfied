@@ -52,12 +52,30 @@ let
       };
     };
   };
-  probeTimingType = types.submodule {
+  probeSpecType = types.submodule {
     options = {
+      kind = mkOption {
+        type = types.enum [
+          "tcp"
+          "exec"
+        ];
+        default = "tcp";
+        description = "Probe mechanism: tcp-connect the service endpoint, or run a bound short-lived exec (exit 0 = success).";
+      };
+      execId = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        description = "The exec an `exec` probe runs (e.g. pg_isready); must be null for `tcp`.";
+      };
+      execArgs = mkOption {
+        type = types.listOf types.str;
+        default = [ ];
+        description = "Probe-specific args appended to the exec args; placeholders resolve like start exec args.";
+      };
       timeoutMs = mkOption {
         type = positiveInt;
         default = 1000;
-        description = "Per-attempt probe timeout.";
+        description = "Per-attempt probe timeout (the exec spec's own timeoutMs does not apply to probe attempts).";
       };
       retryIntervalMs = mkOption {
         type = positiveInt;
@@ -75,9 +93,9 @@ let
     options = {
       inherit operationId terminal;
       probe = mkOption {
-        type = probeTimingType;
+        type = probeSpecType;
         default = { };
-        description = "Tcp-connect probe timing for the service endpoint.";
+        description = "How the op decides the service answers: a tcp-connect of the endpoint, or a bound exec probe.";
       };
     };
   };

@@ -67,7 +67,16 @@ let
   endpointSpec = endpoint: {
     inherit (endpoint) endpointId host;
   };
-  probeOf = op: { inherit (op.probe) timeoutMs retryIntervalMs maxAttempts; };
+  # Mirror the runtime's serde skip rules (exec fields only on exec probes) so
+  # nix-emitted and runtime-rederived views stay byte-comparable.
+  probeOf =
+    op:
+    {
+      inherit (op.probe) kind timeoutMs retryIntervalMs maxAttempts;
+    }
+    // lib.optionalAttrs (op.probe.kind == "exec") {
+      inherit (op.probe) execId execArgs;
+    };
   terminalOf = op: { inherit (op.terminal) success failure; };
   lifecycleSpec = lc: {
     prepare = {

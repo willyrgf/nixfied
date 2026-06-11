@@ -22,7 +22,7 @@ primitive HealthSpec: operationId probe terminal
 primitive StopSpec: operationId signal timeoutMs terminal
 primitive CleanSpec: operationId terminal
 primitive Endpoint: endpointId host
-primitive ProbeTiming: timeoutMs retryIntervalMs maxAttempts
+primitive ProbeSpec: kind execId execArgs timeoutMs retryIntervalMs maxAttempts
 primitive TerminalSemantics: success failure
 primitive TaskSpec: operationId execId args dependsOnServicesReady exitPolicy artifactRefs logRefs summaryRefs
 primitive WorkflowSpec: servicesRequired nodes
