@@ -28,6 +28,22 @@ let
       target == start || (!(builtins.elem target seen) && reaches start target (seen ++ [ target ]))
     ) (services.${current}.connectsTo or [ ]);
   connectsToAcyclic = lib.all (name: !(reaches name name [ ])) (builtins.attrNames services);
+  # Mirror the runtime's `LoopbackHost` wire type so a model that the runtime
+  # cannot even parse fails at evaluation instead of admission. The runtime
+  # accepts any loopback IP literal; this check admits the canonical forms
+  # (127.x.x.x and ::1), which is strictly narrower — fail-closed.
+  isLoopbackHost =
+    host:
+    host == "::1"
+    || (
+      let
+        octets = builtins.match "127\\.([0-9]+)\\.([0-9]+)\\.([0-9]+)" host;
+      in
+      octets != null && lib.all (octet: lib.toInt octet <= 255) octets
+    );
+  endpointHostsLoopback = lib.all (name: isLoopbackHost services.${name}.endpoint.host) (
+    builtins.attrNames services
+  );
   checks = [
     (expect (config.nixfied.target.system == system) "target.system must match the compile system")
     (expect (slotPolicy.min >= 0) "slotPolicy.min must be non-negative")
@@ -51,6 +67,9 @@ let
     (expect (lib.all (
       task: builtins.hasAttr task config.nixfied.tasks
     ) config.nixfied.environments.dev.tasks) "dev environment tasks must be declared")
+    (expect endpointHostsLoopback
+      "service endpoint.host must be a loopback IP literal (127.x.x.x or ::1)"
+    )
     (expect connectsToDeclared "service connectsTo targets must be declared services")
     (expect connectsToAcyclic "service connectsTo graph must be acyclic")
   ];
