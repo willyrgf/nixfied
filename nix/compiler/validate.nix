@@ -41,7 +41,11 @@ let
     (expect (
       builtins.attrNames config.nixfied.environments == [ "dev" ]
     ) "a single 'dev' environment is supported")
-    (expect (config.nixfied.services != { }) "at least one service must be declared")
+    # A model with no services is valid as long as it declares something to
+    # run: the runtime supports service-less task/workflow selections.
+    (expect (
+      config.nixfied.services != { } || config.nixfied.tasks != { }
+    ) "at least one service or task must be declared")
     (expect (lib.all (
       service: builtins.hasAttr service config.nixfied.services
     ) config.nixfied.environments.dev.services) "dev environment services must be declared")
