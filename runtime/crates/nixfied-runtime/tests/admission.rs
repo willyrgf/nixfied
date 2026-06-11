@@ -118,9 +118,34 @@ fn source_admission_records_invocation_root() {
         .canonicalize()
         .expect("current dir should canonicalize");
 
-    assert_eq!(admission.source.codebase_id, "main");
-    assert_eq!(admission.source.logical_root, ".");
-    assert_eq!(admission.source.observed_root, invocation_root);
+    let source = admission
+        .require_source()
+        .expect("run admission resolves a source");
+    assert_eq!(source.codebase_id, "main");
+    assert_eq!(source.logical_root, ".");
+    assert_eq!(source.observed_root, invocation_root);
+}
+
+#[test]
+fn control_admission_does_not_resolve_a_live_source() {
+    // Recovery (ps/down/clean) must admit from the store model alone, so control
+    // admission leaves the live workspace unresolved instead of failing when the
+    // caller is outside the project root or the workspace has gone.
+    let (_tmp, model_path, closure_root) = write_fixture_model(fixture_model(), true);
+    let loaded = load_model(&model_path).expect("fixture should load");
+    let context = AdmissionContext {
+        policy: StoreOriginPolicy::AllowNonStoreForTests,
+        store_root: closure_root.parent().unwrap().to_path_buf(),
+        host_system: host_system(),
+    };
+    let admission =
+        Admission::check_for_control(&loaded, &context).expect("control admission should succeed");
+
+    assert!(admission.source.is_none());
+    assert_eq!(
+        admission.require_source().unwrap_err().code,
+        ErrorCode::SourceMismatch
+    );
 }
 
 #[test]

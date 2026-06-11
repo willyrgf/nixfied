@@ -466,7 +466,7 @@ fn run_m0_placed(
         let run_context = RunContext {
             run_id,
             computed_model_hash: &admission.computed_model_hash,
-            source_root: &admission.source.observed_root,
+            source_root: &admission.require_source()?.observed_root,
             state_root: &placement.state_root,
         };
         eprintln!("  node {} ({task_id})", node.node_id);
@@ -748,7 +748,7 @@ struct RunOptions {
 fn run_control(command: ControlCommand, args: &[String]) -> Result<(), RuntimeError> {
     let options = parse_control_options(command, args)?;
     let (loaded, admission) =
-        load_admitted_model(options.model_path.clone(), options.allow_non_store)?;
+        load_admitted_model_for_control(options.model_path.clone(), options.allow_non_store)?;
     let model_path = admission.model_path.clone();
     let computed_model_hash = admission.computed_model_hash.clone();
     run_control_admitted(command, &loaded.model, &admission, &options)
@@ -963,6 +963,25 @@ fn load_admitted_model(
     model_path: PathBuf,
     allow_non_store: bool,
 ) -> Result<(nixfied_runtime::model_loader::LoadedModel, Admission), RuntimeError> {
+    load_model_admitted(model_path, allow_non_store, true)
+}
+
+/// Load and admit a model for a recovery/control command (`ps`/`down`/`clean`)
+/// without resolving the live workspace, so control can reconcile, stop, and
+/// clean a slot from the store model and registry even when run outside the
+/// project root or after the workspace has moved or been deleted.
+fn load_admitted_model_for_control(
+    model_path: PathBuf,
+    allow_non_store: bool,
+) -> Result<(nixfied_runtime::model_loader::LoadedModel, Admission), RuntimeError> {
+    load_model_admitted(model_path, allow_non_store, false)
+}
+
+fn load_model_admitted(
+    model_path: PathBuf,
+    allow_non_store: bool,
+    resolve_source: bool,
+) -> Result<(nixfied_runtime::model_loader::LoadedModel, Admission), RuntimeError> {
     let policy = if allow_non_store {
         StoreOriginPolicy::AllowNonStoreForTests
     } else {
@@ -972,7 +991,11 @@ fn load_admitted_model(
     let raw_model = read_raw_model(&model_path)?;
     nixfied_runtime::admission::origin::check_raw_store_origin(&raw_model, &context)?;
     let loaded = parse_loaded_model(raw_model)?;
-    let admission = Admission::check(&loaded, &context)?;
+    let admission = if resolve_source {
+        Admission::check(&loaded, &context)?
+    } else {
+        Admission::check_for_control(&loaded, &context)?
+    };
     warn_on_ephemeral_port_overlap(&loaded.model);
     Ok((loaded, admission))
 }

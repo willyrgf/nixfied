@@ -101,7 +101,14 @@ fn starts_foreground_service_in_owned_process_group_and_records_before_ready() {
         .expect("process command should exist");
     assert_eq!(
         command_json["cwd"],
-        json!(fixture.admission.source.observed_root.to_string_lossy())
+        json!(
+            fixture
+                .admission
+                .require_source()
+                .unwrap()
+                .observed_root
+                .to_string_lossy()
+        )
     );
 
     service
@@ -2469,7 +2476,7 @@ fn down_cancels_live_task_process_group_and_unblocks_cleanup() {
     let task_command_json = json!({
         "executable": "/bin/sleep",
         "args": ["30"],
-        "cwd": fixture.admission.source.observed_root.to_string_lossy(),
+        "cwd": fixture.admission.require_source().unwrap().observed_root.to_string_lossy(),
         "stdoutPath": fixture.placement.logs_dir.join("task.smoke.stdout.log").to_string_lossy(),
         "stderrPath": fixture.placement.logs_dir.join("task.smoke.stderr.log").to_string_lossy(),
     })
@@ -2759,7 +2766,7 @@ fn admission(model: &Model, source_root: &Path) -> Admission {
         runtime_abi: model.runtime_abi.clone(),
         toolchain_id: model.toolchain_id.clone(),
         target_system: model.target.system.clone(),
-        source: admitted_source(source_root),
+        source: Some(admitted_source(source_root)),
         generator_json: serde_json::to_string(&model.generator).unwrap(),
         target_json: serde_json::to_string(&model.target).unwrap(),
         execution_model: nixfied_runtime::execution::lower(model).expect("model should lower"),

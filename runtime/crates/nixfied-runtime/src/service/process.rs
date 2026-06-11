@@ -582,6 +582,7 @@ pub fn start_service_for_slot(
     selection: &ServiceSelection<'_>,
 ) -> RuntimeResult<StartedService> {
     let run_id = run_id.into();
+    let source = admission.require_source()?;
     let ServiceSelection {
         service_name,
         selected_port,
@@ -664,7 +665,7 @@ pub fn start_service_for_slot(
         );
         let prepare_result = run_resolved_exec(
             prepare_exec,
-            &admission.source.observed_root,
+            &source.observed_root,
             &placement.logs_dir,
             service.prepare.meta.operation_id.as_str(),
             &substitution,
@@ -681,7 +682,7 @@ pub fn start_service_for_slot(
     let start_record = LifecycleRecord::from_meta(&service.start.meta, "start");
     record_lifecycle_started(registry, &lifecycle_context, &start_record)?;
     let exec = &service.start.exec;
-    let command_cwd = resolve_exec_cwd(&admission.source.observed_root, &exec.cwd)?;
+    let command_cwd = resolve_exec_cwd(&source.observed_root, &exec.cwd)?;
     let args = substitution.args(&exec.args)?;
     let env = substitution.env(&exec.env)?;
     let stdout_path = placement
@@ -801,7 +802,7 @@ pub fn start_service_for_slot(
         platform_start_identity: platform_start,
         selected_endpoint,
         computed_model_hash: admission.computed_model_hash.clone(),
-        source_root: admission.source.observed_root.clone(),
+        source_root: source.observed_root.clone(),
         state_root: placement.state_root.clone(),
         owner_token,
     };

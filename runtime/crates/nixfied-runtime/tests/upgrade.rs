@@ -456,7 +456,7 @@ fn admission(model: &Model, source_root: &Path, hash: &str) -> Admission {
         runtime_abi: model.runtime_abi.clone(),
         toolchain_id: model.toolchain_id.clone(),
         target_system: model.target.system.clone(),
-        source: admitted_source(source_root),
+        source: Some(admitted_source(source_root)),
         generator_json: serde_json::to_string(&model.generator).expect("generator serializes"),
         target_json: serde_json::to_string(&model.target).expect("target serializes"),
         execution_model: nixfied_runtime::execution::lower(model).expect("model should lower"),
