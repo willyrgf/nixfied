@@ -198,6 +198,7 @@ fn lower_service(
     let ServiceSpec {
         lifecycle,
         endpoint,
+        connects_to,
         state_refs: _,
         log_refs: _,
         containment,
@@ -254,6 +255,7 @@ fn lower_service(
         stop,
         clean,
         endpoint,
+        connects_to: connects_to.iter().cloned().collect(),
         containment: containment.clone(),
         identity: identity.clone(),
     })
@@ -644,6 +646,7 @@ mod tests {
                 "clean": { "operationId": "svc.clean", "terminal": { "success": "cleaned", "failure": "failed" } }
             },
             "endpoint": { "endpointId": "svc-tcp", "host": "127.0.0.1" },
+            "connectsTo": [],
             "stateRefs": [], "logRefs": [],
             "containment": "process-group",
             "identity": {

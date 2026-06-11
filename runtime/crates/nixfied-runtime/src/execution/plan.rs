@@ -248,6 +248,7 @@ mod tests {
                 endpoint_id: "e".to_string(),
                 host: LoopbackHost::parse("127.0.0.1").unwrap(),
             },
+            connects_to: Vec::new(),
             containment: ContainmentRequirement::ProcessGroup,
             identity: ServiceIdentity {
                 service_address_hash: "a".to_string(),

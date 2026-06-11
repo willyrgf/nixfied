@@ -347,6 +347,9 @@ pub struct TerminalSemantics {
 pub struct ServiceSpec {
     pub lifecycle: Lifecycle,
     pub endpoint: Endpoint,
+    /// Same-slot services this service connects to; the declaration gates
+    /// `${port:<serviceId>}`/`${host:<serviceId>}` resolution and start order.
+    pub connects_to: UniqueVec<ServiceId>,
     pub state_refs: Vec<String>,
     pub log_refs: Vec<String>,
     pub containment: ContainmentRequirement,

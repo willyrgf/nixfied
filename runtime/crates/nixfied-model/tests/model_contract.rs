@@ -115,6 +115,7 @@ fn synthetic_service() -> Value {
             "clean": { "operationId": "service.synthetic.clean", "terminal": { "success": "cleaned", "failure": "failed" } }
         },
         "endpoint": { "endpointId": "synthetic-tcp", "host": "127.0.0.1" },
+                "connectsTo": [],
         "stateRefs": ["slot"],
         "logRefs": ["service.synthetic"],
         "containment": "process-group",
@@ -320,4 +321,33 @@ fn clean_operation_stays_marker_gated_runtime_cleanup() {
     let mut value = valid_model_json();
     value["services"]["synthetic"]["lifecycle"]["clean"]["execId"] = json!("synthetic-helper");
     serde_json::from_value::<Model>(value).expect_err("a clean exec binding must not parse");
+}
+
+#[test]
+fn connects_to_undeclared_service_is_rejected() {
+    let mut value = valid_model_json();
+    value["services"]["synthetic"]["connectsTo"] = json!(["missing"]);
+    let model: Model = serde_json::from_value(value).expect("model should deserialize");
+    let error = model.validate().expect_err("undeclared target must fail");
+    assert!(error.to_string().contains("connectsTo"));
+}
+
+#[test]
+fn connects_to_cycle_is_rejected() {
+    let mut value = valid_model_json();
+    add_worker_service(&mut value);
+    value["services"]["synthetic"]["connectsTo"] = json!(["worker"]);
+    value["services"]["worker"]["connectsTo"] = json!(["synthetic"]);
+    let model: Model = serde_json::from_value(value).expect("model should deserialize");
+    let error = model.validate().expect_err("cycle must fail");
+    assert!(error.to_string().contains("acyclic"));
+}
+
+#[test]
+fn connects_to_chain_is_accepted() {
+    let mut value = valid_model_json();
+    add_worker_service(&mut value);
+    value["services"]["worker"]["connectsTo"] = json!(["synthetic"]);
+    let model: Model = serde_json::from_value(value).expect("model should deserialize");
+    model.validate().expect("acyclic wiring should validate");
 }

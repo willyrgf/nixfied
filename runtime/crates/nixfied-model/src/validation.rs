@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use crate::constants::{MODEL_VERSION, TOOLCHAIN_ID, runtime_abi};
 use crate::error::ValidationError;
-use crate::ids::OperationId;
+use crate::ids::{OperationId, ServiceId};
 use crate::types::*;
 
 pub trait Validate {
@@ -271,7 +271,54 @@ fn validate_services(model: &Model) -> Result<(), ValidationError> {
         )?;
         validate_service_lifecycle(service)?;
     }
+    validate_connects_to(model)?;
     Ok(())
+}
+
+/// `connectsTo` targets must be declared services and the wiring graph must be
+/// acyclic; the same checks the Nix compiler enforces, repeated fail-closed at
+/// the admission boundary.
+fn validate_connects_to(model: &Model) -> Result<(), ValidationError> {
+    for (name, service) in &model.services {
+        for target in service.connects_to.iter() {
+            if !model.services.contains_key(target.as_str()) {
+                return Err(ValidationError::UnsupportedValue {
+                    field: "services.connectsTo",
+                    expected: "a declared service",
+                    actual: format!("{name} -> {target}"),
+                });
+            }
+        }
+    }
+    for start in model.services.keys() {
+        let mut seen = Vec::new();
+        if connects_to_reaches(model, start, start, &mut seen) {
+            return Err(ValidationError::UnsupportedValue {
+                field: "services.connectsTo",
+                expected: "an acyclic wiring graph",
+                actual: format!("cycle through {start}"),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn connects_to_reaches<'a>(
+    model: &'a Model,
+    start: &str,
+    current: &str,
+    seen: &mut Vec<&'a ServiceId>,
+) -> bool {
+    let Some(service) = model.services.get(current) else {
+        return false;
+    };
+    service.connects_to.iter().any(|target| {
+        target.as_str() == start
+            || (!seen.contains(&target) && {
+                seen.push(target);
+                connects_to_reaches(model, start, target.as_str(), seen)
+            })
+    })
 }
 
 /// The lifecycle's per-class shape and the endpoint/probe wiring are now

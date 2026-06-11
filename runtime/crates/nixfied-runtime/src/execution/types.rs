@@ -77,6 +77,9 @@ pub struct ExecService {
     pub clean: CleanOp,
     /// The single endpoint bound by the readiness probe.
     pub endpoint: ResolvedEndpoint,
+    /// Same-slot services this service connects to; gates named endpoint
+    /// placeholder resolution and orders service startup.
+    pub connects_to: Vec<ServiceId>,
     pub containment: ContainmentRequirement,
     pub identity: ServiceIdentity,
 }

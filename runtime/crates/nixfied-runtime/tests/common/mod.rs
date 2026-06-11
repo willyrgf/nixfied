@@ -145,6 +145,7 @@ pub fn synthetic_model(
                     }
                 },
                 "endpoint": { "endpointId": "synthetic-tcp", "host": "127.0.0.1" },
+                "connectsTo": [],
                 "stateRefs": ["slot"],
                 "logRefs": ["service.synthetic"],
                 "containment": "process-group",
