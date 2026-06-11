@@ -17,7 +17,7 @@ use crate::cancellation::{CancellationToken, canceled_error};
 use crate::control::reconcile_registry;
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::execution::{ExecService, OpMeta, ResolvedExec, StdinPolicy};
-use crate::registry::Registry;
+use crate::registry::{Registry, RunLeaseHeartbeat};
 use crate::service::identity::{service_address_hash, service_instance_id};
 use crate::service::ownership::{ExpectedEndpointOwner, verify_endpoint_ownership};
 use crate::service::readiness::wait_for_tcp_probe;
@@ -649,8 +649,19 @@ pub fn start_service_for_slot(
     };
     let prepare_record = LifecycleRecord::from_meta(&service.prepare.meta, "prepare");
     record_lifecycle_started(registry, &lifecycle_context, &prepare_record)?;
-    if let Some(prepare_exec) = &service.prepare.exec
-        && let Err(error) = run_resolved_exec(
+    if let Some(prepare_exec) = &service.prepare.exec {
+        // The run-level heartbeat only starts once this function returns, and
+        // the prepare process is not recorded in the registry, so a prepare
+        // longer than the lease TTL would let another runtime stale the lease
+        // and run a concurrent prepare against the same state. Keep the
+        // just-created lease alive with a scoped heartbeat for the duration.
+        let prepare_heartbeat = RunLeaseHeartbeat::start(
+            placement.registry_path().to_path_buf(),
+            registry.identity().clone(),
+            run_id.clone(),
+            owner_token.clone(),
+        );
+        let prepare_result = run_resolved_exec(
             prepare_exec,
             &admission.source.observed_root,
             &placement.state_root,
@@ -658,11 +669,13 @@ pub fn start_service_for_slot(
             service.prepare.meta.operation_id.as_str(),
             &selected_endpoint,
             &CancellationToken::new(),
-        )
-    {
-        let _ = record_lifecycle_failure(registry, &lifecycle_context, &prepare_record, &error);
-        let _ = release_service_reservation(registry, &run_id, &service_instance_id);
-        return Err(error);
+        );
+        let heartbeat_result = prepare_heartbeat.stop();
+        if let Err(error) = prepare_result.and(heartbeat_result) {
+            let _ = record_lifecycle_failure(registry, &lifecycle_context, &prepare_record, &error);
+            let _ = release_service_reservation(registry, &run_id, &service_instance_id);
+            return Err(error);
+        }
     }
     record_lifecycle_success(registry, &lifecycle_context, &prepare_record)?;
     let start_record = LifecycleRecord::from_meta(&service.start.meta, "start");
