@@ -195,10 +195,13 @@ in
   nixfied.services.api = mkAppService "api" [ ] [ ];
   # The worker connects to the api in its own slot: the runtime starts the api
   # first and resolves the named endpoint from the slot plan.
-  nixfied.services.worker = mkAppService "worker" [ "api" ] [
-    "--upstream"
-    "\${host:api}:\${port:api}"
-  ];
+  nixfied.services.worker =
+    mkAppService "worker"
+      [ "api" ]
+      [
+        "--upstream"
+        "\${host:api}:\${port:api}"
+      ];
 
   nixfied.tasks.ping-api = {
     operationId = "task.ping-api.run";

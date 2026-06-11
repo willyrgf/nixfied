@@ -73,7 +73,12 @@ let
   probeOf =
     op:
     {
-      inherit (op.probe) kind timeoutMs retryIntervalMs maxAttempts;
+      inherit (op.probe)
+        kind
+        timeoutMs
+        retryIntervalMs
+        maxAttempts
+        ;
     }
     // lib.optionalAttrs (op.probe.kind == "exec") {
       inherit (op.probe) execId execArgs;

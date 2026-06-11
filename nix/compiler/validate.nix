@@ -25,8 +25,7 @@ let
     start: current: seen:
     lib.any (
       target:
-      target == start
-      || (!(builtins.elem target seen) && reaches start target (seen ++ [ target ]))
+      target == start || (!(builtins.elem target seen) && reaches start target (seen ++ [ target ]))
     ) (services.${current}.connectsTo or [ ]);
   connectsToAcyclic = lib.all (name: !(reaches name name [ ])) (builtins.attrNames services);
   checks = [

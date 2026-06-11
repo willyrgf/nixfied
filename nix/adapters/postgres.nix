@@ -34,56 +34,55 @@ let
       pkgs.gnugrep
       postgresql
     ];
-    text =
-      ''
-        state_dir=""
-        while [[ $# -gt 0 ]]; do
-          case "$1" in
-            --state-dir)
-              state_dir="''${2:?missing --state-dir value}"
-              shift 2
-              ;;
-            *)
-              echo "unknown postgres prepare argument: $1" >&2
-              exit 64
-              ;;
-          esac
-        done
-        if [[ -z "$state_dir" || "$state_dir" == "/" ]]; then
-          echo "missing or unsafe --state-dir argument" >&2
-          exit 64
-        fi
+    text = ''
+      state_dir=""
+      while [[ $# -gt 0 ]]; do
+        case "$1" in
+          --state-dir)
+            state_dir="''${2:?missing --state-dir value}"
+            shift 2
+            ;;
+          *)
+            echo "unknown postgres prepare argument: $1" >&2
+            exit 64
+            ;;
+        esac
+      done
+      if [[ -z "$state_dir" || "$state_dir" == "/" ]]; then
+        echo "missing or unsafe --state-dir argument" >&2
+        exit 64
+      fi
 
-        pgdata="$state_dir/pgdata"
-        if [[ -s "$pgdata/PG_VERSION" ]]; then
-      ''
-      + lib.optionalString isDarwin ''
-        if ! grep -Eq '^[[:space:]]*shared_memory_type[[:space:]]*=[[:space:]]*mmap' \
-             "$pgdata/postgresql.conf"; then
-          echo "existing cluster at $pgdata does not pin shared_memory_type=mmap;" >&2
-          echo "re-initialize it (nixfied clean) or set it in postgresql.conf" >&2
-          exit 1
-        fi
-      ''
-      + ''
-          exit 0
-        fi
+      pgdata="$state_dir/pgdata"
+      if [[ -s "$pgdata/PG_VERSION" ]]; then
+    ''
+    + lib.optionalString isDarwin ''
+      if ! grep -Eq '^[[:space:]]*shared_memory_type[[:space:]]*=[[:space:]]*mmap' \
+           "$pgdata/postgresql.conf"; then
+        echo "existing cluster at $pgdata does not pin shared_memory_type=mmap;" >&2
+        echo "re-initialize it (nixfied clean) or set it in postgresql.conf" >&2
+        exit 1
+      fi
+    ''
+    + ''
+        exit 0
+      fi
 
-        rm -rf "$pgdata"
-        mkdir -p "$pgdata"
-        initdb \
-          -D "$pgdata" \
-          -U postgres \
-          -A trust \
-          --no-locale \
-          --encoding=UTF8
-      ''
-      + lib.optionalString isDarwin ''
-        {
-          echo "shared_memory_type = mmap"
-          echo "dynamic_shared_memory_type = mmap"
-        } >> "$pgdata/postgresql.conf"
-      '';
+      rm -rf "$pgdata"
+      mkdir -p "$pgdata"
+      initdb \
+        -D "$pgdata" \
+        -U postgres \
+        -A trust \
+        --no-locale \
+        --encoding=UTF8
+    ''
+    + lib.optionalString isDarwin ''
+      {
+        echo "shared_memory_type = mmap"
+        echo "dynamic_shared_memory_type = mmap"
+      } >> "$pgdata/postgresql.conf"
+    '';
   };
 in
 {
