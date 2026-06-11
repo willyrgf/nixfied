@@ -96,10 +96,6 @@ const SURFACE_NAMES: &[&str] = &[
     "clean",
 ];
 
-/// The lifecycle classes every service declares, in canonical order. The typed
-/// `Lifecycle` makes this set closed, so the view states it rather than probing.
-const LIFECYCLE_CLASSES: &str = "prepare, start, ready, health, stop, clean";
-
 fn render_view(command: &str, options: &ViewOptions) -> Result<String, CliError> {
     let model = read_model(&options.model)?;
     match command {
@@ -194,8 +190,9 @@ fn docs_view(model: &Model) -> String {
     for (name, spec) in &model.services {
         let _ = writeln!(
             output,
-            "- {name}: endpoint {}; operations {LIFECYCLE_CLASSES}",
-            spec.endpoint.endpoint_id
+            "- {name}: endpoint {}; operations {}",
+            spec.endpoint.endpoint_id,
+            lifecycle_classes(&spec.lifecycle)
         );
     }
     let _ = writeln!(output);
@@ -205,6 +202,19 @@ fn docs_view(model: &Model) -> String {
         let _ = writeln!(output, "- {name}");
     }
     output
+}
+
+/// The lifecycle class names, derived from the spec's own wire shape (sorted
+/// keys) — the same projection nix's `attrNames` makes, so the two docs views
+/// agree by construction rather than by parallel hardcoded lists.
+fn lifecycle_classes(lifecycle: &nixfied_model::Lifecycle) -> String {
+    serde_json::to_value(lifecycle)
+        .ok()
+        .and_then(|value| match value {
+            Value::Object(map) => Some(map.keys().cloned().collect::<Vec<_>>().join(", ")),
+            _ => None,
+        })
+        .unwrap_or_default()
 }
 
 fn to_json(model: &Model) -> Result<Value, CliError> {

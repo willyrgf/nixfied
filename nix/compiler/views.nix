@@ -80,16 +80,7 @@ in
         service:
         let
           serviceSpec = model.services.${service};
-          # The closed lifecycle class set, in canonical order — matches the
-          # runtime CLI's docs view, which states the same typed contract.
-          classes = [
-            "prepare"
-            "start"
-            "ready"
-            "health"
-            "stop"
-            "clean"
-          ];
+          classes = builtins.attrNames serviceSpec.lifecycle;
         in
         "- ${service}: endpoint ${serviceSpec.endpoint.endpointId}; operations ${builtins.concatStringsSep ", " classes}"
       ) serviceNames
