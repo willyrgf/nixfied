@@ -112,3 +112,124 @@ impl RuntimeError {
         self
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Exhaustive sentinels: a new `ErrorCode`/`ExitClass` variant fails to compile
+    // here until it is added, forcing the public error-contract snapshot below (and
+    // the matching list in AGENTS.md) to be updated deliberately. The contract is
+    // public API for the current ABI — it must not drift silently.
+    fn _error_code_is_listed(code: ErrorCode) {
+        match code {
+            ErrorCode::ModelNotStoreOutput
+            | ErrorCode::ModelInvalid
+            | ErrorCode::ModelAdmission
+            | ErrorCode::RuntimeAbiMismatch
+            | ErrorCode::SourceMismatch
+            | ErrorCode::PlatformUnsupported
+            | ErrorCode::ClosureMissing
+            | ErrorCode::RegistryCorrupt
+            | ErrorCode::StateUnwritable
+            | ErrorCode::StateUnowned
+            | ErrorCode::CleanupRefused
+            | ErrorCode::PortConflict
+            | ErrorCode::PortUnverifiable
+            | ErrorCode::ProcEscape
+            | ErrorCode::ReadinessTimeout
+            | ErrorCode::Canceled
+            | ErrorCode::LeaseStale
+            | ErrorCode::LeaseConflict
+            | ErrorCode::TaskFailed
+            | ErrorCode::LifecycleFailed
+            | ErrorCode::DependencyUnavailable => {}
+        }
+    }
+
+    fn _exit_class_is_listed(class: ExitClass) {
+        match class {
+            ExitClass::Ok | ExitClass::Error => {}
+        }
+    }
+
+    /// Every public error code, in contract order. The sentinel above guarantees a
+    /// new variant cannot be added without being seen; this list and the snapshot
+    /// pin the exact wire values.
+    const ALL_ERROR_CODES: &[ErrorCode] = &[
+        ErrorCode::ModelNotStoreOutput,
+        ErrorCode::ModelInvalid,
+        ErrorCode::ModelAdmission,
+        ErrorCode::RuntimeAbiMismatch,
+        ErrorCode::SourceMismatch,
+        ErrorCode::PlatformUnsupported,
+        ErrorCode::ClosureMissing,
+        ErrorCode::RegistryCorrupt,
+        ErrorCode::StateUnwritable,
+        ErrorCode::StateUnowned,
+        ErrorCode::CleanupRefused,
+        ErrorCode::PortConflict,
+        ErrorCode::PortUnverifiable,
+        ErrorCode::ProcEscape,
+        ErrorCode::ReadinessTimeout,
+        ErrorCode::Canceled,
+        ErrorCode::LeaseStale,
+        ErrorCode::LeaseConflict,
+        ErrorCode::TaskFailed,
+        ErrorCode::LifecycleFailed,
+        ErrorCode::DependencyUnavailable,
+    ];
+
+    const ALL_EXIT_CLASSES: &[ExitClass] = &[ExitClass::Ok, ExitClass::Error];
+
+    fn wire(value: impl Serialize) -> String {
+        serde_json::to_value(value)
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_string))
+            .expect("contract enum serializes to a string")
+    }
+
+    /// The stable public error contract: the exact wire values of every error code
+    /// and exit class. Changing a value, or adding/removing a code, breaks this
+    /// snapshot — update it deliberately, in the same change that records the
+    /// contract change. This is decoupled from `runtimeAbi` on purpose: the error
+    /// contract is the runtime's output surface, not the model input wire.
+    #[test]
+    fn public_error_contract_snapshot() {
+        // Reference the sentinels so their exhaustive matches compile (a new
+        // variant fails the build here) rather than being dead code.
+        _error_code_is_listed(ErrorCode::Canceled);
+        _exit_class_is_listed(ExitClass::Ok);
+
+        let codes: Vec<String> = ALL_ERROR_CODES.iter().copied().map(wire).collect();
+        assert_eq!(
+            codes,
+            [
+                "MODEL_NOT_STORE_OUTPUT",
+                "MODEL_INVALID",
+                "MODEL_ADMISSION",
+                "RUNTIME_ABI_MISMATCH",
+                "SOURCE_MISMATCH",
+                "PLATFORM_UNSUPPORTED",
+                "CLOSURE_MISSING",
+                "REGISTRY_CORRUPT",
+                "STATE_UNWRITABLE",
+                "STATE_UNOWNED",
+                "CLEANUP_REFUSED",
+                "PORT_CONFLICT",
+                "PORT_UNVERIFIABLE",
+                "PROC_ESCAPE",
+                "READINESS_TIMEOUT",
+                "CANCELED",
+                "LEASE_STALE",
+                "LEASE_CONFLICT",
+                "TASK_FAILED",
+                "LIFECYCLE_FAILED",
+                "DEPENDENCY_UNAVAILABLE",
+            ]
+        );
+
+        let classes: Vec<String> = ALL_EXIT_CLASSES.iter().copied().map(wire).collect();
+        assert_eq!(classes, ["ok", "error"]);
+    }
+}
