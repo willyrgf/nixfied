@@ -17,13 +17,15 @@ pub fn wait_for_tcp_probe(
     port: u16,
     cancellation: &CancellationToken,
 ) -> RuntimeResult<()> {
-    let address = format!("{host}:{port}");
-    let socket_addr = address.parse::<SocketAddr>().map_err(|error| {
+    // Build the address from the parsed IP, not string concatenation: a bare
+    // IPv6 literal such as `::1` concatenated with `:port` is unparseable.
+    let ip = host.parse::<std::net::IpAddr>().map_err(|error| {
         RuntimeError::new(
             ErrorCode::ModelAdmission,
-            format!("invalid readiness address {address}: {error}"),
+            format!("invalid readiness host {host}: {error}"),
         )
     })?;
+    let socket_addr = SocketAddr::new(ip, port);
     let attempts = probe.max_attempts.max(1);
     let mut last_error = None;
     for _ in 0..attempts {

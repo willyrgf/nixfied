@@ -774,6 +774,29 @@ fn readiness_probe_times_out_without_listener() {
 }
 
 #[test]
+fn tcp_probe_supports_ipv6_loopback_hosts() {
+    // `LoopbackHost` admits `::1`; the probe must build a connectable address
+    // from it rather than the unparseable concatenation `::1:<port>`.
+    let listener = TcpListener::bind("[::1]:0").expect("ipv6 loopback listener should bind");
+    let port = listener.local_addr().expect("local addr").port();
+    let fixture = ServiceFixture::new("/bin/sleep", &["1"], port);
+    let nixfied_runtime::execution::Probe::Tcp(probe) = &fixture
+        .admission
+        .execution_model
+        .services
+        .get("synthetic")
+        .expect("fixture has service")
+        .ready
+        .probe
+    else {
+        panic!("fixture ready probe should be tcp");
+    };
+
+    wait_for_tcp_probe(probe, "::1", port, &CancellationToken::new())
+        .expect("probe should connect to the ipv6 loopback listener");
+}
+
+#[test]
 fn readiness_timeout_stops_started_service_and_records_failed() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
     let port = listener.local_addr().expect("local addr").port();
