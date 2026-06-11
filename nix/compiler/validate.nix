@@ -14,6 +14,21 @@ let
   windows = map slotWindow slots;
   windowsInRange = lib.all (window: window.start >= 1 && window.end <= 65535) windows;
   windowsDoNotOverlap = portPolicy.slotStride >= portPolicy.windowSize;
+  services = config.nixfied.services;
+  connectsToDeclared = lib.all (
+    name: lib.all (target: builtins.hasAttr target services) services.${name}.connectsTo
+  ) (builtins.attrNames services);
+  # Cycle check: a service may not reach itself through connectsTo. Walking
+  # with a `seen` set terminates even on cyclic graphs; reaching the start
+  # service again is the cycle proof.
+  reaches =
+    start: current: seen:
+    lib.any (
+      target:
+      target == start
+      || (!(builtins.elem target seen) && reaches start target (seen ++ [ target ]))
+    ) (services.${current}.connectsTo or [ ]);
+  connectsToAcyclic = lib.all (name: !(reaches name name [ ])) (builtins.attrNames services);
   checks = [
     (expect (config.nixfied.target.system == system) "target.system must match the compile system")
     (expect (slotPolicy.min >= 0) "slotPolicy.min must be non-negative")
@@ -33,6 +48,8 @@ let
     (expect (lib.all (
       task: builtins.hasAttr task config.nixfied.tasks
     ) config.nixfied.environments.dev.tasks) "dev environment tasks must be declared")
+    (expect connectsToDeclared "service connectsTo targets must be declared services")
+    (expect connectsToAcyclic "service connectsTo graph must be acyclic")
   ];
 in
 lib.foldl' (acc: check: lib.seq check acc) config checks

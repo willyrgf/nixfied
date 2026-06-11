@@ -159,6 +159,16 @@ let
         type = endpointType;
         description = "The single tcp loopback endpoint the service binds.";
       };
+      connectsTo = mkOption {
+        type = types.listOf types.nonEmptyStr;
+        default = [ ];
+        description = ''
+          Services this service connects to in the same slot. Declaring a
+          dependency makes its endpoint addressable from this service's exec
+          args and env via ''${port:<serviceId>} and ''${host:<serviceId>},
+          and orders service startup so dependencies are ready first.
+        '';
+      };
       stateRefs = mkOption {
         type = types.listOf types.str;
         default = [ "slot" ];

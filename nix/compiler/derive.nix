@@ -119,11 +119,13 @@ let
       runtimeIdentityInputs = {
         inherit lifecycle endpoint;
         containment = service.containment;
+        connectsTo = service.connectsTo;
         execs = lib.filterAttrs (id: _: builtins.elem id lifecycleExecIds) execs;
       };
     in
     {
       inherit lifecycle endpoint;
+      connectsTo = service.connectsTo;
       stateRefs = service.stateRefs;
       logRefs = service.logRefs;
       containment = service.containment;
