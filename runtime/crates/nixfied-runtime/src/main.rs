@@ -430,9 +430,23 @@ fn run_m0_admitted(
         stop_lease(lease)?;
         return Err(nixfied_runtime::cancellation::canceled_error());
     }
-    // Stop services in reverse start order.
+    // Stop services in reverse start order. On a stop error, tear down the
+    // remaining services instead of aborting the loop: leaving them to Drop
+    // would kill the processes without updating registry rows, leases, or
+    // port reservations, blocking later clean/runs on the slot.
     while let Some(service) = started.pop() {
-        service.stop_cancellable(&mut registry, options.timeout_ms, cancellation)?;
+        if let Err(error) =
+            service.stop_cancellable(&mut registry, options.timeout_ms, cancellation)
+        {
+            teardown(
+                &mut started,
+                &mut registry,
+                options.timeout_ms,
+                error.code == nixfied_runtime::ErrorCode::Canceled,
+            );
+            stop_lease(lease)?;
+            return Err(error);
+        }
     }
     // Settle a run that no service stop and no task finalized (a degenerate
     // selection with no services and no tasks). Guarded on `service-starting`, so
