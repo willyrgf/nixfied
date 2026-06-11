@@ -281,6 +281,10 @@ contract-shaped reason (and the matching validation + runtime path + proof):
   borrower leases (only `run-scoped` is implemented);
 - additional source modes (`snapshot`, `flake-input`) and non-`fail` port
   collision policies;
+- `dirtyPolicy = "reject"`: the runtime cannot prove live-workspace cleanliness,
+  so admission refuses it unconditionally; the Nix option exposes only
+  `allow`/`warn` until the cleanliness proof exists (the wire enum and the
+  fail-closed admission check remain);
 - real secret injection (secrets are not part of the contract yet);
 - a portable, non-semantic manifest envelope; a dynamic runtime adapter protocol.
 

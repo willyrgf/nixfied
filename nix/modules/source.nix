@@ -17,10 +17,12 @@ in
     };
 
     dirtyPolicy = mkOption {
+      # "reject" is deliberately absent: the runtime cannot prove live-workspace
+      # cleanliness yet, so admission would refuse every model that carries it.
+      # See the deferred list in AGENTS.md.
       type = types.enum [
         "allow"
         "warn"
-        "reject"
       ];
       default = "warn";
       description = "dirty policy for the single live workspace codebase.";
