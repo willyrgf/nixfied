@@ -114,7 +114,7 @@ impl StartedService {
                 return Err(error);
             }
             let _ = record_lifecycle_failure(registry, &context, &record, &error);
-            self.cleanup_after_readiness_failure(registry, &error);
+            self.cleanup_after_probe_failure(registry, &error);
             return Err(error);
         }
         if let Some(error) = self.escape_error(registry) {
@@ -145,7 +145,7 @@ impl StartedService {
                     return Err(error);
                 }
                 let _ = record_lifecycle_failure(registry, &context, &record, &error);
-                self.cleanup_after_readiness_failure(registry, &error);
+                self.cleanup_after_probe_failure(registry, &error);
                 return Err(error);
             }
         };
@@ -198,10 +198,12 @@ impl StartedService {
                 return Err(error);
             }
             let _ = record_lifecycle_failure(registry, &context, &record, &error);
+            self.cleanup_after_probe_failure(registry, &error);
             return Err(error);
         }
         if let Err(error) = self.verify_selected_endpoint_ownership_json(registry) {
             let _ = record_lifecycle_failure(registry, &context, &record, &error);
+            self.cleanup_after_probe_failure(registry, &error);
             return Err(error);
         }
         record_lifecycle_success(registry, &context, &record)
@@ -437,7 +439,7 @@ impl StartedService {
         self.monitor.stop();
     }
 
-    fn cleanup_after_readiness_failure(&mut self, registry: &mut Registry, error: &RuntimeError) {
+    fn cleanup_after_probe_failure(&mut self, registry: &mut Registry, error: &RuntimeError) {
         let _ = self.terminate_owned(1000);
         let _ = wait_for_child_exit(&mut self.child, 1000);
         self.monitor.stop();

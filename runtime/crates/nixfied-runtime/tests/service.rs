@@ -954,6 +954,71 @@ fn exec_ready_probe_failure_times_out_and_records_failed() {
 }
 
 #[test]
+fn exec_health_probe_failure_records_failed() {
+    let Some(python) = python3_path() else {
+        return;
+    };
+    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
+    let port = listener.local_addr().expect("local addr").port();
+    drop(listener);
+    // The service is ready (tcp) but never healthy: the failed run must leave
+    // service.failed evidence, not a clean stopped/completed registry state.
+    let mut value = fixture_model(python, &["-c", python_listener_script(), "${port}"], port);
+    value["closures"]["synthetic-helper"]["operationBindings"]
+        .as_array_mut()
+        .expect("bindings should be an array")
+        .push(json!("service.synthetic.health"));
+    value["execs"]["probe-exec"] = json!({
+        "closureId": "synthetic-helper", "executable": "/bin/sh",
+        "args": [], "env": {}, "codebaseId": "main", "cwd": ".",
+        "stdin": "null", "timeoutMs": 30000
+    });
+    value["services"]["synthetic"]["lifecycle"]["health"]["probe"] = json!({
+        "kind": "exec", "execId": "probe-exec", "execArgs": ["-c", "exit 7"],
+        "timeoutMs": 1000, "retryIntervalMs": 50, "maxAttempts": 2
+    });
+    let mut fixture = ServiceFixture::from_value(value);
+    let mut service = start_synthetic_service(
+        &fixture.model,
+        &fixture.admission,
+        &fixture.placement,
+        &mut fixture.registry,
+        "run-exec-health-fail",
+        port,
+    )
+    .expect("service should start");
+    service
+        .wait_for_probe_ready(&mut fixture.registry)
+        .expect("service should become ready");
+
+    let error = service
+        .check_health(&mut fixture.registry)
+        .expect_err("a failing health probe should fail the service");
+
+    assert_ne!(error.code, ErrorCode::Canceled);
+    let service_status: String = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT status FROM services WHERE service_instance_id = ?1",
+            [&service.service_instance_id],
+            |row| row.get(0),
+        )
+        .expect("service status should query");
+    assert_eq!(service_status, "failed");
+    let run_status: String = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT status FROM runs WHERE run_id = 'run-exec-health-fail'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("run status should query");
+    assert_eq!(run_status, "service-failed");
+}
+
+#[test]
 fn cancellation_interrupts_readiness_and_terminates_service_group() {
     let marker = temp_marker("nixfied-cancel-survivor");
     let marker_arg = marker.to_string_lossy().to_string();
