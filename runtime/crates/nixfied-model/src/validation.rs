@@ -13,6 +13,7 @@ impl Validate for Model {
     fn validate(&self) -> Result<(), ValidationError> {
         validate_exact_identities(self)?;
         validate_required_strings(self)?;
+        validate_unit_ids(self)?;
         validate_codebases(self)?;
         validate_environments(self)?;
         validate_slot_policy(&self.slot_policy)?;
@@ -65,6 +66,48 @@ fn validate_required_strings(model: &Model) -> Result<(), ValidationError> {
     require_non_empty("state.markerIdentity", &model.state.marker_identity)?;
     require_non_empty("state.stateEpoch", &model.state.state_epoch)?;
     Ok(())
+}
+
+/// Exec/closure/service/task/workflow/node ids name filesystem artifacts (log
+/// files, registry keys), so they must be path-safe: no separators, no
+/// traversal, no leading dot. Same shape the installer enforces on project ids.
+fn validate_unit_ids(model: &Model) -> Result<(), ValidationError> {
+    for id in model.execs.keys() {
+        require_path_safe_id("execs", id)?;
+    }
+    for id in model.closures.keys() {
+        require_path_safe_id("closures", id)?;
+    }
+    for id in model.services.keys() {
+        require_path_safe_id("services", id)?;
+    }
+    for id in model.tasks.keys() {
+        require_path_safe_id("tasks", id)?;
+    }
+    for (id, workflow) in &model.workflows {
+        require_path_safe_id("workflows", id)?;
+        for node_id in workflow.nodes.keys() {
+            require_path_safe_id("workflows.nodes", node_id)?;
+        }
+    }
+    Ok(())
+}
+
+fn require_path_safe_id(field: &'static str, id: &str) -> Result<(), ValidationError> {
+    let mut chars = id.chars();
+    let valid = chars
+        .next()
+        .is_some_and(|first| first.is_ascii_alphanumeric())
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
+    if valid {
+        Ok(())
+    } else {
+        Err(ValidationError::UnsupportedValue {
+            field,
+            expected: "an id matching [A-Za-z0-9][A-Za-z0-9._-]*",
+            actual: id.to_string(),
+        })
+    }
 }
 
 fn require_non_empty(field: &'static str, value: &str) -> Result<(), ValidationError> {

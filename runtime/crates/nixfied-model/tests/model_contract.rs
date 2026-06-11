@@ -203,6 +203,20 @@ fn accepts_arbitrary_service_and_exec_names() {
 }
 
 #[test]
+fn rejects_path_hostile_unit_ids() {
+    // Ids key filesystem artifacts (log files, registry keys); separators and
+    // traversal segments must be refused before any path is built from them.
+    for hostile in ["../escape", "a/b", "/abs", ".hidden"] {
+        let mut value = valid_model_json();
+        value["tasks"][hostile] = value["tasks"]["smoke"].clone();
+        let model: Model = serde_json::from_value(value).expect("model should deserialize");
+        model
+            .validate()
+            .expect_err("path-hostile ids must be rejected");
+    }
+}
+
+#[test]
 fn accepts_task_only_models() {
     // The compiler admits a model with no services as long as bounded tasks
     // exist; the structural validator must honor the same contract.
