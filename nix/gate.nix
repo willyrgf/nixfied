@@ -139,9 +139,15 @@ pkgs.writeShellApplication {
       mkdir -p "$st"
       if ( NIXFIED_STATE_DIR="$st" "$rt" run \
             --model "${models.minimal}/model.json" --workflow does-not-exist ) \
-            >/dev/null 2>&1; then
+            >/dev/null 2>"$artifacts/negative-error.json"; then
         fail "negative: the runtime accepted an undeclared workflow"
       fi
+
+      echo "  negative (run failure must carry run identity and state paths)" >&2
+      # The error JSON is the final stderr line; progress/warning lines precede it.
+      tail -n 1 "$artifacts/negative-error.json" \
+        | jq -e '.details.runId and .details.stateRoot and .details.logsDir' >/dev/null \
+        || fail "negative: failure JSON is missing runId/stateRoot/logsDir details"
 
       echo "  negative (duplicate workflow node id must not compile)" >&2
       if nix eval --expr \

@@ -187,11 +187,50 @@ fn run_m0_admitted(
     let selected_slot = select_slot(model, options.selection.slot)?;
     let placement =
         derive_host_placement_for_slot(model, &selected_slot, &run_id, &options.state_base)?;
+    // Every failure past this point carries the run's identity and state paths:
+    // the operator must be able to find the evidence without re-deriving the
+    // placement by hand.
+    run_m0_placed(
+        model,
+        admission,
+        options,
+        &run_id,
+        &selected_slot,
+        &placement,
+        cancellation,
+    )
+    .map_err(|error| enrich_run_error(error, &run_id, &placement))
+}
+
+/// Attach the run identity and state paths to a run error, preserving any
+/// details the failure site already recorded.
+fn enrich_run_error(
+    error: RuntimeError,
+    run_id: &str,
+    placement: &nixfied_runtime::state::HostPlacement,
+) -> RuntimeError {
+    error
+        .with_detail("runId", run_id)
+        .with_detail("stateRoot", &placement.state_root)
+        .with_detail("runDir", &placement.run_dir)
+        .with_detail("logsDir", &placement.logs_dir)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_m0_placed(
+    model: &nixfied_model::Model,
+    admission: &Admission,
+    options: &RunOptions,
+    run_id: &str,
+    selected_slot: &nixfied_runtime::slot::SelectedSlot<'_>,
+    placement: &nixfied_runtime::state::HostPlacement,
+    cancellation: &CancellationToken,
+) -> Result<RunOutput, RuntimeError> {
     // The registry opens before the marker decision: when the slot was last
     // used by a different model build, the upgrade path needs registry evidence
     // to tear down what that build left running.
-    materialize_registry_root(&placement)?;
-    let identity = StateIdentity::from_selected_slot(model, admission, &selected_slot);
+    materialize_registry_root(placement)?;
+    let identity = StateIdentity::from_selected_slot(model, admission, selected_slot);
     let mut registry = Registry::open_or_create(
         placement.registry_path(),
         &RegistryIdentity::for_slot(
@@ -203,7 +242,7 @@ fn run_m0_admitted(
         ),
     )?;
     let _ = nixfied_runtime::control::reconcile_registry(&mut registry)?;
-    let upgrade = prepare_slot_state(&placement, &identity, &mut registry, options.timeout_ms)?;
+    let upgrade = prepare_slot_state(placement, &identity, &mut registry, options.timeout_ms)?;
     if upgrade.upgraded {
         eprintln!(
             "  upgraded slot state from model {} (state {})",
@@ -231,9 +270,9 @@ fn run_m0_admitted(
     // run-row insert a harmless no-op.
     nixfied_runtime::service::registry::record_run_created(
         &mut registry,
-        &run_id,
+        run_id,
         admission,
-        &placement,
+        placement,
     )?;
 
     // The slot's full endpoint map, known deterministically before anything
@@ -268,10 +307,10 @@ fn run_m0_admitted(
 
         let started_service = match start_service_for_slot(
             admission,
-            &placement,
+            placement,
             &mut registry,
-            run_id.clone(),
-            &selected_slot,
+            run_id,
+            selected_slot,
             &nixfied_runtime::service::process::ServiceSelection {
                 service_name,
                 selected_port,
@@ -280,6 +319,14 @@ fn run_m0_admitted(
         ) {
             Ok(service) => service,
             Err(error) => {
+                let summary = write_failure_workflow_summary(
+                    placement,
+                    plan.workflow_id.as_deref(),
+                    run_id,
+                    &[],
+                    &started,
+                    &[],
+                );
                 teardown(
                     &mut started,
                     &mut registry,
@@ -287,7 +334,10 @@ fn run_m0_admitted(
                     cancellation.is_canceled(),
                 );
                 stop_lease(lease)?;
-                return Err(error);
+                return Err(with_failure_summary(
+                    error.with_detail("failedService", service_name),
+                    summary,
+                ));
             }
         };
         if lease.is_none() {
@@ -302,6 +352,14 @@ fn run_m0_admitted(
 
         let service = started.last_mut().expect("just pushed a service");
         if let Err(error) = service.wait_for_probe_ready_cancellable(&mut registry, cancellation) {
+            let summary = write_failure_workflow_summary(
+                placement,
+                plan.workflow_id.as_deref(),
+                run_id,
+                &[],
+                &started,
+                &[],
+            );
             teardown(
                 &mut started,
                 &mut registry,
@@ -309,10 +367,21 @@ fn run_m0_admitted(
                 error.code == nixfied_runtime::ErrorCode::Canceled,
             );
             stop_lease(lease)?;
-            return Err(error);
+            return Err(with_failure_summary(
+                error.with_detail("failedService", service_name),
+                summary,
+            ));
         }
         let service = started.last_mut().expect("just pushed a service");
         if let Err(error) = service.check_health_cancellable(&mut registry, cancellation) {
+            let summary = write_failure_workflow_summary(
+                placement,
+                plan.workflow_id.as_deref(),
+                run_id,
+                &[],
+                &started,
+                &[],
+            );
             teardown(
                 &mut started,
                 &mut registry,
@@ -320,7 +389,10 @@ fn run_m0_admitted(
                 error.code == nixfied_runtime::ErrorCode::Canceled,
             );
             stop_lease(lease)?;
-            return Err(error);
+            return Err(with_failure_summary(
+                error.with_detail("failedService", service_name),
+                summary,
+            ));
         }
         let service = started.last().expect("just started a service");
         eprintln!(
@@ -375,22 +447,31 @@ fn run_m0_admitted(
             let error = RuntimeError::new(
                 nixfied_runtime::ErrorCode::DependencyUnavailable,
                 format!("task {task_id} depends on service {name} which was not started"),
+            )
+            .with_detail("failedNodeId", node.node_id.as_str());
+            let summary = write_failure_workflow_summary(
+                placement,
+                plan.workflow_id.as_deref(),
+                run_id,
+                &node_results,
+                &started,
+                &task_runs,
             );
             teardown(&mut started, &mut registry, options.timeout_ms, false);
             stop_lease(lease)?;
-            return Err(error);
+            return Err(with_failure_summary(error, summary));
         }
         let dependencies: Vec<&StartedService> =
             dep_indices.iter().map(|&index| &started[index]).collect();
         let run_context = RunContext {
-            run_id: &run_id,
+            run_id,
             computed_model_hash: &admission.computed_model_hash,
             source_root: &admission.source.observed_root,
             state_root: &placement.state_root,
         };
         eprintln!("  node {} ({task_id})", node.node_id);
         let task_result = run_dependent_task_cancellable(
-            &placement,
+            placement,
             &mut registry,
             run_context,
             &dependencies,
@@ -414,6 +495,39 @@ fn run_m0_admitted(
             }
             Err(error) => {
                 eprintln!("  node {} failed", node.node_id);
+                // The failed task's evidence rides on the error (see
+                // run_dependent_task_cancellable); fold it into the node
+                // results so the failure summary records the failed node
+                // alongside the completed ones.
+                let mut error = error.with_detail("failedNodeId", node.node_id.as_str());
+                let failed_run = error
+                    .details
+                    .get("taskRun")
+                    .and_then(|value| serde_json::from_value::<TaskRun>(value.clone()).ok());
+                if let Some(task_run) = failed_run {
+                    error = error
+                        .with_detail("stdoutPath", &task_run.stdout_path)
+                        .with_detail("stderrPath", &task_run.stderr_path)
+                        .with_detail("summaryPath", &task_run.summary_path);
+                    node_results.push(NodeResult {
+                        node_id: node.node_id.as_str().to_string(),
+                        task_id: task_id.as_str().to_string(),
+                        success: task_run.success,
+                        exit_code: task_run.exit_code,
+                        stdout_path: task_run.stdout_path.clone(),
+                        stderr_path: task_run.stderr_path.clone(),
+                        summary_path: task_run.summary_path.clone(),
+                    });
+                    task_runs.push(task_run);
+                }
+                let summary = write_failure_workflow_summary(
+                    placement,
+                    plan.workflow_id.as_deref(),
+                    run_id,
+                    &node_results,
+                    &started,
+                    &task_runs,
+                );
                 teardown(
                     &mut started,
                     &mut registry,
@@ -421,28 +535,20 @@ fn run_m0_admitted(
                     error.code == nixfied_runtime::ErrorCode::Canceled,
                 );
                 stop_lease(lease)?;
-                return Err(error);
+                return Err(with_failure_summary(error, summary));
             }
         }
     }
 
     // Built before the summary so the workflow record captures the live services
     // (endpoints, instance ids) alongside the node and task results.
-    let services_output = started
-        .iter()
-        .map(|service| ServiceRunOutput {
-            service_id: service.service_name().to_string(),
-            service_instance_id: service.service_instance_id.clone(),
-            process_key: service.process_key.clone(),
-            selected_endpoint: service.selected_endpoint.clone(),
-        })
-        .collect::<Vec<_>>();
+    let services_output = services_output(&started);
 
     let workflow_summary_path = match &plan.workflow_id {
         Some(workflow_id) => Some(write_workflow_summary(
-            &placement,
+            placement,
             workflow_id,
-            &run_id,
+            run_id,
             &node_results,
             &services_output,
             &task_runs,
@@ -451,7 +557,7 @@ fn run_m0_admitted(
     };
     let primary_task = task_runs.last().cloned();
     let output = RunOutput {
-        run_id: run_id.clone(),
+        run_id: run_id.to_string(),
         model_path: admission.model_path.clone(),
         computed_model_hash: admission.computed_model_hash.clone(),
         services: services_output,
@@ -466,7 +572,10 @@ fn run_m0_admitted(
     if cancellation.is_canceled() {
         teardown(&mut started, &mut registry, options.timeout_ms, true);
         stop_lease(lease)?;
-        return Err(nixfied_runtime::cancellation::canceled_error());
+        return Err(with_failure_summary(
+            nixfied_runtime::cancellation::canceled_error(),
+            output.workflow_summary_path.clone(),
+        ));
     }
     // Stop services in reverse start order. On a stop error, tear down the
     // remaining services instead of aborting the loop: leaving them to Drop
@@ -483,15 +592,55 @@ fn run_m0_admitted(
                 error.code == nixfied_runtime::ErrorCode::Canceled,
             );
             stop_lease(lease)?;
-            return Err(error);
+            return Err(with_failure_summary(
+                error,
+                output.workflow_summary_path.clone(),
+            ));
         }
     }
     // Settle a run that no service stop and no task finalized (a degenerate
     // selection with no services and no tasks). Guarded on `service-starting`, so
     // a service- or task-derived terminal status is left untouched.
-    nixfied_runtime::service::registry::mark_run_completed(&mut registry, &run_id)?;
+    nixfied_runtime::service::registry::mark_run_completed(&mut registry, run_id)?;
     stop_lease(lease)?;
     Ok(output)
+}
+
+fn services_output(started: &[StartedService]) -> Vec<ServiceRunOutput> {
+    started
+        .iter()
+        .map(|service| ServiceRunOutput {
+            service_id: service.service_name().to_string(),
+            service_instance_id: service.service_instance_id.clone(),
+            process_key: service.process_key.clone(),
+            selected_endpoint: service.selected_endpoint.clone(),
+        })
+        .collect()
+}
+
+/// Write the workflow summary for a failed run — the nodes completed so far
+/// plus the failed node — so a failure leaves the same aggregate evidence a
+/// success does. Returns the path, or `None` when the run was not a workflow
+/// selection or the summary itself could not be written (the original failure
+/// must surface either way).
+fn write_failure_workflow_summary(
+    placement: &nixfied_runtime::state::HostPlacement,
+    workflow_id: Option<&str>,
+    run_id: &str,
+    nodes: &[NodeResult],
+    started: &[StartedService],
+    tasks: &[TaskRun],
+) -> Option<PathBuf> {
+    let workflow_id = workflow_id?;
+    let services = services_output(started);
+    write_workflow_summary(placement, workflow_id, run_id, nodes, &services, tasks).ok()
+}
+
+fn with_failure_summary(error: RuntimeError, summary_path: Option<PathBuf>) -> RuntimeError {
+    match summary_path {
+        Some(path) => error.with_detail("workflowSummaryPath", &path),
+        None => error,
+    }
 }
 
 /// Tear down already-started services in reverse order on a run error, either

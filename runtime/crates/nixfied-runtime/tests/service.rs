@@ -2899,6 +2899,84 @@ fn find_file(root: &Path, name: &str) -> Option<PathBuf> {
     None
 }
 
+#[test]
+fn failed_workflow_run_writes_failure_summary() {
+    let Some(shell) = nix_store_executable(&["sh", "bash"]) else {
+        return;
+    };
+    let closure_root = closure_root_for_store_executable(&shell)
+        .expect("store executable should have a closure root");
+    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
+    let port = listener.local_addr().expect("local addr").port();
+    drop(listener);
+    let mut value = fixture_model(
+        &shell.to_string_lossy(),
+        &["service", "--host", "127.0.0.1", "--port", "${port}"],
+        port,
+    );
+    value["closures"]["synthetic-helper"]["storePath"] = json!(closure_root.to_string_lossy());
+    value["closures"]["synthetic-helper"]["executable"] = json!(shell.to_string_lossy());
+    value["execs"]["synthetic-helper"]["executable"] = json!(shell.to_string_lossy());
+    // A 0-service workflow whose single node fails: the run must leave the same
+    // aggregate workflow evidence a success does, linked from the error.
+    value["tasks"]["smoke"]["dependsOnServicesReady"] = json!([]);
+    value["tasks"]["smoke"]["args"] = json!(["-c", "exit 3"]);
+    value["workflows"]["wf"] = json!({
+        "servicesRequired": [],
+        "nodes": {
+            "fail-node": { "taskId": "smoke", "dependsOn": [] }
+        }
+    });
+    let model: Model = serde_json::from_value(value).expect("failure fixture model should parse");
+    let tmp = TempDir::new();
+    let model_path = tmp.path.join("model.json");
+    let state_base = tmp.path.join("state");
+    fs::create_dir_all(&state_base).expect("state base should be created");
+    fs::write(
+        &model_path,
+        serde_json::to_vec_pretty(&model).expect("model should serialize"),
+    )
+    .expect("model should be written");
+
+    let output = Command::new(runtime_binary())
+        .arg("run")
+        .arg("--allow-non-store-model")
+        .arg("--model")
+        .arg(&model_path)
+        .arg("--state-base")
+        .arg(&state_base)
+        .arg("--workflow")
+        .arg("wf")
+        .current_dir(&tmp.path)
+        .output()
+        .expect("runtime run should execute");
+
+    assert_eq!(output.status.code(), Some(30), "TaskFailed exit code");
+    let error: Value = stderr_json(&output.stderr);
+    assert_eq!(error["code"], json!("TASK_FAILED"));
+    let details = &error["details"];
+    assert!(details["runId"].is_string(), "error must carry the run id");
+    assert!(details["stateRoot"].is_string());
+    assert!(details["logsDir"].is_string());
+    assert_eq!(details["failedNodeId"], json!("fail-node"));
+    let summary_path = details["workflowSummaryPath"]
+        .as_str()
+        .expect("error must link the workflow summary");
+    let summary: Value =
+        serde_json::from_slice(&fs::read(summary_path).expect("workflow summary should exist"))
+            .expect("workflow summary should parse");
+    assert_eq!(summary["success"], json!(false));
+    let nodes = summary["nodes"].as_array().expect("nodes should be array");
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(nodes[0]["nodeId"], json!("fail-node"));
+    assert_eq!(nodes[0]["success"], json!(false));
+    assert_eq!(nodes[0]["exitCode"], json!(3));
+    let stdout_path = details["stdoutPath"]
+        .as_str()
+        .expect("error must link the failed task stdout");
+    assert!(PathBuf::from(stdout_path).exists());
+}
+
 fn fixture_model(executable: &str, start_args: &[&str], port: u16) -> Value {
     common::synthetic_model(executable, start_args, port, port)
 }

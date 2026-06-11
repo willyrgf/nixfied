@@ -5,7 +5,7 @@ use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::cancellation::{CancellationToken, canceled_error};
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
@@ -22,7 +22,7 @@ use crate::service::registry::{
 use crate::state::HostPlacement;
 use nixfied_model::ServiceId;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskRun {
     pub task_id: String,
@@ -233,9 +233,12 @@ pub fn run_dependent_task_cancellable(
         } else {
             canceled_error().message
         };
-        Err(RuntimeError::new(ErrorCode::Canceled, message))
+        // The run's evidence (exit code, log and summary paths) already exists;
+        // carry it on the error so the failure surface links to it instead of
+        // discarding it.
+        Err(RuntimeError::new(ErrorCode::Canceled, message).with_detail("taskRun", &run))
     } else {
-        Err(RuntimeError::new(ErrorCode::TaskFailed, failure_message))
+        Err(RuntimeError::new(ErrorCode::TaskFailed, failure_message).with_detail("taskRun", &run))
     }
 }
 
