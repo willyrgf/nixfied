@@ -86,6 +86,9 @@ nix run .#check                      # admission: your model is well-formed and 
 nix run .#test                       # run your `test` workflow — its lint/test/e2e tasks
 nix run .#ci                         # fail-fast: check, then test
 nix run .#run -- --workflow <name>   # run any workflow you declare (e.g. a release gate)
+nix run .#ps                         # observe registry-owned processes (reconciles stale evidence)
+nix run .#down                       # stop everything the runtime owns on the slot
+nix run .#clean                      # remove the marker-gated slot state
 ```
 
 Your **tests are tasks**. The scaffold ships a `test` workflow wrapping a starter

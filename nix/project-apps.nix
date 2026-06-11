@@ -40,4 +40,12 @@ in
     "${runtimeBin}" check --model "${modelJson}"
     "${runtimeBin}" run --model "${modelJson}" --workflow test
   '';
+
+  # Recovery/control surface over the project's slots: observe registry-owned
+  # processes (reconciling stale evidence), stop everything the runtime owns,
+  # and remove the marker-gated slot state. Extra args are forwarded
+  # (e.g. `nix run .#down -- --slot 1`).
+  ps = mkApp "ps" ''exec "${runtimeBin}" ps --model "${modelJson}" "$@"'';
+  down = mkApp "down" ''exec "${runtimeBin}" down --model "${modelJson}" "$@"'';
+  clean = mkApp "clean" ''exec "${runtimeBin}" clean --model "${modelJson}" "$@"'';
 }

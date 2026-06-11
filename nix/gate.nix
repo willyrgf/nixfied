@@ -180,7 +180,13 @@ pkgs.writeShellApplication {
       wk=$(mktemp -d)
       ( cd "$wk" && NIXFIED_STATE_DIR="$st" "$rt" run --model "$model" --timeout-ms 60000 ) \
         >/dev/null || fail "adoption: scaffolded run failed"
-      ( cd "$wk" && NIXFIED_STATE_DIR="$st" "$rt" clean --model "$model" ) \
+      # The generated control surface: ps/down/clean must exist as project apps
+      # and work against the same state.
+      ( cd "$wk" && NIXFIED_STATE_DIR="$st" nix run "$project#ps" ) \
+        >/dev/null || fail "adoption: scaffolded ps failed"
+      ( cd "$wk" && NIXFIED_STATE_DIR="$st" nix run "$project#down" ) \
+        >/dev/null || fail "adoption: scaffolded down failed"
+      ( cd "$wk" && NIXFIED_STATE_DIR="$st" nix run "$project#clean" ) \
         >/dev/null || fail "adoption: scaffolded clean failed"
       before=$(cat "$project/nixfied.nix")
       nix run "$checkout#upgrade" -- --root "$project" --nixfied-url "$pin" \
