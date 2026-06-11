@@ -109,6 +109,38 @@ fn changed_state_epoch_upgrades_and_cleans_state_root() {
 }
 
 #[test]
+fn pre_existing_unmarked_state_root_refuses() {
+    let fixture = UpgradeFixture::new();
+    let state_root = fixture.state_root();
+    fs::create_dir_all(&state_root).expect("state root should be creatable");
+    fs::write(state_root.join("leftover"), b"data").expect("leftover should be written");
+
+    let error = fixture
+        .prepare("run-1", &fixture.identity("hash-a"))
+        .expect_err("a non-empty state root without a marker must be refused, not adopted");
+
+    assert_eq!(error.code, ErrorCode::StateUnowned);
+    assert!(
+        !state_root.join(MARKER_FILE_NAME).exists(),
+        "the refusal must not write a marker into the unowned tree"
+    );
+}
+
+#[test]
+fn pre_existing_empty_state_root_is_fresh() {
+    let fixture = UpgradeFixture::new();
+    let state_root = fixture.state_root();
+    fs::create_dir_all(&state_root).expect("state root should be creatable");
+
+    let report = fixture
+        .prepare("run-1", &fixture.identity("hash-a"))
+        .expect("an empty state root has no state to adopt and is a fresh slot");
+
+    assert!(!report.upgraded);
+    assert_eq!(fixture.marker().computed_model_hash, "hash-a");
+}
+
+#[test]
 fn changed_ownership_refuses_state_unowned() {
     let fixture = UpgradeFixture::new();
     fixture

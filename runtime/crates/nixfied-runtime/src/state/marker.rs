@@ -198,6 +198,7 @@ pub fn evaluate_slot_marker(
             }
         }
         Err(error) if error.kind() == ErrorKind::NotFound => {
+            refuse_unmarked_state_root(&placement.state_root)?;
             return Ok(MarkerDecision::Fresh);
         }
         Err(error) => {
@@ -227,6 +228,54 @@ pub fn evaluate_slot_marker(
             "existing state marker was written under a different runtime ABI",
         )),
     }
+}
+
+/// A missing marker only means a fresh slot when the state root itself is
+/// absent (or an empty directory). A state root with content but no marker is
+/// state the runtime never claimed — adopting it would write a marker into an
+/// unowned tree that cleanup rightly refuses, so the run refuses it too.
+fn refuse_unmarked_state_root(state_root: &Path) -> RuntimeResult<()> {
+    let metadata = match std::fs::symlink_metadata(state_root) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(RuntimeError::new(
+                ErrorCode::StateUnowned,
+                format!(
+                    "failed to inspect state root {}: {error}",
+                    state_root.display()
+                ),
+            ));
+        }
+    };
+    if !metadata.file_type().is_dir() {
+        return Err(RuntimeError::new(
+            ErrorCode::StateUnowned,
+            format!(
+                "state root {} exists but is not a directory",
+                state_root.display()
+            ),
+        ));
+    }
+    let mut entries = std::fs::read_dir(state_root).map_err(|error| {
+        RuntimeError::new(
+            ErrorCode::StateUnowned,
+            format!(
+                "failed to inspect state root {}: {error}",
+                state_root.display()
+            ),
+        )
+    })?;
+    if entries.next().is_some() {
+        return Err(RuntimeError::new(
+            ErrorCode::StateUnowned,
+            format!(
+                "state root {} exists without a state marker; refusing to adopt unmarked state",
+                state_root.display()
+            ),
+        ));
+    }
+    Ok(())
 }
 
 /// Write the slot marker for the requested identity, overwriting any previous
