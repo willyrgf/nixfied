@@ -6,6 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+nixfied-model = { path = "../nixfied-model" }
 serde_json = "1.0"
 
 [[bin]]
