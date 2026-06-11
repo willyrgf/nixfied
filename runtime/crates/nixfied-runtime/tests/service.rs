@@ -1235,7 +1235,7 @@ fn cancellation_interrupts_task_and_terminates_task_group() {
 }
 
 #[test]
-fn task_timeout_records_canceled_summary_and_terminates_task_group() {
+fn task_timeout_records_failed_summary_and_terminates_task_group() {
     let python = python3_path()
         .map(str::to_string)
         .or_else(python3_from_path)
@@ -1289,7 +1289,7 @@ fn task_timeout_records_canceled_summary_and_terminates_task_group() {
             .get("smoke")
             .expect("smoke task"),
     )
-    .expect_err("task should time out as cancellation");
+    .expect_err("task should time out as a task failure");
     thread::sleep(Duration::from_millis(2300));
     let report = ps(&mut fixture.registry).expect("ps should reconcile timed-out task");
     let task_observations = report
@@ -1319,7 +1319,7 @@ fn task_timeout_records_canceled_summary_and_terminates_task_group() {
         .registry
         .connection()
         .query_row(
-            "SELECT count(*) FROM events WHERE event_type IN ('task.canceling','task.canceled')",
+            "SELECT count(*) FROM events WHERE event_type IN ('task.canceling','task.timed-out')",
             [],
             |row| row.get(0),
         )
@@ -1335,7 +1335,7 @@ fn task_timeout_records_canceled_summary_and_terminates_task_group() {
     )
     .expect("summary should parse");
 
-    assert_eq!(error.code, ErrorCode::Canceled);
+    assert_eq!(error.code, ErrorCode::TaskFailed);
     assert!(error.message.contains("timed out"));
     assert!(!task_observations.is_empty());
     assert!(task_observations.iter().all(|process| !process.live));
@@ -1345,11 +1345,11 @@ fn task_timeout_records_canceled_summary_and_terminates_task_group() {
             "timed-out task process group should be empty"
         );
     }
-    assert_eq!(task_status, "canceled");
-    assert_eq!(lease_status, "canceled");
+    assert_eq!(task_status, "failed");
+    assert_eq!(lease_status, "failed");
     assert_eq!(task_events, 2);
     assert_eq!(summary["timedOut"], json!(true));
-    assert_eq!(summary["canceled"], json!(true));
+    assert_eq!(summary["canceled"], json!(false));
     assert!(
         !marker.exists(),
         "task timeout should kill TERM-ignoring descendants before marker"

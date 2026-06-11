@@ -55,6 +55,9 @@ pub struct TaskProcessRecord<'a> {
 pub enum TaskTerminalStatus {
     Succeeded,
     Failed,
+    /// The task exceeded its own timeout budget: an execution failure with its
+    /// own event, never conflated with an operator cancellation.
+    TimedOut,
     Canceled,
 }
 
@@ -1000,6 +1003,12 @@ pub fn mark_task_finished(
         TaskTerminalStatus::Failed => (
             ProcessStatus::Failed,
             "task.failed",
+            RunStatus::TaskFailed,
+            Some(RunLeaseStatus::Failed),
+        ),
+        TaskTerminalStatus::TimedOut => (
+            ProcessStatus::Failed,
+            "task.timed-out",
             RunStatus::TaskFailed,
             Some(RunLeaseStatus::Failed),
         ),

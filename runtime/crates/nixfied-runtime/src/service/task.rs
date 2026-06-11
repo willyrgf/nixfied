@@ -175,21 +175,20 @@ pub fn run_dependent_task_cancellable(
             computed_model_hash: run_context.computed_model_hash,
         },
     )?;
-    let canceled = outcome.timed_out || outcome.canceled;
+    let canceled = outcome.canceled;
+    let timed_out = outcome.timed_out;
     let success = !canceled
+        && !timed_out
         && outcome
             .exit_code
             .map(|code| task.success_codes.contains(&code))
             .unwrap_or(false);
     let exit_code = outcome.exit_code;
-    let timed_out = outcome.timed_out;
     let failure_message = if timed_out {
         format!(
             "task {task_id} timed out after {}ms",
             exec.timeout.as_millis()
         )
-    } else if outcome.canceled {
-        "run was canceled".to_string()
     } else {
         format!(
             "task {task_id} exited with code {}",
@@ -222,31 +221,30 @@ pub fn run_dependent_task_cancellable(
         run_context.run_id,
         &process_key,
         run_context.computed_model_hash,
-        task_terminal_status(success, canceled),
+        task_terminal_status(success, timed_out, canceled),
         &payload_json,
     )?;
+    // The run's evidence (exit code, log and summary paths) already exists;
+    // carry it on the error so the failure surface links to it instead of
+    // discarding it. A timeout is an execution failure, not an operator
+    // cancellation — only a canceled run reports CANCELED.
     if success {
         Ok(run)
     } else if canceled {
-        let message = if timed_out {
-            failure_message
-        } else {
-            canceled_error().message
-        };
-        // The run's evidence (exit code, log and summary paths) already exists;
-        // carry it on the error so the failure surface links to it instead of
-        // discarding it.
-        Err(RuntimeError::new(ErrorCode::Canceled, message).with_detail("taskRun", &run))
+        Err(RuntimeError::new(ErrorCode::Canceled, canceled_error().message)
+            .with_detail("taskRun", &run))
     } else {
         Err(RuntimeError::new(ErrorCode::TaskFailed, failure_message).with_detail("taskRun", &run))
     }
 }
 
-fn task_terminal_status(success: bool, canceled: bool) -> TaskTerminalStatus {
+fn task_terminal_status(success: bool, timed_out: bool, canceled: bool) -> TaskTerminalStatus {
     if success {
         TaskTerminalStatus::Succeeded
     } else if canceled {
         TaskTerminalStatus::Canceled
+    } else if timed_out {
+        TaskTerminalStatus::TimedOut
     } else {
         TaskTerminalStatus::Failed
     }
