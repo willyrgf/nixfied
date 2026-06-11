@@ -93,6 +93,28 @@ N-service `e2e` that depends on your services for `${host}`/`${port}`. `.#test`
 runs that workflow through the same runtime that runs your app, so there is no
 separate test harness to wire.
 
+Services and tasks address each other **by name, never by port arithmetic**.
+Exec args and env values support `${port}`/`${host}` (own endpoint for a
+service, primary dependency for a task), `${stateDir}` (the slot state root),
+and the named forms `${port:<serviceId>}`/`${host:<serviceId>}` for any service
+declared in `connectsTo` (services) or `dependsOnServicesReady` (tasks):
+
+```nix
+nixfied.services.app = {
+  connectsTo = [ "postgres" ];   # starts postgres first, makes it addressable
+  lifecycle.start.execArgs = [ "--db" "\${host:postgres}:\${port:postgres}" ];
+};
+# env values are substituted too:
+nixfied.execs.app.env.DATABASE_URL = "postgres://\${host:postgres}:\${port:postgres}/db";
+```
+
+Every slot gets a disjoint, deterministic port window, so slot 1's `app` always
+talks to slot 1's `postgres`. An undeclared named reference, an undeclared
+`connectsTo` target, or a wiring cycle is a compile/admission error, never a
+runtime surprise. Keep `nixfied.placement.ports.base` outside the OS ephemeral
+port range (Linux 32768-60999; the default 23080 already is) — the runtime
+warns at admission if a slot window overlaps it.
+
 ## Verify (working on Nixfied itself)
 
 One command runs the whole repo, fail-fast — the source gate, the test floor,
