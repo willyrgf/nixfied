@@ -6,8 +6,7 @@ pub mod unique_vec;
 pub mod validation;
 
 pub use constants::{
-    CAPABILITY_DESCRIPTOR, MODEL_VERSION, TOOLCHAIN_ID, capability_digest, expected_model_version,
-    expected_runtime_abi, expected_toolchain_id, runtime_abi,
+    CAPABILITY_DESCRIPTOR, MODEL_VERSION, TOOLCHAIN_ID, capability_digest, runtime_abi,
 };
 pub use error::{ModelValidationError, ValidationError};
 pub use ids::{ClosureId, CodebaseId, ExecId, NodeId, OperationId, ServiceId, TaskId};

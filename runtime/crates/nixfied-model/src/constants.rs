@@ -32,18 +32,6 @@ pub fn runtime_abi() -> &'static str {
     ABI.as_str()
 }
 
-pub fn expected_model_version() -> u32 {
-    MODEL_VERSION
-}
-
-pub fn expected_toolchain_id() -> &'static str {
-    TOOLCHAIN_ID
-}
-
-pub fn expected_runtime_abi() -> &'static str {
-    runtime_abi()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
