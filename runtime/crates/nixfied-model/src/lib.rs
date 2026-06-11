@@ -1,6 +1,8 @@
 pub mod constants;
 pub mod error;
+pub mod ids;
 pub mod types;
+pub mod unique_vec;
 pub mod validation;
 
 pub use constants::{
@@ -8,5 +10,7 @@ pub use constants::{
     expected_runtime_abi, expected_toolchain_id, runtime_abi,
 };
 pub use error::{ModelValidationError, ValidationError};
+pub use ids::{ClosureId, CodebaseId, ExecId, NodeId, OperationId, ServiceId, TaskId};
 pub use types::*;
+pub use unique_vec::UniqueVec;
 pub use validation::Validate;

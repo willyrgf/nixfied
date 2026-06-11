@@ -105,9 +105,7 @@ pub fn synthetic_model(
                 "codebaseId": "main",
                 "cwd": ".",
                 "stdin": "null",
-                "timeoutMs": 30000,
-                "outputCapture": "stdout-stderr",
-                "cancellationMode": "kill-process-group"
+                "timeoutMs": 30000
             }
         },
         "services": {
@@ -168,7 +166,6 @@ pub fn synthetic_model(
                 "exitPolicy": {
                     "successCodes": [0]
                 },
-                "outputCapture": "stdout-stderr",
                 "artifactRefs": [],
                 "logRefs": ["task.smoke"],
                 "summaryRefs": ["summary"]

@@ -217,30 +217,26 @@ in
       "api"
       "worker"
     ];
-    nodes = [
-      {
-        nodeId = "db-check";
+    nodes = {
+      db-check = {
         taskId = "smoke-query";
         dependsOn = [ ];
-      }
-      {
-        nodeId = "api-check";
+      };
+      api-check = {
         taskId = "ping-api";
         dependsOn = [ "db-check" ];
-      }
-      {
-        nodeId = "worker-check";
+      };
+      worker-check = {
         taskId = "ping-worker";
         dependsOn = [ "db-check" ];
-      }
-      {
-        nodeId = "gate";
+      };
+      gate = {
         taskId = "release-gate";
         dependsOn = [
           "api-check"
           "worker-check"
         ];
-      }
-    ];
+      };
+    };
   };
 }

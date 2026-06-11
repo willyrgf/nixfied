@@ -61,8 +61,6 @@ let
     cwd = exec.cwd;
     stdin = exec.stdin;
     timeoutMs = exec.timeoutMs;
-    outputCapture = exec.outputCapture;
-    cancellationMode = exec.cancellationMode;
   };
   execs = mapAttrs execSpec config.nixfied.execs;
 
@@ -147,7 +145,6 @@ let
     exitPolicy = {
       successCodes = task.exitPolicy.successCodes;
     };
-    outputCapture = task.outputCapture;
     artifactRefs = task.artifactRefs;
     logRefs = task.logRefs;
     summaryRefs = task.summaryRefs;
@@ -160,15 +157,12 @@ let
 
   workflowSpec = _name: workflow: {
     servicesRequired = workflow.servicesRequired;
-    nodes = builtins.listToAttrs (
-      map (node: {
-        name = node.nodeId;
-        value = {
-          taskId = node.taskId;
-          dependsOn = node.dependsOn;
-        };
-      }) workflow.nodes
-    );
+    # `nodes` is already an attrset keyed by node id (a duplicate id cannot
+    # survive evaluation), so the model object is a direct projection.
+    nodes = mapAttrs (_nodeId: node: {
+      taskId = node.taskId;
+      dependsOn = node.dependsOn;
+    }) workflow.nodes;
   };
   workflows = mapAttrs workflowSpec config.nixfied.workflows;
 in

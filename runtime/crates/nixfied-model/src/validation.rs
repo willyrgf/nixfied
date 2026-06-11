@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 
 use crate::constants::{MODEL_VERSION, TOOLCHAIN_ID, runtime_abi};
 use crate::error::ValidationError;
+use crate::ids::OperationId;
 use crate::types::*;
 
 pub trait Validate {
@@ -81,7 +82,11 @@ fn validate_codebases(model: &Model) -> Result<(), ValidationError> {
         return Err(ValidationError::ExpectedOne { field: "codebases" });
     }
     let codebase = &model.codebases[0];
-    expect_string("codebases[0].codebaseId", "main", &codebase.codebase_id)?;
+    expect_string(
+        "codebases[0].codebaseId",
+        "main",
+        codebase.codebase_id.as_str(),
+    )?;
     require_non_empty("codebases[0].logicalRoot", &codebase.logical_root)?;
     if codebase.source_mode != SourceMode::LiveWorkspace {
         return Err(ValidationError::UnsupportedValue {
@@ -274,7 +279,7 @@ fn validate_services(model: &Model) -> Result<(), ValidationError> {
 /// host), so only non-empty value checks on ids/terminals remain.
 fn validate_service_lifecycle(service: &ServiceSpec) -> Result<(), ValidationError> {
     for (operation_id, terminal) in lifecycle_ops(&service.lifecycle) {
-        require_non_empty("lifecycle.operationId", operation_id)?;
+        require_non_empty("lifecycle.operationId", operation_id.as_str())?;
         require_non_empty("lifecycle.terminal.success", &terminal.success)?;
         require_non_empty("lifecycle.terminal.failure", &terminal.failure)?;
     }
@@ -282,7 +287,7 @@ fn validate_service_lifecycle(service: &ServiceSpec) -> Result<(), ValidationErr
 }
 
 /// The (operationId, terminal) pair of each lifecycle op, in canonical order.
-fn lifecycle_ops(lifecycle: &Lifecycle) -> [(&str, &TerminalSemantics); 6] {
+fn lifecycle_ops(lifecycle: &Lifecycle) -> [(&OperationId, &TerminalSemantics); 6] {
     [
         (&lifecycle.prepare.operation_id, &lifecycle.prepare.terminal),
         (&lifecycle.start.operation_id, &lifecycle.start.terminal),
@@ -295,8 +300,8 @@ fn lifecycle_ops(lifecycle: &Lifecycle) -> [(&str, &TerminalSemantics); 6] {
 
 fn validate_tasks(model: &Model) -> Result<(), ValidationError> {
     for task in model.tasks.values() {
-        require_non_empty("tasks.operationId", &task.operation_id)?;
-        require_non_empty("tasks.execId", &task.exec_id)?;
+        require_non_empty("tasks.operationId", task.operation_id.as_str())?;
+        require_non_empty("tasks.execId", task.exec_id.as_str())?;
         if task.exit_policy.success_codes.is_empty() {
             return Err(ValidationError::UnsupportedValue {
                 field: "tasks.exitPolicy.successCodes",

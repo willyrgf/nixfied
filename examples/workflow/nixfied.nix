@@ -11,17 +11,15 @@
   # task twice with a dependency edge between the nodes.
   nixfied.workflows.pipeline = {
     servicesRequired = [ "synthetic" ];
-    nodes = [
-      {
-        nodeId = "probe";
+    nodes = {
+      probe = {
         taskId = "smoke";
         dependsOn = [ ];
-      }
-      {
-        nodeId = "verify";
+      };
+      verify = {
         taskId = "smoke";
         dependsOn = [ "probe" ];
-      }
-    ];
+      };
+    };
   };
 }

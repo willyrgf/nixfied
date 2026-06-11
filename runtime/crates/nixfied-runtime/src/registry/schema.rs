@@ -10,6 +10,12 @@ pub fn initialize(conn: &mut Connection, identity: &RegistryIdentity) -> Runtime
         "
         PRAGMA journal_mode = WAL;
         PRAGMA foreign_keys = ON;
+        -- A run's heartbeat thread opens its own connection and writes the lease
+        -- concurrently with the main thread. WAL still serializes writers, so
+        -- without a busy timeout a transient collision returns SQLITE_BUSY, which
+        -- the runtime maps to REGISTRY_CORRUPT and would fail an otherwise healthy
+        -- run. Wait instead of erroring.
+        PRAGMA busy_timeout = 5000;
         ",
     )
     .map_err(sql_error)?;

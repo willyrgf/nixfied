@@ -9,8 +9,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use nixfied_model::{
-    ExecSpec, Lifecycle, Model, ProbeTiming, ServiceSpec, StopSpec, TaskSpec, TerminalSemantics,
-    WorkflowSpec,
+    Environment, ExecSpec, Lifecycle, Model, OperationId, ProbeTiming, ServiceId, ServiceSpec,
+    StopSpec, TaskId, TaskSpec, TerminalSemantics, WorkflowSpec,
 };
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
@@ -47,24 +47,36 @@ pub fn lower(model: &Model) -> RuntimeResult<ExecutionModel> {
 
     let lowered_services = services
         .iter()
-        .map(|(name, service)| Ok((name.clone(), lower_service(name, service, execs)?)))
+        .map(|(name, service)| Ok((ServiceId::new(name), lower_service(name, service, execs)?)))
         .collect::<RuntimeResult<BTreeMap<_, _>>>()?;
 
     let lowered_tasks = tasks
         .iter()
-        .map(|(id, task)| Ok((id.clone(), lower_task(id, task, execs)?)))
+        .map(|(id, task)| {
+            Ok((
+                TaskId::new(id),
+                lower_task(id, task, execs, &lowered_services)?,
+            ))
+        })
         .collect::<RuntimeResult<BTreeMap<_, _>>>()?;
 
+    // Resolve each environment/workflow reference against the maps just built, so
+    // every id the executor later follows is a handle proven to resolve. A miss is
+    // an admission rejection here, not a runtime `None`.
     let lowered_workflows = workflows
         .iter()
-        .map(|(id, workflow)| (id.clone(), lower_workflow(workflow)))
-        .collect::<BTreeMap<_, _>>();
+        .map(|(id, workflow)| {
+            Ok((
+                id.clone(),
+                lower_workflow(workflow, &lowered_services, &lowered_tasks)?,
+            ))
+        })
+        .collect::<RuntimeResult<BTreeMap<_, _>>>()?;
 
-    let environment = environments
-        .values()
-        .next()
-        .map(lower_environment)
-        .ok_or(Rejection::NoEnvironment)?;
+    let environment = match environments.values().next() {
+        Some(environment) => lower_environment(environment, &lowered_services, &lowered_tasks)?,
+        None => return Err(Rejection::NoEnvironment.into()),
+    };
 
     let mut slot_windows = BTreeMap::new();
     for slot_placement in placement.slot_placements.values() {
@@ -86,29 +98,95 @@ pub fn lower(model: &Model) -> RuntimeResult<ExecutionModel> {
     })
 }
 
-fn lower_environment(environment: &nixfied_model::Environment) -> ExecEnvironment {
-    let nixfied_model::Environment { services, tasks } = environment;
-    ExecEnvironment {
-        services: services.clone(),
-        tasks: tasks.clone(),
-    }
+fn lower_environment(
+    environment: &Environment,
+    services: &BTreeMap<ServiceId, ExecService>,
+    tasks: &BTreeMap<TaskId, ExecTask>,
+) -> RuntimeResult<ExecEnvironment> {
+    let Environment {
+        services: env_services,
+        tasks: env_tasks,
+    } = environment;
+    let resolved_services = env_services
+        .iter()
+        .map(|id| require_service("environment.services", services, id))
+        .collect::<Result<Vec<_>, Rejection>>()?;
+    let resolved_tasks = env_tasks
+        .iter()
+        .map(|id| require_task("environment.tasks", tasks, id))
+        .collect::<Result<Vec<_>, Rejection>>()?;
+    Ok(ExecEnvironment {
+        services: resolved_services,
+        tasks: resolved_tasks,
+    })
 }
 
-fn lower_workflow(workflow: &WorkflowSpec) -> ExecWorkflow {
+fn lower_workflow(
+    workflow: &WorkflowSpec,
+    services: &BTreeMap<ServiceId, ExecService>,
+    tasks: &BTreeMap<TaskId, ExecTask>,
+) -> RuntimeResult<ExecWorkflow> {
     let WorkflowSpec {
         services_required,
         nodes,
     } = workflow;
-    ExecWorkflow {
-        services_required: services_required.clone(),
-        nodes: nodes
-            .iter()
-            .map(|(node_id, node)| ExecWorkflowNode {
-                node_id: node_id.clone(),
-                task_id: node.task_id.clone(),
-                depends_on: node.depends_on.clone(),
+    let resolved_services = services_required
+        .iter()
+        .map(|id| require_service("workflow.servicesRequired", services, id))
+        .collect::<Result<Vec<_>, Rejection>>()?;
+    let node_ids = nodes.keys().map(String::as_str).collect::<BTreeSet<_>>();
+    let resolved_nodes = nodes
+        .iter()
+        .map(|(node_id, node)| {
+            let task_id = require_task("workflow.node.taskId", tasks, &node.task_id)?;
+            let depends_on = node
+                .depends_on
+                .iter()
+                .map(|dependency| {
+                    if node_ids.contains(dependency.as_str()) {
+                        Ok(dependency.clone())
+                    } else {
+                        Err(undeclared("workflow.node.dependsOn", dependency.as_str()))
+                    }
+                })
+                .collect::<Result<Vec<_>, Rejection>>()?;
+            Ok(ExecWorkflowNode {
+                node_id: nixfied_model::NodeId::new(node_id),
+                task_id,
+                depends_on,
             })
-            .collect(),
+        })
+        .collect::<Result<Vec<_>, Rejection>>()?;
+    Ok(ExecWorkflow {
+        services_required: resolved_services,
+        nodes: resolved_nodes,
+    })
+}
+
+/// Resolve a service reference to a handle proven to exist among the lowered
+/// services; the returned `ServiceId` is the proof.
+fn require_service(
+    kind: &'static str,
+    services: &BTreeMap<ServiceId, ExecService>,
+    id: &ServiceId,
+) -> Result<ServiceId, Rejection> {
+    if services.contains_key(id) {
+        Ok(id.clone())
+    } else {
+        Err(undeclared(kind, id.as_str()))
+    }
+}
+
+/// Resolve a task reference to a handle proven to exist among the lowered tasks.
+fn require_task(
+    kind: &'static str,
+    tasks: &BTreeMap<TaskId, ExecTask>,
+    id: &TaskId,
+) -> Result<TaskId, Rejection> {
+    if tasks.contains_key(id) {
+        Ok(id.clone())
+    } else {
+        Err(undeclared(kind, id.as_str()))
     }
 }
 
@@ -142,13 +220,17 @@ fn lower_service(
     let prepare = PrepareOp {
         meta: op_meta(&prepare.operation_id, &prepare.terminal),
         exec: match &prepare.exec_id {
-            Some(exec_id) => Some(resolve_exec_ref(execs, exec_id, &prepare.exec_args)?),
+            Some(exec_id) => Some(resolve_exec_ref(
+                execs,
+                exec_id.as_str(),
+                &prepare.exec_args,
+            )?),
             None => None,
         },
     };
     let start = StartOp {
         meta: op_meta(&start.operation_id, &start.terminal),
-        exec: resolve_exec_ref(execs, &start.exec_id, &start.exec_args)?,
+        exec: resolve_exec_ref(execs, start.exec_id.as_str(), &start.exec_args)?,
     };
     let ready = ReadyOp {
         meta: op_meta(&ready.operation_id, &ready.terminal),
@@ -164,7 +246,7 @@ fn lower_service(
     };
 
     Ok(ExecService {
-        name: name.to_string(),
+        name: ServiceId::new(name),
         prepare,
         start,
         ready,
@@ -185,9 +267,9 @@ fn lower_stop(stop: &StopSpec) -> StopOp {
     }
 }
 
-fn op_meta(operation_id: &str, terminal: &TerminalSemantics) -> OpMeta {
+fn op_meta(operation_id: &OperationId, terminal: &TerminalSemantics) -> OpMeta {
     OpMeta {
-        operation_id: operation_id.to_string(),
+        operation_id: operation_id.clone(),
         terminal_success: terminal.success.clone(),
         terminal_failure: terminal.failure.clone(),
     }
@@ -197,6 +279,7 @@ fn lower_task(
     task_id: &str,
     task: &TaskSpec,
     execs: &BTreeMap<String, ExecSpec>,
+    services: &BTreeMap<ServiceId, ExecService>,
 ) -> RuntimeResult<ExecTask> {
     let TaskSpec {
         operation_id: _,
@@ -204,12 +287,15 @@ fn lower_task(
         args,
         depends_on_services_ready,
         exit_policy,
-        output_capture: _,
         artifact_refs: _,
         log_refs: _,
         summary_refs: _,
     } = task;
-    let exec = resolve_exec_ref(execs, exec_id, args)?;
+    let exec = resolve_exec_ref(execs, exec_id.as_str(), args)?;
+    let depends_on_services_ready = depends_on_services_ready
+        .iter()
+        .map(|id| require_service("task.dependsOnServicesReady", services, id))
+        .collect::<Result<Vec<_>, Rejection>>()?;
     // `${port}`/`${host}` resolve from the task's primary service. A task that
     // declares no services has no endpoint, so referencing them is unrunnable —
     // reject it here rather than fail at execution.
@@ -225,10 +311,10 @@ fn lower_task(
         }
     }
     Ok(ExecTask {
-        task_id: task_id.to_string(),
+        task_id: TaskId::new(task_id),
         exec,
-        depends_on_services_ready: depends_on_services_ready.clone(),
-        success_codes: exit_policy.success_codes.clone(),
+        depends_on_services_ready,
+        success_codes: exit_policy.success_codes.iter().copied().collect(),
     })
 }
 
@@ -260,16 +346,15 @@ fn resolve_exec(exec: &ExecSpec, extra_args: &[String]) -> ResolvedExec {
         env,
         codebase_id: _,
         cwd,
-        stdin: _,
+        stdin,
         timeout_ms,
-        output_capture: _,
-        cancellation_mode: _,
     } = exec;
     ResolvedExec {
         executable: executable.clone(),
         args: args.iter().chain(extra_args).cloned().collect(),
         env: env.clone(),
         cwd: cwd.clone(),
+        stdin: *stdin,
         timeout: Duration::from_millis(timeout_ms.get()),
     }
 }
@@ -348,12 +433,14 @@ fn undeclared(kind: &'static str, id: impl Into<String>) -> Rejection {
     }
 }
 
-/// Prove every cross-reference in the model resolves: execs to closures/codebases,
-/// closures to the target, lifecycle/task operations to unique ids and declared
-/// execs, environment and workflow programs to declared services/tasks, and
-/// closure operation bindings to declared operations. A successful return is the
-/// proof that the references the executor follows exist. Acyclicity is proven
-/// separately by the planner over every workflow at admission.
+/// Prove the *relational* invariants the per-reference resolver in `lower` cannot
+/// express on its own: execs bind a declared closure/codebase, closures match the
+/// target system, lifecycle/task operation ids are globally unique, an
+/// environment/workflow task depends only on services that program starts, and
+/// closure operation bindings name a declared operation. The single-reference
+/// existence checks (exec/service/task/node ids) are discharged where they are
+/// consumed — `lower` resolves each into a typed handle, so a dangling reference
+/// is rejected there. Acyclicity is proven separately by the planner.
 fn prove_references(model: &Model) -> Result<(), Rejection> {
     let codebase_ids = model
         .codebases
@@ -365,29 +452,14 @@ fn prove_references(model: &Model) -> Result<(), Rejection> {
         .keys()
         .map(String::as_str)
         .collect::<BTreeSet<_>>();
-    let exec_ids = model
-        .execs
-        .keys()
-        .map(String::as_str)
-        .collect::<BTreeSet<_>>();
-    let service_ids = model
-        .services
-        .keys()
-        .map(String::as_str)
-        .collect::<BTreeSet<_>>();
-    let task_ids = model
-        .tasks
-        .keys()
-        .map(String::as_str)
-        .collect::<BTreeSet<_>>();
     let mut declared_operations = BTreeSet::new();
 
     for exec in model.execs.values() {
         if !closure_ids.contains(exec.closure_id.as_str()) {
-            return Err(undeclared("exec.closureId", exec.closure_id.clone()));
+            return Err(undeclared("exec.closureId", exec.closure_id.as_str()));
         }
         if !codebase_ids.contains(exec.codebase_id.as_str()) {
-            return Err(undeclared("exec.codebaseId", exec.codebase_id.clone()));
+            return Err(undeclared("exec.codebaseId", exec.codebase_id.as_str()));
         }
     }
 
@@ -401,70 +473,40 @@ fn prove_references(model: &Model) -> Result<(), Rejection> {
         }
     }
 
+    // Operation ids are globally unique across every lifecycle and task; the
+    // declared set also anchors the closure binding check below.
     for service in model.services.values() {
-        let lifecycle = &service.lifecycle;
-        for operation_id in lifecycle_op_ids(lifecycle) {
+        for operation_id in lifecycle_op_ids(&service.lifecycle) {
             if !declared_operations.insert(operation_id) {
                 return Err(Rejection::DuplicateOperationId {
                     id: operation_id.to_string(),
                 });
             }
         }
-        for exec_id in [
-            lifecycle.prepare.exec_id.as_deref(),
-            Some(lifecycle.start.exec_id.as_str()),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            if !exec_ids.contains(exec_id) {
-                return Err(undeclared("lifecycle.execId", exec_id));
-            }
-        }
     }
-
     for task in model.tasks.values() {
         if !declared_operations.insert(task.operation_id.as_str()) {
             return Err(Rejection::DuplicateOperationId {
-                id: task.operation_id.clone(),
+                id: task.operation_id.to_string(),
             });
-        }
-        if !exec_ids.contains(task.exec_id.as_str()) {
-            return Err(undeclared("task.execId", task.exec_id.clone()));
-        }
-        for service_id in &task.depends_on_services_ready {
-            if !service_ids.contains(service_id.as_str()) {
-                return Err(undeclared(
-                    "task.dependsOnServicesReady",
-                    service_id.clone(),
-                ));
-            }
         }
     }
 
+    // An environment task can only depend on services the environment starts, or
+    // the run fails mid-flight on a missing dependency.
     for env in model.environments.values() {
         let env_services = env
             .services
             .iter()
-            .map(String::as_str)
+            .map(|service| service.as_str())
             .collect::<BTreeSet<_>>();
-        for service_id in &env.services {
-            if !service_ids.contains(service_id.as_str()) {
-                return Err(undeclared("environment.services", service_id.clone()));
-            }
-        }
         for task_id in &env.tasks {
-            if !task_ids.contains(task_id.as_str()) {
-                return Err(undeclared("environment.tasks", task_id.clone()));
-            }
-            // An environment task can only depend on services the environment
-            // starts, or the run fails mid-flight on a missing dependency.
-            if let Some(task) = model.tasks.get(task_id) {
+            if let Some(task) = model.tasks.get(task_id.as_str()) {
                 for service in &task.depends_on_services_ready {
                     if !env_services.contains(service.as_str()) {
                         return Err(undeclared(
                             "environment.task.dependsOnServicesReady",
-                            service.clone(),
+                            service.as_str(),
                         ));
                     }
                 }
@@ -472,37 +514,24 @@ fn prove_references(model: &Model) -> Result<(), Rejection> {
         }
     }
 
+    // The run plan starts only the workflow's servicesRequired, so a node task may
+    // depend only on those.
     for (id, workflow) in &model.workflows {
-        let required = workflow
-            .services_required
-            .iter()
-            .map(String::as_str)
-            .collect::<BTreeSet<_>>();
-        for service in &workflow.services_required {
-            if !service_ids.contains(service.as_str()) {
-                return Err(undeclared("workflow.servicesRequired", service.clone()));
-            }
-        }
         if workflow.nodes.is_empty() {
             return Err(undeclared("workflow.nodes", format!("{id} has no nodes")));
         }
+        let required = workflow
+            .services_required
+            .iter()
+            .map(|service| service.as_str())
+            .collect::<BTreeSet<_>>();
         for node in workflow.nodes.values() {
-            if !task_ids.contains(node.task_id.as_str()) {
-                return Err(undeclared("workflow.node.taskId", node.task_id.clone()));
-            }
-            for dependency in &node.depends_on {
-                if !workflow.nodes.contains_key(dependency) {
-                    return Err(undeclared("workflow.node.dependsOn", dependency.clone()));
-                }
-            }
-            // The run plan starts only the workflow's servicesRequired, so a node
-            // task may depend only on those.
-            if let Some(task) = model.tasks.get(&node.task_id) {
+            if let Some(task) = model.tasks.get(node.task_id.as_str()) {
                 for service in &task.depends_on_services_ready {
                     if !required.contains(service.as_str()) {
                         return Err(undeclared(
                             "workflow.node.task.dependsOnServicesReady",
-                            service.clone(),
+                            service.as_str(),
                         ));
                     }
                 }
@@ -514,7 +543,7 @@ fn prove_references(model: &Model) -> Result<(), Rejection> {
         for binding in &closure.operation_bindings {
             if !declared_operations.contains(binding.as_str()) {
                 return Err(Rejection::UnknownOperationBinding {
-                    binding: binding.clone(),
+                    binding: binding.to_string(),
                 });
             }
         }
@@ -582,14 +611,12 @@ mod tests {
                 "svc-exec": {
                     "closureId": "c", "executable": "/bin/svc",
                     "args": ["serve"], "env": {}, "codebaseId": "main", "cwd": ".",
-                    "stdin": "null", "timeoutMs": 1000, "outputCapture": "stdout-stderr",
-                    "cancellationMode": "kill-process-group"
+                    "stdin": "null", "timeoutMs": 1000
                 },
                 "t-exec": {
                     "closureId": "c", "executable": "/bin/task",
                     "args": [], "env": {}, "codebaseId": "main", "cwd": ".",
-                    "stdin": "null", "timeoutMs": 1000, "outputCapture": "stdout-stderr",
-                    "cancellationMode": "kill-process-group"
+                    "stdin": "null", "timeoutMs": 1000
                 }
             },
             "services": { "svc": service_value() },
@@ -597,7 +624,7 @@ mod tests {
                 "t": {
                     "operationId": "task.t.run", "execId": "t-exec",
                     "args": ["--port", "${port}"], "dependsOnServicesReady": ["svc"],
-                    "exitPolicy": { "successCodes": [0] }, "outputCapture": "stdout-stderr",
+                    "exitPolicy": { "successCodes": [0] },
                     "artifactRefs": [], "logRefs": [], "summaryRefs": []
                 }
             },
@@ -639,11 +666,26 @@ mod tests {
         assert!(svc.prepare.exec.is_none());
         // Start exec args are base ++ operation args.
         assert_eq!(svc.start.exec.args, vec!["serve", "--port", "${port}"]);
-        assert_eq!(em.environment.services, vec!["svc".to_string()]);
+        assert_eq!(svc.start.exec.stdin, StdinPolicy::Null);
+        assert_eq!(em.environment.services, vec![ServiceId::new("svc")]);
         assert_eq!(em.slot_windows[&0].start, 38080);
         let task = em.tasks.get("t").expect("task lowered");
         assert_eq!(task.success_codes, vec![0]);
         assert_eq!(task.exec.args, vec!["--port", "${port}"]);
+        assert_eq!(task.depends_on_services_ready, vec![ServiceId::new("svc")]);
+    }
+
+    #[test]
+    fn stdin_inherit_is_carried_into_resolved_exec() {
+        // A model that declares `stdin: inherit` must lower to an exec that records
+        // it, not silently collapse to null.
+        let mut value = model_value();
+        value["execs"]["svc-exec"]["stdin"] = json!("inherit");
+        let em = lower(&model_from(value)).expect("inherit stdin lowers");
+        assert_eq!(
+            em.services.get("svc").unwrap().start.exec.stdin,
+            StdinPolicy::Inherit
+        );
     }
 
     #[test]
@@ -715,15 +757,17 @@ mod tests {
 
     #[test]
     fn workflow_node_task_must_be_declared() {
+        // Node-task existence is now resolved by `lower` (it mints the typed
+        // handle), so a dangling `taskId` is rejected there, not in
+        // `prove_references`.
         let mut value = model_value();
         value["workflows"]["flow"] = json!({
             "servicesRequired": [],
             "nodes": { "n": { "taskId": "ghost", "dependsOn": [] } }
         });
-        assert_eq!(
-            reject_reason(value),
-            undeclared("workflow.node.taskId", "ghost")
-        );
+        let error = lower(&model_from(value)).expect_err("a dangling node task must reject");
+        assert_eq!(error.code, ErrorCode::ModelAdmission);
+        assert!(error.message.contains("ghost"));
     }
 
     #[test]

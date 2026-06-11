@@ -7,40 +7,44 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-pub use nixfied_model::LoopbackHost;
-use nixfied_model::{ContainmentRequirement, ServiceIdentity};
+use nixfied_model::{
+    ContainmentRequirement, NodeId, OperationId, ServiceId, ServiceIdentity, TaskId,
+};
+pub use nixfied_model::{LoopbackHost, StdinPolicy};
 
 /// The whole executable program for a run: services to start, tasks to run, the
 /// environment and workflow plans, and the per-slot port windows the planner
 /// assigns from.
 #[derive(Debug, Clone)]
 pub struct ExecutionModel {
-    pub services: BTreeMap<String, ExecService>,
-    pub tasks: BTreeMap<String, ExecTask>,
+    pub services: BTreeMap<ServiceId, ExecService>,
+    pub tasks: BTreeMap<TaskId, ExecTask>,
     pub environment: ExecEnvironment,
     pub workflows: BTreeMap<String, ExecWorkflow>,
     pub slot_windows: BTreeMap<u32, PortWindow>,
 }
 
-/// The single environment's start order: services first, then tasks.
+/// The single environment's start order: services first, then tasks. Every id is
+/// a handle the lowering minted by resolving the reference against the declared
+/// services/tasks, so the executor's `services.get(id)` cannot miss.
 #[derive(Debug, Clone)]
 pub struct ExecEnvironment {
-    pub services: Vec<String>,
-    pub tasks: Vec<String>,
+    pub services: Vec<ServiceId>,
+    pub tasks: Vec<TaskId>,
 }
 
 /// A bounded acyclic graph of task nodes over a set of required services.
 #[derive(Debug, Clone)]
 pub struct ExecWorkflow {
-    pub services_required: Vec<String>,
+    pub services_required: Vec<ServiceId>,
     pub nodes: Vec<ExecWorkflowNode>,
 }
 
 #[derive(Debug, Clone)]
 pub struct ExecWorkflowNode {
-    pub node_id: String,
-    pub task_id: String,
-    pub depends_on: Vec<String>,
+    pub node_id: NodeId,
+    pub task_id: TaskId,
+    pub depends_on: Vec<NodeId>,
 }
 
 /// A slot's candidate port window, the range the planner assigns service ports
@@ -64,7 +68,7 @@ impl PortWindow {
 /// exec, an http probe, an exec on ready) cannot be expressed.
 #[derive(Debug, Clone)]
 pub struct ExecService {
-    pub name: String,
+    pub name: ServiceId,
     pub prepare: PrepareOp,
     pub start: StartOp,
     pub ready: ReadyOp,
@@ -80,7 +84,7 @@ pub struct ExecService {
 /// Operation identity carried for durable lifecycle-event recording.
 #[derive(Debug, Clone)]
 pub struct OpMeta {
-    pub operation_id: String,
+    pub operation_id: OperationId,
     pub terminal_success: String,
     pub terminal_failure: String,
 }
@@ -132,6 +136,7 @@ pub struct ResolvedExec {
     pub args: Vec<String>,
     pub env: BTreeMap<String, String>,
     pub cwd: String,
+    pub stdin: StdinPolicy,
     pub timeout: Duration,
 }
 
@@ -208,9 +213,9 @@ impl From<nixfied_model::StopSignal> for StopSignal {
 /// gates on, and its success codes.
 #[derive(Debug, Clone)]
 pub struct ExecTask {
-    pub task_id: String,
+    pub task_id: TaskId,
     pub exec: ResolvedExec,
-    pub depends_on_services_ready: Vec<String>,
+    pub depends_on_services_ready: Vec<ServiceId>,
     pub success_codes: Vec<i32>,
 }
 
