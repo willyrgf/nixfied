@@ -549,6 +549,7 @@ fn run_m0_placed(
             placement,
             workflow_id,
             run_id,
+            true,
             &node_results,
             &services_output,
             &task_runs,
@@ -633,7 +634,10 @@ fn write_failure_workflow_summary(
 ) -> Option<PathBuf> {
     let workflow_id = workflow_id?;
     let services = services_output(started);
-    write_workflow_summary(placement, workflow_id, run_id, nodes, &services, tasks).ok()
+    // The run is failing regardless of what the recorded nodes say — a service
+    // or spawn failure can leave zero failed nodes, which must not read as
+    // success.
+    write_workflow_summary(placement, workflow_id, run_id, false, nodes, &services, tasks).ok()
 }
 
 fn with_failure_summary(error: RuntimeError, summary_path: Option<PathBuf>) -> RuntimeError {
@@ -674,6 +678,7 @@ fn write_workflow_summary(
     placement: &nixfied_runtime::state::HostPlacement,
     workflow_id: &str,
     run_id: &str,
+    run_succeeded: bool,
     nodes: &[NodeResult],
     services: &[ServiceRunOutput],
     tasks: &[TaskRun],
@@ -684,7 +689,7 @@ fn write_workflow_summary(
     let summary = serde_json::json!({
         "workflowId": workflow_id,
         "runId": run_id,
-        "success": nodes.iter().all(|node| node.success),
+        "success": run_succeeded && nodes.iter().all(|node| node.success),
         "services": services,
         "nodes": nodes,
         "tasks": tasks,

@@ -3114,6 +3114,68 @@ fn failed_workflow_run_writes_failure_summary() {
     assert!(PathBuf::from(stdout_path).exists());
 }
 
+#[test]
+fn service_failure_before_any_node_writes_failed_summary() {
+    let Some(shell) = nix_store_executable(&["sh", "bash"]) else {
+        return;
+    };
+    let closure_root = closure_root_for_store_executable(&shell)
+        .expect("store executable should have a closure root");
+    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
+    let port = listener.local_addr().expect("local addr").port();
+    drop(listener);
+    // The service dies before ever listening, so the run fails on the ready
+    // probe with zero node results — the summary must still record failure.
+    let mut value = fixture_model(&shell.to_string_lossy(), &["-c", "exit 1"], port);
+    value["closures"]["synthetic-helper"]["storePath"] = json!(closure_root.to_string_lossy());
+    value["closures"]["synthetic-helper"]["executable"] = json!(shell.to_string_lossy());
+    value["execs"]["synthetic-helper"]["executable"] = json!(shell.to_string_lossy());
+    value["workflows"]["wf"] = json!({
+        "servicesRequired": ["synthetic"],
+        "nodes": {
+            "never-runs": { "taskId": "smoke", "dependsOn": [] }
+        }
+    });
+    let model: Model = serde_json::from_value(value).expect("failure fixture model should parse");
+    let tmp = TempDir::new();
+    let model_path = tmp.path.join("model.json");
+    let state_base = tmp.path.join("state");
+    fs::create_dir_all(&state_base).expect("state base should be created");
+    fs::write(
+        &model_path,
+        serde_json::to_vec_pretty(&model).expect("model should serialize"),
+    )
+    .expect("model should be written");
+
+    let output = Command::new(runtime_binary())
+        .arg("run")
+        .arg("--allow-non-store-model")
+        .arg("--model")
+        .arg(&model_path)
+        .arg("--state-base")
+        .arg(&state_base)
+        .arg("--workflow")
+        .arg("wf")
+        .current_dir(&tmp.path)
+        .output()
+        .expect("runtime run should execute");
+
+    assert!(!output.status.success(), "the run must fail");
+    let error: Value = stderr_json(&output.stderr);
+    let summary_path = error["details"]["workflowSummaryPath"]
+        .as_str()
+        .expect("error must link the workflow summary");
+    let summary: Value =
+        serde_json::from_slice(&fs::read(summary_path).expect("workflow summary should exist"))
+            .expect("workflow summary should parse");
+    assert_eq!(
+        summary["success"],
+        json!(false),
+        "a run that failed before any node must not summarize as success"
+    );
+    assert_eq!(summary["nodes"].as_array().map(Vec::len), Some(0));
+}
+
 fn fixture_model(executable: &str, start_args: &[&str], port: u16) -> Value {
     common::synthetic_model(executable, start_args, port, port)
 }
