@@ -127,6 +127,37 @@ fn source_admission_records_invocation_root() {
 }
 
 #[test]
+fn lowering_failure_carries_model_provenance() {
+    // A workflow node referencing an undeclared task fails during lowering, not
+    // parse/origin/abi/closure checks. That admission error must still carry the
+    // model path and computed hash, like every other admission failure.
+    let mut model = fixture_model();
+    model["workflows"]["pipeline"] = json!({
+        "servicesRequired": ["synthetic"],
+        "nodes": { "build": { "taskId": "missing-task", "dependsOn": [] } }
+    });
+    let (_tmp, model_path, closure_root) = write_fixture_model(model, true);
+    let loaded = load_model(&model_path).expect("fixture should load");
+    let context = AdmissionContext {
+        policy: StoreOriginPolicy::AllowNonStoreForTests,
+        store_root: closure_root.parent().unwrap().to_path_buf(),
+        host_system: host_system(),
+    };
+    let error =
+        Admission::check(&loaded, &context).expect_err("undeclared workflow task must be refused");
+
+    assert_eq!(error.code, ErrorCode::ModelAdmission);
+    assert!(
+        error.model_path.is_some(),
+        "lowering error must carry a model path"
+    );
+    assert_eq!(
+        error.computed_model_hash.as_deref(),
+        Some(loaded.computed_model_hash.as_str())
+    );
+}
+
+#[test]
 fn control_admission_does_not_resolve_a_live_source() {
     // Recovery (ps/down/clean) must admit from the store model alone, so control
     // admission leaves the live workspace unresolved instead of failing when the

@@ -81,6 +81,21 @@ impl Admission {
         context: &AdmissionContext,
         resolve_source: bool,
     ) -> RuntimeResult<Self> {
+        // Attach model provenance to every admission failure, including lowering
+        // and plan-feasibility errors which propagate raw. The bytes were already
+        // read and hashed, so a `null` modelPath/computedModelHash on an invalid
+        // model would be an inconsistent, weaker diagnostic than parse/origin/abi/
+        // closure errors carry.
+        Self::admit_checks(loaded, context, resolve_source).map_err(|error| {
+            error.with_model_if_missing(loaded.path.clone(), loaded.computed_model_hash.clone())
+        })
+    }
+
+    fn admit_checks(
+        loaded: &LoadedModel,
+        context: &AdmissionContext,
+        resolve_source: bool,
+    ) -> RuntimeResult<Self> {
         origin::check_store_origin(loaded, context)?;
         abi::check_abi(&loaded.model, loaded)?;
         target::check_target(&loaded.model, loaded, context)?;
