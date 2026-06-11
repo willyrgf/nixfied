@@ -21,9 +21,27 @@ let
     executable = true;
     text = ''
       #!${pkgs.python3}/bin/python3
-      import argparse, socket, sys
+      import argparse, os, socket, sys
+
+      def check_env(name):
+          # A named endpoint placeholder that survives substitution would reach
+          # us literally; treat that as a hard failure so the gate catches it.
+          value = os.environ.get(name)
+          if value is not None and "''${" in value:
+              print(f"unsubstituted placeholder in {name}: {value}", file=sys.stderr)
+              sys.exit(3)
+
+      def touch(target):
+          host, _, port = target.rpartition(":")
+          with socket.create_connection((host, int(port)), timeout=5) as c:
+              c.sendall(b"ping\n"); sys.stdout.write(c.recv(4096).decode())
 
       def serve(a):
+          check_env("NIXFIED_DEMO_DSN")
+          # The runtime starts connectsTo dependencies first, so an upstream
+          # named by ''${host:..}:''${port:..} is already ready here.
+          if a.upstream:
+              touch(a.upstream)
           with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
               s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
               s.bind((a.host, a.port)); s.listen()
@@ -34,8 +52,11 @@ let
                       c.recv(4096); c.sendall(f"{a.label}-ok\n".encode())
 
       def ping(a):
+          check_env("NIXFIED_DEMO_DSN")
           with socket.create_connection((a.host, a.port), timeout=5) as c:
               c.sendall(b"ping\n"); sys.stdout.write(c.recv(4096).decode())
+          for target in a.also:
+              touch(target)
 
       p = argparse.ArgumentParser()
       sub = p.add_subparsers(dest="cmd", required=True)
@@ -44,6 +65,8 @@ let
           q.add_argument("--label", required=True)
           q.add_argument("--host", required=True)
           q.add_argument("--port", required=True, type=int)
+          q.add_argument("--upstream", default=None)
+          q.add_argument("--also", action="append", default=[])
       sub.add_parser("stop")
       a = p.parse_args()
       if a.cmd == "service": serve(a)
@@ -71,8 +94,11 @@ let
     "\${port}"
   ];
 
-  # One service definition reused for the api and the worker.
-  mkAppService = name: {
+  # One service definition reused for the api and the worker. `connectsTo`
+  # makes the named endpoints (`''${host:<serviceId>}`/`''${port:<serviceId>}`)
+  # of same-slot dependencies addressable from the start args and orders
+  # startup so they are ready first; `extraStartArgs` carries that wiring.
+  mkAppService = name: connectsTo: extraStartArgs: {
     lifecycle = {
       prepare = {
         operationId = "service.${name}.prepare";
@@ -84,7 +110,7 @@ let
       start = {
         operationId = "service.${name}.start";
         execId = name;
-        execArgs = serviceArgs name;
+        execArgs = serviceArgs name ++ extraStartArgs;
         terminal = {
           success = "spawned";
           failure = "failed";
@@ -122,6 +148,7 @@ let
     endpoint = {
       endpointId = "${name}-tcp";
     };
+    inherit connectsTo;
     logRefs = [ "service.${name}" ];
   };
 in
@@ -154,6 +181,7 @@ in
       "service.worker.start"
       "task.ping-api.run"
       "task.ping-worker.run"
+      "task.release-gate.run"
     ];
     effects = [
       "process"
@@ -164,8 +192,13 @@ in
   nixfied.execs.api.closureId = "app";
   nixfied.execs.worker.closureId = "app";
 
-  nixfied.services.api = mkAppService "api";
-  nixfied.services.worker = mkAppService "worker";
+  nixfied.services.api = mkAppService "api" [ ] [ ];
+  # The worker connects to the api in its own slot: the runtime starts the api
+  # first and resolves the named endpoint from the slot plan.
+  nixfied.services.worker = mkAppService "worker" [ "api" ] [
+    "--upstream"
+    "\${host:api}:\${port:api}"
+  ];
 
   nixfied.tasks.ping-api = {
     operationId = "task.ping-api.run";
@@ -181,14 +214,27 @@ in
     dependsOnServicesReady = [ "worker" ];
     logRefs = [ "task.ping-worker" ];
   };
-  # A release gate that requires the whole stack ready before it runs: it depends
-  # on all three services (a task may depend on more than one). The first
-  # dependency (api) is the primary, providing ${port}; it pings the api once the
-  # database and worker are also up.
+  # A release gate that requires the whole stack ready before it runs: it
+  # depends on all three services (a task may depend on more than one). The
+  # first dependency (api) is the primary providing bare ${port}/${host}; the
+  # others are addressed by name via ${port:<serviceId>}/${host:<serviceId>},
+  # and the env DSN proves env values are substituted too (the app fails on a
+  # literal placeholder).
+  nixfied.execs.gate = {
+    closureId = "app";
+    env = {
+      NIXFIED_DEMO_DSN = "tcp://\${host:postgres}:\${port:postgres}";
+    };
+  };
   nixfied.tasks.release-gate = {
     operationId = "task.release-gate.run";
-    execId = "api";
-    args = taskArgs "api";
+    execId = "gate";
+    args = taskArgs "api" ++ [
+      "--also"
+      "\${host:worker}:\${port:worker}"
+      "--also"
+      "\${host:postgres}:\${port:postgres}"
+    ];
     dependsOnServicesReady = [
       "api"
       "worker"
