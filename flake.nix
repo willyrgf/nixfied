@@ -83,6 +83,7 @@
           workflowModel = nixfiedLib.compileModel ./examples/workflow/nixfied.nix;
           polyglotModel = nixfiedLib.compileModel ./examples/polyglot-stack/nixfied.nix;
           downstreamModel = nixfiedLib.compileModel ./examples/downstream/nixfied.nix;
+          rethModel = nixfiedLib.compileModel ./examples/reth/nixfied.nix;
           nixfiedInstall = import ./nix/install/install.nix { inherit pkgs; };
           nixfiedUpgrade = import ./nix/install/upgrade.nix { inherit pkgs; };
           # `nix run .#gate`: the framework gate — runs the example models directly
@@ -96,6 +97,7 @@
               workflow = workflowModel;
               polyglot = polyglotModel;
               downstream = downstreamModel;
+              reth = rethModel;
             };
           };
           # `.#check` / `.#test` / `.#ci`: the framework's own source/test/CI gate.
@@ -123,6 +125,7 @@
           workflow-model = workflowModel;
           polyglot-stack-model = polyglotModel;
           downstream-model = downstreamModel;
+          reth-model = rethModel;
         }
       );
 

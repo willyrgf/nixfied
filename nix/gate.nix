@@ -207,6 +207,7 @@ pkgs.writeShellApplication {
     example workflow "${models.workflow}" pipeline
     example polyglot "${models.polyglot}"
     example downstream "${models.downstream}" release
+    example reth "${models.reth}"
     echo "==> slots" >&2
     slots
     echo "==> negative" >&2

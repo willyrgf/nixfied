@@ -59,7 +59,8 @@ nixfied="$(nix build .#nixfied-runtime --no-link --print-out-paths)/bin/nixfied"
 | Example | Shows |
 | --- | --- |
 | `examples/minimal` | the smallest service + task |
-| `examples/postgres` | the Postgres reference adapter (initdb → server → `SELECT 1` → clean) |
+| `examples/postgres` | the Postgres reference adapter (idempotent initdb → server → `pg_isready` probes → `SELECT 1` → clean) |
+| `examples/reth` | the Reth reference adapter (dev node → JSON-RPC probes → smoke call → clean) |
 | `examples/workflow` | a bounded task DAG with a service-readiness gate |
 | `examples/polyglot-stack` | two services in different languages, one run |
 | `examples/downstream` | a realistic small system + the copy-paste adoption guide |

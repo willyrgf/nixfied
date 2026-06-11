@@ -1,24 +1,98 @@
 # PostgreSQL reference adapter.
 #
-# Compiles a minimal Postgres service into the generic model primitives. The
-# runtime gains no Postgres knowledge: data-dir init is a prepare exec
-# (`initdb`), the server is a foreground start exec (`postgres`), readiness and
-# health are TCP ownership probes, the smoke query is a dependent task (`psql`),
-# and cleanup is the marker-gated runtime primitive that removes the slot state.
+# Compiles a production-shaped Postgres service into the generic model
+# primitives. The runtime gains no Postgres knowledge: data-dir init is an
+# idempotent prepare exec (a wrapper around `initdb` that adopts an existing
+# cluster), the server is a foreground start exec (`postgres`), readiness and
+# health are protocol probes (`pg_isready`), the smoke query is a dependent
+# task (`psql`), and cleanup is the marker-gated runtime primitive that removes
+# the slot state.
 #
 # The data directory lives under `${stateDir}/pgdata`, where `${stateDir}` is the
 # runtime-materialised slot state root, so M2 marker-gated cleanup removes it.
-{ pkgs, ... }:
+{
+  lib,
+  pkgs,
+  ...
+}:
 let
   postgresql = pkgs.postgresql;
   pgdata = "\${stateDir}/pgdata";
+  isDarwin = pkgs.stdenv.hostPlatform.isDarwin;
+
+  # Idempotent, repeat-run-safe prepare: a second run on the same slot adopts
+  # the existing cluster instead of failing in `initdb`; a half-initialized
+  # cluster (no PG_VERSION) is rebuilt. On Darwin the cluster must use mmap
+  # shared memory — the default SysV segments exhaust the tiny macOS kernel
+  # limits when slots run several clusters — so init pins it and adoption
+  # verifies it, failing with an actionable message instead of an opaque
+  # postmaster startup error.
+  pgPrepare = pkgs.writeShellApplication {
+    name = "nixfied-pg-prepare";
+    runtimeInputs = [
+      pkgs.coreutils
+      pkgs.gnugrep
+      postgresql
+    ];
+    text =
+      ''
+        state_dir=""
+        while [[ $# -gt 0 ]]; do
+          case "$1" in
+            --state-dir)
+              state_dir="''${2:?missing --state-dir value}"
+              shift 2
+              ;;
+            *)
+              echo "unknown postgres prepare argument: $1" >&2
+              exit 64
+              ;;
+          esac
+        done
+        if [[ -z "$state_dir" || "$state_dir" == "/" ]]; then
+          echo "missing or unsafe --state-dir argument" >&2
+          exit 64
+        fi
+
+        pgdata="$state_dir/pgdata"
+        if [[ -s "$pgdata/PG_VERSION" ]]; then
+      ''
+      + lib.optionalString isDarwin ''
+        if ! grep -Eq '^[[:space:]]*shared_memory_type[[:space:]]*=[[:space:]]*mmap' \
+             "$pgdata/postgresql.conf"; then
+          echo "existing cluster at $pgdata does not pin shared_memory_type=mmap;" >&2
+          echo "re-initialize it (nixfied clean) or set it in postgresql.conf" >&2
+          exit 1
+        fi
+      ''
+      + ''
+          exit 0
+        fi
+
+        rm -rf "$pgdata"
+        mkdir -p "$pgdata"
+        initdb \
+          -D "$pgdata" \
+          -U postgres \
+          -A trust \
+          --no-locale \
+          --encoding=UTF8
+      ''
+      + lib.optionalString isDarwin ''
+        {
+          echo "shared_memory_type = mmap"
+          echo "dynamic_shared_memory_type = mmap"
+        } >> "$pgdata/postgresql.conf"
+      '';
+  };
 in
 {
-  # One closure per executable in the postgresql package. Each exec resolves to
-  # its closure's executable; admission requires that exact pairing.
-  nixfied.closures.pg-initdb = {
-    package = postgresql;
-    executable = "bin/initdb";
+  # One closure per executable. Each exec resolves to its closure's executable;
+  # admission requires that exact pairing, and the closure binds exactly the
+  # operations it is authorized to run.
+  nixfied.closures.pg-prepare = {
+    package = pgPrepare;
+    executable = "bin/nixfied-pg-prepare";
     operationBindings = [ "service.postgres.prepare" ];
     effects = [
       "process"
@@ -35,6 +109,18 @@ in
       "file-write"
     ];
   };
+  nixfied.closures.pg-isready = {
+    package = postgresql;
+    executable = "bin/pg_isready";
+    operationBindings = [
+      "service.postgres.ready"
+      "service.postgres.health"
+    ];
+    effects = [
+      "process"
+      "network-listener"
+    ];
+  };
   nixfied.closures.pg-psql = {
     package = postgresql;
     executable = "bin/psql";
@@ -46,11 +132,14 @@ in
   };
 
   nixfied.execs.pg-init = {
-    closureId = "pg-initdb";
+    closureId = "pg-prepare";
     timeoutMs = 60000;
   };
   nixfied.execs.pg-server = {
     closureId = "pg-server";
+  };
+  nixfied.execs.pg-ready = {
+    closureId = "pg-isready";
   };
   nixfied.execs.pg-smoke = {
     closureId = "pg-psql";
@@ -62,14 +151,8 @@ in
         operationId = "service.postgres.prepare";
         execId = "pg-init";
         execArgs = [
-          "-D"
-          pgdata
-          "-U"
-          "postgres"
-          "-A"
-          "trust"
-          "--no-locale"
-          "--encoding=UTF8"
+          "--state-dir"
+          "\${stateDir}"
         ];
         terminal = {
           success = "initialized";
@@ -98,8 +181,25 @@ in
       };
       ready = {
         operationId = "service.postgres.ready";
+        # Protocol readiness: pg_isready completes a real handshake, so "ready"
+        # means the postmaster accepts connections, not merely that the port is
+        # bound (which postgres does well before recovery finishes).
         probe = {
-          timeoutMs = 1000;
+          kind = "exec";
+          execId = "pg-ready";
+          execArgs = [
+            "-h"
+            "127.0.0.1"
+            "-p"
+            "\${port}"
+            "-U"
+            "postgres"
+            "-d"
+            "postgres"
+            "-t"
+            "1"
+          ];
+          timeoutMs = 2000;
           retryIntervalMs = 200;
           maxAttempts = 60;
         };
@@ -111,7 +211,21 @@ in
       health = {
         operationId = "service.postgres.health";
         probe = {
-          timeoutMs = 1000;
+          kind = "exec";
+          execId = "pg-ready";
+          execArgs = [
+            "-h"
+            "127.0.0.1"
+            "-p"
+            "\${port}"
+            "-U"
+            "postgres"
+            "-d"
+            "postgres"
+            "-t"
+            "1"
+          ];
+          timeoutMs = 2000;
           retryIntervalMs = 200;
           maxAttempts = 60;
         };

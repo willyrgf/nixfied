@@ -5,4 +5,5 @@
 {
   synthetic = import ./synthetic.nix;
   postgres = import ./postgres.nix;
+  reth = import ./reth.nix;
 }
