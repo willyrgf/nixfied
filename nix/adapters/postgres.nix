@@ -108,7 +108,6 @@ in
   nixfied.closures.pg-prepare = {
     package = pgPrepare;
     executable = "bin/nixfied-pg-prepare";
-    operationBindings = [ "task.pg-init.run" ];
     effects = [
       "process"
       "file-write"
@@ -117,7 +116,6 @@ in
   nixfied.closures.pg-server = {
     package = postgresql;
     executable = "bin/postgres";
-    operationBindings = [ "service.postgres.start" ];
     effects = [
       "process"
       "network-listener"
@@ -127,10 +125,6 @@ in
   nixfied.closures.pg-isready = {
     package = postgresql;
     executable = "bin/pg_isready";
-    operationBindings = [
-      "service.postgres.ready"
-      "service.postgres.health"
-    ];
     effects = [
       "process"
       "network-listener"
@@ -139,7 +133,6 @@ in
   nixfied.closures.pg-psql = {
     package = postgresql;
     executable = "bin/psql";
-    operationBindings = [ "task.smoke-query.run" ];
     effects = [
       "process"
       "network-listener"
@@ -164,7 +157,6 @@ in
     lifecycle = {
       prepare.task = "pg-init";
       start = {
-        operationId = "service.postgres.start";
         invocation = {
           tools = [ "pg-server" ];
           run = [
@@ -181,13 +173,8 @@ in
             "\${port}"
           ];
         };
-        terminal = {
-          success = "spawned";
-          failure = "failed";
-        };
       };
       ready = {
-        operationId = "service.postgres.ready";
         # Protocol readiness: pg_isready completes a real handshake, so "ready"
         # means the postmaster accepts connections, not merely that the port is
         # bound (which postgres does well before recovery finishes).
@@ -198,13 +185,8 @@ in
           retryIntervalMs = 200;
           maxAttempts = 60;
         };
-        terminal = {
-          success = "ready";
-          failure = "not-ready";
-        };
       };
       health = {
-        operationId = "service.postgres.health";
         probe = {
           kind = "exec";
           invocation = pgReadyInvocation;
@@ -212,27 +194,11 @@ in
           retryIntervalMs = 200;
           maxAttempts = 60;
         };
-        terminal = {
-          success = "healthy";
-          failure = "unhealthy";
-        };
       };
       stop = {
-        operationId = "service.postgres.stop";
         # Postgres fast shutdown: SIGINT rolls back in-flight transactions and
         # exits promptly, where SIGTERM (smart shutdown) waits for clients.
         signal = "INT";
-        terminal = {
-          success = "stopped";
-          failure = "failed";
-        };
-      };
-      clean = {
-        operationId = "service.postgres.clean";
-        terminal = {
-          success = "cleaned";
-          failure = "failed";
-        };
       };
     };
     endpoint = {
@@ -243,8 +209,10 @@ in
     containment = "process-tree";
   };
 
+  # The adapter's smoke check is an ordinary named task: adopters reference it
+  # as a step in their own composites (the converse-reuse pattern that
+  # replaced environment membership).
   nixfied.tasks.smoke-query = {
-    operationId = "task.smoke-query.run";
     invocation = {
       tools = [ "pg-psql" ];
       run = [
