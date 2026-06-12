@@ -70,7 +70,7 @@ let
     (mapAttrsToList (_id: task: {
       operationId = task.operationId;
       invocation = task.invocation;
-    }) config.nixfied.tasks)
+    }) (lib.filterAttrs (_id: task: task.kind == "leaf") config.nixfied.tasks))
     ++ lib.concatLists (
       mapAttrsToList (
         _name: service:
@@ -271,17 +271,29 @@ let
     };
   services = mapAttrs serviceSpec config.nixfied.services;
 
-  taskSpec = name: task: {
-    operationId = task.operationId;
-    invocation = resolveInvocation "task ${name}" task.invocation;
-    requires = task.requires;
-    exitPolicy = {
-      successCodes = task.exitPolicy.successCodes;
-    };
-    artifactRefs = task.artifactRefs;
-    logRefs = task.logRefs;
-    summaryRefs = task.summaryRefs;
-  };
+  taskSpec =
+    name: task:
+    if task.kind == "composite" then
+      {
+        kind = "composite";
+        steps = mapAttrs (_stepName: step: {
+          task = step.task;
+          dependsOn = step.dependsOn;
+        }) task.steps;
+      }
+    else
+      {
+        kind = "leaf";
+        operationId = task.operationId;
+        invocation = resolveInvocation "task ${name}" task.invocation;
+        requires = task.requires;
+        exitPolicy = {
+          successCodes = task.exitPolicy.successCodes;
+        };
+        artifactRefs = task.artifactRefs;
+        logRefs = task.logRefs;
+        summaryRefs = task.summaryRefs;
+      };
   tasks = mapAttrs taskSpec config.nixfied.tasks;
 
   environments = mapAttrs (_name: env: {

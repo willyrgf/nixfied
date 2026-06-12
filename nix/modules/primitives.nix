@@ -333,15 +333,47 @@ let
     };
   };
 
+  stepType = types.submodule {
+    options = {
+      task = mkOption {
+        type = types.nonEmptyStr;
+        description = "The task (leaf or composite) this step runs.";
+      };
+      dependsOn = mkOption {
+        type = types.listOf types.str;
+        default = [ ];
+        description = "Sibling steps that must have completed successfully before this step starts.";
+      };
+    };
+  };
+
+  # A task is a leaf (one bounded invocation + orchestration) or a composite (a
+  # static named-step DAG over task references). Kind/field coherence is
+  # validated at eval; the runtime re-proves it at admission.
   taskType = types.submodule {
     options = {
+      kind = mkOption {
+        type = types.enum [
+          "leaf"
+          "composite"
+        ];
+        default = "leaf";
+        description = "Task kind: a bounded leaf invocation, or a composite DAG of steps.";
+      };
       operationId = mkOption {
-        type = types.nonEmptyStr;
-        description = "Globally unique task operation identifier.";
+        type = types.nullOr types.nonEmptyStr;
+        default = null;
+        description = "Globally unique task operation identifier (leaf only).";
       };
       invocation = mkOption {
-        type = invocationType;
-        description = "The leaf invocation the task runs.";
+        type = types.nullOr invocationType;
+        default = null;
+        description = "The leaf invocation the task runs (leaf only).";
+      };
+      steps = mkOption {
+        type = types.attrsOf stepType;
+        default = { };
+        description = "Composite body: named steps referencing declared tasks (composite only).";
       };
       requires = mkOption {
         type = types.listOf types.str;

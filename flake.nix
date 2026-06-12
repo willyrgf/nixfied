@@ -49,9 +49,11 @@
           # The nix-built runtime an adopter's apps run against. Lazy: only forced
           # when `projectApps` is used, so `compileModel`-only callers don't build it.
           runtime = import ./nix/packages/runtime.nix { inherit pkgs; };
+          composeLib = import ./nix/lib/compose.nix { inherit (nixpkgs) lib; };
         in
         {
           inherit compileModel;
+          inherit (composeLib) seq;
           # The uniform run/check/test/ci app set for an adopting project's model.
           projectApps =
             module:

@@ -85,6 +85,76 @@ let
   workflowsAcyclic = lib.all (
     wf: lib.all (node: !(workflowReaches wf node node [ ])) (nodeNames wf)
   ) workflowNames;
+  # Task kind/field coherence, composite graph validity, and step-path id
+  # discipline: invalid composition must fail at evaluation, not compile into
+  # a model the runtime only rejects at admission.
+  taskNames = builtins.attrNames tasks;
+  stepSafe = id: builtins.match "[A-Za-z0-9][A-Za-z0-9_-]*" id != null;
+  taskIdsStepSafe = lib.all stepSafe taskNames && lib.all stepSafe (builtins.attrNames services);
+  leafTasks = lib.filterAttrs (_n: task: task.kind == "leaf") tasks;
+  compositeTasks = lib.filterAttrs (_n: task: task.kind == "composite") tasks;
+  leavesCoherent = lib.all (
+    name:
+    let
+      task = leafTasks.${name};
+    in
+    task.operationId != null && task.invocation != null && task.steps == { }
+  ) (builtins.attrNames leafTasks);
+  compositesCoherent = lib.all (
+    name:
+    let
+      task = compositeTasks.${name};
+    in
+    task.steps != { }
+    && task.operationId == null
+    && task.invocation == null
+    && task.requires == [ ]
+    && lib.all stepSafe (builtins.attrNames task.steps)
+  ) (builtins.attrNames compositeTasks);
+  stepTasksDeclared = lib.all (
+    name:
+    lib.all (step: builtins.hasAttr step.task tasks) (
+      builtins.attrValues compositeTasks.${name}.steps
+    )
+  ) (builtins.attrNames compositeTasks);
+  stepDependsOnSiblings = lib.all (
+    name:
+    let
+      stepNames = builtins.attrNames compositeTasks.${name}.steps;
+    in
+    lib.all (step: lib.all (dep: builtins.elem dep stepNames) step.dependsOn) (
+      builtins.attrValues compositeTasks.${name}.steps
+    )
+  ) (builtins.attrNames compositeTasks);
+  # Sibling dependsOn acyclicity per composite, and task-reference acyclicity
+  # through nesting (a composite may not reach itself through step task refs).
+  stepReaches =
+    steps: start: current: seen:
+    lib.any (
+      dep:
+      dep == start || (!(builtins.elem dep seen) && stepReaches steps start dep (seen ++ [ dep ]))
+    ) steps.${current}.dependsOn;
+  stepGraphsAcyclic = lib.all (
+    name:
+    let
+      steps = compositeTasks.${name}.steps;
+    in
+    lib.all (step: !(stepReaches steps step step [ ])) (builtins.attrNames steps)
+  ) (builtins.attrNames compositeTasks);
+  taskRefsOf =
+    name:
+    if tasks.${name}.kind == "composite" then
+      map (step: step.task) (builtins.attrValues tasks.${name}.steps)
+    else
+      [ ];
+  taskReaches =
+    start: current: seen:
+    lib.any (
+      target:
+      builtins.hasAttr target tasks
+      && (target == start || (!(builtins.elem target seen) && taskReaches start target (seen ++ [ target ])))
+    ) (taskRefsOf current);
+  taskGraphAcyclic = lib.all (name: !(taskReaches name name [ ])) taskNames;
   checks = [
     (expect (config.nixfied.target.system == system) "target.system must match the compile system")
     (expect (slotPolicy.min >= 0) "slotPolicy.min must be non-negative")
@@ -120,6 +190,15 @@ let
     )
     (expect workflowsNonEmpty "a declared workflow must declare at least one node")
     (expect workflowsAcyclic "workflow node dependency graph must be acyclic")
+    (expect taskIdsStepSafe "task and service ids must match [A-Za-z0-9][A-Za-z0-9_-]* (step-path segments)")
+    (expect leavesCoherent "a leaf task must declare operationId and invocation and no steps")
+    (expect compositesCoherent
+      "a composite task carries only steps (no invocation, operationId, or requires) with step-safe names"
+    )
+    (expect stepTasksDeclared "composite steps must reference declared tasks")
+    (expect stepDependsOnSiblings "composite step dependsOn must name a sibling step")
+    (expect stepGraphsAcyclic "composite step dependency graph must be acyclic")
+    (expect taskGraphAcyclic "the task reference graph must be acyclic")
   ];
 in
 lib.foldl' (acc: check: lib.seq check acc) config checks
