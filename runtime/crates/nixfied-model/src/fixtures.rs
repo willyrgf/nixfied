@@ -135,7 +135,6 @@ pub fn synthetic_model(options: &SyntheticModelOptions) -> Value {
                 "targetSystem": options.system,
                 "operationBindings": [
                     "service.synthetic.start",
-                    "service.synthetic.stop",
                     "task.smoke.run"
                 ],
                 "requiresExecutable": true,

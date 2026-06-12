@@ -67,7 +67,6 @@ fn valid_model_json() -> Value {
                 "targetSystem": "aarch64-darwin",
                 "operationBindings": [
                     "service.synthetic.start",
-                    "service.synthetic.stop",
                     "task.smoke.run"
                 ],
                 "requiresExecutable": true,
@@ -141,10 +140,11 @@ fn parse_valid_model() -> Model {
 /// binds its own lifecycle, endpoint, and probe. Used to prove structural
 /// validation accepts arbitrary service counts.
 fn add_worker_service(value: &mut Value) {
-    value["closures"]["synthetic-helper"]["operationBindings"]
-        .as_array_mut()
-        .unwrap()
-        .push(json!("service.worker.start"));
+    value["closures"]["synthetic-helper"]["operationBindings"] = json!([
+        "service.synthetic.start",
+        "service.worker.start",
+        "task.smoke.run"
+    ]);
 
     let mut worker = synthetic_service();
     worker["endpoints"] =

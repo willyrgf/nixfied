@@ -2698,6 +2698,7 @@ fn task_child_path_is_assembled_from_tool_roots() {
     let mut value = fixture_model(python, &["-c", python_listener_script(), "${port}"], port);
     value["environments"]["dev"]["services"] = json!([]);
     value["tasks"]["smoke"]["requires"] = json!([]);
+    value["tasks"]["smoke"]["servicesRequired"] = json!([]);
     set_task_run_args(
         &mut value,
         &["-c", "import os, sys; sys.stdout.write(os.environ['PATH'])"],
@@ -2753,6 +2754,7 @@ fn task_child_environment_is_hermetic() {
     let mut value = fixture_model(python, &["-c", python_listener_script(), "${port}"], port);
     value["environments"]["dev"]["services"] = json!([]);
     value["tasks"]["smoke"]["requires"] = json!([]);
+    value["tasks"]["smoke"]["servicesRequired"] = json!([]);
     value["tasks"]["smoke"]["invocation"]["env"] = json!({ "DECLARED": "yes" });
     set_task_run_args(
         &mut value,
@@ -3189,6 +3191,7 @@ fn composite_run_keys_evidence_by_step_path() {
     value["closures"]["synthetic-helper"]["storePath"] = json!(closure_root.to_string_lossy());
     value["environments"]["dev"]["services"] = json!([]);
     value["tasks"]["smoke"]["requires"] = json!([]);
+    value["tasks"]["smoke"]["servicesRequired"] = json!([]);
     set_task_run_args(&mut value, &["unit"]);
     prepend_invocation_args(&mut value, &["-c", script]);
     value["tasks"]["twice"] = json!({
@@ -3287,6 +3290,7 @@ fn task_only_run_records_a_durable_runs_row() {
     // The environment starts no services and runs only the service-less task.
     value["environments"]["dev"]["services"] = json!([]);
     value["tasks"]["smoke"]["requires"] = json!([]);
+    value["tasks"]["smoke"]["servicesRequired"] = json!([]);
     set_task_run_args(&mut value, &["noservice"]);
     prepend_invocation_args(&mut value, &["-c", script]);
     let model: Model = serde_json::from_value(value).expect("task-only model should parse");
@@ -3363,6 +3367,7 @@ fn inherit_stdin_reaches_a_task_process() {
     value["closures"]["synthetic-helper"]["storePath"] = json!(closure_root.to_string_lossy());
     value["environments"]["dev"]["services"] = json!([]);
     value["tasks"]["smoke"]["requires"] = json!([]);
+    value["tasks"]["smoke"]["servicesRequired"] = json!([]);
     set_task_run_args(&mut value, &[]);
     prepend_invocation_args(&mut value, &["-c", script]);
     value["tasks"]["smoke"]["invocation"]["stdin"] = json!("inherit");
@@ -3450,6 +3455,7 @@ fn failed_composite_run_writes_failure_summary() {
     // A 0-service composite whose single node fails: the run must leave the
     // same aggregate evidence a success does, linked from the error.
     value["tasks"]["smoke"]["requires"] = json!([]);
+    value["tasks"]["smoke"]["servicesRequired"] = json!([]);
     set_task_run_args(&mut value, &["-c", "exit 3"]);
     value["environments"]["dev"]["services"] = json!([]);
     value["tasks"]["wf"] = json!({
@@ -3524,6 +3530,7 @@ fn service_failure_before_any_node_writes_failed_summary() {
     value["closures"]["synthetic-helper"]["executable"] = json!(shell.to_string_lossy());
     value["tasks"]["wf"] = json!({
         "kind": "composite",
+        "servicesRequired": ["synthetic"],
         "steps": {
             "never-runs": { "task": "smoke" }
         }

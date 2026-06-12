@@ -596,9 +596,6 @@ pub enum Rejection {
     DuplicateOperationId {
         id: String,
     },
-    UnknownOperationBinding {
-        binding: String,
-    },
     ClosureTargetMismatch {
         closure_id: String,
         target_system: String,
@@ -643,9 +640,11 @@ pub enum Rejection {
         service: String,
         class: &'static str,
     },
-    OperationUnbound {
-        operation_id: String,
-        closure_id: String,
+    DerivedFactMismatch {
+        owner: String,
+        fact: &'static str,
+        carried: String,
+        derived: String,
     },
 }
 
@@ -658,9 +657,6 @@ impl Rejection {
             }
             Rejection::DuplicateOperationId { id } => {
                 format!("operation id {id} is declared more than once")
-            }
-            Rejection::UnknownOperationBinding { binding } => {
-                format!("closure binds undeclared operation {binding}")
             }
             Rejection::ClosureTargetMismatch {
                 closure_id,
@@ -709,12 +705,14 @@ impl Rejection {
             Rejection::ProbeExecMissing { service, class } => {
                 format!("service {service} {class} probe is exec but declares no invocation")
             }
-            Rejection::OperationUnbound {
-                operation_id,
-                closure_id,
+            Rejection::DerivedFactMismatch {
+                owner,
+                fact,
+                carried,
+                derived,
             } => {
                 format!(
-                    "operation {operation_id} is not bound by its invocation's closure {closure_id}"
+                    "{owner} carries {fact} [{carried}] but the graph derives [{derived}] (DERIVE-1)"
                 )
             }
         }
@@ -881,38 +879,133 @@ fn prove_references(model: &Model) -> Result<(), Rejection> {
         }
     }
 
-    for closure in model.closures.values() {
-        for binding in &closure.operation_bindings {
-            if !declared_operations.contains(binding.as_str()) {
-                return Err(Rejection::UnknownOperationBinding {
-                    binding: binding.to_string(),
-                });
+    // Per-position tool/resolution coherence first, so an undeclared tool or
+    // unresolvable run[0] surfaces as itself rather than as a downstream
+    // derived-fact mismatch.
+    for (operation_id, invocation) in invocation_positions(model) {
+        for tool in invocation.tools.iter() {
+            if !model.closures.contains_key(tool.as_str()) {
+                return Err(undeclared("invocation.tools", tool.as_str()));
             }
         }
-    }
-
-    // Every operation that runs through an invocation runs through a closure:
-    // the closure providing the resolved run[0] must explicitly bind that
-    // operation, or the model is executing a closure for an operation it never
-    // declared. Dangling tool references are rejected by the per-reference
-    // resolver, so only the binding coverage is proven here.
-    for (operation_id, invocation) in invocation_positions(model) {
-        let Some((closure_id, closure)) = executable_closure(invocation, &model.closures) else {
-            continue;
-        };
-        if !closure
-            .operation_bindings
-            .iter()
-            .any(|binding| binding.as_str() == operation_id.as_str())
-        {
-            return Err(Rejection::OperationUnbound {
-                operation_id: operation_id.to_string(),
-                closure_id: closure_id.clone(),
+        if executable_closure(invocation, &model.closures).is_none() {
+            return Err(Rejection::RunUnresolvable {
+                owner: format!("operation {operation_id}"),
+                program: invocation.run.first().cloned().unwrap_or_default(),
             });
         }
     }
 
+    // DERIVE-1: derived facts are re-derived here and compared with the
+    // carried values, fail closed, naming both sides.
+    prove_derived_operation_bindings(model)?;
+    prove_derived_services_required(model)?;
+
     Ok(())
+}
+
+/// Re-derive each closure's operation bindings (docs/DERIVATION_SPEC.md §4):
+/// the byte-sorted operation ids of every invocation position whose run[0]
+/// resolves to the closure. The carried `operationBindings` must equal the
+/// derivation exactly — the eval-side narrowing gate has already been applied
+/// there, and the emitted value is the derived set.
+fn prove_derived_operation_bindings(model: &Model) -> Result<(), Rejection> {
+    let positions = invocation_positions(model);
+    for (closure_id, closure) in &model.closures {
+        let mut derived: Vec<&str> = positions
+            .iter()
+            .filter(|(_, invocation)| {
+                executable_closure(invocation, &model.closures)
+                    .is_some_and(|(id, _)| id == closure_id)
+            })
+            .map(|(operation_id, _)| operation_id.as_str())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        derived.sort_unstable();
+        let carried: Vec<&str> = closure
+            .operation_bindings
+            .iter()
+            .map(|binding| binding.as_str())
+            .collect();
+        if derived != carried {
+            return Err(Rejection::DerivedFactMismatch {
+                owner: format!("closure {closure_id}"),
+                fact: "operationBindings",
+                carried: carried.join(", "),
+                derived: derived.join(", "),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Re-derive each task's `servicesRequired` (docs/DERIVATION_SPEC.md §3): the
+/// union of transitive leaf `requires`, closed over `connectsTo`, byte-sorted.
+fn prove_derived_services_required(model: &Model) -> Result<(), Rejection> {
+    for (task_id, task) in &model.tasks {
+        let derived = derive_services_required(model, task_id);
+        let carried: Vec<&str> = task
+            .services_required
+            .iter()
+            .map(|service| service.as_str())
+            .collect();
+        if derived != carried {
+            return Err(Rejection::DerivedFactMismatch {
+                owner: format!("task {task_id}"),
+                fact: "servicesRequired",
+                carried: carried.join(", "),
+                derived: derived.join(", "),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// The derived service union of one task. Set semantics throughout; the
+/// authored task-reference graph is acyclic by the time admission compares
+/// (the planner proves it), but the walk guards with a seen set so this
+/// function is total on any deserialized model.
+pub(crate) fn derive_services_required<'a>(model: &'a Model, task_id: &str) -> Vec<&'a str> {
+    fn leaf_requires<'a>(
+        model: &'a Model,
+        task_id: &str,
+        seen: &mut BTreeSet<String>,
+        out: &mut BTreeSet<&'a str>,
+    ) {
+        if !seen.insert(task_id.to_string()) {
+            return;
+        }
+        let Some(task) = model.tasks.get(task_id) else {
+            return;
+        };
+        match task.kind {
+            TaskKind::Leaf => {
+                out.extend(task.requires.iter().map(|service| service.as_str()));
+            }
+            TaskKind::Composite => {
+                for step in task.steps.values() {
+                    leaf_requires(model, step.task.as_str(), seen, out);
+                }
+            }
+        }
+    }
+    let mut base = BTreeSet::new();
+    leaf_requires(model, task_id, &mut BTreeSet::new(), &mut base);
+    // Close over connectsTo to a fixpoint.
+    loop {
+        let additions: Vec<&str> = base
+            .iter()
+            .filter_map(|service| model.services.get(*service))
+            .flat_map(|service| service.connects_to.iter().map(|target| target.as_str()))
+            .filter(|target| !base.contains(target))
+            .collect();
+        if additions.is_empty() {
+            break;
+        }
+        base.extend(additions);
+    }
+    base.into_iter().collect()
 }
 
 /// The operation id of each lifecycle op, in canonical order.
@@ -979,7 +1072,7 @@ mod tests {
                 "c": {
                     "kind": "executable", "storePath": "/nix/store/c", "executable": "/nix/store/c/bin/svc",
                     "targetSystem": "x86_64-linux",
-                    "operationBindings": ["svc.start", "task.t.run"],
+                    "operationBindings": ["svc.start"],
                     "requiresExecutable": true, "effects": ["process"]
                 },
                 "ct": {
@@ -1142,46 +1235,73 @@ mod tests {
     }
 
     #[test]
-    fn closure_bindings_must_reference_declared_operations() {
+    fn carried_bindings_must_equal_the_derivation() {
+        // The carried bindings list an operation the graph never dispatches
+        // against this closure — a derived-fact mismatch (DERIVE-1).
         let mut value = model_value();
-        value["closures"]["c"]["operationBindings"]
-            .as_array_mut()
-            .unwrap()
-            .push(json!("ghost.op"));
-        assert_eq!(
+        value["closures"]["c"]["operationBindings"] = json!(["svc.start", "task.t.run"]);
+        assert!(matches!(
             reject_reason(value),
-            Rejection::UnknownOperationBinding {
-                binding: "ghost.op".to_string()
+            Rejection::DerivedFactMismatch {
+                fact: "operationBindings",
+                ..
             }
-        );
+        ));
     }
 
     #[test]
-    fn start_operation_must_be_bound_by_its_closure() {
-        // The closure no longer binds svc.start, so the start invocation would
-        // run a closure for an operation it never declared.
+    fn missing_carried_bindings_are_a_derived_fact_mismatch() {
+        // The closure is dispatched against svc.start but carries no binding
+        // for it.
         let mut value = model_value();
-        value["closures"]["c"]["operationBindings"] = json!(["task.t.run"]);
-        assert_eq!(
+        value["closures"]["c"]["operationBindings"] = json!([]);
+        assert!(matches!(
             reject_reason(value),
-            Rejection::OperationUnbound {
-                operation_id: "svc.start".to_string(),
-                closure_id: "c".to_string()
+            Rejection::DerivedFactMismatch {
+                fact: "operationBindings",
+                ..
             }
-        );
+        ));
+    }
+
+    /// Golden vector V4 (docs/DERIVATION_SPEC.md §6) on the runtime side:
+    /// union of transitive leaf requires, closed over connectsTo, byte-sorted.
+    #[test]
+    fn services_required_derivation_matches_vector_v4() {
+        let mut value = model_value();
+        // svc gains a connectsTo dependency `dep`, so the task's derived union
+        // closes over it.
+        let mut dep = service_value();
+        dep["endpoints"] = json!({ "dep-tcp": { "endpointId": "dep-tcp", "host": "127.0.0.1" } });
+        dep["primaryEndpoint"] = json!("dep-tcp");
+        for (class, op) in dep["lifecycle"].as_object_mut().unwrap() {
+            op["operationId"] = json!(format!("dep.{class}"));
+        }
+        value["closures"]["c"]["operationBindings"] = json!(["dep.start", "svc.start"]);
+        value["services"]["dep"] = dep;
+        value["services"]["svc"]["connectsTo"] = json!(["dep"]);
+        value["environments"]["dev"]["services"] = json!(["svc", "dep"]);
+        let model = model_from(value);
+        assert_eq!(derive_services_required(&model, "t"), vec!["dep", "svc"]);
     }
 
     #[test]
-    fn task_operation_must_be_bound_by_its_closure() {
+    fn services_required_mismatch_is_rejected_naming_both_values() {
         let mut value = model_value();
-        value["closures"]["ct"]["operationBindings"] = json!([]);
-        assert_eq!(
-            reject_reason(value),
-            Rejection::OperationUnbound {
-                operation_id: "task.t.run".to_string(),
-                closure_id: "ct".to_string()
-            }
+        value["tasks"]["t"]["servicesRequired"] = json!([]);
+        let error = lower(&model_from(value)).expect_err("derived-fact mismatch must reject");
+        assert_eq!(error.code, ErrorCode::ModelAdmission);
+        assert!(
+            error.message.contains("servicesRequired"),
+            "{}",
+            error.message
         );
+        assert!(
+            error.message.contains("[svc]") || error.message.contains("svc"),
+            "{}",
+            error.message
+        );
+        assert!(error.message.contains("DERIVE-1"), "{}", error.message);
     }
 
     #[test]
@@ -1201,6 +1321,7 @@ mod tests {
         // does not reference a service-derived placeholder.
         let mut value = model_value();
         value["tasks"]["t"]["requires"] = json!([]);
+        value["tasks"]["t"]["servicesRequired"] = json!([]);
         value["tasks"]["t"]["invocation"]["run"] = json!(["task", "--check"]);
         let em = lower(&model_from(value)).expect("a service-less task lowers");
         assert!(em.tasks["t"].requires.is_empty());
@@ -1212,6 +1333,7 @@ mod tests {
         // it, admission must reject rather than admit-then-fail.
         let mut value = model_value();
         value["tasks"]["t"]["requires"] = json!([]);
+        value["tasks"]["t"]["servicesRequired"] = json!([]);
         let error =
             lower(&model_from(value)).expect_err("a service-less task using ${port} must reject");
         assert_eq!(error.code, ErrorCode::ModelAdmission);
@@ -1223,6 +1345,7 @@ mod tests {
         // otherwise run with the literal placeholder in the environment.
         let mut value = model_value();
         value["tasks"]["t"]["requires"] = json!([]);
+        value["tasks"]["t"]["servicesRequired"] = json!([]);
         value["tasks"]["t"]["invocation"]["run"] = json!(["task", "--check"]);
         value["tasks"]["t"]["invocation"]["env"] = json!({ "PORT": "${port}" });
         let error = lower(&model_from(value))
@@ -1238,10 +1361,8 @@ mod tests {
             "invocation": invocation_value("/nix/store/c/bin/svc", json!(["svc", "ping"])),
             "timeoutMs": 500, "retryIntervalMs": 100, "maxAttempts": 5
         });
-        value["closures"]["c"]["operationBindings"]
-            .as_array_mut()
-            .unwrap()
-            .push(json!("svc.ready"));
+        // Carried bindings are the byte-sorted derived set.
+        value["closures"]["c"]["operationBindings"] = json!(["svc.ready", "svc.start"]);
     }
 
     #[test]
@@ -1291,12 +1412,12 @@ mod tests {
     fn exec_probe_op_must_be_bound_by_its_closure() {
         let mut value = model_value();
         with_exec_ready_probe(&mut value);
-        // Remove the binding again: the probe's closure no longer authorizes
-        // the ready operation.
-        value["closures"]["c"]["operationBindings"] = json!(["svc.start", "task.t.run"]);
+        // Remove the binding again: the carried bindings no longer cover the
+        // ready operation the graph dispatches against the closure.
+        value["closures"]["c"]["operationBindings"] = json!(["svc.start"]);
         let error = lower(&model_from(value)).expect_err("unbound probe op must reject");
         assert_eq!(error.code, ErrorCode::ModelAdmission);
-        assert!(error.message.contains("not bound"));
+        assert!(error.message.contains("DERIVE-1"), "{}", error.message);
     }
 
     #[test]
@@ -1315,6 +1436,7 @@ mod tests {
         let mut value = model_value();
         value["tasks"]["pipeline"] = json!({
             "kind": "composite",
+            "servicesRequired": ["svc"],
             "steps": {
                 "first": { "task": "t" },
                 "second": { "task": "t", "dependsOn": ["first"] }
@@ -1345,6 +1467,7 @@ mod tests {
         let mut value = model_value();
         value["tasks"]["pipeline"] = json!({
             "kind": "composite",
+            "servicesRequired": ["svc"],
             "steps": { "only": { "task": "t", "dependsOn": ["ghost"] } }
         });
         let error = lower(&model_from(value)).expect_err("dangling dependsOn must reject");
@@ -1357,6 +1480,7 @@ mod tests {
         let mut value = model_value();
         value["tasks"]["pipeline"] = json!({
             "kind": "composite",
+            "servicesRequired": ["svc"],
             "steps": { "only": { "task": "t" } }
         });
         value["environments"]["dev"]["tasks"] = json!(["pipeline"]);
@@ -1371,9 +1495,11 @@ mod tests {
             .as_object_mut()
             .unwrap()
             .remove("invocation");
+        // The invocation-less leaf no longer dispatches against its closure, so
+        // the carried bindings already mismatch the derivation before the
+        // kind-coherence backstop fires; either way the model is refused.
         let error = lower(&model_from(value)).expect_err("invocation-less leaf must reject");
         assert_eq!(error.code, ErrorCode::ModelAdmission);
-        assert!(error.message.contains("kind-incoherent"));
     }
 
     #[test]
@@ -1424,10 +1550,7 @@ mod tests {
         for (class, op) in dep["lifecycle"].as_object_mut().unwrap() {
             op["operationId"] = json!(format!("dep.{class}"));
         }
-        value["closures"]["c"]["operationBindings"]
-            .as_array_mut()
-            .unwrap()
-            .push(json!("dep.start"));
+        value["closures"]["c"]["operationBindings"] = json!(["dep.start", "svc.start"]);
         value["services"]["dep"] = dep;
         value["services"]["svc"]["connectsTo"] = json!(["dep"]);
         // dev environment starts only svc: the wiring target is missing.
@@ -1445,12 +1568,12 @@ mod tests {
         for (class, op) in dep["lifecycle"].as_object_mut().unwrap() {
             op["operationId"] = json!(format!("dep.{class}"));
         }
-        value["closures"]["c"]["operationBindings"]
-            .as_array_mut()
-            .unwrap()
-            .push(json!("dep.start"));
+        value["closures"]["c"]["operationBindings"] = json!(["dep.start", "svc.start"]);
         value["services"]["dep"] = dep;
         value["services"]["svc"]["connectsTo"] = json!(["dep"]);
+        // Task t requires svc; svc now connectsTo dep, so the derived union
+        // closes over it.
+        value["tasks"]["t"]["servicesRequired"] = json!(["dep", "svc"]);
         value["services"]["svc"]["lifecycle"]["start"]["invocation"]["run"] =
             json!(["svc", "serve", "--db", "${host:dep}:${port:dep}"]);
         value["services"]["svc"]["lifecycle"]["start"]["invocation"]["env"] =
