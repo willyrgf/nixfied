@@ -61,7 +61,7 @@ closure    = store path + executable + effects            (attestation record)
 invocation = tools + run + env + cwd + timeout + stdin    (a TYPE — inline only, never named)
 task       = leaf      { invocation, requires, exitPolicy, refs }
            | composite { steps : name → { task ref, dependsOn } }
-service    = endpoints + state + identity
+service    = endpoints? + state + identity             (endpoints optional — durable ≠ listening)
            + lifecycle( prepare : task ref            — full task semantics, composites allowed
                       , start   : invocation + containment
                       , ready   : probe(invocation | tcp, retry)
@@ -171,6 +171,69 @@ adapter checks enter an adopter's pipeline: adapter smoke tasks
 (`smoke-query`, `reth-smoke`) are ordinary named tasks the adopter references
 as steps in its own composites.
 
+### Endpoint-optional services — durable is not listening
+
+The inherited schema conflates two properties the algebra must keep apart:
+**durable** (owned, probed, contained, cleaned) and **network-addressable**.
+Today a service must bind an endpoint (`primitives.nix:188-216` — `endpoint`
+xor `endpoints`, "exactly one form must be set"), and the requirement cannot
+be faked: PORT-1 verifies endpoint *ownership* at readiness, so a declared
+but never-bound endpoint fails the ready gate. That leaves the most common
+second-adopter shape — a queue consumer, an indexer, any non-listening worker
+daemon — unrepresentable: it is durable execution by every criterion this
+section names, and it binds no socket. Without this correction the shape is
+forced below the seam (a fake listener) or out of the model entirely —
+problem A1 wearing a service costume.
+
+The fix is subtraction, not addition: KIND-2 holds, there is no third kind
+and no new lifetime machinery — the endpoint requirement was an accidental
+constraint imported by "unchanged where it works." A service declares **at
+most one** endpoint form (was exactly one); a service with neither is
+**endpoint-less**, with every consequence type- or validation-enforced in the
+house style (illegal states unrepresentable, fail-closed):
+
+- **Probes must be invocations.** A `tcp` ready/health probe on an
+  endpoint-less service has no target and is rejected at eval and admission
+  (the `ProbeExecOnTcp` pattern at `lower.rs:423-437`, applied one level up).
+  Readiness means "the probe answers" — a heartbeat file under
+  `${stateDir}`, a queue-depth query through the broker the worker connects
+  to.
+- **PORT-1 is restated scoped, not weakened where it applies.** Where an
+  endpoint exists, readiness still requires verified ownership, unchanged.
+  An endpoint-less service makes **no addressability claim at all** and
+  nothing may rely on one (next rule), so there is no claim left for PORT-1
+  to protect. This is a deliberate carve-out, recorded here so it cannot be
+  read as a loophole.
+- **Nothing can address it.** `${port:<id>}` / `${host:<id>}` naming an
+  endpoint-less service is rejected in every scope placeholders are checked
+  today (leaf `requires`, service `connectsTo`, probes); bare
+  `${port}`/`${host}` inside its own lifecycle invocations is rejected by
+  the same rule tasks already have (`lower.rs:373-388`, applied
+  symmetrically to services).
+- **It can still be depended on.** `requires` and `connectsTo` *toward* an
+  endpoint-less service stay legal and keep their meaning — ready ordering,
+  failure semantics, and the derived service union — minus addressability:
+  an e2e leaf may `require` the worker so it is alive while the test runs;
+  the worker itself `connectsTo` postgres and addresses it normally.
+- **Effects coherence gains its converse.** The forward rule stands
+  (declared endpoints ⇒ the start closure declares `network-listener`); now
+  also: an endpoint-less service whose start closure declares
+  `network-listener` is rejected — it announces a listener the planner
+  cannot reserve, the exact bypass `docs/ADAPTERS.md` already forbids for
+  unmodelled sockets.
+- **Identity and planning need no special case.** The `endpointIdentity`
+  layer of SVC-ID-1 hashes the empty endpoint set deterministically; the
+  planner already sums per-endpoint port demand (`plan.rs:134-189`), so an
+  endpoint-less service consumes no ports from the slot window.
+
+This lands inside the same single ABI rotation as the rest of this design —
+it is a wire-contract change (`endpoints` required → optional, probe-kind
+coherence) — and deferring it would cost a second rotation the moment the
+first non-listening adopter arrives. It is distinct from the deferred
+durable-lifetime work (`until-idle`/`persistent-until-down`): leases govern
+how long an admitted service lives; this governs whether the service can be
+declared at all.
+
 ## What dies, and why
 
 | Removed | Replaced by | Problem it closes |
@@ -222,8 +285,14 @@ as steps in its own composites.
   runtime's lowering, like the ABI digest today.
 - Exported verb names must not collide with the reserved control namespace
   (eval error, fail-closed).
-- Effects coherence (first enforcement): a start closure must declare
-  `network-listener` if its service declares endpoints.
+- A service declares at most one endpoint form. An endpoint-less service's
+  ready/health probes must be invocation probes (`tcp` is an eval/admission
+  error); named placeholders resolving to an endpoint-less service are
+  rejected in every scope; bare `${port}`/`${host}` in its own lifecycle
+  invocations are rejected (the task rule, applied to services).
+- Effects coherence (first enforcement), both directions: declared endpoints
+  require `network-listener` on the start closure; `network-listener` on the
+  start closure of an endpoint-less service is rejected.
 
 ## The generated surface
 
@@ -270,7 +339,8 @@ Nix-shaped at run time), RUNTIME-GENERIC-1 (the runtime gains *structure* —
 PATH assembly, composite lowering onto the existing flat plan in `plan.rs`,
 derived unions — never vocabulary or domain), MODEL-SEAM-1/SINGLE-MODEL-1,
 HASH-1, MODEL-ORIGIN-1, ABI-1 (one rotation), PREPARE-1, SOURCE-1, SVC-ID-1,
-PORT-1, REG-*/LIVE-1, GC-*, PROC-*, REDACT-1, SHELL-1/NIX-1.
+PORT-1 (restated scoped to declared endpoints — see endpoint-optional
+services), REG-*/LIVE-1, GC-*, PROC-*, REDACT-1, SHELL-1/NIX-1.
 
 ## Acceptance: the mfm dissolution map
 
@@ -291,6 +361,10 @@ And the methodology fix that makes this class of flaw detectable forever
 after: the gate gains a **toolchain-shaped example** (heterogeneous per-task
 `requires`, a real multi-tool PATH, nested composites) run like every other
 example — a daemon-shaped example can never catch a vocabulary gap again.
+That example (or a sibling) also declares an **endpoint-less worker service**
+(no listener, invocation-probed readiness, `connectsTo` a database, a leaf
+that `requires` it) so both halves of the service kind — listening and
+non-listening — stay provably expressible, in the same standing way.
 
 ## Out of scope / deferred
 
