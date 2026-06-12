@@ -132,7 +132,7 @@ pub fn run_dependent_task_cancellable(
         .logs_dir
         .join(format!("task.{node_id}.stderr.log"));
     let args = substitution.args(&exec.args)?;
-    let env = substitution.env(&exec.env)?;
+    let env = exec.env_with_path(substitution.env(&exec.env)?);
     let command_cwd = resolve_exec_cwd(run_context.source_root, &exec.cwd)?;
     let command_json = serde_json::to_string(&TaskCommandRecord {
         task_id,

@@ -1424,6 +1424,12 @@ fn cli_signal_cancels_run_and_empties_service_group() {
         &mut value,
         &["-c", script, "parent", &marker_arg, &started_arg],
     );
+    // The script needs touch/sleep on its hermetic PATH: declare coreutils as a
+    // tool like any adopter would.
+    let Some(touch) = nix_store_executable(&["touch"]) else {
+        return;
+    };
+    add_tool_closure(&mut value, "coreutils-tools", &touch);
     let model: Model = serde_json::from_value(value).expect("CLI fixture model should parse");
     let tmp = TempDir::new();
     let model_path = tmp.path.join("model.json");
@@ -1544,6 +1550,12 @@ fn cli_signal_during_shutdown_records_canceled_terminal_state() {
             &python,
         ],
     );
+    // The script needs touch/sleep on its hermetic PATH: declare coreutils as a
+    // tool like any adopter would.
+    let Some(touch) = nix_store_executable(&["touch"]) else {
+        return;
+    };
+    add_tool_closure(&mut value, "coreutils-tools", &touch);
     let model: Model = serde_json::from_value(value).expect("CLI fixture model should parse");
     let tmp = TempDir::new();
     let model_path = tmp.path.join("model.json");
@@ -2671,6 +2683,59 @@ fn down_escalates_until_owned_process_group_is_empty() {
     let _ = fs::remove_file(marker);
 }
 
+#[test]
+fn task_child_path_is_assembled_from_tool_roots() {
+    // The child PATH is runtime-owned: exactly the tool roots, in declared
+    // order — not the runtime's own inherited PATH.
+    let Some(python) = python3_path() else {
+        return;
+    };
+    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
+    let port = listener.local_addr().expect("local addr").port();
+    drop(listener);
+    let mut value = fixture_model(python, &["-c", python_listener_script(), "${port}"], port);
+    value["environments"]["dev"]["services"] = json!([]);
+    value["tasks"]["smoke"]["requires"] = json!([]);
+    set_task_run_args(
+        &mut value,
+        &["-c", "import os, sys; sys.stdout.write(os.environ['PATH'])"],
+    );
+    let mut fixture = ServiceFixture::from_value(value);
+    let task = fixture
+        .admission
+        .execution_model
+        .tasks
+        .get("smoke")
+        .expect("task lowered")
+        .clone();
+    let source_root = fixture
+        .admission
+        .require_source()
+        .expect("run admission resolves source")
+        .observed_root
+        .clone();
+    let run = run_dependent_task(
+        &fixture.placement,
+        &mut fixture.registry,
+        RunContext {
+            run_id: "run-path-proof",
+            computed_model_hash: &fixture.admission.computed_model_hash,
+            source_root: &source_root,
+            state_root: &fixture.placement.state_root,
+        },
+        &[],
+        &task,
+    )
+    .expect("path-printing task should succeed");
+    let stdout = fs::read_to_string(&run.stdout_path).expect("task stdout log");
+    let expected = Path::new(python)
+        .parent()
+        .expect("python parent dir")
+        .to_string_lossy()
+        .to_string();
+    assert_eq!(stdout, expected);
+}
+
 struct ServiceFixture {
     _tmp: TempDir,
     model: Model,
@@ -3522,6 +3587,33 @@ fn spawnable(path: &Path) -> bool {
         .stderr(Stdio::null())
         .status()
         .is_ok()
+}
+
+/// Declare an extra tool closure and add it to both the start and smoke
+/// invocations' tool sets, widening the child PATH by the tool's bin dir.
+fn add_tool_closure(value: &mut Value, id: &str, executable: &Path) {
+    let root = closure_root_for_store_executable(executable)
+        .map(|root| root.to_string_lossy().to_string())
+        .unwrap_or_else(|| "/".to_string());
+    let target = value["target"]["closureSystem"].clone();
+    value["closures"][id] = json!({
+        "kind": "executable", "storePath": root,
+        "executable": executable.to_string_lossy(),
+        "targetSystem": target,
+        "operationBindings": [],
+        "requiresExecutable": true, "effects": ["process"]
+    });
+    for invocation in ["start", "smoke"] {
+        let tools = if invocation == "start" {
+            &mut value["services"]["synthetic"]["lifecycle"]["start"]["invocation"]["tools"]
+        } else {
+            &mut value["tasks"]["smoke"]["invocation"]["tools"]
+        };
+        tools
+            .as_array_mut()
+            .expect("tools is an array")
+            .push(json!(id));
+    }
 }
 
 fn closure_root_for_store_executable(executable: &Path) -> Option<PathBuf> {

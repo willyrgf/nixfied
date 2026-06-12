@@ -499,6 +499,14 @@ fn resolve_invocation(
             program: String::new(),
         });
     };
+    // PATH is runtime-owned: it is assembled from the tool roots at spawn, so a
+    // declared PATH would be silently overwritten — reject it instead.
+    if env.contains_key("PATH") {
+        return Err(Rejection::ReservedEnvVar {
+            owner: owner(),
+            name: "PATH",
+        });
+    }
     let mut tool_roots = Vec::with_capacity(tools.len());
     for tool in tools.iter() {
         let Some(closure) = closures.get(tool.as_str()) else {
@@ -564,6 +572,10 @@ pub enum Rejection {
         carried: String,
         resolved: String,
     },
+    ReservedEnvVar {
+        owner: String,
+        name: &'static str,
+    },
     TaskPlaceholderWithoutService {
         task_id: String,
         placeholder: &'static str,
@@ -622,6 +634,9 @@ impl Rejection {
             } => format!(
                 "{owner} carries executable {carried} but its tools resolve run[0] to {resolved}"
             ),
+            Rejection::ReservedEnvVar { owner, name } => {
+                format!("{owner} declares runtime-owned environment variable {name}")
+            }
             Rejection::TaskPlaceholderWithoutService {
                 task_id,
                 placeholder,
@@ -1289,6 +1304,17 @@ mod tests {
         let error = lower(&model_from(value)).expect_err("out-of-scope named ref must reject");
         assert_eq!(error.code, ErrorCode::ModelAdmission);
         assert!(error.message.contains("ghost"));
+    }
+
+    #[test]
+    fn declared_path_env_is_rejected() {
+        // PATH is runtime-owned (assembled from tool roots); a declared PATH
+        // would be silently overwritten, so it is rejected fail-closed.
+        let mut value = model_value();
+        value["tasks"]["t"]["invocation"]["env"] = json!({ "PATH": "/usr/bin" });
+        let error = lower(&model_from(value)).expect_err("declared PATH must reject");
+        assert_eq!(error.code, ErrorCode::ModelAdmission);
+        assert!(error.message.contains("PATH"));
     }
 
     #[test]

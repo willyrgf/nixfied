@@ -186,6 +186,22 @@ pub struct ResolvedInvocation {
     pub tool_roots: Vec<String>,
 }
 
+impl ResolvedInvocation {
+    /// The child PATH: the tool roots joined in declared order. PATH is
+    /// runtime-owned — a declared `env.PATH` is rejected at lowering — so the
+    /// child's search path is exactly the declared tool set.
+    pub fn path_value(&self) -> String {
+        self.tool_roots.join(":")
+    }
+
+    /// The given (already substituted) declared env with the runtime-owned
+    /// PATH inserted.
+    pub fn env_with_path(&self, mut env: BTreeMap<String, String>) -> BTreeMap<String, String> {
+        env.insert("PATH".to_string(), self.path_value());
+        env
+    }
+}
+
 /// A tcp-connect probe of the service's single bound endpoint; `label` only names
 /// the op (ready/health) in diagnostics. No http target, no cross-endpoint ref.
 #[derive(Debug, Clone)]

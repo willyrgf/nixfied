@@ -754,7 +754,7 @@ pub fn start_service_for_slot(
     let exec = &service.start.exec;
     let command_cwd = resolve_exec_cwd(&source.observed_root, &exec.cwd)?;
     let args = substitution.args(&exec.args)?;
-    let env = substitution.env(&exec.env)?;
+    let env = exec.env_with_path(substitution.env(&exec.env)?);
     let stdout_path = placement
         .logs_dir
         .join(format!("service.{service_name}.stdout.log"));
@@ -1204,7 +1204,7 @@ fn run_resolved_exec(
 ) -> RuntimeResult<()> {
     let command_cwd = resolve_exec_cwd(source_root, &exec.cwd)?;
     let args = substitution.args(&exec.args)?;
-    let env = substitution.env(&exec.env)?;
+    let env = exec.env_with_path(substitution.env(&exec.env)?);
     let stdout_path = logs_dir.join(format!("lifecycle.{label}.stdout.log"));
     let stderr_path = logs_dir.join(format!("lifecycle.{label}.stderr.log"));
     let outcome = run_bounded_exec(

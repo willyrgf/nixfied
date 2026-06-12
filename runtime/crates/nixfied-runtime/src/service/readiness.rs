@@ -62,6 +62,7 @@ pub fn wait_for_exec_probe(
     cancellation: &CancellationToken,
 ) -> RuntimeResult<()> {
     let command_cwd = resolve_exec_cwd(source_root, &probe.exec.cwd)?;
+    let env = probe.exec.env_with_path(probe.exec.env.clone());
     let stdout_path = logs_dir.join(format!("lifecycle.{}.probe.stdout.log", probe.label));
     let stderr_path = logs_dir.join(format!("lifecycle.{}.probe.stderr.log", probe.label));
     let attempts = probe.max_attempts.max(1);
@@ -72,7 +73,7 @@ pub fn wait_for_exec_probe(
             &BoundedExec {
                 executable: &probe.exec.executable,
                 args: &probe.exec.args,
-                env: &probe.exec.env,
+                env: &env,
                 cwd: &command_cwd,
                 stdin: probe.exec.stdin,
                 timeout: probe.timeout,
