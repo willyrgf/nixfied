@@ -122,6 +122,7 @@ fn synthetic_service() -> Value {
 
 fn smoke_task() -> Value {
     json!({
+        "kind": "leaf",
         "operationId": "task.smoke.run",
         "invocation": helper_invocation(json!(["synthetic-helper", "task", "--host", "127.0.0.1", "--port", "${port}"])),
         "requires": ["synthetic"],

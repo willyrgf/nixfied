@@ -76,10 +76,10 @@ fn validate_unit_ids(model: &Model) -> Result<(), ValidationError> {
         require_path_safe_id("closures", id)?;
     }
     for id in model.services.keys() {
-        require_path_safe_id("services", id)?;
+        require_step_safe_id("services", id)?;
     }
     for id in model.tasks.keys() {
-        require_path_safe_id("tasks", id)?;
+        require_step_safe_id("tasks", id)?;
     }
     for (id, workflow) in &model.workflows {
         require_path_safe_id("workflows", id)?;
@@ -261,7 +261,9 @@ fn validate_candidate_port_window(
 /// resolution rule are proven by the runtime's `lower` step.
 fn validate_invocations(model: &Model) -> Result<(), ValidationError> {
     for task in model.tasks.values() {
-        validate_invocation(&task.invocation)?;
+        if let Some(invocation) = &task.invocation {
+            validate_invocation(invocation)?;
+        }
     }
     for service in model.services.values() {
         for invocation in lifecycle_invocations(&service.lifecycle) {
@@ -457,18 +459,102 @@ fn lifecycle_ops(lifecycle: &Lifecycle) -> [(&OperationId, &TerminalSemantics); 
     ]
 }
 
+/// Kind/field coherence for the discriminated task record: a leaf carries an
+/// operation id, an invocation, and an exit policy and no steps; a composite
+/// carries non-empty steps and none of the leaf machinery. Step names are
+/// evidence path segments, so they exclude `.`.
 fn validate_tasks(model: &Model) -> Result<(), ValidationError> {
-    for task in model.tasks.values() {
-        require_non_empty("tasks.operationId", task.operation_id.as_str())?;
-        if task.exit_policy.success_codes.is_empty() {
-            return Err(ValidationError::UnsupportedValue {
-                field: "tasks.exitPolicy.successCodes",
-                expected: "at least one success code",
-                actual: "[]".to_string(),
-            });
+    for (id, task) in &model.tasks {
+        match task.kind {
+            TaskKind::Leaf => {
+                let operation_id =
+                    task.operation_id
+                        .as_ref()
+                        .ok_or(ValidationError::UnsupportedValue {
+                            field: "tasks.operationId",
+                            expected: "an operation id on a leaf task",
+                            actual: format!("{id}: none"),
+                        })?;
+                require_non_empty("tasks.operationId", operation_id.as_str())?;
+                if task.invocation.is_none() {
+                    return Err(ValidationError::UnsupportedValue {
+                        field: "tasks.invocation",
+                        expected: "an invocation on a leaf task",
+                        actual: format!("{id}: none"),
+                    });
+                }
+                let exit_policy =
+                    task.exit_policy
+                        .as_ref()
+                        .ok_or(ValidationError::UnsupportedValue {
+                            field: "tasks.exitPolicy",
+                            expected: "an exit policy on a leaf task",
+                            actual: format!("{id}: none"),
+                        })?;
+                if exit_policy.success_codes.is_empty() {
+                    return Err(ValidationError::UnsupportedValue {
+                        field: "tasks.exitPolicy.successCodes",
+                        expected: "at least one success code",
+                        actual: "[]".to_string(),
+                    });
+                }
+                if !task.steps.is_empty() {
+                    return Err(ValidationError::UnsupportedValue {
+                        field: "tasks.steps",
+                        expected: "no steps on a leaf task",
+                        actual: format!("{id}: {} steps", task.steps.len()),
+                    });
+                }
+            }
+            TaskKind::Composite => {
+                if task.steps.is_empty() {
+                    return Err(ValidationError::UnsupportedValue {
+                        field: "tasks.steps",
+                        expected: "at least one step on a composite task",
+                        actual: format!("{id}: {{}}"),
+                    });
+                }
+                if task.operation_id.is_some()
+                    || task.invocation.is_some()
+                    || task.exit_policy.is_some()
+                    || !task.requires.is_empty()
+                    || !task.artifact_refs.is_empty()
+                    || !task.log_refs.is_empty()
+                    || !task.summary_refs.is_empty()
+                {
+                    return Err(ValidationError::UnsupportedValue {
+                        field: "tasks",
+                        expected: "a composite carries only steps (leaves own invocation, requires, exitPolicy, refs)",
+                        actual: id.clone(),
+                    });
+                }
+                for step_name in task.steps.keys() {
+                    require_step_safe_id("tasks.steps", step_name)?;
+                }
+            }
         }
     }
     Ok(())
+}
+
+/// Step names and task/service ids are step-path segments
+/// (docs/DERIVATION_SPEC.md §1): path-safe AND dot-free, so paths parse
+/// unambiguously on `.`.
+fn require_step_safe_id(field: &'static str, id: &str) -> Result<(), ValidationError> {
+    let mut chars = id.chars();
+    let valid = chars
+        .next()
+        .is_some_and(|first| first.is_ascii_alphanumeric())
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'));
+    if valid {
+        Ok(())
+    } else {
+        Err(ValidationError::UnsupportedValue {
+            field,
+            expected: "an id matching [A-Za-z0-9][A-Za-z0-9_-]*",
+            actual: id.to_string(),
+        })
+    }
 }
 
 fn expect_string(

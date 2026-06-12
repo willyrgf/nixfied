@@ -11,8 +11,8 @@ use std::time::Duration;
 
 use nixfied_model::{
     ClosureSpec, Environment, InvocationSpec, Lifecycle, Model, OperationId, ProbeKind, ProbeSpec,
-    ServiceId, ServiceSpec, StatePolicy, StopSpec, Target, TaskId, TaskSpec, TerminalSemantics,
-    WorkflowSpec,
+    ServiceId, ServiceSpec, StatePolicy, StepSpec, StopSpec, Target, TaskId, TaskKind, TaskSpec,
+    TerminalSemantics, WorkflowSpec,
 };
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
@@ -56,15 +56,19 @@ pub fn lower(model: &Model) -> RuntimeResult<ExecutionModel> {
         })
         .collect::<RuntimeResult<BTreeMap<_, _>>>()?;
 
-    let lowered_tasks = tasks
-        .iter()
-        .map(|(id, task)| {
-            Ok((
-                TaskId::new(id),
-                lower_task(id, task, closures, &lowered_services)?,
-            ))
-        })
-        .collect::<RuntimeResult<BTreeMap<_, _>>>()?;
+    let mut lowered_tasks = BTreeMap::new();
+    let mut lowered_composites = BTreeMap::new();
+    let task_ids = tasks.keys().map(String::as_str).collect::<BTreeSet<_>>();
+    for (id, task) in tasks {
+        match lower_task(id, task, closures, &lowered_services, &task_ids)? {
+            LoweredTask::Leaf(leaf) => {
+                lowered_tasks.insert(TaskId::new(id), leaf);
+            }
+            LoweredTask::Composite(composite) => {
+                lowered_composites.insert(TaskId::new(id), composite);
+            }
+        }
+    }
 
     // Resolve each environment/workflow reference against the maps just built, so
     // every id the executor later follows is a handle proven to resolve. A miss is
@@ -80,7 +84,12 @@ pub fn lower(model: &Model) -> RuntimeResult<ExecutionModel> {
         .collect::<RuntimeResult<BTreeMap<_, _>>>()?;
 
     let environment = match environments.values().next() {
-        Some(environment) => lower_environment(environment, &lowered_services, &lowered_tasks)?,
+        Some(environment) => lower_environment(
+            environment,
+            &lowered_services,
+            &lowered_tasks,
+            &lowered_composites,
+        )?,
         None => return Err(Rejection::NoEnvironment.into()),
     };
 
@@ -98,6 +107,7 @@ pub fn lower(model: &Model) -> RuntimeResult<ExecutionModel> {
     Ok(ExecutionModel {
         services: lowered_services,
         tasks: lowered_tasks,
+        composites: lowered_composites,
         environment,
         workflows: lowered_workflows,
         slot_windows,
@@ -108,6 +118,7 @@ fn lower_environment(
     environment: &Environment,
     services: &BTreeMap<ServiceId, ExecService>,
     tasks: &BTreeMap<TaskId, ExecTask>,
+    composites: &BTreeMap<TaskId, ExecComposite>,
 ) -> RuntimeResult<ExecEnvironment> {
     let Environment {
         services: env_services,
@@ -117,9 +128,17 @@ fn lower_environment(
         .iter()
         .map(|id| require_service("environment.services", services, id))
         .collect::<Result<Vec<_>, Rejection>>()?;
+    // An environment task may be a leaf or a composite; the planner flattens
+    // composites onto the run plan with stable step paths.
     let resolved_tasks = env_tasks
         .iter()
-        .map(|id| require_task("environment.tasks", tasks, id))
+        .map(|id| {
+            if tasks.contains_key(id) || composites.contains_key(id) {
+                Ok(id.clone())
+            } else {
+                Err(undeclared("environment.tasks", id.as_str()))
+            }
+        })
         .collect::<Result<Vec<_>, Rejection>>()?;
     require_connects_to_closed("environment.services", &resolved_services, services)?;
     Ok(ExecEnvironment {
@@ -340,22 +359,63 @@ fn op_meta(operation_id: &OperationId, terminal: &TerminalSemantics) -> OpMeta {
     }
 }
 
+/// A lowered task: the executor's leaf, or a composite for the planner to
+/// flatten.
+enum LoweredTask {
+    Leaf(ExecTask),
+    Composite(ExecComposite),
+}
+
 fn lower_task(
     task_id: &str,
     task: &TaskSpec,
     closures: &BTreeMap<String, ClosureSpec>,
     services: &BTreeMap<ServiceId, ExecService>,
-) -> RuntimeResult<ExecTask> {
+    task_ids: &BTreeSet<&str>,
+) -> RuntimeResult<LoweredTask> {
     let TaskSpec {
+        kind,
         operation_id: _,
         invocation,
         requires,
         exit_policy,
+        steps,
         artifact_refs: _,
         log_refs: _,
         summary_refs: _,
     } = task;
+    match kind {
+        TaskKind::Composite => {
+            return Ok(LoweredTask::Composite(lower_composite(
+                task_id, steps, task_ids,
+            )?));
+        }
+        TaskKind::Leaf => {}
+    }
     let owner = || format!("task {task_id}");
+    // Kind/field coherence is validated structurally; re-prove it here so the
+    // lowering is total on any deserialized model (fail closed).
+    let Some(invocation) = invocation else {
+        return Err(Rejection::TaskKindIncoherent {
+            task_id: task_id.to_string(),
+            expected: "a leaf task carries an invocation",
+        }
+        .into());
+    };
+    let Some(exit_policy) = exit_policy else {
+        return Err(Rejection::TaskKindIncoherent {
+            task_id: task_id.to_string(),
+            expected: "a leaf task carries an exit policy",
+        }
+        .into());
+    };
+    if !steps.is_empty() {
+        return Err(Rejection::TaskKindIncoherent {
+            task_id: task_id.to_string(),
+            expected: "a leaf task carries no steps",
+        }
+        .into());
+    }
     let exec = resolve_invocation(&owner, invocation, closures)?;
     let requires = requires
         .iter()
@@ -384,11 +444,57 @@ fn lower_task(
     // requirements (any of them, not just the primary).
     let allowed: BTreeSet<&str> = requires.iter().map(|id| id.as_str()).collect();
     require_named_refs_in_scope(&owner, "requires", &exec, &allowed)?;
-    Ok(ExecTask {
+    Ok(LoweredTask::Leaf(ExecTask {
         task_id: TaskId::new(task_id),
         exec,
         requires,
         success_codes: exit_policy.success_codes.iter().copied().collect(),
+    }))
+}
+
+/// Lower a composite body: every step references a declared task (leaf or
+/// composite) and `dependsOn` names sibling steps. Acyclicity through nesting
+/// is proven by the planner's flattening, which admission runs for every
+/// slot/selection.
+fn lower_composite(
+    task_id: &str,
+    steps: &BTreeMap<String, StepSpec>,
+    task_ids: &BTreeSet<&str>,
+) -> Result<ExecComposite, Rejection> {
+    if steps.is_empty() {
+        return Err(Rejection::TaskKindIncoherent {
+            task_id: task_id.to_string(),
+            expected: "a composite task carries at least one step",
+        });
+    }
+    let step_names = steps.keys().map(String::as_str).collect::<BTreeSet<_>>();
+    let lowered = steps
+        .iter()
+        .map(|(name, step)| {
+            if !task_ids.contains(step.task.as_str()) {
+                return Err(undeclared("task.steps.task", step.task.as_str()));
+            }
+            let depends_on = step
+                .depends_on
+                .iter()
+                .map(|dependency| {
+                    if step_names.contains(dependency.as_str()) {
+                        Ok(dependency.clone())
+                    } else {
+                        Err(undeclared("task.steps.dependsOn", dependency.as_str()))
+                    }
+                })
+                .collect::<Result<Vec<_>, Rejection>>()?;
+            Ok(ExecStep {
+                name: name.clone(),
+                task: step.task.clone(),
+                depends_on,
+            })
+        })
+        .collect::<Result<Vec<_>, Rejection>>()?;
+    Ok(ExecComposite {
+        task_id: TaskId::new(task_id),
+        steps: lowered,
     })
 }
 
@@ -576,6 +682,10 @@ pub enum Rejection {
         owner: String,
         name: &'static str,
     },
+    TaskKindIncoherent {
+        task_id: String,
+        expected: &'static str,
+    },
     TaskPlaceholderWithoutService {
         task_id: String,
         placeholder: &'static str,
@@ -636,6 +746,9 @@ impl Rejection {
             ),
             Rejection::ReservedEnvVar { owner, name } => {
                 format!("{owner} declares runtime-owned environment variable {name}")
+            }
+            Rejection::TaskKindIncoherent { task_id, expected } => {
+                format!("task {task_id} is kind-incoherent: {expected}")
             }
             Rejection::TaskPlaceholderWithoutService {
                 task_id,
@@ -749,7 +862,9 @@ fn invocation_positions(model: &Model) -> Vec<(&OperationId, &InvocationSpec)> {
         }
     }
     for task in model.tasks.values() {
-        positions.push((&task.operation_id, &task.invocation));
+        if let (Some(operation_id), Some(invocation)) = (&task.operation_id, &task.invocation) {
+            positions.push((operation_id, invocation));
+        }
     }
     positions
 }
@@ -800,10 +915,14 @@ fn prove_references(model: &Model) -> Result<(), Rejection> {
             }
         }
     }
-    for task in model.tasks.values() {
-        if !declared_operations.insert(task.operation_id.as_str()) {
+    for operation_id in model
+        .tasks
+        .values()
+        .filter_map(|task| task.operation_id.as_ref())
+    {
+        if !declared_operations.insert(operation_id.as_str()) {
             return Err(Rejection::DuplicateOperationId {
-                id: task.operation_id.to_string(),
+                id: operation_id.to_string(),
             });
         }
     }
@@ -960,6 +1079,7 @@ mod tests {
             "services": { "svc": service_value() },
             "tasks": {
                 "t": {
+                    "kind": "leaf",
                     "operationId": "task.t.run",
                     "invocation": {
                         "tools": ["ct"],
@@ -1304,6 +1424,72 @@ mod tests {
         let error = lower(&model_from(value)).expect_err("out-of-scope named ref must reject");
         assert_eq!(error.code, ErrorCode::ModelAdmission);
         assert!(error.message.contains("ghost"));
+    }
+
+    #[test]
+    fn composite_task_lowers_with_resolved_steps() {
+        let mut value = model_value();
+        value["tasks"]["pipeline"] = json!({
+            "kind": "composite",
+            "steps": {
+                "first": { "task": "t" },
+                "second": { "task": "t", "dependsOn": ["first"] }
+            }
+        });
+        let em = lower(&model_from(value)).expect("composite lowers");
+        let composite = em.composites.get("pipeline").expect("composite lowered");
+        assert_eq!(composite.steps.len(), 2);
+        assert_eq!(composite.steps[0].name, "first");
+        assert_eq!(composite.steps[1].depends_on, vec!["first"]);
+        assert!(!em.tasks.contains_key("pipeline"));
+    }
+
+    #[test]
+    fn composite_step_must_reference_a_declared_task() {
+        let mut value = model_value();
+        value["tasks"]["pipeline"] = json!({
+            "kind": "composite",
+            "steps": { "only": { "task": "ghost" } }
+        });
+        let error = lower(&model_from(value)).expect_err("dangling step task must reject");
+        assert_eq!(error.code, ErrorCode::ModelAdmission);
+        assert!(error.message.contains("ghost"));
+    }
+
+    #[test]
+    fn composite_step_depends_on_must_name_a_sibling() {
+        let mut value = model_value();
+        value["tasks"]["pipeline"] = json!({
+            "kind": "composite",
+            "steps": { "only": { "task": "t", "dependsOn": ["ghost"] } }
+        });
+        let error = lower(&model_from(value)).expect_err("dangling dependsOn must reject");
+        assert_eq!(error.code, ErrorCode::ModelAdmission);
+        assert!(error.message.contains("ghost"));
+    }
+
+    #[test]
+    fn composite_may_be_an_environment_task() {
+        let mut value = model_value();
+        value["tasks"]["pipeline"] = json!({
+            "kind": "composite",
+            "steps": { "only": { "task": "t" } }
+        });
+        value["environments"]["dev"]["tasks"] = json!(["pipeline"]);
+        let em = lower(&model_from(value)).expect("composite env selection lowers");
+        assert_eq!(em.environment.tasks, vec![TaskId::new("pipeline")]);
+    }
+
+    #[test]
+    fn leaf_without_invocation_is_rejected() {
+        let mut value = model_value();
+        value["tasks"]["t"]
+            .as_object_mut()
+            .unwrap()
+            .remove("invocation");
+        let error = lower(&model_from(value)).expect_err("invocation-less leaf must reject");
+        assert_eq!(error.code, ErrorCode::ModelAdmission);
+        assert!(error.message.contains("kind-incoherent"));
     }
 
     #[test]

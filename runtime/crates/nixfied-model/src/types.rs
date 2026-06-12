@@ -408,18 +408,53 @@ pub enum ContainmentRequirement {
     ProcessTree,
 }
 
+/// A task is a **leaf** (one bounded invocation with orchestration: requires,
+/// exit policy, evidence refs) or a **composite** (a static named-step DAG over
+/// task references — STATIC-1: no parameters, conditionals, retries, or loops).
+/// The wire shape is one closed struct with a `kind` discriminator — like
+/// `ProbeSpec`, because `deny_unknown_fields` does not compose with tagged
+/// enums — and kind/field coherence is proven by validation and lowering.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TaskSpec {
-    pub operation_id: OperationId,
-    pub invocation: InvocationSpec,
+    pub kind: TaskKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_id: Option<OperationId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invocation: Option<InvocationSpec>,
     /// Services that must be ready (alive, probed, addressable) while the
     /// leaf runs — the leaf-intrinsic fact `servicesRequired` derives from.
+    #[serde(default, skip_serializing_if = "UniqueVec::is_empty")]
     pub requires: UniqueVec<ServiceId>,
-    pub exit_policy: ExitPolicy,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_policy: Option<ExitPolicy>,
+    /// Composite body: named steps referencing declared tasks. Names are the
+    /// step-path segments of evidence identity, so they exclude `.`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub steps: BTreeMap<String, StepSpec>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub artifact_refs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub log_refs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub summary_refs: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TaskKind {
+    Leaf,
+    Composite,
+}
+
+/// One named step of a composite: a task reference plus the sibling steps that
+/// must have completed successfully first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StepSpec {
+    pub task: TaskId,
+    #[serde(default, skip_serializing_if = "UniqueVec::is_empty")]
+    pub depends_on: UniqueVec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

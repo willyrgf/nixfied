@@ -185,6 +185,7 @@ pub fn synthetic_model(options: &SyntheticModelOptions) -> Value {
         },
         "tasks": {
             "smoke": {
+                "kind": "leaf",
                 "operationId": "task.smoke.run",
                 "invocation": invocation(&options.executable, task_run),
                 "requires": ["synthetic"],

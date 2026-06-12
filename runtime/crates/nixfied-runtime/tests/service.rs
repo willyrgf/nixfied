@@ -1292,6 +1292,8 @@ fn task_timeout_records_failed_summary_and_terminates_task_group() {
         .get_mut("smoke")
         .expect("fixture has task")
         .invocation
+        .as_mut()
+        .expect("leaf task has invocation")
         .timeout_ms = 100u64.try_into().unwrap();
     set_smoke_args(
         &mut fixture.model,
@@ -3509,6 +3511,8 @@ fn set_smoke_args(model: &mut Model, args: &[&str]) {
         .get_mut("smoke")
         .expect("fixture has task")
         .invocation
+        .as_mut()
+        .expect("leaf task has invocation")
         .run;
     run.truncate(1);
     run.extend(args.iter().map(|arg| arg.to_string()));

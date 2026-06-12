@@ -12,6 +12,12 @@ use serde::{Deserialize, Deserializer, Serialize};
 #[serde(transparent)]
 pub struct UniqueVec<T>(Vec<T>);
 
+impl<T> Default for UniqueVec<T> {
+    fn default() -> Self {
+        Self(Vec::new())
+    }
+}
+
 impl<T> UniqueVec<T> {
     /// Borrow the elements as a slice.
     pub fn as_slice(&self) -> &[T] {

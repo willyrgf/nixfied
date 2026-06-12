@@ -26,14 +26,32 @@ pub struct ServiceIdentity {
 
 /// The whole executable program for a run: services to start, tasks to run, the
 /// environment and workflow plans, and the per-slot port windows the planner
-/// assigns from.
+/// assigns from. `tasks` holds the leaves; `composites` the named-step DAGs the
+/// planner flattens onto the run plan with stable step paths.
 #[derive(Debug, Clone)]
 pub struct ExecutionModel {
     pub services: BTreeMap<ServiceId, ExecService>,
     pub tasks: BTreeMap<TaskId, ExecTask>,
+    pub composites: BTreeMap<TaskId, ExecComposite>,
     pub environment: ExecEnvironment,
     pub workflows: BTreeMap<String, ExecWorkflow>,
     pub slot_windows: BTreeMap<u32, PortWindow>,
+}
+
+/// A composite task: a static named-step DAG over task references (leaf or
+/// composite). Steps are kept in canonical (byte) order of their names — the
+/// spec's emission order.
+#[derive(Debug, Clone)]
+pub struct ExecComposite {
+    pub task_id: TaskId,
+    pub steps: Vec<ExecStep>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExecStep {
+    pub name: String,
+    pub task: TaskId,
+    pub depends_on: Vec<String>,
 }
 
 /// The single environment's start order: services first, then tasks. Every id is

@@ -29,7 +29,8 @@ primitive CleanSpec: operationId terminal
 primitive Endpoint: endpointId host
 primitive ProbeSpec: kind invocation timeoutMs retryIntervalMs maxAttempts
 primitive TerminalSemantics: success failure
-primitive TaskSpec: operationId invocation requires exitPolicy artifactRefs logRefs summaryRefs
+primitive TaskSpec: kind operationId invocation requires exitPolicy steps artifactRefs logRefs summaryRefs
+primitive StepSpec: task dependsOn
 primitive ExitPolicy: successCodes
 primitive WorkflowSpec: servicesRequired nodes
 primitive WorkflowNode: taskId dependsOn
@@ -54,6 +55,7 @@ enum ClosureKind: executable helper
 enum ClosureEffect: process network-listener source-read file-write
 enum StdinPolicy: null inherit
 enum ProbeKind: tcp exec
+enum TaskKind: leaf composite
 enum ContainmentRequirement: process-group process-tree
 enum SourceMode: snapshot flake-input live-workspace
 enum DirtyPolicy: allow warn reject

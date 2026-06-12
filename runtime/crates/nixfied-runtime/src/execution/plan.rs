@@ -339,6 +339,7 @@ mod tests {
                 .map(|name| (ServiceId::new(name), service(name)))
                 .collect(),
             tasks: BTreeMap::new(),
+            composites: BTreeMap::new(),
             environment: ExecEnvironment {
                 services: env_services.into_iter().map(ServiceId::new).collect(),
                 tasks: Vec::new(),

@@ -92,7 +92,8 @@ fn invocation_tool_ids(model: &Model) -> impl Iterator<Item = &str> {
     let task_tools = model
         .tasks
         .values()
-        .flat_map(|task| task.invocation.tools.iter());
+        .flat_map(|task| task.invocation.iter())
+        .flat_map(|invocation| invocation.tools.iter());
     let lifecycle_tools = model.services.values().flat_map(|service| {
         let lifecycle = &service.lifecycle;
         lifecycle

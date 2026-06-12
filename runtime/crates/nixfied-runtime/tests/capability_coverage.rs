@@ -20,6 +20,7 @@ const MAP_FIELDS: &[&str] = &[
     "services",
     "closures",
     "tasks",
+    "steps",
     "workflows",
     "environments",
     "slotPlacements",
@@ -55,6 +56,12 @@ fn capability_descriptor_names_every_wire_field() {
     model["workflows"]["wf"] = json!({
         "servicesRequired": ["synthetic"],
         "nodes": { "n": { "taskId": "smoke", "dependsOn": [] } }
+    });
+    // The synthetic fixture has no composite; inject one so the StepSpec
+    // fields are exercised too.
+    model["tasks"]["pipeline"] = json!({
+        "kind": "composite",
+        "steps": { "only": { "task": "smoke", "dependsOn": [] } }
     });
 
     let mut fields = BTreeSet::new();
