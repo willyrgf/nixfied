@@ -1,19 +1,27 @@
-# The verification + run surface nixfied generates for an adopting project from
-# its compiled model. For an adopter, verification *is* a workflow — their tests
-# are tasks — so these run through the nix-built runtime against the model store
-# path baked in at eval time; no nix is invoked at run time, so SEAM-1 holds.
+# The generated surface nixfied derives for an adopting project from its
+# module (VERB-1, the corrected split of SURFACE-1):
 #
-# `.#gate` is deliberately absent: that is the framework proving its own runtime.
-# A project's acceptance proof is just one of its workflows (run via `.#run --
-# --workflow <name>`).
+# - the **reserved control namespace**, framework-owned: `run`, `ps`, `down`,
+#   `clean`, and `admit` (admission sanity — renamed from `check`, freeing the
+#   most common adopter verb);
+# - the **project verbs**, adopter-owned: one app per task id exported in
+#   `nixfied.surface.verbs` (`.#check` -> `runtime run --task check`).
+#
+# Everything runs through the nix-built runtime against the model store path
+# baked in at eval time; no nix is invoked at run time, so SEAM-1 holds.
+# `.#gate` is deliberately absent: that is the framework proving its own
+# runtime.
 {
   pkgs,
+  lib,
   runtime,
   model,
+  config,
 }:
 let
   runtimeBin = "${runtime}/bin/nixfied-runtime";
   modelJson = "${model}/model.json";
+  verbs = config.nixfied.surface.verbs;
   mkApp =
     name: text:
     let
@@ -23,23 +31,24 @@ let
       type = "app";
       program = "${drv}/bin/${name}";
     };
+  # `validate.nix` already proved each verb names a declared task and avoids
+  # the reserved namespace; this projection just derives the apps.
+  verbApps = builtins.listToAttrs (
+    map (verb: {
+      name = verb;
+      value = mkApp verb ''exec "${runtimeBin}" run --model "${modelJson}" --task "${verb}" "$@"'';
+    }) verbs
+  );
 in
 {
-  # Start the environment's services and run its tasks. Extra args are forwarded
-  # (e.g. `nix run .#run -- --workflow release`).
+  # Run one selected task (`nix run .#run -- --task <id>`): its derived
+  # service union starts eagerly, then the flattened nodes execute. With no
+  # selection the runtime refuses and lists the declared tasks.
   run = mkApp "run" ''exec "${runtimeBin}" run --model "${modelJson}" "$@"'';
 
-  # Admission sanity: the model is well-formed and admits (cheap, no execution).
-  check = mkApp "check" ''exec "${runtimeBin}" check --model "${modelJson}"'';
-
-  # Run the project's `test` workflow — its lint/test/e2e tasks.
-  test = mkApp "test" ''exec "${runtimeBin}" run --model "${modelJson}" --workflow test "$@"'';
-
-  # Fail-fast: admit, then run the test workflow.
-  ci = mkApp "ci" ''
-    "${runtimeBin}" check --model "${modelJson}"
-    "${runtimeBin}" run --model "${modelJson}" --workflow test
-  '';
+  # Admission sanity: the model is well-formed and admits (cheap, no
+  # execution). Named `admit` so `check` stays free for adopters.
+  admit = mkApp "admit" ''exec "${runtimeBin}" check --model "${modelJson}"'';
 
   # Recovery/control surface over the project's slots: observe registry-owned
   # processes (reconciling stale evidence), stop everything the runtime owns,
@@ -49,3 +58,4 @@ in
   down = mkApp "down" ''exec "${runtimeBin}" down --model "${modelJson}" "$@"'';
   clean = mkApp "clean" ''exec "${runtimeBin}" clean --model "${modelJson}" "$@"'';
 }
+// verbApps

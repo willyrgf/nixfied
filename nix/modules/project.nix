@@ -26,6 +26,18 @@ in
     description = "Nix target system for the model and runtime closures.";
   };
 
+  # The adopter-owned public verb surface (VERB-1): an explicit list of task
+  # ids that become flake apps (`.#check` -> `runtime run --task check`).
+  # Which tasks form the public surface is a *choice*, not a derivable fact —
+  # explicit export is what keeps imported adapter tasks from silently
+  # becoming public apps. The control namespace (`run`, `ps`, `down`, `clean`,
+  # `admit`) is framework-reserved and can never collide.
+  options.nixfied.surface.verbs = mkOption {
+    type = types.listOf types.nonEmptyStr;
+    default = [ ];
+    description = "Declared task ids exported as project flake apps.";
+  };
+
   options.nixfied.slotPolicy = {
     min = mkOption {
       type = types.int;

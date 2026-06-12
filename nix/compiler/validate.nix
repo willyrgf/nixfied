@@ -185,6 +185,22 @@ let
     (expect stepGraphsAcyclic "composite step dependency graph must be acyclic")
     (expect taskGraphAcyclic "the task reference graph must be acyclic")
     (expect prepareTasksDeclared "service prepare must reference a declared task")
+    (expect (lib.all (verb: builtins.hasAttr verb tasks) config.nixfied.surface.verbs)
+      "surface.verbs must name declared tasks"
+    )
+    (expect
+      (lib.all (
+        verb:
+        !(builtins.elem verb [
+          "run"
+          "ps"
+          "down"
+          "clean"
+          "admit"
+        ])
+      ) config.nixfied.surface.verbs)
+      "surface.verbs must not collide with the reserved control namespace (run, ps, down, clean, admit)"
+    )
     (expect combinedGraphAcyclic
       "the combined connectsTo + prepare-requires service graph must be acyclic"
     )

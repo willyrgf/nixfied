@@ -50,16 +50,26 @@
           # when `projectApps` is used, so `compileModel`-only callers don't build it.
           runtime = import ./nix/packages/runtime.nix { inherit pkgs; };
           composeLib = import ./nix/lib/compose.nix { inherit (nixpkgs) lib; };
+          resolveConfig =
+            module:
+            (import ./nix/compiler/resolve.nix {
+              inherit (nixpkgs) lib;
+              inherit pkgs system module;
+            }).config;
         in
         {
           inherit compileModel;
           inherit (composeLib) seq;
-          # The uniform run/check/test/ci app set for an adopting project's model.
+          # The generated project surface: the reserved control apps
+          # (run/ps/down/clean/admit) plus one app per task id the adopter
+          # exports in `nixfied.surface.verbs`.
           projectApps =
             module:
             import ./nix/project-apps.nix {
               inherit pkgs runtime;
+              inherit (nixpkgs) lib;
               model = compileModel module;
+              config = resolveConfig module;
             };
         };
     in
