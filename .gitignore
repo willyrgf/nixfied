@@ -5,6 +5,8 @@ result
 !docs/*.md
 !AGENTS.md
 !README.md
+!DESIGN*.md
+!PROBLEM*.md
 !docs/ARCHITECTURE.md
 !docs/DETAILED.md
 !docs/UPGRADE.md
