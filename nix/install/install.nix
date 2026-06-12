@@ -116,10 +116,13 @@ pkgs.writeShellApplication {
       nixfied.project.name = "$project_name_escaped";
       nixfied.codebases.main.logicalRoot = ".";
 
-      # \`nix run .#run -- --task smoke\` runs the synthetic adapter's
-      # \`smoke\` task (it pings the service). Add your own leaf tasks
-      # (lint/test) and compose them into composite tasks
-      # (kind = "composite", steps = …).
+      # The synthetic adapter contributes the \`smoke\` task (it pings the
+      # service); exporting it below makes it a flake app: \`nix run .#smoke\`.
+      # Add your own leaf tasks (lint/test), compose them into composite tasks
+      # (kind = "composite", steps = …), and export the ones that form your
+      # public surface. \`nix run .#admit\` checks the model admits;
+      # \`nix run .#run -- --task <id>\` runs any declared task.
+      nixfied.surface.verbs = [ "smoke" ];
     }
     EOF
     }

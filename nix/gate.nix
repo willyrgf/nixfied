@@ -335,6 +335,10 @@ pkgs.writeShellApplication {
         >/dev/null || fail "adoption: scaffolded run failed"
       # The generated control surface: ps/down/clean must exist as project apps
       # and work against the same state.
+      ( cd "$wk" && NIXFIED_STATE_DIR="$st" nix run "$project#admit" ) \
+        >/dev/null || fail "adoption: scaffolded admit failed"
+      ( cd "$wk" && NIXFIED_STATE_DIR="$st" nix run "$project#smoke" -- --timeout-ms 60000 ) \
+        >/dev/null || fail "adoption: scaffolded smoke verb failed"
       ( cd "$wk" && NIXFIED_STATE_DIR="$st" nix run "$project#ps" ) \
         >/dev/null || fail "adoption: scaffolded ps failed"
       ( cd "$wk" && NIXFIED_STATE_DIR="$st" nix run "$project#down" ) \
