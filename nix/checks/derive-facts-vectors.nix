@@ -6,20 +6,56 @@
 let
   deriveFacts = import ../lib/derive-facts.nix { inherit lib; };
 
+  leaf = requires: {
+    kind = "leaf";
+    inherit requires;
+  };
+
+  # V1-V3 — flattening and step paths.
+  v1Tasks = {
+    fmt = leaf [ ];
+    clippy = leaf [ ];
+    tests = leaf [ ];
+    check = {
+      kind = "composite";
+      steps = {
+        fmt.task = "fmt";
+        clippy = {
+          task = "clippy";
+          dependsOn = [ "fmt" ];
+        };
+      };
+    };
+    ci = {
+      kind = "composite";
+      steps = {
+        check.task = "check";
+        tests = {
+          task = "tests";
+          dependsOn = [ "check" ];
+        };
+      };
+    };
+  };
+  v2Tasks = {
+    unit = leaf [ ];
+    twice = {
+      kind = "composite";
+      steps = {
+        again = {
+          task = "unit";
+          dependsOn = [ "first" ];
+        };
+        first.task = "unit";
+      };
+    };
+  };
+
   # V4 — servicesRequired: union, connectsTo closure, canonical order.
   v4Tasks = {
-    e2e = {
-      kind = "leaf";
-      requires = [ "worker" ];
-    };
-    smoke = {
-      kind = "leaf";
-      requires = [ "api" ];
-    };
-    lint = {
-      kind = "leaf";
-      requires = [ ];
-    };
+    e2e = leaf [ "worker" ];
+    smoke = leaf [ "api" ];
+    lint = leaf [ ];
     all = {
       kind = "composite";
       steps = {
@@ -37,6 +73,52 @@ let
   sr = deriveFacts.servicesRequired {
     tasks = v4Tasks;
     services = v4Services;
+  };
+
+  # V8 — diamond dedup.
+  v8Sr = deriveFacts.servicesRequired {
+    tasks.e2e = leaf [ "a" "b" ];
+    services = {
+      db.connectsTo = [ ];
+      a.connectsTo = [ "db" ];
+      b.connectsTo = [ "db" ];
+    };
+  };
+
+  # V9 — prepare task may be composite.
+  v9Tasks = {
+    migrate = leaf [ "dep" ];
+    seed = leaf [ ];
+    prep = {
+      kind = "composite";
+      steps = {
+        migrate.task = "migrate";
+        seed = {
+          task = "seed";
+          dependsOn = [ "migrate" ];
+        };
+      };
+    };
+    run = leaf [ "svc" ];
+  };
+  v9Sr = deriveFacts.servicesRequired {
+    tasks = v9Tasks;
+    services = {
+      dep.connectsTo = [ ];
+      svc.connectsTo = [ ];
+    };
+    prepareTaskOf = name: if name == "svc" then "prep" else null;
+  };
+
+  # V10 — connectsTo closure reaches a fixpoint beyond one hop.
+  v10Sr = deriveFacts.servicesRequired {
+    tasks.e2e = leaf [ "api" ];
+    services = {
+      api.connectsTo = [ "worker" ];
+      worker.connectsTo = [ "db" ];
+      db.connectsTo = [ "cache" ];
+      cache.connectsTo = [ ];
+    };
   };
 
   # V5/V7 — operationBindings: run[0] closure binds, tools do not; one closure
@@ -78,6 +160,54 @@ let
   };
 
   vectors = [
+    {
+      name = "V1 flatten(ci)";
+      ok = deriveFacts.flattenPlan v1Tasks "ci" == [
+        {
+          stepPath = "ci.check.fmt";
+          leaf = "fmt";
+          dependsOn = [ ];
+        }
+        {
+          stepPath = "ci.check.clippy";
+          leaf = "clippy";
+          dependsOn = [ "ci.check.fmt" ];
+        }
+        {
+          stepPath = "ci.tests";
+          leaf = "tests";
+          dependsOn = [
+            "ci.check.clippy"
+            "ci.check.fmt"
+          ];
+        }
+      ];
+    }
+    {
+      name = "V2 flatten(twice)";
+      ok = deriveFacts.flattenPlan v2Tasks "twice" == [
+        {
+          stepPath = "twice.first";
+          leaf = "unit";
+          dependsOn = [ ];
+        }
+        {
+          stepPath = "twice.again";
+          leaf = "unit";
+          dependsOn = [ "twice.first" ];
+        }
+      ];
+    }
+    {
+      name = "V3 flatten(fmt)";
+      ok = deriveFacts.flattenPlan v1Tasks "fmt" == [
+        {
+          stepPath = "fmt";
+          leaf = "fmt";
+          dependsOn = [ ];
+        }
+      ];
+    }
     {
       name = "V4 servicesRequired(all)";
       ok = sr "all" == [ "api" "postgres" "worker" ];
@@ -128,6 +258,18 @@ let
         success = "ready";
         failure = "not-ready";
       };
+    }
+    {
+      name = "V8 diamond servicesRequired(e2e)";
+      ok = v8Sr "e2e" == [ "a" "b" "db" ];
+    }
+    {
+      name = "V9 composite prepare servicesRequired(run)";
+      ok = v9Sr "run" == [ "dep" "svc" ];
+    }
+    {
+      name = "V10 long connectsTo servicesRequired(e2e)";
+      ok = v10Sr "e2e" == [ "api" "cache" "db" "worker" ];
     }
   ];
   failed = builtins.filter (vector: !vector.ok) vectors;

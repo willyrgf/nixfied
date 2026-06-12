@@ -1255,6 +1255,24 @@ mod tests {
         })
     }
 
+    fn named_service_value(name: &str) -> Value {
+        let mut service = service_value();
+        service["lifecycle"]["start"]["operationId"] = json!(format!("{name}.start"));
+        service["lifecycle"]["ready"]["operationId"] = json!(format!("{name}.ready"));
+        service["lifecycle"]["health"]["operationId"] = json!(format!("{name}.health"));
+        service["lifecycle"]["stop"]["operationId"] = json!(format!("{name}.stop"));
+        service["lifecycle"]["clean"]["operationId"] = json!(format!("{name}.clean"));
+        service["endpoints"] = json!({ format!("{name}-tcp"): { "endpointId": format!("{name}-tcp"), "host": "127.0.0.1" } });
+        service["primaryEndpoint"] = json!(format!("{name}-tcp"));
+        service
+    }
+
+    fn add_named_service(value: &mut Value, name: &str, connects_to: &[&str]) {
+        let mut service = named_service_value(name);
+        service["connectsTo"] = json!(connects_to);
+        value["services"][name] = service;
+    }
+
     fn model_from(value: Value) -> Model {
         serde_json::from_value(value).expect("fixture should deserialize")
     }
@@ -1407,6 +1425,138 @@ mod tests {
         value["services"]["svc"]["connectsTo"] = json!(["dep"]);
         let model = model_from(value);
         assert_eq!(derive_services_required(&model, "t"), vec!["dep", "svc"]);
+    }
+
+    #[test]
+    fn operation_bindings_vector_v5_run0_closure_binds_tools_do_not() {
+        let mut value = model_value();
+        value["closures"]["gitC"] = json!({
+            "kind": "executable", "storePath": "/nix/store/git", "executable": "/nix/store/git/bin/git",
+            "targetSystem": "x86_64-linux", "operationBindings": [],
+            "requiresExecutable": true, "effects": ["process"]
+        });
+        value["closures"]["probeC"] = json!({
+            "kind": "executable", "storePath": "/nix/store/probe", "executable": "/nix/store/probe/bin/probe",
+            "targetSystem": "x86_64-linux", "operationBindings": ["svc.ready"],
+            "requiresExecutable": true, "effects": ["process"]
+        });
+        value["tasks"]["t"]["invocation"]["tools"] = json!(["ct", "gitC"]);
+        let mut probe_invocation =
+            invocation_value("/nix/store/probe/bin/probe", json!(["probe", "ready"]));
+        probe_invocation["tools"] = json!(["probeC"]);
+        value["services"]["svc"]["lifecycle"]["ready"]["probe"] = json!({
+            "kind": "exec",
+            "invocation": probe_invocation,
+            "timeoutMs": 500, "retryIntervalMs": 100, "maxAttempts": 5
+        });
+        lower(&model_from(value)).expect("tool-only closure and probe binding vector should lower");
+    }
+
+    #[test]
+    fn operation_bindings_vector_v6_override_and_v7_multiple_leaves() {
+        let mut value = model_value();
+        value["closures"]["ct"]["operationBindings"] = json!(["task.custom.odd", "task.t.run"]);
+        value["tasks"]["odd"] = json!({
+            "kind": "leaf",
+            "operationId": "task.custom.odd",
+            "invocation": {
+                "tools": ["ct"],
+                "run": ["task", "odd"],
+                "executable": "/nix/store/ct/bin/task",
+                "env": {}, "codebaseId": "main", "cwd": ".", "stdin": "null", "timeoutMs": 1000
+            },
+            "requires": [],
+            "servicesRequired": [],
+            "exitPolicy": { "successCodes": [0] }
+        });
+        lower(&model_from(value)).expect("override operation id should participate in bindings");
+    }
+
+    #[test]
+    fn services_required_vector_v8_diamond_dedups() {
+        let mut value = model_value();
+        add_named_service(&mut value, "db", &[]);
+        add_named_service(&mut value, "a", &["db"]);
+        add_named_service(&mut value, "b", &["db"]);
+        value["closures"]["c"]["operationBindings"] =
+            json!(["a.start", "b.start", "db.start", "svc.start"]);
+        value["tasks"]["t"]["requires"] = json!(["a", "b"]);
+        value["tasks"]["t"]["servicesRequired"] = json!(["a", "b", "db"]);
+        let model = model_from(value);
+        assert_eq!(derive_services_required(&model, "t"), vec!["a", "b", "db"]);
+        lower(&model).expect("diamond service graph should lower");
+    }
+
+    #[test]
+    fn services_required_vector_v9_prepare_task_may_be_composite() {
+        let mut value = model_value();
+        add_named_service(&mut value, "dep", &[]);
+        value["closures"]["c"]["operationBindings"] = json!(["dep.start", "svc.start"]);
+        value["closures"]["ct"]["operationBindings"] =
+            json!(["task.migrate.run", "task.seed.run", "task.t.run"]);
+        value["tasks"]["migrate"] = json!({
+            "kind": "leaf",
+            "operationId": "task.migrate.run",
+            "invocation": {
+                "tools": ["ct"],
+                "run": ["task", "migrate", "--db", "${port:dep}"],
+                "executable": "/nix/store/ct/bin/task",
+                "env": {}, "codebaseId": "main", "cwd": ".", "stdin": "null", "timeoutMs": 1000
+            },
+            "requires": ["dep"],
+            "servicesRequired": ["dep"],
+            "exitPolicy": { "successCodes": [0] }
+        });
+        value["tasks"]["seed"] = json!({
+            "kind": "leaf",
+            "operationId": "task.seed.run",
+            "invocation": {
+                "tools": ["ct"],
+                "run": ["task", "seed"],
+                "executable": "/nix/store/ct/bin/task",
+                "env": {}, "codebaseId": "main", "cwd": ".", "stdin": "null", "timeoutMs": 1000
+            },
+            "requires": [],
+            "servicesRequired": [],
+            "exitPolicy": { "successCodes": [0] }
+        });
+        value["tasks"]["prep"] = json!({
+            "kind": "composite",
+            "steps": {
+                "migrate": { "task": "migrate" },
+                "seed": { "task": "seed", "dependsOn": ["migrate"] }
+            },
+            "servicesRequired": ["dep"]
+        });
+        value["services"]["svc"]["lifecycle"]["prepare"] = json!({ "task": "prep" });
+        value["tasks"]["t"]["servicesRequired"] = json!(["dep", "svc"]);
+        let model = model_from(value);
+        assert_eq!(derive_services_required(&model, "t"), vec!["dep", "svc"]);
+        lower(&model).expect("composite prepare task should lower");
+    }
+
+    #[test]
+    fn services_required_vector_v10_connects_to_fixpoint() {
+        let mut value = model_value();
+        add_named_service(&mut value, "api", &["worker"]);
+        add_named_service(&mut value, "worker", &["db"]);
+        add_named_service(&mut value, "db", &["cache"]);
+        add_named_service(&mut value, "cache", &[]);
+        value["closures"]["c"]["operationBindings"] = json!([
+            "api.start",
+            "cache.start",
+            "db.start",
+            "svc.start",
+            "worker.start"
+        ]);
+        value["tasks"]["t"]["requires"] = json!(["api"]);
+        value["tasks"]["t"]["servicesRequired"] = json!(["api", "cache", "db", "worker"]);
+        let model = model_from(value);
+        assert_eq!(
+            derive_services_required(&model, "t"),
+            vec!["api", "cache", "db", "worker"]
+        );
+        lower(&model).expect("long connectsTo closure should lower");
     }
 
     #[test]

@@ -84,6 +84,57 @@ rec {
     };
   };
 
+  # flatten(task) — spec §2: emit every reachable leaf with a stable step path,
+  # attach whole-subtree sibling dependencies, then return the deterministic
+  # topological plan order (first emitted ready node wins).
+  flattenPlan = tasks: root:
+    let
+      emit = taskId: path:
+        let
+          task = tasks.${taskId};
+        in
+        if task.kind == "composite" then
+          let
+            stepNames = byteSort (builtins.attrNames task.steps);
+            subtrees = builtins.listToAttrs (
+              map (stepName: {
+                name = stepName;
+                value = emit task.steps.${stepName}.task "${path}.${stepName}";
+              }) stepNames
+            );
+            withDeps = stepName:
+              let
+                dependencyPaths = byteSort (lib.unique (
+                  lib.concatMap (dep: map (node: node.stepPath) subtrees.${dep}) (
+                    task.steps.${stepName}.dependsOn or [ ]
+                  )
+                ));
+              in
+              map (node: node // { dependsOn = byteSort (lib.unique (node.dependsOn ++ dependencyPaths)); }) subtrees.${stepName};
+          in
+          lib.concatMap withDeps stepNames
+        else
+          [
+            {
+              stepPath = path;
+              leaf = taskId;
+              dependsOn = [ ];
+            }
+          ];
+      emitted = emit root root;
+      topo = placed: remaining: ordered:
+        if remaining == [ ] then
+          ordered
+        else
+          let
+            ready = builtins.filter (node: lib.all (dep: builtins.elem dep placed) node.dependsOn) remaining;
+            next = builtins.head ready;
+            rest = builtins.filter (node: node.stepPath != next.stepPath) remaining;
+          in
+          topo (placed ++ [ next.stepPath ]) rest (ordered ++ [ next ]);
+    in
+    topo [ ] emitted [ ];
+
   # operationBindings(closure) — spec §4: the byte-sorted operation ids of
   # every invocation position whose run[0] resolves to the closure (the FIRST
   # tool whose executable basename equals run[0]); tool-set members that are

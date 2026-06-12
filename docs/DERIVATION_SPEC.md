@@ -109,10 +109,12 @@ Pinned consequences:
   dependent may start only after all of them. (Edges to sinks alone would let
   a dependent start while a parallel branch of `a` is still running or has
   failed.)
-- **Output order** is the emission order above (depth-first, steps in
-  canonical order). Execution order is any topological order consistent with
-  `dependsOn`; the runtime's existing deterministic scheduler applies
-  unchanged with `stepPath` in place of today's node id.
+- **Emission order** is depth-first, steps in canonical order. The executable
+  **plan order** is the deterministic topological order over that emitted list:
+  repeatedly select the first emitted node whose dependencies have all been
+  placed. This preserves canonical sibling order where there is no dependency,
+  and it moves a dependency before its dependent when the byte-sorted emission
+  order would otherwise put the dependent first.
 - **Failure** is today's cancellation applied to the flattened graph: a
   failed node cancels every not-yet-started node that (transitively) depends
   on it. A composite "succeeds" iff all nodes under its path prefix succeed;
@@ -285,15 +287,17 @@ tasks:
   tests  = leaf(tests)
 
 flatten(ci) =
-  [ { stepPath: "ci.check.clippy", leaf: "clippy", dependsOn: ["ci.check.fmt"] }
-  , { stepPath: "ci.check.fmt",    leaf: "fmt",    dependsOn: [] }
+  [ { stepPath: "ci.check.fmt",    leaf: "fmt",    dependsOn: [] }
+  , { stepPath: "ci.check.clippy", leaf: "clippy", dependsOn: ["ci.check.fmt"] }
   , { stepPath: "ci.tests",        leaf: "tests",
       dependsOn: ["ci.check.clippy", "ci.check.fmt"] }
   ]
 ```
 
-(Emission order shown sorted by step name at each level: `check` < `tests`,
-`clippy` < `fmt`. `ci.tests` depends on **every** node under `ci.check`.)
+(Emission order is sorted by step name at each level: `check` < `tests`,
+`clippy` < `fmt`; plan order moves `ci.check.fmt` before
+`ci.check.clippy` because clippy depends on it. `ci.tests` depends on
+**every** node under `ci.check`.)
 
 ### V2 — the same task referenced twice flattens twice
 
@@ -304,8 +308,8 @@ tasks:
                          first: {task: unit} })
 
 flatten(twice) =
-  [ { stepPath: "twice.again", leaf: "unit", dependsOn: ["twice.first"] }
-  , { stepPath: "twice.first", leaf: "unit", dependsOn: [] }
+  [ { stepPath: "twice.first", leaf: "unit", dependsOn: [] }
+  , { stepPath: "twice.again", leaf: "unit", dependsOn: ["twice.first"] }
   ]
 ```
 
@@ -381,3 +385,44 @@ tasks:
 operationBindings(cargoC) = ["task.clippy.run", "task.fmt.run"]   # sorted
 ```
 
+### V8 — servicesRequired: diamond dedup
+
+```
+services:
+  db = { connectsTo: [] }
+  a  = { connectsTo: ["db"] }
+  b  = { connectsTo: ["db"] }
+tasks:
+  e2e = leaf(e2e, requires=["a", "b"])
+
+servicesRequired(e2e) = ["a", "b", "db"]
+```
+
+### V9 — servicesRequired: prepare task may be composite
+
+```
+services:
+  dep = { connectsTo: [] }
+  svc = { connectsTo: [], prepare: prep }
+tasks:
+  migrate = leaf(migrate, requires=["dep"])
+  seed    = leaf(seed,    requires=[])
+  prep    = comp(steps={ migrate: {task: migrate}, seed: {task: seed, dependsOn: [migrate]} })
+  run     = leaf(run, requires=["svc"])
+
+servicesRequired(run) = ["dep", "svc"]
+```
+
+### V10 — servicesRequired: connectsTo closure is a fixpoint
+
+```
+services:
+  api    = { connectsTo: ["worker"] }
+  worker = { connectsTo: ["db"] }
+  db     = { connectsTo: ["cache"] }
+  cache  = { connectsTo: [] }
+tasks:
+  e2e = leaf(e2e, requires=["api"])
+
+servicesRequired(e2e) = ["api", "cache", "db", "worker"]
+```
