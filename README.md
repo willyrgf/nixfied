@@ -1,9 +1,28 @@
 # Nixfied
 
-Nixfied is a Nix-authored project model with a generic, Nix-free Rust runtime.
-Typed Nix compiles one canonical `model.json`; the runtime admits that model and
-starts, inspects, reconciles, cancels, and cleans up its services, tasks, and
-workflows.
+Describe your project's services, tasks, and workflows once in typed Nix; a
+generic, Nix-free Rust runtime then starts, inspects, reconciles, and cleans them
+up — many isolated environments side by side, every process and port under one
+owner.
+
+## The problem
+
+**A project's operational behavior has no owner.**
+
+A modern project is a small polyglot system — APIs, workers, databases, queues,
+migrations, test harnesses, CI jobs, dev workflows. Its *operational* behavior is
+scattered across `flake.nix`, shell scripts, package scripts, CI YAML, compose
+files, env files, and port conventions, and nothing owns **running** it: starting
+its services, running its tasks and workflows, tracking processes, owning ports
+and state, and cleaning up — let alone running several environments, or several
+copies of one, side by side. So `dev`/`test`/`ci` runs collide, ports and state
+leak, a service started by one script is stopped by another (if at all), and CI
+leaves weak evidence of what ran or survived.
+
+Nixfied gives that system one authority. Typed Nix is the authority for what the
+project is *allowed to be*; a generic Rust runtime is the authority for what it is
+*currently doing* — so services, workflows, state, ports, logs, and cleanup all
+answer to a single owner, per environment and per slot.
 
 - **Nix** is the integration + correctness layer — you describe environments,
   services, tasks, workflows, state, ports, and source policy as typed Nix.
