@@ -50,19 +50,13 @@ pub fn plan(model: &ExecutionModel, selection: Selection<'_>, slot: u32) -> Runt
     })?;
 
     let (service_names, nodes, workflow_id) = match selection {
-        Selection::Environment => (
-            model.environment.services.clone(),
-            model
-                .environment
-                .tasks
-                .iter()
-                .map(|task_id| PlanNode {
-                    node_id: NodeId::new(task_id.as_str()),
-                    task_id: task_id.clone(),
-                })
-                .collect(),
-            None,
-        ),
+        Selection::Environment => {
+            let mut nodes = Vec::new();
+            for task_id in &model.environment.tasks {
+                nodes.extend(flatten_task(model, task_id)?);
+            }
+            (model.environment.services.clone(), nodes, None)
+        }
         Selection::Workflow(id) => {
             let workflow = model.workflows.get(id).ok_or_else(|| {
                 RuntimeError::new(
@@ -186,6 +180,129 @@ fn assign_ports(
         ));
     }
     Ok(bindings)
+}
+
+/// Flatten one selected task into ordered plan nodes with stable step paths
+/// (docs/DERIVATION_SPEC.md §2): a leaf is a single node whose path is the task
+/// id; a composite emits its steps depth-first in canonical step-name order,
+/// each node's path `<root>.<step>...<step>`. A step's `dependsOn` constrains
+/// every node of its subtree on **every** node of the dependency's subtree
+/// (composite success is conjunction). The returned order is the deterministic
+/// topological order: emission order, earliest node whose dependencies are
+/// already placed first. Cycles through nesting are rejected here — admission
+/// proves every selection plans, so a cyclic reference never survives it.
+fn flatten_task(model: &ExecutionModel, root: &TaskId) -> RuntimeResult<Vec<PlanNode>> {
+    struct FlatNode {
+        step_path: String,
+        leaf: TaskId,
+        depends_on: BTreeSet<String>,
+    }
+
+    fn emit(
+        model: &ExecutionModel,
+        task: &TaskId,
+        path: String,
+        visiting: &mut Vec<TaskId>,
+        out: &mut Vec<FlatNode>,
+    ) -> RuntimeResult<()> {
+        if model.tasks.contains_key(task) {
+            out.push(FlatNode {
+                step_path: path,
+                leaf: task.clone(),
+                depends_on: BTreeSet::new(),
+            });
+            return Ok(());
+        }
+        let Some(composite) = model.composites.get(task) else {
+            return Err(RuntimeError::new(
+                ErrorCode::ModelAdmission,
+                format!("task {task} is missing"),
+            ));
+        };
+        if visiting.contains(task) {
+            let chain = visiting
+                .iter()
+                .map(|id| id.as_str())
+                .chain(std::iter::once(task.as_str()))
+                .collect::<Vec<_>>()
+                .join(" -> ");
+            return Err(RuntimeError::new(
+                ErrorCode::ModelAdmission,
+                format!("task reference cycle: {chain}"),
+            ));
+        }
+        visiting.push(task.clone());
+        // Emit each step's subtree (steps are already in canonical order),
+        // recording its node range so sibling dependencies can be applied to
+        // whole subtrees afterwards (dependsOn may name a later sibling).
+        let mut ranges: BTreeMap<&str, (usize, usize)> = BTreeMap::new();
+        for step in &composite.steps {
+            let start = out.len();
+            emit(
+                model,
+                &step.task,
+                format!("{path}.{}", step.name),
+                visiting,
+                out,
+            )?;
+            ranges.insert(step.name.as_str(), (start, out.len()));
+        }
+        for step in &composite.steps {
+            let mut dependency_paths = BTreeSet::new();
+            for dependency in &step.depends_on {
+                // Lowering proved dependsOn names a sibling step.
+                let (start, end) = ranges[dependency.as_str()];
+                dependency_paths.extend(out[start..end].iter().map(|node| node.step_path.clone()));
+            }
+            if dependency_paths.is_empty() {
+                continue;
+            }
+            let (start, end) = ranges[step.name.as_str()];
+            for node in &mut out[start..end] {
+                node.depends_on.extend(dependency_paths.iter().cloned());
+            }
+        }
+        visiting.pop();
+        Ok(())
+    }
+
+    let mut flat = Vec::new();
+    emit(
+        model,
+        root,
+        root.as_str().to_string(),
+        &mut Vec::new(),
+        &mut flat,
+    )?;
+
+    // Deterministic topological order over the flattened nodes.
+    let mut ordered = Vec::with_capacity(flat.len());
+    let mut placed: BTreeSet<String> = BTreeSet::new();
+    let mut remaining: Vec<FlatNode> = flat;
+    while !remaining.is_empty() {
+        let Some(index) = remaining
+            .iter()
+            .position(|node| node.depends_on.iter().all(|dep| placed.contains(dep)))
+        else {
+            // A sibling dependsOn cycle: every unplaced node waits on another.
+            let stuck = remaining
+                .iter()
+                .map(|node| node.step_path.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(RuntimeError::new(
+                ErrorCode::ModelAdmission,
+                format!("task {root} has a step dependency cycle through: {stuck}"),
+            ));
+        };
+        let node = remaining.remove(index);
+        placed.insert(node.step_path.clone());
+        ordered.push(PlanNode {
+            node_id: NodeId::new(&node.step_path),
+            task_id: node.leaf,
+        });
+    }
+    Ok(ordered)
 }
 
 /// Deterministic topological order of workflow nodes; `None` on a cycle.
@@ -399,6 +516,137 @@ mod tests {
                 .code,
             ErrorCode::PortConflict
         );
+    }
+
+    fn leaf_task(name: &str) -> ExecTask {
+        ExecTask {
+            task_id: TaskId::new(name),
+            exec: resolved_exec(),
+            requires: Vec::new(),
+            success_codes: vec![0],
+        }
+    }
+
+    fn composite(name: &str, steps: Vec<(&str, &str, Vec<&str>)>) -> ExecComposite {
+        ExecComposite {
+            task_id: TaskId::new(name),
+            steps: steps
+                .into_iter()
+                .map(|(step, task, deps)| ExecStep {
+                    name: step.to_string(),
+                    task: TaskId::new(task),
+                    depends_on: deps.into_iter().map(String::from).collect(),
+                })
+                .collect(),
+        }
+    }
+
+    fn vector_model(
+        leaves: Vec<&str>,
+        composites: Vec<ExecComposite>,
+        env_tasks: Vec<&str>,
+    ) -> ExecutionModel {
+        let mut em = model(vec![], vec![], vec![(0, 23080, 23090)]);
+        for leaf in leaves {
+            em.tasks.insert(TaskId::new(leaf), leaf_task(leaf));
+        }
+        for comp in composites {
+            em.composites.insert(comp.task_id.clone(), comp);
+        }
+        em.environment.tasks = env_tasks.into_iter().map(TaskId::new).collect();
+        em
+    }
+
+    fn plan_paths(em: &ExecutionModel) -> Vec<String> {
+        plan(em, Selection::Environment, 0)
+            .expect("plan exists")
+            .nodes
+            .iter()
+            .map(|node| node.node_id.as_str().to_string())
+            .collect()
+    }
+
+    /// Golden vector V1 (docs/DERIVATION_SPEC.md §6): nesting, step paths,
+    /// canonical step order, whole-subtree dependencies.
+    #[test]
+    fn flattening_vector_v1_nesting_and_step_paths() {
+        let em = vector_model(
+            vec!["fmt", "clippy", "tests"],
+            vec![
+                composite(
+                    "check",
+                    vec![("fmt", "fmt", vec![]), ("clippy", "clippy", vec!["fmt"])],
+                ),
+                composite(
+                    "ci",
+                    vec![
+                        ("check", "check", vec![]),
+                        ("tests", "tests", vec!["check"]),
+                    ],
+                ),
+            ],
+            vec!["ci"],
+        );
+        // Emission order is check < tests, clippy emitted before fmt (byte
+        // order), but fmt orders first (clippy depends on it); ci.tests
+        // depends on every node under ci.check.
+        assert_eq!(
+            plan_paths(&em),
+            vec!["ci.check.fmt", "ci.check.clippy", "ci.tests"]
+        );
+    }
+
+    /// Golden vector V2: the same task referenced twice flattens twice with
+    /// distinct step paths.
+    #[test]
+    fn flattening_vector_v2_run_once_is_per_step() {
+        let em = vector_model(
+            vec!["unit"],
+            vec![composite(
+                "twice",
+                vec![("again", "unit", vec!["first"]), ("first", "unit", vec![])],
+            )],
+            vec!["twice"],
+        );
+        assert_eq!(plan_paths(&em), vec!["twice.first", "twice.again"]);
+    }
+
+    /// Golden vector V3: selecting a leaf directly yields one node whose step
+    /// path is the task id.
+    #[test]
+    fn flattening_vector_v3_leaf_selection() {
+        let em = vector_model(vec!["fmt"], vec![], vec!["fmt"]);
+        assert_eq!(plan_paths(&em), vec!["fmt"]);
+    }
+
+    #[test]
+    fn flattening_rejects_a_task_reference_cycle() {
+        let em = vector_model(
+            vec![],
+            vec![
+                composite("a", vec![("to-b", "b", vec![])]),
+                composite("b", vec![("to-a", "a", vec![])]),
+            ],
+            vec!["a"],
+        );
+        let error = plan(&em, Selection::Environment, 0).expect_err("cycle must reject");
+        assert_eq!(error.code, ErrorCode::ModelAdmission);
+        assert!(error.message.contains("cycle"), "{}", error.message);
+    }
+
+    #[test]
+    fn flattening_rejects_a_sibling_depends_on_cycle() {
+        let em = vector_model(
+            vec!["unit"],
+            vec![composite(
+                "spin",
+                vec![("x", "unit", vec!["y"]), ("y", "unit", vec!["x"])],
+            )],
+            vec!["spin"],
+        );
+        let error = plan(&em, Selection::Environment, 0).expect_err("cycle must reject");
+        assert_eq!(error.code, ErrorCode::ModelAdmission);
+        assert!(error.message.contains("cycle"), "{}", error.message);
     }
 
     #[test]
