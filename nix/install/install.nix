@@ -116,9 +116,10 @@ pkgs.writeShellApplication {
       nixfied.project.name = "$project_name_escaped";
       nixfied.codebases.main.logicalRoot = ".";
 
-      # \`nix run .#test\` runs the environment: the synthetic adapter's
-      # \`smoke\` task pings the service. Add your own leaf tasks (lint/test)
-      # and compose them into composite tasks (kind = "composite", steps = …).
+      # \`nix run .#run -- --task smoke\` runs the synthetic adapter's
+      # \`smoke\` task (it pings the service). Add your own leaf tasks
+      # (lint/test) and compose them into composite tasks
+      # (kind = "composite", steps = …).
     }
     EOF
     }

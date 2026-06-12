@@ -65,12 +65,12 @@ pkgs.writeShellApplication {
     # Run one example as an adopter would, verify its emitted views project from
     # the model (nix-emitted == runtime-rederived), then clean.
     example() {
-      local name="$1" dir="$2"
+      local name="$1" dir="$2" task="$3"
       local model="$dir/model.json"
       echo "  example $name" >&2
       local st="$state/$name-state" wk="$state/$name-work"
       mkdir -p "$st" "$wk"
-      local args=(run --model "$model" --timeout-ms 60000)
+      local args=(run --model "$model" --task "$task" --timeout-ms 60000)
       ( cd "$wk" && NIXFIED_STATE_DIR="$st" "$rt" "''${args[@]}" ) \
         > "$artifacts/$name.json" 2> "$st/run.err" \
         || fail "$name: run failed — $(tail -n1 "$st/run.err")"
@@ -108,10 +108,10 @@ pkgs.writeShellApplication {
       w0="$state/slots-w0"
       w1="$state/slots-w1"
       mkdir -p "$st" "$w0" "$w1"
-      ( cd "$w0" && NIXFIED_STATE_DIR="$st" "$rt" run --model "$model" --slot 0 --timeout-ms 60000 ) \
+      ( cd "$w0" && NIXFIED_STATE_DIR="$st" "$rt" run --model "$model" --task release --slot 0 --timeout-ms 60000 ) \
         > "$artifacts/slots-0.json" 2> "$st/0.err" &
       p0=$!
-      ( cd "$w1" && NIXFIED_STATE_DIR="$st" "$rt" run --model "$model" --slot 1 --timeout-ms 60000 ) \
+      ( cd "$w1" && NIXFIED_STATE_DIR="$st" "$rt" run --model "$model" --task release --slot 1 --timeout-ms 60000 ) \
         > "$artifacts/slots-1.json" 2> "$st/1.err" &
       p1=$!
       wait "$p0" || fail "slots: slot 0 run failed — $(tail -n1 "$st/0.err")"
@@ -146,20 +146,30 @@ pkgs.writeShellApplication {
     # name, so a duplicate is a Nix evaluation error rather than a silent
     # last-wins collapse), and broken composites must fail at evaluation.
     negative() {
-      echo "  negative (the removed --workflow flag must be refused)" >&2
+      echo "  negative (run with no selection refuses and lists declared tasks)" >&2
       local st="$state/negative-state"
       mkdir -p "$st"
       if ( NIXFIED_STATE_DIR="$st" "$rt" run \
-            --model "${models.minimal}/model.json" --workflow does-not-exist ) \
-            >/dev/null 2>"$artifacts/negative-error.json"; then
-        fail "negative: the runtime accepted the removed --workflow flag"
+            --model "${models.minimal}/model.json" ) \
+            >/dev/null 2>"$artifacts/negative-selection.json"; then
+        fail "negative: the runtime accepted a run with no task selection"
+      fi
+      tail -n 1 "$artifacts/negative-selection.json" \
+        | jq -e '.details.declaredTasks | index("smoke") != null' >/dev/null \
+        || fail "negative: the selection refusal did not list the declared tasks"
+
+      echo "  negative (an undeclared task selection must be refused)" >&2
+      if ( NIXFIED_STATE_DIR="$st" "$rt" run \
+            --model "${models.minimal}/model.json" --task does-not-exist ) \
+            >/dev/null 2>"$artifacts/negative-unknown-task.json"; then
+        fail "negative: the runtime accepted an undeclared task"
       fi
 
       echo "  negative (run failure must carry run identity and state paths)" >&2
       # A genuine run failure: a composite whose step leaf deterministically
       # fails (it dials a port nothing listens on).
       if ( NIXFIED_STATE_DIR="$st/identity" "$rt" run \
-            --model "${models.negativeFail}/model.json" ) \
+            --model "${models.negativeFail}/model.json" --task failing ) \
             >/dev/null 2>"$artifacts/negative-fail.json"; then
         fail "negative: the failing composite run reported success"
       fi
@@ -210,18 +220,18 @@ pkgs.writeShellApplication {
       mkdir -p "$st"
       root="$st/minimal/dev/0"
       marker="$root/.nixfied-state.json"
-      NIXFIED_STATE_DIR="$st" "$rt" run --model "${models.minimal}/model.json" \
+      NIXFIED_STATE_DIR="$st" "$rt" run --model "${models.minimal}/model.json" --task smoke \
         >/dev/null || fail "lifecycle: first run failed"
       touch "$root/sentinel"
       hash1=$(jq -r .computedModelHash "$marker")
-      NIXFIED_STATE_DIR="$st" "$rt" run --model "${models.minimal}/model.json" \
+      NIXFIED_STATE_DIR="$st" "$rt" run --model "${models.minimal}/model.json" --task smoke \
         >/dev/null || fail "lifecycle: second run of the same model failed"
       [ -e "$root/sentinel" ] || fail "lifecycle: second run lost the state root"
       [ "$(jq -r .computedModelHash "$marker")" = "$hash1" ] \
         || fail "lifecycle: second run rewrote marker provenance"
 
       echo "  lifecycle (changed model hash: in-place upgrade, state preserved)" >&2
-      NIXFIED_STATE_DIR="$st" "$rt" run --model "${models.minimalB}/model.json" \
+      NIXFIED_STATE_DIR="$st" "$rt" run --model "${models.minimalB}/model.json" --task smoke \
         >/dev/null || fail "lifecycle: changed-model run was refused"
       [ -e "$root/sentinel" ] \
         || fail "lifecycle: same-epoch upgrade cleaned the state root"
@@ -232,7 +242,7 @@ pkgs.writeShellApplication {
       [ "$upgrades" -ge 1 ] || fail "lifecycle: upgrade left no state.upgraded event"
 
       echo "  lifecycle (changed state epoch: upgrade with clean)" >&2
-      NIXFIED_STATE_DIR="$st" "$rt" run --model "${models.minimalEpoch2}/model.json" \
+      NIXFIED_STATE_DIR="$st" "$rt" run --model "${models.minimalEpoch2}/model.json" --task smoke \
         >/dev/null || fail "lifecycle: epoch-change run was refused"
       [ ! -e "$root/sentinel" ] \
         || fail "lifecycle: epoch upgrade preserved state across the declared boundary"
@@ -242,7 +252,7 @@ pkgs.writeShellApplication {
       echo "  lifecycle (interrupted run: live old-model service recovered)" >&2
       local pst="$state/lifecycle-interrupt-state" ppid live
       mkdir -p "$pst"
-      NIXFIED_STATE_DIR="$pst" "$rt" run --model "${models.postgresSlow}/model.json" \
+      NIXFIED_STATE_DIR="$pst" "$rt" run --model "${models.postgresSlow}/model.json" --task smoke-query \
         >"$artifacts/lifecycle-interrupt.json" 2>&1 &
       ppid=$!
       for _ in $(seq 1 300); do
@@ -259,7 +269,7 @@ pkgs.writeShellApplication {
       # The next model's run must recover on its own: reconcile the dead
       # runtime's evidence, stop the orphaned postgres, adopt pgdata (same
       # epoch + idempotent prepare), and proceed.
-      NIXFIED_STATE_DIR="$pst" "$rt" run --model "${models.postgres}/model.json" \
+      NIXFIED_STATE_DIR="$pst" "$rt" run --model "${models.postgres}/model.json" --task smoke-query \
         >/dev/null || fail "lifecycle: recovery run after interrupt failed"
       [ -s "$pst/postgres-example/dev/0/pgdata/PG_VERSION" ] \
         || fail "lifecycle: recovery run did not adopt the existing cluster"
@@ -271,14 +281,14 @@ pkgs.writeShellApplication {
       local code
       jq '.projectId = "intruder"' "$marker" > "$marker.tmp" && mv "$marker.tmp" "$marker"
       code=0
-      NIXFIED_STATE_DIR="$st" "$rt" run --model "${models.minimalEpoch2}/model.json" \
+      NIXFIED_STATE_DIR="$st" "$rt" run --model "${models.minimalEpoch2}/model.json" --task smoke \
         >/dev/null 2>"$artifacts/lifecycle-tamper-owner.json" || code=$?
       [ "$code" -eq 21 ] \
         || fail "lifecycle: tampered ownership exited $code, want 21 (STATE_UNOWNED)"
       jq '.projectId = "minimal" | .runtimeAbi = "nixfied-runtime-abi:0-foreign"' \
         "$marker" > "$marker.tmp" && mv "$marker.tmp" "$marker"
       code=0
-      NIXFIED_STATE_DIR="$st" "$rt" run --model "${models.minimalEpoch2}/model.json" \
+      NIXFIED_STATE_DIR="$st" "$rt" run --model "${models.minimalEpoch2}/model.json" --task smoke \
         >/dev/null 2>"$artifacts/lifecycle-tamper-abi.json" || code=$?
       [ "$code" -eq 21 ] \
         || fail "lifecycle: tampered runtime ABI exited $code, want 21 (STATE_UNOWNED)"
@@ -321,7 +331,7 @@ pkgs.writeShellApplication {
       model="$(nix build --no-link --print-out-paths "$project#model")/model.json"
       st=$(mktemp -d)
       wk=$(mktemp -d)
-      ( cd "$wk" && NIXFIED_STATE_DIR="$st" "$rt" run --model "$model" --timeout-ms 60000 ) \
+      ( cd "$wk" && NIXFIED_STATE_DIR="$st" "$rt" run --model "$model" --task smoke --timeout-ms 60000 ) \
         >/dev/null || fail "adoption: scaffolded run failed"
       # The generated control surface: ps/down/clean must exist as project apps
       # and work against the same state.
@@ -341,7 +351,7 @@ pkgs.writeShellApplication {
       model="$(nix build --no-link --print-out-paths "$project#model")/model.json"
       st=$(mktemp -d)
       wk=$(mktemp -d)
-      ( cd "$wk" && NIXFIED_STATE_DIR="$st" "$rt" run --model "$model" --timeout-ms 60000 ) \
+      ( cd "$wk" && NIXFIED_STATE_DIR="$st" "$rt" run --model "$model" --task smoke --timeout-ms 60000 ) \
         >/dev/null || fail "adoption: post-upgrade run failed"
       ( cd "$wk" && NIXFIED_STATE_DIR="$st" "$rt" clean --model "$model" ) \
         >/dev/null || fail "adoption: post-upgrade clean failed"
@@ -351,12 +361,12 @@ pkgs.writeShellApplication {
     }
 
     echo "==> examples (run + views + clean)" >&2
-    example minimal "${models.minimal}"
-    example postgres "${models.postgres}"
-    example workflow "${models.workflow}"
-    example polyglot "${models.polyglot}"
-    example downstream "${models.downstream}"
-    example reth "${models.reth}"
+    example minimal "${models.minimal}" smoke
+    example postgres "${models.postgres}" smoke-query
+    example workflow "${models.workflow}" pipeline
+    example polyglot "${models.polyglot}" all
+    example downstream "${models.downstream}" release
+    example reth "${models.reth}" reth-smoke
     echo "==> slots" >&2
     slots
     echo "==> negative" >&2

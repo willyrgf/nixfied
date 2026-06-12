@@ -233,9 +233,4 @@ in
     logRefs = [ "task.reth-smoke" ];
     summaryRefs = [ "summary" ];
   };
-
-  nixfied.environments.dev = {
-    services = [ "reth" ];
-    tasks = [ "reth-smoke" ];
-  };
 }

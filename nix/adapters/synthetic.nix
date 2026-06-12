@@ -158,9 +158,4 @@ in
     logRefs = [ "task.smoke" ];
     summaryRefs = [ "summary" ];
   };
-
-  nixfied.environments.dev = {
-    services = [ "synthetic" ];
-    tasks = [ "smoke" ];
-  };
 }

@@ -267,9 +267,4 @@ in
     logRefs = [ "task.smoke-query" ];
     summaryRefs = [ "summary" ];
   };
-
-  nixfied.environments.dev = {
-    services = [ "postgres" ];
-    tasks = [ "smoke-query" ];
-  };
 }
