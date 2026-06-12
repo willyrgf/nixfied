@@ -60,10 +60,18 @@ module merging — `nixfied.services.postgres.lifecycle.stop.signal`,
 `nixfied.placement.ports.base`, probe timing, or whole execs. No adapter has
 its own option namespace.
 
-## Known limitation: derived ports
+## Multiple listeners: model every endpoint
 
-A service that needs more than one listener (reth: http/ws/authrpc/p2p) gets
-only one planned port; the adapter derives the rest (+1/+2/+3) and the planner
-does **not** reserve them. Give such a project a dedicated
-`nixfied.placement.ports.base`. Folding derived listeners into the plan needs
-model-level multi-endpoint support (future work).
+A service that binds more than one listener (reth: http/ws/authrpc) declares each
+as a named `endpoint` and names the primary with `primaryEndpoint` (see
+`nix/adapters/reth.nix`). The planner reserves a contiguous port block — one port
+per endpoint — so every listener is reserved, conflict-checked against other
+services and slots, and ownership-verified after readiness. The start wrapper
+receives the planned ports as arguments (`${port:reth-http}`, `${port:reth-ws}`, …)
+and derives nothing.
+
+Do **not** derive auxiliary ports (`+1/+2/+3`) inside the wrapper: a derived port
+is outside the plan, so it is neither reserved nor isolated across slots. Model it
+as an endpoint instead. A listener the adapter cannot model (no fixed offset, or an
+out-of-band socket) must be disabled rather than left unreserved — see reth's
+`--ipcdisable`.
