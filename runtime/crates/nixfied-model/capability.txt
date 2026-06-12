@@ -67,3 +67,10 @@ status ProcessStatus: starting running ready stopped succeeded failed canceled e
 status RunLeaseStatus: active canceling canceled completed failed stale
 status PortStatus: reserved binding bound active released stale
 status CleanupStatus: intent deleted failed
+
+# The public runtime error contract: the stable error codes and exit classes the
+# runtime emits. These are public API for the current ABI, so a change rotates the
+# digest like any primitive field — old models and the new runtime cannot disagree
+# on the failure vocabulary without the identity check noticing.
+error-code: MODEL_NOT_STORE_OUTPUT MODEL_INVALID MODEL_ADMISSION RUNTIME_ABI_MISMATCH SOURCE_MISMATCH PLATFORM_UNSUPPORTED CLOSURE_MISSING REGISTRY_CORRUPT STATE_UNWRITABLE STATE_UNOWNED CLEANUP_REFUSED PORT_CONFLICT PORT_UNVERIFIABLE PROC_ESCAPE READINESS_TIMEOUT CANCELED LEASE_STALE LEASE_CONFLICT TASK_FAILED LIFECYCLE_FAILED DEPENDENCY_UNAVAILABLE
+exit-class: ok error

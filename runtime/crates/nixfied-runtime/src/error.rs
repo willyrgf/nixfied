@@ -189,47 +189,39 @@ mod tests {
             .expect("contract enum serializes to a string")
     }
 
-    /// The stable public error contract: the exact wire values of every error code
-    /// and exit class. Changing a value, or adding/removing a code, breaks this
-    /// snapshot — update it deliberately, in the same change that records the
-    /// contract change. This is decoupled from `runtimeAbi` on purpose: the error
-    /// contract is the runtime's output surface, not the model input wire.
+    /// The public error contract is part of the capability descriptor that drives
+    /// `runtimeAbi` (AGENTS.md: "public API for the current ABI"). Every error code
+    /// and exit class must be listed there, so the chain holds: a new variant fails
+    /// to compile in the sentinels above, listing it in `capability.txt` is then the
+    /// only way past this test, and that edit rotates the ABI digest (caught by the
+    /// `runtime_abi_snapshot` test) — the error vocabulary cannot change silently or
+    /// without the runtime/model identity check noticing.
     #[test]
-    fn public_error_contract_snapshot() {
+    fn public_error_contract_is_in_capability_descriptor() {
+        use std::collections::BTreeSet;
+
         // Reference the sentinels so their exhaustive matches compile (a new
         // variant fails the build here) rather than being dead code.
         _error_code_is_listed(ErrorCode::Canceled);
         _exit_class_is_listed(ExitClass::Ok);
 
-        let codes: Vec<String> = ALL_ERROR_CODES.iter().copied().map(wire).collect();
-        assert_eq!(
-            codes,
-            [
-                "MODEL_NOT_STORE_OUTPUT",
-                "MODEL_INVALID",
-                "MODEL_ADMISSION",
-                "RUNTIME_ABI_MISMATCH",
-                "SOURCE_MISMATCH",
-                "PLATFORM_UNSUPPORTED",
-                "CLOSURE_MISSING",
-                "REGISTRY_CORRUPT",
-                "STATE_UNWRITABLE",
-                "STATE_UNOWNED",
-                "CLEANUP_REFUSED",
-                "PORT_CONFLICT",
-                "PORT_UNVERIFIABLE",
-                "PROC_ESCAPE",
-                "READINESS_TIMEOUT",
-                "CANCELED",
-                "LEASE_STALE",
-                "LEASE_CONFLICT",
-                "TASK_FAILED",
-                "LIFECYCLE_FAILED",
-                "DEPENDENCY_UNAVAILABLE",
-            ]
-        );
+        let tokens: BTreeSet<&str> = nixfied_model::constants::CAPABILITY_DESCRIPTOR
+            .split_whitespace()
+            .collect();
 
-        let classes: Vec<String> = ALL_EXIT_CLASSES.iter().copied().map(wire).collect();
-        assert_eq!(classes, ["ok", "error"]);
+        for code in ALL_ERROR_CODES {
+            let value = wire(*code);
+            assert!(
+                tokens.contains(value.as_str()),
+                "error code {value} is missing from the capability descriptor"
+            );
+        }
+        for class in ALL_EXIT_CLASSES {
+            let value = wire(*class);
+            assert!(
+                tokens.contains(value.as_str()),
+                "exit class {value} is missing from the capability descriptor"
+            );
+        }
     }
 }
