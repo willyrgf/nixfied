@@ -2736,6 +2736,78 @@ fn task_child_path_is_assembled_from_tool_roots() {
     assert_eq!(stdout, expected);
 }
 
+#[test]
+fn task_child_environment_is_hermetic() {
+    // The child sees the declared env plus the runtime-owned PATH — nothing
+    // inherited from the runtime's own environment.
+    let Some(python) = python3_path() else {
+        return;
+    };
+    // A canary in the runtime's environment that must NOT leak to the child.
+    unsafe { std::env::set_var("NIXFIED_HERMETIC_CANARY", "leaked") };
+    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
+    let port = listener.local_addr().expect("local addr").port();
+    drop(listener);
+    let mut value = fixture_model(python, &["-c", python_listener_script(), "${port}"], port);
+    value["environments"]["dev"]["services"] = json!([]);
+    value["tasks"]["smoke"]["requires"] = json!([]);
+    value["tasks"]["smoke"]["invocation"]["env"] = json!({ "DECLARED": "yes" });
+    set_task_run_args(
+        &mut value,
+        &[
+            "-c",
+            "import os, sys; sys.stdout.write(';'.join(sorted(f'{k}={v}' for k, v in os.environ.items())))",
+        ],
+    );
+    let mut fixture = ServiceFixture::from_value(value);
+    let task = fixture
+        .admission
+        .execution_model
+        .tasks
+        .get("smoke")
+        .expect("task lowered")
+        .clone();
+    let source_root = fixture
+        .admission
+        .require_source()
+        .expect("run admission resolves source")
+        .observed_root
+        .clone();
+    let run = run_dependent_task(
+        &fixture.placement,
+        &mut fixture.registry,
+        RunContext {
+            run_id: "run-hermetic-proof",
+            computed_model_hash: &fixture.admission.computed_model_hash,
+            source_root: &source_root,
+            state_root: &fixture.placement.state_root,
+        },
+        &[],
+        &task,
+    )
+    .expect("env-printing task should succeed");
+    let stdout = fs::read_to_string(&run.stdout_path).expect("task stdout log");
+    let vars: Vec<&str> = stdout.split(';').filter(|v| !v.is_empty()).collect();
+    assert!(
+        vars.contains(&"DECLARED=yes"),
+        "declared env must be present: {stdout}"
+    );
+    assert!(
+        !stdout.contains("NIXFIED_HERMETIC_CANARY"),
+        "runtime env must not leak: {stdout}"
+    );
+    // Exactly the declared env + the runtime-owned variables (PATH, and
+    // anything the platform libc injects for every process, e.g. LC_CTYPE on
+    // some systems). Assert the strong property directly: no inherited vars.
+    for var in &vars {
+        let name = var.split('=').next().unwrap_or("");
+        assert!(
+            matches!(name, "DECLARED" | "PATH" | "LC_CTYPE"),
+            "unexpected child env var {name}: {stdout}"
+        );
+    }
+}
+
 struct ServiceFixture {
     _tmp: TempDir,
     model: Model,

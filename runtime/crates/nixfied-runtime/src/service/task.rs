@@ -291,7 +291,9 @@ fn spawn_task(
     stderr_path: &Path,
 ) -> RuntimeResult<Child> {
     let mut command = Command::new(&exec.executable);
+    // Hermetic child environment: declared env + runtime-owned PATH only.
     command
+        .env_clear()
         .args(args)
         .current_dir(command_cwd)
         .envs(env)

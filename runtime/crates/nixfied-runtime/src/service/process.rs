@@ -770,7 +770,11 @@ pub fn start_service_for_slot(
     })
     .map_err(|error| RuntimeError::new(ErrorCode::ModelAdmission, error.to_string()))?;
     let mut command = Command::new(&exec.executable);
+    // Hermetic child environment: declared env + runtime-owned variables only
+    // (PATH from the tool roots); nothing inherited from the runtime's own
+    // environment.
     command
+        .env_clear()
         .args(&args)
         .current_dir(&command_cwd)
         .envs(&env)
@@ -1136,7 +1140,9 @@ pub(crate) fn run_bounded_exec(
 ) -> RuntimeResult<BoundedExecOutcome> {
     let label = spec.label;
     let mut command = Command::new(spec.executable);
+    // Hermetic child environment, same as the long-lived spawn paths.
     command
+        .env_clear()
         .args(spec.args)
         .current_dir(spec.cwd)
         .envs(spec.env)
