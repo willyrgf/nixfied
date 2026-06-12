@@ -433,7 +433,7 @@ fn run_m0_placed(
         // zero services — it runs in the run context alone.
         let mut dep_indices = Vec::new();
         let mut missing_dependency = None;
-        for name in &task.depends_on_services_ready {
+        for name in &task.requires {
             match started
                 .iter()
                 .position(|service| service.service_name() == name.as_str())

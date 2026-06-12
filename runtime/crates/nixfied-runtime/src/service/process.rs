@@ -16,7 +16,7 @@ use crate::admission::Admission;
 use crate::cancellation::{CancellationToken, canceled_error};
 use crate::control::reconcile_registry;
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
-use crate::execution::{ExecProbe, ExecService, OpMeta, Probe, ResolvedExec, StdinPolicy};
+use crate::execution::{ExecProbe, ExecService, OpMeta, Probe, ResolvedInvocation, StdinPolicy};
 use crate::registry::{Registry, RunLeaseHeartbeat};
 use crate::service::identity::{
     compute_service_identity, service_address_hash, service_instance_id,
@@ -944,7 +944,7 @@ fn record_service_clean(
     );
     // Recompute the same identity the lowering derived for this service so the
     // clean path keys on the exact registry instance the start path created.
-    let identity = compute_service_identity(service, &model.execs, &model.state, &model.target);
+    let identity = compute_service_identity(service, &model.state, &model.target);
     let service_instance_id = service_instance_id(&address_hash, &identity);
     let lifecycle_context = LifecycleEventContext {
         run_id: None,
@@ -1195,7 +1195,7 @@ pub(crate) fn run_bounded_exec(
 /// (e.g. initdb) leaves a recoverable trail. Honors cancellation and the exec
 /// timeout.
 fn run_resolved_exec(
-    exec: &ResolvedExec,
+    exec: &ResolvedInvocation,
     source_root: &Path,
     logs_dir: &Path,
     label: &str,

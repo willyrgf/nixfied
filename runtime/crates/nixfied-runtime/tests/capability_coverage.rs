@@ -19,7 +19,6 @@ use common::*;
 const MAP_FIELDS: &[&str] = &[
     "services",
     "closures",
-    "execs",
     "tasks",
     "workflows",
     "environments",

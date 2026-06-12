@@ -3,7 +3,7 @@ use std::num::{NonZeroU32, NonZeroU64};
 
 use serde::{Deserialize, Serialize};
 
-use crate::ids::{ClosureId, CodebaseId, ExecId, NodeId, OperationId, ServiceId, TaskId};
+use crate::ids::{ClosureId, CodebaseId, NodeId, OperationId, ServiceId, TaskId};
 use crate::unique_vec::UniqueVec;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -21,7 +21,6 @@ pub struct Model {
     pub placement: Placement,
     pub state: StatePolicy,
     pub closures: BTreeMap<String, ClosureSpec>,
-    pub execs: BTreeMap<String, ExecSpec>,
     pub services: BTreeMap<String, ServiceSpec>,
     pub tasks: BTreeMap<String, TaskSpec>,
     pub workflows: BTreeMap<String, WorkflowSpec>,
@@ -173,12 +172,20 @@ pub enum ClosureEffect {
     FileWrite,
 }
 
+/// The one way anything in the model says "run this program" (INVOKE-1):
+/// inline, anonymous, fully applied — no invocation registry, no invocation
+/// ids. `tools` references declared closures whose executables' parent
+/// directories form the child PATH in declared order; `run` is the argv, and
+/// `executable` is the eval-resolved absolute path of `run[0]`: the
+/// executable of the first tool closure whose declared executable basename
+/// equals `run[0]`. Lowering re-derives that resolution and rejects a model
+/// that disagrees, so the runtime resolves nothing on the host (SEAM-1).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ExecSpec {
-    pub closure_id: ClosureId,
+pub struct InvocationSpec {
+    pub tools: UniqueVec<ClosureId>,
+    pub run: Vec<String>,
     pub executable: String,
-    pub args: Vec<String>,
     pub env: BTreeMap<String, String>,
     pub codebase_id: CodebaseId,
     pub cwd: String,
@@ -265,11 +272,9 @@ impl<'de> Deserialize<'de> for LoopbackHost {
 pub struct ProbeSpec {
     pub kind: ProbeKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub exec_id: Option<ExecId>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub exec_args: Vec<String>,
+    pub invocation: Option<InvocationSpec>,
     /// Per-attempt budget: the tcp connect timeout, or the exec attempt's
-    /// kill-after deadline (the exec spec's own timeoutMs does not apply).
+    /// kill-after deadline (the invocation's own timeoutMs does not apply).
     pub timeout_ms: NonZeroU64,
     pub retry_interval_ms: NonZeroU64,
     pub max_attempts: NonZeroU32,
@@ -297,23 +302,22 @@ pub struct Lifecycle {
     pub clean: CleanSpec,
 }
 
-/// prepare: an optional data-dir init exec.
+/// prepare: an optional data-dir init invocation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PrepareSpec {
     pub operation_id: OperationId,
-    pub exec_id: Option<ExecId>,
-    pub exec_args: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invocation: Option<InvocationSpec>,
     pub terminal: TerminalSemantics,
 }
 
-/// start: spawn-and-own a required exec.
+/// start: spawn-and-own a required invocation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StartSpec {
     pub operation_id: OperationId,
-    pub exec_id: ExecId,
-    pub exec_args: Vec<String>,
+    pub invocation: InvocationSpec,
     pub terminal: TerminalSemantics,
 }
 
@@ -408,9 +412,10 @@ pub enum ContainmentRequirement {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TaskSpec {
     pub operation_id: OperationId,
-    pub exec_id: ExecId,
-    pub args: Vec<String>,
-    pub depends_on_services_ready: UniqueVec<ServiceId>,
+    pub invocation: InvocationSpec,
+    /// Services that must be ready (alive, probed, addressable) while the
+    /// leaf runs — the leaf-intrinsic fact `servicesRequired` derives from.
+    pub requires: UniqueVec<ServiceId>,
     pub exit_policy: ExitPolicy,
     pub artifact_refs: Vec<String>,
     pub log_refs: Vec<String>,

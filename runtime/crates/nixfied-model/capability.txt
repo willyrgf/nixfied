@@ -4,7 +4,7 @@ model-version: 1
 # The wire primitives the runtime admits and lowers. A field added or removed
 # here is a contract change; editing this manifest rotates the runtime ABI digest
 # so models emitted against the old contract are rejected by the identity check.
-primitive Model: modelVersion toolchainId runtimeAbi generator project target codebases environments slotPolicy placement state closures execs services tasks workflows docs
+primitive Model: modelVersion toolchainId runtimeAbi generator project target codebases environments slotPolicy placement state closures services tasks workflows docs
 primitive Generator: name version emitter
 primitive Project: projectId name
 primitive Target: system os arch closureSystem
@@ -17,29 +17,29 @@ primitive Placement: slotPlacements
 primitive SlotPlacement: slot candidatePorts
 primitive CandidatePortWindow: start end
 primitive ClosureSpec: kind storePath executable targetSystem operationBindings requiresExecutable effects
-primitive ExecSpec: closureId executable args env codebaseId cwd stdin timeoutMs
+primitive Invocation: tools run executable env codebaseId cwd stdin timeoutMs
 primitive ServiceSpec: lifecycle endpoints primaryEndpoint connectsTo stateRefs logRefs containment
 primitive Lifecycle: prepare start ready health stop clean
-primitive PrepareSpec: operationId execId execArgs terminal
-primitive StartSpec: operationId execId execArgs terminal
+primitive PrepareSpec: operationId invocation terminal
+primitive StartSpec: operationId invocation terminal
 primitive ReadySpec: operationId probe terminal
 primitive HealthSpec: operationId probe terminal
 primitive StopSpec: operationId signal timeoutMs terminal
 primitive CleanSpec: operationId terminal
 primitive Endpoint: endpointId host
-primitive ProbeSpec: kind execId execArgs timeoutMs retryIntervalMs maxAttempts
+primitive ProbeSpec: kind invocation timeoutMs retryIntervalMs maxAttempts
 primitive TerminalSemantics: success failure
-primitive TaskSpec: operationId execId args dependsOnServicesReady exitPolicy artifactRefs logRefs summaryRefs
+primitive TaskSpec: operationId invocation requires exitPolicy artifactRefs logRefs summaryRefs
 primitive ExitPolicy: successCodes
 primitive WorkflowSpec: servicesRequired nodes
 primitive WorkflowNode: taskId dependsOn
 primitive Docs: title summary
 
-# The exec arg/env placeholder grammar the runtime substitutes. Bare forms
-# resolve to the exec's own primary endpoint (services) or the primary dependency
-# (tasks). The named form ${port:<name>} resolves <name> first against the exec's
-# own endpoint ids (services), then against a service declared via connectsTo
-# (services) or dependsOnServicesReady (tasks) — its primary slot-plan endpoint.
+# The invocation arg/env placeholder grammar the runtime substitutes. Bare forms
+# resolve to the invocation's own primary endpoint (services) or the primary
+# dependency (tasks). The named form ${port:<name>} resolves <name> first against
+# the owning service's endpoint ids, then against a service declared via
+# connectsTo (services) or requires (tasks) — its primary slot-plan endpoint.
 substitution: ${port} ${host} ${stateDir} ${port:<name>} ${host:<name>}
 
 # The runtime command surfaces every model exposes.

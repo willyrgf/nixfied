@@ -18,7 +18,7 @@ impl Validate for Model {
         validate_environments(self)?;
         validate_slot_policy(&self.slot_policy)?;
         validate_slot_placements(self)?;
-        validate_execs(self)?;
+        validate_invocations(self)?;
         validate_closures(self)?;
         validate_services(self)?;
         validate_tasks(self)?;
@@ -72,9 +72,6 @@ fn validate_required_strings(model: &Model) -> Result<(), ValidationError> {
 /// files, registry keys), so they must be path-safe: no separators, no
 /// traversal, no leading dot. Same shape the installer enforces on project ids.
 fn validate_unit_ids(model: &Model) -> Result<(), ValidationError> {
-    for id in model.execs.keys() {
-        require_path_safe_id("execs", id)?;
-    }
     for id in model.closures.keys() {
         require_path_safe_id("closures", id)?;
     }
@@ -259,19 +256,49 @@ fn validate_candidate_port_window(
     Ok(())
 }
 
-/// At least one reusable exec; each binds a declared closure/codebase (resolved
-/// in `validate_references`) and carries a positive timeout.
-fn validate_execs(model: &Model) -> Result<(), ValidationError> {
-    if model.execs.is_empty() {
+/// Every inline invocation carries a non-empty argv, a resolved executable,
+/// and a confined cwd. Tool/closure reference resolution and the run[0]
+/// resolution rule are proven by the runtime's `lower` step.
+fn validate_invocations(model: &Model) -> Result<(), ValidationError> {
+    for task in model.tasks.values() {
+        validate_invocation(&task.invocation)?;
+    }
+    for service in model.services.values() {
+        for invocation in lifecycle_invocations(&service.lifecycle) {
+            validate_invocation(invocation)?;
+        }
+    }
+    Ok(())
+}
+
+/// Every invocation a lifecycle carries, in canonical order.
+fn lifecycle_invocations(lifecycle: &Lifecycle) -> impl Iterator<Item = &InvocationSpec> {
+    lifecycle
+        .prepare
+        .invocation
+        .iter()
+        .chain(std::iter::once(&lifecycle.start.invocation))
+        .chain(lifecycle.ready.probe.invocation.iter())
+        .chain(lifecycle.health.probe.invocation.iter())
+}
+
+fn validate_invocation(invocation: &InvocationSpec) -> Result<(), ValidationError> {
+    if invocation.run.is_empty() {
         return Err(ValidationError::UnsupportedValue {
-            field: "execs",
-            expected: "at least one exec",
-            actual: "{}".to_string(),
+            field: "invocation.run",
+            expected: "a non-empty argv",
+            actual: "[]".to_string(),
         });
     }
-    for exec in model.execs.values() {
-        require_non_empty("execs.executable", &exec.executable)?;
-        require_non_empty("execs.cwd", &exec.cwd)?;
+    require_non_empty("invocation.run[0]", &invocation.run[0])?;
+    require_non_empty("invocation.executable", &invocation.executable)?;
+    require_non_empty("invocation.cwd", &invocation.cwd)?;
+    if invocation.tools.is_empty() {
+        return Err(ValidationError::UnsupportedValue {
+            field: "invocation.tools",
+            expected: "at least one tool closure",
+            actual: "[]".to_string(),
+        });
     }
     Ok(())
 }
@@ -433,7 +460,6 @@ fn lifecycle_ops(lifecycle: &Lifecycle) -> [(&OperationId, &TerminalSemantics); 
 fn validate_tasks(model: &Model) -> Result<(), ValidationError> {
     for task in model.tasks.values() {
         require_non_empty("tasks.operationId", task.operation_id.as_str())?;
-        require_non_empty("tasks.execId", task.exec_id.as_str())?;
         if task.exit_policy.success_codes.is_empty() {
             return Err(ValidationError::UnsupportedValue {
                 field: "tasks.exitPolicy.successCodes",

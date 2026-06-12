@@ -55,16 +55,13 @@ pub fn check_closures(
             )
             .with_model(&loaded.path, &loaded.computed_model_hash));
         }
-        // A closure invoked by any exec is later run via `Command::new`, so it
-        // must carry the executable bit no matter what `requiresExecutable`
+        // A closure invoked by any invocation is later run via `Command::new`, so
+        // it must carry the executable bit no matter what `requiresExecutable`
         // declares. Enforce it at admission (CLOSURE_MISSING) instead of trusting
         // the Nix default and letting a non-executable invoked closure surface as
         // a ProcEscape after the model has already been admitted.
-        let exec_bound = model
-            .execs
-            .values()
-            .any(|exec| exec.closure_id.as_str() == closure_id.as_str());
-        if closure.requires_executable || exec_bound {
+        let invoked = invocation_tool_ids(model).any(|tool| tool == closure_id.as_str());
+        if closure.requires_executable || invoked {
             let metadata = executable.metadata().map_err(|error| {
                 RuntimeError::new(
                     ErrorCode::ClosureMissing,
@@ -86,24 +83,28 @@ pub fn check_closures(
                 .with_model(&loaded.path, &loaded.computed_model_hash));
             }
         }
-        for (exec_id, exec) in model
-            .execs
-            .iter()
-            .filter(|(_, exec)| exec.closure_id.as_str() == closure_id.as_str())
-        {
-            if exec.executable != closure.executable {
-                return Err(RuntimeError::new(
-                    ErrorCode::ClosureMissing,
-                    format!(
-                        "exec {} executable {} does not match closure {} executable {}",
-                        exec_id, exec.executable, closure_id, closure.executable
-                    ),
-                )
-                .with_model(&loaded.path, &loaded.computed_model_hash));
-            }
-        }
     }
     Ok(())
+}
+
+/// Every closure id referenced as a tool by any invocation in the model.
+fn invocation_tool_ids(model: &Model) -> impl Iterator<Item = &str> {
+    let task_tools = model
+        .tasks
+        .values()
+        .flat_map(|task| task.invocation.tools.iter());
+    let lifecycle_tools = model.services.values().flat_map(|service| {
+        let lifecycle = &service.lifecycle;
+        lifecycle
+            .prepare
+            .invocation
+            .iter()
+            .chain(std::iter::once(&lifecycle.start.invocation))
+            .chain(lifecycle.ready.probe.invocation.iter())
+            .chain(lifecycle.health.probe.invocation.iter())
+            .flat_map(|invocation| invocation.tools.iter())
+    });
+    task_tools.chain(lifecycle_tools).map(|id| id.as_str())
 }
 
 fn require_store_path(

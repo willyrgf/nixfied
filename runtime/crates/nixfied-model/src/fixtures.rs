@@ -51,6 +51,25 @@ impl Default for SyntheticModelOptions {
 /// by construction: it deserializes into [`crate::Model`] and passes
 /// [`crate::Validate`].
 pub fn synthetic_model(options: &SyntheticModelOptions) -> Value {
+    // The fixture binds one closure; its store path is the executable's
+    // grandparent (…/store-path/bin/exe), matching what Nix emits.
+    let store_path = std::path::Path::new(&options.executable)
+        .ancestors()
+        .nth(2)
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "/nix/store/test-synthetic-helper".to_string());
+    let program = std::path::Path::new(&options.executable)
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| "synthetic-helper".to_string());
+    let mut start_run = vec![program.clone()];
+    start_run.extend(options.start_args.iter().cloned());
+    let mut task_run = vec![program];
+    task_run.extend(
+        ["task", "--host", "127.0.0.1", "--port", "${port}"]
+            .iter()
+            .map(|s| s.to_string()),
+    );
     json!({
         "modelVersion": MODEL_VERSION,
         "toolchainId": TOOLCHAIN_ID,
@@ -111,7 +130,7 @@ pub fn synthetic_model(options: &SyntheticModelOptions) -> Value {
         "closures": {
             "synthetic-helper": {
                 "kind": "executable",
-                "storePath": "/nix/store/test-synthetic-helper",
+                "storePath": store_path,
                 "executable": options.executable,
                 "targetSystem": options.system,
                 "operationBindings": [
@@ -123,31 +142,16 @@ pub fn synthetic_model(options: &SyntheticModelOptions) -> Value {
                 "effects": ["process", "network-listener"]
             }
         },
-        "execs": {
-            "synthetic-helper": {
-                "closureId": "synthetic-helper",
-                "executable": options.executable,
-                "args": [],
-                "env": {},
-                "codebaseId": "main",
-                "cwd": ".",
-                "stdin": "null",
-                "timeoutMs": 30000
-            }
-        },
         "services": {
             "synthetic": {
                 "lifecycle": {
                     "prepare": {
                         "operationId": "service.synthetic.prepare",
-                        "execId": null,
-                        "execArgs": [],
                         "terminal": { "success": "prepared", "failure": "failed" }
                     },
                     "start": {
                         "operationId": "service.synthetic.start",
-                        "execId": "synthetic-helper",
-                        "execArgs": options.start_args,
+                        "invocation": invocation(&options.executable, start_run),
                         "terminal": { "success": "spawned", "failure": "failed" }
                     },
                     "ready": {
@@ -182,9 +186,8 @@ pub fn synthetic_model(options: &SyntheticModelOptions) -> Value {
         "tasks": {
             "smoke": {
                 "operationId": "task.smoke.run",
-                "execId": "synthetic-helper",
-                "args": ["task", "--host", "127.0.0.1", "--port", "${port}"],
-                "dependsOnServicesReady": ["synthetic"],
+                "invocation": invocation(&options.executable, task_run),
+                "requires": ["synthetic"],
                 "exitPolicy": {
                     "successCodes": [0]
                 },
@@ -198,6 +201,20 @@ pub fn synthetic_model(options: &SyntheticModelOptions) -> Value {
             "title": options.docs_title,
             "summary": options.docs_summary
         }
+    })
+}
+
+/// An inline invocation over the fixture's single tool closure.
+fn invocation(executable: &str, run: Vec<String>) -> Value {
+    json!({
+        "tools": ["synthetic-helper"],
+        "run": run,
+        "executable": executable,
+        "env": {},
+        "codebaseId": "main",
+        "cwd": ".",
+        "stdin": "null",
+        "timeoutMs": 30000
     })
 }
 

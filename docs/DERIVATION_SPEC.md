@@ -34,6 +34,31 @@ Vocabulary is `DESIGN_COMPOSITION.md`'s: a *task* is a leaf
   collation is a spec violation.
 - **Dedup** is set semantics under byte equality.
 
+### 1.1 `run[0]` resolution and the executable closure
+
+An invocation's `tools` is a list of declared closure ids. Each tool closure
+contributes one **PATH root**: the parent directory of its absolute
+`executable`. The invocation's PATH is the roots joined in `tools` order
+(first wins).
+
+`run[0]` resolution is **declarative, not a filesystem scan** (so eval and
+admission cannot drift and no realisation is needed at eval):
+
+```
+executableClosure(invocation) =
+  the FIRST element c of invocation.tools
+  where basename(c.executable) == invocation.run[0]
+
+invocation.executable = executableClosure(invocation).executable   (absolute)
+```
+
+No matching tool is an eval error; admission re-derives the same rule and
+requires the carried `executable` to equal it (fail closed). A program that
+is on the assembled PATH but is not any tool closure's declared executable
+(e.g. `rustc` inside a toolchain whose closure declares `bin/cargo`) is
+reachable by child processes through PATH, but cannot be `run[0]` without its
+own tool closure entry.
+
 ## 2. Flattening and step paths
 
 A run executes one selected task. The planner flattens the (acyclic,

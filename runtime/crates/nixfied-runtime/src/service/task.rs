@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::cancellation::{CancellationToken, canceled_error};
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
-use crate::execution::{ExecTask, ResolvedExec};
+use crate::execution::{ExecTask, ResolvedInvocation};
 use crate::registry::Registry;
 use crate::service::process::{
     ExecSubstitution, SlotEndpoints, StartedService, platform_start_identity, process_group,
@@ -263,7 +263,7 @@ fn ensure_task_dependencies(
     task: &ExecTask,
     dependencies: &[&StartedService],
 ) -> RuntimeResult<()> {
-    for service_name in &task.depends_on_services_ready {
+    for service_name in &task.requires {
         let service = dependencies
             .iter()
             .find(|service| service.service_name() == service_name.as_str())
@@ -283,7 +283,7 @@ fn ensure_task_dependencies(
 }
 
 fn spawn_task(
-    exec: &ResolvedExec,
+    exec: &ResolvedInvocation,
     args: &[String],
     env: &std::collections::BTreeMap<String, String>,
     command_cwd: &Path,

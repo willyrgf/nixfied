@@ -261,14 +261,15 @@ mod tests {
         }
     }
 
-    fn resolved_exec() -> ResolvedExec {
-        ResolvedExec {
+    fn resolved_exec() -> ResolvedInvocation {
+        ResolvedInvocation {
             executable: "/bin/svc".to_string(),
             args: Vec::new(),
             env: BTreeMap::new(),
             cwd: ".".to_string(),
             stdin: StdinPolicy::Null,
             timeout: Duration::from_millis(1000),
+            tool_roots: Vec::new(),
         }
     }
 

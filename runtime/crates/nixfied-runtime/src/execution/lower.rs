@@ -6,11 +6,13 @@
 //! runtime — never execution failures.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 use std::time::Duration;
 
 use nixfied_model::{
-    Environment, ExecSpec, Lifecycle, Model, OperationId, ProbeKind, ProbeSpec, ServiceId,
-    ServiceSpec, StatePolicy, StopSpec, Target, TaskId, TaskSpec, TerminalSemantics, WorkflowSpec,
+    ClosureSpec, Environment, InvocationSpec, Lifecycle, Model, OperationId, ProbeKind, ProbeSpec,
+    ServiceId, ServiceSpec, StatePolicy, StopSpec, Target, TaskId, TaskSpec, TerminalSemantics,
+    WorkflowSpec,
 };
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
@@ -31,14 +33,13 @@ pub fn lower(model: &Model) -> RuntimeResult<ExecutionModel> {
         runtime_abi: _,
         generator: _,
         project: _,
-        target,
+        target: _,
         codebases: _,
         environments,
         slot_policy: _,
         placement,
         state,
-        closures: _,
-        execs,
+        closures,
         services,
         tasks,
         workflows,
@@ -50,7 +51,7 @@ pub fn lower(model: &Model) -> RuntimeResult<ExecutionModel> {
         .map(|(name, service)| {
             Ok((
                 ServiceId::new(name),
-                lower_service(name, service, execs, state, target)?,
+                lower_service(name, service, closures, state, &model.target)?,
             ))
         })
         .collect::<RuntimeResult<BTreeMap<_, _>>>()?;
@@ -60,7 +61,7 @@ pub fn lower(model: &Model) -> RuntimeResult<ExecutionModel> {
         .map(|(id, task)| {
             Ok((
                 TaskId::new(id),
-                lower_task(id, task, execs, &lowered_services)?,
+                lower_task(id, task, closures, &lowered_services)?,
             ))
         })
         .collect::<RuntimeResult<BTreeMap<_, _>>>()?;
@@ -226,7 +227,7 @@ fn require_task(
 fn lower_service(
     name: &str,
     service: &ServiceSpec,
-    execs: &BTreeMap<String, ExecSpec>,
+    closures: &BTreeMap<String, ClosureSpec>,
     state: &StatePolicy,
     target: &Target,
 ) -> RuntimeResult<ExecService> {
@@ -261,39 +262,37 @@ fn lower_service(
         })
         .collect();
 
+    let owner = || format!("service {name}");
     let prepare = PrepareOp {
         meta: op_meta(&prepare.operation_id, &prepare.terminal),
-        exec: match &prepare.exec_id {
-            Some(exec_id) => Some(resolve_exec_ref(
-                execs,
-                exec_id.as_str(),
-                &prepare.exec_args,
-            )?),
+        exec: match &prepare.invocation {
+            Some(invocation) => Some(resolve_invocation(&owner, invocation, closures)?),
             None => None,
         },
     };
     let start = StartOp {
         meta: op_meta(&start.operation_id, &start.terminal),
-        exec: resolve_exec_ref(execs, start.exec_id.as_str(), &start.exec_args)?,
+        exec: resolve_invocation(&owner, &start.invocation, closures)?,
     };
     let ready = ReadyOp {
         meta: op_meta(&ready.operation_id, &ready.terminal),
-        probe: lower_probe(name, "ready", &ready.probe, execs)?,
+        probe: lower_probe(name, "ready", &ready.probe, closures)?,
     };
     let health = HealthOp {
         meta: op_meta(&health.operation_id, &health.terminal),
-        probe: lower_probe(name, "health", &health.probe, execs)?,
+        probe: lower_probe(name, "health", &health.probe, closures)?,
     };
     let stop = lower_stop(stop);
     let clean = CleanOp {
         meta: op_meta(&clean.operation_id, &clean.terminal),
     };
 
-    // Named endpoint placeholders `${port:<name>}` in lifecycle exec args/env
-    // (including exec probe args) resolve against the service's own endpoint ids
-    // or its declared connectsTo dependencies; reject any other reference here
-    // rather than fail (or silently leak the literal placeholder) at execution.
-    // Validation already proved own endpoint ids and connectsTo ids are disjoint.
+    // Named endpoint placeholders `${port:<name>}` in lifecycle invocation
+    // args/env (including probe invocations) resolve against the service's own
+    // endpoint ids or its declared connectsTo dependencies; reject any other
+    // reference here rather than fail (or silently leak the literal placeholder)
+    // at execution. Validation already proved own endpoint ids and connectsTo
+    // ids are disjoint.
     let allowed: BTreeSet<&str> = endpoints
         .keys()
         .map(String::as_str)
@@ -306,12 +305,7 @@ fn lower_service(
         .chain(probe_exec(&ready.probe))
         .chain(probe_exec(&health.probe))
     {
-        require_named_refs_in_scope(
-            || format!("service {name}"),
-            "own endpoints or connectsTo",
-            exec,
-            &allowed,
-        )?;
+        require_named_refs_in_scope(&owner, "own endpoints or connectsTo", exec, &allowed)?;
     }
 
     Ok(ExecService {
@@ -326,7 +320,7 @@ fn lower_service(
         primary_endpoint: primary_endpoint.clone(),
         connects_to: connects_to.iter().cloned().collect(),
         containment: containment.clone(),
-        identity: crate::service::identity::compute_service_identity(service, execs, state, target),
+        identity: crate::service::identity::compute_service_identity(service, state, target),
     })
 }
 
@@ -349,28 +343,28 @@ fn op_meta(operation_id: &OperationId, terminal: &TerminalSemantics) -> OpMeta {
 fn lower_task(
     task_id: &str,
     task: &TaskSpec,
-    execs: &BTreeMap<String, ExecSpec>,
+    closures: &BTreeMap<String, ClosureSpec>,
     services: &BTreeMap<ServiceId, ExecService>,
 ) -> RuntimeResult<ExecTask> {
     let TaskSpec {
         operation_id: _,
-        exec_id,
-        args,
-        depends_on_services_ready,
+        invocation,
+        requires,
         exit_policy,
         artifact_refs: _,
         log_refs: _,
         summary_refs: _,
     } = task;
-    let exec = resolve_exec_ref(execs, exec_id.as_str(), args)?;
-    let depends_on_services_ready = depends_on_services_ready
+    let owner = || format!("task {task_id}");
+    let exec = resolve_invocation(&owner, invocation, closures)?;
+    let requires = requires
         .iter()
-        .map(|id| require_service("task.dependsOnServicesReady", services, id))
+        .map(|id| require_service("task.requires", services, id))
         .collect::<Result<Vec<_>, Rejection>>()?;
     // `${port}`/`${host}` resolve from the task's primary service. A task that
-    // declares no services has no endpoint, so referencing them is unrunnable —
+    // requires no services has no endpoint, so referencing them is unrunnable —
     // reject it here rather than fail at execution.
-    if depends_on_services_ready.is_empty() {
+    if requires.is_empty() {
         for placeholder in ["${port}", "${host}"] {
             if exec
                 .args
@@ -387,41 +381,40 @@ fn lower_task(
         }
     }
     // Named endpoint placeholders may only reference declared service
-    // dependencies (any of them, not just the primary).
-    let allowed: BTreeSet<&str> = depends_on_services_ready
-        .iter()
-        .map(|id| id.as_str())
-        .collect();
-    require_named_refs_in_scope(
-        || format!("task {task_id}"),
-        "dependsOnServicesReady",
-        &exec,
-        &allowed,
-    )?;
+    // requirements (any of them, not just the primary).
+    let allowed: BTreeSet<&str> = requires.iter().map(|id| id.as_str()).collect();
+    require_named_refs_in_scope(&owner, "requires", &exec, &allowed)?;
     Ok(ExecTask {
         task_id: TaskId::new(task_id),
         exec,
-        depends_on_services_ready,
+        requires,
         success_codes: exit_policy.success_codes.iter().copied().collect(),
     })
 }
 
 /// Lower the kind-discriminated wire probe into the executor's closed enum,
-/// proving kind/field coherence: a tcp probe must not carry exec fields, an
-/// exec probe must resolve its exec. The probe's own timing governs every
-/// attempt — the referenced exec spec's timeout is overridden.
+/// proving kind/field coherence: a tcp probe must not carry an invocation, an
+/// exec probe must carry one. The probe's own timing governs every attempt —
+/// the invocation's own timeout is overridden.
 fn lower_probe(
     service: &str,
     class: &'static str,
     probe: &ProbeSpec,
-    execs: &BTreeMap<String, ExecSpec>,
+    closures: &BTreeMap<String, ClosureSpec>,
 ) -> RuntimeResult<Probe> {
-    let timeout = Duration::from_millis(probe.timeout_ms.get());
-    let retry_interval = Duration::from_millis(probe.retry_interval_ms.get());
-    let max_attempts = probe.max_attempts.get();
-    match probe.kind {
+    let ProbeSpec {
+        kind,
+        invocation,
+        timeout_ms,
+        retry_interval_ms,
+        max_attempts,
+    } = probe;
+    let timeout = Duration::from_millis(timeout_ms.get());
+    let retry_interval = Duration::from_millis(retry_interval_ms.get());
+    let max_attempts = max_attempts.get();
+    match kind {
         ProbeKind::Tcp => {
-            if probe.exec_id.is_some() || !probe.exec_args.is_empty() {
+            if invocation.is_some() {
                 return Err(Rejection::ProbeExecOnTcp {
                     service: service.to_string(),
                     class,
@@ -436,11 +429,15 @@ fn lower_probe(
             }))
         }
         ProbeKind::Exec => {
-            let exec_id = probe.exec_id.as_ref().ok_or(Rejection::ProbeExecMissing {
-                service: service.to_string(),
-                class,
-            })?;
-            let mut exec = resolve_exec_ref(execs, exec_id.as_str(), &probe.exec_args)?;
+            let Some(invocation) = invocation else {
+                return Err(Rejection::ProbeExecMissing {
+                    service: service.to_string(),
+                    class,
+                }
+                .into());
+            };
+            let owner = || format!("service {service} {class} probe");
+            let mut exec = resolve_invocation(&owner, invocation, closures)?;
             exec.timeout = timeout;
             Ok(Probe::Exec(ExecProbe {
                 label: class.to_string(),
@@ -453,43 +450,88 @@ fn lower_probe(
     }
 }
 
-fn probe_exec(probe: &Probe) -> Option<&ResolvedExec> {
+fn probe_exec(probe: &Probe) -> Option<&ResolvedInvocation> {
     match probe {
         Probe::Exec(probe) => Some(&probe.exec),
         Probe::Tcp(_) => None,
     }
 }
 
-fn resolve_exec_ref(
-    execs: &BTreeMap<String, ExecSpec>,
-    exec_id: &str,
-    extra_args: &[String],
-) -> RuntimeResult<ResolvedExec> {
-    let exec = execs.get(exec_id).ok_or_else(|| Rejection::MissingExec {
-        exec_id: exec_id.to_string(),
-    })?;
-    Ok(resolve_exec(exec, extra_args))
+/// The declarative run[0] resolution rule (docs/DERIVATION_SPEC.md §1.1): the
+/// first tool closure whose declared executable basename equals `run[0]`
+/// provides the executable. No filesystem scan, so eval and admission derive
+/// the same answer from the same declarations.
+fn executable_closure<'a>(
+    invocation: &InvocationSpec,
+    closures: &'a BTreeMap<String, ClosureSpec>,
+) -> Option<(&'a String, &'a ClosureSpec)> {
+    let program = invocation.run.first()?;
+    invocation.tools.iter().find_map(|tool| {
+        let (id, closure) = closures.get_key_value(tool.as_str())?;
+        let basename = Path::new(&closure.executable).file_name()?;
+        (basename.to_str() == Some(program.as_str())).then_some((id, closure))
+    })
 }
 
-fn resolve_exec(exec: &ExecSpec, extra_args: &[String]) -> ResolvedExec {
-    let ExecSpec {
-        closure_id: _,
+/// Resolve an inline invocation against the declared closures: every tool must
+/// be a declared closure, run[0] must resolve per the derivation spec, and the
+/// carried `executable` must equal that resolution (fail closed). The PATH
+/// roots — each tool executable's parent directory, in declared order — are
+/// carried for the runtime's child-PATH assembly.
+fn resolve_invocation(
+    owner: &impl Fn() -> String,
+    invocation: &InvocationSpec,
+    closures: &BTreeMap<String, ClosureSpec>,
+) -> Result<ResolvedInvocation, Rejection> {
+    let InvocationSpec {
+        tools,
+        run,
         executable,
-        args,
         env,
         codebase_id: _,
         cwd,
         stdin,
         timeout_ms,
-    } = exec;
-    ResolvedExec {
+    } = invocation;
+    let Some(program) = run.first() else {
+        return Err(Rejection::RunUnresolvable {
+            owner: owner(),
+            program: String::new(),
+        });
+    };
+    let mut tool_roots = Vec::with_capacity(tools.len());
+    for tool in tools.iter() {
+        let Some(closure) = closures.get(tool.as_str()) else {
+            return Err(undeclared("invocation.tools", tool.as_str()));
+        };
+        let root = Path::new(&closure.executable)
+            .parent()
+            .map(|parent| parent.display().to_string())
+            .unwrap_or_default();
+        tool_roots.push(root);
+    }
+    let Some((_, resolved)) = executable_closure(invocation, closures) else {
+        return Err(Rejection::RunUnresolvable {
+            owner: owner(),
+            program: program.clone(),
+        });
+    };
+    if resolved.executable != *executable {
+        return Err(Rejection::ExecutableMismatch {
+            owner: owner(),
+            carried: executable.clone(),
+            resolved: resolved.executable.clone(),
+        });
+    }
+    Ok(ResolvedInvocation {
         executable: executable.clone(),
-        args: args.iter().chain(extra_args).cloned().collect(),
+        args: run[1..].to_vec(),
         env: env.clone(),
         cwd: cwd.clone(),
         stdin: *stdin,
         timeout: Duration::from_millis(timeout_ms.get()),
-    }
+        tool_roots,
+    })
 }
 
 /// The closed set of reasons the model cannot be lowered into an executable
@@ -513,8 +555,14 @@ pub enum Rejection {
         target_system: String,
         closure_system: String,
     },
-    MissingExec {
-        exec_id: String,
+    RunUnresolvable {
+        owner: String,
+        program: String,
+    },
+    ExecutableMismatch {
+        owner: String,
+        carried: String,
+        resolved: String,
     },
     TaskPlaceholderWithoutService {
         task_id: String,
@@ -564,12 +612,21 @@ impl Rejection {
             } => format!(
                 "closure {closure_id} targetSystem {target_system} does not match closureSystem {closure_system}"
             ),
-            Rejection::MissingExec { exec_id } => format!("exec {exec_id} is missing"),
+            Rejection::RunUnresolvable { owner, program } => format!(
+                "{owner} run[0] {program:?} is not the executable of any declared tool closure"
+            ),
+            Rejection::ExecutableMismatch {
+                owner,
+                carried,
+                resolved,
+            } => format!(
+                "{owner} carries executable {carried} but its tools resolve run[0] to {resolved}"
+            ),
             Rejection::TaskPlaceholderWithoutService {
                 task_id,
                 placeholder,
             } => format!(
-                "task {task_id} references {placeholder} but depends on no service to resolve it"
+                "task {task_id} references {placeholder} but requires no service to resolve it"
             ),
             Rejection::PlaceholderOutOfScope {
                 owner,
@@ -584,16 +641,18 @@ impl Rejection {
                 target,
             } => format!("{scope} starts {service} but not its connectsTo dependency {target}"),
             Rejection::ProbeExecOnTcp { service, class } => {
-                format!("service {service} {class} probe is tcp but carries an exec reference")
+                format!("service {service} {class} probe is tcp but carries an invocation")
             }
             Rejection::ProbeExecMissing { service, class } => {
-                format!("service {service} {class} probe is exec but declares no execId")
+                format!("service {service} {class} probe is exec but declares no invocation")
             }
             Rejection::OperationUnbound {
                 operation_id,
                 closure_id,
             } => {
-                format!("operation {operation_id} is not bound by its exec's closure {closure_id}")
+                format!(
+                    "operation {operation_id} is not bound by its invocation's closure {closure_id}"
+                )
             }
         }
     }
@@ -606,7 +665,7 @@ impl From<Rejection> for RuntimeError {
 }
 
 /// Service ids referenced by named endpoint placeholders (`${port:<id>}` /
-/// `${host:<id>}`) in one exec value.
+/// `${host:<id>}`) in one invocation value.
 pub(crate) fn named_endpoint_refs(value: &str) -> Vec<&str> {
     let mut refs = Vec::new();
     for prefix in ["${port:", "${host:"] {
@@ -622,9 +681,9 @@ pub(crate) fn named_endpoint_refs(value: &str) -> Vec<&str> {
 }
 
 fn require_named_refs_in_scope(
-    owner: impl Fn() -> String,
+    owner: &impl Fn() -> String,
     scope: &'static str,
-    exec: &ResolvedExec,
+    exec: &ResolvedInvocation,
     allowed: &BTreeSet<&str>,
 ) -> RuntimeResult<()> {
     for value in exec.args.iter().chain(exec.env.values()) {
@@ -649,12 +708,43 @@ fn undeclared(kind: &'static str, id: impl Into<String>) -> Rejection {
     }
 }
 
+/// Every invocation position in the model with its operation id, in canonical
+/// order: task leaves, then each service's prepare/start/ready/health.
+fn invocation_positions(model: &Model) -> Vec<(&OperationId, &InvocationSpec)> {
+    let mut positions = Vec::new();
+    for service in model.services.values() {
+        let lifecycle = &service.lifecycle;
+        if let Some(invocation) = &lifecycle.prepare.invocation {
+            positions.push((&lifecycle.prepare.operation_id, invocation));
+        }
+        positions.push((&lifecycle.start.operation_id, &lifecycle.start.invocation));
+        for (probe, operation_id) in [
+            (&lifecycle.ready.probe, &lifecycle.ready.operation_id),
+            (&lifecycle.health.probe, &lifecycle.health.operation_id),
+        ] {
+            // A tcp probe carrying an invocation is incoherent; `lower_probe`
+            // rejects it with the precise probe-kind error, so it is not an
+            // invocation position here.
+            if probe.kind != ProbeKind::Exec {
+                continue;
+            }
+            if let Some(invocation) = &probe.invocation {
+                positions.push((operation_id, invocation));
+            }
+        }
+    }
+    for task in model.tasks.values() {
+        positions.push((&task.operation_id, &task.invocation));
+    }
+    positions
+}
+
 /// Prove the *relational* invariants the per-reference resolver in `lower` cannot
-/// express on its own: execs bind a declared closure/codebase, closures match the
-/// target system, lifecycle/task operation ids are globally unique, an
-/// environment/workflow task depends only on services that program starts, and
+/// express on its own: every invocation references a declared codebase, closures
+/// match the target system, lifecycle/task operation ids are globally unique, an
+/// environment/workflow task requires only services that program starts, and
 /// closure operation bindings name a declared operation. The single-reference
-/// existence checks (exec/service/task/node ids) are discharged where they are
+/// existence checks (tool/service/task/node ids) are discharged where they are
 /// consumed — `lower` resolves each into a typed handle, so a dangling reference
 /// is rejected there. Acyclicity is proven separately by the planner.
 fn prove_references(model: &Model) -> Result<(), Rejection> {
@@ -663,19 +753,14 @@ fn prove_references(model: &Model) -> Result<(), Rejection> {
         .iter()
         .map(|codebase| codebase.codebase_id.as_str())
         .collect::<BTreeSet<_>>();
-    let closure_ids = model
-        .closures
-        .keys()
-        .map(String::as_str)
-        .collect::<BTreeSet<_>>();
     let mut declared_operations = BTreeSet::new();
 
-    for exec in model.execs.values() {
-        if !closure_ids.contains(exec.closure_id.as_str()) {
-            return Err(undeclared("exec.closureId", exec.closure_id.as_str()));
-        }
-        if !codebase_ids.contains(exec.codebase_id.as_str()) {
-            return Err(undeclared("exec.codebaseId", exec.codebase_id.as_str()));
+    for (_, invocation) in invocation_positions(model) {
+        if !codebase_ids.contains(invocation.codebase_id.as_str()) {
+            return Err(undeclared(
+                "invocation.codebaseId",
+                invocation.codebase_id.as_str(),
+            ));
         }
     }
 
@@ -708,7 +793,7 @@ fn prove_references(model: &Model) -> Result<(), Rejection> {
         }
     }
 
-    // An environment task can only depend on services the environment starts, or
+    // An environment task can only require services the environment starts, or
     // the run fails mid-flight on a missing dependency.
     for env in model.environments.values() {
         let env_services = env
@@ -718,12 +803,9 @@ fn prove_references(model: &Model) -> Result<(), Rejection> {
             .collect::<BTreeSet<_>>();
         for task_id in &env.tasks {
             if let Some(task) = model.tasks.get(task_id.as_str()) {
-                for service in &task.depends_on_services_ready {
+                for service in &task.requires {
                     if !env_services.contains(service.as_str()) {
-                        return Err(undeclared(
-                            "environment.task.dependsOnServicesReady",
-                            service.as_str(),
-                        ));
+                        return Err(undeclared("environment.task.requires", service.as_str()));
                     }
                 }
             }
@@ -731,7 +813,7 @@ fn prove_references(model: &Model) -> Result<(), Rejection> {
     }
 
     // The run plan starts only the workflow's servicesRequired, so a node task may
-    // depend only on those.
+    // require only those.
     for (id, workflow) in &model.workflows {
         if workflow.nodes.is_empty() {
             return Err(undeclared("workflow.nodes", format!("{id} has no nodes")));
@@ -743,12 +825,9 @@ fn prove_references(model: &Model) -> Result<(), Rejection> {
             .collect::<BTreeSet<_>>();
         for node in workflow.nodes.values() {
             if let Some(task) = model.tasks.get(node.task_id.as_str()) {
-                for service in &task.depends_on_services_ready {
+                for service in &task.requires {
                     if !required.contains(service.as_str()) {
-                        return Err(undeclared(
-                            "workflow.node.task.dependsOnServicesReady",
-                            service.as_str(),
-                        ));
+                        return Err(undeclared("workflow.node.task.requires", service.as_str()));
                     }
                 }
             }
@@ -765,54 +844,25 @@ fn prove_references(model: &Model) -> Result<(), Rejection> {
         }
     }
 
-    // Every operation that runs through an exec runs through a closure: the
-    // closure must explicitly bind that operation, or the model is executing a
-    // closure for an operation it never declared. Dangling exec/closure
-    // references are rejected by the per-reference resolvers, so only the
-    // binding coverage is proven here.
-    let require_bound = |exec_id: &str, operation_id: &str| -> Result<(), Rejection> {
-        let Some(exec) = model.execs.get(exec_id) else {
-            return Ok(());
-        };
-        let Some(closure) = model.closures.get(exec.closure_id.as_str()) else {
-            return Ok(());
+    // Every operation that runs through an invocation runs through a closure:
+    // the closure providing the resolved run[0] must explicitly bind that
+    // operation, or the model is executing a closure for an operation it never
+    // declared. Dangling tool references are rejected by the per-reference
+    // resolver, so only the binding coverage is proven here.
+    for (operation_id, invocation) in invocation_positions(model) {
+        let Some((closure_id, closure)) = executable_closure(invocation, &model.closures) else {
+            continue;
         };
         if !closure
             .operation_bindings
             .iter()
-            .any(|binding| binding.as_str() == operation_id)
+            .any(|binding| binding.as_str() == operation_id.as_str())
         {
             return Err(Rejection::OperationUnbound {
                 operation_id: operation_id.to_string(),
-                closure_id: exec.closure_id.to_string(),
+                closure_id: closure_id.clone(),
             });
         }
-        Ok(())
-    };
-    for service in model.services.values() {
-        let lifecycle = &service.lifecycle;
-        if let Some(exec_id) = &lifecycle.prepare.exec_id {
-            require_bound(exec_id.as_str(), lifecycle.prepare.operation_id.as_str())?;
-        }
-        require_bound(
-            lifecycle.start.exec_id.as_str(),
-            lifecycle.start.operation_id.as_str(),
-        )?;
-        for (probe, operation_id) in [
-            (&lifecycle.ready.probe, &lifecycle.ready.operation_id),
-            (&lifecycle.health.probe, &lifecycle.health.operation_id),
-        ] {
-            if probe.kind != nixfied_model::ProbeKind::Exec {
-                continue;
-            }
-            let Some(exec_id) = &probe.exec_id else {
-                continue;
-            };
-            require_bound(exec_id.as_str(), operation_id.as_str())?;
-        }
-    }
-    for task in model.tasks.values() {
-        require_bound(task.exec_id.as_str(), task.operation_id.as_str())?;
     }
 
     Ok(())
@@ -834,6 +884,19 @@ fn lifecycle_op_ids(lifecycle: &Lifecycle) -> [&str; 6] {
 mod tests {
     use super::*;
     use serde_json::{Value, json};
+
+    fn invocation_value(executable: &str, run: Value) -> Value {
+        json!({
+            "tools": ["c"],
+            "run": run,
+            "executable": executable,
+            "env": {},
+            "codebaseId": "main",
+            "cwd": ".",
+            "stdin": "null",
+            "timeoutMs": 1000
+        })
+    }
 
     fn model_value() -> Value {
         json!({
@@ -867,29 +930,33 @@ mod tests {
             },
             "closures": {
                 "c": {
-                    "kind": "executable", "storePath": "/nix/store/c", "executable": "/bin/svc",
+                    "kind": "executable", "storePath": "/nix/store/c", "executable": "/nix/store/c/bin/svc",
                     "targetSystem": "x86_64-linux",
                     "operationBindings": ["svc.start", "task.t.run"],
                     "requiresExecutable": true, "effects": ["process"]
-                }
-            },
-            "execs": {
-                "svc-exec": {
-                    "closureId": "c", "executable": "/bin/svc",
-                    "args": ["serve"], "env": {}, "codebaseId": "main", "cwd": ".",
-                    "stdin": "null", "timeoutMs": 1000
                 },
-                "t-exec": {
-                    "closureId": "c", "executable": "/bin/task",
-                    "args": [], "env": {}, "codebaseId": "main", "cwd": ".",
-                    "stdin": "null", "timeoutMs": 1000
+                "ct": {
+                    "kind": "executable", "storePath": "/nix/store/ct", "executable": "/nix/store/ct/bin/task",
+                    "targetSystem": "x86_64-linux",
+                    "operationBindings": ["task.t.run"],
+                    "requiresExecutable": true, "effects": ["process"]
                 }
             },
             "services": { "svc": service_value() },
             "tasks": {
                 "t": {
-                    "operationId": "task.t.run", "execId": "t-exec",
-                    "args": ["--port", "${port}"], "dependsOnServicesReady": ["svc"],
+                    "operationId": "task.t.run",
+                    "invocation": {
+                        "tools": ["ct"],
+                        "run": ["task", "--port", "${port}"],
+                        "executable": "/nix/store/ct/bin/task",
+                        "env": {},
+                        "codebaseId": "main",
+                        "cwd": ".",
+                        "stdin": "null",
+                        "timeoutMs": 1000
+                    },
+                    "requires": ["svc"],
                     "exitPolicy": { "successCodes": [0] },
                     "artifactRefs": [], "logRefs": [], "summaryRefs": []
                 }
@@ -902,8 +969,12 @@ mod tests {
     fn service_value() -> Value {
         json!({
             "lifecycle": {
-                "prepare": { "operationId": "svc.prepare", "execId": null, "execArgs": [], "terminal": { "success": "prepared", "failure": "failed" } },
-                "start": { "operationId": "svc.start", "execId": "svc-exec", "execArgs": ["--port", "${port}"], "terminal": { "success": "spawned", "failure": "failed" } },
+                "prepare": { "operationId": "svc.prepare", "terminal": { "success": "prepared", "failure": "failed" } },
+                "start": {
+                    "operationId": "svc.start",
+                    "invocation": invocation_value("/nix/store/c/bin/svc", json!(["svc", "serve", "--port", "${port}"])),
+                    "terminal": { "success": "spawned", "failure": "failed" }
+                },
                 "ready": { "operationId": "svc.ready", "probe": { "kind": "tcp", "timeoutMs": 1000, "retryIntervalMs": 100, "maxAttempts": 20 }, "terminal": { "success": "ready", "failure": "not-ready" } },
                 "health": { "operationId": "svc.health", "probe": { "kind": "tcp", "timeoutMs": 1000, "retryIntervalMs": 100, "maxAttempts": 20 }, "terminal": { "success": "healthy", "failure": "unhealthy" } },
                 "stop": { "operationId": "svc.stop", "signal": "TERM", "timeoutMs": 5000, "terminal": { "success": "stopped", "failure": "failed" } },
@@ -929,23 +1000,26 @@ mod tests {
         assert_eq!(svc.primary_endpoint, "svc-tcp");
         assert_eq!(svc.stop.signal, StopSignal::Term);
         assert!(svc.prepare.exec.is_none());
-        // Start exec args are base ++ operation args.
+        // Args are run[1..]; run[0] resolved to the closure executable.
+        assert_eq!(svc.start.exec.executable, "/nix/store/c/bin/svc");
         assert_eq!(svc.start.exec.args, vec!["serve", "--port", "${port}"]);
+        assert_eq!(svc.start.exec.tool_roots, vec!["/nix/store/c/bin"]);
         assert_eq!(svc.start.exec.stdin, StdinPolicy::Null);
         assert_eq!(em.environment.services, vec![ServiceId::new("svc")]);
         assert_eq!(em.slot_windows[&0].start, 23080);
         let task = em.tasks.get("t").expect("task lowered");
         assert_eq!(task.success_codes, vec![0]);
         assert_eq!(task.exec.args, vec!["--port", "${port}"]);
-        assert_eq!(task.depends_on_services_ready, vec![ServiceId::new("svc")]);
+        assert_eq!(task.exec.tool_roots, vec!["/nix/store/ct/bin"]);
+        assert_eq!(task.requires, vec![ServiceId::new("svc")]);
     }
 
     #[test]
-    fn stdin_inherit_is_carried_into_resolved_exec() {
-        // A model that declares `stdin: inherit` must lower to an exec that records
-        // it, not silently collapse to null.
+    fn stdin_inherit_is_carried_into_resolved_invocation() {
+        // A model that declares `stdin: inherit` must lower to an invocation that
+        // records it, not silently collapse to null.
         let mut value = model_value();
-        value["execs"]["svc-exec"]["stdin"] = json!("inherit");
+        value["services"]["svc"]["lifecycle"]["start"]["invocation"]["stdin"] = json!("inherit");
         let em = lower(&model_from(value)).expect("inherit stdin lowers");
         assert_eq!(
             em.services.get("svc").unwrap().start.exec.stdin,
@@ -954,11 +1028,33 @@ mod tests {
     }
 
     #[test]
-    fn rejects_a_missing_exec_reference() {
+    fn rejects_an_undeclared_tool_reference() {
         let mut value = model_value();
-        value["services"]["svc"]["lifecycle"]["start"]["execId"] = json!("ghost");
-        let error = lower(&model_from(value)).expect_err("missing exec ref must reject");
+        value["services"]["svc"]["lifecycle"]["start"]["invocation"]["tools"] = json!(["ghost"]);
+        let error = lower(&model_from(value)).expect_err("undeclared tool must reject");
         assert_eq!(error.code, ErrorCode::ModelAdmission);
+        assert!(error.message.contains("ghost"));
+    }
+
+    #[test]
+    fn rejects_an_unresolvable_run_program() {
+        // run[0] names a program no tool closure's executable provides.
+        let mut value = model_value();
+        value["services"]["svc"]["lifecycle"]["start"]["invocation"]["run"] =
+            json!(["ghost-program"]);
+        let error = lower(&model_from(value)).expect_err("unresolvable run[0] must reject");
+        assert_eq!(error.code, ErrorCode::ModelAdmission);
+        assert!(error.message.contains("ghost-program"));
+    }
+
+    #[test]
+    fn rejects_a_carried_executable_that_disagrees_with_resolution() {
+        let mut value = model_value();
+        value["services"]["svc"]["lifecycle"]["start"]["invocation"]["executable"] =
+            json!("/nix/store/other/bin/svc");
+        let error = lower(&model_from(value)).expect_err("executable mismatch must reject");
+        assert_eq!(error.code, ErrorCode::ModelAdmission);
+        assert!(error.message.contains("resolve"));
     }
 
     fn reject_reason(value: Value) -> Rejection {
@@ -966,10 +1062,13 @@ mod tests {
     }
 
     #[test]
-    fn execs_must_reference_declared_closures() {
+    fn invocations_must_reference_declared_codebases() {
         let mut value = model_value();
-        value["execs"]["svc-exec"]["closureId"] = json!("ghost");
-        assert_eq!(reject_reason(value), undeclared("exec.closureId", "ghost"));
+        value["tasks"]["t"]["invocation"]["codebaseId"] = json!("ghost");
+        assert_eq!(
+            reject_reason(value),
+            undeclared("invocation.codebaseId", "ghost")
+        );
     }
 
     #[test]
@@ -1011,8 +1110,8 @@ mod tests {
 
     #[test]
     fn start_operation_must_be_bound_by_its_closure() {
-        // The closure no longer binds svc.start, so the start exec would run a
-        // closure for an operation it never declared.
+        // The closure no longer binds svc.start, so the start invocation would
+        // run a closure for an operation it never declared.
         let mut value = model_value();
         value["closures"]["c"]["operationBindings"] = json!(["task.t.run"]);
         assert_eq!(
@@ -1027,30 +1126,30 @@ mod tests {
     #[test]
     fn task_operation_must_be_bound_by_its_closure() {
         let mut value = model_value();
-        value["closures"]["c"]["operationBindings"] = json!(["svc.start"]);
+        value["closures"]["ct"]["operationBindings"] = json!([]);
         assert_eq!(
             reject_reason(value),
             Rejection::OperationUnbound {
                 operation_id: "task.t.run".to_string(),
-                closure_id: "c".to_string()
+                closure_id: "ct".to_string()
             }
         );
     }
 
     #[test]
     fn env_task_service_deps_must_be_started_by_the_env() {
-        // Task `t` depends on `svc`, but the env no longer starts it.
+        // Task `t` requires `svc`, but the env no longer starts it.
         let mut value = model_value();
         value["environments"]["dev"]["services"] = json!([]);
         assert_eq!(
             reject_reason(value),
-            undeclared("environment.task.dependsOnServicesReady", "svc")
+            undeclared("environment.task.requires", "svc")
         );
     }
 
     #[test]
     fn workflow_node_task_must_be_declared() {
-        // Node-task existence is now resolved by `lower` (it mints the typed
+        // Node-task existence is resolved by `lower` (it mints the typed
         // handle), so a dangling `taskId` is rejected there, not in
         // `prove_references`.
         let mut value = model_value();
@@ -1065,7 +1164,7 @@ mod tests {
 
     #[test]
     fn workflow_node_task_deps_must_be_required() {
-        // Node task `t` depends on `svc`, absent from the workflow's services.
+        // Node task `t` requires `svc`, absent from the workflow's services.
         let mut value = model_value();
         value["workflows"]["flow"] = json!({
             "servicesRequired": [],
@@ -1073,27 +1172,27 @@ mod tests {
         });
         assert_eq!(
             reject_reason(value),
-            undeclared("workflow.node.task.dependsOnServicesReady", "svc")
+            undeclared("workflow.node.task.requires", "svc")
         );
     }
 
     #[test]
     fn service_less_task_lowers() {
-        // A task may depend on zero services (e.g. a lint/test task) as long as it
+        // A task may require zero services (e.g. a lint/test task) as long as it
         // does not reference a service-derived placeholder.
         let mut value = model_value();
-        value["tasks"]["t"]["dependsOnServicesReady"] = json!([]);
-        value["tasks"]["t"]["args"] = json!(["--check"]);
+        value["tasks"]["t"]["requires"] = json!([]);
+        value["tasks"]["t"]["invocation"]["run"] = json!(["task", "--check"]);
         let em = lower(&model_from(value)).expect("a service-less task lowers");
-        assert!(em.tasks["t"].depends_on_services_ready.is_empty());
+        assert!(em.tasks["t"].requires.is_empty());
     }
 
     #[test]
     fn service_less_task_using_port_is_rejected() {
-        // The fixture task's args carry "${port}"; with no service to resolve it,
-        // admission must reject rather than admit-then-fail.
+        // The fixture task's run args carry "${port}"; with no service to resolve
+        // it, admission must reject rather than admit-then-fail.
         let mut value = model_value();
-        value["tasks"]["t"]["dependsOnServicesReady"] = json!([]);
+        value["tasks"]["t"]["requires"] = json!([]);
         let error =
             lower(&model_from(value)).expect_err("a service-less task using ${port} must reject");
         assert_eq!(error.code, ErrorCode::ModelAdmission);
@@ -1104,18 +1203,20 @@ mod tests {
         // Env values substitute like args; a bare ${port} with no service would
         // otherwise run with the literal placeholder in the environment.
         let mut value = model_value();
-        value["tasks"]["t"]["dependsOnServicesReady"] = json!([]);
-        value["tasks"]["t"]["args"] = json!(["--check"]);
-        value["execs"]["t-exec"]["env"] = json!({ "PORT": "${port}" });
+        value["tasks"]["t"]["requires"] = json!([]);
+        value["tasks"]["t"]["invocation"]["run"] = json!(["task", "--check"]);
+        value["tasks"]["t"]["invocation"]["env"] = json!({ "PORT": "${port}" });
         let error = lower(&model_from(value))
             .expect_err("a service-less task using ${port} in env must reject");
         assert_eq!(error.code, ErrorCode::ModelAdmission);
     }
 
-    /// Rewrite the fixture's ready probe as an exec probe bound to closure `c`.
+    /// Rewrite the fixture's ready probe as an invocation probe bound to
+    /// closure `c`.
     fn with_exec_ready_probe(value: &mut Value) {
         value["services"]["svc"]["lifecycle"]["ready"]["probe"] = json!({
-            "kind": "exec", "execId": "svc-exec", "execArgs": ["ping"],
+            "kind": "exec",
+            "invocation": invocation_value("/nix/store/c/bin/svc", json!(["svc", "ping"])),
             "timeoutMs": 500, "retryIntervalMs": 100, "maxAttempts": 5
         });
         value["closures"]["c"]["operationBindings"]
@@ -1133,50 +1234,38 @@ mod tests {
         let Probe::Exec(probe) = &svc.ready.probe else {
             panic!("ready probe should lower to the exec variant");
         };
-        // Probe args are exec base args ++ probe args; the probe's per-attempt
-        // timeout overrides the exec spec's own timeout.
-        assert_eq!(probe.exec.args, vec!["serve", "ping"]);
+        // Probe args are run[1..]; the probe's per-attempt timeout overrides the
+        // invocation's own timeout.
+        assert_eq!(probe.exec.args, vec!["ping"]);
         assert_eq!(probe.exec.timeout, Duration::from_millis(500));
         assert_eq!(probe.max_attempts, 5);
         assert!(matches!(svc.health.probe, Probe::Tcp(_)));
     }
 
     #[test]
-    fn tcp_probe_with_exec_id_is_rejected() {
+    fn tcp_probe_with_invocation_is_rejected() {
         let mut value = model_value();
         value["services"]["svc"]["lifecycle"]["ready"]["probe"] = json!({
-            "kind": "tcp", "execId": "svc-exec",
+            "kind": "tcp",
+            "invocation": invocation_value("/nix/store/c/bin/svc", json!(["svc", "ping"])),
             "timeoutMs": 500, "retryIntervalMs": 100, "maxAttempts": 5
         });
-        let error = lower(&model_from(value)).expect_err("tcp probe with exec must reject");
+        let error = lower(&model_from(value)).expect_err("tcp probe with invocation must reject");
         assert_eq!(error.code, ErrorCode::ModelAdmission);
-        assert!(error.message.contains("tcp but carries an exec"));
+        assert!(error.message.contains("tcp but carries an invocation"));
     }
 
     #[test]
-    fn exec_probe_without_exec_id_is_rejected() {
+    fn exec_probe_without_invocation_is_rejected() {
         let mut value = model_value();
         value["services"]["svc"]["lifecycle"]["ready"]["probe"] = json!({
             "kind": "exec",
             "timeoutMs": 500, "retryIntervalMs": 100, "maxAttempts": 5
         });
-        // The op must still be bound for prove_references to pass first.
-        value["closures"]["c"]["operationBindings"]
-            .as_array_mut()
-            .unwrap()
-            .push(json!("svc.ready"));
-        let error = lower(&model_from(value)).expect_err("exec probe without exec must reject");
+        let error =
+            lower(&model_from(value)).expect_err("exec probe without invocation must reject");
         assert_eq!(error.code, ErrorCode::ModelAdmission);
-        assert!(error.message.contains("declares no execId"));
-    }
-
-    #[test]
-    fn exec_probe_missing_exec_is_rejected() {
-        let mut value = model_value();
-        with_exec_ready_probe(&mut value);
-        value["services"]["svc"]["lifecycle"]["ready"]["probe"]["execId"] = json!("ghost");
-        let error = lower(&model_from(value)).expect_err("dangling probe exec must reject");
-        assert_eq!(error.code, ErrorCode::ModelAdmission);
+        assert!(error.message.contains("declares no invocation"));
     }
 
     #[test]
@@ -1195,8 +1284,8 @@ mod tests {
     fn exec_probe_named_ref_outside_connects_to_is_rejected() {
         let mut value = model_value();
         with_exec_ready_probe(&mut value);
-        value["services"]["svc"]["lifecycle"]["ready"]["probe"]["execArgs"] =
-            json!(["--db", "${port:ghost}"]);
+        value["services"]["svc"]["lifecycle"]["ready"]["probe"]["invocation"]["run"] =
+            json!(["svc", "--db", "${port:ghost}"]);
         let error = lower(&model_from(value)).expect_err("out-of-scope named ref must reject");
         assert_eq!(error.code, ErrorCode::ModelAdmission);
         assert!(error.message.contains("ghost"));
@@ -1212,9 +1301,9 @@ mod tests {
     }
 
     #[test]
-    fn task_named_ref_outside_dependencies_is_rejected() {
+    fn task_named_ref_outside_requires_is_rejected() {
         let mut value = model_value();
-        value["tasks"]["t"]["args"] = json!(["--db", "${port:ghost}"]);
+        value["tasks"]["t"]["invocation"]["run"] = json!(["task", "--db", "${port:ghost}"]);
         let error = lower(&model_from(value)).expect_err("out-of-scope named ref must reject");
         assert_eq!(error.code, ErrorCode::ModelAdmission);
         assert!(error.message.contains("ghost"));
@@ -1223,8 +1312,8 @@ mod tests {
     #[test]
     fn service_named_ref_outside_connects_to_is_rejected() {
         let mut value = model_value();
-        value["services"]["svc"]["lifecycle"]["start"]["execArgs"] =
-            json!(["--db", "${port:ghost}"]);
+        value["services"]["svc"]["lifecycle"]["start"]["invocation"]["run"] =
+            json!(["svc", "--db", "${port:ghost}"]);
         let error = lower(&model_from(value)).expect_err("out-of-scope named ref must reject");
         assert_eq!(error.code, ErrorCode::ModelAdmission);
         assert!(error.message.contains("ghost"));
@@ -1239,6 +1328,10 @@ mod tests {
         for (class, op) in dep["lifecycle"].as_object_mut().unwrap() {
             op["operationId"] = json!(format!("dep.{class}"));
         }
+        value["closures"]["c"]["operationBindings"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("dep.start"));
         value["services"]["dep"] = dep;
         value["services"]["svc"]["connectsTo"] = json!(["dep"]);
         // dev environment starts only svc: the wiring target is missing.
@@ -1256,18 +1349,16 @@ mod tests {
         for (class, op) in dep["lifecycle"].as_object_mut().unwrap() {
             op["operationId"] = json!(format!("dep.{class}"));
         }
-        // dep gets its own exec: the named-ref env below belongs to svc only.
-        dep["lifecycle"]["start"]["execId"] = json!("dep-exec");
-        value["execs"]["dep-exec"] = value["execs"]["svc-exec"].clone();
         value["closures"]["c"]["operationBindings"]
             .as_array_mut()
             .unwrap()
             .push(json!("dep.start"));
         value["services"]["dep"] = dep;
         value["services"]["svc"]["connectsTo"] = json!(["dep"]);
-        value["services"]["svc"]["lifecycle"]["start"]["execArgs"] =
-            json!(["--db", "${host:dep}:${port:dep}"]);
-        value["execs"]["svc-exec"]["env"] = json!({ "DB_URL": "tcp://${host:dep}:${port:dep}" });
+        value["services"]["svc"]["lifecycle"]["start"]["invocation"]["run"] =
+            json!(["svc", "serve", "--db", "${host:dep}:${port:dep}"]);
+        value["services"]["svc"]["lifecycle"]["start"]["invocation"]["env"] =
+            json!({ "DB_URL": "tcp://${host:dep}:${port:dep}" });
         value["environments"]["dev"]["services"] = json!(["svc", "dep"]);
         let em = lower(&model_from(value)).expect("declared named refs lower");
         let svc = em.services.get("svc").expect("service lowered");

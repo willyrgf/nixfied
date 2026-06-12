@@ -67,10 +67,6 @@ id_newtype!(
     ClosureId
 );
 id_newtype!(
-    /// A reusable exec's id (`Model.execs` key).
-    ExecId
-);
-id_newtype!(
     /// A source codebase's id (`Model.codebases[].codebaseId`).
     CodebaseId
 );
@@ -107,7 +103,7 @@ mod tests {
 
     #[test]
     fn id_deserializes_from_a_json_string() {
-        let id: ExecId = serde_json::from_str("\"svc-exec\"").expect("deserialize");
-        assert_eq!(id.as_str(), "svc-exec");
+        let id: ClosureId = serde_json::from_str("\"svc-closure\"").expect("deserialize");
+        assert_eq!(id.as_str(), "svc-closure");
     }
 }

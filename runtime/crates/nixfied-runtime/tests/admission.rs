@@ -290,8 +290,8 @@ fn closure_store_path_escape_is_rejected() {
             .join("../outside-closure/test-synthetic-helper/bin/synthetic-helper")
             .to_string_lossy()
     );
-    model["execs"]["synthetic-helper"]["executable"] =
-        model["closures"]["synthetic-helper"]["executable"].clone();
+    let escaped_executable = model["closures"]["synthetic-helper"]["executable"].clone();
+    set_invocation_executables(&mut model, escaped_executable);
     let model_path = tmp.path.join("model.json");
     fs::write(&model_path, serde_json::to_vec(&model).unwrap()).unwrap();
     let loaded = load_model(&model_path).expect("fixture should load");
@@ -306,11 +306,13 @@ fn closure_store_path_escape_is_rejected() {
 }
 
 #[test]
-fn exec_executable_must_match_declared_closure() {
+fn invocation_executable_must_match_run_resolution() {
+    // A carried executable that disagrees with the declarative run[0]
+    // resolution is rejected at lowering, fail closed.
     let (_tmp, model_path, closure_root) = write_fixture_model(fixture_model(), true);
     let mut value: Value =
         serde_json::from_slice(&fs::read(&model_path).unwrap()).expect("fixture JSON");
-    value["execs"]["synthetic-helper"]["executable"] =
+    value["services"]["synthetic"]["lifecycle"]["start"]["invocation"]["executable"] =
         json!(closure_root.join("bin/other-helper").to_string_lossy());
     fs::write(&model_path, serde_json::to_vec(&value).unwrap()).unwrap();
     let loaded = load_model(&model_path).expect("fixture should load");
@@ -319,10 +321,11 @@ fn exec_executable_must_match_declared_closure() {
         store_root: closure_root.parent().unwrap().to_path_buf(),
         host_system: host_system(),
     };
-    let error =
-        Admission::check(&loaded, &context).expect_err("exec executable mismatch should fail");
+    let error = Admission::check(&loaded, &context)
+        .expect_err("invocation executable mismatch should fail");
 
-    assert_eq!(error.code, ErrorCode::ClosureMissing);
+    assert_eq!(error.code, ErrorCode::ModelAdmission);
+    assert!(error.message.contains("resolve"));
 }
 
 #[test]
@@ -373,7 +376,7 @@ fn write_fixture_model(mut value: Value, create_executable: bool) -> (TempDir, P
     let executable = closure_root.join("bin/synthetic-helper");
     value["closures"]["synthetic-helper"]["storePath"] = json!(closure_root.to_string_lossy());
     value["closures"]["synthetic-helper"]["executable"] = json!(executable.to_string_lossy());
-    value["execs"]["synthetic-helper"]["executable"] = json!(executable.to_string_lossy());
+    set_invocation_executables(&mut value, json!(executable.to_string_lossy()));
     let model_path = tmp.path.join("model.json");
     if create_executable {
         fs::create_dir_all(executable.parent().expect("executable parent")).unwrap();
@@ -384,6 +387,14 @@ fn write_fixture_model(mut value: Value, create_executable: bool) -> (TempDir, P
     }
     fs::write(&model_path, serde_json::to_vec(&value).unwrap()).unwrap();
     (tmp, model_path, closure_root)
+}
+
+/// Point every fixture invocation's carried executable at the relocated
+/// closure executable, keeping carried resolution and declaration coherent.
+fn set_invocation_executables(value: &mut Value, executable: Value) {
+    value["services"]["synthetic"]["lifecycle"]["start"]["invocation"]["executable"] =
+        executable.clone();
+    value["tasks"]["smoke"]["invocation"]["executable"] = executable;
 }
 
 fn sha256_hex(raw: &[u8]) -> String {

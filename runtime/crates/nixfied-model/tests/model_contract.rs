@@ -74,9 +74,6 @@ fn valid_model_json() -> Value {
                 "effects": ["process", "network-listener"]
             }
         },
-        "execs": {
-            "synthetic-helper": helper_exec()
-        },
         "services": {
             "synthetic": synthetic_service()
         },
@@ -91,11 +88,11 @@ fn valid_model_json() -> Value {
     })
 }
 
-fn helper_exec() -> Value {
+fn helper_invocation(run: Value) -> Value {
     json!({
-        "closureId": "synthetic-helper",
+        "tools": ["synthetic-helper"],
+        "run": run,
         "executable": "/nix/store/00000000000000000000000000000000-synthetic-helper/bin/synthetic-helper",
-        "args": [],
         "env": {},
         "codebaseId": "main",
         "cwd": ".",
@@ -107,8 +104,8 @@ fn helper_exec() -> Value {
 fn synthetic_service() -> Value {
     json!({
         "lifecycle": {
-            "prepare": { "operationId": "service.synthetic.prepare", "execId": null, "execArgs": [], "terminal": { "success": "prepared", "failure": "failed" } },
-            "start": { "operationId": "service.synthetic.start", "execId": "synthetic-helper", "execArgs": ["service", "--host", "127.0.0.1", "--port", "${port}"], "terminal": { "success": "spawned", "failure": "failed" } },
+            "prepare": { "operationId": "service.synthetic.prepare", "terminal": { "success": "prepared", "failure": "failed" } },
+            "start": { "operationId": "service.synthetic.start", "invocation": helper_invocation(json!(["synthetic-helper", "service", "--host", "127.0.0.1", "--port", "${port}"])), "terminal": { "success": "spawned", "failure": "failed" } },
             "ready": { "operationId": "service.synthetic.ready", "probe": { "kind": "tcp", "timeoutMs": 1000, "retryIntervalMs": 100, "maxAttempts": 20 }, "terminal": { "success": "ready", "failure": "not-ready" } },
             "health": { "operationId": "service.synthetic.health", "probe": { "kind": "tcp", "timeoutMs": 1000, "retryIntervalMs": 100, "maxAttempts": 20 }, "terminal": { "success": "healthy", "failure": "unhealthy" } },
             "stop": { "operationId": "service.synthetic.stop", "signal": "TERM", "timeoutMs": 5000, "terminal": { "success": "stopped", "failure": "failed" } },
@@ -126,9 +123,8 @@ fn synthetic_service() -> Value {
 fn smoke_task() -> Value {
     json!({
         "operationId": "task.smoke.run",
-        "execId": "synthetic-helper",
-        "args": ["task", "--host", "127.0.0.1", "--port", "${port}"],
-        "dependsOnServicesReady": ["synthetic"],
+        "invocation": helper_invocation(json!(["synthetic-helper", "task", "--host", "127.0.0.1", "--port", "${port}"])),
+        "requires": ["synthetic"],
         "exitPolicy": { "successCodes": [0] },
         "artifactRefs": [],
         "logRefs": ["task.smoke"],
@@ -160,14 +156,6 @@ fn add_worker_service(value: &mut Value) {
     value["environments"]["dev"]["services"] = json!(["synthetic", "worker"]);
 }
 
-fn synthetic_lifecycle_mut(model: &mut Model) -> &mut nixfied_model::Lifecycle {
-    &mut model
-        .services
-        .get_mut("synthetic")
-        .expect("fixture has service")
-        .lifecycle
-}
-
 #[test]
 fn parses_and_validates_contract() {
     let model = parse_valid_model();
@@ -185,17 +173,14 @@ fn parses_and_validates_contract() {
 }
 
 #[test]
-fn accepts_arbitrary_service_and_exec_names() {
-    // The synthetic/smoke names are not special. A second service and a second
-    // exec validate as long as the structural contract holds.
+fn accepts_arbitrary_service_names() {
+    // The synthetic/smoke names are not special. A second service validates as
+    // long as the structural contract holds.
     let mut value = valid_model_json();
     add_worker_service(&mut value);
-    value["execs"]["aux-helper"] = helper_exec();
 
     let model: Model = serde_json::from_value(value).expect("model should deserialize");
-    model
-        .validate()
-        .expect("multi-service / multi-exec models are valid");
+    model.validate().expect("multi-service models are valid");
 }
 
 #[test]
@@ -239,12 +224,16 @@ fn rejects_models_with_nothing_to_run() {
 }
 
 #[test]
-fn prepare_operation_may_bind_an_exec() {
-    // initdb-style preparation: the prepare class is allowed to bind an exec.
-    let mut model = parse_valid_model();
-    synthetic_lifecycle_mut(&mut model).prepare.exec_id =
-        Some(nixfied_model::ExecId::new("synthetic-helper"));
-    model.validate().expect("prepare may bind a generic exec");
+fn prepare_operation_may_bind_an_invocation() {
+    // initdb-style preparation: the prepare class is allowed to bind an
+    // invocation.
+    let mut value = valid_model_json();
+    value["services"]["synthetic"]["lifecycle"]["prepare"]["invocation"] =
+        helper_invocation(json!(["synthetic-helper", "init"]));
+    let model: Model = serde_json::from_value(value).expect("model should deserialize");
+    model
+        .validate()
+        .expect("prepare may bind a generic invocation");
 }
 
 #[test]
@@ -373,7 +362,8 @@ fn probe_rejects_unknown_fields() {
 fn exec_probe_round_trips() {
     let mut value = valid_model_json();
     value["services"]["synthetic"]["lifecycle"]["ready"]["probe"] = json!({
-        "kind": "exec", "execId": "synthetic-helper", "execArgs": ["ping", "-p", "${port}"],
+        "kind": "exec",
+        "invocation": helper_invocation(json!(["synthetic-helper", "ping", "-p", "${port}"])),
         "timeoutMs": 2000, "retryIntervalMs": 200, "maxAttempts": 30
     });
     let model: Model = serde_json::from_value(value).expect("an exec probe should parse");
@@ -381,23 +371,24 @@ fn exec_probe_round_trips() {
     assert_eq!(probe.kind, nixfied_model::ProbeKind::Exec);
     let emitted = serde_json::to_value(&model).expect("model should serialize");
     assert_eq!(
-        emitted["services"]["synthetic"]["lifecycle"]["ready"]["probe"]["execId"],
+        emitted["services"]["synthetic"]["lifecycle"]["ready"]["probe"]["invocation"]["run"][0],
         json!("synthetic-helper")
     );
-    // A tcp probe round-trips without exec-field noise (serde skip rules the
+    // A tcp probe round-trips without invocation noise (serde skip rules the
     // Nix emitter mirrors).
     let health = &emitted["services"]["synthetic"]["lifecycle"]["health"]["probe"];
     assert_eq!(health["kind"], json!("tcp"));
-    assert!(health.get("execId").is_none());
-    assert!(health.get("execArgs").is_none());
+    assert!(health.get("invocation").is_none());
 }
 
 #[test]
 fn clean_operation_stays_marker_gated_runtime_cleanup() {
-    // clean binds nothing: an execId on it is an unknown field, rejected at parse.
+    // clean binds nothing: an invocation on it is an unknown field, rejected at
+    // parse.
     let mut value = valid_model_json();
-    value["services"]["synthetic"]["lifecycle"]["clean"]["execId"] = json!("synthetic-helper");
-    serde_json::from_value::<Model>(value).expect_err("a clean exec binding must not parse");
+    value["services"]["synthetic"]["lifecycle"]["clean"]["invocation"] =
+        helper_invocation(json!(["synthetic-helper"]));
+    serde_json::from_value::<Model>(value).expect_err("a clean invocation binding must not parse");
 }
 
 #[test]

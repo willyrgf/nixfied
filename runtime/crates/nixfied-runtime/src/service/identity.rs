@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
 use nixfied_model::{
-    CleanupPolicy, ContainmentRequirement, Endpoint, ExecSpec, Lifecycle, PersistencePolicy,
-    ServiceId, ServiceSpec, StatePolicy, Target, UniqueVec,
+    CleanupPolicy, ContainmentRequirement, Endpoint, Lifecycle, PersistencePolicy, ServiceId,
+    ServiceSpec, StatePolicy, Target, UniqueVec,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -18,26 +18,9 @@ use crate::execution::ServiceIdentity;
 /// Nix/runtime boundary, so the runtime owns the scheme outright.
 pub fn compute_service_identity(
     service: &ServiceSpec,
-    execs: &BTreeMap<String, ExecSpec>,
     state: &StatePolicy,
     target: &Target,
 ) -> ServiceIdentity {
-    // The execs the lifecycle actually invokes (prepare/start); a wiring or exec
-    // change must move the identity, so they are part of the runtime contract.
-    let lifecycle_exec_ids: Vec<&str> = [
-        service.lifecycle.prepare.exec_id.as_ref(),
-        Some(&service.lifecycle.start.exec_id),
-    ]
-    .into_iter()
-    .flatten()
-    .map(|id| id.as_str())
-    .collect();
-    let lifecycle_execs: BTreeMap<&str, &ExecSpec> = execs
-        .iter()
-        .filter(|(id, _)| lifecycle_exec_ids.contains(&id.as_str()))
-        .map(|(id, exec)| (id.as_str(), exec))
-        .collect();
-
     ServiceIdentity {
         endpoint_identity_hash: hash_json(
             "endpoint-identity",
@@ -62,7 +45,6 @@ pub fn compute_service_identity(
                 primary_endpoint: &service.primary_endpoint,
                 containment: &service.containment,
                 connects_to: &service.connects_to,
-                execs: lifecycle_execs,
             },
         ),
         target_identity_hash: hash_json("target-identity", target),
@@ -88,8 +70,8 @@ struct StateIdentityInputs<'a> {
     persistence: &'a PersistencePolicy,
 }
 
-/// The behavioral contract a reuse identity depends on: the lifecycle, endpoints,
-/// containment, wiring, and the execs the lifecycle invokes.
+/// The behavioral contract a reuse identity depends on: the lifecycle (which
+/// now carries every invocation inline), endpoints, containment, and wiring.
 #[derive(Serialize)]
 struct RuntimeIdentityInputs<'a> {
     lifecycle: &'a Lifecycle,
@@ -97,7 +79,6 @@ struct RuntimeIdentityInputs<'a> {
     primary_endpoint: &'a str,
     containment: &'a ContainmentRequirement,
     connects_to: &'a UniqueVec<ServiceId>,
-    execs: BTreeMap<&'a str, &'a ExecSpec>,
 }
 
 /// Hash a serializable identity component under a domain tag. Serialization of

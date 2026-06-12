@@ -155,9 +155,12 @@ fn service_start_rejects_exec_cwd_escape() {
     let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 23180);
     fixture
         .model
-        .execs
-        .get_mut("synthetic-helper")
-        .expect("fixture exec should exist")
+        .services
+        .get_mut("synthetic")
+        .expect("fixture service should exist")
+        .lifecycle
+        .start
+        .invocation
         .cwd = "..".to_string();
     fixture.relower();
 
@@ -614,7 +617,7 @@ fn service_instance_identity_includes_selected_slot() {
         .get("synthetic")
         .expect("fixture has synthetic service");
 
-    let identity = compute_service_identity(service, &model.execs, &model.state, &model.target);
+    let identity = compute_service_identity(service, &model.state, &model.target);
     let slot_0_address = service_address_hash(&model.project.project_id, "dev", 0, "synthetic");
     let slot_1_address = service_address_hash(&model.project.project_id, "dev", 1, "synthetic");
     let slot_0_instance = service_instance_id(&slot_0_address, &identity);
@@ -634,15 +637,10 @@ fn dependent_task_runs_after_owned_service_is_ready() {
     drop(listener);
     let script = python_listener_script();
     let mut fixture = ServiceFixture::new(python, &["-c", script, "${port}"], port);
-    fixture
-        .model
-        .tasks
-        .get_mut("smoke")
-        .expect("fixture has task")
-        .args = vec![
-        "-c".to_string(),
-        "import sys; sys.stdout.write('task-ok')".to_string(),
-    ];
+    set_smoke_args(
+        &mut fixture.model,
+        &["-c", "import sys; sys.stdout.write('task-ok')"],
+    );
     fixture.relower();
     let mut service = start_synthetic_service(
         &fixture.model,
@@ -869,20 +867,38 @@ fn exec_probe_fixture_value(
     probe_attempts: u32,
 ) -> Value {
     let mut value = fixture_model(executable, start_args, port);
-    value["closures"]["synthetic-helper"]["operationBindings"]
-        .as_array_mut()
-        .expect("bindings should be an array")
-        .push(json!("service.synthetic.ready"));
-    value["execs"]["probe-exec"] = json!({
-        "closureId": "synthetic-helper", "executable": "/bin/sh",
-        "args": [], "env": {}, "codebaseId": "main", "cwd": ".",
-        "stdin": "null", "timeoutMs": 30000
-    });
+    add_probe_shell_closure(&mut value, "service.synthetic.ready");
+    let mut run = vec![json!("sh")];
+    run.extend(probe_args.as_array().expect("probe args").iter().cloned());
     value["services"]["synthetic"]["lifecycle"]["ready"]["probe"] = json!({
-        "kind": "exec", "execId": "probe-exec", "execArgs": probe_args,
+        "kind": "exec", "invocation": probe_shell_invocation(Value::Array(run)),
         "timeoutMs": 1000, "retryIntervalMs": 50, "maxAttempts": probe_attempts
     });
     value
+}
+
+/// A `/bin/sh` tool closure for invocation probes, bound to the given op.
+fn add_probe_shell_closure(value: &mut Value, operation: &str) {
+    let target = value["target"]["closureSystem"].clone();
+    value["closures"]["probe-shell"] = json!({
+        "kind": "executable", "storePath": "/bin", "executable": "/bin/sh",
+        "targetSystem": target,
+        "operationBindings": [operation],
+        "requiresExecutable": true, "effects": ["process"]
+    });
+}
+
+fn probe_shell_invocation(run: Value) -> Value {
+    json!({
+        "tools": ["probe-shell"],
+        "run": run,
+        "executable": "/bin/sh",
+        "env": {},
+        "codebaseId": "main",
+        "cwd": ".",
+        "stdin": "null",
+        "timeoutMs": 30000
+    })
 }
 
 #[test]
@@ -996,17 +1012,10 @@ fn exec_health_probe_failure_records_failed() {
     // The service is ready (tcp) but never healthy: the failed run must leave
     // service.failed evidence, not a clean stopped/completed registry state.
     let mut value = fixture_model(python, &["-c", python_listener_script(), "${port}"], port);
-    value["closures"]["synthetic-helper"]["operationBindings"]
-        .as_array_mut()
-        .expect("bindings should be an array")
-        .push(json!("service.synthetic.health"));
-    value["execs"]["probe-exec"] = json!({
-        "closureId": "synthetic-helper", "executable": "/bin/sh",
-        "args": [], "env": {}, "codebaseId": "main", "cwd": ".",
-        "stdin": "null", "timeoutMs": 30000
-    });
+    add_probe_shell_closure(&mut value, "service.synthetic.health");
     value["services"]["synthetic"]["lifecycle"]["health"]["probe"] = json!({
-        "kind": "exec", "execId": "probe-exec", "execArgs": ["-c", "exit 7"],
+        "kind": "exec",
+        "invocation": probe_shell_invocation(json!(["sh", "-c", "exit 7"])),
         "timeoutMs": 1000, "retryIntervalMs": 50, "maxAttempts": 2
     });
     let mut fixture = ServiceFixture::from_value(value);
@@ -1152,16 +1161,14 @@ fn cancellation_interrupts_task_and_terminates_task_group() {
     drop(listener);
     let mut fixture =
         ServiceFixture::new(&python, &["-c", python_listener_script(), "${port}"], port);
-    fixture
-        .model
-        .tasks
-        .get_mut("smoke")
-        .expect("fixture has task")
-        .args = vec![
-        "-c".to_string(),
-        "import signal, subprocess, sys; signal.signal(signal.SIGTERM, lambda *_: sys.exit(0)); subprocess.Popen(['/bin/sh', '-c', 'trap \"\" TERM; sleep 2; touch \"$1\"; sleep 30', 'child', sys.argv[1]]).wait()".to_string(),
-        marker_arg.clone(),
-    ];
+    set_smoke_args(
+        &mut fixture.model,
+        &[
+            "-c",
+            "import signal, subprocess, sys; signal.signal(signal.SIGTERM, lambda *_: sys.exit(0)); subprocess.Popen(['/bin/sh', '-c', 'trap \"\" TERM; sleep 2; touch \"$1\"; sleep 30', 'child', sys.argv[1]]).wait()",
+            &marker_arg,
+        ],
+    );
     fixture.relower();
     let mut service = start_synthetic_service(
         &fixture.model,
@@ -1281,20 +1288,19 @@ fn task_timeout_records_failed_summary_and_terminates_task_group() {
         ServiceFixture::new(&python, &["-c", python_listener_script(), "${port}"], port);
     fixture
         .model
-        .execs
-        .get_mut("synthetic-helper")
-        .expect("fixture has exec")
-        .timeout_ms = 100u64.try_into().unwrap();
-    fixture
-        .model
         .tasks
         .get_mut("smoke")
         .expect("fixture has task")
-        .args = vec![
-        "-c".to_string(),
-        "import subprocess, sys; subprocess.Popen(['/bin/sh', '-c', 'trap \"\" TERM; sleep 2; touch \"$1\"; sleep 30', 'child', sys.argv[1]]).wait()".to_string(),
-        marker_arg.clone(),
-    ];
+        .invocation
+        .timeout_ms = 100u64.try_into().unwrap();
+    set_smoke_args(
+        &mut fixture.model,
+        &[
+            "-c",
+            "import subprocess, sys; subprocess.Popen(['/bin/sh', '-c', 'trap \"\" TERM; sleep 2; touch \"$1\"; sleep 30', 'child', sys.argv[1]]).wait()",
+            &marker_arg,
+        ],
+    );
     fixture.relower();
     let mut service = start_synthetic_service(
         &fixture.model,
@@ -1414,9 +1420,10 @@ fn cli_signal_cancels_run_and_empties_service_group() {
     );
     value["closures"]["synthetic-helper"]["storePath"] = json!(closure_root.to_string_lossy());
     value["closures"]["synthetic-helper"]["executable"] = json!(shell.to_string_lossy());
-    value["execs"]["synthetic-helper"]["executable"] = json!(shell.to_string_lossy());
-    value["execs"]["synthetic-helper"]["args"] =
-        json!(["-c", script, "parent", marker_arg, started_arg]);
+    prepend_invocation_args(
+        &mut value,
+        &["-c", script, "parent", &marker_arg, &started_arg],
+    );
     let model: Model = serde_json::from_value(value).expect("CLI fixture model should parse");
     let tmp = TempDir::new();
     let model_path = tmp.path.join("model.json");
@@ -1526,9 +1533,17 @@ fn cli_signal_during_shutdown_records_canceled_terminal_state() {
     );
     value["closures"]["synthetic-helper"]["storePath"] = json!(closure_root.to_string_lossy());
     value["closures"]["synthetic-helper"]["executable"] = json!(shell.to_string_lossy());
-    value["execs"]["synthetic-helper"]["executable"] = json!(shell.to_string_lossy());
-    value["execs"]["synthetic-helper"]["args"] =
-        json!(["-c", script, "wrapper", started_arg, stopping_arg, python]);
+    prepend_invocation_args(
+        &mut value,
+        &[
+            "-c",
+            script,
+            "wrapper",
+            &started_arg,
+            &stopping_arg,
+            &python,
+        ],
+    );
     let model: Model = serde_json::from_value(value).expect("CLI fixture model should parse");
     let tmp = TempDir::new();
     let model_path = tmp.path.join("model.json");
@@ -2915,8 +2930,8 @@ fn runtime_drives_full_lifecycle_without_invoking_nix() {
 
     let mut value = fixture_model(&python.to_string_lossy(), &["service", "${port}"], port);
     value["closures"]["synthetic-helper"]["storePath"] = json!(closure_root.to_string_lossy());
-    value["execs"]["synthetic-helper"]["args"] = json!(["-c", script]);
-    value["tasks"]["smoke"]["args"] = json!(["task", "${port}"]);
+    set_task_run_args(&mut value, &["task", "${port}"]);
+    prepend_invocation_args(&mut value, &["-c", &script]);
     let model: Model = serde_json::from_value(value).expect("seam fixture model should parse");
 
     let tmp = TempDir::new();
@@ -3033,11 +3048,11 @@ fn task_only_run_records_a_durable_runs_row() {
 
     let mut value = fixture_model(&python.to_string_lossy(), &["service", "${port}"], port);
     value["closures"]["synthetic-helper"]["storePath"] = json!(closure_root.to_string_lossy());
-    value["execs"]["synthetic-helper"]["args"] = json!(["-c", script]);
     // The environment starts no services and runs only the service-less task.
     value["environments"]["dev"]["services"] = json!([]);
-    value["tasks"]["smoke"]["dependsOnServicesReady"] = json!([]);
-    value["tasks"]["smoke"]["args"] = json!(["noservice"]);
+    value["tasks"]["smoke"]["requires"] = json!([]);
+    set_task_run_args(&mut value, &["noservice"]);
+    prepend_invocation_args(&mut value, &["-c", script]);
     let model: Model = serde_json::from_value(value).expect("task-only model should parse");
 
     let tmp = TempDir::new();
@@ -3110,11 +3125,11 @@ fn inherit_stdin_reaches_a_task_process() {
 
     let mut value = fixture_model(&python.to_string_lossy(), &["service", "${port}"], port);
     value["closures"]["synthetic-helper"]["storePath"] = json!(closure_root.to_string_lossy());
-    value["execs"]["synthetic-helper"]["args"] = json!(["-c", script]);
-    value["execs"]["synthetic-helper"]["stdin"] = json!("inherit");
     value["environments"]["dev"]["services"] = json!([]);
-    value["tasks"]["smoke"]["dependsOnServicesReady"] = json!([]);
-    value["tasks"]["smoke"]["args"] = json!([]);
+    value["tasks"]["smoke"]["requires"] = json!([]);
+    set_task_run_args(&mut value, &[]);
+    prepend_invocation_args(&mut value, &["-c", script]);
+    value["tasks"]["smoke"]["invocation"]["stdin"] = json!("inherit");
     let model: Model = serde_json::from_value(value).expect("inherit-stdin model should parse");
 
     let tmp = TempDir::new();
@@ -3196,11 +3211,10 @@ fn failed_workflow_run_writes_failure_summary() {
     );
     value["closures"]["synthetic-helper"]["storePath"] = json!(closure_root.to_string_lossy());
     value["closures"]["synthetic-helper"]["executable"] = json!(shell.to_string_lossy());
-    value["execs"]["synthetic-helper"]["executable"] = json!(shell.to_string_lossy());
     // A 0-service workflow whose single node fails: the run must leave the same
     // aggregate workflow evidence a success does, linked from the error.
-    value["tasks"]["smoke"]["dependsOnServicesReady"] = json!([]);
-    value["tasks"]["smoke"]["args"] = json!(["-c", "exit 3"]);
+    value["tasks"]["smoke"]["requires"] = json!([]);
+    set_task_run_args(&mut value, &["-c", "exit 3"]);
     value["workflows"]["wf"] = json!({
         "servicesRequired": [],
         "nodes": {
@@ -3272,7 +3286,6 @@ fn service_failure_before_any_node_writes_failed_summary() {
     let mut value = fixture_model(&shell.to_string_lossy(), &["-c", "exit 1"], port);
     value["closures"]["synthetic-helper"]["storePath"] = json!(closure_root.to_string_lossy());
     value["closures"]["synthetic-helper"]["executable"] = json!(shell.to_string_lossy());
-    value["execs"]["synthetic-helper"]["executable"] = json!(shell.to_string_lossy());
     value["workflows"]["wf"] = json!({
         "servicesRequired": ["synthetic"],
         "nodes": {
@@ -3321,6 +3334,47 @@ fn service_failure_before_any_node_writes_failed_summary() {
 
 fn fixture_model(executable: &str, start_args: &[&str], port: u16) -> Value {
     common::synthetic_model(executable, start_args, port, port)
+}
+
+/// Insert args right after `run[0]` of one invocation value — the old shared
+/// exec base args, applied per inline invocation.
+fn splice_run_args(invocation: &mut Value, args: &[&str]) {
+    let run = invocation["run"].as_array_mut().expect("run is an array");
+    for (index, arg) in args.iter().enumerate() {
+        run.insert(1 + index, json!(arg));
+    }
+}
+
+/// Apply shared script args to both the start and smoke invocations.
+fn prepend_invocation_args(value: &mut Value, args: &[&str]) {
+    splice_run_args(
+        &mut value["services"]["synthetic"]["lifecycle"]["start"]["invocation"],
+        args,
+    );
+    splice_run_args(&mut value["tasks"]["smoke"]["invocation"], args);
+}
+
+/// Replace the smoke task's argv tail (`run[1..]`), keeping the program word.
+fn set_task_run_args(value: &mut Value, args: &[&str]) {
+    let run = value["tasks"]["smoke"]["invocation"]["run"]
+        .as_array_mut()
+        .expect("run is an array");
+    run.truncate(1);
+    for arg in args {
+        run.push(json!(arg));
+    }
+}
+
+/// Replace the smoke task's argv tail on the typed model.
+fn set_smoke_args(model: &mut Model, args: &[&str]) {
+    let run = &mut model
+        .tasks
+        .get_mut("smoke")
+        .expect("fixture has task")
+        .invocation
+        .run;
+    run.truncate(1);
+    run.extend(args.iter().map(|arg| arg.to_string()));
 }
 
 fn python3_path() -> Option<&'static str> {

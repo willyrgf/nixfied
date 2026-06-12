@@ -115,13 +115,13 @@ pub struct OpMeta {
 #[derive(Debug, Clone)]
 pub struct PrepareOp {
     pub meta: OpMeta,
-    pub exec: Option<ResolvedExec>,
+    pub exec: Option<ResolvedInvocation>,
 }
 
 #[derive(Debug, Clone)]
 pub struct StartOp {
     pub meta: OpMeta,
-    pub exec: ResolvedExec,
+    pub exec: ResolvedInvocation,
 }
 
 #[derive(Debug, Clone)]
@@ -152,7 +152,7 @@ pub enum Probe {
 #[derive(Debug, Clone)]
 pub struct ExecProbe {
     pub label: String,
-    pub exec: ResolvedExec,
+    pub exec: ResolvedInvocation,
     pub timeout: Duration,
     pub retry_interval: Duration,
     pub max_attempts: u32,
@@ -170,17 +170,20 @@ pub struct CleanOp {
     pub meta: OpMeta,
 }
 
-/// A resolved exec: its closure executable, the combined (base + operation/task)
-/// argument template, environment, confined relative working directory, and
-/// timeout. `${port}`/`${stateDir}`/`${host}` are substituted at run time.
+/// A resolved invocation: the eval-resolved executable, the argv tail
+/// (`run[1..]`), environment, confined relative working directory, timeout,
+/// and the tool PATH roots (each tool executable's parent directory, in
+/// declared order) the runtime assembles the child PATH from.
+/// `${port}`/`${stateDir}`/`${host}` are substituted at run time.
 #[derive(Debug, Clone)]
-pub struct ResolvedExec {
+pub struct ResolvedInvocation {
     pub executable: String,
     pub args: Vec<String>,
     pub env: BTreeMap<String, String>,
     pub cwd: String,
     pub stdin: StdinPolicy,
     pub timeout: Duration,
+    pub tool_roots: Vec<String>,
 }
 
 /// A tcp-connect probe of the service's single bound endpoint; `label` only names
@@ -252,13 +255,13 @@ impl From<nixfied_model::StopSignal> for StopSignal {
     }
 }
 
-/// A resolved task: the combined exec/task argument template, the services it
-/// gates on, and its success codes.
+/// A resolved leaf task: its invocation, the services it requires ready while
+/// it runs, and its success codes.
 #[derive(Debug, Clone)]
 pub struct ExecTask {
     pub task_id: TaskId,
-    pub exec: ResolvedExec,
-    pub depends_on_services_ready: Vec<ServiceId>,
+    pub exec: ResolvedInvocation,
+    pub requires: Vec<ServiceId>,
     pub success_codes: Vec<i32>,
 }
 
