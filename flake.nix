@@ -121,7 +121,6 @@
             { ... }:
             {
               imports = [ ./examples/minimal/nixfied.nix ];
-              nixfied.closures.synthetic-helper.operationBindings = [ "task.always-fails.run" ];
               nixfied.tasks.always-fails = {
                 operationId = "task.always-fails.run";
                 invocation = {
