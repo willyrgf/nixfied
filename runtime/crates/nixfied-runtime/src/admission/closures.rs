@@ -24,13 +24,18 @@ pub fn check_closures(
             )
             .with_model(&loaded.path, &loaded.computed_model_hash));
         }
-        if !executable.starts_with(&store_path) {
+        // Containment is asserted on the DECLARED paths: the executable the
+        // model names must live under the storePath the model names. The
+        // canonicalized form is used only for existence/exec-bit checks —
+        // buildEnv-style packages (e.g. a Rust toolchain) legitimately
+        // symlink `bin/<tool>` into a different store path inside the same
+        // closure, and following the link must not break the attestation.
+        if !Path::new(&closure.executable).starts_with(&closure.store_path) {
             return Err(RuntimeError::new(
                 ErrorCode::ClosureMissing,
                 format!(
                     "closure executable {} is not inside storePath {}",
-                    executable.display(),
-                    store_path.display()
+                    closure.executable, closure.store_path
                 ),
             )
             .with_model(&loaded.path, &loaded.computed_model_hash));

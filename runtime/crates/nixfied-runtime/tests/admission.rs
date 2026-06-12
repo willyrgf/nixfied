@@ -371,6 +371,29 @@ fn target_os_and_arch_must_match_host() {
     assert_eq!(error.code, ErrorCode::PlatformUnsupported);
 }
 
+#[test]
+fn symlinked_closure_executable_is_admitted() {
+    // buildEnv-style packages symlink bin/<tool> into another store path of
+    // the same closure (a Rust toolchain joins cargo/rustc components). The
+    // declared executable lives under the declared storePath; following the
+    // symlink must not break containment.
+    let (tmp, model_path, closure_root) = write_fixture_model(fixture_model(), true);
+    // Move the real binary outside the declared root and symlink it back in.
+    let real_dir = tmp.path.join("store/real-component/bin");
+    fs::create_dir_all(&real_dir).unwrap();
+    let real = real_dir.join("synthetic-helper");
+    let declared = closure_root.join("bin/synthetic-helper");
+    fs::rename(&declared, &real).unwrap();
+    std::os::unix::fs::symlink(&real, &declared).unwrap();
+    let loaded = load_model(&model_path).expect("fixture should load");
+    let context = AdmissionContext {
+        policy: StoreOriginPolicy::AllowNonStoreForTests,
+        store_root: closure_root.parent().unwrap().to_path_buf(),
+        host_system: host_system(),
+    };
+    Admission::check(&loaded, &context).expect("symlinked executable should admit");
+}
+
 fn write_fixture_model(mut value: Value, create_executable: bool) -> (TempDir, PathBuf, PathBuf) {
     let tmp = TempDir::new();
     let closure_root = tmp.path.join("store/test-synthetic-helper");
