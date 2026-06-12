@@ -206,6 +206,38 @@ pkgs.writeShellApplication {
         'nixfied.tasks.pipeline.steps = lib.mkForce { };'
       reject_composite "a cyclic step graph" \
         'nixfied.tasks.pipeline.steps.probe.dependsOn = lib.mkForce [ "verify" ];'
+
+      # Every validation rule phases 1-5 introduced, proven fail-closed at
+      # evaluation against the workflow example (synthetic adapter + pipeline).
+      echo "  negative (phase 1-5 rules must fail at nix evaluation)" >&2
+      reject_composite "a runtime-owned PATH declared in env" \
+        'nixfied.tasks.smoke.invocation.env.PATH = "/usr/bin";'
+      reject_composite "an unresolvable run[0]" \
+        'nixfied.tasks.smoke.invocation.run = lib.mkForce [ "ghost-program" ];'
+      reject_composite "a dotted task id (step-path discipline)" \
+        'nixfied.closures.synthetic-helper.operationBindings = lib.mkForce null; nixfied.tasks."has.dot" = { invocation = { tools = [ "synthetic-helper" ]; run = [ "nixfied-synthetic-helper" "task" "--host" "127.0.0.1" "--port" "1" ]; }; };'
+      reject_composite "a leaf carrying steps" \
+        'nixfied.tasks.smoke.steps.bad.task = "smoke";'
+      reject_composite "a composite carrying an invocation" \
+        'nixfied.tasks.pipeline.invocation = { tools = [ "synthetic-helper" ]; run = [ "nixfied-synthetic-helper" ]; };'
+      reject_composite "a cyclic task reference graph" \
+        'nixfied.tasks.loop-a = { kind = "composite"; steps.next.task = "loop-b"; }; nixfied.tasks.loop-b = { kind = "composite"; steps.next.task = "loop-a"; };'
+      reject_composite "an operation binding gate narrower than the derivation" \
+        'nixfied.closures.synthetic-helper.operationBindings = lib.mkForce [ "task.smoke.run" ];'
+      reject_composite "both endpoint forms set" \
+        'nixfied.services.synthetic.endpoints = { extra = { }; }; nixfied.services.synthetic.primaryEndpoint = "extra";'
+      reject_composite "a tcp probe on an endpoint-less service" \
+        'nixfied.services.bare = { lifecycle.start.invocation = { tools = [ "synthetic-helper" ]; run = [ "nixfied-synthetic-helper" "service" "--host" "127.0.0.1" "--port" "1" ]; }; };'
+      reject_composite "a listening service without the network-listener attestation" \
+        'nixfied.closures.synthetic-helper.effects = lib.mkForce [ "process" ];'
+      reject_composite "a dangling prepare task" \
+        'nixfied.services.synthetic.lifecycle.prepare.task = "ghost";'
+      reject_composite "a prepare requiring its own service (combined-graph cycle)" \
+        'nixfied.closures.synthetic-helper.operationBindings = lib.mkForce null; nixfied.tasks.selfinit = { invocation = { tools = [ "synthetic-helper" ]; run = [ "nixfied-synthetic-helper" "task" "--host" "127.0.0.1" "--port" "1" ]; }; requires = [ "synthetic" ]; }; nixfied.services.synthetic.lifecycle.prepare.task = "selfinit";'
+      reject_composite "a dangling surface verb" \
+        'nixfied.surface.verbs = [ "ghost" ];'
+      reject_composite "a surface verb colliding with the control namespace" \
+        'nixfied.closures.synthetic-helper.operationBindings = lib.mkForce null; nixfied.tasks.clean = { invocation = { tools = [ "synthetic-helper" ]; run = [ "nixfied-synthetic-helper" "task" "--host" "127.0.0.1" "--port" "1" ]; }; }; nixfied.surface.verbs = [ "clean" ];'
     }
 
     # The state lifecycle matrix over one shared state dir: second run (adopt),
