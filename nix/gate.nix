@@ -186,14 +186,14 @@ pkgs.writeShellApplication {
 
       # Composite structural validation is the Nix layer's job: a broken or
       # cyclic composite must throw at evaluation, never compile into a model
-      # the runtime only rejects later. Each case overrides the valid workflow
+      # the runtime only rejects later. Each case overrides the valid composite
       # example and must fail to build. `getAttr currentSystem flake.lib` keeps
       # the expr free of any dollar-brace, so neither the shell nor the
       # surrounding Nix string rewrites it.
       echo "  negative (invalid composites must fail at nix evaluation)" >&2
       reject_composite() {
         if nix build --no-link --impure --expr \
-            "let flake = builtins.getFlake (toString $checkout); compileModel = (builtins.getAttr builtins.currentSystem flake.lib).compileModel; in compileModel ({ lib, ... }: { imports = [ $checkout/examples/workflow/nixfied.nix ]; $2 })" \
+            "let flake = builtins.getFlake (toString $checkout); compileModel = (builtins.getAttr builtins.currentSystem flake.lib).compileModel; in compileModel ({ lib, ... }: { imports = [ $checkout/examples/composite/nixfied.nix ]; $2 })" \
             >/dev/null 2>&1; then
           fail "negative: $1 compiled instead of failing at evaluation"
         fi
@@ -208,7 +208,7 @@ pkgs.writeShellApplication {
         'nixfied.tasks.pipeline.steps.probe.dependsOn = lib.mkForce [ "verify" ];'
 
       # Every validation rule phases 1-5 introduced, proven fail-closed at
-      # evaluation against the workflow example (synthetic adapter + pipeline).
+      # evaluation against the composite example (synthetic adapter + pipeline).
       echo "  negative (phase 1-5 rules must fail at nix evaluation)" >&2
       reject_composite "a runtime-owned PATH declared in env" \
         'nixfied.tasks.smoke.invocation.env.PATH = "/usr/bin";'
@@ -399,7 +399,7 @@ pkgs.writeShellApplication {
     echo "==> examples (run + views + clean)" >&2
     example minimal "${models.minimal}" smoke
     example postgres "${models.postgres}" smoke-query
-    example workflow "${models.workflow}" pipeline
+    example composite "${models.composite}" pipeline
     example polyglot "${models.polyglot}" all
     example downstream "${models.downstream}" release
     example reth "${models.reth}" reth-smoke

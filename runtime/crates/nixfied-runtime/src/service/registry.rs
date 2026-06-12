@@ -193,7 +193,7 @@ pub fn reserve_service_start(
 }
 
 /// Record the run row up front, before any service starts, so every admitted run
-/// leaves durable evidence — including a service-less selection (a workflow or
+/// leaves durable evidence — including a service-less selection (a task or
 /// environment of only service-less tasks) whose service loop never runs and so
 /// never reaches `reserve_service_start`. `INSERT OR IGNORE` keeps the later
 /// service-path inserts idempotent no-ops, preserving their semantics exactly.

@@ -381,35 +381,3 @@ tasks:
 operationBindings(cargoC) = ["task.clippy.run", "task.fmt.run"]   # sorted
 ```
 
----
-
-## Appendix (non-normative): phase-0 spike findings
-
-Recorded here because repo convention keeps commit messages to one line.
-
-- **Expressibility.** All ten mfm tasks (`../mfm/nixfied.nix:91-131`) map
-  onto the algebra with no new concept: eight case arms are pure
-  argv+env+tools leaves; `workspace-tests` runs two commands and becomes a
-  two-step `seq` composite of two leaves; the three workflows become
-  composites (`ci` referencing `check`-shaped structure directly). The
-  dispatcher's only non-dispatch content becomes typed env attrs:
-  `CARGO_TARGET_DIR = "${stateDir}/cargo-target"`, `RUST_BACKTRACE = "1"`,
-  and the darwin link env as plain values — the `${VAR:-}` append-to-inherited
-  idiom is exactly what phase 1's hermetic child environment deliberately
-  drops. The shell port→env rebuild becomes per-leaf
-  `env.DATABASE_URL = "postgresql://postgres@${host:postgres}:${port:postgres}/postgres"`.
-- **INVOKE-1 inflation.** mfm's ten leaves each carry an inline invocation
-  (~6 tool store paths + env + argv ≈ 0.5–1 KB serialized) instead of one
-  shared exec: roughly +5–10 KB on a model in the tens of KB, low single-digit
-  factor on the tasks section, trivial absolutely. Duplicated-and-diffable is
-  the intended trade (the model is the fully-applied form).
-- **Endpoint-less worker.** The minimal worker shape (no listener,
-  invocation-probed readiness, `connectsTo` postgres, one leaf requiring it)
-  needs only the phase-4 subtractions; V4 covers its derivation behavior.
-- **Spec decisions made here** (the parts the plan left to this document):
-  canonical byte-order everywhere (§1) so Nix attrsets and Rust BTree
-  agree for free; composite `dependsOn` flattens to the dependency's whole
-  subtree (§2.2) because composite success is conjunction; tool-set members
-  gain no operation bindings (§4); tasks carry no terminal tokens (§5.2);
-  step names and task/service ids exclude `.` so step paths parse
-  unambiguously (§1).

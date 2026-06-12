@@ -22,9 +22,9 @@ impl Validate for Model {
         validate_closures(self)?;
         validate_services(self)?;
         validate_tasks(self)?;
-        // Cross-reference resolution (execs/closures/operations/workflow/env
-        // references) is proven by the runtime's `lower` step, which builds the
-        // executor input only from references that exist. `validate` covers the
+        // Cross-reference resolution (tools/closures/operations/steps) is
+        // proven by the runtime's `lower` step, which builds the executor
+        // input only from references that exist. `validate` covers the
         // identity, value, and structural contract a single document must hold on
         // its own; admission then lowers it.
         Ok(())
@@ -68,9 +68,9 @@ fn validate_required_strings(model: &Model) -> Result<(), ValidationError> {
     Ok(())
 }
 
-/// Exec/closure/service/task/workflow/node ids name filesystem artifacts (log
-/// files, registry keys), so they must be path-safe: no separators, no
-/// traversal, no leading dot. Same shape the installer enforces on project ids.
+/// Closure/service/task ids name filesystem artifacts (log files, registry
+/// keys), so they must be path-safe: no separators, no traversal, no leading
+/// dot. Same shape the installer enforces on project ids.
 fn validate_unit_ids(model: &Model) -> Result<(), ValidationError> {
     for id in model.closures.keys() {
         require_path_safe_id("closures", id)?;

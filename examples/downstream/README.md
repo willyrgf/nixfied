@@ -2,7 +2,7 @@
 
 A realistic "small system" you can copy as the starting point for adopting
 Nixfied: a Postgres database, a first-party `api` service, a `worker` service,
-and a `release` workflow that ties them together. The framework gate installs and
+and a `release` composite task that ties them together. The framework gate installs and
 drives this example (among the others) to prove the framework works end to end.
 
 Everything is declared as typed Nix that compiles into the generic model
@@ -13,7 +13,7 @@ worker — it executes `model.json`.
 
 | File | Owner | Purpose |
 | --- | --- | --- |
-| `nixfied.nix` | you | every semantic declaration: services, tasks, workflow, slots, ports |
+| `nixfied.nix` | you | every semantic declaration: services, tasks, composites, verbs, slots, ports |
 | `flake.nix` | Nixfied wiring | pins the `nixfied` input and exposes `packages.<system>.model` |
 
 The split is the install/upgrade ownership boundary: `nixfied install` scaffolds
@@ -28,12 +28,17 @@ touches your `nixfied.nix`.
 - **Services** — `api` and `worker`, two foreground TCP services built from a
   small Nix-packaged executable. Real projects point closures at their own
   binaries instead.
-- **Tasks** — `ping-api` and `ping-worker`, each gated on its service's
-  readiness, plus the adapter's `smoke-query`.
-- **Workflow** — `release`: `db-check` (the `SELECT 1`) runs first, then
-  `api-check` and `worker-check` run once the database has answered.
-- **Slots** — `slotPolicy.max = 1`, so two slots of the same environment can run
-  side by side with disjoint ports, state, and registries.
+- **Tasks** — `ping-api` and `ping-worker`, each requiring its service ready
+  while it runs, plus the adapter's `smoke-query` (referenced as a step — the
+  converse-reuse pattern that replaced environment membership).
+- **Composite** — `release`: `db-check` (the `SELECT 1`) runs first, then
+  `api-check` and `worker-check` once the database has answered, then the
+  `gate` over the whole stack. Running it brings up exactly the services its
+  leaves require — `servicesRequired` is derived, never curated.
+- **Verbs** — `nixfied.surface.verbs = [ "release" ]` exports the composite as
+  the project's one public flake app.
+- **Slots** — `slotPolicy.max = 1`, so two slots can run side by side with
+  disjoint ports, state, and registries.
 
 ## Build and run
 
@@ -48,18 +53,17 @@ runtime="$(nix build .#nixfied-runtime --no-link --print-out-paths)/bin/nixfied-
 # Validate the admission contract without starting anything.
 "$runtime" check --model "$model"
 
-# Start every service, run every task, then clean.
-NIXFIED_STATE_DIR=/tmp/downstream-state "$runtime" run --model "$model"
+# Run the release composite: it starts the derived service union (postgres,
+# api, worker), runs the flattened steps, then stops everything.
+NIXFIED_STATE_DIR=/tmp/downstream-state "$runtime" run --model "$model" --task release
 NIXFIED_STATE_DIR=/tmp/downstream-state "$runtime" clean --model "$model"
 
-# Or drive the release workflow.
-NIXFIED_STATE_DIR=/tmp/downstream-state "$runtime" run --model "$model" --workflow release
-NIXFIED_STATE_DIR=/tmp/downstream-state "$runtime" clean --model "$model"
+# `run` with no --task refuses and lists the declared tasks.
 ```
 
-`run` prints a JSON summary (services, per-task success, the computed model
-hash, and — for a workflow — the ordered node results). `clean` is marker-gated
-and path-confined: it only removes state roots this model owns.
+`run` prints a JSON summary (services, per-node success keyed by step path,
+the computed model hash). `clean` is marker-gated and path-confined: it only
+removes state roots this model owns.
 
 ### With the generated apps
 
@@ -67,14 +71,13 @@ This example's `flake.nix` wires `nixfied.lib.<system>.projectApps`, so the same
 operations are one command each — the surface every nixfied project gets:
 
 ```sh
-nix run ./examples/downstream#check                      # admission only
-nix run ./examples/downstream#run                        # start services, run tasks
-nix run ./examples/downstream#run -- --workflow release  # drive the release workflow
+nix run ./examples/downstream#admit                   # admission only
+nix run ./examples/downstream#release                 # the exported verb
+nix run ./examples/downstream#run -- --task ping-api  # any declared task
 ```
 
-`.#test` / `.#ci` run a project's `test` workflow; this example ships a `release`
-workflow instead (its acceptance gate), so it is driven via `.#run -- --workflow
-release`. A fresh `#install` scaffold ships a `test` workflow by default. State
+The control namespace (`run`/`ps`/`down`/`clean`/`admit`) is framework-owned;
+`release` is this project's exported verb (`nixfied.surface.verbs`). State
 goes to the default location (`$XDG_STATE_HOME/nixfied`); set `NIXFIED_STATE_DIR`
 to override.
 

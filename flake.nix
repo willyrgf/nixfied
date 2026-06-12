@@ -92,7 +92,7 @@
           };
           minimalModel = nixfiedLib.compileModel ./examples/minimal/nixfied.nix;
           postgresModel = nixfiedLib.compileModel ./examples/postgres/nixfied.nix;
-          workflowModel = nixfiedLib.compileModel ./examples/workflow/nixfied.nix;
+          compositeModel = nixfiedLib.compileModel ./examples/composite/nixfied.nix;
           polyglotModel = nixfiedLib.compileModel ./examples/polyglot-stack/nixfied.nix;
           downstreamModel = nixfiedLib.compileModel ./examples/downstream/nixfied.nix;
           rethModel = nixfiedLib.compileModel ./examples/reth/nixfied.nix;
@@ -161,7 +161,12 @@
               ];
             }
           );
-          nixfiedInstall = import ./nix/install/install.nix { inherit pkgs; };
+          nixfiedInstall = import ./nix/install/install.nix {
+            inherit pkgs;
+            # The debug build: the installer only writes scaffold files, and
+            # the whole CI loop shares one fast profile.
+            runtime = nixfiedRuntimeDebug;
+          };
           nixfiedUpgrade = import ./nix/install/upgrade.nix { inherit pkgs; };
           # `nix run .#gate`: the framework gate — runs the example models directly
           # (rebuilds the debug runtime + models from the working tree on each run).
@@ -171,7 +176,7 @@
             models = {
               minimal = minimalModel;
               postgres = postgresModel;
-              workflow = workflowModel;
+              composite = compositeModel;
               polyglot = polyglotModel;
               downstream = downstreamModel;
               reth = rethModel;
@@ -205,7 +210,7 @@
           ci = devApps.ci;
           minimal-model = minimalModel;
           postgres-model = postgresModel;
-          workflow-model = workflowModel;
+          composite-model = compositeModel;
           polyglot-stack-model = polyglotModel;
           downstream-model = downstreamModel;
           reth-model = rethModel;

@@ -79,7 +79,7 @@ id_newtype!(
     TaskId
 );
 id_newtype!(
-    /// A workflow node's id (`WorkflowSpec.nodes` key).
+    /// A flattened plan node's id: the step path (docs/DERIVATION_SPEC.md §2).
     NodeId
 );
 id_newtype!(

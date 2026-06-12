@@ -74,7 +74,7 @@ pub fn run_dependent_task(
     dependencies: &[&StartedService],
     task: &ExecTask,
 ) -> RuntimeResult<TaskRun> {
-    // Outside a workflow the node id is the task id.
+    // A directly selected leaf's step path is the task id.
     run_dependent_task_cancellable(
         placement,
         registry,
@@ -130,8 +130,9 @@ pub fn run_dependent_task_cancellable(
         state_root: run_context.state_root,
     };
     let exec = &task.exec;
-    // Key logs by node id, not task id: a workflow may run the same task in more
-    // than one node, and task-id-keyed paths would overwrite each other's logs.
+    // Key logs by step path, not task id: a composite may run the same leaf in
+    // more than one step, and task-id-keyed paths would overwrite each other's
+    // logs.
     let stdout_path = placement
         .logs_dir
         .join(format!("task.{node_id}.stdout.log"));
@@ -218,7 +219,7 @@ pub fn run_dependent_task_cancellable(
         success,
         stdout_path,
         stderr_path,
-        // Key the summary by node id like the logs: nodes in a workflow share
+        // Key the summary by step path like the logs: a run's nodes share
         // the run dir, and a single run-level summary.json would be
         // overwritten by each node, losing per-node evidence.
         summary_path: placement

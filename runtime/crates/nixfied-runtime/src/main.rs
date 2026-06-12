@@ -284,7 +284,7 @@ fn run_m0_placed(
     )?;
 
     // Record the run row before any service starts, so even a service-less
-    // selection (a workflow/environment of only service-less tasks) leaves durable
+    // selection (a task tree whose leaves require nothing) leaves durable
     // run evidence for `ps`/reconcile. `INSERT OR IGNORE` makes the service-path
     // run-row insert a harmless no-op.
     nixfied_runtime::service::registry::record_run_created(
@@ -485,9 +485,10 @@ fn run_m0_placed(
         return Err(error);
     }
 
-    // Run each node in dependency order, gating each task on the readiness of its
-    // declared service dependency (the first dependency provides ${port}/${host}
-    // substitution). The plan's order already honors workflow node dependencies.
+    // Run each flattened node in dependency order, gating each leaf on the
+    // readiness of its declared service requirements (the first provides
+    // ${port}/${host} substitution). The plan's order already honors the
+    // composite's step dependencies.
     let mut task_runs: Vec<TaskRun> = Vec::new();
     let mut node_results: Vec<NodeResult> = Vec::new();
     for node in &plan.nodes {
@@ -609,7 +610,7 @@ fn run_m0_placed(
         }
     }
 
-    // Built before the summary so the workflow record captures the live services
+    // Built before the summary so the run record captures the live services
     // (endpoints, instance ids) alongside the node and task results.
     let services_output = services_output(&started);
 

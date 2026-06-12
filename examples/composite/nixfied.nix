@@ -2,8 +2,8 @@
 {
   imports = [ adapters.synthetic ];
 
-  nixfied.project.projectId = "workflow-example";
-  nixfied.project.name = "Workflow Example";
+  nixfied.project.projectId = "composite-example";
+  nixfied.project.name = "Composite Example";
   nixfied.codebases.main.logicalRoot = ".";
   nixfied.placement.ports.base = 24680;
 

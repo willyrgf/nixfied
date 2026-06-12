@@ -88,7 +88,7 @@ nixfied="$(nix build .#nixfied-runtime --no-link --print-out-paths)/bin/nixfied"
 | `examples/minimal` | the smallest service + task |
 | `examples/postgres` | the Postgres reference adapter (idempotent initdb → server → `pg_isready` probes → `SELECT 1` → clean) |
 | `examples/reth` | the Reth reference adapter (dev node → JSON-RPC probes → smoke call → clean) |
-| `examples/workflow` | a composite task (a bounded step DAG over a service) |
+| `examples/composite` | a composite task (a bounded step DAG over a service) |
 | `examples/polyglot-stack` | two services in different languages, one composed check |
 | `examples/downstream` | a realistic small system + the copy-paste adoption guide |
 | `examples/toolchain` | the toolchain-shaped adopter: multi-tool PATH leaves, heterogeneous requirements, nested composites, and an endpoint-less worker |

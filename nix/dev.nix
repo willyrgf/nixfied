@@ -1,9 +1,9 @@
 # Developer convenience apps for the framework repo, run against the working tree.
 #
 # These verify the framework's *own* Rust/Nix source. They are deliberately plain
-# shell apps over `nix` + the pinned cargo, not nixfied workflows: a nixfied task
+# shell apps over `nix` + the pinned cargo, not nixfied tasks: a nixfied task
 # cannot invoke nix (SEAM-1), and the runtime's own unit tests must not be measured
-# by the runtime itself. The adopter surface — where verification *is* a workflow —
+# by the runtime itself. The adopter surface — where verification is composition —
 # is generated separately by `lib.projectApps`.
 {
   pkgs,

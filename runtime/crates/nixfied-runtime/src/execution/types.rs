@@ -24,9 +24,9 @@ pub struct ServiceIdentity {
     pub target_identity_hash: String,
 }
 
-/// The whole executable program for a run: services to start, tasks to run, the
-/// environment and workflow plans, and the per-slot port windows the planner
-/// assigns from. `tasks` holds the leaves; `composites` the named-step DAGs the
+/// The whole executable program for a run: services to start, tasks to run
+/// (leaves and the composites the planner flattens), and the per-slot port
+/// windows the planner assigns from. `tasks` holds the leaves; `composites` the named-step DAGs the
 /// planner flattens onto the run plan with stable step paths.
 #[derive(Debug, Clone)]
 pub struct ExecutionModel {
