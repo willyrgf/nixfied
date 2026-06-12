@@ -310,6 +310,9 @@ fn lower_task(
         operation_id: _,
         invocation,
         requires,
+        // Re-derived and compared against the carried value at admission
+        // (DERIVE-1); the executor reads the derived union via the planner.
+        services_required: _,
         exit_policy,
         steps,
         artifact_refs: _,
@@ -1002,6 +1005,7 @@ mod tests {
                         "timeoutMs": 1000
                     },
                     "requires": ["svc"],
+                    "servicesRequired": ["svc"],
                     "exitPolicy": { "successCodes": [0] },
                     "artifactRefs": [], "logRefs": [], "summaryRefs": []
                 }

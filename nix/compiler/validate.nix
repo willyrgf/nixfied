@@ -67,7 +67,7 @@ let
     let
       task = leafTasks.${name};
     in
-    task.operationId != null && task.invocation != null && task.steps == { }
+    task.invocation != null && task.steps == { }
   ) (builtins.attrNames leafTasks);
   compositesCoherent = lib.all (
     name:
@@ -155,7 +155,7 @@ let
     (expect connectsToDeclared "service connectsTo targets must be declared services")
     (expect connectsToAcyclic "service connectsTo graph must be acyclic")
     (expect taskIdsStepSafe "task and service ids must match [A-Za-z0-9][A-Za-z0-9_-]* (step-path segments)")
-    (expect leavesCoherent "a leaf task must declare operationId and invocation and no steps")
+    (expect leavesCoherent "a leaf task must declare an invocation and no steps")
     (expect compositesCoherent
       "a composite task carries only steps (no invocation, operationId, or requires) with step-safe names"
     )

@@ -425,6 +425,11 @@ pub struct TaskSpec {
     /// leaf runs — the leaf-intrinsic fact `servicesRequired` derives from.
     #[serde(default, skip_serializing_if = "UniqueVec::is_empty")]
     pub requires: UniqueVec<ServiceId>,
+    /// Derived (docs/DERIVATION_SPEC.md §3): the union of transitive leaf
+    /// `requires`, closed over `connectsTo`, byte-sorted. Computed by the Nix
+    /// compiler; the runtime re-derives and compares at admission (DERIVE-1).
+    #[serde(default)]
+    pub services_required: UniqueVec<ServiceId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exit_policy: Option<ExitPolicy>,
     /// Composite body: named steps referencing declared tasks. Names are the

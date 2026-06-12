@@ -125,6 +125,7 @@ fn smoke_task() -> Value {
         "operationId": "task.smoke.run",
         "invocation": helper_invocation(json!(["synthetic-helper", "task", "--host", "127.0.0.1", "--port", "${port}"])),
         "requires": ["synthetic"],
+        "servicesRequired": ["synthetic"],
         "exitPolicy": { "successCodes": [0] },
         "artifactRefs": [],
         "logRefs": ["task.smoke"],

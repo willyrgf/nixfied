@@ -189,6 +189,7 @@ pub fn synthetic_model(options: &SyntheticModelOptions) -> Value {
                 "operationId": "task.smoke.run",
                 "invocation": invocation(&options.executable, task_run),
                 "requires": ["synthetic"],
+                "servicesRequired": ["synthetic"],
                 "exitPolicy": {
                     "successCodes": [0]
                 },

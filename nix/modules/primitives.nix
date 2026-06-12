@@ -18,12 +18,17 @@ let
   };
 
   operationId = mkOption {
-    type = types.nonEmptyStr;
-    description = "Globally unique lifecycle operation identifier.";
+    type = types.nullOr types.nonEmptyStr;
+    default = null;
+    description = "Globally unique lifecycle operation identifier; derived (`service.<name>.<op>`) unless overridden.";
   };
-  terminal = mkOption {
+  # Terminal tokens default per lifecycle class (docs/DERIVATION_SPEC.md §5.2);
+  # declare to override.
+  terminalDefaults = (import ../lib/derive-facts.nix { inherit lib; }).terminalDefaults;
+  mkTerminal = class: mkOption {
     type = terminalType;
-    description = "Typed terminal result tokens.";
+    default = terminalDefaults.${class};
+    description = "Typed terminal result tokens (defaulted per lifecycle class).";
   };
   # The one way anything in the model says "run this program" (INVOKE-1):
   # inline, anonymous, fully applied. `tools` is the tool set whose bin roots
@@ -75,7 +80,8 @@ let
   # illegal binding (a stop invocation, a probe on start) is unrepresentable.
   prepareOpType = types.submodule {
     options = {
-      inherit operationId terminal;
+      inherit operationId;
+      terminal = mkTerminal "prepare";
       invocation = mkOption {
         type = types.nullOr invocationType;
         default = null;
@@ -85,7 +91,8 @@ let
   };
   startOpType = types.submodule {
     options = {
-      inherit operationId terminal;
+      inherit operationId;
+      terminal = mkTerminal "start";
       invocation = mkOption {
         type = invocationType;
         description = "Invocation spawned and owned as the foreground service.";
@@ -124,9 +131,10 @@ let
       };
     };
   };
-  probeOpType = types.submodule {
+  probeOpType = class: types.submodule {
     options = {
-      inherit operationId terminal;
+      inherit operationId;
+      terminal = mkTerminal class;
       probe = mkOption {
         type = probeSpecType;
         default = { };
@@ -136,7 +144,8 @@ let
   };
   stopOpType = types.submodule {
     options = {
-      inherit operationId terminal;
+      inherit operationId;
+      terminal = mkTerminal "stop";
       signal = mkOption {
         type = types.enum [
           "TERM"
@@ -156,13 +165,15 @@ let
   };
   cleanOpType = types.submodule {
     options = {
-      inherit operationId terminal;
+      inherit operationId;
+      terminal = mkTerminal "clean";
     };
   };
   lifecycleType = types.submodule {
     options = {
       prepare = mkOption {
         type = prepareOpType;
+        default = { };
         description = "Optional data-dir init.";
       };
       start = mkOption {
@@ -170,19 +181,23 @@ let
         description = "Spawn-and-own the foreground service.";
       };
       ready = mkOption {
-        type = probeOpType;
+        type = probeOpType "ready";
+        default = { };
         description = "Wait on the readiness probe.";
       };
       health = mkOption {
-        type = probeOpType;
+        type = probeOpType "health";
+        default = { };
         description = "Wait on a health probe.";
       };
       stop = mkOption {
         type = stopOpType;
+        default = { };
         description = "Signal-based graceful shutdown.";
       };
       clean = mkOption {
         type = cleanOpType;
+        default = { };
         description = "Marker-gated runtime cleanup.";
       };
     };
@@ -304,9 +319,14 @@ let
         description = "Whether the runtime must verify the executable bit.";
       };
       operationBindings = mkOption {
-        type = types.listOf types.str;
-        default = [ ];
-        description = "Lifecycle/task operation ids dispatched against this closure.";
+        type = types.nullOr (types.listOf types.str);
+        default = null;
+        description = ''
+          Optional narrowing gate: the operation ids this closure may be
+          dispatched against. The model carries the *derived* bindings (from
+          the invocation graph); declaring a list additionally requires the
+          derived set to be a subset of it.
+        '';
       };
       effects = mkOption {
         type = types.listOf (
@@ -363,7 +383,7 @@ let
       operationId = mkOption {
         type = types.nullOr types.nonEmptyStr;
         default = null;
-        description = "Globally unique task operation identifier (leaf only).";
+        description = "Globally unique task operation identifier (leaf only); derived (`task.<name>.run`) unless overridden.";
       };
       invocation = mkOption {
         type = types.nullOr invocationType;

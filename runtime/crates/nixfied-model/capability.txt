@@ -29,7 +29,7 @@ primitive CleanSpec: operationId terminal
 primitive Endpoint: endpointId host
 primitive ProbeSpec: kind invocation timeoutMs retryIntervalMs maxAttempts
 primitive TerminalSemantics: success failure
-primitive TaskSpec: kind operationId invocation requires exitPolicy steps artifactRefs logRefs summaryRefs
+primitive TaskSpec: kind operationId invocation requires servicesRequired exitPolicy steps artifactRefs logRefs summaryRefs
 primitive StepSpec: task dependsOn
 primitive ExitPolicy: successCodes
 primitive Docs: title summary

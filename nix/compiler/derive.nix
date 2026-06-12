@@ -9,6 +9,7 @@
 let
   inherit (lib) mapAttrs mapAttrsToList;
   targetLib = import ../lib/target.nix { inherit lib; };
+  deriveFacts = import ../lib/derive-facts.nix { inherit lib; };
 
   target = targetLib.fromSystem config.nixfied.target.system;
 
@@ -38,12 +39,14 @@ let
   # Declared closures: realise package store paths and absolute executable
   # paths. Tool entries given as plain packages synthesize additional closures
   # below.
-  declaredClosureSpec = _id: closure: {
+  # Bindings are DERIVED (docs/DERIVATION_SPEC.md §4); a declared list is an
+  # optional narrowing gate checked below.
+  declaredClosureSpec = id: closure: {
     kind = closure.kind;
     storePath = "${closure.package}";
     executable = "${closure.package}/${closure.executable}";
     targetSystem = target.closureSystem;
-    operationBindings = closure.operationBindings;
+    operationBindings = gatedBindings id closure.operationBindings;
     requiresExecutable = closure.requiresExecutable;
     effects = closure.effects;
   };
@@ -59,40 +62,50 @@ let
     storePath = "${package}";
     executable = "${package}/bin/${toolMainProgram package}";
     targetSystem = target.closureSystem;
-    operationBindings = derivedToolBindings.${toolClosureId package} or [ ];
+    operationBindings = derivedBindings (toolClosureId package);
     requiresExecutable = true;
     effects = [ "process" ];
   };
 
-  # Every invocation position in the model, with the operation id it executes
-  # under: task leaves plus each service's prepare/start and exec probes.
+  # Effective operation ids: derived by default (docs/DERIVATION_SPEC.md §5.1),
+  # declared only to override.
+  leafOperationId =
+    name: task:
+    if task.operationId != null then task.operationId else deriveFacts.leafOperationId name;
+  serviceOperationId =
+    name: op: declared:
+    if declared != null then declared else deriveFacts.serviceOperationId name op;
+
+  # Every invocation position in the model, with the (effective) operation id
+  # it executes under: task leaves plus each service's prepare/start and exec
+  # probes.
   invocationPositions =
-    (mapAttrsToList (_id: task: {
-      operationId = task.operationId;
+    (mapAttrsToList (name: task: {
+      operationId = leafOperationId name task;
       invocation = task.invocation;
     }) (lib.filterAttrs (_id: task: task.kind == "leaf") config.nixfied.tasks))
     ++ lib.concatLists (
       mapAttrsToList (
-        _name: service:
+        name: service:
         let
           lc = service.lifecycle;
         in
         lib.optional (lc.prepare.invocation != null) {
-          operationId = lc.prepare.operationId;
+          operationId = serviceOperationId name "prepare" lc.prepare.operationId;
           invocation = lc.prepare.invocation;
         }
         ++ [
           {
-            operationId = lc.start.operationId;
+            operationId = serviceOperationId name "start" lc.start.operationId;
             invocation = lc.start.invocation;
           }
         ]
         ++ lib.optional (lc.ready.probe.kind == "exec" && lc.ready.probe.invocation != null) {
-          operationId = lc.ready.operationId;
+          operationId = serviceOperationId name "ready" lc.ready.operationId;
           invocation = lc.ready.probe.invocation;
         }
         ++ lib.optional (lc.health.probe.kind == "exec" && lc.health.probe.invocation != null) {
-          operationId = lc.health.operationId;
+          operationId = serviceOperationId name "health" lc.health.operationId;
           invocation = lc.health.probe.invocation;
         }
       ) config.nixfied.services
@@ -144,42 +157,39 @@ let
       timeoutMs = invocation.timeoutMs;
     };
 
-  # Synthesized tool closures derive their bindings from the positions they
-  # resolve run[0] for (declared closures keep hand-declared bindings).
-  derivedToolBindings =
+  # Derived operation bindings (docs/DERIVATION_SPEC.md §4): the byte-sorted
+  # operation ids of every position whose run[0] resolves to the closure. A
+  # declared list narrows: the derived set must be a subset of it, and every
+  # declared binding must name a declared operation.
+  executableBasenames = mapAttrs (_id: closure: baseNameOf closure.executable) closures;
+  bindingPositions = map (position: {
+    operationId = position.operationId;
+    toolIds = map toolEntryId position.invocation.tools;
+    program = builtins.head position.invocation.run;
+  }) invocationPositions;
+  derivedBindings =
+    deriveFacts.operationBindings {
+      positions = bindingPositions;
+      inherit executableBasenames;
+    };
+  declaredOperationIds = map (position: position.operationId) invocationPositions;
+  gatedBindings =
+    id: declared:
     let
-      bindingsFor =
-        toolId:
-        lib.naturalSort (
-          lib.unique (
-            map (position: position.operationId) (
-              builtins.filter (
-                position:
-                let
-                  toolIds = map toolEntryId position.invocation.tools;
-                  program = builtins.head position.invocation.run;
-                  matches = builtins.filter (
-                    id:
-                    (
-                      if builtins.isString id then
-                        (closures ? ${id}) && baseNameOf closures.${id}.executable == program
-                      else
-                        false
-                    )
-                  ) toolIds;
-                in
-                matches != [ ] && builtins.head matches == toolId
-              ) invocationPositions
-            )
-          )
-        );
+      derived = derivedBindings id;
+      outsideGate = builtins.filter (binding: !(builtins.elem binding declared)) derived;
+      unknownDeclared = builtins.filter (binding: !(builtins.elem binding declaredOperationIds)) (
+        if declared == null then [ ] else declared
+      );
     in
-    builtins.listToAttrs (
-      map (package: rec {
-        name = toolClosureId package;
-        value = bindingsFor name;
-      }) packageTools
-    );
+    if declared == null then
+      derived
+    else
+      assert lib.assertMsg (unknownDeclared == [ ])
+        "closure ${id}: declared operationBindings name undeclared operations: ${builtins.concatStringsSep ", " unknownDeclared}";
+      assert lib.assertMsg (outsideGate == [ ])
+        "closure ${id}: dispatched against operations outside its declared bindings: ${builtins.concatStringsSep ", " outsideGate}";
+      derived;
 
   # Mirror the runtime's serde skip rules (invocation only on exec probes and
   # bound prepares) so nix-emitted and runtime-rederived views stay
@@ -200,33 +210,34 @@ let
   terminalOf = op: { inherit (op.terminal) success failure; };
   lifecycleSpec = name: lc: {
     prepare = {
-      inherit (lc.prepare) operationId;
+      operationId = serviceOperationId name "prepare" lc.prepare.operationId;
       terminal = terminalOf lc.prepare;
     }
     // lib.optionalAttrs (lc.prepare.invocation != null) {
       invocation = resolveInvocation "service ${name} prepare" lc.prepare.invocation;
     };
     start = {
-      inherit (lc.start) operationId;
+      operationId = serviceOperationId name "start" lc.start.operationId;
       invocation = resolveInvocation "service ${name} start" lc.start.invocation;
       terminal = terminalOf lc.start;
     };
     ready = {
-      inherit (lc.ready) operationId;
+      operationId = serviceOperationId name "ready" lc.ready.operationId;
       probe = probeOf "service ${name} ready probe" lc.ready;
       terminal = terminalOf lc.ready;
     };
     health = {
-      inherit (lc.health) operationId;
+      operationId = serviceOperationId name "health" lc.health.operationId;
       probe = probeOf "service ${name} health probe" lc.health;
       terminal = terminalOf lc.health;
     };
     stop = {
-      inherit (lc.stop) operationId signal timeoutMs;
+      operationId = serviceOperationId name "stop" lc.stop.operationId;
+      inherit (lc.stop) signal timeoutMs;
       terminal = terminalOf lc.stop;
     };
     clean = {
-      inherit (lc.clean) operationId;
+      operationId = serviceOperationId name "clean" lc.clean.operationId;
       terminal = terminalOf lc.clean;
     };
   };
@@ -271,11 +282,19 @@ let
     };
   services = mapAttrs serviceSpec config.nixfied.services;
 
+  # Derived per task: the union of transitive leaf requires, closed over
+  # connectsTo (docs/DERIVATION_SPEC.md §3). The runtime re-derives and
+  # compares at admission (DERIVE-1).
+  taskServicesRequired = deriveFacts.servicesRequired {
+    tasks = config.nixfied.tasks;
+    services = config.nixfied.services;
+  };
   taskSpec =
     name: task:
     if task.kind == "composite" then
       {
         kind = "composite";
+        servicesRequired = taskServicesRequired name;
         steps = mapAttrs (_stepName: step: {
           task = step.task;
           dependsOn = step.dependsOn;
@@ -284,9 +303,10 @@ let
     else
       {
         kind = "leaf";
-        operationId = task.operationId;
+        operationId = leafOperationId name task;
         invocation = resolveInvocation "task ${name}" task.invocation;
         requires = task.requires;
+        servicesRequired = taskServicesRequired name;
         exitPolicy = {
           successCodes = task.exitPolicy.successCodes;
         };

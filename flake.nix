@@ -241,6 +241,12 @@
         { pkgs, system }:
         {
           minimal-model = self.packages.${system}.minimal-model;
+          # The derivation spec's golden vectors as Nix eval fixtures
+          # (docs/DERIVATION_SPEC.md §6; DERIVE-1).
+          derive-facts-vectors = import ./nix/checks/derive-facts-vectors.nix {
+            inherit pkgs;
+            inherit (nixpkgs) lib;
+          };
           # The runtime workspace must compile reproducibly. CI verifies the fast
           # debug profile (release is built on demand by `.#install` / the
           # `nixfied-runtime` package); a release-only compile break is essentially
