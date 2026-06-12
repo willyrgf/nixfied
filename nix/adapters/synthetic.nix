@@ -68,10 +68,6 @@ in
     executable = "bin/nixfied-synthetic-helper";
     kind = "executable";
     requiresExecutable = true;
-    operationBindings = [
-      "service.synthetic.start"
-      "task.smoke.run"
-    ];
     effects = [
       "process"
       "network-listener"
@@ -81,7 +77,6 @@ in
   nixfied.services.synthetic = {
     lifecycle = {
       start = {
-        operationId = "service.synthetic.start";
         invocation = {
           tools = [ "synthetic-helper" ];
           run = [
@@ -93,38 +88,6 @@ in
             "\${port}"
           ];
         };
-        terminal = {
-          success = "spawned";
-          failure = "failed";
-        };
-      };
-      ready = {
-        operationId = "service.synthetic.ready";
-        terminal = {
-          success = "ready";
-          failure = "not-ready";
-        };
-      };
-      health = {
-        operationId = "service.synthetic.health";
-        terminal = {
-          success = "healthy";
-          failure = "unhealthy";
-        };
-      };
-      stop = {
-        operationId = "service.synthetic.stop";
-        terminal = {
-          success = "stopped";
-          failure = "failed";
-        };
-      };
-      clean = {
-        operationId = "service.synthetic.clean";
-        terminal = {
-          success = "cleaned";
-          failure = "failed";
-        };
       };
     };
     endpoint = {
@@ -135,7 +98,6 @@ in
   };
 
   nixfied.tasks.smoke = {
-    operationId = "task.smoke.run";
     invocation = {
       tools = [ "synthetic-helper" ];
       run = [

@@ -74,44 +74,9 @@ let
 
   mkService = name: program: {
     lifecycle = {
-      start = {
-        operationId = "service.${name}.start";
-        invocation = {
-          tools = [ name ];
-          run = [ program ] ++ serviceArgs;
-        };
-        terminal = {
-          success = "spawned";
-          failure = "failed";
-        };
-      };
-      ready = {
-        operationId = "service.${name}.ready";
-        terminal = {
-          success = "ready";
-          failure = "not-ready";
-        };
-      };
-      health = {
-        operationId = "service.${name}.health";
-        terminal = {
-          success = "healthy";
-          failure = "unhealthy";
-        };
-      };
-      stop = {
-        operationId = "service.${name}.stop";
-        terminal = {
-          success = "stopped";
-          failure = "failed";
-        };
-      };
-      clean = {
-        operationId = "service.${name}.clean";
-        terminal = {
-          success = "cleaned";
-          failure = "failed";
-        };
+      start.invocation = {
+        tools = [ name ];
+        run = [ program ] ++ serviceArgs;
       };
     };
     endpoint = {
@@ -129,10 +94,6 @@ in
   nixfied.closures.api = {
     package = pythonService;
     executable = "bin/polyglot-python";
-    operationBindings = [
-      "service.api.start"
-      "task.ping-api.run"
-    ];
     effects = [
       "process"
       "network-listener"
@@ -141,10 +102,6 @@ in
   nixfied.closures.worker = {
     package = perlService;
     executable = "bin/polyglot-perl";
-    operationBindings = [
-      "service.worker.start"
-      "task.ping-worker.run"
-    ];
     effects = [
       "process"
       "network-listener"
@@ -155,7 +112,6 @@ in
   nixfied.services.worker = mkService "worker" "polyglot-perl";
 
   nixfied.tasks.ping-api = {
-    operationId = "task.ping-api.run";
     invocation = {
       tools = [ "api" ];
       run = [ "polyglot-python" ] ++ taskArgs;
@@ -164,7 +120,6 @@ in
     logRefs = [ "task.ping-api" ];
   };
   nixfied.tasks.ping-worker = {
-    operationId = "task.ping-worker.run";
     invocation = {
       tools = [ "worker" ];
       run = [ "polyglot-perl" ] ++ taskArgs;

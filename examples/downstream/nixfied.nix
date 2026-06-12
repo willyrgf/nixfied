@@ -100,45 +100,12 @@ let
   # of same-slot dependencies addressable from the start args and orders
   # startup so they are ready first; `extraStartArgs` carries that wiring.
   mkAppService = name: connectsTo: extraStartArgs: {
+    # Operation ids and terminal tokens are derived (service.<name>.<op> and
+    # the per-class defaults); only the start mechanism is authored.
     lifecycle = {
-      start = {
-        operationId = "service.${name}.start";
-        invocation = {
-          tools = [ "app" ];
-          run = serviceRun name ++ extraStartArgs;
-        };
-        terminal = {
-          success = "spawned";
-          failure = "failed";
-        };
-      };
-      ready = {
-        operationId = "service.${name}.ready";
-        terminal = {
-          success = "ready";
-          failure = "not-ready";
-        };
-      };
-      health = {
-        operationId = "service.${name}.health";
-        terminal = {
-          success = "healthy";
-          failure = "unhealthy";
-        };
-      };
-      stop = {
-        operationId = "service.${name}.stop";
-        terminal = {
-          success = "stopped";
-          failure = "failed";
-        };
-      };
-      clean = {
-        operationId = "service.${name}.clean";
-        terminal = {
-          success = "cleaned";
-          failure = "failed";
-        };
+      start.invocation = {
+        tools = [ "app" ];
+        run = serviceRun name ++ extraStartArgs;
       };
     };
     endpoint = {
@@ -172,13 +139,6 @@ in
   nixfied.closures.app = {
     package = appHelper;
     executable = "bin/downstream-app";
-    operationBindings = [
-      "service.api.start"
-      "service.worker.start"
-      "task.ping-api.run"
-      "task.ping-worker.run"
-      "task.release-gate.run"
-    ];
     effects = [
       "process"
       "network-listener"
@@ -197,7 +157,6 @@ in
       ];
 
   nixfied.tasks.ping-api = {
-    operationId = "task.ping-api.run";
     invocation = {
       tools = [ "app" ];
       run = taskRun "api";
@@ -206,7 +165,6 @@ in
     logRefs = [ "task.ping-api" ];
   };
   nixfied.tasks.ping-worker = {
-    operationId = "task.ping-worker.run";
     invocation = {
       tools = [ "app" ];
       run = taskRun "worker";
@@ -221,7 +179,6 @@ in
   # and the env DSN proves env values are substituted too (the app fails on a
   # literal placeholder).
   nixfied.tasks.release-gate = {
-    operationId = "task.release-gate.run";
     invocation = {
       tools = [ "app" ];
       run = taskRun "api" ++ [
@@ -241,6 +198,10 @@ in
     ];
     logRefs = [ "task.release-gate" ];
   };
+
+  # The adopter-owned public surface: the release flow is the one verb this
+  # example exports (`nix run .#release` once wired through projectApps).
+  nixfied.surface.verbs = [ "release" ];
 
   # A release flow: prove the database answers, then exercise both services,
   # then run the gate over the whole stack. A composite task; the services it
