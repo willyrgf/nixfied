@@ -371,6 +371,7 @@ pkgs.writeShellApplication {
     example polyglot "${models.polyglot}" all
     example downstream "${models.downstream}" release
     example reth "${models.reth}" reth-smoke
+    example toolchain "${models.toolchain}" ci
     echo "==> slots" >&2
     slots
     echo "==> negative" >&2

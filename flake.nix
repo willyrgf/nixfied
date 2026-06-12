@@ -96,6 +96,7 @@
           polyglotModel = nixfiedLib.compileModel ./examples/polyglot-stack/nixfied.nix;
           downstreamModel = nixfiedLib.compileModel ./examples/downstream/nixfied.nix;
           rethModel = nixfiedLib.compileModel ./examples/reth/nixfied.nix;
+          toolchainModel = nixfiedLib.compileModel ./examples/toolchain/nixfied.nix;
           # Gate-only variants of the example models, for the state lifecycle
           # shard: a provenance-only delta (same identity, new model hash), an
           # epoch bump (declared state-compatibility boundary), and a postgres
@@ -175,6 +176,7 @@
               polyglot = polyglotModel;
               downstream = downstreamModel;
               reth = rethModel;
+              toolchain = toolchainModel;
               minimalB = minimalModelB;
               minimalEpoch2 = minimalModelEpoch2;
               postgresSlow = postgresSlowModel;
@@ -190,6 +192,7 @@
         in
         {
           default = minimalModel;
+          toolchain-model = toolchainModel;
           nixfied-runtime = nixfiedRuntime;
           # The debug runtime the framework's CI path builds (also the
           # `nixfied-runtime` check). Adopters never use this; `.#install` ships
