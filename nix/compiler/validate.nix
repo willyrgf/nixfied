@@ -52,6 +52,39 @@ let
   endpointHostsLoopback = lib.all (
     name: lib.all isLoopbackHost (serviceHosts services.${name})
   ) (builtins.attrNames services);
+  # Workflow structural validation: a broken or cyclic workflow is invalid intent
+  # that must fail at evaluation, not compile into an admitted model the runtime
+  # only rejects later. Rust lowering keeps the same checks as a fail-closed
+  # backstop; the contract is that this layer is authoritative.
+  tasks = config.nixfied.tasks;
+  workflows = config.nixfied.workflows;
+  workflowNames = builtins.attrNames workflows;
+  nodeNames = wf: builtins.attrNames workflows.${wf}.nodes;
+  workflowServicesDeclared = lib.all (
+    wf: lib.all (svc: builtins.hasAttr svc services) workflows.${wf}.servicesRequired
+  ) workflowNames;
+  workflowTasksDeclared = lib.all (
+    wf: lib.all (node: builtins.hasAttr workflows.${wf}.nodes.${node}.taskId tasks) (nodeNames wf)
+  ) workflowNames;
+  workflowDependsOnDeclared = lib.all (
+    wf:
+    lib.all (
+      node: lib.all (dep: builtins.elem dep (nodeNames wf)) workflows.${wf}.nodes.${node}.dependsOn
+    ) (nodeNames wf)
+  ) workflowNames;
+  workflowsNonEmpty = lib.all (wf: workflows.${wf}.nodes != { }) workflowNames;
+  # Walking with a `seen` set terminates even on cycles; reaching the start node
+  # again is the cycle proof. dependsOn references are validated above, so every
+  # `current` here resolves.
+  workflowReaches =
+    wf: start: current: seen:
+    lib.any (
+      dep:
+      dep == start || (!(builtins.elem dep seen) && workflowReaches wf start dep (seen ++ [ dep ]))
+    ) workflows.${wf}.nodes.${current}.dependsOn;
+  workflowsAcyclic = lib.all (
+    wf: lib.all (node: !(workflowReaches wf node node [ ])) (nodeNames wf)
+  ) workflowNames;
   checks = [
     (expect (config.nixfied.target.system == system) "target.system must match the compile system")
     (expect (slotPolicy.min >= 0) "slotPolicy.min must be non-negative")
@@ -80,6 +113,13 @@ let
     )
     (expect connectsToDeclared "service connectsTo targets must be declared services")
     (expect connectsToAcyclic "service connectsTo graph must be acyclic")
+    (expect workflowServicesDeclared "workflow servicesRequired must name declared services")
+    (expect workflowTasksDeclared "workflow node taskId must name a declared task")
+    (expect workflowDependsOnDeclared
+      "workflow node dependsOn must name a node in the same workflow"
+    )
+    (expect workflowsNonEmpty "a declared workflow must declare at least one node")
+    (expect workflowsAcyclic "workflow node dependency graph must be acyclic")
   ];
 in
 lib.foldl' (acc: check: lib.seq check acc) config checks

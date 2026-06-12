@@ -168,6 +168,30 @@ pkgs.writeShellApplication {
             >/dev/null 2>&1; then
         fail "negative: a duplicate workflow node id evaluated successfully"
       fi
+
+      # Workflow structural validation is the Nix layer's job: a broken or cyclic
+      # workflow must throw at evaluation, never compile into a model the runtime
+      # only rejects later. Each case overrides the valid workflow example and must
+      # fail to build. `getAttr currentSystem flake.lib` keeps the expr free of any
+      # dollar-brace, so neither the shell nor the surrounding Nix string rewrites it.
+      echo "  negative (invalid workflows must fail at nix evaluation)" >&2
+      reject_workflow() {
+        if nix build --no-link --impure --expr \
+            "let flake = builtins.getFlake (toString $checkout); compileModel = (builtins.getAttr builtins.currentSystem flake.lib).compileModel; in compileModel ({ lib, ... }: { imports = [ $checkout/examples/workflow/nixfied.nix ]; $2 })" \
+            >/dev/null 2>&1; then
+          fail "negative: $1 compiled instead of failing at evaluation"
+        fi
+      }
+      reject_workflow "undeclared workflow service" \
+        'nixfied.workflows.pipeline.servicesRequired = lib.mkForce [ "ghost" ];'
+      reject_workflow "undeclared workflow node task" \
+        'nixfied.workflows.pipeline.nodes.bad.taskId = "missing-task";'
+      reject_workflow "dependsOn an unknown node" \
+        'nixfied.workflows.pipeline.nodes.verify.dependsOn = lib.mkForce [ "ghost-node" ];'
+      reject_workflow "an empty workflow" \
+        'nixfied.workflows.pipeline.nodes = lib.mkForce { };'
+      reject_workflow "a cyclic workflow" \
+        'nixfied.workflows.pipeline.nodes.probe.dependsOn = lib.mkForce [ "verify" ];'
     }
 
     # The state lifecycle matrix over one shared state dir: second run (adopt),
