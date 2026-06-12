@@ -3,7 +3,7 @@ use std::num::{NonZeroU32, NonZeroU64};
 
 use serde::{Deserialize, Serialize};
 
-use crate::ids::{ClosureId, CodebaseId, NodeId, OperationId, ServiceId, TaskId};
+use crate::ids::{ClosureId, CodebaseId, OperationId, ServiceId, TaskId};
 use crate::unique_vec::UniqueVec;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -23,7 +23,6 @@ pub struct Model {
     pub closures: BTreeMap<String, ClosureSpec>,
     pub services: BTreeMap<String, ServiceSpec>,
     pub tasks: BTreeMap<String, TaskSpec>,
-    pub workflows: BTreeMap<String, WorkflowSpec>,
     pub docs: Docs,
 }
 
@@ -461,23 +460,6 @@ pub struct StepSpec {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExitPolicy {
     pub success_codes: UniqueVec<i32>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct WorkflowSpec {
-    /// Services that must be started and ready before any node runs.
-    pub services_required: UniqueVec<ServiceId>,
-    /// Bounded acyclic dependency graph of task nodes, keyed by node id.
-    pub nodes: BTreeMap<String, WorkflowNode>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct WorkflowNode {
-    pub task_id: TaskId,
-    /// Other node ids in the same workflow that must succeed first.
-    pub depends_on: UniqueVec<NodeId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

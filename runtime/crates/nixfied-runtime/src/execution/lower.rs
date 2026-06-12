@@ -12,7 +12,7 @@ use std::time::Duration;
 use nixfied_model::{
     ClosureSpec, Environment, InvocationSpec, Lifecycle, Model, OperationId, ProbeKind, ProbeSpec,
     ServiceId, ServiceSpec, StatePolicy, StepSpec, StopSpec, Target, TaskId, TaskKind, TaskSpec,
-    TerminalSemantics, WorkflowSpec,
+    TerminalSemantics,
 };
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
@@ -42,7 +42,6 @@ pub fn lower(model: &Model) -> RuntimeResult<ExecutionModel> {
         closures,
         services,
         tasks,
-        workflows,
         docs: _,
     } = model;
 
@@ -70,19 +69,9 @@ pub fn lower(model: &Model) -> RuntimeResult<ExecutionModel> {
         }
     }
 
-    // Resolve each environment/workflow reference against the maps just built, so
-    // every id the executor later follows is a handle proven to resolve. A miss is
-    // an admission rejection here, not a runtime `None`.
-    let lowered_workflows = workflows
-        .iter()
-        .map(|(id, workflow)| {
-            Ok((
-                id.clone(),
-                lower_workflow(workflow, &lowered_services, &lowered_tasks)?,
-            ))
-        })
-        .collect::<RuntimeResult<BTreeMap<_, _>>>()?;
-
+    // Resolve each environment reference against the maps just built, so every
+    // id the executor later follows is a handle proven to resolve. A miss is an
+    // admission rejection here, not a runtime `None`.
     let environment = match environments.values().next() {
         Some(environment) => lower_environment(
             environment,
@@ -109,7 +98,6 @@ pub fn lower(model: &Model) -> RuntimeResult<ExecutionModel> {
         tasks: lowered_tasks,
         composites: lowered_composites,
         environment,
-        workflows: lowered_workflows,
         slot_windows,
     })
 }
@@ -173,49 +161,6 @@ fn require_connects_to_closed(
     Ok(())
 }
 
-fn lower_workflow(
-    workflow: &WorkflowSpec,
-    services: &BTreeMap<ServiceId, ExecService>,
-    tasks: &BTreeMap<TaskId, ExecTask>,
-) -> RuntimeResult<ExecWorkflow> {
-    let WorkflowSpec {
-        services_required,
-        nodes,
-    } = workflow;
-    let resolved_services = services_required
-        .iter()
-        .map(|id| require_service("workflow.servicesRequired", services, id))
-        .collect::<Result<Vec<_>, Rejection>>()?;
-    let node_ids = nodes.keys().map(String::as_str).collect::<BTreeSet<_>>();
-    let resolved_nodes = nodes
-        .iter()
-        .map(|(node_id, node)| {
-            let task_id = require_task("workflow.node.taskId", tasks, &node.task_id)?;
-            let depends_on = node
-                .depends_on
-                .iter()
-                .map(|dependency| {
-                    if node_ids.contains(dependency.as_str()) {
-                        Ok(dependency.clone())
-                    } else {
-                        Err(undeclared("workflow.node.dependsOn", dependency.as_str()))
-                    }
-                })
-                .collect::<Result<Vec<_>, Rejection>>()?;
-            Ok(ExecWorkflowNode {
-                node_id: nixfied_model::NodeId::new(node_id),
-                task_id,
-                depends_on,
-            })
-        })
-        .collect::<Result<Vec<_>, Rejection>>()?;
-    require_connects_to_closed("workflow.servicesRequired", &resolved_services, services)?;
-    Ok(ExecWorkflow {
-        services_required: resolved_services,
-        nodes: resolved_nodes,
-    })
-}
-
 /// Resolve a service reference to a handle proven to exist among the lowered
 /// services; the returned `ServiceId` is the proof.
 fn require_service(
@@ -224,19 +169,6 @@ fn require_service(
     id: &ServiceId,
 ) -> Result<ServiceId, Rejection> {
     if services.contains_key(id) {
-        Ok(id.clone())
-    } else {
-        Err(undeclared(kind, id.as_str()))
-    }
-}
-
-/// Resolve a task reference to a handle proven to exist among the lowered tasks.
-fn require_task(
-    kind: &'static str,
-    tasks: &BTreeMap<TaskId, ExecTask>,
-    id: &TaskId,
-) -> Result<TaskId, Rejection> {
-    if tasks.contains_key(id) {
         Ok(id.clone())
     } else {
         Err(undeclared(kind, id.as_str()))
@@ -872,7 +804,7 @@ fn invocation_positions(model: &Model) -> Vec<(&OperationId, &InvocationSpec)> {
 /// Prove the *relational* invariants the per-reference resolver in `lower` cannot
 /// express on its own: every invocation references a declared codebase, closures
 /// match the target system, lifecycle/task operation ids are globally unique, an
-/// environment/workflow task requires only services that program starts, and
+/// environment task requires only services that program starts, and
 /// closure operation bindings name a declared operation. The single-reference
 /// existence checks (tool/service/task/node ids) are discharged where they are
 /// consumed — `lower` resolves each into a typed handle, so a dangling reference
@@ -940,28 +872,6 @@ fn prove_references(model: &Model) -> Result<(), Rejection> {
                 for service in &task.requires {
                     if !env_services.contains(service.as_str()) {
                         return Err(undeclared("environment.task.requires", service.as_str()));
-                    }
-                }
-            }
-        }
-    }
-
-    // The run plan starts only the workflow's servicesRequired, so a node task may
-    // require only those.
-    for (id, workflow) in &model.workflows {
-        if workflow.nodes.is_empty() {
-            return Err(undeclared("workflow.nodes", format!("{id} has no nodes")));
-        }
-        let required = workflow
-            .services_required
-            .iter()
-            .map(|service| service.as_str())
-            .collect::<BTreeSet<_>>();
-        for node in workflow.nodes.values() {
-            if let Some(task) = model.tasks.get(node.task_id.as_str()) {
-                for service in &task.requires {
-                    if !required.contains(service.as_str()) {
-                        return Err(undeclared("workflow.node.task.requires", service.as_str()));
                     }
                 }
             }
@@ -1096,7 +1006,6 @@ mod tests {
                     "artifactRefs": [], "logRefs": [], "summaryRefs": []
                 }
             },
-            "workflows": {},
             "docs": { "title": "t", "summary": "s" }
         })
     }
@@ -1279,35 +1188,6 @@ mod tests {
         assert_eq!(
             reject_reason(value),
             undeclared("environment.task.requires", "svc")
-        );
-    }
-
-    #[test]
-    fn workflow_node_task_must_be_declared() {
-        // Node-task existence is resolved by `lower` (it mints the typed
-        // handle), so a dangling `taskId` is rejected there, not in
-        // `prove_references`.
-        let mut value = model_value();
-        value["workflows"]["flow"] = json!({
-            "servicesRequired": [],
-            "nodes": { "n": { "taskId": "ghost", "dependsOn": [] } }
-        });
-        let error = lower(&model_from(value)).expect_err("a dangling node task must reject");
-        assert_eq!(error.code, ErrorCode::ModelAdmission);
-        assert!(error.message.contains("ghost"));
-    }
-
-    #[test]
-    fn workflow_node_task_deps_must_be_required() {
-        // Node task `t` requires `svc`, absent from the workflow's services.
-        let mut value = model_value();
-        value["workflows"]["flow"] = json!({
-            "servicesRequired": [],
-            "nodes": { "n": { "taskId": "t", "dependsOn": [] } }
-        });
-        assert_eq!(
-            reject_reason(value),
-            undeclared("workflow.node.task.requires", "svc")
         );
     }
 

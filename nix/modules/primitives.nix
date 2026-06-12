@@ -442,40 +442,4 @@ in
     };
   };
 
-  options.nixfied.workflows = mkOption {
-    type = types.attrsOf (
-      types.submodule {
-        options = {
-          servicesRequired = mkOption {
-            type = types.listOf types.str;
-            default = [ ];
-            description = "Services that must be ready before any node runs.";
-          };
-          nodes = mkOption {
-            # An attrset keyed by node id: a duplicate node id is a Nix evaluation
-            # error here, not a silent last-wins collapse downstream.
-            type = types.attrsOf (
-              types.submodule {
-                options = {
-                  taskId = mkOption {
-                    type = types.nonEmptyStr;
-                    description = "Task this node runs.";
-                  };
-                  dependsOn = mkOption {
-                    type = types.listOf types.str;
-                    default = [ ];
-                    description = "Node ids that must succeed before this node.";
-                  };
-                };
-              }
-            );
-            default = { };
-            description = "Bounded acyclic task dependency graph, keyed by node id.";
-          };
-        };
-      }
-    );
-    default = { };
-    description = "Declared workflows, keyed by workflow id.";
-  };
 }

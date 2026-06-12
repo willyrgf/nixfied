@@ -131,7 +131,6 @@ fn capabilities_view(model: &Model) -> Value {
         "slots": (model.slot_policy.min..=model.slot_policy.max).collect::<Vec<_>>(),
         "services": model.services.keys().collect::<Vec<_>>(),
         "tasks": model.tasks.keys().collect::<Vec<_>>(),
-        "workflows": model.workflows.keys().collect::<Vec<_>>(),
         "surfaces": SURFACE_NAMES,
     })
 }

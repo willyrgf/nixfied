@@ -7,7 +7,7 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use nixfied_model::{ContainmentRequirement, NodeId, OperationId, ServiceId, TaskId};
+use nixfied_model::{ContainmentRequirement, OperationId, ServiceId, TaskId};
 pub use nixfied_model::{LoopbackHost, StdinPolicy};
 
 /// A service's reuse identity, computed by the lowering from the service's actual
@@ -34,7 +34,6 @@ pub struct ExecutionModel {
     pub tasks: BTreeMap<TaskId, ExecTask>,
     pub composites: BTreeMap<TaskId, ExecComposite>,
     pub environment: ExecEnvironment,
-    pub workflows: BTreeMap<String, ExecWorkflow>,
     pub slot_windows: BTreeMap<u32, PortWindow>,
 }
 
@@ -61,20 +60,6 @@ pub struct ExecStep {
 pub struct ExecEnvironment {
     pub services: Vec<ServiceId>,
     pub tasks: Vec<TaskId>,
-}
-
-/// A bounded acyclic graph of task nodes over a set of required services.
-#[derive(Debug, Clone)]
-pub struct ExecWorkflow {
-    pub services_required: Vec<ServiceId>,
-    pub nodes: Vec<ExecWorkflowNode>,
-}
-
-#[derive(Debug, Clone)]
-pub struct ExecWorkflowNode {
-    pub node_id: NodeId,
-    pub task_id: TaskId,
-    pub depends_on: Vec<NodeId>,
 }
 
 /// A slot's candidate port window, the range the planner assigns service ports

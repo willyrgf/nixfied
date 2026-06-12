@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use nixfied_runtime::cancellation::{CancellationToken, ProcessSignalGuard};
-use nixfied_runtime::execution::{Selection, plan};
+use nixfied_runtime::execution::plan;
 use nixfied_runtime::registry::{Registry, RegistryIdentity, RunLeaseHeartbeat};
 use nixfied_runtime::service::task::TaskRun;
 use nixfied_runtime::service::{
@@ -69,12 +69,10 @@ struct RunOutput {
     task: Option<TaskRun>,
     #[serde(skip_serializing_if = "Option::is_none")]
     summary_path: Option<PathBuf>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    workflow_id: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    workflow_nodes: Vec<NodeResult>,
+    nodes: Vec<NodeResult>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    workflow_summary_path: Option<PathBuf>,
+    run_summary_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -255,14 +253,11 @@ fn run_m0_placed(
         );
     }
 
-    // A run drives either the environment's services+tasks, or a single workflow.
-    // The plan (service ports + task order) is a pure function of the lowered
-    // model and the slot, already proven feasible at admission.
-    let selection = match options.workflow.as_deref() {
-        Some(workflow_id) => Selection::Workflow(workflow_id),
-        None => Selection::Environment,
-    };
-    let plan = plan(&admission.execution_model, selection, selected_slot.slot)?;
+    // A run drives the environment's services plus its tasks (composites
+    // flattened with stable step paths). The plan (service ports + node order)
+    // is a pure function of the lowered model and the slot, already proven
+    // feasible at admission.
+    let plan = plan(&admission.execution_model, selected_slot.slot)?;
 
     // Record the run row before any service starts, so even a service-less
     // selection (a workflow/environment of only service-less tasks) leaves durable
@@ -321,14 +316,7 @@ fn run_m0_placed(
         ) {
             Ok(service) => service,
             Err(error) => {
-                let summary = write_failure_workflow_summary(
-                    placement,
-                    plan.workflow_id.as_deref(),
-                    run_id,
-                    &[],
-                    &started,
-                    &[],
-                );
+                let summary = write_failure_run_summary(placement, run_id, &[], &started, &[]);
                 teardown(
                     &mut started,
                     &mut registry,
@@ -354,14 +342,7 @@ fn run_m0_placed(
 
         let service = started.last_mut().expect("just pushed a service");
         if let Err(error) = service.wait_for_probe_ready_cancellable(&mut registry, cancellation) {
-            let summary = write_failure_workflow_summary(
-                placement,
-                plan.workflow_id.as_deref(),
-                run_id,
-                &[],
-                &started,
-                &[],
-            );
+            let summary = write_failure_run_summary(placement, run_id, &[], &started, &[]);
             teardown(
                 &mut started,
                 &mut registry,
@@ -376,14 +357,7 @@ fn run_m0_placed(
         }
         let service = started.last_mut().expect("just pushed a service");
         if let Err(error) = service.check_health_cancellable(&mut registry, cancellation) {
-            let summary = write_failure_workflow_summary(
-                placement,
-                plan.workflow_id.as_deref(),
-                run_id,
-                &[],
-                &started,
-                &[],
-            );
+            let summary = write_failure_run_summary(placement, run_id, &[], &started, &[]);
             teardown(
                 &mut started,
                 &mut registry,
@@ -451,14 +425,8 @@ fn run_m0_placed(
                 format!("task {task_id} depends on service {name} which was not started"),
             )
             .with_detail("failedNodeId", node.node_id.as_str());
-            let summary = write_failure_workflow_summary(
-                placement,
-                plan.workflow_id.as_deref(),
-                run_id,
-                &node_results,
-                &started,
-                &task_runs,
-            );
+            let summary =
+                write_failure_run_summary(placement, run_id, &node_results, &started, &task_runs);
             teardown(&mut started, &mut registry, options.timeout_ms, false);
             stop_lease(lease)?;
             return Err(with_failure_summary(error, summary));
@@ -522,9 +490,8 @@ fn run_m0_placed(
                     });
                     task_runs.push(task_run);
                 }
-                let summary = write_failure_workflow_summary(
+                let summary = write_failure_run_summary(
                     placement,
-                    plan.workflow_id.as_deref(),
                     run_id,
                     &node_results,
                     &started,
@@ -546,18 +513,14 @@ fn run_m0_placed(
     // (endpoints, instance ids) alongside the node and task results.
     let services_output = services_output(&started);
 
-    let workflow_summary_path = match &plan.workflow_id {
-        Some(workflow_id) => Some(write_workflow_summary(
-            placement,
-            workflow_id,
-            run_id,
-            true,
-            &node_results,
-            &services_output,
-            &task_runs,
-        )?),
-        None => None,
-    };
+    let run_summary_path = Some(write_run_summary(
+        placement,
+        run_id,
+        true,
+        &node_results,
+        &services_output,
+        &task_runs,
+    )?);
     let primary_task = task_runs.last().cloned();
     let output = RunOutput {
         run_id: run_id.to_string(),
@@ -567,9 +530,8 @@ fn run_m0_placed(
         summary_path: primary_task.as_ref().map(|task| task.summary_path.clone()),
         task: primary_task,
         tasks: task_runs,
-        workflow_id: plan.workflow_id.clone(),
-        workflow_nodes: node_results,
-        workflow_summary_path,
+        nodes: node_results,
+        run_summary_path,
     };
 
     if cancellation.is_canceled() {
@@ -577,7 +539,7 @@ fn run_m0_placed(
         stop_lease(lease)?;
         return Err(with_failure_summary(
             nixfied_runtime::cancellation::canceled_error(),
-            output.workflow_summary_path.clone(),
+            output.run_summary_path.clone(),
         ));
     }
     // Stop services in reverse start order. On a stop error, tear down the
@@ -595,10 +557,7 @@ fn run_m0_placed(
                 error.code == nixfied_runtime::ErrorCode::Canceled,
             );
             stop_lease(lease)?;
-            return Err(with_failure_summary(
-                error,
-                output.workflow_summary_path.clone(),
-            ));
+            return Err(with_failure_summary(error, output.run_summary_path.clone()));
         }
     }
     // Settle a run that no service stop and no task finalized (a degenerate
@@ -621,39 +580,27 @@ fn services_output(started: &[StartedService]) -> Vec<ServiceRunOutput> {
         .collect()
 }
 
-/// Write the workflow summary for a failed run — the nodes completed so far
-/// plus the failed node — so a failure leaves the same aggregate evidence a
-/// success does. Returns the path, or `None` when the run was not a workflow
-/// selection or the summary itself could not be written (the original failure
-/// must surface either way).
-fn write_failure_workflow_summary(
+/// Write the run summary for a failed run — the nodes completed so far plus
+/// the failed node — so a failure leaves the same aggregate evidence a success
+/// does. Returns the path, or `None` when the summary itself could not be
+/// written (the original failure must surface either way).
+fn write_failure_run_summary(
     placement: &nixfied_runtime::state::HostPlacement,
-    workflow_id: Option<&str>,
     run_id: &str,
     nodes: &[NodeResult],
     started: &[StartedService],
     tasks: &[TaskRun],
 ) -> Option<PathBuf> {
-    let workflow_id = workflow_id?;
     let services = services_output(started);
     // The run is failing regardless of what the recorded nodes say — a service
     // or spawn failure can leave zero failed nodes, which must not read as
     // success.
-    write_workflow_summary(
-        placement,
-        workflow_id,
-        run_id,
-        false,
-        nodes,
-        &services,
-        tasks,
-    )
-    .ok()
+    write_run_summary(placement, run_id, false, nodes, &services, tasks).ok()
 }
 
 fn with_failure_summary(error: RuntimeError, summary_path: Option<PathBuf>) -> RuntimeError {
     match summary_path {
-        Some(path) => error.with_detail("workflowSummaryPath", &path),
+        Some(path) => error.with_detail("runSummaryPath", &path),
         None => error,
     }
 }
@@ -682,23 +629,19 @@ fn stop_lease(lease: Option<RunLeaseHeartbeat>) -> Result<(), RuntimeError> {
     Ok(())
 }
 
-/// Write an aggregate per-workflow summary: the run id, overall success, the
-/// services started (with their resolved endpoints), and the per-node and
-/// per-task results — a complete, inspectable record of the workflow execution.
-fn write_workflow_summary(
+/// Write the aggregate run summary: the run id, overall success, the services
+/// started (with their resolved endpoints), and the per-node and per-task
+/// results — a complete, inspectable record of the run.
+fn write_run_summary(
     placement: &nixfied_runtime::state::HostPlacement,
-    workflow_id: &str,
     run_id: &str,
     run_succeeded: bool,
     nodes: &[NodeResult],
     services: &[ServiceRunOutput],
     tasks: &[TaskRun],
 ) -> Result<PathBuf, RuntimeError> {
-    let path = placement
-        .artifacts_dir
-        .join(format!("workflow-{workflow_id}.json"));
+    let path = placement.artifacts_dir.join("run-summary.json");
     let summary = serde_json::json!({
-        "workflowId": workflow_id,
         "runId": run_id,
         "success": run_succeeded && nodes.iter().all(|node| node.success),
         "services": services,
@@ -714,10 +657,7 @@ fn write_workflow_summary(
     std::fs::write(&path, bytes).map_err(|error| {
         RuntimeError::new(
             nixfied_runtime::ErrorCode::StateUnwritable,
-            format!(
-                "failed to write workflow summary {}: {error}",
-                path.display()
-            ),
+            format!("failed to write run summary {}: {error}", path.display()),
         )
     })?;
     Ok(path)
@@ -744,7 +684,6 @@ struct RunOptions {
     state_base: PathBuf,
     timeout_ms: u64,
     selection: RuntimeSelection,
-    workflow: Option<String>,
 }
 
 fn run_control(command: ControlCommand, args: &[String]) -> Result<(), RuntimeError> {
@@ -798,7 +737,6 @@ fn parse_run_options(args: &[String]) -> Result<RunOptions, RuntimeError> {
     let mut state_base = None;
     let mut timeout_ms = 5000;
     let mut slot = None;
-    let mut workflow = None;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
@@ -816,19 +754,6 @@ fn parse_run_options(args: &[String]) -> Result<RunOptions, RuntimeError> {
             "--slot" => {
                 index += 1;
                 slot = Some(parse_slot_arg(args.get(index), "--slot")?);
-            }
-            "--workflow" => {
-                index += 1;
-                workflow = Some(
-                    args.get(index)
-                        .ok_or_else(|| {
-                            RuntimeError::new(
-                                nixfied_runtime::ErrorCode::ModelAdmission,
-                                "missing --workflow value",
-                            )
-                        })?
-                        .clone(),
-                );
             }
             "--timeout-ms" => {
                 index += 1;
@@ -867,7 +792,6 @@ fn parse_run_options(args: &[String]) -> Result<RunOptions, RuntimeError> {
         state_base,
         timeout_ms,
         selection: RuntimeSelection { slot },
-        workflow,
     })
 }
 

@@ -65,19 +65,18 @@ pkgs.writeShellApplication {
     # Run one example as an adopter would, verify its emitted views project from
     # the model (nix-emitted == runtime-rederived), then clean.
     example() {
-      local name="$1" dir="$2" workflow="''${3:-}"
+      local name="$1" dir="$2"
       local model="$dir/model.json"
       echo "  example $name" >&2
       local st="$state/$name-state" wk="$state/$name-work"
       mkdir -p "$st" "$wk"
       local args=(run --model "$model" --timeout-ms 60000)
-      [ -n "$workflow" ] && args+=(--workflow "$workflow")
       ( cd "$wk" && NIXFIED_STATE_DIR="$st" "$rt" "''${args[@]}" ) \
         > "$artifacts/$name.json" 2> "$st/run.err" \
         || fail "$name: run failed — $(tail -n1 "$st/run.err")"
-      jq -e '(.services | length > 0) or (.workflowNodes | length > 0)' \
+      jq -e '(.services | length > 0) or (.nodes | length > 0)' \
         "$artifacts/$name.json" >/dev/null \
-        || fail "$name: run reported no services or workflow nodes"
+        || fail "$name: run reported no services or nodes"
       # The runtime re-derives each view from model.json; it must project the same
       # view nix emitted. Compare JSON semantically (formatting is not contract);
       # docs is text.
@@ -142,56 +141,61 @@ pkgs.writeShellApplication {
         >> "$state/summary.txt"
     }
 
-    # Fail-closed: selecting an undeclared workflow must be refused, and a workflow
-    # authored with a duplicate node id must not even compile (workflow `nodes` is
-    # an attrset keyed by node id, so a duplicate is a Nix evaluation error rather
-    # than a silent last-wins collapse).
+    # Fail-closed: a dead selection flag must be refused, a duplicate step name
+    # must not even compile (composite `steps` is an attrset keyed by step
+    # name, so a duplicate is a Nix evaluation error rather than a silent
+    # last-wins collapse), and broken composites must fail at evaluation.
     negative() {
-      echo "  negative (undeclared workflow must be refused)" >&2
+      echo "  negative (the removed --workflow flag must be refused)" >&2
       local st="$state/negative-state"
       mkdir -p "$st"
       if ( NIXFIED_STATE_DIR="$st" "$rt" run \
             --model "${models.minimal}/model.json" --workflow does-not-exist ) \
             >/dev/null 2>"$artifacts/negative-error.json"; then
-        fail "negative: the runtime accepted an undeclared workflow"
+        fail "negative: the runtime accepted the removed --workflow flag"
       fi
 
       echo "  negative (run failure must carry run identity and state paths)" >&2
-      # The error JSON is the final stderr line; progress/warning lines precede it.
-      tail -n 1 "$artifacts/negative-error.json" \
+      # A genuine run failure: a composite whose step leaf deterministically
+      # fails (it dials a port nothing listens on).
+      if ( NIXFIED_STATE_DIR="$st/identity" "$rt" run \
+            --model "${models.negativeFail}/model.json" ) \
+            >/dev/null 2>"$artifacts/negative-fail.json"; then
+        fail "negative: the failing composite run reported success"
+      fi
+      tail -n 1 "$artifacts/negative-fail.json" \
         | jq -e '.details.runId and .details.stateRoot and .details.logsDir' >/dev/null \
         || fail "negative: failure JSON is missing runId/stateRoot/logsDir details"
 
-      echo "  negative (duplicate workflow node id must not compile)" >&2
+      echo "  negative (duplicate step name must not compile)" >&2
       if nix eval --expr \
-            '{ nodes = { dup = { taskId = "a"; }; dup = { taskId = "b"; }; }; }' \
+            '{ steps = { dup = { task = "a"; }; dup = { task = "b"; }; }; }' \
             >/dev/null 2>&1; then
-        fail "negative: a duplicate workflow node id evaluated successfully"
+        fail "negative: a duplicate step name evaluated successfully"
       fi
 
-      # Workflow structural validation is the Nix layer's job: a broken or cyclic
-      # workflow must throw at evaluation, never compile into a model the runtime
-      # only rejects later. Each case overrides the valid workflow example and must
-      # fail to build. `getAttr currentSystem flake.lib` keeps the expr free of any
-      # dollar-brace, so neither the shell nor the surrounding Nix string rewrites it.
-      echo "  negative (invalid workflows must fail at nix evaluation)" >&2
-      reject_workflow() {
+      # Composite structural validation is the Nix layer's job: a broken or
+      # cyclic composite must throw at evaluation, never compile into a model
+      # the runtime only rejects later. Each case overrides the valid workflow
+      # example and must fail to build. `getAttr currentSystem flake.lib` keeps
+      # the expr free of any dollar-brace, so neither the shell nor the
+      # surrounding Nix string rewrites it.
+      echo "  negative (invalid composites must fail at nix evaluation)" >&2
+      reject_composite() {
         if nix build --no-link --impure --expr \
             "let flake = builtins.getFlake (toString $checkout); compileModel = (builtins.getAttr builtins.currentSystem flake.lib).compileModel; in compileModel ({ lib, ... }: { imports = [ $checkout/examples/workflow/nixfied.nix ]; $2 })" \
             >/dev/null 2>&1; then
           fail "negative: $1 compiled instead of failing at evaluation"
         fi
       }
-      reject_workflow "undeclared workflow service" \
-        'nixfied.workflows.pipeline.servicesRequired = lib.mkForce [ "ghost" ];'
-      reject_workflow "undeclared workflow node task" \
-        'nixfied.workflows.pipeline.nodes.bad.taskId = "missing-task";'
-      reject_workflow "dependsOn an unknown node" \
-        'nixfied.workflows.pipeline.nodes.verify.dependsOn = lib.mkForce [ "ghost-node" ];'
-      reject_workflow "an empty workflow" \
-        'nixfied.workflows.pipeline.nodes = lib.mkForce { };'
-      reject_workflow "a cyclic workflow" \
-        'nixfied.workflows.pipeline.nodes.probe.dependsOn = lib.mkForce [ "verify" ];'
+      reject_composite "an undeclared step task" \
+        'nixfied.tasks.pipeline.steps.bad.task = "missing-task";'
+      reject_composite "dependsOn an unknown step" \
+        'nixfied.tasks.pipeline.steps.verify.dependsOn = lib.mkForce [ "ghost-step" ];'
+      reject_composite "an empty composite" \
+        'nixfied.tasks.pipeline.steps = lib.mkForce { };'
+      reject_composite "a cyclic step graph" \
+        'nixfied.tasks.pipeline.steps.probe.dependsOn = lib.mkForce [ "verify" ];'
     }
 
     # The state lifecycle matrix over one shared state dir: second run (adopt),
@@ -349,9 +353,9 @@ pkgs.writeShellApplication {
     echo "==> examples (run + views + clean)" >&2
     example minimal "${models.minimal}"
     example postgres "${models.postgres}"
-    example workflow "${models.workflow}" pipeline
+    example workflow "${models.workflow}"
     example polyglot "${models.polyglot}"
-    example downstream "${models.downstream}" release
+    example downstream "${models.downstream}"
     example reth "${models.reth}"
     echo "==> slots" >&2
     slots

@@ -80,7 +80,6 @@ fn valid_model_json() -> Value {
         "tasks": {
             "smoke": smoke_task()
         },
-        "workflows": {},
         "docs": {
             "title": "M0 Example",
             "summary": "Minimal M0 model contract fixture."
@@ -297,27 +296,20 @@ fn abi_mismatch_is_contract_error() {
     );
 }
 
-fn with_workflow(value: &mut Value, nodes: Value) {
-    value["workflows"]["pipeline"] = json!({
-        "servicesRequired": ["synthetic"],
-        "nodes": nodes,
-    });
-}
-
 #[test]
-fn accepts_a_bounded_acyclic_workflow() {
+fn accepts_a_bounded_acyclic_composite() {
     let mut value = valid_model_json();
-    with_workflow(
-        &mut value,
-        json!({
-            "first": { "taskId": "smoke", "dependsOn": [] },
-            "second": { "taskId": "smoke", "dependsOn": ["first"] }
-        }),
-    );
+    value["tasks"]["pipeline"] = json!({
+        "kind": "composite",
+        "steps": {
+            "first": { "task": "smoke" },
+            "second": { "task": "smoke", "dependsOn": ["first"] }
+        }
+    });
     let model: Model = serde_json::from_value(value).expect("model should deserialize");
     model
         .validate()
-        .expect("a bounded acyclic workflow is valid");
+        .expect("a bounded acyclic composite is valid");
 }
 
 #[test]

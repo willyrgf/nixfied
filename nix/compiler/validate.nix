@@ -52,45 +52,14 @@ let
   endpointHostsLoopback = lib.all (
     name: lib.all isLoopbackHost (serviceHosts services.${name})
   ) (builtins.attrNames services);
-  # Workflow structural validation: a broken or cyclic workflow is invalid intent
-  # that must fail at evaluation, not compile into an admitted model the runtime
-  # only rejects later. Rust lowering keeps the same checks as a fail-closed
-  # backstop; the contract is that this layer is authoritative.
-  tasks = config.nixfied.tasks;
-  workflows = config.nixfied.workflows;
-  workflowNames = builtins.attrNames workflows;
-  nodeNames = wf: builtins.attrNames workflows.${wf}.nodes;
-  workflowServicesDeclared = lib.all (
-    wf: lib.all (svc: builtins.hasAttr svc services) workflows.${wf}.servicesRequired
-  ) workflowNames;
-  workflowTasksDeclared = lib.all (
-    wf: lib.all (node: builtins.hasAttr workflows.${wf}.nodes.${node}.taskId tasks) (nodeNames wf)
-  ) workflowNames;
-  workflowDependsOnDeclared = lib.all (
-    wf:
-    lib.all (
-      node: lib.all (dep: builtins.elem dep (nodeNames wf)) workflows.${wf}.nodes.${node}.dependsOn
-    ) (nodeNames wf)
-  ) workflowNames;
-  workflowsNonEmpty = lib.all (wf: workflows.${wf}.nodes != { }) workflowNames;
-  # Walking with a `seen` set terminates even on cycles; reaching the start node
-  # again is the cycle proof. dependsOn references are validated above, so every
-  # `current` here resolves.
-  workflowReaches =
-    wf: start: current: seen:
-    lib.any (
-      dep:
-      dep == start || (!(builtins.elem dep seen) && workflowReaches wf start dep (seen ++ [ dep ]))
-    ) workflows.${wf}.nodes.${current}.dependsOn;
-  workflowsAcyclic = lib.all (
-    wf: lib.all (node: !(workflowReaches wf node node [ ])) (nodeNames wf)
-  ) workflowNames;
   # Task kind/field coherence, composite graph validity, and step-path id
   # discipline: invalid composition must fail at evaluation, not compile into
   # a model the runtime only rejects at admission.
+  tasks = config.nixfied.tasks;
   taskNames = builtins.attrNames tasks;
   stepSafe = id: builtins.match "[A-Za-z0-9][A-Za-z0-9_-]*" id != null;
-  taskIdsStepSafe = lib.all stepSafe taskNames && lib.all stepSafe (builtins.attrNames services);
+  taskIdsStepSafe =
+    lib.all stepSafe taskNames && lib.all stepSafe (builtins.attrNames services);
   leafTasks = lib.filterAttrs (_n: task: task.kind == "leaf") tasks;
   compositeTasks = lib.filterAttrs (_n: task: task.kind == "composite") tasks;
   leavesCoherent = lib.all (
@@ -152,7 +121,9 @@ let
     lib.any (
       target:
       builtins.hasAttr target tasks
-      && (target == start || (!(builtins.elem target seen) && taskReaches start target (seen ++ [ target ])))
+      && (
+        target == start || (!(builtins.elem target seen) && taskReaches start target (seen ++ [ target ]))
+      )
     ) (taskRefsOf current);
   taskGraphAcyclic = lib.all (name: !(taskReaches name name [ ])) taskNames;
   checks = [
@@ -183,13 +154,6 @@ let
     )
     (expect connectsToDeclared "service connectsTo targets must be declared services")
     (expect connectsToAcyclic "service connectsTo graph must be acyclic")
-    (expect workflowServicesDeclared "workflow servicesRequired must name declared services")
-    (expect workflowTasksDeclared "workflow node taskId must name a declared task")
-    (expect workflowDependsOnDeclared
-      "workflow node dependsOn must name a node in the same workflow"
-    )
-    (expect workflowsNonEmpty "a declared workflow must declare at least one node")
-    (expect workflowsAcyclic "workflow node dependency graph must be acyclic")
     (expect taskIdsStepSafe "task and service ids must match [A-Za-z0-9][A-Za-z0-9_-]* (step-path segments)")
     (expect leavesCoherent "a leaf task must declare operationId and invocation and no steps")
     (expect compositesCoherent

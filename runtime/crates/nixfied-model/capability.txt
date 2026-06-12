@@ -4,7 +4,7 @@ model-version: 1
 # The wire primitives the runtime admits and lowers. A field added or removed
 # here is a contract change; editing this manifest rotates the runtime ABI digest
 # so models emitted against the old contract are rejected by the identity check.
-primitive Model: modelVersion toolchainId runtimeAbi generator project target codebases environments slotPolicy placement state closures services tasks workflows docs
+primitive Model: modelVersion toolchainId runtimeAbi generator project target codebases environments slotPolicy placement state closures services tasks docs
 primitive Generator: name version emitter
 primitive Project: projectId name
 primitive Target: system os arch closureSystem
@@ -32,8 +32,6 @@ primitive TerminalSemantics: success failure
 primitive TaskSpec: kind operationId invocation requires exitPolicy steps artifactRefs logRefs summaryRefs
 primitive StepSpec: task dependsOn
 primitive ExitPolicy: successCodes
-primitive WorkflowSpec: servicesRequired nodes
-primitive WorkflowNode: taskId dependsOn
 primitive Docs: title summary
 
 # The invocation arg/env placeholder grammar the runtime substitutes. Bare forms

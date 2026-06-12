@@ -128,13 +128,14 @@ fn source_admission_records_invocation_root() {
 
 #[test]
 fn lowering_failure_carries_model_provenance() {
-    // A workflow node referencing an undeclared task fails during lowering, not
-    // parse/origin/abi/closure checks. That admission error must still carry the
-    // model path and computed hash, like every other admission failure.
+    // A composite step referencing an undeclared task fails during lowering,
+    // not parse/origin/abi/closure checks. That admission error must still
+    // carry the model path and computed hash, like every other admission
+    // failure.
     let mut model = fixture_model();
-    model["workflows"]["pipeline"] = json!({
-        "servicesRequired": ["synthetic"],
-        "nodes": { "build": { "taskId": "missing-task", "dependsOn": [] } }
+    model["tasks"]["pipeline"] = json!({
+        "kind": "composite",
+        "steps": { "build": { "task": "missing-task" } }
     });
     let (_tmp, model_path, closure_root) = write_fixture_model(model, true);
     let loaded = load_model(&model_path).expect("fixture should load");
@@ -144,7 +145,7 @@ fn lowering_failure_carries_model_provenance() {
         host_system: host_system(),
     };
     let error =
-        Admission::check(&loaded, &context).expect_err("undeclared workflow task must be refused");
+        Admission::check(&loaded, &context).expect_err("undeclared step task must be refused");
 
     assert_eq!(error.code, ErrorCode::ModelAdmission);
     assert!(

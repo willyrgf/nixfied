@@ -81,12 +81,6 @@ fn validate_unit_ids(model: &Model) -> Result<(), ValidationError> {
     for id in model.tasks.keys() {
         require_step_safe_id("tasks", id)?;
     }
-    for (id, workflow) in &model.workflows {
-        require_path_safe_id("workflows", id)?;
-        for node_id in workflow.nodes.keys() {
-            require_path_safe_id("workflows.nodes", node_id)?;
-        }
-    }
     Ok(())
 }
 

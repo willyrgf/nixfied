@@ -50,7 +50,6 @@ in
     inherit slots;
     services = serviceNames;
     tasks = taskNames;
-    workflows = attrNames model.workflows;
     surfaces = surfaceNames;
   };
 

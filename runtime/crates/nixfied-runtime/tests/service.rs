@@ -3431,7 +3431,7 @@ fn find_file(root: &Path, name: &str) -> Option<PathBuf> {
 }
 
 #[test]
-fn failed_workflow_run_writes_failure_summary() {
+fn failed_composite_run_writes_failure_summary() {
     let Some(shell) = nix_store_executable(&["sh", "bash"]) else {
         return;
     };
@@ -3447,16 +3447,18 @@ fn failed_workflow_run_writes_failure_summary() {
     );
     value["closures"]["synthetic-helper"]["storePath"] = json!(closure_root.to_string_lossy());
     value["closures"]["synthetic-helper"]["executable"] = json!(shell.to_string_lossy());
-    // A 0-service workflow whose single node fails: the run must leave the same
-    // aggregate workflow evidence a success does, linked from the error.
+    // A 0-service composite whose single node fails: the run must leave the
+    // same aggregate evidence a success does, linked from the error.
     value["tasks"]["smoke"]["requires"] = json!([]);
     set_task_run_args(&mut value, &["-c", "exit 3"]);
-    value["workflows"]["wf"] = json!({
-        "servicesRequired": [],
-        "nodes": {
-            "fail-node": { "taskId": "smoke", "dependsOn": [] }
+    value["environments"]["dev"]["services"] = json!([]);
+    value["tasks"]["wf"] = json!({
+        "kind": "composite",
+        "steps": {
+            "fail-node": { "task": "smoke" }
         }
     });
+    value["environments"]["dev"]["tasks"] = json!(["wf"]);
     let model: Model = serde_json::from_value(value).expect("failure fixture model should parse");
     let tmp = TempDir::new();
     let model_path = tmp.path.join("model.json");
@@ -3475,8 +3477,6 @@ fn failed_workflow_run_writes_failure_summary() {
         .arg(&model_path)
         .arg("--state-base")
         .arg(&state_base)
-        .arg("--workflow")
-        .arg("wf")
         .current_dir(&tmp.path)
         .output()
         .expect("runtime run should execute");
@@ -3488,17 +3488,17 @@ fn failed_workflow_run_writes_failure_summary() {
     assert!(details["runId"].is_string(), "error must carry the run id");
     assert!(details["stateRoot"].is_string());
     assert!(details["logsDir"].is_string());
-    assert_eq!(details["failedNodeId"], json!("fail-node"));
-    let summary_path = details["workflowSummaryPath"]
+    assert_eq!(details["failedNodeId"], json!("wf.fail-node"));
+    let summary_path = details["runSummaryPath"]
         .as_str()
-        .expect("error must link the workflow summary");
+        .expect("error must link the run summary");
     let summary: Value =
-        serde_json::from_slice(&fs::read(summary_path).expect("workflow summary should exist"))
-            .expect("workflow summary should parse");
+        serde_json::from_slice(&fs::read(summary_path).expect("run summary should exist"))
+            .expect("run summary should parse");
     assert_eq!(summary["success"], json!(false));
     let nodes = summary["nodes"].as_array().expect("nodes should be array");
     assert_eq!(nodes.len(), 1);
-    assert_eq!(nodes[0]["nodeId"], json!("fail-node"));
+    assert_eq!(nodes[0]["nodeId"], json!("wf.fail-node"));
     assert_eq!(nodes[0]["success"], json!(false));
     assert_eq!(nodes[0]["exitCode"], json!(3));
     let stdout_path = details["stdoutPath"]
@@ -3522,12 +3522,13 @@ fn service_failure_before_any_node_writes_failed_summary() {
     let mut value = fixture_model(&shell.to_string_lossy(), &["-c", "exit 1"], port);
     value["closures"]["synthetic-helper"]["storePath"] = json!(closure_root.to_string_lossy());
     value["closures"]["synthetic-helper"]["executable"] = json!(shell.to_string_lossy());
-    value["workflows"]["wf"] = json!({
-        "servicesRequired": ["synthetic"],
-        "nodes": {
-            "never-runs": { "taskId": "smoke", "dependsOn": [] }
+    value["tasks"]["wf"] = json!({
+        "kind": "composite",
+        "steps": {
+            "never-runs": { "task": "smoke" }
         }
     });
+    value["environments"]["dev"]["tasks"] = json!(["wf"]);
     let model: Model = serde_json::from_value(value).expect("failure fixture model should parse");
     let tmp = TempDir::new();
     let model_path = tmp.path.join("model.json");
@@ -3546,20 +3547,18 @@ fn service_failure_before_any_node_writes_failed_summary() {
         .arg(&model_path)
         .arg("--state-base")
         .arg(&state_base)
-        .arg("--workflow")
-        .arg("wf")
         .current_dir(&tmp.path)
         .output()
         .expect("runtime run should execute");
 
     assert!(!output.status.success(), "the run must fail");
     let error: Value = stderr_json(&output.stderr);
-    let summary_path = error["details"]["workflowSummaryPath"]
+    let summary_path = error["details"]["runSummaryPath"]
         .as_str()
-        .expect("error must link the workflow summary");
+        .expect("error must link the run summary");
     let summary: Value =
-        serde_json::from_slice(&fs::read(summary_path).expect("workflow summary should exist"))
-            .expect("workflow summary should parse");
+        serde_json::from_slice(&fs::read(summary_path).expect("run summary should exist"))
+            .expect("run summary should parse");
     assert_eq!(
         summary["success"],
         json!(false),

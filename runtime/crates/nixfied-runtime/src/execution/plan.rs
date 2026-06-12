@@ -8,14 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use nixfied_model::{NodeId, ServiceId, TaskId};
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
-use crate::execution::types::{ExecWorkflow, ExecutionModel, PortWindow};
-
-/// Which program a run drives: the environment's services + tasks, or a workflow.
-#[derive(Debug, Clone, Copy)]
-pub enum Selection<'a> {
-    Environment,
-    Workflow(&'a str),
-}
+use crate::execution::types::{ExecutionModel, PortWindow};
 
 /// A concrete, executable plan for one slot: services bound to ports in start
 /// order, and tasks in execution order.
@@ -23,7 +16,6 @@ pub enum Selection<'a> {
 pub struct RunPlan {
     pub services: Vec<ServiceBinding>,
     pub nodes: Vec<PlanNode>,
-    pub workflow_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,7 +33,7 @@ pub struct PlanNode {
     pub task_id: TaskId,
 }
 
-pub fn plan(model: &ExecutionModel, selection: Selection<'_>, slot: u32) -> RuntimeResult<RunPlan> {
+pub fn plan(model: &ExecutionModel, slot: u32) -> RuntimeResult<RunPlan> {
     let window = model.slot_windows.get(&slot).ok_or_else(|| {
         RuntimeError::new(
             ErrorCode::ModelAdmission,
@@ -49,34 +41,11 @@ pub fn plan(model: &ExecutionModel, selection: Selection<'_>, slot: u32) -> Runt
         )
     })?;
 
-    let (service_names, nodes, workflow_id) = match selection {
-        Selection::Environment => {
-            let mut nodes = Vec::new();
-            for task_id in &model.environment.tasks {
-                nodes.extend(flatten_task(model, task_id)?);
-            }
-            (model.environment.services.clone(), nodes, None)
-        }
-        Selection::Workflow(id) => {
-            let workflow = model.workflows.get(id).ok_or_else(|| {
-                RuntimeError::new(
-                    ErrorCode::ModelAdmission,
-                    format!("workflow {id} is missing"),
-                )
-            })?;
-            let nodes = topological_order(workflow).ok_or_else(|| {
-                RuntimeError::new(
-                    ErrorCode::ModelAdmission,
-                    format!("workflow {id} graph is not acyclic"),
-                )
-            })?;
-            (
-                workflow.services_required.clone(),
-                nodes,
-                Some(id.to_string()),
-            )
-        }
-    };
+    let service_names = model.environment.services.clone();
+    let mut nodes = Vec::new();
+    for task_id in &model.environment.tasks {
+        nodes.extend(flatten_task(model, task_id)?);
+    }
 
     // Ports are assigned by *declared* order (stable, predictable addressing —
     // wiring changes never move a service's port), then the bindings are
@@ -84,11 +53,7 @@ pub fn plan(model: &ExecutionModel, selection: Selection<'_>, slot: u32) -> Runt
     // dependent spawns. Lowering proved the graph acyclic and closed under the
     // selection, so the sort always completes.
     let services = order_for_start(assign_ports(&service_names, model, *window, slot)?, model);
-    Ok(RunPlan {
-        services,
-        nodes,
-        workflow_id,
-    })
+    Ok(RunPlan { services, nodes })
 }
 
 /// Stable topological order over the connectsTo graph: among services whose
@@ -305,56 +270,11 @@ fn flatten_task(model: &ExecutionModel, root: &TaskId) -> RuntimeResult<Vec<Plan
     Ok(ordered)
 }
 
-/// Deterministic topological order of workflow nodes; `None` on a cycle.
-fn topological_order(workflow: &ExecWorkflow) -> Option<Vec<PlanNode>> {
-    let mut pending: BTreeMap<&str, BTreeSet<&str>> = workflow
-        .nodes
-        .iter()
-        .map(|node| {
-            (
-                node.node_id.as_str(),
-                node.depends_on.iter().map(|id| id.as_str()).collect(),
-            )
-        })
-        .collect();
-    let task_by_node: BTreeMap<&str, &str> = workflow
-        .nodes
-        .iter()
-        .map(|node| (node.node_id.as_str(), node.task_id.as_str()))
-        .collect();
-    let mut ordered = Vec::new();
-    while !pending.is_empty() {
-        let ready: Vec<&str> = pending
-            .iter()
-            .filter(|(_, deps)| deps.is_empty())
-            .map(|(id, _)| *id)
-            .collect();
-        if ready.is_empty() {
-            return None;
-        }
-        for node_id in ready {
-            pending.remove(node_id);
-            for deps in pending.values_mut() {
-                deps.remove(node_id);
-            }
-            ordered.push(PlanNode {
-                node_id: NodeId::new(node_id),
-                task_id: TaskId::new(task_by_node[node_id]),
-            });
-        }
-    }
-    Some(ordered)
-}
-
-/// Prove a concrete plan exists for every slot in the policy range and for the
-/// environment and every workflow selection. Admission calls this so "admitted"
-/// implies "runnable for any slot/selection the user can pick".
+/// Prove a concrete plan exists for every slot in the policy range. Admission
+/// calls this so "admitted" implies "runnable for any slot the user can pick".
 pub fn prove_all_plans_feasible(model: &ExecutionModel) -> RuntimeResult<()> {
     for &slot in model.slot_windows.keys() {
-        plan(model, Selection::Environment, slot)?;
-        for workflow_id in model.workflows.keys() {
-            plan(model, Selection::Workflow(workflow_id), slot)?;
-        }
+        plan(model, slot)?;
     }
     Ok(())
 }
@@ -366,7 +286,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::time::Duration;
 
-    use nixfied_model::{ContainmentRequirement, NodeId, OperationId, ServiceId, TaskId};
+    use nixfied_model::{ContainmentRequirement, OperationId, ServiceId, TaskId};
 
     use crate::execution::ServiceIdentity;
 
@@ -461,7 +381,6 @@ mod tests {
                 services: env_services.into_iter().map(ServiceId::new).collect(),
                 tasks: Vec::new(),
             },
-            workflows: BTreeMap::new(),
             slot_windows: windows
                 .into_iter()
                 .map(|(slot, start, end)| (slot, PortWindow { start, end }))
@@ -472,7 +391,7 @@ mod tests {
     #[test]
     fn assigns_ports_from_window_start_in_order() {
         let em = model(vec!["a", "b"], vec!["a", "b"], vec![(0, 23080, 23090)]);
-        let plan = plan(&em, Selection::Environment, 0).expect("plan exists");
+        let plan = plan(&em, 0).expect("plan exists");
         assert_eq!(
             plan.services,
             vec![
@@ -491,7 +410,7 @@ mod tests {
     #[test]
     fn rejects_when_window_cannot_host_all_services() {
         let em = model(vec!["a", "b"], vec!["a", "b"], vec![(0, 23080, 23080)]);
-        let error = plan(&em, Selection::Environment, 0).expect_err("window too small");
+        let error = plan(&em, 0).expect_err("window too small");
         assert_eq!(error.code, ErrorCode::PortConflict);
     }
 
@@ -503,11 +422,9 @@ mod tests {
             vec!["a", "b"],
             vec![(0, 23080, 23090), (1, 24000, 24000)],
         );
-        assert!(plan(&em, Selection::Environment, 0).is_ok());
+        assert!(plan(&em, 0).is_ok());
         assert_eq!(
-            plan(&em, Selection::Environment, 1)
-                .expect_err("slot 1 too small")
-                .code,
+            plan(&em, 1).expect_err("slot 1 too small").code,
             ErrorCode::PortConflict
         );
         assert_eq!(
@@ -558,7 +475,7 @@ mod tests {
     }
 
     fn plan_paths(em: &ExecutionModel) -> Vec<String> {
-        plan(em, Selection::Environment, 0)
+        plan(em, 0)
             .expect("plan exists")
             .nodes
             .iter()
@@ -629,7 +546,7 @@ mod tests {
             ],
             vec!["a"],
         );
-        let error = plan(&em, Selection::Environment, 0).expect_err("cycle must reject");
+        let error = plan(&em, 0).expect_err("cycle must reject");
         assert_eq!(error.code, ErrorCode::ModelAdmission);
         assert!(error.message.contains("cycle"), "{}", error.message);
     }
@@ -644,60 +561,9 @@ mod tests {
             )],
             vec!["spin"],
         );
-        let error = plan(&em, Selection::Environment, 0).expect_err("cycle must reject");
+        let error = plan(&em, 0).expect_err("cycle must reject");
         assert_eq!(error.code, ErrorCode::ModelAdmission);
         assert!(error.message.contains("cycle"), "{}", error.message);
-    }
-
-    #[test]
-    fn workflow_nodes_are_topologically_ordered() {
-        let mut em = model(vec!["a"], vec!["a"], vec![(0, 23080, 23090)]);
-        em.workflows.insert(
-            "wf".to_string(),
-            ExecWorkflow {
-                services_required: vec![ServiceId::new("a")],
-                nodes: vec![
-                    ExecWorkflowNode {
-                        node_id: NodeId::new("second"),
-                        task_id: TaskId::new("t"),
-                        depends_on: vec![NodeId::new("first")],
-                    },
-                    ExecWorkflowNode {
-                        node_id: NodeId::new("first"),
-                        task_id: TaskId::new("t"),
-                        depends_on: vec![],
-                    },
-                ],
-            },
-        );
-        let plan = plan(&em, Selection::Workflow("wf"), 0).expect("workflow plans");
-        let order: Vec<&str> = plan.nodes.iter().map(|n| n.node_id.as_str()).collect();
-        assert_eq!(order, vec!["first", "second"]);
-        assert_eq!(plan.workflow_id.as_deref(), Some("wf"));
-    }
-
-    #[test]
-    fn rejects_a_cyclic_workflow() {
-        let mut em = model(vec!["a"], vec!["a"], vec![(0, 23080, 23090)]);
-        em.workflows.insert(
-            "wf".to_string(),
-            ExecWorkflow {
-                services_required: vec![ServiceId::new("a")],
-                nodes: vec![
-                    ExecWorkflowNode {
-                        node_id: NodeId::new("x"),
-                        task_id: TaskId::new("t"),
-                        depends_on: vec![NodeId::new("y")],
-                    },
-                    ExecWorkflowNode {
-                        node_id: NodeId::new("y"),
-                        task_id: TaskId::new("t"),
-                        depends_on: vec![NodeId::new("x")],
-                    },
-                ],
-            },
-        );
-        assert!(plan(&em, Selection::Workflow("wf"), 0).is_err());
     }
 
     #[test]
@@ -713,7 +579,7 @@ mod tests {
             .get_mut(&ServiceId::new("app"))
             .expect("app exists")
             .connects_to = vec![ServiceId::new("db")];
-        let plan = plan(&em, Selection::Environment, 0).expect("plan exists");
+        let plan = plan(&em, 0).expect("plan exists");
         assert_eq!(
             plan.services,
             vec![
@@ -753,7 +619,7 @@ mod tests {
         }
         multi.endpoints.remove("e");
         multi.primary_endpoint = "a".to_string();
-        let plan = plan(&em, Selection::Environment, 0).expect("plan exists");
+        let plan = plan(&em, 0).expect("plan exists");
         let multi_ports = &plan
             .services
             .iter()
@@ -782,7 +648,7 @@ mod tests {
         // Two single-endpoint services need two ports; a one-port window cannot.
         let em = model(vec!["a", "b"], vec!["a", "b"], vec![(0, 23080, 23080)]);
         assert_eq!(
-            plan(&em, Selection::Environment, 0)
+            plan(&em, 0)
                 .expect_err("window too small for the endpoint block")
                 .code,
             ErrorCode::PortConflict

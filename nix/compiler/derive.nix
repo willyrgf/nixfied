@@ -300,16 +300,6 @@ let
     inherit (env) services tasks;
   }) config.nixfied.environments;
 
-  workflowSpec = _name: workflow: {
-    servicesRequired = workflow.servicesRequired;
-    # `nodes` is already an attrset keyed by node id (a duplicate id cannot
-    # survive evaluation), so the model object is a direct projection.
-    nodes = mapAttrs (_nodeId: node: {
-      taskId = node.taskId;
-      dependsOn = node.dependsOn;
-    }) workflow.nodes;
-  };
-  workflows = mapAttrs workflowSpec config.nixfied.workflows;
 in
 {
   packages = closurePackages;
@@ -354,7 +344,6 @@ in
       closures
       services
       tasks
-      workflows
       ;
     docs = {
       title = config.nixfied.project.name;

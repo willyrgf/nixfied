@@ -104,6 +104,34 @@
               nixfied.state.stateEpoch = "2";
             }
           );
+          # A deterministically failing composite (its leaf dials a closed
+          # port), for the gate's failure-identity negative check.
+          negativeFailModel = nixfiedLib.compileModel (
+            { ... }:
+            {
+              imports = [ ./examples/minimal/nixfied.nix ];
+              nixfied.closures.synthetic-helper.operationBindings = [ "task.always-fails.run" ];
+              nixfied.tasks.always-fails = {
+                operationId = "task.always-fails.run";
+                invocation = {
+                  tools = [ "synthetic-helper" ];
+                  run = [
+                    "nixfied-synthetic-helper"
+                    "task"
+                    "--host"
+                    "127.0.0.1"
+                    "--port"
+                    "1"
+                  ];
+                };
+              };
+              nixfied.tasks.failing = {
+                kind = "composite";
+                steps.boom.task = "always-fails";
+              };
+              nixfied.environments.dev.tasks = [ "failing" ];
+            }
+          );
           postgresSlowModel = nixfiedLib.compileModel (
             { lib, ... }:
             {
@@ -141,6 +169,7 @@
               minimalB = minimalModelB;
               minimalEpoch2 = minimalModelEpoch2;
               postgresSlow = postgresSlowModel;
+              negativeFail = negativeFailModel;
             };
           };
           # `.#check` / `.#test` / `.#ci`: the framework's own source/test/CI gate.

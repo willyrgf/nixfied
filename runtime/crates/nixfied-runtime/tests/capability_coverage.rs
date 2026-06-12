@@ -21,11 +21,9 @@ const MAP_FIELDS: &[&str] = &[
     "closures",
     "tasks",
     "steps",
-    "workflows",
     "environments",
     "slotPlacements",
     "endpoints",
-    "nodes",
     "env",
 ];
 
@@ -50,15 +48,9 @@ fn collect_fields(value: &Value, in_map: bool, out: &mut BTreeSet<String>) {
 
 #[test]
 fn capability_descriptor_names_every_wire_field() {
-    // The synthetic fixture omits workflows; inject a minimal one so the
-    // WorkflowSpec/WorkflowNode fields are exercised too.
-    let mut model = synthetic_model_default(23080, 23090);
-    model["workflows"]["wf"] = json!({
-        "servicesRequired": ["synthetic"],
-        "nodes": { "n": { "taskId": "smoke", "dependsOn": [] } }
-    });
     // The synthetic fixture has no composite; inject one so the StepSpec
     // fields are exercised too.
+    let mut model = synthetic_model_default(23080, 23090);
     model["tasks"]["pipeline"] = json!({
         "kind": "composite",
         "steps": { "only": { "task": "smoke", "dependsOn": [] } }

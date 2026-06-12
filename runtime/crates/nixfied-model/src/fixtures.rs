@@ -197,7 +197,6 @@ pub fn synthetic_model(options: &SyntheticModelOptions) -> Value {
                 "summaryRefs": ["summary"]
             }
         },
-        "workflows": {},
         "docs": {
             "title": options.docs_title,
             "summary": options.docs_summary

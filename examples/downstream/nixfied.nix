@@ -3,13 +3,12 @@
 # This is the copy-paste adoption guide other teams start from. It composes a
 # Postgres database (via the reusable `adapters.postgres` Nix-side adapter) with
 # two first-party services written as plain Nix-built executables - an `api` and
-# a `worker` - and orchestrates them with a `release` workflow. Everything below
+# a `worker` - and orchestrates them with a `release` composite task. Everything below
 # compiles into the generic model primitives; the runtime gains no knowledge of
 # Postgres, the api, or the worker.
 #
 # Build it:    nix build ./examples/downstream#model
 # Run it:      nixfied-runtime run --model <store>/model.json
-# Run a flow:  nixfied-runtime run --model <store>/model.json --workflow release
 { pkgs, adapters, ... }:
 let
   # A tiny TCP app used for both the api and the worker. In `service` mode it
@@ -260,31 +259,29 @@ in
     tasks = [
       "ping-api"
       "ping-worker"
+      "release"
     ];
   };
 
-  # A release flow: prove the database answers, then exercise both services.
-  nixfied.workflows.release = {
-    servicesRequired = [
-      "postgres"
-      "api"
-      "worker"
-    ];
-    nodes = {
+  # A release flow: prove the database answers, then exercise both services,
+  # then run the gate over the whole stack. A composite task; the services it
+  # needs come from the environment until phase 3 derives them from the leaves.
+  nixfied.tasks.release = {
+    kind = "composite";
+    steps = {
       db-check = {
-        taskId = "smoke-query";
-        dependsOn = [ ];
+        task = "smoke-query";
       };
       api-check = {
-        taskId = "ping-api";
+        task = "ping-api";
         dependsOn = [ "db-check" ];
       };
       worker-check = {
-        taskId = "ping-worker";
+        task = "ping-worker";
         dependsOn = [ "db-check" ];
       };
       gate = {
-        taskId = "release-gate";
+        task = "release-gate";
         dependsOn = [
           "api-check"
           "worker-check"

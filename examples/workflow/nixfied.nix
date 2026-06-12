@@ -7,19 +7,24 @@
   nixfied.codebases.main.logicalRoot = ".";
   nixfied.placement.ports.base = 24680;
 
-  # A bounded workflow: require the synthetic service ready, then run the smoke
-  # task twice with a dependency edge between the nodes.
-  nixfied.workflows.pipeline = {
-    servicesRequired = [ "synthetic" ];
-    nodes = {
+  # A bounded composite: run the smoke task twice with a dependency edge
+  # between the steps. Referencing the same leaf twice is legal — each step
+  # leaves its own evidence under its step path (pipeline.probe,
+  # pipeline.verify).
+  nixfied.tasks.pipeline = {
+    kind = "composite";
+    steps = {
       probe = {
-        taskId = "smoke";
-        dependsOn = [ ];
+        task = "smoke";
       };
       verify = {
-        taskId = "smoke";
+        task = "smoke";
         dependsOn = [ "probe" ];
       };
     };
   };
+
+  # Run the pipeline as part of the environment (the adapter's own smoke task
+  # merges in alongside it).
+  nixfied.environments.dev.tasks = [ "pipeline" ];
 }
