@@ -1,7 +1,9 @@
-//! The run planner: a pure function of `(ExecutionModel, selection, slot)` that
-//! assigns service ports and orders tasks, or rejects when no concrete executable
-//! plan exists. Admission runs it over every slot/selection so that "admitted"
-//! means "a concrete plan exists"; `run` recomputes the same function.
+//! The run planner: a pure function of `(ExecutionModel, selected task, slot)`
+//! that derives the service union, assigns service ports, and orders the
+//! flattened nodes — or rejects when no concrete executable plan exists.
+//! Admission runs it over every slot and every declared task so that
+//! "admitted" means "a concrete plan exists"; `run` recomputes the same
+//! function.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -33,7 +35,7 @@ pub struct PlanNode {
     pub task_id: TaskId,
 }
 
-pub fn plan(model: &ExecutionModel, slot: u32) -> RuntimeResult<RunPlan> {
+pub fn plan(model: &ExecutionModel, task: &TaskId, slot: u32) -> RuntimeResult<RunPlan> {
     let window = model.slot_windows.get(&slot).ok_or_else(|| {
         RuntimeError::new(
             ErrorCode::ModelAdmission,
@@ -41,17 +43,36 @@ pub fn plan(model: &ExecutionModel, slot: u32) -> RuntimeResult<RunPlan> {
         )
     })?;
 
-    let service_names = model.environment.services.clone();
-    let mut nodes = Vec::new();
-    for task_id in &model.environment.tasks {
-        nodes.extend(flatten_task(model, task_id)?);
+    let nodes = flatten_task(model, task)?;
+    // The derived service union (docs/DERIVATION_SPEC.md §3): the flattened
+    // leaves' requires, closed over connectsTo, in canonical (byte) order —
+    // ports are assigned from the sorted set, so a service's port depends only
+    // on membership, never on authoring order.
+    let mut union: BTreeSet<ServiceId> = nodes
+        .iter()
+        .filter_map(|node| model.tasks.get(&node.task_id))
+        .flat_map(|leaf| leaf.requires.iter().cloned())
+        .collect();
+    loop {
+        let additions: Vec<ServiceId> = union
+            .iter()
+            .filter_map(|name| model.services.get(name))
+            .flat_map(|service| service.connects_to.iter().cloned())
+            .filter(|target| !union.contains(target))
+            .collect();
+        if additions.is_empty() {
+            break;
+        }
+        union.extend(additions);
     }
+    let service_names: Vec<ServiceId> = union.into_iter().collect();
 
-    // Ports are assigned by *declared* order (stable, predictable addressing —
-    // wiring changes never move a service's port), then the bindings are
-    // reordered for start so every connectsTo dependency is ready before its
-    // dependent spawns. Lowering proved the graph acyclic and closed under the
-    // selection, so the sort always completes.
+    // Ports are assigned in the union's canonical order (stable, predictable
+    // addressing — authoring order never moves a service's port), then the
+    // bindings are reordered for start so every connectsTo dependency is ready
+    // before its dependent spawns. Validation proved the wiring graph acyclic,
+    // and the union is connectsTo-closed by construction, so the sort always
+    // completes.
     let services = order_for_start(assign_ports(&service_names, model, *window, slot)?, model);
     Ok(RunPlan { services, nodes })
 }
@@ -270,11 +291,15 @@ fn flatten_task(model: &ExecutionModel, root: &TaskId) -> RuntimeResult<Vec<Plan
     Ok(ordered)
 }
 
-/// Prove a concrete plan exists for every slot in the policy range. Admission
-/// calls this so "admitted" implies "runnable for any slot the user can pick".
+/// Prove a concrete plan exists for every slot in the policy range and every
+/// declared task. Admission calls this so "admitted" implies "runnable for any
+/// slot/task the user can select" — including composite acyclicity and the
+/// derived union's port feasibility.
 pub fn prove_all_plans_feasible(model: &ExecutionModel) -> RuntimeResult<()> {
     for &slot in model.slot_windows.keys() {
-        plan(model, slot)?;
+        for task in model.tasks.keys().chain(model.composites.keys()) {
+            plan(model, task, slot)?;
+        }
     }
     Ok(())
 }
@@ -365,22 +390,22 @@ mod tests {
         }
     }
 
+    /// A model whose `all` leaf requires the given services — selecting it
+    /// derives exactly that union.
     fn model(
         services: Vec<&str>,
-        env_services: Vec<&str>,
+        required: Vec<&str>,
         windows: Vec<(u32, u16, u16)>,
     ) -> ExecutionModel {
+        let mut leaf = leaf_task("all");
+        leaf.requires = required.into_iter().map(ServiceId::new).collect();
         ExecutionModel {
             services: services
                 .into_iter()
                 .map(|name| (ServiceId::new(name), service(name)))
                 .collect(),
-            tasks: BTreeMap::new(),
+            tasks: BTreeMap::from([(TaskId::new("all"), leaf)]),
             composites: BTreeMap::new(),
-            environment: ExecEnvironment {
-                services: env_services.into_iter().map(ServiceId::new).collect(),
-                tasks: Vec::new(),
-            },
             slot_windows: windows
                 .into_iter()
                 .map(|(slot, start, end)| (slot, PortWindow { start, end }))
@@ -391,7 +416,7 @@ mod tests {
     #[test]
     fn assigns_ports_from_window_start_in_order() {
         let em = model(vec!["a", "b"], vec!["a", "b"], vec![(0, 23080, 23090)]);
-        let plan = plan(&em, 0).expect("plan exists");
+        let plan = plan(&em, &TaskId::new("all"), 0).expect("plan exists");
         assert_eq!(
             plan.services,
             vec![
@@ -410,7 +435,7 @@ mod tests {
     #[test]
     fn rejects_when_window_cannot_host_all_services() {
         let em = model(vec!["a", "b"], vec!["a", "b"], vec![(0, 23080, 23080)]);
-        let error = plan(&em, 0).expect_err("window too small");
+        let error = plan(&em, &TaskId::new("all"), 0).expect_err("window too small");
         assert_eq!(error.code, ErrorCode::PortConflict);
     }
 
@@ -422,9 +447,11 @@ mod tests {
             vec!["a", "b"],
             vec![(0, 23080, 23090), (1, 24000, 24000)],
         );
-        assert!(plan(&em, 0).is_ok());
+        assert!(plan(&em, &TaskId::new("all"), 0).is_ok());
         assert_eq!(
-            plan(&em, 1).expect_err("slot 1 too small").code,
+            plan(&em, &TaskId::new("all"), 1)
+                .expect_err("slot 1 too small")
+                .code,
             ErrorCode::PortConflict
         );
         assert_eq!(
@@ -458,24 +485,20 @@ mod tests {
         }
     }
 
-    fn vector_model(
-        leaves: Vec<&str>,
-        composites: Vec<ExecComposite>,
-        env_tasks: Vec<&str>,
-    ) -> ExecutionModel {
+    fn vector_model(leaves: Vec<&str>, composites: Vec<ExecComposite>) -> ExecutionModel {
         let mut em = model(vec![], vec![], vec![(0, 23080, 23090)]);
+        em.tasks.clear();
         for leaf in leaves {
             em.tasks.insert(TaskId::new(leaf), leaf_task(leaf));
         }
         for comp in composites {
             em.composites.insert(comp.task_id.clone(), comp);
         }
-        em.environment.tasks = env_tasks.into_iter().map(TaskId::new).collect();
         em
     }
 
-    fn plan_paths(em: &ExecutionModel) -> Vec<String> {
-        plan(em, 0)
+    fn plan_paths(em: &ExecutionModel, root: &str) -> Vec<String> {
+        plan(em, &TaskId::new(root), 0)
             .expect("plan exists")
             .nodes
             .iter()
@@ -502,13 +525,12 @@ mod tests {
                     ],
                 ),
             ],
-            vec!["ci"],
         );
         // Emission order is check < tests, clippy emitted before fmt (byte
         // order), but fmt orders first (clippy depends on it); ci.tests
         // depends on every node under ci.check.
         assert_eq!(
-            plan_paths(&em),
+            plan_paths(&em, "ci"),
             vec!["ci.check.fmt", "ci.check.clippy", "ci.tests"]
         );
     }
@@ -523,17 +545,16 @@ mod tests {
                 "twice",
                 vec![("again", "unit", vec!["first"]), ("first", "unit", vec![])],
             )],
-            vec!["twice"],
         );
-        assert_eq!(plan_paths(&em), vec!["twice.first", "twice.again"]);
+        assert_eq!(plan_paths(&em, "twice"), vec!["twice.first", "twice.again"]);
     }
 
     /// Golden vector V3: selecting a leaf directly yields one node whose step
     /// path is the task id.
     #[test]
     fn flattening_vector_v3_leaf_selection() {
-        let em = vector_model(vec!["fmt"], vec![], vec!["fmt"]);
-        assert_eq!(plan_paths(&em), vec!["fmt"]);
+        let em = vector_model(vec!["fmt"], vec![]);
+        assert_eq!(plan_paths(&em, "fmt"), vec!["fmt"]);
     }
 
     #[test]
@@ -544,9 +565,8 @@ mod tests {
                 composite("a", vec![("to-b", "b", vec![])]),
                 composite("b", vec![("to-a", "a", vec![])]),
             ],
-            vec!["a"],
         );
-        let error = plan(&em, 0).expect_err("cycle must reject");
+        let error = plan(&em, &TaskId::new("a"), 0).expect_err("cycle must reject");
         assert_eq!(error.code, ErrorCode::ModelAdmission);
         assert!(error.message.contains("cycle"), "{}", error.message);
     }
@@ -559,17 +579,16 @@ mod tests {
                 "spin",
                 vec![("x", "unit", vec!["y"]), ("y", "unit", vec!["x"])],
             )],
-            vec!["spin"],
         );
-        let error = plan(&em, 0).expect_err("cycle must reject");
+        let error = plan(&em, &TaskId::new("spin"), 0).expect_err("cycle must reject");
         assert_eq!(error.code, ErrorCode::ModelAdmission);
         assert!(error.message.contains("cycle"), "{}", error.message);
     }
 
     #[test]
     fn start_order_honors_connects_to_but_ports_stay_declared() {
-        // app is declared first (and keeps the first port), but connects to db,
-        // so db must start first.
+        // app sorts first (and keeps the first port), but connects to db, so
+        // db must start first.
         let mut em = model(
             vec!["app", "db"],
             vec!["app", "db"],
@@ -579,7 +598,7 @@ mod tests {
             .get_mut(&ServiceId::new("app"))
             .expect("app exists")
             .connects_to = vec![ServiceId::new("db")];
-        let plan = plan(&em, 0).expect("plan exists");
+        let plan = plan(&em, &TaskId::new("all"), 0).expect("plan exists");
         assert_eq!(
             plan.services,
             vec![
@@ -619,7 +638,7 @@ mod tests {
         }
         multi.endpoints.remove("e");
         multi.primary_endpoint = "a".to_string();
-        let plan = plan(&em, 0).expect("plan exists");
+        let plan = plan(&em, &TaskId::new("all"), 0).expect("plan exists");
         let multi_ports = &plan
             .services
             .iter()
@@ -648,7 +667,7 @@ mod tests {
         // Two single-endpoint services need two ports; a one-port window cannot.
         let em = model(vec!["a", "b"], vec!["a", "b"], vec![(0, 23080, 23080)]);
         assert_eq!(
-            plan(&em, 0)
+            plan(&em, &TaskId::new("all"), 0)
                 .expect_err("window too small for the endpoint block")
                 .code,
             ErrorCode::PortConflict

@@ -26,28 +26,6 @@ in
     description = "Nix target system for the model and runtime closures.";
   };
 
-  options.nixfied.environments = mkOption {
-    type = types.attrsOf (
-      types.submodule {
-        options = {
-          services = mkOption {
-            type = types.listOf types.str;
-            default = [ ];
-            description = "Services composing this environment.";
-          };
-
-          tasks = mkOption {
-            type = types.listOf types.str;
-            default = [ ];
-            description = "Tasks composing this environment.";
-          };
-        };
-      }
-    );
-    default = { };
-    description = "Named environments. A single `dev` environment is supported for now.";
-  };
-
   options.nixfied.slotPolicy = {
     min = mkOption {
       type = types.int;

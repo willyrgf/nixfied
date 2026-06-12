@@ -316,10 +316,6 @@ let
       };
   tasks = mapAttrs taskSpec config.nixfied.tasks;
 
-  environments = mapAttrs (_name: env: {
-    inherit (env) services tasks;
-  }) config.nixfied.environments;
-
 in
 {
   packages = closurePackages;
@@ -347,7 +343,9 @@ in
         };
       }
     ];
-    inherit environments;
+    # Membership does not exist; `dev` is the single isolation namespace
+    # (state roots, slots, registry keys).
+    environments = [ "dev" ];
     inherit slotPolicy;
     placement = {
       inherit slotPlacements;

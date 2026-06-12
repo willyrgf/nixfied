@@ -135,20 +135,11 @@ let
     ) "slotPolicy.default must be within the slot range")
     (expect windowsInRange "per-slot candidate port windows must be in 1..65535")
     (expect windowsDoNotOverlap "per-slot candidate port windows must not overlap")
-    (expect (
-      builtins.attrNames config.nixfied.environments == [ "dev" ]
-    ) "a single 'dev' environment is supported")
     # A model with no services is valid as long as it declares something to
-    # run: the runtime supports service-less task/workflow selections.
+    # run: the runtime supports service-less task selections.
     (expect (
       config.nixfied.services != { } || config.nixfied.tasks != { }
     ) "at least one service or task must be declared")
-    (expect (lib.all (
-      service: builtins.hasAttr service config.nixfied.services
-    ) config.nixfied.environments.dev.services) "dev environment services must be declared")
-    (expect (lib.all (
-      task: builtins.hasAttr task config.nixfied.tasks
-    ) config.nixfied.environments.dev.tasks) "dev environment tasks must be declared")
     (expect endpointHostsLoopback
       "service endpoint.host must be a loopback IP literal (127.x.x.x or ::1)"
     )

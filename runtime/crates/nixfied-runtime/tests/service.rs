@@ -1445,6 +1445,8 @@ fn cli_signal_cancels_run_and_empties_service_group() {
 
     let mut child = Command::new(runtime_binary())
         .arg("run")
+        .arg("--task")
+        .arg("smoke")
         .arg("--allow-non-store-model")
         .arg("--model")
         .arg(&model_path)
@@ -1571,6 +1573,8 @@ fn cli_signal_during_shutdown_records_canceled_terminal_state() {
 
     let child = Command::new(runtime_binary())
         .arg("run")
+        .arg("--task")
+        .arg("smoke")
         .arg("--allow-non-store-model")
         .arg("--model")
         .arg(&model_path)
@@ -2696,7 +2700,6 @@ fn task_child_path_is_assembled_from_tool_roots() {
     let port = listener.local_addr().expect("local addr").port();
     drop(listener);
     let mut value = fixture_model(python, &["-c", python_listener_script(), "${port}"], port);
-    value["environments"]["dev"]["services"] = json!([]);
     value["tasks"]["smoke"]["requires"] = json!([]);
     value["tasks"]["smoke"]["servicesRequired"] = json!([]);
     set_task_run_args(
@@ -2752,7 +2755,6 @@ fn task_child_environment_is_hermetic() {
     let port = listener.local_addr().expect("local addr").port();
     drop(listener);
     let mut value = fixture_model(python, &["-c", python_listener_script(), "${port}"], port);
-    value["environments"]["dev"]["services"] = json!([]);
     value["tasks"]["smoke"]["requires"] = json!([]);
     value["tasks"]["smoke"]["servicesRequired"] = json!([]);
     value["tasks"]["smoke"]["invocation"]["env"] = json!({ "DECLARED": "yes" });
@@ -3133,7 +3135,7 @@ fn runtime_drives_full_lifecycle_without_invoking_nix() {
         String::from_utf8_lossy(&check.stderr)
     );
 
-    let run = run_binary("run", &["--timeout-ms", "5000"]);
+    let run = run_binary("run", &["--task", "smoke", "--timeout-ms", "5000"]);
     assert!(
         run.status.success(),
         "run failed: {}",
@@ -3189,7 +3191,6 @@ fn composite_run_keys_evidence_by_step_path() {
 
     let mut value = fixture_model(&python.to_string_lossy(), &["service", "${port}"], port);
     value["closures"]["synthetic-helper"]["storePath"] = json!(closure_root.to_string_lossy());
-    value["environments"]["dev"]["services"] = json!([]);
     value["tasks"]["smoke"]["requires"] = json!([]);
     value["tasks"]["smoke"]["servicesRequired"] = json!([]);
     set_task_run_args(&mut value, &["unit"]);
@@ -3201,7 +3202,6 @@ fn composite_run_keys_evidence_by_step_path() {
             "first": { "task": "smoke" }
         }
     });
-    value["environments"]["dev"]["tasks"] = json!(["twice"]);
     let model: Model = serde_json::from_value(value).expect("composite model should parse");
 
     let tmp = TempDir::new();
@@ -3216,6 +3216,8 @@ fn composite_run_keys_evidence_by_step_path() {
 
     let run = Command::new(runtime_binary())
         .arg("run")
+        .arg("--task")
+        .arg("twice")
         .arg("--allow-non-store-model")
         .arg("--model")
         .arg(&model_path)
@@ -3288,7 +3290,6 @@ fn task_only_run_records_a_durable_runs_row() {
     let mut value = fixture_model(&python.to_string_lossy(), &["service", "${port}"], port);
     value["closures"]["synthetic-helper"]["storePath"] = json!(closure_root.to_string_lossy());
     // The environment starts no services and runs only the service-less task.
-    value["environments"]["dev"]["services"] = json!([]);
     value["tasks"]["smoke"]["requires"] = json!([]);
     value["tasks"]["smoke"]["servicesRequired"] = json!([]);
     set_task_run_args(&mut value, &["noservice"]);
@@ -3307,6 +3308,8 @@ fn task_only_run_records_a_durable_runs_row() {
 
     let run = Command::new(runtime_binary())
         .arg("run")
+        .arg("--task")
+        .arg("smoke")
         .arg("--allow-non-store-model")
         .arg("--model")
         .arg(&model_path)
@@ -3365,7 +3368,6 @@ fn inherit_stdin_reaches_a_task_process() {
 
     let mut value = fixture_model(&python.to_string_lossy(), &["service", "${port}"], port);
     value["closures"]["synthetic-helper"]["storePath"] = json!(closure_root.to_string_lossy());
-    value["environments"]["dev"]["services"] = json!([]);
     value["tasks"]["smoke"]["requires"] = json!([]);
     value["tasks"]["smoke"]["servicesRequired"] = json!([]);
     set_task_run_args(&mut value, &[]);
@@ -3385,6 +3387,8 @@ fn inherit_stdin_reaches_a_task_process() {
 
     let mut child = Command::new(runtime_binary())
         .arg("run")
+        .arg("--task")
+        .arg("smoke")
         .arg("--allow-non-store-model")
         .arg("--model")
         .arg(&model_path)
@@ -3457,14 +3461,12 @@ fn failed_composite_run_writes_failure_summary() {
     value["tasks"]["smoke"]["requires"] = json!([]);
     value["tasks"]["smoke"]["servicesRequired"] = json!([]);
     set_task_run_args(&mut value, &["-c", "exit 3"]);
-    value["environments"]["dev"]["services"] = json!([]);
     value["tasks"]["wf"] = json!({
         "kind": "composite",
         "steps": {
             "fail-node": { "task": "smoke" }
         }
     });
-    value["environments"]["dev"]["tasks"] = json!(["wf"]);
     let model: Model = serde_json::from_value(value).expect("failure fixture model should parse");
     let tmp = TempDir::new();
     let model_path = tmp.path.join("model.json");
@@ -3478,6 +3480,8 @@ fn failed_composite_run_writes_failure_summary() {
 
     let output = Command::new(runtime_binary())
         .arg("run")
+        .arg("--task")
+        .arg("wf")
         .arg("--allow-non-store-model")
         .arg("--model")
         .arg(&model_path)
@@ -3535,7 +3539,6 @@ fn service_failure_before_any_node_writes_failed_summary() {
             "never-runs": { "task": "smoke" }
         }
     });
-    value["environments"]["dev"]["tasks"] = json!(["wf"]);
     let model: Model = serde_json::from_value(value).expect("failure fixture model should parse");
     let tmp = TempDir::new();
     let model_path = tmp.path.join("model.json");
@@ -3549,6 +3552,8 @@ fn service_failure_before_any_node_writes_failed_summary() {
 
     let output = Command::new(runtime_binary())
         .arg("run")
+        .arg("--task")
+        .arg("wf")
         .arg("--allow-non-store-model")
         .arg("--model")
         .arg(&model_path)

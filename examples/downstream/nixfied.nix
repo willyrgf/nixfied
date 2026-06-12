@@ -249,20 +249,6 @@ in
     logRefs = [ "task.release-gate" ];
   };
 
-  # Add the api/worker to the `dev` environment (merges with the adapter's
-  # `postgres` service and `smoke-query` task).
-  nixfied.environments.dev = {
-    services = [
-      "api"
-      "worker"
-    ];
-    tasks = [
-      "ping-api"
-      "ping-worker"
-      "release"
-    ];
-  };
-
   # A release flow: prove the database answers, then exercise both services,
   # then run the gate over the whole stack. A composite task; the services it
   # needs come from the environment until phase 3 derives them from the leaves.

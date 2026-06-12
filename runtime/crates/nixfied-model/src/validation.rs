@@ -132,20 +132,17 @@ fn validate_codebases(model: &Model) -> Result<(), ValidationError> {
     Ok(())
 }
 
-/// A single `dev` environment whose service/task references resolve (resolution
-/// is enforced in `validate_references`). Multi-environment orchestration is a
-/// later milestone.
+/// A single `dev` isolation namespace. Multi-environment isolation is a later
+/// milestone; membership does not exist at all (a run's services derive from
+/// its selected task).
 fn validate_environments(model: &Model) -> Result<(), ValidationError> {
-    if model.environments.len() != 1 {
-        return Err(ValidationError::ExpectedOne {
-            field: "environments",
-        });
-    }
-    if !model.environments.contains_key("dev") {
+    if model.environments.len() != 1
+        || model.environments.iter().next().map(String::as_str) != Some("dev")
+    {
         return Err(ValidationError::UnsupportedValue {
             field: "environments",
-            expected: "dev",
-            actual: format!("{:?}", model.environments.keys().collect::<Vec<_>>()),
+            expected: "[\"dev\"]",
+            actual: format!("{:?}", model.environments.as_slice()),
         });
     }
     Ok(())

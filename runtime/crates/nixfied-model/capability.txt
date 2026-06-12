@@ -11,7 +11,6 @@ primitive Target: system os arch closureSystem
 primitive Codebase: codebaseId logicalRoot sourceMode sourceIdentity sourcePolicy
 primitive SourcePolicy: dirtyPolicy admissionFingerprintPolicy
 primitive StatePolicy: markerIdentity stateEpoch cleanupPolicy persistence
-primitive Environment: services tasks
 primitive SlotPolicy: min default max
 primitive Placement: slotPlacements
 primitive SlotPlacement: slot candidatePorts

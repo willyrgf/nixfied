@@ -901,8 +901,9 @@ pub fn start_service_for_slot(
     Ok(started)
 }
 
-/// Clean every service declared in the selected slot's environment, then clean
-/// the marker-owned slot state once. Each service's clean lifecycle operation is
+/// Clean every declared service of the slot, then clean the marker-owned slot
+/// state once. Membership does not exist; every declared service may have left
+/// slot evidence, so each one's clean lifecycle operation is recorded. Each is
 /// a marker-gated runtime cleanup primitive (no exec).
 pub fn run_slot_clean(
     model: &Model,
@@ -911,16 +912,8 @@ pub fn run_slot_clean(
     registry: &mut Registry,
     selected_slot: &SelectedSlot<'_>,
 ) -> RuntimeResult<CleanupOutcome> {
-    if let Some(env) = model.environments.get(selected_slot.environment) {
-        for service_name in &env.services {
-            record_service_clean(
-                model,
-                admission,
-                registry,
-                selected_slot,
-                service_name.as_str(),
-            )?;
-        }
+    for service_name in model.services.keys() {
+        record_service_clean(model, admission, registry, selected_slot, service_name)?;
     }
     clean_marked_slot_state(model, admission, placement, registry, selected_slot)
 }

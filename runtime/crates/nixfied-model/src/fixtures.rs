@@ -99,12 +99,7 @@ pub fn synthetic_model(options: &SyntheticModelOptions) -> Value {
                 "admissionFingerprintPolicy": "live-fingerprint"
             }
         }],
-        "environments": {
-            "dev": {
-                "services": ["synthetic"],
-                "tasks": ["smoke"]
-            }
-        },
+        "environments": ["dev"],
         "slotPolicy": {
             "min": 0,
             "default": 0,

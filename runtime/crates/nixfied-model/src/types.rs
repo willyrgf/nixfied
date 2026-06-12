@@ -16,7 +16,10 @@ pub struct Model {
     pub project: Project,
     pub target: Target,
     pub codebases: Vec<Codebase>,
-    pub environments: BTreeMap<String, Environment>,
+    /// The isolation namespaces (state roots, slots, registry keys) the model
+    /// supports. Membership does not exist: running a task brings up exactly
+    /// the services its leaves require. A single `dev` environment for now.
+    pub environments: UniqueVec<String>,
     pub slot_policy: SlotPolicy,
     pub placement: Placement,
     pub state: StatePolicy,
@@ -81,13 +84,6 @@ pub enum DirtyPolicy {
     Allow,
     Warn,
     Reject,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct Environment {
-    pub services: UniqueVec<ServiceId>,
-    pub tasks: UniqueVec<TaskId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

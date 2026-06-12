@@ -180,14 +180,13 @@ in
     logRefs = [ "task.ping-worker" ];
   };
 
-  nixfied.environments.dev = {
-    services = [
-      "api"
-      "worker"
-    ];
-    tasks = [
-      "ping-api"
-      "ping-worker"
-    ];
+  # The composed check the gate selects: both pings, each bringing up its own
+  # service through the derived union.
+  nixfied.tasks.all = {
+    kind = "composite";
+    steps = {
+      ping-api.task = "ping-api";
+      ping-worker.task = "ping-worker";
+    };
   };
 }

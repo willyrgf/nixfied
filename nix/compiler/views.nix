@@ -46,7 +46,7 @@ in
   # The capabilities view is a projection of the model, derived on demand rather
   # than carried as a redundant model section.
   capabilities = {
-    environments = attrNames model.environments;
+    environments = model.environments;
     inherit slots;
     services = serviceNames;
     tasks = taskNames;

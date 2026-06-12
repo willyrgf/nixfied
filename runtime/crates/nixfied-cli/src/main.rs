@@ -127,7 +127,7 @@ fn read_model(path: &Path) -> Result<Model, CliError> {
 /// than read from a redundant model section.
 fn capabilities_view(model: &Model) -> Value {
     json!({
-        "environments": model.environments.keys().collect::<Vec<_>>(),
+        "environments": model.environments.as_slice(),
         "slots": (model.slot_policy.min..=model.slot_policy.max).collect::<Vec<_>>(),
         "services": model.services.keys().collect::<Vec<_>>(),
         "tasks": model.tasks.keys().collect::<Vec<_>>(),

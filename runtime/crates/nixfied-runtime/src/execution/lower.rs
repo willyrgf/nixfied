@@ -10,8 +10,8 @@ use std::path::Path;
 use std::time::Duration;
 
 use nixfied_model::{
-    ClosureSpec, Environment, InvocationSpec, Lifecycle, Model, OperationId, ProbeKind, ProbeSpec,
-    ServiceId, ServiceSpec, StatePolicy, StepSpec, StopSpec, Target, TaskId, TaskKind, TaskSpec,
+    ClosureSpec, InvocationSpec, Lifecycle, Model, OperationId, ProbeKind, ProbeSpec, ServiceId,
+    ServiceSpec, StatePolicy, StepSpec, StopSpec, Target, TaskId, TaskKind, TaskSpec,
     TerminalSemantics,
 };
 
@@ -35,7 +35,7 @@ pub fn lower(model: &Model) -> RuntimeResult<ExecutionModel> {
         project: _,
         target: _,
         codebases: _,
-        environments,
+        environments: _,
         slot_policy: _,
         placement,
         state,
@@ -69,19 +69,6 @@ pub fn lower(model: &Model) -> RuntimeResult<ExecutionModel> {
         }
     }
 
-    // Resolve each environment reference against the maps just built, so every
-    // id the executor later follows is a handle proven to resolve. A miss is an
-    // admission rejection here, not a runtime `None`.
-    let environment = match environments.values().next() {
-        Some(environment) => lower_environment(
-            environment,
-            &lowered_services,
-            &lowered_tasks,
-            &lowered_composites,
-        )?,
-        None => return Err(Rejection::NoEnvironment.into()),
-    };
-
     let mut slot_windows = BTreeMap::new();
     for slot_placement in placement.slot_placements.values() {
         slot_windows.insert(
@@ -97,68 +84,8 @@ pub fn lower(model: &Model) -> RuntimeResult<ExecutionModel> {
         services: lowered_services,
         tasks: lowered_tasks,
         composites: lowered_composites,
-        environment,
         slot_windows,
     })
-}
-
-fn lower_environment(
-    environment: &Environment,
-    services: &BTreeMap<ServiceId, ExecService>,
-    tasks: &BTreeMap<TaskId, ExecTask>,
-    composites: &BTreeMap<TaskId, ExecComposite>,
-) -> RuntimeResult<ExecEnvironment> {
-    let Environment {
-        services: env_services,
-        tasks: env_tasks,
-    } = environment;
-    let resolved_services = env_services
-        .iter()
-        .map(|id| require_service("environment.services", services, id))
-        .collect::<Result<Vec<_>, Rejection>>()?;
-    // An environment task may be a leaf or a composite; the planner flattens
-    // composites onto the run plan with stable step paths.
-    let resolved_tasks = env_tasks
-        .iter()
-        .map(|id| {
-            if tasks.contains_key(id) || composites.contains_key(id) {
-                Ok(id.clone())
-            } else {
-                Err(undeclared("environment.tasks", id.as_str()))
-            }
-        })
-        .collect::<Result<Vec<_>, Rejection>>()?;
-    require_connects_to_closed("environment.services", &resolved_services, services)?;
-    Ok(ExecEnvironment {
-        services: resolved_services,
-        tasks: resolved_tasks,
-    })
-}
-
-/// Every started service's `connectsTo` dependency must itself be started by
-/// the same selection, or its named endpoint placeholders would have no
-/// slot-plan entry to resolve against.
-fn require_connects_to_closed(
-    scope: &'static str,
-    selected: &[ServiceId],
-    services: &BTreeMap<ServiceId, ExecService>,
-) -> RuntimeResult<()> {
-    for id in selected {
-        let Some(service) = services.get(id) else {
-            continue;
-        };
-        for target in &service.connects_to {
-            if !selected.contains(target) {
-                return Err(Rejection::ConnectsToNotStarted {
-                    scope,
-                    service: id.as_str().to_string(),
-                    target: target.as_str().to_string(),
-                }
-                .into());
-            }
-        }
-    }
-    Ok(())
 }
 
 /// Resolve a service reference to a handle proven to exist among the lowered
@@ -588,7 +515,6 @@ fn resolve_invocation(
 /// successful `lower` is a proof the references resolve.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Rejection {
-    NoEnvironment,
     UndeclaredReference {
         kind: &'static str,
         id: String,
@@ -651,7 +577,6 @@ pub enum Rejection {
 impl Rejection {
     fn message(&self) -> String {
         match self {
-            Rejection::NoEnvironment => "model declares no environment".to_string(),
             Rejection::UndeclaredReference { kind, id } => {
                 format!("{kind} references undeclared {id}")
             }
@@ -860,25 +785,6 @@ fn prove_references(model: &Model) -> Result<(), Rejection> {
         }
     }
 
-    // An environment task can only require services the environment starts, or
-    // the run fails mid-flight on a missing dependency.
-    for env in model.environments.values() {
-        let env_services = env
-            .services
-            .iter()
-            .map(|service| service.as_str())
-            .collect::<BTreeSet<_>>();
-        for task_id in &env.tasks {
-            if let Some(task) = model.tasks.get(task_id.as_str()) {
-                for service in &task.requires {
-                    if !env_services.contains(service.as_str()) {
-                        return Err(undeclared("environment.task.requires", service.as_str()));
-                    }
-                }
-            }
-        }
-    }
-
     // Per-position tool/resolution coherence first, so an undeclared tool or
     // unresolvable run[0] surfaces as itself rather than as a downstream
     // derived-fact mismatch.
@@ -1054,7 +960,7 @@ mod tests {
                 "sourceIdentity": "live",
                 "sourcePolicy": { "dirtyPolicy": "warn", "admissionFingerprintPolicy": "live" }
             }],
-            "environments": { "dev": { "services": ["svc"], "tasks": ["t"] } },
+            "environments": ["dev"],
             "slotPolicy": { "min": 0, "default": 0, "max": 0 },
             "placement": {
                 "slotPlacements": {
@@ -1146,7 +1052,6 @@ mod tests {
         assert_eq!(svc.start.exec.args, vec!["serve", "--port", "${port}"]);
         assert_eq!(svc.start.exec.tool_roots, vec!["/nix/store/c/bin"]);
         assert_eq!(svc.start.exec.stdin, StdinPolicy::Null);
-        assert_eq!(em.environment.services, vec![ServiceId::new("svc")]);
         assert_eq!(em.slot_windows[&0].start, 23080);
         let task = em.tasks.get("t").expect("task lowered");
         assert_eq!(task.success_codes, vec![0]);
@@ -1280,7 +1185,6 @@ mod tests {
         value["closures"]["c"]["operationBindings"] = json!(["dep.start", "svc.start"]);
         value["services"]["dep"] = dep;
         value["services"]["svc"]["connectsTo"] = json!(["dep"]);
-        value["environments"]["dev"]["services"] = json!(["svc", "dep"]);
         let model = model_from(value);
         assert_eq!(derive_services_required(&model, "t"), vec!["dep", "svc"]);
     }
@@ -1302,17 +1206,6 @@ mod tests {
             error.message
         );
         assert!(error.message.contains("DERIVE-1"), "{}", error.message);
-    }
-
-    #[test]
-    fn env_task_service_deps_must_be_started_by_the_env() {
-        // Task `t` requires `svc`, but the env no longer starts it.
-        let mut value = model_value();
-        value["environments"]["dev"]["services"] = json!([]);
-        assert_eq!(
-            reject_reason(value),
-            undeclared("environment.task.requires", "svc")
-        );
     }
 
     #[test]
@@ -1476,16 +1369,15 @@ mod tests {
     }
 
     #[test]
-    fn composite_may_be_an_environment_task() {
+    fn composite_is_a_selectable_root() {
         let mut value = model_value();
         value["tasks"]["pipeline"] = json!({
             "kind": "composite",
             "servicesRequired": ["svc"],
             "steps": { "only": { "task": "t" } }
         });
-        value["environments"]["dev"]["tasks"] = json!(["pipeline"]);
-        let em = lower(&model_from(value)).expect("composite env selection lowers");
-        assert_eq!(em.environment.tasks, vec![TaskId::new("pipeline")]);
+        let em = lower(&model_from(value)).expect("composite lowers as a selectable root");
+        assert!(em.composites.contains_key("pipeline"));
     }
 
     #[test]
@@ -1542,24 +1434,6 @@ mod tests {
     }
 
     #[test]
-    fn environment_must_start_connects_to_dependencies() {
-        let mut value = model_value();
-        let mut dep = service_value();
-        dep["endpoints"] = json!({ "dep-tcp": { "endpointId": "dep-tcp", "host": "127.0.0.1" } });
-        dep["primaryEndpoint"] = json!("dep-tcp");
-        for (class, op) in dep["lifecycle"].as_object_mut().unwrap() {
-            op["operationId"] = json!(format!("dep.{class}"));
-        }
-        value["closures"]["c"]["operationBindings"] = json!(["dep.start", "svc.start"]);
-        value["services"]["dep"] = dep;
-        value["services"]["svc"]["connectsTo"] = json!(["dep"]);
-        // dev environment starts only svc: the wiring target is missing.
-        let error = lower(&model_from(value)).expect_err("unstarted connectsTo must reject");
-        assert_eq!(error.code, ErrorCode::ModelAdmission);
-        assert!(error.message.contains("dep"));
-    }
-
-    #[test]
     fn named_ref_inside_connects_to_lowers_with_env() {
         let mut value = model_value();
         let mut dep = service_value();
@@ -1578,7 +1452,6 @@ mod tests {
             json!(["svc", "serve", "--db", "${host:dep}:${port:dep}"]);
         value["services"]["svc"]["lifecycle"]["start"]["invocation"]["env"] =
             json!({ "DB_URL": "tcp://${host:dep}:${port:dep}" });
-        value["environments"]["dev"]["services"] = json!(["svc", "dep"]);
         let em = lower(&model_from(value)).expect("declared named refs lower");
         let svc = em.services.get("svc").expect("service lowered");
         assert_eq!(svc.connects_to, vec![ServiceId::new("dep")]);

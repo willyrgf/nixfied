@@ -24,7 +24,4 @@
     };
   };
 
-  # Run the pipeline as part of the environment (the adapter's own smoke task
-  # merges in alongside it).
-  nixfied.environments.dev.tasks = [ "pipeline" ];
 }

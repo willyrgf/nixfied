@@ -31,12 +31,7 @@ fn valid_model_json() -> Value {
                 "admissionFingerprintPolicy": "live-fingerprint"
             }
         }],
-        "environments": {
-            "dev": {
-                "services": ["synthetic"],
-                "tasks": ["smoke"]
-            }
-        },
+        "environments": ["dev"],
         "slotPolicy": {
             "min": 0,
             "default": 0,
@@ -154,7 +149,6 @@ fn add_worker_service(value: &mut Value) {
         op["operationId"] = json!(format!("service.worker.{class}"));
     }
     value["services"]["worker"] = worker;
-    value["environments"]["dev"]["services"] = json!(["synthetic", "worker"]);
 }
 
 #[test]
@@ -204,7 +198,8 @@ fn accepts_task_only_models() {
     // exist; the structural validator must honor the same contract.
     let mut value = valid_model_json();
     value["services"] = json!({});
-    value["environments"]["dev"]["services"] = json!([]);
+    value["tasks"]["smoke"]["requires"] = json!([]);
+    value["tasks"]["smoke"]["servicesRequired"] = json!([]);
 
     let model: Model = serde_json::from_value(value).expect("model should deserialize");
     model.validate().expect("task-only models are valid");
@@ -214,9 +209,7 @@ fn accepts_task_only_models() {
 fn rejects_models_with_nothing_to_run() {
     let mut value = valid_model_json();
     value["services"] = json!({});
-    value["environments"]["dev"]["services"] = json!([]);
     value["tasks"] = json!({});
-    value["environments"]["dev"]["tasks"] = json!([]);
 
     let model: Model = serde_json::from_value(value).expect("model should deserialize");
     model
@@ -263,14 +256,13 @@ fn unknown_top_level_field_is_invalid() {
 }
 
 #[test]
-fn duplicate_environment_service_is_refused_at_the_wire() {
-    // `environment.services` is a set: a service listed twice would be admitted as
-    // feasible and then collide on its own lease at run time. Reject it at the wire
-    // so an inexpressible model never deserializes.
+fn duplicate_environment_is_refused_at_the_wire() {
+    // `environments` is a set of isolation namespaces; a duplicate is
+    // inexpressible at the wire.
     let mut value = valid_model_json();
-    value["environments"]["dev"]["services"] = json!(["synthetic", "synthetic"]);
-    let error =
-        serde_json::from_value::<Model>(value).expect_err("a duplicate service must be refused");
+    value["environments"] = json!(["dev", "dev"]);
+    let error = serde_json::from_value::<Model>(value)
+        .expect_err("a duplicate environment must be refused");
     assert!(error.to_string().contains("duplicate element"));
 }
 

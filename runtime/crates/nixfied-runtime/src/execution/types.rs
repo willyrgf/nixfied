@@ -33,7 +33,6 @@ pub struct ExecutionModel {
     pub services: BTreeMap<ServiceId, ExecService>,
     pub tasks: BTreeMap<TaskId, ExecTask>,
     pub composites: BTreeMap<TaskId, ExecComposite>,
-    pub environment: ExecEnvironment,
     pub slot_windows: BTreeMap<u32, PortWindow>,
 }
 
@@ -51,15 +50,6 @@ pub struct ExecStep {
     pub name: String,
     pub task: TaskId,
     pub depends_on: Vec<String>,
-}
-
-/// The single environment's start order: services first, then tasks. Every id is
-/// a handle the lowering minted by resolving the reference against the declared
-/// services/tasks, so the executor's `services.get(id)` cannot miss.
-#[derive(Debug, Clone)]
-pub struct ExecEnvironment {
-    pub services: Vec<ServiceId>,
-    pub tasks: Vec<TaskId>,
 }
 
 /// A slot's candidate port window, the range the planner assigns service ports

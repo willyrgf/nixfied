@@ -129,7 +129,6 @@
                 kind = "composite";
                 steps.boom.task = "always-fails";
               };
-              nixfied.environments.dev.tasks = [ "failing" ];
             }
           );
           postgresSlowModel = nixfiedLib.compileModel (

@@ -253,11 +253,34 @@ fn run_m0_placed(
         );
     }
 
-    // A run drives the environment's services plus its tasks (composites
-    // flattened with stable step paths). The plan (service ports + node order)
-    // is a pure function of the lowered model and the slot, already proven
-    // feasible at admission.
-    let plan = plan(&admission.execution_model, selected_slot.slot)?;
+    // A run drives one selected task: its flattened nodes plus the derived
+    // service union, started eagerly. The plan (service ports + node order) is
+    // a pure function of the lowered model, the task, and the slot, already
+    // proven feasible at admission. `run` with no selection refuses and lists
+    // the declared tasks — there is no implicit default.
+    let selected_task = match options.task.as_deref() {
+        Some(task) => nixfied_model::TaskId::new(task),
+        None => {
+            return Err(selection_required_error(&admission.execution_model));
+        }
+    };
+    if !admission
+        .execution_model
+        .tasks
+        .contains_key(selected_task.as_str())
+        && !admission
+            .execution_model
+            .composites
+            .contains_key(selected_task.as_str())
+    {
+        return Err(selection_required_error(&admission.execution_model)
+            .with_detail("unknownTask", selected_task.as_str()));
+    }
+    let plan = plan(
+        &admission.execution_model,
+        &selected_task,
+        selected_slot.slot,
+    )?;
 
     // Record the run row before any service starts, so even a service-less
     // selection (a workflow/environment of only service-less tasks) leaves durable
@@ -684,6 +707,26 @@ struct RunOptions {
     state_base: PathBuf,
     timeout_ms: u64,
     selection: RuntimeSelection,
+    task: Option<String>,
+}
+
+/// The refusal for a missing or unknown task selection: name every declared
+/// task so the operator can pick one.
+fn selection_required_error(model: &nixfied_runtime::execution::ExecutionModel) -> RuntimeError {
+    let declared: Vec<&str> = model
+        .tasks
+        .keys()
+        .chain(model.composites.keys())
+        .map(|task| task.as_str())
+        .collect();
+    RuntimeError::new(
+        nixfied_runtime::ErrorCode::ModelAdmission,
+        format!(
+            "run requires --task <id>; declared tasks: {}",
+            declared.join(", ")
+        ),
+    )
+    .with_detail("declaredTasks", &declared)
 }
 
 fn run_control(command: ControlCommand, args: &[String]) -> Result<(), RuntimeError> {
@@ -737,6 +780,7 @@ fn parse_run_options(args: &[String]) -> Result<RunOptions, RuntimeError> {
     let mut state_base = None;
     let mut timeout_ms = 5000;
     let mut slot = None;
+    let mut task = None;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
@@ -754,6 +798,19 @@ fn parse_run_options(args: &[String]) -> Result<RunOptions, RuntimeError> {
             "--slot" => {
                 index += 1;
                 slot = Some(parse_slot_arg(args.get(index), "--slot")?);
+            }
+            "--task" => {
+                index += 1;
+                task = Some(
+                    args.get(index)
+                        .ok_or_else(|| {
+                            RuntimeError::new(
+                                nixfied_runtime::ErrorCode::ModelAdmission,
+                                "missing --task value",
+                            )
+                        })?
+                        .clone(),
+                );
             }
             "--timeout-ms" => {
                 index += 1;
@@ -792,6 +849,7 @@ fn parse_run_options(args: &[String]) -> Result<RunOptions, RuntimeError> {
         state_base,
         timeout_ms,
         selection: RuntimeSelection { slot },
+        task,
     })
 }
 
