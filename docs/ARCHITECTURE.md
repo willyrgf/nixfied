@@ -82,6 +82,47 @@ mode:
   breaking change — never per
   milestone or docs rebuild.
 
+## The task–service algebra (the composition rewrite)
+
+The first external adoption (`PROBLEM_COMPOSITION.md`) exposed the original
+sin of the authoring surface: it was the runtime's **wire format exposed
+raw** — closures, execs, operationIds, terminal tokens — so adopter concepts
+with no runtime equivalent (a *command*, a *toolchain*, a *workflow*, a
+*verb*) escaped the model: below it into opaque shell dispatchers, above it
+into the adopter's own flake. The accepted fix (`DESIGN_COMPOSITION.md`) is a
+closed algebra of exactly **two semantic kinds** (KIND-2):
+
+- **task** — bounded, composable execution: a **leaf** (one inline
+  invocation + `requires` + exit policy) or a **composite** (a static
+  named-step DAG over task references; STATIC-1 — no parameters,
+  conditionals, retries, or loops in the contract).
+- **service** — durable execution: orchestrated, probed, owned, cleaned —
+  with **endpoints optional**, because durable is not listening: a queue
+  consumer or indexer is owned, invocation-probed, contained, and cleaned
+  while binding no socket and claiming no port (PORT-1 stays fully scoped to
+  declared endpoints).
+
+The connective tissue is the **invocation** (`tools + run + env + cwd +
+timeout + stdin`) — the one way anything says "run this program". Invocations
+are **anonymous and inline** (INVOKE-1): naming them for reuse would recreate
+the exec registry and its reuse/wiring entanglement; content reuse is a Nix
+`let`, and the model carries the fully-applied copies.
+
+Adopter vocabulary enters the contract as **names over this algebra, never as
+schema**: `check` is not a concept nixfied knows, it is a composite an
+adopter named, exported to the flake surface through
+`nixfied.surface.verbs` (VERB-1: control verbs — `run`, `ps`, `down`,
+`clean`, `admit` — are framework-reserved; project verbs derive only from
+adopter-exported task names). Environment **membership does not exist**:
+running a task brings up exactly the services its leaves require —
+`servicesRequired`, `operationBindings`, and operation ids are **derived**
+from the graph (DERIVE-1), computed identically by the Nix compiler and the
+runtime's lowering against one normative source
+(`docs/DERIVATION_SPEC.md`), and compared fail-closed at admission.
+Hand-declaration is reserved for *choices* (surface verbs) and *attestations*
+(effects). Child environments are **hermetic**: declared env plus the
+runtime-owned PATH (assembled from the tool roots), nothing inherited.
+
 ## Correctness in four layers
 
 1. **Model correctness (Nix).** Reject invalid names, broken references, cyclic
@@ -173,7 +214,9 @@ future scope.
 | Lease/refcount assumed a daemon | run/service/borrower lease split |
 | Adapter complexity preceded proven lifecycle | generic primitives before concrete adapters (RUNTIME-GENERIC-1) |
 | A single huge proof workspace became a second framework | tiered proofs; later, the thin self-hosted gate |
-| Duplicate command families per lifecycle action | framework-owned public surfaces (SURFACE-1) |
+| Duplicate command families per lifecycle action | framework-owned public surfaces (SURFACE-1, since split) |
+| The authoring surface was the wire format; the first adopter's commands/toolchain/verbs escaped into shell and its flake | the task–service algebra: vocabulary as names over a closed algebra, derived facts, the adopter-owned verb surface (KIND-2 / INVOKE-1 / STATIC-1 / DERIVE-1 / VERB-1) |
+| The endpoint requirement conflated durable with listening; the non-listening worker shape was unrepresentable | endpoint-optional services with probe/placeholder/effects coherence; PORT-1 restated scoped to declared endpoints |
 
 ## The framework gate
 
@@ -193,26 +236,28 @@ inputs + nix-built binaries + throwaway repos/state, not a VM.
 
 ## Verification surfaces (framework vs adopter)
 
-Two audiences, two surfaces, one rule. **Adopters** get `run` / `check` / `test`
-/ `ci` flake apps generated from their model (`lib.projectApps`, wired by the
-`install` scaffold); their verification *is* a workflow, because their tests are
-tasks — a 0-service `fullcheck` (lint/test), an N-service `e2e` — run by the same
-runtime that runs their app, with no separate harness. **The framework** verifies
-its own Rust/Nix with plain `nix flake check` (a hermetic rustfmt/clippy/check
-derivation), a `cargo` test floor, and the gate; it does *not* route its source
-checks through nixfied tasks. The reason is the invariant that makes the whole
+Two audiences, two surfaces, one rule. **Adopters** get the reserved control
+apps (`run` / `ps` / `down` / `clean` / `admit`) plus one app per task id they
+export in `nixfied.surface.verbs` (`lib.projectApps`, wired by the `install`
+scaffold); their verification *is* composition, because their tests are
+tasks — a 0-service `check` (lint/test), an N-service `e2e` — composed into
+the composites they name and run by the same runtime that runs their app,
+with no separate harness. **The framework** verifies its own Rust/Nix with
+plain `nix flake check` (a hermetic rustfmt/clippy/check derivation), a
+`cargo` test floor, and the gate; it does *not* route its source checks
+through nixfied tasks. The reason is the invariant that makes the whole
 design work: a nixfied task can never invoke Nix (SEAM-1), so `nix build` /
-`nix flake check` cannot be tasks; and the runtime must not be the instrument that
-grades its own unit tests. So `.#gate` is framework-only — a system proving its
-own runtime — while an adopter's acceptance proof is simply another workflow they
-declare (run via `.#run -- --workflow <name>`). Nix is the substrate and the
-workflow engine runs *on* it: the framework's own CI lives in that substrate,
-every adopter's verification lives in the engine.
+`nix flake check` cannot be tasks; and the runtime must not be the instrument
+that grades its own unit tests. So `.#gate` is framework-only — a system
+proving its own runtime — while an adopter's acceptance proof is simply
+another task they declare and export (`nix run .#release`, or
+`.#run -- --task <id>` for anything unexported).
 
 ## Deferred by design
 
 The first cut intentionally omits: full secrets/credentials management;
-inter-service DAGs beyond workflow readiness gates; centralized log aggregation;
+inter-service DAGs beyond readiness gates and prepare requirements;
+centralized log aggregation;
 multi-host/remote execution; a required daemon; UI/dashboards; a manifest-sealed
 bundle envelope; and a dynamic runtime adapter protocol. The last two are added
 only if a concrete need (portable bundles, cache export/import, standalone
