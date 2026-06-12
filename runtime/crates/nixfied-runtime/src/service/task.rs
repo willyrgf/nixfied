@@ -26,6 +26,11 @@ use nixfied_model::ServiceId;
 #[serde(rename_all = "camelCase")]
 pub struct TaskRun {
     pub task_id: String,
+    /// Evidence identity: the flattened step path of the node that ran this
+    /// leaf (`<root>.<step>...` for composite selections, the task id for a
+    /// direct leaf run). Logs, summaries, and the registry process row key by
+    /// it, so the same leaf referenced twice leaves distinct evidence.
+    pub step_path: String,
     pub process_key: String,
     pub exit_code: Option<i32>,
     pub timed_out: bool,
@@ -148,7 +153,7 @@ pub fn run_dependent_task_cancellable(
     let pid = child.id();
     let pgid = process_group(pid)?
         .ok_or_else(|| RuntimeError::new(ErrorCode::ProcEscape, "task process disappeared"))?;
-    let process_key = format!("process-{}-task-{task_id}-{pid}-{pgid}", run_context.run_id);
+    let process_key = format!("process-{}-task-{node_id}-{pid}-{pgid}", run_context.run_id);
     let start_identity = process_start_identity(pid, pgid, platform_start_identity(pid).as_deref());
     if let Err(error) = record_task_started(
         registry,
@@ -203,6 +208,7 @@ pub fn run_dependent_task_cancellable(
     };
     let run = TaskRun {
         task_id: task_id.to_string(),
+        step_path: node_id.to_string(),
         process_key: process_key.clone(),
         exit_code,
         timed_out,

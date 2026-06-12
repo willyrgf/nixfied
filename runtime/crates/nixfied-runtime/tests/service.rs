@@ -3172,6 +3172,103 @@ fn runtime_drives_full_lifecycle_without_invoking_nix() {
 /// to create that row only inside the per-service loop, so a task-only run left
 /// none and `mark_task_finished`'s `UPDATE runs` was a silent no-op.
 #[test]
+fn composite_run_keys_evidence_by_step_path() {
+    // A composite referencing the same leaf twice runs it twice, with logs,
+    // summaries, and registry rows keyed by the distinct step paths.
+    let Some(python) = nix_store_executable(&["python3"]) else {
+        return;
+    };
+    let closure_root = closure_root_for_store_executable(&python)
+        .expect("store executable should have a closure root");
+    let script = "import sys; sys.exit(0)";
+    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
+    let port = listener.local_addr().expect("local addr").port();
+    drop(listener);
+
+    let mut value = fixture_model(&python.to_string_lossy(), &["service", "${port}"], port);
+    value["closures"]["synthetic-helper"]["storePath"] = json!(closure_root.to_string_lossy());
+    value["environments"]["dev"]["services"] = json!([]);
+    value["tasks"]["smoke"]["requires"] = json!([]);
+    set_task_run_args(&mut value, &["unit"]);
+    prepend_invocation_args(&mut value, &["-c", script]);
+    value["tasks"]["twice"] = json!({
+        "kind": "composite",
+        "steps": {
+            "again": { "task": "smoke", "dependsOn": ["first"] },
+            "first": { "task": "smoke" }
+        }
+    });
+    value["environments"]["dev"]["tasks"] = json!(["twice"]);
+    let model: Model = serde_json::from_value(value).expect("composite model should parse");
+
+    let tmp = TempDir::new();
+    let model_path = tmp.path.join("model.json");
+    let state_base = tmp.path.join("state");
+    fs::create_dir_all(&state_base).expect("state base should be created");
+    fs::write(
+        &model_path,
+        serde_json::to_vec_pretty(&model).expect("model should serialize"),
+    )
+    .expect("model should be written");
+
+    let run = Command::new(runtime_binary())
+        .arg("run")
+        .arg("--allow-non-store-model")
+        .arg("--model")
+        .arg(&model_path)
+        .arg("--timeout-ms")
+        .arg("5000")
+        .current_dir(&tmp.path)
+        .env("NIXFIED_STATE_DIR", &state_base)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("runtime should run");
+    assert!(
+        run.status.success(),
+        "composite run failed: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let output: Value = serde_json::from_slice(&run.stdout).expect("run output should be JSON");
+    let step_paths: Vec<&str> = output["tasks"]
+        .as_array()
+        .expect("tasks array")
+        .iter()
+        .map(|task| task["stepPath"].as_str().expect("stepPath"))
+        .collect();
+    assert_eq!(step_paths, vec!["twice.first", "twice.again"]);
+
+    // Per-node evidence: distinct logs and summaries keyed by step path.
+    for path in ["twice.first", "twice.again"] {
+        assert!(
+            find_file(&state_base, &format!("task.{path}.stdout.log")).is_some(),
+            "missing stdout log for {path}"
+        );
+        assert!(
+            find_file(&state_base, &format!("summary.{path}.json")).is_some(),
+            "missing summary for {path}"
+        );
+    }
+
+    // Two registry task rows, keyed by step-path process keys.
+    let registry_path =
+        find_file(&state_base, "registry.sqlite3").expect("a registry must exist after the run");
+    let conn = rusqlite::Connection::open(&registry_path).expect("registry should open");
+    let keys: Vec<String> = conn
+        .prepare("SELECT process_key FROM processes ORDER BY process_key")
+        .expect("statement prepares")
+        .query_map([], |row| row.get(0))
+        .expect("query runs")
+        .collect::<Result<_, _>>()
+        .expect("rows collect");
+    assert!(
+        keys.iter().any(|key| key.contains("task-twice.first"))
+            && keys.iter().any(|key| key.contains("task-twice.again")),
+        "process keys must carry step paths: {keys:?}"
+    );
+}
+
+#[test]
 fn task_only_run_records_a_durable_runs_row() {
     let Some(python) = nix_store_executable(&["python3"]) else {
         return;
