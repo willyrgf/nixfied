@@ -106,7 +106,8 @@
             { lib, ... }:
             {
               imports = [ ./examples/postgres/nixfied.nix ];
-              nixfied.tasks.smoke-query.args = lib.mkForce [
+              nixfied.tasks.smoke-query.invocation.run = lib.mkForce [
+                "psql"
                 "-h"
                 "127.0.0.1"
                 "-p"

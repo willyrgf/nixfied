@@ -84,6 +84,22 @@ let
       } >> "$pgdata/postgresql.conf"
     '';
   };
+  pgReadyInvocation = {
+    tools = [ "pg-isready" ];
+    run = [
+      "pg_isready"
+      "-h"
+      "127.0.0.1"
+      "-p"
+      "\${port}"
+      "-U"
+      "postgres"
+      "-d"
+      "postgres"
+      "-t"
+      "1"
+    ];
+  };
 in
 {
   # One closure per executable. Each exec resolves to its closure's executable;
@@ -130,29 +146,19 @@ in
     ];
   };
 
-  nixfied.execs.pg-init = {
-    closureId = "pg-prepare";
-    timeoutMs = 60000;
-  };
-  nixfied.execs.pg-server = {
-    closureId = "pg-server";
-  };
-  nixfied.execs.pg-ready = {
-    closureId = "pg-isready";
-  };
-  nixfied.execs.pg-smoke = {
-    closureId = "pg-psql";
-  };
-
   nixfied.services.postgres = {
     lifecycle = {
       prepare = {
         operationId = "service.postgres.prepare";
-        execId = "pg-init";
-        execArgs = [
-          "--state-dir"
-          "\${stateDir}"
-        ];
+        invocation = {
+          tools = [ "pg-prepare" ];
+          run = [
+            "nixfied-pg-prepare"
+            "--state-dir"
+            "\${stateDir}"
+          ];
+          timeoutMs = 60000;
+        };
         terminal = {
           success = "initialized";
           failure = "failed";
@@ -160,19 +166,22 @@ in
       };
       start = {
         operationId = "service.postgres.start";
-        execId = "pg-server";
-        execArgs = [
-          "-D"
-          pgdata
-          # Connect over TCP only; disabling the Unix socket avoids the macOS
-          # sun_path length limit under deep state directories.
-          "-c"
-          "unix_socket_directories="
-          "-h"
-          "127.0.0.1"
-          "-p"
-          "\${port}"
-        ];
+        invocation = {
+          tools = [ "pg-server" ];
+          run = [
+            "postgres"
+            "-D"
+            pgdata
+            # Connect over TCP only; disabling the Unix socket avoids the macOS
+            # sun_path length limit under deep state directories.
+            "-c"
+            "unix_socket_directories="
+            "-h"
+            "127.0.0.1"
+            "-p"
+            "\${port}"
+          ];
+        };
         terminal = {
           success = "spawned";
           failure = "failed";
@@ -185,19 +194,7 @@ in
         # bound (which postgres does well before recovery finishes).
         probe = {
           kind = "exec";
-          execId = "pg-ready";
-          execArgs = [
-            "-h"
-            "127.0.0.1"
-            "-p"
-            "\${port}"
-            "-U"
-            "postgres"
-            "-d"
-            "postgres"
-            "-t"
-            "1"
-          ];
+          invocation = pgReadyInvocation;
           timeoutMs = 2000;
           retryIntervalMs = 200;
           maxAttempts = 60;
@@ -211,19 +208,7 @@ in
         operationId = "service.postgres.health";
         probe = {
           kind = "exec";
-          execId = "pg-ready";
-          execArgs = [
-            "-h"
-            "127.0.0.1"
-            "-p"
-            "\${port}"
-            "-U"
-            "postgres"
-            "-d"
-            "postgres"
-            "-t"
-            "1"
-          ];
+          invocation = pgReadyInvocation;
           timeoutMs = 2000;
           retryIntervalMs = 200;
           maxAttempts = 60;
@@ -261,21 +246,24 @@ in
 
   nixfied.tasks.smoke-query = {
     operationId = "task.smoke-query.run";
-    execId = "pg-smoke";
-    args = [
-      "-h"
-      "127.0.0.1"
-      "-p"
-      "\${port}"
-      "-U"
-      "postgres"
-      "-d"
-      "postgres"
-      "-w"
-      "-tAc"
-      "SELECT 1"
-    ];
-    dependsOnServicesReady = [ "postgres" ];
+    invocation = {
+      tools = [ "pg-psql" ];
+      run = [
+        "psql"
+        "-h"
+        "127.0.0.1"
+        "-p"
+        "\${port}"
+        "-U"
+        "postgres"
+        "-d"
+        "postgres"
+        "-w"
+        "-tAc"
+        "SELECT 1"
+      ];
+    };
+    requires = [ "postgres" ];
     logRefs = [ "task.smoke-query" ];
     summaryRefs = [ "summary" ];
   };

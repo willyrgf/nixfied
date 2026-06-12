@@ -72,7 +72,7 @@ let
     "\${port}"
   ];
 
-  mkService = name: {
+  mkService = name: program: {
     lifecycle = {
       prepare = {
         operationId = "service.${name}.prepare";
@@ -83,8 +83,10 @@ let
       };
       start = {
         operationId = "service.${name}.start";
-        execId = name;
-        execArgs = serviceArgs;
+        invocation = {
+          tools = [ name ];
+          run = [ program ] ++ serviceArgs;
+        };
         terminal = {
           success = "spawned";
           failure = "failed";
@@ -156,28 +158,25 @@ in
     ];
   };
 
-  nixfied.execs.api = {
-    closureId = "api";
-  };
-  nixfied.execs.worker = {
-    closureId = "worker";
-  };
-
-  nixfied.services.api = mkService "api";
-  nixfied.services.worker = mkService "worker";
+  nixfied.services.api = mkService "api" "polyglot-python";
+  nixfied.services.worker = mkService "worker" "polyglot-perl";
 
   nixfied.tasks.ping-api = {
     operationId = "task.ping-api.run";
-    execId = "api";
-    args = taskArgs;
-    dependsOnServicesReady = [ "api" ];
+    invocation = {
+      tools = [ "api" ];
+      run = [ "polyglot-python" ] ++ taskArgs;
+    };
+    requires = [ "api" ];
     logRefs = [ "task.ping-api" ];
   };
   nixfied.tasks.ping-worker = {
     operationId = "task.ping-worker.run";
-    execId = "worker";
-    args = taskArgs;
-    dependsOnServicesReady = [ "worker" ];
+    invocation = {
+      tools = [ "worker" ];
+      run = [ "polyglot-perl" ] ++ taskArgs;
+    };
+    requires = [ "worker" ];
     logRefs = [ "task.ping-worker" ];
   };
 

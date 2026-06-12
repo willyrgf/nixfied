@@ -1,7 +1,7 @@
 # Reth (Ethereum dev node) reference adapter.
 #
 # Compiles a dev-mode reth node into the generic model primitives. The runtime
-# gains no Ethereum knowledge: start is a wrapper exec that derives the node's
+# gains no Ethereum knowledge: start is a wrapper invocation that derives the node's
 # auxiliary ports and dev credentials, readiness and health are JSON-RPC
 # protocol probes (`curl` posting `eth_blockNumber`), the smoke task is the
 # same probe as a dependent task, and cleanup is the marker-gated runtime
@@ -96,7 +96,8 @@ let
     '';
   };
 
-  rpcProbeArgs = [
+  rpcProbeRun = [
+    "curl"
     "-sf"
     "-X"
     "POST"
@@ -106,6 +107,10 @@ let
     ''{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}''
     "http://127.0.0.1:\${port}"
   ];
+  rpcProbeInvocation = {
+    tools = [ "reth-rpc-probe" ];
+    run = rpcProbeRun;
+  };
 in
 {
   nixfied.closures.reth-node = {
@@ -132,13 +137,6 @@ in
     ];
   };
 
-  nixfied.execs.reth-node = {
-    closureId = "reth-node";
-  };
-  nixfied.execs.reth-rpc = {
-    closureId = "reth-rpc-probe";
-  };
-
   nixfied.services.reth = {
     lifecycle = {
       prepare = {
@@ -151,17 +149,20 @@ in
       };
       start = {
         operationId = "service.reth.start";
-        execId = "reth-node";
-        execArgs = [
-          "--http-port"
-          "\${port:reth-http}"
-          "--ws-port"
-          "\${port:reth-ws}"
-          "--authrpc-port"
-          "\${port:reth-authrpc}"
-          "--state-dir"
-          "\${stateDir}"
-        ];
+        invocation = {
+          tools = [ "reth-node" ];
+          run = [
+            "nixfied-reth"
+            "--http-port"
+            "\${port:reth-http}"
+            "--ws-port"
+            "\${port:reth-ws}"
+            "--authrpc-port"
+            "\${port:reth-authrpc}"
+            "--state-dir"
+            "\${stateDir}"
+          ];
+        };
         terminal = {
           success = "spawned";
           failure = "failed";
@@ -173,8 +174,7 @@ in
         # port — reth listens well before the RPC layer serves requests.
         probe = {
           kind = "exec";
-          execId = "reth-rpc";
-          execArgs = rpcProbeArgs;
+          invocation = rpcProbeInvocation;
           timeoutMs = 2000;
           retryIntervalMs = 500;
           maxAttempts = 120;
@@ -188,8 +188,7 @@ in
         operationId = "service.reth.health";
         probe = {
           kind = "exec";
-          execId = "reth-rpc";
-          execArgs = rpcProbeArgs;
+          invocation = rpcProbeInvocation;
           timeoutMs = 2000;
           retryIntervalMs = 500;
           maxAttempts = 120;
@@ -229,9 +228,8 @@ in
 
   nixfied.tasks.reth-smoke = {
     operationId = "task.reth-smoke.run";
-    execId = "reth-rpc";
-    args = rpcProbeArgs;
-    dependsOnServicesReady = [ "reth" ];
+    invocation = rpcProbeInvocation;
+    requires = [ "reth" ];
     logRefs = [ "task.reth-smoke" ];
     summaryRefs = [ "summary" ];
   };

@@ -75,7 +75,8 @@ let
     '';
   };
 
-  serviceArgs = label: [
+  serviceRun = label: [
+    "downstream-app"
     "service"
     "--label"
     label
@@ -84,7 +85,8 @@ let
     "--port"
     "\${port}"
   ];
-  taskArgs = label: [
+  taskRun = label: [
+    "downstream-app"
     "task"
     "--label"
     label
@@ -109,8 +111,10 @@ let
       };
       start = {
         operationId = "service.${name}.start";
-        execId = name;
-        execArgs = serviceArgs name ++ extraStartArgs;
+        invocation = {
+          tools = [ "app" ];
+          run = serviceRun name ++ extraStartArgs;
+        };
         terminal = {
           success = "spawned";
           failure = "failed";
@@ -189,9 +193,6 @@ in
     ];
   };
 
-  nixfied.execs.api.closureId = "app";
-  nixfied.execs.worker.closureId = "app";
-
   nixfied.services.api = mkAppService "api" [ ] [ ];
   # The worker connects to the api in its own slot: the runtime starts the api
   # first and resolves the named endpoint from the slot plan.
@@ -205,16 +206,20 @@ in
 
   nixfied.tasks.ping-api = {
     operationId = "task.ping-api.run";
-    execId = "api";
-    args = taskArgs "api";
-    dependsOnServicesReady = [ "api" ];
+    invocation = {
+      tools = [ "app" ];
+      run = taskRun "api";
+    };
+    requires = [ "api" ];
     logRefs = [ "task.ping-api" ];
   };
   nixfied.tasks.ping-worker = {
     operationId = "task.ping-worker.run";
-    execId = "worker";
-    args = taskArgs "worker";
-    dependsOnServicesReady = [ "worker" ];
+    invocation = {
+      tools = [ "app" ];
+      run = taskRun "worker";
+    };
+    requires = [ "worker" ];
     logRefs = [ "task.ping-worker" ];
   };
   # A release gate that requires the whole stack ready before it runs: it
@@ -223,22 +228,21 @@ in
   # others are addressed by name via ${port:<serviceId>}/${host:<serviceId>},
   # and the env DSN proves env values are substituted too (the app fails on a
   # literal placeholder).
-  nixfied.execs.gate = {
-    closureId = "app";
-    env = {
-      NIXFIED_DEMO_DSN = "tcp://\${host:postgres}:\${port:postgres}";
-    };
-  };
   nixfied.tasks.release-gate = {
     operationId = "task.release-gate.run";
-    execId = "gate";
-    args = taskArgs "api" ++ [
-      "--also"
-      "\${host:worker}:\${port:worker}"
-      "--also"
-      "\${host:postgres}:\${port:postgres}"
-    ];
-    dependsOnServicesReady = [
+    invocation = {
+      tools = [ "app" ];
+      run = taskRun "api" ++ [
+        "--also"
+        "\${host:worker}:\${port:worker}"
+        "--also"
+        "\${host:postgres}:\${port:postgres}"
+      ];
+      env = {
+        NIXFIED_DEMO_DSN = "tcp://\${host:postgres}:\${port:postgres}";
+      };
+    };
+    requires = [
       "api"
       "worker"
       "postgres"
