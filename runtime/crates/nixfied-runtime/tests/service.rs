@@ -14,8 +14,8 @@ use nixfied_runtime::service::registry::{
     PortReservation, RunRecord, TaskProcessRecord, record_task_started, reserve_service_start,
 };
 use nixfied_runtime::service::{
-    RunContext, compute_service_identity, run_dependent_task, run_dependent_task_cancellable,
-    service_address_hash, service_instance_id, wait_for_tcp_probe,
+    RunContext, SlotEndpoints, compute_service_identity, run_dependent_task,
+    run_dependent_task_cancellable, service_address_hash, service_instance_id, wait_for_tcp_probe,
 };
 use nixfied_runtime::slot::select_slot;
 use nixfied_runtime::state::{
@@ -2825,6 +2825,81 @@ fn task_child_environment_is_hermetic() {
             "unexpected child env var {name}: {stdout}"
         );
     }
+}
+
+#[test]
+fn endpoint_less_identity_is_deterministic_and_distinct() {
+    // SVC-ID-1 over the empty endpoint set: hashing is deterministic, and an
+    // endpoint-less contract has a different identity than a listening one.
+    let value = fixture_model("/bin/sleep", &["30"], 23180);
+    let model: Model = serde_json::from_value(value).expect("fixture model should parse");
+    let listening = model.services.get("synthetic").expect("service");
+    let mut endpoint_less = listening.clone();
+    endpoint_less.endpoints.clear();
+    endpoint_less.primary_endpoint = None;
+
+    let a = compute_service_identity(&endpoint_less, &model.state, &model.target);
+    let b = compute_service_identity(&endpoint_less, &model.state, &model.target);
+    let c = compute_service_identity(listening, &model.state, &model.target);
+    assert_eq!(a.endpoint_identity_hash, b.endpoint_identity_hash);
+    assert_ne!(a.endpoint_identity_hash, c.endpoint_identity_hash);
+}
+
+#[test]
+fn endpoint_less_service_reaches_ready_without_ownership_verification() {
+    // An endpoint-less service binds nothing: readiness is its invocation
+    // probe answering, and PORT-1 has no claim left to verify (scoped to
+    // declared endpoints).
+    let mut value = fixture_model("/bin/sleep", &["30"], 23180);
+    value["services"]["synthetic"]["endpoints"] = json!(null);
+    value["services"]["synthetic"]["primaryEndpoint"] = json!(null);
+    value["services"]["synthetic"]["lifecycle"]["start"]["invocation"]["run"] =
+        json!(["sleep", "30"]);
+    add_probe_shell_closure(&mut value, "service.synthetic.ready");
+    value["services"]["synthetic"]["lifecycle"]["ready"]["probe"] = json!({
+        "kind": "exec", "invocation": probe_shell_invocation(json!(["sh", "-c", "exit 0"])),
+        "timeoutMs": 1000, "retryIntervalMs": 50, "maxAttempts": 5
+    });
+    // Health stays tcp in the fixture; make it an invocation probe too.
+    value["closures"]["probe-shell"]["operationBindings"] =
+        json!(["service.synthetic.health", "service.synthetic.ready"]);
+    value["services"]["synthetic"]["lifecycle"]["health"]["probe"] = json!({
+        "kind": "exec", "invocation": probe_shell_invocation(json!(["sh", "-c", "exit 0"])),
+        "timeoutMs": 1000, "retryIntervalMs": 50, "maxAttempts": 5
+    });
+    // The smoke task's bare placeholder has no endpoint to resolve against an
+    // endpoint-less primary; the test exercises the service, not the task.
+    set_task_run_args(&mut value, &["noop"]);
+    // serde: null maps/strings are not "absent" — drop the keys entirely.
+    value["services"]["synthetic"]
+        .as_object_mut()
+        .unwrap()
+        .remove("endpoints");
+    value["services"]["synthetic"]
+        .as_object_mut()
+        .unwrap()
+        .remove("primaryEndpoint");
+    let mut fixture = ServiceFixture::from_value(value);
+    let mut service = nixfied_runtime::service::start_service_for_slot(
+        &fixture.admission,
+        &fixture.placement,
+        &mut fixture.registry,
+        "run-endpoint-less",
+        &select_slot(&fixture.model, None).expect("slot"),
+        &nixfied_runtime::service::ServiceSelection {
+            service_name: "synthetic",
+            endpoint_ports: &std::collections::BTreeMap::new(),
+            slot_endpoints: &SlotEndpoints::new(),
+        },
+    )
+    .expect("endpoint-less service should start");
+    assert!(service.selected_endpoint.is_none());
+    service
+        .wait_for_probe_ready(&mut fixture.registry)
+        .expect("invocation probe readiness should succeed with no ownership claim");
+    service
+        .stop(&mut fixture.registry, 1000)
+        .expect("service should stop");
 }
 
 struct ServiceFixture {
