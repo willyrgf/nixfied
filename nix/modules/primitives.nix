@@ -25,30 +25,70 @@ let
     type = terminalType;
     description = "Typed terminal result tokens.";
   };
-  execArgs = mkOption {
-    type = types.listOf types.str;
-    default = [ ];
-    description = "Operation-specific args appended to the exec args.";
+  # The one way anything in the model says "run this program" (INVOKE-1):
+  # inline, anonymous, fully applied. `tools` is the tool set whose bin roots
+  # form the child PATH: declared closure ids (strings) or plain packages the
+  # compiler synthesizes tool closures from. `run` is the argv; `run[0]` is
+  # resolved against the tool set at eval, so the runtime resolves nothing on
+  # the host (SEAM-1).
+  invocationOptions = {
+    tools = mkOption {
+      type = types.nonEmptyListOf (types.either types.nonEmptyStr types.package);
+      description = "Tool set: declared closure ids or packages; their bin roots form the child PATH in order.";
+    };
+    run = mkOption {
+      type = types.nonEmptyListOf types.str;
+      description = "Argv. run[0] must be the executable basename of one tool.";
+    };
+    env = mkOption {
+      type = types.attrsOf types.str;
+      default = { };
+      description = "Declared child environment (hermetic: nothing else is inherited; PATH is runtime-owned).";
+    };
+    codebaseId = mkOption {
+      type = types.nonEmptyStr;
+      default = "main";
+      description = "Codebase the invocation observes.";
+    };
+    cwd = mkOption {
+      type = types.nonEmptyStr;
+      default = ".";
+      description = "Confined relative working directory under the codebase.";
+    };
+    stdin = mkOption {
+      type = types.enum [
+        "null"
+        "inherit"
+      ];
+      default = "null";
+      description = "Stdin policy.";
+    };
+    timeoutMs = mkOption {
+      type = positiveInt;
+      default = 30000;
+      description = "Invocation timeout.";
+    };
   };
+  invocationType = types.submodule { options = invocationOptions; };
 
   # Each lifecycle class binds exactly the primitive its mechanism needs: an
-  # illegal binding (a stop exec, a probe on start) is unrepresentable.
+  # illegal binding (a stop invocation, a probe on start) is unrepresentable.
   prepareOpType = types.submodule {
     options = {
-      inherit operationId terminal execArgs;
-      execId = mkOption {
-        type = types.nullOr types.str;
+      inherit operationId terminal;
+      invocation = mkOption {
+        type = types.nullOr invocationType;
         default = null;
-        description = "Optional data-dir init exec.";
+        description = "Optional data-dir init invocation.";
       };
     };
   };
   startOpType = types.submodule {
     options = {
-      inherit operationId terminal execArgs;
-      execId = mkOption {
-        type = types.nonEmptyStr;
-        description = "Exec spawned and owned as the foreground service.";
+      inherit operationId terminal;
+      invocation = mkOption {
+        type = invocationType;
+        description = "Invocation spawned and owned as the foreground service.";
       };
     };
   };
@@ -60,22 +100,17 @@ let
           "exec"
         ];
         default = "tcp";
-        description = "Probe mechanism: tcp-connect the service endpoint, or run a bound short-lived exec (exit 0 = success).";
+        description = "Probe mechanism: tcp-connect the service endpoint, or run a bound short-lived invocation (exit 0 = success).";
       };
-      execId = mkOption {
-        type = types.nullOr types.str;
+      invocation = mkOption {
+        type = types.nullOr invocationType;
         default = null;
-        description = "The exec an `exec` probe runs (e.g. pg_isready); must be null for `tcp`.";
-      };
-      execArgs = mkOption {
-        type = types.listOf types.str;
-        default = [ ];
-        description = "Probe-specific args appended to the exec args; placeholders resolve like start exec args.";
+        description = "The invocation an `exec` probe runs (e.g. pg_isready); must be null for `tcp`.";
       };
       timeoutMs = mkOption {
         type = positiveInt;
         default = 1000;
-        description = "Per-attempt probe timeout (the exec spec's own timeoutMs does not apply to probe attempts).";
+        description = "Per-attempt probe timeout (the invocation's own timeoutMs does not apply to probe attempts).";
       };
       retryIntervalMs = mkOption {
         type = positiveInt;
@@ -245,51 +280,6 @@ let
     };
   };
 
-  execType = types.submodule {
-    options = {
-      closureId = mkOption {
-        type = types.nonEmptyStr;
-        description = "Closure providing the executable.";
-      };
-      # No `executable` override: an exec always runs its closure's declared
-      # executable. Admission enforces that exact pairing, so an override could
-      # only produce a model that evaluates but never admits.
-      args = mkOption {
-        type = types.listOf types.str;
-        default = [ ];
-        description = "Base exec args.";
-      };
-      env = mkOption {
-        type = types.attrsOf types.str;
-        default = { };
-        description = "Exec environment variables.";
-      };
-      codebaseId = mkOption {
-        type = types.nonEmptyStr;
-        default = "main";
-        description = "Codebase the exec observes.";
-      };
-      cwd = mkOption {
-        type = types.nonEmptyStr;
-        default = ".";
-        description = "Confined relative working directory under the codebase.";
-      };
-      stdin = mkOption {
-        type = types.enum [
-          "null"
-          "inherit"
-        ];
-        default = "null";
-        description = "Stdin policy.";
-      };
-      timeoutMs = mkOption {
-        type = positiveInt;
-        default = 30000;
-        description = "Exec timeout.";
-      };
-    };
-  };
-
   closureType = types.submodule {
     options = {
       package = mkOption {
@@ -349,19 +339,14 @@ let
         type = types.nonEmptyStr;
         description = "Globally unique task operation identifier.";
       };
-      execId = mkOption {
-        type = types.nonEmptyStr;
-        description = "Exec the task runs.";
+      invocation = mkOption {
+        type = invocationType;
+        description = "The leaf invocation the task runs.";
       };
-      args = mkOption {
+      requires = mkOption {
         type = types.listOf types.str;
         default = [ ];
-        description = "Task-specific args appended to the exec args.";
-      };
-      dependsOnServicesReady = mkOption {
-        type = types.listOf types.str;
-        default = [ ];
-        description = "Services that must be ready before the task runs.";
+        description = "Services that must be ready (alive, probed, addressable) while the leaf runs.";
       };
       exitPolicy = mkOption {
         type = exitPolicyType;
@@ -391,12 +376,6 @@ in
     type = types.attrsOf closureType;
     default = { };
     description = "Realised runtime closures, keyed by closure id.";
-  };
-
-  options.nixfied.execs = mkOption {
-    type = types.attrsOf execType;
-    default = { };
-    description = "Reusable exec specs, keyed by exec id.";
   };
 
   options.nixfied.services = mkOption {

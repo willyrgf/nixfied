@@ -35,39 +35,157 @@ let
     }) slots
   );
 
-  # Closures: realise package store paths and absolute executable paths.
-  closurePackages = mapAttrsToList (_id: closure: closure.package) config.nixfied.closures;
-  closureExecutable =
-    id: "${config.nixfied.closures.${id}.package}/${config.nixfied.closures.${id}.executable}";
-  closureSpec = id: closure: {
+  # Declared closures: realise package store paths and absolute executable
+  # paths. Tool entries given as plain packages synthesize additional closures
+  # below.
+  declaredClosureSpec = _id: closure: {
     kind = closure.kind;
     storePath = "${closure.package}";
-    executable = closureExecutable id;
+    executable = "${closure.package}/${closure.executable}";
     targetSystem = target.closureSystem;
     operationBindings = closure.operationBindings;
     requiresExecutable = closure.requiresExecutable;
     effects = closure.effects;
   };
-  closures = mapAttrs closureSpec config.nixfied.closures;
+  declaredClosures = mapAttrs declaredClosureSpec config.nixfied.closures;
 
-  # Execs: the executable is always the bound closure's executable — admission
-  # rejects any other pairing, so the option does not exist.
-  execSpec = _id: exec: {
-    closureId = exec.closureId;
-    executable = closureExecutable exec.closureId;
-    args = exec.args;
-    env = exec.env;
-    codebaseId = exec.codebaseId;
-    cwd = exec.cwd;
-    stdin = exec.stdin;
-    timeoutMs = exec.timeoutMs;
+  # A package-shaped tool synthesizes a closure: its executable anchors the
+  # PATH root (the bin dir) and run[0] resolution; effects default to the
+  # weakest attestation (per-tool effects granularity is deferred).
+  toolClosureId = package: "tool-${lib.getName package}";
+  toolMainProgram = package: package.meta.mainProgram or (lib.getName package);
+  synthesizedClosureOf = package: {
+    kind = "executable";
+    storePath = "${package}";
+    executable = "${package}/bin/${toolMainProgram package}";
+    targetSystem = target.closureSystem;
+    operationBindings = derivedToolBindings.${toolClosureId package} or [ ];
+    requiresExecutable = true;
+    effects = [ "process" ];
   };
-  execs = mapAttrs execSpec config.nixfied.execs;
 
-  # Mirror the runtime's serde skip rules (exec fields only on exec probes) so
-  # nix-emitted and runtime-rederived views stay byte-comparable.
+  # Every invocation position in the model, with the operation id it executes
+  # under: task leaves plus each service's prepare/start and exec probes.
+  invocationPositions =
+    (mapAttrsToList (_id: task: {
+      operationId = task.operationId;
+      invocation = task.invocation;
+    }) config.nixfied.tasks)
+    ++ lib.concatLists (
+      mapAttrsToList (
+        _name: service:
+        let
+          lc = service.lifecycle;
+        in
+        lib.optional (lc.prepare.invocation != null) {
+          operationId = lc.prepare.operationId;
+          invocation = lc.prepare.invocation;
+        }
+        ++ [
+          {
+            operationId = lc.start.operationId;
+            invocation = lc.start.invocation;
+          }
+        ]
+        ++ lib.optional (lc.ready.probe.kind == "exec" && lc.ready.probe.invocation != null) {
+          operationId = lc.ready.operationId;
+          invocation = lc.ready.probe.invocation;
+        }
+        ++ lib.optional (lc.health.probe.kind == "exec" && lc.health.probe.invocation != null) {
+          operationId = lc.health.operationId;
+          invocation = lc.health.probe.invocation;
+        }
+      ) config.nixfied.services
+    );
+
+  toolEntryId = tool: if builtins.isString tool then tool else toolClosureId tool;
+  packageTools = lib.concatMap (
+    position: builtins.filter (tool: !(builtins.isString tool)) position.invocation.tools
+  ) invocationPositions;
+  synthesizedClosures = builtins.listToAttrs (
+    map (package: {
+      name = toolClosureId package;
+      value = synthesizedClosureOf package;
+    }) packageTools
+  );
+  collidingToolIds = builtins.filter (id: declaredClosures ? ${id}) (
+    builtins.attrNames synthesizedClosures
+  );
+  closures =
+    assert lib.assertMsg (collidingToolIds == [ ]) "synthesized tool closure ids collide with declared closures: ${builtins.concatStringsSep ", " collidingToolIds}";
+    declaredClosures // synthesizedClosures;
+  closurePackages = mapAttrsToList (_id: closure: closure.package) config.nixfied.closures ++ packageTools;
+
+  # The declarative run[0] resolution rule (docs/DERIVATION_SPEC.md §1.1): the
+  # first tool closure whose executable basename equals run[0] provides the
+  # executable. The runtime re-derives the same rule at admission.
+  resolveInvocation =
+    owner: invocation:
+    let
+      toolIds = map toolEntryId invocation.tools;
+      undeclared = builtins.filter (id: !(closures ? ${id})) toolIds;
+      program = builtins.head invocation.run;
+      resolvedId = lib.findFirst (id: baseNameOf closures.${id}.executable == program) null toolIds;
+    in
+    assert lib.assertMsg (undeclared == [ ])
+      "${owner}: tools reference undeclared closures: ${builtins.concatStringsSep ", " undeclared}";
+    assert lib.assertMsg (resolvedId != null)
+      "${owner}: run[0] \"${program}\" is not the executable of any declared tool closure";
+    assert lib.assertMsg (!(invocation.env ? PATH))
+      "${owner}: env.PATH is runtime-owned (assembled from the tool roots) and must not be declared";
+    {
+      tools = toolIds;
+      run = invocation.run;
+      executable = closures.${resolvedId}.executable;
+      env = invocation.env;
+      codebaseId = invocation.codebaseId;
+      cwd = invocation.cwd;
+      stdin = invocation.stdin;
+      timeoutMs = invocation.timeoutMs;
+    };
+
+  # Synthesized tool closures derive their bindings from the positions they
+  # resolve run[0] for (declared closures keep hand-declared bindings).
+  derivedToolBindings =
+    let
+      bindingsFor =
+        toolId:
+        lib.naturalSort (
+          lib.unique (
+            map (position: position.operationId) (
+              builtins.filter (
+                position:
+                let
+                  toolIds = map toolEntryId position.invocation.tools;
+                  program = builtins.head position.invocation.run;
+                  matches = builtins.filter (
+                    id:
+                    (
+                      if builtins.isString id then
+                        (closures ? ${id}) && baseNameOf closures.${id}.executable == program
+                      else
+                        false
+                    )
+                  ) toolIds;
+                in
+                matches != [ ] && builtins.head matches == toolId
+              ) invocationPositions
+            )
+          )
+        );
+    in
+    builtins.listToAttrs (
+      map (package: rec {
+        name = toolClosureId package;
+        value = bindingsFor name;
+      }) packageTools
+    );
+
+  # Mirror the runtime's serde skip rules (invocation only on exec probes and
+  # bound prepares) so nix-emitted and runtime-rederived views stay
+  # byte-comparable.
   probeOf =
-    op:
+    owner: op:
     {
       inherit (op.probe)
         kind
@@ -76,27 +194,31 @@ let
         maxAttempts
         ;
     }
-    // lib.optionalAttrs (op.probe.kind == "exec") {
-      inherit (op.probe) execId execArgs;
+    // lib.optionalAttrs (op.probe.kind == "exec" && op.probe.invocation != null) {
+      invocation = resolveInvocation owner op.probe.invocation;
     };
   terminalOf = op: { inherit (op.terminal) success failure; };
-  lifecycleSpec = lc: {
+  lifecycleSpec = name: lc: {
     prepare = {
-      inherit (lc.prepare) operationId execId execArgs;
+      inherit (lc.prepare) operationId;
       terminal = terminalOf lc.prepare;
+    }
+    // lib.optionalAttrs (lc.prepare.invocation != null) {
+      invocation = resolveInvocation "service ${name} prepare" lc.prepare.invocation;
     };
     start = {
-      inherit (lc.start) operationId execId execArgs;
+      inherit (lc.start) operationId;
+      invocation = resolveInvocation "service ${name} start" lc.start.invocation;
       terminal = terminalOf lc.start;
     };
     ready = {
       inherit (lc.ready) operationId;
-      probe = probeOf lc.ready;
+      probe = probeOf "service ${name} ready probe" lc.ready;
       terminal = terminalOf lc.ready;
     };
     health = {
       inherit (lc.health) operationId;
-      probe = probeOf lc.health;
+      probe = probeOf "service ${name} health probe" lc.health;
       terminal = terminalOf lc.health;
     };
     stop = {
@@ -120,7 +242,7 @@ let
   serviceSpec =
     name: service:
     let
-      lifecycle = lifecycleSpec service.lifecycle;
+      lifecycle = lifecycleSpec name service.lifecycle;
       singular = service.endpoint != null;
       multi = service.endpoints != { };
       endpoints =
@@ -149,11 +271,10 @@ let
     };
   services = mapAttrs serviceSpec config.nixfied.services;
 
-  taskSpec = _name: task: {
+  taskSpec = name: task: {
     operationId = task.operationId;
-    execId = task.execId;
-    args = task.args;
-    dependsOnServicesReady = task.dependsOnServicesReady;
+    invocation = resolveInvocation "task ${name}" task.invocation;
+    requires = task.requires;
     exitPolicy = {
       successCodes = task.exitPolicy.successCodes;
     };
@@ -219,7 +340,6 @@ in
     };
     inherit
       closures
-      execs
       services
       tasks
       workflows

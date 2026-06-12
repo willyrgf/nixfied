@@ -148,7 +148,7 @@ fn schema_view(_model: &Model) -> Value {
             "runtimeAbi": nixfied_model::runtime_abi(),
             "toolchainId": nixfied_model::TOOLCHAIN_ID,
             "primitives": [
-                "ExecSpec",
+                "Invocation",
                 "Endpoint",
                 "ProbeSpec",
                 "Lifecycle",

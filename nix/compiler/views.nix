@@ -31,7 +31,7 @@ in
       runtimeAbi = model.runtimeAbi;
       toolchainId = model.toolchainId;
       primitives = [
-        "ExecSpec"
+        "Invocation"
         "Endpoint"
         "ProbeSpec"
         "Lifecycle"

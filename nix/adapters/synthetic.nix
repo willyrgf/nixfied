@@ -78,12 +78,6 @@ in
     ];
   };
 
-  nixfied.execs.synthetic-helper = {
-    closureId = "synthetic-helper";
-    codebaseId = "main";
-    cwd = ".";
-  };
-
   nixfied.services.synthetic = {
     lifecycle = {
       prepare = {
@@ -95,14 +89,17 @@ in
       };
       start = {
         operationId = "service.synthetic.start";
-        execId = "synthetic-helper";
-        execArgs = [
-          "service"
-          "--host"
-          "127.0.0.1"
-          "--port"
-          "\${port}"
-        ];
+        invocation = {
+          tools = [ "synthetic-helper" ];
+          run = [
+            "nixfied-synthetic-helper"
+            "service"
+            "--host"
+            "127.0.0.1"
+            "--port"
+            "\${port}"
+          ];
+        };
         terminal = {
           success = "spawned";
           failure = "failed";
@@ -146,15 +143,18 @@ in
 
   nixfied.tasks.smoke = {
     operationId = "task.smoke.run";
-    execId = "synthetic-helper";
-    args = [
-      "task"
-      "--host"
-      "127.0.0.1"
-      "--port"
-      "\${port}"
-    ];
-    dependsOnServicesReady = [ "synthetic" ];
+    invocation = {
+      tools = [ "synthetic-helper" ];
+      run = [
+        "nixfied-synthetic-helper"
+        "task"
+        "--host"
+        "127.0.0.1"
+        "--port"
+        "\${port}"
+      ];
+    };
+    requires = [ "synthetic" ];
     logRefs = [ "task.smoke" ];
     summaryRefs = [ "summary" ];
   };
