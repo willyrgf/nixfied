@@ -150,6 +150,31 @@ fn lower_service(
             None => None,
         },
     };
+    // Effects coherence, both directions: a listening service's start closure
+    // must attest `network-listener`; an endpoint-less service's must not — it
+    // would announce a listener the planner cannot reserve.
+    if let Some((closure_id, closure)) = executable_closure(&start.invocation, closures) {
+        let listens = closure
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, nixfied_model::ClosureEffect::NetworkListener));
+        if !endpoint_less && !listens {
+            return Err(Rejection::EffectsIncoherent {
+                service: name.to_string(),
+                closure_id: closure_id.clone(),
+                expected: "declared endpoints require `network-listener` on the start closure",
+            }
+            .into());
+        }
+        if endpoint_less && listens {
+            return Err(Rejection::EffectsIncoherent {
+                service: name.to_string(),
+                closure_id: closure_id.clone(),
+                expected: "an endpoint-less service's start closure must not declare `network-listener` (an unreservable listener)",
+            }
+            .into());
+        }
+    }
     let start = StartOp {
         meta: op_meta(&start.operation_id, &start.terminal),
         exec: resolve_invocation(&owner, &start.invocation, closures)?,
@@ -631,6 +656,11 @@ pub enum Rejection {
         service: String,
         placeholder: &'static str,
     },
+    EffectsIncoherent {
+        service: String,
+        closure_id: String,
+        expected: &'static str,
+    },
     ProbeExecMissing {
         service: String,
         class: &'static str,
@@ -707,6 +737,11 @@ impl Rejection {
             } => format!(
                 "service {service} references {placeholder} but declares no endpoint to resolve it"
             ),
+            Rejection::EffectsIncoherent {
+                service,
+                closure_id,
+                expected,
+            } => format!("service {service} start closure {closure_id}: {expected}"),
             Rejection::ProbeExecMissing { service, class } => {
                 format!("service {service} {class} probe is exec but declares no invocation")
             }
@@ -1059,7 +1094,7 @@ mod tests {
                     "kind": "executable", "storePath": "/nix/store/c", "executable": "/nix/store/c/bin/svc",
                     "targetSystem": "x86_64-linux",
                     "operationBindings": ["svc.start"],
-                    "requiresExecutable": true, "effects": ["process"]
+                    "requiresExecutable": true, "effects": ["process", "network-listener"]
                 },
                 "ct": {
                     "kind": "executable", "storePath": "/nix/store/ct", "executable": "/nix/store/ct/bin/task",
@@ -1477,9 +1512,27 @@ mod tests {
     /// An endpoint-less sibling service `worker` with invocation probes; the
     /// closure binds its ops.
     fn with_endpoint_less_worker(value: &mut Value) {
+        value["closures"]["cw"] = json!({
+            "kind": "executable", "storePath": "/nix/store/cw", "executable": "/nix/store/cw/bin/worker",
+            "targetSystem": "x86_64-linux",
+            "operationBindings": ["worker.health", "worker.ready", "worker.start"],
+            "requiresExecutable": true, "effects": ["process"]
+        });
+        let worker_invocation = |run: Value| {
+            json!({
+                "tools": ["cw"],
+                "run": run,
+                "executable": "/nix/store/cw/bin/worker",
+                "env": {},
+                "codebaseId": "main",
+                "cwd": ".",
+                "stdin": "null",
+                "timeoutMs": 1000
+            })
+        };
         let probe = json!({
             "kind": "exec",
-            "invocation": invocation_value("/nix/store/c/bin/svc", json!(["svc", "ping"])),
+            "invocation": worker_invocation(json!(["worker", "ping"])),
             "timeoutMs": 500, "retryIntervalMs": 100, "maxAttempts": 5
         });
         value["services"]["worker"] = json!({
@@ -1487,7 +1540,7 @@ mod tests {
                 "prepare": { "operationId": "worker.prepare", "terminal": { "success": "initialized", "failure": "failed" } },
                 "start": {
                     "operationId": "worker.start",
-                    "invocation": invocation_value("/nix/store/c/bin/svc", json!(["svc", "consume"])),
+                    "invocation": worker_invocation(json!(["worker", "consume"])),
                     "terminal": { "success": "spawned", "failure": "failed" }
                 },
                 "ready": { "operationId": "worker.ready", "probe": probe.clone(), "terminal": { "success": "ready", "failure": "not-ready" } },
@@ -1499,8 +1552,7 @@ mod tests {
             "stateRefs": [], "logRefs": [],
             "containment": "process-group"
         });
-        value["closures"]["c"]["operationBindings"] =
-            json!(["svc.start", "worker.health", "worker.ready", "worker.start"]);
+        value["closures"]["c"]["operationBindings"] = json!(["svc.start"]);
     }
 
     #[test]
@@ -1522,8 +1574,7 @@ mod tests {
         });
         // The tcp probe carries no invocation, so the closure's derived
         // bindings shrink with it.
-        value["closures"]["c"]["operationBindings"] =
-            json!(["svc.start", "worker.health", "worker.start"]);
+        value["closures"]["cw"]["operationBindings"] = json!(["worker.health", "worker.start"]);
         let error = lower(&model_from(value)).expect_err("tcp probe without endpoint must reject");
         assert_eq!(error.code, ErrorCode::ModelAdmission);
         assert!(error.message.contains("endpoint-less"), "{}", error.message);
@@ -1534,7 +1585,7 @@ mod tests {
         let mut value = model_value();
         with_endpoint_less_worker(&mut value);
         value["services"]["worker"]["lifecycle"]["start"]["invocation"]["run"] =
-            json!(["svc", "consume", "--listen", "${port}"]);
+            json!(["worker", "consume", "--listen", "${port}"]);
         let error = lower(&model_from(value)).expect_err("bare placeholder must reject");
         assert_eq!(error.code, ErrorCode::ModelAdmission);
         assert!(
@@ -1581,6 +1632,33 @@ mod tests {
         value["tasks"]["t"]["servicesRequired"] = json!(["svc", "worker"]);
         let em = lower(&model_from(value)).expect("requiring an endpoint-less service is legal");
         assert_eq!(em.tasks["t"].requires.len(), 2);
+    }
+
+    #[test]
+    fn listening_service_start_closure_must_declare_network_listener() {
+        let mut value = model_value();
+        value["closures"]["c"]["effects"] = json!(["process"]);
+        let error = lower(&model_from(value)).expect_err("missing network-listener must reject");
+        assert_eq!(error.code, ErrorCode::ModelAdmission);
+        assert!(
+            error.message.contains("network-listener"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn endpoint_less_start_closure_must_not_declare_network_listener() {
+        let mut value = model_value();
+        with_endpoint_less_worker(&mut value);
+        value["closures"]["cw"]["effects"] = json!(["process", "network-listener"]);
+        let error = lower(&model_from(value)).expect_err("unreservable listener must reject");
+        assert_eq!(error.code, ErrorCode::ModelAdmission);
+        assert!(
+            error.message.contains("network-listener"),
+            "{}",
+            error.message
+        );
     }
 
     #[test]

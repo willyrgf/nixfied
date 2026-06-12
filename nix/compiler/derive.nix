@@ -271,6 +271,17 @@ let
           }) service.endpoints;
       primaryEndpoint = if singular then service.endpoint.endpointId else service.primaryEndpoint;
       probeKind = op: service.lifecycle.${op}.probe.kind;
+      startClosureEffects =
+        let
+          inv = service.lifecycle.start.invocation;
+          toolIds = map toolEntryId inv.tools;
+          program = builtins.head inv.run;
+          resolvedId = lib.findFirst (
+            id: (closures ? ${id}) && baseNameOf closures.${id}.executable == program
+          ) null toolIds;
+        in
+        if resolvedId == null then [ ] else closures.${resolvedId}.effects;
+      startListens = builtins.elem "network-listener" startClosureEffects;
     in
     assert lib.assertMsg (
       !(singular && multi)
@@ -283,6 +294,15 @@ let
     assert lib.assertMsg (
       !endpointLess || (probeKind "ready" == "exec" && probeKind "health" == "exec")
     ) "service ${name}: an endpoint-less service's ready/health probes must be invocation probes (tcp has no target)";
+    # Effects coherence, both directions: declared endpoints require a
+    # `network-listener` attestation on the start closure; an endpoint-less
+    # start closure must not announce a listener the planner cannot reserve.
+    assert lib.assertMsg (
+      endpointLess || startListens
+    ) "service ${name}: declared endpoints require `network-listener` on the start closure's effects";
+    assert lib.assertMsg (
+      !endpointLess || !startListens
+    ) "service ${name}: an endpoint-less service's start closure must not declare `network-listener`";
     {
       inherit lifecycle;
       connectsTo = service.connectsTo;

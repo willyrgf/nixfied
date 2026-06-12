@@ -2851,6 +2851,8 @@ fn endpoint_less_service_reaches_ready_without_ownership_verification() {
     // probe answering, and PORT-1 has no claim left to verify (scoped to
     // declared endpoints).
     let mut value = fixture_model("/bin/sleep", &["30"], 23180);
+    // Endpoint-less: no listener attestation either (effects coherence).
+    value["closures"]["synthetic-helper"]["effects"] = json!(["process"]);
     value["services"]["synthetic"]["endpoints"] = json!(null);
     value["services"]["synthetic"]["primaryEndpoint"] = json!(null);
     value["services"]["synthetic"]["lifecycle"]["start"]["invocation"]["run"] =
