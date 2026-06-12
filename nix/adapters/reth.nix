@@ -116,7 +116,6 @@ in
   nixfied.closures.reth-node = {
     package = rethNode;
     executable = "bin/nixfied-reth";
-    operationBindings = [ "service.reth.start" ];
     effects = [
       "process"
       "network-listener"
@@ -126,11 +125,6 @@ in
   nixfied.closures.reth-rpc-probe = {
     package = pkgs.curl;
     executable = "bin/curl";
-    operationBindings = [
-      "service.reth.ready"
-      "service.reth.health"
-      "task.reth-smoke.run"
-    ];
     effects = [
       "process"
       "network-listener"
@@ -140,7 +134,6 @@ in
   nixfied.services.reth = {
     lifecycle = {
       start = {
-        operationId = "service.reth.start";
         invocation = {
           tools = [ "reth-node" ];
           run = [
@@ -155,13 +148,8 @@ in
             "\${stateDir}"
           ];
         };
-        terminal = {
-          success = "spawned";
-          failure = "failed";
-        };
       };
       ready = {
-        operationId = "service.reth.ready";
         # Protocol readiness: an answered eth_blockNumber call, not a bound
         # port — reth listens well before the RPC layer serves requests.
         probe = {
@@ -171,13 +159,8 @@ in
           retryIntervalMs = 500;
           maxAttempts = 120;
         };
-        terminal = {
-          success = "ready";
-          failure = "not-ready";
-        };
       };
       health = {
-        operationId = "service.reth.health";
         probe = {
           kind = "exec";
           invocation = rpcProbeInvocation;
@@ -185,26 +168,9 @@ in
           retryIntervalMs = 500;
           maxAttempts = 120;
         };
-        terminal = {
-          success = "healthy";
-          failure = "unhealthy";
-        };
       };
       stop = {
-        operationId = "service.reth.stop";
-        signal = "TERM";
         timeoutMs = 10000;
-        terminal = {
-          success = "stopped";
-          failure = "failed";
-        };
-      };
-      clean = {
-        operationId = "service.reth.clean";
-        terminal = {
-          success = "cleaned";
-          failure = "failed";
-        };
       };
     };
     endpoints = {
@@ -218,8 +184,9 @@ in
     containment = "process-tree";
   };
 
+  # The adapter's smoke check is an ordinary named task adopters reference as
+  # a step in their own composites.
   nixfied.tasks.reth-smoke = {
-    operationId = "task.reth-smoke.run";
     invocation = rpcProbeInvocation;
     requires = [ "reth" ];
     logRefs = [ "task.reth-smoke" ];
