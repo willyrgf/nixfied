@@ -116,18 +116,9 @@ pkgs.writeShellApplication {
       nixfied.project.name = "$project_name_escaped";
       nixfied.codebases.main.logicalRoot = ".";
 
-      # \`nix run .#test\` runs the \`test\` workflow. This starter wraps the
-      # synthetic adapter's \`smoke\` task (it pings the service). Replace it with
-      # your own tasks: a 0-service \`fullcheck\` (lint/test) or an N-service \`e2e\`.
-      nixfied.workflows.test = {
-        servicesRequired = [ "synthetic" ];
-        nodes = {
-          smoke = {
-            taskId = "smoke";
-            dependsOn = [ ];
-          };
-        };
-      };
+      # \`nix run .#test\` runs the environment: the synthetic adapter's
+      # \`smoke\` task pings the service. Add your own leaf tasks (lint/test)
+      # and compose them into composite tasks (kind = "composite", steps = …).
     }
     EOF
     }
