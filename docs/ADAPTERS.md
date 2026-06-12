@@ -21,11 +21,13 @@ the registry lives in `nix/adapters/default.nix` (`synthetic`, `postgres`,
 
 | Piece | Contract |
 | --- | --- |
-| Closures | One per executable, each binding exactly the operations it is authorized to run (`operationBindings`) with declared `effects`. |
-| Execs | Reusable exec specs referencing the closures. |
-| Service | A full lifecycle: `prepare` / `start` / `ready` / `health` / `stop` / `clean`, an endpoint, `stateRefs = [ "slot" ]`, containment. |
-| Tasks | Optional smoke/verification tasks gated on the service's readiness. |
-| Environment | A `dev` contribution (services + tasks) that merges with the importing project's own. |
+| Closures | One per executable, with declared `effects` (the one hand-declared attestation). `operationBindings` are derived from the invocation graph; declare a list only as a narrowing gate. |
+| Service | A lifecycle of inline invocations: `prepare` (a **task reference** — see below) / `start` / `ready` / `health` / `stop` / `clean`, endpoints where the service listens, `stateRefs = [ "slot" ]`, containment. Operation ids and terminal tokens are derived; declare only to override (postgres overrides `stop.signal`). |
+| Tasks | Named smoke/verification tasks (`smoke-query`, `reth-smoke`). **This is how adapter checks enter an adopter's pipeline**: the adopter references them as steps in its own composites — membership does not exist, so importing an adapter contributes *definitions only* and adds zero startup to tasks that require nothing of it. |
+
+There is no Execs piece (invocations are inline and anonymous — reuse is a
+Nix `let`) and no Environment piece (membership died with the composition
+rewrite).
 
 ## Conventions
 
@@ -33,6 +35,10 @@ the registry lives in `nix/adapters/default.nix` (`synthetic`, `postgres`,
   `${stateDir}/pgdata`, `${stateDir}/reth`), where `${stateDir}` is the
   runtime-materialised slot state root — so marker-gated `clean` owns it and an
   epoch upgrade can rebuild it.
+- **Prepare is a task**: bind `lifecycle.prepare.task` to a declared task
+  (leaf or composite) — full task semantics, ordinary task evidence, and
+  cross-service `requires` for typed initialization (the combined
+  `connectsTo` + prepare-requires graph must stay acyclic).
 - **Idempotent prepare**: a second run on the same slot must adopt existing
   state, not fail in init. When the package's own init tool is not idempotent
   (initdb), wrap it in a `writeShellApplication` closure that detects and
@@ -40,8 +46,7 @@ the registry lives in `nix/adapters/default.nix` (`synthetic`, `postgres`,
   `nix/adapters/postgres.nix`).
 - **Protocol probes**: ready/health should be `kind = "exec"` protocol probes
   (`pg_isready`, a JSON-RPC call via `curl`) rather than tcp connects, so
-  "ready" means the service answers, not that the port is bound. The probe's
-  closure must bind the ready/health operation ids.
+  "ready" means the service answers, not that the port is bound.
 - **Socket paths**: anything that opens a Unix socket must keep the path short
   (macOS `sun_path` limit under deep state dirs): disable the socket
   (postgres: `unix_socket_directories=`) or place it under `/tmp` keyed by the
@@ -75,3 +80,23 @@ is outside the plan, so it is neither reserved nor isolated across slots. Model 
 as an endpoint instead. A listener the adapter cannot model (no fixed offset, or an
 out-of-band socket) must be disabled rather than left unreserved — see reth's
 `--ipcdisable`.
+
+## Endpoint-less services: durable is not listening
+
+A daemon that binds nothing — a queue consumer, an indexer, a worker that only
+connects OUT — declares **no** endpoint form at all. It keeps the full durable
+contract (owned start, probed readiness, containment, marker-gated clean) with
+the consequences the validators enforce:
+
+- ready/health must be **invocation probes** (a tcp probe has no target);
+  readiness means "the probe answers" — a heartbeat file under `${stateDir}`,
+  a queue-depth query through the broker it connects to;
+- nothing may address it: `${port:<id>}`/`${host:<id>}` toward it are rejected
+  in every scope, and bare `${port}`/`${host}` in its own lifecycle are too;
+- its start closure must **not** attest `network-listener` (effects
+  coherence — an unreservable listener is the bypass this document already
+  forbids);
+- `requires`/`connectsTo` **toward** it stay legal: ready ordering, failure
+  semantics, and the derived service union — minus addressability.
+
+See the worker in `examples/toolchain/nixfied.nix` for the standing shape.
