@@ -22,7 +22,7 @@ primitive Invocation: tools run executable env codebaseId cwd stdin timeoutMs
 # nothing may address it, no port demand.
 primitive ServiceSpec: lifecycle endpoints primaryEndpoint connectsTo stateRefs logRefs containment
 primitive Lifecycle: prepare start ready health stop clean
-primitive PrepareSpec: operationId invocation terminal
+primitive PrepareSpec: task
 primitive StartSpec: operationId invocation terminal
 primitive ReadySpec: operationId probe terminal
 primitive HealthSpec: operationId probe terminal

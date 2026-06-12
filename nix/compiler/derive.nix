@@ -90,11 +90,7 @@ let
         let
           lc = service.lifecycle;
         in
-        lib.optional (lc.prepare.invocation != null) {
-          operationId = serviceOperationId name "prepare" lc.prepare.operationId;
-          invocation = lc.prepare.invocation;
-        }
-        ++ [
+        [
           {
             operationId = serviceOperationId name "start" lc.start.operationId;
             invocation = lc.start.invocation;
@@ -209,13 +205,6 @@ let
     };
   terminalOf = op: { inherit (op.terminal) success failure; };
   lifecycleSpec = name: lc: {
-    prepare = {
-      operationId = serviceOperationId name "prepare" lc.prepare.operationId;
-      terminal = terminalOf lc.prepare;
-    }
-    // lib.optionalAttrs (lc.prepare.invocation != null) {
-      invocation = resolveInvocation "service ${name} prepare" lc.prepare.invocation;
-    };
     start = {
       operationId = serviceOperationId name "start" lc.start.operationId;
       invocation = resolveInvocation "service ${name} start" lc.start.invocation;
@@ -239,6 +228,11 @@ let
     clean = {
       operationId = serviceOperationId name "clean" lc.clean.operationId;
       terminal = terminalOf lc.clean;
+    };
+  }
+  // lib.optionalAttrs (lc.prepare.task != null) {
+    prepare = {
+      task = lc.prepare.task;
     };
   };
 
@@ -321,6 +315,7 @@ let
   taskServicesRequired = deriveFacts.servicesRequired {
     tasks = config.nixfied.tasks;
     services = config.nixfied.services;
+    prepareTaskOf = name: config.nixfied.services.${name}.lifecycle.prepare.task;
   };
   taskSpec =
     name: task:

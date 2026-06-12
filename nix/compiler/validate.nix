@@ -126,6 +126,36 @@ let
       )
     ) (taskRefsOf current);
   taskGraphAcyclic = lib.all (name: !(taskReaches name name [ ])) taskNames;
+  # prepare-as-task: the reference must resolve, and the combined connectsTo +
+  # prepare-requires service graph must stay acyclic (a service cannot —
+  # directly or transitively — wait on itself to prepare).
+  deriveFacts = import ../lib/derive-facts.nix { inherit lib; };
+  prepareTaskOf = name: services.${name}.lifecycle.prepare.task;
+  prepareTasksDeclared = lib.all (
+    name: prepareTaskOf name == null || builtins.hasAttr (prepareTaskOf name) tasks
+  ) (builtins.attrNames services);
+  prepareRequiresOf =
+    name:
+    if prepareTaskOf name == null || !(builtins.hasAttr (prepareTaskOf name) tasks) then
+      [ ]
+    else
+      lib.unique (
+        lib.concatMap (leaf: tasks.${leaf}.requires) (deriveFacts.leavesOf tasks (prepareTaskOf name))
+      );
+  combinedEdges = name: services.${name}.connectsTo ++ prepareRequiresOf name;
+  combinedReaches =
+    start: current: seen:
+    lib.any (
+      target:
+      builtins.hasAttr target services
+      && (
+        target == start
+        || (!(builtins.elem target seen) && combinedReaches start target (seen ++ [ target ]))
+      )
+    ) (combinedEdges current);
+  combinedGraphAcyclic = lib.all (name: !(combinedReaches name name [ ])) (
+    builtins.attrNames services
+  );
   checks = [
     (expect (config.nixfied.target.system == system) "target.system must match the compile system")
     (expect (slotPolicy.min >= 0) "slotPolicy.min must be non-negative")
@@ -154,6 +184,10 @@ let
     (expect stepDependsOnSiblings "composite step dependsOn must name a sibling step")
     (expect stepGraphsAcyclic "composite step dependency graph must be acyclic")
     (expect taskGraphAcyclic "the task reference graph must be acyclic")
+    (expect prepareTasksDeclared "service prepare must reference a declared task")
+    (expect combinedGraphAcyclic
+      "the combined connectsTo + prepare-requires service graph must be acyclic"
+    )
   ];
 in
 lib.foldl' (acc: check: lib.seq check acc) config checks

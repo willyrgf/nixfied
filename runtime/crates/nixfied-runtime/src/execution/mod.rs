@@ -11,5 +11,5 @@ mod plan;
 mod types;
 
 pub use lower::lower;
-pub use plan::{PlanNode, RunPlan, ServiceBinding, plan, prove_all_plans_feasible};
+pub use plan::{PlanNode, RunPlan, ServiceBinding, flatten_task, plan, prove_all_plans_feasible};
 pub use types::*;

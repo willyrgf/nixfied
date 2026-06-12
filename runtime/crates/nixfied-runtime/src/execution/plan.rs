@@ -54,12 +54,28 @@ pub fn plan(model: &ExecutionModel, task: &TaskId, slot: u32) -> RuntimeResult<R
         .flat_map(|leaf| leaf.requires.iter().cloned())
         .collect();
     loop {
-        let additions: Vec<ServiceId> = union
-            .iter()
-            .filter_map(|name| model.services.get(name))
-            .flat_map(|service| service.connects_to.iter().cloned())
-            .filter(|target| !union.contains(target))
-            .collect();
+        let mut additions: Vec<ServiceId> = Vec::new();
+        for name in union.iter() {
+            let Some(service) = model.services.get(name) else {
+                continue;
+            };
+            additions.extend(
+                service
+                    .connects_to
+                    .iter()
+                    .filter(|target| !union.contains(*target))
+                    .cloned(),
+            );
+            // Starting a service runs its prepare task first; its leaves'
+            // requirements belong to the union (docs/DERIVATION_SPEC.md §3).
+            if let Some(prepare_task) = &service.prepare {
+                additions.extend(
+                    prepare_requires(model, prepare_task)?
+                        .into_iter()
+                        .filter(|target| !union.contains(target)),
+                );
+            }
+        }
         if additions.is_empty() {
             break;
         }
@@ -77,25 +93,46 @@ pub fn plan(model: &ExecutionModel, task: &TaskId, slot: u32) -> RuntimeResult<R
     Ok(RunPlan { services, nodes })
 }
 
-/// Stable topological order over the connectsTo graph: among services whose
-/// dependencies are all started, declared order wins, so a wiring-free model
-/// keeps exactly its declared start order.
+/// The services a prepare task's leaves require — the prepare-requires edges
+/// of the combined service graph.
+fn prepare_requires(
+    model: &ExecutionModel,
+    prepare_task: &TaskId,
+) -> RuntimeResult<Vec<ServiceId>> {
+    Ok(flatten_task(model, prepare_task)?
+        .iter()
+        .filter_map(|node| model.tasks.get(&node.task_id))
+        .flat_map(|leaf| leaf.requires.iter().cloned())
+        .collect())
+}
+
+/// Stable topological order over the combined connectsTo + prepare-requires
+/// graph: among services whose dependencies are all started, canonical order
+/// wins, so a wiring-free union keeps its canonical order.
 fn order_for_start(bindings: Vec<ServiceBinding>, model: &ExecutionModel) -> Vec<ServiceBinding> {
     let mut remaining = bindings;
     let mut ordered = Vec::with_capacity(remaining.len());
     let mut started: BTreeSet<ServiceId> = BTreeSet::new();
+    let edges_of = |name: &ServiceId| -> Vec<ServiceId> {
+        let Some(service) = model.services.get(name) else {
+            return Vec::new();
+        };
+        let mut edges: Vec<ServiceId> = service.connects_to.clone();
+        if let Some(Ok(required)) = service
+            .prepare
+            .as_ref()
+            .map(|prepare_task| prepare_requires(model, prepare_task))
+        {
+            edges.extend(required);
+        }
+        edges
+    };
     while !remaining.is_empty() {
         let ready = remaining.iter().position(|binding| {
-            model
-                .services
-                .get(&binding.service_name)
-                .map(|service| {
-                    service.connects_to.iter().all(|target| {
-                        started.contains(target)
-                            || !remaining.iter().any(|other| other.service_name == *target)
-                    })
-                })
-                .unwrap_or(true)
+            edges_of(&binding.service_name).iter().all(|target| {
+                started.contains(target)
+                    || !remaining.iter().any(|other| other.service_name == *target)
+            })
         });
         // Lowering guarantees acyclicity; a missing ready node would mean a
         // cycle leaked through, so falling back to declared order is the only
@@ -177,7 +214,7 @@ fn assign_ports(
 /// topological order: emission order, earliest node whose dependencies are
 /// already placed first. Cycles through nesting are rejected here — admission
 /// proves every selection plans, so a cyclic reference never survives it.
-fn flatten_task(model: &ExecutionModel, root: &TaskId) -> RuntimeResult<Vec<PlanNode>> {
+pub fn flatten_task(model: &ExecutionModel, root: &TaskId) -> RuntimeResult<Vec<PlanNode>> {
     struct FlatNode {
         step_path: String,
         leaf: TaskId,
@@ -347,10 +384,7 @@ mod tests {
     fn service(name: &str) -> ExecService {
         ExecService {
             name: ServiceId::new(name),
-            prepare: PrepareOp {
-                meta: op_meta("prepare"),
-                exec: None,
-            },
+            prepare: None,
             start: StartOp {
                 meta: op_meta("start"),
                 exec: resolved_exec(),

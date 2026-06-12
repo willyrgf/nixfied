@@ -101,13 +101,6 @@ let
   # startup so they are ready first; `extraStartArgs` carries that wiring.
   mkAppService = name: connectsTo: extraStartArgs: {
     lifecycle = {
-      prepare = {
-        operationId = "service.${name}.prepare";
-        terminal = {
-          success = "prepared";
-          failure = "failed";
-        };
-      };
       start = {
         operationId = "service.${name}.start";
         invocation = {

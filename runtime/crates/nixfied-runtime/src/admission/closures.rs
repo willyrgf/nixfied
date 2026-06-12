@@ -96,11 +96,7 @@ fn invocation_tool_ids(model: &Model) -> impl Iterator<Item = &str> {
         .flat_map(|invocation| invocation.tools.iter());
     let lifecycle_tools = model.services.values().flat_map(|service| {
         let lifecycle = &service.lifecycle;
-        lifecycle
-            .prepare
-            .invocation
-            .iter()
-            .chain(std::iter::once(&lifecycle.start.invocation))
+        std::iter::once(&lifecycle.start.invocation)
             .chain(lifecycle.ready.probe.invocation.iter())
             .chain(lifecycle.health.probe.invocation.iter())
             .flat_map(|invocation| invocation.tools.iter())

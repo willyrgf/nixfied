@@ -138,13 +138,26 @@ admission-compare target.
 ```
 servicesRequired(task):
   base  = ⋃ { leaf.requires | leaf in leaves(flatten(task)) }
-  closed = least fixpoint of:  S ∪ ⋃ { connectsTo(s) | s in S }  starting from base
+  closed = least fixpoint of:
+             S ∪ ⋃ { connectsTo(s) | s in S }
+               ∪ ⋃ { prepareRequires(s) | s in S }
+           starting from base
   return sorted(closed)        # canonical order, §1; dedup is set semantics
+
+prepareRequires(s) = ⋃ { leaf.requires | leaf in leaves(flatten(prepareTask(s))) }
+                     (∅ when s binds no prepare task)
 ```
+
+The closure pulls in **prepare requirements** as well as wiring: starting a
+service means running its prepare task first, and that task's leaves may
+require other services (typed cross-service initialization), so they belong
+to the union. The combined `connectsTo` ∪ prepare-requires edge set must be
+acyclic (validated at eval, re-proven at admission with the edge kinds named
+in the error).
 
 Pinned consequences:
 
-- The result is the **transitive** `connectsTo` closure: if a leaf requires
+- The result is the **transitive** closure over both edge kinds: if a leaf requires
   `api`, `api` connectsTo `postgres`, and `postgres` connectsTo nothing, the
   set is `[ "api", "postgres" ]`.
 - Ordering is canonical (§1) — **not** declaration or discovery order. Port

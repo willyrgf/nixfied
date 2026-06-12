@@ -50,7 +50,15 @@ pub fn lower(model: &Model) -> RuntimeResult<ExecutionModel> {
         .map(|(name, service)| {
             Ok((
                 ServiceId::new(name),
-                lower_service(name, service, services, closures, state, &model.target)?,
+                lower_service(
+                    name,
+                    service,
+                    services,
+                    tasks,
+                    closures,
+                    state,
+                    &model.target,
+                )?,
             ))
         })
         .collect::<RuntimeResult<BTreeMap<_, _>>>()?;
@@ -106,6 +114,7 @@ fn lower_service(
     name: &str,
     service: &ServiceSpec,
     all_services: &BTreeMap<String, ServiceSpec>,
+    tasks: &BTreeMap<String, TaskSpec>,
     closures: &BTreeMap<String, ClosureSpec>,
     state: &StatePolicy,
     target: &Target,
@@ -143,12 +152,17 @@ fn lower_service(
 
     let owner = || format!("service {name}");
     let endpoint_less = endpoints.is_empty();
-    let prepare = PrepareOp {
-        meta: op_meta(&prepare.operation_id, &prepare.terminal),
-        exec: match &prepare.invocation {
-            Some(invocation) => Some(resolve_invocation(&owner, invocation, closures)?),
-            None => None,
-        },
+    // prepare is a task reference with full task semantics. It must name a
+    // declared task, and its derived service union must not (transitively)
+    // include the owning service — a service cannot wait on itself to prepare.
+    let prepare = match prepare {
+        Some(spec) => {
+            if !tasks.contains_key(spec.task.as_str()) {
+                return Err(undeclared("service.prepare.task", spec.task.as_str()).into());
+            }
+            Some(spec.task.clone())
+        }
+        None => None,
     };
     // Effects coherence, both directions: a listening service's start closure
     // must attest `network-listener`; an endpoint-less service's must not — it
@@ -222,10 +236,7 @@ fn lower_service(
             (!target.endpoints.is_empty()).then_some(id.as_str())
         }))
         .collect();
-    for exec in prepare
-        .exec
-        .iter()
-        .chain(std::iter::once(&start.exec))
+    for exec in std::iter::once(&start.exec)
         .chain(probe_exec(&ready.probe))
         .chain(probe_exec(&health.probe))
     {
@@ -661,6 +672,9 @@ pub enum Rejection {
         closure_id: String,
         expected: &'static str,
     },
+    ServiceGraphCycle {
+        cycle: String,
+    },
     ProbeExecMissing {
         service: String,
         class: &'static str,
@@ -742,6 +756,9 @@ impl Rejection {
                 closure_id,
                 expected,
             } => format!("service {service} start closure {closure_id}: {expected}"),
+            Rejection::ServiceGraphCycle { cycle } => format!(
+                "the combined connectsTo + prepare-requires service graph has a cycle: {cycle}"
+            ),
             Rejection::ProbeExecMissing { service, class } => {
                 format!("service {service} {class} probe is exec but declares no invocation")
             }
@@ -815,9 +832,6 @@ fn invocation_positions(model: &Model) -> Vec<(&OperationId, &InvocationSpec)> {
     let mut positions = Vec::new();
     for service in model.services.values() {
         let lifecycle = &service.lifecycle;
-        if let Some(invocation) = &lifecycle.prepare.invocation {
-            positions.push((&lifecycle.prepare.operation_id, invocation));
-        }
         positions.push((&lifecycle.start.operation_id, &lifecycle.start.invocation));
         for (probe, operation_id) in [
             (&lifecycle.ready.probe, &lifecycle.ready.operation_id),
@@ -917,6 +931,10 @@ fn prove_references(model: &Model) -> Result<(), Rejection> {
         }
     }
 
+    // The combined connectsTo + prepare-requires graph must be acyclic before
+    // any union derivation walks it.
+    prove_service_graph_acyclic(model)?;
+
     // DERIVE-1: derived facts are re-derived here and compared with the
     // carried values, fail closed, naming both sides.
     prove_derived_operation_bindings(model)?;
@@ -988,39 +1006,35 @@ fn prove_derived_services_required(model: &Model) -> Result<(), Rejection> {
 /// (the planner proves it), but the walk guards with a seen set so this
 /// function is total on any deserialized model.
 pub(crate) fn derive_services_required<'a>(model: &'a Model, task_id: &str) -> Vec<&'a str> {
-    fn leaf_requires<'a>(
-        model: &'a Model,
-        task_id: &str,
-        seen: &mut BTreeSet<String>,
-        out: &mut BTreeSet<&'a str>,
-    ) {
-        if !seen.insert(task_id.to_string()) {
-            return;
-        }
-        let Some(task) = model.tasks.get(task_id) else {
-            return;
-        };
-        match task.kind {
-            TaskKind::Leaf => {
-                out.extend(task.requires.iter().map(|service| service.as_str()));
-            }
-            TaskKind::Composite => {
-                for step in task.steps.values() {
-                    leaf_requires(model, step.task.as_str(), seen, out);
-                }
-            }
-        }
-    }
     let mut base = BTreeSet::new();
     leaf_requires(model, task_id, &mut BTreeSet::new(), &mut base);
-    // Close over connectsTo to a fixpoint.
+    // Close over connectsTo AND prepare requirements to a fixpoint: starting a
+    // service runs its prepare task first, whose leaves may require other
+    // services (docs/DERIVATION_SPEC.md §3).
     loop {
-        let additions: Vec<&str> = base
-            .iter()
-            .filter_map(|service| model.services.get(*service))
-            .flat_map(|service| service.connects_to.iter().map(|target| target.as_str()))
-            .filter(|target| !base.contains(target))
-            .collect();
+        let mut additions: Vec<&str> = Vec::new();
+        for service_id in base.iter() {
+            let Some(service) = model.services.get(*service_id) else {
+                continue;
+            };
+            additions.extend(
+                service
+                    .connects_to
+                    .iter()
+                    .map(|target| target.as_str())
+                    .filter(|target| !base.contains(target)),
+            );
+            if let Some(prepare) = &service.lifecycle.prepare {
+                let mut prepare_base = BTreeSet::new();
+                leaf_requires(
+                    model,
+                    prepare.task.as_str(),
+                    &mut BTreeSet::new(),
+                    &mut prepare_base,
+                );
+                additions.extend(prepare_base.into_iter().filter(|t| !base.contains(t)));
+            }
+        }
         if additions.is_empty() {
             break;
         }
@@ -1029,10 +1043,102 @@ pub(crate) fn derive_services_required<'a>(model: &'a Model, task_id: &str) -> V
     base.into_iter().collect()
 }
 
-/// The operation id of each lifecycle op, in canonical order.
-fn lifecycle_op_ids(lifecycle: &Lifecycle) -> [&str; 6] {
+/// The union of transitive leaf `requires` reachable from one task.
+fn leaf_requires<'a>(
+    model: &'a Model,
+    task_id: &str,
+    seen: &mut BTreeSet<String>,
+    out: &mut BTreeSet<&'a str>,
+) {
+    if !seen.insert(task_id.to_string()) {
+        return;
+    }
+    let Some(task) = model.tasks.get(task_id) else {
+        return;
+    };
+    match task.kind {
+        TaskKind::Leaf => {
+            out.extend(task.requires.iter().map(|service| service.as_str()));
+        }
+        TaskKind::Composite => {
+            for step in task.steps.values() {
+                leaf_requires(model, step.task.as_str(), seen, out);
+            }
+        }
+    }
+}
+
+/// The kind-tagged service dependency edges: `connectsTo` wiring plus prepare
+/// requirements (the prepare task's transitive leaf `requires`).
+fn service_edges<'a>(model: &'a Model, service_id: &str) -> Vec<(&'a str, &'static str)> {
+    let Some(service) = model.services.get(service_id) else {
+        return Vec::new();
+    };
+    let mut edges: Vec<(&str, &'static str)> = service
+        .connects_to
+        .iter()
+        .map(|target| (target.as_str(), "connectsTo"))
+        .collect();
+    if let Some(prepare) = &service.lifecycle.prepare {
+        let mut prepare_base = BTreeSet::new();
+        leaf_requires(
+            model,
+            prepare.task.as_str(),
+            &mut BTreeSet::new(),
+            &mut prepare_base,
+        );
+        edges.extend(
+            prepare_base
+                .into_iter()
+                .map(|target| (target, "prepare requires")),
+        );
+    }
+    edges
+}
+
+/// The combined `connectsTo` + prepare-requires graph must be acyclic. The
+/// rejection renders the cycle with each edge's kind, so the operator can see
+/// which hops are wiring and which are prepare requirements.
+fn prove_service_graph_acyclic(model: &Model) -> Result<(), Rejection> {
+    fn visit<'a>(
+        model: &'a Model,
+        start: &str,
+        current: &'a str,
+        trail: &mut Vec<(&'a str, &'static str)>,
+        seen: &mut BTreeSet<&'a str>,
+    ) -> Option<Vec<(&'a str, &'static str)>> {
+        for (target, kind) in service_edges(model, current) {
+            if target == start {
+                let mut cycle = trail.clone();
+                cycle.push((target, kind));
+                return Some(cycle);
+            }
+            if seen.insert(target) {
+                trail.push((target, kind));
+                if let Some(cycle) = visit(model, start, target, trail, seen) {
+                    return Some(cycle);
+                }
+                trail.pop();
+            }
+        }
+        None
+    }
+    for start in model.services.keys() {
+        if let Some(cycle) = visit(model, start, start, &mut Vec::new(), &mut BTreeSet::new()) {
+            let mut rendered = start.to_string();
+            for (target, kind) in cycle {
+                rendered.push_str(&format!(" -[{kind}]-> {target}"));
+            }
+            return Err(Rejection::ServiceGraphCycle { cycle: rendered });
+        }
+    }
+    Ok(())
+}
+
+/// The operation id of each lifecycle op, in canonical order. Prepare is a
+/// task reference and carries no operation id.
+fn lifecycle_op_ids(lifecycle: &Lifecycle) -> [&str; 5] {
     [
-        lifecycle.prepare.operation_id.as_str(),
         lifecycle.start.operation_id.as_str(),
         lifecycle.ready.operation_id.as_str(),
         lifecycle.health.operation_id.as_str(),
@@ -1131,7 +1237,6 @@ mod tests {
     fn service_value() -> Value {
         json!({
             "lifecycle": {
-                "prepare": { "operationId": "svc.prepare", "terminal": { "success": "prepared", "failure": "failed" } },
                 "start": {
                     "operationId": "svc.start",
                     "invocation": invocation_value("/nix/store/c/bin/svc", json!(["svc", "serve", "--port", "${port}"])),
@@ -1161,7 +1266,7 @@ mod tests {
         assert_eq!(svc.endpoints["svc-tcp"].host.to_string(), "127.0.0.1");
         assert_eq!(svc.primary_endpoint.as_deref(), Some("svc-tcp"));
         assert_eq!(svc.stop.signal, StopSignal::Term);
-        assert!(svc.prepare.exec.is_none());
+        assert!(svc.prepare.is_none());
         // Args are run[1..]; run[0] resolved to the closure executable.
         assert_eq!(svc.start.exec.executable, "/nix/store/c/bin/svc");
         assert_eq!(svc.start.exec.args, vec!["serve", "--port", "${port}"]);
@@ -1537,7 +1642,6 @@ mod tests {
         });
         value["services"]["worker"] = json!({
             "lifecycle": {
-                "prepare": { "operationId": "worker.prepare", "terminal": { "success": "initialized", "failure": "failed" } },
                 "start": {
                     "operationId": "worker.start",
                     "invocation": worker_invocation(json!(["worker", "consume"])),
@@ -1658,6 +1762,62 @@ mod tests {
             error.message.contains("network-listener"),
             "{}",
             error.message
+        );
+    }
+
+    #[test]
+    fn prepare_task_must_be_declared() {
+        let mut value = model_value();
+        value["services"]["svc"]["lifecycle"]["prepare"] = json!({ "task": "ghost" });
+        let error = lower(&model_from(value)).expect_err("dangling prepare task must reject");
+        assert_eq!(error.code, ErrorCode::ModelAdmission);
+        assert!(error.message.contains("ghost"), "{}", error.message);
+    }
+
+    #[test]
+    fn prepare_task_reference_lowers_and_widens_the_union() {
+        // Cross-service prepare: svc's prepare task requires dep, so starting
+        // svc pulls dep into every union that contains svc.
+        let mut value = model_value();
+        let mut dep = service_value();
+        dep["endpoints"] = json!({ "dep-tcp": { "endpointId": "dep-tcp", "host": "127.0.0.1" } });
+        dep["primaryEndpoint"] = json!("dep-tcp");
+        for (class, op) in dep["lifecycle"].as_object_mut().unwrap() {
+            op["operationId"] = json!(format!("dep.{class}"));
+        }
+        value["closures"]["c"]["operationBindings"] = json!(["dep.start", "svc.start"]);
+        value["services"]["dep"] = dep;
+        value["closures"]["cm"] = json!({
+            "kind": "executable", "storePath": "/nix/store/cm", "executable": "/nix/store/cm/bin/migrate",
+            "targetSystem": "x86_64-linux",
+            "operationBindings": ["task.migrate.run"],
+            "requiresExecutable": true, "effects": ["process"]
+        });
+        value["tasks"]["migrate"] = json!({
+            "kind": "leaf",
+            "operationId": "task.migrate.run",
+            "invocation": {
+                "tools": ["cm"],
+                "run": ["migrate", "--db", "${port:dep}"],
+                "executable": "/nix/store/cm/bin/migrate",
+                "env": {}, "codebaseId": "main", "cwd": ".", "stdin": "null", "timeoutMs": 1000
+            },
+            "requires": ["dep"],
+            "servicesRequired": ["dep"],
+            "exitPolicy": { "successCodes": [0] }
+        });
+        value["services"]["svc"]["lifecycle"]["prepare"] = json!({ "task": "migrate" });
+        // Task t requires svc; svc's prepare requires dep -> union closes over it.
+        value["tasks"]["t"]["servicesRequired"] = json!(["dep", "svc"]);
+        let em = lower(&model_from(value)).expect("cross-service prepare lowers");
+        assert_eq!(
+            em.services
+                .get("svc")
+                .unwrap()
+                .prepare
+                .as_ref()
+                .map(|t| t.as_str()),
+            Some("migrate")
         );
     }
 

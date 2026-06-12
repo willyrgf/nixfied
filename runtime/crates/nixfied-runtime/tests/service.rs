@@ -298,18 +298,6 @@ fn lifecycle_events_follow_declared_class_order_and_clean_terminal() {
         vec![
             LifecycleEvent {
                 event_type: "service.lifecycle.started".to_string(),
-                class: "prepare".to_string(),
-                terminal_result: None,
-                error_code: None,
-            },
-            LifecycleEvent {
-                event_type: "service.lifecycle.terminal".to_string(),
-                class: "prepare".to_string(),
-                terminal_result: Some("prepared".to_string()),
-                error_code: None,
-            },
-            LifecycleEvent {
-                event_type: "service.lifecycle.started".to_string(),
                 class: "start".to_string(),
                 terminal_result: None,
                 error_code: None,
@@ -2888,10 +2876,11 @@ fn endpoint_less_service_reaches_ready_without_ownership_verification() {
         &mut fixture.registry,
         "run-endpoint-less",
         &select_slot(&fixture.model, None).expect("slot"),
-        &nixfied_runtime::service::ServiceSelection {
+        nixfied_runtime::service::ServiceSelection {
             service_name: "synthetic",
             endpoint_ports: &std::collections::BTreeMap::new(),
             slot_endpoints: &SlotEndpoints::new(),
+            prepare_runner: None,
         },
     )
     .expect("endpoint-less service should start");

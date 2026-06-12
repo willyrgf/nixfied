@@ -289,7 +289,8 @@ pub enum ProbeKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Lifecycle {
-    pub prepare: PrepareSpec,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prepare: Option<PrepareSpec>,
     pub start: StartSpec,
     pub ready: ReadySpec,
     pub health: HealthSpec,
@@ -297,14 +298,15 @@ pub struct Lifecycle {
     pub clean: CleanSpec,
 }
 
-/// prepare: an optional data-dir init invocation.
+/// prepare: an optional **task reference** with full task semantics —
+/// composites allowed, cross-service `requires` allowed (the combined
+/// `connectsTo` + prepare-requires graph must be acyclic). Its evidence is the
+/// referenced task's flattened nodes; the position has no operation id of its
+/// own.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PrepareSpec {
-    pub operation_id: OperationId,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub invocation: Option<InvocationSpec>,
-    pub terminal: TerminalSemantics,
+    pub task: TaskId,
 }
 
 /// start: spawn-and-own a required invocation.

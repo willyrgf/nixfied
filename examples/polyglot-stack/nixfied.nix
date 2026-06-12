@@ -74,13 +74,6 @@ let
 
   mkService = name: program: {
     lifecycle = {
-      prepare = {
-        operationId = "service.${name}.prepare";
-        terminal = {
-          success = "prepared";
-          failure = "failed";
-        };
-      };
       start = {
         operationId = "service.${name}.start";
         invocation = {

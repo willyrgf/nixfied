@@ -139,14 +139,6 @@ in
 
   nixfied.services.reth = {
     lifecycle = {
-      prepare = {
-        operationId = "service.reth.prepare";
-        # The start wrapper is self-preparing (datadir, jwt, stale IPC socket).
-        terminal = {
-          success = "prepared";
-          failure = "failed";
-        };
-      };
       start = {
         operationId = "service.reth.start";
         invocation = {

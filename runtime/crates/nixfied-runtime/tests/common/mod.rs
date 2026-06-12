@@ -97,10 +97,11 @@ pub fn start_synthetic_service_for_slot(
         registry,
         run_id,
         selected_slot,
-        &ServiceSelection {
+        ServiceSelection {
             service_name: SYNTHETIC_SERVICE_NAME,
             endpoint_ports: &endpoint_ports,
             slot_endpoints: &SlotEndpoints::new(),
+            prepare_runner: None,
         },
     )
 }

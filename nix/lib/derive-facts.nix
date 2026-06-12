@@ -22,16 +22,31 @@ rec {
       [ taskId ];
 
   # servicesRequired(task) — spec §3: the union of transitive leaf `requires`,
-  # closed over `connectsTo`, byte-sorted and deduplicated.
+  # closed over `connectsTo` AND prepare requirements (starting a service runs
+  # its prepare task first), byte-sorted and deduplicated. `prepareTaskOf`
+  # maps a service name to its prepare task id or null.
   servicesRequired =
-    { tasks, services }:
+    {
+      tasks,
+      services,
+      prepareTaskOf ? (_name: null),
+    }:
     taskId:
     let
-      base = lib.unique (lib.concatMap (leaf: tasks.${leaf}.requires) (leavesOf tasks taskId));
+      requiresOf =
+        rootTask: lib.unique (lib.concatMap (leaf: tasks.${leaf}.requires) (leavesOf tasks rootTask));
+      base = requiresOf taskId;
       close =
         set:
         let
-          next = lib.unique (set ++ lib.concatMap (service: services.${service}.connectsTo) set);
+          next = lib.unique (
+            set
+            ++ lib.concatMap (
+              service:
+              services.${service}.connectsTo
+              ++ (if prepareTaskOf service == null then [ ] else requiresOf (prepareTaskOf service))
+            ) set
+          );
         in
         if builtins.length next == builtins.length set then set else close next;
     in

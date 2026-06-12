@@ -16,7 +16,7 @@ use crate::admission::Admission;
 use crate::cancellation::{CancellationToken, canceled_error};
 use crate::control::reconcile_registry;
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
-use crate::execution::{ExecProbe, ExecService, OpMeta, Probe, ResolvedInvocation, StdinPolicy};
+use crate::execution::{ExecProbe, ExecService, OpMeta, Probe, StdinPolicy};
 use crate::registry::{Registry, RunLeaseHeartbeat};
 use crate::service::identity::{
     compute_service_identity, service_address_hash, service_instance_id,
@@ -595,7 +595,16 @@ pub struct ServiceSelection<'a> {
     pub service_name: &'a str,
     pub endpoint_ports: &'a BTreeMap<String, u16>,
     pub slot_endpoints: &'a SlotEndpoints,
+    /// Executes the service's prepare task (its flattened nodes) inside the
+    /// service reservation. Supplied by the run driver, which owns the started
+    /// services the prepare leaves may require; `None` when the service
+    /// declares no prepare task. The runtime stays generic: this is plumbing,
+    /// not vocabulary.
+    pub prepare_runner: Option<PrepareRunner<'a>>,
 }
+
+/// The prepare-task executor a run driver supplies.
+pub type PrepareRunner<'a> = Box<dyn FnMut(&mut Registry) -> RuntimeResult<()> + 'a>;
 
 /// Start a declared foreground service from the lowered model: run prepare,
 /// spawn-and-own the start exec, and track the process. The service is read from
@@ -606,15 +615,13 @@ pub fn start_service_for_slot(
     registry: &mut Registry,
     run_id: impl Into<String>,
     selected_slot: &SelectedSlot<'_>,
-    selection: &ServiceSelection<'_>,
+    mut selection: ServiceSelection<'_>,
 ) -> RuntimeResult<StartedService> {
     let run_id = run_id.into();
     let source = admission.require_source()?;
-    let ServiceSelection {
-        service_name,
-        endpoint_ports,
-        slot_endpoints,
-    } = *selection;
+    let service_name = selection.service_name;
+    let endpoint_ports = selection.endpoint_ports;
+    let slot_endpoints = selection.slot_endpoints;
     let service = admission
         .execution_model
         .services
@@ -724,36 +731,44 @@ pub fn start_service_for_slot(
         process_key: None,
         computed_model_hash: admission.computed_model_hash.clone(),
     };
-    let prepare_record = LifecycleRecord::from_meta(&service.prepare.meta, "prepare");
-    record_lifecycle_started(registry, &lifecycle_context, &prepare_record)?;
-    if let Some(prepare_exec) = &service.prepare.exec {
-        // The run-level heartbeat only starts once this function returns, and
-        // the prepare process is not recorded in the registry, so a prepare
-        // longer than the lease TTL would let another runtime stale the lease
-        // and run a concurrent prepare against the same state. Keep the
-        // just-created lease alive with a scoped heartbeat for the duration.
+    // prepare is a task reference: the caller supplies a runner that executes
+    // the referenced task's flattened nodes (ordinary task evidence — logs,
+    // summaries, registry rows keyed by step path). It runs INSIDE the
+    // service's reservation, so concurrent runtimes cannot double-prepare the
+    // same state, with the just-created lease kept alive for the duration.
+    if let Some(prepare_task) = &service.prepare {
+        let prepare_record = LifecycleRecord::from_meta(
+            &OpMeta {
+                operation_id: nixfied_model::OperationId::new(prepare_task.as_str()),
+                terminal_success: "initialized".to_string(),
+                terminal_failure: "failed".to_string(),
+            },
+            "prepare",
+        );
+        record_lifecycle_started(registry, &lifecycle_context, &prepare_record)?;
         let prepare_heartbeat = RunLeaseHeartbeat::start(
             placement.registry_path().to_path_buf(),
             registry.identity().clone(),
             run_id.clone(),
             owner_token.clone(),
         );
-        let prepare_result = run_resolved_exec(
-            prepare_exec,
-            &source.observed_root,
-            &placement.logs_dir,
-            service.prepare.meta.operation_id.as_str(),
-            &substitution,
-            &CancellationToken::new(),
-        );
+        let prepare_result = match selection.prepare_runner {
+            Some(ref mut runner) => runner(registry),
+            None => Err(RuntimeError::new(
+                ErrorCode::ModelAdmission,
+                format!(
+                    "service {service_name} declares prepare task {prepare_task} but the caller supplied no prepare runner"
+                ),
+            )),
+        };
         let heartbeat_result = prepare_heartbeat.stop();
         if let Err(error) = prepare_result.and(heartbeat_result) {
             let _ = record_lifecycle_failure(registry, &lifecycle_context, &prepare_record, &error);
             let _ = release_service_reservation(registry, &run_id, &service_instance_id);
             return Err(error);
         }
+        record_lifecycle_success(registry, &lifecycle_context, &prepare_record)?;
     }
-    record_lifecycle_success(registry, &lifecycle_context, &prepare_record)?;
     let start_record = LifecycleRecord::from_meta(&service.start.meta, "start");
     record_lifecycle_started(registry, &lifecycle_context, &start_record)?;
     let exec = &service.start.exec;
@@ -1193,59 +1208,6 @@ pub(crate) fn run_bounded_exec(
             return Ok(BoundedExecOutcome::TimedOut);
         }
         thread::sleep(Duration::from_millis(10));
-    }
-}
-
-/// Run a resolved lifecycle exec (prepare) to completion in its own process
-/// group, capturing output to the logs dir keyed by `label` so a failed prepare
-/// (e.g. initdb) leaves a recoverable trail. Honors cancellation and the exec
-/// timeout.
-fn run_resolved_exec(
-    exec: &ResolvedInvocation,
-    source_root: &Path,
-    logs_dir: &Path,
-    label: &str,
-    substitution: &ExecSubstitution<'_>,
-    cancellation: &CancellationToken,
-) -> RuntimeResult<()> {
-    let command_cwd = resolve_exec_cwd(source_root, &exec.cwd)?;
-    let args = substitution.args(&exec.args)?;
-    let env = exec.env_with_path(substitution.env(&exec.env)?);
-    let stdout_path = logs_dir.join(format!("lifecycle.{label}.stdout.log"));
-    let stderr_path = logs_dir.join(format!("lifecycle.{label}.stderr.log"));
-    let outcome = run_bounded_exec(
-        &BoundedExec {
-            executable: &exec.executable,
-            args: &args,
-            env: &env,
-            cwd: &command_cwd,
-            stdin: exec.stdin,
-            timeout: exec.timeout,
-            stdout_path: &stdout_path,
-            stderr_path: &stderr_path,
-            label,
-        },
-        cancellation,
-    )?;
-    match outcome {
-        BoundedExecOutcome::Exited(status) if status.success() => Ok(()),
-        BoundedExecOutcome::Exited(status) => Err(RuntimeError::new(
-            ErrorCode::LifecycleFailed,
-            format!(
-                "service lifecycle operation {label} exited with code {}",
-                status
-                    .code()
-                    .map(|code| code.to_string())
-                    .unwrap_or_else(|| "unknown".to_string())
-            ),
-        )),
-        BoundedExecOutcome::TimedOut => Err(RuntimeError::new(
-            ErrorCode::LifecycleFailed,
-            format!(
-                "service lifecycle operation {label} timed out after {}ms",
-                exec.timeout.as_millis()
-            ),
-        )),
     }
 }
 

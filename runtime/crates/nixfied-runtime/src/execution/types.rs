@@ -74,7 +74,9 @@ impl PortWindow {
 #[derive(Debug, Clone)]
 pub struct ExecService {
     pub name: ServiceId,
-    pub prepare: PrepareOp,
+    /// The optional prepare **task reference** (full task semantics): its
+    /// flattened nodes run inside the service's reservation, before start.
+    pub prepare: Option<TaskId>,
     pub start: StartOp,
     pub ready: ReadyOp,
     pub health: HealthOp,
@@ -101,14 +103,6 @@ pub struct OpMeta {
     pub operation_id: OperationId,
     pub terminal_success: String,
     pub terminal_failure: String,
-}
-
-/// Prepare is always a recorded lifecycle class; its exec is optional (e.g. a
-/// data-dir init like initdb, or nothing).
-#[derive(Debug, Clone)]
-pub struct PrepareOp {
-    pub meta: OpMeta,
-    pub exec: Option<ResolvedInvocation>,
 }
 
 #[derive(Debug, Clone)]

@@ -139,10 +139,6 @@ pub fn synthetic_model(options: &SyntheticModelOptions) -> Value {
         "services": {
             "synthetic": {
                 "lifecycle": {
-                    "prepare": {
-                        "operationId": "service.synthetic.prepare",
-                        "terminal": { "success": "prepared", "failure": "failed" }
-                    },
                     "start": {
                         "operationId": "service.synthetic.start",
                         "invocation": invocation(&options.executable, start_run),

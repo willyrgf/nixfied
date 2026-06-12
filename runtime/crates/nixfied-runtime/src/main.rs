@@ -323,9 +323,80 @@ fn run_m0_placed(
     // then health before the next.
     let mut started: Vec<StartedService> = Vec::new();
     let mut lease: Option<RunLeaseHeartbeat> = None;
+    let source_root = admission.require_source()?.observed_root.clone();
     for binding in &plan.services {
         let service_name = binding.service_name.as_str();
         eprintln!("  starting service {service_name}");
+
+        // prepare-as-task: the runner executes the prepare task's flattened
+        // nodes inside the service reservation, resolving each leaf's
+        // requirements against the services already started (the combined
+        // connectsTo + prepare-requires ordering guarantees they are ready).
+        let service_def = admission
+            .execution_model
+            .services
+            .get(service_name)
+            .ok_or_else(|| {
+                RuntimeError::new(
+                    nixfied_runtime::ErrorCode::ModelAdmission,
+                    format!("service {service_name} is missing"),
+                )
+            })?;
+        let prepare_runner: Option<nixfied_runtime::service::process::PrepareRunner<'_>> =
+            service_def.prepare.clone().map(|prepare_task| {
+                let started_services = &started;
+                let source_root = source_root.clone();
+                Box::new(move |registry: &mut Registry| -> Result<(), RuntimeError> {
+                    let nodes = nixfied_runtime::execution::flatten_task(
+                        &admission.execution_model,
+                        &prepare_task,
+                    )?;
+                    for node in nodes {
+                        let task = admission
+                            .execution_model
+                            .tasks
+                            .get(node.task_id.as_str())
+                            .ok_or_else(|| {
+                                RuntimeError::new(
+                                    nixfied_runtime::ErrorCode::ModelAdmission,
+                                    format!("task {} is missing", node.task_id),
+                                )
+                            })?;
+                        let mut dependencies: Vec<&StartedService> = Vec::new();
+                        for name in &task.requires {
+                            let Some(dependency) = started_services
+                                .iter()
+                                .find(|service| service.service_name() == name.as_str())
+                            else {
+                                return Err(RuntimeError::new(
+                                    nixfied_runtime::ErrorCode::DependencyUnavailable,
+                                    format!(
+                                        "prepare node {} requires service {name} which is not started yet",
+                                        node.node_id
+                                    ),
+                                ));
+                            };
+                            dependencies.push(dependency);
+                        }
+                        eprintln!("  prepare node {} ({})", node.node_id, node.task_id);
+                        run_dependent_task_cancellable(
+                            placement,
+                            registry,
+                            RunContext {
+                                run_id,
+                                computed_model_hash: &admission.computed_model_hash,
+                                source_root: &source_root,
+                                state_root: &placement.state_root,
+                            },
+                            &dependencies,
+                            node.node_id.as_str(),
+                            task,
+                            cancellation,
+                        )?;
+                    }
+                    Ok(())
+                }) as nixfied_runtime::service::process::PrepareRunner<'_>
+            });
 
         let started_service = match start_service_for_slot(
             admission,
@@ -333,10 +404,11 @@ fn run_m0_placed(
             &mut registry,
             run_id,
             selected_slot,
-            &nixfied_runtime::service::process::ServiceSelection {
+            nixfied_runtime::service::process::ServiceSelection {
                 service_name,
                 endpoint_ports: &binding.endpoint_ports,
                 slot_endpoints: &slot_endpoints,
+                prepare_runner,
             },
         ) {
             Ok(service) => service,

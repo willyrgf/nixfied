@@ -266,11 +266,7 @@ fn validate_invocations(model: &Model) -> Result<(), ValidationError> {
 
 /// Every invocation a lifecycle carries, in canonical order.
 fn lifecycle_invocations(lifecycle: &Lifecycle) -> impl Iterator<Item = &InvocationSpec> {
-    lifecycle
-        .prepare
-        .invocation
-        .iter()
-        .chain(std::iter::once(&lifecycle.start.invocation))
+    std::iter::once(&lifecycle.start.invocation)
         .chain(lifecycle.ready.probe.invocation.iter())
         .chain(lifecycle.health.probe.invocation.iter())
 }
@@ -443,9 +439,10 @@ fn validate_service_lifecycle(service: &ServiceSpec) -> Result<(), ValidationErr
 }
 
 /// The (operationId, terminal) pair of each lifecycle op, in canonical order.
-fn lifecycle_ops(lifecycle: &Lifecycle) -> [(&OperationId, &TerminalSemantics); 6] {
+/// Prepare is a task reference with the referenced task's evidence — it has no
+/// operation id or terminal of its own.
+fn lifecycle_ops(lifecycle: &Lifecycle) -> [(&OperationId, &TerminalSemantics); 5] {
     [
-        (&lifecycle.prepare.operation_id, &lifecycle.prepare.terminal),
         (&lifecycle.start.operation_id, &lifecycle.start.terminal),
         (&lifecycle.ready.operation_id, &lifecycle.ready.terminal),
         (&lifecycle.health.operation_id, &lifecycle.health.terminal),

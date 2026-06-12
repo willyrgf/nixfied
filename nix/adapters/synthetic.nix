@@ -80,13 +80,6 @@ in
 
   nixfied.services.synthetic = {
     lifecycle = {
-      prepare = {
-        operationId = "service.synthetic.prepare";
-        terminal = {
-          success = "prepared";
-          failure = "failed";
-        };
-      };
       start = {
         operationId = "service.synthetic.start";
         invocation = {

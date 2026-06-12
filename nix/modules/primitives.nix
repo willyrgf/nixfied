@@ -78,14 +78,16 @@ let
 
   # Each lifecycle class binds exactly the primitive its mechanism needs: an
   # illegal binding (a stop invocation, a probe on start) is unrepresentable.
+  # prepare binds a task reference with full task semantics: composites
+  # allowed, cross-service `requires` allowed (the combined connectsTo +
+  # prepare-requires graph must stay acyclic). Its evidence is the referenced
+  # task's flattened nodes.
   prepareOpType = types.submodule {
     options = {
-      inherit operationId;
-      terminal = mkTerminal "prepare";
-      invocation = mkOption {
-        type = types.nullOr invocationType;
+      task = mkOption {
+        type = types.nullOr types.nonEmptyStr;
         default = null;
-        description = "Optional data-dir init invocation.";
+        description = "The declared task (leaf or composite) that prepares this service's state.";
       };
     };
   };

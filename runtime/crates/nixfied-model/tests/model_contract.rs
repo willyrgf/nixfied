@@ -97,7 +97,6 @@ fn helper_invocation(run: Value) -> Value {
 fn synthetic_service() -> Value {
     json!({
         "lifecycle": {
-            "prepare": { "operationId": "service.synthetic.prepare", "terminal": { "success": "prepared", "failure": "failed" } },
             "start": { "operationId": "service.synthetic.start", "invocation": helper_invocation(json!(["synthetic-helper", "service", "--host", "127.0.0.1", "--port", "${port}"])), "terminal": { "success": "spawned", "failure": "failed" } },
             "ready": { "operationId": "service.synthetic.ready", "probe": { "kind": "tcp", "timeoutMs": 1000, "retryIntervalMs": 100, "maxAttempts": 20 }, "terminal": { "success": "ready", "failure": "not-ready" } },
             "health": { "operationId": "service.synthetic.health", "probe": { "kind": "tcp", "timeoutMs": 1000, "retryIntervalMs": 100, "maxAttempts": 20 }, "terminal": { "success": "healthy", "failure": "unhealthy" } },
@@ -218,16 +217,12 @@ fn rejects_models_with_nothing_to_run() {
 }
 
 #[test]
-fn prepare_operation_may_bind_an_invocation() {
-    // initdb-style preparation: the prepare class is allowed to bind an
-    // invocation.
+fn prepare_may_bind_a_task_reference() {
+    // initdb-style preparation is a task reference with full task semantics.
     let mut value = valid_model_json();
-    value["services"]["synthetic"]["lifecycle"]["prepare"]["invocation"] =
-        helper_invocation(json!(["synthetic-helper", "init"]));
+    value["services"]["synthetic"]["lifecycle"]["prepare"] = json!({ "task": "smoke" });
     let model: Model = serde_json::from_value(value).expect("model should deserialize");
-    model
-        .validate()
-        .expect("prepare may bind a generic invocation");
+    model.validate().expect("prepare may reference a task");
 }
 
 #[test]

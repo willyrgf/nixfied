@@ -108,7 +108,7 @@ in
   nixfied.closures.pg-prepare = {
     package = pgPrepare;
     executable = "bin/nixfied-pg-prepare";
-    operationBindings = [ "service.postgres.prepare" ];
+    operationBindings = [ "task.pg-init.run" ];
     effects = [
       "process"
       "file-write"
@@ -146,24 +146,23 @@ in
     ];
   };
 
+  # Data-dir init as an ordinary task (prepare-as-task): idempotent, bounded,
+  # with the task's own evidence (logs/summary keyed by its step path).
+  nixfied.tasks.pg-init = {
+    invocation = {
+      tools = [ "pg-prepare" ];
+      run = [
+        "nixfied-pg-prepare"
+        "--state-dir"
+        "\${stateDir}"
+      ];
+      timeoutMs = 60000;
+    };
+  };
+
   nixfied.services.postgres = {
     lifecycle = {
-      prepare = {
-        operationId = "service.postgres.prepare";
-        invocation = {
-          tools = [ "pg-prepare" ];
-          run = [
-            "nixfied-pg-prepare"
-            "--state-dir"
-            "\${stateDir}"
-          ];
-          timeoutMs = 60000;
-        };
-        terminal = {
-          success = "initialized";
-          failure = "failed";
-        };
-      };
+      prepare.task = "pg-init";
       start = {
         operationId = "service.postgres.start";
         invocation = {
