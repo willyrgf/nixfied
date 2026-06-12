@@ -81,7 +81,9 @@ in
           serviceSpec = model.services.${service};
           classes = builtins.attrNames serviceSpec.lifecycle;
         in
-        "- ${service}: endpoints ${builtins.concatStringsSep ", " (builtins.attrNames serviceSpec.endpoints)} (primary ${serviceSpec.primaryEndpoint}); operations ${builtins.concatStringsSep ", " classes}"
+        "- ${service}: endpoints ${
+          builtins.concatStringsSep ", " (builtins.attrNames (serviceSpec.endpoints or { }))
+        } (primary ${serviceSpec.primaryEndpoint or "none"}); operations ${builtins.concatStringsSep ", " classes}"
       ) serviceNames
     )}
 

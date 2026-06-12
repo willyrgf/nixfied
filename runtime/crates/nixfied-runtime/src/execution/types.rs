@@ -86,8 +86,8 @@ pub struct ExecService {
     pub endpoints: BTreeMap<String, ResolvedEndpoint>,
     /// The endpoint bare `${port}`/`${host}` and the tcp readiness/health probe
     /// resolve to, and the one a `connectsTo` dependent reaches by service id. A
-    /// key in `endpoints`.
-    pub primary_endpoint: String,
+    /// key in `endpoints`; `None` for an endpoint-less service.
+    pub primary_endpoint: Option<String>,
     /// Same-slot services this service connects to; gates named endpoint
     /// placeholder resolution and orders service startup.
     pub connects_to: Vec<ServiceId>,

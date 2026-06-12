@@ -506,7 +506,10 @@ fn slot_one_service_uses_slot_placement_port_window() {
     )
     .expect("slot 1 service should accept slot placement port");
 
-    assert_eq!(service.selected_endpoint.port, 23280);
+    assert_eq!(
+        service.selected_endpoint.as_ref().expect("endpoint").port,
+        23280
+    );
     assert_eq!(placement.state_root, tmp.path.join("runtime-test/dev/1"));
     service
         .stop(&mut registry, 1000)
@@ -543,8 +546,18 @@ fn two_slots_keep_services_state_and_controls_isolated() {
     assert_ne!(slot0.placement.artifacts_dir, slot1.placement.artifacts_dir);
     assert_ne!(slot0.placement.summary_path, slot1.placement.summary_path);
     assert_ne!(
-        slot0.service.selected_endpoint.port,
-        slot1.service.selected_endpoint.port
+        slot0
+            .service
+            .selected_endpoint
+            .as_ref()
+            .expect("endpoint")
+            .port,
+        slot1
+            .service
+            .selected_endpoint
+            .as_ref()
+            .expect("endpoint")
+            .port
     );
     assert_ne!(
         slot0.service.service_instance_id,

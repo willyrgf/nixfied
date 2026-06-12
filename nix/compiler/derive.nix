@@ -256,6 +256,7 @@ let
       lifecycle = lifecycleSpec name service.lifecycle;
       singular = service.endpoint != null;
       multi = service.endpoints != { };
+      endpointLess = !singular && !multi;
       endpoints =
         if singular then
           {
@@ -264,21 +265,33 @@ let
             };
           }
         else
-          builtins.mapAttrs (id: ep: { endpointId = id; inherit (ep) host; }) service.endpoints;
+          builtins.mapAttrs (id: ep: {
+            endpointId = id;
+            inherit (ep) host;
+          }) service.endpoints;
       primaryEndpoint = if singular then service.endpoint.endpointId else service.primaryEndpoint;
+      probeKind = op: service.lifecycle.${op}.probe.kind;
     in
     assert lib.assertMsg (
-      singular != multi
-    ) "service ${name}: set exactly one of `endpoint` or `endpoints`";
+      !(singular && multi)
+    ) "service ${name}: set at most one of `endpoint` or `endpoints`";
     assert lib.assertMsg (
       !multi || service.primaryEndpoint != null
     ) "service ${name}: `endpoints` requires `primaryEndpoint`";
+    # An endpoint-less service has no tcp probe target: readiness means "the
+    # probe answers", so both probes must be invocation probes.
+    assert lib.assertMsg (
+      !endpointLess || (probeKind "ready" == "exec" && probeKind "health" == "exec")
+    ) "service ${name}: an endpoint-less service's ready/health probes must be invocation probes (tcp has no target)";
     {
-      inherit lifecycle endpoints primaryEndpoint;
+      inherit lifecycle;
       connectsTo = service.connectsTo;
       stateRefs = service.stateRefs;
       logRefs = service.logRefs;
       containment = service.containment;
+    }
+    // lib.optionalAttrs (!endpointLess) {
+      inherit endpoints primaryEndpoint;
     };
   services = mapAttrs serviceSpec config.nixfied.services;
 

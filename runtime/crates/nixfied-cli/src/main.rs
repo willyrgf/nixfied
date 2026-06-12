@@ -195,7 +195,7 @@ fn docs_view(model: &Model) -> String {
                 .cloned()
                 .collect::<Vec<_>>()
                 .join(", "),
-            spec.primary_endpoint,
+            spec.primary_endpoint.as_deref().unwrap_or("none"),
             lifecycle_classes(&spec.lifecycle)
         );
     }

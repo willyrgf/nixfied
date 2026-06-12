@@ -367,12 +367,18 @@ pub struct ServiceSpec {
     /// assigns each one a port from a contiguous per-service block, so every
     /// listener is reserved and conflict-checked — no service runs an unmodeled
     /// port. Own endpoints are addressable in exec args/env via
-    /// `${port:<endpointId>}`/`${host:<endpointId>}`.
+    /// `${port:<endpointId>}`/`${host:<endpointId>}`. MAY be empty: durable is
+    /// not listening — an endpoint-less service (queue consumer, indexer) is
+    /// owned, probed (invocation probes only), contained, and cleaned, but
+    /// makes no addressability claim and nothing may address it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub endpoints: BTreeMap<String, Endpoint>,
     /// The endpoint bare `${port}`/`${host}` resolve to, the target of the tcp
     /// readiness/health probe, and the endpoint a `connectsTo` dependent reaches
-    /// via `${port:<serviceId>}`. Must be a key in `endpoints`.
-    pub primary_endpoint: String,
+    /// via `${port:<serviceId>}`. Must be a key in `endpoints`; present iff any
+    /// endpoint is declared.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary_endpoint: Option<String>,
     /// Same-slot services this service connects to; the declaration gates
     /// `${port:<serviceId>}`/`${host:<serviceId>}` resolution and start order.
     pub connects_to: UniqueVec<ServiceId>,

@@ -337,17 +337,21 @@ fn validate_services(model: &Model) -> Result<(), ValidationError> {
     Ok(())
 }
 
-/// A service binds at least one endpoint; each map key equals its endpointId, the
-/// primary names a declared endpoint, and no endpointId collides with a
-/// `connectsTo` serviceId (the two share the `${port:<name>}` namespace, resolved
+/// A service binds zero or more endpoints (durable is not listening); each map
+/// key equals its endpointId, the primary is present iff any endpoint is
+/// declared and names one, and no endpointId collides with a `connectsTo`
+/// serviceId (the two share the `${port:<name>}` namespace, resolved
 /// own-endpoint first, so a collision would be ambiguous).
 fn validate_service_endpoints(name: &str, service: &ServiceSpec) -> Result<(), ValidationError> {
     if service.endpoints.is_empty() {
-        return Err(ValidationError::UnsupportedValue {
-            field: "services.endpoints",
-            expected: "at least one endpoint",
-            actual: format!("{name}: {{}}"),
-        });
+        if service.primary_endpoint.is_some() {
+            return Err(ValidationError::UnsupportedValue {
+                field: "services.primaryEndpoint",
+                expected: "no primary endpoint on an endpoint-less service",
+                actual: format!("{name}: {:?}", service.primary_endpoint),
+            });
+        }
+        return Ok(());
     }
     for (id, endpoint) in &service.endpoints {
         require_non_empty("services.endpoints.endpointId", &endpoint.endpoint_id)?;
@@ -370,14 +374,14 @@ fn validate_service_endpoints(name: &str, service: &ServiceSpec) -> Result<(), V
             });
         }
     }
-    if !service.endpoints.contains_key(&service.primary_endpoint) {
-        return Err(ValidationError::UnsupportedValue {
+    match &service.primary_endpoint {
+        Some(primary) if service.endpoints.contains_key(primary) => Ok(()),
+        other => Err(ValidationError::UnsupportedValue {
             field: "services.primaryEndpoint",
             expected: "a declared endpoint id",
-            actual: format!("{name}: {}", service.primary_endpoint),
-        });
+            actual: format!("{name}: {other:?}"),
+        }),
     }
-    Ok(())
 }
 
 /// `connectsTo` targets must be declared services and the wiring graph must be

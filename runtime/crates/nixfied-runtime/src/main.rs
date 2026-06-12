@@ -39,7 +39,8 @@ struct ServiceRunOutput {
     service_id: String,
     service_instance_id: String,
     process_key: String,
-    selected_endpoint: SelectedEndpoint,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    selected_endpoint: Option<SelectedEndpoint>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -304,8 +305,9 @@ fn run_m0_placed(
                 .execution_model
                 .services
                 .get(binding.service_name.as_str())?;
-            let primary = service.endpoints.get(&service.primary_endpoint)?;
-            let port = *binding.endpoint_ports.get(&service.primary_endpoint)?;
+            let primary_id = service.primary_endpoint.as_ref()?;
+            let primary = service.endpoints.get(primary_id)?;
+            let port = *binding.endpoint_ports.get(primary_id)?;
             Some((
                 binding.service_name.clone(),
                 nixfied_runtime::service::SelectedEndpoint {
@@ -394,12 +396,15 @@ fn run_m0_placed(
             ));
         }
         let service = started.last().expect("just started a service");
-        eprintln!(
-            "  service {} ready at {}:{}",
-            service.service_name(),
-            service.selected_endpoint.host,
-            service.selected_endpoint.port
-        );
+        match &service.selected_endpoint {
+            Some(endpoint) => eprintln!(
+                "  service {} ready at {}:{}",
+                service.service_name(),
+                endpoint.host,
+                endpoint.port
+            ),
+            None => eprintln!("  service {} ready (endpoint-less)", service.service_name()),
+        }
     }
 
     if let Err(error) = cancellation.check() {

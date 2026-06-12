@@ -240,8 +240,10 @@ let
         default = null;
         description = ''
           Single-endpoint sugar: the one tcp loopback endpoint the service binds.
-          Mutually exclusive with `endpoints`/`primaryEndpoint`; exactly one form
-          must be set.
+          Mutually exclusive with `endpoints`/`primaryEndpoint`; at most one form
+          may be set — a service with neither is endpoint-less (durable is not
+          listening): owned, invocation-probed, contained, and cleaned, but not
+          addressable.
         '';
       };
       endpoints = mkOption {

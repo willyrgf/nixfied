@@ -378,7 +378,7 @@ mod tests {
                     host: LoopbackHost::parse("127.0.0.1").unwrap(),
                 },
             )]),
-            primary_endpoint: "e".to_string(),
+            primary_endpoint: Some("e".to_string()),
             connects_to: Vec::new(),
             containment: ContainmentRequirement::ProcessGroup,
             identity: ServiceIdentity {
@@ -637,7 +637,7 @@ mod tests {
             );
         }
         multi.endpoints.remove("e");
-        multi.primary_endpoint = "a".to_string();
+        multi.primary_endpoint = Some("a".to_string());
         let plan = plan(&em, &TaskId::new("all"), 0).expect("plan exists");
         let multi_ports = &plan
             .services

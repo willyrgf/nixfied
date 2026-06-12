@@ -57,7 +57,7 @@ pub fn compute_service_identity(
 #[derive(Serialize)]
 struct EndpointIdentityInputs<'a> {
     endpoints: &'a BTreeMap<String, Endpoint>,
-    primary_endpoint: &'a str,
+    primary_endpoint: &'a Option<String>,
 }
 
 /// The state inputs a reuse identity depends on: the epoch and the cleanup /
@@ -76,7 +76,7 @@ struct StateIdentityInputs<'a> {
 struct RuntimeIdentityInputs<'a> {
     lifecycle: &'a Lifecycle,
     endpoints: &'a BTreeMap<String, Endpoint>,
-    primary_endpoint: &'a str,
+    primary_endpoint: &'a Option<String>,
     containment: &'a ContainmentRequirement,
     connects_to: &'a UniqueVec<ServiceId>,
 }

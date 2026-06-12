@@ -50,7 +50,7 @@ pub fn lower(model: &Model) -> RuntimeResult<ExecutionModel> {
         .map(|(name, service)| {
             Ok((
                 ServiceId::new(name),
-                lower_service(name, service, closures, state, &model.target)?,
+                lower_service(name, service, services, closures, state, &model.target)?,
             ))
         })
         .collect::<RuntimeResult<BTreeMap<_, _>>>()?;
@@ -105,6 +105,7 @@ fn require_service(
 fn lower_service(
     name: &str,
     service: &ServiceSpec,
+    all_services: &BTreeMap<String, ServiceSpec>,
     closures: &BTreeMap<String, ClosureSpec>,
     state: &StatePolicy,
     target: &Target,
@@ -141,6 +142,7 @@ fn lower_service(
         .collect();
 
     let owner = || format!("service {name}");
+    let endpoint_less = endpoints.is_empty();
     let prepare = PrepareOp {
         meta: op_meta(&prepare.operation_id, &prepare.terminal),
         exec: match &prepare.invocation {
@@ -152,6 +154,20 @@ fn lower_service(
         meta: op_meta(&start.operation_id, &start.terminal),
         exec: resolve_invocation(&owner, &start.invocation, closures)?,
     };
+    // An endpoint-less service has no tcp probe target: readiness means "the
+    // probe answers", so its probes must be invocations (rejected at eval and
+    // re-proven here).
+    if endpoint_less {
+        for (class, probe) in [("ready", &ready.probe), ("health", &health.probe)] {
+            if probe.kind == ProbeKind::Tcp {
+                return Err(Rejection::TcpProbeWithoutEndpoint {
+                    service: name.to_string(),
+                    class,
+                }
+                .into());
+            }
+        }
+    }
     let ready = ReadyOp {
         meta: op_meta(&ready.operation_id, &ready.terminal),
         probe: lower_probe(name, "ready", &ready.probe, closures)?,
@@ -171,10 +187,15 @@ fn lower_service(
     // reference here rather than fail (or silently leak the literal placeholder)
     // at execution. Validation already proved own endpoint ids and connectsTo
     // ids are disjoint.
+    // An endpoint-less connectsTo target keeps its ordering/derivation meaning
+    // but is NOT addressable: it leaves the named-placeholder scope entirely.
     let allowed: BTreeSet<&str> = endpoints
         .keys()
         .map(String::as_str)
-        .chain(connects_to.iter().map(|id| id.as_str()))
+        .chain(connects_to.iter().filter_map(|id| {
+            let target = all_services.get(id.as_str())?;
+            (!target.endpoints.is_empty()).then_some(id.as_str())
+        }))
         .collect();
     for exec in prepare
         .exec
@@ -183,7 +204,31 @@ fn lower_service(
         .chain(probe_exec(&ready.probe))
         .chain(probe_exec(&health.probe))
     {
-        require_named_refs_in_scope(&owner, "own endpoints or connectsTo", exec, &allowed)?;
+        require_named_refs_in_scope(
+            &owner,
+            "own endpoints or addressable connectsTo",
+            exec,
+            &allowed,
+        )?;
+        // The bare-placeholder rule tasks already have, applied symmetrically:
+        // an endpoint-less service has no primary endpoint for `${port}` /
+        // `${host}` to resolve to.
+        if endpoint_less {
+            for placeholder in ["${port}", "${host}"] {
+                if exec
+                    .args
+                    .iter()
+                    .chain(exec.env.values())
+                    .any(|value| value.contains(placeholder))
+                {
+                    return Err(Rejection::ServicePlaceholderWithoutEndpoint {
+                        service: name.to_string(),
+                        placeholder,
+                    }
+                    .into());
+                }
+            }
+        }
     }
 
     Ok(ExecService {
@@ -283,10 +328,16 @@ fn lower_task(
         .iter()
         .map(|id| require_service("task.requires", services, id))
         .collect::<Result<Vec<_>, Rejection>>()?;
-    // `${port}`/`${host}` resolve from the task's primary service. A task that
-    // requires no services has no endpoint, so referencing them is unrunnable —
+    // `${port}`/`${host}` resolve from the task's primary (first) requirement.
+    // A task that requires no services — or whose primary requirement is
+    // endpoint-less — has no endpoint, so referencing them is unrunnable:
     // reject it here rather than fail at execution.
-    if requires.is_empty() {
+    let primary_has_endpoint = requires
+        .first()
+        .and_then(|id| services.get(id))
+        .map(|service| !service.endpoints.is_empty())
+        .unwrap_or(false);
+    if !primary_has_endpoint {
         for placeholder in ["${port}", "${host}"] {
             if exec
                 .args
@@ -303,9 +354,19 @@ fn lower_task(
         }
     }
     // Named endpoint placeholders may only reference declared service
-    // requirements (any of them, not just the primary).
-    let allowed: BTreeSet<&str> = requires.iter().map(|id| id.as_str()).collect();
-    require_named_refs_in_scope(&owner, "requires", &exec, &allowed)?;
+    // requirements (any of them, not just the primary) that actually declare
+    // endpoints — an endpoint-less requirement is not addressable.
+    let allowed: BTreeSet<&str> = requires
+        .iter()
+        .filter(|id| {
+            services
+                .get(id.as_str())
+                .map(|service| !service.endpoints.is_empty())
+                .unwrap_or(false)
+        })
+        .map(|id| id.as_str())
+        .collect();
+    require_named_refs_in_scope(&owner, "addressable requires", &exec, &allowed)?;
     Ok(LoweredTask::Leaf(ExecTask {
         task_id: TaskId::new(task_id),
         exec,
@@ -562,6 +623,14 @@ pub enum Rejection {
         service: String,
         class: &'static str,
     },
+    TcpProbeWithoutEndpoint {
+        service: String,
+        class: &'static str,
+    },
+    ServicePlaceholderWithoutEndpoint {
+        service: String,
+        placeholder: &'static str,
+    },
     ProbeExecMissing {
         service: String,
         class: &'static str,
@@ -627,6 +696,17 @@ impl Rejection {
             Rejection::ProbeExecOnTcp { service, class } => {
                 format!("service {service} {class} probe is tcp but carries an invocation")
             }
+            Rejection::TcpProbeWithoutEndpoint { service, class } => {
+                format!(
+                    "service {service} is endpoint-less but its {class} probe is tcp (no target to connect)"
+                )
+            }
+            Rejection::ServicePlaceholderWithoutEndpoint {
+                service,
+                placeholder,
+            } => format!(
+                "service {service} references {placeholder} but declares no endpoint to resolve it"
+            ),
             Rejection::ProbeExecMissing { service, class } => {
                 format!("service {service} {class} probe is exec but declares no invocation")
             }
@@ -1044,7 +1124,7 @@ mod tests {
         let em = lower(&model_from(model_value())).expect("valid model lowers");
         let svc = em.services.get("svc").expect("service lowered");
         assert_eq!(svc.endpoints["svc-tcp"].host.to_string(), "127.0.0.1");
-        assert_eq!(svc.primary_endpoint, "svc-tcp");
+        assert_eq!(svc.primary_endpoint.as_deref(), Some("svc-tcp"));
         assert_eq!(svc.stop.signal, StopSignal::Term);
         assert!(svc.prepare.exec.is_none());
         // Args are run[1..]; run[0] resolved to the closure executable.
@@ -1392,6 +1472,115 @@ mod tests {
         // kind-coherence backstop fires; either way the model is refused.
         let error = lower(&model_from(value)).expect_err("invocation-less leaf must reject");
         assert_eq!(error.code, ErrorCode::ModelAdmission);
+    }
+
+    /// An endpoint-less sibling service `worker` with invocation probes; the
+    /// closure binds its ops.
+    fn with_endpoint_less_worker(value: &mut Value) {
+        let probe = json!({
+            "kind": "exec",
+            "invocation": invocation_value("/nix/store/c/bin/svc", json!(["svc", "ping"])),
+            "timeoutMs": 500, "retryIntervalMs": 100, "maxAttempts": 5
+        });
+        value["services"]["worker"] = json!({
+            "lifecycle": {
+                "prepare": { "operationId": "worker.prepare", "terminal": { "success": "initialized", "failure": "failed" } },
+                "start": {
+                    "operationId": "worker.start",
+                    "invocation": invocation_value("/nix/store/c/bin/svc", json!(["svc", "consume"])),
+                    "terminal": { "success": "spawned", "failure": "failed" }
+                },
+                "ready": { "operationId": "worker.ready", "probe": probe.clone(), "terminal": { "success": "ready", "failure": "not-ready" } },
+                "health": { "operationId": "worker.health", "probe": probe, "terminal": { "success": "healthy", "failure": "unhealthy" } },
+                "stop": { "operationId": "worker.stop", "signal": "TERM", "timeoutMs": 5000, "terminal": { "success": "stopped", "failure": "failed" } },
+                "clean": { "operationId": "worker.clean", "terminal": { "success": "cleaned", "failure": "failed" } }
+            },
+            "connectsTo": [],
+            "stateRefs": [], "logRefs": [],
+            "containment": "process-group"
+        });
+        value["closures"]["c"]["operationBindings"] =
+            json!(["svc.start", "worker.health", "worker.ready", "worker.start"]);
+    }
+
+    #[test]
+    fn endpoint_less_service_lowers_without_a_primary() {
+        let mut value = model_value();
+        with_endpoint_less_worker(&mut value);
+        let em = lower(&model_from(value)).expect("endpoint-less service lowers");
+        let worker = em.services.get("worker").expect("worker lowered");
+        assert!(worker.endpoints.is_empty());
+        assert!(worker.primary_endpoint.is_none());
+    }
+
+    #[test]
+    fn endpoint_less_tcp_probe_is_rejected() {
+        let mut value = model_value();
+        with_endpoint_less_worker(&mut value);
+        value["services"]["worker"]["lifecycle"]["ready"]["probe"] = json!({
+            "kind": "tcp", "timeoutMs": 500, "retryIntervalMs": 100, "maxAttempts": 5
+        });
+        // The tcp probe carries no invocation, so the closure's derived
+        // bindings shrink with it.
+        value["closures"]["c"]["operationBindings"] =
+            json!(["svc.start", "worker.health", "worker.start"]);
+        let error = lower(&model_from(value)).expect_err("tcp probe without endpoint must reject");
+        assert_eq!(error.code, ErrorCode::ModelAdmission);
+        assert!(error.message.contains("endpoint-less"), "{}", error.message);
+    }
+
+    #[test]
+    fn endpoint_less_bare_placeholder_is_rejected() {
+        let mut value = model_value();
+        with_endpoint_less_worker(&mut value);
+        value["services"]["worker"]["lifecycle"]["start"]["invocation"]["run"] =
+            json!(["svc", "consume", "--listen", "${port}"]);
+        let error = lower(&model_from(value)).expect_err("bare placeholder must reject");
+        assert_eq!(error.code, ErrorCode::ModelAdmission);
+        assert!(
+            error.message.contains("declares no endpoint"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn named_ref_toward_endpoint_less_service_is_rejected() {
+        // svc connectsTo worker (legal: ordering + derivation) but addresses
+        // it (illegal: no addressability claim exists).
+        let mut value = model_value();
+        with_endpoint_less_worker(&mut value);
+        value["services"]["svc"]["connectsTo"] = json!(["worker"]);
+        value["services"]["svc"]["lifecycle"]["start"]["invocation"]["run"] =
+            json!(["svc", "serve", "--peer", "${port:worker}"]);
+        let error =
+            lower(&model_from(value)).expect_err("named ref toward endpoint-less must reject");
+        assert_eq!(error.code, ErrorCode::ModelAdmission);
+        assert!(error.message.contains("worker"), "{}", error.message);
+    }
+
+    #[test]
+    fn task_named_ref_toward_endpoint_less_requirement_is_rejected() {
+        let mut value = model_value();
+        with_endpoint_less_worker(&mut value);
+        value["tasks"]["t"]["requires"] = json!(["svc", "worker"]);
+        value["tasks"]["t"]["servicesRequired"] = json!(["svc", "worker"]);
+        value["tasks"]["t"]["invocation"]["run"] =
+            json!(["task", "--port", "${port}", "--peer", "${port:worker}"]);
+        let error =
+            lower(&model_from(value)).expect_err("named ref toward endpoint-less must reject");
+        assert_eq!(error.code, ErrorCode::ModelAdmission);
+        assert!(error.message.contains("worker"), "{}", error.message);
+    }
+
+    #[test]
+    fn endpoint_less_requirement_stays_legal_without_placeholders() {
+        let mut value = model_value();
+        with_endpoint_less_worker(&mut value);
+        value["tasks"]["t"]["requires"] = json!(["svc", "worker"]);
+        value["tasks"]["t"]["servicesRequired"] = json!(["svc", "worker"]);
+        let em = lower(&model_from(value)).expect("requiring an endpoint-less service is legal");
+        assert_eq!(em.tasks["t"].requires.len(), 2);
     }
 
     #[test]

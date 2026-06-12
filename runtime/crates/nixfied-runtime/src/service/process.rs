@@ -71,9 +71,10 @@ pub struct StartedService {
     pub pid: u32,
     pub pgid: i32,
     pub platform_start_identity: Option<String>,
-    /// The primary endpoint: the tcp probe target and the endpoint recorded as the
-    /// service's address.
-    pub selected_endpoint: SelectedEndpoint,
+    /// The primary endpoint: the tcp probe target and the endpoint recorded as
+    /// the service's address; `None` for an endpoint-less service (which can
+    /// only carry invocation probes).
+    pub selected_endpoint: Option<SelectedEndpoint>,
     /// Every endpoint the service binds (including the primary), each reserved and
     /// ownership-verified after readiness.
     pub selected_endpoints: Vec<SelectedEndpoint>,
@@ -224,12 +225,17 @@ impl StartedService {
 
     fn wait_probe(&self, probe: &Probe, cancellation: &CancellationToken) -> RuntimeResult<()> {
         match probe {
-            Probe::Tcp(probe) => wait_for_tcp_probe(
-                probe,
-                &self.selected_endpoint.host,
-                self.selected_endpoint.port,
-                cancellation,
-            ),
+            Probe::Tcp(probe) => {
+                // Lowering rejects tcp probes on endpoint-less services, so a
+                // missing primary here is a lowering/executor skew — refuse.
+                let endpoint = self.selected_endpoint.as_ref().ok_or_else(|| {
+                    RuntimeError::new(
+                        ErrorCode::ModelAdmission,
+                        "tcp probe on a service with no selected endpoint",
+                    )
+                })?;
+                wait_for_tcp_probe(probe, &endpoint.host, endpoint.port, cancellation)
+            }
             Probe::Exec(probe) => {
                 wait_for_exec_probe(probe, &self.source_root, &self.logs_dir, cancellation)
             }
@@ -638,18 +644,17 @@ pub fn start_service_for_slot(
             },
         );
     }
-    let selected_endpoint = own_endpoints
-        .get(&service.primary_endpoint)
-        .cloned()
-        .ok_or_else(|| {
+    // An endpoint-less service has no primary: it makes no addressability
+    // claim, so there is no selected endpoint to record or probe over tcp.
+    let selected_endpoint = match &service.primary_endpoint {
+        Some(primary) => Some(own_endpoints.get(primary).cloned().ok_or_else(|| {
             RuntimeError::new(
                 ErrorCode::ModelAdmission,
-                format!(
-                    "service {service_name} primary endpoint {} is missing",
-                    service.primary_endpoint
-                ),
+                format!("service {service_name} primary endpoint {primary} is missing"),
             )
-        })?;
+        })?),
+        None => None,
+    };
     let selected_endpoints: Vec<SelectedEndpoint> = own_endpoints.values().cloned().collect();
     // The named substitution scope is the declared connectsTo set; lowering
     // proved every cross-service placeholder references a member of it.
@@ -659,7 +664,7 @@ pub fn start_service_for_slot(
         .map(|(id, endpoint)| (id.clone(), endpoint.clone()))
         .collect();
     let substitution = ExecSubstitution {
-        own_primary: Some(&selected_endpoint),
+        own_primary: selected_endpoint.as_ref(),
         own_endpoints: &own_endpoints,
         named: &named,
         state_root: &placement.state_root,
@@ -822,6 +827,8 @@ pub fn start_service_for_slot(
         process_key: Some(process_key.clone()),
         computed_model_hash: admission.computed_model_hash.clone(),
     };
+    // `null` for an endpoint-less service: durable evidence records the absence
+    // of an addressability claim, not a fabricated endpoint.
     let endpoint_json = serde_json::to_string(&selected_endpoint)
         .map_err(|error| RuntimeError::new(ErrorCode::ModelAdmission, error.to_string()))?;
     if let Err(error) = record_service_start(

@@ -108,14 +108,16 @@ pub fn run_dependent_task_cancellable(
     // alone.
     let endpoint = dependencies
         .first()
-        .map(|service| &service.selected_endpoint);
+        .and_then(|service| service.selected_endpoint.as_ref());
+    // Endpoint-less dependencies are alive while the task runs but contribute
+    // nothing addressable; lowering already rejected placeholders toward them.
     let named: SlotEndpoints = dependencies
         .iter()
-        .map(|service| {
-            (
+        .filter_map(|service| {
+            Some((
                 ServiceId::new(service.service_name()),
-                service.selected_endpoint.clone(),
-            )
+                service.selected_endpoint.clone()?,
+            ))
         })
         .collect();
     // A task binds no endpoints of its own, so the `${port:<name>}` namespace is

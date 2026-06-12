@@ -48,7 +48,7 @@ let
     if service.endpoint != null then
       [ service.endpoint.host ]
     else
-      map (ep: ep.host) (builtins.attrValues service.endpoints);
+      map (ep: ep.host) (builtins.attrValues service.endpoints); # [] when endpoint-less
   endpointHostsLoopback = lib.all (
     name: lib.all isLoopbackHost (serviceHosts services.${name})
   ) (builtins.attrNames services);
