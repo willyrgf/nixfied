@@ -1822,6 +1822,87 @@ mod tests {
     }
 
     #[test]
+    fn heterogeneous_cycle_error_names_each_edge_kind() {
+        // svc -[prepare requires]-> dep (via the migrate task) and
+        // dep -[connectsTo]-> svc: the rejection must render the cycle with
+        // each hop's kind, so the operator can tell wiring from preparation.
+        let mut value = model_value();
+        let mut dep = service_value();
+        dep["endpoints"] = json!({ "dep-tcp": { "endpointId": "dep-tcp", "host": "127.0.0.1" } });
+        dep["primaryEndpoint"] = json!("dep-tcp");
+        for (class, op) in dep["lifecycle"].as_object_mut().unwrap() {
+            op["operationId"] = json!(format!("dep.{class}"));
+        }
+        value["closures"]["c"]["operationBindings"] = json!(["dep.start", "svc.start"]);
+        dep["connectsTo"] = json!(["svc"]);
+        value["services"]["dep"] = dep;
+        value["closures"]["cm"] = json!({
+            "kind": "executable", "storePath": "/nix/store/cm", "executable": "/nix/store/cm/bin/migrate",
+            "targetSystem": "x86_64-linux",
+            "operationBindings": ["task.migrate.run"],
+            "requiresExecutable": true, "effects": ["process"]
+        });
+        value["tasks"]["migrate"] = json!({
+            "kind": "leaf",
+            "operationId": "task.migrate.run",
+            "invocation": {
+                "tools": ["cm"],
+                "run": ["migrate"],
+                "executable": "/nix/store/cm/bin/migrate",
+                "env": {}, "codebaseId": "main", "cwd": ".", "stdin": "null", "timeoutMs": 1000
+            },
+            "requires": ["dep"],
+            "servicesRequired": ["dep"],
+            "exitPolicy": { "successCodes": [0] }
+        });
+        value["services"]["svc"]["lifecycle"]["prepare"] = json!({ "task": "migrate" });
+        let error = lower(&model_from(value)).expect_err("heterogeneous cycle must reject");
+        assert_eq!(error.code, ErrorCode::ModelAdmission);
+        assert!(
+            error.message.contains("-[prepare requires]->"),
+            "must name the prepare edge: {}",
+            error.message
+        );
+        assert!(
+            error.message.contains("-[connectsTo]->"),
+            "must name the wiring edge: {}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn prepare_requiring_the_owner_is_a_self_cycle() {
+        let mut value = model_value();
+        value["closures"]["cm"] = json!({
+            "kind": "executable", "storePath": "/nix/store/cm", "executable": "/nix/store/cm/bin/selfinit",
+            "targetSystem": "x86_64-linux",
+            "operationBindings": ["task.selfinit.run"],
+            "requiresExecutable": true, "effects": ["process"]
+        });
+        value["tasks"]["selfinit"] = json!({
+            "kind": "leaf",
+            "operationId": "task.selfinit.run",
+            "invocation": {
+                "tools": ["cm"],
+                "run": ["selfinit"],
+                "executable": "/nix/store/cm/bin/selfinit",
+                "env": {}, "codebaseId": "main", "cwd": ".", "stdin": "null", "timeoutMs": 1000
+            },
+            "requires": ["svc"],
+            "servicesRequired": ["svc"],
+            "exitPolicy": { "successCodes": [0] }
+        });
+        value["services"]["svc"]["lifecycle"]["prepare"] = json!({ "task": "selfinit" });
+        let error = lower(&model_from(value)).expect_err("self-preparing service must reject");
+        assert_eq!(error.code, ErrorCode::ModelAdmission);
+        assert!(
+            error.message.contains("svc -[prepare requires]-> svc"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
     fn declared_path_env_is_rejected() {
         // PATH is runtime-owned (assembled from tool roots); a declared PATH
         // would be silently overwritten, so it is rejected fail-closed.
