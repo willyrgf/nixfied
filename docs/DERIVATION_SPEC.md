@@ -121,7 +121,7 @@ Pinned consequences:
   no PlanNode exists for the composite itself.
 - **Cycles**: the task reference graph (composite → step → task) must be
   acyclic. Eval rejects it; admission re-proves it (the existing
-  workflow-cycle rejection, applied through nesting).
+  task-cycle rejection, applied through nesting).
 
 ### 2.3 Evidence identity
 

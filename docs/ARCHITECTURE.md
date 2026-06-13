@@ -12,11 +12,11 @@ decisions live on here and in git history.
 ## The problem
 
 Modern projects are small systems: APIs, workers, databases, queues, migrations,
-test harnesses, CI jobs, and dev workflows — often polyglot, owned by different
+test harnesses, CI jobs, and dev tasks — often polyglot, owned by different
 tools. Their operational behavior is scattered across `flake.nix`, shell scripts,
 package scripts, CI YAML, compose files, env files, and port conventions. Nothing
 gives a project a clean, process-aware way to run multiple environments — or
-multiple copies of one environment — while keeping services, workflows, state,
+multiple copies of one environment — while keeping services, tasks, state,
 logs, ports, artifacts, and cleanup under a single authority. Without first-class
 environment/slot/state/placement/registry/source concepts, `dev`/`test`/`ci`
 runs collide, ports and state leak, services started by one script are stopped by
@@ -86,8 +86,8 @@ mode:
 
 The first external adoption (`PROBLEM_COMPOSITION.md`) exposed the original
 sin of the authoring surface: it was the runtime's **wire format exposed
-raw** — closures, execs, operationIds, terminal tokens — so adopter concepts
-with no runtime equivalent (a *command*, a *toolchain*, a *workflow*, a
+raw** — closures, invocations, operationIds, terminal tokens — so adopter concepts
+with no runtime equivalent (a *command*, a *toolchain*, a *pipeline*, a
 *verb*) escaped the model: below it into opaque shell dispatchers, above it
 into the adopter's own flake. The accepted fix (`DESIGN_COMPOSITION.md`) is a
 closed algebra of exactly **two semantic kinds** (KIND-2):
@@ -105,7 +105,7 @@ closed algebra of exactly **two semantic kinds** (KIND-2):
 The connective tissue is the **invocation** (`tools + run + env + cwd +
 timeout + stdin`) — the one way anything says "run this program". Invocations
 are **anonymous and inline** (INVOKE-1): naming them for reuse would recreate
-the exec registry and its reuse/wiring entanglement; content reuse is a Nix
+the named-invocation registry and its reuse/wiring entanglement; content reuse is a Nix
 `let`, and the model carries the fully-applied copies.
 
 Adopter vocabulary enters the contract as **names over this algebra, never as
@@ -126,7 +126,7 @@ runtime-owned PATH (assembled from the tool roots), nothing inherited.
 ## Correctness in four layers
 
 1. **Model correctness (Nix).** Reject invalid names, broken references, cyclic
-   workflows, malformed state/placement, missing closures, invalid primitives, or
+   task graphs, malformed state/placement, missing closures, invalid primitives, or
    bad source/target policy — before runtime is even possible.
 2. **Closure correctness (Nix).** Reproducibly realise the store paths the runtime
    may execute.
@@ -136,7 +136,7 @@ runtime-owned PATH (assembled from the tool roots), nothing inherited.
    cross-reference exists), writable marker-owned state, registry acquisition, port
    ownership strategy, and stale-lease reconciliation.
 4. **Execution correctness (Rust).** The impure graph: process groups, signals,
-   readiness/health, tasks, workflow cancellation, registry events, summaries,
+   readiness/health, task/composite cancellation, registry events, summaries,
    cleanup, reconciliation.
 
 This keeps Nix central to project evolution while preventing it from becoming a

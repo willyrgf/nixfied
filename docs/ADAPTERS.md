@@ -62,8 +62,8 @@ rewrite).
 
 Adapters are ordinary modules: the importing project overrides options by
 module merging — `nixfied.services.postgres.lifecycle.stop.signal`,
-`nixfied.placement.ports.base`, probe timing, or whole execs. No adapter has
-its own option namespace.
+`nixfied.placement.ports.base`, probe timing, or lifecycle invocations. No
+adapter has its own option namespace.
 
 ## Multiple listeners: model every endpoint
 

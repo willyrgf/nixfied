@@ -102,7 +102,7 @@ deliberate change to the contract (and matching version bump + docs + tests):
 - **STATIC-1:** composites are static, fully-applied DAGs. No parameters,
   conditionals, retries, or loops in the contract — dynamism is Nix-side
   expansion or inside an opaque leaf. This is the line against growing a
-  workflow language inside the seam.
+  orchestration language inside the seam.
 - **DERIVE-1:** a fact derivable from the graph is derived
   (`servicesRequired`, `operationBindings`, operation ids), per the normative
   `docs/DERIVATION_SPEC.md`, computed identically by the Nix compiler and the
@@ -161,7 +161,8 @@ runtime/crates/nixfied-runtime
                              endpoint ownership, tasks, composites, and controls
 runtime/crates/nixfied-cli   ergonomic CLI: model/schema/docs/capabilities/install
 examples/                    downstream-shaped examples: minimal, postgres,
-                             workflow, polyglot-stack, downstream (the worked example)
+                             composite, polyglot-stack, downstream, reth,
+                             toolchain
 ```
 
 There is no `tests/` directory: end-to-end behavior lives in the cargo floor
@@ -275,16 +276,17 @@ few checks a single run can't make on its own (`.github/workflows/checks.yml`):
 nix run .#gate
 ```
 
-For each example (`minimal`, `postgres`, `workflow`, `polyglot`, `downstream`) the
-gate runs the model + cleans it — the example is its own spec, so the run fails if
-its services/tasks fail — and diffs the emitted views against the runtime's
-re-derivation (`nixfied {schema,capabilities,docs} --model` ⟂ `<model>/views/*`).
-Then `slots` runs two concurrent slots of `downstream` and asserts full isolation
-(disjoint ports/instances/process-keys, separate Postgres data clusters, isolated
-clean) — the one genuinely cross-run check; `negative` proves the gate fails closed
-(an undeclared workflow is refused); `adoption` runs the real `#install` +
-`#upgrade` against a throwaway repo. There is no self-model and no orchestrator
-binary — it is all `nix/gate.nix`.
+For each example (`minimal`, `postgres`, `composite`, `polyglot-stack`,
+`downstream`, `reth`, `toolchain`) the gate runs the model + cleans it — the
+example is its own spec, so the run fails if its services/tasks fail — and diffs
+the emitted views against the runtime's re-derivation (`nixfied
+{schema,capabilities,docs} --model` ⟂ `<model>/views/*`). Then `slots` runs two
+concurrent slots of `downstream` and asserts full isolation (disjoint
+ports/instances/process-keys, separate Postgres data clusters, isolated clean) —
+the one genuinely cross-run check; `negative` proves the gate fails closed (for
+example, an undeclared task selection is refused); `adoption` runs the real
+`#install` + `#upgrade` against a throwaway repo. There is no self-model and no
+orchestrator binary — it is all `nix/gate.nix`.
 
 There are no e2e shell proofs: the cancellation/GC/lifecycle invariants are
 white-box cargo tests, SEAM-1 (the runtime never invokes nix) is the
