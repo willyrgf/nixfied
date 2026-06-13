@@ -56,8 +56,34 @@ let
   # discipline: invalid composition must fail at evaluation, not compile into
   # a model the runtime only rejects at admission.
   tasks = config.nixfied.tasks;
+  deriveFacts = import ../lib/derive-facts.nix { inherit lib; };
   taskNames = builtins.attrNames tasks;
   stepSafe = id: builtins.match "[A-Za-z0-9][A-Za-z0-9_-]*" id != null;
+  endpointLess = service: service.endpoint == null && service.endpoints == { };
+  endpointIds =
+    service:
+    if service.endpoint != null then
+      [ service.endpoint.endpointId ]
+    else
+      builtins.attrNames service.endpoints;
+  invocationValues = invocation: invocation.run ++ builtins.attrValues invocation.env;
+  refsAfterPrefix =
+    prefix: value:
+    lib.concatMap (
+      part:
+      let
+        split = lib.splitString "}" part;
+      in
+      if builtins.length split > 1 then [ (builtins.head split) ] else [ ]
+    ) (builtins.tail (lib.splitString prefix value));
+  namedEndpointRefs =
+    value:
+    refsAfterPrefix "\${port:" value ++ refsAfterPrefix "\${host:" value;
+  invocationNamedRefs =
+    invocation:
+    lib.unique (lib.concatMap namedEndpointRefs (invocationValues invocation));
+  hasBareEndpointRef = value: lib.hasInfix "\${port}" value || lib.hasInfix "\${host}" value;
+  invocationHasBareRef = invocation: lib.any hasBareEndpointRef (invocationValues invocation);
   taskIdsStepSafe =
     lib.all stepSafe taskNames && lib.all stepSafe (builtins.attrNames services);
   leafTasks = lib.filterAttrs (_n: task: task.kind == "leaf") tasks;
@@ -126,10 +152,90 @@ let
       )
     ) (taskRefsOf current);
   taskGraphAcyclic = lib.all (name: !(taskReaches name name [ ])) taskNames;
+  leafRequiresDeclared = lib.all (
+    name: lib.all (target: builtins.hasAttr target services) leafTasks.${name}.requires
+  ) (builtins.attrNames leafTasks);
+  leafNamedRefsInScope = lib.all (
+    name:
+    let
+      task = leafTasks.${name};
+      allowed = builtins.filter (
+        target: builtins.hasAttr target services && !(endpointLess services.${target})
+      ) task.requires;
+    in
+    lib.all (reference: builtins.elem reference allowed) (invocationNamedRefs task.invocation)
+  ) (builtins.attrNames leafTasks);
+  leafBareRefsResolvable = lib.all (
+    name:
+    let
+      task = leafTasks.${name};
+      primary = if task.requires == [ ] then null else builtins.head task.requires;
+      primaryHasEndpoint =
+        primary != null && builtins.hasAttr primary services && !(endpointLess services.${primary});
+    in
+    !(invocationHasBareRef task.invocation) || primaryHasEndpoint
+  ) (builtins.attrNames leafTasks);
+  serviceLifecycleInvocations =
+    service:
+    let
+      lc = service.lifecycle;
+    in
+    [ lc.start.invocation ]
+    ++ lib.optional (lc.ready.probe.kind == "exec" && lc.ready.probe.invocation != null) lc.ready.probe.invocation
+    ++ lib.optional (lc.health.probe.kind == "exec" && lc.health.probe.invocation != null) lc.health.probe.invocation;
+  serviceNamedRefsInScope = lib.all (
+    name:
+    let
+      service = services.${name};
+      allowed = endpointIds service ++ builtins.filter (
+        target: builtins.hasAttr target services && !(endpointLess services.${target})
+      ) service.connectsTo;
+      refs = lib.unique (
+        lib.concatMap invocationNamedRefs (serviceLifecycleInvocations service)
+      );
+    in
+    lib.all (reference: builtins.elem reference allowed) refs
+  ) (builtins.attrNames services);
+  endpointLessServicesHaveNoBareRefs = lib.all (
+    name:
+    let
+      service = services.${name};
+    in
+    !(endpointLess service)
+    || lib.all (invocation: !(invocationHasBareRef invocation)) (serviceLifecycleInvocations service)
+  ) (builtins.attrNames services);
+  leafOperationId =
+    name: task:
+    if task.operationId != null then task.operationId else deriveFacts.leafOperationId name;
+  serviceOperationId =
+    name: op: declared:
+    if declared != null then declared else deriveFacts.serviceOperationId name op;
+  effectiveOperationIds =
+    map (
+      name: leafOperationId name leafTasks.${name}
+    ) (builtins.attrNames leafTasks)
+    ++ lib.concatMap (
+      name:
+      let
+        lc = services.${name}.lifecycle;
+      in
+      [
+        (serviceOperationId name "start" lc.start.operationId)
+        (serviceOperationId name "ready" lc.ready.operationId)
+        (serviceOperationId name "health" lc.health.operationId)
+        (serviceOperationId name "stop" lc.stop.operationId)
+        (serviceOperationId name "clean" lc.clean.operationId)
+      ]
+    ) (builtins.attrNames services);
+  duplicateOperationIds = lib.unique (
+    builtins.filter (
+      id:
+      builtins.length (builtins.filter (other: other == id) effectiveOperationIds) > 1
+    ) effectiveOperationIds
+  );
   # prepare-as-task: the reference must resolve, and the combined connectsTo +
   # prepare-requires service graph must stay acyclic (a service cannot —
   # directly or transitively — wait on itself to prepare).
-  deriveFacts = import ../lib/derive-facts.nix { inherit lib; };
   prepareTaskOf = name: services.${name}.lifecycle.prepare.task;
   prepareTasksDeclared = lib.all (
     name: prepareTaskOf name == null || builtins.hasAttr (prepareTaskOf name) tasks
@@ -184,6 +290,22 @@ let
     (expect stepDependsOnSiblings "composite step dependsOn must name a sibling step")
     (expect stepGraphsAcyclic "composite step dependency graph must be acyclic")
     (expect taskGraphAcyclic "the task reference graph must be acyclic")
+    (expect leafRequiresDeclared "leaf task requires targets must be declared services")
+    (expect leafNamedRefsInScope
+      "leaf task named endpoint placeholders must reference addressable required services"
+    )
+    (expect leafBareRefsResolvable
+      "leaf task bare endpoint placeholders require a primary service with endpoints"
+    )
+    (expect serviceNamedRefsInScope
+      "service named endpoint placeholders must reference own endpoints or addressable connectsTo services"
+    )
+    (expect endpointLessServicesHaveNoBareRefs
+      "endpoint-less service lifecycle invocations must not use bare endpoint placeholders"
+    )
+    (expect (duplicateOperationIds == [ ])
+      "effective operation ids must be globally unique: ${builtins.concatStringsSep ", " duplicateOperationIds}"
+    )
     (expect prepareTasksDeclared "service prepare must reference a declared task")
     (expect (lib.all (verb: builtins.hasAttr verb tasks) config.nixfied.surface.verbs)
       "surface.verbs must name declared tasks"

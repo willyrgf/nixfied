@@ -224,12 +224,27 @@ pkgs.writeShellApplication {
         'nixfied.tasks.loop-a = { kind = "composite"; steps.next.task = "loop-b"; }; nixfied.tasks.loop-b = { kind = "composite"; steps.next.task = "loop-a"; };'
       reject_composite "an operation binding gate narrower than the derivation" \
         'nixfied.closures.synthetic-helper.operationBindings = lib.mkForce [ "task.smoke.run" ];'
+      reject_composite "a duplicate effective operation id" \
+        'nixfied.tasks.smoke.operationId = "service.synthetic.start";'
+      # shellcheck disable=SC2016
+      reject_composite "a task named endpoint ref outside requires" \
+        'nixfied.tasks.smoke.invocation.run = lib.mkForce [ "nixfied-synthetic-helper" "task" "--host" "127.0.0.1" "--port" "\''${port:ghost}" ];'
+      # shellcheck disable=SC2016
+      reject_composite "a service named endpoint ref outside connectsTo" \
+        'nixfied.services.synthetic.lifecycle.start.invocation.run = lib.mkForce [ "nixfied-synthetic-helper" "service" "--host" "127.0.0.1" "--port" "\''${port:ghost}" ];'
       reject_composite "both endpoint forms set" \
         'nixfied.services.synthetic.endpoints = { extra = { }; }; nixfied.services.synthetic.primaryEndpoint = "extra";'
       reject_composite "a tcp probe on an endpoint-less service" \
         'nixfied.services.bare = { lifecycle.start.invocation = { tools = [ "synthetic-helper" ]; run = [ "nixfied-synthetic-helper" "service" "--host" "127.0.0.1" "--port" "1" ]; }; };'
       reject_composite "a listening service without the network-listener attestation" \
         'nixfied.closures.synthetic-helper.effects = lib.mkForce [ "process" ];'
+      reject_composite "an endpoint-less lifecycle using a bare endpoint placeholder" \
+        'nixfied.closures.synthetic-helper.effects = lib.mkForce [ "process" ]; nixfied.services.synthetic.endpoint = lib.mkForce null; nixfied.services.synthetic.lifecycle.ready.probe = { kind = "exec"; invocation = { tools = [ "synthetic-helper" ]; run = [ "nixfied-synthetic-helper" "task" "--host" "127.0.0.1" "--port" "1" ]; }; }; nixfied.services.synthetic.lifecycle.health.probe = { kind = "exec"; invocation = { tools = [ "synthetic-helper" ]; run = [ "nixfied-synthetic-helper" "task" "--host" "127.0.0.1" "--port" "1" ]; }; };'
+      # shellcheck disable=SC2016
+      reject_composite "a task addressing an endpoint-less required service" \
+        'nixfied.closures.synthetic-helper.effects = lib.mkForce [ "process" ]; nixfied.services.synthetic.endpoint = lib.mkForce null; nixfied.services.synthetic.lifecycle.start.invocation.run = lib.mkForce [ "nixfied-synthetic-helper" "task" "--host" "127.0.0.1" "--port" "1" ]; nixfied.services.synthetic.lifecycle.ready.probe = { kind = "exec"; invocation = { tools = [ "synthetic-helper" ]; run = [ "nixfied-synthetic-helper" "task" "--host" "127.0.0.1" "--port" "1" ]; }; }; nixfied.services.synthetic.lifecycle.health.probe = { kind = "exec"; invocation = { tools = [ "synthetic-helper" ]; run = [ "nixfied-synthetic-helper" "task" "--host" "127.0.0.1" "--port" "1" ]; }; }; nixfied.tasks.smoke.invocation.run = lib.mkForce [ "nixfied-synthetic-helper" "task" "--host" "127.0.0.1" "--port" "\''${port:synthetic}" ];'
+      reject_composite "an endpoint-less service start declaring network-listener" \
+        'nixfied.services.synthetic.endpoint = lib.mkForce null; nixfied.services.synthetic.lifecycle.start.invocation.run = lib.mkForce [ "nixfied-synthetic-helper" "task" "--host" "127.0.0.1" "--port" "1" ]; nixfied.services.synthetic.lifecycle.ready.probe = { kind = "exec"; invocation = { tools = [ "synthetic-helper" ]; run = [ "nixfied-synthetic-helper" "task" "--host" "127.0.0.1" "--port" "1" ]; }; }; nixfied.services.synthetic.lifecycle.health.probe = { kind = "exec"; invocation = { tools = [ "synthetic-helper" ]; run = [ "nixfied-synthetic-helper" "task" "--host" "127.0.0.1" "--port" "1" ]; }; };'
       reject_composite "a dangling prepare task" \
         'nixfied.services.synthetic.lifecycle.prepare.task = "ghost";'
       reject_composite "a prepare requiring its own service (combined-graph cycle)" \
