@@ -3353,6 +3353,222 @@ fn composite_run_keys_evidence_by_step_path() {
 }
 
 #[test]
+fn nested_composite_cancellation_terminates_leaf_process_group() {
+    let Some(python) = nix_store_executable(&["python3"]) else {
+        return;
+    };
+    let closure_root = closure_root_for_store_executable(&python)
+        .expect("store executable should have a closure root");
+    let marker = temp_marker("nixfied-nested-composite-cancel-survivor");
+    let marker_arg = marker.to_string_lossy().to_string();
+    let script = [
+        "import os, pathlib, signal, sys, time",
+        "signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))",
+        "pid = os.fork()",
+        "if pid == 0:",
+        "    signal.signal(signal.SIGTERM, signal.SIG_IGN)",
+        "    time.sleep(2)",
+        "    pathlib.Path(sys.argv[1]).touch()",
+        "    time.sleep(30)",
+        "else:",
+        "    os.waitpid(pid, 0)",
+    ]
+    .join("\n");
+    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
+    let port = listener.local_addr().expect("local addr").port();
+    drop(listener);
+    let mut value = fixture_model(
+        &python.to_string_lossy(),
+        &["service", "--host", "127.0.0.1", "--port", "${port}"],
+        port,
+    );
+    value["closures"]["synthetic-helper"]["storePath"] = json!(closure_root.to_string_lossy());
+    value["closures"]["synthetic-helper"]["executable"] = json!(python.to_string_lossy());
+    value["tasks"]["smoke"]["requires"] = json!([]);
+    value["tasks"]["smoke"]["servicesRequired"] = json!([]);
+    set_task_run_args(&mut value, &["-c", &script, &marker_arg]);
+    value["tasks"]["inner"] = json!({
+        "kind": "composite",
+        "servicesRequired": [],
+        "steps": {
+            "wait": { "task": "smoke" }
+        }
+    });
+    value["tasks"]["outer"] = json!({
+        "kind": "composite",
+        "servicesRequired": [],
+        "steps": {
+            "inner": { "task": "inner" }
+        }
+    });
+    let model: Model = serde_json::from_value(value).expect("nested fixture model should parse");
+
+    let tmp = TempDir::new();
+    let model_path = tmp.path.join("model.json");
+    let state_base = tmp.path.join("state");
+    fs::create_dir_all(&state_base).expect("state base should be created");
+    fs::write(
+        &model_path,
+        serde_json::to_vec_pretty(&model).expect("model should serialize"),
+    )
+    .expect("model should be written");
+
+    let child = Command::new(runtime_binary())
+        .arg("run")
+        .arg("--task")
+        .arg("outer")
+        .arg("--allow-non-store-model")
+        .arg("--model")
+        .arg(&model_path)
+        .arg("--state-base")
+        .arg(&state_base)
+        .current_dir(&tmp.path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("runtime should spawn");
+    let registry_path = wait_for_task_process_row(&state_base, Duration::from_secs(5));
+    let signal_result = unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
+    assert_eq!(signal_result, 0, "SIGTERM should reach runtime process");
+
+    let output = wait_for_child_output(child, Duration::from_secs(10));
+
+    assert_eq!(output.status.code(), Some(27), "CANCELED exit code");
+    let error = stderr_json(&output.stderr);
+    assert_eq!(error["code"], json!("CANCELED"));
+    assert_eq!(error["details"]["failedNodeId"], json!("outer.inner.wait"));
+    let conn = rusqlite::Connection::open(&registry_path).expect("registry should open");
+    let (task_status, pgid): (String, i32) = conn
+        .query_row(
+            "SELECT status, pgid FROM processes WHERE service_instance_id IS NULL",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("task process row should exist");
+    assert_eq!(task_status, "canceled");
+    assert!(
+        !process_group_has_non_zombie_member(pgid),
+        "canceled nested leaf process group should be empty"
+    );
+    thread::sleep(Duration::from_millis(2300));
+    assert!(
+        !marker.exists(),
+        "descendant that ignored TERM should have been killed before touching marker"
+    );
+    let _ = fs::remove_file(marker);
+}
+
+#[test]
+fn composite_starts_full_service_union_before_first_node() {
+    let Some(python) = nix_store_executable(&["python3"]) else {
+        return;
+    };
+    let closure_root = closure_root_for_store_executable(&python)
+        .expect("store executable should have a closure root");
+    let port = available_port_window(2);
+    let worker_port = port.checked_add(1).expect("two-port window should fit");
+    let worker_port_arg = worker_port.to_string();
+    let script = [
+        "import socket, sys, time",
+        "cmd = sys.argv[1]",
+        "if cmd == 'service':",
+        "    s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)",
+        "    s.bind(('127.0.0.1', int(sys.argv[2]))); s.listen(16); time.sleep(30)",
+        "elif cmd == 'task':",
+        "    with socket.create_connection(('127.0.0.1', int(sys.argv[2])), timeout=2): pass",
+    ]
+    .join("\n");
+    let mut value = fixture_model(
+        &python.to_string_lossy(),
+        &["-c", &script, "service", "${port}"],
+        port,
+    );
+    value["closures"]["synthetic-helper"]["storePath"] = json!(closure_root.to_string_lossy());
+    value["placement"]["slotPlacements"]["0"]["candidatePorts"]["end"] = json!(worker_port);
+    value["closures"]["synthetic-helper"]["operationBindings"] = json!([
+        "service.synthetic.start",
+        "service.worker.start",
+        "task.needs-worker.run",
+        "task.smoke.run"
+    ]);
+
+    let mut worker = value["services"]["synthetic"].clone();
+    worker["lifecycle"]["start"]["operationId"] = json!("service.worker.start");
+    worker["lifecycle"]["ready"]["operationId"] = json!("service.worker.ready");
+    worker["lifecycle"]["health"]["operationId"] = json!("service.worker.health");
+    worker["lifecycle"]["stop"]["operationId"] = json!("service.worker.stop");
+    worker["lifecycle"]["clean"]["operationId"] = json!("service.worker.clean");
+    worker["endpoints"] = json!({
+        "worker-tcp": { "endpointId": "worker-tcp", "host": "127.0.0.1" }
+    });
+    worker["primaryEndpoint"] = json!("worker-tcp");
+    worker["logRefs"] = json!(["service.worker"]);
+    value["services"]["worker"] = worker;
+
+    set_task_run_args(&mut value, &["-c", &script, "task", &worker_port_arg]);
+    let mut needs_worker = value["tasks"]["smoke"].clone();
+    let program = needs_worker["invocation"]["run"][0].clone();
+    needs_worker["operationId"] = json!("task.needs-worker.run");
+    needs_worker["requires"] = json!(["worker"]);
+    needs_worker["servicesRequired"] = json!(["worker"]);
+    needs_worker["logRefs"] = json!(["task.needs-worker"]);
+    needs_worker["invocation"]["run"] = Value::Array(vec![
+        program,
+        json!("-c"),
+        json!(script),
+        json!("task"),
+        json!("${port}"),
+    ]);
+    value["tasks"]["needs-worker"] = needs_worker;
+    value["tasks"]["pipeline"] = json!({
+        "kind": "composite",
+        "servicesRequired": ["synthetic", "worker"],
+        "steps": {
+            "first": { "task": "smoke" },
+            "second": { "task": "needs-worker", "dependsOn": ["first"] }
+        }
+    });
+    let model: Model = serde_json::from_value(value).expect("eager fixture model should parse");
+
+    let tmp = TempDir::new();
+    let model_path = tmp.path.join("model.json");
+    let state_base = tmp.path.join("state");
+    fs::create_dir_all(&state_base).expect("state base should be created");
+    fs::write(
+        &model_path,
+        serde_json::to_vec_pretty(&model).expect("model should serialize"),
+    )
+    .expect("model should be written");
+
+    let output = Command::new(runtime_binary())
+        .arg("run")
+        .arg("--task")
+        .arg("pipeline")
+        .arg("--allow-non-store-model")
+        .arg("--model")
+        .arg(&model_path)
+        .arg("--state-base")
+        .arg(&state_base)
+        .current_dir(&tmp.path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("runtime should run");
+
+    assert!(
+        output.status.success(),
+        "pipeline run failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let run: Value = serde_json::from_slice(&output.stdout).expect("run output should be JSON");
+    assert_eq!(run["services"].as_array().map(Vec::len), Some(2));
+    assert_eq!(run["nodes"][0]["nodeId"], json!("pipeline.first"));
+    assert_eq!(run["nodes"][1]["nodeId"], json!("pipeline.second"));
+    assert_eq!(run["tasks"][0]["success"], json!(true));
+    assert_eq!(run["tasks"][1]["success"], json!(true));
+}
+
+#[test]
 fn task_only_run_records_a_durable_runs_row() {
     let Some(python) = nix_store_executable(&["python3"]) else {
         return;
@@ -3516,6 +3732,58 @@ fn find_file(root: &Path, name: &str) -> Option<PathBuf> {
         }
     }
     None
+}
+
+fn available_port_window(width: u16) -> u16 {
+    assert!(width > 0, "port window width must be positive");
+    for _ in 0..256 {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
+        let start = listener.local_addr().expect("local addr").port();
+        drop(listener);
+        let end = u32::from(start) + u32::from(width) - 1;
+        if end > u32::from(u16::MAX) {
+            continue;
+        }
+        let mut held = Vec::with_capacity(usize::from(width));
+        let mut available = true;
+        for port in start..=end as u16 {
+            match TcpListener::bind(("127.0.0.1", port)) {
+                Ok(listener) => held.push(listener),
+                Err(_) => {
+                    available = false;
+                    break;
+                }
+            }
+        }
+        if available {
+            return start;
+        }
+    }
+    panic!("could not find an available {width}-port window");
+}
+
+fn wait_for_task_process_row(state_base: &Path, timeout: Duration) -> PathBuf {
+    let deadline = Instant::now() + timeout;
+    let mut last_error: Option<String> = None;
+    loop {
+        if let Some(registry_path) = find_file(state_base, "registry.sqlite3") {
+            match rusqlite::Connection::open(&registry_path).and_then(|conn| {
+                conn.query_row(
+                    "SELECT count(*) FROM processes WHERE service_instance_id IS NULL",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+            }) {
+                Ok(count) if count > 0 => return registry_path,
+                Ok(_) => {}
+                Err(error) => last_error = Some(error.to_string()),
+            }
+        }
+        if Instant::now() >= deadline {
+            panic!("timed out waiting for task process row; last error: {last_error:?}");
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
 }
 
 #[test]
