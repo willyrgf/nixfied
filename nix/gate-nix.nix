@@ -108,7 +108,6 @@ pkgs.writeShellApplication {
 
     echo "  adoption (#install + #upgrade against a throwaway repo)" >&2
     t0=$SECONDS
-    local pin project st wk model before after
     if [ -n "$dirty" ]; then
       pin="path:$checkout"
       echo "    pin: $pin (--dirty: every run re-derives the closure)" >&2
