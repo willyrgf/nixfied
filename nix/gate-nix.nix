@@ -42,6 +42,7 @@ pkgs.writeShellApplication {
       fi
     }
 
+    t0=$SECONDS
     echo "  negative (duplicate step name must not compile)" >&2
     if nix eval --expr \
           '{ steps = { dup = { task = "a"; }; dup = { task = "b"; }; }; }' \
@@ -103,8 +104,10 @@ pkgs.writeShellApplication {
       'nixfied.surface.verbs = [ "ghost" ];'
     reject_composite "a surface verb colliding with the control namespace" \
       'nixfied.closures.synthetic-helper.operationBindings = lib.mkForce null; nixfied.tasks.clean = { invocation = { tools = [ "synthetic-helper" ]; run = [ "nixfied-synthetic-helper" "task" "--host" "127.0.0.1" "--port" "1" ]; }; }; nixfied.surface.verbs = [ "clean" ];'
+    printf '  reject_composite: %ds\n' "$((SECONDS - t0))" >&2
 
     echo "  adoption (#install + #upgrade against a throwaway repo)" >&2
+    t0=$SECONDS
     local pin project st wk model before after
     if [ -n "$dirty" ]; then
       pin="path:$checkout"
@@ -165,5 +168,6 @@ pkgs.writeShellApplication {
     printf '  %-11s %s\n' adoption "install -> build -> run -> clean -> upgrade -> rebuild -> run -> clean" \
       >> "$state/summary.txt"
     rm -rf "$project"
+    printf '  adoption: %ds\n' "$((SECONDS - t0))" >&2
   '';
 }
