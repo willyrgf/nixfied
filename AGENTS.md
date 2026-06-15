@@ -278,34 +278,42 @@ nix develop --command bash -c 'cd runtime && cargo test --workspace'
 ```
 
 The gate (the third `.#ci` stage, and the final CI layer after the cargo floor and
-the structural gates) exercises the runtime the way adopters do — it runs the
-example models as ordinary top-level runs through the runtime under test, plus the
-few checks a single run can't make on its own (`.github/workflows/checks.yml`):
+the structural gates) is split into two programs that reflect the framework's own
+layer boundary (`.github/workflows/checks.yml`):
 
 ```sh
-# Builds the debug runtime + the example models from the working tree and runs
-# them against a fixed state dir ($TMPDIR/nixfied-gate), wiped fresh each run and
-# kept afterward; per-check artifacts land in $TMPDIR/nixfied-gate/artifacts/.
+# Builds the debug runtime + all example models from the working tree, then runs
+# both gate programs sequentially against $TMPDIR/nixfied-gate.
 nix run .#gate
 ```
 
-For each example (`minimal`, `postgres`, `composite`, `polyglot-stack`,
-`downstream`, `reth`, `toolchain`) the gate runs the model + cleans it — the
-example is its own spec, so the run fails if its services/tasks fail — and diffs
-the emitted views against the runtime's re-derivation (`nixfied
-{schema,capabilities,docs} --model` ⟂ `<model>/views/*`). Then `slots` runs two
-concurrent slots of `downstream` and asserts full isolation (disjoint
-ports/instances/process-keys, separate Postgres data clusters, isolated clean) —
-the one genuinely cross-run check; `negative` proves the gate fails closed (for
-example, an undeclared task selection is refused); `adoption` runs the real
-`#install` + `#upgrade` against a throwaway repo. There is no self-model and no
-orchestrator binary — it is all `nix/gate.nix`.
+**`gate-runtime`** (`nix/gate-runtime/nixfied.nix`) is a first-class nixfied model
+that exercises the runtime as adopters do: parallel example runs (run → view-diff →
+clean for each of the seven examples), concurrent slot isolation (two slots of
+`downstream` with full disjointness assertion), runtime-layer negatives (no-selection
+refusal, undeclared-task refusal, failure-identity), and the state lifecycle matrix
+(adopt, in-place upgrade, epoch-bump clean, tampered-marker refusal). These tests are
+expressed as nixfied tasks — parallel execution, sequential composites, and slot
+isolation all emerge from the model — with no bespoke orchestration.
 
-There are no e2e shell proofs: the cancellation/GC/lifecycle invariants are
-white-box cargo tests, SEAM-1 (the runtime never invokes nix) is the
-`runtime_drives_full_lifecycle_without_invoking_nix` cargo test, and the
-view→model projection contract is the per-example `nixfied <view>` ⟂ emitted-view
-diff in the gate.
+**`gate-nix`** (`nix/gate-nix.nix`) stays in bash because its tests exercise the
+Nix compiler and install tooling, not the Rust runtime: `reject_composite` asserts
+that invalid composites fail at evaluation, and `adoption` runs the real `#install` +
+`#upgrade` against a throwaway repo. Expressing these as runtime tasks would create
+tasks that do arbitrary builds and network I/O — a violation of bounded-execution
+semantics and a blurring of the framework's own layer separation. The only bespoke
+logic in the Nix layer is ~3 functions, ~60 lines, all Nix-invocations.
+
+The interrupt-and-recover scenario (kill a running runtime, verify the next run
+reconciles the orphan) is a white-box cargo test (`runtime/crates/nixfied-runtime/
+tests/lifecycle.rs`), consistent with the principle that cancellation/GC/lifecycle
+invariants require registry access and timing control that a bounded leaf task cannot
+provide.
+
+There are no e2e shell proofs: the view→model projection contract is the per-example
+`nixfied <view>` ⟂ emitted-view diff in `gate-runtime`, SEAM-1 is the
+`runtime_drives_full_lifecycle_without_invoking_nix` cargo test, and the lifecycle
+invariants are white-box cargo tests.
 
 **Build profiles.** `.#ci`, `nix flake check`, and the gate all build the fast
 `debug` profile (`nix/packages/runtime.nix { buildType = "debug"; }`, exposed as
