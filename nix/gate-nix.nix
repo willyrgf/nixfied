@@ -164,8 +164,6 @@ pkgs.writeShellApplication {
       >/dev/null || fail "adoption: post-upgrade run failed"
     ( cd "$wk" && NIXFIED_STATE_DIR="$st" "$rt" clean --model "$model" ) \
       >/dev/null || fail "adoption: post-upgrade clean failed"
-    printf '  %-11s %s\n' adoption "install -> build -> run -> clean -> upgrade -> rebuild -> run -> clean" \
-      >> "$state/summary.txt"
     rm -rf "$project"
     printf '  adoption: %ds\n' "$((SECONDS - t0))" >&2
   '';

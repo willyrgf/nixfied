@@ -222,17 +222,28 @@ future scope.
 
 A system cannot fully certify itself, so the gate is layered and runs in order:
 (1) `cargo test` is the trusted floor — it verifies the runtime's own primitives
-without the runtime grading itself; (2) the gate runs the **example models** the
-way adopters do — as ordinary top-level runs through the runtime under test — and
-diffs each example's emitted views against the runtime's re-derivation; (3) `nix
-flake check` covers the structural gates. The examples are the spec (a run fails if
-its services/tasks fail), so the gate stays thin: the only bespoke logic is the
-genuinely cross-run `slots` isolation check, plus `negative` (fail-closed) and
-`adoption` (the real `install`/`upgrade` loop). There is no self-model and no
-orchestrator binary — the gate is `nix/gate.nix`. A NixOS-VM was considered and
-rejected: the gate's needs (a real Nix daemon, ports, multi-process supervisors,
-nested `nix`) already exist in a normal shell, so hermeticity comes from pinned
-inputs + nix-built binaries + throwaway repos/state, not a VM.
+without the runtime grading itself; (2) **`gate-runtime`** (`nix/gate-runtime/nixfied.nix`)
+is a first-class nixfied model that exercises the runtime as adopters do — parallel
+example runs with emitted-view diffs, concurrent slot isolation, runtime-layer negatives,
+and a sequential state lifecycle matrix (adopt, in-place upgrade, epoch-bump clean,
+tampered-marker refusal) — all expressed as nixfied tasks with no bespoke orchestration;
+(3) **`gate-nix`** (`nix/gate-nix.nix`) covers the Nix layer in bash: `reject_composite`
+(invalid composites must fail at evaluation), a `nix eval` duplicate-step assertion, and
+the full `install`/`upgrade` adoption loop — these stay in bash because they invoke the
+Nix build system directly, which violates bounded-execution semantics if expressed as
+tasks; (4) `nix flake check` covers the structural gates. A thin coordinator
+(`nix/gate.nix`) runs gate-runtime then gate-nix.
+
+The interrupt-and-recover scenario — kill the runtime mid-flight; verify the next run
+reconciles the orphaned service and adopts persisted state — lives in the white-box cargo
+test floor (`tests/lifecycle.rs`). A bounded task cannot hold a registry connection or
+control process timing across a kill; cargo can. This is consistent with the
+already-stated principle that cancellation/GC/lifecycle invariants are white-box cargo
+tests.
+
+A NixOS-VM was considered and rejected: the gate's needs (a real Nix daemon, ports,
+multi-process supervisors, nested `nix`) already exist in a normal shell, so hermeticity
+comes from pinned inputs + nix-built binaries + throwaway repos/state, not a VM.
 
 ## Verification surfaces (framework vs adopter)
 
