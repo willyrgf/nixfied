@@ -23,7 +23,7 @@ pkgs.writeShellApplication {
     NIXFIED_STATE_DIR="$state" ${gateRuntime}/bin/nixfied-gate-runtime
 
     echo "==> gate-nix" >&2
-    NIXFIED_GATE_CHECKOUT="$checkout" NIXFIED_GATE_STATE="$state" \
+    NIXFIED_GATE_CHECKOUT="$checkout" \
       ${gateNix}/bin/nixfied-gate-nix "$@"
   '';
 }

@@ -14,7 +14,6 @@ pkgs.writeShellApplication {
   text = ''
     checkout="''${NIXFIED_GATE_CHECKOUT:-$PWD}"
     dirty="''${NIXFIED_GATE_DIRTY:-}"
-    state="''${NIXFIED_GATE_STATE}"
 
     for arg in "$@"; do
       case "$arg" in
