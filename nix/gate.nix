@@ -257,10 +257,8 @@ pkgs.writeShellApplication {
 
     # The state lifecycle matrix over one shared state dir: second run (adopt),
     # changed model hash (in-place upgrade preserving state), changed state
-    # epoch (upgrade with clean), an interrupted run recovered by the next
-    # model's run (live old-model service torn down through the registry), and
-    # tampered-marker refusals. This is the repeatability story the first
-    # adopter's review demanded proven end-to-end.
+    # epoch (upgrade with clean), and tampered-marker refusals.
+    # Interrupt-recover moved to the cargo test floor (lifecycle.rs).
     lifecycle() {
       echo "  lifecycle (second run: marker adopted)" >&2
       local st="$state/lifecycle-state" root marker hash1 hash2
@@ -296,34 +294,6 @@ pkgs.writeShellApplication {
       [ "$(jq -r .stateEpoch "$marker")" = "2" ] \
         || fail "lifecycle: epoch upgrade did not record the new epoch"
 
-      echo "  lifecycle (interrupted run: live old-model service recovered)" >&2
-      local pst="$state/lifecycle-interrupt-state" ppid live
-      mkdir -p "$pst"
-      NIXFIED_STATE_DIR="$pst" "$rt" run --model "${models.postgresSlow}/model.json" --task smoke-query \
-        >"$artifacts/lifecycle-interrupt.json" 2>&1 &
-      ppid=$!
-      for _ in $(seq 1 300); do
-        if (echo > /dev/tcp/127.0.0.1/24580) 2>/dev/null; then break; fi
-        sleep 0.2
-      done
-      (echo > /dev/tcp/127.0.0.1/24580) 2>/dev/null \
-        || fail "lifecycle: interrupted-run postgres never came up"
-      kill -9 "$ppid" 2>/dev/null || true
-      wait "$ppid" 2>/dev/null || true
-      live=$(NIXFIED_STATE_DIR="$pst" "$rt" ps --model "${models.postgresSlow}/model.json" \
-        | jq '[.processes[] | select(.live)] | length')
-      [ "$live" -ge 1 ] || fail "lifecycle: interrupted run left no live service to recover"
-      # The next model's run must recover on its own: reconcile the dead
-      # runtime's evidence, stop the orphaned postgres, adopt pgdata (same
-      # epoch + idempotent prepare), and proceed.
-      NIXFIED_STATE_DIR="$pst" "$rt" run --model "${models.postgres}/model.json" --task smoke-query \
-        >/dev/null || fail "lifecycle: recovery run after interrupt failed"
-      [ -s "$pst/postgres-example/dev/0/pgdata/PG_VERSION" ] \
-        || fail "lifecycle: recovery run did not adopt the existing cluster"
-      NIXFIED_STATE_DIR="$pst" "$rt" clean --model "${models.postgres}/model.json" \
-        >/dev/null || fail "lifecycle: clean after recovery failed"
-      [ ! -e "$pst/postgres-example/dev/0" ] || fail "lifecycle: clean left the state root"
-
       echo "  lifecycle (tampered marker: ownership and ABI refusals)" >&2
       local code
       jq '.projectId = "intruder"' "$marker" > "$marker.tmp" && mv "$marker.tmp" "$marker"
@@ -340,7 +310,7 @@ pkgs.writeShellApplication {
       [ "$code" -eq 21 ] \
         || fail "lifecycle: tampered runtime ABI exited $code, want 21 (STATE_UNOWNED)"
       printf '  %-11s %s\n' lifecycle \
-        "adopt -> upgrade(preserve) -> upgrade(epoch clean) -> interrupt+recover -> tamper refused" \
+        "adopt -> upgrade(preserve) -> upgrade(epoch clean) -> tamper refused" \
         >> "$state/summary.txt"
     }
 

@@ -141,26 +141,6 @@
               };
             }
           );
-          postgresSlowModel = nixfiedLib.compileModel (
-            { lib, ... }:
-            {
-              imports = [ ./examples/postgres/nixfied.nix ];
-              nixfied.tasks.smoke-query.invocation.run = lib.mkForce [
-                "psql"
-                "-h"
-                "127.0.0.1"
-                "-p"
-                "\${port}"
-                "-U"
-                "postgres"
-                "-d"
-                "postgres"
-                "-w"
-                "-tAc"
-                "SELECT pg_sleep(120)"
-              ];
-            }
-          );
           nixfiedInstall = import ./nix/install/install.nix {
             inherit pkgs;
             # The debug build: the installer only writes scaffold files, and
@@ -183,7 +163,6 @@
               toolchain = toolchainModel;
               minimalB = minimalModelB;
               minimalEpoch2 = minimalModelEpoch2;
-              postgresSlow = postgresSlowModel;
               negativeFail = negativeFailModel;
             };
           };
