@@ -75,15 +75,44 @@ fn interrupt_and_recover_adopts_orphaned_postgres() {
     );
     let ps_json: serde_json::Value =
         serde_json::from_slice(&ps.stdout).expect("ps output should be JSON");
-    let live = ps_json["processes"]
+    let live_processes: Vec<&serde_json::Value> = ps_json["processes"]
         .as_array()
         .expect("processes should be an array")
         .iter()
         .filter(|p| p["live"] == serde_json::json!(true))
-        .count();
+        .collect();
     assert!(
-        live >= 1,
+        !live_processes.is_empty(),
         "interrupted run should leave at least one live orphaned process: {ps_json}"
+    );
+
+    // Stop the orphaned postgres process group so run_has_live_process returns
+    // false, then directly expire the stale run lease so recovery can acquire a
+    // new lease immediately without waiting for the 30s TTL (white-box test).
+    let mut seen_pgids = std::collections::BTreeSet::new();
+    for process in &live_processes {
+        if let Some(pgid) = process["pgid"].as_i64() {
+            if pgid > 0 && seen_pgids.insert(pgid) {
+                let _ = unsafe { libc::kill(-(pgid as libc::pid_t), libc::SIGKILL) };
+            }
+        }
+    }
+    thread::sleep(Duration::from_millis(500));
+
+    let registry_path =
+        state_base.join("registry/postgres-example/dev/0/registry.sqlite3");
+    let expire = Command::new("sqlite3")
+        .arg(&registry_path)
+        .arg(
+            "UPDATE run_leases SET expires_at = '2000-01-01T00:00:00.000Z' \
+             WHERE status IN ('active', 'canceling')",
+        )
+        .output()
+        .expect("sqlite3 must be on PATH — nixfied test environment provides pkgs.sqlite");
+    assert!(
+        expire.status.success(),
+        "sqlite3 lease expiry update failed: {}",
+        String::from_utf8_lossy(&expire.stderr)
     );
 
     let recovery = Command::new(runtime_binary())
