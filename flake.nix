@@ -202,24 +202,12 @@
                 --timeout-ms 300000
             '';
           };
-          # `nix run .#gate`: the framework gate — runs the example models directly
-          # (rebuilds the debug runtime + models from the working tree on each run).
+          # `nix run .#gate`: the framework gate — runtime-layer tests via the
+          # gate-runtime nixfied model, then nix-layer tests via gate-nix.
           nixfiedGate = import ./nix/gate.nix {
             inherit pkgs;
             gateNix = nixfiedGateNix;
-            runtime = nixfiedRuntimeDebug;
-            models = {
-              minimal = minimalModel;
-              postgres = postgresModel;
-              composite = compositeModel;
-              polyglot = polyglotModel;
-              downstream = downstreamModel;
-              reth = rethModel;
-              toolchain = toolchainModel;
-              minimalB = minimalModelB;
-              minimalEpoch2 = minimalModelEpoch2;
-              negativeFail = negativeFailModel;
-            };
+            gateRuntime = nixfiedGateRuntime;
           };
           # `.#check` / `.#test` / `.#ci`: the framework's own source/test/CI gate.
           devApps = import ./nix/dev.nix {
