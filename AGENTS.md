@@ -60,6 +60,19 @@ deliberate change to the contract (and matching version bump + docs + tests):
   so a contract change rotates the ABI on both sides at once.
 - **SEAM-1:** `nixfied-runtime` never invokes Nix, `nix-store`, `nix build`, or
   `nix eval`, and never imports Nix expressions.
+
+  **Note on scope**: SEAM-1 applies to the **runtime binary** (`nixfied-runtime`). Task
+  scripts are child processes spawned with a hermetic environment (declared tools on PATH,
+  declared env vars, nothing inherited) — they are not the runtime binary and are not
+  governed by SEAM-1. The reason the gate's Nix-layer tests (`adoption`,
+  `reject_composite`, `nix eval`) stay in bash is not that tasks *cannot* call nix, but
+  that those tests verify the Nix compiler and install tooling — they belong to the Nix
+  layer's test surface. Expressing them as runtime tasks would create tasks that do
+  arbitrary builds and network I/O, violating the bounded-execution semantics of a task
+  and blurring the framework's own layer separation. The gate's split (`gate-nix` vs
+  `gate-runtime`) reflects which layer each test exercises, not a capability limitation of
+  the runtime.
+
 - **PREPARE-1:** every referenced closure is realised before the runtime starts;
   the runtime only verifies existence/executability/target/declaration.
 - **RUNTIME-GENERIC-1:** the runtime executes generic primitives; concrete
