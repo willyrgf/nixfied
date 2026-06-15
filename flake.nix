@@ -153,6 +153,55 @@
             inherit pkgs;
             runtime = nixfiedRuntimeDebug;
           };
+          # Runtime-layer tests expressed as a first-class nixfied model.
+          # The compileModel override injects the runtime closures (rt, cli)
+          # and all model paths as compile-time env vars.
+          gateRuntimeModel = nixfiedLib.compileModel (
+            { ... }:
+            {
+              imports = [ ./nix/gate-runtime/nixfied.nix ];
+              nixfied.closures.rt = {
+                package = nixfiedRuntimeDebug;
+                executable = "bin/nixfied-runtime";
+                effects = [
+                  "process"
+                  "file-write"
+                ];
+              };
+              nixfied.closures.cli = {
+                package = nixfiedRuntimeDebug;
+                executable = "bin/nixfied";
+              };
+              nixfied.tasks.example-minimal.invocation.env.MINIMAL_MODEL = toString minimalModel;
+              nixfied.tasks.example-postgres.invocation.env.POSTGRES_MODEL = toString postgresModel;
+              nixfied.tasks.example-composite.invocation.env.COMPOSITE_MODEL = toString compositeModel;
+              nixfied.tasks.example-polyglot.invocation.env.POLYGLOT_MODEL = toString polyglotModel;
+              nixfied.tasks.example-downstream.invocation.env.DOWNSTREAM_MODEL = toString downstreamModel;
+              nixfied.tasks.example-reth.invocation.env.RETH_MODEL = toString rethModel;
+              nixfied.tasks.example-toolchain.invocation.env.TOOLCHAIN_MODEL = toString toolchainModel;
+              nixfied.tasks.negative-no-selection.invocation.env.MINIMAL_MODEL = toString minimalModel;
+              nixfied.tasks.negative-undeclared-task.invocation.env.MINIMAL_MODEL = toString minimalModel;
+              nixfied.tasks.negative-failure-identity.invocation.env.NEGATIVE_FAIL_MODEL = toString negativeFailModel;
+              nixfied.tasks.lifecycle-first-run.invocation.env.MINIMAL_MODEL = toString minimalModel;
+              nixfied.tasks.lifecycle-second-run.invocation.env.MINIMAL_MODEL = toString minimalModel;
+              nixfied.tasks.lifecycle-upgrade-preserve.invocation.env.MINIMAL_B_MODEL = toString minimalModelB;
+              nixfied.tasks.lifecycle-upgrade-epoch.invocation.env.MINIMAL_EPOCH2_MODEL = toString minimalModelEpoch2;
+              nixfied.tasks.lifecycle-tamper-refusal.invocation.env.MINIMAL_EPOCH2_MODEL = toString minimalModelEpoch2;
+              nixfied.tasks.slot-0.invocation.env.DOWNSTREAM_MODEL = toString downstreamModel;
+              nixfied.tasks.slot-1.invocation.env.DOWNSTREAM_MODEL = toString downstreamModel;
+              nixfied.tasks.slots-assert.invocation.env.DOWNSTREAM_MODEL = toString downstreamModel;
+            }
+          );
+          nixfiedGateRuntime = pkgs.writeShellApplication {
+            name = "nixfied-gate-runtime";
+            runtimeInputs = [ nixfiedRuntimeDebug ];
+            text = ''
+              nixfied-runtime run \
+                --model "${gateRuntimeModel}/model.json" \
+                --task all \
+                --timeout-ms 300000
+            '';
+          };
           # `nix run .#gate`: the framework gate — runs the example models directly
           # (rebuilds the debug runtime + models from the working tree on each run).
           nixfiedGate = import ./nix/gate.nix {
@@ -182,6 +231,7 @@
         {
           default = minimalModel;
           toolchain-model = toolchainModel;
+          gate-runtime-model = gateRuntimeModel;
           nixfied-runtime = nixfiedRuntime;
           # The debug runtime the framework's CI path builds (also the
           # `nixfied-runtime` check). Adopters never use this; `.#install` ships
