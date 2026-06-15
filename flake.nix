@@ -148,10 +148,16 @@
             runtime = nixfiedRuntimeDebug;
           };
           nixfiedUpgrade = import ./nix/install/upgrade.nix { inherit pkgs; };
+          # Nix-layer tests: reject_composite suite + adoption loop.
+          nixfiedGateNix = import ./nix/gate-nix.nix {
+            inherit pkgs;
+            runtime = nixfiedRuntimeDebug;
+          };
           # `nix run .#gate`: the framework gate — runs the example models directly
           # (rebuilds the debug runtime + models from the working tree on each run).
           nixfiedGate = import ./nix/gate.nix {
             inherit pkgs;
+            gateNix = nixfiedGateNix;
             runtime = nixfiedRuntimeDebug;
             models = {
               minimal = minimalModel;

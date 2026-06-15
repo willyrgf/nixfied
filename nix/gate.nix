@@ -1,23 +1,19 @@
-# The framework gate: exercise the runtime the way adopters do — run the example
-# models as ordinary top-level runs — plus the few checks a single run can't make
-# on its own (cross-slot isolation, fail-closed, the adoption loop). There is no
-# self-model and no orchestrator binary: each example is its own spec (it fails if
-# its services/tasks fail), and the only bespoke logic is the cross-run `slots`
-# assertion.
+# The framework gate coordinator: runs nix-layer tests (gate-nix) then the
+# runtime-layer tests (examples, slots, negatives, lifecycle). There is no
+# self-model and no orchestrator binary.
 #
-# `nix run .#gate` builds the debug runtime + the example models from the working
-# tree and runs everything against a fixed state dir ($TMPDIR/nixfied-gate), wiped
-# fresh each run and kept afterward so the per-check artifacts stay inspectable.
+# `nix run .#gate` builds the debug runtime + the example models from the
+# working tree and runs everything against a fixed state dir
+# ($TMPDIR/nixfied-gate), wiped fresh each run and kept afterward.
 {
   pkgs,
+  gateNix,
   runtime,
   models,
 }:
 pkgs.writeShellApplication {
   name = "nixfied-gate";
   runtimeInputs = [
-    pkgs.nix
-    pkgs.git
     pkgs.jq
     pkgs.coreutils
     pkgs.diffutils
@@ -41,9 +37,7 @@ pkgs.writeShellApplication {
     }
 
     # `--dirty` (or NIXFIED_GATE_DIRTY=1) pins the adoption test to the working
-    # tree (`path:`) instead of HEAD. A `path:` pin hashes the whole directory —
-    # `.git/` included — so every run re-derives the entire closure; the default
-    # rev pin keeps the store cache warm but only exercises committed code.
+    # tree (`path:`) instead of HEAD.
     dirty="''${NIXFIED_GATE_DIRTY:-}"
     for arg in "$@"; do
       case "$arg" in
@@ -77,9 +71,6 @@ pkgs.writeShellApplication {
       jq -e '(.services | length > 0) or (.nodes | length > 0)' \
         "$artifacts/$name.json" >/dev/null \
         || fail "$name: run reported no services or nodes"
-      # The runtime re-derives each view from model.json; it must project the same
-      # view nix emitted. Compare JSON semantically (formatting is not contract);
-      # docs is text.
       local sub
       for sub in schema capabilities; do
         diff <("$cli" "$sub" --model "$model" | jq -S .) <(jq -S . "$dir/views/$sub.json") \
@@ -141,10 +132,8 @@ pkgs.writeShellApplication {
         >> "$state/summary.txt"
     }
 
-    # Fail-closed: a dead selection flag must be refused, a duplicate step name
-    # must not even compile (composite `steps` is an attrset keyed by step
-    # name, so a duplicate is a Nix evaluation error rather than a silent
-    # last-wins collapse), and broken composites must fail at evaluation.
+    # Non-nix fail-closed checks: runtime-layer negatives that belong here until
+    # gate-runtime is wired in Phase 2/3. The nix-eval checks moved to gate-nix.
     negative() {
       echo "  negative (run with no selection refuses and lists declared tasks)" >&2
       local st="$state/negative-state"
@@ -166,8 +155,6 @@ pkgs.writeShellApplication {
       fi
 
       echo "  negative (run failure must carry run identity and state paths)" >&2
-      # A genuine run failure: a composite whose step leaf deterministically
-      # fails (it dials a port nothing listens on).
       if ( NIXFIED_STATE_DIR="$st/identity" "$rt" run \
             --model "${models.negativeFail}/model.json" --task failing ) \
             >/dev/null 2>"$artifacts/negative-fail.json"; then
@@ -176,83 +163,6 @@ pkgs.writeShellApplication {
       tail -n 1 "$artifacts/negative-fail.json" \
         | jq -e '.details.runId and .details.stateRoot and .details.logsDir' >/dev/null \
         || fail "negative: failure JSON is missing runId/stateRoot/logsDir details"
-
-      echo "  negative (duplicate step name must not compile)" >&2
-      if nix eval --expr \
-            '{ steps = { dup = { task = "a"; }; dup = { task = "b"; }; }; }' \
-            >/dev/null 2>&1; then
-        fail "negative: a duplicate step name evaluated successfully"
-      fi
-
-      # Composite structural validation is the Nix layer's job: a broken or
-      # cyclic composite must throw at evaluation, never compile into a model
-      # the runtime only rejects later. Each case overrides the valid composite
-      # example and must fail to build. `getAttr currentSystem flake.lib` keeps
-      # the expr free of any dollar-brace, so neither the shell nor the
-      # surrounding Nix string rewrites it.
-      echo "  negative (invalid composites must fail at nix evaluation)" >&2
-      reject_composite() {
-        if nix build --no-link --impure --expr \
-            "let flake = builtins.getFlake (toString $checkout); compileModel = (builtins.getAttr builtins.currentSystem flake.lib).compileModel; in compileModel ({ lib, ... }: { imports = [ $checkout/examples/composite/nixfied.nix ]; $2 })" \
-            >/dev/null 2>&1; then
-          fail "negative: $1 compiled instead of failing at evaluation"
-        fi
-      }
-      reject_composite "an undeclared step task" \
-        'nixfied.tasks.pipeline.steps.bad.task = "missing-task";'
-      reject_composite "dependsOn an unknown step" \
-        'nixfied.tasks.pipeline.steps.verify.dependsOn = lib.mkForce [ "ghost-step" ];'
-      reject_composite "an empty composite" \
-        'nixfied.tasks.pipeline.steps = lib.mkForce { };'
-      reject_composite "a cyclic step graph" \
-        'nixfied.tasks.pipeline.steps.probe.dependsOn = lib.mkForce [ "verify" ];'
-
-      # Every validation rule phases 1-5 introduced, proven fail-closed at
-      # evaluation against the composite example (synthetic adapter + pipeline).
-      echo "  negative (phase 1-5 rules must fail at nix evaluation)" >&2
-      reject_composite "a runtime-owned PATH declared in env" \
-        'nixfied.tasks.smoke.invocation.env.PATH = "/usr/bin";'
-      reject_composite "an unresolvable run[0]" \
-        'nixfied.tasks.smoke.invocation.run = lib.mkForce [ "ghost-program" ];'
-      reject_composite "a dotted task id (step-path discipline)" \
-        'nixfied.closures.synthetic-helper.operationBindings = lib.mkForce null; nixfied.tasks."has.dot" = { invocation = { tools = [ "synthetic-helper" ]; run = [ "nixfied-synthetic-helper" "task" "--host" "127.0.0.1" "--port" "1" ]; }; };'
-      reject_composite "a leaf carrying steps" \
-        'nixfied.tasks.smoke.steps.bad.task = "smoke";'
-      reject_composite "a composite carrying an invocation" \
-        'nixfied.tasks.pipeline.invocation = { tools = [ "synthetic-helper" ]; run = [ "nixfied-synthetic-helper" ]; };'
-      reject_composite "a cyclic task reference graph" \
-        'nixfied.tasks.loop-a = { kind = "composite"; steps.next.task = "loop-b"; }; nixfied.tasks.loop-b = { kind = "composite"; steps.next.task = "loop-a"; };'
-      reject_composite "an operation binding gate narrower than the derivation" \
-        'nixfied.closures.synthetic-helper.operationBindings = lib.mkForce [ "task.smoke.run" ];'
-      reject_composite "a duplicate effective operation id" \
-        'nixfied.tasks.smoke.operationId = "service.synthetic.start";'
-      # shellcheck disable=SC2016
-      reject_composite "a task named endpoint ref outside requires" \
-        'nixfied.tasks.smoke.invocation.run = lib.mkForce [ "nixfied-synthetic-helper" "task" "--host" "127.0.0.1" "--port" "\''${port:ghost}" ];'
-      # shellcheck disable=SC2016
-      reject_composite "a service named endpoint ref outside connectsTo" \
-        'nixfied.services.synthetic.lifecycle.start.invocation.run = lib.mkForce [ "nixfied-synthetic-helper" "service" "--host" "127.0.0.1" "--port" "\''${port:ghost}" ];'
-      reject_composite "both endpoint forms set" \
-        'nixfied.services.synthetic.endpoints = { extra = { }; }; nixfied.services.synthetic.primaryEndpoint = "extra";'
-      reject_composite "a tcp probe on an endpoint-less service" \
-        'nixfied.services.bare = { lifecycle.start.invocation = { tools = [ "synthetic-helper" ]; run = [ "nixfied-synthetic-helper" "service" "--host" "127.0.0.1" "--port" "1" ]; }; };'
-      reject_composite "a listening service without the network-listener attestation" \
-        'nixfied.closures.synthetic-helper.effects = lib.mkForce [ "process" ];'
-      reject_composite "an endpoint-less lifecycle using a bare endpoint placeholder" \
-        'nixfied.closures.synthetic-helper.effects = lib.mkForce [ "process" ]; nixfied.services.synthetic.endpoint = lib.mkForce null; nixfied.services.synthetic.lifecycle.ready.probe = { kind = "exec"; invocation = { tools = [ "synthetic-helper" ]; run = [ "nixfied-synthetic-helper" "task" "--host" "127.0.0.1" "--port" "1" ]; }; }; nixfied.services.synthetic.lifecycle.health.probe = { kind = "exec"; invocation = { tools = [ "synthetic-helper" ]; run = [ "nixfied-synthetic-helper" "task" "--host" "127.0.0.1" "--port" "1" ]; }; };'
-      # shellcheck disable=SC2016
-      reject_composite "a task addressing an endpoint-less required service" \
-        'nixfied.closures.synthetic-helper.effects = lib.mkForce [ "process" ]; nixfied.services.synthetic.endpoint = lib.mkForce null; nixfied.services.synthetic.lifecycle.start.invocation.run = lib.mkForce [ "nixfied-synthetic-helper" "task" "--host" "127.0.0.1" "--port" "1" ]; nixfied.services.synthetic.lifecycle.ready.probe = { kind = "exec"; invocation = { tools = [ "synthetic-helper" ]; run = [ "nixfied-synthetic-helper" "task" "--host" "127.0.0.1" "--port" "1" ]; }; }; nixfied.services.synthetic.lifecycle.health.probe = { kind = "exec"; invocation = { tools = [ "synthetic-helper" ]; run = [ "nixfied-synthetic-helper" "task" "--host" "127.0.0.1" "--port" "1" ]; }; }; nixfied.tasks.smoke.invocation.run = lib.mkForce [ "nixfied-synthetic-helper" "task" "--host" "127.0.0.1" "--port" "\''${port:synthetic}" ];'
-      reject_composite "an endpoint-less service start declaring network-listener" \
-        'nixfied.services.synthetic.endpoint = lib.mkForce null; nixfied.services.synthetic.lifecycle.start.invocation.run = lib.mkForce [ "nixfied-synthetic-helper" "task" "--host" "127.0.0.1" "--port" "1" ]; nixfied.services.synthetic.lifecycle.ready.probe = { kind = "exec"; invocation = { tools = [ "synthetic-helper" ]; run = [ "nixfied-synthetic-helper" "task" "--host" "127.0.0.1" "--port" "1" ]; }; }; nixfied.services.synthetic.lifecycle.health.probe = { kind = "exec"; invocation = { tools = [ "synthetic-helper" ]; run = [ "nixfied-synthetic-helper" "task" "--host" "127.0.0.1" "--port" "1" ]; }; };'
-      reject_composite "a dangling prepare task" \
-        'nixfied.services.synthetic.lifecycle.prepare.task = "ghost";'
-      reject_composite "a prepare requiring its own service (combined-graph cycle)" \
-        'nixfied.closures.synthetic-helper.operationBindings = lib.mkForce null; nixfied.tasks.selfinit = { invocation = { tools = [ "synthetic-helper" ]; run = [ "nixfied-synthetic-helper" "task" "--host" "127.0.0.1" "--port" "1" ]; }; requires = [ "synthetic" ]; }; nixfied.services.synthetic.lifecycle.prepare.task = "selfinit";'
-      reject_composite "a dangling surface verb" \
-        'nixfied.surface.verbs = [ "ghost" ];'
-      reject_composite "a surface verb colliding with the control namespace" \
-        'nixfied.closures.synthetic-helper.operationBindings = lib.mkForce null; nixfied.tasks.clean = { invocation = { tools = [ "synthetic-helper" ]; run = [ "nixfied-synthetic-helper" "task" "--host" "127.0.0.1" "--port" "1" ]; }; }; nixfied.surface.verbs = [ "clean" ];'
     }
 
     # The state lifecycle matrix over one shared state dir: second run (adopt),
@@ -314,73 +224,9 @@ pkgs.writeShellApplication {
         >> "$state/summary.txt"
     }
 
-    # The real adoption loop: scaffold a throwaway repo pinning the checkout, build
-    # + run + clean, then upgrade (must not touch the project-owned nixfied.nix),
-    # rebuild + run + clean.
-    adoption() {
-      echo "  adoption (#install + #upgrade against a throwaway repo)" >&2
-      local pin project st wk model before after
-      if [ -n "$dirty" ]; then
-        pin="path:$checkout"
-        echo "    pin: $pin (--dirty: every run re-derives the closure)" >&2
-      else
-        pin="git+file://$checkout?rev=$(git -C "$checkout" rev-parse HEAD)"
-        # Nix refuses to fetch from shallow clones (CI checkouts) unless told.
-        if [ "$(git -C "$checkout" rev-parse --is-shallow-repository)" = true ]; then
-          pin="$pin&shallow=1"
-        fi
-        if ! git -C "$checkout" diff --quiet HEAD 2>/dev/null; then
-          echo "    pin: HEAD — uncommitted changes are NOT exercised here (use --dirty)" >&2
-        fi
-      fi
-      project=$(mktemp -d)
-      git -C "$project" init -q
-      git -C "$project" config user.email gate@nixfied
-      git -C "$project" config user.name "nixfied gate"
-      nix run "$checkout#install" -- \
-        --root "$project" --project-id adopt --name adopt --nixfied-url "$pin" \
-        || fail "adoption: install failed"
-      git -C "$project" add -A
-      git -C "$project" commit -q -m scaffold
-      if nix run "$checkout#install" -- --root "$project" >/dev/null 2>&1; then
-        fail "adoption: re-running install did not refuse an existing flake.nix"
-      fi
-      model="$(nix build --no-link --print-out-paths "$project#model")/model.json"
-      st=$(mktemp -d)
-      wk=$(mktemp -d)
-      ( cd "$wk" && NIXFIED_STATE_DIR="$st" "$rt" run --model "$model" --task smoke --timeout-ms 60000 ) \
-        >/dev/null || fail "adoption: scaffolded run failed"
-      # The generated control surface: ps/down/clean must exist as project apps
-      # and work against the same state.
-      ( cd "$wk" && NIXFIED_STATE_DIR="$st" nix run "$project#admit" ) \
-        >/dev/null || fail "adoption: scaffolded admit failed"
-      ( cd "$wk" && NIXFIED_STATE_DIR="$st" nix run "$project#smoke" -- --timeout-ms 60000 ) \
-        >/dev/null || fail "adoption: scaffolded smoke verb failed"
-      ( cd "$wk" && NIXFIED_STATE_DIR="$st" nix run "$project#ps" ) \
-        >/dev/null || fail "adoption: scaffolded ps failed"
-      ( cd "$wk" && NIXFIED_STATE_DIR="$st" nix run "$project#down" ) \
-        >/dev/null || fail "adoption: scaffolded down failed"
-      ( cd "$wk" && NIXFIED_STATE_DIR="$st" nix run "$project#clean" ) \
-        >/dev/null || fail "adoption: scaffolded clean failed"
-      before=$(cat "$project/nixfied.nix")
-      nix run "$checkout#upgrade" -- --root "$project" --nixfied-url "$pin" \
-        || fail "adoption: upgrade failed"
-      after=$(cat "$project/nixfied.nix")
-      [ "$before" = "$after" ] || fail "adoption: upgrade modified the project-owned nixfied.nix"
-      git -C "$project" add -A
-      git -C "$project" commit -q -m upgrade
-      model="$(nix build --no-link --print-out-paths "$project#model")/model.json"
-      st=$(mktemp -d)
-      wk=$(mktemp -d)
-      ( cd "$wk" && NIXFIED_STATE_DIR="$st" "$rt" run --model "$model" --task smoke --timeout-ms 60000 ) \
-        >/dev/null || fail "adoption: post-upgrade run failed"
-      ( cd "$wk" && NIXFIED_STATE_DIR="$st" "$rt" clean --model "$model" ) \
-        >/dev/null || fail "adoption: post-upgrade clean failed"
-      printf '  %-11s %s\n' adoption "install -> build -> run -> clean -> upgrade -> rebuild -> run -> clean" \
-        >> "$state/summary.txt"
-      rm -rf "$project"
-    }
-
+    echo "==> gate-nix" >&2
+    NIXFIED_GATE_CHECKOUT="$checkout" NIXFIED_GATE_DIRTY="$dirty" NIXFIED_GATE_STATE="$state" \
+      ${gateNix}/bin/nixfied-gate-nix
     echo "==> examples (run + views + clean)" >&2
     example minimal "${models.minimal}" smoke
     example postgres "${models.postgres}" smoke-query
@@ -395,8 +241,6 @@ pkgs.writeShellApplication {
     negative
     echo "==> lifecycle" >&2
     lifecycle
-    echo "==> adoption" >&2
-    adoption
     echo "  gate: all checks passed" >&2
     echo "" >&2
     echo "  execution detail (service:port + state root per check; full JSON in $artifacts):" >&2
