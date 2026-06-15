@@ -99,8 +99,7 @@ fn interrupt_and_recover_adopts_orphaned_postgres() {
     }
     thread::sleep(Duration::from_millis(500));
 
-    let registry_path =
-        state_base.join("registry/postgres-example/dev/0/registry.sqlite3");
+    let registry_path = state_base.join("registry/postgres-example/dev/0/registry.sqlite3");
     let expire = Command::new("sqlite3")
         .arg(&registry_path)
         .arg(
