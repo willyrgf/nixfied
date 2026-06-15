@@ -91,10 +91,11 @@ fn interrupt_and_recover_adopts_orphaned_postgres() {
     // new lease immediately without waiting for the 30s TTL (white-box test).
     let mut seen_pgids = std::collections::BTreeSet::new();
     for process in &live_processes {
-        if let Some(pgid) = process["pgid"].as_i64() {
-            if pgid > 0 && seen_pgids.insert(pgid) {
-                let _ = unsafe { libc::kill(-(pgid as libc::pid_t), libc::SIGKILL) };
-            }
+        if let Some(pgid) = process["pgid"].as_i64()
+            && pgid > 0
+            && seen_pgids.insert(pgid)
+        {
+            let _ = unsafe { libc::kill(-(pgid as libc::pid_t), libc::SIGKILL) };
         }
     }
     thread::sleep(Duration::from_millis(500));
