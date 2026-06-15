@@ -189,7 +189,7 @@
           };
           # `.#check` / `.#test` / `.#ci`: the framework's own source/test/CI gate.
           devApps = import ./nix/dev.nix {
-            inherit pkgs;
+            inherit pkgs postgresModel;
             gate = nixfiedGate;
             runtime = nixfiedRuntimeDebug;
           };

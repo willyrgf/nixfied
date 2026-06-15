@@ -9,6 +9,7 @@
   pkgs,
   gate,
   runtime,
+  postgresModel,
 }:
 let
   rustToolchain = pkgs.rust-bin.stable."1.96.0".minimal.override {
@@ -30,7 +31,8 @@ let
       pkgs.git
     ];
     text = ''
-      cargo test --manifest-path runtime/Cargo.toml --workspace "$@"
+      NIXFIED_TEST_POSTGRES_MODEL="${postgresModel}" \
+        cargo test --manifest-path runtime/Cargo.toml --workspace "$@"
     '';
   };
 
