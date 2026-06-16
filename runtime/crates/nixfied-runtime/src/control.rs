@@ -14,7 +14,7 @@ use crate::service::process::{
     process_group_has_live_member, process_is_live_with_identity, signal_process_group,
 };
 use crate::service::registry::{TaskTerminalStatus, mark_service_stopped, mark_task_finished};
-use crate::state::{CleanupOutcome, StateIdentity, clean_marked_state};
+use crate::state::{CleanupMode, CleanupOutcome, StateIdentity, clean_marked_state};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -152,9 +152,10 @@ pub fn clean_reconciled_state(
     state_base: &Path,
     state_root: &Path,
     identity: &StateIdentity,
+    mode: CleanupMode,
 ) -> RuntimeResult<CleanupOutcome> {
     reconcile_registry(registry)?;
-    clean_marked_state(state_base, state_root, identity, registry)
+    clean_marked_state(state_base, state_root, identity, registry, mode)
 }
 
 #[derive(Debug)]

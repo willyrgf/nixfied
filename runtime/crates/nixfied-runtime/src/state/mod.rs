@@ -3,7 +3,7 @@ pub mod marker;
 pub mod placement;
 pub mod upgrade;
 
-pub use cleanup::{CleanupOutcome, clean_marked_state, inspect_cleanup_target};
+pub use cleanup::{CleanupMode, CleanupOutcome, clean_marked_state, inspect_cleanup_target};
 pub use marker::{
     MARKER_FILE_NAME, MarkerComparison, MarkerDecision, StateIdentity, StateMarker,
     commit_slot_marker, evaluate_slot_marker,

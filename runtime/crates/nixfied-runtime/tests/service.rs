@@ -19,7 +19,7 @@ use nixfied_runtime::service::{
 };
 use nixfied_runtime::slot::select_slot;
 use nixfied_runtime::state::{
-    StateIdentity, clean_marked_state, commit_slot_marker, derive_host_placement,
+    CleanupMode, StateIdentity, clean_marked_state, commit_slot_marker, derive_host_placement,
     derive_host_placement_for_slot, materialize_run_roots,
 };
 use nixfied_runtime::{Admission, AdmittedSource, ErrorCode};
@@ -580,6 +580,7 @@ fn two_slots_keep_services_state_and_controls_isolated() {
         &slot0.placement.state_root,
         &slot0_identity,
         &mut slot0.registry,
+        CleanupMode::Standard,
     )
     .expect("slot 0 cleanup should succeed after down");
     assert!(!slot0.placement.state_root.exists());
@@ -591,6 +592,7 @@ fn two_slots_keep_services_state_and_controls_isolated() {
         &slot1.placement.state_root,
         &slot0_identity,
         &mut slot1.registry,
+        CleanupMode::Standard,
     )
     .expect_err("slot 0 identity must not clean slot 1 state");
     assert!(slot1.placement.state_root.exists());
@@ -604,6 +606,7 @@ fn two_slots_keep_services_state_and_controls_isolated() {
         &slot1.placement.state_root,
         &slot1_identity,
         &mut slot1.registry,
+        CleanupMode::Standard,
     )
     .expect("slot 1 cleanup should succeed after stop");
 }
@@ -2455,6 +2458,7 @@ fn down_completes_canceling_lease_and_unblocks_cleanup() {
         &fixture.placement.state_root,
         &StateIdentity::from_model(&fixture.model, &fixture.admission),
         &mut fixture.registry,
+        CleanupMode::Standard,
     )
     .expect("canceled lease should not block cleanup");
 
@@ -2624,6 +2628,7 @@ fn down_cancels_live_task_process_group_and_unblocks_cleanup() {
         &fixture.placement.state_root,
         &StateIdentity::from_model(&fixture.model, &fixture.admission),
         &mut fixture.registry,
+        CleanupMode::Standard,
     )
     .expect("canceled task lease should not block cleanup");
 

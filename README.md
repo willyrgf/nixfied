@@ -115,6 +115,7 @@ nix run .#model-check           # admission: your model is well-formed and admit
 nix run .#ps                    # observe registry-owned processes (reconciles stale evidence)
 nix run .#down                  # stop everything the runtime owns on the slot
 nix run .#clean                 # remove the marker-gated slot state
+nix run .#clean -- --purge      # also remove protected/persistent state, under the same safety gates
 
 # your verbs (nixfied.surface.verbs = [ "check" "ci" ];)
 nix run .#check

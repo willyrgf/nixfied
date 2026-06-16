@@ -12,7 +12,7 @@ use serde::Serialize;
 use crate::control::{ProcessFilter, down_processes};
 use crate::error::RuntimeResult;
 use crate::registry::{EventInsert, Registry, append_event};
-use crate::state::cleanup::clean_marked_state;
+use crate::state::cleanup::{CleanupMode, clean_marked_state};
 use crate::state::marker::{
     MarkerDecision, StateIdentity, commit_slot_marker, evaluate_slot_marker,
 };
@@ -83,6 +83,7 @@ pub fn prepare_slot_state(
                     &placement.state_root,
                     identity,
                     registry,
+                    CleanupMode::Standard,
                 )?;
             }
             record_upgrade_event(registry, identity, &existing, clean_state)?;

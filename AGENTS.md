@@ -95,8 +95,10 @@ deliberate change to the contract (and matching version bump + docs + tests):
 - **REG-1 / REG-ORDER-1 / LIVE-1:** one transactional per-slot SQLite registry
   owns shared mutable state with a total per-slot event order; liveness is
   reconciled against the OS before being reported.
-- **GC-1 / GC-2:** cleanup is idempotent, crash-safe, path-confined, marker-gated,
-  lease-gated, process-gated, and policy-gated.
+- **GC-1 / GC-2:** cleanup is idempotent, crash-safe, path-confined,
+  marker-gated, lease-gated, process-gated, and policy-gated. Explicit purge
+  relaxes only the protected/persistent cleanup policy gate; all confinement,
+  marker, live lease/process, and registry safety gates remain unconditional.
 - **PROC-1..3 / PROC-CAP-1:** every spawned process belongs to a runtime-owned
   process group; cancellation propagates to the whole group; a long-lived process
   counts as started only after a registry process record; admission fails if a

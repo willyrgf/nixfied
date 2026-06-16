@@ -777,6 +777,7 @@ struct ControlOptions {
     state_base: PathBuf,
     timeout_ms: u64,
     selection: RuntimeSelection,
+    cleanup_mode: nixfied_runtime::state::CleanupMode,
 }
 
 struct RunOptions {
@@ -848,6 +849,7 @@ fn run_control_admitted(
             &placement,
             &mut registry,
             &selected_slot,
+            options.cleanup_mode,
         )?),
     }
 }
@@ -940,6 +942,7 @@ fn parse_control_options(
     let mut state_base = None;
     let mut timeout_ms = 5000;
     let mut slot = None;
+    let mut cleanup_mode = nixfied_runtime::state::CleanupMode::Standard;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
@@ -957,6 +960,9 @@ fn parse_control_options(
             "--slot" => {
                 index += 1;
                 slot = Some(parse_slot_arg(args.get(index), "--slot")?);
+            }
+            "--purge" if matches!(command, ControlCommand::Clean) => {
+                cleanup_mode = nixfied_runtime::state::CleanupMode::Purge;
             }
             "--timeout-ms" if matches!(command, ControlCommand::Down) => {
                 index += 1;
@@ -995,6 +1001,7 @@ fn parse_control_options(
         state_base,
         timeout_ms,
         selection: RuntimeSelection { slot },
+        cleanup_mode,
     })
 }
 

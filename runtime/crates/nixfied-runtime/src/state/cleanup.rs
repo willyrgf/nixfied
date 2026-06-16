@@ -18,10 +18,23 @@ pub struct CleanupOutcome {
     pub deleted_path: PathBuf,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CleanupMode {
+    Standard,
+    Purge,
+}
+
+impl CleanupMode {
+    pub fn is_purge(self) -> bool {
+        matches!(self, Self::Purge)
+    }
+}
+
 pub fn inspect_cleanup_target(
     state_base: impl AsRef<Path>,
     target: impl AsRef<Path>,
     expected: &StateIdentity,
+    mode: CleanupMode,
 ) -> RuntimeResult<StateMarker> {
     let state_base = state_base.as_ref();
     let target = target.as_ref();
@@ -48,8 +61,8 @@ pub fn inspect_cleanup_target(
             "state marker identity does not match the requested cleanup identity",
         ));
     }
-    refuse_cleanup_policy(&marker.cleanup_policy, &marker.persistence)?;
-    refuse_cleanup_policy(&expected.cleanup_policy, &expected.persistence)?;
+    refuse_cleanup_policy(&marker.cleanup_policy, &marker.persistence, mode)?;
+    refuse_cleanup_policy(&expected.cleanup_policy, &expected.persistence, mode)?;
     Ok(marker)
 }
 
@@ -58,12 +71,19 @@ pub fn clean_marked_state(
     target: impl AsRef<Path>,
     expected: &StateIdentity,
     registry: &mut Registry,
+    mode: CleanupMode,
 ) -> RuntimeResult<CleanupOutcome> {
     let target = target.as_ref();
     if target_is_missing(target)? {
-        return finish_missing_target_cleanup(state_base.as_ref(), target, expected, registry);
+        return finish_missing_target_cleanup(
+            state_base.as_ref(),
+            target,
+            expected,
+            registry,
+            mode,
+        );
     }
-    let marker = inspect_cleanup_target(state_base, target, expected)?;
+    let marker = inspect_cleanup_target(state_base, target, expected, mode)?;
     refuse_active_refs(registry)?;
     let canonical_target = canonicalize_existing("cleanup target", target)?;
     let cleanup_id = format!(
@@ -71,13 +91,14 @@ pub fn clean_marked_state(
         std::process::id(),
         unix_time_nanos().unwrap_or(0)
     );
-    let payload_json = cleanup_payload_json(&cleanup_id, &canonical_target);
+    let payload_json = cleanup_payload_json(&cleanup_id, &canonical_target, mode);
     record_cleanup_intent(
         registry,
         &cleanup_id,
         &canonical_target,
         &marker,
         &payload_json,
+        mode,
     )?;
     if let Err(error) = std::fs::remove_dir_all(&canonical_target) {
         let cleanup_error = RuntimeError::new(
@@ -116,13 +137,15 @@ fn finish_missing_target_cleanup(
     target: &Path,
     expected: &StateIdentity,
     registry: &mut Registry,
+    mode: CleanupMode,
 ) -> RuntimeResult<CleanupOutcome> {
     let canonical_target = canonicalize_missing_target(state_base, target)?;
     refuse_active_refs(registry)?;
-    refuse_cleanup_policy(&expected.cleanup_policy, &expected.persistence)?;
+    refuse_cleanup_policy(&expected.cleanup_policy, &expected.persistence, mode)?;
     let cleanup = find_prior_cleanup(registry, &canonical_target, expected)?;
     if CleanupStatus::from_db(&cleanup.status) == Some(CleanupStatus::Intent) {
-        let payload_json = cleanup_payload_json(&cleanup.cleanup_id, &canonical_target);
+        let payload_json =
+            cleanup_payload_json(&cleanup.cleanup_id, &canonical_target, cleanup.mode);
         record_cleanup_terminal(
             registry,
             &cleanup.cleanup_id,
@@ -142,6 +165,7 @@ fn finish_missing_target_cleanup(
 struct PriorCleanup {
     cleanup_id: String,
     status: String,
+    mode: CleanupMode,
     marker: StateMarker,
 }
 
@@ -197,7 +221,7 @@ fn find_prior_cleanup(
             .connection()
             .prepare(&format!(
                 "
-                SELECT cleanup_id, marker_json, status
+                SELECT cleanup_id, marker_json, status, purge
                 FROM cleanups
                 WHERE target_path = ?1 AND status IN ({})
                 ORDER BY rowid DESC
@@ -211,13 +235,14 @@ fn find_prior_cleanup(
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
                 ))
             })
             .map_err(sql_error)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(sql_error)?
     };
-    for (cleanup_id, marker_json, status) in rows {
+    for (cleanup_id, marker_json, status, purge) in rows {
         let marker = serde_json::from_str::<StateMarker>(&marker_json).map_err(|error| {
             RuntimeError::new(
                 ErrorCode::RegistryCorrupt,
@@ -228,6 +253,11 @@ fn find_prior_cleanup(
             return Ok(PriorCleanup {
                 cleanup_id,
                 status,
+                mode: if purge == 0 {
+                    CleanupMode::Standard
+                } else {
+                    CleanupMode::Purge
+                },
                 marker,
             });
         }
@@ -244,7 +274,11 @@ fn find_prior_cleanup(
 fn refuse_cleanup_policy(
     cleanup_policy: &CleanupPolicy,
     persistence: &PersistencePolicy,
+    mode: CleanupMode,
 ) -> RuntimeResult<()> {
+    if mode.is_purge() {
+        return Ok(());
+    }
     if cleanup_policy == &CleanupPolicy::DeleteOnClean
         && persistence == &PersistencePolicy::RunScoped
     {
@@ -252,7 +286,7 @@ fn refuse_cleanup_policy(
     }
     Err(RuntimeError::new(
         ErrorCode::CleanupRefused,
-        "state cleanup policy requires explicit purge, which is not implemented",
+        "state cleanup policy requires explicit purge",
     ))
 }
 
@@ -319,6 +353,7 @@ fn record_cleanup_intent(
     target: &Path,
     marker: &StateMarker,
     payload_json: &str,
+    mode: CleanupMode,
 ) -> RuntimeResult<()> {
     let marker_json = serde_json::to_string(marker).map_err(|error| {
         RuntimeError::new(
@@ -332,15 +367,16 @@ fn record_cleanup_intent(
         .execute(
             "
             INSERT INTO cleanups (
-              cleanup_id, environment, slot, target_path, marker_json, status,
+              cleanup_id, environment, slot, target_path, purge, marker_json, status,
               refusal_reason
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL)
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL)
             ",
             params![
                 cleanup_id,
                 identity.environment.as_str(),
                 identity.slot,
                 target.display().to_string(),
+                if mode.is_purge() { 1_i64 } else { 0_i64 },
                 marker_json,
                 CleanupStatus::Intent.as_str(),
             ],
@@ -422,10 +458,11 @@ fn insert_cleanup_event(
     Ok(())
 }
 
-fn cleanup_payload_json(cleanup_id: &str, target: &Path) -> String {
+fn cleanup_payload_json(cleanup_id: &str, target: &Path, mode: CleanupMode) -> String {
     serde_json::json!({
         "cleanupId": cleanup_id,
         "targetPath": target.display().to_string(),
+        "purge": mode.is_purge(),
     })
     .to_string()
 }

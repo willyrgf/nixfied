@@ -7,8 +7,8 @@ use nixfied_runtime::control::clean_reconciled_state;
 use nixfied_runtime::registry::{Registry, RegistryIdentity};
 use nixfied_runtime::slot::{first_candidate_port, select_slot};
 use nixfied_runtime::state::{
-    MARKER_FILE_NAME, MarkerComparison, StateIdentity, StateMarker, clean_marked_state,
-    commit_slot_marker, derive_host_placement, derive_host_placement_for_slot,
+    CleanupMode, MARKER_FILE_NAME, MarkerComparison, StateIdentity, StateMarker,
+    clean_marked_state, commit_slot_marker, derive_host_placement, derive_host_placement_for_slot,
     evaluate_slot_marker, inspect_cleanup_target, materialize_run_roots,
 };
 use nixfied_runtime::{Admission, AdmittedSource, ErrorCode};
@@ -165,6 +165,7 @@ fn clean_accepts_old_provenance_marker() {
         &fixture.layout.state_root,
         &fixture.identity,
         &mut registry,
+        CleanupMode::Standard,
     )
     .expect("old-provenance marker should be cleanable by the slot owner");
 
@@ -178,8 +179,13 @@ fn cleanup_refuses_unmarked_roots() {
     let target = fixture.tmp.path.join("runtime-test/dev/unmarked");
     fs::create_dir_all(&target).expect("unmarked root should be created");
 
-    let error = inspect_cleanup_target(&fixture.tmp.path, &target, &fixture.identity)
-        .expect_err("unmarked target should be refused");
+    let error = inspect_cleanup_target(
+        &fixture.tmp.path,
+        &target,
+        &fixture.identity,
+        CleanupMode::Standard,
+    )
+    .expect_err("unmarked target should be refused");
 
     assert_eq!(error.code, ErrorCode::StateUnowned);
     assert!(target.exists());
@@ -197,8 +203,13 @@ fn cleanup_refuses_path_escape() {
     )
     .expect("outside marker should be written");
 
-    let error = inspect_cleanup_target(&fixture.tmp.path, &outside, &fixture.identity)
-        .expect_err("path escape should be refused");
+    let error = inspect_cleanup_target(
+        &fixture.tmp.path,
+        &outside,
+        &fixture.identity,
+        CleanupMode::Standard,
+    )
+    .expect_err("path escape should be refused");
 
     assert_eq!(error.code, ErrorCode::StateUnowned);
     let _ = fs::remove_dir_all(&outside);
@@ -219,6 +230,7 @@ fn cleanup_refuses_marker_mismatch() {
         &fixture.layout.state_base,
         &fixture.layout.state_root,
         &fixture.identity,
+        CleanupMode::Standard,
     )
     .expect_err("marker mismatch should be refused");
 
@@ -241,6 +253,7 @@ fn cleanup_refuses_protected_state() {
         &fixture.layout.state_base,
         &fixture.layout.state_root,
         &fixture.identity,
+        CleanupMode::Standard,
     )
     .expect_err("protected state should be refused");
 
@@ -264,10 +277,177 @@ fn cleanup_refuses_persistent_state() {
         &fixture.layout.state_base,
         &fixture.layout.state_root,
         &persistent,
+        CleanupMode::Standard,
     )
     .expect_err("persistent state should be refused");
 
     assert_eq!(error.code, ErrorCode::CleanupRefused);
+    assert!(fixture.layout.state_root.exists());
+}
+
+#[test]
+fn purge_deletes_protected_state_and_records_intent() {
+    let fixture = StateFixture::new();
+    let mut registry = fixture.registry();
+    let mut protected = fixture.identity.clone();
+    protected.cleanup_policy = CleanupPolicy::Protected;
+    fs::write(
+        fixture.layout.state_root.join(MARKER_FILE_NAME),
+        serde_json::to_vec_pretty(&StateMarker::slot(&protected)).expect("marker JSON"),
+    )
+    .expect("protected marker should be written");
+
+    let outcome = clean_marked_state(
+        &fixture.layout.state_base,
+        &fixture.layout.state_root,
+        &protected,
+        &mut registry,
+        CleanupMode::Purge,
+    )
+    .expect("protected state should purge");
+
+    let cleanup_row: (String, i64) = registry
+        .connection()
+        .query_row(
+            "SELECT status, purge FROM cleanups WHERE cleanup_id = ?1",
+            [&outcome.cleanup_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("cleanup row should query");
+    assert_eq!(cleanup_row, ("deleted".to_string(), 1));
+    let payloads = cleanup_event_payloads(&registry, &outcome.cleanup_id);
+    assert_eq!(payloads.len(), 2);
+    assert!(payloads.iter().all(|payload| payload["purge"] == true));
+    assert!(!fixture.layout.state_root.exists());
+}
+
+#[test]
+fn purge_deletes_persistent_state() {
+    let fixture = StateFixture::new();
+    let mut registry = fixture.registry();
+    let mut persistent = fixture.identity.clone();
+    persistent.persistence = PersistencePolicy::Persistent;
+    fs::write(
+        fixture.layout.state_root.join(MARKER_FILE_NAME),
+        serde_json::to_vec_pretty(&StateMarker::slot(&persistent)).expect("marker JSON"),
+    )
+    .expect("persistent marker should be written");
+
+    let outcome = clean_marked_state(
+        &fixture.layout.state_base,
+        &fixture.layout.state_root,
+        &persistent,
+        &mut registry,
+        CleanupMode::Purge,
+    )
+    .expect("persistent state should purge");
+
+    let purge: i64 = registry
+        .connection()
+        .query_row(
+            "SELECT purge FROM cleanups WHERE cleanup_id = ?1",
+            [&outcome.cleanup_id],
+            |row| row.get(0),
+        )
+        .expect("cleanup purge flag should query");
+    assert_eq!(purge, 1);
+    assert!(!fixture.layout.state_root.exists());
+}
+
+#[test]
+fn purge_still_refuses_active_registry_refs() {
+    let fixture = StateFixture::new();
+    let mut registry = fixture.registry();
+    let mut persistent = fixture.identity.clone();
+    persistent.persistence = PersistencePolicy::Persistent;
+    fs::write(
+        fixture.layout.state_root.join(MARKER_FILE_NAME),
+        serde_json::to_vec_pretty(&StateMarker::slot(&persistent)).expect("marker JSON"),
+    )
+    .expect("persistent marker should be written");
+    registry
+        .connection_mut()
+        .execute_batch(
+            "INSERT INTO run_leases (
+               run_id, environment, slot, service_instance_id, owner_token, heartbeat_at,
+               expires_at, status
+             ) VALUES ('run-1', 'dev', 0, 'service-1', 'owner', 'now', 'later', 'active')",
+        )
+        .expect("active lease should be inserted");
+
+    let error = clean_marked_state(
+        &fixture.layout.state_base,
+        &fixture.layout.state_root,
+        &persistent,
+        &mut registry,
+        CleanupMode::Purge,
+    )
+    .expect_err("purge must still refuse active refs");
+
+    assert_eq!(error.code, ErrorCode::CleanupRefused);
+    assert!(fixture.layout.state_root.exists());
+}
+
+#[test]
+fn purge_still_refuses_unmarked_roots_and_marker_mismatch() {
+    let fixture = StateFixture::new();
+    let unmarked = fixture.tmp.path.join("runtime-test/dev/unmarked-purge");
+    fs::create_dir_all(&unmarked).expect("unmarked root should be created");
+
+    let unmarked_error = inspect_cleanup_target(
+        &fixture.tmp.path,
+        &unmarked,
+        &fixture.identity,
+        CleanupMode::Purge,
+    )
+    .expect_err("purge must still refuse unmarked roots");
+    assert_eq!(unmarked_error.code, ErrorCode::StateUnowned);
+
+    let mut marker = StateMarker::slot(&fixture.identity);
+    marker.project_id = "other-project".to_string();
+    fs::write(
+        fixture.layout.state_root.join(MARKER_FILE_NAME),
+        serde_json::to_vec_pretty(&marker).expect("marker JSON"),
+    )
+    .expect("marker should be replaced");
+    let mismatch_error = inspect_cleanup_target(
+        &fixture.layout.state_base,
+        &fixture.layout.state_root,
+        &fixture.identity,
+        CleanupMode::Purge,
+    )
+    .expect_err("purge must still refuse marker mismatch");
+    assert_eq!(mismatch_error.code, ErrorCode::StateUnowned);
+}
+
+#[cfg(unix)]
+#[test]
+fn purge_still_refuses_symlink_target_and_tree() {
+    let fixture = StateFixture::new();
+    let target_link = fixture.tmp.path.join("runtime-test/dev/target-link");
+    std::os::unix::fs::symlink(&fixture.layout.state_root, &target_link)
+        .expect("target symlink should be created");
+    let target_error = inspect_cleanup_target(
+        &fixture.layout.state_base,
+        &target_link,
+        &fixture.identity,
+        CleanupMode::Purge,
+    )
+    .expect_err("purge must still refuse a symlink target");
+    assert_eq!(target_error.code, ErrorCode::StateUnowned);
+
+    let outside = fixture.tmp.path.join("outside-file");
+    fs::write(&outside, b"outside").expect("outside file should exist");
+    std::os::unix::fs::symlink(&outside, fixture.layout.state_root.join("escape-link"))
+        .expect("tree symlink should be created");
+    let tree_error = inspect_cleanup_target(
+        &fixture.layout.state_base,
+        &fixture.layout.state_root,
+        &fixture.identity,
+        CleanupMode::Purge,
+    )
+    .expect_err("purge must still refuse symlinks inside the tree");
+    assert_eq!(tree_error.code, ErrorCode::StateUnowned);
     assert!(fixture.layout.state_root.exists());
 }
 
@@ -284,6 +464,7 @@ fn cleanup_refuses_symlink_traversal() {
         &fixture.layout.state_base,
         &fixture.layout.state_root,
         &fixture.identity,
+        CleanupMode::Standard,
     )
     .expect_err("symlink in cleanup tree should be refused");
 
@@ -323,6 +504,7 @@ fn cleanup_deletes_matching_inactive_state() {
         &fixture.layout.state_root,
         &fixture.identity,
         &mut registry,
+        CleanupMode::Standard,
     )
     .expect("inactive marked state should be deleted");
 
@@ -386,6 +568,7 @@ fn cleanup_deletes_matching_inactive_state() {
         &fixture.layout.state_root,
         &fixture.identity,
         &mut reopened,
+        CleanupMode::Standard,
     )
     .expect("repeated cleanup should use prior deletion evidence");
     assert_eq!(repeated, outcome);
@@ -441,6 +624,7 @@ fn clean_reconciles_stale_refs_before_marker_owned_delete() {
         &fixture.layout.state_base,
         &fixture.layout.state_root,
         &fixture.identity,
+        CleanupMode::Standard,
     )
     .expect("stale refs should reconcile before cleanup");
 
@@ -484,8 +668,9 @@ fn cleanup_finishes_interrupted_delete_when_target_is_already_absent() {
         .execute(
             "
             INSERT INTO cleanups (
-              cleanup_id, environment, slot, target_path, marker_json, status, refusal_reason
-            ) VALUES ('cleanup-interrupted', 'dev', 0, ?1, ?2, 'intent', NULL)
+              cleanup_id, environment, slot, target_path, purge, marker_json, status,
+              refusal_reason
+            ) VALUES ('cleanup-interrupted', 'dev', 0, ?1, 0, ?2, 'intent', NULL)
             ",
             [&target_path, &marker_json],
         )
@@ -497,6 +682,7 @@ fn cleanup_finishes_interrupted_delete_when_target_is_already_absent() {
         &fixture.layout.state_root,
         &fixture.identity,
         &mut registry,
+        CleanupMode::Standard,
     )
     .expect("missing target with intent evidence should finish as deleted");
     let cleanup_status: String = registry
@@ -547,6 +733,7 @@ fn cleanup_delete_failure_records_failed_without_deleted_success() {
         &fixture.layout.state_root,
         &fixture.identity,
         &mut registry,
+        CleanupMode::Standard,
     );
     drop(restore);
     let error = result.expect_err("delete failure should refuse cleanup");
@@ -632,6 +819,7 @@ fn clean_marks_active_port_stale_after_owner_process_is_proven_dead() {
         &fixture.layout.state_base,
         &fixture.layout.state_root,
         &fixture.identity,
+        CleanupMode::Standard,
     )
     .expect("stale port should reconcile before cleanup");
     let port_status: String = registry
@@ -669,11 +857,33 @@ fn assert_cleanup_refused_with_active_ref(sql: &str) {
         &fixture.layout.state_root,
         &fixture.identity,
         &mut registry,
+        CleanupMode::Standard,
     )
     .expect_err("active registry refs should refuse cleanup");
 
     assert_eq!(error.code, ErrorCode::CleanupRefused);
     assert!(fixture.layout.state_root.exists());
+}
+
+fn cleanup_event_payloads(registry: &Registry, cleanup_id: &str) -> Vec<Value> {
+    let mut statement = registry
+        .connection()
+        .prepare(
+            "
+            SELECT payload_json FROM events
+            WHERE event_type LIKE 'cleanup.%' AND payload_json LIKE ?1
+            ORDER BY seq
+            ",
+        )
+        .expect("cleanup payload statement should prepare");
+    statement
+        .query_map([format!("%{cleanup_id}%")], |row| {
+            let payload_json: String = row.get(0)?;
+            Ok(serde_json::from_str::<Value>(&payload_json).expect("payload should parse"))
+        })
+        .expect("cleanup payloads should query")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("cleanup payloads should collect")
 }
 
 struct PermissionRestore {

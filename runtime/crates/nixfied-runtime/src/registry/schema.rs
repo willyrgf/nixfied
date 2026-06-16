@@ -3,7 +3,7 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::registry::records::RegistryIdentity;
 
-pub const SCHEMA_VERSION: i64 = 3;
+pub const SCHEMA_VERSION: i64 = 4;
 
 pub fn initialize(conn: &mut Connection, identity: &RegistryIdentity) -> RuntimeResult<()> {
     conn.execute_batch(
@@ -137,6 +137,7 @@ pub fn initialize(conn: &mut Connection, identity: &RegistryIdentity) -> Runtime
               environment TEXT NOT NULL,
               slot INTEGER NOT NULL CHECK (slot >= 0),
               target_path TEXT NOT NULL,
+              purge INTEGER NOT NULL CHECK (purge IN (0, 1)),
               marker_json TEXT,
               status TEXT NOT NULL,
               refusal_reason TEXT
@@ -206,7 +207,7 @@ fn verify_required_columns(conn: &Connection) -> RuntimeResult<()> {
             "run_leases",
             &["environment", "slot", "service_instance_id", "status"][..],
         ),
-        ("cleanups", &["environment", "slot"][..]),
+        ("cleanups", &["environment", "slot", "purge"][..]),
     ] {
         for column in columns {
             if !has_column(conn, table, column)? {

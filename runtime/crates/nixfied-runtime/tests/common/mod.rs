@@ -49,7 +49,7 @@ use nixfied_runtime::service::{
     ServiceSelection, SlotEndpoints, StartedService, run_slot_clean, start_service_for_slot,
 };
 use nixfied_runtime::slot::{SelectedSlot, select_slot};
-use nixfied_runtime::state::{CleanupOutcome, HostPlacement};
+use nixfied_runtime::state::{CleanupMode, CleanupOutcome, HostPlacement};
 use nixfied_runtime::{Admission, RuntimeResult};
 
 /// The fixture service name. The production runtime crate is service-name
@@ -116,7 +116,14 @@ pub fn run_synthetic_service_clean_for_slot(
     registry: &mut Registry,
     selected_slot: &SelectedSlot<'_>,
 ) -> RuntimeResult<CleanupOutcome> {
-    run_slot_clean(model, admission, placement, registry, selected_slot)
+    run_slot_clean(
+        model,
+        admission,
+        placement,
+        registry,
+        selected_slot,
+        CleanupMode::Standard,
+    )
 }
 
 /// A unique temporary directory removed on drop.

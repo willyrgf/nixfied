@@ -31,7 +31,7 @@ use crate::service::registry::{
     reserve_service_start,
 };
 use crate::slot::SelectedSlot;
-use crate::state::{CleanupOutcome, HostPlacement, StateIdentity, clean_marked_state};
+use crate::state::{CleanupMode, CleanupOutcome, HostPlacement, StateIdentity, clean_marked_state};
 
 const FOREGROUND_GRACE: Duration = Duration::from_millis(100);
 const MONITOR_INTERVAL: Duration = Duration::from_millis(1);
@@ -933,11 +933,12 @@ pub fn run_slot_clean(
     placement: &HostPlacement,
     registry: &mut Registry,
     selected_slot: &SelectedSlot<'_>,
+    mode: CleanupMode,
 ) -> RuntimeResult<CleanupOutcome> {
     for service_name in model.services.keys() {
         record_service_clean(model, admission, registry, selected_slot, service_name)?;
     }
-    clean_marked_slot_state(model, admission, placement, registry, selected_slot)
+    clean_marked_slot_state(model, admission, placement, registry, selected_slot, mode)
 }
 
 /// Record the marker-gated clean lifecycle operation for one service.
@@ -982,6 +983,7 @@ fn clean_marked_slot_state(
     placement: &HostPlacement,
     registry: &mut Registry,
     selected_slot: &SelectedSlot<'_>,
+    mode: CleanupMode,
 ) -> RuntimeResult<CleanupOutcome> {
     let identity = StateIdentity::from_selected_slot(model, admission, selected_slot);
     // Reconcile first so rows left active by a crashed runtime (no live OS
@@ -993,6 +995,7 @@ fn clean_marked_slot_state(
         &placement.state_root,
         &identity,
         registry,
+        mode,
     )
 }
 

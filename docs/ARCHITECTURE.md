@@ -185,7 +185,8 @@ Every runtime action is scoped by `projectId / environment / slot / runId`.
   `.nixfied-state.json` marker. Cleanup canonicalizes first; refuses paths outside
   the state base, symlink/traversal escapes, unmarked roots, marker mismatches,
   active leases/processes/reservations, and policy-protected persistent state; and
-  is idempotent and crash-safe.
+  is idempotent and crash-safe. `clean --purge` expresses deliberate destruction
+  of protected/persistent state, but it relaxes only that policy gate.
 - **Containment is runtime-owned.** Services run foreground under a runtime-owned
   process group; cancellation propagates to the whole group; a process counts as
   started only after a registry record exists. A supervisor whose children form
