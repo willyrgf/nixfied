@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::time::Instant;
 
 use nixfied_model::ServiceLifetime;
 use nixfied_runtime::cancellation::{CancellationToken, ProcessSignalGuard};
@@ -67,6 +68,7 @@ struct RunOutput {
     run_id: String,
     model_path: PathBuf,
     computed_model_hash: String,
+    duration_ms: u64,
     services: Vec<ServiceRunOutput>,
     tasks: Vec<TaskRun>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -241,6 +243,7 @@ fn run_m0_placed(
     placement: &nixfied_runtime::state::HostPlacement,
     cancellation: &CancellationToken,
 ) -> Result<RunOutput, RuntimeError> {
+    let run_started = Instant::now();
     // The registry opens before the marker decision: when the slot was last
     // used by a different model build, the upgrade path needs registry evidence
     // to tear down what that build left running.
@@ -433,8 +436,15 @@ fn run_m0_placed(
         ) {
             Ok(service) => service,
             Err(error) => {
-                let summary =
-                    write_failure_run_summary(placement, run_id, &[], &started, &[], redactor);
+                let summary = write_failure_run_summary(
+                    placement,
+                    run_id,
+                    elapsed_ms(run_started),
+                    &[],
+                    &started,
+                    &[],
+                    redactor,
+                );
                 teardown(
                     &mut started,
                     &mut registry,
@@ -460,8 +470,15 @@ fn run_m0_placed(
 
         let service = started.last_mut().expect("just pushed a service");
         if let Err(error) = service.wait_for_probe_ready_cancellable(&mut registry, cancellation) {
-            let summary =
-                write_failure_run_summary(placement, run_id, &[], &started, &[], redactor);
+            let summary = write_failure_run_summary(
+                placement,
+                run_id,
+                elapsed_ms(run_started),
+                &[],
+                &started,
+                &[],
+                redactor,
+            );
             teardown(
                 &mut started,
                 &mut registry,
@@ -476,8 +493,15 @@ fn run_m0_placed(
         }
         let service = started.last_mut().expect("just pushed a service");
         if let Err(error) = service.check_health_cancellable(&mut registry, cancellation) {
-            let summary =
-                write_failure_run_summary(placement, run_id, &[], &started, &[], redactor);
+            let summary = write_failure_run_summary(
+                placement,
+                run_id,
+                elapsed_ms(run_started),
+                &[],
+                &started,
+                &[],
+                redactor,
+            );
             teardown(
                 &mut started,
                 &mut registry,
@@ -502,18 +526,27 @@ fn run_m0_placed(
         }
     }
 
+    let mut task_runs: Vec<TaskRun> = Vec::new();
+    let mut node_results: Vec<NodeResult> = Vec::new();
     if let Err(error) = cancellation.check() {
+        let summary = write_failure_run_summary(
+            placement,
+            run_id,
+            elapsed_ms(run_started),
+            &node_results,
+            &started,
+            &task_runs,
+            redactor,
+        );
         teardown(&mut started, &mut registry, options.timeout_ms, true);
         stop_lease(lease)?;
-        return Err(error);
+        return Err(with_failure_summary(error, summary));
     }
 
     // Run each flattened node in dependency order, gating each leaf on the
     // readiness of its declared service requirements (the first provides
     // ${port}/${host} substitution). The plan's order already honors the
     // composite's step dependencies.
-    let mut task_runs: Vec<TaskRun> = Vec::new();
-    let mut node_results: Vec<NodeResult> = Vec::new();
     for node in &plan.nodes {
         let task_id = &node.task_id;
         let task = admission
@@ -552,6 +585,7 @@ fn run_m0_placed(
             let summary = write_failure_run_summary(
                 placement,
                 run_id,
+                elapsed_ms(run_started),
                 &node_results,
                 &started,
                 &task_runs,
@@ -566,7 +600,7 @@ fn run_m0_placed(
         let run_context = RunContext {
             run_id,
             computed_model_hash: &admission.computed_model_hash,
-            source_root: &admission.require_source()?.observed_root,
+            source_root: &source_root,
             state_root: &placement.state_root,
             secrets: &admission.secrets,
             redactor,
@@ -627,6 +661,7 @@ fn run_m0_placed(
                 let summary = write_failure_run_summary(
                     placement,
                     run_id,
+                    elapsed_ms(run_started),
                     &node_results,
                     &started,
                     &task_runs,
@@ -648,34 +683,21 @@ fn run_m0_placed(
     // (endpoints, instance ids) alongside the node and task results.
     let services_output = services_output(&started);
 
-    let run_summary_path = Some(write_run_summary(
-        placement,
-        run_id,
-        true,
-        &node_results,
-        &services_output,
-        &task_runs,
-        redactor,
-    )?);
-    let primary_task = task_runs.last().cloned();
-    let output = RunOutput {
-        run_id: run_id.to_string(),
-        model_path: admission.model_path.clone(),
-        computed_model_hash: admission.computed_model_hash.clone(),
-        services: services_output,
-        summary_path: primary_task.as_ref().map(|task| task.summary_path.clone()),
-        task: primary_task,
-        tasks: task_runs,
-        nodes: node_results,
-        run_summary_path,
-    };
-
     if cancellation.is_canceled() {
+        let summary = write_failure_run_summary_from_services(
+            placement,
+            run_id,
+            elapsed_ms(run_started),
+            &node_results,
+            &services_output,
+            &task_runs,
+            redactor,
+        );
         teardown(&mut started, &mut registry, options.timeout_ms, true);
         stop_lease(lease)?;
         return Err(with_failure_summary(
             nixfied_runtime::cancellation::canceled_error(),
-            output.run_summary_path.clone(),
+            summary,
         ));
     }
     // Stop services in reverse start order. On a stop error, tear down the
@@ -689,6 +711,15 @@ fn run_m0_placed(
             service.stand(&mut registry)
         };
         if let Err(error) = result {
+            let summary = write_failure_run_summary_from_services(
+                placement,
+                run_id,
+                elapsed_ms(run_started),
+                &node_results,
+                &services_output,
+                &task_runs,
+                redactor,
+            );
             teardown(
                 &mut started,
                 &mut registry,
@@ -696,7 +727,7 @@ fn run_m0_placed(
                 error.code == nixfied_runtime::ErrorCode::Canceled,
             );
             stop_lease(lease)?;
-            return Err(with_failure_summary(error, output.run_summary_path.clone()));
+            return Err(with_failure_summary(error, summary));
         }
     }
     // Settle a run that no service stop and no task finalized (a degenerate
@@ -704,6 +735,30 @@ fn run_m0_placed(
     // a service- or task-derived terminal status is left untouched.
     nixfied_runtime::service::registry::mark_run_completed(&mut registry, run_id)?;
     stop_lease(lease)?;
+    let duration_ms = elapsed_ms(run_started);
+    let run_summary_path = Some(write_run_summary(
+        placement,
+        run_id,
+        true,
+        duration_ms,
+        &node_results,
+        &services_output,
+        &task_runs,
+        redactor,
+    )?);
+    let primary_task = task_runs.last().cloned();
+    let output = RunOutput {
+        run_id: run_id.to_string(),
+        model_path: admission.model_path.clone(),
+        computed_model_hash: admission.computed_model_hash.clone(),
+        duration_ms,
+        services: services_output,
+        summary_path: primary_task.as_ref().map(|task| task.summary_path.clone()),
+        task: primary_task,
+        tasks: task_runs,
+        nodes: node_results,
+        run_summary_path,
+    };
     Ok(output)
 }
 
@@ -726,16 +781,47 @@ fn services_output(started: &[StartedService]) -> Vec<ServiceRunOutput> {
 fn write_failure_run_summary(
     placement: &nixfied_runtime::state::HostPlacement,
     run_id: &str,
+    duration_ms: u64,
     nodes: &[NodeResult],
     started: &[StartedService],
     tasks: &[TaskRun],
     redactor: &Redactor,
 ) -> Option<PathBuf> {
     let services = services_output(started);
+    write_failure_run_summary_from_services(
+        placement,
+        run_id,
+        duration_ms,
+        nodes,
+        &services,
+        tasks,
+        redactor,
+    )
+}
+
+fn write_failure_run_summary_from_services(
+    placement: &nixfied_runtime::state::HostPlacement,
+    run_id: &str,
+    duration_ms: u64,
+    nodes: &[NodeResult],
+    services: &[ServiceRunOutput],
+    tasks: &[TaskRun],
+    redactor: &Redactor,
+) -> Option<PathBuf> {
     // The run is failing regardless of what the recorded nodes say — a service
     // or spawn failure can leave zero failed nodes, which must not read as
     // success.
-    write_run_summary(placement, run_id, false, nodes, &services, tasks, redactor).ok()
+    write_run_summary(
+        placement,
+        run_id,
+        false,
+        duration_ms,
+        nodes,
+        services,
+        tasks,
+        redactor,
+    )
+    .ok()
 }
 
 fn with_failure_summary(error: RuntimeError, summary_path: Option<PathBuf>) -> RuntimeError {
@@ -769,6 +855,10 @@ fn stop_lease(lease: Option<RunLeaseHeartbeat>) -> Result<(), RuntimeError> {
     Ok(())
 }
 
+fn elapsed_ms(started: Instant) -> u64 {
+    started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64
+}
+
 /// Write the aggregate run summary: the run id, overall success, the services
 /// started (with their resolved endpoints), and the per-node and per-task
 /// results — a complete, inspectable record of the run.
@@ -776,6 +866,7 @@ fn write_run_summary(
     placement: &nixfied_runtime::state::HostPlacement,
     run_id: &str,
     run_succeeded: bool,
+    duration_ms: u64,
     nodes: &[NodeResult],
     services: &[ServiceRunOutput],
     tasks: &[TaskRun],
@@ -785,6 +876,7 @@ fn write_run_summary(
     let mut summary = serde_json::json!({
         "runId": run_id,
         "success": run_succeeded && nodes.iter().all(|node| node.success),
+        "durationMs": duration_ms,
         "services": services,
         "nodes": nodes,
         "tasks": tasks,

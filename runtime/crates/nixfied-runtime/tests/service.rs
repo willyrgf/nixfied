@@ -3754,6 +3754,20 @@ fn runtime_drives_full_lifecycle_without_invoking_nix() {
         run_json["task"]["durationMs"].as_u64().is_some(),
         "task output should carry durationMs: {run_json}"
     );
+    assert!(
+        run_json["durationMs"].as_u64().is_some(),
+        "run output should carry durationMs: {run_json}"
+    );
+    let run_summary_path = run_json["runSummaryPath"]
+        .as_str()
+        .expect("run output should link run summary");
+    let run_summary: Value =
+        serde_json::from_slice(&fs::read(run_summary_path).expect("run summary should read"))
+            .expect("run summary should parse");
+    assert!(
+        run_summary["durationMs"].as_u64().is_some(),
+        "run summary should carry durationMs: {run_summary}"
+    );
     let state_root = state_base.join("runtime-test").join("dev").join("0");
     assert!(
         state_root.join(".nixfied-state.json").is_file(),
@@ -4390,6 +4404,7 @@ fn failed_composite_run_writes_failure_summary() {
             .expect("run summary should parse");
     assert_eq!(summary["success"], json!(false));
     let nodes = summary["nodes"].as_array().expect("nodes should be array");
+    assert!(summary["durationMs"].as_u64().is_some());
     assert_eq!(nodes.len(), 1);
     assert_eq!(nodes[0]["nodeId"], json!("wf.fail-node"));
     assert_eq!(nodes[0]["success"], json!(false));
@@ -4461,6 +4476,7 @@ fn service_failure_before_any_node_writes_failed_summary() {
         json!(false),
         "a run that failed before any node must not summarize as success"
     );
+    assert!(summary["durationMs"].as_u64().is_some());
     assert_eq!(summary["nodes"].as_array().map(Vec::len), Some(0));
 }
 
