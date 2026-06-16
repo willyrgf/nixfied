@@ -2,8 +2,7 @@
 # module (VERB-1, the corrected split of SURFACE-1):
 #
 # - the **reserved control namespace**, framework-owned: `run`, `ps`, `down`,
-#   `clean`, and `admit` (admission sanity — renamed from `check`, freeing the
-#   most common adopter verb);
+#   `clean`, and `model-check` (admission sanity, freeing common adopter verbs);
 # - the **project verbs**, adopter-owned: one app per task id exported in
 #   `nixfied.surface.verbs` (`.#check` -> `runtime run --task check`).
 #
@@ -47,8 +46,8 @@ in
   run = mkApp "run" ''exec "${runtimeBin}" run --model "${modelJson}" "$@"'';
 
   # Admission sanity: the model is well-formed and admits (cheap, no
-  # execution). Named `admit` so `check` stays free for adopters.
-  admit = mkApp "admit" ''exec "${runtimeBin}" check --model "${modelJson}"'';
+  # execution). Named `model-check` so `check` stays free for adopters.
+  model-check = mkApp "model-check" ''exec "${runtimeBin}" check --model "${modelJson}"'';
 
   # Recovery/control surface over the project's slots: observe registry-owned
   # processes (reconciling stale evidence), stop everything the runtime owns,

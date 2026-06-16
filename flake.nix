@@ -61,7 +61,7 @@
           inherit compileModel;
           inherit (composeLib) seq;
           # The generated project surface: the reserved control apps
-          # (run/ps/down/clean/admit) plus one app per task id the adopter
+          # (run/ps/down/clean/model-check) plus one app per task id the adopter
           # exports in `nixfied.surface.verbs`.
           projectApps =
             module:

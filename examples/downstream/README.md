@@ -71,12 +71,12 @@ This example's `flake.nix` wires `nixfied.lib.<system>.projectApps`, so the same
 operations are one command each — the surface every nixfied project gets:
 
 ```sh
-nix run ./examples/downstream#admit                   # admission only
+nix run ./examples/downstream#model-check             # admission only
 nix run ./examples/downstream#release                 # the exported verb
 nix run ./examples/downstream#run -- --task ping-api  # any declared task
 ```
 
-The control namespace (`run`/`ps`/`down`/`clean`/`admit`) is framework-owned;
+The control namespace (`run`/`ps`/`down`/`clean`/`model-check`) is framework-owned;
 `release` is this project's exported verb (`nixfied.surface.verbs`). State
 goes to the default location (`$XDG_STATE_HOME/nixfied`); set `NIXFIED_STATE_DIR`
 to override.

@@ -318,10 +318,10 @@ let
           "ps"
           "down"
           "clean"
-          "admit"
+          "model-check"
         ])
       ) config.nixfied.surface.verbs)
-      "surface.verbs must not collide with the reserved control namespace (run, ps, down, clean, admit)"
+      "surface.verbs must not collide with the reserved control namespace (run, ps, down, clean, model-check)"
     )
     (expect combinedGraphAcyclic
       "the combined connectsTo + prepare-requires service graph must be acyclic"

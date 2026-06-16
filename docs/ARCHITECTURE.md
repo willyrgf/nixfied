@@ -112,7 +112,7 @@ Adopter vocabulary enters the contract as **names over this algebra, never as
 schema**: `check` is not a concept nixfied knows, it is a composite an
 adopter named, exported to the flake surface through
 `nixfied.surface.verbs` (VERB-1: control verbs — `run`, `ps`, `down`,
-`clean`, `admit` — are framework-reserved; project verbs derive only from
+`clean`, `model-check` — are framework-reserved; project verbs derive only from
 adopter-exported task names). Environment **membership does not exist**:
 running a task brings up exactly the services its leaves require —
 `servicesRequired`, `operationBindings`, and operation ids are **derived**
@@ -248,7 +248,7 @@ comes from pinned inputs + nix-built binaries + throwaway repos/state, not a VM.
 ## Verification surfaces (framework vs adopter)
 
 Two audiences, two surfaces, one rule. **Adopters** get the reserved control
-apps (`run` / `ps` / `down` / `clean` / `admit`) plus one app per task id they
+apps (`run` / `ps` / `down` / `clean` / `model-check`) plus one app per task id they
 export in `nixfied.surface.verbs` (`lib.projectApps`, wired by the `install`
 scaffold); their verification *is* composition, because their tests are
 tasks — a 0-service `check` (lint/test), an N-service `e2e` — composed into

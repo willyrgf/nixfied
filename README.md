@@ -111,7 +111,7 @@ verbs are yours** — one flake app per task id you export:
 ```sh
 # reserved control namespace
 nix run .#run -- --task <id>    # run any declared task (no selection => refuse + list)
-nix run .#admit                 # admission: your model is well-formed and admits (no execution)
+nix run .#model-check           # admission: your model is well-formed and admits (no execution)
 nix run .#ps                    # observe registry-owned processes (reconciles stale evidence)
 nix run .#down                  # stop everything the runtime owns on the slot
 nix run .#clean                 # remove the marker-gated slot state

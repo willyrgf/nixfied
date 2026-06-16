@@ -441,7 +441,7 @@ fn flake_template(nixfied_url: &str) -> String {
         model = nixfied.lib.${{system}}.compileModel ./nixfied.nix;
       }});
       # The generated surface: the reserved control apps (`.#run` / `.#ps` /
-      # `.#down` / `.#clean` / `.#admit`) plus one app per task id exported in
+      # `.#down` / `.#clean` / `.#model-check`) plus one app per task id exported in
       # `nixfied.surface.verbs`.
       apps = forAllSystems (system: nixfied.lib.${{system}}.projectApps ./nixfied.nix);
     }};
@@ -468,7 +468,7 @@ fn nixfied_module_template(metadata: &ProjectMetadata) -> String {
   # service); exporting it below makes it a flake app: `nix run .#smoke`.
   # Add your own leaf tasks (lint/test), compose them into composite tasks
   # (kind = "composite", steps = ...), and export the ones that form your
-  # public surface. `nix run .#admit` checks the model admits;
+  # public surface. `nix run .#model-check` checks the model admits;
   # `nix run .#run -- --task <id>` runs any declared task.
   nixfied.surface.verbs = [ "smoke" ];
 }}
