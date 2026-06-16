@@ -52,6 +52,19 @@ surface: model schema docs capabilities check run ps down clean
 # structured automation surface; both is the explicit combined diagnostic mode.
 run-output-mode: summary json both
 
+# The runtime-owned run output schemas. These JSON/text projections are public
+# for the current ABI, same as the admitted model and error vocabulary; changing
+# required fields or field meaning records a contract change here and rotates the
+# runtime ABI digest.
+output-schema run-json: runId modelPath computedModelHash durationMs services tasks task? summaryPath? nodes runSummaryPath?
+output-schema run-summary-json: runId success durationMs services nodes tasks
+output-schema run-task: taskId stepPath processKey exitCode timedOut canceled success durationMs stdoutPath stderrPath summaryPath
+output-schema run-node: nodeId taskId success exitCode durationMs stdoutPath stderrPath summaryPath
+output-schema run-service: serviceId serviceInstanceId processKey selectedEndpoint?
+output-schema selected-endpoint: endpointId host port
+output-schema run-summary-text: slot-upgrade service-start prepare-node service-ready-endpoint service-ready-endpointless task-ok task-fail task-fail-stderr result-ok result-fail-empty result-fail-nodes run-summary logs
+output-schema run-error-summary-text: error
+
 # The closed stop signals the runtime can send.
 signal: TERM INT QUIT HUP
 
