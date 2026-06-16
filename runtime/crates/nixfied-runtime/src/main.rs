@@ -811,16 +811,16 @@ fn run_m0_placed(
     nixfied_runtime::service::registry::mark_run_completed(&mut registry, run_id)?;
     stop_lease(lease)?;
     let duration_ms = elapsed_ms(run_started);
-    let run_summary_path = Some(write_run_summary(
+    let run_summary_path = Some(write_run_summary(RunSummary {
         placement,
         run_id,
-        true,
+        run_succeeded: true,
         duration_ms,
-        &node_results,
-        &services_output,
-        &task_runs,
+        nodes: &node_results,
+        services: &services_output,
+        tasks: &task_runs,
         redactor,
-    )?);
+    })?);
     print_run_footer(
         true,
         &node_results,
@@ -893,16 +893,16 @@ fn write_failure_run_summary_from_services(
     // The run is failing regardless of what the recorded nodes say — a service
     // or spawn failure can leave zero failed nodes, which must not read as
     // success.
-    write_run_summary(
+    write_run_summary(RunSummary {
         placement,
         run_id,
-        false,
+        run_succeeded: false,
         duration_ms,
         nodes,
         services,
         tasks,
         redactor,
-    )
+    })
     .ok()
 }
 
@@ -991,29 +991,31 @@ fn print_run_footer(
     eprintln!("  logs: {}", human_path(logs_dir));
 }
 
+struct RunSummary<'a> {
+    placement: &'a nixfied_runtime::state::HostPlacement,
+    run_id: &'a str,
+    run_succeeded: bool,
+    duration_ms: u64,
+    nodes: &'a [NodeResult],
+    services: &'a [ServiceRunOutput],
+    tasks: &'a [TaskRun],
+    redactor: &'a Redactor,
+}
+
 /// Write the aggregate run summary: the run id, overall success, the services
 /// started (with their resolved endpoints), and the per-node and per-task
 /// results — a complete, inspectable record of the run.
-fn write_run_summary(
-    placement: &nixfied_runtime::state::HostPlacement,
-    run_id: &str,
-    run_succeeded: bool,
-    duration_ms: u64,
-    nodes: &[NodeResult],
-    services: &[ServiceRunOutput],
-    tasks: &[TaskRun],
-    redactor: &Redactor,
-) -> Result<PathBuf, RuntimeError> {
-    let path = placement.artifacts_dir.join("run-summary.json");
+fn write_run_summary(input: RunSummary<'_>) -> Result<PathBuf, RuntimeError> {
+    let path = input.placement.artifacts_dir.join("run-summary.json");
     let mut summary = serde_json::json!({
-        "runId": run_id,
-        "success": run_succeeded && nodes.iter().all(|node| node.success),
-        "durationMs": duration_ms,
-        "services": services,
-        "nodes": nodes,
-        "tasks": tasks,
+        "runId": input.run_id,
+        "success": input.run_succeeded && input.nodes.iter().all(|node| node.success),
+        "durationMs": input.duration_ms,
+        "services": input.services,
+        "nodes": input.nodes,
+        "tasks": input.tasks,
     });
-    redactor.redact_value(&mut summary);
+    input.redactor.redact_value(&mut summary);
     let bytes = serde_json::to_vec_pretty(&summary).map_err(|error| {
         RuntimeError::new(
             nixfied_runtime::ErrorCode::ModelAdmission,
