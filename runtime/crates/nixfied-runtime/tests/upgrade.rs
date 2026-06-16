@@ -272,11 +272,11 @@ fn interrupted_run_reconciles_then_upgrade_proceeds() {
             INSERT INTO services (
               service_instance_id, environment, slot, service_name,
               service_address_hash, endpoint_identity_hash, state_identity_hash,
-              runtime_compatibility_hash, target_identity_hash, status,
+              runtime_compatibility_hash, target_identity_hash, service_lifetime, status,
               endpoint_json, state_root
             ) VALUES (
               'service-interrupted', 'dev', 0, 'synthetic', 'address', 'endpoint',
-              'state', 'runtime', 'target', 'probe-ready', '{}', '/tmp/interrupted'
+              'state', 'runtime', 'target', 'run-scoped', 'probe-ready', '{}', '/tmp/interrupted'
             );
             INSERT INTO processes (
               process_key, environment, slot, pid, pgid, start_identity, command_json,

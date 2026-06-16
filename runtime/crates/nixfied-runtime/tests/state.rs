@@ -594,11 +594,11 @@ fn clean_reconciles_stale_refs_before_marker_owned_delete() {
             INSERT INTO services (
               service_instance_id, environment, slot, service_name,
               service_address_hash, endpoint_identity_hash, state_identity_hash,
-              runtime_compatibility_hash, target_identity_hash, status,
+              runtime_compatibility_hash, target_identity_hash, service_lifetime, status,
               endpoint_json, state_root
             ) VALUES (
               'service-stale', 'dev', 0, 'synthetic', 'address', 'endpoint', 'state',
-              'runtime', 'target', 'probe-ready', '{}', '/tmp/stale'
+              'runtime', 'target', 'run-scoped', 'probe-ready', '{}', '/tmp/stale'
             );
             INSERT INTO processes (
               process_key, environment, slot, pid, pgid, start_identity, command_json,
@@ -789,11 +789,11 @@ fn clean_marks_active_port_stale_after_owner_process_is_proven_dead() {
             INSERT INTO services (
               service_instance_id, environment, slot, service_name,
               service_address_hash, endpoint_identity_hash, state_identity_hash,
-              runtime_compatibility_hash, target_identity_hash, status,
+              runtime_compatibility_hash, target_identity_hash, service_lifetime, status,
               endpoint_json, state_root
             ) VALUES (
               'service-stale-port', 'dev', 0, 'synthetic', 'address', 'endpoint', 'state',
-              'runtime', 'target', 'stopped', '{}', '/tmp/stale-port'
+              'runtime', 'target', 'run-scoped', 'stopped', '{}', '/tmp/stale-port'
             );
             INSERT INTO processes (
               process_key, environment, slot, pid, pgid, start_identity, command_json,
