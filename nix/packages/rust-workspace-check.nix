@@ -7,12 +7,7 @@
 # `.#test` / `.#ci` outside the sandbox.
 { pkgs }:
 let
-  rustToolchain = pkgs.rust-bin.stable."1.96.0".minimal.override {
-    extensions = [
-      "clippy"
-      "rustfmt"
-    ];
-  };
+  rustToolchain = (import ../toolchain.nix { inherit pkgs; }).dev;
 in
 pkgs.stdenv.mkDerivation {
   name = "nixfied-rust-workspace-check";

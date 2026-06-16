@@ -14,7 +14,7 @@
   buildType ? "release",
 }:
 let
-  rustToolchain = pkgs.rust-bin.stable."1.96.0".minimal;
+  rustToolchain = (import ../toolchain.nix { inherit pkgs; }).build;
   rustPlatform = pkgs.makeRustPlatform {
     cargo = rustToolchain;
     rustc = rustToolchain;

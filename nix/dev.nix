@@ -12,12 +12,7 @@
   postgresModel,
 }:
 let
-  rustToolchain = pkgs.rust-bin.stable."1.96.0".minimal.override {
-    extensions = [
-      "clippy"
-      "rustfmt"
-    ];
-  };
+  rustToolchain = (import ./toolchain.nix { inherit pkgs; }).dev;
 
   # `.#test`: the white-box cargo floor (binds ports / spawns process groups), so
   # it runs outside the nix sandbox with the pinned toolchain and a C compiler for
