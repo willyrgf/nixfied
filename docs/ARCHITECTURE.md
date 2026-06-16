@@ -208,6 +208,15 @@ scoped to runtime-owned persistent output (logs, summaries, registry payloads,
 captured child output, and error JSON), which is scrubbed before write; it cannot
 govern files or sockets a child chooses to write on its own.
 
+## Output Control
+
+`run` has three output projections. Stdout is the stable structured JSON contract:
+run/task/node results, diagnostic `durationMs`, and evidence paths. Stderr is the
+human projection: progress, concise pass/fail summaries, and pointers to the run
+summary and log directory. Captured child stdout/stderr stays in redacted log
+files; the runtime does not inline or replay child bytes, and no `logs` command is
+part of the public surface.
+
 ## What v1 taught us (and the invariant each lesson produced)
 
 | v1 failure | Resulting decision |

@@ -110,6 +110,11 @@ deliberate change to the contract (and matching version bump + docs + tests):
   Secret values are never model data; resolved values exist only in runtime
   memory and hermetic child environments. REDACT-1 does not govern files or
   sockets a child writes on its own.
+- **Runtime output projection:** `run` stdout is the stable structured JSON
+  contract (including diagnostic `durationMs` and evidence paths); stderr is
+  human progress plus pass/fail summaries and pointers; child stdout/stderr
+  remains in redacted log files and is not replayed inline. There is no `logs`
+  control command in the current surface.
 - **SURFACE-1 (split into its two honest halves):** the runtime/view command
   set (`model`, `schema`, `docs`, `capabilities`, `check`, `run`, `ps`,
   `down`, `clean`) is framework-owned, derived in the views, and listed in

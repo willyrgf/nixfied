@@ -72,6 +72,12 @@ NIXFIED_STATE_DIR=/tmp/nixfied "$rt" run   --model "$model" --task smoke # start
 NIXFIED_STATE_DIR=/tmp/nixfied "$rt" clean --model "$model"              # marker-gated cleanup
 ```
 
+`run` keeps stdout as pretty JSON for machines, including diagnostic
+`durationMs` values and evidence paths (`stdoutPath`, `stderrPath`,
+`runSummaryPath`). Human progress, the final pass/fail summary, and those same
+paths are written to stderr. Child stdout/stderr is not replayed inline; inspect
+the redacted log files through the paths in the JSON or summary.
+
 A model is admitted only from under the Nix store and only on an exact
 `runtimeAbi` / `toolchainId` match. Inspect it through the `nixfied` CLI
 (`model` / `schema` / `docs` / `capabilities`):
