@@ -96,8 +96,30 @@ pkgs.writeShellApplication {
     # and work against the same state.
     ( cd "$wk" && NIXFIED_STATE_DIR="$st" nix run "$project#model-check" ) \
       >/dev/null || fail "adoption: scaffolded model-check failed"
+    smoke_stdout="$st/smoke.stdout"
+    smoke_stderr="$st/smoke.stderr"
     ( cd "$wk" && NIXFIED_STATE_DIR="$st" nix run "$project#smoke" -- --timeout-ms 60000 ) \
-      >/dev/null || fail "adoption: scaffolded smoke verb failed"
+      >"$smoke_stdout" 2>"$smoke_stderr" || fail "adoption: scaffolded smoke verb failed"
+    [ ! -s "$smoke_stdout" ] || fail "adoption: scaffolded smoke verb wrote JSON stdout in summary mode"
+    grep -q "  result: ok 1 passed, 0 failed in " "$smoke_stderr" \
+      || fail "adoption: scaffolded smoke verb did not print a concise result"
+    grep -q "  run-summary: " "$smoke_stderr" \
+      || fail "adoption: scaffolded smoke verb did not print the run summary path"
+    grep -q "  logs: " "$smoke_stderr" \
+      || fail "adoption: scaffolded smoke verb did not print the logs path"
+    smoke_json_stdout="$st/smoke-json.stdout"
+    smoke_json_stderr="$st/smoke-json.stderr"
+    ( cd "$wk" && NIXFIED_STATE_DIR="$st" nix run "$project#smoke" -- --timeout-ms 60000 --json ) \
+      >"$smoke_json_stdout" 2>"$smoke_json_stderr" || fail "adoption: scaffolded smoke verb --json failed"
+    jq -e '.task.success == true and (.durationMs >= 0) and (.runSummaryPath | type == "string")' \
+      "$smoke_json_stdout" >/dev/null || fail "adoption: scaffolded smoke verb --json did not write run JSON"
+    ! grep -q "  result: " "$smoke_json_stderr" \
+      || fail "adoption: scaffolded smoke verb --json printed human summary"
+    run_json_stdout="$st/run-json.stdout"
+    ( cd "$wk" && NIXFIED_STATE_DIR="$st" nix run "$project#run" -- --task smoke --timeout-ms 60000 --json ) \
+      >"$run_json_stdout" || fail "adoption: scaffolded run control app --json failed"
+    jq -e '.task.success == true and (.durationMs >= 0) and (.runSummaryPath | type == "string")' \
+      "$run_json_stdout" >/dev/null || fail "adoption: scaffolded run control app --json did not write run JSON"
     ( cd "$wk" && NIXFIED_STATE_DIR="$st" nix run "$project#ps" ) \
       >/dev/null || fail "adoption: scaffolded ps failed"
     ( cd "$wk" && NIXFIED_STATE_DIR="$st" nix run "$project#down" ) \
