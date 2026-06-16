@@ -77,7 +77,10 @@ let
 
   # V8 — diamond dedup.
   v8Sr = deriveFacts.servicesRequired {
-    tasks.e2e = leaf [ "a" "b" ];
+    tasks.e2e = leaf [
+      "a"
+      "b"
+    ];
     services = {
       db.connectsTo = [ ];
       a.connectsTo = [ "db" ];
@@ -162,59 +165,71 @@ let
   vectors = [
     {
       name = "V1 flatten(ci)";
-      ok = deriveFacts.flattenPlan v1Tasks "ci" == [
-        {
-          stepPath = "ci.check.fmt";
-          leaf = "fmt";
-          dependsOn = [ ];
-        }
-        {
-          stepPath = "ci.check.clippy";
-          leaf = "clippy";
-          dependsOn = [ "ci.check.fmt" ];
-        }
-        {
-          stepPath = "ci.tests";
-          leaf = "tests";
-          dependsOn = [
-            "ci.check.clippy"
-            "ci.check.fmt"
-          ];
-        }
-      ];
+      ok =
+        deriveFacts.flattenPlan v1Tasks "ci" == [
+          {
+            stepPath = "ci.check.fmt";
+            leaf = "fmt";
+            dependsOn = [ ];
+          }
+          {
+            stepPath = "ci.check.clippy";
+            leaf = "clippy";
+            dependsOn = [ "ci.check.fmt" ];
+          }
+          {
+            stepPath = "ci.tests";
+            leaf = "tests";
+            dependsOn = [
+              "ci.check.clippy"
+              "ci.check.fmt"
+            ];
+          }
+        ];
     }
     {
       name = "V2 flatten(twice)";
-      ok = deriveFacts.flattenPlan v2Tasks "twice" == [
-        {
-          stepPath = "twice.first";
-          leaf = "unit";
-          dependsOn = [ ];
-        }
-        {
-          stepPath = "twice.again";
-          leaf = "unit";
-          dependsOn = [ "twice.first" ];
-        }
-      ];
+      ok =
+        deriveFacts.flattenPlan v2Tasks "twice" == [
+          {
+            stepPath = "twice.first";
+            leaf = "unit";
+            dependsOn = [ ];
+          }
+          {
+            stepPath = "twice.again";
+            leaf = "unit";
+            dependsOn = [ "twice.first" ];
+          }
+        ];
     }
     {
       name = "V3 flatten(fmt)";
-      ok = deriveFacts.flattenPlan v1Tasks "fmt" == [
-        {
-          stepPath = "fmt";
-          leaf = "fmt";
-          dependsOn = [ ];
-        }
-      ];
+      ok =
+        deriveFacts.flattenPlan v1Tasks "fmt" == [
+          {
+            stepPath = "fmt";
+            leaf = "fmt";
+            dependsOn = [ ];
+          }
+        ];
     }
     {
       name = "V4 servicesRequired(all)";
-      ok = sr "all" == [ "api" "postgres" "worker" ];
+      ok =
+        sr "all" == [
+          "api"
+          "postgres"
+          "worker"
+        ];
     }
     {
       name = "V4 servicesRequired(e2e)";
-      ok = sr "e2e" == [ "postgres" "worker" ];
+      ok =
+        sr "e2e" == [
+          "postgres"
+          "worker"
+        ];
     }
     {
       name = "V4 servicesRequired(lint)";
@@ -222,7 +237,11 @@ let
     }
     {
       name = "V4 servicesRequired(smoke)";
-      ok = sr "smoke" == [ "api" "postgres" ];
+      ok =
+        sr "smoke" == [
+          "api"
+          "postgres"
+        ];
     }
     {
       name = "V5/V7 bindings(cargoC) sorted";
@@ -254,26 +273,44 @@ let
     }
     {
       name = "V6 default ready terminal";
-      ok = deriveFacts.terminalDefaults.ready == {
-        success = "ready";
-        failure = "not-ready";
-      };
+      ok =
+        deriveFacts.terminalDefaults.ready == {
+          success = "ready";
+          failure = "not-ready";
+        };
     }
     {
       name = "V8 diamond servicesRequired(e2e)";
-      ok = v8Sr "e2e" == [ "a" "b" "db" ];
+      ok =
+        v8Sr "e2e" == [
+          "a"
+          "b"
+          "db"
+        ];
     }
     {
       name = "V9 composite prepare servicesRequired(run)";
-      ok = v9Sr "run" == [ "dep" "svc" ];
+      ok =
+        v9Sr "run" == [
+          "dep"
+          "svc"
+        ];
     }
     {
       name = "V10 long connectsTo servicesRequired(e2e)";
-      ok = v10Sr "e2e" == [ "api" "cache" "db" "worker" ];
+      ok =
+        v10Sr "e2e" == [
+          "api"
+          "cache"
+          "db"
+          "worker"
+        ];
     }
   ];
   failed = builtins.filter (vector: !vector.ok) vectors;
 in
 assert lib.assertMsg (failed == [ ])
-  "derivation-spec golden vectors failed: ${builtins.concatStringsSep ", " (map (vector: vector.name) failed)}";
+  "derivation-spec golden vectors failed: ${
+    builtins.concatStringsSep ", " (map (vector: vector.name) failed)
+  }";
 pkgs.runCommand "derive-facts-vectors" { } "touch $out"

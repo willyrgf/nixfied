@@ -56,9 +56,9 @@ let
       [ service.endpoint.host ]
     else
       map (ep: ep.host) (builtins.attrValues service.endpoints); # [] when endpoint-less
-  endpointHostsLoopback = lib.all (
-    name: lib.all isLoopbackHost (serviceHosts services.${name})
-  ) (builtins.attrNames services);
+  endpointHostsLoopback = lib.all (name: lib.all isLoopbackHost (serviceHosts services.${name})) (
+    builtins.attrNames services
+  );
   # Task kind/field coherence, composite graph validity, and step-path id
   # discipline: invalid composition must fail at evaluation, not compile into
   # a model the runtime only rejects at admission.
@@ -87,27 +87,20 @@ let
   hasSecretRefSyntax = value: lib.hasInfix "\${secret:" value;
   secretRefMalformed =
     value:
-    lib.any (
-      part: builtins.length (lib.splitString "}" part) == 1
-    ) (builtins.tail (lib.splitString "\${secret:" value));
-  namedEndpointRefs =
-    value:
-    refsAfterPrefix "\${port:" value ++ refsAfterPrefix "\${host:" value;
+    lib.any (part: builtins.length (lib.splitString "}" part) == 1) (
+      builtins.tail (lib.splitString "\${secret:" value)
+    );
+  namedEndpointRefs = value: refsAfterPrefix "\${port:" value ++ refsAfterPrefix "\${host:" value;
   invocationNamedRefs =
-    invocation:
-    lib.unique (lib.concatMap namedEndpointRefs (invocationValues invocation));
+    invocation: lib.unique (lib.concatMap namedEndpointRefs (invocationValues invocation));
   hasBareEndpointRef = value: lib.hasInfix "\${port}" value || lib.hasInfix "\${host}" value;
   invocationHasBareRef = invocation: lib.any hasBareEndpointRef (invocationValues invocation);
-  taskIdsStepSafe =
-    lib.all stepSafe taskNames && lib.all stepSafe (builtins.attrNames services);
+  taskIdsStepSafe = lib.all stepSafe taskNames && lib.all stepSafe (builtins.attrNames services);
   secrets = config.nixfied.secrets;
   secretNames = builtins.attrNames secrets;
   secretIdsStepSafe = lib.all stepSafe secretNames;
   secretFilePathConfined =
-    path:
-    path != null
-    && !(lib.hasPrefix "/" path)
-    && !(builtins.elem ".." (lib.splitString "/" path));
+    path: path != null && !(lib.hasPrefix "/" path) && !(builtins.elem ".." (lib.splitString "/" path));
   secretResolversCoherent = lib.all (
     name:
     let
@@ -140,9 +133,7 @@ let
   ) (builtins.attrNames compositeTasks);
   stepTasksDeclared = lib.all (
     name:
-    lib.all (step: builtins.hasAttr step.task tasks) (
-      builtins.attrValues compositeTasks.${name}.steps
-    )
+    lib.all (step: builtins.hasAttr step.task tasks) (builtins.attrValues compositeTasks.${name}.steps)
   ) (builtins.attrNames compositeTasks);
   stepDependsOnSiblings = lib.all (
     name:
@@ -158,8 +149,7 @@ let
   stepReaches =
     steps: start: current: seen:
     lib.any (
-      dep:
-      dep == start || (!(builtins.elem dep seen) && stepReaches steps start dep (seen ++ [ dep ]))
+      dep: dep == start || (!(builtins.elem dep seen) && stepReaches steps start dep (seen ++ [ dep ]))
     ) steps.${current}.dependsOn;
   stepGraphsAcyclic = lib.all (
     name:
@@ -213,8 +203,12 @@ let
       lc = service.lifecycle;
     in
     [ lc.start.invocation ]
-    ++ lib.optional (lc.ready.probe.kind == "exec" && lc.ready.probe.invocation != null) lc.ready.probe.invocation
-    ++ lib.optional (lc.health.probe.kind == "exec" && lc.health.probe.invocation != null) lc.health.probe.invocation;
+    ++ lib.optional (
+      lc.ready.probe.kind == "exec" && lc.ready.probe.invocation != null
+    ) lc.ready.probe.invocation
+    ++ lib.optional (
+      lc.health.probe.kind == "exec" && lc.health.probe.invocation != null
+    ) lc.health.probe.invocation;
   allInvocations =
     (map (task: task.invocation) (builtins.attrValues leafTasks))
     ++ lib.concatMap serviceLifecycleInvocations (builtins.attrValues services);
@@ -234,12 +228,12 @@ let
     name:
     let
       service = services.${name};
-      allowed = endpointIds service ++ builtins.filter (
-        target: builtins.hasAttr target services && !(endpointLess services.${target})
-      ) service.connectsTo;
-      refs = lib.unique (
-        lib.concatMap invocationNamedRefs (serviceLifecycleInvocations service)
-      );
+      allowed =
+        endpointIds service
+        ++ builtins.filter (
+          target: builtins.hasAttr target services && !(endpointLess services.${target})
+        ) service.connectsTo;
+      refs = lib.unique (lib.concatMap invocationNamedRefs (serviceLifecycleInvocations service));
     in
     lib.all (reference: builtins.elem reference allowed) refs
   ) (builtins.attrNames services);
@@ -252,15 +246,12 @@ let
     || lib.all (invocation: !(invocationHasBareRef invocation)) (serviceLifecycleInvocations service)
   ) (builtins.attrNames services);
   leafOperationId =
-    name: task:
-    if task.operationId != null then task.operationId else deriveFacts.leafOperationId name;
+    name: task: if task.operationId != null then task.operationId else deriveFacts.leafOperationId name;
   serviceOperationId =
     name: op: declared:
     if declared != null then declared else deriveFacts.serviceOperationId name op;
   effectiveOperationIds =
-    map (
-      name: leafOperationId name leafTasks.${name}
-    ) (builtins.attrNames leafTasks)
+    map (name: leafOperationId name leafTasks.${name}) (builtins.attrNames leafTasks)
     ++ lib.concatMap (
       name:
       let
@@ -276,8 +267,7 @@ let
     ) (builtins.attrNames services);
   duplicateOperationIds = lib.unique (
     builtins.filter (
-      id:
-      builtins.length (builtins.filter (other: other == id) effectiveOperationIds) > 1
+      id: builtins.length (builtins.filter (other: other == id) effectiveOperationIds) > 1
     ) effectiveOperationIds
   );
   # prepare-as-task: the reference must resolve, and the combined connectsTo +
@@ -318,64 +308,40 @@ let
     ) "slotPolicy.default must be within the slot range")
     (expect windowsInRange "per-slot candidate port windows must be in 1..65535")
     (expect windowsDoNotOverlap "per-slot candidate port windows must not overlap")
-    (expect immutableSourceIsStoreRoot
-      "immutable codebase sourceIdentity must be a Nix store path"
-    )
-    (expect liveRejectAllowed
-      "dirtyPolicy=reject is only valid for immutable source modes"
-    )
+    (expect immutableSourceIsStoreRoot "immutable codebase sourceIdentity must be a Nix store path")
+    (expect liveRejectAllowed "dirtyPolicy=reject is only valid for immutable source modes")
     # A model with no services is valid as long as it declares something to
     # run: the runtime supports service-less task selections.
     (expect (
       config.nixfied.services != { } || config.nixfied.tasks != { }
     ) "at least one service or task must be declared")
-    (expect endpointHostsLoopback
-      "service endpoint.host must be a loopback IP literal (127.x.x.x or ::1)"
-    )
+    (expect endpointHostsLoopback "service endpoint.host must be a loopback IP literal (127.x.x.x or ::1)")
     (expect connectsToDeclared "service connectsTo targets must be declared services")
     (expect connectsToAcyclic "service connectsTo graph must be acyclic")
     (expect taskIdsStepSafe "task and service ids must match [A-Za-z0-9][A-Za-z0-9_-]* (step-path segments)")
     (expect secretIdsStepSafe "secret ids must match [A-Za-z0-9][A-Za-z0-9_-]*")
-    (expect secretResolversCoherent
-      "secret resolvers must be env-var with envVar only, or file with a confined relative path only"
-    )
-    (expect secretRefsOnlyInEnv
-      "secret placeholders are only valid in invocation.env values"
-    )
-    (expect secretRefsWellFormed
-      "secret placeholders must use the \${secret:<id>} grammar"
-    )
-    (expect secretRefsDeclared
-      "secret placeholders must reference declared nixfied.secrets ids"
-    )
+    (expect secretResolversCoherent "secret resolvers must be env-var with envVar only, or file with a confined relative path only")
+    (expect secretRefsOnlyInEnv "secret placeholders are only valid in invocation.env values")
+    (expect secretRefsWellFormed "secret placeholders must use the \${secret:<id>} grammar")
+    (expect secretRefsDeclared "secret placeholders must reference declared nixfied.secrets ids")
     (expect leavesCoherent "a leaf task must declare an invocation and no steps")
-    (expect compositesCoherent
-      "a composite task carries only steps (no invocation, operationId, or requires) with step-safe names"
-    )
+    (expect compositesCoherent "a composite task carries only steps (no invocation, operationId, or requires) with step-safe names")
     (expect stepTasksDeclared "composite steps must reference declared tasks")
     (expect stepDependsOnSiblings "composite step dependsOn must name a sibling step")
     (expect stepGraphsAcyclic "composite step dependency graph must be acyclic")
     (expect taskGraphAcyclic "the task reference graph must be acyclic")
     (expect leafRequiresDeclared "leaf task requires targets must be declared services")
-    (expect leafNamedRefsInScope
-      "leaf task named endpoint placeholders must reference addressable required services"
-    )
-    (expect leafBareRefsResolvable
-      "leaf task bare endpoint placeholders require a primary service with endpoints"
-    )
-    (expect serviceNamedRefsInScope
-      "service named endpoint placeholders must reference own endpoints or addressable connectsTo services"
-    )
-    (expect endpointLessServicesHaveNoBareRefs
-      "endpoint-less service lifecycle invocations must not use bare endpoint placeholders"
-    )
+    (expect leafNamedRefsInScope "leaf task named endpoint placeholders must reference addressable required services")
+    (expect leafBareRefsResolvable "leaf task bare endpoint placeholders require a primary service with endpoints")
+    (expect serviceNamedRefsInScope "service named endpoint placeholders must reference own endpoints or addressable connectsTo services")
+    (expect endpointLessServicesHaveNoBareRefs "endpoint-less service lifecycle invocations must not use bare endpoint placeholders")
     (expect (duplicateOperationIds == [ ])
       "effective operation ids must be globally unique: ${builtins.concatStringsSep ", " duplicateOperationIds}"
     )
     (expect prepareTasksDeclared "service prepare must reference a declared task")
-    (expect (lib.all (verb: builtins.hasAttr verb tasks) config.nixfied.surface.verbs)
-      "surface.verbs must name declared tasks"
-    )
+    (expect (lib.all (
+      verb: builtins.hasAttr verb tasks
+    ) config.nixfied.surface.verbs) "surface.verbs must name declared tasks")
     (expect
       (lib.all (
         verb:
@@ -389,9 +355,7 @@ let
       ) config.nixfied.surface.verbs)
       "surface.verbs must not collide with the reserved control namespace (run, ps, down, clean, model-check)"
     )
-    (expect combinedGraphAcyclic
-      "the combined connectsTo + prepare-requires service graph must be acyclic"
-    )
+    (expect combinedGraphAcyclic "the combined connectsTo + prepare-requires service graph must be acyclic")
   ];
 in
 lib.foldl' (acc: check: lib.seq check acc) config checks

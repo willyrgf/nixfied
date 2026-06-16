@@ -210,13 +210,17 @@
               nixfied.tasks.example-toolchain.invocation.env.TOOLCHAIN_MODEL = toString toolchainModel;
               nixfied.tasks.negative-no-selection.invocation.env.MINIMAL_MODEL = toString minimalModel;
               nixfied.tasks.negative-undeclared-task.invocation.env.MINIMAL_MODEL = toString minimalModel;
-              nixfied.tasks.negative-failure-identity.invocation.env.NEGATIVE_FAIL_MODEL = toString negativeFailModel;
+              nixfied.tasks.negative-failure-identity.invocation.env.NEGATIVE_FAIL_MODEL =
+                toString negativeFailModel;
               nixfied.tasks.lifecycle-first-run.invocation.env.MINIMAL_MODEL = toString minimalModel;
               nixfied.tasks.lifecycle-second-run.invocation.env.MINIMAL_MODEL = toString minimalModel;
               nixfied.tasks.lifecycle-upgrade-preserve.invocation.env.MINIMAL_B_MODEL = toString minimalModelB;
-              nixfied.tasks.lifecycle-upgrade-epoch.invocation.env.MINIMAL_EPOCH2_MODEL = toString minimalModelEpoch2;
-              nixfied.tasks.lifecycle-tamper-refusal.invocation.env.MINIMAL_EPOCH2_MODEL = toString minimalModelEpoch2;
-              nixfied.tasks.lifecycle-service-lifetime.invocation.env.PERSISTENT_MINIMAL_MODEL = toString persistentMinimalModel;
+              nixfied.tasks.lifecycle-upgrade-epoch.invocation.env.MINIMAL_EPOCH2_MODEL =
+                toString minimalModelEpoch2;
+              nixfied.tasks.lifecycle-tamper-refusal.invocation.env.MINIMAL_EPOCH2_MODEL =
+                toString minimalModelEpoch2;
+              nixfied.tasks.lifecycle-service-lifetime.invocation.env.PERSISTENT_MINIMAL_MODEL =
+                toString persistentMinimalModel;
               nixfied.tasks.lifecycle-purge.invocation.env.PURGE_MINIMAL_MODEL = toString purgeMinimalModel;
               nixfied.tasks.slot-0.invocation.env.DOWNSTREAM_MODEL = toString downstreamModel;
               nixfied.tasks.slot-1.invocation.env.DOWNSTREAM_MODEL = toString downstreamModel;

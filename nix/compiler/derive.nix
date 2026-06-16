@@ -74,8 +74,7 @@ let
   # Effective operation ids: derived by default (docs/DERIVATION_SPEC.md §5.1),
   # declared only to override.
   leafOperationId =
-    name: task:
-    if task.operationId != null then task.operationId else deriveFacts.leafOperationId name;
+    name: task: if task.operationId != null then task.operationId else deriveFacts.leafOperationId name;
   serviceOperationId =
     name: op: declared:
     if declared != null then declared else deriveFacts.serviceOperationId name op;
@@ -125,9 +124,11 @@ let
     builtins.attrNames synthesizedClosures
   );
   closures =
-    assert lib.assertMsg (collidingToolIds == [ ]) "synthesized tool closure ids collide with declared closures: ${builtins.concatStringsSep ", " collidingToolIds}";
+    assert lib.assertMsg (collidingToolIds == [ ])
+      "synthesized tool closure ids collide with declared closures: ${builtins.concatStringsSep ", " collidingToolIds}";
     declaredClosures // synthesizedClosures;
-  closurePackages = mapAttrsToList (_id: closure: closure.package) config.nixfied.closures ++ packageTools;
+  closurePackages =
+    mapAttrsToList (_id: closure: closure.package) config.nixfied.closures ++ packageTools;
 
   # The declarative run[0] resolution rule (docs/DERIVATION_SPEC.md §1.1): the
   # first tool closure whose executable basename equals run[0] provides the
@@ -140,12 +141,15 @@ let
       program = builtins.head invocation.run;
       resolvedId = lib.findFirst (id: baseNameOf closures.${id}.executable == program) null toolIds;
     in
-    assert lib.assertMsg (undeclared == [ ])
-      "${owner}: tools reference undeclared closures: ${builtins.concatStringsSep ", " undeclared}";
-    assert lib.assertMsg (resolvedId != null)
-      "${owner}: run[0] \"${program}\" is not the executable of any declared tool closure";
-    assert lib.assertMsg (!(invocation.env ? PATH))
-      "${owner}: env.PATH is runtime-owned (assembled from the tool roots) and must not be declared";
+    assert lib.assertMsg (
+      undeclared == [ ]
+    ) "${owner}: tools reference undeclared closures: ${builtins.concatStringsSep ", " undeclared}";
+    assert lib.assertMsg (
+      resolvedId != null
+    ) "${owner}: run[0] \"${program}\" is not the executable of any declared tool closure";
+    assert lib.assertMsg (
+      !(invocation.env ? PATH)
+    ) "${owner}: env.PATH is runtime-owned (assembled from the tool roots) and must not be declared";
     {
       tools = toolIds;
       run = invocation.run;
@@ -167,11 +171,10 @@ let
     toolIds = map toolEntryId position.invocation.tools;
     program = builtins.head position.invocation.run;
   }) invocationPositions;
-  derivedBindings =
-    deriveFacts.operationBindings {
-      positions = bindingPositions;
-      inherit executableBasenames;
-    };
+  derivedBindings = deriveFacts.operationBindings {
+    positions = bindingPositions;
+    inherit executableBasenames;
+  };
   declaredOperationIds = map (position: position.operationId) invocationPositions;
   gatedBindings =
     id: declared:
@@ -208,37 +211,39 @@ let
       invocation = resolveInvocation owner op.probe.invocation;
     };
   terminalOf = op: { inherit (op.terminal) success failure; };
-  lifecycleSpec = name: lc: {
-    start = {
-      operationId = serviceOperationId name "start" lc.start.operationId;
-      invocation = resolveInvocation "service ${name} start" lc.start.invocation;
-      terminal = terminalOf lc.start;
+  lifecycleSpec =
+    name: lc:
+    {
+      start = {
+        operationId = serviceOperationId name "start" lc.start.operationId;
+        invocation = resolveInvocation "service ${name} start" lc.start.invocation;
+        terminal = terminalOf lc.start;
+      };
+      ready = {
+        operationId = serviceOperationId name "ready" lc.ready.operationId;
+        probe = probeOf "service ${name} ready probe" lc.ready;
+        terminal = terminalOf lc.ready;
+      };
+      health = {
+        operationId = serviceOperationId name "health" lc.health.operationId;
+        probe = probeOf "service ${name} health probe" lc.health;
+        terminal = terminalOf lc.health;
+      };
+      stop = {
+        operationId = serviceOperationId name "stop" lc.stop.operationId;
+        inherit (lc.stop) signal timeoutMs;
+        terminal = terminalOf lc.stop;
+      };
+      clean = {
+        operationId = serviceOperationId name "clean" lc.clean.operationId;
+        terminal = terminalOf lc.clean;
+      };
+    }
+    // lib.optionalAttrs (lc.prepare.task != null) {
+      prepare = {
+        task = lc.prepare.task;
+      };
     };
-    ready = {
-      operationId = serviceOperationId name "ready" lc.ready.operationId;
-      probe = probeOf "service ${name} ready probe" lc.ready;
-      terminal = terminalOf lc.ready;
-    };
-    health = {
-      operationId = serviceOperationId name "health" lc.health.operationId;
-      probe = probeOf "service ${name} health probe" lc.health;
-      terminal = terminalOf lc.health;
-    };
-    stop = {
-      operationId = serviceOperationId name "stop" lc.stop.operationId;
-      inherit (lc.stop) signal timeoutMs;
-      terminal = terminalOf lc.stop;
-    };
-    clean = {
-      operationId = serviceOperationId name "clean" lc.clean.operationId;
-      terminal = terminalOf lc.clean;
-    };
-  }
-  // lib.optionalAttrs (lc.prepare.task != null) {
-    prepare = {
-      task = lc.prepare.task;
-    };
-  };
 
   # Service identity is no longer emitted: the runtime derives a service's reuse
   # identity from its own lowered contract, so the model carries no identity
@@ -289,9 +294,9 @@ let
     ) "service ${name}: `endpoints` requires `primaryEndpoint`";
     # An endpoint-less service has no tcp probe target: readiness means "the
     # probe answers", so both probes must be invocation probes.
-    assert lib.assertMsg (
-      !endpointLess || (probeKind "ready" == "exec" && probeKind "health" == "exec")
-    ) "service ${name}: an endpoint-less service's ready/health probes must be invocation probes (tcp has no target)";
+    assert lib.assertMsg
+      (!endpointLess || (probeKind "ready" == "exec" && probeKind "health" == "exec"))
+      "service ${name}: an endpoint-less service's ready/health probes must be invocation probes (tcp has no target)";
     # Effects coherence, both directions: declared endpoints require a
     # `network-listener` attestation on the start closure; an endpoint-less
     # start closure must not announce a listener the planner cannot reserve.

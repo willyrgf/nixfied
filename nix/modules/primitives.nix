@@ -25,11 +25,13 @@ let
   # Terminal tokens default per lifecycle class (docs/DERIVATION_SPEC.md §5.2);
   # declare to override.
   terminalDefaults = (import ../lib/derive-facts.nix { inherit lib; }).terminalDefaults;
-  mkTerminal = class: mkOption {
-    type = terminalType;
-    default = terminalDefaults.${class};
-    description = "Typed terminal result tokens (defaulted per lifecycle class).";
-  };
+  mkTerminal =
+    class:
+    mkOption {
+      type = terminalType;
+      default = terminalDefaults.${class};
+      description = "Typed terminal result tokens (defaulted per lifecycle class).";
+    };
   # The one way anything in the model says "run this program" (INVOKE-1):
   # inline, anonymous, fully applied. `tools` is the tool set whose bin roots
   # form the child PATH: declared closure ids (strings) or plain packages the
@@ -133,17 +135,19 @@ let
       };
     };
   };
-  probeOpType = class: types.submodule {
-    options = {
-      inherit operationId;
-      terminal = mkTerminal class;
-      probe = mkOption {
-        type = probeSpecType;
-        default = { };
-        description = "How the op decides the service answers: a tcp-connect of the endpoint, or a bound exec probe.";
+  probeOpType =
+    class:
+    types.submodule {
+      options = {
+        inherit operationId;
+        terminal = mkTerminal class;
+        probe = mkOption {
+          type = probeSpecType;
+          default = { };
+          description = "How the op decides the service answers: a tcp-connect of the endpoint, or a bound exec probe.";
+        };
       };
     };
-  };
   stopOpType = types.submodule {
     options = {
       inherit operationId;

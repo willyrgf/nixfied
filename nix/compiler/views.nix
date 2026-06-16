@@ -85,7 +85,9 @@ in
         in
         "- ${service}: endpoints ${
           builtins.concatStringsSep ", " (builtins.attrNames (serviceSpec.endpoints or { }))
-        } (primary ${serviceSpec.primaryEndpoint or "none"}); operations ${builtins.concatStringsSep ", " classes}"
+        } (primary ${
+          serviceSpec.primaryEndpoint or "none"
+        }); operations ${builtins.concatStringsSep ", " classes}"
       ) serviceNames
     )}
 

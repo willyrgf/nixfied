@@ -87,9 +87,11 @@ rec {
   # flatten(task) — spec §2: emit every reachable leaf with a stable step path,
   # attach whole-subtree sibling dependencies, then return the deterministic
   # topological plan order (first emitted ready node wins).
-  flattenPlan = tasks: root:
+  flattenPlan =
+    tasks: root:
     let
-      emit = taskId: path:
+      emit =
+        taskId: path:
         let
           task = tasks.${taskId};
         in
@@ -102,15 +104,20 @@ rec {
                 value = emit task.steps.${stepName}.task "${path}.${stepName}";
               }) stepNames
             );
-            withDeps = stepName:
+            withDeps =
+              stepName:
               let
-                dependencyPaths = byteSort (lib.unique (
-                  lib.concatMap (dep: map (node: node.stepPath) subtrees.${dep}) (
-                    task.steps.${stepName}.dependsOn or [ ]
+                dependencyPaths = byteSort (
+                  lib.unique (
+                    lib.concatMap (dep: map (node: node.stepPath) subtrees.${dep}) (
+                      task.steps.${stepName}.dependsOn or [ ]
+                    )
                   )
-                ));
+                );
               in
-              map (node: node // { dependsOn = byteSort (lib.unique (node.dependsOn ++ dependencyPaths)); }) subtrees.${stepName};
+              map (
+                node: node // { dependsOn = byteSort (lib.unique (node.dependsOn ++ dependencyPaths)); }
+              ) subtrees.${stepName};
           in
           lib.concatMap withDeps stepNames
         else
@@ -122,7 +129,8 @@ rec {
             }
           ];
       emitted = emit root root;
-      topo = placed: remaining: ordered:
+      topo =
+        placed: remaining: ordered:
         if remaining == [ ] then
           ordered
         else
