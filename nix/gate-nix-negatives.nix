@@ -407,11 +407,83 @@ else
       }
     ))
 
+    (reject "immutable sourceIdentity outside the Nix store" (
+      { ... }:
+      {
+        imports = [ composite ];
+        nixfied.codebases.main.sourceMode = "snapshot";
+        nixfied.codebases.main.sourceIdentity = "/tmp/nixfied-source";
+        nixfied.codebases.main.dirtyPolicy = "reject";
+      }
+    ))
+
     (reject "live workspace dirtyPolicy reject" (
       { ... }:
       {
         imports = [ composite ];
         nixfied.codebases.main.dirtyPolicy = "reject";
+      }
+    ))
+
+    (reject "an env-var secret resolver carrying a file path" (
+      { ... }:
+      {
+        imports = [ composite ];
+        nixfied.secrets.api-token.source = {
+          kind = "env-var";
+          envVar = "API_TOKEN";
+          path = "api-token";
+        };
+      }
+    ))
+
+    (reject "a file secret resolver escaping the secrets dir" (
+      { ... }:
+      {
+        imports = [ composite ];
+        nixfied.secrets.api-token.source = {
+          kind = "file";
+          path = "../api-token";
+        };
+      }
+    ))
+
+    (reject "a secret placeholder outside env" (
+      { lib, ... }:
+      {
+        imports = [ composite ];
+        nixfied.secrets.api-token.source = {
+          kind = "env-var";
+          envVar = "API_TOKEN";
+        };
+        nixfied.tasks.smoke.invocation.run = lib.mkForce [
+          "nixfied-synthetic-helper"
+          "task"
+          "--host"
+          "127.0.0.1"
+          "--port"
+          "\${secret:api-token}"
+        ];
+      }
+    ))
+
+    (reject "an undeclared secret placeholder" (
+      { ... }:
+      {
+        imports = [ composite ];
+        nixfied.tasks.smoke.invocation.env.API_TOKEN = "\${secret:missing}";
+      }
+    ))
+
+    (reject "a malformed secret placeholder" (
+      { ... }:
+      {
+        imports = [ composite ];
+        nixfied.secrets.api-token.source = {
+          kind = "env-var";
+          envVar = "API_TOKEN";
+        };
+        nixfied.tasks.smoke.invocation.env.API_TOKEN = "\${secret:api-token";
       }
     ))
   ]

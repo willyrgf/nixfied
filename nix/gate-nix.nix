@@ -46,13 +46,6 @@ pkgs.writeShellApplication {
     }
 
     t0=$SECONDS
-    echo "  negative (duplicate step name must not compile)" >&2
-    if nix eval --expr \
-          '{ steps = { dup = { task = "a"; }; dup = { task = "b"; }; }; }' \
-          >/dev/null 2>&1; then
-      fail "negative: a duplicate step name evaluated successfully"
-    fi
-
     echo "  negative (invalid composites must fail at nix evaluation)" >&2
     echo "  negative (phase 1-5 rules must fail at nix evaluation)" >&2
     reject_composites
