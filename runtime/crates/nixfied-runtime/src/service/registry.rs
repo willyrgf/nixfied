@@ -6,6 +6,7 @@ use crate::execution::ServiceIdentity;
 
 use crate::admission::Admission;
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
+use crate::redaction::Redactor;
 use crate::registry::leases::lease_ttl_modifier;
 use crate::registry::status::{
     self, DbStatus, PortStatus, ProcessStatus, RunLeaseStatus, RunStatus, ServiceStatus,
@@ -97,6 +98,7 @@ pub fn reserve_service_start(
     let target_json = run.admission.target_json.as_str();
     let source_json = serde_json::to_string(&run.admission.source).map_err(json_error)?;
     let identity = registry.identity().clone();
+    let redactor = registry.redactor().clone();
     let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
     ensure_no_active_lease_transaction(&transaction, service_instance_id, run.run_id)?;
     ensure_no_active_service_transaction(&transaction, service_instance_id)?;
@@ -179,6 +181,7 @@ pub fn reserve_service_start(
     insert_event(
         &transaction,
         &identity,
+        &redactor,
         EventRecord {
             event_type: "service.reserved",
             run_id: Some(run.run_id),
@@ -211,6 +214,7 @@ pub fn record_run_created(
 ) -> RuntimeResult<()> {
     let source_json = serde_json::to_string(&admission.source).map_err(json_error)?;
     let identity = registry.identity().clone();
+    let redactor = registry.redactor().clone();
     let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
     transaction
         .execute(
@@ -240,6 +244,7 @@ pub fn record_run_created(
     insert_event(
         &transaction,
         &identity,
+        &redactor,
         EventRecord {
             event_type: "run.created",
             run_id: Some(run_id),
@@ -283,6 +288,7 @@ pub fn release_service_reservation(
     service_instance_id: &str,
 ) -> RuntimeResult<()> {
     let identity = registry.identity().clone();
+    let redactor = registry.redactor().clone();
     let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
     transaction
         .execute(
@@ -313,6 +319,7 @@ pub fn release_service_reservation(
     insert_event(
         &transaction,
         &identity,
+        &redactor,
         EventRecord {
             event_type: "service.reservation-released",
             run_id: Some(run_id),
@@ -336,6 +343,8 @@ pub fn record_service_start(
     let target_json = run.admission.target_json.as_str();
     let source_json = serde_json::to_string(&run.admission.source).map_err(json_error)?;
     let identity = registry.identity().clone();
+    let redactor = registry.redactor().clone();
+    let process_command_json = redactor.redact_json_str(process.command_json)?;
     let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
     ensure_no_active_lease_transaction(&transaction, service.service_instance_id, run.run_id)?;
     ensure_no_active_service_transaction(&transaction, service.service_instance_id)?;
@@ -429,7 +438,7 @@ pub fn record_service_start(
                 process.pid,
                 process.pgid,
                 process.start_identity,
-                process.command_json,
+                process_command_json,
                 process.run_id,
                 process.service_instance_id,
                 ProcessStatus::Running.as_str(),
@@ -439,6 +448,7 @@ pub fn record_service_start(
     insert_event(
         &transaction,
         &identity,
+        &redactor,
         EventRecord {
             event_type: "run.admitted",
             run_id: Some(run.run_id),
@@ -451,13 +461,14 @@ pub fn record_service_start(
     insert_event(
         &transaction,
         &identity,
+        &redactor,
         EventRecord {
             event_type: "service.starting",
             run_id: Some(run.run_id),
             service_instance_id: Some(service.service_instance_id),
             process_key: Some(process.process_key),
             computed_model_hash: Some(&run.admission.computed_model_hash),
-            payload_json: process.command_json,
+            payload_json: &process_command_json,
         },
     )?;
     transaction.commit().map_err(sql_error)?;
@@ -474,6 +485,7 @@ pub fn mark_endpoint_owner_verified(
     payload_json: &str,
 ) -> RuntimeResult<()> {
     let identity = registry.identity().clone();
+    let redactor = registry.redactor().clone();
     let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
     transaction
         .execute(
@@ -488,6 +500,7 @@ pub fn mark_endpoint_owner_verified(
     insert_event(
         &transaction,
         &identity,
+        &redactor,
         EventRecord {
             event_type: "port.owner-verified",
             run_id: Some(run_id),
@@ -509,6 +522,7 @@ pub fn mark_service_probe_ready(
     computed_model_hash: &str,
 ) -> RuntimeResult<()> {
     let identity = registry.identity().clone();
+    let redactor = registry.redactor().clone();
     let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
     transaction
         .execute(
@@ -519,6 +533,7 @@ pub fn mark_service_probe_ready(
     insert_event(
         &transaction,
         &identity,
+        &redactor,
         EventRecord {
             event_type: "service.probe-ready",
             run_id: Some(run_id),
@@ -540,6 +555,7 @@ pub fn mark_service_stopped(
     computed_model_hash: &str,
 ) -> RuntimeResult<()> {
     let identity = registry.identity().clone();
+    let redactor = registry.redactor().clone();
     let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
     let run_status = transaction
         .query_row(
@@ -619,6 +635,7 @@ pub fn mark_service_stopped(
     insert_event(
         &transaction,
         &identity,
+        &redactor,
         EventRecord {
             event_type,
             run_id: Some(run_id),
@@ -641,6 +658,7 @@ pub fn record_service_canceling(
     payload_json: &str,
 ) -> RuntimeResult<()> {
     let identity = registry.identity().clone();
+    let redactor = registry.redactor().clone();
     let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
     transaction
         .execute(
@@ -666,6 +684,7 @@ pub fn record_service_canceling(
     insert_event(
         &transaction,
         &identity,
+        &redactor,
         EventRecord {
             event_type: "service.canceling",
             run_id: Some(run_id),
@@ -688,6 +707,7 @@ pub fn mark_service_canceled(
     payload_json: &str,
 ) -> RuntimeResult<()> {
     let identity = registry.identity().clone();
+    let redactor = registry.redactor().clone();
     let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
     transaction
         .execute(
@@ -728,6 +748,7 @@ pub fn mark_service_canceled(
     insert_event(
         &transaction,
         &identity,
+        &redactor,
         EventRecord {
             event_type: "service.canceled",
             run_id: Some(run_id),
@@ -751,10 +772,12 @@ pub fn record_service_lifecycle_event(
     payload_json: &str,
 ) -> RuntimeResult<()> {
     let identity = registry.identity().clone();
+    let redactor = registry.redactor().clone();
     let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
     insert_event(
         &transaction,
         &identity,
+        &redactor,
         EventRecord {
             event_type,
             run_id,
@@ -776,6 +799,7 @@ pub fn record_task_canceling(
     payload_json: &str,
 ) -> RuntimeResult<()> {
     let identity = registry.identity().clone();
+    let redactor = registry.redactor().clone();
     let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
     transaction
         .execute(
@@ -800,6 +824,7 @@ pub fn record_task_canceling(
     insert_event(
         &transaction,
         &identity,
+        &redactor,
         EventRecord {
             event_type: "task.canceling",
             run_id: Some(run_id),
@@ -822,6 +847,7 @@ pub fn mark_service_failed(
     payload_json: &str,
 ) -> RuntimeResult<()> {
     let identity = registry.identity().clone();
+    let redactor = registry.redactor().clone();
     let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
     transaction
         .execute(
@@ -858,6 +884,7 @@ pub fn mark_service_failed(
     insert_event(
         &transaction,
         &identity,
+        &redactor,
         EventRecord {
             event_type: "service.failed",
             run_id: Some(run_id),
@@ -880,6 +907,7 @@ pub fn mark_process_escape(
     payload_json: &str,
 ) -> RuntimeResult<()> {
     let identity = registry.identity().clone();
+    let redactor = registry.redactor().clone();
     let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
     transaction
         .execute(
@@ -916,6 +944,7 @@ pub fn mark_process_escape(
     insert_event(
         &transaction,
         &identity,
+        &redactor,
         EventRecord {
             event_type: "service.proc-escape",
             run_id: Some(run_id),
@@ -961,6 +990,8 @@ pub fn record_task_started(
     process: &TaskProcessRecord<'_>,
 ) -> RuntimeResult<()> {
     let identity = registry.identity().clone();
+    let redactor = registry.redactor().clone();
+    let command_json = redactor.redact_json_str(process.command_json)?;
     let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
     transaction
         .execute(
@@ -977,7 +1008,7 @@ pub fn record_task_started(
                 process.pid,
                 process.pgid,
                 process.start_identity,
-                process.command_json,
+                command_json,
                 process.run_id,
                 ProcessStatus::Running.as_str(),
             ],
@@ -986,13 +1017,14 @@ pub fn record_task_started(
     insert_event(
         &transaction,
         &identity,
+        &redactor,
         EventRecord {
             event_type: "task.running",
             run_id: Some(process.run_id),
             service_instance_id: None,
             process_key: Some(process.process_key),
             computed_model_hash: Some(process.computed_model_hash),
-            payload_json: process.command_json,
+            payload_json: &command_json,
         },
     )?;
     transaction.commit().map_err(sql_error)?;
@@ -1034,6 +1066,7 @@ pub fn mark_task_finished(
         ),
     };
     let identity = registry.identity().clone();
+    let redactor = registry.redactor().clone();
     let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
     transaction
         .execute(
@@ -1065,6 +1098,7 @@ pub fn mark_task_finished(
     insert_event(
         &transaction,
         &identity,
+        &redactor,
         EventRecord {
             event_type,
             run_id: Some(run_id),
@@ -1081,8 +1115,10 @@ pub fn mark_task_finished(
 fn insert_event(
     transaction: &rusqlite::Transaction<'_>,
     identity: &RegistryIdentity,
+    redactor: &Redactor,
     event: EventRecord<'_>,
 ) -> RuntimeResult<()> {
+    let payload_json = redactor.redact_json_str(event.payload_json)?;
     transaction
         .execute(
             "
@@ -1101,7 +1137,7 @@ fn insert_event(
                 event.service_instance_id,
                 event.process_key,
                 event.computed_model_hash,
-                event.payload_json,
+                payload_json,
             ],
         )
         .map_err(sql_error)?;

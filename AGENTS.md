@@ -105,9 +105,11 @@ deliberate change to the contract (and matching version bump + docs + tests):
   process group; cancellation propagates to the whole group; a long-lived process
   counts as started only after a registry process record; admission fails if a
   service needs stronger containment than the host supports.
-- **REDACT-1:** runtime-owned persistent output is redacted before write. Secret
-  values are never model data; resolved values exist only in runtime memory and
-  hermetic child environments.
+- **REDACT-1:** runtime-owned persistent output is redacted before write: captured
+  child stdout/stderr, summaries, registry payloads, and runtime error JSON.
+  Secret values are never model data; resolved values exist only in runtime
+  memory and hermetic child environments. REDACT-1 does not govern files or
+  sockets a child writes on its own.
 - **SURFACE-1 (split into its two honest halves):** the runtime/view command
   set (`model`, `schema`, `docs`, `capabilities`, `check`, `run`, `ps`,
   `down`, `clean`) is framework-owned, derived in the views, and listed in
@@ -333,9 +335,8 @@ essentially impossible once clippy + debug pass.
 ## In progress
 
 The remaining capabilities being implemented to close out the old deferred
-list — secret injection/redaction and service lifetime behavior/reuse — are
-designed in `docs/RFC_DEFERRED_STATE_SECRET_SERVICE.md`; each is removed here as
-it ships.
+list — service lifetime behavior/reuse — are designed in
+`docs/RFC_DEFERRED_STATE_SECRET_SERVICE.md`; each is removed here as it ships.
 There is no other backlog: rejected non-goals (a manifest envelope, a dynamic
 runtime adapter protocol, multi-host execution, a required daemon, UI, non-`fail`
 port policies, richer inter-service DAGs, cross-reference memoization, per-tool

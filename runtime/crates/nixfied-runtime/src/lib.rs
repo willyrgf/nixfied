@@ -4,6 +4,7 @@ pub mod control;
 pub mod error;
 pub mod execution;
 pub mod model_loader;
+pub mod redaction;
 pub mod registry;
 pub mod service;
 pub mod slot;

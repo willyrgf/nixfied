@@ -19,6 +19,10 @@ impl ResolvedSecrets {
         self.values.get(id).map(String::as_str)
     }
 
+    pub(crate) fn values(&self) -> impl Iterator<Item = &str> {
+        self.values.values().map(String::as_str)
+    }
+
     #[cfg(test)]
     pub(crate) fn from_values(values: BTreeMap<String, String>) -> Self {
         Self { values }

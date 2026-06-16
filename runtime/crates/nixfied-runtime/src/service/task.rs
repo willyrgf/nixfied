@@ -1,7 +1,6 @@
-use std::fs::File;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -11,6 +10,7 @@ use crate::admission::secrets::ResolvedSecrets;
 use crate::cancellation::{CancellationToken, canceled_error};
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::execution::{ExecTask, ResolvedInvocation};
+use crate::redaction::{RedactedLogRelays, Redactor, child_output};
 use crate::registry::Registry;
 use crate::service::process::{
     ExecSubstitution, SlotEndpoints, StartedService, platform_start_identity, process_group,
@@ -54,6 +54,7 @@ pub struct RunContext<'a> {
     pub source_root: &'a Path,
     pub state_root: &'a Path,
     pub secrets: &'a ResolvedSecrets,
+    pub redactor: &'a Redactor,
 }
 
 impl<'a> RunContext<'a> {
@@ -66,6 +67,7 @@ impl<'a> RunContext<'a> {
             source_root: &service.source_root,
             state_root: &service.state_root,
             secrets: &service.secrets,
+            redactor: &service.redactor,
         }
     }
 }
@@ -156,8 +158,16 @@ pub fn run_dependent_task_cancellable(
     })
     .map_err(|error| RuntimeError::new(ErrorCode::ModelAdmission, error.to_string()))?;
     cancellation.check()?;
-    let mut child = spawn_task(exec, &args, &env, &command_cwd, &stdout_path, &stderr_path)?;
-    let pid = child.id();
+    let mut child = spawn_task(
+        exec,
+        &args,
+        &env,
+        &command_cwd,
+        &stdout_path,
+        &stderr_path,
+        run_context.redactor,
+    )?;
+    let pid = child.child.id();
     let pgid = process_group(pid)?
         .ok_or_else(|| RuntimeError::new(ErrorCode::ProcEscape, "task process disappeared"))?;
     let process_key = format!("process-{}-task-{node_id}-{pid}-{pgid}", run_context.run_id);
@@ -175,12 +185,12 @@ pub fn run_dependent_task_cancellable(
         },
     ) {
         let _ = terminate_process_group(pgid, 1000);
-        let _ = child.wait();
+        let _ = child.child.wait();
         return Err(error);
     }
     let outcome = wait_for_task(
         registry,
-        &mut child,
+        &mut child.child,
         pgid,
         exec.timeout.as_millis() as u64,
         cancellation,
@@ -191,6 +201,7 @@ pub fn run_dependent_task_cancellable(
             computed_model_hash: run_context.computed_model_hash,
         },
     )?;
+    child.logs.join()?;
     let canceled = outcome.canceled;
     let timed_out = outcome.timed_out;
     let success = !canceled
@@ -230,8 +241,11 @@ pub fn run_dependent_task_cancellable(
             .summary_path
             .with_file_name(format!("summary.{node_id}.json")),
     };
-    write_summary(&run)?;
-    let payload_json = serde_json::to_string(&run)
+    write_summary(&run, run_context.redactor)?;
+    let mut payload_value = serde_json::to_value(&run)
+        .map_err(|error| RuntimeError::new(ErrorCode::ModelAdmission, error.to_string()))?;
+    run_context.redactor.redact_value(&mut payload_value);
+    let payload_json = serde_json::to_string(&payload_value)
         .map_err(|error| RuntimeError::new(ErrorCode::ModelAdmission, error.to_string()))?;
     mark_task_finished(
         registry,
@@ -302,7 +316,9 @@ fn spawn_task(
     command_cwd: &Path,
     stdout_path: &Path,
     stderr_path: &Path,
-) -> RuntimeResult<Child> {
+    redactor: &Redactor,
+) -> RuntimeResult<SpawnedTask> {
+    let output = child_output(stdout_path, stderr_path, redactor)?;
     let mut command = Command::new(&exec.executable);
     // Hermetic child environment: declared env + runtime-owned PATH only.
     command
@@ -311,8 +327,8 @@ fn spawn_task(
         .current_dir(command_cwd)
         .envs(env)
         .stdin(crate::service::process::stdin_for(exec.stdin))
-        .stdout(Stdio::from(create_log_file(stdout_path)?))
-        .stderr(Stdio::from(create_log_file(stderr_path)?));
+        .stdout(output.stdout)
+        .stderr(output.stderr);
     unsafe {
         command.pre_exec(|| {
             if libc::setpgid(0, 0) == 0 {
@@ -322,12 +338,21 @@ fn spawn_task(
             }
         });
     }
-    command.spawn().map_err(|error| {
+    let child = command.spawn().map_err(|error| {
         RuntimeError::new(
             ErrorCode::ProcEscape,
             format!("failed to spawn task process: {error}"),
         )
+    })?;
+    Ok(SpawnedTask {
+        child,
+        logs: output.relays,
     })
+}
+
+struct SpawnedTask {
+    child: Child,
+    logs: RedactedLogRelays,
 }
 
 fn wait_for_task(
@@ -431,8 +456,11 @@ fn process_start_identity(pid: u32, pgid: i32, platform_start: Option<&str>) -> 
     .to_string()
 }
 
-fn write_summary(run: &TaskRun) -> RuntimeResult<()> {
-    let summary = serde_json::to_vec_pretty(run)
+fn write_summary(run: &TaskRun, redactor: &Redactor) -> RuntimeResult<()> {
+    let mut summary = serde_json::to_value(run)
+        .map_err(|error| RuntimeError::new(ErrorCode::ModelAdmission, error.to_string()))?;
+    redactor.redact_value(&mut summary);
+    let summary = serde_json::to_vec_pretty(&summary)
         .map_err(|error| RuntimeError::new(ErrorCode::ModelAdmission, error.to_string()))?;
     std::fs::write(&run.summary_path, summary).map_err(|error| {
         RuntimeError::new(
@@ -441,15 +469,6 @@ fn write_summary(run: &TaskRun) -> RuntimeResult<()> {
                 "failed to write task summary {}: {error}",
                 run.summary_path.display()
             ),
-        )
-    })
-}
-
-fn create_log_file(path: &Path) -> RuntimeResult<File> {
-    File::create(path).map_err(|error| {
-        RuntimeError::new(
-            ErrorCode::StateUnwritable,
-            format!("failed to create log file {}: {error}", path.display()),
         )
     })
 }

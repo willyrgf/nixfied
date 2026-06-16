@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use rusqlite::Connection;
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
+use crate::redaction::Redactor;
 use crate::registry::events::{EventInsert, append_event};
 use crate::registry::records::RegistryIdentity;
 use crate::registry::schema;
@@ -11,6 +12,7 @@ pub struct Registry {
     path: PathBuf,
     conn: Connection,
     identity: RegistryIdentity,
+    redactor: Redactor,
 }
 
 impl Registry {
@@ -37,6 +39,7 @@ impl Registry {
             path,
             conn,
             identity: identity.clone(),
+            redactor: Redactor::empty(),
         })
     }
 
@@ -56,7 +59,21 @@ impl Registry {
         &self.identity
     }
 
+    pub fn set_redactor(&mut self, redactor: Redactor) {
+        self.redactor = redactor;
+    }
+
+    pub fn redactor(&self) -> &Redactor {
+        &self.redactor
+    }
+
+    pub fn redact_payload_json(&self, payload_json: &str) -> RuntimeResult<String> {
+        self.redactor.redact_json_str(payload_json)
+    }
+
     pub fn append_event(&mut self, event: &EventInsert) -> RuntimeResult<i64> {
-        append_event(&mut self.conn, &self.identity, event)
+        let mut event = event.clone();
+        event.payload_json = self.redact_payload_json(&event.payload_json)?;
+        append_event(&mut self.conn, &self.identity, &event)
     }
 }

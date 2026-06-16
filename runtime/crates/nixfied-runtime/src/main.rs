@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use nixfied_runtime::cancellation::{CancellationToken, ProcessSignalGuard};
 use nixfied_runtime::execution::plan;
+use nixfied_runtime::redaction::Redactor;
 use nixfied_runtime::registry::{Registry, RegistryIdentity, RunLeaseHeartbeat};
 use nixfied_runtime::service::task::TaskRun;
 use nixfied_runtime::service::{
@@ -168,16 +169,27 @@ fn run_m0(args: &[String]) -> Result<(), RuntimeError> {
     let run_id = new_run_id();
     let (loaded, admission) =
         load_admitted_model(options.model_path.clone(), options.allow_non_store)?;
+    let redactor = Redactor::from_secrets(&admission.secrets);
     let model_path = admission.model_path.clone();
     let computed_model_hash = admission.computed_model_hash.clone();
-    let output = run_m0_admitted(&loaded.model, &admission, &options, run_id, &cancellation)
-        .map_err(|error| error.with_model_if_missing(model_path, computed_model_hash))?;
-    print_json(&output)
+    let output = run_m0_admitted(
+        &loaded.model,
+        &admission,
+        &redactor,
+        &options,
+        run_id,
+        &cancellation,
+    )
+    .map_err(|error| {
+        redactor.redact_error(error.with_model_if_missing(model_path, computed_model_hash))
+    })?;
+    print_json_redacted(&output, &redactor)
 }
 
 fn run_m0_admitted(
     model: &nixfied_model::Model,
     admission: &Admission,
+    redactor: &Redactor,
     options: &RunOptions,
     run_id: String,
     cancellation: &CancellationToken,
@@ -192,6 +204,7 @@ fn run_m0_admitted(
     run_m0_placed(
         model,
         admission,
+        redactor,
         options,
         &run_id,
         &selected_slot,
@@ -219,6 +232,7 @@ fn enrich_run_error(
 fn run_m0_placed(
     model: &nixfied_model::Model,
     admission: &Admission,
+    redactor: &Redactor,
     options: &RunOptions,
     run_id: &str,
     selected_slot: &nixfied_runtime::slot::SelectedSlot<'_>,
@@ -240,6 +254,7 @@ fn run_m0_placed(
             &model.toolchain_id,
         ),
     )?;
+    registry.set_redactor(redactor.clone());
     let _ = nixfied_runtime::control::reconcile_registry(&mut registry)?;
     let upgrade = prepare_slot_state(placement, &identity, &mut registry, options.timeout_ms)?;
     if upgrade.upgraded {
@@ -388,6 +403,7 @@ fn run_m0_placed(
                                 source_root: &source_root,
                                 state_root: &placement.state_root,
                                 secrets: &admission.secrets,
+                                redactor,
                             },
                             &dependencies,
                             node.node_id.as_str(),
@@ -414,7 +430,8 @@ fn run_m0_placed(
         ) {
             Ok(service) => service,
             Err(error) => {
-                let summary = write_failure_run_summary(placement, run_id, &[], &started, &[]);
+                let summary =
+                    write_failure_run_summary(placement, run_id, &[], &started, &[], redactor);
                 teardown(
                     &mut started,
                     &mut registry,
@@ -440,7 +457,8 @@ fn run_m0_placed(
 
         let service = started.last_mut().expect("just pushed a service");
         if let Err(error) = service.wait_for_probe_ready_cancellable(&mut registry, cancellation) {
-            let summary = write_failure_run_summary(placement, run_id, &[], &started, &[]);
+            let summary =
+                write_failure_run_summary(placement, run_id, &[], &started, &[], redactor);
             teardown(
                 &mut started,
                 &mut registry,
@@ -455,7 +473,8 @@ fn run_m0_placed(
         }
         let service = started.last_mut().expect("just pushed a service");
         if let Err(error) = service.check_health_cancellable(&mut registry, cancellation) {
-            let summary = write_failure_run_summary(placement, run_id, &[], &started, &[]);
+            let summary =
+                write_failure_run_summary(placement, run_id, &[], &started, &[], redactor);
             teardown(
                 &mut started,
                 &mut registry,
@@ -527,8 +546,14 @@ fn run_m0_placed(
                 format!("task {task_id} depends on service {name} which was not started"),
             )
             .with_detail("failedNodeId", node.node_id.as_str());
-            let summary =
-                write_failure_run_summary(placement, run_id, &node_results, &started, &task_runs);
+            let summary = write_failure_run_summary(
+                placement,
+                run_id,
+                &node_results,
+                &started,
+                &task_runs,
+                redactor,
+            );
             teardown(&mut started, &mut registry, options.timeout_ms, false);
             stop_lease(lease)?;
             return Err(with_failure_summary(error, summary));
@@ -541,6 +566,7 @@ fn run_m0_placed(
             source_root: &admission.require_source()?.observed_root,
             state_root: &placement.state_root,
             secrets: &admission.secrets,
+            redactor,
         };
         eprintln!("  node {} ({task_id})", node.node_id);
         let task_result = run_dependent_task_cancellable(
@@ -599,6 +625,7 @@ fn run_m0_placed(
                     &node_results,
                     &started,
                     &task_runs,
+                    redactor,
                 );
                 teardown(
                     &mut started,
@@ -623,6 +650,7 @@ fn run_m0_placed(
         &node_results,
         &services_output,
         &task_runs,
+        redactor,
     )?);
     let primary_task = task_runs.last().cloned();
     let output = RunOutput {
@@ -693,12 +721,13 @@ fn write_failure_run_summary(
     nodes: &[NodeResult],
     started: &[StartedService],
     tasks: &[TaskRun],
+    redactor: &Redactor,
 ) -> Option<PathBuf> {
     let services = services_output(started);
     // The run is failing regardless of what the recorded nodes say — a service
     // or spawn failure can leave zero failed nodes, which must not read as
     // success.
-    write_run_summary(placement, run_id, false, nodes, &services, tasks).ok()
+    write_run_summary(placement, run_id, false, nodes, &services, tasks, redactor).ok()
 }
 
 fn with_failure_summary(error: RuntimeError, summary_path: Option<PathBuf>) -> RuntimeError {
@@ -742,15 +771,17 @@ fn write_run_summary(
     nodes: &[NodeResult],
     services: &[ServiceRunOutput],
     tasks: &[TaskRun],
+    redactor: &Redactor,
 ) -> Result<PathBuf, RuntimeError> {
     let path = placement.artifacts_dir.join("run-summary.json");
-    let summary = serde_json::json!({
+    let mut summary = serde_json::json!({
         "runId": run_id,
         "success": run_succeeded && nodes.iter().all(|node| node.success),
         "services": services,
         "nodes": nodes,
         "tasks": tasks,
     });
+    redactor.redact_value(&mut summary);
     let bytes = serde_json::to_vec_pretty(&summary).map_err(|error| {
         RuntimeError::new(
             nixfied_runtime::ErrorCode::ModelAdmission,
@@ -1100,9 +1131,20 @@ fn host_ephemeral_port_range() -> Option<(u32, u32)> {
 }
 
 fn print_json(value: &impl Serialize) -> Result<(), RuntimeError> {
+    print_json_redacted(value, &Redactor::empty())
+}
+
+fn print_json_redacted(value: &impl Serialize, redactor: &Redactor) -> Result<(), RuntimeError> {
+    let mut value = serde_json::to_value(value).map_err(|error| {
+        RuntimeError::new(
+            nixfied_runtime::ErrorCode::ModelAdmission,
+            error.to_string(),
+        )
+    })?;
+    redactor.redact_value(&mut value);
     println!(
         "{}",
-        serde_json::to_string_pretty(value).map_err(|error| RuntimeError::new(
+        serde_json::to_string_pretty(&value).map_err(|error| RuntimeError::new(
             nixfied_runtime::ErrorCode::ModelAdmission,
             error.to_string()
         ))?

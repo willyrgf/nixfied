@@ -203,8 +203,8 @@ The contract carries secret descriptors, never secret values. Descriptors are
 runtime references such as `env-var` and confined `file` resolvers; resolved
 values belong only in runtime memory and hermetic child environments. REDACT-1 is
 scoped to runtime-owned persistent output (logs, summaries, registry payloads,
-captured child output, and error JSON); it cannot govern files or sockets a child
-chooses to write on its own.
+captured child output, and error JSON), which is scrubbed before write; it cannot
+govern files or sockets a child chooses to write on its own.
 
 ## What v1 taught us (and the invariant each lesson produced)
 

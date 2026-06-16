@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::fs::File;
 use std::os::unix::process::CommandExt;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -18,6 +17,7 @@ use crate::cancellation::{CancellationToken, canceled_error};
 use crate::control::reconcile_registry;
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::execution::{ExecProbe, ExecService, OpMeta, Probe, StdinPolicy};
+use crate::redaction::{RedactedLogRelays, Redactor, child_output};
 use crate::registry::{Registry, RunLeaseHeartbeat};
 use crate::service::identity::{
     compute_service_identity, service_address_hash, service_instance_id,
@@ -83,7 +83,9 @@ pub struct StartedService {
     pub source_root: PathBuf,
     pub state_root: PathBuf,
     pub secrets: ResolvedSecrets,
+    pub redactor: Redactor,
     pub owner_token: String,
+    log_relays: Option<RedactedLogRelays>,
 }
 
 impl StartedService {
@@ -238,9 +240,13 @@ impl StartedService {
                 })?;
                 wait_for_tcp_probe(probe, &endpoint.host, endpoint.port, cancellation)
             }
-            Probe::Exec(probe) => {
-                wait_for_exec_probe(probe, &self.source_root, &self.logs_dir, cancellation)
-            }
+            Probe::Exec(probe) => wait_for_exec_probe(
+                probe,
+                &self.source_root,
+                &self.logs_dir,
+                &self.redactor,
+                cancellation,
+            ),
         }
     }
 
@@ -267,6 +273,7 @@ impl StartedService {
         self.terminate_owned(timeout_ms)?;
         let _ = wait_for_child_exit(&mut self.child, 1000)?;
         self.monitor.stop();
+        self.join_log_relays()?;
         mark_service_canceled(
             registry,
             &self.run_id,
@@ -335,6 +342,7 @@ impl StartedService {
         };
         self.record_stop_signaled(registry, escalated, stop_timeout);
         let _ = wait_for_child_exit(&mut self.child, 1000)?;
+        self.join_log_relays()?;
         if let Some(cancellation) = cancellation
             && cancellation.is_canceled()
         {
@@ -449,12 +457,14 @@ impl StartedService {
         best_effort_kill_processes(&descendants.into_values().collect::<Vec<_>>());
         let _ = self.terminate_owned(1000);
         let _ = self.child.wait();
+        let _ = self.join_log_relays();
         self.monitor.stop();
     }
 
     fn cleanup_after_probe_failure(&mut self, registry: &mut Registry, error: &RuntimeError) {
         let _ = self.terminate_owned(1000);
         let _ = wait_for_child_exit(&mut self.child, 1000);
+        let _ = self.join_log_relays();
         self.monitor.stop();
         let payload = serde_json::json!({
             "pid": self.pid,
@@ -527,6 +537,13 @@ impl StartedService {
         self.service.name.as_str()
     }
 
+    fn join_log_relays(&mut self) -> RuntimeResult<()> {
+        match self.log_relays.take() {
+            Some(relays) => relays.join(),
+            None => Ok(()),
+        }
+    }
+
     fn lifecycle_event_context(&self) -> LifecycleEventContext {
         LifecycleEventContext {
             run_id: Some(self.run_id.clone()),
@@ -587,6 +604,7 @@ impl Drop for StartedService {
             }
         }
         self.monitor.stop();
+        let _ = self.join_log_relays();
     }
 }
 
@@ -792,6 +810,8 @@ pub fn start_service_for_slot(
         stderr_path: stderr_path.as_path(),
     })
     .map_err(|error| RuntimeError::new(ErrorCode::ModelAdmission, error.to_string()))?;
+    let redactor = Redactor::from_secrets(&admission.secrets);
+    let output = child_output(&stdout_path, &stderr_path, &redactor)?;
     let mut command = Command::new(&exec.executable);
     // Hermetic child environment: declared env + runtime-owned variables only
     // (PATH from the tool roots); nothing inherited from the runtime's own
@@ -802,8 +822,8 @@ pub fn start_service_for_slot(
         .current_dir(&command_cwd)
         .envs(&env)
         .stdin(stdin_for(exec.stdin))
-        .stdout(Stdio::from(create_log_file(&stdout_path)?))
-        .stderr(Stdio::from(create_log_file(&stderr_path)?));
+        .stdout(output.stdout)
+        .stderr(output.stderr);
     unsafe {
         command.pre_exec(|| {
             if libc::setpgid(0, 0) == 0 {
@@ -902,7 +922,9 @@ pub fn start_service_for_slot(
         source_root: source.observed_root.clone(),
         state_root: placement.state_root.clone(),
         secrets: admission.secrets.clone(),
+        redactor,
         owner_token,
+        log_relays: Some(output.relays),
     };
     if let Err(error) = ensure_foreground_child_alive(&mut started) {
         let payload = serde_json::json!({
@@ -1175,6 +1197,7 @@ pub(crate) struct BoundedExec<'a> {
     pub timeout: Duration,
     pub stdout_path: &'a Path,
     pub stderr_path: &'a Path,
+    pub redactor: &'a Redactor,
     /// Names the operation in spawn/inspect failures.
     pub label: &'a str,
 }
@@ -1193,6 +1216,7 @@ pub(crate) fn run_bounded_exec(
     cancellation: &CancellationToken,
 ) -> RuntimeResult<BoundedExecOutcome> {
     let label = spec.label;
+    let output = child_output(spec.stdout_path, spec.stderr_path, spec.redactor)?;
     let mut command = Command::new(spec.executable);
     // Hermetic child environment, same as the long-lived spawn paths.
     command
@@ -1201,8 +1225,8 @@ pub(crate) fn run_bounded_exec(
         .current_dir(spec.cwd)
         .envs(spec.env)
         .stdin(stdin_for(spec.stdin))
-        .stdout(Stdio::from(create_log_file(spec.stdout_path)?))
-        .stderr(Stdio::from(create_log_file(spec.stderr_path)?));
+        .stdout(output.stdout)
+        .stderr(output.stderr);
     unsafe {
         command.pre_exec(|| {
             if libc::setpgid(0, 0) == 0 {
@@ -1231,6 +1255,7 @@ pub(crate) fn run_bounded_exec(
         if cancellation.is_canceled() {
             let _ = terminate_process_group(pgid, 1000);
             let _ = wait_for_child_exit(&mut child, 1000);
+            output.relays.join()?;
             return Err(canceled_error());
         }
         if let Some(status) = child.try_wait().map_err(|error| {
@@ -1239,11 +1264,13 @@ pub(crate) fn run_bounded_exec(
                 format!("failed to inspect lifecycle operation {label}: {error}"),
             )
         })? {
+            output.relays.join()?;
             return Ok(BoundedExecOutcome::Exited(status));
         }
         if Instant::now() >= deadline {
             let _ = terminate_process_group(pgid, 1000);
             let _ = wait_for_child_exit(&mut child, 1000);
+            output.relays.join()?;
             return Ok(BoundedExecOutcome::TimedOut);
         }
         thread::sleep(Duration::from_millis(10));
@@ -1366,15 +1393,6 @@ fn record_lifecycle_terminal(
         &context.computed_model_hash,
         &payload_json,
     )
-}
-
-fn create_log_file(path: &Path) -> RuntimeResult<File> {
-    File::create(path).map_err(|error| {
-        RuntimeError::new(
-            ErrorCode::StateUnwritable,
-            format!("failed to create log file {}: {error}", path.display()),
-        )
-    })
 }
 
 fn get_process_group(pid: u32) -> RuntimeResult<i32> {

@@ -11,7 +11,7 @@ use serde::Serialize;
 
 use crate::control::{ProcessFilter, down_processes};
 use crate::error::RuntimeResult;
-use crate::registry::{EventInsert, Registry, append_event};
+use crate::registry::{EventInsert, Registry};
 use crate::state::cleanup::{CleanupMode, clean_marked_state};
 use crate::state::marker::{
     MarkerDecision, StateIdentity, commit_slot_marker, evaluate_slot_marker,
@@ -115,9 +115,8 @@ fn record_upgrade_event(
         "cleaned": cleaned,
     })
     .to_string();
-    let registry_identity = registry.identity().clone();
     let mut event = EventInsert::new("state.upgraded", payload);
     event.computed_model_hash = Some(identity.computed_model_hash.clone());
-    append_event(registry.connection_mut(), &registry_identity, &event)?;
+    registry.append_event(&event)?;
     Ok(())
 }

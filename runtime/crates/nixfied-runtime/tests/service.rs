@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 use nixfied_model::{DirtyPolicy, Model, SourceMode};
 use nixfied_runtime::cancellation::CancellationToken;
+use nixfied_runtime::redaction::{REDACTION_TOKEN, Redactor};
 use nixfied_runtime::registry::{Registry, RegistryIdentity};
 use nixfied_runtime::service::registry::{
     PortReservation, RunRecord, TaskProcessRecord, record_task_started, reserve_service_start,
@@ -2726,6 +2727,7 @@ fn task_child_path_is_assembled_from_tool_roots() {
         .expect("run admission resolves source")
         .observed_root
         .clone();
+    let redactor = Redactor::empty();
     let run = run_dependent_task(
         &fixture.placement,
         &mut fixture.registry,
@@ -2735,6 +2737,7 @@ fn task_child_path_is_assembled_from_tool_roots() {
             source_root: &source_root,
             state_root: &fixture.placement.state_root,
             secrets: &fixture.admission.secrets,
+            redactor: &redactor,
         },
         &[],
         &task,
@@ -2786,6 +2789,7 @@ fn task_child_environment_is_hermetic() {
         .expect("run admission resolves source")
         .observed_root
         .clone();
+    let redactor = Redactor::empty();
     let run = run_dependent_task(
         &fixture.placement,
         &mut fixture.registry,
@@ -2795,6 +2799,7 @@ fn task_child_environment_is_hermetic() {
             source_root: &source_root,
             state_root: &fixture.placement.state_root,
             secrets: &fixture.admission.secrets,
+            redactor: &redactor,
         },
         &[],
         &task,
@@ -2823,7 +2828,7 @@ fn task_child_environment_is_hermetic() {
 }
 
 #[test]
-fn task_receives_secret_only_through_declared_env() {
+fn task_secret_output_is_redacted_from_runtime_owned_sinks() {
     let Some(python) = nix_store_executable(&["python3"]) else {
         return;
     };
@@ -2885,6 +2890,10 @@ fn task_receives_secret_only_through_declared_env() {
         String::from_utf8_lossy(&run.stdout),
         String::from_utf8_lossy(&run.stderr)
     );
+    let runtime_stdout = String::from_utf8_lossy(&run.stdout);
+    let runtime_stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(!runtime_stdout.contains("child-visible-secret"));
+    assert!(!runtime_stderr.contains("child-visible-secret"));
     let output: Value = serde_json::from_slice(&run.stdout).expect("run output should be JSON");
     let stdout_path = output["task"]["stdoutPath"]
         .as_str()
@@ -2892,8 +2901,58 @@ fn task_receives_secret_only_through_declared_env() {
 
     assert_eq!(
         fs::read_to_string(stdout_path).expect("task stdout should read"),
-        "child-visible-secret"
+        REDACTION_TOKEN
     );
+    assert_tree_excludes(&state_base, b"child-visible-secret");
+    assert_tree_contains(&state_base, REDACTION_TOKEN.as_bytes());
+}
+
+fn assert_tree_excludes(root: &Path, needle: &[u8]) {
+    for file in files_under(root) {
+        let bytes = fs::read(&file).unwrap_or_else(|error| {
+            panic!("failed to read {}: {error}", file.display());
+        });
+        assert!(
+            !bytes.windows(needle.len()).any(|window| window == needle),
+            "{} contains secret material",
+            file.display()
+        );
+    }
+}
+
+fn assert_tree_contains(root: &Path, needle: &[u8]) {
+    assert!(
+        files_under(root).into_iter().any(|file| {
+            fs::read(&file)
+                .map(|bytes| bytes.windows(needle.len()).any(|window| window == needle))
+                .unwrap_or(false)
+        }),
+        "{} did not contain expected redaction token",
+        root.display()
+    );
+}
+
+fn files_under(root: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(path) = stack.pop() {
+        if path.is_dir() {
+            for entry in fs::read_dir(&path).unwrap_or_else(|error| {
+                panic!("failed to read dir {}: {error}", path.display());
+            }) {
+                stack.push(
+                    entry
+                        .unwrap_or_else(|error| {
+                            panic!("failed to read dir entry under {}: {error}", path.display());
+                        })
+                        .path(),
+                );
+            }
+        } else {
+            files.push(path);
+        }
+    }
+    files
 }
 
 #[test]

@@ -4,6 +4,7 @@ use std::path::Path;
 use crate::cancellation::{CancellationToken, sleep_cancellable};
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::execution::{ExecProbe, TcpProbe};
+use crate::redaction::Redactor;
 use crate::service::process::{
     BoundedExec, BoundedExecOutcome, resolve_exec_cwd, run_bounded_exec,
 };
@@ -59,6 +60,7 @@ pub fn wait_for_exec_probe(
     probe: &ExecProbe,
     source_root: &Path,
     logs_dir: &Path,
+    redactor: &Redactor,
     cancellation: &CancellationToken,
 ) -> RuntimeResult<()> {
     let command_cwd = resolve_exec_cwd(source_root, &probe.exec.cwd)?;
@@ -79,6 +81,7 @@ pub fn wait_for_exec_probe(
                 timeout: probe.timeout,
                 stdout_path: &stdout_path,
                 stderr_path: &stderr_path,
+                redactor,
                 label: &probe.label,
             },
             cancellation,
