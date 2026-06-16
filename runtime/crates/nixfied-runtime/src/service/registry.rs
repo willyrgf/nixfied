@@ -475,6 +475,162 @@ pub fn record_service_start(
     Ok(())
 }
 
+pub fn record_service_borrow(
+    registry: &mut Registry,
+    run: &RunRecord<'_>,
+    service_instance_id: &str,
+    borrowed_process_key: &str,
+) -> RuntimeResult<()> {
+    let generator_json = run.admission.generator_json.as_str();
+    let target_json = run.admission.target_json.as_str();
+    let source_json = serde_json::to_string(&run.admission.source).map_err(json_error)?;
+    let identity = registry.identity().clone();
+    let redactor = registry.redactor().clone();
+    let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
+    transaction
+        .execute(
+            "
+            INSERT OR IGNORE INTO runs (
+              run_id, environment, slot, status, model_path, computed_model_hash,
+              runtime_abi, toolchain_id, generator_json, target_json, source_json,
+              summary_path
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+            ",
+            params![
+                run.run_id,
+                identity.environment.as_str(),
+                identity.slot,
+                RunStatus::ServiceStarting.as_str(),
+                run.admission.model_path.display().to_string(),
+                run.admission.computed_model_hash.as_str(),
+                run.admission.runtime_abi.as_str(),
+                run.admission.toolchain_id.as_str(),
+                generator_json,
+                target_json,
+                source_json,
+                run.placement.summary_path.display().to_string(),
+            ],
+        )
+        .map_err(sql_error)?;
+    transaction
+        .execute(
+            "
+            INSERT INTO run_leases (
+              run_id, environment, slot, service_instance_id, owner_token,
+              heartbeat_at, expires_at, status
+            ) VALUES (
+              ?1, ?2, ?3, ?4, ?5,
+              strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+              strftime('%Y-%m-%dT%H:%M:%fZ','now', ?6),
+              ?7
+            )
+            ",
+            params![
+                run.run_id,
+                identity.environment.as_str(),
+                identity.slot,
+                service_instance_id,
+                run.owner_token,
+                lease_ttl_modifier(),
+                RunLeaseStatus::Active.as_str(),
+            ],
+        )
+        .map_err(sql_error)?;
+    let payload_json = serde_json::json!({
+        "borrowedProcessKey": borrowed_process_key,
+    })
+    .to_string();
+    insert_event(
+        &transaction,
+        &identity,
+        &redactor,
+        EventRecord {
+            event_type: "service.borrowed",
+            run_id: Some(run.run_id),
+            service_instance_id: Some(service_instance_id),
+            process_key: Some(borrowed_process_key),
+            computed_model_hash: Some(&run.admission.computed_model_hash),
+            payload_json: &payload_json,
+        },
+    )?;
+    transaction.commit().map_err(sql_error)?;
+    Ok(())
+}
+
+pub fn release_service_borrow(
+    registry: &mut Registry,
+    run_id: &str,
+    service_instance_id: &str,
+    borrowed_process_key: &str,
+    computed_model_hash: &str,
+    canceled: bool,
+) -> RuntimeResult<()> {
+    let lease_status = if canceled {
+        RunLeaseStatus::Canceled
+    } else {
+        RunLeaseStatus::Completed
+    };
+    let event_type = if canceled {
+        "service.borrow-canceled"
+    } else {
+        "service.borrow-released"
+    };
+    let identity = registry.identity().clone();
+    let redactor = registry.redactor().clone();
+    let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
+    transaction
+        .execute(
+            &format!(
+                "
+            UPDATE run_leases
+            SET status = ?3
+            WHERE run_id = ?1 AND service_instance_id = ?2 AND status IN ({})
+            ",
+                status::sql_in_list(status::LEASE_OPEN)
+            ),
+            params![run_id, service_instance_id, lease_status.as_str()],
+        )
+        .map_err(sql_error)?;
+    if canceled {
+        transaction
+            .execute(
+                "UPDATE runs SET status = ?2 WHERE run_id = ?1",
+                params![run_id, RunStatus::Canceled.as_str()],
+            )
+            .map_err(sql_error)?;
+    } else {
+        transaction
+            .execute(
+                "UPDATE runs SET status = ?2 WHERE run_id = ?1 AND status = ?3",
+                params![
+                    run_id,
+                    RunStatus::Completed.as_str(),
+                    RunStatus::ServiceStarting.as_str()
+                ],
+            )
+            .map_err(sql_error)?;
+    }
+    let payload_json = serde_json::json!({
+        "borrowedProcessKey": borrowed_process_key,
+    })
+    .to_string();
+    insert_event(
+        &transaction,
+        &identity,
+        &redactor,
+        EventRecord {
+            event_type,
+            run_id: Some(run_id),
+            service_instance_id: Some(service_instance_id),
+            process_key: Some(borrowed_process_key),
+            computed_model_hash: Some(computed_model_hash),
+            payload_json: &payload_json,
+        },
+    )?;
+    transaction.commit().map_err(sql_error)?;
+    Ok(())
+}
+
 pub fn mark_endpoint_owner_verified(
     registry: &mut Registry,
     endpoint_key: &str,

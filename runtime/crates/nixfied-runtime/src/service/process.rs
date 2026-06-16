@@ -9,7 +9,8 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use nixfied_model::{ContainmentRequirement, Model};
-use serde::Serialize;
+use rusqlite::{OptionalExtension, params};
+use serde::{Deserialize, Serialize};
 
 use crate::admission::Admission;
 use crate::admission::secrets::{ResolvedSecrets, has_unclosed_secret_ref, secret_refs};
@@ -18,6 +19,7 @@ use crate::control::reconcile_registry;
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::execution::{ExecProbe, ExecService, OpMeta, Probe, StdinPolicy};
 use crate::redaction::{RedactedLogRelays, Redactor, child_output};
+use crate::registry::status::{self, DbStatus, PortStatus, ServiceStatus};
 use crate::registry::{Registry, RunLeaseHeartbeat};
 use crate::service::identity::{
     compute_service_identity, service_address_hash, service_instance_id,
@@ -27,9 +29,9 @@ use crate::service::readiness::{wait_for_exec_probe, wait_for_tcp_probe};
 use crate::service::registry::{
     PortReservation, ProcessRecord, RunRecord, ServiceRecord, ensure_service_start_allowed,
     mark_endpoint_owner_verified, mark_process_escape, mark_service_canceled, mark_service_failed,
-    mark_service_probe_ready, mark_service_stopped, record_service_canceling,
-    record_service_lifecycle_event, record_service_start, release_service_reservation,
-    reserve_service_start,
+    mark_service_probe_ready, mark_service_stopped, record_service_borrow,
+    record_service_canceling, record_service_lifecycle_event, record_service_start,
+    release_service_borrow, release_service_reservation, reserve_service_start,
 };
 use crate::slot::SelectedSlot;
 use crate::state::{CleanupMode, CleanupOutcome, HostPlacement, StateIdentity, clean_marked_state};
@@ -55,8 +57,8 @@ pub struct SelectedEndpoint {
 }
 
 pub struct StartedService {
-    child: Child,
-    monitor: ProcessMonitor,
+    child: Option<Child>,
+    monitor: Option<ProcessMonitor>,
     /// The resolved service: the executor reads lifecycle ops, the bound endpoint,
     /// and the stop signal from here, never from the raw `Model`.
     service: ExecService,
@@ -89,6 +91,19 @@ pub struct StartedService {
 }
 
 impl StartedService {
+    pub fn is_borrowed(&self) -> bool {
+        self.child.is_none()
+    }
+
+    fn child_mut(&mut self) -> RuntimeResult<&mut Child> {
+        self.child.as_mut().ok_or_else(|| {
+            RuntimeError::new(
+                ErrorCode::ModelAdmission,
+                "borrowed service does not own a child process",
+            )
+        })
+    }
+
     pub fn wait_for_probe_ready(&mut self, registry: &mut Registry) -> RuntimeResult<()> {
         self.wait_for_probe_ready_cancellable(registry, &CancellationToken::new())
     }
@@ -98,6 +113,9 @@ impl StartedService {
         registry: &mut Registry,
         cancellation: &CancellationToken,
     ) -> RuntimeResult<()> {
+        if self.is_borrowed() {
+            return Ok(());
+        }
         let record = LifecycleRecord::from_meta(&self.service.ready.meta, "ready");
         let context = self.lifecycle_event_context();
         record_lifecycle_started(registry, &context, &record)?;
@@ -190,6 +208,9 @@ impl StartedService {
         registry: &mut Registry,
         cancellation: &CancellationToken,
     ) -> RuntimeResult<()> {
+        if self.is_borrowed() {
+            return Ok(());
+        }
         let record = LifecycleRecord::from_meta(&self.service.health.meta, "health");
         let context = self.lifecycle_event_context();
         record_lifecycle_started(registry, &context, &record)?;
@@ -256,6 +277,16 @@ impl StartedService {
         timeout_ms: u64,
         reason: &str,
     ) -> RuntimeResult<()> {
+        if self.is_borrowed() {
+            return release_service_borrow(
+                registry,
+                &self.run_id,
+                &self.service_instance_id,
+                &self.process_key,
+                &self.computed_model_hash,
+                true,
+            );
+        }
         let payload = serde_json::json!({
             "pid": self.pid,
             "pgid": self.pgid,
@@ -271,8 +302,10 @@ impl StartedService {
             &payload,
         )?;
         self.terminate_owned(timeout_ms)?;
-        let _ = wait_for_child_exit(&mut self.child, 1000)?;
-        self.monitor.stop();
+        let _ = wait_for_child_exit(self.child_mut()?, 1000)?;
+        if let Some(monitor) = &mut self.monitor {
+            monitor.stop();
+        }
         self.join_log_relays()?;
         mark_service_canceled(
             registry,
@@ -303,6 +336,22 @@ impl StartedService {
         timeout_ms: u64,
         cancellation: Option<&CancellationToken>,
     ) -> RuntimeResult<()> {
+        if self.is_borrowed() {
+            let canceled = cancellation.is_some_and(|token| token.is_canceled());
+            release_service_borrow(
+                registry,
+                &self.run_id,
+                &self.service_instance_id,
+                &self.process_key,
+                &self.computed_model_hash,
+                canceled,
+            )?;
+            return if canceled {
+                Err(canceled_error())
+            } else {
+                Ok(())
+            };
+        }
         let context = self.lifecycle_event_context();
         let stop_record = LifecycleRecord::from_meta(&self.service.stop.meta, "stop");
         if let Some(error) = self.escape_error(registry) {
@@ -317,7 +366,7 @@ impl StartedService {
             return Err(canceled_error());
         }
         record_lifecycle_started(registry, &context, &stop_record)?;
-        if let Some(status) = self.child.try_wait().map_err(|error| {
+        if let Some(status) = self.child_mut()?.try_wait().map_err(|error| {
             RuntimeError::new(
                 ErrorCode::ProcEscape,
                 format!("failed to inspect foreground service child: {error}"),
@@ -341,7 +390,7 @@ impl StartedService {
             }
         };
         self.record_stop_signaled(registry, escalated, stop_timeout);
-        let _ = wait_for_child_exit(&mut self.child, 1000)?;
+        let _ = wait_for_child_exit(self.child_mut()?, 1000)?;
         self.join_log_relays()?;
         if let Some(cancellation) = cancellation
             && cancellation.is_canceled()
@@ -360,7 +409,9 @@ impl StartedService {
                 &self.computed_model_hash,
                 &payload,
             )?;
-            self.monitor.stop();
+            if let Some(monitor) = &mut self.monitor {
+                monitor.stop();
+            }
             mark_service_canceled(
                 registry,
                 &self.run_id,
@@ -378,7 +429,9 @@ impl StartedService {
             let _ = record_lifecycle_failure(registry, &context, &stop_record, &error);
             return Err(error);
         }
-        self.monitor.stop();
+        if let Some(monitor) = &mut self.monitor {
+            monitor.stop();
+        }
         mark_service_stopped(
             registry,
             &self.run_id,
@@ -390,7 +443,10 @@ impl StartedService {
     }
 
     fn escape_error(&mut self, registry: &mut Registry) -> Option<RuntimeError> {
-        let escaped = self.monitor.escaped_descendants();
+        let Some(monitor) = &self.monitor else {
+            return None;
+        };
+        let escaped = monitor.escaped_descendants();
         if escaped.is_empty() {
             return None;
         }
@@ -443,7 +499,9 @@ impl StartedService {
     fn cleanup_after_escape(&mut self) {
         let mut descendants = self
             .monitor
-            .known_descendants()
+            .as_ref()
+            .map(ProcessMonitor::known_descendants)
+            .unwrap_or_default()
             .into_iter()
             .map(|process| (process.pid, process))
             .collect::<BTreeMap<_, _>>();
@@ -456,16 +514,24 @@ impl StartedService {
         }
         best_effort_kill_processes(&descendants.into_values().collect::<Vec<_>>());
         let _ = self.terminate_owned(1000);
-        let _ = self.child.wait();
+        if let Some(child) = &mut self.child {
+            let _ = child.wait();
+        }
         let _ = self.join_log_relays();
-        self.monitor.stop();
+        if let Some(monitor) = &mut self.monitor {
+            monitor.stop();
+        }
     }
 
     fn cleanup_after_probe_failure(&mut self, registry: &mut Registry, error: &RuntimeError) {
         let _ = self.terminate_owned(1000);
-        let _ = wait_for_child_exit(&mut self.child, 1000);
+        if let Some(child) = &mut self.child {
+            let _ = wait_for_child_exit(child, 1000);
+        }
         let _ = self.join_log_relays();
-        self.monitor.stop();
+        if let Some(monitor) = &mut self.monitor {
+            monitor.stop();
+        }
         let payload = serde_json::json!({
             "pid": self.pid,
             "pgid": self.pgid,
@@ -596,14 +662,19 @@ impl StartedService {
 
 impl Drop for StartedService {
     fn drop(&mut self) {
-        if self.child.try_wait().ok().flatten().is_none() {
+        let Some(child) = &mut self.child else {
+            return;
+        };
+        if child.try_wait().ok().flatten().is_none() {
             let _ = signal_process_group(self.pgid, libc::SIGTERM);
-            if wait_for_child_exit(&mut self.child, 100).ok() != Some(true) {
+            if wait_for_child_exit(child, 100).ok() != Some(true) {
                 let _ = signal_process_group(self.pgid, libc::SIGKILL);
-                let _ = wait_for_child_exit(&mut self.child, 1000);
+                let _ = wait_for_child_exit(child, 1000);
             }
         }
-        self.monitor.stop();
+        if let Some(monitor) = &mut self.monitor {
+            monitor.stop();
+        }
         let _ = self.join_log_relays();
     }
 }
@@ -728,8 +799,27 @@ pub fn start_service_for_slot(
         })
         .collect();
     reconcile_registry(registry)?;
-    ensure_service_start_allowed(registry, &run_id, &service_instance_id)?;
     let owner_token = run_owner_token(&run_id);
+    if let Some(started) = borrow_reusable_service(
+        registry,
+        BorrowServiceRequest {
+            admission,
+            placement,
+            run_id: &run_id,
+            owner_token: &owner_token,
+            service,
+            service_name,
+            address_hash: &address_hash,
+            service_instance_id: &service_instance_id,
+            selected_endpoint: selected_endpoint.clone(),
+            selected_endpoints: selected_endpoints.clone(),
+            ready_probe: ready_probe.clone(),
+            health_probe: health_probe.clone(),
+        },
+    )? {
+        return Ok(started);
+    }
+    ensure_service_start_allowed(registry, &run_id, &service_instance_id)?;
     // Reserve the service instance (run row + active lease) AND every endpoint port
     // under the start conflict gates before running any state-mutating lifecycle
     // work, so a second runtime racing the same slot — or any modelled port already
@@ -904,8 +994,8 @@ pub fn start_service_for_slot(
     let strict_process_group = matches!(service.containment, ContainmentRequirement::ProcessGroup);
     let monitor = spawn_process_monitor(pid, pgid, strict_process_group);
     let mut started = StartedService {
-        child,
-        monitor,
+        child: Some(child),
+        monitor: Some(monitor),
         service: service.clone(),
         ready_probe,
         health_probe,
@@ -947,6 +1037,263 @@ pub fn start_service_for_slot(
     }
     record_lifecycle_success(registry, &started_context, &start_record)?;
     Ok(started)
+}
+
+struct BorrowServiceRequest<'a> {
+    admission: &'a Admission,
+    placement: &'a HostPlacement,
+    run_id: &'a str,
+    owner_token: &'a str,
+    service: &'a ExecService,
+    service_name: &'a str,
+    address_hash: &'a str,
+    service_instance_id: &'a str,
+    selected_endpoint: Option<SelectedEndpoint>,
+    selected_endpoints: Vec<SelectedEndpoint>,
+    ready_probe: Probe,
+    health_probe: Probe,
+}
+
+fn borrow_reusable_service(
+    registry: &mut Registry,
+    request: BorrowServiceRequest<'_>,
+) -> RuntimeResult<Option<StartedService>> {
+    let Some(service_row) = stored_service_row(registry, request.service_instance_id)? else {
+        return Ok(None);
+    };
+    let service_status = ServiceStatus::parse_db(&service_row.status)?;
+    if !matches!(
+        service_status,
+        ServiceStatus::ProbeReady | ServiceStatus::Standing | ServiceStatus::Borrowed
+    ) {
+        return Ok(None);
+    }
+    if service_row.service_name != request.service_name
+        || service_row.service_address_hash != request.address_hash
+        || service_row.endpoint_identity_hash != request.service.identity.endpoint_identity_hash
+        || service_row.state_identity_hash != request.service.identity.state_identity_hash
+        || service_row.runtime_compatibility_hash
+            != request.service.identity.runtime_compatibility_hash
+        || service_row.target_identity_hash != request.service.identity.target_identity_hash
+        || service_row.state_root != request.placement.state_root.display().to_string()
+    {
+        return Ok(None);
+    }
+    let Some(process_row) = stored_active_service_process(registry, request.service_instance_id)?
+    else {
+        return Ok(None);
+    };
+    if !process_is_live_with_identity(
+        process_row.pid,
+        process_row.pgid,
+        process_row.start_identity.platform_start.as_deref(),
+    )? {
+        return Ok(None);
+    }
+    let registry_endpoints = stored_active_endpoints(
+        registry,
+        request.service_instance_id,
+        &process_row.process_key,
+    )?;
+    if endpoint_map(&registry_endpoints) != endpoint_map(&request.selected_endpoints) {
+        return Ok(None);
+    }
+    let source = request.admission.require_source()?;
+    record_service_borrow(
+        registry,
+        &RunRecord {
+            run_id: request.run_id,
+            owner_token: request.owner_token,
+            admission: request.admission,
+            placement: request.placement,
+        },
+        request.service_instance_id,
+        &process_row.process_key,
+    )?;
+    Ok(Some(StartedService {
+        child: None,
+        monitor: None,
+        service: request.service.clone(),
+        ready_probe: request.ready_probe,
+        health_probe: request.health_probe,
+        logs_dir: request.placement.logs_dir.clone(),
+        run_id: request.run_id.to_string(),
+        service_instance_id: request.service_instance_id.to_string(),
+        process_key: process_row.process_key,
+        pid: process_row.pid,
+        pgid: process_row.pgid,
+        platform_start_identity: process_row.start_identity.platform_start,
+        selected_endpoint: request.selected_endpoint,
+        selected_endpoints: registry_endpoints,
+        computed_model_hash: request.admission.computed_model_hash.clone(),
+        source_root: source.observed_root.clone(),
+        state_root: request.placement.state_root.clone(),
+        secrets: request.admission.secrets.clone(),
+        redactor: Redactor::from_secrets(&request.admission.secrets),
+        owner_token: request.owner_token.to_string(),
+        log_relays: None,
+    }))
+}
+
+fn endpoint_map(endpoints: &[SelectedEndpoint]) -> BTreeMap<String, SelectedEndpoint> {
+    endpoints
+        .iter()
+        .map(|endpoint| (endpoint.endpoint_id.clone(), endpoint.clone()))
+        .collect()
+}
+
+#[derive(Debug)]
+struct StoredServiceRow {
+    service_name: String,
+    service_address_hash: String,
+    endpoint_identity_hash: String,
+    state_identity_hash: String,
+    runtime_compatibility_hash: String,
+    target_identity_hash: String,
+    status: String,
+    state_root: String,
+}
+
+#[derive(Debug)]
+struct StoredProcessRow {
+    process_key: String,
+    pid: u32,
+    pgid: i32,
+    start_identity: StoredStartIdentity,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredStartIdentity {
+    #[serde(default)]
+    platform_start: Option<String>,
+}
+
+fn stored_service_row(
+    registry: &Registry,
+    service_instance_id: &str,
+) -> RuntimeResult<Option<StoredServiceRow>> {
+    registry
+        .connection()
+        .query_row(
+            "
+            SELECT service_name, service_address_hash, endpoint_identity_hash,
+                   state_identity_hash, runtime_compatibility_hash,
+                   target_identity_hash, status, state_root
+            FROM services
+            WHERE service_instance_id = ?1
+            ",
+            params![service_instance_id],
+            |row| {
+                Ok(StoredServiceRow {
+                    service_name: row.get(0)?,
+                    service_address_hash: row.get(1)?,
+                    endpoint_identity_hash: row.get(2)?,
+                    state_identity_hash: row.get(3)?,
+                    runtime_compatibility_hash: row.get(4)?,
+                    target_identity_hash: row.get(5)?,
+                    status: row.get(6)?,
+                    state_root: row.get(7)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(sql_error)
+}
+
+fn stored_active_service_process(
+    registry: &Registry,
+    service_instance_id: &str,
+) -> RuntimeResult<Option<StoredProcessRow>> {
+    registry
+        .connection()
+        .query_row(
+            &format!(
+                "
+            SELECT process_key, pid, pgid, start_identity
+            FROM processes
+            WHERE service_instance_id = ?1 AND status IN ({})
+            ORDER BY process_key
+            LIMIT 1
+            ",
+                status::sql_in_list(status::PROCESS_ACTIVE)
+            ),
+            params![service_instance_id],
+            |row| {
+                let start_identity_json: String = row.get(3)?;
+                let start_identity = serde_json::from_str::<StoredStartIdentity>(
+                    &start_identity_json,
+                )
+                .map_err(|error| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        3,
+                        rusqlite::types::Type::Text,
+                        Box::new(error),
+                    )
+                })?;
+                Ok(StoredProcessRow {
+                    process_key: row.get(0)?,
+                    pid: row.get(1)?,
+                    pgid: row.get(2)?,
+                    start_identity,
+                })
+            },
+        )
+        .optional()
+        .map_err(sql_error)
+}
+
+fn stored_active_endpoints(
+    registry: &Registry,
+    service_instance_id: &str,
+    process_key: &str,
+) -> RuntimeResult<Vec<SelectedEndpoint>> {
+    let mut statement = registry
+        .connection()
+        .prepare(
+            "
+            SELECT endpoint_key, address, port, owner_process_key
+            FROM ports
+            WHERE service_instance_id = ?1 AND status = ?2
+            ORDER BY endpoint_key
+            ",
+        )
+        .map_err(sql_error)?;
+    let rows = statement
+        .query_map(
+            params![service_instance_id, PortStatus::Active.as_str()],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, u16>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                ))
+            },
+        )
+        .map_err(sql_error)?;
+    let mut endpoints = Vec::new();
+    for row in rows {
+        let (endpoint_key, host, port, owner_process_key) = row.map_err(sql_error)?;
+        if owner_process_key.as_deref() != Some(process_key) {
+            return Ok(Vec::new());
+        }
+        let prefix = format!("{service_instance_id}:");
+        let endpoint_id = endpoint_key.strip_prefix(&prefix).ok_or_else(|| {
+            RuntimeError::new(
+                ErrorCode::RegistryCorrupt,
+                format!(
+                    "endpoint key {endpoint_key} does not belong to service {service_instance_id}"
+                ),
+            )
+        })?;
+        endpoints.push(SelectedEndpoint {
+            endpoint_id: endpoint_id.to_string(),
+            host,
+            port,
+        });
+    }
+    Ok(endpoints)
 }
 
 /// Clean every declared service of the slot, then clean the marker-owned slot
@@ -1027,6 +1374,10 @@ fn clean_marked_slot_state(
 
 fn run_owner_token(run_id: &str) -> String {
     format!("{run_id}:runtime-pid-{}", std::process::id())
+}
+
+fn sql_error(error: rusqlite::Error) -> RuntimeError {
+    RuntimeError::new(ErrorCode::RegistryCorrupt, error.to_string())
 }
 
 /// The slot plan's endpoint map: every service selected for the run, resolved
@@ -1445,7 +1796,7 @@ pub(crate) fn process_group_has_live_member(pgid: i32) -> RuntimeResult<bool> {
 
 fn ensure_foreground_child_alive(service: &mut StartedService) -> RuntimeResult<()> {
     thread::sleep(FOREGROUND_GRACE);
-    match service.child.try_wait().map_err(|error| {
+    match service.child_mut()?.try_wait().map_err(|error| {
         RuntimeError::new(
             ErrorCode::ProcEscape,
             format!("failed to inspect service child: {error}"),

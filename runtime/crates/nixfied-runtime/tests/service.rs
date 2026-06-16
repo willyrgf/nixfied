@@ -1986,6 +1986,151 @@ fn duplicate_active_service_start_is_refused() {
 }
 
 #[test]
+fn probe_ready_service_can_be_borrowed_by_exact_matching_run() {
+    let Some(python) = python3_path() else {
+        return;
+    };
+    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
+    let port = listener.local_addr().expect("local addr").port();
+    drop(listener);
+    let mut fixture =
+        ServiceFixture::new(python, &["-c", python_listener_script(), "${port}"], port);
+    let mut owner = start_synthetic_service(
+        &fixture.model,
+        &fixture.admission,
+        &fixture.placement,
+        &mut fixture.registry,
+        "run-owner",
+        port,
+    )
+    .expect("owner service should start");
+    owner
+        .wait_for_probe_ready(&mut fixture.registry)
+        .expect("owner should become ready before reuse");
+    let owner_process_key = owner.process_key.clone();
+    let owner_pgid = owner.pgid;
+
+    let borrower = start_synthetic_service(
+        &fixture.model,
+        &fixture.admission,
+        &fixture.placement,
+        &mut fixture.registry,
+        "run-borrower",
+        port,
+    )
+    .expect("exact matching run should borrow the ready service");
+
+    assert!(borrower.is_borrowed());
+    assert_eq!(borrower.process_key, owner_process_key);
+    assert_eq!(borrower.pgid, owner_pgid);
+    let active_leases: i64 = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT count(*) FROM run_leases WHERE service_instance_id = ?1 AND status = 'active'",
+            [&owner.service_instance_id],
+            |row| row.get(0),
+        )
+        .expect("active lease count should query");
+    let borrowed_events: i64 = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT count(*) FROM events WHERE event_type = 'service.borrowed'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("borrow event count should query");
+    assert_eq!(active_leases, 2);
+    assert_eq!(borrowed_events, 1);
+
+    borrower
+        .stop(&mut fixture.registry, 1000)
+        .expect("borrower release should not stop owner");
+    assert!(
+        process_group_has_non_zombie_member(owner_pgid),
+        "borrower stop must not signal the owner process group"
+    );
+    let borrower_status: String = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT status FROM run_leases WHERE run_id = 'run-borrower'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("borrower lease status should query");
+    let owner_status: String = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT status FROM run_leases WHERE run_id = 'run-owner'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("owner lease status should query");
+    assert_eq!(borrower_status, "completed");
+    assert_eq!(owner_status, "active");
+
+    owner
+        .stop(&mut fixture.registry, 1000)
+        .expect("owner service should stop");
+}
+
+#[test]
+fn probe_ready_service_with_different_planned_port_is_not_reused() {
+    let Some(python) = python3_path() else {
+        return;
+    };
+    let port_a = available_port_window(2);
+    let port_b = port_a + 1;
+    let mut fixture =
+        ServiceFixture::new(python, &["-c", python_listener_script(), "${port}"], port_a);
+    let mut owner = start_synthetic_service(
+        &fixture.model,
+        &fixture.admission,
+        &fixture.placement,
+        &mut fixture.registry,
+        "run-owner-port",
+        port_a,
+    )
+    .expect("owner service should start");
+    owner
+        .wait_for_probe_ready(&mut fixture.registry)
+        .expect("owner should become ready before mismatch attempt");
+
+    let error = match start_synthetic_service(
+        &fixture.model,
+        &fixture.admission,
+        &fixture.placement,
+        &mut fixture.registry,
+        "run-borrower-port",
+        port_b,
+    ) {
+        Ok(borrower) => {
+            let _ = borrower.stop(&mut fixture.registry, 1000);
+            panic!("different planned port must not be borrowed");
+        }
+        Err(error) => error,
+    };
+
+    assert_eq!(error.code, ErrorCode::LeaseConflict);
+    let borrowed_events: i64 = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT count(*) FROM events WHERE event_type = 'service.borrowed'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("borrow event count should query");
+    assert_eq!(borrowed_events, 0);
+    owner
+        .stop(&mut fixture.registry, 1000)
+        .expect("owner service should stop");
+}
+
+#[test]
 fn ps_reconciles_dead_owned_process_and_port_as_stale() {
     let mut fixture = ServiceFixture::new("/bin/sleep", &["1"], 23187);
     let service = start_synthetic_service(
