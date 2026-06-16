@@ -255,8 +255,8 @@ fn interrupted_run_reconciles_then_upgrade_proceeds() {
         .prepare("run-1", &fixture.identity("hash-a"))
         .expect("first run should prepare a fresh slot");
     // A crashed runtime's leftovers: rows still active, process long dead.
-    fixture
-        .registry()
+    let mut registry = fixture.registry();
+    registry
         .connection_mut()
         .execute_batch(
             "
@@ -269,15 +269,17 @@ fn interrupted_run_reconciles_then_upgrade_proceeds() {
               '/nix/store/model-a/model.json', 'hash-a', 'nixfied-runtime-abi:1',
               'nixfied-toolchain:1', '{}', '{}', '[]', NULL
             );
-            INSERT INTO services (
-              service_instance_id, environment, slot, service_name,
-              service_address_hash, endpoint_identity_hash, state_identity_hash,
-              runtime_compatibility_hash, target_identity_hash, service_lifetime, status,
-              endpoint_json, state_root
-            ) VALUES (
-              'service-interrupted', 'dev', 0, 'synthetic', 'address', 'endpoint',
-              'state', 'runtime', 'target', 'run-scoped', 'probe-ready', '{}', '/tmp/interrupted'
-            );
+            ",
+        )
+        .expect("interrupted run row should insert");
+    insert_registry_service(
+        &mut registry,
+        &RegistryServiceRow::synthetic("service-interrupted", "probe-ready", "/tmp/interrupted"),
+    );
+    registry
+        .connection_mut()
+        .execute_batch(
+            "
             INSERT INTO processes (
               process_key, environment, slot, pid, pgid, start_identity, command_json,
               run_id, service_instance_id, status
@@ -288,7 +290,7 @@ fn interrupted_run_reconciles_then_upgrade_proceeds() {
             );
             ",
         )
-        .expect("interrupted-run rows should insert");
+        .expect("interrupted process row should insert");
 
     let report = fixture
         .prepare("run-2", &fixture.identity("hash-b"))

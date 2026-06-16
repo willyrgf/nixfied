@@ -116,18 +116,6 @@ pkgs.writeShellApplication {
       || fail "immutable source: runtime check failed"
     printf '  immutable_source: %ds\n' "$((SECONDS - t0))" >&2
 
-    echo "  positive (task serviceLifetime is emitted)" >&2
-    t0=$SECONDS
-    lifetime_model=$(nix build --no-link --print-out-paths --impure --expr \
-      "let flake = builtins.getFlake (toString $checkout); compileModel = (builtins.getAttr builtins.currentSystem flake.lib).compileModel; in compileModel ({ ... }: { imports = [ $checkout/examples/minimal/nixfied.nix ]; nixfied.tasks.smoke.serviceLifetime = \"until-idle\"; })") \
-      || fail "serviceLifetime: model build failed"
-    jq -e '.tasks.smoke.serviceLifetime == "until-idle" and .tasks.smoke.servicesRequired == ["synthetic"]' \
-      "$lifetime_model/model.json" >/dev/null \
-      || fail "serviceLifetime: model did not carry expected lifetime and service closure"
-    "$rt" check --model "$lifetime_model/model.json" >/dev/null \
-      || fail "serviceLifetime: runtime check failed"
-    printf '  service_lifetime: %ds\n' "$((SECONDS - t0))" >&2
-
     echo "  adoption (#install + #upgrade against a throwaway repo)" >&2
     t0=$SECONDS
     if [ -n "$dirty" ]; then

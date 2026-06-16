@@ -591,15 +591,17 @@ fn clean_reconciles_stale_refs_before_marker_owned_delete() {
               'computed-hash', 'nixfied-runtime-abi:1',
               'nixfied-toolchain:1', '{}', '{}', '[]', NULL
             );
-            INSERT INTO services (
-              service_instance_id, environment, slot, service_name,
-              service_address_hash, endpoint_identity_hash, state_identity_hash,
-              runtime_compatibility_hash, target_identity_hash, service_lifetime, status,
-              endpoint_json, state_root
-            ) VALUES (
-              'service-stale', 'dev', 0, 'synthetic', 'address', 'endpoint', 'state',
-              'runtime', 'target', 'run-scoped', 'probe-ready', '{}', '/tmp/stale'
-            );
+            ",
+        )
+        .expect("stale run should be inserted");
+    insert_registry_service(
+        &mut registry,
+        &RegistryServiceRow::synthetic("service-stale", "probe-ready", "/tmp/stale"),
+    );
+    registry
+        .connection_mut()
+        .execute_batch(
+            "
             INSERT INTO processes (
               process_key, environment, slot, pid, pgid, start_identity, command_json,
               run_id, service_instance_id, status
@@ -786,15 +788,17 @@ fn clean_marks_active_port_stale_after_owner_process_is_proven_dead() {
               'computed-hash', 'nixfied-runtime-abi:1',
               'nixfied-toolchain:1', '{}', '{}', '[]', NULL
             );
-            INSERT INTO services (
-              service_instance_id, environment, slot, service_name,
-              service_address_hash, endpoint_identity_hash, state_identity_hash,
-              runtime_compatibility_hash, target_identity_hash, service_lifetime, status,
-              endpoint_json, state_root
-            ) VALUES (
-              'service-stale-port', 'dev', 0, 'synthetic', 'address', 'endpoint', 'state',
-              'runtime', 'target', 'run-scoped', 'stopped', '{}', '/tmp/stale-port'
-            );
+            ",
+        )
+        .expect("stale-port run should be inserted");
+    insert_registry_service(
+        &mut registry,
+        &RegistryServiceRow::synthetic("service-stale-port", "stopped", "/tmp/stale-port"),
+    );
+    registry
+        .connection_mut()
+        .execute_batch(
+            "
             INSERT INTO processes (
               process_key, environment, slot, pid, pgid, start_identity, command_json,
               run_id, service_instance_id, status

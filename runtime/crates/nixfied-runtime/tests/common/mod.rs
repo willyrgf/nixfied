@@ -8,6 +8,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use rusqlite::params;
 use serde_json::Value;
 
 use nixfied_model::fixtures::{self, SyntheticModelOptions};
@@ -57,6 +58,81 @@ use nixfied_runtime::{Admission, RuntimeResult};
 /// agnostic — it starts whatever `ServiceSelection` names — so the concrete
 /// `synthetic` name lives here in test support, not in the runtime.
 pub const SYNTHETIC_SERVICE_NAME: &str = "synthetic";
+
+pub struct RegistryServiceRow<'a> {
+    pub service_instance_id: &'a str,
+    pub environment: &'a str,
+    pub slot: i64,
+    pub service_name: &'a str,
+    pub service_address_hash: &'a str,
+    pub endpoint_identity_hash: &'a str,
+    pub state_identity_hash: &'a str,
+    pub runtime_compatibility_hash: &'a str,
+    pub target_identity_hash: &'a str,
+    pub service_lifetime: ServiceLifetime,
+    pub status: &'a str,
+    pub endpoint_json: &'a str,
+    pub state_root: &'a str,
+}
+
+impl<'a> RegistryServiceRow<'a> {
+    pub fn synthetic(service_instance_id: &'a str, status: &'a str, state_root: &'a str) -> Self {
+        Self {
+            service_instance_id,
+            environment: "dev",
+            slot: 0,
+            service_name: SYNTHETIC_SERVICE_NAME,
+            service_address_hash: "address",
+            endpoint_identity_hash: "endpoint",
+            state_identity_hash: "state",
+            runtime_compatibility_hash: "runtime",
+            target_identity_hash: "target",
+            service_lifetime: ServiceLifetime::RunScoped,
+            status,
+            endpoint_json: "{}",
+            state_root,
+        }
+    }
+}
+
+pub fn insert_registry_service(registry: &mut Registry, row: &RegistryServiceRow<'_>) {
+    registry
+        .connection_mut()
+        .execute(
+            "
+            INSERT INTO services (
+              service_instance_id, environment, slot, service_name,
+              service_address_hash, endpoint_identity_hash, state_identity_hash,
+              runtime_compatibility_hash, target_identity_hash, service_lifetime, status,
+              endpoint_json, state_root
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+            ",
+            params![
+                row.service_instance_id,
+                row.environment,
+                row.slot,
+                row.service_name,
+                row.service_address_hash,
+                row.endpoint_identity_hash,
+                row.state_identity_hash,
+                row.runtime_compatibility_hash,
+                row.target_identity_hash,
+                service_lifetime_wire(row.service_lifetime),
+                row.status,
+                row.endpoint_json,
+                row.state_root,
+            ],
+        )
+        .expect("service row should insert");
+}
+
+fn service_lifetime_wire(lifetime: ServiceLifetime) -> &'static str {
+    match lifetime {
+        ServiceLifetime::RunScoped => "run-scoped",
+        ServiceLifetime::UntilIdle => "until-idle",
+        ServiceLifetime::PersistentUntilDown => "persistent-until-down",
+    }
+}
 
 /// Start the fixture's `synthetic` service on the default slot through the
 /// generic runtime API.
