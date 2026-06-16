@@ -53,6 +53,10 @@
           NIXFIED_STATE_DIR="''${stateDir}/example-minimal-inner" \
             nixfied-runtime run --model "$MINIMAL_MODEL/model.json" --task smoke --timeout-ms 60000 \
             > "''${stateDir}/gate-artifacts/example-minimal.json"
+          jq -e '.durationMs >= 0 and .task.durationMs >= 0 and .tasks[0].durationMs >= 0 and .nodes[0].durationMs >= 0' \
+            "''${stateDir}/gate-artifacts/example-minimal.json" >/dev/null
+          jq -e '.durationMs >= 0' \
+            "$(jq -r .runSummaryPath "''${stateDir}/gate-artifacts/example-minimal.json")" >/dev/null
           diff <(nixfied schema       --model "$MINIMAL_MODEL/model.json" | jq -S .) \
                <(jq -S . "$MINIMAL_MODEL/views/schema.json")
           diff <(nixfied capabilities --model "$MINIMAL_MODEL/model.json" | jq -S .) \
@@ -328,6 +332,11 @@
              >/dev/null 2>"''${stateDir}/gate-artifacts/negative-fail.json"; then
             echo "failing composite reported success" >&2; exit 1
           fi
+          run_summary=$(
+            tail -n 1 "''${stateDir}/gate-artifacts/negative-fail.json" \
+              | jq -r '.details.runSummaryPath'
+          )
+          jq -e '.durationMs >= 0' "$run_summary" >/dev/null
           tail -n 1 "''${stateDir}/gate-artifacts/negative-fail.json" \
             | jq -e '.details.runId and .details.stateRoot and .details.logsDir' >/dev/null
         ''
