@@ -316,7 +316,7 @@ fn lower_task(
 ) -> RuntimeResult<LoweredTask> {
     let TaskSpec {
         kind,
-        service_lifetime: _,
+        service_lifetime,
         operation_id: _,
         invocation,
         requires,
@@ -332,7 +332,10 @@ fn lower_task(
     match kind {
         TaskKind::Composite => {
             return Ok(LoweredTask::Composite(lower_composite(
-                task_id, steps, task_ids,
+                task_id,
+                *service_lifetime,
+                steps,
+                task_ids,
             )?));
         }
         TaskKind::Leaf => {}
@@ -407,6 +410,7 @@ fn lower_task(
     require_named_refs_in_scope(&owner, "addressable requires", &exec, &allowed)?;
     Ok(LoweredTask::Leaf(ExecTask {
         task_id: TaskId::new(task_id),
+        service_lifetime: *service_lifetime,
         exec,
         requires,
         success_codes: exit_policy.success_codes.iter().copied().collect(),
@@ -419,6 +423,7 @@ fn lower_task(
 /// slot/selection.
 fn lower_composite(
     task_id: &str,
+    service_lifetime: nixfied_model::ServiceLifetime,
     steps: &BTreeMap<String, StepSpec>,
     task_ids: &BTreeSet<&str>,
 ) -> Result<ExecComposite, Rejection> {
@@ -455,6 +460,7 @@ fn lower_composite(
         .collect::<Result<Vec<_>, Rejection>>()?;
     Ok(ExecComposite {
         task_id: TaskId::new(task_id),
+        service_lifetime,
         steps: lowered,
     })
 }
@@ -1300,6 +1306,10 @@ mod tests {
         assert_eq!(task.exec.args, vec!["--port", "${port}"]);
         assert_eq!(task.exec.tool_roots, vec!["/nix/store/ct/bin"]);
         assert_eq!(task.requires, vec![ServiceId::new("svc")]);
+        assert_eq!(
+            task.service_lifetime,
+            nixfied_model::ServiceLifetime::RunScoped
+        );
     }
 
     #[test]
@@ -1707,7 +1717,7 @@ mod tests {
         let mut value = model_value();
         value["tasks"]["pipeline"] = json!({
             "kind": "composite",
-            "serviceLifetime": "run-scoped",
+            "serviceLifetime": "until-idle",
             "servicesRequired": ["svc"],
             "steps": {
                 "first": { "task": "t" },
@@ -1717,6 +1727,10 @@ mod tests {
         let em = lower(&model_from(value)).expect("composite lowers");
         let composite = em.composites.get("pipeline").expect("composite lowered");
         assert_eq!(composite.steps.len(), 2);
+        assert_eq!(
+            composite.service_lifetime,
+            nixfied_model::ServiceLifetime::UntilIdle
+        );
         assert_eq!(composite.steps[0].name, "first");
         assert_eq!(composite.steps[1].depends_on, vec!["first"]);
         assert!(!em.tasks.contains_key("pipeline"));

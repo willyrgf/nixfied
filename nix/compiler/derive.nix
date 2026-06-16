@@ -326,7 +326,7 @@ let
     if task.kind == "composite" then
       {
         kind = "composite";
-        serviceLifetime = "run-scoped";
+        serviceLifetime = task.serviceLifetime;
         servicesRequired = taskServicesRequired name;
         steps = mapAttrs (_stepName: step: {
           task = step.task;
@@ -336,7 +336,7 @@ let
     else
       {
         kind = "leaf";
-        serviceLifetime = "run-scoped";
+        serviceLifetime = task.serviceLifetime;
         operationId = leafOperationId name task;
         invocation = resolveInvocation "task ${name}" task.invocation;
         requires = task.requires;

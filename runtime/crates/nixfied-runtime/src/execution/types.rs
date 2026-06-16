@@ -7,7 +7,7 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use nixfied_model::{ContainmentRequirement, OperationId, ServiceId, TaskId};
+use nixfied_model::{ContainmentRequirement, OperationId, ServiceId, ServiceLifetime, TaskId};
 pub use nixfied_model::{LoopbackHost, StdinPolicy};
 
 /// A service's reuse identity, computed by the lowering from the service's actual
@@ -42,6 +42,7 @@ pub struct ExecutionModel {
 #[derive(Debug, Clone)]
 pub struct ExecComposite {
     pub task_id: TaskId,
+    pub service_lifetime: ServiceLifetime,
     pub steps: Vec<ExecStep>,
 }
 
@@ -263,6 +264,7 @@ impl From<nixfied_model::StopSignal> for StopSignal {
 #[derive(Debug, Clone)]
 pub struct ExecTask {
     pub task_id: TaskId,
+    pub service_lifetime: ServiceLifetime,
     pub exec: ResolvedInvocation,
     pub requires: Vec<ServiceId>,
     pub success_codes: Vec<i32>,

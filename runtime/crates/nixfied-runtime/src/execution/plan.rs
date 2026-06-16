@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use nixfied_model::{NodeId, ServiceId, TaskId};
+use nixfied_model::{NodeId, ServiceId, ServiceLifetime, TaskId};
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::execution::types::{ExecutionModel, PortWindow};
@@ -16,6 +16,7 @@ use crate::execution::types::{ExecutionModel, PortWindow};
 /// order, and tasks in execution order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunPlan {
+    pub service_lifetime: ServiceLifetime,
     pub services: Vec<ServiceBinding>,
     pub nodes: Vec<PlanNode>,
 }
@@ -43,6 +44,7 @@ pub fn plan(model: &ExecutionModel, task: &TaskId, slot: u32) -> RuntimeResult<R
         )
     })?;
 
+    let service_lifetime = selected_service_lifetime(model, task)?;
     let nodes = flatten_task(model, task)?;
     // The derived service union (docs/DERIVATION_SPEC.md §3): the flattened
     // leaves' requires, closed over connectsTo, in canonical (byte) order —
@@ -90,7 +92,27 @@ pub fn plan(model: &ExecutionModel, task: &TaskId, slot: u32) -> RuntimeResult<R
     // and the union is connectsTo-closed by construction, so the sort always
     // completes.
     let services = order_for_start(assign_ports(&service_names, model, *window, slot)?, model);
-    Ok(RunPlan { services, nodes })
+    Ok(RunPlan {
+        service_lifetime,
+        services,
+        nodes,
+    })
+}
+
+fn selected_service_lifetime(
+    model: &ExecutionModel,
+    task: &TaskId,
+) -> RuntimeResult<ServiceLifetime> {
+    if let Some(task) = model.tasks.get(task) {
+        return Ok(task.service_lifetime);
+    }
+    if let Some(task) = model.composites.get(task) {
+        return Ok(task.service_lifetime);
+    }
+    Err(RuntimeError::new(
+        ErrorCode::ModelAdmission,
+        format!("task {task} is missing"),
+    ))
 }
 
 /// The services a prepare task's leaves require — the prepare-requires edges
@@ -348,7 +370,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::time::Duration;
 
-    use nixfied_model::{ContainmentRequirement, OperationId, ServiceId, TaskId};
+    use nixfied_model::{ContainmentRequirement, OperationId, ServiceId, ServiceLifetime, TaskId};
 
     use crate::execution::ServiceIdentity;
 
@@ -499,6 +521,7 @@ mod tests {
     fn leaf_task(name: &str) -> ExecTask {
         ExecTask {
             task_id: TaskId::new(name),
+            service_lifetime: ServiceLifetime::RunScoped,
             exec: resolved_exec(),
             requires: Vec::new(),
             success_codes: vec![0],
@@ -508,6 +531,7 @@ mod tests {
     fn composite(name: &str, steps: Vec<(&str, &str, Vec<&str>)>) -> ExecComposite {
         ExecComposite {
             task_id: TaskId::new(name),
+            service_lifetime: ServiceLifetime::RunScoped,
             steps: steps
                 .into_iter()
                 .map(|(step, task, deps)| ExecStep {
@@ -589,6 +613,43 @@ mod tests {
     fn flattening_vector_v3_leaf_selection() {
         let em = vector_model(vec!["fmt"], vec![]);
         assert_eq!(plan_paths(&em, "fmt"), vec!["fmt"]);
+    }
+
+    #[test]
+    fn selected_task_lifetime_applies_to_service_union() {
+        let mut leaf = leaf_task("smoke");
+        leaf.service_lifetime = ServiceLifetime::PersistentUntilDown;
+        leaf.requires = vec![ServiceId::new("db")];
+        let mut composite = composite("stack", vec![("smoke", "smoke", vec![])]);
+        composite.service_lifetime = ServiceLifetime::UntilIdle;
+        let mut em = model(vec!["db"], vec![], vec![(0, 23080, 23090)]);
+        em.tasks = BTreeMap::from([(TaskId::new("smoke"), leaf)]);
+        em.composites = BTreeMap::from([(TaskId::new("stack"), composite)]);
+
+        let direct = plan(&em, &TaskId::new("smoke"), 0).expect("leaf plan exists");
+        assert_eq!(
+            direct.service_lifetime,
+            ServiceLifetime::PersistentUntilDown
+        );
+        assert_eq!(
+            direct
+                .services
+                .iter()
+                .map(|binding| binding.service_name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["db"]
+        );
+
+        let nested = plan(&em, &TaskId::new("stack"), 0).expect("composite plan exists");
+        assert_eq!(nested.service_lifetime, ServiceLifetime::UntilIdle);
+        assert_eq!(
+            nested
+                .services
+                .iter()
+                .map(|binding| binding.service_name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["db"]
+        );
     }
 
     #[test]

@@ -418,6 +418,15 @@ let
         default = null;
         description = "Globally unique task operation identifier (leaf only); derived (`task.<name>.run`) unless overridden.";
       };
+      serviceLifetime = mkOption {
+        type = types.enum [
+          "run-scoped"
+          "until-idle"
+          "persistent-until-down"
+        ];
+        default = "run-scoped";
+        description = "Lifetime policy applied to the task's full servicesRequired closure.";
+      };
       invocation = mkOption {
         type = types.nullOr invocationType;
         default = null;
