@@ -48,6 +48,10 @@ substitution: ${port} ${host} ${stateDir} ${port:<name>} ${host:<name>} ${secret
 # The runtime command surfaces every model exposes.
 surface: model schema docs capabilities check run ps down clean
 
+# The run command output projections. Summary is human-facing; json is the
+# structured automation surface; both is the explicit combined diagnostic mode.
+run-output-mode: summary json both
+
 # The closed stop signals the runtime can send.
 signal: TERM INT QUIT HUP
 

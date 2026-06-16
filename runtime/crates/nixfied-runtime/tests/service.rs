@@ -1466,6 +1466,7 @@ fn cli_signal_cancels_run_and_empties_service_group() {
         .arg(&state_base)
         .arg("--timeout-ms")
         .arg("200")
+        .arg("--json")
         .current_dir(&tmp.path)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1594,6 +1595,7 @@ fn cli_signal_during_shutdown_records_canceled_terminal_state() {
         .arg(&state_base)
         .arg("--timeout-ms")
         .arg("1000")
+        .arg("--json")
         .current_dir(&tmp.path)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -3258,6 +3260,7 @@ fn task_secret_output_is_redacted_from_runtime_owned_sinks() {
         .arg(&model_path)
         .arg("--timeout-ms")
         .arg("5000")
+        .arg("--json")
         .current_dir(&tmp.path)
         .env("NIXFIED_STATE_DIR", &state_base)
         .env("NIXFIED_TEST_TASK_SECRET", "child-visible-secret")
@@ -3748,8 +3751,54 @@ fn runtime_drives_full_lifecycle_without_invoking_nix() {
     assert!(run_stderr.contains("  result: ok 1 passed, 0 failed in "));
     assert!(run_stderr.contains("  run-summary: "));
     assert!(run_stderr.contains("  logs: "));
+    assert!(
+        run.stdout.is_empty(),
+        "summary output mode should not write JSON stdout: {}",
+        String::from_utf8_lossy(&run.stdout)
+    );
+
+    let run_json_output = run_binary(
+        "run",
+        &[
+            "--task",
+            "smoke",
+            "--timeout-ms",
+            "5000",
+            "--summary",
+            "--output",
+            "json",
+        ],
+    );
+    assert!(
+        run_json_output.status.success(),
+        "json run failed: {}",
+        String::from_utf8_lossy(&run_json_output.stderr)
+    );
+    let run_json_stderr = String::from_utf8_lossy(&run_json_output.stderr);
+    assert!(
+        !run_json_stderr.contains("  result: "),
+        "json output mode should not write human summary stderr: {run_json_stderr}"
+    );
     let run_json: Value =
-        serde_json::from_slice(&run.stdout).expect("run output should be valid JSON");
+        serde_json::from_slice(&run_json_output.stdout).expect("run output should be valid JSON");
+
+    let run_both_output = run_binary(
+        "run",
+        &["--task", "smoke", "--timeout-ms", "5000", "--both"],
+    );
+    assert!(
+        run_both_output.status.success(),
+        "both run failed: {}",
+        String::from_utf8_lossy(&run_both_output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&run_both_output.stderr)
+            .contains("  result: ok 1 passed, 0 failed in "),
+        "both output mode should include the human summary"
+    );
+    let _: Value =
+        serde_json::from_slice(&run_both_output.stdout).expect("both output should include JSON");
+
     assert_eq!(
         run_json["task"]["success"],
         json!(true),
@@ -3849,6 +3898,7 @@ fn composite_run_keys_evidence_by_step_path() {
         .arg(&model_path)
         .arg("--timeout-ms")
         .arg("5000")
+        .arg("--json")
         .current_dir(&tmp.path)
         .env("NIXFIED_STATE_DIR", &state_base)
         .stdout(Stdio::piped())
@@ -3971,6 +4021,7 @@ fn nested_composite_cancellation_terminates_leaf_process_group() {
         .arg(&model_path)
         .arg("--state-base")
         .arg(&state_base)
+        .arg("--json")
         .current_dir(&tmp.path)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -4099,6 +4150,7 @@ fn composite_starts_full_service_union_before_first_node() {
         .arg(&model_path)
         .arg("--state-base")
         .arg(&state_base)
+        .arg("--json")
         .current_dir(&tmp.path)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -4400,18 +4452,19 @@ fn failed_composite_run_writes_failure_summary() {
     assert!(stderr_text.contains("  result: fail 0 passed, 1 failed in "));
     assert!(stderr_text.contains("  run-summary: "));
     assert!(stderr_text.contains("  logs: "));
-    let error: Value = stderr_json(&output.stderr);
-    assert_eq!(error["code"], json!("TASK_FAILED"));
-    let details = &error["details"];
-    assert!(details["runId"].is_string(), "error must carry the run id");
-    assert!(details["stateRoot"].is_string());
-    assert!(details["logsDir"].is_string());
-    assert_eq!(details["failedNodeId"], json!("wf.fail-node"));
-    let summary_path = details["runSummaryPath"]
-        .as_str()
-        .expect("error must link the run summary");
+    assert!(
+        output.stdout.is_empty(),
+        "summary failure output should not write stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        !stderr_text.contains(r#""code":"TASK_FAILED""#),
+        "summary failure output should not append JSON error payload: {stderr_text}"
+    );
+    let summary_path =
+        find_file(&state_base, "run-summary.json").expect("run summary should exist");
     let summary: Value =
-        serde_json::from_slice(&fs::read(summary_path).expect("run summary should exist"))
+        serde_json::from_slice(&fs::read(&summary_path).expect("run summary should exist"))
             .expect("run summary should parse");
     assert_eq!(summary["success"], json!(false));
     let nodes = summary["nodes"].as_array().expect("nodes should be array");
@@ -4421,10 +4474,49 @@ fn failed_composite_run_writes_failure_summary() {
     assert_eq!(nodes[0]["success"], json!(false));
     assert_eq!(nodes[0]["exitCode"], json!(3));
     assert!(nodes[0]["durationMs"].as_u64().is_some());
-    let stdout_path = details["stdoutPath"]
+    let stdout_path = summary["tasks"][0]["stdoutPath"]
         .as_str()
-        .expect("error must link the failed task stdout");
+        .expect("summary must link the failed task stdout");
     assert!(PathBuf::from(stdout_path).exists());
+
+    let json_state_base = tmp.path.join("state-json");
+    fs::create_dir_all(&json_state_base).expect("json state base should be created");
+    let json_output = Command::new(runtime_binary())
+        .arg("run")
+        .arg("--task")
+        .arg("wf")
+        .arg("--allow-non-store-model")
+        .arg("--model")
+        .arg(&model_path)
+        .arg("--state-base")
+        .arg(&json_state_base)
+        .arg("--json")
+        .current_dir(&tmp.path)
+        .output()
+        .expect("runtime run should execute");
+
+    assert_eq!(json_output.status.code(), Some(30), "TaskFailed exit code");
+    assert!(
+        json_output.stdout.is_empty(),
+        "json failure output should not write stdout: {}",
+        String::from_utf8_lossy(&json_output.stdout)
+    );
+    let json_stderr_text = String::from_utf8_lossy(&json_output.stderr);
+    assert!(
+        !json_stderr_text.contains("  result: "),
+        "json failure output should not include human summary: {json_stderr_text}"
+    );
+    let error: Value = stderr_json(&json_output.stderr);
+    assert_eq!(error["code"], json!("TASK_FAILED"));
+    let details = &error["details"];
+    assert!(details["runId"].is_string(), "error must carry the run id");
+    assert!(details["stateRoot"].is_string());
+    assert!(details["logsDir"].is_string());
+    assert_eq!(details["failedNodeId"], json!("wf.fail-node"));
+    let json_summary_path = details["runSummaryPath"]
+        .as_str()
+        .expect("error must link the run summary");
+    assert!(PathBuf::from(json_summary_path).exists());
 }
 
 #[test]
@@ -4470,6 +4562,7 @@ fn service_failure_before_any_node_writes_failed_summary() {
         .arg(&model_path)
         .arg("--state-base")
         .arg(&state_base)
+        .arg("--json")
         .current_dir(&tmp.path)
         .output()
         .expect("runtime run should execute");

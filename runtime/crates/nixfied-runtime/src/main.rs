@@ -86,18 +86,32 @@ struct RuntimeSelection {
     slot: Option<u32>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RunOutputMode {
+    Summary,
+    Json,
+    Both,
+}
+
+impl RunOutputMode {
+    fn emit_summary(self) -> bool {
+        matches!(self, Self::Summary | Self::Both)
+    }
+
+    fn emit_json(self) -> bool {
+        matches!(self, Self::Json | Self::Both)
+    }
+}
+
 fn main() {
-    if let Err(error) = run() {
-        eprintln!(
-            "{}",
-            serde_json::to_string(&error).unwrap_or_else(|_| error.to_string())
-        );
+    let args = std::env::args().skip(1).collect::<Vec<_>>();
+    if let Err(error) = run(&args) {
+        print_error(&args, &error);
         std::process::exit(exit_code(&error));
     }
 }
 
-fn run() -> Result<(), RuntimeError> {
-    let args = std::env::args().skip(1).collect::<Vec<_>>();
+fn run(args: &[String]) -> Result<(), RuntimeError> {
     let command = args.first().map(String::as_str).unwrap_or("check");
     match command {
         "check" => check(args.get(1..).unwrap_or(&[])),
@@ -110,6 +124,27 @@ fn run() -> Result<(), RuntimeError> {
             format!("unsupported runtime command: {command}"),
         )
         .with_detail("command", command)),
+    }
+}
+
+fn print_error(args: &[String], error: &RuntimeError) {
+    if args.first().map(String::as_str) == Some("run") {
+        match parse_run_output_mode_lossy(args.get(1..).unwrap_or(&[])) {
+            RunOutputMode::Summary => {
+                eprintln!("  error: {}: {}", error_code_wire(error), error.message);
+            }
+            RunOutputMode::Json | RunOutputMode::Both => {
+                eprintln!(
+                    "{}",
+                    serde_json::to_string(error).unwrap_or_else(|_| error.to_string())
+                );
+            }
+        }
+    } else {
+        eprintln!(
+            "{}",
+            serde_json::to_string(error).unwrap_or_else(|_| error.to_string())
+        );
     }
 }
 
@@ -187,7 +222,10 @@ fn run_m0(args: &[String]) -> Result<(), RuntimeError> {
     .map_err(|error| {
         redactor.redact_error(error.with_model_if_missing(model_path, computed_model_hash))
     })?;
-    print_json_redacted(&output, &redactor)
+    if options.output_mode.emit_json() {
+        print_json_redacted(&output, &redactor)?;
+    }
+    Ok(())
 }
 
 fn run_m0_admitted(
@@ -262,7 +300,7 @@ fn run_m0_placed(
     registry.set_redactor(redactor.clone());
     let _ = nixfied_runtime::control::reconcile_registry(&mut registry)?;
     let upgrade = prepare_slot_state(placement, &identity, &mut registry, options.timeout_ms)?;
-    if upgrade.upgraded {
+    if upgrade.upgraded && options.output_mode.emit_summary() {
         eprintln!(
             "  upgraded slot state from model {} (state {})",
             upgrade.from_model_hash.as_deref().unwrap_or("unknown"),
@@ -346,7 +384,9 @@ fn run_m0_placed(
     let source_root = admission.require_source()?.observed_root.clone();
     for binding in &plan.services {
         let service_name = binding.service_name.as_str();
-        eprintln!("  starting service {service_name}");
+        if options.output_mode.emit_summary() {
+            eprintln!("  starting service {service_name}");
+        }
 
         // prepare-as-task: the runner executes the prepare task's flattened
         // nodes inside the service reservation, resolving each leaf's
@@ -362,6 +402,7 @@ fn run_m0_placed(
                     format!("service {service_name} is missing"),
                 )
             })?;
+        let output_mode = options.output_mode;
         let prepare_runner: Option<nixfied_runtime::service::process::PrepareRunner<'_>> =
             service_def.prepare.clone().map(|prepare_task| {
                 let started_services = &started;
@@ -398,7 +439,9 @@ fn run_m0_placed(
                             };
                             dependencies.push(dependency);
                         }
-                        eprintln!("  prepare node {} ({})", node.node_id, node.task_id);
+                        if output_mode.emit_summary() {
+                            eprintln!("  prepare node {} ({})", node.node_id, node.task_id);
+                        }
                         run_dependent_task_cancellable(
                             placement,
                             registry,
@@ -447,6 +490,7 @@ fn run_m0_placed(
                     redactor,
                 );
                 print_run_footer(
+                    options.output_mode,
                     false,
                     &[],
                     duration_ms,
@@ -489,6 +533,7 @@ fn run_m0_placed(
                 redactor,
             );
             print_run_footer(
+                options.output_mode,
                 false,
                 &[],
                 duration_ms,
@@ -520,6 +565,7 @@ fn run_m0_placed(
                 redactor,
             );
             print_run_footer(
+                options.output_mode,
                 false,
                 &[],
                 duration_ms,
@@ -539,14 +585,16 @@ fn run_m0_placed(
             ));
         }
         let service = started.last().expect("just started a service");
-        match &service.selected_endpoint {
-            Some(endpoint) => eprintln!(
-                "  service {} ready at {}:{}",
-                service.service_name(),
-                endpoint.host,
-                endpoint.port
-            ),
-            None => eprintln!("  service {} ready (endpoint-less)", service.service_name()),
+        if options.output_mode.emit_summary() {
+            match &service.selected_endpoint {
+                Some(endpoint) => eprintln!(
+                    "  service {} ready at {}:{}",
+                    service.service_name(),
+                    endpoint.host,
+                    endpoint.port
+                ),
+                None => eprintln!("  service {} ready (endpoint-less)", service.service_name()),
+            }
         }
     }
 
@@ -564,6 +612,7 @@ fn run_m0_placed(
             redactor,
         );
         print_run_footer(
+            options.output_mode,
             false,
             &node_results,
             duration_ms,
@@ -625,6 +674,7 @@ fn run_m0_placed(
                 redactor,
             );
             print_run_footer(
+                options.output_mode,
                 false,
                 &node_results,
                 duration_ms,
@@ -656,11 +706,13 @@ fn run_m0_placed(
         );
         match task_result {
             Ok(task_run) => {
-                eprintln!(
-                    "  ok {} ({task_id}) {}",
-                    node.node_id,
-                    human_duration(task_run.duration_ms)
-                );
+                if options.output_mode.emit_summary() {
+                    eprintln!(
+                        "  ok {} ({task_id}) {}",
+                        node.node_id,
+                        human_duration(task_run.duration_ms)
+                    );
+                }
                 node_results.push(NodeResult {
                     node_id: node.node_id.as_str().to_string(),
                     task_id: task_id.as_str().to_string(),
@@ -684,13 +736,15 @@ fn run_m0_placed(
                     .get("taskRun")
                     .and_then(|value| serde_json::from_value::<TaskRun>(value.clone()).ok());
                 if let Some(task_run) = failed_run {
-                    eprintln!(
-                        "  fail {} ({task_id}) {} exit={}",
-                        node.node_id,
-                        human_duration(task_run.duration_ms),
-                        human_exit_code(task_run.exit_code)
-                    );
-                    eprintln!("    stderr: {}", human_path(&task_run.stderr_path));
+                    if options.output_mode.emit_summary() {
+                        eprintln!(
+                            "  fail {} ({task_id}) {} exit={}",
+                            node.node_id,
+                            human_duration(task_run.duration_ms),
+                            human_exit_code(task_run.exit_code)
+                        );
+                        eprintln!("    stderr: {}", human_path(&task_run.stderr_path));
+                    }
                     error = error
                         .with_detail("stdoutPath", &task_run.stdout_path)
                         .with_detail("stderrPath", &task_run.stderr_path)
@@ -706,7 +760,7 @@ fn run_m0_placed(
                         summary_path: task_run.summary_path.clone(),
                     });
                     task_runs.push(task_run);
-                } else {
+                } else if options.output_mode.emit_summary() {
                     eprintln!("  fail {} ({task_id})", node.node_id);
                 }
                 let duration_ms = elapsed_ms(run_started);
@@ -720,6 +774,7 @@ fn run_m0_placed(
                     redactor,
                 );
                 print_run_footer(
+                    options.output_mode,
                     false,
                     &node_results,
                     duration_ms,
@@ -754,6 +809,7 @@ fn run_m0_placed(
             redactor,
         );
         print_run_footer(
+            options.output_mode,
             false,
             &node_results,
             duration_ms,
@@ -789,6 +845,7 @@ fn run_m0_placed(
                 redactor,
             );
             print_run_footer(
+                options.output_mode,
                 false,
                 &node_results,
                 duration_ms,
@@ -822,6 +879,7 @@ fn run_m0_placed(
         redactor,
     })?);
     print_run_footer(
+        options.output_mode,
         true,
         &node_results,
         duration_ms,
@@ -963,12 +1021,16 @@ fn human_exit_code(exit_code: Option<i32>) -> String {
 }
 
 fn print_run_footer(
+    output_mode: RunOutputMode,
     run_succeeded: bool,
     nodes: &[NodeResult],
     duration_ms: u64,
     run_summary_path: Option<&Path>,
     logs_dir: &Path,
 ) {
+    if !output_mode.emit_summary() {
+        return;
+    }
     if run_succeeded {
         eprintln!(
             "  result: ok {} passed, 0 failed in {}",
@@ -1052,6 +1114,7 @@ struct RunOptions {
     allow_non_store: bool,
     state_base: PathBuf,
     timeout_ms: u64,
+    output_mode: RunOutputMode,
     selection: RuntimeSelection,
     task: Option<String>,
 }
@@ -1073,6 +1136,42 @@ fn selection_required_error(model: &nixfied_runtime::execution::ExecutionModel) 
         ),
     )
     .with_detail("declaredTasks", &declared)
+}
+
+fn parse_run_output_mode(value: &str) -> Result<RunOutputMode, RuntimeError> {
+    match value {
+        "summary" => Ok(RunOutputMode::Summary),
+        "json" => Ok(RunOutputMode::Json),
+        "both" => Ok(RunOutputMode::Both),
+        other => Err(RuntimeError::new(
+            nixfied_runtime::ErrorCode::ModelAdmission,
+            format!("invalid --output value {other}: expected summary, json, or both"),
+        )),
+    }
+}
+
+fn parse_run_output_mode_lossy(args: &[String]) -> RunOutputMode {
+    let mut output_mode = RunOutputMode::Summary;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--summary" => output_mode = RunOutputMode::Summary,
+            "--json" => output_mode = RunOutputMode::Json,
+            "--both" => output_mode = RunOutputMode::Both,
+            "--output" => {
+                index += 1;
+                if let Some(value) = args
+                    .get(index)
+                    .and_then(|value| parse_run_output_mode(value).ok())
+                {
+                    output_mode = value;
+                }
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    output_mode
 }
 
 fn run_control(command: ControlCommand, args: &[String]) -> Result<(), RuntimeError> {
@@ -1126,6 +1225,7 @@ fn parse_run_options(args: &[String]) -> Result<RunOptions, RuntimeError> {
     let mut allow_non_store = false;
     let mut state_base = None;
     let mut timeout_ms = 5000;
+    let mut output_mode = RunOutputMode::Summary;
     let mut slot = None;
     let mut task = None;
     let mut index = 0;
@@ -1174,6 +1274,25 @@ fn parse_run_options(args: &[String]) -> Result<RunOptions, RuntimeError> {
                     )
                 })?;
             }
+            "--output" => {
+                index += 1;
+                let value = args.get(index).ok_or_else(|| {
+                    RuntimeError::new(
+                        nixfied_runtime::ErrorCode::ModelAdmission,
+                        "missing --output value",
+                    )
+                })?;
+                output_mode = parse_run_output_mode(value)?;
+            }
+            "--summary" => {
+                output_mode = RunOutputMode::Summary;
+            }
+            "--json" => {
+                output_mode = RunOutputMode::Json;
+            }
+            "--both" => {
+                output_mode = RunOutputMode::Both;
+            }
             other => {
                 return Err(RuntimeError::new(
                     nixfied_runtime::ErrorCode::ModelAdmission,
@@ -1195,6 +1314,7 @@ fn parse_run_options(args: &[String]) -> Result<RunOptions, RuntimeError> {
         allow_non_store,
         state_base,
         timeout_ms,
+        output_mode,
         selection: RuntimeSelection { slot },
         task,
     })
@@ -1366,6 +1486,13 @@ fn host_ephemeral_port_range() -> Option<(u32, u32)> {
 
 fn print_json(value: &impl Serialize) -> Result<(), RuntimeError> {
     print_json_redacted(value, &Redactor::empty())
+}
+
+fn error_code_wire(error: &RuntimeError) -> String {
+    serde_json::to_value(error.code)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_string))
+        .unwrap_or_else(|| format!("{:?}", error.code))
 }
 
 fn print_json_redacted(value: &impl Serialize, redactor: &Redactor) -> Result<(), RuntimeError> {
