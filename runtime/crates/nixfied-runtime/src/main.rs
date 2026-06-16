@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use nixfied_model::ServiceLifetime;
@@ -436,14 +436,22 @@ fn run_m0_placed(
         ) {
             Ok(service) => service,
             Err(error) => {
+                let duration_ms = elapsed_ms(run_started);
                 let summary = write_failure_run_summary(
                     placement,
                     run_id,
-                    elapsed_ms(run_started),
+                    duration_ms,
                     &[],
                     &started,
                     &[],
                     redactor,
+                );
+                print_run_footer(
+                    false,
+                    &[],
+                    duration_ms,
+                    summary.as_deref(),
+                    &placement.logs_dir,
                 );
                 teardown(
                     &mut started,
@@ -470,14 +478,22 @@ fn run_m0_placed(
 
         let service = started.last_mut().expect("just pushed a service");
         if let Err(error) = service.wait_for_probe_ready_cancellable(&mut registry, cancellation) {
+            let duration_ms = elapsed_ms(run_started);
             let summary = write_failure_run_summary(
                 placement,
                 run_id,
-                elapsed_ms(run_started),
+                duration_ms,
                 &[],
                 &started,
                 &[],
                 redactor,
+            );
+            print_run_footer(
+                false,
+                &[],
+                duration_ms,
+                summary.as_deref(),
+                &placement.logs_dir,
             );
             teardown(
                 &mut started,
@@ -493,14 +509,22 @@ fn run_m0_placed(
         }
         let service = started.last_mut().expect("just pushed a service");
         if let Err(error) = service.check_health_cancellable(&mut registry, cancellation) {
+            let duration_ms = elapsed_ms(run_started);
             let summary = write_failure_run_summary(
                 placement,
                 run_id,
-                elapsed_ms(run_started),
+                duration_ms,
                 &[],
                 &started,
                 &[],
                 redactor,
+            );
+            print_run_footer(
+                false,
+                &[],
+                duration_ms,
+                summary.as_deref(),
+                &placement.logs_dir,
             );
             teardown(
                 &mut started,
@@ -529,14 +553,22 @@ fn run_m0_placed(
     let mut task_runs: Vec<TaskRun> = Vec::new();
     let mut node_results: Vec<NodeResult> = Vec::new();
     if let Err(error) = cancellation.check() {
+        let duration_ms = elapsed_ms(run_started);
         let summary = write_failure_run_summary(
             placement,
             run_id,
-            elapsed_ms(run_started),
+            duration_ms,
             &node_results,
             &started,
             &task_runs,
             redactor,
+        );
+        print_run_footer(
+            false,
+            &node_results,
+            duration_ms,
+            summary.as_deref(),
+            &placement.logs_dir,
         );
         teardown(&mut started, &mut registry, options.timeout_ms, true);
         stop_lease(lease)?;
@@ -582,14 +614,22 @@ fn run_m0_placed(
                 format!("task {task_id} depends on service {name} which was not started"),
             )
             .with_detail("failedNodeId", node.node_id.as_str());
+            let duration_ms = elapsed_ms(run_started);
             let summary = write_failure_run_summary(
                 placement,
                 run_id,
-                elapsed_ms(run_started),
+                duration_ms,
                 &node_results,
                 &started,
                 &task_runs,
                 redactor,
+            );
+            print_run_footer(
+                false,
+                &node_results,
+                duration_ms,
+                summary.as_deref(),
+                &placement.logs_dir,
             );
             teardown(&mut started, &mut registry, options.timeout_ms, false);
             stop_lease(lease)?;
@@ -605,7 +645,6 @@ fn run_m0_placed(
             secrets: &admission.secrets,
             redactor,
         };
-        eprintln!("  node {} ({task_id})", node.node_id);
         let task_result = run_dependent_task_cancellable(
             placement,
             &mut registry,
@@ -617,7 +656,11 @@ fn run_m0_placed(
         );
         match task_result {
             Ok(task_run) => {
-                eprintln!("  node {} ok", node.node_id);
+                eprintln!(
+                    "  ok {} ({task_id}) {}",
+                    node.node_id,
+                    human_duration(task_run.duration_ms)
+                );
                 node_results.push(NodeResult {
                     node_id: node.node_id.as_str().to_string(),
                     task_id: task_id.as_str().to_string(),
@@ -631,7 +674,6 @@ fn run_m0_placed(
                 task_runs.push(task_run);
             }
             Err(error) => {
-                eprintln!("  node {} failed", node.node_id);
                 // The failed task's evidence rides on the error (see
                 // run_dependent_task_cancellable); fold it into the node
                 // results so the failure summary records the failed node
@@ -642,6 +684,13 @@ fn run_m0_placed(
                     .get("taskRun")
                     .and_then(|value| serde_json::from_value::<TaskRun>(value.clone()).ok());
                 if let Some(task_run) = failed_run {
+                    eprintln!(
+                        "  fail {} ({task_id}) {} exit={}",
+                        node.node_id,
+                        human_duration(task_run.duration_ms),
+                        human_exit_code(task_run.exit_code)
+                    );
+                    eprintln!("    stderr: {}", human_path(&task_run.stderr_path));
                     error = error
                         .with_detail("stdoutPath", &task_run.stdout_path)
                         .with_detail("stderrPath", &task_run.stderr_path)
@@ -657,15 +706,25 @@ fn run_m0_placed(
                         summary_path: task_run.summary_path.clone(),
                     });
                     task_runs.push(task_run);
+                } else {
+                    eprintln!("  fail {} ({task_id})", node.node_id);
                 }
+                let duration_ms = elapsed_ms(run_started);
                 let summary = write_failure_run_summary(
                     placement,
                     run_id,
-                    elapsed_ms(run_started),
+                    duration_ms,
                     &node_results,
                     &started,
                     &task_runs,
                     redactor,
+                );
+                print_run_footer(
+                    false,
+                    &node_results,
+                    duration_ms,
+                    summary.as_deref(),
+                    &placement.logs_dir,
                 );
                 teardown(
                     &mut started,
@@ -684,14 +743,22 @@ fn run_m0_placed(
     let services_output = services_output(&started);
 
     if cancellation.is_canceled() {
+        let duration_ms = elapsed_ms(run_started);
         let summary = write_failure_run_summary_from_services(
             placement,
             run_id,
-            elapsed_ms(run_started),
+            duration_ms,
             &node_results,
             &services_output,
             &task_runs,
             redactor,
+        );
+        print_run_footer(
+            false,
+            &node_results,
+            duration_ms,
+            summary.as_deref(),
+            &placement.logs_dir,
         );
         teardown(&mut started, &mut registry, options.timeout_ms, true);
         stop_lease(lease)?;
@@ -711,14 +778,22 @@ fn run_m0_placed(
             service.stand(&mut registry)
         };
         if let Err(error) = result {
+            let duration_ms = elapsed_ms(run_started);
             let summary = write_failure_run_summary_from_services(
                 placement,
                 run_id,
-                elapsed_ms(run_started),
+                duration_ms,
                 &node_results,
                 &services_output,
                 &task_runs,
                 redactor,
+            );
+            print_run_footer(
+                false,
+                &node_results,
+                duration_ms,
+                summary.as_deref(),
+                &placement.logs_dir,
             );
             teardown(
                 &mut started,
@@ -746,6 +821,13 @@ fn run_m0_placed(
         &task_runs,
         redactor,
     )?);
+    print_run_footer(
+        true,
+        &node_results,
+        duration_ms,
+        run_summary_path.as_deref(),
+        &placement.logs_dir,
+    );
     let primary_task = task_runs.last().cloned();
     let output = RunOutput {
         run_id: run_id.to_string(),
@@ -857,6 +939,56 @@ fn stop_lease(lease: Option<RunLeaseHeartbeat>) -> Result<(), RuntimeError> {
 
 fn elapsed_ms(started: Instant) -> u64 {
     started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64
+}
+
+fn human_duration(duration_ms: u64) -> String {
+    if duration_ms < 1000 {
+        format!("{duration_ms}ms")
+    } else {
+        format!("{:.2}s", duration_ms as f64 / 1000.0)
+    }
+}
+
+fn human_path(path: &Path) -> String {
+    path.display()
+        .to_string()
+        .replace('{', "(")
+        .replace('}', ")")
+}
+
+fn human_exit_code(exit_code: Option<i32>) -> String {
+    exit_code
+        .map(|code| code.to_string())
+        .unwrap_or_else(|| "none".to_string())
+}
+
+fn print_run_footer(
+    run_succeeded: bool,
+    nodes: &[NodeResult],
+    duration_ms: u64,
+    run_summary_path: Option<&Path>,
+    logs_dir: &Path,
+) {
+    if run_succeeded {
+        eprintln!(
+            "  result: ok {} passed, 0 failed in {}",
+            nodes.iter().filter(|node| node.success).count(),
+            human_duration(duration_ms)
+        );
+    } else if nodes.is_empty() {
+        eprintln!("  result: fail in {}", human_duration(duration_ms));
+    } else {
+        eprintln!(
+            "  result: fail {} passed, {} failed in {}",
+            nodes.iter().filter(|node| node.success).count(),
+            nodes.iter().filter(|node| !node.success).count(),
+            human_duration(duration_ms)
+        );
+    }
+    if let Some(path) = run_summary_path {
+        eprintln!("  run-summary: {}", human_path(path));
+    }
+    eprintln!("  logs: {}", human_path(logs_dir));
 }
 
 /// Write the aggregate run summary: the run id, overall success, the services

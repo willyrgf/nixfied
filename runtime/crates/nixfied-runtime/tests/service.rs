@@ -3743,6 +3743,11 @@ fn runtime_drives_full_lifecycle_without_invoking_nix() {
         "run failed: {}",
         String::from_utf8_lossy(&run.stderr)
     );
+    let run_stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(run_stderr.contains("  ok smoke (smoke)"));
+    assert!(run_stderr.contains("  result: ok 1 passed, 0 failed in "));
+    assert!(run_stderr.contains("  run-summary: "));
+    assert!(run_stderr.contains("  logs: "));
     let run_json: Value =
         serde_json::from_slice(&run.stdout).expect("run output should be valid JSON");
     assert_eq!(
@@ -4389,6 +4394,12 @@ fn failed_composite_run_writes_failure_summary() {
         .expect("runtime run should execute");
 
     assert_eq!(output.status.code(), Some(30), "TaskFailed exit code");
+    let stderr_text = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr_text.contains("  fail wf.fail-node (smoke)"));
+    assert!(stderr_text.contains("    stderr: "));
+    assert!(stderr_text.contains("  result: fail 0 passed, 1 failed in "));
+    assert!(stderr_text.contains("  run-summary: "));
+    assert!(stderr_text.contains("  logs: "));
     let error: Value = stderr_json(&output.stderr);
     assert_eq!(error["code"], json!("TASK_FAILED"));
     let details = &error["details"];
