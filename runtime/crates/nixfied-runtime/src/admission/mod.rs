@@ -44,9 +44,9 @@ pub struct Admission {
     pub runtime_abi: String,
     pub toolchain_id: String,
     pub target_system: String,
-    /// The resolved live workspace. Present for run admission; `None` for control
+    /// The resolved source root. Present for run admission; `None` for control
     /// admission (`ps`/`down`/`clean`), which must operate on a slot from the store
-    /// model and registry alone and so does not resolve the caller's workspace.
+    /// model and registry alone and so does not resolve source from the caller.
     pub source: Option<source::AdmittedSource>,
     /// Provenance serialized once at admission for the run record, so the executor
     /// records it without reading the raw `Model`.
@@ -58,8 +58,8 @@ pub struct Admission {
 }
 
 impl Admission {
-    /// Run admission: admit and lower the model, and resolve the live workspace so
-    /// the executor can spawn execs from it.
+    /// Run admission: admit and lower the model, and resolve the declared source
+    /// root so the executor can spawn execs from it.
     pub fn check(loaded: &LoadedModel, context: &AdmissionContext) -> RuntimeResult<Self> {
         Self::admit(loaded, context, true)
     }
@@ -100,7 +100,7 @@ impl Admission {
         abi::check_abi(&loaded.model, loaded)?;
         target::check_target(&loaded.model, loaded, context)?;
         let source = if resolve_source {
-            Some(source::check_source(&loaded.model, loaded)?)
+            Some(source::check_source(&loaded.model, loaded, context)?)
         } else {
             None
         };
@@ -110,14 +110,14 @@ impl Admission {
         Ok(from_loaded(&loaded.model, loaded, source, execution_model))
     }
 
-    /// The resolved live workspace, or a `SOURCE_MISMATCH` error when this is a
+    /// The resolved source root, or a `SOURCE_MISMATCH` error when this is a
     /// control admission that did not resolve one. Every run-path caller holds a
     /// run admission, so the error is only reachable through a misuse.
     pub fn require_source(&self) -> RuntimeResult<&source::AdmittedSource> {
         self.source.as_ref().ok_or_else(|| {
             RuntimeError::new(
                 ErrorCode::SourceMismatch,
-                "operation requires an admitted live source that control admission does not resolve",
+                "operation requires an admitted source that control admission does not resolve",
             )
         })
     }

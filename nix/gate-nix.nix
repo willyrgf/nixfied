@@ -103,7 +103,18 @@ pkgs.writeShellApplication {
       'nixfied.surface.verbs = [ "ghost" ];'
     reject_composite "a surface verb colliding with the control namespace" \
       'nixfied.closures.synthetic-helper.operationBindings = lib.mkForce null; nixfied.tasks.clean = { invocation = { tools = [ "synthetic-helper" ]; run = [ "nixfied-synthetic-helper" "task" "--host" "127.0.0.1" "--port" "1" ]; }; }; nixfied.surface.verbs = [ "clean" ];'
+    reject_composite "live workspace dirtyPolicy reject" \
+      'nixfied.codebases.main.dirtyPolicy = "reject";'
     printf '  reject_composite: %ds\n' "$((SECONDS - t0))" >&2
+
+    echo "  positive (immutable source dirtyPolicy reject admits)" >&2
+    t0=$SECONDS
+    immutable_model=$(nix build --no-link --print-out-paths --impure --expr \
+      "let flake = builtins.getFlake (toString $checkout); compileModel = (builtins.getAttr builtins.currentSystem flake.lib).compileModel; in compileModel ({ ... }: { imports = [ $checkout/examples/minimal/nixfied.nix ]; nixfied.codebases.main.sourceMode = \"snapshot\"; nixfied.codebases.main.sourceIdentity = builtins.path { path = $checkout/examples/minimal; name = \"nixfied-minimal-source\"; }; nixfied.codebases.main.dirtyPolicy = \"reject\"; })") \
+      || fail "immutable source: model build failed"
+    "$rt" check --model "$immutable_model/model.json" >/dev/null \
+      || fail "immutable source: runtime check failed"
+    printf '  immutable_source: %ds\n' "$((SECONDS - t0))" >&2
 
     echo "  adoption (#install + #upgrade against a throwaway repo)" >&2
     t0=$SECONDS

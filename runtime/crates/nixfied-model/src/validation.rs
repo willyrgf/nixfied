@@ -109,8 +109,8 @@ fn require_non_empty(field: &'static str, value: &str) -> Result<(), ValidationE
     }
 }
 
-/// A single live-workspace codebase named `main`. Multi-codebase source identity
-/// is a later milestone; the runtime admission layer still resolves one root.
+/// A single codebase named `main`. Multi-codebase source identity is a later
+/// milestone; the runtime admission layer still resolves one root.
 fn validate_codebases(model: &Model) -> Result<(), ValidationError> {
     if model.codebases.len() != 1 {
         return Err(ValidationError::ExpectedOne { field: "codebases" });
@@ -122,13 +122,7 @@ fn validate_codebases(model: &Model) -> Result<(), ValidationError> {
         codebase.codebase_id.as_str(),
     )?;
     require_non_empty("codebases[0].logicalRoot", &codebase.logical_root)?;
-    if codebase.source_mode != SourceMode::LiveWorkspace {
-        return Err(ValidationError::UnsupportedValue {
-            field: "codebases[0].sourceMode",
-            expected: "live-workspace",
-            actual: format!("{:?}", codebase.source_mode),
-        });
-    }
+    require_non_empty("codebases[0].sourceIdentity", &codebase.source_identity)?;
     Ok(())
 }
 

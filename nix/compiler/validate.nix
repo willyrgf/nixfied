@@ -6,6 +6,13 @@ let
   expect = condition: message: if condition then null else fail message;
   slotPolicy = config.nixfied.slotPolicy;
   portPolicy = config.nixfied.placement.ports;
+  source = config.nixfied.codebases.main;
+  sourceIsLive = source.sourceMode == "live-workspace";
+  sourceIsImmutable = source.sourceMode == "snapshot" || source.sourceMode == "flake-input";
+  sourceIdentity = toString source.sourceIdentity;
+  immutableSourceIsStoreRoot =
+    !sourceIsImmutable || lib.hasPrefix "${builtins.storeDir}/" sourceIdentity;
+  liveRejectAllowed = !(sourceIsLive && source.dirtyPolicy == "reject");
   slots = lib.range slotPolicy.min slotPolicy.max;
   slotWindow = slot: {
     start = portPolicy.base + (slot * portPolicy.slotStride);
@@ -271,6 +278,12 @@ let
     ) "slotPolicy.default must be within the slot range")
     (expect windowsInRange "per-slot candidate port windows must be in 1..65535")
     (expect windowsDoNotOverlap "per-slot candidate port windows must not overlap")
+    (expect immutableSourceIsStoreRoot
+      "immutable codebase sourceIdentity must be a Nix store path"
+    )
+    (expect liveRejectAllowed
+      "dirtyPolicy=reject is only valid for immutable source modes"
+    )
     # A model with no services is valid as long as it declares something to
     # run: the runtime supports service-less task selections.
     (expect (

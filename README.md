@@ -147,6 +147,11 @@ Running a task brings up exactly the services its leaves require (closed over
 wiring and prepare requirements) — there is no environment membership to
 curate and nothing for an imported adapter to inject.
 
+Source is declared as a `codebase`. The default `live-workspace` mode observes
+the caller's checkout and allows `dirtyPolicy = allow|warn`; immutable
+`snapshot` / `flake-input` modes carry a Nix store root in `sourceIdentity` and
+may use `dirtyPolicy = reject`.
+
 Services and tasks address each other **by name, never by port arithmetic**.
 Invocation args and env values support `${port}`/`${host}` (own primary
 endpoint for a service, primary requirement for a task), `${stateDir}` (the

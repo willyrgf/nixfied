@@ -364,8 +364,7 @@ in
     codebases = [
       {
         codebaseId = "main";
-        inherit (config.nixfied.codebases.main) logicalRoot sourceIdentity;
-        sourceMode = "live-workspace";
+        inherit (config.nixfied.codebases.main) logicalRoot sourceMode sourceIdentity;
         sourcePolicy = {
           inherit (config.nixfied.codebases.main) dirtyPolicy admissionFingerprintPolicy;
         };

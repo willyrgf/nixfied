@@ -148,8 +148,11 @@ Every runtime action is scoped by `projectId / environment / slot / runId`.
 
 - **Source is explicit.** Every tree the runtime may observe is a declared
   `codebase` (logical root, source mode, dirty policy, fingerprint policy). Runtime
-  operations observe source only through declared `codebaseId`s — never implicit
-  cwd. (v1: live checkout state was implicit.)
+  operations observe source only through declared `codebaseId`s. A live
+  workspace resolves from the invocation root; immutable `snapshot` /
+  `flake-input` modes resolve from the Nix store root carried in
+  `sourceIdentity`, so `dirtyPolicy = reject` is provable for those modes.
+  (v1: live checkout state was implicit.)
 - **Service identity is layered**, so harmless changes don't blur ownership:
   `serviceInstanceId = hash(serviceAddress, endpointIdentity, stateIdentity,
   runtimeCompatibilityHash, targetIdentity)`. Reuse requires an exact match across

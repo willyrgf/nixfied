@@ -191,14 +191,117 @@ fn dirty_policy_reject_fails_closed() {
         store_root: closure_root.parent().unwrap().to_path_buf(),
         host_system: host_system(),
     };
-    let error =
-        Admission::check(&loaded, &context).expect_err("dirtyPolicy=reject cannot be proven in M0");
+    let error = Admission::check(&loaded, &context)
+        .expect_err("dirtyPolicy=reject cannot be proven for live-workspace");
 
     assert_eq!(error.code, ErrorCode::SourceMismatch);
     assert_eq!(
         error.computed_model_hash.as_deref(),
         Some(loaded.computed_model_hash.as_str())
     );
+}
+
+#[test]
+fn snapshot_source_admits_immutable_store_root_with_reject() {
+    let (_tmp, model_path, closure_root) = write_fixture_model(fixture_model(), true);
+    let store_root = closure_root.parent().unwrap().to_path_buf();
+    let source_root = store_root.join("source-snapshot");
+    fs::create_dir_all(source_root.join("app")).expect("immutable logical root should exist");
+    let mut value: Value =
+        serde_json::from_slice(&fs::read(&model_path).unwrap()).expect("fixture JSON");
+    value["codebases"][0]["sourceMode"] = json!("snapshot");
+    value["codebases"][0]["sourceIdentity"] = json!(source_root.to_string_lossy());
+    value["codebases"][0]["logicalRoot"] = json!("app");
+    value["codebases"][0]["sourcePolicy"]["dirtyPolicy"] = json!("reject");
+    fs::write(&model_path, serde_json::to_vec(&value).unwrap()).unwrap();
+    let loaded = load_model(&model_path).expect("fixture should load");
+    let context = AdmissionContext {
+        policy: StoreOriginPolicy::AllowNonStoreForTests,
+        store_root,
+        host_system: host_system(),
+    };
+
+    let admission = Admission::check(&loaded, &context).expect("snapshot source should admit");
+    let source = admission.require_source().expect("source should resolve");
+
+    assert_eq!(source.source_mode, nixfied_model::SourceMode::Snapshot);
+    assert_eq!(
+        source.observed_root,
+        source_root.join("app").canonicalize().unwrap()
+    );
+}
+
+#[test]
+fn flake_input_source_admits_immutable_store_root() {
+    let (_tmp, model_path, closure_root) = write_fixture_model(fixture_model(), true);
+    let store_root = closure_root.parent().unwrap().to_path_buf();
+    let source_root = store_root.join("source-flake-input");
+    fs::create_dir_all(&source_root).expect("immutable source root should exist");
+    let mut value: Value =
+        serde_json::from_slice(&fs::read(&model_path).unwrap()).expect("fixture JSON");
+    value["codebases"][0]["sourceMode"] = json!("flake-input");
+    value["codebases"][0]["sourceIdentity"] = json!(source_root.to_string_lossy());
+    fs::write(&model_path, serde_json::to_vec(&value).unwrap()).unwrap();
+    let loaded = load_model(&model_path).expect("fixture should load");
+    let context = AdmissionContext {
+        policy: StoreOriginPolicy::AllowNonStoreForTests,
+        store_root,
+        host_system: host_system(),
+    };
+
+    let admission = Admission::check(&loaded, &context).expect("flake input source should admit");
+    let source = admission.require_source().expect("source should resolve");
+
+    assert_eq!(source.source_mode, nixfied_model::SourceMode::FlakeInput);
+    assert_eq!(source.observed_root, source_root.canonicalize().unwrap());
+}
+
+#[test]
+fn immutable_source_must_be_under_store_root() {
+    let (tmp, model_path, closure_root) = write_fixture_model(fixture_model(), true);
+    let outside_source = tmp.path.join("outside-source");
+    fs::create_dir_all(&outside_source).expect("outside source should exist");
+    let mut value: Value =
+        serde_json::from_slice(&fs::read(&model_path).unwrap()).expect("fixture JSON");
+    value["codebases"][0]["sourceMode"] = json!("snapshot");
+    value["codebases"][0]["sourceIdentity"] = json!(outside_source.to_string_lossy());
+    fs::write(&model_path, serde_json::to_vec(&value).unwrap()).unwrap();
+    let loaded = load_model(&model_path).expect("fixture should load");
+    let context = AdmissionContext {
+        policy: StoreOriginPolicy::AllowNonStoreForTests,
+        store_root: closure_root.parent().unwrap().to_path_buf(),
+        host_system: host_system(),
+    };
+
+    let error = Admission::check(&loaded, &context)
+        .expect_err("immutable source outside store root must fail");
+
+    assert_eq!(error.code, ErrorCode::SourceMismatch);
+}
+
+#[test]
+fn immutable_source_logical_root_escape_is_rejected() {
+    let (_tmp, model_path, closure_root) = write_fixture_model(fixture_model(), true);
+    let store_root = closure_root.parent().unwrap().to_path_buf();
+    let source_root = store_root.join("source-snapshot-escape");
+    fs::create_dir_all(&source_root).expect("immutable source root should exist");
+    let mut value: Value =
+        serde_json::from_slice(&fs::read(&model_path).unwrap()).expect("fixture JSON");
+    value["codebases"][0]["sourceMode"] = json!("snapshot");
+    value["codebases"][0]["sourceIdentity"] = json!(source_root.to_string_lossy());
+    value["codebases"][0]["logicalRoot"] = json!("..");
+    fs::write(&model_path, serde_json::to_vec(&value).unwrap()).unwrap();
+    let loaded = load_model(&model_path).expect("fixture should load");
+    let context = AdmissionContext {
+        policy: StoreOriginPolicy::AllowNonStoreForTests,
+        store_root,
+        host_system: host_system(),
+    };
+
+    let error =
+        Admission::check(&loaded, &context).expect_err("immutable logicalRoot escape must fail");
+
+    assert_eq!(error.code, ErrorCode::SourceMismatch);
 }
 
 #[test]

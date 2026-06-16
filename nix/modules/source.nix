@@ -7,25 +7,34 @@ in
     logicalRoot = mkOption {
       type = types.nonEmptyStr;
       default = ".";
-      description = "Logical source root for the single live workspace codebase.";
+      description = "Logical source root for the single main codebase.";
+    };
+
+    sourceMode = mkOption {
+      type = types.enum [
+        "live-workspace"
+        "snapshot"
+        "flake-input"
+      ];
+      default = "live-workspace";
+      description = "Source mode for the single main codebase.";
     };
 
     sourceIdentity = mkOption {
-      type = types.nonEmptyStr;
+      type = types.either types.path types.nonEmptyStr;
+      apply = toString;
       default = "live";
-      description = "live workspace source identity placeholder.";
+      description = "Live identity placeholder, or immutable source store root for snapshot/flake-input.";
     };
 
     dirtyPolicy = mkOption {
-      # "reject" is deliberately absent: the runtime cannot prove live-workspace
-      # cleanliness yet, so admission would refuse every model that carries it.
-      # See the deferred list in AGENTS.md.
       type = types.enum [
         "allow"
         "warn"
+        "reject"
       ];
       default = "warn";
-      description = "dirty policy for the single live workspace codebase.";
+      description = "Dirty policy for the single main codebase.";
     };
 
     admissionFingerprintPolicy = mkOption {

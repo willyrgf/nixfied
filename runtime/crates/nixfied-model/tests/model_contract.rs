@@ -167,6 +167,22 @@ fn parses_and_validates_contract() {
 }
 
 #[test]
+fn accepts_immutable_source_modes() {
+    for mode in ["snapshot", "flake-input"] {
+        let mut value = valid_model_json();
+        value["codebases"][0]["sourceMode"] = json!(mode);
+        value["codebases"][0]["sourceIdentity"] =
+            json!("/nix/store/00000000000000000000000000000000-source");
+        value["codebases"][0]["sourcePolicy"]["dirtyPolicy"] = json!("reject");
+        let model: Model = serde_json::from_value(value).expect("model JSON should deserialize");
+
+        model
+            .validate()
+            .expect("immutable source mode should pass structural validation");
+    }
+}
+
+#[test]
 fn accepts_arbitrary_service_names() {
     // The synthetic/smoke names are not special. A second service validates as
     // long as the structural contract holds.

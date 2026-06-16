@@ -82,7 +82,9 @@ deliberate change to the contract (and matching version bump + docs + tests):
 - **NIX-API-1:** Nix modules are the integration API; project behavior is typed
   Nix data compiled into generic primitives.
 - **SOURCE-1:** runtime operations observe source only through declared
-  `codebaseId`s.
+  `codebaseId`s. `live-workspace` roots resolve from the invocation root;
+  immutable `snapshot` / `flake-input` roots resolve from a Nix store path
+  carried in `sourceIdentity`, independent of CWD.
 - **SVC-ID-1:** service reuse requires exact service address, endpoint identity,
   state identity, runtime compatibility hash, and target identity.
 - **PORT-1:** where a service declares endpoints, readiness requires verified
