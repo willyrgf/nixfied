@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
+use crate::admission::secrets::ResolvedSecrets;
 use crate::cancellation::{CancellationToken, canceled_error};
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::execution::{ExecTask, ResolvedInvocation};
@@ -52,6 +53,7 @@ pub struct RunContext<'a> {
     pub computed_model_hash: &'a str,
     pub source_root: &'a Path,
     pub state_root: &'a Path,
+    pub secrets: &'a ResolvedSecrets,
 }
 
 impl<'a> RunContext<'a> {
@@ -63,6 +65,7 @@ impl<'a> RunContext<'a> {
             computed_model_hash: &service.computed_model_hash,
             source_root: &service.source_root,
             state_root: &service.state_root,
+            secrets: &service.secrets,
         }
     }
 }
@@ -128,6 +131,7 @@ pub fn run_dependent_task_cancellable(
         own_endpoints: &own_endpoints,
         named: &named,
         state_root: run_context.state_root,
+        secrets: run_context.secrets,
     };
     let exec = &task.exec;
     // Key logs by step path, not task id: a composite may run the same leaf in

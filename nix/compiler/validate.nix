@@ -83,6 +83,13 @@ let
       in
       if builtins.length split > 1 then [ (builtins.head split) ] else [ ]
     ) (builtins.tail (lib.splitString prefix value));
+  secretRefs = refsAfterPrefix "\${secret:";
+  hasSecretRefSyntax = value: lib.hasInfix "\${secret:" value;
+  secretRefMalformed =
+    value:
+    lib.any (
+      part: builtins.length (lib.splitString "}" part) == 1
+    ) (builtins.tail (lib.splitString "\${secret:" value));
   namedEndpointRefs =
     value:
     refsAfterPrefix "\${port:" value ++ refsAfterPrefix "\${host:" value;
@@ -93,6 +100,24 @@ let
   invocationHasBareRef = invocation: lib.any hasBareEndpointRef (invocationValues invocation);
   taskIdsStepSafe =
     lib.all stepSafe taskNames && lib.all stepSafe (builtins.attrNames services);
+  secrets = config.nixfied.secrets;
+  secretNames = builtins.attrNames secrets;
+  secretIdsStepSafe = lib.all stepSafe secretNames;
+  secretFilePathConfined =
+    path:
+    path != null
+    && !(lib.hasPrefix "/" path)
+    && !(builtins.elem ".." (lib.splitString "/" path));
+  secretResolversCoherent = lib.all (
+    name:
+    let
+      source = secrets.${name}.source;
+    in
+    if source.kind == "env-var" then
+      source.envVar != null && source.path == null
+    else
+      source.path != null && source.envVar == null && secretFilePathConfined source.path
+  ) secretNames;
   leafTasks = lib.filterAttrs (_n: task: task.kind == "leaf") tasks;
   compositeTasks = lib.filterAttrs (_n: task: task.kind == "composite") tasks;
   leavesCoherent = lib.all (
@@ -190,6 +215,21 @@ let
     [ lc.start.invocation ]
     ++ lib.optional (lc.ready.probe.kind == "exec" && lc.ready.probe.invocation != null) lc.ready.probe.invocation
     ++ lib.optional (lc.health.probe.kind == "exec" && lc.health.probe.invocation != null) lc.health.probe.invocation;
+  allInvocations =
+    (map (task: task.invocation) (builtins.attrValues leafTasks))
+    ++ lib.concatMap serviceLifecycleInvocations (builtins.attrValues services);
+  secretRefsOnlyInEnv = lib.all (
+    invocation: lib.all (value: !(hasSecretRefSyntax value)) invocation.run
+  ) allInvocations;
+  secretRefsWellFormed = lib.all (
+    invocation: lib.all (value: !(secretRefMalformed value)) (builtins.attrValues invocation.env)
+  ) allInvocations;
+  secretRefsDeclared = lib.all (
+    invocation:
+    lib.all (reference: reference != "" && builtins.hasAttr reference secrets) (
+      lib.concatMap secretRefs (builtins.attrValues invocation.env)
+    )
+  ) allInvocations;
   serviceNamedRefsInScope = lib.all (
     name:
     let
@@ -295,6 +335,19 @@ let
     (expect connectsToDeclared "service connectsTo targets must be declared services")
     (expect connectsToAcyclic "service connectsTo graph must be acyclic")
     (expect taskIdsStepSafe "task and service ids must match [A-Za-z0-9][A-Za-z0-9_-]* (step-path segments)")
+    (expect secretIdsStepSafe "secret ids must match [A-Za-z0-9][A-Za-z0-9_-]*")
+    (expect secretResolversCoherent
+      "secret resolvers must be env-var with envVar only, or file with a confined relative path only"
+    )
+    (expect secretRefsOnlyInEnv
+      "secret placeholders are only valid in invocation.env values"
+    )
+    (expect secretRefsWellFormed
+      "secret placeholders must use the \${secret:<id>} grammar"
+    )
+    (expect secretRefsDeclared
+      "secret placeholders must reference declared nixfied.secrets ids"
+    )
     (expect leavesCoherent "a leaf task must declare an invocation and no steps")
     (expect compositesCoherent
       "a composite task carries only steps (no invocation, operationId, or requires) with step-safe names"

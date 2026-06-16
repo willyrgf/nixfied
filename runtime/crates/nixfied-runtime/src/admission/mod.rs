@@ -1,6 +1,7 @@
 pub mod abi;
 pub mod closures;
 pub mod origin;
+pub mod secrets;
 pub mod source;
 pub mod target;
 
@@ -55,6 +56,10 @@ pub struct Admission {
     /// The lowered, executable view of the model. Admission proves a concrete plan
     /// exists for every slot/selection; the executor consumes only this.
     pub execution_model: ExecutionModel,
+    /// Secret material resolved once during run/check admission. Control admission
+    /// only proves references and leaves this empty because ps/down/clean never
+    /// spawn children.
+    pub secrets: secrets::ResolvedSecrets,
 }
 
 impl Admission {
@@ -104,10 +109,22 @@ impl Admission {
         } else {
             None
         };
+        let secrets = if resolve_source {
+            secrets::resolve_secrets(&loaded.model)?
+        } else {
+            secrets::check_secret_references(&loaded.model)?;
+            secrets::ResolvedSecrets::empty()
+        };
         closures::check_closures(&loaded.model, loaded, context)?;
         let execution_model = lower(&loaded.model)?;
         prove_all_plans_feasible(&execution_model)?;
-        Ok(from_loaded(&loaded.model, loaded, source, execution_model))
+        Ok(from_loaded(
+            &loaded.model,
+            loaded,
+            source,
+            execution_model,
+            secrets,
+        ))
     }
 
     /// The resolved source root, or a `SOURCE_MISMATCH` error when this is a
@@ -128,6 +145,7 @@ fn from_loaded(
     loaded: &LoadedModel,
     source: Option<source::AdmittedSource>,
     execution_model: ExecutionModel,
+    secrets: secrets::ResolvedSecrets,
 ) -> Admission {
     Admission {
         model_path: loaded.path.clone(),
@@ -141,6 +159,7 @@ fn from_loaded(
         generator_json: serde_json::to_string(&model.generator).unwrap_or_default(),
         target_json: serde_json::to_string(&model.target).unwrap_or_default(),
         execution_model,
+        secrets,
     }
 }
 

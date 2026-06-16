@@ -13,6 +13,7 @@ use nixfied_model::{ContainmentRequirement, Model};
 use serde::Serialize;
 
 use crate::admission::Admission;
+use crate::admission::secrets::{ResolvedSecrets, has_unclosed_secret_ref, secret_refs};
 use crate::cancellation::{CancellationToken, canceled_error};
 use crate::control::reconcile_registry;
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
@@ -81,6 +82,7 @@ pub struct StartedService {
     pub computed_model_hash: String,
     pub source_root: PathBuf,
     pub state_root: PathBuf,
+    pub secrets: ResolvedSecrets,
     pub owner_token: String,
 }
 
@@ -675,6 +677,7 @@ pub fn start_service_for_slot(
         own_endpoints: &own_endpoints,
         named: &named,
         state_root: &placement.state_root,
+        secrets: &admission.secrets,
     };
     // Exec probe args/env are substituted once here, with the same scope as the
     // start exec, so probe attempts later need no endpoint context.
@@ -898,6 +901,7 @@ pub fn start_service_for_slot(
         computed_model_hash: admission.computed_model_hash.clone(),
         source_root: source.observed_root.clone(),
         state_root: placement.state_root.clone(),
+        secrets: admission.secrets.clone(),
         owner_token,
     };
     if let Err(error) = ensure_foreground_child_alive(&mut started) {
@@ -1022,10 +1026,11 @@ pub(crate) struct ExecSubstitution<'a> {
     pub own_endpoints: &'a BTreeMap<String, SelectedEndpoint>,
     pub named: &'a SlotEndpoints,
     pub state_root: &'a Path,
+    pub secrets: &'a ResolvedSecrets,
 }
 
 impl ExecSubstitution<'_> {
-    pub(crate) fn value(&self, value: &str) -> RuntimeResult<String> {
+    fn endpoint_value(&self, value: &str) -> RuntimeResult<String> {
         let mut out = value.to_string();
         // Own endpoints win the `${port:<name>}` namespace; validation proved no
         // own endpointId collides with a connectsTo serviceId, so order is moot
@@ -1061,6 +1066,37 @@ impl ExecSubstitution<'_> {
         Ok(out)
     }
 
+    pub(crate) fn value(&self, value: &str) -> RuntimeResult<String> {
+        let out = self.endpoint_value(value)?;
+        if out.contains("${secret:") {
+            return Err(RuntimeError::new(
+                ErrorCode::ModelAdmission,
+                "secret placeholders are only allowed in invocation.env values",
+            ));
+        }
+        Ok(out)
+    }
+
+    fn env_value(&self, value: &str) -> RuntimeResult<String> {
+        if has_unclosed_secret_ref(value) {
+            return Err(RuntimeError::new(
+                ErrorCode::ModelAdmission,
+                format!("malformed secret placeholder in invocation env value: {value}"),
+            ));
+        }
+        let mut out = self.endpoint_value(value)?;
+        for reference in secret_refs(value) {
+            let secret = self.secrets.get(reference).ok_or_else(|| {
+                RuntimeError::new(
+                    ErrorCode::ModelAdmission,
+                    format!("secret placeholder references unresolved secret {reference}"),
+                )
+            })?;
+            out = out.replace(&format!("${{secret:{reference}}}"), secret);
+        }
+        Ok(out)
+    }
+
     pub(crate) fn args(&self, args: &[String]) -> RuntimeResult<Vec<String>> {
         args.iter().map(|arg| self.value(arg)).collect()
     }
@@ -1070,7 +1106,7 @@ impl ExecSubstitution<'_> {
         env: &BTreeMap<String, String>,
     ) -> RuntimeResult<BTreeMap<String, String>> {
         env.iter()
-            .map(|(key, value)| Ok((key.clone(), self.value(value)?)))
+            .map(|(key, value)| Ok((key.clone(), self.env_value(value)?)))
             .collect()
     }
 }
@@ -2022,6 +2058,7 @@ struct CommandRecord<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::admission::secrets::ResolvedSecrets;
     use nixfied_model::ServiceId;
 
     fn endpoint(host: &str, port: u16) -> SelectedEndpoint {
@@ -2043,6 +2080,7 @@ mod tests {
             own_endpoints: &BTreeMap::new(),
             named: &named,
             state_root: Path::new("/state"),
+            secrets: &ResolvedSecrets::empty(),
         };
         let value = substitution
             .value("--listen ${host}:${port} --db ${host:postgres}:${port:postgres} --data ${stateDir}")
@@ -2068,6 +2106,7 @@ mod tests {
             own_endpoints: &own_endpoints,
             named: &SlotEndpoints::new(),
             state_root: Path::new("/state"),
+            secrets: &ResolvedSecrets::empty(),
         };
         let value = substitution
             .value("--http ${port} --ws ${port:ws} --auth ${port:authrpc}")
@@ -2085,6 +2124,7 @@ mod tests {
             own_endpoints: &BTreeMap::new(),
             named: &named,
             state_root: Path::new("/state"),
+            secrets: &ResolvedSecrets::empty(),
         };
         let env: BTreeMap<String, String> = [(
             "DB_URL".to_string(),
@@ -2097,12 +2137,44 @@ mod tests {
     }
 
     #[test]
+    fn secret_placeholders_are_env_only() {
+        let secrets = ResolvedSecrets::from_values(BTreeMap::from([(
+            "api-token".to_string(),
+            "secret-value".to_string(),
+        )]));
+        let substitution = ExecSubstitution {
+            own_primary: None,
+            own_endpoints: &BTreeMap::new(),
+            named: &SlotEndpoints::new(),
+            state_root: Path::new("/state"),
+            secrets: &secrets,
+        };
+        let env: BTreeMap<String, String> = [(
+            "TOKEN".to_string(),
+            "bearer:${secret:api-token}".to_string(),
+        )]
+        .into_iter()
+        .collect();
+
+        let env = substitution.env(&env).expect("secret env substitutes");
+        assert_eq!(env["TOKEN"], "bearer:secret-value");
+        assert_eq!(
+            substitution
+                .value("--token=${secret:api-token}")
+                .unwrap_err()
+                .code,
+            ErrorCode::ModelAdmission
+        );
+    }
+
+    #[test]
     fn unresolved_named_placeholder_fails_closed() {
         let substitution = ExecSubstitution {
             own_primary: None,
             own_endpoints: &BTreeMap::new(),
             named: &SlotEndpoints::new(),
             state_root: Path::new("/state"),
+            secrets: &ResolvedSecrets::empty(),
         };
         let error = substitution
             .value("--db ${port:ghost}")

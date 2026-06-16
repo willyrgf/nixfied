@@ -948,6 +948,7 @@ fn admission(model: &Model, source_root: &Path) -> Admission {
         generator_json: serde_json::to_string(&model.generator).unwrap(),
         target_json: serde_json::to_string(&model.target).unwrap(),
         execution_model: nixfied_runtime::execution::lower(model).expect("model should lower"),
+        secrets: nixfied_runtime::admission::secrets::ResolvedSecrets::empty(),
     }
 }
 

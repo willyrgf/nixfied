@@ -7,7 +7,7 @@
 }:
 
 let
-  inherit (lib) mapAttrs mapAttrsToList;
+  inherit (lib) filterAttrs mapAttrs mapAttrsToList;
   targetLib = import ../lib/target.nix { inherit lib; };
   deriveFacts = import ../lib/derive-facts.nix { inherit lib; };
 
@@ -35,6 +35,10 @@ let
       value = slotPlacement slot;
     }) slots
   );
+  secretDescriptors = mapAttrs (secretId: secret: {
+    inherit secretId;
+    source = filterAttrs (_name: value: value != null) secret.source;
+  }) config.nixfied.secrets;
 
   # Declared closures: realise package store paths and absolute executable
   # paths. Tool entries given as plain packages synthesize additional closures
@@ -372,7 +376,7 @@ in
         };
       }
     ];
-    secrets = { };
+    secrets = secretDescriptors;
     # Membership does not exist; `dev` is the single isolation namespace
     # (state roots, slots, registry keys).
     environments = [ "dev" ];

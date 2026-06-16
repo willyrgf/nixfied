@@ -387,6 +387,7 @@ fn run_m0_placed(
                                 computed_model_hash: &admission.computed_model_hash,
                                 source_root: &source_root,
                                 state_root: &placement.state_root,
+                                secrets: &admission.secrets,
                             },
                             &dependencies,
                             node.node_id.as_str(),
@@ -539,6 +540,7 @@ fn run_m0_placed(
             computed_model_hash: &admission.computed_model_hash,
             source_root: &admission.require_source()?.observed_root,
             state_root: &placement.state_root,
+            secrets: &admission.secrets,
         };
         eprintln!("  node {} ({task_id})", node.node_id);
         let task_result = run_dependent_task_cancellable(

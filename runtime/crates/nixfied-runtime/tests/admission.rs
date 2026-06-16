@@ -15,6 +15,10 @@ fn fixture_model() -> Value {
     common::synthetic_model_default(23080, 23090)
 }
 
+fn unique_env_name(prefix: &str) -> String {
+    format!("{prefix}_{}_{}", std::process::id(), unique_suffix())
+}
+
 #[test]
 fn load_model_hashes_raw_bytes() {
     let (_tmp, model_path, _closure) = write_fixture_model(fixture_model(), true);
@@ -200,6 +204,150 @@ fn dirty_policy_reject_fails_closed() {
         error.computed_model_hash.as_deref(),
         Some(loaded.computed_model_hash.as_str())
     );
+}
+
+#[test]
+fn env_var_secret_resolves_during_admission() {
+    let env_var = unique_env_name("NIXFIED_TEST_SECRET");
+    unsafe { std::env::set_var(&env_var, "resolved-secret") };
+    let mut model = fixture_model();
+    model["secrets"]["api-token"] = json!({
+        "secretId": "api-token",
+        "source": { "kind": "env-var", "envVar": env_var }
+    });
+    model["tasks"]["smoke"]["invocation"]["env"]["TOKEN"] = json!("${secret:api-token}");
+    let (_tmp, model_path, closure_root) = write_fixture_model(model, true);
+    let loaded = load_model(&model_path).expect("fixture should load");
+    let context = AdmissionContext {
+        policy: StoreOriginPolicy::AllowNonStoreForTests,
+        store_root: closure_root.parent().unwrap().to_path_buf(),
+        host_system: host_system(),
+    };
+
+    let admission = Admission::check(&loaded, &context).expect("secret should resolve");
+    unsafe { std::env::remove_var(&env_var) };
+
+    assert_eq!(admission.secrets.get("api-token"), Some("resolved-secret"));
+}
+
+#[test]
+fn missing_secret_fails_admission_before_execution() {
+    let env_var = unique_env_name("NIXFIED_TEST_MISSING_SECRET");
+    unsafe { std::env::remove_var(&env_var) };
+    let mut model = fixture_model();
+    model["secrets"]["api-token"] = json!({
+        "secretId": "api-token",
+        "source": { "kind": "env-var", "envVar": env_var }
+    });
+    model["tasks"]["smoke"]["invocation"]["env"]["TOKEN"] = json!("${secret:api-token}");
+    let (_tmp, model_path, closure_root) = write_fixture_model(model, true);
+    let loaded = load_model(&model_path).expect("fixture should load");
+    let context = AdmissionContext {
+        policy: StoreOriginPolicy::AllowNonStoreForTests,
+        store_root: closure_root.parent().unwrap().to_path_buf(),
+        host_system: host_system(),
+    };
+
+    let error = Admission::check(&loaded, &context).expect_err("missing secret must fail");
+
+    assert_eq!(error.code, ErrorCode::SecretUnavailable);
+    assert_eq!(
+        error.computed_model_hash.as_deref(),
+        Some(loaded.computed_model_hash.as_str())
+    );
+}
+
+#[test]
+fn empty_secret_material_is_unavailable() {
+    let env_var = unique_env_name("NIXFIED_TEST_EMPTY_SECRET");
+    unsafe { std::env::set_var(&env_var, "") };
+    let mut model = fixture_model();
+    model["secrets"]["api-token"] = json!({
+        "secretId": "api-token",
+        "source": { "kind": "env-var", "envVar": env_var }
+    });
+    model["tasks"]["smoke"]["invocation"]["env"]["TOKEN"] = json!("${secret:api-token}");
+    let (_tmp, model_path, closure_root) = write_fixture_model(model, true);
+    let loaded = load_model(&model_path).expect("fixture should load");
+    let context = AdmissionContext {
+        policy: StoreOriginPolicy::AllowNonStoreForTests,
+        store_root: closure_root.parent().unwrap().to_path_buf(),
+        host_system: host_system(),
+    };
+
+    let error = Admission::check(&loaded, &context).expect_err("empty secret must fail");
+    unsafe { std::env::remove_var(&env_var) };
+
+    assert_eq!(error.code, ErrorCode::SecretUnavailable);
+}
+
+#[test]
+fn file_secret_is_confined_and_normalized() {
+    let (tmp, model_path, closure_root) = write_fixture_model(fixture_model(), true);
+    let secrets_dir = tmp.path.join("secrets");
+    fs::create_dir_all(&secrets_dir).expect("secrets dir should exist");
+    fs::write(secrets_dir.join("api-token"), "file-secret\n").expect("secret file should write");
+    unsafe { std::env::set_var("NIXFIED_SECRETS_DIR", &secrets_dir) };
+    let mut value: Value =
+        serde_json::from_slice(&fs::read(&model_path).unwrap()).expect("fixture JSON");
+    value["secrets"]["api-token"] = json!({
+        "secretId": "api-token",
+        "source": { "kind": "file", "path": "api-token" }
+    });
+    value["tasks"]["smoke"]["invocation"]["env"]["TOKEN"] = json!("${secret:api-token}");
+    fs::write(&model_path, serde_json::to_vec(&value).unwrap()).unwrap();
+    let loaded = load_model(&model_path).expect("fixture should load");
+    let context = AdmissionContext {
+        policy: StoreOriginPolicy::AllowNonStoreForTests,
+        store_root: closure_root.parent().unwrap().to_path_buf(),
+        host_system: host_system(),
+    };
+
+    let admission = Admission::check(&loaded, &context).expect("file secret should resolve");
+    unsafe { std::env::remove_var("NIXFIED_SECRETS_DIR") };
+
+    assert_eq!(admission.secrets.get("api-token"), Some("file-secret"));
+}
+
+#[test]
+fn undeclared_secret_reference_is_model_admission_error() {
+    let mut model = fixture_model();
+    model["tasks"]["smoke"]["invocation"]["env"]["TOKEN"] = json!("${secret:missing}");
+    let (_tmp, model_path, closure_root) = write_fixture_model(model, true);
+    let loaded = load_model(&model_path).expect("fixture should load");
+    let context = AdmissionContext {
+        policy: StoreOriginPolicy::AllowNonStoreForTests,
+        store_root: closure_root.parent().unwrap().to_path_buf(),
+        host_system: host_system(),
+    };
+
+    let error = Admission::check(&loaded, &context).expect_err("undeclared secret must fail");
+
+    assert_eq!(error.code, ErrorCode::ModelAdmission);
+}
+
+#[test]
+fn secret_reference_in_args_is_model_admission_error() {
+    let env_var = unique_env_name("NIXFIED_TEST_ARG_SECRET");
+    unsafe { std::env::set_var(&env_var, "resolved-secret") };
+    let mut model = fixture_model();
+    model["secrets"]["api-token"] = json!({
+        "secretId": "api-token",
+        "source": { "kind": "env-var", "envVar": env_var }
+    });
+    model["tasks"]["smoke"]["invocation"]["run"][1] = json!("${secret:api-token}");
+    let (_tmp, model_path, closure_root) = write_fixture_model(model, true);
+    let loaded = load_model(&model_path).expect("fixture should load");
+    let context = AdmissionContext {
+        policy: StoreOriginPolicy::AllowNonStoreForTests,
+        store_root: closure_root.parent().unwrap().to_path_buf(),
+        host_system: host_system(),
+    };
+
+    let error = Admission::check(&loaded, &context).expect_err("arg secret must fail");
+    unsafe { std::env::remove_var(&env_var) };
+
+    assert_eq!(error.code, ErrorCode::ModelAdmission);
 }
 
 #[test]

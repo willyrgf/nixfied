@@ -2734,6 +2734,7 @@ fn task_child_path_is_assembled_from_tool_roots() {
             computed_model_hash: &fixture.admission.computed_model_hash,
             source_root: &source_root,
             state_root: &fixture.placement.state_root,
+            secrets: &fixture.admission.secrets,
         },
         &[],
         &task,
@@ -2793,6 +2794,7 @@ fn task_child_environment_is_hermetic() {
             computed_model_hash: &fixture.admission.computed_model_hash,
             source_root: &source_root,
             state_root: &fixture.placement.state_root,
+            secrets: &fixture.admission.secrets,
         },
         &[],
         &task,
@@ -2818,6 +2820,80 @@ fn task_child_environment_is_hermetic() {
             "unexpected child env var {name}: {stdout}"
         );
     }
+}
+
+#[test]
+fn task_receives_secret_only_through_declared_env() {
+    let Some(python) = nix_store_executable(&["python3"]) else {
+        return;
+    };
+    let closure_root = closure_root_for_store_executable(&python)
+        .expect("store executable should have a closure root");
+    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
+    let port = listener.local_addr().expect("local addr").port();
+    drop(listener);
+    let mut value = fixture_model(&python.to_string_lossy(), &["service", "${port}"], port);
+    value["closures"]["synthetic-helper"]["storePath"] = json!(closure_root.to_string_lossy());
+    value["tasks"]["smoke"]["requires"] = json!([]);
+    value["tasks"]["smoke"]["servicesRequired"] = json!([]);
+    value["secrets"]["api-token"] = json!({
+        "secretId": "api-token",
+        "source": {
+            "kind": "env-var",
+            "envVar": "NIXFIED_TEST_TASK_SECRET"
+        }
+    });
+    value["tasks"]["smoke"]["invocation"]["env"]["TOKEN"] = json!("${secret:api-token}");
+    set_task_run_args(
+        &mut value,
+        &[
+            "-c",
+            "import os, sys; sys.stdout.write(os.environ['TOKEN'])",
+        ],
+    );
+    let model: Model = serde_json::from_value(value).expect("secret fixture model should parse");
+
+    let tmp = TempDir::new();
+    let model_path = tmp.path.join("model.json");
+    let state_base = tmp.path.join("state");
+    fs::create_dir_all(&state_base).expect("state base should be created");
+    fs::write(
+        &model_path,
+        serde_json::to_vec_pretty(&model).expect("model should serialize"),
+    )
+    .expect("model should be written");
+
+    let run = Command::new(runtime_binary())
+        .arg("run")
+        .arg("--task")
+        .arg("smoke")
+        .arg("--allow-non-store-model")
+        .arg("--model")
+        .arg(&model_path)
+        .arg("--timeout-ms")
+        .arg("5000")
+        .current_dir(&tmp.path)
+        .env("NIXFIED_STATE_DIR", &state_base)
+        .env("NIXFIED_TEST_TASK_SECRET", "child-visible-secret")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("runtime should run");
+    assert!(
+        run.status.success(),
+        "run failed\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let output: Value = serde_json::from_slice(&run.stdout).expect("run output should be JSON");
+    let stdout_path = output["task"]["stdoutPath"]
+        .as_str()
+        .expect("task output should link stdout");
+
+    assert_eq!(
+        fs::read_to_string(stdout_path).expect("task stdout should read"),
+        "child-visible-secret"
+    );
 }
 
 #[test]
@@ -3061,6 +3137,7 @@ fn admission(model: &Model, source_root: &Path) -> Admission {
         generator_json: serde_json::to_string(&model.generator).unwrap(),
         target_json: serde_json::to_string(&model.target).unwrap(),
         execution_model: nixfied_runtime::execution::lower(model).expect("model should lower"),
+        secrets: nixfied_runtime::admission::secrets::ResolvedSecrets::empty(),
     }
 }
 

@@ -460,6 +460,7 @@ fn admission(model: &Model, source_root: &Path, hash: &str) -> Admission {
         generator_json: serde_json::to_string(&model.generator).expect("generator serializes"),
         target_json: serde_json::to_string(&model.target).expect("target serializes"),
         execution_model: nixfied_runtime::execution::lower(model).expect("model should lower"),
+        secrets: nixfied_runtime::admission::secrets::ResolvedSecrets::empty(),
     }
 }
 

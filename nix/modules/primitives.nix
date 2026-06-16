@@ -371,6 +371,35 @@ let
     };
   };
 
+  secretSourceType = types.submodule {
+    options = {
+      kind = mkOption {
+        type = types.enum [
+          "env-var"
+          "file"
+        ];
+        description = "Secret resolver kind.";
+      };
+      envVar = mkOption {
+        type = types.nullOr types.nonEmptyStr;
+        default = null;
+        description = "Runtime environment variable read at admission for env-var secrets.";
+      };
+      path = mkOption {
+        type = types.nullOr types.nonEmptyStr;
+        default = null;
+        description = "Relative file path under NIXFIED_SECRETS_DIR for file secrets.";
+      };
+    };
+  };
+
+  secretType = types.submodule {
+    options.source = mkOption {
+      type = secretSourceType;
+      description = "Runtime secret resolver descriptor. The model carries this reference, never the value.";
+    };
+  };
+
   # A task is a leaf (one bounded invocation + orchestration) or a composite (a
   # static named-step DAG over task references). Kind/field coherence is
   # validated at eval; the runtime re-proves it at admission.
@@ -444,6 +473,12 @@ in
     type = types.attrsOf taskType;
     default = { };
     description = "Declared bounded tasks, keyed by task id.";
+  };
+
+  options.nixfied.secrets = mkOption {
+    type = types.attrsOf secretType;
+    default = { };
+    description = "Secret descriptors keyed by secret id. Values are resolved by the runtime, never embedded in the model.";
   };
 
   options.nixfied.placement.ports = {
