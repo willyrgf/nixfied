@@ -52,6 +52,7 @@ struct NodeResult {
     task_id: String,
     success: bool,
     exit_code: Option<i32>,
+    duration_ms: u64,
     // Where the node's full execution detail lives — the task's captured stdout,
     // stderr, and summary — so the summary links each node straight to its
     // evidence without a separate lookup.
@@ -588,6 +589,7 @@ fn run_m0_placed(
                     task_id: task_id.as_str().to_string(),
                     success: task_run.success,
                     exit_code: task_run.exit_code,
+                    duration_ms: task_run.duration_ms,
                     stdout_path: task_run.stdout_path.clone(),
                     stderr_path: task_run.stderr_path.clone(),
                     summary_path: task_run.summary_path.clone(),
@@ -615,6 +617,7 @@ fn run_m0_placed(
                         task_id: task_id.as_str().to_string(),
                         success: task_run.success,
                         exit_code: task_run.exit_code,
+                        duration_ms: task_run.duration_ms,
                         stdout_path: task_run.stdout_path.clone(),
                         stderr_path: task_run.stderr_path.clone(),
                         summary_path: task_run.summary_path.clone(),

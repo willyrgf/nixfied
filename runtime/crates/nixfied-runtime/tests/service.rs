@@ -682,6 +682,13 @@ fn dependent_task_runs_after_owned_service_is_ready() {
     );
     assert!(task.stderr_path.exists());
     assert!(task.summary_path.exists());
+    let summary: Value =
+        serde_json::from_slice(&fs::read(&task.summary_path).expect("task summary should read"))
+            .expect("task summary should parse");
+    assert!(
+        summary["durationMs"].as_u64().is_some(),
+        "task summary should carry durationMs: {summary}"
+    );
     let task_events: i64 = fixture
         .registry
         .connection()
@@ -3743,6 +3750,10 @@ fn runtime_drives_full_lifecycle_without_invoking_nix() {
         json!(true),
         "smoke task should succeed: {run_json}"
     );
+    assert!(
+        run_json["task"]["durationMs"].as_u64().is_some(),
+        "task output should carry durationMs: {run_json}"
+    );
     let state_root = state_base.join("runtime-test").join("dev").join("0");
     assert!(
         state_root.join(".nixfied-state.json").is_file(),
@@ -4084,8 +4095,12 @@ fn composite_starts_full_service_union_before_first_node() {
     assert_eq!(run["services"].as_array().map(Vec::len), Some(2));
     assert_eq!(run["nodes"][0]["nodeId"], json!("pipeline.first"));
     assert_eq!(run["nodes"][1]["nodeId"], json!("pipeline.second"));
+    assert!(run["nodes"][0]["durationMs"].as_u64().is_some());
+    assert!(run["nodes"][1]["durationMs"].as_u64().is_some());
     assert_eq!(run["tasks"][0]["success"], json!(true));
     assert_eq!(run["tasks"][1]["success"], json!(true));
+    assert!(run["tasks"][0]["durationMs"].as_u64().is_some());
+    assert!(run["tasks"][1]["durationMs"].as_u64().is_some());
 }
 
 #[test]
@@ -4379,6 +4394,7 @@ fn failed_composite_run_writes_failure_summary() {
     assert_eq!(nodes[0]["nodeId"], json!("wf.fail-node"));
     assert_eq!(nodes[0]["success"], json!(false));
     assert_eq!(nodes[0]["exitCode"], json!(3));
+    assert!(nodes[0]["durationMs"].as_u64().is_some());
     let stdout_path = details["stdoutPath"]
         .as_str()
         .expect("error must link the failed task stdout");

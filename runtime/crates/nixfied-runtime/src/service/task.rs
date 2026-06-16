@@ -37,6 +37,7 @@ pub struct TaskRun {
     pub timed_out: bool,
     pub canceled: bool,
     pub success: bool,
+    pub duration_ms: u64,
     pub stdout_path: PathBuf,
     pub stderr_path: PathBuf,
     pub summary_path: PathBuf,
@@ -158,6 +159,7 @@ pub fn run_dependent_task_cancellable(
     })
     .map_err(|error| RuntimeError::new(ErrorCode::ModelAdmission, error.to_string()))?;
     cancellation.check()?;
+    let started = Instant::now();
     let mut child = spawn_task(
         exec,
         &args,
@@ -202,6 +204,7 @@ pub fn run_dependent_task_cancellable(
         },
     )?;
     child.logs.join()?;
+    let duration_ms = elapsed_ms(started);
     let canceled = outcome.canceled;
     let timed_out = outcome.timed_out;
     let success = !canceled
@@ -232,6 +235,7 @@ pub fn run_dependent_task_cancellable(
         timed_out,
         canceled,
         success,
+        duration_ms,
         stdout_path,
         stderr_path,
         // Key the summary by step path like the logs: a run's nodes share
@@ -269,6 +273,10 @@ pub fn run_dependent_task_cancellable(
     } else {
         Err(RuntimeError::new(ErrorCode::TaskFailed, failure_message).with_detail("taskRun", &run))
     }
+}
+
+fn elapsed_ms(started: Instant) -> u64 {
+    started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64
 }
 
 fn task_terminal_status(success: bool, timed_out: bool, canceled: bool) -> TaskTerminalStatus {
