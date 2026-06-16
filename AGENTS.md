@@ -332,12 +332,9 @@ compiles in a final `nix build .#nixfied-runtime` step. Behavior is identical
 across profiles (the runtime is I/O-bound), and a release-only compile break is
 essentially impossible once clippy + debug pass.
 
-## In progress
+## No Backlog
 
-The remaining capabilities being implemented to close out the old deferred
-list — service lifetime behavior/reuse — are designed in
-`docs/RFC_DEFERRED_STATE_SECRET_SERVICE.md`; each is removed here as it ships.
-There is no other backlog: rejected non-goals (a manifest envelope, a dynamic
+The old deferred list is closed. Rejected non-goals (a manifest envelope, a dynamic
 runtime adapter protocol, multi-host execution, a required daemon, UI, non-`fail`
 port policies, richer inter-service DAGs, cross-reference memoization, per-tool
 effects, environment membership) are not deferred ideas and are not tracked —

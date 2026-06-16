@@ -147,6 +147,14 @@ Running a task brings up exactly the services its leaves require (closed over
 wiring and prepare requirements) — there is no environment membership to
 curate and nothing for an imported adapter to inject.
 
+Task service lifetime defaults to `run-scoped`. Set
+`serviceLifetime = "until-idle"` to leave the required service closure up until
+the next runtime invocation observes no live borrowers, or
+`serviceLifetime = "persistent-until-down"` to leave it standing until
+`nix run .#down`.
+Later compatible runs borrow the existing instance on the exact service identity
+instead of starting a second copy.
+
 Source is declared as a `codebase`. The default `live-workspace` mode observes
 the caller's checkout and allows `dirtyPolicy = allow|warn`; immutable
 `snapshot` / `flake-input` modes carry a Nix store root in `sourceIdentity` and
@@ -169,6 +177,11 @@ nixfied.services.app = {
   };
 };
 ```
+
+Secrets are declared as descriptors (`env-var` or confined `file`), never model
+values. Use `${secret:<id>}` only in invocation environment values; the runtime
+resolves secrets before spawning, injects them into the hermetic child env, and
+redacts runtime-owned persistent output.
 
 Every slot gets a disjoint, deterministic port window, so slot 1's `app` always
 talks to slot 1's `postgres`. An undeclared named reference, an undeclared

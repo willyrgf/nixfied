@@ -174,8 +174,10 @@ Every runtime action is scoped by `projectId / environment / slot / runId`.
   process identity (surviving PID reuse) before saying `running`/`stale`/etc.
 - **Leases split three ways** — `run-scoped`, `until-idle`, `persistent-until-down`
   — because no daemon is guaranteed; reference counts derive from live borrower
-  leases, never an independently mutated counter. (v1: lease/refcount semantics
-  assumed a daemon that didn't exist.) Only `run-scoped` is implemented today.
+  leases, never an independently mutated counter. `until-idle` services are
+  torn down lazily on the next runtime invocation after the last borrower is
+  gone or stale; `persistent-until-down` services stand until `down` releases
+  them. (v1: lease/refcount semantics assumed a daemon that didn't exist.)
 
 ## Ports, state, containment
 
