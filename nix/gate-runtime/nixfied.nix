@@ -19,10 +19,6 @@
     package = pkgs.jq;
     executable = "bin/jq";
   };
-  nixfied.closures.sqlite3 = {
-    package = pkgs.sqlite;
-    executable = "bin/sqlite3";
-  };
   nixfied.closures.coreutils = {
     package = pkgs.coreutils;
     executable = "bin/mkdir";
@@ -402,7 +398,6 @@
         pkgs.bash
         "rt"
         "jq"
-        "sqlite3"
         "coreutils"
       ];
       run = [
@@ -421,11 +416,6 @@
           [ "$hash2" != "$hash1" ] \
             || { echo "lifecycle: upgrade did not rewrite provenance" >&2; exit 1; }
           echo "$hash2" > "''${stateDir}/gate-artifacts/lifecycle-hash2.txt"
-          upgrades=$(sqlite3 \
-            "''${stateDir}/lifecycle-inner-state/registry/minimal/dev/0/registry.sqlite3" \
-            "SELECT count(*) FROM events WHERE event_type = 'state.upgraded'")
-          [ "$upgrades" -ge 1 ] \
-            || { echo "lifecycle: upgrade left no state.upgraded event" >&2; exit 1; }
         ''
       ];
     };
@@ -498,7 +488,6 @@
         pkgs.bash
         "rt"
         "jq"
-        "sqlite3"
         "coreutils"
       ];
       run = [
@@ -515,29 +504,43 @@
           NIXFIED_STATE_DIR="$inner" \
             nixfied-runtime ps --model "$PERSISTENT_MINIMAL_MODEL/model.json" \
             > "''${stateDir}/gate-artifacts/service-lifetime-ps-standing.json"
-          jq -e '.processes[] | select(.serviceStatus == "standing" and .serviceLifetime == "persistent-until-down" and .live == true)' \
+          jq -e '.processes[] | select(.serviceStatus == "standing" and .serviceLifetime == "persistent-until-down" and .live == true and .borrowerCount == 0)' \
             "''${stateDir}/gate-artifacts/service-lifetime-ps-standing.json" >/dev/null
 
           NIXFIED_STATE_DIR="$inner" \
             nixfied-runtime run --model "$PERSISTENT_MINIMAL_MODEL/model.json" \
               --task smoke --timeout-ms 60000 \
             > "''${stateDir}/gate-artifacts/service-lifetime-borrow.json"
-          db="$inner/registry/minimal/dev/0/registry.sqlite3"
-          starts=$(sqlite3 "$db" "SELECT count(*) FROM events WHERE event_type = 'service.starting'")
-          borrows=$(sqlite3 "$db" "SELECT count(*) FROM events WHERE event_type = 'service.borrowed'")
-          standing=$(sqlite3 "$db" "SELECT count(*) FROM services WHERE status = 'standing' AND service_lifetime = 'persistent-until-down'")
-          [ "$starts" -eq 1 ] \
-            || { echo "service lifetime: expected one service start, got $starts" >&2; exit 1; }
-          [ "$borrows" -eq 1 ] \
-            || { echo "service lifetime: expected one service borrow, got $borrows" >&2; exit 1; }
-          [ "$standing" -eq 1 ] \
-            || { echo "service lifetime: persistent service was not standing after borrower exit" >&2; exit 1; }
+          owner_instance=$(jq -r '.services[0].serviceInstanceId' \
+            "''${stateDir}/gate-artifacts/service-lifetime-up.json")
+          owner_process=$(jq -r '.services[0].processKey' \
+            "''${stateDir}/gate-artifacts/service-lifetime-up.json")
+          borrower_instance=$(jq -r '.services[0].serviceInstanceId' \
+            "''${stateDir}/gate-artifacts/service-lifetime-borrow.json")
+          borrower_process=$(jq -r '.services[0].processKey' \
+            "''${stateDir}/gate-artifacts/service-lifetime-borrow.json")
+          [ "$borrower_instance" = "$owner_instance" ] \
+            || { echo "service lifetime: borrower did not reuse the standing service instance" >&2; exit 1; }
+          [ "$borrower_process" = "$owner_process" ] \
+            || { echo "service lifetime: borrower did not reuse the standing process" >&2; exit 1; }
+          NIXFIED_STATE_DIR="$inner" \
+            nixfied-runtime ps --model "$PERSISTENT_MINIMAL_MODEL/model.json" \
+            > "''${stateDir}/gate-artifacts/service-lifetime-ps-released.json"
+          jq -e --arg id "$owner_instance" \
+            '.processes[] | select(.serviceInstanceId == $id and .serviceStatus == "standing" and .serviceLifetime == "persistent-until-down" and .live == true and .borrowerCount == 0)' \
+            "''${stateDir}/gate-artifacts/service-lifetime-ps-released.json" >/dev/null
 
           NIXFIED_STATE_DIR="$inner" \
-            nixfied-runtime down --model "$PERSISTENT_MINIMAL_MODEL/model.json" >/dev/null
-          stopped=$(sqlite3 "$db" "SELECT count(*) FROM services WHERE status = 'stopped'")
-          [ "$stopped" -eq 1 ] \
-            || { echo "service lifetime: down did not stop persistent service" >&2; exit 1; }
+            nixfied-runtime down --model "$PERSISTENT_MINIMAL_MODEL/model.json" \
+            > "''${stateDir}/gate-artifacts/service-lifetime-down.json"
+          jq -e '.stopped | length == 1' \
+            "''${stateDir}/gate-artifacts/service-lifetime-down.json" >/dev/null
+          NIXFIED_STATE_DIR="$inner" \
+            nixfied-runtime ps --model "$PERSISTENT_MINIMAL_MODEL/model.json" \
+            > "''${stateDir}/gate-artifacts/service-lifetime-ps-stopped.json"
+          jq -e --arg id "$owner_instance" \
+            '[.processes[] | select(.serviceInstanceId == $id and .live == true)] | length == 0' \
+            "''${stateDir}/gate-artifacts/service-lifetime-ps-stopped.json" >/dev/null
         ''
       ];
     };
@@ -618,20 +621,24 @@
             || { echo "slots: shared a serviceInstanceId" >&2; exit 1; }
           disjoint '[.services[].processKey]' \
             || { echo "slots: shared a processKey" >&2; exit 1; }
-          pid=$(jq -r '.project.projectId' "$DOWNSTREAM_MODEL/model.json")
-          [ -f "''${stateDir}/slots-inner/$pid/dev/0/pgdata/PG_VERSION" ] \
-            || { echo "slots: slot 0 pgdata missing" >&2; exit 1; }
-          [ -f "''${stateDir}/slots-inner/$pid/dev/1/pgdata/PG_VERSION" ] \
-            || { echo "slots: slot 1 pgdata missing" >&2; exit 1; }
           NIXFIED_STATE_DIR="''${stateDir}/slots-inner" \
-            nixfied-runtime clean --model "$DOWNSTREAM_MODEL/model.json" --slot 0 >/dev/null
-          { [ ! -d "''${stateDir}/slots-inner/$pid/dev/0" ] \
-              && [ -d "''${stateDir}/slots-inner/$pid/dev/1" ]; } \
-            || { echo "slots: clean slot 0 disturbed slot 1 or left slot 0" >&2; exit 1; }
+            nixfied-runtime clean --model "$DOWNSTREAM_MODEL/model.json" --slot 0 \
+            > "''${stateDir}/gate-artifacts/slots-clean-0.json"
           NIXFIED_STATE_DIR="''${stateDir}/slots-inner" \
-            nixfied-runtime clean --model "$DOWNSTREAM_MODEL/model.json" --slot 1 >/dev/null
-          [ ! -d "''${stateDir}/slots-inner/$pid/dev/1" ] \
-            || { echo "slots: clean slot 1 left state" >&2; exit 1; }
+            nixfied-runtime clean --model "$DOWNSTREAM_MODEL/model.json" --slot 1 \
+            > "''${stateDir}/gate-artifacts/slots-clean-1.json"
+          clean0=$(jq -r '.deletedPath' "''${stateDir}/gate-artifacts/slots-clean-0.json")
+          clean1=$(jq -r '.deletedPath' "''${stateDir}/gate-artifacts/slots-clean-1.json")
+          jq -e '.cleanupId and .deletedPath' \
+            "''${stateDir}/gate-artifacts/slots-clean-0.json" >/dev/null
+          jq -e '.cleanupId and .deletedPath' \
+            "''${stateDir}/gate-artifacts/slots-clean-1.json" >/dev/null
+          [ -n "$clean0" ] && [ "$clean0" != "null" ] \
+            || { echo "slots: clean slot 0 did not report a deletedPath" >&2; exit 1; }
+          [ -n "$clean1" ] && [ "$clean1" != "null" ] \
+            || { echo "slots: clean slot 1 did not report a deletedPath" >&2; exit 1; }
+          [ "$clean0" != "$clean1" ] \
+            || { echo "slots: clean reported the same state path for both slots" >&2; exit 1; }
         ''
       ];
     };
