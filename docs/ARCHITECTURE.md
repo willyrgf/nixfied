@@ -264,13 +264,15 @@ proving its own runtime — while an adopter's acceptance proof is simply
 another task they declare and export (`nix run .#release`, or
 `.#run -- --task <id>` for anything unexported).
 
-## Deferred by design
+## Definitional boundaries
 
-The first cut intentionally omits: full secrets/credentials management;
-inter-service DAGs beyond readiness gates and prepare requirements;
-centralized log aggregation;
-multi-host/remote execution; a required daemon; UI/dashboards; a manifest-sealed
-bundle envelope; and a dynamic runtime adapter protocol. The last two are added
-only if a concrete need (portable bundles, cache export/import, standalone
-distribution; or generic primitives proving insufficient) appears. See AGENTS.md
-for the current deferred list as it stands in the code.
+Some things are not roadmap items but **definitional non-goals** — the design
+is what it is because it excludes them. Multi-host/remote execution, a required
+daemon, central log aggregation, and UI/dashboards are outside a per-project,
+per-slot, single-host authority; a manifest-sealed bundle envelope re-opens the
+v1 artifact-sealing failure (SINGLE-MODEL-1); a dynamic runtime adapter protocol
+re-opens v1 adapter complexity and would give the runtime domain awareness
+(RUNTIME-GENERIC-1). The no-daemon assumption in particular is load-bearing:
+the lease/liveness model (LIVE-1) is shaped around it. These are not deferred;
+adding any of them is a deliberate redefinition of the product, not a backlog
+pickup.

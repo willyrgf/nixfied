@@ -49,7 +49,8 @@ deliberate change to the contract (and matching version bump + docs + tests):
   non-store admission is an unstable test/dev escape hatch (`--allow-non-store-model`).
 - **MODEL-CONTRACT-1:** the model carries the full admission contract
   (generator/toolchain, runtime ABI, target, source policy, closure metadata,
-  layered service identity, state policy, secret descriptors).
+  layered service identity, state policy). The model carries **no** secret
+  section (REDACT-1; secrets are deferred scope).
 - **HASH-1:** the runtime computes `computedModelHash = sha256(raw bytes)`; no
   self-hash is embedded.
 - **ABI-1:** admission requires an exact `runtimeAbi` / `toolchainId` match; no
@@ -325,31 +326,19 @@ compiles in a final `nix build .#nixfied-runtime` step. Behavior is identical
 across profiles (the runtime is I/O-bound), and a release-only compile break is
 essentially impossible once clippy + debug pass.
 
-## Deferred
+## In progress
 
-Intentionally not implemented. Do not add without an explicit, deliberate,
-contract-shaped reason (and the matching validation + runtime path + proof):
-
-- ergonomic surfaces `up`, `logs`, `validate --deep`;
-- multiple environments beyond `dev` (environment is a pure isolation
-  namespace — state roots, slots, registry keys; membership does not exist to
-  defer against);
-- `until-idle` / `persistent-until-down` service lifetimes, service reuse, and
-  borrower leases (only `run-scoped` is implemented) — now also the only home
-  of the "bring the dev stack up and leave it" surface, as an invocation
-  surface (`run --service …`), never a model concept;
-- cross-reference memoization within a run (a task referenced twice executes
-  twice, deterministically);
-- per-tool effects granularity (package-shaped tools attest
-  `effects = [ "process" ]`);
-- additional source modes (`snapshot`, `flake-input`) and non-`fail` port
-  collision policies;
-- `dirtyPolicy = "reject"`: the runtime cannot prove live-workspace cleanliness,
-  so admission refuses it unconditionally; the Nix option exposes only
-  `allow`/`warn` until the cleanliness proof exists (the wire enum and the
-  fail-closed admission check remain);
-- real secret injection (secrets are not part of the contract yet);
-- a portable, non-semantic manifest envelope; a dynamic runtime adapter protocol.
+The remaining capabilities being implemented to close out the old deferred
+list — explicit state purge, immutable source modes + `dirtyPolicy = reject`,
+secret injection, and service lifetimes/reuse — are designed in
+`docs/RFC_DEFERRED_STATE_SECRET_SERVICE.md`; each is removed here as it ships.
+There is no other backlog: rejected non-goals (a manifest envelope, a dynamic
+runtime adapter protocol, multi-host execution, a required daemon, UI, non-`fail`
+port policies, richer inter-service DAGs, cross-reference memoization, per-tool
+effects, environment membership) are not deferred ideas and are not tracked —
+the boundaries that forbid them live in the invariants and Non-Negotiable
+Boundaries above (SINGLE-MODEL-1, RUNTIME-GENERIC-1, STATIC-1, the
+`manifest.json` boundary), not in a roadmap.
 
 ## Git Hygiene
 

@@ -234,11 +234,10 @@ operation ids are rejected at eval and admission).
 | leaf task `<name>` | `task.<name>.run` |
 | service `<name>` lifecycle op `<op>` | `service.<name>.<op>` |
 
-`<op>` ranges over `start`, `ready`, `health`, `stop`, `clean` — and
-`prepare` only while prepare is invocation-shaped (phases 1–3). Once prepare
-binds a task reference (phase 4), the prepare position has **no operation id
-of its own**: its evidence is the referenced task's flattened nodes, keyed by
-step path with root `<taskId>` as in §2.
+`<op>` ranges over `start`, `ready`, `health`, `stop`, `clean`. Prepare binds
+a **task reference**, not an invocation, so the prepare position has **no
+operation id of its own**: its evidence is the referenced task's flattened
+nodes, keyed by step path with root `<taskId>` as in §2.
 
 Composites have no operation id: only invocation positions execute.
 
@@ -252,7 +251,6 @@ Service lifecycle defaults (override per position via `terminal`):
 
 | Op | success | failure |
 | --- | --- | --- |
-| prepare (phases 1–3 only) | `initialized` | `failed` |
 | start | `spawned` | `failed` |
 | ready | `ready` | `not-ready` |
 | health | `healthy` | `unhealthy` |
