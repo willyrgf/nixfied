@@ -8,7 +8,7 @@ use std::thread;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use nixfied_model::{ContainmentRequirement, Model};
+use nixfied_model::{ContainmentRequirement, Model, ServiceLifetime};
 use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
@@ -29,7 +29,7 @@ use crate::service::readiness::{wait_for_exec_probe, wait_for_tcp_probe};
 use crate::service::registry::{
     PortReservation, ProcessRecord, RunRecord, ServiceRecord, ensure_service_start_allowed,
     mark_endpoint_owner_verified, mark_process_escape, mark_service_canceled, mark_service_failed,
-    mark_service_probe_ready, mark_service_stopped, record_service_borrow,
+    mark_service_probe_ready, mark_service_standing, mark_service_stopped, record_service_borrow,
     record_service_canceling, record_service_lifecycle_event, record_service_start,
     release_service_borrow, release_service_reservation, reserve_service_start,
 };
@@ -87,6 +87,7 @@ pub struct StartedService {
     pub secrets: ResolvedSecrets,
     pub redactor: Redactor,
     pub owner_token: String,
+    pub service_lifetime: ServiceLifetime,
     log_relays: Option<RedactedLogRelays>,
 }
 
@@ -328,6 +329,34 @@ impl StartedService {
         cancellation: &CancellationToken,
     ) -> RuntimeResult<()> {
         self.stop_with_cancellation(registry, timeout_ms, Some(cancellation))
+    }
+
+    pub fn stand(mut self, registry: &mut Registry) -> RuntimeResult<()> {
+        if self.is_borrowed() {
+            return release_service_borrow(
+                registry,
+                &self.run_id,
+                &self.service_instance_id,
+                &self.process_key,
+                &self.computed_model_hash,
+                false,
+            );
+        }
+        mark_service_standing(
+            registry,
+            &self.run_id,
+            &self.service_instance_id,
+            &self.process_key,
+            &self.computed_model_hash,
+            self.service_lifetime,
+        )?;
+        if let Some(monitor) = &mut self.monitor {
+            monitor.stop();
+        }
+        self.child = None;
+        self.monitor = None;
+        self.log_relays = None;
+        Ok(())
     }
 
     fn stop_with_cancellation(
@@ -684,6 +713,7 @@ impl Drop for StartedService {
 /// `${port:<serviceId>}` resolves against.
 pub struct ServiceSelection<'a> {
     pub service_name: &'a str,
+    pub service_lifetime: ServiceLifetime,
     pub endpoint_ports: &'a BTreeMap<String, u16>,
     pub slot_endpoints: &'a SlotEndpoints,
     /// Executes the service's prepare task (its flattened nodes) inside the
@@ -809,6 +839,7 @@ pub fn start_service_for_slot(
             owner_token: &owner_token,
             service,
             service_name,
+            service_lifetime: selection.service_lifetime,
             address_hash: &address_hash,
             service_instance_id: &service_instance_id,
             selected_endpoint: selected_endpoint.clone(),
@@ -901,7 +932,13 @@ pub fn start_service_for_slot(
     })
     .map_err(|error| RuntimeError::new(ErrorCode::ModelAdmission, error.to_string()))?;
     let redactor = Redactor::from_secrets(&admission.secrets);
-    let output = child_output(&stdout_path, &stderr_path, &redactor)?;
+    let (stdout, stderr, log_relays) =
+        if matches!(selection.service_lifetime, ServiceLifetime::RunScoped) {
+            let output = child_output(&stdout_path, &stderr_path, &redactor)?;
+            (output.stdout, output.stderr, Some(output.relays))
+        } else {
+            (Stdio::null(), Stdio::null(), None)
+        };
     let mut command = Command::new(&exec.executable);
     // Hermetic child environment: declared env + runtime-owned variables only
     // (PATH from the tool roots); nothing inherited from the runtime's own
@@ -912,8 +949,8 @@ pub fn start_service_for_slot(
         .current_dir(&command_cwd)
         .envs(&env)
         .stdin(stdin_for(exec.stdin))
-        .stdout(output.stdout)
-        .stderr(output.stderr);
+        .stdout(stdout)
+        .stderr(stderr);
     unsafe {
         command.pre_exec(|| {
             if libc::setpgid(0, 0) == 0 {
@@ -972,6 +1009,7 @@ pub fn start_service_for_slot(
             service_name,
             service_address_hash: &address_hash,
             identity: &service.identity,
+            service_lifetime: selection.service_lifetime,
             endpoint_json: &endpoint_json,
             state_root: &placement.state_root,
         },
@@ -1014,7 +1052,8 @@ pub fn start_service_for_slot(
         secrets: admission.secrets.clone(),
         redactor,
         owner_token,
-        log_relays: Some(output.relays),
+        service_lifetime: selection.service_lifetime,
+        log_relays,
     };
     if let Err(error) = ensure_foreground_child_alive(&mut started) {
         let payload = serde_json::json!({
@@ -1046,6 +1085,7 @@ struct BorrowServiceRequest<'a> {
     owner_token: &'a str,
     service: &'a ExecService,
     service_name: &'a str,
+    service_lifetime: ServiceLifetime,
     address_hash: &'a str,
     service_instance_id: &'a str,
     selected_endpoint: Option<SelectedEndpoint>,
@@ -1131,6 +1171,7 @@ fn borrow_reusable_service(
         secrets: request.admission.secrets.clone(),
         redactor: Redactor::from_secrets(&request.admission.secrets),
         owner_token: request.owner_token.to_string(),
+        service_lifetime: request.service_lifetime,
         log_relays: None,
     }))
 }

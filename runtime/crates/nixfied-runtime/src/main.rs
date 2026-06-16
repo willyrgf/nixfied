@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use nixfied_model::ServiceLifetime;
 use nixfied_runtime::cancellation::{CancellationToken, ProcessSignalGuard};
 use nixfied_runtime::execution::plan;
 use nixfied_runtime::redaction::Redactor;
@@ -423,6 +424,7 @@ fn run_m0_placed(
             selected_slot,
             nixfied_runtime::service::process::ServiceSelection {
                 service_name,
+                service_lifetime: plan.service_lifetime,
                 endpoint_ports: &binding.endpoint_ports,
                 slot_endpoints: &slot_endpoints,
                 prepare_runner,
@@ -678,9 +680,12 @@ fn run_m0_placed(
     // would kill the processes without updating registry rows, leases, or
     // port reservations, blocking later clean/runs on the slot.
     while let Some(service) = started.pop() {
-        if let Err(error) =
+        let result = if matches!(plan.service_lifetime, ServiceLifetime::RunScoped) {
             service.stop_cancellable(&mut registry, options.timeout_ms, cancellation)
-        {
+        } else {
+            service.stand(&mut registry)
+        };
+        if let Err(error) = result {
             teardown(
                 &mut started,
                 &mut registry,

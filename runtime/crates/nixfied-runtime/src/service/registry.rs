@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use nixfied_model::ServiceLifetime;
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::execution::ServiceIdentity;
@@ -26,6 +27,7 @@ pub struct ServiceRecord<'a> {
     pub service_name: &'a str,
     pub service_address_hash: &'a str,
     pub identity: &'a ServiceIdentity,
+    pub service_lifetime: ServiceLifetime,
     pub endpoint_json: &'a str,
     pub state_root: &'a Path,
 }
@@ -403,9 +405,9 @@ pub fn record_service_start(
             INSERT OR REPLACE INTO services (
               service_instance_id, environment, slot, service_name,
               service_address_hash, endpoint_identity_hash, state_identity_hash,
-              runtime_compatibility_hash, target_identity_hash, status,
+              runtime_compatibility_hash, target_identity_hash, service_lifetime, status,
               endpoint_json, state_root
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?12, ?10, ?11)
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?13, ?11, ?12)
             ",
             params![
                 service.service_instance_id,
@@ -417,6 +419,7 @@ pub fn record_service_start(
                 service.identity.state_identity_hash.as_str(),
                 service.identity.runtime_compatibility_hash.as_str(),
                 service.identity.target_identity_hash.as_str(),
+                service_lifetime_as_str(service.service_lifetime),
                 service.endpoint_json,
                 service.state_root.display().to_string(),
                 ServiceStatus::Starting.as_str(),
@@ -514,6 +517,12 @@ pub fn record_service_borrow(
         .map_err(sql_error)?;
     transaction
         .execute(
+            "UPDATE services SET status = ?2 WHERE service_instance_id = ?1",
+            params![service_instance_id, ServiceStatus::Borrowed.as_str()],
+        )
+        .map_err(sql_error)?;
+    transaction
+        .execute(
             "
             INSERT INTO run_leases (
               run_id, environment, slot, service_instance_id, owner_token,
@@ -591,6 +600,7 @@ pub fn release_service_borrow(
             params![run_id, service_instance_id, lease_status.as_str()],
         )
         .map_err(sql_error)?;
+    refresh_service_borrow_status(&transaction, service_instance_id)?;
     if canceled {
         transaction
             .execute(
@@ -623,6 +633,90 @@ pub fn release_service_borrow(
             run_id: Some(run_id),
             service_instance_id: Some(service_instance_id),
             process_key: Some(borrowed_process_key),
+            computed_model_hash: Some(computed_model_hash),
+            payload_json: &payload_json,
+        },
+    )?;
+    transaction.commit().map_err(sql_error)?;
+    Ok(())
+}
+
+pub fn mark_service_standing(
+    registry: &mut Registry,
+    run_id: &str,
+    service_instance_id: &str,
+    process_key: &str,
+    computed_model_hash: &str,
+    service_lifetime: ServiceLifetime,
+) -> RuntimeResult<()> {
+    let identity = registry.identity().clone();
+    let redactor = registry.redactor().clone();
+    let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
+    let lease_status = match service_lifetime {
+        ServiceLifetime::RunScoped => RunLeaseStatus::Completed,
+        ServiceLifetime::UntilIdle => RunLeaseStatus::Completed,
+        ServiceLifetime::PersistentUntilDown => RunLeaseStatus::Active,
+    };
+    if matches!(service_lifetime, ServiceLifetime::PersistentUntilDown) {
+        transaction
+            .execute(
+                &format!(
+                    "
+                UPDATE run_leases
+                SET status = ?3,
+                    expires_at = '9999-12-31T23:59:59.999Z'
+                WHERE run_id = ?1 AND service_instance_id = ?2 AND status IN ({})
+                ",
+                    status::sql_in_list(status::LEASE_OPEN)
+                ),
+                params![run_id, service_instance_id, lease_status.as_str()],
+            )
+            .map_err(sql_error)?;
+    } else {
+        transaction
+            .execute(
+                &format!(
+                    "
+                UPDATE run_leases
+                SET status = ?3,
+                    expires_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+                WHERE run_id = ?1 AND service_instance_id = ?2 AND status IN ({})
+                ",
+                    status::sql_in_list(status::LEASE_OPEN)
+                ),
+                params![run_id, service_instance_id, lease_status.as_str()],
+            )
+            .map_err(sql_error)?;
+    }
+    transaction
+        .execute(
+            "UPDATE services SET status = ?2 WHERE service_instance_id = ?1",
+            params![service_instance_id, ServiceStatus::Standing.as_str()],
+        )
+        .map_err(sql_error)?;
+    transaction
+        .execute(
+            "UPDATE runs SET status = ?2 WHERE run_id = ?1 AND status = ?3",
+            params![
+                run_id,
+                RunStatus::Completed.as_str(),
+                RunStatus::ServiceStarting.as_str()
+            ],
+        )
+        .map_err(sql_error)?;
+    let payload_json = serde_json::json!({
+        "serviceLifetime": service_lifetime_as_str(service_lifetime),
+    })
+    .to_string();
+    insert_event(
+        &transaction,
+        &identity,
+        &redactor,
+        EventRecord {
+            event_type: "service.standing",
+            run_id: Some(run_id),
+            service_instance_id: Some(service_instance_id),
+            process_key: Some(process_key),
             computed_model_hash: Some(computed_model_hash),
             payload_json: &payload_json,
         },
@@ -1129,10 +1223,21 @@ pub fn ensure_service_instance_probe_ready(
         .optional()
         .map_err(sql_error)?;
     match status.as_deref() {
-        Some(raw) if raw == ServiceStatus::ProbeReady.as_str() => Ok(()),
-        Some(status) => Err(RuntimeError::new(
+        Some(raw)
+            if matches!(
+                ServiceStatus::from_db(raw),
+                Some(ServiceStatus::ProbeReady | ServiceStatus::Standing | ServiceStatus::Borrowed)
+            ) =>
+        {
+            Ok(())
+        }
+        Some(raw) if ServiceStatus::from_db(raw).is_some() => Err(RuntimeError::new(
             ErrorCode::DependencyUnavailable,
-            format!("service {service_name} is {status}, not probe-ready"),
+            format!("service {service_name} is {raw}, not ready"),
+        )),
+        Some(raw) => Err(RuntimeError::new(
+            ErrorCode::DependencyUnavailable,
+            format!("service {service_name} has unknown readiness status {raw}"),
         )),
         None => Err(RuntimeError::new(
             ErrorCode::DependencyUnavailable,
@@ -1463,6 +1568,87 @@ fn release_service_ports(
             WHERE service_instance_id = ?1
             ",
             params![service_instance_id, PortStatus::Released.as_str()],
+        )
+        .map_err(sql_error)?;
+    Ok(())
+}
+
+pub fn service_lifetime_as_str(lifetime: ServiceLifetime) -> &'static str {
+    match lifetime {
+        ServiceLifetime::RunScoped => "run-scoped",
+        ServiceLifetime::UntilIdle => "until-idle",
+        ServiceLifetime::PersistentUntilDown => "persistent-until-down",
+    }
+}
+
+fn refresh_service_borrow_status(
+    transaction: &rusqlite::Transaction<'_>,
+    service_instance_id: &str,
+) -> RuntimeResult<()> {
+    let row = transaction
+        .query_row(
+            &format!(
+                "
+            SELECT s.status, s.service_lifetime, p.run_id
+            FROM services s
+            LEFT JOIN processes p
+              ON p.service_instance_id = s.service_instance_id
+             AND p.status IN ({})
+            WHERE s.service_instance_id = ?1
+            ORDER BY p.process_key
+            LIMIT 1
+            ",
+                status::sql_in_list(status::PROCESS_ACTIVE)
+            ),
+            params![service_instance_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(sql_error)?;
+    let Some((raw_status, service_lifetime, owner_run_id)) = row else {
+        return Ok(());
+    };
+    let current = ServiceStatus::parse_db(&raw_status)?;
+    if !matches!(
+        current,
+        ServiceStatus::ProbeReady | ServiceStatus::Standing | ServiceStatus::Borrowed
+    ) {
+        return Ok(());
+    }
+    let owner_run_id = owner_run_id.unwrap_or_default();
+    let borrower_count: i64 = transaction
+        .query_row(
+            &format!(
+                "
+            SELECT count(*)
+            FROM run_leases
+            WHERE service_instance_id = ?1
+              AND run_id != ?2
+              AND status IN ({})
+            ",
+                status::sql_in_list(status::LEASE_OPEN)
+            ),
+            params![service_instance_id, owner_run_id],
+            |row| row.get(0),
+        )
+        .map_err(sql_error)?;
+    let next_status = if borrower_count > 0 {
+        ServiceStatus::Borrowed
+    } else if service_lifetime == service_lifetime_as_str(ServiceLifetime::RunScoped) {
+        ServiceStatus::ProbeReady
+    } else {
+        ServiceStatus::Standing
+    };
+    transaction
+        .execute(
+            "UPDATE services SET status = ?2 WHERE service_instance_id = ?1",
+            params![service_instance_id, next_status.as_str()],
         )
         .map_err(sql_error)?;
     Ok(())

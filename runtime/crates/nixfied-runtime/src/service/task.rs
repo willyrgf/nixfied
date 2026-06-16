@@ -284,7 +284,7 @@ fn task_terminal_status(success: bool, timed_out: bool, canceled: bool) -> TaskT
 }
 
 /// Verify every service the task declares as a dependency is among the started
-/// services and is probe-ready. A task may depend on more than one service.
+/// services and in a task-ready state. A task may depend on more than one service.
 fn ensure_task_dependencies(
     registry: &Registry,
     task: &ExecTask,

@@ -2,6 +2,7 @@ use std::path::Path;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use nixfied_model::ServiceLifetime;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 
@@ -13,7 +14,9 @@ use crate::registry::{Registry, RegistryIdentity};
 use crate::service::process::{
     process_group_has_live_member, process_is_live_with_identity, signal_process_group,
 };
-use crate::service::registry::{TaskTerminalStatus, mark_service_stopped, mark_task_finished};
+use crate::service::registry::{
+    TaskTerminalStatus, mark_service_stopped, mark_task_finished, service_lifetime_as_str,
+};
 use crate::state::{CleanupMode, CleanupOutcome, StateIdentity, clean_marked_state};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -32,6 +35,9 @@ pub struct ProcessObservation {
     pub pgid: i32,
     pub registry_status: String,
     pub reconciled_status: String,
+    pub service_status: Option<String>,
+    pub service_lifetime: Option<String>,
+    pub borrower_count: i64,
     pub live: bool,
 }
 
@@ -48,17 +54,34 @@ pub fn ps(registry: &mut Registry) -> RuntimeResult<PsReport> {
 
 pub fn reconcile_registry(registry: &mut Registry) -> RuntimeResult<PsReport> {
     let rows = process_rows(registry)?;
+    for row in rows {
+        let active = is_active_status(&row.status);
+        let live = if active { row.is_live()? } else { false };
+        if active && !live {
+            mark_process_stale(registry, &row)?;
+        }
+    }
+    reconcile_expired_run_leases(registry)?;
+    reconcile_stale_port_reservations(registry)?;
+    reconcile_service_lifetime_statuses(registry)?;
+    reconcile_until_idle_services(registry)?;
+    reconcile_service_lifetime_statuses(registry)?;
+
+    let rows = process_rows(registry)?;
     let mut observations = Vec::with_capacity(rows.len());
     for row in rows {
         let active = is_active_status(&row.status);
         let live = if active { row.is_live()? } else { false };
-        let reconciled_status = if active && !live {
-            mark_process_stale(registry, &row)?;
-            ProcessStatus::Stale.as_str().to_string()
-        } else if live {
+        let reconciled_status = if active && live {
             ProcessStatus::Running.as_str().to_string()
         } else {
             row.status.clone()
+        };
+        let borrower_count = match row.service_instance_id.as_deref() {
+            Some(service_instance_id) => {
+                active_borrower_count(registry, service_instance_id, &row.run_id)?
+            }
+            None => 0,
         };
         observations.push(ProcessObservation {
             process_key: row.process_key,
@@ -68,11 +91,12 @@ pub fn reconcile_registry(registry: &mut Registry) -> RuntimeResult<PsReport> {
             pgid: row.pgid,
             registry_status: row.status,
             reconciled_status,
+            service_status: row.service_status,
+            service_lifetime: row.service_lifetime,
+            borrower_count,
             live,
         });
     }
-    reconcile_expired_run_leases(registry)?;
-    reconcile_stale_port_reservations(registry)?;
     Ok(PsReport {
         processes: observations,
     })
@@ -123,6 +147,17 @@ pub fn down_processes(
         .into_iter()
         .filter(|row| is_active_status(&row.status) && filter.matches(row))
     {
+        if let Some(service_instance_id) = row.service_instance_id.as_deref() {
+            let borrower_count = active_borrower_count(registry, service_instance_id, &row.run_id)?;
+            if borrower_count > 0 {
+                return Err(RuntimeError::new(
+                    ErrorCode::LeaseConflict,
+                    format!(
+                        "service instance {service_instance_id} has {borrower_count} active borrower lease(s)"
+                    ),
+                ));
+            }
+        }
         if !row.is_live()? {
             mark_process_stale(registry, &row)?;
             stale.push(row.process_key);
@@ -169,6 +204,8 @@ struct ProcessRow {
     service_instance_id: Option<String>,
     status: String,
     computed_model_hash: String,
+    service_status: Option<String>,
+    service_lifetime: Option<String>,
 }
 
 #[derive(Debug)]
@@ -228,9 +265,11 @@ fn process_rows(registry: &Registry) -> RuntimeResult<Vec<ProcessRow>> {
             "
             SELECT
               p.process_key, p.pid, p.pgid, p.start_identity, p.command_json,
-              p.run_id, p.service_instance_id, p.status, r.computed_model_hash
+              p.run_id, p.service_instance_id, p.status, r.computed_model_hash,
+              s.status, s.service_lifetime
             FROM processes p
             JOIN runs r ON r.run_id = p.run_id
+            LEFT JOIN services s ON s.service_instance_id = p.service_instance_id
             ORDER BY p.process_key
             ",
         )
@@ -248,6 +287,8 @@ fn process_rows(registry: &Registry) -> RuntimeResult<Vec<ProcessRow>> {
                 row.get::<_, Option<String>>(6)?,
                 row.get::<_, String>(7)?,
                 row.get::<_, String>(8)?,
+                row.get::<_, Option<String>>(9)?,
+                row.get::<_, Option<String>>(10)?,
             ))
         })
         .map_err(sql_error)?
@@ -265,6 +306,8 @@ fn process_rows(registry: &Registry) -> RuntimeResult<Vec<ProcessRow>> {
                 service_instance_id,
                 status,
                 computed_model_hash,
+                service_status,
+                service_lifetime,
             )| {
                 let start_identity = serde_json::from_str::<StoredStartIdentity>(
                     &start_identity_json,
@@ -285,6 +328,8 @@ fn process_rows(registry: &Registry) -> RuntimeResult<Vec<ProcessRow>> {
                     service_instance_id,
                     status,
                     computed_model_hash,
+                    service_status,
+                    service_lifetime,
                 })
             },
         )
@@ -449,6 +494,142 @@ fn active_port_rows(registry: &Registry) -> RuntimeResult<Vec<PortRow>> {
         .map_err(sql_error)?
         .collect::<Result<Vec<_>, _>>()
         .map_err(sql_error)
+}
+
+fn reconcile_service_lifetime_statuses(registry: &mut Registry) -> RuntimeResult<()> {
+    let rows = process_rows(registry)?;
+    let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
+    for row in rows
+        .iter()
+        .filter(|row| is_active_status(&row.status))
+        .filter_map(|row| {
+            Some((
+                row.service_instance_id.as_deref()?,
+                row.run_id.as_str(),
+                row.service_status.as_deref()?,
+                row.service_lifetime.as_deref()?,
+            ))
+        })
+    {
+        let (service_instance_id, owner_run_id, raw_service_status, service_lifetime) = row;
+        let service_status = ServiceStatus::parse_db(raw_service_status)?;
+        if !matches!(
+            service_status,
+            ServiceStatus::ProbeReady | ServiceStatus::Standing | ServiceStatus::Borrowed
+        ) {
+            continue;
+        }
+        let borrower_count =
+            active_borrower_count_conn(&transaction, service_instance_id, owner_run_id)?;
+        let next_status = if borrower_count > 0 {
+            ServiceStatus::Borrowed
+        } else if service_lifetime == service_lifetime_as_str(ServiceLifetime::RunScoped) {
+            ServiceStatus::ProbeReady
+        } else {
+            ServiceStatus::Standing
+        };
+        transaction
+            .execute(
+                "UPDATE services SET status = ?2 WHERE service_instance_id = ?1",
+                params![service_instance_id, next_status.as_str()],
+            )
+            .map_err(sql_error)?;
+    }
+    transaction.commit().map_err(sql_error)?;
+    Ok(())
+}
+
+fn reconcile_until_idle_services(registry: &mut Registry) -> RuntimeResult<()> {
+    let rows = process_rows(registry)?;
+    for row in rows
+        .into_iter()
+        .filter(|row| is_active_status(&row.status))
+        .filter(|row| {
+            row.service_lifetime.as_deref()
+                == Some(service_lifetime_as_str(ServiceLifetime::UntilIdle))
+        })
+    {
+        let Some(service_instance_id) = row.service_instance_id.as_deref() else {
+            continue;
+        };
+        if run_lease_is_open(registry, service_instance_id, &row.run_id)? {
+            continue;
+        }
+        if active_borrower_count(registry, service_instance_id, &row.run_id)? > 0 {
+            continue;
+        }
+        if !row.is_live()? {
+            mark_process_stale(registry, &row)?;
+            continue;
+        }
+        signal_process_group(row.pgid, libc::SIGTERM)?;
+        if !row.wait_until_process_group_empty(1000)? {
+            signal_process_group(row.pgid, libc::SIGKILL)?;
+            if !row.wait_until_process_group_empty(1000)? {
+                return Err(RuntimeError::new(
+                    ErrorCode::ProcEscape,
+                    format!("failed to stop idle until-idle process group {}", row.pgid),
+                ));
+            }
+        }
+        mark_stopped(registry, &row)?;
+    }
+    Ok(())
+}
+
+fn active_borrower_count(
+    registry: &Registry,
+    service_instance_id: &str,
+    owner_run_id: &str,
+) -> RuntimeResult<i64> {
+    active_borrower_count_conn(registry.connection(), service_instance_id, owner_run_id)
+}
+
+fn run_lease_is_open(
+    registry: &Registry,
+    service_instance_id: &str,
+    run_id: &str,
+) -> RuntimeResult<bool> {
+    let count: i64 = registry
+        .connection()
+        .query_row(
+            &format!(
+                "
+            SELECT count(*)
+            FROM run_leases
+            WHERE service_instance_id = ?1
+              AND run_id = ?2
+              AND status IN ({})
+            ",
+                status::sql_in_list(status::LEASE_OPEN)
+            ),
+            params![service_instance_id, run_id],
+            |row| row.get(0),
+        )
+        .map_err(sql_error)?;
+    Ok(count > 0)
+}
+
+fn active_borrower_count_conn(
+    conn: &rusqlite::Connection,
+    service_instance_id: &str,
+    owner_run_id: &str,
+) -> RuntimeResult<i64> {
+    conn.query_row(
+        &format!(
+            "
+        SELECT count(*)
+        FROM run_leases
+        WHERE service_instance_id = ?1
+          AND run_id != ?2
+          AND status IN ({})
+        ",
+            status::sql_in_list(status::LEASE_OPEN)
+        ),
+        params![service_instance_id, owner_run_id],
+        |row| row.get(0),
+    )
+    .map_err(sql_error)
 }
 
 fn run_has_live_process(registry: &Registry, run_id: &str) -> RuntimeResult<bool> {

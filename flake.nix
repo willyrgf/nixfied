@@ -91,6 +91,27 @@
             buildType = "debug";
           };
           minimalModel = nixfiedLib.compileModel ./examples/minimal/nixfied.nix;
+          persistentMinimalModel = nixfiedLib.compileModel (
+            { ... }:
+            {
+              imports = [ ./examples/minimal/nixfied.nix ];
+              nixfied.tasks.keep-up = {
+                serviceLifetime = "persistent-until-down";
+                invocation = {
+                  tools = [ "synthetic-helper" ];
+                  run = [
+                    "nixfied-synthetic-helper"
+                    "task"
+                    "--host"
+                    "127.0.0.1"
+                    "--port"
+                    "\${port}"
+                  ];
+                };
+                requires = [ "synthetic" ];
+              };
+            }
+          );
           postgresModel = nixfiedLib.compileModel ./examples/postgres/nixfied.nix;
           compositeModel = nixfiedLib.compileModel ./examples/composite/nixfied.nix;
           polyglotModel = nixfiedLib.compileModel ./examples/polyglot-stack/nixfied.nix;
@@ -187,6 +208,7 @@
               nixfied.tasks.lifecycle-upgrade-preserve.invocation.env.MINIMAL_B_MODEL = toString minimalModelB;
               nixfied.tasks.lifecycle-upgrade-epoch.invocation.env.MINIMAL_EPOCH2_MODEL = toString minimalModelEpoch2;
               nixfied.tasks.lifecycle-tamper-refusal.invocation.env.MINIMAL_EPOCH2_MODEL = toString minimalModelEpoch2;
+              nixfied.tasks.lifecycle-service-lifetime.invocation.env.PERSISTENT_MINIMAL_MODEL = toString persistentMinimalModel;
               nixfied.tasks.slot-0.invocation.env.DOWNSTREAM_MODEL = toString downstreamModel;
               nixfied.tasks.slot-1.invocation.env.DOWNSTREAM_MODEL = toString downstreamModel;
               nixfied.tasks.slots-assert.invocation.env.DOWNSTREAM_MODEL = toString downstreamModel;

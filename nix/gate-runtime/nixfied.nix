@@ -492,6 +492,57 @@
     };
   };
 
+  nixfied.tasks.lifecycle-service-lifetime = {
+    invocation = {
+      tools = [
+        pkgs.bash
+        "rt"
+        "jq"
+        "sqlite3"
+        "coreutils"
+      ];
+      run = [
+        "bash"
+        "-c"
+        ''
+          set -euo pipefail
+          inner="''${stateDir}/service-lifetime-inner"
+          mkdir -p "''${stateDir}/gate-artifacts" "$inner"
+          NIXFIED_STATE_DIR="$inner" \
+            nixfied-runtime run --model "$PERSISTENT_MINIMAL_MODEL/model.json" \
+              --task keep-up --timeout-ms 60000 \
+            > "''${stateDir}/gate-artifacts/service-lifetime-up.json"
+          NIXFIED_STATE_DIR="$inner" \
+            nixfied-runtime ps --model "$PERSISTENT_MINIMAL_MODEL/model.json" \
+            > "''${stateDir}/gate-artifacts/service-lifetime-ps-standing.json"
+          jq -e '.processes[] | select(.serviceStatus == "standing" and .serviceLifetime == "persistent-until-down" and .live == true)' \
+            "''${stateDir}/gate-artifacts/service-lifetime-ps-standing.json" >/dev/null
+
+          NIXFIED_STATE_DIR="$inner" \
+            nixfied-runtime run --model "$PERSISTENT_MINIMAL_MODEL/model.json" \
+              --task smoke --timeout-ms 60000 \
+            > "''${stateDir}/gate-artifacts/service-lifetime-borrow.json"
+          db="$inner/registry/minimal/dev/0/registry.sqlite3"
+          starts=$(sqlite3 "$db" "SELECT count(*) FROM events WHERE event_type = 'service.starting'")
+          borrows=$(sqlite3 "$db" "SELECT count(*) FROM events WHERE event_type = 'service.borrowed'")
+          standing=$(sqlite3 "$db" "SELECT count(*) FROM services WHERE status = 'standing' AND service_lifetime = 'persistent-until-down'")
+          [ "$starts" -eq 1 ] \
+            || { echo "service lifetime: expected one service start, got $starts" >&2; exit 1; }
+          [ "$borrows" -eq 1 ] \
+            || { echo "service lifetime: expected one service borrow, got $borrows" >&2; exit 1; }
+          [ "$standing" -eq 1 ] \
+            || { echo "service lifetime: persistent service was not standing after borrower exit" >&2; exit 1; }
+
+          NIXFIED_STATE_DIR="$inner" \
+            nixfied-runtime down --model "$PERSISTENT_MINIMAL_MODEL/model.json" >/dev/null
+          stopped=$(sqlite3 "$db" "SELECT count(*) FROM services WHERE status = 'stopped'")
+          [ "$stopped" -eq 1 ] \
+            || { echo "service lifetime: down did not stop persistent service" >&2; exit 1; }
+        ''
+      ];
+    };
+  };
+
   # ---- slot leaf tasks (slot-0 and slot-1 run concurrently) -----------
 
   nixfied.tasks.slot-0 = {
@@ -618,6 +669,7 @@
       "lifecycle-upgrade-preserve"
       "lifecycle-upgrade-epoch"
       "lifecycle-tamper-refusal"
+      "lifecycle-service-lifetime"
     ];
   };
 

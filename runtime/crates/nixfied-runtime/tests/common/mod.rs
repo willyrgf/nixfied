@@ -44,6 +44,7 @@ pub fn synthetic_model_default(port_start: u16, port_end: u16) -> Value {
 pub use nixfied_model::fixtures::{host_arch, host_os, host_system};
 
 use nixfied_model::Model;
+use nixfied_model::ServiceLifetime;
 use nixfied_runtime::registry::Registry;
 use nixfied_runtime::service::{
     ServiceSelection, SlotEndpoints, StartedService, run_slot_clean, start_service_for_slot,
@@ -78,6 +79,27 @@ pub fn start_synthetic_service(
     )
 }
 
+pub fn start_synthetic_service_with_lifetime(
+    model: &Model,
+    admission: &Admission,
+    placement: &HostPlacement,
+    registry: &mut Registry,
+    run_id: impl Into<String>,
+    selected_port: u16,
+    service_lifetime: ServiceLifetime,
+) -> RuntimeResult<StartedService> {
+    let selected_slot = select_slot(model, None)?;
+    start_synthetic_service_for_slot_with_lifetime(
+        admission,
+        placement,
+        registry,
+        run_id,
+        &selected_slot,
+        selected_port,
+        service_lifetime,
+    )
+}
+
 /// Start the fixture's `synthetic` service on a chosen slot through the generic
 /// runtime API, with no wired endpoints.
 pub fn start_synthetic_service_for_slot(
@@ -87,6 +109,26 @@ pub fn start_synthetic_service_for_slot(
     run_id: impl Into<String>,
     selected_slot: &SelectedSlot<'_>,
     selected_port: u16,
+) -> RuntimeResult<StartedService> {
+    start_synthetic_service_for_slot_with_lifetime(
+        admission,
+        placement,
+        registry,
+        run_id,
+        selected_slot,
+        selected_port,
+        ServiceLifetime::RunScoped,
+    )
+}
+
+pub fn start_synthetic_service_for_slot_with_lifetime(
+    admission: &Admission,
+    placement: &HostPlacement,
+    registry: &mut Registry,
+    run_id: impl Into<String>,
+    selected_slot: &SelectedSlot<'_>,
+    selected_port: u16,
+    service_lifetime: ServiceLifetime,
 ) -> RuntimeResult<StartedService> {
     // The synthetic fixture binds a single endpoint, `synthetic-tcp`.
     let endpoint_ports =
@@ -99,6 +141,7 @@ pub fn start_synthetic_service_for_slot(
         selected_slot,
         ServiceSelection {
             service_name: SYNTHETIC_SERVICE_NAME,
+            service_lifetime,
             endpoint_ports: &endpoint_ports,
             slot_endpoints: &SlotEndpoints::new(),
             prepare_runner: None,

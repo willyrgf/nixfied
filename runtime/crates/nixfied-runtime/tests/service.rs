@@ -7,7 +7,7 @@ use std::process::{Child, Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use nixfied_model::{DirtyPolicy, Model, SourceMode};
+use nixfied_model::{DirtyPolicy, Model, ServiceLifetime, SourceMode};
 use nixfied_runtime::cancellation::CancellationToken;
 use nixfied_runtime::redaction::{REDACTION_TOKEN, Redactor};
 use nixfied_runtime::registry::{Registry, RegistryIdentity};
@@ -2131,6 +2131,235 @@ fn probe_ready_service_with_different_planned_port_is_not_reused() {
 }
 
 #[test]
+fn persistent_service_survives_borrower_exit_and_down_stops_after_release() {
+    let Some(python) = python3_path() else {
+        return;
+    };
+    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
+    let port = listener.local_addr().expect("local addr").port();
+    drop(listener);
+    let mut fixture =
+        ServiceFixture::new(python, &["-c", python_listener_script(), "${port}"], port);
+    let mut owner = start_synthetic_service_with_lifetime(
+        &fixture.model,
+        &fixture.admission,
+        &fixture.placement,
+        &mut fixture.registry,
+        "run-persistent-owner",
+        port,
+        ServiceLifetime::PersistentUntilDown,
+    )
+    .expect("persistent owner service should start");
+    owner
+        .wait_for_probe_ready(&mut fixture.registry)
+        .expect("persistent service should become ready");
+    let service_instance_id = owner.service_instance_id.clone();
+    let owner_pgid = owner.pgid;
+    owner
+        .stand(&mut fixture.registry)
+        .expect("persistent service should stand");
+
+    let standing = ps(&mut fixture.registry).expect("ps should report standing service");
+    let observed = standing
+        .processes
+        .iter()
+        .find(|process| process.service_instance_id.as_deref() == Some(&service_instance_id))
+        .expect("standing service process should be reported");
+    assert!(observed.live);
+    assert_eq!(observed.service_status.as_deref(), Some("standing"));
+    assert_eq!(
+        observed.service_lifetime.as_deref(),
+        Some("persistent-until-down")
+    );
+    assert_eq!(observed.borrower_count, 0);
+
+    let borrower = start_synthetic_service(
+        &fixture.model,
+        &fixture.admission,
+        &fixture.placement,
+        &mut fixture.registry,
+        "run-persistent-borrower",
+        port,
+    )
+    .expect("run-scoped borrower should reuse persistent service");
+    assert!(borrower.is_borrowed());
+    let borrowed = ps(&mut fixture.registry).expect("ps should report borrowed service");
+    let observed = borrowed
+        .processes
+        .iter()
+        .find(|process| process.service_instance_id.as_deref() == Some(&service_instance_id))
+        .expect("borrowed service process should be reported");
+    assert_eq!(observed.service_status.as_deref(), Some("borrowed"));
+    assert_eq!(observed.borrower_count, 1);
+
+    let conflict = down_owned_process_groups(&mut fixture.registry, 1000)
+        .expect_err("down must not stop a service with a live borrower");
+    assert_eq!(conflict.code, ErrorCode::LeaseConflict);
+    assert!(process_group_has_non_zombie_member(owner_pgid));
+
+    borrower
+        .stop(&mut fixture.registry, 1000)
+        .expect("borrower should release without stopping persistent owner");
+    let released = ps(&mut fixture.registry).expect("ps should report standing after release");
+    let observed = released
+        .processes
+        .iter()
+        .find(|process| process.service_instance_id.as_deref() == Some(&service_instance_id))
+        .expect("standing service process should still be reported");
+    assert_eq!(observed.service_status.as_deref(), Some("standing"));
+    assert_eq!(observed.borrower_count, 0);
+
+    let down = down_owned_process_groups(&mut fixture.registry, 1000)
+        .expect("down should stop persistent service after borrowers release");
+    assert_eq!(down.stopped.len(), 1);
+    assert!(
+        !process_group_has_non_zombie_member(owner_pgid),
+        "down should terminate the persistent owner process group"
+    );
+}
+
+#[test]
+fn until_idle_service_stops_when_borrower_lease_goes_stale() {
+    let Some(python) = python3_path() else {
+        return;
+    };
+    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
+    let port = listener.local_addr().expect("local addr").port();
+    drop(listener);
+    let mut fixture =
+        ServiceFixture::new(python, &["-c", python_listener_script(), "${port}"], port);
+    let mut owner = start_synthetic_service_with_lifetime(
+        &fixture.model,
+        &fixture.admission,
+        &fixture.placement,
+        &mut fixture.registry,
+        "run-until-idle-owner",
+        port,
+        ServiceLifetime::UntilIdle,
+    )
+    .expect("until-idle owner service should start");
+    owner
+        .wait_for_probe_ready(&mut fixture.registry)
+        .expect("until-idle service should become ready");
+    let service_instance_id = owner.service_instance_id.clone();
+    let owner_pgid = owner.pgid;
+    let borrower = start_synthetic_service(
+        &fixture.model,
+        &fixture.admission,
+        &fixture.placement,
+        &mut fixture.registry,
+        "run-until-idle-borrower",
+        port,
+    )
+    .expect("borrower should reuse until-idle service");
+    assert!(borrower.is_borrowed());
+    owner
+        .stand(&mut fixture.registry)
+        .expect("until-idle service should stand while borrower is active");
+    fixture
+        .registry
+        .connection()
+        .execute(
+            "
+            UPDATE run_leases
+            SET expires_at = strftime('%Y-%m-%dT%H:%M:%fZ','now','-1 seconds')
+            WHERE run_id = 'run-until-idle-borrower'
+            ",
+            [],
+        )
+        .expect("test should expire borrower lease");
+
+    let report = ps(&mut fixture.registry).expect("ps should reconcile stale borrower");
+
+    let observed = report
+        .processes
+        .iter()
+        .find(|process| process.service_instance_id.as_deref() == Some(&service_instance_id))
+        .expect("until-idle process row should be reported");
+    assert_eq!(observed.registry_status, "stopped");
+    assert_eq!(observed.service_status.as_deref(), Some("stopped"));
+    assert!(!observed.live);
+    let borrower_lease_status: String = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT status FROM run_leases WHERE run_id = 'run-until-idle-borrower'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("borrower lease status should query");
+    assert_eq!(borrower_lease_status, "stale");
+    assert!(
+        !process_group_has_non_zombie_member(owner_pgid),
+        "idle reconciliation should stop the until-idle process group"
+    );
+}
+
+#[test]
+fn clean_and_purge_refuse_while_until_idle_borrower_is_live() {
+    let Some(python) = python3_path() else {
+        return;
+    };
+    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
+    let port = listener.local_addr().expect("local addr").port();
+    drop(listener);
+    let mut fixture =
+        ServiceFixture::new(python, &["-c", python_listener_script(), "${port}"], port);
+    let selected = select_slot(&fixture.model, None).expect("default slot should select");
+    let identity = StateIdentity::from_selected_slot(&fixture.model, &fixture.admission, &selected);
+    commit_slot_marker(&fixture.placement, &identity).expect("slot marker should be written");
+    let mut owner = start_synthetic_service_with_lifetime(
+        &fixture.model,
+        &fixture.admission,
+        &fixture.placement,
+        &mut fixture.registry,
+        "run-clean-owner",
+        port,
+        ServiceLifetime::UntilIdle,
+    )
+    .expect("until-idle owner service should start");
+    owner
+        .wait_for_probe_ready(&mut fixture.registry)
+        .expect("until-idle service should become ready");
+    owner
+        .stand(&mut fixture.registry)
+        .expect("until-idle service should stand");
+    let borrower = start_synthetic_service(
+        &fixture.model,
+        &fixture.admission,
+        &fixture.placement,
+        &mut fixture.registry,
+        "run-clean-borrower",
+        port,
+    )
+    .expect("borrower should reuse until-idle service");
+
+    let clean_error = run_synthetic_service_clean_for_slot(
+        &fixture.model,
+        &fixture.admission,
+        &fixture.placement,
+        &mut fixture.registry,
+        &selected,
+    )
+    .expect_err("clean must refuse while borrower lease is active");
+    let purge_error = clean_marked_state(
+        &fixture.placement.state_base,
+        &fixture.placement.state_root,
+        &identity,
+        &mut fixture.registry,
+        CleanupMode::Purge,
+    )
+    .expect_err("purge must refuse while borrower lease is active");
+
+    assert_eq!(clean_error.code, ErrorCode::CleanupRefused);
+    assert_eq!(purge_error.code, ErrorCode::CleanupRefused);
+    borrower
+        .stop(&mut fixture.registry, 1000)
+        .expect("borrower should release after cleanup refusal proof");
+    let _ = ps(&mut fixture.registry).expect("until-idle service should stop after release");
+}
+
+#[test]
 fn ps_reconciles_dead_owned_process_and_port_as_stale() {
     let mut fixture = ServiceFixture::new("/bin/sleep", &["1"], 23187);
     let service = start_synthetic_service(
@@ -3163,6 +3392,7 @@ fn endpoint_less_service_reaches_ready_without_ownership_verification() {
         &select_slot(&fixture.model, None).expect("slot"),
         nixfied_runtime::service::ServiceSelection {
             service_name: "synthetic",
+            service_lifetime: nixfied_model::ServiceLifetime::RunScoped,
             endpoint_ports: &std::collections::BTreeMap::new(),
             slot_endpoints: &SlotEndpoints::new(),
             prepare_runner: None,
