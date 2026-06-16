@@ -33,6 +33,8 @@ pub enum ErrorCode {
     TaskFailed,
     LifecycleFailed,
     DependencyUnavailable,
+    SecretUnavailable,
+    SecretLeakBlocked,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -143,7 +145,9 @@ mod tests {
             | ErrorCode::LeaseConflict
             | ErrorCode::TaskFailed
             | ErrorCode::LifecycleFailed
-            | ErrorCode::DependencyUnavailable => {}
+            | ErrorCode::DependencyUnavailable
+            | ErrorCode::SecretUnavailable
+            | ErrorCode::SecretLeakBlocked => {}
         }
     }
 
@@ -178,6 +182,8 @@ mod tests {
         ErrorCode::TaskFailed,
         ErrorCode::LifecycleFailed,
         ErrorCode::DependencyUnavailable,
+        ErrorCode::SecretUnavailable,
+        ErrorCode::SecretLeakBlocked,
     ];
 
     const ALL_EXIT_CLASSES: &[ExitClass] = &[ExitClass::Ok, ExitClass::Error];

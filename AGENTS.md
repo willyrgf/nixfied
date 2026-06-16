@@ -49,8 +49,8 @@ deliberate change to the contract (and matching version bump + docs + tests):
   non-store admission is an unstable test/dev escape hatch (`--allow-non-store-model`).
 - **MODEL-CONTRACT-1:** the model carries the full admission contract
   (generator/toolchain, runtime ABI, target, source policy, closure metadata,
-  layered service identity, state policy). The model carries **no** secret
-  section (REDACT-1; secrets are deferred scope).
+  layered service identity, state policy, and secret descriptors). Secret
+  descriptors are references only; the model carries no secret values.
 - **HASH-1:** the runtime computes `computedModelHash = sha256(raw bytes)`; no
   self-hash is embedded.
 - **ABI-1:** admission requires an exact `runtimeAbi` / `toolchainId` match; no
@@ -105,8 +105,9 @@ deliberate change to the contract (and matching version bump + docs + tests):
   process group; cancellation propagates to the whole group; a long-lived process
   counts as started only after a registry process record; admission fails if a
   service needs stronger containment than the host supports.
-- **REDACT-1:** persistent output is redacted before write. (Secrets are not yet
-  part of the contract — see deferred scope; the model carries no secret section.)
+- **REDACT-1:** runtime-owned persistent output is redacted before write. Secret
+  values are never model data; resolved values exist only in runtime memory and
+  hermetic child environments.
 - **SURFACE-1 (split into its two honest halves):** the runtime/view command
   set (`model`, `schema`, `docs`, `capabilities`, `check`, `run`, `ps`,
   `down`, `clean`) is framework-owned, derived in the views, and listed in
@@ -143,12 +144,11 @@ The runtime error contract (stable codes/exit classes) — `MODEL_NOT_STORE_OUTP
 `MODEL_INVALID`, `MODEL_ADMISSION`, `RUNTIME_ABI_MISMATCH`, `SOURCE_MISMATCH`,
 `PLATFORM_UNSUPPORTED`, `CLOSURE_MISSING`, `PORT_CONFLICT`, `PORT_UNVERIFIABLE`,
 `STATE_UNWRITABLE`, `STATE_UNOWNED`, `LEASE_STALE`/`LEASE_CONFLICT`, `PROC_ESCAPE`,
-`READINESS_TIMEOUT`, `CANCELED`, `CLEANUP_REFUSED`, `REGISTRY_CORRUPT`, plus the
-execution-class codes `TASK_FAILED`, `LIFECYCLE_FAILED`, `DEPENDENCY_UNAVAILABLE`
-(admission passed, execution failed — `MODEL_ADMISSION` after admission is, by
-construction, a leak) — is public API for the current ABI. `SECRET_UNAVAILABLE`
-and `SECRET_LEAK_BLOCKED` are reserved for the deferred secrets scope and do not
-exist in the runtime yet.
+`READINESS_TIMEOUT`, `CANCELED`, `CLEANUP_REFUSED`, `REGISTRY_CORRUPT`,
+`SECRET_UNAVAILABLE`, `SECRET_LEAK_BLOCKED`, plus the execution-class codes
+`TASK_FAILED`, `LIFECYCLE_FAILED`, `DEPENDENCY_UNAVAILABLE` (admission passed,
+execution failed — `MODEL_ADMISSION` after admission is, by construction, a leak)
+— is public API for the current ABI.
 
 ## Non-Negotiable Boundaries
 
@@ -333,9 +333,9 @@ essentially impossible once clippy + debug pass.
 ## In progress
 
 The remaining capabilities being implemented to close out the old deferred
-list — explicit state purge, immutable source modes + `dirtyPolicy = reject`,
-secret injection, and service lifetimes/reuse — are designed in
-`docs/RFC_DEFERRED_STATE_SECRET_SERVICE.md`; each is removed here as it ships.
+list — secret injection/redaction and service lifetime behavior/reuse — are
+designed in `docs/RFC_DEFERRED_STATE_SECRET_SERVICE.md`; each is removed here as
+it ships.
 There is no other backlog: rejected non-goals (a manifest envelope, a dynamic
 runtime adapter protocol, multi-host execution, a required daemon, UI, non-`fail`
 port policies, richer inter-service DAGs, cross-reference memoization, per-tool

@@ -16,6 +16,7 @@ pub struct Model {
     pub project: Project,
     pub target: Target,
     pub codebases: Vec<Codebase>,
+    pub secrets: BTreeMap<String, SecretDescriptor>,
     /// The isolation namespaces (state roots, slots, registry keys) the model
     /// supports. Membership does not exist: running a task brings up exactly
     /// the services its leaves require. A single `dev` environment for now.
@@ -137,6 +138,30 @@ pub enum CleanupPolicy {
 pub enum PersistencePolicy {
     RunScoped,
     Persistent,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SecretDescriptor {
+    pub secret_id: String,
+    pub source: SecretSource,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SecretSource {
+    pub kind: SecretSourceKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env_var: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SecretSourceKind {
+    EnvVar,
+    File,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -421,6 +446,7 @@ pub enum ContainmentRequirement {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TaskSpec {
     pub kind: TaskKind,
+    pub service_lifetime: ServiceLifetime,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operation_id: Option<OperationId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -453,6 +479,14 @@ pub struct TaskSpec {
 pub enum TaskKind {
     Leaf,
     Composite,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ServiceLifetime {
+    RunScoped,
+    UntilIdle,
+    PersistentUntilDown,
 }
 
 /// One named step of a composite: a task reference plus the sibling steps that

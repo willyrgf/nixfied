@@ -35,6 +35,7 @@ pub fn lower(model: &Model) -> RuntimeResult<ExecutionModel> {
         project: _,
         target: _,
         codebases: _,
+        secrets: _,
         environments: _,
         slot_policy: _,
         placement,
@@ -315,6 +316,7 @@ fn lower_task(
 ) -> RuntimeResult<LoweredTask> {
     let TaskSpec {
         kind,
+        service_lifetime: _,
         operation_id: _,
         invocation,
         requires,
@@ -1181,6 +1183,7 @@ mod tests {
                 "sourceIdentity": "live",
                 "sourcePolicy": { "dirtyPolicy": "warn", "admissionFingerprintPolicy": "live" }
             }],
+            "secrets": {},
             "environments": ["dev"],
             "slotPolicy": { "min": 0, "default": 0, "max": 0 },
             "placement": {
@@ -1213,6 +1216,7 @@ mod tests {
             "tasks": {
                 "t": {
                     "kind": "leaf",
+                    "serviceLifetime": "run-scoped",
                     "operationId": "task.t.run",
                     "invocation": {
                         "tools": ["ct"],
@@ -1458,6 +1462,7 @@ mod tests {
         value["closures"]["ct"]["operationBindings"] = json!(["task.custom.odd", "task.t.run"]);
         value["tasks"]["odd"] = json!({
             "kind": "leaf",
+            "serviceLifetime": "run-scoped",
             "operationId": "task.custom.odd",
             "invocation": {
                 "tools": ["ct"],
@@ -1496,6 +1501,7 @@ mod tests {
             json!(["task.migrate.run", "task.seed.run", "task.t.run"]);
         value["tasks"]["migrate"] = json!({
             "kind": "leaf",
+            "serviceLifetime": "run-scoped",
             "operationId": "task.migrate.run",
             "invocation": {
                 "tools": ["ct"],
@@ -1509,6 +1515,7 @@ mod tests {
         });
         value["tasks"]["seed"] = json!({
             "kind": "leaf",
+            "serviceLifetime": "run-scoped",
             "operationId": "task.seed.run",
             "invocation": {
                 "tools": ["ct"],
@@ -1522,6 +1529,7 @@ mod tests {
         });
         value["tasks"]["prep"] = json!({
             "kind": "composite",
+            "serviceLifetime": "run-scoped",
             "steps": {
                 "migrate": { "task": "migrate" },
                 "seed": { "task": "seed", "dependsOn": ["migrate"] }
@@ -1699,6 +1707,7 @@ mod tests {
         let mut value = model_value();
         value["tasks"]["pipeline"] = json!({
             "kind": "composite",
+            "serviceLifetime": "run-scoped",
             "servicesRequired": ["svc"],
             "steps": {
                 "first": { "task": "t" },
@@ -1718,6 +1727,7 @@ mod tests {
         let mut value = model_value();
         value["tasks"]["pipeline"] = json!({
             "kind": "composite",
+            "serviceLifetime": "run-scoped",
             "steps": { "only": { "task": "ghost" } }
         });
         let error = lower(&model_from(value)).expect_err("dangling step task must reject");
@@ -1730,6 +1740,7 @@ mod tests {
         let mut value = model_value();
         value["tasks"]["pipeline"] = json!({
             "kind": "composite",
+            "serviceLifetime": "run-scoped",
             "servicesRequired": ["svc"],
             "steps": { "only": { "task": "t", "dependsOn": ["ghost"] } }
         });
@@ -1743,6 +1754,7 @@ mod tests {
         let mut value = model_value();
         value["tasks"]["pipeline"] = json!({
             "kind": "composite",
+            "serviceLifetime": "run-scoped",
             "servicesRequired": ["svc"],
             "steps": { "only": { "task": "t" } }
         });
@@ -1945,6 +1957,7 @@ mod tests {
         });
         value["tasks"]["migrate"] = json!({
             "kind": "leaf",
+            "serviceLifetime": "run-scoped",
             "operationId": "task.migrate.run",
             "invocation": {
                 "tools": ["cm"],
@@ -1994,6 +2007,7 @@ mod tests {
         });
         value["tasks"]["migrate"] = json!({
             "kind": "leaf",
+            "serviceLifetime": "run-scoped",
             "operationId": "task.migrate.run",
             "invocation": {
                 "tools": ["cm"],
@@ -2031,6 +2045,7 @@ mod tests {
         });
         value["tasks"]["selfinit"] = json!({
             "kind": "leaf",
+            "serviceLifetime": "run-scoped",
             "operationId": "task.selfinit.run",
             "invocation": {
                 "tools": ["cm"],

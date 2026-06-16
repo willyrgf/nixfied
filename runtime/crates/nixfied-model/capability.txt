@@ -4,13 +4,15 @@ model-version: 1
 # The wire primitives the runtime admits and lowers. A field added or removed
 # here is a contract change; editing this manifest rotates the runtime ABI digest
 # so models emitted against the old contract are rejected by the identity check.
-primitive Model: modelVersion toolchainId runtimeAbi generator project target codebases environments slotPolicy placement state closures services tasks docs
+primitive Model: modelVersion toolchainId runtimeAbi generator project target codebases secrets environments slotPolicy placement state closures services tasks docs
 primitive Generator: name version emitter
 primitive Project: projectId name
 primitive Target: system os arch closureSystem
 primitive Codebase: codebaseId logicalRoot sourceMode sourceIdentity sourcePolicy
 primitive SourcePolicy: dirtyPolicy admissionFingerprintPolicy
 primitive StatePolicy: markerIdentity stateEpoch cleanupPolicy persistence
+primitive SecretDescriptor: secretId source
+primitive SecretSource: kind envVar path
 primitive SlotPolicy: min default max
 primitive Placement: slotPlacements
 primitive SlotPlacement: slot candidatePorts
@@ -31,7 +33,7 @@ primitive CleanSpec: operationId terminal
 primitive Endpoint: endpointId host
 primitive ProbeSpec: kind invocation timeoutMs retryIntervalMs maxAttempts
 primitive TerminalSemantics: success failure
-primitive TaskSpec: kind operationId invocation requires servicesRequired exitPolicy steps artifactRefs logRefs summaryRefs
+primitive TaskSpec: kind serviceLifetime operationId invocation requires servicesRequired exitPolicy steps artifactRefs logRefs summaryRefs
 primitive StepSpec: task dependsOn
 primitive ExitPolicy: successCodes
 primitive Docs: title summary
@@ -41,7 +43,7 @@ primitive Docs: title summary
 # dependency (tasks). The named form ${port:<name>} resolves <name> first against
 # the owning service's endpoint ids, then against a service declared via
 # connectsTo (services) or requires (tasks) — its primary slot-plan endpoint.
-substitution: ${port} ${host} ${stateDir} ${port:<name>} ${host:<name>}
+substitution: ${port} ${host} ${stateDir} ${port:<name>} ${host:<name>} ${secret:<id>}
 
 # The runtime command surfaces every model exposes.
 surface: model schema docs capabilities check run ps down clean
@@ -56,6 +58,8 @@ enum ClosureEffect: process network-listener source-read file-write
 enum StdinPolicy: null inherit
 enum ProbeKind: tcp exec
 enum TaskKind: leaf composite
+enum ServiceLifetime: run-scoped until-idle persistent-until-down
+enum SecretSourceKind: env-var file
 enum ContainmentRequirement: process-group process-tree
 enum SourceMode: snapshot flake-input live-workspace
 enum DirtyPolicy: allow warn reject
@@ -64,7 +68,7 @@ enum PersistencePolicy: run-scoped persistent
 
 # The typed registry status domains and their wire values.
 status RunStatus: service-starting canceling canceled completed task-succeeded task-failed service-failed proc-escaped stale
-status ServiceStatus: starting probe-ready stopped canceled failed escaped stale
+status ServiceStatus: starting probe-ready standing borrowed stopped canceled failed escaped stale
 status ProcessStatus: starting running ready stopped succeeded failed canceled escaped stale
 status RunLeaseStatus: active canceling canceled completed failed stale
 status PortStatus: reserved binding bound active released stale
@@ -74,5 +78,5 @@ status CleanupStatus: intent deleted failed
 # runtime emits. These are public API for the current ABI, so a change rotates the
 # digest like any primitive field — old models and the new runtime cannot disagree
 # on the failure vocabulary without the identity check noticing.
-error-code: MODEL_NOT_STORE_OUTPUT MODEL_INVALID MODEL_ADMISSION RUNTIME_ABI_MISMATCH SOURCE_MISMATCH PLATFORM_UNSUPPORTED CLOSURE_MISSING REGISTRY_CORRUPT STATE_UNWRITABLE STATE_UNOWNED CLEANUP_REFUSED PORT_CONFLICT PORT_UNVERIFIABLE PROC_ESCAPE READINESS_TIMEOUT CANCELED LEASE_STALE LEASE_CONFLICT TASK_FAILED LIFECYCLE_FAILED DEPENDENCY_UNAVAILABLE
+error-code: MODEL_NOT_STORE_OUTPUT MODEL_INVALID MODEL_ADMISSION RUNTIME_ABI_MISMATCH SOURCE_MISMATCH PLATFORM_UNSUPPORTED CLOSURE_MISSING REGISTRY_CORRUPT STATE_UNWRITABLE STATE_UNOWNED CLEANUP_REFUSED PORT_CONFLICT PORT_UNVERIFIABLE PROC_ESCAPE READINESS_TIMEOUT CANCELED LEASE_STALE LEASE_CONFLICT TASK_FAILED LIFECYCLE_FAILED DEPENDENCY_UNAVAILABLE SECRET_UNAVAILABLE SECRET_LEAK_BLOCKED
 exit-class: ok error

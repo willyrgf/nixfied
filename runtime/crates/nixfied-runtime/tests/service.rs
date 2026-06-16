@@ -3281,6 +3281,7 @@ fn composite_run_keys_evidence_by_step_path() {
     prepend_invocation_args(&mut value, &["-c", script]);
     value["tasks"]["twice"] = json!({
         "kind": "composite",
+        "serviceLifetime": "run-scoped",
         "steps": {
             "again": { "task": "smoke", "dependsOn": ["first"] },
             "first": { "task": "smoke" }
@@ -3394,6 +3395,7 @@ fn nested_composite_cancellation_terminates_leaf_process_group() {
     set_task_run_args(&mut value, &["-c", &script, &marker_arg]);
     value["tasks"]["inner"] = json!({
         "kind": "composite",
+        "serviceLifetime": "run-scoped",
         "servicesRequired": [],
         "steps": {
             "wait": { "task": "smoke" }
@@ -3401,6 +3403,7 @@ fn nested_composite_cancellation_terminates_leaf_process_group() {
     });
     value["tasks"]["outer"] = json!({
         "kind": "composite",
+        "serviceLifetime": "run-scoped",
         "servicesRequired": [],
         "steps": {
             "inner": { "task": "inner" }
@@ -3527,6 +3530,7 @@ fn composite_starts_full_service_union_before_first_node() {
     value["tasks"]["needs-worker"] = needs_worker;
     value["tasks"]["pipeline"] = json!({
         "kind": "composite",
+        "serviceLifetime": "run-scoped",
         "servicesRequired": ["synthetic", "worker"],
         "steps": {
             "first": { "task": "smoke" },
@@ -3815,6 +3819,7 @@ fn failed_composite_run_writes_failure_summary() {
     set_task_run_args(&mut value, &["-c", "exit 3"]);
     value["tasks"]["wf"] = json!({
         "kind": "composite",
+        "serviceLifetime": "run-scoped",
         "steps": {
             "fail-node": { "task": "smoke" }
         }
@@ -3886,6 +3891,7 @@ fn service_failure_before_any_node_writes_failed_summary() {
     value["closures"]["synthetic-helper"]["executable"] = json!(shell.to_string_lossy());
     value["tasks"]["wf"] = json!({
         "kind": "composite",
+        "serviceLifetime": "run-scoped",
         "servicesRequired": ["synthetic"],
         "steps": {
             "never-runs": { "task": "smoke" }

@@ -38,6 +38,8 @@ in
         "TerminalSemantics"
         "ServiceSpec"
         "TaskSpec"
+        "SecretDescriptor"
+        "SecretSource"
         "SlotPlacement"
       ];
     };

@@ -1131,5 +1131,7 @@ fn exit_code(error: &RuntimeError) -> i32 {
         nixfied_runtime::ErrorCode::TaskFailed => 30,
         nixfied_runtime::ErrorCode::LifecycleFailed => 31,
         nixfied_runtime::ErrorCode::DependencyUnavailable => 32,
+        nixfied_runtime::ErrorCode::SecretUnavailable => 33,
+        nixfied_runtime::ErrorCode::SecretLeakBlocked => 34,
     }
 }

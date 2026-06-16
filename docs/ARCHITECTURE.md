@@ -199,10 +199,12 @@ Every runtime action is scoped by `projectId / environment / slot / runId`.
 
 ## Secrets
 
-Full secrets management is deferred, but non-leakage is not. The contract carries
-no secrets section at all; persistent output (logs, summaries, registry, errors)
-is redacted before write. Reintroducing secret *references* (never values) is
-future scope.
+The contract carries secret descriptors, never secret values. Descriptors are
+runtime references such as `env-var` and confined `file` resolvers; resolved
+values belong only in runtime memory and hermetic child environments. REDACT-1 is
+scoped to runtime-owned persistent output (logs, summaries, registry payloads,
+captured child output, and error JSON); it cannot govern files or sockets a child
+chooses to write on its own.
 
 ## What v1 taught us (and the invariant each lesson produced)
 

@@ -322,6 +322,7 @@ let
     if task.kind == "composite" then
       {
         kind = "composite";
+        serviceLifetime = "run-scoped";
         servicesRequired = taskServicesRequired name;
         steps = mapAttrs (_stepName: step: {
           task = step.task;
@@ -331,6 +332,7 @@ let
     else
       {
         kind = "leaf";
+        serviceLifetime = "run-scoped";
         operationId = leafOperationId name task;
         invocation = resolveInvocation "task ${name}" task.invocation;
         requires = task.requires;
@@ -370,6 +372,7 @@ in
         };
       }
     ];
+    secrets = { };
     # Membership does not exist; `dev` is the single isolation namespace
     # (state roots, slots, registry keys).
     environments = [ "dev" ];

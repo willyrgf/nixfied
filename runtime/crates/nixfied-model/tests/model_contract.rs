@@ -31,6 +31,7 @@ fn valid_model_json() -> Value {
                 "admissionFingerprintPolicy": "live-fingerprint"
             }
         }],
+        "secrets": {},
         "environments": ["dev"],
         "slotPolicy": {
             "min": 0,
@@ -115,6 +116,7 @@ fn synthetic_service() -> Value {
 fn smoke_task() -> Value {
     json!({
         "kind": "leaf",
+        "serviceLifetime": "run-scoped",
         "operationId": "task.smoke.run",
         "invocation": helper_invocation(json!(["synthetic-helper", "task", "--host", "127.0.0.1", "--port", "${port}"])),
         "requires": ["synthetic"],
@@ -164,6 +166,70 @@ fn parses_and_validates_contract() {
         "service.synthetic.start"
     );
     assert_eq!(lifecycle.stop.signal, nixfied_model::StopSignal::Term);
+}
+
+#[test]
+fn secret_descriptors_round_trip_without_values() {
+    let mut value = valid_model_json();
+    value["secrets"] = json!({
+        "api-token": {
+            "secretId": "api-token",
+            "source": {
+                "kind": "env-var",
+                "envVar": "API_TOKEN"
+            }
+        },
+        "tls-key": {
+            "secretId": "tls-key",
+            "source": {
+                "kind": "file",
+                "path": "tls/key"
+            }
+        }
+    });
+    value["tasks"]["smoke"]["serviceLifetime"] = json!("until-idle");
+    value["tasks"]["smoke"]["invocation"]["env"]["API_TOKEN"] = json!("${secret:api-token}");
+
+    let model: Model = serde_json::from_value(value).expect("secret descriptors should parse");
+    let api_token = &model.secrets["api-token"];
+    assert_eq!(api_token.secret_id.as_str(), "api-token");
+    assert_eq!(
+        api_token.source.kind,
+        nixfied_model::SecretSourceKind::EnvVar
+    );
+    assert_eq!(api_token.source.env_var.as_deref(), Some("API_TOKEN"));
+    assert_eq!(api_token.source.path, None);
+    assert_eq!(
+        model.tasks["smoke"].service_lifetime,
+        nixfied_model::ServiceLifetime::UntilIdle
+    );
+
+    let emitted = serde_json::to_value(&model).expect("model should serialize");
+    assert_eq!(
+        emitted["secrets"]["tls-key"]["source"]["kind"],
+        json!("file")
+    );
+    assert_eq!(
+        emitted["tasks"]["smoke"]["invocation"]["env"]["API_TOKEN"],
+        json!("${secret:api-token}")
+    );
+}
+
+#[test]
+fn service_lifetime_variants_round_trip() {
+    for (wire, expected) in [
+        ("run-scoped", nixfied_model::ServiceLifetime::RunScoped),
+        ("until-idle", nixfied_model::ServiceLifetime::UntilIdle),
+        (
+            "persistent-until-down",
+            nixfied_model::ServiceLifetime::PersistentUntilDown,
+        ),
+    ] {
+        let mut value = valid_model_json();
+        value["tasks"]["smoke"]["serviceLifetime"] = json!(wire);
+        let model: Model = serde_json::from_value(value).expect("service lifetime should parse");
+        assert_eq!(model.tasks["smoke"].service_lifetime, expected);
+    }
 }
 
 #[test]
@@ -287,6 +353,21 @@ fn duplicate_task_success_code_is_refused_at_the_wire() {
 }
 
 #[test]
+fn secret_descriptor_rejects_unknown_fields() {
+    let mut value = valid_model_json();
+    value["secrets"]["api-token"] = json!({
+        "secretId": "api-token",
+        "source": {
+            "kind": "env-var",
+            "envVar": "API_TOKEN"
+        },
+        "value": "must-not-be-in-model"
+    });
+    let error = serde_json::from_value::<Model>(value).expect_err("secret values must not parse");
+    assert!(error.to_string().contains("value"));
+}
+
+#[test]
 fn abi_mismatch_is_contract_error() {
     let mut model = parse_valid_model();
     model.runtime_abi = "nixfied-runtime-abi:legacy".to_string();
@@ -305,6 +386,7 @@ fn accepts_a_bounded_acyclic_composite() {
     let mut value = valid_model_json();
     value["tasks"]["pipeline"] = json!({
         "kind": "composite",
+        "serviceLifetime": "run-scoped",
         "steps": {
             "first": { "task": "smoke" },
             "second": { "task": "smoke", "dependsOn": ["first"] }

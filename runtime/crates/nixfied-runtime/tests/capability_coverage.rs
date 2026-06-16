@@ -21,6 +21,7 @@ const MAP_FIELDS: &[&str] = &[
     "closures",
     "tasks",
     "steps",
+    "secrets",
     "environments",
     "slotPlacements",
     "endpoints",
@@ -51,8 +52,16 @@ fn capability_descriptor_names_every_wire_field() {
     // The synthetic fixture has no composite; inject one so the StepSpec
     // fields are exercised too.
     let mut model = synthetic_model_default(23080, 23090);
+    model["secrets"]["api-token"] = json!({
+        "secretId": "api-token",
+        "source": {
+            "kind": "env-var",
+            "envVar": "API_TOKEN"
+        }
+    });
     model["tasks"]["pipeline"] = json!({
         "kind": "composite",
+        "serviceLifetime": "run-scoped",
         "steps": { "only": { "task": "smoke", "dependsOn": [] } }
     });
 

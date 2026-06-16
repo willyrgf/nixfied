@@ -135,6 +135,7 @@ fn lowering_failure_carries_model_provenance() {
     let mut model = fixture_model();
     model["tasks"]["pipeline"] = json!({
         "kind": "composite",
+        "serviceLifetime": "run-scoped",
         "steps": { "build": { "task": "missing-task" } }
     });
     let (_tmp, model_path, closure_root) = write_fixture_model(model, true);

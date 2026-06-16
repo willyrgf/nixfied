@@ -99,6 +99,7 @@ pub fn synthetic_model(options: &SyntheticModelOptions) -> Value {
                 "admissionFingerprintPolicy": "live-fingerprint"
             }
         }],
+        "secrets": {},
         "environments": ["dev"],
         "slotPolicy": {
             "min": 0,
@@ -176,6 +177,7 @@ pub fn synthetic_model(options: &SyntheticModelOptions) -> Value {
         "tasks": {
             "smoke": {
                 "kind": "leaf",
+                "serviceLifetime": "run-scoped",
                 "operationId": "task.smoke.run",
                 "invocation": invocation(&options.executable, task_run),
                 "requires": ["synthetic"],

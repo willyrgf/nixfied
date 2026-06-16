@@ -154,6 +154,8 @@ fn schema_view(_model: &Model) -> Value {
                 "TerminalSemantics",
                 "ServiceSpec",
                 "TaskSpec",
+                "SecretDescriptor",
+                "SecretSource",
                 "SlotPlacement"
             ]
         }

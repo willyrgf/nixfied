@@ -81,6 +81,8 @@ db_status! {
     ServiceStatus {
         Starting => "starting",
         ProbeReady => "probe-ready",
+        Standing => "standing",
+        Borrowed => "borrowed",
         Stopped => "stopped",
         Canceled => "canceled",
         Failed => "failed",
@@ -214,6 +216,8 @@ mod tests {
         assert_round_trips(&[
             ServiceStatus::Starting,
             ServiceStatus::ProbeReady,
+            ServiceStatus::Standing,
+            ServiceStatus::Borrowed,
             ServiceStatus::Stopped,
             ServiceStatus::Canceled,
             ServiceStatus::Failed,
@@ -252,6 +256,8 @@ mod tests {
     fn service_active_classification_matches_terminal_set() {
         assert!(ServiceStatus::Starting.is_active());
         assert!(ServiceStatus::ProbeReady.is_active());
+        assert!(ServiceStatus::Standing.is_active());
+        assert!(ServiceStatus::Borrowed.is_active());
         for terminal in [
             ServiceStatus::Stopped,
             ServiceStatus::Canceled,
