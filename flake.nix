@@ -112,6 +112,14 @@
               };
             }
           );
+          purgeMinimalModel = nixfiedLib.compileModel (
+            { ... }:
+            {
+              imports = [ ./examples/minimal/nixfied.nix ];
+              nixfied.state.cleanupPolicy = "protected";
+              nixfied.state.persistence = "persistent";
+            }
+          );
           postgresModel = nixfiedLib.compileModel ./examples/postgres/nixfied.nix;
           compositeModel = nixfiedLib.compileModel ./examples/composite/nixfied.nix;
           polyglotModel = nixfiedLib.compileModel ./examples/polyglot-stack/nixfied.nix;
@@ -209,6 +217,7 @@
               nixfied.tasks.lifecycle-upgrade-epoch.invocation.env.MINIMAL_EPOCH2_MODEL = toString minimalModelEpoch2;
               nixfied.tasks.lifecycle-tamper-refusal.invocation.env.MINIMAL_EPOCH2_MODEL = toString minimalModelEpoch2;
               nixfied.tasks.lifecycle-service-lifetime.invocation.env.PERSISTENT_MINIMAL_MODEL = toString persistentMinimalModel;
+              nixfied.tasks.lifecycle-purge.invocation.env.PURGE_MINIMAL_MODEL = toString purgeMinimalModel;
               nixfied.tasks.slot-0.invocation.env.DOWNSTREAM_MODEL = toString downstreamModel;
               nixfied.tasks.slot-1.invocation.env.DOWNSTREAM_MODEL = toString downstreamModel;
               nixfied.tasks.slots-assert.invocation.env.DOWNSTREAM_MODEL = toString downstreamModel;

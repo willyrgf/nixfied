@@ -350,7 +350,7 @@ Boundaries above (SINGLE-MODEL-1, RUNTIME-GENERIC-1, STATIC-1, the
   intentionally replaces behavior.
 - Keep commits focused on one architectural slice when commit-by-commit work is
   requested.
-- Commit messages: a single concise line, no body, no author or other
+- Commit messages: a lower-case, single concise line, no body, no author or other
   trailers.
 - Before committing architecture changes, review the diff against the invariants
   and boundaries above, scope discipline, tests, and regressions.

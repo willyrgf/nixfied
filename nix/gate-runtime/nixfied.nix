@@ -546,6 +546,47 @@
     };
   };
 
+  nixfied.tasks.lifecycle-purge = {
+    invocation = {
+      tools = [
+        pkgs.bash
+        "rt"
+        "jq"
+        "coreutils"
+      ];
+      run = [
+        "bash"
+        "-c"
+        ''
+          set -euo pipefail
+          inner="''${stateDir}/purge-inner"
+          mkdir -p "''${stateDir}/gate-artifacts" "$inner"
+          NIXFIED_STATE_DIR="$inner" \
+            nixfied-runtime run --model "$PURGE_MINIMAL_MODEL/model.json" \
+              --task smoke --timeout-ms 60000 \
+            > "''${stateDir}/gate-artifacts/purge-run.json"
+          if NIXFIED_STATE_DIR="$inner" \
+             nixfied-runtime clean --model "$PURGE_MINIMAL_MODEL/model.json" \
+             >"''${stateDir}/gate-artifacts/purge-clean-standard.json" \
+             2>"''${stateDir}/gate-artifacts/purge-clean-standard.err"; then
+            echo "purge: standard clean accepted protected persistent state" >&2
+            exit 1
+          fi
+          NIXFIED_STATE_DIR="$inner" \
+            nixfied-runtime clean --model "$PURGE_MINIMAL_MODEL/model.json" --purge \
+            > "''${stateDir}/gate-artifacts/purge-clean.json"
+          deleted=$(jq -r '.deletedPath' "''${stateDir}/gate-artifacts/purge-clean.json")
+          jq -e '.cleanupId and .deletedPath' \
+            "''${stateDir}/gate-artifacts/purge-clean.json" >/dev/null
+          [ -n "$deleted" ] && [ "$deleted" != "null" ] \
+            || { echo "purge: clean output did not report deletedPath" >&2; exit 1; }
+          [ ! -e "$deleted" ] \
+            || { echo "purge: deletedPath still exists" >&2; exit 1; }
+        ''
+      ];
+    };
+  };
+
   # ---- slot leaf tasks (slot-0 and slot-1 run concurrently) -----------
 
   nixfied.tasks.slot-0 = {
@@ -677,6 +718,7 @@
       "lifecycle-upgrade-epoch"
       "lifecycle-tamper-refusal"
       "lifecycle-service-lifetime"
+      "lifecycle-purge"
     ];
   };
 
