@@ -210,12 +210,14 @@ govern files or sockets a child chooses to write on its own.
 
 ## Output Control
 
-`run` has three output projections. Stdout is the stable structured JSON contract:
-run/task/node results, diagnostic `durationMs`, and evidence paths. Stderr is the
-human projection: progress, concise pass/fail summaries, and pointers to the run
-summary and log directory. Captured child stdout/stderr stays in redacted log
-files; the runtime does not inline or replay child bytes, and no `logs` command is
-part of the public surface.
+`run` has three output projections selected by runtime-owned flags. `summary`
+is the default: progress, concise pass/fail summaries, and pointers to the run
+summary and log directory on stderr, with stdout empty. `json` (`--json`) is the
+structured automation contract: run/task/node results, diagnostic `durationMs`,
+and evidence paths on stdout, with human run-summary narration suppressed.
+`both` (`--both`) emits both projections explicitly for diagnostics. Captured
+child stdout/stderr stays in redacted log files; the runtime does not inline or
+replay child bytes, and no `logs` command is part of the public surface.
 
 ## What v1 taught us (and the invariant each lesson produced)
 
