@@ -4510,13 +4510,55 @@ fn failed_composite_run_writes_failure_summary() {
     assert_eq!(error["code"], json!("TASK_FAILED"));
     let details = &error["details"];
     assert!(details["runId"].is_string(), "error must carry the run id");
+    assert!(details["stateBase"].is_string());
     assert!(details["stateRoot"].is_string());
+    assert!(details["registryDir"].is_string());
+    assert!(details["registryPath"].is_string());
     assert!(details["logsDir"].is_string());
     assert_eq!(details["failedNodeId"], json!("wf.fail-node"));
     let json_summary_path = details["runSummaryPath"]
         .as_str()
         .expect("error must link the run summary");
     assert!(PathBuf::from(json_summary_path).exists());
+
+    let both_state_base = tmp.path.join("state-both");
+    fs::create_dir_all(&both_state_base).expect("both state base should be created");
+    let both_output = Command::new(runtime_binary())
+        .arg("run")
+        .arg("--task")
+        .arg("wf")
+        .arg("--allow-non-store-model")
+        .arg("--model")
+        .arg(&model_path)
+        .arg("--state-base")
+        .arg(&both_state_base)
+        .arg("--both")
+        .current_dir(&tmp.path)
+        .output()
+        .expect("runtime run should execute");
+
+    assert_eq!(both_output.status.code(), Some(30), "TaskFailed exit code");
+    assert!(
+        both_output.stdout.is_empty(),
+        "both failure output should not write stdout: {}",
+        String::from_utf8_lossy(&both_output.stdout)
+    );
+    let both_stderr_text = String::from_utf8_lossy(&both_output.stderr);
+    assert!(both_stderr_text.contains("error: TASK_FAILED:"));
+    assert!(both_stderr_text.contains("state-root: "));
+    assert!(both_stderr_text.contains("registry-dir: "));
+    assert!(both_stderr_text.contains("registry: "));
+    assert!(both_stderr_text.contains("logs: "));
+    assert!(both_stderr_text.contains("run-summary: "));
+    let both_json: Value = serde_json::from_str(
+        both_stderr_text
+            .lines()
+            .last()
+            .expect("both stderr should end with JSON"),
+    )
+    .expect("both stderr final line should be JSON");
+    assert_eq!(both_json["code"], json!("TASK_FAILED"));
+    assert!(both_json["details"]["registryPath"].is_string());
 }
 
 #[test]
@@ -4582,6 +4624,76 @@ fn service_failure_before_any_node_writes_failed_summary() {
     );
     assert!(summary["durationMs"].as_u64().is_some());
     assert_eq!(summary["nodes"].as_array().map(Vec::len), Some(0));
+}
+
+#[test]
+fn control_registry_identity_mismatch_reports_human_scoped_recovery() {
+    let Some(shell) = nix_store_executable(&["sh", "bash"]) else {
+        return;
+    };
+    let closure_root = closure_root_for_store_executable(&shell)
+        .expect("store executable should have a closure root");
+    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
+    let port = listener.local_addr().expect("local addr").port();
+    drop(listener);
+    let mut value = fixture_model(&shell.to_string_lossy(), &["-c", "sleep 30"], port);
+    value["closures"]["synthetic-helper"]["storePath"] = json!(closure_root.to_string_lossy());
+    value["closures"]["synthetic-helper"]["executable"] = json!(shell.to_string_lossy());
+    let model: Model = serde_json::from_value(value).expect("fixture model should parse");
+    let tmp = TempDir::new();
+    let model_path = tmp.path.join("model.json");
+    let state_base = tmp.path.join("state");
+    fs::write(
+        &model_path,
+        serde_json::to_vec_pretty(&model).expect("model should serialize"),
+    )
+    .expect("model should be written");
+
+    let selected_slot = select_slot(&model, None).expect("slot should select");
+    let placement = derive_host_placement_for_slot(&model, &selected_slot, "setup", &state_base)
+        .expect("placement should derive");
+    Registry::open_or_create(
+        placement.registry_path(),
+        &RegistryIdentity::for_slot(
+            "other-project",
+            selected_slot.environment,
+            selected_slot.slot,
+            &model.runtime_abi,
+            &model.toolchain_id,
+        ),
+    )
+    .expect("mismatched registry should be created");
+
+    let output = Command::new(runtime_binary())
+        .arg("ps")
+        .arg("--allow-non-store-model")
+        .arg("--model")
+        .arg(&model_path)
+        .arg("--state-base")
+        .arg(&state_base)
+        .current_dir(&tmp.path)
+        .output()
+        .expect("runtime ps should execute");
+
+    assert_eq!(output.status.code(), Some(21), "StateUnowned exit code");
+    assert!(
+        output.stdout.is_empty(),
+        "failed control command should not write stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let stderr_text = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr_text.contains("error: STATE_UNOWNED:"));
+    assert!(stderr_text.contains("state-root: "));
+    assert!(stderr_text.contains("registry-dir: "));
+    assert!(stderr_text.contains("registry: "));
+    assert!(stderr_text.contains("expected: projectId="));
+    assert!(stderr_text.contains("found: projectId=other-project"));
+    assert!(stderr_text.contains("mismatch: projectId"));
+    assert!(stderr_text.contains("hint: do not delete the whole Nixfied state base"));
+    assert!(
+        !stderr_text.contains('{'),
+        "default control errors should be human text, not JSON: {stderr_text}"
+    );
 }
 
 fn fixture_model(executable: &str, start_args: &[&str], port: u16) -> Value {

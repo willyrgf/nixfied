@@ -21,6 +21,7 @@ use nixfied_runtime::{
     read_raw_model,
 };
 use serde::Serialize;
+use serde_json::Value;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -128,24 +129,112 @@ fn run(args: &[String]) -> Result<(), RuntimeError> {
 }
 
 fn print_error(args: &[String], error: &RuntimeError) {
-    if args.first().map(String::as_str) == Some("run") {
-        match parse_run_output_mode_lossy(args.get(1..).unwrap_or(&[])) {
-            RunOutputMode::Summary => {
-                eprintln!("  error: {}: {}", error_code_wire(error), error.message);
-            }
-            RunOutputMode::Json | RunOutputMode::Both => {
-                eprintln!(
-                    "{}",
-                    serde_json::to_string(error).unwrap_or_else(|_| error.to_string())
-                );
-            }
+    match error_output_projection(args) {
+        ErrorOutputProjection::Human => print_human_error(error),
+        ErrorOutputProjection::Json => print_json_error(error),
+        ErrorOutputProjection::Both => {
+            print_human_error(error);
+            print_json_error(error);
         }
-    } else {
-        eprintln!(
-            "{}",
-            serde_json::to_string(error).unwrap_or_else(|_| error.to_string())
-        );
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ErrorOutputProjection {
+    Human,
+    Json,
+    Both,
+}
+
+fn error_output_projection(args: &[String]) -> ErrorOutputProjection {
+    if args.first().map(String::as_str) != Some("run") {
+        return ErrorOutputProjection::Human;
+    }
+    match parse_run_output_mode_lossy(args.get(1..).unwrap_or(&[])) {
+        RunOutputMode::Summary => ErrorOutputProjection::Human,
+        RunOutputMode::Json => ErrorOutputProjection::Json,
+        RunOutputMode::Both => ErrorOutputProjection::Both,
+    }
+}
+
+fn print_json_error(error: &RuntimeError) {
+    eprintln!(
+        "{}",
+        serde_json::to_string(error).unwrap_or_else(|_| error.to_string())
+    );
+}
+
+fn print_human_error(error: &RuntimeError) {
+    eprintln!("error: {}: {}", error_code_wire(error), error.message);
+    print_path_detail(error, "state-root", "stateRoot");
+    print_path_detail(error, "registry-dir", "registryDir");
+    print_path_detail(error, "registry", "registryPath");
+    print_path_detail(error, "logs", "logsDir");
+    print_path_detail(error, "run-summary", "runSummaryPath");
+    if let Some(expected) = registry_identity_detail(error, "expectedRegistryIdentity") {
+        eprintln!("expected: {expected}");
+    }
+    if let Some(found) = registry_identity_detail(error, "foundRegistryIdentity") {
+        eprintln!("found: {found}");
+    }
+    if let Some(fields) = mismatched_fields_detail(error) {
+        eprintln!("mismatch: {fields}");
+    }
+    print_recovery_hint(error);
+}
+
+fn print_path_detail(error: &RuntimeError, label: &str, key: &str) {
+    if let Some(value) = string_detail(error, key) {
+        eprintln!("{label}: {}", human_path(Path::new(value)));
+    }
+}
+
+fn registry_identity_detail(error: &RuntimeError, key: &str) -> Option<String> {
+    let value = error.details.get(key)?;
+    Some(format!(
+        "projectId={} environment={} slot={} runtimeAbi={} toolchainId={}",
+        scalar_detail(value.get("projectId")),
+        scalar_detail(value.get("environment")),
+        scalar_detail(value.get("slot")),
+        scalar_detail(value.get("runtimeAbi")),
+        scalar_detail(value.get("toolchainId")),
+    ))
+}
+
+fn scalar_detail(value: Option<&Value>) -> String {
+    match value {
+        Some(Value::String(value)) => value.clone(),
+        Some(Value::Number(value)) => value.to_string(),
+        Some(Value::Bool(value)) => value.to_string(),
+        _ => "unknown".to_string(),
+    }
+}
+
+fn mismatched_fields_detail(error: &RuntimeError) -> Option<String> {
+    let fields = error.details.get("mismatchedFields")?.as_array()?;
+    let fields = fields.iter().filter_map(Value::as_str).collect::<Vec<_>>();
+    (!fields.is_empty()).then(|| fields.join(", "))
+}
+
+fn print_recovery_hint(error: &RuntimeError) {
+    if !matches!(
+        error.code,
+        nixfied_runtime::ErrorCode::StateUnowned | nixfied_runtime::ErrorCode::RuntimeAbiMismatch
+    ) {
+        return;
+    }
+    if string_detail(error, "stateRoot").is_none() && string_detail(error, "registryDir").is_none()
+    {
+        return;
+    }
+    eprintln!("hint: do not delete the whole Nixfied state base");
+    eprintln!(
+        "hint: after confirming no owned processes are live, reset only the state-root and registry-dir above"
+    );
+}
+
+fn string_detail<'a>(error: &'a RuntimeError, key: &str) -> Option<&'a str> {
+    error.details.get(key).and_then(Value::as_str)
 }
 
 fn check(args: &[String]) -> Result<(), RuntimeError> {
@@ -253,7 +342,7 @@ fn run_m0_admitted(
         &placement,
         cancellation,
     )
-    .map_err(|error| enrich_run_error(error, &run_id, &placement))
+    .map_err(|error| enrich_run_error(error, &run_id, &placement, &selected_slot))
 }
 
 /// Attach the run identity and state paths to a run error, preserving any
@@ -262,12 +351,29 @@ fn enrich_run_error(
     error: RuntimeError,
     run_id: &str,
     placement: &nixfied_runtime::state::HostPlacement,
+    selected_slot: &nixfied_runtime::slot::SelectedSlot<'_>,
 ) -> RuntimeError {
-    error
+    enrich_placed_error(error, placement, selected_slot)
         .with_detail("runId", run_id)
-        .with_detail("stateRoot", &placement.state_root)
         .with_detail("runDir", &placement.run_dir)
         .with_detail("logsDir", &placement.logs_dir)
+}
+
+/// Attach selected slot placement to errors from run/control execution. These
+/// paths are runtime materialization details, so the runtime reports them
+/// directly instead of asking operators to re-derive them.
+fn enrich_placed_error(
+    error: RuntimeError,
+    placement: &nixfied_runtime::state::HostPlacement,
+    selected_slot: &nixfied_runtime::slot::SelectedSlot<'_>,
+) -> RuntimeError {
+    error
+        .with_detail("environment", selected_slot.environment)
+        .with_detail("slot", selected_slot.slot)
+        .with_detail("stateBase", &placement.state_base)
+        .with_detail("stateRoot", &placement.state_root)
+        .with_detail("registryDir", &placement.registry_dir)
+        .with_detail("registryPath", placement.registry_path())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1193,31 +1299,36 @@ fn run_control_admitted(
     let selected_slot = select_slot(model, options.selection.slot)?;
     let placement =
         derive_host_placement_for_slot(model, &selected_slot, "control", &options.state_base)?;
-    let mut registry = Registry::open_or_create(
-        placement.registry_path(),
-        &RegistryIdentity::for_slot(
-            &model.project.project_id,
-            selected_slot.environment,
-            selected_slot.slot,
-            &model.runtime_abi,
-            &model.toolchain_id,
-        ),
-    )?;
-    match command {
-        ControlCommand::Ps => print_json(&nixfied_runtime::control::ps(&mut registry)?),
-        ControlCommand::Down => print_json(&nixfied_runtime::control::down_owned_process_groups(
-            &mut registry,
-            options.timeout_ms,
-        )?),
-        ControlCommand::Clean => print_json(&run_slot_clean(
-            model,
-            admission,
-            &placement,
-            &mut registry,
-            &selected_slot,
-            options.cleanup_mode,
-        )?),
-    }
+    let result = (|| {
+        let mut registry = Registry::open_or_create(
+            placement.registry_path(),
+            &RegistryIdentity::for_slot(
+                &model.project.project_id,
+                selected_slot.environment,
+                selected_slot.slot,
+                &model.runtime_abi,
+                &model.toolchain_id,
+            ),
+        )?;
+        match command {
+            ControlCommand::Ps => print_json(&nixfied_runtime::control::ps(&mut registry)?),
+            ControlCommand::Down => {
+                print_json(&nixfied_runtime::control::down_owned_process_groups(
+                    &mut registry,
+                    options.timeout_ms,
+                )?)
+            }
+            ControlCommand::Clean => print_json(&run_slot_clean(
+                model,
+                admission,
+                &placement,
+                &mut registry,
+                &selected_slot,
+                options.cleanup_mode,
+            )?),
+        }
+    })();
+    result.map_err(|error| enrich_placed_error(error, &placement, &selected_slot))
 }
 
 fn parse_run_options(args: &[String]) -> Result<RunOptions, RuntimeError> {
