@@ -1,4 +1,5 @@
 use rusqlite::{Connection, OptionalExtension};
+use serde_json::{Value, json};
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::registry::records::RegistryIdentity;
@@ -261,19 +262,67 @@ fn verify_identity(conn: &Connection, identity: &RegistryIdentity) -> RuntimeRes
             "registry metadata row is missing",
         ));
     };
-    if schema_version != SCHEMA_VERSION
-        || project_id != identity.project_id
-        || environment != identity.environment
-        || slot != identity.slot
-        || runtime_abi != identity.runtime_abi
-        || toolchain_id != identity.toolchain_id
-    {
+    if schema_version != SCHEMA_VERSION {
         return Err(RuntimeError::new(
             ErrorCode::RegistryCorrupt,
-            "registry metadata does not match the selected identity",
+            format!("expected registry schema_version {SCHEMA_VERSION}, got {schema_version}"),
         ));
     }
+
+    let found = RegistryIdentity {
+        project_id,
+        environment,
+        slot,
+        runtime_abi,
+        toolchain_id,
+    };
+    let mut mismatched_fields = Vec::new();
+    if found.project_id != identity.project_id {
+        mismatched_fields.push("projectId");
+    }
+    if found.environment != identity.environment {
+        mismatched_fields.push("environment");
+    }
+    if found.slot != identity.slot {
+        mismatched_fields.push("slot");
+    }
+    if found.runtime_abi != identity.runtime_abi {
+        mismatched_fields.push("runtimeAbi");
+    }
+    if found.toolchain_id != identity.toolchain_id {
+        mismatched_fields.push("toolchainId");
+    }
+    if !mismatched_fields.is_empty() {
+        let ownership_mismatch = mismatched_fields
+            .iter()
+            .any(|field| matches!(*field, "projectId" | "environment" | "slot"));
+        let (code, message) = if ownership_mismatch {
+            (
+                ErrorCode::StateUnowned,
+                "registry metadata is owned by a different project/environment/slot identity",
+            )
+        } else {
+            (
+                ErrorCode::RuntimeAbiMismatch,
+                "registry metadata was written under a different runtime ABI/toolchain identity",
+            )
+        };
+        return Err(RuntimeError::new(code, message)
+            .with_detail("expectedRegistryIdentity", registry_identity_json(identity))
+            .with_detail("foundRegistryIdentity", registry_identity_json(&found))
+            .with_detail("mismatchedFields", mismatched_fields));
+    }
     Ok(())
+}
+
+fn registry_identity_json(identity: &RegistryIdentity) -> Value {
+    json!({
+        "projectId": identity.project_id,
+        "environment": identity.environment,
+        "slot": identity.slot,
+        "runtimeAbi": identity.runtime_abi,
+        "toolchainId": identity.toolchain_id,
+    })
 }
 
 fn user_table_count(conn: &Connection) -> RuntimeResult<i64> {

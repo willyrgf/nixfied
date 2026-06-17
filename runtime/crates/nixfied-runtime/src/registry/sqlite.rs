@@ -23,18 +23,26 @@ impl Registry {
         let path = path.as_ref().to_path_buf();
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|error| {
-                RuntimeError::new(
-                    ErrorCode::RegistryCorrupt,
-                    format!(
-                        "failed to create registry dir {}: {error}",
-                        parent.display()
+                with_registry_path(
+                    RuntimeError::new(
+                        ErrorCode::RegistryCorrupt,
+                        format!(
+                            "failed to create registry dir {}: {error}",
+                            parent.display()
+                        ),
                     ),
+                    &path,
                 )
             })?;
         }
-        let mut conn = Connection::open(&path)
-            .map_err(|error| RuntimeError::new(ErrorCode::RegistryCorrupt, error.to_string()))?;
-        schema::initialize(&mut conn, identity)?;
+        let mut conn = Connection::open(&path).map_err(|error| {
+            with_registry_path(
+                RuntimeError::new(ErrorCode::RegistryCorrupt, error.to_string()),
+                &path,
+            )
+        })?;
+        schema::initialize(&mut conn, identity)
+            .map_err(|error| with_registry_path(error, &path))?;
         Ok(Self {
             path,
             conn,
@@ -75,5 +83,14 @@ impl Registry {
         let mut event = event.clone();
         event.payload_json = self.redact_payload_json(&event.payload_json)?;
         append_event(&mut self.conn, &self.identity, &event)
+    }
+}
+
+fn with_registry_path(error: RuntimeError, path: &Path) -> RuntimeError {
+    let error = error.with_detail("registryPath", path);
+    if let Some(parent) = path.parent() {
+        error.with_detail("registryDir", parent)
+    } else {
+        error
     }
 }

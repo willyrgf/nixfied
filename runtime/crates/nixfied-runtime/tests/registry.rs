@@ -124,7 +124,7 @@ fn appends_events_with_total_ordering() {
 }
 
 #[test]
-fn rejects_incompatible_registry_identity() {
+fn rejects_registry_project_mismatch_as_state_unowned() {
     let tmp = TempDir::new();
     let path = tmp.path.join("registry.sqlite3");
     let identity = identity();
@@ -139,7 +139,32 @@ fn rejects_incompatible_registry_identity() {
         Err(error) => error,
     };
 
-    assert_eq!(error.code, ErrorCode::RegistryCorrupt);
+    assert_eq!(error.code, ErrorCode::StateUnowned);
+    assert_mismatched_fields(&error, &["projectId"]);
+    assert_registry_path_details(&error, &path);
+}
+
+#[test]
+fn rejects_registry_environment_mismatch_as_state_unowned() {
+    let tmp = TempDir::new();
+    let path = tmp.path.join("registry.sqlite3");
+    let identity = identity();
+    Registry::open_or_create(&path, &identity).expect("registry should open");
+    let bad = RegistryIdentity::for_slot(
+        "minimal",
+        "prod",
+        0,
+        "nixfied-runtime-abi:1",
+        "nixfied-toolchain:1",
+    );
+    let error = match Registry::open_or_create(&path, &bad) {
+        Ok(_) => panic!("environment mismatch should fail"),
+        Err(error) => error,
+    };
+
+    assert_eq!(error.code, ErrorCode::StateUnowned);
+    assert_mismatched_fields(&error, &["environment"]);
+    assert_registry_path_details(&error, &path);
 }
 
 #[test]
@@ -170,7 +195,45 @@ fn records_and_checks_selected_slot_identity() {
         Err(error) => error,
     };
 
-    assert_eq!(error.code, ErrorCode::RegistryCorrupt);
+    assert_eq!(error.code, ErrorCode::StateUnowned);
+    assert_mismatched_fields(&error, &["slot"]);
+    assert_registry_path_details(&error, &path);
+}
+
+#[test]
+fn rejects_registry_runtime_abi_mismatch_as_runtime_abi_mismatch() {
+    let tmp = TempDir::new();
+    let path = tmp.path.join("registry.sqlite3");
+    let identity = identity();
+    Registry::open_or_create(&path, &identity).expect("registry should open");
+    let bad =
+        RegistryIdentity::default_slot("minimal", "nixfied-runtime-abi:2", "nixfied-toolchain:1");
+    let error = match Registry::open_or_create(&path, &bad) {
+        Ok(_) => panic!("runtime ABI mismatch should fail"),
+        Err(error) => error,
+    };
+
+    assert_eq!(error.code, ErrorCode::RuntimeAbiMismatch);
+    assert_mismatched_fields(&error, &["runtimeAbi"]);
+    assert_registry_path_details(&error, &path);
+}
+
+#[test]
+fn rejects_registry_toolchain_mismatch_as_runtime_abi_mismatch() {
+    let tmp = TempDir::new();
+    let path = tmp.path.join("registry.sqlite3");
+    let identity = identity();
+    Registry::open_or_create(&path, &identity).expect("registry should open");
+    let bad =
+        RegistryIdentity::default_slot("minimal", "nixfied-runtime-abi:1", "nixfied-toolchain:2");
+    let error = match Registry::open_or_create(&path, &bad) {
+        Ok(_) => panic!("toolchain mismatch should fail"),
+        Err(error) => error,
+    };
+
+    assert_eq!(error.code, ErrorCode::RuntimeAbiMismatch);
+    assert_mismatched_fields(&error, &["toolchainId"]);
+    assert_registry_path_details(&error, &path);
 }
 
 #[test]
@@ -242,4 +305,33 @@ fn rejects_nonempty_unversioned_registry() {
 
 fn identity() -> RegistryIdentity {
     RegistryIdentity::default_slot("minimal", "nixfied-runtime-abi:1", "nixfied-toolchain:1")
+}
+
+fn assert_mismatched_fields(error: &nixfied_runtime::RuntimeError, expected: &[&str]) {
+    let fields: Vec<&str> = error.details["mismatchedFields"]
+        .as_array()
+        .expect("mismatchedFields should be an array")
+        .iter()
+        .map(|field| field.as_str().expect("field should be a string"))
+        .collect();
+    assert_eq!(fields, expected);
+    assert!(
+        error.details["expectedRegistryIdentity"].is_object(),
+        "expected identity should be recorded"
+    );
+    assert!(
+        error.details["foundRegistryIdentity"].is_object(),
+        "found identity should be recorded"
+    );
+}
+
+fn assert_registry_path_details(error: &nixfied_runtime::RuntimeError, path: &std::path::Path) {
+    assert_eq!(
+        error.details["registryPath"].as_str(),
+        Some(path.to_str().expect("registry path should be UTF-8"))
+    );
+    assert_eq!(
+        error.details["registryDir"].as_str(),
+        path.parent().and_then(std::path::Path::to_str).or(Some(""))
+    );
 }
