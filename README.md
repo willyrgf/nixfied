@@ -80,6 +80,10 @@ including diagnostic `durationMs` values and evidence paths (`stdoutPath`,
 stdout/stderr is not replayed inline; inspect the redacted log files through the
 paths in the JSON or summary.
 
+Runtime failures default to human-readable stderr across the generated surface.
+For `run --json`, failures remain a structured JSON `RuntimeError`; `run --both`
+prints the human error and then the JSON error as the final stderr line.
+
 A model is admitted only from under the Nix store and only on an exact
 `runtimeAbi` / `toolchainId` match. Inspect it through the `nixfied` CLI
 (`model` / `schema` / `docs` / `capabilities`):
@@ -129,6 +133,14 @@ nix run .#clean -- --purge      # also remove protected/persistent state, under 
 nix run .#check
 nix run .#ci
 ```
+
+If runtime-owned state refuses admission, trust the error code and the printed
+paths. `REGISTRY_CORRUPT` means the registry file is structurally unreadable or
+schema-incompatible. `STATE_UNOWNED` means the selected project/environment/slot
+does not own that registry or marker. `RUNTIME_ABI_MISMATCH` means the registry
+or model was written for another runtime/toolchain contract. Do not delete the
+whole Nixfied state base; recover only the printed slot `state-root` and
+`registry-dir` paths after confirming no owned processes are live.
 
 Your **tests are tasks** and your **phases are composites**: name leaves for
 each command (its toolchain on PATH, its argv, its env, its service

@@ -219,6 +219,14 @@ and evidence paths on stdout, with human run-summary narration suppressed.
 child stdout/stderr stays in redacted log files; the runtime does not inline or
 replay child bytes, and no `logs` command is part of the public surface.
 
+Runtime failures use the same projection rule: default runtime execution prints a
+human-readable error on stderr; `run --json` prints the structured `RuntimeError`;
+and `run --both` prints human text followed by the JSON error as the final stderr
+line. Registry/state refusals must point at the selected slot paths instead of
+encouraging broad deletion: `REGISTRY_CORRUPT` is structural registry damage,
+`STATE_UNOWNED` is project/environment/slot ownership mismatch, and
+`RUNTIME_ABI_MISMATCH` is a runtime/toolchain contract mismatch.
+
 ## What v1 taught us (and the invariant each lesson produced)
 
 | v1 failure | Resulting decision |
