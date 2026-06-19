@@ -6,7 +6,6 @@ pkgs.writeShellApplication {
   name = "nixfied-upgrade";
   runtimeInputs = [
     pkgs.coreutils
-    pkgs.gnugrep
     pkgs.nix
   ];
   text = ''
@@ -76,11 +75,28 @@ pkgs.writeShellApplication {
       exit 3
     fi
 
-    if ! grep -Eq '(^|[^A-Za-z0-9_.])nixfied\.url[[:space:]]*=' "$flake"; then
+    flake_eval_path="$(realpath "$flake")"
+
+    has_nixfied_input_pin() {
+      local verdict
+      if ! verdict="$(
+        NIXFIED_UPGRADE_FLAKE="$flake_eval_path" nix eval --impure --expr '
+          let
+            flake = import (builtins.getEnv "NIXFIED_UPGRADE_FLAKE");
+          in
+            flake ? inputs && flake.inputs ? nixfied && flake.inputs.nixfied ? url
+        ' 2>/dev/null
+      )"; then
+        return 1
+      fi
+      [[ "$verdict" == "true" ]]
+    }
+
+    if ! has_nixfied_input_pin; then
       {
         echo "flake.nix in $root has no Nixfied input pin to upgrade"
         echo "No files were changed."
-        echo "Expected an 'inputs.nixfied.url = \"...\";' assignment."
+        echo "Expected an 'inputs.nixfied.url = \"...\";' assignment or an 'inputs.nixfied = { url = \"...\"; ... };' block."
       } >&2
       exit 3
     fi
@@ -90,6 +106,31 @@ pkgs.writeShellApplication {
       value="''${value//\\/\\\\}"
       value="''${value//\"/\\\"}"
       printf '%s' "$value"
+    }
+
+    brace_delta() {
+      local text="$1"
+      local delta=0
+      local i
+      local ch
+      for ((i = 0; i < ''${#text}; i++)); do
+        ch="''${text:i:1}"
+        case "$ch" in
+          "{") delta=$((delta + 1)) ;;
+          "}") delta=$((delta - 1)) ;;
+        esac
+      done
+      printf '%s' "$delta"
+    }
+
+    is_direct_nixfied_url() {
+      local stripped="$1"
+      [[ "$stripped" == 'nixfied.url="'*'";'* || "$stripped" == 'inputs.nixfied.url="'*'";'* ]]
+    }
+
+    is_nixfied_input_block_start() {
+      local stripped="$1"
+      [[ "$stripped" == 'nixfied={'* || "$stripped" == 'inputs.nixfied={'* ]]
     }
 
     changed=""
@@ -103,24 +144,49 @@ pkgs.writeShellApplication {
       nixfied_url_escaped="$(nix_escape "$nixfied_url")"
       rewritten="$root/.nixfied-upgrade.tmp"
       matches=0
+      in_nixfied_input_block=0
+      nixfied_input_block_depth=0
       : >"$rewritten"
       while IFS= read -r line || [[ -n "$line" ]]; do
         # Compare on a whitespace-stripped form so we match the exact `nixfied.url`
-        # assignment regardless of indentation/spacing, then re-emit it canonically.
+        # assignment regardless of indentation/spacing. Attrset inputs are matched
+        # as a scoped block and only their inner `url = "...";` line is rewritten.
         stripped="''${line//[[:space:]]/}"
-        if [[ "$stripped" == 'nixfied.url="'*'";'* ]]; then
-          indent="''${line%%nixfied.url*}"
-          printf '%snixfied.url = "%s";\n' "$indent" "$nixfied_url_escaped" >>"$rewritten"
+        if [[ "$in_nixfied_input_block" -eq 0 ]] && is_direct_nixfied_url "$stripped"; then
+          if [[ "$stripped" == 'inputs.nixfied.url="'* ]]; then
+            indent="''${line%%inputs.nixfied.url*}"
+            printf '%sinputs.nixfied.url = "%s";\n' "$indent" "$nixfied_url_escaped" >>"$rewritten"
+          else
+            indent="''${line%%nixfied.url*}"
+            printf '%snixfied.url = "%s";\n' "$indent" "$nixfied_url_escaped" >>"$rewritten"
+          fi
+          matches=$((matches + 1))
+        elif [[ "$in_nixfied_input_block" -eq 1 && "$stripped" == 'url="'*'";'* ]]; then
+          indent="''${line%%url*}"
+          printf '%surl = "%s";\n' "$indent" "$nixfied_url_escaped" >>"$rewritten"
           matches=$((matches + 1))
         else
           printf '%s\n' "$line" >>"$rewritten"
+        fi
+
+        if [[ "$in_nixfied_input_block" -eq 0 ]] && is_nixfied_input_block_start "$stripped"; then
+          in_nixfied_input_block=1
+          nixfied_input_block_depth="$(brace_delta "$line")"
+          if [[ "$nixfied_input_block_depth" -le 0 ]]; then
+            in_nixfied_input_block=0
+          fi
+        elif [[ "$in_nixfied_input_block" -eq 1 ]]; then
+          nixfied_input_block_depth=$((nixfied_input_block_depth + $(brace_delta "$line")))
+          if [[ "$nixfied_input_block_depth" -le 0 ]]; then
+            in_nixfied_input_block=0
+          fi
         fi
       done <"$flake"
 
       if [[ "$matches" -ne 1 ]]; then
         rm -f "$rewritten"
         {
-          echo "expected exactly one 'nixfied.url = \"...\";' line in flake.nix, found $matches"
+          echo "expected exactly one nixfied input url assignment in flake.nix, found $matches"
           echo "No files were changed."
           echo "Refusing to guess which input pin to rewrite."
         } >&2

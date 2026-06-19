@@ -142,5 +142,48 @@ pkgs.writeShellApplication {
       >/dev/null || fail "adoption: post-upgrade clean failed"
     rm -rf "$project"
     printf '  adoption: %ds\n' "$((SECONDS - t0))" >&2
+
+    echo "  positive (upgrade accepts attrset flake input)" >&2
+    t0=$SECONDS
+    attr_project=$(mktemp -d)
+    cat >"$attr_project/flake.nix" <<EOF
+{
+  description = "attrset upgrade fixture";
+
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+    nixfied = {
+      url = "github:willyrgf/nixfied";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+  };
+
+  outputs = { self, nixfied, nixpkgs }: {};
+}
+EOF
+    nix run "$checkout#upgrade" -- --root "$attr_project" --no-lock \
+      >/dev/null || fail "attrset upgrade: existing nixfied attrset input was not accepted"
+    nix run "$checkout#upgrade" -- --root "$attr_project" --nixfied-url "$pin" --no-lock \
+      >/dev/null || fail "attrset upgrade: repin failed"
+    actual_pin=$(
+      NIXFIED_GATE_FLAKE="$attr_project/flake.nix" nix eval --raw --impure --expr '
+        let
+          flake = import (builtins.getEnv "NIXFIED_GATE_FLAKE");
+        in
+          flake.inputs.nixfied.url
+      '
+    )
+    [ "$actual_pin" = "$pin" ] || fail "attrset upgrade: nixfied url was not rewritten"
+    actual_follows=$(
+      NIXFIED_GATE_FLAKE="$attr_project/flake.nix" nix eval --raw --impure --expr '
+        let
+          flake = import (builtins.getEnv "NIXFIED_GATE_FLAKE");
+        in
+          flake.inputs.nixfied.inputs.nixpkgs.follows
+      '
+    )
+    [ "$actual_follows" = "nixpkgs" ] || fail "attrset upgrade: nixpkgs follows line was not preserved"
+    rm -rf "$attr_project"
+    printf '  attrset_upgrade: %ds\n' "$((SECONDS - t0))" >&2
   '';
 }
