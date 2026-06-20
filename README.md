@@ -47,19 +47,19 @@ for the contributor contract and invariants see [`AGENTS.md`](AGENTS.md).
 
 ## Prerequisites
 
-Nix with flakes enabled — the only requirement. The runtime and CLI build from a
-pinned Rust toolchain via `nix` (no host Rust needed). `nix develop` provides the
-pinned `cargo` / `clippy` / `rustfmt` for development.
+Nix with flakes enabled — the only requirement.
 
-## Quick Start: adopt a project
+## Quick Start: install into your project
 
-The normal adopter path is the generated flake surface. Nix compiles your
-`nixfied.nix` module into a Nix-store `model.json`; the generated apps run the
-matching Rust runtime against that model. The runtime itself never invokes Nix.
+Install Nixfied into a project by adding its generated flake surface. You keep
+your operational declarations in `nixfied.nix`; Nix compiles them into a
+Nix-store `model.json`; the generated apps run the matching Rust runtime against
+that model. The runtime itself never invokes Nix.
 
-### 1. Scaffold the project
+### 1. Install the project wiring
 
-From the root of a project that does not already have a `flake.nix`:
+From the root of the project you want to install Nixfied into, when it does not
+already have a `flake.nix`:
 
 ```sh
 nix run github:willyrgf/nixfied#install -- \
@@ -67,38 +67,24 @@ nix run github:willyrgf/nixfied#install -- \
   --name "My Project"
 ```
 
-This creates two files:
+This installs two files:
 
 | File | Owner | Purpose |
 | --- | --- | --- |
-| `flake.nix` | Nixfied wiring | pins the `nixfied` input, builds `.#model`, and exposes generated apps |
+| `flake.nix` | Nixfied wiring | pins the `nixfied` input, exposes generated apps, and keeps the model build behind them |
 | `nixfied.nix` | project | declares your services, tasks, composites, slots, source policy, and exported verbs |
 
-If `flake.nix` already exists, install refuses to modify it and prints the exact
-input/package/app snippets to merge by hand. It never overwrites an existing
-`nixfied.nix`.
+If `flake.nix` already exists, the installer refuses to modify it and prints the
+exact input/package/app snippets to merge by hand. It never overwrites an
+existing `nixfied.nix`.
 
-### 2. Build the model
+### 2. Run the installed starter
 
-```sh
-nix build .#model
-ls result
-# model.json  views/
-```
-
-`model.json` is the only semantic artifact and is admitted only from the Nix
-store, with an exact `runtimeAbi` / `toolchainId` match. `views/schema.json`,
-`views/docs.md`, and `views/capabilities.json` are generated projections for
-humans and tools, not separate authority.
-
-### 3. Run the starter surface
-
-The scaffold imports `adapters.synthetic`, which contributes a tiny TCP service
-and a `smoke` task. The starter exports that task as a project verb, so the
-project works before you replace it:
+The installed `nixfied.nix` imports `adapters.synthetic`, which contributes a
+tiny TCP service and a `smoke` task. The starter exports that task as a project
+verb, so the project works before you replace it:
 
 ```sh
-nix run .#model-check             # admission only; starts nothing
 nix run .#smoke                   # exported task verb
 nix run .#run -- --task smoke     # reserved control app for any declared task
 nix run .#ps                      # reconciled process view for the current slot
@@ -111,7 +97,7 @@ and evidence paths (`run-summary`, `logs`) on stderr, with stdout empty.
 Automation opts in with `--json`; diagnostics can request both with `--both`.
 Child stdout/stderr stays in redacted log files and is not replayed inline.
 
-### 4. Replace the starter declarations
+### 3. Replace the starter declarations
 
 Edit `nixfied.nix`. Keep the project/source metadata, remove the synthetic
 adapter when you no longer need it, and declare your own graph:
@@ -194,18 +180,19 @@ The important authoring rules are:
   assembled from `invocation.tools`;
 - services and tasks address dependencies by declared names (`${host:postgres}`,
   `${port:postgres}`), not port arithmetic;
-- `nixfied.surface.verbs` is the adopter-owned public surface. The control names
+- `nixfied.surface.verbs` is the project-owned public surface. The control names
   `run`, `ps`, `down`, `clean`, and `model-check` are reserved.
 
 After each edit, run:
 
 ```sh
-nix build .#model
-nix run .#model-check
 nix run .#check
 ```
 
-### 5. Operate and upgrade
+Use `nix run .#model-check` when you want admission feedback without starting
+services or executing tasks.
+
+### 4. Operate and upgrade
 
 The generated apps accept runtime flags after `--`, including `--slot`,
 `--timeout-ms`, `--json`, and `--both`:
@@ -215,6 +202,21 @@ NIXFIED_STATE_DIR=/tmp/my-project nix run .#check -- --slot 1 --json
 nix run .#down -- --slot 1
 nix run .#clean -- --slot 1
 ```
+
+The scaffold supports slot `0` by default. To run several copies of the same
+project side by side, declare the slot range in `nixfied.nix`:
+
+```nix
+nixfied.slotPolicy = {
+  min = 0;
+  default = 0;
+  max = 3;
+};
+```
+
+Each slot gets a separate state root, registry, leases, process records, and
+deterministic port window. With the default placement policy, adjacent slots are
+offset by `nixfied.placement.ports.slotStride = 100`.
 
 Task service lifetime defaults to `run-scoped`. Set
 `serviceLifetime = "until-idle"` to keep a task's service closure up until a
@@ -250,22 +252,6 @@ after upgrading.
 
 Build any via the root flake (e.g. `nix build .#postgres-model`);
 `examples/downstream/README.md` walks through adoption.
-
-## Direct runtime use
-
-Adopters usually do not need to call `nixfied-runtime` directly; generated apps
-bake in the model store path and matching runtime. When working on this
-repository or debugging a raw model output, the lower-level shape is:
-
-```sh
-nix build .#minimal-model
-rt="$(nix build .#nixfied-runtime --no-link --print-out-paths)/bin/nixfied-runtime"
-model="$(nix build .#minimal-model --no-link --print-out-paths)/model.json"
-
-"$rt" check --model "$model"
-NIXFIED_STATE_DIR=/tmp/nixfied "$rt" run --model "$model" --task smoke
-NIXFIED_STATE_DIR=/tmp/nixfied "$rt" clean --model "$model"
-```
 
 ## Verify (working on Nixfied itself)
 
