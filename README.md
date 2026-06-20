@@ -51,47 +51,190 @@ Nix with flakes enabled — the only requirement. The runtime and CLI build from
 pinned Rust toolchain via `nix` (no host Rust needed). `nix develop` provides the
 pinned `cargo` / `clippy` / `rustfmt` for development.
 
-## Quickstart
+## Quick Start: adopt a project
 
-Build a model (a Nix store output; there is no required `manifest.json`):
+The normal adopter path is the generated flake surface. Nix compiles your
+`nixfied.nix` module into a Nix-store `model.json`; the generated apps run the
+matching Rust runtime against that model. The runtime itself never invokes Nix.
+
+### 1. Scaffold the project
+
+From the root of a project that does not already have a `flake.nix`:
 
 ```sh
-nix build .#minimal-model
-# → result/{model.json, views/{schema.json,docs.md,capabilities.json}}
+nix run github:willyrgf/nixfied#install -- \
+  --project-id my-project \
+  --name "My Project"
 ```
 
-Drive it with the runtime (`nixfied-runtime`: `check`, `run`, `ps`, `down`,
-`clean`):
+This creates two files:
+
+| File | Owner | Purpose |
+| --- | --- | --- |
+| `flake.nix` | Nixfied wiring | pins the `nixfied` input, builds `.#model`, and exposes generated apps |
+| `nixfied.nix` | project | declares your services, tasks, composites, slots, source policy, and exported verbs |
+
+If `flake.nix` already exists, install refuses to modify it and prints the exact
+input/package/app snippets to merge by hand. It never overwrites an existing
+`nixfied.nix`.
+
+### 2. Build the model
 
 ```sh
-rt="$(nix build .#nixfied-runtime --no-link --print-out-paths)/bin/nixfied-runtime"
-model="$(nix build .#minimal-model --no-link --print-out-paths)/model.json"
+nix build .#model
+ls result
+# model.json  views/
+```
 
-"$rt" check --model "$model"                                             # validate admission contract
-NIXFIED_STATE_DIR=/tmp/nixfied "$rt" run   --model "$model" --task smoke # start its services, run it
-NIXFIED_STATE_DIR=/tmp/nixfied "$rt" clean --model "$model"              # marker-gated cleanup
+`model.json` is the only semantic artifact and is admitted only from the Nix
+store, with an exact `runtimeAbi` / `toolchainId` match. `views/schema.json`,
+`views/docs.md`, and `views/capabilities.json` are generated projections for
+humans and tools, not separate authority.
+
+### 3. Run the starter surface
+
+The scaffold imports `adapters.synthetic`, which contributes a tiny TCP service
+and a `smoke` task. The starter exports that task as a project verb, so the
+project works before you replace it:
+
+```sh
+nix run .#model-check             # admission only; starts nothing
+nix run .#smoke                   # exported task verb
+nix run .#run -- --task smoke     # reserved control app for any declared task
+nix run .#ps                      # reconciled process view for the current slot
+nix run .#down                    # stop runtime-owned processes for the slot
+nix run .#clean                   # marker-gated cleanup for the slot
 ```
 
 `run` defaults to the human projection: progress, the final pass/fail summary,
-and evidence paths (`run-summary`, `logs`) on stderr, with no stdout JSON.
-Machines opt in with `--json`, which writes the structured `RunOutput` JSON
-including diagnostic `durationMs` values and evidence paths (`stdoutPath`,
-`stderrPath`, `runSummaryPath`). `--both` emits both projections. Child
-stdout/stderr is not replayed inline; inspect the redacted log files through the
-paths in the JSON or summary.
+and evidence paths (`run-summary`, `logs`) on stderr, with stdout empty.
+Automation opts in with `--json`; diagnostics can request both with `--both`.
+Child stdout/stderr stays in redacted log files and is not replayed inline.
 
-Runtime failures default to human-readable stderr across the generated surface.
-For `run --json`, failures remain a structured JSON `RuntimeError`; `run --both`
-prints the human error and then the JSON error as the final stderr line.
+### 4. Replace the starter declarations
 
-A model is admitted only from under the Nix store and only on an exact
-`runtimeAbi` / `toolchainId` match. Inspect it through the `nixfied` CLI
-(`model` / `schema` / `docs` / `capabilities`):
+Edit `nixfied.nix`. Keep the project/source metadata, remove the synthetic
+adapter when you no longer need it, and declare your own graph:
+
+```nix
+{ pkgs, adapters, nixfiedLib, ... }:
+let
+  apiPackage = pkgs.callPackage ./nix/api.nix { };
+in
+{
+  imports = [ adapters.postgres ]; # imports definitions only; it starts nothing
+
+  nixfied.project.projectId = "my-project";
+  nixfied.project.name = "My Project";
+  nixfied.codebases.main.logicalRoot = ".";
+
+  nixfied.closures.api = {
+    package = apiPackage;
+    executable = "bin/api-server";
+    effects = [ "process" "network-listener" ];
+  };
+
+  nixfied.services.api = {
+    connectsTo = [ "postgres" ];
+    lifecycle.start.invocation = {
+      tools = [ "api" ];
+      run = [
+        "api-server"
+        "--listen"
+        "127.0.0.1:\${port}"
+        "--database-url"
+        "postgresql://postgres@\${host:postgres}:\${port:postgres}/postgres"
+      ];
+    };
+    endpoint = {
+      endpointId = "api-http";
+    };
+  };
+
+  nixfied.tasks.lint.invocation = {
+    tools = [ pkgs.bash pkgs.git ];
+    run = [ "bash" "-c" "git diff --check" ];
+  };
+
+  nixfied.tasks.api-smoke = {
+    invocation = {
+      tools = [ pkgs.curl ];
+      run = [ "curl" "-fsS" "http://\${host}:\${port}/health" ];
+    };
+    requires = [ "api" ];
+  };
+
+  nixfied.tasks.check = {
+    kind = "composite";
+    steps = {
+      lint.task = "lint";
+      db = {
+        task = "smoke-query"; # contributed by adapters.postgres
+        dependsOn = [ "lint" ];
+      };
+      api = {
+        task = "api-smoke";
+        dependsOn = [ "db" ];
+      };
+    };
+  };
+
+  nixfied.surface.verbs = [ "check" ];
+}
+```
+
+The important authoring rules are:
+
+- tasks are leaves (`invocation`) or static composites (`steps`);
+- services start only because a task leaf `requires` them, closed over
+  `connectsTo` and prepare requirements;
+- imported adapters contribute ordinary definitions, not environment
+  membership or implicit startup;
+- child environments are hermetic: declared `env` plus the runtime-owned PATH
+  assembled from `invocation.tools`;
+- services and tasks address dependencies by declared names (`${host:postgres}`,
+  `${port:postgres}`), not port arithmetic;
+- `nixfied.surface.verbs` is the adopter-owned public surface. The control names
+  `run`, `ps`, `down`, `clean`, and `model-check` are reserved.
+
+After each edit, run:
 
 ```sh
-nixfied="$(nix build .#nixfied-runtime --no-link --print-out-paths)/bin/nixfied"
-"$nixfied" capabilities --model "$model"
+nix build .#model
+nix run .#model-check
+nix run .#check
 ```
+
+### 5. Operate and upgrade
+
+The generated apps accept runtime flags after `--`, including `--slot`,
+`--timeout-ms`, `--json`, and `--both`:
+
+```sh
+NIXFIED_STATE_DIR=/tmp/my-project nix run .#check -- --slot 1 --json
+nix run .#down -- --slot 1
+nix run .#clean -- --slot 1
+```
+
+Task service lifetime defaults to `run-scoped`. Set
+`serviceLifetime = "until-idle"` to keep a task's service closure up until a
+later runtime invocation observes no live borrowers, or
+`serviceLifetime = "persistent-until-down"` to keep it up until `down`.
+
+Secrets are descriptors only (`env-var` or confined `file`); the model never
+carries secret values. Use `${secret:<id>}` only in invocation `env` values.
+The runtime resolves secrets at admission, injects them into the hermetic child
+environment, and redacts runtime-owned persistent output.
+
+To repin Nixfied later:
+
+```sh
+nix run github:willyrgf/nixfied#upgrade -- --root .
+```
+
+`upgrade` updates the Nixfied input/lock only. It does not edit `nixfied.nix`,
+migrate old models, or provide cross-version compatibility; rebuild the model
+after upgrading.
 
 ## Examples
 
@@ -108,107 +251,21 @@ nixfied="$(nix build .#nixfied-runtime --no-link --print-out-paths)/bin/nixfied"
 Build any via the root flake (e.g. `nix build .#postgres-model`);
 `examples/downstream/README.md` walks through adoption.
 
-## Install into another project
+## Direct runtime use
+
+Adopters usually do not need to call `nixfied-runtime` directly; generated apps
+bake in the model store path and matching runtime. When working on this
+repository or debugging a raw model output, the lower-level shape is:
 
 ```sh
-nix run github:willyrgf/nixfied#install   # scaffolds flake.nix + nixfied.nix (won't overwrite)
-nix run github:willyrgf/nixfied#upgrade   # repins the nixfied input only
+nix build .#minimal-model
+rt="$(nix build .#nixfied-runtime --no-link --print-out-paths)/bin/nixfied-runtime"
+model="$(nix build .#minimal-model --no-link --print-out-paths)/model.json"
+
+"$rt" check --model "$model"
+NIXFIED_STATE_DIR=/tmp/nixfied "$rt" run --model "$model" --task smoke
+NIXFIED_STATE_DIR=/tmp/nixfied "$rt" clean --model "$model"
 ```
-
-The scaffold wires the generated surface over your model (via
-`nixfied.lib.<system>.projectApps ./nixfied.nix`, already in the scaffolded
-`flake.nix`). The **control namespace is framework-reserved**; the **project
-verbs are yours** — one flake app per task id you export:
-
-```sh
-# reserved control namespace
-nix run .#run -- --task <id>    # run any declared task (no selection => refuse + list)
-nix run .#model-check           # admission: your model is well-formed and admits (no execution)
-nix run .#ps                    # observe registry-owned processes (reconciles stale evidence)
-nix run .#down                  # stop everything the runtime owns on the slot
-nix run .#clean                 # remove the marker-gated slot state
-nix run .#clean -- --purge      # also remove protected/persistent state, under the same safety gates
-
-# your verbs (nixfied.surface.verbs = [ "check" "ci" ];)
-nix run .#check
-nix run .#ci
-```
-
-If runtime-owned state refuses admission, trust the error code and the printed
-paths. `REGISTRY_CORRUPT` means the registry file is structurally unreadable or
-schema-incompatible. `STATE_UNOWNED` means the selected project/environment/slot
-does not own that registry or marker. `RUNTIME_ABI_MISMATCH` means the registry
-or model was written for another runtime/toolchain contract. Do not delete the
-whole Nixfied state base; recover only the printed slot `state-root` and
-`registry-dir` paths after confirming no owned processes are live.
-
-Your **tests are tasks** and your **phases are composites**: name leaves for
-each command (its toolchain on PATH, its argv, its env, its service
-requirements), compose them into named DAGs, and export the ones that form
-your public surface:
-
-```nix
-nixfied.tasks.lint.invocation = {
-  tools = [ rustToolchain pkgs.git ];          # the leaf's PATH, typed
-  run = [ "cargo" "clippy" "--" "-D" "warnings" ];
-};
-nixfied.tasks.db-test = {
-  invocation.tools = [ rustToolchain ];
-  invocation.run = [ "cargo" "test" "--features" "db" ];
-  invocation.env.DATABASE_URL =
-    "postgresql://postgres@\${host:postgres}:\${port:postgres}/postgres";
-  requires = [ "postgres" ];                   # ready while the leaf runs
-};
-nixfied.tasks.check = { kind = "composite"; steps = nixfiedLib.seq [ "lint" "db-test" ]; };
-nixfied.surface.verbs = [ "check" ];
-```
-
-Running a task brings up exactly the services its leaves require (closed over
-wiring and prepare requirements) — there is no environment membership to
-curate and nothing for an imported adapter to inject.
-
-Task service lifetime defaults to `run-scoped`. Set
-`serviceLifetime = "until-idle"` to leave the required service closure up until
-the next runtime invocation observes no live borrowers, or
-`serviceLifetime = "persistent-until-down"` to leave it standing until
-`nix run .#down`.
-Later compatible runs borrow the existing instance on the exact service identity
-instead of starting a second copy.
-
-Source is declared as a `codebase`. The default `live-workspace` mode observes
-the caller's checkout and allows `dirtyPolicy = allow|warn`; immutable
-`snapshot` / `flake-input` modes carry a Nix store root in `sourceIdentity` and
-may use `dirtyPolicy = reject`.
-
-Services and tasks address each other **by name, never by port arithmetic**.
-Invocation args and env values support `${port}`/`${host}` (own primary
-endpoint for a service, primary requirement for a task), `${stateDir}` (the
-slot state root), and the named forms
-`${port:<serviceId>}`/`${host:<serviceId>}` for any service declared in
-`connectsTo` (services) or `requires` (tasks):
-
-```nix
-nixfied.services.app = {
-  connectsTo = [ "postgres" ];   # starts postgres first, makes it addressable
-  lifecycle.start.invocation = {
-    tools = [ "app" ];
-    run = [ "my-app" "--db" "\${host:postgres}:\${port:postgres}" ];
-    env.DATABASE_URL = "postgres://\${host:postgres}:\${port:postgres}/db";
-  };
-};
-```
-
-Secrets are declared as descriptors (`env-var` or confined `file`), never model
-values. Use `${secret:<id>}` only in invocation environment values; the runtime
-resolves secrets before spawning, injects them into the hermetic child env, and
-redacts runtime-owned persistent output.
-
-Every slot gets a disjoint, deterministic port window, so slot 1's `app` always
-talks to slot 1's `postgres`. An undeclared named reference, an undeclared
-`connectsTo` target, or a wiring cycle is a compile/admission error, never a
-runtime surprise. Keep `nixfied.placement.ports.base` outside the OS ephemeral
-port range (Linux 32768-60999; the default 23080 already is) — the runtime
-warns at admission if a slot window overlaps it.
 
 ## Verify (working on Nixfied itself)
 
@@ -234,8 +291,8 @@ and a real `install` + `upgrade`. CI (`.github/workflows/checks.yml`) runs the s
 layered gate.
 
 Note the asymmetry with the adopter surface above: the framework verifies its
-*own* Rust source with plain cargo/nix — a nixfied task cannot invoke Nix, and
-the runtime must not grade itself — while every adopter's verification *is*
-composition: the tasks they name and export. See
+*own* Rust source with plain cargo/nix because those checks exercise the Nix
+compiler, install tooling, and Rust implementation, while every adopter's
+verification *is* composition: the tasks they name and export. See
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md); the exact dev commands are in
 [`AGENTS.md`](AGENTS.md).
