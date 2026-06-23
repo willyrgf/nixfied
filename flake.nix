@@ -222,6 +222,7 @@
               nixfied.tasks.lifecycle-service-lifetime.invocation.env.PERSISTENT_MINIMAL_MODEL =
                 toString persistentMinimalModel;
               nixfied.tasks.lifecycle-purge.invocation.env.PURGE_MINIMAL_MODEL = toString purgeMinimalModel;
+              nixfied.tasks.cache-run-scope.invocation.env.TOOLCHAIN_MODEL = toString toolchainModel;
               nixfied.tasks.slot-0.invocation.env.DOWNSTREAM_MODEL = toString downstreamModel;
               nixfied.tasks.slot-1.invocation.env.DOWNSTREAM_MODEL = toString downstreamModel;
               nixfied.tasks.slots-assert.invocation.env.DOWNSTREAM_MODEL = toString downstreamModel;

@@ -596,6 +596,48 @@
     };
   };
 
+  # ---- cache leaf tasks ------------------------------------------------
+
+  nixfied.tasks.cache-run-scope = {
+    invocation = {
+      tools = [
+        pkgs.bash
+        "rt"
+        "jq"
+        "coreutils"
+      ];
+      run = [
+        "bash"
+        "-c"
+        ''
+          set -euo pipefail
+          inner="''${stateDir}/cache-run-inner"
+          mkdir -p "''${stateDir}/gate-artifacts" "$inner"
+          NIXFIED_STATE_DIR="$inner" \
+            nixfied-runtime run --model "$TOOLCHAIN_MODEL/model.json" \
+              --task lint --timeout-ms 60000 --json \
+            > "''${stateDir}/gate-artifacts/cache-run-1.json"
+          NIXFIED_STATE_DIR="$inner" \
+            nixfied-runtime run --model "$TOOLCHAIN_MODEL/model.json" \
+              --task lint --timeout-ms 60000 --json \
+            > "''${stateDir}/gate-artifacts/cache-run-2.json"
+          cache1=$(jq -r '.task.cacheEnv[] | select(.envVar == "NIXFIED_RUN_CACHE") | .path' \
+            "''${stateDir}/gate-artifacts/cache-run-1.json")
+          cache2=$(jq -r '.task.cacheEnv[] | select(.envVar == "NIXFIED_RUN_CACHE") | .path' \
+            "''${stateDir}/gate-artifacts/cache-run-2.json")
+          [ -n "$cache1" ] && [ "$cache1" != "null" ] && [ -d "$cache1" ] \
+            || { echo "cache: first run-scope path missing or uncreated" >&2; exit 1; }
+          [ -n "$cache2" ] && [ "$cache2" != "null" ] && [ -d "$cache2" ] \
+            || { echo "cache: second run-scope path missing or uncreated" >&2; exit 1; }
+          [ "$cache1" != "$cache2" ] \
+            || { echo "cache: run-scope cache paths were reused across runs" >&2; exit 1; }
+          NIXFIED_STATE_DIR="$inner" \
+            nixfied-runtime clean --model "$TOOLCHAIN_MODEL/model.json" >/dev/null
+        ''
+      ];
+    };
+  };
+
   # ---- slot leaf tasks (slot-0 and slot-1 run concurrently) -----------
 
   nixfied.tasks.slot-0 = {
@@ -671,6 +713,14 @@
             || { echo "slots: shared a serviceInstanceId" >&2; exit 1; }
           disjoint '[.services[].processKey]' \
             || { echo "slots: shared a processKey" >&2; exit 1; }
+          cache0=$(jq -r '.tasks[] | select(.taskId == "ping-api") | .cacheEnv[] | select(.envVar == "NIXFIED_SLOT_CACHE") | .path' "$s0")
+          cache1=$(jq -r '.tasks[] | select(.taskId == "ping-api") | .cacheEnv[] | select(.envVar == "NIXFIED_SLOT_CACHE") | .path' "$s1")
+          [ -n "$cache0" ] && [ "$cache0" != "null" ] && [ -d "$cache0" ] \
+            || { echo "slots: slot 0 cache path missing or uncreated" >&2; exit 1; }
+          [ -n "$cache1" ] && [ "$cache1" != "null" ] && [ -d "$cache1" ] \
+            || { echo "slots: slot 1 cache path missing or uncreated" >&2; exit 1; }
+          [ "$cache0" != "$cache1" ] \
+            || { echo "slots: slot-scope cache path shared across slots" >&2; exit 1; }
           NIXFIED_STATE_DIR="''${stateDir}/slots-inner" \
             nixfied-runtime clean --model "$DOWNSTREAM_MODEL/model.json" --slot 0 \
             > "''${stateDir}/gate-artifacts/slots-clean-0.json"
@@ -746,6 +796,13 @@
     };
   };
 
+  nixfied.tasks.cache = {
+    kind = "composite";
+    steps = {
+      run-scope.task = "cache-run-scope";
+    };
+  };
+
   nixfied.tasks.all = {
     kind = "composite";
     steps = {
@@ -758,9 +815,13 @@
         task = "lifecycle";
         dependsOn = [ "negatives" ];
       };
+      cache = {
+        task = "cache";
+        dependsOn = [ "lifecycle" ];
+      };
       slots = {
         task = "slots";
-        dependsOn = [ "lifecycle" ];
+        dependsOn = [ "cache" ];
       };
     };
   };
