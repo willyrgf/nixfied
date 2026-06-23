@@ -494,7 +494,7 @@ fn purge_still_refuses_unmarked_roots_and_marker_mismatch() {
 
 #[cfg(unix)]
 #[test]
-fn purge_still_refuses_symlink_target_and_tree() {
+fn purge_refuses_symlink_target_but_unlinks_tree_symlinks() {
     let fixture = StateFixture::new();
     let target_link = fixture.tmp.path.join("runtime-test/dev/target-link");
     std::os::unix::fs::symlink(&fixture.layout.state_root, &target_link)
@@ -512,36 +512,46 @@ fn purge_still_refuses_symlink_target_and_tree() {
     fs::write(&outside, b"outside").expect("outside file should exist");
     std::os::unix::fs::symlink(&outside, fixture.layout.state_root.join("escape-link"))
         .expect("tree symlink should be created");
-    let tree_error = inspect_cleanup_target(
+    let mut registry = fixture.registry();
+    clean_marked_state(
         &fixture.layout.state_base,
         &fixture.layout.state_root,
         &fixture.identity,
+        &mut registry,
         CleanupMode::Purge,
     )
-    .expect_err("purge must still refuse symlinks inside the tree");
-    assert_eq!(tree_error.code, ErrorCode::StateUnowned);
-    assert!(fixture.layout.state_root.exists());
+    .expect("purge should unlink tree symlink entries");
+    assert!(!fixture.layout.state_root.exists());
+    assert_eq!(
+        fs::read_to_string(&outside).expect("outside target should survive"),
+        "outside"
+    );
 }
 
 #[cfg(unix)]
 #[test]
-fn cleanup_refuses_symlink_traversal() {
+fn cleanup_unlinks_tree_symlinks_without_following() {
     let fixture = StateFixture::new();
     let outside = fixture.tmp.path.join("outside-file");
     fs::write(&outside, b"outside").expect("outside file should exist");
     std::os::unix::fs::symlink(&outside, fixture.layout.state_root.join("escape-link"))
         .expect("symlink should be created");
 
-    let error = inspect_cleanup_target(
+    let mut registry = fixture.registry();
+    clean_marked_state(
         &fixture.layout.state_base,
         &fixture.layout.state_root,
         &fixture.identity,
+        &mut registry,
         CleanupMode::Standard,
     )
-    .expect_err("symlink in cleanup tree should be refused");
+    .expect("cleanup should unlink tree symlink entries");
 
-    assert_eq!(error.code, ErrorCode::StateUnowned);
-    assert!(fixture.layout.state_root.exists());
+    assert!(!fixture.layout.state_root.exists());
+    assert_eq!(
+        fs::read_to_string(&outside).expect("outside target should survive"),
+        "outside"
+    );
 }
 
 #[test]

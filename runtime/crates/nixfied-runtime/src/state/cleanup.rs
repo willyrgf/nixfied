@@ -51,7 +51,6 @@ pub fn inspect_cleanup_target(
         ));
     }
     reject_target_symlink(target)?;
-    reject_tree_symlinks(&canonical_target)?;
     let marker = read_marker(&canonical_target)?;
     // Cleanup is gated on ownership, not provenance: the slot's current owner
     // may clean a state root last used by an older build of the same model.
@@ -100,14 +99,7 @@ pub fn clean_marked_state(
         &payload_json,
         mode,
     )?;
-    if let Err(error) = std::fs::remove_dir_all(&canonical_target) {
-        let cleanup_error = RuntimeError::new(
-            ErrorCode::CleanupRefused,
-            format!(
-                "failed to delete cleanup target {}: {error}",
-                canonical_target.display()
-            ),
-        );
+    if let Err(cleanup_error) = remove_dir_all_confined(&canonical_target, &canonical_target) {
         let _ = record_cleanup_terminal(
             registry,
             &cleanup_id,
@@ -486,10 +478,10 @@ fn reject_target_symlink(target: &Path) -> RuntimeResult<()> {
     Ok(())
 }
 
-fn reject_tree_symlinks(path: &Path) -> RuntimeResult<()> {
+fn remove_dir_all_confined(path: &Path, canonical_target: &Path) -> RuntimeResult<()> {
     for entry in std::fs::read_dir(path).map_err(|error| {
         RuntimeError::new(
-            ErrorCode::StateUnowned,
+            ErrorCode::CleanupRefused,
             format!(
                 "failed to inspect cleanup target {}: {error}",
                 path.display()
@@ -498,7 +490,7 @@ fn reject_tree_symlinks(path: &Path) -> RuntimeResult<()> {
     })? {
         let entry = entry.map_err(|error| {
             RuntimeError::new(
-                ErrorCode::StateUnowned,
+                ErrorCode::CleanupRefused,
                 format!(
                     "failed to inspect cleanup target {}: {error}",
                     path.display()
@@ -508,7 +500,7 @@ fn reject_tree_symlinks(path: &Path) -> RuntimeResult<()> {
         let entry_path = entry.path();
         let metadata = std::fs::symlink_metadata(&entry_path).map_err(|error| {
             RuntimeError::new(
-                ErrorCode::StateUnowned,
+                ErrorCode::CleanupRefused,
                 format!(
                     "failed to inspect cleanup target {}: {error}",
                     entry_path.display()
@@ -516,16 +508,46 @@ fn reject_tree_symlinks(path: &Path) -> RuntimeResult<()> {
             )
         })?;
         if metadata.file_type().is_symlink() {
-            return Err(RuntimeError::new(
-                ErrorCode::StateUnowned,
-                format!("cleanup target contains symlink {}", entry_path.display()),
-            ));
-        }
-        if metadata.is_dir() {
-            reject_tree_symlinks(&entry_path)?;
+            std::fs::remove_file(&entry_path).map_err(|error| {
+                RuntimeError::new(
+                    ErrorCode::CleanupRefused,
+                    format!(
+                        "failed to unlink cleanup symlink {}: {error}",
+                        entry_path.display()
+                    ),
+                )
+            })?;
+        } else if metadata.is_dir() {
+            let canonical_entry = canonicalize_existing("cleanup entry", &entry_path)?;
+            if !canonical_entry.starts_with(canonical_target) {
+                return Err(RuntimeError::new(
+                    ErrorCode::StateUnowned,
+                    format!(
+                        "cleanup entry {} escapes cleanup target {}",
+                        canonical_entry.display(),
+                        canonical_target.display()
+                    ),
+                ));
+            }
+            remove_dir_all_confined(&entry_path, canonical_target)?;
+        } else {
+            std::fs::remove_file(&entry_path).map_err(|error| {
+                RuntimeError::new(
+                    ErrorCode::CleanupRefused,
+                    format!(
+                        "failed to delete cleanup entry {}: {error}",
+                        entry_path.display()
+                    ),
+                )
+            })?;
         }
     }
-    Ok(())
+    std::fs::remove_dir(path).map_err(|error| {
+        RuntimeError::new(
+            ErrorCode::CleanupRefused,
+            format!("failed to delete cleanup dir {}: {error}", path.display()),
+        )
+    })
 }
 
 fn unix_time_nanos() -> Option<u128> {
