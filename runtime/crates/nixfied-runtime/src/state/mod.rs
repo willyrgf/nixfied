@@ -1,8 +1,10 @@
+pub mod cache;
 pub mod cleanup;
 pub mod marker;
 pub mod placement;
 pub mod upgrade;
 
+pub use cache::{CacheIdentity, MaterializedCacheEnv, materialize_cache_env};
 pub use cleanup::{CleanupMode, CleanupOutcome, clean_marked_state, inspect_cleanup_target};
 pub use marker::{
     MARKER_FILE_NAME, MarkerComparison, MarkerDecision, StateIdentity, StateMarker,
