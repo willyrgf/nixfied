@@ -10,8 +10,8 @@ use std::path::Path;
 use std::time::Duration;
 
 use nixfied_model::{
-    ClosureSpec, InvocationSpec, Lifecycle, Model, OperationId, ProbeKind, ProbeSpec, ServiceId,
-    ServiceSpec, StatePolicy, StepSpec, StopSpec, Target, TaskId, TaskKind, TaskSpec,
+    CacheEnvSpec, ClosureSpec, InvocationSpec, Lifecycle, Model, OperationId, ProbeKind, ProbeSpec,
+    ServiceId, ServiceSpec, StatePolicy, StepSpec, StopSpec, Target, TaskId, TaskKind, TaskSpec,
     TerminalSemantics,
 };
 
@@ -192,7 +192,7 @@ fn lower_service(
     }
     let start = StartOp {
         meta: op_meta(&start.operation_id, &start.terminal),
-        exec: resolve_invocation(&owner, &start.invocation, closures)?,
+        exec: resolve_invocation(&owner, &start.invocation, closures, false)?,
     };
     // An endpoint-less service has no tcp probe target: readiness means "the
     // probe answers", so its probes must be invocations (rejected at eval and
@@ -364,7 +364,7 @@ fn lower_task(
         }
         .into());
     }
-    let exec = resolve_invocation(&owner, invocation, closures)?;
+    let exec = resolve_invocation(&owner, invocation, closures, true)?;
     let requires = requires
         .iter()
         .map(|id| require_service("task.requires", services, id))
@@ -510,7 +510,7 @@ fn lower_probe(
                 .into());
             };
             let owner = || format!("service {service} {class} probe");
-            let mut exec = resolve_invocation(&owner, invocation, closures)?;
+            let mut exec = resolve_invocation(&owner, invocation, closures, false)?;
             exec.timeout = timeout;
             Ok(Probe::Exec(ExecProbe {
                 label: class.to_string(),
@@ -555,12 +555,14 @@ fn resolve_invocation(
     owner: &impl Fn() -> String,
     invocation: &InvocationSpec,
     closures: &BTreeMap<String, ClosureSpec>,
+    allow_cache_env: bool,
 ) -> Result<ResolvedInvocation, Rejection> {
     let InvocationSpec {
         tools,
         run,
         executable,
         env,
+        cache_env,
         codebase_id: _,
         cwd,
         stdin,
@@ -578,6 +580,18 @@ fn resolve_invocation(
         return Err(Rejection::ReservedEnvVar {
             owner: owner(),
             name: "PATH",
+        });
+    }
+    nixfied_model::validation::validate_cache_env_map(env, cache_env).map_err(|error| {
+        Rejection::CacheEnvInvalid {
+            owner: owner(),
+            reason: error.to_string(),
+        }
+    })?;
+    if !allow_cache_env && !cache_env.is_empty() {
+        return Err(Rejection::CacheEnvUnsupported {
+            owner: owner(),
+            expected: "cacheEnv only on leaf task invocations",
         });
     }
     let mut tool_roots = Vec::with_capacity(tools.len());
@@ -608,11 +622,25 @@ fn resolve_invocation(
         executable: executable.clone(),
         args: run[1..].to_vec(),
         env: env.clone(),
+        cache_env: lower_cache_env(cache_env),
         cwd: cwd.clone(),
         stdin: *stdin,
         timeout: Duration::from_millis(timeout_ms.get()),
         tool_roots,
     })
+}
+
+fn lower_cache_env(cache_env: &BTreeMap<String, CacheEnvSpec>) -> Vec<ResolvedCacheEnv> {
+    cache_env
+        .iter()
+        .map(|(env_var, cache)| ResolvedCacheEnv {
+            env_var: env_var.clone(),
+            family: cache.family.clone(),
+            mode: cache.mode,
+            scope: cache.scope,
+            key_parts: cache.key.parts.clone(),
+        })
+        .collect()
 }
 
 /// The closed set of reasons the model cannot be lowered into an executable
@@ -644,6 +672,14 @@ pub enum Rejection {
     ReservedEnvVar {
         owner: String,
         name: &'static str,
+    },
+    CacheEnvUnsupported {
+        owner: String,
+        expected: &'static str,
+    },
+    CacheEnvInvalid {
+        owner: String,
+        reason: String,
     },
     TaskKindIncoherent {
         task_id: String,
@@ -723,6 +759,12 @@ impl Rejection {
             ),
             Rejection::ReservedEnvVar { owner, name } => {
                 format!("{owner} declares runtime-owned environment variable {name}")
+            }
+            Rejection::CacheEnvUnsupported { owner, expected } => {
+                format!("{owner} declares cacheEnv but {expected}")
+            }
+            Rejection::CacheEnvInvalid { owner, reason } => {
+                format!("{owner} declares invalid cacheEnv: {reason}")
             }
             Rejection::TaskKindIncoherent { task_id, expected } => {
                 format!("task {task_id} is kind-incoherent: {expected}")
@@ -1310,6 +1352,64 @@ mod tests {
             task.service_lifetime,
             nixfied_model::ServiceLifetime::RunScoped
         );
+    }
+
+    #[test]
+    fn task_cache_env_lowers_to_resolved_bindings() {
+        let mut value = model_value();
+        value["tasks"]["t"]["invocation"]["cacheEnv"] = json!({
+            "CARGO_TARGET_DIR": {
+                "family": "cargo-target",
+                "mode": "fast-dev",
+                "scope": "slot",
+                "key": { "parts": ["cargo-target-v1", "lock:abc123"] }
+            }
+        });
+
+        let em = lower(&model_from(value)).expect("task cache env lowers");
+        let cache = &em.tasks["t"].exec.cache_env[0];
+        assert_eq!(cache.env_var, "CARGO_TARGET_DIR");
+        assert_eq!(cache.family, "cargo-target");
+        assert_eq!(cache.mode, CacheMode::FastDev);
+        assert_eq!(cache.scope, CacheScope::Slot);
+        assert_eq!(
+            cache.key_parts,
+            vec!["cargo-target-v1".to_string(), "lock:abc123".to_string()]
+        );
+    }
+
+    #[test]
+    fn lifecycle_cache_env_is_rejected_during_lowering() {
+        let mut value = model_value();
+        value["services"]["svc"]["lifecycle"]["start"]["invocation"]["cacheEnv"] = json!({
+            "CARGO_TARGET_DIR": {
+                "family": "cargo-target",
+                "mode": "fast-dev",
+                "scope": "slot",
+                "key": { "parts": ["cargo-target-v1"] }
+            }
+        });
+
+        let error = lower(&model_from(value)).expect_err("service cacheEnv must reject");
+        assert_eq!(error.code, ErrorCode::ModelAdmission);
+        assert!(error.message.contains("cacheEnv only on leaf"));
+    }
+
+    #[test]
+    fn malformed_cache_env_is_rejected_during_lowering() {
+        let mut value = model_value();
+        value["tasks"]["t"]["invocation"]["cacheEnv"] = json!({
+            "CARGO_TARGET_DIR": {
+                "family": "../cargo-target",
+                "mode": "fast-dev",
+                "scope": "slot",
+                "key": { "parts": ["cargo-target-v1"] }
+            }
+        });
+
+        let error = lower(&model_from(value)).expect_err("malformed cacheEnv must reject");
+        assert_eq!(error.code, ErrorCode::ModelAdmission);
+        assert!(error.message.contains("invalid cacheEnv"));
     }
 
     #[test]

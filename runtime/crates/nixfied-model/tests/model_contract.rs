@@ -1,4 +1,7 @@
-use nixfied_model::{MODEL_VERSION, Model, TOOLCHAIN_ID, Validate, ValidationError, runtime_abi};
+use nixfied_model::{
+    CacheMode, CacheScope, MODEL_VERSION, Model, TOOLCHAIN_ID, Validate, ValidationError,
+    runtime_abi,
+};
 use serde_json::{Value, json};
 
 fn valid_model_json() -> Value {
@@ -213,6 +216,140 @@ fn secret_descriptors_round_trip_without_values() {
         emitted["tasks"]["smoke"]["invocation"]["env"]["API_TOKEN"],
         json!("${secret:api-token}")
     );
+}
+
+#[test]
+fn cache_env_round_trips_on_leaf_invocations() {
+    let mut value = valid_model_json();
+    value["tasks"]["smoke"]["invocation"]["cacheEnv"] = json!({
+        "CARGO_TARGET_DIR": {
+            "family": "cargo-target",
+            "mode": "fast-dev",
+            "scope": "slot",
+            "key": {
+                "parts": [
+                    "cargo-target-v1",
+                    "rust:1.90.0",
+                    "lock:abc123"
+                ]
+            }
+        }
+    });
+
+    let model: Model = serde_json::from_value(value).expect("cacheEnv model should parse");
+    model.validate().expect("leaf cacheEnv should validate");
+    let invocation = model.tasks["smoke"]
+        .invocation
+        .as_ref()
+        .expect("smoke is a leaf");
+    let cache = &invocation.cache_env["CARGO_TARGET_DIR"];
+    assert_eq!(cache.family, "cargo-target");
+    assert_eq!(cache.mode, CacheMode::FastDev);
+    assert_eq!(cache.scope, CacheScope::Slot);
+    assert_eq!(
+        cache.key.parts,
+        vec![
+            "cargo-target-v1".to_string(),
+            "rust:1.90.0".to_string(),
+            "lock:abc123".to_string()
+        ]
+    );
+
+    let emitted = serde_json::to_value(&model).expect("model should serialize");
+    assert_eq!(
+        emitted["tasks"]["smoke"]["invocation"]["cacheEnv"]["CARGO_TARGET_DIR"]["mode"],
+        json!("fast-dev")
+    );
+}
+
+#[test]
+fn cache_env_is_rejected_outside_leaf_tasks() {
+    let mut value = valid_model_json();
+    value["services"]["synthetic"]["lifecycle"]["start"]["invocation"]["cacheEnv"] = json!({
+        "CARGO_TARGET_DIR": {
+            "family": "cargo-target",
+            "mode": "fast-dev",
+            "scope": "slot",
+            "key": { "parts": ["cargo-target-v1"] }
+        }
+    });
+
+    let model: Model = serde_json::from_value(value).expect("model should parse");
+    let error = model
+        .validate()
+        .expect_err("service lifecycle cacheEnv must be rejected");
+    assert!(error.to_string().contains("cacheEnv only on leaf"));
+}
+
+#[test]
+fn cache_env_validation_is_closed() {
+    let cases = [
+        (
+            "PATH",
+            "cargo-target",
+            "slot",
+            "fast-dev",
+            json!(["cache-v1"]),
+        ),
+        (
+            "1INVALID",
+            "cargo-target",
+            "slot",
+            "fast-dev",
+            json!(["cache-v1"]),
+        ),
+        (
+            "CACHE_DIR",
+            "../cargo-target",
+            "slot",
+            "fast-dev",
+            json!(["cache-v1"]),
+        ),
+        ("CACHE_DIR", "cargo-target", "slot", "fast-dev", json!([])),
+        ("CACHE_DIR", "cargo-target", "run", "exact", json!([])),
+        (
+            "CACHE_DIR",
+            "cargo-target",
+            "run",
+            "fast-dev",
+            json!(["/tmp/cache"]),
+        ),
+    ];
+
+    for (env_var, family, scope, mode, parts) in cases {
+        let mut value = valid_model_json();
+        value["tasks"]["smoke"]["invocation"]["cacheEnv"] = json!({});
+        value["tasks"]["smoke"]["invocation"]["cacheEnv"][env_var] = json!({
+            "family": family,
+            "mode": mode,
+            "scope": scope,
+            "key": { "parts": parts }
+        });
+        let model: Model = serde_json::from_value(value).expect("model should parse");
+        model
+            .validate()
+            .expect_err("invalid cacheEnv should be rejected");
+    }
+}
+
+#[test]
+fn cache_env_rejects_declared_env_collision() {
+    let mut value = valid_model_json();
+    value["tasks"]["smoke"]["invocation"]["env"]["CARGO_TARGET_DIR"] = json!("declared");
+    value["tasks"]["smoke"]["invocation"]["cacheEnv"] = json!({
+        "CARGO_TARGET_DIR": {
+            "family": "cargo-target",
+            "mode": "fast-dev",
+            "scope": "slot",
+            "key": { "parts": ["cache-v1"] }
+        }
+    });
+
+    let model: Model = serde_json::from_value(value).expect("model should parse");
+    let error = model
+        .validate()
+        .expect_err("cacheEnv must not collide with declared env");
+    assert!(error.to_string().contains("no collision"));
 }
 
 #[test]

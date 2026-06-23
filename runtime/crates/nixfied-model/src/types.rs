@@ -207,10 +207,43 @@ pub struct InvocationSpec {
     pub run: Vec<String>,
     pub executable: String,
     pub env: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub cache_env: BTreeMap<String, CacheEnvSpec>,
     pub codebase_id: CodebaseId,
     pub cwd: String,
     pub stdin: StdinPolicy,
     pub timeout_ms: NonZeroU64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CacheEnvSpec {
+    pub family: String,
+    pub mode: CacheMode,
+    pub scope: CacheScope,
+    pub key: CacheKeySpec,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CacheKeySpec {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parts: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CacheMode {
+    FastDev,
+    TrustedCi,
+    Exact,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CacheScope {
+    Run,
+    Slot,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

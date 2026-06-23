@@ -387,6 +387,7 @@ mod tests {
             executable: "/bin/svc".to_string(),
             args: Vec::new(),
             env: BTreeMap::new(),
+            cache_env: Vec::new(),
             cwd: ".".to_string(),
             stdin: StdinPolicy::Null,
             timeout: Duration::from_millis(1000),

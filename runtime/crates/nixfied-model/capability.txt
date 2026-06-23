@@ -18,7 +18,9 @@ primitive Placement: slotPlacements
 primitive SlotPlacement: slot candidatePorts
 primitive CandidatePortWindow: start end
 primitive ClosureSpec: kind storePath executable targetSystem operationBindings requiresExecutable effects
-primitive Invocation: tools run executable env codebaseId cwd stdin timeoutMs
+primitive Invocation: tools run executable env cacheEnv codebaseId cwd stdin timeoutMs
+primitive CacheEnvSpec: family mode scope key
+primitive CacheKeySpec: parts
 # endpoints/primaryEndpoint are optional: durable is not listening. An
 # endpoint-less service makes no addressability claim — invocation probes only,
 # nothing may address it, no port demand.
@@ -58,8 +60,9 @@ run-output-mode: summary json both
 # runtime ABI digest.
 output-schema run-json: runId modelPath computedModelHash durationMs services tasks task? summaryPath? nodes runSummaryPath?
 output-schema run-summary-json: runId success durationMs services nodes tasks
-output-schema run-task: taskId stepPath processKey exitCode timedOut canceled success durationMs stdoutPath stderrPath summaryPath
-output-schema run-node: nodeId taskId success exitCode durationMs stdoutPath stderrPath summaryPath
+output-schema run-task: taskId stepPath processKey exitCode timedOut canceled success durationMs stdoutPath stderrPath summaryPath cacheEnv?
+output-schema run-node: nodeId taskId success exitCode durationMs stdoutPath stderrPath summaryPath cacheEnv?
+output-schema task-cache-evidence: envVar family mode scope digest path
 output-schema run-service: serviceId serviceInstanceId processKey selectedEndpoint?
 output-schema selected-endpoint: endpointId host port
 output-schema run-summary-text: slot-upgrade service-start prepare-node service-ready-endpoint service-ready-endpointless task-ok task-fail task-fail-stderr result-ok result-fail-empty result-fail-nodes run-summary logs
@@ -72,6 +75,8 @@ signal: TERM INT QUIT HUP
 # contract change that rotates the ABI digest, same as a primitive field.
 enum ClosureKind: executable helper
 enum ClosureEffect: process network-listener source-read file-write
+enum CacheMode: fast-dev trusted-ci exact
+enum CacheScope: run slot
 enum StdinPolicy: null inherit
 enum ProbeKind: tcp exec
 enum TaskKind: leaf composite

@@ -148,6 +148,8 @@ fn schema_view(_model: &Model) -> Value {
             "toolchainId": nixfied_model::TOOLCHAIN_ID,
             "primitives": [
                 "Invocation",
+                "CacheEnvSpec",
+                "CacheKeySpec",
                 "Endpoint",
                 "ProbeSpec",
                 "Lifecycle",
