@@ -64,6 +64,78 @@ else
       }
     ))
 
+    (reject "a runtime-owned PATH declared in cacheEnv" (
+      { ... }:
+      {
+        imports = [ composite ];
+        nixfied.tasks.smoke.invocation.cacheEnv.PATH = {
+          family = "cargo-target";
+          mode = "fast-dev";
+          key.parts = [ "cache-v1" ];
+        };
+      }
+    ))
+
+    (reject "cacheEnv colliding with env" (
+      { ... }:
+      {
+        imports = [ composite ];
+        nixfied.tasks.smoke.invocation.env.CARGO_TARGET_DIR = "declared";
+        nixfied.tasks.smoke.invocation.cacheEnv.CARGO_TARGET_DIR = {
+          family = "cargo-target";
+          mode = "fast-dev";
+          key.parts = [ "cache-v1" ];
+        };
+      }
+    ))
+
+    (reject "slot cacheEnv without key parts" (
+      { ... }:
+      {
+        imports = [ composite ];
+        nixfied.tasks.smoke.invocation.cacheEnv.CARGO_TARGET_DIR = {
+          family = "cargo-target";
+          mode = "fast-dev";
+        };
+      }
+    ))
+
+    (reject "exact cacheEnv without explicit scope" (
+      { ... }:
+      {
+        imports = [ composite ];
+        nixfied.tasks.smoke.invocation.cacheEnv.CARGO_TARGET_DIR = {
+          family = "cargo-target";
+          mode = "exact";
+          key.parts = [ "cache-v1" ];
+        };
+      }
+    ))
+
+    (reject "cacheEnv on a service lifecycle invocation" (
+      { ... }:
+      {
+        imports = [ composite ];
+        nixfied.services.synthetic.lifecycle.start.invocation.cacheEnv.CARGO_TARGET_DIR = {
+          family = "cargo-target";
+          mode = "fast-dev";
+          key.parts = [ "cache-v1" ];
+        };
+      }
+    ))
+
+    (reject "path-shaped cacheEnv family" (
+      { ... }:
+      {
+        imports = [ composite ];
+        nixfied.tasks.smoke.invocation.cacheEnv.CARGO_TARGET_DIR = {
+          family = "../cargo-target";
+          mode = "fast-dev";
+          key.parts = [ "cache-v1" ];
+        };
+      }
+    ))
+
     (reject "an unresolvable run[0]" (
       { lib, ... }:
       {

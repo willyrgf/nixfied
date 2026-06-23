@@ -133,6 +133,23 @@ let
   # The declarative run[0] resolution rule (docs/DERIVATION_SPEC.md §1.1): the
   # first tool closure whose executable basename equals run[0] provides the
   # executable. The runtime re-derives the same rule at admission.
+  cacheScope =
+    cache:
+    if cache.scope != null then
+      cache.scope
+    else if cache.mode == "fast-dev" then
+      "slot"
+    else if cache.mode == "trusted-ci" then
+      "run"
+    else
+      null;
+  normalizeCacheEnv = mapAttrs (_envVar: cache: {
+    inherit (cache) family mode;
+    scope = cacheScope cache;
+    key = {
+      inherit (cache.key) parts;
+    };
+  });
   resolveInvocation =
     owner: invocation:
     let
@@ -140,6 +157,10 @@ let
       undeclared = builtins.filter (id: !(closures ? ${id})) toolIds;
       program = builtins.head invocation.run;
       resolvedId = lib.findFirst (id: baseNameOf closures.${id}.executable == program) null toolIds;
+      cacheEnv = normalizeCacheEnv invocation.cacheEnv;
+      cacheEnvCollisions = builtins.filter (name: invocation.env ? ${name}) (
+        builtins.attrNames invocation.cacheEnv
+      );
     in
     assert lib.assertMsg (
       undeclared == [ ]
@@ -150,6 +171,9 @@ let
     assert lib.assertMsg (
       !(invocation.env ? PATH)
     ) "${owner}: env.PATH is runtime-owned (assembled from the tool roots) and must not be declared";
+    assert lib.assertMsg (
+      cacheEnvCollisions == [ ]
+    ) "${owner}: cacheEnv collides with declared env: ${builtins.concatStringsSep ", " cacheEnvCollisions}";
     {
       tools = toolIds;
       run = invocation.run;
@@ -159,6 +183,9 @@ let
       cwd = invocation.cwd;
       stdin = invocation.stdin;
       timeoutMs = invocation.timeoutMs;
+    }
+    // lib.optionalAttrs (cacheEnv != { }) {
+      inherit cacheEnv;
     };
 
   # Derived operation bindings (docs/DERIVATION_SPEC.md §4): the byte-sorted

@@ -38,6 +38,45 @@ let
   # compiler synthesizes tool closures from. `run` is the argv; `run[0]` is
   # resolved against the tool set at eval, so the runtime resolves nothing on
   # the host (SEAM-1).
+  cacheKeyType = types.submodule {
+    options = {
+      parts = mkOption {
+        type = types.listOf types.str;
+        default = [ ];
+        description = "Logical cache identity parts. Slot-scoped and exact caches require at least one part.";
+      };
+    };
+  };
+  cacheEnvType = types.submodule {
+    options = {
+      family = mkOption {
+        type = types.nonEmptyStr;
+        description = "Logical cache family. Used as a runtime-owned path component after validation.";
+      };
+      mode = mkOption {
+        type = types.enum [
+          "fast-dev"
+          "trusted-ci"
+          "exact"
+        ];
+        default = "fast-dev";
+        description = "Cache trust/reuse mode.";
+      };
+      scope = mkOption {
+        type = types.nullOr (types.enum [
+          "run"
+          "slot"
+        ]);
+        default = null;
+        description = "Cache placement scope. Defaults from mode for fast-dev/trusted-ci; exact requires an explicit scope.";
+      };
+      key = mkOption {
+        type = cacheKeyType;
+        default = { };
+        description = "Logical cache identity key.";
+      };
+    };
+  };
   invocationOptions = {
     tools = mkOption {
       type = types.nonEmptyListOf (types.either types.nonEmptyStr types.package);
@@ -51,6 +90,11 @@ let
       type = types.attrsOf types.str;
       default = { };
       description = "Declared child environment (hermetic: nothing else is inherited; PATH is runtime-owned).";
+    };
+    cacheEnv = mkOption {
+      type = types.attrsOf cacheEnvType;
+      default = { };
+      description = "Runtime-owned cache directories materialized into selected child environment variables.";
     };
     codebaseId = mkOption {
       type = types.nonEmptyStr;
