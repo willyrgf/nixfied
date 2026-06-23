@@ -554,6 +554,9 @@ fn run_m0_placed(
                             RunContext {
                                 run_id,
                                 computed_model_hash: &admission.computed_model_hash,
+                                target_json: &admission.target_json,
+                                runtime_abi: &admission.runtime_abi,
+                                toolchain_id: &admission.toolchain_id,
                                 source_root: &source_root,
                                 state_root: &placement.state_root,
                                 secrets: &admission.secrets,
@@ -796,6 +799,9 @@ fn run_m0_placed(
         let run_context = RunContext {
             run_id,
             computed_model_hash: &admission.computed_model_hash,
+            target_json: &admission.target_json,
+            runtime_abi: &admission.runtime_abi,
+            toolchain_id: &admission.toolchain_id,
             source_root: &source_root,
             state_root: &placement.state_root,
             secrets: &admission.secrets,

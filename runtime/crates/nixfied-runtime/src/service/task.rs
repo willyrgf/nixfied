@@ -20,7 +20,7 @@ use crate::service::registry::{
     TaskProcessRecord, TaskTerminalStatus, ensure_service_instance_probe_ready, mark_task_finished,
     record_task_canceling, record_task_started,
 };
-use crate::state::HostPlacement;
+use crate::state::{CacheIdentity, HostPlacement, materialize_cache_env};
 use nixfied_model::ServiceId;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -41,6 +41,19 @@ pub struct TaskRun {
     pub stdout_path: PathBuf,
     pub stderr_path: PathBuf,
     pub summary_path: PathBuf,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cache_env: Vec<TaskCacheEvidence>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskCacheEvidence {
+    pub env_var: String,
+    pub family: String,
+    pub mode: nixfied_model::CacheMode,
+    pub scope: nixfied_model::CacheScope,
+    pub digest: String,
+    pub path: PathBuf,
 }
 
 /// The run-level context a task executes in, independent of any service: the run
@@ -52,6 +65,9 @@ pub struct TaskRun {
 pub struct RunContext<'a> {
     pub run_id: &'a str,
     pub computed_model_hash: &'a str,
+    pub target_json: &'a str,
+    pub runtime_abi: &'a str,
+    pub toolchain_id: &'a str,
     pub source_root: &'a Path,
     pub state_root: &'a Path,
     pub secrets: &'a ResolvedSecrets,
@@ -65,6 +81,9 @@ impl<'a> RunContext<'a> {
         Self {
             run_id: &service.run_id,
             computed_model_hash: &service.computed_model_hash,
+            target_json: &service.target_json,
+            runtime_abi: &service.runtime_abi,
+            toolchain_id: &service.toolchain_id,
             source_root: &service.source_root,
             state_root: &service.state_root,
             secrets: &service.secrets,
@@ -147,7 +166,20 @@ pub fn run_dependent_task_cancellable(
         .logs_dir
         .join(format!("task.{node_id}.stderr.log"));
     let args = substitution.args(&exec.args)?;
-    let env = exec.env_with_path(substitution.env(&exec.env)?);
+    let mut env = substitution.env(&exec.env)?;
+    let cache_env = materialize_task_cache_env(placement, run_context, exec)?;
+    for cache in &cache_env {
+        if env
+            .insert(cache.env_var.clone(), cache.path.display().to_string())
+            .is_some()
+        {
+            return Err(RuntimeError::new(
+                ErrorCode::ModelAdmission,
+                format!("cacheEnv {} collides with declared env", cache.env_var),
+            ));
+        }
+    }
+    let env = exec.env_with_path(env);
     let command_cwd = resolve_exec_cwd(run_context.source_root, &exec.cwd)?;
     let command_json = serde_json::to_string(&TaskCommandRecord {
         task_id,
@@ -156,6 +188,7 @@ pub fn run_dependent_task_cancellable(
         cwd: command_cwd.as_path(),
         stdout_path: stdout_path.as_path(),
         stderr_path: stderr_path.as_path(),
+        cache_env: &cache_env,
     })
     .map_err(|error| RuntimeError::new(ErrorCode::ModelAdmission, error.to_string()))?;
     cancellation.check()?;
@@ -244,6 +277,7 @@ pub fn run_dependent_task_cancellable(
         summary_path: placement
             .summary_path
             .with_file_name(format!("summary.{node_id}.json")),
+        cache_env,
     };
     write_summary(&run, run_context.redactor)?;
     let mut payload_value = serde_json::to_value(&run)
@@ -273,6 +307,32 @@ pub fn run_dependent_task_cancellable(
     } else {
         Err(RuntimeError::new(ErrorCode::TaskFailed, failure_message).with_detail("taskRun", &run))
     }
+}
+
+fn materialize_task_cache_env(
+    placement: &HostPlacement,
+    run_context: RunContext<'_>,
+    exec: &ResolvedInvocation,
+) -> RuntimeResult<Vec<TaskCacheEvidence>> {
+    let identity = CacheIdentity {
+        target_json: run_context.target_json,
+        runtime_abi: run_context.runtime_abi,
+        toolchain_id: run_context.toolchain_id,
+    };
+    exec.cache_env
+        .iter()
+        .map(|binding| {
+            let cache = materialize_cache_env(placement, binding, &identity)?;
+            Ok(TaskCacheEvidence {
+                env_var: cache.env_var,
+                family: cache.family,
+                mode: cache.mode,
+                scope: cache.scope,
+                digest: cache.digest,
+                path: cache.path,
+            })
+        })
+        .collect()
 }
 
 fn elapsed_ms(started: Instant) -> u64 {
@@ -490,4 +550,5 @@ struct TaskCommandRecord<'a> {
     cwd: &'a Path,
     stdout_path: &'a Path,
     stderr_path: &'a Path,
+    cache_env: &'a [TaskCacheEvidence],
 }

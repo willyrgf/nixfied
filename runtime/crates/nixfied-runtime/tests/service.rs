@@ -3117,6 +3117,9 @@ fn task_child_path_is_assembled_from_tool_roots() {
         RunContext {
             run_id: "run-path-proof",
             computed_model_hash: &fixture.admission.computed_model_hash,
+            target_json: &fixture.admission.target_json,
+            runtime_abi: &fixture.admission.runtime_abi,
+            toolchain_id: &fixture.admission.toolchain_id,
             source_root: &source_root,
             state_root: &fixture.placement.state_root,
             secrets: &fixture.admission.secrets,
@@ -3179,6 +3182,9 @@ fn task_child_environment_is_hermetic() {
         RunContext {
             run_id: "run-hermetic-proof",
             computed_model_hash: &fixture.admission.computed_model_hash,
+            target_json: &fixture.admission.target_json,
+            runtime_abi: &fixture.admission.runtime_abi,
+            toolchain_id: &fixture.admission.toolchain_id,
             source_root: &source_root,
             state_root: &fixture.placement.state_root,
             secrets: &fixture.admission.secrets,
@@ -3208,6 +3214,85 @@ fn task_child_environment_is_hermetic() {
             "unexpected child env var {name}: {stdout}"
         );
     }
+}
+
+#[test]
+fn task_cache_env_is_materialized_and_injected() {
+    let Some(python) = python3_path() else {
+        return;
+    };
+    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
+    let port = listener.local_addr().expect("local addr").port();
+    drop(listener);
+    let mut value = fixture_model(python, &["-c", python_listener_script(), "${port}"], port);
+    value["tasks"]["smoke"]["requires"] = json!([]);
+    value["tasks"]["smoke"]["servicesRequired"] = json!([]);
+    value["tasks"]["smoke"]["invocation"]["cacheEnv"] = json!({
+        "NIXFIED_CACHE_DIR": {
+            "family": "nixfied-test-cache",
+            "mode": "trusted-ci",
+            "scope": "run",
+            "key": { "parts": [] }
+        }
+    });
+    set_task_run_args(
+        &mut value,
+        &[
+            "-c",
+            "import os, sys; p=os.environ['NIXFIED_CACHE_DIR']; sys.stdout.write(p)",
+        ],
+    );
+    let mut fixture = ServiceFixture::from_value(value);
+    let task = fixture
+        .admission
+        .execution_model
+        .tasks
+        .get("smoke")
+        .expect("task lowered")
+        .clone();
+    let source_root = fixture
+        .admission
+        .require_source()
+        .expect("run admission resolves source")
+        .observed_root
+        .clone();
+    let redactor = Redactor::empty();
+
+    let run = run_dependent_task(
+        &fixture.placement,
+        &mut fixture.registry,
+        RunContext {
+            run_id: "run-cache-env-proof",
+            computed_model_hash: &fixture.admission.computed_model_hash,
+            target_json: &fixture.admission.target_json,
+            runtime_abi: &fixture.admission.runtime_abi,
+            toolchain_id: &fixture.admission.toolchain_id,
+            source_root: &source_root,
+            state_root: &fixture.placement.state_root,
+            secrets: &fixture.admission.secrets,
+            redactor: &redactor,
+        },
+        &[],
+        &task,
+    )
+    .expect("cache-env task should succeed");
+
+    let stdout = fs::read_to_string(&run.stdout_path).expect("task stdout log");
+    let cache_path = PathBuf::from(stdout);
+    assert!(cache_path.starts_with(fixture.placement.run_dir.join("caches")));
+    assert!(cache_path.is_dir());
+    assert_eq!(run.cache_env.len(), 1);
+    assert_eq!(run.cache_env[0].env_var, "NIXFIED_CACHE_DIR");
+    assert_eq!(run.cache_env[0].path, cache_path);
+
+    let summary: Value =
+        serde_json::from_slice(&fs::read(&run.summary_path).expect("task summary should read"))
+            .expect("task summary should parse");
+    assert_eq!(
+        summary["cacheEnv"][0]["family"],
+        json!("nixfied-test-cache")
+    );
+    assert_eq!(summary["cacheEnv"][0]["scope"], json!("run"));
 }
 
 #[test]
