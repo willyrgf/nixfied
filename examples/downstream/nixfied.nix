@@ -159,6 +159,12 @@ in
   nixfied.tasks.ping-api = {
     invocation = {
       tools = [ "app" ];
+      cacheEnv.NIXFIED_SLOT_CACHE = {
+        family = "downstream-ping-api";
+        mode = "fast-dev";
+        scope = "slot";
+        key.parts = [ "downstream-ping-api-v1" ];
+      };
       run = taskRun "api";
     };
     requires = [ "api" ];

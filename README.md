@@ -178,6 +178,9 @@ The important authoring rules are:
   membership or implicit startup;
 - child environments are hermetic: declared `env` plus the runtime-owned PATH
   assembled from `invocation.tools`;
+- leaf task invocations may also declare `cacheEnv.<NAME>`; the runtime creates
+  the cache directory and injects its path into that env var without ever
+  memoizing or skipping the task;
 - services and tasks address dependencies by declared names (`${host:postgres}`,
   `${port:postgres}`), not port arithmetic;
 - `nixfied.surface.verbs` is the project-owned public surface. The control names
@@ -227,6 +230,33 @@ Secrets are descriptors only (`env-var` or confined `file`); the model never
 carries secret values. Use `${secret:<id>}` only in invocation `env` values.
 The runtime resolves secrets at admission, injects them into the hermetic child
 environment, and redacts runtime-owned persistent output.
+
+Task cache directories are inline invocation resources:
+
+```nix
+nixfied.tasks.check.invocation = {
+  tools = [ pkgs.cargo ];
+  cacheEnv.CARGO_TARGET_DIR = {
+    family = "cargo-target";
+    mode = "fast-dev";
+    scope = "slot";
+    key.parts = [
+      "cargo-target-v1"
+      "rust:${pkgs.rustc.version}"
+      "lock:${builtins.hashFile "sha256" ./Cargo.lock}"
+    ];
+  };
+  env.CARGO_INCREMENTAL = "0";
+  run = [ "cargo" "clippy" "--workspace" ];
+};
+```
+
+`scope = "run"` places the cache under the current run; `scope = "slot"`
+places it under the slot state root and requires non-empty `key.parts`.
+`mode = "exact"` also requires non-empty key parts and an explicit scope. The
+runtime does not lock shared slot caches in v1; use them for ordinary local
+sequential development or tools that provide their own locking. Cache contents
+are child-owned files and are not redacted by REDACT-1.
 
 To repin Nixfied later:
 

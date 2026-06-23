@@ -102,11 +102,14 @@ closed algebra of exactly **two semantic kinds** (KIND-2):
   while binding no socket and claiming no port (PORT-1 stays fully scoped to
   declared endpoints).
 
-The connective tissue is the **invocation** (`tools + run + env + cwd +
-timeout + stdin`) — the one way anything says "run this program". Invocations
-are **anonymous and inline** (INVOKE-1): naming them for reuse would recreate
-the named-invocation registry and its reuse/wiring entanglement; content reuse is a Nix
-`let`, and the model carries the fully-applied copies.
+The connective tissue is the **invocation** (`tools + run + env + cacheEnv +
+cwd + timeout + stdin`) — the one way anything says "run this program".
+Invocations are **anonymous and inline** (INVOKE-1): naming them for reuse would
+recreate the named-invocation registry and its reuse/wiring entanglement;
+content reuse is a Nix `let`, and the model carries the fully-applied copies.
+`cacheEnv` is not a third semantic kind and not result memoization: a leaf task
+still executes every time, while the runtime materialises a cache directory and
+injects its path into the selected environment variable.
 
 Adopter vocabulary enters the contract as **names over this algebra, never as
 schema**: `check` is not a concept nixfied knows, it is a composite an
@@ -120,8 +123,9 @@ from the graph (DERIVE-1), computed identically by the Nix compiler and the
 runtime's lowering against one normative source
 (`docs/DERIVATION_SPEC.md`), and compared fail-closed at admission.
 Hand-declaration is reserved for *choices* (surface verbs) and *attestations*
-(effects). Child environments are **hermetic**: declared env plus the
-runtime-owned PATH (assembled from the tool roots), nothing inherited.
+(effects). Child environments are **hermetic**: declared env plus materialised
+cache env vars plus the runtime-owned PATH (assembled from the tool roots),
+nothing inherited.
 
 ## Correctness in four layers
 
@@ -164,6 +168,13 @@ Every runtime action is scoped by `projectId / environment / slot / runId`.
   (`$NIXFIED_STATE_DIR` or a platform default), with run-scoped paths using the
   `runId` known only at runtime. (v1: placement drifted when both sides derived it;
   the layout templates were later pinned constants in the model, then removed.)
+- **Invocation caches are runtime-owned placement.** A leaf task may ask for a
+  cache directory through `invocation.cacheEnv.<ENV>`. `scope = "run"` places it
+  under the run directory; `scope = "slot"` places it under the slot state root
+  and keys reuse by declared logical parts plus target/runtime/toolchain identity.
+  The runtime creates directories but does not lock shared slot caches in v1, so
+  parallel same-slot reuse is left to tools with their own locking or a future
+  cache-lease ABI.
 
 ## Registry, liveness, leases
 
@@ -188,10 +199,12 @@ Every runtime action is scoped by `projectId / environment / slot / runId`.
   sufficient.)
 - **State: marker-gated, path-confined cleanup.** Every owned state root carries a
   `.nixfied-state.json` marker. Cleanup canonicalizes first; refuses paths outside
-  the state base, symlink/traversal escapes, unmarked roots, marker mismatches,
-  active leases/processes/reservations, and policy-protected persistent state; and
-  is idempotent and crash-safe. `clean --purge` expresses deliberate destruction
-  of protected/persistent state, but it relaxes only that policy gate.
+  the state base, target symlinks, traversal escapes, unmarked roots, marker
+  mismatches, active leases/processes/reservations, and policy-protected
+  persistent state; unlinks symlink entries inside the owned tree without
+  following them; and is idempotent and crash-safe. `clean --purge` expresses
+  deliberate destruction of protected/persistent state, but it relaxes only that
+  policy gate.
 - **Containment is runtime-owned.** Services run foreground under a runtime-owned
   process group; cancellation propagates to the whole group; a process counts as
   started only after a registry record exists. A supervisor whose children form
@@ -206,7 +219,7 @@ runtime references such as `env-var` and confined `file` resolvers; resolved
 values belong only in runtime memory and hermetic child environments. REDACT-1 is
 scoped to runtime-owned persistent output (logs, summaries, registry payloads,
 captured child output, and error JSON), which is scrubbed before write; it cannot
-govern files or sockets a child chooses to write on its own.
+govern files, cache contents, or sockets a child chooses to write on its own.
 
 ## Output Control
 

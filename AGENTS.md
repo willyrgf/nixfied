@@ -101,6 +101,8 @@ deliberate change to the contract (and matching version bump + docs + tests):
   marker-gated, lease-gated, process-gated, and policy-gated. Explicit purge
   relaxes only the protected/persistent cleanup policy gate; all confinement,
   marker, live lease/process, and registry safety gates remain unconditional.
+  Cleanup refuses the cleanup target itself if it is a symlink, but symlink
+  entries inside an owned state tree are unlinked as entries and never followed.
 - **PROC-1..3 / PROC-CAP-1:** every spawned process belongs to a runtime-owned
   process group; cancellation propagates to the whole group; a long-lived process
   counts as started only after a registry process record; admission fails if a
@@ -109,7 +111,7 @@ deliberate change to the contract (and matching version bump + docs + tests):
   child stdout/stderr, summaries, registry payloads, and runtime error JSON.
   Secret values are never model data; resolved values exist only in runtime
   memory and hermetic child environments. REDACT-1 does not govern files or
-  sockets a child writes on its own.
+  sockets a child writes on its own, including child-written cache contents.
 - **Runtime output projection:** `run` defaults to `summary`: human progress,
   pass/fail summaries, and artifact pointers on stderr, with stdout empty.
   `--json` is the stable structured output contract (including diagnostic
@@ -124,6 +126,10 @@ deliberate change to the contract (and matching version bump + docs + tests):
 - **KIND-2:** the model has exactly two semantic kinds, task and service. A
   new adopter concept must be expressible as names over the algebra; growing
   the schema requires demonstrating the algebra cannot express it.
+- **CACHE-1:** cache is not a semantic kind and never result memoization. It is
+  an inline leaf-task invocation resource (`invocation.cacheEnv`) that the
+  runtime materialises into selected child env vars. Tasks always execute; cache
+  reuse must not synthesize evidence or change success semantics.
 - **INVOKE-1:** invocations are inline, anonymous structural values; no
   invocation registry, no invocation ids in the wire format.
 - **STATIC-1:** composites are static, fully-applied DAGs. No parameters,
@@ -139,11 +145,12 @@ deliberate change to the contract (and matching version bump + docs + tests):
   framework-reserved; project verbs derive only from adopter-exported task
   names (`nixfied.surface.verbs`). Exported names colliding with the reserved
   namespace are rejected at eval.
-- **Hermetic child environment (recorded semantic):** a spawned leaf, probe,
-  or service start sees its declared env plus the runtime-owned PATH
-  (assembled from the invocation's tool roots) — nothing inherited from the
-  runtime's environment. Append-to-inherited (`\${VAR:-}`) patterns are
-  consciously unsupported.
+- **Hermetic child environment (recorded semantic):** a spawned leaf sees its
+  declared env plus materialised cache env vars plus the runtime-owned PATH
+  (assembled from the invocation's tool roots); probes and service starts see
+  declared env plus that PATH. Nothing is inherited from the runtime's
+  environment. Append-to-inherited (`\${VAR:-}`) patterns are consciously
+  unsupported.
 - **SHELL-1 / NIX-1:** shell cannot own graph/registry/summary/validation/liveness/
   cleanup semantics; Nix cannot own live supervision/liveness/cancellation/registry/
   cleanup.

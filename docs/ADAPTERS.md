@@ -47,6 +47,9 @@ rewrite).
 - **Protocol probes**: ready/health should be `kind = "exec"` protocol probes
   (`pg_isready`, a JSON-RPC call via `curl`) rather than tcp connects, so
   "ready" means the service answers, not that the port is bound.
+- **Invocation caches**: `cacheEnv` is a bounded leaf-task resource, not a
+  service lifecycle or probe feature in v1. Adapter-provided checks may use it
+  for generic tool caches, but service start/ready/health invocations must not.
 - **Socket paths**: anything that opens a Unix socket must keep the path short
   (macOS `sun_path` limit under deep state dirs): disable the socket
   (postgres: `unix_socket_directories=`) or place it under `/tmp` keyed by the
