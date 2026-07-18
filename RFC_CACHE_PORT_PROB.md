@@ -1,6 +1,6 @@
 # RFC: Remove cache semantics and make port conflicts host-aware
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-07-18
 - Scope: Nixfied model, Nix compiler, Rust runtime, generated views, and adopter
   guidance
@@ -215,8 +215,9 @@ This RFC MUST:
    independent state roots;
 6. retain the listening socket, not a Nixfied file lock, as steady-state endpoint
    ownership;
-7. emit `PORT_CONFLICT` whenever OS evidence proves that another process owns the
-   planned endpoint;
+7. emit `PORT_CONFLICT` when the startup lock is contended, a conflicting
+   kernel listener is observed before spawn, or post-spawn evidence proves a
+   distinct conflicting listener outside the tracked containment;
 8. report owner identity only when Nixfied can prove it;
 9. preserve the single-model seam, the Nix/Rust boundary, generic runtime, process
    containment, redaction, and marker-confined cleanup invariants; and
@@ -399,7 +400,7 @@ select the same normalized OS endpoint in the same network scope MUST contend on
 the same startup lock. Runtime ABI, model hash, and adopter identities MUST NOT
 enter the key.
 
-The filesystem lock name SHOULD be a fixed-format digest of the normalized
+The filesystem lock name MUST be a fixed-format digest of the normalized
 endpoint. Untrusted project/service identifiers MUST NOT become path components.
 
 IPv4/IPv6 loopback and platform dual-stack behavior MUST ultimately be decided
@@ -467,13 +468,42 @@ wildcard, and dual-stack listeners according to that host's bind semantics. A
 bind by itself is not proof of an occupying process.
 
 The observer MUST enumerate every conflicting listener, not stop after the first
-process match. Readiness and reuse succeed only when at least one listener exists
-for each declared endpoint and every observed conflicting listener is proven to
-belong to the tracked contained process group/tree. A co-bound external listener
-therefore prevents ownership proof even if one expected child socket also
-matches.
+process match. Collision and satisfaction are deliberately different
+relations: wildcard, mapped, and dual-stack listeners MAY conflict according to
+host bind semantics, but readiness/reuse require at least one listener whose
+canonical family, address, and port exactly match each declared endpoint. Every
+distinct observed conflicting kernel socket record must also correlate to at
+least one live holder in the tracked contained process group/tree. A distinct
+record with a different kernel socket UID or a visible outside holder is a
+conflict; an unmatched record is `PORT_UNVERIFIABLE`. The runtime does not
+claim it can prove absence of an
+inaccessible co-holder of the same kernel socket. A contained wildcard listener
+alone therefore does not satisfy an exact loopback declaration; a co-bound
+external socket record prevents ownership proof even when an expected exact
+child socket also matches.
 
-While holding the startup locks, preflight for each endpoint is:
+On Linux, the sole kernel listener authority is a `NETLINK_SOCK_DIAG` dump of
+`TCP_LISTEN` records for `AF_INET` and `AF_INET6`, including the information
+needed to distinguish IPv6-only from dual-stack sockets. Interrupted dumps and
+missing material IPv6-only attributes are unverifiable. `/proc/net/tcp*` is
+not a fallback listener authority; `/proc/PID/fd` is used only to correlate
+observed socket inodes to accessible holders; inability to inspect unrelated
+processes does not make the snapshot globally incomplete. On macOS, the sole kernel listener
+authority is `sysctlbyname("net.inet.tcp.pcblist_n")`, with generation,
+record-kind/length/alignment, and socket-address correlation validation plus
+dynamically sized
+`proc_listallpids`/`proc_pidinfo`/`proc_pidfdinfo` holder enumeration. Fixed
+buffers, silent truncation, shell commands, `lsof`, and `netstat` are
+forbidden. Kernel PID hints are candidates, not ownership proof. Unsupported
+layouts, missing material flags, incomplete attribution where ownership is
+required for a matching record, or unstable snapshots are
+`PORT_UNVERIFIABLE`. There is no global attribution-completeness requirement:
+each matching kernel socket record is classified from its own correlations.
+
+While holding the startup locks, preflight first establishes that the platform
+can produce a complete kernel listener snapshot, even if the temporary bind
+will succeed. This capability check does not require global process-table/FD
+attribution when no listener needs an ownership proof. Then, for each endpoint:
 
 1. Create a temporary socket of the planned address family without
    `SO_REUSEADDR` or `SO_REUSEPORT` and attempt to bind the exact planned
@@ -497,24 +527,97 @@ cooperating Nixfied contenders, not arbitrary binders.
 ### Startup algorithm
 
 An endpoint-less service has no addressability claim and takes no endpoint lock.
-The runtime first reconciles its selected local registry. This RFC strengthens
-that path: before reusing or replacing an endpoint-bearing service, the runtime
-MUST re-observe every declared listener and prove ownership against the recorded
-PID/process group/start identity. Matching registry endpoint rows and a live
-process alone are insufficient. A service proven live, endpoint-owning, and
-otherwise reusable under `SVC-ID-1` is not a new start and does not take a
-startup lock. A missing or proven-wrong listener prevents reuse and is never
-silently accepted. On this mutating reuse/replacement path, if its recorded
-process group is still live, the runtime MUST terminate that owned group through
-the existing TERM/KILL path, confirm the group is gone, and only then mark the
-existing service/process/port records terminal or stale and permit replacement.
-If termination cannot be proven, the existing reservations remain closed and
-the operation fails with `PROC_ESCAPE`; the runtime MUST NOT start a replacement
-that the old process could race by rebinding. If listener inspection itself is
-unverifiable, the runtime instead preserves the live process and reservations,
-returns `PORT_UNVERIFIABLE`, and permits explicit `down` to stop the proven-owned
-process; it neither reuses nor replaces it. For every new endpoint-bearing
-service start, the runtime MUST perform the following sequence:
+Admission, placement, registry opening, ordinary reconciliation,
+`record_run_created`, and `prepare_slot_state` remain run-wide and complete
+before per-service endpoint locking. In this section, “state-mutating lifecycle
+operation” means service-specific endpoint reservation, service prepare,
+terminate-before-replace, spawn, and readiness transitions; it does not mean
+slot marker adoption, epoch upgrade, or registry opening.
+
+Before reusing or replacing an endpoint-bearing service, the runtime MUST
+re-observe every declared endpoint and every conflicting kernel listener record,
+then prove ownership against the recorded PID/process group/start identity.
+Matching registry endpoint rows and a live process alone are insufficient. A
+service proven live, endpoint-owning, and
+otherwise reusable under `SVC-ID-1` is guarded-borrowed transactionally and does
+not take a startup lock. The borrow transaction accepts the reusable
+`probe-ready`, `standing`, and `borrowed` statuses while requiring the same
+primary process identity and complete active endpoint set. A missing or
+proven-wrong listener prevents reuse and is never silently accepted.
+
+The primary process `runId` identifies the owner lease; other open leases for
+that service are borrowers. Lease authority is classified from existing rows:
+
+- an unexpired finite-TTL owner or borrower is preserved and produces
+  `LEASE_CONFLICT`;
+- an expired finite-TTL lease revokes its run/owner token, so the repair
+  transaction marks every open lease for that run/token `stale`; and
+- a completed persistent owner is fenceable for only this service when the
+  service lifetime is `persistent-until-down`, reconciliation left the service
+  `standing`, its owner run is successfully terminal (`completed` or
+  `task-succeeded`), its owner lease is `active` with the existing year-9999
+  expiry, and no open borrower remains after expired borrower tokens are fenced.
+  That durable owner row is marked `stale` only for the repaired service; any
+  lingering heartbeat observes the fence before updating a sibling.
+
+`heartbeat_run_lease` MUST be one atomic fence-aware operation. If any lease for
+its run/owner token is `stale`, it updates no sibling lease and returns
+`LEASE_STALE`; otherwise it refreshes all open siblings as today. This prevents
+a paused multi-service run from reviving one lease after repair revoked its run
+authority.
+
+The guarded borrow transaction MUST insert a borrower lease only while a
+reusable service status, primary process identity, and complete active endpoint
+set still match the candidate just observed. A concurrent repair claim and a
+concurrent borrow cannot both commit.
+
+Termination for repair MUST occur only after every endpoint startup lock has
+been acquired in canonical order, the registry rows and all owner/borrower leases have
+been reloaded, and listener ownership has been re-observed under those locks. A
+guarded transaction MUST apply the lease classification and fencing above, then
+make the service non-borrowable using the existing `starting` status before
+signaling. The runtime then uses the existing declared TERM/KILL path, confirms
+the group is gone, and only then marks the old service/process/port records
+terminal or stale and permits replacement.
+
+If termination cannot be proven, the runtime sets that process and service to
+their existing `escaped` statuses, sets the requesting run to `proc-escaped`,
+preserves open ports and lease history, and fails with `PROC_ESCAPE`. The
+durable composite `escaped` plus an open port is unresolved resource ownership:
+the shared reconciliation/control query MUST include it alongside normally
+active processes so `ps`, `down`, cleanup safety, and later mutating requests
+continue to prove OS liveness. It is never restored for reuse. Once group death
+is proven, ports are released/staled and process/service remain terminal
+`escaped`. No event-log lookup is used as state. If inspection itself is
+unverifiable, the runtime preserves the live process and reservations,
+returns `PORT_UNVERIFIABLE`, and permits explicit `down`; it neither reuses nor
+replaces it.
+
+Repair authority is limited to the requested service instance. An unrelated
+local service on the endpoint is never terminated by this path: a proven
+listener is `PORT_CONFLICT`, a lease-only reservation is `LEASE_CONFLICT`, dead
+evidence is reconciled, and a live unrelated process with no listener is
+preserved with `PORT_UNVERIFIABLE` until explicit `down`.
+
+A runtime may die after the guarded repair claim and before signaling. A later
+mutating request MUST acquire the endpoint locks and recover a live `starting`
+row by re-observing it: exact ownership restores reusable standing state;
+missing/wrong ownership resumes terminate-before-replace; unverifiable
+inspection preserves the row/process/reservations and fails closed. If the
+process is gone, the process/service/ports become `stale`. This path is
+distinguished from failed termination by the existing per-service/process
+`escaped` states, not a new status, table, lease, worker, event-log query, or
+compatibility path.
+
+The ordinary reconciliation pass before endpoint locking MUST preserve a live
+`starting` row with active process/port evidence as recoverable. It MUST NOT
+terminalize, stale, borrow, or endpoint-repair that row; only the locked
+mutating path above may restore or repair it. `ps` remains process-only.
+An `escaped` row with an open port instead follows the unresolved ownership rule
+and is never restored.
+
+For every new endpoint-bearing service start, the runtime MUST perform the
+following sequence:
 
 1. Derive all normalized endpoint lock keys for the service.
 2. Sort the keys in one deterministic byte order.
@@ -531,9 +634,17 @@ service start, the runtime MUST perform the following sequence:
    today.
 8. Run prepare, spawn the child, record its process identity, and perform
    readiness plus ownership verification while retaining all startup locks.
-9. A service is ready only after the expected process owns every declared
-    endpoint and the declared readiness probe succeeds.
-10. Mark the existing registry endpoint/process state ready/active.
+9. One readiness loop uses the declared attempt/retry budget. An attempt
+   succeeds only when the declared probe succeeds, every declared endpoint has
+   an exact listener, every distinct conflicting kernel socket record
+   correlates to at least one live holder in the tracked containment, and no
+   distinct conflicting record has a visible outside holder. Complete
+   observation with a missing exact listener remains pending and ends as
+   `READINESS_TIMEOUT` when the budget is exhausted.
+10. In one transaction, mark every endpoint active, the process ready, the
+    service probe-ready, record ready lifecycle success, and append the
+    ownership/readiness events. Validate expected keys, prior statuses, and
+    affected-row counts; no partial endpoint-ready state is committed.
 11. Release all startup locks.
 
 Every failure path MUST release acquired locks. Lock lifetime SHOULD be expressed
@@ -542,6 +653,19 @@ The implementation MUST retain the guards in the in-progress service state
 across the existing spawn/readiness API split and clear them only after step 10.
 Lock file descriptors MUST be close-on-exec and MUST NOT be inherited by
 prepare, service, probe, task, or stop children.
+
+The existing run cancellation token MUST cover startup: check it after lock
+acquisition, before and after prepare, immediately before spawn, after process
+recording, and in readiness attempts. Cancellation before a child exists
+settles its lease/run as canceled and releases ports then locks. Cancellation
+after spawn terminates and confirms the owned group before those releases. A
+primary cancellation with proven cleanup returns `CANCELED`; a later
+cancellation does not replace an already-proven non-cancellation failure; and
+unproven termination returns `PROC_ESCAPE` with reservations preserved,
+overriding cancellation or the original startup error. Pre-child prepare/spawn
+failure uses the same outcome-aware settlement transaction but records lease
+`failed` and run `service-failed`. No second cancellation or timeout concept is
+added.
 
 The existing fail-only port policy remains unchanged. The runtime MUST NOT pick a
 different port after a conflict.
@@ -555,8 +679,10 @@ Once ready:
 
 - the service's listening socket is the host-global endpoint owner;
 - the registered PID/process-start identity is Nixfied's durable evidence;
-- a later runtime acquires the now-free startup lock, observes the occupied
-  endpoint, and returns `PORT_CONFLICT`; and
+- a later runtime with no reusable match in its local registry acquires the
+  now-free startup lock, observes the occupied endpoint, and returns
+  `PORT_CONFLICT`; a same-registry exact match follows guarded reuse instead;
+  and
 - stopping the service releases the endpoint by closing the socket, after which
   another runtime may start it normally.
 
@@ -564,8 +690,10 @@ No surviving Nixfied supervisor or lock-holder process is introduced.
 If a ready service voluntarily closes a declared listener, it has relinquished
 that endpoint; registry evidence cannot preserve socket ownership that the OS no
 longer observes. `ps` remains process-liveness reconciliation and MUST NOT signal
-the process or redefine `ps.live` as addressability. A later local
-reuse/replacement request applies the terminate-before-replace rule above. A
+the process solely because a listener is missing/unverifiable or redefine
+`ps.live` as addressability. Existing until-idle lease-expiry reconciliation is
+unchanged. A later local reuse/replacement request applies the
+terminate-before-replace rule above. A
 cross-state-root runtime cannot discover an unbound old process, so a service
 that closes and later rebinds participates in the same explicitly unsupported
 external bind race. Eliminating that gap would require the rejected lifetime
@@ -606,12 +734,12 @@ The existing generic run-error details (`runId`, `environment`, `slot`, and
 Absence of `nixfiedOwner` has one exact meaning: the owner is unknown or not
 provably Nixfied. The runtime MUST include `nixfiedOwner` only when an exact
 trustworthy registry match identifies the service, the registered primary
-process has a non-null live start-identity match, and every observed listener
-process is proven to be that primary or a currently contained member of its
-recorded process group/tree with a non-null live start identity. A PID, process
-group, stale lock-file contents, open port, or matching command-line string by
-itself is not sufficient. Startup-lock contention alone therefore never carries
-`nixfiedOwner`.
+process has a non-null live start-identity match, every distinct observed
+listener socket record correlates to at least one primary/contained holder with
+a non-null live start identity, and no visible holder is proven outside that
+containment. A PID, process group, stale lock-file contents, open port, or
+matching command-line string by itself is not sufficient. Startup-lock
+contention alone therefore never carries `nixfiedOwner`.
 
 After a cross-state-root service has reached readiness and released its startup
 lock, the socket alone cannot prove which Nixfied project owns it without the
@@ -631,8 +759,10 @@ secret placeholders, or arbitrary process command lines.
 
 The stable error meanings are:
 
-- `PORT_CONFLICT`: the normalized endpoint startup lock is contended, or OS
-  evidence proves that another process owns the planned endpoint;
+- `PORT_CONFLICT`: the normalized endpoint startup lock is contended, a
+  conflicting kernel listener is observed during preflight before a child can
+  own it, or post-spawn evidence proves a distinct conflicting listener outside
+  the tracked containment;
 - `PORT_UNVERIFIABLE`: the runtime cannot perform the required endpoint ownership
   proof or cannot establish safe endpoint-lock coordination on the host;
 - `PROC_ESCAPE`: the expected child violated process containment or escaped the
@@ -655,6 +785,12 @@ existing `LEASE_CONFLICT`, preserve the reservation, and run no prepare/spawn.
 After the lease expires, ordinary reconciliation may stale/release it and a
 later attempt may proceed. Registry reservation code MUST NOT emit a third
 shape-less `PORT_CONFLICT` case.
+
+After successful reconciliation, an open port row with no valid lease and no
+live recorded process is transactionally staled/released. If such a row remains
+despite the reconciliation proof, it is `REGISTRY_CORRUPT`, never
+`PORT_CONFLICT`, `LEASE_STALE`, or `PORT_UNVERIFIABLE`. A live recorded
+process with a missing listener is the repair path above, not an orphan row.
 
 A proven address-in-use condition MUST NOT leak as `PROC_ESCAPE`.
 
@@ -715,7 +851,10 @@ oracle, or semantic artifact.
 > same-effective-user startups in the same network/mount namespaces
 > independently of state-root placement, refuses an endpoint observed occupied
 > or reserved before service mutation, and admits readiness only after the
-> tracked process group owns every listener. Startup locks are transient; after
+> every distinct conflicting kernel socket record correlates to at least one
+> live holder in the tracked process group, no such record has a visible
+> outside holder, and an exact listener satisfies every declared endpoint.
+> Startup locks are transient; after
 > readiness the socket is ownership and the registry is evidence, never a
 > host-global oracle. The existing endpoint-less-service carve-out is unchanged.
 
@@ -744,6 +883,13 @@ from “that listener maps to this process”: existence is sufficient for a
 preflight conflict, while readiness/reuse still requires the stronger process
 identity proof.
 
+One private endpoint module owns normalized keys, locking, bind preflight,
+kernel snapshots, overlap, exact satisfaction, and typed observation evidence.
+It does not query the registry or construct public runtime errors. The existing
+service process path owns reuse/repair policy, registry attribution, error
+precedence, and the sole structured `PORT_CONFLICT` constructor. No public
+endpoint/diagnostic type or observer trait is added.
+
 Across the whole RFC, the implementation is expected to be a net conceptual and
 code reduction: the bounded private locking path replaces neither the deleted
 cache contract nor any part of the socket/registry ownership path.
@@ -754,6 +900,11 @@ This RFC changes the exact contract by editing the capability descriptor. The
 descriptor removes cache primitives, fields, enums, and output schemas and
 records the strengthened port behavior. Its digest therefore produces a new
 `runtimeAbi` automatically and identically in Nix and Rust.
+
+The unused intermediate `PortStatus` values `binding` and `bound` are deleted.
+The actual endpoint transition is exactly `reserved -> active -> released|stale`;
+no registry code currently produces the removed values, and no migration or
+parser compatibility is retained.
 
 This RFC does not separately change the model envelope or toolchain generation:
 
@@ -899,7 +1050,7 @@ The implementation is complete only when:
 2. Rust contains no cache model structs, enums, validation, lowering,
    materialisation, injection, evidence, state module, cache-only run/service
    identity plumbing, or cache-only helper visibility.
-3. Run/task/node output contains no cache-specific fields.
+3. Run/task/node/summary/error output contains no cache-specific fields.
 4. A model containing `invocation.cacheEnv` is rejected as an unknown field.
 5. Ordinary declared environment variables such as `CARGO_TARGET_DIR` continue
    to reach leaf children hermetically.
@@ -935,8 +1086,8 @@ Framework acceptance tests MUST prove:
 6. An external listener produces `PORT_CONFLICT` before prepare/spawn and omits
    `nixfiedOwner` unless a Nixfied owner is independently proven.
 7. Same-registry conflicts provide the complete `nixfiedOwner` object when the
-   required listener/process/registry proof succeeds; all other conflicts omit
-   it, and both JSON forms are snapshot-tested.
+   required per-socket-record/process/registry proof succeeds; all other
+   conflicts omit it, and both JSON forms are snapshot-tested.
 8. A synchronized external bind after preflight is reclassified as
    `PORT_CONFLICT` when a different owner remains observable; no child stderr is
    parsed to do so.
@@ -946,7 +1097,9 @@ Framework acceptance tests MUST prove:
     never becomes ready still reports `READINESS_TIMEOUT`.
 11. Multi-endpoint services acquire locks deterministically; lock/preflight
     failure runs no prepare or child, readiness is admitted only when the child
-    owns every endpoint, and a post-spawn partial-ownership failure terminates
+    owns an exact listener for every endpoint, every distinct conflicting
+    socket record correlates to the tracked containment, and no such record has
+    a visible outside holder. A post-spawn partial-ownership failure terminates
     and reconciles the runtime-owned process group without reporting readiness.
 12. Unsafe lock-root ownership, permissions, symlink components, and non-regular
     lock files produce `PORT_UNVERIFIABLE` before service lifecycle mutation.
@@ -957,13 +1110,25 @@ Framework acceptance tests MUST prove:
 15. A local reuse/replacement request for a recorded process that is live but has
     a missing or proven-wrong listener terminates and confirms the owned group,
     records the terminal/stale transitions, and only then permits replacement.
+    Any unexpired finite owner or borrower lease instead produces
+    `LEASE_CONFLICT` without signaling. An expired finite lease fences every
+    open sibling for its run/owner token. A successfully completed persistent
+    owner can be fenced only for the broken service when no borrower remains.
     Failed termination preserves reservations and returns `PROC_ESCAPE`. A
     standalone `ps` does not signal that process and reports `ps.live = true`.
+    The process/service are `escaped` while their open port keeps the unresolved
+    row visible to `ps`/`down` and cleanup safety; after group death is proven,
+    ports release and terminal `escaped` evidence remains.
+    Runtime death after the guarded repair claim is recovered by the next
+    mutating request without stranding a live `starting` row.
 16. Unverifiable listener inspection preserves the live process and
     reservations, returns `PORT_UNVERIFIABLE`, blocks replacement, and still
     permits explicit `down` of the proven-owned process.
-17. Prepare, spawn, readiness, cancellation, and partial multi-lock failures all
-    release every startup lock.
+17. Prepare, spawn, readiness, partial multi-lock, and cancellation checks after
+    locking/during prepare/after process recording/during readiness all release
+    every startup lock after terminating any created child. Pre-child
+    cancellation records canceled rather than failed lease/run evidence;
+    unproven termination returns `PROC_ESCAPE` and preserves reservations.
 18. A temporary preflight bind failure with no observed conflicting `LISTEN`
     socket, including a synthetic residual-kernel-state case, produces
     `PORT_UNVERIFIABLE` rather than a guessed owner or `PORT_CONFLICT`.
@@ -979,15 +1144,23 @@ Framework acceptance tests MUST prove:
 22. The listener observer matrix covers an exact IPv4 listener, an IPv4 wildcard
     against arbitrary `127/8`, an exact IPv6 listener, and an IPv6 wildcard
     against both `::1` and IPv4 with `IPV6_V6ONLY` explicitly enabled/disabled;
-    expected conflict follows the host bind semantics, while `TIME_WAIT` never
-    counts as ownership.
-23. Linux runtimes in the same network namespace derive the same network-scope
-    key, while runtimes sharing the lock filesystem but using distinct network
-    namespaces derive different keys; macOS derives the documented `host` scope.
+    expected conflict follows host bind semantics, wildcard-only ownership does
+    not satisfy an exact declaration, and `TIME_WAIT` never counts as ownership.
+23. A runtime reads the current Linux network namespace device/inode directly
+    and same-scope key derivation is stable. A deterministic key test supplies
+    two distinct device/inode identities and proves different lock keys, without
+    requiring namespace-creation privilege in CI. Production has no injected
+    identity or fallback. macOS derives the documented `host` scope.
 24. Runtime death after local port reservation but before process recording
     leaves the next attempt with `LEASE_CONFLICT` and no prepare/spawn; after the
     lease expires, ordinary reconciliation releases it and a later start can
     proceed. This path never emits `PORT_CONFLICT`.
+25. A paused multi-service run whose expired finite lease is fenced has all of
+    its open sibling leases atomically marked `stale`; its next heartbeat
+    updates none and returns `LEASE_STALE`.
+26. A broken `persistent-until-down` service whose owner run completed
+    successfully can be repaired after its durable owner row is fenced for that
+    service, while any live borrower still blocks signaling.
 
 ### Regression floor
 
@@ -1031,18 +1204,20 @@ MFM will:
 1. update its Nixfied pin to the new exact contract;
 2. delete `verificationCachePolicy`, `cargoTargetCache`, and
    `cacheEnv.CARGO_TARGET_DIR` from its `cargoLeaf` construction;
-3. declare its chosen verification target through ordinary project-owned
-   invocation environment or tool configuration;
+3. declare `CARGO_TARGET_DIR = "target/verification"` through ordinary
+   invocation environment, shared by broad verification in one worktree and
+   isolated naturally across worktrees;
 4. own worktree isolation, writer behavior, inspection, retention, cleanup,
    bypass, and corruption recovery for that target;
-5. revise its Rust build ADR and capability handoff to reflect the corrected
-   ownership boundary;
+5. revise its Rust build ADR and delete the superseded capability-request
+   draft, because the accepted RFC now carries the forcing-case record;
 6. rerun the exact verification and coverage floor; and
 7. remeasure performance if the chosen target placement differs from the
    qualified path.
 
-The framework RFC does not prescribe MFM's target directory name or retention
-policy. Those are deliberately downstream choices.
+The framework boundary does not prescribe target names or retention policy.
+MFM's architect made the downstream choice above; Cargo/MFM own it, and
+`nixfied clean` does not remove it.
 
 ### Old state
 
