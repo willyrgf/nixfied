@@ -8,6 +8,7 @@ result
 !DESIGN*.md
 !PROBLEM*.md
 !IMPLEMENTATION*.md
+!RFC_CACHE_PORT_PROB.md
 !docs/ARCHITECTURE.md
 !docs/DETAILED.md
 !docs/UPGRADE.md
