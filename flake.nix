@@ -91,28 +91,7 @@
             buildType = "debug";
           };
           minimalModel = nixfiedLib.compileModel ./examples/minimal/nixfied.nix;
-          persistentMinimalModel = nixfiedLib.compileModel (
-            { ... }:
-            {
-              imports = [ ./examples/minimal/nixfied.nix ];
-              nixfied.tasks.keep-up = {
-                serviceLifetime = "persistent-until-down";
-                invocation = {
-                  tools = [ "synthetic-helper" ];
-                  run = [
-                    "nixfied-synthetic-helper"
-                    "task"
-                    "--host"
-                    "127.0.0.1"
-                    "--port"
-                    "\${port}"
-                  ];
-                };
-                requires = [ "synthetic" ];
-              };
-            }
-          );
-          endpointCoordinationModel = nixfiedLib.compileModel (
+          persistentEndpointModel = nixfiedLib.compileModel (
             { pkgs, ... }:
             {
               imports = [ ./examples/minimal/nixfied.nix ];
@@ -148,7 +127,6 @@
                 };
                 requires = [ "synthetic" ];
               };
-              nixfied.surface.verbs = [ "keep-up" ];
             }
           );
           purgeMinimalModel = nixfiedLib.compileModel (
@@ -280,11 +258,11 @@
                 toString minimalModelEpoch2;
               nixfied.tasks.lifecycle-tamper-refusal.invocation.env.MINIMAL_EPOCH2_MODEL =
                 toString minimalModelEpoch2;
-              nixfied.tasks.lifecycle-service-lifetime.invocation.env.PERSISTENT_MINIMAL_MODEL =
-                toString persistentMinimalModel;
+              nixfied.tasks.lifecycle-service-lifetime.invocation.env.PERSISTENT_ENDPOINT_MODEL =
+                toString persistentEndpointModel;
               nixfied.tasks.lifecycle-purge.invocation.env.PURGE_MINIMAL_MODEL = toString purgeMinimalModel;
-              nixfied.tasks.endpoint-cross-root.invocation.env.ENDPOINT_COORDINATION_MODEL =
-                toString endpointCoordinationModel;
+              nixfied.tasks.endpoint-cross-root.invocation.env.PERSISTENT_ENDPOINT_MODEL =
+                toString persistentEndpointModel;
               nixfied.tasks.slot-0.invocation.env.DOWNSTREAM_MODEL = toString downstreamSlotsModel;
               nixfied.tasks.slot-1.invocation.env.DOWNSTREAM_MODEL = toString downstreamSlotsModel;
               nixfied.tasks.slots-assert.invocation.env.DOWNSTREAM_MODEL = toString downstreamSlotsModel;

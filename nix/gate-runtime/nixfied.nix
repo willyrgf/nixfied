@@ -511,17 +511,17 @@
           inner="''${stateDir}/service-lifetime-inner"
           mkdir -p "''${stateDir}/gate-artifacts" "$inner"
           NIXFIED_STATE_DIR="$inner" \
-            nixfied-runtime run --model "$PERSISTENT_MINIMAL_MODEL/model.json" \
+            nixfied-runtime run --model "$PERSISTENT_ENDPOINT_MODEL/model.json" \
               --task keep-up --timeout-ms 60000 --json \
             > "''${stateDir}/gate-artifacts/service-lifetime-up.json"
           NIXFIED_STATE_DIR="$inner" \
-            nixfied-runtime ps --model "$PERSISTENT_MINIMAL_MODEL/model.json" \
+            nixfied-runtime ps --model "$PERSISTENT_ENDPOINT_MODEL/model.json" \
             > "''${stateDir}/gate-artifacts/service-lifetime-ps-standing.json"
           jq -e '.processes[] | select((has("serviceStatus") | not) and .registryStatus == "ready" and .reconciledStatus == "running" and .serviceLifetime == "persistent-until-down" and .live == true and .borrowerCount == 0)' \
             "''${stateDir}/gate-artifacts/service-lifetime-ps-standing.json" >/dev/null
 
           NIXFIED_STATE_DIR="$inner" \
-            nixfied-runtime run --model "$PERSISTENT_MINIMAL_MODEL/model.json" \
+            nixfied-runtime run --model "$PERSISTENT_ENDPOINT_MODEL/model.json" \
               --task smoke --timeout-ms 60000 --json \
             > "''${stateDir}/gate-artifacts/service-lifetime-borrow.json"
           owner_instance=$(jq -r '.services[0].serviceInstanceId' \
@@ -537,19 +537,19 @@
           [ "$borrower_process" = "$owner_process" ] \
             || { echo "service lifetime: borrower did not reuse the standing process" >&2; exit 1; }
           NIXFIED_STATE_DIR="$inner" \
-            nixfied-runtime ps --model "$PERSISTENT_MINIMAL_MODEL/model.json" \
+            nixfied-runtime ps --model "$PERSISTENT_ENDPOINT_MODEL/model.json" \
             > "''${stateDir}/gate-artifacts/service-lifetime-ps-released.json"
           jq -e --arg id "$owner_instance" \
             '.processes[] | select(.serviceInstanceId == $id and (has("serviceStatus") | not) and .registryStatus == "ready" and .reconciledStatus == "running" and .serviceLifetime == "persistent-until-down" and .live == true and .borrowerCount == 0)' \
             "''${stateDir}/gate-artifacts/service-lifetime-ps-released.json" >/dev/null
 
           NIXFIED_STATE_DIR="$inner" \
-            nixfied-runtime down --model "$PERSISTENT_MINIMAL_MODEL/model.json" \
+            nixfied-runtime down --model "$PERSISTENT_ENDPOINT_MODEL/model.json" \
             > "''${stateDir}/gate-artifacts/service-lifetime-down.json"
           jq -e '.stopped | length == 1' \
             "''${stateDir}/gate-artifacts/service-lifetime-down.json" >/dev/null
           NIXFIED_STATE_DIR="$inner" \
-            nixfied-runtime ps --model "$PERSISTENT_MINIMAL_MODEL/model.json" \
+            nixfied-runtime ps --model "$PERSISTENT_ENDPOINT_MODEL/model.json" \
             > "''${stateDir}/gate-artifacts/service-lifetime-ps-stopped.json"
           jq -e --arg id "$owner_instance" \
             '[.processes[] | select(.serviceInstanceId == $id and .live == true)] | length == 0' \
@@ -622,23 +622,23 @@
           mkdir -p "$root_a" "$root_b" "$artifacts"
           cleanup_endpoint_roots() {
             NIXFIED_STATE_DIR="$root_a" \
-              nixfied-runtime down --model "$ENDPOINT_COORDINATION_MODEL/model.json" \
+              nixfied-runtime down --model "$PERSISTENT_ENDPOINT_MODEL/model.json" \
               >/dev/null 2>&1 || true
             NIXFIED_STATE_DIR="$root_b" \
-              nixfied-runtime down --model "$ENDPOINT_COORDINATION_MODEL/model.json" \
+              nixfied-runtime down --model "$PERSISTENT_ENDPOINT_MODEL/model.json" \
               >/dev/null 2>&1 || true
           }
           trap cleanup_endpoint_roots EXIT
 
           NIXFIED_STATE_DIR="$root_a" \
-            nixfied-runtime run --model "$ENDPOINT_COORDINATION_MODEL/model.json" \
+            nixfied-runtime run --model "$PERSISTENT_ENDPOINT_MODEL/model.json" \
               --task keep-up --timeout-ms 60000 --json \
             > "$artifacts/endpoint-root-a.json"
           [ "$(find "$root_a" -name endpoint-prepare-sentinel -type f | wc -l)" -eq 1 ] \
             || { echo "endpoint: root A prepare sentinel missing" >&2; exit 1; }
 
           if NIXFIED_STATE_DIR="$root_b" \
-             nixfied-runtime run --model "$ENDPOINT_COORDINATION_MODEL/model.json" \
+             nixfied-runtime run --model "$PERSISTENT_ENDPOINT_MODEL/model.json" \
                --task keep-up --timeout-ms 60000 --json \
              >/dev/null 2>"$artifacts/endpoint-root-b-conflict.json"; then
             echo "endpoint: independent root B took root A's live listener" >&2
@@ -654,15 +654,15 @@
             || { echo "endpoint: root B prepared before conflict refusal" >&2; exit 1; }
 
           NIXFIED_STATE_DIR="$root_a" \
-            nixfied-runtime down --model "$ENDPOINT_COORDINATION_MODEL/model.json" >/dev/null
+            nixfied-runtime down --model "$PERSISTENT_ENDPOINT_MODEL/model.json" >/dev/null
           NIXFIED_STATE_DIR="$root_b" \
-            nixfied-runtime run --model "$ENDPOINT_COORDINATION_MODEL/model.json" \
+            nixfied-runtime run --model "$PERSISTENT_ENDPOINT_MODEL/model.json" \
               --task keep-up --timeout-ms 60000 --json \
             > "$artifacts/endpoint-root-b.json"
           [ "$(find "$root_b" -name endpoint-prepare-sentinel -type f | wc -l)" -eq 1 ] \
             || { echo "endpoint: root B did not prepare after root A went down" >&2; exit 1; }
           NIXFIED_STATE_DIR="$root_b" \
-            nixfied-runtime down --model "$ENDPOINT_COORDINATION_MODEL/model.json" >/dev/null
+            nixfied-runtime down --model "$PERSISTENT_ENDPOINT_MODEL/model.json" >/dev/null
           trap - EXIT
         ''
       ];

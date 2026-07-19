@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::Mutex;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use nixfied_model::{Model, Validate};
 use serde_json::{Value, json};
@@ -55,7 +55,7 @@ fn persistent_listener_blocks_an_independent_root_before_prepare_then_releases()
         return;
     };
     let temp = TempDir::new();
-    let port = available_port();
+    let port = available_port_window(1);
     let model = write_endpoint_model(
         &temp.path,
         &python,
@@ -106,7 +106,7 @@ fn concurrent_roots_have_one_prepare_winner_and_one_lock_loser() {
         return;
     };
     let temp = TempDir::new();
-    let port = available_port();
+    let port = available_port_window(1);
     let model = write_endpoint_model(&temp.path, &python, port, true, "run-scoped", false);
     let root_a = temp.path.join("root-a");
     let root_b = temp.path.join("root-b");
@@ -117,12 +117,12 @@ fn concurrent_roots_have_one_prepare_winner_and_one_lock_loser() {
     let sentinel = wait_for_named(&root_a, "endpoint-prepare-sentinel", Duration::from_secs(5))
         .expect("root A should enter prepare while retaining the lock");
     let loser = spawn_run(&model, &root_b);
-    let loser_output = wait_for_output(loser, Duration::from_secs(5));
+    let loser_output = wait_for_child_output(loser, Duration::from_secs(5));
     assert_port_conflict(&loser_output, "startup-lock-contended", port);
     assert!(find_named(&root_b, "endpoint-prepare-sentinel").is_none());
 
     fs::write(sentinel.with_file_name("endpoint-prepare-ack"), b"continue").unwrap();
-    let winner_output = wait_for_output(winner, Duration::from_secs(20));
+    let winner_output = wait_for_child_output(winner, Duration::from_secs(20));
     assert_success(&winner_output, "lock winner");
 }
 
@@ -133,7 +133,7 @@ fn killing_runtime_during_prepare_releases_lock_not_inherited_by_child() {
         return;
     };
     let temp = TempDir::new();
-    let port = available_port();
+    let port = available_port_window(1);
     let model = write_endpoint_model(&temp.path, &python, port, true, "run-scoped", false);
     let root_a = temp.path.join("root-a");
     let root_b = temp.path.join("root-b");
@@ -148,7 +148,7 @@ fn killing_runtime_during_prepare_releases_lock_not_inherited_by_child() {
         unsafe { libc::kill(runtime_pid as libc::pid_t, libc::SIGKILL) },
         0
     );
-    let killed = wait_for_output(runtime, Duration::from_secs(5));
+    let killed = wait_for_child_output(runtime, Duration::from_secs(5));
     assert!(!killed.status.success());
     // Let the now-orphaned prepare child exit promptly. Its exec environment
     // never inherited the CLOEXEC startup-lock descriptor.
@@ -167,7 +167,7 @@ fn killing_runtime_during_prepare_releases_lock_not_inherited_by_child() {
     )
     .unwrap();
     assert_success(
-        &wait_for_output(successor, Duration::from_secs(20)),
+        &wait_for_child_output(successor, Duration::from_secs(20)),
         "successor after runtime SIGKILL",
     );
 }
@@ -179,7 +179,7 @@ fn external_bind_after_preflight_overrides_early_exit_with_port_conflict() {
         return;
     };
     let temp = TempDir::new();
-    let port = available_port();
+    let port = available_port_window(1);
     let model = write_endpoint_model(&temp.path, &python, port, true, "run-scoped", false);
     let root = temp.path.join("root");
     fs::create_dir_all(&root).unwrap();
@@ -191,7 +191,7 @@ fn external_bind_after_preflight_overrides_early_exit_with_port_conflict() {
         .expect("external harness should win the post-preflight bind race");
     fs::write(sentinel.with_file_name("endpoint-prepare-ack"), b"continue").unwrap();
 
-    let output = wait_for_output(runtime, Duration::from_secs(10));
+    let output = wait_for_child_output(runtime, Duration::from_secs(10));
     let error = assert_port_conflict(&output, "listener-occupied", port);
     assert_eq!(error["details"]["failedService"], json!("synthetic"));
     assert!(error["details"]["runId"].is_string());
@@ -235,7 +235,7 @@ fn lost_listener_is_preserved_until_explicit_down_then_retry_succeeds() {
         return;
     };
     let temp = TempDir::new();
-    let port = available_port();
+    let port = available_port_window(1);
     let model = write_endpoint_model(
         &temp.path,
         &python,
@@ -303,7 +303,7 @@ fn active_borrower_blocks_nonreusable_service_without_signaling_owner() {
         return;
     };
     let temp = TempDir::new();
-    let port = available_port();
+    let port = available_port_window(1);
     let model = write_endpoint_model(
         &temp.path,
         &python,
@@ -377,7 +377,7 @@ fn live_starting_service_is_not_promoted_or_borrowed() {
         return;
     };
     let temp = TempDir::new();
-    let port = available_port();
+    let port = available_port_window(1);
     let model = write_endpoint_model(
         &temp.path,
         &python,
@@ -436,7 +436,7 @@ fn outside_listener_preserves_recorded_process_and_reports_conflict() {
         return;
     };
     let temp = TempDir::new();
-    let port = available_port();
+    let port = available_port_window(1);
     let model = write_endpoint_model(
         &temp.path,
         &python,
@@ -494,7 +494,7 @@ fn missing_second_endpoint_never_commits_partial_ready_and_releases_locks() {
         return;
     };
     let temp = TempDir::new();
-    let port = available_two_port_window();
+    let port = available_port_window(2);
     let model = write_multi_endpoint_model(&temp.path, &python, port);
     let root = temp.path.join("root");
     fs::create_dir_all(&root).unwrap();
@@ -691,45 +691,6 @@ fn assert_port_conflict(output: &Output, reason: &str, port: u16) -> Value {
     error
 }
 
-fn available_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
-}
-
-fn available_two_port_window() -> u16 {
-    loop {
-        let first = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = first.local_addr().unwrap().port();
-        let Some(second_port) = port.checked_add(1) else {
-            continue;
-        };
-        if let Ok(second) = TcpListener::bind(("127.0.0.1", second_port)) {
-            drop(second);
-            drop(first);
-            return port;
-        }
-    }
-}
-
-fn find_named(root: &Path, name: &str) -> Option<PathBuf> {
-    let entries = fs::read_dir(root).ok()?;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.file_name().and_then(|value| value.to_str()) == Some(name) {
-            return Some(path);
-        }
-        if path.is_dir()
-            && let Some(found) = find_named(&path, name)
-        {
-            return Some(found);
-        }
-    }
-    None
-}
-
 fn force_live_starting_process_without_open_lease(root: &Path) {
     let registry = find_named(root, "registry.sqlite3").expect("registry should exist");
     let connection = rusqlite::Connection::open(registry).expect("registry should open");
@@ -837,44 +798,4 @@ fn insert_active_borrower(root: &Path, borrower_run_id: &str) -> (libc::pid_t, S
         1
     );
     (owner_pid, owner_process_key)
-}
-
-fn wait_for_named(root: &Path, name: &str, timeout: Duration) -> Option<PathBuf> {
-    let deadline = Instant::now() + timeout;
-    loop {
-        if let Some(path) = find_named(root, name) {
-            return Some(path);
-        }
-        if Instant::now() >= deadline {
-            return None;
-        }
-        thread::sleep(Duration::from_millis(20));
-    }
-}
-
-fn wait_for_output(mut child: Child, timeout: Duration) -> Output {
-    let deadline = Instant::now() + timeout;
-    loop {
-        if child
-            .try_wait()
-            .expect("child status should query")
-            .is_some()
-        {
-            return child
-                .wait_with_output()
-                .expect("child output should collect");
-        }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let output = child
-                .wait_with_output()
-                .expect("timed-out output should collect");
-            panic!(
-                "runtime timed out\nstdout: {}\nstderr: {}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            );
-        }
-        thread::sleep(Duration::from_millis(20));
-    }
 }

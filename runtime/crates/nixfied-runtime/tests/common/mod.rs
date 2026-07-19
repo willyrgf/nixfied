@@ -5,10 +5,13 @@
 #![allow(unused_imports)]
 
 use std::fs;
+use std::net::TcpListener;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use rusqlite::params;
 use serde_json::Value;
@@ -372,4 +375,89 @@ pub fn unique_suffix() -> u128 {
         .expect("time should be available")
         .as_nanos();
     now + u128::from(NEXT_ID.fetch_add(1, Ordering::Relaxed))
+}
+
+pub fn available_port_window(width: u16) -> u16 {
+    assert!(width > 0, "port window width must be positive");
+    for _ in 0..256 {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
+        let start = listener.local_addr().expect("local addr").port();
+        drop(listener);
+        let Some(end) = start.checked_add(width - 1) else {
+            continue;
+        };
+        let held = (start..=end)
+            .map(|port| TcpListener::bind(("127.0.0.1", port)))
+            .collect::<Result<Vec<_>, _>>();
+        if held.is_ok() {
+            return start;
+        }
+    }
+    panic!("could not find an available {width}-port window");
+}
+
+pub fn find_named(root: &Path, name: &str) -> Option<PathBuf> {
+    for entry in fs::read_dir(root).ok()?.flatten() {
+        let path = entry.path();
+        if path.file_name().and_then(|value| value.to_str()) == Some(name) {
+            return Some(path);
+        }
+        if path.is_dir()
+            && let Some(found) = find_named(&path, name)
+        {
+            return Some(found);
+        }
+    }
+    None
+}
+
+pub fn wait_for_path(path: &Path, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if path.exists() {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    path.exists()
+}
+
+pub fn wait_for_named(root: &Path, name: &str, timeout: Duration) -> Option<PathBuf> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(path) = find_named(root, name) {
+            return Some(path);
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+pub fn wait_for_child_output(mut child: Child, timeout: Duration) -> Output {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if child
+            .try_wait()
+            .expect("child status should be inspectable")
+            .is_some()
+        {
+            return child
+                .wait_with_output()
+                .expect("child output should be collected");
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let output = child
+                .wait_with_output()
+                .expect("timed-out child output should be collected");
+            panic!(
+                "child did not exit before timeout\nstdout: {}\nstderr: {}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
 }
