@@ -84,13 +84,13 @@ mode:
 
 ## The task–service algebra (the composition rewrite)
 
-The first external adoption (`PROBLEM_COMPOSITION.md`) exposed the original
-sin of the authoring surface: it was the runtime's **wire format exposed
+The first external adoption exposed the original sin of the authoring
+surface: it was the runtime's **wire format exposed
 raw** — closures, invocations, operationIds, terminal tokens — so adopter concepts
 with no runtime equivalent (a *command*, a *toolchain*, a *pipeline*, a
 *verb*) escaped the model: below it into opaque shell dispatchers, above it
-into the adopter's own flake. The accepted fix (`DESIGN_COMPOSITION.md`) is a
-closed algebra of exactly **two semantic kinds** (KIND-2):
+into the adopter's own flake. The accepted fix is a closed algebra of exactly
+**two semantic kinds** (KIND-2):
 
 - **task** — bounded, composable execution: a **leaf** (one inline
   invocation + `requires` + exit policy) or a **composite** (a static
@@ -110,7 +110,13 @@ content reuse is a Nix `let`, and the model carries the fully-applied copies.
 Cache is not a third semantic kind or a runtime resource. Tool acceleration is
 child/tool/project-owned and may use ordinary declared invocation environment
 or arguments; Nixfied does not identify, place, create, lock, report, retain, or
-selectively clean those artifacts.
+selectively clean those artifacts. A cache-specific placement layer would imply
+ownership Nixfied does not have: an honest Nixfied-owned cache manager also
+needs writer arbitration, leases, accounting, retention and eviction policy,
+deletion recovery, inspection, and operator controls. None is required for
+runtime execution correctness, while ordinary invocation environment and
+arguments already let each project configure its own tools without splitting
+lifecycle responsibility.
 
 Adopter vocabulary enters the contract as **names over this algebra, never as
 schema**: `check` is not a concept nixfied knows, it is a composite an
@@ -207,7 +213,9 @@ Every runtime action is scoped by `projectId / environment / slot / runId`.
   declaration. Complete observation with no exact listener remains pending and
   ends as `READINESS_TIMEOUT`; incomplete ownership proof is
   `PORT_UNVERIFIABLE`. Locks end after the atomic ready commit; sockets remain
-  steady-state ownership.
+  steady-state ownership. The lock is transient coordination, never durable
+  service identity, liveness evidence, or owner attribution; the registry
+  remains the only durable runtime authority.
 - **Lock scope begins after slot preparation.** Marker adoption, epoch handling,
   registry opening, and mandatory reconciliation remain run-wide. Endpoint
   locks begin when the pre-lock exact-reuse attempt does not succeed and cover
@@ -220,6 +228,16 @@ Every runtime action is scoped by `projectId / environment / slot / runId`.
   is `LEASE_CONFLICT`. The recorded process and ownership evidence remain
   actionable to `down` and cleanup; after explicit `down`, a later run may start
   the replacement.
+- **The coordination boundary is deliberately narrow.** Endpoint locks
+  coordinate participating runtimes for the same effective user and relevant
+  network scope, not arbitrary external binders. An unrelated process can still
+  race between preflight and the child's bind; a surviving competing listener is
+  observed, while an ambiguous bind failure fails closed. Eliminating that
+  window would require socket activation and descriptor handoff, which widens
+  the generic invocation and adapter contracts, or a lifetime lock or guardian,
+  which adds a supervision protocol even though persistent services outlive the
+  invoking runtime. Nixfied therefore does not claim atomic reservation against
+  arbitrary host processes.
 - **State: marker-gated, path-confined cleanup.** Every owned state root carries a
   `.nixfied-state.json` marker. Cleanup canonicalizes first; refuses paths outside
   the state base, target symlinks, traversal escapes, unmarked roots, marker

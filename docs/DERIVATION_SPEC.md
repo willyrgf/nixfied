@@ -16,7 +16,7 @@ Scope: the exact algorithms for
 3. **`operationBindings`** of a closure (§4);
 4. default **operation ids** and default **terminal tokens** (§5).
 
-Vocabulary is `DESIGN_COMPOSITION.md`'s: a *task* is a leaf
+Vocabulary follows the task–service algebra: a *task* is a leaf
 `{ invocation, requires, exitPolicy, refs }` or a composite
 `{ steps : name → { task, dependsOn } }`; an *invocation* is
 `{ tools, run, env, cwd, timeoutMs, stdin }`, inline and anonymous (INVOKE-1).
