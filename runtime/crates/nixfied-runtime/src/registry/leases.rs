@@ -32,11 +32,7 @@ pub fn heartbeat_run_lease(
             .collect::<Result<Vec<_>, _>>()
             .map_err(sql_error)?
     };
-    if statuses.is_empty()
-        || statuses
-            .iter()
-            .any(|status| RunLeaseStatus::from_db(status) == Some(RunLeaseStatus::Stale))
-    {
+    if statuses.is_empty() {
         return Err(stale_lease_error(run_id));
     }
     let parsed = statuses

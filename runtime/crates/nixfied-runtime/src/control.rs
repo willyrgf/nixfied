@@ -459,17 +459,8 @@ fn mark_process_stale(registry: &mut Registry, row: &ProcessRow) -> RuntimeResul
 }
 
 fn reconcile_expired_run_leases(registry: &mut Registry) -> RuntimeResult<()> {
-    let leases = expired_run_leases(registry)?;
-    // `mark_run_lease_stale` stales every lease of a run at once (its service
-    // leases expire together), so act only once per run even when several of its
-    // service leases are returned, to avoid duplicate stale events.
-    let mut staled = std::collections::BTreeSet::new();
-    for lease in leases {
-        if staled.contains(&lease.run_id) || run_has_live_process(registry, &lease.run_id)? {
-            continue;
-        }
-        mark_run_lease_stale(registry, &lease)?;
-        staled.insert(lease.run_id.clone());
+    for lease in expired_run_leases(registry)? {
+        mark_expired_lease_stale(registry, &lease)?;
     }
     Ok(())
 }
@@ -700,18 +691,6 @@ fn active_borrower_count_conn(
     .map_err(sql_error)
 }
 
-fn run_has_live_process(registry: &Registry, run_id: &str) -> RuntimeResult<bool> {
-    for row in process_rows(registry)? {
-        if row.run_id == run_id
-            && (is_active_status(&row.status) || row.unresolved_escape)
-            && row.reconciled_liveness()?
-        {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
 impl PortRow {
     fn is_owned_by_process(&self, process: &ProcessRow) -> bool {
         if let Some(owner_process_key) = self.owner_process_key.as_deref() {
@@ -721,31 +700,71 @@ impl PortRow {
     }
 }
 
-fn mark_run_lease_stale(registry: &mut Registry, lease: &RunLeaseRow) -> RuntimeResult<()> {
+fn mark_expired_lease_stale(registry: &mut Registry, lease: &RunLeaseRow) -> RuntimeResult<()> {
     let identity = registry.identity().clone();
-    let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
-    transaction
+    let transaction = registry
+        .connection_mut()
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(sql_error)?;
+    let changed = transaction
         .execute(
             &format!(
                 "
-            UPDATE run_leases
-            SET status = ?2
-            WHERE run_id = ?1 AND status IN ({})
-            ",
-                status::sql_in_list(status::LEASE_OPEN)
+                UPDATE run_leases
+                SET status = ?3
+                WHERE run_id = ?1 AND service_instance_id = ?2
+                  AND status IN ({open_leases})
+                  AND expires_at <= strftime('%Y-%m-%dT%H:%M:%fZ','now')
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM processes p
+                    WHERE p.run_id = ?1
+                      AND p.service_instance_id = ?2
+                      AND (
+                        p.status IN ({active_processes})
+                        OR (
+                          p.status = '{escaped}'
+                          AND EXISTS (
+                            SELECT 1 FROM ports ep
+                            WHERE ep.service_instance_id = p.service_instance_id
+                              AND ep.owner_process_key = p.process_key
+                              AND ep.status IN ({open_ports})
+                          )
+                        )
+                      )
+                  )
+                ",
+                open_leases = status::sql_in_list(status::LEASE_OPEN),
+                active_processes = status::sql_in_list(status::PROCESS_ACTIVE),
+                escaped = ProcessStatus::Escaped.as_str(),
+                open_ports = status::sql_in_list(status::PORT_OPEN),
             ),
-            params![lease.run_id.as_str(), RunLeaseStatus::Stale.as_str()],
+            params![
+                lease.run_id.as_str(),
+                lease.service_instance_id.as_str(),
+                RunLeaseStatus::Stale.as_str(),
+            ],
         )
         .map_err(sql_error)?;
+    if changed == 0 {
+        transaction.commit().map_err(sql_error)?;
+        return Ok(());
+    }
     transaction
         .execute(
             &format!(
                 "
-            UPDATE runs
-            SET status = ?2
-            WHERE run_id = ?1 AND status NOT IN ({})
-            ",
-                status::sql_in_list(status::RUN_TERMINAL)
+                UPDATE runs
+                SET status = ?2
+                WHERE run_id = ?1
+                  AND status NOT IN ({terminal_runs})
+                  AND NOT EXISTS (
+                    SELECT 1 FROM run_leases
+                    WHERE run_id = ?1 AND status IN ({open_leases})
+                  )
+                ",
+                terminal_runs = status::sql_in_list(status::RUN_TERMINAL),
+                open_leases = status::sql_in_list(status::LEASE_OPEN),
             ),
             params![lease.run_id.as_str(), RunStatus::Stale.as_str()],
         )
@@ -760,15 +779,16 @@ fn mark_run_lease_stale(registry: &mut Registry, lease: &RunLeaseRow) -> Runtime
                 "
             UPDATE ports
             SET status = ?2
-            WHERE service_instance_id IN (
-              SELECT service_instance_id FROM run_leases WHERE run_id = ?1
-            )
+            WHERE service_instance_id = ?1
               AND owner_process_key IS NULL
               AND status IN ({})
             ",
                 status::sql_in_list(status::PORT_OPEN)
             ),
-            params![lease.run_id.as_str(), PortStatus::Stale.as_str()],
+            params![
+                lease.service_instance_id.as_str(),
+                PortStatus::Stale.as_str()
+            ],
         )
         .map_err(sql_error)?;
     let payload_json = serde_json::json!({

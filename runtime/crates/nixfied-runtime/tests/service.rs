@@ -347,7 +347,7 @@ fn ready_activation_rejects_raced_port_owner_atomically() {
 
     let error = service
         .wait_for_probe_ready(&mut fixture.registry)
-        .expect_err("ready activation must not repair a mismatched owner");
+        .expect_err("ready activation must not accept a mismatched owner");
 
     assert_eq!(error.code, ErrorCode::RegistryCorrupt);
     let raced: (String, String, String) = fixture
@@ -641,90 +641,6 @@ fn same_registry_proven_listener_reports_complete_nixfied_owner() {
     owner
         .stop(&mut fixture.registry, 1000)
         .expect("owner should stop");
-}
-
-#[test]
-fn unrelated_live_service_without_listener_is_preserved_as_unverifiable() {
-    let Some(python) = python3_path() else {
-        return;
-    };
-    let port = available_port_window(1);
-    let script = "import socket,sys,time; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s.bind(('127.0.0.1',int(sys.argv[1]))); s.listen(16); time.sleep(0.5); s.close(); time.sleep(30)";
-    let mut fixture = ServiceFixture::new(python, &["-c", script, "${port}"], port);
-    let mut owner = start_synthetic_service(
-        &fixture.model,
-        &fixture.admission,
-        &fixture.placement,
-        &mut fixture.registry,
-        "run-unrelated-missing-listener",
-        port,
-    )
-    .expect("owner service should start");
-    owner
-        .wait_for_probe_ready(&mut fixture.registry)
-        .expect("owner should first prove its listener");
-    thread::sleep(Duration::from_millis(700));
-
-    let mut other = fixture.admission.execution_model.services["synthetic"].clone();
-    other.name = nixfied_model::ServiceId::new("other");
-    fixture
-        .admission
-        .execution_model
-        .services
-        .insert(nixfied_model::ServiceId::new("other"), other);
-    let selected = select_slot(&fixture.model, None).expect("default slot should select");
-    let endpoint_ports = BTreeMap::from([("synthetic-tcp".to_string(), port)]);
-    let error = match start_service_for_slot(
-        &fixture.admission,
-        &fixture.placement,
-        &mut fixture.registry,
-        "run-unrelated-contender",
-        &selected,
-        ServiceSelection {
-            service_name: "other",
-            service_lifetime: ServiceLifetime::RunScoped,
-            endpoint_ports: &endpoint_ports,
-            slot_endpoints: &SlotEndpoints::new(),
-            run_timeout_ms: 5000,
-            cancellation: &CancellationToken::new(),
-            prepare_runner: None,
-        },
-    ) {
-        Ok(service) => {
-            let _ = service.stop(&mut fixture.registry, 1000);
-            panic!("a live unrelated holder without its listener must block replacement");
-        }
-        Err(error) => error,
-    };
-
-    assert_eq!(error.code, ErrorCode::PortUnverifiable);
-    assert!(error.message.contains("has no exact listener"));
-    assert!(
-        process_group_has_non_zombie_member(owner.pgid),
-        "unverifiable unrelated evidence must not signal its process group"
-    );
-    let owner_state: (String, String, String) = fixture
-        .registry
-        .connection()
-        .query_row(
-            "
-            SELECT p.status, s.status, o.status
-            FROM processes p
-            JOIN services s ON s.service_instance_id = p.service_instance_id
-            JOIN ports o ON o.owner_process_key = p.process_key
-            WHERE p.process_key = ?1
-            ",
-            [&owner.process_key],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )
-        .expect("unrelated owner evidence should remain");
-    assert_eq!(
-        owner_state,
-        ("ready".into(), "probe-ready".into(), "active".into())
-    );
-    owner
-        .stop(&mut fixture.registry, 1000)
-        .expect("owner should stop through process proof");
 }
 
 #[test]
@@ -2321,7 +2237,11 @@ fn duplicate_active_service_start_is_refused() {
         Err(error) => error,
     };
 
-    assert_eq!(error.code, ErrorCode::LeaseConflict);
+    assert_eq!(error.code, ErrorCode::PortConflict);
+    assert_eq!(
+        error.details["portConflict"]["reason"],
+        json!("startup-lock-contended")
+    );
     let running_processes: i64 = fixture
         .registry
         .connection()
@@ -2334,7 +2254,7 @@ fn duplicate_active_service_start_is_refused() {
     assert_eq!(running_processes, 1);
     assert!(
         process_group_has_non_zombie_member(service.pgid),
-        "an unexpired finite owner lease must block without signaling"
+        "startup-lock contention must block without signaling"
     );
     let unchanged: (String, String, String, String) = fixture
         .registry
@@ -3110,7 +3030,7 @@ fn ps_marks_expired_dead_run_lease_as_stale() {
 
     // The old runtime handle still owns the startup lock even though its child
     // has died. Dropping the handle models runtime exit and releases that
-    // process-scoped guard before a new runtime attempts repair.
+    // process-scoped guard before a new runtime retries acquisition.
     drop(service);
     let restarted = start_synthetic_service(
         &fixture.model,
@@ -3129,7 +3049,7 @@ fn ps_marks_expired_dead_run_lease_as_stale() {
 #[test]
 fn active_run_lease_refuses_new_service_start_even_after_terminal_service_row() {
     let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 23229);
-    let mut service = start_synthetic_service(
+    let service = start_synthetic_service(
         &fixture.model,
         &fixture.admission,
         &fixture.placement,
@@ -3162,6 +3082,8 @@ fn active_run_lease_refuses_new_service_start_even_after_terminal_service_row() 
             [&service.service_instance_id],
         )
         .expect("test should release port row");
+    let service_instance_id = service.service_instance_id.clone();
+    drop(service);
 
     let error = match start_synthetic_service(
         &fixture.model,
@@ -3177,167 +3099,17 @@ fn active_run_lease_refuses_new_service_start_even_after_terminal_service_row() 
 
     assert_eq!(error.code, ErrorCode::LeaseConflict);
     assert!(error.message.contains("run-active-lease"));
-    assert!(error.message.contains("unexpired or non-fenceable lease"));
-    service
-        .cancel(&mut fixture.registry, 1000, "test lease conflict cleanup")
-        .expect("original service should cancel");
-}
-
-#[test]
-fn expired_live_run_still_holding_startup_lock_is_not_repaired_concurrently() {
-    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 23230);
-    let mut service = start_synthetic_service(
-        &fixture.model,
-        &fixture.admission,
-        &fixture.placement,
-        &mut fixture.registry,
-        "run-expired-live-lease",
-        23230,
-    )
-    .expect("foreground service should start");
-    fixture
-        .registry
-        .connection()
-        .execute(
-            "
-            UPDATE run_leases
-            SET expires_at = strftime('%Y-%m-%dT%H:%M:%fZ','now','-1 seconds')
-            WHERE run_id = ?1
-            ",
-            [&service.run_id],
-        )
-        .expect("test should expire lease");
-
-    let error = match start_synthetic_service(
-        &fixture.model,
-        &fixture.admission,
-        &fixture.placement,
-        &mut fixture.registry,
-        "run-expired-live-conflict",
-        23230,
-    ) {
-        Ok(_) => panic!("a live runtime's startup lock must refuse a concurrent repairer"),
-        Err(error) => error,
-    };
+    assert!(error.message.contains("authoritative open lease"));
     let lease_status: String = fixture
         .registry
         .connection()
         .query_row(
-            "SELECT status FROM run_leases WHERE run_id = ?1",
-            [&service.run_id],
+            "SELECT status FROM run_leases WHERE service_instance_id = ?1",
+            [&service_instance_id],
             |row| row.get(0),
         )
-        .expect("lease status should query");
-
-    assert_eq!(error.code, ErrorCode::PortConflict);
-    assert_eq!(
-        error.details["portConflict"],
-        json!({
-            "reason": "startup-lock-contended",
-            "projectId": "runtime-test",
-            "endpoint": {
-                "transport": "tcp",
-                "family": "ipv4",
-                "address": "127.0.0.1",
-                "port": 23230,
-                "endpointId": "synthetic-tcp"
-            }
-        })
-    );
+        .expect("blocked lease should remain queryable");
     assert_eq!(lease_status, "active");
-    service
-        .cancel(
-            &mut fixture.registry,
-            1000,
-            "test expired live lease cleanup",
-        )
-        .expect("original service should cancel");
-}
-
-#[test]
-fn repair_claim_fences_every_open_sibling_for_the_expired_owner_token() {
-    let Some(python) = python3_path() else {
-        return;
-    };
-    let port = available_port_window(1);
-    let script = "import socket,sys,time; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s.bind(('127.0.0.1',int(sys.argv[1]))); s.listen(16); time.sleep(0.5); s.close(); time.sleep(30)";
-    let mut fixture = ServiceFixture::new(python, &["-c", script, "${port}"], port);
-    let mut owner = start_synthetic_service(
-        &fixture.model,
-        &fixture.admission,
-        &fixture.placement,
-        &mut fixture.registry,
-        "run-expired-token-siblings",
-        port,
-    )
-    .expect("owner service should start");
-    owner
-        .wait_for_probe_ready(&mut fixture.registry)
-        .expect("owner should release its startup guard after exact readiness");
-    fixture
-        .registry
-        .connection_mut()
-        .execute(
-            "
-            INSERT INTO run_leases (
-              run_id, environment, slot, service_instance_id, owner_token,
-              heartbeat_at, expires_at, status
-            )
-            SELECT run_id, environment, slot, 'sibling-service-instance', owner_token,
-                   heartbeat_at, expires_at, status
-            FROM run_leases WHERE service_instance_id = ?1
-            ",
-            [&owner.service_instance_id],
-        )
-        .expect("test run should own a second sibling lease");
-    fixture
-        .registry
-        .connection_mut()
-        .execute(
-            "UPDATE run_leases SET expires_at = '1970-01-01T00:00:00.000Z' WHERE run_id = ?1",
-            [&owner.run_id],
-        )
-        .expect("every sibling lease should expire together");
-    thread::sleep(Duration::from_millis(700));
-
-    let replacement = start_synthetic_service(
-        &fixture.model,
-        &fixture.admission,
-        &fixture.placement,
-        &mut fixture.registry,
-        "run-after-expired-token-fence",
-        port,
-    )
-    .expect("repair should fence the expired token before terminate-and-replace");
-
-    let stale_siblings: i64 = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT count(*) FROM run_leases WHERE run_id = ?1 AND status = 'stale'",
-            [&owner.run_id],
-            |row| row.get(0),
-        )
-        .expect("fenced sibling count should query");
-    let owner_run_status: String = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT status FROM runs WHERE run_id = ?1",
-            [&owner.run_id],
-            |row| row.get(0),
-        )
-        .expect("fenced run status should query");
-    assert_eq!(stale_siblings, 2);
-    assert_eq!(owner_run_status, "stale");
-    assert!(
-        !process_group_has_non_zombie_member(owner.pgid),
-        "repair must prove old containment dead before replacement"
-    );
-    replacement
-        .stop(&mut fixture.registry, 1000)
-        .expect("replacement should stop");
-    drop(owner);
 }
 
 #[test]
@@ -3630,7 +3402,7 @@ fn unresolved_escape_keeps_ports_for_identity_tracked_reparented_child() {
 }
 
 #[test]
-fn escaped_service_with_restored_exact_listener_is_terminated_not_reused() {
+fn escaped_service_with_exact_listener_is_preserved_until_explicit_down() {
     let Some(python) = python3_path() else {
         return;
     };
@@ -3673,7 +3445,7 @@ fn escaped_service_with_restored_exact_listener_is_terminated_not_reused() {
     )
     .expect("failed termination should retain escaped plus open-port evidence");
 
-    let owner_conflict = match start_synthetic_service(
+    let conflict = match start_synthetic_service(
         &fixture.model,
         &fixture.admission,
         &fixture.placement,
@@ -3683,46 +3455,38 @@ fn escaped_service_with_restored_exact_listener_is_terminated_not_reused() {
     ) {
         Ok(service) => {
             let _ = service.stop(&mut fixture.registry, 1000);
-            panic!("an unexpired escaped owner lease must refuse repair without signaling");
+            panic!("an escaped owner must not be reused or replaced implicitly");
         }
         Err(error) => error,
     };
-    assert_eq!(owner_conflict.code, ErrorCode::LeaseConflict);
+    assert_eq!(conflict.code, ErrorCode::LeaseConflict);
     assert!(process_group_has_non_zombie_member(escaped_pgid));
-    fixture
+    let state: (String, String, String) = fixture
         .registry
-        .connection_mut()
-        .execute(
-            "UPDATE run_leases SET expires_at = '1970-01-01T00:00:00.000Z' WHERE run_id = ?1",
-            [&escaped.run_id],
+        .connection()
+        .query_row(
+            "
+            SELECT p.status, s.status, o.status
+            FROM processes p
+            JOIN services s ON s.service_instance_id = p.service_instance_id
+            JOIN ports o ON o.owner_process_key = p.process_key
+            WHERE p.process_key = ?1
+            ",
+            [&escaped_process_key],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
-        .expect("escaped owner lease should expire");
-
-    let borrower_conflict = match start_synthetic_service(
-        &fixture.model,
-        &fixture.admission,
-        &fixture.placement,
-        &mut fixture.registry,
-        "run-blocked-by-escaped-borrower",
-        port,
-    ) {
-        Ok(service) => {
-            let _ = service.stop(&mut fixture.registry, 1000);
-            panic!("an unexpired borrower lease must refuse escaped repair without signaling");
-        }
-        Err(error) => error,
-    };
-    assert_eq!(borrower_conflict.code, ErrorCode::LeaseConflict);
-    assert!(process_group_has_non_zombie_member(escaped_pgid));
-    fixture
-        .registry
-        .connection_mut()
-        .execute(
-            "UPDATE run_leases SET expires_at = '1970-01-01T00:00:00.000Z' WHERE run_id = ?1",
-            [&borrower.run_id],
-        )
-        .expect("escaped borrower lease should expire");
-
+        .expect("escaped evidence should remain durable");
+    assert_eq!(state, ("escaped".into(), "escaped".into(), "active".into()));
+    borrower
+        .stop(&mut fixture.registry, 1000)
+        .expect("borrower should release before explicit down");
+    let down = down_owned_process_groups(&mut fixture.registry, 1000)
+        .expect("explicit down should terminate the preserved escape");
+    assert_eq!(down.stopped, vec![escaped_process_key.clone()]);
+    assert!(
+        !process_group_has_non_zombie_member(escaped_pgid),
+        "explicit down must prove the escaped containment dead"
+    );
     let replacement = start_synthetic_service(
         &fixture.model,
         &fixture.admission,
@@ -3731,49 +3495,12 @@ fn escaped_service_with_restored_exact_listener_is_terminated_not_reused() {
         "run-after-escaped-exact-listener",
         port,
     )
-    .expect("endpoint-locked recovery should terminate escaped evidence before replacement");
+    .expect("a new owner should start only after explicit down");
 
     assert_ne!(replacement.process_key, escaped_process_key);
-    assert!(
-        !process_group_has_non_zombie_member(escaped_pgid),
-        "an Escaped service must never be restored to reuse"
-    );
-    let escaped_state: (String, String, String) = fixture
-        .registry
-        .connection()
-        .query_row(
-            "
-            SELECT
-              (SELECT status FROM processes WHERE process_key = ?1),
-              (SELECT status FROM services WHERE service_instance_id = ?2),
-              (SELECT status FROM ports WHERE owner_process_key = ?3)
-            ",
-            rusqlite::params![
-                escaped_process_key,
-                replacement.service_instance_id,
-                replacement.process_key
-            ],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )
-        .expect("escaped process evidence and replacement ownership should coexist");
-    assert_eq!(
-        escaped_state,
-        ("escaped".into(), "starting".into(), "reserved".into())
-    );
-    let fenced_leases: i64 = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT count(*) FROM run_leases WHERE run_id IN (?1, ?2) AND status = 'stale'",
-            rusqlite::params![escaped.run_id, borrower.run_id],
-            |row| row.get(0),
-        )
-        .expect("escaped repair lease fences should query");
-    assert_eq!(fenced_leases, 2);
     replacement
         .stop(&mut fixture.registry, 1000)
         .expect("replacement should stop");
-    drop(borrower);
     drop(escaped);
 }
 
@@ -4394,6 +4121,19 @@ fn endpoint_less_service_reaches_ready_without_ownership_verification() {
     // An endpoint-less service binds nothing: readiness is its invocation
     // probe answering, and PORT-1 has no claim left to verify (scoped to
     // declared endpoints).
+    let mut fixture = endpoint_less_fixture();
+    let mut service = start_endpoint_less_service(&mut fixture, "run-endpoint-less")
+        .expect("endpoint-less service should start");
+    assert!(service.selected_endpoint.is_none());
+    service
+        .wait_for_probe_ready(&mut fixture.registry)
+        .expect("invocation probe readiness should succeed with no ownership claim");
+    service
+        .stop(&mut fixture.registry, 1000)
+        .expect("service should stop");
+}
+
+fn endpoint_less_fixture() -> ServiceFixture {
     let mut value = fixture_model("/bin/sleep", &["30"], 23180);
     // Endpoint-less: no listener attestation either (effects coherence).
     value["closures"]["synthetic-helper"]["effects"] = json!(["process"]);
@@ -4425,31 +4165,29 @@ fn endpoint_less_service_reaches_ready_without_ownership_verification() {
         .as_object_mut()
         .unwrap()
         .remove("primaryEndpoint");
-    let mut fixture = ServiceFixture::from_value(value);
-    let mut service = nixfied_runtime::service::start_service_for_slot(
+    ServiceFixture::from_value(value)
+}
+
+fn start_endpoint_less_service(
+    fixture: &mut ServiceFixture,
+    run_id: &str,
+) -> nixfied_runtime::RuntimeResult<nixfied_runtime::service::StartedService> {
+    start_service_for_slot(
         &fixture.admission,
         &fixture.placement,
         &mut fixture.registry,
-        "run-endpoint-less",
+        run_id,
         &select_slot(&fixture.model, None).expect("slot"),
-        nixfied_runtime::service::ServiceSelection {
+        ServiceSelection {
             service_name: "synthetic",
-            service_lifetime: nixfied_model::ServiceLifetime::RunScoped,
-            endpoint_ports: &std::collections::BTreeMap::new(),
+            service_lifetime: ServiceLifetime::RunScoped,
+            endpoint_ports: &BTreeMap::new(),
             slot_endpoints: &SlotEndpoints::new(),
             run_timeout_ms: 5000,
             cancellation: &CancellationToken::new(),
             prepare_runner: None,
         },
     )
-    .expect("endpoint-less service should start");
-    assert!(service.selected_endpoint.is_none());
-    service
-        .wait_for_probe_ready(&mut fixture.registry)
-        .expect("invocation probe readiness should succeed with no ownership claim");
-    service
-        .stop(&mut fixture.registry, 1000)
-        .expect("service should stop");
 }
 
 struct ServiceFixture {
@@ -4738,6 +4476,69 @@ fn crashed_pre_process_reservation_blocks_until_expiry_then_reconciles_for_retry
 }
 
 #[test]
+fn endpoint_less_crashed_reservation_reconciles_after_expiry() {
+    let mut fixture = endpoint_less_fixture();
+    let service = &fixture.admission.execution_model.services["synthetic"];
+    let address_hash = service_address_hash("runtime-test", "dev", 0, "synthetic");
+    let instance_id = service_instance_id(&address_hash, &service.identity);
+    reserve_service_start(
+        &mut fixture.registry,
+        &RunRecord {
+            run_id: "run-crashed-endpoint-less-reservation",
+            owner_token: "crashed-endpoint-less-owner",
+            admission: &fixture.admission,
+            placement: &fixture.placement,
+        },
+        &instance_id,
+        &[],
+    )
+    .expect("endpoint-less reservation should be recorded without ports");
+
+    let error = match start_endpoint_less_service(
+        &mut fixture,
+        "run-before-endpoint-less-reservation-expiry",
+    ) {
+        Ok(service) => {
+            let _ = service.stop(&mut fixture.registry, 1000);
+            panic!("an unexpired endpoint-less reservation must block retry");
+        }
+        Err(error) => error,
+    };
+    assert_eq!(error.code, ErrorCode::LeaseConflict);
+    let port_count: i64 = fixture
+        .registry
+        .connection()
+        .query_row("SELECT count(*) FROM ports", [], |row| row.get(0))
+        .expect("endpoint-less reservation port count should query");
+    assert_eq!(port_count, 0);
+
+    fixture
+        .registry
+        .connection_mut()
+        .execute(
+            "UPDATE run_leases SET expires_at = '1970-01-01T00:00:00.000Z' WHERE run_id = 'run-crashed-endpoint-less-reservation'",
+            [],
+        )
+        .expect("endpoint-less crashed reservation should expire");
+    let retry =
+        start_endpoint_less_service(&mut fixture, "run-after-endpoint-less-reservation-expiry")
+            .expect("expired endpoint-less reservation should reconcile before retry");
+    let stale_lease: String = fixture
+        .registry
+        .connection()
+        .query_row(
+            "SELECT status FROM run_leases WHERE run_id = 'run-crashed-endpoint-less-reservation'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("endpoint-less crashed lease should query");
+    assert_eq!(stale_lease, "stale");
+    retry
+        .stop(&mut fixture.registry, 1000)
+        .expect("endpoint-less retry should stop");
+}
+
+#[test]
 fn impossible_active_registry_row_after_reconciliation_is_corrupt() {
     let port = available_port_window(1);
     let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], port);
@@ -4791,7 +4592,7 @@ fn impossible_active_registry_row_after_reconciliation_is_corrupt() {
     assert!(
         error
             .message
-            .contains("active evidence without an actionable process"),
+            .contains("nonterminal evidence without an actionable process"),
         "unexpected corruption diagnostic: {}",
         error.message
     );

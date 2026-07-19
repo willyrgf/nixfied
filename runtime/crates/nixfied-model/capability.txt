@@ -75,7 +75,7 @@ output-schema run-error-summary-text: error
 # registry CAS. Linux observes SOCK_DIAG; macOS observes pcblist_n.
 endpoint-acquisition: fixed-euid-startup-lock exact-bind-preflight linux-sock-diag macos-pcblist-n socket-steady-state
 endpoint-reuse: exact-listener process-identity containment complete-active-endpoint-set guarded-cas
-lease-fencing: finite-run-owner-token fence-all-siblings fence-aware-heartbeat completed-persistent-owner-exception
+lease-authority: open-lease-blocks-replacement exact-reuse-adds-borrower expired-processless-reservation-reconciled
 escaped-port-reconciliation: escaped-plus-open-port unresolved ps-visible down-actionable cleanup-blocked release-after-death-proof
 
 # The closed stop signals the runtime can send.

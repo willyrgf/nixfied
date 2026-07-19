@@ -90,6 +90,7 @@ fn capability_descriptor_rejects_removed_cache_and_port_status_vocabulary() {
         "CacheScope",
         "binding",
         "bound",
+        "lease-fencing",
     ] {
         assert!(
             !CAPABILITY_DESCRIPTOR.split_whitespace().any(|token| {

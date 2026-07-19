@@ -32,14 +32,11 @@ use crate::service::identity::{
 use crate::service::readiness::{ProbeAttempt, exec_probe_attempt, tcp_probe_attempt};
 use crate::service::registry::{
     PortReservation, ProcessRecord, ReservationOutcome, RunRecord, ServiceRecord,
-    ServiceReuseGuard, StoredServiceProcess, VerifiedEndpointActivation, activate_service_ready,
-    ensure_service_start_allowed, guarded_claim_service_repair, mark_process_escape,
-    mark_repair_target_stale, mark_service_canceled, mark_service_failed, mark_service_standing,
-    mark_service_stopped, open_port_service_instances, read_service_snapshot,
-    record_service_borrow, record_service_canceling, record_service_lifecycle_event,
-    record_service_start, refuse_unexpired_repair_leases, release_service_borrow,
-    release_unresolved_escape_ports, reserve_service_start, settle_registry_only_evidence,
-    settle_service_reservation,
+    ServiceReuseGuard, VerifiedEndpointActivation, activate_service_ready,
+    ensure_service_start_allowed, mark_process_escape, mark_service_canceled, mark_service_failed,
+    mark_service_standing, mark_service_stopped, read_service_snapshot, record_service_borrow,
+    record_service_canceling, record_service_lifecycle_event, record_service_start,
+    release_service_borrow, reserve_service_start, settle_service_reservation,
 };
 use crate::slot::SelectedSlot;
 use crate::state::{CleanupMode, CleanupOutcome, HostPlacement, StateIdentity, clean_marked_state};
@@ -1269,7 +1266,6 @@ pub fn start_service_for_slot(
         Ok(endpoints) => endpoints,
         Err(failure) => return Err(endpoint_failure_error(registry, service, failure)?),
     };
-    reconcile_registry(registry)?;
     let owner_token = run_owner_token(&run_id);
     if let Some(started) = borrow_reusable_service(
         registry,
@@ -1288,13 +1284,10 @@ pub fn start_service_for_slot(
             ready_probe: ready_probe.clone(),
             health_probe: health_probe.clone(),
             reservations: &reservations,
-            recover_starting: false,
         },
     )? {
         return Ok(started);
     }
-    let initial_snapshot = read_service_snapshot(registry, &service_instance_id)?;
-    refuse_unexpired_repair_leases(&initial_snapshot)?;
     cancellation.check()?;
     let startup_guards = match acquire_startup_locks(&planned_endpoints) {
         Ok(guards) => guards,
@@ -1319,7 +1312,6 @@ pub fn start_service_for_slot(
             ready_probe: ready_probe.clone(),
             health_probe: health_probe.clone(),
             reservations: &reservations,
-            recover_starting: true,
         },
     )? {
         startup_guards.release();
@@ -1334,47 +1326,7 @@ pub fn start_service_for_slot(
         endpoint_json: "null",
         state_root: &placement.state_root,
     };
-    match repair_requested_service(
-        registry,
-        &service_record,
-        service,
-        &selected_endpoints,
-        &run_id,
-        &admission.computed_model_hash,
-        run_timeout_ms,
-    )? {
-        RepairOutcome::Cleared => {}
-        RepairOutcome::Reusable => {
-            if let Some(started) = borrow_reusable_service(
-                registry,
-                BorrowServiceRequest {
-                    admission,
-                    placement,
-                    run_id: &run_id,
-                    owner_token: &owner_token,
-                    service,
-                    service_name,
-                    service_lifetime: selection.service_lifetime,
-                    address_hash: &address_hash,
-                    service_instance_id: &service_instance_id,
-                    selected_endpoint: selected_endpoint.clone(),
-                    selected_endpoints: selected_endpoints.clone(),
-                    ready_probe: ready_probe.clone(),
-                    health_probe: health_probe.clone(),
-                    reservations: &reservations,
-                    recover_starting: true,
-                },
-            )? {
-                startup_guards.release();
-                return Ok(started);
-            }
-            return Err(RuntimeError::new(
-                ErrorCode::RegistryCorrupt,
-                format!("service {service_name} changed after exact Starting recovery proof"),
-            ));
-        }
-    }
-    inspect_unrelated_endpoint_evidence(admission, registry, &reservations, &service_instance_id)?;
+    refuse_nonreusable_local_service(registry, &service_record, service, &selected_endpoints)?;
     if let Err(failure) = preflight(&planned_endpoints) {
         return Err(endpoint_failure_error(registry, service, failure)?);
     }
@@ -1703,147 +1655,105 @@ struct BorrowServiceRequest<'a> {
     ready_probe: Probe,
     health_probe: Probe,
     reservations: &'a [PortReservation<'a>],
-    recover_starting: bool,
 }
 
-enum RepairOutcome {
-    Cleared,
-    Reusable,
-}
-
-fn repair_requested_service(
+fn refuse_nonreusable_local_service(
     registry: &mut Registry,
     requested_record: &ServiceRecord<'_>,
     requested_service: &ExecService,
     requested_endpoints: &[SelectedEndpoint],
-    requesting_run_id: &str,
-    computed_model_hash: &str,
-    run_timeout_ms: u64,
-) -> RuntimeResult<RepairOutcome> {
-    for _ in 0..3 {
-        let snapshot = read_service_snapshot(registry, requested_record.service_instance_id)?;
-        if !snapshot.has_evidence() {
-            return Ok(RepairOutcome::Cleared);
-        }
-        let Some(service) = snapshot.service.as_ref() else {
-            if settle_registry_only_evidence(registry, requested_record.service_instance_id)? {
-                return Ok(RepairOutcome::Cleared);
-            }
-            continue;
-        };
-        if service.service_name != requested_record.service_name
-            || service.service_address_hash != requested_record.service_address_hash
-            || service.endpoint_identity_hash != requested_record.identity.endpoint_identity_hash
-            || service.state_identity_hash != requested_record.identity.state_identity_hash
-            || service.runtime_compatibility_hash
-                != requested_record.identity.runtime_compatibility_hash
-            || service.target_identity_hash != requested_record.identity.target_identity_hash
-            || service.state_root != requested_record.state_root.display().to_string()
-        {
-            return Err(RuntimeError::new(
-                ErrorCode::RegistryCorrupt,
-                format!(
-                    "service instance {} does not match its computed identity",
-                    requested_record.service_instance_id
-                ),
-            ));
-        }
-        let Some(process) = snapshot.process.as_ref() else {
-            if service.status.is_active()
-                || snapshot
-                    .endpoints
-                    .iter()
-                    .any(|endpoint| status::PORT_OPEN.contains(&endpoint.status))
-                || snapshot
-                    .leases
-                    .iter()
-                    .any(|lease| status::LEASE_OPEN.contains(&lease.status))
+) -> RuntimeResult<()> {
+    let snapshot = read_service_snapshot(registry, requested_record.service_instance_id)?;
+    let stored_service = match snapshot.service.as_ref() {
+        Some(service) => service,
+        None => {
+            if let Some(lease) = snapshot
+                .leases
+                .iter()
+                .find(|lease| status::LEASE_OPEN.contains(&lease.status))
             {
+                return Err(open_service_lease_error(
+                    requested_record.service_instance_id,
+                    &lease.run_id,
+                ));
+            }
+            if snapshot.process.is_some() || !snapshot.endpoints.is_empty() {
                 return Err(RuntimeError::new(
                     ErrorCode::RegistryCorrupt,
                     format!(
-                        "service instance {} has active evidence without an actionable process",
+                        "service instance {} has process or port evidence without service metadata",
                         requested_record.service_instance_id
                     ),
                 ));
             }
-            return Ok(RepairOutcome::Cleared);
-        };
-        if process.status == crate::registry::status::ProcessStatus::Escaped
-            || service.status == ServiceStatus::Escaped
-        {
-            if process.status != crate::registry::status::ProcessStatus::Escaped
-                || service.status != ServiceStatus::Escaped
-            {
-                return Err(RuntimeError::new(
-                    ErrorCode::RegistryCorrupt,
-                    "escaped repair candidate has inconsistent process/service status",
-                ));
-            }
-            refuse_unexpired_repair_leases(&snapshot)?;
-            if !guarded_claim_service_repair(registry, requested_record, &snapshot)? {
-                continue;
-            }
-            let process = process.clone();
-            let start_identity = stored_escape_start_identity(&process);
-            if let Err(termination_error) =
-                terminate_stored_service(requested_service, &process, run_timeout_ms)
-            {
-                let payload = serde_json::json!({
-                    "pid": process.pid,
-                    "pgid": process.pgid,
-                    "reason": "escaped-service-repair",
-                    "terminationError": termination_error.message,
-                })
-                .to_string();
-                let _ = mark_process_escape(
-                    registry,
-                    &process.process_key,
-                    requesting_run_id,
-                    requested_record.service_instance_id,
-                    computed_model_hash,
-                    &start_identity,
-                    &payload,
-                );
-                return Err(RuntimeError::new(
-                    ErrorCode::ProcEscape,
-                    format!(
-                        "failed to prove termination of escaped service process group {}: {}",
-                        process.pgid, termination_error.message
-                    ),
-                ));
-            }
-            release_unresolved_escape_ports(
-                registry,
-                &process.process_key,
-                &process.run_id,
-                requested_record.service_instance_id,
-                computed_model_hash,
-            )?;
-            return Ok(RepairOutcome::Cleared);
+            return Ok(());
         }
-        if !status::PROCESS_ACTIVE.contains(&process.status) {
+    };
+    if stored_service.service_name != requested_record.service_name
+        || stored_service.service_address_hash != requested_record.service_address_hash
+        || stored_service.endpoint_identity_hash != requested_record.identity.endpoint_identity_hash
+        || stored_service.state_identity_hash != requested_record.identity.state_identity_hash
+        || stored_service.runtime_compatibility_hash
+            != requested_record.identity.runtime_compatibility_hash
+        || stored_service.target_identity_hash != requested_record.identity.target_identity_hash
+        || stored_service.state_root != requested_record.state_root.display().to_string()
+    {
+        return Err(RuntimeError::new(
+            ErrorCode::RegistryCorrupt,
+            format!(
+                "service instance {} does not match its computed identity",
+                requested_record.service_instance_id
+            ),
+        ));
+    }
+    if let Some(lease) = snapshot
+        .leases
+        .iter()
+        .find(|lease| status::LEASE_OPEN.contains(&lease.status))
+    {
+        return Err(open_service_lease_error(
+            requested_record.service_instance_id,
+            &lease.run_id,
+        ));
+    }
+    let Some(process) = snapshot.process.as_ref() else {
+        if stored_service.status.is_active() || !snapshot.endpoints.is_empty() {
             return Err(RuntimeError::new(
                 ErrorCode::RegistryCorrupt,
                 format!(
-                    "repair candidate process {} is not actionable",
-                    process.process_key
+                    "service instance {} has nonterminal evidence without an actionable process",
+                    requested_record.service_instance_id
                 ),
             ));
         }
-        if !process_is_live_with_identity(
+        return Ok(());
+    };
+    let escaped = process.status == crate::registry::status::ProcessStatus::Escaped;
+    if !escaped
+        && !process_is_live_with_identity(
             process.pid,
             process.pgid,
             process.platform_start.as_deref(),
-        )? {
-            return Err(RuntimeError::new(
-                ErrorCode::RegistryCorrupt,
-                "mandatory reconciliation left a dead repair candidate active",
-            ));
-        }
-        let stored_endpoints =
-            repair_candidate_endpoints(&snapshot, requested_record.service_instance_id)?;
-        let stored_planned = match planned_endpoints(&stored_endpoints) {
+        )?
+    {
+        return Err(RuntimeError::new(
+            ErrorCode::RegistryCorrupt,
+            "mandatory reconciliation left a dead service process active",
+        ));
+    }
+    if requested_endpoints.is_empty() {
+        return Err(RuntimeError::new(
+            ErrorCode::LeaseConflict,
+            format!(
+                "live endpoint-less service {} is not exactly reusable; run down before replacement",
+                requested_record.service_name
+            ),
+        ));
+    }
+    let stored_endpoints =
+        open_endpoints_from_snapshot(&snapshot, requested_record.service_instance_id)?;
+    if stored_endpoints.is_empty() {
+        let requested = match planned_endpoints(requested_endpoints) {
             Ok(endpoints) => endpoints,
             Err(failure) => {
                 return Err(endpoint_failure_error(
@@ -1853,91 +1763,82 @@ fn repair_requested_service(
                 )?);
             }
         };
-        let observation = classify_endpoint_observation(observe_ownership(
-            &stored_planned,
-            &ExpectedOwner {
-                pid: process.pid,
-                pgid: process.pgid,
-                platform_start: process.platform_start.as_deref(),
-                containment: requested_service.containment.clone(),
-                tracked_processes: &[],
-            },
+        return Err(port_unverifiable_error(
+            requested.first(),
+            format!(
+                "live service {} has no complete open endpoint evidence; run down before replacement",
+                requested_record.service_name
+            ),
         ));
-        match observation {
-            EndpointDecision::Complete(_)
-                if endpoint_map(&stored_endpoints) == endpoint_map(requested_endpoints)
-                    && (service.status != ServiceStatus::Starting
-                        || (!snapshot.endpoints.is_empty()
-                            && snapshot
-                                .endpoints
-                                .iter()
-                                .all(|endpoint| endpoint.status == PortStatus::Active)))
-                    && matches!(
-                        service.status,
-                        ServiceStatus::ProbeReady
-                            | ServiceStatus::Standing
-                            | ServiceStatus::Borrowed
-                            | ServiceStatus::Starting
-                    ) =>
-            {
-                return Ok(RepairOutcome::Reusable);
-            }
-            EndpointDecision::Unverifiable { endpoint, message } => {
-                return Err(port_unverifiable_error(endpoint.as_ref(), message));
-            }
-            EndpointDecision::ContainmentUnconfirmed(message) => {
-                return Err(RuntimeError::new(ErrorCode::ProcEscape, message));
-            }
-            EndpointDecision::Complete(_)
-            | EndpointDecision::Pending(_)
-            | EndpointDecision::Conflict { .. } => {}
-        }
-        refuse_unexpired_repair_leases(&snapshot)?;
-        if !guarded_claim_service_repair(registry, requested_record, &snapshot)? {
-            continue;
-        }
-        let process = process.clone();
-        let start_identity = stored_escape_start_identity(&process);
-        if let Err(termination_error) =
-            terminate_stored_service(requested_service, &process, run_timeout_ms)
-        {
-            let payload = serde_json::json!({
-                "pid": process.pid,
-                "pgid": process.pgid,
-                "reason": "service-repair",
-                "terminationError": termination_error.message,
-            })
-            .to_string();
-            let _ = mark_process_escape(
-                registry,
-                &process.process_key,
-                requesting_run_id,
-                requested_record.service_instance_id,
-                computed_model_hash,
-                &start_identity,
-                &payload,
-            );
-            return Err(RuntimeError::new(
-                ErrorCode::ProcEscape,
-                format!(
-                    "failed to prove termination of service process group {}: {}",
-                    process.pgid, termination_error.message
-                ),
-            ));
-        }
-        mark_repair_target_stale(registry, requested_record.service_instance_id, &process)?;
-        return Ok(RepairOutcome::Cleared);
     }
-    Err(RuntimeError::new(
-        ErrorCode::LeaseConflict,
-        format!(
-            "service instance {} changed during repair claim",
-            requested_record.service_instance_id
-        ),
-    ))
+    let stored_planned = match planned_endpoints(&stored_endpoints) {
+        Ok(endpoints) => endpoints,
+        Err(failure) => {
+            return Err(endpoint_failure_error(
+                registry,
+                requested_service,
+                failure,
+            )?);
+        }
+    };
+    let expected = ExpectedOwner {
+        pid: process.pid,
+        pgid: process.pgid,
+        platform_start: process.platform_start.as_deref(),
+        containment: requested_service.containment.clone(),
+        tracked_processes: &process.tracked_processes,
+    };
+    let observation = if escaped {
+        observe_ownership_after_primary_exit(&stored_planned, &expected)
+    } else {
+        observe_ownership(&stored_planned, &expected)
+    };
+    match classify_endpoint_observation(observation) {
+        EndpointDecision::Complete(_) => Err(port_unverifiable_error(
+            stored_planned.first(),
+            format!(
+                "live service {} is not exactly reusable; run down before replacement",
+                requested_record.service_name
+            ),
+        )),
+        EndpointDecision::Pending(endpoint) => Err(port_unverifiable_error(
+            Some(&endpoint),
+            format!(
+                "live service {} is missing its expected listener; run down before replacement",
+                requested_record.service_name
+            ),
+        )),
+        EndpointDecision::Conflict {
+            endpoint,
+            listeners,
+        } => {
+            let owner = proven_nixfied_owner(registry, &endpoint, &listeners, requested_service)?;
+            Err(port_conflict_error(
+                "listener-occupied",
+                &registry.identity().project_id,
+                &endpoint,
+                owner.as_ref(),
+            ))
+        }
+        EndpointDecision::Unverifiable { endpoint, message } => {
+            Err(port_unverifiable_error(endpoint.as_ref(), message))
+        }
+        EndpointDecision::ContainmentUnconfirmed(message) => {
+            Err(port_unverifiable_error(None, message))
+        }
+    }
 }
 
-fn repair_candidate_endpoints(
+fn open_service_lease_error(service_instance_id: &str, run_id: &str) -> RuntimeError {
+    RuntimeError::new(
+        ErrorCode::LeaseConflict,
+        format!(
+            "service instance {service_instance_id} has authoritative open lease owned by run {run_id}"
+        ),
+    )
+}
+
+fn open_endpoints_from_snapshot(
     snapshot: &crate::service::registry::ServiceSnapshot,
     service_instance_id: &str,
 ) -> RuntimeResult<Vec<SelectedEndpoint>> {
@@ -1964,197 +1865,6 @@ fn repair_candidate_endpoints(
         .collect()
 }
 
-fn inspect_unrelated_endpoint_evidence(
-    admission: &Admission,
-    registry: &mut Registry,
-    requested: &[PortReservation<'_>],
-    own_service_instance_id: &str,
-) -> RuntimeResult<()> {
-    for other_instance in open_port_service_instances(registry, requested, own_service_instance_id)?
-    {
-        let snapshot = read_service_snapshot(registry, &other_instance)?;
-        let Some(process) = snapshot.process.as_ref() else {
-            refuse_unexpired_repair_leases(&snapshot)?;
-            if snapshot.service.is_none()
-                && settle_registry_only_evidence(registry, &other_instance)?
-            {
-                continue;
-            }
-            return Err(RuntimeError::new(
-                ErrorCode::RegistryCorrupt,
-                format!(
-                    "unrelated service instance {other_instance} owns an open port without an actionable process or lease"
-                ),
-            ));
-        };
-        if !process_is_live_with_identity(
-            process.pid,
-            process.pgid,
-            process.platform_start.as_deref(),
-        )? {
-            return Err(RuntimeError::new(
-                ErrorCode::RegistryCorrupt,
-                format!(
-                    "mandatory reconciliation left unrelated process {} active",
-                    process.process_key
-                ),
-            ));
-        }
-        let Some(stored_service) = snapshot.service.as_ref() else {
-            return Err(RuntimeError::new(
-                ErrorCode::RegistryCorrupt,
-                format!(
-                    "unrelated process {} has no service row",
-                    process.process_key
-                ),
-            ));
-        };
-        let Some(service) = admission
-            .execution_model
-            .services
-            .get(stored_service.service_name.as_str())
-        else {
-            return Err(RuntimeError::new(
-                ErrorCode::PortUnverifiable,
-                format!(
-                    "live unrelated service {} is not present in the admitted model",
-                    stored_service.service_name
-                ),
-            ));
-        };
-        if stored_service.endpoint_identity_hash != service.identity.endpoint_identity_hash
-            || stored_service.state_identity_hash != service.identity.state_identity_hash
-            || stored_service.runtime_compatibility_hash
-                != service.identity.runtime_compatibility_hash
-            || stored_service.target_identity_hash != service.identity.target_identity_hash
-        {
-            return Err(RuntimeError::new(
-                ErrorCode::PortUnverifiable,
-                format!(
-                    "live unrelated service {} does not match the admitted identity",
-                    stored_service.service_name
-                ),
-            ));
-        }
-        for requested_endpoint in requested {
-            let Some(stored_endpoint) = snapshot.endpoints.iter().find(|endpoint| {
-                endpoint.address == requested_endpoint.address
-                    && endpoint.port == requested_endpoint.port
-            }) else {
-                continue;
-            };
-            let endpoint_id = stored_endpoint
-                .endpoint_key
-                .strip_prefix(&format!("{other_instance}:"))
-                .ok_or_else(|| {
-                    RuntimeError::new(
-                        ErrorCode::RegistryCorrupt,
-                        format!(
-                            "endpoint key {} does not belong to service {other_instance}",
-                            stored_endpoint.endpoint_key
-                        ),
-                    )
-                })?;
-            let planned = match PlannedEndpoint::parse(
-                endpoint_id,
-                &stored_endpoint.address,
-                stored_endpoint.port,
-            ) {
-                Ok(endpoint) => endpoint,
-                Err(failure) => {
-                    return Err(endpoint_failure_error(registry, service, failure)?);
-                }
-            };
-            match classify_endpoint_observation(observe_ownership(
-                std::slice::from_ref(&planned),
-                &ExpectedOwner {
-                    pid: process.pid,
-                    pgid: process.pgid,
-                    platform_start: process.platform_start.as_deref(),
-                    containment: service.containment.clone(),
-                    tracked_processes: &[],
-                },
-            )) {
-                EndpointDecision::Complete(ownership) => {
-                    let listeners = ownership
-                        .into_iter()
-                        .next()
-                        .map(|ownership| ownership.listeners)
-                        .unwrap_or_default();
-                    let owner = proven_nixfied_owner(registry, &planned, &listeners, service)?;
-                    return Err(port_conflict_error(
-                        "listener-occupied",
-                        &admission.project_id,
-                        &planned,
-                        owner.as_ref(),
-                    ));
-                }
-                EndpointDecision::Conflict {
-                    endpoint,
-                    listeners,
-                } => {
-                    let owner = proven_nixfied_owner(registry, &endpoint, &listeners, service)?;
-                    return Err(port_conflict_error(
-                        "listener-occupied",
-                        &admission.project_id,
-                        &endpoint,
-                        owner.as_ref(),
-                    ));
-                }
-                EndpointDecision::Pending(endpoint) => {
-                    return Err(port_unverifiable_error(
-                        Some(&endpoint),
-                        format!(
-                            "live unrelated process {} has no exact listener for its open port",
-                            process.process_key
-                        ),
-                    ));
-                }
-                EndpointDecision::Unverifiable { endpoint, message } => {
-                    return Err(port_unverifiable_error(endpoint.as_ref(), message));
-                }
-                EndpointDecision::ContainmentUnconfirmed(message) => {
-                    return Err(RuntimeError::new(ErrorCode::PortUnverifiable, message));
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-fn terminate_stored_service(
-    service: &ExecService,
-    process: &StoredServiceProcess,
-    run_timeout_ms: u64,
-) -> RuntimeResult<()> {
-    let timeout_ms =
-        (service.stop.timeout.as_millis().min(u128::from(u64::MAX)) as u64).min(run_timeout_ms);
-    match service.containment {
-        ContainmentRequirement::ProcessGroup => {
-            terminate_process_group_signal(process.pgid, service.stop.signal.libc(), timeout_ms)?;
-        }
-        ContainmentRequirement::ProcessTree => {
-            terminate_process_tree_signal(
-                process.pid,
-                process.pgid,
-                service.stop.signal.libc(),
-                timeout_ms,
-            )?;
-        }
-    }
-    Ok(())
-}
-
-fn stored_escape_start_identity(process: &StoredServiceProcess) -> String {
-    let tracked = tracked_process_snapshot(process.pid, &process.tracked_processes);
-    process_start_identity(
-        process.pid,
-        process.pgid,
-        process.platform_start.as_deref(),
-        &tracked,
-    )
-}
-
 fn borrow_reusable_service(
     registry: &mut Registry,
     request: BorrowServiceRequest<'_>,
@@ -2163,11 +1873,10 @@ fn borrow_reusable_service(
     let Some(service_row) = &snapshot.service else {
         return Ok(None);
     };
-    if !(matches!(
+    if !matches!(
         service_row.status,
         ServiceStatus::ProbeReady | ServiceStatus::Standing | ServiceStatus::Borrowed
-    ) || request.recover_starting && service_row.status == ServiceStatus::Starting)
-    {
+    ) {
         return Ok(None);
     }
     if service_row.service_name != request.service_name
@@ -2254,7 +1963,6 @@ fn borrow_reusable_service(
             process: process_row,
             endpoints: request.reservations,
         },
-        request.recover_starting,
     )?;
     if !borrowed {
         return Ok(None);
