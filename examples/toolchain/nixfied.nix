@@ -1,6 +1,6 @@
 # The toolchain-shaped standing example: the adopter shape the first external
 # adoption proved the old vocabulary could not express, kept provably
-# expressible forever after (the methodology fix from PROBLEM_COMPOSITION.md).
+# expressible forever after as a standing regression proof.
 #
 # It demonstrates, in one model the gate runs like every other example:
 #   - leaves with a real multi-tool PATH (plain packages synthesized into tool
