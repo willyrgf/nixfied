@@ -77,21 +77,6 @@ db_status! {
 }
 
 db_status! {
-    /// `services.status`: a service instance's lifecycle state.
-    ServiceStatus {
-        Starting => "starting",
-        ProbeReady => "probe-ready",
-        Standing => "standing",
-        Borrowed => "borrowed",
-        Stopped => "stopped",
-        Canceled => "canceled",
-        Failed => "failed",
-        Escaped => "escaped",
-        Stale => "stale",
-    }
-}
-
-db_status! {
     /// `processes.status`: a spawned process's state.
     ProcessStatus {
         Starting => "starting",
@@ -134,17 +119,6 @@ db_status! {
         Intent => "intent",
         Deleted => "deleted",
         Failed => "failed",
-    }
-}
-
-impl ServiceStatus {
-    /// A service still holding resources a new start must not collide with: any
-    /// status that is not one of the terminal outcomes.
-    pub fn is_active(self) -> bool {
-        !matches!(
-            self,
-            Self::Stopped | Self::Escaped | Self::Failed | Self::Stale | Self::Canceled
-        )
     }
 }
 
@@ -207,17 +181,6 @@ mod tests {
             RunStatus::Stale,
         ]);
         assert_round_trips(&[
-            ServiceStatus::Starting,
-            ServiceStatus::ProbeReady,
-            ServiceStatus::Standing,
-            ServiceStatus::Borrowed,
-            ServiceStatus::Stopped,
-            ServiceStatus::Canceled,
-            ServiceStatus::Failed,
-            ServiceStatus::Escaped,
-            ServiceStatus::Stale,
-        ]);
-        assert_round_trips(&[
             PortStatus::Reserved,
             PortStatus::Active,
             PortStatus::Released,
@@ -238,22 +201,5 @@ mod tests {
             sql_in_list(RUN_TERMINAL),
             "'canceled', 'task-failed', 'service-failed', 'proc-escaped'"
         );
-    }
-
-    #[test]
-    fn service_active_classification_matches_terminal_set() {
-        assert!(ServiceStatus::Starting.is_active());
-        assert!(ServiceStatus::ProbeReady.is_active());
-        assert!(ServiceStatus::Standing.is_active());
-        assert!(ServiceStatus::Borrowed.is_active());
-        for terminal in [
-            ServiceStatus::Stopped,
-            ServiceStatus::Canceled,
-            ServiceStatus::Failed,
-            ServiceStatus::Escaped,
-            ServiceStatus::Stale,
-        ] {
-            assert!(!terminal.is_active());
-        }
     }
 }

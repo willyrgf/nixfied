@@ -618,7 +618,7 @@ fn clean_reconciles_stale_refs_before_marker_owned_delete() {
         .expect("stale run should be inserted");
     insert_registry_service(
         &mut registry,
-        &RegistryServiceRow::synthetic("service-stale", "probe-ready", "/tmp/stale"),
+        &RegistryServiceRow::synthetic("service-stale", "/tmp/stale"),
     );
     registry
         .connection_mut()
@@ -815,7 +815,7 @@ fn clean_marks_active_port_stale_after_owner_process_is_proven_dead() {
         .expect("stale-port run should be inserted");
     insert_registry_service(
         &mut registry,
-        &RegistryServiceRow::synthetic("service-stale-port", "stopped", "/tmp/stale-port"),
+        &RegistryServiceRow::synthetic("service-stale-port", "/tmp/stale-port"),
     );
     registry
         .connection_mut()

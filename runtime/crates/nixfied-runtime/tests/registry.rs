@@ -27,11 +27,25 @@ fn creates_registry_schema_with_wal() {
             |row| row.get(0),
         )
         .expect("table count should be readable");
+    let service_columns = registry
+        .connection()
+        .prepare("PRAGMA table_info(services)")
+        .expect("service columns should prepare")
+        .query_map([], |row| row.get::<_, String>(1))
+        .expect("service columns should query")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("service columns should collect");
 
     assert_eq!(registry.path(), path.as_path());
     assert_eq!(journal_mode, "wal");
     assert_eq!(user_version, SCHEMA_VERSION);
     assert_eq!(table_count, 8);
+    assert!(!service_columns.iter().any(|column| column == "status"));
+    assert!(
+        !service_columns
+            .iter()
+            .any(|column| column == "endpoint_json")
+    );
 }
 
 #[test]
@@ -285,6 +299,25 @@ fn rejects_incompatible_user_version() {
 
     let error = match Registry::open_or_create(&path, &identity) {
         Ok(_) => panic!("schema mismatch should fail"),
+        Err(error) => error,
+    };
+    assert_eq!(error.code, ErrorCode::RegistryCorrupt);
+}
+
+#[test]
+fn rejects_previous_service_status_schema_without_migration() {
+    let tmp = TempDir::new();
+    let path = tmp.path.join("registry.sqlite3");
+    let identity = identity();
+    let registry = Registry::open_or_create(&path, &identity).expect("registry should open");
+    registry
+        .connection()
+        .execute_batch("PRAGMA user_version = 5;")
+        .expect("test should identify the removed service-status schema");
+    drop(registry);
+
+    let error = match Registry::open_or_create(&path, &identity) {
+        Ok(_) => panic!("the prior registry shape must not be migrated"),
         Err(error) => error,
     };
     assert_eq!(error.code, ErrorCode::RegistryCorrupt);

@@ -517,7 +517,7 @@
           NIXFIED_STATE_DIR="$inner" \
             nixfied-runtime ps --model "$PERSISTENT_MINIMAL_MODEL/model.json" \
             > "''${stateDir}/gate-artifacts/service-lifetime-ps-standing.json"
-          jq -e '.processes[] | select(.serviceStatus == "standing" and .serviceLifetime == "persistent-until-down" and .live == true and .borrowerCount == 0)' \
+          jq -e '.processes[] | select((has("serviceStatus") | not) and .registryStatus == "ready" and .reconciledStatus == "running" and .serviceLifetime == "persistent-until-down" and .live == true and .borrowerCount == 0)' \
             "''${stateDir}/gate-artifacts/service-lifetime-ps-standing.json" >/dev/null
 
           NIXFIED_STATE_DIR="$inner" \
@@ -540,7 +540,7 @@
             nixfied-runtime ps --model "$PERSISTENT_MINIMAL_MODEL/model.json" \
             > "''${stateDir}/gate-artifacts/service-lifetime-ps-released.json"
           jq -e --arg id "$owner_instance" \
-            '.processes[] | select(.serviceInstanceId == $id and .serviceStatus == "standing" and .serviceLifetime == "persistent-until-down" and .live == true and .borrowerCount == 0)' \
+            '.processes[] | select(.serviceInstanceId == $id and (has("serviceStatus") | not) and .registryStatus == "ready" and .reconciledStatus == "running" and .serviceLifetime == "persistent-until-down" and .live == true and .borrowerCount == 0)' \
             "''${stateDir}/gate-artifacts/service-lifetime-ps-released.json" >/dev/null
 
           NIXFIED_STATE_DIR="$inner" \

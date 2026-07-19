@@ -274,7 +274,7 @@ fn interrupted_run_reconciles_then_upgrade_proceeds() {
         .expect("interrupted run row should insert");
     insert_registry_service(
         &mut registry,
-        &RegistryServiceRow::synthetic("service-interrupted", "probe-ready", "/tmp/interrupted"),
+        &RegistryServiceRow::synthetic("service-interrupted", "/tmp/interrupted"),
     );
     registry
         .connection_mut()

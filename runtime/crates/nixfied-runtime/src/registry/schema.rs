@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::registry::records::RegistryIdentity;
 
-pub const SCHEMA_VERSION: i64 = 5;
+pub const SCHEMA_VERSION: i64 = 6;
 
 pub fn initialize(conn: &mut Connection, identity: &RegistryIdentity) -> RuntimeResult<()> {
     conn.execute_batch(
@@ -91,8 +91,6 @@ pub fn initialize(conn: &mut Connection, identity: &RegistryIdentity) -> Runtime
               runtime_compatibility_hash TEXT NOT NULL,
               target_identity_hash TEXT NOT NULL,
               service_lifetime TEXT NOT NULL,
-              status TEXT NOT NULL,
-              endpoint_json TEXT NOT NULL,
               state_root TEXT NOT NULL
             );
 
