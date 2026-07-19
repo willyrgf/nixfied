@@ -3367,31 +3367,14 @@ fn descendant_pids(pid: u32) -> RuntimeResult<Vec<u32>> {
 
 #[cfg(target_os = "macos")]
 fn direct_child_pids_macos(parent: u32) -> RuntimeResult<Vec<u32>> {
-    let capacity = 8192usize;
-    let mut buffer = vec![0 as libc::pid_t; capacity];
-    let count = unsafe {
-        libc::proc_listallpids(
-            buffer.as_mut_ptr().cast(),
-            (capacity * std::mem::size_of::<libc::pid_t>()) as libc::c_int,
-        )
-    };
-    if count < 0 {
-        return Err(RuntimeError::new(
+    let pids = macos_process_ids().map_err(|error| {
+        RuntimeError::new(
             ErrorCode::ProcEscape,
-            format!(
-                "failed to list pids while inspecting descendants for pid {parent}: {}",
-                std::io::Error::last_os_error()
-            ),
-        ));
-    }
+            format!("failed to list pids while inspecting descendants for pid {parent}: {error}"),
+        )
+    })?;
     let mut children = Vec::new();
-    for pid in buffer.into_iter().take(count as usize) {
-        let Ok(pid) = u32::try_from(pid) else {
-            continue;
-        };
-        if pid == 0 {
-            continue;
-        }
+    for pid in pids {
         let Some(info) = process_bsd_info(pid) else {
             continue;
         };
@@ -3488,35 +3471,66 @@ fn process_is_zombie(pid: u32) -> bool {
 
 #[cfg(target_os = "macos")]
 fn process_group_has_live_member_impl(pgid: i32) -> RuntimeResult<bool> {
-    let capacity = 8192usize;
-    let mut buffer = vec![0 as libc::pid_t; capacity];
-    let count = unsafe {
-        libc::proc_listallpids(
-            buffer.as_mut_ptr().cast(),
-            (capacity * std::mem::size_of::<libc::pid_t>()) as libc::c_int,
-        )
-    };
-    if count < 0 {
-        return Err(RuntimeError::new(
+    let pids = macos_process_ids().map_err(|error| {
+        RuntimeError::new(
             ErrorCode::ProcEscape,
-            format!(
-                "failed to list pids while checking process group {pgid}: {}",
-                std::io::Error::last_os_error()
-            ),
-        ));
-    }
-    for pid in buffer.into_iter().take(count as usize) {
-        let Ok(pid) = u32::try_from(pid) else {
-            continue;
-        };
-        if pid == 0 {
-            continue;
-        }
+            format!("failed to list pids while checking process group {pgid}: {error}"),
+        )
+    })?;
+    for pid in pids {
         if process_group(pid)? == Some(pgid) && !process_is_zombie(pid) {
             return Ok(true);
         }
     }
     Ok(false)
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn macos_process_ids() -> std::io::Result<Vec<u32>> {
+    let required = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
+    if required < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let mut capacity = usize::try_from(required)
+        .map_err(|_| std::io::Error::other("macOS process-list size was negative"))?
+        .checked_add(32)
+        .ok_or_else(|| std::io::Error::other("macOS process-list capacity overflow"))?
+        .max(32);
+
+    loop {
+        let byte_capacity = capacity
+            .checked_mul(std::mem::size_of::<libc::pid_t>())
+            .ok_or_else(|| std::io::Error::other("macOS process-list byte size overflow"))?;
+        let byte_capacity = libc::c_int::try_from(byte_capacity).map_err(|_| {
+            std::io::Error::other("macOS process-list byte size exceeds proc_listallpids limits")
+        })?;
+        let mut pids = Vec::new();
+        pids.try_reserve_exact(capacity).map_err(|error| {
+            std::io::Error::other(format!("failed to allocate macOS process list: {error}"))
+        })?;
+        pids.resize(capacity, 0 as libc::pid_t);
+        let count = unsafe { libc::proc_listallpids(pids.as_mut_ptr().cast(), byte_capacity) };
+        if count < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let count = usize::try_from(count)
+            .map_err(|_| std::io::Error::other("macOS process count was negative"))?;
+        if count >= pids.len() {
+            capacity = capacity.checked_mul(2).ok_or_else(|| {
+                std::io::Error::other("macOS process-list capacity growth overflow")
+            })?;
+            continue;
+        }
+        pids.truncate(count);
+        let mut result = pids
+            .into_iter()
+            .filter_map(|pid| u32::try_from(pid).ok())
+            .filter(|pid| *pid > 0)
+            .collect::<Vec<_>>();
+        result.sort_unstable();
+        result.dedup();
+        return Ok(result);
+    }
 }
 
 #[cfg(target_os = "macos")]
