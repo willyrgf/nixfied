@@ -10,7 +10,7 @@ use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::redaction::Redactor;
 use crate::registry::leases::lease_ttl_modifier;
 use crate::registry::status::{
-    self, DbStatus, PortStatus, ProcessStatus, RunLeaseStatus, RunStatus, ServiceStatus,
+    self, DbStatus, PortStatus, ProcessStatus, RunLeaseStatus, RunStatus,
 };
 use crate::registry::{Registry, RegistryIdentity};
 use crate::state::HostPlacement;
@@ -30,7 +30,6 @@ pub struct ServiceRecord<'a> {
     pub service_address_hash: &'a str,
     pub identity: &'a ServiceIdentity,
     pub service_lifetime: ServiceLifetime,
-    pub endpoint_json: &'a str,
     pub state_root: &'a Path,
 }
 
@@ -69,7 +68,6 @@ pub(crate) struct StoredServiceState {
     pub(crate) runtime_compatibility_hash: String,
     pub(crate) target_identity_hash: String,
     pub(crate) service_lifetime: ServiceLifetime,
-    pub(crate) status: ServiceStatus,
     pub(crate) state_root: String,
 }
 
@@ -493,9 +491,9 @@ pub fn record_service_start(
             INSERT OR REPLACE INTO services (
               service_instance_id, environment, slot, service_name,
               service_address_hash, endpoint_identity_hash, state_identity_hash,
-              runtime_compatibility_hash, target_identity_hash, service_lifetime, status,
-              endpoint_json, state_root
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?13, ?11, ?12)
+              runtime_compatibility_hash, target_identity_hash, service_lifetime,
+              state_root
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
             ",
             params![
                 service.service_instance_id,
@@ -508,9 +506,7 @@ pub fn record_service_start(
                 service.identity.runtime_compatibility_hash.as_str(),
                 service.identity.target_identity_hash.as_str(),
                 service_lifetime_as_str(service.service_lifetime),
-                service.endpoint_json,
                 service.state_root.display().to_string(),
-                ServiceStatus::Starting.as_str(),
             ],
         )
         .map_err(sql_error)?;
@@ -598,16 +594,6 @@ pub(crate) fn record_service_borrow(
     if !reuse_snapshot_matches(&snapshot, guard) {
         return Ok(false);
     }
-    let previous_status = snapshot
-        .service
-        .as_ref()
-        .ok_or_else(|| {
-            RuntimeError::new(
-                ErrorCode::RegistryCorrupt,
-                "matched reuse snapshot has no service row",
-            )
-        })?
-        .status;
     transaction
         .execute(
             "
@@ -633,19 +619,6 @@ pub(crate) fn record_service_borrow(
             ],
         )
         .map_err(sql_error)?;
-    let changed = transaction
-        .execute(
-            "UPDATE services SET status = ?2 WHERE service_instance_id = ?1 AND status = ?3",
-            params![
-                guard.service.service_instance_id,
-                ServiceStatus::Borrowed.as_str(),
-                previous_status.as_str(),
-            ],
-        )
-        .map_err(sql_error)?;
-    if changed != 1 {
-        return Ok(false);
-    }
     transaction
         .execute(
             "
@@ -725,7 +698,6 @@ pub fn release_service_borrow(
             params![run_id, service_instance_id, lease_status.as_str()],
         )
         .map_err(sql_error)?;
-    refresh_service_borrow_status(&transaction, service_instance_id)?;
     if canceled {
         transaction
             .execute(
@@ -813,12 +785,6 @@ pub fn mark_service_standing(
             )
             .map_err(sql_error)?;
     }
-    transaction
-        .execute(
-            "UPDATE services SET status = ?2 WHERE service_instance_id = ?1",
-            params![service_instance_id, ServiceStatus::Standing.as_str()],
-        )
-        .map_err(sql_error)?;
     transaction
         .execute(
             "UPDATE runs SET status = ?2 WHERE run_id = ?1 AND status = ?3",
@@ -988,26 +954,6 @@ pub fn activate_service_ready(
             format!("ready activation changed {changed_process} process rows"),
         ));
     }
-    let changed_service = transaction
-        .execute(
-            "
-            UPDATE services
-            SET status = ?3
-            WHERE service_instance_id = ?1 AND status = ?2
-            ",
-            params![
-                service_instance_id,
-                ServiceStatus::Starting.as_str(),
-                ServiceStatus::ProbeReady.as_str(),
-            ],
-        )
-        .map_err(sql_error)?;
-    if changed_service != 1 {
-        return Err(RuntimeError::new(
-            ErrorCode::RegistryCorrupt,
-            format!("ready activation changed {changed_service} service rows"),
-        ));
-    }
     insert_event(
         &transaction,
         &identity,
@@ -1071,17 +1017,15 @@ pub fn mark_service_stopped(
         .as_deref()
         .and_then(RunStatus::from_db)
         .is_some_and(|status| matches!(status, RunStatus::Canceling | RunStatus::Canceled));
-    let (process_status, service_status, lease_status, event_type) = if run_was_canceling {
+    let (process_status, lease_status, event_type) = if run_was_canceling {
         (
             ProcessStatus::Canceled,
-            ServiceStatus::Canceled,
             RunLeaseStatus::Canceled,
             "service.canceled",
         )
     } else {
         (
             ProcessStatus::Stopped,
-            ServiceStatus::Stopped,
             RunLeaseStatus::Completed,
             "service.stopped",
         )
@@ -1090,12 +1034,6 @@ pub fn mark_service_stopped(
         .execute(
             "UPDATE processes SET status = ?2 WHERE process_key = ?1",
             params![process_key, process_status.as_str()],
-        )
-        .map_err(sql_error)?;
-    transaction
-        .execute(
-            "UPDATE services SET status = ?2 WHERE service_instance_id = ?1",
-            params![service_instance_id, service_status.as_str()],
         )
         .map_err(sql_error)?;
     if run_was_canceling {
@@ -1215,12 +1153,6 @@ pub fn mark_service_canceled(
         .execute(
             "UPDATE processes SET status = ?2 WHERE process_key = ?1",
             params![process_key, ProcessStatus::Canceled.as_str()],
-        )
-        .map_err(sql_error)?;
-    transaction
-        .execute(
-            "UPDATE services SET status = ?2 WHERE service_instance_id = ?1",
-            params![service_instance_id, ServiceStatus::Canceled.as_str()],
         )
         .map_err(sql_error)?;
     transaction
@@ -1359,12 +1291,6 @@ pub fn mark_service_failed(
         .map_err(sql_error)?;
     transaction
         .execute(
-            "UPDATE services SET status = ?2 WHERE service_instance_id = ?1",
-            params![service_instance_id, ServiceStatus::Failed.as_str()],
-        )
-        .map_err(sql_error)?;
-    transaction
-        .execute(
             "UPDATE runs SET status = ?2 WHERE run_id = ?1",
             params![run_id, RunStatus::ServiceFailed.as_str()],
         )
@@ -1402,47 +1328,122 @@ pub fn mark_service_failed(
 
 pub fn mark_process_escape(
     registry: &mut Registry,
-    process_key: &str,
-    run_id: &str,
-    service_instance_id: &str,
+    process: &ProcessRecord<'_>,
     computed_model_hash: &str,
-    start_identity_json: &str,
+    platform_start: Option<&str>,
     payload_json: &str,
 ) -> RuntimeResult<()> {
     let identity = registry.identity().clone();
     let redactor = registry.redactor().clone();
-    let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
-    transaction
+    let transaction = registry
+        .connection_mut()
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(sql_error)?;
+    let service_rows: i64 = transaction
+        .query_row(
+            "SELECT count(*) FROM services WHERE service_instance_id = ?1",
+            params![process.service_instance_id],
+            |row| row.get(0),
+        )
+        .map_err(sql_error)?;
+    if service_rows != 1 {
+        return Err(RuntimeError::new(
+            ErrorCode::RegistryCorrupt,
+            format!(
+                "escape settlement found {service_rows} service rows for {}, expected 1",
+                process.service_instance_id
+            ),
+        ));
+    }
+    let changed_process = transaction
         .execute(
-            "UPDATE processes SET status = ?2, start_identity = ?3 WHERE process_key = ?1",
+            &format!(
+                "
+                UPDATE processes
+                SET status = ?8, start_identity = ?7
+                WHERE process_key = ?1
+                  AND run_id = ?2
+                  AND service_instance_id = ?3
+                  AND pid = ?4
+                  AND pgid = ?5
+                  AND CAST(json_extract(start_identity, '$.pid') AS INTEGER) = ?4
+                  AND CAST(json_extract(start_identity, '$.pgid') AS INTEGER) = ?5
+                  AND json_extract(start_identity, '$.platformStart') IS ?6
+                  AND CAST(json_extract(?7, '$.pid') AS INTEGER) = ?4
+                  AND CAST(json_extract(?7, '$.pgid') AS INTEGER) = ?5
+                  AND json_extract(?7, '$.platformStart') IS ?6
+                  AND status IN ({})
+                ",
+                status::sql_in_list(status::PROCESS_ACTIVE)
+            ),
             params![
-                process_key,
+                process.process_key,
+                process.run_id,
+                process.service_instance_id,
+                process.pid,
+                process.pgid,
+                platform_start,
+                process.start_identity,
                 ProcessStatus::Escaped.as_str(),
-                start_identity_json,
             ],
         )
         .map_err(sql_error)?;
-    transaction
+    if changed_process != 1 {
+        return Err(RuntimeError::new(
+            ErrorCode::RegistryCorrupt,
+            format!(
+                "escape settlement changed {changed_process} process rows for {}, expected 1",
+                process.process_key
+            ),
+        ));
+    }
+    let run_pre_states = [
+        RunStatus::ServiceStarting,
+        RunStatus::Canceling,
+        RunStatus::Canceled,
+        RunStatus::Completed,
+        RunStatus::TaskSucceeded,
+        RunStatus::TaskFailed,
+        RunStatus::ServiceFailed,
+        RunStatus::Stale,
+    ];
+    let changed_run = transaction
         .execute(
-            "UPDATE services SET status = ?2 WHERE service_instance_id = ?1",
-            params![service_instance_id, ServiceStatus::Escaped.as_str()],
+            &format!(
+                "
+            UPDATE runs
+            SET status = ?3
+            WHERE run_id = ?1
+              AND computed_model_hash = ?2
+              AND status IN ({})
+            ",
+                status::sql_in_list(&run_pre_states)
+            ),
+            params![
+                process.run_id,
+                computed_model_hash,
+                RunStatus::ProcEscaped.as_str()
+            ],
         )
         .map_err(sql_error)?;
-    transaction
-        .execute(
-            "UPDATE runs SET status = ?2 WHERE run_id = ?1",
-            params![run_id, RunStatus::ProcEscaped.as_str()],
-        )
-        .map_err(sql_error)?;
+    if changed_run != 1 {
+        return Err(RuntimeError::new(
+            ErrorCode::RegistryCorrupt,
+            format!(
+                "escape settlement changed {changed_run} run rows for {}, expected 1",
+                process.run_id
+            ),
+        ));
+    }
     insert_event(
         &transaction,
         &identity,
         &redactor,
         EventRecord {
             event_type: "service.proc-escape",
-            run_id: Some(run_id),
-            service_instance_id: Some(service_instance_id),
-            process_key: Some(process_key),
+            run_id: Some(process.run_id),
+            service_instance_id: Some(process.service_instance_id),
+            process_key: Some(process.process_key),
             computed_model_hash: Some(computed_model_hash),
             payload_json,
         },
@@ -1453,7 +1454,7 @@ pub fn mark_process_escape(
 
 /// Release the durable ownership evidence of an unresolved escape after OS
 /// liveness proves the recorded process containment is gone. The terminal
-/// Escaped process/service evidence is intentionally retained.
+/// escaped process evidence is intentionally retained.
 pub(crate) fn release_unresolved_escape_ports(
     registry: &mut Registry,
     process_key: &str,
@@ -1467,30 +1468,42 @@ pub(crate) fn release_unresolved_escape_ports(
         .connection_mut()
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(sql_error)?;
-    let process_status = transaction
+    let unresolved: i64 = transaction
         .query_row(
-            "SELECT status FROM processes WHERE process_key = ?1",
-            params![process_key],
-            |row| row.get::<_, String>(0),
+            &format!(
+                "
+                SELECT count(*)
+                FROM processes p
+                JOIN services s ON s.service_instance_id = p.service_instance_id
+                JOIN runs r ON r.run_id = p.run_id
+                WHERE p.process_key = ?1
+                  AND p.run_id = ?2
+                  AND p.service_instance_id = ?3
+                  AND p.status = ?4
+                  AND r.computed_model_hash = ?5
+                  AND EXISTS (
+                    SELECT 1 FROM ports ep
+                    WHERE ep.service_instance_id = p.service_instance_id
+                      AND ep.owner_process_key = p.process_key
+                      AND ep.status IN ({})
+                  )
+                ",
+                status::sql_in_list(status::PORT_OPEN)
+            ),
+            params![
+                process_key,
+                run_id,
+                service_instance_id,
+                ProcessStatus::Escaped.as_str(),
+                computed_model_hash,
+            ],
+            |row| row.get(0),
         )
-        .optional()
         .map_err(sql_error)?;
-    let service_status = transaction
-        .query_row(
-            "SELECT status FROM services WHERE service_instance_id = ?1",
-            params![service_instance_id],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()
-        .map_err(sql_error)?;
-    if process_status.as_deref() != Some(ProcessStatus::Escaped.as_str())
-        || service_status.as_deref() != Some(ServiceStatus::Escaped.as_str())
-    {
+    if unresolved != 1 {
         return Err(RuntimeError::new(
             ErrorCode::RegistryCorrupt,
-            format!(
-                "unresolved escape {process_key} no longer has escaped process/service evidence"
-            ),
+            format!("unresolved escape {process_key} no longer has exact open-port evidence"),
         ));
     }
     transaction
@@ -1544,31 +1557,15 @@ pub fn ensure_service_instance_probe_ready(
     service_name: &str,
     service_instance_id: &str,
 ) -> RuntimeResult<()> {
-    let status = registry
-        .connection()
-        .query_row(
-            "SELECT status FROM services WHERE service_instance_id = ?1",
-            params![service_instance_id],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()
-        .map_err(sql_error)?;
-    match status.as_deref() {
-        Some(raw)
-            if matches!(
-                ServiceStatus::from_db(raw),
-                Some(ServiceStatus::ProbeReady | ServiceStatus::Standing | ServiceStatus::Borrowed)
-            ) =>
-        {
-            Ok(())
-        }
-        Some(raw) if ServiceStatus::from_db(raw).is_some() => Err(RuntimeError::new(
+    let snapshot = read_service_snapshot(registry, service_instance_id)?;
+    match snapshot.process.as_ref().map(|process| process.status) {
+        Some(ProcessStatus::Ready) => Ok(()),
+        Some(status) => Err(RuntimeError::new(
             ErrorCode::DependencyUnavailable,
-            format!("service {service_name} is {raw}, not ready"),
-        )),
-        Some(raw) => Err(RuntimeError::new(
-            ErrorCode::DependencyUnavailable,
-            format!("service {service_name} has unknown readiness status {raw}"),
+            format!(
+                "service {service_name} process is {}, not ready",
+                status.as_str()
+            ),
         )),
         None => Err(RuntimeError::new(
             ErrorCode::DependencyUnavailable,
@@ -1761,7 +1758,7 @@ fn read_service_snapshot_conn(
             "
             SELECT service_name, service_address_hash, endpoint_identity_hash,
                    state_identity_hash, runtime_compatibility_hash,
-                   target_identity_hash, service_lifetime, status, state_root
+                   target_identity_hash, service_lifetime, state_root
             FROM services
             WHERE service_instance_id = ?1
             ",
@@ -1776,7 +1773,6 @@ fn read_service_snapshot_conn(
                     row.get::<_, String>(5)?,
                     row.get::<_, String>(6)?,
                     row.get::<_, String>(7)?,
-                    row.get::<_, String>(8)?,
                 ))
             },
         )
@@ -1792,7 +1788,6 @@ fn read_service_snapshot_conn(
                 runtime_compatibility_hash,
                 target_identity_hash,
                 lifetime,
-                service_status,
                 state_root,
             )|
              -> RuntimeResult<StoredServiceState> {
@@ -1804,7 +1799,6 @@ fn read_service_snapshot_conn(
                     runtime_compatibility_hash,
                     target_identity_hash,
                     service_lifetime: parse_service_lifetime(&lifetime)?,
-                    status: ServiceStatus::parse_db(&service_status)?,
                     state_root,
                 })
             },
@@ -1968,12 +1962,7 @@ fn reuse_snapshot_matches(snapshot: &ServiceSnapshot, guard: &ServiceReuseGuard<
     let Some(service) = &snapshot.service else {
         return false;
     };
-    let reusable = matches!(
-        service.status,
-        ServiceStatus::ProbeReady | ServiceStatus::Standing | ServiceStatus::Borrowed
-    );
-    if !reusable
-        || service.service_name != guard.service.service_name
+    if service.service_name != guard.service.service_name
         || service.service_address_hash != guard.service.service_address_hash
         || service.endpoint_identity_hash != guard.service.identity.endpoint_identity_hash
         || service.state_identity_hash != guard.service.identity.state_identity_hash
@@ -1990,7 +1979,7 @@ fn reuse_snapshot_matches(snapshot: &ServiceSnapshot, guard: &ServiceReuseGuard<
         || process.pid != guard.process.pid
         || process.pgid != guard.process.pgid
         || process.start_identity_json != guard.process.start_identity_json
-        || !status::PROCESS_ACTIVE.contains(&process.status)
+        || process.status != ProcessStatus::Ready
     {
         return false;
     }
@@ -2053,14 +2042,7 @@ fn ensure_no_active_service_conn(
     conn: &Connection,
     service_instance_id: &str,
 ) -> RuntimeResult<()> {
-    let existing = conn
-        .query_row(
-            "SELECT status FROM services WHERE service_instance_id = ?1",
-            params![service_instance_id],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()
-        .map_err(sql_error)?;
+    let existing = actionable_process_status(conn, service_instance_id)?;
     refuse_active_service(service_instance_id, existing)
 }
 
@@ -2068,27 +2050,52 @@ fn ensure_no_active_service_transaction(
     transaction: &Transaction<'_>,
     service_instance_id: &str,
 ) -> RuntimeResult<()> {
-    let existing = transaction
+    let existing = actionable_process_status(transaction, service_instance_id)?;
+    refuse_active_service(service_instance_id, existing)
+}
+
+fn actionable_process_status(
+    connection: &Connection,
+    service_instance_id: &str,
+) -> RuntimeResult<Option<String>> {
+    connection
         .query_row(
-            "SELECT status FROM services WHERE service_instance_id = ?1",
+            &format!(
+                "
+                SELECT p.status
+                FROM processes p
+                WHERE p.service_instance_id = ?1
+                  AND (
+                    p.status IN ({active})
+                    OR (
+                      p.status = '{escaped}'
+                      AND EXISTS (
+                        SELECT 1 FROM ports ep
+                        WHERE ep.service_instance_id = p.service_instance_id
+                          AND ep.owner_process_key = p.process_key
+                          AND ep.status IN ({ports})
+                      )
+                    )
+                  )
+                ORDER BY p.process_key
+                LIMIT 1
+                ",
+                active = status::sql_in_list(status::PROCESS_ACTIVE),
+                escaped = ProcessStatus::Escaped.as_str(),
+                ports = status::sql_in_list(status::PORT_OPEN),
+            ),
             params![service_instance_id],
-            |row| row.get::<_, String>(0),
+            |row| row.get(0),
         )
         .optional()
-        .map_err(sql_error)?;
-    refuse_active_service(service_instance_id, existing)
+        .map_err(sql_error)
 }
 
 fn refuse_active_service(service_instance_id: &str, existing: Option<String>) -> RuntimeResult<()> {
     if let Some(status) = existing {
-        if ServiceStatus::from_db(&status).is_some_and(|status| !status.is_active()) {
-            return Ok(());
-        }
         Err(RuntimeError::new(
             ErrorCode::ModelAdmission,
-            format!(
-                "service reuse is unsupported; service instance {service_instance_id} is {status}"
-            ),
+            format!("service instance {service_instance_id} has actionable process {status}"),
         ))
     } else {
         Ok(())
@@ -2214,79 +2221,6 @@ pub fn service_lifetime_as_str(lifetime: ServiceLifetime) -> &'static str {
         ServiceLifetime::UntilIdle => "until-idle",
         ServiceLifetime::PersistentUntilDown => "persistent-until-down",
     }
-}
-
-fn refresh_service_borrow_status(
-    transaction: &rusqlite::Transaction<'_>,
-    service_instance_id: &str,
-) -> RuntimeResult<()> {
-    let row = transaction
-        .query_row(
-            &format!(
-                "
-            SELECT s.status, s.service_lifetime, p.run_id
-            FROM services s
-            LEFT JOIN processes p
-              ON p.service_instance_id = s.service_instance_id
-             AND p.status IN ({})
-            WHERE s.service_instance_id = ?1
-            ORDER BY p.process_key
-            LIMIT 1
-            ",
-                status::sql_in_list(status::PROCESS_ACTIVE)
-            ),
-            params![service_instance_id],
-            |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, Option<String>>(2)?,
-                ))
-            },
-        )
-        .optional()
-        .map_err(sql_error)?;
-    let Some((raw_status, service_lifetime, owner_run_id)) = row else {
-        return Ok(());
-    };
-    let current = ServiceStatus::parse_db(&raw_status)?;
-    if !matches!(
-        current,
-        ServiceStatus::ProbeReady | ServiceStatus::Standing | ServiceStatus::Borrowed
-    ) {
-        return Ok(());
-    }
-    let owner_run_id = owner_run_id.unwrap_or_default();
-    let borrower_count: i64 = transaction
-        .query_row(
-            &format!(
-                "
-            SELECT count(*)
-            FROM run_leases
-            WHERE service_instance_id = ?1
-              AND run_id != ?2
-              AND status IN ({})
-            ",
-                status::sql_in_list(status::LEASE_OPEN)
-            ),
-            params![service_instance_id, owner_run_id],
-            |row| row.get(0),
-        )
-        .map_err(sql_error)?;
-    let next_status = if borrower_count > 0 {
-        ServiceStatus::Borrowed
-    } else if service_lifetime == service_lifetime_as_str(ServiceLifetime::RunScoped) {
-        ServiceStatus::ProbeReady
-    } else {
-        ServiceStatus::Standing
-    };
-    transaction
-        .execute(
-            "UPDATE services SET status = ?2 WHERE service_instance_id = ?1",
-            params![service_instance_id, next_status.as_str()],
-        )
-        .map_err(sql_error)?;
-    Ok(())
 }
 
 fn sql_error(error: rusqlite::Error) -> RuntimeError {

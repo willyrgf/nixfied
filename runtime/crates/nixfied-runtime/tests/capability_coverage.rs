@@ -80,7 +80,7 @@ fn capability_descriptor_names_every_wire_field() {
 }
 
 #[test]
-fn capability_descriptor_rejects_removed_cache_and_port_status_vocabulary() {
+fn capability_descriptor_rejects_removed_contract_vocabulary() {
     for removed in [
         "cacheEnv",
         "CacheEnvSpec",
@@ -91,6 +91,9 @@ fn capability_descriptor_rejects_removed_cache_and_port_status_vocabulary() {
         "binding",
         "bound",
         "lease-fencing",
+        "ServiceStatus",
+        "serviceStatus",
+        "endpoint_json",
     ] {
         assert!(
             !CAPABILITY_DESCRIPTOR.split_whitespace().any(|token| {

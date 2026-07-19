@@ -146,13 +146,11 @@ pub struct RegistryServiceRow<'a> {
     pub runtime_compatibility_hash: &'a str,
     pub target_identity_hash: &'a str,
     pub service_lifetime: ServiceLifetime,
-    pub status: &'a str,
-    pub endpoint_json: &'a str,
     pub state_root: &'a str,
 }
 
 impl<'a> RegistryServiceRow<'a> {
-    pub fn synthetic(service_instance_id: &'a str, status: &'a str, state_root: &'a str) -> Self {
+    pub fn synthetic(service_instance_id: &'a str, state_root: &'a str) -> Self {
         Self {
             service_instance_id,
             environment: "dev",
@@ -164,8 +162,6 @@ impl<'a> RegistryServiceRow<'a> {
             runtime_compatibility_hash: "runtime",
             target_identity_hash: "target",
             service_lifetime: ServiceLifetime::RunScoped,
-            status,
-            endpoint_json: "{}",
             state_root,
         }
     }
@@ -179,9 +175,9 @@ pub fn insert_registry_service(registry: &mut Registry, row: &RegistryServiceRow
             INSERT INTO services (
               service_instance_id, environment, slot, service_name,
               service_address_hash, endpoint_identity_hash, state_identity_hash,
-              runtime_compatibility_hash, target_identity_hash, service_lifetime, status,
-              endpoint_json, state_root
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+              runtime_compatibility_hash, target_identity_hash, service_lifetime,
+              state_root
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
             ",
             params![
                 row.service_instance_id,
@@ -194,8 +190,6 @@ pub fn insert_registry_service(registry: &mut Registry, row: &RegistryServiceRow
                 row.runtime_compatibility_hash,
                 row.target_identity_hash,
                 service_lifetime_wire(row.service_lifetime),
-                row.status,
-                row.endpoint_json,
                 row.state_root,
             ],
         )

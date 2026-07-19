@@ -19,7 +19,7 @@ use crate::control::reconcile_registry;
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::execution::{ExecProbe, ExecService, OpMeta, Probe, StdinPolicy};
 use crate::redaction::{RedactedLogRelays, Redactor, child_output};
-use crate::registry::status::{self, DbStatus, PortStatus, ServiceStatus};
+use crate::registry::status::{self, DbStatus, PortStatus, ProcessStatus};
 use crate::registry::{Registry, RunLeaseHeartbeat};
 use crate::service::endpoint::{
     EndpointFailure, EndpointLockGuards, EndpointOwnership, ExpectedOwner, ListenerRecord,
@@ -270,7 +270,7 @@ impl StartedService {
     }
 
     fn ensure_start_process_live(&mut self) -> RuntimeResult<()> {
-        if let Some(error) = self.escape_error_unrecorded() {
+        if let Some(error) = self.escape_error() {
             return Err(error);
         }
         if let Some(status) = self.child_mut()?.try_wait().map_err(|error| {
@@ -449,32 +449,9 @@ impl StartedService {
         error: RuntimeError,
     ) -> RuntimeError {
         if let Err(termination_error) = self.terminate_after_failure(timeout_ms) {
-            let start_identity = self.escape_start_identity();
-            let payload = serde_json::json!({
-                "pid": self.pid,
-                "pgid": self.pgid,
-                "errorCode": error.code,
-                "message": error.message.as_str(),
-                "terminationError": termination_error.message.as_str(),
-            })
-            .to_string();
-            let _ = mark_process_escape(
-                registry,
-                &self.process_key,
-                &self.run_id,
-                &self.service_instance_id,
-                &self.computed_model_hash,
-                &start_identity,
-                &payload,
-            );
+            let escape = self.settle_escape(registry, &error, &termination_error);
             self.startup_guards.take();
-            return RuntimeError::new(
-                ErrorCode::ProcEscape,
-                format!(
-                    "failed to prove termination of service process tree rooted at {}: {}",
-                    self.pid, termination_error.message
-                ),
-            );
+            return escape;
         }
         if let Some(child) = &mut self.child {
             let _ = wait_for_child_exit(child, 1000);
@@ -547,7 +524,10 @@ impl StartedService {
             &self.computed_model_hash,
             &payload,
         )?;
-        self.terminate_owned(timeout_ms)?;
+        if let Err(termination_error) = self.terminate_owned(timeout_ms) {
+            let cancellation = RuntimeError::new(ErrorCode::Canceled, reason);
+            return Err(self.settle_escape(registry, &cancellation, &termination_error));
+        }
         let _ = wait_for_child_exit(self.child_mut()?, 1000)?;
         if let Some(monitor) = &mut self.monitor {
             monitor.stop();
@@ -658,7 +638,7 @@ impl StartedService {
             Ok(escalated) => escalated,
             Err(error) => {
                 let _ = record_lifecycle_failure(registry, &context, &stop_record, &error);
-                return Err(error);
+                return Err(self.settle_escape(registry, &error, &error));
             }
         };
         self.record_stop_signaled(registry, escalated, stop_timeout);
@@ -730,6 +710,48 @@ impl StartedService {
             self.pid, self.pgid, escaped_pids
         );
         Some(RuntimeError::new(ErrorCode::ProcEscape, message))
+    }
+
+    fn settle_escape(
+        &mut self,
+        registry: &mut Registry,
+        operation_error: &RuntimeError,
+        termination_error: &RuntimeError,
+    ) -> RuntimeError {
+        let start_identity = self.escape_start_identity();
+        let payload = serde_json::json!({
+            "pid": self.pid,
+            "pgid": self.pgid,
+            "errorCode": operation_error.code,
+            "message": operation_error.message.as_str(),
+            "terminationError": termination_error.message.as_str(),
+        })
+        .to_string();
+        let process = ProcessRecord {
+            process_key: &self.process_key,
+            pid: self.pid,
+            pgid: self.pgid,
+            start_identity: &start_identity,
+            command_json: "{}",
+            run_id: &self.run_id,
+            service_instance_id: &self.service_instance_id,
+        };
+        match mark_process_escape(
+            registry,
+            &process,
+            &self.computed_model_hash,
+            self.platform_start_identity.as_deref(),
+            &payload,
+        ) {
+            Ok(()) => RuntimeError::new(
+                ErrorCode::ProcEscape,
+                format!(
+                    "failed to prove termination of service process tree rooted at {}: {}",
+                    self.pid, termination_error.message
+                ),
+            ),
+            Err(settlement_error) => settlement_error,
+        }
     }
 
     /// Record honest evidence of the stop mechanism that actually ran — the
@@ -822,25 +844,6 @@ impl StartedService {
         }
     }
 
-    fn escape_error_unrecorded(&self) -> Option<RuntimeError> {
-        let monitor = self.monitor.as_ref()?;
-        let escaped = monitor.escaped_descendants();
-        if escaped.is_empty() {
-            return None;
-        }
-        let escaped_pids = escaped
-            .iter()
-            .map(|process| process.pid)
-            .collect::<Vec<_>>();
-        Some(RuntimeError::new(
-            ErrorCode::ProcEscape,
-            format!(
-                "service process {} has escaped descendants outside pgid {}: {:?}",
-                self.pid, self.pgid, escaped_pids
-            ),
-        ))
-    }
-
     fn escape_start_identity(&mut self) -> String {
         if let Some(monitor) = &mut self.monitor {
             monitor.stop();
@@ -850,12 +853,11 @@ impl StartedService {
             .as_ref()
             .map(ProcessMonitor::known_descendants)
             .unwrap_or_default();
-        let tracked = tracked_process_snapshot(self.pid, &known);
-        process_start_identity(
+        process_escape_start_identity(
             self.pid,
             self.pgid,
             self.platform_start_identity.as_deref(),
-            &tracked,
+            &known,
         )
     }
 }
@@ -1323,7 +1325,6 @@ pub fn start_service_for_slot(
         service_address_hash: &address_hash,
         identity: &service.identity,
         service_lifetime: selection.service_lifetime,
-        endpoint_json: "null",
         state_root: &placement.state_root,
     };
     refuse_nonreusable_local_service(registry, &service_record, service, &selected_endpoints)?;
@@ -1443,11 +1444,6 @@ pub fn start_service_for_slot(
     })
     .map_err(|error| RuntimeError::new(ErrorCode::ModelAdmission, error.to_string()))
     .map_err(|error| settle_reserved_failure(registry, &run_id, &service_instance_id, error))?;
-    // `null` for an endpoint-less service: durable evidence records the absence
-    // of an addressability claim, not a fabricated endpoint.
-    let endpoint_json = serde_json::to_string(&selected_endpoint)
-        .map_err(|error| RuntimeError::new(ErrorCode::ModelAdmission, error.to_string()))
-        .map_err(|error| settle_reserved_failure(registry, &run_id, &service_instance_id, error))?;
     let redactor = Redactor::from_secrets(&admission.secrets);
     let (stdout, stderr, mut log_relays) =
         if matches!(selection.service_lifetime, ServiceLifetime::RunScoped) {
@@ -1554,7 +1550,6 @@ pub fn start_service_for_slot(
             service_address_hash: &address_hash,
             identity: &service.identity,
             service_lifetime: selection.service_lifetime,
-            endpoint_json: &endpoint_json,
             state_root: &placement.state_root,
         },
         &ProcessRecord {
@@ -1717,7 +1712,7 @@ fn refuse_nonreusable_local_service(
         ));
     }
     let Some(process) = snapshot.process.as_ref() else {
-        if stored_service.status.is_active() || !snapshot.endpoints.is_empty() {
+        if !snapshot.endpoints.is_empty() {
             return Err(RuntimeError::new(
                 ErrorCode::RegistryCorrupt,
                 format!(
@@ -1873,12 +1868,6 @@ fn borrow_reusable_service(
     let Some(service_row) = &snapshot.service else {
         return Ok(None);
     };
-    if !matches!(
-        service_row.status,
-        ServiceStatus::ProbeReady | ServiceStatus::Standing | ServiceStatus::Borrowed
-    ) {
-        return Ok(None);
-    }
     if service_row.service_name != request.service_name
         || service_row.service_address_hash != request.address_hash
         || service_row.endpoint_identity_hash != request.service.identity.endpoint_identity_hash
@@ -1893,7 +1882,7 @@ fn borrow_reusable_service(
     let Some(process_row) = snapshot.process.as_ref() else {
         return Ok(None);
     };
-    if !status::PROCESS_ACTIVE.contains(&process_row.status) {
+    if process_row.status != ProcessStatus::Ready {
         return Ok(None);
     }
     if !process_is_live_with_identity(
@@ -1947,7 +1936,6 @@ fn borrow_reusable_service(
         service_address_hash: request.address_hash,
         identity: &request.service.identity,
         service_lifetime: service_row.service_lifetime,
-        endpoint_json: "null",
         state_root: &request.placement.state_root,
     };
     let borrowed = record_service_borrow(
@@ -2997,6 +2985,16 @@ fn tracked_process_snapshot(
             .or_insert(observed);
     }
     tracked.into_values().collect()
+}
+
+pub(crate) fn process_escape_start_identity(
+    pid: u32,
+    pgid: i32,
+    platform_start: Option<&str>,
+    existing: &[TrackedProcessIdentity],
+) -> String {
+    let tracked = tracked_process_snapshot(pid, existing);
+    process_start_identity(pid, pgid, platform_start, &tracked)
 }
 
 fn escaped_descendants(pid: u32, expected_pgid: i32) -> RuntimeResult<Vec<u32>> {

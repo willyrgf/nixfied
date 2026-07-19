@@ -62,6 +62,8 @@ output-schema run-task: taskId stepPath processKey exitCode timedOut canceled su
 output-schema run-node: nodeId taskId success exitCode durationMs stdoutPath stderrPath summaryPath
 output-schema run-service: serviceId serviceInstanceId processKey selectedEndpoint?
 output-schema selected-endpoint: endpointId host port
+output-schema ps-json: processes
+output-schema ps-process: processKey runId serviceInstanceId? pid pgid registryStatus reconciledStatus serviceLifetime? borrowerCount live
 output-schema runtime-error-port-conflict: portConflict
 output-schema port-conflict: reason projectId endpoint nixfiedOwner?
 output-schema port-conflict-endpoint: transport family address port endpointId
@@ -76,6 +78,7 @@ output-schema run-error-summary-text: error
 endpoint-acquisition: fixed-euid-startup-lock exact-bind-preflight linux-sock-diag macos-pcblist-n socket-steady-state
 endpoint-reuse: exact-listener process-identity containment complete-active-endpoint-set guarded-cas
 lease-authority: open-lease-blocks-replacement exact-reuse-adds-borrower expired-processless-reservation-reconciled
+escape-settlement: exact-process-identity expected-active-prestate atomic-process-run-event ports-retained affected-row-validation
 escaped-port-reconciliation: escaped-plus-open-port unresolved ps-visible down-actionable cleanup-blocked release-after-death-proof
 
 # The closed stop signals the runtime can send.
@@ -98,7 +101,6 @@ enum PersistencePolicy: run-scoped persistent
 
 # The typed registry status domains and their wire values.
 status RunStatus: service-starting canceling canceled completed task-succeeded task-failed service-failed proc-escaped stale
-status ServiceStatus: starting probe-ready standing borrowed stopped canceled failed escaped stale
 status ProcessStatus: starting running ready stopped succeeded failed canceled escaped stale
 status RunLeaseStatus: active canceling canceled completed failed stale
 status PortStatus: reserved active released stale

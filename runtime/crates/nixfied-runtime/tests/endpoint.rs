@@ -337,20 +337,20 @@ fn active_borrower_blocks_nonreusable_service_without_signaling_owner() {
 
     let registry = find_named(&root, "registry.sqlite3").expect("registry should exist");
     let connection = rusqlite::Connection::open(registry).expect("registry should open");
-    let state: (String, String, String) = connection
+    let state: (String, String) = connection
         .query_row(
             "
-            SELECT s.status, p.status, l.status
+            SELECT p.status, l.status
             FROM services s
             JOIN processes p ON p.service_instance_id = s.service_instance_id
             JOIN run_leases l ON l.service_instance_id = s.service_instance_id
             WHERE p.process_key = ?1 AND l.run_id = 'run-active-borrower'
             ",
             [&owner_process_key],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .expect("blocked ownership evidence should remain unchanged");
-    assert_eq!(state, ("borrowed".into(), "ready".into(), "active".into()));
+    assert_eq!(state, ("ready".into(), "active".into()));
     connection
         .execute(
             "UPDATE run_leases SET status = 'completed' WHERE run_id = 'run-active-borrower'",
@@ -397,7 +397,7 @@ fn live_starting_service_is_not_promoted_or_borrowed() {
         .unwrap()
         .to_string();
     let owner_pid = process_pid(&root, &first_process);
-    force_live_starting_without_open_lease(&root);
+    force_live_starting_process_without_open_lease(&root);
 
     let second = run_command(&model, &root).output().unwrap();
     assert_error_code(&second, "PORT_UNVERIFIABLE", 24);
@@ -408,23 +408,20 @@ fn live_starting_service_is_not_promoted_or_borrowed() {
     );
     let registry = find_named(&root, "registry.sqlite3").expect("registry should exist");
     let connection = rusqlite::Connection::open(registry).expect("registry should open");
-    let evidence: (String, String, String) = connection
+    let evidence: (String, String) = connection
         .query_row(
             "
-            SELECT s.status, p.status, o.status
+            SELECT p.status, o.status
             FROM services s
             JOIN processes p ON p.service_instance_id = s.service_instance_id
             JOIN ports o ON o.owner_process_key = p.process_key
             WHERE p.process_key = ?1
             ",
             [&first_process],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .expect("Starting evidence should remain unchanged");
-    assert_eq!(
-        evidence,
-        ("starting".into(), "ready".into(), "active".into())
-    );
+    assert_eq!(evidence, ("starting".into(), "active".into()));
     drop(connection);
     assert_success(
         &down_command(&model, &root).output().unwrap(),
@@ -733,13 +730,16 @@ fn find_named(root: &Path, name: &str) -> Option<PathBuf> {
     None
 }
 
-fn force_live_starting_without_open_lease(root: &Path) {
+fn force_live_starting_process_without_open_lease(root: &Path) {
     let registry = find_named(root, "registry.sqlite3").expect("registry should exist");
     let connection = rusqlite::Connection::open(registry).expect("registry should open");
     assert_eq!(
         connection
-            .execute("UPDATE services SET status = 'starting'", [])
-            .expect("service should enter simulated Starting state"),
+            .execute(
+                "UPDATE processes SET status = 'starting' WHERE service_instance_id IS NOT NULL AND status = 'ready'",
+                [],
+            )
+            .expect("process should enter simulated Starting state"),
         1
     );
     assert!(

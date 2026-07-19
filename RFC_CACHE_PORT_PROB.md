@@ -541,10 +541,11 @@ then prove ownership against the recorded PID/process group/start identity.
 Matching registry endpoint rows and a live process alone are insufficient. A
 service proven live, endpoint-owning, and
 otherwise reusable under `SVC-ID-1` is guarded-borrowed transactionally and does
-not take a startup lock. The borrow transaction accepts the reusable
-`probe-ready`, `standing`, and `borrowed` statuses while requiring the same
-primary process identity and complete active endpoint set. A missing or
-proven-wrong listener prevents reuse and is never silently accepted.
+not take a startup lock. The borrow transaction requires a `ready` primary
+process with the same identity and complete active endpoint set. Standing and
+borrowing derive from service lifetime and owner/borrower leases rather than a
+separate service status. A missing or proven-wrong listener prevents reuse and
+is never silently accepted.
 
 The primary process `runId` identifies the owner lease; other open leases for
 that service are borrowers. Exact healthy reuse may add a borrower while any of
@@ -555,18 +556,19 @@ no process owner is handled by ordinary reconciliation, which stales its run
 lease and any owner-less reserved ports transactionally. This applies equally
 to endpoint-less reservations, which have no port rows.
 
-The guarded borrow transaction MUST insert a borrower lease only while a
-reusable service status, primary process identity, and complete active endpoint
-set still match the candidate just observed. It is the only acquisition
-transaction that may admit an existing service.
+The guarded borrow transaction MUST insert a borrower lease only while the
+immutable service identity metadata, ready primary process identity, and
+complete active endpoint set still match the candidate just observed. It is the
+only acquisition transaction that may admit an existing service.
 
 If exact reuse does not commit, the runtime acquires every startup lock,
 reconciles ordinary stale evidence, and retries exact reuse once. Any remaining
 live or otherwise nonterminal local evidence blocks replacement without a
 signal: an open lease is `LEASE_CONFLICT`, a missing or unprovable expected
 listener is `PORT_UNVERIFIABLE`, and an observed outside listener is
-`PORT_CONFLICT`. A live `starting` row is never promoted or borrowed. A broken
-persistent service therefore requires explicit `down`, followed by a new run.
+`PORT_CONFLICT`. A live `starting` process row is never promoted or borrowed. A
+broken persistent service therefore requires explicit `down`, followed by a new
+run.
 
 The durable composite `escaped` process plus an open port remains unresolved
 resource ownership. The shared reconciliation/control query includes it for
@@ -600,10 +602,10 @@ following sequence:
    distinct conflicting record has a visible outside holder. Complete
    observation with a missing exact listener remains pending and ends as
    `READINESS_TIMEOUT` when the budget is exhausted.
-10. In one transaction, mark every endpoint active, the process ready, the
-    service probe-ready, record ready lifecycle success, and append the
-    ownership/readiness events. Validate expected keys, prior statuses, and
-    affected-row counts; no partial endpoint-ready state is committed.
+10. In one transaction, mark every endpoint active and the process ready, record
+    ready lifecycle success, and append the ownership/readiness events. Validate
+    expected keys, prior statuses, and affected-row counts; no partial
+    endpoint-ready state is committed.
 11. Release all startup locks.
 
 Every failure path MUST release acquired locks. Lock lifetime SHOULD be expressed
@@ -621,10 +623,13 @@ after spawn terminates and confirms the owned group before those releases. A
 primary cancellation with proven cleanup returns `CANCELED`; a later
 cancellation does not replace an already-proven non-cancellation failure; and
 unproven termination returns `PROC_ESCAPE` with reservations preserved,
-overriding cancellation or the original startup error. Pre-child prepare/spawn
-failure uses the same outcome-aware settlement transaction but records lease
-`failed` and run `service-failed`. No second cancellation or timeout concept is
-added.
+overriding cancellation or the original startup error only after one transaction
+matches the exact active process identity, updates process and run evidence,
+retains open ports, and appends the redacted event. If that transaction cannot
+commit, its registry error is returned instead of `PROC_ESCAPE`. Pre-child
+prepare/spawn failure uses the same outcome-aware settlement transaction but
+records lease `failed` and run `service-failed`. No second cancellation or
+timeout concept is added.
 
 The existing fail-only port policy remains unchanged. The runtime MUST NOT pick a
 different port after a conflict.
@@ -1071,7 +1076,8 @@ Framework acceptance tests MUST prove:
     missing or proven-wrong listener preserves the process and fails without a
     signal. An open owner or borrower lease produces `LEASE_CONFLICT`; missing
     or unprovable ownership is `PORT_UNVERIFIABLE`; an observed outside listener
-    is `PORT_CONFLICT`. A live `starting` row is neither promoted nor borrowed.
+    is `PORT_CONFLICT`. A live `starting` process row is neither promoted nor
+    borrowed.
     Explicit `down` terminates the preserved process, after which retry succeeds.
 16. Unverifiable listener inspection preserves the live process and
     reservations, returns `PORT_UNVERIFIABLE`, blocks replacement, and still
@@ -1080,7 +1086,9 @@ Framework acceptance tests MUST prove:
     locking/during prepare/after process recording/during readiness all release
     every startup lock after terminating any created child. Pre-child
     cancellation records canceled rather than failed lease/run evidence;
-    unproven termination returns `PROC_ESCAPE` and preserves reservations.
+    unproven termination returns `PROC_ESCAPE` and preserves reservations only
+    after exact atomic escape evidence commits; registry failure takes
+    precedence otherwise.
 18. A temporary preflight bind failure with no observed conflicting `LISTEN`
     socket, including a synthetic residual-kernel-state case, produces
     `PORT_UNVERIFIABLE` rather than a guessed owner or `PORT_CONFLICT`.

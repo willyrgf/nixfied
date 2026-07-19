@@ -179,6 +179,10 @@ Every runtime action is scoped by `projectId / environment / slot / runId`.
 - **Registry-only evidence fails closed.** A live reservation lease without a
   process is `LEASE_CONFLICT`; a post-reconcile row with neither a valid lease
   nor a valid process is `REGISTRY_CORRUPT`.
+- **Service state is derived.** The `services` row stores identity, lifetime,
+  and state-root metadata; process readiness comes from the primary process and
+  active ports, while standing and borrowing derive from owner/borrower leases.
+  `ps` projects those facts without a separately persisted service status.
 - **Leases split three ways** — `run-scoped`, `until-idle`, `persistent-until-down`
   — because no daemon is guaranteed; reference counts derive from live borrower
   leases, never an independently mutated counter. `until-idle` services are
@@ -228,8 +232,10 @@ Every runtime action is scoped by `projectId / environment / slot / runId`.
   process group; cancellation propagates to the whole group; a process counts as
   started only after a registry record exists. A supervisor whose children form
   their own groups uses `process-tree` containment. Daemonization/double-fork
-  without a stable handoff is refused as `PROC_ESCAPE`. (v1: containment differed
-  by platform with no single owner.)
+  without a stable handoff is refused as `PROC_ESCAPE`, but only after an exact
+  process/run/event transaction durably records the escape while retaining open
+  ports; registry failure takes precedence. (v1: containment differed by platform
+  with no single owner.)
 
 ## Secrets
 

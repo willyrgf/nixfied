@@ -8,18 +8,18 @@ use serde::Serialize;
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::registry::status::{
-    self, DbStatus, PortStatus, ProcessStatus, RunLeaseStatus, RunStatus, ServiceStatus,
+    self, DbStatus, PortStatus, ProcessStatus, RunLeaseStatus, RunStatus,
 };
 use crate::registry::{Registry, RegistryIdentity};
 use crate::service::StoredProcessIdentity;
 use crate::service::process::{
-    process_group_has_live_member, process_is_live_with_identity,
+    process_escape_start_identity, process_group_has_live_member, process_is_live_with_identity,
     process_is_live_with_start_identity, signal_process_group,
     terminate_process_tree_with_snapshot,
 };
 use crate::service::registry::{
-    TaskTerminalStatus, mark_service_stopped, mark_task_finished, release_unresolved_escape_ports,
-    service_lifetime_as_str,
+    ProcessRecord, TaskTerminalStatus, mark_process_escape, mark_service_stopped,
+    mark_task_finished, release_unresolved_escape_ports, service_lifetime_as_str,
 };
 use crate::state::{CleanupMode, CleanupOutcome, StateIdentity, clean_marked_state};
 
@@ -39,7 +39,6 @@ pub struct ProcessObservation {
     pub pgid: i32,
     pub registry_status: String,
     pub reconciled_status: String,
-    pub service_status: Option<String>,
     pub service_lifetime: Option<String>,
     pub borrower_count: i64,
     pub live: bool,
@@ -73,9 +72,7 @@ pub fn reconcile_registry(registry: &mut Registry) -> RuntimeResult<PsReport> {
     }
     reconcile_expired_run_leases(registry)?;
     reconcile_stale_port_reservations(registry)?;
-    reconcile_service_lifetime_statuses(registry)?;
     reconcile_until_idle_services(registry)?;
-    reconcile_service_lifetime_statuses(registry)?;
 
     let rows = process_rows(registry)?;
     let mut observations = Vec::with_capacity(rows.len());
@@ -105,7 +102,6 @@ pub fn reconcile_registry(registry: &mut Registry) -> RuntimeResult<PsReport> {
             pgid: row.pgid,
             registry_status: row.status,
             reconciled_status,
-            service_status: row.service_status,
             service_lifetime: row.service_lifetime,
             borrower_count,
             live,
@@ -192,17 +188,20 @@ pub fn down_processes(
             stopped.push(row.process_key);
             continue;
         }
-        signal_process_group(row.pgid, libc::SIGTERM)?;
-        if row.wait_until_process_group_empty(timeout_ms)? {
-            settle_down_process(registry, &row)?;
-            stopped.push(row.process_key);
-            continue;
-        }
-        signal_process_group(row.pgid, libc::SIGKILL)?;
-        if !row.wait_until_process_group_empty(1000)? {
-            return Err(RuntimeError::new(
-                ErrorCode::ProcEscape,
-                format!("failed to stop owned process group {}", row.pgid),
+        let escape_start_identity = row.service_instance_id.as_ref().map(|_| {
+            process_escape_start_identity(
+                row.pid,
+                row.pgid,
+                row.start_identity.platform_start.as_deref(),
+                &row.start_identity.tracked_processes,
+            )
+        });
+        if let Err(error) = terminate_active_process(&row, timeout_ms) {
+            return Err(settle_control_escape(
+                registry,
+                &row,
+                escape_start_identity.as_deref(),
+                error,
             ));
         }
         settle_down_process(registry, &row)?;
@@ -233,7 +232,6 @@ struct ProcessRow {
     service_instance_id: Option<String>,
     status: String,
     computed_model_hash: String,
-    service_status: Option<String>,
     service_lifetime: Option<String>,
     unresolved_escape: bool,
 }
@@ -311,6 +309,68 @@ impl ProcessRow {
     }
 }
 
+fn terminate_active_process(row: &ProcessRow, timeout_ms: u64) -> RuntimeResult<()> {
+    signal_process_group(row.pgid, libc::SIGTERM)?;
+    if row.wait_until_process_group_empty(timeout_ms)? {
+        return Ok(());
+    }
+    signal_process_group(row.pgid, libc::SIGKILL)?;
+    if row.wait_until_process_group_empty(1000)? {
+        Ok(())
+    } else {
+        Err(RuntimeError::new(
+            ErrorCode::ProcEscape,
+            format!("failed to stop owned process group {}", row.pgid),
+        ))
+    }
+}
+
+fn settle_control_escape(
+    registry: &mut Registry,
+    row: &ProcessRow,
+    start_identity: Option<&str>,
+    termination_error: RuntimeError,
+) -> RuntimeError {
+    let (Some(service_instance_id), Some(start_identity)) =
+        (row.service_instance_id.as_deref(), start_identity)
+    else {
+        return termination_error;
+    };
+    let payload = serde_json::json!({
+        "pid": row.pid,
+        "pgid": row.pgid,
+        "errorCode": termination_error.code,
+        "message": termination_error.message.as_str(),
+        "terminationError": termination_error.message.as_str(),
+    })
+    .to_string();
+    let process = ProcessRecord {
+        process_key: &row.process_key,
+        pid: row.pid,
+        pgid: row.pgid,
+        start_identity,
+        command_json: &row.command_json,
+        run_id: &row.run_id,
+        service_instance_id,
+    };
+    match mark_process_escape(
+        registry,
+        &process,
+        &row.computed_model_hash,
+        row.start_identity.platform_start.as_deref(),
+        &payload,
+    ) {
+        Ok(()) => RuntimeError::new(
+            ErrorCode::ProcEscape,
+            format!(
+                "failed to prove termination of service process group {}: {}",
+                row.pgid, termination_error.message
+            ),
+        ),
+        Err(settlement_error) => settlement_error,
+    }
+}
+
 fn process_rows(registry: &Registry) -> RuntimeResult<Vec<ProcessRow>> {
     let mut statement = registry
         .connection()
@@ -319,9 +379,8 @@ fn process_rows(registry: &Registry) -> RuntimeResult<Vec<ProcessRow>> {
             SELECT
               p.process_key, p.pid, p.pgid, p.start_identity, p.command_json,
               p.run_id, p.service_instance_id, p.status, r.computed_model_hash,
-              s.status, s.service_lifetime,
+              s.service_lifetime,
               CASE WHEN p.status = '{escaped_process}'
-                         AND s.status = '{escaped_service}'
                          AND EXISTS (
                            SELECT 1 FROM ports ep
                            WHERE ep.service_instance_id = p.service_instance_id
@@ -335,7 +394,6 @@ fn process_rows(registry: &Registry) -> RuntimeResult<Vec<ProcessRow>> {
             ORDER BY p.process_key
             ",
             escaped_process = ProcessStatus::Escaped.as_str(),
-            escaped_service = ServiceStatus::Escaped.as_str(),
             open_ports = status::sql_in_list(status::PORT_OPEN),
         ))
         .map_err(sql_error)?;
@@ -353,8 +411,7 @@ fn process_rows(registry: &Registry) -> RuntimeResult<Vec<ProcessRow>> {
                 row.get::<_, String>(7)?,
                 row.get::<_, String>(8)?,
                 row.get::<_, Option<String>>(9)?,
-                row.get::<_, Option<String>>(10)?,
-                row.get::<_, i64>(11)? != 0,
+                row.get::<_, i64>(10)? != 0,
             ))
         })
         .map_err(sql_error)?
@@ -372,7 +429,6 @@ fn process_rows(registry: &Registry) -> RuntimeResult<Vec<ProcessRow>> {
                 service_instance_id,
                 status,
                 computed_model_hash,
-                service_status,
                 service_lifetime,
                 unresolved_escape,
             )| {
@@ -395,7 +451,6 @@ fn process_rows(registry: &Registry) -> RuntimeResult<Vec<ProcessRow>> {
                     service_instance_id,
                     status,
                     computed_model_hash,
-                    service_status,
                     service_lifetime,
                     unresolved_escape,
                 })
@@ -414,12 +469,6 @@ fn mark_process_stale(registry: &mut Registry, row: &ProcessRow) -> RuntimeResul
         )
         .map_err(sql_error)?;
     if let Some(service_instance_id) = row.service_instance_id.as_deref() {
-        transaction
-            .execute(
-                "UPDATE services SET status = ?2 WHERE service_instance_id = ?1",
-                params![service_instance_id, ServiceStatus::Stale.as_str()],
-            )
-            .map_err(sql_error)?;
         transaction
             .execute(
                 &format!(
@@ -555,49 +604,6 @@ fn active_port_rows(registry: &Registry) -> RuntimeResult<Vec<PortRow>> {
         .map_err(sql_error)
 }
 
-fn reconcile_service_lifetime_statuses(registry: &mut Registry) -> RuntimeResult<()> {
-    let rows = process_rows(registry)?;
-    let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
-    for row in rows
-        .iter()
-        .filter(|row| is_active_status(&row.status))
-        .filter_map(|row| {
-            Some((
-                row.service_instance_id.as_deref()?,
-                row.run_id.as_str(),
-                row.service_status.as_deref()?,
-                row.service_lifetime.as_deref()?,
-            ))
-        })
-    {
-        let (service_instance_id, owner_run_id, raw_service_status, service_lifetime) = row;
-        let service_status = ServiceStatus::parse_db(raw_service_status)?;
-        if !matches!(
-            service_status,
-            ServiceStatus::ProbeReady | ServiceStatus::Standing | ServiceStatus::Borrowed
-        ) {
-            continue;
-        }
-        let borrower_count =
-            active_borrower_count_conn(&transaction, service_instance_id, owner_run_id)?;
-        let next_status = if borrower_count > 0 {
-            ServiceStatus::Borrowed
-        } else if service_lifetime == service_lifetime_as_str(ServiceLifetime::RunScoped) {
-            ServiceStatus::ProbeReady
-        } else {
-            ServiceStatus::Standing
-        };
-        transaction
-            .execute(
-                "UPDATE services SET status = ?2 WHERE service_instance_id = ?1",
-                params![service_instance_id, next_status.as_str()],
-            )
-            .map_err(sql_error)?;
-    }
-    transaction.commit().map_err(sql_error)?;
-    Ok(())
-}
-
 fn reconcile_until_idle_services(registry: &mut Registry) -> RuntimeResult<()> {
     let rows = process_rows(registry)?;
     for row in rows
@@ -621,15 +627,19 @@ fn reconcile_until_idle_services(registry: &mut Registry) -> RuntimeResult<()> {
             mark_process_stale(registry, &row)?;
             continue;
         }
-        signal_process_group(row.pgid, libc::SIGTERM)?;
-        if !row.wait_until_process_group_empty(1000)? {
-            signal_process_group(row.pgid, libc::SIGKILL)?;
-            if !row.wait_until_process_group_empty(1000)? {
-                return Err(RuntimeError::new(
-                    ErrorCode::ProcEscape,
-                    format!("failed to stop idle until-idle process group {}", row.pgid),
-                ));
-            }
+        let escape_start_identity = process_escape_start_identity(
+            row.pid,
+            row.pgid,
+            row.start_identity.platform_start.as_deref(),
+            &row.start_identity.tracked_processes,
+        );
+        if let Err(error) = terminate_active_process(&row, 1000) {
+            return Err(settle_control_escape(
+                registry,
+                &row,
+                Some(&escape_start_identity),
+                error,
+            ));
         }
         mark_stopped(registry, &row)?;
     }
