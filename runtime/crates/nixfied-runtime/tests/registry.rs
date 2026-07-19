@@ -125,37 +125,6 @@ fn appends_events_with_total_ordering() {
 }
 
 #[test]
-fn stale_sibling_fences_the_whole_run_token_without_refreshing_any_row() {
-    let tmp = TempDir::new();
-    let path = tmp.path.join("registry.sqlite3");
-    let identity = identity();
-    let mut registry = Registry::open_or_create(&path, &identity).expect("registry should open");
-    insert_run_for_heartbeat(&registry, "run-fenced");
-    for (service, status) in [("service-a", "stale"), ("service-b", "active")] {
-        registry
-            .connection()
-            .execute(
-                "
-                INSERT INTO run_leases (
-                  run_id, environment, slot, service_instance_id, owner_token,
-                  heartbeat_at, expires_at, status
-                ) VALUES (?1, 'dev', 0, ?2, 'owner-token',
-                          '2001-01-01T00:00:00.000Z', '2001-01-01T00:00:30.000Z', ?3)
-                ",
-                ("run-fenced", service, status),
-            )
-            .expect("lease should insert");
-    }
-    let before = heartbeat_rows(&registry, "run-fenced");
-
-    let error = heartbeat_run_lease(&mut registry, "run-fenced", "owner-token")
-        .expect_err("one stale sibling must fence the complete token");
-
-    assert_eq!(error.code, ErrorCode::LeaseStale);
-    assert_eq!(heartbeat_rows(&registry, "run-fenced"), before);
-}
-
-#[test]
 fn all_clean_terminal_siblings_allow_heartbeat_shutdown() {
     let tmp = TempDir::new();
     let path = tmp.path.join("registry.sqlite3");

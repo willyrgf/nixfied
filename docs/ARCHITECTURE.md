@@ -185,12 +185,11 @@ Every runtime action is scoped by `projectId / environment / slot / runId`.
   torn down lazily on the next runtime invocation after the last borrower is
   gone or stale; `persistent-until-down` services stand until `down` releases
   them. (v1: lease/refcount semantics assumed a daemon that didn't exist.)
-- **Repair fences finite owner tokens atomically.** An expired finite run token
-  stales all of its open sibling leases before any signal, and its heartbeat
-  then updates none and receives `LEASE_STALE`. Unexpired owners or borrowers
-  return `LEASE_CONFLICT`. The only durable exception is a completed or
-  task-succeeded `persistent-until-down` owner with its year-9999 lease and no
-  borrower; repair fences only that broken standing service.
+- **Open leases are replacement authority.** Exact healthy reuse may admit
+  another borrower while the owner and existing borrowers remain open. If the
+  service is not exactly reusable, any open owner or borrower lease returns
+  `LEASE_CONFLICT`; acquisition never mutates the lease or signals its process.
+  Expired process-less reservations are reclaimed by ordinary reconciliation.
 
 ## Ports, state, containment
 
@@ -207,14 +206,16 @@ Every runtime action is scoped by `projectId / environment / slot / runId`.
   steady-state ownership.
 - **Lock scope begins after slot preparation.** Marker adoption, epoch handling,
   registry opening, and mandatory reconciliation remain run-wide. Endpoint
-  locks begin only when service repair/new start is required and cover local
-  reservation, service prepare, spawn, and readiness.
-- **Listener loss does not make `ps` a repair worker.** `ps` remains process
-  liveness and never signals solely because an endpoint is missing. The next
-  mutating start may repair under endpoint locks. If termination cannot be
-  proven, process/service become terminal `Escaped` while open port rows remain
-  actionable to `ps`, `down`, and cleanup; only later OS death proof releases
-  those rows.
+  locks begin when the pre-lock exact-reuse attempt does not succeed and cover
+  the under-lock reuse check, local reservation, service prepare, spawn, and
+  readiness.
+- **Listener loss requires explicit teardown.** `ps` remains process liveness
+  and never signals solely because an endpoint is missing. Endpoint acquisition
+  also never signals a pre-existing process: missing or unprovable ownership is
+  `PORT_UNVERIFIABLE`, an outside listener is `PORT_CONFLICT`, and an open lease
+  is `LEASE_CONFLICT`. The recorded process and ownership evidence remain
+  actionable to `down` and cleanup; after explicit `down`, a later run may start
+  the replacement.
 - **State: marker-gated, path-confined cleanup.** Every owned state root carries a
   `.nixfied-state.json` marker. Cleanup canonicalizes first; refuses paths outside
   the state base, target symlinks, traversal escapes, unmarked roots, marker

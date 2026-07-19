@@ -89,8 +89,11 @@ deliberate change to the contract (and matching version bump + docs + tests):
   state identity, runtime compatibility hash, and target identity.
 - **PORT-1:** where a service declares endpoints, startup is serialized by a
   host endpoint lock and readiness requires exact, kernel-observed ownership of
-  every endpoint, not just an open port. Wildcard listeners conflict with an
-  exact endpoint but never satisfy it. An
+  every endpoint, not just an open port. Endpoint acquisition never signals a
+  pre-existing service to resolve a collision or ownership mismatch; a live
+  service that is not exactly reusable requires explicit `down` before
+  replacement. Wildcard listeners conflict with an exact endpoint but never
+  satisfy it. An
   endpoint-less service makes **no addressability claim at all** and nothing
   may rely on one (placeholders toward it are rejected in every scope, its
   probes must be invocations, its start closure must not attest

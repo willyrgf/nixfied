@@ -229,7 +229,7 @@ fn external_listener_fails_before_prepare_with_no_owner_attribution() {
 }
 
 #[test]
-fn completed_persistent_owner_with_lost_listener_is_repaired_before_replace() {
+fn lost_listener_is_preserved_until_explicit_down_then_retry_succeeds() {
     let _serial = ENDPOINT_TESTS.lock().unwrap();
     let Some(python) = nix_store_executable(&["python3"]) else {
         return;
@@ -254,24 +254,50 @@ fn completed_persistent_owner_with_lost_listener_is_repaired_before_replace() {
         .as_str()
         .unwrap()
         .to_string();
+    let owner_pid = process_pid(&root, &first_process);
     thread::sleep(Duration::from_millis(900));
 
-    let second = run_command(&model, &root).output().unwrap();
-    assert_success(&second, "persistent repair replacement");
-    let second_json: Value = serde_json::from_slice(&second.stdout).unwrap();
-    let second_process = second_json["services"][0]["processKey"].as_str().unwrap();
-    assert_ne!(
-        second_process, first_process,
-        "missing exact ownership must terminate-before-replace, never borrow"
+    let lease_blocked = run_command(&model, &root).output().unwrap();
+    assert_error_code(&lease_blocked, "LEASE_CONFLICT", 29);
+    assert_eq!(
+        unsafe { libc::kill(owner_pid, 0) },
+        0,
+        "an open owner lease must block without signaling the live process"
     );
+    mark_open_leases_stale(&root);
+
+    let ownership_blocked = run_command(&model, &root).output().unwrap();
+    let error = assert_error_code(&ownership_blocked, "PORT_UNVERIFIABLE", 24);
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains("missing its expected listener"),
+        "unexpected missing-listener error: {error:#}"
+    );
+    assert_eq!(
+        unsafe { libc::kill(owner_pid, 0) },
+        0,
+        "missing ownership must not trigger a replacement signal"
+    );
+
     assert_success(
         &down_command(&model, &root).output().unwrap(),
-        "replacement down",
+        "preserved owner down",
     );
+    let retry = run_command(&model, &root).output().unwrap();
+    assert_success(&retry, "retry after explicit down");
+    let retry_json: Value = serde_json::from_slice(&retry.stdout).unwrap();
+    assert_ne!(
+        retry_json["services"][0]["processKey"],
+        json!(first_process),
+        "retry after down must start a new process"
+    );
+    assert_success(&down_command(&model, &root).output().unwrap(), "retry down");
 }
 
 #[test]
-fn active_borrower_blocks_persistent_repair_without_signaling_owner() {
+fn active_borrower_blocks_nonreusable_service_without_signaling_owner() {
     let _serial = ENDPOINT_TESTS.lock().unwrap();
     let Some(python) = nix_store_executable(&["python3"]) else {
         return;
@@ -295,20 +321,18 @@ fn active_borrower_blocks_persistent_repair_without_signaling_owner() {
     thread::sleep(Duration::from_millis(900));
 
     let blocked = run_command(&model, &root).output().unwrap();
-    assert_eq!(blocked.status.code(), Some(29), "LEASE_CONFLICT exit code");
-    let error = stderr_json(&blocked.stderr);
-    assert_eq!(error["code"], json!("LEASE_CONFLICT"));
+    let error = assert_error_code(&blocked, "LEASE_CONFLICT", 29);
     assert!(
         error["message"]
             .as_str()
             .unwrap()
-            .contains("unexpired or non-fenceable lease"),
+            .contains("authoritative open lease"),
         "unexpected lease conflict: {error:#}"
     );
     assert_eq!(
         unsafe { libc::kill(owner_pid, 0) },
         0,
-        "repair refusal must not signal the tracked owner"
+        "replacement refusal must not signal the tracked owner"
     );
 
     let registry = find_named(&root, "registry.sqlite3").expect("registry should exist");
@@ -325,7 +349,7 @@ fn active_borrower_blocks_persistent_repair_without_signaling_owner() {
             [&owner_process_key],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
-        .expect("blocked repair evidence should remain unchanged");
+        .expect("blocked ownership evidence should remain unchanged");
     assert_eq!(state, ("borrowed".into(), "ready".into(), "active".into()));
     connection
         .execute(
@@ -347,7 +371,7 @@ fn active_borrower_blocks_persistent_repair_without_signaling_owner() {
 }
 
 #[test]
-fn crash_after_repair_claim_recovers_exact_starting_service_for_borrow() {
+fn live_starting_service_is_not_promoted_or_borrowed() {
     let _serial = ENDPOINT_TESTS.lock().unwrap();
     let Some(python) = nix_store_executable(&["python3"]) else {
         return;
@@ -372,24 +396,44 @@ fn crash_after_repair_claim_recovers_exact_starting_service_for_borrow() {
         .as_str()
         .unwrap()
         .to_string();
-    force_post_claim_starting(&root);
+    let owner_pid = process_pid(&root, &first_process);
+    force_live_starting_without_open_lease(&root);
 
     let second = run_command(&model, &root).output().unwrap();
-    assert_success(&second, "exact Starting recovery");
-    let second_json: Value = serde_json::from_slice(&second.stdout).unwrap();
+    assert_error_code(&second, "PORT_UNVERIFIABLE", 24);
     assert_eq!(
-        second_json["services"][0]["processKey"],
-        json!(first_process),
-        "an exact live Starting row should recover by guarded borrow"
+        unsafe { libc::kill(owner_pid, 0) },
+        0,
+        "a live Starting process must be preserved"
     );
+    let registry = find_named(&root, "registry.sqlite3").expect("registry should exist");
+    let connection = rusqlite::Connection::open(registry).expect("registry should open");
+    let evidence: (String, String, String) = connection
+        .query_row(
+            "
+            SELECT s.status, p.status, o.status
+            FROM services s
+            JOIN processes p ON p.service_instance_id = s.service_instance_id
+            JOIN ports o ON o.owner_process_key = p.process_key
+            WHERE p.process_key = ?1
+            ",
+            [&first_process],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("Starting evidence should remain unchanged");
+    assert_eq!(
+        evidence,
+        ("starting".into(), "ready".into(), "active".into())
+    );
+    drop(connection);
     assert_success(
         &down_command(&model, &root).output().unwrap(),
-        "recovered owner down",
+        "Starting owner down",
     );
 }
 
 #[test]
-fn crash_after_repair_claim_with_missing_listener_terminates_before_replace() {
+fn outside_listener_preserves_recorded_process_and_reports_conflict() {
     let _serial = ENDPOINT_TESTS.lock().unwrap();
     let Some(python) = nix_store_executable(&["python3"]) else {
         return;
@@ -414,20 +458,35 @@ fn crash_after_repair_claim_with_missing_listener_terminates_before_replace() {
         .as_str()
         .unwrap()
         .to_string();
+    let owner_pid = process_pid(&root, &first_process);
     thread::sleep(Duration::from_millis(900));
-    force_post_claim_starting(&root);
+    let external = TcpListener::bind(("127.0.0.1", port))
+        .expect("external listener should replace the service socket");
+    mark_open_leases_stale(&root);
 
-    let second = run_command(&model, &root).output().unwrap();
-    assert_success(&second, "broken Starting replacement");
-    let second_json: Value = serde_json::from_slice(&second.stdout).unwrap();
-    assert_ne!(
-        second_json["services"][0]["processKey"],
-        json!(first_process),
-        "a live Starting row missing its listener must terminate before replacement"
+    let blocked = run_command(&model, &root).output().unwrap();
+    let error = assert_port_conflict(&blocked, "listener-occupied", port);
+    assert!(
+        error["details"]["portConflict"]
+            .get("nixfiedOwner")
+            .is_none(),
+        "an external listener must not be attributed to the recorded service"
+    );
+    assert_eq!(
+        unsafe { libc::kill(owner_pid, 0) },
+        0,
+        "wrong listener ownership must not signal the recorded process"
     );
     assert_success(
         &down_command(&model, &root).output().unwrap(),
-        "replacement down",
+        "wrong-owner service down",
+    );
+    drop(external);
+    let retry = run_command(&model, &root).output().unwrap();
+    assert_success(&retry, "retry after wrong-owner down");
+    assert_success(
+        &down_command(&model, &root).output().unwrap(),
+        "wrong-owner retry down",
     );
 }
 
@@ -674,13 +733,13 @@ fn find_named(root: &Path, name: &str) -> Option<PathBuf> {
     None
 }
 
-fn force_post_claim_starting(root: &Path) {
+fn force_live_starting_without_open_lease(root: &Path) {
     let registry = find_named(root, "registry.sqlite3").expect("registry should exist");
     let connection = rusqlite::Connection::open(registry).expect("registry should open");
     assert_eq!(
         connection
             .execute("UPDATE services SET status = 'starting'", [])
-            .expect("service should enter simulated repair claim"),
+            .expect("service should enter simulated Starting state"),
         1
     );
     assert!(
@@ -689,9 +748,40 @@ fn force_post_claim_starting(root: &Path) {
                 "UPDATE run_leases SET status = 'stale' WHERE status IN ('active', 'canceling')",
                 [],
             )
-            .expect("claim should fence every open owner token")
+            .expect("test should close every owner token")
             >= 1
     );
+}
+
+fn process_pid(root: &Path, process_key: &str) -> libc::pid_t {
+    let registry = find_named(root, "registry.sqlite3").expect("registry should exist");
+    rusqlite::Connection::open(registry)
+        .expect("registry should open")
+        .query_row(
+            "SELECT pid FROM processes WHERE process_key = ?1",
+            [process_key],
+            |row| row.get(0),
+        )
+        .expect("process pid should query")
+}
+
+fn mark_open_leases_stale(root: &Path) {
+    let registry = find_named(root, "registry.sqlite3").expect("registry should exist");
+    rusqlite::Connection::open(registry)
+        .expect("registry should open")
+        .execute(
+            "UPDATE run_leases SET status = 'stale' WHERE status IN ('active', 'canceling')",
+            [],
+        )
+        .expect("test should close open leases");
+}
+
+fn assert_error_code(output: &Output, code: &str, exit_code: i32) -> Value {
+    assert_eq!(output.status.code(), Some(exit_code), "{code} exit code");
+    assert!(output.stdout.is_empty());
+    let error = stderr_json(&output.stderr);
+    assert_eq!(error["code"], json!(code));
+    error
 }
 
 fn insert_active_borrower(root: &Path, borrower_run_id: &str) -> (libc::pid_t, String) {

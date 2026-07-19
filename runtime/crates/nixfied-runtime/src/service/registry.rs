@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::execution::ServiceIdentity;
@@ -16,8 +16,6 @@ use crate::registry::{Registry, RegistryIdentity};
 use crate::state::HostPlacement;
 
 use super::{StoredProcessIdentity, TrackedProcessIdentity};
-
-const PERSISTENT_LEASE_EXPIRY: &str = "9999-12-31T23:59:59.999Z";
 
 pub struct RunRecord<'a> {
     pub run_id: &'a str,
@@ -99,12 +97,7 @@ pub(crate) struct StoredServiceEndpoint {
 #[derive(Debug, Clone)]
 pub(crate) struct StoredServiceLease {
     pub(crate) run_id: String,
-    pub(crate) owner_token: String,
-    pub(crate) expires_at: String,
     pub(crate) status: RunLeaseStatus,
-    pub(crate) expired: bool,
-    pub(crate) run_status: RunStatus,
-    pub(crate) computed_model_hash: String,
 }
 
 #[derive(Debug, Clone)]
@@ -113,15 +106,6 @@ pub(crate) struct ServiceSnapshot {
     pub(crate) process: Option<StoredServiceProcess>,
     pub(crate) endpoints: Vec<StoredServiceEndpoint>,
     pub(crate) leases: Vec<StoredServiceLease>,
-}
-
-impl ServiceSnapshot {
-    pub(crate) fn has_evidence(&self) -> bool {
-        self.service.is_some()
-            || self.process.is_some()
-            || !self.endpoints.is_empty()
-            || !self.leases.is_empty()
-    }
 }
 
 pub(crate) struct ServiceReuseGuard<'a> {
@@ -600,7 +584,6 @@ pub(crate) fn record_service_borrow(
     registry: &mut Registry,
     run: &RunRecord<'_>,
     guard: &ServiceReuseGuard<'_>,
-    recover_starting: bool,
 ) -> RuntimeResult<bool> {
     let generator_json = run.admission.generator_json.as_str();
     let target_json = run.admission.target_json.as_str();
@@ -612,7 +595,7 @@ pub(crate) fn record_service_borrow(
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(sql_error)?;
     let snapshot = read_service_snapshot_conn(&transaction, guard.service.service_instance_id)?;
-    if !reuse_snapshot_matches(&snapshot, guard, recover_starting) {
+    if !reuse_snapshot_matches(&snapshot, guard) {
         return Ok(false);
     }
     let previous_status = snapshot
@@ -689,7 +672,6 @@ pub(crate) fn record_service_borrow(
         .map_err(sql_error)?;
     let payload_json = serde_json::json!({
         "borrowedProcessKey": guard.process.process_key,
-        "recoveredStarting": recover_starting,
     })
     .to_string();
     insert_event(
@@ -707,450 +689,6 @@ pub(crate) fn record_service_borrow(
     )?;
     transaction.commit().map_err(sql_error)?;
     Ok(true)
-}
-
-pub(crate) fn refuse_unexpired_repair_leases(snapshot: &ServiceSnapshot) -> RuntimeResult<()> {
-    for lease in snapshot
-        .leases
-        .iter()
-        .filter(|lease| status::LEASE_OPEN.contains(&lease.status))
-    {
-        if lease.expires_at == PERSISTENT_LEASE_EXPIRY {
-            if durable_owner_is_eligible(snapshot, lease) {
-                continue;
-            }
-        } else if lease.expired {
-            continue;
-        }
-        return Err(active_repair_lease_error(lease, snapshot));
-    }
-    Ok(())
-}
-
-/// Fence repairable leases and claim a still-matching broken service by moving
-/// its existing row to Starting. The caller holds every endpoint startup lock;
-/// this immediate transaction is the durable loser-does-nothing CAS before any
-/// signal is sent.
-pub(crate) fn guarded_claim_service_repair(
-    registry: &mut Registry,
-    requested_service: &ServiceRecord<'_>,
-    expected: &ServiceSnapshot,
-) -> RuntimeResult<bool> {
-    let identity = registry.identity().clone();
-    let redactor = registry.redactor().clone();
-    let transaction = registry
-        .connection_mut()
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(sql_error)?;
-    let before = read_service_snapshot_conn(&transaction, requested_service.service_instance_id)?;
-    if !repair_snapshot_matches(&before, expected, requested_service) {
-        return Ok(false);
-    }
-    let process = before.process.as_ref().ok_or_else(|| {
-        RuntimeError::new(
-            ErrorCode::RegistryCorrupt,
-            "repair candidate has no actionable process",
-        )
-    })?;
-
-    let mut expired_tokens = BTreeSet::new();
-    for lease in before
-        .leases
-        .iter()
-        .filter(|lease| status::LEASE_OPEN.contains(&lease.status))
-    {
-        if lease.expires_at == PERSISTENT_LEASE_EXPIRY {
-            continue;
-        }
-        if !lease.expired {
-            return Err(active_repair_lease_error(lease, &before));
-        }
-        expired_tokens.insert((lease.run_id.clone(), lease.owner_token.clone()));
-    }
-    for (expired_run_id, expired_owner_token) in &expired_tokens {
-        let changed = transaction
-            .execute(
-                &format!(
-                    "
-                    UPDATE run_leases
-                    SET status = ?3
-                    WHERE run_id = ?1 AND owner_token = ?2 AND status IN ({})
-                    ",
-                    status::sql_in_list(status::LEASE_OPEN)
-                ),
-                params![
-                    expired_run_id,
-                    expired_owner_token,
-                    RunLeaseStatus::Stale.as_str(),
-                ],
-            )
-            .map_err(sql_error)?;
-        if changed == 0 {
-            return Ok(false);
-        }
-        transaction
-            .execute(
-                &format!(
-                    "
-                    UPDATE runs
-                    SET status = ?2
-                    WHERE run_id = ?1 AND status NOT IN ({})
-                    ",
-                    status::sql_in_list(status::RUN_TERMINAL)
-                ),
-                params![expired_run_id, RunStatus::Stale.as_str()],
-            )
-            .map_err(sql_error)?;
-        let evidence = before
-            .leases
-            .iter()
-            .find(|lease| {
-                lease.run_id == *expired_run_id && lease.owner_token == *expired_owner_token
-            })
-            .ok_or_else(|| {
-                RuntimeError::new(
-                    ErrorCode::RegistryCorrupt,
-                    "expired repair token lost its lease evidence",
-                )
-            })?;
-        let payload = serde_json::json!({
-            "ownerToken": expired_owner_token,
-            "reason": "service-repair",
-        })
-        .to_string();
-        insert_event(
-            &transaction,
-            &identity,
-            &redactor,
-            EventRecord {
-                event_type: "run.lease-stale",
-                run_id: Some(expired_run_id),
-                service_instance_id: Some(requested_service.service_instance_id),
-                process_key: Some(&process.process_key),
-                computed_model_hash: Some(&evidence.computed_model_hash),
-                payload_json: &payload,
-            },
-        )?;
-    }
-
-    let after_finite =
-        read_service_snapshot_conn(&transaction, requested_service.service_instance_id)?;
-    let remaining = after_finite
-        .leases
-        .iter()
-        .filter(|lease| status::LEASE_OPEN.contains(&lease.status))
-        .collect::<Vec<_>>();
-    if !remaining.is_empty() {
-        if remaining.len() != 1 || !durable_owner_is_eligible(&after_finite, remaining[0]) {
-            return Err(active_repair_lease_error(remaining[0], &after_finite));
-        }
-        let durable = remaining[0];
-        let changed = transaction
-            .execute(
-                &format!(
-                    "
-                    UPDATE run_leases
-                    SET status = ?4
-                    WHERE run_id = ?1 AND service_instance_id = ?2
-                      AND owner_token = ?3 AND status IN ({})
-                    ",
-                    status::sql_in_list(status::LEASE_OPEN)
-                ),
-                params![
-                    durable.run_id,
-                    requested_service.service_instance_id,
-                    durable.owner_token,
-                    RunLeaseStatus::Stale.as_str(),
-                ],
-            )
-            .map_err(sql_error)?;
-        if changed != 1 {
-            return Ok(false);
-        }
-    }
-
-    let previous_status = before
-        .service
-        .as_ref()
-        .ok_or_else(|| {
-            RuntimeError::new(
-                ErrorCode::RegistryCorrupt,
-                "repairable snapshot has no service row",
-            )
-        })?
-        .status;
-    let changed = transaction
-        .execute(
-            "
-            UPDATE services
-            SET status = ?3
-            WHERE service_instance_id = ?1 AND status = ?2
-            ",
-            params![
-                requested_service.service_instance_id,
-                previous_status.as_str(),
-                ServiceStatus::Starting.as_str(),
-            ],
-        )
-        .map_err(sql_error)?;
-    if changed != 1 {
-        return Ok(false);
-    }
-    let payload = serde_json::json!({
-        "previousStatus": previous_status.as_str(),
-        "processKey": process.process_key,
-    })
-    .to_string();
-    insert_event(
-        &transaction,
-        &identity,
-        &redactor,
-        EventRecord {
-            event_type: "service.repair-claimed",
-            run_id: None,
-            service_instance_id: Some(requested_service.service_instance_id),
-            process_key: Some(&process.process_key),
-            computed_model_hash: None,
-            payload_json: &payload,
-        },
-    )?;
-    transaction.commit().map_err(sql_error)?;
-    Ok(true)
-}
-
-pub(crate) fn mark_repair_target_stale(
-    registry: &mut Registry,
-    service_instance_id: &str,
-    process: &StoredServiceProcess,
-) -> RuntimeResult<()> {
-    let identity = registry.identity().clone();
-    let redactor = registry.redactor().clone();
-    let transaction = registry
-        .connection_mut()
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(sql_error)?;
-    let changed_process = transaction
-        .execute(
-            &format!(
-                "
-                UPDATE processes
-                SET status = ?3
-                WHERE process_key = ?1 AND service_instance_id = ?2
-                  AND status IN ({})
-                ",
-                status::sql_in_list(status::PROCESS_ACTIVE)
-            ),
-            params![
-                process.process_key,
-                service_instance_id,
-                ProcessStatus::Stale.as_str(),
-            ],
-        )
-        .map_err(sql_error)?;
-    let changed_service = transaction
-        .execute(
-            "
-            UPDATE services
-            SET status = ?2
-            WHERE service_instance_id = ?1 AND status = ?3
-            ",
-            params![
-                service_instance_id,
-                ServiceStatus::Stale.as_str(),
-                ServiceStatus::Starting.as_str(),
-            ],
-        )
-        .map_err(sql_error)?;
-    if changed_process != 1 || changed_service != 1 {
-        return Err(RuntimeError::new(
-            ErrorCode::RegistryCorrupt,
-            format!(
-                "repair settlement changed {changed_process} process and {changed_service} service rows"
-            ),
-        ));
-    }
-    transaction
-        .execute(
-            &format!(
-                "
-                UPDATE ports
-                SET status = ?3
-                WHERE service_instance_id = ?1 AND owner_process_key = ?2
-                  AND status IN ({})
-                ",
-                status::sql_in_list(status::PORT_OPEN)
-            ),
-            params![
-                service_instance_id,
-                process.process_key,
-                PortStatus::Stale.as_str(),
-            ],
-        )
-        .map_err(sql_error)?;
-    insert_event(
-        &transaction,
-        &identity,
-        &redactor,
-        EventRecord {
-            event_type: "service.repair-stale",
-            run_id: Some(&process.run_id),
-            service_instance_id: Some(service_instance_id),
-            process_key: Some(&process.process_key),
-            computed_model_hash: None,
-            payload_json: "{}",
-        },
-    )?;
-    transaction.commit().map_err(sql_error)?;
-    Ok(())
-}
-
-/// Reclaim a reservation that never acquired a process row. This is the only
-/// repair path that acts without a service/process candidate: finite expired
-/// owner tokens are fenced as a unit, then owner-less reserved ports are staled.
-pub(crate) fn settle_registry_only_evidence(
-    registry: &mut Registry,
-    service_instance_id: &str,
-) -> RuntimeResult<bool> {
-    let transaction = registry
-        .connection_mut()
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(sql_error)?;
-    let snapshot = read_service_snapshot_conn(&transaction, service_instance_id)?;
-    if snapshot.service.is_some() || snapshot.process.is_some() {
-        return Ok(false);
-    }
-    if !snapshot.has_evidence() {
-        transaction.commit().map_err(sql_error)?;
-        return Ok(true);
-    }
-    let mut expired_tokens = BTreeSet::new();
-    for lease in snapshot
-        .leases
-        .iter()
-        .filter(|lease| status::LEASE_OPEN.contains(&lease.status))
-    {
-        if lease.expires_at == PERSISTENT_LEASE_EXPIRY || !lease.expired {
-            return Err(active_repair_lease_error(lease, &snapshot));
-        }
-        expired_tokens.insert((lease.run_id.clone(), lease.owner_token.clone()));
-    }
-    for (run_id, owner_token) in expired_tokens {
-        transaction
-            .execute(
-                &format!(
-                    "
-                    UPDATE run_leases
-                    SET status = ?3
-                    WHERE run_id = ?1 AND owner_token = ?2 AND status IN ({})
-                    ",
-                    status::sql_in_list(status::LEASE_OPEN)
-                ),
-                params![run_id, owner_token, RunLeaseStatus::Stale.as_str()],
-            )
-            .map_err(sql_error)?;
-        transaction
-            .execute(
-                &format!(
-                    "UPDATE runs SET status = ?2 WHERE run_id = ?1 AND status NOT IN ({})",
-                    status::sql_in_list(status::RUN_TERMINAL)
-                ),
-                params![run_id, RunStatus::Stale.as_str()],
-            )
-            .map_err(sql_error)?;
-    }
-    if snapshot
-        .endpoints
-        .iter()
-        .any(|endpoint| endpoint.owner_process_key.is_some())
-    {
-        return Err(RuntimeError::new(
-            ErrorCode::RegistryCorrupt,
-            format!(
-                "service reservation {service_instance_id} has port ownership without a process"
-            ),
-        ));
-    }
-    transaction
-        .execute(
-            &format!(
-                "
-                UPDATE ports SET status = ?2
-                WHERE service_instance_id = ?1 AND status IN ({})
-                ",
-                status::sql_in_list(status::PORT_OPEN)
-            ),
-            params![service_instance_id, PortStatus::Stale.as_str()],
-        )
-        .map_err(sql_error)?;
-    transaction.commit().map_err(sql_error)?;
-    Ok(true)
-}
-
-pub(crate) fn open_port_service_instances(
-    registry: &Registry,
-    endpoints: &[PortReservation<'_>],
-    own_service_instance_id: &str,
-) -> RuntimeResult<BTreeSet<String>> {
-    let mut instances = BTreeSet::new();
-    for endpoint in endpoints {
-        let mut statement = registry
-            .connection()
-            .prepare(&format!(
-                "
-                SELECT service_instance_id
-                FROM ports
-                WHERE address = ?1 AND port = ?2
-                  AND service_instance_id != ?3
-                  AND status IN ({})
-                ORDER BY service_instance_id
-                ",
-                status::sql_in_list(status::PORT_OPEN)
-            ))
-            .map_err(sql_error)?;
-        let rows = statement
-            .query_map(
-                params![endpoint.address, endpoint.port, own_service_instance_id],
-                |row| row.get::<_, String>(0),
-            )
-            .map_err(sql_error)?;
-        for row in rows {
-            instances.insert(row.map_err(sql_error)?);
-        }
-    }
-    Ok(instances)
-}
-
-fn durable_owner_is_eligible(snapshot: &ServiceSnapshot, lease: &StoredServiceLease) -> bool {
-    let (Some(service), Some(process)) = (&snapshot.service, &snapshot.process) else {
-        return false;
-    };
-    lease.run_id == process.run_id
-        && lease.expires_at == PERSISTENT_LEASE_EXPIRY
-        && lease.status == RunLeaseStatus::Active
-        && service.service_lifetime == ServiceLifetime::PersistentUntilDown
-        && service.status == ServiceStatus::Standing
-        && matches!(
-            lease.run_status,
-            RunStatus::Completed | RunStatus::TaskSucceeded
-        )
-}
-
-fn active_repair_lease_error(
-    lease: &StoredServiceLease,
-    snapshot: &ServiceSnapshot,
-) -> RuntimeError {
-    let service = snapshot
-        .service
-        .as_ref()
-        .map(|service| service.service_name.as_str())
-        .unwrap_or("reserved service");
-    RuntimeError::new(
-        ErrorCode::LeaseConflict,
-        format!(
-            "{service} has an unexpired or non-fenceable lease owned by run {}",
-            lease.run_id
-        ),
-    )
 }
 
 pub fn release_service_borrow(
@@ -1913,7 +1451,7 @@ pub fn mark_process_escape(
     Ok(())
 }
 
-/// Release only the durable open-port evidence of an unresolved escape after OS
+/// Release the durable ownership evidence of an unresolved escape after OS
 /// liveness proves the recorded process containment is gone. The terminal
 /// Escaped process/service evidence is intentionally retained.
 pub(crate) fn release_unresolved_escape_ports(
@@ -1946,12 +1484,7 @@ pub(crate) fn release_unresolved_escape_ports(
         .optional()
         .map_err(sql_error)?;
     if process_status.as_deref() != Some(ProcessStatus::Escaped.as_str())
-        || !matches!(
-            service_status.as_deref(),
-            Some(status)
-                if status == ServiceStatus::Escaped.as_str()
-                    || status == ServiceStatus::Starting.as_str()
-        )
+        || service_status.as_deref() != Some(ServiceStatus::Escaped.as_str())
     {
         return Err(RuntimeError::new(
             ErrorCode::RegistryCorrupt,
@@ -1960,28 +1493,20 @@ pub(crate) fn release_unresolved_escape_ports(
             ),
         ));
     }
-    if service_status.as_deref() == Some(ServiceStatus::Starting.as_str()) {
-        let changed = transaction
-            .execute(
+    transaction
+        .execute(
+            &format!(
                 "
-                UPDATE services
+                UPDATE run_leases
                 SET status = ?3
-                WHERE service_instance_id = ?1 AND status = ?2
+                WHERE run_id = ?1 AND service_instance_id = ?2
+                  AND status IN ({})
                 ",
-                params![
-                    service_instance_id,
-                    ServiceStatus::Starting.as_str(),
-                    ServiceStatus::Escaped.as_str(),
-                ],
-            )
-            .map_err(sql_error)?;
-        if changed != 1 {
-            return Err(RuntimeError::new(
-                ErrorCode::RegistryCorrupt,
-                format!("claimed escape {process_key} lost its Starting service row"),
-            ));
-        }
-    }
+                status::sql_in_list(status::LEASE_OPEN)
+            ),
+            params![run_id, service_instance_id, RunLeaseStatus::Stale.as_str()],
+        )
+        .map_err(sql_error)?;
     transaction
         .execute(
             &format!(
@@ -2408,12 +1933,8 @@ fn read_service_snapshot_conn(
         let mut statement = connection
             .prepare(
                 "
-                SELECT l.run_id, l.owner_token, l.expires_at, l.status,
-                       CASE WHEN l.expires_at <= strftime('%Y-%m-%dT%H:%M:%fZ','now')
-                            THEN 1 ELSE 0 END,
-                       r.status, r.computed_model_hash
+                SELECT l.run_id, l.status
                 FROM run_leases l
-                LEFT JOIN runs r ON r.run_id = l.run_id
                 WHERE l.service_instance_id = ?1
                 ORDER BY l.run_id
                 ",
@@ -2421,52 +1942,18 @@ fn read_service_snapshot_conn(
             .map_err(sql_error)?;
         let rows = statement
             .query_map(params![service_instance_id], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, i64>(4)? != 0,
-                    row.get::<_, Option<String>>(5)?,
-                    row.get::<_, Option<String>>(6)?,
-                ))
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
             })
             .map_err(sql_error)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(sql_error)?;
         rows.into_iter()
-            .map(
-                |(
+            .map(|(run_id, lease_status)| {
+                Ok(StoredServiceLease {
                     run_id,
-                    owner_token,
-                    expires_at,
-                    lease_status,
-                    expired,
-                    run_status,
-                    computed_model_hash,
-                )| {
-                    let run_status = run_status.ok_or_else(|| {
-                        RuntimeError::new(
-                            ErrorCode::RegistryCorrupt,
-                            format!("lease for run {run_id} has no run row"),
-                        )
-                    })?;
-                    Ok(StoredServiceLease {
-                        run_id,
-                        owner_token,
-                        expires_at,
-                        status: RunLeaseStatus::parse_db(&lease_status)?,
-                        expired,
-                        run_status: RunStatus::parse_db(&run_status)?,
-                        computed_model_hash: computed_model_hash.ok_or_else(|| {
-                            RuntimeError::new(
-                                ErrorCode::RegistryCorrupt,
-                                "lease run has no computed model hash",
-                            )
-                        })?,
-                    })
-                },
-            )
+                    status: RunLeaseStatus::parse_db(&lease_status)?,
+                })
+            })
             .collect::<RuntimeResult<Vec<_>>>()?
     };
     Ok(ServiceSnapshot {
@@ -2477,18 +1964,14 @@ fn read_service_snapshot_conn(
     })
 }
 
-fn reuse_snapshot_matches(
-    snapshot: &ServiceSnapshot,
-    guard: &ServiceReuseGuard<'_>,
-    recover_starting: bool,
-) -> bool {
+fn reuse_snapshot_matches(snapshot: &ServiceSnapshot, guard: &ServiceReuseGuard<'_>) -> bool {
     let Some(service) = &snapshot.service else {
         return false;
     };
     let reusable = matches!(
         service.status,
         ServiceStatus::ProbeReady | ServiceStatus::Standing | ServiceStatus::Borrowed
-    ) || (recover_starting && service.status == ServiceStatus::Starting);
+    );
     if !reusable
         || service.service_name != guard.service.service_name
         || service.service_address_hash != guard.service.service_address_hash
@@ -2513,41 +1996,6 @@ fn reuse_snapshot_matches(
     }
     expected_endpoint_map(guard.endpoints, &guard.process.process_key)
         == stored_endpoint_map(&snapshot.endpoints)
-}
-
-fn repair_snapshot_matches(
-    fresh: &ServiceSnapshot,
-    expected: &ServiceSnapshot,
-    requested: &ServiceRecord<'_>,
-) -> bool {
-    let (Some(fresh_service), Some(expected_service)) = (&fresh.service, &expected.service) else {
-        return false;
-    };
-    fresh_service == expected_service
-        && fresh.process == expected.process
-        && fresh.endpoints == expected.endpoints
-        && fresh_service.service_name == requested.service_name
-        && fresh_service.service_address_hash == requested.service_address_hash
-        && fresh_service.endpoint_identity_hash == requested.identity.endpoint_identity_hash
-        && fresh_service.state_identity_hash == requested.identity.state_identity_hash
-        && fresh_service.runtime_compatibility_hash == requested.identity.runtime_compatibility_hash
-        && fresh_service.target_identity_hash == requested.identity.target_identity_hash
-        && fresh_service.state_root == requested.state_root.display().to_string()
-        && fresh.process.as_ref().is_some_and(|process| {
-            let actionable = if fresh_service.status == ServiceStatus::Escaped {
-                process.status == ProcessStatus::Escaped
-            } else {
-                status::PROCESS_ACTIVE.contains(&process.status)
-            };
-            actionable
-                && fresh.endpoints.iter().all(|endpoint| {
-                    status::PORT_OPEN.contains(&endpoint.status)
-                        && (endpoint.owner_process_key.as_deref()
-                            == Some(process.process_key.as_str())
-                            || (endpoint.status == PortStatus::Reserved
-                                && endpoint.owner_process_key.is_none()))
-                })
-        })
 }
 
 fn expected_endpoint_map(

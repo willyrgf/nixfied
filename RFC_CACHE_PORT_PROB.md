@@ -527,11 +527,12 @@ cooperating Nixfied contenders, not arbitrary binders.
 ### Startup algorithm
 
 An endpoint-less service has no addressability claim and takes no endpoint lock.
-Admission, placement, registry opening, ordinary reconciliation,
-`record_run_created`, and `prepare_slot_state` remain run-wide and complete
-before per-service endpoint locking. In this section, “state-mutating lifecycle
-operation” means service-specific endpoint reservation, service prepare,
-terminate-before-replace, spawn, and readiness transitions; it does not mean
+Admission, placement, registry opening, `record_run_created`, and
+`prepare_slot_state` remain run-wide. Per-service acquisition attempts exact
+reuse before locking, then performs its ordinary reconciliation under all
+startup locks before the one under-lock retry. In this section,
+“state-mutating lifecycle operation” means service-specific endpoint
+reservation, service prepare, spawn, and readiness transitions; it does not mean
 slot marker adoption, epoch upgrade, or registry opening.
 
 Before reusing or replacing an endpoint-bearing service, the runtime MUST
@@ -546,75 +547,33 @@ primary process identity and complete active endpoint set. A missing or
 proven-wrong listener prevents reuse and is never silently accepted.
 
 The primary process `runId` identifies the owner lease; other open leases for
-that service are borrowers. Lease authority is classified from existing rows:
-
-- an unexpired finite-TTL owner or borrower is preserved and produces
-  `LEASE_CONFLICT`;
-- an expired finite-TTL lease revokes its run/owner token, so the repair
-  transaction marks every open lease for that run/token `stale`; and
-- a completed persistent owner is fenceable for only this service when the
-  service lifetime is `persistent-until-down`, reconciliation left the service
-  `standing`, its owner run is successfully terminal (`completed` or
-  `task-succeeded`), its owner lease is `active` with the existing year-9999
-  expiry, and no open borrower remains after expired borrower tokens are fenced.
-  That durable owner row is marked `stale` only for the repaired service; any
-  lingering heartbeat observes the fence before updating a sibling.
-
-`heartbeat_run_lease` MUST be one atomic fence-aware operation. If any lease for
-its run/owner token is `stale`, it updates no sibling lease and returns
-`LEASE_STALE`; otherwise it refreshes all open siblings as today. This prevents
-a paused multi-service run from reviving one lease after repair revoked its run
-authority.
+that service are borrowers. Exact healthy reuse may add a borrower while any of
+those leases remain open. If exact reuse fails, every open owner or borrower
+lease is authoritative and returns `LEASE_CONFLICT`; acquisition neither
+changes the lease nor signals the recorded process. An expired reservation with
+no process owner is handled by ordinary reconciliation, which stales its run
+lease and any owner-less reserved ports transactionally. This applies equally
+to endpoint-less reservations, which have no port rows.
 
 The guarded borrow transaction MUST insert a borrower lease only while a
 reusable service status, primary process identity, and complete active endpoint
-set still match the candidate just observed. A concurrent repair claim and a
-concurrent borrow cannot both commit.
+set still match the candidate just observed. It is the only acquisition
+transaction that may admit an existing service.
 
-Termination for repair MUST occur only after every endpoint startup lock has
-been acquired in canonical order, the registry rows and all owner/borrower leases have
-been reloaded, and listener ownership has been re-observed under those locks. A
-guarded transaction MUST apply the lease classification and fencing above, then
-make the service non-borrowable using the existing `starting` status before
-signaling. The runtime then uses the existing declared TERM/KILL path, confirms
-the group is gone, and only then marks the old service/process/port records
-terminal or stale and permits replacement.
+If exact reuse does not commit, the runtime acquires every startup lock,
+reconciles ordinary stale evidence, and retries exact reuse once. Any remaining
+live or otherwise nonterminal local evidence blocks replacement without a
+signal: an open lease is `LEASE_CONFLICT`, a missing or unprovable expected
+listener is `PORT_UNVERIFIABLE`, and an observed outside listener is
+`PORT_CONFLICT`. A live `starting` row is never promoted or borrowed. A broken
+persistent service therefore requires explicit `down`, followed by a new run.
 
-If termination cannot be proven, the runtime sets that process and service to
-their existing `escaped` statuses, sets the requesting run to `proc-escaped`,
-preserves open ports and lease history, and fails with `PROC_ESCAPE`. The
-durable composite `escaped` plus an open port is unresolved resource ownership:
-the shared reconciliation/control query MUST include it alongside normally
-active processes so `ps`, `down`, cleanup safety, and later mutating requests
-continue to prove OS liveness. It is never restored for reuse. Once group death
-is proven, ports are released/staled and process/service remain terminal
-`escaped`. No event-log lookup is used as state. If inspection itself is
-unverifiable, the runtime preserves the live process and reservations,
-returns `PORT_UNVERIFIABLE`, and permits explicit `down`; it neither reuses nor
-replaces it.
-
-Repair authority is limited to the requested service instance. An unrelated
-local service on the endpoint is never terminated by this path: a proven
-listener is `PORT_CONFLICT`, a lease-only reservation is `LEASE_CONFLICT`, dead
-evidence is reconciled, and a live unrelated process with no listener is
-preserved with `PORT_UNVERIFIABLE` until explicit `down`.
-
-A runtime may die after the guarded repair claim and before signaling. A later
-mutating request MUST acquire the endpoint locks and recover a live `starting`
-row by re-observing it: exact ownership restores reusable standing state;
-missing/wrong ownership resumes terminate-before-replace; unverifiable
-inspection preserves the row/process/reservations and fails closed. If the
-process is gone, the process/service/ports become `stale`. This path is
-distinguished from failed termination by the existing per-service/process
-`escaped` states, not a new status, table, lease, worker, event-log query, or
-compatibility path.
-
-The ordinary reconciliation pass before endpoint locking MUST preserve a live
-`starting` row with active process/port evidence as recoverable. It MUST NOT
-terminalize, stale, borrow, or endpoint-repair that row; only the locked
-mutating path above may restore or repair it. `ps` remains process-only.
-An `escaped` row with an open port instead follows the unresolved ownership rule
-and is never restored.
+The durable composite `escaped` process plus an open port remains unresolved
+resource ownership. The shared reconciliation/control query includes it for
+`ps`, `down`, and cleanup safety. It is never restored for reuse, and acquisition
+never signals it. Once OS liveness proves the containment gone, the owner lease
+and ports are released/staled while terminal escaped evidence remains. No event
+log is read as state.
 
 For every new endpoint-bearing service start, the runtime MUST perform the
 following sequence:
@@ -692,8 +651,8 @@ that endpoint; registry evidence cannot preserve socket ownership that the OS no
 longer observes. `ps` remains process-liveness reconciliation and MUST NOT signal
 the process solely because a listener is missing/unverifiable or redefine
 `ps.live` as addressability. Existing until-idle lease-expiry reconciliation is
-unchanged. A later local reuse/replacement request applies the
-terminate-before-replace rule above. A
+unchanged. A later local request reuses only complete exact ownership; otherwise
+it preserves the old process and requires explicit `down` before replacement. A
 cross-state-root runtime cannot discover an unbound old process, so a service
 that closes and later rebinds participates in the same explicitly unsupported
 external bind race. Eliminating that gap would require the rejected lifetime
@@ -790,7 +749,8 @@ After successful reconciliation, an open port row with no valid lease and no
 live recorded process is transactionally staled/released. If such a row remains
 despite the reconciliation proof, it is `REGISTRY_CORRUPT`, never
 `PORT_CONFLICT`, `LEASE_STALE`, or `PORT_UNVERIFIABLE`. A live recorded
-process with a missing listener is the repair path above, not an orphan row.
+process with a missing listener is preserved and requires explicit `down`; it is
+not an orphan row.
 
 A proven address-in-use condition MUST NOT leak as `PROC_ESCAPE`.
 
@@ -886,7 +846,7 @@ identity proof.
 One private endpoint module owns normalized keys, locking, bind preflight,
 kernel snapshots, overlap, exact satisfaction, and typed observation evidence.
 It does not query the registry or construct public runtime errors. The existing
-service process path owns reuse/repair policy, registry attribution, error
+service process path owns reuse/acquisition policy, registry attribution, error
 precedence, and the sole structured `PORT_CONFLICT` constructor. No public
 endpoint/diagnostic type or observer trait is added.
 
@@ -1107,20 +1067,12 @@ Framework acceptance tests MUST prove:
     value, or child command line.
 14. Different non-conflicting endpoints and different slots continue to start
     independently.
-15. A local reuse/replacement request for a recorded process that is live but has
-    a missing or proven-wrong listener terminates and confirms the owned group,
-    records the terminal/stale transitions, and only then permits replacement.
-    Any unexpired finite owner or borrower lease instead produces
-    `LEASE_CONFLICT` without signaling. An expired finite lease fences every
-    open sibling for its run/owner token. A successfully completed persistent
-    owner can be fenced only for the broken service when no borrower remains.
-    Failed termination preserves reservations and returns `PROC_ESCAPE`. A
-    standalone `ps` does not signal that process and reports `ps.live = true`.
-    The process/service are `escaped` while their open port keeps the unresolved
-    row visible to `ps`/`down` and cleanup safety; after group death is proven,
-    ports release and terminal `escaped` evidence remains.
-    Runtime death after the guarded repair claim is recovered by the next
-    mutating request without stranding a live `starting` row.
+15. A local acquisition request for a recorded process that is live but has a
+    missing or proven-wrong listener preserves the process and fails without a
+    signal. An open owner or borrower lease produces `LEASE_CONFLICT`; missing
+    or unprovable ownership is `PORT_UNVERIFIABLE`; an observed outside listener
+    is `PORT_CONFLICT`. A live `starting` row is neither promoted nor borrowed.
+    Explicit `down` terminates the preserved process, after which retry succeeds.
 16. Unverifiable listener inspection preserves the live process and
     reservations, returns `PORT_UNVERIFIABLE`, blocks replacement, and still
     permits explicit `down` of the proven-owned process.
@@ -1155,12 +1107,12 @@ Framework acceptance tests MUST prove:
     leaves the next attempt with `LEASE_CONFLICT` and no prepare/spawn; after the
     lease expires, ordinary reconciliation releases it and a later start can
     proceed. This path never emits `PORT_CONFLICT`.
-25. A paused multi-service run whose expired finite lease is fenced has all of
-    its open sibling leases atomically marked `stale`; its next heartbeat
-    updates none and returns `LEASE_STALE`.
-26. A broken `persistent-until-down` service whose owner run completed
-    successfully can be repaired after its durable owner row is fenced for that
-    service, while any live borrower still blocks signaling.
+25. Runtime death after an endpoint-less reservation but before process
+    recording follows the same lease-expiry/retry behavior without creating a
+    port row.
+26. A broken `persistent-until-down` service is preserved without signaling and
+    cannot be replaced until explicit `down`; exact healthy reuse remains
+    available while owner or borrower leases are open.
 
 ### Regression floor
 
