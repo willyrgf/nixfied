@@ -2,9 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
-use super::{
-    EndpointFamily, KernelSocketIdentity, ListenerHolder, ListenerIdentity, ListenerRecord,
-};
+use super::{KernelSocketIdentity, ListenerHolder, ListenerIdentity, ListenerRecord, read_array};
 use crate::service::process::{macos_process_ids, platform_start_identity, process_group};
 
 const XINPGEN_LEN: usize = 24;
@@ -152,24 +150,25 @@ fn parse_pcblist(bytes: &[u8]) -> Result<Vec<ListenerRecord>, ParseFailure> {
     let mut records = Vec::new();
     let mut offset = XINPGEN_LEN;
     while offset < trailer_offset {
-        let inpcb = parse_record(bytes, offset, trailer_offset, XSO_INPCB, XINPCB_MIN_LEN)?;
-        offset = inpcb.next;
-        let socket = parse_record(bytes, offset, trailer_offset, XSO_SOCKET, XSOCKET_MIN_LEN)?;
-        offset = socket.next;
+        let (inpcb, next) = parse_record(bytes, offset, trailer_offset, XSO_INPCB, XINPCB_MIN_LEN)?;
+        offset = next;
+        let (socket, next) =
+            parse_record(bytes, offset, trailer_offset, XSO_SOCKET, XSOCKET_MIN_LEN)?;
+        offset = next;
         let receive = parse_record(bytes, offset, trailer_offset, XSO_RCVBUF, 8)?;
-        offset = receive.next;
+        offset = receive.1;
         let send = parse_record(bytes, offset, trailer_offset, XSO_SNDBUF, 8)?;
-        offset = send.next;
+        offset = send.1;
         let stats = parse_record(bytes, offset, trailer_offset, XSO_STATS, 8)?;
-        offset = stats.next;
+        offset = stats.1;
         let tcp = parse_record(bytes, offset, trailer_offset, XSO_TCPCB, XTCPCB_MIN_LEN)?;
-        offset = tcp.next;
+        offset = tcp.1;
 
-        let tcp_state = read_u32_ne(tcp.bytes, 36)?;
+        let tcp_state = read_u32_ne(tcp.0, 36)?;
         if tcp_state != TCPS_LISTEN {
             continue;
         }
-        records.push(parse_listener(inpcb.bytes, socket.bytes)?);
+        records.push(parse_listener(inpcb, socket)?);
     }
     if offset != trailer_offset {
         return Err(ParseFailure::Invalid(
@@ -193,18 +192,13 @@ fn parse_generation(bytes: &[u8]) -> Result<(u32, u64, u64), ParseFailure> {
     ))
 }
 
-struct ParsedRecord<'a> {
-    bytes: &'a [u8],
-    next: usize,
-}
-
 fn parse_record<'a>(
     bytes: &'a [u8],
     offset: usize,
     limit: usize,
     expected_kind: u32,
     minimum_len: usize,
-) -> Result<ParsedRecord<'a>, ParseFailure> {
+) -> Result<(&'a [u8], usize), ParseFailure> {
     if offset > limit || limit - offset < 8 {
         return Err(ParseFailure::Invalid(format!(
             "truncated macOS PCB record kind {expected_kind}"
@@ -229,10 +223,7 @@ fn parse_record<'a>(
             "truncated alignment padding for macOS PCB record kind {kind}"
         )));
     }
-    Ok(ParsedRecord {
-        bytes: &bytes[offset..offset + length],
-        next: offset + aligned,
-    })
+    Ok((&bytes[offset..offset + length], offset + aligned))
 }
 
 fn parse_listener(inpcb: &[u8], socket: &[u8]) -> Result<ListenerRecord, ParseFailure> {
@@ -252,11 +243,10 @@ fn parse_listener(inpcb: &[u8], socket: &[u8]) -> Result<ListenerRecord, ParseFa
     let vflag = *inpcb
         .get(44)
         .ok_or_else(|| ParseFailure::Invalid("truncated macOS inp_vflag".to_string()))?;
-    let local = inpcb
-        .get(64..80)
+    let local = read_array::<16>(inpcb, 64)
         .ok_or_else(|| ParseFailure::Invalid("truncated macOS local address".to_string()))?;
     let flags = read_u32_ne(inpcb, 36)?;
-    let (family, address, ipv6_only) = match socket_family {
+    let (address, ipv6_only) = match socket_family {
         libc::AF_INET => {
             if vflag & INP_IPV4 == 0 || vflag & INP_IPV6 != 0 {
                 return Err(ParseFailure::Invalid(format!(
@@ -264,7 +254,6 @@ fn parse_listener(inpcb: &[u8], socket: &[u8]) -> Result<ListenerRecord, ParseFa
                 )));
             }
             (
-                EndpointFamily::Ipv4,
                 IpAddr::V4(Ipv4Addr::new(local[12], local[13], local[14], local[15])),
                 None,
             )
@@ -275,16 +264,13 @@ fn parse_listener(inpcb: &[u8], socket: &[u8]) -> Result<ListenerRecord, ParseFa
                     "macOS IPv6 listener has inconsistent inp_vflag {vflag:#x}"
                 )));
             }
-            let address = Ipv6Addr::from(<[u8; 16]>::try_from(local).map_err(|_| {
-                ParseFailure::Invalid("invalid macOS IPv6 local address".to_string())
-            })?);
+            let address = Ipv6Addr::from(local);
             if vflag & INP_V4MAPPEDV6 != 0 && address.to_ipv4_mapped().is_none() {
                 return Err(ParseFailure::Invalid(
                     "macOS listener marks a non-mapped IPv6 address as V4MAPPEDV6".to_string(),
                 ));
             }
             (
-                EndpointFamily::Ipv6,
                 IpAddr::V6(address),
                 Some(flags & (IN6P_IPV6_V6ONLY | IN6P_BINDV6ONLY) != 0),
             )
@@ -312,7 +298,6 @@ fn parse_listener(inpcb: &[u8], socket: &[u8]) -> Result<ListenerRecord, ParseFa
     pid_hints.dedup();
     Ok(ListenerRecord {
         identity: ListenerIdentity {
-            family,
             address,
             port,
             kernel: KernelSocketIdentity::Macos {
@@ -472,12 +457,9 @@ fn read_u32_ne(bytes: &[u8], offset: usize) -> Result<u32, ParseFailure> {
 }
 
 fn read_u16_be(bytes: &[u8], offset: usize) -> Result<u16, ParseFailure> {
-    let value = bytes
-        .get(offset..offset + 2)
-        .ok_or_else(|| ParseFailure::Invalid("truncated macOS PCB u16 field".to_string()))?;
-    Ok(u16::from_be_bytes(value.try_into().map_err(|_| {
-        ParseFailure::Invalid("invalid macOS PCB u16 field".to_string())
-    })?))
+    Ok(u16::from_be_bytes(read_array(bytes, offset).ok_or_else(
+        || ParseFailure::Invalid("truncated macOS PCB u16 field".to_string()),
+    )?))
 }
 
 fn read_u64_ne(bytes: &[u8], offset: usize) -> Result<u64, ParseFailure> {
@@ -485,35 +467,20 @@ fn read_u64_ne(bytes: &[u8], offset: usize) -> Result<u64, ParseFailure> {
 }
 
 fn read_u32_ne_raw(bytes: &[u8], offset: usize) -> Result<u32, String> {
-    let field = bytes
-        .get(offset..offset + 4)
-        .ok_or_else(|| "truncated macOS u32 field".to_string())?;
     Ok(u32::from_ne_bytes(
-        field
-            .try_into()
-            .map_err(|_| "invalid macOS u32 field".to_string())?,
+        read_array(bytes, offset).ok_or_else(|| "truncated macOS u32 field".to_string())?,
     ))
 }
 
 fn read_u64_ne_raw(bytes: &[u8], offset: usize) -> Result<u64, String> {
-    let field = bytes
-        .get(offset..offset + 8)
-        .ok_or_else(|| "truncated macOS u64 field".to_string())?;
     Ok(u64::from_ne_bytes(
-        field
-            .try_into()
-            .map_err(|_| "invalid macOS u64 field".to_string())?,
+        read_array(bytes, offset).ok_or_else(|| "truncated macOS u64 field".to_string())?,
     ))
 }
 
 fn read_i32_ne_raw(bytes: &[u8], offset: usize) -> Result<i32, String> {
-    let field = bytes
-        .get(offset..offset + 4)
-        .ok_or_else(|| "truncated macOS i32 field".to_string())?;
     Ok(i32::from_ne_bytes(
-        field
-            .try_into()
-            .map_err(|_| "invalid macOS i32 field".to_string())?,
+        read_array(bytes, offset).ok_or_else(|| "truncated macOS i32 field".to_string())?,
     ))
 }
 

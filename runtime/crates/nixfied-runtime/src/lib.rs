@@ -1,3 +1,6 @@
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+compile_error!("nixfied-runtime supports only Linux and macOS");
+
 pub mod admission;
 pub mod cancellation;
 pub mod control;

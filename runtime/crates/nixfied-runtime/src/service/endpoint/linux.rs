@@ -5,9 +5,7 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::fs::MetadataExt;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use super::{
-    EndpointFamily, KernelSocketIdentity, ListenerHolder, ListenerIdentity, ListenerRecord,
-};
+use super::{KernelSocketIdentity, ListenerHolder, ListenerIdentity, ListenerRecord, read_array};
 use crate::service::process::{platform_start_identity, process_group};
 
 const NETLINK_SOCK_DIAG: libc::c_int = 4;
@@ -58,12 +56,6 @@ struct NetlinkHeader {
     flags: u16,
     sequence: u32,
     pid: u32,
-}
-
-#[derive(Debug, Default)]
-struct ParsedDatagram {
-    records: Vec<ListenerRecord>,
-    done: bool,
 }
 
 pub(super) fn snapshot() -> Result<Vec<ListenerRecord>, String> {
@@ -190,9 +182,9 @@ fn dump_family(family: u8) -> Result<Vec<ListenerRecord>, String> {
                 sender.nl_pid
             ));
         }
-        let parsed = parse_datagram(&buffer[..received as usize], sequence, family)?;
-        records.extend(parsed.records);
-        if parsed.done {
+        let (parsed, done) = parse_datagram(&buffer[..received as usize], sequence, family)?;
+        records.extend(parsed);
+        if done {
             return Ok(records);
         }
     }
@@ -207,8 +199,13 @@ fn append_struct_bytes<T>(target: &mut Vec<u8>, value: &T) {
     target.extend_from_slice(bytes);
 }
 
-fn parse_datagram(bytes: &[u8], sequence: u32, family: u8) -> Result<ParsedDatagram, String> {
-    let mut parsed = ParsedDatagram::default();
+fn parse_datagram(
+    bytes: &[u8],
+    sequence: u32,
+    family: u8,
+) -> Result<(Vec<ListenerRecord>, bool), String> {
+    let mut records = Vec::new();
+    let mut done = false;
     let mut offset = 0_usize;
     while offset < bytes.len() {
         let remaining = bytes.len() - offset;
@@ -255,12 +252,12 @@ fn parse_datagram(bytes: &[u8], sequence: u32, family: u8) -> Result<ParsedDatag
                         ));
                     }
                 }
-                parsed.done = true;
+                done = true;
             }
             NLMSG_OVERRUN => {
                 return Err("NETLINK_SOCK_DIAG reported receive overrun".to_string());
             }
-            SOCK_DIAG_BY_FAMILY => parsed.records.push(parse_listener(payload, family)?),
+            SOCK_DIAG_BY_FAMILY => records.push(parse_listener(payload, family)?),
             other => {
                 return Err(format!("unexpected NETLINK_SOCK_DIAG message type {other}"));
             }
@@ -275,7 +272,7 @@ fn parse_datagram(bytes: &[u8], sequence: u32, family: u8) -> Result<ParsedDatag
             offset += aligned;
         }
     }
-    Ok(parsed)
+    Ok((records, done))
 }
 
 fn parse_listener(payload: &[u8], requested_family: u8) -> Result<ListenerRecord, String> {
@@ -295,23 +292,17 @@ fn parse_listener(payload: &[u8], requested_family: u8) -> Result<ListenerRecord
         ));
     }
     let port = read_u16_be(payload, 4)?;
-    let (family, address) = match family as libc::c_int {
-        libc::AF_INET => (
-            EndpointFamily::Ipv4,
-            IpAddr::V4(Ipv4Addr::new(
-                payload[8],
-                payload[9],
-                payload[10],
-                payload[11],
-            )),
-        ),
+    let address = match family as libc::c_int {
+        libc::AF_INET => IpAddr::V4(Ipv4Addr::new(
+            payload[8],
+            payload[9],
+            payload[10],
+            payload[11],
+        )),
         libc::AF_INET6 => {
-            let octets: [u8; 16] = payload
-                .get(8..24)
-                .ok_or_else(|| "truncated IPv6 inet_diag address".to_string())?
-                .try_into()
-                .map_err(|_| "invalid IPv6 inet_diag address".to_string())?;
-            (EndpointFamily::Ipv6, IpAddr::V6(Ipv6Addr::from(octets)))
+            let octets = read_array(payload, 8)
+                .ok_or_else(|| "truncated IPv6 inet_diag address".to_string())?;
+            IpAddr::V6(Ipv6Addr::from(octets))
         }
         other => return Err(format!("unsupported inet_diag_msg family {other}")),
     };
@@ -354,12 +345,11 @@ fn parse_listener(payload: &[u8], requested_family: u8) -> Result<ListenerRecord
             offset += aligned;
         }
     }
-    if matches!(family, EndpointFamily::Ipv6) && ipv6_only.is_none() {
+    if matches!(address, IpAddr::V6(_)) && ipv6_only.is_none() {
         return Err("IPv6 listener omitted required INET_DIAG_SKV6ONLY".to_string());
     }
     Ok(ListenerRecord {
         identity: ListenerIdentity {
-            family,
             address,
             port,
             kernel: KernelSocketIdentity::Linux { inode, cookie },
@@ -387,7 +377,6 @@ pub(super) fn correlate(records: &mut [ListenerRecord]) -> Result<(), String> {
     if indexes_by_inode.is_empty() {
         return Ok(());
     }
-    let target_inodes = indexes_by_inode.keys().copied().collect::<BTreeSet<_>>();
     let entries = std::fs::read_dir("/proc")
         .map_err(|error| format!("failed to inspect /proc for listener holders: {error}"))?;
     for entry in entries {
@@ -430,7 +419,7 @@ pub(super) fn correlate(records: &mut [ListenerRecord]) -> Result<(), String> {
             else {
                 continue;
             };
-            if target_inodes.contains(&inode) {
+            if indexes_by_inode.contains_key(&inode) {
                 held.insert(inode);
             }
         }
@@ -459,47 +448,27 @@ pub(super) fn correlate(records: &mut [ListenerRecord]) -> Result<(), String> {
 }
 
 fn read_u16_ne(bytes: &[u8], offset: usize) -> Result<u16, String> {
-    let value = bytes
-        .get(offset..offset + 2)
-        .ok_or_else(|| "truncated u16 field".to_string())?;
     Ok(u16::from_ne_bytes(
-        value
-            .try_into()
-            .map_err(|_| "invalid u16 field".to_string())?,
+        read_array(bytes, offset).ok_or_else(|| "truncated u16 field".to_string())?,
     ))
 }
 
 fn read_u32_ne(bytes: &[u8], offset: usize) -> Result<u32, String> {
-    let value = bytes
-        .get(offset..offset + 4)
-        .ok_or_else(|| "truncated u32 field".to_string())?;
     Ok(u32::from_ne_bytes(
-        value
-            .try_into()
-            .map_err(|_| "invalid u32 field".to_string())?,
+        read_array(bytes, offset).ok_or_else(|| "truncated u32 field".to_string())?,
     ))
 }
 
 fn read_i32_ne(bytes: &[u8], offset: usize) -> Result<i32, String> {
-    let value = bytes
-        .get(offset..offset + 4)
-        .ok_or_else(|| "truncated i32 field".to_string())?;
     Ok(i32::from_ne_bytes(
-        value
-            .try_into()
-            .map_err(|_| "invalid i32 field".to_string())?,
+        read_array(bytes, offset).ok_or_else(|| "truncated i32 field".to_string())?,
     ))
 }
 
 fn read_u16_be(bytes: &[u8], offset: usize) -> Result<u16, String> {
-    let value = bytes
-        .get(offset..offset + 2)
-        .ok_or_else(|| "truncated big-endian u16 field".to_string())?;
-    Ok(u16::from_be_bytes(
-        value
-            .try_into()
-            .map_err(|_| "invalid big-endian u16 field".to_string())?,
-    ))
+    Ok(u16::from_be_bytes(read_array(bytes, offset).ok_or_else(
+        || "truncated big-endian u16 field".to_string(),
+    )?))
 }
 
 fn align4(value: usize) -> Option<usize> {
@@ -582,7 +551,7 @@ mod tests {
         let bytes = message(SOCK_DIAG_BY_FAMILY, 0, 23, &payload);
         let record = parse_datagram(&bytes, 23, libc::AF_INET6 as u8)
             .unwrap()
-            .records
+            .0
             .pop()
             .unwrap();
         assert_eq!(record.identity.address, IpAddr::V6(Ipv6Addr::LOCALHOST));

@@ -476,7 +476,7 @@ fn run_m0_placed(
                 binding.service_name.clone(),
                 nixfied_runtime::service::SelectedEndpoint {
                     endpoint_id: primary.endpoint_id.clone(),
-                    host: primary.host.to_string(),
+                    host: primary.host,
                     port,
                 },
             ))
@@ -636,7 +636,7 @@ fn run_m0_placed(
                 service_id: current_service.service_name().to_string(),
                 service_instance_id: current_service.service_instance_id.clone(),
                 process_key: current_service.process_key.clone(),
-                selected_endpoint: current_service.selected_endpoint.clone(),
+                selected_endpoint: current_service.selected_endpoint().cloned(),
             });
             let summary = write_failure_run_summary_from_services(
                 placement,
@@ -666,7 +666,7 @@ fn run_m0_placed(
             ));
         }
         if options.output_mode.emit_summary() {
-            match &current_service.selected_endpoint {
+            match current_service.selected_endpoint() {
                 Some(endpoint) => eprintln!(
                     "  service {} ready at {}:{}",
                     current_service.service_name(),
@@ -993,7 +993,7 @@ fn services_output(started: &[StartedService]) -> Vec<ServiceRunOutput> {
             service_id: service.service_name().to_string(),
             service_instance_id: service.service_instance_id.clone(),
             process_key: service.process_key.clone(),
-            selected_endpoint: service.selected_endpoint.clone(),
+            selected_endpoint: service.selected_endpoint().cloned(),
         })
         .collect()
 }

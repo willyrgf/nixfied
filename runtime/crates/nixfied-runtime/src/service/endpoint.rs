@@ -6,9 +6,8 @@
 
 #[cfg(test)]
 use std::cell::Cell;
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::ffi::{CStr, CString};
-use std::fmt;
 use std::io;
 use std::net::IpAddr;
 #[cfg(test)]
@@ -21,7 +20,9 @@ use nixfied_model::ContainmentRequirement;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-use crate::service::process::{process_is_in_containment, process_is_live_with_identity};
+use crate::service::process::{
+    SelectedEndpoint, process_is_in_containment, process_is_live_with_identity,
+};
 
 use super::TrackedProcessIdentity;
 
@@ -33,79 +34,31 @@ mod macos;
 const LOCK_SUFFIX: &str = ".lock";
 const STABLE_SNAPSHOT_ATTEMPTS: usize = 3;
 
+fn read_array<const N: usize>(bytes: &[u8], offset: usize) -> Option<[u8; N]> {
+    let end = offset.checked_add(N)?;
+    bytes.get(offset..end)?.try_into().ok()
+}
+
 #[cfg(test)]
 thread_local! {
     static TEST_LOCK_ROOT_FD: Cell<Option<RawFd>> = const { Cell::new(None) };
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub(crate) enum EndpointFamily {
-    Ipv4,
-    Ipv6,
-}
-
-impl EndpointFamily {
-    pub(crate) fn as_str(&self) -> &'static str {
-        match self {
-            Self::Ipv4 => "ipv4",
-            Self::Ipv6 => "ipv6",
-        }
-    }
-
-    fn tag(&self) -> u8 {
-        match self {
-            Self::Ipv4 => 4,
-            Self::Ipv6 => 6,
-        }
+fn address_family(address: IpAddr) -> &'static str {
+    match address {
+        IpAddr::V4(_) => "ipv4",
+        IpAddr::V6(_) => "ipv6",
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct PlannedEndpoint {
-    pub(crate) endpoint_id: String,
-    pub(crate) family: EndpointFamily,
-    pub(crate) address: IpAddr,
-    pub(crate) port: u16,
-}
-
-impl PlannedEndpoint {
-    pub(crate) fn parse(
-        endpoint_id: impl Into<String>,
-        address: &str,
-        port: u16,
-    ) -> Result<Self, EndpointFailure> {
-        let address = address.parse::<IpAddr>().map_err(|error| {
-            EndpointFailure::unverifiable(
-                None,
-                format!("invalid endpoint address {address}: {error}"),
-            )
-        })?;
-        if !address.is_loopback() {
-            return Err(EndpointFailure::unverifiable(
-                None,
-                format!("endpoint address {address} is not loopback"),
-            ));
-        }
-        let family = match address {
-            IpAddr::V4(_) => EndpointFamily::Ipv4,
-            IpAddr::V6(_) => EndpointFamily::Ipv6,
-        };
-        Ok(Self {
-            endpoint_id: endpoint_id.into(),
-            family,
-            address,
-            port,
-        })
-    }
-
-    pub(crate) fn canonical_address(&self) -> String {
-        self.address.to_string()
+fn address_family_tag(address: IpAddr) -> u8 {
+    match address {
+        IpAddr::V4(_) => 4,
+        IpAddr::V6(_) => 6,
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, PartialEq, Eq)]
 enum NetworkScope {
     #[cfg(target_os = "linux")]
     Linux { device: u64, inode: u64 },
@@ -132,13 +85,6 @@ impl NetworkScope {
         {
             Ok(Self::Host)
         }
-        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-        {
-            Err(EndpointFailure::unverifiable(
-                None,
-                "endpoint coordination is unsupported on this platform",
-            ))
-        }
     }
 
     fn append_bytes(&self, out: &mut Vec<u8>) {
@@ -155,27 +101,26 @@ impl NetworkScope {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug)]
 struct EndpointKey {
-    encoded: Vec<u8>,
     filename: String,
-    endpoint: PlannedEndpoint,
+    endpoint: SelectedEndpoint,
 }
 
 impl EndpointKey {
-    fn derive(endpoint: &PlannedEndpoint, scope: &NetworkScope) -> Self {
+    fn derive(endpoint: &SelectedEndpoint, scope: &NetworkScope) -> Self {
         let mut encoded = Vec::with_capacity(64);
         encoded.extend_from_slice(b"tcp\0");
         scope.append_bytes(&mut encoded);
-        encoded.push(endpoint.family.tag());
-        match endpoint.address {
+        let address = endpoint.host.ip();
+        encoded.push(address_family_tag(address));
+        match address {
             IpAddr::V4(address) => encoded.extend_from_slice(&address.octets()),
             IpAddr::V6(address) => encoded.extend_from_slice(&address.octets()),
         }
         encoded.extend_from_slice(&endpoint.port.to_be_bytes());
         let filename = format!("{}{}", hex::encode(Sha256::digest(&encoded)), LOCK_SUFFIX);
         Self {
-            encoded,
             filename,
             endpoint: endpoint.clone(),
         }
@@ -185,20 +130,20 @@ impl EndpointKey {
 #[derive(Debug)]
 pub(crate) enum EndpointFailure {
     LockContended {
-        endpoint: PlannedEndpoint,
+        endpoint: SelectedEndpoint,
     },
     ListenerOccupied {
-        endpoint: PlannedEndpoint,
+        endpoint: SelectedEndpoint,
         listeners: Vec<ListenerRecord>,
     },
     Unverifiable {
-        endpoint: Option<PlannedEndpoint>,
+        endpoint: Option<SelectedEndpoint>,
         message: String,
     },
 }
 
 impl EndpointFailure {
-    fn unverifiable(endpoint: Option<PlannedEndpoint>, message: impl Into<String>) -> Self {
+    fn unverifiable(endpoint: Option<SelectedEndpoint>, message: impl Into<String>) -> Self {
         Self::Unverifiable {
             endpoint,
             message: message.into(),
@@ -206,32 +151,10 @@ impl EndpointFailure {
     }
 }
 
-impl fmt::Display for EndpointFailure {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::LockContended { endpoint } => write!(
-                formatter,
-                "endpoint startup lock is contended for {}:{}",
-                endpoint.address, endpoint.port
-            ),
-            Self::ListenerOccupied { endpoint, .. } => write!(
-                formatter,
-                "endpoint is occupied by a listener at {}:{}",
-                endpoint.address, endpoint.port
-            ),
-            Self::Unverifiable { message, .. } => formatter.write_str(message),
-        }
-    }
-}
-
-struct EndpointLockGuard {
-    _fd: OwnedFd,
-}
-
 /// The complete startup lock set for one service. Dropping it releases every
 /// kernel lock; the rendezvous files deliberately remain.
 pub(crate) struct EndpointLockGuards {
-    _guards: Vec<EndpointLockGuard>,
+    _guards: Vec<OwnedFd>,
 }
 
 impl EndpointLockGuards {
@@ -245,20 +168,20 @@ impl EndpointLockGuards {
     }
 }
 
-pub(crate) fn acquire_startup_locks(
-    endpoints: &[PlannedEndpoint],
+pub(crate) fn acquire_startup_locks<'a>(
+    endpoints: impl IntoIterator<Item = &'a SelectedEndpoint>,
 ) -> Result<EndpointLockGuards, EndpointFailure> {
-    if endpoints.is_empty() {
+    let mut endpoints = endpoints.into_iter().peekable();
+    if endpoints.peek().is_none() {
         return Ok(EndpointLockGuards {
             _guards: Vec::new(),
         });
     }
     let scope = NetworkScope::production()?;
     let mut keys = endpoints
-        .iter()
         .map(|endpoint| EndpointKey::derive(endpoint, &scope))
         .collect::<Vec<_>>();
-    keys.sort_by(|left, right| left.encoded.cmp(&right.encoded));
+    keys.sort_by(|left, right| left.filename.cmp(&right.filename));
     let lock_dir = open_lock_directory()?;
     let mut guards = Vec::with_capacity(keys.len());
     for key in keys {
@@ -279,7 +202,7 @@ pub(crate) fn acquire_startup_locks(
                 format!("failed to acquire endpoint startup lock: {error}"),
             ));
         }
-        guards.push(EndpointLockGuard { _fd: fd });
+        guards.push(fd);
     }
     Ok(EndpointLockGuards { _guards: guards })
 }
@@ -301,15 +224,6 @@ fn open_lock_directory() -> Result<OwnedFd, EndpointFailure> {
     const SYSTEM_COMPONENTS: &[&CStr] = &[c"tmp"];
     #[cfg(target_os = "macos")]
     const SYSTEM_COMPONENTS: &[&CStr] = &[c"private", c"tmp"];
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    const SYSTEM_COMPONENTS: &[&CStr] = &[];
-
-    if SYSTEM_COMPONENTS.is_empty() {
-        return Err(EndpointFailure::unverifiable(
-            None,
-            "endpoint coordination is unsupported on this platform",
-        ));
-    }
     let root = open_path(c"/", libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW)?;
     validate_directory(root.as_raw_fd(), 0, None, "filesystem root")?;
     let mut current = root;
@@ -546,15 +460,38 @@ pub(crate) enum KernelSocketIdentity {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct ListenerIdentity {
-    pub(crate) family: EndpointFamily,
     pub(crate) address: IpAddr,
     pub(crate) port: u16,
     pub(crate) kernel: KernelSocketIdentity,
     pub(crate) uid: u32,
     pub(crate) ipv6_only: Option<bool>,
+}
+
+impl Serialize for ListenerIdentity {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Borrowed<'a> {
+            family: &'static str,
+            address: IpAddr,
+            port: u16,
+            kernel: &'a KernelSocketIdentity,
+            uid: u32,
+            ipv6_only: Option<bool>,
+        }
+
+        Borrowed {
+            family: address_family(self.address),
+            address: self.address,
+            port: self.port,
+            kernel: &self.kernel,
+            uid: self.uid,
+            ipv6_only: self.ipv6_only,
+        }
+        .serialize(serializer)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -574,11 +511,11 @@ pub(crate) struct ListenerRecord {
     pub(crate) pid_hints: Vec<u32>,
 }
 
-pub(crate) fn conflicts(planned: &PlannedEndpoint, observed: &ListenerRecord) -> bool {
-    if planned.port != observed.identity.port {
+pub(crate) fn conflicts(endpoint: &SelectedEndpoint, observed: &ListenerRecord) -> bool {
+    if endpoint.port != observed.identity.port {
         return false;
     }
-    match (planned.address, observed.identity.address) {
+    match (endpoint.host.ip(), observed.identity.address) {
         (IpAddr::V4(planned), IpAddr::V4(observed)) => {
             observed.is_unspecified() || observed == planned
         }
@@ -599,33 +536,47 @@ pub(crate) fn conflicts(planned: &PlannedEndpoint, observed: &ListenerRecord) ->
 }
 
 pub(crate) fn satisfies_declared_endpoint(
-    planned: &PlannedEndpoint,
+    endpoint: &SelectedEndpoint,
     observed: &ListenerRecord,
 ) -> bool {
-    planned.port == observed.identity.port
-        && planned.family == observed.identity.family
-        && planned.address == observed.identity.address
+    endpoint.port == observed.identity.port && endpoint.host.ip() == observed.identity.address
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct EndpointOwnership {
-    pub(crate) endpoint_id: String,
-    pub(crate) address: IpAddr,
-    pub(crate) port: u16,
+pub(crate) struct EndpointOwnership<'a> {
+    pub(crate) endpoint: &'a SelectedEndpoint,
     pub(crate) listeners: Vec<ListenerRecord>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum OwnershipObservation {
-    Complete(Vec<EndpointOwnership>),
-    Missing(PlannedEndpoint),
+impl Serialize for EndpointOwnership<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Borrowed<'a> {
+            endpoint_id: &'a str,
+            address: &'a nixfied_model::LoopbackHost,
+            port: u16,
+            listeners: &'a [ListenerRecord],
+        }
+
+        Borrowed {
+            endpoint_id: &self.endpoint.endpoint_id,
+            address: &self.endpoint.host,
+            port: self.endpoint.port,
+            listeners: &self.listeners,
+        }
+        .serialize(serializer)
+    }
+}
+
+pub(crate) enum OwnershipObservation<'a> {
+    Complete(Vec<EndpointOwnership<'a>>),
+    Missing(&'a SelectedEndpoint),
     Outside {
-        endpoint: PlannedEndpoint,
+        endpoint: &'a SelectedEndpoint,
         listeners: Vec<ListenerRecord>,
     },
     Unverifiable {
-        endpoint: Option<PlannedEndpoint>,
+        endpoint: Option<&'a SelectedEndpoint>,
         message: String,
     },
     ContainmentUnconfirmed {
@@ -641,11 +592,12 @@ pub(crate) struct ExpectedOwner<'a> {
     pub(crate) tracked_processes: &'a [TrackedProcessIdentity],
 }
 
-pub(crate) fn observe_ownership(
-    endpoints: &[PlannedEndpoint],
+pub(crate) fn observe_ownership<'a>(
+    endpoints: &'a BTreeMap<String, SelectedEndpoint>,
     expected: &ExpectedOwner<'_>,
-) -> OwnershipObservation {
-    observe_ownership_inner(endpoints, expected, true)
+) -> OwnershipObservation<'a> {
+    let endpoints = endpoints.values().collect::<Vec<_>>();
+    observe_ownership_inner(&endpoints, expected, true)
 }
 
 /// Re-observe after the foreground child is known to have exited. The recorded
@@ -654,18 +606,26 @@ pub(crate) fn observe_ownership(
 /// weaker early-exit error with PORT_CONFLICT. A listener left inside the old
 /// containment does not become an outside conflict; the caller preserves
 /// PROC_ESCAPE and terminates the complete tracked tree.
-pub(crate) fn observe_ownership_after_primary_exit(
-    endpoints: &[PlannedEndpoint],
+pub(crate) fn observe_ownership_after_primary_exit<'a>(
+    endpoints: &'a BTreeMap<String, SelectedEndpoint>,
     expected: &ExpectedOwner<'_>,
-) -> OwnershipObservation {
-    observe_ownership_inner(endpoints, expected, false)
+) -> OwnershipObservation<'a> {
+    let endpoints = endpoints.values().collect::<Vec<_>>();
+    observe_ownership_inner(&endpoints, expected, false)
 }
 
-fn observe_ownership_inner(
-    endpoints: &[PlannedEndpoint],
+pub(crate) fn observe_single_ownership<'a>(
+    endpoint: &'a SelectedEndpoint,
+    expected: &ExpectedOwner<'_>,
+) -> OwnershipObservation<'a> {
+    observe_ownership_inner(&[endpoint], expected, true)
+}
+
+fn observe_ownership_inner<'a>(
+    endpoints: &[&'a SelectedEndpoint],
     expected: &ExpectedOwner<'_>,
     require_primary_live: bool,
-) -> OwnershipObservation {
+) -> OwnershipObservation<'a> {
     if endpoints.is_empty() {
         return OwnershipObservation::Complete(Vec::new());
     }
@@ -705,7 +665,8 @@ fn observe_ownership_inner(
         }
     };
     let euid = unsafe { libc::geteuid() } as u32;
-    for endpoint in endpoints {
+    let mut ownership = Vec::with_capacity(endpoints.len());
+    for endpoint in endpoints.iter().copied() {
         let matches = listeners
             .iter()
             .filter(|listener| conflicts(endpoint, listener))
@@ -714,24 +675,23 @@ fn observe_ownership_inner(
         for listener in &matches {
             if listener.identity.uid != euid {
                 return OwnershipObservation::Outside {
-                    endpoint: endpoint.clone(),
+                    endpoint,
                     listeners: matches,
                 };
             }
             if listener.holders.is_empty() {
                 return OwnershipObservation::Unverifiable {
-                    endpoint: Some(endpoint.clone()),
+                    endpoint: Some(endpoint),
                     message: format!(
                         "listener record for {}:{} could not be correlated to a live fd holder",
                         listener.identity.address, listener.identity.port
                     ),
                 };
             }
-            let mut tracked = false;
             for holder in &listener.holders {
                 if holder.platform_start.is_none() {
                     return OwnershipObservation::Unverifiable {
-                        endpoint: Some(endpoint.clone()),
+                        endpoint: Some(endpoint),
                         message: format!(
                             "listener holder pid {} has no live start identity",
                             holder.pid
@@ -741,11 +701,10 @@ fn observe_ownership_inner(
                 if !require_primary_live {
                     if holder.pid == expected.pid {
                         if holder.platform_start.as_deref() == Some(expected_start) {
-                            tracked = true;
                             continue;
                         }
                         return OwnershipObservation::Outside {
-                            endpoint: endpoint.clone(),
+                            endpoint,
                             listeners: matches,
                         };
                     }
@@ -763,11 +722,10 @@ fn observe_ownership_inner(
                             };
                         };
                         if holder.platform_start.as_deref() == Some(monitored_start) {
-                            tracked = true;
                             continue;
                         }
                         return OwnershipObservation::Outside {
-                            endpoint: endpoint.clone(),
+                            endpoint,
                             listeners: matches,
                         };
                     }
@@ -779,10 +737,10 @@ fn observe_ownership_inner(
                     holder.pid,
                     holder.pgid,
                 ) {
-                    Ok(true) => tracked = true,
+                    Ok(true) => {}
                     Ok(false) => {
                         return OwnershipObservation::Outside {
-                            endpoint: endpoint.clone(),
+                            endpoint,
                             listeners: matches,
                         };
                     }
@@ -793,40 +751,25 @@ fn observe_ownership_inner(
                     }
                 }
             }
-            if !tracked {
-                return OwnershipObservation::Unverifiable {
-                    endpoint: Some(endpoint.clone()),
-                    message: "listener has no holder in the tracked containment".to_string(),
-                };
-            }
         }
-    }
-    for endpoint in endpoints {
-        if !listeners
+        if !matches
             .iter()
             .any(|listener| satisfies_declared_endpoint(endpoint, listener))
         {
-            return OwnershipObservation::Missing(endpoint.clone());
+            return OwnershipObservation::Missing(endpoint);
         }
+        ownership.push(EndpointOwnership {
+            endpoint,
+            listeners: matches,
+        });
     }
-    OwnershipObservation::Complete(
-        endpoints
-            .iter()
-            .map(|endpoint| EndpointOwnership {
-                endpoint_id: endpoint.endpoint_id.clone(),
-                address: endpoint.address,
-                port: endpoint.port,
-                listeners: listeners
-                    .iter()
-                    .filter(|listener| conflicts(endpoint, listener))
-                    .cloned()
-                    .collect(),
-            })
-            .collect(),
-    )
+    OwnershipObservation::Complete(ownership)
 }
 
-pub(crate) fn preflight(endpoints: &[PlannedEndpoint]) -> Result<(), EndpointFailure> {
+pub(crate) fn preflight<'a>(
+    endpoints: impl IntoIterator<Item = &'a SelectedEndpoint>,
+) -> Result<(), EndpointFailure> {
+    let endpoints = endpoints.into_iter().collect::<Vec<_>>();
     if endpoints.is_empty() {
         return Ok(());
     }
@@ -837,26 +780,22 @@ pub(crate) fn preflight(endpoints: &[PlannedEndpoint]) -> Result<(), EndpointFai
         match bind_exact(endpoint) {
             Ok(BindResult::Available) => {}
             Ok(BindResult::AddressInUse) => {
-                let listeners = stable_matching_snapshot(std::slice::from_ref(endpoint), false)
-                    .map_err(|message| {
+                let listeners =
+                    stable_matching_snapshot(&[endpoint], false).map_err(|message| {
                         EndpointFailure::unverifiable(Some(endpoint.clone()), message)
                     })?;
-                let conflicts = listeners
-                    .into_iter()
-                    .filter(|listener| conflicts(endpoint, listener))
-                    .collect::<Vec<_>>();
-                if conflicts.is_empty() {
+                if listeners.is_empty() {
                     return Err(EndpointFailure::unverifiable(
                         Some(endpoint.clone()),
                         format!(
                             "bind reported address in use for {}:{} without an observable listener",
-                            endpoint.address, endpoint.port
+                            endpoint.host, endpoint.port
                         ),
                     ));
                 }
                 return Err(EndpointFailure::ListenerOccupied {
                     endpoint: endpoint.clone(),
-                    listeners: conflicts,
+                    listeners,
                 });
             }
             Err(message) => {
@@ -871,19 +810,12 @@ pub(crate) fn preflight(endpoints: &[PlannedEndpoint]) -> Result<(), EndpointFai
 }
 
 fn stable_matching_snapshot(
-    endpoints: &[PlannedEndpoint],
+    endpoints: &[&SelectedEndpoint],
     correlation_required: bool,
 ) -> Result<Vec<ListenerRecord>, String> {
     let mut last_churn = None;
     for _ in 0..STABLE_SNAPSHOT_ATTEMPTS {
-        let mut before = platform_snapshot()?
-            .into_iter()
-            .filter(|listener| {
-                endpoints
-                    .iter()
-                    .any(|endpoint| conflicts(endpoint, listener))
-            })
-            .collect::<Vec<_>>();
+        let mut before = matching_snapshot(endpoints)?;
         let correlation = platform_correlate(&mut before);
         if correlation_required {
             correlation?;
@@ -892,22 +824,15 @@ fn stable_matching_snapshot(
                 listener.holders.clear();
             }
         }
-        let after = platform_snapshot()?
-            .into_iter()
-            .filter(|listener| {
-                endpoints
-                    .iter()
-                    .any(|endpoint| conflicts(endpoint, listener))
-            })
-            .collect::<Vec<_>>();
+        let after = matching_snapshot(endpoints)?;
         let before_ids = before
             .iter()
             .map(|record| record.identity.clone())
-            .collect::<BTreeSet<_>>();
+            .collect::<Vec<_>>();
         let after_ids = after
             .iter()
             .map(|record| record.identity.clone())
-            .collect::<BTreeSet<_>>();
+            .collect::<Vec<_>>();
         if before_ids == after_ids {
             return Ok(before);
         }
@@ -918,6 +843,17 @@ fn stable_matching_snapshot(
     Err(last_churn.unwrap_or_else(|| "listener snapshot was unstable".to_string()))
 }
 
+fn matching_snapshot(endpoints: &[&SelectedEndpoint]) -> Result<Vec<ListenerRecord>, String> {
+    Ok(platform_snapshot()?
+        .into_iter()
+        .filter(|listener| {
+            endpoints
+                .iter()
+                .any(|endpoint| conflicts(endpoint, listener))
+        })
+        .collect())
+}
+
 fn platform_snapshot() -> Result<Vec<ListenerRecord>, String> {
     #[cfg(target_os = "linux")]
     {
@@ -926,10 +862,6 @@ fn platform_snapshot() -> Result<Vec<ListenerRecord>, String> {
     #[cfg(target_os = "macos")]
     {
         macos::snapshot()
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        Err("kernel listener observation is unsupported on this platform".to_string())
     }
 }
 
@@ -942,11 +874,6 @@ fn platform_correlate(records: &mut [ListenerRecord]) -> Result<(), String> {
     {
         macos::correlate(records)
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        let _ = records;
-        Err("kernel listener correlation is unsupported on this platform".to_string())
-    }
 }
 
 enum BindResult {
@@ -954,10 +881,10 @@ enum BindResult {
     AddressInUse,
 }
 
-fn bind_exact(endpoint: &PlannedEndpoint) -> Result<BindResult, String> {
-    let domain = match endpoint.family {
-        EndpointFamily::Ipv4 => libc::AF_INET,
-        EndpointFamily::Ipv6 => libc::AF_INET6,
+fn bind_exact(endpoint: &SelectedEndpoint) -> Result<BindResult, String> {
+    let domain = match endpoint.host.ip() {
+        IpAddr::V4(_) => libc::AF_INET,
+        IpAddr::V6(_) => libc::AF_INET6,
     };
     #[cfg(target_os = "linux")]
     let socket_type = libc::SOCK_STREAM | libc::SOCK_CLOEXEC;
@@ -974,7 +901,7 @@ fn bind_exact(endpoint: &PlannedEndpoint) -> Result<BindResult, String> {
     let socket = unsafe { OwnedFd::from_raw_fd(raw) };
     #[cfg(not(target_os = "linux"))]
     set_cloexec(socket.as_raw_fd())?;
-    let result = match endpoint.address {
+    let result = match endpoint.host.ip() {
         IpAddr::V4(address) => {
             // SAFETY: zero is a valid initial representation; every field bind
             // consumes is initialized below.
@@ -1027,7 +954,7 @@ fn bind_exact(endpoint: &PlannedEndpoint) -> Result<BindResult, String> {
         } else {
             Err(format!(
                 "failed to bind endpoint preflight socket at {}:{}: {error}",
-                endpoint.address, endpoint.port
+                endpoint.host, endpoint.port
             ))
         }
     }
@@ -1093,17 +1020,17 @@ mod tests {
         assert!(matches!(result, Err(EndpointFailure::Unverifiable { .. })));
     }
 
-    fn endpoint(address: &str, port: u16) -> PlannedEndpoint {
-        PlannedEndpoint::parse("test", address, port).unwrap()
+    fn endpoint(address: &str, port: u16) -> SelectedEndpoint {
+        SelectedEndpoint {
+            endpoint_id: "test".to_string(),
+            host: nixfied_model::LoopbackHost::parse(address).unwrap(),
+            port,
+        }
     }
 
     fn listener(address: IpAddr, port: u16, ipv6_only: Option<bool>) -> ListenerRecord {
         ListenerRecord {
             identity: ListenerIdentity {
-                family: match address {
-                    IpAddr::V4(_) => EndpointFamily::Ipv4,
-                    IpAddr::V6(_) => EndpointFamily::Ipv6,
-                },
                 address,
                 port,
                 kernel: test_kernel_identity(),
@@ -1221,24 +1148,19 @@ mod tests {
         assert_eq!(NetworkScope::production().unwrap(), NetworkScope::Host);
         let key = EndpointKey::derive(&endpoint("127.0.0.1", 23080), &NetworkScope::Host);
         assert_eq!(
-            hex::encode(&key.encoded),
-            "74637000686f737400047f0000015a28"
+            key.filename,
+            "bec0f5812199b9f16f3c4bcac20d074711ee127f5d9f28f692e470e972e8fc6e.lock"
         );
-        assert_eq!(key.filename.len(), 64 + LOCK_SUFFIX.len());
     }
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn endpoint_key_encoding_and_digest_are_stable() {
+    fn endpoint_key_digest_is_stable() {
         let scope = NetworkScope::Linux {
             device: 0x0102_0304_0506_0708,
             inode: 0x1112_1314_1516_1718,
         };
         let key = EndpointKey::derive(&endpoint("127.0.0.1", 23080), &scope);
-        assert_eq!(
-            hex::encode(&key.encoded),
-            "746370006c696e75780001020304050607081112131415161718047f0000015a28"
-        );
         assert_eq!(
             key.filename,
             "e57a1586478a9da5cbd9deb535ba9cb28fda348d8855c6e47979f68f9c3f2ef0.lock"
@@ -1251,6 +1173,20 @@ mod tests {
             },
         );
         assert_ne!(key.filename, other.filename);
+    }
+
+    #[test]
+    fn ownership_evidence_projects_the_selected_endpoint_as_an_address() {
+        let endpoint = endpoint("127.0.0.1", 23080);
+        let ownership = EndpointOwnership {
+            endpoint: &endpoint,
+            listeners: vec![listener(IpAddr::V4(Ipv4Addr::LOCALHOST), 23080, None)],
+        };
+        let value = serde_json::to_value(ownership).unwrap();
+        assert_eq!(value["endpointId"], "test");
+        assert_eq!(value["address"], "127.0.0.1");
+        assert_eq!(value["port"], 23080);
+        assert_eq!(value["listeners"][0]["identity"]["family"], "ipv4");
     }
 
     #[cfg(target_os = "linux")]
@@ -1365,8 +1301,9 @@ mod tests {
         let start = crate::service::process::platform_start_identity(pid)
             .expect("test process has a start identity");
 
+        let endpoints = BTreeMap::from([(planned.endpoint_id.clone(), planned.clone())]);
         let observation = observe_ownership(
-            std::slice::from_ref(&planned),
+            &endpoints,
             &ExpectedOwner {
                 pid,
                 pgid,
@@ -1391,13 +1328,10 @@ mod tests {
     #[test]
     fn endpoint_id_and_declared_values_do_not_enter_the_lock_filename() {
         let scope = NetworkScope::production().unwrap();
-        let public = PlannedEndpoint::parse("public", "127.0.0.1", 23100).unwrap();
-        let secret_named = PlannedEndpoint::parse(
-            "SECRET_TOKEN_and_ENV_VALUE_and_arbitrary-command",
-            "127.0.0.1",
-            23100,
-        )
-        .unwrap();
+        let mut public = endpoint("127.0.0.1", 23100);
+        public.endpoint_id = "public".to_string();
+        let mut secret_named = endpoint("127.0.0.1", 23100);
+        secret_named.endpoint_id = "SECRET_TOKEN_and_ENV_VALUE_and_arbitrary-command".to_string();
         let public_key = EndpointKey::derive(&public, &scope);
         let secret_key = EndpointKey::derive(&secret_named, &scope);
         assert_eq!(public_key.filename, secret_key.filename);
@@ -1443,7 +1377,7 @@ mod tests {
         with_root(&root, || {
             let scope = NetworkScope::production().unwrap();
             let mut endpoints = [endpoint("127.0.0.1", 23111), endpoint("127.0.0.1", 23112)];
-            endpoints.sort_by_key(|endpoint| EndpointKey::derive(endpoint, &scope).encoded);
+            endpoints.sort_by_key(|endpoint| EndpointKey::derive(endpoint, &scope).filename);
             let contended = acquire_startup_locks(std::slice::from_ref(&endpoints[1])).unwrap();
             assert!(matches!(
                 acquire_startup_locks(&endpoints),
@@ -1452,7 +1386,7 @@ mod tests {
             let partial_was_released =
                 acquire_startup_locks(std::slice::from_ref(&endpoints[0])).unwrap();
             for guard in &partial_was_released._guards {
-                let flags = unsafe { libc::fcntl(guard._fd.as_raw_fd(), libc::F_GETFD) };
+                let flags = unsafe { libc::fcntl(guard.as_raw_fd(), libc::F_GETFD) };
                 assert!(flags >= 0 && flags & libc::FD_CLOEXEC != 0);
             }
             drop(partial_was_released);

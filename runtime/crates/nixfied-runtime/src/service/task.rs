@@ -114,7 +114,7 @@ pub fn run_dependent_task_cancellable(
     // alone.
     let endpoint = dependencies
         .first()
-        .and_then(|service| service.selected_endpoint.as_ref());
+        .and_then(|service| service.selected_endpoint());
     // Endpoint-less dependencies are alive while the task runs but contribute
     // nothing addressable; lowering already rejected placeholders toward them.
     let named: SlotEndpoints = dependencies
@@ -122,7 +122,7 @@ pub fn run_dependent_task_cancellable(
         .filter_map(|service| {
             Some((
                 ServiceId::new(service.service_name()),
-                service.selected_endpoint.clone()?,
+                service.selected_endpoint().cloned()?,
             ))
         })
         .collect();
