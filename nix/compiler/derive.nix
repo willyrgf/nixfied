@@ -321,11 +321,28 @@ let
   # Derived per task: the union of transitive leaf requires, closed over
   # connectsTo (docs/DERIVATION_SPEC.md §3). The runtime re-derives and
   # compares at admission (DERIVE-1).
-  taskServicesRequired = deriveFacts.servicesRequired {
-    tasks = config.nixfied.tasks;
-    services = config.nixfied.services;
-    prepareTaskOf = name: config.nixfied.services.${name}.lifecycle.prepare.task;
-  };
+  taskServicesRequired =
+    let
+      derived = deriveFacts.servicesRequired {
+        tasks = config.nixfied.tasks;
+        services = config.nixfied.services;
+        prepareTaskOf = name: config.nixfied.services.${name}.lifecycle.prepare.task;
+      };
+      endpointDemand =
+        required:
+        lib.foldl' (
+          total: serviceName:
+          total + builtins.length (builtins.attrNames (services.${serviceName}.endpoints or { }))
+        ) 0 required;
+    in
+    name:
+    let
+      required = derived name;
+    in
+    assert lib.assertMsg (
+      endpointDemand required <= portPolicy.windowSize
+    ) "task ${name}: derived service endpoint demand must fit placement.ports.windowSize";
+    required;
   taskSpec =
     name: task:
     if task.kind == "composite" then

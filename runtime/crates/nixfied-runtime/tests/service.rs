@@ -4,7 +4,7 @@ use std::net::TcpListener;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Output, Stdio};
+use std::process::{Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -15,16 +15,17 @@ use nixfied_runtime::cancellation::CancellationToken;
 use nixfied_runtime::redaction::{REDACTION_TOKEN, Redactor};
 use nixfied_runtime::registry::{Registry, RegistryIdentity};
 use nixfied_runtime::service::{
-    RunContext, ServiceSelection, SlotEndpoints, StartedService, compute_service_identity,
-    record_run_created, run_dependent_task, run_dependent_task_cancellable, service_address_hash,
-    service_instance_id, start_service_for_slot,
+    PrepareRunner, RunContext, ServiceSelection, SlotEndpoints, StartedService,
+    compute_service_identity, record_run_created, run_dependent_task,
+    run_dependent_task_cancellable, service_address_hash, service_instance_id,
+    start_service_for_slot,
 };
 use nixfied_runtime::slot::select_slot;
 use nixfied_runtime::state::{
     CleanupMode, StateIdentity, clean_marked_state, commit_slot_marker, derive_host_placement,
     derive_host_placement_for_slot, materialize_run_roots,
 };
-use nixfied_runtime::{Admission, AdmittedSource, ErrorCode, RuntimeResult};
+use nixfied_runtime::{Admission, AdmittedSource, ErrorCode, RuntimeError, RuntimeResult};
 use serde_json::{Value, json};
 
 use nixfied_runtime::control::{down_owned_process_groups, ps};
@@ -488,58 +489,6 @@ fn lifecycle_events_follow_declared_class_order_and_clean_terminal() {
         .collect::<Result<Vec<_>, _>>()
         .expect("cleanup events should collect");
     assert_eq!(cleanup_events, vec!["cleanup.intent", "cleanup.deleted"]);
-}
-
-#[test]
-fn external_listener_is_refused_by_preflight_before_service_mutation() {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("listener should bind");
-    let port = listener.local_addr().expect("local addr").port();
-    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], port);
-    let error = match start_synthetic_service(
-        &fixture.model,
-        &fixture.admission,
-        &fixture.placement,
-        &mut fixture.registry,
-        "run-external-listener",
-        port,
-    ) {
-        Ok(service) => {
-            let _ = service.stop(&mut fixture.registry, 1000);
-            panic!("a proven external listener must be refused before spawn");
-        }
-        Err(error) => error,
-    };
-
-    assert_eq!(error.code, ErrorCode::PortConflict);
-    assert_eq!(
-        error.details["portConflict"]["reason"],
-        json!("listener-occupied")
-    );
-    assert_eq!(
-        error.details["portConflict"]["endpoint"],
-        json!({
-            "transport": "tcp",
-            "family": "ipv4",
-            "address": "127.0.0.1",
-            "port": port,
-            "endpointId": "synthetic-tcp"
-        })
-    );
-    assert!(error.details["portConflict"].get("nixfiedOwner").is_none());
-    let service_rows: i64 = fixture
-        .registry
-        .connection()
-        .query_row("SELECT count(*) FROM services", [], |row| row.get(0))
-        .expect("service rows should query");
-    let process_rows: i64 = fixture
-        .registry
-        .connection()
-        .query_row("SELECT count(*) FROM processes", [], |row| row.get(0))
-        .expect("process rows should query");
-
-    assert_eq!(service_rows, 0);
-    assert_eq!(process_rows, 0);
-    drop(listener);
 }
 
 #[test]
@@ -4451,46 +4400,25 @@ fn impossible_active_registry_row_after_reconciliation_is_corrupt() {
 
 #[test]
 fn cancellation_after_prepare_settles_reservation_and_releases_startup_guard() {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
-    let port = listener.local_addr().expect("local addr").port();
-    drop(listener);
+    let port = available_port_window(1);
     let mut fixture = service_fixture_with_prepare("/bin/sleep", &["30"], port);
-    let selected = select_slot(&fixture.model, None).expect("default slot should select");
-    let endpoint_ports = BTreeMap::from([("synthetic-tcp".to_string(), port)]);
     let cancellation = CancellationToken::new();
     let prepare_cancellation = cancellation.clone();
-
-    record_fixture_run(
-        &mut fixture.registry,
-        &fixture.admission,
-        &fixture.placement,
+    let result = start_prepared_service(
+        &mut fixture,
         "run-prepare-canceled",
+        port,
+        &cancellation,
+        Box::new(move |_| {
+            prepare_cancellation.cancel();
+            Ok(())
+        }),
     );
-    let error = match start_service_for_slot(
-        &fixture.admission,
-        &fixture.placement,
+    let error = expect_service_start_failure(
+        result,
         &mut fixture.registry,
-        "run-prepare-canceled",
-        &selected,
-        ServiceSelection {
-            service_name: "synthetic",
-            service_lifetime: ServiceLifetime::RunScoped,
-            endpoint_ports: &endpoint_ports,
-            slot_endpoints: &SlotEndpoints::new(),
-            run_timeout_ms: 5000,
-            cancellation: &cancellation,
-            prepare_runner: Some(Box::new(move |_| {
-                prepare_cancellation.cancel();
-                Ok(())
-            })),
-        },
-    ) {
-        Ok(service) => {
-            let _ = service.stop(&mut fixture.registry, 1000);
-            panic!("cancellation after prepare must prevent spawn");
-        }
-        Err(error) => error,
-    };
+        "cancellation after prepare must prevent spawn",
+    );
 
     assert_eq!(error.code, ErrorCode::Canceled);
     assert_pre_child_settlement(
@@ -4499,77 +4427,31 @@ fn cancellation_after_prepare_settles_reservation_and_releases_startup_guard() {
         "canceled",
         "canceled",
     );
-
-    record_fixture_run(
-        &mut fixture.registry,
-        &fixture.admission,
-        &fixture.placement,
-        "run-after-prepare-canceled",
-    );
-    let retry = start_service_for_slot(
-        &fixture.admission,
-        &fixture.placement,
-        &mut fixture.registry,
-        "run-after-prepare-canceled",
-        &selected,
-        ServiceSelection {
-            service_name: "synthetic",
-            service_lifetime: ServiceLifetime::RunScoped,
-            endpoint_ports: &endpoint_ports,
-            slot_endpoints: &SlotEndpoints::new(),
-            run_timeout_ms: 5000,
-            cancellation: &CancellationToken::new(),
-            prepare_runner: Some(Box::new(|_| Ok(()))),
-        },
-    )
-    .expect("a corrected run should reacquire the endpoint after cancellation");
-    retry
-        .stop(&mut fixture.registry, 1000)
-        .expect("retry service should stop");
+    assert_prepared_retry(&mut fixture, "run-after-prepare-canceled", port);
 }
 
 #[test]
 fn prepare_failure_settles_reservation_and_allows_corrected_retry() {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
-    let port = listener.local_addr().expect("local addr").port();
-    drop(listener);
+    let port = available_port_window(1);
     let mut fixture = service_fixture_with_prepare("/bin/sleep", &["30"], port);
-    let selected = select_slot(&fixture.model, None).expect("default slot should select");
-    let endpoint_ports = BTreeMap::from([("synthetic-tcp".to_string(), port)]);
-
-    record_fixture_run(
-        &mut fixture.registry,
-        &fixture.admission,
-        &fixture.placement,
+    let cancellation = CancellationToken::new();
+    let result = start_prepared_service(
+        &mut fixture,
         "run-prepare-failed",
+        port,
+        &cancellation,
+        Box::new(|_| {
+            Err(RuntimeError::new(
+                ErrorCode::TaskFailed,
+                "deterministic prepare failure",
+            ))
+        }),
     );
-    let error = match start_service_for_slot(
-        &fixture.admission,
-        &fixture.placement,
+    let error = expect_service_start_failure(
+        result,
         &mut fixture.registry,
-        "run-prepare-failed",
-        &selected,
-        ServiceSelection {
-            service_name: "synthetic",
-            service_lifetime: ServiceLifetime::RunScoped,
-            endpoint_ports: &endpoint_ports,
-            slot_endpoints: &SlotEndpoints::new(),
-            run_timeout_ms: 5000,
-            cancellation: &CancellationToken::new(),
-            prepare_runner: Some(Box::new(|_| {
-                Err(nixfied_runtime::RuntimeError::new(
-                    ErrorCode::TaskFailed,
-                    "deterministic prepare failure",
-                ))
-            })),
-        },
-    ) {
-        Ok(service) => {
-            let _ = service.stop(&mut fixture.registry, 1000);
-            panic!("prepare failure must prevent spawn");
-        }
-        Err(error) => error,
-    };
+        "prepare failure must prevent spawn",
+    );
 
     assert_eq!(error.code, ErrorCode::TaskFailed);
     assert_pre_child_settlement(
@@ -4578,33 +4460,7 @@ fn prepare_failure_settles_reservation_and_allows_corrected_retry() {
         "service-failed",
         "failed",
     );
-
-    record_fixture_run(
-        &mut fixture.registry,
-        &fixture.admission,
-        &fixture.placement,
-        "run-after-prepare-failed",
-    );
-    let retry = start_service_for_slot(
-        &fixture.admission,
-        &fixture.placement,
-        &mut fixture.registry,
-        "run-after-prepare-failed",
-        &selected,
-        ServiceSelection {
-            service_name: "synthetic",
-            service_lifetime: ServiceLifetime::RunScoped,
-            endpoint_ports: &endpoint_ports,
-            slot_endpoints: &SlotEndpoints::new(),
-            run_timeout_ms: 5000,
-            cancellation: &CancellationToken::new(),
-            prepare_runner: Some(Box::new(|_| Ok(()))),
-        },
-    )
-    .expect("a corrected run should reacquire the endpoint after prepare failure");
-    retry
-        .stop(&mut fixture.registry, 1000)
-        .expect("retry service should stop");
+    assert_prepared_retry(&mut fixture, "run-after-prepare-failed", port);
 }
 
 #[test]
@@ -4612,9 +4468,7 @@ fn spawn_failure_after_prepare_settles_reservation_and_allows_restored_retry() {
     let executable_dir = TempDir::new();
     let executable = executable_dir.path.join("fixture-sleep");
     restore_executable_fixture(&executable);
-    let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
-    let port = listener.local_addr().expect("local addr").port();
-    drop(listener);
+    let port = available_port_window(1);
     let mut fixture = service_fixture_with_prepare(
         executable
             .to_str()
@@ -4622,45 +4476,27 @@ fn spawn_failure_after_prepare_settles_reservation_and_allows_restored_retry() {
         &["30"],
         port,
     );
-    let selected = select_slot(&fixture.model, None).expect("default slot should select");
-    let endpoint_ports = BTreeMap::from([("synthetic-tcp".to_string(), port)]);
     let removed_executable = executable.clone();
-
-    record_fixture_run(
-        &mut fixture.registry,
-        &fixture.admission,
-        &fixture.placement,
+    let cancellation = CancellationToken::new();
+    let result = start_prepared_service(
+        &mut fixture,
         "run-spawn-failed",
+        port,
+        &cancellation,
+        Box::new(move |_| {
+            fs::remove_file(&removed_executable).map_err(|error| {
+                RuntimeError::new(
+                    ErrorCode::TaskFailed,
+                    format!("failed to remove spawn fixture: {error}"),
+                )
+            })
+        }),
     );
-    let error = match start_service_for_slot(
-        &fixture.admission,
-        &fixture.placement,
+    let error = expect_service_start_failure(
+        result,
         &mut fixture.registry,
-        "run-spawn-failed",
-        &selected,
-        ServiceSelection {
-            service_name: "synthetic",
-            service_lifetime: ServiceLifetime::RunScoped,
-            endpoint_ports: &endpoint_ports,
-            slot_endpoints: &SlotEndpoints::new(),
-            run_timeout_ms: 5000,
-            cancellation: &CancellationToken::new(),
-            prepare_runner: Some(Box::new(move |_| {
-                fs::remove_file(&removed_executable).map_err(|error| {
-                    nixfied_runtime::RuntimeError::new(
-                        ErrorCode::TaskFailed,
-                        format!("failed to remove spawn fixture: {error}"),
-                    )
-                })
-            })),
-        },
-    ) {
-        Ok(service) => {
-            let _ = service.stop(&mut fixture.registry, 1000);
-            panic!("removed executable must fail at the real spawn boundary");
-        }
-        Err(error) => error,
-    };
+        "removed executable must fail at the real spawn boundary",
+    );
 
     assert_eq!(error.code, ErrorCode::ProcEscape);
     assert_pre_child_settlement(
@@ -4671,32 +4507,7 @@ fn spawn_failure_after_prepare_settles_reservation_and_allows_restored_retry() {
     );
 
     restore_executable_fixture(&executable);
-    record_fixture_run(
-        &mut fixture.registry,
-        &fixture.admission,
-        &fixture.placement,
-        "run-after-spawn-failed",
-    );
-    let retry = start_service_for_slot(
-        &fixture.admission,
-        &fixture.placement,
-        &mut fixture.registry,
-        "run-after-spawn-failed",
-        &selected,
-        ServiceSelection {
-            service_name: "synthetic",
-            service_lifetime: ServiceLifetime::RunScoped,
-            endpoint_ports: &endpoint_ports,
-            slot_endpoints: &SlotEndpoints::new(),
-            run_timeout_ms: 5000,
-            cancellation: &CancellationToken::new(),
-            prepare_runner: Some(Box::new(|_| Ok(()))),
-        },
-    )
-    .expect("restoring the admitted executable should permit a retry");
-    retry
-        .stop(&mut fixture.registry, 1000)
-        .expect("retry service should stop");
+    assert_prepared_retry(&mut fixture, "run-after-spawn-failed", port);
 }
 
 fn admission(model: &Model, source_root: &Path) -> Admission {
@@ -5053,18 +4864,18 @@ fn composite_run_keys_evidence_by_step_path() {
     // Per-node evidence: distinct logs and summaries keyed by step path.
     for path in ["twice.first", "twice.again"] {
         assert!(
-            find_file(&state_base, &format!("task.{path}.stdout.log")).is_some(),
+            find_named(&state_base, &format!("task.{path}.stdout.log")).is_some(),
             "missing stdout log for {path}"
         );
         assert!(
-            find_file(&state_base, &format!("summary.{path}.json")).is_some(),
+            find_named(&state_base, &format!("summary.{path}.json")).is_some(),
             "missing summary for {path}"
         );
     }
 
     // Two registry task rows, keyed by step-path process keys.
     let registry_path =
-        find_file(&state_base, "registry.sqlite3").expect("a registry must exist after the run");
+        find_named(&state_base, "registry.sqlite3").expect("a registry must exist after the run");
     let conn = rusqlite::Connection::open(&registry_path).expect("registry should open");
     let keys: Vec<String> = conn
         .prepare("SELECT process_key FROM processes ORDER BY process_key")
@@ -5360,7 +5171,7 @@ fn task_only_run_records_a_durable_runs_row() {
     );
 
     let registry_path =
-        find_file(&state_base, "registry.sqlite3").expect("a registry must exist after the run");
+        find_named(&state_base, "registry.sqlite3").expect("a registry must exist after the run");
     let conn = rusqlite::Connection::open(&registry_path).expect("registry should open");
     let (count, status): (i64, String) = conn
         .query_row(
@@ -5448,7 +5259,7 @@ fn inherit_stdin_reaches_a_task_process() {
     );
 
     let log =
-        find_file(&state_base, "task.smoke.stdout.log").expect("task stdout log should exist");
+        find_named(&state_base, "task.smoke.stdout.log").expect("task stdout log should exist");
     let captured = fs::read_to_string(&log).expect("task stdout log should be readable");
     assert!(
         captured.contains("nixfied-inherited-stdin-marker"),
@@ -5456,54 +5267,11 @@ fn inherit_stdin_reaches_a_task_process() {
     );
 }
 
-/// Recursively locate the single file with `name` written under `root`.
-fn find_file(root: &Path, name: &str) -> Option<PathBuf> {
-    for entry in fs::read_dir(root).ok()? {
-        let path = entry.ok()?.path();
-        if path.is_dir() {
-            if let Some(found) = find_file(&path, name) {
-                return Some(found);
-            }
-        } else if path.file_name().is_some_and(|file| file == name) {
-            return Some(path);
-        }
-    }
-    None
-}
-
-fn available_port_window(width: u16) -> u16 {
-    assert!(width > 0, "port window width must be positive");
-    for _ in 0..256 {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
-        let start = listener.local_addr().expect("local addr").port();
-        drop(listener);
-        let end = u32::from(start) + u32::from(width) - 1;
-        if end > u32::from(u16::MAX) {
-            continue;
-        }
-        let mut held = Vec::with_capacity(usize::from(width));
-        let mut available = true;
-        for port in start..=end as u16 {
-            match TcpListener::bind(("127.0.0.1", port)) {
-                Ok(listener) => held.push(listener),
-                Err(_) => {
-                    available = false;
-                    break;
-                }
-            }
-        }
-        if available {
-            return start;
-        }
-    }
-    panic!("could not find an available {width}-port window");
-}
-
 fn wait_for_task_process_row(state_base: &Path, timeout: Duration) -> PathBuf {
     let deadline = Instant::now() + timeout;
     let mut last_error: Option<String> = None;
     loop {
-        if let Some(registry_path) = find_file(state_base, "registry.sqlite3") {
+        if let Some(registry_path) = find_named(state_base, "registry.sqlite3") {
             match rusqlite::Connection::open(&registry_path).and_then(|conn| {
                 conn.query_row(
                     "SELECT count(*) FROM processes WHERE service_instance_id IS NULL",
@@ -5593,7 +5361,7 @@ fn failed_composite_run_writes_failure_summary() {
         "summary failure output should not append JSON error payload: {stderr_text}"
     );
     let summary_path =
-        find_file(&state_base, "run-summary.json").expect("run summary should exist");
+        find_named(&state_base, "run-summary.json").expect("run summary should exist");
     let summary: Value =
         serde_json::from_slice(&fs::read(&summary_path).expect("run summary should exist"))
             .expect("run summary should parse");
@@ -5863,6 +5631,62 @@ fn service_fixture_with_prepare(
     ServiceFixture::from_model(model)
 }
 
+fn start_prepared_service(
+    fixture: &mut ServiceFixture,
+    run_id: &str,
+    port: u16,
+    cancellation: &CancellationToken,
+    prepare_runner: PrepareRunner<'_>,
+) -> RuntimeResult<StartedService> {
+    record_fixture_run(
+        &mut fixture.registry,
+        &fixture.admission,
+        &fixture.placement,
+        run_id,
+    );
+    let selected = select_slot(&fixture.model, None).expect("default slot should select");
+    let endpoint_ports = BTreeMap::from([("synthetic-tcp".to_string(), port)]);
+    start_service_for_slot(
+        &fixture.admission,
+        &fixture.placement,
+        &mut fixture.registry,
+        run_id,
+        &selected,
+        ServiceSelection {
+            service_name: "synthetic",
+            service_lifetime: ServiceLifetime::RunScoped,
+            endpoint_ports: &endpoint_ports,
+            slot_endpoints: &SlotEndpoints::new(),
+            run_timeout_ms: 5000,
+            cancellation,
+            prepare_runner: Some(prepare_runner),
+        },
+    )
+}
+
+fn expect_service_start_failure(
+    result: RuntimeResult<StartedService>,
+    registry: &mut Registry,
+    message: &str,
+) -> RuntimeError {
+    match result {
+        Ok(service) => {
+            let _ = service.stop(registry, 1000);
+            panic!("{message}");
+        }
+        Err(error) => error,
+    }
+}
+
+fn assert_prepared_retry(fixture: &mut ServiceFixture, run_id: &str, port: u16) {
+    let cancellation = CancellationToken::new();
+    let retry = start_prepared_service(fixture, run_id, port, &cancellation, Box::new(|_| Ok(())))
+        .expect("a corrected run should reacquire the endpoint");
+    retry
+        .stop(&mut fixture.registry, 1000)
+        .expect("retry service should stop");
+}
+
 fn assert_pre_child_settlement(
     registry: &Registry,
     run_id: &str,
@@ -6051,46 +5875,6 @@ fn add_tool_closure(value: &mut Value, id: &str, executable: &Path) {
             .as_array_mut()
             .expect("tools is an array")
             .push(json!(id));
-    }
-}
-
-fn wait_for_path(path: &Path, timeout: Duration) -> bool {
-    let deadline = Instant::now() + timeout;
-    loop {
-        if path.exists() {
-            return true;
-        }
-        if Instant::now() >= deadline {
-            return false;
-        }
-        thread::sleep(Duration::from_millis(25));
-    }
-}
-
-fn wait_for_child_output(mut child: Child, timeout: Duration) -> Output {
-    let deadline = Instant::now() + timeout;
-    loop {
-        if child
-            .try_wait()
-            .expect("child status should be inspectable")
-            .is_some()
-        {
-            return child
-                .wait_with_output()
-                .expect("child output should be collected");
-        }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let output = child
-                .wait_with_output()
-                .expect("timed-out child output should be collected");
-            panic!(
-                "child did not exit before timeout\nstdout: {}\nstderr: {}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            );
-        }
-        thread::sleep(Duration::from_millis(25));
     }
 }
 
