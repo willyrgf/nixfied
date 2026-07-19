@@ -32,8 +32,6 @@ in
       toolchainId = model.toolchainId;
       primitives = [
         "Invocation"
-        "CacheEnvSpec"
-        "CacheKeySpec"
         "Endpoint"
         "ProbeSpec"
         "Lifecycle"

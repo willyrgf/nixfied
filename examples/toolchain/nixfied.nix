@@ -122,16 +122,11 @@ in
         pkgs.gnugrep
         pkgs.coreutils
       ];
-      cacheEnv.NIXFIED_RUN_CACHE = {
-        family = "toolchain-lint";
-        mode = "trusted-ci";
-        scope = "run";
-      };
       run = [
         "bash"
         "-c"
         # Children resolve grep/wc through the assembled PATH.
-        "test -d \"$NIXFIED_RUN_CACHE\" && printf 'lint target\\n' | grep -c target | grep -qx 1"
+        "printf 'lint target\\n' | grep -c target | grep -qx 1"
       ];
     };
   };
@@ -142,16 +137,10 @@ in
         pkgs.bash
         pkgs.coreutils
       ];
-      cacheEnv.NIXFIED_EXAMPLE_CACHE = {
-        family = "toolchain-unit";
-        mode = "fast-dev";
-        scope = "slot";
-        key.parts = [ "toolchain-unit-v1" ];
-      };
       run = [
         "bash"
         "-c"
-        "test \"$(seq 3 | tail -n1)\" = 3 && test -d \"$NIXFIED_EXAMPLE_CACHE\""
+        "test \"$(seq 3 | tail -n1)\" = 3"
       ];
     };
   };

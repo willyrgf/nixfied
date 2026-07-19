@@ -112,6 +112,45 @@
               };
             }
           );
+          endpointCoordinationModel = nixfiedLib.compileModel (
+            { pkgs, ... }:
+            {
+              imports = [ ./examples/minimal/nixfied.nix ];
+              nixfied.tasks.endpoint-prepare = {
+                invocation = {
+                  tools = [
+                    pkgs.bash
+                    pkgs.coreutils
+                  ];
+                  run = [
+                    "bash"
+                    "-c"
+                    ''
+                      set -euo pipefail
+                      touch "''${stateDir}/endpoint-prepare-sentinel"
+                    ''
+                  ];
+                };
+              };
+              nixfied.services.synthetic.lifecycle.prepare.task = "endpoint-prepare";
+              nixfied.tasks.keep-up = {
+                serviceLifetime = "persistent-until-down";
+                invocation = {
+                  tools = [ "synthetic-helper" ];
+                  run = [
+                    "nixfied-synthetic-helper"
+                    "task"
+                    "--host"
+                    "127.0.0.1"
+                    "--port"
+                    "\${port}"
+                  ];
+                };
+                requires = [ "synthetic" ];
+              };
+              nixfied.surface.verbs = [ "keep-up" ];
+            }
+          );
           purgeMinimalModel = nixfiedLib.compileModel (
             { ... }:
             {
@@ -121,9 +160,31 @@
             }
           );
           postgresModel = nixfiedLib.compileModel ./examples/postgres/nixfied.nix;
+          # The cargo lifecycle test runs immediately before the gate in `.#ci`.
+          # Keep its Postgres window distinct: a stopped server may leave a
+          # non-listening TIME_WAIT claim that the gate's raw-bind preflight must
+          # continue to refuse rather than treating as available.
+          postgresTestModel = nixfiedLib.compileModel (
+            { lib, ... }:
+            {
+              imports = [ ./examples/postgres/nixfied.nix ];
+              nixfied.placement.ports.base = lib.mkForce 44580;
+            }
+          );
           compositeModel = nixfiedLib.compileModel ./examples/composite/nixfied.nix;
           polyglotModel = nixfiedLib.compileModel ./examples/polyglot-stack/nixfied.nix;
           downstreamModel = nixfiedLib.compileModel ./examples/downstream/nixfied.nix;
+          # The example shard and the later slot-concurrency shard use distinct
+          # deterministic windows. A stopped Postgres can leave a non-listening
+          # TIME_WAIT claim that the required raw-bind preflight must refuse as
+          # unverifiable rather than silently treating as available.
+          downstreamSlotsModel = nixfiedLib.compileModel (
+            { lib, ... }:
+            {
+              imports = [ ./examples/downstream/nixfied.nix ];
+              nixfied.placement.ports.base = lib.mkForce 34880;
+            }
+          );
           rethModel = nixfiedLib.compileModel ./examples/reth/nixfied.nix;
           toolchainModel = nixfiedLib.compileModel ./examples/toolchain/nixfied.nix;
           # Gate-only variants of the example models, for the state lifecycle
@@ -222,10 +283,11 @@
               nixfied.tasks.lifecycle-service-lifetime.invocation.env.PERSISTENT_MINIMAL_MODEL =
                 toString persistentMinimalModel;
               nixfied.tasks.lifecycle-purge.invocation.env.PURGE_MINIMAL_MODEL = toString purgeMinimalModel;
-              nixfied.tasks.cache-run-scope.invocation.env.TOOLCHAIN_MODEL = toString toolchainModel;
-              nixfied.tasks.slot-0.invocation.env.DOWNSTREAM_MODEL = toString downstreamModel;
-              nixfied.tasks.slot-1.invocation.env.DOWNSTREAM_MODEL = toString downstreamModel;
-              nixfied.tasks.slots-assert.invocation.env.DOWNSTREAM_MODEL = toString downstreamModel;
+              nixfied.tasks.endpoint-cross-root.invocation.env.ENDPOINT_COORDINATION_MODEL =
+                toString endpointCoordinationModel;
+              nixfied.tasks.slot-0.invocation.env.DOWNSTREAM_MODEL = toString downstreamSlotsModel;
+              nixfied.tasks.slot-1.invocation.env.DOWNSTREAM_MODEL = toString downstreamSlotsModel;
+              nixfied.tasks.slots-assert.invocation.env.DOWNSTREAM_MODEL = toString downstreamSlotsModel;
             }
           );
           nixfiedGateRuntime = pkgs.writeShellApplication {
@@ -247,7 +309,7 @@
           };
           # `.#check` / `.#test` / `.#ci`: the framework's own source/test/CI gate.
           devApps = import ./nix/dev.nix {
-            inherit pkgs postgresModel;
+            inherit pkgs postgresTestModel;
             gate = nixfiedGate;
             runtime = nixfiedRuntimeDebug;
           };
@@ -343,6 +405,7 @@
               pkgs.sqlite
               pkgs.nix
               pkgs.git
+              pkgs.python3
             ];
           };
         }

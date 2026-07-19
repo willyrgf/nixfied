@@ -18,9 +18,7 @@ primitive Placement: slotPlacements
 primitive SlotPlacement: slot candidatePorts
 primitive CandidatePortWindow: start end
 primitive ClosureSpec: kind storePath executable targetSystem operationBindings requiresExecutable effects
-primitive Invocation: tools run executable env cacheEnv codebaseId cwd stdin timeoutMs
-primitive CacheEnvSpec: family mode scope key
-primitive CacheKeySpec: parts
+primitive Invocation: tools run executable env codebaseId cwd stdin timeoutMs
 # endpoints/primaryEndpoint are optional: durable is not listening. An
 # endpoint-less service makes no addressability claim — invocation probes only,
 # nothing may address it, no port demand.
@@ -60,13 +58,25 @@ run-output-mode: summary json both
 # runtime ABI digest.
 output-schema run-json: runId modelPath computedModelHash durationMs services tasks task? summaryPath? nodes runSummaryPath?
 output-schema run-summary-json: runId success durationMs services nodes tasks
-output-schema run-task: taskId stepPath processKey exitCode timedOut canceled success durationMs stdoutPath stderrPath summaryPath cacheEnv?
-output-schema run-node: nodeId taskId success exitCode durationMs stdoutPath stderrPath summaryPath cacheEnv?
-output-schema task-cache-evidence: envVar family mode scope digest path
+output-schema run-task: taskId stepPath processKey exitCode timedOut canceled success durationMs stdoutPath stderrPath summaryPath
+output-schema run-node: nodeId taskId success exitCode durationMs stdoutPath stderrPath summaryPath
 output-schema run-service: serviceId serviceInstanceId processKey selectedEndpoint?
 output-schema selected-endpoint: endpointId host port
+output-schema runtime-error-port-conflict: portConflict
+output-schema port-conflict: reason projectId endpoint nixfiedOwner?
+output-schema port-conflict-endpoint: transport family address port endpointId
+output-schema nixfied-owner: projectId environment slot runId serviceId serviceInstanceId processKey
 output-schema run-summary-text: slot-upgrade service-start prepare-node service-ready-endpoint service-ready-endpointless task-ok task-fail task-fail-stderr result-ok result-fail-empty result-fail-nodes run-summary logs
 output-schema run-error-summary-text: error
+
+# Endpoint locks serialize only service-specific mutation and are released after
+# the atomic ready transition. Kernel listeners remain steady-state ownership.
+# Reuse requires exact listener/process/containment/endpoint proof and a guarded
+# registry CAS. Linux observes SOCK_DIAG; macOS observes pcblist_n.
+endpoint-acquisition: fixed-euid-startup-lock exact-bind-preflight linux-sock-diag macos-pcblist-n socket-steady-state
+endpoint-reuse: exact-listener process-identity containment complete-active-endpoint-set guarded-cas
+lease-fencing: finite-run-owner-token fence-all-siblings fence-aware-heartbeat completed-persistent-owner-exception
+escaped-port-reconciliation: escaped-plus-open-port unresolved ps-visible down-actionable cleanup-blocked release-after-death-proof
 
 # The closed stop signals the runtime can send.
 signal: TERM INT QUIT HUP
@@ -75,8 +85,6 @@ signal: TERM INT QUIT HUP
 # contract change that rotates the ABI digest, same as a primitive field.
 enum ClosureKind: executable helper
 enum ClosureEffect: process network-listener source-read file-write
-enum CacheMode: fast-dev trusted-ci exact
-enum CacheScope: run slot
 enum StdinPolicy: null inherit
 enum ProbeKind: tcp exec
 enum TaskKind: leaf composite
@@ -93,8 +101,11 @@ status RunStatus: service-starting canceling canceled completed task-succeeded t
 status ServiceStatus: starting probe-ready standing borrowed stopped canceled failed escaped stale
 status ProcessStatus: starting running ready stopped succeeded failed canceled escaped stale
 status RunLeaseStatus: active canceling canceled completed failed stale
-status PortStatus: reserved binding bound active released stale
+status PortStatus: reserved active released stale
 status CleanupStatus: intent deleted failed
+
+# PORT_CONFLICT is constructed only from one of these two proven host facts.
+enum PortConflictReason: startup-lock-contended listener-occupied
 
 # The public runtime error contract: the stable error codes and exit classes the
 # runtime emits. These are public API for the current ABI, so a change rotates the

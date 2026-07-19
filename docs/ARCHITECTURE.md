@@ -102,14 +102,15 @@ closed algebra of exactly **two semantic kinds** (KIND-2):
   while binding no socket and claiming no port (PORT-1 stays fully scoped to
   declared endpoints).
 
-The connective tissue is the **invocation** (`tools + run + env + cacheEnv +
-cwd + timeout + stdin`) — the one way anything says "run this program".
+The connective tissue is the **invocation** (`tools + run + env + cwd + timeout
++ stdin`) — the one way anything says "run this program".
 Invocations are **anonymous and inline** (INVOKE-1): naming them for reuse would
 recreate the named-invocation registry and its reuse/wiring entanglement;
 content reuse is a Nix `let`, and the model carries the fully-applied copies.
-`cacheEnv` is not a third semantic kind and not result memoization: a leaf task
-still executes every time, while the runtime materialises a cache directory and
-injects its path into the selected environment variable.
+Cache is not a third semantic kind or a runtime resource. Tool acceleration is
+child/tool/project-owned and may use ordinary declared invocation environment
+or arguments; Nixfied does not identify, place, create, lock, report, retain, or
+selectively clean those artifacts.
 
 Adopter vocabulary enters the contract as **names over this algebra, never as
 schema**: `check` is not a concept nixfied knows, it is a composite an
@@ -123,9 +124,8 @@ from the graph (DERIVE-1), computed identically by the Nix compiler and the
 runtime's lowering against one normative source
 (`docs/DERIVATION_SPEC.md`), and compared fail-closed at admission.
 Hand-declaration is reserved for *choices* (surface verbs) and *attestations*
-(effects). Child environments are **hermetic**: declared env plus materialised
-cache env vars plus the runtime-owned PATH (assembled from the tool roots),
-nothing inherited.
+(effects). Child environments are **hermetic**: declared env plus the
+runtime-owned PATH assembled from the tool roots, nothing inherited.
 
 ## Correctness in four layers
 
@@ -168,13 +168,6 @@ Every runtime action is scoped by `projectId / environment / slot / runId`.
   (`$NIXFIED_STATE_DIR` or a platform default), with run-scoped paths using the
   `runId` known only at runtime. (v1: placement drifted when both sides derived it;
   the layout templates were later pinned constants in the model, then removed.)
-- **Invocation caches are runtime-owned placement.** A leaf task may ask for a
-  cache directory through `invocation.cacheEnv.<ENV>`. `scope = "run"` places it
-  under the run directory; `scope = "slot"` places it under the slot state root
-  and keys reuse by declared logical parts plus target/runtime/toolchain identity.
-  The runtime creates directories but does not lock shared slot caches in v1, so
-  parallel same-slot reuse is left to tools with their own locking or a future
-  cache-lease ABI.
 
 ## Registry, liveness, leases
 
@@ -183,20 +176,45 @@ Every runtime action is scoped by `projectId / environment / slot / runId`.
   record, not a liveness oracle*. (v1: the registry was treated as liveness truth.)
 - **Liveness is reconciled against the OS** before being reported — `ps` confirms
   process identity (surviving PID reuse) before saying `running`/`stale`/etc.
+- **Registry-only evidence fails closed.** A live reservation lease without a
+  process is `LEASE_CONFLICT`; a post-reconcile row with neither a valid lease
+  nor a valid process is `REGISTRY_CORRUPT`.
 - **Leases split three ways** — `run-scoped`, `until-idle`, `persistent-until-down`
   — because no daemon is guaranteed; reference counts derive from live borrower
   leases, never an independently mutated counter. `until-idle` services are
   torn down lazily on the next runtime invocation after the last borrower is
   gone or stale; `persistent-until-down` services stand until `down` releases
   them. (v1: lease/refcount semantics assumed a daemon that didn't exist.)
+- **Repair fences finite owner tokens atomically.** An expired finite run token
+  stales all of its open sibling leases before any signal, and its heartbeat
+  then updates none and receives `LEASE_STALE`. Unexpired owners or borrowers
+  return `LEASE_CONFLICT`. The only durable exception is a completed or
+  task-succeeded `persistent-until-down` owner with its year-9999 lease and no
+  borrower; repair fences only that broken standing service.
 
 ## Ports, state, containment
 
-- **Ports: ownership-verified readiness.** Pure derivation and registry
-  reservations are both insufficient — the registry coordinates Nixfied processes,
-  not the OS. A service is ready only when the *expected owned process* is proven
-  to hold the *expected endpoint*. (v1: pure port derivation was treated as
-  sufficient.)
+- **Ports: host-coordinated, ownership-verified readiness.** Pure derivation and
+  per-state-root registry reservations are insufficient because TCP endpoints
+  are host resources. A fixed per-euid endpoint lock serializes
+  service-specific mutation across independent roots; Linux `SOCK_DIAG` and
+  macOS `net.inet.tcp.pcblist_n` provide kernel listener truth. A service is
+  ready only when its probe succeeds and every exact endpoint is held by the
+  expected containment. Wildcards conflict but do not satisfy an exact
+  declaration. Complete observation with no exact listener remains pending and
+  ends as `READINESS_TIMEOUT`; incomplete ownership proof is
+  `PORT_UNVERIFIABLE`. Locks end after the atomic ready commit; sockets remain
+  steady-state ownership.
+- **Lock scope begins after slot preparation.** Marker adoption, epoch handling,
+  registry opening, and mandatory reconciliation remain run-wide. Endpoint
+  locks begin only when service repair/new start is required and cover local
+  reservation, service prepare, spawn, and readiness.
+- **Listener loss does not make `ps` a repair worker.** `ps` remains process
+  liveness and never signals solely because an endpoint is missing. The next
+  mutating start may repair under endpoint locks. If termination cannot be
+  proven, process/service become terminal `Escaped` while open port rows remain
+  actionable to `ps`, `down`, and cleanup; only later OS death proof releases
+  those rows.
 - **State: marker-gated, path-confined cleanup.** Every owned state root carries a
   `.nixfied-state.json` marker. Cleanup canonicalizes first; refuses paths outside
   the state base, target symlinks, traversal escapes, unmarked roots, marker

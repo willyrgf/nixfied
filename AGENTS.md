@@ -87,16 +87,20 @@ deliberate change to the contract (and matching version bump + docs + tests):
   carried in `sourceIdentity`, independent of CWD.
 - **SVC-ID-1:** service reuse requires exact service address, endpoint identity,
   state identity, runtime compatibility hash, and target identity.
-- **PORT-1:** where a service declares endpoints, readiness requires verified
-  endpoint ownership of every one, not just an open port — unchanged. An
+- **PORT-1:** where a service declares endpoints, startup is serialized by a
+  host endpoint lock and readiness requires exact, kernel-observed ownership of
+  every endpoint, not just an open port. Wildcard listeners conflict with an
+  exact endpoint but never satisfy it. An
   endpoint-less service makes **no addressability claim at all** and nothing
   may rely on one (placeholders toward it are rejected in every scope, its
   probes must be invocations, its start closure must not attest
   `network-listener`), so there is no claim left for PORT-1 to protect: a
   deliberate scoped carve-out, not a loophole.
 - **REG-1 / REG-ORDER-1 / LIVE-1:** one transactional per-slot SQLite registry
-  owns shared mutable state with a total per-slot event order; liveness is
-  reconciled against the OS before being reported.
+  owns durable shared mutable state with a total per-slot event order; private
+  OS endpoint locks are transient startup coordination, not another registry or
+  semantic authority. Liveness is reconciled against the OS before being
+  reported.
 - **GC-1 / GC-2:** cleanup is idempotent, crash-safe, path-confined,
   marker-gated, lease-gated, process-gated, and policy-gated. Explicit purge
   relaxes only the protected/persistent cleanup policy gate; all confinement,
@@ -111,7 +115,7 @@ deliberate change to the contract (and matching version bump + docs + tests):
   child stdout/stderr, summaries, registry payloads, and runtime error JSON.
   Secret values are never model data; resolved values exist only in runtime
   memory and hermetic child environments. REDACT-1 does not govern files or
-  sockets a child writes on its own, including child-written cache contents.
+  sockets a child writes on its own.
 - **Runtime output projection:** `run` defaults to `summary`: human progress,
   pass/fail summaries, and artifact pointers on stderr, with stdout empty.
   `--json` is the stable structured output contract (including diagnostic
@@ -126,10 +130,10 @@ deliberate change to the contract (and matching version bump + docs + tests):
 - **KIND-2:** the model has exactly two semantic kinds, task and service. A
   new adopter concept must be expressible as names over the algebra; growing
   the schema requires demonstrating the algebra cannot express it.
-- **CACHE-1:** cache is not a semantic kind and never result memoization. It is
-  an inline leaf-task invocation resource (`invocation.cacheEnv`) that the
-  runtime materialises into selected child env vars. Tasks always execute; cache
-  reuse must not synthesize evidence or change success semantics.
+- **CACHE-1:** cache is not a Nixfied semantic kind or runtime resource. Tool
+  acceleration is child/tool/project-owned and may use ordinary declared
+  invocation environment or arguments. Nixfied does not identify, place,
+  create, lock, report, retain, or selectively clean those artifacts.
 - **INVOKE-1:** invocations are inline, anonymous structural values; no
   invocation registry, no invocation ids in the wire format.
 - **STATIC-1:** composites are static, fully-applied DAGs. No parameters,
@@ -145,12 +149,11 @@ deliberate change to the contract (and matching version bump + docs + tests):
   framework-reserved; project verbs derive only from adopter-exported task
   names (`nixfied.surface.verbs`). Exported names colliding with the reserved
   namespace are rejected at eval.
-- **Hermetic child environment (recorded semantic):** a spawned leaf sees its
-  declared env plus materialised cache env vars plus the runtime-owned PATH
-  (assembled from the invocation's tool roots); probes and service starts see
-  declared env plus that PATH. Nothing is inherited from the runtime's
-  environment. Append-to-inherited (`\${VAR:-}`) patterns are consciously
-  unsupported.
+- **Hermetic child environment (recorded semantic):** every spawned leaf,
+  probe, and service start sees its declared env plus the runtime-owned PATH
+  assembled from the invocation's tool roots. Nothing is inherited from the
+  runtime's environment. Append-to-inherited (`\${VAR:-}`) patterns are
+  consciously unsupported.
 - **SHELL-1 / NIX-1:** shell cannot own graph/registry/summary/validation/liveness/
   cleanup semantics; Nix cannot own live supervision/liveness/cancellation/registry/
   cleanup.

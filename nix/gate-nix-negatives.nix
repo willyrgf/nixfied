@@ -64,72 +64,12 @@ else
       }
     ))
 
-    (reject "a runtime-owned PATH declared in cacheEnv" (
-      { ... }:
-      {
-        imports = [ composite ];
-        nixfied.tasks.smoke.invocation.cacheEnv.PATH = {
-          family = "cargo-target";
-          mode = "fast-dev";
-          key.parts = [ "cache-v1" ];
-        };
-      }
-    ))
-
-    (reject "cacheEnv colliding with env" (
-      { ... }:
-      {
-        imports = [ composite ];
-        nixfied.tasks.smoke.invocation.env.CARGO_TARGET_DIR = "declared";
-        nixfied.tasks.smoke.invocation.cacheEnv.CARGO_TARGET_DIR = {
-          family = "cargo-target";
-          mode = "fast-dev";
-          key.parts = [ "cache-v1" ];
-        };
-      }
-    ))
-
-    (reject "slot cacheEnv without key parts" (
+    (reject "the removed cacheEnv option" (
       { ... }:
       {
         imports = [ composite ];
         nixfied.tasks.smoke.invocation.cacheEnv.CARGO_TARGET_DIR = {
           family = "cargo-target";
-          mode = "fast-dev";
-        };
-      }
-    ))
-
-    (reject "exact cacheEnv without explicit scope" (
-      { ... }:
-      {
-        imports = [ composite ];
-        nixfied.tasks.smoke.invocation.cacheEnv.CARGO_TARGET_DIR = {
-          family = "cargo-target";
-          mode = "exact";
-          key.parts = [ "cache-v1" ];
-        };
-      }
-    ))
-
-    (reject "cacheEnv on a service lifecycle invocation" (
-      { ... }:
-      {
-        imports = [ composite ];
-        nixfied.services.synthetic.lifecycle.start.invocation.cacheEnv.CARGO_TARGET_DIR = {
-          family = "cargo-target";
-          mode = "fast-dev";
-          key.parts = [ "cache-v1" ];
-        };
-      }
-    ))
-
-    (reject "path-shaped cacheEnv family" (
-      { ... }:
-      {
-        imports = [ composite ];
-        nixfied.tasks.smoke.invocation.cacheEnv.CARGO_TARGET_DIR = {
-          family = "../cargo-target";
           mode = "fast-dev";
           key.parts = [ "cache-v1" ];
         };
@@ -446,6 +386,20 @@ else
           requires = [ "synthetic" ];
         };
         nixfied.services.synthetic.lifecycle.prepare.task = "selfinit";
+      }
+    ))
+
+    (reject "a task whose endpoint demand exceeds its port window" (
+      { lib, ... }:
+      {
+        imports = [ composite ];
+        nixfied.placement.ports.windowSize = 1;
+        nixfied.services.synthetic.endpoint = lib.mkForce null;
+        nixfied.services.synthetic.endpoints = {
+          api = { };
+          admin = { };
+        };
+        nixfied.services.synthetic.primaryEndpoint = "api";
       }
     ))
 

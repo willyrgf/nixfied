@@ -1,4 +1,5 @@
 use nixfied_runtime::ErrorCode;
+use nixfied_runtime::registry::leases::heartbeat_run_lease;
 use nixfied_runtime::registry::{EventInsert, Registry, RegistryIdentity, SCHEMA_VERSION};
 
 mod common;
@@ -121,6 +122,71 @@ fn appends_events_with_total_ordering() {
 
     assert_eq!(first + 1, second);
     assert_eq!(scopes, [("dev".to_string(), 0), ("dev".to_string(), 0)]);
+}
+
+#[test]
+fn stale_sibling_fences_the_whole_run_token_without_refreshing_any_row() {
+    let tmp = TempDir::new();
+    let path = tmp.path.join("registry.sqlite3");
+    let identity = identity();
+    let mut registry = Registry::open_or_create(&path, &identity).expect("registry should open");
+    insert_run_for_heartbeat(&registry, "run-fenced");
+    for (service, status) in [("service-a", "stale"), ("service-b", "active")] {
+        registry
+            .connection()
+            .execute(
+                "
+                INSERT INTO run_leases (
+                  run_id, environment, slot, service_instance_id, owner_token,
+                  heartbeat_at, expires_at, status
+                ) VALUES (?1, 'dev', 0, ?2, 'owner-token',
+                          '2001-01-01T00:00:00.000Z', '2001-01-01T00:00:30.000Z', ?3)
+                ",
+                ("run-fenced", service, status),
+            )
+            .expect("lease should insert");
+    }
+    let before = heartbeat_rows(&registry, "run-fenced");
+
+    let error = heartbeat_run_lease(&mut registry, "run-fenced", "owner-token")
+        .expect_err("one stale sibling must fence the complete token");
+
+    assert_eq!(error.code, ErrorCode::LeaseStale);
+    assert_eq!(heartbeat_rows(&registry, "run-fenced"), before);
+}
+
+#[test]
+fn all_clean_terminal_siblings_allow_heartbeat_shutdown() {
+    let tmp = TempDir::new();
+    let path = tmp.path.join("registry.sqlite3");
+    let identity = identity();
+    let mut registry = Registry::open_or_create(&path, &identity).expect("registry should open");
+    insert_run_for_heartbeat(&registry, "run-terminal");
+    for (service, status) in [
+        ("service-a", "completed"),
+        ("service-b", "canceled"),
+        ("service-c", "failed"),
+    ] {
+        registry
+            .connection()
+            .execute(
+                "
+                INSERT INTO run_leases (
+                  run_id, environment, slot, service_instance_id, owner_token,
+                  heartbeat_at, expires_at, status
+                ) VALUES (?1, 'dev', 0, ?2, 'owner-token',
+                          '2001-01-01T00:00:00.000Z', '2001-01-01T00:00:30.000Z', ?3)
+                ",
+                ("run-terminal", service, status),
+            )
+            .expect("lease should insert");
+    }
+    let before = heartbeat_rows(&registry, "run-terminal");
+
+    heartbeat_run_lease(&mut registry, "run-terminal", "owner-token")
+        .expect("a completely clean terminal run should stop heartbeat successfully");
+
+    assert_eq!(heartbeat_rows(&registry, "run-terminal"), before);
 }
 
 #[test]
@@ -305,6 +371,44 @@ fn rejects_nonempty_unversioned_registry() {
 
 fn identity() -> RegistryIdentity {
     RegistryIdentity::default_slot("minimal", "nixfied-runtime-abi:1", "nixfied-toolchain:1")
+}
+
+fn insert_run_for_heartbeat(registry: &Registry, run_id: &str) {
+    registry
+        .connection()
+        .execute(
+            "
+            INSERT INTO runs (
+              run_id, environment, slot, status, model_path, computed_model_hash,
+              runtime_abi, toolchain_id, generator_json, target_json, source_json,
+              summary_path
+            ) VALUES (?1, 'dev', 0, 'service-starting', '/nix/store/model.json',
+                      'hash', 'nixfied-runtime-abi:1', 'nixfied-toolchain:1',
+                      '{}', '{}', '{}', NULL)
+            ",
+            [run_id],
+        )
+        .expect("run should insert");
+}
+
+fn heartbeat_rows(registry: &Registry, run_id: &str) -> Vec<(String, String, String, String)> {
+    registry
+        .connection()
+        .prepare(
+            "
+            SELECT service_instance_id, status, heartbeat_at, expires_at
+            FROM run_leases
+            WHERE run_id = ?1
+            ORDER BY service_instance_id
+            ",
+        )
+        .expect("lease rows should prepare")
+        .query_map([run_id], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })
+        .expect("lease rows should query")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("lease rows should collect")
 }
 
 fn assert_mismatched_fields(error: &nixfied_runtime::RuntimeError, expected: &[&str]) {

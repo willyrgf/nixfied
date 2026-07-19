@@ -1,6 +1,6 @@
 # Implementation plan: remove cache semantics and make port conflicts host-aware
 
-- Status: ready for engineer handoff
+- Status: implemented
 - Target: RFC_CACHE_PORT_PROB.md
 - Upstream repository: nixfied
 - Downstream repository: ../mfm3

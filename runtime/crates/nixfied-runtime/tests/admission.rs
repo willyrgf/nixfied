@@ -31,6 +31,25 @@ fn load_model_hashes_raw_bytes() {
 }
 
 #[test]
+fn removed_cache_env_is_model_invalid_before_admission_or_lowering() {
+    let mut value = fixture_model();
+    value["tasks"]["smoke"]["invocation"]["cacheEnv"] = json!({
+        "CARGO_TARGET_DIR": {
+            "family": "cargo-target",
+            "mode": "fast-dev",
+            "scope": "slot",
+            "key": { "parts": ["cache-v1"] }
+        }
+    });
+    let (_tmp, model_path, _closure) = write_fixture_model(value, true);
+
+    let error = load_model(&model_path).expect_err("removed cacheEnv must fail while parsing");
+
+    assert_eq!(error.code, ErrorCode::ModelInvalid);
+    assert!(error.message.contains("unknown field `cacheEnv`"));
+}
+
+#[test]
 fn normal_admission_refuses_non_store_model() {
     let (_tmp, model_path, _closure) = write_fixture_model(fixture_model(), true);
     let loaded = load_model(&model_path).expect("fixture should load");

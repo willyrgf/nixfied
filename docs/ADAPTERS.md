@@ -47,9 +47,10 @@ rewrite).
 - **Protocol probes**: ready/health should be `kind = "exec"` protocol probes
   (`pg_isready`, a JSON-RPC call via `curl`) rather than tcp connects, so
   "ready" means the service answers, not that the port is bound.
-- **Invocation caches**: `cacheEnv` is a bounded leaf-task resource, not a
-  service lifecycle or probe feature in v1. Adapter-provided checks may use it
-  for generic tool caches, but service start/ready/health invocations must not.
+- **Tool acceleration**: cache/build state is child/tool/project-owned, not an
+  adapter or runtime resource. Adapter-provided checks may pass an ordinary
+  declared environment value or argument, but Nixfied does not place, create,
+  report, retain, or selectively clean the resulting artifacts.
 - **Socket paths**: anything that opens a Unix socket must keep the path short
   (macOS `sun_path` limit under deep state dirs): disable the socket
   (postgres: `unix_socket_directories=`) or place it under `/tmp` keyed by the
@@ -73,8 +74,10 @@ adapter has its own option namespace.
 A service that binds more than one listener (reth: http/ws/authrpc) declares each
 as a named `endpoint` and names the primary with `primaryEndpoint` (see
 `nix/adapters/reth.nix`). The planner reserves a contiguous port block — one port
-per endpoint — so every listener is reserved, conflict-checked against other
-services and slots, and ownership-verified after readiness. The start wrapper
+per endpoint — so every listener is reserved, coordinated across independent
+state roots by host endpoint locks, and kernel-ownership-verified during
+readiness. Wildcard overlap is a conflict but never satisfies an exact declared
+endpoint. The start wrapper
 receives the planned ports as arguments (`${port:reth-http}`, `${port:reth-ws}`, …)
 and derives nothing.
 

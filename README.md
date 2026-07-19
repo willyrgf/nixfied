@@ -178,9 +178,8 @@ The important authoring rules are:
   membership or implicit startup;
 - child environments are hermetic: declared `env` plus the runtime-owned PATH
   assembled from `invocation.tools`;
-- leaf task invocations may also declare `cacheEnv.<NAME>`; the runtime creates
-  the cache directory and injects its path into that env var without ever
-  memoizing or skipping the task;
+- tool acceleration remains child/tool/project-owned and is expressed through
+  ordinary invocation `env` or arguments when needed;
 - services and tasks address dependencies by declared names (`${host:postgres}`,
   `${port:postgres}`), not port arithmetic;
 - `nixfied.surface.verbs` is the project-owned public surface. The control names
@@ -221,6 +220,14 @@ Each slot gets a separate state root, registry, leases, process records, and
 deterministic port window. With the default placement policy, adjacent slots are
 offset by `nixfied.placement.ports.slotStride = 100`.
 
+The compiler rejects any selectable task whose derived service endpoint demand
+cannot fit its port window. At runtime, endpoint-keyed OS locks coordinate
+independent state roots before service-specific mutation; Linux uses
+`SOCK_DIAG` and macOS uses the TCP PCB list to prove listeners. A wildcard
+listener conflicts with an exact endpoint but cannot satisfy exact readiness.
+Proven lock/listener collisions are `PORT_CONFLICT`; a service that simply never
+opens its exact endpoint reaches `READINESS_TIMEOUT`.
+
 Task service lifetime defaults to `run-scoped`. Set
 `serviceLifetime = "until-idle"` to keep a task's service closure up until a
 later runtime invocation observes no live borrowers, or
@@ -231,32 +238,22 @@ carries secret values. Use `${secret:<id>}` only in invocation `env` values.
 The runtime resolves secrets at admission, injects them into the hermetic child
 environment, and redacts runtime-owned persistent output.
 
-Task cache directories are inline invocation resources:
+Tool build artifacts are ordinary project state, not Nixfied resources. For
+example, a project may choose one worktree-owned Cargo target for broad checks:
 
 ```nix
 nixfied.tasks.check.invocation = {
   tools = [ pkgs.cargo ];
-  cacheEnv.CARGO_TARGET_DIR = {
-    family = "cargo-target";
-    mode = "fast-dev";
-    scope = "slot";
-    key.parts = [
-      "cargo-target-v1"
-      "rust:${pkgs.rustc.version}"
-      "lock:${builtins.hashFile "sha256" ./Cargo.lock}"
-    ];
-  };
+  env.CARGO_TARGET_DIR = "target/verification";
   env.CARGO_INCREMENTAL = "0";
   run = [ "cargo" "clippy" "--workspace" ];
 };
 ```
 
-`scope = "run"` places the cache under the current run; `scope = "slot"`
-places it under the slot state root and requires non-empty `key.parts`.
-`mode = "exact"` also requires non-empty key parts and an explicit scope. The
-runtime does not lock shared slot caches in v1; use them for ordinary local
-sequential development or tools that provide their own locking. Cache contents
-are child-owned files and are not redacted by REDACT-1.
+Nixfied passes that declaration unchanged. Cargo and the project own placement,
+writer locking, fingerprints, inspection, retention, cleanup, bypass, and
+corruption recovery. `NIXFIED_STATE_DIR` neither selects nor selectively cleans
+such artifacts; runtime output contains execution evidence, not cache evidence.
 
 To repin Nixfied later:
 

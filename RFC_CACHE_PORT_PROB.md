@@ -1,6 +1,6 @@
 # RFC: Remove cache semantics and make port conflicts host-aware
 
-- Status: accepted
+- Status: implemented
 - Date: 2026-07-18
 - Scope: Nixfied model, Nix compiler, Rust runtime, generated views, and adopter
   guidance

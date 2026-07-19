@@ -78,3 +78,26 @@ fn capability_descriptor_names_every_wire_field() {
         "capability descriptor is missing wire fields: {missing:?}"
     );
 }
+
+#[test]
+fn capability_descriptor_rejects_removed_cache_and_port_status_vocabulary() {
+    for removed in [
+        "cacheEnv",
+        "CacheEnvSpec",
+        "CacheKeySpec",
+        "task-cache-evidence",
+        "CacheMode",
+        "CacheScope",
+        "binding",
+        "bound",
+    ] {
+        assert!(
+            !CAPABILITY_DESCRIPTOR.split_whitespace().any(|token| {
+                token.trim_matches(|character: char| {
+                    !character.is_ascii_alphanumeric() && character != '-'
+                }) == removed
+            }),
+            "removed capability token {removed} survived the exact contract cut"
+        );
+    }
+}
