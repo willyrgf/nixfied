@@ -1,8 +1,10 @@
 use std::net::{SocketAddr, TcpStream};
 use std::path::Path;
 
+use nixfied_model::LoopbackHost;
+
 use crate::cancellation::CancellationToken;
-use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
+use crate::error::RuntimeResult;
 use crate::execution::{ExecProbe, TcpProbe};
 use crate::redaction::Redactor;
 use crate::service::process::{
@@ -19,19 +21,11 @@ pub(crate) enum ProbeAttempt {
 /// ownership observation live together in `process.rs`.
 pub(crate) fn tcp_probe_attempt(
     probe: &TcpProbe,
-    host: &str,
+    host: LoopbackHost,
     port: u16,
     cancellation: &CancellationToken,
 ) -> RuntimeResult<ProbeAttempt> {
-    // Build the address from the parsed IP, not string concatenation: a bare
-    // IPv6 literal such as `::1` concatenated with `:port` is unparseable.
-    let ip = host.parse::<std::net::IpAddr>().map_err(|error| {
-        RuntimeError::new(
-            ErrorCode::ModelAdmission,
-            format!("invalid readiness host {host}: {error}"),
-        )
-    })?;
-    let socket_addr = SocketAddr::new(ip, port);
+    let socket_addr = SocketAddr::new(host.ip(), port);
     cancellation.check()?;
     Ok(
         match TcpStream::connect_timeout(&socket_addr, probe.timeout) {

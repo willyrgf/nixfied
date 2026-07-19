@@ -8,7 +8,7 @@ use std::thread;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use nixfied_model::{ContainmentRequirement, Model, ServiceLifetime};
+use nixfied_model::{ContainmentRequirement, LoopbackHost, Model, ServiceLifetime};
 use rusqlite::params;
 use serde::Serialize;
 
@@ -23,8 +23,8 @@ use crate::registry::status::{self, DbStatus, PortStatus, ProcessStatus};
 use crate::registry::{Registry, RunLeaseHeartbeat};
 use crate::service::endpoint::{
     EndpointFailure, EndpointLockGuards, EndpointOwnership, ExpectedOwner, ListenerRecord,
-    OwnershipObservation, PlannedEndpoint, acquire_startup_locks, observe_ownership,
-    observe_ownership_after_primary_exit, preflight,
+    OwnershipObservation, acquire_startup_locks, observe_ownership,
+    observe_ownership_after_primary_exit, observe_single_ownership, preflight,
 };
 use crate::service::identity::{
     compute_service_identity, service_address_hash, service_instance_id,
@@ -59,7 +59,7 @@ pub(crate) fn stdin_for(policy: StdinPolicy) -> Stdio {
 #[serde(rename_all = "camelCase")]
 pub struct SelectedEndpoint {
     pub endpoint_id: String,
-    pub host: String,
+    pub host: LoopbackHost,
     pub port: u16,
 }
 
@@ -83,14 +83,10 @@ pub struct StartedService {
     pub pid: u32,
     pub pgid: i32,
     pub platform_start_identity: Option<String>,
-    /// The primary endpoint: the tcp probe target and the endpoint recorded as
-    /// the service's address; `None` for an endpoint-less service (which can
-    /// only carry invocation probes).
-    pub selected_endpoint: Option<SelectedEndpoint>,
-    /// Every endpoint the service binds (including the primary), each reserved and
-    /// ownership-verified after readiness.
-    pub selected_endpoints: Vec<SelectedEndpoint>,
-    planned_endpoints: Vec<PlannedEndpoint>,
+    /// Every endpoint the service binds, keyed by endpoint id. The primary is
+    /// derived from `service.primary_endpoint`; endpoint-less services keep an
+    /// empty map and make no addressability claim.
+    selected_endpoints: BTreeMap<String, SelectedEndpoint>,
     pub computed_model_hash: String,
     pub source_root: PathBuf,
     pub state_root: PathBuf,
@@ -104,6 +100,13 @@ pub struct StartedService {
 impl StartedService {
     pub fn is_borrowed(&self) -> bool {
         self.borrowed
+    }
+
+    pub fn selected_endpoint(&self) -> Option<&SelectedEndpoint> {
+        self.service
+            .primary_endpoint
+            .as_ref()
+            .and_then(|endpoint_id| self.selected_endpoints.get(endpoint_id))
     }
 
     fn child_mut(&mut self) -> RuntimeResult<&mut Child> {
@@ -182,8 +185,8 @@ impl StartedService {
             let probe_attempt = self.probe_attempt(probe, cancellation)?;
             cancellation.check()?;
             let observation = self.observe_endpoint_ownership();
-            match classify_endpoint_observation(observation) {
-                EndpointDecision::Complete(ownership) => {
+            match observation {
+                OwnershipObservation::Complete(ownership) => {
                     if matches!(probe_attempt, ProbeAttempt::Succeeded) {
                         if let Some(record) = ready_record {
                             self.commit_ready(registry, &ownership, record)?;
@@ -203,31 +206,31 @@ impl StartedService {
                         last_pending = message;
                     }
                 }
-                EndpointDecision::Pending(endpoint) => {
+                OwnershipObservation::Missing(endpoint) => {
                     last_pending = match &probe_attempt {
                         ProbeAttempt::Failed(message) => message.clone(),
                         ProbeAttempt::Succeeded => format!(
                             "endpoint {} has no exact listener at {}:{}",
-                            endpoint.endpoint_id, endpoint.address, endpoint.port
+                            endpoint.endpoint_id, endpoint.host, endpoint.port
                         ),
                     };
                 }
-                EndpointDecision::Conflict {
+                OwnershipObservation::Outside {
                     endpoint,
                     listeners,
                 } => {
                     return Err(port_conflict_error(
                         "listener-occupied",
                         self.computed_project_id(registry),
-                        &endpoint,
-                        proven_nixfied_owner(registry, &endpoint, &listeners, &self.service)?
+                        endpoint,
+                        proven_nixfied_owner(registry, endpoint, &listeners, &self.service)?
                             .as_ref(),
                     ));
                 }
-                EndpointDecision::Unverifiable { endpoint, message } => {
-                    return Err(port_unverifiable_error(endpoint.as_ref(), message));
+                OwnershipObservation::Unverifiable { endpoint, message } => {
+                    return Err(port_unverifiable_error(endpoint, message));
                 }
-                EndpointDecision::ContainmentUnconfirmed(message) => {
+                OwnershipObservation::ContainmentUnconfirmed { message } => {
                     return Err(RuntimeError::new(ErrorCode::ProcEscape, message));
                 }
             }
@@ -251,13 +254,13 @@ impl StartedService {
     ) -> RuntimeResult<ProbeAttempt> {
         match probe {
             Probe::Tcp(probe) => {
-                let endpoint = self.selected_endpoint.as_ref().ok_or_else(|| {
+                let endpoint = self.selected_endpoint().ok_or_else(|| {
                     RuntimeError::new(
                         ErrorCode::ModelAdmission,
                         "tcp probe on a service with no selected endpoint",
                     )
                 })?;
-                tcp_probe_attempt(probe, &endpoint.host, endpoint.port, cancellation)
+                tcp_probe_attempt(probe, endpoint.host, endpoint.port, cancellation)
             }
             Probe::Exec(probe) => exec_probe_attempt(
                 probe,
@@ -300,9 +303,9 @@ impl StartedService {
         Ok(())
     }
 
-    fn observe_endpoint_ownership(&self) -> OwnershipObservation {
+    fn observe_endpoint_ownership(&self) -> OwnershipObservation<'_> {
         observe_ownership(
-            &self.planned_endpoints,
+            &self.selected_endpoints,
             &ExpectedOwner {
                 pid: self.pid,
                 pgid: self.pgid,
@@ -335,7 +338,7 @@ impl StartedService {
             registry,
             fallback,
             observe_ownership_after_primary_exit(
-                &self.planned_endpoints,
+                &self.selected_endpoints,
                 &ExpectedOwner {
                     pid: self.pid,
                     pgid: self.pgid,
@@ -351,32 +354,32 @@ impl StartedService {
         &self,
         registry: &Registry,
         fallback: RuntimeError,
-        observation: OwnershipObservation,
+        observation: OwnershipObservation<'_>,
     ) -> RuntimeResult<()> {
-        match classify_endpoint_observation(observation) {
-            EndpointDecision::Conflict {
+        match observation {
+            OwnershipObservation::Outside {
                 endpoint,
                 listeners,
             } => Err(port_conflict_error(
                 "listener-occupied",
                 self.computed_project_id(registry),
-                &endpoint,
-                proven_nixfied_owner(registry, &endpoint, &listeners, &self.service)?.as_ref(),
+                endpoint,
+                proven_nixfied_owner(registry, endpoint, &listeners, &self.service)?.as_ref(),
             )),
-            EndpointDecision::Unverifiable { endpoint, message } => {
-                Err(port_unverifiable_error(endpoint.as_ref(), message))
+            OwnershipObservation::Unverifiable { endpoint, message } => {
+                Err(port_unverifiable_error(endpoint, message))
             }
-            EndpointDecision::ContainmentUnconfirmed(message) => {
+            OwnershipObservation::ContainmentUnconfirmed { message } => {
                 Err(RuntimeError::new(ErrorCode::ProcEscape, message))
             }
-            EndpointDecision::Complete(_) | EndpointDecision::Pending(_) => Err(fallback),
+            OwnershipObservation::Complete(_) | OwnershipObservation::Missing(_) => Err(fallback),
         }
     }
 
     fn commit_ready(
         &self,
         registry: &mut Registry,
-        ownership: &[EndpointOwnership],
+        ownership: &[EndpointOwnership<'_>],
         record: &LifecycleRecord,
     ) -> RuntimeResult<()> {
         let payloads = ownership
@@ -385,9 +388,12 @@ impl StartedService {
                 serde_json::to_string(ownership)
                     .map(|payload| {
                         (
-                            endpoint_key(&self.service_instance_id, &ownership.endpoint_id),
-                            ownership.address.to_string(),
-                            ownership.port,
+                            endpoint_key(
+                                &self.service_instance_id,
+                                &ownership.endpoint.endpoint_id,
+                            ),
+                            ownership.endpoint.host.to_string(),
+                            ownership.endpoint.port,
                             payload,
                         )
                     })
@@ -877,57 +883,13 @@ fn probe_policy(probe: &Probe) -> (u32, Duration, &str) {
     }
 }
 
-fn planned_endpoints(
-    endpoints: &[SelectedEndpoint],
-) -> Result<Vec<PlannedEndpoint>, EndpointFailure> {
-    endpoints
-        .iter()
-        .map(|endpoint| {
-            PlannedEndpoint::parse(&endpoint.endpoint_id, &endpoint.host, endpoint.port)
-        })
-        .collect()
-}
-
-enum EndpointDecision {
-    Complete(Vec<EndpointOwnership>),
-    Pending(PlannedEndpoint),
-    Conflict {
-        endpoint: PlannedEndpoint,
-        listeners: Vec<ListenerRecord>,
-    },
-    Unverifiable {
-        endpoint: Option<PlannedEndpoint>,
-        message: String,
-    },
-    ContainmentUnconfirmed(String),
-}
-
-fn classify_endpoint_observation(observation: OwnershipObservation) -> EndpointDecision {
-    match observation {
-        OwnershipObservation::Complete(ownership) => EndpointDecision::Complete(ownership),
-        OwnershipObservation::Missing(endpoint) => EndpointDecision::Pending(endpoint),
-        OwnershipObservation::Outside {
-            endpoint,
-            listeners,
-        } => EndpointDecision::Conflict {
-            endpoint,
-            listeners,
-        },
-        OwnershipObservation::Unverifiable { endpoint, message } => {
-            EndpointDecision::Unverifiable { endpoint, message }
-        }
-        OwnershipObservation::ContainmentUnconfirmed { message } => {
-            EndpointDecision::ContainmentUnconfirmed(message)
-        }
-    }
-}
-
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PortConflictEndpoint<'a> {
     transport: &'static str,
     family: &'static str,
-    address: String,
+    #[serde(rename = "address")]
+    host: &'a LoopbackHost,
     port: u16,
     endpoint_id: &'a str,
 }
@@ -957,7 +919,7 @@ struct PortConflictDetails<'a> {
 fn port_conflict_error(
     reason: &str,
     project_id: &str,
-    endpoint: &PlannedEndpoint,
+    endpoint: &SelectedEndpoint,
     owner: Option<&NixfiedOwner>,
 ) -> RuntimeError {
     let details = PortConflictDetails {
@@ -965,8 +927,11 @@ fn port_conflict_error(
         project_id,
         endpoint: PortConflictEndpoint {
             transport: "tcp",
-            family: endpoint.family.as_str(),
-            address: endpoint.canonical_address(),
+            family: match endpoint.host.ip() {
+                std::net::IpAddr::V4(_) => "ipv4",
+                std::net::IpAddr::V6(_) => "ipv6",
+            },
+            host: &endpoint.host,
             port: endpoint.port,
             endpoint_id: &endpoint.endpoint_id,
         },
@@ -976,21 +941,21 @@ fn port_conflict_error(
         ErrorCode::PortConflict,
         format!(
             "endpoint {} is unavailable at {}:{} ({reason})",
-            endpoint.endpoint_id, endpoint.address, endpoint.port
+            endpoint.endpoint_id, endpoint.host, endpoint.port
         ),
     )
     .with_detail("portConflict", details)
 }
 
 fn port_unverifiable_error(
-    endpoint: Option<&PlannedEndpoint>,
+    endpoint: Option<&SelectedEndpoint>,
     message: impl Into<String>,
 ) -> RuntimeError {
     let mut error = RuntimeError::new(ErrorCode::PortUnverifiable, message);
     if let Some(endpoint) = endpoint {
         error = error
             .with_detail("endpointId", &endpoint.endpoint_id)
-            .with_detail("address", endpoint.canonical_address())
+            .with_detail("address", endpoint.host)
             .with_detail("port", endpoint.port);
     }
     error
@@ -998,13 +963,14 @@ fn port_unverifiable_error(
 
 fn proven_nixfied_owner(
     registry: &Registry,
-    endpoint: &PlannedEndpoint,
+    endpoint: &SelectedEndpoint,
     listeners: &[ListenerRecord],
     requested_service: &ExecService,
 ) -> RuntimeResult<Option<NixfiedOwner>> {
     if listeners.is_empty() {
         return Ok(None);
     }
+    let address = endpoint.host.to_string();
     let candidates = {
         let mut statement = registry
             .connection()
@@ -1019,11 +985,7 @@ fn proven_nixfied_owner(
             .map_err(sql_error)?;
         statement
             .query_map(
-                params![
-                    endpoint.canonical_address(),
-                    endpoint.port,
-                    PortStatus::Active.as_str(),
-                ],
+                params![address, endpoint.port, PortStatus::Active.as_str()],
                 |row| row.get::<_, String>(0),
             )
             .map_err(sql_error)?
@@ -1042,7 +1004,7 @@ fn proven_nixfied_owner(
             || service.target_identity_hash != requested_service.identity.target_identity_hash
             || !status::PROCESS_ACTIVE.contains(&process.status)
             || !snapshot.endpoints.iter().any(|stored| {
-                stored.address == endpoint.canonical_address()
+                stored.address == address
                     && stored.port == endpoint.port
                     && stored.status == PortStatus::Active
                     && stored.owner_process_key.as_deref() == Some(&process.process_key)
@@ -1058,8 +1020,8 @@ fn proven_nixfied_owner(
             continue;
         }
         if !matches!(
-            observe_ownership(
-                std::slice::from_ref(endpoint),
+            observe_single_ownership(
+                endpoint,
                 &ExpectedOwner {
                     pid: process.pid,
                     pgid: process.pgid,
@@ -1203,7 +1165,7 @@ pub fn start_service_for_slot(
             endpoint_id.clone(),
             SelectedEndpoint {
                 endpoint_id: endpoint.endpoint_id.clone(),
-                host: endpoint.host.to_string(),
+                host: endpoint.host,
                 port,
             },
         );
@@ -1211,7 +1173,7 @@ pub fn start_service_for_slot(
     // An endpoint-less service has no primary: it makes no addressability
     // claim, so there is no selected endpoint to record or probe over tcp.
     let selected_endpoint = match &service.primary_endpoint {
-        Some(primary) => Some(own_endpoints.get(primary).cloned().ok_or_else(|| {
+        Some(primary) => Some(own_endpoints.get(primary).ok_or_else(|| {
             RuntimeError::new(
                 ErrorCode::ModelAdmission,
                 format!("service {service_name} primary endpoint {primary} is missing"),
@@ -1219,7 +1181,6 @@ pub fn start_service_for_slot(
         })?),
         None => None,
     };
-    let selected_endpoints: Vec<SelectedEndpoint> = own_endpoints.values().cloned().collect();
     // The named substitution scope is the declared connectsTo set; lowering
     // proved every cross-service placeholder references a member of it.
     let named: SlotEndpoints = slot_endpoints
@@ -1228,7 +1189,7 @@ pub fn start_service_for_slot(
         .map(|(id, endpoint)| (id.clone(), endpoint.clone()))
         .collect();
     let substitution = ExecSubstitution {
-        own_primary: selected_endpoint.as_ref(),
+        own_primary: selected_endpoint,
         own_endpoints: &own_endpoints,
         named: &named,
         state_root: &placement.state_root,
@@ -1246,12 +1207,12 @@ pub fn start_service_for_slot(
     );
     let service_instance_id = service_instance_id(&address_hash, &service.identity);
     // Stable backing storage for the per-endpoint reservation keys.
-    let reservation_keys: Vec<(String, String, u16)> = selected_endpoints
-        .iter()
+    let reservation_keys: Vec<(String, String, u16)> = own_endpoints
+        .values()
         .map(|endpoint| {
             (
                 endpoint_key(&service_instance_id, &endpoint.endpoint_id),
-                endpoint.host.clone(),
+                endpoint.host.to_string(),
                 endpoint.port,
             )
         })
@@ -1264,10 +1225,6 @@ pub fn start_service_for_slot(
             port: *port,
         })
         .collect();
-    let planned_endpoints = match planned_endpoints(&selected_endpoints) {
-        Ok(endpoints) => endpoints,
-        Err(failure) => return Err(endpoint_failure_error(registry, service, failure)?),
-    };
     let owner_token = run_owner_token(&run_id);
     if let Some(started) = borrow_reusable_service(
         registry,
@@ -1281,8 +1238,7 @@ pub fn start_service_for_slot(
             service_lifetime: selection.service_lifetime,
             address_hash: &address_hash,
             service_instance_id: &service_instance_id,
-            selected_endpoint: selected_endpoint.clone(),
-            selected_endpoints: selected_endpoints.clone(),
+            selected_endpoints: &own_endpoints,
             ready_probe: ready_probe.clone(),
             health_probe: health_probe.clone(),
             reservations: &reservations,
@@ -1291,7 +1247,7 @@ pub fn start_service_for_slot(
         return Ok(started);
     }
     cancellation.check()?;
-    let startup_guards = match acquire_startup_locks(&planned_endpoints) {
+    let startup_guards = match acquire_startup_locks(own_endpoints.values()) {
         Ok(guards) => guards,
         Err(failure) => return Err(endpoint_failure_error(registry, service, failure)?),
     };
@@ -1309,8 +1265,7 @@ pub fn start_service_for_slot(
             service_lifetime: selection.service_lifetime,
             address_hash: &address_hash,
             service_instance_id: &service_instance_id,
-            selected_endpoint: selected_endpoint.clone(),
-            selected_endpoints: selected_endpoints.clone(),
+            selected_endpoints: &own_endpoints,
             ready_probe: ready_probe.clone(),
             health_probe: health_probe.clone(),
             reservations: &reservations,
@@ -1327,8 +1282,8 @@ pub fn start_service_for_slot(
         service_lifetime: selection.service_lifetime,
         state_root: &placement.state_root,
     };
-    refuse_nonreusable_local_service(registry, &service_record, service, &selected_endpoints)?;
-    if let Err(failure) = preflight(&planned_endpoints) {
+    refuse_nonreusable_local_service(registry, &service_record, service, &own_endpoints)?;
+    if let Err(failure) = preflight(own_endpoints.values()) {
         return Err(endpoint_failure_error(registry, service, failure)?);
     }
     ensure_service_start_allowed(registry, &run_id, &service_instance_id)?;
@@ -1601,9 +1556,7 @@ pub fn start_service_for_slot(
         pid,
         pgid,
         platform_start_identity: platform_start,
-        selected_endpoint,
-        selected_endpoints,
-        planned_endpoints,
+        selected_endpoints: own_endpoints,
         computed_model_hash: admission.computed_model_hash.clone(),
         source_root: source.observed_root.clone(),
         state_root: placement.state_root.clone(),
@@ -1645,8 +1598,7 @@ struct BorrowServiceRequest<'a> {
     service_lifetime: ServiceLifetime,
     address_hash: &'a str,
     service_instance_id: &'a str,
-    selected_endpoint: Option<SelectedEndpoint>,
-    selected_endpoints: Vec<SelectedEndpoint>,
+    selected_endpoints: &'a BTreeMap<String, SelectedEndpoint>,
     ready_probe: Probe,
     health_probe: Probe,
     reservations: &'a [PortReservation<'a>],
@@ -1656,7 +1608,7 @@ fn refuse_nonreusable_local_service(
     registry: &mut Registry,
     requested_record: &ServiceRecord<'_>,
     requested_service: &ExecService,
-    requested_endpoints: &[SelectedEndpoint],
+    requested_endpoints: &BTreeMap<String, SelectedEndpoint>,
 ) -> RuntimeResult<()> {
     let snapshot = read_service_snapshot(registry, requested_record.service_instance_id)?;
     let stored_service = match snapshot.service.as_ref() {
@@ -1748,34 +1700,14 @@ fn refuse_nonreusable_local_service(
     let stored_endpoints =
         open_endpoints_from_snapshot(&snapshot, requested_record.service_instance_id)?;
     if stored_endpoints.is_empty() {
-        let requested = match planned_endpoints(requested_endpoints) {
-            Ok(endpoints) => endpoints,
-            Err(failure) => {
-                return Err(endpoint_failure_error(
-                    registry,
-                    requested_service,
-                    failure,
-                )?);
-            }
-        };
         return Err(port_unverifiable_error(
-            requested.first(),
+            requested_endpoints.values().next(),
             format!(
                 "live service {} has no complete open endpoint evidence; run down before replacement",
                 requested_record.service_name
             ),
         ));
     }
-    let stored_planned = match planned_endpoints(&stored_endpoints) {
-        Ok(endpoints) => endpoints,
-        Err(failure) => {
-            return Err(endpoint_failure_error(
-                registry,
-                requested_service,
-                failure,
-            )?);
-        }
-    };
     let expected = ExpectedOwner {
         pid: process.pid,
         pgid: process.pgid,
@@ -1784,41 +1716,41 @@ fn refuse_nonreusable_local_service(
         tracked_processes: &process.tracked_processes,
     };
     let observation = if escaped {
-        observe_ownership_after_primary_exit(&stored_planned, &expected)
+        observe_ownership_after_primary_exit(&stored_endpoints, &expected)
     } else {
-        observe_ownership(&stored_planned, &expected)
+        observe_ownership(&stored_endpoints, &expected)
     };
-    match classify_endpoint_observation(observation) {
-        EndpointDecision::Complete(_) => Err(port_unverifiable_error(
-            stored_planned.first(),
+    match observation {
+        OwnershipObservation::Complete(_) => Err(port_unverifiable_error(
+            stored_endpoints.values().next(),
             format!(
                 "live service {} is not exactly reusable; run down before replacement",
                 requested_record.service_name
             ),
         )),
-        EndpointDecision::Pending(endpoint) => Err(port_unverifiable_error(
-            Some(&endpoint),
+        OwnershipObservation::Missing(endpoint) => Err(port_unverifiable_error(
+            Some(endpoint),
             format!(
                 "live service {} is missing its expected listener; run down before replacement",
                 requested_record.service_name
             ),
         )),
-        EndpointDecision::Conflict {
+        OwnershipObservation::Outside {
             endpoint,
             listeners,
         } => {
-            let owner = proven_nixfied_owner(registry, &endpoint, &listeners, requested_service)?;
+            let owner = proven_nixfied_owner(registry, endpoint, &listeners, requested_service)?;
             Err(port_conflict_error(
                 "listener-occupied",
                 &registry.identity().project_id,
-                &endpoint,
+                endpoint,
                 owner.as_ref(),
             ))
         }
-        EndpointDecision::Unverifiable { endpoint, message } => {
-            Err(port_unverifiable_error(endpoint.as_ref(), message))
+        OwnershipObservation::Unverifiable { endpoint, message } => {
+            Err(port_unverifiable_error(endpoint, message))
         }
-        EndpointDecision::ContainmentUnconfirmed(message) => {
+        OwnershipObservation::ContainmentUnconfirmed { message } => {
             Err(port_unverifiable_error(None, message))
         }
     }
@@ -1836,7 +1768,7 @@ fn open_service_lease_error(service_instance_id: &str, run_id: &str) -> RuntimeE
 fn open_endpoints_from_snapshot(
     snapshot: &crate::service::registry::ServiceSnapshot,
     service_instance_id: &str,
-) -> RuntimeResult<Vec<SelectedEndpoint>> {
+) -> RuntimeResult<BTreeMap<String, SelectedEndpoint>> {
     let prefix = format!("{service_instance_id}:");
     snapshot
         .endpoints
@@ -1851,11 +1783,16 @@ fn open_endpoints_from_snapshot(
                     ),
                 )
             })?;
-            Ok(SelectedEndpoint {
-                endpoint_id: endpoint_id.to_string(),
-                host: endpoint.address.clone(),
-                port: endpoint.port,
-            })
+            let host = LoopbackHost::parse(&endpoint.address)
+                .map_err(|message| RuntimeError::new(ErrorCode::RegistryCorrupt, message))?;
+            Ok((
+                endpoint_id.to_string(),
+                SelectedEndpoint {
+                    endpoint_id: endpoint_id.to_string(),
+                    host,
+                    port: endpoint.port,
+                },
+            ))
         })
         .collect()
 }
@@ -1897,17 +1834,11 @@ fn borrow_reusable_service(
         request.service_instance_id,
         &process_row.process_key,
     )?;
-    if endpoint_map(&registry_endpoints) != endpoint_map(&request.selected_endpoints) {
+    if &registry_endpoints != request.selected_endpoints {
         return Ok(None);
     }
-    let planned = match planned_endpoints(&request.selected_endpoints) {
-        Ok(endpoints) => endpoints,
-        Err(failure) => {
-            return Err(endpoint_failure_error(registry, request.service, failure)?);
-        }
-    };
-    match classify_endpoint_observation(observe_ownership(
-        &planned,
+    match observe_ownership(
+        request.selected_endpoints,
         &ExpectedOwner {
             pid: process_row.pid,
             pgid: process_row.pgid,
@@ -1915,17 +1846,17 @@ fn borrow_reusable_service(
             containment: request.service.containment.clone(),
             tracked_processes: &[],
         },
-    )) {
-        EndpointDecision::Complete(_) => {}
-        EndpointDecision::Pending(_) => return Ok(None),
-        EndpointDecision::Conflict {
+    ) {
+        OwnershipObservation::Complete(_) => {}
+        OwnershipObservation::Missing(_) => return Ok(None),
+        OwnershipObservation::Outside {
             endpoint: _,
             listeners: _,
         } => return Ok(None),
-        EndpointDecision::Unverifiable { endpoint, message } => {
-            return Err(port_unverifiable_error(endpoint.as_ref(), message));
+        OwnershipObservation::Unverifiable { endpoint, message } => {
+            return Err(port_unverifiable_error(endpoint, message));
         }
-        EndpointDecision::ContainmentUnconfirmed(message) => {
+        OwnershipObservation::ContainmentUnconfirmed { message } => {
             return Err(RuntimeError::new(ErrorCode::ProcEscape, message));
         }
     }
@@ -1971,9 +1902,7 @@ fn borrow_reusable_service(
         pid: process_row.pid,
         pgid: process_row.pgid,
         platform_start_identity: process_row.platform_start,
-        selected_endpoint: request.selected_endpoint,
         selected_endpoints: registry_endpoints,
-        planned_endpoints: planned,
         computed_model_hash: request.admission.computed_model_hash.clone(),
         source_root: source.observed_root.clone(),
         state_root: request.placement.state_root.clone(),
@@ -1985,24 +1914,17 @@ fn borrow_reusable_service(
     }))
 }
 
-fn endpoint_map(endpoints: &[SelectedEndpoint]) -> BTreeMap<String, SelectedEndpoint> {
-    endpoints
-        .iter()
-        .map(|endpoint| (endpoint.endpoint_id.clone(), endpoint.clone()))
-        .collect()
-}
-
 fn selected_endpoints_from_snapshot(
     snapshot: &crate::service::registry::ServiceSnapshot,
     service_instance_id: &str,
     process_key: &str,
-) -> RuntimeResult<Vec<SelectedEndpoint>> {
-    let mut endpoints = Vec::new();
+) -> RuntimeResult<BTreeMap<String, SelectedEndpoint>> {
+    let mut endpoints = BTreeMap::new();
     for endpoint in &snapshot.endpoints {
         if endpoint.status != PortStatus::Active
             || endpoint.owner_process_key.as_deref() != Some(process_key)
         {
-            return Ok(Vec::new());
+            return Ok(BTreeMap::new());
         }
         let prefix = format!("{service_instance_id}:");
         let endpoint_id = endpoint.endpoint_key.strip_prefix(&prefix).ok_or_else(|| {
@@ -2014,11 +1936,16 @@ fn selected_endpoints_from_snapshot(
                 ),
             )
         })?;
-        endpoints.push(SelectedEndpoint {
-            endpoint_id: endpoint_id.to_string(),
-            host: endpoint.address.clone(),
-            port: endpoint.port,
-        });
+        let host = LoopbackHost::parse(&endpoint.address)
+            .map_err(|message| RuntimeError::new(ErrorCode::RegistryCorrupt, message))?;
+        endpoints.insert(
+            endpoint_id.to_string(),
+            SelectedEndpoint {
+                endpoint_id: endpoint_id.to_string(),
+                host,
+                port: endpoint.port,
+            },
+        );
     }
     Ok(endpoints)
 }
@@ -2194,25 +2121,28 @@ impl ExecSubstitution<'_> {
         // own endpointId collides with a connectsTo serviceId, so order is moot
         // for correctness, but resolving own first keeps the intent explicit.
         for (endpoint_id, endpoint) in self.own_endpoints {
+            let host = endpoint.host.to_string();
             out = out
                 .replace(
                     &format!("${{port:{endpoint_id}}}"),
                     &endpoint.port.to_string(),
                 )
-                .replace(&format!("${{host:{endpoint_id}}}"), &endpoint.host);
+                .replace(&format!("${{host:{endpoint_id}}}"), &host);
         }
         for (service, endpoint) in self.named {
+            let host = endpoint.host.to_string();
             out = out
                 .replace(
                     &format!("${{port:{}}}", service.as_str()),
                     &endpoint.port.to_string(),
                 )
-                .replace(&format!("${{host:{}}}", service.as_str()), &endpoint.host);
+                .replace(&format!("${{host:{}}}", service.as_str()), &host);
         }
         if let Some(own) = self.own_primary {
+            let host = own.host.to_string();
             out = out
                 .replace("${port}", &own.port.to_string())
-                .replace("${host}", &own.host);
+                .replace("${host}", &host);
         }
         out = out.replace("${stateDir}", &self.state_root.to_string_lossy());
         if out.contains("${port:") || out.contains("${host:") {
@@ -3091,11 +3021,6 @@ fn direct_child_pids_macos(parent: u32) -> RuntimeResult<Vec<u32>> {
     Ok(children)
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn descendant_pids(_pid: u32) -> RuntimeResult<Vec<u32>> {
-    Ok(Vec::new())
-}
-
 fn process_start_identity(
     pid: u32,
     pgid: i32,
@@ -3258,21 +3183,6 @@ fn process_bsd_info(pid: u32) -> Option<libc::proc_bsdinfo> {
     Some(unsafe { info.assume_init() })
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-pub(crate) fn platform_start_identity(_pid: u32) -> Option<String> {
-    None
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn process_is_zombie(_pid: u32) -> bool {
-    false
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn process_group_has_live_member_impl(_pgid: i32) -> RuntimeResult<bool> {
-    Ok(false)
-}
-
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CommandRecord<'a> {
@@ -3292,7 +3202,7 @@ mod tests {
     fn endpoint(host: &str, port: u16) -> SelectedEndpoint {
         SelectedEndpoint {
             endpoint_id: format!("{host}:{port}"),
-            host: host.to_string(),
+            host: LoopbackHost::parse(host).unwrap(),
             port,
         }
     }
@@ -3408,39 +3318,5 @@ mod tests {
             .value("--db ${port:ghost}")
             .expect_err("an undeclared named placeholder must not leak to the child");
         assert_eq!(error.code, ErrorCode::ModelAdmission);
-    }
-
-    #[test]
-    fn endpoint_evidence_classifier_preserves_closed_error_precedence() {
-        let planned = PlannedEndpoint::parse("api", "127.0.0.1", 23080).unwrap();
-        assert!(matches!(
-            classify_endpoint_observation(OwnershipObservation::Complete(Vec::new())),
-            EndpointDecision::Complete(_)
-        ));
-        assert!(matches!(
-            classify_endpoint_observation(OwnershipObservation::Missing(planned.clone())),
-            EndpointDecision::Pending(endpoint) if endpoint == planned
-        ));
-        assert!(matches!(
-            classify_endpoint_observation(OwnershipObservation::Outside {
-                endpoint: planned.clone(),
-                listeners: Vec::new(),
-            }),
-            EndpointDecision::Conflict { endpoint, .. } if endpoint == planned
-        ));
-        assert!(matches!(
-            classify_endpoint_observation(OwnershipObservation::Unverifiable {
-                endpoint: Some(planned.clone()),
-                message: "incomplete fd proof".to_string(),
-            }),
-            EndpointDecision::Unverifiable { endpoint: Some(endpoint), message }
-                if endpoint == planned && message == "incomplete fd proof"
-        ));
-        assert!(matches!(
-            classify_endpoint_observation(OwnershipObservation::ContainmentUnconfirmed {
-                message: "escaped".to_string(),
-            }),
-            EndpointDecision::ContainmentUnconfirmed(message) if message == "escaped"
-        ));
     }
 }
