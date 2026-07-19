@@ -5,7 +5,6 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
-use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -15,14 +14,10 @@ use nixfied_model::{
 use nixfied_runtime::cancellation::CancellationToken;
 use nixfied_runtime::redaction::{REDACTION_TOKEN, Redactor};
 use nixfied_runtime::registry::{Registry, RegistryIdentity};
-use nixfied_runtime::service::registry::{
-    PortReservation, ProcessRecord, RunRecord, TaskProcessRecord, mark_process_escape,
-    record_task_started, reserve_service_start,
-};
 use nixfied_runtime::service::{
     RunContext, ServiceSelection, SlotEndpoints, StartedService, compute_service_identity,
-    run_dependent_task, run_dependent_task_cancellable, service_address_hash, service_instance_id,
-    start_service_for_slot,
+    record_run_created, run_dependent_task, run_dependent_task_cancellable, service_address_hash,
+    service_instance_id, start_service_for_slot,
 };
 use nixfied_runtime::slot::select_slot;
 use nixfied_runtime::state::{
@@ -30,7 +25,6 @@ use nixfied_runtime::state::{
     derive_host_placement_for_slot, materialize_run_roots,
 };
 use nixfied_runtime::{Admission, AdmittedSource, ErrorCode, RuntimeResult};
-use rusqlite::TransactionBehavior;
 use serde_json::{Value, json};
 
 use nixfied_runtime::control::{down_owned_process_groups, ps};
@@ -583,6 +577,12 @@ fn same_registry_proven_listener_reports_complete_nixfied_owner() {
         .insert(nixfied_model::ServiceId::new("other"), other);
     let selected = select_slot(&fixture.model, None).expect("default slot should select");
     let endpoint_ports = BTreeMap::from([("synthetic-tcp".to_string(), port)]);
+    record_fixture_run(
+        &mut fixture.registry,
+        &fixture.admission,
+        &fixture.placement,
+        "run-owner-collision",
+    );
     let error = match start_service_for_slot(
         &fixture.admission,
         &fixture.placement,
@@ -3054,241 +3054,6 @@ fn down_stops_verified_owned_process_group_only() {
 }
 
 #[test]
-fn escape_settlement_rejects_a_missing_process_row() {
-    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 23235);
-    let service = start_synthetic_service(
-        &fixture.model,
-        &fixture.admission,
-        &fixture.placement,
-        &mut fixture.registry,
-        "run-escape-missing-process",
-        23235,
-    )
-    .expect("service should start");
-    let start_identity = stored_process_start_identity(&fixture.registry, &service.process_key);
-    fixture
-        .registry
-        .connection_mut()
-        .execute(
-            "DELETE FROM processes WHERE process_key = ?1",
-            [&service.process_key],
-        )
-        .expect("test should remove the expected process row");
-
-    let error = mark_started_service_escape(
-        &mut fixture.registry,
-        &service,
-        service.pid,
-        &start_identity,
-        r#"{"reason":"missing-process-row"}"#,
-    )
-    .expect_err("escape settlement must require exactly one process row");
-
-    assert_eq!(error.code, ErrorCode::RegistryCorrupt);
-    let escaped_events: i64 = fixture
-        .registry
-        .connection()
-        .query_row(
-            "SELECT count(*) FROM events WHERE event_type = 'service.proc-escape'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("escape events should query");
-    assert_eq!(escaped_events, 0);
-    service
-        .stop(&mut fixture.registry, 1000)
-        .expect("fixture process should still be terminated");
-}
-
-#[test]
-fn escape_settlement_rejects_mismatched_process_identity() {
-    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 23236);
-    let service = start_synthetic_service(
-        &fixture.model,
-        &fixture.admission,
-        &fixture.placement,
-        &mut fixture.registry,
-        "run-escape-identity-mismatch",
-        23236,
-    )
-    .expect("service should start");
-    let start_identity = stored_process_start_identity(&fixture.registry, &service.process_key);
-
-    let error = mark_started_service_escape(
-        &mut fixture.registry,
-        &service,
-        service.pid.saturating_add(1),
-        &start_identity,
-        r#"{"reason":"mismatched-process-identity"}"#,
-    )
-    .expect_err("escape settlement must match the exact process identity");
-
-    assert_eq!(error.code, ErrorCode::RegistryCorrupt);
-    let state: (String, String, i64) = fixture
-        .registry
-        .connection()
-        .query_row(
-            "
-            SELECT p.status, r.status,
-                   (SELECT count(*) FROM events WHERE event_type = 'service.proc-escape')
-            FROM processes p
-            JOIN runs r ON r.run_id = p.run_id
-            WHERE p.process_key = ?1
-            ",
-            [&service.process_key],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )
-        .expect("unchanged process and run evidence should query");
-    assert_eq!(state, ("running".into(), "service-starting".into(), 0));
-    service
-        .stop(&mut fixture.registry, 1000)
-        .expect("fixture service should stop");
-}
-
-#[test]
-fn escape_settlement_rejects_mismatched_run_evidence() {
-    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 23238);
-    let service = start_synthetic_service(
-        &fixture.model,
-        &fixture.admission,
-        &fixture.placement,
-        &mut fixture.registry,
-        "run-escape-run-mismatch",
-        23238,
-    )
-    .expect("service should start");
-    let start_identity = stored_process_start_identity(&fixture.registry, &service.process_key);
-    fixture
-        .registry
-        .connection_mut()
-        .execute(
-            "UPDATE runs SET computed_model_hash = 'mismatched-hash' WHERE run_id = ?1",
-            [&service.run_id],
-        )
-        .expect("test should corrupt the expected run identity");
-
-    let error = mark_started_service_escape(
-        &mut fixture.registry,
-        &service,
-        service.pid,
-        &start_identity,
-        r#"{"reason":"mismatched-run-evidence"}"#,
-    )
-    .expect_err("escape settlement must match the exact run evidence");
-
-    assert_eq!(error.code, ErrorCode::RegistryCorrupt);
-    let state: (String, String, String, i64) = fixture
-        .registry
-        .connection()
-        .query_row(
-            "
-            SELECT p.status, r.status, o.status,
-                   (SELECT count(*) FROM events WHERE event_type = 'service.proc-escape')
-            FROM processes p
-            JOIN runs r ON r.run_id = p.run_id
-            JOIN ports o ON o.owner_process_key = p.process_key
-            WHERE p.process_key = ?1
-            ",
-            [&service.process_key],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-        )
-        .expect("rolled-back process, run, port, and event evidence should query");
-    assert_eq!(
-        state,
-        (
-            "running".into(),
-            "service-starting".into(),
-            "reserved".into(),
-            0
-        )
-    );
-    fixture
-        .registry
-        .connection_mut()
-        .execute(
-            "UPDATE runs SET computed_model_hash = ?2 WHERE run_id = ?1",
-            [&service.run_id, &service.computed_model_hash],
-        )
-        .expect("test should restore the run identity before cleanup");
-    service
-        .stop(&mut fixture.registry, 1000)
-        .expect("fixture service should stop after rollback proof");
-}
-
-#[test]
-fn escape_settlement_rolls_back_when_event_insert_fails() {
-    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 23237);
-    let service = start_synthetic_service(
-        &fixture.model,
-        &fixture.admission,
-        &fixture.placement,
-        &mut fixture.registry,
-        "run-escape-transaction-failure",
-        23237,
-    )
-    .expect("service should start");
-    let start_identity = stored_process_start_identity(&fixture.registry, &service.process_key);
-    fixture
-        .registry
-        .connection_mut()
-        .execute_batch(
-            "
-            CREATE TRIGGER reject_proc_escape_event
-            BEFORE INSERT ON events
-            WHEN NEW.event_type = 'service.proc-escape'
-            BEGIN
-              SELECT RAISE(ABORT, 'injected escape event failure');
-            END;
-            ",
-        )
-        .expect("escape failure trigger should install");
-
-    let error = mark_started_service_escape(
-        &mut fixture.registry,
-        &service,
-        service.pid,
-        &start_identity,
-        r#"{"reason":"injected-transaction-failure"}"#,
-    )
-    .expect_err("event failure must roll back the complete escape settlement");
-
-    assert_eq!(error.code, ErrorCode::RegistryCorrupt);
-    let state: (String, String, String, i64) = fixture
-        .registry
-        .connection()
-        .query_row(
-            "
-            SELECT p.status, r.status, o.status,
-                   (SELECT count(*) FROM events WHERE event_type = 'service.proc-escape')
-            FROM processes p
-            JOIN runs r ON r.run_id = p.run_id
-            JOIN ports o ON o.owner_process_key = p.process_key
-            WHERE p.process_key = ?1
-            ",
-            [&service.process_key],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-        )
-        .expect("rolled-back escape evidence should query");
-    assert_eq!(
-        state,
-        (
-            "running".into(),
-            "service-starting".into(),
-            "reserved".into(),
-            0
-        )
-    );
-    fixture
-        .registry
-        .connection_mut()
-        .execute_batch("DROP TRIGGER reject_proc_escape_event")
-        .expect("escape failure trigger should drop");
-    service
-        .stop(&mut fixture.registry, 1000)
-        .expect("fixture service should stop after rollback proof");
-}
-
-#[test]
 fn escaped_plus_open_port_remains_actionable_until_down_proves_death() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
     let port = listener.local_addr().expect("local addr").port();
@@ -3760,19 +3525,26 @@ fn down_cancels_live_task_process_group_and_unblocks_cleanup() {
         "stderrPath": fixture.placement.logs_dir.join("task.smoke.stderr.log").to_string_lossy(),
     })
     .to_string();
-    record_task_started(
-        &mut fixture.registry,
-        &TaskProcessRecord {
-            run_id: &service.run_id,
-            process_key: &task_process_key,
-            pid: task_pid,
-            pgid: task_pgid,
-            start_identity: &task_start_identity,
-            command_json: &task_command_json,
-            computed_model_hash: &service.computed_model_hash,
-        },
-    )
-    .expect("task process should be recorded");
+    fixture
+        .registry
+        .connection()
+        .execute(
+            "
+            INSERT INTO processes (
+              process_key, environment, slot, pid, pgid, start_identity,
+              command_json, run_id, service_instance_id, status
+            ) VALUES (?1, 'dev', 0, ?2, ?3, ?4, ?5, ?6, NULL, 'running')
+            ",
+            rusqlite::params![
+                task_process_key,
+                task_pid,
+                task_pgid,
+                task_start_identity,
+                task_command_json,
+                service.run_id,
+            ],
+        )
+        .expect("task process fixture should be recorded");
     fixture
         .registry
         .connection()
@@ -4268,6 +4040,12 @@ fn start_endpoint_less_service(
     fixture: &mut ServiceFixture,
     run_id: &str,
 ) -> nixfied_runtime::RuntimeResult<nixfied_runtime::service::StartedService> {
+    record_run_created(
+        &mut fixture.registry,
+        run_id,
+        &fixture.admission,
+        &fixture.placement,
+    )?;
     start_service_for_slot(
         &fixture.admission,
         &fixture.placement,
@@ -4336,6 +4114,82 @@ impl ServiceFixture {
     }
 }
 
+fn record_fixture_run(
+    registry: &mut Registry,
+    admission: &Admission,
+    placement: &nixfied_runtime::state::HostPlacement,
+    run_id: &str,
+) {
+    record_run_created(registry, run_id, admission, placement)
+        .expect("test run should be recorded before service acquisition");
+}
+
+fn insert_crashed_reservation(
+    fixture: &mut ServiceFixture,
+    run_id: &str,
+    owner_token: &str,
+    service_instance_id: &str,
+    endpoint: Option<(&str, &str, u16)>,
+) {
+    record_fixture_run(
+        &mut fixture.registry,
+        &fixture.admission,
+        &fixture.placement,
+        run_id,
+    );
+    let identity = fixture.registry.identity().clone();
+    let transaction = fixture
+        .registry
+        .connection_mut()
+        .transaction()
+        .expect("crashed reservation fixture transaction should start");
+    transaction
+        .execute(
+            "
+            INSERT INTO run_leases (
+              run_id, environment, slot, service_instance_id, owner_token,
+              heartbeat_at, expires_at, status
+            ) VALUES (
+              ?1, ?2, ?3, ?4, ?5,
+              strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+              strftime('%Y-%m-%dT%H:%M:%fZ','now','+30 seconds'),
+              'active'
+            )
+            ",
+            rusqlite::params![
+                run_id,
+                identity.environment,
+                identity.slot,
+                service_instance_id,
+                owner_token,
+            ],
+        )
+        .expect("crashed reservation lease should be inserted");
+    if let Some((endpoint_key, address, port)) = endpoint {
+        transaction
+            .execute(
+                "
+                INSERT INTO ports (
+                  endpoint_key, environment, slot, service_instance_id, address,
+                  port, status, owner_process_key
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'reserved', NULL)
+                ",
+                rusqlite::params![
+                    endpoint_key,
+                    identity.environment,
+                    identity.slot,
+                    service_instance_id,
+                    address,
+                    port,
+                ],
+            )
+            .expect("crashed reservation port should be inserted");
+    }
+    transaction
+        .commit()
+        .expect("crashed reservation fixture should commit");
+}
+
 struct StartedSlot<'a> {
     selected: nixfied_runtime::slot::SelectedSlot<'a>,
     placement: nixfied_runtime::state::HostPlacement,
@@ -4391,106 +4245,6 @@ impl<'a> StartedSlot<'a> {
 }
 
 #[test]
-fn endpoint_port_reservation_refuses_a_second_registry_holder_as_lease_conflict() {
-    // The port is reserved in the same transaction as the run lease, before any
-    // prepare or spawn. A different service instance cannot take a port already
-    // held in the slot: the conflict is refused at reservation, not discovered
-    // after a process has already been started.
-    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 24222);
-    let run_a = RunRecord {
-        run_id: "reserve-a",
-        owner_token: "owner-a",
-        admission: &fixture.admission,
-        placement: &fixture.placement,
-    };
-    reserve_service_start(
-        &mut fixture.registry,
-        &run_a,
-        "service-instance-a",
-        &[PortReservation {
-            endpoint_key: "service-instance-a:endpoint",
-            address: "127.0.0.1",
-            port: 24222,
-        }],
-    )
-    .expect("first reservation should hold the port");
-
-    let run_b = RunRecord {
-        run_id: "reserve-b",
-        owner_token: "owner-b",
-        admission: &fixture.admission,
-        placement: &fixture.placement,
-    };
-    let error = reserve_service_start(
-        &mut fixture.registry,
-        &run_b,
-        "service-instance-b",
-        &[PortReservation {
-            endpoint_key: "service-instance-b:endpoint",
-            address: "127.0.0.1",
-            port: 24222,
-        }],
-    )
-    .expect_err("a second instance cannot reserve a held port");
-
-    assert_eq!(error.code, ErrorCode::LeaseConflict);
-}
-
-#[test]
-fn reservation_waits_for_a_concurrent_heartbeat_writer() {
-    // Once the first service is ready, the run heartbeat writes through a second
-    // connection while later services reserve their endpoints. A deferred
-    // read-then-write transaction can fail its lock upgrade immediately even
-    // with busy_timeout; taking the writer lock before the reads must wait.
-    let mut fixture = ServiceFixture::new("/bin/sleep", &["30"], 24223);
-    let path = fixture.placement.registry_path().to_path_buf();
-    let identity = fixture.registry.identity().clone();
-    let (writer_ready_tx, writer_ready_rx) = mpsc::sync_channel(1);
-    let writer = thread::spawn(move || {
-        let mut registry =
-            Registry::open_or_create(&path, &identity).expect("heartbeat connection should open");
-        let transaction = registry
-            .connection_mut()
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .expect("heartbeat writer should acquire the registry");
-        transaction
-            .execute(
-                "UPDATE registry_meta SET created_at = created_at WHERE id = 1",
-                [],
-            )
-            .expect("heartbeat-shaped write should succeed");
-        writer_ready_tx
-            .send(())
-            .expect("reservation thread should still be waiting");
-        thread::sleep(Duration::from_millis(250));
-        transaction
-            .commit()
-            .expect("heartbeat-shaped write should commit");
-    });
-    writer_ready_rx
-        .recv()
-        .expect("heartbeat writer should hold the registry");
-
-    reserve_service_start(
-        &mut fixture.registry,
-        &RunRecord {
-            run_id: "reserve-after-heartbeat",
-            owner_token: "owner-after-heartbeat",
-            admission: &fixture.admission,
-            placement: &fixture.placement,
-        },
-        "service-instance-after-heartbeat",
-        &[PortReservation {
-            endpoint_key: "service-instance-after-heartbeat:endpoint",
-            address: "127.0.0.1",
-            port: 24223,
-        }],
-    )
-    .expect("reservation should wait for the heartbeat writer");
-    writer.join().expect("heartbeat writer should not panic");
-}
-
-#[test]
 fn crashed_pre_process_reservation_blocks_until_expiry_then_reconciles_for_retry() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
     let port = listener.local_addr().expect("local addr").port();
@@ -4500,22 +4254,13 @@ fn crashed_pre_process_reservation_blocks_until_expiry_then_reconciles_for_retry
     let address_hash = service_address_hash("runtime-test", "dev", 0, "synthetic");
     let instance_id = service_instance_id(&address_hash, &service.identity);
     let endpoint_key = format!("{instance_id}:synthetic-tcp");
-    reserve_service_start(
-        &mut fixture.registry,
-        &RunRecord {
-            run_id: "run-crashed-reservation",
-            owner_token: "crashed-owner-token",
-            admission: &fixture.admission,
-            placement: &fixture.placement,
-        },
+    insert_crashed_reservation(
+        &mut fixture,
+        "run-crashed-reservation",
+        "crashed-owner-token",
         &instance_id,
-        &[PortReservation {
-            endpoint_key: &endpoint_key,
-            address: "127.0.0.1",
-            port,
-        }],
-    )
-    .expect("crashed runtime fixture should reserve before process recording");
+        Some((&endpoint_key, "127.0.0.1", port)),
+    );
 
     let error = match start_synthetic_service(
         &fixture.model,
@@ -4577,18 +4322,13 @@ fn endpoint_less_crashed_reservation_reconciles_after_expiry() {
     let service = &fixture.admission.execution_model.services["synthetic"];
     let address_hash = service_address_hash("runtime-test", "dev", 0, "synthetic");
     let instance_id = service_instance_id(&address_hash, &service.identity);
-    reserve_service_start(
-        &mut fixture.registry,
-        &RunRecord {
-            run_id: "run-crashed-endpoint-less-reservation",
-            owner_token: "crashed-endpoint-less-owner",
-            admission: &fixture.admission,
-            placement: &fixture.placement,
-        },
+    insert_crashed_reservation(
+        &mut fixture,
+        "run-crashed-endpoint-less-reservation",
+        "crashed-endpoint-less-owner",
         &instance_id,
-        &[],
-    )
-    .expect("endpoint-less reservation should be recorded without ports");
+        None,
+    );
 
     let error = match start_endpoint_less_service(
         &mut fixture,
@@ -4720,6 +4460,12 @@ fn cancellation_after_prepare_settles_reservation_and_releases_startup_guard() {
     let cancellation = CancellationToken::new();
     let prepare_cancellation = cancellation.clone();
 
+    record_fixture_run(
+        &mut fixture.registry,
+        &fixture.admission,
+        &fixture.placement,
+        "run-prepare-canceled",
+    );
     let error = match start_service_for_slot(
         &fixture.admission,
         &fixture.placement,
@@ -4754,6 +4500,12 @@ fn cancellation_after_prepare_settles_reservation_and_releases_startup_guard() {
         "canceled",
     );
 
+    record_fixture_run(
+        &mut fixture.registry,
+        &fixture.admission,
+        &fixture.placement,
+        "run-after-prepare-canceled",
+    );
     let retry = start_service_for_slot(
         &fixture.admission,
         &fixture.placement,
@@ -4785,6 +4537,12 @@ fn prepare_failure_settles_reservation_and_allows_corrected_retry() {
     let selected = select_slot(&fixture.model, None).expect("default slot should select");
     let endpoint_ports = BTreeMap::from([("synthetic-tcp".to_string(), port)]);
 
+    record_fixture_run(
+        &mut fixture.registry,
+        &fixture.admission,
+        &fixture.placement,
+        "run-prepare-failed",
+    );
     let error = match start_service_for_slot(
         &fixture.admission,
         &fixture.placement,
@@ -4821,6 +4579,12 @@ fn prepare_failure_settles_reservation_and_allows_corrected_retry() {
         "failed",
     );
 
+    record_fixture_run(
+        &mut fixture.registry,
+        &fixture.admission,
+        &fixture.placement,
+        "run-after-prepare-failed",
+    );
     let retry = start_service_for_slot(
         &fixture.admission,
         &fixture.placement,
@@ -4862,6 +4626,12 @@ fn spawn_failure_after_prepare_settles_reservation_and_allows_restored_retry() {
     let endpoint_ports = BTreeMap::from([("synthetic-tcp".to_string(), port)]);
     let removed_executable = executable.clone();
 
+    record_fixture_run(
+        &mut fixture.registry,
+        &fixture.admission,
+        &fixture.placement,
+        "run-spawn-failed",
+    );
     let error = match start_service_for_slot(
         &fixture.admission,
         &fixture.placement,
@@ -4901,6 +4671,12 @@ fn spawn_failure_after_prepare_settles_reservation_and_allows_restored_retry() {
     );
 
     restore_executable_fixture(&executable);
+    record_fixture_run(
+        &mut fixture.registry,
+        &fixture.admission,
+        &fixture.placement,
+        "run-after-spawn-failed",
+    );
     let retry = start_service_for_slot(
         &fixture.admission,
         &fixture.placement,
@@ -6375,22 +6151,101 @@ fn mark_started_service_escape(
     start_identity: &str,
     payload_json: &str,
 ) -> RuntimeResult<()> {
-    let process = ProcessRecord {
-        process_key: &service.process_key,
-        pid,
-        pgid: service.pgid,
-        start_identity,
-        command_json: "{}",
-        run_id: &service.run_id,
-        service_instance_id: &service.service_instance_id,
-    };
-    mark_process_escape(
-        registry,
-        &process,
-        &service.computed_model_hash,
-        service.platform_start_identity.as_deref(),
-        payload_json,
-    )
+    let transaction = registry.connection_mut().transaction().map_err(|error| {
+        nixfied_runtime::RuntimeError::new(
+            ErrorCode::RegistryCorrupt,
+            format!("failed to begin escaped-process fixture transaction: {error}"),
+        )
+    })?;
+    let process_rows = transaction
+        .execute(
+            "
+            UPDATE processes
+            SET status = 'escaped', start_identity = ?7
+            WHERE process_key = ?1
+              AND pid = ?2
+              AND pgid = ?3
+              AND run_id = ?4
+              AND service_instance_id = ?5
+              AND status IN ('running', 'ready')
+              AND EXISTS (
+                SELECT 1 FROM runs
+                WHERE run_id = ?4 AND computed_model_hash = ?6
+              )
+            ",
+            rusqlite::params![
+                service.process_key,
+                pid,
+                service.pgid,
+                service.run_id,
+                service.service_instance_id,
+                service.computed_model_hash,
+                start_identity,
+            ],
+        )
+        .map_err(|error| {
+            nixfied_runtime::RuntimeError::new(
+                ErrorCode::RegistryCorrupt,
+                format!("failed to inject escaped process evidence: {error}"),
+            )
+        })?;
+    if process_rows != 1 {
+        return Err(nixfied_runtime::RuntimeError::new(
+            ErrorCode::RegistryCorrupt,
+            format!("escaped-process fixture matched {process_rows} process rows"),
+        ));
+    }
+    let run_rows = transaction
+        .execute(
+            "
+            UPDATE runs
+            SET status = 'proc-escaped'
+            WHERE run_id = ?1 AND computed_model_hash = ?2
+            ",
+            rusqlite::params![service.run_id, service.computed_model_hash],
+        )
+        .map_err(|error| {
+            nixfied_runtime::RuntimeError::new(
+                ErrorCode::RegistryCorrupt,
+                format!("failed to inject escaped run evidence: {error}"),
+            )
+        })?;
+    if run_rows != 1 {
+        return Err(nixfied_runtime::RuntimeError::new(
+            ErrorCode::RegistryCorrupt,
+            format!("escaped-process fixture matched {run_rows} run rows"),
+        ));
+    }
+    let event_rows = transaction
+        .execute(
+            "
+            UPDATE events
+            SET event_type = 'service.proc-escape', payload_json = ?2
+            WHERE seq = (
+              SELECT max(seq) FROM events
+              WHERE event_type = 'service.starting' AND process_key = ?1
+            )
+            ",
+            rusqlite::params![service.process_key, payload_json],
+        )
+        .map_err(|error| {
+            nixfied_runtime::RuntimeError::new(
+                ErrorCode::RegistryCorrupt,
+                format!("failed to inject escaped event evidence: {error}"),
+            )
+        })?;
+    if event_rows != 1 {
+        return Err(nixfied_runtime::RuntimeError::new(
+            ErrorCode::RegistryCorrupt,
+            format!("escaped-process fixture matched {event_rows} event rows"),
+        ));
+    }
+    transaction.commit().map_err(|error| {
+        nixfied_runtime::RuntimeError::new(
+            ErrorCode::RegistryCorrupt,
+            format!("failed to commit escaped-process fixture: {error}"),
+        )
+    })
 }
 
 fn wait_for_process_exit(pid: u32) {

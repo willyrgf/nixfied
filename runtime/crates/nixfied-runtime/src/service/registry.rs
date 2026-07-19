@@ -7,7 +7,7 @@ use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, 
 
 use crate::admission::Admission;
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
-use crate::redaction::Redactor;
+use crate::registry::events::{BorrowedEvent, insert_event};
 use crate::registry::leases::lease_ttl_modifier;
 use crate::registry::status::{
     self, DbStatus, PortStatus, ProcessStatus, RunLeaseStatus, RunStatus,
@@ -17,46 +17,39 @@ use crate::state::HostPlacement;
 
 use super::{StoredProcessIdentity, TrackedProcessIdentity};
 
-pub struct RunRecord<'a> {
-    pub run_id: &'a str,
-    pub owner_token: &'a str,
-    pub admission: &'a Admission,
-    pub placement: &'a HostPlacement,
-}
-
-pub struct ServiceRecord<'a> {
-    pub service_instance_id: &'a str,
-    pub service_name: &'a str,
-    pub service_address_hash: &'a str,
-    pub identity: &'a ServiceIdentity,
-    pub service_lifetime: ServiceLifetime,
-    pub state_root: &'a Path,
+pub(crate) struct ServiceRecord<'a> {
+    pub(crate) service_instance_id: &'a str,
+    pub(crate) service_name: &'a str,
+    pub(crate) service_address_hash: &'a str,
+    pub(crate) identity: &'a ServiceIdentity,
+    pub(crate) service_lifetime: ServiceLifetime,
+    pub(crate) state_root: &'a Path,
 }
 
 /// One endpoint's reservation: the registry key, bind address, and port a service
 /// will own. Reserved alongside the run lease before any process starts, so a port
 /// conflict is refused before prepare and spawn rather than discovered afterward.
-pub struct PortReservation<'a> {
-    pub endpoint_key: &'a str,
-    pub address: &'a str,
-    pub port: u16,
+pub(crate) struct PortReservation<'a> {
+    pub(crate) endpoint_key: &'a str,
+    pub(crate) address: &'a str,
+    pub(crate) port: u16,
 }
 
-pub struct ProcessRecord<'a> {
-    pub process_key: &'a str,
-    pub pid: u32,
-    pub pgid: i32,
-    pub start_identity: &'a str,
-    pub command_json: &'a str,
-    pub run_id: &'a str,
-    pub service_instance_id: &'a str,
+pub(crate) struct ProcessRecord<'a> {
+    pub(crate) process_key: &'a str,
+    pub(crate) pid: u32,
+    pub(crate) pgid: i32,
+    pub(crate) start_identity: &'a str,
+    pub(crate) command_json: &'a str,
+    pub(crate) run_id: &'a str,
+    pub(crate) service_instance_id: &'a str,
 }
 
-pub struct VerifiedEndpointActivation<'a> {
-    pub endpoint_key: &'a str,
-    pub address: &'a str,
-    pub port: u16,
-    pub ownership_json: &'a str,
+pub(crate) struct VerifiedEndpointActivation<'a> {
+    pub(crate) endpoint_key: &'a str,
+    pub(crate) address: &'a str,
+    pub(crate) port: u16,
+    pub(crate) ownership_json: &'a str,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -112,18 +105,18 @@ pub(crate) struct ServiceReuseGuard<'a> {
     pub(crate) endpoints: &'a [PortReservation<'a>],
 }
 
-pub struct TaskProcessRecord<'a> {
-    pub run_id: &'a str,
-    pub process_key: &'a str,
-    pub pid: u32,
-    pub pgid: i32,
-    pub start_identity: &'a str,
-    pub command_json: &'a str,
-    pub computed_model_hash: &'a str,
+pub(crate) struct TaskProcessRecord<'a> {
+    pub(crate) run_id: &'a str,
+    pub(crate) process_key: &'a str,
+    pub(crate) pid: u32,
+    pub(crate) pgid: i32,
+    pub(crate) start_identity: &'a str,
+    pub(crate) command_json: &'a str,
+    pub(crate) computed_model_hash: &'a str,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TaskTerminalStatus {
+pub(crate) enum TaskTerminalStatus {
     Succeeded,
     Failed,
     /// The task exceeded its own timeout budget: an execution failure with its
@@ -138,34 +131,18 @@ pub(crate) enum ReservationOutcome {
     Failed,
 }
 
-pub fn ensure_service_start_allowed(
-    registry: &Registry,
-    run_id: &str,
-    service_instance_id: &str,
-) -> RuntimeResult<()> {
-    // The run row is created idempotently (a run may own several services), so the
-    // safety gates are per service instance: no active lease and no live service.
-    // The run's own reservation lease is excluded so this stays a valid recheck
-    // after the slot is reserved ahead of prepare.
-    ensure_no_active_lease_conn(registry.connection(), service_instance_id, run_id)?;
-    ensure_no_active_service_conn(registry.connection(), service_instance_id)
-}
-
 /// Reserve a service instance for a run before any state-mutating lifecycle work
-/// (e.g. prepare/initdb) runs: insert the run row and an active lease under the
-/// same conflict gates as `record_service_start`, so a second runtime racing the
-/// same slot is refused instead of running prepare concurrently. The reservation
-/// is outcome-settled if the start later fails before `record_service_start`
-/// takes ownership.
-pub fn reserve_service_start(
+/// (e.g. prepare/initdb) runs. The run must already have been created by
+/// `record_run_created`; this transition adds only the active service lease and
+/// endpoint reservations.
+pub(crate) fn reserve_service_start(
     registry: &mut Registry,
-    run: &RunRecord<'_>,
+    run_id: &str,
+    owner_token: &str,
+    computed_model_hash: &str,
     service_instance_id: &str,
     endpoints: &[PortReservation<'_>],
 ) -> RuntimeResult<()> {
-    let generator_json = run.admission.generator_json.as_str();
-    let target_json = run.admission.target_json.as_str();
-    let source_json = serde_json::to_string(&run.admission.source).map_err(json_error)?;
     let identity = registry.identity().clone();
     let redactor = registry.redactor().clone();
     // The run heartbeat writes through a second connection once the first
@@ -177,37 +154,12 @@ pub fn reserve_service_start(
         .connection_mut()
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(sql_error)?;
-    ensure_no_active_lease_transaction(&transaction, service_instance_id, run.run_id)?;
-    ensure_no_active_service_transaction(&transaction, service_instance_id)?;
+    require_run(&transaction, &identity, run_id, computed_model_hash)?;
+    ensure_service_start_allowed_transaction(&transaction, service_instance_id, run_id)?;
     transaction
         .execute(
             "
-            INSERT OR IGNORE INTO runs (
-              run_id, environment, slot, status, model_path, computed_model_hash,
-              runtime_abi, toolchain_id, generator_json, target_json, source_json,
-              summary_path
-            ) VALUES (?1, ?2, ?3, ?12, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
-            ",
-            params![
-                run.run_id,
-                identity.environment.as_str(),
-                identity.slot,
-                run.admission.model_path.display().to_string(),
-                run.admission.computed_model_hash.as_str(),
-                run.admission.runtime_abi.as_str(),
-                run.admission.toolchain_id.as_str(),
-                generator_json,
-                target_json,
-                source_json,
-                run.placement.summary_path.display().to_string(),
-                RunStatus::ServiceStarting.as_str(),
-            ],
-        )
-        .map_err(sql_error)?;
-    transaction
-        .execute(
-            "
-            INSERT OR IGNORE INTO run_leases (
+            INSERT INTO run_leases (
               run_id, environment, slot, service_instance_id, owner_token,
               heartbeat_at, expires_at, status
             ) VALUES (
@@ -218,11 +170,11 @@ pub fn reserve_service_start(
             )
             ",
             params![
-                run.run_id,
+                run_id,
                 identity.environment.as_str(),
                 identity.slot,
                 service_instance_id,
-                run.owner_token,
+                owner_token,
                 lease_ttl_modifier(),
                 RunLeaseStatus::Active.as_str(),
             ],
@@ -259,12 +211,12 @@ pub fn reserve_service_start(
         &transaction,
         &identity,
         &redactor,
-        EventRecord {
+        BorrowedEvent {
             event_type: "service.reserved",
-            run_id: Some(run.run_id),
+            run_id: Some(run_id),
             service_instance_id: Some(service_instance_id),
             process_key: None,
-            computed_model_hash: Some(&run.admission.computed_model_hash),
+            computed_model_hash: Some(computed_model_hash),
             payload_json: "{}",
         },
     )?;
@@ -275,8 +227,7 @@ pub fn reserve_service_start(
 /// Record the run row up front, before any service starts, so every admitted run
 /// leaves durable evidence — including a service-less selection (a task or
 /// environment of only service-less tasks) whose service loop never runs and so
-/// never reaches `reserve_service_start`. `INSERT OR IGNORE` keeps the later
-/// service-path inserts idempotent no-ops, preserving their semantics exactly.
+/// never reaches `reserve_service_start`. This is the only run-row creator.
 ///
 /// No run lease is created here: a lease keys on a `service_instance_id`
 /// (`run_leases PRIMARY KEY (run_id, service_instance_id)`) and guards cross-run
@@ -296,7 +247,7 @@ pub fn record_run_created(
     transaction
         .execute(
             "
-            INSERT OR IGNORE INTO runs (
+            INSERT INTO runs (
               run_id, environment, slot, status, model_path, computed_model_hash,
               runtime_abi, toolchain_id, generator_json, target_json, source_json,
               summary_path
@@ -322,7 +273,7 @@ pub fn record_run_created(
         &transaction,
         &identity,
         &redactor,
-        EventRecord {
+        BorrowedEvent {
             event_type: "run.created",
             run_id: Some(run_id),
             service_instance_id: None,
@@ -405,7 +356,7 @@ pub(crate) fn settle_service_reservation(
         &transaction,
         &identity,
         &redactor,
-        EventRecord {
+        BorrowedEvent {
             event_type,
             run_id: Some(run_id),
             service_instance_id: Some(service_instance_id),
@@ -418,15 +369,21 @@ pub(crate) fn settle_service_reservation(
     Ok(())
 }
 
-pub fn record_service_start(
+pub(crate) fn record_service_start(
     registry: &mut Registry,
-    run: &RunRecord<'_>,
+    run_id: &str,
+    owner_token: &str,
+    computed_model_hash: &str,
     service: &ServiceRecord<'_>,
     process: &ProcessRecord<'_>,
+    endpoints: &[PortReservation<'_>],
 ) -> RuntimeResult<()> {
-    let generator_json = run.admission.generator_json.as_str();
-    let target_json = run.admission.target_json.as_str();
-    let source_json = serde_json::to_string(&run.admission.source).map_err(json_error)?;
+    if process.run_id != run_id || process.service_instance_id != service.service_instance_id {
+        return Err(RuntimeError::new(
+            ErrorCode::RegistryCorrupt,
+            "service process does not match its run and service transition context",
+        ));
+    }
     let identity = registry.identity().clone();
     let redactor = registry.redactor().clone();
     let process_command_json = redactor.redact_json_str(process.command_json)?;
@@ -434,57 +391,27 @@ pub fn record_service_start(
         .connection_mut()
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(sql_error)?;
-    ensure_no_active_lease_transaction(&transaction, service.service_instance_id, run.run_id)?;
-    ensure_no_active_service_transaction(&transaction, service.service_instance_id)?;
-    transaction
-        .execute(
-            "
-            INSERT OR IGNORE INTO runs (
-              run_id, environment, slot, status, model_path, computed_model_hash,
-              runtime_abi, toolchain_id, generator_json, target_json, source_json,
-              summary_path
-            ) VALUES (?1, ?2, ?3, ?12, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
-            ",
-            params![
-                run.run_id,
-                identity.environment.as_str(),
-                identity.slot,
-                run.admission.model_path.display().to_string(),
-                run.admission.computed_model_hash.as_str(),
-                run.admission.runtime_abi.as_str(),
-                run.admission.toolchain_id.as_str(),
-                generator_json,
-                target_json,
-                source_json,
-                run.placement.summary_path.display().to_string(),
-                RunStatus::ServiceStarting.as_str(),
-            ],
-        )
-        .map_err(sql_error)?;
-    transaction
-        .execute(
-            "
-            INSERT OR IGNORE INTO run_leases (
-              run_id, environment, slot, service_instance_id, owner_token,
-              heartbeat_at, expires_at, status
-            ) VALUES (
-              ?1, ?2, ?3, ?4, ?5,
-              strftime('%Y-%m-%dT%H:%M:%fZ','now'),
-              strftime('%Y-%m-%dT%H:%M:%fZ','now', ?6),
-              ?7
-            )
-            ",
-            params![
-                run.run_id,
-                identity.environment.as_str(),
-                identity.slot,
-                service.service_instance_id,
-                run.owner_token,
-                lease_ttl_modifier(),
-                RunLeaseStatus::Active.as_str(),
-            ],
-        )
-        .map_err(sql_error)?;
+    require_run(&transaction, &identity, run_id, computed_model_hash)?;
+    ensure_service_start_allowed_transaction(&transaction, service.service_instance_id, run_id)?;
+    require_active_reservation(
+        &transaction,
+        &identity,
+        run_id,
+        owner_token,
+        service.service_instance_id,
+        endpoints,
+    )?;
+    if let Some(stored) = read_stored_service(&transaction, service.service_instance_id)?
+        && !stored_service_matches(&stored, service)
+    {
+        return Err(RuntimeError::new(
+            ErrorCode::RegistryCorrupt,
+            format!(
+                "service instance {} does not match its stored identity",
+                service.service_instance_id
+            ),
+        ));
+    }
     transaction
         .execute(
             "
@@ -513,7 +440,7 @@ pub fn record_service_start(
     transaction
         .execute(
             "
-            INSERT OR REPLACE INTO processes (
+            INSERT INTO processes (
               process_key, environment, slot, pid, pgid, start_identity,
               command_json, run_id, service_instance_id, status
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
@@ -532,7 +459,7 @@ pub fn record_service_start(
             ],
         )
         .map_err(sql_error)?;
-    transaction
+    let changed_ports = transaction
         .execute(
             "
             UPDATE ports
@@ -546,16 +473,25 @@ pub fn record_service_start(
             ],
         )
         .map_err(sql_error)?;
+    if changed_ports != endpoints.len() {
+        return Err(RuntimeError::new(
+            ErrorCode::RegistryCorrupt,
+            format!(
+                "process recording changed {changed_ports} reserved endpoints, expected {}",
+                endpoints.len()
+            ),
+        ));
+    }
     insert_event(
         &transaction,
         &identity,
         &redactor,
-        EventRecord {
+        BorrowedEvent {
             event_type: "run.admitted",
-            run_id: Some(run.run_id),
+            run_id: Some(run_id),
             service_instance_id: None,
             process_key: None,
-            computed_model_hash: Some(&run.admission.computed_model_hash),
+            computed_model_hash: Some(computed_model_hash),
             payload_json: "{}",
         },
     )?;
@@ -563,12 +499,12 @@ pub fn record_service_start(
         &transaction,
         &identity,
         &redactor,
-        EventRecord {
+        BorrowedEvent {
             event_type: "service.starting",
-            run_id: Some(run.run_id),
+            run_id: Some(run_id),
             service_instance_id: Some(service.service_instance_id),
             process_key: Some(process.process_key),
-            computed_model_hash: Some(&run.admission.computed_model_hash),
+            computed_model_hash: Some(computed_model_hash),
             payload_json: &process_command_json,
         },
     )?;
@@ -578,47 +514,22 @@ pub fn record_service_start(
 
 pub(crate) fn record_service_borrow(
     registry: &mut Registry,
-    run: &RunRecord<'_>,
+    run_id: &str,
+    owner_token: &str,
+    computed_model_hash: &str,
     guard: &ServiceReuseGuard<'_>,
 ) -> RuntimeResult<bool> {
-    let generator_json = run.admission.generator_json.as_str();
-    let target_json = run.admission.target_json.as_str();
-    let source_json = serde_json::to_string(&run.admission.source).map_err(json_error)?;
     let identity = registry.identity().clone();
     let redactor = registry.redactor().clone();
     let transaction = registry
         .connection_mut()
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(sql_error)?;
+    require_run(&transaction, &identity, run_id, computed_model_hash)?;
     let snapshot = read_service_snapshot_conn(&transaction, guard.service.service_instance_id)?;
     if !reuse_snapshot_matches(&snapshot, guard) {
         return Ok(false);
     }
-    transaction
-        .execute(
-            "
-            INSERT OR IGNORE INTO runs (
-              run_id, environment, slot, status, model_path, computed_model_hash,
-              runtime_abi, toolchain_id, generator_json, target_json, source_json,
-              summary_path
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
-            ",
-            params![
-                run.run_id,
-                identity.environment.as_str(),
-                identity.slot,
-                RunStatus::ServiceStarting.as_str(),
-                run.admission.model_path.display().to_string(),
-                run.admission.computed_model_hash.as_str(),
-                run.admission.runtime_abi.as_str(),
-                run.admission.toolchain_id.as_str(),
-                generator_json,
-                target_json,
-                source_json,
-                run.placement.summary_path.display().to_string(),
-            ],
-        )
-        .map_err(sql_error)?;
     transaction
         .execute(
             "
@@ -633,11 +544,11 @@ pub(crate) fn record_service_borrow(
             )
             ",
             params![
-                run.run_id,
+                run_id,
                 identity.environment.as_str(),
                 identity.slot,
                 guard.service.service_instance_id,
-                run.owner_token,
+                owner_token,
                 lease_ttl_modifier(),
                 RunLeaseStatus::Active.as_str(),
             ],
@@ -651,12 +562,12 @@ pub(crate) fn record_service_borrow(
         &transaction,
         &identity,
         &redactor,
-        EventRecord {
+        BorrowedEvent {
             event_type: "service.borrowed",
-            run_id: Some(run.run_id),
+            run_id: Some(run_id),
             service_instance_id: Some(guard.service.service_instance_id),
             process_key: Some(&guard.process.process_key),
-            computed_model_hash: Some(&run.admission.computed_model_hash),
+            computed_model_hash: Some(computed_model_hash),
             payload_json: &payload_json,
         },
     )?;
@@ -664,7 +575,7 @@ pub(crate) fn record_service_borrow(
     Ok(true)
 }
 
-pub fn release_service_borrow(
+pub(crate) fn release_service_borrow(
     registry: &mut Registry,
     run_id: &str,
     service_instance_id: &str,
@@ -725,7 +636,7 @@ pub fn release_service_borrow(
         &transaction,
         &identity,
         &redactor,
-        EventRecord {
+        BorrowedEvent {
             event_type,
             run_id: Some(run_id),
             service_instance_id: Some(service_instance_id),
@@ -738,7 +649,7 @@ pub fn release_service_borrow(
     Ok(())
 }
 
-pub fn mark_service_standing(
+pub(crate) fn mark_service_standing(
     registry: &mut Registry,
     run_id: &str,
     service_instance_id: &str,
@@ -803,7 +714,7 @@ pub fn mark_service_standing(
         &transaction,
         &identity,
         &redactor,
-        EventRecord {
+        BorrowedEvent {
             event_type: "service.standing",
             run_id: Some(run_id),
             service_instance_id: Some(service_instance_id),
@@ -816,7 +727,7 @@ pub fn mark_service_standing(
     Ok(())
 }
 
-pub fn activate_service_ready(
+pub(crate) fn activate_service_ready(
     registry: &mut Registry,
     run_id: &str,
     service_instance_id: &str,
@@ -923,7 +834,7 @@ pub fn activate_service_ready(
             &transaction,
             &identity,
             &redactor,
-            EventRecord {
+            BorrowedEvent {
                 event_type: "port.owner-verified",
                 run_id: Some(run_id),
                 service_instance_id: Some(service_instance_id),
@@ -958,7 +869,7 @@ pub fn activate_service_ready(
         &transaction,
         &identity,
         &redactor,
-        EventRecord {
+        BorrowedEvent {
             event_type: "service.probe-ready",
             run_id: Some(run_id),
             service_instance_id: Some(service_instance_id),
@@ -979,7 +890,7 @@ pub fn activate_service_ready(
         &transaction,
         &identity,
         &redactor,
-        EventRecord {
+        BorrowedEvent {
             event_type: "service.lifecycle.terminal",
             run_id: Some(run_id),
             service_instance_id: Some(service_instance_id),
@@ -992,12 +903,36 @@ pub fn activate_service_ready(
     Ok(())
 }
 
-pub fn mark_service_stopped(
+pub(crate) fn mark_service_stopped(
     registry: &mut Registry,
     run_id: &str,
     service_instance_id: &str,
     process_key: &str,
     computed_model_hash: &str,
+) -> RuntimeResult<()> {
+    settle_service_terminal(
+        registry,
+        run_id,
+        service_instance_id,
+        process_key,
+        computed_model_hash,
+        ServiceTerminal::Stopped,
+    )
+}
+
+enum ServiceTerminal<'a> {
+    Stopped,
+    Canceled(&'a str),
+    Failed(&'a str),
+}
+
+fn settle_service_terminal(
+    registry: &mut Registry,
+    run_id: &str,
+    service_instance_id: &str,
+    process_key: &str,
+    computed_model_hash: &str,
+    terminal: ServiceTerminal<'_>,
 ) -> RuntimeResult<()> {
     let identity = registry.identity().clone();
     let redactor = registry.redactor().clone();
@@ -1005,45 +940,67 @@ pub fn mark_service_stopped(
         .connection_mut()
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(sql_error)?;
-    let run_status = transaction
-        .query_row(
-            "SELECT status FROM runs WHERE run_id = ?1",
-            params![run_id],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()
-        .map_err(sql_error)?;
-    let run_was_canceling = run_status
-        .as_deref()
-        .and_then(RunStatus::from_db)
-        .is_some_and(|status| matches!(status, RunStatus::Canceling | RunStatus::Canceled));
-    let (process_status, lease_status, event_type) = if run_was_canceling {
-        (
-            ProcessStatus::Canceled,
-            RunLeaseStatus::Canceled,
-            "service.canceled",
-        )
-    } else {
-        (
-            ProcessStatus::Stopped,
-            RunLeaseStatus::Completed,
-            "service.stopped",
-        )
-    };
+    let (process_status, run_status, lease_status, event_type, payload_json, guarded_run) =
+        match terminal {
+            ServiceTerminal::Stopped => {
+                let run_status = transaction
+                    .query_row(
+                        "SELECT status FROM runs WHERE run_id = ?1",
+                        params![run_id],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .optional()
+                    .map_err(sql_error)?;
+                let canceled = run_status
+                    .as_deref()
+                    .and_then(RunStatus::from_db)
+                    .is_some_and(|status| {
+                        matches!(status, RunStatus::Canceling | RunStatus::Canceled)
+                    });
+                if canceled {
+                    (
+                        ProcessStatus::Canceled,
+                        RunStatus::Canceled,
+                        RunLeaseStatus::Canceled,
+                        "service.canceled",
+                        "{}",
+                        false,
+                    )
+                } else {
+                    (
+                        ProcessStatus::Stopped,
+                        RunStatus::Completed,
+                        RunLeaseStatus::Completed,
+                        "service.stopped",
+                        "{}",
+                        true,
+                    )
+                }
+            }
+            ServiceTerminal::Canceled(payload_json) => (
+                ProcessStatus::Canceled,
+                RunStatus::Canceled,
+                RunLeaseStatus::Canceled,
+                "service.canceled",
+                payload_json,
+                false,
+            ),
+            ServiceTerminal::Failed(payload_json) => (
+                ProcessStatus::Failed,
+                RunStatus::ServiceFailed,
+                RunLeaseStatus::Failed,
+                "service.failed",
+                payload_json,
+                false,
+            ),
+        };
     transaction
         .execute(
             "UPDATE processes SET status = ?2 WHERE process_key = ?1",
             params![process_key, process_status.as_str()],
         )
         .map_err(sql_error)?;
-    if run_was_canceling {
-        transaction
-            .execute(
-                "UPDATE runs SET status = ?2 WHERE run_id = ?1",
-                params![run_id, RunStatus::Canceled.as_str()],
-            )
-            .map_err(sql_error)?;
-    } else {
+    if guarded_run {
         // A run whose environment declares services but no tasks finishes here:
         // move it out of 'service-starting' to a terminal status. Guarded on the
         // starting status so a task-derived terminal result is never clobbered.
@@ -1052,9 +1009,16 @@ pub fn mark_service_stopped(
                 "UPDATE runs SET status = ?2 WHERE run_id = ?1 AND status = ?3",
                 params![
                     run_id,
-                    RunStatus::Completed.as_str(),
+                    run_status.as_str(),
                     RunStatus::ServiceStarting.as_str()
                 ],
+            )
+            .map_err(sql_error)?;
+    } else {
+        transaction
+            .execute(
+                "UPDATE runs SET status = ?2 WHERE run_id = ?1",
+                params![run_id, run_status.as_str()],
             )
             .map_err(sql_error)?;
     }
@@ -1076,25 +1040,45 @@ pub fn mark_service_stopped(
         &transaction,
         &identity,
         &redactor,
-        EventRecord {
+        BorrowedEvent {
             event_type,
             run_id: Some(run_id),
             service_instance_id: Some(service_instance_id),
             process_key: Some(process_key),
             computed_model_hash: Some(computed_model_hash),
-            payload_json: "{}",
+            payload_json,
         },
     )?;
     transaction.commit().map_err(sql_error)?;
     Ok(())
 }
 
-pub fn record_service_canceling(
+pub(crate) fn record_service_canceling(
     registry: &mut Registry,
     run_id: &str,
     service_instance_id: &str,
     process_key: &str,
     computed_model_hash: &str,
+    payload_json: &str,
+) -> RuntimeResult<()> {
+    record_canceling(
+        registry,
+        run_id,
+        Some(service_instance_id),
+        process_key,
+        computed_model_hash,
+        "service.canceling",
+        payload_json,
+    )
+}
+
+fn record_canceling(
+    registry: &mut Registry,
+    run_id: &str,
+    service_instance_id: Option<&str>,
+    process_key: &str,
+    computed_model_hash: &str,
+    event_type: &str,
     payload_json: &str,
 ) -> RuntimeResult<()> {
     let identity = registry.identity().clone();
@@ -1111,7 +1095,9 @@ pub fn record_service_canceling(
             "
             UPDATE run_leases
             SET status = ?3
-            WHERE run_id = ?1 AND service_instance_id = ?2 AND status = ?4
+            WHERE run_id = ?1
+              AND (?2 IS NULL OR service_instance_id = ?2)
+              AND status = ?4
             ",
             params![
                 run_id,
@@ -1125,10 +1111,10 @@ pub fn record_service_canceling(
         &transaction,
         &identity,
         &redactor,
-        EventRecord {
-            event_type: "service.canceling",
+        BorrowedEvent {
+            event_type,
             run_id: Some(run_id),
-            service_instance_id: Some(service_instance_id),
+            service_instance_id,
             process_key: Some(process_key),
             computed_model_hash: Some(computed_model_hash),
             payload_json,
@@ -1138,7 +1124,7 @@ pub fn record_service_canceling(
     Ok(())
 }
 
-pub fn mark_service_canceled(
+pub(crate) fn mark_service_canceled(
     registry: &mut Registry,
     run_id: &str,
     service_instance_id: &str,
@@ -1146,57 +1132,17 @@ pub fn mark_service_canceled(
     computed_model_hash: &str,
     payload_json: &str,
 ) -> RuntimeResult<()> {
-    let identity = registry.identity().clone();
-    let redactor = registry.redactor().clone();
-    let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
-    transaction
-        .execute(
-            "UPDATE processes SET status = ?2 WHERE process_key = ?1",
-            params![process_key, ProcessStatus::Canceled.as_str()],
-        )
-        .map_err(sql_error)?;
-    transaction
-        .execute(
-            "UPDATE runs SET status = ?2 WHERE run_id = ?1",
-            params![run_id, RunStatus::Canceled.as_str()],
-        )
-        .map_err(sql_error)?;
-    transaction
-        .execute(
-            &format!(
-                "
-            UPDATE run_leases
-            SET status = ?3
-            WHERE run_id = ?1 AND service_instance_id = ?2 AND status IN ({})
-            ",
-                status::sql_in_list(status::LEASE_OPEN)
-            ),
-            params![
-                run_id,
-                service_instance_id,
-                RunLeaseStatus::Canceled.as_str()
-            ],
-        )
-        .map_err(sql_error)?;
-    release_service_ports(&transaction, service_instance_id)?;
-    insert_event(
-        &transaction,
-        &identity,
-        &redactor,
-        EventRecord {
-            event_type: "service.canceled",
-            run_id: Some(run_id),
-            service_instance_id: Some(service_instance_id),
-            process_key: Some(process_key),
-            computed_model_hash: Some(computed_model_hash),
-            payload_json,
-        },
-    )?;
-    transaction.commit().map_err(sql_error)?;
-    Ok(())
+    settle_service_terminal(
+        registry,
+        run_id,
+        service_instance_id,
+        process_key,
+        computed_model_hash,
+        ServiceTerminal::Canceled(payload_json),
+    )
 }
 
-pub fn record_service_lifecycle_event(
+pub(crate) fn record_service_lifecycle_event(
     registry: &mut Registry,
     event_type: &str,
     run_id: Option<&str>,
@@ -1212,7 +1158,7 @@ pub fn record_service_lifecycle_event(
         &transaction,
         &identity,
         &redactor,
-        EventRecord {
+        BorrowedEvent {
             event_type,
             run_id,
             service_instance_id: Some(service_instance_id),
@@ -1225,54 +1171,25 @@ pub fn record_service_lifecycle_event(
     Ok(())
 }
 
-pub fn record_task_canceling(
+pub(crate) fn record_task_canceling(
     registry: &mut Registry,
     run_id: &str,
     process_key: &str,
     computed_model_hash: &str,
     payload_json: &str,
 ) -> RuntimeResult<()> {
-    let identity = registry.identity().clone();
-    let redactor = registry.redactor().clone();
-    let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
-    transaction
-        .execute(
-            "UPDATE runs SET status = ?2 WHERE run_id = ?1",
-            params![run_id, RunStatus::Canceling.as_str()],
-        )
-        .map_err(sql_error)?;
-    transaction
-        .execute(
-            "
-            UPDATE run_leases
-            SET status = ?2
-            WHERE run_id = ?1 AND status = ?3
-            ",
-            params![
-                run_id,
-                RunLeaseStatus::Canceling.as_str(),
-                RunLeaseStatus::Active.as_str()
-            ],
-        )
-        .map_err(sql_error)?;
-    insert_event(
-        &transaction,
-        &identity,
-        &redactor,
-        EventRecord {
-            event_type: "task.canceling",
-            run_id: Some(run_id),
-            service_instance_id: None,
-            process_key: Some(process_key),
-            computed_model_hash: Some(computed_model_hash),
-            payload_json,
-        },
-    )?;
-    transaction.commit().map_err(sql_error)?;
-    Ok(())
+    record_canceling(
+        registry,
+        run_id,
+        None,
+        process_key,
+        computed_model_hash,
+        "task.canceling",
+        payload_json,
+    )
 }
 
-pub fn mark_service_failed(
+pub(crate) fn mark_service_failed(
     registry: &mut Registry,
     run_id: &str,
     service_instance_id: &str,
@@ -1280,53 +1197,17 @@ pub fn mark_service_failed(
     computed_model_hash: &str,
     payload_json: &str,
 ) -> RuntimeResult<()> {
-    let identity = registry.identity().clone();
-    let redactor = registry.redactor().clone();
-    let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
-    transaction
-        .execute(
-            "UPDATE processes SET status = ?2 WHERE process_key = ?1",
-            params![process_key, ProcessStatus::Failed.as_str()],
-        )
-        .map_err(sql_error)?;
-    transaction
-        .execute(
-            "UPDATE runs SET status = ?2 WHERE run_id = ?1",
-            params![run_id, RunStatus::ServiceFailed.as_str()],
-        )
-        .map_err(sql_error)?;
-    transaction
-        .execute(
-            &format!(
-                "
-            UPDATE run_leases
-            SET status = ?3
-            WHERE run_id = ?1 AND service_instance_id = ?2 AND status IN ({})
-            ",
-                status::sql_in_list(status::LEASE_OPEN)
-            ),
-            params![run_id, service_instance_id, RunLeaseStatus::Failed.as_str()],
-        )
-        .map_err(sql_error)?;
-    release_service_ports(&transaction, service_instance_id)?;
-    insert_event(
-        &transaction,
-        &identity,
-        &redactor,
-        EventRecord {
-            event_type: "service.failed",
-            run_id: Some(run_id),
-            service_instance_id: Some(service_instance_id),
-            process_key: Some(process_key),
-            computed_model_hash: Some(computed_model_hash),
-            payload_json,
-        },
-    )?;
-    transaction.commit().map_err(sql_error)?;
-    Ok(())
+    settle_service_terminal(
+        registry,
+        run_id,
+        service_instance_id,
+        process_key,
+        computed_model_hash,
+        ServiceTerminal::Failed(payload_json),
+    )
 }
 
-pub fn mark_process_escape(
+pub(crate) fn mark_process_escape(
     registry: &mut Registry,
     process: &ProcessRecord<'_>,
     computed_model_hash: &str,
@@ -1439,7 +1320,7 @@ pub fn mark_process_escape(
         &transaction,
         &identity,
         &redactor,
-        EventRecord {
+        BorrowedEvent {
             event_type: "service.proc-escape",
             run_id: Some(process.run_id),
             service_instance_id: Some(process.service_instance_id),
@@ -1539,7 +1420,7 @@ pub(crate) fn release_unresolved_escape_ports(
         &transaction,
         &identity,
         &redactor,
-        EventRecord {
+        BorrowedEvent {
             event_type: "service.escape-reconciled",
             run_id: Some(run_id),
             service_instance_id: Some(service_instance_id),
@@ -1552,7 +1433,7 @@ pub(crate) fn release_unresolved_escape_ports(
     Ok(())
 }
 
-pub fn ensure_service_instance_probe_ready(
+pub(crate) fn ensure_service_instance_probe_ready(
     registry: &Registry,
     service_name: &str,
     service_instance_id: &str,
@@ -1574,7 +1455,7 @@ pub fn ensure_service_instance_probe_ready(
     }
 }
 
-pub fn record_task_started(
+pub(crate) fn record_task_started(
     registry: &mut Registry,
     process: &TaskProcessRecord<'_>,
 ) -> RuntimeResult<()> {
@@ -1607,7 +1488,7 @@ pub fn record_task_started(
         &transaction,
         &identity,
         &redactor,
-        EventRecord {
+        BorrowedEvent {
             event_type: "task.running",
             run_id: Some(process.run_id),
             service_instance_id: None,
@@ -1620,7 +1501,7 @@ pub fn record_task_started(
     Ok(())
 }
 
-pub fn mark_task_finished(
+pub(crate) fn mark_task_finished(
     registry: &mut Registry,
     run_id: &str,
     process_key: &str,
@@ -1688,7 +1569,7 @@ pub fn mark_task_finished(
         &transaction,
         &identity,
         &redactor,
-        EventRecord {
+        BorrowedEvent {
             event_type,
             run_id: Some(run_id),
             service_instance_id: None,
@@ -1701,47 +1582,6 @@ pub fn mark_task_finished(
     Ok(())
 }
 
-fn insert_event(
-    transaction: &rusqlite::Transaction<'_>,
-    identity: &RegistryIdentity,
-    redactor: &Redactor,
-    event: EventRecord<'_>,
-) -> RuntimeResult<()> {
-    let payload_json = redactor.redact_json_str(event.payload_json)?;
-    transaction
-        .execute(
-            "
-            INSERT INTO events (
-              at, environment, slot, event_type, run_id, service_instance_id,
-              process_key, computed_model_hash, payload_json
-            ) VALUES (
-              strftime('%Y-%m-%dT%H:%M:%fZ','now'), ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8
-            )
-            ",
-            params![
-                identity.environment.as_str(),
-                identity.slot,
-                event.event_type,
-                event.run_id,
-                event.service_instance_id,
-                event.process_key,
-                event.computed_model_hash,
-                payload_json,
-            ],
-        )
-        .map_err(sql_error)?;
-    Ok(())
-}
-
-struct EventRecord<'a> {
-    event_type: &'a str,
-    run_id: Option<&'a str>,
-    service_instance_id: Option<&'a str>,
-    process_key: Option<&'a str>,
-    computed_model_hash: Option<&'a str>,
-    payload_json: &'a str,
-}
-
 pub(crate) fn read_service_snapshot(
     registry: &Registry,
     service_instance_id: &str,
@@ -1749,11 +1589,11 @@ pub(crate) fn read_service_snapshot(
     read_service_snapshot_conn(registry.connection(), service_instance_id)
 }
 
-fn read_service_snapshot_conn(
+fn read_stored_service(
     connection: &Connection,
     service_instance_id: &str,
-) -> RuntimeResult<ServiceSnapshot> {
-    let service_raw = connection
+) -> RuntimeResult<Option<StoredServiceState>> {
+    let service = connection
         .query_row(
             "
             SELECT service_name, service_address_hash, endpoint_identity_hash,
@@ -1778,7 +1618,7 @@ fn read_service_snapshot_conn(
         )
         .optional()
         .map_err(sql_error)?;
-    let service = service_raw
+    service
         .map(
             |(
                 service_name,
@@ -1789,8 +1629,7 @@ fn read_service_snapshot_conn(
                 target_identity_hash,
                 lifetime,
                 state_root,
-            )|
-             -> RuntimeResult<StoredServiceState> {
+            )| {
                 Ok(StoredServiceState {
                     service_name,
                     service_address_hash,
@@ -1803,7 +1642,14 @@ fn read_service_snapshot_conn(
                 })
             },
         )
-        .transpose()?;
+        .transpose()
+}
+
+fn read_service_snapshot_conn(
+    connection: &Connection,
+    service_instance_id: &str,
+) -> RuntimeResult<ServiceSnapshot> {
+    let service = read_stored_service(connection, service_instance_id)?;
 
     let process_rows = {
         let mut statement = connection
@@ -1962,14 +1808,7 @@ fn reuse_snapshot_matches(snapshot: &ServiceSnapshot, guard: &ServiceReuseGuard<
     let Some(service) = &snapshot.service else {
         return false;
     };
-    if service.service_name != guard.service.service_name
-        || service.service_address_hash != guard.service.service_address_hash
-        || service.endpoint_identity_hash != guard.service.identity.endpoint_identity_hash
-        || service.state_identity_hash != guard.service.identity.state_identity_hash
-        || service.runtime_compatibility_hash != guard.service.identity.runtime_compatibility_hash
-        || service.target_identity_hash != guard.service.identity.target_identity_hash
-        || service.state_root != guard.service.state_root.display().to_string()
-    {
+    if !stored_service_matches(service, guard.service) {
         return false;
     }
     let Some(process) = &snapshot.process else {
@@ -1985,6 +1824,19 @@ fn reuse_snapshot_matches(snapshot: &ServiceSnapshot, guard: &ServiceReuseGuard<
     }
     expected_endpoint_map(guard.endpoints, &guard.process.process_key)
         == stored_endpoint_map(&snapshot.endpoints)
+}
+
+pub(crate) fn stored_service_matches(
+    stored: &StoredServiceState,
+    requested: &ServiceRecord<'_>,
+) -> bool {
+    stored.service_name == requested.service_name
+        && stored.service_address_hash == requested.service_address_hash
+        && stored.endpoint_identity_hash == requested.identity.endpoint_identity_hash
+        && stored.state_identity_hash == requested.identity.state_identity_hash
+        && stored.runtime_compatibility_hash == requested.identity.runtime_compatibility_hash
+        && stored.target_identity_hash == requested.identity.target_identity_hash
+        && stored.state_root == requested.state_root.display().to_string()
 }
 
 fn expected_endpoint_map(
@@ -2038,18 +1890,140 @@ fn parse_service_lifetime(value: &str) -> RuntimeResult<ServiceLifetime> {
     }
 }
 
-fn ensure_no_active_service_conn(
-    conn: &Connection,
-    service_instance_id: &str,
+fn require_run(
+    transaction: &Transaction<'_>,
+    identity: &RegistryIdentity,
+    run_id: &str,
+    computed_model_hash: &str,
 ) -> RuntimeResult<()> {
-    let existing = actionable_process_status(conn, service_instance_id)?;
-    refuse_active_service(service_instance_id, existing)
+    let matches: i64 = transaction
+        .query_row(
+            "
+            SELECT count(*)
+            FROM runs
+            WHERE run_id = ?1
+              AND environment = ?2
+              AND slot = ?3
+              AND computed_model_hash = ?4
+            ",
+            params![
+                run_id,
+                identity.environment.as_str(),
+                identity.slot,
+                computed_model_hash,
+            ],
+            |row| row.get(0),
+        )
+        .map_err(sql_error)?;
+    if matches != 1 {
+        return Err(RuntimeError::new(
+            ErrorCode::RegistryCorrupt,
+            format!("run transition found {matches} exact rows for {run_id}, expected 1"),
+        ));
+    }
+    Ok(())
 }
 
-fn ensure_no_active_service_transaction(
+fn require_active_reservation(
+    transaction: &Transaction<'_>,
+    identity: &RegistryIdentity,
+    run_id: &str,
+    owner_token: &str,
+    service_instance_id: &str,
+    endpoints: &[PortReservation<'_>],
+) -> RuntimeResult<()> {
+    let leases: i64 = transaction
+        .query_row(
+            "
+            SELECT count(*)
+            FROM run_leases
+            WHERE run_id = ?1
+              AND environment = ?2
+              AND slot = ?3
+              AND service_instance_id = ?4
+              AND owner_token = ?5
+              AND status = ?6
+              AND expires_at > strftime('%Y-%m-%dT%H:%M:%fZ','now')
+            ",
+            params![
+                run_id,
+                identity.environment.as_str(),
+                identity.slot,
+                service_instance_id,
+                owner_token,
+                RunLeaseStatus::Active.as_str(),
+            ],
+            |row| row.get(0),
+        )
+        .map_err(sql_error)?;
+    if leases != 1 {
+        return Err(RuntimeError::new(
+            ErrorCode::RegistryCorrupt,
+            format!(
+                "process recording found {leases} exact active reservations for run {run_id} and service {service_instance_id}, expected 1"
+            ),
+        ));
+    }
+
+    let stored = {
+        let query = format!(
+            "
+            SELECT endpoint_key, address, port, status, owner_process_key
+            FROM ports
+            WHERE service_instance_id = ?1
+              AND status IN ({})
+            ORDER BY endpoint_key
+            ",
+            status::sql_in_list(status::PORT_OPEN)
+        );
+        let mut statement = transaction.prepare(&query).map_err(sql_error)?;
+        statement
+            .query_map(params![service_instance_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    (
+                        row.get::<_, String>(1)?,
+                        row.get::<_, u16>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                    ),
+                ))
+            })
+            .map_err(sql_error)?
+            .collect::<Result<BTreeMap<_, _>, _>>()
+            .map_err(sql_error)?
+    };
+    let expected = endpoints
+        .iter()
+        .map(|endpoint| {
+            (
+                endpoint.endpoint_key.to_string(),
+                (
+                    endpoint.address.to_string(),
+                    endpoint.port,
+                    PortStatus::Reserved.as_str().to_string(),
+                    None,
+                ),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    if expected.len() != endpoints.len() || stored != expected {
+        return Err(RuntimeError::new(
+            ErrorCode::RegistryCorrupt,
+            format!(
+                "process recording reservation mismatch for {service_instance_id}: stored {stored:?}, expected {expected:?}"
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_service_start_allowed_transaction(
     transaction: &Transaction<'_>,
     service_instance_id: &str,
+    own_run_id: &str,
 ) -> RuntimeResult<()> {
+    ensure_no_active_lease_transaction(transaction, service_instance_id, own_run_id)?;
     let existing = actionable_process_status(transaction, service_instance_id)?;
     refuse_active_service(service_instance_id, existing)
 }
@@ -2100,33 +2074,6 @@ fn refuse_active_service(service_instance_id: &str, existing: Option<String>) ->
     } else {
         Ok(())
     }
-}
-
-// The caller's own reservation lease is excluded via `own_run_id` so the start
-// path can reserve the slot before prepare and still pass its own later checks.
-// An empty `own_run_id` excludes nothing (run ids are non-empty).
-fn ensure_no_active_lease_conn(
-    conn: &Connection,
-    service_instance_id: &str,
-    own_run_id: &str,
-) -> RuntimeResult<()> {
-    let existing = conn
-        .query_row(
-            &format!(
-                "
-            SELECT run_id, status FROM run_leases
-            WHERE service_instance_id = ?1 AND run_id != ?2 AND status IN ({})
-            ORDER BY run_id
-            LIMIT 1
-            ",
-                status::sql_in_list(status::LEASE_OPEN)
-            ),
-            params![service_instance_id, own_run_id],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-        )
-        .optional()
-        .map_err(sql_error)?;
-    refuse_active_lease(service_instance_id, existing)
 }
 
 fn ensure_no_active_lease_transaction(
@@ -2215,7 +2162,7 @@ fn release_service_ports(
     Ok(())
 }
 
-pub fn service_lifetime_as_str(lifetime: ServiceLifetime) -> &'static str {
+pub(crate) fn service_lifetime_as_str(lifetime: ServiceLifetime) -> &'static str {
     match lifetime {
         ServiceLifetime::RunScoped => "run-scoped",
         ServiceLifetime::UntilIdle => "until-idle",
@@ -2232,4 +2179,349 @@ fn sql_error(error: rusqlite::Error) -> RuntimeError {
 
 fn json_error(error: serde_json::Error) -> RuntimeError {
     RuntimeError::new(ErrorCode::ModelAdmission, error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::Duration;
+
+    use super::*;
+
+    const RUN_ID: &str = "run-test";
+    const MODEL_HASH: &str = "model-hash";
+    const OWNER_TOKEN: &str = "owner-token";
+    const SERVICE_ID: &str = "service-instance";
+    const PROCESS_KEY: &str = "process-key";
+    const START_IDENTITY: &str =
+        r#"{"pid":123,"pgid":123,"platformStart":null,"trackedProcesses":[]}"#;
+
+    static NEXT_TEST_REGISTRY: AtomicU64 = AtomicU64::new(0);
+
+    struct TestRegistry {
+        root: PathBuf,
+        registry: Registry,
+    }
+
+    impl TestRegistry {
+        fn new() -> Self {
+            let root = std::env::temp_dir().join(format!(
+                "nixfied-service-registry-test-{}-{}",
+                std::process::id(),
+                NEXT_TEST_REGISTRY.fetch_add(1, Ordering::Relaxed)
+            ));
+            let identity = RegistryIdentity::default_slot("test-project", "test-abi", "test-tool");
+            let registry = Registry::open_or_create(root.join("registry.sqlite"), &identity)
+                .expect("test registry should open");
+            Self { root, registry }
+        }
+
+        fn path(&self) -> PathBuf {
+            self.registry.path().to_path_buf()
+        }
+    }
+
+    impl Drop for TestRegistry {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn identity() -> ServiceIdentity {
+        ServiceIdentity {
+            endpoint_identity_hash: "endpoint-hash".into(),
+            state_identity_hash: "state-hash".into(),
+            runtime_compatibility_hash: "runtime-hash".into(),
+            target_identity_hash: "target-hash".into(),
+        }
+    }
+
+    fn service_record(identity: &ServiceIdentity) -> ServiceRecord<'_> {
+        ServiceRecord {
+            service_instance_id: SERVICE_ID,
+            service_name: "service",
+            service_address_hash: "address-hash",
+            identity,
+            service_lifetime: ServiceLifetime::RunScoped,
+            state_root: Path::new("/test/state"),
+        }
+    }
+
+    fn process_record(pid: u32) -> ProcessRecord<'static> {
+        ProcessRecord {
+            process_key: PROCESS_KEY,
+            pid,
+            pgid: 123,
+            start_identity: START_IDENTITY,
+            command_json: "{}",
+            run_id: RUN_ID,
+            service_instance_id: SERVICE_ID,
+        }
+    }
+
+    fn endpoint() -> PortReservation<'static> {
+        PortReservation {
+            endpoint_key: "service-instance:endpoint",
+            address: "127.0.0.1",
+            port: 24222,
+        }
+    }
+
+    fn insert_run(registry: &Registry, run_id: &str) {
+        let identity = registry.identity();
+        registry
+            .connection()
+            .execute(
+                "
+                INSERT INTO runs (
+                  run_id, environment, slot, status, model_path, computed_model_hash,
+                  runtime_abi, toolchain_id, generator_json, target_json, source_json,
+                  summary_path
+                ) VALUES (?1, ?2, ?3, 'service-starting', '/model', ?4, ?5, ?6, '{}', '{}', '{}', NULL)
+                ",
+                params![
+                    run_id,
+                    identity.environment,
+                    identity.slot,
+                    MODEL_HASH,
+                    identity.runtime_abi,
+                    identity.toolchain_id,
+                ],
+            )
+            .expect("test run should insert");
+    }
+
+    fn reserve(registry: &mut Registry, run_id: &str, owner_token: &str, with_endpoint: bool) {
+        let endpoints = with_endpoint.then(endpoint);
+        reserve_service_start(
+            registry,
+            run_id,
+            owner_token,
+            MODEL_HASH,
+            SERVICE_ID,
+            endpoints.as_slice(),
+        )
+        .expect("test reservation should succeed");
+    }
+
+    fn record_started(registry: &mut Registry) {
+        insert_run(registry, RUN_ID);
+        reserve(registry, RUN_ID, OWNER_TOKEN, true);
+        let identity = identity();
+        record_service_start(
+            registry,
+            RUN_ID,
+            OWNER_TOKEN,
+            MODEL_HASH,
+            &service_record(&identity),
+            &process_record(123),
+            &[endpoint()],
+        )
+        .expect("test service should be recorded");
+    }
+
+    #[test]
+    fn process_recording_requires_exact_run_lease_owner_and_endpoints() {
+        enum BrokenPrecondition {
+            MissingRun,
+            MissingLease,
+            WrongOwner,
+            WrongEndpoint,
+        }
+
+        for broken in [
+            BrokenPrecondition::MissingRun,
+            BrokenPrecondition::MissingLease,
+            BrokenPrecondition::WrongOwner,
+            BrokenPrecondition::WrongEndpoint,
+        ] {
+            let mut fixture = TestRegistry::new();
+            if !matches!(broken, BrokenPrecondition::MissingRun) {
+                insert_run(&fixture.registry, RUN_ID);
+            }
+            if matches!(
+                broken,
+                BrokenPrecondition::WrongOwner | BrokenPrecondition::WrongEndpoint
+            ) {
+                reserve(&mut fixture.registry, RUN_ID, OWNER_TOKEN, true);
+            }
+            if matches!(broken, BrokenPrecondition::WrongOwner) {
+                fixture
+                    .registry
+                    .connection()
+                    .execute(
+                        "UPDATE run_leases SET owner_token = 'other-owner' WHERE run_id = ?1",
+                        [RUN_ID],
+                    )
+                    .unwrap();
+            }
+            if matches!(broken, BrokenPrecondition::WrongEndpoint) {
+                fixture
+                    .registry
+                    .connection()
+                    .execute("UPDATE ports SET port = port + 1", [])
+                    .unwrap();
+            }
+
+            let identity = identity();
+            let error = record_service_start(
+                &mut fixture.registry,
+                RUN_ID,
+                OWNER_TOKEN,
+                MODEL_HASH,
+                &service_record(&identity),
+                &process_record(123),
+                &[endpoint()],
+            )
+            .expect_err("incomplete reservation evidence must fail closed");
+            assert_eq!(error.code, ErrorCode::RegistryCorrupt);
+            let mutations: i64 = fixture
+                .registry
+                .connection()
+                .query_row(
+                    "SELECT (SELECT count(*) FROM services) + (SELECT count(*) FROM processes)",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(mutations, 0);
+        }
+    }
+
+    #[test]
+    fn reservation_is_atomic_and_waits_for_the_registry_writer() {
+        let mut fixture = TestRegistry::new();
+        insert_run(&fixture.registry, "reserve-a");
+        insert_run(&fixture.registry, "reserve-b");
+        reserve_service_start(
+            &mut fixture.registry,
+            "reserve-a",
+            "owner-a",
+            MODEL_HASH,
+            "service-a",
+            &[endpoint()],
+        )
+        .unwrap();
+        let conflict = reserve_service_start(
+            &mut fixture.registry,
+            "reserve-b",
+            "owner-b",
+            MODEL_HASH,
+            "service-b",
+            &[PortReservation {
+                endpoint_key: "service-b:endpoint",
+                ..endpoint()
+            }],
+        )
+        .expect_err("a second registry holder must not reserve the same port");
+        assert_eq!(conflict.code, ErrorCode::LeaseConflict);
+
+        let mut waiting = TestRegistry::new();
+        insert_run(&waiting.registry, RUN_ID);
+        let path = waiting.path();
+        let registry_identity = waiting.registry.identity().clone();
+        let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+        let writer = thread::spawn(move || {
+            let mut registry = Registry::open_or_create(path, &registry_identity).unwrap();
+            let transaction = registry
+                .connection_mut()
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .unwrap();
+            transaction
+                .execute(
+                    "UPDATE registry_meta SET created_at = created_at WHERE id = 1",
+                    [],
+                )
+                .unwrap();
+            ready_tx.send(()).unwrap();
+            thread::sleep(Duration::from_millis(100));
+            transaction.commit().unwrap();
+        });
+        ready_rx.recv().unwrap();
+        reserve(&mut waiting.registry, RUN_ID, OWNER_TOKEN, true);
+        writer.join().unwrap();
+    }
+
+    #[test]
+    fn escape_settlement_requires_exact_evidence_and_rolls_back() {
+        for mutation in [
+            "missing-process",
+            "wrong-process",
+            "wrong-run",
+            "event-failure",
+        ] {
+            let mut fixture = TestRegistry::new();
+            record_started(&mut fixture.registry);
+            match mutation {
+                "missing-process" => {
+                    fixture
+                        .registry
+                        .connection()
+                        .execute(
+                            "DELETE FROM processes WHERE process_key = ?1",
+                            [PROCESS_KEY],
+                        )
+                        .unwrap();
+                }
+                "wrong-run" => {
+                    fixture
+                        .registry
+                        .connection()
+                        .execute(
+                            "UPDATE runs SET computed_model_hash = 'wrong-hash' WHERE run_id = ?1",
+                            [RUN_ID],
+                        )
+                        .unwrap();
+                }
+                "event-failure" => fixture
+                    .registry
+                    .connection()
+                    .execute_batch(
+                        "
+                        CREATE TRIGGER reject_proc_escape_event
+                        BEFORE INSERT ON events
+                        WHEN NEW.event_type = 'service.proc-escape'
+                        BEGIN
+                          SELECT RAISE(ABORT, 'injected escape event failure');
+                        END;
+                        ",
+                    )
+                    .unwrap(),
+                _ => {}
+            }
+            let process = process_record(if mutation == "wrong-process" {
+                124
+            } else {
+                123
+            });
+            let error = mark_process_escape(
+                &mut fixture.registry,
+                &process,
+                MODEL_HASH,
+                None,
+                r#"{"reason":"test"}"#,
+            )
+            .expect_err("escape settlement must require exact durable evidence");
+            assert_eq!(error.code, ErrorCode::RegistryCorrupt);
+            let state: (i64, i64, i64, i64) = fixture
+                .registry
+                .connection()
+                .query_row(
+                    "
+                    SELECT
+                      (SELECT count(*) FROM processes WHERE status = 'running'),
+                      (SELECT count(*) FROM runs WHERE status = 'service-starting'),
+                      (SELECT count(*) FROM ports WHERE status = 'reserved'),
+                      (SELECT count(*) FROM events WHERE event_type = 'service.proc-escape')
+                    ",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                )
+                .unwrap();
+            assert_eq!(state, ((mutation != "missing-process") as i64, 1, 1, 0));
+        }
+    }
 }

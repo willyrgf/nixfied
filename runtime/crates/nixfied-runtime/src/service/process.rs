@@ -31,12 +31,12 @@ use crate::service::identity::{
 };
 use crate::service::readiness::{ProbeAttempt, exec_probe_attempt, tcp_probe_attempt};
 use crate::service::registry::{
-    PortReservation, ProcessRecord, ReservationOutcome, RunRecord, ServiceRecord,
-    ServiceReuseGuard, VerifiedEndpointActivation, activate_service_ready,
-    ensure_service_start_allowed, mark_process_escape, mark_service_canceled, mark_service_failed,
-    mark_service_standing, mark_service_stopped, read_service_snapshot, record_service_borrow,
-    record_service_canceling, record_service_lifecycle_event, record_service_start,
-    release_service_borrow, reserve_service_start, settle_service_reservation,
+    PortReservation, ProcessRecord, ReservationOutcome, ServiceRecord, ServiceReuseGuard,
+    VerifiedEndpointActivation, activate_service_ready, mark_process_escape, mark_service_canceled,
+    mark_service_failed, mark_service_standing, mark_service_stopped, read_service_snapshot,
+    record_service_borrow, record_service_canceling, record_service_lifecycle_event,
+    record_service_start, release_service_borrow, reserve_service_start,
+    settle_service_reservation, stored_service_matches,
 };
 use crate::slot::SelectedSlot;
 use crate::state::{CleanupMode, CleanupOutcome, HostPlacement, StateIdentity, clean_marked_state};
@@ -1125,7 +1125,8 @@ pub type PrepareRunner<'a> = Box<dyn FnMut(&mut Registry) -> RuntimeResult<()> +
 
 /// Start a declared foreground service from the lowered model: run prepare,
 /// spawn-and-own the start exec, and track the process. The service is read from
-/// the admission's `ExecutionModel`, never the raw `Model`.
+/// the admission's `ExecutionModel`, never the raw `Model`. The caller must have
+/// recorded this exact `run_id` with [`super::record_run_created`] first.
 pub fn start_service_for_slot(
     admission: &Admission,
     placement: &HostPlacement,
@@ -1226,24 +1227,27 @@ pub fn start_service_for_slot(
         })
         .collect();
     let owner_token = run_owner_token(&run_id);
-    if let Some(started) = borrow_reusable_service(
-        registry,
-        BorrowServiceRequest {
-            admission,
-            placement,
-            run_id: &run_id,
-            owner_token: &owner_token,
-            service,
-            service_name,
-            service_lifetime: selection.service_lifetime,
-            address_hash: &address_hash,
-            service_instance_id: &service_instance_id,
-            selected_endpoints: &own_endpoints,
-            ready_probe: ready_probe.clone(),
-            health_probe: health_probe.clone(),
-            reservations: &reservations,
-        },
-    )? {
+    let service_record = ServiceRecord {
+        service_instance_id: &service_instance_id,
+        service_name,
+        service_address_hash: &address_hash,
+        identity: &service.identity,
+        service_lifetime: selection.service_lifetime,
+        state_root: &placement.state_root,
+    };
+    let borrow_request = BorrowServiceRequest {
+        admission,
+        placement,
+        run_id: &run_id,
+        owner_token: &owner_token,
+        service,
+        service_record: &service_record,
+        selected_endpoints: &own_endpoints,
+        ready_probe: &ready_probe,
+        health_probe: &health_probe,
+        reservations: &reservations,
+    };
+    if let Some(started) = borrow_reusable_service(registry, &borrow_request, false)? {
         return Ok(started);
     }
     cancellation.check()?;
@@ -1253,53 +1257,23 @@ pub fn start_service_for_slot(
     };
     cancellation.check()?;
     reconcile_registry(registry)?;
-    if let Some(started) = borrow_reusable_service(
-        registry,
-        BorrowServiceRequest {
-            admission,
-            placement,
-            run_id: &run_id,
-            owner_token: &owner_token,
-            service,
-            service_name,
-            service_lifetime: selection.service_lifetime,
-            address_hash: &address_hash,
-            service_instance_id: &service_instance_id,
-            selected_endpoints: &own_endpoints,
-            ready_probe: ready_probe.clone(),
-            health_probe: health_probe.clone(),
-            reservations: &reservations,
-        },
-    )? {
+    if let Some(started) = borrow_reusable_service(registry, &borrow_request, true)? {
         startup_guards.release();
         return Ok(started);
     }
-    let service_record = ServiceRecord {
-        service_instance_id: &service_instance_id,
-        service_name,
-        service_address_hash: &address_hash,
-        identity: &service.identity,
-        service_lifetime: selection.service_lifetime,
-        state_root: &placement.state_root,
-    };
     refuse_nonreusable_local_service(registry, &service_record, service, &own_endpoints)?;
     if let Err(failure) = preflight(own_endpoints.values()) {
         return Err(endpoint_failure_error(registry, service, failure)?);
     }
-    ensure_service_start_allowed(registry, &run_id, &service_instance_id)?;
-    // Reserve the service instance (run row + active lease) AND every endpoint port
-    // under the start conflict gates before running any state-mutating lifecycle
-    // work, so a second runtime racing the same slot — or any modelled port already
-    // held by another active service — is refused before prepare (e.g. initdb) and
-    // spawn run, never discovered afterward. Released on failure below.
+    // Reserve the service instance's active lease and every endpoint port under
+    // the start conflict gates before running any state-mutating lifecycle work.
+    // The run row already exists. Conflicts are serialized and refused before
+    // prepare or spawn, and the reservation is released on failure below.
     reserve_service_start(
         registry,
-        &RunRecord {
-            run_id: &run_id,
-            owner_token: &owner_token,
-            admission,
-            placement,
-        },
+        &run_id,
+        &owner_token,
+        &admission.computed_model_hash,
         &service_instance_id,
         &reservations,
     )?;
@@ -1493,20 +1467,10 @@ pub fn start_service_for_slot(
     };
     if let Err(error) = record_service_start(
         registry,
-        &RunRecord {
-            run_id: &run_id,
-            owner_token: &owner_token,
-            admission,
-            placement,
-        },
-        &ServiceRecord {
-            service_instance_id: &service_instance_id,
-            service_name,
-            service_address_hash: &address_hash,
-            identity: &service.identity,
-            service_lifetime: selection.service_lifetime,
-            state_root: &placement.state_root,
-        },
+        &run_id,
+        &owner_token,
+        &admission.computed_model_hash,
+        &service_record,
         &ProcessRecord {
             process_key: &process_key,
             pid,
@@ -1516,6 +1480,7 @@ pub fn start_service_for_slot(
             run_id: &run_id,
             service_instance_id: &service_instance_id,
         },
+        &reservations,
     ) {
         let _ = record_lifecycle_failure(registry, &started_context, &start_record, &error);
         if let Err(termination_error) =
@@ -1594,13 +1559,10 @@ struct BorrowServiceRequest<'a> {
     run_id: &'a str,
     owner_token: &'a str,
     service: &'a ExecService,
-    service_name: &'a str,
-    service_lifetime: ServiceLifetime,
-    address_hash: &'a str,
-    service_instance_id: &'a str,
+    service_record: &'a ServiceRecord<'a>,
     selected_endpoints: &'a BTreeMap<String, SelectedEndpoint>,
-    ready_probe: Probe,
-    health_probe: Probe,
+    ready_probe: &'a Probe,
+    health_probe: &'a Probe,
     reservations: &'a [PortReservation<'a>],
 }
 
@@ -1636,15 +1598,7 @@ fn refuse_nonreusable_local_service(
             return Ok(());
         }
     };
-    if stored_service.service_name != requested_record.service_name
-        || stored_service.service_address_hash != requested_record.service_address_hash
-        || stored_service.endpoint_identity_hash != requested_record.identity.endpoint_identity_hash
-        || stored_service.state_identity_hash != requested_record.identity.state_identity_hash
-        || stored_service.runtime_compatibility_hash
-            != requested_record.identity.runtime_compatibility_hash
-        || stored_service.target_identity_hash != requested_record.identity.target_identity_hash
-        || stored_service.state_root != requested_record.state_root.display().to_string()
-    {
+    if !stored_service_matches(stored_service, requested_record) {
         return Err(RuntimeError::new(
             ErrorCode::RegistryCorrupt,
             format!(
@@ -1799,21 +1753,14 @@ fn open_endpoints_from_snapshot(
 
 fn borrow_reusable_service(
     registry: &mut Registry,
-    request: BorrowServiceRequest<'_>,
+    request: &BorrowServiceRequest<'_>,
+    under_startup_locks: bool,
 ) -> RuntimeResult<Option<StartedService>> {
-    let snapshot = read_service_snapshot(registry, request.service_instance_id)?;
+    let snapshot = read_service_snapshot(registry, request.service_record.service_instance_id)?;
     let Some(service_row) = &snapshot.service else {
         return Ok(None);
     };
-    if service_row.service_name != request.service_name
-        || service_row.service_address_hash != request.address_hash
-        || service_row.endpoint_identity_hash != request.service.identity.endpoint_identity_hash
-        || service_row.state_identity_hash != request.service.identity.state_identity_hash
-        || service_row.runtime_compatibility_hash
-            != request.service.identity.runtime_compatibility_hash
-        || service_row.target_identity_hash != request.service.identity.target_identity_hash
-        || service_row.state_root != request.placement.state_root.display().to_string()
-    {
+    if !stored_service_matches(service_row, request.service_record) {
         return Ok(None);
     }
     let Some(process_row) = snapshot.process.as_ref() else {
@@ -1829,12 +1776,12 @@ fn borrow_reusable_service(
     )? {
         return Ok(None);
     }
-    let registry_endpoints = selected_endpoints_from_snapshot(
-        &snapshot,
-        request.service_instance_id,
+    if !stored_endpoints_match_selection(
+        &snapshot.endpoints,
+        request.service_record.service_instance_id,
         &process_row.process_key,
-    )?;
-    if &registry_endpoints != request.selected_endpoints {
+        request.selected_endpoints,
+    )? {
         return Ok(None);
     }
     match observe_ownership(
@@ -1854,31 +1801,26 @@ fn borrow_reusable_service(
             listeners: _,
         } => return Ok(None),
         OwnershipObservation::Unverifiable { endpoint, message } => {
-            return Err(port_unverifiable_error(endpoint, message));
+            if under_startup_locks {
+                return Err(port_unverifiable_error(endpoint, message));
+            }
+            return Ok(None);
         }
         OwnershipObservation::ContainmentUnconfirmed { message } => {
-            return Err(RuntimeError::new(ErrorCode::ProcEscape, message));
+            if under_startup_locks {
+                return Err(RuntimeError::new(ErrorCode::ProcEscape, message));
+            }
+            return Ok(None);
         }
     }
     let source = request.admission.require_source()?;
-    let service_record = ServiceRecord {
-        service_instance_id: request.service_instance_id,
-        service_name: request.service_name,
-        service_address_hash: request.address_hash,
-        identity: &request.service.identity,
-        service_lifetime: service_row.service_lifetime,
-        state_root: &request.placement.state_root,
-    };
     let borrowed = record_service_borrow(
         registry,
-        &RunRecord {
-            run_id: request.run_id,
-            owner_token: request.owner_token,
-            admission: request.admission,
-            placement: request.placement,
-        },
+        request.run_id,
+        request.owner_token,
+        &request.admission.computed_model_hash,
         &ServiceReuseGuard {
-            service: &service_record,
+            service: request.service_record,
             process: process_row,
             endpoints: request.reservations,
         },
@@ -1887,17 +1829,22 @@ fn borrow_reusable_service(
         return Ok(None);
     }
     let process_row = process_row.clone();
+    let registry_endpoints = selected_endpoints_from_snapshot(
+        &snapshot,
+        request.service_record.service_instance_id,
+        &process_row.process_key,
+    )?;
     Ok(Some(StartedService {
         child: None,
         borrowed: true,
         monitor: None,
         startup_guards: None,
         service: request.service.clone(),
-        ready_probe: request.ready_probe,
-        health_probe: request.health_probe,
+        ready_probe: request.ready_probe.clone(),
+        health_probe: request.health_probe.clone(),
         logs_dir: request.placement.logs_dir.clone(),
         run_id: request.run_id.to_string(),
-        service_instance_id: request.service_instance_id.to_string(),
+        service_instance_id: request.service_record.service_instance_id.to_string(),
         process_key: process_row.process_key,
         pid: process_row.pid,
         pgid: process_row.pgid,
@@ -1909,9 +1856,49 @@ fn borrow_reusable_service(
         secrets: request.admission.secrets.clone(),
         redactor: Redactor::from_secrets(&request.admission.secrets),
         owner_token: request.owner_token.to_string(),
-        service_lifetime: request.service_lifetime,
+        service_lifetime: request.service_record.service_lifetime,
         log_relays: None,
     }))
+}
+
+fn stored_endpoints_match_selection(
+    stored: &[crate::service::registry::StoredServiceEndpoint],
+    service_instance_id: &str,
+    process_key: &str,
+    selected: &BTreeMap<String, SelectedEndpoint>,
+) -> RuntimeResult<bool> {
+    if stored.len() != selected.len() {
+        return Ok(false);
+    }
+    let prefix = format!("{service_instance_id}:");
+    for endpoint in stored {
+        if endpoint.status != PortStatus::Active
+            || endpoint.owner_process_key.as_deref() != Some(process_key)
+        {
+            return Ok(false);
+        }
+        let endpoint_id = endpoint.endpoint_key.strip_prefix(&prefix).ok_or_else(|| {
+            RuntimeError::new(
+                ErrorCode::RegistryCorrupt,
+                format!(
+                    "endpoint key {} does not belong to service {service_instance_id}",
+                    endpoint.endpoint_key
+                ),
+            )
+        })?;
+        let host = LoopbackHost::parse(&endpoint.address)
+            .map_err(|message| RuntimeError::new(ErrorCode::RegistryCorrupt, message))?;
+        let Some(selected) = selected.get(endpoint_id) else {
+            return Ok(false);
+        };
+        if selected.endpoint_id != endpoint_id
+            || selected.host != host
+            || selected.port != endpoint.port
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 fn selected_endpoints_from_snapshot(

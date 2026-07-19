@@ -6,8 +6,9 @@ use rusqlite::params;
 use serde::Serialize;
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
+use crate::registry::Registry;
+use crate::registry::events::{BorrowedEvent, insert_event};
 use crate::registry::status::{self, CleanupStatus, DbStatus};
-use crate::registry::{Registry, RegistryIdentity};
 use crate::state::marker::{StateIdentity, StateMarker, read_marker};
 use crate::state::placement::canonicalize_existing;
 
@@ -354,6 +355,7 @@ fn record_cleanup_intent(
         )
     })?;
     let identity = registry.identity().clone();
+    let redactor = registry.redactor().clone();
     let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
     transaction
         .execute(
@@ -374,12 +376,18 @@ fn record_cleanup_intent(
             ],
         )
         .map_err(sql_error)?;
-    insert_cleanup_event(
+    insert_event(
         &transaction,
         &identity,
-        "cleanup.intent",
-        &marker.computed_model_hash,
-        payload_json,
+        &redactor,
+        BorrowedEvent {
+            event_type: "cleanup.intent",
+            run_id: None,
+            service_instance_id: None,
+            process_key: None,
+            computed_model_hash: Some(&marker.computed_model_hash),
+            payload_json,
+        },
     )?;
     transaction.commit().map_err(sql_error)?;
     Ok(())
@@ -394,6 +402,7 @@ fn record_cleanup_terminal(
     refusal_reason: Option<&str>,
 ) -> RuntimeResult<()> {
     let identity = registry.identity().clone();
+    let redactor = registry.redactor().clone();
     let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
     transaction
         .execute(
@@ -410,43 +419,20 @@ fn record_cleanup_terminal(
         CleanupStatus::Failed => "cleanup.failed",
         CleanupStatus::Intent => "cleanup.terminal",
     };
-    insert_cleanup_event(
+    insert_event(
         &transaction,
         &identity,
-        event_type,
-        computed_model_hash,
-        payload_json,
+        &redactor,
+        BorrowedEvent {
+            event_type,
+            run_id: None,
+            service_instance_id: None,
+            process_key: None,
+            computed_model_hash: Some(computed_model_hash),
+            payload_json,
+        },
     )?;
     transaction.commit().map_err(sql_error)?;
-    Ok(())
-}
-
-fn insert_cleanup_event(
-    transaction: &rusqlite::Transaction<'_>,
-    identity: &RegistryIdentity,
-    event_type: &str,
-    computed_model_hash: &str,
-    payload_json: &str,
-) -> RuntimeResult<()> {
-    transaction
-        .execute(
-            "
-            INSERT INTO events (
-              at, environment, slot, event_type, run_id, service_instance_id,
-              process_key, computed_model_hash, payload_json
-            ) VALUES (
-              strftime('%Y-%m-%dT%H:%M:%fZ','now'), ?1, ?2, ?3, NULL, NULL, NULL, ?4, ?5
-            )
-            ",
-            params![
-                identity.environment.as_str(),
-                identity.slot,
-                event_type,
-                computed_model_hash,
-                payload_json
-            ],
-        )
-        .map_err(sql_error)?;
     Ok(())
 }
 

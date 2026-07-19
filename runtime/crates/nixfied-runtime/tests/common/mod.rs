@@ -124,7 +124,8 @@ use nixfied_model::Model;
 use nixfied_model::ServiceLifetime;
 use nixfied_runtime::registry::Registry;
 use nixfied_runtime::service::{
-    ServiceSelection, SlotEndpoints, StartedService, run_slot_clean, start_service_for_slot,
+    ServiceSelection, SlotEndpoints, StartedService, record_run_created, run_slot_clean,
+    start_service_for_slot,
 };
 use nixfied_runtime::slot::{SelectedSlot, select_slot};
 use nixfied_runtime::state::{CleanupMode, CleanupOutcome, HostPlacement};
@@ -276,6 +277,8 @@ pub fn start_synthetic_service_for_slot_with_lifetime(
     selected_port: u16,
     service_lifetime: ServiceLifetime,
 ) -> RuntimeResult<StartedService> {
+    let run_id = run_id.into();
+    record_run_created(registry, &run_id, admission, placement)?;
     // The synthetic fixture binds a single endpoint, `synthetic-tcp`.
     let endpoint_ports =
         std::collections::BTreeMap::from([("synthetic-tcp".to_string(), selected_port)]);
