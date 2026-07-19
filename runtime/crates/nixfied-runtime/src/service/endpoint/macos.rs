@@ -5,7 +5,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use super::{
     EndpointFamily, KernelSocketIdentity, ListenerHolder, ListenerIdentity, ListenerRecord,
 };
-use crate::service::process::{platform_start_identity, process_group};
+use crate::service::process::{macos_process_ids, platform_start_identity, process_group};
 
 const XINPGEN_LEN: usize = 24;
 const XINPCB_MIN_LEN: usize = 104;
@@ -340,7 +340,9 @@ pub(super) fn correlate(records: &mut [ListenerRecord]) -> Result<(), String> {
     if indexes.is_empty() {
         return Ok(());
     }
-    let all = list_all_pids()?;
+    let all = macos_process_ids().map_err(|error| {
+        format!("failed to enumerate macOS processes for endpoint correlation: {error}")
+    })?;
     let mut ordered = hints.iter().copied().collect::<Vec<_>>();
     ordered.extend(all.into_iter().filter(|pid| !hints.contains(pid)));
     for pid in ordered {
@@ -369,45 +371,6 @@ pub(super) fn correlate(records: &mut [ListenerRecord]) -> Result<(), String> {
         record.holders.dedup_by_key(|holder| holder.pid);
     }
     Ok(())
-}
-
-fn list_all_pids() -> Result<Vec<u32>, String> {
-    let mut capacity = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
-    if capacity < 0 {
-        return Err(format!(
-            "failed to size macOS process list: {}",
-            io::Error::last_os_error()
-        ));
-    }
-    capacity = capacity.saturating_add(32).max(32);
-    loop {
-        let mut pids = vec![0 as libc::pid_t; capacity as usize];
-        let count = unsafe {
-            libc::proc_listallpids(
-                pids.as_mut_ptr().cast(),
-                (pids.len() * std::mem::size_of::<libc::pid_t>()) as libc::c_int,
-            )
-        };
-        if count < 0 {
-            return Err(format!(
-                "failed to read macOS process list: {}",
-                io::Error::last_os_error()
-            ));
-        }
-        if count as usize >= pids.len() {
-            capacity = capacity.saturating_mul(2);
-            continue;
-        }
-        let mut result = pids
-            .into_iter()
-            .take(count as usize)
-            .filter_map(|pid| u32::try_from(pid).ok())
-            .filter(|pid| *pid > 0)
-            .collect::<Vec<_>>();
-        result.sort_unstable();
-        result.dedup();
-        return Ok(result);
-    }
 }
 
 fn list_socket_fds(pid: u32) -> Vec<i32> {
