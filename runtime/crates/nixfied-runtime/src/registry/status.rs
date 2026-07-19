@@ -122,8 +122,6 @@ db_status! {
     /// `ports.status`: a port reservation's binding state.
     PortStatus {
         Reserved => "reserved",
-        Binding => "binding",
-        Bound => "bound",
         Active => "active",
         Released => "released",
         Stale => "stale",
@@ -162,12 +160,7 @@ pub const LEASE_TERMINAL: &[RunLeaseStatus] = &[
 ];
 
 /// Port statuses that keep a reservation open.
-pub const PORT_OPEN: &[PortStatus] = &[
-    PortStatus::Reserved,
-    PortStatus::Binding,
-    PortStatus::Bound,
-    PortStatus::Active,
-];
+pub const PORT_OPEN: &[PortStatus] = &[PortStatus::Reserved, PortStatus::Active];
 
 /// Process statuses that count as still live during reconciliation.
 pub const PROCESS_ACTIVE: &[ProcessStatus] = &[
@@ -226,8 +219,6 @@ mod tests {
         ]);
         assert_round_trips(&[
             PortStatus::Reserved,
-            PortStatus::Binding,
-            PortStatus::Bound,
             PortStatus::Active,
             PortStatus::Released,
             PortStatus::Stale,
@@ -242,10 +233,7 @@ mod tests {
     #[test]
     fn sql_in_list_quotes_and_joins() {
         assert_eq!(sql_in_list(LEASE_OPEN), "'active', 'canceling'");
-        assert_eq!(
-            sql_in_list(PORT_OPEN),
-            "'reserved', 'binding', 'bound', 'active'"
-        );
+        assert_eq!(sql_in_list(PORT_OPEN), "'reserved', 'active'");
         assert_eq!(
             sql_in_list(RUN_TERMINAL),
             "'canceled', 'task-failed', 'service-failed', 'proc-escaped'"

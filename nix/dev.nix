@@ -9,7 +9,7 @@
   pkgs,
   gate,
   runtime,
-  postgresModel,
+  postgresTestModel,
 }:
 let
   rustToolchain = (import ./toolchain.nix { inherit pkgs; }).dev;
@@ -26,7 +26,7 @@ let
       pkgs.git
     ];
     text = ''
-      NIXFIED_TEST_POSTGRES_MODEL="${postgresModel}" \
+      NIXFIED_TEST_POSTGRES_MODEL="${postgresTestModel}" \
         cargo test --manifest-path runtime/Cargo.toml --workspace "$@"
     '';
   };

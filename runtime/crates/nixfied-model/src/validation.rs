@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use crate::constants::{MODEL_VERSION, TOOLCHAIN_ID, runtime_abi};
 use crate::error::ValidationError;
@@ -247,12 +247,12 @@ fn validate_candidate_port_window(
 fn validate_invocations(model: &Model) -> Result<(), ValidationError> {
     for task in model.tasks.values() {
         if let Some(invocation) = &task.invocation {
-            validate_invocation(invocation, true)?;
+            validate_invocation(invocation)?;
         }
     }
     for service in model.services.values() {
         for invocation in lifecycle_invocations(&service.lifecycle) {
-            validate_invocation(invocation, false)?;
+            validate_invocation(invocation)?;
         }
     }
     Ok(())
@@ -265,10 +265,7 @@ fn lifecycle_invocations(lifecycle: &Lifecycle) -> impl Iterator<Item = &Invocat
         .chain(lifecycle.health.probe.invocation.iter())
 }
 
-fn validate_invocation(
-    invocation: &InvocationSpec,
-    allow_cache_env: bool,
-) -> Result<(), ValidationError> {
+fn validate_invocation(invocation: &InvocationSpec) -> Result<(), ValidationError> {
     if invocation.run.is_empty() {
         return Err(ValidationError::UnsupportedValue {
             field: "invocation.run",
@@ -284,99 +281,6 @@ fn validate_invocation(
             field: "invocation.tools",
             expected: "at least one tool closure",
             actual: "[]".to_string(),
-        });
-    }
-    validate_cache_env_map(&invocation.env, &invocation.cache_env)?;
-    if !allow_cache_env && !invocation.cache_env.is_empty() {
-        return Err(ValidationError::UnsupportedValue {
-            field: "invocation.cacheEnv",
-            expected: "cacheEnv only on leaf task invocations",
-            actual: "service lifecycle invocation".to_string(),
-        });
-    }
-    Ok(())
-}
-
-pub fn validate_cache_env_map(
-    env: &BTreeMap<String, String>,
-    cache_env: &BTreeMap<String, CacheEnvSpec>,
-) -> Result<(), ValidationError> {
-    for (env_var, spec) in cache_env {
-        validate_cache_env_name("invocation.cacheEnv", env_var)?;
-        if env.contains_key(env_var) {
-            return Err(ValidationError::UnsupportedValue {
-                field: "invocation.cacheEnv",
-                expected: "no collision with invocation.env",
-                actual: env_var.clone(),
-            });
-        }
-        validate_cache_env_spec(spec)?;
-    }
-    Ok(())
-}
-
-pub fn validate_cache_env_spec(spec: &CacheEnvSpec) -> Result<(), ValidationError> {
-    validate_cache_component("invocation.cacheEnv.family", &spec.family)?;
-    for part in &spec.key.parts {
-        validate_cache_component("invocation.cacheEnv.key.parts", part)?;
-    }
-    if matches!(spec.scope, CacheScope::Slot) && spec.key.parts.is_empty() {
-        return Err(ValidationError::UnsupportedValue {
-            field: "invocation.cacheEnv.key.parts",
-            expected: "non-empty for slot-scoped caches",
-            actual: "[]".to_string(),
-        });
-    }
-    if matches!(spec.mode, CacheMode::Exact) && spec.key.parts.is_empty() {
-        return Err(ValidationError::UnsupportedValue {
-            field: "invocation.cacheEnv.key.parts",
-            expected: "non-empty for exact caches",
-            actual: "[]".to_string(),
-        });
-    }
-    Ok(())
-}
-
-pub fn validate_cache_env_name(field: &'static str, name: &str) -> Result<(), ValidationError> {
-    if name == "PATH" {
-        return Err(ValidationError::UnsupportedValue {
-            field,
-            expected: "a non-PATH env var matching [A-Za-z_][A-Za-z0-9_]*",
-            actual: name.to_string(),
-        });
-    }
-    let mut chars = name.chars();
-    let valid = chars
-        .next()
-        .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
-        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
-    if valid {
-        Ok(())
-    } else {
-        Err(ValidationError::UnsupportedValue {
-            field,
-            expected: "a non-PATH env var matching [A-Za-z_][A-Za-z0-9_]*",
-            actual: name.to_string(),
-        })
-    }
-}
-
-pub fn validate_cache_component(field: &'static str, value: &str) -> Result<(), ValidationError> {
-    let looks_like_windows_drive = value.len() >= 2
-        && value.as_bytes()[1] == b':'
-        && value.as_bytes()[0].is_ascii_alphabetic();
-    let invalid = value.is_empty()
-        || matches!(value, "." | "..")
-        || value.starts_with('~')
-        || value.contains('/')
-        || value.contains('\\')
-        || value.contains('\0')
-        || looks_like_windows_drive;
-    if invalid {
-        return Err(ValidationError::UnsupportedValue {
-            field,
-            expected: "a non-empty logical path component without separators, traversal, NUL, or host-path syntax",
-            actual: value.to_string(),
         });
     }
     Ok(())

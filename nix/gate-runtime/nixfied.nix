@@ -31,6 +31,10 @@
     package = pkgs.diffutils;
     executable = "bin/diff";
   };
+  nixfied.closures.findutils = {
+    package = pkgs.findutils;
+    executable = "bin/find";
+  };
 
   # ---- example leaf tasks (run → view-diff → clean) -------------------
 
@@ -596,43 +600,70 @@
     };
   };
 
-  # ---- cache leaf tasks ------------------------------------------------
+  # ---- host endpoint coordination across independent state roots ------
 
-  nixfied.tasks.cache-run-scope = {
+  nixfied.tasks.endpoint-cross-root = {
     invocation = {
       tools = [
         pkgs.bash
         "rt"
         "jq"
         "coreutils"
+        "findutils"
       ];
       run = [
         "bash"
         "-c"
         ''
           set -euo pipefail
-          inner="''${stateDir}/cache-run-inner"
-          mkdir -p "''${stateDir}/gate-artifacts" "$inner"
-          NIXFIED_STATE_DIR="$inner" \
-            nixfied-runtime run --model "$TOOLCHAIN_MODEL/model.json" \
-              --task lint --timeout-ms 60000 --json \
-            > "''${stateDir}/gate-artifacts/cache-run-1.json"
-          NIXFIED_STATE_DIR="$inner" \
-            nixfied-runtime run --model "$TOOLCHAIN_MODEL/model.json" \
-              --task lint --timeout-ms 60000 --json \
-            > "''${stateDir}/gate-artifacts/cache-run-2.json"
-          cache1=$(jq -r '.task.cacheEnv[] | select(.envVar == "NIXFIED_RUN_CACHE") | .path' \
-            "''${stateDir}/gate-artifacts/cache-run-1.json")
-          cache2=$(jq -r '.task.cacheEnv[] | select(.envVar == "NIXFIED_RUN_CACHE") | .path' \
-            "''${stateDir}/gate-artifacts/cache-run-2.json")
-          [ -n "$cache1" ] && [ "$cache1" != "null" ] && [ -d "$cache1" ] \
-            || { echo "cache: first run-scope path missing or uncreated" >&2; exit 1; }
-          [ -n "$cache2" ] && [ "$cache2" != "null" ] && [ -d "$cache2" ] \
-            || { echo "cache: second run-scope path missing or uncreated" >&2; exit 1; }
-          [ "$cache1" != "$cache2" ] \
-            || { echo "cache: run-scope cache paths were reused across runs" >&2; exit 1; }
-          NIXFIED_STATE_DIR="$inner" \
-            nixfied-runtime clean --model "$TOOLCHAIN_MODEL/model.json" >/dev/null
+          root_a="''${stateDir}/endpoint-root-a"
+          root_b="''${stateDir}/endpoint-root-b"
+          artifacts="''${stateDir}/gate-artifacts"
+          mkdir -p "$root_a" "$root_b" "$artifacts"
+          cleanup_endpoint_roots() {
+            NIXFIED_STATE_DIR="$root_a" \
+              nixfied-runtime down --model "$ENDPOINT_COORDINATION_MODEL/model.json" \
+              >/dev/null 2>&1 || true
+            NIXFIED_STATE_DIR="$root_b" \
+              nixfied-runtime down --model "$ENDPOINT_COORDINATION_MODEL/model.json" \
+              >/dev/null 2>&1 || true
+          }
+          trap cleanup_endpoint_roots EXIT
+
+          NIXFIED_STATE_DIR="$root_a" \
+            nixfied-runtime run --model "$ENDPOINT_COORDINATION_MODEL/model.json" \
+              --task keep-up --timeout-ms 60000 --json \
+            > "$artifacts/endpoint-root-a.json"
+          [ "$(find "$root_a" -name endpoint-prepare-sentinel -type f | wc -l)" -eq 1 ] \
+            || { echo "endpoint: root A prepare sentinel missing" >&2; exit 1; }
+
+          if NIXFIED_STATE_DIR="$root_b" \
+             nixfied-runtime run --model "$ENDPOINT_COORDINATION_MODEL/model.json" \
+               --task keep-up --timeout-ms 60000 --json \
+             >/dev/null 2>"$artifacts/endpoint-root-b-conflict.json"; then
+            echo "endpoint: independent root B took root A's live listener" >&2
+            exit 1
+          fi
+          tail -n 1 "$artifacts/endpoint-root-b-conflict.json" \
+            | jq -e '
+                .code == "PORT_CONFLICT"
+                and .details.portConflict.reason == "listener-occupied"
+                and .details.portConflict.endpoint.endpointId == "synthetic-tcp"
+              ' >/dev/null
+          [ "$(find "$root_b" -name endpoint-prepare-sentinel -type f | wc -l)" -eq 0 ] \
+            || { echo "endpoint: root B prepared before conflict refusal" >&2; exit 1; }
+
+          NIXFIED_STATE_DIR="$root_a" \
+            nixfied-runtime down --model "$ENDPOINT_COORDINATION_MODEL/model.json" >/dev/null
+          NIXFIED_STATE_DIR="$root_b" \
+            nixfied-runtime run --model "$ENDPOINT_COORDINATION_MODEL/model.json" \
+              --task keep-up --timeout-ms 60000 --json \
+            > "$artifacts/endpoint-root-b.json"
+          [ "$(find "$root_b" -name endpoint-prepare-sentinel -type f | wc -l)" -eq 1 ] \
+            || { echo "endpoint: root B did not prepare after root A went down" >&2; exit 1; }
+          NIXFIED_STATE_DIR="$root_b" \
+            nixfied-runtime down --model "$ENDPOINT_COORDINATION_MODEL/model.json" >/dev/null
+          trap - EXIT
         ''
       ];
     };
@@ -713,14 +744,6 @@
             || { echo "slots: shared a serviceInstanceId" >&2; exit 1; }
           disjoint '[.services[].processKey]' \
             || { echo "slots: shared a processKey" >&2; exit 1; }
-          cache0=$(jq -r '.tasks[] | select(.taskId == "ping-api") | .cacheEnv[] | select(.envVar == "NIXFIED_SLOT_CACHE") | .path' "$s0")
-          cache1=$(jq -r '.tasks[] | select(.taskId == "ping-api") | .cacheEnv[] | select(.envVar == "NIXFIED_SLOT_CACHE") | .path' "$s1")
-          [ -n "$cache0" ] && [ "$cache0" != "null" ] && [ -d "$cache0" ] \
-            || { echo "slots: slot 0 cache path missing or uncreated" >&2; exit 1; }
-          [ -n "$cache1" ] && [ "$cache1" != "null" ] && [ -d "$cache1" ] \
-            || { echo "slots: slot 1 cache path missing or uncreated" >&2; exit 1; }
-          [ "$cache0" != "$cache1" ] \
-            || { echo "slots: slot-scope cache path shared across slots" >&2; exit 1; }
           NIXFIED_STATE_DIR="''${stateDir}/slots-inner" \
             nixfied-runtime clean --model "$DOWNSTREAM_MODEL/model.json" --slot 0 \
             > "''${stateDir}/gate-artifacts/slots-clean-0.json"
@@ -796,13 +819,6 @@
     };
   };
 
-  nixfied.tasks.cache = {
-    kind = "composite";
-    steps = {
-      run-scope.task = "cache-run-scope";
-    };
-  };
-
   nixfied.tasks.all = {
     kind = "composite";
     steps = {
@@ -815,13 +831,13 @@
         task = "lifecycle";
         dependsOn = [ "negatives" ];
       };
-      cache = {
-        task = "cache";
+      endpoint = {
+        task = "endpoint-cross-root";
         dependsOn = [ "lifecycle" ];
       };
       slots = {
         task = "slots";
-        dependsOn = [ "cache" ];
+        dependsOn = [ "endpoint" ];
       };
     };
   };

@@ -178,7 +178,7 @@ fn relative_template_path(
     Ok(path)
 }
 
-pub(crate) fn materialize_owned_dir(
+fn materialize_owned_dir(
     owner_root: &Path,
     canonical_owner_root: &Path,
     path: &Path,

@@ -554,9 +554,6 @@ fn run_m0_placed(
                             RunContext {
                                 run_id,
                                 computed_model_hash: &admission.computed_model_hash,
-                                target_json: &admission.target_json,
-                                runtime_abi: &admission.runtime_abi,
-                                toolchain_id: &admission.toolchain_id,
                                 source_root: &source_root,
                                 state_root: &placement.state_root,
                                 secrets: &admission.secrets,
@@ -572,7 +569,7 @@ fn run_m0_placed(
                 }) as nixfied_runtime::service::process::PrepareRunner<'_>
             });
 
-        let started_service = match start_service_for_slot(
+        let mut current_service = match start_service_for_slot(
             admission,
             placement,
             &mut registry,
@@ -583,6 +580,8 @@ fn run_m0_placed(
                 service_lifetime: plan.service_lifetime,
                 endpoint_ports: &binding.endpoint_ports,
                 slot_endpoints: &slot_endpoints,
+                run_timeout_ms: options.timeout_ms,
+                cancellation,
                 prepare_runner,
             },
         ) {
@@ -623,21 +622,28 @@ fn run_m0_placed(
             lease = Some(RunLeaseHeartbeat::start(
                 placement.registry_path().to_path_buf(),
                 registry.identity().clone(),
-                started_service.run_id.clone(),
-                started_service.owner_token.clone(),
+                current_service.run_id.clone(),
+                current_service.owner_token.clone(),
             ));
         }
-        started.push(started_service);
-
-        let service = started.last_mut().expect("just pushed a service");
-        if let Err(error) = service.wait_for_probe_ready_cancellable(&mut registry, cancellation) {
+        let startup_result = current_service
+            .wait_for_probe_ready_cancellable(&mut registry, cancellation)
+            .and_then(|()| current_service.check_health_cancellable(&mut registry, cancellation));
+        if let Err(error) = startup_result {
             let duration_ms = elapsed_ms(run_started);
-            let summary = write_failure_run_summary(
+            let mut summary_services = services_output(&started);
+            summary_services.push(ServiceRunOutput {
+                service_id: current_service.service_name().to_string(),
+                service_instance_id: current_service.service_instance_id.clone(),
+                process_key: current_service.process_key.clone(),
+                selected_endpoint: current_service.selected_endpoint.clone(),
+            });
+            let summary = write_failure_run_summary_from_services(
                 placement,
                 run_id,
                 duration_ms,
                 &[],
-                &started,
+                &summary_services,
                 &[],
                 redactor,
             );
@@ -649,62 +655,31 @@ fn run_m0_placed(
                 summary.as_deref(),
                 &placement.logs_dir,
             );
-            teardown(
-                &mut started,
-                &mut registry,
-                options.timeout_ms,
-                error.code == nixfied_runtime::ErrorCode::Canceled,
-            );
+            let canceled = error.code == nixfied_runtime::ErrorCode::Canceled;
+            let error =
+                current_service.finalize_failed_start(&mut registry, options.timeout_ms, error);
+            teardown(&mut started, &mut registry, options.timeout_ms, canceled);
             stop_lease(lease)?;
             return Err(with_failure_summary(
                 error.with_detail("failedService", service_name),
                 summary,
             ));
         }
-        let service = started.last_mut().expect("just pushed a service");
-        if let Err(error) = service.check_health_cancellable(&mut registry, cancellation) {
-            let duration_ms = elapsed_ms(run_started);
-            let summary = write_failure_run_summary(
-                placement,
-                run_id,
-                duration_ms,
-                &[],
-                &started,
-                &[],
-                redactor,
-            );
-            print_run_footer(
-                options.output_mode,
-                false,
-                &[],
-                duration_ms,
-                summary.as_deref(),
-                &placement.logs_dir,
-            );
-            teardown(
-                &mut started,
-                &mut registry,
-                options.timeout_ms,
-                error.code == nixfied_runtime::ErrorCode::Canceled,
-            );
-            stop_lease(lease)?;
-            return Err(with_failure_summary(
-                error.with_detail("failedService", service_name),
-                summary,
-            ));
-        }
-        let service = started.last().expect("just started a service");
         if options.output_mode.emit_summary() {
-            match &service.selected_endpoint {
+            match &current_service.selected_endpoint {
                 Some(endpoint) => eprintln!(
                     "  service {} ready at {}:{}",
-                    service.service_name(),
+                    current_service.service_name(),
                     endpoint.host,
                     endpoint.port
                 ),
-                None => eprintln!("  service {} ready (endpoint-less)", service.service_name()),
+                None => eprintln!(
+                    "  service {} ready (endpoint-less)",
+                    current_service.service_name()
+                ),
             }
         }
+        started.push(current_service);
     }
 
     let mut task_runs: Vec<TaskRun> = Vec::new();
@@ -799,9 +774,6 @@ fn run_m0_placed(
         let run_context = RunContext {
             run_id,
             computed_model_hash: &admission.computed_model_hash,
-            target_json: &admission.target_json,
-            runtime_abi: &admission.runtime_abi,
-            toolchain_id: &admission.toolchain_id,
             source_root: &source_root,
             state_root: &placement.state_root,
             secrets: &admission.secrets,

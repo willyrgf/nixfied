@@ -22,6 +22,14 @@ fn interrupt_and_recover_adopts_orphaned_postgres() {
         Err(_) => return,
     };
     let model_path = format!("{model_dir}/model.json");
+    let model: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(&model_path).expect("postgres test model should be readable"),
+    )
+    .expect("postgres test model should be JSON");
+    let port = model["placement"]["slotPlacements"]["0"]["candidatePorts"]["start"]
+        .as_u64()
+        .and_then(|port| u16::try_from(port).ok())
+        .expect("postgres test model should carry a valid slot-zero port window start");
 
     let tmp = TempDir::new();
     let state_base = tmp.path.join("state");
@@ -41,7 +49,6 @@ fn interrupt_and_recover_adopts_orphaned_postgres() {
         .spawn()
         .expect("runtime should spawn");
 
-    let port: u16 = 24580;
     let deadline = Instant::now() + Duration::from_secs(90);
     let mut postgres_up = false;
     while Instant::now() < deadline {

@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use rusqlite::params;
+use rusqlite::{TransactionBehavior, params};
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::registry::status::{self, DbStatus, RunLeaseStatus};
@@ -18,9 +18,57 @@ pub fn heartbeat_run_lease(
     run_id: &str,
     owner_token: &str,
 ) -> RuntimeResult<()> {
-    let ttl_modifier = lease_ttl_modifier();
-    let updated = registry
+    let transaction = registry
         .connection_mut()
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(sql_error)?;
+    let statuses = {
+        let mut statement = transaction
+            .prepare("SELECT status FROM run_leases WHERE run_id = ?1 AND owner_token = ?2")
+            .map_err(sql_error)?;
+        statement
+            .query_map(params![run_id, owner_token], |row| row.get::<_, String>(0))
+            .map_err(sql_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(sql_error)?
+    };
+    if statuses.is_empty()
+        || statuses
+            .iter()
+            .any(|status| RunLeaseStatus::from_db(status) == Some(RunLeaseStatus::Stale))
+    {
+        return Err(stale_lease_error(run_id));
+    }
+    let parsed = statuses
+        .iter()
+        .map(|status| {
+            RunLeaseStatus::from_db(status).ok_or_else(|| {
+                RuntimeError::new(
+                    ErrorCode::RegistryCorrupt,
+                    format!("run lease {run_id} has unknown status {status}"),
+                )
+            })
+        })
+        .collect::<RuntimeResult<Vec<_>>>()?;
+    let open_count = parsed
+        .iter()
+        .filter(|status| status::LEASE_OPEN.contains(status))
+        .count();
+    if open_count == 0 {
+        let clean_terminal = parsed.iter().all(|status| {
+            matches!(
+                status,
+                RunLeaseStatus::Completed | RunLeaseStatus::Canceled | RunLeaseStatus::Failed
+            )
+        });
+        if clean_terminal {
+            transaction.commit().map_err(sql_error)?;
+            return Ok(());
+        }
+        return Err(stale_lease_error(run_id));
+    }
+    let ttl_modifier = lease_ttl_modifier();
+    let updated = transaction
         .execute(
             &format!(
                 "
@@ -34,43 +82,23 @@ pub fn heartbeat_run_lease(
             params![run_id, owner_token, ttl_modifier],
         )
         .map_err(sql_error)?;
-    // A run heartbeats all of its per-service leases at once; while any remains
-    // open the run still owns the slot. Only when none are open do we decide
-    // between a clean end (all terminal) and a lost lease.
-    if updated == 0 {
-        if lease_is_terminal_for_owner(registry, run_id, owner_token)? {
-            return Ok(());
-        }
+    if updated != open_count {
         return Err(RuntimeError::new(
-            ErrorCode::LeaseStale,
-            format!("run lease {run_id} is no longer active for this owner"),
+            ErrorCode::RegistryCorrupt,
+            format!(
+                "run lease heartbeat updated {updated} rows for {run_id}, expected {open_count}"
+            ),
         ));
     }
+    transaction.commit().map_err(sql_error)?;
     Ok(())
 }
 
-/// The owner's leases for this run are collectively terminal: it still holds at
-/// least one lease row and every one has reached a terminal status (so the run
-/// ended rather than the lease being yanked out from under the owner).
-fn lease_is_terminal_for_owner(
-    registry: &Registry,
-    run_id: &str,
-    owner_token: &str,
-) -> RuntimeResult<bool> {
-    let mut statement = registry
-        .connection()
-        .prepare("SELECT status FROM run_leases WHERE run_id = ?1 AND owner_token = ?2")
-        .map_err(sql_error)?;
-    let statuses = statement
-        .query_map(params![run_id, owner_token], |row| row.get::<_, String>(0))
-        .map_err(sql_error)?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(sql_error)?;
-    Ok(!statuses.is_empty()
-        && statuses.iter().all(|status| {
-            RunLeaseStatus::from_db(status)
-                .is_some_and(|status| status::LEASE_TERMINAL.contains(&status))
-        }))
+fn stale_lease_error(run_id: &str) -> RuntimeError {
+    RuntimeError::new(
+        ErrorCode::LeaseStale,
+        format!("run lease {run_id} is no longer active for this owner"),
+    )
 }
 
 pub fn lease_ttl_modifier() -> String {
@@ -136,5 +164,8 @@ fn sleep_until_next_heartbeat(stop: &AtomicBool) {
 }
 
 fn sql_error(error: rusqlite::Error) -> RuntimeError {
-    RuntimeError::new(ErrorCode::RegistryCorrupt, error.to_string())
+    RuntimeError::new(
+        ErrorCode::RegistryCorrupt,
+        format!("run lease registry operation failed: {error}"),
+    )
 }

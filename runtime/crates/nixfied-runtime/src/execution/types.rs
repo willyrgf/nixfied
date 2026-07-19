@@ -7,8 +7,8 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-pub use nixfied_model::{CacheMode, CacheScope, LoopbackHost, StdinPolicy};
 use nixfied_model::{ContainmentRequirement, OperationId, ServiceId, ServiceLifetime, TaskId};
+pub use nixfied_model::{LoopbackHost, StdinPolicy};
 
 /// A service's reuse identity, computed by the lowering from the service's actual
 /// contract — never supplied by the model. The four components hash the endpoint,
@@ -168,20 +168,10 @@ pub struct ResolvedInvocation {
     pub executable: String,
     pub args: Vec<String>,
     pub env: BTreeMap<String, String>,
-    pub cache_env: Vec<ResolvedCacheEnv>,
     pub cwd: String,
     pub stdin: StdinPolicy,
     pub timeout: Duration,
     pub tool_roots: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ResolvedCacheEnv {
-    pub env_var: String,
-    pub family: String,
-    pub mode: CacheMode,
-    pub scope: CacheScope,
-    pub key_parts: Vec<String>,
 }
 
 impl ResolvedInvocation {

@@ -4,13 +4,12 @@ use std::path::{Path, PathBuf};
 
 use nixfied_model::{CleanupPolicy, DirtyPolicy, Model, PersistencePolicy, SourceMode};
 use nixfied_runtime::control::clean_reconciled_state;
-use nixfied_runtime::execution::{CacheMode, CacheScope, ResolvedCacheEnv};
 use nixfied_runtime::registry::{Registry, RegistryIdentity};
 use nixfied_runtime::slot::{first_candidate_port, select_slot};
 use nixfied_runtime::state::{
-    CacheIdentity, CleanupMode, MARKER_FILE_NAME, MarkerComparison, StateIdentity, StateMarker,
+    CleanupMode, MARKER_FILE_NAME, MarkerComparison, StateIdentity, StateMarker,
     clean_marked_state, commit_slot_marker, derive_host_placement, derive_host_placement_for_slot,
-    evaluate_slot_marker, inspect_cleanup_target, materialize_cache_env, materialize_run_roots,
+    evaluate_slot_marker, inspect_cleanup_target, materialize_run_roots,
 };
 use nixfied_runtime::{Admission, AdmittedSource, ErrorCode};
 use serde_json::{Value, json};
@@ -64,77 +63,6 @@ fn materializes_m0_roots_and_slot_marker() {
     assert_eq!(marker.state_epoch, "1");
     assert_eq!(marker.cleanup_policy, CleanupPolicy::DeleteOnClean);
     assert_eq!(marker.persistence, PersistencePolicy::RunScoped);
-}
-
-#[test]
-fn materializes_run_scoped_cache_under_run_dir() {
-    let fixture = StateFixture::new();
-    let model = model();
-    let admission = admission(&model, &fixture.tmp.path);
-    let binding = ResolvedCacheEnv {
-        env_var: "CARGO_TARGET_DIR".to_string(),
-        family: "cargo-target".to_string(),
-        mode: CacheMode::TrustedCi,
-        scope: CacheScope::Run,
-        key_parts: Vec::new(),
-    };
-
-    let cache = materialize_cache_env(
-        &fixture.layout,
-        &binding,
-        &CacheIdentity {
-            target_json: &admission.target_json,
-            runtime_abi: &admission.runtime_abi,
-            toolchain_id: &admission.toolchain_id,
-        },
-    )
-    .expect("run cache should materialize");
-
-    assert!(
-        cache
-            .path
-            .starts_with(fixture.layout.run_dir.join("caches"))
-    );
-    assert!(cache.path.is_dir());
-    assert_eq!(cache.family, "cargo-target");
-    assert_eq!(cache.digest.len(), 64);
-}
-
-#[test]
-fn materializes_slot_scoped_cache_under_state_root() {
-    let fixture = StateFixture::new();
-    let model = model();
-    let admission = admission(&model, &fixture.tmp.path);
-    let binding = ResolvedCacheEnv {
-        env_var: "CARGO_TARGET_DIR".to_string(),
-        family: "cargo-target".to_string(),
-        mode: CacheMode::FastDev,
-        scope: CacheScope::Slot,
-        key_parts: vec!["cargo-target-v1".to_string(), "lock:abc123".to_string()],
-    };
-
-    let cache = materialize_cache_env(
-        &fixture.layout,
-        &binding,
-        &CacheIdentity {
-            target_json: &admission.target_json,
-            runtime_abi: &admission.runtime_abi,
-            toolchain_id: &admission.toolchain_id,
-        },
-    )
-    .expect("slot cache should materialize");
-
-    assert!(
-        cache
-            .path
-            .starts_with(fixture.layout.state_root.join("caches"))
-    );
-    assert!(
-        !cache
-            .path
-            .starts_with(fixture.layout.run_dir.join("caches"))
-    );
-    assert!(cache.path.is_dir());
 }
 
 #[test]
@@ -580,6 +508,14 @@ fn cleanup_refuses_active_registry_refs() {
 fn cleanup_deletes_matching_inactive_state() {
     let fixture = StateFixture::new();
     let mut registry = fixture.registry();
+    let child_written = fixture
+        .layout
+        .state_root
+        .join("child-owned/tool-artifacts/result.bin");
+    fs::create_dir_all(child_written.parent().expect("child path has a parent"))
+        .expect("child-owned directory should be created");
+    fs::write(&child_written, b"opaque child data")
+        .expect("child-owned artifact should be written");
 
     let outcome = clean_marked_state(
         &fixture.layout.state_base,
@@ -591,6 +527,10 @@ fn cleanup_deletes_matching_inactive_state() {
     .expect("inactive marked state should be deleted");
 
     assert!(outcome.cleanup_id.starts_with("cleanup-"));
+    assert!(
+        !fixture.layout.state_root.exists(),
+        "whole-slot clean removes opaque child-written contents without selectively interpreting them"
+    );
     let cleanup_status: String = registry
         .connection()
         .query_row(

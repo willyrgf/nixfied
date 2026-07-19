@@ -31,12 +31,19 @@ let
                   conn, _addr = listener.accept()
                   with conn:
                       data = conn.recv(4096)
-                      if data.startswith(b"GET "):
+                      if not data:
+                          continue
+                      elif data.startswith(b"GET "):
                           conn.sendall(
                               b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nok"
                           )
                       else:
                           conn.sendall(b"ok\n")
+                      # Let the client actively close after consuming the
+                      # response, so the service endpoint does not retain a
+                      # server-side TIME_WAIT claim after `down`.
+                      while conn.recv(4096):
+                          pass
 
 
       def run_task(args):

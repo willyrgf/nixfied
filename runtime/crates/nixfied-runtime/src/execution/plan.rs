@@ -176,9 +176,25 @@ fn assign_ports(
     window: PortWindow,
     slot: u32,
 ) -> RuntimeResult<Vec<ServiceBinding>> {
+    let demand: usize = service_names
+        .iter()
+        .filter_map(|name| model.services.get(name))
+        .map(|service| service.endpoints.len())
+        .sum();
+    if demand > window.capacity() as usize {
+        return Err(RuntimeError::new(
+            ErrorCode::ModelAdmission,
+            format!(
+                "slot {slot} candidate window {}-{} cannot host {demand} endpoints across {} services",
+                window.start,
+                window.end,
+                service_names.len()
+            ),
+        ));
+    }
+
     let mut bindings = Vec::with_capacity(service_names.len());
     let mut cursor = window.start;
-    let mut exhausted = false;
     for service_name in service_names {
         // Lowering proved every selected service resolves; an absent one would be
         // a planner/lowering skew, so treat it as an empty endpoint set.
@@ -189,40 +205,13 @@ fn assign_ports(
             .unwrap_or_default();
         let mut endpoint_ports = BTreeMap::new();
         for endpoint_id in endpoint_ids {
-            if exhausted || cursor > window.end {
-                exhausted = true;
-                break;
-            }
             endpoint_ports.insert(endpoint_id, cursor);
-            match cursor.checked_add(1) {
-                Some(next) => cursor = next,
-                None => exhausted = true,
-            }
+            cursor = cursor.saturating_add(1);
         }
         bindings.push(ServiceBinding {
             service_name: service_name.clone(),
             endpoint_ports,
         });
-    }
-    let demand: usize = bindings
-        .iter()
-        .map(|binding| binding.endpoint_ports.len())
-        .sum();
-    let assigned: usize = service_names
-        .iter()
-        .filter_map(|name| model.services.get(name))
-        .map(|service| service.endpoints.len())
-        .sum();
-    if exhausted || demand != assigned {
-        return Err(RuntimeError::new(
-            ErrorCode::PortConflict,
-            format!(
-                "slot {slot} candidate window {}-{} cannot host {assigned} endpoints across {} services",
-                window.start,
-                window.end,
-                service_names.len()
-            ),
-        ));
     }
     Ok(bindings)
 }
@@ -387,7 +376,6 @@ mod tests {
             executable: "/bin/svc".to_string(),
             args: Vec::new(),
             env: BTreeMap::new(),
-            cache_env: Vec::new(),
             cwd: ".".to_string(),
             stdin: StdinPolicy::Null,
             timeout: Duration::from_millis(1000),
@@ -493,7 +481,7 @@ mod tests {
     fn rejects_when_window_cannot_host_all_services() {
         let em = model(vec!["a", "b"], vec!["a", "b"], vec![(0, 23080, 23080)]);
         let error = plan(&em, &TaskId::new("all"), 0).expect_err("window too small");
-        assert_eq!(error.code, ErrorCode::PortConflict);
+        assert_eq!(error.code, ErrorCode::ModelAdmission);
     }
 
     #[test]
@@ -509,13 +497,13 @@ mod tests {
             plan(&em, &TaskId::new("all"), 1)
                 .expect_err("slot 1 too small")
                 .code,
-            ErrorCode::PortConflict
+            ErrorCode::ModelAdmission
         );
         assert_eq!(
             prove_all_plans_feasible(&em)
                 .expect_err("not all slots feasible")
                 .code,
-            ErrorCode::PortConflict
+            ErrorCode::ModelAdmission
         );
     }
 
@@ -766,7 +754,7 @@ mod tests {
             plan(&em, &TaskId::new("all"), 0)
                 .expect_err("window too small for the endpoint block")
                 .code,
-            ErrorCode::PortConflict
+            ErrorCode::ModelAdmission
         );
     }
 }

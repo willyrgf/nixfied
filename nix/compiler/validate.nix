@@ -66,45 +66,6 @@ let
   deriveFacts = import ../lib/derive-facts.nix { inherit lib; };
   taskNames = builtins.attrNames tasks;
   stepSafe = id: builtins.match "[A-Za-z0-9][A-Za-z0-9_-]*" id != null;
-  validEnvName = name: name != "PATH" && builtins.match "[A-Za-z_][A-Za-z0-9_]*" name != null;
-  looksLikeWindowsPath = value: builtins.match "[A-Za-z]:.*" value != null;
-  validCacheComponent =
-    value:
-    value != ""
-    && value != "."
-    && value != ".."
-    && !(lib.hasPrefix "~" value)
-    && !(lib.hasInfix "/" value)
-    && !(lib.hasInfix "\\" value)
-    && !(looksLikeWindowsPath value);
-  cacheScope =
-    cache:
-    if cache.scope != null then
-      cache.scope
-    else if cache.mode == "fast-dev" then
-      "slot"
-    else if cache.mode == "trusted-ci" then
-      "run"
-    else
-      null;
-  cacheEnvNames = invocation: builtins.attrNames invocation.cacheEnv;
-  cacheEnvCollisions =
-    invocation: builtins.filter (name: invocation.env ? ${name}) (cacheEnvNames invocation);
-  cacheSpecValid =
-    cache:
-    let
-      scope = cacheScope cache;
-    in
-    scope != null
-    && validCacheComponent cache.family
-    && lib.all validCacheComponent cache.key.parts
-    && !(scope == "slot" && cache.key.parts == [ ])
-    && !(cache.mode == "exact" && (cache.scope == null || cache.key.parts == [ ]));
-  invocationCacheEnvValid =
-    invocation:
-    lib.all validEnvName (cacheEnvNames invocation)
-    && cacheEnvCollisions invocation == [ ]
-    && lib.all cacheSpecValid (builtins.attrValues invocation.cacheEnv);
   endpointLess = service: service.endpoint == null && service.endpoints == { };
   endpointIds =
     service:
@@ -251,10 +212,6 @@ let
   allInvocations =
     (map (task: task.invocation) (builtins.attrValues leafTasks))
     ++ lib.concatMap serviceLifecycleInvocations (builtins.attrValues services);
-  serviceCacheEnvEmpty = lib.all (
-    invocation: invocation.cacheEnv == { }
-  ) (lib.concatMap serviceLifecycleInvocations (builtins.attrValues services));
-  allCacheEnvValid = lib.all invocationCacheEnvValid allInvocations;
   secretRefsOnlyInEnv = lib.all (
     invocation: lib.all (value: !(hasSecretRefSyntax value)) invocation.run
   ) allInvocations;
@@ -342,6 +299,32 @@ let
   combinedGraphAcyclic = lib.all (name: !(combinedReaches name name [ ])) (
     builtins.attrNames services
   );
+  taskEndpointDemandFeasible =
+    if
+      !(
+        leavesCoherent
+        && compositesCoherent
+        && stepTasksDeclared
+        && taskGraphAcyclic
+        && leafRequiresDeclared
+        && connectsToDeclared
+        && prepareTasksDeclared
+        && combinedGraphAcyclic
+      )
+    then
+      true
+    else
+      let
+        servicesRequired = deriveFacts.servicesRequired {
+          inherit tasks services prepareTaskOf;
+        };
+        endpointDemand =
+          taskName:
+          lib.foldl' (
+            total: serviceName: total + builtins.length (endpointIds services.${serviceName})
+          ) 0 (servicesRequired taskName);
+      in
+      lib.all (taskName: endpointDemand taskName <= portPolicy.windowSize) taskNames;
   checks = [
     (expect (config.nixfied.target.system == system) "target.system must match the compile system")
     (expect (slotPolicy.min >= 0) "slotPolicy.min must be non-negative")
@@ -367,10 +350,6 @@ let
     (expect secretRefsOnlyInEnv "secret placeholders are only valid in invocation.env values")
     (expect secretRefsWellFormed "secret placeholders must use the \${secret:<id>} grammar")
     (expect secretRefsDeclared "secret placeholders must reference declared nixfied.secrets ids")
-    (expect serviceCacheEnvEmpty "invocation.cacheEnv is only valid on leaf task invocations")
-    (expect allCacheEnvValid
-      "invocation.cacheEnv names must be non-PATH env vars, must not collide with env, and family/key parts must be path-safe with required key parts"
-    )
     (expect leavesCoherent "a leaf task must declare an invocation and no steps")
     (expect compositesCoherent "a composite task carries only steps (no invocation, operationId, or requires) with step-safe names")
     (expect stepTasksDeclared "composite steps must reference declared tasks")
@@ -399,10 +378,13 @@ let
           "clean"
           "model-check"
         ])
-      ) config.nixfied.surface.verbs)
+    ) config.nixfied.surface.verbs)
       "surface.verbs must not collide with the reserved control namespace (run, ps, down, clean, model-check)"
     )
     (expect combinedGraphAcyclic "the combined connectsTo + prepare-requires service graph must be acyclic")
+    (expect taskEndpointDemandFeasible
+      "each task's derived service closure endpoint demand must fit placement.ports.windowSize"
+    )
   ];
 in
 lib.foldl' (acc: check: lib.seq check acc) config checks

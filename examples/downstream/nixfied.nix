@@ -48,7 +48,11 @@ let
               while True:
                   c, _ = s.accept()
                   with c:
-                      c.recv(4096); c.sendall(f"{a.label}-ok\n".encode())
+                      request = c.recv(4096)
+                      if request:
+                          c.sendall(f"{a.label}-ok\n".encode())
+                          while c.recv(4096):
+                              pass
 
       def ping(a):
           check_env("NIXFIED_DEMO_DSN")
@@ -159,12 +163,6 @@ in
   nixfied.tasks.ping-api = {
     invocation = {
       tools = [ "app" ];
-      cacheEnv.NIXFIED_SLOT_CACHE = {
-        family = "downstream-ping-api";
-        mode = "fast-dev";
-        scope = "slot";
-        key.parts = [ "downstream-ping-api-v1" ];
-      };
       run = taskRun "api";
     };
     requires = [ "api" ];
