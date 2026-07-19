@@ -280,7 +280,7 @@ fn lower_service(
         primary_endpoint: primary_endpoint.clone(),
         connects_to: connects_to.iter().cloned().collect(),
         containment: containment.clone(),
-        identity: crate::service::identity::compute_service_identity(service, state, target),
+        identity: crate::service::compute_service_identity(service, state, target),
     })
 }
 

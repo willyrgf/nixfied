@@ -1,6 +1,7 @@
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, Transaction, params};
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
+use crate::redaction::Redactor;
 use crate::registry::RegistryIdentity;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,14 +27,50 @@ impl EventInsert {
     }
 }
 
-pub fn append_event(
+pub(crate) struct BorrowedEvent<'a> {
+    pub(crate) event_type: &'a str,
+    pub(crate) run_id: Option<&'a str>,
+    pub(crate) service_instance_id: Option<&'a str>,
+    pub(crate) process_key: Option<&'a str>,
+    pub(crate) computed_model_hash: Option<&'a str>,
+    pub(crate) payload_json: &'a str,
+}
+
+pub(crate) fn append_event(
     conn: &mut Connection,
     identity: &RegistryIdentity,
+    redactor: &Redactor,
     event: &EventInsert,
 ) -> RuntimeResult<i64> {
     let transaction = conn
         .transaction()
         .map_err(|error| RuntimeError::new(ErrorCode::RegistryCorrupt, error.to_string()))?;
+    let seq = insert_event(
+        &transaction,
+        identity,
+        redactor,
+        BorrowedEvent {
+            event_type: &event.event_type,
+            run_id: event.run_id.as_deref(),
+            service_instance_id: event.service_instance_id.as_deref(),
+            process_key: event.process_key.as_deref(),
+            computed_model_hash: event.computed_model_hash.as_deref(),
+            payload_json: &event.payload_json,
+        },
+    )?;
+    transaction
+        .commit()
+        .map_err(|error| RuntimeError::new(ErrorCode::RegistryCorrupt, error.to_string()))?;
+    Ok(seq)
+}
+
+pub(crate) fn insert_event(
+    transaction: &Transaction<'_>,
+    identity: &RegistryIdentity,
+    redactor: &Redactor,
+    event: BorrowedEvent<'_>,
+) -> RuntimeResult<i64> {
+    let payload_json = redactor.redact_json_str(event.payload_json)?;
     transaction
         .execute(
             "
@@ -52,13 +89,9 @@ pub fn append_event(
                 event.service_instance_id,
                 event.process_key,
                 event.computed_model_hash,
-                event.payload_json,
+                payload_json,
             ],
         )
         .map_err(|error| RuntimeError::new(ErrorCode::RegistryCorrupt, error.to_string()))?;
-    let seq = transaction.last_insert_rowid();
-    transaction
-        .commit()
-        .map_err(|error| RuntimeError::new(ErrorCode::RegistryCorrupt, error.to_string()))?;
-    Ok(seq)
+    Ok(transaction.last_insert_rowid())
 }

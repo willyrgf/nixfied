@@ -75,14 +75,8 @@ impl Registry {
         &self.redactor
     }
 
-    pub fn redact_payload_json(&self, payload_json: &str) -> RuntimeResult<String> {
-        self.redactor.redact_json_str(payload_json)
-    }
-
     pub fn append_event(&mut self, event: &EventInsert) -> RuntimeResult<i64> {
-        let mut event = event.clone();
-        event.payload_json = self.redact_payload_json(&event.payload_json)?;
-        append_event(&mut self.conn, &self.identity, &event)
+        append_event(&mut self.conn, &self.identity, &self.redactor, event)
     }
 }
 

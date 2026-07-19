@@ -1,25 +1,21 @@
 use std::path::Path;
-use std::thread;
-use std::time::{Duration, Instant};
 
 use nixfied_model::ServiceLifetime;
 use rusqlite::params;
 use serde::Serialize;
 
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
+use crate::registry::Registry;
+use crate::registry::events::{BorrowedEvent, insert_event};
 use crate::registry::status::{
     self, DbStatus, PortStatus, ProcessStatus, RunLeaseStatus, RunStatus,
 };
-use crate::registry::{Registry, RegistryIdentity};
-use crate::service::StoredProcessIdentity;
-use crate::service::process::{
-    process_escape_start_identity, process_group_has_live_member, process_is_live_with_identity,
-    process_is_live_with_start_identity, signal_process_group,
-    terminate_process_tree_with_snapshot,
-};
-use crate::service::registry::{
-    ProcessRecord, TaskTerminalStatus, mark_process_escape, mark_service_stopped,
-    mark_task_finished, release_unresolved_escape_ports, service_lifetime_as_str,
+use crate::service::{
+    ProcessRecord, StoredProcessIdentity, TaskTerminalStatus, mark_process_escape,
+    mark_service_stopped, mark_task_finished, process_escape_start_identity,
+    process_group_has_live_member, process_is_live_with_identity,
+    process_is_live_with_start_identity, release_unresolved_escape_ports, service_lifetime_as_str,
+    terminate_process_group, terminate_process_tree_with_snapshot,
 };
 use crate::state::{CleanupMode, CleanupOutcome, StateIdentity, clean_marked_state};
 
@@ -71,8 +67,9 @@ pub fn reconcile_registry(registry: &mut Registry) -> RuntimeResult<PsReport> {
         }
     }
     reconcile_expired_run_leases(registry)?;
-    reconcile_stale_port_reservations(registry)?;
-    reconcile_until_idle_services(registry)?;
+    let rows = process_rows(registry)?;
+    reconcile_stale_port_reservations(registry, &rows)?;
+    reconcile_until_idle_services(registry, &rows)?;
 
     let rows = process_rows(registry)?;
     let mut observations = Vec::with_capacity(rows.len());
@@ -196,7 +193,7 @@ pub fn down_processes(
                 &row.start_identity.tracked_processes,
             )
         });
-        if let Err(error) = terminate_active_process(&row, timeout_ms) {
+        if let Err(error) = terminate_process_group(row.pgid, timeout_ms) {
             return Err(settle_control_escape(
                 registry,
                 &row,
@@ -293,35 +290,6 @@ impl ProcessRow {
             }
         }
         Ok(false)
-    }
-
-    fn wait_until_process_group_empty(&self, timeout_ms: u64) -> RuntimeResult<bool> {
-        let deadline = Instant::now() + Duration::from_millis(timeout_ms);
-        loop {
-            if !process_group_has_live_member(self.pgid)? {
-                return Ok(true);
-            }
-            if Instant::now() >= deadline {
-                return Ok(false);
-            }
-            thread::sleep(Duration::from_millis(10));
-        }
-    }
-}
-
-fn terminate_active_process(row: &ProcessRow, timeout_ms: u64) -> RuntimeResult<()> {
-    signal_process_group(row.pgid, libc::SIGTERM)?;
-    if row.wait_until_process_group_empty(timeout_ms)? {
-        return Ok(());
-    }
-    signal_process_group(row.pgid, libc::SIGKILL)?;
-    if row.wait_until_process_group_empty(1000)? {
-        Ok(())
-    } else {
-        Err(RuntimeError::new(
-            ErrorCode::ProcEscape,
-            format!("failed to stop owned process group {}", row.pgid),
-        ))
     }
 }
 
@@ -461,6 +429,7 @@ fn process_rows(registry: &Registry) -> RuntimeResult<Vec<ProcessRow>> {
 
 fn mark_process_stale(registry: &mut Registry, row: &ProcessRow) -> RuntimeResult<()> {
     let identity = registry.identity().clone();
+    let redactor = registry.redactor().clone();
     let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
     transaction
         .execute(
@@ -494,9 +463,10 @@ fn mark_process_stale(registry: &mut Registry, row: &ProcessRow) -> RuntimeResul
     insert_event(
         &transaction,
         &identity,
-        ControlEvent {
+        &redactor,
+        BorrowedEvent {
             event_type: "process.stale",
-            run_id: &row.run_id,
+            run_id: Some(&row.run_id),
             service_instance_id: row.service_instance_id.as_deref(),
             process_key: Some(&row.process_key),
             computed_model_hash: Some(&row.computed_model_hash),
@@ -514,9 +484,11 @@ fn reconcile_expired_run_leases(registry: &mut Registry) -> RuntimeResult<()> {
     Ok(())
 }
 
-fn reconcile_stale_port_reservations(registry: &mut Registry) -> RuntimeResult<()> {
+fn reconcile_stale_port_reservations(
+    registry: &mut Registry,
+    processes: &[ProcessRow],
+) -> RuntimeResult<()> {
     let ports = active_port_rows(registry)?;
-    let processes = process_rows(registry)?;
     for port in ports {
         let mut proof_process = None;
         let mut live_owner = false;
@@ -604,10 +576,12 @@ fn active_port_rows(registry: &Registry) -> RuntimeResult<Vec<PortRow>> {
         .map_err(sql_error)
 }
 
-fn reconcile_until_idle_services(registry: &mut Registry) -> RuntimeResult<()> {
-    let rows = process_rows(registry)?;
+fn reconcile_until_idle_services(
+    registry: &mut Registry,
+    rows: &[ProcessRow],
+) -> RuntimeResult<()> {
     for row in rows
-        .into_iter()
+        .iter()
         .filter(|row| is_active_status(&row.status))
         .filter(|row| {
             row.service_lifetime.as_deref()
@@ -624,7 +598,7 @@ fn reconcile_until_idle_services(registry: &mut Registry) -> RuntimeResult<()> {
             continue;
         }
         if !row.is_live()? {
-            mark_process_stale(registry, &row)?;
+            mark_process_stale(registry, row)?;
             continue;
         }
         let escape_start_identity = process_escape_start_identity(
@@ -633,15 +607,15 @@ fn reconcile_until_idle_services(registry: &mut Registry) -> RuntimeResult<()> {
             row.start_identity.platform_start.as_deref(),
             &row.start_identity.tracked_processes,
         );
-        if let Err(error) = terminate_active_process(&row, 1000) {
+        if let Err(error) = terminate_process_group(row.pgid, 1000) {
             return Err(settle_control_escape(
                 registry,
-                &row,
+                row,
                 Some(&escape_start_identity),
                 error,
             ));
         }
-        mark_stopped(registry, &row)?;
+        mark_stopped(registry, row)?;
     }
     Ok(())
 }
@@ -712,6 +686,7 @@ impl PortRow {
 
 fn mark_expired_lease_stale(registry: &mut Registry, lease: &RunLeaseRow) -> RuntimeResult<()> {
     let identity = registry.identity().clone();
+    let redactor = registry.redactor().clone();
     let transaction = registry
         .connection_mut()
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
@@ -812,9 +787,10 @@ fn mark_expired_lease_stale(registry: &mut Registry, lease: &RunLeaseRow) -> Run
     insert_event(
         &transaction,
         &identity,
-        ControlEvent {
+        &redactor,
+        BorrowedEvent {
             event_type: "run.lease-stale",
-            run_id: &lease.run_id,
+            run_id: Some(&lease.run_id),
             service_instance_id: Some(&lease.service_instance_id),
             process_key: None,
             computed_model_hash: Some(&lease.computed_model_hash),
@@ -831,6 +807,7 @@ fn mark_port_stale(
     process: &ProcessRow,
 ) -> RuntimeResult<()> {
     let identity = registry.identity().clone();
+    let redactor = registry.redactor().clone();
     let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
     transaction
         .execute(
@@ -857,9 +834,10 @@ fn mark_port_stale(
     insert_event(
         &transaction,
         &identity,
-        ControlEvent {
+        &redactor,
+        BorrowedEvent {
             event_type: "port.stale",
-            run_id: &process.run_id,
+            run_id: Some(&process.run_id),
             service_instance_id: Some(&port.service_instance_id),
             process_key: Some(&process.process_key),
             computed_model_hash: Some(&process.computed_model_hash),
@@ -922,45 +900,6 @@ fn reconcile_unresolved_escape(registry: &mut Registry, row: &ProcessRow) -> Run
         service_instance_id,
         &row.computed_model_hash,
     )
-}
-
-fn insert_event(
-    transaction: &rusqlite::Transaction<'_>,
-    identity: &RegistryIdentity,
-    event: ControlEvent<'_>,
-) -> RuntimeResult<()> {
-    transaction
-        .execute(
-            "
-            INSERT INTO events (
-              at, environment, slot, event_type, run_id, service_instance_id,
-              process_key, computed_model_hash, payload_json
-            ) VALUES (
-              strftime('%Y-%m-%dT%H:%M:%fZ','now'), ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8
-            )
-            ",
-            params![
-                identity.environment.as_str(),
-                identity.slot,
-                event.event_type,
-                event.run_id,
-                event.service_instance_id,
-                event.process_key,
-                event.computed_model_hash,
-                event.payload_json,
-            ],
-        )
-        .map_err(sql_error)?;
-    Ok(())
-}
-
-struct ControlEvent<'a> {
-    event_type: &'a str,
-    run_id: &'a str,
-    service_instance_id: Option<&'a str>,
-    process_key: Option<&'a str>,
-    computed_model_hash: Option<&'a str>,
-    payload_json: &'a str,
 }
 
 fn is_active_status(status: &str) -> bool {

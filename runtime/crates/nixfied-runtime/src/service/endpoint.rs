@@ -1457,6 +1457,7 @@ mod tests {
         use crate::cancellation::CancellationToken;
         use crate::registry::{Registry, RegistryIdentity};
         use crate::service::process::{ServiceSelection, start_service_for_slot};
+        use crate::service::record_run_created;
         use crate::slot::select_slot;
         use crate::state::{derive_host_placement_for_slot, materialize_run_roots};
         use crate::{Admission, AdmittedSource, ErrorCode};
@@ -1524,6 +1525,13 @@ mod tests {
             execution_model: crate::execution::lower(&model).unwrap(),
             secrets: ResolvedSecrets::empty(),
         };
+        record_run_created(
+            &mut registry,
+            "run-unsafe-lock-root",
+            &admission,
+            &placement,
+        )
+        .unwrap();
         let endpoint_ports =
             std::collections::BTreeMap::from([("synthetic-tcp".to_string(), port)]);
         let mut prepare_ran = false;

@@ -6,9 +6,9 @@ use nixfied_runtime::cancellation::{CancellationToken, ProcessSignalGuard};
 use nixfied_runtime::execution::plan;
 use nixfied_runtime::redaction::Redactor;
 use nixfied_runtime::registry::{Registry, RegistryIdentity, RunLeaseHeartbeat};
-use nixfied_runtime::service::task::TaskRun;
 use nixfied_runtime::service::{
-    RunContext, SelectedEndpoint, StartedService, run_dependent_task_cancellable, run_slot_clean,
+    PrepareRunner, RunContext, SelectedEndpoint, ServiceSelection, StartedService, TaskRun,
+    mark_run_completed, record_run_created, run_dependent_task_cancellable, run_slot_clean,
     start_service_for_slot,
 };
 use nixfied_runtime::slot::select_slot;
@@ -448,15 +448,10 @@ fn run_m0_placed(
     )?;
 
     // Record the run row before any service starts, so even a service-less
-    // selection (a task tree whose leaves require nothing) leaves durable
-    // run evidence for `ps`/reconcile. `INSERT OR IGNORE` makes the service-path
-    // run-row insert a harmless no-op.
-    nixfied_runtime::service::registry::record_run_created(
-        &mut registry,
-        run_id,
-        admission,
-        placement,
-    )?;
+    // selection (a task tree whose leaves require nothing) leaves durable run
+    // evidence for `ps`/reconcile. Service transitions require this exact row
+    // and never create or repair it themselves.
+    record_run_created(&mut registry, run_id, admission, placement)?;
 
     // The slot's cross-service endpoint map, known deterministically before
     // anything spawns: `${port:<serviceId>}` substitution addresses each service's
@@ -509,7 +504,7 @@ fn run_m0_placed(
                 )
             })?;
         let output_mode = options.output_mode;
-        let prepare_runner: Option<nixfied_runtime::service::process::PrepareRunner<'_>> =
+        let prepare_runner: Option<PrepareRunner<'_>> =
             service_def.prepare.clone().map(|prepare_task| {
                 let started_services = &started;
                 let source_root = source_root.clone();
@@ -566,7 +561,7 @@ fn run_m0_placed(
                         )?;
                     }
                     Ok(())
-                }) as nixfied_runtime::service::process::PrepareRunner<'_>
+                }) as PrepareRunner<'_>
             });
 
         let mut current_service = match start_service_for_slot(
@@ -575,7 +570,7 @@ fn run_m0_placed(
             &mut registry,
             run_id,
             selected_slot,
-            nixfied_runtime::service::process::ServiceSelection {
+            ServiceSelection {
                 service_name,
                 service_lifetime: plan.service_lifetime,
                 endpoint_ports: &binding.endpoint_ports,
@@ -949,7 +944,7 @@ fn run_m0_placed(
     // Settle a run that no service stop and no task finalized (a degenerate
     // selection with no services and no tasks). Guarded on `service-starting`, so
     // a service- or task-derived terminal status is left untouched.
-    nixfied_runtime::service::registry::mark_run_completed(&mut registry, run_id)?;
+    mark_run_completed(&mut registry, run_id)?;
     stop_lease(lease)?;
     let duration_ms = elapsed_ms(run_started);
     let run_summary_path = Some(write_run_summary(RunSummary {
