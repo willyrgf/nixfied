@@ -80,7 +80,7 @@ Regenerate the checked option reference after changing `nix/modules/`:
 ```sh
 generated="$(nix build --impure --no-link --print-out-paths --expr '
   let
-    flake = builtins.getFlake (toString ./.);
+    flake = builtins.getFlake ("git+file://" + builtins.getEnv "PWD");
     system = builtins.currentSystem;
   in
   import ./nix/docs/options.nix {
@@ -94,6 +94,8 @@ cp "$generated" docs/OPTIONS.md
 
 The generator reuses the compiler's module evaluator. `OPTIONS.md` is a checked
 repository reference, not a flake app/output or an additional model authority.
+The Git flake URL deliberately excludes ignored build artifacts from the source
+snapshot while retaining changes to tracked module files.
 
 ## Gate composition
 
