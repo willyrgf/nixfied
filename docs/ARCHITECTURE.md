@@ -289,24 +289,6 @@ encouraging broad deletion: `REGISTRY_CORRUPT` is structural registry damage,
 `STATE_UNOWNED` is project/environment/slot ownership mismatch, and
 `RUNTIME_ABI_MISMATCH` is a runtime/toolchain contract mismatch.
 
-## What v1 taught us (and the invariant each lesson produced)
-
-| v1 failure | Resulting decision |
-| --- | --- |
-| Runtime semantics drifted into shell + Nix builders, no single owner | SEAM-1 / SHELL-1 / NIX-1; the two-binary split |
-| Artifact sealing grew toward a package format | single model seam + computed provenance hash + model-owned admission |
-| Live checkout state was implicit | first-class `codebases` |
-| Registry treated as liveness truth | OS reconciliation (LIVE-1) |
-| Pure port derivation treated as sufficient | ownership-verified readiness (PORT-1) |
-| Placement drifted across Nix and runtime | logical placement in Nix, host materialisation in Rust |
-| Service reuse blurred incompatible configs | layered service identity, exact match (SVC-ID-1) |
-| Lease/refcount assumed a daemon | run/service/borrower lease split |
-| Adapter complexity preceded proven lifecycle | generic primitives before concrete adapters (RUNTIME-GENERIC-1) |
-| A single huge proof workspace became a second framework | tiered proofs; later, the thin self-hosted gate |
-| Duplicate command families per lifecycle action | framework-owned public surfaces (SURFACE-1, since split) |
-| The authoring surface was the wire format; the first adopter's commands/toolchain/verbs escaped into shell and its flake | the task–service algebra: vocabulary as names over a closed algebra, derived facts, the adopter-owned verb surface (KIND-2 / INVOKE-1 / STATIC-1 / DERIVE-1 / VERB-1) |
-| The endpoint requirement conflated durable with listening; the non-listening worker shape was unrepresentable | endpoint-optional services with probe/placeholder/effects coherence; PORT-1 restated scoped to declared endpoints |
-
 ## Verification boundary
 
 A system cannot fully certify itself, so framework verification is split across

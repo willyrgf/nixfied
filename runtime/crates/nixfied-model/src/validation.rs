@@ -126,9 +126,8 @@ fn validate_codebases(model: &Model) -> Result<(), ValidationError> {
     Ok(())
 }
 
-/// A single `dev` isolation namespace. Multi-environment isolation is a later
-/// milestone; membership does not exist at all (a run's services derive from
-/// its selected task).
+/// The contract admits exactly one `dev` isolation namespace. Membership does
+/// not exist: a run's services derive from its selected task.
 fn validate_environments(model: &Model) -> Result<(), ValidationError> {
     if model.environments.len() != 1
         || model.environments.iter().next().map(String::as_str) != Some("dev")

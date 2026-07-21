@@ -17,9 +17,8 @@ pub struct Model {
     pub target: Target,
     pub codebases: Vec<Codebase>,
     pub secrets: BTreeMap<String, SecretDescriptor>,
-    /// The isolation namespaces (state roots, slots, registry keys) the model
-    /// supports. Membership does not exist: running a task brings up exactly
-    /// the services its leaves require. A single `dev` environment for now.
+    /// The sole isolation namespace is `dev`. Membership does not exist: running
+    /// a task brings up exactly the services its leaves require.
     pub environments: UniqueVec<String>,
     pub slot_policy: SlotPolicy,
     pub placement: Placement,
