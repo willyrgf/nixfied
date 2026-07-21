@@ -1,7 +1,7 @@
 # Nix-layer tests: checks that exercise the Nix compiler and install tooling.
-# These stay in bash because expressing them as runtime tasks would create tasks
-# that do arbitrary builds and network I/O — a violation of the bounded-execution
-# semantics of a task and a blurring of the framework's layer boundary.
+# These stay in bash because they perform open-ended Nix builds and external
+# fetches; expressing them as runtime tasks would exceed the bounded role of
+# those framework tasks and blur which layer is under test.
 { pkgs, runtime }:
 pkgs.writeShellApplication {
   name = "nixfied-gate-nix";

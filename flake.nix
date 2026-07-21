@@ -363,9 +363,8 @@
             inherit (nixpkgs) lib;
           };
           # The runtime workspace must compile reproducibly. CI verifies the fast
-          # debug profile (release is built on demand by `.#install` / the
-          # `nixfied-runtime` package); a release-only compile break is essentially
-          # impossible once clippy + debug pass.
+          # debug profile for fast iteration. The hosted workflow separately
+          # builds the release package as its final safety net.
           nixfied-runtime = self.packages.${system}.nixfied-runtime-debug;
           # Hermetic source gate: rustfmt + clippy (-D warnings) + cargo check.
           rust-workspace = import ./nix/packages/rust-workspace-check.nix { inherit pkgs; };

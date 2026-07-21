@@ -120,8 +120,8 @@ mod tests {
     use super::*;
 
     // Exhaustive sentinels: a new `ErrorCode`/`ExitClass` variant fails to compile
-    // here until it is added, forcing the public error-contract snapshot below (and
-    // the matching list in AGENTS.md) to be updated deliberately. The contract is
+    // here until it is added, forcing the public error-contract snapshot and the
+    // capability descriptor below to be updated deliberately. The contract is
     // public API for the current ABI — it must not drift silently.
     fn _error_code_is_listed(code: ErrorCode) {
         match code {
@@ -196,8 +196,8 @@ mod tests {
     }
 
     /// The public error contract is part of the capability descriptor that drives
-    /// `runtimeAbi` (AGENTS.md: "public API for the current ABI"). Every error code
-    /// and exit class must be listed there, so the chain holds: a new variant fails
+    /// `runtimeAbi` (docs/CONTRACT.md). Every error code and exit class must be
+    /// listed there, so the chain holds: a new variant fails
     /// to compile in the sentinels above, listing it in `capability.txt` is then the
     /// only way past this test, and that edit rotates the ABI digest (caught by the
     /// `runtime_abi_snapshot` test) — the error vocabulary cannot change silently or

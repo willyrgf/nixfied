@@ -42,8 +42,17 @@ included), leaf and composite tasks, derived service unions, multi-slot
 isolation, the Postgres and Reth reference adapters, a toolchain-shaped
 example, non-destructive `install` / `upgrade`, and a self-hosted gate.
 
-For the design rationale (the *why*) see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md);
-for the contributor contract and invariants see [`AGENTS.md`](AGENTS.md).
+## Documentation
+
+- [`docs/CONTRACT.md`](docs/CONTRACT.md) — normative project invariants and
+  boundaries.
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — design rationale and
+  definitional non-goals.
+- [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) — repository layout, checks, and
+  test placement.
+- [`docs/DERIVATION_SPEC.md`](docs/DERIVATION_SPEC.md) — normative graph
+  derivation algorithms.
+- [`docs/ADAPTERS.md`](docs/ADAPTERS.md) — adapter authoring conventions.
 
 ## Prerequisites
 
@@ -282,30 +291,12 @@ Build any via the root flake (e.g. `nix build .#postgres-model`);
 
 ## Verify (working on Nixfied itself)
 
-One command runs the whole repo, fail-fast — the source gate, the test floor,
-then the gate:
+The canonical full local gate is:
 
 ```sh
 nix run .#ci
 ```
 
-Its stages also run on their own:
-
-```sh
-nix run .#check   # nix flake check (rustfmt + clippy -D warnings + every build) + model admission
-nix run .#test    # the white-box cargo floor (binds ports / spawns process groups)
-nix run .#gate    # the framework gate (below)
-```
-
-`.#gate` exercises the runtime the way adopters do — it runs the example models as
-ordinary top-level runs through the runtime under test (each example is its own
-spec) — plus the checks a single run can't make: cross-slot isolation, fail-closed,
-and a real `install` + `upgrade`. CI (`.github/workflows/checks.yml`) runs the same
-layered gate.
-
-Note the asymmetry with the adopter surface above: the framework verifies its
-*own* Rust source with plain cargo/nix because those checks exercise the Nix
-compiler, install tooling, and Rust implementation, while every adopter's
-verification *is* composition: the tasks they name and export. See
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md); the exact dev commands are in
-[`AGENTS.md`](AGENTS.md).
+It runs the source/build checks, the white-box Cargo floor, and both integration
+gates. See [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) for targeted commands,
+working-tree adoption mode, exact coverage, and hosted-CI differences.

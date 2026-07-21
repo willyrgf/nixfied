@@ -4,10 +4,12 @@ This is the *why* behind Nixfied's design. It is condensed from the original
 build spec (RFC v2.3), which has since been retired from the tree — its
 decisions live on here and in git history.
 
-- **README.md** — what Nixfied is and how to use it.
-- **AGENTS.md** — the contract: invariants, boundaries, project map, checks.
-- **This file** — the reasoning behind those invariants, and the v1 mistakes that
-  motivated them.
+- **[`README.md`](../README.md)** — what Nixfied is and how to use it.
+- **[`CONTRACT.md`](CONTRACT.md)** — the normative invariants and boundaries.
+- **[`DEVELOPMENT.md`](DEVELOPMENT.md)** — repository layout, checks, and test
+  placement.
+- **This file** — the reasoning behind the contract and the v1 mistakes that
+  motivated it.
 
 ## The problem
 
@@ -301,61 +303,42 @@ encouraging broad deletion: `REGISTRY_CORRUPT` is structural registry damage,
 | The authoring surface was the wire format; the first adopter's commands/toolchain/verbs escaped into shell and its flake | the task–service algebra: vocabulary as names over a closed algebra, derived facts, the adopter-owned verb surface (KIND-2 / INVOKE-1 / STATIC-1 / DERIVE-1 / VERB-1) |
 | The endpoint requirement conflated durable with listening; the non-listening worker shape was unrepresentable | endpoint-optional services with probe/placeholder/effects coherence; PORT-1 restated scoped to declared endpoints |
 
-## The framework gate
+## Verification boundary
 
-A system cannot fully certify itself, so the gate is layered and runs in order:
-(1) `cargo test` is the trusted floor — it verifies the runtime's own primitives
-without the runtime grading itself; (2) **`gate-runtime`** (`nix/gate-runtime/nixfied.nix`)
-is a first-class nixfied model that exercises the runtime as adopters do — parallel
-example runs with emitted-view diffs, concurrent slot isolation, runtime-layer negatives,
-and a sequential state lifecycle matrix (adopt, in-place upgrade, epoch-bump clean,
-tampered-marker refusal) — all expressed as nixfied tasks with no bespoke orchestration;
-(3) **`gate-nix`** (`nix/gate-nix.nix`) covers the Nix layer in bash: `reject_composite`
-(invalid composites must fail at evaluation), a `nix eval` duplicate-step assertion, and
-the full `install`/`upgrade` adoption loop — these stay in bash because they invoke the
-Nix build system directly, which violates bounded-execution semantics if expressed as
-tasks; (4) `nix flake check` covers the structural gates. A thin coordinator
-(`nix/gate.nix`) runs gate-runtime then gate-nix.
+A system cannot fully certify itself, so framework verification is split across
+independent assurance layers: white-box Cargo tests grade the runtime primitives;
+hermetic Nix checks grade source, model compilation, and builds; an
+adopter-shaped gate exercises the runtime against realised models; and hosted CI
+adds platform-specific coverage plus a release build. These are logical layers,
+not one universal execution order. The current entrypoints and their exact order
+are documented in [`DEVELOPMENT.md`](DEVELOPMENT.md).
 
-The interrupt-and-recover scenario — kill the runtime mid-flight; verify the next run
-reconciles the orphaned service and adopts persisted state — lives in the white-box cargo
-test floor (`tests/lifecycle.rs`). A bounded task cannot hold a registry connection or
-control process timing across a kill; cargo can. This is consistent with the
-already-stated principle that cancellation/GC/lifecycle invariants are white-box cargo
-tests.
+The runtime-shaped portion is a first-class Nixfied model, while compiler and
+installer cases remain ordinary shell around Nix. The latter perform open-ended
+Nix builds and external fetches, which do not fit the bounded role of those
+framework tasks and obscure which layer is under test. SEAM-1 itself constrains
+the runtime binary; its exact scope is defined in
+[`CONTRACT.md`](CONTRACT.md). Precise process-kill, registry, and recovery
+scenarios similarly belong in white-box Cargo tests rather than bounded leaves.
 
-A NixOS-VM was considered and rejected: the gate's needs (a real Nix daemon, ports,
-multi-process supervisors, nested `nix`) already exist in a normal shell, so hermeticity
-comes from pinned inputs + nix-built binaries + throwaway repos/state, not a VM.
+Adopters have a different verification surface. They receive the reserved
+control apps plus one app per task exported in `nixfied.surface.verbs`; their
+checks and acceptance proofs are ordinary tasks and composites run by the same
+runtime as the rest of their project. The framework uses Cargo and Nix to grade
+its own implementation before relying on its self-hosted gate.
 
-## Verification surfaces (framework vs adopter)
-
-Two audiences, two surfaces, one rule. **Adopters** get the reserved control
-apps (`run` / `ps` / `down` / `clean` / `model-check`) plus one app per task id they
-export in `nixfied.surface.verbs` (`lib.projectApps`, wired by the `install`
-scaffold); their verification *is* composition, because their tests are
-tasks — a 0-service `check` (lint/test), an N-service `e2e` — composed into
-the composites they name and run by the same runtime that runs their app,
-with no separate harness. **The framework** verifies its own Rust/Nix with
-plain `nix flake check` (a hermetic rustfmt/clippy/check derivation), a
-`cargo` test floor, and the gate; it does *not* route its source checks
-through nixfied tasks. The reason is the invariant that makes the whole
-design work: a nixfied task can never invoke Nix (SEAM-1), so `nix build` /
-`nix flake check` cannot be tasks; and the runtime must not be the instrument
-that grades its own unit tests. So `.#gate` is framework-only — a system
-proving its own runtime — while an adopter's acceptance proof is simply
-another task they declare and export (`nix run .#release`, or
-`.#run -- --task <id>` for anything unexported).
+A NixOS VM was considered and rejected: the gate already has the real Nix
+daemon, ports, multi-process behavior, pinned inputs, Nix-built binaries, and
+throwaway repositories/state it needs in a normal host shell.
 
 ## Definitional boundaries
 
-Some things are not roadmap items but **definitional non-goals** — the design
-is what it is because it excludes them. Multi-host/remote execution, a required
-daemon, central log aggregation, and UI/dashboards are outside a per-project,
-per-slot, single-host authority; a manifest-sealed bundle envelope re-opens the
-v1 artifact-sealing failure (SINGLE-MODEL-1); a dynamic runtime adapter protocol
-re-opens v1 adapter complexity and would give the runtime domain awareness
-(RUNTIME-GENERIC-1). The no-daemon assumption in particular is load-bearing:
-the lease/liveness model (LIVE-1) is shaped around it. These are not deferred;
-adding any of them is a deliberate redefinition of the product, not a backlog
-pickup.
+The exhaustive normative list is in
+[`CONTRACT.md`](CONTRACT.md#definitional-boundaries). These exclusions shape the
+design rather than wait on a roadmap. Multi-host execution, a required daemon,
+central log aggregation, and UI are outside a per-project, per-slot, single-host
+authority. A manifest envelope re-opens the v1 artifact-sealing failure
+(SINGLE-MODEL-1), while a dynamic runtime adapter protocol restores domain
+awareness and v1 adapter complexity (RUNTIME-GENERIC-1). The no-daemon assumption
+is especially load-bearing because it shapes the lease/liveness model (LIVE-1).
+Adding one of these concepts deliberately redefines the product.
