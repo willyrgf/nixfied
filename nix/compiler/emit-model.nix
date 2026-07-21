@@ -2,9 +2,7 @@
 
 let
   modelJson = builtins.toJSON derived.model;
-  views = import ./views.nix { model = derived.model; };
-  schemaJson = builtins.toJSON views.schema;
-  capabilitiesJson = builtins.toJSON views.capabilities;
+  docsMarkdown = import ./views.nix { model = derived.model; };
 in
 pkgs.runCommand "nixfied-model"
   {
@@ -13,22 +11,13 @@ pkgs.runCommand "nixfied-model"
     buildInputs = derived.packages;
     passAsFile = [
       "modelJson"
-      "schemaJson"
-      "capabilitiesJson"
       "docsMarkdown"
     ];
-    inherit
-      modelJson
-      schemaJson
-      capabilitiesJson
-      ;
-    docsMarkdown = views.docs;
+    inherit modelJson docsMarkdown;
   }
   ''
     mkdir -p "$out"
     mkdir -p "$out/views"
     cp "$modelJsonPath" "$out/model.json"
-    cp "$schemaJsonPath" "$out/views/schema.json"
-    cp "$capabilitiesJsonPath" "$out/views/capabilities.json"
     cp "$docsMarkdownPath" "$out/views/docs.md"
   ''

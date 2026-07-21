@@ -26,7 +26,6 @@ pub struct Model {
     pub closures: BTreeMap<String, ClosureSpec>,
     pub services: BTreeMap<String, ServiceSpec>,
     pub tasks: BTreeMap<String, TaskSpec>,
-    pub docs: Docs,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -502,11 +501,4 @@ pub struct StepSpec {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExitPolicy {
     pub success_codes: UniqueVec<i32>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct Docs {
-    pub title: String,
-    pub summary: String,
 }

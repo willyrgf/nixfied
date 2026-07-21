@@ -4,7 +4,7 @@ model-version: 1
 # The wire primitives the runtime admits and lowers. A field added or removed
 # here is a contract change; editing this manifest rotates the runtime ABI digest
 # so models emitted against the old contract are rejected by the identity check.
-primitive Model: modelVersion toolchainId runtimeAbi generator project target codebases secrets environments slotPolicy placement state closures services tasks docs
+primitive Model: modelVersion toolchainId runtimeAbi generator project target codebases secrets environments slotPolicy placement state closures services tasks
 primitive Generator: name version emitter
 primitive Project: projectId name
 primitive Target: system os arch closureSystem
@@ -36,7 +36,6 @@ primitive TerminalSemantics: success failure
 primitive TaskSpec: kind serviceLifetime operationId invocation requires servicesRequired exitPolicy steps artifactRefs logRefs summaryRefs
 primitive StepSpec: task dependsOn
 primitive ExitPolicy: successCodes
-primitive Docs: title summary
 
 # The invocation arg/env placeholder grammar the runtime substitutes. Bare forms
 # resolve to the invocation's own primary endpoint (services) or the primary
@@ -45,8 +44,9 @@ primitive Docs: title summary
 # connectsTo (services) or requires (tasks) — its primary slot-plan endpoint.
 substitution: ${port} ${host} ${stateDir} ${port:<name>} ${host:<name>} ${secret:<id>}
 
-# The runtime command surfaces every model exposes.
-surface: model schema docs capabilities check run ps down clean
+# The hidden runtime command surfaces every model exposes. `model-check` is the
+# generated project-app name for `check`; installation is outside the model ABI.
+surface: check run ps down clean
 
 # The run command output projections. Summary is human-facing; json is the
 # structured automation surface; both is the explicit combined diagnostic mode.

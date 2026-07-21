@@ -31,7 +31,8 @@ The split is defined by the verb, not by timing:
 - **Nix is the integration *and* correctness layer.** It is programmable, typed,
   reproducible, and already where people describe environments. Typed modules
   evaluate to `model.json`; invalid intent never produces an admitted model. Nix
-  builds/realises closures and emits views. It is also the public extension API:
+  builds/realises closures and emits the disposable docs view. It is also the
+  public extension API:
   adopters integrate by importing a module, not by vendoring internals or
   reshaping their repo.
 - **Rust is the hidden, generic execution runtime.** It knows no domain
@@ -45,7 +46,7 @@ The split is defined by the verb, not by timing:
 Three properties, deliberately distinct:
 
 - **Codified & discoverable** — the whole project is typed data in `model.json`; a
-  human or agent learns what it can do by reading the model or its views.
+  human or agent learns its structure from the model or generated docs view.
 - **Deterministic model & logical placement** — same typed input ⇒ same compiled
   model and logical placement. Host-absolute paths are *not* part of this; Rust
   materialises them at admission.
@@ -63,10 +64,10 @@ fail-closed checks, and independent seam proofs explicit.
 The single most important hardening choice. Each clause replaced a v1 failure
 mode:
 
-- **Many artifacts → one semantic model.** No required `manifest.json` /
-  `schema.json` / `capabilities.json`. `schema`/`docs`/`capabilities` are
-  *disposable views*. (v1: artifact sealing kept growing toward a mini package
-  format.)
+- **Many artifacts → one semantic model.** No required `manifest.json`,
+  `schema.json`, or `capabilities.json`. The model package contains only
+  `model.json` plus the disposable, model-derived `views/docs.md` human
+  reference. (v1: artifact sealing kept growing toward a mini package format.)
 - **Manifest hardening → model-owned admission contract.** Source identity,
   target identity, generator/toolchain identity, closure metadata, layered service
   identity, and state policy are first-class `model.json` fields — so the model

@@ -34,8 +34,8 @@ exposes come from the task names *you* export.
 - **Nix** is the integration + correctness layer — you describe services,
   tasks, composites, state, ports, and source policy as typed Nix.
 - **Rust** is the hidden, generic runtime — it knows no domain and never invokes Nix.
-- **`model.json`** is the only semantic seam; `schema` / `docs` / `capabilities`
-  are disposable views over it.
+- **`model.json`** is the only semantic seam; `views/docs.md` is its disposable
+  human-readable projection.
 
 The capability line is implemented and shipped: services (endpoint-less ones
 included), leaf and composite tasks, derived service unions, multi-slot
@@ -202,6 +202,13 @@ nix run .#check
 
 Use `nix run .#model-check` when you want admission feedback without starting
 services or executing tasks.
+
+Build the existing model package to inspect its model-derived project reference:
+
+```sh
+nix build .#model
+less result/views/docs.md
+```
 
 ### 4. Operate and upgrade
 

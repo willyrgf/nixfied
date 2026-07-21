@@ -24,8 +24,6 @@ pub struct SyntheticModelOptions {
     pub system: String,
     pub os: String,
     pub arch: String,
-    pub docs_title: String,
-    pub docs_summary: String,
 }
 
 impl Default for SyntheticModelOptions {
@@ -40,8 +38,6 @@ impl Default for SyntheticModelOptions {
             system: host_system(),
             os: host_os().to_string(),
             arch: host_arch().to_string(),
-            docs_title: "Runtime Test".to_string(),
-            docs_summary: "Runtime admission fixture.".to_string(),
         }
     }
 }
@@ -189,10 +185,6 @@ pub fn synthetic_model(options: &SyntheticModelOptions) -> Value {
                 "logRefs": ["task.smoke"],
                 "summaryRefs": ["summary"]
             }
-        },
-        "docs": {
-            "title": options.docs_title,
-            "summary": options.docs_summary
         }
     })
 }

@@ -48,8 +48,8 @@ descriptor is the authored wire-contract inventory whose digest derives
 
 - Nix evaluates, validates, builds, and realises. Rust admits, executes,
   reconciles, and cleans against `model.json` and OS reality.
-- `model.json` is the only semantic seam. Generated schema, docs, and
-  capabilities are disposable projections, never additional authority.
+- `model.json` is the only semantic seam. Its generated `views/docs.md` is a
+  disposable human projection, never additional authority.
 - `nixfied-runtime` never invokes Nix or imports Nix expressions. SEAM-1 applies
   to the runtime binary, not to declared child programs.
 - The runtime stays domain-generic. Concrete adapters and the public integration
@@ -69,11 +69,11 @@ The short list above is a routing aid, not a substitute for the full contract.
 | Change | Primary owner |
 | --- | --- |
 | User declaration surface | `nix/modules/` |
-| Resolution, validation, derivation, emitted model/views | `nix/compiler/` |
+| Resolution, validation, derivation, emitted model/docs view | `nix/compiler/` |
 | Nix-side model/ABI constants | `nix/spec/` |
 | Shared serialized model types and structural validation | `runtime/crates/nixfied-model/` |
 | Admission, registry, lifecycle, execution, and controls | `runtime/crates/nixfied-runtime/` |
-| Ergonomic model/view/install CLI | `runtime/crates/nixfied-cli/` |
+| Install CLI | `runtime/crates/nixfied-cli/` |
 | Domain adapters | `nix/adapters/` |
 
 Keep runtime behavior out of `nixfied-model`; it is the shared typed contract.
@@ -93,9 +93,9 @@ Do not invent ad hoc runtime-side model shapes.
   `runtime/crates/nixfied-runtime/tests/capability_coverage.rs`.
 - For derived-fact changes, update `docs/DERIVATION_SPEC.md`, both derivations
   (`nix/compiler/derive.nix` and runtime lowering), and both golden-vector suites.
-- For view changes, keep `nix/compiler/views.nix` and the `nixfied` CLI projection
-  aligned; never hand-edit emitted models or views. The gate proves emitted and
-  runtime-derived views agree.
+- `nix/compiler/views.nix` is the sole generated documentation renderer. Never
+  hand-edit emitted models or views; the gate checks the emitted model and docs
+  together.
 - Error codes may be renamed or removed through a recorded ABI change. Preserve
   the admission/execution phase distinction; never report `MODEL_ADMISSION`
   after admission.

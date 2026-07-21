@@ -3,10 +3,8 @@
 # adopter would — parallel examples, sequential lifecycle, concurrent slot
 # isolation, and structured assertion steps — with no bespoke orchestration.
 #
-# Closures `rt` and `cli` are injected by the flake.nix override module
-# (both point at nixfiedRuntimeDebug). Task env vars (model paths) are also
-# injected there. The four pure-nixpkgs closures below are complete on their
-# own.
+# Closure `rt` and the model paths are injected by the flake.nix override
+# module. The pure-nixpkgs closures below are complete on their own.
 { pkgs, nixfiedLib, ... }:
 {
   nixfied.project.projectId = "gate-runtime";
@@ -14,7 +12,7 @@
   nixfied.codebases.main.logicalRoot = ".";
 
   # ---- closures -------------------------------------------------------
-  # rt and cli are declared in the flake.nix compileModel override.
+  # rt is declared in the flake.nix compileModel override.
   nixfied.closures.jq = {
     package = pkgs.jq;
     executable = "bin/jq";
@@ -27,25 +25,19 @@
       "file-write"
     ];
   };
-  nixfied.closures.diffutils = {
-    package = pkgs.diffutils;
-    executable = "bin/diff";
-  };
   nixfied.closures.findutils = {
     package = pkgs.findutils;
     executable = "bin/find";
   };
 
-  # ---- example leaf tasks (run → view-diff → clean) -------------------
+  # ---- example leaf tasks (run → model/docs proof → clean) ------------
 
   nixfied.tasks.example-minimal = {
     invocation = {
       tools = [
         pkgs.bash
         "rt"
-        "cli"
         "jq"
-        "diffutils"
         "coreutils"
       ];
       run = [
@@ -61,12 +53,19 @@
             "''${stateDir}/gate-artifacts/example-minimal.json" >/dev/null
           jq -e '.durationMs >= 0' \
             "$(jq -r .runSummaryPath "''${stateDir}/gate-artifacts/example-minimal.json")" >/dev/null
-          diff <(nixfied schema       --model "$MINIMAL_MODEL/model.json" | jq -S .) \
-               <(jq -S . "$MINIMAL_MODEL/views/schema.json")
-          diff <(nixfied capabilities --model "$MINIMAL_MODEL/model.json" | jq -S .) \
-               <(jq -S . "$MINIMAL_MODEL/views/capabilities.json")
-          diff <(nixfied docs         --model "$MINIMAL_MODEL/model.json") \
-               "$MINIMAL_MODEL/views/docs.md"
+          jq -e '.project.projectId == "minimal" and (has("docs") | not)' \
+            "$MINIMAL_MODEL/model.json" >/dev/null
+          test -f "$MINIMAL_MODEL/views/docs.md"
+          test ! -e "$MINIMAL_MODEL/views/schema.json"
+          test ! -e "$MINIMAL_MODEL/views/capabilities.json"
+          docs=$(<"$MINIMAL_MODEL/views/docs.md")
+          [[ "$docs" == *'# Minimal'* ]]
+          [[ "$docs" == *'- id: `minimal`'* ]]
+          [[ "$docs" == *'### `smoke`'* ]]
+          [[ "$docs" == *'- services required: `synthetic`'* ]]
+          [[ "$docs" == *'### `synthetic`'* ]]
+          [[ "$docs" == *'- primary endpoint: `synthetic-tcp`'* ]]
+          [[ "$docs" != *'## Surfaces'* ]]
           NIXFIED_STATE_DIR="''${stateDir}/example-minimal-inner" \
             nixfied-runtime clean --model "$MINIMAL_MODEL/model.json"
         ''
@@ -79,9 +78,6 @@
       tools = [
         pkgs.bash
         "rt"
-        "cli"
-        "jq"
-        "diffutils"
         "coreutils"
       ];
       run = [
@@ -93,12 +89,6 @@
           NIXFIED_STATE_DIR="''${stateDir}/example-postgres-inner" \
             nixfied-runtime run --model "$POSTGRES_MODEL/model.json" --task smoke-query --timeout-ms 60000 --json \
             > "''${stateDir}/gate-artifacts/example-postgres.json"
-          diff <(nixfied schema       --model "$POSTGRES_MODEL/model.json" | jq -S .) \
-               <(jq -S . "$POSTGRES_MODEL/views/schema.json")
-          diff <(nixfied capabilities --model "$POSTGRES_MODEL/model.json" | jq -S .) \
-               <(jq -S . "$POSTGRES_MODEL/views/capabilities.json")
-          diff <(nixfied docs         --model "$POSTGRES_MODEL/model.json") \
-               "$POSTGRES_MODEL/views/docs.md"
           NIXFIED_STATE_DIR="''${stateDir}/example-postgres-inner" \
             nixfied-runtime clean --model "$POSTGRES_MODEL/model.json"
         ''
@@ -111,9 +101,6 @@
       tools = [
         pkgs.bash
         "rt"
-        "cli"
-        "jq"
-        "diffutils"
         "coreutils"
       ];
       run = [
@@ -125,12 +112,11 @@
           NIXFIED_STATE_DIR="''${stateDir}/example-composite-inner" \
             nixfied-runtime run --model "$COMPOSITE_MODEL/model.json" --task pipeline --timeout-ms 60000 --json \
             > "''${stateDir}/gate-artifacts/example-composite.json"
-          diff <(nixfied schema       --model "$COMPOSITE_MODEL/model.json" | jq -S .) \
-               <(jq -S . "$COMPOSITE_MODEL/views/schema.json")
-          diff <(nixfied capabilities --model "$COMPOSITE_MODEL/model.json" | jq -S .) \
-               <(jq -S . "$COMPOSITE_MODEL/views/capabilities.json")
-          diff <(nixfied docs         --model "$COMPOSITE_MODEL/model.json") \
-               "$COMPOSITE_MODEL/views/docs.md"
+          docs=$(<"$COMPOSITE_MODEL/views/docs.md")
+          [[ "$docs" == *'### `pipeline`'* ]]
+          [[ "$docs" == *'- kind: `composite`'* ]]
+          [[ "$docs" == *'`probe`: task `smoke`; depends on none'* ]]
+          [[ "$docs" == *'`verify`: task `smoke`; depends on `probe`'* ]]
           NIXFIED_STATE_DIR="''${stateDir}/example-composite-inner" \
             nixfied-runtime clean --model "$COMPOSITE_MODEL/model.json"
         ''
@@ -143,9 +129,6 @@
       tools = [
         pkgs.bash
         "rt"
-        "cli"
-        "jq"
-        "diffutils"
         "coreutils"
       ];
       run = [
@@ -157,12 +140,6 @@
           NIXFIED_STATE_DIR="''${stateDir}/example-polyglot-inner" \
             nixfied-runtime run --model "$POLYGLOT_MODEL/model.json" --task all --timeout-ms 60000 --json \
             > "''${stateDir}/gate-artifacts/example-polyglot.json"
-          diff <(nixfied schema       --model "$POLYGLOT_MODEL/model.json" | jq -S .) \
-               <(jq -S . "$POLYGLOT_MODEL/views/schema.json")
-          diff <(nixfied capabilities --model "$POLYGLOT_MODEL/model.json" | jq -S .) \
-               <(jq -S . "$POLYGLOT_MODEL/views/capabilities.json")
-          diff <(nixfied docs         --model "$POLYGLOT_MODEL/model.json") \
-               "$POLYGLOT_MODEL/views/docs.md"
           NIXFIED_STATE_DIR="''${stateDir}/example-polyglot-inner" \
             nixfied-runtime clean --model "$POLYGLOT_MODEL/model.json"
         ''
@@ -175,9 +152,6 @@
       tools = [
         pkgs.bash
         "rt"
-        "cli"
-        "jq"
-        "diffutils"
         "coreutils"
       ];
       run = [
@@ -189,12 +163,6 @@
           NIXFIED_STATE_DIR="''${stateDir}/example-downstream-inner" \
             nixfied-runtime run --model "$DOWNSTREAM_MODEL/model.json" --task release --timeout-ms 60000 --json \
             > "''${stateDir}/gate-artifacts/example-downstream.json"
-          diff <(nixfied schema       --model "$DOWNSTREAM_MODEL/model.json" | jq -S .) \
-               <(jq -S . "$DOWNSTREAM_MODEL/views/schema.json")
-          diff <(nixfied capabilities --model "$DOWNSTREAM_MODEL/model.json" | jq -S .) \
-               <(jq -S . "$DOWNSTREAM_MODEL/views/capabilities.json")
-          diff <(nixfied docs         --model "$DOWNSTREAM_MODEL/model.json") \
-               "$DOWNSTREAM_MODEL/views/docs.md"
           NIXFIED_STATE_DIR="''${stateDir}/example-downstream-inner" \
             nixfied-runtime clean --model "$DOWNSTREAM_MODEL/model.json"
         ''
@@ -207,9 +175,6 @@
       tools = [
         pkgs.bash
         "rt"
-        "cli"
-        "jq"
-        "diffutils"
         "coreutils"
       ];
       run = [
@@ -221,12 +186,6 @@
           NIXFIED_STATE_DIR="''${stateDir}/example-reth-inner" \
             nixfied-runtime run --model "$RETH_MODEL/model.json" --task reth-smoke --timeout-ms 60000 --json \
             > "''${stateDir}/gate-artifacts/example-reth.json"
-          diff <(nixfied schema       --model "$RETH_MODEL/model.json" | jq -S .) \
-               <(jq -S . "$RETH_MODEL/views/schema.json")
-          diff <(nixfied capabilities --model "$RETH_MODEL/model.json" | jq -S .) \
-               <(jq -S . "$RETH_MODEL/views/capabilities.json")
-          diff <(nixfied docs         --model "$RETH_MODEL/model.json") \
-               "$RETH_MODEL/views/docs.md"
           NIXFIED_STATE_DIR="''${stateDir}/example-reth-inner" \
             nixfied-runtime clean --model "$RETH_MODEL/model.json"
         ''
@@ -239,9 +198,6 @@
       tools = [
         pkgs.bash
         "rt"
-        "cli"
-        "jq"
-        "diffutils"
         "coreutils"
       ];
       run = [
@@ -253,12 +209,6 @@
           NIXFIED_STATE_DIR="''${stateDir}/example-toolchain-inner" \
             nixfied-runtime run --model "$TOOLCHAIN_MODEL/model.json" --task ci --timeout-ms 60000 --json \
             > "''${stateDir}/gate-artifacts/example-toolchain.json"
-          diff <(nixfied schema       --model "$TOOLCHAIN_MODEL/model.json" | jq -S .) \
-               <(jq -S . "$TOOLCHAIN_MODEL/views/schema.json")
-          diff <(nixfied capabilities --model "$TOOLCHAIN_MODEL/model.json" | jq -S .) \
-               <(jq -S . "$TOOLCHAIN_MODEL/views/capabilities.json")
-          diff <(nixfied docs         --model "$TOOLCHAIN_MODEL/model.json") \
-               "$TOOLCHAIN_MODEL/views/docs.md"
           NIXFIED_STATE_DIR="''${stateDir}/example-toolchain-inner" \
             nixfied-runtime clean --model "$TOOLCHAIN_MODEL/model.json"
         ''

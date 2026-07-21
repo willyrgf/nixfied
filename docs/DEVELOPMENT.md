@@ -8,7 +8,7 @@ Read [`CONTRACT.md`](CONTRACT.md) before changing the model/runtime boundary and
 
 ```text
 nix/modules/                   typed adopter declaration surface
-nix/compiler/                  resolve -> validate -> derive -> emit model/views
+nix/compiler/                  resolve -> validate -> derive -> emit model/docs
 nix/spec/                      Nix-side model and ABI constants
 nix/adapters/                  Nix-side domain adapters
 nix/install/                   install and upgrade programs
@@ -21,7 +21,7 @@ nix/gate.nix                   thin gate coordinator
 nix/dev.nix                    local check, test, and ci app definitions
 runtime/crates/nixfied-model/   serde contract, validation, capability descriptor
 runtime/crates/nixfied-runtime/ admission and impure runtime behavior
-runtime/crates/nixfied-cli/     model/view/install CLI
+runtime/crates/nixfied-cli/     install CLI
 examples/                       downstream-shaped example models
 ```
 
@@ -77,9 +77,9 @@ tests run outside the Nix sandbox through `.#test`.
 
 `nix/gate.nix` is a thin sequential coordinator:
 
-- `gate-runtime` is a first-class Nixfied model. It exercises example runs and
-  view parity, concurrent slot isolation, runtime-layer refusal cases, endpoint
-  coordination, and the state/service lifecycle matrix.
+- `gate-runtime` is a first-class Nixfied model. It exercises example runs, the
+  emitted model/docs contract, concurrent slot isolation, runtime-layer refusal
+  cases, endpoint coordination, and the state/service lifecycle matrix.
 - `gate-nix` exercises the Nix compiler and install tooling: evaluation
   negatives, immutable-source admission, and real install/upgrade adoption in
   throwaway repositories.
@@ -134,7 +134,7 @@ Use the smallest proof that covers the change, then widen for shared contracts:
 | `nixfied-model` shape/validation | model crate tests + `.#check` |
 | Runtime admission or lifecycle | focused runtime test + `.#test` |
 | Nix resolution/validation/derivation | `nix flake check` + affected Nix vectors |
-| Views or public output | focused CLI/runtime tests + `.#gate` |
+| Generated docs or public output | affected model build + `.#gate` |
 | Adapter or example | build the affected model + `.#gate` |
 | Contract or cross-layer change | `.#ci`; use `--dirty` when the generated project must consume the working tree |
 

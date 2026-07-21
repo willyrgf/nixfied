@@ -43,7 +43,6 @@ pub fn lower(model: &Model) -> RuntimeResult<ExecutionModel> {
         closures,
         services,
         tasks,
-        docs: _,
     } = model;
 
     let lowered_services = services
@@ -1240,7 +1239,6 @@ mod tests {
                     "artifactRefs": [], "logRefs": [], "summaryRefs": []
                 }
             },
-            "docs": { "title": "t", "summary": "s" }
         })
     }
 

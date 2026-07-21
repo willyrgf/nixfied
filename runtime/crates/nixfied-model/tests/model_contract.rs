@@ -74,10 +74,6 @@ fn valid_model_json() -> Value {
         },
         "tasks": {
             "smoke": smoke_task()
-        },
-        "docs": {
-            "title": "M0 Example",
-            "summary": "Minimal M0 model contract fixture."
         }
     })
 }
@@ -347,6 +343,16 @@ fn unknown_top_level_field_is_invalid() {
 
     let error = serde_json::from_value::<Model>(value).expect_err("unknown field must be refused");
     assert!(error.to_string().contains("computedModelHash"));
+}
+
+#[test]
+fn removed_docs_field_is_invalid() {
+    let mut value = valid_model_json();
+    value["docs"] = json!({ "title": "legacy", "summary": "legacy" });
+
+    let error = serde_json::from_value::<Model>(value)
+        .expect_err("the removed docs model section must be refused");
+    assert!(error.to_string().contains("docs"));
 }
 
 #[test]

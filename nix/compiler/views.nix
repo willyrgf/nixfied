@@ -1,98 +1,125 @@
 { model }:
 
 let
-  inherit (builtins) attrNames;
-  # Framework-owned public surfaces: the generated view/runtime command set every
-  # model exposes. A view concern, derived here rather than mirrored in the model.
-  surfaceNames = [
-    "model"
-    "schema"
-    "docs"
-    "capabilities"
-    "check"
-    "run"
-    "ps"
-    "down"
-    "clean"
-  ];
-  serviceNames = attrNames model.services;
+  inherit (builtins) attrNames concatStringsSep;
+
+  inlineList =
+    values:
+    if values == [ ] then
+      "none"
+    else
+      concatStringsSep ", " (map (value: "`${toString value}`") values);
+
+  taskDocs =
+    taskId:
+    let
+      task = model.tasks.${taskId};
+      stepNames = attrNames (task.steps or { });
+    in
+    concatStringsSep "\n" (
+      [
+        "### `${taskId}`"
+        ""
+        "- kind: `${task.kind}`"
+        "- service lifetime: `${task.serviceLifetime}`"
+        "- services required: ${inlineList task.servicesRequired}"
+        "- artifact refs: ${inlineList (task.artifactRefs or [ ])}"
+        "- log refs: ${inlineList (task.logRefs or [ ])}"
+        "- summary refs: ${inlineList (task.summaryRefs or [ ])}"
+      ]
+      ++ (
+        if task.kind == "composite" then
+          [ "- steps:" ]
+          ++ map (
+            stepName:
+            let
+              step = task.steps.${stepName};
+            in
+            "  - `${stepName}`: task `${toString step.task}`; depends on ${inlineList (step.dependsOn or [ ])}"
+          ) stepNames
+        else
+          [ ]
+      )
+    );
+
+  serviceDocs =
+    serviceId:
+    let
+      service = model.services.${serviceId};
+      endpointNames = attrNames (service.endpoints or { });
+    in
+    concatStringsSep "\n" (
+      [
+        "### `${serviceId}`"
+        ""
+        "- primary endpoint: ${
+          if (service.primaryEndpoint or null) == null then "none" else "`${service.primaryEndpoint}`"
+        }"
+        "- connects to: ${inlineList service.connectsTo}"
+        "- containment: `${service.containment}`"
+        "- state refs: ${inlineList service.stateRefs}"
+        "- log refs: ${inlineList service.logRefs}"
+        "- endpoints:"
+      ]
+      ++ (
+        if endpointNames == [ ] then
+          [ "  - none" ]
+        else
+          map (
+            endpointName:
+            let
+              endpoint = service.endpoints.${endpointName};
+              primary = service.primaryEndpoint or null;
+            in
+            "  - `${endpointName}`: `${endpoint.host}`${if primary == endpointName then " (primary)" else ""}"
+          ) endpointNames
+      )
+    );
+
   taskNames = attrNames model.tasks;
-  slots = builtins.genList (i: model.slotPolicy.min + i) (
-    model.slotPolicy.max - model.slotPolicy.min + 1
+  serviceNames = attrNames model.services;
+  slotNames = attrNames model.placement.slotPlacements;
+  slotWindows = concatStringsSep "\n" (
+    map (
+      slotName:
+      let
+        placement = model.placement.slotPlacements.${slotName};
+      in
+      "  - slot `${toString placement.slot}`: `${toString placement.candidatePorts.start}` through `${
+        toString placement.candidatePorts.end
+      }`"
+    ) slotNames
   );
 in
-{
-  schema = {
-    schemaVersion = 1;
-    source = "model.json";
-    surfaces = surfaceNames;
-    modelTypes = {
-      modelVersion = model.modelVersion;
-      runtimeAbi = model.runtimeAbi;
-      toolchainId = model.toolchainId;
-      primitives = [
-        "Invocation"
-        "Endpoint"
-        "ProbeSpec"
-        "Lifecycle"
-        "TerminalSemantics"
-        "ServiceSpec"
-        "TaskSpec"
-        "SecretDescriptor"
-        "SecretSource"
-        "SlotPlacement"
-      ];
-    };
-  };
+''
+  # ${model.project.name}
 
-  # The capabilities view is a projection of the model, derived on demand rather
-  # than carried as a redundant model section.
-  capabilities = {
-    environments = model.environments;
-    inherit slots;
-    services = serviceNames;
-    tasks = taskNames;
-    surfaces = surfaceNames;
-  };
+  ## Project
 
-  docs = ''
-    # ${model.docs.title}
+  - id: `${model.project.projectId}`
+  - target system: `${model.target.system}`
+  - runtime ABI: `${model.runtimeAbi}`
+  - toolchain: `${model.toolchainId}`
 
-    ${model.docs.summary}
+  ## Slots
 
-    ## Target
+  - allowed: `${toString model.slotPolicy.min}` through `${toString model.slotPolicy.max}`
+  - default: `${toString model.slotPolicy.default}`
+  - candidate port windows:
+  ${slotWindows}
 
-    - system: ${model.target.system}
-    - runtime ABI: ${model.runtimeAbi}
-    - toolchain: ${model.toolchainId}
+  ## State
 
-    ## Surfaces
+  - marker identity: `${model.state.markerIdentity}`
+  - epoch: `${model.state.stateEpoch}`
+  - cleanup: `${model.state.cleanupPolicy}`
+  - persistence: `${model.state.persistence}`
 
-    ${builtins.concatStringsSep "\n" (map (name: "- ${name}") surfaceNames)}
+  ## Tasks
 
-    ## Services
+  ${if taskNames == [ ] then "none" else concatStringsSep "\n\n" (map taskDocs taskNames)}
 
-    ${builtins.concatStringsSep "\n" (map (service: "- ${service}") serviceNames)}
+  ## Services
 
-    ## Lifecycle
-
-    ${builtins.concatStringsSep "\n" (
-      map (
-        service:
-        let
-          serviceSpec = model.services.${service};
-          classes = builtins.attrNames serviceSpec.lifecycle;
-        in
-        "- ${service}: endpoints ${
-          builtins.concatStringsSep ", " (builtins.attrNames (serviceSpec.endpoints or { }))
-        } (primary ${
-          serviceSpec.primaryEndpoint or "none"
-        }); operations ${builtins.concatStringsSep ", " classes}"
-      ) serviceNames
-    )}
-
-    ## Tasks
-
-    ${builtins.concatStringsSep "\n" (map (task: "- ${task}") taskNames)}
-  '';
-}
+  ${if serviceNames == [ ] then "none" else concatStringsSep "\n\n" (map serviceDocs serviceNames)}
+''

@@ -222,8 +222,8 @@
             runtime = nixfiedRuntimeDebug;
           };
           # Runtime-layer tests expressed as a first-class nixfied model.
-          # The compileModel override injects the runtime closures (rt, cli)
-          # and all model paths as compile-time env vars.
+          # The compileModel override injects the runtime closure and all model
+          # paths as compile-time env vars.
           gateRuntimeModel = nixfiedLib.compileModel (
             { ... }:
             {
@@ -235,10 +235,6 @@
                   "process"
                   "file-write"
                 ];
-              };
-              nixfied.closures.cli = {
-                package = nixfiedRuntimeDebug;
-                executable = "bin/nixfied";
               };
               nixfied.tasks.example-minimal.invocation.env.MINIMAL_MODEL = toString minimalModel;
               nixfied.tasks.example-postgres.invocation.env.POSTGRES_MODEL = toString postgresModel;

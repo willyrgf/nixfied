@@ -195,8 +195,7 @@ let
       derived;
 
   # Mirror the runtime's serde skip rules (invocation only on exec probes and
-  # bound prepares) so nix-emitted and runtime-rederived views stay
-  # byte-comparable.
+  # bound prepares) so the emitted model matches the typed runtime wire shape.
   probeOf =
     owner: op:
     {
@@ -419,9 +418,5 @@ in
       services
       tasks
       ;
-    docs = {
-      title = config.nixfied.project.name;
-      summary = "Compiled model for ${config.nixfied.project.projectId}.";
-    };
   };
 }

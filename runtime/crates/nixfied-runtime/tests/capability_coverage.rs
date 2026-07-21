@@ -94,6 +94,11 @@ fn capability_descriptor_rejects_removed_contract_vocabulary() {
         "ServiceStatus",
         "serviceStatus",
         "endpoint_json",
+        "Docs",
+        "docs",
+        "title",
+        "schema",
+        "capabilities",
     ] {
         assert!(
             !CAPABILITY_DESCRIPTOR.split_whitespace().any(|token| {

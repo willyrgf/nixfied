@@ -22,8 +22,9 @@ coordinated ABI, implementation, documentation, and test updates.
 ## Model and version boundary
 
 - **MODEL-SEAM-1 / SINGLE-MODEL-1:** `model.json` is the only required semantic
-  artifact. Schema, docs, and capabilities are generated views and never
-  independent authority. Do not add a required manifest, sidecar, or envelope.
+  artifact. The generated `views/docs.md` human reference is a disposable
+  projection and never independent authority. Do not add a required manifest,
+  sidecar, or envelope.
 - **MODEL-ORIGIN-1:** normal admission requires `model.json` under the Nix store.
   `--allow-non-store-model` is an unstable framework test/development escape
   hatch, not an adopter path.
@@ -89,9 +90,10 @@ coordinated ABI, implementation, documentation, and test updates.
 - **VERB-1:** `run`, `ps`, `down`, `clean`, and `model-check` are reserved control
   verbs. Project verbs derive only from task names explicitly exported through
   `nixfied.surface.verbs`; collisions fail at Nix evaluation.
-- **SURFACE-1:** framework runtime/view commands are framework-owned and listed
-  in the capability descriptor, not declared by an adopter in the model. The
-  adopter owns only its exported task-verb surface.
+- **SURFACE-1:** hidden runtime commands are framework-owned and listed in the
+  capability descriptor, not declared by an adopter in the model. The adopter
+  owns only its exported task-verb surface. `model-check` is the generated app
+  name for the runtime's admission-only `check` command.
 - **Hermetic child environment:** every leaf, probe, and service start receives
   only its declared environment plus the runtime-owned `PATH` assembled from
   invocation tool roots. Runtime environment inheritance and append-to-inherited
