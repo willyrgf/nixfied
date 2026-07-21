@@ -1,0 +1,390 @@
+# Adopting Nixfied
+
+This guide covers the stable adopter workflow: wire an existing project through
+`compileModel` and `projectApps`, author `nixfied.nix`, discover and run the
+generated surface, and operate or upgrade it. The complete declaration schema
+is in the generated [option reference](OPTIONS.md).
+
+## Install or integrate
+
+### Fresh project
+
+Run the installer from the project root:
+
+```sh
+nix run github:willyrgf/nixfied#install -- \
+  --project-id my-project \
+  --name "My Project"
+```
+
+Use `--root PATH` to target another directory and `--nixfied-url URL` to choose
+a different input pin. The installer creates `flake.nix` and `nixfied.nix` only
+when they do not already exist. If `flake.nix` exists, it changes nothing and
+prints the exact integration fragment to merge manually. It never overwrites an
+existing `nixfied.nix`.
+
+The ownership split is intentional:
+
+| File | Responsibility |
+| --- | --- |
+| `flake.nix` | Pin Nixfied and expose the compiled model and generated apps |
+| `nixfied.nix` | Declare project-owned tasks, services, slots, state policy, and exported verbs |
+
+### Existing flake
+
+Add the input, compile the module as the existing `model` package, and expose
+the existing generated app set:
+
+```nix
+inputs.nixfied.url = "github:willyrgf/nixfied";
+
+packages.${system}.model =
+  nixfied.lib.${system}.compileModel ./nixfied.nix;
+
+apps.${system} =
+  nixfied.lib.${system}.projectApps ./nixfied.nix;
+```
+
+Place those expressions inside the system mapping already used by the flake.
+`compileModel` evaluates, validates, derives, and emits the model package.
+`projectApps` returns the five control apps plus the task verbs explicitly
+listed in `nixfied.surface.verbs`.
+
+Existing custom apps remain ordinary flake apps. Merge disjoint names into the
+generated attrset rather than wrapping Nixfied in another interface:
+
+```nix
+apps.${system} =
+  (nixfied.lib.${system}.projectApps ./nixfied.nix)
+  // {
+    my-tool = {
+      type = "app";
+      program = "${myTool}/bin/my-tool";
+      meta.description = "Run the project's custom tool";
+    };
+  };
+```
+
+The right-hand side of `//` wins, so keep custom names distinct from generated
+control names and exported verbs. The framework-reserved names are `run`, `ps`,
+`down`, `clean`, and `model-check`.
+
+## Discover the project surface
+
+The flake and each generated app already describe the available interface:
+
+```sh
+nix flake show
+nix run .#run -- --help
+nix run .#model-check -- --help
+nix run .#ps -- --help
+nix run .#down -- --help
+nix run .#clean -- --help
+nix run .#my-exported-verb -- --help
+```
+
+`nix flake show` lists the model package, control apps, and project-exported
+verbs. After the flake evaluates, app help returns before runtime model
+admission, source resolution, state materialisation, or execution. A Nix module
+evaluation error must still be fixed before any flake app can be built.
+
+For project-specific model facts, build the existing model package:
+
+```sh
+nix build .#model
+less result/views/docs.md
+```
+
+The generated view lists project identity, ABI and target, allowed slots and
+their exact port windows, state policy, task kinds and derived service
+requirements, composite steps, services, and endpoints. It is derived from
+`result/model.json`; neither file should be edited. `model.json` remains the
+only semantic input to the runtime.
+
+## Author `nixfied.nix`
+
+A declaration is a Nix module. The common arguments are `pkgs`, `adapters`, and
+`nixfiedLib`. This example combines a packaged API, the Postgres adapter, leaf
+tasks, and one exported composite:
+
+```nix
+{ pkgs, adapters, ... }:
+let
+  apiPackage = pkgs.callPackage ./nix/api.nix { };
+in
+{
+  imports = [ adapters.postgres ];
+
+  nixfied.project.projectId = "my-project";
+  nixfied.project.name = "My Project";
+  nixfied.codebases.main.logicalRoot = ".";
+
+  nixfied.closures.api = {
+    package = apiPackage;
+    executable = "bin/api-server";
+    effects = [ "process" "network-listener" ];
+  };
+
+  nixfied.services.api = {
+    connectsTo = [ "postgres" ];
+    lifecycle.start.invocation = {
+      tools = [ "api" ];
+      run = [
+        "api-server"
+        "--listen"
+        "127.0.0.1:\${port}"
+        "--database-url"
+        "postgresql://postgres@\${host:postgres}:\${port:postgres}/postgres"
+      ];
+    };
+    endpoint.endpointId = "api-http";
+  };
+
+  nixfied.tasks.lint.invocation = {
+    tools = [ pkgs.bash pkgs.git ];
+    run = [ "bash" "-c" "git diff --check" ];
+  };
+
+  nixfied.tasks.api-smoke = {
+    invocation = {
+      tools = [ pkgs.curl ];
+      run = [ "curl" "-fsS" "http://\${host}:\${port}/health" ];
+    };
+    requires = [ "api" ];
+  };
+
+  nixfied.tasks.check = {
+    kind = "composite";
+    steps = {
+      lint.task = "lint";
+      database = {
+        task = "smoke-query";
+        dependsOn = [ "lint" ];
+      };
+      api = {
+        task = "api-smoke";
+        dependsOn = [ "database" ];
+      };
+    };
+  };
+
+  nixfied.surface.verbs = [ "check" ];
+}
+```
+
+The main rules are:
+
+- A leaf task owns one inline `invocation`; a composite owns a static DAG of
+  named `steps`. Parameters, retries, loops, and conditionals belong in Nix
+  expansion or inside a leaf program.
+- `invocation.tools` contains declared closure IDs or Nix packages. Their
+  executable roots form the child `PATH`. The child otherwise receives only
+  declared `env`; the runtime environment is not inherited.
+- A leaf's `requires` names services that must be ready while it executes.
+  Service `connectsTo` declarations order transitive dependencies and make
+  their named endpoints addressable. Composite service requirements are
+  derived from their leaves.
+- Importing an adapter contributes ordinary service and task definitions. It
+  starts nothing until a selected leaf requires one of those services.
+- `nixfied.surface.verbs` is an explicit public choice. Imported or internal
+  tasks do not silently become flake apps.
+- Tool caches and build directories remain child- and project-owned. Configure
+  them through ordinary invocation arguments or `env`; Nixfied does not place,
+  lock, report, retain, or clean them.
+
+The source defaults to the live workspace. `logicalRoot`, `sourceMode`,
+`sourceIdentity`, and `dirtyPolicy` define whether invocations observe that
+workspace or an immutable snapshot/flake input. In live-workspace mode, invoke
+the apps from the intended project root; source resolution starts at the
+invocation root. See [OPTIONS.md](OPTIONS.md) for the exact option types,
+defaults, lifecycle fields, probe forms, endpoint forms, and validation
+vocabulary.
+
+After a declaration change, compile and admit it before running a workflow:
+
+```sh
+nix build .#model
+nix run .#model-check
+```
+
+## Run and control
+
+| App | Meaning |
+| --- | --- |
+| `nix run .#<verb>` | Run the task preselected by an exported verb |
+| `nix run .#run -- --task <id>` | Run any declared task, including an internal one |
+| `nix run .#model-check` | Admit the model and selected slot without starting processes or executing tasks |
+| `nix run .#ps` | Reconcile registry evidence against the OS and report owned processes |
+| `nix run .#down` | Stop runtime-owned process groups in the selected slot |
+| `nix run .#clean` | Remove slot state only after ownership and safety gates pass |
+
+`model-check` is framework admission. A verb such as `check` is project-owned:
+it exists only when the project declares a task with that name and exports it,
+and running it executes that project workflow.
+
+`run` starts the selected task's exact derived service closure, then executes
+the leaf or flattened composite DAG. Selecting a leaf directly does not run
+steps that happen to precede it in some composite; select the composite when
+those dependencies are part of the intended workflow.
+
+Pass runtime flags after Nix's `--` separator. `run` and exported verbs accept
+`--slot`, `--timeout-ms`, and the output flags. `model-check` and `ps` accept
+`--slot`; `down` also accepts `--timeout-ms`; `clean` accepts `--purge`. Use the
+app's `--help` as the exact flag reference.
+
+The default run projection writes human progress, the result summary, and
+evidence paths to stderr while leaving stdout empty. `--json` writes structured
+output to stdout; `--both` requests both projections explicitly. Child
+stdout/stderr is captured in redacted run log files and is not replayed inline.
+There is no framework `logs` command: follow the evidence paths reported by the
+run.
+
+## Services, slots, and state
+
+Services are generic foreground processes with prepare, start, readiness,
+health, stop, and clean semantics. A service may declare one endpoint, several
+named endpoints, or no endpoint. Every declared TCP endpoint receives a planned
+port and must be proven to belong to the process the runtime started; an open
+port alone is not readiness. A live service that is not exactly reusable must
+be stopped explicitly with `down` before replacement.
+
+Task service lifetime controls what happens after the borrower finishes:
+
+- `run-scoped` stops the task's services at the end of the run;
+- `until-idle` keeps them until reconciliation observes no live borrowers;
+- `persistent-until-down` keeps them until an explicit `down`.
+
+Slots isolate simultaneous copies of a project. Declare the accepted range and
+default in `nixfied.nix`:
+
+```nix
+nixfied.slotPolicy = {
+  min = 0;
+  default = 0;
+  max = 3;
+};
+```
+
+Select a slot consistently for run and control commands:
+
+```sh
+nix run .#check -- --slot 2
+nix run .#ps -- --slot 2
+nix run .#down -- --slot 2
+nix run .#clean -- --slot 2
+```
+
+Each slot has its own state root, registry, leases, process records, and
+deterministic candidate port window. `nixfied.placement.ports` controls the base,
+window size, and stride; the generated model view shows the resolved windows.
+
+Runtime state defaults to `$XDG_STATE_HOME/nixfied`, then the platform-specific
+user state directory. Set `NIXFIED_STATE_DIR` to choose another base, for
+example in CI:
+
+```sh
+NIXFIED_STATE_DIR=/tmp/my-project-state nix run .#check -- --slot 0
+```
+
+`clean` is idempotent, path-confined, marker-gated, lease-gated, and
+process-gated. Run `down` first. A protected or persistent policy additionally
+requires `clean --purge`; purge relaxes only that policy gate, never the
+ownership, confinement, or live-process checks. Do not manually rewrite state
+markers or the registry.
+
+### Secrets
+
+The model contains secret descriptors, never values. An environment-backed
+secret and its use look like this:
+
+```nix
+nixfied.secrets.database-password.source = {
+  kind = "env-var";
+  envVar = "DATABASE_PASSWORD";
+};
+
+nixfied.tasks.migrate.invocation.env.DB_PASSWORD =
+  "\${secret:database-password}";
+```
+
+A `file` descriptor names a relative path under `NIXFIED_SECRETS_DIR`. The
+runtime resolves secrets at admission, puts values only in memory and the
+hermetic child environment, and redacts runtime-owned persistent output. A file
+or socket written directly by a child remains the child's responsibility.
+
+## Use and extend adapters
+
+Adapters are Nix modules that compile a concrete service into the same generic
+tasks, services, closures, and lifecycle invocations. Nixfied includes
+`synthetic`, `postgres`, and `reth` adapters:
+
+```nix
+{ adapters, ... }:
+{
+  imports = [ adapters.postgres ];
+}
+```
+
+Override their declarations through normal module merging and reference their
+tasks in project composites. Use the [adapter guide](ADAPTERS.md) for prepare
+tasks, probes, multi-endpoint services, endpoint-less workers, and adapter
+authoring conventions.
+
+## Upgrade and recover
+
+There are no model migrations, compatibility shims, or simultaneous old/new
+contracts. A new pin compiles a new model and ships its exactly matching
+runtime. Treat an upgrade as a deliberate contract transition.
+
+Before repinning, use the old pin to inspect and stop every active slot:
+
+```sh
+nix run .#ps -- --slot 0
+nix run .#down -- --slot 0
+```
+
+If the new declaration intentionally changes the state epoch, clean incompatible
+state with the old pin as well; add `--purge` only for state declared protected
+or persistent. Then update the input and verify the new model:
+
+```sh
+nix run github:willyrgf/nixfied#upgrade -- --root .
+nix build .#model
+nix run .#model-check
+```
+
+`upgrade` refreshes only the `nixfied` input/lock entry. Pass
+`--nixfied-url URL` to rewrite the pin, or `--no-lock` to skip lock refresh. It
+does not edit `nixfied.nix` or translate old models or state.
+
+If the new model is rejected, restore the previous input and lock from version
+control and use that pin for recovery. `model-check` separates model, source,
+closure, and host admission failures from execution and state preparation. If
+admission passes but a run fails while preparing existing state, retry the same
+task against an empty temporary state base:
+
+```sh
+probe_state="$(mktemp -d)"
+NIXFIED_STATE_DIR="$probe_state" nix run .#run -- --task <id>
+```
+
+Do not delete the whole Nixfied state base or bypass marker and registry checks.
+When cleanup is necessary, target the affected project slot through `down` and
+`clean` using the runtime that owns its contract.
+
+## Keep project documentation project-specific
+
+Nixfied owns the generic option reference, control-command semantics, and the
+generated facts in `views/docs.md`. An adopting repository should document only
+what its names mean and how its team uses them:
+
+- which exported verb is the normal local or CI entry point;
+- when to select focused internal tasks through `.#run`;
+- project artifact and child-tool cache policies;
+- custom non-Nixfied flake apps and their relationship to workflows;
+- CI selection, platform exceptions, and project-specific recovery steps.
+
+Link back to this guide and [OPTIONS.md](OPTIONS.md) for framework behavior
+instead of copying it into the adopter repository. This keeps framework updates
+in one place while the project's operational vocabulary remains close to its
+code.
