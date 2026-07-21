@@ -21,6 +21,29 @@ project.
 descriptor is the authored wire-contract inventory whose digest derives
 `runtimeAbi`; it is not generated documentation.
 
+## Simplification and change policy
+
+- Prefer composition from existing primitives. Optimize for fewer concepts,
+  code paths, public types, duplicated responsibilities, and places future
+  changes must touch. Prefer deletion and net LOC reduction when behavior and
+  proof remain explicit; never trade away type safety, ownership boundaries,
+  fail-closed checks, or independent seam verification for fewer lines.
+- Backward compatibility is not a design constraint. Deliberate breaking
+  changes replace the previous exact contract; old and new contracts are never
+  supported concurrently. Follow ABI-1 for the required atomic ABI rotation.
+- Delete superseded in-scope code, tests, fixtures, flags, branches, and
+  documentation in the same change. Do not retain compatibility fallbacks,
+  aliases, shims, commented code, or hidden legacy paths. Git history is the
+  recovery mechanism.
+- Deliver non-trivial work as dependency-ordered, focused commits. Each commit
+  owns one coherent architectural slice, includes its tests, documentation, and
+  deletions, passes its focused checks, and leaves the repository coherent. A
+  contract transition remains atomic in one commit; do not create WIP commits.
+- If architecture or design remains unclear after reading the routed references,
+  spawn a read-only architect agent before implementation. Pass this section
+  verbatim and ask for the smallest contract-consistent design and its contract
+  impact. The primary agent owns the final decision and integration.
+
 ## Core guardrails
 
 - Nix evaluates, validates, builds, and realises. Rust admits, executes,
@@ -36,8 +59,6 @@ descriptor is the authored wire-contract inventory whose digest derives
   environment-membership, or dynamic orchestration concepts.
 - Keep host-absolute placement and secret values out of model data. Child
   environments remain hermetic.
-- Do not add v1 compatibility, migrations, sidecars, or shims. Contract changes
-  are deliberate ABI changes with coordinated implementation, docs, and tests.
 - Admission, endpoint ownership, state cleanup, liveness, containment, and
   secret handling fail closed. Do not weaken their safety gates for convenience.
 
@@ -63,11 +84,11 @@ Do not invent ad hoc runtime-side model shapes.
 - Inspect `git status --short --untracked-files=all` before editing.
 - Model types deny unknown fields. Prefer strong types and typed errors; avoid
   panics in library code.
-- Treat JSON/text projections and runtime error payloads as stable within the
-  exact ABI/toolchain contract. Any model/runtime contract change must be
-  recorded in the capability descriptor so the ABI rotates, then update the ABI
-  snapshot, both Nix and Rust sides where applicable, contract docs, and tests.
-  Bump numeric version components only when their semantics require it.
+- Keep JSON/text projections and runtime error payloads internally consistent
+  within the current exact ABI/toolchain contract. They may break through a
+  recorded contract change: rotate the ABI, then update the ABI snapshot, both
+  Nix and Rust sides where applicable, contract docs, and tests. Bump numeric
+  version components only when their semantics require it.
 - When adding a model field, extend the fully populated fixture in
   `runtime/crates/nixfied-runtime/tests/capability_coverage.rs`.
 - For derived-fact changes, update `docs/DERIVATION_SPEC.md`, both derivations
@@ -75,12 +96,12 @@ Do not invent ad hoc runtime-side model shapes.
 - For view changes, keep `nix/compiler/views.nix` and the `nixfied` CLI projection
   aligned; never hand-edit emitted models or views. The gate proves emitted and
   runtime-derived views agree.
-- Preserve stable error codes and distinguish admission failures from execution
-  failures. Never report `MODEL_ADMISSION` after admission.
+- Error codes may be renamed or removed through a recorded ABI change. Preserve
+  the admission/execution phase distinction; never report `MODEL_ADMISSION`
+  after admission.
 - Shell must not own graph, registry, validation, liveness, summary, or cleanup
   semantics. Nix must not own live supervision, cancellation, or reconciliation.
-- Prefer a complete underlying fix over a workaround or compatibility layer.
-  Report anything not fully verified or any remaining fragility.
+- Report anything not fully verified or any remaining fragility.
 
 ## Verification
 
@@ -101,9 +122,10 @@ model required by the interrupt-and-recover lifecycle test.
 
 ## Git and handoff
 
-- Do not revert, delete, or overwrite unrelated work.
-- Commit only when requested. Keep each commit focused; messages are lower-case,
-  one concise line, with no body or trailers.
+- Delete superseded work within the requested scope; do not revert, overwrite,
+  delete, stage, or commit unrelated or pre-existing work.
+- Inspect the staged diff before every commit. Messages are lower-case, one
+  concise line, with no body or trailers.
 - Before committing a contract change, review the diff against
   `docs/CONTRACT.md`, scope, tests, and regressions.
 - In the handoff, state what changed, which checks ran, and what remains

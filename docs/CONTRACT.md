@@ -35,8 +35,11 @@ coordinated ABI, implementation, documentation, and test updates.
 - **HASH-1:** the runtime computes `computedModelHash` as SHA-256 over the raw
   model bytes. The model contains no self-hash.
 - **ABI-1:** admission requires exact `runtimeAbi` and `toolchainId` matches.
-  There is no cross-version compatibility or migration. The runtime ABI suffix
-  is the capability-descriptor digest, computed identically by
+  Backward compatibility imposes no design constraint: a deliberate contract
+  change may break any prior model, command, output, or error surface. The new
+  contract replaces the old one; old contracts are rejected, never migrated,
+  translated, or admitted through a compatibility fallback. The runtime ABI
+  suffix is the capability-descriptor digest, computed identically by
   `nixfied-model::constants` and `nix/spec/constants.nix`.
 - **PREPARE-1:** Nix realises every referenced closure before runtime start. The
   runtime verifies existence, executability, target, and declaration; it never
@@ -159,8 +162,7 @@ The following are product redefinitions, not backlog items: an additional
 manifest envelope, a dynamic runtime adapter protocol, multi-host execution, a
 required daemon, central log aggregation, UI or dashboards, non-`fail` port
 policies, richer inter-service DAGs, cross-reference memoization, per-tool
-effects, and environment membership. Do not preserve or recreate v1 layouts,
-commands, fixtures, sidecars, APIs, or compatibility layers.
+effects, and environment membership.
 
 ## Changing the contract
 
@@ -175,6 +177,6 @@ A contract change must be explicit and atomic:
 3. When the model seam is affected, change the Nix producer and Rust consumer
    together, including structural validation and fail-closed admission.
 4. Update this contract, relevant rationale or derivation documentation, and
-   focused tests/golden vectors.
-5. Run the appropriate gates from `DEVELOPMENT.md`; do not add compatibility
-   shims for models emitted under the previous exact contract.
+   focused tests/golden vectors, and delete the superseded implementation,
+   fixtures, and documentation in the same transition.
+5. Run the appropriate gates from `DEVELOPMENT.md`.

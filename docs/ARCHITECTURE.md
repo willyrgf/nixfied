@@ -52,6 +52,12 @@ Three properties, deliberately distinct:
 - **Owned execution** — runtime timing/scheduling is not deterministic, but every
   process is owned, tracked, attributable, OS-reconciled, and cleanable.
 
+This split creates subtractive design pressure: one seam and one owner per
+responsibility make it possible to remove concepts, branches, public types, and
+change sites instead of coordinating more of them. Net LOC reduction is useful
+evidence when it removes semantic machinery while keeping the typed boundaries,
+fail-closed checks, and independent seam proofs explicit.
+
 ## Why one `model.json` seam
 
 The single most important hardening choice. Each clause replaced a v1 failure
@@ -75,14 +81,12 @@ mode:
   under the Nix store: a local origin/trust + immutability policy, not a proof of
   compiler provenance. A non-store escape hatch exists only for framework
   tests/dev (`--allow-non-store-model`).
-- **No cross-version compatibility.** A model is valid only for the exact
-  `runtimeAbi` / `toolchainId` that produced it. The `runtimeAbi` is *derived*: its
-  suffix is a digest of the capability descriptor, hashed identically by Rust and
-  Nix, so any contract change rotates it on both sides and old models are rejected.
-  No migration layer; updating Nixfied means recompiling. This keeps the first
-  implementation simple and honest, and the version integer bumps only on a real
-  breaking change — never per
-  milestone or docs rebuild.
+- **Replacement instead of compatibility.** Exact ABI/toolchain matching means
+  adopters recompile when the contract changes. Translators and dual
+  implementations would multiply parsers, branches, tests, and future change
+  sites; Git preserves removed implementations. The capability digest records
+  every contract change, while numeric versions change only for their separately
+  defined semantics.
 
 ## The task–service algebra (the composition rewrite)
 
