@@ -1,23 +1,30 @@
 # The generated surface nixfied derives for an adopting project from its
 # module (VERB-1, the corrected split of SURFACE-1):
 #
-# - the **reserved control namespace**, framework-owned: `run`, `ps`, `down`,
-#   `clean`, and `model-check` (admission sanity, freeing common adopter verbs);
+# - the **framework project apps**, framework-owned discovery and controls;
 # - the **project verbs**, adopter-owned: one app per task id exported in
 #   `nixfied.surface.verbs` (`.#check` -> `runtime run --task check`).
 #
-# Everything runs through the nix-built runtime against the model store path
-# baked in at eval time; no nix is invoked at run time, so SEAM-1 holds.
-# `.#gate` is deliberately absent: that is the framework proving its own
-# runtime.
+# Runtime-backed apps use the model store path baked in at evaluation. The help
+# app instead projects final flake metadata through Nix and never enters the
+# runtime, so SEAM-1 remains intact.
 {
+  module,
   pkgs,
   lib,
   runtime,
+  system,
   model,
   config,
 }:
 let
+  modulePath = toString module;
+  moduleRoot = builtins.dirOf modulePath;
+  moduleIsProjectRoot =
+    builtins.isPath module
+    && builtins.baseNameOf modulePath == "nixfied.nix"
+    && builtins.pathExists "${moduleRoot}/flake.nix"
+    && builtins.pathExists "${moduleRoot}/flake.lock";
   runtimeBin = "${runtime}/bin/nixfied-runtime";
   modelJson = "${model}/model.json";
   verbs = config.nixfied.surface.verbs;
@@ -32,7 +39,7 @@ let
       meta.description = description;
     };
   # `validate.nix` already proved each verb names a declared task and avoids
-  # the reserved namespace; this projection just derives the apps.
+  # the framework namespace; this projection just derives the apps.
   verbApps = builtins.listToAttrs (
     map (verb: {
       name = verb;
@@ -42,7 +49,14 @@ let
     }) verbs
   );
 in
+assert lib.assertMsg moduleIsProjectRoot "lib.projectApps requires project-root flake.nix, flake.lock, and nixfied.nix";
 {
+  help = import ./help-app.nix {
+    inherit pkgs system;
+    expectedFlakePath = moduleRoot;
+    flakeRef = ".";
+  };
+
   # Run one selected task (`nix run .#run -- --task <id>`): its derived
   # service union starts eagerly, then the flattened nodes execute. With no
   # selection the runtime refuses and lists the declared tasks.

@@ -7,7 +7,7 @@
 # compiles into the generic model primitives; the runtime gains no knowledge of
 # Postgres, the api, or the worker.
 #
-# Build it:    nix build ./examples/downstream#model
+# Build it:    nix build --no-write-lock-file ./examples/downstream#model
 # Run it:      nixfied-runtime run --model <store>/model.json
 { pkgs, adapters, ... }:
 let
@@ -209,7 +209,7 @@ in
 
   # A release flow: prove the database answers, then exercise both services,
   # then run the gate over the whole stack. A composite task; the services it
-  # needs come from the environment until phase 3 derives them from the leaves.
+  # needs are derived from the referenced leaves.
   nixfied.tasks.release = {
     kind = "composite";
     steps = {

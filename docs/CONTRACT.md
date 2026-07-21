@@ -90,15 +90,22 @@ when the model/runtime contract changes.
   does not identify, place, create, lock, report, retain, or selectively clean
   cache artifacts. Child tools and projects own those concerns through ordinary
   invocation environment or arguments.
-- **VERB-1:** `run`, `ps`, `down`, `clean`, and `model-check` are reserved control
-  verbs. Project verbs derive only from task names explicitly exported through
-  `nixfied.surface.verbs`; collisions fail at Nix evaluation.
+- **VERB-1:** `help`, `run`, `ps`, `down`, `clean`, and `model-check` are reserved
+  project-app names. Project verbs derive only from task names explicitly
+  exported through `nixfied.surface.verbs`; collisions fail at Nix evaluation.
 - **SURFACE-1:** hidden runtime commands are framework-owned and listed in the
   capability descriptor, not declared by an adopter in the model. The adopter
-  owns only its exported task-verb surface. `model-check` is the generated app
-  name for the runtime's admission-only `check` command. Every generated
-  control and exported task app accepts `-h` and `--help`; help completes before
-  model admission, source resolution, state materialisation, or execution.
+  declaration owns only its exported task-verb surface; unrelated custom flake
+  apps remain ordinary Nix integration. `model-check` is the generated app name
+  for the runtime's admission-only `check` command. Every runtime-backed control
+  and exported task app accepts `-h` and `--help`; that help completes before
+  model admission, source resolution, state materialisation, or execution. The
+  generated `.#help` app is instead a Nix-only projection of final current-flake
+  app metadata, sorted by app name and rendered without a caller-relative flake
+  reference. It maps to no runtime command, admits or executes no model, and
+  stays outside `runtimeAbi`. `projectApps` requires project-root `flake.nix`,
+  `flake.lock`, and `nixfied.nix`; its help app is source-bound and rejects a
+  current-flake context that does not match that source.
 - **Hermetic child environment:** every leaf, probe, and service start receives
   only its declared environment plus the runtime-owned `PATH` assembled from
   invocation tool roots. Runtime environment inheritance and append-to-inherited

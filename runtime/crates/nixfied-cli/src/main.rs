@@ -246,9 +246,8 @@ fn flake_template(nixfied_url: &str) -> String {
         default = self.packages.${{system}}.model;
         model = nixfied.lib.${{system}}.compileModel ./nixfied.nix;
       }});
-      # The generated surface: the reserved control apps (`.#run` / `.#ps` /
-      # `.#down` / `.#clean` / `.#model-check`) plus one app per task id exported in
-      # `nixfied.surface.verbs`.
+      # The generated discovery/control apps plus one app per task id exported
+      # in `nixfied.surface.verbs`.
       apps = forAllSystems (system: nixfied.lib.${{system}}.projectApps ./nixfied.nix);
     }};
 }}
@@ -272,10 +271,10 @@ fn nixfied_module_template(metadata: &ProjectMetadata) -> String {
 
   # The synthetic adapter contributes the `smoke` task (it pings the
   # service); exporting it below makes it a flake app: `nix run .#smoke`.
+  # `nix run .#help` lists the final flake app surface.
   # Add your own leaf tasks (lint/test), compose them into composite tasks
   # (kind = "composite", steps = ...), and export the ones that form your
-  # public surface. `nix run .#model-check` checks the model admits;
-  # `nix run .#run -- --task <id>` runs any declared task.
+  # public surface. `nix run .#run -- --task <id>` runs any declared task.
   nixfied.surface.verbs = [ "smoke" ];
 }}
 "#,
@@ -308,8 +307,8 @@ fn flake_merge_snippet(nixfied_url: &str) -> String {
 
 packages.${{system}}.model = nixfied.lib.${{system}}.compileModel ./nixfied.nix;
 
-# The generated surface: the reserved control apps plus one app per exported
-# task id (`nixfied.surface.verbs`).
+# The generated discovery/control apps plus one app per exported task id
+# (`nixfied.surface.verbs`).
 apps.${{system}} = nixfied.lib.${{system}}.projectApps ./nixfied.nix;
 "#,
         nix_escape(nixfied_url)
@@ -336,7 +335,7 @@ fn print_install_outcome(outcome: &InstallOutcome) {
     if !outcome.skipped.is_empty() {
         println!("skipped: {}", outcome.skipped.join(", "));
     }
-    println!("next: nix build .#model");
+    println!("next: stage flake.nix and nixfied.nix when using Git, then run nix flake lock");
 }
 
 fn print_usage() {
@@ -401,8 +400,7 @@ mod tests {
         assert!(root.join("nixfied.nix").is_file());
         let flake = read(&root.join("flake.nix"));
         assert!(flake.contains("nixfied.url = \"path:/repo\""));
-        // The scaffold wires the generated surface: the reserved control apps
-        // plus the exported verbs.
+        // The scaffold wires the generated framework apps plus exported verbs.
         assert!(flake.contains("projectApps ./nixfied.nix"));
         let module = read(&root.join("nixfied.nix"));
         assert!(module.contains("nixfied.project.projectId = \"install-proof\""));

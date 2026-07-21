@@ -60,13 +60,13 @@
         {
           inherit compileModel;
           inherit (composeLib) seq;
-          # The generated project surface: the reserved control apps
-          # (run/ps/down/clean/model-check) plus one app per task id the adopter
-          # exports in `nixfied.surface.verbs`.
+          # The generated discovery/control apps plus one app per task id the
+          # adopter exports in `nixfied.surface.verbs`.
           projectApps =
             module:
             import ./nix/project-apps.nix {
-              inherit pkgs runtime;
+              inherit module;
+              inherit pkgs runtime system;
               inherit (nixpkgs) lib;
               model = compileModel module;
               config = resolveConfig module;
@@ -317,6 +317,7 @@
         {
           help = import ./nix/help-app.nix {
             inherit pkgs system;
+            expectedFlakePath = self.outPath;
             flakeRef = self.outPath;
           };
           install = {

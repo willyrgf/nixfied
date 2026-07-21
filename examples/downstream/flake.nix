@@ -28,7 +28,5 @@
         default = nixfied.lib.${system}.compileModel ./nixfied.nix;
         model = nixfied.lib.${system}.compileModel ./nixfied.nix;
       });
-      # The generated run/check/test/ci surface (see this example's README).
-      apps = forAllSystems (system: nixfied.lib.${system}.projectApps ./nixfied.nix);
     };
 }

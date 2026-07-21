@@ -37,15 +37,19 @@ nix run github:willyrgf/nixfied#install -- \
 
 The installer creates:
 
-- `flake.nix`, which pins Nixfied and exposes the compiled model and generated
-  apps;
+- `flake.nix`, which declares Nixfied and exposes the compiled model and
+  generated apps;
 - `nixfied.nix`, which the project owns and edits.
 
 It starts with a synthetic service and exported `smoke` task, so the complete
-path is immediately runnable:
+path is immediately runnable. In a Git worktree, stage `flake.nix` and
+`nixfied.nix` before locking, then commit them with the generated `flake.lock`:
 
 ```sh
-nix flake show              # discover the model package and available apps
+git add flake.nix nixfied.nix  # Git worktrees only: expose new sources to Nix
+nix flake lock                 # pin the declared inputs
+git add flake.lock             # Git worktrees only: include the pin in the commit
+nix run .#help              # list every runnable command and its purpose
 nix build .#model           # evaluate, validate, and compile the model
 nix run .#model-check       # admit it without executing a task
 nix run .#smoke             # run the starter's exported task
@@ -109,8 +113,7 @@ less result/views/docs.md
 For example:
 
 ```sh
-nix build ./examples/downstream#model
-nix run ./examples/downstream#release
+nix build --no-write-lock-file ./examples/downstream#model
 ```
 
 ## Developing Nixfied

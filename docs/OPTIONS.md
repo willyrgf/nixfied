@@ -1804,7 +1804,7 @@ non-empty string
 
 
 
-Task ids exported as project flake apps; framework control names are reserved\.
+Task ids exported as project flake apps; framework project-app names are reserved\.
 
 
 

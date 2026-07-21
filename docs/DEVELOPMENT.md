@@ -15,7 +15,8 @@ nix/install/                   install and upgrade programs
 nix/lib/                       pure Nix helpers
 nix/docs/                      private generated-reference builders
 nix/packages/                  reproducible Rust builds and source checks
-nix/project-apps.nix           reserved controls + adopter-exported task apps
+nix/help-*.nix                 private contextual app catalog
+nix/project-apps.nix           discovery/controls + adopter-exported task apps
 nix/gate-runtime/nixfied.nix   adopter-shaped runtime integration gate
 nix/gate-nix.nix               Nix compiler/install integration gate
 nix/gate.nix                   thin gate coordinator
@@ -45,14 +46,6 @@ It is fail-fast and runs these local stages:
 1. `.#check` — `nix flake check`, then admission of a realised example model.
 2. `.#test` — the white-box Cargo workspace floor under the pinned toolchain.
 3. `.#gate` — the runtime-shaped gate followed by the Nix-layer gate.
-
-Run a stage directly while iterating:
-
-```sh
-nix run .#check
-nix run .#test
-nix run .#gate
-```
 
 Use `.#test` for the complete Cargo floor. It injects the realised Postgres model
 required by `interrupt_and_recover_adopts_orphaned_postgres`; a raw
@@ -104,9 +97,9 @@ snapshot while retaining changes to tracked module files.
 - `gate-runtime` is a first-class Nixfied model. It exercises example runs, the
   emitted model/docs contract, concurrent slot isolation, runtime-layer refusal
   cases, endpoint coordination, and the state/service lifecycle matrix.
-- `gate-nix` exercises the Nix compiler and install tooling: evaluation
-  negatives, immutable-source admission, and real install/upgrade adoption in
-  throwaway repositories.
+- `gate-nix` exercises the Nix compiler and install tooling: final-app
+  discovery, evaluation negatives, immutable-source admission, and real
+  install/upgrade adoption in throwaway repositories.
 
 The Nix-layer cases are ordinary shell around Nix because they test the compiler
 and installer through open-ended Nix builds and external fetches. Putting them

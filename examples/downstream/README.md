@@ -14,11 +14,10 @@ worker — it executes `model.json`.
 | File | Owner | Purpose |
 | --- | --- | --- |
 | `nixfied.nix` | you | every semantic declaration: services, tasks, composites, verbs, slots, ports |
-| `flake.nix` | Nixfied wiring | pins the `nixfied` input and exposes `packages.<system>.model` |
+| `flake.nix` | example wiring | declares the `nixfied` input and exposes `packages.<system>.model` |
 
-The split is the install/upgrade ownership boundary: `nixfied install` scaffolds
-`flake.nix`, `nixfied upgrade` repins the input, and neither command ever
-touches your `nixfied.nix`.
+The split keeps reusable project declarations separate from this repository's
+example-only flake wiring.
 
 ## What it declares
 
@@ -35,8 +34,8 @@ touches your `nixfied.nix`.
   `api-check` and `worker-check` once the database has answered, then the
   `gate` over the whole stack. Running it brings up exactly the services its
   leaves require — `servicesRequired` is derived, never curated.
-- **Verbs** — `nixfied.surface.verbs = [ "release" ]` exports the composite as
-  the project's one public flake app.
+- **Verbs** — `nixfied.surface.verbs = [ "release" ]` marks the composite for
+  export when an adopter wires `projectApps`.
 - **Slots** — `slotPolicy.max = 1`, so two slots can run side by side with
   disjoint ports, state, and registries.
 
@@ -44,8 +43,8 @@ touches your `nixfied.nix`.
 
 ```sh
 # Compile the model (a Nix store output).
-nix build ./examples/downstream#model
-model="$(nix build ./examples/downstream#model --no-link --print-out-paths)/model.json"
+nix build --no-write-lock-file ./examples/downstream#model
+model="$(nix build --no-write-lock-file ./examples/downstream#model --no-link --print-out-paths)/model.json"
 
 # Build the runtime from this repo (host-Rust-free).
 runtime="$(nix build .#nixfied-runtime --no-link --print-out-paths)/bin/nixfied-runtime"
@@ -61,25 +60,8 @@ NIXFIED_STATE_DIR=/tmp/downstream-state "$runtime" clean --model "$model"
 # `run` with no --task refuses and lists the declared tasks.
 ```
 
-`run` prints a JSON summary (services, per-node success keyed by step path,
-the computed model hash). `clean` is marker-gated and path-confined: it only
-removes state roots this model owns.
-
-### With the generated apps
-
-This example's `flake.nix` wires `nixfied.lib.<system>.projectApps`, so the same
-operations are one command each — the surface every nixfied project gets:
-
-```sh
-nix run ./examples/downstream#model-check             # admission only
-nix run ./examples/downstream#release                 # the exported verb
-nix run ./examples/downstream#run -- --task ping-api  # any declared task
-```
-
-The control namespace (`run`/`ps`/`down`/`clean`/`model-check`) is framework-owned;
-`release` is this project's exported verb (`nixfied.surface.verbs`). State
-goes to the default location (`$XDG_STATE_HOME/nixfied`); set `NIXFIED_STATE_DIR`
-to override.
+State goes to the default location (`$XDG_STATE_HOME/nixfied`); set
+`NIXFIED_STATE_DIR` to override.
 
 ## macOS + Linux
 

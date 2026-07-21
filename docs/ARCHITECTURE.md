@@ -86,8 +86,8 @@ mode:
   adopters recompile when the contract changes. Translators and dual
   implementations would multiply parsers, branches, tests, and future change
   sites; Git preserves removed implementations. The capability digest records
-  every contract change, while numeric versions change only for their separately
-  defined semantics.
+  every model/runtime contract change, while numeric versions change only for
+  their separately defined semantics.
 
 ## The task–service algebra (the composition rewrite)
 
@@ -128,10 +128,13 @@ lifecycle responsibility.
 Adopter vocabulary enters the contract as **names over this algebra, never as
 schema**: `check` is not a concept nixfied knows, it is a composite an
 adopter named, exported to the flake surface through
-`nixfied.surface.verbs` (VERB-1: control verbs — `run`, `ps`, `down`,
-`clean`, `model-check` — are framework-reserved; project verbs derive only from
-adopter-exported task names). Environment **membership does not exist**:
-running a task brings up exactly the services its leaves require —
+`nixfied.surface.verbs`. Exported verbs share a namespace with framework apps
+reserved by VERB-1 and derive only from adopter-exported task names. Contextual
+help is a source-bound, reference-neutral Nix projection of final current-flake
+metadata; a mismatched caller context fails instead of projecting another
+flake. It adds nothing to the model algebra or runtime ABI. Environment
+**membership does not exist**: running a task brings up exactly the services
+its leaves require —
 `servicesRequired`, `operationBindings`, and operation ids are **derived**
 from the graph (DERIVE-1), computed identically by the Nix compiler and the
 runtime's lowering against one normative source
@@ -308,11 +311,12 @@ the runtime binary; its exact scope is defined in
 [`CONTRACT.md`](CONTRACT.md). Precise process-kill, registry, and recovery
 scenarios similarly belong in white-box Cargo tests rather than bounded leaves.
 
-Adopters have a different verification surface. They receive the reserved
-control apps plus one app per task exported in `nixfied.surface.verbs`; their
-checks and acceptance proofs are ordinary tasks and composites run by the same
-runtime as the rest of their project. The framework uses Cargo and Nix to grade
-its own implementation before relying on its self-hosted gate.
+Adopters have a different verification surface. They receive framework
+discovery/control apps plus one app per task exported in
+`nixfied.surface.verbs`; their checks and acceptance proofs are ordinary tasks
+and composites run by the same runtime as the rest of their project. The
+framework uses Cargo and Nix to grade its own implementation before relying on
+its self-hosted gate.
 
 A NixOS VM was considered and rejected: the gate already has the real Nix
 daemon, ports, multi-process behavior, pinned inputs, Nix-built binaries, and

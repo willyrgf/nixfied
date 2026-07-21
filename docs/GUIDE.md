@@ -27,7 +27,8 @@ The ownership split is intentional:
 
 | File | Responsibility |
 | --- | --- |
-| `flake.nix` | Pin Nixfied and expose the compiled model and generated apps |
+| `flake.nix` | Declare Nixfied and expose the compiled model and generated apps |
+| `flake.lock` | Pin exact input revisions for reproducible evaluation |
 | `nixfied.nix` | Declare project-owned tasks, services, slots, state policy, and exported verbs |
 
 ### Existing flake
@@ -46,9 +47,25 @@ apps.${system} =
 ```
 
 Place those expressions inside the system mapping already used by the flake.
+After either installation path, create and commit the standard input lock
+before evaluating the app surface. A Git worktree must expose new source files
+to Nix before lock creation:
+
+```sh
+git add flake.nix nixfied.nix  # only when these files are new to Git
+nix flake lock
+git add flake.lock             # include the generated pin in the commit
+```
+
+Outside a Git worktree, only `nix flake lock` is required.
+
 `compileModel` evaluates, validates, derives, and emits the model package.
-`projectApps` returns the five control apps plus the task verbs explicitly
-listed in `nixfied.surface.verbs`.
+`projectApps` returns the framework discovery/control apps plus the task verbs
+explicitly listed in `nixfied.surface.verbs`. `projectApps` accepts only the
+project-local, root-level `./nixfied.nix` form shown above in a flake with
+`flake.nix` and `flake.lock`; function, attrset, subdirectory, and externally
+sourced modules are unsupported so help can bind its catalog to the defining
+source.
 
 Existing custom apps remain ordinary flake apps. Merge disjoint names into the
 generated attrset rather than wrapping Nixfied in another interface:
@@ -65,28 +82,36 @@ apps.${system} =
   };
 ```
 
-The right-hand side of `//` wins, so keep custom names distinct from generated
-control names and exported verbs. The framework-reserved names are `run`, `ps`,
-`down`, `clean`, and `model-check`.
+The right-hand side of `//` wins, so keep custom names distinct from every app
+returned by `projectApps`. Give every custom app a nonempty `meta.description`
+so contextual help can describe the complete surface.
 
 ## Discover the project surface
 
-The flake and each generated app already describe the available interface:
+From the adopter project root, use the contextual catalog for app discovery and
+the selected app for its exact flags:
 
 ```sh
-nix flake show
-nix run .#run -- --help
-nix run .#model-check -- --help
-nix run .#ps -- --help
-nix run .#down -- --help
-nix run .#clean -- --help
-nix run .#my-exported-verb -- --help
+nix run .#help
+nix run .#<app> -- --help
 ```
 
-`nix flake show` lists the model package, control apps, and project-exported
-verbs. After the flake evaluates, app help returns before runtime model
-admission, source resolution, state materialisation, or execution. A Nix module
-evaluation error must still be fixed before any flake app can be built.
+Catalog entries are reference-neutral names and descriptions. Replace `#help`
+in the invocation you used with `#<name>`; local adopter discovery therefore
+stays local (`.#help` → `.#check`).
+
+`.#help` evaluates the current system's final flake app set, so it includes
+framework apps, exported verbs, and custom apps merged after `projectApps`.
+Descriptions come only from each app's `meta.description`; a missing or invalid
+description fails the whole catalog instead of producing partial help. This Nix
+evaluation neither admits nor executes the model and does not materialise
+runtime state, but declaration or app evaluation errors surface directly.
+
+Generated adopter help is bound to its defining source and deliberately uses
+the current flake context, so only local `nix run .#help` is supported. An
+explicit remote or path adopter reference invoked from elsewhere fails instead
+of cataloging the caller. Per-app `--help` remains the exact runtime-flag
+reference.
 
 For project-specific model facts, build the existing model package:
 
@@ -209,14 +234,7 @@ nix run .#model-check
 
 ## Run and control
 
-| App | Meaning |
-| --- | --- |
-| `nix run .#<verb>` | Run the task preselected by an exported verb |
-| `nix run .#run -- --task <id>` | Run any declared task, including an internal one |
-| `nix run .#model-check` | Admit the model and selected slot without starting processes or executing tasks |
-| `nix run .#ps` | Reconcile registry evidence against the OS and report owned processes |
-| `nix run .#down` | Stop runtime-owned process groups in the selected slot |
-| `nix run .#clean` | Remove slot state only after ownership and safety gates pass |
+Use `.#help` for the available project apps and their one-line descriptions.
 
 `model-check` is framework admission. A verb such as `check` is project-owned:
 it exists only when the project declares a task with that name and exports it,

@@ -31,12 +31,12 @@ in
   # ids that become flake apps (`.#check` -> `runtime run --task check`).
   # Which tasks form the public surface is a *choice*, not a derivable fact —
   # explicit export is what keeps imported adapter tasks from silently
-  # becoming public apps. The control namespace (`run`, `ps`, `down`, `clean`,
-  # `model-check`) is framework-reserved and can never collide.
+  # becoming public apps. The generated framework project-app namespace is
+  # reserved and can never collide.
   options.nixfied.surface.verbs = mkOption {
     type = types.listOf types.nonEmptyStr;
     default = [ ];
-    description = "Task ids exported as project flake apps; framework control names are reserved.";
+    description = "Task ids exported as project flake apps; framework project-app names are reserved.";
   };
 
   options.nixfied.slotPolicy = {

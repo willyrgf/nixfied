@@ -70,6 +70,7 @@ The short list above is a routing aid, not a substitute for the full contract.
 | Change | Primary owner |
 | --- | --- |
 | User declaration surface | `nix/modules/` |
+| Generated project-app surface | `nix/project-apps.nix`, `nix/help-*.nix` |
 | Resolution, validation, derivation, emitted model/docs view | `nix/compiler/` |
 | Nix-side model/ABI constants | `nix/spec/` |
 | Shared serialized model types and structural validation | `runtime/crates/nixfied-model/` |

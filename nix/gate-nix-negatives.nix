@@ -1,17 +1,24 @@
 # Batched Nix-layer negative cases for gate-nix.
 #
-# Each case must fail during evaluation of the compiled model derivation. The
-# result is the list of case names that unexpectedly compiled.
+# Each case must fail during Nix evaluation. Model cases force the compiled
+# derivation; help cases force the complete rendered string. The result lists
+# cases that unexpectedly evaluated.
 { checkout }:
 
 let
   flake = builtins.getFlake (toString checkout);
   compileModel = (builtins.getAttr builtins.currentSystem flake.lib).compileModel;
+  projectApps = (builtins.getAttr builtins.currentSystem flake.lib).projectApps;
   composite = checkout + /examples/composite/nixfied.nix;
 
   compiles = module: (builtins.tryEval ((compileModel module).drvPath)).success;
+  projects = module: (builtins.tryEval ((projectApps module).help.program)).success;
+  renderHelp = import (checkout + /nix/help-renderer.nix);
+  renders = apps: (builtins.tryEval (builtins.stringLength (renderHelp apps))).success;
 
   reject = name: module: if compiles module then [ name ] else [ ];
+  rejectProjectApps = name: module: if projects module then [ name ] else [ ];
+  rejectHelp = name: apps: if renders apps then [ name ] else [ ];
 
   validCompositeCompiles = compiles (
     { ... }:
@@ -24,6 +31,60 @@ if !validCompositeCompiles then
   throw "gate-nix negatives sanity check failed: valid composite model did not compile"
 else
   builtins.concatLists [
+    (rejectHelp "a help app whose program does not evaluate" {
+      broken = {
+        program = throw "program must be forced";
+        meta.description = "Broken app";
+      };
+    })
+
+    (rejectHelp "a help app with an empty program" {
+      broken = {
+        program = "";
+        meta.description = "Broken app";
+      };
+    })
+
+    (rejectHelp "a help app with a non-string program" {
+      broken = {
+        program = [ "/bin/false" ];
+        meta.description = "Broken app";
+      };
+    })
+
+    (rejectHelp "a help app without a description" {
+      broken.program = "/bin/false";
+    })
+
+    (rejectHelp "a help app with an empty description" {
+      broken = {
+        program = "/bin/false";
+        meta.description = "";
+      };
+    })
+
+    (rejectHelp "a help app with a non-string description" {
+      broken = {
+        program = "/bin/false";
+        meta.description = [ "invalid" ];
+      };
+    })
+
+    (rejectProjectApps "projectApps called with a function module" (
+      { ... }:
+      {
+        imports = [ composite ];
+      }
+    ))
+
+    (rejectProjectApps "projectApps called with an attrset module" {
+      imports = [ composite ];
+    })
+
+    (rejectProjectApps "projectApps called with a wrongly named root module" (checkout + /flake.nix))
+
+    (rejectProjectApps "projectApps called with a nested module path" composite)
+
     (reject "an undeclared step task" (
       { ... }:
       {
@@ -411,12 +472,12 @@ else
       }
     ))
 
-    (reject "a surface verb colliding with the control namespace" (
+    (reject "a surface verb colliding with the project-app namespace" (
       { lib, ... }:
       {
         imports = [ composite ];
         nixfied.closures.synthetic-helper.operationBindings = lib.mkForce null;
-        nixfied.tasks.clean = {
+        nixfied.tasks.help = {
           invocation = {
             tools = [ "synthetic-helper" ];
             run = [
@@ -429,7 +490,7 @@ else
             ];
           };
         };
-        nixfied.surface.verbs = [ "clean" ];
+        nixfied.surface.verbs = [ "help" ];
       }
     ))
 

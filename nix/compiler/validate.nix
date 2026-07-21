@@ -9,6 +9,14 @@ let
   source = config.nixfied.codebases.main;
   sourceIsLive = source.sourceMode == "live-workspace";
   sourceIsImmutable = source.sourceMode == "snapshot" || source.sourceMode == "flake-input";
+  reservedProjectApps = [
+    "help"
+    "run"
+    "ps"
+    "down"
+    "clean"
+    "model-check"
+  ];
   sourceIdentity = toString source.sourceIdentity;
   immutableSourceIsStoreRoot =
     !sourceIsImmutable || lib.hasPrefix "${builtins.storeDir}/" sourceIdentity;
@@ -344,16 +352,9 @@ let
     ) config.nixfied.surface.verbs) "surface.verbs must name declared tasks")
     (expect
       (lib.all (
-        verb:
-        !(builtins.elem verb [
-          "run"
-          "ps"
-          "down"
-          "clean"
-          "model-check"
-        ])
+        verb: !(builtins.elem verb reservedProjectApps)
       ) config.nixfied.surface.verbs)
-      "surface.verbs must not collide with the reserved control namespace (run, ps, down, clean, model-check)"
+      "surface.verbs must not collide with the reserved project-app namespace (${builtins.concatStringsSep ", " reservedProjectApps})"
     )
     (expect combinedGraphAcyclic "the combined connectsTo + prepare-requires service graph must be acyclic")
   ];

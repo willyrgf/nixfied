@@ -91,27 +91,24 @@ pkgs.writeShellApplication {
     framework_help
     printf '  framework_help: %ds\n' "$((SECONDS - t0))" >&2
 
-    # Composite structural validation is the Nix layer's job: a broken or
-    # cyclic composite must throw at evaluation, never compile into a model
-    # the runtime only rejects later. Each case overrides the valid composite
-    # example and must fail while evaluating the model derivation.
-    reject_composites() {
+    # Nix-layer validation must fail before an invalid model or app catalog can
+    # become executable. Batch the negative expressions into one evaluation.
+    reject_invalid_evaluations() {
       local unexpected
       if ! unexpected=$(nix eval --json --impure --expr "import ${./gate-nix-negatives.nix} { checkout = $checkout; }"); then
-        fail "negative: batched invalid composite evaluation failed"
+        fail "negative: batched invalid evaluation failed"
       fi
       if [ "$unexpected" != "[]" ]; then
         echo "  unexpected successful negative cases:" >&2
         echo "$unexpected" | jq -r '.[] | "    - " + .' >&2
-        fail "negative: invalid composites compiled instead of failing at evaluation"
+        fail "negative: invalid expressions succeeded instead of failing at evaluation"
       fi
     }
 
     t0=$SECONDS
-    echo "  negative (invalid composites must fail at nix evaluation)" >&2
-    echo "  negative (phase 1-5 rules must fail at nix evaluation)" >&2
-    reject_composites
-    printf '  reject_composites: %ds\n' "$((SECONDS - t0))" >&2
+    echo "  negative (invalid models and app metadata must fail at nix evaluation)" >&2
+    reject_invalid_evaluations
+    printf '  reject_invalid_evaluations: %ds\n' "$((SECONDS - t0))" >&2
 
     echo "  positive (immutable source dirtyPolicy reject admits)" >&2
     t0=$SECONDS
@@ -137,36 +134,117 @@ pkgs.writeShellApplication {
         echo "    pin: HEAD — uncommitted changes are NOT exercised here (use --dirty)" >&2
       fi
     fi
-    project=$(mktemp -d)
-    git -C "$project" init -q
+    path_project=$(mktemp -d)
+    nix run "$checkout#install" -- \
+      --root "$path_project" --project-id path-adopt --name path-adopt --nixfied-url "$pin" \
+      >/dev/null || fail "adoption: non-Git install failed"
+    nix flake lock "$path_project" || fail "adoption: non-Git scaffold lock failed"
+    path_lock_before=$(sha256sum "$path_project/flake.lock")
+    path_help=$(cd "$path_project" && nix run --no-write-lock-file .#help) \
+      || fail "adoption: non-Git contextual help failed"
+    printf '%s\n' "$path_help" | grep -Fq "  smoke  Run the Nixfied task 'smoke'" \
+      || fail "adoption: non-Git contextual help omitted the exported task"
+    [ "$(sha256sum "$path_project/flake.lock")" = "$path_lock_before" ] \
+      || fail "adoption: non-Git contextual help modified the lock file"
+    rm -rf "$path_project"
+
+    project_repo=$(mktemp -d)
+    project="$project_repo/adopter"
+    mkdir "$project"
+    git -C "$project_repo" init -q
     git -C "$project" config user.email gate@nixfied
     git -C "$project" config user.name "nixfied gate"
-    nix run "$checkout#install" -- \
+    install_output=$(nix run "$checkout#install" -- \
       --root "$project" --project-id adopt --name adopt --nixfied-url "$pin" \
-      || fail "adoption: install failed"
-    git -C "$project" add -A
+    ) || fail "adoption: install failed"
+    printf '%s\n' "$install_output" \
+      | grep -Fq "stage flake.nix and nixfied.nix when using Git, then run nix flake lock" \
+      || fail "adoption: installer omitted the required Git lock ordering"
+    git -C "$project" add flake.nix nixfied.nix
+    current_system=$(nix eval --impure --raw --expr builtins.currentSystem)
+    if prelock_error=$(nix eval --no-write-lock-file --json "$project#apps.$current_system" 2>&1); then
+      fail "adoption: projectApps accepted a project without flake.lock"
+    fi
+    printf '%s\n' "$prelock_error" | grep -Fq "project-root flake.nix, flake.lock, and nixfied.nix" \
+      || fail "adoption: pre-lock evaluation failed for the wrong reason"
+    nix flake lock "$project" || fail "adoption: scaffold lock failed"
+    git -C "$project" add flake.lock
     git -C "$project" commit -q -m scaffold
+    scaffold_metadata=$(cd "$project" && nix flake metadata --no-write-lock-file --json .) \
+      || fail "adoption: scaffold metadata did not resolve"
+    printf '%s\n' "$scaffold_metadata" | jq -e '.resolved.dir == "adopter"' >/dev/null \
+      || fail "adoption: Git subflake did not exercise resolved.dir source identity"
+    scaffold_apps=$(nix eval --no-write-lock-file --json "$project#apps.$current_system") \
+      || fail "adoption: untouched scaffold app metadata did not evaluate"
+    printf '%s\n' "$scaffold_apps" | jq -e '
+      (keys | sort) == ["clean", "down", "help", "model-check", "ps", "run", "smoke"]
+      and all(.[];
+        (.program | type == "string" and length > 0)
+        and (.meta.description | type == "string" and length > 0)
+      )
+    ' >/dev/null || fail "adoption: untouched scaffold app namespace was incomplete"
+    scaffold_help=$(cd "$project" && nix run --no-write-lock-file .#help) \
+      || fail "adoption: untouched scaffold help failed"
+    printf '%s\n' "$scaffold_help" | grep -Fq "  smoke  Run the Nixfied task 'smoke'" \
+      || fail "adoption: untouched scaffold help omitted the exported task"
+    if printf '%s\n' "$scaffold_help" | grep -Fq "  merged  "; then
+      fail "adoption: untouched scaffold unexpectedly contained the merge fixture"
+    fi
     if nix run "$checkout#install" -- --root "$project" >/dev/null 2>&1; then
       fail "adoption: re-running install did not refuse an existing flake.nix"
     fi
-    current_system=$(nix eval --impure --raw --expr builtins.currentSystem)
+    ${pkgs.gnused}/bin/sed -i \
+      '/^      apps = forAllSystems /c\      apps = forAllSystems (system: let generated = (builtins.getAttr system nixfied.lib).projectApps ./nixfied.nix; in generated // { merged = generated.run // { meta.description = "Merged adopter app"; }; });' \
+      "$project/flake.nix"
+    git -C "$project" add flake.nix
+    git -C "$project" commit -q -m merged-app
     apps_json=$(nix eval --json "$project#apps.$current_system") \
       || fail "adoption: generated app metadata did not evaluate"
     printf '%s\n' "$apps_json" | jq -e '
-      ([
-        .run.meta.description,
-        .["model-check"].meta.description,
-        .ps.meta.description,
-        .down.meta.description,
-        .clean.meta.description,
-        .smoke.meta.description
-      ] | map(select(type == "string" and length > 0)) | length) == 6
+      all(.[];
+        (.program | type == "string" and length > 0)
+        and (.meta.description | type == "string" and length > 0)
+      )
       and (.smoke.meta.description | contains("smoke"))
+      and has("help")
+      and .merged.meta.description == "Merged adopter app"
     ' >/dev/null || fail "adoption: generated apps lack discoverable descriptions"
     model="$(nix build --no-link --print-out-paths "$project#model")/model.json"
     st=$(mktemp -d)
     wk=$(mktemp -d)
     help_state="$st-help"
+    help_lock_before=$(sha256sum "$project/flake.lock")
+    project_help_expected=$(
+      cd "$project"
+      nix eval --no-write-lock-file --raw ".#apps.$current_system" \
+        --apply "$(<"$checkout/nix/help-renderer.nix")"
+    ) || fail "adoption: final project app metadata did not render"
+    project_help=$(
+      cd "$project"
+      NIXFIED_STATE_DIR="$help_state" nix run --no-write-lock-file .#help
+    ) || fail "adoption: contextual project help failed"
+    [ "$project_help" = "$project_help_expected" ] \
+      || fail "adoption: contextual help did not match final project app metadata"
+    printf '%s\n' "$project_help" | grep -Fq "  help  " \
+      || fail "adoption: contextual help omitted itself"
+    printf '%s\n' "$project_help" | grep -Fq "  merged  Merged adopter app" \
+      || fail "adoption: contextual help omitted a post-projectApps merge"
+    if wrong_context_error=$(
+      cd "$checkout"
+      nix run --no-write-lock-file "$project#help" 2>&1
+    ); then
+      fail "adoption: explicit help from another flake guessed the caller catalog"
+    fi
+    printf '%s\n' "$wrong_context_error" | grep -Fq "help: context mismatch" \
+      || fail "adoption: explicit help failed for a reason other than context identity"
+    if unresolved_context_error=$(
+      cd "$wk"
+      nix run --no-write-lock-file "$project#help" 2>&1
+    ); then
+      fail "adoption: explicit help from a non-flake directory guessed a catalog"
+    fi
+    printf '%s\n' "$unresolved_context_error" | grep -Fq "help: could not resolve the current flake source" \
+      || fail "adoption: non-flake context failed for the wrong reason"
     for app in run model-check ps down clean smoke; do
       case "$app" in
         run) help_flag=--help; usage='nix run .#run' ;;
@@ -183,6 +261,8 @@ pkgs.writeShellApplication {
         || fail "adoption: scaffolded $app $help_flag omitted its usage"
     done
     [ ! -e "$help_state" ] || fail "adoption: generated app help materialized runtime state"
+    [ "$(sha256sum "$project/flake.lock")" = "$help_lock_before" ] \
+      || fail "adoption: generated app help modified the project lock file"
     ( cd "$wk" && NIXFIED_STATE_DIR="$st" "$rt" run --model "$model" --task smoke --timeout-ms 60000 ) \
       >/dev/null || fail "adoption: scaffolded run failed"
     # The generated control surface must work against the same state.
@@ -224,7 +304,7 @@ pkgs.writeShellApplication {
     after=$(cat "$project/nixfied.nix")
     [ "$before" = "$after" ] || fail "adoption: upgrade modified the project-owned nixfied.nix"
     git -C "$project" add -A
-    git -C "$project" commit -q -m upgrade
+    git -C "$project" commit -q --allow-empty -m upgrade
     model="$(nix build --no-link --print-out-paths "$project#model")/model.json"
     st=$(mktemp -d)
     wk=$(mktemp -d)
@@ -232,7 +312,7 @@ pkgs.writeShellApplication {
       >/dev/null || fail "adoption: post-upgrade run failed"
     ( cd "$wk" && NIXFIED_STATE_DIR="$st" "$rt" clean --model "$model" ) \
       >/dev/null || fail "adoption: post-upgrade clean failed"
-    rm -rf "$project"
+    rm -rf "$project_repo"
     printf '  adoption: %ds\n' "$((SECONDS - t0))" >&2
 
     echo "  positive (upgrade accepts attrset flake input)" >&2
