@@ -307,10 +307,11 @@ nixfied.tasks.migrate.invocation.env.DB_PASSWORD =
   "\${secret:database-password}";
 ```
 
-A `file` descriptor names a relative path under `NIXFIED_SECRETS_DIR`. The
-runtime resolves secrets at admission, puts values only in memory and the
-hermetic child environment, and redacts runtime-owned persistent output. A file
-or socket written directly by a child remains the child's responsibility.
+A `file` descriptor names a relative path under the configured secrets base
+(`NIXFIED_SECRETS_DIR`, or the platform default). On run admission, the runtime
+resolves secrets, puts values only in memory and the hermetic child environment,
+and redacts runtime-owned persistent output. A file or socket written directly
+by a child remains the child's responsibility.
 
 ## Use and extend adapters
 
@@ -358,10 +359,11 @@ nix run .#model-check
 does not edit `nixfied.nix` or translate old models or state.
 
 If the new model is rejected, restore the previous input and lock from version
-control and use that pin for recovery. `model-check` separates model, source,
-closure, and host admission failures from execution and state preparation. If
-admission passes but a run fails while preparing existing state, retry the same
-task against an empty temporary state base:
+control and use that pin for recovery. `model-check` checks model origin and
+shape, ABI and target, closures, secret references, and plan feasibility without
+resolving source or secret material or preparing state. If that check passes but
+a run fails while preparing existing state, retry the same task against an empty
+temporary state base:
 
 ```sh
 probe_state="$(mktemp -d)"
