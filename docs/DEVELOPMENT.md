@@ -13,6 +13,7 @@ nix/spec/                      Nix-side model and ABI constants
 nix/adapters/                  Nix-side domain adapters
 nix/install/                   install and upgrade programs
 nix/lib/                       pure Nix helpers
+nix/docs/                      private generated-reference builders
 nix/packages/                  reproducible Rust builds and source checks
 nix/project-apps.nix           reserved controls + adopter-exported task apps
 nix/gate-runtime/nixfied.nix   adopter-shaped runtime integration gate
@@ -68,10 +69,31 @@ nix develop --command bash -c 'cd runtime && cargo test -p nixfied-runtime --tes
 ```
 
 `nix flake check` is the hermetic source/build core. Its `rust-workspace`
-derivation runs rustfmt and Clippy with `-D warnings`; Clippy type-checks all
+derivation first proves that [`OPTIONS.md`](OPTIONS.md) matches the typed Nix
+modules, then runs rustfmt and Clippy with `-D warnings`; Clippy type-checks all
 targets. The flake checks also build the debug runtime and minimal example model,
-and run the Nix derivation golden vectors. The process- and port-using Cargo
-tests run outside the Nix sandbox through `.#test`.
+and run the Nix derivation golden vectors. The process- and port-using Cargo tests
+run outside the Nix sandbox through `.#test`.
+
+Regenerate the checked option reference after changing `nix/modules/`:
+
+```sh
+generated="$(nix build --impure --no-link --print-out-paths --expr '
+  let
+    flake = builtins.getFlake (toString ./.);
+    system = builtins.currentSystem;
+  in
+  import ./nix/docs/options.nix {
+    inherit system;
+    inherit (flake.inputs.nixpkgs) lib;
+    pkgs = flake.inputs.nixpkgs.legacyPackages.${system};
+  }
+')"
+cp "$generated" docs/OPTIONS.md
+```
+
+The generator reuses the compiler's module evaluator. `OPTIONS.md` is a checked
+repository reference, not a flake app/output or an additional model authority.
 
 ## Gate composition
 

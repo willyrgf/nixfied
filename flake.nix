@@ -350,6 +350,12 @@
 
       checks = forAllSystems (
         { pkgs, system }:
+        let
+          optionsDoc = import ./nix/docs/options.nix {
+            inherit pkgs system;
+            inherit (nixpkgs) lib;
+          };
+        in
         {
           minimal-model = self.packages.${system}.minimal-model;
           # The derivation spec's golden vectors as Nix eval fixtures
@@ -362,8 +368,12 @@
           # debug profile for fast iteration. The hosted workflow separately
           # builds the release package as its final safety net.
           nixfied-runtime = self.packages.${system}.nixfied-runtime-debug;
-          # Hermetic source gate: rustfmt + clippy (-D warnings) + cargo check.
-          rust-workspace = import ./nix/packages/rust-workspace-check.nix { inherit pkgs; };
+          # Hermetic source gate: checked option reference + rustfmt + clippy
+          # (-D warnings). Keep this under the existing check rather than adding
+          # another public flake output solely for documentation maintenance.
+          rust-workspace = import ./nix/packages/rust-workspace-check.nix {
+            inherit pkgs optionsDoc;
+          };
         }
       );
 

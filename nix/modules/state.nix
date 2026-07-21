@@ -7,13 +7,13 @@ in
     markerIdentity = mkOption {
       type = types.nonEmptyStr;
       default = "nixfied-state";
-      description = "Marker identity written into state ownership metadata.";
+      description = "Identity written into the slot marker and required before the runtime may adopt or clean its state.";
     };
 
     stateEpoch = mkOption {
       type = types.nonEmptyStr;
       default = "1";
-      description = "state epoch.";
+      description = "Project-chosen state compatibility epoch; a mismatch must pass the declared cleanup policy before admission.";
     };
 
     cleanupPolicy = mkOption {
@@ -22,7 +22,7 @@ in
         "protected"
       ];
       default = "delete-on-clean";
-      description = "state cleanup policy.";
+      description = "Whether ordinary `clean` may delete owned state or must require explicit purge.";
     };
 
     persistence = mkOption {
@@ -31,7 +31,7 @@ in
         "persistent"
       ];
       default = "run-scoped";
-      description = "state persistence policy.";
+      description = "Whether slot state is eligible for ordinary cleanup or treated as persistent data requiring explicit purge.";
     };
   };
 }

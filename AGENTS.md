@@ -15,6 +15,7 @@ project.
 | [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) | Repository map, test placement, gate composition, and build profiles |
 | [`docs/DERIVATION_SPEC.md`](docs/DERIVATION_SPEC.md) | Derived graph facts or canonical ordering |
 | [`docs/ADAPTERS.md`](docs/ADAPTERS.md) | Adapter authoring or endpoint conventions |
+| [`docs/OPTIONS.md`](docs/OPTIONS.md) | Generated types, defaults, and descriptions for the `nixfied.nix` option surface |
 | [`runtime/crates/nixfied-model/capability.txt`](runtime/crates/nixfied-model/capability.txt) | ABI inventory: model/output vocabulary, surfaces, and error codes |
 
 `docs/CONTRACT.md` is the normative behavioral contract. The capability

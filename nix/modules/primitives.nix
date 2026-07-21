@@ -68,12 +68,12 @@ let
         "inherit"
       ];
       default = "null";
-      description = "Stdin policy.";
+      description = "Whether the child receives closed stdin (`null`) or the runtime command's stdin (`inherit`).";
     };
     timeoutMs = mkOption {
       type = positiveInt;
       default = 30000;
-      description = "Invocation timeout.";
+      description = "Maximum invocation duration in milliseconds before cancellation.";
     };
   };
   invocationType = types.submodule { options = invocationOptions; };
@@ -126,12 +126,12 @@ let
       retryIntervalMs = mkOption {
         type = positiveInt;
         default = 100;
-        description = "Probe retry interval.";
+        description = "Delay in milliseconds between probe attempts.";
       };
       maxAttempts = mkOption {
         type = positiveInt;
         default = 20;
-        description = "Maximum probe attempts.";
+        description = "Maximum number of probe attempts before readiness or health fails.";
       };
     };
   };
@@ -180,7 +180,7 @@ let
       prepare = mkOption {
         type = prepareOpType;
         default = { };
-        description = "Optional data-dir init.";
+        description = "Optional task that prepares or adopts service state before start.";
       };
       start = mkOption {
         type = startOpType;
@@ -189,12 +189,12 @@ let
       ready = mkOption {
         type = probeOpType "ready";
         default = { };
-        description = "Wait on the readiness probe.";
+        description = "Probe contract that must pass before the service is recorded as ready.";
       };
       health = mkOption {
         type = probeOpType "health";
         default = { };
-        description = "Wait on a health probe.";
+        description = "Probe contract used to verify an existing service remains reusable.";
       };
       stop = mkOption {
         type = stopOpType;
@@ -285,12 +285,12 @@ let
       stateRefs = mkOption {
         type = types.listOf types.str;
         default = [ "slot" ];
-        description = "State roots the service owns.";
+        description = "Logical state-root references attributed to the service and included in its identity.";
       };
       logRefs = mkOption {
         type = types.listOf types.str;
         default = [ ];
-        description = "Log roots the service writes.";
+        description = "Logical log references recorded for the service.";
       };
       containment = mkOption {
         type = types.enum [
@@ -298,7 +298,7 @@ let
           "process-tree"
         ];
         default = "process-group";
-        description = "Containment requirement.";
+        description = "OS process-containment strength required for ownership, cancellation, and endpoint verification.";
       };
     };
   };
@@ -319,7 +319,7 @@ let
           "helper"
         ];
         default = "executable";
-        description = "Closure kind.";
+        description = "Declared role of the realised closure: directly executable program or supporting helper.";
       };
       requiresExecutable = mkOption {
         type = types.bool;
@@ -346,7 +346,7 @@ let
           ]
         );
         default = [ "process" ];
-        description = "Declared closure effects.";
+        description = "Attested effect classes the closure may exercise when dispatched.";
       };
     };
   };
@@ -382,7 +382,7 @@ let
           "env-var"
           "file"
         ];
-        description = "Secret resolver kind.";
+        description = "Runtime resolver used to obtain the secret without embedding its value in the model.";
       };
       envVar = mkOption {
         type = types.nullOr types.nonEmptyStr;
@@ -454,17 +454,17 @@ let
       artifactRefs = mkOption {
         type = types.listOf types.str;
         default = [ ];
-        description = "Artifact roots the task writes.";
+        description = "Logical artifact references recorded for the leaf task.";
       };
       logRefs = mkOption {
         type = types.listOf types.str;
         default = [ ];
-        description = "Log roots the task writes.";
+        description = "Logical log references recorded for the leaf task.";
       };
       summaryRefs = mkOption {
         type = types.listOf types.str;
         default = [ "summary" ];
-        description = "Summary roots the task writes.";
+        description = "Logical summary references recorded for the leaf task.";
       };
     };
   };

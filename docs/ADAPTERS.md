@@ -4,6 +4,9 @@ An adapter is a Nix module that compiles one concrete service into the generic
 model primitives. The runtime never learns the domain — an adapter is pure
 model authorship, importable by any project:
 
+[`OPTIONS.md`](OPTIONS.md) is the generated reference for the exact option
+types and defaults used below.
+
 ```nix
 { adapters, ... }:
 {

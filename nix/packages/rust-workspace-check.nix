@@ -1,11 +1,12 @@
-# Hermetic source gate for the runtime workspace: format + lint + typecheck.
+# Hermetic source gate: generated option-reference drift + runtime workspace
+# formatting, linting, and type-checking.
 #
 # Run from the pinned toolchain with vendored deps so `nix flake check` proves the
 # Rust source is `rustfmt`-clean, `clippy`-clean (`-D warnings`), and type-checks —
 # with no host toolchain and no network. The white-box `cargo test` floor is
 # intentionally *not* here (it binds ports / spawns process groups); that runs via
 # `.#test` / `.#ci` outside the sandbox.
-{ pkgs }:
+{ pkgs, optionsDoc }:
 let
   rustToolchain = (import ../toolchain.nix { inherit pkgs; }).dev;
 in
@@ -21,6 +22,7 @@ pkgs.stdenv.mkDerivation {
   ];
   buildPhase = ''
     runHook preBuild
+    diff -u ${../../docs/OPTIONS.md} ${optionsDoc}
     cargo fmt --all -- --check
     # `clippy` runs the full rustc front end, so `--all-targets -D warnings` also
     # type-checks every target — a separate `cargo check` would just recompile the

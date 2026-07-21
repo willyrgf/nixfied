@@ -23,7 +23,8 @@ in
       "x86_64-linux"
     ];
     default = system;
-    description = "Nix target system for the model and runtime closures.";
+    defaultText = lib.literalExpression "system";
+    description = "Target system shared by the compiled model, runtime, and every declared closure.";
   };
 
   # The adopter-owned public verb surface (VERB-1): an explicit list of task
@@ -35,26 +36,26 @@ in
   options.nixfied.surface.verbs = mkOption {
     type = types.listOf types.nonEmptyStr;
     default = [ ];
-    description = "Declared task ids exported as project flake apps.";
+    description = "Task ids exported as project flake apps; framework control names are reserved.";
   };
 
   options.nixfied.slotPolicy = {
     min = mkOption {
       type = types.int;
       default = 0;
-      description = "Minimum supported slot.";
+      description = "Lowest slot number accepted by runtime commands.";
     };
 
     default = mkOption {
       type = types.int;
       default = 0;
-      description = "Default supported slot.";
+      description = "Slot selected when a runtime command receives no explicit `--slot`.";
     };
 
     max = mkOption {
       type = types.int;
       default = 0;
-      description = "Maximum supported slot.";
+      description = "Highest slot number accepted by runtime commands.";
     };
   };
 }

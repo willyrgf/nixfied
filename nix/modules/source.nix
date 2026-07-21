@@ -7,7 +7,7 @@ in
     logicalRoot = mkOption {
       type = types.nonEmptyStr;
       default = ".";
-      description = "Logical source root for the single main codebase.";
+      description = "Logical root within the main codebase's declared source identity.";
     };
 
     sourceMode = mkOption {
@@ -17,14 +17,14 @@ in
         "flake-input"
       ];
       default = "live-workspace";
-      description = "Source mode for the single main codebase.";
+      description = "Whether the main codebase resolves from the live workspace or an immutable Nix-store source.";
     };
 
     sourceIdentity = mkOption {
       type = types.either types.path types.nonEmptyStr;
       apply = toString;
       default = "live";
-      description = "Live identity placeholder, or immutable source store root for snapshot/flake-input.";
+      description = "`live` for a live workspace, or the immutable Nix-store source root for snapshot and flake-input modes.";
     };
 
     dirtyPolicy = mkOption {
@@ -34,13 +34,13 @@ in
         "reject"
       ];
       default = "warn";
-      description = "Dirty policy for the single main codebase.";
+      description = "Admission policy for uncommitted changes in a live workspace.";
     };
 
     admissionFingerprintPolicy = mkOption {
       type = types.nonEmptyStr;
       default = "live-fingerprint";
-      description = "source fingerprint policy placeholder.";
+      description = "Source fingerprint policy recorded in the admission contract; currently `live-fingerprint`.";
     };
   };
 }
