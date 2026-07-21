@@ -47,6 +47,9 @@ substitution: ${port} ${host} ${stateDir} ${port:<name>} ${host:<name>} ${secret
 # The hidden runtime command surfaces every model exposes. `model-check` is the
 # generated project-app name for `check`; installation is outside the model ABI.
 surface: check run ps down clean
+# Existing generated control and task apps expose conventional help before
+# admission, state materialisation, or execution.
+surface-help: -h --help
 
 # The run command output projections. Summary is human-facing; json is the
 # structured automation surface; both is the explicit combined diagnostic mode.

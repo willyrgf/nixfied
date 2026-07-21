@@ -93,7 +93,9 @@ coordinated ABI, implementation, documentation, and test updates.
 - **SURFACE-1:** hidden runtime commands are framework-owned and listed in the
   capability descriptor, not declared by an adopter in the model. The adopter
   owns only its exported task-verb surface. `model-check` is the generated app
-  name for the runtime's admission-only `check` command.
+  name for the runtime's admission-only `check` command. Every generated
+  control and exported task app accepts `-h` and `--help`; help completes before
+  model admission, source resolution, state materialisation, or execution.
 - **Hermetic child environment:** every leaf, probe, and service start receives
   only its declared environment plus the runtime-owned `PATH` assembled from
   invocation tool roots. Runtime environment inheritance and append-to-inherited

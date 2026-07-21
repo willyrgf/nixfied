@@ -237,7 +237,20 @@ fn string_detail<'a>(error: &'a RuntimeError, key: &str) -> Option<&'a str> {
     error.details.get(key).and_then(Value::as_str)
 }
 
+const CHECK_HELP: &str = "\
+Admit the compiled Nixfied model without executing tasks.
+
+Usage:
+  nix run .#model-check -- [options]
+
+Options:
+  --slot <number>  Select a declared project slot
+  -h, --help       Show this help";
+
 fn check(args: &[String]) -> Result<(), RuntimeError> {
+    if print_help_if_requested(args, CHECK_HELP) {
+        return Ok(());
+    }
     let mut model_path = None;
     let mut allow_non_store = false;
     let mut slot = None;
@@ -291,6 +304,9 @@ fn check(args: &[String]) -> Result<(), RuntimeError> {
 }
 
 fn run_m0(args: &[String]) -> Result<(), RuntimeError> {
+    if print_help_if_requested(args, RUN_HELP) {
+        return Ok(());
+    }
     let options = parse_run_options(args)?;
     let _signals = ProcessSignalGuard::install()?;
     let cancellation = CancellationToken::new();
@@ -1198,6 +1214,75 @@ struct RunOptions {
     task: Option<String>,
 }
 
+const RUN_HELP: &str = "\
+Run one declared task and its required services.
+
+Usage:
+  nix run .#run -- --task <id> [options]
+  nix run .#<verb> -- [options]
+
+Options:
+  --task <id>             Select a declared task (the exported verb preselects it)
+  --slot <number>         Select a declared project slot
+  --timeout-ms <number>   Set the runtime operation timeout in milliseconds
+  --output <mode>         Select summary, json, or both (default: summary)
+  --summary               Emit the human summary
+  --json                  Emit structured JSON
+  --both                  Emit both projections
+  -h, --help              Show this help";
+
+const PS_HELP: &str = "\
+Reconcile and report Nixfied-owned processes for a slot.
+
+Usage:
+  nix run .#ps -- [options]
+
+Options:
+  --slot <number>  Select a declared project slot
+  -h, --help       Show this help";
+
+const DOWN_HELP: &str = "\
+Stop Nixfied-owned process groups for a slot.
+
+Usage:
+  nix run .#down -- [options]
+
+Options:
+  --slot <number>        Select a declared project slot
+  --timeout-ms <number>  Set the stop timeout in milliseconds
+  -h, --help             Show this help";
+
+const CLEAN_HELP: &str = "\
+Safely clean Nixfied-owned state for a slot.
+
+Usage:
+  nix run .#clean -- [options]
+
+Options:
+  --slot <number>  Select a declared project slot
+  --purge          Relax only the protected/persistent cleanup policy gate
+  -h, --help       Show this help";
+
+fn print_help_if_requested(args: &[String], help: &str) -> bool {
+    if args
+        .iter()
+        .any(|arg| matches!(arg.as_str(), "-h" | "--help"))
+    {
+        println!("{help}");
+        true
+    } else {
+        false
+    }
+}
+
+fn control_help(command: ControlCommand) -> &'static str {
+    match command {
+        ControlCommand::Ps => PS_HELP,
+        ControlCommand::Down => DOWN_HELP,
+        ControlCommand::Clean => CLEAN_HELP,
+    }
+}
+
 /// The refusal for a missing or unknown task selection: name every declared
 /// task so the operator can pick one.
 fn selection_required_error(model: &nixfied_runtime::execution::ExecutionModel) -> RuntimeError {
@@ -1254,6 +1339,9 @@ fn parse_run_output_mode_lossy(args: &[String]) -> RunOutputMode {
 }
 
 fn run_control(command: ControlCommand, args: &[String]) -> Result<(), RuntimeError> {
+    if print_help_if_requested(args, control_help(command)) {
+        return Ok(());
+    }
     let options = parse_control_options(command, args)?;
     let (loaded, admission) =
         load_admitted_model_for_control(options.model_path.clone(), options.allow_non_store)?;

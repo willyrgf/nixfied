@@ -22,20 +22,23 @@ let
   modelJson = "${model}/model.json";
   verbs = config.nixfied.surface.verbs;
   mkApp =
-    name: text:
+    name: description: text:
     let
       drv = pkgs.writeShellApplication { inherit name text; };
     in
     {
       type = "app";
       program = "${drv}/bin/${name}";
+      meta.description = description;
     };
   # `validate.nix` already proved each verb names a declared task and avoids
   # the reserved namespace; this projection just derives the apps.
   verbApps = builtins.listToAttrs (
     map (verb: {
       name = verb;
-      value = mkApp verb ''exec "${runtimeBin}" run --model "${modelJson}" --task "${verb}" "$@"'';
+      value =
+        mkApp verb "Run the Nixfied task '${verb}'"
+          ''exec "${runtimeBin}" run --model "${modelJson}" --task "${verb}" "$@"'';
     }) verbs
   );
 in
@@ -43,18 +46,28 @@ in
   # Run one selected task (`nix run .#run -- --task <id>`): its derived
   # service union starts eagerly, then the flattened nodes execute. With no
   # selection the runtime refuses and lists the declared tasks.
-  run = mkApp "run" ''exec "${runtimeBin}" run --model "${modelJson}" "$@"'';
+  run =
+    mkApp "run" "Run one declared Nixfied task"
+      ''exec "${runtimeBin}" run --model "${modelJson}" "$@"'';
 
   # Admission sanity: the model is well-formed and admits (cheap, no
   # execution). Named `model-check` so `check` stays free for adopters.
-  model-check = mkApp "model-check" ''exec "${runtimeBin}" check --model "${modelJson}"'';
+  model-check =
+    mkApp "model-check" "Admit the compiled Nixfied model without executing tasks"
+      ''exec "${runtimeBin}" check --model "${modelJson}" "$@"'';
 
   # Recovery/control surface over the project's slots: observe registry-owned
   # processes (reconciling stale evidence), stop everything the runtime owns,
   # and remove the marker-gated slot state. Extra args are forwarded
   # (e.g. `nix run .#down -- --slot 1`).
-  ps = mkApp "ps" ''exec "${runtimeBin}" ps --model "${modelJson}" "$@"'';
-  down = mkApp "down" ''exec "${runtimeBin}" down --model "${modelJson}" "$@"'';
-  clean = mkApp "clean" ''exec "${runtimeBin}" clean --model "${modelJson}" "$@"'';
+  ps =
+    mkApp "ps" "Reconcile and report Nixfied-owned processes for a slot"
+      ''exec "${runtimeBin}" ps --model "${modelJson}" "$@"'';
+  down =
+    mkApp "down" "Stop Nixfied-owned processes for a slot"
+      ''exec "${runtimeBin}" down --model "${modelJson}" "$@"'';
+  clean =
+    mkApp "clean" "Safely clean Nixfied-owned state for a slot"
+      ''exec "${runtimeBin}" clean --model "${modelJson}" "$@"'';
 }
 // verbApps

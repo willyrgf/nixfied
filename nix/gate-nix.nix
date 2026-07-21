@@ -87,13 +87,43 @@ pkgs.writeShellApplication {
     if nix run "$checkout#install" -- --root "$project" >/dev/null 2>&1; then
       fail "adoption: re-running install did not refuse an existing flake.nix"
     fi
+    current_system=$(nix eval --impure --raw --expr builtins.currentSystem)
+    apps_json=$(nix eval --json "$project#apps.$current_system") \
+      || fail "adoption: generated app metadata did not evaluate"
+    printf '%s\n' "$apps_json" | jq -e '
+      ([
+        .run.meta.description,
+        .["model-check"].meta.description,
+        .ps.meta.description,
+        .down.meta.description,
+        .clean.meta.description,
+        .smoke.meta.description
+      ] | map(select(type == "string" and length > 0)) | length) == 6
+      and (.smoke.meta.description | contains("smoke"))
+    ' >/dev/null || fail "adoption: generated apps lack discoverable descriptions"
     model="$(nix build --no-link --print-out-paths "$project#model")/model.json"
     st=$(mktemp -d)
     wk=$(mktemp -d)
+    help_state="$st-help"
+    for app in run model-check ps down clean smoke; do
+      case "$app" in
+        run) help_flag=--help; usage='nix run .#run' ;;
+        model-check) help_flag=-h; usage='nix run .#model-check' ;;
+        ps) help_flag=--help; usage='nix run .#ps' ;;
+        down) help_flag=-h; usage='nix run .#down' ;;
+        clean) help_flag=--help; usage='nix run .#clean' ;;
+        smoke) help_flag=-h; usage='nix run .#<verb>' ;;
+      esac
+      help_stdout="$wk/$app-help.stdout"
+      ( cd "$wk" && NIXFIED_STATE_DIR="$help_state" nix run "$project#$app" -- "$help_flag" ) \
+        >"$help_stdout" || fail "adoption: scaffolded $app $help_flag failed"
+      grep -Fq "$usage" "$help_stdout" \
+        || fail "adoption: scaffolded $app $help_flag omitted its usage"
+    done
+    [ ! -e "$help_state" ] || fail "adoption: generated app help materialized runtime state"
     ( cd "$wk" && NIXFIED_STATE_DIR="$st" "$rt" run --model "$model" --task smoke --timeout-ms 60000 ) \
       >/dev/null || fail "adoption: scaffolded run failed"
-    # The generated control surface: model-check/ps/down/clean must exist as project apps
-    # and work against the same state.
+    # The generated control surface must work against the same state.
     ( cd "$wk" && NIXFIED_STATE_DIR="$st" nix run "$project#model-check" ) \
       >/dev/null || fail "adoption: scaffolded model-check failed"
     smoke_stdout="$st/smoke.stdout"
