@@ -16,7 +16,7 @@ project.
 | [`docs/DERIVATION_SPEC.md`](docs/DERIVATION_SPEC.md) | Derived graph facts or canonical ordering |
 | [`docs/ADAPTERS.md`](docs/ADAPTERS.md) | Adapter authoring or endpoint conventions |
 | [`docs/OPTIONS.md`](docs/OPTIONS.md) | Generated types, defaults, and descriptions for the `nixfied.nix` option surface |
-| [`runtime/crates/nixfied-model/capability.txt`](runtime/crates/nixfied-model/capability.txt) | ABI inventory: model/output vocabulary, surfaces, and error codes |
+| [`runtime/crates/nixfied-model/capability.txt`](runtime/crates/nixfied-model/capability.txt) | ABI inventory: model, runtime-command/output, and error vocabulary |
 
 `docs/CONTRACT.md` is the normative behavioral contract. The capability
 descriptor is the authored wire-contract inventory whose digest derives
@@ -31,7 +31,7 @@ descriptor is the authored wire-contract inventory whose digest derives
   fail-closed checks, or independent seam verification for fewer lines.
 - Backward compatibility is not a design constraint. Deliberate breaking
   changes replace the previous exact contract; old and new contracts are never
-  supported concurrently. Follow ABI-1 for the required atomic ABI rotation.
+  supported concurrently. Follow ABI-1 when the model/runtime contract changes.
 - Delete superseded in-scope code, tests, fixtures, flags, branches, and
   documentation in the same change. Do not retain compatibility fallbacks,
   aliases, shims, commented code, or hidden legacy paths. Git history is the

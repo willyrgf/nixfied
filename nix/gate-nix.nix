@@ -29,6 +29,68 @@ pkgs.writeShellApplication {
       exit 1
     }
 
+    framework_help() {
+      local current_system help_dir help_state lock_before expected actual
+      current_system=$(nix eval --impure --raw --expr builtins.currentSystem)
+      help_dir=$(mktemp -d)
+      help_state="$help_dir/state"
+      lock_before=$(sha256sum "$checkout/flake.lock")
+      expected=$(nix eval --no-write-lock-file --raw "$checkout#apps.$current_system" \
+        --apply "$(<"$checkout/nix/help-renderer.nix")") \
+        || fail "framework help: final root app metadata did not render"
+      actual=$(
+        cd "$help_dir"
+        NIXFIED_STATE_DIR="$help_state" nix run --no-write-lock-file "$checkout#help"
+      ) || fail "framework help: explicit checkout invocation failed"
+      [ "$actual" = "$expected" ] \
+        || fail "framework help: output did not match the final root app metadata"
+      for flag in -h --help; do
+        actual=$(
+          cd "$help_dir"
+          NIXFIED_STATE_DIR="$help_state" nix run --no-write-lock-file "$checkout#help" -- "$flag"
+        ) || fail "framework help: $flag failed"
+        [ "$actual" = "$expected" ] \
+          || fail "framework help: $flag changed the catalog"
+      done
+      if (
+        cd "$help_dir"
+        nix run --no-write-lock-file "$checkout#help" -- unexpected
+      ) >/dev/null 2>&1; then
+        fail "framework help: accepted an unknown argument"
+      fi
+      if (
+        cd "$help_dir"
+        nix run --no-write-lock-file "$checkout#help" -- one two
+      ) >/dev/null 2>&1; then
+        fail "framework help: accepted multiple arguments"
+      fi
+      [ ! -e "$help_state" ] || fail "framework help: materialized runtime state"
+      [ ! -e "$help_dir/flake.lock" ] || fail "framework help: wrote a caller lock file"
+      [ "$(sha256sum "$checkout/flake.lock")" = "$lock_before" ] \
+        || fail "framework help: modified the framework lock file"
+      nix eval --impure --raw --expr "
+        let render = import $checkout/nix/help-renderer.nix;
+        in render {
+          z = { program = \"/z\"; meta.description = \"Z\"; };
+          a = { program = \"/a\"; meta.description = \"A\"; };
+        }
+      " >"$help_dir/renderer.actual" || fail "framework help: renderer golden did not evaluate"
+      printf 'Available commands:\n\n  a  A\n  z  Z\n' >"$help_dir/renderer.expected"
+      [ "$(sha256sum <"$help_dir/renderer.actual")" = "$(sha256sum <"$help_dir/renderer.expected")" ] \
+        || fail "framework help: renderer order or layout drifted"
+      printf '%s\n' "$actual" | grep -Fq "  help  List this flake's runnable commands" \
+        || fail "framework help: catalog omitted its own app"
+      if printf '%s\n' "$actual" | grep -Fq "nix run .#"; then
+        fail "framework help: catalog baked a caller-relative invocation"
+      fi
+      rm -rf "$help_dir"
+    }
+
+    t0=$SECONDS
+    echo "  framework help (final root app metadata from any cwd)" >&2
+    framework_help
+    printf '  framework_help: %ds\n' "$((SECONDS - t0))" >&2
+
     # Composite structural validation is the Nix layer's job: a broken or
     # cyclic composite must throw at evaluation, never compile into a model
     # the runtime only rejects later. Each case overrides the valid composite

@@ -17,8 +17,17 @@ isolated slots can run side by side with separate ports, processes, and state.
 
 ## Quick start
 
-The only prerequisite is Nix with flakes enabled. In a project that does not
-already have a `flake.nix`, run:
+The only prerequisite is Nix with flakes enabled. Inspect Nixfied's own
+runnable apps without a checkout:
+
+```sh
+nix run github:willyrgf/nixfied#help
+```
+
+The catalog is reference-neutral. Reuse the same flake reference with a listed
+name, for example `nix run github:willyrgf/nixfied#check`.
+
+In a project that does not already have a `flake.nix`, run:
 
 ```sh
 nix run github:willyrgf/nixfied#install -- \
@@ -106,7 +115,8 @@ nix run ./examples/downstream#release
 
 ## Developing Nixfied
 
-The canonical local repository gate is:
+Run `nix run .#help` to list the framework repository commands. The canonical
+local repository gate is:
 
 ```sh
 nix run .#ci

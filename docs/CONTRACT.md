@@ -6,18 +6,21 @@ outputs. [`ARCHITECTURE.md`](ARCHITECTURE.md) explains why these constraints
 exist; [`DEVELOPMENT.md`](DEVELOPMENT.md) explains how to work on the
 implementation.
 
-The ABI's model-field and enum names, public surfaces, output-field vocabulary,
-and error vocabulary are inventoried in
+The runtime ABI's model-field and enum names, hidden runtime-command surface,
+output-field vocabulary, and error vocabulary are inventoried in
 [`runtime/crates/nixfied-model/capability.txt`](../runtime/crates/nixfied-model/capability.txt).
 That authored descriptor is hashed identically by Nix and Rust to derive the
 `runtimeAbi` suffix. The complete typed shape and validation live in the Nix
-producer and `nixfied-model`; the descriptor records their public vocabulary,
-and its digest ensures a recorded change rotates the ABI.
+producer and `nixfied-model`; the descriptor records the vocabulary the runtime
+understands, and its digest ensures a recorded model/runtime change rotates the
+ABI. Nix-only library and flake-app surfaces are public integration API but stay
+outside `runtimeAbi` unless they change emitted model data or runtime behavior.
 [`DERIVATION_SPEC.md`](DERIVATION_SPEC.md) is separately normative for facts
 derived from the task/service graph.
 
 Do not weaken an invariant below without an explicit contract change and
-coordinated ABI, implementation, documentation, and test updates.
+coordinated implementation, documentation, and test updates. Rotate the ABI
+when the model/runtime contract changes.
 
 ## Model and version boundary
 
@@ -37,11 +40,11 @@ coordinated ABI, implementation, documentation, and test updates.
   model bytes. The model contains no self-hash.
 - **ABI-1:** admission requires exact `runtimeAbi` and `toolchainId` matches.
   Backward compatibility imposes no design constraint: a deliberate contract
-  change may break any prior model, command, output, or error surface. The new
-  contract replaces the old one; old contracts are rejected, never migrated,
-  translated, or admitted through a compatibility fallback. The runtime ABI
-  suffix is the capability-descriptor digest, computed identically by
-  `nixfied-model::constants` and `nix/spec/constants.nix`.
+  change may break any prior model, runtime command, output, or error surface.
+  The new contract replaces the old one; old contracts are rejected, never
+  migrated, translated, or admitted through a compatibility fallback. The
+  runtime ABI suffix is the capability-descriptor digest, computed identically
+  by `nixfied-model::constants` and `nix/spec/constants.nix`.
 - **PREPARE-1:** Nix realises every referenced closure before runtime start. The
   runtime verifies existence, executability, target, and declaration; it never
   builds missing closures.
@@ -174,7 +177,9 @@ A contract change must be explicit and atomic:
 
 1. Record every model/runtime contract change in the capability descriptor so
    the runtime ABI rotates. This includes wire data, admitted vocabulary,
-   behavioral semantics, command surfaces, output schemas, and error vocabulary.
+   behavioral semantics, hidden runtime command surfaces, output schemas, and
+   error vocabulary. Nix-only flake-app changes do not enter the descriptor
+   unless they also change emitted model data or runtime behavior.
 2. Update the derived ABI snapshot and confirm Nix and Rust compute the same
    value. Change numeric model, ABI-base, or toolchain versions only when their
    defined semantics require it.

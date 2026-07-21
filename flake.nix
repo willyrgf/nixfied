@@ -313,8 +313,12 @@
       );
 
       apps = forAllSystems (
-        { system, ... }:
+        { pkgs, system }:
         {
+          help = import ./nix/help-app.nix {
+            inherit pkgs system;
+            flakeRef = self.outPath;
+          };
           install = {
             type = "app";
             program = "${self.packages.${system}.install}/bin/nixfied-install";
