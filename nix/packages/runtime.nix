@@ -1,6 +1,6 @@
 # Reproducible, host-toolchain-free build of selected runtime workspace binary
-# packages. `packages` defaults to the two shipped products
-# (`nixfied-runtime`, `nixfied`); private callers can select a narrower fixture.
+# packages. `packages` defaults to the two shipped product packages
+# (`nixfied-runtime`, `nixfied-cli`); private callers can select a narrower fixture.
 #
 # `buildType` selects the cargo profile: the default `"release"` is what
 # `.#install` ships to adopters; the framework's own CI path (flake checks and the
