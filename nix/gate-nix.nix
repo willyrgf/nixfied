@@ -71,14 +71,14 @@ pkgs.writeShellApplication {
       nix eval --impure --raw --expr "
         let render = import $checkout/nix/help-renderer.nix;
         in render {
-          z = { program = \"/z\"; meta.description = \"Z\"; };
           a = { program = \"/a\"; meta.description = \"A\"; };
+          bbb = { program = \"/bbb\"; meta.description = \"B\"; };
         }
       " >"$help_dir/renderer.actual" || fail "framework help: renderer golden did not evaluate"
-      printf 'Available commands:\n\n  a  A\n  z  Z\n' >"$help_dir/renderer.expected"
+      printf 'Available commands:\n\n  a    A\n  bbb  B\n' >"$help_dir/renderer.expected"
       [ "$(sha256sum <"$help_dir/renderer.actual")" = "$(sha256sum <"$help_dir/renderer.expected")" ] \
         || fail "framework help: renderer order or layout drifted"
-      printf '%s\n' "$actual" | grep -Fq "  help  List this flake's runnable commands" \
+      printf '%s\n' "$actual" | grep -Eq "^  help +List this flake's runnable commands$" \
         || fail "framework help: catalog omitted its own app"
       if printf '%s\n' "$actual" | grep -Fq "nix run .#"; then
         fail "framework help: catalog baked a caller-relative invocation"
@@ -142,7 +142,7 @@ pkgs.writeShellApplication {
     path_lock_before=$(sha256sum "$path_project/flake.lock")
     path_help=$(cd "$path_project" && nix run --no-write-lock-file .#help) \
       || fail "adoption: non-Git contextual help failed"
-    printf '%s\n' "$path_help" | grep -Fq "  smoke  Run the Nixfied task 'smoke'" \
+    printf '%s\n' "$path_help" | grep -Eq "^  smoke +Run the Nixfied task 'smoke'$" \
       || fail "adoption: non-Git contextual help omitted the exported task"
     [ "$(sha256sum "$path_project/flake.lock")" = "$path_lock_before" ] \
       || fail "adoption: non-Git contextual help modified the lock file"
@@ -185,9 +185,9 @@ pkgs.writeShellApplication {
     ' >/dev/null || fail "adoption: untouched scaffold app namespace was incomplete"
     scaffold_help=$(cd "$project" && nix run --no-write-lock-file .#help) \
       || fail "adoption: untouched scaffold help failed"
-    printf '%s\n' "$scaffold_help" | grep -Fq "  smoke  Run the Nixfied task 'smoke'" \
+    printf '%s\n' "$scaffold_help" | grep -Eq "^  smoke +Run the Nixfied task 'smoke'$" \
       || fail "adoption: untouched scaffold help omitted the exported task"
-    if printf '%s\n' "$scaffold_help" | grep -Fq "  merged  "; then
+    if printf '%s\n' "$scaffold_help" | grep -Eq '^  merged +'; then
       fail "adoption: untouched scaffold unexpectedly contained the merge fixture"
     fi
     if nix run "$checkout#install" -- --root "$project" >/dev/null 2>&1; then
@@ -225,9 +225,9 @@ pkgs.writeShellApplication {
     ) || fail "adoption: contextual project help failed"
     [ "$project_help" = "$project_help_expected" ] \
       || fail "adoption: contextual help did not match final project app metadata"
-    printf '%s\n' "$project_help" | grep -Fq "  help  " \
+    printf '%s\n' "$project_help" | grep -Eq "^  help +List this flake's runnable commands$" \
       || fail "adoption: contextual help omitted itself"
-    printf '%s\n' "$project_help" | grep -Fq "  merged  Merged adopter app" \
+    printf '%s\n' "$project_help" | grep -Eq '^  merged +Merged adopter app$' \
       || fail "adoption: contextual help omitted a post-projectApps merge"
     if wrong_context_error=$(
       cd "$checkout"

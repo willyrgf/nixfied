@@ -1,5 +1,16 @@
 apps:
 let
+  names = builtins.attrNames apps;
+  nameWidth = builtins.foldl' (
+    width: name:
+    let
+      length = builtins.stringLength name;
+    in
+    if length > width then length else width
+  ) 0 names;
+  padding =
+    name:
+    builtins.concatStringsSep "" (builtins.genList (_: " ") (nameWidth - builtins.stringLength name));
   render =
     name:
     let
@@ -18,8 +29,7 @@ let
           true;
     in
     builtins.seq validProgram (
-      builtins.seq validDescription "  ${name}  ${description}\n"
+      builtins.seq validDescription "  ${name}${padding name}  ${description}\n"
     );
 in
-"Available commands:\n\n"
-+ builtins.concatStringsSep "" (map render (builtins.attrNames apps))
+"Available commands:\n\n" + builtins.concatStringsSep "" (map render names)
