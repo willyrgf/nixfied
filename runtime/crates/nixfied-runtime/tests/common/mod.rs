@@ -31,6 +31,38 @@ pub fn runtime_binary() -> PathBuf {
         .join("nixfied-runtime")
 }
 
+pub fn test_child() -> PathBuf {
+    let configured = std::env::var_os("NIXFIED_TEST_CHILD")
+        .expect("NIXFIED_TEST_CHILD must name the Nix-built test fixture");
+    let configured = PathBuf::from(configured);
+    let canonical = configured.canonicalize().unwrap_or_else(|error| {
+        panic!(
+            "NIXFIED_TEST_CHILD {} should canonicalize: {error}",
+            configured.display()
+        )
+    });
+    let metadata = fs::metadata(&canonical).unwrap_or_else(|error| {
+        panic!(
+            "NIXFIED_TEST_CHILD {} should be inspectable: {error}",
+            canonical.display()
+        )
+    });
+    assert!(metadata.is_file(), "test child must be a regular file");
+    assert_ne!(
+        metadata.permissions().mode() & 0o111,
+        0,
+        "test child must be executable"
+    );
+    assert!(
+        canonical.starts_with("/nix/store"),
+        "test child must resolve under /nix/store, got {}",
+        canonical.display()
+    );
+    closure_root_for_store_executable(&canonical)
+        .expect("test child should have a Nix store closure root");
+    canonical
+}
+
 pub fn nix_store_executable(names: &[&str]) -> Option<PathBuf> {
     if let Some(executable) = std::env::var_os("PATH")
         .into_iter()

@@ -72,6 +72,12 @@
               config = resolveConfig module;
             };
         };
+      mkNixfiedTestChild =
+        pkgs:
+        import ./nix/packages/runtime.nix {
+          inherit pkgs;
+          packages = [ "nixfied-test-child" ];
+        };
     in
     {
       lib = forAllSystems mkNixfiedLib;
@@ -90,6 +96,7 @@
             inherit pkgs;
             buildType = "debug";
           };
+          nixfiedTestChild = mkNixfiedTestChild pkgs;
           minimalModel = nixfiedLib.compileModel ./examples/minimal/nixfied.nix;
           persistentEndpointModel = nixfiedLib.compileModel (
             { pkgs, ... }:
@@ -286,6 +293,7 @@
             inherit pkgs postgresTestModel;
             gate = nixfiedGate;
             runtime = nixfiedRuntimeDebug;
+            testChild = nixfiedTestChild;
           };
         in
         {
@@ -384,6 +392,9 @@
 
       devShells = forAllSystems (
         { pkgs, ... }:
+        let
+          nixfiedTestChild = mkNixfiedTestChild pkgs;
+        in
         {
           # The pinned toolchain (cargo/rustc/clippy/rustfmt) so the cargo floor
           # runs identically on every host and in CI, independent of host Rust.
@@ -395,6 +406,7 @@
               pkgs.git
               pkgs.python3
             ];
+            NIXFIED_TEST_CHILD = "${nixfiedTestChild}/bin/nixfied-test-child";
           };
         }
       );

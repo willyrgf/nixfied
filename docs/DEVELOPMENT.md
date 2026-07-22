@@ -24,6 +24,7 @@ nix/dev.nix                    local check, test, and ci app definitions
 runtime/crates/nixfied-model/   serde contract, validation, capability descriptor
 runtime/crates/nixfied-runtime/ admission and impure runtime behavior
 runtime/crates/nixfied-cli/     install CLI
+runtime/crates/nixfied-test-child/ private process/socket test fixture
 examples/                       downstream-shaped example models
 ```
 
@@ -51,6 +52,11 @@ Use `.#test` for the complete Cargo floor. It injects the realised Postgres mode
 required by `interrupt_and_recover_adopts_orphaned_postgres`; a raw
 `cargo test --workspace` without `NIXFIED_TEST_POSTGRES_MODEL` intentionally
 skips that case.
+
+Rust integration tests that exercise spawned process and socket behavior use a
+private Nix-built child executable. Run those tests through `nix develop` or
+`.#test`; raw Cargo outside that environment has no `NIXFIED_TEST_CHILD` fixture
+and fails loudly rather than skipping coverage.
 
 For a targeted Rust iteration inside the pinned development environment:
 

@@ -1,5 +1,6 @@
-# Reproducible, host-toolchain-free build of the runtime workspace binaries
-# (`nixfied-runtime`, `nixfied`).
+# Reproducible, host-toolchain-free build of selected runtime workspace binary
+# packages. `packages` defaults to the two shipped products
+# (`nixfied-runtime`, `nixfied`); private callers can select a narrower fixture.
 #
 # `buildType` selects the cargo profile: the default `"release"` is what
 # `.#install` ships to adopters; the framework's own CI path (flake checks and the
@@ -12,6 +13,10 @@
 {
   pkgs,
   buildType ? "release",
+  packages ? [
+    "nixfied-runtime"
+    "nixfied-cli"
+  ],
 }:
 let
   rustToolchain = (import ../toolchain.nix { inherit pkgs; }).build;
@@ -20,12 +25,14 @@ let
     rustc = rustToolchain;
   };
 in
+assert packages != [ ];
 rustPlatform.buildRustPackage {
-  pname = "nixfied-runtime";
+  pname = builtins.head packages;
   version = "0.1.0";
   src = ../../runtime;
   cargoLock.lockFile = ../../runtime/Cargo.lock;
   inherit buildType;
+  cargoBuildFlags = map (package: "--package=${package}") packages;
   # The white-box `cargo test` floor runs outside the build sandbox (it binds
   # ports and spawns process groups); here we only compile.
   doCheck = false;

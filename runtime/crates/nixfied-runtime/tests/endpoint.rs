@@ -5,7 +5,6 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::Mutex;
-use std::thread;
 use std::time::Duration;
 
 use nixfied_model::{Model, Validate};
@@ -16,56 +15,15 @@ use common::*;
 
 static ENDPOINT_TESTS: Mutex<()> = Mutex::new(());
 
-const HARNESS: &str = r#"
-import pathlib, socket, sys, time
-
-command = sys.argv[1]
-if command == "prepare":
-    sentinel = pathlib.Path(sys.argv[2])
-    acknowledgement = pathlib.Path(sys.argv[3])
-    sentinel.parent.mkdir(parents=True, exist_ok=True)
-    sentinel.touch()
-    if sys.argv[4] == "block":
-        deadline = time.monotonic() + 15
-        while not acknowledgement.exists():
-            if time.monotonic() >= deadline:
-                raise SystemExit(70)
-            time.sleep(0.02)
-elif command == "service":
-    listener = socket.socket()
-    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    listener.bind(("127.0.0.1", int(sys.argv[2])))
-    listener.listen(16)
-    if sys.argv[3] == "close":
-        time.sleep(0.6)
-        listener.close()
-        time.sleep(30)
-    else:
-        while True:
-            connection, _ = listener.accept()
-            if sys.argv[3] == "active-close":
-                connection.shutdown(socket.SHUT_WR)
-            else:
-                connection.recv(1)
-            connection.close()
-elif command == "task":
-    connection = socket.create_connection(("127.0.0.1", int(sys.argv[2])), timeout=5)
-    if sys.argv[3] == "active-close":
-        assert connection.recv(1) == b""
-    connection.close()
-"#;
-
 #[test]
 fn persistent_listener_blocks_an_independent_root_before_prepare_then_releases() {
     let _serial = ENDPOINT_TESTS.lock().unwrap();
-    let Some(python) = nix_store_executable(&["python3"]) else {
-        return;
-    };
+    let child = test_child();
     let temp = TempDir::new();
     let port = available_port_window(1);
     let model = write_endpoint_model(
         &temp.path,
-        &python,
+        &child,
         port,
         false,
         "persistent-until-down",
@@ -109,12 +67,10 @@ fn persistent_listener_blocks_an_independent_root_before_prepare_then_releases()
 #[test]
 fn concurrent_roots_have_one_prepare_winner_and_one_lock_loser() {
     let _serial = ENDPOINT_TESTS.lock().unwrap();
-    let Some(python) = nix_store_executable(&["python3"]) else {
-        return;
-    };
+    let child = test_child();
     let temp = TempDir::new();
     let port = available_port_window(1);
-    let model = write_endpoint_model(&temp.path, &python, port, true, "run-scoped", "hold");
+    let model = write_endpoint_model(&temp.path, &child, port, true, "run-scoped", "hold");
     let root_a = temp.path.join("root-a");
     let root_b = temp.path.join("root-b");
     fs::create_dir_all(&root_a).unwrap();
@@ -136,12 +92,10 @@ fn concurrent_roots_have_one_prepare_winner_and_one_lock_loser() {
 #[test]
 fn killing_runtime_during_prepare_releases_lock_not_inherited_by_child() {
     let _serial = ENDPOINT_TESTS.lock().unwrap();
-    let Some(python) = nix_store_executable(&["python3"]) else {
-        return;
-    };
+    let child = test_child();
     let temp = TempDir::new();
     let port = available_port_window(1);
-    let model = write_endpoint_model(&temp.path, &python, port, true, "run-scoped", "hold");
+    let model = write_endpoint_model(&temp.path, &child, port, true, "run-scoped", "hold");
     let root_a = temp.path.join("root-a");
     let root_b = temp.path.join("root-b");
     fs::create_dir_all(&root_a).unwrap();
@@ -182,12 +136,10 @@ fn killing_runtime_during_prepare_releases_lock_not_inherited_by_child() {
 #[test]
 fn external_bind_after_preflight_overrides_early_exit_with_port_conflict() {
     let _serial = ENDPOINT_TESTS.lock().unwrap();
-    let Some(python) = nix_store_executable(&["python3"]) else {
-        return;
-    };
+    let child = test_child();
     let temp = TempDir::new();
     let port = available_port_window(1);
-    let model = write_endpoint_model(&temp.path, &python, port, true, "run-scoped", "hold");
+    let model = write_endpoint_model(&temp.path, &child, port, true, "run-scoped", "hold");
     let root = temp.path.join("root");
     fs::create_dir_all(&root).unwrap();
 
@@ -215,15 +167,13 @@ fn external_bind_after_preflight_overrides_early_exit_with_port_conflict() {
 #[test]
 fn external_exact_and_wildcard_listeners_fail_before_prepare() {
     let _serial = ENDPOINT_TESTS.lock().unwrap();
-    let Some(python) = nix_store_executable(&["python3"]) else {
-        return;
-    };
+    let child = test_child();
     for address in ["127.0.0.1", "0.0.0.0"] {
         let temp = TempDir::new();
         let external = TcpListener::bind((address, 0)).unwrap();
         enable_address_reuse(&external);
         let port = external.local_addr().unwrap().port();
-        let model = write_endpoint_model(&temp.path, &python, port, false, "run-scoped", "hold");
+        let model = write_endpoint_model(&temp.path, &child, port, false, "run-scoped", "hold");
         let root = temp.path.join("root");
         fs::create_dir_all(&root).unwrap();
 
@@ -241,14 +191,12 @@ fn external_exact_and_wildcard_listeners_fail_before_prepare() {
 #[test]
 fn immediate_lifecycle_repeat_ignores_server_side_time_wait() {
     let _serial = ENDPOINT_TESTS.lock().unwrap();
-    let Some(python) = nix_store_executable(&["python3"]) else {
-        return;
-    };
+    let child = test_child();
     let temp = TempDir::new();
     let port = available_port_window(1);
     let model = write_endpoint_model(
         &temp.path,
-        &python,
+        &child,
         port,
         false,
         "run-scoped",
@@ -268,14 +216,12 @@ fn immediate_lifecycle_repeat_ignores_server_side_time_wait() {
 #[test]
 fn lost_listener_is_preserved_until_explicit_down_then_retry_succeeds() {
     let _serial = ENDPOINT_TESTS.lock().unwrap();
-    let Some(python) = nix_store_executable(&["python3"]) else {
-        return;
-    };
+    let child = test_child();
     let temp = TempDir::new();
     let port = available_port_window(1);
     let model = write_endpoint_model(
         &temp.path,
-        &python,
+        &child,
         port,
         false,
         "persistent-until-down",
@@ -292,8 +238,6 @@ fn lost_listener_is_preserved_until_explicit_down_then_retry_succeeds() {
         .unwrap()
         .to_string();
     let owner_pid = process_pid(&root, &first_process);
-    thread::sleep(Duration::from_millis(900));
-
     let lease_blocked = run_command(&model, &root).output().unwrap();
     assert_error_code(&lease_blocked, "LEASE_CONFLICT", 29);
     assert_eq!(
@@ -336,14 +280,12 @@ fn lost_listener_is_preserved_until_explicit_down_then_retry_succeeds() {
 #[test]
 fn active_borrower_blocks_nonreusable_service_without_signaling_owner() {
     let _serial = ENDPOINT_TESTS.lock().unwrap();
-    let Some(python) = nix_store_executable(&["python3"]) else {
-        return;
-    };
+    let child = test_child();
     let temp = TempDir::new();
     let port = available_port_window(1);
     let model = write_endpoint_model(
         &temp.path,
-        &python,
+        &child,
         port,
         false,
         "persistent-until-down",
@@ -355,8 +297,6 @@ fn active_borrower_blocks_nonreusable_service_without_signaling_owner() {
     let first = run_command(&model, &root).output().unwrap();
     assert_success(&first, "initial persistent owner");
     let (owner_pid, owner_process_key) = insert_active_borrower(&root, "run-active-borrower");
-    thread::sleep(Duration::from_millis(900));
-
     let blocked = run_command(&model, &root).output().unwrap();
     let error = assert_error_code(&blocked, "LEASE_CONFLICT", 29);
     assert!(
@@ -410,14 +350,12 @@ fn active_borrower_blocks_nonreusable_service_without_signaling_owner() {
 #[test]
 fn live_starting_service_is_not_promoted_or_borrowed() {
     let _serial = ENDPOINT_TESTS.lock().unwrap();
-    let Some(python) = nix_store_executable(&["python3"]) else {
-        return;
-    };
+    let child = test_child();
     let temp = TempDir::new();
     let port = available_port_window(1);
     let model = write_endpoint_model(
         &temp.path,
-        &python,
+        &child,
         port,
         false,
         "persistent-until-down",
@@ -469,14 +407,12 @@ fn live_starting_service_is_not_promoted_or_borrowed() {
 #[test]
 fn outside_listener_preserves_recorded_process_and_reports_conflict() {
     let _serial = ENDPOINT_TESTS.lock().unwrap();
-    let Some(python) = nix_store_executable(&["python3"]) else {
-        return;
-    };
+    let child = test_child();
     let temp = TempDir::new();
     let port = available_port_window(1);
     let model = write_endpoint_model(
         &temp.path,
-        &python,
+        &child,
         port,
         false,
         "persistent-until-down",
@@ -493,7 +429,6 @@ fn outside_listener_preserves_recorded_process_and_reports_conflict() {
         .unwrap()
         .to_string();
     let owner_pid = process_pid(&root, &first_process);
-    thread::sleep(Duration::from_millis(900));
     let external = TcpListener::bind(("127.0.0.1", port))
         .expect("external listener should replace the service socket");
     mark_open_leases_stale(&root);
@@ -527,12 +462,10 @@ fn outside_listener_preserves_recorded_process_and_reports_conflict() {
 #[test]
 fn missing_second_endpoint_never_commits_partial_ready_and_releases_locks() {
     let _serial = ENDPOINT_TESTS.lock().unwrap();
-    let Some(python) = nix_store_executable(&["python3"]) else {
-        return;
-    };
+    let child = test_child();
     let temp = TempDir::new();
     let port = available_port_window(2);
-    let model = write_multi_endpoint_model(&temp.path, &python, port);
+    let model = write_multi_endpoint_model(&temp.path, &child, port);
     let root = temp.path.join("root");
     fs::create_dir_all(&root).unwrap();
 
@@ -579,17 +512,21 @@ fn missing_second_endpoint_never_commits_partial_ready_and_releases_locks() {
 
 fn write_endpoint_model(
     directory: &Path,
-    python: &Path,
+    child: &Path,
     port: u16,
     blocking_prepare: bool,
     service_lifetime: &str,
     listener_behavior: &str,
 ) -> PathBuf {
-    let closure_root = closure_root_for_store_executable(python)
+    let closure_root = closure_root_for_store_executable(child)
         .expect("store executable should have a closure root");
+    let executable_name = child
+        .file_name()
+        .and_then(|name| name.to_str())
+        .expect("test child should have a UTF-8 file name");
     let mut value = synthetic_model(
-        &python.to_string_lossy(),
-        &["-c", HARNESS, "service", "${port}"],
+        &child.to_string_lossy(),
+        &["listen", "127.0.0.1", "${port}", "hold"],
         port,
         port,
     );
@@ -600,38 +537,72 @@ fn write_endpoint_model(
         "task.smoke.run"
     ]);
     value["services"]["synthetic"]["lifecycle"]["prepare"] = json!({ "task": "endpoint-prepare" });
-    value["services"]["synthetic"]["lifecycle"]["start"]["invocation"]["run"] = json!([
-        python.file_name().unwrap().to_string_lossy(),
-        "-c",
-        HARNESS,
-        "service",
-        "${port}",
-        listener_behavior
-    ]);
+    let (start_run, task_run) = match listener_behavior {
+        "hold" => (
+            json!([executable_name, "listen", "127.0.0.1", "${port}", "hold"]),
+            json!([executable_name, "connect", "127.0.0.1", "${port}", "close"]),
+        ),
+        "active-close" => (
+            json!([
+                executable_name,
+                "listen",
+                "127.0.0.1",
+                "${port}",
+                "active-close"
+            ]),
+            json!([
+                executable_name,
+                "connect",
+                "127.0.0.1",
+                "${port}",
+                "wait-eof"
+            ]),
+        ),
+        "close" => (
+            json!([
+                executable_name,
+                "listen",
+                "127.0.0.1",
+                "${port}",
+                "close-on-marker",
+                "${stateDir}/endpoint-listener-close",
+                "${stateDir}/endpoint-listener-closed"
+            ]),
+            json!([
+                executable_name,
+                "connect",
+                "127.0.0.1",
+                "${port}",
+                "close-and-signal",
+                "${stateDir}/endpoint-listener-close",
+                "${stateDir}/endpoint-listener-closed"
+            ]),
+        ),
+        behavior => panic!("unsupported endpoint listener behavior {behavior:?}"),
+    };
+    value["services"]["synthetic"]["lifecycle"]["start"]["invocation"]["run"] = start_run;
     value["tasks"]["smoke"]["serviceLifetime"] = json!(service_lifetime);
-    value["tasks"]["smoke"]["invocation"]["run"] = json!([
-        python.file_name().unwrap().to_string_lossy(),
-        "-c",
-        HARNESS,
-        "task",
-        "${port}",
-        listener_behavior
-    ]);
+    value["tasks"]["smoke"]["invocation"]["run"] = task_run;
     let mut prepare = value["tasks"]["smoke"].clone();
     prepare["serviceLifetime"] = json!("run-scoped");
     prepare["operationId"] = json!("task.endpoint-prepare.run");
     prepare["requires"] = json!([]);
     prepare["servicesRequired"] = json!([]);
     prepare["logRefs"] = json!(["task.endpoint-prepare"]);
-    prepare["invocation"]["run"] = json!([
-        python.file_name().unwrap().to_string_lossy(),
-        "-c",
-        HARNESS,
-        "prepare",
-        "${stateDir}/endpoint-prepare-sentinel",
-        "${stateDir}/endpoint-prepare-ack",
-        if blocking_prepare { "block" } else { "pass" }
-    ]);
+    prepare["invocation"]["run"] = if blocking_prepare {
+        json!([
+            executable_name,
+            "prepare",
+            "${stateDir}/endpoint-prepare-sentinel",
+            "${stateDir}/endpoint-prepare-ack"
+        ])
+    } else {
+        json!([
+            executable_name,
+            "prepare",
+            "${stateDir}/endpoint-prepare-sentinel"
+        ])
+    };
     value["tasks"]["endpoint-prepare"] = prepare;
 
     let model: Model = serde_json::from_value(value).expect("endpoint model should parse");
@@ -641,8 +612,8 @@ fn write_endpoint_model(
     path
 }
 
-fn write_multi_endpoint_model(directory: &Path, python: &Path, port: u16) -> PathBuf {
-    let path = write_endpoint_model(directory, python, port, false, "run-scoped", "hold");
+fn write_multi_endpoint_model(directory: &Path, child: &Path, port: u16) -> PathBuf {
+    let path = write_endpoint_model(directory, child, port, false, "run-scoped", "hold");
     let mut value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
     value["placement"]["slotPlacements"]["0"]["candidatePorts"]["end"] = json!(port + 1);
     value["services"]["synthetic"]["endpoints"]["admin"] = json!({

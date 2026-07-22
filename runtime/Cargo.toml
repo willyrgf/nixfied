@@ -4,6 +4,7 @@ members = [
   "crates/nixfied-cli",
   "crates/nixfied-model",
   "crates/nixfied-runtime",
+  "crates/nixfied-test-child",
 ]
 
 [workspace.package]

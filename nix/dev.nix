@@ -10,6 +10,7 @@
   pkgs,
   gate,
   runtime,
+  testChild,
   postgresTestModel,
 }:
 let
@@ -27,6 +28,7 @@ let
       pkgs.git
     ];
     text = ''
+      NIXFIED_TEST_CHILD="${testChild}/bin/nixfied-test-child" \
       NIXFIED_TEST_POSTGRES_MODEL="${postgresTestModel}" \
         cargo test --manifest-path runtime/Cargo.toml --workspace "$@"
     '';
