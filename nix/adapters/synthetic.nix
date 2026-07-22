@@ -39,17 +39,14 @@ let
                           )
                       else:
                           conn.sendall(b"ok\n")
-                      # Let the client actively close after consuming the
-                      # response, so the service endpoint does not retain a
-                      # server-side TIME_WAIT claim after `down`.
-                      while conn.recv(4096):
-                          pass
+                      conn.shutdown(socket.SHUT_WR)
 
 
       def run_task(args):
           with socket.create_connection((args.host, args.port), timeout=5) as conn:
               conn.sendall(b"smoke\n")
-              sys.stdout.write(conn.recv(4096).decode("utf-8", "replace"))
+              with conn.makefile("rb") as response:
+                  sys.stdout.write(response.read().decode("utf-8", "replace"))
 
 
       parser = argparse.ArgumentParser(prog="nixfied-synthetic-helper")

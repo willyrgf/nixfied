@@ -1,5 +1,7 @@
 use std::fs;
+use std::io;
 use std::net::TcpListener;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::Mutex;
@@ -41,10 +43,15 @@ elif command == "service":
     else:
         while True:
             connection, _ = listener.accept()
-            connection.recv(1)
+            if sys.argv[3] == "active-close":
+                connection.shutdown(socket.SHUT_WR)
+            else:
+                connection.recv(1)
             connection.close()
 elif command == "task":
     connection = socket.create_connection(("127.0.0.1", int(sys.argv[2])), timeout=5)
+    if sys.argv[3] == "active-close":
+        assert connection.recv(1) == b""
     connection.close()
 "#;
 
@@ -62,7 +69,7 @@ fn persistent_listener_blocks_an_independent_root_before_prepare_then_releases()
         port,
         false,
         "persistent-until-down",
-        false,
+        "hold",
     );
     let root_a = temp.path.join("root-a");
     let root_b = temp.path.join("root-b");
@@ -107,7 +114,7 @@ fn concurrent_roots_have_one_prepare_winner_and_one_lock_loser() {
     };
     let temp = TempDir::new();
     let port = available_port_window(1);
-    let model = write_endpoint_model(&temp.path, &python, port, true, "run-scoped", false);
+    let model = write_endpoint_model(&temp.path, &python, port, true, "run-scoped", "hold");
     let root_a = temp.path.join("root-a");
     let root_b = temp.path.join("root-b");
     fs::create_dir_all(&root_a).unwrap();
@@ -134,7 +141,7 @@ fn killing_runtime_during_prepare_releases_lock_not_inherited_by_child() {
     };
     let temp = TempDir::new();
     let port = available_port_window(1);
-    let model = write_endpoint_model(&temp.path, &python, port, true, "run-scoped", false);
+    let model = write_endpoint_model(&temp.path, &python, port, true, "run-scoped", "hold");
     let root_a = temp.path.join("root-a");
     let root_b = temp.path.join("root-b");
     fs::create_dir_all(&root_a).unwrap();
@@ -180,7 +187,7 @@ fn external_bind_after_preflight_overrides_early_exit_with_port_conflict() {
     };
     let temp = TempDir::new();
     let port = available_port_window(1);
-    let model = write_endpoint_model(&temp.path, &python, port, true, "run-scoped", false);
+    let model = write_endpoint_model(&temp.path, &python, port, true, "run-scoped", "hold");
     let root = temp.path.join("root");
     fs::create_dir_all(&root).unwrap();
 
@@ -206,26 +213,56 @@ fn external_bind_after_preflight_overrides_early_exit_with_port_conflict() {
 }
 
 #[test]
-fn external_listener_fails_before_prepare_with_no_owner_attribution() {
+fn external_exact_and_wildcard_listeners_fail_before_prepare() {
+    let _serial = ENDPOINT_TESTS.lock().unwrap();
+    let Some(python) = nix_store_executable(&["python3"]) else {
+        return;
+    };
+    for address in ["127.0.0.1", "0.0.0.0"] {
+        let temp = TempDir::new();
+        let external = TcpListener::bind((address, 0)).unwrap();
+        enable_address_reuse(&external);
+        let port = external.local_addr().unwrap().port();
+        let model = write_endpoint_model(&temp.path, &python, port, false, "run-scoped", "hold");
+        let root = temp.path.join("root");
+        fs::create_dir_all(&root).unwrap();
+
+        let output = run_command(&model, &root).output().unwrap();
+        let error = assert_port_conflict(&output, "listener-occupied", port);
+        assert!(find_named(&root, "endpoint-prepare-sentinel").is_none());
+        assert!(
+            error["details"]["portConflict"]
+                .get("nixfiedOwner")
+                .is_none()
+        );
+    }
+}
+
+#[test]
+fn immediate_lifecycle_repeat_ignores_server_side_time_wait() {
     let _serial = ENDPOINT_TESTS.lock().unwrap();
     let Some(python) = nix_store_executable(&["python3"]) else {
         return;
     };
     let temp = TempDir::new();
-    let external = TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = external.local_addr().unwrap().port();
-    let model = write_endpoint_model(&temp.path, &python, port, false, "run-scoped", false);
+    let port = available_port_window(1);
+    let model = write_endpoint_model(
+        &temp.path,
+        &python,
+        port,
+        false,
+        "run-scoped",
+        "active-close",
+    );
     let root = temp.path.join("root");
     fs::create_dir_all(&root).unwrap();
 
-    let output = run_command(&model, &root).output().unwrap();
-    let error = assert_port_conflict(&output, "listener-occupied", port);
-    assert!(find_named(&root, "endpoint-prepare-sentinel").is_none());
-    assert!(
-        error["details"]["portConflict"]
-            .get("nixfiedOwner")
-            .is_none()
-    );
+    let first = run_command(&model, &root).output().unwrap();
+    assert_success(&first, "first active-close lifecycle");
+    assert_nonreusable_bind_is_occupied(port);
+
+    let second = run_command(&model, &root).output().unwrap();
+    assert_success(&second, "immediate lifecycle repeat");
 }
 
 #[test]
@@ -242,7 +279,7 @@ fn lost_listener_is_preserved_until_explicit_down_then_retry_succeeds() {
         port,
         false,
         "persistent-until-down",
-        true,
+        "close",
     );
     let root = temp.path.join("root");
     fs::create_dir_all(&root).unwrap();
@@ -310,7 +347,7 @@ fn active_borrower_blocks_nonreusable_service_without_signaling_owner() {
         port,
         false,
         "persistent-until-down",
-        true,
+        "close",
     );
     let root = temp.path.join("root");
     fs::create_dir_all(&root).unwrap();
@@ -384,7 +421,7 @@ fn live_starting_service_is_not_promoted_or_borrowed() {
         port,
         false,
         "persistent-until-down",
-        false,
+        "hold",
     );
     let root = temp.path.join("root");
     fs::create_dir_all(&root).unwrap();
@@ -443,7 +480,7 @@ fn outside_listener_preserves_recorded_process_and_reports_conflict() {
         port,
         false,
         "persistent-until-down",
-        true,
+        "close",
     );
     let root = temp.path.join("root");
     fs::create_dir_all(&root).unwrap();
@@ -546,7 +583,7 @@ fn write_endpoint_model(
     port: u16,
     blocking_prepare: bool,
     service_lifetime: &str,
-    close_listener: bool,
+    listener_behavior: &str,
 ) -> PathBuf {
     let closure_root = closure_root_for_store_executable(python)
         .expect("store executable should have a closure root");
@@ -569,7 +606,7 @@ fn write_endpoint_model(
         HARNESS,
         "service",
         "${port}",
-        if close_listener { "close" } else { "hold" }
+        listener_behavior
     ]);
     value["tasks"]["smoke"]["serviceLifetime"] = json!(service_lifetime);
     value["tasks"]["smoke"]["invocation"]["run"] = json!([
@@ -577,7 +614,8 @@ fn write_endpoint_model(
         "-c",
         HARNESS,
         "task",
-        "${port}"
+        "${port}",
+        listener_behavior
     ]);
     let mut prepare = value["tasks"]["smoke"].clone();
     prepare["serviceLifetime"] = json!("run-scoped");
@@ -604,7 +642,7 @@ fn write_endpoint_model(
 }
 
 fn write_multi_endpoint_model(directory: &Path, python: &Path, port: u16) -> PathBuf {
-    let path = write_endpoint_model(directory, python, port, false, "run-scoped", false);
+    let path = write_endpoint_model(directory, python, port, false, "run-scoped", "hold");
     let mut value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
     value["placement"]["slotPlacements"]["0"]["candidatePorts"]["end"] = json!(port + 1);
     value["services"]["synthetic"]["endpoints"]["admin"] = json!({
@@ -618,6 +656,55 @@ fn write_multi_endpoint_model(directory: &Path, python: &Path, port: u16) -> Pat
     let path = directory.join("multi-endpoint-model.json");
     fs::write(&path, serde_json::to_vec_pretty(&model).unwrap()).unwrap();
     path
+}
+
+fn enable_address_reuse(listener: &TcpListener) {
+    let enabled: libc::c_int = 1;
+    assert_eq!(
+        unsafe {
+            libc::setsockopt(
+                listener.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_REUSEADDR,
+                std::ptr::from_ref(&enabled).cast(),
+                std::mem::size_of_val(&enabled) as libc::socklen_t,
+            )
+        },
+        0,
+        "test listener should enable address reuse: {}",
+        io::Error::last_os_error()
+    );
+}
+
+fn assert_nonreusable_bind_is_occupied(port: u16) {
+    let raw = unsafe { libc::socket(libc::AF_INET, libc::SOCK_STREAM, libc::IPPROTO_TCP) };
+    assert!(
+        raw >= 0,
+        "test socket should open: {}",
+        io::Error::last_os_error()
+    );
+    let socket = unsafe { OwnedFd::from_raw_fd(raw) };
+    let mut address: libc::sockaddr_in = unsafe { std::mem::zeroed() };
+    #[cfg(target_os = "macos")]
+    {
+        address.sin_len = std::mem::size_of::<libc::sockaddr_in>() as u8;
+    }
+    address.sin_family = libc::AF_INET as libc::sa_family_t;
+    address.sin_port = port.to_be();
+    address.sin_addr.s_addr = u32::from_ne_bytes([127, 0, 0, 1]);
+    let result = unsafe {
+        libc::bind(
+            socket.as_raw_fd(),
+            std::ptr::from_ref(&address).cast(),
+            std::mem::size_of_val(&address) as libc::socklen_t,
+        )
+    };
+    assert_ne!(result, 0, "non-reuse bind unexpectedly succeeded");
+    assert_eq!(
+        io::Error::last_os_error().raw_os_error(),
+        Some(libc::EADDRINUSE),
+        "non-reuse bind should be blocked by server-side TIME_WAIT"
+    );
 }
 
 fn run_command(model: &Path, state_root: &Path) -> Command {

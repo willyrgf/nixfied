@@ -773,37 +773,27 @@ pub(crate) fn preflight<'a>(
     if endpoints.is_empty() {
         return Ok(());
     }
-    // Observer support is part of admission to service mutation even when the
-    // point-in-time bind succeeds.
-    platform_snapshot().map_err(|message| EndpointFailure::unverifiable(None, message))?;
     for endpoint in endpoints {
-        match bind_exact(endpoint) {
-            Ok(BindResult::Available) => {}
-            Ok(BindResult::AddressInUse) => {
-                let listeners =
-                    stable_matching_snapshot(&[endpoint], false).map_err(|message| {
-                        EndpointFailure::unverifiable(Some(endpoint.clone()), message)
-                    })?;
-                if listeners.is_empty() {
-                    return Err(EndpointFailure::unverifiable(
-                        Some(endpoint.clone()),
-                        format!(
-                            "bind reported address in use for {}:{} without an observable listener",
-                            endpoint.host, endpoint.port
-                        ),
-                    ));
-                }
-                return Err(EndpointFailure::ListenerOccupied {
-                    endpoint: endpoint.clone(),
-                    listeners,
-                });
-            }
-            Err(message) => {
-                return Err(EndpointFailure::unverifiable(
-                    Some(endpoint.clone()),
-                    message,
-                ));
-            }
+        let bind = bind_exact(endpoint)
+            .map_err(|message| EndpointFailure::unverifiable(Some(endpoint.clone()), message))?;
+        // A reusable exact bind can coexist with a wildcard listener on some
+        // hosts, so the kernel listener view remains the conflict authority.
+        let listeners = stable_matching_snapshot(&[endpoint], false)
+            .map_err(|message| EndpointFailure::unverifiable(Some(endpoint.clone()), message))?;
+        if !listeners.is_empty() {
+            return Err(EndpointFailure::ListenerOccupied {
+                endpoint: endpoint.clone(),
+                listeners,
+            });
+        }
+        if matches!(bind, BindResult::AddressInUse) {
+            return Err(EndpointFailure::unverifiable(
+                Some(endpoint.clone()),
+                format!(
+                    "bind reported address in use for {}:{} without an observable listener",
+                    endpoint.host, endpoint.port
+                ),
+            ));
         }
     }
     Ok(())
@@ -901,6 +891,24 @@ fn bind_exact(endpoint: &SelectedEndpoint) -> Result<BindResult, String> {
     let socket = unsafe { OwnedFd::from_raw_fd(raw) };
     #[cfg(not(target_os = "linux"))]
     set_cloexec(socket.as_raw_fd())?;
+    let reuse: libc::c_int = 1;
+    // SAFETY: `socket` is live and `reuse` has the type and size required by
+    // SO_REUSEADDR.
+    let reused = unsafe {
+        libc::setsockopt(
+            socket.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_REUSEADDR,
+            (&raw const reuse).cast(),
+            std::mem::size_of_val(&reuse) as libc::socklen_t,
+        )
+    };
+    if reused < 0 {
+        return Err(format!(
+            "failed to enable address reuse for endpoint preflight socket: {}",
+            io::Error::last_os_error()
+        ));
+    }
     let result = match endpoint.host.ip() {
         IpAddr::V4(address) => {
             // SAFETY: zero is a valid initial representation; every field bind

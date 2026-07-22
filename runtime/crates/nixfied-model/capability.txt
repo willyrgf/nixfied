@@ -78,7 +78,7 @@ output-schema run-error-summary-text: error
 # the atomic ready transition. Kernel listeners remain steady-state ownership.
 # Reuse requires exact listener/process/containment/endpoint proof and a guarded
 # registry CAS. Linux observes SOCK_DIAG; macOS observes pcblist_n.
-endpoint-acquisition: fixed-euid-startup-lock exact-bind-preflight linux-sock-diag macos-pcblist-n socket-steady-state
+endpoint-acquisition: fixed-euid-startup-lock reuseaddr-exact-bind-preflight linux-sock-diag macos-pcblist-n socket-steady-state
 endpoint-reuse: exact-listener process-identity containment complete-active-endpoint-set guarded-cas
 lease-authority: open-lease-blocks-replacement exact-reuse-adds-borrower expired-processless-reservation-reconciled
 escape-settlement: exact-process-identity expected-active-prestate atomic-process-run-event ports-retained affected-row-validation

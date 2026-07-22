@@ -123,8 +123,10 @@ when the model/runtime contract changes.
   state identity, runtime compatibility hash, and target identity.
 - **PORT-1:** when a service declares endpoints, startup is serialized by a host
   endpoint lock and readiness requires exact kernel-observed ownership of every
-  endpoint. An open port alone is insufficient. Wildcard listeners conflict
-  with, but never satisfy, an exact endpoint.
+  endpoint. Exact-bind preflight uses `SO_REUSEADDR` so compatible TCP
+  `TIME_WAIT` state does not block restart, then independently rejects a stable
+  exact or wildcard listener snapshot even when bind succeeds. An open port
+  alone is insufficient; a wildcard listener never satisfies an exact endpoint.
 - Endpoint acquisition never signals an existing service to resolve collision or
   ownership mismatch. A live service that is not exactly reusable requires an
   explicit `down` before replacement.

@@ -217,12 +217,15 @@ Every runtime action is scoped by `projectId / environment / slot / runId`.
   per-state-root registry reservations are insufficient because TCP endpoints
   are host resources. A fixed per-euid endpoint lock serializes
   service-specific mutation across independent roots; Linux `SOCK_DIAG` and
-  macOS `net.inet.tcp.pcblist_n` provide kernel listener truth. A service is
-  ready only when its probe succeeds and every exact endpoint is held by the
-  expected containment. Wildcards conflict but do not satisfy an exact
-  declaration. Complete observation with no exact listener remains pending and
-  ends as `READINESS_TIMEOUT`; incomplete ownership proof is
-  `PORT_UNVERIFIABLE`. Locks end after the atomic ready commit; sockets remain
+  macOS `net.inet.tcp.pcblist_n` provide kernel listener truth. Exact-bind
+  preflight enables `SO_REUSEADDR` so compatible `TIME_WAIT` residue from a
+  stopped service does not masquerade as a live conflict. A stable listener
+  snapshot remains authoritative after either bind outcome: exact and wildcard
+  listeners conflict, while readiness requires a successful probe and exact
+  ownership of every endpoint by the expected containment. Complete observation
+  with no exact listener remains pending and ends as `READINESS_TIMEOUT`;
+  incomplete ownership proof is `PORT_UNVERIFIABLE`. Locks end after the atomic
+  ready commit; sockets remain
   steady-state ownership. The lock is transient coordination, never durable
   service identity, liveness evidence, or owner attribution; the registry
   remains the only durable runtime authority.
