@@ -1,6 +1,6 @@
 use std::env;
 use std::fs;
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::net::{Ipv4Addr, Shutdown, SocketAddrV4, TcpListener, TcpStream};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
@@ -24,6 +24,9 @@ fn run(args: Vec<String>) -> Result<(), String> {
         "prepare" => prepare(args),
         "listen" => listen(args),
         "connect" => connect(args),
+        "output" => output(args),
+        "exit" => exit_with(args),
+        "block" => block(args),
         _ => Err(format!("unsupported command {command:?}")),
     }
 }
@@ -42,9 +45,7 @@ fn prepare(args: &[String]) -> Result<(), String> {
 
 fn listen(args: &[String]) -> Result<(), String> {
     let [address, port, mode, tail @ ..] = args else {
-        return Err(
-            "listen expects ADDRESS PORT (hold|active-close|close-on-marker REQUEST CLOSED)".into(),
-        );
+        return Err("listen expects ADDRESS PORT MODE [MODE-ARGUMENTS]".into());
     };
     let address = parse_address(address)?;
     let port = parse_port(port)?;
@@ -56,7 +57,67 @@ fn listen(args: &[String]) -> Result<(), String> {
         ("close-on-marker", [request, closed]) => {
             close_on_marker(listener, Path::new(request), Path::new(closed))
         }
+        ("ready-on-marker", [bound, acknowledgement, ready]) => ready_on_marker(
+            listener,
+            Path::new(bound),
+            Path::new(acknowledgement),
+            Path::new(ready),
+        ),
         _ => Err(format!("invalid listen mode or arguments: {mode:?}")),
+    }
+}
+
+fn output(args: &[String]) -> Result<(), String> {
+    match args {
+        [mode, stdout, stderr] if mode == "literal" => {
+            io::stdout()
+                .write_all(stdout.as_bytes())
+                .map_err(|error| format!("write stdout: {error}"))?;
+            io::stderr()
+                .write_all(stderr.as_bytes())
+                .map_err(|error| format!("write stderr: {error}"))
+        }
+        [mode, name] if mode == "env" => {
+            let value = env::var_os(name)
+                .ok_or_else(|| format!("environment variable {name:?} is not set"))?;
+            io::stdout()
+                .write_all(value.to_string_lossy().as_bytes())
+                .map_err(|error| format!("write stdout: {error}"))
+        }
+        [mode] if mode == "environment" => {
+            let mut variables = env::vars_os()
+                .map(|(name, value)| {
+                    format!("{}={}", name.to_string_lossy(), value.to_string_lossy())
+                })
+                .collect::<Vec<_>>();
+            variables.sort();
+            io::stdout()
+                .write_all(variables.join(";").as_bytes())
+                .map_err(|error| format!("write stdout: {error}"))
+        }
+        [mode] if mode == "stdin" => io::copy(&mut io::stdin().lock(), &mut io::stdout().lock())
+            .map(|_| ())
+            .map_err(|error| format!("copy stdin: {error}")),
+        _ => Err("output expects literal STDOUT STDERR, env NAME, environment, or stdin".into()),
+    }
+}
+
+fn exit_with(args: &[String]) -> Result<(), String> {
+    let [code] = args else {
+        return Err("exit expects CODE".into());
+    };
+    let code = code
+        .parse::<u8>()
+        .map_err(|error| format!("invalid exit code {code:?}: {error}"))?;
+    std::process::exit(i32::from(code));
+}
+
+fn block(args: &[String]) -> Result<(), String> {
+    if !args.is_empty() {
+        return Err("block expects no arguments".into());
+    }
+    loop {
+        thread::park();
     }
 }
 
@@ -139,6 +200,21 @@ fn close_on_marker(listener: TcpListener, request: &Path, closed: &Path) -> Resu
             Err(error) => return Err(format!("accept connection: {error}")),
         }
     }
+}
+
+fn ready_on_marker(
+    listener: TcpListener,
+    bound: &Path,
+    acknowledgement: &Path,
+    ready: &Path,
+) -> Result<(), String> {
+    remove_if_present(bound)?;
+    remove_if_present(acknowledgement)?;
+    remove_if_present(ready)?;
+    touch(bound)?;
+    wait_for_path(acknowledgement, MARKER_TIMEOUT)?;
+    touch(ready)?;
+    accept_forever(listener, false)
 }
 
 fn remove_if_present(path: &Path) -> Result<(), String> {

@@ -187,14 +187,10 @@ fn service_start_rejects_exec_cwd_escape() {
 
 #[test]
 fn readiness_probe_marks_ready_only_after_endpoint_ownership() {
-    let Some(python) = python3_path() else {
-        return;
-    };
     let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
     let port = listener.local_addr().expect("local addr").port();
     drop(listener);
-    let script = python_listener_script();
-    let mut fixture = ServiceFixture::new(python, &["-c", script, "${port}"], port);
+    let mut fixture = test_child_listener_fixture(port);
     let mut service = start_synthetic_service(
         &fixture.model,
         &fixture.admission,
@@ -256,12 +252,8 @@ fn readiness_probe_marks_ready_only_after_endpoint_ownership() {
 
 #[test]
 fn ready_activation_rejects_unexpected_open_endpoint_rows_atomically() {
-    let Some(python) = python3_path() else {
-        return;
-    };
     let port = available_port_window(2);
-    let mut fixture =
-        ServiceFixture::new(python, &["-c", python_listener_script(), "${port}"], port);
+    let mut fixture = test_child_listener_fixture(port);
     let mut service = start_synthetic_service(
         &fixture.model,
         &fixture.admission,
@@ -315,12 +307,8 @@ fn ready_activation_rejects_unexpected_open_endpoint_rows_atomically() {
 
 #[test]
 fn ready_activation_rejects_raced_port_owner_atomically() {
-    let Some(python) = python3_path() else {
-        return;
-    };
     let port = available_port_window(1);
-    let mut fixture =
-        ServiceFixture::new(python, &["-c", python_listener_script(), "${port}"], port);
+    let mut fixture = test_child_listener_fixture(port);
     let mut service = start_synthetic_service(
         &fixture.model,
         &fixture.admission,
@@ -374,12 +362,8 @@ fn ready_activation_rejects_raced_port_owner_atomically() {
 
 #[test]
 fn lifecycle_events_follow_declared_class_order_and_clean_terminal() {
-    let Some(python) = python3_path() else {
-        return;
-    };
     let port = 45000 + (unique_suffix() % 1000) as u16;
-    let script = python_listener_script();
-    let mut fixture = ServiceFixture::new(python, &["-c", script, "${port}"], port);
+    let mut fixture = test_child_listener_fixture(port);
     let mut service = start_synthetic_service(
         &fixture.model,
         &fixture.admission,
@@ -493,14 +477,10 @@ fn lifecycle_events_follow_declared_class_order_and_clean_terminal() {
 
 #[test]
 fn same_registry_proven_listener_reports_complete_nixfied_owner() {
-    let Some(python) = python3_path() else {
-        return;
-    };
     let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
     let port = listener.local_addr().expect("local addr").port();
     drop(listener);
-    let mut fixture =
-        ServiceFixture::new(python, &["-c", python_listener_script(), "${port}"], port);
+    let mut fixture = test_child_listener_fixture(port);
     let mut owner = start_synthetic_service(
         &fixture.model,
         &fixture.admission,
@@ -590,14 +570,10 @@ fn same_registry_proven_listener_reports_complete_nixfied_owner() {
 
 #[test]
 fn wildcard_listener_does_not_satisfy_loopback_endpoint_ownership() {
-    let Some(python) = python3_path() else {
-        return;
-    };
     let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
     let port = listener.local_addr().expect("local addr").port();
     drop(listener);
-    let script = python_wildcard_listener_script();
-    let mut fixture = ServiceFixture::new(python, &["-c", script, "${port}"], port);
+    let mut fixture = test_child_wildcard_listener_fixture(port);
     let mut service = start_synthetic_service(
         &fixture.model,
         &fixture.admission,
@@ -685,12 +661,8 @@ fn slot_one_service_uses_slot_placement_port_window() {
 
 #[test]
 fn two_slots_keep_services_state_and_controls_isolated() {
-    let python = python3_path()
-        .map(str::to_string)
-        .or_else(python3_from_path)
-        .expect("python3 is required for the M1 slot isolation proof");
     let tmp = TempDir::new();
-    let mut value = fixture_model(&python, &["-c", python_listener_script(), "${port}"], 23210);
+    let mut value = test_child_listener_value(23210);
     add_slot_one(&mut value, 23310, 23320);
     let model: Model = serde_json::from_value(value).expect("fixture model should parse");
     let admission = admission(&model, &tmp.path);
@@ -797,18 +769,11 @@ fn service_instance_identity_includes_selected_slot() {
 
 #[test]
 fn dependent_task_runs_after_owned_service_is_ready() {
-    let Some(python) = python3_path() else {
-        return;
-    };
     let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
     let port = listener.local_addr().expect("local addr").port();
     drop(listener);
-    let script = python_listener_script();
-    let mut fixture = ServiceFixture::new(python, &["-c", script, "${port}"], port);
-    set_smoke_args(
-        &mut fixture.model,
-        &["-c", "import sys; sys.stdout.write('task-ok')"],
-    );
+    let mut fixture = test_child_listener_fixture(port);
+    set_smoke_args(&mut fixture.model, &["output", "literal", "task-ok", ""]);
     fixture.relower();
     let mut service = start_synthetic_service(
         &fixture.model,
@@ -1024,18 +989,25 @@ fn probe_shell_invocation(run: Value) -> Value {
 
 #[test]
 fn exec_ready_probe_gates_on_flag_and_marks_ready() {
-    let Some(python) = python3_path() else {
-        return;
-    };
     let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
     let port = listener.local_addr().expect("local addr").port();
     drop(listener);
     // The service binds its endpoint immediately but signals readiness only via
-    // the flag file it touches afterwards — exactly what a tcp probe cannot see.
-    let script = "import socket, sys, time, pathlib; s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(('127.0.0.1', int(sys.argv[1]))); s.listen(16); time.sleep(0.3); pathlib.Path(sys.argv[2]).touch(); time.sleep(30)";
+    // a marker acknowledgement — exactly what a tcp probe cannot see.
+    let child = test_child();
     let value = exec_probe_fixture_value(
-        python,
-        &["-c", script, "${port}", "${stateDir}/ready-flag"],
+        child
+            .to_str()
+            .expect("test child store path should be valid UTF-8"),
+        &[
+            "listen",
+            "127.0.0.1",
+            "${port}",
+            "ready-on-marker",
+            "${stateDir}/listener-bound",
+            "${stateDir}/ready-ack",
+            "${stateDir}/ready-flag",
+        ],
         port,
         json!([
             "-c",
@@ -1056,9 +1028,32 @@ fn exec_ready_probe_gates_on_flag_and_marks_ready() {
     )
     .expect("service should start");
 
+    let listener_bound = fixture.placement.state_root.join("listener-bound");
+    let ready_ack = fixture.placement.state_root.join("ready-ack");
+    let ready_flag = fixture.placement.state_root.join("ready-flag");
+    assert!(
+        wait_for_path(&listener_bound, Duration::from_secs(5)),
+        "service child should announce the bound listener"
+    );
+    assert!(!ready_flag.exists(), "listener bind must precede readiness");
+    let first_probe_log = fixture
+        .placement
+        .logs_dir
+        .join("lifecycle.ready.probe.stdout.log");
+    let acknowledge = thread::spawn(move || {
+        assert!(
+            wait_for_path(&first_probe_log, Duration::from_secs(5)),
+            "the exec probe should fail at least once before acknowledgement"
+        );
+        fs::write(ready_ack, b"ready").expect("test should acknowledge readiness");
+    });
+
     service
         .wait_for_probe_ready(&mut fixture.registry)
         .expect("exec probe should succeed once the flag appears");
+    acknowledge
+        .join()
+        .expect("readiness acknowledger should join");
 
     let process_status: String = fixture
         .registry
@@ -1127,15 +1122,12 @@ fn exec_ready_probe_failure_times_out_and_records_failed() {
 
 #[test]
 fn exec_health_probe_failure_records_failed() {
-    let Some(python) = python3_path() else {
-        return;
-    };
     let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
     let port = listener.local_addr().expect("local addr").port();
     drop(listener);
     // The service is ready (tcp) but never healthy: the failed run must leave
     // service.failed evidence, not a clean stopped/completed registry state.
-    let mut value = fixture_model(python, &["-c", python_listener_script(), "${port}"], port);
+    let mut value = test_child_listener_value(port);
     add_probe_shell_closure(&mut value, "service.synthetic.health");
     value["services"]["synthetic"]["lifecycle"]["health"]["probe"] = json!({
         "kind": "exec",
@@ -2174,14 +2166,10 @@ fn duplicate_active_service_start_is_refused() {
 
 #[test]
 fn probe_ready_service_can_be_borrowed_by_exact_matching_run() {
-    let Some(python) = python3_path() else {
-        return;
-    };
     let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
     let port = listener.local_addr().expect("local addr").port();
     drop(listener);
-    let mut fixture =
-        ServiceFixture::new(python, &["-c", python_listener_script(), "${port}"], port);
+    let mut fixture = test_child_listener_fixture(port);
     let mut owner = start_synthetic_service(
         &fixture.model,
         &fixture.admission,
@@ -2280,13 +2268,9 @@ fn probe_ready_service_can_be_borrowed_by_exact_matching_run() {
 
 #[test]
 fn probe_ready_service_with_different_planned_port_is_not_reused() {
-    let Some(python) = python3_path() else {
-        return;
-    };
     let port_a = available_port_window(2);
     let port_b = port_a + 1;
-    let mut fixture =
-        ServiceFixture::new(python, &["-c", python_listener_script(), "${port}"], port_a);
+    let mut fixture = test_child_listener_fixture(port_a);
     let mut owner = start_synthetic_service(
         &fixture.model,
         &fixture.admission,
@@ -2333,14 +2317,10 @@ fn probe_ready_service_with_different_planned_port_is_not_reused() {
 
 #[test]
 fn persistent_service_survives_borrower_exit_and_down_stops_after_release() {
-    let Some(python) = python3_path() else {
-        return;
-    };
     let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
     let port = listener.local_addr().expect("local addr").port();
     drop(listener);
-    let mut fixture =
-        ServiceFixture::new(python, &["-c", python_listener_script(), "${port}"], port);
+    let mut fixture = test_child_listener_fixture(port);
     let mut owner = start_synthetic_service_with_lifetime(
         &fixture.model,
         &fixture.admission,
@@ -2428,12 +2408,8 @@ fn persistent_service_survives_borrower_exit_and_down_stops_after_release() {
 
 #[test]
 fn expired_borrower_reconciliation_preserves_live_persistent_owner_ports() {
-    let Some(python) = python3_path() else {
-        return;
-    };
     let port = available_port_window(1);
-    let mut fixture =
-        ServiceFixture::new(python, &["-c", python_listener_script(), "${port}"], port);
+    let mut fixture = test_child_listener_fixture(port);
     let mut owner = start_synthetic_service_with_lifetime(
         &fixture.model,
         &fixture.admission,
@@ -2494,14 +2470,10 @@ fn expired_borrower_reconciliation_preserves_live_persistent_owner_ports() {
 
 #[test]
 fn until_idle_service_stops_when_borrower_lease_goes_stale() {
-    let Some(python) = python3_path() else {
-        return;
-    };
     let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
     let port = listener.local_addr().expect("local addr").port();
     drop(listener);
-    let mut fixture =
-        ServiceFixture::new(python, &["-c", python_listener_script(), "${port}"], port);
+    let mut fixture = test_child_listener_fixture(port);
     let mut owner = start_synthetic_service_with_lifetime(
         &fixture.model,
         &fixture.admission,
@@ -2571,14 +2543,10 @@ fn until_idle_service_stops_when_borrower_lease_goes_stale() {
 
 #[test]
 fn clean_and_purge_refuse_while_until_idle_borrower_is_live() {
-    let Some(python) = python3_path() else {
-        return;
-    };
     let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
     let port = listener.local_addr().expect("local addr").port();
     drop(listener);
-    let mut fixture =
-        ServiceFixture::new(python, &["-c", python_listener_script(), "${port}"], port);
+    let mut fixture = test_child_listener_fixture(port);
     let selected = select_slot(&fixture.model, None).expect("default slot should select");
     let identity = StateIdentity::from_selected_slot(&fixture.model, &fixture.admission, &selected);
     commit_slot_marker(&fixture.placement, &identity).expect("slot marker should be written");
@@ -2758,14 +2726,20 @@ fn ps_rejects_live_process_with_mismatched_start_identity_as_stale() {
 
 #[test]
 fn ps_keeps_live_process_ready_when_its_listener_disappears() {
-    let Some(python) = python3_path() else {
-        return;
-    };
     let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
     let port = listener.local_addr().expect("local addr").port();
     drop(listener);
-    let script = "import socket,sys,time; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s.bind(('127.0.0.1',int(sys.argv[1]))); s.listen(16); time.sleep(0.5); s.close(); time.sleep(30)";
-    let mut fixture = ServiceFixture::new(python, &["-c", script, "${port}"], port);
+    let mut fixture = ServiceFixture::from_value(test_child_fixture_value(
+        &[
+            "listen",
+            "127.0.0.1",
+            "${port}",
+            "close-on-marker",
+            "${stateDir}/listener-close",
+            "${stateDir}/listener-closed",
+        ],
+        port,
+    ));
     let mut service = start_synthetic_service(
         &fixture.model,
         &fixture.admission,
@@ -2778,7 +2752,18 @@ fn ps_keeps_live_process_ready_when_its_listener_disappears() {
     service
         .wait_for_probe_ready(&mut fixture.registry)
         .expect("service should first prove its listener");
-    thread::sleep(Duration::from_millis(700));
+    fs::write(
+        fixture.placement.state_root.join("listener-close"),
+        b"close",
+    )
+    .expect("test should request listener loss");
+    assert!(
+        wait_for_path(
+            &fixture.placement.state_root.join("listener-closed"),
+            Duration::from_secs(5)
+        ),
+        "service child should acknowledge listener loss"
+    );
 
     let report = ps(&mut fixture.registry).expect("ps should remain process-only");
     let process = report
@@ -3235,12 +3220,8 @@ fn unresolved_escape_keeps_ports_for_identity_tracked_reparented_child() {
 
 #[test]
 fn escaped_service_with_exact_listener_is_preserved_until_explicit_down() {
-    let Some(python) = python3_path() else {
-        return;
-    };
     let port = available_port_window(1);
-    let mut fixture =
-        ServiceFixture::new(python, &["-c", python_listener_script(), "${port}"], port);
+    let mut fixture = test_child_listener_fixture(port);
     let mut escaped = start_synthetic_service(
         &fixture.model,
         &fixture.admission,
@@ -3648,19 +3629,13 @@ fn down_escalates_until_owned_process_group_is_empty() {
 fn task_child_path_is_assembled_from_tool_roots() {
     // The child PATH is runtime-owned: exactly the tool roots, in declared
     // order — not the runtime's own inherited PATH.
-    let Some(python) = python3_path() else {
-        return;
-    };
     let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
     let port = listener.local_addr().expect("local addr").port();
     drop(listener);
-    let mut value = fixture_model(python, &["-c", python_listener_script(), "${port}"], port);
+    let mut value = test_child_listener_value(port);
     value["tasks"]["smoke"]["requires"] = json!([]);
     value["tasks"]["smoke"]["servicesRequired"] = json!([]);
-    set_task_run_args(
-        &mut value,
-        &["-c", "import os, sys; sys.stdout.write(os.environ['PATH'])"],
-    );
+    set_task_run_args(&mut value, &["output", "env", "PATH"]);
     let mut fixture = ServiceFixture::from_value(value);
     let task = fixture
         .admission
@@ -3692,9 +3667,10 @@ fn task_child_path_is_assembled_from_tool_roots() {
     )
     .expect("path-printing task should succeed");
     let stdout = fs::read_to_string(&run.stdout_path).expect("task stdout log");
-    let expected = Path::new(python)
+    let expected = test_child()
+        .as_path()
         .parent()
-        .expect("python parent dir")
+        .expect("test child parent dir")
         .to_string_lossy()
         .to_string();
     assert_eq!(stdout, expected);
@@ -3704,28 +3680,19 @@ fn task_child_path_is_assembled_from_tool_roots() {
 fn task_child_environment_is_hermetic() {
     // The child sees the declared env plus the runtime-owned PATH — nothing
     // inherited from the runtime's own environment.
-    let Some(python) = python3_path() else {
-        return;
-    };
     // A canary in the runtime's environment that must NOT leak to the child.
     unsafe { std::env::set_var("NIXFIED_HERMETIC_CANARY", "leaked") };
     let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
     let port = listener.local_addr().expect("local addr").port();
     drop(listener);
-    let mut value = fixture_model(python, &["-c", python_listener_script(), "${port}"], port);
+    let mut value = test_child_listener_value(port);
     value["tasks"]["smoke"]["requires"] = json!([]);
     value["tasks"]["smoke"]["servicesRequired"] = json!([]);
     value["tasks"]["smoke"]["invocation"]["env"] = json!({
         "DECLARED": "yes",
         "CARGO_TARGET_DIR": "target/verification"
     });
-    set_task_run_args(
-        &mut value,
-        &[
-            "-c",
-            "import os, sys; sys.stdout.write(';'.join(sorted(f'{k}={v}' for k, v in os.environ.items())))",
-        ],
-    );
+    set_task_run_args(&mut value, &["output", "environment"]);
     let mut fixture = ServiceFixture::from_value(value);
     let task = fixture
         .admission
@@ -3788,16 +3755,10 @@ fn task_child_environment_is_hermetic() {
 
 #[test]
 fn task_secret_output_is_redacted_from_runtime_owned_sinks() {
-    let Some(python) = nix_store_executable(&["python3"]) else {
-        return;
-    };
-    let closure_root = closure_root_for_store_executable(&python)
-        .expect("store executable should have a closure root");
     let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
     let port = listener.local_addr().expect("local addr").port();
     drop(listener);
-    let mut value = fixture_model(&python.to_string_lossy(), &["service", "${port}"], port);
-    value["closures"]["synthetic-helper"]["storePath"] = json!(closure_root.to_string_lossy());
+    let mut value = test_child_listener_value(port);
     value["tasks"]["smoke"]["requires"] = json!([]);
     value["tasks"]["smoke"]["servicesRequired"] = json!([]);
     value["secrets"]["api-token"] = json!({
@@ -3808,13 +3769,7 @@ fn task_secret_output_is_redacted_from_runtime_owned_sinks() {
         }
     });
     value["tasks"]["smoke"]["invocation"]["env"]["TOKEN"] = json!("${secret:api-token}");
-    set_task_run_args(
-        &mut value,
-        &[
-            "-c",
-            "import os, sys; sys.stdout.write(os.environ['TOKEN'])",
-        ],
-    );
+    set_task_run_args(&mut value, &["output", "env", "TOKEN"]);
     let model: Model = serde_json::from_value(value).expect("secret fixture model should parse");
 
     let tmp = TempDir::new();
@@ -4598,30 +4553,12 @@ fn assert_registry_tables_scoped_to_slot(registry: &Registry, slot: i64, tables:
 /// `PATH` cannot starve them - only a nix invocation would trip the sentinel.
 #[test]
 fn runtime_drives_full_lifecycle_without_invoking_nix() {
-    let Some(python) = nix_store_executable(&["python3"]) else {
-        return;
-    };
-    let closure_root = closure_root_for_store_executable(&python)
-        .expect("store executable should have a closure root");
-    let script = [
-        "import socket, sys, time",
-        "cmd = sys.argv[1]",
-        "if cmd == 'service':",
-        "    s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)",
-        "    s.bind(('127.0.0.1', int(sys.argv[2]))); s.listen(16); time.sleep(30)",
-        "elif cmd == 'task':",
-        "    socket.create_connection(('127.0.0.1', int(sys.argv[2])), timeout=5).close()",
-    ]
-    .join("\n");
-
     let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
     let port = listener.local_addr().expect("local addr").port();
     drop(listener);
 
-    let mut value = fixture_model(&python.to_string_lossy(), &["service", "${port}"], port);
-    value["closures"]["synthetic-helper"]["storePath"] = json!(closure_root.to_string_lossy());
-    set_task_run_args(&mut value, &["task", "${port}"]);
-    prepend_invocation_args(&mut value, &["-c", &script]);
+    let mut value = test_child_listener_value(port);
+    set_task_run_args(&mut value, &["connect", "127.0.0.1", "${port}", "close"]);
     let model: Model = serde_json::from_value(value).expect("seam fixture model should parse");
 
     let tmp = TempDir::new();
@@ -4795,22 +4732,14 @@ fn runtime_drives_full_lifecycle_without_invoking_nix() {
 fn composite_run_keys_evidence_by_step_path() {
     // A composite referencing the same leaf twice runs it twice, with logs,
     // summaries, and registry rows keyed by the distinct step paths.
-    let Some(python) = nix_store_executable(&["python3"]) else {
-        return;
-    };
-    let closure_root = closure_root_for_store_executable(&python)
-        .expect("store executable should have a closure root");
-    let script = "import sys; sys.exit(0)";
     let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
     let port = listener.local_addr().expect("local addr").port();
     drop(listener);
 
-    let mut value = fixture_model(&python.to_string_lossy(), &["service", "${port}"], port);
-    value["closures"]["synthetic-helper"]["storePath"] = json!(closure_root.to_string_lossy());
+    let mut value = test_child_listener_value(port);
     value["tasks"]["smoke"]["requires"] = json!([]);
     value["tasks"]["smoke"]["servicesRequired"] = json!([]);
-    set_task_run_args(&mut value, &["unit"]);
-    prepend_invocation_args(&mut value, &["-c", script]);
+    set_task_run_args(&mut value, &["exit", "0"]);
     value["tasks"]["twice"] = json!({
         "kind": "composite",
         "serviceLifetime": "run-scoped",
@@ -5002,30 +4931,10 @@ fn nested_composite_cancellation_terminates_leaf_process_group() {
 
 #[test]
 fn composite_starts_full_service_union_before_first_node() {
-    let Some(python) = nix_store_executable(&["python3"]) else {
-        return;
-    };
-    let closure_root = closure_root_for_store_executable(&python)
-        .expect("store executable should have a closure root");
     let port = available_port_window(2);
     let worker_port = port.checked_add(1).expect("two-port window should fit");
     let worker_port_arg = worker_port.to_string();
-    let script = [
-        "import socket, sys, time",
-        "cmd = sys.argv[1]",
-        "if cmd == 'service':",
-        "    s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)",
-        "    s.bind(('127.0.0.1', int(sys.argv[2]))); s.listen(16); time.sleep(30)",
-        "elif cmd == 'task':",
-        "    with socket.create_connection(('127.0.0.1', int(sys.argv[2])), timeout=2): pass",
-    ]
-    .join("\n");
-    let mut value = fixture_model(
-        &python.to_string_lossy(),
-        &["-c", &script, "service", "${port}"],
-        port,
-    );
-    value["closures"]["synthetic-helper"]["storePath"] = json!(closure_root.to_string_lossy());
+    let mut value = test_child_listener_value(port);
     value["placement"]["slotPlacements"]["0"]["candidatePorts"]["end"] = json!(worker_port);
     value["closures"]["synthetic-helper"]["operationBindings"] = json!([
         "service.synthetic.start",
@@ -5047,7 +4956,10 @@ fn composite_starts_full_service_union_before_first_node() {
     worker["logRefs"] = json!(["service.worker"]);
     value["services"]["worker"] = worker;
 
-    set_task_run_args(&mut value, &["-c", &script, "task", &worker_port_arg]);
+    set_task_run_args(
+        &mut value,
+        &["connect", "127.0.0.1", &worker_port_arg, "close"],
+    );
     let mut needs_worker = value["tasks"]["smoke"].clone();
     let program = needs_worker["invocation"]["run"][0].clone();
     needs_worker["operationId"] = json!("task.needs-worker.run");
@@ -5056,10 +4968,10 @@ fn composite_starts_full_service_union_before_first_node() {
     needs_worker["logRefs"] = json!(["task.needs-worker"]);
     needs_worker["invocation"]["run"] = Value::Array(vec![
         program,
-        json!("-c"),
-        json!(script),
-        json!("task"),
+        json!("connect"),
+        json!("127.0.0.1"),
         json!("${port}"),
+        json!("close"),
     ]);
     value["tasks"]["needs-worker"] = needs_worker;
     value["tasks"]["pipeline"] = json!({
@@ -5118,25 +5030,15 @@ fn composite_starts_full_service_union_before_first_node() {
 
 #[test]
 fn task_only_run_records_a_durable_runs_row() {
-    let Some(python) = nix_store_executable(&["python3"]) else {
-        return;
-    };
-    let closure_root = closure_root_for_store_executable(&python)
-        .expect("store executable should have a closure root");
-    // A service-less task: it exits 0 without touching any port.
-    let script = "import sys; sys.exit(0)";
-
     let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
     let port = listener.local_addr().expect("local addr").port();
     drop(listener);
 
-    let mut value = fixture_model(&python.to_string_lossy(), &["service", "${port}"], port);
-    value["closures"]["synthetic-helper"]["storePath"] = json!(closure_root.to_string_lossy());
+    let mut value = test_child_listener_value(port);
     // The environment starts no services and runs only the service-less task.
     value["tasks"]["smoke"]["requires"] = json!([]);
     value["tasks"]["smoke"]["servicesRequired"] = json!([]);
-    set_task_run_args(&mut value, &["noservice"]);
-    prepend_invocation_args(&mut value, &["-c", script]);
+    set_task_run_args(&mut value, &["exit", "0"]);
     let model: Model = serde_json::from_value(value).expect("task-only model should parse");
 
     let tmp = TempDir::new();
@@ -5197,24 +5099,14 @@ fn task_only_run_records_a_durable_runs_row() {
 fn inherit_stdin_reaches_a_task_process() {
     use std::io::Write;
 
-    let Some(python) = nix_store_executable(&["python3"]) else {
-        return;
-    };
-    let closure_root = closure_root_for_store_executable(&python)
-        .expect("store executable should have a closure root");
-    // The task echoes whatever it reads on stdin to stdout (captured to its log).
-    let script = "import sys; sys.stdout.write(sys.stdin.read())";
-
     let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
     let port = listener.local_addr().expect("local addr").port();
     drop(listener);
 
-    let mut value = fixture_model(&python.to_string_lossy(), &["service", "${port}"], port);
-    value["closures"]["synthetic-helper"]["storePath"] = json!(closure_root.to_string_lossy());
+    let mut value = test_child_listener_value(port);
     value["tasks"]["smoke"]["requires"] = json!([]);
     value["tasks"]["smoke"]["servicesRequired"] = json!([]);
-    set_task_run_args(&mut value, &[]);
-    prepend_invocation_args(&mut value, &["-c", script]);
+    set_task_run_args(&mut value, &["output", "stdin"]);
     value["tasks"]["smoke"]["invocation"]["stdin"] = json!("inherit");
     let model: Model = serde_json::from_value(value).expect("inherit-stdin model should parse");
 
@@ -5599,6 +5491,32 @@ fn fixture_model(executable: &str, start_args: &[&str], port: u16) -> Value {
     common::synthetic_model(executable, start_args, port, port)
 }
 
+fn test_child_fixture_value(start_args: &[&str], port: u16) -> Value {
+    let child = test_child();
+    fixture_model(
+        child
+            .to_str()
+            .expect("test child store path should be valid UTF-8"),
+        start_args,
+        port,
+    )
+}
+
+fn test_child_listener_value(port: u16) -> Value {
+    test_child_fixture_value(&["listen", "127.0.0.1", "${port}", "hold"], port)
+}
+
+fn test_child_listener_fixture(port: u16) -> ServiceFixture {
+    ServiceFixture::from_value(test_child_listener_value(port))
+}
+
+fn test_child_wildcard_listener_fixture(port: u16) -> ServiceFixture {
+    ServiceFixture::from_value(test_child_fixture_value(
+        &["listen", "0.0.0.0", "${port}", "hold"],
+        port,
+    ))
+}
+
 fn service_fixture_with_prepare(
     executable: &str,
     start_args: &[&str],
@@ -5803,10 +5721,6 @@ fn python3_from_path() -> Option<String> {
 
 fn python_listener_script() -> &'static str {
     "import socket, sys, time; s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(('127.0.0.1', int(sys.argv[1]))); s.listen(16); time.sleep(30)"
-}
-
-fn python_wildcard_listener_script() -> &'static str {
-    "import socket, sys, time; s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(('0.0.0.0', int(sys.argv[1]))); s.listen(16); time.sleep(30)"
 }
 
 #[derive(Debug, PartialEq, Eq)]
