@@ -1181,16 +1181,16 @@ fn exec_health_probe_failure_records_failed() {
 #[test]
 fn cancellation_interrupts_readiness_and_terminates_service_group() {
     let marker = temp_marker("nixfied-cancel-survivor");
+    let started = temp_marker("nixfied-cancel-started");
     let marker_arg = marker.to_string_lossy().to_string();
-    let script = "trap 'exit 0' TERM; /bin/sh -c 'trap \"\" TERM; sleep 2; touch \"$1\"; sleep 30' child \"$1\" & wait";
+    let started_arg = started.to_string_lossy().to_string();
     let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
     let port = listener.local_addr().expect("local addr").port();
     drop(listener);
-    let mut fixture = ServiceFixture::new(
-        "/bin/sh",
-        &["-c", script, "parent", marker_arg.as_str()],
+    let mut fixture = ServiceFixture::from_value(test_child_fixture_value(
+        &["term-tree", &started_arg, &marker_arg],
         port,
-    );
+    ));
     let mut service = start_synthetic_service(
         &fixture.model,
         &fixture.admission,
@@ -1204,7 +1204,10 @@ fn cancellation_interrupts_readiness_and_terminates_service_group() {
     let cancellation = CancellationToken::new();
     let canceler = cancellation.clone();
     let handle = thread::spawn(move || {
-        thread::sleep(Duration::from_millis(80));
+        assert!(
+            wait_for_path(&started, Duration::from_secs(3)),
+            "TERM-ignoring descendant should start before cancellation"
+        );
         canceler.cancel();
     });
 
@@ -1255,28 +1258,22 @@ fn cancellation_interrupts_readiness_and_terminates_service_group() {
         "child that ignored TERM should have been killed before touching marker"
     );
     let _ = fs::remove_file(marker);
+    let _ = fs::remove_file(started_arg);
 }
 
 #[test]
 fn cancellation_interrupts_task_and_terminates_task_group() {
-    let python = python3_path()
-        .map(str::to_string)
-        .or_else(python3_from_path)
-        .expect("python3 is required for task cancellation proof");
     let marker = temp_marker("nixfied-cancel-task-survivor");
+    let started = temp_marker("nixfied-cancel-task-started");
     let marker_arg = marker.to_string_lossy().to_string();
+    let started_arg = started.to_string_lossy().to_string();
     let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
     let port = listener.local_addr().expect("local addr").port();
     drop(listener);
-    let mut fixture =
-        ServiceFixture::new(&python, &["-c", python_listener_script(), "${port}"], port);
+    let mut fixture = test_child_listener_fixture(port);
     set_smoke_args(
         &mut fixture.model,
-        &[
-            "-c",
-            "import signal, subprocess, sys; signal.signal(signal.SIGTERM, lambda *_: sys.exit(0)); subprocess.Popen(['/bin/sh', '-c', 'trap \"\" TERM; sleep 2; touch \"$1\"; sleep 30', 'child', sys.argv[1]]).wait()",
-            &marker_arg,
-        ],
+        &["term-tree", &started_arg, &marker_arg],
     );
     fixture.relower();
     let mut service = start_synthetic_service(
@@ -1294,7 +1291,10 @@ fn cancellation_interrupts_task_and_terminates_task_group() {
     let cancellation = CancellationToken::new();
     let canceler = cancellation.clone();
     let handle = thread::spawn(move || {
-        thread::sleep(Duration::from_millis(80));
+        assert!(
+            wait_for_path(&started, Duration::from_secs(3)),
+            "TERM-ignoring task descendant should start before cancellation"
+        );
         canceler.cancel();
     });
 
@@ -1377,6 +1377,7 @@ fn cancellation_interrupts_task_and_terminates_task_group() {
     assert_eq!(task_events, 2);
     assert_eq!(summary["canceled"], json!(true));
     let _ = fs::remove_file(marker);
+    let _ = fs::remove_file(started_arg);
     service
         .stop(&mut fixture.registry, 1000)
         .expect("service should stop");
@@ -1384,17 +1385,14 @@ fn cancellation_interrupts_task_and_terminates_task_group() {
 
 #[test]
 fn task_timeout_records_failed_summary_and_terminates_task_group() {
-    let python = python3_path()
-        .map(str::to_string)
-        .or_else(python3_from_path)
-        .expect("python3 is required for task timeout proof");
     let marker = temp_marker("nixfied-timeout-task-survivor");
+    let started = temp_marker("nixfied-timeout-task-started");
     let marker_arg = marker.to_string_lossy().to_string();
+    let started_arg = started.to_string_lossy().to_string();
     let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
     let port = listener.local_addr().expect("local addr").port();
     drop(listener);
-    let mut fixture =
-        ServiceFixture::new(&python, &["-c", python_listener_script(), "${port}"], port);
+    let mut fixture = test_child_listener_fixture(port);
     fixture
         .model
         .tasks
@@ -1406,11 +1404,7 @@ fn task_timeout_records_failed_summary_and_terminates_task_group() {
         .timeout_ms = 100u64.try_into().unwrap();
     set_smoke_args(
         &mut fixture.model,
-        &[
-            "-c",
-            "import subprocess, sys; subprocess.Popen(['/bin/sh', '-c', 'trap \"\" TERM; sleep 2; touch \"$1\"; sleep 30', 'child', sys.argv[1]]).wait()",
-            &marker_arg,
-        ],
+        &["term-tree", &started_arg, &marker_arg],
     );
     fixture.relower();
     let mut service = start_synthetic_service(
@@ -1500,10 +1494,15 @@ fn task_timeout_records_failed_summary_and_terminates_task_group() {
     assert_eq!(summary["timedOut"], json!(true));
     assert_eq!(summary["canceled"], json!(false));
     assert!(
+        started.exists(),
+        "timeout proof should create the TERM-ignoring descendant"
+    );
+    assert!(
         !marker.exists(),
         "task timeout should kill TERM-ignoring descendants before marker"
     );
     let _ = fs::remove_file(marker);
+    let _ = fs::remove_file(started);
     service
         .stop(&mut fixture.registry, 1000)
         .expect("service should stop");
@@ -1511,36 +1510,14 @@ fn task_timeout_records_failed_summary_and_terminates_task_group() {
 
 #[test]
 fn cli_signal_cancels_run_and_empties_service_group() {
-    let Some(shell) = nix_store_executable(&["sh", "bash"]) else {
-        return;
-    };
-    let closure_root = closure_root_for_store_executable(&shell)
-        .expect("store executable should have a closure root");
     let marker = temp_marker("nixfied-cli-cancel-survivor");
     let started = temp_marker("nixfied-cli-cancel-started");
     let marker_arg = marker.to_string_lossy().to_string();
     let started_arg = started.to_string_lossy().to_string();
-    let script = "touch \"$2\"; trap 'exit 0' TERM; /bin/sh -c 'trap \"\" TERM; sleep 2; touch \"$1\"; sleep 30' child \"$1\" & wait";
     let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
     let port = listener.local_addr().expect("local addr").port();
     drop(listener);
-    let mut value = fixture_model(
-        &shell.to_string_lossy(),
-        &["service", "--host", "127.0.0.1", "--port", "${port}"],
-        port,
-    );
-    value["closures"]["synthetic-helper"]["storePath"] = json!(closure_root.to_string_lossy());
-    value["closures"]["synthetic-helper"]["executable"] = json!(shell.to_string_lossy());
-    prepend_invocation_args(
-        &mut value,
-        &["-c", script, "parent", &marker_arg, &started_arg],
-    );
-    // The script needs touch/sleep on its hermetic PATH: declare coreutils as a
-    // tool like any adopter would.
-    let Some(touch) = nix_store_executable(&["touch"]) else {
-        return;
-    };
-    add_tool_closure(&mut value, "coreutils-tools", &touch);
+    let value = test_child_fixture_value(&["term-tree", &started_arg, &marker_arg], port);
     let model: Model = serde_json::from_value(value).expect("CLI fixture model should parse");
     let tmp = TempDir::new();
     let model_path = tmp.path.join("model.json");
@@ -1629,47 +1606,24 @@ fn cli_signal_cancels_run_and_empties_service_group() {
 
 #[test]
 fn cli_signal_during_shutdown_records_canceled_terminal_state() {
-    let Some(shell) = nix_store_executable(&["sh", "bash"]) else {
-        return;
-    };
-    let python = python3_path()
-        .map(str::to_string)
-        .or_else(python3_from_path)
-        .expect("python3 is required for shutdown cancellation proof");
-    let closure_root = closure_root_for_store_executable(&shell)
-        .expect("store executable should have a closure root");
     let started = temp_marker("nixfied-cli-shutdown-started");
     let stopping = temp_marker("nixfied-cli-shutdown-stopping");
     let started_arg = started.to_string_lossy().to_string();
     let stopping_arg = stopping.to_string_lossy().to_string();
-    let script = "started=\"$1\"; stopping=\"$2\"; python=\"$3\"; cmd=\"$4\"; if [ \"$cmd\" = service ]; then port=\"$8\"; touch \"$started\"; trap 'touch \"$2\"; sleep 30' TERM; \"$python\" -c 'import socket, sys, time; s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind((\"127.0.0.1\", int(sys.argv[1]))); s.listen(16); time.sleep(30)' \"$port\" & wait; elif [ \"$cmd\" = task ]; then exit 0; elif [ \"$cmd\" = stop ]; then exit 0; else exit 1; fi";
     let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
     let port = listener.local_addr().expect("local addr").port();
     drop(listener);
-    let mut value = fixture_model(
-        &shell.to_string_lossy(),
-        &["service", "--host", "127.0.0.1", "--port", "${port}"],
-        port,
-    );
-    value["closures"]["synthetic-helper"]["storePath"] = json!(closure_root.to_string_lossy());
-    value["closures"]["synthetic-helper"]["executable"] = json!(shell.to_string_lossy());
-    prepend_invocation_args(
-        &mut value,
+    let mut value = test_child_fixture_value(
         &[
-            "-c",
-            script,
-            "wrapper",
+            "term-block",
+            "127.0.0.1",
+            "${port}",
             &started_arg,
             &stopping_arg,
-            &python,
         ],
+        port,
     );
-    // The script needs touch/sleep on its hermetic PATH: declare coreutils as a
-    // tool like any adopter would.
-    let Some(touch) = nix_store_executable(&["touch"]) else {
-        return;
-    };
-    add_tool_closure(&mut value, "coreutils-tools", &touch);
+    set_task_run_args(&mut value, &["exit", "0"]);
     let model: Model = serde_json::from_value(value).expect("CLI fixture model should parse");
     let tmp = TempDir::new();
     let model_path = tmp.path.join("model.json");
@@ -1745,21 +1699,25 @@ fn cli_signal_during_shutdown_records_canceled_terminal_state() {
 
 #[test]
 fn readiness_timeout_prefers_escape_discovered_during_probe() {
-    if !Path::new("/usr/bin/perl").exists() {
-        return;
-    }
+    let request = temp_marker("nixfied-readiness-timeout-escape-request");
+    let armed = temp_marker("nixfied-readiness-timeout-escape-armed");
+    let detached = temp_marker("nixfied-readiness-timeout-escape-detached");
+    let request_arg = request.to_string_lossy().to_string();
+    let armed_arg = armed.to_string_lossy().to_string();
+    let detached_arg = detached.to_string_lossy().to_string();
     let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
     let port = listener.local_addr().expect("local addr").port();
     drop(listener);
-    let mut fixture = ServiceFixture::new(
-        "/usr/bin/perl",
+    let mut fixture = ServiceFixture::from_value(test_child_fixture_value(
         &[
-            "-MPOSIX=setsid",
-            "-e",
-            "select(undef, undef, undef, 0.2); if (fork() == 0) { setsid(); sleep 30; exit 0; } sleep 30;",
+            "detached-sleeper",
+            "after-marker",
+            &request_arg,
+            &armed_arg,
+            &detached_arg,
         ],
         port,
-    );
+    ));
     let probe = &mut fixture
         .model
         .services
@@ -1780,6 +1738,15 @@ fn readiness_timeout_prefers_escape_discovered_during_probe() {
         port,
     )
     .expect("service should initially start");
+    assert!(
+        wait_for_path(&armed, Duration::from_secs(3)),
+        "service child should arm the escape request"
+    );
+    fs::write(&request, []).expect("escape request should be written");
+    assert!(
+        wait_for_path(&detached, Duration::from_secs(3)),
+        "detached child should exist before readiness reconciliation"
+    );
 
     let error = service
         .wait_for_probe_ready(&mut fixture.registry)
@@ -1808,11 +1775,19 @@ fn readiness_timeout_prefers_escape_discovered_during_probe() {
         .expect("events should query");
     assert_eq!(failed_processes, 1);
     assert_eq!(failure_events, 1);
+    for marker in [request, armed, detached] {
+        let _ = fs::remove_file(marker);
+    }
 }
 
 #[test]
 fn daemonizing_service_is_terminated_and_recorded_failed() {
-    let mut fixture = ServiceFixture::new("/bin/sh", &["-c", "sleep 30 & exit 0"], 23182);
+    let child_ready = temp_marker("nixfied-daemon-child-ready");
+    let child_ready_arg = child_ready.to_string_lossy().to_string();
+    let mut fixture = ServiceFixture::from_value(test_child_fixture_value(
+        &["detached-sleeper", "parent-exit", &child_ready_arg],
+        23182,
+    ));
 
     let error = match start_synthetic_service(
         &fixture.model,
@@ -1848,22 +1823,18 @@ fn daemonizing_service_is_terminated_and_recorded_failed() {
 
     assert_eq!(failed_processes, 1);
     assert_eq!(open_ports, 0);
+    assert!(child_ready.exists(), "daemon child should have started");
+    let _ = fs::remove_file(child_ready);
 }
 
 #[test]
 fn setsid_descendant_is_identity_killed_before_failed_settlement() {
-    if !Path::new("/usr/bin/perl").exists() {
-        return;
-    }
-    let mut fixture = ServiceFixture::new(
-        "/usr/bin/perl",
-        &[
-            "-MPOSIX=setsid",
-            "-e",
-            "if (fork() == 0) { setsid(); sleep 30; exit 0; } sleep 30;",
-        ],
+    let detached = temp_marker("nixfied-start-escape-detached");
+    let detached_arg = detached.to_string_lossy().to_string();
+    let mut fixture = ServiceFixture::from_value(test_child_fixture_value(
+        &["detached-sleeper", "immediate", &detached_arg],
         23183,
-    );
+    ));
 
     let error = match start_synthetic_service(
         &fixture.model,
@@ -1898,22 +1869,28 @@ fn setsid_descendant_is_identity_killed_before_failed_settlement() {
         .expect("escaped process status should query");
     assert_eq!(failed_processes, 1);
     assert_eq!(escaped_processes, 0);
+    assert!(detached.exists(), "setsid descendant should have started");
+    let _ = fs::remove_file(detached);
 }
 
 #[test]
 fn stop_terminates_delayed_setsid_escape_and_records_failure() {
-    if !Path::new("/usr/bin/perl").exists() {
-        return;
-    }
-    let mut fixture = ServiceFixture::new(
-        "/usr/bin/perl",
+    let request = temp_marker("nixfied-stop-escape-request");
+    let armed = temp_marker("nixfied-stop-escape-armed");
+    let detached = temp_marker("nixfied-stop-escape-detached");
+    let request_arg = request.to_string_lossy().to_string();
+    let armed_arg = armed.to_string_lossy().to_string();
+    let detached_arg = detached.to_string_lossy().to_string();
+    let mut fixture = ServiceFixture::from_value(test_child_fixture_value(
         &[
-            "-MPOSIX=setsid",
-            "-e",
-            "sleep 1; if (fork() == 0) { setsid(); sleep 30; exit 0; } sleep 1; exit 0;",
+            "detached-sleeper",
+            "after-marker",
+            &request_arg,
+            &armed_arg,
+            &detached_arg,
         ],
         23185,
-    );
+    ));
     let service = start_synthetic_service(
         &fixture.model,
         &fixture.admission,
@@ -1923,7 +1900,9 @@ fn stop_terminates_delayed_setsid_escape_and_records_failure() {
         23185,
     )
     .expect("service should initially pass handoff");
-    thread::sleep(Duration::from_millis(1300));
+    assert!(wait_for_path(&armed, Duration::from_secs(3)));
+    fs::write(&request, []).expect("escape request should be written");
+    assert!(wait_for_path(&detached, Duration::from_secs(3)));
 
     let error = service
         .stop(&mut fixture.registry, 1000)
@@ -1950,25 +1929,32 @@ fn stop_terminates_delayed_setsid_escape_and_records_failure() {
         .expect("process status should query");
     assert_eq!(failed_processes, 1);
     assert_eq!(escaped_processes, 0);
+    for marker in [request, armed, detached] {
+        let _ = fs::remove_file(marker);
+    }
 }
 
 #[test]
 fn readiness_refuses_monitored_setsid_escape() {
-    if !Path::new("/usr/bin/perl").exists() {
-        return;
-    }
+    let request = temp_marker("nixfied-readiness-escape-request");
+    let armed = temp_marker("nixfied-readiness-escape-armed");
+    let detached = temp_marker("nixfied-readiness-escape-detached");
+    let request_arg = request.to_string_lossy().to_string();
+    let armed_arg = armed.to_string_lossy().to_string();
+    let detached_arg = detached.to_string_lossy().to_string();
     let listener = TcpListener::bind("127.0.0.1:0").expect("listener should bind");
     let port = listener.local_addr().expect("local addr").port();
     drop(listener);
-    let mut fixture = ServiceFixture::new(
-        "/usr/bin/perl",
+    let mut fixture = ServiceFixture::from_value(test_child_fixture_value(
         &[
-            "-MPOSIX=setsid",
-            "-e",
-            "sleep 1; if (fork() == 0) { setsid(); sleep 30; exit 0; } sleep 1;",
+            "detached-sleeper",
+            "after-marker",
+            &request_arg,
+            &armed_arg,
+            &detached_arg,
         ],
         port,
-    );
+    ));
     let mut service = start_synthetic_service(
         &fixture.model,
         &fixture.admission,
@@ -1978,7 +1964,9 @@ fn readiness_refuses_monitored_setsid_escape() {
         port,
     )
     .expect("service should initially pass handoff");
-    thread::sleep(Duration::from_millis(1300));
+    assert!(wait_for_path(&armed, Duration::from_secs(3)));
+    fs::write(&request, []).expect("escape request should be written");
+    assert!(wait_for_path(&detached, Duration::from_secs(3)));
 
     let error = service
         .wait_for_probe_ready(&mut fixture.registry)
@@ -2007,14 +1995,24 @@ fn readiness_refuses_monitored_setsid_escape() {
         .expect("process status should query");
     assert_eq!(probe_ready_events, 0);
     assert_eq!(failed_processes, 1);
+    for marker in [request, armed, detached] {
+        let _ = fs::remove_file(marker);
+    }
 }
 
 #[test]
 fn readiness_records_foreground_exit_as_escape() {
+    let started = temp_marker("nixfied-readiness-exit-started");
+    let exit_request = temp_marker("nixfied-readiness-exit-request");
+    let started_arg = started.to_string_lossy().to_string();
+    let exit_request_arg = exit_request.to_string_lossy().to_string();
     let listener = TcpListener::bind("127.0.0.1:0").expect("listener should bind");
     let port = listener.local_addr().expect("local addr").port();
     drop(listener);
-    let mut fixture = ServiceFixture::new("/bin/sh", &["-c", "sleep 1"], port);
+    let mut fixture = ServiceFixture::from_value(test_child_fixture_value(
+        &["prepare", &started_arg, &exit_request_arg],
+        port,
+    ));
     let mut service = start_synthetic_service(
         &fixture.model,
         &fixture.admission,
@@ -2024,7 +2022,9 @@ fn readiness_records_foreground_exit_as_escape() {
         port,
     )
     .expect("service should initially pass handoff");
-    thread::sleep(Duration::from_millis(1300));
+    assert!(wait_for_path(&started, Duration::from_secs(3)));
+    fs::write(&exit_request, []).expect("foreground exit should be requested");
+    wait_for_process_exit(service.pid);
 
     let error = service
         .wait_for_probe_ready(&mut fixture.registry)
@@ -2053,18 +2053,32 @@ fn readiness_records_foreground_exit_as_escape() {
         .expect("process status should query");
     assert_eq!(failed_processes, 1);
     assert_eq!(running_processes, 0);
+    let _ = fs::remove_file(started);
+    let _ = fs::remove_file(exit_request);
 }
 
 #[test]
 fn process_tree_listener_retained_after_primary_exit_remains_proc_escape() {
-    let Some(python) = python3_path() else {
-        return;
-    };
+    let bound = temp_marker("nixfied-detached-listener-bound");
+    let exit_request = temp_marker("nixfied-detached-listener-exit-request");
+    let exiting = temp_marker("nixfied-detached-listener-exiting");
+    let bound_arg = bound.to_string_lossy().to_string();
+    let exit_request_arg = exit_request.to_string_lossy().to_string();
+    let exiting_arg = exiting.to_string_lossy().to_string();
     let listener = TcpListener::bind("127.0.0.1:0").expect("listener should bind");
     let port = listener.local_addr().expect("local addr").port();
     drop(listener);
-    let script = "import os,socket,sys,time; child=os.fork(); (os.setsid(), (lambda s: (s.bind(('127.0.0.1',int(sys.argv[1]))), s.listen(16), time.sleep(30)))(socket.socket()), os._exit(0)) if child == 0 else (time.sleep(0.2), os._exit(0))";
-    let mut fixture = ServiceFixture::new(python, &["-c", script, "${port}"], port);
+    let mut fixture = ServiceFixture::from_value(test_child_fixture_value(
+        &[
+            "detached-listener",
+            "127.0.0.1",
+            "${port}",
+            &bound_arg,
+            &exit_request_arg,
+            &exiting_arg,
+        ],
+        port,
+    ));
     fixture
         .model
         .services
@@ -2081,7 +2095,10 @@ fn process_tree_listener_retained_after_primary_exit_remains_proc_escape() {
         port,
     )
     .expect("parent should survive the foreground handoff");
-    thread::sleep(Duration::from_millis(250));
+    assert!(wait_for_path(&bound, Duration::from_secs(3)));
+    fs::write(&exit_request, []).expect("primary exit should be requested");
+    assert!(wait_for_path(&exiting, Duration::from_secs(3)));
+    wait_for_process_exit(service.pid);
 
     let error = service
         .wait_for_probe_ready(&mut fixture.registry)
@@ -2092,6 +2109,9 @@ fn process_tree_listener_retained_after_primary_exit_remains_proc_escape() {
     assert_eq!(error.code, ErrorCode::ProcEscape);
     TcpListener::bind(("127.0.0.1", port))
         .expect("failure cleanup should terminate the identity-tracked child listener");
+    for marker in [bound, exit_request, exiting] {
+        let _ = fs::remove_file(marker);
+    }
 }
 
 #[test]
@@ -3070,12 +3090,16 @@ fn escaped_plus_open_port_remains_actionable_until_down_proves_death() {
 fn unresolved_escape_keeps_ports_while_primary_group_descendant_lives() {
     let pid_dir = TempDir::new();
     let child_pid_path = pid_dir.path.join("child.pid");
-    let script = format!(
-        "sleep 30 & child=$!; printf '%s' \"$child\" > '{}'; wait \"$child\"",
-        child_pid_path.display()
-    );
+    let started = temp_marker("nixfied-unresolved-group-child-started");
+    let survivor = temp_marker("nixfied-unresolved-group-child-survivor");
+    let started_arg = started.to_string_lossy().to_string();
+    let survivor_arg = survivor.to_string_lossy().to_string();
+    let child_pid_arg = child_pid_path.to_string_lossy().to_string();
     let port = available_port_window(1);
-    let mut fixture = ServiceFixture::new("/bin/sh", &["-c", &script], port);
+    let mut fixture = ServiceFixture::from_value(test_child_fixture_value(
+        &["term-tree", &started_arg, &survivor_arg, &child_pid_arg],
+        port,
+    ));
     let service = start_synthetic_service(
         &fixture.model,
         &fixture.admission,
@@ -3085,6 +3109,7 @@ fn unresolved_escape_keeps_ports_while_primary_group_descendant_lives() {
         port,
     )
     .expect("service with a group child should start");
+    assert!(wait_for_path(&started, Duration::from_secs(3)));
     let child_pid = wait_for_pid_file(&child_pid_path);
     let start_identity = stored_process_start_identity(&fixture.registry, &service.process_key);
     mark_started_service_escape(
@@ -3128,28 +3153,29 @@ fn unresolved_escape_keeps_ports_while_primary_group_descendant_lives() {
         .expect("down should terminate the surviving group containment");
     assert_eq!(down.stopped, vec![service.process_key.clone()]);
     assert!(!process_is_non_zombie(child_pid));
+    let _ = fs::remove_file(started);
+    let _ = fs::remove_file(survivor);
     drop(service);
 }
 
 #[cfg(target_os = "linux")]
 #[test]
 fn unresolved_escape_keeps_ports_for_identity_tracked_reparented_child() {
-    let Some(python) = python3_path() else {
-        return;
-    };
     let pid_dir = TempDir::new();
     let child_pid_path = pid_dir.path.join("tree-child.pid");
-    let script = "import os,sys,time; child=os.fork(); (os.setsid(), time.sleep(30), os._exit(0)) if child == 0 else (open(sys.argv[1],'w').write(str(child)), time.sleep(30))";
+    let detached = temp_marker("nixfied-unresolved-tree-child-detached");
+    let detached_arg = detached.to_string_lossy().to_string();
+    let child_pid_arg = child_pid_path.to_string_lossy().to_string();
     let port = available_port_window(1);
-    let mut fixture = ServiceFixture::new(
-        python,
+    let mut fixture = ServiceFixture::from_value(test_child_fixture_value(
         &[
-            "-c",
-            script,
-            child_pid_path.to_str().expect("utf-8 temp path"),
+            "detached-sleeper",
+            "immediate",
+            &detached_arg,
+            &child_pid_arg,
         ],
         port,
-    );
+    ));
     fixture
         .model
         .services
@@ -3215,6 +3241,7 @@ fn unresolved_escape_keeps_ports_for_identity_tracked_reparented_child() {
         .expect("down should terminate the identity-tracked reparented child");
     assert_eq!(down.stopped, vec![service.process_key.clone()]);
     assert!(!process_is_non_zombie(child_pid));
+    let _ = fs::remove_file(detached);
     drop(service);
 }
 
@@ -3596,13 +3623,13 @@ fn down_escalates_until_owned_process_group_is_empty() {
         ));
         path
     };
+    let started = temp_marker("nixfied-down-escalate-started");
     let marker_arg = marker.to_string_lossy().to_string();
-    let script = "trap 'exit 0' TERM; /bin/sh -c 'trap \"\" TERM; sleep 2; touch \"$1\"; sleep 30' child \"$1\" & wait";
-    let mut fixture = ServiceFixture::new(
-        "/bin/sh",
-        &["-c", script, "parent", marker_arg.as_str()],
+    let started_arg = started.to_string_lossy().to_string();
+    let mut fixture = ServiceFixture::from_value(test_child_fixture_value(
+        &["term-tree", &started_arg, &marker_arg],
         23189,
-    );
+    ));
     let service = start_synthetic_service(
         &fixture.model,
         &fixture.admission,
@@ -3612,6 +3639,10 @@ fn down_escalates_until_owned_process_group_is_empty() {
         23189,
     )
     .expect("foreground service should start");
+    assert!(
+        wait_for_path(&started, Duration::from_secs(3)),
+        "TERM-ignoring descendant should start before down"
+    );
 
     let report = down_owned_process_groups(&mut fixture.registry, 200)
         .expect("down should escalate and stop the process group");
@@ -3623,6 +3654,7 @@ fn down_escalates_until_owned_process_group_is_empty() {
         "child that ignored TERM should have been killed before touching marker"
     );
     let _ = fs::remove_file(marker);
+    let _ = fs::remove_file(started);
 }
 
 #[test]
@@ -4822,39 +4854,17 @@ fn composite_run_keys_evidence_by_step_path() {
 
 #[test]
 fn nested_composite_cancellation_terminates_leaf_process_group() {
-    let Some(python) = nix_store_executable(&["python3"]) else {
-        return;
-    };
-    let closure_root = closure_root_for_store_executable(&python)
-        .expect("store executable should have a closure root");
     let marker = temp_marker("nixfied-nested-composite-cancel-survivor");
+    let started = temp_marker("nixfied-nested-composite-cancel-started");
     let marker_arg = marker.to_string_lossy().to_string();
-    let script = [
-        "import os, pathlib, signal, sys, time",
-        "signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))",
-        "pid = os.fork()",
-        "if pid == 0:",
-        "    signal.signal(signal.SIGTERM, signal.SIG_IGN)",
-        "    time.sleep(2)",
-        "    pathlib.Path(sys.argv[1]).touch()",
-        "    time.sleep(30)",
-        "else:",
-        "    os.waitpid(pid, 0)",
-    ]
-    .join("\n");
+    let started_arg = started.to_string_lossy().to_string();
     let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
     let port = listener.local_addr().expect("local addr").port();
     drop(listener);
-    let mut value = fixture_model(
-        &python.to_string_lossy(),
-        &["service", "--host", "127.0.0.1", "--port", "${port}"],
-        port,
-    );
-    value["closures"]["synthetic-helper"]["storePath"] = json!(closure_root.to_string_lossy());
-    value["closures"]["synthetic-helper"]["executable"] = json!(python.to_string_lossy());
+    let mut value = test_child_listener_value(port);
     value["tasks"]["smoke"]["requires"] = json!([]);
     value["tasks"]["smoke"]["servicesRequired"] = json!([]);
-    set_task_run_args(&mut value, &["-c", &script, &marker_arg]);
+    set_task_run_args(&mut value, &["term-tree", &started_arg, &marker_arg]);
     value["tasks"]["inner"] = json!({
         "kind": "composite",
         "serviceLifetime": "run-scoped",
@@ -4899,6 +4909,10 @@ fn nested_composite_cancellation_terminates_leaf_process_group() {
         .spawn()
         .expect("runtime should spawn");
     let registry_path = wait_for_task_process_row(&state_base, Duration::from_secs(5));
+    assert!(
+        wait_for_path(&started, Duration::from_secs(3)),
+        "nested task descendant should start before cancellation"
+    );
     let signal_result = unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
     assert_eq!(signal_result, 0, "SIGTERM should reach runtime process");
 
@@ -4927,6 +4941,7 @@ fn nested_composite_cancellation_terminates_leaf_process_group() {
         "descendant that ignored TERM should have been killed before touching marker"
     );
     let _ = fs::remove_file(marker);
+    let _ = fs::remove_file(started);
 }
 
 #[test]
@@ -5185,26 +5200,15 @@ fn wait_for_task_process_row(state_base: &Path, timeout: Duration) -> PathBuf {
 
 #[test]
 fn failed_composite_run_writes_failure_summary() {
-    let Some(shell) = nix_store_executable(&["sh", "bash"]) else {
-        return;
-    };
-    let closure_root = closure_root_for_store_executable(&shell)
-        .expect("store executable should have a closure root");
     let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
     let port = listener.local_addr().expect("local addr").port();
     drop(listener);
-    let mut value = fixture_model(
-        &shell.to_string_lossy(),
-        &["service", "--host", "127.0.0.1", "--port", "${port}"],
-        port,
-    );
-    value["closures"]["synthetic-helper"]["storePath"] = json!(closure_root.to_string_lossy());
-    value["closures"]["synthetic-helper"]["executable"] = json!(shell.to_string_lossy());
+    let mut value = test_child_listener_value(port);
     // A 0-service composite whose single node fails: the run must leave the
     // same aggregate evidence a success does, linked from the error.
     value["tasks"]["smoke"]["requires"] = json!([]);
     value["tasks"]["smoke"]["servicesRequired"] = json!([]);
-    set_task_run_args(&mut value, &["-c", "exit 3"]);
+    set_task_run_args(&mut value, &["exit", "3"]);
     value["tasks"]["wf"] = json!({
         "kind": "composite",
         "serviceLifetime": "run-scoped",
@@ -5354,19 +5358,12 @@ fn failed_composite_run_writes_failure_summary() {
 
 #[test]
 fn service_failure_before_any_node_writes_failed_summary() {
-    let Some(shell) = nix_store_executable(&["sh", "bash"]) else {
-        return;
-    };
-    let closure_root = closure_root_for_store_executable(&shell)
-        .expect("store executable should have a closure root");
     let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
     let port = listener.local_addr().expect("local addr").port();
     drop(listener);
     // The service dies before ever listening, so the run fails on the ready
     // probe with zero node results — the summary must still record failure.
-    let mut value = fixture_model(&shell.to_string_lossy(), &["-c", "exit 1"], port);
-    value["closures"]["synthetic-helper"]["storePath"] = json!(closure_root.to_string_lossy());
-    value["closures"]["synthetic-helper"]["executable"] = json!(shell.to_string_lossy());
+    let mut value = test_child_fixture_value(&["exit", "1"], port);
     value["tasks"]["wf"] = json!({
         "kind": "composite",
         "serviceLifetime": "run-scoped",
@@ -5419,17 +5416,10 @@ fn service_failure_before_any_node_writes_failed_summary() {
 
 #[test]
 fn control_registry_identity_mismatch_reports_human_scoped_recovery() {
-    let Some(shell) = nix_store_executable(&["sh", "bash"]) else {
-        return;
-    };
-    let closure_root = closure_root_for_store_executable(&shell)
-        .expect("store executable should have a closure root");
     let listener = TcpListener::bind("127.0.0.1:0").expect("temporary listener should bind");
     let port = listener.local_addr().expect("local addr").port();
     drop(listener);
-    let mut value = fixture_model(&shell.to_string_lossy(), &["-c", "sleep 30"], port);
-    value["closures"]["synthetic-helper"]["storePath"] = json!(closure_root.to_string_lossy());
-    value["closures"]["synthetic-helper"]["executable"] = json!(shell.to_string_lossy());
+    let value = test_child_fixture_value(&["block"], port);
     let model: Model = serde_json::from_value(value).expect("fixture model should parse");
     let tmp = TempDir::new();
     let model_path = tmp.path.join("model.json");
@@ -5656,24 +5646,6 @@ fn restore_executable_fixture(path: &Path) {
     fs::set_permissions(path, permissions).expect("spawn fixture should be executable");
 }
 
-/// Insert args right after `run[0]` of one invocation value — the old shared
-/// exec base args, applied per inline invocation.
-fn splice_run_args(invocation: &mut Value, args: &[&str]) {
-    let run = invocation["run"].as_array_mut().expect("run is an array");
-    for (index, arg) in args.iter().enumerate() {
-        run.insert(1 + index, json!(arg));
-    }
-}
-
-/// Apply shared script args to both the start and smoke invocations.
-fn prepend_invocation_args(value: &mut Value, args: &[&str]) {
-    splice_run_args(
-        &mut value["services"]["synthetic"]["lifecycle"]["start"]["invocation"],
-        args,
-    );
-    splice_run_args(&mut value["tasks"]["smoke"]["invocation"], args);
-}
-
 /// Replace the smoke task's argv tail (`run[1..]`), keeping the program word.
 fn set_task_run_args(value: &mut Value, args: &[&str]) {
     let run = value["tasks"]["smoke"]["invocation"]["run"]
@@ -5697,30 +5669,6 @@ fn set_smoke_args(model: &mut Model, args: &[&str]) {
         .run;
     run.truncate(1);
     run.extend(args.iter().map(|arg| arg.to_string()));
-}
-
-fn python3_path() -> Option<&'static str> {
-    [
-        "/opt/homebrew/bin/python3",
-        "/usr/local/bin/python3",
-        "/usr/bin/python3",
-        "/bin/python3",
-    ]
-    .into_iter()
-    .find(|path| Path::new(path).exists())
-}
-
-fn python3_from_path() -> Option<String> {
-    std::env::var_os("PATH")?
-        .to_string_lossy()
-        .split(':')
-        .map(|dir| Path::new(dir).join("python3"))
-        .find(|path| path.is_file())
-        .map(|path| path.to_string_lossy().to_string())
-}
-
-fn python_listener_script() -> &'static str {
-    "import socket, sys, time; s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(('127.0.0.1', int(sys.argv[1]))); s.listen(16); time.sleep(30)"
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -5763,33 +5711,6 @@ fn lifecycle_events(registry: &Registry) -> Vec<LifecycleEvent> {
         .expect("lifecycle events should query")
         .collect::<Result<Vec<_>, _>>()
         .expect("lifecycle events should collect")
-}
-
-/// Declare an extra tool closure and add it to both the start and smoke
-/// invocations' tool sets, widening the child PATH by the tool's bin dir.
-fn add_tool_closure(value: &mut Value, id: &str, executable: &Path) {
-    let root = closure_root_for_store_executable(executable)
-        .map(|root| root.to_string_lossy().to_string())
-        .unwrap_or_else(|| "/".to_string());
-    let target = value["target"]["closureSystem"].clone();
-    value["closures"][id] = json!({
-        "kind": "executable", "storePath": root,
-        "executable": executable.to_string_lossy(),
-        "targetSystem": target,
-        "operationBindings": [],
-        "requiresExecutable": true, "effects": ["process"]
-    });
-    for invocation in ["start", "smoke"] {
-        let tools = if invocation == "start" {
-            &mut value["services"]["synthetic"]["lifecycle"]["start"]["invocation"]["tools"]
-        } else {
-            &mut value["tasks"]["smoke"]["invocation"]["tools"]
-        };
-        tools
-            .as_array_mut()
-            .expect("tools is an array")
-            .push(json!(id));
-    }
 }
 
 fn process_group_has_non_zombie_member(pgid: i32) -> bool {

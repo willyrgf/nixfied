@@ -4,10 +4,13 @@ use std::io::{self, Read, Write};
 use std::net::{Ipv4Addr, Shutdown, SocketAddrV4, TcpListener, TcpStream};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
 const MARKER_TIMEOUT: Duration = Duration::from_secs(15);
+const SURVIVOR_DELAY: Duration = Duration::from_secs(2);
+static TERM_RECEIVED: AtomicBool = AtomicBool::new(false);
 
 fn main() {
     if let Err(error) = run(env::args().skip(1).collect()) {
@@ -27,6 +30,10 @@ fn run(args: Vec<String>) -> Result<(), String> {
         "output" => output(args),
         "exit" => exit_with(args),
         "block" => block(args),
+        "term-tree" => term_tree(args),
+        "detached-listener" => detached_listener(args),
+        "detached-sleeper" => detached_sleeper(args),
+        "term-block" => term_block(args),
         _ => Err(format!("unsupported command {command:?}")),
     }
 }
@@ -116,9 +123,119 @@ fn block(args: &[String]) -> Result<(), String> {
     if !args.is_empty() {
         return Err("block expects no arguments".into());
     }
-    loop {
-        thread::park();
+    park_forever()
+}
+
+fn term_tree(args: &[String]) -> Result<(), String> {
+    let (started, survivor, pid_file) = match args {
+        [started, survivor] => (started.as_str(), survivor.as_str(), None),
+        [started, survivor, pid_file] => {
+            (started.as_str(), survivor.as_str(), Some(pid_file.as_str()))
+        }
+        _ => return Err("term-tree expects STARTED SURVIVOR [PID-FILE]".into()),
+    };
+    let child = fork_process()?;
+    if child == 0 {
+        child_exit((|| {
+            ignore_signal(libc::SIGTERM)?;
+            if let Some(pid_file) = pid_file {
+                write_pid(Path::new(pid_file))?;
+            }
+            touch(Path::new(started))?;
+            thread::sleep(SURVIVOR_DELAY);
+            touch(Path::new(survivor))?;
+            park_forever()
+        })());
     }
+    wait_for_child(child)
+}
+
+fn detached_listener(args: &[String]) -> Result<(), String> {
+    let [address, port, bound, exit_request, exiting] = args else {
+        return Err("detached-listener expects ADDRESS PORT BOUND EXIT-REQUEST EXITING".into());
+    };
+    let address = parse_address(address)?;
+    let port = parse_port(port)?;
+    for marker in [bound, exit_request, exiting] {
+        remove_if_present(Path::new(marker))?;
+    }
+    let child = fork_process()?;
+    if child == 0 {
+        child_exit((|| {
+            create_session()?;
+            let listener = reusable_listener(address, port)?;
+            touch(Path::new(bound))?;
+            accept_forever(listener, false)
+        })());
+    }
+    wait_for_path(Path::new(bound), MARKER_TIMEOUT)?;
+    wait_for_path(Path::new(exit_request), MARKER_TIMEOUT)?;
+    touch(Path::new(exiting))
+}
+
+fn detached_sleeper(args: &[String]) -> Result<(), String> {
+    let Some((mode, args)) = args.split_first() else {
+        return Err("detached-sleeper expects a mode".into());
+    };
+    match (mode.as_str(), args) {
+        ("immediate", [detached]) => {
+            spawn_detached_sleeper(Path::new(detached), None)?;
+            park_forever()
+        }
+        ("immediate", [detached, pid_file]) => {
+            spawn_detached_sleeper(Path::new(detached), Some(Path::new(pid_file)))?;
+            park_forever()
+        }
+        ("after-marker", [request, armed, detached]) => {
+            remove_if_present(Path::new(request))?;
+            remove_if_present(Path::new(armed))?;
+            remove_if_present(Path::new(detached))?;
+            touch(Path::new(armed))?;
+            wait_for_path(Path::new(request), MARKER_TIMEOUT)?;
+            spawn_detached_sleeper(Path::new(detached), None)?;
+            park_forever()
+        }
+        ("parent-exit", [child_ready]) => {
+            remove_if_present(Path::new(child_ready))?;
+            let child = fork_process()?;
+            if child == 0 {
+                child_exit((|| {
+                    touch(Path::new(child_ready))?;
+                    park_forever()
+                })());
+            }
+            wait_for_path(Path::new(child_ready), MARKER_TIMEOUT)
+        }
+        _ => Err(format!(
+            "invalid detached-sleeper mode or arguments: {mode:?}"
+        )),
+    }
+}
+
+fn term_block(args: &[String]) -> Result<(), String> {
+    let [address, port, started, stopping] = args else {
+        return Err("term-block expects ADDRESS PORT STARTED STOPPING".into());
+    };
+    remove_if_present(Path::new(started))?;
+    remove_if_present(Path::new(stopping))?;
+    TERM_RECEIVED.store(false, Ordering::SeqCst);
+    install_term_handler()?;
+    let listener = reusable_listener(parse_address(address)?, parse_port(port)?)?;
+    listener
+        .set_nonblocking(true)
+        .map_err(|error| format!("set listener nonblocking: {error}"))?;
+    touch(Path::new(started))?;
+    while !TERM_RECEIVED.load(Ordering::SeqCst) {
+        match listener.accept() {
+            Ok((_stream, _)) => {}
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(20));
+            }
+            Err(error) => return Err(format!("accept connection: {error}")),
+        }
+    }
+    touch(Path::new(stopping))?;
+    park_forever()
 }
 
 fn connect(args: &[String]) -> Result<(), String> {
@@ -273,6 +390,116 @@ fn reusable_listener(address: Ipv4Addr, port: u16) -> Result<TcpListener, String
         return Err(format!("listen: {}", io::Error::last_os_error()));
     }
     Ok(TcpListener::from(socket))
+}
+
+fn spawn_detached_sleeper(detached: &Path, pid_file: Option<&Path>) -> Result<(), String> {
+    remove_if_present(detached)?;
+    if let Some(pid_file) = pid_file {
+        remove_if_present(pid_file)?;
+    }
+    let child = fork_process()?;
+    if child == 0 {
+        child_exit((|| {
+            create_session()?;
+            if let Some(pid_file) = pid_file {
+                write_pid(pid_file)?;
+            }
+            touch(detached)?;
+            park_forever()
+        })());
+    }
+    Ok(())
+}
+
+fn fork_process() -> Result<libc::pid_t, String> {
+    let pid = unsafe { libc::fork() };
+    if pid < 0 {
+        Err(format!("fork: {}", io::Error::last_os_error()))
+    } else {
+        Ok(pid)
+    }
+}
+
+fn create_session() -> Result<(), String> {
+    if unsafe { libc::setsid() } < 0 {
+        Err(format!("setsid: {}", io::Error::last_os_error()))
+    } else {
+        Ok(())
+    }
+}
+
+fn ignore_signal(signal: libc::c_int) -> Result<(), String> {
+    if unsafe { libc::signal(signal, libc::SIG_IGN) } == libc::SIG_ERR {
+        Err(format!(
+            "ignore signal {signal}: {}",
+            io::Error::last_os_error()
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+extern "C" fn record_term(_: libc::c_int) {
+    TERM_RECEIVED.store(true, Ordering::SeqCst);
+}
+
+fn install_term_handler() -> Result<(), String> {
+    if unsafe {
+        libc::signal(
+            libc::SIGTERM,
+            record_term as *const () as libc::sighandler_t,
+        )
+    } == libc::SIG_ERR
+    {
+        Err(format!(
+            "install TERM handler: {}",
+            io::Error::last_os_error()
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn wait_for_child(pid: libc::pid_t) -> Result<(), String> {
+    loop {
+        let mut status = 0;
+        let result = unsafe { libc::waitpid(pid, &mut status, 0) };
+        if result == pid {
+            return Ok(());
+        }
+        let error = io::Error::last_os_error();
+        if error.kind() != io::ErrorKind::Interrupted {
+            return Err(format!("wait for child {pid}: {error}"));
+        }
+    }
+}
+
+fn child_exit(result: Result<(), String>) -> ! {
+    let code = match result {
+        Ok(()) => 0,
+        Err(error) => {
+            eprintln!("nixfied-test-child: {error}");
+            70
+        }
+    };
+    unsafe { libc::_exit(code) }
+}
+
+fn write_pid(path: &Path) -> Result<(), String> {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("create pid-file parent {}: {error}", parent.display()))?;
+    }
+    fs::write(path, std::process::id().to_string())
+        .map_err(|error| format!("write pid file {}: {error}", path.display()))
+}
+
+fn park_forever() -> ! {
+    loop {
+        thread::park();
+    }
 }
 
 fn parse_address(value: &str) -> Result<Ipv4Addr, String> {

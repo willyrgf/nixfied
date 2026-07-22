@@ -63,62 +63,6 @@ pub fn test_child() -> PathBuf {
     canonical
 }
 
-pub fn nix_store_executable(names: &[&str]) -> Option<PathBuf> {
-    if let Some(executable) = std::env::var_os("PATH")
-        .into_iter()
-        .flat_map(|paths| std::env::split_paths(&paths).collect::<Vec<_>>())
-        .find_map(|dir| executable_from_dir(&dir, names))
-    {
-        return Some(executable);
-    }
-    fs::read_dir("/nix/store").ok()?.find_map(|entry| {
-        let package_root = entry.ok()?.path();
-        executable_from_dir(&package_root.join("bin"), names)
-    })
-}
-
-fn executable_from_dir(dir: &Path, names: &[&str]) -> Option<PathBuf> {
-    for name in names {
-        let candidate = dir.join(name);
-        let Ok(metadata) = fs::metadata(&candidate) else {
-            continue;
-        };
-        if metadata.permissions().mode() & 0o111 == 0 {
-            continue;
-        }
-        let Ok(canonical) = candidate.canonicalize() else {
-            continue;
-        };
-        if !canonical.starts_with("/nix/store") {
-            continue;
-        }
-        if candidate.starts_with("/nix/store") {
-            if spawnable(&candidate) {
-                return Some(candidate);
-            }
-            continue;
-        }
-        let store_named = canonical.with_file_name(name);
-        if store_named.exists() && spawnable(&store_named) {
-            return Some(store_named);
-        }
-        if canonical.file_name() == Some(std::ffi::OsStr::new(name)) && spawnable(&canonical) {
-            return Some(canonical);
-        }
-    }
-    None
-}
-
-fn spawnable(path: &Path) -> bool {
-    Command::new(path)
-        .arg("--version")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok()
-}
-
 pub fn closure_root_for_store_executable(executable: &Path) -> Option<PathBuf> {
     let rest = executable.to_str()?.strip_prefix("/nix/store/")?;
     let package = rest.split('/').next()?;

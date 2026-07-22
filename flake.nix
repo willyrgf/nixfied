@@ -404,7 +404,6 @@
               pkgs.sqlite
               pkgs.nix
               pkgs.git
-              pkgs.python3
             ];
             NIXFIED_TEST_CHILD = "${nixfiedTestChild}/bin/nixfied-test-child";
           };
