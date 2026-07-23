@@ -2,10 +2,9 @@
   description = "Nixfied v2 workspace";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
-    # Pinned Rust toolchain source. nixpkgs 25.05 ships an rustc older than the
-    # workspace's rust-version (let-chains), so the runtime/CLI binaries are built
-    # from a toolchain pinned here: host-Rust-free and reproducible.
+    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+    # Independently pinned Rust toolchain source. Runtime/CLI compiler upgrades
+    # stay separate from nixpkgs updates: host-Rust-free and reproducible.
     rust-overlay = {
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -22,7 +21,6 @@
       systems = [
         "aarch64-darwin"
         "aarch64-linux"
-        "x86_64-darwin"
         "x86_64-linux"
       ];
       forAllSystems =

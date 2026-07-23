@@ -18,7 +18,10 @@ attribute set of (submodule)
 
 
 *Default:*
-` { } `
+
+```nix
+{ }
+```
 
 
 
@@ -50,7 +53,7 @@ list of (one of “process”, “network-listener”, “source-read”, “fil
 
 *Default:*
 
-```
+```nix
 [
   "process"
 ]
@@ -85,7 +88,10 @@ one of “executable”, “helper”
 
 
 *Default:*
-` "executable" `
+
+```nix
+"executable"
+```
 
 
 
@@ -106,7 +112,10 @@ null or (list of string)
 
 
 *Default:*
-` null `
+
+```nix
+null
+```
 
 
 
@@ -124,7 +133,10 @@ boolean
 
 
 *Default:*
-` true `
+
+```nix
+true
+```
 
 
 
@@ -142,7 +154,10 @@ non-empty string
 
 
 *Default:*
-` "live-fingerprint" `
+
+```nix
+"live-fingerprint"
+```
 
 
 
@@ -160,7 +175,10 @@ one of “allow”, “warn”, “reject”
 
 
 *Default:*
-` "warn" `
+
+```nix
+"warn"
+```
 
 
 
@@ -178,7 +196,10 @@ non-empty string
 
 
 *Default:*
-` "." `
+
+```nix
+"."
+```
 
 
 
@@ -196,7 +217,10 @@ absolute path or non-empty string
 
 
 *Default:*
-` "live" `
+
+```nix
+"live"
+```
 
 
 
@@ -214,7 +238,10 @@ one of “live-workspace”, “snapshot”, “flake-input”
 
 
 *Default:*
-` "live-workspace" `
+
+```nix
+"live-workspace"
+```
 
 
 
@@ -232,7 +259,10 @@ signed integer
 
 
 *Default:*
-` 23080 `
+
+```nix
+23080
+```
 
 
 
@@ -250,7 +280,10 @@ signed integer
 
 
 *Default:*
-` 100 `
+
+```nix
+100
+```
 
 
 
@@ -268,7 +301,10 @@ signed integer
 
 
 *Default:*
-` 11 `
+
+```nix
+11
+```
 
 
 
@@ -312,7 +348,10 @@ attribute set of (submodule)
 
 
 *Default:*
-` { } `
+
+```nix
+{ }
+```
 
 
 
@@ -343,7 +382,10 @@ null or non-empty string
 
 
 *Default:*
-` null `
+
+```nix
+null
+```
 
 
 
@@ -374,7 +416,10 @@ null or non-empty string
 
 
 *Default:*
-` null `
+
+```nix
+null
+```
 
 
 
@@ -392,7 +437,10 @@ attribute set of (submodule)
 
 
 *Default:*
-` { } `
+
+```nix
+{ }
+```
 
 
 
@@ -413,7 +461,10 @@ list of non-empty string
 
 
 *Default:*
-` [ ] `
+
+```nix
+[ ]
+```
 
 
 
@@ -431,7 +482,10 @@ one of “process-group”, “process-tree”
 
 
 *Default:*
-` "process-group" `
+
+```nix
+"process-group"
+```
 
 
 
@@ -453,7 +507,10 @@ null or (submodule)
 
 
 *Default:*
-` null `
+
+```nix
+null
+```
 
 
 
@@ -484,7 +541,10 @@ non-empty string
 
 
 *Default:*
-` "127.0.0.1" `
+
+```nix
+"127.0.0.1"
+```
 
 
 
@@ -506,7 +566,10 @@ attribute set of (submodule)
 
 
 *Default:*
-` { } `
+
+```nix
+{ }
+```
 
 
 
@@ -524,7 +587,10 @@ non-empty string
 
 
 *Default:*
-` "127.0.0.1" `
+
+```nix
+"127.0.0.1"
+```
 
 
 
@@ -555,7 +621,10 @@ submodule
 
 
 *Default:*
-` { } `
+
+```nix
+{ }
+```
 
 
 
@@ -573,7 +642,10 @@ null or non-empty string
 
 
 *Default:*
-` null `
+
+```nix
+null
+```
 
 
 
@@ -592,7 +664,7 @@ submodule
 
 *Default:*
 
-```
+```nix
 {
   failure = "failed";
   success = "cleaned";
@@ -641,7 +713,10 @@ submodule
 
 
 *Default:*
-` { } `
+
+```nix
+{ }
+```
 
 
 
@@ -659,7 +734,10 @@ null or non-empty string
 
 
 *Default:*
-` null `
+
+```nix
+null
+```
 
 
 
@@ -677,7 +755,10 @@ submodule
 
 
 *Default:*
-` { } `
+
+```nix
+{ }
+```
 
 
 
@@ -695,7 +776,10 @@ null or (submodule)
 
 
 *Default:*
-` null `
+
+```nix
+null
+```
 
 
 
@@ -713,7 +797,10 @@ non-empty string
 
 
 *Default:*
-` "main" `
+
+```nix
+"main"
+```
 
 
 
@@ -731,7 +818,10 @@ non-empty string
 
 
 *Default:*
-` "." `
+
+```nix
+"."
+```
 
 
 
@@ -749,7 +839,10 @@ attribute set of string
 
 
 *Default:*
-` { } `
+
+```nix
+{ }
+```
 
 
 
@@ -780,7 +873,10 @@ one of “null”, “inherit”
 
 
 *Default:*
-` "null" `
+
+```nix
+"null"
+```
 
 
 
@@ -798,7 +894,10 @@ signed integer
 
 
 *Default:*
-` 30000 `
+
+```nix
+30000
+```
 
 
 
@@ -829,7 +928,10 @@ one of “tcp”, “exec”
 
 
 *Default:*
-` "tcp" `
+
+```nix
+"tcp"
+```
 
 
 
@@ -847,7 +949,10 @@ signed integer
 
 
 *Default:*
-` 20 `
+
+```nix
+20
+```
 
 
 
@@ -865,7 +970,10 @@ signed integer
 
 
 *Default:*
-` 100 `
+
+```nix
+100
+```
 
 
 
@@ -883,7 +991,10 @@ signed integer
 
 
 *Default:*
-` 1000 `
+
+```nix
+1000
+```
 
 
 
@@ -902,7 +1013,7 @@ submodule
 
 *Default:*
 
-```
+```nix
 {
   failure = "unhealthy";
   success = "healthy";
@@ -951,7 +1062,10 @@ submodule
 
 
 *Default:*
-` { } `
+
+```nix
+{ }
+```
 
 
 
@@ -969,7 +1083,10 @@ null or non-empty string
 
 
 *Default:*
-` null `
+
+```nix
+null
+```
 
 
 
@@ -987,7 +1104,10 @@ submodule
 
 
 *Default:*
-` { } `
+
+```nix
+{ }
+```
 
 
 
@@ -1005,7 +1125,10 @@ null or non-empty string
 
 
 *Default:*
-` null `
+
+```nix
+null
+```
 
 
 
@@ -1023,7 +1146,10 @@ submodule
 
 
 *Default:*
-` { } `
+
+```nix
+{ }
+```
 
 
 
@@ -1041,7 +1167,10 @@ null or (submodule)
 
 
 *Default:*
-` null `
+
+```nix
+null
+```
 
 
 
@@ -1059,7 +1188,10 @@ non-empty string
 
 
 *Default:*
-` "main" `
+
+```nix
+"main"
+```
 
 
 
@@ -1077,7 +1209,10 @@ non-empty string
 
 
 *Default:*
-` "." `
+
+```nix
+"."
+```
 
 
 
@@ -1095,7 +1230,10 @@ attribute set of string
 
 
 *Default:*
-` { } `
+
+```nix
+{ }
+```
 
 
 
@@ -1126,7 +1264,10 @@ one of “null”, “inherit”
 
 
 *Default:*
-` "null" `
+
+```nix
+"null"
+```
 
 
 
@@ -1144,7 +1285,10 @@ signed integer
 
 
 *Default:*
-` 30000 `
+
+```nix
+30000
+```
 
 
 
@@ -1175,7 +1319,10 @@ one of “tcp”, “exec”
 
 
 *Default:*
-` "tcp" `
+
+```nix
+"tcp"
+```
 
 
 
@@ -1193,7 +1340,10 @@ signed integer
 
 
 *Default:*
-` 20 `
+
+```nix
+20
+```
 
 
 
@@ -1211,7 +1361,10 @@ signed integer
 
 
 *Default:*
-` 100 `
+
+```nix
+100
+```
 
 
 
@@ -1229,7 +1382,10 @@ signed integer
 
 
 *Default:*
-` 1000 `
+
+```nix
+1000
+```
 
 
 
@@ -1248,7 +1404,7 @@ submodule
 
 *Default:*
 
-```
+```nix
 {
   failure = "not-ready";
   success = "ready";
@@ -1323,7 +1479,10 @@ non-empty string
 
 
 *Default:*
-` "main" `
+
+```nix
+"main"
+```
 
 
 
@@ -1341,7 +1500,10 @@ non-empty string
 
 
 *Default:*
-` "." `
+
+```nix
+"."
+```
 
 
 
@@ -1359,7 +1521,10 @@ attribute set of string
 
 
 *Default:*
-` { } `
+
+```nix
+{ }
+```
 
 
 
@@ -1390,7 +1555,10 @@ one of “null”, “inherit”
 
 
 *Default:*
-` "null" `
+
+```nix
+"null"
+```
 
 
 
@@ -1408,7 +1576,10 @@ signed integer
 
 
 *Default:*
-` 30000 `
+
+```nix
+30000
+```
 
 
 
@@ -1439,7 +1610,10 @@ null or non-empty string
 
 
 *Default:*
-` null `
+
+```nix
+null
+```
 
 
 
@@ -1458,7 +1632,7 @@ submodule
 
 *Default:*
 
-```
+```nix
 {
   failure = "failed";
   success = "spawned";
@@ -1507,7 +1681,10 @@ submodule
 
 
 *Default:*
-` { } `
+
+```nix
+{ }
+```
 
 
 
@@ -1525,7 +1702,10 @@ null or non-empty string
 
 
 *Default:*
-` null `
+
+```nix
+null
+```
 
 
 
@@ -1543,7 +1723,10 @@ one of “TERM”, “INT”, “QUIT”, “HUP”
 
 
 *Default:*
-` "TERM" `
+
+```nix
+"TERM"
+```
 
 
 
@@ -1562,7 +1745,7 @@ submodule
 
 *Default:*
 
-```
+```nix
 {
   failure = "failed";
   success = "stopped";
@@ -1611,7 +1794,10 @@ signed integer
 
 
 *Default:*
-` 5000 `
+
+```nix
+5000
+```
 
 
 
@@ -1629,7 +1815,10 @@ list of string
 
 
 *Default:*
-` [ ] `
+
+```nix
+[ ]
+```
 
 
 
@@ -1649,7 +1838,10 @@ null or non-empty string
 
 
 *Default:*
-` null `
+
+```nix
+null
+```
 
 
 
@@ -1668,7 +1860,7 @@ list of string
 
 *Default:*
 
-```
+```nix
 [
   "slot"
 ]
@@ -1690,7 +1882,10 @@ signed integer
 
 
 *Default:*
-` 0 `
+
+```nix
+0
+```
 
 
 
@@ -1708,7 +1903,10 @@ signed integer
 
 
 *Default:*
-` 0 `
+
+```nix
+0
+```
 
 
 
@@ -1726,7 +1924,10 @@ signed integer
 
 
 *Default:*
-` 0 `
+
+```nix
+0
+```
 
 
 
@@ -1742,7 +1943,10 @@ one of “delete-on-clean”, “protected”
 
 
 *Default:*
-` "delete-on-clean" `
+
+```nix
+"delete-on-clean"
+```
 
 
 
@@ -1760,7 +1964,10 @@ non-empty string
 
 
 *Default:*
-` "nixfied-state" `
+
+```nix
+"nixfied-state"
+```
 
 
 
@@ -1778,7 +1985,10 @@ one of “run-scoped”, “persistent”
 
 
 *Default:*
-` "run-scoped" `
+
+```nix
+"run-scoped"
+```
 
 
 
@@ -1796,7 +2006,10 @@ non-empty string
 
 
 *Default:*
-` "1" `
+
+```nix
+"1"
+```
 
 
 
@@ -1814,7 +2027,10 @@ list of non-empty string
 
 
 *Default:*
-` [ ] `
+
+```nix
+[ ]
+```
 
 
 
@@ -1827,12 +2043,15 @@ Target system shared by the compiled model, runtime, and every declared closure\
 
 
 *Type:*
-one of “aarch64-darwin”, “aarch64-linux”, “x86_64-darwin”, “x86_64-linux”
+one of “aarch64-darwin”, “aarch64-linux”, “x86_64-linux”
 
 
 
 *Default:*
-` system `
+
+```nix
+system
+```
 
 
 
@@ -1850,7 +2069,10 @@ attribute set of (submodule)
 
 
 *Default:*
-` { } `
+
+```nix
+{ }
+```
 
 
 
@@ -1868,7 +2090,10 @@ list of string
 
 
 *Default:*
-` [ ] `
+
+```nix
+[ ]
+```
 
 
 
@@ -1886,7 +2111,10 @@ submodule
 
 
 *Default:*
-` { } `
+
+```nix
+{ }
+```
 
 
 
@@ -1905,7 +2133,7 @@ list of signed integer
 
 *Default:*
 
-```
+```nix
 [
   0
 ]
@@ -1927,7 +2155,10 @@ null or (submodule)
 
 
 *Default:*
-` null `
+
+```nix
+null
+```
 
 
 
@@ -1945,7 +2176,10 @@ non-empty string
 
 
 *Default:*
-` "main" `
+
+```nix
+"main"
+```
 
 
 
@@ -1963,7 +2197,10 @@ non-empty string
 
 
 *Default:*
-` "." `
+
+```nix
+"."
+```
 
 
 
@@ -1981,7 +2218,10 @@ attribute set of string
 
 
 *Default:*
-` { } `
+
+```nix
+{ }
+```
 
 
 
@@ -2012,7 +2252,10 @@ one of “null”, “inherit”
 
 
 *Default:*
-` "null" `
+
+```nix
+"null"
+```
 
 
 
@@ -2030,7 +2273,10 @@ signed integer
 
 
 *Default:*
-` 30000 `
+
+```nix
+30000
+```
 
 
 
@@ -2061,7 +2307,10 @@ one of “leaf”, “composite”
 
 
 *Default:*
-` "leaf" `
+
+```nix
+"leaf"
+```
 
 
 
@@ -2079,7 +2328,10 @@ list of string
 
 
 *Default:*
-` [ ] `
+
+```nix
+[ ]
+```
 
 
 
@@ -2097,7 +2349,10 @@ null or non-empty string
 
 
 *Default:*
-` null `
+
+```nix
+null
+```
 
 
 
@@ -2115,7 +2370,10 @@ list of string
 
 
 *Default:*
-` [ ] `
+
+```nix
+[ ]
+```
 
 
 
@@ -2133,7 +2391,10 @@ one of “run-scoped”, “until-idle”, “persistent-until-down”
 
 
 *Default:*
-` "run-scoped" `
+
+```nix
+"run-scoped"
+```
 
 
 
@@ -2151,7 +2412,10 @@ attribute set of (submodule)
 
 
 *Default:*
-` { } `
+
+```nix
+{ }
+```
 
 
 
@@ -2169,7 +2433,10 @@ list of string
 
 
 *Default:*
-` [ ] `
+
+```nix
+[ ]
+```
 
 
 
@@ -2201,7 +2468,7 @@ list of string
 
 *Default:*
 
-```
+```nix
 [
   "summary"
 ]

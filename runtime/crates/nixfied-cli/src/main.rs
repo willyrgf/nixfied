@@ -231,7 +231,6 @@ fn flake_template(nixfied_url: &str) -> String {
       systems = [
         "aarch64-darwin"
         "aarch64-linux"
-        "x86_64-darwin"
         "x86_64-linux"
       ];
       forAllSystems = f: builtins.listToAttrs (
@@ -402,6 +401,7 @@ mod tests {
         assert!(flake.contains("nixfied.url = \"path:/repo\""));
         // The scaffold wires the generated framework apps plus exported verbs.
         assert!(flake.contains("projectApps ./nixfied.nix"));
+        assert!(!flake.contains("x86_64-darwin"));
         let module = read(&root.join("nixfied.nix"));
         assert!(module.contains("nixfied.project.projectId = \"install-proof\""));
         // The scaffold ships a runnable service so `nix build .#model` builds,
