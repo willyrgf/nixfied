@@ -639,6 +639,10 @@ impl StartedService {
         // Graceful shutdown is the model's declared stop signal escalated to
         // SIGKILL. The graceful budget is the model's stopPolicy.timeoutMs, capped
         // by the CLI timeout as an upper bound.
+        if let Some(error) = self.escape_error() {
+            let _ = record_lifecycle_failure(registry, &context, &stop_record, &error);
+            return Err(self.settle_failed_service(registry, timeout_ms, error));
+        }
         let stop_timeout = (self.service.stop.timeout.as_millis() as u64).min(timeout_ms);
         let escalated = match self.stop_owned(self.service.stop.signal.libc(), stop_timeout) {
             Ok(escalated) => escalated,
@@ -703,6 +707,19 @@ impl StartedService {
         let Some(monitor) = &self.monitor else {
             return None;
         };
+        // Refresh at the decision boundary so shutdown cannot signal the
+        // foreground group before the asynchronous monitor records a child
+        // that has already escaped it.
+        if let Err(error) = monitor.refresh(
+            self.pid,
+            self.pgid,
+            matches!(
+                self.service.containment,
+                ContainmentRequirement::ProcessGroup
+            ),
+        ) {
+            return Some(error);
+        }
         let escaped = monitor.escaped_descendants();
         if escaped.is_empty() {
             return None;
@@ -820,9 +837,20 @@ impl StartedService {
     /// escalation to SIGKILL was required.
     fn stop_owned(&self, signal: i32, timeout_ms: u64) -> RuntimeResult<bool> {
         match self.service.containment {
-            ContainmentRequirement::ProcessGroup => {
-                terminate_process_group_signal(self.pgid, signal, timeout_ms)
-            }
+            // Preserve the refreshed descendant identities across the first
+            // signal, when an escapee can otherwise reparent and disappear
+            // from both the foreground group and the live process tree.
+            ContainmentRequirement::ProcessGroup => terminate_process_tree_with_snapshot(
+                self.pid,
+                self.pgid,
+                signal,
+                timeout_ms,
+                &self
+                    .monitor
+                    .as_ref()
+                    .map(ProcessMonitor::known_descendants)
+                    .unwrap_or_default(),
+            ),
             ContainmentRequirement::ProcessTree => {
                 terminate_process_tree_signal(self.pid, self.pgid, signal, timeout_ms)
             }
@@ -2788,6 +2816,15 @@ struct ProcessMonitor {
 }
 
 impl ProcessMonitor {
+    fn refresh(
+        &self,
+        pid: u32,
+        expected_pgid: i32,
+        strict_process_group: bool,
+    ) -> RuntimeResult<()> {
+        collect_process_tree(pid, expected_pgid, strict_process_group, &self.state)
+    }
+
     fn escaped_descendants(&self) -> Vec<TrackedProcessIdentity> {
         self.state
             .lock()
@@ -2827,10 +2864,10 @@ fn spawn_process_monitor(
     let thread_stop = Arc::clone(&stop);
     let handle = thread::spawn(move || {
         while !thread_stop.load(Ordering::SeqCst) {
-            collect_process_tree(pid, expected_pgid, strict_process_group, &thread_state);
+            let _ = collect_process_tree(pid, expected_pgid, strict_process_group, &thread_state);
             thread::sleep(MONITOR_INTERVAL);
         }
-        collect_process_tree(pid, expected_pgid, strict_process_group, &thread_state);
+        let _ = collect_process_tree(pid, expected_pgid, strict_process_group, &thread_state);
     });
     ProcessMonitor {
         state,
@@ -2844,10 +2881,8 @@ fn collect_process_tree(
     expected_pgid: i32,
     strict_process_group: bool,
     state: &Arc<Mutex<ProcessMonitorState>>,
-) {
-    let Ok(descendants) = descendant_pids(pid) else {
-        return;
-    };
+) -> RuntimeResult<()> {
+    let descendants = descendant_pids(pid)?;
     // Under process-tree containment, supervised children may form their own
     // process groups; that is not an escape. Strict process-group services still
     // flag any descendant that leaves the owned group.
@@ -2861,17 +2896,22 @@ fn collect_process_tree(
             }
         }
     }
-    if let Ok(mut state) = state.lock() {
-        for descendant in descendants {
-            state
-                .known_descendants
-                .entry(descendant)
-                .or_insert_with(|| monitored_process(descendant));
-        }
-        for process in escaped {
-            state.escaped_descendants.insert(process.pid, process);
-        }
+    let mut state = state.lock().map_err(|_| {
+        RuntimeError::new(
+            ErrorCode::ProcEscape,
+            "process monitor state lock is poisoned",
+        )
+    })?;
+    for descendant in descendants {
+        state
+            .known_descendants
+            .entry(descendant)
+            .or_insert_with(|| monitored_process(descendant));
     }
+    for process in escaped {
+        state.escaped_descendants.insert(process.pid, process);
+    }
+    Ok(())
 }
 
 fn monitored_process(pid: u32) -> TrackedProcessIdentity {
