@@ -74,6 +74,28 @@ upgrades.
 - **`model.json`** is the only semantic seam. Its `views/docs.md` file is a
   disposable, model-derived human reference.
 
+### Ownership in practice
+
+Nixfied owns:
+
+- task and service execution;
+- process containment and cancellation;
+- service state and lifecycle;
+- declared endpoint placement and ownership verification;
+- runtime-owned run evidence;
+- marker-gated, path-confined cleanup of state roots it owns.
+
+Compiler and tool caches remain child-, tool-, and project-owned. Nixfied does
+not own their:
+
+- placement or compatibility policy;
+- writer arbitration;
+- inventory, timestamps, or byte accounting;
+- retention or eviction policy;
+- corruption recovery;
+- cold/warm modes;
+- operator history.
+
 Build the model to inspect the exact tasks, services, slots, port windows, and
 state policy of an adopted project:
 
