@@ -134,6 +134,7 @@ pkgs.writeShellApplication {
         echo "    pin: HEAD — uncommitted changes are NOT exercised here (use --dirty)" >&2
       fi
     fi
+    current_system=$(nix eval --impure --raw --expr builtins.currentSystem)
     path_project=$(mktemp -d)
     nix run "$checkout#install" -- \
       --root "$path_project" --project-id path-adopt --name path-adopt --nixfied-url "$pin" \
@@ -142,10 +143,18 @@ pkgs.writeShellApplication {
     path_lock_before=$(sha256sum "$path_project/flake.lock")
     path_help=$(cd "$path_project" && nix run --no-write-lock-file .#help) \
       || fail "adoption: non-Git contextual help failed"
-    printf '%s\n' "$path_help" | grep -Eq "^  smoke +Run the Nixfied task 'smoke'$" \
+    printf '%s\n' "$path_help" | grep -Eq "^  smoke +Run the starter smoke test$" \
       || fail "adoption: non-Git contextual help omitted the exported task"
     [ "$(sha256sum "$path_project/flake.lock")" = "$path_lock_before" ] \
       || fail "adoption: non-Git contextual help modified the lock file"
+    ${pkgs.gnused}/bin/sed -i \
+      '/^  nixfied.surface.verbs.smoke = /c\  nixfied.surface.verbs = { };' \
+      "$path_project/nixfied.nix"
+    empty_surface_apps=$(nix eval --no-write-lock-file --json "$path_project#apps.$current_system") \
+      || fail "adoption: empty surface app metadata did not evaluate"
+    printf '%s\n' "$empty_surface_apps" | jq -e '
+      (keys | sort) == ["clean", "down", "help", "model-check", "ps", "run"]
+    ' >/dev/null || fail "adoption: empty surface unexpectedly exported a task app"
     rm -rf "$path_project"
 
     project_repo=$(mktemp -d)
@@ -161,7 +170,6 @@ pkgs.writeShellApplication {
       | grep -Fq "stage flake.nix and nixfied.nix when using Git, then run nix flake lock" \
       || fail "adoption: installer omitted the required Git lock ordering"
     git -C "$project" add flake.nix nixfied.nix
-    current_system=$(nix eval --impure --raw --expr builtins.currentSystem)
     if prelock_error=$(nix eval --no-write-lock-file --json "$project#apps.$current_system" 2>&1); then
       fail "adoption: projectApps accepted a project without flake.lock"
     fi
@@ -182,10 +190,11 @@ pkgs.writeShellApplication {
         (.program | type == "string" and length > 0)
         and (.meta.description | type == "string" and length > 0)
       )
+      and .smoke.meta.description == "Run the starter smoke test"
     ' >/dev/null || fail "adoption: untouched scaffold app namespace was incomplete"
     scaffold_help=$(cd "$project" && nix run --no-write-lock-file .#help) \
       || fail "adoption: untouched scaffold help failed"
-    printf '%s\n' "$scaffold_help" | grep -Eq "^  smoke +Run the Nixfied task 'smoke'$" \
+    printf '%s\n' "$scaffold_help" | grep -Eq "^  smoke +Run the starter smoke test$" \
       || fail "adoption: untouched scaffold help omitted the exported task"
     if printf '%s\n' "$scaffold_help" | grep -Eq '^  merged +'; then
       fail "adoption: untouched scaffold unexpectedly contained the merge fixture"
@@ -193,8 +202,32 @@ pkgs.writeShellApplication {
     if nix run "$checkout#install" -- --root "$project" >/dev/null 2>&1; then
       fail "adoption: re-running install did not refuse an existing flake.nix"
     fi
+    printf '%s\n' \
+      '{ lib, ... }: { nixfied.surface.verbs.smoke = lib.mkDefault "Reusable default smoke"; }' \
+      >"$project/reusable.nix"
     ${pkgs.gnused}/bin/sed -i \
-      '/^      apps = forAllSystems /c\      apps = forAllSystems (system: let generated = (builtins.getAttr system nixfied.lib).projectApps ./nixfied.nix; in generated // { merged = generated.run // { meta.description = "Merged adopter app"; }; });' \
+      's@^  imports = \[ adapters.synthetic \];@  imports = [ adapters.synthetic ./reusable.nix ];@' \
+      "$project/nixfied.nix"
+    ${pkgs.gnused}/bin/sed -i \
+      's@^  nixfied.surface.verbs.smoke = .*@  nixfied.surface.verbs = { smoke = "Run the starter smoke test"; "composite-smoke" = "Run the composite smoke test"; }; nixfied.tasks.composite-smoke = { kind = "composite"; steps.only.task = "smoke"; };@' \
+      "$project/nixfied.nix"
+    git -C "$project" add nixfied.nix reusable.nix
+    git -C "$project" commit -q -m surface
+    surface_apps=$(nix eval --json "$project#apps.$current_system") \
+      || fail "adoption: leaf/composite surface app metadata did not evaluate"
+    printf '%s\n' "$surface_apps" | jq -e '
+      (keys | sort) == ["clean", "composite-smoke", "down", "help", "model-check", "ps", "run", "smoke"]
+      and .smoke.meta.description == "Run the starter smoke test"
+      and .["composite-smoke"].meta.description == "Run the composite smoke test"
+    ' >/dev/null || fail "adoption: leaf/composite app descriptions were not copied exactly"
+    surface_help=$(cd "$project" && nix run --no-write-lock-file .#help) \
+      || fail "adoption: leaf/composite contextual help failed"
+    printf '%s\n' "$surface_help" | grep -Eq "^  smoke +Run the starter smoke test$" \
+      || fail "adoption: contextual help omitted the exact leaf description"
+    printf '%s\n' "$surface_help" | grep -Eq "^  composite-smoke +Run the composite smoke test$" \
+      || fail "adoption: contextual help omitted the exact composite description"
+    ${pkgs.gnused}/bin/sed -i \
+      '/^      apps = forAllSystems /c\      apps = forAllSystems (system: let generated = (builtins.getAttr system nixfied.lib).projectApps ./nixfied.nix; in generated // { smoke = generated.smoke // { meta.description = "Overridden adopter verb"; }; merged = generated.run // { meta.description = "Merged adopter app"; }; });' \
       "$project/flake.nix"
     git -C "$project" add flake.nix
     git -C "$project" commit -q -m merged-app
@@ -205,11 +238,19 @@ pkgs.writeShellApplication {
         (.program | type == "string" and length > 0)
         and (.meta.description | type == "string" and length > 0)
       )
-      and (.smoke.meta.description | contains("smoke"))
+      and .smoke.meta.description == "Overridden adopter verb"
+      and .["composite-smoke"].meta.description == "Run the composite smoke test"
       and has("help")
       and .merged.meta.description == "Merged adopter app"
     ' >/dev/null || fail "adoption: generated apps lack discoverable descriptions"
-    model="$(nix build --no-link --print-out-paths "$project#model")/model.json"
+    model_dir="$(nix build --no-link --print-out-paths "$project#model")"
+    model="$model_dir/model.json"
+    if jq -e 'tostring | (contains("Run the starter smoke test") or contains("Run the composite smoke test") or contains("Overridden adopter verb"))' "$model" >/dev/null; then
+      fail "adoption: surface descriptions entered model.json"
+    fi
+    if grep -Eq "Run the starter smoke test|Run the composite smoke test|Overridden adopter verb" "$model_dir/views/docs.md"; then
+      fail "adoption: surface descriptions entered views/docs.md"
+    fi
     st=$(mktemp -d)
     wk=$(mktemp -d)
     help_state="$st-help"
@@ -227,6 +268,10 @@ pkgs.writeShellApplication {
       || fail "adoption: contextual help did not match final project app metadata"
     printf '%s\n' "$project_help" | grep -Eq "^  help +List this flake's runnable commands$" \
       || fail "adoption: contextual help omitted itself"
+    printf '%s\n' "$project_help" | grep -Eq "^  smoke +Overridden adopter verb$" \
+      || fail "adoption: contextual help ignored a final app metadata override"
+    printf '%s\n' "$project_help" | grep -Eq "^  composite-smoke +Run the composite smoke test$" \
+      || fail "adoption: contextual help lost the composite description"
     printf '%s\n' "$project_help" | grep -Eq '^  merged +Merged adopter app$' \
       || fail "adoption: contextual help omitted a post-projectApps merge"
     if wrong_context_error=$(
@@ -252,7 +297,7 @@ pkgs.writeShellApplication {
         ps) help_flag=--help; usage='nix run .#ps' ;;
         down) help_flag=-h; usage='nix run .#down' ;;
         clean) help_flag=--help; usage='nix run .#clean' ;;
-        smoke) help_flag=-h; usage='nix run .#<verb>' ;;
+        smoke|composite-smoke) help_flag=-h; usage='nix run .#<verb>' ;;
       esac
       help_stdout="$wk/$app-help.stdout"
       ( cd "$wk" && NIXFIED_STATE_DIR="$help_state" nix run "$project#$app" -- "$help_flag" ) \
@@ -279,6 +324,13 @@ pkgs.writeShellApplication {
       || fail "adoption: scaffolded smoke verb did not print the run summary path"
     grep -q "  logs: " "$smoke_stderr" \
       || fail "adoption: scaffolded smoke verb did not print the logs path"
+    composite_stdout="$st/composite.stdout"
+    composite_stderr="$st/composite.stderr"
+    ( cd "$wk" && NIXFIED_STATE_DIR="$st" nix run "$project#composite-smoke" -- --timeout-ms 60000 ) \
+      >"$composite_stdout" 2>"$composite_stderr" || fail "adoption: scaffolded composite smoke verb failed"
+    [ ! -s "$composite_stdout" ] || fail "adoption: scaffolded composite smoke verb wrote JSON stdout in summary mode"
+    grep -q "  result: ok 1 passed, 0 failed in " "$composite_stderr" \
+      || fail "adoption: scaffolded composite smoke verb did not print a concise result"
     smoke_json_stdout="$st/smoke-json.stdout"
     smoke_json_stderr="$st/smoke-json.stderr"
     ( cd "$wk" && NIXFIED_STATE_DIR="$st" nix run "$project#smoke" -- --timeout-ms 60000 --json ) \

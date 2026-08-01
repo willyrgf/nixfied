@@ -71,6 +71,14 @@ let
   # discipline: invalid composition must fail at evaluation, not compile into
   # a model the runtime only rejects at admission.
   tasks = config.nixfied.tasks;
+  surfaceVerbs = config.nixfied.surface.verbs;
+  surfaceVerbIds = builtins.attrNames surfaceVerbs;
+  # `attrsOf` values are lazy. Force every description here so malformed or
+  # throwing descriptions fail model evaluation even when no app projection is
+  # requested later.
+  surfaceDescriptionsForced = builtins.deepSeq (
+    map (verb: surfaceVerbs.${verb}) surfaceVerbIds
+  ) true;
   deriveFacts = import ../lib/derive-facts.nix { inherit lib; };
   taskNames = builtins.attrNames tasks;
   stepSafe = id: builtins.match "[A-Za-z0-9][A-Za-z0-9_-]*" id != null;
@@ -347,13 +355,14 @@ let
       "effective operation ids must be globally unique: ${builtins.concatStringsSep ", " duplicateOperationIds}"
     )
     (expect prepareTasksDeclared "service prepare must reference a declared task")
+    (expect surfaceDescriptionsForced "surface.verbs descriptions must evaluate")
     (expect (lib.all (
       verb: builtins.hasAttr verb tasks
-    ) config.nixfied.surface.verbs) "surface.verbs must name declared tasks")
+    ) surfaceVerbIds) "surface.verbs must name declared tasks")
     (expect
       (lib.all (
         verb: !(builtins.elem verb reservedProjectApps)
-      ) config.nixfied.surface.verbs)
+      ) surfaceVerbIds)
       "surface.verbs must not collide with the reserved project-app namespace (${builtins.concatStringsSep ", " reservedProjectApps})"
     )
     (expect combinedGraphAcyclic "the combined connectsTo + prepare-requires service graph must be acyclic")

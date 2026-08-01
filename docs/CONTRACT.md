@@ -91,8 +91,13 @@ when the model/runtime contract changes.
   cache artifacts. Child tools and projects own those concerns through ordinary
   invocation environment or arguments.
 - **VERB-1:** `help`, `run`, `ps`, `down`, `clean`, and `model-check` are reserved
-  project-app names. Project verbs derive only from task names explicitly
-  exported through `nixfied.surface.verbs`; collisions fail at Nix evaluation.
+  project-app names. `nixfied.surface.verbs` is an attrset mapping each
+  explicitly exported task id to its exact nonempty user-facing app
+  description. Project verbs derive only from those task names; undeclared ids,
+  reserved-name collisions, empty/non-string descriptions, and the former list
+  form fail at Nix evaluation. `{}` emits no adopter task apps. The descriptions
+  are Nix-only app metadata: they are not emitted into `model.json` or
+  `views/docs.md`, and do not enter `runtimeAbi`.
 - **SURFACE-1:** hidden runtime commands are framework-owned and listed in the
   capability descriptor, not declared by an adopter in the model. The adopter
   declaration owns only its exported task-verb surface; unrelated custom flake

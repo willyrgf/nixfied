@@ -34,8 +34,9 @@ example-only flake wiring.
   `api-check` and `worker-check` once the database has answered, then the
   `gate` over the whole stack. Running it brings up exactly the services its
   leaves require — `servicesRequired` is derived, never curated.
-- **Verbs** — `nixfied.surface.verbs = [ "release" ]` marks the composite for
-  export when an adopter wires `projectApps`.
+- **Verbs** — `nixfied.surface.verbs.release = "Run the downstream release workflow"`
+  marks the composite for export and supplies its generated app description
+  when an adopter wires `projectApps`.
 - **Slots** — `slotPolicy.max = 1`, so two slots can run side by side with
   disjoint ports, state, and registries.
 

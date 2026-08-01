@@ -468,7 +468,39 @@ else
       { ... }:
       {
         imports = [ composite ];
-        nixfied.surface.verbs = [ "ghost" ];
+        nixfied.surface.verbs.ghost = "Run the missing task";
+      }
+    ))
+
+    (reject "an empty surface verb description" (
+      { ... }:
+      {
+        imports = [ composite ];
+        nixfied.surface.verbs.smoke = "";
+      }
+    ))
+
+    (reject "a non-string surface verb description" (
+      { ... }:
+      {
+        imports = [ composite ];
+        nixfied.surface.verbs.smoke = [ "invalid" ];
+      }
+    ))
+
+    (reject "a surface verb description that is not forced" (
+      { ... }:
+      {
+        imports = [ composite ];
+        nixfied.surface.verbs.smoke = throw "surface description must be forced";
+      }
+    ))
+
+    (reject "the removed list form of surface verbs" (
+      { ... }:
+      {
+        imports = [ composite ];
+        nixfied.surface.verbs = [ "smoke" ];
       }
     ))
 
@@ -490,7 +522,7 @@ else
             ];
           };
         };
-        nixfied.surface.verbs = [ "help" ];
+        nixfied.surface.verbs.help = "Run the reserved task";
       }
     ))
 

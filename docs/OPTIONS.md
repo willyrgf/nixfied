@@ -2017,19 +2017,19 @@ non-empty string
 
 
 
-Task ids exported as project flake apps; framework project-app names are reserved\.
+Mapping from exported task ids to their exact project flake-app descriptions; framework project-app names are reserved\.
 
 
 
 *Type:*
-list of non-empty string
+attribute set of non-empty string
 
 
 
 *Default:*
 
 ```nix
-[ ]
+{ }
 ```
 
 

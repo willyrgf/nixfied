@@ -205,7 +205,7 @@ in
 
   # The adopter-owned public surface: the release flow is the one verb this
   # example exports (`nix run .#release` once wired through projectApps).
-  nixfied.surface.verbs = [ "release" ];
+  nixfied.surface.verbs.release = "Run the downstream release workflow";
 
   # A release flow: prove the database answers, then exercise both services,
   # then run the gate over the whole stack. A composite task; the services it

@@ -26,16 +26,16 @@ in
     description = "Target system shared by the compiled model, runtime, and every declared closure.";
   };
 
-  # The adopter-owned public verb surface (VERB-1): an explicit list of task
-  # ids that become flake apps (`.#check` -> `runtime run --task check`).
-  # Which tasks form the public surface is a *choice*, not a derivable fact —
-  # explicit export is what keeps imported adapter tasks from silently
-  # becoming public apps. The generated framework project-app namespace is
-  # reserved and can never collide.
+  # The adopter-owned public verb surface (VERB-1): an explicit mapping of
+  # task ids to the descriptions of the flake apps they become (`.#check` ->
+  # `runtime run --task check`). Which tasks form the public surface is a
+  # *choice*, not a derivable fact — explicit export is what keeps imported
+  # adapter tasks from silently becoming public apps. The generated framework
+  # project-app namespace is reserved and can never collide.
   options.nixfied.surface.verbs = mkOption {
-    type = types.listOf types.nonEmptyStr;
-    default = [ ];
-    description = "Task ids exported as project flake apps; framework project-app names are reserved.";
+    type = types.attrsOf types.nonEmptyStr;
+    default = { };
+    description = "Mapping from exported task ids to their exact project flake-app descriptions; framework project-app names are reserved.";
   };
 
   options.nixfied.slotPolicy = {

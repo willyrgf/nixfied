@@ -61,7 +61,9 @@ Outside a Git worktree, only `nix flake lock` is required.
 
 `compileModel` evaluates, validates, derives, and emits the model package.
 `projectApps` returns the framework discovery/control apps plus the task verbs
-explicitly listed in `nixfied.surface.verbs`. `projectApps` accepts only the
+explicitly mapped in `nixfied.surface.verbs`. That option is an attrset from
+task id to the exact nonempty description for its generated app; descriptions are
+Nix-only app metadata and do not enter the model. `projectApps` accepts only the
 project-local, root-level `./nixfied.nix` form shown above in a flake with
 `flake.nix` and `flake.lock`; function, attrset, subdirectory, and externally
 sourced modules are unsupported so help can bind its catalog to the defining
@@ -193,7 +195,7 @@ in
     };
   };
 
-  nixfied.surface.verbs = [ "check" ];
+  nixfied.surface.verbs.check = "Run formatting, linting, and tests";
 }
 ```
 
@@ -211,11 +213,24 @@ The main rules are:
   derived from their leaves.
 - Importing an adapter contributes ordinary service and task definitions. It
   starts nothing until a selected leaf requires one of those services.
-- `nixfied.surface.verbs` is an explicit public choice. Imported or internal
-  tasks do not silently become flake apps.
+- `nixfied.surface.verbs` is an explicit public choice and description mapping.
+  Imported or internal tasks do not silently become flake apps. The generated
+  verb app starts with the description declared in `nixfied.nix`, while final
+  flake app metadata remains authoritative after composition and is what
+  contextual help renders.
 - Tool caches and build directories remain child- and project-owned. Configure
   them through ordinary invocation arguments or `env`; Nixfied does not place,
   lock, report, retain, or clean them.
+
+For example, a tool whose exit codes `0` and `1` are both successful can declare:
+
+```nix
+nixfied.tasks.inspect.exitPolicy.successCodes = [ 0 1 ];
+```
+
+If `inspect` exits `1`, Nixfied records that raw code but treats the task as
+successful; the overall command therefore returns success unless another task,
+lifecycle operation, or runtime phase fails.
 
 The source defaults to the live workspace. `logicalRoot`, `sourceMode`,
 `sourceIdentity`, and `dirtyPolicy` define whether invocations observe that

@@ -28,6 +28,7 @@ let
   runtimeBin = "${runtime}/bin/nixfied-runtime";
   modelJson = "${model}/model.json";
   verbs = config.nixfied.surface.verbs;
+  verbIds = builtins.attrNames verbs;
   mkApp =
     name: description: text:
     let
@@ -38,15 +39,16 @@ let
       program = "${drv}/bin/${name}";
       meta.description = description;
     };
-  # `validate.nix` already proved each verb names a declared task and avoids
-  # the framework namespace; this projection just derives the apps.
+  # `validate.nix` already proved each verb names a declared task, avoids the
+  # framework namespace, and forced every description; this projection just
+  # derives the apps.
   verbApps = builtins.listToAttrs (
     map (verb: {
       name = verb;
       value =
-        mkApp verb "Run the Nixfied task '${verb}'"
+        mkApp verb verbs.${verb}
           ''exec "${runtimeBin}" run --model "${modelJson}" --task "${verb}" "$@"'';
-    }) verbs
+    }) verbIds
   );
 in
 assert lib.assertMsg moduleIsProjectRoot "lib.projectApps requires project-root flake.nix, flake.lock, and nixfied.nix";

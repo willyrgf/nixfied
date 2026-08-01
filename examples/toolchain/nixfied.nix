@@ -241,8 +241,8 @@ in
   };
 
   # The adopter-owned public surface.
-  nixfied.surface.verbs = [
-    "check"
-    "ci"
-  ];
+  nixfied.surface.verbs = {
+    check = "Run formatting, linting, and tests";
+    ci = "Run the complete CI workflow";
+  };
 }

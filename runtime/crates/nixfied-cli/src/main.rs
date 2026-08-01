@@ -274,7 +274,7 @@ fn nixfied_module_template(metadata: &ProjectMetadata) -> String {
   # Add your own leaf tasks (lint/test), compose them into composite tasks
   # (kind = "composite", steps = ...), and export the ones that form your
   # public surface. `nix run .#run -- --task <id>` runs any declared task.
-  nixfied.surface.verbs = [ "smoke" ];
+  nixfied.surface.verbs.smoke = "Run the starter smoke test";
 }}
 "#,
         nix_escape(&metadata.project_id),
@@ -408,7 +408,7 @@ mod tests {
         // and exports the starter task so `nix run .#smoke` works out of the
         // box.
         assert!(module.contains("imports = [ adapters.synthetic ];"));
-        assert!(module.contains("nixfied.surface.verbs = [ \"smoke\" ];"));
+        assert!(module.contains("nixfied.surface.verbs.smoke = \"Run the starter smoke test\";"));
     }
 
     #[test]

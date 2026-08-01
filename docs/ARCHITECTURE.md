@@ -128,11 +128,14 @@ lifecycle responsibility.
 Adopter vocabulary enters the contract as **names over this algebra, never as
 schema**: `check` is not a concept nixfied knows, it is a composite an
 adopter named, exported to the flake surface through
-`nixfied.surface.verbs`. Exported verbs share a namespace with framework apps
-reserved by VERB-1 and derive only from adopter-exported task names. Contextual
-help is a source-bound, reference-neutral Nix projection of final current-flake
-metadata; a mismatched caller context fails instead of projecting another
-flake. It adds nothing to the model algebra or runtime ABI. Environment
+`nixfied.surface.verbs`. That attrset combines the explicit export choice with
+the presentation metadata for each generated app: its key is the task id and
+its value is the exact nonempty user-facing description. Exported verbs share
+a namespace with framework apps reserved by VERB-1 and derive only from
+adopter-exported task names. Contextual help is a source-bound, reference-neutral
+Nix projection of final current-flake metadata; a mismatched caller context
+fails instead of projecting another flake. It adds nothing to the model algebra
+or runtime ABI. Environment
 **membership does not exist**: running a task brings up exactly the services
 its leaves require —
 `servicesRequired`, `operationBindings`, and operation ids are **derived**
