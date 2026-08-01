@@ -387,14 +387,33 @@ state with the old pin as well; add `--purge` only for state declared protected
 or persistent. Then update the input and verify the new model:
 
 ```sh
+nix run github:willyrgf/nixfied#upgrade -- --root . --plan > nixfied-upgrade.diff
 nix run github:willyrgf/nixfied#upgrade -- --root .
 nix build .#model
 nix run .#model-check
 ```
 
 `upgrade` refreshes only the `nixfied` input/lock entry. Pass
-`--nixfied-url URL` to rewrite the pin, or `--no-lock` to skip lock refresh. It
-does not edit `nixfied.nix` or translate old models or state.
+`--nixfied-url URL` to rewrite the pin, or `--no-lock` to skip lock refresh. A
+checked upgrade requires the existing `flake.lock`: it uses that exact locked
+Nixfied source as the old side of the comparison, resolves a candidate lock in
+a temporary file, and applies it only after the candidate model passes
+preflight. It does not edit `nixfied.nix` or translate old models or state.
+
+The checked command prints a framed unified diff to stdout for `README.md` and
+the regular files under `docs/`; status, warnings, and Nix diagnostics go to
+stderr. `--plan` performs the same candidate resolution, documentation diff,
+and `model.drvPath` preflight without changing project files, so the redirected
+diff is safe to inspect before applying. A lock-resolution or model-preflight
+failure is nonzero and leaves `flake.nix`, `flake.lock`, and `nixfied.nix`
+unchanged. If either source cannot be materialized, the report says that the
+documentation diff is unavailable; if the scoped files are identical, it says
+that no checked-in documentation changed. Neither result is a compatibility
+claim—the model preflight is the gate.
+
+`--no-lock` is an explicit mechanical URL-only mode. It skips the source
+documentation diff and candidate verification and reports both skips; use it
+only when that checked inspection is intentionally unavailable.
 
 If the new model is rejected, restore the previous input and lock from version
 control and use that pin for recovery. `model-check` checks model origin and

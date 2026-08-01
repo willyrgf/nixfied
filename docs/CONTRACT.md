@@ -165,6 +165,17 @@ when the model/runtime contract changes.
 
 ## Output and failure contract
 
+- **UPGRADE-1:** the Nix-only `upgrade` flake app derives its checked
+  documentation report from the adopter's old and candidate locked Nixfied
+  sources, comparing only `README.md` and regular files under `docs/`. The
+  report is framed on stdout; status, warnings, and Nix diagnostics are on
+  stderr. Checked mode performs candidate model preflight before changing
+  project wiring, preserves `nixfied.nix`, and leaves `flake.nix` and
+  `flake.lock` unchanged when lock resolution or model preflight fails.
+  `--plan` performs the same inspection without mutation. `--no-lock` is an
+  explicit URL-only mode that reports documentation and candidate verification
+  as skipped. This surface is Nix-only and does not enter `model.json`,
+  `runtimeAbi`, or Rust runtime behavior.
 - `run` defaults to the human `summary` projection: progress, pass/fail summary,
   and evidence pointers on stderr, with stdout empty. `--json` is the stable
   structured projection; `--both` explicitly emits both. Captured child output
