@@ -2122,7 +2122,11 @@ submodule
 
 
 
-Exit codes treated as success\.
+Nonempty, duplicate-free list of child exit codes treated as leaf-task
+success\. The raw child code is retained in task evidence, while the
+Nixfied command reports the overall run outcome: an accepted code is
+not passed through as the command status, and an unaccepted code
+produces ` TASK_FAILED `\.
 
 
 

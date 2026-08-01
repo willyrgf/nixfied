@@ -211,6 +211,11 @@ The main rules are:
   Service `connectsTo` declarations order transitive dependencies and make
   their named endpoints addressable. Composite service requirements are
   derived from their leaves.
+- A leaf's `exitPolicy.successCodes` is a nonempty, duplicate-free list that
+  classifies child exit codes as task success; it defaults to `[ 0 ]`. The raw
+  child code remains in task evidence, but is not passed through as the `nix run`
+  status. An accepted code contributes success to the overall run, while any
+  other code produces `TASK_FAILED`.
 - Importing an adapter contributes ordinary service and task definitions. It
   starts nothing until a selected leaf requires one of those services.
 - `nixfied.surface.verbs` is an explicit public choice and description mapping.
