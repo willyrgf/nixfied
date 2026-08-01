@@ -6,10 +6,16 @@ pkgs.writeShellApplication {
   name = "nixfied-upgrade";
   runtimeInputs = [
     pkgs.coreutils
+    pkgs.diffutils
+    pkgs.findutils
+    pkgs.gnused
+    pkgs.jq
     pkgs.nix
+    pkgs.python3
   ];
   text = ''
     set -euo pipefail
+    export LC_ALL=C
 
     # Nixfied upgrade surface.
     #
@@ -23,9 +29,10 @@ pkgs.writeShellApplication {
     root="."
     nixfied_url=""
     update_lock=1
+    plan=0
 
     usage() {
-      echo 'usage: nixfied upgrade [--root PATH] [--nixfied-url URL] [--no-lock]'
+      echo 'usage: nixfied upgrade [--root PATH] [--nixfied-url URL] [--plan] [--no-lock]'
     }
 
     take_value() {
@@ -47,6 +54,10 @@ pkgs.writeShellApplication {
         --nixfied-url)
           nixfied_url="$(take_value "$1" "''${2-}")"
           shift 2
+          ;;
+        --plan)
+          plan=1
+          shift
           ;;
         --no-lock)
           update_lock=0
@@ -75,7 +86,11 @@ pkgs.writeShellApplication {
       exit 3
     fi
 
+    root="$(realpath "$root")"
+    flake="$root/flake.nix"
     flake_eval_path="$(realpath "$flake")"
+    lock="$root/flake.lock"
+    project_file="$root/nixfied.nix"
 
     has_nixfied_input_pin() {
       local verdict
@@ -100,6 +115,35 @@ pkgs.writeShellApplication {
       } >&2
       exit 3
     fi
+
+    file_identity() {
+      local path="$1"
+      if [[ -f "$path" ]]; then
+        sha256sum -- "$path" | cut -d ' ' -f1
+      else
+        printf '%s' absent
+      fi
+    }
+
+    flake_before="$(file_identity "$flake")"
+    lock_before="$(file_identity "$lock")"
+    project_before="$(file_identity "$project_file")"
+    lock_before_exists=0
+    [[ -f "$lock" ]] && lock_before_exists=1
+
+    if [[ "$update_lock" -eq 1 && "$lock_before_exists" -eq 0 ]]; then
+      echo "flake.lock is required for a checked upgrade because it identifies the old Nixfied source" >&2
+      echo "No files were changed. Use --no-lock for the mechanical URL-only mode." >&2
+      exit 3
+    fi
+
+    work="$(mktemp -d)"
+    apply_temp=""
+    cleanup() {
+      [[ -z "$apply_temp" ]] || rm -f -- "$apply_temp"
+      rm -rf -- "$work"
+    }
+    trap cleanup EXIT
 
     nix_escape() {
       local value="$1"
@@ -133,16 +177,14 @@ pkgs.writeShellApplication {
       [[ "$stripped" == 'nixfied={'* || "$stripped" == 'inputs.nixfied={'* ]]
     }
 
-    changed=""
-    preserved=""
+    staged_flake=""
+    stage_flake_rewrite() {
+      [[ -n "$nixfied_url" ]] || return 0
 
-    if [[ -e "$root/nixfied.nix" ]]; then
-      preserved="nixfied.nix"
-    fi
-
-    if [[ -n "$nixfied_url" ]]; then
+      local nixfied_url_escaped rewritten matches in_nixfied_input_block
+      local nixfied_input_block_depth line stripped indent
       nixfied_url_escaped="$(nix_escape "$nixfied_url")"
-      rewritten="$root/.nixfied-upgrade.tmp"
+      rewritten="$work/flake.nix"
       matches=0
       in_nixfied_input_block=0
       nixfied_input_block_depth=0
@@ -184,42 +226,489 @@ pkgs.writeShellApplication {
       done <"$flake"
 
       if [[ "$matches" -ne 1 ]]; then
-        rm -f "$rewritten"
-        {
-          echo "expected exactly one nixfied input url assignment in flake.nix, found $matches"
-          echo "No files were changed."
-          echo "Refusing to guess which input pin to rewrite."
-        } >&2
+        echo "expected exactly one nixfied input url assignment in flake.nix, found $matches" >&2
+        echo "No files were changed." >&2
+        echo "Refusing to guess which input pin to rewrite." >&2
         exit 3
       fi
+      staged_flake="$rewritten"
+    }
 
-      mv "$rewritten" "$flake"
-      changed="flake.nix (nixfied.url -> $nixfied_url)"
-    fi
+    assert_unchanged() {
+      if [[ "$(file_identity "$flake")" != "$flake_before" \
+        || "$(file_identity "$lock")" != "$lock_before" \
+        || "$(file_identity "$project_file")" != "$project_before" ]]; then
+        echo "upgrade aborted: flake.nix, flake.lock, or nixfied.nix changed while the candidate was being prepared" >&2
+        echo "upgrade not applied; no project files were changed by this command" >&2
+        exit 6
+      fi
+    }
 
-    if [[ "$update_lock" -eq 1 ]]; then
-      if command -v nix >/dev/null 2>&1; then
-        if nix flake update nixfied --flake "$root" >/dev/null 2>&1; then
-          changed="''${changed:+$changed; }flake.lock (nixfied input)"
+    stage_flake_rewrite
+
+    # Replace a regular file only if the content captured before the Nix
+    # preflight is still present. The exchange is atomic: a concurrent writer
+    # is observed after the swap and the original directory entry is restored
+    # before this function reports a conflict. Linux and Darwin provide the
+    # needed exchange primitive under different names.
+    atomic_replace() {
+      python3 - "$1" "$2" "$3" <<'PY'
+import ctypes
+import ctypes.util
+import errno
+import hashlib
+import os
+import platform
+import sys
+
+staged, destination, expected = sys.argv[1:]
+
+def digest(path):
+    checksum = hashlib.sha256()
+    with open(path, "rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            checksum.update(block)
+    return checksum.hexdigest()
+
+def fail(message, code):
+    print("atomic replace: " + message, file=sys.stderr)
+    raise SystemExit(code)
+
+def exchange(old_path, new_path):
+    libc_name = ctypes.util.find_library("c")
+    libc = ctypes.CDLL(libc_name or None, use_errno=True)
+    if sys.platform == "darwin":
+        renamex = getattr(libc, "renamex_np", None)
+        if renamex is None:
+            fail("Darwin renamex_np is unavailable", 4)
+        renamex.restype = ctypes.c_int
+        result = renamex(os.fsencode(old_path), os.fsencode(new_path), 2)
+    else:
+        syscall_numbers = {"x86_64": 316, "aarch64": 276, "arm64": 276}
+        number = syscall_numbers.get(platform.machine())
+        if number is None:
+            fail("Linux renameat2 is unavailable on this architecture", 4)
+        syscall = libc.syscall
+        syscall.restype = ctypes.c_long
+        result = syscall(number, -100, os.fsencode(old_path), -100, os.fsencode(new_path), 2)
+    if result != 0:
+        error = ctypes.get_errno()
+        fail("atomic exchange failed: " + errno.errorcode.get(error, str(error)), 4)
+
+if not os.path.exists(staged):
+    fail("staged file is missing", 4)
+if os.path.lexists(destination):
+    if not os.path.isfile(destination) or os.path.islink(destination):
+        fail("destination is not a regular file", 4)
+    if digest(destination) != expected:
+        fail("destination changed concurrently", 3)
+    exchange(staged, destination)
+    if digest(staged) != expected:
+        exchange(staged, destination)
+        fail("destination changed concurrently", 3)
+    try:
+        os.unlink(staged)
+    except OSError:
+        pass
+else:
+    if expected != "absent":
+        fail("destination disappeared concurrently", 3)
+    try:
+        os.link(staged, destination)
+        os.unlink(staged)
+    except FileExistsError:
+        fail("destination appeared concurrently", 3)
+PY
+    }
+
+    if [[ "$update_lock" -eq 0 ]]; then
+      echo "Nixfied upgrade inspection" >&2
+      echo "documentation diff: skipped (--no-lock; no candidate lock was produced)" >&2
+      echo "candidate verification: skipped (--no-lock)" >&2
+      if [[ -n "$nixfied_url" ]]; then
+        if cmp -s "$staged_flake" "$flake"; then
+          echo "flake.nix: unchanged" >&2
+        elif [[ "$plan" -eq 1 ]]; then
+          echo "plan: would rewrite flake.nix nixfied.url to $nixfied_url" >&2
         else
-          echo "warning: failed to refresh flake.lock for the nixfied input; run 'nix flake update nixfied' manually" >&2
+          assert_unchanged
+          install_flake="$flake.nixfied-upgrade.$$"
+          apply_temp="$install_flake"
+          cp -- "$staged_flake" "$install_flake"
+          replace_status=0
+          atomic_replace "$install_flake" "$flake" "$flake_before" || replace_status=$?
+          rm -f -- "$install_flake"
+          apply_temp=""
+          if [[ "$replace_status" -eq 3 ]]; then
+            echo "upgrade aborted: flake.nix changed concurrently; no project files were changed" >&2
+            exit 6
+          elif [[ "$replace_status" -ne 0 ]]; then
+            echo "failed to apply flake.nix; no project files were changed" >&2
+            exit 7
+          fi
+          echo "changed: flake.nix (nixfied.url -> $nixfied_url)" >&2
         fi
       else
-        echo "warning: nix not found on PATH; skipped flake.lock refresh" >&2
+        echo "Nothing to upgrade in $root" >&2
+        echo "Pass --nixfied-url to repin the input, or drop --no-lock to refresh the lock." >&2
       fi
-    fi
-
-    if [[ -z "$changed" ]]; then
-      echo "Nothing to upgrade in $root"
-      echo "Pass --nixfied-url to repin the input, or drop --no-lock to refresh the lock."
+      if [[ -n "$project_file" && -f "$project_file" ]]; then
+        echo "preserved (project-owned): nixfied.nix" >&2
+      fi
+      if [[ "$plan" -eq 1 ]]; then
+        echo "plan: no project files changed" >&2
+      fi
       exit 0
     fi
 
-    echo "Upgraded Nixfied wiring in $root"
-    echo "changed: $changed"
-    if [[ -n "$preserved" ]]; then
-      echo "preserved (project-owned): $preserved"
+    candidate_lock="$work/flake.lock"
+    update_command=(nix flake update nixfied --flake "$root" --output-lock-file "$candidate_lock")
+    if [[ -n "$nixfied_url" ]]; then
+      update_command+=(--override-input nixfied "$nixfied_url")
     fi
-    echo "next: nix build .#model"
+
+    echo "Nixfied upgrade candidate" >&2
+    if ! "''${update_command[@]}" >/dev/null; then
+      echo "candidate lock resolution failed" >&2
+      echo "upgrade not applied; no project files were changed" >&2
+      exit 4
+    fi
+
+    lock_node_json() {
+      local lock_path="$1"
+      jq -c '
+        .nodes[.root].inputs.nixfied as $nixfied
+        | .nodes[$nixfied] // empty
+      ' "$lock_path"
+    }
+
+    report_identity() {
+      local label="$1"
+      local lock_path="$2"
+      local node_json
+      if ! node_json="$(lock_node_json "$lock_path")" || [[ -z "$node_json" ]]; then
+        echo "$label source: unavailable (nixfied lock node is missing)" >&2
+        return 1
+      fi
+      printf '%s source: ' "$label" >&2
+      printf '%s\n' "$node_json" | jq -c '{original, locked}' >&2
+      return 0
+    }
+
+    old_source=""
+    candidate_source=""
+    old_available=0
+    candidate_available=0
+    if [[ -f "$lock" ]]; then
+      report_identity "old" "$lock" || true
+    else
+      echo "old source: unavailable (flake.lock is missing)" >&2
+    fi
+    report_identity "candidate" "$candidate_lock" || true
+
+    materialize_source() {
+      local label="$1"
+      local lock_path="$2"
+      local error_path="$work/$label-archive.stderr"
+      local archive_json source_path
+      if [[ ! -f "$lock_path" ]]; then
+        echo "documentation diff unavailable: $label source has no lock file" >&2
+        return 1
+      fi
+      if ! archive_json="$(nix flake archive --json --no-write-lock-file \
+        --reference-lock-file "$lock_path" "$root" 2>"$error_path")"; then
+        echo "documentation diff unavailable: $label source materialization failed" >&2
+        [[ ! -s "$error_path" ]] || sed 's/^/  nix: /' "$error_path" >&2
+        return 1
+      fi
+      if ! source_path="$(printf '%s\n' "$archive_json" | jq -er '.inputs.nixfied.path // empty')"; then
+        echo "documentation diff unavailable: $label source path was not present in nix flake archive output" >&2
+        return 1
+      fi
+      if [[ ! -d "$source_path" ]]; then
+        echo "documentation diff unavailable: $label source path is not a directory" >&2
+        return 1
+      fi
+      printf '%s' "$source_path"
+    }
+
+    if [[ -f "$lock" ]]; then
+      if old_source="$(materialize_source old "$lock")"; then
+        old_available=1
+      fi
+    fi
+    if candidate_source="$(materialize_source candidate "$candidate_lock")"; then
+      candidate_available=1
+    fi
+
+    scope_paths() {
+      local source="$1"
+      if [[ -f "$source/README.md" ]]; then
+        printf 'README.md\0'
+      fi
+      if [[ -d "$source/docs" ]]; then
+        while IFS= read -r -d $'\0' file; do
+          printf 'docs/%s\0' "''${file#"$source/docs/"}"
+        done < <(find "$source/docs" -type f -print0)
+      fi
+    }
+
+    emit_docs_diff() {
+      local old="$1"
+      local new="$2"
+      local scope="$work/documentation-scope"
+      local relative old_file new_file diff_status has_changes=0
+      {
+        scope_paths "$old"
+        scope_paths "$new"
+      } | sort -z -u >"$scope"
+      while IFS= read -r -d $'\0' relative; do
+        old_file="$old/$relative"
+        new_file="$new/$relative"
+        diff_status=0
+        if [[ -f "$old_file" && -f "$new_file" ]]; then
+          diff -u --label "old/$relative" --label "new/$relative" "$old_file" "$new_file" || diff_status=$?
+        elif [[ -f "$old_file" ]]; then
+          diff -u --label "old/$relative" --label "new/$relative" "$old_file" /dev/null || diff_status=$?
+        else
+          diff -u --label "old/$relative" --label "new/$relative" /dev/null "$new_file" || diff_status=$?
+        fi
+        if [[ "$diff_status" -gt 1 ]]; then
+          echo "documentation diff failed while comparing $relative" >&2
+          return 1
+        fi
+        if [[ "$diff_status" -eq 1 ]]; then
+          has_changes=1
+        fi
+      done <"$scope"
+      if [[ "$has_changes" -eq 0 ]]; then
+        echo '--- NO CHECKED-IN DOCUMENTATION CHANGED ---'
+      fi
+    }
+
+    printf '%s\n' '--- BEGIN NIXFIED DOCUMENTATION DIFF ---'
+    if [[ "$old_available" -eq 1 && "$candidate_available" -eq 1 ]]; then
+      if ! emit_docs_diff "$old_source" "$candidate_source"; then
+        echo '--- DOCUMENTATION DIFF UNAVAILABLE ---'
+        echo "documentation diff unavailable: source comparison failed" >&2
+      fi
+    else
+      echo '--- DOCUMENTATION DIFF UNAVAILABLE ---'
+      echo "documentation diff unavailable: one or both locked Nixfied sources could not be materialized" >&2
+    fi
+    printf '%s\n' '--- END NIXFIED DOCUMENTATION DIFF ---'
+
+    if ! nix eval --no-write-lock-file --reference-lock-file "$candidate_lock" --raw \
+      "$root#model.drvPath" >/dev/null; then
+      echo "model preflight: failed" >&2
+      echo "candidate source is shown above; project declaration remains unchanged" >&2
+      echo "upgrade not applied; no project files were changed" >&2
+      exit 5
+    fi
+    echo "model preflight: passed" >&2
+
+    assert_unchanged
+    if [[ "$plan" -eq 1 ]]; then
+      echo "plan: candidate resolved and model preflight passed" >&2
+      echo "plan: no project files changed" >&2
+      exit 0
+    fi
+
+    flake_changed=0
+    lock_changed=0
+    if [[ -n "$staged_flake" ]] && ! cmp -s "$staged_flake" "$flake"; then
+      flake_changed=1
+    fi
+    if [[ "$lock_before_exists" -eq 0 ]] || ! cmp -s "$candidate_lock" "$lock"; then
+      lock_changed=1
+    fi
+    candidate_lock_identity="$(file_identity "$candidate_lock")"
+    candidate_flake_identity=""
+    if [[ -n "$staged_flake" ]]; then
+      candidate_flake_identity="$(file_identity "$staged_flake")"
+    fi
+
+    lock_backup="$work/flake.lock.before"
+    flake_backup="$work/flake.nix.before"
+
+    lock_apply_started=0
+    flake_apply_started=0
+    apply_in_progress=1
+    rollback() {
+      local rollback_failed=0 rollback_tmp replace_status current_identity
+      if [[ "$flake_apply_started" -eq 1 ]]; then
+        current_identity="$(file_identity "$flake")"
+        if [[ "$current_identity" == "$flake_before" ]]; then
+          flake_apply_started=0
+        elif [[ "$current_identity" != "$candidate_flake_identity" ]]; then
+          rollback_failed=1
+        fi
+      fi
+      if [[ "$flake_apply_started" -eq 1 ]]; then
+        rollback_tmp="$flake.nixfied-upgrade.rollback.$$"
+        if ! cp -- "$flake_backup" "$rollback_tmp"; then
+          rollback_failed=1
+        else
+          replace_status=0
+          atomic_replace "$rollback_tmp" "$flake" "$candidate_flake_identity" || replace_status=$?
+          rm -f -- "$rollback_tmp"
+          [[ "$replace_status" -eq 0 ]] || rollback_failed=1
+        fi
+      fi
+      if [[ "$lock_apply_started" -eq 1 ]]; then
+        current_identity="$(file_identity "$lock")"
+        if [[ "$current_identity" == "$lock_before" ]]; then
+          lock_apply_started=0
+        elif [[ "$current_identity" != "$candidate_lock_identity" ]]; then
+          rollback_failed=1
+        fi
+      fi
+      if [[ "$lock_apply_started" -eq 1 ]]; then
+        if [[ "$lock_before_exists" -eq 1 ]]; then
+          rollback_tmp="$lock.nixfied-upgrade.rollback.$$"
+          if ! cp -- "$lock_backup" "$rollback_tmp"; then
+            rollback_failed=1
+          else
+            replace_status=0
+            atomic_replace "$rollback_tmp" "$lock" "$candidate_lock_identity" || replace_status=$?
+            rm -f -- "$rollback_tmp"
+            [[ "$replace_status" -eq 0 ]] || rollback_failed=1
+          fi
+        elif ! rm -f -- "$lock"; then
+          rollback_failed=1
+        fi
+      fi
+      return "$rollback_failed"
+    }
+
+    on_interrupt() {
+      if [[ "$apply_in_progress" -eq 1 ]]; then
+        if ! rollback; then
+          echo "upgrade interrupted and rollback failed; inspect the project files" >&2
+          exit 8
+        fi
+        echo "upgrade interrupted; candidate rolled back" >&2
+      fi
+      exit 130
+    }
+    trap on_interrupt INT TERM HUP
+
+    if [[ "$lock_changed" -eq 1 && "$lock_before_exists" -eq 1 ]]; then
+      if ! cp -- "$lock" "$lock_backup"; then
+        echo "failed to prepare flake.lock backup; no project files were changed" >&2
+        exit 7
+      fi
+    fi
+    if [[ "$flake_changed" -eq 1 ]]; then
+      if ! cp -- "$flake" "$flake_backup"; then
+        echo "failed to prepare flake.nix backup; no project files were changed" >&2
+        exit 7
+      fi
+    fi
+
+    if [[ "$lock_changed" -eq 1 ]]; then
+      lock_install="$lock.nixfied-upgrade.$$"
+      apply_temp="$lock_install"
+      lock_apply_started=1
+      if ! cp -- "$candidate_lock" "$lock_install"; then
+        apply_temp=""
+        if ! rollback; then
+          echo "failed to prepare candidate flake.lock and rollback also failed; inspect the project files" >&2
+          exit 8
+        fi
+        echo "failed to prepare candidate flake.lock; no project files were changed" >&2
+        exit 7
+      fi
+      replace_status=0
+      atomic_replace "$lock_install" "$lock" "$lock_before" || replace_status=$?
+      rm -f -- "$lock_install"
+      apply_temp=""
+      if [[ "$replace_status" -eq 3 ]]; then
+        echo "upgrade aborted: flake.lock changed concurrently; no project files were changed" >&2
+        exit 6
+      elif [[ "$replace_status" -ne 0 ]]; then
+        if ! rollback; then
+          echo "failed to apply candidate flake.lock and rollback also failed; inspect the project files" >&2
+          exit 8
+        fi
+        echo "failed to apply candidate flake.lock; candidate was rolled back" >&2
+        exit 7
+      fi
+      if [[ "$flake_changed" -eq 1 && "$(file_identity "$lock")" != "$candidate_lock_identity" ]]; then
+        if ! rollback; then
+          echo "flake.lock changed during the upgrade and rollback failed; inspect the project files" >&2
+          exit 8
+        fi
+        echo "flake.lock changed during the upgrade; candidate was rolled back" >&2
+        exit 6
+      fi
+    fi
+    if [[ "$flake_changed" -eq 1 && -n "''${NIXFIED_UPGRADE_TEST_PAUSE_AFTER_LOCK-}" ]]; then
+      echo "test pause after lock apply" >&2
+      sleep "''${NIXFIED_UPGRADE_TEST_PAUSE_AFTER_LOCK}"
+    fi
+    if [[ "$flake_changed" -eq 1 ]]; then
+      flake_install="$flake.nixfied-upgrade.$$"
+      apply_temp="$flake_install"
+      flake_apply_started=1
+      if ! cp -- "$staged_flake" "$flake_install"; then
+        apply_temp=""
+        if ! rollback; then
+          echo "failed to prepare candidate flake.nix and rollback also failed; inspect the project files" >&2
+          exit 8
+        fi
+        echo "failed to prepare candidate flake.nix; candidate was rolled back" >&2
+        exit 7
+      fi
+      replace_status=0
+      atomic_replace "$flake_install" "$flake" "$flake_before" || replace_status=$?
+      rm -f -- "$flake_install"
+      apply_temp=""
+      if [[ "$replace_status" -ne 0 ]]; then
+        if ! rollback; then
+          echo "failed to apply flake.nix and rollback also failed; inspect the project files" >&2
+          exit 8
+        fi
+        if [[ "$replace_status" -eq 3 ]]; then
+          echo "upgrade aborted: flake.nix changed concurrently; candidate was rolled back" >&2
+          exit 6
+        fi
+        echo "failed to apply flake.nix; candidate was rolled back" >&2
+        exit 7
+      fi
+    fi
+    if [[ "$(file_identity "$lock")" != "$candidate_lock_identity" \
+      || ( "$flake_changed" -eq 1 && "$(file_identity "$flake")" != "$candidate_flake_identity" ) ]]; then
+      if ! rollback; then
+        echo "project files changed during the upgrade and rollback failed; inspect the project files" >&2
+        exit 8
+      fi
+      echo "project files changed during the upgrade; candidate was rolled back" >&2
+      exit 6
+    fi
+    apply_in_progress=0
+    trap - INT TERM HUP
+
+    if [[ "$flake_changed" -eq 1 ]]; then
+      changed="flake.nix (nixfied.url -> $nixfied_url)"
+    else
+      changed=""
+    fi
+    if [[ "$lock_changed" -eq 1 ]]; then
+      changed="''${changed:+$changed; }flake.lock (nixfied input)"
+    fi
+    if [[ -z "$changed" ]]; then
+      echo "upgrade candidate already matches the project in $root" >&2
+    else
+      echo "upgraded Nixfied wiring in $root" >&2
+      echo "changed: $changed" >&2
+    fi
+    if [[ -f "$project_file" && "$(file_identity "$project_file")" == "$project_before" ]]; then
+      echo "preserved (project-owned): nixfied.nix" >&2
+    else
+      echo "nixfied.nix changed concurrently; this command did not edit it" >&2
+    fi
+    echo "next: nix build $root#model" >&2
+    echo "next: nix run $root#model-check" >&2
   '';
 }
