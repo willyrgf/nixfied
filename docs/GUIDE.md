@@ -413,13 +413,13 @@ claim—the model preflight is the gate.
 
 The status report presents each locked source as a readable identity block
 with its type, original source, revision when available, and NAR hash when
-available. A successful checked apply reports `candidate verification: passed`,
-`upgrade applied: yes`, the changed or unchanged `flake.nix`/`flake.lock`
-wiring, and `nixfied.nix` as preserved project-owned input. It then says that
-post-upgrade validation was not run and prints the recommended `nix build
-<root>#model` and `nix run <root>#model-check` commands. The documentation diff
-itself remains the only stdout payload, so this distinction is preserved when
-redirecting it to a file.
+available. Plan and apply use the same candidate verification, wiring,
+ownership, and next-step summary: plan says `would change` and includes the
+command to rerun without `--plan`; apply says `changed` when it writes the
+candidate. Both report that post-upgrade validation was not run and print the
+recommended `nix build <root>#model` and `nix run <root>#model-check` commands.
+The documentation diff itself remains the only stdout payload, so this
+distinction is preserved when redirecting it to a file.
 
 `--no-lock` is an explicit mechanical URL-only mode. It skips the source
 documentation diff and candidate verification and reports both skips; use it

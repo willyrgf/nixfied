@@ -543,6 +543,22 @@ pkgs.writeShellApplication {
         || fail "upgrade golden: compatible plan omitted plan apply status"
       grep -Fq 'plan: no project files changed' "$success_project/plan.stderr" \
         || fail "upgrade golden: compatible plan omitted no-mutation status"
+      grep -Fq 'would change: flake.nix' "$success_project/plan.stderr" \
+        || fail "upgrade golden: compatible plan omitted flake.nix plan status"
+      grep -Fq 'would change: flake.lock (nixfied input)' "$success_project/plan.stderr" \
+        || fail "upgrade golden: compatible plan omitted flake.lock plan status"
+      grep -Fq 'preserved: nixfied.nix (project-owned)' "$success_project/plan.stderr" \
+        || fail "upgrade golden: compatible plan omitted project ownership"
+      grep -Fq 'post-upgrade validation: not run (--plan)' "$success_project/plan.stderr" \
+        || fail "upgrade golden: compatible plan omitted post-upgrade validation status"
+      grep -Fxq 'next:' "$success_project/plan.stderr" \
+        || fail "upgrade golden: compatible plan omitted next-step header"
+      grep -Fq 'rerun upgrade without --plan' "$success_project/plan.stderr" \
+        || fail "upgrade golden: compatible plan omitted apply next step"
+      grep -Fq '  nix build ' "$success_project/plan.stderr" \
+        || fail "upgrade golden: compatible plan omitted model build next step"
+      grep -Fq '  nix run ' "$success_project/plan.stderr" \
+        || fail "upgrade golden: compatible plan omitted model-check next step"
       grep -Fq "  narHash: $upgrade_old_nar_hash" "$success_project/plan.stderr" \
         || fail "upgrade golden: compatible plan omitted old NAR identity"
       grep -Fq "  narHash: $upgrade_new_nar_hash" "$success_project/plan.stderr" \

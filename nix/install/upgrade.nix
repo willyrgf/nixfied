@@ -527,26 +527,25 @@ PY
     fi
     printf '%s\n' '--- END NIXFIED DOCUMENTATION DIFF ---'
 
-    if ! nix eval --no-write-lock-file --reference-lock-file "$candidate_lock" --raw \
-      "$root#model.drvPath" >/dev/null; then
-      echo "candidate verification: failed (model preflight)" >&2
-      echo "upgrade applied: no" >&2
-      echo "candidate source is shown above; project declaration remains unchanged" >&2
-      echo "upgrade not applied; no project files were changed" >&2
-      exit 5
-    fi
-    echo "candidate verification: passed (model preflight)" >&2
+    verify_candidate() {
+      if ! nix eval --no-write-lock-file --reference-lock-file "$candidate_lock" --raw \
+        "$root#model.drvPath" >/dev/null; then
+        echo "candidate verification: failed (model preflight)" >&2
+        echo "upgrade applied: no" >&2
+        echo "candidate source is shown above; project declaration remains unchanged" >&2
+        echo "upgrade not applied; no project files were changed" >&2
+        exit 5
+      fi
+      echo "candidate verification: passed (model preflight)" >&2
+    }
+
+    verify_candidate
 
     if [[ -n "''${NIXFIED_UPGRADE_TEST_PAUSE_BEFORE_APPLY-}" ]]; then
       echo "test pause before apply" >&2
       sleep "''${NIXFIED_UPGRADE_TEST_PAUSE_BEFORE_APPLY}"
     fi
     assert_unchanged
-    if [[ "$plan" -eq 1 ]]; then
-      echo "upgrade applied: no (--plan)" >&2
-      echo "plan: no project files changed" >&2
-      exit 0
-    fi
 
     flake_changed=0
     lock_changed=0
@@ -556,6 +555,69 @@ PY
     if [[ "$lock_before_exists" -eq 0 ]] || ! cmp -s "$candidate_lock" "$lock"; then
       lock_changed=1
     fi
+
+    report_checked_summary() {
+      local mode="$1"
+      local changed=""
+      if [[ "$flake_changed" -eq 1 ]]; then
+        changed="flake.nix (nixfied.url -> $nixfied_url)"
+      fi
+      if [[ "$lock_changed" -eq 1 ]]; then
+        changed="''${changed:+$changed; }flake.lock (nixfied input)"
+      fi
+
+      if [[ "$mode" == "plan" ]]; then
+        echo "upgrade applied: no (--plan)" >&2
+        echo "plan: no project files changed" >&2
+        if [[ "$flake_changed" -eq 0 ]]; then
+          echo "unchanged: flake.nix" >&2
+        else
+          echo "would change: flake.nix (nixfied.url -> $nixfied_url)" >&2
+        fi
+        if [[ "$lock_changed" -eq 0 ]]; then
+          echo "unchanged: flake.lock (nixfied input)" >&2
+        else
+          echo "would change: flake.lock (nixfied input)" >&2
+        fi
+      elif [[ -z "$changed" ]]; then
+        echo "upgrade applied: no (project already matched candidate)" >&2
+      else
+        echo "upgrade applied: yes" >&2
+        echo "upgraded Nixfied wiring in $root" >&2
+        echo "changed: $changed" >&2
+      fi
+
+      if [[ "$mode" != "plan" ]]; then
+        if [[ "$flake_changed" -eq 0 ]]; then
+          echo "unchanged: flake.nix" >&2
+        fi
+        if [[ "$lock_changed" -eq 0 ]]; then
+          echo "unchanged: flake.lock (nixfied input)" >&2
+        fi
+      fi
+      if [[ -f "$project_file" && "$(file_identity "$project_file")" == "$project_before" ]]; then
+        echo "preserved: nixfied.nix (project-owned)" >&2
+      elif [[ "$mode" != "plan" ]]; then
+        echo "nixfied.nix changed concurrently; this command did not edit it" >&2
+      fi
+      if [[ "$mode" == "plan" ]]; then
+        echo "post-upgrade validation: not run (--plan)" >&2
+      else
+        echo "post-upgrade validation: not run" >&2
+      fi
+      echo "next:" >&2
+      if [[ "$mode" == "plan" ]]; then
+        echo "  rerun upgrade without --plan to apply the candidate" >&2
+      fi
+      echo "  nix build $root#model" >&2
+      echo "  nix run $root#model-check" >&2
+    }
+
+    if [[ "$plan" -eq 1 ]]; then
+      report_checked_summary plan
+      exit 0
+    fi
+
     candidate_lock_identity="$(file_identity "$candidate_lock")"
     candidate_flake_identity=""
     if [[ -n "$staged_flake" ]]; then
@@ -722,36 +784,6 @@ PY
     fi
     apply_in_progress=0
     trap - INT TERM HUP
-
-    if [[ "$flake_changed" -eq 1 ]]; then
-      changed="flake.nix (nixfied.url -> $nixfied_url)"
-    else
-      changed=""
-    fi
-    if [[ "$lock_changed" -eq 1 ]]; then
-      changed="''${changed:+$changed; }flake.lock (nixfied input)"
-    fi
-    if [[ -z "$changed" ]]; then
-      echo "upgrade applied: no (project already matched candidate)" >&2
-    else
-      echo "upgrade applied: yes" >&2
-      echo "upgraded Nixfied wiring in $root" >&2
-      echo "changed: $changed" >&2
-    fi
-    if [[ "$flake_changed" -eq 0 ]]; then
-      echo "unchanged: flake.nix" >&2
-    fi
-    if [[ "$lock_changed" -eq 0 ]]; then
-      echo "unchanged: flake.lock (nixfied input)" >&2
-    fi
-    if [[ -f "$project_file" && "$(file_identity "$project_file")" == "$project_before" ]]; then
-      echo "preserved: nixfied.nix (project-owned)" >&2
-    else
-      echo "nixfied.nix changed concurrently; this command did not edit it" >&2
-    fi
-    echo "post-upgrade validation: not run" >&2
-    echo "next:" >&2
-    echo "  nix build $root#model" >&2
-    echo "  nix run $root#model-check" >&2
+    report_checked_summary apply
   '';
 }
