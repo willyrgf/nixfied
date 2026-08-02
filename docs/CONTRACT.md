@@ -172,7 +172,12 @@ when the model/runtime contract changes.
   stderr. Checked mode performs candidate model preflight before changing
   project wiring, preserves `nixfied.nix`, and leaves `flake.nix` and
   `flake.lock` unchanged when lock resolution or model preflight fails.
-  `--plan` performs the same inspection without mutation. `--no-lock` is an
+  `--plan` performs the same inspection without mutation. Source identities are
+  reported as readable type, original source, revision, and NAR hash fields
+  rather than raw lock JSON. A successful apply reports candidate verification,
+  whether the upgrade was applied, changed or unchanged project wiring,
+  preserved `nixfied.nix`, and the post-upgrade validation commands; those
+  commands are guidance and are not run by `upgrade`. `--no-lock` is an
   explicit URL-only mode that reports documentation and candidate verification
   as skipped. This surface is Nix-only and does not enter `model.json`,
   `runtimeAbi`, or Rust runtime behavior.

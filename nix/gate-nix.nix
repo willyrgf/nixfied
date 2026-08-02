@@ -219,10 +219,10 @@ pkgs.writeShellApplication {
       grep -Fq "$race_candidate_pin" "$project/flake.nix" \
         || fail "upgrade transaction: concurrent upgrade applied the wrong flake pin"
       if [ -n "$dirty" ]; then
-        grep -Fq '"type":"git"' "$project/race-one.stderr" "$project/race-two.stderr" \
+        grep -Fq '  type: git' "$project/race-one.stderr" "$project/race-two.stderr" \
           || fail "upgrade transaction: concurrent Git candidate identity was not reported"
       else
-        grep -Fq '"type":"path"' "$project/race-one.stderr" "$project/race-two.stderr" \
+        grep -Fq '  type: path' "$project/race-one.stderr" "$project/race-two.stderr" \
           || fail "upgrade transaction: concurrent path candidate identity was not reported"
       fi
       [ -z "$(find "$project" -maxdepth 1 -type f -name '*nixfied-upgrade*' -print -quit)" ] \
@@ -276,7 +276,8 @@ pkgs.writeShellApplication {
       if nix run "$checkout#upgrade" -- --root "$model_project" --nixfied-url "$pin" >"$model_project/stdout" 2>"$model_project/stderr"; then
         fail "upgrade transaction: incompatible candidate unexpectedly succeeded"
       fi
-      grep -Fq "model preflight: failed" "$model_project/stderr" || fail "upgrade transaction: model failure was not reported"
+      grep -Fq "candidate verification: failed (model preflight)" "$model_project/stderr" || fail "upgrade transaction: model failure was not reported"
+      grep -Fq "upgrade applied: no" "$model_project/stderr" || fail "upgrade transaction: model failure omitted apply status"
       grep -Fq "upgrade not applied; no project files were changed" "$model_project/stderr" || fail "upgrade transaction: model failure omitted no-mutation status"
       [ "$before_flake" = "$(sha256sum "$model_project/flake.nix")" ] || fail "upgrade transaction: model failure changed flake.nix"
       [ "$before_lock" = "$(sha256sum "$model_project/flake.lock")" ] || fail "upgrade transaction: model failure changed flake.lock"
@@ -308,6 +309,9 @@ pkgs.writeShellApplication {
       nix run "$checkout#upgrade" -- --root "$no_lock_project" --nixfied-url "$no_lock_url" --no-lock >"$no_lock_project/stdout" 2>"$no_lock_project/stderr" || fail "upgrade transaction: --no-lock failed"
       grep -Fq "documentation diff: skipped (--no-lock; no candidate lock was produced)" "$no_lock_project/stderr" || fail "upgrade transaction: --no-lock omitted documentation skip"
       grep -Fq "candidate verification: skipped (--no-lock)" "$no_lock_project/stderr" || fail "upgrade transaction: --no-lock omitted verification skip"
+      grep -Fq "upgrade applied: no (flake.nix already matched)" "$no_lock_project/stderr" || fail "upgrade transaction: --no-lock omitted already-matched status"
+      grep -Fq "unchanged: flake.nix" "$no_lock_project/stderr" || fail "upgrade transaction: --no-lock omitted unchanged flake status"
+      grep -Fq "preserved: nixfied.nix (project-owned)" "$no_lock_project/stderr" || fail "upgrade transaction: --no-lock omitted project ownership"
       [ "$before_lock" = "$(sha256sum "$no_lock_project/flake.lock")" ] || fail "upgrade transaction: --no-lock changed flake.lock"
       [ "$before_project" = "$(sha256sum "$no_lock_project/nixfied.nix")" ] || fail "upgrade transaction: --no-lock changed nixfied.nix"
       rm -rf "$no_lock_project"
@@ -442,14 +446,16 @@ pkgs.writeShellApplication {
         || run_status=$?
       [ "$run_status" -eq 5 ] || fail "upgrade golden: incompatible plan returned $run_status instead of 5"
       assert_upgrade_golden "$failure_project/plan.stdout" "incompatible plan"
-      grep -Fq '"type":"tarball"' "$failure_project/plan.stderr" \
+      grep -Fq '  type: tarball' "$failure_project/plan.stderr" \
         || fail "upgrade golden: tarball identity was not reported for the incompatible plan"
-      grep -Fq "\"narHash\":\"$upgrade_old_nar_hash\"" "$failure_project/plan.stderr" \
+      grep -Fq "  narHash: $upgrade_old_nar_hash" "$failure_project/plan.stderr" \
         || fail "upgrade golden: old tarball NAR hash was not reported"
-      grep -Fq "\"narHash\":\"$upgrade_new_nar_hash\"" "$failure_project/plan.stderr" \
+      grep -Fq "  narHash: $upgrade_new_nar_hash" "$failure_project/plan.stderr" \
         || fail "upgrade golden: candidate tarball NAR hash was not reported"
-      grep -Fq 'model preflight: failed' "$failure_project/plan.stderr" \
+      grep -Fq 'candidate verification: failed (model preflight)' "$failure_project/plan.stderr" \
         || fail "upgrade golden: incompatible plan omitted model preflight failure"
+      grep -Fq 'upgrade applied: no' "$failure_project/plan.stderr" \
+        || fail "upgrade golden: incompatible plan omitted apply status"
       grep -Fq 'upgrade not applied; no project files were changed' "$failure_project/plan.stderr" \
         || fail "upgrade golden: incompatible plan omitted no-mutation status"
       assert_upgrade_unchanged "$failure_project" "$before_flake" "$before_lock" "$before_project" "incompatible plan"
@@ -462,8 +468,10 @@ pkgs.writeShellApplication {
         || run_status=$?
       [ "$run_status" -eq 5 ] || fail "upgrade golden: incompatible apply returned $run_status instead of 5"
       assert_upgrade_golden "$failure_project/apply.stdout" "incompatible apply"
-      grep -Fq 'model preflight: failed' "$failure_project/apply.stderr" \
+      grep -Fq 'candidate verification: failed (model preflight)' "$failure_project/apply.stderr" \
         || fail "upgrade golden: incompatible apply omitted model preflight failure"
+      grep -Fq 'upgrade applied: no' "$failure_project/apply.stderr" \
+        || fail "upgrade golden: incompatible apply omitted apply status"
       grep -Fq 'upgrade not applied; no project files were changed' "$failure_project/apply.stderr" \
         || fail "upgrade golden: incompatible apply omitted no-mutation status"
       assert_upgrade_unchanged "$failure_project" "$before_flake" "$before_lock" "$before_project" "incompatible apply"
@@ -529,13 +537,15 @@ pkgs.writeShellApplication {
         >"$success_project/plan.stdout" 2>"$success_project/plan.stderr" \
         || fail "upgrade golden: compatible plan failed"
       assert_upgrade_golden "$success_project/plan.stdout" "compatible plan"
-      grep -Fq 'model preflight: passed' "$success_project/plan.stderr" \
+      grep -Fq 'candidate verification: passed (model preflight)' "$success_project/plan.stderr" \
         || fail "upgrade golden: compatible plan omitted model preflight success"
+      grep -Fq 'upgrade applied: no (--plan)' "$success_project/plan.stderr" \
+        || fail "upgrade golden: compatible plan omitted plan apply status"
       grep -Fq 'plan: no project files changed' "$success_project/plan.stderr" \
         || fail "upgrade golden: compatible plan omitted no-mutation status"
-      grep -Fq "\"narHash\":\"$upgrade_old_nar_hash\"" "$success_project/plan.stderr" \
+      grep -Fq "  narHash: $upgrade_old_nar_hash" "$success_project/plan.stderr" \
         || fail "upgrade golden: compatible plan omitted old NAR identity"
-      grep -Fq "\"narHash\":\"$upgrade_new_nar_hash\"" "$success_project/plan.stderr" \
+      grep -Fq "  narHash: $upgrade_new_nar_hash" "$success_project/plan.stderr" \
         || fail "upgrade golden: compatible plan omitted candidate NAR identity"
       assert_upgrade_unchanged "$success_project" "$before_flake" "$before_lock" "$before_project" "compatible plan"
       [ ! -e "$state" ] || fail "upgrade golden: compatible plan materialized runtime state"
@@ -545,14 +555,24 @@ pkgs.writeShellApplication {
         >"$success_project/apply.stdout" 2>"$success_project/apply.stderr" \
         || fail "upgrade golden: compatible apply failed"
       assert_upgrade_golden "$success_project/apply.stdout" "compatible apply"
-      grep -Fq 'model preflight: passed' "$success_project/apply.stderr" \
+      grep -Fq 'candidate verification: passed (model preflight)' "$success_project/apply.stderr" \
         || fail "upgrade golden: compatible apply omitted model preflight success"
+      grep -Fq 'upgrade applied: yes' "$success_project/apply.stderr" \
+        || fail "upgrade golden: compatible apply omitted apply status"
       grep -Fq 'changed: flake.nix' "$success_project/apply.stderr" \
         || fail "upgrade golden: compatible apply did not report flake.nix"
       grep -Fq 'flake.lock (nixfied input)' "$success_project/apply.stderr" \
         || fail "upgrade golden: compatible apply did not report flake.lock"
-      grep -Fq 'preserved (project-owned): nixfied.nix' "$success_project/apply.stderr" \
+      grep -Fq 'preserved: nixfied.nix (project-owned)' "$success_project/apply.stderr" \
         || fail "upgrade golden: compatible apply did not report project ownership"
+      grep -Fq 'post-upgrade validation: not run' "$success_project/apply.stderr" \
+        || fail "upgrade golden: compatible apply omitted post-upgrade validation status"
+      grep -Fxq 'next:' "$success_project/apply.stderr" \
+        || fail "upgrade golden: compatible apply omitted next-step header"
+      grep -Fq '  nix build ' "$success_project/apply.stderr" \
+        || fail "upgrade golden: compatible apply omitted model build next step"
+      grep -Fq '  nix run ' "$success_project/apply.stderr" \
+        || fail "upgrade golden: compatible apply omitted model-check next step"
       grep -Fq "$upgrade_new_url" "$success_project/flake.nix" \
         || fail "upgrade golden: compatible apply did not apply the pinned new URL"
       jq -e --arg expected "$upgrade_new_nar_hash" \
@@ -618,11 +638,11 @@ pkgs.writeShellApplication {
         || fail "upgrade golden: documentation scope plan failed"
       cmp -s "$scope_expected" "$scope_project/stdout" \
         || fail "upgrade golden: README/addition/deletion scope diff drifted"
-      grep -Fq '"type":"path"' "$scope_project/stderr" \
+      grep -Fq '  type: path' "$scope_project/stderr" \
         || fail "upgrade golden: scope fixture path identity was not reported"
-      ! grep -Fq '"rev"' "$scope_project/stderr" \
+      ! grep -Fq '  rev:' "$scope_project/stderr" \
         || fail "upgrade golden: scope fixture path identity fabricated a revision"
-      grep -Fq 'model preflight: passed' "$scope_project/stderr" \
+      grep -Fq 'candidate verification: passed (model preflight)' "$scope_project/stderr" \
         || fail "upgrade golden: documentation scope plan omitted model preflight success"
       assert_upgrade_unchanged "$scope_project" "$before_flake" "$before_lock" "$before_project" "documentation scope plan"
       [ ! -e "$state" ] || fail "upgrade golden: documentation scope plan materialized runtime state"
@@ -651,9 +671,9 @@ pkgs.writeShellApplication {
         >"$path_project/stdout" 2>"$path_project/stderr" \
         || fail "upgrade golden: path fixture upgrade failed"
       assert_upgrade_golden "$path_project/stdout" "path upgrade"
-      grep -Fq '"type":"path"' "$path_project/stderr" \
+      grep -Fq '  type: path' "$path_project/stderr" \
         || fail "upgrade golden: path identity was not reported"
-      ! grep -Fq '"rev"' "$path_project/stderr" \
+      ! grep -Fq '  rev:' "$path_project/stderr" \
         || fail "upgrade golden: path identity fabricated a revision"
       jq -e '
         .nodes[.nodes[.root].inputs.nixfied].locked as $locked
@@ -687,11 +707,11 @@ pkgs.writeShellApplication {
         >"$git_project/plan.stdout" 2>"$git_project/plan.stderr" \
         || fail "upgrade golden: Git plan failed"
       assert_upgrade_golden "$git_project/plan.stdout" "Git plan"
-      grep -Fq "\"type\":\"git\"" "$git_project/plan.stderr" \
+      grep -Fq '  type: git' "$git_project/plan.stderr" \
         || fail "upgrade golden: Git identity was not reported"
-      grep -Fq "\"rev\":\"$old_git_rev\"" "$git_project/plan.stderr" \
+      grep -Fq "  rev: $old_git_rev" "$git_project/plan.stderr" \
         || fail "upgrade golden: old Git revision was not reported"
-      grep -Fq "\"rev\":\"$new_git_rev\"" "$git_project/plan.stderr" \
+      grep -Fq "  rev: $new_git_rev" "$git_project/plan.stderr" \
         || fail "upgrade golden: candidate Git revision was not reported"
       assert_upgrade_unchanged "$git_project" "$before_flake" "$before_lock" "$before_project" "Git plan"
       nix run "$checkout#upgrade" -- \
@@ -699,9 +719,9 @@ pkgs.writeShellApplication {
         >"$git_project/apply.stdout" 2>"$git_project/apply.stderr" \
         || fail "upgrade golden: Git apply failed"
       assert_upgrade_golden "$git_project/apply.stdout" "Git apply"
-      grep -Fq "\"rev\":\"$old_git_rev\"" "$git_project/apply.stderr" \
+      grep -Fq "  rev: $old_git_rev" "$git_project/apply.stderr" \
         || fail "upgrade golden: Git apply omitted old revision"
-      grep -Fq "\"rev\":\"$new_git_rev\"" "$git_project/apply.stderr" \
+      grep -Fq "  rev: $new_git_rev" "$git_project/apply.stderr" \
         || fail "upgrade golden: Git apply omitted candidate revision"
       jq -e --arg expected "$new_git_rev" \
         '.nodes[.nodes[.root].inputs.nixfied].locked.rev == $expected' \
@@ -737,9 +757,9 @@ pkgs.writeShellApplication {
         || fail "upgrade golden: unavailable source was not reported"
       ! grep -Fq -- 'NO CHECKED-IN DOCUMENTATION CHANGED' "$unavailable_project/stdout" \
         || fail "upgrade golden: unavailable source was reported as empty"
-      grep -Fq 'model preflight: passed' "$unavailable_project/stderr" \
+      grep -Fq 'candidate verification: passed (model preflight)' "$unavailable_project/stderr" \
         || fail "upgrade golden: unavailable source incorrectly failed candidate preflight"
-      ! grep -Fq '"rev"' "$unavailable_project/stderr" \
+      ! grep -Fq '  rev:' "$unavailable_project/stderr" \
         || fail "upgrade golden: unavailable path identity fabricated a revision"
       rm -rf "$unavailable_project" "$source_root" "$git_root"
       printf '  upgrade_versioned: ok\n' >&2
