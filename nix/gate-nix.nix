@@ -10,6 +10,7 @@ pkgs.writeShellApplication {
     pkgs.git
     pkgs.jq
     pkgs.coreutils
+    pkgs.diffutils
     pkgs.gnutar
     pkgs.gzip
   ];
@@ -121,7 +122,7 @@ pkgs.writeShellApplication {
       || fail "immutable source: runtime check failed"
     printf '  immutable_source: %ds\n' "$((SECONDS - t0))" >&2
 
-    echo "  adoption (#install + #upgrade against a throwaway repo)" >&2
+    echo "  adoption (#install and runtime controls against a throwaway repo)" >&2
     t0=$SECONDS
     if [ -n "$dirty" ]; then
       pin="path:$checkout"
@@ -136,29 +137,18 @@ pkgs.writeShellApplication {
         echo "    pin: HEAD — uncommitted changes are NOT exercised here (use --dirty)" >&2
       fi
     fi
+    upgrade_fixture="$checkout/nix/fixtures/upgrade-golden"
+    upgrade_manifest="$upgrade_fixture/manifest.json"
+    upgrade_expected="$upgrade_fixture/expected.diff"
+    upgrade_old_archive="$upgrade_fixture/nixfied-old.tar.gz"
+    upgrade_new_archive="$upgrade_fixture/nixfied-new.tar.gz"
+    upgrade_old_url="file://$upgrade_old_archive"
+    upgrade_new_url="file://$upgrade_new_archive"
     upgrade_transaction_tests() {
       local project model_project lock_failure_project no_lock_project
       local before_flake before_lock before_project bad_pin no_lock_url
-      local state
 
       echo "  upgrade transaction and mode semantics" >&2
-      project=$(mktemp -d)
-      nix run "$checkout#install" -- --root "$project" --project-id upgrade-plan --name upgrade-plan --nixfied-url "$pin" >/dev/null || fail "upgrade transaction: fixture install failed"
-      nix flake lock "$project" >/dev/null || fail "upgrade transaction: fixture lock failed"
-      state="$project/runtime-state"
-      before_flake=$(sha256sum "$project/flake.nix")
-      before_lock=$(sha256sum "$project/flake.lock")
-      before_project=$(sha256sum "$project/nixfied.nix")
-      nix_plan_stdout="$project/plan.stdout"
-      nix_plan_stderr="$project/plan.stderr"
-      ( NIXFIED_STATE_DIR="$state" nix run "$checkout#upgrade" -- --root "$project" --nixfied-url "$pin" --plan ) >"$nix_plan_stdout" 2>"$nix_plan_stderr" || fail "upgrade transaction: --plan failed"
-      grep -Fq "model preflight: passed" "$nix_plan_stderr" || fail "upgrade transaction: --plan omitted model preflight"
-      grep -Fq "plan: no project files changed" "$nix_plan_stderr" || fail "upgrade transaction: --plan omitted no-mutation status"
-      [ "$before_flake" = "$(sha256sum "$project/flake.nix")" ] || fail "upgrade transaction: --plan changed flake.nix"
-      [ "$before_lock" = "$(sha256sum "$project/flake.lock")" ] || fail "upgrade transaction: --plan changed flake.lock"
-      [ "$before_project" = "$(sha256sum "$project/nixfied.nix")" ] || fail "upgrade transaction: --plan changed nixfied.nix"
-      [ ! -e "$state" ] || fail "upgrade transaction: --plan materialized runtime state"
-      rm -rf "$project"
 
       missing_lock_project=$(mktemp -d)
       nix run "$checkout#install" -- --root "$missing_lock_project" --project-id upgrade-missing-lock --name upgrade-missing-lock --nixfied-url "$pin" >/dev/null \
@@ -190,8 +180,24 @@ pkgs.writeShellApplication {
       before_lock=$(sha256sum "$project/flake.lock")
       before_project=$(sha256sum "$project/nixfied.nix")
       race_state="$project/runtime-state"
-      nix run "$checkout#upgrade" -- --root "$project" --nixfied-url "$race_candidate_pin" >"$project/race-one.stdout" 2>"$project/race-one.stderr" &
+      NIXFIED_UPGRADE_TEST_PAUSE_BEFORE_APPLY=10 nix run "$checkout#upgrade" -- \
+        --root "$project" --nixfied-url "$race_candidate_pin" \
+        >"$project/race-one.stdout" 2>"$project/race-one.stderr" &
       race_one=$!
+      race_paused=0
+      for attempt in $(seq 1 120); do
+        : "$attempt"
+        if grep -Fq "test pause before apply" "$project/race-one.stderr"; then
+          race_paused=1
+          break
+        fi
+        kill -0 "$race_one" 2>/dev/null || break
+        sleep 0.25
+      done
+      if [ "$race_paused" -ne 1 ]; then
+        kill "$race_one" 2>/dev/null || true
+        fail "upgrade transaction: concurrent fixture never reached the guarded pre-apply window"
+      fi
       nix run "$checkout#upgrade" -- --root "$project" --nixfied-url "$race_candidate_pin" >"$project/race-two.stdout" 2>"$project/race-two.stderr" &
       race_two=$!
       race_one_status=0
@@ -202,7 +208,7 @@ pkgs.writeShellApplication {
         || fail "upgrade transaction: concurrent upgrades both failed"
       [ "$race_one_status" -eq 6 ] || [ "$race_two_status" -eq 6 ] \
         || fail "upgrade transaction: concurrent upgrade did not refuse the stale candidate"
-      grep -hEq "changed concurrently|concurrently" "$project/race-one.stderr" "$project/race-two.stderr" \
+      grep -hEq "changed concurrently|concurrently|changed while the candidate was being prepared" "$project/race-one.stderr" "$project/race-two.stderr" \
         || fail "upgrade transaction: concurrent upgrade omitted the conflict diagnostic"
       [ "$before_project" = "$(sha256sum "$project/nixfied.nix")" ] \
         || fail "upgrade transaction: concurrent upgrade changed nixfied.nix"
@@ -310,139 +316,436 @@ pkgs.writeShellApplication {
 
     upgrade_transaction_tests
 
-    upgrade_docs_diff_tests() {
-      local old_source new_source old_rev new_rev old_git_pin new_git_pin
-      local project path_project tar_project unavailable_project
-      local old_tar new_tar old_path_pin new_path_pin file_pin
-      local before_project
+    upgrade_versioned_tests() {
+      local source_root old_source new_source git_root old_git_source new_git_source
+      local unavailable_source old_path_pin new_path_pin old_git_pin new_git_pin
+      local old_git_rev new_git_rev
+      local failure_project unsupported_project success_project path_project git_project unavailable_project
+      local scope_root scope_old_source scope_new_source scope_project
+      local scope_old_patch scope_new_patch scope_expected scope_expected_hash
+      local before_flake before_lock before_project state run_status expected_empty
+      local old_commit new_commit old_archive_hash new_archive_hash expected_diff_hash
 
-      echo "  upgrade source identity and documentation diff" >&2
-      old_source=$(mktemp -d)
-      git -C "$checkout" archive HEAD | tar -xf - -C "$old_source" \
-        || fail "upgrade docs: old source snapshot failed"
-      git -C "$old_source" init -q
-      git -C "$old_source" config user.email gate@nixfied
-      git -C "$old_source" config user.name "nixfied gate"
-      git -C "$old_source" add -A
-      git -C "$old_source" commit -q -m old-source
+      sha256_file() {
+        sha256sum "$1" | cut -d ' ' -f1
+      }
 
-      new_source=$(mktemp -d)
-      git -C "$checkout" archive HEAD | tar -xf - -C "$new_source" \
-        || fail "upgrade docs: new source snapshot failed"
-      printf '\nUpgrade fixture documentation changed here.\n' >>"$new_source/README.md"
-      printf '%s\n' '# Upgrade fixture' "" 'This file proves additions stay in the explicit documentation scope.' >"$new_source/docs/upgrade-fixture.md"
-      git -C "$new_source" init -q
-      git -C "$new_source" config user.email gate@nixfied
-      git -C "$new_source" config user.name "nixfied gate"
-      git -C "$new_source" add -A
-      git -C "$new_source" commit -q -m new-source
-      old_rev=$(git -C "$old_source" rev-parse HEAD)
-      new_rev=$(git -C "$new_source" rev-parse HEAD)
-      old_git_pin="git+file://$old_source?rev=$old_rev&shallow=1"
-      new_git_pin="git+file://$new_source?rev=$new_rev&shallow=1"
+      assert_upgrade_golden() {
+        local output="$1" label="$2"
+        if ! cmp -s "$upgrade_expected" "$output"; then
+          echo "  golden mismatch: $label" >&2
+          diff -u "$upgrade_expected" "$output" >&2 || true
+          fail "upgrade golden: $label differed from expected.diff"
+        fi
+      }
 
-      project=$(mktemp -d)
-      nix run "$checkout#install" -- --root "$project" --project-id upgrade-docs-git --name upgrade-docs-git --nixfied-url "$old_git_pin" >/dev/null \
-        || fail "upgrade docs: Git fixture install failed"
-      nix flake lock "$project" >/dev/null || fail "upgrade docs: Git fixture lock failed"
-      before_project=$(sha256sum "$project/nixfied.nix")
-      nix run "$checkout#upgrade" -- --root "$project" --nixfied-url "$new_git_pin" --plan >"$project/plan.stdout" 2>"$project/plan.stderr" \
-        || fail "upgrade docs: Git plan failed"
-      nix run "$checkout#upgrade" -- --root "$project" --nixfied-url "$new_git_pin" >"$project/apply.stdout" 2>"$project/apply.stderr" \
-        || fail "upgrade docs: Git apply failed"
-      cmp -s "$project/plan.stdout" "$project/apply.stdout" \
-        || fail "upgrade docs: --plan and apply produced different documentation diffs"
-      grep -Fq -- '--- old/README.md' "$project/apply.stdout" \
-        || fail "upgrade docs: README diff was not emitted"
-      grep -Fq -- '--- old/docs/upgrade-fixture.md' "$project/apply.stdout" \
-        || fail "upgrade docs: added documentation file was not emitted"
-      grep -Fq -- '+++ new/docs/upgrade-fixture.md' "$project/apply.stdout" \
-        || fail "upgrade docs: added documentation label was not stable"
-      [ "$(grep '^--- old/' "$project/apply.stdout" | head -n 1)" = '--- old/README.md' ] \
-        || fail "upgrade docs: scoped files were not in canonical order"
-      ! grep -Fq -- 'nix/compiler/' "$project/apply.stdout" \
-        || fail "upgrade docs: source code entered the diff"
-      ! grep -Fq -- 'views/docs.md' "$project/apply.stdout" \
-        || fail "upgrade docs: generated model view entered the diff"
-      ! grep -Fq -- '/nix/store/' "$project/apply.stdout" \
-        || fail "upgrade docs: store paths entered the diff"
-      ! grep -Fq -- 'model preflight' "$project/apply.stdout" \
-        || fail "upgrade docs: status leaked onto stdout"
-      grep -Fq -- "\"rev\":\"$old_rev\"" "$project/apply.stderr" \
-        || fail "upgrade docs: old locked revision was not reported"
-      grep -Fq -- "\"rev\":\"$new_rev\"" "$project/apply.stderr" \
-        || fail "upgrade docs: candidate locked revision was not reported"
-      grep -Fq -- 'model preflight: passed' "$project/apply.stderr" \
-        || fail "upgrade docs: candidate preflight status was not reported"
-      grep -Fq -- 'preserved (project-owned): nixfied.nix' "$project/apply.stderr" \
-        || fail "upgrade docs: ownership status was not reported"
-      [ "$before_project" = "$(sha256sum "$project/nixfied.nix")" ] \
-        || fail "upgrade docs: Git upgrade changed nixfied.nix"
-      jq -e --arg rev "$new_rev" '.nodes[.nodes[.root].inputs.nixfied].locked.rev == $rev' "$project/flake.lock" >/dev/null \
-        || fail "upgrade docs: candidate Git revision was not applied"
-      rm -rf "$project"
+      assert_upgrade_unchanged() {
+        local root="$1" expected_flake="$2" expected_lock="$3" expected_project="$4" label="$5"
+        [ "$expected_flake" = "$(sha256sum "$root/flake.nix")" ] \
+          || fail "upgrade golden: $label changed flake.nix"
+        [ "$expected_lock" = "$(sha256sum "$root/flake.lock")" ] \
+          || fail "upgrade golden: $label changed flake.lock"
+        [ "$expected_project" = "$(sha256sum "$root/nixfied.nix")" ] \
+          || fail "upgrade golden: $label changed nixfied.nix"
+      }
 
+      make_git_fixture() {
+        local archive="$1" destination="$2"
+        mkdir "$destination"
+        tar -xzf "$archive" -C "$destination" \
+          || fail "upgrade golden: Git fixture extraction failed"
+        git -C "$destination" init -q
+        git -C "$destination" config user.email gate@nixfied
+        git -C "$destination" config user.name "nixfied gate"
+        git -C "$destination" add -A
+        GIT_AUTHOR_DATE=2000-01-01T00:00:00Z GIT_COMMITTER_DATE=2000-01-01T00:00:00Z \
+          git -C "$destination" commit -q -m fixture
+      }
+
+      echo "  upgrade pinned versions and documentation golden" >&2
+      [ -f "$upgrade_manifest" ] || fail "upgrade golden: manifest is missing"
+      [ -f "$upgrade_expected" ] || fail "upgrade golden: expected diff is missing"
+      [ -f "$upgrade_old_archive" ] || fail "upgrade golden: old archive is missing"
+      [ -f "$upgrade_new_archive" ] || fail "upgrade golden: new archive is missing"
+      scope_old_patch="$upgrade_fixture/scope-old.patch"
+      scope_new_patch="$upgrade_fixture/scope-new.patch"
+      scope_expected="$upgrade_fixture/scope.expected.diff"
+      [ -f "$scope_old_patch" ] || fail "upgrade golden: scope old patch is missing"
+      [ -f "$scope_new_patch" ] || fail "upgrade golden: scope new patch is missing"
+      [ -f "$scope_expected" ] || fail "upgrade golden: scope expected diff is missing"
+      jq -e '
+        .archiveFormat == "tar.gz"
+        and .normalization.sort == "name"
+        and .normalization.mtime == "1970-01-01T00:00:00Z"
+        and .normalization.owner == 0
+        and .normalization.group == 0
+        and .normalization.numericOwner == true
+        and .normalization.gzip == "-n"
+      ' "$upgrade_manifest" >/dev/null \
+        || fail "upgrade golden: manifest normalization is not deterministic"
+      old_commit=$(jq -er '.old.commit' "$upgrade_manifest") \
+        || fail "upgrade golden: old commit is missing"
+      new_commit=$(jq -er '.new.commit' "$upgrade_manifest") \
+        || fail "upgrade golden: new commit is missing"
+      old_archive_hash=$(jq -er '.old.archiveSha256' "$upgrade_manifest") \
+        || fail "upgrade golden: old archive hash is missing"
+      new_archive_hash=$(jq -er '.new.archiveSha256' "$upgrade_manifest") \
+        || fail "upgrade golden: new archive hash is missing"
+      upgrade_old_nar_hash=$(jq -er '.old.narHash' "$upgrade_manifest") \
+        || fail "upgrade golden: old NAR hash is missing"
+      upgrade_new_nar_hash=$(jq -er '.new.narHash' "$upgrade_manifest") \
+        || fail "upgrade golden: new NAR hash is missing"
+      expected_diff_hash=$(jq -er '.expectedDiffSha256' "$upgrade_manifest") \
+        || fail "upgrade golden: expected diff hash is missing"
+      scope_expected_hash=$(jq -er '.scopeExpectedDiffSha256' "$upgrade_manifest") \
+        || fail "upgrade golden: scope expected diff hash is missing"
+      [ "$old_commit" = "8e1fa56d9423b93b89f9aabf4be86c2081da0362" ] \
+        || fail "upgrade golden: old source commit drifted"
+      [ "$new_commit" = "0aaf8740e7ef8aa5ee487085bac7be0dd5998007" ] \
+        || fail "upgrade golden: new source commit drifted"
+      [ "$old_archive_hash" = "013005b8e74778217891ae7f5199191eafef1edd7ec4ea2430389bf262349c0c" ] \
+        || fail "upgrade golden: old archive provenance drifted"
+      [ "$new_archive_hash" = "b63ce314aef0f41b7394ff7388e1ba32b46f6db0c8ecfc105c393a9705de183d" ] \
+        || fail "upgrade golden: new archive provenance drifted"
+      [ "$(sha256_file "$upgrade_old_archive")" = "$old_archive_hash" ] \
+        || fail "upgrade golden: old archive checksum mismatch"
+      [ "$(sha256_file "$upgrade_new_archive")" = "$new_archive_hash" ] \
+        || fail "upgrade golden: new archive checksum mismatch"
+      [ "$(sha256_file "$upgrade_expected")" = "$expected_diff_hash" ] \
+        || fail "upgrade golden: expected diff checksum mismatch"
+      [ "$scope_expected_hash" = "7d8ab0971df7d8f494aeff47800b3dece6e20638e97f44397935ec136db31589" ] \
+        || fail "upgrade golden: scope expected diff provenance drifted"
+      [ "$(sha256_file "$scope_expected")" = "$scope_expected_hash" ] \
+        || fail "upgrade golden: scope expected diff checksum mismatch"
+
+      failure_project=$(mktemp -d)
+      nix run "$upgrade_old_url#install" -- \
+        --root "$failure_project" --project-id upgrade-golden-failure --name upgrade-golden-failure \
+        --nixfied-url "$upgrade_old_url" >/dev/null \
+        || fail "upgrade golden: historical install failed"
+      grep -Fq 'nixfied.surface.verbs = [ "smoke" ];' "$failure_project/nixfied.nix" \
+        || fail "upgrade golden: historical installer did not produce the list-form declaration"
+      nix flake lock "$failure_project" >/dev/null \
+        || fail "upgrade golden: historical failure fixture lock failed"
+      jq -e --arg expected "$upgrade_old_nar_hash" \
+        '.nodes[.nodes[.root].inputs.nixfied].locked.narHash == $expected' \
+        "$failure_project/flake.lock" >/dev/null \
+        || fail "upgrade golden: historical failure fixture did not lock the pinned old source"
+      before_flake=$(sha256sum "$failure_project/flake.nix")
+      before_lock=$(sha256sum "$failure_project/flake.lock")
+      before_project=$(sha256sum "$failure_project/nixfied.nix")
+      state="$failure_project/runtime-state"
+      run_status=0
+      ( NIXFIED_STATE_DIR="$state" nix run "$checkout#upgrade" -- \
+          --root "$failure_project" --nixfied-url "$upgrade_new_url" --plan \
+          >"$failure_project/plan.stdout" 2>"$failure_project/plan.stderr" ) \
+        || run_status=$?
+      [ "$run_status" -eq 5 ] || fail "upgrade golden: incompatible plan returned $run_status instead of 5"
+      assert_upgrade_golden "$failure_project/plan.stdout" "incompatible plan"
+      grep -Fq '"type":"tarball"' "$failure_project/plan.stderr" \
+        || fail "upgrade golden: tarball identity was not reported for the incompatible plan"
+      grep -Fq "\"narHash\":\"$upgrade_old_nar_hash\"" "$failure_project/plan.stderr" \
+        || fail "upgrade golden: old tarball NAR hash was not reported"
+      grep -Fq "\"narHash\":\"$upgrade_new_nar_hash\"" "$failure_project/plan.stderr" \
+        || fail "upgrade golden: candidate tarball NAR hash was not reported"
+      grep -Fq 'model preflight: failed' "$failure_project/plan.stderr" \
+        || fail "upgrade golden: incompatible plan omitted model preflight failure"
+      grep -Fq 'upgrade not applied; no project files were changed' "$failure_project/plan.stderr" \
+        || fail "upgrade golden: incompatible plan omitted no-mutation status"
+      assert_upgrade_unchanged "$failure_project" "$before_flake" "$before_lock" "$before_project" "incompatible plan"
+      [ ! -e "$state" ] || fail "upgrade golden: incompatible plan materialized runtime state"
+
+      run_status=0
+      ( NIXFIED_STATE_DIR="$state" nix run "$checkout#upgrade" -- \
+          --root "$failure_project" --nixfied-url "$upgrade_new_url" \
+          >"$failure_project/apply.stdout" 2>"$failure_project/apply.stderr" ) \
+        || run_status=$?
+      [ "$run_status" -eq 5 ] || fail "upgrade golden: incompatible apply returned $run_status instead of 5"
+      assert_upgrade_golden "$failure_project/apply.stdout" "incompatible apply"
+      grep -Fq 'model preflight: failed' "$failure_project/apply.stderr" \
+        || fail "upgrade golden: incompatible apply omitted model preflight failure"
+      grep -Fq 'upgrade not applied; no project files were changed' "$failure_project/apply.stderr" \
+        || fail "upgrade golden: incompatible apply omitted no-mutation status"
+      assert_upgrade_unchanged "$failure_project" "$before_flake" "$before_lock" "$before_project" "incompatible apply"
+      [ ! -e "$state" ] || fail "upgrade golden: incompatible apply materialized runtime state"
+      rm -rf "$failure_project"
+
+      unsupported_project=$(mktemp -d)
+      nix run "$upgrade_old_url#install" -- \
+        --root "$unsupported_project" --project-id upgrade-golden-unsupported --name upgrade-golden-unsupported \
+        --nixfied-url "$upgrade_old_url" >/dev/null \
+        || fail "upgrade golden: unsupported identity install failed"
+      nix flake lock "$unsupported_project" >/dev/null \
+        || fail "upgrade golden: unsupported identity fixture lock failed"
+      jq '.nodes[.nodes[.root].inputs.nixfied].locked.type = "sourcehut"' \
+        "$unsupported_project/flake.lock" >"$unsupported_project/flake.lock.invalid" \
+        || fail "upgrade golden: unsupported identity lock fixture could not be prepared"
+      mv "$unsupported_project/flake.lock.invalid" "$unsupported_project/flake.lock"
+      before_flake=$(sha256sum "$unsupported_project/flake.nix")
+      before_lock=$(sha256sum "$unsupported_project/flake.lock")
+      before_project=$(sha256sum "$unsupported_project/nixfied.nix")
+      state="$unsupported_project/runtime-state"
+      run_status=0
+      ( NIXFIED_STATE_DIR="$state" nix run "$checkout#upgrade" -- \
+          --root "$unsupported_project" --nixfied-url "$upgrade_new_url" --plan \
+          >"$unsupported_project/stdout" 2>"$unsupported_project/stderr" ) \
+        || run_status=$?
+      [ "$run_status" -eq 4 ] \
+        || fail "upgrade golden: unsupported identity returned $run_status instead of 4"
+      grep -Fq 'sourcehut' "$unsupported_project/stderr" \
+        || fail "upgrade golden: unsupported identity was not named"
+      grep -Fq 'candidate lock resolution failed' "$unsupported_project/stderr" \
+        || fail "upgrade golden: unsupported identity omitted lock failure"
+      grep -Fq 'upgrade not applied; no project files were changed' "$unsupported_project/stderr" \
+        || fail "upgrade golden: unsupported identity omitted no-mutation status"
+      ! grep -Fq '"rev"' "$unsupported_project/stderr" \
+        || fail "upgrade golden: unsupported identity fabricated a revision"
+      [ ! -s "$unsupported_project/stdout" ] \
+        || fail "upgrade golden: unsupported identity emitted a partial documentation report"
+      assert_upgrade_unchanged "$unsupported_project" "$before_flake" "$before_lock" "$before_project" "unsupported identity"
+      [ ! -e "$state" ] || fail "upgrade golden: unsupported identity materialized runtime state"
+      rm -rf "$unsupported_project"
+
+      success_project=$(mktemp -d)
+      nix run "$upgrade_old_url#install" -- \
+        --root "$success_project" --project-id upgrade-golden-success --name upgrade-golden-success \
+        --nixfied-url "$upgrade_old_url" >/dev/null \
+        || fail "upgrade golden: historical compatible install failed"
+      grep -Fq 'nixfied.surface.verbs = [ "smoke" ];' "$success_project/nixfied.nix" \
+        || fail "upgrade golden: compatible fixture did not start from the list-form declaration"
+      ${pkgs.gnused}/bin/sed -i \
+        '/^  nixfied.surface.verbs = \[ "smoke" \];$/d' \
+        "$success_project/nixfied.nix"
+      ! grep -Fq 'nixfied.surface.verbs = [ "smoke" ];' "$success_project/nixfied.nix" \
+        || fail "upgrade golden: compatible fixture retained the incompatible list declaration"
+      nix flake lock "$success_project" >/dev/null \
+        || fail "upgrade golden: historical compatible fixture lock failed"
+      before_flake=$(sha256sum "$success_project/flake.nix")
+      before_lock=$(sha256sum "$success_project/flake.lock")
+      before_project=$(sha256sum "$success_project/nixfied.nix")
+      state="$success_project/runtime-state"
+      nix run "$checkout#upgrade" -- \
+        --root "$success_project" --nixfied-url "$upgrade_new_url" --plan \
+        >"$success_project/plan.stdout" 2>"$success_project/plan.stderr" \
+        || fail "upgrade golden: compatible plan failed"
+      assert_upgrade_golden "$success_project/plan.stdout" "compatible plan"
+      grep -Fq 'model preflight: passed' "$success_project/plan.stderr" \
+        || fail "upgrade golden: compatible plan omitted model preflight success"
+      grep -Fq 'plan: no project files changed' "$success_project/plan.stderr" \
+        || fail "upgrade golden: compatible plan omitted no-mutation status"
+      grep -Fq "\"narHash\":\"$upgrade_old_nar_hash\"" "$success_project/plan.stderr" \
+        || fail "upgrade golden: compatible plan omitted old NAR identity"
+      grep -Fq "\"narHash\":\"$upgrade_new_nar_hash\"" "$success_project/plan.stderr" \
+        || fail "upgrade golden: compatible plan omitted candidate NAR identity"
+      assert_upgrade_unchanged "$success_project" "$before_flake" "$before_lock" "$before_project" "compatible plan"
+      [ ! -e "$state" ] || fail "upgrade golden: compatible plan materialized runtime state"
+
+      NIXFIED_STATE_DIR="$state" nix run "$checkout#upgrade" -- \
+        --root "$success_project" --nixfied-url "$upgrade_new_url" \
+        >"$success_project/apply.stdout" 2>"$success_project/apply.stderr" \
+        || fail "upgrade golden: compatible apply failed"
+      assert_upgrade_golden "$success_project/apply.stdout" "compatible apply"
+      grep -Fq 'model preflight: passed' "$success_project/apply.stderr" \
+        || fail "upgrade golden: compatible apply omitted model preflight success"
+      grep -Fq 'changed: flake.nix' "$success_project/apply.stderr" \
+        || fail "upgrade golden: compatible apply did not report flake.nix"
+      grep -Fq 'flake.lock (nixfied input)' "$success_project/apply.stderr" \
+        || fail "upgrade golden: compatible apply did not report flake.lock"
+      grep -Fq 'preserved (project-owned): nixfied.nix' "$success_project/apply.stderr" \
+        || fail "upgrade golden: compatible apply did not report project ownership"
+      grep -Fq "$upgrade_new_url" "$success_project/flake.nix" \
+        || fail "upgrade golden: compatible apply did not apply the pinned new URL"
+      jq -e --arg expected "$upgrade_new_nar_hash" \
+        '.nodes[.nodes[.root].inputs.nixfied].locked.narHash == $expected' \
+        "$success_project/flake.lock" >/dev/null \
+        || fail "upgrade golden: compatible apply did not apply the pinned new lock"
+      [ "$before_project" = "$(sha256sum "$success_project/nixfied.nix")" ] \
+        || fail "upgrade golden: compatible apply changed nixfied.nix"
+      [ ! -e "$state" ] \
+        || fail "upgrade golden: compatible apply materialized runtime state"
+      nix build --no-link "$success_project#model" >/dev/null \
+        || fail "upgrade golden: compatible applied model did not build"
+      nix run --no-write-lock-file "$success_project#model-check" >/dev/null \
+        || fail "upgrade golden: compatible applied model-check failed"
+
+      expected_empty="$success_project/empty.expected"
+      printf '%s\n' \
+        '--- BEGIN NIXFIED DOCUMENTATION DIFF ---' \
+        '--- NO CHECKED-IN DOCUMENTATION CHANGED ---' \
+        '--- END NIXFIED DOCUMENTATION DIFF ---' \
+        >"$expected_empty"
+      before_flake=$(sha256sum "$success_project/flake.nix")
+      before_lock=$(sha256sum "$success_project/flake.lock")
+      before_project=$(sha256sum "$success_project/nixfied.nix")
+      nix run "$checkout#upgrade" -- \
+        --root "$success_project" --nixfied-url "$upgrade_new_url" --plan \
+        >"$success_project/empty.stdout" 2>"$success_project/empty.stderr" \
+        || fail "upgrade golden: unchanged source plan failed"
+      cmp -s "$expected_empty" "$success_project/empty.stdout" \
+        || fail "upgrade golden: unchanged source did not emit the exact empty marker"
+      grep -Fq 'plan: no project files changed' "$success_project/empty.stderr" \
+        || fail "upgrade golden: unchanged source omitted no-mutation status"
+      assert_upgrade_unchanged "$success_project" "$before_flake" "$before_lock" "$before_project" "unchanged source plan"
+      [ ! -e "$state" ] || fail "upgrade golden: unchanged source plan materialized runtime state"
+      rm -rf "$success_project"
+
+      scope_root=$(mktemp -d)
+      scope_old_source="$scope_root/old"
+      scope_new_source="$scope_root/new"
+      mkdir "$scope_old_source" "$scope_new_source"
+      tar -xzf "$upgrade_new_archive" -C "$scope_old_source" \
+        || fail "upgrade golden: scope old extraction failed"
+      tar -xzf "$upgrade_new_archive" -C "$scope_new_source" \
+        || fail "upgrade golden: scope new extraction failed"
+      git -C "$scope_old_source" apply --unidiff-zero --unsafe-paths "$scope_old_patch" \
+        || fail "upgrade golden: scope old patch failed"
+      git -C "$scope_new_source" apply --unidiff-zero --unsafe-paths "$scope_new_patch" \
+        || fail "upgrade golden: scope new patch failed"
+      scope_project=$(mktemp -d)
+      nix run "$checkout#install" -- \
+        --root "$scope_project" --project-id upgrade-golden-scope --name upgrade-golden-scope \
+        --nixfied-url "path:$scope_old_source" >/dev/null \
+        || fail "upgrade golden: scope fixture install failed"
+      nix flake lock "$scope_project" >/dev/null \
+        || fail "upgrade golden: scope fixture lock failed"
+      before_flake=$(sha256sum "$scope_project/flake.nix")
+      before_lock=$(sha256sum "$scope_project/flake.lock")
+      before_project=$(sha256sum "$scope_project/nixfied.nix")
+      state="$scope_project/runtime-state"
+      nix run "$checkout#upgrade" -- \
+        --root "$scope_project" --nixfied-url "path:$scope_new_source" --plan \
+        >"$scope_project/stdout" 2>"$scope_project/stderr" \
+        || fail "upgrade golden: documentation scope plan failed"
+      cmp -s "$scope_expected" "$scope_project/stdout" \
+        || fail "upgrade golden: README/addition/deletion scope diff drifted"
+      grep -Fq '"type":"path"' "$scope_project/stderr" \
+        || fail "upgrade golden: scope fixture path identity was not reported"
+      ! grep -Fq '"rev"' "$scope_project/stderr" \
+        || fail "upgrade golden: scope fixture path identity fabricated a revision"
+      grep -Fq 'model preflight: passed' "$scope_project/stderr" \
+        || fail "upgrade golden: documentation scope plan omitted model preflight success"
+      assert_upgrade_unchanged "$scope_project" "$before_flake" "$before_lock" "$before_project" "documentation scope plan"
+      [ ! -e "$state" ] || fail "upgrade golden: documentation scope plan materialized runtime state"
+      rm -rf "$scope_project" "$scope_root"
+
+      source_root=$(mktemp -d)
+      old_source="$source_root/old"
+      new_source="$source_root/new"
+      mkdir "$old_source" "$new_source"
+      tar -xzf "$upgrade_old_archive" -C "$old_source" \
+        || fail "upgrade golden: path fixture old extraction failed"
+      tar -xzf "$upgrade_new_archive" -C "$new_source" \
+        || fail "upgrade golden: path fixture new extraction failed"
       old_path_pin="path:$old_source"
       new_path_pin="path:$new_source"
+
       path_project=$(mktemp -d)
-      nix run "$checkout#install" -- --root "$path_project" --project-id upgrade-docs-path --name upgrade-docs-path --nixfied-url "$old_path_pin" >/dev/null \
-        || fail "upgrade docs: path fixture install failed"
-      nix flake lock "$path_project" >/dev/null || fail "upgrade docs: path fixture lock failed"
-      nix run "$checkout#upgrade" -- --root "$path_project" --nixfied-url "$new_path_pin" >"$path_project/stdout" 2>"$path_project/stderr" \
-        || fail "upgrade docs: path upgrade failed"
-      grep -Fq -- '"type":"path"' "$path_project/stderr" \
-        || fail "upgrade docs: path locked identity was not reported"
-      ! grep -Fq -- '"rev"' "$path_project/stderr" \
-        || fail "upgrade docs: path identity fabricated a revision"
-      grep -Fq -- 'Upgrade fixture documentation changed here.' "$path_project/stdout" \
-        || fail "upgrade docs: path source diff was not emitted"
+      nix run "$checkout#install" -- \
+        --root "$path_project" --project-id upgrade-golden-path --name upgrade-golden-path \
+        --nixfied-url "$old_path_pin" >/dev/null \
+        || fail "upgrade golden: path fixture install failed"
+      nix flake lock "$path_project" >/dev/null \
+        || fail "upgrade golden: path fixture lock failed"
+      nix run "$checkout#upgrade" -- \
+        --root "$path_project" --nixfied-url "$new_path_pin" \
+        >"$path_project/stdout" 2>"$path_project/stderr" \
+        || fail "upgrade golden: path fixture upgrade failed"
+      assert_upgrade_golden "$path_project/stdout" "path upgrade"
+      grep -Fq '"type":"path"' "$path_project/stderr" \
+        || fail "upgrade golden: path identity was not reported"
+      ! grep -Fq '"rev"' "$path_project/stderr" \
+        || fail "upgrade golden: path identity fabricated a revision"
+      jq -e '
+        .nodes[.nodes[.root].inputs.nixfied].locked as $locked
+        | $locked.type == "path" and ($locked | has("rev") | not)
+      ' "$path_project/flake.lock" >/dev/null \
+        || fail "upgrade golden: path lock identity was not preserved"
       rm -rf "$path_project"
 
-      old_tar="$new_source/../nixfied-old.tar.gz"
-      new_tar="$new_source/../nixfied-new.tar.gz"
-      tar --exclude=.git -C "$old_source" -czf "$old_tar" . || fail "upgrade docs: old tarball creation failed"
-      tar --exclude=.git -C "$new_source" -czf "$new_tar" . || fail "upgrade docs: new tarball creation failed"
-      file_pin="file://$old_tar"
-      tar_project=$(mktemp -d)
-      nix run "$checkout#install" -- --root "$tar_project" --project-id upgrade-docs-tar --name upgrade-docs-tar --nixfied-url "$file_pin" >/dev/null \
-        || fail "upgrade docs: tarball fixture install failed"
-      nix flake lock "$tar_project" >/dev/null || fail "upgrade docs: tarball fixture lock failed"
-      nix run "$checkout#upgrade" -- --root "$tar_project" --nixfied-url "file://$new_tar" >"$tar_project/stdout" 2>"$tar_project/stderr" \
-        || fail "upgrade docs: tarball upgrade failed"
-      grep -Fq -- '"type":"tarball"' "$tar_project/stderr" \
-        || fail "upgrade docs: tarball locked identity was not reported"
-      grep -Fq -- 'narHash' "$tar_project/stderr" \
-        || fail "upgrade docs: tarball content hash was not reported"
-      grep -Fq -- '--- old/README.md' "$tar_project/stdout" \
-        || fail "upgrade docs: tarball source diff was not emitted"
-      rm -rf "$tar_project"
+      git_root=$(mktemp -d)
+      old_git_source="$git_root/old"
+      new_git_source="$git_root/new"
+      make_git_fixture "$upgrade_old_archive" "$old_git_source"
+      make_git_fixture "$upgrade_new_archive" "$new_git_source"
+      old_git_rev=$(git -C "$old_git_source" rev-parse HEAD)
+      new_git_rev=$(git -C "$new_git_source" rev-parse HEAD)
+      old_git_pin="git+file://$old_git_source?rev=$old_git_rev&shallow=1"
+      new_git_pin="git+file://$new_git_source?rev=$new_git_rev&shallow=1"
+
+      git_project=$(mktemp -d)
+      nix run "$checkout#install" -- \
+        --root "$git_project" --project-id upgrade-golden-git --name upgrade-golden-git \
+        --nixfied-url "$old_git_pin" >/dev/null \
+        || fail "upgrade golden: Git fixture install failed"
+      nix flake lock "$git_project" >/dev/null \
+        || fail "upgrade golden: Git fixture lock failed"
+      before_flake=$(sha256sum "$git_project/flake.nix")
+      before_lock=$(sha256sum "$git_project/flake.lock")
+      before_project=$(sha256sum "$git_project/nixfied.nix")
+      nix run "$checkout#upgrade" -- \
+        --root "$git_project" --nixfied-url "$new_git_pin" --plan \
+        >"$git_project/plan.stdout" 2>"$git_project/plan.stderr" \
+        || fail "upgrade golden: Git plan failed"
+      assert_upgrade_golden "$git_project/plan.stdout" "Git plan"
+      grep -Fq "\"type\":\"git\"" "$git_project/plan.stderr" \
+        || fail "upgrade golden: Git identity was not reported"
+      grep -Fq "\"rev\":\"$old_git_rev\"" "$git_project/plan.stderr" \
+        || fail "upgrade golden: old Git revision was not reported"
+      grep -Fq "\"rev\":\"$new_git_rev\"" "$git_project/plan.stderr" \
+        || fail "upgrade golden: candidate Git revision was not reported"
+      assert_upgrade_unchanged "$git_project" "$before_flake" "$before_lock" "$before_project" "Git plan"
+      nix run "$checkout#upgrade" -- \
+        --root "$git_project" --nixfied-url "$new_git_pin" \
+        >"$git_project/apply.stdout" 2>"$git_project/apply.stderr" \
+        || fail "upgrade golden: Git apply failed"
+      assert_upgrade_golden "$git_project/apply.stdout" "Git apply"
+      grep -Fq "\"rev\":\"$old_git_rev\"" "$git_project/apply.stderr" \
+        || fail "upgrade golden: Git apply omitted old revision"
+      grep -Fq "\"rev\":\"$new_git_rev\"" "$git_project/apply.stderr" \
+        || fail "upgrade golden: Git apply omitted candidate revision"
+      jq -e --arg expected "$new_git_rev" \
+        '.nodes[.nodes[.root].inputs.nixfied].locked.rev == $expected' \
+        "$git_project/flake.lock" >/dev/null \
+        || fail "upgrade golden: Git apply did not apply the candidate revision"
+      [ "$before_project" = "$(sha256sum "$git_project/nixfied.nix")" ] \
+        || fail "upgrade golden: Git apply changed nixfied.nix"
+      rm -rf "$git_project"
 
       unavailable_project=$(mktemp -d)
-      unavailable_source=$(mktemp -d)
-      git -C "$checkout" archive HEAD | tar -xf - -C "$unavailable_source" \
-        || fail "upgrade docs: unavailable source snapshot failed"
-      nix run "$checkout#install" -- --root "$unavailable_project" --project-id upgrade-docs-unavailable --name upgrade-docs-unavailable --nixfied-url "path:$unavailable_source" >/dev/null \
-        || fail "upgrade docs: unavailable fixture install failed"
-      nix flake lock "$unavailable_project" >/dev/null || fail "upgrade docs: unavailable fixture lock failed"
-      jq '.nodes[.nodes[.root].inputs.nixfied].locked.narHash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="' "$unavailable_project/flake.lock" >"$unavailable_project/flake.lock.invalid" \
-        || fail "upgrade docs: unavailable lock fixture could not be prepared"
+      unavailable_source="$source_root/unavailable-old"
+      mkdir "$unavailable_source"
+      tar -xzf "$upgrade_old_archive" -C "$unavailable_source" \
+        || fail "upgrade golden: unavailable fixture extraction failed"
+      nix run "$checkout#install" -- \
+        --root "$unavailable_project" --project-id upgrade-golden-unavailable --name upgrade-golden-unavailable \
+        --nixfied-url "path:$unavailable_source" >/dev/null \
+        || fail "upgrade golden: unavailable fixture install failed"
+      nix flake lock "$unavailable_project" >/dev/null \
+        || fail "upgrade golden: unavailable fixture lock failed"
+      jq '.nodes[.nodes[.root].inputs.nixfied].locked.narHash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="' \
+        "$unavailable_project/flake.lock" >"$unavailable_project/flake.lock.invalid" \
+        || fail "upgrade golden: unavailable lock fixture could not be prepared"
       mv "$unavailable_project/flake.lock.invalid" "$unavailable_project/flake.lock"
       rm -rf "$unavailable_source"
-      nix run "$checkout#upgrade" -- --root "$unavailable_project" --nixfied-url "$new_path_pin" >"$unavailable_project/stdout" 2>"$unavailable_project/stderr" \
-        || fail "upgrade docs: unavailable source prevented a valid upgrade"
-      grep -Fq -- 'documentation diff unavailable: old source materialization failed' "$unavailable_project/stderr" \
-        || fail "upgrade docs: unavailable source warning was missing"
+      nix run "$checkout#upgrade" -- \
+        --root "$unavailable_project" --nixfied-url "$new_path_pin" \
+        >"$unavailable_project/stdout" 2>"$unavailable_project/stderr" \
+        || fail "upgrade golden: unavailable source prevented a valid upgrade"
+      grep -Fq 'documentation diff unavailable: old source materialization failed' "$unavailable_project/stderr" \
+        || fail "upgrade golden: unavailable source warning was missing"
       grep -Fq -- '--- DOCUMENTATION DIFF UNAVAILABLE ---' "$unavailable_project/stdout" \
-        || fail "upgrade docs: unavailable source was reported as a diff"
+        || fail "upgrade golden: unavailable source was not reported"
       ! grep -Fq -- 'NO CHECKED-IN DOCUMENTATION CHANGED' "$unavailable_project/stdout" \
-        || fail "upgrade docs: unavailable source was reported as empty"
-      grep -Fq -- 'model preflight: passed' "$unavailable_project/stderr" \
-        || fail "upgrade docs: unavailable source incorrectly failed candidate preflight"
-      rm -rf "$unavailable_project" "$old_source" "$new_source" "$old_tar" "$new_tar"
-      printf '  upgrade_docs_diff: ok\n' >&2
+        || fail "upgrade golden: unavailable source was reported as empty"
+      grep -Fq 'model preflight: passed' "$unavailable_project/stderr" \
+        || fail "upgrade golden: unavailable source incorrectly failed candidate preflight"
+      ! grep -Fq '"rev"' "$unavailable_project/stderr" \
+        || fail "upgrade golden: unavailable path identity fabricated a revision"
+      rm -rf "$unavailable_project" "$source_root" "$git_root"
+      printf '  upgrade_versioned: ok\n' >&2
     }
 
-    upgrade_docs_diff_tests
+    upgrade_versioned_tests
 
     current_system=$(nix eval --impure --raw --expr builtins.currentSystem)
     path_project=$(mktemp -d)
@@ -660,20 +963,6 @@ pkgs.writeShellApplication {
       >/dev/null || fail "adoption: scaffolded down failed"
     ( cd "$wk" && NIXFIED_STATE_DIR="$st" nix run "$project#clean" ) \
       >/dev/null || fail "adoption: scaffolded clean failed"
-    before=$(cat "$project/nixfied.nix")
-    nix run "$checkout#upgrade" -- --root "$project" --nixfied-url "$pin" \
-      || fail "adoption: upgrade failed"
-    after=$(cat "$project/nixfied.nix")
-    [ "$before" = "$after" ] || fail "adoption: upgrade modified the project-owned nixfied.nix"
-    git -C "$project" add -A
-    git -C "$project" commit -q --allow-empty -m upgrade
-    model="$(nix build --no-link --print-out-paths "$project#model")/model.json"
-    st=$(mktemp -d)
-    wk=$(mktemp -d)
-    ( cd "$wk" && NIXFIED_STATE_DIR="$st" "$rt" run --model "$model" --task smoke --timeout-ms 60000 ) \
-      >/dev/null || fail "adoption: post-upgrade run failed"
-    ( cd "$wk" && NIXFIED_STATE_DIR="$st" "$rt" clean --model "$model" ) \
-      >/dev/null || fail "adoption: post-upgrade clean failed"
     rm -rf "$project_repo"
     printf '  adoption: %ds\n' "$((SECONDS - t0))" >&2
 

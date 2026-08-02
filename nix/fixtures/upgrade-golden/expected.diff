@@ -1,0 +1,137 @@
+--- BEGIN NIXFIED DOCUMENTATION DIFF ---
+--- old/docs/ARCHITECTURE.md
++++ new/docs/ARCHITECTURE.md
+@@ -128,11 +128,14 @@
+ Adopter vocabulary enters the contract as **names over this algebra, never as
+ schema**: `check` is not a concept nixfied knows, it is a composite an
+ adopter named, exported to the flake surface through
+-`nixfied.surface.verbs`. Exported verbs share a namespace with framework apps
+-reserved by VERB-1 and derive only from adopter-exported task names. Contextual
+-help is a source-bound, reference-neutral Nix projection of final current-flake
+-metadata; a mismatched caller context fails instead of projecting another
+-flake. It adds nothing to the model algebra or runtime ABI. Environment
++`nixfied.surface.verbs`. That attrset combines the explicit export choice with
++the presentation metadata for each generated app: its key is the task id and
++its value is the exact nonempty user-facing description. Exported verbs share
++a namespace with framework apps reserved by VERB-1 and derive only from
++adopter-exported task names. Contextual help is a source-bound, reference-neutral
++Nix projection of final current-flake metadata; a mismatched caller context
++fails instead of projecting another flake. It adds nothing to the model algebra
++or runtime ABI. Environment
+ **membership does not exist**: running a task brings up exactly the services
+ its leaves require —
+ `servicesRequired`, `operationBindings`, and operation ids are **derived**
+--- old/docs/CONTRACT.md
++++ new/docs/CONTRACT.md
+@@ -91,8 +91,13 @@
+   cache artifacts. Child tools and projects own those concerns through ordinary
+   invocation environment or arguments.
+ - **VERB-1:** `help`, `run`, `ps`, `down`, `clean`, and `model-check` are reserved
+-  project-app names. Project verbs derive only from task names explicitly
+-  exported through `nixfied.surface.verbs`; collisions fail at Nix evaluation.
++  project-app names. `nixfied.surface.verbs` is an attrset mapping each
++  explicitly exported task id to its exact nonempty user-facing app
++  description. Project verbs derive only from those task names; undeclared ids,
++  reserved-name collisions, empty/non-string descriptions, and the former list
++  form fail at Nix evaluation. `{}` emits no adopter task apps. The descriptions
++  are Nix-only app metadata: they are not emitted into `model.json` or
++  `views/docs.md`, and do not enter `runtimeAbi`.
+ - **SURFACE-1:** hidden runtime commands are framework-owned and listed in the
+   capability descriptor, not declared by an adopter in the model. The adopter
+   declaration owns only its exported task-verb surface; unrelated custom flake
+--- old/docs/GUIDE.md
++++ new/docs/GUIDE.md
+@@ -61,7 +61,9 @@
+ 
+ `compileModel` evaluates, validates, derives, and emits the model package.
+ `projectApps` returns the framework discovery/control apps plus the task verbs
+-explicitly listed in `nixfied.surface.verbs`. `projectApps` accepts only the
++explicitly mapped in `nixfied.surface.verbs`. That option is an attrset from
++task id to the exact nonempty description for its generated app; descriptions are
++Nix-only app metadata and do not enter the model. `projectApps` accepts only the
+ project-local, root-level `./nixfied.nix` form shown above in a flake with
+ `flake.nix` and `flake.lock`; function, attrset, subdirectory, and externally
+ sourced modules are unsupported so help can bind its catalog to the defining
+@@ -193,7 +195,7 @@
+     };
+   };
+ 
+-  nixfied.surface.verbs = [ "check" ];
++  nixfied.surface.verbs.check = "Run formatting, linting, and tests";
+ }
+ ```
+ 
+@@ -209,14 +211,32 @@
+   Service `connectsTo` declarations order transitive dependencies and make
+   their named endpoints addressable. Composite service requirements are
+   derived from their leaves.
++- A leaf's `exitPolicy.successCodes` is a nonempty, duplicate-free list that
++  classifies child exit codes as task success; it defaults to `[ 0 ]`. The raw
++  child code remains in task evidence, but is not passed through as the `nix run`
++  status. An accepted code contributes success to the overall run, while any
++  other code produces `TASK_FAILED`.
+ - Importing an adapter contributes ordinary service and task definitions. It
+   starts nothing until a selected leaf requires one of those services.
+-- `nixfied.surface.verbs` is an explicit public choice. Imported or internal
+-  tasks do not silently become flake apps.
++- `nixfied.surface.verbs` is an explicit public choice and description mapping.
++  Imported or internal tasks do not silently become flake apps. The generated
++  verb app starts with the description declared in `nixfied.nix`, while final
++  flake app metadata remains authoritative after composition and is what
++  contextual help renders.
+ - Tool caches and build directories remain child- and project-owned. Configure
+   them through ordinary invocation arguments or `env`; Nixfied does not place,
+   lock, report, retain, or clean them.
+ 
++For example, a tool whose exit codes `0` and `1` are both successful can declare:
++
++```nix
++nixfied.tasks.inspect.exitPolicy.successCodes = [ 0 1 ];
++```
++
++If `inspect` exits `1`, Nixfied records that raw code but treats the task as
++successful; the overall command therefore returns success unless another task,
++lifecycle operation, or runtime phase fails.
++
+ The source defaults to the live workspace. `logicalRoot`, `sourceMode`,
+ `sourceIdentity`, and `dirtyPolicy` define whether invocations observe that
+ workspace or an immutable snapshot/flake input. In live-workspace mode, invoke
+--- old/docs/OPTIONS.md
++++ new/docs/OPTIONS.md
+@@ -2017,19 +2017,19 @@
+ 
+ 
+ 
+-Task ids exported as project flake apps; framework project-app names are reserved\.
++Mapping from exported task ids to their exact project flake-app descriptions; framework project-app names are reserved\.
+ 
+ 
+ 
+ *Type:*
+-list of non-empty string
++attribute set of non-empty string
+ 
+ 
+ 
+ *Default:*
+ 
+ ```nix
+-[ ]
++{ }
+ ```
+ 
+ 
+@@ -2122,7 +2122,11 @@
+ 
+ 
+ 
+-Exit codes treated as success\.
++Nonempty, duplicate-free list of child exit codes treated as leaf-task
++success\. The raw child code is retained in task evidence, while the
++Nixfied command reports the overall run outcome: an accepted code is
++not passed through as the command status, and an unaccepted code
++produces ` TASK_FAILED `\.
+ 
+ 
+ 
+--- END NIXFIED DOCUMENTATION DIFF ---

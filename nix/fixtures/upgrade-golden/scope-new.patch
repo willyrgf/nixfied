@@ -1,0 +1,13 @@
+diff --git a/README.md b/README.md
+--- a/README.md
++++ b/README.md
+@@ -16,0 +17 @@
++Scope fixture README changed.
+diff --git a/docs/upgrade-scope-added.md b/docs/upgrade-scope-added.md
+new file mode 100644
+index 0000000..4d7f2c1
+--- /dev/null
++++ b/docs/upgrade-scope-added.md
+@@ -0,0 +1,2 @@
++# Added scope fixture
++This file exists only in the deterministic documentation-scope test.

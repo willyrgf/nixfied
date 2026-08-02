@@ -507,6 +507,10 @@ PY
     fi
     echo "model preflight: passed" >&2
 
+    if [[ -n "''${NIXFIED_UPGRADE_TEST_PAUSE_BEFORE_APPLY-}" ]]; then
+      echo "test pause before apply" >&2
+      sleep "''${NIXFIED_UPGRADE_TEST_PAUSE_BEFORE_APPLY}"
+    fi
     assert_unchanged
     if [[ "$plan" -eq 1 ]]; then
       echo "plan: candidate resolved and model preflight passed" >&2

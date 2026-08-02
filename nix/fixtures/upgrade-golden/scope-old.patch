@@ -1,0 +1,7 @@
+diff --git a/docs/upgrade-scope-removed.md b/docs/upgrade-scope-removed.md
+new file mode 100644
+index 0000000..8b1c1f0
+--- /dev/null
++++ b/docs/upgrade-scope-removed.md
+@@ -0,0 +1 @@
++# Removed scope fixture

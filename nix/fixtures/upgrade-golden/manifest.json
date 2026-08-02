@@ -1,0 +1,23 @@
+{
+  "archiveFormat": "tar.gz",
+  "normalization": {
+    "sort": "name",
+    "mtime": "1970-01-01T00:00:00Z",
+    "owner": 0,
+    "group": 0,
+    "numericOwner": true,
+    "gzip": "-n"
+  },
+  "expectedDiffSha256": "b14fc8b3cc78691bf861fe436e1ad0e368109749bebbb214ae934f63e2188589",
+  "scopeExpectedDiffSha256": "7d8ab0971df7d8f494aeff47800b3dece6e20638e97f44397935ec136db31589",
+  "old": {
+    "commit": "8e1fa56d9423b93b89f9aabf4be86c2081da0362",
+    "archiveSha256": "013005b8e74778217891ae7f5199191eafef1edd7ec4ea2430389bf262349c0c",
+    "narHash": "sha256-/6oahZWNTHpjLbBfBwf1Rvfzll79GLd5BdkOjOxKjz8="
+  },
+  "new": {
+    "commit": "0aaf8740e7ef8aa5ee487085bac7be0dd5998007",
+    "archiveSha256": "b63ce314aef0f41b7394ff7388e1ba32b46f6db0c8ecfc105c393a9705de183d",
+    "narHash": "sha256-72B7WmRbOBcyfNvAvA+wevX9B5alWtoRiXpM7h/MeO0="
+  }
+}

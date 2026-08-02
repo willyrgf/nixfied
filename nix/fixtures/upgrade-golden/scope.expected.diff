@@ -1,0 +1,21 @@
+--- BEGIN NIXFIED DOCUMENTATION DIFF ---
+--- old/README.md
++++ new/README.md
+@@ -14,6 +14,7 @@
+ Projects name those primitives in their own vocabulary—`lint`, `database`,
+ `dev`, `test`, `release`—without adding domain logic to the runtime. Several
+ isolated slots can run side by side with separate ports, processes, and state.
++Scope fixture README changed.
+ 
+ ## Quick start
+ 
+--- old/docs/upgrade-scope-added.md
++++ new/docs/upgrade-scope-added.md
+@@ -0,0 +1,2 @@
++# Added scope fixture
++This file exists only in the deterministic documentation-scope test.
+--- old/docs/upgrade-scope-removed.md
++++ new/docs/upgrade-scope-removed.md
+@@ -1 +0,0 @@
+-# Removed scope fixture
+--- END NIXFIED DOCUMENTATION DIFF ---
