@@ -60,6 +60,12 @@ flakes are supported through the same `compileModel` and `projectApps` calls;
 the installer refuses to edit an existing `flake.nix` and prints the merge
 fragment instead.
 
+The distribution boundary is deliberate: `.#install` is a CLI-only scaffold
+wrapper and does not depend on the process runtime. Generated project apps
+(`run`, `model-check`, `ps`, `down`, `clean`, and exported task verbs) use the
+release `nixfied-runtime` package. The debug runtime and test child are private
+framework-check inputs, not adopter-facing package outputs.
+
 See the [adopter guide](docs/GUIDE.md) for existing-flake integration, the
 authoring model, command semantics, slots and state, secrets, adapters, and
 upgrades.

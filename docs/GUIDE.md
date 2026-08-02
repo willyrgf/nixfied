@@ -59,6 +59,26 @@ git add flake.lock             # include the generated pin in the commit
 
 Outside a Git worktree, only `nix flake lock` is required.
 
+The installer and generated apps intentionally use different framework
+products. `.#install` contains only the dependency-free `nixfied-cli`, so
+scaffolding does not build or retain the process runtime. Once the project is
+locked, generated `run`, `model-check`, `ps`, `down`, `clean`, and exported task
+apps reference the release `nixfied-runtime`. The debug runtime and test child
+remain private to Nixfied's own checks and gates.
+
+If the adopting flake already has a compatible `nixpkgs` input, it may opt into
+input convergence explicitly:
+
+```nix
+inputs.nixfied = {
+  url = "github:willyrgf/nixfied";
+  inputs.nixpkgs.follows = "nixpkgs";
+};
+```
+
+Test this follows relationship against the project's pinned Nixfied revision;
+the package expressions still require a compatible nixpkgs package set.
+
 `compileModel` evaluates, validates, derives, and emits the model package.
 `projectApps` returns the framework discovery/control apps plus the task verbs
 explicitly mapped in `nixfied.surface.verbs`. That option is an attrset from

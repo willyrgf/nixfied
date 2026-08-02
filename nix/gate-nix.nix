@@ -2,7 +2,7 @@
 # These stay in bash because they perform open-ended Nix builds and external
 # fetches; expressing them as runtime tasks would exceed the bounded role of
 # those framework tasks and blur which layer is under test.
-{ pkgs, runtime }:
+{ pkgs, debugRuntime }:
 pkgs.writeShellApplication {
   name = "nixfied-gate-nix";
   runtimeInputs = [
@@ -25,7 +25,7 @@ pkgs.writeShellApplication {
       esac
     done
 
-    rt="${runtime}/bin/nixfied-runtime"
+    rt="${debugRuntime}/bin/nixfied-runtime"
 
     fail() {
       echo "  GATE FAIL: $*" >&2
@@ -122,7 +122,6 @@ pkgs.writeShellApplication {
       || fail "immutable source: runtime check failed"
     printf '  immutable_source: %ds\n' "$((SECONDS - t0))" >&2
 
-    echo "  adoption (#install and runtime controls against a throwaway repo)" >&2
     t0=$SECONDS
     if [ -n "$dirty" ]; then
       pin="path:$checkout"
@@ -137,6 +136,59 @@ pkgs.writeShellApplication {
         echo "    pin: HEAD — uncommitted changes are NOT exercised here (use --dirty)" >&2
       fi
     fi
+
+    package_boundary_tests() {
+      local current_system install_path cli_path release_runtime debug_runtime
+      local install_refs public_packages boundary_project generated_run
+
+      echo "  package boundaries (CLI installer and release adopter runtime)" >&2
+      current_system=$(nix eval --impure --raw --expr builtins.currentSystem)
+      install_path=$(nix build --no-write-lock-file --no-link --print-out-paths "$checkout#install") \
+        || fail "package boundaries: install output did not build"
+      cli_path=$(nix build --no-write-lock-file --no-link --print-out-paths "$checkout#nixfied-cli") \
+        || fail "package boundaries: CLI output did not build"
+      release_runtime=$(nix build --no-write-lock-file --no-link --print-out-paths "$checkout#nixfied-runtime") \
+        || fail "package boundaries: release runtime output did not build"
+      debug_runtime="${debugRuntime}"
+
+      install_refs=$(nix path-info --recursive "$install_path") \
+        || fail "package boundaries: install closure could not be inspected"
+      printf '%s\n' "$install_refs" | grep -Fq "$cli_path" \
+        || fail "package boundaries: install closure omitted the CLI output"
+      ! printf '%s\n' "$install_refs" | grep -Fq "$release_runtime" \
+        || fail "package boundaries: install closure references the release runtime"
+      ! printf '%s\n' "$install_refs" | grep -Fq "$debug_runtime" \
+        || fail "package boundaries: install closure references the debug runtime"
+
+      public_packages=$(nix eval --no-write-lock-file --json "$checkout#packages.$current_system" --apply builtins.attrNames) \
+        || fail "package boundaries: public package names did not evaluate"
+      printf '%s\n' "$public_packages" | jq -e '
+        index("nixfied-cli") != null
+        and index("nixfied-runtime") != null
+        and index("nixfied-runtime-debug") == null
+        and index("nixfied-test-child") == null
+      ' >/dev/null || fail "package boundaries: public package surface is incorrect"
+
+      boundary_project=$(mktemp -d)
+      nix run "$checkout#install" -- \
+        --root "$boundary_project" --project-id package-boundary --name package-boundary --nixfied-url "$pin" \
+        >/dev/null || fail "package boundaries: CLI installer did not run in a fresh project"
+      nix flake lock "$boundary_project" >/dev/null \
+        || fail "package boundaries: fresh project could not lock its inputs"
+      generated_run=$(nix eval --no-write-lock-file --raw "$boundary_project#apps.$current_system.run.program") \
+        || fail "package boundaries: generated run app did not evaluate"
+      nix run --no-write-lock-file "$boundary_project#run" -- --help >/dev/null \
+        || fail "package boundaries: generated run wrapper did not realise"
+      grep -Fq "$release_runtime" "$generated_run" \
+        || fail "package boundaries: generated run wrapper omitted the release runtime"
+      ! grep -Fq "$debug_runtime" "$generated_run" \
+        || fail "package boundaries: generated run wrapper references the debug runtime"
+      rm -rf "$boundary_project"
+      printf '  package_boundaries: ok\n' >&2
+    }
+
+    package_boundary_tests
+    echo "  adoption (#install and runtime controls against a throwaway repo)" >&2
     upgrade_fixture="$checkout/nix/fixtures/upgrade-golden"
     upgrade_manifest="$upgrade_fixture/manifest.json"
     upgrade_expected="$upgrade_fixture/expected.diff"

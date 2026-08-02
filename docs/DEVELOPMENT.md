@@ -15,6 +15,9 @@ nix/install/                   install and upgrade programs
 nix/lib/                       pure Nix helpers
 nix/docs/                      private generated-reference builders
 nix/packages/                  reproducible Rust builds and source checks
+nix/packages/runtime-source.nix package-specific filtered Cargo roots
+nix/checks/package-boundaries.nix package/source/public-output boundary proof
+nix/distribution-benchmark.nix opt-in framework/adopter cost measurements
 nix/help-*.nix                 private contextual app catalog
 nix/project-apps.nix           discovery/controls + adopter-exported task apps
 nix/gate-runtime/nixfied.nix   adopter-shaped runtime integration gate
@@ -65,6 +68,11 @@ nix develop --command bash -c 'cd runtime && cargo fmt --all -- --check'
 nix develop --command bash -c 'cd runtime && cargo clippy --workspace --all-targets -- -D warnings'
 nix develop --command bash -c 'cd runtime && cargo test -p nixfied-model'
 nix develop --command bash -c 'cd runtime && cargo test -p nixfied-runtime --test admission'
+nix build .#nixfied-cli --no-link
+nix build .#nixfied-runtime --no-link
+nix build .#install --no-link
+nix build --impure .#checks.$(nix eval --impure --raw --expr builtins.currentSystem).package-boundaries --no-link
+nix run .#measure-distribution -- --mode warm
 ```
 
 `nix flake check` is the hermetic source/build core. Its `rust-workspace`
@@ -73,6 +81,33 @@ modules, then runs rustfmt and Clippy with `-D warnings`; Clippy type-checks all
 targets. The flake checks also build the debug runtime and minimal example model,
 and run the Nix derivation golden vectors. The process- and port-using Cargo tests
 run outside the Nix sandbox through `.#test`.
+
+The public package surface contains `nixfied-cli` and the release
+`nixfied-runtime`; `install` wraps only the CLI. The debug runtime and
+`nixfied-test-child` are private transitive inputs of checks, gates, the dev
+shell, and the fixture-backed test wrapper. `runtime-source.nix` creates a real
+Cargo workspace root for each product, so CLI, runtime/model, and test-child
+source changes do not invalidate unrelated product derivations. The Cargo lock
+and vendor derivation remain shared initially, so toolchain, lockfile, and
+workspace-metadata changes can still invalidate multiple products, and the CLI
+may retain shared build inputs even though it does not compile runtime code. The
+filtered roots retain the canonical lock for shared vendor validation; Cargo
+derives a transient member-only lock during the build/check because full-workspace
+lock entries are not accepted by `cargo metadata --locked` in a reduced workspace.
+The focused boundary command is impure so its source-variant matrix runs on the
+native Linux target; pure cross-system flake evaluation keeps the structural
+root/output proof without trying to realise a foreign test copy.
+
+`nix run .#measure-distribution` emits tab-separated measurements for the CLI and
+release runtime builds, then creates a fresh synthetic adopter and measures
+installation, lock/evaluation, model realization, `model-check`, and the starter
+task. Each build record includes planned paths, wall time, peak RSS, NAR size,
+recursive closure size, closure path count, and whether `rustc` appeared in the
+build log. Nix versions that do not expose download-byte events report that field
+as `unreported`. Run it once with `--mode clean` in an isolated store and again
+with `--mode warm` against the reused store; the command never garbage-collects or
+deletes store paths. Add `--source-boundaries` to include the focused temporary
+source-variant derivation check.
 
 Regenerate the checked option reference after changing `nix/modules/`:
 
@@ -161,10 +196,12 @@ Dirty mode uses a path pin and therefore re-derives the downstream closure.
 
 `nix run .#ci` is the canonical full local gate, not a byte-for-byte copy of the
 hosted workflow. `.github/workflows/checks.yml` separately runs the raw Cargo
-floor, flake checks, and gate; it also runs macOS-specific endpoint observer
-tests and builds the optimized release runtime as a final safety net:
+floor, flake checks, package-boundary check, and gate; it also runs macOS-specific
+endpoint observer tests and builds the public CLI, installer, and optimized
+release runtime as a final safety net:
 
 ```sh
+nix build .#nixfied-cli .#install --no-link
 nix build .#nixfied-runtime --no-link
 ```
 
@@ -184,6 +221,7 @@ Use the smallest proof that covers the change, then widen for shared contracts:
 | `nixfied-model` shape/validation | model crate tests + `.#check` |
 | Runtime admission or lifecycle | focused runtime test + `.#test` |
 | Nix resolution/validation/derivation | `nix flake check` + affected Nix vectors |
+| Package/source/public output boundary | `package-boundaries` check + CLI/runtime/install builds |
 | Generated docs or public output | affected model build + `.#gate` |
 | Adapter or example | build the affected model + `.#gate` |
 | Contract or cross-layer change | `.#ci`; use `--dirty` when the generated project must consume the working tree |

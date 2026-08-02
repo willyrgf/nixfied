@@ -3,8 +3,8 @@ name: checks
 # The framework's checks, layered so a bug in the runtime cannot certify itself:
 # the trusted cargo floor grades the runtime first, then nix flake check's
 # hermetic structural gates, then the product orchestrates its own end-to-end
-# framework gate. Everything here builds the fast debug profile; the release binary
-# `.#install` ships is verified by a final build step.
+# framework gate. Framework checks use the private debug runtime; public CLI/runtime
+# and installer products are verified by explicit boundary and build steps.
 on:
   push:
 
@@ -54,6 +54,13 @@ jobs:
       - name: nix flake check
         run: nix flake check
 
+      # 2b. Package boundaries: filtered Cargo roots, independent derivation
+      #    identities, public/private outputs, and exact shipped binaries.
+      - name: package boundary check
+        run: |
+          system="$(nix eval --impure --raw --expr builtins.currentSystem)"
+          nix build --impure ".#checks.$system.package-boundaries" --no-link
+
       # 3. Gate (debug): the framework runs the example models the way adopters do
       #    — through the runtime under test — plus the cross-slot, fail-closed, and
       #    adoption checks. Uses the debug runtime built by step 2 (cached).
@@ -69,8 +76,9 @@ jobs:
           path: ${{ runner.temp }}/nixfied-gate/artifacts/
           if-no-files-found: warn
 
-      # 4. Release safety net: the optimized binary `.#install` ships to adopters
-      #    must compile. CI builds debug everywhere else, so this is where a
-      #    release-only break would surface before shipping.
+      # 4. Public product safety net: the CLI-only installer and optimized
+      #    release runtime shipped to adopters must compile independently.
+      - name: CLI and installer builds
+        run: nix build .#nixfied-cli .#install --no-link
       - name: release runtime build
         run: nix build .#nixfied-runtime --no-link

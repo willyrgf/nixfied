@@ -12,7 +12,7 @@
   module,
   pkgs,
   lib,
-  runtime,
+  releaseRuntime,
   system,
   model,
   config,
@@ -25,7 +25,7 @@ let
     && builtins.baseNameOf modulePath == "nixfied.nix"
     && builtins.pathExists "${moduleRoot}/flake.nix"
     && builtins.pathExists "${moduleRoot}/flake.lock";
-  runtimeBin = "${runtime}/bin/nixfied-runtime";
+  runtimeBin = "${releaseRuntime}/bin/nixfied-runtime";
   modelJson = "${model}/model.json";
   verbs = config.nixfied.surface.verbs;
   verbIds = builtins.attrNames verbs;

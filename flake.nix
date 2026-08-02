@@ -35,6 +35,15 @@
             };
           }
         );
+      mkNixfiedPackage =
+        {
+          pkgs,
+          package,
+          buildType ? "release",
+        }:
+        import ./nix/packages/runtime.nix {
+          inherit pkgs package buildType;
+        };
       mkNixfiedLib =
         { pkgs, system }:
         let
@@ -44,9 +53,12 @@
               inherit (nixpkgs) lib;
               inherit pkgs system module;
             };
-          # The nix-built runtime an adopter's apps run against. Lazy: only forced
+          # The release runtime an adopter's apps run against. Lazy: only forced
           # when `projectApps` is used, so `compileModel`-only callers don't build it.
-          runtime = import ./nix/packages/runtime.nix { inherit pkgs; };
+          releaseRuntime = mkNixfiedPackage {
+            inherit pkgs;
+            package = "nixfied-runtime";
+          };
           composeLib = import ./nix/lib/compose.nix { inherit (nixpkgs) lib; };
           resolveConfig =
             module:
@@ -64,7 +76,7 @@
             module:
             import ./nix/project-apps.nix {
               inherit module;
-              inherit pkgs runtime system;
+              inherit pkgs releaseRuntime system;
               inherit (nixpkgs) lib;
               model = compileModel module;
               config = resolveConfig module;
@@ -72,9 +84,9 @@
         };
       mkNixfiedTestChild =
         pkgs:
-        import ./nix/packages/runtime.nix {
+        mkNixfiedPackage {
           inherit pkgs;
-          packages = [ "nixfied-test-child" ];
+          package = "nixfied-test-child";
         };
     in
     {
@@ -84,14 +96,22 @@
         { pkgs, system }:
         let
           nixfiedLib = mkNixfiedLib { inherit pkgs system; };
-          # The release runtime/CLI binaries (host-Rust-free) — what `.#install`
-          # ships to adopters and what `projectApps` runs.
-          nixfiedRuntime = import ./nix/packages/runtime.nix { inherit pkgs; };
+          # Public release products. The installer uses only the CLI; generated
+          # project apps use the release runtime through `projectApps` above.
+          nixfiedCli = mkNixfiedPackage {
+            inherit pkgs;
+            package = "nixfied-cli";
+          };
+          nixfiedRuntime = mkNixfiedPackage {
+            inherit pkgs;
+            package = "nixfied-runtime";
+          };
           # The debug build the framework's own CI path uses (flake checks and the
           # gate), so every `.#ci` compile shares one fast profile instead of also
           # building release optimization.
-          nixfiedRuntimeDebug = import ./nix/packages/runtime.nix {
+          nixfiedRuntimeDebug = mkNixfiedPackage {
             inherit pkgs;
+            package = "nixfied-runtime";
             buildType = "debug";
           };
           nixfiedTestChild = mkNixfiedTestChild pkgs;
@@ -216,15 +236,13 @@
           );
           nixfiedInstall = import ./nix/install/install.nix {
             inherit pkgs;
-            # The debug build: the installer only writes scaffold files, and
-            # the whole CI loop shares one fast profile.
-            runtime = nixfiedRuntimeDebug;
+            cli = nixfiedCli;
           };
           nixfiedUpgrade = import ./nix/install/upgrade.nix { inherit pkgs; };
           # Nix-layer tests: reject_composite suite + adoption loop.
           nixfiedGateNix = import ./nix/gate-nix.nix {
             inherit pkgs;
-            runtime = nixfiedRuntimeDebug;
+            debugRuntime = nixfiedRuntimeDebug;
           };
           # Runtime-layer tests expressed as a first-class nixfied model.
           # The compileModel override injects the runtime closure and all model
@@ -290,7 +308,7 @@
           devApps = import ./nix/dev.nix {
             inherit pkgs postgresTestModel;
             gate = nixfiedGate;
-            runtime = nixfiedRuntimeDebug;
+            debugRuntime = nixfiedRuntimeDebug;
             testChild = nixfiedTestChild;
           };
         in
@@ -298,11 +316,8 @@
           default = minimalModel;
           toolchain-model = toolchainModel;
           gate-runtime-model = gateRuntimeModel;
+          nixfied-cli = nixfiedCli;
           nixfied-runtime = nixfiedRuntime;
-          # The debug runtime the framework's CI path builds (also the
-          # `nixfied-runtime` check). Adopters never use this; `.#install` ships
-          # the release `nixfied-runtime` above.
-          nixfied-runtime-debug = nixfiedRuntimeDebug;
           install = nixfiedInstall;
           upgrade = nixfiedUpgrade;
           gate = nixfiedGate;
@@ -320,11 +335,22 @@
 
       apps = forAllSystems (
         { pkgs, system }:
+        let
+          distributionBenchmark = import ./nix/distribution-benchmark.nix {
+            inherit pkgs;
+            framework = self.outPath;
+          };
+        in
         {
           help = import ./nix/help-app.nix {
             inherit pkgs system;
             expectedFlakePath = self.outPath;
             flakeRef = self.outPath;
+          };
+          measure-distribution = {
+            type = "app";
+            program = "${distributionBenchmark}/bin/nixfied-distribution-benchmark";
+            meta.description = "Measure framework and adopter distribution/build cost";
           };
           install = {
             type = "app";
@@ -375,10 +401,27 @@
             inherit pkgs;
             inherit (nixpkgs) lib;
           };
+          # Source filtering, derivation independence, public output boundaries,
+          # and exact shipped binary contents.
+          package-boundaries = import ./nix/checks/package-boundaries.nix {
+            inherit pkgs;
+            publicPackages = self.packages.${system};
+            # Source-variant derivations are built by a native Linux boundary
+            # invocation. Pure cross-system evaluation keeps the structural
+            # root/output proof without trying to realise a foreign test copy.
+            runSourceMatrix =
+              builtins ? currentSystem
+              && builtins.elem system [ "aarch64-linux" "x86_64-linux" ]
+              && builtins.currentSystem == system;
+          };
           # The runtime workspace must compile reproducibly. CI verifies the fast
           # debug profile for fast iteration. The hosted workflow separately
           # builds the release package as its final safety net.
-          nixfied-runtime = self.packages.${system}.nixfied-runtime-debug;
+          nixfied-runtime = mkNixfiedPackage {
+            inherit pkgs;
+            package = "nixfied-runtime";
+            buildType = "debug";
+          };
           # Hermetic source gate: checked option reference + rustfmt + clippy
           # (-D warnings). Keep this under the existing check rather than adding
           # another public flake output solely for documentation maintenance.

@@ -9,7 +9,7 @@
 {
   pkgs,
   gate,
-  runtime,
+  debugRuntime,
   testChild,
   postgresTestModel,
 }:
@@ -47,7 +47,7 @@ let
       nix flake check
       echo "==> model admission" >&2
       model="$(nix build .#minimal-model --no-link --print-out-paths)/model.json"
-      "${runtime}/bin/nixfied-runtime" check --model "$model"
+      "${debugRuntime}/bin/nixfied-runtime" check --model "$model"
     '';
   };
 
