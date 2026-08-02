@@ -353,6 +353,21 @@ pkgs.writeShellApplication {
           || fail "upgrade golden: $label changed nixfied.nix"
       }
 
+      assert_blank_after() {
+        local path="$1" marker="$2" label="$3" line found=0
+        while IFS= read -r line || [[ -n "$line" ]]; do
+          if [[ "$found" -eq 1 ]]; then
+            [[ -z "$line" ]] \
+              || fail "upgrade golden: $label did not separate status sections"
+            return 0
+          fi
+          if [[ "$line" == "$marker" ]]; then
+            found=1
+          fi
+        done <"$path"
+        fail "upgrade golden: $label status marker was missing"
+      }
+
       make_git_fixture() {
         local archive="$1" destination="$2"
         mkdir "$destination"
@@ -539,6 +554,8 @@ pkgs.writeShellApplication {
       assert_upgrade_golden "$success_project/plan.stdout" "compatible plan"
       grep -Fq 'candidate verification: passed (model preflight)' "$success_project/plan.stderr" \
         || fail "upgrade golden: compatible plan omitted model preflight success"
+      assert_blank_after "$success_project/plan.stderr" \
+        'candidate verification: passed (model preflight)' 'compatible plan'
       grep -Fq 'upgrade applied: no (--plan)' "$success_project/plan.stderr" \
         || fail "upgrade golden: compatible plan omitted plan apply status"
       grep -Fq 'plan: no project files changed' "$success_project/plan.stderr" \
@@ -573,6 +590,8 @@ pkgs.writeShellApplication {
       assert_upgrade_golden "$success_project/apply.stdout" "compatible apply"
       grep -Fq 'candidate verification: passed (model preflight)' "$success_project/apply.stderr" \
         || fail "upgrade golden: compatible apply omitted model preflight success"
+      assert_blank_after "$success_project/apply.stderr" \
+        'candidate verification: passed (model preflight)' 'compatible apply'
       grep -Fq 'upgrade applied: yes' "$success_project/apply.stderr" \
         || fail "upgrade golden: compatible apply omitted apply status"
       grep -Fq 'changed: flake.nix' "$success_project/apply.stderr" \

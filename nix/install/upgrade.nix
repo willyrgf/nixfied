@@ -125,6 +125,10 @@ pkgs.writeShellApplication {
       fi
     }
 
+    status_break() {
+      printf '\n' >&2
+    }
+
     flake_before="$(file_identity "$flake")"
     lock_before="$(file_identity "$lock")"
     project_before="$(file_identity "$project_file")"
@@ -323,6 +327,7 @@ PY
 
     if [[ "$update_lock" -eq 0 ]]; then
       echo "Nixfied upgrade inspection" >&2
+      status_break
       echo "documentation diff: skipped (--no-lock; no candidate lock was produced)" >&2
       echo "candidate verification: skipped (--no-lock)" >&2
       if [[ -n "$nixfied_url" ]]; then
@@ -377,11 +382,13 @@ PY
 
     echo "Nixfied upgrade candidate" >&2
     if ! "''${update_command[@]}" >/dev/null; then
+      status_break
       echo "candidate lock resolution failed" >&2
       echo "upgrade applied: no" >&2
       echo "upgrade not applied; no project files were changed" >&2
       exit 4
     fi
+    status_break
 
     lock_node_json() {
       local lock_path="$1"
@@ -432,6 +439,7 @@ PY
     else
       echo "old source: unavailable (flake.lock is missing)" >&2
     fi
+    status_break
     report_identity "candidate" "$candidate_lock" || true
 
     materialize_source() {
@@ -514,7 +522,9 @@ PY
       fi
     }
 
+    status_break
     echo "documentation diff: emitted on stdout (README.md and docs/)" >&2
+    status_break
     printf '%s\n' '--- BEGIN NIXFIED DOCUMENTATION DIFF ---'
     if [[ "$old_available" -eq 1 && "$candidate_available" -eq 1 ]]; then
       if ! emit_docs_diff "$old_source" "$candidate_source"; then
@@ -528,6 +538,7 @@ PY
     printf '%s\n' '--- END NIXFIED DOCUMENTATION DIFF ---'
 
     verify_candidate() {
+      status_break
       if ! nix eval --no-write-lock-file --reference-lock-file "$candidate_lock" --raw \
         "$root#model.drvPath" >/dev/null; then
         echo "candidate verification: failed (model preflight)" >&2
@@ -559,6 +570,7 @@ PY
     report_checked_summary() {
       local mode="$1"
       local changed=""
+      status_break
       if [[ "$flake_changed" -eq 1 ]]; then
         changed="flake.nix (nixfied.url -> $nixfied_url)"
       fi
@@ -600,6 +612,7 @@ PY
       elif [[ "$mode" != "plan" ]]; then
         echo "nixfied.nix changed concurrently; this command did not edit it" >&2
       fi
+      status_break
       if [[ "$mode" == "plan" ]]; then
         echo "post-upgrade validation: not run (--plan)" >&2
       else
