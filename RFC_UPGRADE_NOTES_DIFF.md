@@ -280,23 +280,33 @@ the intent of arbitrary Nix module composition.
 The implementation belongs in the Nix-layer adoption gate in
 [`nix/gate-nix.nix`](nix/gate-nix.nix), not in Rust tests.
 
-Add hermetic fixtures that prove:
+The implemented gate uses the checked-in fixtures under
+[`nix/fixtures/upgrade-golden/`](nix/fixtures/upgrade-golden/) and proves:
 
-1. Two exact local Nixfied source revisions produce an actual docs diff with
-   stable `old/` and `new/` labels.
+1. The exact historical source revisions `8e1fa56` and `0aaf874` are frozen as
+   deterministic tarballs, with archive SHA256, NAR hash, normalization, and
+   provenance recorded in `manifest.json`.
 2. The `surface.verbs` list-to-attrset change appears in the emitted diff and
-   candidate model evaluation rejects the old declaration.
+   candidate model evaluation rejects the old declaration produced by the
+   historical installer.
 3. A failed candidate leaves `flake.nix`, `flake.lock`, and `nixfied.nix`
    byte-for-byte unchanged.
 4. A successful candidate applies only the intended input URL/lock changes and
    preserves `nixfied.nix`.
-5. `--plan` emits the same source diff and performs no mutation.
-6. Path, tarball, unavailable-source, and unsupported-identity cases report
-   explicit diff unavailability without fabricating revisions.
-7. The diff is on stdout and status/diagnostics are on stderr, so redirection
+5. `--plan` and apply each emit the same byte-for-byte `expected.diff`; plan
+   performs no mutation, while apply is followed by a model build and
+   `model-check`.
+6. The exact empty-diff marker is emitted when the locked source is unchanged.
+7. Git, path, and tarball locks report their own identities without fabricated
+   revisions; an unavailable path source reports explicit diff unavailability
+   and still allows an independently valid candidate preflight. An unsupported
+   locked scheme is rejected during candidate resolution with no partial report
+   or project mutation.
+8. The diff is on stdout and status/diagnostics are on stderr, so redirection
    captures the actual diff.
-8. No runtime command, state directory, model admission, or ABI snapshot is
-   involved in producing the report.
+9. No runtime command, runtime state directory, Rust model admission, or ABI
+   snapshot is involved in producing the report; Nix-side model preflight is
+   intentionally part of the upgrade gate.
 
 The existing negative evaluation proving that the former list form is rejected
 must remain. It proves the compiler contract; the new adoption fixture proves
@@ -313,10 +323,10 @@ This is a Nix-only upgrade CLI and output change. It does not modify:
 - `runtimeAbi` or `capability.txt`;
 - runtime commands, state, lifecycle, or recovery semantics.
 
-The implementation should update the upgrade section of `docs/GUIDE.md` and,
-if the output and apply guarantees become normative, add the corresponding
-Nix-only upgrade-surface statement to `docs/CONTRACT.md`. No ABI rotation or
-runtime compatibility path is required.
+The upgrade section of `docs/GUIDE.md` documents the user-facing output and
+apply guarantees. This fixture change adds no new public behavior, so it does
+not require a `docs/CONTRACT.md` or ABI change. No runtime compatibility path
+is required.
 
 ## Open questions
 

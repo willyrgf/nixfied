@@ -113,6 +113,33 @@ in the runtime task graph would blur which layer is under test and exceed the
 bounded role of those framework tasks. See the ownership boundary in
 [`CONTRACT.md`](CONTRACT.md) for SEAM-1's exact scope.
 
+The upgrade adoption cases use the pinned source fixtures in
+[`nix/fixtures/upgrade-golden/`](../nix/fixtures/upgrade-golden/) rather than
+constructing ad hoc documentation trees at test time. `manifest.json`
+records the historical source commits, deterministic archive checksums, NAR
+hashes, archive normalization, and the checksum of `expected.diff`. The old
+archive is installed with its historical `#install`; the current checkout's
+`#upgrade` then resolves the new archive and must reproduce `expected.diff`
+byte-for-byte on both `--plan` and apply. The same fixed trees are reused for
+Git and path identity checks, while tarball and unavailable-source cases retain
+separate locked-identity coverage; an unsupported locked scheme is also
+required to fail before emitting a partial report or mutating the project. The
+checked-in scope patches and `scope.expected.diff` separately prove README
+changes plus documentation additions and deletions.
+
+Refresh these fixtures only for an intentional upgrade-behavior change. Export
+each source revision into an empty directory, then create the archive with
+sorted names, epoch timestamps, numeric zero ownership, and `gzip -n` (the
+normalization is recorded in the manifest). Recompute the archive SHA256 and
+NAR hash, regenerate the exact stdout golden from the current upgrade command,
+regenerate `scope.expected.diff` if the deterministic scope overlays change,
+and update `scope-old.patch`, `scope-new.patch`, `expectedDiffSha256`, and
+`scopeExpectedDiffSha256` together with the fixture. Verify that the historical
+installer still produces the list-form declaration used by the rejection case,
+that the compatible case still passes model preflight, and that plan/apply
+stdout remains identical. The fixture freezes source versions and report
+bytes; it does not make the nested Nix dependency closure offline.
+
 The interrupt-and-recover lifecycle scenario remains a white-box Cargo test. It
 requires registry access and precise process timing that a bounded leaf task
 cannot provide.
