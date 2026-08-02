@@ -17,7 +17,6 @@ nix/docs/                      private generated-reference builders
 nix/packages/                  reproducible Rust builds and source checks
 nix/packages/runtime-source.nix package-specific filtered Cargo roots
 nix/checks/package-boundaries.nix package/source/public-output boundary proof
-nix/distribution-benchmark.nix opt-in framework/adopter cost measurements
 nix/help-*.nix                 private contextual app catalog
 nix/project-apps.nix           discovery/controls + adopter-exported task apps
 nix/gate-runtime/nixfied.nix   adopter-shaped runtime integration gate
@@ -72,7 +71,6 @@ nix build .#nixfied-cli --no-link
 nix build .#nixfied-runtime --no-link
 nix build .#install --no-link
 nix build --impure .#checks.$(nix eval --impure --raw --expr builtins.currentSystem).package-boundaries --no-link
-nix run .#measure-distribution -- --mode warm
 ```
 
 `nix flake check` is the hermetic source/build core. Its `rust-workspace`
@@ -97,17 +95,6 @@ lock entries are not accepted by `cargo metadata --locked` in a reduced workspac
 The focused boundary command is impure so its source-variant matrix runs on the
 native Linux target; pure cross-system flake evaluation keeps the structural
 root/output proof without trying to realise a foreign test copy.
-
-`nix run .#measure-distribution` emits tab-separated measurements for the CLI and
-release runtime builds, then creates a fresh synthetic adopter and measures
-installation, lock/evaluation, model realization, `model-check`, and the starter
-task. Each build record includes planned paths, wall time, peak RSS, NAR size,
-recursive closure size, closure path count, and whether `rustc` appeared in the
-build log. Nix versions that do not expose download-byte events report that field
-as `unreported`. Run it once with `--mode clean` in an isolated store and again
-with `--mode warm` against the reused store; the command never garbage-collects or
-deletes store paths. Add `--source-boundaries` to include the focused temporary
-source-variant derivation check.
 
 Regenerate the checked option reference after changing `nix/modules/`:
 

@@ -335,22 +335,11 @@
 
       apps = forAllSystems (
         { pkgs, system }:
-        let
-          distributionBenchmark = import ./nix/distribution-benchmark.nix {
-            inherit pkgs;
-            framework = self.outPath;
-          };
-        in
         {
           help = import ./nix/help-app.nix {
             inherit pkgs system;
             expectedFlakePath = self.outPath;
             flakeRef = self.outPath;
-          };
-          measure-distribution = {
-            type = "app";
-            program = "${distributionBenchmark}/bin/nixfied-distribution-benchmark";
-            meta.description = "Measure framework and adopter distribution/build cost";
           };
           install = {
             type = "app";
