@@ -60,10 +60,14 @@ pub struct ProcessSignalGuard {
 impl ProcessSignalGuard {
     pub fn install() -> RuntimeResult<Self> {
         PROCESS_SIGNAL_CANCELED.store(false, Ordering::SeqCst);
-        let mut previous = Vec::with_capacity(3);
+        let mut previous = Vec::with_capacity(4);
         for signal in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP] {
             previous.push(install_handler(signal)?);
         }
+        // Replay writes must observe EPIPE as a typed projection issue.  The
+        // default disposition would terminate the runtime before the worker can
+        // report the broken pipe.  The prior disposition is restored by Drop.
+        previous.push(install_ignore_handler(libc::SIGPIPE)?);
         Ok(Self { previous })
     }
 }
@@ -92,6 +96,27 @@ fn install_handler(signal: libc::c_int) -> RuntimeResult<(libc::c_int, libc::sig
                 ErrorCode::PlatformUnsupported,
                 format!(
                     "failed to install cancellation signal handler for signal {signal}: {}",
+                    std::io::Error::last_os_error()
+                ),
+            ))
+        }
+    }
+}
+
+fn install_ignore_handler(signal: libc::c_int) -> RuntimeResult<(libc::c_int, libc::sigaction)> {
+    unsafe {
+        let mut action: libc::sigaction = mem::zeroed();
+        let mut previous: libc::sigaction = mem::zeroed();
+        action.sa_sigaction = libc::SIG_IGN;
+        action.sa_flags = 0;
+        libc::sigemptyset(&mut action.sa_mask);
+        if libc::sigaction(signal, &action, &mut previous) == 0 {
+            Ok((signal, previous))
+        } else {
+            Err(RuntimeError::new(
+                ErrorCode::PlatformUnsupported,
+                format!(
+                    "failed to install SIGPIPE handling: {}",
                     std::io::Error::last_os_error()
                 ),
             ))
