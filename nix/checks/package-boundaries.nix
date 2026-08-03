@@ -8,6 +8,11 @@
 }:
 let
   source = ../../runtime;
+  lockFiles = {
+    nixfied-cli = ../../runtime/locks/nixfied-cli.Cargo.lock;
+    nixfied-runtime = ../../runtime/Cargo.lock;
+    nixfied-test-child = ../../runtime/locks/nixfied-test-child.Cargo.lock;
+  };
   rustToolchain = (import ../toolchain.nix { inherit pkgs; }).build;
   mkSourceVariant =
     name: relativePath:
@@ -29,14 +34,17 @@ let
   cliSource = import ../packages/runtime-source.nix {
     inherit pkgs source;
     package = "nixfied-cli";
+    lockFile = lockFiles.nixfied-cli;
   };
   runtimeSource = import ../packages/runtime-source.nix {
     inherit pkgs source;
     package = "nixfied-runtime";
+    lockFile = lockFiles.nixfied-runtime;
   };
   testChildSource = import ../packages/runtime-source.nix {
     inherit pkgs source;
     package = "nixfied-test-child";
+    lockFile = lockFiles.nixfied-test-child;
   };
   cliVariant = mkSourceVariant "cli" "crates/nixfied-cli/src/main.rs";
   runtimeVariant = mkSourceVariant "runtime" "crates/nixfied-runtime/src/lib.rs";
@@ -159,8 +167,6 @@ pkgs.stdenv.mkDerivation {
 
     test -f "$root/Cargo.toml" || fail "$expected source root has no Cargo.toml"
     test -f "$root/Cargo.lock" || fail "$expected source root has no Cargo.lock"
-    cargo generate-lockfile --offline --manifest-path "$root/Cargo.toml" \
-      || fail "$expected source root failed to derive its package lock"
     metadata="$(mktemp)"
     cargo metadata --manifest-path "$root/Cargo.toml" --locked --offline --format-version 1 \
       >"$metadata" \
@@ -168,12 +174,15 @@ pkgs.stdenv.mkDerivation {
     case "$expected" in
       cli)
         jq -e '([.packages[] as $package | select(.workspace_members | index($package.id)) | $package.name] | sort) == ["nixfied-cli"]' "$metadata" >/dev/null
+        jq -e '([.packages[] | select(.source != null) | .name] | sort) == []' "$metadata" >/dev/null
         ;;
       runtime)
         jq -e '([.packages[] as $package | select(.workspace_members | index($package.id)) | $package.name] | sort) == ["nixfied-model", "nixfied-runtime"]' "$metadata" >/dev/null
+        jq -e '([.packages[] | select(.source != null) | .name] | length) == 38' "$metadata" >/dev/null
         ;;
       test-child)
         jq -e '([.packages[] as $package | select(.workspace_members | index($package.id)) | $package.name] | sort) == ["nixfied-test-child"]' "$metadata" >/dev/null
+        jq -e '([.packages[] | select(.source != null) | .name] | sort) == ["libc"]' "$metadata" >/dev/null
         ;;
     esac || fail "$expected source root exposed the wrong Cargo members"
     rm -f "$metadata"

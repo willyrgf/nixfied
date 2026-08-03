@@ -5,6 +5,7 @@
   pkgs,
   source,
   package,
+  lockFile,
 }:
 let
   lib = pkgs.lib;
@@ -72,10 +73,11 @@ ${lib.concatMapStringsSep "\n" (member: "  \"${member}\",") selectedMembers}
   root = pkgs.runCommand "nixfied-${package}-source" { } ''
     mkdir -p "$out"
     cp -R --no-preserve=mode,ownership ${filteredSource}/. "$out/"
+    cp ${lockFile} "$out/Cargo.lock"
     cp ${manifestFile} "$out/Cargo.toml"
   '';
 in
 {
-  inherit root selectedMembers;
+  inherit root selectedMembers lockFile;
   members = selectedMembers;
 }

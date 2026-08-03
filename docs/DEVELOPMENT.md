@@ -27,6 +27,7 @@ runtime/crates/nixfied-model/   serde contract, validation, capability descripto
 runtime/crates/nixfied-runtime/ admission and impure runtime behavior
 runtime/crates/nixfied-cli/     install CLI
 runtime/crates/nixfied-test-child/ private process/socket test fixture
+runtime/locks/                  package-specific Cargo locks for light products
 examples/                       downstream-shaped example models
 ```
 
@@ -86,12 +87,14 @@ The public package surface contains `nixfied-cli` and the release
 shell, and the fixture-backed test wrapper. `runtime-source.nix` creates a real
 Cargo workspace root for each product, so CLI, runtime/model, and test-child
 source changes do not invalidate unrelated product derivations. The Cargo lock
-and vendor derivation remain shared initially, so toolchain, lockfile, and
-workspace-metadata changes can still invalidate multiple products, and the CLI
-may retain shared build inputs even though it does not compile runtime code. The
-filtered roots retain the canonical lock for shared vendor validation; Cargo
-derives a transient member-only lock during the build/check because full-workspace
-lock entries are not accepted by `cargo metadata --locked` in a reduced workspace.
+and vendor derivation are package-specific for the dependency-free CLI and the
+libc-only test child. The runtime/model product intentionally retains the
+canonical full-workspace lock because it owns the complete runtime dependency
+closure. Rust toolchain and workspace-metadata changes can still invalidate
+multiple products; package-specific lock changes are now isolated to the product
+that owns them. The filtered roots carry the lock selected by their package map,
+and `cargo metadata --locked --offline` validates that no transient lock
+generation is needed.
 The focused boundary command is impure so its source-variant matrix runs on the
 native Linux target; pure cross-system flake evaluation keeps the structural
 root/output proof without trying to realise a foreign test copy.

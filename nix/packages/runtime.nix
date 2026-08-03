@@ -1,6 +1,7 @@
 # Reproducible, host-toolchain-free build of one Nixfied workspace product.
 # Source filtering keeps unrelated workspace members out of the product's
-# derivation identity; the shared lockfile remains the canonical dependency input.
+# derivation identity. The runtime keeps the canonical workspace lock; the
+# dependency-light CLI and test child use package-specific lock/vendor inputs.
 #
 # `buildType` selects the cargo profile: the default `"release"` is what
 # generated adopter apps use; the framework's own CI path (flake checks and the
@@ -21,26 +22,31 @@ let
     cargo = rustToolchain;
     rustc = rustToolchain;
   };
-  canonicalLock = builtins.toFile "nixfied-Cargo.lock" (builtins.readFile ../../runtime/Cargo.lock);
-  sharedCargoDeps = rustPlatform.importCargoLock {
-    lockFile = canonicalLock;
+  lockSources = {
+    nixfied-cli = ../../runtime/locks/nixfied-cli.Cargo.lock;
+    nixfied-runtime = ../../runtime/Cargo.lock;
+    nixfied-test-child = ../../runtime/locks/nixfied-test-child.Cargo.lock;
+  };
+  lockSource =
+    if builtins.hasAttr package lockSources then
+      lockSources.${package}
+    else
+      throw "nixfied package: unsupported package ${package}";
+  packageLock = builtins.toFile "nixfied-${package}-Cargo.lock" (builtins.readFile lockSource);
+  packageCargoDeps = rustPlatform.importCargoLock {
+    lockFile = packageLock;
   };
   sourceInfo = import ./runtime-source.nix {
     inherit pkgs source package;
+    lockFile = packageLock;
   };
 in
 rustPlatform.buildRustPackage {
   pname = package;
   version = "0.1.0";
   src = sourceInfo.root;
-  cargoLock.lockFile = canonicalLock;
-  cargoDeps = sharedCargoDeps;
-  # The canonical lock/vendor pair is validated first. Then Cargo derives the
-  # selected workspace lock after that hook, so `cargo metadata --locked` and the
-  # package build see only the members in this filtered root.
-  preConfigure = ''
-    cargo generate-lockfile --offline
-  '';
+  cargoLock.lockFile = packageLock;
+  cargoDeps = packageCargoDeps;
   inherit buildType;
   cargoBuildFlags = [ "--package=${package}" ];
   # The white-box `cargo test` floor runs outside the build sandbox (it binds
