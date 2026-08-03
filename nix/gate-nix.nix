@@ -355,7 +355,7 @@ pkgs.writeShellApplication {
       no_lock_project=$(mktemp -d)
       nix run "$checkout#install" -- --root "$no_lock_project" --project-id upgrade-no-lock --name upgrade-no-lock --nixfied-url "$pin" >/dev/null || fail "upgrade transaction: no-lock fixture install failed"
       nix flake lock "$no_lock_project" >/dev/null || fail "upgrade transaction: no-lock fixture lock failed"
-      no_lock_url="path:$checkout"
+      no_lock_url="$pin"
       before_lock=$(sha256sum "$no_lock_project/flake.lock")
       before_project=$(sha256sum "$no_lock_project/nixfied.nix")
       nix run "$checkout#upgrade" -- --root "$no_lock_project" --nixfied-url "$no_lock_url" --no-lock >"$no_lock_project/stdout" 2>"$no_lock_project/stderr" || fail "upgrade transaction: --no-lock failed"
