@@ -84,6 +84,19 @@ fn output(args: &[String]) -> Result<(), String> {
                 .write_all(stderr.as_bytes())
                 .map_err(|error| format!("write stderr: {error}"))
         }
+        [mode, stdout, stderr] if mode == "hex" => write_hex_output(stdout, stderr),
+        [mode, stdout_byte, stdout_count, stderr_byte, stderr_count] if mode == "repeat" => {
+            write_repeated_output(stdout_byte, stdout_count, stderr_byte, stderr_count)
+        }
+        [mode, stdout, stderr, code] if mode == "hex-exit" => {
+            write_hex_output(stdout, stderr)?;
+            exit_with(&[code.clone()])
+        }
+        [mode, stdout, stderr, marker] if mode == "hex-block" => {
+            write_hex_output(stdout, stderr)?;
+            touch(Path::new(marker))?;
+            park_forever()
+        }
         [mode, name] if mode == "env" => {
             let value = env::var_os(name)
                 .ok_or_else(|| format!("environment variable {name:?} is not set"))?;
@@ -105,7 +118,106 @@ fn output(args: &[String]) -> Result<(), String> {
         [mode] if mode == "stdin" => io::copy(&mut io::stdin().lock(), &mut io::stdout().lock())
             .map(|_| ())
             .map_err(|error| format!("copy stdin: {error}")),
-        _ => Err("output expects literal STDOUT STDERR, env NAME, environment, or stdin".into()),
+        _ => Err("output expects literal, hex, repeat, env, environment, or stdin".into()),
+    }
+}
+
+fn write_hex_output(stdout: &str, stderr: &str) -> Result<(), String> {
+    let stdout = decode_hex(stdout)?;
+    let stderr = decode_hex(stderr)?;
+    let mut stdout_handle = io::stdout().lock();
+    stdout_handle
+        .write_all(&stdout)
+        .map_err(|error| format!("write stdout: {error}"))?;
+    stdout_handle
+        .flush()
+        .map_err(|error| format!("flush stdout: {error}"))?;
+    let mut stderr_handle = io::stderr().lock();
+    stderr_handle
+        .write_all(&stderr)
+        .map_err(|error| format!("write stderr: {error}"))?;
+    stderr_handle
+        .flush()
+        .map_err(|error| format!("flush stderr: {error}"))
+}
+
+fn write_repeated_output(
+    stdout_byte: &str,
+    stdout_count: &str,
+    stderr_byte: &str,
+    stderr_count: &str,
+) -> Result<(), String> {
+    let stdout_byte = one_hex_byte(stdout_byte)?;
+    let stderr_byte = one_hex_byte(stderr_byte)?;
+    let stdout_count = stdout_count
+        .parse::<usize>()
+        .map_err(|error| format!("invalid stdout repeat count {stdout_count:?}: {error}"))?;
+    let stderr_count = stderr_count
+        .parse::<usize>()
+        .map_err(|error| format!("invalid stderr repeat count {stderr_count:?}: {error}"))?;
+    write_repeated(
+        &mut io::stdout().lock(),
+        stdout_byte,
+        stdout_count,
+        "stdout",
+    )?;
+    write_repeated(
+        &mut io::stderr().lock(),
+        stderr_byte,
+        stderr_count,
+        "stderr",
+    )
+}
+
+fn write_repeated<W: Write>(
+    writer: &mut W,
+    byte: u8,
+    count: usize,
+    stream: &str,
+) -> Result<(), String> {
+    let chunk = [byte; 8192];
+    let mut remaining = count;
+    while remaining > 0 {
+        let amount = remaining.min(chunk.len());
+        writer
+            .write_all(&chunk[..amount])
+            .map_err(|error| format!("write {stream}: {error}"))?;
+        remaining -= amount;
+    }
+    writer
+        .flush()
+        .map_err(|error| format!("flush {stream}: {error}"))
+}
+
+fn one_hex_byte(value: &str) -> Result<u8, String> {
+    let bytes = decode_hex(value)?;
+    bytes
+        .first()
+        .copied()
+        .filter(|_| bytes.len() == 1)
+        .ok_or_else(|| format!("expected one hex byte, got {value:?}"))
+}
+
+fn decode_hex(value: &str) -> Result<Vec<u8>, String> {
+    if !value.len().is_multiple_of(2) {
+        return Err(format!("hex value has odd length: {value:?}"));
+    }
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len() / 2);
+    for pair in bytes.chunks_exact(2) {
+        let high = hex_digit(pair[0])?;
+        let low = hex_digit(pair[1])?;
+        decoded.push((high << 4) | low);
+    }
+    Ok(decoded)
+}
+
+fn hex_digit(value: u8) -> Result<u8, String> {
+    match value {
+        b'0'..=b'9' => Ok(value - b'0'),
+        b'a'..=b'f' => Ok(value - b'a' + 10),
+        b'A'..=b'F' => Ok(value - b'A' + 10),
+        _ => Err(format!("invalid hex digit: {value:?}")),
     }
 }
 

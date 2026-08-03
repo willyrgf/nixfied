@@ -282,14 +282,32 @@ govern files, cache contents, or sockets a child chooses to write on its own.
 
 ## Output Control
 
-`run` has three output projections selected by runtime-owned flags. `summary`
-is the default: progress, concise pass/fail summaries, and pointers to the run
+`run` has four output projections selected by runtime-owned flags. `summary` is
+the default: progress, concise pass/fail summaries, and pointers to the run
 summary and log directory on stderr, with stdout empty. `json` (`--json`) is the
 structured automation contract: run/task/node results, diagnostic `durationMs`,
 and evidence paths on stdout, with human run-summary narration suppressed.
-`both` (`--both`) emits both projections explicitly for diagnostics. Captured
-child stdout/stderr stays in redacted log files; the runtime does not inline or
-replay child bytes, and no `logs` command is part of the public surface.
+`both` (`--both`) emits both projections explicitly for diagnostics.
+
+`--output task-output` is a separate direct-leaf boundary. The runtime validates
+one explicit leaf after admission but before slot selection, placement, state,
+registry, services, prepare tasks, or child spawn. It captures and redacts the
+selected task through the ordinary evidence path, opens both redacted evidence
+files before terminal transitions, then gives a move-only `ReplayTicket` to the
+run finalizer. The ticket owns independent stdout/stderr sources and is consumed
+exactly once by bounded concurrent workers. A failed stream does not stop the
+other stream; both workers are joined and their typed projection issues are
+retained.
+
+The run session is the single finalization owner. It replays before service
+teardown, lease release, aggregate summary, footer, and final error projection,
+then runs every remaining cleanup stage even when an earlier stage fails.
+Typed task evidence crosses task, prepare, registry, summary, and error
+boundaries without being reconstructed from serialized JSON. Compound errors
+retain non-recursive causes, with safety/registry/lease failures first,
+projection failures second, and task outcomes third. Captured child
+stdout/stderr otherwise stays in redacted log files, and no `logs` command is
+part of the public surface.
 
 Runtime failures use the same projection rule: default runtime execution prints a
 human-readable error on stderr; `run --json` prints the structured `RuntimeError`;

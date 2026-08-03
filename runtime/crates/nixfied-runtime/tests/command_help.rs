@@ -27,7 +27,14 @@ fn existing_commands_print_help_without_touching_the_model_or_state() {
             command: "run",
             injected_args: &[],
             usage: "nix run .#run",
-            public_flags: &["--task", "--slot", "--timeout-ms", "--output", "--json"],
+            public_flags: &[
+                "--task",
+                "--slot",
+                "--timeout-ms",
+                "--output",
+                "task-output",
+                "--json",
+            ],
         },
         HelpCase {
             command: "run",
@@ -95,6 +102,11 @@ fn existing_commands_print_help_without_touching_the_model_or_state() {
                     "{} {help_flag} omitted {public_flag}: {stdout}",
                     case.command
                 );
+            }
+            if case.command == "run" {
+                assert!(!stdout.contains("--task-output"));
+                assert!(!stdout.contains("task_output"));
+                assert!(!stdout.contains("taskOutput"));
             }
         }
     }

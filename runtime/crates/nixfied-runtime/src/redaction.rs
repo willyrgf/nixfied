@@ -94,6 +94,10 @@ impl Redactor {
         }
         error.message = self.redact_text(&error.message);
         self.redact_value(&mut error.details);
+        for cause in &mut error.causes {
+            cause.message = self.redact_text(&cause.message);
+            self.redact_value(&mut cause.details);
+        }
         if let Some(hash) = &mut error.computed_model_hash {
             *hash = self.redact_text(hash);
         }

@@ -1,14 +1,19 @@
+use std::fmt::Display;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use nixfied_model::ServiceLifetime;
 use nixfied_runtime::cancellation::{CancellationToken, ProcessSignalGuard};
+use nixfied_runtime::error::RuntimeCause;
 use nixfied_runtime::execution::plan;
+use nixfied_runtime::output::{EvidenceMode, ReplaySinks, ReplayTicket};
 use nixfied_runtime::redaction::Redactor;
 use nixfied_runtime::registry::{Registry, RegistryIdentity, RunLeaseHeartbeat};
 use nixfied_runtime::service::{
-    PrepareRunner, RunContext, SelectedEndpoint, ServiceSelection, StartedService, TaskRun,
-    mark_run_completed, record_run_created, run_dependent_task_cancellable, run_slot_clean,
+    PrepareRunner, PrepareTaskError, RunContext, SelectedEndpoint, ServiceSelection,
+    StartedService, TaskExecution, TaskExecutionError, TaskRun, mark_run_completed,
+    mark_run_failed, record_run_created, run_dependent_task_cancellable, run_slot_clean,
     start_service_for_slot,
 };
 use nixfied_runtime::slot::select_slot;
@@ -21,7 +26,7 @@ use nixfied_runtime::{
     read_raw_model,
 };
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -82,6 +87,225 @@ struct RunOutput {
     run_summary_path: Option<PathBuf>,
 }
 
+enum ReplayPlan {
+    None,
+    Selected(ReplayTicket),
+}
+
+struct RunSession<'a> {
+    placement: &'a nixfied_runtime::state::HostPlacement,
+    admission: &'a Admission,
+    options: &'a RunOptions,
+    redactor: &'a Redactor,
+    cancellation: &'a CancellationToken,
+    run_id: &'a str,
+    run_started: Instant,
+    registry: Registry,
+    started: Vec<StartedService>,
+    extra_services: Vec<ServiceRunOutput>,
+    service_lifetime: ServiceLifetime,
+    direct_selected: bool,
+    lease: Option<RunLeaseHeartbeat>,
+    task_runs: Vec<TaskRun>,
+    selected_task_run: Option<TaskRun>,
+    node_results: Vec<NodeResult>,
+    replay: ReplayPlan,
+    diagnostic_failures: Vec<RuntimeError>,
+}
+
+struct FailureAccumulator {
+    primary: Option<RuntimeError>,
+    causes: Vec<RuntimeCause>,
+}
+
+impl FailureAccumulator {
+    fn new() -> Self {
+        Self {
+            primary: None,
+            causes: Vec::new(),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.primary.is_none()
+    }
+
+    fn push(&mut self, error: RuntimeError) {
+        let Some(mut primary) = self.primary.take() else {
+            self.primary = Some(error);
+            return;
+        };
+        if failure_priority(error.code) > failure_priority(primary.code) {
+            let mut error = error;
+            let incoming = std::mem::take(&mut error.causes);
+            error.causes.extend(incoming);
+            error.causes.extend(primary.causes.drain(..));
+            error.causes.extend(self.causes.drain(..));
+            error.causes.push(RuntimeCause::from_error(primary));
+            self.primary = Some(error);
+        } else {
+            let mut error = error;
+            let incoming = std::mem::take(&mut error.causes);
+            self.causes.extend(incoming);
+            self.causes.push(RuntimeCause::from_error(error));
+            self.primary = Some(primary);
+        }
+    }
+
+    fn finish(self, output: RunOutput) -> Result<RunOutput, RuntimeError> {
+        let Some(mut primary) = self.primary else {
+            return Ok(output);
+        };
+        primary.causes.extend(self.causes);
+        Err(primary)
+    }
+}
+
+fn failure_priority(code: nixfied_runtime::ErrorCode) -> u8 {
+    match code {
+        nixfied_runtime::ErrorCode::OutputProjectionFailed => 2,
+        nixfied_runtime::ErrorCode::TaskFailed
+        | nixfied_runtime::ErrorCode::Canceled
+        | nixfied_runtime::ErrorCode::DependencyUnavailable => 1,
+        _ => 3,
+    }
+}
+
+impl<'a> RunSession<'a> {
+    fn finalize(mut self, initial_error: Option<RuntimeError>) -> Result<RunOutput, RuntimeError> {
+        let had_initial_outcome = initial_error.is_some();
+        let cancellation_seen = self.cancellation.is_canceled();
+        let mut cancellation_recorded = initial_error
+            .as_ref()
+            .is_some_and(|error| error.code == nixfied_runtime::ErrorCode::Canceled);
+        let mut failures = FailureAccumulator::new();
+        if let Some(error) = initial_error {
+            failures.push(error);
+        }
+        if !had_initial_outcome && cancellation_seen {
+            failures.push(nixfied_runtime::cancellation::canceled_error());
+            cancellation_recorded = true;
+        }
+        for error in self.diagnostic_failures.drain(..) {
+            failures.push(error);
+        }
+
+        if let ReplayPlan::Selected(ticket) = std::mem::replace(&mut self.replay, ReplayPlan::None)
+        {
+            if let Some(error) = ticket.replay(ReplaySinks::stdio()).into_error() {
+                failures.push(error);
+            }
+        }
+        if self.cancellation.is_canceled() && !cancellation_recorded {
+            failures.push(nixfied_runtime::cancellation::canceled_error());
+        }
+
+        let services = {
+            let mut services = self.extra_services;
+            services.extend(services_output(&self.started));
+            services
+        };
+        let mut canceled = self.cancellation.is_canceled()
+            || failures
+                .primary
+                .as_ref()
+                .is_some_and(|error| error.code == nixfied_runtime::ErrorCode::Canceled);
+        let had_initial_failure = !failures.is_empty();
+        while let Some(mut service) = self.started.pop() {
+            let result = if canceled {
+                service.cancel(&mut self.registry, self.options.timeout_ms, "run canceled")
+            } else if had_initial_failure {
+                service.stop(&mut self.registry, self.options.timeout_ms)
+            } else if self.service_lifetime == ServiceLifetime::RunScoped {
+                service.stop_cancellable(
+                    &mut self.registry,
+                    self.options.timeout_ms,
+                    self.cancellation,
+                )
+            } else {
+                service.stand(&mut self.registry)
+            };
+            if let Err(error) = result {
+                failures.push(error);
+            }
+        }
+        if let Some(lease) = self.lease.take()
+            && let Err(error) = lease.stop()
+        {
+            failures.push(error);
+        }
+        if self.cancellation.is_canceled() && !cancellation_recorded {
+            failures.push(nixfied_runtime::cancellation::canceled_error());
+        }
+        canceled |= self.cancellation.is_canceled()
+            || failures
+                .primary
+                .as_ref()
+                .is_some_and(|error| error.code == nixfied_runtime::ErrorCode::Canceled);
+
+        let registry_result = if failures.is_empty() {
+            mark_run_completed(&mut self.registry, self.run_id)
+        } else {
+            mark_run_failed(&mut self.registry, self.run_id, canceled)
+        };
+        if let Err(error) = registry_result {
+            failures.push(error);
+        }
+
+        let duration_ms = elapsed_ms(self.run_started);
+        let run_succeeded = failures.is_empty();
+        let run_summary_path = match write_run_summary(RunSummary {
+            placement: self.placement,
+            run_id: self.run_id,
+            run_succeeded,
+            duration_ms,
+            nodes: &self.node_results,
+            services: &services,
+            tasks: &self.task_runs,
+            redactor: self.redactor,
+        }) {
+            Ok(path) => Some(path),
+            Err(error) => {
+                failures.push(error);
+                None
+            }
+        };
+        let footer_succeeded = failures.is_empty();
+        if let Err(error) = print_run_footer(
+            self.options.output_mode,
+            footer_succeeded,
+            &self.node_results,
+            duration_ms,
+            run_summary_path.as_deref(),
+            &self.placement.logs_dir,
+        ) {
+            failures.push(error);
+        }
+
+        let primary_task = if self.direct_selected {
+            self.selected_task_run.clone()
+        } else {
+            self.task_runs.last().cloned()
+        };
+        let output = RunOutput {
+            run_id: self.run_id.to_string(),
+            model_path: self.admission.model_path.clone(),
+            computed_model_hash: self.admission.computed_model_hash.clone(),
+            duration_ms,
+            services,
+            summary_path: primary_task.as_ref().map(|task| task.summary_path.clone()),
+            task: primary_task,
+            tasks: self.task_runs,
+            nodes: self.node_results,
+            run_summary_path: run_summary_path.clone(),
+        };
+        match failures.finish(output) {
+            Ok(output) => Ok(output),
+            Err(error) => Err(with_failure_summary(error, run_summary_path)),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RuntimeSelection {
     slot: Option<u32>,
@@ -92,20 +316,32 @@ enum RunOutputMode {
     Summary,
     Json,
     Both,
+    TaskOutput,
 }
 
 impl RunOutputMode {
     fn emit_summary(self) -> bool {
-        matches!(self, Self::Summary | Self::Both)
+        matches!(self, Self::Summary | Self::Both | Self::TaskOutput)
     }
 
     fn emit_json(self) -> bool {
         matches!(self, Self::Json | Self::Both)
     }
+
+    fn is_task_output(self) -> bool {
+        matches!(self, Self::TaskOutput)
+    }
 }
 
 fn main() {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
+    let _signals = match ProcessSignalGuard::install() {
+        Ok(signals) => signals,
+        Err(error) => {
+            print_error(&args, &error);
+            std::process::exit(exit_code(&error));
+        }
+    };
     if let Err(error) = run(&args) {
         print_error(&args, &error);
         std::process::exit(exit_code(&error));
@@ -150,42 +386,93 @@ fn error_output_projection(args: &[String]) -> ErrorOutputProjection {
     if args.first().map(String::as_str) != Some("run") {
         return ErrorOutputProjection::Human;
     }
-    match parse_run_output_mode_lossy(args.get(1..).unwrap_or(&[])) {
-        RunOutputMode::Summary => ErrorOutputProjection::Human,
-        RunOutputMode::Json => ErrorOutputProjection::Json,
-        RunOutputMode::Both => ErrorOutputProjection::Both,
+    let args = args.get(1..).unwrap_or(&[]);
+    let mut json = false;
+    let mut both = false;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--both" => both = true,
+            "--json" => json = true,
+            "--output" => {
+                if let Some(value) = args.get(index + 1).map(String::as_str) {
+                    match value {
+                        "both" => both = true,
+                        "json" => json = true,
+                        _ => {}
+                    }
+                    index += 1;
+                }
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    if both {
+        ErrorOutputProjection::Both
+    } else if json {
+        ErrorOutputProjection::Json
+    } else {
+        ErrorOutputProjection::Human
     }
 }
 
 fn print_json_error(error: &RuntimeError) {
-    eprintln!(
-        "{}",
-        serde_json::to_string(error).unwrap_or_else(|_| error.to_string())
-    );
+    write_stderr_line(serde_json::to_string(error).unwrap_or_else(|_| error.to_string()));
 }
 
 fn print_human_error(error: &RuntimeError) {
-    eprintln!("error: {}: {}", error_code_wire(error), error.message);
+    write_stderr_line(format!(
+        "error: {}: {}",
+        error_code_wire(error),
+        error.message
+    ));
+    for cause in &error.causes {
+        write_stderr_line(format!(
+            "  cause: {}: {}",
+            error_code_wire_value(cause.code),
+            cause.message
+        ));
+    }
+    if let Some(projections) = error.details.get("projections").and_then(Value::as_array) {
+        for projection in projections {
+            let stream = projection
+                .get("stream")
+                .and_then(Value::as_str)
+                .unwrap_or("output");
+            let operation = projection
+                .get("operation")
+                .and_then(Value::as_str)
+                .unwrap_or("projection");
+            let kind = projection
+                .get("kind")
+                .and_then(Value::as_str)
+                .unwrap_or("io");
+            write_stderr_line(format!(
+                "  projection: {stream} {operation} failed ({kind})"
+            ));
+        }
+    }
     print_path_detail(error, "state-root", "stateRoot");
     print_path_detail(error, "registry-dir", "registryDir");
     print_path_detail(error, "registry", "registryPath");
     print_path_detail(error, "logs", "logsDir");
     print_path_detail(error, "run-summary", "runSummaryPath");
     if let Some(expected) = registry_identity_detail(error, "expectedRegistryIdentity") {
-        eprintln!("expected: {expected}");
+        write_stderr_line(format!("expected: {expected}"));
     }
     if let Some(found) = registry_identity_detail(error, "foundRegistryIdentity") {
-        eprintln!("found: {found}");
+        write_stderr_line(format!("found: {found}"));
     }
     if let Some(fields) = mismatched_fields_detail(error) {
-        eprintln!("mismatch: {fields}");
+        write_stderr_line(format!("mismatch: {fields}"));
     }
     print_recovery_hint(error);
 }
 
 fn print_path_detail(error: &RuntimeError, label: &str, key: &str) {
     if let Some(value) = string_detail(error, key) {
-        eprintln!("{label}: {}", human_path(Path::new(value)));
+        write_stderr_line(format!("{label}: {}", human_path(Path::new(value))));
     }
 }
 
@@ -227,10 +514,14 @@ fn print_recovery_hint(error: &RuntimeError) {
     {
         return;
     }
-    eprintln!("hint: do not delete the whole Nixfied state base");
-    eprintln!(
-        "hint: after confirming no owned processes are live, reset only the state-root and registry-dir above"
+    write_stderr_line("hint: do not delete the whole Nixfied state base");
+    write_stderr_line(
+        "hint: after confirming no owned processes are live, reset only the state-root and registry-dir above",
     );
+}
+
+fn write_stderr_line(line: impl Display) {
+    let _ = writeln!(io::stderr().lock(), "{line}");
 }
 
 fn string_detail<'a>(error: &'a RuntimeError, key: &str) -> Option<&'a str> {
@@ -284,7 +575,7 @@ fn check(args: &[String]) -> Result<(), RuntimeError> {
         )
     })?;
     let (loaded, admission) = load_admitted_model(model_path, allow_non_store)?;
-    let selected_slot = select_slot(&loaded.model, slot)?;
+    let selected_slot = select_slot(&loaded.model, slot).map_err(post_admission_error)?;
     let output = CheckOutput {
         model_path: admission.model_path,
         computed_model_hash: admission.computed_model_hash,
@@ -296,11 +587,13 @@ fn check(args: &[String]) -> Result<(), RuntimeError> {
         environment: selected_slot.environment.to_string(),
         slot: selected_slot.slot,
     };
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&output).expect("check output should serialize")
-    );
-    Ok(())
+    let output = serde_json::to_string_pretty(&output).map_err(|error| {
+        RuntimeError::new(
+            nixfied_runtime::ErrorCode::LifecycleFailed,
+            error.to_string(),
+        )
+    })?;
+    write_stdout_line(&output)
 }
 
 fn run_m0(args: &[String]) -> Result<(), RuntimeError> {
@@ -308,11 +601,17 @@ fn run_m0(args: &[String]) -> Result<(), RuntimeError> {
         return Ok(());
     }
     let options = parse_run_options(args)?;
-    let _signals = ProcessSignalGuard::install()?;
     let cancellation = CancellationToken::new();
     let run_id = new_run_id();
     let (loaded, admission) =
         load_admitted_model(options.model_path.clone(), options.allow_non_store)?;
+    validate_run_selection(
+        &admission.execution_model,
+        options.output_mode,
+        options.task.as_deref(),
+    )?;
+    let selected_slot =
+        select_slot(&loaded.model, options.selection.slot).map_err(post_admission_error)?;
     let redactor = Redactor::from_secrets(&admission.secrets);
     let model_path = admission.model_path.clone();
     let computed_model_hash = admission.computed_model_hash.clone();
@@ -342,9 +641,10 @@ fn run_m0_admitted(
     cancellation: &CancellationToken,
 ) -> Result<RunOutput, RuntimeError> {
     cancellation.check()?;
-    let selected_slot = select_slot(model, options.selection.slot)?;
+    let selected_slot = select_slot(model, options.selection.slot).map_err(post_admission_error)?;
     let placement =
-        derive_host_placement_for_slot(model, &selected_slot, &run_id, &options.state_base)?;
+        derive_host_placement_for_slot(model, &selected_slot, &run_id, &options.state_base)
+            .map_err(post_admission_error)?;
     // Every failure past this point carries the run's identity and state paths:
     // the operator must be able to find the evidence without re-deriving the
     // placement by hand.
@@ -373,6 +673,20 @@ fn enrich_run_error(
         .with_detail("runId", run_id)
         .with_detail("runDir", &placement.run_dir)
         .with_detail("logsDir", &placement.logs_dir)
+}
+
+/// Lowering and admission prove that the execution plan is concrete. Any
+/// defensive invariant error encountered after that boundary is therefore a
+/// runtime lifecycle failure, never another model-admission failure.
+fn post_admission_error(error: RuntimeError) -> RuntimeError {
+    if error.code != nixfied_runtime::ErrorCode::ModelAdmission {
+        return error;
+    }
+    RuntimeError::new(
+        nixfied_runtime::ErrorCode::LifecycleFailed,
+        format!("admitted execution invariant failed: {}", error.message),
+    )
+    .with_details(error.details)
 }
 
 /// Attach selected slot placement to errors from run/control execution. These
@@ -404,6 +718,7 @@ fn run_m0_placed(
     cancellation: &CancellationToken,
 ) -> Result<RunOutput, RuntimeError> {
     let run_started = Instant::now();
+    let mut diagnostic_failures: Vec<RuntimeError> = Vec::new();
     // The registry opens before the marker decision: when the slot was last
     // used by a different model build, the upgrade path needs registry evidence
     // to tear down what that build left running.
@@ -423,15 +738,20 @@ fn run_m0_placed(
     let _ = nixfied_runtime::control::reconcile_registry(&mut registry)?;
     let upgrade = prepare_slot_state(placement, &identity, &mut registry, options.timeout_ms)?;
     if upgrade.upgraded && options.output_mode.emit_summary() {
-        eprintln!(
-            "  upgraded slot state from model {} (state {})",
-            upgrade.from_model_hash.as_deref().unwrap_or("unknown"),
-            if upgrade.cleaned {
-                "cleaned: state epoch changed"
-            } else {
-                "preserved"
-            }
-        );
+        if let Err(error) = write_diagnostic(
+            options.output_mode,
+            format_args!(
+                "  upgraded slot state from model {} (state {})",
+                upgrade.from_model_hash.as_deref().unwrap_or("unknown"),
+                if upgrade.cleaned {
+                    "cleaned: state epoch changed"
+                } else {
+                    "preserved"
+                }
+            ),
+        ) {
+            diagnostic_failures.push(error);
+        }
     }
 
     // A run drives one selected task: its flattened nodes plus the derived
@@ -439,29 +759,20 @@ fn run_m0_placed(
     // a pure function of the lowered model, the task, and the slot, already
     // proven feasible at admission. `run` with no selection refuses and lists
     // the declared tasks — there is no implicit default.
-    let selected_task = match options.task.as_deref() {
-        Some(task) => nixfied_model::TaskId::new(task),
-        None => {
-            return Err(selection_required_error(&admission.execution_model));
-        }
+    let Some(task_name) = options.task.as_deref() else {
+        return Err(RuntimeError::new(
+            nixfied_runtime::ErrorCode::LifecycleFailed,
+            "admitted run selection lost its task identity",
+        ));
     };
-    if !admission
-        .execution_model
-        .tasks
-        .contains_key(selected_task.as_str())
-        && !admission
-            .execution_model
-            .composites
-            .contains_key(selected_task.as_str())
-    {
-        return Err(selection_required_error(&admission.execution_model)
-            .with_detail("unknownTask", selected_task.as_str()));
-    }
+    let selected_task = nixfied_model::TaskId::new(task_name);
     let plan = plan(
         &admission.execution_model,
         &selected_task,
         selected_slot.slot,
-    )?;
+    )
+    .map_err(post_admission_error)?;
+    let direct_selected = admission.execution_model.tasks.contains_key(&selected_task);
 
     // Record the run row before any service starts, so even a service-less
     // selection (a task tree whose leaves require nothing) leaves durable run
@@ -498,68 +809,129 @@ fn run_m0_placed(
     // then health before the next.
     let mut started: Vec<StartedService> = Vec::new();
     let mut lease: Option<RunLeaseHeartbeat> = None;
-    let source_root = admission.require_source()?.observed_root.clone();
+    let mut prepare_runs: Vec<TaskRun> = Vec::new();
+    let mut task_runs: Vec<TaskRun> = Vec::new();
+    let mut selected_task_run: Option<TaskRun> = None;
+    let mut node_results: Vec<NodeResult> = Vec::new();
+    let mut replay_ticket: Option<ReplayTicket> = None;
+    macro_rules! finish_run {
+        ($error:expr, $extra_services:expr) => {{
+            task_runs.extend(prepare_runs.drain(..));
+            let session = RunSession {
+                placement,
+                admission,
+                options,
+                redactor,
+                cancellation,
+                run_id,
+                run_started,
+                registry,
+                started,
+                extra_services: $extra_services,
+                service_lifetime: plan.service_lifetime,
+                direct_selected,
+                lease,
+                task_runs,
+                selected_task_run,
+                node_results,
+                replay: replay_ticket
+                    .map(ReplayPlan::Selected)
+                    .unwrap_or(ReplayPlan::None),
+                diagnostic_failures,
+            };
+            return session.finalize(Some($error));
+        }};
+    }
+    let source_root = match admission.require_source() {
+        Ok(source) => source.observed_root.clone(),
+        Err(error) => finish_run!(error, Vec::new()),
+    };
     for binding in &plan.services {
         let service_name = binding.service_name.as_str();
         if options.output_mode.emit_summary() {
-            eprintln!("  starting service {service_name}");
+            if let Err(error) = write_diagnostic(
+                options.output_mode,
+                format_args!("  starting service {service_name}"),
+            ) {
+                diagnostic_failures.push(error);
+            }
         }
 
         // prepare-as-task: the runner executes the prepare task's flattened
         // nodes inside the service reservation, resolving each leaf's
         // requirements against the services already started (the combined
         // connectsTo + prepare-requires ordering guarantees they are ready).
-        let service_def = admission
-            .execution_model
-            .services
-            .get(service_name)
-            .ok_or_else(|| {
+        let Some(service_def) = admission.execution_model.services.get(service_name) else {
+            finish_run!(
                 RuntimeError::new(
-                    nixfied_runtime::ErrorCode::ModelAdmission,
-                    format!("service {service_name} is missing"),
-                )
-            })?;
+                    nixfied_runtime::ErrorCode::LifecycleFailed,
+                    format!("admitted service {service_name} is missing"),
+                ),
+                Vec::new()
+            );
+        };
         let output_mode = options.output_mode;
         let prepare_runner: Option<PrepareRunner<'_>> =
             service_def.prepare.clone().map(|prepare_task| {
                 let started_services = &started;
                 let source_root = source_root.clone();
-                Box::new(move |registry: &mut Registry| -> Result<(), RuntimeError> {
-                    let nodes = nixfied_runtime::execution::flatten_task(
+                let diagnostic_failures = &mut diagnostic_failures;
+                Box::new(move |registry: &mut Registry| -> Result<Vec<TaskRun>, PrepareTaskError> {
+                    let mut task_runs = Vec::new();
+                    let nodes = match nixfied_runtime::execution::flatten_task(
                         &admission.execution_model,
                         &prepare_task,
-                    )?;
+                    ) {
+                        Ok(nodes) => nodes,
+                        Err(error) => {
+                            return Err(PrepareTaskError::new(
+                                post_admission_error(error),
+                                task_runs,
+                            ));
+                        }
+                    };
                     for node in nodes {
-                        let task = admission
-                            .execution_model
-                            .tasks
-                            .get(node.task_id.as_str())
-                            .ok_or_else(|| {
+                        let Some(task) = admission.execution_model.tasks.get(node.task_id.as_str())
+                        else {
+                            return Err(PrepareTaskError::new(
                                 RuntimeError::new(
-                                    nixfied_runtime::ErrorCode::ModelAdmission,
-                                    format!("task {} is missing", node.task_id),
-                                )
-                            })?;
+                                    nixfied_runtime::ErrorCode::LifecycleFailed,
+                                    format!("admitted task {} is missing", node.task_id),
+                                ),
+                                task_runs,
+                            ));
+                        };
                         let mut dependencies: Vec<&StartedService> = Vec::new();
                         for name in &task.requires {
                             let Some(dependency) = started_services
                                 .iter()
                                 .find(|service| service.service_name() == name.as_str())
                             else {
-                                return Err(RuntimeError::new(
-                                    nixfied_runtime::ErrorCode::DependencyUnavailable,
-                                    format!(
-                                        "prepare node {} requires service {name} which is not started yet",
-                                        node.node_id
+                                return Err(PrepareTaskError::new(
+                                    RuntimeError::new(
+                                        nixfied_runtime::ErrorCode::DependencyUnavailable,
+                                        format!(
+                                            "prepare node {} requires service {name} which is not started yet",
+                                            node.node_id
+                                        ),
                                     ),
+                                    task_runs,
                                 ));
                             };
                             dependencies.push(dependency);
                         }
                         if output_mode.emit_summary() {
-                            eprintln!("  prepare node {} ({})", node.node_id, node.task_id);
+                            if let Err(error) = write_diagnostic(
+                                output_mode,
+                                format_args!(
+                                    "  prepare node {} ({})",
+                                    node.node_id, node.task_id
+                                ),
+                            ) {
+                                diagnostic_failures.push(error);
+                            }
                         }
-                        run_dependent_task_cancellable(
+                        let task_result = run_dependent_task_cancellable(
                             placement,
                             registry,
                             RunContext {
@@ -574,9 +946,35 @@ fn run_m0_placed(
                             node.node_id.as_str(),
                             task,
                             cancellation,
-                        )?;
+                            EvidenceMode::CaptureOnly,
+                        );
+                        match task_result {
+                            Ok(TaskExecution::Succeeded(evidence)) => {
+                                let (task_run, _) = evidence.into_task_and_replay();
+                                task_runs.push(task_run);
+                            }
+                            Ok(TaskExecution::Failed { error, evidence }) => {
+                                let (task_run, _) = evidence.into_task_and_replay();
+                                task_runs.push(task_run.clone());
+                                return Err(PrepareTaskError::new(
+                                    attach_task_evidence(error, &task_run),
+                                    task_runs,
+                                ));
+                            }
+                            Err(TaskExecutionError::BeforeTerminal(error)) => {
+                                return Err(PrepareTaskError::new(error, task_runs));
+                            }
+                            Err(TaskExecutionError::AfterTerminal { error, evidence }) => {
+                                let (task_run, _) = evidence.into_task_and_replay();
+                                task_runs.push(task_run.clone());
+                                return Err(PrepareTaskError::new(
+                                    attach_task_evidence(error, &task_run),
+                                    task_runs,
+                                ));
+                            }
+                        }
                     }
-                    Ok(())
+                    Ok(task_runs)
                 }) as PrepareRunner<'_>
             });
 
@@ -597,36 +995,10 @@ fn run_m0_placed(
             },
         ) {
             Ok(service) => service,
-            Err(error) => {
-                let duration_ms = elapsed_ms(run_started);
-                let summary = write_failure_run_summary(
-                    placement,
-                    run_id,
-                    duration_ms,
-                    &[],
-                    &started,
-                    &[],
-                    redactor,
-                );
-                print_run_footer(
-                    options.output_mode,
-                    false,
-                    &[],
-                    duration_ms,
-                    summary.as_deref(),
-                    &placement.logs_dir,
-                );
-                teardown(
-                    &mut started,
-                    &mut registry,
-                    options.timeout_ms,
-                    cancellation.is_canceled(),
-                );
-                stop_lease(lease)?;
-                return Err(with_failure_summary(
-                    error.with_detail("failedService", service_name),
-                    summary,
-                ));
+            Err(start_error) => {
+                let (error, evidence) = start_error.into_parts();
+                task_runs.extend(evidence);
+                finish_run!(error.with_detail("failedService", service_name), Vec::new());
             }
         };
         if lease.is_none() {
@@ -641,82 +1013,53 @@ fn run_m0_placed(
             .wait_for_probe_ready_cancellable(&mut registry, cancellation)
             .and_then(|()| current_service.check_health_cancellable(&mut registry, cancellation));
         if let Err(error) = startup_result {
-            let duration_ms = elapsed_ms(run_started);
-            let mut summary_services = services_output(&started);
-            summary_services.push(ServiceRunOutput {
+            let failed_service_output = ServiceRunOutput {
                 service_id: current_service.service_name().to_string(),
                 service_instance_id: current_service.service_instance_id.clone(),
                 process_key: current_service.process_key.clone(),
                 selected_endpoint: current_service.selected_endpoint().cloned(),
-            });
-            let summary = write_failure_run_summary_from_services(
-                placement,
-                run_id,
-                duration_ms,
-                &[],
-                &summary_services,
-                &[],
-                redactor,
-            );
-            print_run_footer(
-                options.output_mode,
-                false,
-                &[],
-                duration_ms,
-                summary.as_deref(),
-                &placement.logs_dir,
-            );
-            let canceled = error.code == nixfied_runtime::ErrorCode::Canceled;
+            };
             let error =
                 current_service.finalize_failed_start(&mut registry, options.timeout_ms, error);
-            teardown(&mut started, &mut registry, options.timeout_ms, canceled);
-            stop_lease(lease)?;
-            return Err(with_failure_summary(
+            finish_run!(
                 error.with_detail("failedService", service_name),
-                summary,
-            ));
+                vec![failed_service_output]
+            );
         }
         if options.output_mode.emit_summary() {
             match current_service.selected_endpoint() {
-                Some(endpoint) => eprintln!(
-                    "  service {} ready at {}:{}",
-                    current_service.service_name(),
-                    endpoint.host,
-                    endpoint.port
-                ),
-                None => eprintln!(
-                    "  service {} ready (endpoint-less)",
-                    current_service.service_name()
-                ),
+                Some(endpoint) => {
+                    if let Err(error) = write_diagnostic(
+                        options.output_mode,
+                        format_args!(
+                            "  service {} ready at {}:{}",
+                            current_service.service_name(),
+                            endpoint.host,
+                            endpoint.port
+                        ),
+                    ) {
+                        diagnostic_failures.push(error);
+                    }
+                }
+                None => {
+                    if let Err(error) = write_diagnostic(
+                        options.output_mode,
+                        format_args!(
+                            "  service {} ready (endpoint-less)",
+                            current_service.service_name()
+                        ),
+                    ) {
+                        diagnostic_failures.push(error);
+                    }
+                }
             }
         }
         started.push(current_service);
     }
 
-    let mut task_runs: Vec<TaskRun> = Vec::new();
-    let mut node_results: Vec<NodeResult> = Vec::new();
+    task_runs.append(&mut prepare_runs);
     if let Err(error) = cancellation.check() {
-        let duration_ms = elapsed_ms(run_started);
-        let summary = write_failure_run_summary(
-            placement,
-            run_id,
-            duration_ms,
-            &node_results,
-            &started,
-            &task_runs,
-            redactor,
-        );
-        print_run_footer(
-            options.output_mode,
-            false,
-            &node_results,
-            duration_ms,
-            summary.as_deref(),
-            &placement.logs_dir,
-        );
-        teardown(&mut started, &mut registry, options.timeout_ms, true);
-        stop_lease(lease)?;
-        return Err(with_failure_summary(error, summary));
+        finish_run!(error, Vec::new());
     }
 
     // Run each flattened node in dependency order, gating each leaf on the
@@ -725,16 +1068,15 @@ fn run_m0_placed(
     // composite's step dependencies.
     for node in &plan.nodes {
         let task_id = &node.task_id;
-        let task = admission
-            .execution_model
-            .tasks
-            .get(task_id.as_str())
-            .ok_or_else(|| {
+        let Some(task) = admission.execution_model.tasks.get(task_id.as_str()) else {
+            finish_run!(
                 RuntimeError::new(
-                    nixfied_runtime::ErrorCode::ModelAdmission,
-                    format!("task {task_id} is missing"),
-                )
-            })?;
+                    nixfied_runtime::ErrorCode::LifecycleFailed,
+                    format!("admitted task {task_id} is missing"),
+                ),
+                Vec::new()
+            );
+        };
         // Resolve every service this task depends on to its started instance (the
         // first is the primary, providing ${port}/${host}). A task may declare
         // zero services — it runs in the run context alone.
@@ -758,27 +1100,7 @@ fn run_m0_placed(
                 format!("task {task_id} depends on service {name} which was not started"),
             )
             .with_detail("failedNodeId", node.node_id.as_str());
-            let duration_ms = elapsed_ms(run_started);
-            let summary = write_failure_run_summary(
-                placement,
-                run_id,
-                duration_ms,
-                &node_results,
-                &started,
-                &task_runs,
-                redactor,
-            );
-            print_run_footer(
-                options.output_mode,
-                false,
-                &node_results,
-                duration_ms,
-                summary.as_deref(),
-                &placement.logs_dir,
-            );
-            teardown(&mut started, &mut registry, options.timeout_ms, false);
-            stop_lease(lease)?;
-            return Err(with_failure_summary(error, summary));
+            finish_run!(error, Vec::new());
         }
         let dependencies: Vec<&StartedService> =
             dep_indices.iter().map(|&index| &started[index]).collect();
@@ -798,15 +1120,30 @@ fn run_m0_placed(
             node.node_id.as_str(),
             task,
             cancellation,
+            if options.output_mode.is_task_output() {
+                EvidenceMode::ReplaySelected
+            } else {
+                EvidenceMode::CaptureOnly
+            },
         );
         match task_result {
-            Ok(task_run) => {
+            Ok(TaskExecution::Succeeded(evidence)) => {
+                let (task_run, ticket) = evidence.into_task_and_replay();
+                replay_ticket = ticket.or(replay_ticket);
+                if direct_selected {
+                    selected_task_run = Some(task_run.clone());
+                }
                 if options.output_mode.emit_summary() {
-                    eprintln!(
-                        "  ok {} ({task_id}) {}",
-                        node.node_id,
-                        human_duration(task_run.duration_ms)
-                    );
+                    if let Err(error) = write_diagnostic(
+                        options.output_mode,
+                        format_args!(
+                            "  ok {} ({task_id}) {}",
+                            node.node_id,
+                            human_duration(task_run.duration_ms)
+                        ),
+                    ) {
+                        diagnostic_failures.push(error);
+                    }
                 }
                 node_results.push(NodeResult {
                     node_id: node.node_id.as_str().to_string(),
@@ -820,181 +1157,77 @@ fn run_m0_placed(
                 });
                 task_runs.push(task_run);
             }
-            Err(error) => {
-                // The failed task's evidence rides on the error (see
-                // run_dependent_task_cancellable); fold it into the node
-                // results so the failure summary records the failed node
-                // alongside the completed ones.
-                let mut error = error.with_detail("failedNodeId", node.node_id.as_str());
-                let failed_run = error
-                    .details
-                    .get("taskRun")
-                    .and_then(|value| serde_json::from_value::<TaskRun>(value.clone()).ok());
-                if let Some(task_run) = failed_run {
-                    if options.output_mode.emit_summary() {
-                        eprintln!(
-                            "  fail {} ({task_id}) {} exit={}",
-                            node.node_id,
-                            human_duration(task_run.duration_ms),
-                            human_exit_code(task_run.exit_code)
-                        );
-                        eprintln!("    stderr: {}", human_path(&task_run.stderr_path));
-                    }
-                    error = error
-                        .with_detail("stdoutPath", &task_run.stdout_path)
-                        .with_detail("stderrPath", &task_run.stderr_path)
-                        .with_detail("summaryPath", &task_run.summary_path);
-                    node_results.push(NodeResult {
-                        node_id: node.node_id.as_str().to_string(),
-                        task_id: task_id.as_str().to_string(),
-                        success: task_run.success,
-                        exit_code: task_run.exit_code,
-                        duration_ms: task_run.duration_ms,
-                        stdout_path: task_run.stdout_path.clone(),
-                        stderr_path: task_run.stderr_path.clone(),
-                        summary_path: task_run.summary_path.clone(),
-                    });
-                    task_runs.push(task_run);
-                } else if options.output_mode.emit_summary() {
-                    eprintln!("  fail {} ({task_id})", node.node_id);
+            Ok(TaskExecution::Failed { error, evidence }) => {
+                let (task_run, ticket) = evidence.into_task_and_replay();
+                replay_ticket = ticket.or(replay_ticket);
+                if direct_selected {
+                    selected_task_run = Some(task_run.clone());
                 }
-                let duration_ms = elapsed_ms(run_started);
-                let summary = write_failure_run_summary(
-                    placement,
-                    run_id,
-                    duration_ms,
-                    &node_results,
-                    &started,
-                    &task_runs,
-                    redactor,
-                );
-                print_run_footer(
+                let error = task_failure_with_evidence(
+                    error,
+                    node.node_id.as_str(),
+                    task_id.as_str(),
+                    &task_run,
                     options.output_mode,
-                    false,
-                    &node_results,
-                    duration_ms,
-                    summary.as_deref(),
-                    &placement.logs_dir,
+                    &mut node_results,
+                    &mut task_runs,
+                    &mut diagnostic_failures,
                 );
-                teardown(
-                    &mut started,
-                    &mut registry,
-                    options.timeout_ms,
-                    error.code == nixfied_runtime::ErrorCode::Canceled,
-                );
-                stop_lease(lease)?;
-                return Err(with_failure_summary(error, summary));
+                let error = error.with_detail("failedNodeId", node.node_id.as_str());
+                finish_run!(error, Vec::new());
+            }
+            Err(TaskExecutionError::BeforeTerminal(error)) => {
+                let error = error.with_detail("failedNodeId", node.node_id.as_str());
+                finish_run!(error, Vec::new());
+            }
+            Err(TaskExecutionError::AfterTerminal { error, evidence }) => {
+                let (task_run, ticket) = evidence.into_task_and_replay();
+                replay_ticket = ticket.or(replay_ticket);
+                if direct_selected {
+                    selected_task_run = Some(task_run.clone());
+                }
+                let error = task_failure_with_evidence(
+                    error,
+                    node.node_id.as_str(),
+                    task_id.as_str(),
+                    &task_run,
+                    options.output_mode,
+                    &mut node_results,
+                    &mut task_runs,
+                    &mut diagnostic_failures,
+                )
+                .with_detail("failedNodeId", node.node_id.as_str());
+                finish_run!(error, Vec::new());
             }
         }
     }
 
-    // Built before the summary so the run record captures the live services
-    // (endpoints, instance ids) alongside the node and task results.
-    let services_output = services_output(&started);
-
     if cancellation.is_canceled() {
-        let duration_ms = elapsed_ms(run_started);
-        let summary = write_failure_run_summary_from_services(
-            placement,
-            run_id,
-            duration_ms,
-            &node_results,
-            &services_output,
-            &task_runs,
-            redactor,
-        );
-        print_run_footer(
-            options.output_mode,
-            false,
-            &node_results,
-            duration_ms,
-            summary.as_deref(),
-            &placement.logs_dir,
-        );
-        teardown(&mut started, &mut registry, options.timeout_ms, true);
-        stop_lease(lease)?;
-        return Err(with_failure_summary(
-            nixfied_runtime::cancellation::canceled_error(),
-            summary,
-        ));
+        finish_run!(nixfied_runtime::cancellation::canceled_error(), Vec::new());
     }
-    // Stop services in reverse start order. On a stop error, tear down the
-    // remaining services instead of aborting the loop: leaving them to Drop
-    // would kill the processes without updating registry rows, leases, or
-    // port reservations, blocking later clean/runs on the slot.
-    while let Some(service) = started.pop() {
-        let result = if matches!(plan.service_lifetime, ServiceLifetime::RunScoped) {
-            service.stop_cancellable(&mut registry, options.timeout_ms, cancellation)
-        } else {
-            service.stand(&mut registry)
-        };
-        if let Err(error) = result {
-            let duration_ms = elapsed_ms(run_started);
-            let summary = write_failure_run_summary_from_services(
-                placement,
-                run_id,
-                duration_ms,
-                &node_results,
-                &services_output,
-                &task_runs,
-                redactor,
-            );
-            print_run_footer(
-                options.output_mode,
-                false,
-                &node_results,
-                duration_ms,
-                summary.as_deref(),
-                &placement.logs_dir,
-            );
-            teardown(
-                &mut started,
-                &mut registry,
-                options.timeout_ms,
-                error.code == nixfied_runtime::ErrorCode::Canceled,
-            );
-            stop_lease(lease)?;
-            return Err(with_failure_summary(error, summary));
-        }
-    }
-    // Settle a run that no service stop and no task finalized (a degenerate
-    // selection with no services and no tasks). Guarded on `service-starting`, so
-    // a service- or task-derived terminal status is left untouched.
-    mark_run_completed(&mut registry, run_id)?;
-    stop_lease(lease)?;
-    let duration_ms = elapsed_ms(run_started);
-    let run_summary_path = Some(write_run_summary(RunSummary {
+    let session = RunSession {
         placement,
-        run_id,
-        run_succeeded: true,
-        duration_ms,
-        nodes: &node_results,
-        services: &services_output,
-        tasks: &task_runs,
+        admission,
+        options,
         redactor,
-    })?);
-    print_run_footer(
-        options.output_mode,
-        true,
-        &node_results,
-        duration_ms,
-        run_summary_path.as_deref(),
-        &placement.logs_dir,
-    );
-    let primary_task = task_runs.last().cloned();
-    let output = RunOutput {
-        run_id: run_id.to_string(),
-        model_path: admission.model_path.clone(),
-        computed_model_hash: admission.computed_model_hash.clone(),
-        duration_ms,
-        services: services_output,
-        summary_path: primary_task.as_ref().map(|task| task.summary_path.clone()),
-        task: primary_task,
-        tasks: task_runs,
-        nodes: node_results,
-        run_summary_path,
+        cancellation,
+        run_id,
+        run_started,
+        registry,
+        started,
+        extra_services: Vec::new(),
+        service_lifetime: plan.service_lifetime,
+        direct_selected,
+        lease,
+        task_runs,
+        selected_task_run,
+        node_results,
+        replay: replay_ticket
+            .map(ReplayPlan::Selected)
+            .unwrap_or(ReplayPlan::None),
+        diagnostic_failures,
     };
-    Ok(output)
+    session.finalize(None)
 }
 
 fn services_output(started: &[StartedService]) -> Vec<ServiceRunOutput> {
@@ -1009,54 +1242,96 @@ fn services_output(started: &[StartedService]) -> Vec<ServiceRunOutput> {
         .collect()
 }
 
-/// Write the run summary for a failed run — the nodes completed so far plus
-/// the failed node — so a failure leaves the same aggregate evidence a success
-/// does. Returns the path, or `None` when the summary itself could not be
-/// written (the original failure must surface either way).
-fn write_failure_run_summary(
-    placement: &nixfied_runtime::state::HostPlacement,
-    run_id: &str,
-    duration_ms: u64,
-    nodes: &[NodeResult],
-    started: &[StartedService],
-    tasks: &[TaskRun],
-    redactor: &Redactor,
-) -> Option<PathBuf> {
-    let services = services_output(started);
-    write_failure_run_summary_from_services(
-        placement,
-        run_id,
-        duration_ms,
-        nodes,
-        &services,
-        tasks,
-        redactor,
+fn write_diagnostic(output_mode: RunOutputMode, line: impl Display) -> Result<(), RuntimeError> {
+    if !output_mode.emit_summary() {
+        return Ok(());
+    }
+    writeln!(io::stderr().lock(), "{line}")
+        .map_err(|error| output_projection_io_error("stderr", "write", "<stderr>", error))
+}
+
+fn write_stdout_line(line: &str) -> Result<(), RuntimeError> {
+    writeln!(io::stdout().lock(), "{line}")
+        .map_err(|error| output_projection_io_error("stdout", "write", "<stdout>", error))
+}
+
+fn output_projection_io_error(
+    stream: &str,
+    operation: &str,
+    path: &str,
+    error: io::Error,
+) -> RuntimeError {
+    let kind = match error.kind() {
+        io::ErrorKind::BrokenPipe => "broken-pipe",
+        io::ErrorKind::PermissionDenied => "permission-denied",
+        io::ErrorKind::Interrupted => "interrupted",
+        _ => "io",
+    };
+    RuntimeError::new(
+        nixfied_runtime::ErrorCode::OutputProjectionFailed,
+        "runtime output projection failed",
+    )
+    .with_detail(
+        "projections",
+        vec![json!({
+            "stream": stream,
+            "operation": operation,
+            "kind": kind,
+            "path": path,
+            "bytesWritten": 0,
+        })],
     )
 }
 
-fn write_failure_run_summary_from_services(
-    placement: &nixfied_runtime::state::HostPlacement,
-    run_id: &str,
-    duration_ms: u64,
-    nodes: &[NodeResult],
-    services: &[ServiceRunOutput],
-    tasks: &[TaskRun],
-    redactor: &Redactor,
-) -> Option<PathBuf> {
-    // The run is failing regardless of what the recorded nodes say — a service
-    // or spawn failure can leave zero failed nodes, which must not read as
-    // success.
-    write_run_summary(RunSummary {
-        placement,
-        run_id,
-        run_succeeded: false,
-        duration_ms,
-        nodes,
-        services,
-        tasks,
-        redactor,
-    })
-    .ok()
+fn task_failure_with_evidence(
+    error: RuntimeError,
+    node_id: &str,
+    task_id: &str,
+    task_run: &TaskRun,
+    output_mode: RunOutputMode,
+    node_results: &mut Vec<NodeResult>,
+    task_runs: &mut Vec<TaskRun>,
+    diagnostic_failures: &mut Vec<RuntimeError>,
+) -> RuntimeError {
+    if output_mode.emit_summary() {
+        if let Err(error) = write_diagnostic(
+            output_mode,
+            format_args!(
+                "  fail {node_id} ({task_id}) {} exit={}",
+                human_duration(task_run.duration_ms),
+                human_exit_code(task_run.exit_code)
+            ),
+        ) {
+            diagnostic_failures.push(error);
+        }
+        if let Err(error) = write_diagnostic(
+            output_mode,
+            format_args!("    stderr: {}", human_path(&task_run.stderr_path)),
+        ) {
+            diagnostic_failures.push(error);
+        }
+    }
+    node_results.push(NodeResult {
+        node_id: node_id.to_string(),
+        task_id: task_id.to_string(),
+        success: task_run.success,
+        exit_code: task_run.exit_code,
+        duration_ms: task_run.duration_ms,
+        stdout_path: task_run.stdout_path.clone(),
+        stderr_path: task_run.stderr_path.clone(),
+        summary_path: task_run.summary_path.clone(),
+    });
+    task_runs.push(task_run.clone());
+    attach_task_evidence(error, task_run)
+}
+
+fn attach_task_evidence(mut error: RuntimeError, task_run: &TaskRun) -> RuntimeError {
+    error = error
+        .with_detail("taskRun", task_run)
+        .with_detail("stdoutPath", &task_run.stdout_path)
+        .with_detail("stderrPath", &task_run.stderr_path)
+        .with_detail("summaryPath", &task_run.summary_path);
+    error
 }
 
 fn with_failure_summary(error: RuntimeError, summary_path: Option<PathBuf>) -> RuntimeError {
@@ -1064,30 +1339,6 @@ fn with_failure_summary(error: RuntimeError, summary_path: Option<PathBuf>) -> R
         Some(path) => error.with_detail("runSummaryPath", &path),
         None => error,
     }
-}
-
-/// Tear down already-started services in reverse order on a run error, either
-/// cancelling (process-group cancellation, recorded as canceled) or stopping.
-fn teardown(
-    started: &mut Vec<StartedService>,
-    registry: &mut Registry,
-    timeout_ms: u64,
-    canceled: bool,
-) {
-    while let Some(mut service) = started.pop() {
-        if canceled {
-            let _ = service.cancel(registry, timeout_ms, "run canceled");
-        } else {
-            let _ = service.stop(registry, timeout_ms);
-        }
-    }
-}
-
-fn stop_lease(lease: Option<RunLeaseHeartbeat>) -> Result<(), RuntimeError> {
-    if let Some(lease) = lease {
-        lease.stop()?;
-    }
-    Ok(())
 }
 
 fn elapsed_ms(started: Instant) -> u64 {
@@ -1122,30 +1373,45 @@ fn print_run_footer(
     duration_ms: u64,
     run_summary_path: Option<&Path>,
     logs_dir: &Path,
-) {
+) -> Result<(), RuntimeError> {
     if !output_mode.emit_summary() {
-        return;
+        return Ok(());
     }
     if run_succeeded {
-        eprintln!(
-            "  result: ok {} passed, 0 failed in {}",
-            nodes.iter().filter(|node| node.success).count(),
-            human_duration(duration_ms)
-        );
+        write_diagnostic(
+            output_mode,
+            format_args!(
+                "  result: ok {} passed, 0 failed in {}",
+                nodes.iter().filter(|node| node.success).count(),
+                human_duration(duration_ms)
+            ),
+        )?;
     } else if nodes.is_empty() {
-        eprintln!("  result: fail in {}", human_duration(duration_ms));
+        write_diagnostic(
+            output_mode,
+            format_args!("  result: fail in {}", human_duration(duration_ms)),
+        )?;
     } else {
-        eprintln!(
-            "  result: fail {} passed, {} failed in {}",
-            nodes.iter().filter(|node| node.success).count(),
-            nodes.iter().filter(|node| !node.success).count(),
-            human_duration(duration_ms)
-        );
+        write_diagnostic(
+            output_mode,
+            format_args!(
+                "  result: fail {} passed, {} failed in {}",
+                nodes.iter().filter(|node| node.success).count(),
+                nodes.iter().filter(|node| !node.success).count(),
+                human_duration(duration_ms)
+            ),
+        )?;
     }
     if let Some(path) = run_summary_path {
-        eprintln!("  run-summary: {}", human_path(path));
+        write_diagnostic(
+            output_mode,
+            format_args!("  run-summary: {}", human_path(path)),
+        )?;
     }
-    eprintln!("  logs: {}", human_path(logs_dir));
+    write_diagnostic(
+        output_mode,
+        format_args!("  logs: {}", human_path(logs_dir)),
+    )
 }
 
 struct RunSummary<'a> {
@@ -1175,7 +1441,7 @@ fn write_run_summary(input: RunSummary<'_>) -> Result<PathBuf, RuntimeError> {
     input.redactor.redact_value(&mut summary);
     let bytes = serde_json::to_vec_pretty(&summary).map_err(|error| {
         RuntimeError::new(
-            nixfied_runtime::ErrorCode::ModelAdmission,
+            nixfied_runtime::ErrorCode::LifecycleFailed,
             error.to_string(),
         )
     })?;
@@ -1225,7 +1491,8 @@ Options:
   --task <id>             Select a declared task (the exported verb preselects it)
   --slot <number>         Select a declared project slot
   --timeout-ms <number>   Set the runtime operation timeout in milliseconds
-  --output <mode>         Select summary, json, or both (default: summary)
+  --output <mode>         Select summary, json, both, or task-output (default: summary)
+                          task-output requires one directly selected leaf and replays redacted output
   --summary               Emit the human summary
   --json                  Emit structured JSON
   --both                  Emit both projections
@@ -1293,7 +1560,7 @@ fn selection_required_error(model: &nixfied_runtime::execution::ExecutionModel) 
         .map(|task| task.as_str())
         .collect();
     RuntimeError::new(
-        nixfied_runtime::ErrorCode::ModelAdmission,
+        nixfied_runtime::ErrorCode::TaskSelectionInvalid,
         format!(
             "run requires --task <id>; declared tasks: {}",
             declared.join(", ")
@@ -1302,40 +1569,60 @@ fn selection_required_error(model: &nixfied_runtime::execution::ExecutionModel) 
     .with_detail("declaredTasks", &declared)
 }
 
+fn validate_run_selection(
+    model: &nixfied_runtime::execution::ExecutionModel,
+    output_mode: RunOutputMode,
+    task: Option<&str>,
+) -> Result<(), RuntimeError> {
+    let Some(task) = task else {
+        return Err(selection_required_error(model));
+    };
+    let task_id = nixfied_model::TaskId::new(task);
+    if model.tasks.contains_key(&task_id) {
+        return validate_selection_nodes(model, &task_id, task);
+    }
+    if let Some(composite) = model.composites.get(&task_id) {
+        if output_mode.is_task_output() {
+            return Err(RuntimeError::new(
+                nixfied_runtime::ErrorCode::TaskSelectionInvalid,
+                format!("task-output requires a directly selected leaf; {task} is composite"),
+            )
+            .with_detail("task", task)
+            .with_detail("compositeSteps", composite.steps.len()));
+        }
+        return validate_selection_nodes(model, &task_id, task);
+    }
+    Err(selection_required_error(model).with_detail("unknownTask", task))
+}
+
+fn validate_selection_nodes(
+    model: &nixfied_runtime::execution::ExecutionModel,
+    task_id: &nixfied_model::TaskId,
+    task: &str,
+) -> Result<(), RuntimeError> {
+    let nodes = nixfied_runtime::execution::flatten_task(model, task_id)
+        .map_err(post_admission_error)?;
+    if nodes.is_empty() {
+        return Err(RuntimeError::new(
+            nixfied_runtime::ErrorCode::TaskSelectionInvalid,
+            format!("task {task} has no executable nodes"),
+        )
+        .with_detail("task", task));
+    }
+    Ok(())
+}
+
 fn parse_run_output_mode(value: &str) -> Result<RunOutputMode, RuntimeError> {
     match value {
         "summary" => Ok(RunOutputMode::Summary),
         "json" => Ok(RunOutputMode::Json),
         "both" => Ok(RunOutputMode::Both),
+        "task-output" => Ok(RunOutputMode::TaskOutput),
         other => Err(RuntimeError::new(
-            nixfied_runtime::ErrorCode::ModelAdmission,
-            format!("invalid --output value {other}: expected summary, json, or both"),
+            nixfied_runtime::ErrorCode::OutputModeInvalid,
+            format!("invalid --output value {other}: expected summary, json, both, or task-output"),
         )),
     }
-}
-
-fn parse_run_output_mode_lossy(args: &[String]) -> RunOutputMode {
-    let mut output_mode = RunOutputMode::Summary;
-    let mut index = 0;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--summary" => output_mode = RunOutputMode::Summary,
-            "--json" => output_mode = RunOutputMode::Json,
-            "--both" => output_mode = RunOutputMode::Both,
-            "--output" => {
-                index += 1;
-                if let Some(value) = args
-                    .get(index)
-                    .and_then(|value| parse_run_output_mode(value).ok())
-                {
-                    output_mode = value;
-                }
-            }
-            _ => {}
-        }
-        index += 1;
-    }
-    output_mode
 }
 
 fn run_control(command: ControlCommand, args: &[String]) -> Result<(), RuntimeError> {
@@ -1357,9 +1644,10 @@ fn run_control_admitted(
     admission: &Admission,
     options: &ControlOptions,
 ) -> Result<(), RuntimeError> {
-    let selected_slot = select_slot(model, options.selection.slot)?;
+    let selected_slot = select_slot(model, options.selection.slot).map_err(post_admission_error)?;
     let placement =
-        derive_host_placement_for_slot(model, &selected_slot, "control", &options.state_base)?;
+        derive_host_placement_for_slot(model, &selected_slot, "control", &options.state_base)
+            .map_err(post_admission_error)?;
     let result = (|| {
         let mut registry = Registry::open_or_create(
             placement.registry_path(),
@@ -1398,6 +1686,8 @@ fn parse_run_options(args: &[String]) -> Result<RunOptions, RuntimeError> {
     let mut state_base = None;
     let mut timeout_ms = 5000;
     let mut output_mode = RunOutputMode::Summary;
+    let mut saw_task_output = false;
+    let mut saw_metadata_output = false;
     let mut slot = None;
     let mut task = None;
     let mut index = 0;
@@ -1420,16 +1710,21 @@ fn parse_run_options(args: &[String]) -> Result<RunOptions, RuntimeError> {
             }
             "--task" => {
                 index += 1;
-                task = Some(
-                    args.get(index)
-                        .ok_or_else(|| {
-                            RuntimeError::new(
-                                nixfied_runtime::ErrorCode::ModelAdmission,
-                                "missing --task value",
-                            )
-                        })?
-                        .clone(),
-                );
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| {
+                        RuntimeError::new(
+                            nixfied_runtime::ErrorCode::TaskSelectionInvalid,
+                            "missing --task value",
+                        )
+                    })?
+                    .clone();
+                if task.replace(value).is_some() {
+                    return Err(RuntimeError::new(
+                        nixfied_runtime::ErrorCode::TaskSelectionInvalid,
+                        "--task may be specified only once",
+                    ));
+                }
             }
             "--timeout-ms" => {
                 index += 1;
@@ -1450,20 +1745,65 @@ fn parse_run_options(args: &[String]) -> Result<RunOptions, RuntimeError> {
                 index += 1;
                 let value = args.get(index).ok_or_else(|| {
                     RuntimeError::new(
-                        nixfied_runtime::ErrorCode::ModelAdmission,
+                        nixfied_runtime::ErrorCode::OutputModeInvalid,
                         "missing --output value",
                     )
                 })?;
-                output_mode = parse_run_output_mode(value)?;
+                let parsed = parse_run_output_mode(value)?;
+                if parsed.is_task_output() {
+                    if saw_metadata_output {
+                        return Err(RuntimeError::new(
+                            nixfied_runtime::ErrorCode::OutputModeConflict,
+                            "task-output cannot be combined with a metadata output mode",
+                        ));
+                    }
+                    saw_task_output = true;
+                } else {
+                    if saw_task_output {
+                        return Err(RuntimeError::new(
+                            nixfied_runtime::ErrorCode::OutputModeConflict,
+                            "task-output cannot be combined with a metadata output mode",
+                        ));
+                    }
+                    saw_metadata_output = true;
+                }
+                output_mode = parsed;
             }
             "--summary" => {
+                if saw_task_output {
+                    return Err(RuntimeError::new(
+                        nixfied_runtime::ErrorCode::OutputModeConflict,
+                        "task-output cannot be combined with a metadata output mode",
+                    ));
+                }
+                saw_metadata_output = true;
                 output_mode = RunOutputMode::Summary;
             }
             "--json" => {
+                if saw_task_output {
+                    return Err(RuntimeError::new(
+                        nixfied_runtime::ErrorCode::OutputModeConflict,
+                        "task-output cannot be combined with a metadata output mode",
+                    ));
+                }
+                saw_metadata_output = true;
                 output_mode = RunOutputMode::Json;
             }
             "--both" => {
+                if saw_task_output {
+                    return Err(RuntimeError::new(
+                        nixfied_runtime::ErrorCode::OutputModeConflict,
+                        "task-output cannot be combined with a metadata output mode",
+                    ));
+                }
+                saw_metadata_output = true;
                 output_mode = RunOutputMode::Both;
+            }
+            "--task-output" => {
+                return Err(RuntimeError::new(
+                    nixfied_runtime::ErrorCode::OutputModeInvalid,
+                    "unknown output flag --task-output; use --output task-output",
+                ));
             }
             other => {
                 return Err(RuntimeError::new(
@@ -1640,10 +1980,10 @@ fn warn_on_ephemeral_port_overlap(model: &nixfied_model::Model) {
     for placement in model.placement.slot_placements.values() {
         let window = &placement.candidate_ports;
         if u32::from(window.start) <= high && u32::from(window.end) >= low {
-            eprintln!(
+            write_stderr_line(format_args!(
                 "warning: slot {} candidate port window {}-{} overlaps the host ephemeral port range {low}-{high}; deterministic ports may collide with ephemeral allocations (set nixfied.placement.ports.base outside the range)",
                 placement.slot, window.start, window.end
-            );
+            ));
         }
     }
 }
@@ -1661,28 +2001,31 @@ fn print_json(value: &impl Serialize) -> Result<(), RuntimeError> {
 }
 
 fn error_code_wire(error: &RuntimeError) -> String {
-    serde_json::to_value(error.code)
+    error_code_wire_value(error.code)
+}
+
+fn error_code_wire_value(code: nixfied_runtime::ErrorCode) -> String {
+    serde_json::to_value(code)
         .ok()
         .and_then(|value| value.as_str().map(str::to_string))
-        .unwrap_or_else(|| format!("{:?}", error.code))
+        .unwrap_or_else(|| format!("{code:?}"))
 }
 
 fn print_json_redacted(value: &impl Serialize, redactor: &Redactor) -> Result<(), RuntimeError> {
     let mut value = serde_json::to_value(value).map_err(|error| {
         RuntimeError::new(
-            nixfied_runtime::ErrorCode::ModelAdmission,
+            nixfied_runtime::ErrorCode::LifecycleFailed,
             error.to_string(),
         )
     })?;
     redactor.redact_value(&mut value);
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&value).map_err(|error| RuntimeError::new(
-            nixfied_runtime::ErrorCode::ModelAdmission,
-            error.to_string()
-        ))?
-    );
-    Ok(())
+    let rendered = serde_json::to_string_pretty(&value).map_err(|error| {
+        RuntimeError::new(
+            nixfied_runtime::ErrorCode::LifecycleFailed,
+            error.to_string(),
+        )
+    })?;
+    write_stdout_line(&rendered)
 }
 
 fn exit_code(error: &RuntimeError) -> i32 {
@@ -1710,5 +2053,9 @@ fn exit_code(error: &RuntimeError) -> i32 {
         nixfied_runtime::ErrorCode::DependencyUnavailable => 32,
         nixfied_runtime::ErrorCode::SecretUnavailable => 33,
         nixfied_runtime::ErrorCode::SecretLeakBlocked => 34,
+        nixfied_runtime::ErrorCode::OutputModeInvalid => 35,
+        nixfied_runtime::ErrorCode::OutputModeConflict => 36,
+        nixfied_runtime::ErrorCode::TaskSelectionInvalid => 37,
+        nixfied_runtime::ErrorCode::OutputProjectionFailed => 38,
     }
 }

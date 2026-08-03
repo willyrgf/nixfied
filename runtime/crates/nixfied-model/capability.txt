@@ -52,8 +52,9 @@ surface: check run ps down clean
 surface-help: -h --help
 
 # The run command output projections. Summary is human-facing; json is the
-# structured automation surface; both is the explicit combined diagnostic mode.
-run-output-mode: summary json both
+# structured automation surface; both is the explicit combined diagnostic mode;
+# task-output replays one directly selected leaf's redacted evidence bytes.
+run-output-mode: summary json both task-output
 
 # The runtime-owned run output schemas. These JSON/text projections are public
 # for the current ABI, same as the admitted model and error vocabulary; changing
@@ -62,6 +63,7 @@ run-output-mode: summary json both
 output-schema run-json: runId modelPath computedModelHash durationMs services tasks task? summaryPath? nodes runSummaryPath?
 output-schema run-summary-json: runId success durationMs services nodes tasks
 output-schema run-task: taskId stepPath processKey exitCode timedOut canceled success durationMs stdoutPath stderrPath summaryPath
+output-schema run-task-output: redacted-stdout redacted-stderr human-diagnostics
 output-schema run-node: nodeId taskId success exitCode durationMs stdoutPath stderrPath summaryPath
 output-schema run-service: serviceId serviceInstanceId processKey selectedEndpoint?
 output-schema selected-endpoint: endpointId host port
@@ -73,6 +75,9 @@ output-schema port-conflict-endpoint: transport family address port endpointId
 output-schema nixfied-owner: projectId environment slot runId serviceId serviceInstanceId processKey
 output-schema run-summary-text: slot-upgrade service-start prepare-node service-ready-endpoint service-ready-endpointless task-ok task-fail task-fail-stderr result-ok result-fail-empty result-fail-nodes run-summary logs
 output-schema run-error-summary-text: error
+output-schema runtime-error: code exitClass message details causes? modelPath? computedModelHash?
+output-schema runtime-error-cause: code exitClass message details
+output-schema runtime-error-projection: stream operation kind path bytesWritten
 
 # Endpoint locks serialize only service-specific mutation and are released after
 # the atomic ready transition. Kernel listeners remain steady-state ownership.
@@ -116,5 +121,5 @@ enum PortConflictReason: startup-lock-contended listener-occupied
 # runtime emits. These are public API for the current ABI, so a change rotates the
 # digest like any primitive field — old models and the new runtime cannot disagree
 # on the failure vocabulary without the identity check noticing.
-error-code: MODEL_NOT_STORE_OUTPUT MODEL_INVALID MODEL_ADMISSION RUNTIME_ABI_MISMATCH SOURCE_MISMATCH PLATFORM_UNSUPPORTED CLOSURE_MISSING REGISTRY_CORRUPT STATE_UNWRITABLE STATE_UNOWNED CLEANUP_REFUSED PORT_CONFLICT PORT_UNVERIFIABLE PROC_ESCAPE READINESS_TIMEOUT CANCELED LEASE_STALE LEASE_CONFLICT TASK_FAILED LIFECYCLE_FAILED DEPENDENCY_UNAVAILABLE SECRET_UNAVAILABLE SECRET_LEAK_BLOCKED
+error-code: MODEL_NOT_STORE_OUTPUT MODEL_INVALID MODEL_ADMISSION RUNTIME_ABI_MISMATCH SOURCE_MISMATCH PLATFORM_UNSUPPORTED CLOSURE_MISSING REGISTRY_CORRUPT STATE_UNWRITABLE STATE_UNOWNED CLEANUP_REFUSED PORT_CONFLICT PORT_UNVERIFIABLE PROC_ESCAPE READINESS_TIMEOUT CANCELED LEASE_STALE LEASE_CONFLICT TASK_FAILED LIFECYCLE_FAILED DEPENDENCY_UNAVAILABLE SECRET_UNAVAILABLE SECRET_LEAK_BLOCKED OUTPUT_MODE_INVALID OUTPUT_MODE_CONFLICT TASK_SELECTION_INVALID OUTPUT_PROJECTION_FAILED
 exit-class: ok error

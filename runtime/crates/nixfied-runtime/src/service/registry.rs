@@ -307,6 +307,31 @@ pub fn mark_run_completed(registry: &mut Registry, run_id: &str) -> RuntimeResul
     Ok(())
 }
 
+/// Settle an admitted run that failed before a service or task transition could
+/// write its own terminal status. The guarded update preserves task/service
+/// terminal outcomes already committed by lower layers, while ensuring an early
+/// lifecycle failure cannot leave the durable run row in `service-starting`.
+pub fn mark_run_failed(registry: &mut Registry, run_id: &str, canceled: bool) -> RuntimeResult<()> {
+    let status = if canceled {
+        RunStatus::Canceled
+    } else {
+        RunStatus::ServiceFailed
+    };
+    let pre_states = [RunStatus::ServiceStarting, RunStatus::Canceling];
+    let transaction = registry.connection_mut().transaction().map_err(sql_error)?;
+    transaction
+        .execute(
+            &format!(
+                "UPDATE runs SET status = ?2 WHERE run_id = ?1 AND status IN ({})",
+                status::sql_in_list(&pre_states)
+            ),
+            params![run_id, status.as_str()],
+        )
+        .map_err(sql_error)?;
+    transaction.commit().map_err(sql_error)?;
+    Ok(())
+}
+
 /// Settle a reservation when no child exists, or only after a spawned child is
 /// proven gone. Port release and the run/lease outcome commit together.
 pub(crate) fn settle_service_reservation(
@@ -2068,7 +2093,7 @@ fn actionable_process_status(
 fn refuse_active_service(service_instance_id: &str, existing: Option<String>) -> RuntimeResult<()> {
     if let Some(status) = existing {
         Err(RuntimeError::new(
-            ErrorCode::ModelAdmission,
+            ErrorCode::LeaseConflict,
             format!("service instance {service_instance_id} has actionable process {status}"),
         ))
     } else {
@@ -2178,7 +2203,7 @@ fn sql_error(error: rusqlite::Error) -> RuntimeError {
 }
 
 fn json_error(error: serde_json::Error) -> RuntimeError {
-    RuntimeError::new(ErrorCode::ModelAdmission, error.to_string())
+    RuntimeError::new(ErrorCode::RegistryCorrupt, error.to_string())
 }
 
 #[cfg(test)]

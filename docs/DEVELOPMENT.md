@@ -210,6 +210,7 @@ Use the smallest proof that covers the change, then widen for shared contracts:
 | Rust formatting/lint only | rustfmt + Clippy commands above |
 | `nixfied-model` shape/validation | model crate tests + `.#check` |
 | Runtime admission or lifecycle | focused runtime test + `.#test` |
+| Task-output replay/projection | `cargo test -p nixfied-runtime --test output` + `.#gate -- --dirty` |
 | Nix resolution/validation/derivation | `nix flake check` + affected Nix vectors |
 | Package/source/public output boundary | `package-boundaries` check + CLI/runtime/install builds |
 | Generated docs or public output | affected model build + `.#gate` |

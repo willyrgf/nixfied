@@ -1560,7 +1560,7 @@ mod tests {
                     cancellation: &CancellationToken::new(),
                     prepare_runner: Some(Box::new(|_| {
                         prepare_ran = true;
-                        Ok(())
+                        Ok(Vec::new())
                     })),
                 },
             ) {
@@ -1572,7 +1572,7 @@ mod tests {
             }
         });
 
-        assert_eq!(error.code, ErrorCode::PortUnverifiable);
+        assert_eq!(error.error().code, ErrorCode::PortUnverifiable);
         assert!(!prepare_ran);
         let mutations: i64 = registry
             .connection()

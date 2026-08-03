@@ -294,8 +294,23 @@ The default run projection writes human progress, the result summary, and
 evidence paths to stderr while leaving stdout empty. `--json` writes structured
 output to stdout; `--both` requests both projections explicitly. Child
 stdout/stderr is captured in redacted run log files and is not replayed inline.
-There is no framework `logs` command: follow the evidence paths reported by the
-run.
+
+For an application-shaped leaf, request the already redacted captured bytes
+explicitly:
+
+```sh
+nix run .#run -- --task simulate --output task-output < request.json
+```
+
+`task-output` requires one directly selected leaf and writes its exact captured
+stdout to stdout and its exact captured stderr among runtime diagnostics on
+stderr. It preserves binary bytes and missing final newlines, and replays on
+success, task failure, timeout, and cancellation. Check the command status
+before treating stdout as a valid result; a child exit accepted by
+`exitPolicy.successCodes` still returns success. Composite selections and
+metadata output flags are rejected before runtime state or child side effects.
+There is no `--task-output` spelling alias. There is no framework `logs`
+command: metadata modes report the evidence paths for inspection.
 
 ## Services, slots, and state
 

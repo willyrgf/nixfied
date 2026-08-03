@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::thread;
 
 use serde::Serialize;
+use serde_json::json;
 
 const COPY_BUFFER_SIZE: usize = 64 * 1024;
 
@@ -238,6 +239,32 @@ impl ReplayReport {
 
     pub fn into_issues(self) -> Vec<ProjectionIssue> {
         self.issues
+    }
+
+    pub fn into_error(self) -> Option<crate::error::RuntimeError> {
+        if self.issues.is_empty() {
+            return None;
+        }
+        let projections = self
+            .issues
+            .into_iter()
+            .map(|issue| {
+                json!({
+                    "stream": issue.stream,
+                    "operation": issue.operation,
+                    "kind": issue.kind,
+                    "path": issue.path.to_string_lossy(),
+                    "bytesWritten": issue.bytes_written,
+                })
+            })
+            .collect::<Vec<_>>();
+        Some(
+            crate::error::RuntimeError::new(
+                crate::error::ErrorCode::OutputProjectionFailed,
+                "selected task output replay failed",
+            )
+            .with_detail("projections", projections),
+        )
     }
 }
 

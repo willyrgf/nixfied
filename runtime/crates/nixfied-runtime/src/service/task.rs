@@ -10,6 +10,7 @@ use crate::admission::secrets::ResolvedSecrets;
 use crate::cancellation::{CancellationToken, canceled_error};
 use crate::error::{ErrorCode, RuntimeError, RuntimeResult};
 use crate::execution::{ExecTask, ResolvedInvocation};
+use crate::output::{EvidenceMode, ReplayTicket};
 use crate::redaction::{RedactedLogRelays, Redactor, child_output};
 use crate::registry::Registry;
 use crate::service::process::{
@@ -41,6 +42,79 @@ pub struct TaskRun {
     pub stdout_path: PathBuf,
     pub stderr_path: PathBuf,
     pub summary_path: PathBuf,
+}
+
+#[derive(Debug)]
+pub enum CompletedEvidence {
+    Captured(TaskRun),
+    Replayable { task: TaskRun, ticket: ReplayTicket },
+}
+
+impl CompletedEvidence {
+    pub fn task_run(&self) -> &TaskRun {
+        match self {
+            Self::Captured(task) | Self::Replayable { task, .. } => task,
+        }
+    }
+
+    pub fn into_task_and_replay(self) -> (TaskRun, Option<ReplayTicket>) {
+        match self {
+            Self::Captured(task) => (task, None),
+            Self::Replayable { task, ticket } => (task, Some(ticket)),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum TaskExecution {
+    Succeeded(CompletedEvidence),
+    Failed {
+        error: RuntimeError,
+        evidence: CompletedEvidence,
+    },
+}
+
+#[derive(Debug)]
+pub enum TaskExecutionError {
+    BeforeTerminal(RuntimeError),
+    AfterTerminal {
+        error: RuntimeError,
+        evidence: CompletedEvidence,
+    },
+}
+
+impl TaskExecutionError {
+    pub fn error(&self) -> &RuntimeError {
+        match self {
+            Self::BeforeTerminal(error) | Self::AfterTerminal { error, .. } => error,
+        }
+    }
+
+    pub fn into_error_and_evidence(self) -> (RuntimeError, Option<CompletedEvidence>) {
+        match self {
+            Self::BeforeTerminal(error) => (error, None),
+            Self::AfterTerminal { error, evidence } => (error, Some(evidence)),
+        }
+    }
+}
+
+/// Typed evidence retained when a service prepare task fails. The service
+/// lifecycle owns the reservation failure, while the run driver owns the
+/// completed task evidence for summaries and public error details.
+#[derive(Debug)]
+pub struct PrepareTaskError {
+    error: RuntimeError,
+    task_runs: Vec<TaskRun>,
+}
+
+impl PrepareTaskError {
+    pub fn new(error: RuntimeError, task_runs: Vec<TaskRun>) -> Self {
+        Self { error, task_runs }
+    }
+
+    pub fn into_parts(self) -> (RuntimeError, Vec<TaskRun>) {
+        (self.error, self.task_runs)
+    }
 }
 
 /// The run-level context a task executes in, independent of any service: the run
@@ -79,7 +153,7 @@ pub fn run_dependent_task(
     run_context: RunContext<'_>,
     dependencies: &[&StartedService],
     task: &ExecTask,
-) -> RuntimeResult<TaskRun> {
+) -> Result<TaskExecution, TaskExecutionError> {
     // A directly selected leaf's step path is the task id.
     run_dependent_task_cancellable(
         placement,
@@ -89,6 +163,7 @@ pub fn run_dependent_task(
         task.task_id.as_str(),
         task,
         &CancellationToken::new(),
+        EvidenceMode::CaptureOnly,
     )
 }
 
@@ -104,10 +179,36 @@ pub fn run_dependent_task_cancellable(
     node_id: &str,
     task: &ExecTask,
     cancellation: &CancellationToken,
-) -> RuntimeResult<TaskRun> {
-    cancellation.check()?;
+    evidence: EvidenceMode,
+) -> Result<TaskExecution, TaskExecutionError> {
+    run_dependent_task_with_evidence(
+        placement,
+        registry,
+        run_context,
+        dependencies,
+        node_id,
+        task,
+        cancellation,
+        evidence,
+    )
+}
+
+fn run_dependent_task_with_evidence(
+    placement: &HostPlacement,
+    registry: &mut Registry,
+    run_context: RunContext<'_>,
+    dependencies: &[&StartedService],
+    node_id: &str,
+    task: &ExecTask,
+    cancellation: &CancellationToken,
+    evidence: EvidenceMode,
+) -> Result<TaskExecution, TaskExecutionError> {
+    cancellation
+        .check()
+        .map_err(TaskExecutionError::BeforeTerminal)?;
     let task_id = task.task_id.as_str();
-    ensure_task_dependencies(registry, task, dependencies)?;
+    ensure_task_dependencies(registry, task, dependencies)
+        .map_err(TaskExecutionError::BeforeTerminal)?;
     // The first dependency is the primary, providing bare ${port}/${host};
     // every declared dependency is addressable by name via ${port:<serviceId>}
     // and ${host:<serviceId>}. A task with no services runs in the run context
@@ -146,10 +247,15 @@ pub fn run_dependent_task_cancellable(
     let stderr_path = placement
         .logs_dir
         .join(format!("task.{node_id}.stderr.log"));
-    let args = substitution.args(&exec.args)?;
-    let env = substitution.env(&exec.env)?;
+    let args = substitution
+        .args(&exec.args)
+        .map_err(TaskExecutionError::BeforeTerminal)?;
+    let env = substitution
+        .env(&exec.env)
+        .map_err(TaskExecutionError::BeforeTerminal)?;
     let env = exec.env_with_path(env);
-    let command_cwd = resolve_exec_cwd(run_context.source_root, &exec.cwd)?;
+    let command_cwd = resolve_exec_cwd(run_context.source_root, &exec.cwd)
+        .map_err(TaskExecutionError::BeforeTerminal)?;
     let command_json = serde_json::to_string(&TaskCommandRecord {
         task_id,
         executable: exec.executable.as_str(),
@@ -158,8 +264,15 @@ pub fn run_dependent_task_cancellable(
         stdout_path: stdout_path.as_path(),
         stderr_path: stderr_path.as_path(),
     })
-    .map_err(|error| RuntimeError::new(ErrorCode::ModelAdmission, error.to_string()))?;
-    cancellation.check()?;
+    .map_err(|error| {
+        TaskExecutionError::BeforeTerminal(RuntimeError::new(
+            ErrorCode::LifecycleFailed,
+            error.to_string(),
+        ))
+    })?;
+    cancellation
+        .check()
+        .map_err(TaskExecutionError::BeforeTerminal)?;
     let started = Instant::now();
     let mut child = spawn_task(
         exec,
@@ -169,10 +282,23 @@ pub fn run_dependent_task_cancellable(
         &stdout_path,
         &stderr_path,
         run_context.redactor,
-    )?;
+    )
+    .map_err(TaskExecutionError::BeforeTerminal)?;
     let pid = child.child.id();
-    let pgid = process_group(pid)?
-        .ok_or_else(|| RuntimeError::new(ErrorCode::ProcEscape, "task process disappeared"))?;
+    let pgid = match process_group(pid) {
+        Ok(Some(pgid)) => pgid,
+        Ok(None) => {
+            return Err(TaskExecutionError::BeforeTerminal(cleanup_unrecorded_task(
+                child,
+                RuntimeError::new(ErrorCode::ProcEscape, "task process disappeared"),
+            )));
+        }
+        Err(error) => {
+            return Err(TaskExecutionError::BeforeTerminal(cleanup_unrecorded_task(
+                child, error,
+            )));
+        }
+    };
     let process_key = format!("process-{}-task-{node_id}-{pid}-{pgid}", run_context.run_id);
     let start_identity = process_start_identity(pid, pgid, platform_start_identity(pid).as_deref());
     if let Err(error) = record_task_started(
@@ -187,9 +313,27 @@ pub fn run_dependent_task_cancellable(
             computed_model_hash: run_context.computed_model_hash,
         },
     ) {
-        let _ = terminate_process_group(pgid, 1000);
-        let _ = child.child.wait();
-        return Err(error);
+        let termination_error = terminate_process_group(pgid, 1000).err();
+        let wait_error = match wait_for_child_exit(&mut child.child, 1000) {
+            Ok(true) => None,
+            Ok(false) => match child.child.kill() {
+                Ok(()) if matches!(wait_for_child_exit(&mut child.child, 1000), Ok(true)) => None,
+                Ok(()) => Some(RuntimeError::new(
+                    ErrorCode::ProcEscape,
+                    "task child did not exit after containment or direct kill",
+                )),
+                Err(kill_error) => Some(RuntimeError::new(
+                    ErrorCode::ProcEscape,
+                    format!("task child did not exit after containment: {kill_error}"),
+                )),
+            },
+            Err(error) => Some(error),
+        };
+        let error = termination_error
+            .into_iter()
+            .chain(wait_error)
+            .fold(error, |error, cleanup| error.with_cause(cleanup));
+        return Err(TaskExecutionError::BeforeTerminal(error));
     }
     let outcome = wait_for_task(
         registry,
@@ -203,8 +347,12 @@ pub fn run_dependent_task_cancellable(
             process_key: &process_key,
             computed_model_hash: run_context.computed_model_hash,
         },
-    )?;
-    child.logs.join()?;
+    )
+    .map_err(TaskExecutionError::BeforeTerminal)?;
+    child
+        .logs
+        .join()
+        .map_err(TaskExecutionError::BeforeTerminal)?;
     let duration_ms = elapsed_ms(started);
     let canceled = outcome.canceled;
     let timed_out = outcome.timed_out;
@@ -246,33 +394,61 @@ pub fn run_dependent_task_cancellable(
             .summary_path
             .with_file_name(format!("summary.{node_id}.json")),
     };
-    write_summary(&run, run_context.redactor)?;
-    let mut payload_value = serde_json::to_value(&run)
-        .map_err(|error| RuntimeError::new(ErrorCode::ModelAdmission, error.to_string()))?;
+    let evidence = match evidence {
+        EvidenceMode::CaptureOnly => CompletedEvidence::Captured(run),
+        EvidenceMode::ReplaySelected => CompletedEvidence::Replayable {
+            ticket: ReplayTicket::open(&run.stdout_path, &run.stderr_path),
+            task: run,
+        },
+    };
+    if let Err(error) = write_summary(evidence.task_run(), run_context.redactor) {
+        return Err(TaskExecutionError::AfterTerminal { error, evidence });
+    }
+    let mut payload_value = match serde_json::to_value(evidence.task_run()) {
+        Ok(value) => value,
+        Err(error) => {
+            return Err(TaskExecutionError::AfterTerminal {
+                error: RuntimeError::new(ErrorCode::LifecycleFailed, error.to_string()),
+                evidence,
+            });
+        }
+    };
     run_context.redactor.redact_value(&mut payload_value);
-    let payload_json = serde_json::to_string(&payload_value)
-        .map_err(|error| RuntimeError::new(ErrorCode::ModelAdmission, error.to_string()))?;
-    mark_task_finished(
+    let payload_json = match serde_json::to_string(&payload_value) {
+        Ok(value) => value,
+        Err(error) => {
+            return Err(TaskExecutionError::AfterTerminal {
+                error: RuntimeError::new(ErrorCode::LifecycleFailed, error.to_string()),
+                evidence,
+            });
+        }
+    };
+    if let Err(error) = mark_task_finished(
         registry,
         run_context.run_id,
         &process_key,
         run_context.computed_model_hash,
         task_terminal_status(success, timed_out, canceled),
         &payload_json,
-    )?;
+    ) {
+        return Err(TaskExecutionError::AfterTerminal { error, evidence });
+    }
     // The run's evidence (exit code, log and summary paths) already exists;
     // carry it on the error so the failure surface links to it instead of
     // discarding it. A timeout is an execution failure, not an operator
     // cancellation — only a canceled run reports CANCELED.
     if success {
-        Ok(run)
+        Ok(TaskExecution::Succeeded(evidence))
     } else if canceled {
-        Err(
-            RuntimeError::new(ErrorCode::Canceled, canceled_error().message)
-                .with_detail("taskRun", &run),
-        )
+        Ok(TaskExecution::Failed {
+            error: RuntimeError::new(ErrorCode::Canceled, canceled_error().message),
+            evidence,
+        })
     } else {
-        Err(RuntimeError::new(ErrorCode::TaskFailed, failure_message).with_detail("taskRun", &run))
+        Ok(TaskExecution::Failed {
+            error: RuntimeError::new(ErrorCode::TaskFailed, failure_message),
+            evidence,
+        })
     }
 }
 
@@ -364,6 +540,35 @@ struct SpawnedTask {
     logs: RedactedLogRelays,
 }
 
+fn cleanup_unrecorded_task(mut task: SpawnedTask, mut error: RuntimeError) -> RuntimeError {
+    match task.child.try_wait() {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            if let Err(kill_error) = task.child.kill() {
+                error = error.with_cause(RuntimeError::new(
+                    ErrorCode::ProcEscape,
+                    format!("failed to kill unrecorded task process: {kill_error}"),
+                ));
+            } else if !matches!(wait_for_child_exit(&mut task.child, 1000), Ok(true)) {
+                error = error.with_cause(RuntimeError::new(
+                    ErrorCode::ProcEscape,
+                    "unrecorded task process did not exit after kill",
+                ));
+            }
+        }
+        Err(wait_error) => {
+            error = error.with_cause(RuntimeError::new(
+                ErrorCode::ProcEscape,
+                format!("failed to inspect unrecorded task process: {wait_error}"),
+            ));
+        }
+    }
+    if let Err(relay_error) = task.logs.join() {
+        error = error.with_cause(relay_error);
+    }
+    error
+}
+
 fn wait_for_task(
     registry: &mut Registry,
     child: &mut Child,
@@ -378,7 +583,7 @@ fn wait_for_task(
         if cancellation.is_canceled() {
             record_task_cancellation_intent(registry, &context, pgid, "run canceled")?;
             terminate_process_group(pgid, 1000)?;
-            let _ = wait_for_child_exit(child, 1000);
+            require_child_exit(child)?;
             return Ok(TaskOutcome {
                 exit_code: None,
                 timed_out: false,
@@ -395,7 +600,7 @@ fn wait_for_task(
             // children into its own process group. Reconcile the owned group so a
             // task that daemonizes and exits 0 cannot leave processes behind,
             // matching the containment services enforce.
-            let _ = terminate_process_group(pgid, 1000);
+            terminate_process_group(pgid, 1000)?;
             return Ok(TaskOutcome {
                 exit_code: status.code(),
                 timed_out: false,
@@ -405,7 +610,7 @@ fn wait_for_task(
         if Instant::now() >= deadline {
             record_task_cancellation_intent(registry, &context, pgid, "task timeout")?;
             terminate_process_group(pgid, 1000)?;
-            let _ = wait_for_child_exit(child, 1000);
+            require_child_exit(child)?;
             return Ok(TaskOutcome {
                 exit_code: None,
                 timed_out: true,
@@ -413,6 +618,16 @@ fn wait_for_task(
             });
         }
         thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn require_child_exit(child: &mut Child) -> RuntimeResult<()> {
+    match wait_for_child_exit(child, 1000)? {
+        true => Ok(()),
+        false => Err(RuntimeError::new(
+            ErrorCode::ProcEscape,
+            "task child did not exit after cancellation or timeout containment",
+        )),
     }
 }
 
@@ -467,10 +682,10 @@ fn process_start_identity(pid: u32, pgid: i32, platform_start: Option<&str>) -> 
 
 fn write_summary(run: &TaskRun, redactor: &Redactor) -> RuntimeResult<()> {
     let mut summary = serde_json::to_value(run)
-        .map_err(|error| RuntimeError::new(ErrorCode::ModelAdmission, error.to_string()))?;
+        .map_err(|error| RuntimeError::new(ErrorCode::LifecycleFailed, error.to_string()))?;
     redactor.redact_value(&mut summary);
     let summary = serde_json::to_vec_pretty(&summary)
-        .map_err(|error| RuntimeError::new(ErrorCode::ModelAdmission, error.to_string()))?;
+        .map_err(|error| RuntimeError::new(ErrorCode::LifecycleFailed, error.to_string()))?;
     std::fs::write(&run.summary_path, summary).map_err(|error| {
         RuntimeError::new(
             ErrorCode::StateUnwritable,

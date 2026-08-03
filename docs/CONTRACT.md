@@ -184,9 +184,30 @@ when the model/runtime contract changes.
   and does not enter `model.json`, `runtimeAbi`, or Rust runtime behavior.
 - `run` defaults to the human `summary` projection: progress, pass/fail summary,
   and evidence pointers on stderr, with stdout empty. `--json` is the stable
-  structured projection; `--both` explicitly emits both. Captured child output
-  remains in redacted log files and is never replayed inline. There is no `logs`
-  control command.
+  structured projection; `--both` explicitly emits both. `--output task-output`
+  is an opt-in projection for exactly one directly selected leaf: stdout is the
+  selected task's exact redacted captured stdout, while stderr contains runtime
+  diagnostics and the exact redacted captured stderr. It emits no runtime JSON
+  metadata to stdout. Callers must check the process status before consuming
+  replayed bytes; accepted child exit codes still produce a successful run.
+  Composite selections, missing/unknown/repeated selections, and metadata-mode
+  conflicts are rejected before state or child side effects. There is no
+  `--task-output` alias and no `logs` control command.
+- Task-output replay happens only after capture and redaction complete, with
+  both evidence files opened before terminal registry transitions or cleanup.
+  The two streams replay concurrently with bounded buffers, preserving each
+  stream's bytes and order but not cross-stream interleaving. Replay occurs for
+  success, task failure, timeout, and cancellation, before service teardown,
+  lease release, aggregate summary, footer, or final error projection. Cleanup
+  and finalization continue after a replay failure.
+- Runtime errors may carry a non-recursive `causes` array. Projection failures
+  use typed redaction-safe `details.projections` entries containing stream,
+  operation, kind, path, and committed byte count; captured bytes, secrets, and
+  raw OS messages are never serialized. Containment, registry, lease, and state
+  failures take precedence over `OUTPUT_PROJECTION_FAILED`, which takes
+  precedence over task outcomes. Post-admission failures use lifecycle,
+  registry, state, or selection codes; `MODEL_ADMISSION` is never a late phase
+  projection.
 - JSON fields, text projection tokens, error codes, and exit classes are public
   for the current exact ABI. Their authoritative inventory is the capability
   descriptor, and the runtime tests enforce agreement with the typed Rust enums.

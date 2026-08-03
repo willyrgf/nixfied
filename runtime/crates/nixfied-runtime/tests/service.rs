@@ -12,12 +12,13 @@ use nixfied_model::{
     ContainmentRequirement, DirtyPolicy, Model, ServiceLifetime, SourceMode, Validate,
 };
 use nixfied_runtime::cancellation::CancellationToken;
+use nixfied_runtime::output::EvidenceMode;
 use nixfied_runtime::redaction::{REDACTION_TOKEN, Redactor};
 use nixfied_runtime::registry::{Registry, RegistryIdentity};
 use nixfied_runtime::service::{
-    PrepareRunner, RunContext, ServiceSelection, SlotEndpoints, StartedService,
-    compute_service_identity, record_run_created, run_dependent_task,
-    run_dependent_task_cancellable, service_address_hash, service_instance_id,
+    PrepareRunner, PrepareTaskError, RunContext, ServiceSelection, ServiceStartError,
+    SlotEndpoints, StartedService, TaskExecution, compute_service_identity, record_run_created,
+    run_dependent_task, run_dependent_task_cancellable, service_address_hash, service_instance_id,
     start_service_for_slot,
 };
 use nixfied_runtime::slot::select_slot;
@@ -535,9 +536,9 @@ fn same_registry_proven_listener_reports_complete_nixfied_owner() {
         Err(error) => error,
     };
 
-    assert_eq!(error.code, ErrorCode::PortConflict);
+    assert_eq!(error.error().code, ErrorCode::PortConflict);
     assert_eq!(
-        error.details["portConflict"],
+        error.error().details["portConflict"],
         json!({
             "reason": "listener-occupied",
             "projectId": "runtime-test",
@@ -801,6 +802,11 @@ fn dependent_task_runs_after_owned_service_is_ready() {
             .expect("smoke task"),
     )
     .expect("ready dependent task should run");
+    let TaskExecution::Succeeded(evidence) = task else {
+        panic!("ready dependent task should succeed");
+    };
+    let (task, replay) = evidence.into_task_and_replay();
+    assert!(replay.is_none());
 
     assert!(task.success);
     assert_eq!(task.exit_code, Some(0));
@@ -880,7 +886,7 @@ fn dependent_task_refuses_to_run_before_service_ready() {
     )
     .expect_err("task should wait for probe-ready service");
 
-    assert_eq!(error.code, ErrorCode::DependencyUnavailable);
+    assert_eq!(error.error().code, ErrorCode::DependencyUnavailable);
     let task_events: i64 = fixture
         .registry
         .connection()
@@ -1298,7 +1304,7 @@ fn cancellation_interrupts_task_and_terminates_task_group() {
         canceler.cancel();
     });
 
-    let error = run_dependent_task_cancellable(
+    let result = run_dependent_task_cancellable(
         &fixture.placement,
         &mut fixture.registry,
         RunContext::from_service(&service),
@@ -1311,8 +1317,14 @@ fn cancellation_interrupts_task_and_terminates_task_group() {
             .get("smoke")
             .expect("smoke task"),
         &cancellation,
+        EvidenceMode::CaptureOnly,
     )
-    .expect_err("task should be canceled");
+    .expect("task should complete with a canceled outcome");
+    let TaskExecution::Failed { error, evidence } = result else {
+        panic!("task should be canceled");
+    };
+    let (task_run, replay) = evidence.into_task_and_replay();
+    assert!(replay.is_none());
     handle.join().expect("canceler should join");
     thread::sleep(Duration::from_millis(2300));
     let report = ps(&mut fixture.registry).expect("ps should reconcile canceled task");
@@ -1376,6 +1388,7 @@ fn cancellation_interrupts_task_and_terminates_task_group() {
     assert_eq!(lease_status, "canceled");
     assert_eq!(task_events, 2);
     assert_eq!(summary["canceled"], json!(true));
+    assert!(task_run.canceled);
     let _ = fs::remove_file(marker);
     let _ = fs::remove_file(started_arg);
     service
@@ -1420,7 +1433,7 @@ fn task_timeout_records_failed_summary_and_terminates_task_group() {
         .wait_for_probe_ready(&mut fixture.registry)
         .expect("owned listener should become ready");
 
-    let error = run_dependent_task(
+    let result = run_dependent_task(
         &fixture.placement,
         &mut fixture.registry,
         RunContext::from_service(&service),
@@ -1432,7 +1445,12 @@ fn task_timeout_records_failed_summary_and_terminates_task_group() {
             .get("smoke")
             .expect("smoke task"),
     )
-    .expect_err("task should time out as a task failure");
+    .expect("task should complete with a timed-out failure outcome");
+    let TaskExecution::Failed { error, evidence } = result else {
+        panic!("task should time out as a task failure");
+    };
+    let (task_run, replay) = evidence.into_task_and_replay();
+    assert!(replay.is_none());
     thread::sleep(Duration::from_millis(2300));
     let report = ps(&mut fixture.registry).expect("ps should reconcile timed-out task");
     let task_observations = report
@@ -1492,6 +1510,7 @@ fn task_timeout_records_failed_summary_and_terminates_task_group() {
     assert_eq!(lease_status, "failed");
     assert_eq!(task_events, 2);
     assert_eq!(summary["timedOut"], json!(true));
+    assert!(task_run.timed_out);
     assert_eq!(summary["canceled"], json!(false));
     assert!(
         started.exists(),
@@ -3698,6 +3717,11 @@ fn task_child_path_is_assembled_from_tool_roots() {
         &task,
     )
     .expect("path-printing task should succeed");
+    let TaskExecution::Succeeded(evidence) = run else {
+        panic!("path-printing task should succeed");
+    };
+    let (run, replay) = evidence.into_task_and_replay();
+    assert!(replay.is_none());
     let stdout = fs::read_to_string(&run.stdout_path).expect("task stdout log");
     let expected = test_child()
         .as_path()
@@ -3755,6 +3779,11 @@ fn task_child_environment_is_hermetic() {
         &task,
     )
     .expect("env-printing task should succeed");
+    let TaskExecution::Succeeded(evidence) = run else {
+        panic!("env-printing task should succeed");
+    };
+    let (run, replay) = evidence.into_task_and_replay();
+    assert!(replay.is_none());
     let stdout = fs::read_to_string(&run.stdout_path).expect("task stdout log");
     let vars: Vec<&str> = stdout.split(';').filter(|v| !v.is_empty()).collect();
     assert!(
@@ -3998,6 +4027,7 @@ fn start_endpoint_less_service(
             prepare_runner: None,
         },
     )
+    .map_err(|error| error.into_parts().0)
 }
 
 struct ServiceFixture {
@@ -4398,7 +4428,7 @@ fn cancellation_after_prepare_settles_reservation_and_releases_startup_guard() {
         &cancellation,
         Box::new(move |_| {
             prepare_cancellation.cancel();
-            Ok(())
+            Ok(Vec::new())
         }),
     );
     let error = expect_service_start_failure(
@@ -4428,9 +4458,9 @@ fn prepare_failure_settles_reservation_and_allows_corrected_retry() {
         port,
         &cancellation,
         Box::new(|_| {
-            Err(RuntimeError::new(
-                ErrorCode::TaskFailed,
-                "deterministic prepare failure",
+            Err(PrepareTaskError::new(
+                RuntimeError::new(ErrorCode::TaskFailed, "deterministic prepare failure"),
+                Vec::new(),
             ))
         }),
     );
@@ -4471,12 +4501,17 @@ fn spawn_failure_after_prepare_settles_reservation_and_allows_restored_retry() {
         port,
         &cancellation,
         Box::new(move |_| {
-            fs::remove_file(&removed_executable).map_err(|error| {
-                RuntimeError::new(
-                    ErrorCode::TaskFailed,
-                    format!("failed to remove spawn fixture: {error}"),
-                )
-            })
+            fs::remove_file(&removed_executable)
+                .map(|()| Vec::new())
+                .map_err(|error| {
+                    PrepareTaskError::new(
+                        RuntimeError::new(
+                            ErrorCode::TaskFailed,
+                            format!("failed to remove spawn fixture: {error}"),
+                        ),
+                        Vec::new(),
+                    )
+                })
         }),
     );
     let error = expect_service_start_failure(
@@ -5545,7 +5580,7 @@ fn start_prepared_service(
     port: u16,
     cancellation: &CancellationToken,
     prepare_runner: PrepareRunner<'_>,
-) -> RuntimeResult<StartedService> {
+) -> Result<StartedService, ServiceStartError> {
     record_fixture_run(
         &mut fixture.registry,
         &fixture.admission,
@@ -5573,7 +5608,7 @@ fn start_prepared_service(
 }
 
 fn expect_service_start_failure(
-    result: RuntimeResult<StartedService>,
+    result: Result<StartedService, ServiceStartError>,
     registry: &mut Registry,
     message: &str,
 ) -> RuntimeError {
@@ -5582,14 +5617,20 @@ fn expect_service_start_failure(
             let _ = service.stop(registry, 1000);
             panic!("{message}");
         }
-        Err(error) => error,
+        Err(error) => error.into_parts().0,
     }
 }
 
 fn assert_prepared_retry(fixture: &mut ServiceFixture, run_id: &str, port: u16) {
     let cancellation = CancellationToken::new();
-    let retry = start_prepared_service(fixture, run_id, port, &cancellation, Box::new(|_| Ok(())))
-        .expect("a corrected run should reacquire the endpoint");
+    let retry = start_prepared_service(
+        fixture,
+        run_id,
+        port,
+        &cancellation,
+        Box::new(|_| Ok(Vec::new())),
+    )
+    .expect("a corrected run should reacquire the endpoint");
     retry
         .stop(&mut fixture.registry, 1000)
         .expect("retry service should stop");

@@ -35,6 +35,10 @@ pub enum ErrorCode {
     DependencyUnavailable,
     SecretUnavailable,
     SecretLeakBlocked,
+    OutputModeInvalid,
+    OutputModeConflict,
+    TaskSelectionInvalid,
+    OutputProjectionFailed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -42,6 +46,110 @@ pub enum ErrorCode {
 pub enum ExitClass {
     Ok,
     Error,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeCause {
+    pub code: ErrorCode,
+    pub exit_class: ExitClass,
+    pub message: String,
+    pub details: Value,
+}
+
+impl RuntimeCause {
+    pub fn from_error(error: RuntimeError) -> Self {
+        Self {
+            code: error.code,
+            exit_class: error.exit_class,
+            message: format!(
+                "cause: {}",
+                serde_json::to_value(error.code)
+                    .ok()
+                    .and_then(|value| value.as_str().map(str::to_string))
+                    .unwrap_or_else(|| format!("{:?}", error.code))
+            ),
+            details: cause_details(error.code, error.details),
+        }
+    }
+}
+
+/// Causes are a typed summary boundary, not a second copy of an arbitrary
+/// runtime error. In particular, formatted OS messages are intentionally left
+/// out; callers still receive the structured diagnostic fields that are safe and
+/// useful for the public projection (including task evidence and projection
+/// outcomes).
+fn cause_details(code: ErrorCode, details: Value) -> Value {
+    const SAFE_KEYS: &[&str] = &[
+        "compositeSteps",
+        "declaredTasks",
+        "endpoint",
+        "expectedRegistryIdentity",
+        "failedNodeId",
+        "failedService",
+        "foundRegistryIdentity",
+        "logsDir",
+        "mismatchedFields",
+        "nixfiedOwner",
+        "portConflict",
+        "projections",
+        "registryDir",
+        "registryPath",
+        "runDir",
+        "runId",
+        "runSummaryPath",
+        "slot",
+        "stateRoot",
+        "summaryPath",
+        "stderrPath",
+        "stdoutPath",
+        "task",
+        "taskRun",
+        "unknownTask",
+    ];
+    let Value::Object(details) = details else {
+        return Value::Object(Map::new());
+    };
+    let mut safe = Map::new();
+    for key in SAFE_KEYS {
+        if let Some(value) = details.get(*key) {
+            safe.insert((*key).to_string(), value.clone());
+        }
+    }
+    // A projection error has one additional structured field; all other
+    // details are intentionally omitted from a cause unless they are explicitly
+    // listed above. Keep the match exhaustive at the code boundary so adding a
+    // new error class prompts a conscious public-cause decision.
+    match code {
+        ErrorCode::ModelNotStoreOutput
+        | ErrorCode::ModelInvalid
+        | ErrorCode::ModelAdmission
+        | ErrorCode::RuntimeAbiMismatch
+        | ErrorCode::SourceMismatch
+        | ErrorCode::PlatformUnsupported
+        | ErrorCode::ClosureMissing
+        | ErrorCode::RegistryCorrupt
+        | ErrorCode::StateUnwritable
+        | ErrorCode::StateUnowned
+        | ErrorCode::CleanupRefused
+        | ErrorCode::PortConflict
+        | ErrorCode::PortUnverifiable
+        | ErrorCode::ProcEscape
+        | ErrorCode::ReadinessTimeout
+        | ErrorCode::Canceled
+        | ErrorCode::LeaseStale
+        | ErrorCode::LeaseConflict
+        | ErrorCode::TaskFailed
+        | ErrorCode::LifecycleFailed
+        | ErrorCode::DependencyUnavailable
+        | ErrorCode::SecretUnavailable
+        | ErrorCode::SecretLeakBlocked
+        | ErrorCode::OutputModeInvalid
+        | ErrorCode::OutputModeConflict
+        | ErrorCode::TaskSelectionInvalid
+        | ErrorCode::OutputProjectionFailed => {}
+    }
+    Value::Object(safe)
 }
 
 #[derive(Debug, Error, Serialize)]
@@ -52,6 +160,8 @@ pub struct RuntimeError {
     pub exit_class: ExitClass,
     pub message: String,
     pub details: Value,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub causes: Vec<RuntimeCause>,
     pub model_path: Option<PathBuf>,
     pub computed_model_hash: Option<String>,
 }
@@ -63,6 +173,7 @@ impl RuntimeError {
             exit_class: ExitClass::Error,
             message: message.into(),
             details: Value::Object(Map::new()),
+            causes: Vec::new(),
             model_path: None,
             computed_model_hash: None,
         }
@@ -75,6 +186,20 @@ impl RuntimeError {
 
     pub fn with_details(mut self, details: Value) -> Self {
         self.details = details;
+        self
+    }
+
+    pub fn with_cause(mut self, cause: RuntimeError) -> Self {
+        self.causes.push(RuntimeCause::from_error(cause));
+        self
+    }
+
+    pub fn with_causes<I>(mut self, causes: I) -> Self
+    where
+        I: IntoIterator<Item = RuntimeError>,
+    {
+        self.causes
+            .extend(causes.into_iter().map(RuntimeCause::from_error));
         self
     }
 
@@ -147,7 +272,11 @@ mod tests {
             | ErrorCode::LifecycleFailed
             | ErrorCode::DependencyUnavailable
             | ErrorCode::SecretUnavailable
-            | ErrorCode::SecretLeakBlocked => {}
+            | ErrorCode::SecretLeakBlocked
+            | ErrorCode::OutputModeInvalid
+            | ErrorCode::OutputModeConflict
+            | ErrorCode::TaskSelectionInvalid
+            | ErrorCode::OutputProjectionFailed => {}
         }
     }
 
@@ -184,6 +313,10 @@ mod tests {
         ErrorCode::DependencyUnavailable,
         ErrorCode::SecretUnavailable,
         ErrorCode::SecretLeakBlocked,
+        ErrorCode::OutputModeInvalid,
+        ErrorCode::OutputModeConflict,
+        ErrorCode::TaskSelectionInvalid,
+        ErrorCode::OutputProjectionFailed,
     ];
 
     const ALL_EXIT_CLASSES: &[ExitClass] = &[ExitClass::Ok, ExitClass::Error];
@@ -229,5 +362,64 @@ mod tests {
                 "exit class {value} is missing from the capability descriptor"
             );
         }
+    }
+
+    #[test]
+    fn causes_are_omitted_when_empty_and_are_non_recursive_when_present() {
+        let empty = serde_json::to_value(RuntimeError::new(ErrorCode::TaskFailed, "task failed"))
+            .expect("runtime error should serialize");
+        assert!(empty.get("causes").is_none());
+
+        let cause = RuntimeError::new(ErrorCode::TaskFailed, "task smoke failed")
+            .with_detail("taskRun", serde_json::json!({ "success": false }));
+        let compound = RuntimeError::new(
+            ErrorCode::OutputProjectionFailed,
+            "selected task output replay failed",
+        )
+        .with_detail(
+            "projections",
+            serde_json::json!([{
+                "stream": "stdout",
+                "operation": "write",
+                "kind": "broken-pipe",
+                "path": "<stdout>",
+                "bytesWritten": 4
+            }]),
+        )
+        .with_cause(cause);
+        let wire = serde_json::to_value(compound).expect("compound error should serialize");
+        assert_eq!(wire["code"], serde_json::json!("OUTPUT_PROJECTION_FAILED"));
+        assert_eq!(wire["causes"][0]["code"], serde_json::json!("TASK_FAILED"));
+        assert_eq!(wire["causes"][0]["exitClass"], serde_json::json!("error"));
+        assert_eq!(
+            wire["causes"][0]["details"]["taskRun"]["success"],
+            serde_json::json!(false)
+        );
+        assert!(wire["causes"][0].get("causes").is_none());
+    }
+
+    #[test]
+    fn causes_project_typed_details_without_raw_os_messages() {
+        let compound = RuntimeError::new(
+            ErrorCode::OutputProjectionFailed,
+            "selected task output replay failed",
+        )
+        .with_cause(
+            RuntimeError::new(
+                ErrorCode::TaskFailed,
+                "failed to signal process group: secret-value and /private/path",
+            )
+            .with_detail("error", "raw operating-system text")
+            .with_detail("taskRun", serde_json::json!({"success": false})),
+        );
+        let wire = serde_json::to_value(compound).expect("compound error should serialize");
+        let cause = &wire["causes"][0];
+        assert_eq!(cause["code"], serde_json::json!("TASK_FAILED"));
+        assert_eq!(cause["message"], serde_json::json!("cause: TASK_FAILED"));
+        assert_eq!(
+            cause["details"]["taskRun"]["success"],
+            serde_json::json!(false)
+        );
+        assert!(cause["details"].get("error").is_none());
     }
 }

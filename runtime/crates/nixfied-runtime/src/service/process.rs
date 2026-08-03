@@ -42,6 +42,7 @@ use crate::slot::SelectedSlot;
 use crate::state::{CleanupMode, CleanupOutcome, HostPlacement, StateIdentity, clean_marked_state};
 
 use super::TrackedProcessIdentity;
+use super::task::{PrepareTaskError, TaskRun};
 
 const FOREGROUND_GRACE: Duration = Duration::from_millis(100);
 const MONITOR_INTERVAL: Duration = Duration::from_millis(1);
@@ -112,7 +113,7 @@ impl StartedService {
     fn child_mut(&mut self) -> RuntimeResult<&mut Child> {
         self.child.as_mut().ok_or_else(|| {
             RuntimeError::new(
-                ErrorCode::ModelAdmission,
+                ErrorCode::LifecycleFailed,
                 "borrowed service does not own a child process",
             )
         })
@@ -256,7 +257,7 @@ impl StartedService {
             Probe::Tcp(probe) => {
                 let endpoint = self.selected_endpoint().ok_or_else(|| {
                     RuntimeError::new(
-                        ErrorCode::ModelAdmission,
+                        ErrorCode::LifecycleFailed,
                         "tcp probe on a service with no selected endpoint",
                     )
                 })?;
@@ -398,7 +399,7 @@ impl StartedService {
                         )
                     })
                     .map_err(|error| {
-                        RuntimeError::new(ErrorCode::ModelAdmission, error.to_string())
+                        RuntimeError::new(ErrorCode::LifecycleFailed, error.to_string())
                     })
             })
             .collect::<RuntimeResult<Vec<_>>>()?;
@@ -442,7 +443,7 @@ impl StartedService {
                 error.code == ErrorCode::Canceled,
             ) {
                 Ok(()) => error,
-                Err(settlement_error) => settlement_error,
+                Err(settlement_error) => settlement_error.with_cause(error),
             };
         }
         self.settle_failed_service(registry, timeout_ms, error)
@@ -496,7 +497,7 @@ impl StartedService {
         self.child = None;
         match settlement {
             Ok(()) => error,
-            Err(settlement_error) => settlement_error,
+            Err(settlement_error) => settlement_error.with_cause(error),
         }
     }
 
@@ -1149,7 +1150,34 @@ pub struct ServiceSelection<'a> {
 }
 
 /// The prepare-task executor a run driver supplies.
-pub type PrepareRunner<'a> = Box<dyn FnMut(&mut Registry) -> RuntimeResult<()> + 'a>;
+pub type PrepareRunner<'a> =
+    Box<dyn FnMut(&mut Registry) -> Result<Vec<TaskRun>, PrepareTaskError> + 'a>;
+
+/// Owned result of a service start attempt. Prepare tasks run before a service
+/// process exists, so their completed evidence belongs to the start attempt and
+/// must survive both success and failure without an optional side channel.
+#[derive(Debug)]
+pub struct ServiceStartError {
+    error: RuntimeError,
+    prepare_runs: Vec<TaskRun>,
+}
+
+impl ServiceStartError {
+    fn new(error: RuntimeError, prepare_runs: Vec<TaskRun>) -> Self {
+        Self {
+            error,
+            prepare_runs,
+        }
+    }
+
+    pub fn error(&self) -> &RuntimeError {
+        &self.error
+    }
+
+    pub fn into_parts(self) -> (RuntimeError, Vec<TaskRun>) {
+        (self.error, self.prepare_runs)
+    }
+}
 
 /// Start a declared foreground service from the lowered model: run prepare,
 /// spawn-and-own the start exec, and track the process. The service is read from
@@ -1161,7 +1189,29 @@ pub fn start_service_for_slot(
     registry: &mut Registry,
     run_id: impl Into<String>,
     selected_slot: &SelectedSlot<'_>,
+    selection: ServiceSelection<'_>,
+) -> Result<StartedService, ServiceStartError> {
+    let mut prepare_runs = Vec::new();
+    start_service_for_slot_inner(
+        admission,
+        placement,
+        registry,
+        run_id,
+        selected_slot,
+        selection,
+        &mut prepare_runs,
+    )
+    .map_err(|error| ServiceStartError::new(error, prepare_runs))
+}
+
+fn start_service_for_slot_inner(
+    admission: &Admission,
+    placement: &HostPlacement,
+    registry: &mut Registry,
+    run_id: impl Into<String>,
+    selected_slot: &SelectedSlot<'_>,
     mut selection: ServiceSelection<'_>,
+    prepare_runs: &mut Vec<TaskRun>,
 ) -> RuntimeResult<StartedService> {
     let run_id = run_id.into();
     let run_timeout_ms = selection.run_timeout_ms;
@@ -1176,7 +1226,7 @@ pub fn start_service_for_slot(
         .get(service_name)
         .ok_or_else(|| {
             RuntimeError::new(
-                ErrorCode::ModelAdmission,
+                ErrorCode::LifecycleFailed,
                 format!("service {service_name} is missing"),
             )
         })?;
@@ -1186,7 +1236,7 @@ pub fn start_service_for_slot(
     for (endpoint_id, endpoint) in &service.endpoints {
         let port = endpoint_ports.get(endpoint_id).copied().ok_or_else(|| {
             RuntimeError::new(
-                ErrorCode::ModelAdmission,
+                ErrorCode::LifecycleFailed,
                 format!("service {service_name} endpoint {endpoint_id} has no planned port"),
             )
         })?;
@@ -1204,7 +1254,7 @@ pub fn start_service_for_slot(
     let selected_endpoint = match &service.primary_endpoint {
         Some(primary) => Some(own_endpoints.get(primary).ok_or_else(|| {
             RuntimeError::new(
-                ErrorCode::ModelAdmission,
+                ErrorCode::LifecycleFailed,
                 format!("service {service_name} primary endpoint {primary} is missing"),
             )
         })?),
@@ -1343,16 +1393,31 @@ pub fn start_service_for_slot(
             owner_token.clone(),
         );
         let prepare_result = match selection.prepare_runner {
-            Some(ref mut runner) => runner(registry),
+            Some(ref mut runner) => match runner(registry) {
+                Ok(task_runs) => {
+                    prepare_runs.extend(task_runs);
+                    Ok(())
+                }
+                Err(failure) => {
+                    let (error, task_runs) = failure.into_parts();
+                    prepare_runs.extend(task_runs);
+                    Err(error)
+                }
+            },
             None => Err(RuntimeError::new(
-                ErrorCode::ModelAdmission,
+                ErrorCode::LifecycleFailed,
                 format!(
                     "service {service_name} declares prepare task {prepare_task} but the caller supplied no prepare runner"
                 ),
             )),
         };
         let heartbeat_result = prepare_heartbeat.stop();
-        if let Err(error) = prepare_result.and(heartbeat_result) {
+        let prepare_error = match (prepare_result, heartbeat_result) {
+            (Ok(()), Ok(())) => None,
+            (Err(error), Ok(())) | (Ok(()), Err(error)) => Some(error),
+            (Err(error), Err(heartbeat_error)) => Some(heartbeat_error.with_cause(error)),
+        };
+        if let Some(error) = prepare_error {
             let _ = record_lifecycle_failure(registry, &lifecycle_context, &prepare_record, &error);
             return Err(settle_reserved_failure(
                 registry,
@@ -1399,7 +1464,7 @@ pub fn start_service_for_slot(
         stdout_path: stdout_path.as_path(),
         stderr_path: stderr_path.as_path(),
     })
-    .map_err(|error| RuntimeError::new(ErrorCode::ModelAdmission, error.to_string()))
+    .map_err(|error| RuntimeError::new(ErrorCode::LifecycleFailed, error.to_string()))
     .map_err(|error| settle_reserved_failure(registry, &run_id, &service_instance_id, error))?;
     let redactor = Redactor::from_secrets(&admission.secrets);
     let (stdout, stderr, mut log_relays) =
@@ -1993,7 +2058,7 @@ fn record_service_clean(
 ) -> RuntimeResult<()> {
     let service = model.services.get(service_name).ok_or_else(|| {
         RuntimeError::new(
-            ErrorCode::ModelAdmission,
+            ErrorCode::LifecycleFailed,
             format!("service {service_name} is missing"),
         )
     })?;
@@ -2066,7 +2131,7 @@ fn settle_reserved_failure(
         reservation_outcome(&error),
     ) {
         Ok(()) => error,
-        Err(settlement_error) => settlement_error,
+        Err(settlement_error) => settlement_error.with_cause(error),
     }
 }
 
@@ -2162,7 +2227,7 @@ impl ExecSubstitution<'_> {
         out = out.replace("${stateDir}", &self.state_root.to_string_lossy());
         if out.contains("${port:") || out.contains("${host:") {
             return Err(RuntimeError::new(
-                ErrorCode::ModelAdmission,
+                ErrorCode::LifecycleFailed,
                 format!("unresolved endpoint placeholder in exec value: {value}"),
             ));
         }
@@ -2173,7 +2238,7 @@ impl ExecSubstitution<'_> {
         let out = self.endpoint_value(value)?;
         if out.contains("${secret:") {
             return Err(RuntimeError::new(
-                ErrorCode::ModelAdmission,
+                ErrorCode::LifecycleFailed,
                 "secret placeholders are only allowed in invocation.env values",
             ));
         }
@@ -2183,7 +2248,7 @@ impl ExecSubstitution<'_> {
     fn env_value(&self, value: &str) -> RuntimeResult<String> {
         if has_unclosed_secret_ref(value) {
             return Err(RuntimeError::new(
-                ErrorCode::ModelAdmission,
+                ErrorCode::LifecycleFailed,
                 format!("malformed secret placeholder in invocation env value: {value}"),
             ));
         }
@@ -2191,7 +2256,7 @@ impl ExecSubstitution<'_> {
         for reference in secret_refs(value) {
             let secret = self.secrets.get(reference).ok_or_else(|| {
                 RuntimeError::new(
-                    ErrorCode::ModelAdmission,
+                    ErrorCode::LifecycleFailed,
                     format!("secret placeholder references unresolved secret {reference}"),
                 )
             })?;
@@ -2415,7 +2480,7 @@ fn record_lifecycle_started(
         "operationId": record.operation_id,
         "class": record.class,
     }))
-    .map_err(|error| RuntimeError::new(ErrorCode::ModelAdmission, error.to_string()))?;
+    .map_err(|error| RuntimeError::new(ErrorCode::LifecycleFailed, error.to_string()))?;
     record_service_lifecycle_event(
         registry,
         "service.lifecycle.started",
@@ -2464,7 +2529,7 @@ fn record_lifecycle_terminal(
         "errorCode": error.map(|error| error.code),
         "message": error.map(|error| error.message.as_str()),
     }))
-    .map_err(|error| RuntimeError::new(ErrorCode::ModelAdmission, error.to_string()))?;
+    .map_err(|error| RuntimeError::new(ErrorCode::LifecycleFailed, error.to_string()))?;
     record_service_lifecycle_event(
         registry,
         "service.lifecycle.terminal",
@@ -3328,7 +3393,7 @@ mod tests {
                 .value("--token=${secret:api-token}")
                 .unwrap_err()
                 .code,
-            ErrorCode::ModelAdmission
+            ErrorCode::LifecycleFailed
         );
     }
 
@@ -3344,6 +3409,6 @@ mod tests {
         let error = substitution
             .value("--db ${port:ghost}")
             .expect_err("an undeclared named placeholder must not leak to the child");
-        assert_eq!(error.code, ErrorCode::ModelAdmission);
+        assert_eq!(error.code, ErrorCode::LifecycleFailed);
     }
 }

@@ -277,6 +277,7 @@ pub fn start_synthetic_service_for_slot_with_lifetime(
             prepare_runner: None,
         },
     )
+    .map_err(|error| error.into_parts().0)
 }
 
 /// Clean the synthetic fixture's slot. The fixture's `dev` environment is exactly
