@@ -1600,8 +1600,8 @@ fn validate_selection_nodes(
     task_id: &nixfied_model::TaskId,
     task: &str,
 ) -> Result<(), RuntimeError> {
-    let nodes = nixfied_runtime::execution::flatten_task(model, task_id)
-        .map_err(post_admission_error)?;
+    let nodes =
+        nixfied_runtime::execution::flatten_task(model, task_id).map_err(post_admission_error)?;
     if nodes.is_empty() {
         return Err(RuntimeError::new(
             nixfied_runtime::ErrorCode::TaskSelectionInvalid,
