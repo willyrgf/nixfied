@@ -1044,6 +1044,40 @@ pkgs.writeShellApplication {
       || fail "adoption: scaffolded smoke verb did not print the run summary path"
     grep -q "  logs: " "$smoke_stderr" \
       || fail "adoption: scaffolded smoke verb did not print the logs path"
+
+    task_output_state="$st/task-output-state"
+    task_output_stdout="$st/task-output.stdout"
+    task_output_stderr="$st/task-output.stderr"
+    task_output_expected="$st/task-output.expected"
+    printf 'ok\n' >"$task_output_expected"
+    ( cd "$wk" && NIXFIED_STATE_DIR="$task_output_state" nix run "$project#smoke" -- --timeout-ms 60000 --output task-output ) \
+      >"$task_output_stdout" 2>"$task_output_stderr" \
+      || fail "adoption: generated smoke task-output verb failed"
+    cmp -s "$task_output_expected" "$task_output_stdout" \
+      || fail "adoption: generated smoke task-output stdout was not exact"
+    ! grep -Fq '"task"' "$task_output_stdout" \
+      || fail "adoption: generated smoke task-output emitted runtime metadata"
+
+    composite_task_output_state="$st/composite-task-output-state"
+    composite_task_output_stdout="$st/composite-task-output.stdout"
+    composite_task_output_stderr="$st/composite-task-output.stderr"
+    composite_task_output_code=0
+    if ( cd "$wk" && NIXFIED_STATE_DIR="$composite_task_output_state" \
+         nix run "$project#composite-smoke" -- --timeout-ms 60000 --output task-output ) \
+         >"$composite_task_output_stdout" 2>"$composite_task_output_stderr"; then
+      :
+    else
+      composite_task_output_code=$?
+    fi
+    [ "$composite_task_output_code" -eq 37 ] \
+      || fail "adoption: generated composite task-output exited $composite_task_output_code, want 37"
+    [ ! -e "$composite_task_output_state" ] \
+      || fail "adoption: generated composite task-output materialized runtime state"
+    [ ! -s "$composite_task_output_stdout" ] \
+      || fail "adoption: generated composite task-output wrote stdout"
+    grep -Fq "TASK_SELECTION_INVALID" "$composite_task_output_stderr" \
+      || fail "adoption: generated composite task-output omitted its typed rejection"
+
     composite_stdout="$st/composite.stdout"
     composite_stderr="$st/composite.stderr"
     ( cd "$wk" && NIXFIED_STATE_DIR="$st" nix run "$project#composite-smoke" -- --timeout-ms 60000 ) \

@@ -29,6 +29,10 @@
     package = pkgs.findutils;
     executable = "bin/find";
   };
+  nixfied.closures.diffutils = {
+    package = pkgs.diffutils;
+    executable = "bin/cmp";
+  };
 
   # ---- example leaf tasks (run → model/docs proof → clean) ------------
 
@@ -211,6 +215,116 @@
             > "''${stateDir}/gate-artifacts/example-toolchain.json"
           NIXFIED_STATE_DIR="''${stateDir}/example-toolchain-inner" \
             nixfied-runtime clean --model "$TOOLCHAIN_MODEL/model.json"
+        ''
+      ];
+    };
+  };
+
+  # ---- task-output projection ----------------------------------------
+
+  nixfied.tasks.task-output = {
+    invocation = {
+      tools = [
+        pkgs.bash
+        "rt"
+        "coreutils"
+        "diffutils"
+      ];
+      run = [
+        "bash"
+        "-c"
+        ''
+          set -euo pipefail
+          inner="''${stateDir}/task-output-inner"
+          artifacts="''${stateDir}/gate-artifacts/task-output"
+          mkdir -p "$artifacts"
+
+          assert_stdout() {
+            local expected=$1
+            local actual=$2
+            local expected_path=$3
+            printf '%b' "$expected" > "$expected_path"
+            cmp -s "$expected_path" "$actual"
+          }
+
+          assert_stderr_contains() {
+            local actual=$1
+            local expected=$2
+            [[ "$(<"$actual")" == *"$expected"* ]]
+          }
+
+          NIXFIED_STATE_DIR="$inner/success" \
+            nixfied-runtime run --model "$TASK_OUTPUT_MODEL/model.json" \
+              --task output --output task-output \
+              >"$artifacts/success.stdout" 2>"$artifacts/success.stderr"
+          assert_stdout '\x00\x01\x02\x00\xff\n' \
+            "$artifacts/success.stdout" "$artifacts/success.expected"
+          assert_stderr_contains "$artifacts/success.stderr" "diagnostic"
+
+          NIXFIED_STATE_DIR="$inner/accepted" \
+            nixfied-runtime run --model "$TASK_OUTPUT_MODEL/model.json" \
+              --task accepted --output task-output \
+              >"$artifacts/accepted.stdout" 2>"$artifacts/accepted.stderr"
+          assert_stdout 'accepted' \
+            "$artifacts/accepted.stdout" "$artifacts/accepted.expected"
+          assert_stderr_contains "$artifacts/accepted.stderr" "nonzero"
+
+          NIXFIED_STATE_DIR="$inner/redacted" \
+            nixfied-runtime run --model "$TASK_OUTPUT_MODEL/model.json" \
+              --task redacted --output task-output \
+              >"$artifacts/redacted.stdout" 2>"$artifacts/redacted.stderr"
+          assert_stdout '[REDACTED]' \
+            "$artifacts/redacted.stdout" "$artifacts/redacted.expected"
+          ! [[ "$(<"$artifacts/redacted.stdout")" == *"$NIXFIED_TASK_OUTPUT_SECRET"* ]]
+          ! [[ "$(<"$artifacts/redacted.stderr")" == *"$NIXFIED_TASK_OUTPUT_SECRET"* ]]
+
+          timeout_code=0
+          if NIXFIED_STATE_DIR="$inner/timeout" \
+             nixfied-runtime run --model "$TASK_OUTPUT_MODEL/model.json" \
+               --task timeout --output task-output \
+               >"$artifacts/timeout.stdout" 2>"$artifacts/timeout.stderr"; then
+            :
+          else
+            timeout_code=$?
+          fi
+          [ "$timeout_code" -eq 30 ]
+          assert_stdout 'timeout-output' \
+            "$artifacts/timeout.stdout" "$artifacts/timeout.expected"
+          assert_stderr_contains "$artifacts/timeout.stderr" "timeout-error"
+          assert_stderr_contains "$artifacts/timeout.stderr" "timed out"
+
+          NIXFIED_STATE_DIR="$inner/cancel" \
+            nixfied-runtime run --model "$TASK_OUTPUT_MODEL/model.json" \
+              --task cancel --output task-output \
+              >"$artifacts/cancel.stdout" 2>"$artifacts/cancel.stderr" &
+          cancel_pid=$!
+          sleep 1
+          kill -TERM "$cancel_pid"
+          cancel_code=0
+          if wait "$cancel_pid"; then
+            :
+          else
+            cancel_code=$?
+          fi
+          [ "$cancel_code" -eq 27 ]
+          assert_stdout 'cancel-output' \
+            "$artifacts/cancel.stdout" "$artifacts/cancel.expected"
+          assert_stderr_contains "$artifacts/cancel.stderr" "cancel-error"
+          assert_stderr_contains "$artifacts/cancel.stderr" "CANCELED"
+
+          composite_state="$inner/composite"
+          composite_code=0
+          if NIXFIED_STATE_DIR="$composite_state" \
+             nixfied-runtime run --model "$TASK_OUTPUT_MODEL/model.json" \
+               --task pipeline --output task-output \
+               >"$artifacts/composite.stdout" 2>"$artifacts/composite.stderr"; then
+            :
+          else
+            composite_code=$?
+          fi
+          [ "$composite_code" -eq 37 ]
+          [ ! -e "$composite_state" ]
+          [ ! -s "$artifacts/composite.stdout" ]
         ''
       ];
     };
@@ -781,9 +895,13 @@
         task = "lifecycle";
         dependsOn = [ "negatives" ];
       };
+      task-output = {
+        task = "task-output";
+        dependsOn = [ "lifecycle" ];
+      };
       endpoint = {
         task = "endpoint-cross-root";
-        dependsOn = [ "lifecycle" ];
+        dependsOn = [ "task-output" ];
       };
       slots = {
         task = "slots";

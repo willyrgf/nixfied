@@ -115,6 +115,116 @@
             buildType = "debug";
           };
           nixfiedTestChild = mkNixfiedTestChild pkgs;
+          taskOutputModel = nixfiedLib.compileModel (
+            { ... }:
+            {
+              nixfied.project.projectId = "task-output";
+              nixfied.project.name = "Task Output";
+              nixfied.codebases.main.logicalRoot = ".";
+
+              nixfied.closures.test-child = {
+                package = nixfiedTestChild;
+                executable = "bin/nixfied-test-child";
+                effects = [ "process" ];
+              };
+
+              nixfied.secrets.task-output-secret = {
+                source = {
+                  kind = "env-var";
+                  envVar = "NIXFIED_TASK_OUTPUT_SECRET";
+                };
+              };
+
+              nixfied.tasks.output = {
+                invocation = {
+                  tools = [ "test-child" ];
+                  run = [
+                    "nixfied-test-child"
+                    "output"
+                    "hex"
+                    "00010200ff0a"
+                    "646961676e6f73746963"
+                  ];
+                };
+              };
+
+              nixfied.tasks.accepted = {
+                invocation = {
+                  tools = [ "test-child" ];
+                  run = [
+                    "nixfied-test-child"
+                    "output"
+                    "hex-exit"
+                    "6163636570746564"
+                    "6e6f6e7a65726f"
+                    "7"
+                  ];
+                };
+                exitPolicy.successCodes = [ 0 7 ];
+              };
+
+              nixfied.tasks.redacted = {
+                invocation = {
+                  tools = [ "test-child" ];
+                  run = [
+                    "nixfied-test-child"
+                    "output"
+                    "env"
+                    "TOKEN"
+                  ];
+                  env.TOKEN = "\${secret:task-output-secret}";
+                };
+              };
+
+              nixfied.tasks.timeout = {
+                invocation = {
+                  tools = [ "test-child" ];
+                  run = [
+                    "nixfied-test-child"
+                    "output"
+                    "hex-block"
+                    "74696d656f75742d6f7574707574"
+                    "74696d656f75742d6572726f72"
+                    "\${stateDir}/task-output-timeout-marker"
+                  ];
+                  timeoutMs = 150;
+                };
+              };
+
+              nixfied.tasks.cancel = {
+                invocation = {
+                  tools = [ "test-child" ];
+                  run = [
+                    "nixfied-test-child"
+                    "output"
+                    "hex-block"
+                    "63616e63656c2d6f7574707574"
+                    "63616e63656c2d6572726f72"
+                    "\${stateDir}/task-output-cancel-marker"
+                  ];
+                };
+              };
+
+              nixfied.tasks.composite-block = {
+                invocation = {
+                  tools = [ "test-child" ];
+                  run = [
+                    "nixfied-test-child"
+                    "output"
+                    "hex-block"
+                    "636f6d706f736974652d6f7574707574"
+                    "636f6d706f736974652d6572726f72"
+                    "\${stateDir}/task-output-composite-marker"
+                  ];
+                };
+              };
+
+              nixfied.tasks.pipeline = {
+                kind = "composite";
+                steps.only.task = "composite-block";
+              };
+            }
+          );
           minimalModel = nixfiedLib.compileModel ./examples/minimal/nixfied.nix;
           persistentEndpointModel = nixfiedLib.compileModel (
             { pkgs, ... }:
@@ -266,6 +376,9 @@
               nixfied.tasks.example-downstream.invocation.env.DOWNSTREAM_MODEL = toString downstreamModel;
               nixfied.tasks.example-reth.invocation.env.RETH_MODEL = toString rethModel;
               nixfied.tasks.example-toolchain.invocation.env.TOOLCHAIN_MODEL = toString toolchainModel;
+              nixfied.tasks.task-output.invocation.env.TASK_OUTPUT_MODEL = toString taskOutputModel;
+              nixfied.tasks.task-output.invocation.env.NIXFIED_TASK_OUTPUT_SECRET =
+                "task-output-gate-secret";
               nixfied.tasks.negative-no-selection.invocation.env.MINIMAL_MODEL = toString minimalModel;
               nixfied.tasks.negative-undeclared-task.invocation.env.MINIMAL_MODEL = toString minimalModel;
               nixfied.tasks.negative-failure-identity.invocation.env.NEGATIVE_FAIL_MODEL =
