@@ -90,7 +90,7 @@ fn output(args: &[String]) -> Result<(), String> {
         }
         [mode, stdout, stderr, code] if mode == "hex-exit" => {
             write_hex_output(stdout, stderr)?;
-            exit_with(&[code.clone()])
+            exit_with(std::slice::from_ref(code))
         }
         [mode, stdout, stderr, marker] if mode == "hex-block" => {
             write_hex_output(stdout, stderr)?;
