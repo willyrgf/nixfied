@@ -94,7 +94,7 @@ impl Redactor {
         }
         error.message = self.redact_text(&error.message);
         self.redact_value(&mut error.details);
-        for cause in &mut error.causes {
+        for cause in error.causes.iter_mut() {
             cause.message = self.redact_text(&cause.message);
             self.redact_value(&mut cause.details);
         }

@@ -138,7 +138,7 @@ impl FailureAccumulator {
         if failure_priority(error.code) > failure_priority(primary.code) {
             let mut error = error;
             let incoming = std::mem::take(&mut error.causes);
-            error.causes.extend(incoming);
+            error.causes.extend(*incoming);
             error.causes.extend(primary.causes.drain(..));
             error.causes.extend(self.causes.drain(..));
             error.causes.push(RuntimeCause::from_error(primary));
@@ -146,7 +146,7 @@ impl FailureAccumulator {
         } else {
             let mut error = error;
             let incoming = std::mem::take(&mut error.causes);
-            self.causes.extend(incoming);
+            self.causes.extend(*incoming);
             self.causes.push(RuntimeCause::from_error(error));
             self.primary = Some(primary);
         }
@@ -191,10 +191,9 @@ impl<'a> RunSession<'a> {
         }
 
         if let ReplayPlan::Selected(ticket) = std::mem::replace(&mut self.replay, ReplayPlan::None)
+            && let Some(error) = ticket.replay(ReplaySinks::stdio()).into_error()
         {
-            if let Some(error) = ticket.replay(ReplaySinks::stdio()).into_error() {
-                failures.push(error);
-            }
+            failures.push(error);
         }
         if self.cancellation.is_canceled() && !cancellation_recorded {
             failures.push(nixfied_runtime::cancellation::canceled_error());
@@ -335,17 +334,30 @@ impl RunOutputMode {
 
 fn main() {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
-    let _signals = match ProcessSignalGuard::install() {
-        Ok(signals) => signals,
+    let exit = match ProcessSignalGuard::install() {
+        Ok(signals) => {
+            let exit = match run(&args) {
+                Ok(()) => 0,
+                Err(error) => {
+                    let exit = exit_code(&error);
+                    match print_error(&args, &error) {
+                        Ok(()) => exit,
+                        Err(projection_error) => exit_code(&projection_error),
+                    }
+                }
+            };
+            // Restore SIGINT, SIGTERM, SIGHUP, and SIGPIPE before the final
+            // process exit. `std::process::exit` does not run Drop handlers.
+            drop(signals);
+            exit
+        }
         Err(error) => {
-            print_error(&args, &error);
-            std::process::exit(exit_code(&error));
+            let exit = exit_code(&error);
+            let _ = print_error(&args, &error);
+            exit
         }
     };
-    if let Err(error) = run(&args) {
-        print_error(&args, &error);
-        std::process::exit(exit_code(&error));
-    }
+    std::process::exit(exit);
 }
 
 fn run(args: &[String]) -> Result<(), RuntimeError> {
@@ -364,13 +376,13 @@ fn run(args: &[String]) -> Result<(), RuntimeError> {
     }
 }
 
-fn print_error(args: &[String], error: &RuntimeError) {
+fn print_error(args: &[String], error: &RuntimeError) -> Result<(), RuntimeError> {
     match error_output_projection(args) {
         ErrorOutputProjection::Human => print_human_error(error),
         ErrorOutputProjection::Json => print_json_error(error),
         ErrorOutputProjection::Both => {
-            print_human_error(error);
-            print_json_error(error);
+            print_human_error(error)?;
+            print_json_error(error)
         }
     }
 }
@@ -417,22 +429,22 @@ fn error_output_projection(args: &[String]) -> ErrorOutputProjection {
     }
 }
 
-fn print_json_error(error: &RuntimeError) {
-    write_stderr_line(serde_json::to_string(error).unwrap_or_else(|_| error.to_string()));
+fn print_json_error(error: &RuntimeError) -> Result<(), RuntimeError> {
+    write_stderr_line(serde_json::to_string(error).unwrap_or_else(|_| error.to_string()))
 }
 
-fn print_human_error(error: &RuntimeError) {
+fn print_human_error(error: &RuntimeError) -> Result<(), RuntimeError> {
     write_stderr_line(format!(
         "error: {}: {}",
         error_code_wire(error),
         error.message
-    ));
-    for cause in &error.causes {
+    ))?;
+    for cause in error.causes.iter() {
         write_stderr_line(format!(
             "  cause: {}: {}",
             error_code_wire_value(cause.code),
             cause.message
-        ));
+        ))?;
     }
     if let Some(projections) = error.details.get("projections").and_then(Value::as_array) {
         for projection in projections {
@@ -450,30 +462,31 @@ fn print_human_error(error: &RuntimeError) {
                 .unwrap_or("io");
             write_stderr_line(format!(
                 "  projection: {stream} {operation} failed ({kind})"
-            ));
+            ))?;
         }
     }
-    print_path_detail(error, "state-root", "stateRoot");
-    print_path_detail(error, "registry-dir", "registryDir");
-    print_path_detail(error, "registry", "registryPath");
-    print_path_detail(error, "logs", "logsDir");
-    print_path_detail(error, "run-summary", "runSummaryPath");
+    print_path_detail(error, "state-root", "stateRoot")?;
+    print_path_detail(error, "registry-dir", "registryDir")?;
+    print_path_detail(error, "registry", "registryPath")?;
+    print_path_detail(error, "logs", "logsDir")?;
+    print_path_detail(error, "run-summary", "runSummaryPath")?;
     if let Some(expected) = registry_identity_detail(error, "expectedRegistryIdentity") {
-        write_stderr_line(format!("expected: {expected}"));
+        write_stderr_line(format!("expected: {expected}"))?;
     }
     if let Some(found) = registry_identity_detail(error, "foundRegistryIdentity") {
-        write_stderr_line(format!("found: {found}"));
+        write_stderr_line(format!("found: {found}"))?;
     }
     if let Some(fields) = mismatched_fields_detail(error) {
-        write_stderr_line(format!("mismatch: {fields}"));
+        write_stderr_line(format!("mismatch: {fields}"))?;
     }
-    print_recovery_hint(error);
+    print_recovery_hint(error)
 }
 
-fn print_path_detail(error: &RuntimeError, label: &str, key: &str) {
+fn print_path_detail(error: &RuntimeError, label: &str, key: &str) -> Result<(), RuntimeError> {
     if let Some(value) = string_detail(error, key) {
-        write_stderr_line(format!("{label}: {}", human_path(Path::new(value))));
+        write_stderr_line(format!("{label}: {}", human_path(Path::new(value))))?;
     }
+    Ok(())
 }
 
 fn registry_identity_detail(error: &RuntimeError, key: &str) -> Option<String> {
@@ -503,25 +516,26 @@ fn mismatched_fields_detail(error: &RuntimeError) -> Option<String> {
     (!fields.is_empty()).then(|| fields.join(", "))
 }
 
-fn print_recovery_hint(error: &RuntimeError) {
+fn print_recovery_hint(error: &RuntimeError) -> Result<(), RuntimeError> {
     if !matches!(
         error.code,
         nixfied_runtime::ErrorCode::StateUnowned | nixfied_runtime::ErrorCode::RuntimeAbiMismatch
     ) {
-        return;
+        return Ok(());
     }
     if string_detail(error, "stateRoot").is_none() && string_detail(error, "registryDir").is_none()
     {
-        return;
+        return Ok(());
     }
-    write_stderr_line("hint: do not delete the whole Nixfied state base");
+    write_stderr_line("hint: do not delete the whole Nixfied state base")?;
     write_stderr_line(
         "hint: after confirming no owned processes are live, reset only the state-root and registry-dir above",
-    );
+    )
 }
 
-fn write_stderr_line(line: impl Display) {
-    let _ = writeln!(io::stderr().lock(), "{line}");
+fn write_stderr_line(line: impl Display) -> Result<(), RuntimeError> {
+    writeln!(io::stderr().lock(), "{line}")
+        .map_err(|error| output_projection_io_error("stderr", "write", "<stderr>", error))
 }
 
 fn string_detail<'a>(error: &'a RuntimeError, key: &str) -> Option<&'a str> {
@@ -610,8 +624,6 @@ fn run_m0(args: &[String]) -> Result<(), RuntimeError> {
         options.output_mode,
         options.task.as_deref(),
     )?;
-    let selected_slot =
-        select_slot(&loaded.model, options.selection.slot).map_err(post_admission_error)?;
     let redactor = Redactor::from_secrets(&admission.secrets);
     let model_path = admission.model_path.clone();
     let computed_model_hash = admission.computed_model_hash.clone();
@@ -737,8 +749,9 @@ fn run_m0_placed(
     registry.set_redactor(redactor.clone());
     let _ = nixfied_runtime::control::reconcile_registry(&mut registry)?;
     let upgrade = prepare_slot_state(placement, &identity, &mut registry, options.timeout_ms)?;
-    if upgrade.upgraded && options.output_mode.emit_summary() {
-        if let Err(error) = write_diagnostic(
+    if upgrade.upgraded
+        && options.output_mode.emit_summary()
+        && let Err(error) = write_diagnostic(
             options.output_mode,
             format_args!(
                 "  upgraded slot state from model {} (state {})",
@@ -749,9 +762,9 @@ fn run_m0_placed(
                     "preserved"
                 }
             ),
-        ) {
-            diagnostic_failures.push(error);
-        }
+        )
+    {
+        diagnostic_failures.push(error);
     }
 
     // A run drives one selected task: its flattened nodes plus the derived
@@ -848,13 +861,13 @@ fn run_m0_placed(
     };
     for binding in &plan.services {
         let service_name = binding.service_name.as_str();
-        if options.output_mode.emit_summary() {
-            if let Err(error) = write_diagnostic(
+        if options.output_mode.emit_summary()
+            && let Err(error) = write_diagnostic(
                 options.output_mode,
                 format_args!("  starting service {service_name}"),
-            ) {
-                diagnostic_failures.push(error);
-            }
+            )
+        {
+            diagnostic_failures.push(error);
         }
 
         // prepare-as-task: the runner executes the prepare task's flattened
@@ -920,16 +933,16 @@ fn run_m0_placed(
                             };
                             dependencies.push(dependency);
                         }
-                        if output_mode.emit_summary() {
-                            if let Err(error) = write_diagnostic(
+                        if output_mode.emit_summary()
+                            && let Err(error) = write_diagnostic(
                                 output_mode,
                                 format_args!(
                                     "  prepare node {} ({})",
                                     node.node_id, node.task_id
                                 ),
-                            ) {
-                                diagnostic_failures.push(error);
-                            }
+                            )
+                        {
+                            diagnostic_failures.push(error);
                         }
                         let task_result = run_dependent_task_cancellable(
                             placement,
@@ -962,9 +975,11 @@ fn run_m0_placed(
                                 ));
                             }
                             Err(TaskExecutionError::BeforeTerminal(error)) => {
-                                return Err(PrepareTaskError::new(error, task_runs));
+                                return Err(PrepareTaskError::new(*error, task_runs));
                             }
                             Err(TaskExecutionError::AfterTerminal { error, evidence }) => {
+                                let error = *error;
+                                let evidence = *evidence;
                                 let (task_run, _) = evidence.into_task_and_replay();
                                 task_runs.push(task_run.clone());
                                 return Err(PrepareTaskError::new(
@@ -1133,17 +1148,17 @@ fn run_m0_placed(
                 if direct_selected {
                     selected_task_run = Some(task_run.clone());
                 }
-                if options.output_mode.emit_summary() {
-                    if let Err(error) = write_diagnostic(
+                if options.output_mode.emit_summary()
+                    && let Err(error) = write_diagnostic(
                         options.output_mode,
                         format_args!(
                             "  ok {} ({task_id}) {}",
                             node.node_id,
                             human_duration(task_run.duration_ms)
                         ),
-                    ) {
-                        diagnostic_failures.push(error);
-                    }
+                    )
+                {
+                    diagnostic_failures.push(error);
                 }
                 node_results.push(NodeResult {
                     node_id: node.node_id.as_str().to_string(),
@@ -1177,10 +1192,12 @@ fn run_m0_placed(
                 finish_run!(error, Vec::new());
             }
             Err(TaskExecutionError::BeforeTerminal(error)) => {
-                let error = error.with_detail("failedNodeId", node.node_id.as_str());
+                let error = (*error).with_detail("failedNodeId", node.node_id.as_str());
                 finish_run!(error, Vec::new());
             }
             Err(TaskExecutionError::AfterTerminal { error, evidence }) => {
+                let error = *error;
+                let evidence = *evidence;
                 let (task_run, ticket) = evidence.into_task_and_replay();
                 replay_ticket = ticket.or(replay_ticket);
                 if direct_selected {
@@ -1283,6 +1300,7 @@ fn output_projection_io_error(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn task_failure_with_evidence(
     error: RuntimeError,
     node_id: &str,
@@ -1964,7 +1982,7 @@ fn load_model_admitted(
     } else {
         Admission::check_for_control(&loaded, &context)?
     };
-    warn_on_ephemeral_port_overlap(&loaded.model);
+    warn_on_ephemeral_port_overlap(&loaded.model)?;
     Ok((loaded, admission))
 }
 
@@ -1973,9 +1991,9 @@ fn load_model_admitted(
 /// any process, so a deterministic window inside it can collide with unrelated
 /// ephemeral allocations. The range is host state only Linux exposes a stable
 /// path for; elsewhere the check is silently skipped.
-fn warn_on_ephemeral_port_overlap(model: &nixfied_model::Model) {
+fn warn_on_ephemeral_port_overlap(model: &nixfied_model::Model) -> Result<(), RuntimeError> {
     let Some((low, high)) = host_ephemeral_port_range() else {
-        return;
+        return Ok(());
     };
     for placement in model.placement.slot_placements.values() {
         let window = &placement.candidate_ports;
@@ -1983,9 +2001,10 @@ fn warn_on_ephemeral_port_overlap(model: &nixfied_model::Model) {
             write_stderr_line(format_args!(
                 "warning: slot {} candidate port window {}-{} overlaps the host ephemeral port range {low}-{high}; deterministic ports may collide with ephemeral allocations (set nixfied.placement.ports.base outside the range)",
                 placement.slot, window.start, window.end
-            ));
+            ))?;
         }
     }
+    Ok(())
 }
 
 fn host_ephemeral_port_range() -> Option<(u32, u32)> {

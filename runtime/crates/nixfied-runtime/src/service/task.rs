@@ -76,14 +76,25 @@ pub enum TaskExecution {
 
 #[derive(Debug)]
 pub enum TaskExecutionError {
-    BeforeTerminal(RuntimeError),
+    BeforeTerminal(Box<RuntimeError>),
     AfterTerminal {
-        error: RuntimeError,
-        evidence: CompletedEvidence,
+        error: Box<RuntimeError>,
+        evidence: Box<CompletedEvidence>,
     },
 }
 
 impl TaskExecutionError {
+    fn before(error: RuntimeError) -> Self {
+        Self::BeforeTerminal(Box::new(error))
+    }
+
+    fn after(error: RuntimeError, evidence: CompletedEvidence) -> Self {
+        Self::AfterTerminal {
+            error: Box::new(error),
+            evidence: Box::new(evidence),
+        }
+    }
+
     pub fn error(&self) -> &RuntimeError {
         match self {
             Self::BeforeTerminal(error) | Self::AfterTerminal { error, .. } => error,
@@ -92,8 +103,8 @@ impl TaskExecutionError {
 
     pub fn into_error_and_evidence(self) -> (RuntimeError, Option<CompletedEvidence>) {
         match self {
-            Self::BeforeTerminal(error) => (error, None),
-            Self::AfterTerminal { error, evidence } => (error, Some(evidence)),
+            Self::BeforeTerminal(error) => (*error, None),
+            Self::AfterTerminal { error, evidence } => (*error, Some(*evidence)),
         }
     }
 }
@@ -103,17 +114,20 @@ impl TaskExecutionError {
 /// completed task evidence for summaries and public error details.
 #[derive(Debug)]
 pub struct PrepareTaskError {
-    error: RuntimeError,
+    error: Box<RuntimeError>,
     task_runs: Vec<TaskRun>,
 }
 
 impl PrepareTaskError {
     pub fn new(error: RuntimeError, task_runs: Vec<TaskRun>) -> Self {
-        Self { error, task_runs }
+        Self {
+            error: Box::new(error),
+            task_runs,
+        }
     }
 
     pub fn into_parts(self) -> (RuntimeError, Vec<TaskRun>) {
-        (self.error, self.task_runs)
+        (*self.error, self.task_runs)
     }
 }
 
@@ -171,6 +185,7 @@ pub fn run_dependent_task(
 /// `dependsOnServicesReady` (which may be empty). The run-level context comes from
 /// `run_context`; the first dependency, if any, is the primary that provides
 /// `${port}`/`${host}` substitution.
+#[allow(clippy::too_many_arguments)]
 pub fn run_dependent_task_cancellable(
     placement: &HostPlacement,
     registry: &mut Registry,
@@ -193,6 +208,7 @@ pub fn run_dependent_task_cancellable(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_dependent_task_with_evidence(
     placement: &HostPlacement,
     registry: &mut Registry,
@@ -203,12 +219,9 @@ fn run_dependent_task_with_evidence(
     cancellation: &CancellationToken,
     evidence: EvidenceMode,
 ) -> Result<TaskExecution, TaskExecutionError> {
-    cancellation
-        .check()
-        .map_err(TaskExecutionError::BeforeTerminal)?;
+    cancellation.check().map_err(TaskExecutionError::before)?;
     let task_id = task.task_id.as_str();
-    ensure_task_dependencies(registry, task, dependencies)
-        .map_err(TaskExecutionError::BeforeTerminal)?;
+    ensure_task_dependencies(registry, task, dependencies).map_err(TaskExecutionError::before)?;
     // The first dependency is the primary, providing bare ${port}/${host};
     // every declared dependency is addressable by name via ${port:<serviceId>}
     // and ${host:<serviceId>}. A task with no services runs in the run context
@@ -249,13 +262,13 @@ fn run_dependent_task_with_evidence(
         .join(format!("task.{node_id}.stderr.log"));
     let args = substitution
         .args(&exec.args)
-        .map_err(TaskExecutionError::BeforeTerminal)?;
+        .map_err(TaskExecutionError::before)?;
     let env = substitution
         .env(&exec.env)
-        .map_err(TaskExecutionError::BeforeTerminal)?;
+        .map_err(TaskExecutionError::before)?;
     let env = exec.env_with_path(env);
-    let command_cwd = resolve_exec_cwd(run_context.source_root, &exec.cwd)
-        .map_err(TaskExecutionError::BeforeTerminal)?;
+    let command_cwd =
+        resolve_exec_cwd(run_context.source_root, &exec.cwd).map_err(TaskExecutionError::before)?;
     let command_json = serde_json::to_string(&TaskCommandRecord {
         task_id,
         executable: exec.executable.as_str(),
@@ -265,14 +278,12 @@ fn run_dependent_task_with_evidence(
         stderr_path: stderr_path.as_path(),
     })
     .map_err(|error| {
-        TaskExecutionError::BeforeTerminal(RuntimeError::new(
+        TaskExecutionError::before(RuntimeError::new(
             ErrorCode::LifecycleFailed,
             error.to_string(),
         ))
     })?;
-    cancellation
-        .check()
-        .map_err(TaskExecutionError::BeforeTerminal)?;
+    cancellation.check().map_err(TaskExecutionError::before)?;
     let started = Instant::now();
     let mut child = spawn_task(
         exec,
@@ -283,18 +294,18 @@ fn run_dependent_task_with_evidence(
         &stderr_path,
         run_context.redactor,
     )
-    .map_err(TaskExecutionError::BeforeTerminal)?;
+    .map_err(TaskExecutionError::before)?;
     let pid = child.child.id();
     let pgid = match process_group(pid) {
         Ok(Some(pgid)) => pgid,
         Ok(None) => {
-            return Err(TaskExecutionError::BeforeTerminal(cleanup_unrecorded_task(
+            return Err(TaskExecutionError::before(cleanup_unrecorded_task(
                 child,
                 RuntimeError::new(ErrorCode::ProcEscape, "task process disappeared"),
             )));
         }
         Err(error) => {
-            return Err(TaskExecutionError::BeforeTerminal(cleanup_unrecorded_task(
+            return Err(TaskExecutionError::before(cleanup_unrecorded_task(
                 child, error,
             )));
         }
@@ -333,7 +344,7 @@ fn run_dependent_task_with_evidence(
             .into_iter()
             .chain(wait_error)
             .fold(error, |error, cleanup| error.with_cause(cleanup));
-        return Err(TaskExecutionError::BeforeTerminal(error));
+        return Err(TaskExecutionError::before(error));
     }
     let outcome = wait_for_task(
         registry,
@@ -348,11 +359,8 @@ fn run_dependent_task_with_evidence(
             computed_model_hash: run_context.computed_model_hash,
         },
     )
-    .map_err(TaskExecutionError::BeforeTerminal)?;
-    child
-        .logs
-        .join()
-        .map_err(TaskExecutionError::BeforeTerminal)?;
+    .map_err(TaskExecutionError::before)?;
+    child.logs.join().map_err(TaskExecutionError::before)?;
     let duration_ms = elapsed_ms(started);
     let canceled = outcome.canceled;
     let timed_out = outcome.timed_out;
@@ -402,25 +410,25 @@ fn run_dependent_task_with_evidence(
         },
     };
     if let Err(error) = write_summary(evidence.task_run(), run_context.redactor) {
-        return Err(TaskExecutionError::AfterTerminal { error, evidence });
+        return Err(TaskExecutionError::after(error, evidence));
     }
     let mut payload_value = match serde_json::to_value(evidence.task_run()) {
         Ok(value) => value,
         Err(error) => {
-            return Err(TaskExecutionError::AfterTerminal {
-                error: RuntimeError::new(ErrorCode::LifecycleFailed, error.to_string()),
+            return Err(TaskExecutionError::after(
+                RuntimeError::new(ErrorCode::LifecycleFailed, error.to_string()),
                 evidence,
-            });
+            ));
         }
     };
     run_context.redactor.redact_value(&mut payload_value);
     let payload_json = match serde_json::to_string(&payload_value) {
         Ok(value) => value,
         Err(error) => {
-            return Err(TaskExecutionError::AfterTerminal {
-                error: RuntimeError::new(ErrorCode::LifecycleFailed, error.to_string()),
+            return Err(TaskExecutionError::after(
+                RuntimeError::new(ErrorCode::LifecycleFailed, error.to_string()),
                 evidence,
-            });
+            ));
         }
     };
     if let Err(error) = mark_task_finished(
@@ -431,7 +439,7 @@ fn run_dependent_task_with_evidence(
         task_terminal_status(success, timed_out, canceled),
         &payload_json,
     ) {
-        return Err(TaskExecutionError::AfterTerminal { error, evidence });
+        return Err(TaskExecutionError::after(error, evidence));
     }
     // The run's evidence (exit code, log and summary paths) already exists;
     // carry it on the error so the failure surface links to it instead of

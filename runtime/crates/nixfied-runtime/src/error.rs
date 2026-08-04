@@ -62,16 +62,47 @@ impl RuntimeCause {
         Self {
             code: error.code,
             exit_class: error.exit_class,
-            message: format!(
-                "cause: {}",
-                serde_json::to_value(error.code)
-                    .ok()
-                    .and_then(|value| value.as_str().map(str::to_string))
-                    .unwrap_or_else(|| format!("{:?}", error.code))
-            ),
+            message: cause_message(&error),
             details: cause_details(error.code, error.details),
         }
     }
+}
+
+fn cause_message(error: &RuntimeError) -> String {
+    match error.code {
+        // These execution messages are constructed from validated model ids
+        // and terminal facts, so retaining them makes compound failures
+        // actionable without admitting arbitrary infrastructure text.
+        ErrorCode::TaskFailed => task_failure_cause_message(&error.details)
+            .unwrap_or_else(|| format!("cause: {}", error_code_wire(error.code))),
+        ErrorCode::Canceled | ErrorCode::DependencyUnavailable => error.message.clone(),
+        _ => format!("cause: {}", error_code_wire(error.code)),
+    }
+}
+
+fn task_failure_cause_message(details: &Value) -> Option<String> {
+    let task_run = details.get("taskRun")?;
+    let task_id = task_run.get("taskId")?.as_str()?;
+    if task_run
+        .get("timedOut")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return Some(format!("task {task_id} timed out"));
+    }
+    let exit_code = task_run
+        .get("exitCode")
+        .and_then(Value::as_i64)
+        .map(|code| code.to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+    Some(format!("task {task_id} exited with code {exit_code}"))
+}
+
+fn error_code_wire(code: ErrorCode) -> String {
+    serde_json::to_value(code)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_string))
+        .unwrap_or_else(|| format!("{code:?}"))
 }
 
 /// Causes are a typed summary boundary, not a second copy of an arbitrary
@@ -152,6 +183,10 @@ fn cause_details(code: ErrorCode, details: Value) -> Value {
     Value::Object(safe)
 }
 
+fn causes_empty(causes: &[RuntimeCause]) -> bool {
+    causes.is_empty()
+}
+
 #[derive(Debug, Error, Serialize)]
 #[serde(rename_all = "camelCase")]
 #[error("{code:?}: {message}")]
@@ -160,8 +195,8 @@ pub struct RuntimeError {
     pub exit_class: ExitClass,
     pub message: String,
     pub details: Value,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub causes: Vec<RuntimeCause>,
+    #[serde(default, skip_serializing_if = "causes_empty")]
+    pub causes: Box<Vec<RuntimeCause>>,
     pub model_path: Option<PathBuf>,
     pub computed_model_hash: Option<String>,
 }
@@ -173,7 +208,7 @@ impl RuntimeError {
             exit_class: ExitClass::Error,
             message: message.into(),
             details: Value::Object(Map::new()),
-            causes: Vec::new(),
+            causes: Box::new(Vec::new()),
             model_path: None,
             computed_model_hash: None,
         }
@@ -410,12 +445,23 @@ mod tests {
                 "failed to signal process group: secret-value and /private/path",
             )
             .with_detail("error", "raw operating-system text")
-            .with_detail("taskRun", serde_json::json!({"success": false})),
+            .with_detail(
+                "taskRun",
+                serde_json::json!({
+                    "taskId": "smoke",
+                    "exitCode": 7,
+                    "timedOut": false,
+                    "success": false
+                }),
+            ),
         );
         let wire = serde_json::to_value(compound).expect("compound error should serialize");
         let cause = &wire["causes"][0];
         assert_eq!(cause["code"], serde_json::json!("TASK_FAILED"));
-        assert_eq!(cause["message"], serde_json::json!("cause: TASK_FAILED"));
+        assert_eq!(
+            cause["message"],
+            serde_json::json!("task smoke exited with code 7")
+        );
         assert_eq!(
             cause["details"]["taskRun"]["success"],
             serde_json::json!(false)

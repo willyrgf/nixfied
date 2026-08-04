@@ -62,22 +62,38 @@ impl ProcessSignalGuard {
         PROCESS_SIGNAL_CANCELED.store(false, Ordering::SeqCst);
         let mut previous = Vec::with_capacity(4);
         for signal in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP] {
-            previous.push(install_handler(signal)?);
+            match install_handler(signal) {
+                Ok(previous_action) => previous.push(previous_action),
+                Err(error) => {
+                    restore_handlers(&previous);
+                    return Err(error);
+                }
+            }
         }
         // Replay writes must observe EPIPE as a typed projection issue.  The
         // default disposition would terminate the runtime before the worker can
         // report the broken pipe.  The prior disposition is restored by Drop.
-        previous.push(install_ignore_handler(libc::SIGPIPE)?);
+        match install_ignore_handler(libc::SIGPIPE) {
+            Ok(previous_action) => previous.push(previous_action),
+            Err(error) => {
+                restore_handlers(&previous);
+                return Err(error);
+            }
+        }
         Ok(Self { previous })
     }
 }
 
 impl Drop for ProcessSignalGuard {
     fn drop(&mut self) {
-        for (signal, previous) in self.previous.iter().rev() {
-            unsafe {
-                libc::sigaction(*signal, previous, std::ptr::null_mut());
-            }
+        restore_handlers(&self.previous);
+    }
+}
+
+fn restore_handlers(previous: &[(libc::c_int, libc::sigaction)]) {
+    for (signal, previous) in previous.iter().rev() {
+        unsafe {
+            libc::sigaction(*signal, previous, std::ptr::null_mut());
         }
     }
 }

@@ -1158,24 +1158,24 @@ pub type PrepareRunner<'a> =
 /// must survive both success and failure without an optional side channel.
 #[derive(Debug)]
 pub struct ServiceStartError {
-    error: RuntimeError,
+    error: Box<RuntimeError>,
     prepare_runs: Vec<TaskRun>,
 }
 
 impl ServiceStartError {
     fn new(error: RuntimeError, prepare_runs: Vec<TaskRun>) -> Self {
         Self {
-            error,
+            error: Box::new(error),
             prepare_runs,
         }
     }
 
     pub fn error(&self) -> &RuntimeError {
-        &self.error
+        self.error.as_ref()
     }
 
     pub fn into_parts(self) -> (RuntimeError, Vec<TaskRun>) {
-        (self.error, self.prepare_runs)
+        (*self.error, self.prepare_runs)
     }
 }
 
