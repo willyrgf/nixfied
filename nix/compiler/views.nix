@@ -21,6 +21,7 @@ let
         "### `${taskId}`"
         ""
         "- kind: `${task.kind}`"
+        "- default output: `${task.defaultOutput}`"
         "- service lifetime: `${task.serviceLifetime}`"
         "- services required: ${inlineList task.servicesRequired}"
         "- artifact refs: ${inlineList (task.artifactRefs or [ ])}"

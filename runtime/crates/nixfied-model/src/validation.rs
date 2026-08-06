@@ -499,6 +499,13 @@ fn validate_tasks(model: &Model) -> Result<(), ValidationError> {
                         actual: format!("{id}: {{}}"),
                     });
                 }
+                if task.default_output != TaskDefaultOutput::Summary {
+                    return Err(ValidationError::UnsupportedValue {
+                        field: "tasks.defaultOutput",
+                        expected: "summary on a composite task",
+                        actual: format!("{id}: {:?}", task.default_output),
+                    });
+                }
                 if task.operation_id.is_some()
                     || task.invocation.is_some()
                     || task.exit_policy.is_some()

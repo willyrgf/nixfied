@@ -282,12 +282,14 @@ govern files, cache contents, or sockets a child chooses to write on its own.
 
 ## Output Control
 
-`run` has four output projections selected by runtime-owned flags. `summary` is
-the default: progress, concise pass/fail summaries, and pointers to the run
-summary and log directory on stderr, with stdout empty. `json` (`--json`) is the
-structured automation contract: run/task/node results, diagnostic `durationMs`,
-and evidence paths on stdout, with human run-summary narration suppressed.
-`both` (`--both`) emits both projections explicitly for diagnostics.
+`run` has four output projections selected by one canonical runtime-owned
+option. `--output summary` is the human default: progress, concise pass/fail
+summaries, and pointers to the run summary and log directory on stderr, with
+stdout empty. `--output json` is the structured automation contract: run/task/
+node results, diagnostic `durationMs`, and evidence paths on stdout, with human
+run-summary narration suppressed. `--output both` emits both projections
+explicitly for diagnostics. When the option is omitted, the runtime uses the
+selected root task's model `defaultOutput`, whose normal value is `summary`.
 
 `--output task-output` is a separate direct-leaf boundary. The runtime validates
 one explicit leaf after admission but before slot selection, placement, state,
@@ -310,9 +312,9 @@ stdout/stderr otherwise stays in redacted log files, and no `logs` command is
 part of the public surface.
 
 Runtime failures use the same projection rule: default runtime execution prints a
-human-readable error on stderr; `run --json` prints the structured `RuntimeError`;
-and `run --both` prints human text followed by the JSON error as the final stderr
-line. Registry/state refusals must point at the selected slot paths instead of
+human-readable error on stderr; `run --output json` prints the structured
+`RuntimeError`; and `run --output both` prints human text followed by the JSON
+error as the final stderr line. Registry/state refusals must point at the selected slot paths instead of
 encouraging broad deletion: `REGISTRY_CORRUPT` is structural registry damage,
 `STATE_UNOWNED` is project/environment/slot ownership mismatch, and
 `RUNTIME_ABI_MISMATCH` is a runtime/toolchain contract mismatch.

@@ -434,6 +434,14 @@ pub enum ContainmentRequirement {
     ProcessTree,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum TaskDefaultOutput {
+    #[default]
+    Summary,
+    TaskOutput,
+}
+
 /// A task is a **leaf** (one bounded invocation with orchestration: requires,
 /// exit policy, evidence refs) or a **composite** (a static named-step DAG over
 /// task references — STATIC-1: no parameters, conditionals, retries, or loops).
@@ -444,6 +452,8 @@ pub enum ContainmentRequirement {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TaskSpec {
     pub kind: TaskKind,
+    #[serde(default)]
+    pub default_output: TaskDefaultOutput,
     pub service_lifetime: ServiceLifetime,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operation_id: Option<OperationId>,

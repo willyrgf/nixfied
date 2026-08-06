@@ -315,6 +315,7 @@ fn lower_task(
 ) -> RuntimeResult<LoweredTask> {
     let TaskSpec {
         kind,
+        default_output: _,
         service_lifetime,
         operation_id: _,
         invocation,

@@ -286,14 +286,17 @@ steps that happen to precede it in some composite; select the composite when
 those dependencies are part of the intended workflow.
 
 Pass runtime flags after Nix's `--` separator. `run` and exported verbs accept
-`--slot`, `--timeout-ms`, and the output flags. `model-check` and `ps` accept
+`--slot`, `--timeout-ms`, and `--output <mode>`. `model-check` and `ps` accept
 `--slot`; `down` also accepts `--timeout-ms`; `clean` accepts `--purge`. Use the
 app's `--help` as the exact flag reference.
 
-The default run projection writes human progress, the result summary, and
-evidence paths to stderr while leaving stdout empty. `--json` writes structured
-output to stdout; `--both` requests both projections explicitly. Child
-stdout/stderr is captured in redacted run log files and is not replayed inline.
+The default run projection is `summary`: it writes human progress, the result
+summary, and evidence paths to stderr while leaving stdout empty. A task may
+declare `defaultOutput = "task-output"` to make its direct application
+interface the default. Explicit `--output <mode>` always wins. `--output json`
+writes structured output to stdout; `--output both` requests both projections
+explicitly. Child stdout/stderr is captured in redacted run log files and is not
+replayed inline.
 
 For an application-shaped leaf, request the already redacted captured bytes
 explicitly:
@@ -308,8 +311,8 @@ stderr. It preserves binary bytes and missing final newlines, and replays on
 success, task failure, timeout, and cancellation. Check the command status
 before treating stdout as a valid result; a child exit accepted by
 `exitPolicy.successCodes` still returns success. Composite selections and
-metadata output flags are rejected before runtime state or child side effects.
-There is no `--task-output` spelling alias. There is no framework `logs`
+metadata output modes are rejected before runtime state or child side effects.
+There are no mode-specific flag aliases. There is no framework `logs`
 command: metadata modes report the evidence paths for inspection.
 
 ## Services, slots, and state

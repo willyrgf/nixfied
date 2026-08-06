@@ -65,6 +65,10 @@ fn set_task_run_args(model: &mut Value, args: &[String]) {
     model["tasks"]["smoke"]["invocation"]["run"] = Value::Array(run);
 }
 
+fn set_task_default_output(model: &mut Value, output: &str) {
+    model["tasks"]["smoke"]["defaultOutput"] = json!(output);
+}
+
 fn command(fixture: &RuntimeFixture, extra: &[&str]) -> Command {
     let mut command = Command::new(runtime_binary());
     command
@@ -112,17 +116,7 @@ fn direct_leaf_replays_exact_binary_without_metadata() {
         hex(stderr),
     ];
     let fixture = fixture(task_model(&args));
-    let output = run(
-        &fixture,
-        &[
-            "--task",
-            "smoke",
-            "--output",
-            "task-output",
-            "--output",
-            "task-output",
-        ],
-    );
+    let output = run(&fixture, &["--task", "smoke", "--output", "task-output"]);
 
     assert!(
         output.status.success(),
@@ -134,6 +128,75 @@ fn direct_leaf_replays_exact_binary_without_metadata() {
     assert!(
         !output.stdout.windows(1).any(|window| window == b"{"),
         "task-output stdout must not contain runtime JSON"
+    );
+}
+
+#[test]
+fn leaf_default_replays_when_output_is_omitted() {
+    let stdout = b"default stdout";
+    let stderr = b"default stderr";
+    let mut model = task_model(&[
+        "output".to_string(),
+        "hex".to_string(),
+        hex(stdout),
+        hex(stderr),
+    ]);
+    no_service(&mut model);
+    set_task_default_output(&mut model, "task-output");
+    let fixture = fixture(model);
+    let output = run(&fixture, &["--task", "smoke"]);
+
+    assert!(
+        output.status.success(),
+        "implicit task-output failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, stdout);
+    assert_stream_contains(&output.stderr, stderr, "stderr");
+}
+
+#[test]
+fn explicit_output_overrides_leaf_default() {
+    let mut model = task_model(&["exit".to_string(), "0".to_string()]);
+    no_service(&mut model);
+    set_task_default_output(&mut model, "task-output");
+    let fixture = fixture(model);
+    let output = run(&fixture, &["--task", "smoke", "--output", "summary"]);
+
+    assert!(
+        output.status.success(),
+        "explicit summary failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "summary must not replay task stdout"
+    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("result: ok"));
+}
+
+#[test]
+fn composite_selection_uses_its_metadata_default_not_a_child_default() {
+    let mut model = task_model(&["exit".to_string(), "0".to_string()]);
+    set_task_default_output(&mut model, "task-output");
+    model["tasks"]["pipeline"] = json!({
+        "kind": "composite",
+        "defaultOutput": "summary",
+        "serviceLifetime": "run-scoped",
+        "servicesRequired": ["synthetic"],
+        "steps": { "only": { "task": "smoke", "dependsOn": [] } }
+    });
+    let fixture = fixture(model);
+    let output = run(&fixture, &["--task", "pipeline"]);
+
+    assert!(
+        output.status.success(),
+        "composite run failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "composites must not replay child output"
     );
 }
 
@@ -414,7 +477,7 @@ fn parser_refuses_missing_unknown_repeated_and_alias_selections() {
     assert_eq!(output.status.code(), Some(37));
     assert!(!repeated.state_base.exists());
 
-    for spelling in ["--task-output", "--output"] {
+    for spelling in ["--task-output", "--json", "--both", "--summary", "--output"] {
         let alias = fixture(model.clone());
         let args = if spelling == "--output" {
             vec!["--task", "smoke", "--output", "task_output"]
@@ -430,9 +493,9 @@ fn parser_refuses_missing_unknown_repeated_and_alias_selections() {
 #[test]
 fn task_output_conflicts_regardless_of_flag_order_and_projects_errors() {
     for args in [
-        ["--output", "task-output", "--json"],
-        ["--json", "--output", "task-output"],
-        ["--both", "--output", "task-output"],
+        ["--output", "task-output", "--output", "json"],
+        ["--output", "json", "--output", "task-output"],
+        ["--output", "summary", "--output", "both"],
     ] {
         let fixture = fixture(task_model(&["exit".to_string(), "0".to_string()]));
         let output = run(&fixture, &args);
@@ -440,10 +503,6 @@ fn task_output_conflicts_regardless_of_flag_order_and_projects_errors() {
         assert!(output.stdout.is_empty());
         assert!(!fixture.state_base.exists());
         assert!(String::from_utf8_lossy(&output.stderr).contains("OUTPUT_MODE_CONFLICT"));
-        if args.contains(&"--json") {
-            let json = common::stderr_json(&output.stderr);
-            assert_eq!(json["code"], json!("OUTPUT_MODE_CONFLICT"));
-        }
     }
 }
 

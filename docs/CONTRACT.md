@@ -162,6 +162,10 @@ when the model/runtime contract changes.
   error JSON. Resolved secrets exist only in runtime memory and hermetic child
   environments. Files and sockets written directly by a child are outside this
   guarantee.
+- A task's `defaultOutput` is part of the model contract. `summary` is the
+  normal default; `task-output` is valid only for a directly selected leaf.
+  A leaf's default never propagates through a composite or a service prepare
+  execution.
 
 ## Output and failure contract
 
@@ -182,17 +186,19 @@ when the model/runtime contract changes.
   `upgrade`. `--no-lock` is an explicit URL-only mode that reports
   documentation and candidate verification as skipped. This surface is Nix-only
   and does not enter `model.json`, `runtimeAbi`, or Rust runtime behavior.
-- `run` defaults to the human `summary` projection: progress, pass/fail summary,
-  and evidence pointers on stderr, with stdout empty. `--json` is the stable
-  structured projection; `--both` explicitly emits both. `--output task-output`
-  is an opt-in projection for exactly one directly selected leaf: stdout is the
-  selected task's exact redacted captured stdout, while stderr contains runtime
-  diagnostics and the exact redacted captured stderr. It emits no runtime JSON
-  metadata to stdout. Callers must check the process status before consuming
-  replayed bytes; accepted child exit codes still produce a successful run.
-  Composite selections, missing/unknown/repeated selections, and metadata-mode
-  conflicts are rejected before state or child side effects. There is no
-  `--task-output` alias and no `logs` control command.
+- `run` resolves its output projection as explicit `--output <mode>`, then the
+  selected root task's `defaultOutput`, then `summary`. The canonical modes are
+  `summary`, `json`, `both`, and `task-output`; the older mode-specific flags
+  are not accepted. `task-output` is valid only for exactly one directly
+  selected leaf: stdout is the selected task's exact redacted captured stdout,
+  while stderr contains runtime diagnostics and the exact redacted captured
+  stderr. It emits no runtime JSON metadata to stdout. Callers must check the
+  process status before consuming replayed bytes; accepted child exit codes
+  still produce a successful run. Composite selections, missing/unknown/
+  repeated selections, invalid repeated output options, and invalid model
+  defaults are rejected before state or child side effects. There is no
+  `--json`, `--both`, `--summary`, or `--task-output` alias and no `logs`
+  control command.
 - Task-output replay happens only after capture and redaction complete, with
   both evidence files opened before terminal registry transitions or cleanup.
   The two streams replay concurrently with bounded buffers, preserving each

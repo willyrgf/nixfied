@@ -142,6 +142,7 @@ let
       task = compositeTasks.${name};
     in
     task.steps != { }
+    && task.defaultOutput == "summary"
     && task.operationId == null
     && task.invocation == null
     && task.requires == [ ]
@@ -341,7 +342,7 @@ let
     (expect secretRefsWellFormed "secret placeholders must use the \${secret:<id>} grammar")
     (expect secretRefsDeclared "secret placeholders must reference declared nixfied.secrets ids")
     (expect leavesCoherent "a leaf task must declare an invocation and no steps")
-    (expect compositesCoherent "a composite task carries only steps (no invocation, operationId, or requires) with step-safe names")
+    (expect compositesCoherent "a composite task carries only steps and summary defaultOutput (no invocation, operationId, or requires) with step-safe names")
     (expect stepTasksDeclared "composite steps must reference declared tasks")
     (expect stepDependsOnSiblings "composite step dependsOn must name a sibling step")
     (expect stepGraphsAcyclic "composite step dependency graph must be acyclic")

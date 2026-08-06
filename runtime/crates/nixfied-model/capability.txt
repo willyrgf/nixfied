@@ -33,7 +33,7 @@ primitive CleanSpec: operationId terminal
 primitive Endpoint: endpointId host
 primitive ProbeSpec: kind invocation timeoutMs retryIntervalMs maxAttempts
 primitive TerminalSemantics: success failure
-primitive TaskSpec: kind serviceLifetime operationId invocation requires servicesRequired exitPolicy steps artifactRefs logRefs summaryRefs
+primitive TaskSpec: kind defaultOutput serviceLifetime operationId invocation requires servicesRequired exitPolicy steps artifactRefs logRefs summaryRefs
 primitive StepSpec: task dependsOn
 primitive ExitPolicy: successCodes
 
@@ -99,6 +99,7 @@ enum ClosureEffect: process network-listener source-read file-write
 enum StdinPolicy: null inherit
 enum ProbeKind: tcp exec
 enum TaskKind: leaf composite
+enum TaskDefaultOutput: summary task-output
 enum ServiceLifetime: run-scoped until-idle persistent-until-down
 enum SecretSourceKind: env-var file
 enum ContainmentRequirement: process-group process-tree

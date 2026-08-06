@@ -112,6 +112,7 @@ fn synthetic_service() -> Value {
 fn smoke_task() -> Value {
     json!({
         "kind": "leaf",
+        "defaultOutput": "summary",
         "serviceLifetime": "run-scoped",
         "operationId": "task.smoke.run",
         "invocation": helper_invocation(json!(["synthetic-helper", "task", "--host", "127.0.0.1", "--port", "${port}"])),
@@ -162,6 +163,42 @@ fn parses_and_validates_contract() {
         "service.synthetic.start"
     );
     assert_eq!(lifecycle.stop.signal, nixfied_model::StopSignal::Term);
+}
+
+#[test]
+fn task_default_output_round_trips_for_a_leaf() {
+    let mut value = valid_model_json();
+    value["tasks"]["smoke"]["defaultOutput"] = json!("task-output");
+    let model: Model = serde_json::from_value(value).expect("task default should parse");
+    model.validate().expect("leaf task default should validate");
+    assert_eq!(
+        model.tasks["smoke"].default_output,
+        nixfied_model::TaskDefaultOutput::TaskOutput
+    );
+    let emitted = serde_json::to_value(model).expect("task default should serialize");
+    assert_eq!(
+        emitted["tasks"]["smoke"]["defaultOutput"],
+        json!("task-output")
+    );
+}
+
+#[test]
+fn composite_task_default_output_is_rejected() {
+    let mut value = valid_model_json();
+    value["tasks"]["pipeline"] = json!({
+        "kind": "composite",
+        "defaultOutput": "task-output",
+        "serviceLifetime": "run-scoped",
+        "steps": { "only": { "task": "smoke", "dependsOn": [] } }
+    });
+    let model: Model = serde_json::from_value(value).expect("composite should deserialize");
+    assert!(matches!(
+        model.validate(),
+        Err(ValidationError::UnsupportedValue {
+            field: "tasks.defaultOutput",
+            ..
+        })
+    ));
 }
 
 #[test]

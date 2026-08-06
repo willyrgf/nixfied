@@ -173,6 +173,7 @@ pub fn synthetic_model(options: &SyntheticModelOptions) -> Value {
         "tasks": {
             "smoke": {
                 "kind": "leaf",
+                "defaultOutput": "summary",
                 "serviceLifetime": "run-scoped",
                 "operationId": "task.smoke.run",
                 "invocation": invocation(&options.executable, task_run),

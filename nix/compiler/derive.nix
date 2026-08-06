@@ -347,6 +347,7 @@ let
     if task.kind == "composite" then
       {
         kind = "composite";
+        defaultOutput = task.defaultOutput;
         serviceLifetime = task.serviceLifetime;
         servicesRequired = taskServicesRequired name;
         steps = mapAttrs (_stepName: step: {
@@ -357,6 +358,7 @@ let
     else
       {
         kind = "leaf";
+        defaultOutput = task.defaultOutput;
         serviceLifetime = task.serviceLifetime;
         operationId = leafOperationId name task;
         invocation = resolveInvocation "task ${name}" task.invocation;

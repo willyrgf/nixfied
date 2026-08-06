@@ -3,7 +3,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use nixfied_model::ServiceLifetime;
+use nixfied_model::{ServiceLifetime, TaskDefaultOutput};
 use nixfied_runtime::cancellation::{CancellationToken, ProcessSignalGuard};
 use nixfied_runtime::error::RuntimeCause;
 use nixfied_runtime::execution::plan;
@@ -399,33 +399,21 @@ fn error_output_projection(args: &[String]) -> ErrorOutputProjection {
         return ErrorOutputProjection::Human;
     }
     let args = args.get(1..).unwrap_or(&[]);
-    let mut json = false;
-    let mut both = false;
+    let mut mode = None;
     let mut index = 0;
     while index < args.len() {
-        match args[index].as_str() {
-            "--both" => both = true,
-            "--json" => json = true,
-            "--output" => {
-                if let Some(value) = args.get(index + 1).map(String::as_str) {
-                    match value {
-                        "both" => both = true,
-                        "json" => json = true,
-                        _ => {}
-                    }
-                    index += 1;
-                }
-            }
-            _ => {}
+        if args[index].as_str() == "--output"
+            && let Some(value) = args.get(index + 1).map(String::as_str)
+        {
+            mode = Some(value);
+            index += 1;
         }
         index += 1;
     }
-    if both {
-        ErrorOutputProjection::Both
-    } else if json {
-        ErrorOutputProjection::Json
-    } else {
-        ErrorOutputProjection::Human
+    match mode {
+        Some("both") => ErrorOutputProjection::Both,
+        Some("json") => ErrorOutputProjection::Json,
+        _ => ErrorOutputProjection::Human,
     }
 }
 
@@ -614,16 +602,24 @@ fn run_m0(args: &[String]) -> Result<(), RuntimeError> {
     if print_help_if_requested(args, RUN_HELP) {
         return Ok(());
     }
-    let options = parse_run_options(args)?;
+    let parsed_options = parse_run_options(args)?;
     let cancellation = CancellationToken::new();
     let run_id = new_run_id();
-    let (loaded, admission) =
-        load_admitted_model(options.model_path.clone(), options.allow_non_store)?;
+    let (loaded, admission) = load_admitted_model(
+        parsed_options.model_path.clone(),
+        parsed_options.allow_non_store,
+    )?;
+    let output_mode = resolve_run_output_mode(
+        &loaded.model,
+        parsed_options.output_mode,
+        parsed_options.task.as_deref(),
+    );
     validate_run_selection(
         &admission.execution_model,
-        options.output_mode,
-        options.task.as_deref(),
+        output_mode,
+        parsed_options.task.as_deref(),
     )?;
+    let options = parsed_options.resolve(output_mode);
     let redactor = Redactor::from_secrets(&admission.secrets);
     let model_path = admission.model_path.clone();
     let computed_model_hash = admission.computed_model_hash.clone();
@@ -1488,16 +1484,6 @@ struct ControlOptions {
     cleanup_mode: nixfied_runtime::state::CleanupMode,
 }
 
-struct RunOptions {
-    model_path: PathBuf,
-    allow_non_store: bool,
-    state_base: PathBuf,
-    timeout_ms: u64,
-    output_mode: RunOutputMode,
-    selection: RuntimeSelection,
-    task: Option<String>,
-}
-
 const RUN_HELP: &str = "\
 Run one declared task and its required services.
 
@@ -1509,11 +1495,8 @@ Options:
   --task <id>             Select a declared task (the exported verb preselects it)
   --slot <number>         Select a declared project slot
   --timeout-ms <number>   Set the runtime operation timeout in milliseconds
-  --output <mode>         Select summary, json, both, or task-output (default: summary)
-                          task-output requires one directly selected leaf and replays redacted output
-  --summary               Emit the human summary
-  --json                  Emit structured JSON
-  --both                  Emit both projections
+  --output <mode>         Select summary, json, both, or task-output (default: task default or summary)
+                           task-output requires one directly selected leaf and replays redacted output
   -h, --help              Show this help";
 
 const PS_HELP: &str = "\
@@ -1613,6 +1596,21 @@ fn validate_run_selection(
     Err(selection_required_error(model).with_detail("unknownTask", task))
 }
 
+fn resolve_run_output_mode(
+    model: &nixfied_model::Model,
+    explicit: Option<RunOutputMode>,
+    task: Option<&str>,
+) -> RunOutputMode {
+    explicit.unwrap_or_else(|| {
+        task.and_then(|task| model.tasks.get(task))
+            .map(|task| match task.default_output {
+                TaskDefaultOutput::Summary => RunOutputMode::Summary,
+                TaskDefaultOutput::TaskOutput => RunOutputMode::TaskOutput,
+            })
+            .unwrap_or(RunOutputMode::Summary)
+    })
+}
+
 fn validate_selection_nodes(
     model: &nixfied_runtime::execution::ExecutionModel,
     task_id: &nixfied_model::TaskId,
@@ -1698,14 +1696,12 @@ fn run_control_admitted(
     result.map_err(|error| enrich_placed_error(error, &placement, &selected_slot))
 }
 
-fn parse_run_options(args: &[String]) -> Result<RunOptions, RuntimeError> {
+fn parse_run_options(args: &[String]) -> Result<ParsedRunOptions, RuntimeError> {
     let mut model_path = None;
     let mut allow_non_store = false;
     let mut state_base = None;
     let mut timeout_ms = 5000;
-    let mut output_mode = RunOutputMode::Summary;
-    let mut saw_task_output = false;
-    let mut saw_metadata_output = false;
+    let mut output_mode = None;
     let mut slot = None;
     let mut task = None;
     let mut index = 0;
@@ -1768,59 +1764,20 @@ fn parse_run_options(args: &[String]) -> Result<RunOptions, RuntimeError> {
                     )
                 })?;
                 let parsed = parse_run_output_mode(value)?;
-                if parsed.is_task_output() {
-                    if saw_metadata_output {
-                        return Err(RuntimeError::new(
-                            nixfied_runtime::ErrorCode::OutputModeConflict,
-                            "task-output cannot be combined with a metadata output mode",
-                        ));
-                    }
-                    saw_task_output = true;
-                } else {
-                    if saw_task_output {
-                        return Err(RuntimeError::new(
-                            nixfied_runtime::ErrorCode::OutputModeConflict,
-                            "task-output cannot be combined with a metadata output mode",
-                        ));
-                    }
-                    saw_metadata_output = true;
-                }
-                output_mode = parsed;
-            }
-            "--summary" => {
-                if saw_task_output {
+                if output_mode.replace(parsed).is_some() {
                     return Err(RuntimeError::new(
                         nixfied_runtime::ErrorCode::OutputModeConflict,
-                        "task-output cannot be combined with a metadata output mode",
+                        "--output may be specified only once",
                     ));
                 }
-                saw_metadata_output = true;
-                output_mode = RunOutputMode::Summary;
             }
-            "--json" => {
-                if saw_task_output {
-                    return Err(RuntimeError::new(
-                        nixfied_runtime::ErrorCode::OutputModeConflict,
-                        "task-output cannot be combined with a metadata output mode",
-                    ));
-                }
-                saw_metadata_output = true;
-                output_mode = RunOutputMode::Json;
-            }
-            "--both" => {
-                if saw_task_output {
-                    return Err(RuntimeError::new(
-                        nixfied_runtime::ErrorCode::OutputModeConflict,
-                        "task-output cannot be combined with a metadata output mode",
-                    ));
-                }
-                saw_metadata_output = true;
-                output_mode = RunOutputMode::Both;
-            }
-            "--task-output" => {
+            "--summary" | "--json" | "--both" | "--task-output" => {
                 return Err(RuntimeError::new(
                     nixfied_runtime::ErrorCode::OutputModeInvalid,
-                    "unknown output flag --task-output; use --output task-output",
+                    format!(
+                        "unsupported output flag {}; use --output <mode>",
+                        args[index]
+                    ),
                 ));
             }
             other => {
@@ -1839,7 +1796,7 @@ fn parse_run_options(args: &[String]) -> Result<RunOptions, RuntimeError> {
         )
     })?;
     let state_base = state_base.map(Ok).unwrap_or_else(state_base_from_env)?;
-    Ok(RunOptions {
+    Ok(ParsedRunOptions {
         model_path,
         allow_non_store,
         state_base,
@@ -1848,6 +1805,36 @@ fn parse_run_options(args: &[String]) -> Result<RunOptions, RuntimeError> {
         selection: RuntimeSelection { slot },
         task,
     })
+}
+
+struct ParsedRunOptions {
+    model_path: PathBuf,
+    allow_non_store: bool,
+    state_base: PathBuf,
+    timeout_ms: u64,
+    output_mode: Option<RunOutputMode>,
+    selection: RuntimeSelection,
+    task: Option<String>,
+}
+
+impl ParsedRunOptions {
+    fn resolve(self, output_mode: RunOutputMode) -> RunOptions {
+        RunOptions {
+            state_base: self.state_base,
+            timeout_ms: self.timeout_ms,
+            output_mode,
+            selection: self.selection,
+            task: self.task,
+        }
+    }
+}
+
+struct RunOptions {
+    state_base: PathBuf,
+    timeout_ms: u64,
+    output_mode: RunOutputMode,
+    selection: RuntimeSelection,
+    task: Option<String>,
 }
 
 fn parse_control_options(

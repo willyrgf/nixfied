@@ -689,7 +689,7 @@ fn run_command(model: &Path, state_root: &Path) -> Command {
         .arg(model)
         .arg("--timeout-ms")
         .arg("20000")
-        .arg("--json")
+        .args(["--output", "json"])
         .env("NIXFIED_STATE_DIR", state_root)
         .current_dir(model.parent().unwrap())
         .stdout(Stdio::piped())

@@ -185,6 +185,14 @@ else
       }
     ))
 
+    (reject "a composite carrying task-output as its default" (
+      { ... }:
+      {
+        imports = [ composite ];
+        nixfied.tasks.pipeline.defaultOutput = "task-output";
+      }
+    ))
+
     (reject "a cyclic task reference graph" (
       { ... }:
       {

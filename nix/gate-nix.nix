@@ -878,7 +878,7 @@ pkgs.writeShellApplication {
       's@^  imports = \[ adapters.synthetic \];@  imports = [ adapters.synthetic ./reusable.nix ];@' \
       "$project/nixfied.nix"
     ${pkgs.gnused}/bin/sed -i \
-      's@^  nixfied.surface.verbs.smoke = .*@  nixfied.surface.verbs = { smoke = "Run the starter smoke test"; "composite-smoke" = "Run the composite smoke test"; }; nixfied.tasks.composite-smoke = { kind = "composite"; steps.only.task = "smoke"; };@' \
+      's@^  nixfied.surface.verbs.smoke = .*@  nixfied.surface.verbs = { smoke = "Run the starter smoke test"; "composite-smoke" = "Run the composite smoke test"; }; nixfied.tasks.smoke.defaultOutput = "task-output"; nixfied.tasks.composite-smoke = { kind = "composite"; steps.only.task = "smoke"; };@' \
       "$project/nixfied.nix"
     git -C "$project" add nixfied.nix reusable.nix
     git -C "$project" commit -q -m surface
@@ -977,8 +977,10 @@ pkgs.writeShellApplication {
     [ ! -e "$help_state" ] || fail "adoption: generated app help materialized runtime state"
     [ "$(sha256sum "$project/flake.lock")" = "$help_lock_before" ] \
       || fail "adoption: generated app help modified the project lock file"
+    direct_default_stdout="$st/direct-default.stdout"
+    direct_default_stderr="$st/direct-default.stderr"
     ( cd "$wk" && NIXFIED_STATE_DIR="$st" "$rt" run --model "$model" --task smoke --timeout-ms 60000 ) \
-      >/dev/null || fail "adoption: scaffolded run failed"
+      >"$direct_default_stdout" 2>"$direct_default_stderr" || fail "adoption: scaffolded run failed"
     # The generated control surface must work against the same state.
     ( cd "$wk" && NIXFIED_STATE_DIR="$st" nix run "$project#model-check" ) \
       >/dev/null || fail "adoption: scaffolded model-check failed"
@@ -986,9 +988,13 @@ pkgs.writeShellApplication {
     smoke_stderr="$st/smoke.stderr"
     ( cd "$wk" && NIXFIED_STATE_DIR="$st" nix run "$project#smoke" -- --timeout-ms 60000 ) \
       >"$smoke_stdout" 2>"$smoke_stderr" || fail "adoption: scaffolded smoke verb failed"
-    [ ! -s "$smoke_stdout" ] || fail "adoption: scaffolded smoke verb wrote JSON stdout in summary mode"
+    printf 'ok\n' >"$st/task-output.expected"
+    cmp -s "$st/task-output.expected" "$direct_default_stdout" \
+      || fail "adoption: direct run did not apply the task-output default"
+    cmp -s "$st/task-output.expected" "$smoke_stdout" \
+      || fail "adoption: generated smoke verb did not apply the task-output default"
     grep -q "  result: ok 1 passed, 0 failed in " "$smoke_stderr" \
-      || fail "adoption: scaffolded smoke verb did not print a concise result"
+      || fail "adoption: scaffolded smoke verb default omitted runtime diagnostics"
     grep -q "  run-summary: " "$smoke_stderr" \
       || fail "adoption: scaffolded smoke verb did not print the run summary path"
     grep -q "  logs: " "$smoke_stderr" \
@@ -998,7 +1004,6 @@ pkgs.writeShellApplication {
     task_output_stdout="$st/task-output.stdout"
     task_output_stderr="$st/task-output.stderr"
     task_output_expected="$st/task-output.expected"
-    printf 'ok\n' >"$task_output_expected"
     ( cd "$wk" && NIXFIED_STATE_DIR="$task_output_state" nix run "$project#smoke" -- --timeout-ms 60000 --output task-output ) \
       >"$task_output_stdout" 2>"$task_output_stderr" \
       || fail "adoption: generated smoke task-output verb failed"
@@ -1036,17 +1041,17 @@ pkgs.writeShellApplication {
       || fail "adoption: scaffolded composite smoke verb did not print a concise result"
     smoke_json_stdout="$st/smoke-json.stdout"
     smoke_json_stderr="$st/smoke-json.stderr"
-    ( cd "$wk" && NIXFIED_STATE_DIR="$st" nix run "$project#smoke" -- --timeout-ms 60000 --json ) \
-      >"$smoke_json_stdout" 2>"$smoke_json_stderr" || fail "adoption: scaffolded smoke verb --json failed"
+    ( cd "$wk" && NIXFIED_STATE_DIR="$st" nix run "$project#smoke" -- --timeout-ms 60000 --output json ) \
+      >"$smoke_json_stdout" 2>"$smoke_json_stderr" || fail "adoption: scaffolded smoke verb --output json failed"
     jq -e '.task.success == true and (.durationMs >= 0) and (.runSummaryPath | type == "string")' \
-      "$smoke_json_stdout" >/dev/null || fail "adoption: scaffolded smoke verb --json did not write run JSON"
+      "$smoke_json_stdout" >/dev/null || fail "adoption: scaffolded smoke verb --output json did not write run JSON"
     ! grep -q "  result: " "$smoke_json_stderr" \
-      || fail "adoption: scaffolded smoke verb --json printed human summary"
+      || fail "adoption: scaffolded smoke verb --output json printed human summary"
     run_json_stdout="$st/run-json.stdout"
-    ( cd "$wk" && NIXFIED_STATE_DIR="$st" nix run "$project#run" -- --task smoke --timeout-ms 60000 --json ) \
-      >"$run_json_stdout" || fail "adoption: scaffolded run control app --json failed"
+    ( cd "$wk" && NIXFIED_STATE_DIR="$st" nix run "$project#run" -- --task smoke --timeout-ms 60000 --output json ) \
+      >"$run_json_stdout" || fail "adoption: scaffolded run control app --output json failed"
     jq -e '.task.success == true and (.durationMs >= 0) and (.runSummaryPath | type == "string")' \
-      "$run_json_stdout" >/dev/null || fail "adoption: scaffolded run control app --json did not write run JSON"
+      "$run_json_stdout" >/dev/null || fail "adoption: scaffolded run control app --output json did not write run JSON"
     ( cd "$wk" && NIXFIED_STATE_DIR="$st" nix run "$project#ps" ) \
       >/dev/null || fail "adoption: scaffolded ps failed"
     ( cd "$wk" && NIXFIED_STATE_DIR="$st" nix run "$project#down" ) \

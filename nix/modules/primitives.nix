@@ -423,6 +423,14 @@ let
         default = "leaf";
         description = "Task kind: a bounded leaf invocation, or a composite DAG of steps.";
       };
+      defaultOutput = mkOption {
+        type = types.enum [
+          "summary"
+          "task-output"
+        ];
+        default = "summary";
+        description = "Default output for a directly selected task; task-output is valid only for leaves.";
+      };
       operationId = mkOption {
         type = types.nullOr types.nonEmptyStr;
         default = null;

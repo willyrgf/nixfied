@@ -51,7 +51,7 @@
           set -euo pipefail
           mkdir -p "''${stateDir}/gate-artifacts" "''${stateDir}/example-minimal-inner"
           NIXFIED_STATE_DIR="''${stateDir}/example-minimal-inner" \
-            nixfied-runtime run --model "$MINIMAL_MODEL/model.json" --task smoke --timeout-ms 60000 --json \
+            nixfied-runtime run --model "$MINIMAL_MODEL/model.json" --task smoke --timeout-ms 60000 --output json \
             > "''${stateDir}/gate-artifacts/example-minimal.json"
           jq -e '.durationMs >= 0 and .task.durationMs >= 0 and .tasks[0].durationMs >= 0 and .nodes[0].durationMs >= 0' \
             "''${stateDir}/gate-artifacts/example-minimal.json" >/dev/null
@@ -66,6 +66,7 @@
           [[ "$docs" == *'# Minimal'* ]]
           [[ "$docs" == *'- id: `minimal`'* ]]
           [[ "$docs" == *'### `smoke`'* ]]
+          [[ "$docs" == *'- default output: `summary`'* ]]
           [[ "$docs" == *'- services required: `synthetic`'* ]]
           [[ "$docs" == *'### `synthetic`'* ]]
           [[ "$docs" == *'- primary endpoint: `synthetic-tcp`'* ]]
@@ -91,7 +92,7 @@
           set -euo pipefail
           mkdir -p "''${stateDir}/gate-artifacts" "''${stateDir}/example-postgres-inner"
           NIXFIED_STATE_DIR="''${stateDir}/example-postgres-inner" \
-            nixfied-runtime run --model "$POSTGRES_MODEL/model.json" --task smoke-query --timeout-ms 60000 --json \
+            nixfied-runtime run --model "$POSTGRES_MODEL/model.json" --task smoke-query --timeout-ms 60000 --output json \
             > "''${stateDir}/gate-artifacts/example-postgres.json"
           NIXFIED_STATE_DIR="''${stateDir}/example-postgres-inner" \
             nixfied-runtime clean --model "$POSTGRES_MODEL/model.json"
@@ -114,11 +115,12 @@
           set -euo pipefail
           mkdir -p "''${stateDir}/gate-artifacts" "''${stateDir}/example-composite-inner"
           NIXFIED_STATE_DIR="''${stateDir}/example-composite-inner" \
-            nixfied-runtime run --model "$COMPOSITE_MODEL/model.json" --task pipeline --timeout-ms 60000 --json \
+            nixfied-runtime run --model "$COMPOSITE_MODEL/model.json" --task pipeline --timeout-ms 60000 --output json \
             > "''${stateDir}/gate-artifacts/example-composite.json"
           docs=$(<"$COMPOSITE_MODEL/views/docs.md")
           [[ "$docs" == *'### `pipeline`'* ]]
           [[ "$docs" == *'- kind: `composite`'* ]]
+          [[ "$docs" == *'- default output: `summary`'* ]]
           [[ "$docs" == *'`probe`: task `smoke`; depends on none'* ]]
           [[ "$docs" == *'`verify`: task `smoke`; depends on `probe`'* ]]
           NIXFIED_STATE_DIR="''${stateDir}/example-composite-inner" \
@@ -142,7 +144,7 @@
           set -euo pipefail
           mkdir -p "''${stateDir}/gate-artifacts" "''${stateDir}/example-polyglot-inner"
           NIXFIED_STATE_DIR="''${stateDir}/example-polyglot-inner" \
-            nixfied-runtime run --model "$POLYGLOT_MODEL/model.json" --task all --timeout-ms 60000 --json \
+            nixfied-runtime run --model "$POLYGLOT_MODEL/model.json" --task all --timeout-ms 60000 --output json \
             > "''${stateDir}/gate-artifacts/example-polyglot.json"
           NIXFIED_STATE_DIR="''${stateDir}/example-polyglot-inner" \
             nixfied-runtime clean --model "$POLYGLOT_MODEL/model.json"
@@ -165,7 +167,7 @@
           set -euo pipefail
           mkdir -p "''${stateDir}/gate-artifacts" "''${stateDir}/example-downstream-inner"
           NIXFIED_STATE_DIR="''${stateDir}/example-downstream-inner" \
-            nixfied-runtime run --model "$DOWNSTREAM_MODEL/model.json" --task release --timeout-ms 60000 --json \
+            nixfied-runtime run --model "$DOWNSTREAM_MODEL/model.json" --task release --timeout-ms 60000 --output json \
             > "''${stateDir}/gate-artifacts/example-downstream.json"
           NIXFIED_STATE_DIR="''${stateDir}/example-downstream-inner" \
             nixfied-runtime clean --model "$DOWNSTREAM_MODEL/model.json"
@@ -188,7 +190,7 @@
           set -euo pipefail
           mkdir -p "''${stateDir}/gate-artifacts" "''${stateDir}/example-reth-inner"
           NIXFIED_STATE_DIR="''${stateDir}/example-reth-inner" \
-            nixfied-runtime run --model "$RETH_MODEL/model.json" --task reth-smoke --timeout-ms 60000 --json \
+            nixfied-runtime run --model "$RETH_MODEL/model.json" --task reth-smoke --timeout-ms 60000 --output json \
             > "''${stateDir}/gate-artifacts/example-reth.json"
           NIXFIED_STATE_DIR="''${stateDir}/example-reth-inner" \
             nixfied-runtime clean --model "$RETH_MODEL/model.json"
@@ -211,7 +213,7 @@
           set -euo pipefail
           mkdir -p "''${stateDir}/gate-artifacts" "''${stateDir}/example-toolchain-inner"
           NIXFIED_STATE_DIR="''${stateDir}/example-toolchain-inner" \
-            nixfied-runtime run --model "$TOOLCHAIN_MODEL/model.json" --task ci --timeout-ms 60000 --json \
+            nixfied-runtime run --model "$TOOLCHAIN_MODEL/model.json" --task ci --timeout-ms 60000 --output json \
             > "''${stateDir}/gate-artifacts/example-toolchain.json"
           NIXFIED_STATE_DIR="''${stateDir}/example-toolchain-inner" \
             nixfied-runtime clean --model "$TOOLCHAIN_MODEL/model.json"
@@ -347,7 +349,7 @@
           set -euo pipefail
           mkdir -p "''${stateDir}/gate-artifacts" "''${stateDir}/negative-inner"
           if NIXFIED_STATE_DIR="''${stateDir}/negative-inner" \
-             nixfied-runtime run --model "$MINIMAL_MODEL/model.json" --json \
+             nixfied-runtime run --model "$MINIMAL_MODEL/model.json" --output json \
              >/dev/null 2>"''${stateDir}/gate-artifacts/negative-no-selection.json"; then
             echo "runtime accepted a run with no task selection" >&2; exit 1
           fi
@@ -396,7 +398,7 @@
           set -euo pipefail
           mkdir -p "''${stateDir}/gate-artifacts" "''${stateDir}/negative-inner/identity"
           if NIXFIED_STATE_DIR="''${stateDir}/negative-inner/identity" \
-             nixfied-runtime run --model "$NEGATIVE_FAIL_MODEL/model.json" --task failing --json \
+             nixfied-runtime run --model "$NEGATIVE_FAIL_MODEL/model.json" --task failing --output json \
              >/dev/null 2>"''${stateDir}/gate-artifacts/negative-fail.json"; then
             echo "failing composite reported success" >&2; exit 1
           fi
@@ -576,7 +578,7 @@
           mkdir -p "''${stateDir}/gate-artifacts" "$inner"
           NIXFIED_STATE_DIR="$inner" \
             nixfied-runtime run --model "$PERSISTENT_ENDPOINT_MODEL/model.json" \
-              --task keep-up --timeout-ms 60000 --json \
+              --task keep-up --timeout-ms 60000 --output json \
             > "''${stateDir}/gate-artifacts/service-lifetime-up.json"
           NIXFIED_STATE_DIR="$inner" \
             nixfied-runtime ps --model "$PERSISTENT_ENDPOINT_MODEL/model.json" \
@@ -586,7 +588,7 @@
 
           NIXFIED_STATE_DIR="$inner" \
             nixfied-runtime run --model "$PERSISTENT_ENDPOINT_MODEL/model.json" \
-              --task smoke --timeout-ms 60000 --json \
+              --task smoke --timeout-ms 60000 --output json \
             > "''${stateDir}/gate-artifacts/service-lifetime-borrow.json"
           owner_instance=$(jq -r '.services[0].serviceInstanceId' \
             "''${stateDir}/gate-artifacts/service-lifetime-up.json")
@@ -696,14 +698,14 @@
 
           NIXFIED_STATE_DIR="$root_a" \
             nixfied-runtime run --model "$PERSISTENT_ENDPOINT_MODEL/model.json" \
-              --task keep-up --timeout-ms 60000 --json \
+              --task keep-up --timeout-ms 60000 --output json \
             > "$artifacts/endpoint-root-a.json"
           [ "$(find "$root_a" -name endpoint-prepare-sentinel -type f | wc -l)" -eq 1 ] \
             || { echo "endpoint: root A prepare sentinel missing" >&2; exit 1; }
 
           if NIXFIED_STATE_DIR="$root_b" \
              nixfied-runtime run --model "$PERSISTENT_ENDPOINT_MODEL/model.json" \
-               --task keep-up --timeout-ms 60000 --json \
+               --task keep-up --timeout-ms 60000 --output json \
              >/dev/null 2>"$artifacts/endpoint-root-b-conflict.json"; then
             echo "endpoint: independent root B took root A's live listener" >&2
             exit 1
@@ -721,7 +723,7 @@
             nixfied-runtime down --model "$PERSISTENT_ENDPOINT_MODEL/model.json" >/dev/null
           NIXFIED_STATE_DIR="$root_b" \
             nixfied-runtime run --model "$PERSISTENT_ENDPOINT_MODEL/model.json" \
-              --task keep-up --timeout-ms 60000 --json \
+               --task keep-up --timeout-ms 60000 --output json \
             > "$artifacts/endpoint-root-b.json"
           [ "$(find "$root_b" -name endpoint-prepare-sentinel -type f | wc -l)" -eq 1 ] \
             || { echo "endpoint: root B did not prepare after root A went down" >&2; exit 1; }
@@ -750,7 +752,7 @@
           mkdir -p "''${stateDir}/gate-artifacts" "''${stateDir}/slots-inner"
           NIXFIED_STATE_DIR="''${stateDir}/slots-inner" \
             nixfied-runtime run --model "$DOWNSTREAM_MODEL/model.json" \
-            --task release --slot 0 --timeout-ms 60000 --json \
+            --task release --slot 0 --timeout-ms 60000 --output json \
             > "''${stateDir}/gate-artifacts/slots-0.json"
         ''
       ];
@@ -772,7 +774,7 @@
           mkdir -p "''${stateDir}/gate-artifacts" "''${stateDir}/slots-inner"
           NIXFIED_STATE_DIR="''${stateDir}/slots-inner" \
             nixfied-runtime run --model "$DOWNSTREAM_MODEL/model.json" \
-            --task release --slot 1 --timeout-ms 60000 --json \
+            --task release --slot 1 --timeout-ms 60000 --output json \
             > "''${stateDir}/gate-artifacts/slots-1.json"
         ''
       ];

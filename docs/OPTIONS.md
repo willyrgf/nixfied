@@ -2097,6 +2097,27 @@ list of string
 
 
 
+## nixfied\.tasks\.\<name>\.defaultOutput
+
+
+
+Default output for a directly selected task; task-output is valid only for leaves\.
+
+
+
+*Type:*
+one of “summary”, “task-output”
+
+
+
+*Default:*
+
+```nix
+"summary"
+```
+
+
+
 ## nixfied\.tasks\.\<name>\.exitPolicy
 
 

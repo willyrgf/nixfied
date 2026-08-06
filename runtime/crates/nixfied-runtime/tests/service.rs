@@ -1559,7 +1559,7 @@ fn cli_signal_cancels_run_and_empties_service_group() {
         .arg(&state_base)
         .arg("--timeout-ms")
         .arg("200")
-        .arg("--json")
+        .args(["--output", "json"])
         .current_dir(&tmp.path)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1665,7 +1665,7 @@ fn cli_signal_during_shutdown_records_canceled_terminal_state() {
         .arg(&state_base)
         .arg("--timeout-ms")
         .arg("1000")
-        .arg("--json")
+        .args(["--output", "json"])
         .current_dir(&tmp.path)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -3852,7 +3852,7 @@ fn task_secret_output_is_redacted_from_runtime_owned_sinks() {
         .arg(&model_path)
         .arg("--timeout-ms")
         .arg("5000")
-        .arg("--json")
+        .args(["--output", "json"])
         .current_dir(&tmp.path)
         .env("NIXFIED_STATE_DIR", &state_base)
         .env("NIXFIED_TEST_TASK_SECRET", "child-visible-secret")
@@ -4710,7 +4710,6 @@ fn runtime_drives_full_lifecycle_without_invoking_nix() {
             "smoke",
             "--timeout-ms",
             "5000",
-            "--summary",
             "--output",
             "json",
         ],
@@ -4730,7 +4729,14 @@ fn runtime_drives_full_lifecycle_without_invoking_nix() {
 
     let run_both_output = run_binary(
         "run",
-        &["--task", "smoke", "--timeout-ms", "5000", "--both"],
+        &[
+            "--task",
+            "smoke",
+            "--timeout-ms",
+            "5000",
+            "--output",
+            "both",
+        ],
     );
     assert!(
         run_both_output.status.success(),
@@ -4836,7 +4842,7 @@ fn composite_run_keys_evidence_by_step_path() {
         .arg(&model_path)
         .arg("--timeout-ms")
         .arg("5000")
-        .arg("--json")
+        .args(["--output", "json"])
         .current_dir(&tmp.path)
         .env("NIXFIED_STATE_DIR", &state_base)
         .stdout(Stdio::piped())
@@ -4937,7 +4943,7 @@ fn nested_composite_cancellation_terminates_leaf_process_group() {
         .arg(&model_path)
         .arg("--state-base")
         .arg(&state_base)
-        .arg("--json")
+        .args(["--output", "json"])
         .current_dir(&tmp.path)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -5054,7 +5060,7 @@ fn composite_starts_full_service_union_before_first_node() {
         .arg(&model_path)
         .arg("--state-base")
         .arg(&state_base)
-        .arg("--json")
+        .args(["--output", "json"])
         .current_dir(&tmp.path)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -5320,7 +5326,7 @@ fn failed_composite_run_writes_failure_summary() {
         .arg(&model_path)
         .arg("--state-base")
         .arg(&json_state_base)
-        .arg("--json")
+        .args(["--output", "json"])
         .current_dir(&tmp.path)
         .output()
         .expect("runtime run should execute");
@@ -5362,7 +5368,7 @@ fn failed_composite_run_writes_failure_summary() {
         .arg(&model_path)
         .arg("--state-base")
         .arg(&both_state_base)
-        .arg("--both")
+        .args(["--output", "both"])
         .current_dir(&tmp.path)
         .output()
         .expect("runtime run should execute");
@@ -5427,7 +5433,7 @@ fn service_failure_before_any_node_writes_failed_summary() {
         .arg(&model_path)
         .arg("--state-base")
         .arg(&state_base)
-        .arg("--json")
+        .args(["--output", "json"])
         .current_dir(&tmp.path)
         .output()
         .expect("runtime run should execute");
