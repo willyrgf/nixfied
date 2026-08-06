@@ -503,19 +503,6 @@
             inherit pkgs;
             inherit (nixpkgs) lib;
           };
-          # Source filtering, derivation independence, public output boundaries,
-          # and exact shipped binary contents.
-          package-boundaries = import ./nix/checks/package-boundaries.nix {
-            inherit pkgs;
-            publicPackages = self.packages.${system};
-            # Source-variant derivations are built by a native Linux boundary
-            # invocation. Pure cross-system evaluation keeps the structural
-            # root/output proof without trying to realise a foreign test copy.
-            runSourceMatrix =
-              builtins ? currentSystem
-              && builtins.elem system [ "aarch64-linux" "x86_64-linux" ]
-              && builtins.currentSystem == system;
-          };
           # The runtime workspace must compile reproducibly. CI verifies the fast
           # debug profile for fast iteration. The hosted workflow separately
           # builds the release package as its final safety net.

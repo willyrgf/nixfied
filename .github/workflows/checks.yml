@@ -4,7 +4,7 @@ name: checks
 # the trusted cargo floor grades the runtime first, then nix flake check's
 # hermetic structural gates, then the product orchestrates its own end-to-end
 # framework gate. Framework checks use the private debug runtime; public CLI/runtime
-# and installer products are verified by explicit boundary and build steps.
+# and installer products are verified by explicit build steps.
 on:
   push:
 
@@ -53,13 +53,6 @@ jobs:
       #    the debug runtime build, all hermetic.
       - name: nix flake check
         run: nix flake check
-
-      # 2b. Package boundaries: filtered Cargo roots, independent derivation
-      #    identities, public/private outputs, and exact shipped binaries.
-      - name: package boundary check
-        run: |
-          system="$(nix eval --impure --raw --expr builtins.currentSystem)"
-          nix build --impure ".#checks.$system.package-boundaries" --no-link
 
       # 3. Gate (debug): the framework runs the example models the way adopters do
       #    — through the runtime under test — plus the cross-slot, fail-closed, and

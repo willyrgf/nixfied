@@ -16,7 +16,6 @@ nix/lib/                       pure Nix helpers
 nix/docs/                      private generated-reference builders
 nix/packages/                  reproducible Rust builds and source checks
 nix/packages/runtime-source.nix package-specific filtered Cargo roots
-nix/checks/package-boundaries.nix package/source/public-output boundary proof
 nix/help-*.nix                 private contextual app catalog
 nix/project-apps.nix           discovery/controls + adopter-exported task apps
 nix/gate-runtime/nixfied.nix   adopter-shaped runtime integration gate
@@ -71,7 +70,6 @@ nix develop --command bash -c 'cd runtime && cargo test -p nixfied-runtime --tes
 nix build .#nixfied-cli --no-link
 nix build .#nixfied-runtime --no-link
 nix build .#install --no-link
-nix build --impure .#checks.$(nix eval --impure --raw --expr builtins.currentSystem).package-boundaries --no-link
 ```
 
 `nix flake check` is the hermetic source/build core. Its `rust-workspace`
@@ -186,9 +184,9 @@ Dirty mode uses a path pin and therefore re-derives the downstream closure.
 
 `nix run .#ci` is the canonical full local gate, not a byte-for-byte copy of the
 hosted workflow. `.github/workflows/checks.yml` separately runs the raw Cargo
-floor, flake checks, package-boundary check, and gate; it also runs macOS-specific
-endpoint observer tests and builds the public CLI, installer, and optimized
-release runtime as a final safety net:
+floor, flake checks, and gate; it also runs macOS-specific endpoint observer tests
+and builds the public CLI, installer, and optimized release runtime as a final
+safety net:
 
 ```sh
 nix build .#nixfied-cli .#install --no-link
@@ -212,7 +210,7 @@ Use the smallest proof that covers the change, then widen for shared contracts:
 | Runtime admission or lifecycle | focused runtime test + `.#test` |
 | Task-output replay/projection | `cargo test -p nixfied-runtime --test output` + `.#gate -- --dirty` |
 | Nix resolution/validation/derivation | `nix flake check` + affected Nix vectors |
-| Package/source/public output boundary | `package-boundaries` check + CLI/runtime/install builds |
+| Package/build change | CLI/runtime/install builds |
 | Generated docs or public output | affected model build + `.#gate` |
 | Adapter or example | build the affected model + `.#gate` |
 | Contract or cross-layer change | `.#ci`; use `--dirty` when the generated project must consume the working tree |
