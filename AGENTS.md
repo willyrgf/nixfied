@@ -1,110 +1,120 @@
 # Agent guide
 
-This is Nixfied’s active-context routing sheet. Read the relevant reference
-before changing that area. The design and engineering principles below apply
-to all code, test, docs, build, and workflow changes.
+This is Nixfied’s active-context routing sheet. Before changing code, tests,
+docs, builds, or workflow:
 
-## Read before changing
+1. Inspect `git status --short --untracked-files=all` and preserve unrelated work.
+2. Read the authority routed below.
+3. State the invariant, owner, rejection boundary, and proof before editing.
 
-| Area | Reference |
-| --- | --- |
-| User behavior | [`README.md`](README.md) |
-| Model, ABI, lifecycle, output, public surface | [`docs/CONTRACT.md`](docs/CONTRACT.md) |
-| Architecture and non-goals | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
-| Repository map, tests, gates, profiles | [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) |
-| Derived facts and ordering | [`docs/DERIVATION_SPEC.md`](docs/DERIVATION_SPEC.md) |
-| Adapters and endpoints | [`docs/ADAPTERS.md`](docs/ADAPTERS.md) |
-| Generated options | [`docs/OPTIONS.md`](docs/OPTIONS.md) |
-| Authored ABI inventory | [`runtime/crates/nixfied-model/capability.txt`](runtime/crates/nixfied-model/capability.txt) |
+[`docs/CONTRACT.md`](docs/CONTRACT.md) is normative for product behavior and
+the model/runtime ABI. [`capability.txt`](runtime/crates/nixfied-model/capability.txt)
+is the authored wire inventory whose digest derives `runtimeAbi`, not generated
+documentation.
 
-`docs/CONTRACT.md` is normative. `capability.txt` is the authored wire
-inventory whose digest derives `runtimeAbi`, not generated documentation.
+## Core design
 
-## Design and engineering principles
+Nixfied uses correctness-by-construction. Correctness means invalid states are
+unrepresentable or rejected at the owning boundary. Dexterity comes from fewer
+owners and change sites. Simplicity means no duplicate authority or speculative
+machinery.
 
-- Keep one current design. Breaking contracts are allowed, but cut over
-  completely: update all producers, consumers, tests, fixtures, and docs, then
-  delete superseded work. No compatibility shims, aliases, fallbacks, legacy
-  readers/decoders, migrations, dual paths, or rollback support. Persisted
-  contracts update/reset their baseline and reject old data; never reinterpret
-  bytes or rewrite append-only history.
-- Optimize for correctness and simplicity: one owner per responsibility,
-  guarantees at the strongest practical boundary, and local complete changes.
-  Delete duplication and obsolete behavior, not safety, validation, controls,
-  tests, or necessary docs. Fix designs fully; report blockers instead of
-  adding hacks or partial workarounds.
-- Make illegal states unrepresentable. Prefer Rust structs for products,
-  enums for alternatives, newtypes/private fields with fallible constructors,
-  and ownership, typestate, or structural proofs. Avoid correlated flags and
-  `Option` state. Parse untrusted I/O into domain types at boundaries; preserve
-  invariants through construction/conversion/default/deserialization; use
-  typed redaction-safe errors and explicit checked outcomes. Test rejection
-  and invariant-preserving transforms; use compile-fail tests for intentional
-  compile-time exclusions. Keep type machinery no more complex than the
-  invalid states or change sites it removes.
-- Non-trivial work uses dependency-ordered, focused commits with one coherent
-  design, its tests/docs/deletions, and atomic inseparable cutovers. If the
-  routed references leave architecture unclear, request a read-only review of
-  the smallest contract-consistent design and its impact.
+- **Represent the domain.** Use product types for facts that coexist and sum
+  types for alternatives. Use newtypes, private constructors, fallible
+  conversions, and typestate for invariants. Match closed alternatives
+  exhaustively. Use `Option` only for genuine absence, never for hidden
+  alternatives or correlated state.
+- **Close the boundary.** Parse untrusted input into domain types at the
+  earliest boundary with enough information. Use fallible validation, lowering,
+  or admission for cross-field, graph, host, time, and concurrency invariants
+  that types cannot express. Preserve invariants through construction,
+  conversion, defaults, and deserialization; reject incoherent input before
+  side effects.
+- **Give every fact one owner.** Derive repeated facts from one specification.
+  Do not add duplicate registries, caches, seams, compatibility paths, or
+  mutable authorities.
+- **Fail closed and preserve phases.** Use typed redaction-safe errors and
+  explicit checked outcomes. Keep admission, execution, lifecycle, output,
+  containment, and cleanup failures distinct. Invalid admission starts no
+  child process.
+- **Prefer subtraction.** Choose the smallest design that preserves the
+  invariant. Delete duplication, states, branches, and change sites rather
+  than adding coordination or partial workarounds.
+- **Prove the guarantee.** Test accepted construction, rejected inputs,
+  invariant-preserving transformations, and runtime or relational behavior.
+  Use compile-time proofs where the language supports them and runtime tests
+  for runtime facts; tests support the design but do not replace it.
 
-## Architecture guardrails
+For every non-trivial change, answer:
+
+1. What invariant must always hold?
+2. Which invalid states are made unrepresentable?
+3. Which owner rejects what the types cannot express, and when?
+4. What tests or checks prove the invariant and cover coupled surfaces?
+
+## Boundaries
 
 - Nix evaluates, validates, builds, and realises. Rust admits, executes,
   reconciles, and cleans against `model.json` and OS reality.
-- `model.json` is the only semantic seam; `views/docs.md` is disposable.
-  `nixfied-runtime` never invokes Nix or imports Nix expressions (SEAM-1 is for
-  the runtime binary, not declared child programs).
-- Keep runtime behavior domain-generic and adapters/API in typed Nix modules.
-  The model remains tasks, services, inline invocations, static composite DAGs,
-  and derived graph facts; do not add runtime-owned caches, memberships, or
-  dynamic orchestration.
-- Keep host-absolute placement and secrets out of model data; child
+- `model.json` is the only required semantic seam; `views/docs.md` is
+  disposable. The runtime binary never invokes Nix or imports Nix expressions;
+  declared child programs are a separate contract case.
+- Keep runtime behavior domain-generic. The model remains tasks, services,
+  inline invocations, static composite DAGs, and derived graph facts. Do not add
+  runtime-owned caches, memberships, or dynamic orchestration.
+- Keep runtime-owned host placement and secret values out of the model. Child
   environments stay hermetic. Admission, endpoint ownership, state cleanup,
-  liveness, containment, and secret handling fail closed; never weaken gates.
-- Shell must not own graph, registry, validation, liveness, summary, or cleanup;
-  Nix must not own supervision, cancellation, or reconciliation. Keep
-  `nixfied-model` to the shared typed contract, not runtime behavior or ad hoc
-  model shapes.
+  liveness, containment, and secret handling fail closed.
+- Shell and gate scripts may orchestrate tests and assert results, but
+  production graph, registry, validation, liveness, summary, and cleanup
+  semantics stay in their owning layer. Nix does not supervise or reconcile;
+  `nixfied-model` contains the shared typed contract, not runtime behavior.
+- A new semantic kind, seam, mutable authority, compatibility path, daemon,
+  or domain-specific runtime branch requires a contract-consistent design
+  review before implementation.
+
+## Authority
+
+Read these before changing the corresponding area:
+
+- User behavior, authoring, and recovery: [`README.md`](README.md),
+  [`docs/GUIDE.md`](docs/GUIDE.md), [`docs/ADAPTERS.md`](docs/ADAPTERS.md).
+- Model, ABI, lifecycle, output, and public surface: [`docs/CONTRACT.md`](docs/CONTRACT.md)
+  and [`capability.txt`](runtime/crates/nixfied-model/capability.txt).
+- Architecture and derived facts: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md),
+  [`docs/DERIVATION_SPEC.md`](docs/DERIVATION_SPEC.md).
+- Options and generated references: [`docs/OPTIONS.md`](docs/OPTIONS.md).
+- Repository layout, tests, gates, and verification: [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
 
 ## Change routing
 
-| Change | Owner |
-| --- | --- |
-| User declarations | `nix/modules/` |
-| Generated apps/help | `nix/project-apps.nix`, `nix/help-*.nix` |
-| Resolution, validation, derivation, model/docs view | `nix/compiler/` |
-| Nix model/ABI constants | `nix/spec/` |
-| Serialized model/structural validation | `runtime/crates/nixfied-model/` |
-| Admission, lifecycle, execution, controls | `runtime/crates/nixfied-runtime/` |
-| Install CLI | `runtime/crates/nixfied-cli/` |
-| Domain adapters | `nix/adapters/` |
+| Change | Primary owner | Coupled surfaces |
+| --- | --- | --- |
+| Declarations, options, endpoints | `nix/modules/`, `nix/adapters/` | `README.md`, `docs/GUIDE.md`, generated `docs/OPTIONS.md` |
+| Generated apps and help | `nix/project-apps.nix`, `nix/help-*.nix` | `docs/CONTRACT.md`, app and help tests |
+| Resolution, validation, derivation, model/docs view | `nix/compiler/` | `docs/DERIVATION_SPEC.md`, Nix vectors and views |
+| Model fields, ABI, serialization, structural validation | `nix/spec/`, `runtime/crates/nixfied-model/` | `capability.txt`, Nix/Rust constants, fixtures, contract tests |
+| Admission, lifecycle, execution, and controls | `runtime/crates/nixfied-runtime/` | `docs/CONTRACT.md`, focused runtime tests |
+| Install and upgrade behavior | `nix/install/`, `runtime/crates/nixfied-cli/` | `docs/GUIDE.md`, install and package checks |
+| Builds, checks, gates, and CI | `nix/checks/`, `nix/gate*.nix`, `nix/dev.nix`, `.github/workflows/` | `docs/DEVELOPMENT.md` |
 
-## Contract and delivery rules
+If a change names multiple participants, treat it as one atomic cutover rather
+than separate implementations.
 
-- Inspect `git status --short --untracked-files=all` first; preserve unrelated
-  work. Deny unknown model fields, prefer strong types and typed errors, and
-  avoid library panics.
-- Contract/ABI changes follow ABI-1: update `capability.txt`, ABI snapshot, Nix
-  and Rust constants, architecture/contract docs, and tests. Keep JSON/text/error
-  projections consistent; preserve admission versus execution and never report
-  `MODEL_ADMISSION` after admission. Bump numeric versions only when semantics
-  require it.
-- New model fields update the fully populated fixture in
-  `runtime/crates/nixfied-runtime/tests/capability_coverage.rs`. Derived facts
-  update `docs/DERIVATION_SPEC.md`, both derivations, and both golden suites.
-  `nix/compiler/views.nix` is the sole generated-doc renderer; never hand-edit
-  emitted models or views.
-- Run the narrowest relevant check first, then widen; `.#test` supplies the
-  required Nix fixture and is not raw `cargo test`:
+## Contract and delivery
 
-  ```sh
-  nix run .#check
-  nix run .#test
-  nix run .#gate
-  nix run .#ci
-  ```
-
-- Inspect the staged diff before committing, especially contract scope,
-  tests, and regressions. Use one concise lower-case commit line with no body
-  or trailers. Report changes/deletions, checks run, and remaining unverified
-  risks or blockers.
+- Treat model fields, enums, hidden commands, outputs, errors, and semantics as
+  exact ABI. Update `capability.txt`, the ABI snapshot, Nix/Rust constants,
+  producers, consumers, tests, fixtures, and docs together. Delete superseded
+  readers, aliases, fallbacks, migrations, and dual paths; never reinterpret
+  old bytes or rewrite append-only history.
+- New model fields update `runtime/crates/nixfied-runtime/tests/capability_coverage.rs`.
+  Derived facts update `docs/DERIVATION_SPEC.md`, both derivations, and both
+  golden suites. Numeric versions change only when their semantics require it.
+- Edit sources, not generated outputs. `nix/compiler/views.nix` renders
+  `views/docs.md`; `nix/docs/options.nix` generates `docs/OPTIONS.md`.
+- Use the narrowest proof first, then widen according to `docs/DEVELOPMENT.md`.
+  `.#test` is fixture-backed, not raw Cargo; use `.#ci` for cross-layer changes
+  and `--dirty` when a downstream gate must consume uncommitted changes. Report
+  checks run and unverified platform, release, or integration coverage.
+- Do not commit unless explicitly requested.
