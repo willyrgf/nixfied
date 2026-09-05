@@ -9,6 +9,7 @@ result
 !PROBLEM*.md
 !IMPL*.md
 !RFC*.md
+!FIXES*.md
 !docs/ARCHITECTURE.md
 !docs/DETAILED.md
 !docs/UPGRADE.md
