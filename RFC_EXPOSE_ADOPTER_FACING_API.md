@@ -196,7 +196,35 @@ pipeline. Native algorithms still compute closure resolution, graph facts,
 logical placement, and other derived values. Merely serializing the static
 reference graph cannot produce an executable project.
 
-### 4.3 Proposed organization
+### 4.3 Relationship to the existing project compiler
+
+The meta-framework replaces part of the handwritten machinery in `nix/compiler`
+while retaining the project compilation pipeline and its native algorithms.
+Framework compilation defines what Nixfied supports; project compilation turns
+one adopter's configuration into `model.json`; Rust independently admits and
+executes that model.
+
+| Current responsibility | Proposed implementation |
+| --- | --- |
+| Module evaluation and merging in `resolve.nix` | Continue using Nixpkgs' evaluator with generated option declarations. |
+| Simple structural validation | Generate checks from the owning domain and rule declarations. |
+| Complex validation in `validate.nix` and `derive.nix` | Retain native predicates bound to declared rules at their existing rejection phases. |
+| Graph derivation, executable resolution, and lowering | Retain native Nix algorithms with declared inputs, outputs, relationships, and independent proofs. |
+| Handwritten model record construction and serialization policy | Replace with constructors and serialization rules generated from wire declarations; native lowering supplies the values. |
+| Closure realization and artifact emission in `emit-model.nix` | Retain Nix packaging responsibilities and consume the generated model construction path. |
+| Pipeline coordination in `default.nix` | Keep a thin project compiler coordinating resolution, validation, derivation, construction, and emission. |
+
+As each responsibility migrates, delete its superseded handwritten definitions.
+The meta-framework and project compiler must not become competing owners of the
+same checks or wire shapes. Native algorithms remain substantial implementation
+work even when the pipeline coordinator is small.
+
+The `nix/compiler` directory can remain as the home of project compilation.
+Implementation may reorganize files; acceptance depends on clear ownership,
+preserved rejection phases, and removal of duplicate definitions rather than a
+particular directory layout.
+
+### 4.4 Proposed organization
 
 Keep the kernel small and definitions distributed by responsibility:
 
@@ -457,6 +485,12 @@ consume: command grammar and help, field/variant structure, exact vocabulary,
 and explicit bindings to native handlers, resolvers, and validated domains.
 It emits only the necessary executable projection, not the reference graph.
 
+The selected backend emits ordinary Rust source directly from validated Nix
+values. It uses a bounded set of templates/functions for the supported types,
+serialization attributes, grammar forms, and native bindings. Identifier and
+string-literal rendering must be explicit and tested. Native Nix functions are
+not serialized or translated into Rust algorithms.
+
 Rust compilation checks those bindings. For example, a generated command enum
 is matched exhaustively by native dispatch; a missing command handler fails to
 compile. Domain references bind to existing private/fallible constructors,
@@ -574,7 +608,9 @@ closure.
 
 Generate Rust bindings deterministically from Nix values. No import-from-derivation
 is needed: Nix evaluation must not read a generated artifact back to discover
-contract structure. No Cargo build script invokes Nix.
+contract structure. Cargo compiles the generated source as ordinary crate source;
+the baseline adds no per-crate build script or serialized intermediate contract
+for binding generation. No Cargo build script invokes Nix.
 
 Keep generated Rust modules checked in as disposable source projections so
 fixture-backed Cargo and editor workflows continue to use ordinary source.
@@ -778,6 +814,48 @@ algorithms gain no schema interpreter or reference lookup overhead. Cold docs
 rendering and executable rebuild behavior must be measured rather than assumed.
 
 ### 13.2 Alternatives
+
+#### Direct Nix emission versus a Rust build-script generator
+
+Direct Nix emission is the baseline because the current structural forms fit a
+bounded renderer and it introduces fewer build mechanisms. A Rust build script
+could instead consume a generated contract file and emit the same Rust source.
+Both approaches need a code generator; changing its implementation language does
+not remove the type mapping, grammar, or native-binding work.
+
+| Concern | Direct Nix emission | Rust build-script generation |
+| --- | --- | --- |
+| Generator input | Validated Nix values. | Serialized contract plus a strict decoder. |
+| Checked artifact for Cargo workflows | Generated Rust source. | Generated contract input; Rust source produced during the build. |
+| Freshness obligation | Compare Rust source with fresh Nix output. | Compare contract input with fresh Nix output; generation cannot detect a stale input by itself. |
+| Build integration | Existing source compilation and projection checks. | Build scripts, build dependencies, generated includes, and input change tracking. |
+| Docs dependency | Independent of Rust. | Also independent of Rust when docs consumes the Nix declarations directly. |
+| Potential advantage | Smaller overall build path. | Rust-native tooling for a sufficiently complex emitter. |
+
+The existing model/runtime/CLI crates have no binding-generation build scripts.
+The CLI has a dependency-free package and separate lockfile. A shared Rust
+generator would need build-dependency, lockfile, and filtered-workspace changes;
+build-only dependencies need not enter the installed binary, but they remain
+build cost. Copying a generator into each crate would introduce duplicate
+implementation ownership.
+
+A build-script design would keep Nix as contract authority. Its intermediate
+file would be a private build input, not an additional runtime seam. It would
+need a precise execution-contract projection, rather than a project's
+`model.json` or human-readable option metadata. Generated files belong in Cargo's
+`OUT_DIR`, with explicit input tracking and target-aware generation. See the
+[Cargo code-generation example](https://doc.rust-lang.org/cargo/reference/build-script-examples.html#code-generation).
+
+Revisit the backend only if the representative cases demonstrate substantial
+Rust-syntax, transformation, or diagnostic complexity in the Nix renderer.
+Evaluate maintained generator code, format handling, packaging, and tests together;
+the length of a `build.rs` entry point is not a useful total LOC comparison.
+Choosing a Rust emitter and choosing to run it from Cargo are separate decisions:
+a standalone generator could also produce checked source before Cargo runs.
+These alternatives are not additional implementations to maintain alongside the
+selected backend. No generator comparison has yet been prototyped or benchmarked.
+
+#### Other alternatives
 
 - Packaging current Markdown improves access but leaves public construction and
   behavioral relationships unenforced.
