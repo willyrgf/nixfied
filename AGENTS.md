@@ -14,10 +14,13 @@ documentation.
 
 ## Core design
 
-Nixfied uses correctness-by-construction. Correctness means invalid states are
-unrepresentable or rejected at the owning boundary. Dexterity comes from fewer
-owners and change sites. Simplicity means no duplicate authority or speculative
-machinery.
+**Design for correctness, low complexity, simplicity, and reuse.** Make invalid
+states unrepresentable or reject them at the owning boundary before effects.
+Give each fact one owner and minimize concepts, dependencies, and coordinated
+change sites. Prefer the smallest explicit design that satisfies the contract.
+Reuse cohesive components through clear interfaces and ordinary composition;
+introduce abstractions for demonstrated shared meaning, not speculative
+flexibility. Prove invariants with independent checks and tests.
 
 - **Represent the domain.** Use product types for facts that coexist and sum
   types for alternatives. Use newtypes, private constructors, fallible
